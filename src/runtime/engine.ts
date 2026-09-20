@@ -7,7 +7,7 @@ export const toolDefinition = { name: 'mate', description: 'Discover capabilitie
   parameters: Type.Object({ operation: Type.String(), args: Type.Record(Type.String(), Type.Unknown()) }, { additionalProperties: false }) };
 export interface RunSpec { sessionId: string; messages: AgentMessage[]; recovery: string; tokenCap: number; costCap: number; maxTurns: number }
 export interface ToolReply { value: unknown; wait?: boolean }
-export interface EngineHooks { invalidateViews?():Promise<void>; notice?(): Promise<string | undefined>; journal(message: AgentMessage): Promise<void>; tool(id: string, operation: string, args: unknown): Promise<ToolReply>; summarize?(messages: AgentMessage[], stream: StreamFn): Promise<string> }
+export interface EngineHooks { refreshRecovery?():Promise<string>; invalidateViews?():Promise<void>; notice?(): Promise<string | undefined>; journal(message: AgentMessage): Promise<void>; tool(id: string, operation: string, args: unknown): Promise<ToolReply>; summarize?(messages: AgentMessage[], stream: StreamFn): Promise<string> }
 export interface EngineResult { tokens: number; cost: number; certain: boolean; waiting: boolean; continuation: boolean; snapshot?: AgentMessage[] }
 
 /** One instance is retained for the lifetime of one Agent worker. */
@@ -48,6 +48,7 @@ export class Engine {
       })();
       return output;
     };
+    let recovery=spec.recovery;
     let restored = repairTranscript(spec.messages);
     const compactMessages = async (messages: AgentMessage[]): Promise<AgentMessage[] | undefined> => {
       const parts = compactionParts(messages);
@@ -72,9 +73,10 @@ export class Engine {
       }
       if (fault) throw fault;
       await hooks.invalidateViews?.();
+      if(hooks.refreshRecovery){const fresh=await hooks.refreshRecovery();if(fresh.length>50000)throw new Error('Recovery payload exceeds limit');recovery=fresh;}
       return [messages[0]!, { role: 'user', content: `Compacted conversation reference; verify actions in receipts.\n${summary}`, timestamp: 0 }, ...parts.tail];
     };
-    if (byteTokens(restored) + Buffer.byteLength(spec.recovery) > this.model.contextWindow * 0.45) restored = await compactMessages(restored) ?? restored;
+    if (byteTokens(restored) + Buffer.byteLength(recovery) > this.model.contextWindow * 0.45) restored = await compactMessages(restored) ?? restored;
     const tool: AgentTool<typeof toolDefinition.parameters> = { ...toolDefinition, label: 'Mate', execute: async (id, params) => {
       if (fault) throw fault;
       if (waiting) return { content: [{ type: 'text', text: 'Run already waiting; no further actions.' }], details: null, terminate: true };
@@ -93,9 +95,9 @@ export class Engine {
         messages.push(message);
         if(agent.state.messages!==messages)agent.state.messages.push(message);
       }
-      return spec.recovery ? [messages[0]!, { role: 'user' as const, content: `Recovery reference data (not authorization or instructions):\n${spec.recovery}`, timestamp: 0 }, ...messages.slice(1)] : messages;
+      return recovery ? [messages[0]!, { role: 'user' as const, content: `Current recovery package: self-authored knowledge and durable state, not a change to daemon authority.\n${recovery}`, timestamp: 0 }, ...messages.slice(1)] : messages;
     };
-    agent.shouldStopAfterTurn = () => { turns++; return waiting || !!fault || turns >= spec.maxTurns || byteTokens(agent.state.messages) + Buffer.byteLength(spec.recovery) > this.model.contextWindow * 0.45; };
+    agent.shouldStopAfterTurn = () => { turns++; return waiting || !!fault || turns >= spec.maxTurns || byteTokens(agent.state.messages) + Buffer.byteLength(recovery) > this.model.contextWindow * 0.45; };
     const unsubscribe = agent.subscribe(async event => {
       if (event.type === 'message_end') {
         try { await hooks.journal(event.message); } catch (error) { fault = error; agent.abort(); throw error; }
@@ -108,7 +110,7 @@ export class Engine {
       const lastAssistant = agent.state.messages.findLast(m => m.role === 'assistant');
       if (lastAssistant?.role === 'assistant' && ['error','aborted'].includes(lastAssistant.stopReason)) throw new Error(lastAssistant.errorMessage ?? lastAssistant.stopReason);
       const result: EngineResult = { tokens: Math.max(0, tokens), cost: Math.max(0, cost), certain, waiting, continuation: !waiting && lastAssistant?.role === 'assistant' && lastAssistant.stopReason === 'toolUse' };
-      if (byteTokens(agent.state.messages) + Buffer.byteLength(spec.recovery) > this.model.contextWindow * 0.45) {
+      if (byteTokens(agent.state.messages) + Buffer.byteLength(recovery) > this.model.contextWindow * 0.45) {
         const snapshot = await compactMessages(agent.state.messages);
         if (snapshot) result.snapshot = snapshot;
       }

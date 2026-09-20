@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
 import type { EngineHooks, EngineResult, RunSpec } from './engine.js';
-const rpcSchema = z.object({ type: z.literal('rpc'), nonce: z.string(), id: z.number().int().positive(), kind: z.enum(['journal','tool','notice','invalidateViews']), payload: z.unknown() }).strict();
+const rpcSchema = z.object({ type: z.literal('rpc'), nonce: z.string(), id: z.number().int().positive(), kind: z.enum(['journal','tool','notice','invalidateViews','refreshRecovery']), payload: z.unknown() }).strict();
 const resultSchema = z.object({ tokens: z.number().int().nonnegative(), cost: z.number().finite().nonnegative(), certain: z.boolean(), waiting: z.boolean(), continuation: z.boolean(), snapshot: z.array(z.unknown()).optional() }).strict();
 export class WorkerClient {
   readonly child: ChildProcess;
@@ -40,7 +40,8 @@ export class WorkerClient {
         busy = true; const call = parsed.data; sequence = call.id;
         try {
           let value: unknown;
-          if(call.kind==='invalidateViews') await hooks.invalidateViews?.();
+          if(call.kind==='refreshRecovery')value=z.string().max(50000).parse(await hooks.refreshRecovery?.()??spec.recovery);
+          else if(call.kind==='invalidateViews') await hooks.invalidateViews?.();
           else if (call.kind === 'notice') value=await hooks.notice?.();
           else if (call.kind === 'journal') {
             const msg = z.object({ role: z.enum(['system','user','assistant','toolResult']) }).passthrough().parse(call.payload);

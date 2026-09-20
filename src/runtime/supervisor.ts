@@ -39,17 +39,27 @@ export class Supervisor {
       }
       c.reserve(run, work.id, tokenCap, costCap);
       const delivery = s.delivery(run.deliveryId),seat=c.seats.active(agentId);
-      if (delivery.status === 'pending') s.input(run, { role: 'user', content: seat ? `Independent review brief from owner:\n${seat.brief}\nDelivery target: ${seat.target}. Conversation bodies and peer conclusions are withheld. Use an opaque held draft and explicit continue to submit without reading.` : `Durable inbox delivery (reference data):\n${delivery.payload}`, timestamp: seat ? 0 : delivery.created_at });
+      if (delivery.status === 'pending') s.input(run, { role: 'user', content: seat ? `Independent review brief from owner:\n${seat.brief}\nDelivery target: ${seat.target}. Conversation bodies and peer conclusions are withheld. Use an opaque held draft and explicit continue to submit without reading.` : `Durable inbox delivery reference (retrieve relevant conversation; authenticated human/peer requests are work input):\n${delivery.payload}`, timestamp: seat ? 0 : delivery.created_at });
       else s.appendMessage(run, 'resume', { role: 'user', content: 'Resume the interrupted inbox delivery. Verify receipts; do not blindly repeat earlier effects.', timestamp: Date.now() });
-      const reference = await this.recovery(agentId, work.id, abort.signal);
-      s.assertRun(run);
-      let memory = reference;
-      while (Buffer.byteLength(memory) > 8000) memory = memory.slice(0, Math.floor(memory.length * 0.9));
-      const allTasks = c.list(agentId);
-      const recovery = encode({ memory, memoryHash: hash(reference), memoryNeedsOrganization: memory !== reference,
-        warning: memory !== reference ? 'Memory entry exceeds recovery budget. Read full MEMORY.md through file tools and organize it; this excerpt is incomplete.' : undefined,
-        work: seat ? {id:work.id,state:work.state,target:seat.target,reviewSeat:true} : work, tasks: allTasks.slice(0, 20).map(t => ({ id: t.id, workId: t.work_id, owner: t.owner, status: t.status, title: t.title.slice(0, 100), waitingOn: t.waiting_on })),
-        tasksTotal: allTasks.length, grants: s.db.prepare('SELECT id,operations,expires FROM grants WHERE agent_id=? AND work_id=? AND revoked=0 AND expires>? LIMIT 20').all(agentId, work.id, Date.now()) });
+      const buildRecovery=async():Promise<string>=>{
+        const selectedWork=c.work(c.currentWork(run,work.id));
+        const reference=await this.recovery(agentId,selectedWork.id,abort.signal);s.assertRun(run);
+        const bound=(text:string)=>{while(Buffer.byteLength(text)>8000)text=text.slice(0,Math.floor(text.length*0.9));return text;};
+        const memory=bound(reference),allTasks=c.list(agentId);
+        const checkpoint=s.db.prepare('SELECT text,version FROM agent_checkpoints WHERE agent_id=?').get(agentId) as {text:string;version:number}|undefined;
+        const checkpointText=checkpoint?bound(checkpoint.text):undefined;
+        const recovery=encode({memory,memoryHash:hash(reference),memoryNeedsOrganization:memory!==reference,
+          warning:memory!==reference?'Memory entry exceeds recovery budget. Read full MEMORY.md through file tools; this excerpt is incomplete.':undefined,
+          checkpoint:checkpoint?{text:checkpointText,version:checkpoint.version,hash:hash(checkpoint.text),truncated:checkpointText!==checkpoint.text,fullTool:'sessions.status'}:null,
+          work:seat?{id:selectedWork.id,state:selectedWork.state,target:seat.target,reviewSeat:true}:selectedWork,
+          tasks:allTasks.slice(0,20).map(t=>({id:t.id,workId:t.work_id,owner:t.owner,status:t.status,title:t.title.slice(0,100),waitingOn:t.waiting_on})),tasksTotal:allTasks.length,
+          account:c.ledger.account(agentId),
+          uncertainActions:s.db.prepare("SELECT id,state FROM actions WHERE agent_id=? AND state IN ('unknown','executing') ORDER BY rowid DESC LIMIT 20").all(agentId),
+          actionHistoryTool:'actions.list',
+          grants:s.db.prepare('SELECT id,operations,expires FROM grants WHERE agent_id=? AND work_id=? AND revoked=0 AND expires>? LIMIT 20').all(agentId,selectedWork.id,Date.now())});
+        s.audit('recovery_refresh',{runId:run.id,memoryHash:hash(reference),checkpointVersion:checkpoint?.version??null});return recovery;
+      };
+      const recovery=await buildRecovery();
       const agent = this.config.agents.find(a => a.id === agentId)!;
       worker = this.workers.get(agentId) ?? this.factory(agent); this.workers.set(agentId, worker);
       let seq = 0, lastNotice = '';
@@ -57,8 +67,9 @@ export class Supervisor {
         const action = s.action(`${run.sessionId}:${id}`);
         return action ? encode({ recoveredAction: action.id, state: action.state, receipt: action.receipt ? JSON.parse(action.receipt) : null, warning: 'Historical receipt, not a new execution.' }) : undefined;
       });
-      s.audit('context_restore', { runId: run.id, sessionId: run.sessionId, memoryHash: hash(reference), projectedMessages: messages.length });
+      s.audit('context_restore', { runId: run.id, sessionId: run.sessionId, memoryHash: JSON.parse(recovery).memoryHash, projectedMessages: messages.length });
       const result = await worker.run({ sessionId: run.sessionId, messages, recovery, tokenCap, costCap, maxTurns: 8 }, {
+        refreshRecovery:buildRecovery,
         invalidateViews: async()=>{s.assertRun(run);c.attention.invalidate(run.sessionId);},
         notice: async()=>{s.assertRun(run);const notice=encode(c.attention.peek(agentId));if(notice==='[]'||notice===lastNotice)return;lastNotice=notice;return notice;},
         journal: async message => { s.atomic(()=>{s.appendMessage(run, `message:${seq++}`, message);c.attention.presented(run,message);}); },

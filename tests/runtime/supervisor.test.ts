@@ -252,3 +252,15 @@ it('historical non-execution receipts cannot bypass current object ACL through i
  const result=await router.call(run,work,'read-history','actions.read',{actionId:run.sessionId+':cancel-history'},signal);
  expect(JSON.stringify(result)).not.toContain('WITHHELD_HISTORY');expect(JSON.stringify(result)).toContain('receiptUnavailable');
 });
+it('recovery refresh rereads memory, the latest checkpoint and the selected work without refilling account',async()=>{
+ const{store,collaboration:c,work,router,config,supervisor:original}=setup();original.close();let memory='old knowledge',fresh:any;
+ const other=c.createWork('fresh-work',{channel:'CTWO'});let reads=0;
+ const supervisor=new Supervisor(c,router,config,()=>({close:()=>{},run:async(spec,hooks)=>{
+  expect(JSON.parse(spec.recovery).memory).toBe('old knowledge');
+  await hooks.tool('select','works.select',{workId:other});await hooks.tool('checkpoint','sessions.checkpoint',{text:'updated active context'});
+  memory='new domain knowledge';fresh=JSON.parse(await hooks.refreshRecovery!());return{tokens:5,cost:0,certain:true,waiting:false,continuation:false};
+ }}),async()=>{reads++;return memory;});cleanups.unshift(()=>supervisor.close());
+ c.enqueue('research',work,'refresh-memory',{});await supervisor.step('research');
+ expect(reads).toBe(2);expect(fresh.memory).toBe('new domain knowledge');expect(fresh.checkpoint.text).toBe('updated active context');expect(fresh.work.id).toBe(other);expect(fresh.account.tokens).toBe(50000);expect(c.ledger.account('research').tokens).toBe(5);
+ expect(store.db.prepare("SELECT count(*) n FROM audit WHERE kind='recovery_refresh'").get()).toEqual({n:2});
+});

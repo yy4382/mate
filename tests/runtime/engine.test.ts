@@ -77,3 +77,17 @@ it('a once-notified inbox change remains in subsequent input and the recoverable
  const result=await engine.run(spec(),{notice:async()=>++boundary===2?'persistent-notice':undefined,journal:async()=>{},tool:async()=>({value:'done'})});
  expect(contexts[1]).toContain('persistent-notice');expect(contexts[2]).toContain('persistent-notice');expect(JSON.stringify(result.snapshot)).toContain('persistent-notice');
 });
+it('post-compaction recovery refresh reaches the next model input through real worker RPC',async()=>{
+ const {WorkerClient}=await import('../../src/runtime/client.js');const worker=new WorkerClient('test','test','synthetic',new URL('../../dist/tests/helpers/compaction-worker.js',import.meta.url));
+ const input=spec();input.recovery='STALE_RECOVERY';input.messages.push(answer([{type:'text',text:'old'.repeat(4000)}]),{role:'user',content:'continue',timestamp:1});
+ let invalidated=false,refreshed=0,observed='';
+ try{await worker.run(input,{invalidateViews:async()=>{invalidated=true;},refreshRecovery:async()=>{expect(invalidated).toBe(true);refreshed++;return 'NEW_MEMORY_AND_CHECKPOINT';},journal:async m=>{if(m.role==='assistant')observed=JSON.stringify(m);},tool:async()=>({value:null})},10000,new AbortController().signal);}
+ finally{worker.close();}
+ expect(refreshed).toBeGreaterThan(0);expect(observed).toContain('NEW_MEMORY_AND_CHECKPOINT');expect(observed).not.toContain('STALE_RECOVERY');
+});
+it('failed recovery refresh prevents inference on a falsely current compaction package',async()=>{
+ const input=spec();input.messages.push(answer([{type:'text',text:'x'.repeat(12000)}]),{role:'user',content:'resume',timestamp:1});
+ const stream=vi.fn(scripted([answer([{type:'text',text:'must not run'}])]));
+ await expect(new Engine({...model,contextWindow:20000},stream).run(input,{summarize:async()=> 'summary',refreshRecovery:async()=>{throw new Error('memory unavailable');},journal:async()=>{},tool:async()=>({value:null})})).rejects.toThrow('memory unavailable');
+ expect(stream).not.toHaveBeenCalled();
+});

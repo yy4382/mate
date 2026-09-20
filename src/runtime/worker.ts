@@ -37,6 +37,7 @@ export function serveWorker(engine: Engine, models?: Models): void {
     active = true; nonce = parsed.data.nonce; abort = new AbortController();
     try {
       const result = await engine.run(parsed.data.spec as RunSpec, {
+        refreshRecovery:async()=>z.string().max(50000).parse(await rpc('refreshRecovery',null)),
         invalidateViews: async()=>{await rpc('invalidateViews',null);},
         notice: async()=>await rpc('notice',null) as string|undefined,
         journal: async message => { await rpc('journal', message); },
