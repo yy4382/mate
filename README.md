@@ -1,5 +1,7 @@
 # Mate
 
+目标是让持续存在的Agent自主感知、选择工作、协作和管理自己的workspace。新的[项目定位](docs/PROJECT_DIRECTION.md)与[消息门控调研](docs/MESSAGE_GATING_RESEARCH.md)是产品基线。**下文描述现有原型；重新定位后的能力尚未实现，旧模块PASS不代表产品语义验收通过。**
+
 个人单 Slack workspace 的持久多 Agent daemon。使用 **Pi Agent Core + pi-ai**，没有 pi-coding-agent。每 Agent 一个 Node worker、一个跨频道/DM 的逻辑 session 和独立 Markdown memory；SQLite 保存 inbox、任务、journal 和输出回执。
 
 本地实现经过逐模块独立红队，记录在 [实施计划](docs/IMPLEMENTATION_PLAN.md) 和 [审核记录](docs/reviews/)。真实Slack/provider接线尚未凭证验收；脚本化模型测试用于验证harness机制，不评测模型智能。

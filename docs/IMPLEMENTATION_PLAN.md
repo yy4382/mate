@@ -42,3 +42,30 @@ A–G 历史检查与独立红队记录保留；当前检查结果见 `docs/ACCE
 | H（单个交付模块） | pnpm固定版本+唯一lockfile；删除SDK/分类/审批路径及配置；Broker→ExecutionBackend边界保留；v7兼容迁移；源码调用链与feature差距说明 | A–G | pnpm冻结安装、原生依赖、全测试；授权内exec直接执行/越界与未知副作用仍拒绝；v6遗留审批失效而不自动执行；独立红队检查实际代码与说明 | PASS，review_h，66普通+4真实隔离测试 |
 
 旧review记录与reference保留为历史证据，并在当前入口标明已被本次决策取代。调用链说明以harness为验收对象，假设模型足够智能；检查工具/环境/prompt可达性、持久状态与恢复。脚本化模型验证机制即可，不将模型性能或自主性质量作为待办；真实服务检查只关注协议、权限、usage和错误兼容。
+
+
+## R0 — 重新定位与消息门控调研（本轮范围）
+
+用户明确将Raft的模型主观能动性置于产品核心。本轮交付项目定位、证据分层的门控调研、替代架构与后续模块计划；不把研究请求扩成未经设计的runtime重写。
+
+| 模块 | 目标 | 接口/产物 | 依赖 | 验收与验证 | 状态 |
+|---|---|---|---|---|---|
+| R0 | 从受限work执行器重新定位为持久自主Agent的协作环境；调研注意力与发送时门控 | PROJECT_DIRECTION、MESSAGE_GATING_RESEARCH、README/AGENTS/交接入口、后续R1+接口和依赖 | 原始Raft prompt/对话证据、当前源码、官方公开材料 | 明确事实/建议/实现状态；解决八项语义偏移；门控保留读取/修改/沉默/显式继续选择，描述Slack一致性边界；独立红队审查 | PASS，review_r0；仅文档设计 |
+
+不把旧A–H的PASS当作新定位验收。后续代码模块需要各自实现、检查、独立review gate，本轮不将其标为完成。
+
+
+## 重新定位后的代码模块（未开始）
+
+下表是依赖顺序，不代表本轮已实施；本轮交付R0研究/定位。未来每个模块实现后都需要独立review gate，必须检查原意/行动空间，不能只检查所选路径的健壮性。旧数据库升级需提供备份、映射和可恢复失败路径，不删库重建冒充迁移。
+
+| 模块 | 目标与接口 | 依赖 | 验收与有意义验证 | 状态 |
+|---|---|---|---|---|
+| R1 身份/消息/预算基础 | Conversation的channel/thread/dm与revision；Agent/run/预算账户/任务引用分离；显式账户归属与授权 | R0 | 顶层发言、主动DM、同Agent跨事项读取和切换；有限持续账户支持非human触发；不可借切换重置预算；旧work与target迁移回归 | 未开始 |
+| R2 注意力与呈现 | Attention.peek/read/defer/resolve，watch/mute，分页coverage/viewToken，Pi运行中notice与ACK | R1 | 新消息在断点可见但不强制读正文；结束run不清未读；分页/编辑/晚到/崩溃不错误推进seen；跨频道可暂缓/转向 | 未开始 |
+| R3 提交门控 | FreshnessGate、draft生命周期、发送前再检查、有限知情继续、全输入路径review seat隔离 | R2 | 调研表全部相关竞态；变更hold/重启草稿/四选项/热频道活性/盲审不泄漏/Slack竞态显式记录；不启用命令审查 | 未开始 |
+| R4 消息任务 | canonical message claim、unclaim/transfer、状态投影、可选dependency；接R3任务门控 | R3 | 同一消息并发转换/认领唯一；hold无副作用；任务版本冲突；可直接协作或用任务，无强制总管/任务树；人类可见状态 | 未开始 |
+| R5 工具与workspace | ToolEnvironment注册/描述/执行adapter；私有workspace完整文件能力；可配置联网与工具链、附件输入输出 | R4 | 合成资料检索/脚本/文件组织/发布全链；不依赖外部私密凭证；真实backend停止/崩溃隔离；其他Agent私有空间不可访问 | 未开始 |
+| R6 作者拥有的提醒 | Reminder内容/锚点/版本/改期/取消/日志；独立于已完成task，绑定持续预算策略 | R5 | 完成任务后提醒仍触发本人；可见回执不乱唤醒；取消与已入队区分；catch-up去重；旧schedule显式迁移 | 未开始 |
+| R7 session演进与prompt | 逻辑身份/current session、检查点/重置/配置迁移、压缩后memory刷新、完整行为约定 | R6 | 角色更新/换session保持身份/未读/任务/提醒/草稿；旧view失效；memory内容自由；不可恢复窗口如实说明 | 未开始 |
+| R8 产品语义验收 | 合成多Agent场景与故障矩阵、README/current behavior重写 | R7 | 覆盖多种合法选择而非固定合作剧本；真实Slack/provider仅协议接线；独立审查对照Raft原意及用户修正逐项判定 | 未开始 |
