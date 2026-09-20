@@ -64,3 +64,11 @@ it('expired scope and a foreign work cannot reach the execution backend', async 
   await expect(new Broker(db, collaboration, { execute }, [], () => 1000).execute(run, other, 'foreign', grant, { kind: 'read', path: 'note' })).rejects.toThrow('mismatch');
   expect(execute).not.toHaveBeenCalled();
 });
+it('switching activity cannot bypass uncertain effects on the same resources',async()=>{
+  const {root,run,broker,work,grant,execute,collaboration:c}=setup();
+  execute.mockRejectedValueOnce(new Error('lost'));
+  await expect(broker.execute(run,work,'first',grant,{kind:'write',path:'note',content:'x'})).rejects.toThrow('lost');
+  const other=c.createWork('other',{channel:'CTEST'});const otherGrant=broker.issueGrant('UOWNER','research',other,root,['write'],100000);c.selectWork(run,other);
+  expect(await broker.execute(run,other,'second',otherGrant,{kind:'write',path:'note',content:'x'})).toMatchObject({status:'action_unknown'});
+  expect(execute).toHaveBeenCalledTimes(1);
+});

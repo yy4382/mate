@@ -95,3 +95,12 @@ it('wakeups catch up once, retain origin/budget, are transactional and cancel wi
   service.update('research', task, 'cancelled'); expect(service.schedules('research').every(s => s.active === 0)).toBe(true);
   expect(() => service.cancelSchedule('engineer', recurring)).toThrow('owned');
 });
+it('legacy shared-work debt is conservatively retained once per participating Agent',()=>{
+  const {db,service:c,work}=setup();c.enqueue('research',work,'legacy',{});const run=db.beginRun('research')!;db.input(run,{});
+  c.reserve(run,work,50,0.5);db.finish(run);
+  db.db.exec('DELETE FROM budget_runs; DELETE FROM budget_accounts');
+  const account=c.ledger.account('research');expect(account.tokens).toBe(50);
+  expect(c.ledger.account('research')).toEqual(account);
+  c.settleUsage(run.id,10,0.1);expect(c.ledger.account('research').tokens).toBe(10);
+  c.settleUsage(run.id,0,0);expect(c.ledger.account('research').tokens).toBe(10);
+});

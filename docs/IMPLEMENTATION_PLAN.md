@@ -61,8 +61,8 @@ A–G 历史检查与独立红队记录保留；当前检查结果见 `docs/ACCE
 
 | 模块 | 目标与接口 | 依赖 | 验收与有意义验证 | 状态 |
 |---|---|---|---|---|
-| R1 身份/消息/预算基础 | Conversation的channel/thread/dm与revision；Agent/run/预算账户/任务引用分离；显式账户归属与授权 | R0 | 顶层发言、主动DM、同Agent跨事项读取和切换；有限持续账户支持非human触发；不可借切换重置预算；旧work与target迁移回归 | 未开始 |
-| R2 注意力与呈现 | Attention.peek/read/defer/resolve，watch/mute，分页coverage/viewToken，Pi运行中notice与ACK | R1 | 新消息在断点可见但不强制读正文；结束run不清未读；分页/编辑/晚到/崩溃不错误推进seen；跨频道可暂缓/转向 | 未开始 |
+| R1 身份/消息/预算基础 | Conversation的channel/thread/dm与revision；Agent/run/预算账户/任务引用分离；显式账户归属与授权 | R0 | 顶层发言、主动DM、同Agent跨事项读取和切换；有限持续账户支持非human触发；不可借切换重置预算；旧work与target迁移回归 | PASS，R1a/R1b |
+| R2 注意力与呈现 | Attention.peek/read/defer/resolve，watch/mute，分页coverage/viewToken，Pi运行中notice与ACK | R1 | 新消息在断点可见但不强制读正文；结束run不清未读；分页/编辑/晚到/崩溃不错误推进seen；跨频道可暂缓/转向 | 实施中 |
 | R3 提交门控 | FreshnessGate、draft生命周期、发送前再检查、有限知情继续、全输入路径review seat隔离 | R2 | 调研表全部相关竞态；变更hold/重启草稿/四选项/热频道活性/盲审不泄漏/Slack竞态显式记录；不启用命令审查 | 未开始 |
 | R4 消息任务 | canonical message claim、unclaim/transfer、状态投影、可选dependency；接R3任务门控 | R3 | 同一消息并发转换/认领唯一；hold无副作用；任务版本冲突；可直接协作或用任务，无强制总管/任务树；人类可见状态 | 未开始 |
 | R5 工具与workspace | ToolEnvironment注册/描述/执行adapter；私有workspace完整文件能力；可配置联网与工具链、附件输入输出 | R4 | 合成资料检索/脚本/文件组织/发布全链；不依赖外部私密凭证；真实backend停止/崩溃隔离；其他Agent私有空间不可访问 | 未开始 |
@@ -78,6 +78,8 @@ R1同时涉及消息契约与预算模型，拆成两个独立gate，避免一�
 | 模块 | 目标/接口 | 依赖 | 验收与验证 | 状态 |
 |---|---|---|---|---|
 | R1a 交流空间 | Target.thread可选；频道/DM顶层发送、对账；Directory.spaces/members/openDM；本地message event revision；v8迁移前备份 | R0 | 模拟Slack transport验证顶层无thread_ts、新DM及权限、unknown不重放、旧thread兼容；编辑/删除/晚到revision；旧库备份与重开 | PASS，review_r1a，77 tests |
-| R1b 预算与事项解耦 | 持续Agent账户、事项控制与run/action预算归属分离；跨事项read/claim/update，保留授权与债务 | R1a | 无新human预算重置；同Agent不同事项切换；耗尽不暂停全Agent；停止、继承额度、未知用量与旧work迁移 | 实施中 |
+| R1b 预算与事项解耦 | 持续Agent账户、事项控制与run/action预算归属分离；跨事项read/claim/update，保留授权与债务 | R1a | 无新human预算重置；同Agent不同事项切换；耗尽不暂停全Agent；停止、继承额度、未知用量与旧work迁移 | PASS，review_r1b，84 tests |
 
 R2及后续模块维持上述依赖，R1a红队通过后才实施R1b。整个重构不会引入Jev或改变Pi Core选型。
+
+R1b实现约定：预算账户按Agent持久化，配置仅首次播种；owner的`agent-budget`修改累计上限，human/peer消息不补额。旧work上限保留为可选事项上限；一次模型run全部计入Agent账户和起始事项（账单归属不随中途切换改变），run_context单独控制后续动作与停止/continuation。`works.select`检查目标可见性并取得该事项的配置授权，`tasks.read/claim/update`按可见性/所有权独立判断。v9先备份；旧work只有聚合usage，首次账户初始化把该Agent参与过的work全部usage保守计入账户，可能高估但不丢未知债务，并记录audit；不伪称历史可精确拆账。账户耗尽等待owner补额，不自动无限提供控制模型额度；工具读取不会再被事项ID拒绝。

@@ -32,9 +32,10 @@ export class Broker {
   }
   private grant(run: RunToken, workId: string, id: string, op: Operation): Grant {
     this.store.assertRun(run);
-    if (this.collaboration.work(workId).state !== 'active') throw new Error('Work is not active');
+    this.collaboration.assertActionWork(run,workId);
     const binding = this.store.db.prepare('SELECT work_id FROM delivery_work WHERE delivery_id=?').get(run.deliveryId) as { work_id: string } | undefined;
-    if (binding?.work_id !== workId) throw new Error('Run work mismatch');
+    if (this.collaboration.currentWork(run, binding?.work_id ?? '') !== workId) throw new Error('Run work mismatch');
+    this.collaboration.messages.requireAccess(run.agentId, JSON.parse(this.collaboration.work(workId).target).channel);
     const grant = this.store.db.prepare('SELECT * FROM grants WHERE id=?').get(id) as Grant | undefined;
     if (!grant || grant.agent_id !== run.agentId || grant.work_id !== workId || grant.revoked || grant.expires <= this.clock() || !(JSON.parse(grant.operations) as string[]).includes(op.kind)) throw new Error('Grant does not cover action');
     if (canonicalRoot(grant.root, this.protectedRoots) !== grant.root) throw new Error('Grant root changed');
@@ -53,7 +54,7 @@ export class Broker {
     const request = { workId, grantId, root: grant.root, operation: op, policyVersion };
     const action = this.store.prepareAction(run, actionId, request);
     if (action.state === 'succeeded' || action.state === 'failed') return { status: action.state, receipt: action.receipt ? JSON.parse(action.receipt) : null };
-    if (action.state === 'unknown' || action.state === 'executing' || (op.kind !== 'read' && this.store.db.prepare("SELECT 1 FROM actions WHERE agent_id=? AND state IN ('unknown','executing') AND id!=? AND json_extract(request,'$.workId')=? AND (json_extract(request,'$.operation.kind')='exec' OR (json_extract(request,'$.root')=? AND json_extract(request,'$.operation.kind')='write' AND json_extract(request,'$.operation.path')=?))").get(run.agentId, actionId, workId, grant.root, op.kind === 'write' ? op.path : null))) return { status: 'action_unknown', actionId };
+    if (action.state === 'unknown' || action.state === 'executing' || (op.kind !== 'read' && this.store.db.prepare("SELECT 1 FROM actions WHERE agent_id=? AND state IN ('unknown','executing') AND id!=? AND (json_extract(request,'$.operation.kind')='exec' OR (json_extract(request,'$.root')=? AND json_extract(request,'$.operation.kind')='write' AND json_extract(request,'$.operation.path')=?))").get(run.agentId, actionId, grant.root, op.kind === 'write' ? op.path : null))) return { status: 'action_unknown', actionId };
     if (signal?.aborted) throw new Error('Action aborted before execution');
     this.grant(run, workId, grantId, op);
     this.store.atomic(() => {

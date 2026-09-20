@@ -53,13 +53,13 @@ it('worker loss keeps reservation and input; explicit recovery resumes the same 
   store.db.prepare('UPDATE works SET max_tokens=300000 WHERE id=?').run(work); store.resume('research'); failures = false;
   await supervisor.step('research'); expect(store.delivery(delivery).status).toBe('handled'); expect(JSON.stringify(last(store,'research').data.context)).toContain('recover me');
 }, 10000);
-it('local tools use immutable receipts and cannot cross work scope', async () => {
+it('local tools use immutable receipts and can claim another visible activity', async () => {
   const { store, collaboration: c, work, router } = setup(); c.enqueue('research', work, 'one', {}); const run = store.beginRun('research')!; store.input(run, {});
   const target = { channel: 'CTEST', thread: '100.000001' }, signal = new AbortController().signal;
   const created = await router.call(run, work, 'create', 'tasks.create', { target, title: 'one' }, signal);
   expect(await router.call(run, work, 'create', 'tasks.create', { target, title: 'one' }, signal)).toEqual(created); expect(c.list('research')).toHaveLength(1);
   const other = c.createWork('human:other', target), task = c.createTask('research', other, target, 'other');
-  await expect(router.call(run, work, 'claim', 'tasks.claim', { taskId: task }, signal)).rejects.toThrow('another work');
+  await router.call(run, work, 'claim', 'tasks.claim', { taskId: task }, signal); expect(c.task(task).owner).toBe('research');
   await expect(router.call(run, work, 'spoof', 'messages.send', { target, text: 'hi', agentId: 'writer' }, signal)).rejects.toThrow();
 });
 it('recovery is bounded even with large task results; memory callback is injected and hashed', async () => {
@@ -99,4 +99,48 @@ it('crash after effect commit before tool-result journal restores its receipt wi
   c.enqueue('research', work, 'crash-window', {}); await supervisor.step('research'); expect(c.list('research')).toHaveLength(1);
   store.resume('research'); await supervisor.step('research'); expect(c.list('research')).toHaveLength(1);
   expect(restored).toContain('recoveredAction'); expect(restored).toContain('succeeded'); expect(restored).toContain('Historical receipt');
+});
+it('switching activity retains the Agent account and work stop targets the selected activity', async()=>{
+  const {store,collaboration:c,work,router}=setup();
+  const other=c.createWork('other',{channel:'CTWO'});c.enqueue('research',work,'one',{});
+  const run=store.beginRun('research')!;store.input(run,{});c.reserve(run,work,100,0.1);
+  const before=c.ledger.account('research');
+  await router.call(run,work,'switch','works.select',{workId:other},new AbortController().signal);
+  await router.call(run,work,'create','tasks.create',{target:{channel:'CTWO'},title:'new context'},new AbortController().signal);
+  expect(c.list('research')[0]?.work_id).toBe(other);expect(c.ledger.account('research')).toEqual(before);
+  expect(c.control('UOWNER',work,'pause')).toEqual([]);expect(c.control('UOWNER',other,'pause')).toEqual([run.id]);
+});
+it('an exhausted activity does not pause the Agent or starve another activity',async()=>{
+  const {store,collaboration:c,work,supervisor}=setup(()=>({close:()=>{},run:async()=>({tokens:1,cost:0,certain:true,waiting:false,continuation:false})}));
+  store.db.prepare('UPDATE works SET tokens=max_tokens WHERE id=?').run(work);
+  c.enqueue('research',work,'old',{});await supervisor.step('research');
+  const other=c.createWork('other',{channel:'CTWO'});const delivery=c.enqueue('research',other,'new',{});
+  await supervisor.step('research');expect(store.delivery(delivery).status).toBe('handled');
+  expect(store.db.prepare("SELECT paused FROM agents WHERE id='research'").get()).toEqual({paused:0});
+});
+it('new messages and new work cannot erase unknown account usage',()=>{
+  const {store,collaboration:c,work}=setup();
+  c.ledger.setLimits('UOWNER','research',3,100,1);c.enqueue('research',work,'one',{});
+  const run=store.beginRun('research')!;store.input(run,{});c.reserve(run,work,100,0.5);store.finish(run);
+  const other=c.createWork('human:new',{channel:'CTWO'});c.enqueue('research',other,'two',{});const next=store.beginRun('research')!;
+  expect(()=>c.reserve(next,other,1,0)).toThrow('Agent budget exhausted');
+  expect(c.ledger.account('research').tokens).toBe(100);
+});
+it('selected activity survives interrupted delivery recovery while its origin is paused',()=>{
+  const {store,collaboration:c,work}=setup();const other=c.createWork('other',{channel:'CTWO'});
+  c.enqueue('research',work,'one',{});const first=store.beginRun('research')!;store.input(first,{});c.reserve(first,work,10,0.1);
+  c.selectWork(first,other);c.control('UOWNER',work,'pause');store.recover();
+  const next=store.beginRun('research',Date.now(),true)!;expect(next).toBeDefined();
+  c.reserve(next,other,10,0.1);expect(c.currentWork(next,work)).toBe(other);
+  expect(c.ledger.account('research').tokens).toBe(20);
+});
+it('work selection replays its receipt and distinguishes own reservation from exhausted unrelated work',async()=>{
+  const {store,collaboration:c,work,router}=setup();const other=c.createWork('other',{channel:'CTWO'});
+  c.enqueue('research',work,'one',{});const run=store.beginRun('research')!;store.input(run,{});c.reserve(run,work,100000,1);
+  const signal=new AbortController().signal;
+  await router.call(run,work,'create','tasks.create',{target:{channel:'CTEST'},title:'reserved allowance'},signal);
+  const first=await router.call(run,work,'switch','works.select',{workId:other},signal);
+  expect(await router.call(run,work,'switch','works.select',{workId:other},signal)).toEqual(first);
+  const exhausted=c.createWork('exhausted',{channel:'CTEST'});store.db.prepare('UPDATE works SET tokens=max_tokens WHERE id=?').run(exhausted);
+  await expect(router.call(run,work,'blocked','works.select',{workId:exhausted},signal)).rejects.toThrow('budget exhausted');
 });

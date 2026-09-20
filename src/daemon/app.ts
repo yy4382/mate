@@ -67,7 +67,7 @@ export class Daemon {
       this.broker = new Broker(this.store, this.collaboration, this.backend, [projectRoot, state]);
       const research = new Research(config.runtime.researchHosts);
       let artifacts!: Artifacts;
-      const router = new ToolRouter(this.collaboration, this.broker, { research: (url, signal) => research.read(url, signal), publish: (...args) => artifacts.publish(...args) }, new Directory(messages, transport.clients));
+      const router = new ToolRouter(this.collaboration, this.broker, { research: (url, signal) => research.read(url, signal), publish: (...args) => artifacts.publish(...args) }, new Directory(messages, transport.clients), (actor,workId)=>this.ensureGrants(actor,workId));
       this.supervisor = new Supervisor(this.collaboration, router, c, undefined, async (agentId, workId, signal) => {
         this.ensureGrants(agentId, workId);
         const result = await files.execute({ root: this.memoryRoots[agentId]!, operation: { kind: 'read', path: 'MEMORY.md' }, timeoutMs: 10000 }, signal);

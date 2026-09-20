@@ -1,7 +1,7 @@
 import { encode } from '../storage/store.js';
 import type { Collaboration } from '../collaboration/service.js';
 import { messageKey, type NormalMessage } from '../slack/messages.js';
-/** Durable replay never creates fresh budget roots for peer echoes or external bots. */
+/** Message provenance selects an activity; each recipient spends its existing Agent account. */
 export class Ingress {
   constructor(readonly collaboration: Collaboration) {}
   replay(appId: string, eventId: string): void {
@@ -22,14 +22,14 @@ export class Ingress {
         if (!message) continue; const msg = JSON.parse(message.body) as NormalMessage;
         const bound = s.db.prepare('SELECT work_id FROM message_work WHERE message_key=?').get(payload.messageKey) as { work_id: string } | undefined;
         let workId = bound?.work_id;
-        if (!workId && payload.source?.kind === 'human' && payload.source.id) {
+        if (!workId && ['human','agent','external_bot'].includes(payload.source?.kind) && payload.source.id) {
           const threadRoot = messageKey({ team: msg.team, channel: msg.channel, ts: msg.thread });
           const parent = s.db.prepare('SELECT work_id FROM message_work WHERE message_key=?').get(threadRoot) as { work_id: string } | undefined;
-          workId = parent?.work_id ?? c.createWork(`human:${payload.messageKey}`, payload.target);
+          workId = parent?.work_id ?? c.createWork(`message:${payload.messageKey}`, payload.target);
           s.db.prepare('INSERT INTO message_work VALUES(?,?) ON CONFLICT DO NOTHING').run(payload.messageKey, workId);
         }
         if (workId) c.bindDelivery(delivery.id, workId);
-        // Unmapped peers remain held until the sent outbox receipt binds their message.
+        // Non-message deliveries require a trusted scheduler binding.
         else if (payload.source?.kind === 'external_bot') s.db.prepare("UPDATE deliveries SET status='handled' WHERE id=?").run(delivery.id);
       }
       s.audit('ingress_replayed', { appId, eventId });

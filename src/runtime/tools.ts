@@ -7,6 +7,9 @@ import { targetSchema } from '../slack/messages.js';
 import type { ToolReply } from './engine.js';
 const id = z.string().min(1).max(500), text = z.string().max(35000);
 const schemas = {
+  'works.list': z.object({}).strict(),
+  'works.select': z.object({ workId: id }).strict(),
+  'budget.read': z.object({}).strict(),
   'conversations.list': z.object({}).strict(),
   'conversations.members': z.object({ channel: id }).strict(),
   'conversations.openDM': z.object({ user: z.string().regex(/^U[A-Z0-9]+$/) }).strict(),
@@ -33,14 +36,16 @@ export interface AdditionalTools {
   publish(run: RunToken, workId: string, actionId: string, args: { grantId: string; path: string; title: string; target: { channel: string; thread?: string } }, signal: AbortSignal): Promise<unknown>;
 }
 export class ToolRouter {
-  constructor(readonly collaboration: Collaboration, readonly broker: Broker, readonly additional?: AdditionalTools, readonly directory?: Directory) {}
+  constructor(readonly collaboration: Collaboration, readonly broker: Broker, readonly additional?: AdditionalTools, readonly directory?: Directory, readonly provision?: (actor:string,workId:string)=>void) {}
   async call(run: RunToken, workId: string, callId: string, operation: string, input: unknown, signal: AbortSignal): Promise<ToolReply> {
     const c = this.collaboration, s = c.store, actor = run.agentId;
     s.assertRun(run); signal.throwIfAborted();
-    if (c.work(workId).state !== 'active') throw new Error('Work not active');
+    workId = c.currentWork(run, workId);
     if (!(operation in schemas)) throw new Error('Unknown operation');
     // Parsing is deliberately repeated in the daemon, independently of model-side tool validation.
     const args = schemas[operation as keyof typeof schemas].parse(input) as Record<string, any>;
+    const readOnly = ['agents','works.list','budget.read','tasks.read','tasks.list','messages.read','messages.recent','messages.search','schedules.list','inbox.list','inbox.read','conversations.list','conversations.members'];
+    if (!readOnly.includes(operation) && operation !== 'works.select') c.assertActionWork(run, args.taskId ? c.task(args.taskId).work_id : workId);
     const actionId = `${run.sessionId}:${callId}`;
     if (operation.startsWith('conversations.')) {
       if (!this.directory) throw new Error('Directory unavailable');
@@ -55,13 +60,16 @@ export class ToolRouter {
     }
     // All local effects and their receipts commit together. Crash replay returns the recorded value.
     return s.atomic(() => {
-      const existing = s.prepareAction(run, actionId, { workId, operation, args });
+      const existing = s.prepareAction(run, actionId, operation === 'works.select' ? { operation, args } : { workId, operation, args });
       if (existing.state === 'succeeded') return JSON.parse(existing.receipt!) as ToolReply;
       if (existing.state !== 'prepared') throw new Error('Uncertain tool action');
       s.startAction(run, actionId);
-      if (args.taskId && c.task(args.taskId).work_id !== workId) throw new Error('Task belongs to another work');
+      if (args.taskId) c.messages.requireAccess(actor, JSON.parse(c.task(args.taskId).target).channel);
       let value: unknown = null, wait = false;
       switch (operation) {
+        case 'budget.read': value=c.ledger.account(actor); break;
+        case 'works.list': value=s.db.prepare("SELECT w.* FROM works w JOIN channel_access a ON a.channel=json_extract(w.target,'$.channel') WHERE a.agent_id=? AND a.active=1 ORDER BY w.rowid DESC LIMIT 100").all(actor); break;
+        case 'works.select': c.selectWork(run,args.workId); this.provision?.(actor,args.workId); value={work:c.work(args.workId),grants:s.db.prepare('SELECT id,operations FROM grants WHERE agent_id=? AND work_id=? AND revoked=0 AND expires>?').all(actor,args.workId,Date.now())}; break;
         case 'agents': value = c.config.agents.map(a => ({ id: a.id, name: a.name, role: a.role, slackUserId: a.slackUserId })); break;
         case 'tasks.read': { const task = c.task(args.taskId); c.messages.requireAccess(actor, JSON.parse(task.target).channel); value = task; break; }
         case 'messages.recent': value = c.messages.recent(actor, args.channel); break;

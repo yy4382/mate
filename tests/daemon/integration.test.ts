@@ -70,11 +70,13 @@ it('two Agents independently challenge and revise a result through durable tasks
   expect(store.db.prepare('SELECT count(*) n FROM works').get()).toEqual({n:1}); expect(store.db.prepare('SELECT count(*) n FROM sessions').get()).toEqual({n:2});
   expect(store.db.prepare("SELECT count(*) n FROM runs WHERE state='failed'").get()).toEqual({n:0});
 });
-it('unbound peer echoes cannot start runs or mint a budget, then bind to the original sent work', async () => {
+it('peer messages can wake an Agent using its existing finite account without a human budget root', async () => {
   const {store,c,ingress}=setup(); for(const agent of c.config.agents){store.register(agent.id,'v1',[]);c.messages.membership(agent.id,'CTEST',true);}
+  const before=c.ledger.account('writer');
   store.ingest('ATWO','peer',{team_id:'TTEST',event:{type:'message',channel:'CTEST',ts:'100.000001',user:'UONE',bot_id:'BONE',text:'<@UTWO> help'}}); ingress.replay('ATWO','peer');
-  expect(store.beginRun('writer',Date.now(),true)).toBeUndefined(); expect(store.db.prepare('SELECT count(*) n FROM works').get()).toEqual({n:0});
-  const work=c.createWork('human:root',{channel:'CTEST',thread:'100.000001'}); store.db.prepare('INSERT INTO message_work VALUES(?,?)').run(JSON.stringify(['TTEST','CTEST','100.000001']),work); ingress.bindPeerEchoes(); expect(store.beginRun('writer',Date.now(),true)).toBeDefined();
+  const run=store.beginRun('writer',Date.now(),true)!; expect(run).toBeDefined();
+  const binding=store.db.prepare('SELECT work_id FROM delivery_work WHERE delivery_id=?').get(run.deliveryId) as {work_id:string};
+  c.reserve(run,binding.work_id,20,0.1);expect(c.ledger.account('writer')).toMatchObject({max_tokens:before.max_tokens,tokens:20,runs:1});
 });
 it('kernel lock excludes a second daemon; backup restores SQLite plus private memory', async () => {
   const root=mkdtempSync(join(tmpdir(),'mate-checkpoint-')), data=join(root,'data'); mkdirSync(join(data,'agents','research'),{recursive:true}); writeFileSync(join(data,'agents','research','MEMORY.md'),'synthetic lesson');

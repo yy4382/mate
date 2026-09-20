@@ -1,3 +1,4 @@
+import { BudgetLedger } from '../budget/ledger.js';
 import { randomUUID } from 'node:crypto';
 import { CronExpressionParser } from 'cron-parser';
 import { z } from 'zod';
@@ -9,16 +10,34 @@ export interface Work { id: string; target: string; state: string; max_runs: num
 export interface Task { id: string; work_id: string; parent_id: string | null; target: string; title: string; owner: string | null; assigned_to: string | null; status: string; version: number; waiting_on: string | null; result: string | null; outbox_id: string | null }
 interface Schedule { id: string; agent_id: string; work_id: string; task_id: string | null; target: string; next_at: number; cron: string | null; timezone: string; active: number }
 export class Collaboration {
-  constructor(readonly store: Store, readonly messages: Messages, readonly output: Output, readonly config: MateConfig) {}
+  readonly ledger: BudgetLedger;
+  constructor(readonly store: Store, readonly messages: Messages, readonly output: Output, readonly config: MateConfig) { this.ledger = new BudgetLedger(store, config); }
   work(id: string): Work { const work = this.store.db.prepare('SELECT * FROM works WHERE id=?').get(id) as Work | undefined; if (!work) throw new Error('Unknown work'); return work; }
   task(id: string): Task { const task = this.store.db.prepare('SELECT * FROM tasks WHERE id=?').get(id) as Task | undefined; if (!task) throw new Error('Unknown task'); return task; }
   list(agentId: string): Task[] {
     this.messages.agent(agentId);
     return this.store.db.prepare("SELECT t.* FROM tasks t JOIN channel_access a ON a.channel=json_extract(t.target,'$.channel') WHERE a.agent_id=? AND a.active=1 ORDER BY t.rowid DESC LIMIT 100").all(agentId) as Task[];
   }
+  currentWork(run: RunToken, fallback: string): string {
+    this.store.assertRun(run);
+    return (this.store.db.prepare('SELECT work_id FROM run_context WHERE run_id=?').get(run.id) as {work_id:string}|undefined)?.work_id ?? fallback;
+  }
+  assertActionWork(run: RunToken, workId: string): void {
+    this.store.assertRun(run);const work=this.active(workId);
+    const reserved=this.store.db.prepare('SELECT 1 FROM work_runs WHERE run_id=? AND work_id=?').get(run.id,workId);
+    if(!reserved && (work.runs>=work.max_runs || work.tokens>=work.max_tokens || work.cost>=work.max_cost)) throw new Error('Work budget exhausted');
+  }
+  selectWork(run: RunToken, workId: string): void {
+    this.assertActionWork(run,workId); const work=this.active(workId);
+    this.messages.requireAccess(run.agentId, JSON.parse(work.target).channel);
+    this.store.atomic(()=>{
+      this.store.db.prepare('INSERT INTO run_context VALUES(?,?) ON CONFLICT(run_id) DO UPDATE SET work_id=excluded.work_id').run(run.id,workId);
+      this.store.db.prepare('INSERT INTO delivery_context VALUES(?,?) ON CONFLICT(delivery_id) DO UPDATE SET work_id=excluded.work_id').run(run.deliveryId,workId);
+    });
+  }
   private active(workId: string): Work { const work = this.work(workId); if (work.state !== 'active') throw new Error('Work paused or cancelled'); return work; }
   private event(taskId: string, body: unknown): void { this.store.db.prepare('INSERT INTO task_events(task_id,at,body) VALUES(?,?,?)').run(taskId, Date.now(), encode(body)); }
-  /** Only trusted human ingress creates a budget root; peer tools only inherit one. */
+  /** Work identifies an activity; it never grants or replenishes an Agent account. */
   createWork(origin: string, target: Target): string {
     targetSchema.parse(target);
     return this.store.atomic(() => {
@@ -51,9 +70,11 @@ export class Collaboration {
     this.store.atomic(() => {
       this.store.assertRun(run); const work = this.active(workId);
       if (this.store.db.prepare('SELECT 1 FROM work_runs WHERE run_id=?').get(run.id)) throw new Error('Run already reserved');
-      const binding = this.store.db.prepare('SELECT work_id FROM delivery_work WHERE delivery_id=?').get(run.deliveryId) as { work_id: string } | undefined;
+      const binding = this.store.db.prepare('SELECT COALESCE(dc.work_id,dw.work_id) work_id FROM delivery_work dw LEFT JOIN delivery_context dc ON dc.delivery_id=dw.delivery_id WHERE dw.delivery_id=?').get(run.deliveryId) as { work_id: string } | undefined;
       if (!binding || binding.work_id !== workId) throw new Error('Run work mismatch');
       if (work.runs + 1 > work.max_runs || work.tokens + tokens > work.max_tokens || work.cost + cost > work.max_cost) throw new Error('Work budget exhausted');
+      this.ledger.reserve(run, tokens, cost);
+      this.store.db.prepare('INSERT INTO run_context VALUES(?,?) ON CONFLICT DO NOTHING').run(run.id, workId);
       this.store.db.prepare('UPDATE works SET runs=runs+1,tokens=tokens+?,cost=cost+? WHERE id=?').run(tokens, cost, workId);
       this.store.db.prepare('INSERT INTO work_runs(run_id,work_id,token_cap,cost_cap) VALUES(?,?,?,?)').run(run.id, workId, tokens, cost);
     });
@@ -61,6 +82,7 @@ export class Collaboration {
   settleUsage(runId: string, tokens: number, cost: number): void {
     z.number().int().nonnegative().parse(tokens); z.number().finite().nonnegative().parse(cost);
     this.store.atomic(() => {
+      this.ledger.settle(runId, tokens, cost);
       const row = this.store.db.prepare('SELECT * FROM work_runs WHERE run_id=?').get(runId) as { work_id: string; token_cap: number; cost_cap: number; settled: number } | undefined;
       if (!row || row.settled) return;
       this.store.db.prepare('UPDATE works SET tokens=tokens+?,cost=MAX(0,cost+?) WHERE id=?').run(tokens - row.token_cap, cost - row.cost_cap, row.work_id);
@@ -86,7 +108,7 @@ export class Collaboration {
     });
   }
   private owned(agentId: string, id: string): Task {
-    const task = this.task(id); this.active(task.work_id);
+    const task = this.task(id); this.active(task.work_id); this.messages.requireAccess(agentId, JSON.parse(task.target).channel);
     if (task.owner !== agentId || ['done','cancelled','failed','draft'].includes(task.status)) throw new Error('Task not owned or terminal'); return task;
   }
   delegate(agentId: string, parentId: string, peerId: string, title: string): string {
@@ -195,7 +217,7 @@ export class Collaboration {
     if (!this.config.ownerUserIds.includes(ownerId)) throw new Error('Owner only');
     return this.store.atomic(() => {
       const work = this.work(workId); if (work.state === 'cancelled') throw new Error('Cancelled work cannot resume');
-      const runs = this.store.db.prepare("SELECT r.id,r.agent_id FROM runs r JOIN delivery_work dw ON dw.delivery_id=r.delivery_id WHERE dw.work_id=? AND r.state='active'").all(workId) as { id: string; agent_id: string }[];
+      const runs = this.store.db.prepare("SELECT r.id,r.agent_id FROM runs r LEFT JOIN run_context rc ON rc.run_id=r.id JOIN delivery_work dw ON dw.delivery_id=r.delivery_id WHERE COALESCE(rc.work_id,dw.work_id)=? AND r.state='active'").all(workId) as { id: string; agent_id: string }[];
       this.store.db.prepare('UPDATE works SET state=? WHERE id=?').run(operation === 'resume' ? 'active' : operation === 'pause' ? 'paused' : 'cancelled', workId);
       if (operation !== 'resume') {
         for (const run of runs) {

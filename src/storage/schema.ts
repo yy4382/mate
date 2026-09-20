@@ -76,3 +76,11 @@ CREATE INDEX conversation_event_target ON conversation_events(channel,thread,seq
 INSERT INTO conversation_events(channel,thread,message_key,revision,kind) SELECT channel,thread,key,revision,CASE WHEN deleted=1 THEN 'delete' ELSE 'message' END FROM messages ORDER BY rowid;
 PRAGMA user_version=8;
 `;
+
+export const budgetSchema = `
+CREATE TABLE budget_accounts(agent_id TEXT PRIMARY KEY REFERENCES agents(id),max_runs INTEGER NOT NULL,max_tokens INTEGER NOT NULL,max_cost REAL NOT NULL,runs INTEGER NOT NULL DEFAULT 0,tokens INTEGER NOT NULL DEFAULT 0,cost REAL NOT NULL DEFAULT 0);
+CREATE TABLE budget_runs(run_id TEXT PRIMARY KEY REFERENCES runs(id),agent_id TEXT NOT NULL REFERENCES agents(id),token_cap INTEGER NOT NULL,cost_cap REAL NOT NULL,settled INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE delivery_context(delivery_id TEXT PRIMARY KEY REFERENCES deliveries(id),work_id TEXT NOT NULL REFERENCES works(id));
+CREATE TABLE run_context(run_id TEXT PRIMARY KEY REFERENCES runs(id),work_id TEXT NOT NULL REFERENCES works(id));
+PRAGMA user_version=9;
+`;
