@@ -26,7 +26,7 @@ it('v6 review retirement preserves history and unknown effects without auto-auth
   `); old.close();
   let store = new Store(path);
   try {
-    expect(store.db.pragma('user_version',{simple:true})).toBe(9);
+    expect(store.db.pragma('user_version',{simple:true})).toBe(10);
     expect(store.db.prepare("SELECT name FROM sqlite_master WHERE name IN ('approvals','blocked_runs')").all()).toEqual([]);
     expect((store.db.pragma('table_info(grants)') as {name:string}[]).map(c=>c.name)).not.toContain('exec_allowlist');
     expect(store.db.prepare('SELECT id,revoked FROM grants ORDER BY id').all()).toEqual([{id:'exec',revoked:1},{id:'memory',revoked:0}]);

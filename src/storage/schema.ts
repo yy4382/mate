@@ -84,3 +84,14 @@ CREATE TABLE delivery_context(delivery_id TEXT PRIMARY KEY REFERENCES deliveries
 CREATE TABLE run_context(run_id TEXT PRIMARY KEY REFERENCES runs(id),work_id TEXT NOT NULL REFERENCES works(id));
 PRAGMA user_version=9;
 `;
+
+export const attentionSchema = `
+ALTER TABLE conversation_events ADD COLUMN audience TEXT;
+ALTER TABLE sessions ADD COLUMN context_epoch INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE attention_views(id TEXT PRIMARY KEY,agent_id TEXT NOT NULL REFERENCES agents(id),session_id TEXT NOT NULL REFERENCES sessions(id),epoch INTEGER NOT NULL,target TEXT NOT NULL,revision INTEGER NOT NULL,pages TEXT NOT NULL,complete INTEGER NOT NULL);
+CREATE TABLE attention_presented(view_id TEXT NOT NULL REFERENCES attention_views(id),page INTEGER NOT NULL,PRIMARY KEY(view_id,page));
+CREATE TABLE attention_seen(agent_id TEXT NOT NULL,key TEXT NOT NULL,revision TEXT NOT NULL,PRIMARY KEY(agent_id,key));
+CREATE TABLE attention_state(agent_id TEXT NOT NULL,target TEXT NOT NULL,resolved INTEGER NOT NULL DEFAULT 0,deferred_until INTEGER NOT NULL DEFAULT 0,muted INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(agent_id,target));
+CREATE TABLE channel_watches(agent_id TEXT NOT NULL,channel TEXT NOT NULL,PRIMARY KEY(agent_id,channel));
+PRAGMA user_version=10;
+`;

@@ -53,14 +53,16 @@ export class Supervisor {
         tasksTotal: allTasks.length, grants: s.db.prepare('SELECT id,operations,expires FROM grants WHERE agent_id=? AND work_id=? AND revoked=0 AND expires>? LIMIT 20').all(agentId, work.id, Date.now()) });
       const agent = this.config.agents.find(a => a.id === agentId)!;
       worker = this.workers.get(agentId) ?? this.factory(agent); this.workers.set(agentId, worker);
-      let seq = 0;
+      let seq = 0, lastNotice = '';
       const messages = repairTranscript(s.context(run.sessionId) as AgentMessage[], id => {
         const action = s.action(`${run.sessionId}:${id}`);
         return action ? encode({ recoveredAction: action.id, state: action.state, receipt: action.receipt ? JSON.parse(action.receipt) : null, warning: 'Historical receipt, not a new execution.' }) : undefined;
       });
       s.audit('context_restore', { runId: run.id, sessionId: run.sessionId, memoryHash: hash(reference), projectedMessages: messages.length });
       const result = await worker.run({ sessionId: run.sessionId, messages, recovery, tokenCap, costCap, maxTurns: 8 }, {
-        journal: async message => { s.appendMessage(run, `message:${seq++}`, message); },
+        invalidateViews: async()=>{s.assertRun(run);c.attention.invalidate(run.sessionId);},
+        notice: async()=>{s.assertRun(run);const notice=encode(c.attention.peek(agentId));if(notice==='[]'||notice===lastNotice)return;lastNotice=notice;return notice;},
+        journal: async message => { s.atomic(()=>{s.appendMessage(run, `message:${seq++}`, message);c.attention.presented(run,message);}); },
         tool: async (id, operation, args) => {
           const effect = this.router.call(run, work.id, id, operation, args, abort.signal); this.effects.add(effect);
           try { return await effect; } finally { this.effects.delete(effect); }
@@ -70,6 +72,7 @@ export class Supervisor {
         s.assertRun(run);
         if (result.certain) c.settleUsage(run.id, result.tokens, result.cost);
         s.finish(run);
+        c.attention.invalidate(run.sessionId);
         s.snapshot(run.sessionId, result.snapshot ?? repairTranscript(s.context(run.sessionId) as AgentMessage[]));
         const selected = s.db.prepare('SELECT work_id FROM run_context WHERE run_id=?').get(run.id) as {work_id:string}|undefined;
         const continuationWork=c.work(selected?.work_id ?? work.id);

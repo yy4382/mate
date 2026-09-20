@@ -37,6 +37,8 @@ export function serveWorker(engine: Engine, models?: Models): void {
     active = true; nonce = parsed.data.nonce; abort = new AbortController();
     try {
       const result = await engine.run(parsed.data.spec as RunSpec, {
+        invalidateViews: async()=>{await rpc('invalidateViews',null);},
+        notice: async()=>await rpc('notice',null) as string|undefined,
         journal: async message => { await rpc('journal', message); },
         tool: async (id, operation, args) => await rpc('tool', { id, operation, args }) as ToolReply,
         ...(models ? { summarize: async (messages, stream) => summarizeWithPi(models, engine, messages, stream, abort.signal) } : {})

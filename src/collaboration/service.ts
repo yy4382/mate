@@ -1,3 +1,4 @@
+import { Attention } from '../slack/attention.js';
 import { BudgetLedger } from '../budget/ledger.js';
 import { randomUUID } from 'node:crypto';
 import { CronExpressionParser } from 'cron-parser';
@@ -11,7 +12,8 @@ export interface Task { id: string; work_id: string; parent_id: string | null; t
 interface Schedule { id: string; agent_id: string; work_id: string; task_id: string | null; target: string; next_at: number; cron: string | null; timezone: string; active: number }
 export class Collaboration {
   readonly ledger: BudgetLedger;
-  constructor(readonly store: Store, readonly messages: Messages, readonly output: Output, readonly config: MateConfig) { this.ledger = new BudgetLedger(store, config); }
+  readonly attention: Attention;
+  constructor(readonly store: Store, readonly messages: Messages, readonly output: Output, readonly config: MateConfig) { this.ledger = new BudgetLedger(store, config); this.attention = new Attention(messages); }
   work(id: string): Work { const work = this.store.db.prepare('SELECT * FROM works WHERE id=?').get(id) as Work | undefined; if (!work) throw new Error('Unknown work'); return work; }
   task(id: string): Task { const task = this.store.db.prepare('SELECT * FROM tasks WHERE id=?').get(id) as Task | undefined; if (!task) throw new Error('Unknown task'); return task; }
   list(agentId: string): Task[] {
@@ -204,6 +206,15 @@ export class Collaboration {
   schedules(agentId: string): Schedule[] { return this.store.db.prepare('SELECT * FROM schedules WHERE agent_id=?').all(agentId) as Schedule[]; }
   tick(now = Date.now()): void {
     this.store.atomic(() => {
+      const deferred=this.store.db.prepare('SELECT agent_id,target,deferred_until,muted FROM attention_state WHERE deferred_until>0 AND deferred_until<=?').all(now) as {agent_id:string;target:string;deferred_until:number;muted:number}[];
+      for(const item of deferred){
+        const target=JSON.parse(item.target) as Target;
+        this.store.db.prepare('UPDATE attention_state SET deferred_until=0 WHERE agent_id=? AND target=?').run(item.agent_id,item.target);
+        const channelMuted=this.store.db.prepare('SELECT 1 FROM attention_state WHERE agent_id=? AND target=? AND muted=1').get(item.agent_id,encode({channel:target.channel}));
+        if(item.muted || channelMuted || !this.messages.access(item.agent_id,target.channel))continue;
+        const work=this.createWork(`attention:${item.agent_id}:${item.target}`,target);
+        if(this.work(work).state==='active')this.enqueue(item.agent_id,work,`defer:${item.target}:${item.deferred_until}`,{kind:'attention_due',target});
+      }
       const schedules = this.store.db.prepare("SELECT s.* FROM schedules s JOIN works w ON w.id=s.work_id WHERE s.active=1 AND s.next_at<=? AND w.state='active'").all(now) as Schedule[];
       for (const s of schedules) {
         this.enqueue(s.agent_id, s.work_id, `schedule:${s.id}:${s.next_at}`, { kind: 'schedule', scheduleId: s.id, taskId: s.task_id, dueAt: s.next_at, target: JSON.parse(s.target), receivedAt: now });

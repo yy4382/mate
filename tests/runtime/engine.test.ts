@@ -64,3 +64,16 @@ it('oversized restored history is summarized in bounded reference segments befor
   const result = await new Engine({ ...model, contextWindow: 20000 }, stream).run(input, { journal: async () => {}, tool: async () => ({ value: null }), summarize });
   expect(summarize.mock.calls.length).toBeGreaterThan(5); expect(stream).toHaveBeenCalledOnce(); expect(result.snapshot).toBeDefined();
 });
+it('running inbox notices enter the next model boundary after the tool finishes, without forcing a read',async()=>{
+ let available=false,durable=false;const contexts:string[]=[];
+ const source=scripted([call(),answer([{type:'text',text:'continue my current work'}])]);
+ const engine=new Engine({...model,contextWindow:30000},async(m,c,o)=>{contexts.push(JSON.stringify(c));if(available)expect(durable).toBe(true);return source(m,c,o);});
+ await engine.run(spec(),{notice:async()=>available?'[{"target":{"channel":"CTEST"},"unseen":1}]':undefined,journal:async m=>{if(m.role==='user')durable=true;},tool:async()=>{available=true;return{value:'tool completed'};}});
+ expect(contexts[0]).not.toContain('Content-free inbox notice');expect(contexts[1]).toContain('Content-free inbox notice');expect(contexts[1]).toContain('tool completed');
+});
+it('a once-notified inbox change remains in subsequent input and the recoverable snapshot',async()=>{
+ let boundary=0;const contexts:string[]=[];const source=scripted([call(),call(),answer([{type:'text',text:'done'}])]);
+ const engine=new Engine({...model,contextWindow:30000},async(m,c,o)=>{contexts.push(JSON.stringify(c));return source(m,c,o);});
+ const result=await engine.run(spec(),{notice:async()=>++boundary===2?'persistent-notice':undefined,journal:async()=>{},tool:async()=>({value:'done'})});
+ expect(contexts[1]).toContain('persistent-notice');expect(contexts[2]).toContain('persistent-notice');expect(JSON.stringify(result.snapshot)).toContain('persistent-notice');
+});

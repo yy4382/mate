@@ -7,6 +7,11 @@ import { targetSchema } from '../slack/messages.js';
 import type { ToolReply } from './engine.js';
 const id = z.string().min(1).max(500), text = z.string().max(35000);
 const schemas = {
+  'attention.peek': z.object({}).strict(),
+  'attention.read': z.object({target:targetSchema,cursor:id.optional()}).strict(),
+  'attention.resolve': z.object({target:targetSchema,throughRevision:z.number().int().nonnegative()}).strict(),
+  'attention.defer': z.object({target:targetSchema,until:z.number().int().nonnegative()}).strict(),
+  'attention.mute': z.object({target:targetSchema,active:z.boolean()}).strict(),
   'works.list': z.object({}).strict(),
   'works.select': z.object({ workId: id }).strict(),
   'budget.read': z.object({}).strict(),
@@ -44,8 +49,12 @@ export class ToolRouter {
     if (!(operation in schemas)) throw new Error('Unknown operation');
     // Parsing is deliberately repeated in the daemon, independently of model-side tool validation.
     const args = schemas[operation as keyof typeof schemas].parse(input) as Record<string, any>;
-    const readOnly = ['agents','works.list','budget.read','tasks.read','tasks.list','messages.read','messages.recent','messages.search','schedules.list','inbox.list','inbox.read','conversations.list','conversations.members'];
+    const readOnly = ['attention.peek','attention.read','attention.resolve','attention.defer','attention.mute','agents','works.list','budget.read','tasks.read','tasks.list','messages.read','messages.recent','messages.search','schedules.list','inbox.list','inbox.read','conversations.list','conversations.members'];
     if (!readOnly.includes(operation) && operation !== 'works.select') c.assertActionWork(run, args.taskId ? c.task(args.taskId).work_id : workId);
+    if(args.target)c.messages.requireAccess(actor,args.target.channel);
+    if(args.channel)c.messages.requireAccess(actor,args.channel);
+    if(args.taskId)c.messages.requireAccess(actor,JSON.parse(c.task(args.taskId).target).channel);
+    if(args.deliveryId){const delivery=s.delivery(args.deliveryId);if(delivery.agent_id!==actor)throw new Error('Private inbox');const target=JSON.parse(delivery.payload).target;if(target)c.messages.requireAccess(actor,target.channel);}
     const actionId = `${run.sessionId}:${callId}`;
     if (operation.startsWith('conversations.')) {
       if (!this.directory) throw new Error('Directory unavailable');
@@ -61,12 +70,19 @@ export class ToolRouter {
     // All local effects and their receipts commit together. Crash replay returns the recorded value.
     return s.atomic(() => {
       const existing = s.prepareAction(run, actionId, operation === 'works.select' ? { operation, args } : { workId, operation, args });
-      if (existing.state === 'succeeded') return JSON.parse(existing.receipt!) as ToolReply;
+      const refresh = ['attention.peek','budget.read','works.list','tasks.list','messages.search','schedules.list','inbox.list'].includes(operation);
+      if (existing.state === 'succeeded' && !refresh) return JSON.parse(existing.receipt!) as ToolReply;
+      if(existing.state==='succeeded' && refresh){s.db.prepare("UPDATE actions SET state='prepared',run_id=? WHERE id=?").run(run.id,actionId);existing.state='prepared';}
       if (existing.state !== 'prepared') throw new Error('Uncertain tool action');
       s.startAction(run, actionId);
       if (args.taskId) c.messages.requireAccess(actor, JSON.parse(c.task(args.taskId).target).channel);
       let value: unknown = null, wait = false;
       switch (operation) {
+        case 'attention.peek': value=c.attention.peek(actor);break;
+        case 'attention.read': value=c.attention.read(run,args.target,args.cursor);break;
+        case 'attention.resolve': c.attention.state(actor,args.target,'resolve',args.throughRevision);break;
+        case 'attention.defer': c.attention.state(actor,args.target,'defer',args.until);break;
+        case 'attention.mute': c.attention.state(actor,args.target,'mute',Number(args.active));break;
         case 'budget.read': value=c.ledger.account(actor); break;
         case 'works.list': value=s.db.prepare("SELECT w.* FROM works w JOIN channel_access a ON a.channel=json_extract(w.target,'$.channel') WHERE a.agent_id=? AND a.active=1 ORDER BY w.rowid DESC LIMIT 100").all(actor); break;
         case 'works.select': c.selectWork(run,args.workId); this.provision?.(actor,args.workId); value={work:c.work(args.workId),grants:s.db.prepare('SELECT id,operations FROM grants WHERE agent_id=? AND work_id=? AND revoked=0 AND expires>?').all(actor,args.workId,Date.now())}; break;

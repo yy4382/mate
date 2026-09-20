@@ -32,7 +32,11 @@ export class Messages {
   }
   watch(agentId: string, target: Target, active: boolean): void {
     targetSchema.parse(target); this.requireAccess(agentId, target.channel);
-    if (!target.thread) throw new Error('Thread target required for watch');
+    if (!target.thread) {
+      if(active)this.store.db.prepare('INSERT INTO channel_watches VALUES(?,?) ON CONFLICT DO NOTHING').run(agentId,target.channel);
+      else this.store.db.prepare('DELETE FROM channel_watches WHERE agent_id=? AND channel=?').run(agentId,target.channel);
+      return;
+    }
     if (active) this.store.db.prepare('INSERT INTO thread_watches VALUES(?,?,?) ON CONFLICT DO NOTHING').run(agentId, target.channel, target.thread);
     else this.store.db.prepare('DELETE FROM thread_watches WHERE agent_id=? AND channel=? AND thread=?').run(agentId, target.channel, target.thread);
   }
@@ -90,15 +94,18 @@ export class Messages {
       for (const id of visibleTo) {
         const agent = this.agent(id);
         if (!this.access(id, message.channel)) continue;
-        this.store.db.prepare('INSERT INTO message_visibility VALUES(?,?) ON CONFLICT DO NOTHING').run(id, key);
+        const addedVisibility=this.store.db.prepare('INSERT INTO message_visibility VALUES(?,?) ON CONFLICT DO NOTHING').run(id, key).changes;
+        if(old && addedVisibility)this.store.db.prepare('INSERT INTO conversation_events(channel,thread,message_key,revision,kind,audience) VALUES(?,?,?,?,?,?)').run(current.channel,current.thread,key,current.revision,'visibility',id);
         if (this.store.db.prepare('INSERT INTO message_observations VALUES(?,?,?) ON CONFLICT DO NOTHING').run(id, key, current.revision).changes === 0) continue;
         if (effective.user === agent.slackUserId || effective.bot === agent.slackBotId || current.deleted) continue;
         const sender = this.config.agents.find(a => a.slackUserId === effective.user || a.slackBotId === effective.bot);
         const mention = effective.text.includes(`<@${agent.slackUserId}>`);
-        const watched = !!this.store.db.prepare('SELECT 1 FROM thread_watches WHERE agent_id=? AND channel=? AND thread=?').get(id, effective.channel, effective.thread);
+        const watched = !!this.store.db.prepare('SELECT 1 FROM channel_watches WHERE agent_id=? AND channel=?').get(id,effective.channel) || !!this.store.db.prepare('SELECT 1 FROM thread_watches WHERE agent_id=? AND channel=? AND thread=?').get(id, effective.channel, effective.thread);
         const direct = effective.channel.startsWith('D') || mention;
         const participating = agent.channels[effective.channel] === 'participate';
         if (!(direct || watched || participating)) continue;
+        const quiet=this.store.db.prepare('SELECT 1 FROM attention_state WHERE agent_id=? AND target IN (?,?) AND (muted=1 OR deferred_until>?)').get(id,encode({channel:effective.channel}),encode({channel:effective.channel,thread:effective.thread}),Date.now());
+        if(quiet)continue;
         const now = Date.now(), isNotice = !direct && !watched, bucket = Math.floor(now / 20000);
         const work = this.store.db.prepare('SELECT work_id FROM message_work WHERE message_key=?').get(key) as { work_id: string } | undefined;
         const delivery = this.store.enqueue(id, isNotice ? `notice:${effective.channel}:${work?.work_id ?? 'unbound'}:${bucket}` : `message:${key}:${current.revision}`, { kind: isNotice ? 'notice' : 'message',

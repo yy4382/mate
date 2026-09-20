@@ -144,3 +144,8 @@ it('work selection replays its receipt and distinguishes own reservation from ex
   const exhausted=c.createWork('exhausted',{channel:'CTEST'});store.db.prepare('UPDATE works SET tokens=max_tokens WHERE id=?').run(exhausted);
   await expect(router.call(run,work,'blocked','works.select',{workId:exhausted},signal)).rejects.toThrow('budget exhausted');
 });
+it('cached attention.read rechecks current membership even with an expired presentation epoch',async()=>{
+ const{store,collaboration:c,router,work}=setup();c.enqueue('research',work,'start',{});const run=store.beginRun('research')!;const args={target:{channel:'CTEST'}},signal=new AbortController().signal;
+ await router.call(run,work,'read','attention.read',args,signal);c.attention.invalidate(run.sessionId);c.messages.membership('research','CTEST',false);
+ await expect(router.call(run,work,'read','attention.read',args,signal)).rejects.toThrow('access');
+});

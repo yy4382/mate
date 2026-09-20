@@ -62,7 +62,7 @@ A–G 历史检查与独立红队记录保留；当前检查结果见 `docs/ACCE
 | 模块 | 目标与接口 | 依赖 | 验收与有意义验证 | 状态 |
 |---|---|---|---|---|
 | R1 身份/消息/预算基础 | Conversation的channel/thread/dm与revision；Agent/run/预算账户/任务引用分离；显式账户归属与授权 | R0 | 顶层发言、主动DM、同Agent跨事项读取和切换；有限持续账户支持非human触发；不可借切换重置预算；旧work与target迁移回归 | PASS，R1a/R1b |
-| R2 注意力与呈现 | Attention.peek/read/defer/resolve，watch/mute，分页coverage/viewToken，Pi运行中notice与ACK | R1 | 新消息在断点可见但不强制读正文；结束run不清未读；分页/编辑/晚到/崩溃不错误推进seen；跨频道可暂缓/转向 | 实施中 |
+| R2 注意力与呈现 | Attention.peek/read/defer/resolve，watch/mute，分页coverage/viewToken，Pi运行中notice与ACK | R1 | 新消息在断点可见但不强制读正文；结束run不清未读；分页/编辑/晚到/崩溃不错误推进seen；跨频道可暂缓/转向 | PASS，review_r2，95 tests |
 | R3 提交门控 | FreshnessGate、draft生命周期、发送前再检查、有限知情继续、全输入路径review seat隔离 | R2 | 调研表全部相关竞态；变更hold/重启草稿/四选项/热频道活性/盲审不泄漏/Slack竞态显式记录；不启用命令审查 | 未开始 |
 | R4 消息任务 | canonical message claim、unclaim/transfer、状态投影、可选dependency；接R3任务门控 | R3 | 同一消息并发转换/认领唯一；hold无副作用；任务版本冲突；可直接协作或用任务，无强制总管/任务树；人类可见状态 | 未开始 |
 | R5 工具与workspace | ToolEnvironment注册/描述/执行adapter；私有workspace完整文件能力；可配置联网与工具链、附件输入输出 | R4 | 合成资料检索/脚本/文件组织/发布全链；不依赖外部私密凭证；真实backend停止/崩溃隔离；其他Agent私有空间不可访问 | 未开始 |
@@ -83,3 +83,7 @@ R1同时涉及消息契约与预算模型，拆成两个独立gate，避免一�
 R2及后续模块维持上述依赖，R1a红队通过后才实施R1b。整个重构不会引入Jev或改变Pi Core选型。
 
 R1b实现约定：预算账户按Agent持久化，配置仅首次播种；owner的`agent-budget`修改累计上限，human/peer消息不补额。旧work上限保留为可选事项上限；一次模型run全部计入Agent账户和起始事项（账单归属不随中途切换改变），run_context单独控制后续动作与停止/continuation。`works.select`检查目标可见性并取得该事项的配置授权，`tasks.read/claim/update`按可见性/所有权独立判断。v9先备份；旧work只有聚合usage，首次账户初始化把该Agent参与过的work全部usage保守计入账户，可能高估但不丢未知债务，并记录audit；不伪称历史可精确拆账。账户耗尽等待owner补额，不自动无限提供控制模型额度；工具读取不会再被事项ID拒绝。
+
+R2接口落地：Attention.peek/read/resolve/defer/mute与channel/thread watch；不可变分页快照，viewToken绑定Agent/session/context epoch/target/revision，完整toolResult随journal事务ACK才计呈现。现有messages.read/search保留为检索，不签发整目标凭据。最多10000条本地可见消息的有界快照，超限/截断明确不完整，不假称完整阅读；后续R3允许知情继续而非强制读尽。Pi每次模型调用前通过nonce RPC拉取content-free notice，通知写journal后进入本次输入投影；不终止当前工具、不强制读正文。压缩与run投影交接保守失效viewToken；seen/resolved/deferred独立持久化，结束run不resolve。defer到期在tick产生一次持久唤醒；mute抑制新唤醒，不撤销已开始的run。
+
+R3分为两个独立gate：R3a实现消息草稿/提交与dispatch前门控、重试/修改/丢弃/一次知情继续、429/unknown与重启；R3b实现owner授权的独立review seat和统一输入隔离。R4再接任务CAS门控。R3a依赖R2，R3b依赖R3a；各自完整测试与独立审核后才进入下一部分。
