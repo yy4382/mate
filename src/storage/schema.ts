@@ -69,3 +69,10 @@ DROP TABLE approvals;
 ALTER TABLE grants DROP COLUMN exec_allowlist;
 PRAGMA user_version=7;
 `;
+
+export const conversationSchema = `
+CREATE TABLE conversation_events(seq INTEGER PRIMARY KEY AUTOINCREMENT,channel TEXT NOT NULL,thread TEXT NOT NULL,message_key TEXT NOT NULL,revision TEXT NOT NULL,kind TEXT NOT NULL);
+CREATE INDEX conversation_event_target ON conversation_events(channel,thread,seq);
+INSERT INTO conversation_events(channel,thread,message_key,revision,kind) SELECT channel,thread,key,revision,CASE WHEN deleted=1 THEN 'delete' ELSE 'message' END FROM messages ORDER BY rowid;
+PRAGMA user_version=8;
+`;

@@ -124,7 +124,8 @@ export class SlackService {
       try {
         const client = this.transport.clients.get(row.agent_id)!; let cursor: string | undefined, pages = 0;
         do {
-          const result = await client.conversations.replies({ channel: target.channel, ts: target.thread, limit: 100, include_all_metadata: true, ...(cursor ? { cursor } : {}) });
+          const options = { channel: target.channel, limit: 100, include_all_metadata: true, ...(cursor ? { cursor } : {}) };
+          const result = target.thread ? await client.conversations.replies({ ...options, ts: target.thread }) : await client.conversations.history(options);
           for (const msg of result.messages ?? []) {
             const metadata = msg.metadata as { event_type?: string; event_payload?: { id?: string; request_hash?: string } } | undefined;
             if (msg.ts && msg.user && metadata?.event_type === 'mate_outbox' && metadata.event_payload?.id === row.id && metadata.event_payload.request_hash) {
@@ -138,7 +139,8 @@ export class SlackService {
     }
   }
   async upload(agentId: string, target: Target, title: string, content: string): Promise<{ fileId: string }> {
-    const result = await this.transport.clients.get(agentId)!.filesUploadV2({ channel_id: target.channel, thread_ts: target.thread, title, filename: `${title.replace(/[^a-zA-Z0-9._-]/g, '_')}.txt`, content });
+    const options = { channel_id: target.channel, title, filename: `${title.replace(/[^a-zA-Z0-9._-]/g, '_')}.txt`, content };
+    const result = await this.transport.clients.get(agentId)!.filesUploadV2(target.thread ? { ...options, thread_ts: target.thread } : options);
     const id = result.files?.[0]?.files?.[0]?.id; if (!id) throw new Error('Missing Slack artifact receipt'); return { fileId: id };
   }
 }

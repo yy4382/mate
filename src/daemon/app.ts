@@ -1,3 +1,4 @@
+import { Directory } from '../slack/directory.js';
 import { mkdirSync, writeFileSync, existsSync, realpathSync, lstatSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { App } from '@slack/bolt';
@@ -66,7 +67,7 @@ export class Daemon {
       this.broker = new Broker(this.store, this.collaboration, this.backend, [projectRoot, state]);
       const research = new Research(config.runtime.researchHosts);
       let artifacts!: Artifacts;
-      const router = new ToolRouter(this.collaboration, this.broker, { research: (url, signal) => research.read(url, signal), publish: (...args) => artifacts.publish(...args) });
+      const router = new ToolRouter(this.collaboration, this.broker, { research: (url, signal) => research.read(url, signal), publish: (...args) => artifacts.publish(...args) }, new Directory(messages, transport.clients));
       this.supervisor = new Supervisor(this.collaboration, router, c, undefined, async (agentId, workId, signal) => {
         this.ensureGrants(agentId, workId);
         const result = await files.execute({ root: this.memoryRoots[agentId]!, operation: { kind: 'read', path: 'MEMORY.md' }, timeoutMs: 10000 }, signal);

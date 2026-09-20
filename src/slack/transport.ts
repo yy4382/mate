@@ -11,7 +11,7 @@ export class WebSlackTransport implements SlackTransport {
   }
   async post(agentId: string, target: Target, text: string, id: string): Promise<{ ts: string }> {
     const client = this.clients.get(agentId); if (!client) throw new Error('Missing Slack client');
-    const response = await client.chat.postMessage({ channel: target.channel, thread_ts: target.thread, text,
+    const response = await client.chat.postMessage({ channel: target.channel, ...(target.thread ? { thread_ts: target.thread } : {}), text,
       metadata: { event_type: 'mate_outbox', event_payload: { id, request_hash: hash(encode({ target, text })) } }, unfurl_links: false, unfurl_media: false });
     if (!response.ts) throw new Error('Missing Slack receipt'); return { ts: response.ts };
   }

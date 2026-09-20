@@ -4,7 +4,7 @@ import { Store, encode } from '../storage/store.js';
 import type { AgentConfig, MateConfig } from '../config.js';
 
 export const slackTs = z.string().regex(/^\d{1,16}\.\d{1,6}$/);
-export const targetSchema = z.object({ channel: z.string().regex(/^[CDG][A-Z0-9]+$/), thread: slackTs }).strict();
+export const targetSchema = z.object({ channel: z.string().regex(/^[CDG][A-Z0-9]+$/), thread: slackTs.optional() }).strict();
 export type Target = z.infer<typeof targetSchema>;
 export interface NormalMessage { team: string; channel: string; ts: string; thread: string; revision: string; text: string; user?: string; bot?: string; deleted: boolean }
 interface MessageRow { key: string; channel: string; ts: string; thread: string; revision: string; body: string; deleted: number }
@@ -12,9 +12,12 @@ function timestamp(value: string): bigint { const [a, b] = value.split('.'); ret
 export function messageKey(message: Pick<NormalMessage, 'team' | 'channel' | 'ts'>): string { return encode([message.team, message.channel, message.ts]); }
 const rawMessage = z.object({ type: z.string(), channel: z.string(), ts: slackTs.optional(), event_ts: slackTs.optional(), thread_ts: slackTs.optional(),
   text: z.string().optional(), user: z.string().optional(), bot_id: z.string().optional(), subtype: z.string().optional(), deleted_ts: slackTs.optional(),
+  previous_message: z.object({ thread_ts: slackTs.optional() }).passthrough().optional(),
   message: z.object({ ts: slackTs, thread_ts: slackTs.optional(), text: z.string().optional(), user: z.string().optional(), bot_id: z.string().optional(), edited: z.object({ ts: slackTs }).optional() }).optional() }).passthrough();
 
 export class Messages {
+  private readonly membershipVersions = new Map<string, number>();
+  membershipVersion(actor: string): number { return this.membershipVersions.get(actor) ?? 0; }
   constructor(readonly store: Store, readonly config: MateConfig) {}
   agent(id: string): AgentConfig { const a = this.config.agents.find(a => a.id === id); if (!a) throw new Error('Unknown Agent'); return a; }
   access(agentId: string, channel: string): boolean {
@@ -24,10 +27,12 @@ export class Messages {
   /** Only trusted Slack membership reconciliation or authenticated member events call this. */
   membership(agentId: string, channel: string, active: boolean): void {
     this.agent(agentId);
+    this.membershipVersions.set(agentId, this.membershipVersion(agentId) + 1);
     this.store.db.prepare('INSERT INTO channel_access VALUES(?,?,?) ON CONFLICT(agent_id,channel) DO UPDATE SET active=excluded.active').run(agentId, channel, Number(active));
   }
   watch(agentId: string, target: Target, active: boolean): void {
     targetSchema.parse(target); this.requireAccess(agentId, target.channel);
+    if (!target.thread) throw new Error('Thread target required for watch');
     if (active) this.store.db.prepare('INSERT INTO thread_watches VALUES(?,?,?) ON CONFLICT DO NOTHING').run(agentId, target.channel, target.thread);
     else this.store.db.prepare('DELETE FROM thread_watches WHERE agent_id=? AND channel=? AND thread=?').run(agentId, target.channel, target.thread);
   }
@@ -51,7 +56,8 @@ export class Messages {
           if (ts && source) {
             const revision = e.subtype === 'message_changed' ? (e.message?.edited?.ts ?? e.event_ts ?? ts)
               : e.subtype === 'message_deleted' ? (e.event_ts ?? ts) : ts;
-            const msg: NormalMessage = { team: this.config.teamId, channel: e.channel, ts, thread: source.thread_ts ?? ts,
+            const previous = this.store.db.prepare('SELECT thread FROM messages WHERE key=?').get(messageKey({team: this.config.teamId, channel: e.channel, ts})) as { thread: string } | undefined;
+            const msg: NormalMessage = { team: this.config.teamId, channel: e.channel, ts, thread: source.thread_ts ?? e.previous_message?.thread_ts ?? previous?.thread ?? ts,
               revision, text: source.text ?? '', deleted: e.subtype === 'message_deleted',
               ...(source.user ? { user: source.user } : {}), ...(source.bot_id ? { bot: source.bot_id } : {}) };
             this.record(msg, [installation.id]);
@@ -70,6 +76,14 @@ export class Messages {
       if (!old || timestamp(message.revision) > timestamp(old.revision)) {
         this.store.db.prepare('INSERT INTO messages VALUES(?,?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET thread=excluded.thread,revision=excluded.revision,body=excluded.body,deleted=excluded.deleted').run(key, message.channel, message.ts, message.thread, message.revision, encode(message), Number(message.deleted));
         this.store.db.prepare('INSERT INTO message_revisions VALUES(?,?,?) ON CONFLICT DO NOTHING').run(key, message.revision, encode(message));
+        this.store.db.prepare('INSERT INTO conversation_events(channel,thread,message_key,revision,kind) VALUES(?,?,?,?,?)').run(message.channel, message.thread, key, message.revision, message.deleted ? 'delete' : old ? 'edit' : 'message');
+      }
+      // A tombstone can arrive before the original reply, without thread metadata.
+      // Enrich its immutable location without resurrecting text or decreasing revision.
+      if (old?.deleted && old.thread === old.ts && message.thread !== message.ts && timestamp(message.revision) <= timestamp(old.revision)) {
+        const tombstone = { ...JSON.parse(old.body), thread: message.thread };
+        this.store.db.prepare('UPDATE messages SET thread=?,body=? WHERE key=?').run(message.thread, encode(tombstone), key);
+        this.store.db.prepare('INSERT INTO conversation_events(channel,thread,message_key,revision,kind) VALUES(?,?,?,?,?)').run(message.channel, message.thread, key, old.revision, 'delete');
       }
       const current = this.store.db.prepare('SELECT * FROM messages WHERE key=?').get(key) as MessageRow;
       const effective = JSON.parse(current.body) as NormalMessage;
@@ -97,7 +111,7 @@ export class Messages {
   }
   read(agentId: string, target: Target): NormalMessage[] {
     targetSchema.parse(target); this.requireAccess(agentId, target.channel);
-    const rows = this.store.db.prepare('SELECT m.body FROM messages m JOIN message_visibility v ON v.key=m.key WHERE v.agent_id=? AND m.channel=? AND m.thread=? AND m.deleted=0 ORDER BY length(m.ts),m.ts').all(agentId, target.channel, target.thread) as { body: string }[];
+    const rows = this.store.db.prepare('SELECT m.body FROM messages m JOIN message_visibility v ON v.key=m.key WHERE v.agent_id=? AND m.channel=? AND (? IS NULL OR m.thread=?) AND m.deleted=0 ORDER BY length(m.ts),m.ts').all(agentId, target.channel, target.thread ?? null, target.thread ?? null) as { body: string }[];
     return rows.map(r => JSON.parse(r.body) as NormalMessage);
   }
   search(agentId: string, query: string): NormalMessage[] {
@@ -125,7 +139,7 @@ export class Output {
     const row = this.messages.store.output(id);
     if (!row || row.state !== 'unknown') throw new Error('Output does not require reconciliation');
     const { target, text } = JSON.parse(row.request) as { target: Target; text: string };
-    if (evidence.outboxId !== id || evidence.requestHash !== row.request_hash || evidence.user !== this.messages.agent(row.agent_id).slackUserId || evidence.channel !== target.channel || evidence.thread !== target.thread) throw new Error('Receipt evidence mismatch');
+    if (evidence.outboxId !== id || evidence.requestHash !== row.request_hash || evidence.user !== this.messages.agent(row.agent_id).slackUserId || evidence.channel !== target.channel || evidence.thread !== (target.thread ?? evidence.ts)) throw new Error('Receipt evidence mismatch');
     slackTs.parse(evidence.ts);
     this.confirm(id, row.agent_id, target, evidence.text, { ts: evidence.ts }, 'unknown');
   }
@@ -133,7 +147,7 @@ export class Output {
     this.messages.store.atomic(() => {
       this.messages.store.transitionOutput(id, from, 'sent', receipt);
       const agent = this.messages.agent(agentId);
-      const message: NormalMessage = { team: this.messages.config.teamId, channel: target.channel, thread: target.thread,
+      const message: NormalMessage = { team: this.messages.config.teamId, channel: target.channel, thread: target.thread ?? receipt.ts,
         ts: receipt.ts, revision: receipt.ts, text, user: agent.slackUserId, bot: agent.slackBotId, deleted: false };
       this.messages.record(message, []);
       const binding = this.messages.store.db.prepare('SELECT work_id FROM output_work WHERE output_id=?').get(id) as { work_id: string } | undefined;

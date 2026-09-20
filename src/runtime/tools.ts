@@ -2,10 +2,14 @@ import { z } from 'zod';
 import type { RunToken } from '../storage/store.js';
 import type { Collaboration } from '../collaboration/service.js';
 import type { Broker } from '../policy/broker.js';
+import type { Directory } from '../slack/directory.js';
 import { targetSchema } from '../slack/messages.js';
 import type { ToolReply } from './engine.js';
 const id = z.string().min(1).max(500), text = z.string().max(35000);
 const schemas = {
+  'conversations.list': z.object({}).strict(),
+  'conversations.members': z.object({ channel: id }).strict(),
+  'conversations.openDM': z.object({ user: z.string().regex(/^U[A-Z0-9]+$/) }).strict(),
   'research.read': z.object({ url: z.string().url().max(4000) }).strict(),
   'artifact.publish': z.object({ grantId: id, path: id, title: z.string().min(1).max(200), target: targetSchema }).strict(),
   'messages.recent': z.object({ channel: id }).strict(),
@@ -26,10 +30,10 @@ const schemas = {
 export const operationDocumentation = Object.entries(schemas).map(([name, schema]) => `${name}: ${JSON.stringify(z.toJSONSchema(schema))}`).join('\n');
 export interface AdditionalTools {
   research(url: string, signal: AbortSignal): Promise<unknown>;
-  publish(run: RunToken, workId: string, actionId: string, args: { grantId: string; path: string; title: string; target: { channel: string; thread: string } }, signal: AbortSignal): Promise<unknown>;
+  publish(run: RunToken, workId: string, actionId: string, args: { grantId: string; path: string; title: string; target: { channel: string; thread?: string } }, signal: AbortSignal): Promise<unknown>;
 }
 export class ToolRouter {
-  constructor(readonly collaboration: Collaboration, readonly broker: Broker, readonly additional?: AdditionalTools) {}
+  constructor(readonly collaboration: Collaboration, readonly broker: Broker, readonly additional?: AdditionalTools, readonly directory?: Directory) {}
   async call(run: RunToken, workId: string, callId: string, operation: string, input: unknown, signal: AbortSignal): Promise<ToolReply> {
     const c = this.collaboration, s = c.store, actor = run.agentId;
     s.assertRun(run); signal.throwIfAborted();
@@ -38,6 +42,11 @@ export class ToolRouter {
     // Parsing is deliberately repeated in the daemon, independently of model-side tool validation.
     const args = schemas[operation as keyof typeof schemas].parse(input) as Record<string, any>;
     const actionId = `${run.sessionId}:${callId}`;
+    if (operation.startsWith('conversations.')) {
+      if (!this.directory) throw new Error('Directory unavailable');
+      const value = operation === 'conversations.openDM' ? await this.directory.openDM(run, actionId, args.user, signal) : operation === 'conversations.members' ? await this.directory.members(actor, args.channel) : await this.directory.spaces(actor);
+      s.assertRun(run); signal.throwIfAborted(); return { value };
+    }
     if (operation === 'research.read') { if (!this.additional) throw new Error('Research unavailable'); return { value: await this.additional.research(args.url, signal) }; }
     if (operation === 'artifact.publish') { if (!this.additional) throw new Error('Publication unavailable'); return { value: await this.additional.publish(run, workId, actionId, args as any, signal) }; }
     if (['file.read','file.write','exec'].includes(operation)) {
