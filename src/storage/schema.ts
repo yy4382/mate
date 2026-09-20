@@ -95,3 +95,12 @@ CREATE TABLE attention_state(agent_id TEXT NOT NULL,target TEXT NOT NULL,resolve
 CREATE TABLE channel_watches(agent_id TEXT NOT NULL,channel TEXT NOT NULL,PRIMARY KEY(agent_id,channel));
 PRAGMA user_version=10;
 `;
+
+export const freshnessSchema = `
+CREATE TABLE outbox_next(id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agents(id), request_hash TEXT NOT NULL, request TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN ('held','pending','sending','sent','unknown','failed')),receipt TEXT);
+INSERT INTO outbox_next SELECT * FROM outbox;
+DROP TABLE outbox;
+ALTER TABLE outbox_next RENAME TO outbox;
+CREATE TABLE drafts(id TEXT PRIMARY KEY,agent_id TEXT NOT NULL REFERENCES agents(id),outbox_id TEXT NOT NULL REFERENCES outbox(id),revision INTEGER NOT NULL DEFAULT 1,hold_id TEXT,reason TEXT,accepted_revision INTEGER,continue_until INTEGER NOT NULL DEFAULT 0);
+PRAGMA user_version=11;
+`;

@@ -33,7 +33,7 @@ function setup() {
 }
 it('two Agents independently challenge and revise a result through durable tasks, visible delegation and inherited budgets', async () => {
   const { store, c, ingress, broker, post } = setup(); const router = new ToolRouter(c, broker), target = { channel: 'CTEST', thread: '100.000001' };
-  let parent = '', child = '', evidence = '', a = 0, b = 0, counter = 0;
+  let parent = '', child = '', evidence = '', a = 0, b = 0, counter = 0;const views:Record<string,string>={};
   const supervisor = new Supervisor(c, router, c.config, agent => {
     const engine = new Engine({ ...model, contextWindow: 200000 }, () => {
       let op: string | undefined, args: any = {};
@@ -41,22 +41,25 @@ it('two Agents independently challenge and revise a result through durable tasks
         switch (a++) {
           case 0: op='tasks.create'; args={ target, title:'Verify draft conclusion' }; break;
           case 1: op='tasks.claim'; args={ taskId:parent }; break;
-          case 2: op='tasks.delegate'; args={ taskId:parent, peerId:'writer', title:'Challenge my preliminary conclusion: 2+2=5' }; break;
-          case 3: op='tasks.wait'; args={ taskId:parent, dependencyId:child }; break;
-          case 4: op='tasks.read'; args={ taskId:child }; break;
-          case 5: op='messages.send'; args={ target, text:`Revised after peer verification: ${evidence}` }; break;
-          case 6: op='tasks.update'; args={ taskId:parent, status:'done', result:evidence }; break;
+          case 2: op='attention.read'; args={target}; break;
+          case 3: op='tasks.delegate'; args={ taskId:parent, peerId:'writer', title:'Challenge my preliminary conclusion: 2+2=5',viewToken:views[agent.id] }; break;
+          case 4: op='tasks.wait'; args={ taskId:parent, dependencyId:child }; break;
+          case 5: op='tasks.read'; args={ taskId:child }; break;
+          case 6: op='attention.read';args={target};break;
+          case 7: op='messages.send'; args={ target, text:`Revised after peer verification: ${evidence}`,viewToken:views[agent.id] }; break;
+          case 8: op='tasks.update'; args={ taskId:parent, status:'done', result:evidence }; break;
         }
       } else switch (b++) {
         case 0: op='tasks.claim'; args={ taskId:child }; break;
-        case 1: op='messages.send'; args={ target, text:'Independent check: 2+2=4; reject preliminary 5.' }; break;
-        case 2: op='tasks.update'; args={ taskId:child, status:'done', result:'2+2=4; preliminary 5 rejected.' }; break;
+        case 1:op='attention.read';args={target};break;
+        case 2: op='messages.send'; args={ target, text:'Independent check: 2+2=4; reject preliminary 5.',viewToken:views[agent.id] }; break;
+        case 3: op='tasks.update'; args={ taskId:child, status:'done', result:'2+2=4; preliminary 5 rejected.' }; break;
       }
       const message = op ? answer([{ type:'toolCall', id:`call-${++counter}`, name:'mate', arguments:{ operation:op, args } }], 'toolUse') : answer([{ type:'text',text:'Done privately' }]);
       const stream = createAssistantMessageEventStream(); stream.push({ type:'done',reason:message.stopReason as 'stop'|'toolUse',message }); return stream;
     });
     return { close:()=>engine.abort(), run: async (spec,hooks) => engine.run(spec,{ ...hooks, tool:async (id,op,args)=> {
-      const result = await hooks.tool(id,op,args); if(op==='tasks.create') parent=result.value as string; if(op==='tasks.delegate') child=result.value as string; if(op==='tasks.read') evidence=(result.value as {result:string}).result; return result;
+      const result = await hooks.tool(id,op,args); if(op==='attention.read')views[agent.id]=(result.value as {viewToken:string}).viewToken; if(op==='tasks.create') parent=result.value as string; if(op==='tasks.delegate') child=result.value as string; if(op==='tasks.read') evidence=(result.value as {result:string}).result; return result;
     } }) };
   }); cleanups.unshift(()=>supervisor.close()); supervisor.register();
   for(const agent of c.config.agents) c.messages.membership(agent.id,'CTEST',true);
@@ -64,6 +67,7 @@ it('two Agents independently challenge and revise a result through durable tasks
   await supervisor.step('research'); expect(c.task(parent).status).toBe('waiting'); expect(c.task(child).status).toBe('draft');
   for(const row of store.db.prepare("SELECT id FROM outbox WHERE state='pending'").all() as {id:string}[]) await c.output.send(row.id);
   c.activateDelegations(); await supervisor.step('writer'); expect(c.task(child).status).toBe('done');
+  for(const row of c.output.ready())await c.output.send(row.id);
   await supervisor.step('research'); expect(c.task(parent).status).toBe('done');
   for(const row of store.db.prepare("SELECT id FROM outbox WHERE state='pending'").all() as {id:string}[]) await c.output.send(row.id);
   expect(JSON.stringify(post.mock.calls)).toContain('Revised after peer verification: 2+2=4');

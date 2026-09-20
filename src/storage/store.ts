@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { chmodSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
-import { schema, messageSchema, collaborationSchema, policySchema, runtimeSchema, daemonSchema, scopedExecutionSchema, conversationSchema, budgetSchema, attentionSchema } from './schema.js';
+import { schema, messageSchema, collaborationSchema, policySchema, runtimeSchema, daemonSchema, scopedExecutionSchema, conversationSchema, budgetSchema, attentionSchema, freshnessSchema } from './schema.js';
 
 export function encode(value: unknown): string {
   const encoded = JSON.stringify(value);
@@ -21,13 +21,13 @@ export class Store {
     this.db.pragma('foreign_keys = ON'); this.db.pragma('journal_mode = WAL');
     this.db.pragma('synchronous = FULL'); this.db.pragma('busy_timeout = 5000');
     const version = this.db.pragma('user_version', { simple: true });
-    if (Number(version) > 0 && Number(version) < 10 && path !== ':memory:') {
+    if (Number(version) > 0 && Number(version) < 11 && path !== ':memory:') {
       // SQLite creates a consistent backup before changing any legacy schema.
-      const backup = `${path}.pre-v${Number(version) < 8 ? 8 : Number(version) < 9 ? 9 : 10}-${randomUUID()}.sqlite`;
+      const backup = `${path}.pre-v${Number(version) < 8 ? 8 : Number(version) < 9 ? 9 : Number(version) < 10 ? 10 : 11}-${randomUUID()}.sqlite`;
       this.db.prepare('VACUUM INTO ?').run(backup); chmodSync(backup, 0o600);
     }
     if (version === 0) this.atomic(() => this.db.exec(schema));
-    else if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(Number(version))) { this.db.close(); throw new Error('Unsupported database version'); }
+    else if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].includes(Number(version))) { this.db.close(); throw new Error('Unsupported database version'); }
     if (Number(version) < 2) this.atomic(() => this.db.exec(messageSchema));
     if (Number(version) < 3) this.atomic(() => this.db.exec(collaborationSchema));
     if (Number(version) < 4) this.atomic(() => this.db.exec(policySchema));
@@ -37,6 +37,11 @@ export class Store {
     if (Number(version) < 8) this.atomic(() => this.db.exec(conversationSchema));
     if (Number(version) < 9) this.atomic(() => this.db.exec(budgetSchema));
     if (Number(version) < 10) this.atomic(() => this.db.exec(attentionSchema));
+    if(Number(version)<11){
+      this.db.pragma('foreign_keys = OFF');
+      try{this.atomic(()=>{this.db.exec(freshnessSchema);if((this.db.pragma('foreign_key_check') as unknown[]).length)throw new Error('Freshness migration foreign key failure');});}
+      finally{this.db.pragma('foreign_keys = ON');}
+    }
   }
   atomic<T>(fn: () => T): T { return this.db.transaction(fn).immediate(); }
   close(): void { this.db.close(); }
@@ -189,8 +194,8 @@ export class Store {
     });
   }
   output(id: string): Effect | undefined { return this.db.prepare('SELECT * FROM outbox WHERE id=?').get(id) as Effect | undefined; }
-  transitionOutput(id: string, from: string, to: 'sending' | 'sent' | 'unknown' | 'failed' | 'pending', receipt?: unknown): void {
-    const allowed: Record<string, string[]> = { pending: ['sending', 'failed'], sending: ['sent', 'unknown', 'failed', 'pending'], unknown: ['sent', 'failed'] };
+  transitionOutput(id: string, from: string, to: 'sending' | 'sent' | 'unknown' | 'failed' | 'pending' | 'held', receipt?: unknown): void {
+    const allowed: Record<string, string[]> = { held: ['pending','failed'], pending: ['sending', 'failed','held'], sending: ['sent', 'unknown', 'failed', 'pending'], unknown: ['sent', 'failed'] };
     if (!allowed[from]?.includes(to)) throw new Error('Invalid output transition');
     if (this.db.prepare('UPDATE outbox SET state=?,receipt=? WHERE id=? AND state=?').run(to, receipt === undefined ? null : encode(receipt), id, from).changes !== 1) throw new Error('Output state conflict');
   }

@@ -87,3 +87,7 @@ R1b实现约定：预算账户按Agent持久化，配置仅首次播种；owner�
 R2接口落地：Attention.peek/read/resolve/defer/mute与channel/thread watch；不可变分页快照，viewToken绑定Agent/session/context epoch/target/revision，完整toolResult随journal事务ACK才计呈现。现有messages.read/search保留为检索，不签发整目标凭据。最多10000条本地可见消息的有界快照，超限/截断明确不完整，不假称完整阅读；后续R3允许知情继续而非强制读尽。Pi每次模型调用前通过nonce RPC拉取content-free notice，通知写journal后进入本次输入投影；不终止当前工具、不强制读正文。压缩与run投影交接保守失效viewToken；seen/resolved/deferred独立持久化，结束run不resolve。defer到期在tick产生一次持久唤醒；mute抑制新唤醒，不撤销已开始的run。
 
 R3分为两个独立gate：R3a实现消息草稿/提交与dispatch前门控、重试/修改/丢弃/一次知情继续、429/unknown与重启；R3b实现owner授权的独立review seat和统一输入隔离。R4再接任务CAS门控。R3a依赖R2，R3b依赖R3a；各自完整测试与独立审核后才进入下一部分。
+
+R3a实现：生产ToolRouter为Output安装FreshnessGate；所有普通消息/委派消息经持久outbox held状态与draft revision。首次无basis保留草稿；retry需要有效呈现view；revise生成新的不可变outbox版本；discard静默；continue绑定当前holdId+revision，只授权60秒内该草稿的一次成功派发，不推进seen。dispatch全局串行（强于目标串行），已观察改变再hold并产生去重持久唤醒，429再次检查，unknown阻挡同目标后续派发并等待对账。普通消息scope及任务变更CAS门控分开；任务gate属R4，artifact.publish适配器的提交门控属R5，不将R3a称作已覆盖所有外部工具。R3b另验盲审输入隔离。
+
+R3a状态：PASS，review_r3a，104 tests。R3b开始实施，所有后续模块尚未完成。

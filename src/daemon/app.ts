@@ -105,6 +105,7 @@ export class Daemon {
     await this.slack.verify(); if (this.stopping) return;
     await this.slack.membership(); if (this.stopping) return;
     await this.slack.catchUp(); if (this.stopping) return;
+    this.collaboration.output.gate?.adoptPending();
     for (const agent of this.config.mate.agents) {
       const socket = new ManagedSocket(requireSecret(process.env, agent.appTokenEnv));
       const receiver = new DurableReceiver(this.store, agent.slackAppId, this.config.mate.teamId, socket, () => this.log.error({ agentId: agent.id }, 'Slack receiver error; uncommitted events are not acknowledged'), () => this.slack.replay());

@@ -1,3 +1,4 @@
+import type { FreshnessGate, SendBasis } from './freshness.js';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import { Store, encode } from '../storage/store.js';
@@ -135,11 +136,13 @@ export class Messages {
 
 export interface SlackTransport { post(agentId: string, target: Target, text: string, id: string): Promise<{ ts: string }> }
 export class Output {
+  gate?: FreshnessGate;
+  private dispatchQueue: Promise<unknown> = Promise.resolve();
   constructor(private messages: Messages, private transport: SlackTransport, private clock: () => number = Date.now) {}
-  queue(agentId: string, target: Target, text: string, id: string = randomUUID()): string {
+  queue(agentId: string, target: Target, text: string, id: string = randomUUID(), basis?:SendBasis): string {
     targetSchema.parse(target); this.messages.requireAccess(agentId, target.channel);
     z.string().min(1).max(35000).parse(text);
-    this.messages.store.queueOutput(agentId, id, { target, text }); return id;
+    this.messages.store.atomic(()=>{this.messages.store.queueOutput(agentId, id, { target, text });this.gate?.queued(agentId,id,basis);}); return id;
   }
   /** Evidence must come from a fresh Slack history response using the sender's credential. */
   reconcile(id: string, evidence: { ts: string; user: string; channel: string; thread: string; text: string; outboxId: string; requestHash: string }): void {
@@ -167,12 +170,14 @@ export class Output {
     });
   }
   ready(limit = 20): { id: string }[] {
-    return this.messages.store.db.prepare("SELECT o.id FROM outbox o LEFT JOIN output_work ow ON ow.output_id=o.id LEFT JOIN works w ON w.id=ow.work_id WHERE o.state='pending' AND (w.state IS NULL OR w.state!='paused') AND COALESCE(json_extract(o.receipt,'$.retryAt'),0)<=? ORDER BY o.rowid LIMIT ?").all(this.clock(), limit) as { id: string }[];
+    return this.messages.store.db.prepare("SELECT o.id FROM outbox o LEFT JOIN output_work ow ON ow.output_id=o.id LEFT JOIN works w ON w.id=ow.work_id WHERE o.state='pending' AND NOT EXISTS(SELECT 1 FROM agents a WHERE a.id=o.agent_id AND a.paused=1) AND (w.state IS NULL OR w.state!='paused') AND COALESCE(json_extract(o.receipt,'$.retryAt'),0)<=? ORDER BY o.rowid LIMIT ?").all(this.clock(), limit) as { id: string }[];
   }
-  async send(id: string): Promise<void> {
+  send(id:string):Promise<void>{const next=this.dispatchQueue.then(()=>this.sendNow(id));this.dispatchQueue=next.catch(()=>{});return next;}
+  private async sendNow(id: string): Promise<void> {
     const now = this.clock();
     const store = this.messages.store, row = store.output(id);
     if (!row || row.state !== 'pending') return;
+    if(store.db.prepare('SELECT 1 FROM agents WHERE id=? AND paused=1').get(row.agent_id))return;
     const work = store.db.prepare('SELECT w.state FROM works w JOIN output_work ow ON ow.work_id=w.id WHERE ow.output_id=?').get(id) as { state: string } | undefined;
     if (work && work.state !== 'active') {
       if (work.state === 'cancelled') store.transitionOutput(id, 'pending', 'failed', { reason: 'work_cancelled' });
@@ -182,6 +187,12 @@ export class Output {
     const { target, text } = JSON.parse(row.request) as { target: Target; text: string };
     try { this.messages.requireAccess(row.agent_id, target.channel); }
     catch { store.transitionOutput(id, 'pending', 'failed', { reason: 'access_revoked' }); return; }
+    // Ingress is durable before Slack ACK/replay. Wait for trusted replay to normalize
+    // related events (and owner controls) before accepting a local revision as current.
+    if(this.gate && store.db.prepare("SELECT 1 FROM ingress WHERE normalized=0 AND (json_extract(body,'$.event.channel')=? OR json_extract(body,'$.command') IS NOT NULL)").get(target.channel))return;
+    // An unconfirmed earlier dispatch may already have changed this discussion.
+    if(this.gate && store.db.prepare("SELECT 1 FROM outbox WHERE id!=? AND state IN ('sending','unknown') AND json_extract(request,'$.target.channel')=? AND (json_extract(request,'$.target.thread') IS NULL OR ? IS NULL OR json_extract(request,'$.target.thread')=?)").get(id,target.channel,target.thread??null,target.thread??null))return;
+    if(this.gate&&!this.gate.dispatch(id))return;
     store.transitionOutput(id, 'pending', 'sending');
     let receipt: { ts: string };
     try { receipt = await this.transport.post(row.agent_id, target, text, id); slackTs.parse(receipt.ts); }

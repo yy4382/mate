@@ -1,3 +1,4 @@
+import type { SendBasis } from '../slack/freshness.js';
 import { Attention } from '../slack/attention.js';
 import { BudgetLedger } from '../budget/ledger.js';
 import { randomUUID } from 'node:crypto';
@@ -58,9 +59,9 @@ export class Collaboration {
   enqueue(agentId: string, workId: string, key: string, payload: unknown): string {
     return this.store.atomic(() => { this.active(workId); const id = this.store.enqueue(agentId, key, payload, 50); this.bindDelivery(id, workId); return id; });
   }
-  send(agentId: string, workId: string, target: Target, text: string, id: string = randomUUID()): string {
+  send(agentId: string, workId: string, target: Target, text: string, id: string = randomUUID(), basis?:SendBasis): string {
     return this.store.atomic(() => {
-      this.active(workId); this.output.queue(agentId, target, text, id);
+      this.active(workId); this.output.queue(agentId, target, text, id, basis);
       const old = this.store.db.prepare('SELECT work_id FROM output_work WHERE output_id=?').get(id) as { work_id: string } | undefined;
       if (old && old.work_id !== workId) throw new Error('Output work conflict');
       this.store.db.prepare('INSERT INTO output_work VALUES(?,?) ON CONFLICT DO NOTHING').run(id, workId); return id;
@@ -113,13 +114,13 @@ export class Collaboration {
     const task = this.task(id); this.active(task.work_id); this.messages.requireAccess(agentId, JSON.parse(task.target).channel);
     if (task.owner !== agentId || ['done','cancelled','failed','draft'].includes(task.status)) throw new Error('Task not owned or terminal'); return task;
   }
-  delegate(agentId: string, parentId: string, peerId: string, title: string): string {
+  delegate(agentId: string, parentId: string, peerId: string, title: string, basis?:SendBasis): string {
     return this.store.atomic(() => {
       const parent = this.owned(agentId, parentId), target = JSON.parse(parent.target) as Target;
       const peer = this.messages.agent(peerId); if (peerId === agentId) throw new Error('Cannot delegate to self');
       this.messages.requireAccess(peerId, target.channel);
       const id = this.createTask(agentId, parent.work_id, target, title, parentId);
-      const outputId = this.send(agentId, parent.work_id, target, `<@${peer.slackUserId}> ${title}\nMate task: ${id}`);
+      const outputId = this.send(agentId, parent.work_id, target, `<@${peer.slackUserId}> ${title}\nMate task: ${id}`, undefined, basis);
       this.store.db.prepare("UPDATE tasks SET status='draft',assigned_to=?,outbox_id=? WHERE id=?").run(peerId, outputId, id);
       return id;
     });
