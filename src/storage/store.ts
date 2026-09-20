@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { createHash, randomUUID } from 'node:crypto';
-import { schema } from './schema.js';
+import { schema, messageSchema } from './schema.js';
 
 export function encode(value: unknown): string {
   const encoded = JSON.stringify(value);
@@ -21,7 +21,8 @@ export class Store {
     this.db.pragma('synchronous = FULL'); this.db.pragma('busy_timeout = 5000');
     const version = this.db.pragma('user_version', { simple: true });
     if (version === 0) this.atomic(() => this.db.exec(schema));
-    else if (version !== 1) { this.db.close(); throw new Error('Unsupported database version'); }
+    else if (version !== 1 && version !== 2) { this.db.close(); throw new Error('Unsupported database version'); }
+    if (Number(version) < 2) this.atomic(() => this.db.exec(messageSchema));
   }
   atomic<T>(fn: () => T): T { return this.db.transaction(fn).immediate(); }
   close(): void { this.db.close(); }
@@ -60,7 +61,7 @@ export class Store {
     return this.atomic(() => {
       const agent = this.db.prepare('SELECT * FROM agents WHERE id=?').get(agentId) as { session_id: string; generation: number; paused: number } | undefined;
       if (!agent || agent.paused || this.db.prepare("SELECT 1 FROM runs WHERE agent_id=? AND state='active'").get(agentId)) return;
-      const delivery = this.db.prepare("SELECT * FROM deliveries WHERE agent_id=? AND status!='handled' ORDER BY (priority + (? - created_at)/60000) DESC,created_at,id LIMIT 1").get(agentId, now) as Delivery | undefined;
+      const delivery = this.db.prepare("SELECT * FROM deliveries WHERE agent_id=? AND status!='handled' AND COALESCE(json_extract(payload,'$.notBefore'),0)<=? ORDER BY (priority + (? - created_at)/60000) DESC,created_at,id LIMIT 1").get(agentId, now, now) as Delivery | undefined;
       if (!delivery) return;
       const token = { id: randomUUID(), agentId, sessionId: agent.session_id, generation: agent.generation + 1, deliveryId: delivery.id };
       this.db.prepare('UPDATE agents SET generation=? WHERE id=?').run(token.generation, agentId);

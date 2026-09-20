@@ -20,3 +20,12 @@ CREATE TABLE outbox(id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agent
 CREATE TABLE audit(id INTEGER PRIMARY KEY, at INTEGER NOT NULL, kind TEXT NOT NULL, body TEXT NOT NULL);
 PRAGMA user_version=1;
 `;
+export const messageSchema = `
+CREATE TABLE channel_access(agent_id TEXT NOT NULL REFERENCES agents(id), channel TEXT NOT NULL, active INTEGER NOT NULL, PRIMARY KEY(agent_id,channel));
+CREATE TABLE messages(key TEXT PRIMARY KEY, channel TEXT NOT NULL, ts TEXT NOT NULL, thread TEXT NOT NULL, revision TEXT NOT NULL, body TEXT NOT NULL, deleted INTEGER NOT NULL);
+CREATE TABLE message_revisions(key TEXT NOT NULL REFERENCES messages(key), revision TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(key,revision));
+CREATE TABLE message_visibility(agent_id TEXT NOT NULL REFERENCES agents(id), key TEXT NOT NULL REFERENCES messages(key), PRIMARY KEY(agent_id,key));
+CREATE TABLE message_observations(agent_id TEXT NOT NULL REFERENCES agents(id), key TEXT NOT NULL REFERENCES messages(key), revision TEXT NOT NULL, PRIMARY KEY(agent_id,key,revision));
+CREATE TABLE thread_watches(agent_id TEXT NOT NULL REFERENCES agents(id), channel TEXT NOT NULL, thread TEXT NOT NULL, PRIMARY KEY(agent_id,channel,thread));
+PRAGMA user_version=2;
+`;
