@@ -82,7 +82,7 @@ it('owner stop fences active work, blocks pending sends, leaves other work runna
   service.control('UOWNER', work, 'cancel'); await output.send(id); expect(db.output(id)?.state).toBe('failed');
   expect(() => service.control('UOWNER', work, 'resume')).toThrow('cannot resume');
 });
-it('wakeups catch up once, retain origin/budget, are transactional and cancel with task', () => {
+it('wakeups catch up once, retain origin/budget, are transactional and outlive their task', () => {
   const { db, service, work } = setup(); const task = service.createTask('research', work, target, 'watch'); service.claim('research', task);
   const once = service.schedule('research', work, target, 1000, 'Asia/Shanghai', undefined, task);
   const recurring = service.schedule('research', work, target, 1000, 'Asia/Shanghai', '* * * * *', task);
@@ -92,7 +92,7 @@ it('wakeups catch up once, retain origin/budget, are transactional and cancel wi
   expect(db.db.prepare('SELECT count(*) n FROM deliveries').get()).toEqual({ n: 2 });
   expect(service.schedules('research').find(s => s.id === once)?.active).toBe(0);
   expect(service.schedules('research').find(s => s.id === recurring)?.next_at).toBeGreaterThan(3600000);
-  service.update('research', task, 'cancelled'); expect(service.schedules('research').every(s => s.active === 0)).toBe(true);
+  service.update('research', task, 'cancelled'); expect(service.schedules('research').find(s=>s.id===recurring)?.active).toBe(1);service.cancelSchedule('research',recurring);expect(service.schedules('research').every(s=>s.active===0)).toBe(true);
   expect(() => service.cancelSchedule('engineer', recurring)).toThrow('owned');
 });
 it('legacy shared-work debt is conservatively retained once per participating Agent',()=>{

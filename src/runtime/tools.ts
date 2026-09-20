@@ -11,9 +11,16 @@ import { targetSchema,slackTs } from '../slack/messages.js';
 import type { ToolReply } from './engine.js';
 const id = z.string().min(1).max(500), text = z.string().max(35000);
 const messageRef=z.object({channel:id,ts:slackTs}).strict();
+const reminderInput={target:targetSchema,content:z.string().min(1).max(12000),nextAt:z.number().int().nonnegative(),timezone:id,cron:id.optional(),taskId:id.optional(),anchor:messageRef.optional()};
 const fileSchemas = Object.fromEntries(operationSchema.options.filter(schema=>schema.shape.kind.value!=='exec').map(schema=>[`file.${schema.shape.kind.value}`,(schema as z.ZodObject).omit({kind:true}).extend({grantId:id})]));
 const schemas: Record<string,z.ZodType> = {
   ...fileSchemas,
+  'reminders.list':z.object({before:z.number().int().positive().optional()}).strict(),
+  'reminders.read':z.object({reminderId:id}).strict(),
+  'reminders.log':z.object({reminderId:id,before:z.number().int().positive().optional()}).strict(),
+  'reminders.create':z.object(reminderInput).strict(),
+  'reminders.edit':z.object({...reminderInput,reminderId:id,expectedVersion:z.number().int().positive()}).strict(),
+  'reminders.cancel':z.object({reminderId:id,expectedVersion:z.number().int().positive(),cancelPending:z.boolean().optional()}).strict(),
   'environment.info':z.object({}).strict(),
   'attachments.save':z.object({message:messageRef,fileId:z.string().regex(/^F[A-Z0-9]+$/),grantId:id,path:id}).strict(),
   'tasks.byMessage':z.object({message:messageRef}).strict(),
@@ -52,7 +59,7 @@ const schemas: Record<string,z.ZodType> = {
   'tasks.claim': z.union([z.object({taskId:id,expectedVersion:z.number().int().nonnegative(),viewToken:id.optional()}).strict(),z.object({message:messageRef,expectedVersion:z.number().int().nonnegative(),viewToken:id.optional()}).strict()]), 'tasks.delegate': z.object({ taskId: id, peerId: id, title: text, viewToken:id.optional() }).strict(),
   'tasks.wait': z.object({ taskId: id, dependencyId: id,expectedVersion:z.number().int().nonnegative(),viewToken:id.optional() }).strict(),
   'tasks.update': z.object({ taskId: id, status: z.enum(['doing','review','done','cancelled','failed']), result: text.optional(),expectedVersion:z.number().int().nonnegative(),viewToken:id.optional() }).strict(),
-  'schedules.list': z.object({}).strict(), 'schedules.cancel': z.object({ scheduleId: id }).strict(),
+  'schedules.list': z.object({}).strict(), 'schedules.cancel': z.object({ scheduleId: id,expectedVersion:z.number().int().positive(),cancelPending:z.boolean().optional() }).strict(),
   'schedules.create': z.object({ target: targetSchema, nextAt: z.number().int().positive(), timezone: id, cron: id.optional(), taskId: id.optional() }).strict(),
   'inbox.list': z.object({}).strict(), 'inbox.read': z.object({ deliveryId: id }).strict(), 'inbox.ack': z.object({ deliveryId: id }).strict(),
   exec: z.object({ grantId: id, command: z.string().max(16000), cwd: id }).strict()
@@ -113,8 +120,10 @@ export class ToolRouter {
     if (!Object.hasOwn(schemas,operation)) throw new Error('Unknown operation');
     // Parsing is deliberately repeated in the daemon, independently of model-side tool validation.
     const args = schemas[operation]!.parse(input) as Record<string, any>;
-    const readOnly = ['environment.info','tasks.byMessage','tasks.intents','drafts.list','drafts.read','attention.peek','attention.read','attention.resolve','attention.defer','attention.mute','agents','works.list','budget.read','tasks.read','tasks.list','messages.read','messages.recent','messages.search','schedules.list','inbox.list','inbox.read','conversations.list','conversations.members'];
+    const readOnly = ['reminders.list','reminders.read','reminders.log','environment.info','tasks.byMessage','tasks.intents','drafts.list','drafts.read','attention.peek','attention.read','attention.resolve','attention.defer','attention.mute','agents','works.list','budget.read','tasks.read','tasks.list','messages.read','messages.recent','messages.search','schedules.list','inbox.list','inbox.read','conversations.list','conversations.members'];
     if (!readOnly.includes(operation) && operation !== 'works.select') c.assertActionWork(run, args.taskId ? c.task(args.taskId).work_id : workId);
+    if(args.reminderId)c.reminders.read(actor,args.reminderId);
+    if(args.scheduleId)c.reminders.read(actor,args.scheduleId);
     if(args.target)c.messages.requireAccess(actor,args.target.channel);
     if(args.channel)c.messages.requireAccess(actor,args.channel);
     if(args.taskId)c.messages.requireAccess(actor,JSON.parse(c.task(args.taskId).target).channel);
@@ -138,7 +147,7 @@ export class ToolRouter {
       const existing = s.prepareAction(run, actionId, operation === 'works.select' ? { operation, args } : { workId, operation, args });
       if(args.intentId)this.coordination.describe(actor,args.intentId);
       if(args.draftId)this.gate.describe(actor,args.draftId);
-      const refresh = ['tasks.byMessage','tasks.intents','drafts.list','drafts.read','attention.peek','budget.read','works.list','tasks.list','messages.search','schedules.list','inbox.list'].includes(operation);
+      const refresh = ['reminders.list','reminders.read','reminders.log','tasks.byMessage','tasks.intents','drafts.list','drafts.read','attention.peek','budget.read','works.list','tasks.list','messages.search','schedules.list','inbox.list'].includes(operation);
       if (existing.state === 'succeeded' && !refresh) return JSON.parse(existing.receipt!) as ToolReply;
       if(existing.state==='succeeded' && refresh){s.db.prepare("UPDATE actions SET state='prepared',run_id=? WHERE id=?").run(run.id,actionId);existing.state='prepared';}
       if (existing.state !== 'prepared') throw new Error('Uncertain tool action');
@@ -146,6 +155,12 @@ export class ToolRouter {
       if (args.taskId) c.messages.requireAccess(actor, JSON.parse(c.task(args.taskId).target).channel);
       let value: unknown = null, wait = false;
       switch (operation) {
+        case 'reminders.list':{const items=c.reminders.list(actor,args.before);value={items,nextCursor:items.length===100?items.at(-1)!.cursor:null};break;}
+        case 'reminders.read':value=c.reminders.read(actor,args.reminderId);break;
+        case 'reminders.log':value=c.reminders.log(actor,args.reminderId,args.before);break;
+        case 'reminders.create':value=c.reminders.create(actor,workId,args as any);break;
+        case 'reminders.edit':value=c.reminders.edit(actor,args.reminderId,args.expectedVersion,args as any);break;
+        case 'reminders.cancel':value=c.reminders.cancel(actor,args.reminderId,args.expectedVersion,args.cancelPending);break;
         case 'tasks.byMessage':value=this.coordination.find(actor,args.message)??null;break;
         case 'tasks.intents':value=(s.db.prepare("SELECT i.id FROM task_intents i JOIN channel_access a ON a.agent_id=i.agent_id AND a.channel=json_extract(i.target,'$.channel') WHERE i.agent_id=? AND a.active=1 AND i.state='held'").all(actor) as {id:string}[]).map(i=>this.coordination.describe(actor,i.id));break;
         case 'tasks.retry':value=this.coordination.retry(run,args.intentId,args.viewToken);break;
@@ -181,7 +196,7 @@ export class ToolRouter {
         case 'tasks.update':value=this.coordination.submit(run,workId,actionId,operation,args,args.viewToken);break;
         case 'schedules.list': value = c.schedules(actor); break;
         case 'schedules.create': value = c.schedule(actor, workId, args.target, args.nextAt, args.timezone, args.cron, args.taskId); break;
-        case 'schedules.cancel': c.cancelSchedule(actor, args.scheduleId); break;
+        case 'schedules.cancel': value=c.reminders.cancel(actor,args.scheduleId,args.expectedVersion,args.cancelPending);break;
         case 'inbox.read': case 'inbox.ack': {
           const delivery = s.delivery(args.deliveryId);
           if (delivery.agent_id !== actor) throw new Error('Private inbox');

@@ -7,15 +7,16 @@ import type { AgentConfig, MateConfig } from '../config.js';
 export const slackTs = z.string().regex(/^\d{1,16}\.\d{1,6}$/);
 export const targetSchema = z.object({ channel: z.string().regex(/^[CDG][A-Z0-9]+$/), thread: slackTs.optional() }).strict();
 export type Target = z.infer<typeof targetSchema>;
-export interface NormalMessage { team: string; channel: string; ts: string; thread: string; revision: string; text: string; user?: string; bot?: string; deleted: boolean;files?: {id:string;name?:string|undefined;title?:string|undefined;mimetype?:string|undefined;size?:number|undefined}[] }
+export interface NormalMessage { team: string; channel: string; ts: string; thread: string; revision: string; text: string; user?: string; bot?: string; deleted: boolean;systemGenerated?:boolean;files?: {id:string;name?:string|undefined;title?:string|undefined;mimetype?:string|undefined;size?:number|undefined}[] }
 interface MessageRow { key: string; channel: string; ts: string; thread: string; revision: string; body: string; deleted: number }
 function timestamp(value: string): bigint { const [a, b] = value.split('.'); return BigInt(a!) * 1000000n + BigInt(b!.padEnd(6, '0')); }
 export function messageKey(message: Pick<NormalMessage, 'team' | 'channel' | 'ts'>): string { return encode([message.team, message.channel, message.ts]); }
 const fileMetadata=z.object({id:z.string().regex(/^F[A-Z0-9]+$/),name:z.string().max(500).optional(),title:z.string().max(500).optional(),mimetype:z.string().max(200).optional(),size:z.number().nonnegative().optional()});
+const outputMetadata=z.object({event_type:z.string(),event_payload:z.record(z.string(),z.unknown()).optional()}).optional();
 const rawMessage = z.object({ type: z.string(), channel: z.string(), ts: slackTs.optional(), event_ts: slackTs.optional(), thread_ts: slackTs.optional(),
-  files:z.array(fileMetadata).max(100).optional(),text: z.string().optional(), user: z.string().optional(), bot_id: z.string().optional(), subtype: z.string().optional(), deleted_ts: slackTs.optional(),
+  metadata:outputMetadata,files:z.array(fileMetadata).max(100).optional(),text: z.string().optional(), user: z.string().optional(), bot_id: z.string().optional(), subtype: z.string().optional(), deleted_ts: slackTs.optional(),
   previous_message: z.object({ thread_ts: slackTs.optional() }).passthrough().optional(),
-  message: z.object({files:z.array(fileMetadata).max(100).optional(), ts: slackTs, thread_ts: slackTs.optional(), text: z.string().optional(), user: z.string().optional(), bot_id: z.string().optional(), edited: z.object({ ts: slackTs }).optional() }).optional() }).passthrough();
+  message: z.object({metadata:outputMetadata,files:z.array(fileMetadata).max(100).optional(), ts: slackTs, thread_ts: slackTs.optional(), text: z.string().optional(), user: z.string().optional(), bot_id: z.string().optional(), edited: z.object({ ts: slackTs }).optional() }).optional() }).passthrough();
 
 export class Messages {
   private readonly membershipVersions = new Map<string, number>();
@@ -68,6 +69,11 @@ export class Messages {
             const msg: NormalMessage = { team: this.config.teamId, channel: e.channel, ts, thread: source.thread_ts ?? e.previous_message?.thread_ts ?? previous?.thread ?? ts,
               revision,...(source.files?{files:source.files}:{}), text: source.text ?? '', deleted: e.subtype === 'message_deleted',
               ...(source.user ? { user: source.user } : {}), ...(source.bot_id ? { bot: source.bot_id } : {}) };
+            const metadata=source.metadata;
+            if(metadata?.event_type==='mate_outbox'&&typeof metadata.event_payload?.id==='string'){
+              const output=this.store.output(metadata.event_payload.id);
+              if(output&&output.request_hash===metadata.event_payload.request_hash&&source.user===this.agent(output.agent_id).slackUserId&&source.text===JSON.parse(output.request).text&&this.store.db.prepare('SELECT 1 FROM system_projections WHERE output_id=?').get(output.id)){const target=JSON.parse(output.request).target;if(target.channel===msg.channel&&(target.thread??msg.ts)===msg.thread)msg.systemGenerated=true;}
+            }
             this.record(msg, [installation.id]);
           }
         }
@@ -111,6 +117,7 @@ export class Messages {
         }
         if(old && addedVisibility)this.store.db.prepare('INSERT INTO conversation_events(channel,thread,message_key,revision,kind,audience) VALUES(?,?,?,?,?,?)').run(current.channel,current.thread,key,current.revision,'visibility',id);
         if (this.store.db.prepare('INSERT INTO message_observations VALUES(?,?,?) ON CONFLICT DO NOTHING').run(id, key, current.revision).changes === 0) continue;
+        if(effective.systemGenerated)continue;
         if (effective.user === agent.slackUserId || effective.bot === agent.slackBotId || current.deleted) continue;
         const sender = this.config.agents.find(a => a.slackUserId === effective.user || a.slackBotId === effective.bot);
         const mention = effective.text.includes(`<@${agent.slackUserId}>`);
@@ -192,6 +199,7 @@ export class Output {
       const agent = this.messages.agent(agentId);
       const message: NormalMessage = { team: this.messages.config.teamId, channel: target.channel, thread: target.thread ?? receipt.ts,
         ts: receipt.ts, revision: receipt.ts, text, user: agent.slackUserId, bot: agent.slackBotId, deleted: false };
+      if(this.messages.store.db.prepare('SELECT 1 FROM system_projections WHERE output_id=?').get(id)&&text===JSON.parse(this.messages.store.output(id)!.request).text)message.systemGenerated=true;
       this.messages.record(message, []);
       const binding = this.messages.store.db.prepare('SELECT work_id FROM output_work WHERE output_id=?').get(id) as { work_id: string } | undefined;
       if (binding) {

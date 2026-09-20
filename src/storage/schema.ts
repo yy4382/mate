@@ -117,3 +117,16 @@ CREATE TABLE task_intents(id TEXT PRIMARY KEY,agent_id TEXT NOT NULL,work_id TEX
 CREATE TABLE task_projections(output_id TEXT PRIMARY KEY REFERENCES outbox(id),task_id TEXT NOT NULL REFERENCES tasks(id),version INTEGER NOT NULL);
 PRAGMA user_version=13;
 `;
+
+export const reminderSchema = `
+ALTER TABLE schedules ADD COLUMN content TEXT NOT NULL DEFAULT 'Legacy reminder: follow up on the referenced conversation or task.';
+ALTER TABLE schedules ADD COLUMN anchor TEXT;
+ALTER TABLE schedules ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE schedules ADD COLUMN legacy INTEGER NOT NULL DEFAULT 1;
+CREATE TABLE reminder_events(seq INTEGER PRIMARY KEY AUTOINCREMENT,reminder_id TEXT NOT NULL REFERENCES schedules(id),version INTEGER NOT NULL,kind TEXT NOT NULL,at INTEGER NOT NULL,payload TEXT NOT NULL);
+CREATE TABLE reminder_firings(id TEXT PRIMARY KEY,reminder_id TEXT NOT NULL REFERENCES schedules(id),due_at INTEGER NOT NULL,version INTEGER NOT NULL,delivery_id TEXT NOT NULL REFERENCES deliveries(id),output_id TEXT REFERENCES outbox(id),UNIQUE(reminder_id,due_at,version));
+CREATE TABLE system_projections(output_id TEXT PRIMARY KEY REFERENCES outbox(id),kind TEXT NOT NULL CHECK(kind='reminder'),entity_id TEXT NOT NULL,version INTEGER NOT NULL);
+UPDATE schedules SET anchor=(SELECT json_object('channel',json_extract(t.message_key,'$[1]'),'ts',json_extract(t.message_key,'$[2]')) FROM tasks t WHERE t.id=schedules.task_id AND t.message_key IS NOT NULL);
+INSERT INTO reminder_events(reminder_id,version,kind,at,payload) SELECT id,version,'legacy_migrated',CAST(strftime('%s','now') AS INTEGER)*1000,json_object('active',active,'contentInferred',1) FROM schedules;
+PRAGMA user_version=14;
+`;

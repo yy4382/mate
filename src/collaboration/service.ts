@@ -1,9 +1,9 @@
+import {Reminders,type Reminder}from '../reminders/service.js';
 import type { SendBasis } from '../slack/freshness.js';
 import { ReviewSeats } from '../slack/review-seats.js';
 import { Attention } from '../slack/attention.js';
 import { BudgetLedger } from '../budget/ledger.js';
 import { randomUUID } from 'node:crypto';
-import { CronExpressionParser } from 'cron-parser';
 import { z } from 'zod';
 import { Store, encode, type RunToken } from '../storage/store.js';
 import { Messages, Output, targetSchema, type Target } from '../slack/messages.js';
@@ -11,12 +11,12 @@ import type { MateConfig } from '../config.js';
 
 export interface Work { id: string; target: string; state: string; max_runs: number; max_tokens: number; max_cost: number; runs: number; tokens: number; cost: number }
 export interface Task { legacy:number; message_key:string|null; id: string; work_id: string; parent_id: string | null; target: string; title: string; owner: string | null; assigned_to: string | null; status: string; version: number; waiting_on: string | null; result: string | null; outbox_id: string | null }
-interface Schedule { id: string; agent_id: string; work_id: string; task_id: string | null; target: string; next_at: number; cron: string | null; timezone: string; active: number }
 export class Collaboration {
+  readonly reminders:Reminders;
   readonly seats: ReviewSeats;
   readonly ledger: BudgetLedger;
   readonly attention: Attention;
-  constructor(readonly store: Store, readonly messages: Messages, readonly output: Output, readonly config: MateConfig) { this.ledger = new BudgetLedger(store, config); this.attention = new Attention(messages); this.seats = new ReviewSeats(messages); }
+  constructor(readonly store: Store, readonly messages: Messages, readonly output: Output, readonly config: MateConfig) { this.reminders=new Reminders(this); this.ledger = new BudgetLedger(store, config); this.attention = new Attention(messages); this.seats = new ReviewSeats(messages); }
   work(id: string): Work { const work = this.store.db.prepare('SELECT * FROM works WHERE id=?').get(id) as Work | undefined; if (!work) throw new Error('Unknown work'); return work; }
   task(id: string): Task { const task = this.store.db.prepare("SELECT *, (message_key IS NULL AND status!='draft') legacy FROM tasks WHERE id=?").get(id) as Task | undefined; if (!task) throw new Error('Unknown task'); return task; }
   list(agentId: string): Task[] {
@@ -41,7 +41,7 @@ export class Collaboration {
       this.store.db.prepare('INSERT INTO delivery_context VALUES(?,?) ON CONFLICT(delivery_id) DO UPDATE SET work_id=excluded.work_id').run(run.deliveryId,workId);
     });
   }
-  private active(workId: string): Work { const work = this.work(workId); if (work.state !== 'active') throw new Error('Work paused or cancelled'); return work; }
+  active(workId: string): Work { const work = this.work(workId); if (work.state !== 'active') throw new Error('Work paused or cancelled'); return work; }
   private event(taskId: string, body: unknown): void { this.store.db.prepare('INSERT INTO task_events(task_id,at,body) VALUES(?,?,?)').run(taskId, Date.now(), encode(body)); }
   /** Work identifies an activity; it never grants or replenishes an Agent account. */
   createWork(origin: string, target: Target): string {
@@ -188,31 +188,14 @@ export class Collaboration {
       this.store.db.prepare('UPDATE tasks SET status=?,result=?,waiting_on=NULL,version=version+1 WHERE id=?').run(status, result ?? task.result, id);
       this.event(id, { action: status, result });
       if (['done','cancelled','failed'].includes(status)) {
-        this.store.db.prepare('UPDATE schedules SET active=0 WHERE task_id=?').run(id);
         this.wakeDependents(this.task(id));
       }
     });
   }
-  schedule(agentId: string, workId: string, target: Target, nextAt: number, timezone: string, cron?: string, taskId?: string): string {
-    this.active(workId); this.messages.requireAccess(agentId, target.channel); targetSchema.parse(target);
-    z.number().int().nonnegative().safe().parse(nextAt); new Intl.DateTimeFormat('en', { timeZone: timezone });
-    if (cron) CronExpressionParser.parse(cron, { currentDate: nextAt, tz: timezone }).next();
-    if (taskId && this.owned(agentId, taskId).work_id !== workId) throw new Error('Schedule task work mismatch');
-    const id = randomUUID();
-    this.store.db.prepare('INSERT INTO schedules(id,agent_id,work_id,task_id,target,next_at,cron,timezone) VALUES(?,?,?,?,?,?,?,?)').run(id, agentId, workId, taskId ?? null, encode(target), nextAt, cron ?? null, timezone); return id;
-  }
-  cancelSchedule(agentId: string, id: string): void {
-    if (this.store.db.prepare('UPDATE schedules SET active=0 WHERE id=? AND agent_id=?').run(id, agentId).changes !== 1) throw new Error('Unknown owned schedule');
-  }
-  reschedule(agentId: string, id: string, nextAt: number): void {
-    z.number().int().nonnegative().safe().parse(nextAt);
-    this.store.atomic(() => {
-      const schedule = this.schedules(agentId).find(s => s.id === id); if (!schedule) throw new Error('Unknown owned schedule');
-      this.active(schedule.work_id); if (schedule.task_id) this.owned(agentId, schedule.task_id);
-      this.store.db.prepare('UPDATE schedules SET next_at=?,active=1 WHERE id=?').run(nextAt, id);
-    });
-  }
-  schedules(agentId: string): Schedule[] { return this.store.db.prepare('SELECT * FROM schedules WHERE agent_id=?').all(agentId) as Schedule[]; }
+  schedule(agentId:string,workId:string,target:Target,nextAt:number,timezone:string,cron?:string,taskId?:string):string{return this.reminders.create(agentId,workId,{target,nextAt,timezone,cron,taskId,content:'Follow up on the referenced conversation or task.'}).id;}
+  cancelSchedule(agentId:string,id:string):void{const r=this.reminders.read(agentId,id);this.reminders.cancel(agentId,id,r.version);}
+  reschedule(agentId:string,id:string,nextAt:number):void{const r=this.reminders.read(agentId,id);this.reminders.edit(agentId,id,r.version,{target:JSON.parse(r.target),content:r.content,nextAt,timezone:r.timezone,cron:r.cron??undefined,taskId:r.task_id??undefined,anchor:r.anchor?JSON.parse(r.anchor):undefined});}
+  schedules(agentId:string):Reminder[]{return this.reminders.list(agentId);}
   tick(now = Date.now()): void {
     this.store.atomic(() => {
       const deferred=this.store.db.prepare('SELECT agent_id,target,deferred_until,muted FROM attention_state WHERE deferred_until>0 AND deferred_until<=?').all(now) as {agent_id:string;target:string;deferred_until:number;muted:number}[];
@@ -224,12 +207,7 @@ export class Collaboration {
         const work=this.createWork(`attention:${item.agent_id}:${item.target}`,target);
         if(this.work(work).state==='active')this.enqueue(item.agent_id,work,`defer:${item.target}:${item.deferred_until}`,{kind:'attention_due',target});
       }
-      const schedules = this.store.db.prepare("SELECT s.* FROM schedules s JOIN works w ON w.id=s.work_id WHERE s.active=1 AND s.next_at<=? AND w.state='active'").all(now) as Schedule[];
-      for (const s of schedules) {
-        this.enqueue(s.agent_id, s.work_id, `schedule:${s.id}:${s.next_at}`, { kind: 'schedule', scheduleId: s.id, taskId: s.task_id, dueAt: s.next_at, target: JSON.parse(s.target), receivedAt: now });
-        if (s.cron) this.store.db.prepare('UPDATE schedules SET next_at=? WHERE id=?').run(CronExpressionParser.parse(s.cron, { currentDate: now, tz: s.timezone }).next().getTime(), s.id);
-        else this.store.db.prepare('UPDATE schedules SET active=0 WHERE id=?').run(s.id);
-      }
+      this.reminders.tick(now);
     });
   }
   /** Returns affected run IDs for the supervisor's independent abort channel. */
@@ -247,7 +225,7 @@ export class Collaboration {
         }
       }
       if (operation === 'cancel') {
-        this.store.db.prepare('UPDATE schedules SET active=0 WHERE work_id=?').run(workId);
+        this.reminders.cancelWork(workId);
         this.store.db.prepare("UPDATE tasks SET status='cancelled',version=version+1 WHERE work_id=? AND status NOT IN ('done','cancelled','failed')").run(workId);
       }
       this.store.audit('work_control', { ownerId, workId, operation }); return runs.map(r => r.id);

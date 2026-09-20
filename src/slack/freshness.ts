@@ -21,7 +21,8 @@ export class FreshnessGate{
   const s=this.messages.store;if(s.db.prepare('SELECT 1 FROM drafts WHERE outbox_id=?').get(id))return;
   if(basis)s.assertRun(basis.run);
   const output=s.output(id)!,request=JSON.parse(output.request) as {target:Target};
-  const valid=!!basis&&basis.run.agentId===actor&&(basis.systemProjection===true||this.attention.valid(basis.run,request.target,basis.viewToken));
+  const projection=!!s.db.prepare('SELECT 1 FROM system_projections WHERE output_id=?').get(id);
+  const valid=projection||!!basis&&basis.run.agentId===actor&&(basis.systemProjection===true||this.attention.valid(basis.run,request.target,basis.viewToken));
   s.db.prepare('INSERT INTO drafts(id,agent_id,outbox_id,accepted_revision) VALUES(?,?,?,?)').run(id,actor,id,valid?this.attention.revision(request.target,actor):null);
   if(!valid)this.hold(this.draft(actor,id),basis?.viewToken?'view_missing_or_changed':'baseline_unknown');
  }
@@ -67,7 +68,7 @@ export class FreshnessGate{
   const s=this.messages.store,d=s.db.prepare('SELECT * FROM drafts WHERE outbox_id=?').get(id) as Draft|undefined;
   if(!d)throw new Error('Output lacks freshness basis');
   const target=this.request(d).target;this.messages.requireAccess(d.agent_id,target.channel);
-  if(s.db.prepare('SELECT 1 FROM task_projections WHERE output_id=?').get(id))return true;
+  if(s.db.prepare('SELECT 1 FROM task_projections WHERE output_id=? UNION ALL SELECT 1 FROM system_projections WHERE output_id=?').get(id,id))return true;
   if(d.continue_until>this.clock()||d.accepted_revision===this.attention.revision(target,d.agent_id))return true;
   s.atomic(()=>{this.hold(d,'discussion_changed_before_dispatch');
    const delivery=s.enqueue(d.agent_id,`draft-held:${id}:${this.attention.revision(target,d.agent_id)}`,{kind:'draft_held',draftId:d.id,target},50);
