@@ -1,9 +1,9 @@
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { mkdtempSync, realpathSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { createServer } from 'node:http';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { SandboxBackend } from '../../src/execution/backend.js';
@@ -66,3 +66,16 @@ it.skipIf(process.env.MATE_SANDBOX_TEST !== '1')('startup cleanup removes only t
     expect((await cli(['inspect', '--format', '{{.State.Running}}', containers[1]!])).stdout.trim()).toBe('true');
   } finally { for (const id of containers) await cli(['rm', '--force', id]).catch(() => {}); }
 }, 30000);
+
+it.skipIf(process.env.MATE_SANDBOX_TEST !== '1')('fixed file helper exits when its daemon IPC owner is killed', async () => {
+  const root = temp(); await promisify(execFile)('/usr/bin/mkfifo', [`${root}/blocked`]);
+  const script = `import { SandboxBackend } from ${JSON.stringify(new URL('../../dist/src/execution/backend.js', import.meta.url).href)}; await new SandboxBackend().execute({root:${JSON.stringify(root)},operation:{kind:'read',path:'blocked'},timeoutMs:60000});`;
+  const parent = spawn(process.execPath, ['--input-type=module','-e',script], { stdio: ['ignore','ignore','ignore'] });
+  let helper = 0;
+  try {
+    await vi.waitFor(async () => { const result = await promisify(execFile)('/usr/bin/pgrep',['-P',String(parent.pid)]); helper = Number(result.stdout.trim().split('\n')[0]); expect(helper).toBeGreaterThan(0); });
+    await new Promise(resolve => setTimeout(resolve, 700)); process.kill(helper, 0);
+    parent.kill('SIGKILL');
+    await vi.waitFor(() => expect(() => process.kill(helper,0)).toThrow(), { timeout: 3000 });
+  } finally { parent.kill('SIGKILL'); if (helper) { try { process.kill(-helper,'SIGKILL'); } catch {} } }
+}, 10000);

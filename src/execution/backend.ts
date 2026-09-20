@@ -19,12 +19,12 @@ export class SandboxBackend implements ExecutionBackend {
     if (signal?.aborted) return Promise.reject(new Error('Execution aborted'));
     return new Promise((resolve, reject) => {
       const child = spawn(process.execPath, [this.helper], { detached: true,
-        env: { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', LANG: 'en_US.UTF-8' }, stdio: ['pipe', 'pipe', 'pipe'] });
+        env: { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', LANG: 'en_US.UTF-8' }, stdio: ['pipe', 'pipe', 'pipe', 'ipc'] });
       let stdout = '', stderr = '', truncated = false, stopped = false;
       const limit = 65536;
       const collect = (value: string, chunk: Buffer): string => { if (Buffer.byteLength(value) + chunk.length > limit) truncated = true; return (value + chunk.toString()).slice(0, limit); };
-      child.stdout.on('data', (b: Buffer) => { stdout = collect(stdout, b); });
-      child.stderr.on('data', (b: Buffer) => { stderr = collect(stderr, b); });
+      child.stdout!.on('data', (b: Buffer) => { stdout = collect(stdout, b); });
+      child.stderr!.on('data', (b: Buffer) => { stderr = collect(stderr, b); });
       const kill = () => { stopped = true; if (child.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* already exited */ } } };
       const timer = setTimeout(kill, request.timeoutMs); signal?.addEventListener('abort', kill, { once: true });
       child.once('error', error => { clearTimeout(timer); signal?.removeEventListener('abort', kill); reject(error); });
@@ -35,7 +35,7 @@ export class SandboxBackend implements ExecutionBackend {
         else if (code === 125) reject(new Error(`Sandbox unavailable: ${stderr.slice(0, 2000)}`));
         else resolve({ code: code ?? 1, stdout, stderr, truncated });
       });
-      child.stdin.on('error', () => {}); child.stdin.end(JSON.stringify(request));
+      child.stdin!.on('error', () => {}); child.stdin!.end(JSON.stringify(request));
     });
   }
 }

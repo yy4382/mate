@@ -5,6 +5,11 @@ import { fileURLToPath } from 'node:url';
 import { checkedPath } from './paths.js';
 import { operationSchema, type ExecutionRequest } from './backend.js';
 
+// The daemon owns an IPC lifeline even though file requests arrive on stdin.
+// A daemon crash must terminate fixed file helpers as well as model workers.
+const ownerGone = () => { try { process.kill(-process.pid, 'SIGKILL'); } catch { process.exit(125); } };
+process.on('disconnect', ownerGone);
+
 function quote(value: string): string { return `'${value.replaceAll("'", "'\\''")}'`; }
 try {
   let input = ''; for await (const chunk of process.stdin) { input += String(chunk); if (input.length > 1100000) throw new Error('Request too large'); }
@@ -36,4 +41,9 @@ try {
 } catch (error) {
   process.stderr.write(error instanceof Error ? error.message : 'Sandbox failure');
   await SandboxManager.reset().catch(() => {}); process.exitCode = 125;
+}
+
+finally {
+  process.off('disconnect', ownerGone);
+  if (process.connected) process.disconnect();
 }

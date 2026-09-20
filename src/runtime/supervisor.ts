@@ -9,6 +9,7 @@ import { ToolRouter, operationDocumentation } from './tools.js';
 import { repairTranscript } from './context.js';
 export interface Worker { run(spec: RunSpec, hooks: EngineHooks, timeoutMs: number, signal: AbortSignal): Promise<EngineResult>; close(): void }
 export class Supervisor {
+  private effects = new Set<Promise<unknown>>();
   private workers = new Map<string, Worker>();
   private active = new Map<string, { run: RunToken; abort: AbortController }>();
   constructor(readonly collaboration: Collaboration, readonly router: ToolRouter, readonly config: MateConfig,
@@ -23,7 +24,7 @@ export class Supervisor {
   }
   async step(agentId: string): Promise<boolean> {
     if (this.active.has(agentId)) return false;
-    const c = this.collaboration, s = c.store, run = s.beginRun(agentId); if (!run) return false;
+    const c = this.collaboration, s = c.store, run = s.beginRun(agentId, Date.now(), true); if (!run) return false;
     const abort = new AbortController(); this.active.set(agentId, { run, abort });
     let worker: Worker | undefined;
     try {
@@ -53,7 +54,10 @@ export class Supervisor {
       s.audit('context_restore', { runId: run.id, sessionId: run.sessionId, memoryHash: hash(reference), projectedMessages: messages.length });
       const result = await worker.run({ sessionId: run.sessionId, messages, recovery, tokenCap, costCap, maxTurns: 8 }, {
         journal: async message => { s.appendMessage(run, `message:${seq++}`, message); },
-        tool: async (id, operation, args) => this.router.call(run, work.id, id, operation, args, abort.signal)
+        tool: async (id, operation, args) => {
+          const effect = this.router.call(run, work.id, id, operation, args, abort.signal); this.effects.add(effect);
+          try { return await effect; } finally { this.effects.delete(effect); }
+        }
       }, this.config.budgets.runTimeoutMs, abort.signal);
       s.atomic(() => {
         s.assertRun(run);
@@ -71,5 +75,6 @@ export class Supervisor {
   }
   stopRuns(runIds: string[]): void { for (const { run, abort } of this.active.values()) if (runIds.includes(run.id)) abort.abort(); }
   stopAgent(agentId: string): void { this.collaboration.store.pause(agentId); this.active.get(agentId)?.abort.abort(); this.workers.get(agentId)?.close(); this.workers.delete(agentId); }
+  async drain(): Promise<void> { while (this.effects.size) await Promise.allSettled([...this.effects]); }
   close(): void { for (const { abort } of this.active.values()) abort.abort(); for (const worker of this.workers.values()) worker.close(); this.workers.clear(); }
 }

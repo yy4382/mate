@@ -14,7 +14,7 @@
 | D 协作与调度 | tasks/dependencies、work budgets、subscriptions、持久 schedules；owner 控制 stop/resume | C | CAS 认领、等待释放、继承预算、取消和 catch-up 幂等、依赖完成原子唤醒 | PASS，review_d，34 tests |
 | E 权限与执行 | trusted broker、grants/intents/approvals、Jev 官方 SDK、隔离 backend、文件与 memory 原子写 | D | 跨 Agent/路径/符号链接/过期审批/变参攻击；Jev 失败关闭；真实本地沙箱阻断与停止；中文 Jev 评测待凭证 | PASS，review_e，40普通+3真实测试 |
 | F Pi worker 与上下文 | restore/run/checkpoint/compact/abort、IPC、每 Agent 独立进程、memory 恢复包、合法工具投影 | E | 两频道同 session、两 Agent 独立、message_end 持久屏障、kill/restart、压缩闭合边界、审批释放/停止 | PASS，review_f，55普通测试 |
-| G daemon 与日用验收 | main、Slack 管理入口、研究/成果工具、运维日志、备份恢复、配置示例与启动文档 | F | 合成双 Agent 全链路、故障矩阵、配置 fail-fast；真实 Slack/model/Jev 及任务质量比较独立列为未验 | 进行中 |
+| G daemon 与日用验收 | main、Slack 管理入口、研究/成果工具、运维日志、备份恢复、配置示例与启动文档 | F | 合成双 Agent 全链路、故障矩阵、配置 fail-fast；真实 Slack/model/Jev 及任务质量比较独立列为未验 | PASS，review_g，68普通+4真实测试 |
 
 ## 与交接设计的关系
 
@@ -28,3 +28,9 @@
 ## 未完成的真实验收
 
 Slack 安装身份/成员与 bot echo、真实模型调用、Jev 中文样本错误率与延迟、受支持 OS 的沙箱行为、真实任务协作质量。凭证和特定外部动作授权到位后执行，不以 mock 代替。
+
+## 本地交付状态
+
+A–G全部通过独立红队gate。最终构建/普通检查68 passed；默认跳过的4项真实SRT/container/daemon崩溃隔离测试已分别运行通过。参见 `docs/ACCEPTANCE.md`，明确区分reviewer独立普通检查与实现者真实隔离补测。`README.md`提供启动、Slack安装、权限、管理、备份/恢复及现有限制。
+
+目前缺少Slack/model/Jev凭证，未启动真实daemon、未发送消息、未推送或部署。示例`check`按预期报告缺失变量。真实服务和协作质量仍列于未完成真实验收，并非本地mock已验证。

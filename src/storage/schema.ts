@@ -51,3 +51,9 @@ export const runtimeSchema = `
 CREATE TABLE inbox_reads(delivery_id TEXT PRIMARY KEY REFERENCES deliveries(id), agent_id TEXT NOT NULL REFERENCES agents(id), read_at INTEGER NOT NULL);
 PRAGMA user_version=5;
 `;
+export const daemonSchema = `
+CREATE TABLE runtime_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+CREATE TABLE admin_replies(id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agents(id), channel TEXT NOT NULL, user_id TEXT NOT NULL, text TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'pending');
+CREATE TABLE slack_cursors(agent_id TEXT NOT NULL REFERENCES agents(id), channel TEXT NOT NULL, ts TEXT NOT NULL, PRIMARY KEY(agent_id,channel));
+PRAGMA user_version=6;
+`;

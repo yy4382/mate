@@ -145,6 +145,9 @@ export class Output {
       this.messages.record(message, this.messages.config.agents.filter(a => this.messages.access(a.id, target.channel)).map(a => a.id));
     });
   }
+  ready(limit = 20): { id: string }[] {
+    return this.messages.store.db.prepare("SELECT o.id FROM outbox o LEFT JOIN output_work ow ON ow.output_id=o.id LEFT JOIN works w ON w.id=ow.work_id WHERE o.state='pending' AND (w.state IS NULL OR w.state!='paused') AND COALESCE(json_extract(o.receipt,'$.retryAt'),0)<=? ORDER BY o.rowid LIMIT ?").all(this.clock(), limit) as { id: string }[];
+  }
   async send(id: string): Promise<void> {
     const now = this.clock();
     const store = this.messages.store, row = store.output(id);

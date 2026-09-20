@@ -6,6 +6,10 @@ import { targetSchema } from '../slack/messages.js';
 import type { ToolReply } from './engine.js';
 const id = z.string().min(1).max(500), text = z.string().max(35000);
 const schemas = {
+  'research.read': z.object({ url: z.string().url().max(4000) }).strict(),
+  'artifact.publish': z.object({ grantId: id, path: id, title: z.string().min(1).max(200), target: targetSchema }).strict(),
+  'messages.recent': z.object({ channel: id }).strict(),
+  'tasks.read': z.object({ taskId: id }).strict(),
   'actions.retry': z.object({ actionId: id }).strict(),
   agents: z.object({}).strict(), 'messages.read': z.object({ target: targetSchema }).strict(),
   'messages.search': z.object({ query: text }).strict(), 'messages.send': z.object({ target: targetSchema, text }).strict(),
@@ -21,8 +25,12 @@ const schemas = {
   exec: z.object({ grantId: id, command: z.string().max(16000), cwd: id }).strict()
 };
 export const operationDocumentation = Object.entries(schemas).map(([name, schema]) => `${name}: ${JSON.stringify(z.toJSONSchema(schema))}`).join('\n');
+export interface AdditionalTools {
+  research(url: string, signal: AbortSignal): Promise<unknown>;
+  publish(run: RunToken, workId: string, actionId: string, args: { grantId: string; path: string; title: string; target: { channel: string; thread: string } }, signal: AbortSignal): Promise<unknown>;
+}
 export class ToolRouter {
-  constructor(readonly collaboration: Collaboration, readonly broker: Broker) {}
+  constructor(readonly collaboration: Collaboration, readonly broker: Broker, readonly additional?: AdditionalTools) {}
   async call(run: RunToken, workId: string, callId: string, operation: string, input: unknown, signal: AbortSignal): Promise<ToolReply> {
     const c = this.collaboration, s = c.store, actor = run.agentId;
     s.assertRun(run); signal.throwIfAborted();
@@ -31,6 +39,8 @@ export class ToolRouter {
     // Parsing is deliberately repeated in the daemon, independently of model-side tool validation.
     const args = schemas[operation as keyof typeof schemas].parse(input) as Record<string, any>;
     const actionId = `${run.sessionId}:${callId}`;
+    if (operation === 'research.read') { if (!this.additional) throw new Error('Research unavailable'); return { value: await this.additional.research(args.url, signal) }; }
+    if (operation === 'artifact.publish') { if (!this.additional) throw new Error('Publication unavailable'); return { value: await this.additional.publish(run, workId, actionId, args as any, signal) }; }
     if (operation === 'actions.retry') {
       const action = s.action(args.actionId);
       if (!action || action.agent_id !== actor) throw new Error('Unknown own action');
@@ -53,6 +63,8 @@ export class ToolRouter {
       let value: unknown = null, wait = false;
       switch (operation) {
         case 'agents': value = c.config.agents.map(a => ({ id: a.id, name: a.name, role: a.role, slackUserId: a.slackUserId })); break;
+        case 'tasks.read': { const task = c.task(args.taskId); c.messages.requireAccess(actor, JSON.parse(task.target).channel); value = task; break; }
+        case 'messages.recent': value = c.messages.recent(actor, args.channel); break;
         case 'messages.read': value = c.messages.read(actor, args.target); break;
         case 'messages.search': value = c.messages.search(actor, args.query); break;
         case 'messages.send': value = c.send(actor, workId, args.target, args.text, actionId); break;
