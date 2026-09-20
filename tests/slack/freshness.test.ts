@@ -46,3 +46,42 @@ it('durable related ingress blocks dispatch until normalized, then the changed v
  s.ingest('AONE','pending',{team_id:'TTEST',event:{type:'message',channel:'CTEST',thread_ts:target.thread,ts:'150.000001',user:'UOWNER',text:'arrived before ACK'}});
  await o.send(id);expect(post).not.toHaveBeenCalled();m.normalize('AONE','pending');await o.send(id);expect(s.output(id)?.state).toBe('held');expect(post).not.toHaveBeenCalled();
 });
+it('artifact drafts freeze bytes, preserve them on caption revision and hold changes before sharing',async()=>{
+ const{s,c,g,o,w,run,read,change}=setup();const artifact={title:'result',content:'fixed evidence',contentHash:'hash'};
+ const upload=vi.fn(async(_actor:any,_target:any,_text:any,payload:any,prepared:any,beforeShare:any)=>{expect(payload.content).toBe('fixed evidence');prepared('FFILE');change(2);if(!beforeShare())throw new Error('not shared');return{fileId:'FFILE'};});o.artifacts={upload};
+ o.queueArtifact('research',target,'caption',artifact,'artifact',{run,viewToken:read()});s.db.prepare('INSERT INTO output_work VALUES(?,?)').run('artifact',w);
+ await o.send('artifact');expect(s.output('artifact')?.state).toBe('held');expect(upload).toHaveBeenCalledOnce();
+ const revised=g.revise(run,'artifact',1,'new caption') as any;expect(revised.artifact.content).toBe('fixed evidence');g.discard(run,'artifact',2);await o.send('artifact:revision:2');expect(upload).toHaveBeenCalledOnce();
+});
+it('artifact unknown keeps allocated file identity across recovery and needs matching sharing evidence',async()=>{
+ const{s,g,o,w,run,c}=setup();o.artifacts={upload:async(_a,_t,_text,_artifact,prepared,beforeShare)=>{prepared('FFILE');expect(beforeShare()).toBe(true);throw new Error('lost after share');}};
+ o.queueArtifact('research',target,'caption',{title:'result',content:'frozen',contentHash:'hash'},'artifact',{run});s.db.prepare('INSERT INTO output_work VALUES(?,?)').run('artifact',w);
+ const draft=g.describe('research','artifact') as any;g.continueOnce(run,'artifact',1,draft.holdId);await o.send('artifact');s.recover();expect(JSON.parse(s.output('artifact')!.receipt!).fileId).toBe('FFILE');
+ expect(()=>o.reconcileArtifact('artifact','FOTHER',{channel:'CTEST',thread:target.thread,ts:'201.000001',user:'UONE'})).toThrow('mismatch');
+ o.reconcileArtifact('artifact','FFILE',{channel:'CTEST',thread:target.thread,ts:'201.000001',user:'UONE'});expect(s.output('artifact')?.state).toBe('sent');expect(c.attention.revision(target,'research')).toBeGreaterThan(0);
+});
+it('pause during artifact byte staging prevents the visible sharing step',async()=>{
+ const{s,g,o,w,run}=setup();let shared=false;o.artifacts={upload:async(_a,_t,_text,_artifact,prepared,beforeShare)=>{prepared('FFILE');s.db.prepare("UPDATE works SET state='paused' WHERE id=?").run(w);if(!beforeShare())throw new Error('not shared');shared=true;return{fileId:'FFILE'};}};
+ o.queueArtifact('research',target,'caption',{title:'r',content:'f',contentHash:'hash'},'artifact',{run});s.db.prepare('INSERT INTO output_work VALUES(?,?)').run('artifact',w);const draft=g.describe('research','artifact') as any;g.continueOnce(run,'artifact',1,draft.holdId);await o.send('artifact');expect(shared).toBe(false);expect(s.output('artifact')?.state).toBe('pending');
+});
+it('a failure before file sharing is definite and does not block future drafts as unknown',async()=>{
+ const{s,g,o,run}=setup();o.artifacts={upload:async()=>{throw new Error('allocation failed');}};
+ o.queueArtifact('research',target,'caption',{title:'r',content:'f',contentHash:'hash'},'artifact',{run});const draft=g.describe('research','artifact') as any;g.continueOnce(run,'artifact',1,draft.holdId);await o.send('artifact');expect(s.output('artifact')?.state).toBe('failed');expect(JSON.parse(s.output('artifact')!.receipt!).reason).toBe('artifact_not_shared');
+});
+it('publication captions require their own exact presented page before a fresh view is valid',async()=>{
+ const{s,c,g,o,run,read}=setup();o.artifacts={upload:async(_a,_t,_text,_artifact,prepared,beforeShare)=>{prepared('FFILE');if(!beforeShare())throw new Error('deferred');return{fileId:'FFILE'};}};
+ o.queueArtifact('research',target,'NEW EVIDENCE',{title:'result',content:'body',contentHash:'hash'},'artifact',{run,viewToken:read()});await o.send('artifact');
+ const page=c.attention.read(run,target) as any;const present=(v:any)=>c.attention.presented(run,{role:'toolResult',toolCallId:'read',toolName:'mate',content:[{type:'text',text:JSON.stringify(v)}],isError:false,timestamp:0} as AgentMessage);
+ present(page);expect(c.attention.valid(run,target,page.viewToken)).toBe(false);const next=c.attention.read(run,target,page.nextCursor) as any;expect(next.publications[0]).toMatchObject({fileId:'FFILE',caption:'NEW EVIDENCE',title:'result'});
+ present({...next,publications:[]});expect(c.attention.valid(run,target,page.viewToken)).toBe(false);present(next);expect(c.attention.valid(run,target,page.viewToken)).toBe(true);
+ expect((g.describe('research','artifact') as any).receipt.fileId).toBe('FFILE');
+});
+it('crash recovery distinguishes unshared staging from uncertain sharing',()=>{
+ const{s,o,run}=setup();for(const [id,phase]of [['staged','staging'],['shared','sharing']] as const){o.queueArtifact('research',target,'caption',{title:'r',content:'f',contentHash:'hash'},id,{run});s.db.prepare("UPDATE outbox SET state='sending',receipt=? WHERE id=?").run(JSON.stringify({phase,fileId:`F${id.toUpperCase()}`}),id);}
+ s.recover();expect(s.output('staged')?.state).toBe('failed');expect(s.output('shared')?.state).toBe('unknown');expect(JSON.parse(s.output('shared')!.receipt!).fileId).toBe('FSHARED');
+});
+it('bounded publication coverage retains the newest evidence and never claims full coverage',()=>{
+ const{s,c,run}=setup();for(let i=0;i<101;i++){const id=`published-${i}`,fileId=`F${i}`;s.queueOutput('research',id,{target,text:`caption-${i}`,artifact:{title:'t',content:'c',contentHash:'h'}});s.transitionOutput(id,'pending','sending');s.transitionOutput(id,'sending','sent',{fileId});s.db.prepare('INSERT INTO conversation_events(channel,thread,message_key,revision,kind) VALUES(?,?,?,?,?)').run(target.channel,target.thread,`artifact:${fileId}`,fileId,'artifact');}
+ let page=c.attention.read(run,target) as any;const publications:any[]=[];while(true){expect(page.coverage.complete).toBe(false);publications.push(...page.publications);if(!page.nextCursor)break;page=c.attention.read(run,target,page.nextCursor);}
+ expect(publications).toHaveLength(100);expect(publications.at(-1).caption).toBe('caption-100');expect(publications[0].caption).toBe('caption-1');
+});

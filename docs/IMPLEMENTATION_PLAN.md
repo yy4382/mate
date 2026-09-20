@@ -103,3 +103,7 @@ R4实现接口：tasks.byMessage/claim(message|taskId,expectedVersion,viewToken)
 R5拆为两个顺序独立gate：R5a工具注册/发现、私有workspace执行授权及结构化文件操作（目录/查找/编辑/移动/删除），保留backend停止与隔离验证；R5b配置环境网络/工具链、资料与Slack附件输入输出、artifact提交门控。接口分别为ToolEnvironment+Broker/ExecutionBackend，以及环境/附件adapters+durable publication。R5a依赖R4，R5b依赖R5a；真实本地隔离检查和独立红队通过后才继续。
 
 R5a实现已通过独立审核：ToolEnvironment可信adapter注册/描述/执行，tools.list/describe/call，别名与直接调用统一进入原有router授权/回执边界；system prompt只列发现协议和能力目录，精确schema按需获取。file.list/stat/search/mkdir/edit/move/remove经Broker映射read/write权限，编辑使用SHA256+唯一文本匹配，move不覆盖，remove仅文件/空目录；所有写保护workspace根，双路径检查，未知变更保守阻挡同root后续变更，仍允许读取核实。固定SRT helper从stdin接收操作，避免大文件argv限制；文本文件1MB、read64KiB、搜索/列表有界并返回truncated。配置Docker后私有workspace获得exec，已存在未撤销未过期私有grant显式审计升级，保留过期/撤销状态。普通125 tests、真实本地隔离6/6通过；review_r5a独立44 tests及真实Unicode回归通过；记录见reviews/R5a-tools-workspace.md。
+
+R5b继续按风险边界拆成顺序gate：R5b1先把artifact.publish接入统一outbox/draft/FreshnessGate，冻结文件内容，记录上传fileId，支持unknown按Slack分享证据对账，避免附件绕过提交控制；R5b2再提供附件读取/保存及可配置网络/工具链。R5b1依赖R5a，验收hold/revise/discard/continue、排队后变更/停止、未知上传不重发、同文件证据恢复；R5b2依赖R5b1，验收可见消息附件ACL/下载URL边界/二进制文件往返、环境配置与工具发现。每个独立红队通过后才继续。
+
+R5b1 PASS，review_r5b1；普通135tests，独立全套134（最后新增截断test前）及最后相关40tests通过。详情reviews/R5b1-artifact-gating.md。artifact frozen payload进入统一outbox，上传allocation fileId与staging/sharing持久化；分享前重查，unknown按files.info分享证据对账。publication caption独立分页/ACK/seen，不伪造Slack消息ts。R5b2需消除附件echo双计数；R8需修既有outbox ready前序阻挡公平性。

@@ -119,10 +119,20 @@ export class SlackService {
     const rows = s.db.prepare("SELECT rowid seq,id,agent_id,request FROM outbox WHERE state='unknown' AND rowid>? ORDER BY rowid LIMIT 20").all(this.reconcileAfter) as { seq: number; id: string; agent_id: string; request: string }[];
     this.reconcileAfter = rows.at(-1)?.seq ?? 0;
     for (const row of rows) {
-      const { target } = JSON.parse(row.request) as { target: Target };
+      const { target,artifact } = JSON.parse(row.request) as { target: Target;artifact?:unknown };
       if (!this.c.messages.access(row.agent_id, target.channel)) continue;
       try {
-        const client = this.transport.clients.get(row.agent_id)!; let cursor: string | undefined, pages = 0;
+        const client = this.transport.clients.get(row.agent_id)!;
+        if(artifact){
+          const receipt=JSON.parse(s.output(row.id)!.receipt??'{}');if(!receipt.fileId)continue;
+          const result=await client.files.info({file:receipt.fileId});const file=result.file;
+          if(!file||!file.id||file.id!==receipt.fileId||!file.user)continue;
+          for(const scope of [file.shares?.public,file.shares?.private])for(const share of scope?.[target.channel]??[]){
+            if(share.ts&&(target.thread??share.ts)===(share.thread_ts??share.ts)){this.c.output.reconcileArtifact(row.id,file.id,{channel:target.channel,ts:share.ts,user:file.user,...(share.thread_ts?{thread:share.thread_ts}:{})});break;}
+          }
+          continue;
+        }
+        let cursor: string | undefined, pages = 0;
         do {
           const options = { channel: target.channel, limit: 100, include_all_metadata: true, ...(cursor ? { cursor } : {}) };
           const result = target.thread ? await client.conversations.replies({ ...options, ts: target.thread }) : await client.conversations.history(options);
@@ -138,9 +148,16 @@ export class SlackService {
       } catch { /* keep unknown; never resend blindly */ }
     }
   }
-  async upload(agentId: string, target: Target, title: string, content: string): Promise<{ fileId: string }> {
-    const options = { channel_id: target.channel, title, filename: `${title.replace(/[^a-zA-Z0-9._-]/g, '_')}.txt`, content };
-    const result = await this.transport.clients.get(agentId)!.filesUploadV2(target.thread ? { ...options, thread_ts: target.thread } : options);
-    const id = result.files?.[0]?.files?.[0]?.id; if (!id) throw new Error('Missing Slack artifact receipt'); return { fileId: id };
+  async upload(agentId:string,target:Target,text:string,artifact:import('../slack/messages.js').ArtifactPayload,prepared:(fileId:string)=>void,beforeShare:()=>boolean):Promise<{fileId:string}>{
+    const client=this.transport.clients.get(agentId)!;
+    const filename=`${artifact.title.replace(/[^a-zA-Z0-9._-]/g,'_')}.txt`,bytes=Buffer.from(artifact.content);
+    const allocated=await client.files.getUploadURLExternal({filename,length:bytes.length});
+    if(!allocated.file_id||!allocated.upload_url)throw new Error('Missing upload allocation');
+    prepared(allocated.file_id);
+    const url=new URL(allocated.upload_url);if(url.protocol!=='https:'||url.hostname!=='files.slack.com'||url.port||url.username||url.password)throw new Error('Unexpected Slack upload host');
+    const response=await fetch(url,{method:'POST',body:bytes,redirect:'error',signal:AbortSignal.timeout(15000)});if(!response.ok)throw new Error('Slack byte upload failed');await response.body?.cancel();
+    if(this.stopping()||!beforeShare())throw new Error('Publication deferred before sharing');
+    const result=await client.files.completeUploadExternal({files:[{id:allocated.file_id,title:artifact.title}],channel_id:target.channel,...(target.thread?{thread_ts:target.thread}:{}),initial_comment:text});
+    if(!result.ok)throw new Error('Missing publication receipt');return{fileId:allocated.file_id};
   }
 }

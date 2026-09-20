@@ -139,9 +139,12 @@ export class Messages {
   }
 }
 
+export interface ArtifactPayload {title:string;content:string;contentHash:string}
+export interface ArtifactOutputTransport {upload(agentId:string,target:Target,text:string,artifact:ArtifactPayload,prepared:(fileId:string)=>void,beforeShare:()=>boolean):Promise<{fileId:string}>}
 export interface SlackTransport { post(agentId: string, target: Target, text: string, id: string): Promise<{ ts: string }> }
 export class Output {
   gate?: FreshnessGate;
+  artifacts?: ArtifactOutputTransport;
   private dispatchQueue: Promise<unknown> = Promise.resolve();
   constructor(private messages: Messages, private transport: SlackTransport, private clock: () => number = Date.now) {}
   queue(agentId: string, target: Target, text: string, id: string = randomUUID(), basis?:SendBasis): string {
@@ -149,11 +152,25 @@ export class Output {
     z.string().min(1).max(35000).parse(text);
     this.messages.store.atomic(()=>{this.messages.store.queueOutput(agentId, id, { target, text });this.gate?.queued(agentId,id,basis);}); return id;
   }
+  queueArtifact(agentId:string,target:Target,text:string,artifact:ArtifactPayload,id:string,basis:SendBasis):string {
+    targetSchema.parse(target);this.messages.requireAccess(agentId,target.channel);z.string().min(1).max(35000).parse(text);
+    this.messages.store.atomic(()=>{this.messages.store.queueOutput(agentId,id,{target,text,artifact});this.gate?.queued(agentId,id,basis);});return id;
+  }
+  reconcileArtifact(id:string,fileId:string,evidence:{channel:string;thread?:string;ts:string;user:string}):void {
+    const row=this.messages.store.output(id);if(!row||row.state!=='unknown')throw new Error('Output does not require reconciliation');
+    const request=JSON.parse(row.request),receipt=JSON.parse(row.receipt??'{}');
+    if(!request.artifact||receipt.fileId!==fileId||evidence.user!==this.messages.agent(row.agent_id).slackUserId||evidence.channel!==request.target.channel||(request.target.thread??evidence.ts)!==(evidence.thread??evidence.ts))throw new Error('Artifact receipt evidence mismatch');
+    slackTs.parse(evidence.ts);this.confirmArtifact(id,row.agent_id,request.target,{fileId},'unknown');
+  }
+  private confirmArtifact(id:string,actor:string,target:Target,receipt:{fileId:string},from:'sending'|'unknown'):void{
+    const s=this.messages.store;s.atomic(()=>{s.transitionOutput(id,from,'sent',receipt);s.db.prepare('INSERT INTO conversation_events(channel,thread,message_key,revision,kind) VALUES(?,?,?,?,?)').run(target.channel,target.thread??'',`artifact:${receipt.fileId}`,receipt.fileId,'artifact');s.audit('artifact_published',{outputId:id,actor,target,...receipt});});
+  }
   /** Evidence must come from a fresh Slack history response using the sender's credential. */
   reconcile(id: string, evidence: { ts: string; user: string; channel: string; thread: string; text: string; outboxId: string; requestHash: string }): void {
     const row = this.messages.store.output(id);
     if (!row || row.state !== 'unknown') throw new Error('Output does not require reconciliation');
     const { target, text } = JSON.parse(row.request) as { target: Target; text: string };
+    if (JSON.parse(row.request).artifact)throw new Error('Artifact requires file sharing evidence');
     if (evidence.outboxId !== id || evidence.requestHash !== row.request_hash || evidence.user !== this.messages.agent(row.agent_id).slackUserId || evidence.channel !== target.channel || evidence.thread !== (target.thread ?? evidence.ts)) throw new Error('Receipt evidence mismatch');
     slackTs.parse(evidence.ts);
     this.confirm(id, row.agent_id, target, evidence.text, { ts: evidence.ts }, 'unknown');
@@ -189,7 +206,7 @@ export class Output {
       return;
     }
     if (row.receipt && (JSON.parse(row.receipt) as { retryAt?: number }).retryAt! > now) return;
-    const { target, text } = JSON.parse(row.request) as { target: Target; text: string };
+    const { target, text,artifact } = JSON.parse(row.request) as { target: Target; text: string;artifact?:ArtifactPayload };
     try { this.messages.requireAccess(row.agent_id, target.channel); }
     catch { store.transitionOutput(id, 'pending', 'failed', { reason: 'access_revoked' }); return; }
     // Ingress is durable before Slack ACK/replay. Wait for trusted replay to normalize
@@ -197,8 +214,29 @@ export class Output {
     if(this.gate && store.db.prepare("SELECT 1 FROM ingress WHERE normalized=0 AND (json_extract(body,'$.event.channel')=? OR json_extract(body,'$.command') IS NOT NULL)").get(target.channel))return;
     // An unconfirmed earlier dispatch may already have changed this discussion.
     if(this.gate && store.db.prepare("SELECT 1 FROM outbox WHERE id!=? AND state IN ('sending','unknown') AND json_extract(request,'$.target.channel')=? AND (json_extract(request,'$.target.thread') IS NULL OR ? IS NULL OR json_extract(request,'$.target.thread')=?)").get(id,target.channel,target.thread??null,target.thread??null))return;
+    if(artifact&&store.db.prepare("SELECT 1 FROM outbox WHERE id!=? AND agent_id=? AND state IN ('sending','unknown') AND json_extract(request,'$.artifact.contentHash')=?").get(id,row.agent_id,artifact.contentHash))return;
     if(this.gate&&!this.gate.dispatch(id))return;
-    store.transitionOutput(id, 'pending', 'sending');
+    store.transitionOutput(id, 'pending', 'sending',artifact?{phase:'staging'}:undefined);
+    if(artifact){
+      let fileId:string|undefined,shareStarted=false;
+      try{
+        if(!this.artifacts)throw new Error('Artifact transport unavailable');
+        const receipt=await this.artifacts.upload(row.agent_id,target,text,artifact,id=>{fileId=id;store.db.prepare("UPDATE outbox SET receipt=? WHERE id=? AND state='sending'").run(encode({fileId:id,phase:'staging'}),row.id);},()=>{
+          if(store.output(id)?.state!=='sending')return false;
+          store.transitionOutput(id,'sending','pending',{fileId,phase:'staging'});
+          if(store.db.prepare('SELECT 1 FROM agents WHERE id=? AND paused=1').get(row.agent_id))return false;
+          const state=store.db.prepare('SELECT w.state FROM works w JOIN output_work ow ON ow.work_id=w.id WHERE ow.output_id=?').get(id) as {state:string}|undefined;
+          if(state&&state.state!=='active')return false;
+          if(!this.messages.access(row.agent_id,target.channel))return false;
+          if(store.db.prepare("SELECT 1 FROM ingress WHERE normalized=0 AND (json_extract(body,'$.event.channel')=? OR json_extract(body,'$.command') IS NOT NULL)").get(target.channel))return false;
+          if(this.gate&&!this.gate.dispatch(id))return false;
+          store.transitionOutput(id,'pending','sending',{fileId,phase:'sharing'});shareStarted=true;return true;
+        });
+        if(!shareStarted||!receipt.fileId||receipt.fileId!==fileId)throw new Error('Artifact receipt mismatch');
+        this.confirmArtifact(id,row.agent_id,target,receipt,'sending');
+      }catch{if(store.output(id)?.state==='sending')store.transitionOutput(id,'sending',shareStarted?'unknown':'failed',{reason:shareStarted?'artifact_outcome_unknown':'artifact_not_shared',...(fileId?{fileId}:{})});}
+      return;
+    }
     let receipt: { ts: string };
     try { receipt = await this.transport.post(row.agent_id, target, text, id); slackTs.parse(receipt.ts); }
     catch (error) {

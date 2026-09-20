@@ -39,7 +39,8 @@ const schemas: Record<string,z.ZodType> = {
   'conversations.members': z.object({ channel: id }).strict(),
   'conversations.openDM': z.object({ user: z.string().regex(/^U[A-Z0-9]+$/) }).strict(),
   'research.read': z.object({ url: z.string().url().max(4000) }).strict(),
-  'artifact.publish': z.object({ grantId: id, path: id, title: z.string().min(1).max(200), target: targetSchema }).strict(),
+  'artifact.publish': z.object({ grantId: id, path: id, title: z.string().min(1).max(200), target: targetSchema,text:text.optional(),viewToken:id.optional() }).strict(),
+  'artifact.revise':z.object({draftId:id,revision:z.number().int().positive(),grantId:id,path:id,title:z.string().min(1).max(200),target:targetSchema,text:text.optional()}).strict(),
   'messages.recent': z.object({ channel: id }).strict(),
   'tasks.read': z.object({ taskId: id }).strict(),
   agents: z.object({}).strict(), 'messages.read': z.object({ target: targetSchema }).strict(),
@@ -62,7 +63,7 @@ const discoverySchemas={
 export const operationDocumentation = `Use tools.list to discover capabilities and tools.describe with {name} for exact schemas. Call the named operation directly, or tools.call with {name,input}. Available: ${Object.keys(schemas).join(', ')}.\n` + Object.entries(discoverySchemas).map(([name, schema]) => `${name}: ${JSON.stringify(z.toJSONSchema(schema))}`).join('\n');
 export interface AdditionalTools {
   research(url: string, signal: AbortSignal): Promise<unknown>;
-  publish(run: RunToken, workId: string, actionId: string, args: { grantId: string; path: string; title: string; target: { channel: string; thread?: string } }, signal: AbortSignal): Promise<unknown>;
+  publish(run: RunToken, workId: string, actionId: string, args: import('../daemon/artifacts.js').PublishArgs, signal: AbortSignal): Promise<unknown>;
 }
 type ToolContext={run:RunToken;workId:string;callId:string;signal:AbortSignal};
 const seatOperations=['agents','budget.read','attention.peek','messages.send','drafts.list','drafts.read','drafts.retry','drafts.continue','drafts.revise','drafts.discard',...Object.keys(fileSchemas),'exec'];
@@ -116,7 +117,7 @@ export class ToolRouter {
       s.assertRun(run); signal.throwIfAborted(); return { value };
     }
     if (operation === 'research.read') { if (!this.additional) throw new Error('Research unavailable'); return { value: await this.additional.research(args.url, signal) }; }
-    if (operation === 'artifact.publish') { if (!this.additional) throw new Error('Publication unavailable'); return { value: await this.additional.publish(run, workId, actionId, args as any, signal) }; }
+    if (operation === 'artifact.publish'||operation==='artifact.revise') { if (!this.additional) throw new Error('Publication unavailable'); return { value: await this.additional.publish(run, workId, actionId, args as any, signal) }; }
     if (operation.startsWith('file.') || operation==='exec') {
       const value = await this.broker.execute(run, workId, actionId, args.grantId, operationSchema.parse({...Object.fromEntries(Object.entries(args).filter(([key])=>key!=='grantId')),kind:operation==='exec'?'exec':operation.slice(5)}), signal);
       return { value };

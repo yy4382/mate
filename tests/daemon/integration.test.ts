@@ -84,12 +84,13 @@ it('controls are owner-only, durable replay applies once, and unknown admin send
   expect(store.db.prepare('SELECT count(*) n FROM admin_replies').get()).toEqual({n:1});await slack.flushAdmin();await slack.flushAdmin();expect(ephemeral).toHaveBeenCalledOnce();
 });
 it('artifact upload is scoped to own artifact directory and uncertain publication cannot be repeated with a new ID', async () => {
-  const {store,c,broker}=setup();store.register('research','v1',[]);c.messages.membership('research','CTEST',true);const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-artifact-')));cleanups.push(()=>rmSync(root,{recursive:true,force:true}));mkdirSync(join(root,'artifacts'));
+  const {store,c,broker}=setup();new ToolRouter(c,broker);store.register('research','v1',[]);c.messages.membership('research','CTEST',true);const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-artifact-')));cleanups.push(()=>rmSync(root,{recursive:true,force:true}));mkdirSync(join(root,'artifacts'));
   const target={channel:'CTEST',thread:'100.000001'}, work=c.createWork('human:artifact',target);c.enqueue('research',work,'one',{});const run=store.beginRun('research')!;store.input(run,{});const grant=broker.issueGrant('UOWNER','research',work,root,['read'],Date.now()+100000);
-  const upload=vi.fn(async()=>{throw new Error('lost after send')});const artifacts=new Artifacts(c,broker,{upload},{research:root});const signal=new AbortController().signal;
+  const upload=vi.fn(async(_a:any,_t:any,_text:any,_artifact:any,prepared:any,beforeShare:any)=>{prepared('FFILE');beforeShare();throw new Error('lost after send')});const artifacts=new Artifacts(c,broker,{upload},{research:root});const signal=new AbortController().signal;
   await expect(artifacts.publish(run,work,'private',{grantId:grant,path:'MEMORY.md',target,title:'bad'},signal)).rejects.toThrow('Only own');
   await expect(artifacts.publish(run,work,'traversal',{grantId:grant,path:'artifacts/../MEMORY.md',target,title:'bad'},signal)).rejects.toThrow('Only own');
-  await expect(artifacts.publish(run,work,'first',{grantId:grant,path:'artifacts/result.txt',target,title:'result'},signal)).rejects.toThrow('lost');
+  const draft=await artifacts.publish(run,work,'first',{grantId:grant,path:'artifacts/result.txt',target,title:'result'},signal) as any;expect(draft.status).toBe('held');expect(upload).not.toHaveBeenCalled();
+  c.output.gate!.continueOnce(run,draft.draftId,draft.revision,draft.holdId);await c.output.send(draft.draftId);expect(store.output(draft.draftId)?.state).toBe('unknown');
   await expect(artifacts.publish(run,work,'second',{grantId:grant,path:'artifacts/result.txt',target,title:'result'},signal)).rejects.toThrow('unknown');expect(upload).toHaveBeenCalledOnce();
 });
 it('paused or delayed output cannot starve later active work', async () => {
@@ -149,4 +150,37 @@ it('private exec grant upgrades preserve revocation and expiry and require confi
   expect(daemon.store.db.prepare("SELECT count(*) n FROM audit WHERE kind='private_workspace_exec_upgrade'").get()).toEqual({n:docker?1:0});
   }finally{await daemon.close();rmSync(root,{recursive:true,force:true});}
  }}finally{if(saved===undefined)delete process.env.RESEARCH_BOT_TOKEN;else process.env.RESEARCH_BOT_TOKEN=saved;}
+});
+it('artifact publication snapshots survive content edits and explicit revision replaces the frozen bytes',async()=>{
+ const{store,c,broker,backend}=setup();new ToolRouter(c,broker);store.register('research','v1',[]);c.messages.membership('research','CTEST',true);
+ const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-artifact-revise-')));cleanups.push(()=>rmSync(root,{recursive:true,force:true}));mkdirSync(join(root,'artifacts'));
+ const target={channel:'CTEST'},work=c.createWork('artifact',target);c.enqueue('research',work,'one',{});const run=store.beginRun('research')!;store.input(run,{});const grantId=broker.issueGrant('UOWNER','research',work,root,['read'],Date.now()+100000);
+ const uploads:any[]=[];const artifacts=new Artifacts(c,broker,{upload:async(_a,_t,text,artifact,prepared,beforeShare)=>{prepared('FFILE');if(!beforeShare())throw new Error('deferred');uploads.push({text,artifact});return{fileId:'FFILE'};}},{research:root});const args={grantId,path:'artifacts/result.txt',target,title:'result'},signal=new AbortController().signal;
+ const draft=await artifacts.publish(run,work,'first',args,signal) as any;backend.execute.mockResolvedValue({code:0,stdout:'new file content',stderr:'',truncated:false});
+ expect((await artifacts.publish(run,work,'first',args,signal) as any).artifact.content).toBe('artifact evidence');
+ const revised=await artifacts.publish(run,work,'revision',{...args,draftId:draft.draftId,revision:1},signal) as any;expect(revised.artifact.content).toBe('new file content');
+ c.output.gate!.continueOnce(run,draft.draftId,2,revised.holdId);await c.output.send('first:revision:2');expect(uploads[0].artifact.content).toBe('new file content');expect(store.output('first:revision:2')?.state).toBe('sent');
+});
+it('Slack file allocation is persisted before transfer; only proven file shares reconcile unknown publication',async()=>{
+ const{store,c,broker,ingress}=setup();new ToolRouter(c,broker);store.register('research','v1',[]);c.messages.membership('research','CTEST',true);
+ const transport=new WebSlackTransport({research:'synthetic'}),service=new SlackService(c,transport,ingress,new Controls(c,{} as any,broker));const client=transport.clients.get('research')!;
+ client.files.getUploadURLExternal=vi.fn(async()=>({ok:true,file_id:'FFILE',upload_url:'https://files.slack.com/upload/v1/synthetic'})) as any;
+ client.files.completeUploadExternal=vi.fn(async()=>{throw new Error('lost receipt after share');}) as any;
+ const fetchMock=vi.fn(async()=>({ok:true,body:{cancel:async()=>{}}}));vi.stubGlobal('fetch',fetchMock);
+ const target={channel:'CTEST',thread:'100.000001'},work=c.createWork('upload',target);c.enqueue('research',work,'one',{});const run=store.beginRun('research')!;store.input(run,{});c.output.artifacts=service;c.output.queueArtifact('research',target,'caption',{title:'file',content:'frozen',contentHash:'hash'},'upload',{run});store.db.prepare('INSERT INTO output_work VALUES(?,?)').run('upload',work);const draft=c.output.gate!.describe('research','upload') as any;
+ try{c.output.gate!.continueOnce(run,'upload',1,draft.holdId);await c.output.send('upload');expect(JSON.parse(store.output('upload')!.receipt!).fileId).toBe('FFILE');expect(fetchMock).toHaveBeenCalledOnce();
+  client.files.info=vi.fn(async()=>({ok:true,file:{id:'FFILE',user:'UONE',shares:{private:{CTEST:[{ts:'200.000001',thread_ts:'100.000001'}]}}}})) as any;
+  await service.reconcile();expect(store.output('upload')?.state).toBe('sent');expect(client.files.completeUploadExternal).toHaveBeenCalledOnce();
+ }finally{vi.unstubAllGlobals();}
+});
+it('peer publication attention includes captions and respects page ACK, mute and revoked channel access',async()=>{
+ const{store,c,broker}=setup();new ToolRouter(c,broker);for(const actor of ['research','writer']){store.register(actor,'v1',[]);c.messages.membership(actor,'CTEST',true);}
+ const target={channel:'CTEST',thread:'100.000001'},work=c.createWork('peer-artifact',target);for(const actor of ['research','writer'])c.enqueue(actor,work,actor,{});
+ const run=store.beginRun('research')!,peer=store.beginRun('writer')!;store.input(run,{});store.input(peer,{});
+ c.output.artifacts={upload:async(_a,_t,_text,_artifact,prepared,beforeShare)=>{prepared('FFILE');if(!beforeShare())throw new Error('deferred');return{fileId:'FFILE'};}};
+ c.output.queueArtifact('research',target,'peer caption',{title:'result',content:'frozen',contentHash:'hash'},'artifact',{run});const draft=c.output.gate!.describe('research','artifact') as any;c.output.gate!.continueOnce(run,'artifact',1,draft.holdId);await c.output.send('artifact');
+ expect(c.attention.peek('writer')).toEqual([{target,revision:expect.any(Number),unseen:1}]);let page=c.attention.read(peer,target) as any;
+ const present=(value:any)=>c.attention.presented(peer,{role:'toolResult',toolCallId:'p',toolName:'mate',content:[{type:'text',text:JSON.stringify(value)}],isError:false,timestamp:0});
+ present(page);expect(c.attention.valid(peer,target,page.viewToken)).toBe(false);page=c.attention.read(peer,target,page.nextCursor) as any;expect(page.publications[0].caption).toBe('peer caption');present(page);expect(c.attention.valid(peer,target,page.viewToken)).toBe(true);
+ c.attention.state('writer',target,'mute',1);expect(c.attention.peek('writer')).toEqual([]);c.messages.membership('writer','CTEST',false);expect(()=>c.attention.read(peer,target)).toThrow('access');
 });

@@ -135,6 +135,7 @@ export class Store {
       this.db.prepare('UPDATE agents SET generation=generation+1').run();
       this.db.prepare("UPDATE runs SET state='interrupted' WHERE state='active'").run();
       this.db.prepare("UPDATE actions SET state='unknown' WHERE state='executing'").run();
+      this.db.prepare("UPDATE outbox SET state='failed',receipt=json_set(receipt,'$.reason','artifact_not_shared_before_restart') WHERE state='sending' AND json_extract(request,'$.artifact') IS NOT NULL AND json_extract(receipt,'$.phase')='staging'").run();
       this.db.prepare("UPDATE outbox SET state='unknown' WHERE state='sending'").run();
       this.audit('startup_recovery', {});
     });

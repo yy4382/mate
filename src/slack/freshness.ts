@@ -2,7 +2,7 @@ import {randomUUID} from 'node:crypto';
 import type {RunToken} from '../storage/store.js';
 import {encode} from '../storage/store.js';
 import type {Attention} from './attention.js';
-import {targetSchema,type Target,type Messages} from './messages.js';
+import {targetSchema,type Target,type Messages,type ArtifactPayload} from './messages.js';
 export interface SendBasis {run:RunToken;viewToken?:string|undefined;systemProjection?:boolean}
 interface Draft{id:string;agent_id:string;outbox_id:string;revision:number;hold_id:string|null;reason:string|null;accepted_revision:number|null;continue_until:number}
 /** Freshness never evaluates message quality or command execution. */
@@ -13,8 +13,8 @@ export class FreshnessGate{
   if(!d||d.agent_id!==actor)throw new Error('Unknown owned draft');
   this.messages.requireAccess(actor,this.request(d).target.channel);return d;
  }
- private request(d:Draft):{target:Target;text:string}{return JSON.parse(this.messages.store.output(d.outbox_id)!.request);}
- describe(actor:string,id:string):unknown{const d=this.draft(actor,id);return{draftId:d.id,revision:d.revision,status:this.messages.store.output(d.outbox_id)!.state,holdId:d.hold_id,reason:d.reason,...this.request(d),choices:['retry_with_view','revise','discard','continue_once']};}
+ private request(d:Draft):{target:Target;text:string;artifact?:ArtifactPayload}{return JSON.parse(this.messages.store.output(d.outbox_id)!.request);}
+ describe(actor:string,id:string):unknown{const d=this.draft(actor,id);return{draftId:d.id,revision:d.revision,status:this.messages.store.output(d.outbox_id)!.state,receipt:JSON.parse(this.messages.store.output(d.outbox_id)!.receipt??'null'),holdId:d.hold_id,reason:d.reason,...this.request(d),choices:['retry_with_view','revise','discard','continue_once']};}
  list(actor:string):unknown[]{return(this.messages.store.db.prepare("SELECT d.id FROM drafts d JOIN outbox o ON o.id=d.outbox_id JOIN channel_access a ON a.agent_id=d.agent_id AND a.channel=json_extract(o.request,'$.target.channel') WHERE d.agent_id=? AND a.active=1 AND o.state IN ('held','pending','unknown') ORDER BY d.rowid DESC LIMIT 50").all(actor) as {id:string}[]).map(d=>this.describe(actor,d.id));}
  queued(actor:string,id:string,basis?:SendBasis):void{
   const s=this.messages.store;if(s.db.prepare('SELECT 1 FROM drafts WHERE outbox_id=?').get(id))return;
@@ -49,10 +49,10 @@ export class FreshnessGate{
    s.audit('freshness_continue_once',{actor:run.agentId,draftId:id,revision,holdId,expiresAt:this.clock()+60000});return this.describe(run.agentId,id);
   });
  }
- revise(run:RunToken,id:string,revision:number,text:string,target?:Target):unknown{
+ revise(run:RunToken,id:string,revision:number,text:string,target?:Target,artifact?:ArtifactPayload):unknown{
   const s=this.messages.store;return s.atomic(()=>{const d=this.editable(run,id,revision,false),request=this.request(d);target=target??request.target;targetSchema.parse(target);this.messages.requireAccess(run.agentId,target.channel);
    if(!text.trim()||text.length>35000)throw new Error('Invalid message text');
-   s.transitionOutput(d.outbox_id,'held','failed',{reason:'draft_revised'});const next=`${id}:revision:${revision+1}`;s.queueOutput(run.agentId,next,{target,text});
+   s.transitionOutput(d.outbox_id,'held','failed',{reason:'draft_revised'});const next=`${id}:revision:${revision+1}`;s.queueOutput(run.agentId,next,{target,text,...((artifact??request.artifact)?{artifact:artifact??request.artifact}:{})});
    s.db.prepare('INSERT INTO output_work SELECT ?,work_id FROM output_work WHERE output_id=?').run(next,d.outbox_id);
    const linked=s.db.prepare("SELECT assigned_to FROM tasks WHERE outbox_id=? AND status='draft'").all(d.outbox_id) as {assigned_to:string|null}[];
    for(const task of linked)if(task.assigned_to)this.messages.requireAccess(task.assigned_to,target.channel);

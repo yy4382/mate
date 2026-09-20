@@ -28,7 +28,7 @@ pnpm node dist/src/main.js start mate.local.json
 
 ## Slack 安装
 
-每个 Agent 单独创建 Slack app，开启 Socket Mode，app-level token 授予 `connections:write`；bot token 配置 `app_mentions:read`、`chat:write`、`channels:read`、`channels:history`、`groups:read`、`groups:history`、`im:read`、`im:history`、`im:write`、`mpim:read`、`mpim:history`、`files:write`、`users:read`。按实际安装流程确认 `bots.info` 可用。订阅 `app_mention`、`message.channels`、`message.groups`、`message.im`、`member_joined_channel`、`member_left_channel`。将 bots 邀请到配置频道；私有频道不靠配置自动获得权限。
+每个 Agent 单独创建 Slack app，开启 Socket Mode，app-level token 授予 `connections:write`；bot token 配置 `app_mentions:read`、`chat:write`、`channels:read`、`channels:history`、`groups:read`、`groups:history`、`im:read`、`im:history`、`im:write`、`mpim:read`、`mpim:history`、`files:write`、`files:read`、`users:read`。按实际安装流程确认 `bots.info` 可用。订阅 `app_mention`、`message.channels`、`message.groups`、`message.im`、`member_joined_channel`、`member_left_channel`。将 bots 邀请到配置频道；私有频道不靠配置自动获得权限。
 
 在其中一个 app 配置 `/team` slash command（`commands` scope）；Socket Mode 下无需公共 HTTP receiver。其他 apps 不重复注册同名命令。程序验证 auth.test 的 team/user/bot 及 bots.info 的 app_id。接收 envelope 先提交 SQLite 再 ack；Bolt 不负责业务事实源。
 
@@ -89,3 +89,5 @@ pnpm test tests/execution/sandbox.test.ts
 R1a已加入频道/DM顶层消息（省略thread）、conversations.list/members/openDM。Directory用当前bot凭证发现已加入空间；列表分页最多10页并报告incomplete。v8首次升级会在数据库旁保存600权限的pre-v8一致备份；旧thread请求与hash保留。实际Slack接线仍待凭证验证。
 
 R1b预算模型：配置budget为每Agent持久累计账户的初始上限，消息不会重置。`/team agent-budget AGENT_ID MAX_RUNS MAX_TOKENS MAX_USD`由owner修改上限；原`budget WORK_ID ...`仍是额外事项上限。`works.list/select`允许运行中切换可见事项，`budget.read`展示自身账户。一次run计入起始事项及Agent账户；动作/停止使用单独的当前事项。v9升级先备份，历史共享work使用量无法精确分摊，保守计入各参与Agent并审计，可能需owner显式提高额度。账户耗尽不会自动补额或设置Agent暂停；旧session配置变更迁移仍待R7。
+
+文件发布对账需要 `files:read`（files.info）；已有Slack安装增加scope后需要重新安装/授权应用。文件上传和发布分阶段保存，只有已开始分享的未知结果才进入待对账；不自动重发。
