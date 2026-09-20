@@ -16,9 +16,9 @@ it('journal acknowledgment gates execution and failures cannot become successful
   await expect(failed.run(spec(), { journal: async () => { throw new Error('disk failure'); }, tool })).rejects.toThrow('disk failure');
   expect(tool).not.toHaveBeenCalled();
 });
-it('approval wait suppresses the rest of a batch and releases the model loop', async () => {
+it('task wait suppresses the rest of a batch and releases the model loop', async () => {
   const message = call(); message.content.push({ type: 'toolCall', id: 'c2', name: 'mate', arguments: { operation: 'exec', args: {} } });
-  const tool = vi.fn(async () => ({ value: 'approval_pending', wait: true }));
+  const tool = vi.fn(async () => ({ value: 'task_waiting', wait: true }));
   const result = await new Engine(model, scripted([message])).run(spec(), { journal: async () => {}, tool });
   expect(result).toMatchObject({ waiting: true, continuation: false }); expect(tool).toHaveBeenCalledOnce();
 });

@@ -18,7 +18,6 @@ export const configSchema = z.object({
   agents: z.array(agentSchema).min(1).max(3),
   budgets: z.object({ maxRuns: z.number().int().positive(), maxTokens: z.number().int().positive(),
     maxCostUsd: z.number().positive(), runTimeoutMs: z.number().int().positive() }).strict(),
-  jevApiKeyEnv: secretRef,
 }).strict().superRefine((config, ctx) => {
   if (config.agents.some(agent => config.ownerUserIds.includes(agent.slackUserId))) {
     ctx.addIssue({ code: 'custom', message: 'Owner identity must not be an agent bot identity' });

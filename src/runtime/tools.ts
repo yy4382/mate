@@ -10,7 +10,6 @@ const schemas = {
   'artifact.publish': z.object({ grantId: id, path: id, title: z.string().min(1).max(200), target: targetSchema }).strict(),
   'messages.recent': z.object({ channel: id }).strict(),
   'tasks.read': z.object({ taskId: id }).strict(),
-  'actions.retry': z.object({ actionId: id }).strict(),
   agents: z.object({}).strict(), 'messages.read': z.object({ target: targetSchema }).strict(),
   'messages.search': z.object({ query: text }).strict(), 'messages.send': z.object({ target: targetSchema, text }).strict(),
   'messages.watch': z.object({ target: targetSchema, active: z.boolean() }).strict(),
@@ -41,17 +40,9 @@ export class ToolRouter {
     const actionId = `${run.sessionId}:${callId}`;
     if (operation === 'research.read') { if (!this.additional) throw new Error('Research unavailable'); return { value: await this.additional.research(args.url, signal) }; }
     if (operation === 'artifact.publish') { if (!this.additional) throw new Error('Publication unavailable'); return { value: await this.additional.publish(run, workId, actionId, args as any, signal) }; }
-    if (operation === 'actions.retry') {
-      const action = s.action(args.actionId);
-      if (!action || action.agent_id !== actor) throw new Error('Unknown own action');
-      const request = JSON.parse(action.request);
-      if (request.workId !== workId || !request.grantId) throw new Error('Invalid retry scope');
-      const value = await this.broker.execute(run, workId, action.id, request.grantId, request.operation, signal);
-      return { value, wait: this.broker.waiting(run.id) };
-    }
     if (['file.read','file.write','exec'].includes(operation)) {
       const value = await this.broker.execute(run, workId, actionId, args.grantId, operation === 'exec' ? { kind: 'exec', command: args.command, cwd: args.cwd } : operation === 'file.read' ? { kind: 'read', path: args.path } : { kind: 'write', path: args.path, content: args.content }, signal);
-      return { value, wait: this.broker.waiting(run.id) };
+      return { value };
     }
     // All local effects and their receipts commit together. Crash replay returns the recorded value.
     return s.atomic(() => {

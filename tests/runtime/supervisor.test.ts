@@ -14,7 +14,7 @@ afterEach(() => cleanups.splice(0).forEach(fn => fn()));
 function setup(factory?: (id: string) => Worker) {
   const config = configSchema.parse({ ...configFixture, agents: [configFixture.agents[0], { ...configFixture.agents[0], id: 'writer', name: 'Writer', slackAppId: 'ATWO', slackUserId: 'UTWO', slackBotId: 'BTWO', botTokenEnv: 'WRITER_BOT', appTokenEnv: 'WRITER_APP' }] });
   const store = new Store(':memory:'), messages = new Messages(store, config), output = new Output(messages, { post: async () => ({ ts: '100.000002' }) }), collaboration = new Collaboration(store, messages, output, config);
-  const broker = new Broker(store, collaboration, { execute: async () => ({ code: 0, stdout: '', stderr: '', truncated: false }) }, { classify: async () => ({ status: 'unavailable' }) }, ['/never']);
+  const broker = new Broker(store, collaboration, { execute: async () => ({ code: 0, stdout: '', stderr: '', truncated: false }) }, ['/never']);
   const router = new ToolRouter(collaboration, broker);
   const supervisor = new Supervisor(collaboration, router, config, agent => factory?.(agent.id) ?? new WorkerClient('test', 'test', 'only-provider-secret', new URL('../../dist/tests/helpers/worker-fixture.js', import.meta.url)));
   supervisor.register();

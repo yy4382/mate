@@ -57,3 +57,15 @@ CREATE TABLE admin_replies(id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCE
 CREATE TABLE slack_cursors(agent_id TEXT NOT NULL REFERENCES agents(id), channel TEXT NOT NULL, ts TEXT NOT NULL, PRIMARY KEY(agent_id,channel));
 PRAGMA user_version=6;
 `;
+/** One-way compatibility migration: retire review state without executing pending commands. */
+export const scopedExecutionSchema = `
+INSERT INTO audit(at,kind,body) SELECT CAST(strftime('%s','now') AS INTEGER)*1000,'retired_command_review',json_object('actionId',id,'status',status,'requestHash',request_hash) FROM approvals;
+UPDATE grants SET revoked=1 WHERE EXISTS(SELECT 1 FROM json_each(grants.operations) WHERE value='exec');
+UPDATE actions SET state='failed',receipt='{"reason":"command_review_removed; reauthorize scoped execution explicitly"}' WHERE state='prepared' AND json_extract(request,'$.operation.kind')='exec';
+UPDATE deliveries SET status='handled' WHERE json_extract(payload,'$.kind')='approval' AND status!='handled';
+UPDATE outbox SET state='failed',receipt='{"reason":"command_review_removed"}' WHERE id LIKE 'approval-notice:%' AND state='pending';
+DROP TABLE blocked_runs;
+DROP TABLE approvals;
+ALTER TABLE grants DROP COLUMN exec_allowlist;
+PRAGMA user_version=7;
+`;

@@ -28,7 +28,7 @@ function setup() {
   const store = new Store(':memory:'), messages = new Messages(store, config), post = vi.fn(async () => ({ ts: `101.${String(post.mock.calls.length).padStart(6,'0')}` }));
   const c = new Collaboration(store, messages, new Output(messages, { post }), config), ingress = new Ingress(c);
   const backend = { execute: vi.fn(async () => ({ code: 0, stdout: 'artifact evidence', stderr: '', truncated: false })) };
-  const broker = new Broker(store, c, backend, { classify: async () => ({ status: 'unavailable' }) }, ['/synthetic/protected']);
+  const broker = new Broker(store, c, backend, ['/synthetic/protected']);
   cleanups.push(() => store.close()); return { store, c, ingress, broker, post, backend };
 }
 it('two Agents independently challenge and revise a result through durable tasks, visible delegation and inherited budgets', async () => {
@@ -115,13 +115,6 @@ it('paused or delayed output cannot starve later active work', async () => {
   const delayed=c.send('research',active,target,'retry later');store.db.prepare('UPDATE outbox SET receipt=? WHERE id=?').run(JSON.stringify({retryAt:Date.now()+100000}),delayed);
   const ready=c.send('research',active,target,'send now');expect(c.output.ready()).toEqual([{id:ready}]);await c.output.send(ready);expect(post).toHaveBeenCalledOnce();
 });
-it('pending approval in a revoked channel does not block unrelated daemon scheduling', async () => {
-  const {store,c,broker,ingress}=setup();const supervisor=new Supervisor(c,new ToolRouter(c,broker),c.config);supervisor.register();cleanups.unshift(()=>supervisor.close());c.messages.membership('research','CTEST',true);
-  const target={channel:'CTEST',thread:'100.000001'},work=c.createWork('human:approval',target);c.enqueue('research',work,'approval',{});const run=store.beginRun('research')!;store.input(run,{});
-  const root=mkdtempSync(join(tmpdir(),'mate-approve-'));cleanups.push(()=>rmSync(root,{recursive:true,force:true}));const grant=broker.issueGrant('UOWNER','research',work,root,['exec'],Date.now()+100000);
-  await broker.execute(run,work,'pending',grant,{kind:'exec',command:'true',cwd:'.'});store.finish(run);c.messages.membership('research','CTEST',false);
-  const slack=new SlackService(c,new WebSlackTransport({}),ingress,new Controls(c,supervisor,broker));expect(()=>slack.queueApprovals()).not.toThrow();
-});
 it('stop during startup retains the singleton lock until startup settles and never opens sockets afterward', async () => {
   const {Daemon}=await import('../../src/daemon/app.js');const {deferred}=await import('../helpers/pi.js');const root=mkdtempSync(join(tmpdir(),'mate-start-stop-')), gate=deferred();
   const config={mate:configSchema.parse({...configFixture,agents:[{...configFixture.agents[0],model:{provider:'anthropic',id:'claude-haiku-4-5',apiKeyEnv:'MODEL_API_KEY'}}]}),runtime:{dataDir:root,workspaceGrants:[],researchHosts:[]}};
@@ -153,6 +146,6 @@ it('Socket SDK pending URL startup cancels promptly and a late HTTP response can
 it('configured project grants cannot overlap the private Agent memory tree', async () => {
   const {Daemon}=await import('../../src/daemon/app.js');const root=mkdtempSync(join(tmpdir(),'mate-private-grants-'));mkdirSync(join(root,'agents'),{recursive:true});
   const old=process.env.RESEARCH_BOT_TOKEN;process.env.RESEARCH_BOT_TOKEN='synthetic';
-  try {expect(()=>new Daemon({mate:configSchema.parse(configFixture),runtime:{dataDir:root,researchHosts:[],workspaceGrants:[{agentId:'research',root:join(root,'agents'),operations:['read'],exactCommands:[]}]}},{info:()=>{},error:()=>{}})).toThrow('Protected root overlap');}
+  try {expect(()=>new Daemon({mate:configSchema.parse(configFixture),runtime:{dataDir:root,researchHosts:[],workspaceGrants:[{agentId:'research',root:join(root,'agents'),operations:['read']}]}},{info:()=>{},error:()=>{}})).toThrow('Protected root overlap');}
   finally{if(old===undefined)delete process.env.RESEARCH_BOT_TOKEN;else process.env.RESEARCH_BOT_TOKEN=old;rmSync(root,{recursive:true,force:true});}
 });

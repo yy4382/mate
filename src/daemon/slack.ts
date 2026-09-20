@@ -91,15 +91,11 @@ export class SlackService {
       const body = JSON.parse(row.body), agent = this.c.config.agents.find(a => a.slackAppId === row.app_id);
       if (!agent) continue;
       try {
-        if (body.command === '/team' || body.type === 'block_actions') {
+        if (body.command === '/team') {
           s.atomic(() => {
             const team = body.team_id ?? body.team?.id, user = body.user_id ?? body.user?.id, channel = body.channel_id ?? body.channel?.id;
             if (team !== this.c.config.teamId || !/^U[A-Z0-9]+$/.test(user ?? '') || !/^[CDG][A-Z0-9]+$/.test(channel ?? '')) throw new Error('Invalid control identity');
             let text = body.text ?? '';
-            if (body.type === 'block_actions') {
-              const action = body.actions?.[0]; if (!['mate_approve','mate_deny'].includes(action?.action_id)) throw new Error('Unknown control');
-              text = `${action.action_id === 'mate_approve' ? 'approve' : 'deny'} ${action.value}`;
-            }
             let reply: string;
             try { reply = this.controls.execute(user, text); } catch (error) { reply = String(error); }
             s.db.prepare('INSERT INTO admin_replies VALUES(?,?,?,?,?,\'pending\') ON CONFLICT DO NOTHING').run(`${row.app_id}:${row.event_id}`, agent.id, channel, user, reply.slice(0, 15000));
@@ -116,14 +112,6 @@ export class SlackService {
       s.db.prepare("UPDATE admin_replies SET state='unknown' WHERE id=? AND state='pending'").run(row.id);
       try { await this.transport.clients.get(row.agent_id)!.chat.postEphemeral({ channel: row.channel, user: row.user_id, text: row.text }); s.db.prepare("UPDATE admin_replies SET state='sent' WHERE id=?").run(row.id); }
       catch { s.audit('admin_reply_unknown', { id: row.id }); }
-    }
-  }
-  queueApprovals(): void {
-    const s = this.c.store;
-    for (const row of s.db.prepare("SELECT p.id,p.agent_id,p.work_id,a.request FROM approvals p JOIN actions a ON a.id=p.id WHERE p.status='pending'").all() as { id: string; agent_id: string; work_id: string; request: string }[]) {
-      const work = this.c.work(row.work_id); if (work.state !== 'active' || s.output(`approval-notice:${row.id}`) || !this.c.messages.access(row.agent_id, JSON.parse(work.target).channel)) continue;
-      const request = JSON.parse(row.request);
-      this.c.send(row.agent_id, work.id, JSON.parse(work.target), `需要批准命令（Jev 仅提供分类信号）：\n${request.operation.command}\n工作目录：${request.root}/${request.operation.cwd}\n授权与请求参数已固定；请用 /team approve ${row.id} 或 /team deny ${row.id}`, `approval-notice:${row.id}`);
     }
   }
   async reconcile(): Promise<void> {

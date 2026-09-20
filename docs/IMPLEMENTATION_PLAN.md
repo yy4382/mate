@@ -16,7 +16,9 @@
 | F Pi worker 与上下文 | restore/run/checkpoint/compact/abort、IPC、每 Agent 独立进程、memory 恢复包、合法工具投影 | E | 两频道同 session、两 Agent 独立、message_end 持久屏障、kill/restart、压缩闭合边界、审批释放/停止 | PASS，review_f，55普通测试 |
 | G daemon 与日用验收 | main、Slack 管理入口、研究/成果工具、运维日志、备份恢复、配置示例与启动文档 | F | 合成双 Agent 全链路、故障矩阵、配置 fail-fast；真实 Slack/model/Jev 及任务质量比较独立列为未验 | PASS，review_g，68普通+4真实测试 |
 
-## 与交接设计的关系
+以上 A–G 为历史交付记录；旧 Jev、审批及模型质量验收要求已由下方 H 和用户最新 harness 指令取代。
+
+## 与交接设计的关系（历史）
 
 - 将 M0–M3 按基础依赖分解为 A–G；风险契约分布在 A（SDK）、C（ack）、E（沙箱/Jev）、F（worker/压缩）。不把尚未实现的 M0 全部标为完成。
 - 保留应用拥有的 SQLite 事务边界、Pi Core + pi-ai、官方 TypeSafe SDK；不引入 coding-agent。
@@ -25,12 +27,18 @@
 - E红队实测发现macOS SRT的进程组清理不能停止setsid/detached子进程。因此任意shell改为独立容器PID namespace，正常/abort/timeout均确认容器删除；结构化文件仍用SRT。该调整使用设计预留的ExecutionBackend替换边界，增加本地Docker与固定镜像前提，不退回无限制shell。
 - 本地私有 reference 不进入 Git，测试全部使用合成内容。不部署、推送或发送外部消息。
 
-## 未完成的真实验收
+## 当前验收范围
 
-Slack 安装身份/成员与 bot echo、真实模型调用、Jev 中文样本错误率与延迟、受支持 OS 的沙箱行为、真实任务协作质量。凭证和特定外部动作授权到位后执行，不以 mock 代替。
+假设模型足够智能，验收 harness 的工具、环境、system prompt、控制流、持久状态与恢复，不评测模型性能或自主协作质量。脚本化模型测试是有效的机制验证。真实 Slack/provider 待验仅包括安装身份、scopes、bot echo、协议、usage 与错误兼容；其他 OS 隔离和正式备份恢复也尚未验收。
 
-## 本地交付状态
+A–G 历史检查与独立红队记录保留；当前检查结果见 `docs/ACCEPTANCE.md`。未启动真实服务、发送消息、推送或部署。
 
-A–G全部通过独立红队gate。最终构建/普通检查68 passed；默认跳过的4项真实SRT/container/daemon崩溃隔离测试已分别运行通过。参见 `docs/ACCEPTANCE.md`，明确区分reviewer独立普通检查与实现者真实隔离补测。`README.md`提供启动、Slack安装、权限、管理、备份/恢复及现有限制。
+## H — pnpm、移除命令审查与代码导览（2026-09-20 用户新指令）
 
-目前缺少Slack/model/Jev凭证，未启动真实daemon、未发送消息、未推送或部署。示例`check`按预期报告缺失变量。真实服务和协作质量仍列于未完成真实验收，并非本地mock已验证。
+本次指令覆盖交接稿及AGENTS中旧Jev要求：当前不需要Jev或逐命令审批。保留目录/operation grants、隔离backend、预算、停止与动作回执；未来审查可插入Broker的准备/执行边界，当前不保留分类器或闲置审查实现。
+
+| 子范围 | 目标/接口 | 依赖 | 验收与验证 | 状态 |
+|---|---|---|---|---|
+| H（单个交付模块） | pnpm固定版本+唯一lockfile；删除SDK/分类/审批路径及配置；Broker→ExecutionBackend边界保留；v7兼容迁移；源码调用链与feature差距说明 | A–G | pnpm冻结安装、原生依赖、全测试；授权内exec直接执行/越界与未知副作用仍拒绝；v6遗留审批失效而不自动执行；独立红队检查实际代码与说明 | PASS，review_h，66普通+4真实隔离测试 |
+
+旧review记录与reference保留为历史证据，并在当前入口标明已被本次决策取代。调用链说明以harness为验收对象，假设模型足够智能；检查工具/环境/prompt可达性、持久状态与恢复。脚本化模型验证机制即可，不将模型性能或自主性质量作为待办；真实服务检查只关注协议、权限、usage和错误兼容。

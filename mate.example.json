@@ -1,29 +1,59 @@
 {
   "mate": {
     "teamId": "TEXAMPLE",
-    "ownerUserIds": ["UOWNER"],
-    "jevApiKeyEnv": "JEV_API_KEY",
-    "budgets": { "maxRuns": 30, "maxTokens": 600000, "maxCostUsd": 10, "runTimeoutMs": 180000 },
+    "ownerUserIds": [
+      "UOWNER"
+    ],
+    "budgets": {
+      "maxRuns": 30,
+      "maxTokens": 600000,
+      "maxCostUsd": 10,
+      "runTimeoutMs": 180000
+    },
     "agents": [
       {
-        "id": "research", "name": "Research", "role": "Find primary evidence, challenge assumptions, record reusable findings.",
-        "slackAppId": "ARESEARCH", "slackUserId": "URESEARCH", "slackBotId": "BRESEARCH",
-        "botTokenEnv": "RESEARCH_BOT_TOKEN", "appTokenEnv": "RESEARCH_APP_TOKEN",
-        "model": { "provider": "anthropic", "id": "claude-haiku-4-5", "apiKeyEnv": "MODEL_API_KEY" },
-        "channels": { "CEXAMPLE": "mentions" }
+        "id": "research",
+        "name": "Research",
+        "role": "Find primary evidence, challenge assumptions, record reusable findings.",
+        "slackAppId": "ARESEARCH",
+        "slackUserId": "URESEARCH",
+        "slackBotId": "BRESEARCH",
+        "botTokenEnv": "RESEARCH_BOT_TOKEN",
+        "appTokenEnv": "RESEARCH_APP_TOKEN",
+        "model": {
+          "provider": "anthropic",
+          "id": "claude-haiku-4-5",
+          "apiKeyEnv": "MODEL_API_KEY"
+        },
+        "channels": {
+          "CEXAMPLE": "mentions"
+        }
       },
       {
-        "id": "writer", "name": "Writer", "role": "Independently verify evidence, revise drafts, deliver clear artifacts.",
-        "slackAppId": "AWRITER", "slackUserId": "UWRITER", "slackBotId": "BWRITER",
-        "botTokenEnv": "WRITER_BOT_TOKEN", "appTokenEnv": "WRITER_APP_TOKEN",
-        "model": { "provider": "anthropic", "id": "claude-haiku-4-5", "apiKeyEnv": "MODEL_API_KEY" },
-        "channels": { "CEXAMPLE": "mentions" }
+        "id": "writer",
+        "name": "Writer",
+        "role": "Independently verify evidence, revise drafts, deliver clear artifacts.",
+        "slackAppId": "AWRITER",
+        "slackUserId": "UWRITER",
+        "slackBotId": "BWRITER",
+        "botTokenEnv": "WRITER_BOT_TOKEN",
+        "appTokenEnv": "WRITER_APP_TOKEN",
+        "model": {
+          "provider": "anthropic",
+          "id": "claude-haiku-4-5",
+          "apiKeyEnv": "MODEL_API_KEY"
+        },
+        "channels": {
+          "CEXAMPLE": "mentions"
+        }
       }
     ]
   },
   "runtime": {
     "dataDir": "/Users/YOU/.local/share/mate",
     "workspaceGrants": [],
-    "researchHosts": ["example.com"]
+    "researchHosts": [
+      "example.com"
+    ]
   }
 }

@@ -1,3 +1,5 @@
+> 历史设计：2026-09-20用户决定移除Jev与逐命令审批，改用pnpm。当前实际调用链、feature缺口及未来扩展方案以 [HOW_IT_WORKS](../HOW_IT_WORKS.md) 为准；原文保留为设计演进记录。
+
 # Slack 持久多 Agent：Pi Core + Jev 技术方案
 
 版本：v1 设计稿，2026-09-20。

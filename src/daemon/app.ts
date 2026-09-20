@@ -11,7 +11,6 @@ import { WebSlackTransport } from '../slack/transport.js';
 import { DurableReceiver } from '../slack/receiver.js';
 import { Collaboration } from '../collaboration/service.js';
 import { Broker } from '../policy/broker.js';
-import { JevClassifier } from '../policy/jev.js';
 import { SandboxBackend, type ExecutionBackend } from '../execution/backend.js';
 import { ContainerBackend, ControlledBackend } from '../execution/container.js';
 import { canonicalRoot, within } from '../execution/paths.js';
@@ -64,9 +63,7 @@ export class Daemon {
       const files = new SandboxBackend();
       if (config.runtime.docker) this.container = new ContainerBackend({ ...config.runtime.docker, scope: executionScope(data) });
       this.backend = new ControlledBackend(files, this.container ?? { execute: async () => { throw new Error('Container execution is not configured'); } });
-      const secrets = c.agents.flatMap(a => [process.env[a.botTokenEnv], process.env[a.appTokenEnv], process.env[a.model.apiKeyEnv]]).filter((s): s is string => !!s);
-      const classifier = process.env[c.jevApiKeyEnv] ? new JevClassifier(process.env[c.jevApiKeyEnv]!, secrets) : { classify: async () => ({ status: 'unavailable', automaticAllow: false }) };
-      this.broker = new Broker(this.store, this.collaboration, this.backend, classifier, [projectRoot, state]);
+      this.broker = new Broker(this.store, this.collaboration, this.backend, [projectRoot, state]);
       const research = new Research(config.runtime.researchHosts);
       let artifacts!: Artifacts;
       const router = new ToolRouter(this.collaboration, this.broker, { research: (url, signal) => research.read(url, signal), publish: (...args) => artifacts.publish(...args) });
@@ -92,10 +89,10 @@ export class Daemon {
     } catch (error) { opened?.close(); this.release(); throw error; }
   }
   private ensureGrants(agentId: string, workId: string): void {
-    const grants = [{ root: this.memoryRoots[agentId]!, operations: ['read','write'] as ('read'|'write'|'exec')[], exactCommands: [] as { command: string; cwd: string }[] }, ...this.config.runtime.workspaceGrants.filter(g => g.agentId === agentId)];
+    const grants = [{ root: this.memoryRoots[agentId]!, operations: ['read','write'] as ('read'|'write'|'exec')[] }, ...this.config.runtime.workspaceGrants.filter(g => g.agentId === agentId)];
     for (const grant of grants) {
       const root = realpathSync(grant.root);
-      if (!this.store.db.prepare('SELECT 1 FROM grants WHERE agent_id=? AND work_id=? AND root=?').get(agentId, workId, root)) this.broker.issueGrant(this.config.mate.ownerUserIds[0]!, agentId, workId, root, grant.operations, Date.now() + 365 * 86400000, grant.exactCommands);
+      if (!this.store.db.prepare('SELECT 1 FROM grants WHERE agent_id=? AND work_id=? AND root=?').get(agentId, workId, root)) this.broker.issueGrant(this.config.mate.ownerUserIds[0]!, agentId, workId, root, grant.operations, Date.now() + 365 * 86400000);
     }
   }
   start(): Promise<void> { return this.startPromise ??= this.open(); }
@@ -111,7 +108,7 @@ export class Daemon {
       const socket = new ManagedSocket(requireSecret(process.env, agent.appTokenEnv));
       const receiver = new DurableReceiver(this.store, agent.slackAppId, this.config.mate.teamId, socket, () => this.log.error({ agentId: agent.id }, 'Slack receiver error; uncommitted events are not acknowledged'), () => this.slack.replay());
       const app = new App({ token: requireSecret(process.env, agent.botTokenEnv), receiver });
-      app.event(/.*/, async () => {}); app.command('/team', async () => {}); app.action(/.*/, async () => {});
+      app.event(/.*/, async () => {}); app.command('/team', async () => {});
       this.apps.push(app); await app.start(); if (this.stopping) return;
     }
     this.loopPromise = this.loop(); this.log.info({}, 'Mate daemon started');
@@ -122,7 +119,7 @@ export class Daemon {
       try {
         this.slack.replay();
         if (!this.paused) {
-          this.collaboration.tick(); this.slack.queueApprovals();
+          this.collaboration.tick();
           for (const row of this.collaboration.output.ready()) await this.collaboration.output.send(row.id);
           this.slack.ingress.bindPeerEchoes(); this.collaboration.activateDelegations();
           await this.slack.flushAdmin();
