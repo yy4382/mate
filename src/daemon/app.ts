@@ -1,3 +1,4 @@
+import {Attachments}from './attachments.js';
 import { Directory } from '../slack/directory.js';
 import { mkdirSync, writeFileSync, existsSync, realpathSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -67,7 +68,8 @@ export class Daemon {
       this.broker = new Broker(this.store, this.collaboration, this.backend, [projectRoot, state]);
       const research = new Research(config.runtime.researchHosts);
       let artifacts!: Artifacts;
-      const router = new ToolRouter(this.collaboration, this.broker, { research: (url, signal) => research.read(url, signal), publish: (...args) => artifacts.publish(...args) }, new Directory(messages, transport.clients), (actor,workId)=>this.ensureGrants(actor,workId));
+      const attachments=new Attachments(this.collaboration,this.broker,transport.clients);
+      const router = new ToolRouter(this.collaboration, this.broker, { attachment:(...args)=>attachments.save(...args),environment:actor=>({workspace:'/workspace',execConfigured:!!config.runtime.docker,image:config.runtime.docker?.image??null,network:this.collaboration.seats.active(actor)?'none':config.runtime.docker?.network??'none',researchHosts:this.collaboration.seats.active(actor)?[]:config.runtime.researchHosts,toolchain:'Installed in the pinned image; inspect with exec. No host credentials inherited.'}),research: (url, signal) => research.read(url, signal), publish: (...args) => artifacts.publish(...args) }, new Directory(messages, transport.clients), (actor,workId)=>this.ensureGrants(actor,workId));
       this.supervisor = new Supervisor(this.collaboration, router, c, undefined, async (agentId, workId, signal) => {
         this.ensureGrants(agentId, workId);
         const result = await files.execute({ root: this.memoryRoots[agentId]!, operation: { kind: 'read', path: 'MEMORY.md' }, timeoutMs: 10000 }, signal);

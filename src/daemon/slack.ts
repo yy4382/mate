@@ -150,7 +150,7 @@ export class SlackService {
   }
   async upload(agentId:string,target:Target,text:string,artifact:import('../slack/messages.js').ArtifactPayload,prepared:(fileId:string)=>void,beforeShare:()=>boolean):Promise<{fileId:string}>{
     const client=this.transport.clients.get(agentId)!;
-    const filename=`${artifact.title.replace(/[^a-zA-Z0-9._-]/g,'_')}.txt`,bytes=Buffer.from(artifact.content);
+    const filename=artifact.filename??`${artifact.title.replace(/[^a-zA-Z0-9._-]/g,'_')}.txt`,bytes=Buffer.from(artifact.content,artifact.encoding==='base64'?'base64':'utf8');
     const allocated=await client.files.getUploadURLExternal({filename,length:bytes.length});
     if(!allocated.file_id||!allocated.upload_url)throw new Error('Missing upload allocation');
     prepared(allocated.file_id);

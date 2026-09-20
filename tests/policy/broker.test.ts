@@ -86,3 +86,7 @@ it('structured capabilities respect permission families, both move paths and unk
  expect(await broker.execute(run,work,'remove',grant,{kind:'remove',path:'y'})).toMatchObject({status:'action_unknown'});
  await broker.execute(run,work,'inspect',reader,{kind:'stat',path:'y'});expect(execute).toHaveBeenCalledTimes(3);
 });
+it('review-seat private exec forces no network even when the environment permits networking',async()=>{
+ const{root,db,run,broker,work,grant,execute}=setup();db.db.prepare('INSERT INTO review_seats VALUES(?,?,?,?,1)').run('research',JSON.stringify({channel:'CTEST'}),'brief',root);
+ await broker.execute(run,work,'seat-exec',grant,{kind:'exec',cwd:'.',command:'true'});expect(execute.mock.calls[0]).toBeDefined();expect((execute.mock.calls as any)[0][0].network).toBe('none');
+});

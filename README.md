@@ -91,3 +91,7 @@ R1a已加入频道/DM顶层消息（省略thread）、conversations.list/members
 R1b预算模型：配置budget为每Agent持久累计账户的初始上限，消息不会重置。`/team agent-budget AGENT_ID MAX_RUNS MAX_TOKENS MAX_USD`由owner修改上限；原`budget WORK_ID ...`仍是额外事项上限。`works.list/select`允许运行中切换可见事项，`budget.read`展示自身账户。一次run计入起始事项及Agent账户；动作/停止使用单独的当前事项。v9升级先备份，历史共享work使用量无法精确分摊，保守计入各参与Agent并审计，可能需owner显式提高额度。账户耗尽不会自动补额或设置Agent暂停；旧session配置变更迁移仍待R7。
 
 文件发布对账需要 `files:read`（files.info）；已有Slack安装增加scope后需要重新安装/授权应用。文件上传和发布分阶段保存，只有已开始分享的未知结果才进入待对账；不自动重发。
+
+工具环境支持 `tools.list` / `tools.describe` 按需发现，`environment.info` 返回配置的镜像、网络和研究站点。工具链由固定digest镜像提供，Agent可在`/workspace`运行脚本、检查版本和安装workspace内依赖；镜像不会自动拉取。`runtime.docker.network`默认为`none`，owner可显式配置`bridge`。bridge会开放容器到外部以及可路由本地网络的访问，不是仅限公网的过滤器；不挂载host凭证或Docker socket，不发布端口。独立审核席位强制`none`。参见[Docker网络说明](https://docs.docker.com/engine/network/)。
+
+`attachments.save`只接受当前可见消息中的fileId，通过当前Agent的Slack身份下载到granted workspace；不接受模型提供的URL或token，不跟随认证重定向，单文件最多1MB。`file.read_bytes/write_bytes`支持二进制处理，`artifact.publish format=binary`冻结最多1MB文件后走同一发布门控；文本模式仍为64KiB。草稿仅返回哈希、大小、文件名等元数据，避免把大型base64塞入模型上下文。Slack历史cache的同版本消息可补齐过去丢弃的文件metadata；已呈现的publication与后到的相同caption/fileId echo合并为一次未读。参见[Slack文件认证](https://docs.slack.dev/reference/objects/file-object/)。

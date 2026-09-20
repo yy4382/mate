@@ -18,8 +18,12 @@ export class Attention {
       JOIN channel_access a ON a.agent_id=? AND a.channel=json_extract(o.request,'$.target.channel') AND a.active=1
       JOIN conversation_events e ON e.message_key='artifact:'||json_extract(o.receipt,'$.fileId') AND e.channel=a.channel AND e.kind='artifact'
       WHERE o.state='sent' AND json_extract(o.request,'$.artifact') IS NOT NULL
+      AND NOT EXISTS(SELECT 1 FROM messages m JOIN message_visibility v ON v.key=m.key AND v.agent_id=a.agent_id JOIN json_each(m.body,'$.files') f
+        WHERE m.channel=a.channel AND m.deleted=0 AND json_extract(m.body,'$.user')=(SELECT value FROM json_each(?) WHERE key=o.agent_id) AND json_extract(f.value,'$.id')=json_extract(o.receipt,'$.fileId')
+        AND json_extract(m.body,'$.text')=json_extract(o.request,'$.text')
+        AND (json_extract(o.request,'$.target.thread')=m.thread OR (json_extract(o.request,'$.target.thread') IS NULL AND m.thread=m.ts)))
       AND (? IS NULL OR a.channel=?) AND (? IS NULL OR json_extract(o.request,'$.target.thread')=?)
-      ORDER BY e.seq DESC LIMIT 101`).all(actor,target?.channel??null,target?.channel??null,target?.thread??null,target?.thread??null) as {agent_id:string;request:string;receipt:string;seq:number}[];
+      ORDER BY e.seq DESC LIMIT 101`).all(actor,encode(Object.fromEntries(this.messages.config.agents.map(agent=>[agent.id,agent.slackUserId]))),target?.channel??null,target?.channel??null,target?.thread??null,target?.thread??null) as {agent_id:string;request:string;receipt:string;seq:number}[];
     return rows.reverse().map(row=>{const request=JSON.parse(row.request);return{kind:'artifact',fileId:JSON.parse(row.receipt).fileId,caption:request.text,title:request.artifact.title,target:request.target,sender:row.agent_id,revision:row.seq};});
   }
   peek(actor:string,now=Date.now()):unknown[] {
@@ -95,9 +99,19 @@ export class Attention {
     if(encode(this.response(view,result.page))!==content[0].text)return;
     s.db.prepare('INSERT INTO attention_presented VALUES(?,?) ON CONFLICT DO NOTHING').run(view.id,result.page);
     // A bounded/truncated response cannot establish full message presentation.
-    if(view.complete)for(const publication of (result.publications??[]) as Publication[])s.db.prepare('INSERT INTO attention_seen VALUES(?,?,?) ON CONFLICT(agent_id,key) DO UPDATE SET revision=excluded.revision').run(run.agentId,`artifact:${publication.fileId}`,String(publication.revision));
+    if(view.complete)for(const publication of (result.publications??[]) as Publication[]){
+      s.db.prepare('INSERT INTO attention_seen VALUES(?,?,?) ON CONFLICT(agent_id,key) DO UPDATE SET revision=excluded.revision').run(run.agentId,`artifact:${publication.fileId}`,String(publication.revision));
+      // Echo can arrive either before or after the publication's journal ACK.
+      const echoed=s.db.prepare(`SELECT m.key,m.revision FROM messages m JOIN message_visibility v ON v.key=m.key AND v.agent_id=?
+        WHERE m.deleted=0 AND m.channel=? AND (m.thread=? OR (? IS NULL AND m.thread=m.ts))
+        AND json_extract(m.body,'$.user')=? AND json_extract(m.body,'$.text')=?
+        AND json_array_length(m.body,'$.files')=1 AND json_extract(m.body,'$.files[0].id')=?`).all(run.agentId,publication.target.channel,publication.target.thread??null,publication.target.thread??null,this.messages.agent(publication.sender).slackUserId,publication.caption,publication.fileId) as {key:string;revision:string}[];
+      for(const echo of echoed)s.db.prepare('INSERT INTO attention_seen VALUES(?,?,?) ON CONFLICT(agent_id,key) DO UPDATE SET revision=excluded.revision').run(run.agentId,echo.key,echo.revision);
+    }
     if(view.complete) for(const msg of result.messages as NormalMessage[]) {
-      const key=messageKey(msg),old=s.db.prepare('SELECT revision FROM attention_seen WHERE agent_id=? AND key=?').get(run.agentId,key) as {revision:string}|undefined;
+      const key=messageKey(msg),current=s.db.prepare('SELECT body FROM messages WHERE key=?').get(key) as {body:string}|undefined;
+      if(current&&encode((JSON.parse(current.body) as NormalMessage).files??[])!==encode(msg.files??[]))continue;
+      const old=s.db.prepare('SELECT revision FROM attention_seen WHERE agent_id=? AND key=?').get(run.agentId,key) as {revision:string}|undefined;
       if(!old||revisionNumber(msg.revision)>revisionNumber(old.revision))s.db.prepare('INSERT INTO attention_seen VALUES(?,?,?) ON CONFLICT(agent_id,key) DO UPDATE SET revision=excluded.revision').run(run.agentId,key,msg.revision);
     }
   }

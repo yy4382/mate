@@ -96,3 +96,12 @@ it.skipIf(process.env.MATE_SANDBOX_TEST !== '1')('runner preserves a Unicode sca
  const split=value.indexOf(Buffer.from('你'))+1;child.stdin!.write(value.subarray(0,split));await new Promise(r=>setTimeout(r,400));child.stdin!.end(value.subarray(split));
  expect(await done,stderr).toBe(0);expect(readFileSync(`${root}/unicode`,'utf8')).toBe('你');
 },15000);
+it.skipIf(process.env.MATE_SANDBOX_TEST !== '1')('real binary sandbox roundtrip and configured container networking preserve explicit isolation overrides',async()=>{
+ const root=temp(),files=new SandboxBackend(resolve('dist/src/execution/runner.js')),bytes=Buffer.from([0,255,128,12]);
+ expect((await files.execute({root,operation:{kind:'write_bytes',path:'binary',base64:bytes.toString('base64')},timeoutMs:10000})).code).toBe(0);
+ const read=await files.execute({root,operation:{kind:'read_bytes',path:'binary',offset:0,length:32768},timeoutMs:10000});expect(Buffer.from(JSON.parse(read.stdout).base64,'base64')).toEqual(bytes);
+ const backend=new ContainerBackend({binary:'/usr/local/bin/docker',image:process.env.MATE_DOCKER_IMAGE!,host:process.env.MATE_DOCKER_HOST!,scope:'mate-test-network-config',network:'bridge'});
+ const command={kind:'exec' as const,cwd:'.',command:'cat /proc/net/route'};
+ const connected=await backend.execute({root,operation:command,timeoutMs:10000});expect(connected.code).toBe(0);expect(connected.stdout).toContain('eth0');
+ const isolated=await backend.execute({root,operation:command,network:'none',timeoutMs:10000});expect(isolated.code).toBe(0);expect(isolated.stdout).not.toContain('eth0');
+},30000);

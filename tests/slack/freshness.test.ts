@@ -51,7 +51,7 @@ it('artifact drafts freeze bytes, preserve them on caption revision and hold cha
  const upload=vi.fn(async(_actor:any,_target:any,_text:any,payload:any,prepared:any,beforeShare:any)=>{expect(payload.content).toBe('fixed evidence');prepared('FFILE');change(2);if(!beforeShare())throw new Error('not shared');return{fileId:'FFILE'};});o.artifacts={upload};
  o.queueArtifact('research',target,'caption',artifact,'artifact',{run,viewToken:read()});s.db.prepare('INSERT INTO output_work VALUES(?,?)').run('artifact',w);
  await o.send('artifact');expect(s.output('artifact')?.state).toBe('held');expect(upload).toHaveBeenCalledOnce();
- const revised=g.revise(run,'artifact',1,'new caption') as any;expect(revised.artifact.content).toBe('fixed evidence');g.discard(run,'artifact',2);await o.send('artifact:revision:2');expect(upload).toHaveBeenCalledOnce();
+ const revised=g.revise(run,'artifact',1,'new caption') as any;expect(JSON.parse(s.output('artifact:revision:2')!.request).artifact.content).toBe('fixed evidence');expect(revised.artifact.content).toBeUndefined();g.discard(run,'artifact',2);await o.send('artifact:revision:2');expect(upload).toHaveBeenCalledOnce();
 });
 it('artifact unknown keeps allocated file identity across recovery and needs matching sharing evidence',async()=>{
  const{s,g,o,w,run,c}=setup();o.artifacts={upload:async(_a,_t,_text,_artifact,prepared,beforeShare)=>{prepared('FFILE');expect(beforeShare()).toBe(true);throw new Error('lost after share');}};

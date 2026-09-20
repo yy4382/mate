@@ -58,7 +58,7 @@ export class Broker {
     const request = { workId, grantId, root: grant.root, operation: op, policyVersion };
     const action = this.store.prepareAction(run, actionId, request);
     if (action.state === 'succeeded' || action.state === 'failed') return { status: action.state, receipt: action.receipt ? JSON.parse(action.receipt) : null };
-    if (action.state === 'unknown' || action.state === 'executing' || (permissionFor(op) !== 'read' && this.store.db.prepare("SELECT 1 FROM actions WHERE agent_id=? AND state IN ('unknown','executing') AND id!=? AND (json_extract(request,'$.operation.kind')='exec' OR (json_extract(request,'$.root')=? AND json_extract(request,'$.operation.kind') NOT IN ('read','stat','list','search')))").get(run.agentId, actionId, grant.root))) return { status: 'action_unknown', actionId };
+    if (action.state === 'unknown' || action.state === 'executing' || (permissionFor(op) !== 'read' && this.store.db.prepare("SELECT 1 FROM actions WHERE agent_id=? AND state IN ('unknown','executing') AND id!=? AND (json_extract(request,'$.operation.kind')='exec' OR (json_extract(request,'$.root')=? AND json_extract(request,'$.operation.kind') NOT IN ('read','read_bytes','stat','list','search')))").get(run.agentId, actionId, grant.root))) return { status: 'action_unknown', actionId };
     if (signal?.aborted) throw new Error('Action aborted before execution');
     this.grant(run, workId, grantId, op);
     this.store.atomic(() => {
@@ -66,7 +66,7 @@ export class Broker {
       this.store.startAction(run, actionId);
     });
     try {
-      const result = await this.backend.execute({ root: grant.root, operation: op, timeoutMs: Math.min(60000, this.collaboration.config.budgets.runTimeoutMs) }, signal);
+      const result = await this.backend.execute({ root: grant.root, operation: op, timeoutMs: Math.min(60000, this.collaboration.config.budgets.runTimeoutMs),...(this.collaboration.seats.active(run.agentId)?{network:'none' as const}:{}) }, signal);
       this.store.settleAction(run, actionId, result.code === 0 ? 'succeeded' : 'failed', result);
       return result;
     } catch (error) {

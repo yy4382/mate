@@ -1,3 +1,5 @@
+import {createHash}from 'node:crypto';
+import {basename}from 'node:path';
 import { relative } from 'node:path';
 import { checkedPath } from '../execution/paths.js';
 import type { RunToken } from '../storage/store.js';
@@ -6,7 +8,7 @@ import type { Broker } from '../policy/broker.js';
 import type { Collaboration } from '../collaboration/service.js';
 import type { Target,ArtifactOutputTransport } from '../slack/messages.js';
 import type { ExecutionResult } from '../execution/backend.js';
-export interface PublishArgs {grantId:string;path:string;title:string;target:Target;text?:string;viewToken?:string;draftId?:string;revision?:number}
+export interface PublishArgs {grantId:string;path:string;title:string;target:Target;text?:string;viewToken?:string;draftId?:string;revision?:number;format?:'text'|'binary'}
 export class Artifacts {
   constructor(readonly collaboration: Collaboration, readonly broker: Broker, transport: ArtifactOutputTransport, readonly memoryRoots: Record<string, string>) {collaboration.output.artifacts=transport;}
   async publish(run: RunToken, workId: string, actionId: string, args: PublishArgs, signal: AbortSignal): Promise<unknown> {
@@ -14,10 +16,16 @@ export class Artifacts {
     s.assertRun(run);c.assertActionWork(run,workId);c.messages.requireAccess(run.agentId,args.target.channel);
     const grant=s.db.prepare('SELECT root FROM grants WHERE id=?').get(args.grantId) as {root:string}|undefined;
     if(!grant||grant.root!==this.memoryRoots[run.agentId]||!relative(grant.root,checkedPath(grant.root,args.path)).startsWith('artifacts/'))throw new Error('Only own artifacts/ files may be published');
-    const read=await this.broker.execute(run,workId,`${actionId}:read`,args.grantId,{kind:'read',path:args.path},signal) as ExecutionResult|{receipt?:ExecutionResult};
-    const file='code'in read?read:read.receipt;if(!file||file.code!==0||file.truncated)throw new Error('Artifact read failed or incomplete');
+    const result=async(id:string,operation:unknown)=>{const read=await this.broker.execute(run,workId,id,args.grantId,operation,signal) as ExecutionResult|{receipt?:ExecutionResult};const file='code'in read?read:read.receipt;if(!file||file.code!==0||file.truncated)throw new Error('Artifact read failed or incomplete');return file.stdout;};
+    let content:string,encoding:'base64'|undefined,contentHash:string;
+    if(args.format==='binary'){
+      const stat=JSON.parse(await result(`${actionId}:stat`,{kind:'stat',path:args.path}));if(stat.type!=='file'||stat.size>1000000||!stat.sha256)throw new Error('Artifact must be a regular file up to 1 MB');
+      const chunks:Buffer[]=[];
+      for(let offset=0;offset<stat.size;offset+=32768){const part=JSON.parse(await result(`${actionId}:read:${offset}`,{kind:'read_bytes',path:args.path,offset,length:32768}));if(part.totalBytes!==stat.size||part.sha256!==stat.sha256)throw new Error('Artifact changed during snapshot');chunks.push(Buffer.from(part.base64,'base64'));}
+      const bytes=Buffer.concat(chunks);contentHash=createHash('sha256').update(bytes).digest('hex');if(bytes.length!==stat.size||contentHash!==stat.sha256)throw new Error('Artifact snapshot mismatch');content=bytes.toString('base64');encoding='base64';
+    }else{content=await result(`${actionId}:read`,{kind:'read',path:args.path});contentHash=hash(content);}
     signal.throwIfAborted();s.assertRun(run);c.assertActionWork(run,workId);c.messages.requireAccess(run.agentId,args.target.channel);
-    const artifact={title:args.title,content:file.stdout,contentHash:hash(file.stdout)};
+    const artifact={title:args.title,content,contentHash,filename:basename(args.path),...(encoding?{encoding}:{})};
     return s.atomic(()=>{
       const action=s.prepareAction(run,actionId,{kind:'artifact_draft',workId,args,contentHash:artifact.contentHash});
       if(action.state==='succeeded'){const receipt=JSON.parse(action.receipt!);return gate.describe(run.agentId,receipt.draftId);}

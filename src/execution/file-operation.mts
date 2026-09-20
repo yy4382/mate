@@ -18,7 +18,7 @@ function content(path:string):Buffer {
 }
 const hash=(data:Buffer|string)=>createHash('sha256').update(data).digest('hex');
 const json=(value:unknown)=>process.stdout.write(JSON.stringify(value));
-function save(path:string,value:string) {
+function save(path:string,value:string|Buffer) {
   if(Buffer.byteLength(value)>1000000)throw new Error('File exceeds 1 MB limit');
   mkdirSync(dirname(path),{recursive:true});const temp=`${path}.${randomUUID()}.tmp`;
   try {
@@ -33,8 +33,10 @@ function save(path:string,value:string) {
   }finally{try{unlinkSync(temp);}catch{}}
 }
 const path=checked(operation.path);
-if(!['read','list','stat','search'].includes(operation.kind)&&path===root)throw new Error('Cannot mutate workspace root');
+if(!['read','read_bytes','list','stat','search'].includes(operation.kind)&&path===root)throw new Error('Cannot mutate workspace root');
 switch(operation.kind){
+  case 'read_bytes':{const value=content(path);json({base64:value.subarray(operation.offset,operation.offset+operation.length).toString('base64'),offset:operation.offset,totalBytes:value.length,sha256:hash(value)});break;}
+  case 'write_bytes':{const value=Buffer.from(operation.base64,'base64');if(value.toString('base64')!==operation.base64)throw new Error('Invalid base64');save(path,value);break;}
   case 'read':{const value=content(path);if(value.length>65536)throw new Error('File exceeds read limit; use search or exec');process.stdout.write(value);break;}
   case 'write':save(path,operation.content);break;
   case 'edit':{

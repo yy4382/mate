@@ -14,7 +14,8 @@ export class FreshnessGate{
   this.messages.requireAccess(actor,this.request(d).target.channel);return d;
  }
  private request(d:Draft):{target:Target;text:string;artifact?:ArtifactPayload}{return JSON.parse(this.messages.store.output(d.outbox_id)!.request);}
- describe(actor:string,id:string):unknown{const d=this.draft(actor,id);return{draftId:d.id,revision:d.revision,status:this.messages.store.output(d.outbox_id)!.state,receipt:JSON.parse(this.messages.store.output(d.outbox_id)!.receipt??'null'),holdId:d.hold_id,reason:d.reason,...this.request(d),choices:['retry_with_view','revise','discard','continue_once']};}
+ describe(actor:string,id:string):unknown{const d=this.draft(actor,id);return{draftId:d.id,revision:d.revision,status:this.messages.store.output(d.outbox_id)!.state,receipt:JSON.parse(this.messages.store.output(d.outbox_id)!.receipt??'null'),holdId:d.hold_id,reason:d.reason,...this.request(d),...(this.request(d).artifact?{artifact:this.artifactDescription(this.request(d).artifact!)}:{}),choices:['retry_with_view','revise','discard','continue_once']};}
+ private artifactDescription(artifact:ArtifactPayload):unknown{const{content,...metadata}=artifact;return{...metadata,bytes:Buffer.byteLength(content,artifact.encoding==='base64'?'base64':'utf8')};}
  list(actor:string):unknown[]{return(this.messages.store.db.prepare("SELECT d.id FROM drafts d JOIN outbox o ON o.id=d.outbox_id JOIN channel_access a ON a.agent_id=d.agent_id AND a.channel=json_extract(o.request,'$.target.channel') WHERE d.agent_id=? AND a.active=1 AND o.state IN ('held','pending','unknown') ORDER BY d.rowid DESC LIMIT 50").all(actor) as {id:string}[]).map(d=>this.describe(actor,d.id));}
  queued(actor:string,id:string,basis?:SendBasis):void{
   const s=this.messages.store;if(s.db.prepare('SELECT 1 FROM drafts WHERE outbox_id=?').get(id))return;

@@ -157,8 +157,8 @@ it('artifact publication snapshots survive content edits and explicit revision r
  const target={channel:'CTEST'},work=c.createWork('artifact',target);c.enqueue('research',work,'one',{});const run=store.beginRun('research')!;store.input(run,{});const grantId=broker.issueGrant('UOWNER','research',work,root,['read'],Date.now()+100000);
  const uploads:any[]=[];const artifacts=new Artifacts(c,broker,{upload:async(_a,_t,text,artifact,prepared,beforeShare)=>{prepared('FFILE');if(!beforeShare())throw new Error('deferred');uploads.push({text,artifact});return{fileId:'FFILE'};}},{research:root});const args={grantId,path:'artifacts/result.txt',target,title:'result'},signal=new AbortController().signal;
  const draft=await artifacts.publish(run,work,'first',args,signal) as any;backend.execute.mockResolvedValue({code:0,stdout:'new file content',stderr:'',truncated:false});
- expect((await artifacts.publish(run,work,'first',args,signal) as any).artifact.content).toBe('artifact evidence');
- const revised=await artifacts.publish(run,work,'revision',{...args,draftId:draft.draftId,revision:1},signal) as any;expect(revised.artifact.content).toBe('new file content');
+ expect((await artifacts.publish(run,work,'first',args,signal) as any).artifact.bytes).toBe(Buffer.byteLength('artifact evidence'));expect(JSON.parse(store.output('first')!.request).artifact.content).toBe('artifact evidence');
+ const revised=await artifacts.publish(run,work,'revision',{...args,draftId:draft.draftId,revision:1},signal) as any;expect(revised.artifact.bytes).toBe(Buffer.byteLength('new file content'));
  c.output.gate!.continueOnce(run,draft.draftId,2,revised.holdId);await c.output.send('first:revision:2');expect(uploads[0].artifact.content).toBe('new file content');expect(store.output('first:revision:2')?.state).toBe('sent');
 });
 it('Slack file allocation is persisted before transfer; only proven file shares reconcile unknown publication',async()=>{
@@ -183,4 +183,12 @@ it('peer publication attention includes captions and respects page ACK, mute and
  const present=(value:any)=>c.attention.presented(peer,{role:'toolResult',toolCallId:'p',toolName:'mate',content:[{type:'text',text:JSON.stringify(value)}],isError:false,timestamp:0});
  present(page);expect(c.attention.valid(peer,target,page.viewToken)).toBe(false);page=c.attention.read(peer,target,page.nextCursor) as any;expect(page.publications[0].caption).toBe('peer caption');present(page);expect(c.attention.valid(peer,target,page.viewToken)).toBe(true);
  c.attention.state('writer',target,'mute',1);expect(c.attention.peek('writer')).toEqual([]);c.messages.membership('writer','CTEST',false);expect(()=>c.attention.read(peer,target)).toThrow('access');
+});
+it('Slack artifact echoes replace publication projection without double unread after exact presentation',async()=>{
+ const{store,c,broker}=setup();new ToolRouter(c,broker);for(const actor of ['research','writer']){store.register(actor,'v1',[]);c.messages.membership(actor,'CTEST',true);}const target={channel:'CTEST',thread:'100.000001'},work=c.createWork('echo-artifact',target);for(const actor of ['research','writer'])c.enqueue(actor,work,actor,{});
+ const run=store.beginRun('research')!,peer=store.beginRun('writer')!;store.input(run,{});store.input(peer,{});c.output.artifacts={upload:async(_a,_t,_text,_artifact,prepared,beforeShare)=>{prepared('FFILE');if(!beforeShare())throw new Error('deferred');return{fileId:'FFILE'};}};
+ c.output.queueArtifact('research',target,'caption',{title:'result',content:'f',contentHash:'hash'},'artifact',{run});const draft=c.output.gate!.describe('research','artifact')as any;c.output.gate!.continueOnce(run,'artifact',1,draft.holdId);await c.output.send('artifact');
+ let page=c.attention.read(peer,target)as any;while(true){c.attention.presented(peer,{role:'toolResult',toolCallId:'p',toolName:'mate',content:[{type:'text',text:JSON.stringify(page)}],isError:false,timestamp:0});if(!page.nextCursor)break;page=c.attention.read(peer,target,page.nextCursor);}
+ store.ingest('ATWO','echo-file',{team_id:'TTEST',event:{type:'message',channel:'CTEST',ts:'201.000001',thread_ts:target.thread,text:'caption',user:'UONE',files:[{id:'FFILE',title:'result'}]}});c.messages.normalize('ATWO','echo-file');
+ expect(c.attention.peek('writer')).toEqual([{target,revision:expect.any(Number),unseen:0}]);const after=c.attention.read(peer,target)as any;expect(after.publications).toEqual([]);expect(after.messages[0].files[0].id).toBe('FFILE');
 });

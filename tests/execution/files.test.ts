@@ -37,3 +37,9 @@ it('backend decodes split Unicode output as a stream',async()=>{
  const root=temp(),helper=`${root}/synthetic.cjs`;writeFileSync(helper,"process.stdout.write(Buffer.from([0xe4]));setTimeout(()=>process.stdout.end(Buffer.from([0xbd,0xa0])),100);");
  const {SandboxBackend}=await import('../../src/execution/backend.js');const result=await new SandboxBackend(helper).execute({root,operation:{kind:'read',path:'x'},timeoutMs:2000});expect(result.stdout).toBe('你');
 });
+it('binary operations accept a maximum-size canonical payload and bounded chunks without text loss',async()=>{
+ const root=temp(),data=Buffer.alloc(1000000,255);const{operationSchema}=await import('../../src/execution/backend.js');
+ const op=operationSchema.parse({kind:'write_bytes',path:'binary',base64:data.toString('base64')});expect(invoke(root,op).code).toBe(0);
+ const result=JSON.parse(invoke(root,{kind:'read_bytes',path:'binary',offset:983040,length:32768}).stdout);expect(result.totalBytes).toBe(1000000);expect(Buffer.from(result.base64,'base64')).toEqual(data.subarray(983040));
+ expect(()=>operationSchema.parse({...op,base64:'!!!'})).toThrow();
+});

@@ -2,6 +2,8 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 export const operationSchema = z.discriminatedUnion('kind', [
+  z.object({kind:z.literal('read_bytes'),path:z.string().max(4096),offset:z.number().int().min(0).max(1000000),length:z.number().int().min(1).max(32768)}).strict(),
+  z.object({kind:z.literal('write_bytes'),path:z.string().max(4096),base64:z.string().max(1333336).refine(value=>Buffer.from(value,'base64').toString('base64')===value,'Canonical base64 required')}).strict(),
   z.object({ kind: z.literal('read'), path: z.string().max(4096) }).strict(),
   z.object({ kind: z.literal('write'), path: z.string().max(4096), content: z.string().max(1000000) }).strict(),
   z.object({ kind: z.literal('list'), path: z.string().max(4096) }).strict(),
@@ -14,9 +16,9 @@ export const operationSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('exec'), command: z.string().min(1).max(16000), cwd: z.string().max(4096) }).strict(),
 ]);
 export type Permission = 'read' | 'write' | 'exec';
-export function permissionFor(op: Operation): Permission { return ['read','list','stat','search'].includes(op.kind) ? 'read' : op.kind === 'exec' ? 'exec' : 'write'; }
+export function permissionFor(op: Operation): Permission { return ['read','read_bytes','list','stat','search'].includes(op.kind) ? 'read' : op.kind === 'exec' ? 'exec' : 'write'; }
 export type Operation = z.infer<typeof operationSchema>;
-export interface ExecutionRequest { root: string; operation: Operation; timeoutMs: number }
+export interface ExecutionRequest { root: string; operation: Operation; timeoutMs: number;network?:'none' }
 export interface ExecutionResult { code: number; stdout: string; stderr: string; truncated: boolean }
 export interface ExecutionBackend { execute(request: ExecutionRequest, signal?: AbortSignal): Promise<ExecutionResult> }
 /** Each invocation has its own SRT singleton and process group. No host-shell fallback. */

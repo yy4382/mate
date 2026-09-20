@@ -6,7 +6,7 @@ export const daemonConfigSchema = z.object({
   mate: configSchema,
   runtime: z.object({
     dataDir: path,
-    docker: z.object({ binary: path, host: z.string().startsWith('unix:///'), image: z.string().regex(/^sha256:[a-f0-9]{64}$/) }).strict().optional(),
+    docker: z.object({ binary: path, host: z.string().startsWith('unix:///'), image: z.string().regex(/^sha256:[a-f0-9]{64}$/),network:z.enum(['none','bridge']).optional() }).strict().optional(),
     workspaceGrants: z.array(z.object({ agentId: z.string(), root: path, operations: z.array(z.enum(['read','write','exec'])).min(1) }).strict()).default([]),
     researchHosts: z.array(z.string().regex(/^[a-z0-9][a-z0-9.-]*[a-z0-9]$/)).default([]),
   }).strict()

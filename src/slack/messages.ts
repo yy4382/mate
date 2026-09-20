@@ -7,14 +7,15 @@ import type { AgentConfig, MateConfig } from '../config.js';
 export const slackTs = z.string().regex(/^\d{1,16}\.\d{1,6}$/);
 export const targetSchema = z.object({ channel: z.string().regex(/^[CDG][A-Z0-9]+$/), thread: slackTs.optional() }).strict();
 export type Target = z.infer<typeof targetSchema>;
-export interface NormalMessage { team: string; channel: string; ts: string; thread: string; revision: string; text: string; user?: string; bot?: string; deleted: boolean }
+export interface NormalMessage { team: string; channel: string; ts: string; thread: string; revision: string; text: string; user?: string; bot?: string; deleted: boolean;files?: {id:string;name?:string|undefined;title?:string|undefined;mimetype?:string|undefined;size?:number|undefined}[] }
 interface MessageRow { key: string; channel: string; ts: string; thread: string; revision: string; body: string; deleted: number }
 function timestamp(value: string): bigint { const [a, b] = value.split('.'); return BigInt(a!) * 1000000n + BigInt(b!.padEnd(6, '0')); }
 export function messageKey(message: Pick<NormalMessage, 'team' | 'channel' | 'ts'>): string { return encode([message.team, message.channel, message.ts]); }
+const fileMetadata=z.object({id:z.string().regex(/^F[A-Z0-9]+$/),name:z.string().max(500).optional(),title:z.string().max(500).optional(),mimetype:z.string().max(200).optional(),size:z.number().nonnegative().optional()});
 const rawMessage = z.object({ type: z.string(), channel: z.string(), ts: slackTs.optional(), event_ts: slackTs.optional(), thread_ts: slackTs.optional(),
-  text: z.string().optional(), user: z.string().optional(), bot_id: z.string().optional(), subtype: z.string().optional(), deleted_ts: slackTs.optional(),
+  files:z.array(fileMetadata).max(100).optional(),text: z.string().optional(), user: z.string().optional(), bot_id: z.string().optional(), subtype: z.string().optional(), deleted_ts: slackTs.optional(),
   previous_message: z.object({ thread_ts: slackTs.optional() }).passthrough().optional(),
-  message: z.object({ ts: slackTs, thread_ts: slackTs.optional(), text: z.string().optional(), user: z.string().optional(), bot_id: z.string().optional(), edited: z.object({ ts: slackTs }).optional() }).optional() }).passthrough();
+  message: z.object({files:z.array(fileMetadata).max(100).optional(), ts: slackTs, thread_ts: slackTs.optional(), text: z.string().optional(), user: z.string().optional(), bot_id: z.string().optional(), edited: z.object({ ts: slackTs }).optional() }).optional() }).passthrough();
 
 export class Messages {
   private readonly membershipVersions = new Map<string, number>();
@@ -65,7 +66,7 @@ export class Messages {
               : e.subtype === 'message_deleted' ? (e.event_ts ?? ts) : ts;
             const previous = this.store.db.prepare('SELECT thread FROM messages WHERE key=?').get(messageKey({team: this.config.teamId, channel: e.channel, ts})) as { thread: string } | undefined;
             const msg: NormalMessage = { team: this.config.teamId, channel: e.channel, ts, thread: source.thread_ts ?? e.previous_message?.thread_ts ?? previous?.thread ?? ts,
-              revision, text: source.text ?? '', deleted: e.subtype === 'message_deleted',
+              revision,...(source.files?{files:source.files}:{}), text: source.text ?? '', deleted: e.subtype === 'message_deleted',
               ...(source.user ? { user: source.user } : {}), ...(source.bot_id ? { bot: source.bot_id } : {}) };
             this.record(msg, [installation.id]);
           }
@@ -85,6 +86,12 @@ export class Messages {
         this.store.db.prepare('INSERT INTO message_revisions VALUES(?,?,?) ON CONFLICT DO NOTHING').run(key, message.revision, encode(message));
         this.store.db.prepare('INSERT INTO conversation_events(channel,thread,message_key,revision,kind) VALUES(?,?,?,?,?)').run(message.channel, message.thread, key, message.revision, message.deleted ? 'delete' : old ? 'edit' : 'message');
       }
+      // Older caches discarded file metadata. Enrich an equal-revision live message without inventing a Slack edit timestamp.
+      if(old&&!old.deleted&&timestamp(message.revision)===timestamp(old.revision)&&message.files?.length&&!(JSON.parse(old.body) as NormalMessage).files){
+        this.store.db.prepare('UPDATE messages SET body=? WHERE key=?').run(encode({...JSON.parse(old.body),files:message.files}),key);
+        this.store.db.prepare('DELETE FROM attention_seen WHERE key=?').run(key);
+        this.store.db.prepare('INSERT INTO conversation_events(channel,thread,message_key,revision,kind) VALUES(?,?,?,?,?)').run(old.channel,old.thread,key,old.revision,'files_enriched');
+      }
       // A tombstone can arrive before the original reply, without thread metadata.
       // Enrich its immutable location without resurrecting text or decreasing revision.
       if (old?.deleted && old.thread === old.ts && message.thread !== message.ts && timestamp(message.revision) <= timestamp(old.revision)) {
@@ -98,6 +105,10 @@ export class Messages {
         const agent = this.agent(id);
         if (!this.access(id, message.channel)) continue;
         const addedVisibility=this.store.db.prepare('INSERT INTO message_visibility VALUES(?,?) ON CONFLICT DO NOTHING').run(id, key).changes;
+        if(effective.files?.length===1){
+          const published=this.store.db.prepare("SELECT o.agent_id,o.request FROM outbox o JOIN attention_seen seen ON seen.agent_id=? AND seen.key='artifact:'||json_extract(o.receipt,'$.fileId') WHERE o.state='sent' AND json_extract(o.receipt,'$.fileId')=? AND json_extract(o.request,'$.target.channel')=?").get(id,effective.files[0]!.id,message.channel) as {agent_id:string;request:string}|undefined;
+          if(published){const request=JSON.parse(published.request),author=this.agent(published.agent_id);if(effective.user===author.slackUserId&&effective.text===request.text&&(request.target.thread??effective.ts)===effective.thread)this.store.db.prepare('INSERT INTO attention_seen VALUES(?,?,?) ON CONFLICT(agent_id,key) DO UPDATE SET revision=excluded.revision').run(id,key,current.revision);}
+        }
         if(old && addedVisibility)this.store.db.prepare('INSERT INTO conversation_events(channel,thread,message_key,revision,kind,audience) VALUES(?,?,?,?,?,?)').run(current.channel,current.thread,key,current.revision,'visibility',id);
         if (this.store.db.prepare('INSERT INTO message_observations VALUES(?,?,?) ON CONFLICT DO NOTHING').run(id, key, current.revision).changes === 0) continue;
         if (effective.user === agent.slackUserId || effective.bot === agent.slackBotId || current.deleted) continue;
@@ -139,7 +150,7 @@ export class Messages {
   }
 }
 
-export interface ArtifactPayload {title:string;content:string;contentHash:string}
+export interface ArtifactPayload {title:string;content:string;contentHash:string;encoding?:'base64';filename?:string}
 export interface ArtifactOutputTransport {upload(agentId:string,target:Target,text:string,artifact:ArtifactPayload,prepared:(fileId:string)=>void,beforeShare:()=>boolean):Promise<{fileId:string}>}
 export interface SlackTransport { post(agentId: string, target: Target, text: string, id: string): Promise<{ ts: string }> }
 export class Output {

@@ -14,6 +14,8 @@ const messageRef=z.object({channel:id,ts:slackTs}).strict();
 const fileSchemas = Object.fromEntries(operationSchema.options.filter(schema=>schema.shape.kind.value!=='exec').map(schema=>[`file.${schema.shape.kind.value}`,(schema as z.ZodObject).omit({kind:true}).extend({grantId:id})]));
 const schemas: Record<string,z.ZodType> = {
   ...fileSchemas,
+  'environment.info':z.object({}).strict(),
+  'attachments.save':z.object({message:messageRef,fileId:z.string().regex(/^F[A-Z0-9]+$/),grantId:id,path:id}).strict(),
   'tasks.byMessage':z.object({message:messageRef}).strict(),
   'tasks.intents':z.object({}).strict(),
   'tasks.retry':z.object({intentId:id,viewToken:id.optional()}).strict(),
@@ -39,8 +41,8 @@ const schemas: Record<string,z.ZodType> = {
   'conversations.members': z.object({ channel: id }).strict(),
   'conversations.openDM': z.object({ user: z.string().regex(/^U[A-Z0-9]+$/) }).strict(),
   'research.read': z.object({ url: z.string().url().max(4000) }).strict(),
-  'artifact.publish': z.object({ grantId: id, path: id, title: z.string().min(1).max(200), target: targetSchema,text:text.optional(),viewToken:id.optional() }).strict(),
-  'artifact.revise':z.object({draftId:id,revision:z.number().int().positive(),grantId:id,path:id,title:z.string().min(1).max(200),target:targetSchema,text:text.optional()}).strict(),
+  'artifact.publish': z.object({ grantId: id, path: id, title: z.string().min(1).max(200), target: targetSchema,format:z.enum(['text','binary']).optional(),text:text.optional(),viewToken:id.optional() }).strict(),
+  'artifact.revise':z.object({draftId:id,revision:z.number().int().positive(),grantId:id,path:id,title:z.string().min(1).max(200),target:targetSchema,format:z.enum(['text','binary']).optional(),text:text.optional()}).strict(),
   'messages.recent': z.object({ channel: id }).strict(),
   'tasks.read': z.object({ taskId: id }).strict(),
   agents: z.object({}).strict(), 'messages.read': z.object({ target: targetSchema }).strict(),
@@ -62,12 +64,19 @@ const discoverySchemas={
 };
 export const operationDocumentation = `Use tools.list to discover capabilities and tools.describe with {name} for exact schemas. Call the named operation directly, or tools.call with {name,input}. Available: ${Object.keys(schemas).join(', ')}.\n` + Object.entries(discoverySchemas).map(([name, schema]) => `${name}: ${JSON.stringify(z.toJSONSchema(schema))}`).join('\n');
 export interface AdditionalTools {
+  environment?(actor:string):unknown;
+  attachment?(run:RunToken,workId:string,actionId:string,args:import('../daemon/attachments.js').AttachmentArgs,signal:AbortSignal):Promise<unknown>;
   research(url: string, signal: AbortSignal): Promise<unknown>;
   publish(run: RunToken, workId: string, actionId: string, args: import('../daemon/artifacts.js').PublishArgs, signal: AbortSignal): Promise<unknown>;
 }
 type ToolContext={run:RunToken;workId:string;callId:string;signal:AbortSignal};
-const seatOperations=['agents','budget.read','attention.peek','messages.send','drafts.list','drafts.read','drafts.retry','drafts.continue','drafts.revise','drafts.discard',...Object.keys(fileSchemas),'exec'];
+const seatOperations=['environment.info','agents','budget.read','attention.peek','messages.send','drafts.list','drafts.read','drafts.retry','drafts.continue','drafts.revise','drafts.discard',...Object.keys(fileSchemas),'exec'];
 const capabilityDescriptions:Record<string,string>={
+ 'file.read_bytes':'Read up to 32 KiB binary bytes at an offset, returning base64, file size and full SHA256. Files up to 1 MB.',
+ 'file.write_bytes':'Atomically write canonical base64 bytes, decoded size up to 1 MB, in the granted workspace.',
+ 'attachments.save':'Download a file attached to a visible message into a granted workspace path (up to 1 MB). File ID must occur on that message; uses the acting Agent credential.',
+ 'artifact.publish':'Freeze own artifacts/ file and create a gated publication draft. format=text supports 64 KiB UTF-8, format=binary supports 1 MB. Read returned status; queued/held does not mean published.',
+ 'environment.info':'Inspect the configured container image, network policy and research hosts; use exec to inspect installed tool versions.',
  'file.list':'List up to 200 directory entries (48 KB); truncated indicates remaining entries.',
  'file.search':'Recursively find literal text in UTF-8 files up to 1 MB; at most 1000 visited paths/100 matches/45 KB. Skips symlinks/binary files; truncated reports limits.',
  'file.stat':'Inspect file type/size and SHA256 for regular files up to 1 MB.',
@@ -104,7 +113,7 @@ export class ToolRouter {
     if (!Object.hasOwn(schemas,operation)) throw new Error('Unknown operation');
     // Parsing is deliberately repeated in the daemon, independently of model-side tool validation.
     const args = schemas[operation]!.parse(input) as Record<string, any>;
-    const readOnly = ['tasks.byMessage','tasks.intents','drafts.list','drafts.read','attention.peek','attention.read','attention.resolve','attention.defer','attention.mute','agents','works.list','budget.read','tasks.read','tasks.list','messages.read','messages.recent','messages.search','schedules.list','inbox.list','inbox.read','conversations.list','conversations.members'];
+    const readOnly = ['environment.info','tasks.byMessage','tasks.intents','drafts.list','drafts.read','attention.peek','attention.read','attention.resolve','attention.defer','attention.mute','agents','works.list','budget.read','tasks.read','tasks.list','messages.read','messages.recent','messages.search','schedules.list','inbox.list','inbox.read','conversations.list','conversations.members'];
     if (!readOnly.includes(operation) && operation !== 'works.select') c.assertActionWork(run, args.taskId ? c.task(args.taskId).work_id : workId);
     if(args.target)c.messages.requireAccess(actor,args.target.channel);
     if(args.channel)c.messages.requireAccess(actor,args.channel);
@@ -116,6 +125,8 @@ export class ToolRouter {
       const value = operation === 'conversations.openDM' ? await this.directory.openDM(run, actionId, args.user, signal) : operation === 'conversations.members' ? await this.directory.members(actor, args.channel) : await this.directory.spaces(actor);
       s.assertRun(run); signal.throwIfAborted(); return { value };
     }
+    if(operation==='environment.info')return{value:this.additional?.environment?.(actor)??{configured:false}};
+    if(operation==='attachments.save'){if(!this.additional?.attachment)throw new Error('Attachment adapter unavailable');return{value:await this.additional.attachment(run,workId,actionId,args as any,signal)};}
     if (operation === 'research.read') { if (!this.additional) throw new Error('Research unavailable'); return { value: await this.additional.research(args.url, signal) }; }
     if (operation === 'artifact.publish'||operation==='artifact.revise') { if (!this.additional) throw new Error('Publication unavailable'); return { value: await this.additional.publish(run, workId, actionId, args as any, signal) }; }
     if (operation.startsWith('file.') || operation==='exec') {

@@ -6,9 +6,10 @@ import { z } from 'zod';
 import { checkedPath } from './paths.js';
 import { operationSchema, type ExecutionBackend, type ExecutionRequest, type ExecutionResult } from './backend.js';
 
-export interface ContainerConfig { binary: string; image: string; host: string; scope: string }
+export interface ContainerConfig { binary: string; image: string; host: string; scope: string;network?:'none'|'bridge'|undefined }
 export class ContainerBackend implements ExecutionBackend {
   constructor(private config: ContainerConfig) {
+    z.enum(['none','bridge']).parse(config.network??'none');
     z.string().startsWith('/').parse(config.binary);
     z.string().regex(/^sha256:[a-f0-9]{64}$/).parse(config.image);
     z.string().startsWith('unix:///').parse(config.host);
@@ -44,6 +45,7 @@ export class ContainerBackend implements ExecutionBackend {
     });
   }
   async execute(request: ExecutionRequest, signal?: AbortSignal): Promise<ExecutionResult> {
+    z.literal('none').optional().parse(request.network);
     const op = operationSchema.parse(request.operation);
     if (op.kind !== 'exec') throw new Error('Container backend accepts exec only');
     z.number().int().min(1).max(300000).parse(request.timeoutMs);
@@ -52,7 +54,7 @@ export class ContainerBackend implements ExecutionBackend {
     const deadline = Date.now() + request.timeoutMs;
     let result: ExecutionResult | undefined, failure: unknown;
     try {
-      const create = await this.command(['create', '--name', name, '--pull', 'never', '--network', 'none', '--read-only', '--log-driver', 'none', '--cap-drop', 'ALL',
+      const create = await this.command(['create', '--name', name, '--pull', 'never', '--network',request.network??this.config.network??'none', '--read-only', '--log-driver', 'none', '--cap-drop', 'ALL',
         '--security-opt', 'no-new-privileges', '--pids-limit', '64', '--memory', '512m', '--cpus', '1',
         '--user', `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`, '--tmpfs', '/tmp:rw,nosuid,nodev,size=67108864',
         '--mount', `type=bind,src=${root},dst=/workspace`, '--workdir', `/workspace/${relative(root, cwd)}`,

@@ -65,7 +65,7 @@ A–G 历史检查与独立红队记录保留；当前检查结果见 `docs/ACCE
 | R2 注意力与呈现 | Attention.peek/read/defer/resolve，watch/mute，分页coverage/viewToken，Pi运行中notice与ACK | R1 | 新消息在断点可见但不强制读正文；结束run不清未读；分页/编辑/晚到/崩溃不错误推进seen；跨频道可暂缓/转向 | PASS，review_r2，95 tests |
 | R3 提交门控 | FreshnessGate、draft生命周期、发送前再检查、有限知情继续、全输入路径review seat隔离 | R2 | 调研表全部相关竞态；变更hold/重启草稿/四选项/热频道活性/盲审不泄漏/Slack竞态显式记录；不启用命令审查 | PASS，R3a/R3b |
 | R4 消息任务 | canonical message claim、unclaim/transfer、状态投影、可选dependency；接R3任务门控 | R3 | 同一消息并发转换/认领唯一；hold无副作用；任务版本冲突；可直接协作或用任务，无强制总管/任务树；人类可见状态 | PASS，review_r4，115 tests |
-| R5 工具与workspace | ToolEnvironment注册/描述/执行adapter；私有workspace完整文件能力；可配置联网与工具链、附件输入输出 | R4 | 合成资料检索/脚本/文件组织/发布全链；不依赖外部私密凭证；真实backend停止/崩溃隔离；其他Agent私有空间不可访问 | R5a PASS；R5b待实施 |
+| R5 工具与workspace | ToolEnvironment注册/描述/执行adapter；私有workspace完整文件能力；可配置联网与工具链、附件输入输出 | R4 | 合成资料检索/脚本/文件组织/发布全链；不依赖外部私密凭证；真实backend停止/崩溃隔离；其他Agent私有空间不可访问 | PASS，R5a/R5b1/R5b2 |
 | R6 作者拥有的提醒 | Reminder内容/锚点/版本/改期/取消/日志；独立于已完成task，绑定持续预算策略 | R5 | 完成任务后提醒仍触发本人；可见回执不乱唤醒；取消与已入队区分；catch-up去重；旧schedule显式迁移 | 未开始 |
 | R7 session演进与prompt | 逻辑身份/current session、检查点/重置/配置迁移、压缩后memory刷新、完整行为约定 | R6 | 角色更新/换session保持身份/未读/任务/提醒/草稿；旧view失效；memory内容自由；不可恢复窗口如实说明 | 未开始 |
 | R8 产品语义验收 | 合成多Agent场景与故障矩阵、README/current behavior重写 | R7 | 覆盖多种合法选择而非固定合作剧本；真实Slack/provider仅协议接线；独立审查对照Raft原意及用户修正逐项判定 | 未开始 |
@@ -107,3 +107,7 @@ R5a实现已通过独立审核：ToolEnvironment可信adapter注册/描述/执�
 R5b继续按风险边界拆成顺序gate：R5b1先把artifact.publish接入统一outbox/draft/FreshnessGate，冻结文件内容，记录上传fileId，支持unknown按Slack分享证据对账，避免附件绕过提交控制；R5b2再提供附件读取/保存及可配置网络/工具链。R5b1依赖R5a，验收hold/revise/discard/continue、排队后变更/停止、未知上传不重发、同文件证据恢复；R5b2依赖R5b1，验收可见消息附件ACL/下载URL边界/二进制文件往返、环境配置与工具发现。每个独立红队通过后才继续。
 
 R5b1 PASS，review_r5b1；普通135tests，独立全套134（最后新增截断test前）及最后相关40tests通过。详情reviews/R5b1-artifact-gating.md。artifact frozen payload进入统一outbox，上传allocation fileId与staging/sharing持久化；分享前重查，unknown按files.info分享证据对账。publication caption独立分页/ACK/seen，不伪造Slack消息ts。R5b2需消除附件echo双计数；R8需修既有outbox ready前序阻挡公平性。
+
+R5b2实现已独立审核通过：NormalMessage保留文件metadata并补齐旧同版本cache；attachments.save经消息可见性/当前Actor files.info与认证下载（拒绝URL输入与重定向），下载前后检查ACL，Broker写入最多1MB二进制文件。file.read_bytes分块/sha256、write_bytes原子写；artifact binary模式逐块一致哈希快照，草稿不暴露大块base64。environment.info展示固定镜像/network/researchHosts，owner可选none/bridge，bridge明确包括可路由本地网络；review seat强制断网。publication/Slack echo按fileId+caption+作者+target去重；有界文本/二进制限制明确，真实后端测试另记录。
+
+R5b2 PASS，review_r5b2，普通144 tests（独立全套复验相同），真实本地隔离7/7。R5整体完成。两项附件ACK/echo竞态修复记录见reviews/R5b2-attachments-environment.md；下一模块R6作者拥有的提醒。
