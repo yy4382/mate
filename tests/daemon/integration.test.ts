@@ -31,48 +31,27 @@ function setup() {
   const broker = new Broker(store, c, backend, ['/synthetic/protected']);
   cleanups.push(() => store.close()); return { store, c, ingress, broker, post, backend };
 }
-it('two Agents independently challenge and revise a result through durable tasks, visible delegation and inherited budgets', async () => {
-  const { store, c, ingress, broker, post } = setup(); const router = new ToolRouter(c, broker), target = { channel: 'CTEST', thread: '100.000001' };
-  let parent = '', child = '', evidence = '', a = 0, b = 0, counter = 0;const views:Record<string,string>={};
-  const supervisor = new Supervisor(c, router, c.config, agent => {
-    const engine = new Engine({ ...model, contextWindow: 200000 }, () => {
-      let op: string | undefined, args: any = {};
-      if (agent.id === 'research') {
-        switch (a++) {
-          case 0: op='tasks.create'; args={ target, title:'Verify draft conclusion' }; break;
-          case 1: op='tasks.claim'; args={ taskId:parent }; break;
-          case 2: op='attention.read'; args={target}; break;
-          case 3: op='tasks.delegate'; args={ taskId:parent, peerId:'writer', title:'Challenge my preliminary conclusion: 2+2=5',viewToken:views[agent.id] }; break;
-          case 4: op='tasks.wait'; args={ taskId:parent, dependencyId:child }; break;
-          case 5: op='tasks.read'; args={ taskId:child }; break;
-          case 6: op='attention.read';args={target};break;
-          case 7: op='messages.send'; args={ target, text:`Revised after peer verification: ${evidence}`,viewToken:views[agent.id] }; break;
-          case 8: op='tasks.update'; args={ taskId:parent, status:'done', result:evidence }; break;
-        }
-      } else switch (b++) {
-        case 0: op='tasks.claim'; args={ taskId:child }; break;
-        case 1:op='attention.read';args={target};break;
-        case 2: op='messages.send'; args={ target, text:'Independent check: 2+2=4; reject preliminary 5.',viewToken:views[agent.id] }; break;
-        case 3: op='tasks.update'; args={ taskId:child, status:'done', result:'2+2=4; preliminary 5 rejected.' }; break;
-      }
-      const message = op ? answer([{ type:'toolCall', id:`call-${++counter}`, name:'mate', arguments:{ operation:op, args } }], 'toolUse') : answer([{ type:'text',text:'Done privately' }]);
-      const stream = createAssistantMessageEventStream(); stream.push({ type:'done',reason:message.stopReason as 'stop'|'toolUse',message }); return stream;
-    });
-    return { close:()=>engine.abort(), run: async (spec,hooks) => engine.run(spec,{ ...hooks, tool:async (id,op,args)=> {
-      const result = await hooks.tool(id,op,args); if(op==='attention.read')views[agent.id]=(result.value as {viewToken:string}).viewToken; if(op==='tasks.create') parent=result.value as string; if(op==='tasks.delegate') child=result.value as string; if(op==='tasks.read') evidence=(result.value as {result:string}).result; return result;
-    } }) };
-  }); cleanups.unshift(()=>supervisor.close()); supervisor.register();
-  for(const agent of c.config.agents) c.messages.membership(agent.id,'CTEST',true);
-  store.ingest('AONE','human-one',{team_id:'TTEST',event:{type:'message',channel:'CTEST',ts:target.thread,user:'UOWNER',text:'<@UONE> Verify this conclusion'}}); ingress.replay('AONE','human-one');
-  await supervisor.step('research'); expect(c.task(parent).status).toBe('waiting'); expect(c.task(child).status).toBe('draft');
-  for(const row of store.db.prepare("SELECT id FROM outbox WHERE state='pending'").all() as {id:string}[]) await c.output.send(row.id);
-  c.activateDelegations(); await supervisor.step('writer'); expect(c.task(child).status).toBe('done');
-  for(const row of c.output.ready())await c.output.send(row.id);
-  await supervisor.step('research'); expect(c.task(parent).status).toBe('done');
-  for(const row of store.db.prepare("SELECT id FROM outbox WHERE state='pending'").all() as {id:string}[]) await c.output.send(row.id);
-  expect(JSON.stringify(post.mock.calls)).toContain('Revised after peer verification: 2+2=4');
-  expect(store.db.prepare('SELECT count(*) n FROM works').get()).toEqual({n:1}); expect(store.db.prepare('SELECT count(*) n FROM sessions').get()).toEqual({n:2});
-  expect(store.db.prepare("SELECT count(*) n FROM runs WHERE state='failed'").get()).toEqual({n:0});
+it('two Agents can coordinate through one canonical message and direct peer feedback without a task tree',async()=>{
+ const{store,c,ingress,broker,post}=setup(),router=new ToolRouter(c,broker),target={channel:'CTEST',thread:'100.000001'};
+ let task:any,view='',phase='claim',step=0;
+ const supervisor=new Supervisor(c,router,c.config,agent=>({close:()=>{},run:async(spec,hooks)=>{
+  step=0;const engine=new Engine({...model,contextWindow:200000},()=>{
+   let operation:string|undefined,args:any={};
+   if(step++===0){operation='attention.read';args={target};}
+   else if(step===2){
+    if(phase==='claim'){operation='tasks.claim';args={message:{channel:target.channel,ts:target.thread},expectedVersion:0,viewToken:view};}
+    else if(phase==='feedback'){operation='messages.send';args={target,text:'<@UONE> Independent evidence: 2+2=4.',viewToken:view};}
+    else{operation='tasks.update';args={taskId:task.id,expectedVersion:task.version,status:'done',result:'Verified 2+2=4',viewToken:view};}
+   }
+   const message=operation?answer([{type:'toolCall',id:`${phase}:${agent.id}:${step}`,name:'mate',arguments:{operation,args}}],'toolUse'):answer([{type:'text',text:'yield'}]);
+   const stream=createAssistantMessageEventStream();stream.push({type:'done',reason:message.stopReason as 'stop'|'toolUse',message});return stream;
+  });return engine.run(spec,{...hooks,tool:async(id,op,args)=>{const result=await hooks.tool(id,op,args);if(op==='attention.read')view=(result.value as any).viewToken;if(op==='tasks.claim')task=(result.value as any).result;return result;}});
+ }}));cleanups.unshift(()=>supervisor.close());supervisor.register();for(const agent of c.config.agents)c.messages.membership(agent.id,'CTEST',true);
+ store.ingest('AONE','root',{team_id:'TTEST',event:{type:'message',channel:'CTEST',ts:target.thread,user:'UOWNER',text:'<@UONE> Verify 2+2'}});ingress.replay('AONE','root');await supervisor.step('research');expect(task.owner).toBe('research');
+ for(const row of c.output.ready())await c.output.send(row.id);
+ phase='feedback';c.enqueue('writer',task.work_id,'peer-check',{target});await supervisor.step('writer');for(const row of c.output.ready())await c.output.send(row.id);
+ phase='finish';await supervisor.step('research');expect(c.task(task.id).status).toBe('done');for(const row of c.output.ready())await c.output.send(row.id);
+ expect(c.list('research')).toHaveLength(1);expect(c.task(task.id).message_key).toBe(JSON.stringify(['TTEST','CTEST',target.thread]));expect(JSON.stringify(post.mock.calls)).toContain('Independent evidence');expect(store.db.prepare("SELECT count(*) n FROM runs WHERE state='failed'").get()).toEqual({n:0});
 });
 it('peer messages can wake an Agent using its existing finite account without a human budget root', async () => {
   const {store,c,ingress}=setup(); for(const agent of c.config.agents){store.register(agent.id,'v1',[]);c.messages.membership(agent.id,'CTEST',true);}

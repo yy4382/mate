@@ -65,8 +65,8 @@ it('v7 upgrade makes a private consistent backup and retains old targets and mes
     const m=new Messages(initial,configFixture); m.membership('research','CTEST',true);
     m.record({team:'TTEST',channel:'CTEST',ts:'100.000001',thread:'100.000001',revision:'100.000001',text:'legacy synthetic',user:'UOWNER',deleted:false},['research']);
     const output=new Output(m,{post:async()=>({ts:'101.000001'})}); output.queue('research',{channel:'CTEST',thread:'100.000001'},'legacy reply','legacy');
-    initial.db.exec('DROP TABLE review_seats; DROP TABLE drafts; DROP TABLE attention_presented; DROP TABLE attention_views; DROP TABLE attention_seen; DROP TABLE attention_state; DROP TABLE channel_watches; ALTER TABLE sessions DROP COLUMN context_epoch; DROP TABLE budget_runs; DROP TABLE budget_accounts; DROP TABLE run_context; DROP TABLE delivery_context; DROP TABLE conversation_events; PRAGMA user_version=7'); initial.close();
-    const migrated=new Store(path); expect(migrated.db.pragma('user_version',{simple:true})).toBe(12);
+    initial.db.exec('DROP TABLE task_projections; DROP TABLE task_intents; DROP INDEX canonical_message_task; ALTER TABLE tasks DROP COLUMN message_key; DROP TABLE review_seats; DROP TABLE drafts; DROP TABLE attention_presented; DROP TABLE attention_views; DROP TABLE attention_seen; DROP TABLE attention_state; DROP TABLE channel_watches; ALTER TABLE sessions DROP COLUMN context_epoch; DROP TABLE budget_runs; DROP TABLE budget_accounts; DROP TABLE run_context; DROP TABLE delivery_context; DROP TABLE conversation_events; PRAGMA user_version=7'); initial.close();
+    const migrated=new Store(path); expect(migrated.db.pragma('user_version',{simple:true})).toBe(13);
     expect(migrated.db.prepare('SELECT thread FROM conversation_events').get()).toEqual({thread:'100.000001'});
     expect(JSON.parse(migrated.output('legacy')!.request).target).toEqual({channel:'CTEST',thread:'100.000001'}); migrated.close();
     const backups=readdirSync(dir).filter(p=>p.includes('.pre-v8-')); expect(backups).toHaveLength(1);

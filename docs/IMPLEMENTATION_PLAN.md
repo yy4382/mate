@@ -64,7 +64,7 @@ A–G 历史检查与独立红队记录保留；当前检查结果见 `docs/ACCE
 | R1 身份/消息/预算基础 | Conversation的channel/thread/dm与revision；Agent/run/预算账户/任务引用分离；显式账户归属与授权 | R0 | 顶层发言、主动DM、同Agent跨事项读取和切换；有限持续账户支持非human触发；不可借切换重置预算；旧work与target迁移回归 | PASS，R1a/R1b |
 | R2 注意力与呈现 | Attention.peek/read/defer/resolve，watch/mute，分页coverage/viewToken，Pi运行中notice与ACK | R1 | 新消息在断点可见但不强制读正文；结束run不清未读；分页/编辑/晚到/崩溃不错误推进seen；跨频道可暂缓/转向 | PASS，review_r2，95 tests |
 | R3 提交门控 | FreshnessGate、draft生命周期、发送前再检查、有限知情继续、全输入路径review seat隔离 | R2 | 调研表全部相关竞态；变更hold/重启草稿/四选项/热频道活性/盲审不泄漏/Slack竞态显式记录；不启用命令审查 | PASS，R3a/R3b |
-| R4 消息任务 | canonical message claim、unclaim/transfer、状态投影、可选dependency；接R3任务门控 | R3 | 同一消息并发转换/认领唯一；hold无副作用；任务版本冲突；可直接协作或用任务，无强制总管/任务树；人类可见状态 | 实施中 |
+| R4 消息任务 | canonical message claim、unclaim/transfer、状态投影、可选dependency；接R3任务门控 | R3 | 同一消息并发转换/认领唯一；hold无副作用；任务版本冲突；可直接协作或用任务，无强制总管/任务树；人类可见状态 | PASS，review_r4，115 tests |
 | R5 工具与workspace | ToolEnvironment注册/描述/执行adapter；私有workspace完整文件能力；可配置联网与工具链、附件输入输出 | R4 | 合成资料检索/脚本/文件组织/发布全链；不依赖外部私密凭证；真实backend停止/崩溃隔离；其他Agent私有空间不可访问 | 未开始 |
 | R6 作者拥有的提醒 | Reminder内容/锚点/版本/改期/取消/日志；独立于已完成task，绑定持续预算策略 | R5 | 完成任务后提醒仍触发本人；可见回执不乱唤醒；取消与已入队区分；catch-up去重；旧schedule显式迁移 | 未开始 |
 | R7 session演进与prompt | 逻辑身份/current session、检查点/重置/配置迁移、压缩后memory刷新、完整行为约定 | R6 | 角色更新/换session保持身份/未读/任务/提醒/草稿；旧view失效；memory内容自由；不可恢复窗口如实说明 | 未开始 |
@@ -97,3 +97,7 @@ R3b实现约定：owner `/team review-seat AGENT_ID {"target":...,"brief":"..."}
 R3b边界补充：生产私有workspace当前仍只有read/write grants，独立seat脚本exec的实际授权随R5统一workspace工具恢复；R3b不以工具白名单含exec声称已可计算。seat持久user输入timestamp固定0，不暴露被隔离delivery的时间线。
 
 R3b状态PASS，review_r3b，107 tests。R4开始实施：原始message唯一锚点、任务CAS claim/unclaim/transfer/update，任务held intent与消息draft分离；新任务先发可见消息再激活投影；任务提交通过门控后发布由harness生成的固定状态通知，通知不作为模型意见再次接受freshness判断。历史无原始消息映射的任务保留legacy标记，不猜测将多个旧task合并成同一Slack消息。
+
+R4实现接口：tasks.byMessage/claim(message|taskId,expectedVersion,viewToken)/unclaim/transfer/update；tasks.intents/retry/continue/discard管理持久held intent。门控hold不创建canonical task、不改owner；通过后同事务唯一message_key与version/owner CAS。tasks.create生成draft消息，confirmed后activate才绑定message_key并唤醒创建者；未确认不可claim。固定状态通知包含task/source/owner/version，仅在提交成功后由harness生成，不是自由文本freshness绕过入口。legacy=1表示旧库没有可证明原始消息锚点，不自动猜测或合并；新消息认领总走唯一索引。wait支持跨事项可见依赖，醒回waiter自身事项。
+
+R5拆为两个顺序独立gate：R5a工具注册/发现、私有workspace执行授权及结构化文件操作（目录/查找/编辑/移动/删除），保留backend停止与隔离验证；R5b配置环境网络/工具链、资料与Slack附件输入输出、artifact提交门控。接口分别为ToolEnvironment+Broker/ExecutionBackend，以及环境/附件adapters+durable publication。R5a依赖R4，R5b依赖R5a；真实本地隔离检查和独立红队通过后才继续。

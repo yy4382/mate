@@ -109,3 +109,11 @@ export const reviewSeatSchema = `
 CREATE TABLE review_seats(agent_id TEXT PRIMARY KEY REFERENCES agents(id),target TEXT NOT NULL,brief TEXT NOT NULL,workspace TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1);
 PRAGMA user_version=12;
 `;
+
+export const messageTaskSchema = `
+ALTER TABLE tasks ADD COLUMN message_key TEXT REFERENCES messages(key);
+CREATE UNIQUE INDEX canonical_message_task ON tasks(message_key) WHERE message_key IS NOT NULL;
+CREATE TABLE task_intents(id TEXT PRIMARY KEY,agent_id TEXT NOT NULL,work_id TEXT NOT NULL,operation TEXT NOT NULL,args TEXT NOT NULL,target TEXT NOT NULL,state TEXT NOT NULL,hold_id TEXT,receipt TEXT);
+CREATE TABLE task_projections(output_id TEXT PRIMARY KEY REFERENCES outbox(id),task_id TEXT NOT NULL REFERENCES tasks(id),version INTEGER NOT NULL);
+PRAGMA user_version=13;
+`;

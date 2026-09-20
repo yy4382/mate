@@ -59,7 +59,7 @@ it('local tools use immutable receipts and can claim another visible activity', 
   const created = await router.call(run, work, 'create', 'tasks.create', { target, title: 'one' }, signal);
   expect(await router.call(run, work, 'create', 'tasks.create', { target, title: 'one' }, signal)).toEqual(created); expect(c.list('research')).toHaveLength(1);
   const other = c.createWork('human:other', target), task = c.createTask('research', other, target, 'other');
-  await router.call(run, work, 'claim', 'tasks.claim', { taskId: task }, signal); expect(c.task(task).owner).toBe('research');
+  const held=(await router.call(run,work,'claim','tasks.claim',{taskId:task,expectedVersion:0},signal)).value as any; expect(c.task(task).owner).toBeNull(); await router.call(run,work,'continue-claim','tasks.continue',{intentId:held.intentId,holdId:held.holdId,acknowledge:'apply_despite_unread_or_changes'},signal);expect(c.task(task).owner).toBe('research');
   await expect(router.call(run, work, 'spoof', 'messages.send', { target, text: 'hi', agentId: 'writer' }, signal)).rejects.toThrow();
 });
 it('recovery is bounded even with large task results; memory callback is injected and hashed', async () => {
