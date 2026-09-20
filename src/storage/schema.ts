@@ -40,3 +40,9 @@ CREATE TABLE task_events(id INTEGER PRIMARY KEY, task_id TEXT NOT NULL REFERENCE
 CREATE TABLE schedules(id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agents(id), work_id TEXT NOT NULL REFERENCES works(id), task_id TEXT REFERENCES tasks(id), target TEXT NOT NULL, next_at INTEGER NOT NULL, cron TEXT, timezone TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1);
 PRAGMA user_version=3;
 `;
+export const policySchema = `
+CREATE TABLE grants(id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agents(id), work_id TEXT NOT NULL REFERENCES works(id), root TEXT NOT NULL, operations TEXT NOT NULL, expires INTEGER NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, exec_allowlist TEXT NOT NULL DEFAULT '[]');
+CREATE TABLE approvals(id TEXT PRIMARY KEY REFERENCES actions(id), agent_id TEXT NOT NULL REFERENCES agents(id), work_id TEXT NOT NULL REFERENCES works(id), run_id TEXT NOT NULL REFERENCES runs(id), grant_id TEXT NOT NULL REFERENCES grants(id), request_hash TEXT NOT NULL, expires INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending', decision_by TEXT, policy_version TEXT NOT NULL, classification TEXT);
+CREATE TABLE blocked_runs(run_id TEXT PRIMARY KEY REFERENCES runs(id));
+PRAGMA user_version=4;
+`;
