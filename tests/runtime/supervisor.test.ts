@@ -191,3 +191,64 @@ it('prototype-named registered adapters still obey stopped work',async()=>{
  store.db.prepare("UPDATE works SET state='paused' WHERE id=?").run(work);
  await expect(router.call(run,work,'stopped-adapter','tools.call',{name:'constructor',input:{}},new AbortController().signal)).rejects.toThrow();expect(called).toBe(0);
 });
+
+it('model context replacement waits for run completion and retains durable identity and debt',async()=>{
+ let created=0,closed=0,first=true;let restored='';
+ const{store,collaboration:c,work,supervisor,router}=setup(()=>{created++;return{close:()=>{closed++;},run:async(spec,hooks)=>{
+  if(first){first=false;expect((await hooks.tool('reset','sessions.reset',{text:'Continue independent research; inspect unknown receipts.'})).wait).toBe(true);}
+  else restored=JSON.stringify(spec.messages);
+  return{tokens:12,cost:0.01,certain:true,waiting:true,continuation:false};
+ }};});
+ const before=(router.sessions.status('research') as any).session,peer=(router.sessions.status('writer') as any).session;
+ const task=c.createTask('research',work,{channel:'CTEST'},'durable task');
+ const reminder=c.reminders.create('research',work,{target:{channel:'CTEST'},content:'later',nextAt:Date.now()+100000,timezone:'UTC'});
+ c.enqueue('research',work,'reset-one',{});await supervisor.step('research');
+ expect((router.sessions.status('research') as any).session).not.toBe(before);expect((router.sessions.status('writer') as any).session).toBe(peer);
+ expect(c.task(task).title).toBe('durable task');expect(c.reminders.read('research',reminder.id)).toBeDefined();
+ expect(c.ledger.account('research').tokens).toBe(12);expect(closed).toBe(1);
+ await supervisor.step('research');expect(created).toBe(2);expect(restored).toContain('Continue independent research');
+ expect(c.ledger.account('research').tokens).toBe(24);expect(store.db.prepare('SELECT count(*) n FROM session_resets').get()).toEqual({n:1});
+});
+it('crash recovery applies a requested reset exactly once without erasing unknown actions or bypassing paused work',async()=>{
+ const{store,collaboration:c,work,supervisor,router}=setup();c.enqueue('research',work,'reset-crash',{});
+ const run=store.beginRun('research')!;store.input(run,{});c.reserve(run,work,123,0.1);
+ store.prepareAction(run,'uncertain',{synthetic:true});store.startAction(run,'uncertain');
+ const reply=await router.call(run,work,'reset','sessions.reset',{text:'recover carefully'},new AbortController().signal);expect(reply.wait).toBe(true);
+ expect(router.sessions.apply('research')).toBe(false);
+ store.db.prepare("UPDATE works SET state='paused' WHERE id=?").run(work);store.recover();supervisor.recoverSessions();
+ const session=(router.sessions.status('research') as any).session;supervisor.recoverSessions();
+ expect((router.sessions.status('research') as any).session).toBe(session);expect(session).not.toBe(run.sessionId);
+ expect(store.action('uncertain')?.state).toBe('unknown');expect(c.ledger.account('research').tokens).toBe(123);
+ expect(store.beginRun('research',Date.now(),true)).toBeUndefined();
+ expect(store.db.prepare("SELECT count(*) n FROM deliveries WHERE dedupe LIKE 'session-reset:%'").get()).toEqual({n:1});
+});
+it('owner reset is owner-only, invalidates old views and leaves the Agent paused',async()=>{
+ const{Controls}=await import('../../src/daemon/control.js');const{store,collaboration:c,work,supervisor,router}=setup();
+ const controls=new Controls(c,supervisor,router.broker);c.enqueue('research',work,'owner-reset',{});const run=store.beginRun('research')!;store.input(run,{});
+ const epoch=(store.db.prepare('SELECT context_epoch FROM sessions WHERE id=?').get(run.sessionId) as any).context_epoch;
+ await expect(router.call(run,work,'spoof-reset','sessions.reset',{text:'x',agentId:'writer'},new AbortController().signal)).rejects.toThrow();
+ expect(()=>controls.execute('UTWO','agent-reset research checkpoint')).toThrow('Owner');
+ expect(controls.execute('UOWNER','agent-reset research keep going')).toContain('paused');
+ expect(store.beginRun('research')).toBeUndefined();
+ expect((store.db.prepare('SELECT context_epoch FROM sessions WHERE id=?').get(run.sessionId) as any).context_epoch).toBeGreaterThan(epoch);
+ expect(JSON.stringify(store.context((router.sessions.status('research') as any).session))).toContain('keep going');
+});
+it('new contexts can discover and inspect their own old uncertain execution without replay or peer leakage',async()=>{
+ const{store,collaboration:c,work,router,supervisor}=setup();c.enqueue('research',work,'receipt-reset',{});const old=store.beginRun('research')!;store.input(old,{});
+ store.prepareAction(old,'OLD-EXEC',{workId:work,operation:{kind:'exec',command:'synthetic-command'},root:'/private'});store.startAction(old,'OLD-EXEC');
+ await router.call(old,work,'reset','sessions.reset',{text:'continue'},new AbortController().signal);store.recover();supervisor.recoverSessions();const next=store.beginRun('research',Date.now(),true)!;store.input(next,{});
+ const signal=new AbortController().signal;const list=await router.call(next,work,'list','actions.list',{},signal);expect(JSON.stringify(list)).toContain('OLD-EXEC');expect(JSON.stringify(list)).not.toContain('synthetic-command');
+ const read=await router.call(next,work,'read','actions.read',{actionId:'OLD-EXEC'},signal);expect(read.value).toMatchObject({state:'unknown',request:{operation:{command:'synthetic-command'}}});
+ c.enqueue('writer',work,'other',{});const peer=store.beginRun('writer')!;store.input(peer,{});
+ await expect(router.call(peer,work,'read','actions.read',{actionId:'OLD-EXEC'},signal)).rejects.toThrow('own action');
+ c.messages.membership('research','CTEST',false);await expect(router.call(next,work,'read2','actions.read',{actionId:'OLD-EXEC'},signal)).rejects.toThrow('access');
+});
+it('historical non-execution receipts cannot bypass current object ACL through indirect references',async()=>{
+ const{store,collaboration:c,work,router}=setup();c.enqueue('research',work,'historical-acl',{});const run=store.beginRun('research')!;store.input(run,{});
+ const reminder=c.reminders.create('research',work,{target:{channel:'CTWO'},content:'WITHHELD_HISTORY',nextAt:Date.now()+10000,timezone:'UTC'});
+ const signal=new AbortController().signal;await router.call(run,work,'cancel-history','reminders.cancel',{reminderId:reminder.id,expectedVersion:1},signal);
+ c.messages.membership('research','CTWO',false);
+ await expect(router.call(run,work,'read-reminder','reminders.read',{reminderId:reminder.id},signal)).rejects.toThrow('access');
+ const result=await router.call(run,work,'read-history','actions.read',{actionId:run.sessionId+':cancel-history'},signal);
+ expect(JSON.stringify(result)).not.toContain('WITHHELD_HISTORY');expect(JSON.stringify(result)).toContain('receiptUnavailable');
+});

@@ -115,7 +115,7 @@ export class Daemon {
     if (this.stopping) return;
     const models = builtinModels();
     for (const agent of this.config.mate.agents) { requireSecret(process.env, agent.appTokenEnv); requireSecret(process.env, agent.model.apiKeyEnv); if (!models.getModel(agent.model.provider, agent.model.id)) throw new Error(`Unknown provider/model for ${agent.id}`); }
-    await this.container?.recover(); if (this.stopping) return; this.store.recover();
+    await this.container?.recover(); if (this.stopping) return; this.store.recover(); this.supervisor.recoverSessions();
     await this.slack.verify(); if (this.stopping) return;
     await this.slack.membership(); if (this.stopping) return;
     await this.slack.catchUp(); if (this.stopping) return;

@@ -1,3 +1,5 @@
+import { SessionLifecycle } from './sessions.js';
+import { buildBaseline } from './prompt.js';
 import { ToolEnvironment } from './environment.js';
 import { operationSchema } from '../execution/backend.js';
 import { MessageTasks } from '../coordination/messages.js';
@@ -15,6 +17,11 @@ const reminderInput={target:targetSchema,content:z.string().min(1).max(12000),ne
 const fileSchemas = Object.fromEntries(operationSchema.options.filter(schema=>schema.shape.kind.value!=='exec').map(schema=>[`file.${schema.shape.kind.value}`,(schema as z.ZodObject).omit({kind:true}).extend({grantId:id})]));
 const schemas: Record<string,z.ZodType> = {
   ...fileSchemas,
+  'actions.list':z.object({before:z.number().int().positive().optional()}).strict(),
+  'actions.read':z.object({actionId:id}).strict(),
+  'sessions.status':z.object({}).strict(),
+  'sessions.checkpoint':z.object({text:z.string().min(1).max(20000)}).strict(),
+  'sessions.reset':z.object({text:z.string().min(1).max(20000)}).strict(),
   'reminders.list':z.object({before:z.number().int().positive().optional()}).strict(),
   'reminders.read':z.object({reminderId:id}).strict(),
   'reminders.log':z.object({reminderId:id,before:z.number().int().positive().optional()}).strict(),
@@ -77,7 +84,7 @@ export interface AdditionalTools {
   publish(run: RunToken, workId: string, actionId: string, args: import('../daemon/artifacts.js').PublishArgs, signal: AbortSignal): Promise<unknown>;
 }
 type ToolContext={run:RunToken;workId:string;callId:string;signal:AbortSignal};
-const seatOperations=['environment.info','agents','budget.read','attention.peek','messages.send','drafts.list','drafts.read','drafts.retry','drafts.continue','drafts.revise','drafts.discard',...Object.keys(fileSchemas),'exec'];
+const seatOperations=['actions.list','actions.read','sessions.status','sessions.checkpoint','sessions.reset','environment.info','agents','budget.read','attention.peek','messages.send','drafts.list','drafts.read','drafts.retry','drafts.continue','drafts.revise','drafts.discard',...Object.keys(fileSchemas),'exec'];
 const capabilityDescriptions:Record<string,string>={
  'file.read_bytes':'Read up to 32 KiB binary bytes at an offset, returning base64, file size and full SHA256. Files up to 1 MB.',
  'file.write_bytes':'Atomically write canonical base64 bytes, decoded size up to 1 MB, in the granted workspace.',
@@ -99,7 +106,8 @@ export class ToolRouter {
   readonly environment=new ToolEnvironment<ToolContext,ToolReply>();
   readonly gate:FreshnessGate;
   readonly coordination:MessageTasks;
-  constructor(readonly collaboration: Collaboration, readonly broker: Broker, readonly additional?: AdditionalTools, readonly directory?: Directory, readonly provision?: (actor:string,workId:string)=>void) {this.coordination=new MessageTasks(collaboration);this.gate=new FreshnessGate(collaboration.messages,collaboration.attention);collaboration.output.gate=this.gate;
+  readonly sessions:SessionLifecycle;
+  constructor(readonly collaboration: Collaboration, readonly broker: Broker, readonly additional?: AdditionalTools, readonly directory?: Directory, readonly provision?: (actor:string,workId:string)=>void) {this.sessions=new SessionLifecycle(collaboration,agent=>buildBaseline(agent,operationDocumentation));this.coordination=new MessageTasks(collaboration);this.gate=new FreshnessGate(collaboration.messages,collaboration.attention);collaboration.output.gate=this.gate;
     for(const [name,schema]of Object.entries(schemas))this.environment.register({name,schema,description:capabilityDescriptions[name]??`Mate ${name} capability; current actor, work, grants and submission gates apply.`,execute:(context,input)=>this.dispatch(context.run,context.workId,context.callId,name,input,context.signal)});
   }
   async call(run: RunToken, workId: string, callId: string, operation: string, input: unknown, signal: AbortSignal): Promise<ToolReply> {
@@ -120,7 +128,7 @@ export class ToolRouter {
     if (!Object.hasOwn(schemas,operation)) throw new Error('Unknown operation');
     // Parsing is deliberately repeated in the daemon, independently of model-side tool validation.
     const args = schemas[operation]!.parse(input) as Record<string, any>;
-    const readOnly = ['reminders.list','reminders.read','reminders.log','environment.info','tasks.byMessage','tasks.intents','drafts.list','drafts.read','attention.peek','attention.read','attention.resolve','attention.defer','attention.mute','agents','works.list','budget.read','tasks.read','tasks.list','messages.read','messages.recent','messages.search','schedules.list','inbox.list','inbox.read','conversations.list','conversations.members'];
+    const readOnly = ['actions.list','actions.read','sessions.status','reminders.list','reminders.read','reminders.log','environment.info','tasks.byMessage','tasks.intents','drafts.list','drafts.read','attention.peek','attention.read','attention.resolve','attention.defer','attention.mute','agents','works.list','budget.read','tasks.read','tasks.list','messages.read','messages.recent','messages.search','schedules.list','inbox.list','inbox.read','conversations.list','conversations.members'];
     if (!readOnly.includes(operation) && operation !== 'works.select') c.assertActionWork(run, args.taskId ? c.task(args.taskId).work_id : workId);
     if(args.reminderId)c.reminders.read(actor,args.reminderId);
     if(args.scheduleId)c.reminders.read(actor,args.scheduleId);
@@ -147,7 +155,7 @@ export class ToolRouter {
       const existing = s.prepareAction(run, actionId, operation === 'works.select' ? { operation, args } : { workId, operation, args });
       if(args.intentId)this.coordination.describe(actor,args.intentId);
       if(args.draftId)this.gate.describe(actor,args.draftId);
-      const refresh = ['reminders.list','reminders.read','reminders.log','tasks.byMessage','tasks.intents','drafts.list','drafts.read','attention.peek','budget.read','works.list','tasks.list','messages.search','schedules.list','inbox.list'].includes(operation);
+      const refresh = ['actions.list','actions.read','sessions.status','reminders.list','reminders.read','reminders.log','tasks.byMessage','tasks.intents','drafts.list','drafts.read','attention.peek','budget.read','works.list','tasks.list','messages.search','schedules.list','inbox.list'].includes(operation);
       if (existing.state === 'succeeded' && !refresh) return JSON.parse(existing.receipt!) as ToolReply;
       if(existing.state==='succeeded' && refresh){s.db.prepare("UPDATE actions SET state='prepared',run_id=? WHERE id=?").run(run.id,actionId);existing.state='prepared';}
       if (existing.state !== 'prepared') throw new Error('Uncertain tool action');
@@ -155,6 +163,27 @@ export class ToolRouter {
       if (args.taskId) c.messages.requireAccess(actor, JSON.parse(c.task(args.taskId).target).channel);
       let value: unknown = null, wait = false;
       switch (operation) {
+        case 'actions.list':{
+          const items=s.db.prepare("SELECT rowid cursor,id,state,CASE WHEN json_type(request,'$.operation')='object' THEN json_extract(request,'$.operation.kind') ELSE json_extract(request,'$.operation') END operation FROM actions WHERE agent_id=? AND rowid<? ORDER BY rowid DESC LIMIT 100").all(actor,args.before??Number.MAX_SAFE_INTEGER);
+          value={items,nextCursor:items.length===100?(items.at(-1) as any).cursor:null};break;
+        }
+        case 'actions.read':{
+          const row=s.db.prepare('SELECT * FROM actions WHERE id=? AND agent_id=?').get(args.actionId,actor) as {request:string;receipt:string|null}|undefined;
+          if(!row)throw new Error('Unknown own action');const request=JSON.parse(row.request);
+          // Old read results may contain subsequently revoked conversation bodies.
+          // Re-read those through their current ACL-aware capability instead.
+          if(typeof request.operation!=='object'||request.operation===null){
+            value={id:args.actionId,state:(row as any).state,operation:request.operation,receiptUnavailable:'Use the current read capability; historical read bodies are not replayed.'};break;
+          }
+          const target=request.args?.target??request.target;
+          if(target?.channel)c.messages.requireAccess(actor,target.channel);
+          if(request.args?.taskId)c.messages.requireAccess(actor,JSON.parse(c.task(request.args.taskId).target).channel);
+          if(request.workId)c.messages.requireAccess(actor,JSON.parse(c.work(request.workId).target).channel);
+          value={...row,request,receipt:row.receipt?JSON.parse(row.receipt):null};break;
+        }
+        case 'sessions.status':value=this.sessions.status(actor);break;
+        case 'sessions.checkpoint':value=this.sessions.checkpoint(actor,args.text);break;
+        case 'sessions.reset':value=this.sessions.request(run,workId,actionId,args.text);wait=true;break;
         case 'reminders.list':{const items=c.reminders.list(actor,args.before);value={items,nextCursor:items.length===100?items.at(-1)!.cursor:null};break;}
         case 'reminders.read':value=c.reminders.read(actor,args.reminderId);break;
         case 'reminders.log':value=c.reminders.log(actor,args.reminderId,args.before);break;

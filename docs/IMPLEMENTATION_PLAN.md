@@ -115,3 +115,7 @@ R5b2 PASS，review_r5b2，普通144 tests（独立全套复验相同），真实
 R6具体接口/迁移约定：reminders.create/read/list/edit/cancel/log管理作者自己的content、target、可选消息anchor/task引用和version；旧schedules工具保留兼容入口，写操作接同一版本检查。v14保留原schedule ID/active/nextAt，补legacy内容标记和事件日志，不擅自重启历史已取消提醒。任务完成不改变提醒；显式事项pause/cancel仍控制其提醒，所有触发计入持续Agent账户并保留事项上限，不补预算。触发原子写delivery+firing日志+固定可见回执（不发布模型撰写的提醒正文），只唤醒作者；漏过多次cron合并一次再推进到未来。取消默认只取消未来，可显式撤回尚未注入的pending触发，已注入的run单独报告，不伪称撤回。验证任务完成后触发、版本冲突、其他作者拒绝、取消/注入竞态、重启去重、预算/ACL/owner停止和v13迁移。
 
 R6 PASS，review_r6；普通156tests，独立全套相同及额外2项边界通过。初审发现批次LIMIT前未过滤不可触发提醒的饥饿，已修复并覆盖ACL/Agent预算/work预算。详情reviews/R6-author-reminders.md。
+
+R7拆为顺序独立gate：R7a检查点与受控session更换（模型sessions.checkpoint/reset/status、owner reset；请求在run结束或重启恢复后应用，持久身份/任务/提醒/草稿/预算不变，旧view失效，工作继续受pause/cancel约束）；R7b离线显式配置/工具prompt迁移（单实例锁、备份、旧身份核验、运行环境授权差异处理，不删库重建）；R7c完整自主行为prompt及压缩后memory/checkpoint刷新。各自检查及独立红队通过后推进；R8最后重写current docs并做产品语义验收。R7a验证中断窗口、重复reset不重复轮换、恢复未知动作债务、跨会话私有身份和事项控制；R7b验证失败不部分启用配置；R7c验证新恢复内容真正进入下一次模型输入，不评价模型质量。
+
+R7a PASS，review_r7a，正式161 tests；补齐跨session自身执行回执查询，并修复历史非执行回执的间接ACL旁路。详情reviews/R7a-session-lifecycle.md。R7b采用离线显式OLD_CONFIG/NEW_CONFIG/BACKUP命令；身份不重绑定，完整配置快照用于后续核验，旧库无身份快照时需明确声明旧配置可信；保留history并更新baseline，保留撤销授权/预算/unknown，变更事务失败可恢复旧配置。

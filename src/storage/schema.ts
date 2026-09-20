@@ -130,3 +130,10 @@ UPDATE schedules SET anchor=(SELECT json_object('channel',json_extract(t.message
 INSERT INTO reminder_events(reminder_id,version,kind,at,payload) SELECT id,version,'legacy_migrated',CAST(strftime('%s','now') AS INTEGER)*1000,json_object('active',active,'contentInferred',1) FROM schedules;
 PRAGMA user_version=14;
 `;
+
+export const sessionLifecycleSchema = `
+CREATE TABLE agent_checkpoints(agent_id TEXT PRIMARY KEY REFERENCES agents(id),text TEXT NOT NULL,version INTEGER NOT NULL,updated_at INTEGER NOT NULL);
+CREATE TABLE session_resets(id TEXT PRIMARY KEY,agent_id TEXT NOT NULL REFERENCES agents(id),source_session TEXT NOT NULL REFERENCES sessions(id),work_id TEXT NOT NULL REFERENCES works(id),delivery_id TEXT NOT NULL REFERENCES deliveries(id),checkpoint TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN ('requested','applied','superseded')),new_session TEXT REFERENCES sessions(id));
+CREATE UNIQUE INDEX one_pending_reset ON session_resets(agent_id) WHERE state='requested';
+PRAGMA user_version=15;
+`;

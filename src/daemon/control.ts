@@ -21,6 +21,12 @@ export class Controls {
         if (!id) throw new Error('Work ID required');
         this.supervisor.stopRuns(c.control(user, id, command === 'stop' ? 'pause' : command)); return `${id}: ${c.work(id).state}`;
       }
+      case 'agent-reset': {
+        if(!id || !rest.length || rest.join(' ').length>20000)throw new Error('agent-reset AGENT_ID CHECKPOINT (1–20000 characters)');
+        c.messages.agent(id);this.supervisor.stopAgent(id);
+        const session=this.supervisor.router.sessions.resetStopped(id,rest.join(' '));
+        return `Agent ${id} context replaced (${session}); paused, explicitly agent-resume when ready`;
+      }
       case 'agent-stop': if (!id) throw new Error('Agent ID required'); this.supervisor.stopAgent(id); return `Agent ${id} paused`;
       case 'agent-resume': if (!id) throw new Error('Agent ID required'); c.messages.agent(id); s.resume(id); return `Agent ${id} resumed`;
       case 'revoke': if (!id) throw new Error('Grant ID required'); this.broker.revoke(user, id); for (const row of s.db.prepare("SELECT DISTINCT agent_id FROM actions WHERE state='executing' AND json_extract(request,'$.grantId')=?").all(id) as { agent_id: string }[]) this.supervisor.stopAgent(row.agent_id); return `Grant ${id} revoked`;
@@ -33,7 +39,7 @@ export class Controls {
         const work = c.work(id); if (work.state === 'cancelled' || runs! < work.runs || tokens! < work.tokens || dollars! < work.cost) throw new Error('Budget below usage or cancelled work');
         s.db.prepare('UPDATE works SET max_runs=?,max_tokens=?,max_cost=? WHERE id=?').run(runs!, tokens!, dollars!, id); s.audit('owner_budget', { user, id, runs, tokens, dollars }); return `Budget updated for ${id}; resume separately if paused`;
       }
-      default: return 'Commands: status; tasks; schedules; stop|resume|cancel WORK_ID; agent-stop|agent-resume AGENT_ID; revoke GRANT_ID; budget WORK_ID MAX_RUNS MAX_TOKENS MAX_USD; agent-budget AGENT_ID MAX_RUNS MAX_TOKENS MAX_USD';
+      default: return 'Commands: status; tasks; schedules; stop|resume|cancel WORK_ID; agent-stop|agent-resume AGENT_ID; agent-reset AGENT_ID CHECKPOINT; revoke GRANT_ID; budget WORK_ID MAX_RUNS MAX_TOKENS MAX_USD; agent-budget AGENT_ID MAX_RUNS MAX_TOKENS MAX_USD';
     }
   }
 }

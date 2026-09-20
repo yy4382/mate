@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { chmodSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
-import { schema, messageSchema, collaborationSchema, policySchema, runtimeSchema, daemonSchema, scopedExecutionSchema, conversationSchema, budgetSchema, attentionSchema, freshnessSchema, reviewSeatSchema, messageTaskSchema, reminderSchema } from './schema.js';
+import { schema, messageSchema, collaborationSchema, policySchema, runtimeSchema, daemonSchema, scopedExecutionSchema, conversationSchema, budgetSchema, attentionSchema, freshnessSchema, reviewSeatSchema, messageTaskSchema, reminderSchema, sessionLifecycleSchema } from './schema.js';
 
 export function encode(value: unknown): string {
   const encoded = JSON.stringify(value);
@@ -21,13 +21,13 @@ export class Store {
     this.db.pragma('foreign_keys = ON'); this.db.pragma('journal_mode = WAL');
     this.db.pragma('synchronous = FULL'); this.db.pragma('busy_timeout = 5000');
     const version = this.db.pragma('user_version', { simple: true });
-    if (Number(version) > 0 && Number(version) < 14 && path !== ':memory:') {
+    if (Number(version) > 0 && Number(version) < 15 && path !== ':memory:') {
       // SQLite creates a consistent backup before changing any legacy schema.
-      const backup = `${path}.pre-v${Number(version) < 8 ? 8 : Number(version) < 9 ? 9 : Number(version) < 10 ? 10 : Number(version) < 11 ? 11 : Number(version) < 12 ? 12 : Number(version) < 13 ? 13 : 14}-${randomUUID()}.sqlite`;
+      const backup = `${path}.pre-v${Number(version) < 8 ? 8 : Number(version) < 9 ? 9 : Number(version) < 10 ? 10 : Number(version) < 11 ? 11 : Number(version) < 12 ? 12 : Number(version) < 13 ? 13 : Number(version) < 14 ? 14 : 15}-${randomUUID()}.sqlite`;
       this.db.prepare('VACUUM INTO ?').run(backup); chmodSync(backup, 0o600);
     }
     if (version === 0) this.atomic(() => this.db.exec(schema));
-    else if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14].includes(Number(version))) { this.db.close(); throw new Error('Unsupported database version'); }
+    else if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].includes(Number(version))) { this.db.close(); throw new Error('Unsupported database version'); }
     if (Number(version) < 2) this.atomic(() => this.db.exec(messageSchema));
     if (Number(version) < 3) this.atomic(() => this.db.exec(collaborationSchema));
     if (Number(version) < 4) this.atomic(() => this.db.exec(policySchema));
@@ -45,6 +45,7 @@ export class Store {
     if(Number(version)<12)this.atomic(()=>this.db.exec(reviewSeatSchema));
     if(Number(version)<13)this.atomic(()=>this.db.exec(messageTaskSchema));
     if(Number(version)<14)this.atomic(()=>this.db.exec(reminderSchema));
+    if(Number(version)<15)this.atomic(()=>this.db.exec(sessionLifecycleSchema));
   }
   atomic<T>(fn: () => T): T { return this.db.transaction(fn).immediate(); }
   close(): void { this.db.close(); }
@@ -69,6 +70,14 @@ export class Store {
     const old = this.db.prepare('SELECT message FROM entries WHERE session_id=? AND key=?').get(sessionId, key) as { message: string } | undefined;
     if (old) { if (old.message !== body) throw new Error('Journal key reused with different message'); return; }
     this.db.prepare('INSERT INTO entries(session_id,seq,key,message) SELECT ?,COALESCE(MAX(seq),0)+1,?,? FROM entries WHERE session_id=?').run(sessionId, key, body, sessionId);
+  }
+  rotateSession(agentId:string,configVersion:string,initialMessages:unknown[],reason:string):string{
+    return this.atomic(()=>{const agent=this.db.prepare('SELECT session_id FROM agents WHERE id=?').get(agentId) as {session_id:string}|undefined;
+      if(!agent)throw new Error('Unknown Agent');if(this.db.prepare("SELECT 1 FROM runs WHERE agent_id=? AND state='active'").get(agentId))throw new Error('Session rotation requires stopped run');
+      const id=randomUUID();this.db.prepare('INSERT INTO sessions(id,agent_id,config_version) VALUES(?,?,?)').run(id,agentId,configVersion);
+      initialMessages.forEach((message,index)=>this.append(id,`initial:${index}`,message));this.db.prepare('UPDATE sessions SET context_epoch=context_epoch+1 WHERE id=?').run(agent.session_id);
+      this.db.prepare('UPDATE agents SET session_id=?,generation=generation+1 WHERE id=?').run(id,agentId);this.audit('session_rotated',{agentId,from:agent.session_id,to:id,reason});return id;
+    });
   }
   enqueue(agentId: string, dedupe: string, payload: unknown, priority = 0, now = Date.now()): string {
     return this.atomic(() => {
