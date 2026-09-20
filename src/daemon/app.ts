@@ -1,3 +1,4 @@
+import { storedConfiguration,saveConfiguration } from './migrate.js';
 import {Attachments}from './attachments.js';
 import { Directory } from '../slack/directory.js';
 import { mkdirSync, writeFileSync, existsSync, realpathSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
@@ -54,6 +55,9 @@ export class Daemon {
     let opened: Store | undefined;
     try {
       this.store = opened = new Store(join(state, 'mate.sqlite'));
+      const previous=storedConfiguration(this.store);
+      if(previous&&JSON.stringify(previous)!==JSON.stringify(config))throw new Error('Configuration changed; run explicit offline migration');
+      if(!previous&&this.store.db.prepare('SELECT 1 FROM agents').get())throw new Error('Legacy configuration requires explicit offline migration');
       const policyHash = hash(JSON.stringify(config.runtime));
       const oldPolicy = this.store.db.prepare("SELECT value FROM runtime_meta WHERE key='policy'").get() as { value: string } | undefined;
       if (oldPolicy && oldPolicy.value !== policyHash) throw new Error('Runtime policy changed; explicit policy migration required');
@@ -89,6 +93,7 @@ export class Daemon {
       const ingress = new Ingress(this.collaboration), controls = new Controls(this.collaboration, this.supervisor, this.broker, actor=>this.verifyReviewWorkspace(actor));
       this.slack = new SlackService(this.collaboration, transport, ingress, controls, () => this.stopping);
       artifacts = new Artifacts(this.collaboration, this.broker, this.slack, this.memoryRoots);
+      saveConfiguration(this.store,config);
     } catch (error) { opened?.close(); this.release(); throw error; }
   }
   private verifyReviewWorkspace(actor:string):string {

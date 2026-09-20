@@ -32,7 +32,7 @@ export class Supervisor {
     try {
       const binding = s.db.prepare('SELECT COALESCE(dc.work_id,dw.work_id) work_id FROM delivery_work dw LEFT JOIN delivery_context dc ON dc.delivery_id=dw.delivery_id WHERE dw.delivery_id=?').get(run.deliveryId) as { work_id: string } | undefined;
       if (!binding) throw new Error('Delivery has no trusted work budget');
-      const work = c.work(binding.work_id), tokenCap = Math.min(50000, Math.floor(account.max_tokens / this.config.agents.length), account.max_tokens-account.tokens, work.max_tokens - work.tokens), costCap = Math.min(2, account.max_cost-account.cost, work.max_cost - work.cost);
+      const work = c.work(binding.work_id), tokenCap = Math.min(50000, account.max_tokens-account.tokens, work.max_tokens - work.tokens), costCap = Math.min(2, account.max_cost-account.cost, work.max_cost - work.cost);
       if(work.runs>=work.max_runs || tokenCap<=0 || costCap<=0) {
         s.atomic(()=>{s.db.prepare("UPDATE works SET state='paused' WHERE id=?").run(work.id);s.db.prepare("UPDATE runs SET state='failed',error='Work budget exhausted' WHERE id=?").run(run.id);});
         return true;

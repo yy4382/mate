@@ -119,3 +119,5 @@ R6 PASS，review_r6；普通156tests，独立全套相同及额外2项边界通�
 R7拆为顺序独立gate：R7a检查点与受控session更换（模型sessions.checkpoint/reset/status、owner reset；请求在run结束或重启恢复后应用，持久身份/任务/提醒/草稿/预算不变，旧view失效，工作继续受pause/cancel约束）；R7b离线显式配置/工具prompt迁移（单实例锁、备份、旧身份核验、运行环境授权差异处理，不删库重建）；R7c完整自主行为prompt及压缩后memory/checkpoint刷新。各自检查及独立红队通过后推进；R8最后重写current docs并做产品语义验收。R7a验证中断窗口、重复reset不重复轮换、恢复未知动作债务、跨会话私有身份和事项控制；R7b验证失败不部分启用配置；R7c验证新恢复内容真正进入下一次模型输入，不评价模型质量。
 
 R7a PASS，review_r7a，正式161 tests；补齐跨session自身执行回执查询，并修复历史非执行回执的间接ACL旁路。详情reviews/R7a-session-lifecycle.md。R7b采用离线显式OLD_CONFIG/NEW_CONFIG/BACKUP命令；身份不重绑定，完整配置快照用于后续核验，旧库无身份快照时需明确声明旧配置可信；保留history并更新baseline，保留撤销授权/预算/unknown，变更事务失败可恢复旧配置。
+
+R7b PASS，review_r7b，167 tests及独立额外4项通过。迁移命令与完整配置快照、身份限制、备份/事务回滚、历史baseline更换及grant收敛已落地。取消固定三Agent上限，单Agent额度不再除以全队人数。R7c现在实施完整行为prompt和压缩后的恢复刷新，不改变模型评测范围。

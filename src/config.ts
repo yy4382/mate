@@ -15,7 +15,7 @@ const agentSchema = z.object({
 export const configSchema = z.object({
   teamId: z.string().regex(/^T[A-Z0-9]+$/),
   ownerUserIds: z.array(z.string().regex(/^U[A-Z0-9]+$/)).min(1),
-  agents: z.array(agentSchema).min(1).max(3),
+  agents: z.array(agentSchema).min(1),
   budgets: z.object({ maxRuns: z.number().int().positive(), maxTokens: z.number().int().positive(),
     maxCostUsd: z.number().positive(), runTimeoutMs: z.number().int().positive() }).strict(),
 }).strict().superRefine((config, ctx) => {

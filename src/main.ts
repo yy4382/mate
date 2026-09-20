@@ -1,3 +1,4 @@
+import { migrateConfiguration } from './daemon/migrate.js';
 import { readFileSync, existsSync, mkdirSync, cpSync, realpathSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -14,8 +15,14 @@ import { backup } from './daemon/backup.js';
 export async function main(args = process.argv.slice(2)): Promise<void> {
   const [command, configPath, destination] = args;
   if (command === 'models') { process.stdout.write(JSON.stringify(builtinModels().getModels(configPath).map(m => ({ provider: m.provider, id: m.id, contextWindow: m.contextWindow })), null, 2) + '\n'); return; }
-  if (!['check','start','backup','restore'].includes(command ?? '') || !configPath) throw new Error('Usage: mate check|start CONFIG; mate backup CONFIG DESTINATION; mate restore CONFIG BACKUP; mate models [PROVIDER]');
+  if (!['check','start','backup','restore','migrate'].includes(command ?? '') || !configPath) throw new Error('Usage: mate check|start CONFIG; mate backup CONFIG DESTINATION; mate restore CONFIG BACKUP; mate models [PROVIDER]');
   const config = daemonConfigSchema.parse(JSON.parse(readFileSync(resolve(configPath), 'utf8')));
+  if(command==='migrate'){
+    if(!destination||!args[3])throw new Error('Usage: mate migrate OLD_CONFIG NEW_CONFIG BACKUP [--accept-legacy-identity]');
+    if(args[4]&&args[4]!=='--accept-legacy-identity')throw new Error('Unknown migration option');
+    const next=daemonConfigSchema.parse(JSON.parse(readFileSync(resolve(destination),'utf8')));
+    process.stdout.write(JSON.stringify(await migrateConfiguration(config,next,args[3],args[4]==='--accept-legacy-identity'),null,2)+'\n');return;
+  }
   if (command === 'check') {
     const models = builtinModels();
     const report = config.mate.agents.map(a => ({ agent: a.id, modelKnown: !!models.getModel(a.model.provider, a.model.id), missingEnv: [a.botTokenEnv, a.appTokenEnv, a.model.apiKeyEnv].filter(ref => !process.env[ref]) }));
