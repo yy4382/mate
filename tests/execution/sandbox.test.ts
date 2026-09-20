@@ -79,3 +79,20 @@ it.skipIf(process.env.MATE_SANDBOX_TEST !== '1')('fixed file helper exits when i
     await vi.waitFor(() => expect(() => process.kill(helper,0)).toThrow(), { timeout: 3000 });
   } finally { parent.kill('SIGKILL'); if (helper) { try { process.kill(-helper,'SIGKILL'); } catch {} } }
 }, 10000);
+
+it.skipIf(process.env.MATE_SANDBOX_TEST !== '1')('real sandbox supports large stdin writes and structured organization',async()=>{
+ const root=temp(),backend=new SandboxBackend(resolve('dist/src/execution/runner.js'));
+ const run=(operation:import('../../src/execution/backend.js').Operation)=>backend.execute({root,operation,timeoutMs:10000});
+ const value='资料\n'.repeat(40000);expect((await run({kind:'write',path:'notes/large',content:value})).code).toBe(0);expect(readFileSync(`${root}/notes/large`,'utf8')).toBe(value);
+ const result=await run({kind:'search',path:'notes',query:'资料'});expect(result.code,result.stderr).toBe(0);expect(JSON.parse(result.stdout).truncated).toBe(true);
+ expect((await run({kind:'move',path:'notes/large',destination:'notes/moved'})).code).toBe(0);
+ expect((await run({kind:'remove',path:'notes/moved'})).code).toBe(0);
+},30000);
+
+it.skipIf(process.env.MATE_SANDBOX_TEST !== '1')('runner preserves a Unicode scalar split across stdin chunks',async()=>{
+ const root=temp(),value=Buffer.from(JSON.stringify({root,operation:{kind:'write',path:'unicode',content:'你'},timeoutMs:10000}));
+ const child=spawn(process.execPath,[resolve('dist/src/execution/runner.js')],{stdio:['pipe','pipe','pipe','ipc']});let stderr='';child.stderr!.on('data',b=>stderr+=String(b));
+ const done=new Promise<number|null>((r,j)=>{child.once('error',j);child.once('close',r);});
+ const split=value.indexOf(Buffer.from('你'))+1;child.stdin!.write(value.subarray(0,split));await new Promise(r=>setTimeout(r,400));child.stdin!.end(value.subarray(split));
+ expect(await done,stderr).toBe(0);expect(readFileSync(`${root}/unicode`,'utf8')).toBe('你');
+},15000);

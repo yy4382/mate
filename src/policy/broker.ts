@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { Store, encode, type RunToken } from '../storage/store.js';
 import { Collaboration } from '../collaboration/service.js';
 import { canonicalRoot, checkedPath } from '../execution/paths.js';
-import { operationSchema, type Operation, type ExecutionBackend } from '../execution/backend.js';
+import { operationSchema, permissionFor, type Permission, type Operation, type ExecutionBackend } from '../execution/backend.js';
 
 const policyVersion = 'mate-scope-2';
 interface Grant { id: string; agent_id: string; work_id: string; root: string; operations: string; expires: number; revoked: number; }
@@ -13,7 +13,7 @@ export class Broker {
   private queue: Promise<unknown> = Promise.resolve();
   constructor(readonly store: Store, readonly collaboration: Collaboration, private backend: ExecutionBackend,
     private protectedRoots: string[], private clock: () => number = Date.now) {}
-  issueGrant(ownerId: string, agentId: string, workId: string, root: string, operations: Operation['kind'][], expires: number): string {
+  issueGrant(ownerId: string, agentId: string, workId: string, root: string, operations: Permission[], expires: number): string {
     if (!this.collaboration.config.ownerUserIds.includes(ownerId)) throw new Error('Owner only');
     this.collaboration.messages.agent(agentId); this.collaboration.work(workId);
     z.array(z.enum(['read','write','exec'])).min(1).parse(operations); z.number().int().positive().safe().parse(expires);
@@ -28,7 +28,7 @@ export class Broker {
   }
   private normalize(root: string, op: Operation): Operation {
     return op.kind === 'exec' ? { ...op, cwd: relative(root, checkedPath(root, op.cwd)) || '.' }
-      : { ...op, path: relative(root, checkedPath(root, op.path)) };
+      : { ...op, path: relative(root, checkedPath(root, op.path)) || '.', ...(op.kind==='move' ? {destination:relative(root,checkedPath(root,op.destination)) || '.'} : {}) };
   }
   private grant(run: RunToken, workId: string, id: string, op: Operation): Grant {
     this.store.assertRun(run);
@@ -37,10 +37,13 @@ export class Broker {
     if (this.collaboration.currentWork(run, binding?.work_id ?? '') !== workId) throw new Error('Run work mismatch');
     this.collaboration.messages.requireAccess(run.agentId, JSON.parse(this.collaboration.work(workId).target).channel);
     const grant = this.store.db.prepare('SELECT * FROM grants WHERE id=?').get(id) as Grant | undefined;
-    if (!grant || grant.agent_id !== run.agentId || grant.work_id !== workId || grant.revoked || grant.expires <= this.clock() || !(JSON.parse(grant.operations) as string[]).includes(op.kind)) throw new Error('Grant does not cover action');
+    if (!grant || grant.agent_id !== run.agentId || grant.work_id !== workId || grant.revoked || grant.expires <= this.clock() || !(JSON.parse(grant.operations) as string[]).includes(permissionFor(op))) throw new Error('Grant does not cover action');
     const seat=this.collaboration.seats.active(run.agentId);if(seat&&grant.root!==seat.workspace)throw new Error('Review seat permits only its clean private workspace');
     if (canonicalRoot(grant.root, this.protectedRoots) !== grant.root) throw new Error('Grant root changed');
-    checkedPath(grant.root, op.kind === 'exec' ? op.cwd : op.path); return grant;
+    checkedPath(grant.root, op.kind === 'exec' ? op.cwd : op.path);
+    if(op.kind==='move')checkedPath(grant.root,op.destination);
+    if(permissionFor(op)==='write' && (relative(grant.root,checkedPath(grant.root,op.kind==='exec'?op.cwd:op.path))==='' || (op.kind==='move' && relative(grant.root,checkedPath(grant.root,op.destination))==='')))throw new Error('Cannot mutate workspace root');
+    return grant;
   }
   execute(run: RunToken, workId: string, actionId: string, grantId: string, input: unknown, signal?: AbortSignal): Promise<unknown> {
     // Serial broker execution also covers file writes and side-effecting shell calls.
@@ -55,7 +58,7 @@ export class Broker {
     const request = { workId, grantId, root: grant.root, operation: op, policyVersion };
     const action = this.store.prepareAction(run, actionId, request);
     if (action.state === 'succeeded' || action.state === 'failed') return { status: action.state, receipt: action.receipt ? JSON.parse(action.receipt) : null };
-    if (action.state === 'unknown' || action.state === 'executing' || (op.kind !== 'read' && this.store.db.prepare("SELECT 1 FROM actions WHERE agent_id=? AND state IN ('unknown','executing') AND id!=? AND (json_extract(request,'$.operation.kind')='exec' OR (json_extract(request,'$.root')=? AND json_extract(request,'$.operation.kind')='write' AND json_extract(request,'$.operation.path')=?))").get(run.agentId, actionId, grant.root, op.kind === 'write' ? op.path : null))) return { status: 'action_unknown', actionId };
+    if (action.state === 'unknown' || action.state === 'executing' || (permissionFor(op) !== 'read' && this.store.db.prepare("SELECT 1 FROM actions WHERE agent_id=? AND state IN ('unknown','executing') AND id!=? AND (json_extract(request,'$.operation.kind')='exec' OR (json_extract(request,'$.root')=? AND json_extract(request,'$.operation.kind') NOT IN ('read','stat','list','search')))").get(run.agentId, actionId, grant.root))) return { status: 'action_unknown', actionId };
     if (signal?.aborted) throw new Error('Action aborted before execution');
     this.grant(run, workId, grantId, op);
     this.store.atomic(() => {

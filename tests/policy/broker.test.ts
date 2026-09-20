@@ -76,3 +76,13 @@ it('a review seat rejects even a valid grant to another workspace',async()=>{
  const{root,db,run,broker,work,grant,execute}=setup();db.db.prepare('INSERT INTO review_seats VALUES(?,?,?,?,1)').run('research',JSON.stringify({channel:'CTEST'}),'synthetic owner brief',`${root}/clean`);
  await expect(broker.execute(run,work,'outside-review',grant,{kind:'write',path:'note',content:'x'})).rejects.toThrow('clean private workspace');expect(execute).not.toHaveBeenCalled();
 });
+it('structured capabilities respect permission families, both move paths and unknown mutations',async()=>{
+ const{root,run,broker,work,grant,execute}=setup();const reader=broker.issueGrant('UOWNER','research',work,root,['read'],100000);
+ await broker.execute(run,work,'list',reader,{kind:'list',path:'.'});
+ await expect(broker.execute(run,work,'edit',reader,{kind:'edit',path:'x',oldText:'x',newText:'y',expectedHash:'0'.repeat(64)})).rejects.toThrow('Grant');
+ await expect(broker.execute(run,work,'move',grant,{kind:'move',path:'x',destination:'../outside'})).rejects.toThrow('escapes');
+ await expect(broker.execute(run,work,'root',grant,{kind:'remove',path:'.'})).rejects.toThrow('root');
+ execute.mockRejectedValueOnce(new Error('lost receipt'));await expect(broker.execute(run,work,'uncertain',grant,{kind:'move',path:'x',destination:'y'})).rejects.toThrow('lost');
+ expect(await broker.execute(run,work,'remove',grant,{kind:'remove',path:'y'})).toMatchObject({status:'action_unknown'});
+ await broker.execute(run,work,'inspect',reader,{kind:'stat',path:'y'});expect(execute).toHaveBeenCalledTimes(3);
+});

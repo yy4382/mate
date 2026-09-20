@@ -65,7 +65,7 @@ A–G 历史检查与独立红队记录保留；当前检查结果见 `docs/ACCE
 | R2 注意力与呈现 | Attention.peek/read/defer/resolve，watch/mute，分页coverage/viewToken，Pi运行中notice与ACK | R1 | 新消息在断点可见但不强制读正文；结束run不清未读；分页/编辑/晚到/崩溃不错误推进seen；跨频道可暂缓/转向 | PASS，review_r2，95 tests |
 | R3 提交门控 | FreshnessGate、draft生命周期、发送前再检查、有限知情继续、全输入路径review seat隔离 | R2 | 调研表全部相关竞态；变更hold/重启草稿/四选项/热频道活性/盲审不泄漏/Slack竞态显式记录；不启用命令审查 | PASS，R3a/R3b |
 | R4 消息任务 | canonical message claim、unclaim/transfer、状态投影、可选dependency；接R3任务门控 | R3 | 同一消息并发转换/认领唯一；hold无副作用；任务版本冲突；可直接协作或用任务，无强制总管/任务树；人类可见状态 | PASS，review_r4，115 tests |
-| R5 工具与workspace | ToolEnvironment注册/描述/执行adapter；私有workspace完整文件能力；可配置联网与工具链、附件输入输出 | R4 | 合成资料检索/脚本/文件组织/发布全链；不依赖外部私密凭证；真实backend停止/崩溃隔离；其他Agent私有空间不可访问 | 未开始 |
+| R5 工具与workspace | ToolEnvironment注册/描述/执行adapter；私有workspace完整文件能力；可配置联网与工具链、附件输入输出 | R4 | 合成资料检索/脚本/文件组织/发布全链；不依赖外部私密凭证；真实backend停止/崩溃隔离；其他Agent私有空间不可访问 | R5a PASS；R5b待实施 |
 | R6 作者拥有的提醒 | Reminder内容/锚点/版本/改期/取消/日志；独立于已完成task，绑定持续预算策略 | R5 | 完成任务后提醒仍触发本人；可见回执不乱唤醒；取消与已入队区分；catch-up去重；旧schedule显式迁移 | 未开始 |
 | R7 session演进与prompt | 逻辑身份/current session、检查点/重置/配置迁移、压缩后memory刷新、完整行为约定 | R6 | 角色更新/换session保持身份/未读/任务/提醒/草稿；旧view失效；memory内容自由；不可恢复窗口如实说明 | 未开始 |
 | R8 产品语义验收 | 合成多Agent场景与故障矩阵、README/current behavior重写 | R7 | 覆盖多种合法选择而非固定合作剧本；真实Slack/provider仅协议接线；独立审查对照Raft原意及用户修正逐项判定 | 未开始 |
@@ -101,3 +101,5 @@ R3b状态PASS，review_r3b，107 tests。R4开始实施：原始message唯一锚
 R4实现接口：tasks.byMessage/claim(message|taskId,expectedVersion,viewToken)/unclaim/transfer/update；tasks.intents/retry/continue/discard管理持久held intent。门控hold不创建canonical task、不改owner；通过后同事务唯一message_key与version/owner CAS。tasks.create生成draft消息，confirmed后activate才绑定message_key并唤醒创建者；未确认不可claim。固定状态通知包含task/source/owner/version，仅在提交成功后由harness生成，不是自由文本freshness绕过入口。legacy=1表示旧库没有可证明原始消息锚点，不自动猜测或合并；新消息认领总走唯一索引。wait支持跨事项可见依赖，醒回waiter自身事项。
 
 R5拆为两个顺序独立gate：R5a工具注册/发现、私有workspace执行授权及结构化文件操作（目录/查找/编辑/移动/删除），保留backend停止与隔离验证；R5b配置环境网络/工具链、资料与Slack附件输入输出、artifact提交门控。接口分别为ToolEnvironment+Broker/ExecutionBackend，以及环境/附件adapters+durable publication。R5a依赖R4，R5b依赖R5a；真实本地隔离检查和独立红队通过后才继续。
+
+R5a实现已通过独立审核：ToolEnvironment可信adapter注册/描述/执行，tools.list/describe/call，别名与直接调用统一进入原有router授权/回执边界；system prompt只列发现协议和能力目录，精确schema按需获取。file.list/stat/search/mkdir/edit/move/remove经Broker映射read/write权限，编辑使用SHA256+唯一文本匹配，move不覆盖，remove仅文件/空目录；所有写保护workspace根，双路径检查，未知变更保守阻挡同root后续变更，仍允许读取核实。固定SRT helper从stdin接收操作，避免大文件argv限制；文本文件1MB、read64KiB、搜索/列表有界并返回truncated。配置Docker后私有workspace获得exec，已存在未撤销未过期私有grant显式审计升级，保留过期/撤销状态。普通125 tests、真实本地隔离6/6通过；review_r5a独立44 tests及真实Unicode回归通过；记录见reviews/R5a-tools-workspace.md。

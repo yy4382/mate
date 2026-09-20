@@ -134,3 +134,19 @@ it('configured project grants cannot overlap the private Agent memory tree', asy
   try {expect(()=>new Daemon({mate:configSchema.parse(configFixture),runtime:{dataDir:root,researchHosts:[],workspaceGrants:[{agentId:'research',root:join(root,'agents'),operations:['read']}]}},{info:()=>{},error:()=>{}})).toThrow('Protected root overlap');}
   finally{if(old===undefined)delete process.env.RESEARCH_BOT_TOKEN;else process.env.RESEARCH_BOT_TOKEN=old;rmSync(root,{recursive:true,force:true});}
 });
+it('private exec grant upgrades preserve revocation and expiry and require configured Docker',async()=>{
+ const{Daemon}=await import('../../src/daemon/app.js');const saved=process.env.RESEARCH_BOT_TOKEN;process.env.RESEARCH_BOT_TOKEN='synthetic';
+ try{for(const docker of [undefined,{binary:'/usr/local/bin/docker',host:'unix:///synthetic.sock',image:`sha256:${'0'.repeat(64)}`}]){
+  const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-grants-')));const daemon=new Daemon({mate:configSchema.parse(configFixture),runtime:{dataDir:root,researchHosts:[],workspaceGrants:[],...(docker?{docker}:{})}},{info:()=>{},error:()=>{}});
+  if(docker)vi.spyOn((daemon as any).container,'recover').mockResolvedValue(undefined);
+  try{for(const state of ['valid','revoked','expired']){
+   const work=daemon.collaboration.createWork(state,{channel:'CTEST'}),grant=daemon.broker.issueGrant('UOWNER','research',work,daemon.memoryRoots.research!,['read','write'],Date.now()+100000);
+   if(state==='revoked')daemon.broker.revoke('UOWNER',grant);if(state==='expired')daemon.store.db.prepare('UPDATE grants SET expires=1 WHERE id=?').run(grant);
+   (daemon as any).ensureGrants('research',work);
+   const row=daemon.store.db.prepare('SELECT operations,revoked,expires FROM grants WHERE id=?').get(grant) as any;
+   expect(JSON.parse(row.operations).includes('exec')).toBe(!!docker&&state==='valid');if(state==='revoked')expect(row.revoked).toBe(1);if(state==='expired')expect(row.expires).toBe(1);
+  }
+  expect(daemon.store.db.prepare("SELECT count(*) n FROM audit WHERE kind='private_workspace_exec_upgrade'").get()).toEqual({n:docker?1:0});
+  }finally{await daemon.close();rmSync(root,{recursive:true,force:true});}
+ }}finally{if(saved===undefined)delete process.env.RESEARCH_BOT_TOKEN;else process.env.RESEARCH_BOT_TOKEN=saved;}
+});

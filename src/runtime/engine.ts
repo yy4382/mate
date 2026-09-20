@@ -3,7 +3,7 @@ import { createAssistantMessageEventStream, type Api, type Model, type Assistant
 import { Type } from 'typebox';
 import { byteTokens, compactionParts, repairTranscript } from './context.js';
 
-export const toolDefinition = { name: 'mate', description: 'Use explicit operations: agents, messages.read/search/send/watch; tasks.list/create/claim/delegate/wait/update; schedules.list/create/cancel; inbox.list; file.read/write; exec. args must match the documented operation. Actor and work are bound by the daemon. All visible replies require messages.send with an explicit target.',
+export const toolDefinition = { name: 'mate', description: 'Discover capabilities with tools.list ({}), inspect exact arguments with tools.describe ({name}), then use the named operation or tools.call ({name,input}). Actor and work are bound by the daemon. Visible replies require messages.send with an explicit target.',
   parameters: Type.Object({ operation: Type.String(), args: Type.Record(Type.String(), Type.Unknown()) }, { additionalProperties: false }) };
 export interface RunSpec { sessionId: string; messages: AgentMessage[]; recovery: string; tokenCap: number; costCap: number; maxTurns: number }
 export interface ToolReply { value: unknown; wait?: boolean }

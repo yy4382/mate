@@ -98,10 +98,14 @@ export class Daemon {
     return root;
   }
   private ensureGrants(agentId: string, workId: string): void {
-    const grants = [{ root: this.memoryRoots[agentId]!, operations: ['read','write'] as ('read'|'write'|'exec')[] }, ...this.config.runtime.workspaceGrants.filter(g => g.agentId === agentId && !this.collaboration.seats.active(agentId))];
+    const grants = [{ root: this.memoryRoots[agentId]!, operations: (this.config.runtime.docker ? ['read','write','exec'] : ['read','write']) as ('read'|'write'|'exec')[] }, ...this.config.runtime.workspaceGrants.filter(g => g.agentId === agentId && !this.collaboration.seats.active(agentId))];
     for (const grant of grants) {
       const root = realpathSync(grant.root);
-      if (!this.store.db.prepare('SELECT 1 FROM grants WHERE agent_id=? AND work_id=? AND root=?').get(agentId, workId, root)) this.broker.issueGrant(this.config.mate.ownerUserIds[0]!, agentId, workId, root, grant.operations, Date.now() + 365 * 86400000);
+      const existing=this.store.db.prepare('SELECT id,operations,revoked,expires FROM grants WHERE agent_id=? AND work_id=? AND root=? ORDER BY rowid DESC LIMIT 1').get(agentId,workId,root) as {id:string;operations:string;revoked:number;expires:number}|undefined;
+      if(!existing)this.broker.issueGrant(this.config.mate.ownerUserIds[0]!,agentId,workId,root,grant.operations,Date.now()+365*86400000);
+      else if(root===this.memoryRoots[agentId] && this.config.runtime.docker && !existing.revoked && existing.expires>Date.now() && !JSON.parse(existing.operations).includes('exec')){
+        this.store.atomic(()=>{this.store.db.prepare('UPDATE grants SET operations=? WHERE id=?').run(JSON.stringify([...JSON.parse(existing.operations),'exec']),existing.id);this.store.audit('private_workspace_exec_upgrade',{grantId:existing.id,agentId,workId});});
+      }
     }
   }
   start(): Promise<void> { return this.startPromise ??= this.open(); }

@@ -1,3 +1,5 @@
+import { ToolEnvironment } from './environment.js';
+import { operationSchema } from '../execution/backend.js';
 import { MessageTasks } from '../coordination/messages.js';
 import { FreshnessGate } from '../slack/freshness.js';
 import { z } from 'zod';
@@ -9,7 +11,9 @@ import { targetSchema,slackTs } from '../slack/messages.js';
 import type { ToolReply } from './engine.js';
 const id = z.string().min(1).max(500), text = z.string().max(35000);
 const messageRef=z.object({channel:id,ts:slackTs}).strict();
-const schemas = {
+const fileSchemas = Object.fromEntries(operationSchema.options.filter(schema=>schema.shape.kind.value!=='exec').map(schema=>[`file.${schema.shape.kind.value}`,(schema as z.ZodObject).omit({kind:true}).extend({grantId:id})]));
+const schemas: Record<string,z.ZodType> = {
+  ...fileSchemas,
   'tasks.byMessage':z.object({message:messageRef}).strict(),
   'tasks.intents':z.object({}).strict(),
   'tasks.retry':z.object({intentId:id,viewToken:id.optional()}).strict(),
@@ -48,26 +52,57 @@ const schemas = {
   'schedules.list': z.object({}).strict(), 'schedules.cancel': z.object({ scheduleId: id }).strict(),
   'schedules.create': z.object({ target: targetSchema, nextAt: z.number().int().positive(), timezone: id, cron: id.optional(), taskId: id.optional() }).strict(),
   'inbox.list': z.object({}).strict(), 'inbox.read': z.object({ deliveryId: id }).strict(), 'inbox.ack': z.object({ deliveryId: id }).strict(),
-  'file.read': z.object({ grantId: id, path: id }).strict(), 'file.write': z.object({ grantId: id, path: id, content: z.string().max(1000000) }).strict(),
   exec: z.object({ grantId: id, command: z.string().max(16000), cwd: id }).strict()
 };
-export const operationDocumentation = Object.entries(schemas).map(([name, schema]) => `${name}: ${JSON.stringify(z.toJSONSchema(schema))}`).join('\n');
+const discoverySchemas={
+ 'tools.list':z.object({}).strict(),
+ 'tools.describe':z.object({name:id}).strict(),
+ 'tools.call':z.object({name:id,input:z.unknown()}).strict()
+};
+export const operationDocumentation = `Use tools.list to discover capabilities and tools.describe with {name} for exact schemas. Call the named operation directly, or tools.call with {name,input}. Available: ${Object.keys(schemas).join(', ')}.\n` + Object.entries(discoverySchemas).map(([name, schema]) => `${name}: ${JSON.stringify(z.toJSONSchema(schema))}`).join('\n');
 export interface AdditionalTools {
   research(url: string, signal: AbortSignal): Promise<unknown>;
   publish(run: RunToken, workId: string, actionId: string, args: { grantId: string; path: string; title: string; target: { channel: string; thread?: string } }, signal: AbortSignal): Promise<unknown>;
 }
+type ToolContext={run:RunToken;workId:string;callId:string;signal:AbortSignal};
+const seatOperations=['agents','budget.read','attention.peek','messages.send','drafts.list','drafts.read','drafts.retry','drafts.continue','drafts.revise','drafts.discard',...Object.keys(fileSchemas),'exec'];
+const capabilityDescriptions:Record<string,string>={
+ 'file.list':'List up to 200 directory entries (48 KB); truncated indicates remaining entries.',
+ 'file.search':'Recursively find literal text in UTF-8 files up to 1 MB; at most 1000 visited paths/100 matches/45 KB. Skips symlinks/binary files; truncated reports limits.',
+ 'file.stat':'Inspect file type/size and SHA256 for regular files up to 1 MB.',
+ 'file.read':'Read up to 64 KiB UTF-8 text. Use search or exec for larger files.',
+ 'file.write':'Atomically write up to 1 MB UTF-8 text; preserve five previous versions in <path>.history.',
+ 'file.edit':'Edit a file only if expectedHash matches and oldText occurs exactly once. Inspect with file.stat first.',
+ 'file.move':'Move/rename within the granted workspace; destination must not exist.',
+ 'file.remove':'Remove a regular file or empty directory, optionally checking expectedHash. Does not recursively delete directories.',
+ 'file.mkdir':'Create a directory and missing parents within the granted workspace.',
+ exec:'Run a shell command in the configured container and granted workspace. No host credentials; image determines installed tools; unavailable without a configured exec grant.'
+};
 export class ToolRouter {
+  readonly environment=new ToolEnvironment<ToolContext,ToolReply>();
   readonly gate:FreshnessGate;
   readonly coordination:MessageTasks;
-  constructor(readonly collaboration: Collaboration, readonly broker: Broker, readonly additional?: AdditionalTools, readonly directory?: Directory, readonly provision?: (actor:string,workId:string)=>void) {this.coordination=new MessageTasks(collaboration);this.gate=new FreshnessGate(collaboration.messages,collaboration.attention);collaboration.output.gate=this.gate;}
+  constructor(readonly collaboration: Collaboration, readonly broker: Broker, readonly additional?: AdditionalTools, readonly directory?: Directory, readonly provision?: (actor:string,workId:string)=>void) {this.coordination=new MessageTasks(collaboration);this.gate=new FreshnessGate(collaboration.messages,collaboration.attention);collaboration.output.gate=this.gate;
+    for(const [name,schema]of Object.entries(schemas))this.environment.register({name,schema,description:capabilityDescriptions[name]??`Mate ${name} capability; current actor, work, grants and submission gates apply.`,execute:(context,input)=>this.dispatch(context.run,context.workId,context.callId,name,input,context.signal)});
+  }
   async call(run: RunToken, workId: string, callId: string, operation: string, input: unknown, signal: AbortSignal): Promise<ToolReply> {
+    this.collaboration.store.assertRun(run);signal.throwIfAborted();
+    if(operation==='tools.call'){const request=discoverySchemas['tools.call'].parse(input);operation=request.name;input=request.input;if(operation.startsWith('tools.'))throw new Error('Unknown operation');}
+    if(!operation.startsWith('tools.') && this.collaboration.seats.active(run.agentId) && !seatOperations.includes(operation))throw new Error('Independent review seat isolates this input path');
+    // Extensions are trusted host code, but inherit the common active-work boundary.
+    if(!Object.hasOwn(schemas,operation) && !operation.startsWith('tools.')){workId=this.collaboration.currentWork(run,workId);this.collaboration.assertActionWork(run,workId);}
+    if(operation==='tools.list'){discoverySchemas['tools.list'].parse(input);return {value:this.environment.list().filter(item=>!this.collaboration.seats.active(run.agentId)||seatOperations.includes(item.name))};}
+    if(operation==='tools.describe'){const request=discoverySchemas['tools.describe'].parse(input);if(this.collaboration.seats.active(run.agentId)&&!seatOperations.includes(request.name))throw new Error('Independent review seat isolates this input path');return {value:this.environment.describe(request.name)};}
+    return this.environment.execute({run,workId,callId,signal},operation,input);
+  }
+  private async dispatch(run: RunToken, workId: string, callId: string, operation: string, input: unknown, signal: AbortSignal): Promise<ToolReply> {
     const c = this.collaboration, s = c.store, actor = run.agentId;
     s.assertRun(run); signal.throwIfAborted();
-    if(c.seats.active(actor) && !['agents','budget.read','attention.peek','messages.send','drafts.list','drafts.read','drafts.retry','drafts.continue','drafts.revise','drafts.discard','file.read','file.write','exec'].includes(operation))throw new Error('Independent review seat isolates this input path');
+    if(c.seats.active(actor) && !seatOperations.includes(operation))throw new Error('Independent review seat isolates this input path');
     workId = c.currentWork(run, workId);
-    if (!(operation in schemas)) throw new Error('Unknown operation');
+    if (!Object.hasOwn(schemas,operation)) throw new Error('Unknown operation');
     // Parsing is deliberately repeated in the daemon, independently of model-side tool validation.
-    const args = schemas[operation as keyof typeof schemas].parse(input) as Record<string, any>;
+    const args = schemas[operation]!.parse(input) as Record<string, any>;
     const readOnly = ['tasks.byMessage','tasks.intents','drafts.list','drafts.read','attention.peek','attention.read','attention.resolve','attention.defer','attention.mute','agents','works.list','budget.read','tasks.read','tasks.list','messages.read','messages.recent','messages.search','schedules.list','inbox.list','inbox.read','conversations.list','conversations.members'];
     if (!readOnly.includes(operation) && operation !== 'works.select') c.assertActionWork(run, args.taskId ? c.task(args.taskId).work_id : workId);
     if(args.target)c.messages.requireAccess(actor,args.target.channel);
@@ -82,8 +117,8 @@ export class ToolRouter {
     }
     if (operation === 'research.read') { if (!this.additional) throw new Error('Research unavailable'); return { value: await this.additional.research(args.url, signal) }; }
     if (operation === 'artifact.publish') { if (!this.additional) throw new Error('Publication unavailable'); return { value: await this.additional.publish(run, workId, actionId, args as any, signal) }; }
-    if (['file.read','file.write','exec'].includes(operation)) {
-      const value = await this.broker.execute(run, workId, actionId, args.grantId, operation === 'exec' ? { kind: 'exec', command: args.command, cwd: args.cwd } : operation === 'file.read' ? { kind: 'read', path: args.path } : { kind: 'write', path: args.path, content: args.content }, signal);
+    if (operation.startsWith('file.') || operation==='exec') {
+      const value = await this.broker.execute(run, workId, actionId, args.grantId, operationSchema.parse({...Object.fromEntries(Object.entries(args).filter(([key])=>key!=='grantId')),kind:operation==='exec'?'exec':operation.slice(5)}), signal);
       return { value };
     }
     // All local effects and their receipts commit together. Crash replay returns the recorded value.
