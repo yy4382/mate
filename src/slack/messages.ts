@@ -86,10 +86,12 @@ export class Messages {
         const participating = agent.channels[effective.channel] === 'participate';
         if (!(direct || watched || participating)) continue;
         const now = Date.now(), isNotice = !direct && !watched, bucket = Math.floor(now / 20000);
-        this.store.enqueue(id, isNotice ? `notice:${effective.channel}:${bucket}` : `message:${key}:${current.revision}`, { kind: isNotice ? 'notice' : 'message',
+        const work = this.store.db.prepare('SELECT work_id FROM message_work WHERE message_key=?').get(key) as { work_id: string } | undefined;
+        const delivery = this.store.enqueue(id, isNotice ? `notice:${effective.channel}:${work?.work_id ?? 'unbound'}:${bucket}` : `message:${key}:${current.revision}`, { kind: isNotice ? 'notice' : 'message',
           messageKey: key, revision: current.revision, source: sender ? { kind: 'agent', id: sender.id } : { kind: effective.bot ? 'external_bot' : 'human', id: effective.user ?? effective.bot },
           target: { channel: effective.channel, thread: effective.thread }, receivedAt: now,
           ...(isNotice ? { notBefore: (bucket + 1) * 20000, channel: effective.channel, windowStart: bucket * 20000 } : {}) }, direct ? (sender ? 50 : 100) : watched ? 20 : 0);
+        if (work) this.store.db.prepare('INSERT INTO delivery_work VALUES(?,?) ON CONFLICT DO NOTHING').run(delivery, work.work_id);
       }
     });
   }
@@ -133,6 +135,13 @@ export class Output {
       const agent = this.messages.agent(agentId);
       const message: NormalMessage = { team: this.messages.config.teamId, channel: target.channel, thread: target.thread,
         ts: receipt.ts, revision: receipt.ts, text, user: agent.slackUserId, bot: agent.slackBotId, deleted: false };
+      this.messages.record(message, []);
+      const binding = this.messages.store.db.prepare('SELECT work_id FROM output_work WHERE output_id=?').get(id) as { work_id: string } | undefined;
+      if (binding) {
+        const key = messageKey(message);
+        this.messages.store.db.prepare('INSERT INTO message_work VALUES(?,?) ON CONFLICT DO NOTHING').run(key, binding.work_id);
+        this.messages.store.db.prepare("INSERT INTO delivery_work SELECT d.id,? FROM deliveries d WHERE json_extract(d.payload,'$.messageKey')=? ON CONFLICT DO NOTHING").run(binding.work_id, key);
+      }
       this.messages.record(message, this.messages.config.agents.filter(a => this.messages.access(a.id, target.channel)).map(a => a.id));
     });
   }
@@ -140,6 +149,11 @@ export class Output {
     const now = this.clock();
     const store = this.messages.store, row = store.output(id);
     if (!row || row.state !== 'pending') return;
+    const work = store.db.prepare('SELECT w.state FROM works w JOIN output_work ow ON ow.work_id=w.id WHERE ow.output_id=?').get(id) as { state: string } | undefined;
+    if (work && work.state !== 'active') {
+      if (work.state === 'cancelled') store.transitionOutput(id, 'pending', 'failed', { reason: 'work_cancelled' });
+      return;
+    }
     if (row.receipt && (JSON.parse(row.receipt) as { retryAt?: number }).retryAt! > now) return;
     const { target, text } = JSON.parse(row.request) as { target: Target; text: string };
     try { this.messages.requireAccess(row.agent_id, target.channel); }

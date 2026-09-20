@@ -29,3 +29,14 @@ CREATE TABLE message_observations(agent_id TEXT NOT NULL REFERENCES agents(id), 
 CREATE TABLE thread_watches(agent_id TEXT NOT NULL REFERENCES agents(id), channel TEXT NOT NULL, thread TEXT NOT NULL, PRIMARY KEY(agent_id,channel,thread));
 PRAGMA user_version=2;
 `;
+export const collaborationSchema = `
+CREATE TABLE works(id TEXT PRIMARY KEY, origin TEXT NOT NULL UNIQUE, target TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'active', max_runs INTEGER NOT NULL, max_tokens INTEGER NOT NULL, max_cost REAL NOT NULL, runs INTEGER NOT NULL DEFAULT 0, tokens INTEGER NOT NULL DEFAULT 0, cost REAL NOT NULL DEFAULT 0);
+CREATE TABLE work_runs(run_id TEXT PRIMARY KEY REFERENCES runs(id), work_id TEXT NOT NULL REFERENCES works(id), token_cap INTEGER NOT NULL, cost_cap REAL NOT NULL, settled INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE delivery_work(delivery_id TEXT PRIMARY KEY REFERENCES deliveries(id), work_id TEXT NOT NULL REFERENCES works(id));
+CREATE TABLE message_work(message_key TEXT PRIMARY KEY REFERENCES messages(key), work_id TEXT NOT NULL REFERENCES works(id));
+CREATE TABLE output_work(output_id TEXT PRIMARY KEY REFERENCES outbox(id), work_id TEXT NOT NULL REFERENCES works(id));
+CREATE TABLE tasks(id TEXT PRIMARY KEY, work_id TEXT NOT NULL REFERENCES works(id), parent_id TEXT REFERENCES tasks(id), target TEXT NOT NULL, title TEXT NOT NULL, owner TEXT REFERENCES agents(id), assigned_to TEXT REFERENCES agents(id), status TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 0, waiting_on TEXT REFERENCES tasks(id), result TEXT, outbox_id TEXT REFERENCES outbox(id));
+CREATE TABLE task_events(id INTEGER PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), at INTEGER NOT NULL, body TEXT NOT NULL);
+CREATE TABLE schedules(id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agents(id), work_id TEXT NOT NULL REFERENCES works(id), task_id TEXT REFERENCES tasks(id), target TEXT NOT NULL, next_at INTEGER NOT NULL, cron TEXT, timezone TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1);
+PRAGMA user_version=3;
+`;
