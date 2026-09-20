@@ -1,4 +1,5 @@
 import type { SendBasis } from '../slack/freshness.js';
+import { ReviewSeats } from '../slack/review-seats.js';
 import { Attention } from '../slack/attention.js';
 import { BudgetLedger } from '../budget/ledger.js';
 import { randomUUID } from 'node:crypto';
@@ -12,13 +13,15 @@ export interface Work { id: string; target: string; state: string; max_runs: num
 export interface Task { id: string; work_id: string; parent_id: string | null; target: string; title: string; owner: string | null; assigned_to: string | null; status: string; version: number; waiting_on: string | null; result: string | null; outbox_id: string | null }
 interface Schedule { id: string; agent_id: string; work_id: string; task_id: string | null; target: string; next_at: number; cron: string | null; timezone: string; active: number }
 export class Collaboration {
+  readonly seats: ReviewSeats;
   readonly ledger: BudgetLedger;
   readonly attention: Attention;
-  constructor(readonly store: Store, readonly messages: Messages, readonly output: Output, readonly config: MateConfig) { this.ledger = new BudgetLedger(store, config); this.attention = new Attention(messages); }
+  constructor(readonly store: Store, readonly messages: Messages, readonly output: Output, readonly config: MateConfig) { this.ledger = new BudgetLedger(store, config); this.attention = new Attention(messages); this.seats = new ReviewSeats(messages); }
   work(id: string): Work { const work = this.store.db.prepare('SELECT * FROM works WHERE id=?').get(id) as Work | undefined; if (!work) throw new Error('Unknown work'); return work; }
   task(id: string): Task { const task = this.store.db.prepare('SELECT * FROM tasks WHERE id=?').get(id) as Task | undefined; if (!task) throw new Error('Unknown task'); return task; }
   list(agentId: string): Task[] {
     this.messages.agent(agentId);
+    if(this.messages.isolated(agentId))return [];
     return this.store.db.prepare("SELECT t.* FROM tasks t JOIN channel_access a ON a.channel=json_extract(t.target,'$.channel') WHERE a.agent_id=? AND a.active=1 ORDER BY t.rowid DESC LIMIT 100").all(agentId) as Task[];
   }
   currentWork(run: RunToken, fallback: string): string {

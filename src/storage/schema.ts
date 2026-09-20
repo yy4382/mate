@@ -104,3 +104,8 @@ ALTER TABLE outbox_next RENAME TO outbox;
 CREATE TABLE drafts(id TEXT PRIMARY KEY,agent_id TEXT NOT NULL REFERENCES agents(id),outbox_id TEXT NOT NULL REFERENCES outbox(id),revision INTEGER NOT NULL DEFAULT 1,hold_id TEXT,reason TEXT,accepted_revision INTEGER,continue_until INTEGER NOT NULL DEFAULT 0);
 PRAGMA user_version=11;
 `;
+
+export const reviewSeatSchema = `
+CREATE TABLE review_seats(agent_id TEXT PRIMARY KEY REFERENCES agents(id),target TEXT NOT NULL,brief TEXT NOT NULL,workspace TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1);
+PRAGMA user_version=12;
+`;

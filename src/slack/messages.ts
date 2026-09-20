@@ -24,6 +24,8 @@ export class Messages {
   access(agentId: string, channel: string): boolean {
     return !!this.store.db.prepare('SELECT 1 FROM channel_access WHERE agent_id=? AND channel=? AND active=1').get(agentId, channel);
   }
+  isolated(actor:string):boolean{return !!this.store.db.prepare('SELECT 1 FROM review_seats WHERE agent_id=? AND active=1').get(actor);}
+  requireReadable(actor:string):void{if(this.isolated(actor))throw new Error('Independent review seat isolates conversation inputs');}
   requireAccess(agentId: string, channel: string): void { this.agent(agentId); if (!this.access(agentId, channel)) throw new Error('Channel access denied'); }
   /** Only trusted Slack membership reconciliation or authenticated member events call this. */
   membership(agentId: string, channel: string, active: boolean): void {
@@ -118,16 +120,19 @@ export class Messages {
     });
   }
   read(agentId: string, target: Target): NormalMessage[] {
+    this.requireReadable(agentId);
     targetSchema.parse(target); this.requireAccess(agentId, target.channel);
     const rows = this.store.db.prepare('SELECT m.body FROM messages m JOIN message_visibility v ON v.key=m.key WHERE v.agent_id=? AND m.channel=? AND (? IS NULL OR m.thread=?) AND m.deleted=0 ORDER BY length(m.ts),m.ts').all(agentId, target.channel, target.thread ?? null, target.thread ?? null) as { body: string }[];
     return rows.map(r => JSON.parse(r.body) as NormalMessage);
   }
   search(agentId: string, query: string): NormalMessage[] {
+    this.requireReadable(agentId);
     this.agent(agentId); if (!query || query.length > 1000) throw new Error('Invalid search');
     const rows = this.store.db.prepare('SELECT m.body FROM messages m JOIN message_visibility v ON v.key=m.key JOIN channel_access a ON a.agent_id=v.agent_id AND a.channel=m.channel WHERE v.agent_id=? AND a.active=1 AND m.deleted=0 AND instr(m.body,?)>0 LIMIT 100').all(agentId, query) as { body: string }[];
     return rows.map(r => JSON.parse(r.body) as NormalMessage);
   }
   recent(agentId: string, channel: string): NormalMessage[] {
+    this.requireReadable(agentId);
     this.requireAccess(agentId, channel);
     const rows = this.store.db.prepare('SELECT m.body FROM messages m JOIN message_visibility v ON v.key=m.key WHERE v.agent_id=? AND m.channel=? AND m.deleted=0 ORDER BY length(m.ts) DESC,m.ts DESC LIMIT 100').all(agentId, channel) as { body: string }[];
     return rows.reverse().map(r => JSON.parse(r.body) as NormalMessage);

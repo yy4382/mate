@@ -3,13 +3,18 @@ import type { Supervisor } from '../runtime/supervisor.js';
 import type { Broker } from '../policy/broker.js';
 import { encode } from '../storage/store.js';
 export class Controls {
-  constructor(readonly collaboration: Collaboration, readonly supervisor: Supervisor, readonly broker: Broker) {}
+  constructor(readonly collaboration: Collaboration, readonly supervisor: Supervisor, readonly broker: Broker, readonly verifyReviewWorkspace: (actor:string)=>string = ()=>{throw new Error('Clean workspace verification unavailable');}) {}
   execute(user: string, text: string): string {
     const c = this.collaboration, s = c.store;
     if (!c.config.ownerUserIds.includes(user)) throw new Error('Owner only');
     const [command, id, ...rest] = text.trim().split(/\s+/);
     switch (command) {
       case 'status': return encode({ accounts: c.config.agents.map(a=>c.ledger.account(a.id)), agents: s.db.prepare('SELECT id,session_id,paused,generation FROM agents').all(), activeRuns: s.db.prepare("SELECT id,agent_id FROM runs WHERE state='active'").all(), works: s.db.prepare('SELECT id,state,runs,max_runs,tokens,max_tokens,cost,max_cost FROM works ORDER BY rowid DESC LIMIT 20').all(), unknown: s.db.prepare("SELECT id,agent_id,state FROM actions WHERE state='unknown'").all(), unknownOutputs: s.db.prepare("SELECT id,agent_id FROM outbox WHERE state='unknown'").all() });
+      case 'review-seat': {
+        if(!id)throw new Error('Agent ID required');const input=JSON.parse(rest.join(' '));
+        c.seats.activate(user,id,input.target,input.brief,this.verifyReviewWorkspace);return `Independent review seat enabled for ${id}`;
+      }
+      case 'review-release': if(!id)throw new Error('Agent ID required');this.supervisor.stopAgent(id);c.seats.release(user,id);return 'Review isolation released; explicitly resume the Agent';
       case 'tasks': return encode(s.db.prepare('SELECT * FROM tasks ORDER BY rowid DESC LIMIT 30').all());
       case 'schedules': return encode(s.db.prepare('SELECT * FROM schedules WHERE active=1').all());
       case 'stop': case 'pause': case 'cancel': case 'resume': {

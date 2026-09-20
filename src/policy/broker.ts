@@ -38,6 +38,7 @@ export class Broker {
     this.collaboration.messages.requireAccess(run.agentId, JSON.parse(this.collaboration.work(workId).target).channel);
     const grant = this.store.db.prepare('SELECT * FROM grants WHERE id=?').get(id) as Grant | undefined;
     if (!grant || grant.agent_id !== run.agentId || grant.work_id !== workId || grant.revoked || grant.expires <= this.clock() || !(JSON.parse(grant.operations) as string[]).includes(op.kind)) throw new Error('Grant does not cover action');
+    const seat=this.collaboration.seats.active(run.agentId);if(seat&&grant.root!==seat.workspace)throw new Error('Review seat permits only its clean private workspace');
     if (canonicalRoot(grant.root, this.protectedRoots) !== grant.root) throw new Error('Grant root changed');
     checkedPath(grant.root, op.kind === 'exec' ? op.cwd : op.path); return grant;
   }

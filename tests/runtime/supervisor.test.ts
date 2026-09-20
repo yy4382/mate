@@ -149,3 +149,23 @@ it('cached attention.read rechecks current membership even with an expired prese
  await router.call(run,work,'read','attention.read',args,signal);c.attention.invalidate(run.sessionId);c.messages.membership('research','CTEST',false);
  await expect(router.call(run,work,'read','attention.read',args,signal)).rejects.toThrow('access');
 });
+it('fresh review seat withholds bodies through tools, notice, recovery and held feedback while allowing an independent submission',async()=>{
+ let captured='';const {store,collaboration:c,work,router,supervisor}=setup(()=>({close:()=>{},run:async(spec,hooks)=>{captured=JSON.stringify(spec);captured+=await hooks.notice?.();return{tokens:1,cost:0,certain:true,waiting:false,continuation:false};}}));
+ const target={channel:'CTEST',thread:'100.000001'};
+ c.messages.record({team:'TTEST',channel:'CTEST',thread:target.thread,ts:target.thread,revision:target.thread,text:'WITHHELD_PEER_CONCLUSION',user:'UTWO',deleted:false},['research']);
+ c.seats.activate('UOWNER','research',target,'Independently compute 2+2; submit result.',()=>'/synthetic/clean-review-root');
+ const delivery=c.enqueue('research',work,'review',{text:'WITHHELD_PEER_CONCLUSION',source:{id:'UTWO'},target});store.db.prepare('UPDATE deliveries SET created_at=1234567890000 WHERE id=?').run(delivery);await supervisor.step('research');
+ expect(captured).toContain('Independently compute');expect(captured).not.toContain('WITHHELD_PEER_CONCLUSION');expect(captured).not.toContain('UTWO');expect(captured).not.toContain('1234567890000');
+ const session=(store.db.prepare("SELECT session_id FROM agents WHERE id='research'").get() as {session_id:string}).session_id;expect(JSON.stringify(store.context(session))).not.toContain('1234567890000');
+ c.enqueue('research',work,'tools',{});const run=store.beginRun('research')!;const signal=new AbortController().signal;
+ for(const [op,args] of [['messages.read',{target}],['messages.search',{query:'CONCLUSION'}],['attention.read',{target}],['inbox.list',{}],['tasks.list',{}],['conversations.members',{channel:'CTEST'}],['research.read',{url:'https://example.com'}]] as const)await expect(router.call(run,work,op,op,args,signal)).rejects.toThrow('isolates');
+ const result=await router.call(run,work,'send','messages.send',{target,text:'My independent result is 4'},signal);const held=result.value as any;expect(held.status).toBe('held');expect(JSON.stringify(held)).not.toContain('WITHHELD');
+ await router.call(run,work,'continue','drafts.continue',{draftId:held.draftId,revision:held.revision,holdId:held.holdId,acknowledge:'send_despite_unread_or_changes'},signal);await c.output.send(held.draftId);expect(store.output(held.draftId)?.state).toBe('sent');
+ expect(store.db.prepare('SELECT count(*) n FROM attention_seen').get()).toEqual({n:0});
+});
+it('review activation cannot wash an already used identity or accept an unverified workspace',()=>{
+ const{store,collaboration:c,work}=setup();const target={channel:'CTEST'};
+ expect(()=>c.seats.activate('UTWO','research',target,'brief',()=>'/clean')).toThrow('Owner');
+ expect(()=>c.seats.activate('UOWNER','research',target,'brief',()=>{throw new Error('dirty workspace');})).toThrow('dirty');
+ c.enqueue('research',work,'used',{});store.beginRun('research');expect(()=>c.seats.activate('UOWNER','research',target,'brief',()=>'/clean')).toThrow('unused');
+});

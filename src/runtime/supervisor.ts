@@ -39,8 +39,8 @@ export class Supervisor {
         return true;
       }
       c.reserve(run, work.id, tokenCap, costCap);
-      const delivery = s.delivery(run.deliveryId);
-      if (delivery.status === 'pending') s.input(run, { role: 'user', content: `Durable inbox delivery (reference data):\n${delivery.payload}`, timestamp: delivery.created_at });
+      const delivery = s.delivery(run.deliveryId),seat=c.seats.active(agentId);
+      if (delivery.status === 'pending') s.input(run, { role: 'user', content: seat ? `Independent review brief from owner:\n${seat.brief}\nDelivery target: ${seat.target}. Conversation bodies and peer conclusions are withheld. Use an opaque held draft and explicit continue to submit without reading.` : `Durable inbox delivery (reference data):\n${delivery.payload}`, timestamp: seat ? 0 : delivery.created_at });
       else s.appendMessage(run, 'resume', { role: 'user', content: 'Resume the interrupted inbox delivery. Verify receipts; do not blindly repeat earlier effects.', timestamp: Date.now() });
       const reference = await this.recovery(agentId, work.id, abort.signal);
       s.assertRun(run);
@@ -49,7 +49,7 @@ export class Supervisor {
       const allTasks = c.list(agentId);
       const recovery = encode({ memory, memoryHash: hash(reference), memoryNeedsOrganization: memory !== reference,
         warning: memory !== reference ? 'Memory entry exceeds recovery budget. Read full MEMORY.md through file tools and organize it; this excerpt is incomplete.' : undefined,
-        work, tasks: allTasks.slice(0, 20).map(t => ({ id: t.id, workId: t.work_id, owner: t.owner, status: t.status, title: t.title.slice(0, 100), waitingOn: t.waiting_on })),
+        work: seat ? {id:work.id,state:work.state,target:seat.target,reviewSeat:true} : work, tasks: allTasks.slice(0, 20).map(t => ({ id: t.id, workId: t.work_id, owner: t.owner, status: t.status, title: t.title.slice(0, 100), waitingOn: t.waiting_on })),
         tasksTotal: allTasks.length, grants: s.db.prepare('SELECT id,operations,expires FROM grants WHERE agent_id=? AND work_id=? AND revoked=0 AND expires>? LIMIT 20').all(agentId, work.id, Date.now()) });
       const agent = this.config.agents.find(a => a.id === agentId)!;
       worker = this.workers.get(agentId) ?? this.factory(agent); this.workers.set(agentId, worker);

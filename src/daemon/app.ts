@@ -1,5 +1,5 @@
 import { Directory } from '../slack/directory.js';
-import { mkdirSync, writeFileSync, existsSync, realpathSync, lstatSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync, realpathSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { App } from '@slack/bolt';
 import { ManagedSocket } from '../slack/socket.js';
@@ -84,13 +84,21 @@ export class Daemon {
         if (!existsSync(join(root, 'MEMORY.md'))) writeFileSync(join(root, 'MEMORY.md'), `# ${agent.name}\n\nPrivate memory entry. Keep durable lessons and links to notes here.\n`, { flag: 'wx', mode: 0o600 });
       }
       for (const grant of config.runtime.workspaceGrants) canonicalRoot(grant.root, [projectRoot, state, agentsDir]);
-      const ingress = new Ingress(this.collaboration), controls = new Controls(this.collaboration, this.supervisor, this.broker);
+      const ingress = new Ingress(this.collaboration), controls = new Controls(this.collaboration, this.supervisor, this.broker, actor=>this.verifyReviewWorkspace(actor));
       this.slack = new SlackService(this.collaboration, transport, ingress, controls, () => this.stopping);
       artifacts = new Artifacts(this.collaboration, this.broker, this.slack, this.memoryRoots);
     } catch (error) { opened?.close(); this.release(); throw error; }
   }
+  private verifyReviewWorkspace(actor:string):string {
+    const root=this.memoryRoots[actor],agent=this.config.mate.agents.find(a=>a.id===actor);
+    if(!root||!agent)throw new Error('Unknown review identity');
+    const names=readdirSync(root);if(names.some(name=>!['MEMORY.md','notes','artifacts'].includes(name)))throw new Error('Review workspace is not clean');
+    for(const dir of ['notes','artifacts']){const path=join(root,dir);if(lstatSync(path).isSymbolicLink()||readdirSync(path).length)throw new Error('Review workspace contains prior material');}
+    const memory=join(root,'MEMORY.md');if(lstatSync(memory).isSymbolicLink()||lstatSync(memory).nlink!==1||readFileSync(memory,'utf8')!==`# ${agent.name}\n\nPrivate memory entry. Keep durable lessons and links to notes here.\n`)throw new Error('Review memory contains prior material');
+    return root;
+  }
   private ensureGrants(agentId: string, workId: string): void {
-    const grants = [{ root: this.memoryRoots[agentId]!, operations: ['read','write'] as ('read'|'write'|'exec')[] }, ...this.config.runtime.workspaceGrants.filter(g => g.agentId === agentId)];
+    const grants = [{ root: this.memoryRoots[agentId]!, operations: ['read','write'] as ('read'|'write'|'exec')[] }, ...this.config.runtime.workspaceGrants.filter(g => g.agentId === agentId && !this.collaboration.seats.active(agentId))];
     for (const grant of grants) {
       const root = realpathSync(grant.root);
       if (!this.store.db.prepare('SELECT 1 FROM grants WHERE agent_id=? AND work_id=? AND root=?').get(agentId, workId, root)) this.broker.issueGrant(this.config.mate.ownerUserIds[0]!, agentId, workId, root, grant.operations, Date.now() + 365 * 86400000);

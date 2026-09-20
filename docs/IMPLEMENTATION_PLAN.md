@@ -63,8 +63,8 @@ A–G 历史检查与独立红队记录保留；当前检查结果见 `docs/ACCE
 |---|---|---|---|---|
 | R1 身份/消息/预算基础 | Conversation的channel/thread/dm与revision；Agent/run/预算账户/任务引用分离；显式账户归属与授权 | R0 | 顶层发言、主动DM、同Agent跨事项读取和切换；有限持续账户支持非human触发；不可借切换重置预算；旧work与target迁移回归 | PASS，R1a/R1b |
 | R2 注意力与呈现 | Attention.peek/read/defer/resolve，watch/mute，分页coverage/viewToken，Pi运行中notice与ACK | R1 | 新消息在断点可见但不强制读正文；结束run不清未读；分页/编辑/晚到/崩溃不错误推进seen；跨频道可暂缓/转向 | PASS，review_r2，95 tests |
-| R3 提交门控 | FreshnessGate、draft生命周期、发送前再检查、有限知情继续、全输入路径review seat隔离 | R2 | 调研表全部相关竞态；变更hold/重启草稿/四选项/热频道活性/盲审不泄漏/Slack竞态显式记录；不启用命令审查 | 未开始 |
-| R4 消息任务 | canonical message claim、unclaim/transfer、状态投影、可选dependency；接R3任务门控 | R3 | 同一消息并发转换/认领唯一；hold无副作用；任务版本冲突；可直接协作或用任务，无强制总管/任务树；人类可见状态 | 未开始 |
+| R3 提交门控 | FreshnessGate、draft生命周期、发送前再检查、有限知情继续、全输入路径review seat隔离 | R2 | 调研表全部相关竞态；变更hold/重启草稿/四选项/热频道活性/盲审不泄漏/Slack竞态显式记录；不启用命令审查 | PASS，R3a/R3b |
+| R4 消息任务 | canonical message claim、unclaim/transfer、状态投影、可选dependency；接R3任务门控 | R3 | 同一消息并发转换/认领唯一；hold无副作用；任务版本冲突；可直接协作或用任务，无强制总管/任务树；人类可见状态 | 实施中 |
 | R5 工具与workspace | ToolEnvironment注册/描述/执行adapter；私有workspace完整文件能力；可配置联网与工具链、附件输入输出 | R4 | 合成资料检索/脚本/文件组织/发布全链；不依赖外部私密凭证；真实backend停止/崩溃隔离；其他Agent私有空间不可访问 | 未开始 |
 | R6 作者拥有的提醒 | Reminder内容/锚点/版本/改期/取消/日志；独立于已完成task，绑定持续预算策略 | R5 | 完成任务后提醒仍触发本人；可见回执不乱唤醒；取消与已入队区分；catch-up去重；旧schedule显式迁移 | 未开始 |
 | R7 session演进与prompt | 逻辑身份/current session、检查点/重置/配置迁移、压缩后memory刷新、完整行为约定 | R6 | 角色更新/换session保持身份/未读/任务/提醒/草稿；旧view失效；memory内容自由；不可恢复窗口如实说明 | 未开始 |
@@ -91,3 +91,9 @@ R3分为两个独立gate：R3a实现消息草稿/提交与dispatch前门控、�
 R3a实现：生产ToolRouter为Output安装FreshnessGate；所有普通消息/委派消息经持久outbox held状态与draft revision。首次无basis保留草稿；retry需要有效呈现view；revise生成新的不可变outbox版本；discard静默；continue绑定当前holdId+revision，只授权60秒内该草稿的一次成功派发，不推进seen。dispatch全局串行（强于目标串行），已观察改变再hold并产生去重持久唤醒，429再次检查，unknown阻挡同目标后续派发并等待对账。普通消息scope及任务变更CAS门控分开；任务gate属R4，artifact.publish适配器的提交门控属R5，不将R3a称作已覆盖所有外部工具。R3b另验盲审输入隔离。
 
 R3a状态：PASS，review_r3a，104 tests。R3b开始实施，所有后续模块尚未完成。
+
+R3b实现约定：owner `/team review-seat AGENT_ID {"target":...,"brief":"..."}` 启用一次独立席位。必须从无run/非初始journal/snapshot/outbox的身份开始，daemon验证私有workspace只有未改动模板MEMORY和空notes/artifacts；角色配置及brief是明确owner提供的基线，不能声称消除其中已有信息。席位期间不读取任何对话/peer输入（比只屏蔽目标更保守，防止跨频道转述旁路），不提供外部研究/共享workspace/任务正文/inbox入口；允许自己的干净workspace文件读写、opaque notice、自己的草稿和独立发言。Supervisor对持久输入统一投影为owner brief，恢复只含自身memory/当前不透明work ID，不含来源正文/作者/讨论时间线；Broker拒绝共享workspace grants。owner review-release会停止Agent再解除隔离，需明确resume，不允许Agent自己退出。R5将分别接入指定资料/环境能力，不把席位限制作普通Agent的限制。
+
+R3b边界补充：生产私有workspace当前仍只有read/write grants，独立seat脚本exec的实际授权随R5统一workspace工具恢复；R3b不以工具白名单含exec声称已可计算。seat持久user输入timestamp固定0，不暴露被隔离delivery的时间线。
+
+R3b状态PASS，review_r3b，107 tests。R4开始实施：原始message唯一锚点、任务CAS claim/unclaim/transfer/update，任务held intent与消息draft分离；新任务先发可见消息再激活投影；任务提交通过门控后发布由harness生成的固定状态通知，通知不作为模型意见再次接受freshness判断。历史无原始消息映射的任务保留legacy标记，不猜测将多个旧task合并成同一Slack消息。

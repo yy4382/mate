@@ -72,3 +72,7 @@ it('switching activity cannot bypass uncertain effects on the same resources',as
   expect(await broker.execute(run,other,'second',otherGrant,{kind:'write',path:'note',content:'x'})).toMatchObject({status:'action_unknown'});
   expect(execute).toHaveBeenCalledTimes(1);
 });
+it('a review seat rejects even a valid grant to another workspace',async()=>{
+ const{root,db,run,broker,work,grant,execute}=setup();db.db.prepare('INSERT INTO review_seats VALUES(?,?,?,?,1)').run('research',JSON.stringify({channel:'CTEST'}),'synthetic owner brief',`${root}/clean`);
+ await expect(broker.execute(run,work,'outside-review',grant,{kind:'write',path:'note',content:'x'})).rejects.toThrow('clean private workspace');expect(execute).not.toHaveBeenCalled();
+});

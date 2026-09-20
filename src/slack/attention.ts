@@ -12,6 +12,7 @@ export class Attention {
     return (this.messages.store.db.prepare('SELECT COALESCE(MAX(seq),0) revision FROM conversation_events WHERE channel=? AND (? IS NULL OR thread=?) AND (audience IS NULL OR audience=?)').get(target.channel,target.thread??null,target.thread??null,actor??null) as {revision:number}).revision;
   }
   peek(actor:string,now=Date.now()):unknown[] {
+    if(this.messages.isolated(actor))return[{isolated:true,notice:'Independent review seat; discussion inputs are withheld.'}];
     const s=this.messages.store, agent=this.messages.agent(actor);
     const rows=s.db.prepare(`SELECT m.channel,m.thread,m.key,m.revision,MAX(e.seq) seq,seen.revision seen FROM messages m
       JOIN message_visibility v ON v.key=m.key AND v.agent_id=? JOIN channel_access a ON a.agent_id=v.agent_id AND a.channel=m.channel AND a.active=1
@@ -27,6 +28,7 @@ export class Attention {
     return [...groups.values()].sort((a,b)=>b.revision-a.revision).slice(0,50);
   }
   read(run:RunToken,target:Target,cursor?:string):unknown {
+    this.messages.requireReadable(run.agentId);
     const s=this.messages.store;s.assertRun(run);targetSchema.parse(target);this.messages.requireAccess(run.agentId,target.channel);
     let view:View,page=0;
     if(cursor){
@@ -72,6 +74,7 @@ export class Attention {
     }
   }
   valid(run:RunToken,target:Target,token?:string):boolean {
+    if(this.messages.isolated(run.agentId))return false;
     if(!token||!this.messages.access(run.agentId,target.channel))return false;
     const s=this.messages.store,v=s.db.prepare('SELECT * FROM attention_views WHERE id=?').get(token) as View|undefined;
     if(!v||v.agent_id!==run.agentId||v.session_id!==run.sessionId||v.epoch!==this.epoch(run.sessionId)||v.target!==encode(target)||!v.complete||v.revision!==this.revision(target,run.agentId))return false;

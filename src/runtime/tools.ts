@@ -53,6 +53,7 @@ export class ToolRouter {
   async call(run: RunToken, workId: string, callId: string, operation: string, input: unknown, signal: AbortSignal): Promise<ToolReply> {
     const c = this.collaboration, s = c.store, actor = run.agentId;
     s.assertRun(run); signal.throwIfAborted();
+    if(c.seats.active(actor) && !['agents','budget.read','attention.peek','messages.send','drafts.list','drafts.read','drafts.retry','drafts.continue','drafts.revise','drafts.discard','file.read','file.write','exec'].includes(operation))throw new Error('Independent review seat isolates this input path');
     workId = c.currentWork(run, workId);
     if (!(operation in schemas)) throw new Error('Unknown operation');
     // Parsing is deliberately repeated in the daemon, independently of model-side tool validation.
