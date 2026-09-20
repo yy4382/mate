@@ -46,3 +46,8 @@ CREATE TABLE approvals(id TEXT PRIMARY KEY REFERENCES actions(id), agent_id TEXT
 CREATE TABLE blocked_runs(run_id TEXT PRIMARY KEY REFERENCES runs(id));
 PRAGMA user_version=4;
 `;
+
+export const runtimeSchema = `
+CREATE TABLE inbox_reads(delivery_id TEXT PRIMARY KEY REFERENCES deliveries(id), agent_id TEXT NOT NULL REFERENCES agents(id), read_at INTEGER NOT NULL);
+PRAGMA user_version=5;
+`;

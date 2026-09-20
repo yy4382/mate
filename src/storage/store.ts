@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { createHash, randomUUID } from 'node:crypto';
-import { schema, messageSchema, collaborationSchema, policySchema } from './schema.js';
+import { schema, messageSchema, collaborationSchema, policySchema, runtimeSchema } from './schema.js';
 
 export function encode(value: unknown): string {
   const encoded = JSON.stringify(value);
@@ -21,10 +21,11 @@ export class Store {
     this.db.pragma('synchronous = FULL'); this.db.pragma('busy_timeout = 5000');
     const version = this.db.pragma('user_version', { simple: true });
     if (version === 0) this.atomic(() => this.db.exec(schema));
-    else if (![1, 2, 3, 4].includes(Number(version))) { this.db.close(); throw new Error('Unsupported database version'); }
+    else if (![1, 2, 3, 4, 5].includes(Number(version))) { this.db.close(); throw new Error('Unsupported database version'); }
     if (Number(version) < 2) this.atomic(() => this.db.exec(messageSchema));
     if (Number(version) < 3) this.atomic(() => this.db.exec(collaborationSchema));
     if (Number(version) < 4) this.atomic(() => this.db.exec(policySchema));
+    if (Number(version) < 5) this.atomic(() => this.db.exec(runtimeSchema));
   }
   atomic<T>(fn: () => T): T { return this.db.transaction(fn).immediate(); }
   close(): void { this.db.close(); }

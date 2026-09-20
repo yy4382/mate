@@ -13,8 +13,8 @@
 | C Slack 消息服务 | 持久 receiver、normalize、ACL、attention、read/search/send、显式 target、outbox 对账 | B | commit-before-ack、双 app/echo 去重、乱序编辑删除、撤权、429/unknown 故障注入；真实 Slack 另验 | PASS，review_c，27 tests |
 | D 协作与调度 | tasks/dependencies、work budgets、subscriptions、持久 schedules；owner 控制 stop/resume | C | CAS 认领、等待释放、继承预算、取消和 catch-up 幂等、依赖完成原子唤醒 | PASS，review_d，34 tests |
 | E 权限与执行 | trusted broker、grants/intents/approvals、Jev 官方 SDK、隔离 backend、文件与 memory 原子写 | D | 跨 Agent/路径/符号链接/过期审批/变参攻击；Jev 失败关闭；真实本地沙箱阻断与停止；中文 Jev 评测待凭证 | PASS，review_e，40普通+3真实测试 |
-| F Pi worker 与上下文 | restore/run/checkpoint/compact/abort、IPC、每 Agent 独立进程、memory 恢复包、合法工具投影 | E | 两频道同 session、两 Agent 独立、message_end 持久屏障、kill/restart、压缩闭合边界、审批释放/停止 | 进行中 |
-| G daemon 与日用验收 | main、Slack 管理入口、研究/成果工具、运维日志、备份恢复、配置示例与启动文档 | F | 合成双 Agent 全链路、故障矩阵、配置 fail-fast；真实 Slack/model/Jev 及任务质量比较独立列为未验 | 待实施 |
+| F Pi worker 与上下文 | restore/run/checkpoint/compact/abort、IPC、每 Agent 独立进程、memory 恢复包、合法工具投影 | E | 两频道同 session、两 Agent 独立、message_end 持久屏障、kill/restart、压缩闭合边界、审批释放/停止 | PASS，review_f，55普通测试 |
+| G daemon 与日用验收 | main、Slack 管理入口、研究/成果工具、运维日志、备份恢复、配置示例与启动文档 | F | 合成双 Agent 全链路、故障矩阵、配置 fail-fast；真实 Slack/model/Jev 及任务质量比较独立列为未验 | 进行中 |
 
 ## 与交接设计的关系
 

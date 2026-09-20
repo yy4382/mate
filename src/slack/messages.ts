@@ -115,7 +115,7 @@ export class Messages {
 export interface SlackTransport { post(agentId: string, target: Target, text: string, id: string): Promise<{ ts: string }> }
 export class Output {
   constructor(private messages: Messages, private transport: SlackTransport, private clock: () => number = Date.now) {}
-  queue(agentId: string, target: Target, text: string, id = randomUUID()): string {
+  queue(agentId: string, target: Target, text: string, id: string = randomUUID()): string {
     targetSchema.parse(target); this.messages.requireAccess(agentId, target.channel);
     z.string().min(1).max(35000).parse(text);
     this.messages.store.queueOutput(agentId, id, { target, text }); return id;

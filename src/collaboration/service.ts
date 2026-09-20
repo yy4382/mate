@@ -37,7 +37,7 @@ export class Collaboration {
   enqueue(agentId: string, workId: string, key: string, payload: unknown): string {
     return this.store.atomic(() => { this.active(workId); const id = this.store.enqueue(agentId, key, payload, 50); this.bindDelivery(id, workId); return id; });
   }
-  send(agentId: string, workId: string, target: Target, text: string, id = randomUUID()): string {
+  send(agentId: string, workId: string, target: Target, text: string, id: string = randomUUID()): string {
     return this.store.atomic(() => {
       this.active(workId); this.output.queue(agentId, target, text, id);
       const old = this.store.db.prepare('SELECT work_id FROM output_work WHERE output_id=?').get(id) as { work_id: string } | undefined;
