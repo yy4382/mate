@@ -1,27 +1,57 @@
-# Mate 本地交付验收
+# Mate harness 验收
 
-> 以下是旧实现的机制测试记录，不是新产品定位的验收。重新定位后必须按[PROJECT_DIRECTION](PROJECT_DIRECTION.md)验证完整可达行为；当前消息门控等改造未实现。
+2026-09-20。假设模型足够智能，验证它的合理选择是否可执行、可观察、可恢复；不评测模型主动性或协作质量。R1–R8逐模块独立红队通过，最终gate见[实施计划](IMPLEMENTATION_PLAN.md)。[当前调用链](HOW_IT_WORKS.md)解释具体函数与剩余差异。
 
-2026-09-20。模块A–G按依赖顺序实现，每个模块通过独立红队后再继续；本次H也通过独立review_h审核。最终状态以 [实施计划](IMPLEMENTATION_PLAN.md) 和 [逐模块记录](reviews/) 为准。
+## 产品语义与证据
 
-| 验收项 | 本地证据 | 外部待验 |
-|---|---|---|
-| 一个Agent跨频道同session、不同Agent隔离 | 真实Node子进程+合成provider；会话、PID、环境隔离断言 | 真实Slack多频道/DM与provider |
-| 持久输入/工具屏障/重启 | SQLite commit-before-ack；Pi await journal；副作用已提交但toolResult缺失窗口不重放 | Slack真实重复/延迟事件 |
-| 自主协作与成果修正 | 真实Pi loop驱动A委派、B反证、A读取任务结果并修订；只有一个work预算 | 协作工具、事件与Slack权限的真实接线 |
-| 授权和停止 | scope内直接执行、任务等待释放、owner控制；容器setsid、abort、timeout、重启清理 | Slack交互、长任务真实stop时延 |
-| 执行隔离 | macOS SRT实际文件操作；固定本地镜像容器无网络/秘密/跨root读写；daemon死亡文件助手退出 | 其他OS；实际项目工具链镜像 |
-| 压缩恢复 | Pi官方summary helper经同一预算边界；超长历史分块、完整tool边界、snapshot事务 | 真实provider协议与usage账单兼容 |
-| 备份与单实例 | 内核flock；SQLite backup API+memory一致检查点；测试重新打开备份库并比对memory | 用户正式备份位置与完整恢复演练 |
-| Slack服务 | 固定SDK契约、本地缓存ACL/变更、outbox unknown不重发、replies补抓、gap记录 | scopes/安装身份/实际速率限制、bot echo |
-| 命令审查 | 按用户要求移除Jev与逐命令审批；scope/grant/隔离保留 | 不属于当前待验服务 |
+| 能力/选择 | 当前验证 |
+|---|---|
+| 一Agent跨channel/thread/DM连续，peer独立 | runtime/supervisor：真实worker进程、同session/PID和独立环境；slack/conversations：顶层目标/DM发现与对账 |
+| 主动感知、暂缓、沉默 | attention：seen/resolve/defer/mute分离、分页ACK、晚到/编辑/删除；Engine通知在模型边界进入持久输入，不强杀工具 |
+| 同一变化下的多种合理决策 | daemon/integration五种真实Pi loop分支：defer保留、discard静默、continue、revise后发送、重读retry；无task tree；continue不推进seen |
+| 消息任务而非重复任务对象 | coordination/messages：canonical message_key、并发owner CAS、held无提前副作用、unclaim/transfer/update；创建可见消息confirmed后激活 |
+| 同伴直接讨论与证据修订 | daemon/integration：A认领原始消息、B直接反馈、A更新；peer可凭已有账户唤醒，无必需人类预算根 |
+| 跨事项选择 | supervisor：读取/切换独立；run成本仍归起始事项；selected work暂停/恢复与账户债务保持 |
+| 灵活私有workspace | execution/policy：目录、搜索、编辑、移动、删除、exec、root和双路径检查；真实SRT Unicode/二进制往返 |
+| 附件作为输入和可见成果 | daemon/attachments、slack/freshness：acting identity、可见message/fileId、下载前后ACL、binary冻结、分享前重查、unknown fileId对账、echo去重 |
+| 作者提醒独立于task完成 | reminders：内容/锚点/version、改期/取消/log、只唤醒作者、任务结束后仍触发、漏期合并、pending与已选中区分 |
+| 受控更换context，身份不断 | supervisor：model reset after-run/recovery、owner reset留paused、旧view失效、未知动作/债务/任务/提醒保留；跨session自身执行receipt可查 |
+| 角色/工具/配置演进 | daemon/migration：旧配置匹配、身份不可重绑、备份、事务回滚、pending reset一次应用、四Agent本地启动、撤销grant保留 |
+| 完整行为prompt与memory恢复 | runtime/prompt对照产品方向/参考材料独立审查；Engine/真实IPC压缩后刷新最新memory/checkpoint，失败不继续用旧包 |
+| 独立review seat | supervisor/policy：unused身份+clean workspace、对话/peer路径统一屏蔽、私有文件/离线exec、opaque held后continue |
+| 持续预算与公平性 | Agent账户不随新消息/work/reset补额；work耗尽不暂停全Agent；reminder触发与outbox筛选先排除阻挡再LIMIT，无关事项可前进 |
 
-最终普通检查：`pnpm run check` 编译成功，66 passed，4项需要显式本地权限的真实隔离测试默认skipped。4项隔离测试已通过 pnpm 单独实际重跑，全数通过。模拟provider/Slack不产生付费模型调用或真实消息。
+测试位置：上述名称均位于[tests](../tests/)，具体断言可检索对应能力。所有数据均为合成fixture，不使用私有Raft memory。
 
-已知产品边界：固定1–3个Agent；研究是allowlist URL读取，无全网搜索；成果发布为自有artifacts/下64KB文本；搜索仅本地已可见Slack缓存；静态配置策略变化需要显式迁移，不静默扩权；命令审查已移除。当前凭证缺失，未把真实服务协议接线标为已验。
+## 故障矩阵
 
-入口和配置见 [README](../README.md) 与 [mate.example.json](../mate.example.json)。开发过程中未推送、部署、创建外部资源、读取私有memory写入fixture或发送Slack消息。
+| 窗口/故障 | 预期及测试证据 |
+|---|---|
+| Slack重复/乱序、commit后ACK前断开 | ingress持久去重；本地revision独立于Slack时间；编辑/删除/晚到回归 |
+| 工具执行后、toolResult journal前崩溃 | action receipt原子保存；transcript修复显式历史回执，不能盲重放 |
+| notice收到但正文未ACK、分页不完整 | 不推进完整view/seen；重启或epoch变化需要重新呈现或明确continue |
+| send排队后讨论变化、429后变化 | dispatch重新hold，草稿保留；不是悄悄发送旧意见 |
+| 外部调用回执丢失 | unknown持久、同目标后续阻挡；消息/附件按明确Slack证据对账；无凭据不猜成功 |
+| 上传已allocation但尚未share | fileId/phase落盘；分享前再检查；未开始share可判失败，sharing不确定保留unknown |
+| 一个频道有大量被阻挡输出 | unknown/相关ingress在ready LIMIT前过滤；其他频道仍可派发 |
+| 作者预算/ACL/事项阻挡一批提醒 | tick在LIMIT前筛选；其他合法作者仍可触发 |
+| owner stop/cancel、daemon死亡 | generation fence、worker abort、容器PID namespace清理、文件helper lifeline；resume不清债务 |
+| reset请求后run中断、owner reset与旧run收尾交错 | 一次轮换、取消不续跑、暂停保持；不覆盖新session |
+| 配置迁移事务写失败 | 旧配置/session/grants一致保留，已有完整备份；保守fenced recovery不回滚为active |
+| 压缩后memory刷新失败 | 先失效view，再失败；真实RPC验证无主推理、无使用旧包冒充当前 |
 
-2026-09-20补充：A–G测试数为历史基线；本次移除废弃审查测试、补充v7迁移与直接执行测试。原始v1的未接通功能和harness能力可达性缺口见[HOW_IT_WORKS](HOW_IT_WORKS.md)，模块PASS不等于所有产品feature均已完成。
+## 本地验证与外部边界
 
-验收范围按用户最新指示：假设模型足够智能，只评估harness工具、环境、prompt、调用链和状态恢复。模型表现/协作质量不属于本阶段目标或交付阻塞。
+普通检查：`pnpm run check`，176 passed；默认跳过7项需要显式本地SRT/Docker权限的测试。真实隔离集单独执行，7/7通过；详见最终review记录。
+
+普通集调用真实Pi loop、Node worker与IPC，Slack/provider采用合成transport。真实隔离集使用现有固定本地镜像，覆盖跨root/secret/network、停止/超时/daemon死亡、二进制及network策略；不拉镜像、不连接外部服务。
+
+未进行真实Slack/provider验收。上线前核对安装身份/scopes、频道及DM事件、bot echo、429、unknown对账、附件分享、provider usage/错误格式与停止时延；这些是协议接线与运行契约，不是证明模型能自发作出相同决策。
+
+当前边界详见[HOW_IT_WORKS](HOW_IT_WORKS.md)：本地freshness不是Slack全局原子事务；没有通用search/browser/第三方登录；review seat为更保守的全对话隔离；大小/分页/单run输入有界；没有通用unknown强行清账；单daemon/workspace，其他OS未验证。
+
+## 独立审核轨迹
+
+每个模块通过后才实施后续模块：[R1a/R1b–R7c记录](reviews/)。R7a红队发现并修复旧unknown不可查和历史回执ACL旁路；R5/R6发现并修复adapter seat旁路、UTF-8分块损坏、附件ACK/echo竞态、提醒批次饥饿。R8补充outbox公平性及多分支语义验证。最终gate和确切测试数记录在[R8审核](reviews/R8-product-semantics.md)。
+
+未推送、部署、创建外部资源或发送真实Slack消息。

@@ -192,3 +192,44 @@ it('Slack artifact echoes replace publication projection without double unread a
  store.ingest('ATWO','echo-file',{team_id:'TTEST',event:{type:'message',channel:'CTEST',ts:'201.000001',thread_ts:target.thread,text:'caption',user:'UONE',files:[{id:'FFILE',title:'result'}]}});c.messages.normalize('ATWO','echo-file');
  expect(c.attention.peek('writer')).toEqual([{target,revision:expect.any(Number),unseen:0}]);const after=c.attention.read(peer,target)as any;expect(after.publications).toEqual([]);expect(after.messages[0].files[0].id).toBe('FFILE');
 });
+it.each(['defer','discard','continue','revise','retry'] as const)('the same changed discussion permits the Agent choice %s through the Pi loop without a task tree',async choice=>{
+ const{store,c,broker,post}=setup(),router=new ToolRouter(c,broker),target={channel:'CTEST',thread:'100.000001'};let view='',draft:any,step=0,now=200;
+ const change=()=>c.messages.record({team:'TTEST',channel:'CTEST',thread:target.thread,ts:`${now++}.000001`,revision:`${now}.000001`,user:'UTWO',text:'new peer evidence',deleted:false},['research']);
+ const supervisor=new Supervisor(c,router,c.config,()=>({close:()=>{},run:async(spec,hooks)=>{
+  const engine=new Engine({...model,contextWindow:200000},()=>{
+   let operation:string|undefined,args:any={};step++;
+   if(step===1){operation='attention.read';args={target};}
+   else if(step===2){change();operation='messages.send';args={target,text:'original conclusion',viewToken:view};}
+   else if(step===3){
+    if(choice==='defer'){operation='attention.defer';args={target,until:Date.now()+100000};}
+    if(choice==='discard'){operation='drafts.discard';args={draftId:draft.draftId,revision:draft.revision};}
+    if(choice==='continue'){operation='drafts.continue';args={draftId:draft.draftId,revision:draft.revision,holdId:draft.holdId,acknowledge:'send_despite_unread_or_changes'};}
+    if(choice==='revise'){operation='drafts.revise';args={draftId:draft.draftId,revision:draft.revision,text:'revised conclusion'};}
+    if(choice==='retry'){operation='attention.read';args={target};}
+   }else if(step===4&&choice==='retry'){operation='drafts.retry';args={draftId:draft.draftId,revision:draft.revision,viewToken:view};}
+   else if(step===4&&choice==='revise'){operation='drafts.continue';args={draftId:draft.draftId,revision:draft.revision,holdId:draft.holdId,acknowledge:'send_despite_unread_or_changes'};}
+   const message=operation?answer([{type:'toolCall',id:`${choice}:${step}`,name:'mate',arguments:{operation,args}}],'toolUse'):answer([{type:'text',text:'private turn completed'}]);
+   const stream=createAssistantMessageEventStream();stream.push({type:'done',reason:message.stopReason as 'stop'|'toolUse',message});return stream;
+  });
+  return engine.run(spec,{...hooks,tool:async(id,op,args)=>{const reply=await hooks.tool(id,op,args);if(op==='attention.read')view=(reply.value as any).viewToken;if(op==='messages.send'||op==='drafts.revise')draft=reply.value;return reply;}});
+ }}));cleanups.unshift(()=>supervisor.close());supervisor.register();for(const a of c.config.agents)c.messages.membership(a.id,'CTEST',true);
+ const work=c.createWork('choices',target);change();c.enqueue('research',work,'choose',{target});await supervisor.step('research');
+ expect(store.db.prepare("SELECT count(*) n FROM runs WHERE state='failed'").get()).toEqual({n:0});expect(c.list('research')).toHaveLength(0);
+ for(const row of c.output.ready())await c.output.send(row.id);
+ if(choice==='defer'||choice==='discard')expect(post).not.toHaveBeenCalled();else expect(post).toHaveBeenCalledOnce();
+ if(choice==='defer'){expect(c.output.gate!.list('research')).toHaveLength(1);expect(c.attention.peek('research')).toEqual([]);}
+ if(choice==='revise')expect(JSON.stringify(post.mock.calls)).toContain('revised conclusion');
+ const seen=store.db.prepare("SELECT revision FROM attention_seen WHERE agent_id='research' AND key=?").get(JSON.stringify(['TTEST','CTEST','201.000001']));
+ if(choice==='continue')expect(seen).toBeUndefined();
+ if(choice==='retry')expect(seen).toEqual({revision:'202.000001'});
+});
+it('unknown output and unnormalized ingress do not starve unrelated targets before the ready batch limit',async()=>{
+ const{store,c,broker,post}=setup();new ToolRouter(c,broker);store.register('research','v1',[]);for(const channel of ['CTEST','CTWO','CTHREE'])c.messages.membership('research',channel,true);
+ const work=c.createWork('fairness',{channel:'CTEST'});c.enqueue('research',work,'run',{});const run=store.beginRun('research')!;store.input(run,{});
+ const enqueue=(channel:string,id:string)=>{const output=c.send('research',work,{channel},id,id,{run});const draft=c.output.gate!.describe('research',output) as any;c.output.gate!.continueOnce(run,output,draft.revision,draft.holdId);return output;};
+ const unknown=enqueue('CTEST','unknown');store.transitionOutput(unknown,'pending','sending');store.transitionOutput(unknown,'sending','unknown');
+ for(let i=0;i<25;i++)enqueue('CTEST','blocked-'+i);
+ store.ingest('AONE','pending-ingress',{team_id:'TTEST',event:{channel:'CTWO',type:'message',ts:'100.000001',user:'UOWNER',text:'normalize first'}});
+ for(let i=0;i<25;i++)enqueue('CTWO','ingress-blocked-'+i);
+ const unrelated=enqueue('CTHREE','unrelated');expect(c.output.ready()).toEqual([{id:unrelated}]);await c.output.send(unrelated);expect(post).toHaveBeenCalledOnce();expect(store.output(unknown)?.state).toBe('unknown');
+});

@@ -211,7 +211,22 @@ export class Output {
     });
   }
   ready(limit = 20): { id: string }[] {
-    return this.messages.store.db.prepare("SELECT o.id FROM outbox o LEFT JOIN output_work ow ON ow.output_id=o.id LEFT JOIN works w ON w.id=ow.work_id WHERE o.state='pending' AND NOT EXISTS(SELECT 1 FROM agents a WHERE a.id=o.agent_id AND a.paused=1) AND (w.state IS NULL OR w.state!='paused') AND COALESCE(json_extract(o.receipt,'$.retryAt'),0)<=? ORDER BY o.rowid LIMIT ?").all(this.clock(), limit) as { id: string }[];
+    // Eligibility precedes LIMIT so a blocked target cannot starve other conversations.
+    // sendNow repeats these checks at the actual dispatch boundary.
+    return this.messages.store.db.prepare(`
+      SELECT o.id FROM outbox o LEFT JOIN output_work ow ON ow.output_id=o.id LEFT JOIN works w ON w.id=ow.work_id
+      WHERE o.state='pending' AND NOT EXISTS(SELECT 1 FROM agents a WHERE a.id=o.agent_id AND a.paused=1)
+      AND (w.state IS NULL OR w.state!='paused') AND COALESCE(json_extract(o.receipt,'$.retryAt'),0)<=?
+      AND (?=0 OR (
+        NOT EXISTS(SELECT 1 FROM ingress i WHERE i.normalized=0 AND (json_extract(i.body,'$.event.channel')=json_extract(o.request,'$.target.channel') OR json_extract(i.body,'$.command') IS NOT NULL))
+        AND NOT EXISTS(SELECT 1 FROM outbox prior WHERE prior.id!=o.id AND prior.state IN ('sending','unknown')
+          AND json_extract(prior.request,'$.target.channel')=json_extract(o.request,'$.target.channel')
+          AND (json_extract(prior.request,'$.target.thread') IS NULL OR json_extract(o.request,'$.target.thread') IS NULL OR json_extract(prior.request,'$.target.thread')=json_extract(o.request,'$.target.thread')))
+      ))
+      AND NOT EXISTS(SELECT 1 FROM outbox prior WHERE prior.id!=o.id AND prior.agent_id=o.agent_id AND prior.state IN ('sending','unknown')
+        AND json_extract(o.request,'$.artifact.contentHash') IS NOT NULL AND json_extract(prior.request,'$.artifact.contentHash')=json_extract(o.request,'$.artifact.contentHash'))
+      ORDER BY o.rowid LIMIT ?
+    `).all(this.clock(),Number(!!this.gate),limit) as {id:string}[];
   }
   send(id:string):Promise<void>{const next=this.dispatchQueue.then(()=>this.sendNow(id));this.dispatchQueue=next.catch(()=>{});return next;}
   private async sendNow(id: string): Promise<void> {

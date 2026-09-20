@@ -2,6 +2,8 @@
 
 2026-09-20；依据 HANDOFF、技术设计、v1 scope 与本地 Raft 只读证据。工作目录与已保存项目 mate 路径均为 `/Users/chris/Developer/demo/mate`。
 
+当前进度：R1–R8已逐模块实现、检查并通过独立红队；普通176 tests、真实本地隔离7/7通过。A–H及R0下的说明为历史阶段记录；当前模块表与文末最新gate记录优先。
+
 ## 交付规则
 
 模块按下表顺序实施。每个模块先通过本地检查，再由未参与实现的独立红队读取真实代码/测试；修复所有验收阻塞并复审后才启动下一模块。审核记录写入 `docs/reviews/`。外部凭证缺失不阻塞纯本地实现，但模拟验证不代表真实服务验收。
@@ -52,12 +54,12 @@ A–G 历史检查与独立红队记录保留；当前检查结果见 `docs/ACCE
 |---|---|---|---|---|---|
 | R0 | 从受限work执行器重新定位为持久自主Agent的协作环境；调研注意力与发送时门控 | PROJECT_DIRECTION、MESSAGE_GATING_RESEARCH、README/AGENTS/交接入口、后续R1+接口和依赖 | 原始Raft prompt/对话证据、当前源码、官方公开材料 | 明确事实/建议/实现状态；解决八项语义偏移；门控保留读取/修改/沉默/显式继续选择，描述Slack一致性边界；独立红队审查 | PASS，review_r0；仅文档设计 |
 
-不把旧A–H的PASS当作新定位验收。后续代码模块需要各自实现、检查、独立review gate，本轮不将其标为完成。
+R0阶段约定：不把旧A–H的PASS当作新定位验收；R0当时只完成定位研究，代码模块的后续实现与gate记录如下。
 
 
 ## 重新定位后的代码模块（已获实施授权）
 
-用户已要求开始逐模块实施。下表是依赖顺序；R0已完成，R1起逐个实现。未来每个模块实现后都需要独立review gate，必须检查原意/行动空间，不能只检查所选路径的健壮性。旧数据库升级需提供备份、映射和可恢复失败路径，不删库重建冒充迁移。
+用户已要求逐模块实施。下表是依赖顺序及当前状态；每个模块实现后都需要独立review gate，必须检查原意/行动空间，不能只检查所选路径的健壮性。旧数据库升级需提供备份、映射和可恢复失败路径，不删库重建冒充迁移。
 
 | 模块 | 目标与接口 | 依赖 | 验收与有意义验证 | 状态 |
 |---|---|---|---|---|
@@ -67,8 +69,8 @@ A–G 历史检查与独立红队记录保留；当前检查结果见 `docs/ACCE
 | R4 消息任务 | canonical message claim、unclaim/transfer、状态投影、可选dependency；接R3任务门控 | R3 | 同一消息并发转换/认领唯一；hold无副作用；任务版本冲突；可直接协作或用任务，无强制总管/任务树；人类可见状态 | PASS，review_r4，115 tests |
 | R5 工具与workspace | ToolEnvironment注册/描述/执行adapter；私有workspace完整文件能力；可配置联网与工具链、附件输入输出 | R4 | 合成资料检索/脚本/文件组织/发布全链；不依赖外部私密凭证；真实backend停止/崩溃隔离；其他Agent私有空间不可访问 | PASS，R5a/R5b1/R5b2 |
 | R6 作者拥有的提醒 | Reminder内容/锚点/版本/改期/取消/日志；独立于已完成task，绑定持续预算策略 | R5 | 完成任务后提醒仍触发本人；可见回执不乱唤醒；取消与已入队区分；catch-up去重；旧schedule显式迁移 | PASS，review_r6，156 tests |
-| R7 session演进与prompt | 逻辑身份/current session、检查点/重置/配置迁移、压缩后memory刷新、完整行为约定 | R6 | 角色更新/换session保持身份/未读/任务/提醒/草稿；旧view失效；memory内容自由；不可恢复窗口如实说明 | 未开始 |
-| R8 产品语义验收 | 合成多Agent场景与故障矩阵、README/current behavior重写 | R7 | 覆盖多种合法选择而非固定合作剧本；真实Slack/provider仅协议接线；独立审查对照Raft原意及用户修正逐项判定 | 未开始 |
+| R7 session演进与prompt | 逻辑身份/current session、检查点/重置/配置迁移、压缩后memory刷新、完整行为约定 | R6 | 角色更新/换session保持身份/未读/任务/提醒/草稿；旧view失效；memory内容自由；不可恢复窗口如实说明 | PASS，R7a/R7b/R7c |
+| R8 产品语义验收 | 合成多Agent场景与故障矩阵、README/current behavior重写 | R7 | 覆盖多种合法选择而非固定合作剧本；真实Slack/provider仅协议接线；独立审查对照Raft原意及用户修正逐项判定 | PASS，review_r8，176普通+7真实 |
 
 
 ### R1细分与当前执行顺序
@@ -123,3 +125,5 @@ R7a PASS，review_r7a，正式161 tests；补齐跨session自身执行回执查�
 R7b PASS，review_r7b，167 tests及独立额外4项通过。迁移命令与完整配置快照、身份限制、备份/事务回滚、历史baseline更换及grant收敛已落地。取消固定三Agent上限，单Agent额度不再除以全队人数。R7c现在实施完整行为prompt和压缩后的恢复刷新，不改变模型评测范围。
 
 R7c PASS，review_r7c，普通170 tests；独立runtime36及真实RPC故障注入通过。完整prompt已对照产品定位和Raft参考，恢复包在压缩后实际重读memory/checkpoint/selected work并进入下一模型输入。R7整体完成，进入R8多选择语义验收、outbox公平性和当前文档收口。
+
+R8 PASS，review_r8。五种合法决策通过真实Pi loop与持久状态验证，修复outbox前序unknown/ingress阻挡造成的批次饥饿；当前文档完整重写并保留明确差异。独立176 tests、类型检查通过，实现方真实本地隔离7/7；详情reviews/R8-product-semantics.md。R1–R8全部完成；真实Slack/provider协议接线仍未验，不属于模型性能/智能验收。

@@ -1,6 +1,6 @@
 # Mate 开发交接
 
-> 新产品基线：[PROJECT_DIRECTION](PROJECT_DIRECTION.md)，消息门控研究：[MESSAGE_GATING_RESEARCH](MESSAGE_GATING_RESEARCH.md)。当前代码仍存在任务/注意力/work耦合等语义偏移，不能继续按旧方案机械扩展。以下为历史交接。
+> 新产品基线：[PROJECT_DIRECTION](PROJECT_DIRECTION.md)，消息门控研究：[MESSAGE_GATING_RESEARCH](MESSAGE_GATING_RESEARCH.md)。R1–R8已按新方向实现并独立审核，当前验收见[ACCEPTANCE](ACCEPTANCE.md)。以下为历史交接，不应按旧方案机械扩展。
 
 > 历史交接。2026-09-20用户已决定改用pnpm、删除Jev和逐命令审批；本文件相关要求已被覆盖。当前实现/扩展边界见 [HOW_IT_WORKS](HOW_IT_WORKS.md)。
 

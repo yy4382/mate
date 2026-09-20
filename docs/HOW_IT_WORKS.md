@@ -1,157 +1,119 @@
-# Mate 当前如何工作，以及还缺什么
+# Mate 当前调用链、能力与边界
 
-> 本文仅说明现有代码。新的[项目定位](PROJECT_DIRECTION.md)指出了任务对象、跨work行动、注意力、工作空间等核心语义偏移，不能将此文的“已实现”理解为已忠实复现Raft。后续方向以新定位及[门控调研](MESSAGE_GATING_RESEARCH.md)为准，改造尚未实现。
+2026-09-20，R1–R8 已逐模块通过独立红队，最终验收见 [ACCEPTANCE](ACCEPTANCE.md)。本文件描述当前代码；[PROJECT_DIRECTION](PROJECT_DIRECTION.md)解释为何重构，[实施计划](IMPLEMENTATION_PLAN.md)与[审核记录](reviews/)保留各 gate 的证据。
 
-2026-09-20，按当前源码梳理。本次已改用 pnpm，并按用户决定删除 Jev、分类器、逐命令审批和精确命令白名单。目录/操作授权、预算、隔离执行与持久回执仍存在。
+验收只问：假设模型足够智能，工具、环境、prompt 和状态机是否允许它实现目标，并在并发、重启、失败时保持契约。脚本化模型用于选择分支，不是模型性能评测。
 
-验收对象是 **harness**：假设模型智能程度无限高，当前工具、环境、system prompt与状态机能否使目标行为可达。脚本化模型是验证调用链的合适测试手段；不要求证明模型是否足够主动、会不会推理或能否提高协作质量。以前“模块 A–G PASS”指模块审核通过，不能理解为原始v1每个产品入口都已接通。
-
-## 1. 从一条 Slack 消息到一次模型运行
+## 从输入到模型，再到工具
 
 ```mermaid
 flowchart TD
   Slack[Slack Socket Mode] --> Receive[DurableReceiver.receive]
-  Receive --> Persist[Store.ingest 写入 SQLite]
-  Persist --> Ack[ack 确认接收]
-  Ack --> Replay[SlackService.replay / Ingress.replay]
-  Replay --> Normalize[Messages.normalize / record]
-  Normalize --> Inbox[Store.enqueue + Collaboration.bindDelivery]
-  Inbox --> Scheduler[Daemon.loop / Supervisor.step]
-  Scheduler --> Run[beginRun → reserve → input → context]
-  Run --> Child[WorkerClient.run → serveWorker → Engine.run]
-  Child --> Pi[Pi Agent.continue → provider stream]
-  Pi --> Journal[message_end → IPC → Store.appendMessage → ACK]
-  Journal --> Tools[ToolRouter.call]
-  Tools --> Pi
-  Pi --> Finish[settleUsage → finish → snapshot]
+  Receive --> Persist[Store.ingest: commit before ACK]
+  Persist --> Replay[SlackService.replay / Ingress.replay]
+  Replay --> Messages[Messages.normalize / record]
+  Messages --> Events[消息缓存 / revision / audience]
+  Messages --> Inbox[持久 delivery + work binding]
+  Inbox --> Run[Daemon.loop → Supervisor.step]
+  Run --> Budget[beginRun → reserve Agent及事项预算]
+  Budget --> Restore[恢复当前session / memory / checkpoint]
+  Restore --> Worker[WorkerClient → serveWorker → Engine]
+  Worker --> Pi[Pi Agent.continue]
+  Pi --> Journal[message_end → IPC → journal ACK]
+  Journal --> Tool[ToolRouter.call → ToolEnvironment]
+  Tool --> Pi
+  Pi --> Finish[结算 / finish / snapshot / continuation]
 ```
 
-具体入口：[`main`](../src/main.ts) → [`Daemon.start/open`](../src/daemon/app.ts)。启动时拿内核文件锁、恢复本实例遗留容器、fence 旧 run、验证 Slack 身份、同步成员资格和补抓消息，再开各 bot 的 Socket Mode 连接。
+入口：[main](../src/main.ts)、[Daemon](../src/daemon/app.ts)、[Supervisor](../src/runtime/supervisor.ts)、[Engine](../src/runtime/engine.ts)。Pi Core + pi-ai 是实际运行层，没有 pi-coding-agent。
 
-收到消息后：
+同一 Agent 的频道、thread、DM 输入使用同一个当前 session 和 worker；不同 Agent 分开。SQLite 保存原始 journal、恢复 snapshot、队列和回执。每 Agent 同时只有一个主 run；普通输入排队，同时 content-free notice 在下一模型调用边界注入当前 run，不强杀正在执行的工具。owner stop 则走独立 abort/fence 路径。
 
-1. [`DurableReceiver.receive`](../src/slack/receiver.ts) 先写原始 ingress，再 ack。Slack 重试靠 app/event ID 去重。
-2. [`Messages.normalize/record`](../src/slack/messages.ts) 合并消息版本、判断当前可见性、识别注册 Agent/人/外部 bot。明确 @ 和 DM 优先；关注线程可以唤醒；participate 普通讨论按 20 秒窗口合并；自己的 echo 不唤醒自己。
-3. [`Ingress.replay`](../src/daemon/ingress.ts) 绑定 work。work 是一条协作链的预算与停止范围；只有可信人类来源可创建新的预算根。Peer 消息沿用已有 work，未能对账的 echo 暂不运行。
-4. [`Supervisor.step`](../src/runtime/supervisor.ts) 取一个 delivery，预留预算、提交输入，读取上下文和 memory 恢复包，再发给 Agent 的 worker。通知通常只带消息 ID、来源和 target；模型需要 `messages.read/recent/search` 才取得对应内容，并非每条 Slack 全文都自动塞进上下文。
-5. [`Engine.run`](../src/runtime/engine.ts) 调用真实 Pi Core Agent。`message_end` 通过 IPC 等待 SQLite 落盘确认，然后才允许下一步工具调用。结束时还要检查错误/中断状态，不能只看 Pi 已 idle。
+Notice、读取、处理彼此独立。消息到达或进入 inbox 不等于正文已呈现；finish 不等于解决未读问题。模型通过 attention.read 按需获取正文，通过 defer/resolve/mute/watch 管理注意力。
 
-模型的设置也属于这条调用链：[`Supervisor.register`](../src/runtime/supervisor.ts) 将身份/role、跨频道同session、显式公开回复、任务委派与等待、memory维护、预算和停止规则写入system prompt；[`operationDocumentation`](../src/runtime/tools.ts) 把操作名及参数schema附到提示词中，`createInitialSystemMessage` 固定工具声明。每run另注入实际work、任务索引和grant IDs。因此工具不只存在于服务端，也有模型可见的入口和参数说明。
+## 可见性、事项、任务和预算不是同一个对象
 
-## 2. 为什么同一个 Agent 跨频道连续，不同 Agent 又独立
+| 对象 | 用途 | 不会自动发生的事 |
+|---|---|---|
+| Agent / current session | 持久身份和当前上下文 | 换 session 不创建新身份、不清预算 |
+| Target | channel、可选 thread；DM也是channel ID | 不是独立Agent上下文 |
+| Work | 动作控制、事项额度、run归属 | 不是所有读取操作的ACL，也不是必须采用的任务树 |
+| Canonical task | 原消息上的所有权、版本和状态 | 不因重复create生成同一消息的第二个owner |
+| Agent budget account | 持续 runs/tokens/cost，预留与结算 | 新人类消息、peer消息、work或reset不补额 |
+| Grant | 特定Agent/事项/root的read/write/exec授权 | 消息或memory文本不能扩大权限 |
 
-核心键是 `agent_id → session_id`，没有 `channel_id → session_id` 分片。
+[BudgetLedger](../src/budget/ledger.ts)先预留、后按可信 usage 结算；未知 usage 保留预留债务。一次 run 的模型费归起始事项和Agent；works.select 切换后续动作与控制归属，并获取新事项 grants，不改写既有账单。事项耗尽不会暂停整个Agent，其他事项仍可调度；Agent账户耗尽需要owner提高累计上限。配置预算只首次播种账户。
 
-`Store.register` 保留 Agent 的 session；`Supervisor.workers` 按 Agent ID 缓存独立进程。下一条消息即使来自另一频道，仍恢复相同 session 的 snapshot + journal tail。不同 Agent 的 worker、session、MEMORY.md 各自独立。
+读取按当前可见性；跨事项任务读取和同伴讨论可达。曾读过的私有频道内容仍可能保留在这个Agent的共同上下文中；撤销ACL防止新工具读取，并不使模型忘记旧内容。
 
-这使模型可以在后续频道使用先前讨论。频道在这里不是该Agent内部的信息隔离边界：先前看过的内容仍可能保留在共同上下文中。当前按个人单 workspace 设计。
+## 消息门控如何保留自主判断
 
-每个 Agent 同时只有一个主 run。其他消息排队；普通新消息不会实时插进正在进行的模型 turn。`tasks.wait` 会结束当前 run，因此等待同伴期间可以处理另一频道的消息。停止走独立控制路径。
-
-## 3. 两个 Agent 怎样真的影响彼此
+[Attention](../src/slack/attention.ts)维护本地 observed revision、分页快照和 viewToken。新增、编辑、删除、晚到消息、可见性变化都形成事件。完整 toolResult 随 journal 提交后才ACK呈现；搜索、metadata、半页、未ACK结果不能充当完整视图。token绑定Agent/session/epoch/target/revision，压缩和session更换后失效。
 
 ```text
-A: ToolRouter.call("tasks.create/claim")
- → Collaboration.createTask / claim                 持久任务 + 原子认领
-A: ToolRouter.call("tasks.delegate")
- → Collaboration.delegate
- → child task = draft + Collaboration.send         先排队可见委派
- → Output.send → Slack post → Output.confirm       有发送回执
- → Collaboration.activateDelegations               child变todo，投递给B
-A: ToolRouter.call("tasks.wait")
- → Collaboration.wait → reply.wait=true
- → Engine结束本run                                不挂着Promise等待
-B: Supervisor.step → 读取任务 → 执行 → tasks.update(done, result)
- → Collaboration.wakeDependents → 持久投递唤醒A
-A: 下一run → tasks.read(child) → 使用结果 → messages.send
+attention.read → 完整呈现ACK → viewToken
+messages.send / artifact.publish / task mutation
+  ├─依据仍有效 → queued / 接受任务变更
+  └─依据缺失或过时 → held draft / task intent，无提交副作用
+       ├─读取后 retry（再次检查）
+       ├─revise（新不可变版本）
+       ├─discard / 保留、暂缓
+       └─continue（当前hold+revision，有限知情继续）
 ```
 
-不必经过一个总管才能沟通。Agent 也能直接 `messages.send` @同伴；发送成功后的本地回路会路由到有权接收的 Agent，随后 Slack echo 不再重复唤醒。
+[FreshnessGate](../src/slack/freshness.ts)不评价内容质量，不审查命令。continue只跨越freshness，不跨ACL、task CAS、停止或unknown。消息continue绑定60秒内一次派发机会，超时重新hold，不成为永久“忽略变化”。
 
-现有双Agent集成测试走Pi loop、工具、SQLite、输出回执、委派、等待和唤醒。测试用脚本化模型确定动作，验证同伴结果能进入A后续run并改变输出；这就是harness需要验证的能力。由模型选择何时委派、向谁提问或是否反驳，属于已经向它开放的决策空间，不是当前性能评测任务。
+[Output.ready/sendNow](../src/slack/messages.ts)在真正派发前再检查：owner/Agent/work状态、当前ACL、相关未规范化ingress、unknown/sending阻挡和freshness。429后重查；网络丢回执转unknown，不自动重发。阻挡条件在LIMIT前过滤，避免一个频道饿死其他频道。派发目前全局串行，强于按目标串行，吞吐量相应受限。
 
-## 4. 工具、公开输出与现在的命令执行
+Slack没有这里所需的“比较整个房间版本后原子发送”事务。保证覆盖本地已观察状态；外部消息可在本地检查之后到达。完整调研与来源见[MESSAGE_GATING_RESEARCH](MESSAGE_GATING_RESEARCH.md)。
 
-模型只看见统一 `mate(operation, args)` 工具。worker 通过 IPC 向 daemon 请求，[`ToolRouter.call`](../src/runtime/tools.ts) 重新验证参数并绑定真实 actor/work。模型不能通过参数冒充另一个 Agent。
+## 直接协作、消息任务和提醒
 
-| 工具 | 调用路径 | 当前行为 |
+直接路径：A messages.send @B → gate/outbox → confirmed → Messages.record → B持久delivery → B下一run。无需总管、父任务或委派树；自己的echo去重。同伴可以选择回复、核实、补充、暂缓或沉默。
+
+需要追踪所有权时，[MessageTasks](../src/coordination/messages.ts)的 tasks.claim 接原始messageRef或既有taskId，唯一message_key加version CAS。hold时不提前占有任务；继续也不能抢占另一个owner。unclaim/transfer/update都有版本约束。tasks.create先发可见消息，confirmed后才激活任务；历史无法证明原始消息来源的旧task标legacy，不猜测合并。
+
+tasks.wait建立持久依赖并释放run，等待者仍能处理其他对话。新任务与状态投影是可见信息，不代替Agent自己的讨论判断。
+
+[Reminders](../src/reminders/service.ts)由作者管理content、target、可选anchor/task、时间、cron、version和日志。完成task不取消提醒；事项pause/cancel仍控制其触发。tick原子写delivery/firing/固定可见回执，只唤醒作者，cron错过多次合并一次。回执不发布模型撰写正文，也不唤醒其他Agent。cancel默认取消未来，显式cancelPending可撤回尚未被run选中的队列，已选中/注入单独报告。
+
+## 工具与执行的实际路径
+
+| 能力 | 调用链 | 当前契约 |
 |---|---|---|
-| 消息/线程/搜索 | ToolRouter → Messages / Collaboration.send → Output | 当前 ACL；显式 channel/thread；搜索已收集的本地缓存 |
-| 任务/计划/inbox | ToolRouter → Collaboration / Store | SQLite事务；工具动作回执避免重复副作用 |
-| 文件/命令 | ToolRouter → Broker.execute → ExecutionBackend.execute | 授权范围内直接执行，无分类/逐条审批 |
-| 研究 | ToolRouter → Research.read | 配置域名上的公开HTTPS URL读取，无全网搜索 |
-| 成果发布 | ToolRouter → Artifacts.publish → file read → Slack filesUploadV2 | 仅自己artifacts/下、最大64KB文本；显式target |
+| 发现 | ToolEnvironment.list/describe/execute | 精确Zod schema；可信host adapter可扩展，模型不能安装adapter |
+| 交流空间 | ToolRouter → Directory → acting Slack client | 已加入空间/成员/DM；权限变化重查，有界分页 |
+| 文件 | ToolRouter → Broker → SandboxBackend → 固定SRT helper | read/list/stat/search/write/edit/move/remove/mkdir及binary；root/symlink检查 |
+| shell | Broker → ControlledBackend → ContainerBackend | 固定本地镜像、单授权root、可停止/恢复，无host credentials/socket挂载 |
+| 已知URL | Research.read | allowlist公共HTTPS IPv4、无cookies、重定向/DNS检查；不是搜索服务 |
+| 附件输入 | Attachments.save → acting files.info/download → Broker.write_bytes | visible message中的fileId；下载前后ACL/运行状态检查；不接受模型任意URL/token |
+| 附件输出 | Artifacts → immutable outbox/draft → staged upload → share | 冻结内容；分享前重查；fileId/phase持久化，unknown按分享证据对账 |
+| 历史执行 | actions.list/read | 只当前Agent；执行请求/回执可查，其他对象通过当前ACL工具读取 |
 
-[`Broker.perform`](../src/policy/broker.ts) 的顺序：
+[Broker](../src/policy/broker.ts)是参数规范化、grant、work/stop、持久action和执行边界。未知写操作保守阻挡相关root的后续变更；未知exec阻挡该Agent后续变更，仍可读取核实。不能以新action ID或换session绕过。
 
-```text
-校验活跃run / work / grant / 路径 / 操作类别
- → 规范化请求
- → Store.prepareAction，绑定不可变请求hash
- → 已有成功/失败回执直接返回；unknown不盲目再执行
- → 再检查停止/授权
- → Store.startAction
- → ControlledBackend.execute
-     ├─ read/write → SandboxBackend → 固定文件助手 + SRT
-     └─ exec       → ContainerBackend → 单次隔离容器
- → Store.settleAction：succeeded / failed / unknown
-```
+私有workspace是通用工作空间，MEMORY.md只是恢复入口。配置Docker后私有root可exec；镜像决定真实工具链。network默认none，owner可选bridge，后者包含可路由局域网及互联网，并非“仅公网”。review seat强制none。镜像不会自动拉取。
 
-配置的 `operations: ["exec"]` 意味着该 Agent 在对应 work/root 范围内可以直接执行命令，不再逐条判断命令内容。容器仍无网络、无主机凭证、只挂载授权目录；任意 shell 没有主机无隔离降级选项。文件操作仍做路径/符号链接校验与原子写入。
+当前大小限制：file.read 64KiB；文本写/编辑/文件搜索对象最高1MB；binary read每次32KiB；write_bytes/附件输入/二进制发布最高1MB，文本发布64KiB。工具限制不等于任意模型都能一次消费最大结果：每run最多50,000保守token额度（JSON字节估计）且还受provider context限制；大文件宜search、分块或exec提取后读取。保留文件内容，输出截断有明确标记。
 
-模型普通文字不会自动发 Slack，只有 `messages.send` 或成果工具产生可见输出。输出先进 outbox，再实际发送。429 可延期；网络丢失导致结果不明时进入 unknown，通过元数据对账，不能当成失败自动重发。
+Jev、分类SDK、逐命令审批和相关配置已移除。未来命令审查可在Broker准备/执行之间加入独立决策adapter和持久等待状态，重用action identity、grant验证、可替换ExecutionBackend与恢复机制；当前没有伪实现或隐式审查。消息门控与其分离。
 
-## 5. 记忆、压缩、重启分别恢复什么
+## Session演进、角色与恢复
 
-- **会话日志**：每条完整模型消息持久化；压缩只改 snapshot，原 journal 不删除。
-- **长期 memory**：每个 run 开始，`Daemon` 注入的 recovery callback 经文件沙箱读取本 Agent 的 `MEMORY.md`。恢复包包含有界入口、全文 hash、任务索引和 grant IDs；详细 notes 需模型自己读取。
-- **压缩**：`Engine` 检查上下文规模，`summarizeWithPi` 调 Pi 官方摘要 helper，经同一个预算受控 stream。超大历史分段摘要，保留系统基线与近期完整消息边界。
-- **崩溃**：`Store.recover` fence旧 run；`repairTranscript` 为缺失结果的tool call补明确的历史回执/未知提示，不宣称重新执行过。未知用量保留预算预留，未知危险副作用不重放。
+[完整prompt](../src/runtime/prompt.ts)描述持续同伴、自主注意力、真实人类/peer工作输入、自由知识组织、复用消息任务、进展/交接、跟进与收据。角色可通过对话和memory演化；配置身份、授权不随文本改变。
 
-memory通过文件工具和提示词支持模型自主维护：写入、纠错、整理notes均可达，因此无需harness替模型实现这些智能行为。当前没有向量检索或专用归档工具，这是接口取舍，不应等同于模型不能管理记忆。一次 run 中读入的 recovery 包会复用，修改 memory 后不会在该 run 每次请求前重新读取；下一 run 才刷新。也没有受控“换新session并带检查点迁移”的用户入口。
+每run读取最新MEMORY入口；压缩时 Engine → invalidateViews → refreshRecovery RPC → Supervisor重新读取memory、checkpoint、当前选中事项、任务索引和未知动作引用，下一模型输入使用新包。memory/checkpoint各8KB摘录并附hash/截断和完整读取入口；refresh失败则运行失败，不冒充已刷新。原始文件不被截断。MEMORY入口应保持可读且不超过底层64KiB read限制。
 
-## 6. 你关心的feature：harness是否让它可达
+sessions.checkpoint保存自述检查点；sessions.reset在run结束或崩溃恢复后替换上下文，关闭旧worker，绑定原事项的continuation，cancelled事项不再续跑，paused不绕过。所有身份/预算/任务/提醒/草稿/未知效果仍保留。owner agent-reset先停止，替换后保持paused，需显式resume。
 
-| Feature | 当前状态 | 实际限制/缺口 |
-|---|---|---|
-| 同Agent跨channel/thread/DM同session | 已实现；真实子进程+合成provider测试 | 真实Slack/provider协议接线未验；不是频道信息隔离 |
-| 多Agent独立身份/私有memory | 已实现；进程、session、grant隔离测试 | 固定1–3个配置身份；不能动态创建/删除/无缝切换角色模型 |
-| 直接沟通、委派、等待、互相唤醒 | 已实现；脚本化双Agent链路通过 | 分工/质疑/判断交给模型，harness允许直接对等协作 |
-| 重启后恢复inbox/任务/计划/日志 | 已实现并有故障测试 | 未落盘推理不能恢复；unknown副作用需要人工查证 |
-| 持久MEMORY.md/notes | 入口加载、文件写入/版本已实现 | 整理/写入工具已可达；无语义检索；同run recovery入口不实时刷新 |
-| 关注线程后无需反复@ | 显式watch已实现，含离线replies补抓 | `tasks.claim`没有自动watch；要模型调用messages.watch |
-| 灵活注意力/静音 | 配置mentions/participate；20秒合并 | 无运行中频道静音管理；普通新消息不实时steer |
-| 任务可见性/用户知道谁忙 | /team status/tasks、可见委派 | 没有自动忙碌/错误/预算耗尽通知，也没task卡片/表情状态同步 |
-| 持久一次性/cron唤醒 | create/list/cancel工具已接通 | reschedule仅有service方法，尚未暴露工具或管理命令；取消不撤回已入inbox的到期事件 |
-| 文件和终端 | 受控真实工具；macOS/固定镜像实测 | 无文件浏览/patch/ranged read工具；容器无网络，不能直接下载依赖/git push；项目工具链镜像需准备 |
-| 研究与成果 | allowlist URL读取、文本成果上传 | 无网页搜索、浏览器操作、二进制/大附件、丰富文档生成工具 |
-| Slack历史查证 | 本地索引+频道/关注线程补抓 | 非全workspace搜索；没有自动原消息permalink工具；历史限流/缺口仍存在 |
-| 预算与停止 | 统一work预算、单Agent单run、容器清理 | 预算预留耗尽可能暂停整个Agent；用户需增额/恢复，没有自动恢复UX；broker将所有文件/exec请求串行 |
-| 运维 | foreground CLI、文件锁、备份/恢复、日志 | 无开机自启安装、配置迁移/session reset CLI、unknown action裁决界面 |
-| 命令审查 | 按当前需求删除 | 不是待配置Jev；未来需要时再实现审查策略和持久等待 |
-| 外部接线 | 本地契约测试通过 | 真实Slack权限/事件、provider协议/usage/错误兼容尚未连接验证；不评测模型智能 |
+配置/工具prompt版本变化走[离线迁移](../src/daemon/migrate.ts)：锁 → 验证OLD_CONFIG → 旧容器恢复/fence → 数据库+私有文件备份 → 事务更换baseline并保留history、更新grants和配置快照。角色/model/channels/runtime可改、可新增Agent；已有Slack身份/workspace不可重绑定或删除。撤销/过期grant不复活，removed roots撤权，预算不重置。旧库没有身份快照时，显式legacy选项是owner对旧配置的声明，不是假造机器证据。用法见[README](../README.md)。
 
-这里要区分**能力缺失**与**便利入口缺失**：无网络exec与无搜索工具限制实际环境能力；自动watch、专用patch、原子reschedule则是便利或语义缺口。足够智能的模型可以显式watch、read后write、取消后新建计划；不能因此说它不会持续关注、编辑文件或调整计划。取消后新建与原子reschedule在并发到期时仍有语义区别。丰富文档也可由具备相应工具链的exec生成，但当前发布入口仍只支持小文本。
+## 与参考体验仍有区别
 
-这些是对照原v1 scope与工具入口逐项检查后的边界，不意味着“有底层方法”就已经有直接可调用入口。例如 `reschedule` 服务方法未向模型暴露，但其多数用户场景可用现有工具组合完成。
-
-## 7. 不写审查实现，架构怎样为将来准备
-
-当前保持四个可分开的责任：
-
-1. `ToolRouter` 处理模型工具协议；不认识任何审查厂商。
-2. `Broker` 是文件/exec的集中授权与动作生命周期入口；actor/work/run、标准化操作、持久action ID在此齐全。
-3. `ExecutionBackend` 是已实际注入使用的接口。`ControlledBackend` 可组合或替换文件/容器实现，不改变Pi worker与Slack协议。
-4. `Store`、inbox和Supervisor管理持久状态、等待与唤醒，不依赖某个内存Promise。
-
-将来如需审查，应在 Broker 的“prepareAction之后、startAction之前”加入独立策略接口；异步等待返回持久的deferred状态，让run结束，决策后通过inbox唤醒。恢复执行必须重查grant、generation和请求hash。模型、厂商分类和人工判定都不能越过最终授权/执行边界。
-
-**上述是扩展设计，当前没有实现审查插件/策略引擎/审批表。** 也没有为了将来而放一个默认allow的空分类器。未来仍需要实现策略、schema migration、控制入口与测试，但不会需要重写Agent runtime、消息路由或隔离backend。
-
-## 8. pnpm与旧状态升级
-
-- pnpm固定10.33.0，唯一lockfile为pnpm-lock.yaml；Node24.21.0由pnpm-workspace.yaml管理。
-- 安装：`pnpm install --frozen-lockfile`；检查：`pnpm run check`；启动：`pnpm start mate.local.json`。
-- 删除旧配置的`mate.jevApiKeyEnv`与`workspaceGrants[].exactCommands`。新配置仍严格校验，不静默忽略旧字段。
-- SQLite v7迁移保留会话/任务/回执，移除审批表和命令白名单列，归档旧审批最小审计信息，取消未发审批通知/未执行审批动作；**旧exec grant会撤销，而非静默扩大为任意scope内命令授权**。unknown记录保留。
-- 旧会话的工具声明版本、runtime policy hash不会自动重写。若已经使用旧持久数据，需先备份并显式规划配置/会话/授权迁移；当前没有一键迁移CLI，不能删库冒充平滑升级。新安装用更新后的示例。
+- 前端是Slack；没有Raft自有消息服务的全局提交事务。消息任务可以锚定可见thread消息，不只顶层消息；这是Mate的明确扩展。
+- 独立review seat目前由owner在从未运行过的身份和干净workspace启用，隔离所有对话/共享workspace/外部研究，强于仅目标隔离；不自动生成临时review Agent，也不提供选择性资料包。owner提供的role/brief本身仍是输入。
+- 没有通用搜索、浏览器、第三方登录/集成目录；已知URL读取、配置镜像里的CLI和可信adapter是现有入口。也没有让模型自行增建身份/扩大grant的入口。
+- Slack搜索只查本地可见缓存，历史补抓/目录分页有界；不是整个workspace的完整搜索。大文件/超长频道需有界读取或显式知情继续。
+- unknown严格保留；没有通用“自动证明外部效果不存在”或任意owner清账工具。文件可核查、Slack消息/附件有对账路径，证据不足时需明确报告阻塞。
+- 单workspace、单daemon、共享SQLite和串行执行/发送。多主机、高吞吐、热加载工具未实现。macOS SRT/Docker边界已实测，其他OS未验。
+- 真实Slack/provider尚未接线验收；剩余检查是权限、事件、协议、usage和错误兼容，不是“模型能否自主合作”。

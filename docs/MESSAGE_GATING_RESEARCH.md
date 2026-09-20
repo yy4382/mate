@@ -1,6 +1,6 @@
 # 消息门控调研与 Mate 设计建议
 
-2026-09-20。调研完成；以下Mate协议是建议，**尚未实现**。目标是假设模型足够聪明，为它补足并发感知与选择入口。不是Jev/命令审批，也不是训练一个裁判模型决定谁能发言。
+2026-09-20。调研完成；本文记录设计依据。R2–R4已实现核心门控，R5接附件，当前接口与边界见[HOW_IT_WORKS](HOW_IT_WORKS.md)。目标是假设模型足够聪明，为它补足并发感知与选择入口。不是Jev/命令审批，也不是训练一个裁判模型决定谁能发言。
 
 ## 1. 一手证据与边界
 
@@ -11,7 +11,7 @@
 | HANDOFF所列9月14日原始session，JSONL 226、320、517、531行工具回执 | 实际发生发送held、保存草稿，以及任务更新未应用；226/517为成员变更，320/531为任务状态通知 | 证明不是仅写在prompt的愿景。事件型变化也可能触发；不复制私有消息/身份到报告或测试 |
 | [OpenClaw steering queue](https://docs.openclaw.ai/concepts/queue-steering) | 区分steer/followup/collect/interrupt；普通steer不杀死已经运行的工具，在执行边界处理输入 | 运行中送达/调度与提交时freshness是不同层，可以组合 |
 | [Claude Code Agent Teams](https://code.claude.com/docs/en/agent-teams) | 同伴独立context、直接通信、mailbox送达与共享任务认领；另有完成/空闲hooks | 可参考通信/任务契约；所查文档不足以证明有Raft式held draft，不将两者混称 |
-| 已安装Pi Core 0.86.0 [声明](../node_modules/@earendil-works/pi-agent-core/dist/agent.d.ts) | 有steer、followUp和context/turn hooks；Mate尚未把外部通知接入这些路径 | 不需要换成coding-agent；仍须验证IPC、持久化、hook顺序，不把内存队列当持久inbox |
+| 已安装Pi Core 0.86.0 [声明](../node_modules/@earendil-works/pi-agent-core/dist/agent.d.ts) | 有steer、followUp和context/turn hooks；调研时Mate尚未接入；现由模型调用边界的notice RPC接入 | 不需要换成coding-agent；仍须验证IPC、持久化、hook顺序，不把内存队列当持久inbox |
 
 Claude文档还描述auto mode的消息分类检查，那属于另一类安全策略，不是我们要引入的freshness机制。本轮没有启用第三方消息分类或命令审查。外部网页为本次查询快照；不据其版本信息推断本项目兼容性。
 
@@ -24,7 +24,7 @@ Claude文档还描述auto mode的消息分类检查，那属于另一类安全�
 
 防抖、只响应@、固定发言轮次、LLM相关性过滤都不等于第3层。尤其不要为了“降低噪声”默认抹掉参与讨论的能力。来源/事件去重、自己的echo及同一状态重复通知可以代码抑制；对一条新的同伴消息是否有价值，应留给模型。
 
-## 3. Mate提议协议
+## 3. Mate协议设计
 
 ### 3.1 版本与真正呈现
 
@@ -38,7 +38,7 @@ Claude文档还描述auto mode的消息分类检查，那属于另一类安全�
 
 ### 3.2 提交返回可行动的结果
 
-拟议调用：`messages.send(target, body, viewToken?, operationId)`；任务变更另带`taskVersion`。初次打开新目标可先read，空房间也返回有效token；没有有效token时返回`held: baseline_unknown`和保留的draft，而非虚构已读或强制先读完正文。模型可选择取得视图，也可在明确知道未读/变化范围后选择知情继续；两者不能混为同一seen凭据。盲审首发也走opaque hold receipt，不要求取得被隔离的正文token。
+概念调用（operationId由daemon生成，实际schema用tools.describe）：`messages.send(target, body, viewToken?, operationId)`；任务变更另带`taskVersion`。初次打开新目标可先read，空房间也返回有效token；没有有效token时返回`held: baseline_unknown`和保留的draft，而非虚构已读或强制先读完正文。模型可选择取得视图，也可在明确知道未读/变化范围后选择知情继续；两者不能混为同一seen凭据。盲审首发也走opaque hold receipt，不要求取得被隔离的正文token。
 
 ```text
 读取目标 → viewToken
@@ -66,7 +66,7 @@ thread操作默认关注thread及影响它的根消息/任务状态；频道顶�
 
 ### 3.4 Slack一致性必须说清
 
-Slack [chat.postMessage](https://docs.slack.dev/reference/methods/chat.postMessage/) 的`thread_ts`是可选参数；因此当前强制thread是Mate自己的缺口。该API公开参数没有“仅当整个频道仍是某revision才发出”的比较提交契约；`current_draft_last_updated_ts`描述草稿本身，并非房间版本。结合异步[Events API](https://docs.slack.dev/apis/events-api/)，**本报告推断Mate无法在Slack上复制拥有聊天室数据库时的全局原子freshness保证**。
+Slack [chat.postMessage](https://docs.slack.dev/reference/methods/chat.postMessage/) 的`thread_ts`是可选参数；因此旧Mate强制thread是自身缺口，R1a已移除该限制。该API公开参数没有“仅当整个频道仍是某revision才发出”的比较提交契约；`current_draft_last_updated_ts`描述草稿本身，并非房间版本。结合异步[Events API](https://docs.slack.dev/apis/events-api/)，**本报告推断Mate无法在Slack上复制拥有聊天室数据库时的全局原子freshness保证**。
 
 Mate能保证的是本地已观察状态：
 
@@ -83,7 +83,7 @@ held反馈可在当前turn内处理；若run结束，draft仍在Agent工作列�
 
 Agent收到新事项时，可以保留旧事项上下文并切换，不将当前输入的work ID塞进所有工具的ACL。动作的成本归属与控制范围仍明确、不可伪造；停止某事项不等于停止Agent所有其他事项。
 
-## 4. 实现前必须覆盖的合成验收
+## 4. 合成验收要求（当前证据见ACCEPTANCE）
 
 | 场景 | 必须可观察的结果 |
 |---|---|
