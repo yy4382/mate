@@ -11,7 +11,7 @@ Git：在codex/vps-first-release本地分支管理；先保存已审核及进行
 | 模块 | 目标/接口 | 依赖 | 验收与验证 | 状态 |
 |---|---|---|---|---|
 | V0 部署/隔离设计复核 | Linux单机部署、进程权限、Agent私有挂载、执行资源上限、持久目录、Slack接入、低配并发策略 | 当前架构与用户新标准 | 独立架构红队讨论；避免VM/容器套娃和不必要基础设施 | PASS，review_v0_deployment |
-| V1 Linux运行与沙盒 | VPS兼容文件/命令隔离，配置化资源与并发上限，启动依赖检查与失败关闭 | E2–E5及V0 PASS | 真Linux环境的Agent相互读写/进程/secret/socket/停止与重启清理验证；非mock隔离与协议测试分开 | TODO |
+| V1 Linux运行与沙盒 | VPS兼容文件/命令隔离，配置化资源与并发上限，启动依赖检查与失败关闭 | E2–E5及V0 PASS | 真Linux环境的Agent相互读写/进程/secret/socket/停止与重启清理验证；非mock隔离与协议测试分开 | PASS；V1a/V1b/V1c全部通过，最终原生证据见`reviews/V1c-workspaces.md` |
 | V2 部署包与Slack操作闭环 | 固定构建/运行依赖、服务管理、示例配置、诊断、迁移备份恢复、Slack操作手册 | V1 PASS、E6 | 从干净Linux环境按文档安装/启动本地替身协议；持久化/重启/恢复；凭证接入与目标机验收步骤明确 | TODO |
 | V3 发布候选审核 | 完整功能/架构/隔离红队，Git可复现版本和操作清单 | E6、V2 PASS | 已知阻塞清零，只剩真实连接与部署操作；明确不能把未做验证称为通过 | TODO |
 
@@ -20,8 +20,17 @@ V1按低配资源控制、隔离后端、部署层workspace边界的依赖顺序
 | gate | 目标/接口 | 依赖 | 验收 | 状态 |
 |---|---|---|---|---|
 | V1a 运行与执行admission | 可取消的FIFO `FairAdmission`；生产默认全局1个active run和1个backend操作；有限worker idle回收 | V0、E6 PASS | 多Agent公平顺序、排队时stop/shutdown、slot异常释放、同Agent不重复排队、重启持久上下文不变 | PASS；`review_v1a_admission`两轮，见`reviews/V1a-admission.md` |
-| V1b Linux统一容器隔离 | `ContainerBackend`支持固定file helper与exec、配置化memory/cpu/pids/tmpfs；启动probe；cleanup不确定后熔断直到recover | V1a PASS | mock协议故障矩阵；真实Linux验证跨root/secret/socket/network、文件语义、停止/超时/daemon死亡、scope恢复 | PASS；`review_v1b_container`三轮，见`reviews/V1b-container.md`；原生Ubuntu宿主验证留V1c/V2 |
-| V1c workspace容量与启动边界 | 部署workspace manifest/probe核验每Agent独立mount、ext4类型/容量/owner；缺失不得回退普通目录 | V1b PASS | loopback文件真实预分配、mount身份/容量错误失败关闭、ENOSPC、重启/恢复；外部grant明确排除 | 代码/测试独立review PASS；Ubuntu 24.04原生环境验收待OrbStack machine就绪，见`reviews/V1c-workspaces.md` |
+| V1b Linux统一容器隔离 | `ContainerBackend`支持固定file helper与exec、配置化memory/cpu/pids/tmpfs；启动probe；cleanup不确定后熔断直到recover | V1a PASS | mock协议故障矩阵；真实Linux验证跨root/secret/socket/network、文件语义、停止/超时/daemon死亡、scope恢复 | PASS；`review_v1b_container`三轮，见`reviews/V1b-container.md`；原生宿主边界由V1c完成 |
+| V1c workspace容量与启动边界 | 部署workspace manifest/probe核验每Agent独立mount、ext4类型/容量/owner；缺失不得回退普通目录 | V1b PASS | loopback文件真实预分配、mount身份/容量错误失败关闭、ENOSPC、重启/恢复；外部grant明确排除 | PASS；代码与测试独立review通过，Debian 13原生目标机完成完整daemon、双root探针、ENOSPC、卸载失败关闭与重挂恢复；见`reviews/V1c-workspaces.md` |
+
+V2必须先通过本轮独立部署架构复核，再按以下依赖顺序实现；一个gate未通过不得开始下一个：
+
+| gate | 目标/接口 | 依赖 | 验收 | 状态 |
+|---|---|---|---|---|
+| V2a 部署架构更新 | Debian 13真实目标、release/config/data/backing/unit分层、service账户Docker控制、mount unit、doctor、恢复与回滚契约 | V1 PASS | 独立红队检查权限、失败/重试、升级/恢复一致性、低配复杂度及与现代码兼容性 | PASS；`review_v2_architecture`四轮，见`reviews/V2a-deployment-architecture.md` |
+| V2b checkpoint v2与managed restore | inventory+hash/allocated size、symlink本体、特殊文件/控制目录排除；root封存只读checkpoint；外部checkpoint驱动的持久journal与decision后可重入roll-forward；v1兼容路径 | V2a PASS | relative path规范化/重复/prefix collision、symlink与TOCTOU换入、mode恢复顺序、损坏/缺项/额外项、封存权限、decision前无修改、跨root kill续作、decision后checkpoint篡改/替换阻断与修复续作、接近ENOSPC、external不触碰、错误mount/config/capacity、同路径replace与再次启动 | TODO |
+| V2c Debian部署包与doctor | first-party deployment spec与plan/preflight/install/disable入口；release identity/layout；service account；private/external ext4 mount units；systemd service；被动doctor/offline-probe；root allowlist maintenance wrapper | V2b PASS | fake-host单元契约+目标机实际安装；spec覆盖、磁盘/内存plan、掉电staging幂等、不一致拒绝、缺mount/image/socket失败关闭、无secret不自启、disable保留数据；wrapper拒绝路径穿越/任意command/property/env和root直跑，核对oneshot UID/GID/supplementary group | TODO |
+| V2d 运维与Slack接线闭环 | 离线backup/restore、非活动candidate→不可逆activate→finalize/fix-forward、停止、日志诊断、Socket Mode配置与最小scopes runbook | V2c PASS | ncDE本地adapter经systemd持久化/重启/恢复演练；candidate无外部连接/ACK/run/outbox，activate后拒绝checkpoint rollback；Slack/provider缺失项明确且只剩用户配置/真实连接 | TODO |
 
 ---
 

@@ -134,16 +134,46 @@ review_e0_architecture检查现有SQL后同意合并“领域契约切换”和�
 
 ### V0红队修订：首版部署契约
 
-- 支持目标固定为Ubuntu 24.04 LTS x86_64、Node24、Docker Engine及systemd；其他发行版/架构不冒充已验。Linux结构化文件操作优先使用同一受控Docker环境内的固定文件helper，宿主SRT保留为已验证macOS开发后端。共享operation schema与Broker回执，不新建权限/动作状态机。启动前实际探针检查读写、越界拒绝及命令namespace清理；探针失败不接Slack、不消费模型run。
+- 支持目标固定为已经实际验收的Debian 13 x86_64、Node24、Docker及systemd；其他发行版/架构不冒充已验。Linux结构化文件操作优先使用同一受控Docker环境内的固定文件helper，宿主SRT保留为已验证macOS开发后端。共享operation schema与Broker回执，不新建权限/动作状态机。启动前实际探针检查读写、越界拒绝及命令namespace清理；探针失败不接Slack、不消费模型run。
 - 首版默认全局1个active run、1个exec admission，可配置；等待admission时可取消，采用轮转公平调度。结束run后关闭或有限TTL淘汰worker，重建从持久context恢复。容器memory/cpu/pids可配置，必须处理OOM/ENOSPC并释放资源。workspace使用部署层硬容量边界：安装时为每个Agent建立可配置容量的独立ext4 loopback文件系统（默认512MiB），预留控制面DB空间；运行时水位只补充诊断，不代替容量界限。外部grants由owner配置其容量边界并在部署清单明确，不默认授权整宿主目录。
 - namespace删除未确认时，ExecutionBackend熔断新的沙盒执行，Broker保留unknown回执；daemon进入退出/重启恢复路径，不把抛错当作已终止。shutdown使用finally关闭连接并释放锁；systemd超时强杀不等于Docker进程已清除，下次启动取得单实例锁后先清理所属scope，无法确认则不调度。测试Docker不可用、强杀、停止中排队及不触及其他scope。
 - 备份首版采用停止daemon后的离线一致备份；安全复制symlink本体而不跟随，不允许链接扩大备份范围，特殊文件明确失败。清单标明纳入dataDir数据库/Agent内容、排除外部grant roots并列出路径，以及配置/镜像标识；secrets需要独立重新提供。原绝对路径恢复是首版明确限制。loopback容量容器由安装层重建，备份包含其挂载内容而非重复复制磁盘文件；恢复前核验容量和挂载点。验收失败残留、损坏、完成标记、同路径干净VM恢复及升级回滚。
-- V1执行隔离必须用真实Linux kernel、明确Docker daemon与bind mount所在宿主，不使用特权嵌套容器冒充默认环境。V2用能运行systemd的干净Linux VM或等价真实系统，按手册安装；记录kernel/distro/UID/Node/Docker/image。Docker binary测试改为可配置。Linux VM是可在本地完成的验证目标，不要求获得用户VPS凭证才开发。
+- V1执行隔离必须用真实Linux kernel、明确Docker daemon与bind mount所在宿主，不使用特权嵌套容器冒充默认环境。V2在能运行systemd的实际目标机按手册安装；记录kernel/distro/UID/Node/Docker/image。Docker binary测试可配置，虚拟机只作为可选开发环境，不能代替目标机验收。
 - 信任边界：daemon、Pi worker、固定helper代码属于可信控制面；Pi worker持有provider key，模型输入与任意exec不可信。被沙盒隔离的是Agent工具执行及私有workspace访问，不宣称防御SDK/可信worker代码本身被攻破。专用非root用户不是Docker管理权限的安全边界；拒绝给Agent挂载Docker socket、daemon状态、凭证目录或其他Agent私有root。模型不能通过工具参数变更这些挂载。
 
 这些修订是普通工程决策，没有需要用户裁决的产品分叉。V1/V2独立审核必须验证上述契约；V0设计通过不等于Linux已经验证。
 
 V0复审补充：loopback磁盘文件必须实际预分配宿主空间；启动/恢复检查mount身份、容量，挂载失败不回退普通目录。文件helper共用Docker资源限制/清理熔断，不继承宿主env，不从可写workspace加载代码。恢复拒绝部分/损坏备份，先确认目标mount再恢复，不跟随symlink。review_v0_deployment仅设计PASS，执行验证属于V1/V2。
+
+### V2目标机部署架构（独立设计复核PASS）
+
+V1已经在实际目标机`ncDE`验证；首个受支持并实际验收的生产基线因此改为Debian 13 x86_64、Node 24、pnpm 10、Debian Docker 26与systemd 257。Ubuntu 24.04保留为可能兼容的平台，但没有完成同等级安装验收前不能列为已支持。平台判断仍以所需能力为准，部署包只对明确验收的发行版/版本组合承诺支持，不把“Linux”当成无限兼容声明。
+
+部署资源分成五层，彼此不交叉写入：不可变release位于`/opt/mate/releases/<release-id>`；规范配置、workspace manifest与环境引用位于`/etc/mate`；SQLite、部署/恢复journal与mountpoint位于`/var/lib/mate`；root拥有且daemon只读可见的预分配backing位于`/var/lib/mate-volumes`；systemd unit位于`/etc/systemd/system`。`release-id`由git commit、pnpm lockfile、构建产物与安装依赖inventory的摘要共同确定，release内保存身份manifest并由root拥有、移除组/其他写权限，不能用git SHA冒充不同构建完全相同。`/opt/mate/current`只在候选构建、普通测试、目标平台container profile都通过后切换。升级保留一个已通过的回滚release。代码、可变数据、secret和backing不放在同一目录，也不从release目录加载运行数据。
+
+首版提供版本库内、可审计且幂等的Debian host安装入口与systemd模板，不依赖Ansible、Kubernetes或额外部署框架。它必须先给出plan/preflight，再创建资源；plan同时报告两个release、Docker image、全部backing的磁盘需求、预留控制面空间和daemon/container并发内存上界。部署spec为每个私有Agent给出容量（未写时默认512 MiB），并按唯一canonical external root给出一次容量/backing；多位Agent可分别获授同一个external root，plan对grants规范化后验证每条均被该唯一root覆盖。存在未覆盖external root、额外spec entry、嵌套或重复canonical root时失败，不能把普通宿主目录写进manifest。现有Agent身份首版只能保留或新增，不能删除/重绑；grant可按现有显式migration规则增删。
+
+安装先检查总空间和最低state预留，再在`/var/lib/mate-volumes`同目录的root-owned transaction staging中按`truncate → mkfs.ext4 → fallocate`创建backing，验证完整allocation、filesystem和容量后才原子rename到最终路径。unit/config/manifest/release identity同样先写同目录临时文件、fsync并rename；安装journal记录本次创建的staging，重试只清理身份匹配的本次残留，不把任意“不一致”文件当作可删除临时物。已有最终资源只有在owner、mode、容量、filesystem、unit内容和配置身份完全相符时可复用，任何不一致均停止，不自动格式化、覆盖或缩容。
+
+每个唯一受管root对应一个由`systemd-escape --path`确定名字的`.mount` unit，挂载选项固定为`loop,rw,nodev,nosuid`。初次格式化后临时挂载并把ext4根设为`mate:mate 0700`，再正常卸载；`/var/lib/mate-volumes`为`root:mate 0710`以允许daemon解析/stat最终backing，文件为`root:root 0600`且daemon不能修改。配置、env与manifest为`root:mate 0640`。`mate.service`对Docker和全部mount同时声明`Requires`/`After`（并使用`RequiresMountsFor`复核路径），采用`UMask=0077`、`NoNewPrivileges`、`PrivateTmp`、`ProtectHome`、只读系统目录和仅`/var/lib/mate`可写。安装不会在secret/config尚未通过检查时自动启动服务。
+
+可信daemon使用无交互登录的专用`mate`账户。目标机的系统Docker socket由root与`docker`组控制；首版systemd unit通过显式`SupplementaryGroups=docker`只给该服务进程Docker控制能力，不修改Agent容器身份，也不把socket挂入Agent workspace。该能力等同root级主机控制，只属于既有可信控制面，不被描述为daemon自身的安全边界；rootless Docker会增加常驻daemon、网络与存储差异，暂不作为低配置单人VPS的首版默认。真正写入该授权是独立、可见的部署动作，必须在unit和plan中明确显示。
+
+运维检查拆成两个正式接口。`doctor`是被动、可并发诊断：只解析配置/环境引用，检查版本、release身份、image存在、socket可访问、路径分层、manifest/mount/capacity/owner和服务状态；不取得scope、不删容器、不写nonce、不连接Slack/模型、不创建DB、不拉镜像。`offline-probe`必须在service停止后取得同一daemon lock，才可执行scope recover和全部root双向probe。两者以及backup/migrate/restore都由root-owned allowlist wrapper通过`systemd-run --wait --pipe`以`User=mate`、`Group=mate`、`SupplementaryGroups=docker`和主service的基础hardening运行；backup/restore one-shot额外只读写固定checkpoint root`/var/backups/mate`，主service没有该写权限。wrapper只接受规范化后位于该root的checkpoint目录，拒绝路径穿越、任意命令/property/env注入和直接root执行；改变状态的操作发现主service active即失败。这样离线命令与daemon使用同一UID/GID和Docker权限，不要求把`mate`永久加入docker组。
+
+备份格式升级为带完整inventory的version 2：记录原dataDir、规范配置摘要、Agent集合、数据库与每个私有workspace条目的规范相对路径、类型、逻辑/allocated大小、mode、内容hash或symlink目标；完成标记最后原子写入。备份不跟随symlink并防止检查后换入，拒绝socket/device/FIFO等特殊文件，固定排除ext4根的`lost+found`和`/var/lib/mate/control`中的deployment/restore journal，排除所有external grant与backing image。外部root在backup/restore只验证manifest身份与容量，绝不检查为空、复制或清理其用户资料。固定checkpoint父目录为`/var/backups/mate`（`root:mate 0750`）；root wrapper预建唯一、规范化的`mate:mate 0700`目标后运行backup。backup完成并fsync后，wrapper以nofollow遍历复核inventory，把目录/普通文件分别封存为`root:mate 0750/0640`并lchown symlink本体，使maintenance身份只读；主service不能写该路径。restore journal锁定checkpoint目录inode、COMPLETE/inventory hash，wrapper在journal存在时拒绝替换/删除该checkpoint，每项复制通过`O_NOFOLLOW` fd在复制前后核对identity与hash。检测到decision后源损坏时保持journal和daemon阻断，修复同一封存checkpoint后才可续作，不能换源猜测成功。旧version 1 checkpoint继续支持原先“dataDir必须不存在”的unmanaged恢复，不静默按新语义解释。
+
+managed restore同时支持初始化空目标和显式replace已有状态，但不要求硬容量workspace同时容纳old+new两份。replace非空目标前必须先生成并完整验证当前状态checkpoint；目标checkpoint也必须完整、不可变，并在decision前根据inventory allocated blocks、entry开销和目标`statfs`作保守容量证明，不能适配则不改目标。restore在`/var/lib/mate/control`持久化、逐次fsync并原子替换journal；Daemon在打开SQLite前发现未完成journal一律拒绝启动。decision前只验证两个checkpoint、manifest、private容量/mount和恢复计划，不改变DB/workspace；原子decision之后进入只能roll-forward的阶段：逐root清除除`lost+found`外的private内容，从目标checkpoint以单文件同目录临时写、fsync、hash复核、rename的可重入方式恢复，并记录完成项，数据库最后替换。崩溃后同一命令依据inventory校验已完成项并继续，不能切回旧daemon；全部完成后才移除journal。若要回到旧状态，先完成本次roll-forward，再以预先生成的旧checkpoint发起新的replace。初始化空目标使用同一协议但不要求旧checkpoint。V2b必须在接近ENOSPC的真实ext4上验证decision前无修改与decision后崩溃续作。
+
+配置/release升级使用`/var/lib/mate/control`中的独立deployment journal，解决数据库迁移与`/etc`配置、`current` symlink不能同事务提交的问题。V2首版只自动化mount topology不变的升级：Agent ID集合、private root、规范化external root集合必须完全相同；新增Agent或增删grant/mount的部署变更留给后续独立设计，installer/migrate wrapper明确拒绝，不能因底层配置schema允许就声称可运维。流程固定为停service、创建并封存checkpoint、验证不可变新release和staged config、写journal、以staged old/new config运行offline migration、原子切换config与current，再进入非活动`candidate`阶段。candidate只允许被动doctor、offline-probe和不调用`Daemon.start()`的构造/数据库兼容检查；禁止连接Slack/provider、ACK/导入事件、启动调度、派发outbox或执行Agent run，因此这一阶段可停机跨重启并安全恢复旧config/current与checkpoint。
+
+`matectl activate`是外部副作用边界：它在service仍停止时原子把journal置为`activated`，从该点起禁止checkpoint状态回滚，然后才允许正常`Daemon.start()`接入Slack和调度。activated启动失败只能fix-forward，或在兼容性manifest明确证明旧代码可读取当前DB/config时做保留当前状态的code-only rollback；不能恢复旧checkpoint。owner确认正常后finalize移除deployment journal。checkpoint不能回滚Slack/provider世界，人工灾难恢复必须单独对外部副作用和unknown receipt做对账，不能作为自动升级rollback。任何release变更即使配置未变也先checkpoint，因为候选构造可能升级数据库schema；只有明确证明DB/config格式均未变化的已知版本才允许优化掉checkpoint，不能仅凭启动失败猜测。
+
+部署入口只提供非破坏性的重复安装、验证和显式停用：停用先停止service并确认其scope无残留容器，再正常卸载全部受管mount；任一mount为EBUSY即失败，不使用lazy/detach，并保留`/var/lib/mate`、backing与checkpoint。删除backing或状态没有自动命令，必须由owner在独立备份后手工处理。V2首版的managed topology固定；动态新增Agent和grant mount需要后续扩展deployment transaction，不能热改unit或manifest。
+
+systemd停止、离线backup/restore、doctor/offline-probe、升级candidate/commit/rollback和启动顺序写入runbook并在目标机实际演练。Socket Mode仍是首版Slack传输，不新增域名或HTTPS入口；runbook明确每个Agent对应的Slack App binding、app-level `connections:write`、Event Subscriptions、slash command、bot scopes，以及只需出站443/WebSocket。真实token、workspace/App/channel ID由用户接入，缺失时不阻塞上述部署和本地adapter验收。
+
+独立只读红队`/root/review_v2_architecture`经过四轮复审后判定V2a PASS。实现期保留四项P2验收要求：checkpoint封存必须fsync所有修改过metadata的目录及checkpoint父目录，symlink使用lstat/readlink语义；release identity inventory必须落实target arch、精确Node/ABI与native addon hash；decision后checkpoint repair只能由root控制且保持journal绑定的source identity；activate后失败必须保留activated journal供重复诊断和fix-forward，不能被通用cleanup删除。
 
 ### E2b2c路由落地决策（2026-09-21）
 
