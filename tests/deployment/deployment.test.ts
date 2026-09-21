@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -9,7 +9,7 @@ import { createDeploymentPlan } from '../../src/deployment/plan.js';
 import { createReleaseManifest } from '../../src/deployment/release.js';
 import { deploymentSpecSchema } from '../../src/deployment/spec.js';
 import { renderMaintenanceWrapper, renderMountUnit, renderService } from '../../src/deployment/systemd.js';
-import { preflightDeployment, type InstallerHost } from '../../src/deployment/installer.js';
+import { initializePublishedVolume, inspectExistingInstallation, preflightDeployment, remainingRequiredBytes, syncPayloadTree, type InstallerHost } from '../../src/deployment/installer.js';
 import { isMainModule } from '../../src/main.js';
 import { isDeploymentMainModule } from '../../src/deployment/cli.js';
 
@@ -38,6 +38,7 @@ it('plans the fixed managed topology, shared external root, two releases, storag
     expect.objectContaining({ kind: 'external', root: '/srv/shared', capacityBytes: 1024 * 1024 * 1024 }),
   ]);
   expect(plan.release).toMatchObject({ retainedCopies: 2, candidateBytes: 100 * 1024 * 1024, reservedBytes: 200 * 1024 * 1024 });
+  expect(plan.dockerImage).toEqual({ reference: `sha256:${'a'.repeat(64)}`, installedBytes: null, includedInRequiredBytes: false });
   expect(plan.memory).toEqual({ daemonMiB: 512, maxConcurrentContainers: 2, perContainerMiB: 256, upperBoundMiB: 1024 });
   expect(plan.storage.totalRequiredBytes).toBe(plan.storage.backingBytes + plan.storage.stateReserveBytes + plan.storage.releaseReserveBytes);
 });
@@ -83,6 +84,38 @@ it('preflights through a fake host without mutating it and refuses resource or b
   expect(preflightDeployment(spec(), config(), host).target.os).toBe('debian'); expect(calls.some(value => value.includes('image inspect'))).toBe(true); expect(calls.filter(value => value.startsWith('/')).every(value => !value.includes('mkfs'))).toBe(true);
   expect(() => preflightDeployment(spec(), config(), { ...host, memoryMiB: () => 100 })).toThrow('memory');
   expect(() => preflightDeployment(spec(), config(), { ...host, platform: 'darwin' })).toThrow('Debian 13');
+  const plan = createDeploymentPlan(spec(), config(), host), consumedBytes = plan.storage.totalRequiredBytes - 4096;
+  expect(() => preflightDeployment(spec(), config(), { ...host, availableBytes: () => 4096, existingInstall: () => ({ inputIdentity: 'identity-does-not-match', complete: false, consumedBytes }) })).toThrow('differs');
+  expect(remainingRequiredBytes(plan, { inputIdentity: 'same', complete: false, consumedBytes })).toBe(4096);
+  expect(remainingRequiredBytes(plan, { inputIdentity: 'same', releaseId: 'a'.repeat(64), complete: true, consumedBytes: 0 })).toBe(0);
+});
+
+it('finishes ownership and unmount when resuming an already-mounted workspace', () => {
+  const root = mkdtempSync(join(tmpdir(), 'mate-volume-resume-')); roots.push(root); const mountRoot = join(root, 'workspace'), backingFile = join(root, 'workspace.ext4');
+  mkdirSync(mountRoot, { mode: 0o700 }); chmodSync(mountRoot, 0o700); writeFileSync(backingFile, 'backing');
+  const calls: string[] = [], host = {
+    run: (binary: string, args: readonly string[]) => { calls.push(`${binary} ${args.join(' ')}`); if (binary === '/usr/bin/findmnt') return { code: 0, stdout: '/dev/loop7 ext4 rw,nodev,nosuid,relatime\n', stderr: '' }; if (binary === '/usr/sbin/losetup') return { code: 0, stdout: '/dev/loop7\n', stderr: '' }; return { code: 0, stdout: '', stderr: '' }; },
+  } as InstallerHost;
+  initializePublishedVolume(host, { kind: 'external', root: mountRoot, backingFile, capacityBytes: 64 }, process.getuid!(), process.getgid!());
+  expect(calls).toContain(`/usr/bin/chown ${process.getuid!()}:${process.getgid!()} ${mountRoot}`); expect(calls).toContain(`/usr/bin/chmod 0700 ${mountRoot}`); expect(calls).toContain(`/usr/bin/umount ${mountRoot}`);
+  const wrong = { ...host, run: (binary: string, args: readonly string[]) => binary === '/usr/bin/findmnt' ? { code: 0, stdout: '/dev/loop8 ext4 rw,nodev,nosuid\n', stderr: '' } : binary === '/usr/sbin/losetup' ? { code: 0, stdout: '/dev/loop7\n', stderr: '' } : { code: 0, stdout: '', stderr: '' } } as InstallerHost;
+  expect(() => initializePublishedVolume(wrong, { kind: 'external', root: mountRoot, backingFile, capacityBytes: 64 }, process.getuid!(), process.getgid!())).toThrow('managed backing');
+});
+
+it('persists a release payload tree containing files, directories and symlinks', () => {
+  const root = mkdtempSync(join(tmpdir(), 'mate-payload-sync-')); roots.push(root); mkdirSync(join(root, 'nested')); writeFileSync(join(root, 'nested', 'file'), 'payload'); symlinkSync('nested/file', join(root, 'link'));
+  expect(() => syncPayloadTree(root)).not.toThrow();
+});
+
+it('recognizes the recoverable window after current is published and before the completion marker', () => {
+  const root = mkdtempSync(join(tmpdir(), 'mate-install-window-')); roots.push(root); const releases = join(root, 'releases'), control = join(root, 'control'); mkdirSync(releases); mkdirSync(control);
+  const releaseId = 'a'.repeat(64), release = join(releases, releaseId); mkdirSync(release); writeFileSync(join(release, 'payload'), 'ready'); symlinkSync(release, join(root, 'current'));
+  const journalPath = join(control, 'install-v1.json'), completed = join(control, 'installation.json');
+  writeFileSync(journalPath, `${JSON.stringify({ version: 1, transaction: '11111111-1111-4111-8111-111111111111', inputIdentity: 'b'.repeat(64), uid: process.getuid!(), gid: process.getgid!(), directories: [], release: { stage: join(releases, '.stage'), releaseId, status: 'published' }, volumes: [], phase: 'published' })}\n`, { mode: 0o600 }); chmodSync(journalPath, 0o600);
+  const state = inspectExistingInstallation({ bootstrapJournal: join(root, 'bootstrap.json'), controlJournal: journalPath, completed, current: join(root, 'current'), releases }, process.getuid!(), process.getgid!());
+  expect(state).toMatchObject({ inputIdentity: 'b'.repeat(64), releaseId, complete: false }); expect(state!.consumedBytes).toBeGreaterThan(0);
+  writeFileSync(completed, `${JSON.stringify({ version: 1, inputIdentity: 'b'.repeat(64), releaseId })}\n`, { mode: 0o600 }); chmodSync(completed, 0o600);
+  expect(inspectExistingInstallation({ bootstrapJournal: join(root, 'bootstrap.json'), controlJournal: journalPath, completed, current: join(root, 'current'), releases }, process.getuid!(), process.getgid!())).toMatchObject({ complete: false, releaseId });
 });
 
 it('recognizes a deployed CLI reached through the current release symlink', () => {

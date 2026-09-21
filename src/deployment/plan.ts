@@ -11,13 +11,13 @@ export interface DeploymentPlan {
   target: { os: 'debian'; version: '13'; arch: 'x64'; nodeMajor: 24; serviceUser: 'mate'; dockerGroup: 'docker' };
   layout: typeof managedLayout;
   release: { source: string; gitCommit: string; retainedCopies: 2; candidateBytes: number; reservedBytes: number };
-  dockerImage: string;
+  dockerImage: { reference: string; installedBytes: number | null; includedInRequiredBytes: false };
   workspaces: PlannedWorkspace[];
   storage: { backingBytes: number; stateReserveBytes: number; releaseReserveBytes: number; totalRequiredBytes: number };
   memory: { daemonMiB: number; maxConcurrentContainers: number; perContainerMiB: number; upperBoundMiB: number };
   environmentConfigured: boolean;
 }
-export interface PlanFacts { directoryBytes(path: string): number; canonical(path: string): string }
+export interface PlanFacts { directoryBytes(path: string): number; canonical(path: string): string; dockerImageBytes?(reference: string): number | undefined }
 
 function contains(parent: string, child: string): boolean { return child === parent || child.startsWith(`${parent}${sep}`); }
 function overlap(left: string, right: string): boolean { return contains(left, right) || contains(right, left); }
@@ -47,7 +47,8 @@ export function createDeploymentPlan(rawSpec: DeploymentSpec, config: DaemonConf
   const maxConcurrentContainers = config.runtime.limits.maxBackendOperations, perContainerMiB = config.runtime.docker.resources.memoryMb;
   return {
     version: 1, target: { os: 'debian', version: '13', arch: 'x64', nodeMajor: 24, serviceUser: 'mate', dockerGroup: 'docker' }, layout: managedLayout,
-    release: { source, gitCommit: spec.release.gitCommit, retainedCopies: 2, candidateBytes, reservedBytes: releaseReserveBytes }, dockerImage: config.runtime.docker.image, workspaces,
+    release: { source, gitCommit: spec.release.gitCommit, retainedCopies: 2, candidateBytes, reservedBytes: releaseReserveBytes },
+    dockerImage: { reference: config.runtime.docker.image, installedBytes: facts.dockerImageBytes?.(config.runtime.docker.image) ?? null, includedInRequiredBytes: false }, workspaces,
     storage: { backingBytes, stateReserveBytes, releaseReserveBytes, totalRequiredBytes: backingBytes + stateReserveBytes + releaseReserveBytes },
     memory: { daemonMiB: spec.daemonMemoryMiB, maxConcurrentContainers, perContainerMiB, upperBoundMiB: spec.daemonMemoryMiB + maxConcurrentContainers * perContainerMiB },
     environmentConfigured: !!spec.environmentSource,

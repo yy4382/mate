@@ -181,6 +181,10 @@ V2b实现把格式、备份与恢复拆成三个边界：`checkpoint-format`只�
 
 现有`migrateConfiguration`继续服务unmanaged开发/兼容环境。只要OLD或NEW配置带workspace manifest就直接拒绝，避免在root封存前先生成普通service-owned备份再修改数据库。managed candidate升级与固定topology检查由V2d部署journal统一编排；在该入口完成前，不存在可误用的“半套生产迁移”。
 
+V2c把初装部署落实为固定Debian模块，而不是通用资源编排框架。strict deployment spec只允许release/config来源、private容量override、唯一external root容量、state预留和daemon内存；用户不能指定service账户、系统路径、unit名或backing路径。纯plan规范化配置grants并报告两份release、全部backing、state和daemon/container并发上界。installer使用`/var/lib/.mate-install-v1.json` bootstrap journal先记录固定目录意图，control目录建立后原子移入；目录、release staging和backing逐项绑定device/inode与状态，只有同identity重跑可续作。release身份覆盖commit、lockfile、dist、实际pnpm运行依赖、Node/ABI和native addon；相对symlink不得逃逸，hardlink计数必须全部闭合在release树内。
+
+systemd单位由确定性renderer生成，mount名只取真实`systemd-escape --path`结果。主服务与maintenance one-shot都用mate UID/GID、临时docker supplementary group、固定environment、`ProtectSystem`等hardening；在该namespace里`ReadWritePaths=/var/lib/mate`会形成与原ext4/loop完全等价的重复mount layer，验证器只在root/source/device/backing/必需options全部一致时接受，任何冲突叠挂仍失败。root-owned `matectl`只把简单checkpoint名称映射到固定根和固定命令，不透传property/env/config/executable。doctor保持被动；offline-probe和disable使用daemon lock、scope recover及双向probe。初装完成前service不连接任何adapter，完成后仍disabled/inactive；升级事务继续留给V2d。
+
 ### E2b2c路由落地决策（2026-09-21）
 
 与review_e2b2c_canonical讨论后，v17删除E2b2b过渡canonical_targets镜像：可变对象以所属target JSON为权威、表达式索引供查询；outbox以同一行不可更改的canonical target供路由，原wire/hash/receipt独立保留。迁移和新writer均在同事务写入；DB校验routing引用及不可变性，reader核对wire解释。这样unknown和附件可见性查询不需要每次JS全库扫描，也不会因遗漏索引行而遗漏unknown。旧版本解释仅保留于兼容adapter，旧writer位于测试夹具。新消息与effects使用显式payload版本，不能通过ID前缀猜测。

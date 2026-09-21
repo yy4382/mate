@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "release": {
+    "source": "/var/tmp/mate-release",
+    "gitCommit": "0000000000000000000000000000000000000000"
+  },
+  "configSource": "/var/tmp/mate.json",
+  "privateWorkspaces": [],
+  "externalWorkspaces": [],
+  "stateReserveMiB": 512,
+  "daemonMemoryMiB": 512
+}

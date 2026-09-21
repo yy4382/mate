@@ -147,5 +147,5 @@ decision持久化后只能roll forward。每个Agent root清除并恢复后单�
 - 没有通用搜索、浏览器、第三方登录/集成目录；已知URL读取、配置镜像里的CLI和可信adapter是现有入口。也没有让模型自行增建身份/扩大grant的入口。
 - Slack搜索只查本地可见缓存，历史补抓/目录分页有界；不是整个workspace的完整搜索。大文件/超长频道需有界读取或显式知情继续。
 - unknown严格保留；没有通用“自动证明外部效果不存在”或任意owner清账工具。文件可核查、Slack消息/附件有对账路径，证据不足时需明确报告阻塞。
-- 单workspace、单daemon、共享SQLite，默认串行run/backend操作且可配置。多主机、高吞吐、热加载工具未实现。macOS SRT、Docker容器边界及Debian 13原生ext4 loop workspace已实测；systemd服务、专用账户Docker控制、持久mount unit和已挂载root的恢复仍属后续部署gate。
+- 单workspace、单daemon、共享SQLite，默认串行run/backend操作且可配置。多主机、高吞吐、热加载工具未实现。macOS SRT、Docker容器边界、Debian 13原生ext4 loop workspace、专用账户、持久mount unit、systemd service、被动doctor和offline probe已实测；managed release升级/activate/fix-forward仍属后续部署gate。
 - 真实Slack/provider尚未接线验收；剩余检查是权限、事件、协议、usage和错误兼容，不是“模型能否自主合作”。

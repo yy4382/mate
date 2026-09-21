@@ -24,6 +24,8 @@ const completedSchema = z.object({ version: z.literal(1), inputIdentity: z.strin
 const completedPath = join(managedLayout.data, 'control', 'installation.json');
 const bootstrapJournalPath = '/var/lib/.mate-install-v1.json';
 const controlJournalPath = join(managedLayout.data, 'control', 'install-v1.json');
+export interface InstallationPaths { bootstrapJournal: string; controlJournal: string; completed: string; current: string; releases: string }
+const installationPaths: InstallationPaths = { bootstrapJournal: bootstrapJournalPath, controlJournal: controlJournalPath, completed: completedPath, current: managedLayout.current, releases: managedLayout.releases };
 function pathExists(path: string): boolean { try { lstatSync(path); return true; } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error; } }
 function canonicalFuturePath(path: string): string {
   const raw = resolve(path), tail: string[] = []; let current = raw;
@@ -32,6 +34,12 @@ function canonicalFuturePath(path: string): string {
 }
 
 export interface CommandResult { code: number; stdout: string; stderr: string }
+export interface ExistingInstallation {
+  inputIdentity: string;
+  releaseId?: string;
+  complete: boolean;
+  consumedBytes: number;
+}
 export interface InstallerHost {
   platform: NodeJS.Platform;
   arch: string;
@@ -42,9 +50,10 @@ export interface InstallerHost {
   run(binary: string, args: readonly string[]): CommandResult;
   directoryBytes(path: string): number;
   canonical(path: string): string;
+  dockerImageBytes?(reference: string): number | undefined;
   availableBytes(path: string): number;
   memoryMiB(): number;
-  existingInstall(): { inputIdentity: string; releaseId: string } | undefined;
+  existingInstall(): ExistingInstallation | undefined;
 }
 
 function run(binary: string, args: readonly string[]): CommandResult {
@@ -56,18 +65,46 @@ function directoryBytes(path: string): number {
   const visit = (current: string): void => { const stat = lstatSync(current); if (stat.isFile()) total += stat.blocks * 512; else if (stat.isDirectory()) for (const name of readdirSync(current)) visit(join(current, name)); };
   visit(path); return total;
 }
+export function inspectExistingInstallation(paths: InstallationPaths = installationPaths, rootUid = 0, rootGid = 0): ExistingInstallation | undefined {
+  const journals = [paths.bootstrapJournal, paths.controlJournal].filter(pathExists);
+  if (journals.length > 1) throw new Error('Both bootstrap and control install journals exist');
+  if (journals.length === 1) {
+    const journalPath = journals[0]!; owner(journalPath, rootUid, rootGid, 0o600, 'file');
+    const journal = journalSchema.parse(JSON.parse(readFileSync(journalPath, 'utf8')));
+    if (pathExists(paths.current)) {
+      if (!journal.release.releaseId) throw new Error('Unfinished installation current release has no journal identity');
+      const current = lstatSync(paths.current);
+      if (!current.isSymbolicLink() || realpathSync(paths.current) !== realpathSync(join(paths.releases, journal.release.releaseId))) throw new Error('Unfinished installation journal and current release differ');
+    }
+    if (pathExists(paths.completed)) {
+      owner(paths.completed, rootUid, rootGid, 0o600, 'file'); const completed = completedSchema.parse(JSON.parse(readFileSync(paths.completed, 'utf8')));
+      if (completed.inputIdentity !== journal.inputIdentity || completed.releaseId !== journal.release.releaseId) throw new Error('Installation marker and unfinished journal differ');
+    }
+    const releasePath = journal.release.status === 'published' && journal.release.releaseId ? join(paths.releases, journal.release.releaseId) : journal.release.stage;
+    const releaseBytes = pathExists(releasePath) ? directoryBytes(releasePath) : 0;
+    const volumeBytes = journal.volumes.reduce((sum, volume) => {
+      const path = volume.status === 'planned' || volume.status === 'formatted' ? volume.stage : volume.backingFile;
+      if (!pathExists(path)) return sum; const stat = lstatSync(path); return sum + (stat.isFile() && !stat.isSymbolicLink() ? stat.blocks * 512 : 0);
+    }, 0);
+    return { inputIdentity: journal.inputIdentity, ...(journal.release.releaseId ? { releaseId: journal.release.releaseId } : {}), complete: false, consumedBytes: releaseBytes + volumeBytes };
+  }
+  if (!pathExists(paths.completed)) { if (pathExists(paths.current)) throw new Error('Existing current release is not a V2c managed installation'); return undefined; }
+  owner(paths.completed, rootUid, rootGid, 0o600, 'file'); const value = completedSchema.parse(JSON.parse(readFileSync(paths.completed, 'utf8')));
+  const current = lstatSync(paths.current); if (!current.isSymbolicLink() || realpathSync(paths.current) !== realpathSync(join(paths.releases, value.releaseId))) throw new Error('Managed installation marker and current release differ');
+  return { ...value, complete: true, consumedBytes: 0 };
+}
 export const nodeInstallerHost = (): InstallerHost => ({
   platform: process.platform, arch: process.arch, node: process.version,
   euid: () => process.geteuid?.() ?? -1, run, directoryBytes, canonical: canonicalFuturePath,
   read: path => readFileSync(path, 'utf8'), assertRootExecutable: path => { const link = lstatSync(path), stat = lstatSync(realpathSync(path)); if ((!link.isFile() && !link.isSymbolicLink()) || link.uid !== 0 || !stat.isFile() || stat.isSymbolicLink() || stat.uid !== 0 || (stat.mode & 0o022) !== 0 || (stat.mode & 0o111) === 0) throw new Error(`Host executable is not protected: ${path}`); },
   availableBytes: path => { const stat = statfsSync(path); return Number(BigInt(stat.bavail) * BigInt(stat.bsize)); },
-  memoryMiB: () => { const match = /^MemTotal:\s+(\d+)\s+kB$/m.exec(readFileSync('/proc/meminfo', 'utf8')); if (!match) throw new Error('Cannot read host memory'); return Math.floor(Number(match[1]) / 1024); },
-  existingInstall: () => {
-    if (!pathExists(completedPath)) { if (pathExists(managedLayout.current)) throw new Error('Existing current release is not a V2c managed installation'); return undefined; }
-    owner(completedPath, 0, 0, 0o600, 'file'); const value = completedSchema.parse(JSON.parse(readFileSync(completedPath, 'utf8')));
-    const current = lstatSync(managedLayout.current); if (!current.isSymbolicLink() || realpathSync(managedLayout.current) !== join(managedLayout.releases, value.releaseId)) throw new Error('Managed installation marker and current release differ');
-    return value;
+  dockerImageBytes: reference => {
+    const inspected = run('/usr/bin/docker', ['--host', 'unix:///var/run/docker.sock', 'image', 'inspect', '--format={{.Size}}', reference]);
+    if (inspected.code !== 0) return undefined;
+    const bytes = Number(inspected.stdout.trim()); return Number.isSafeInteger(bytes) && bytes >= 0 ? bytes : undefined;
   },
+  memoryMiB: () => { const match = /^MemTotal:\s+(\d+)\s+kB$/m.exec(readFileSync('/proc/meminfo', 'utf8')); if (!match) throw new Error('Cannot read host memory'); return Math.floor(Number(match[1]) / 1024); },
+  existingInstall: () => inspectExistingInstallation(),
 });
 
 function checked(host: InstallerHost, binary: string, args: readonly string[], label: string): string {
@@ -81,6 +118,15 @@ function stable(value: unknown): string {
 }
 function inputIdentity(spec: DeploymentSpec, config: DaemonConfig, plan: DeploymentPlan, host: InstallerHost): string { return hash(stable({ spec, config, plan, environment: spec.environmentSource ? host.read(spec.environmentSource) : '' })); }
 function fsyncDirectory(path: string): void { const fd = openSync(path, constants.O_RDONLY | constants.O_DIRECTORY); try { fsyncSync(fd); } finally { closeSync(fd); } }
+function fsyncFile(path: string): void { const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW); try { fsyncSync(fd); } finally { closeSync(fd); } }
+export function syncPayloadTree(path: string): void {
+  const stat = lstatSync(path);
+  if (stat.isSymbolicLink()) return;
+  if (stat.isFile()) { fsyncFile(path); return; }
+  if (!stat.isDirectory()) throw new Error(`Cannot persist unsupported payload entry: ${path}`);
+  for (const name of readdirSync(path)) syncPayloadTree(join(path, name));
+  fsyncDirectory(path);
+}
 function ensureDirectory(path: string, uid: number, gid: number, mode: number): void {
   if (!existsSync(path)) { mkdirSync(path, { mode }); chownSync(path, uid, gid); chmodSync(path, mode); fsyncDirectory(dirname(path)); }
   const stat = lstatSync(path); if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== uid || stat.gid !== gid || (stat.mode & 0o777) !== mode) throw new Error(`Managed directory identity mismatch: ${path}`);
@@ -111,14 +157,20 @@ export function readDeploymentInputs(specPath: string): { spec: DeploymentSpec; 
 export function preflightDeployment(spec: DeploymentSpec, config: DaemonConfig, host: InstallerHost = nodeInstallerHost()): DeploymentPlan {
   const plan = createDeploymentPlan(spec, config, host), os = Object.fromEntries(host.read('/etc/os-release').split('\n').filter(line => line.includes('=')).map(line => { const at = line.indexOf('='); return [line.slice(0, at), line.slice(at + 1).replace(/^"|"$/g, '')]; }));
   if (host.platform !== 'linux' || host.arch !== 'x64' || os.ID !== 'debian' || os.VERSION_ID !== '13' || !/^v24\./.test(host.node)) throw new Error('Supported installer host is Debian 13 x86_64 with Node 24');
-  for (const binary of ['/usr/bin/systemctl', '/usr/bin/systemd-run', '/usr/bin/systemd-escape', '/usr/bin/systemd-sysusers', '/usr/sbin/mkfs.ext4', '/usr/bin/fallocate', '/usr/bin/mount', '/usr/bin/umount', '/usr/bin/findmnt', '/usr/sbin/blkid', '/usr/bin/docker']) host.assertRootExecutable(binary);
+  for (const binary of ['/usr/bin/systemctl', '/usr/bin/systemd-run', '/usr/bin/systemd-escape', '/usr/bin/systemd-sysusers', '/usr/bin/getent', '/usr/sbin/mkfs.ext4', '/usr/bin/fallocate', '/usr/bin/mount', '/usr/bin/umount', '/usr/bin/findmnt', '/usr/sbin/losetup', '/usr/sbin/blkid', '/usr/bin/docker']) host.assertRootExecutable(binary);
   checked(host, '/usr/bin/docker', ['--host', config.runtime.docker!.host, 'image', 'inspect', config.runtime.docker!.image], 'Pinned Docker image is unavailable');
   const existing = host.existingInstall(), identity = inputIdentity(spec, config, plan, host);
   if (existing && existing.inputIdentity !== identity) throw new Error('Existing managed installation differs; upgrades belong to the V2d transaction');
-  if (!existing && host.availableBytes('/') < plan.storage.totalRequiredBytes) throw new Error('Insufficient disk space for two releases, state reserve and all workspace backing files');
+  const requiredBytes = remainingRequiredBytes(plan, existing);
+  if (requiredBytes > 0 && host.availableBytes('/') < requiredBytes) throw new Error(`Insufficient disk space for remaining deployment resources (${requiredBytes} bytes required)`);
   if (host.memoryMiB() < plan.memory.upperBoundMiB) throw new Error('Host memory is below the configured daemon and concurrent container upper bound');
   const active = host.run('/usr/bin/systemctl', ['is-active', '--quiet', 'mate.service']); if (active.code === 0) throw new Error('mate.service must be stopped before installation');
   return plan;
+}
+
+export function remainingRequiredBytes(plan: DeploymentPlan, existing: ExistingInstallation | undefined): number {
+  if (existing?.complete) return 0;
+  return Math.max(0, plan.storage.totalRequiredBytes - (existing?.consumedBytes ?? 0));
 }
 
 function serviceIdentity(host: InstallerHost): { uid: number; gid: number } {
@@ -126,7 +178,9 @@ function serviceIdentity(host: InstallerHost): { uid: number; gid: number } {
   atomicExact('/etc/sysusers.d/mate.conf', 'u mate - "Mate daemon" /var/lib/mate /usr/sbin/nologin\n', 0, 0, 0o644);
   checked(host, '/usr/bin/systemd-sysusers', ['/etc/sysusers.d/mate.conf'], 'Cannot create Mate service identity');
   const uid = Number(checked(host, '/usr/bin/id', ['-u', 'mate'], 'Cannot resolve mate uid')), gid = Number(checked(host, '/usr/bin/id', ['-g', 'mate'], 'Cannot resolve mate gid'));
-  const groups = checked(host, '/usr/bin/id', ['-Gn', 'mate'], 'Cannot inspect mate groups').split(/\s+/); if (groups.includes('docker')) throw new Error('mate must not be a permanent member of the docker group');
+  const passwd = checked(host, '/usr/bin/getent', ['passwd', 'mate'], 'Cannot inspect mate account').split(':');
+  if (uid <= 0 || gid <= 0 || passwd.length !== 7 || passwd[0] !== 'mate' || Number(passwd[2]) !== uid || Number(passwd[3]) !== gid || passwd[5] !== '/var/lib/mate' || passwd[6] !== '/usr/sbin/nologin') throw new Error('mate must be a dedicated non-root account with the managed home and nologin shell');
+  const groups = checked(host, '/usr/bin/id', ['-Gn', 'mate'], 'Cannot inspect mate groups').split(/\s+/); if (groups.length !== 1 || groups[0] !== 'mate') throw new Error('mate must not have permanent supplementary groups');
   return { uid, gid };
 }
 
@@ -159,7 +213,7 @@ async function publishRelease(host: InstallerHost, spec: DeploymentSpec, journal
   const source = realpathSync(spec.release.source), item = journal.release;
   if (item.status === 'planned') {
     if (!existsSync(item.stage)) {
-      if (item.stageDev !== undefined) throw new Error('Recorded release staging directory disappeared'); mkdirSync(item.stage, { mode: 0o755 }); const created = lstatSync(item.stage);
+      if (item.stageDev !== undefined) throw new Error('Recorded release staging directory disappeared'); mkdirSync(item.stage, { mode: 0o755 }); fsyncDirectory(dirname(item.stage)); const created = lstatSync(item.stage);
       journal = { ...journal, release: { ...item, stageDev: created.dev, stageIno: created.ino } }; replaceJournal(journalPath, journal);
     } else if (item.stageDev === undefined) throw new Error('Unbound release staging directory requires manual inspection');
     const currentItem = journal.release, stageStat = lstatSync(item.stage); if (stageStat.dev !== currentItem.stageDev || stageStat.ino !== currentItem.stageIno) throw new Error('Release staging identity changed');
@@ -168,6 +222,7 @@ async function publishRelease(host: InstallerHost, spec: DeploymentSpec, journal
     for (const name of ['dist', 'node_modules', 'package.json', 'pnpm-lock.yaml']) checked(host, '/usr/bin/cp', ['-a', '--reflink=auto', join(source, name), join(item.stage, name)], `Cannot copy release ${name}`);
     checked(host, '/usr/bin/chown', ['-hR', 'root:root', item.stage], 'Cannot seal release ownership'); checked(host, '/usr/bin/chmod', ['-R', 'go-w', item.stage], 'Cannot seal release modes');
     const manifest = await createReleaseManifest(item.stage, spec.release.gitCommit); atomicExact(join(item.stage, 'RELEASE.json'), `${JSON.stringify(manifest, null, 2)}\n`, 0, 0, 0o444);
+    syncPayloadTree(item.stage);
     journal = { ...journal, release: { ...journal.release, releaseId: manifest.releaseId, status: 'copied' } }; replaceJournal(journalPath, journal);
   }
   const releaseId = journal.release.releaseId;
@@ -189,11 +244,30 @@ function emptyMountpoint(root: string, uid: number, gid: number): void {
   if (stat.dev === lstatSync(dirname(root)).dev && (stat.uid !== uid || stat.gid !== gid || (stat.mode & 0o777) !== 0o700)) throw new Error(`Managed mountpoint underlay identity mismatch: ${root}`);
 }
 
+function assertMountedBacking(host: InstallerHost, workspace: PlannedWorkspace, output: string): void {
+  const fields = output.trim().split(/\s+/), source = fields[0], filesystem = fields[1], options = new Set((fields[2] ?? '').split(','));
+  if (!source || filesystem !== 'ext4' || !['rw', 'nodev', 'nosuid'].every(option => options.has(option))) throw new Error(`Existing workspace mount has unexpected filesystem or options: ${workspace.root}`);
+  const loops = checked(host, '/usr/sbin/losetup', ['--associated', workspace.backingFile, '--noheadings', '--output', 'NAME'], 'Cannot inspect workspace loop device').split('\n').map(value => value.trim()).filter(Boolean);
+  if (!loops.includes(source)) throw new Error(`Existing workspace mount does not use its managed backing: ${workspace.root}`);
+}
+
+export function initializePublishedVolume(host: InstallerHost, workspace: PlannedWorkspace, uid: number, gid: number): void {
+  emptyMountpoint(workspace.root, uid, gid);
+  const mounted = host.run('/usr/bin/findmnt', ['--noheadings', '--mountpoint', workspace.root, '--output', 'SOURCE,FSTYPE,OPTIONS']);
+  if (mounted.code === 0) assertMountedBacking(host, workspace, mounted.stdout);
+  else checked(host, '/usr/bin/mount', ['-o', 'loop,rw,nodev,nosuid', workspace.backingFile, workspace.root], 'Cannot initialize workspace mount');
+  checked(host, '/usr/bin/chown', [`${uid}:${gid}`, workspace.root], 'Cannot set workspace owner');
+  checked(host, '/usr/bin/chmod', ['0700', workspace.root], 'Cannot set workspace mode');
+  fsyncDirectory(workspace.root);
+  checked(host, '/usr/bin/umount', [workspace.root], 'Cannot unmount initialized workspace');
+  fsyncFile(workspace.backingFile);
+}
+
 function prepareVolume(host: InstallerHost, workspace: PlannedWorkspace, uid: number, gid: number, journalPath: string, journal: InstallJournal, index: number): InstallJournal {
   let record = journal.volumes[index]!;
   if (record.status === 'planned') {
     if (!existsSync(record.stage)) {
-      if (record.stageDev !== undefined) throw new Error('Recorded workspace staging file disappeared'); const fd = openSync(record.stage, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600); closeSync(fd); const created = lstatSync(record.stage);
+      if (record.stageDev !== undefined) throw new Error('Recorded workspace staging file disappeared'); const fd = openSync(record.stage, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600); closeSync(fd); fsyncDirectory(dirname(record.stage)); const created = lstatSync(record.stage);
       record = { ...record, stageDev: created.dev, stageIno: created.ino }; journal = { ...journal, volumes: journal.volumes.map((value, at) => at === index ? record : value) }; replaceJournal(journalPath, journal);
     } else if (record.stageDev === undefined) throw new Error('Unbound workspace staging file requires manual inspection');
     const stageIdentity = lstatSync(record.stage); if (stageIdentity.dev !== record.stageDev || stageIdentity.ino !== record.stageIno) throw new Error('Workspace staging identity changed');
@@ -203,6 +277,7 @@ function prepareVolume(host: InstallerHost, workspace: PlannedWorkspace, uid: nu
     checked(host, '/usr/bin/fallocate', ['--length', String(workspace.capacityBytes), record.stage], 'Cannot allocate workspace backing');
     const stat = lstatSync(record.stage); if (stat.size !== workspace.capacityBytes || stat.blocks * 512 < workspace.capacityBytes) throw new Error('Workspace backing allocation is incomplete');
     if (checked(host, '/usr/sbin/blkid', ['-p', '-s', 'TYPE', '-o', 'value', record.stage], 'Cannot inspect workspace filesystem') !== 'ext4') throw new Error('Workspace backing is not ext4');
+    fsyncFile(record.stage);
     record = { ...record, status: 'formatted' }; journal = { ...journal, volumes: journal.volumes.map((value, at) => at === index ? record : value) }; replaceJournal(journalPath, journal);
   }
   if (record.status === 'formatted') {
@@ -210,14 +285,13 @@ function prepareVolume(host: InstallerHost, workspace: PlannedWorkspace, uid: nu
     else { renameSync(record.stage, workspace.backingFile); fsyncDirectory(managedLayout.volumes); }
     record = { ...record, status: 'published' }; journal = { ...journal, volumes: journal.volumes.map((value, at) => at === index ? record : value) }; replaceJournal(journalPath, journal);
   }
+  if (record.status === 'published' || record.status === 'initialized') {
+    const final = lstatSync(workspace.backingFile);
+    if (!final.isFile() || final.isSymbolicLink() || final.uid !== 0 || final.gid !== 0 || (final.mode & 0o777) !== 0o600 || final.size !== workspace.capacityBytes || final.blocks * 512 < workspace.capacityBytes || final.dev !== record.stageDev || final.ino !== record.stageIno) throw new Error(`Published backing identity differs: ${workspace.backingFile}`);
+    if (checked(host, '/usr/sbin/blkid', ['-p', '-s', 'TYPE', '-o', 'value', workspace.backingFile], 'Cannot inspect published workspace filesystem') !== 'ext4') throw new Error('Published workspace backing is not ext4');
+  }
   if (record.status === 'published') {
-    emptyMountpoint(workspace.root, uid, gid);
-    const mounted = host.run('/usr/bin/findmnt', ['--noheadings', '--mountpoint', workspace.root]);
-    if (mounted.code !== 0) {
-      checked(host, '/usr/bin/mount', ['-o', 'loop,rw,nodev,nosuid', workspace.backingFile, workspace.root], 'Cannot initialize workspace mount');
-      checked(host, '/usr/bin/chown', [`${uid}:${gid}`, workspace.root], 'Cannot set workspace owner'); checked(host, '/usr/bin/chmod', ['0700', workspace.root], 'Cannot set workspace mode');
-      checked(host, '/usr/bin/umount', [workspace.root], 'Cannot unmount initialized workspace');
-    }
+    initializePublishedVolume(host, workspace, uid, gid);
     record = { ...record, status: 'initialized' }; journal = { ...journal, volumes: journal.volumes.map((value, at) => at === index ? record : value) }; replaceJournal(journalPath, journal);
   }
   return journal;

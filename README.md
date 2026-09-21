@@ -6,6 +6,8 @@ Mate 是个人单 Slack workspace 中的持久 Agent 团队。每个 Agent 有�
 
 开发按[模块计划](docs/IMPLEMENTATION_PLAN.md)逐个实施、独立红队审核；记录在[reviews](docs/reviews/)，当前验证见[ACCEPTANCE](docs/ACCEPTANCE.md)，能力与证据关系见[CAPABILITY_MATRIX](docs/CAPABILITY_MATRIX.md)。只评harness，不评模型智能。
 
+Debian 13固定拓扑首次部署使用版本库内的plan/preflight/install/disable入口、systemd units和受限`matectl`；完整流程见[DEPLOYMENT](docs/DEPLOYMENT.md)。安装不会因缺少secret自动启动主服务。
+
 ## 本地运行
 
 pnpm 10.33.0；workspace配置固定Node 24.21.0和原生依赖构建。
@@ -42,7 +44,7 @@ dataDir/state是数据库；dataDir/agents/AGENT_ID是私有持久workspace。ME
 
 Linux容器部署必须配置`runtime.workspaceManifest`。manifest逐一声明私有workspace以及显式外部grant的mountpoint、ext4 backing file、硬容量和owner。daemon在创建MEMORY.md或连接Slack前核对：每个root是独立的ext4 loopback mount，backing file已实际分配而非稀疏占位，容量、设备、owner、`rw,nodev,nosuid`和loop identity全部匹配。缺失、共享设备或普通目录会直接终止；不会退回dataDir里的普通文件夹。`environment.info`会把已验证的硬容量随effective grant报告给Agent。
 
-Ubuntu部署中，结构化文件操作和shell都经同一个Docker隔离后端；macOS本地开发的文件操作继续使用已验证的SRT，shell仍走Docker。应用不自动拉取镜像、不执行host shell、不把host credentials或Docker socket挂进Agent容器。Slack示例中的全零image只是必须替换的占位值。
+Debian 13部署中，结构化文件操作和shell都经同一个Docker隔离后端；macOS本地开发的文件操作继续使用已验证的SRT，shell仍走Docker。应用不自动拉取镜像、不执行host shell、不把host credentials或Docker socket挂进Agent容器。Slack示例中的全零image只是必须替换的占位值。
 
 runtime.docker字段：
 
@@ -99,7 +101,7 @@ pnpm node dist/src/main.js restore mate.local.json /ABSOLUTE/target-checkpoint -
 pnpm node dist/src/main.js restore mate.local.json /ABSOLUTE/checkpoint
 ```
 
-备份目的目录必须未存在或是空的规范目录，并位于live dataDir之外；包含SQLite与私有文件，`COMPLETE.json`最后发布。managed部署的root wrapper应预建service-owned目录，并在成功后封存为`root:<service group> 0750/0640`；失败目录只能按预先记录的device/inode清理。恢复到原绝对dataDir。不要删库或删session来绕过升级检查。完整生产wrapper和systemd接线属于V2c/V2d，当前不要用unmanaged迁移替代它。
+备份目的目录必须未存在或是空的规范目录，并位于live dataDir之外；包含SQLite与私有文件，`COMPLETE.json`最后发布。managed部署由root-owned `matectl`在固定checkpoint根预建service-owned目录，并在成功后封存为`root:<service group> 0750/0640`；失败目录只能按预先记录的device/inode清理。恢复到原绝对dataDir。不要删库或删session来绕过升级检查；不要用unmanaged迁移替代managed部署事务。
 
 ## 验证
 
