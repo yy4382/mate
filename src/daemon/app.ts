@@ -40,7 +40,7 @@ import { Research } from './research.js';
 import { Artifacts } from './artifacts.js';
 import {EnvironmentCapabilities} from '../capabilities/environment.js';
 import {normalizeConfiguredWorkspaces,workspaceProfiles,WorkspaceAccess} from '../capabilities/workspaces.js';
-import { executionScope } from './paths.js';
+import { assertDockerControlIsolation,executionProtectedPaths,executionScope,pathVariants } from './paths.js';
 import { backup } from './backup.js';
 import {FairAdmission} from '../concurrency/admission.js';
 import {AdmittedBackend} from '../execution/admitted.js';
@@ -72,15 +72,25 @@ export class Daemon {
   private startPromise?: Promise<void>;
   private closePromise?: Promise<void>;
   readonly config:DaemonConfig;
-  constructor(input: unknown, readonly log: Log, readonly projectRoot = resolve('.')) {
-    const config=this.config=daemonConfigSchema.parse(input);
+  static async create(input:unknown,log:Log,projectRoot=resolve('.')):Promise<Daemon>{
+    const config=daemonConfigSchema.parse(input),data=config.runtime.dataDir;
+    mkdirSync(data,{recursive:true,mode:0o700});if(lstatSync(data).isSymbolicLink()||within(realpathSync(projectRoot),realpathSync(data)))throw new Error('Data directory must be outside the application checkout and not a symlink');
+    const state=join(data,'state');mkdirSync(state,{recursive:true,mode:0o700});if(lstatSync(state).isSymbolicLink())throw new Error('State path must not be a symlink');
+    const release=acquireLock(join(state,'daemon.lock'));let transferred=false;
+    try{
+      const agentsDir=join(data,'agents');assertDockerControlIsolation(projectRoot,state,agentsDir,config.runtime.workspaceGrants,config.runtime.docker);
+      const container=config.runtime.docker?new ContainerBackend({...config.runtime.docker,scope:executionScope(data)}):undefined;
+      await container?.recover();
+      const daemon=new Daemon(config,log,projectRoot,release,container);transferred=true;return daemon;
+    }finally{if(!transferred)release();}
+  }
+  private constructor(config:DaemonConfig,readonly log:Log,readonly projectRoot:string,release:()=>void,container:ContainerBackend|undefined) {
+    this.config=config;this.release=release;this.container=container;
     const slackConfig=slackRuntimeConfig(config);
     const data = config.runtime.dataDir;
-    mkdirSync(data, { recursive: true, mode: 0o700 });
     if (lstatSync(data).isSymbolicLink() || within(realpathSync(projectRoot), realpathSync(data))) throw new Error('Data directory must be outside the application checkout and not a symlink');
-    const state = join(data, 'state'); mkdirSync(state, { recursive: true, mode: 0o700 });
+    const state = join(data, 'state');
     if (lstatSync(state).isSymbolicLink()) throw new Error('State path must not be a symlink');
-    this.release = acquireLock(join(state, 'daemon.lock'));
     let opened: Store | undefined;
     try {
       this.store = opened = new Store(join(state, 'mate.sqlite'));
@@ -104,7 +114,7 @@ export class Daemon {
       const slackApp=slackConfig?slackApplication(this.store,slackConfig,c):undefined;
       const messages=slackApp?.messages??localConversations(this.store,c);
       messages.writes.assertFormat();
-      const transport=slackApp&&slackConfig?new WebSlackTransport(this.store,slackApp.mapper,Object.fromEntries(slackConfig.agents.map(a=>[a.id,requireSecret(process.env,a.botTokenEnv)]))):undefined;
+      const transport=slackApp&&slackConfig?new WebSlackTransport(this.store,slackApp.mapper):undefined;
       const output=new Output(messages,transport??{post:async()=>{throw new Error('External transport unavailable');},pendingInput:()=>false,classify:()=>({kind:'rejected',reason:'External transport unavailable'})});
       this.collaboration = new Collaboration(this.store, messages, output, c);
       const agentsDir = join(data, 'agents'); mkdirSync(agentsDir, { recursive: true, mode: 0o700 });
@@ -116,11 +126,13 @@ export class Daemon {
         for (const dir of ['notes','artifacts']) mkdirSync(join(root, dir), { recursive: true, mode: 0o700 });
         if (!existsSync(join(root, 'MEMORY.md'))) writeFileSync(join(root, 'MEMORY.md'), `# ${agent.name}\n\nPrivate memory entry. Keep durable lessons and links to notes here.\n`, { flag: 'wx', mode: 0o600 });
       }
-      const profiles=workspaceProfiles(this.memoryRoots,normalizeConfiguredWorkspaces(config.runtime.workspaceGrants,[projectRoot,state,agentsDir]),!!config.runtime.docker);
-      const files = new SandboxBackend(),backendAdmission=new FairAdmission(config.runtime.limits.maxBackendOperations),admittedFiles=new AdmittedBackend(files,backendAdmission);
-      if (config.runtime.docker) this.container = new ContainerBackend({ ...config.runtime.docker, scope: executionScope(data) });
+      const protectedRoots=executionProtectedPaths(projectRoot,state,agentsDir,config.runtime.docker),privateBase=new Set(pathVariants(agentsDir));
+      const privateForbidden=protectedRoots.filter(root=>!privateBase.has(root));for(const root of Object.values(this.memoryRoots))canonicalRoot(root,privateForbidden);
+      const profiles=workspaceProfiles(this.memoryRoots,normalizeConfiguredWorkspaces(config.runtime.workspaceGrants,protectedRoots),!!config.runtime.docker);
+      const files:ExecutionBackend=this.container&&process.platform==='linux'?this.container:new SandboxBackend();
+      const backendAdmission=new FairAdmission(config.runtime.limits.maxBackendOperations),admittedFiles=new AdmittedBackend(files,backendAdmission);
       this.backend = new AdmittedBackend(new ControlledBackend(files, this.container ?? { execute: async () => { throw new Error('Container execution is not configured'); } }),backendAdmission);
-      this.broker = new Broker(this.store, this.collaboration, this.backend, [projectRoot, state]);
+      this.broker = new Broker(this.store, this.collaboration, this.backend, privateForbidden);
       const workspaceAccess=this.workspaceAccess=new WorkspaceAccess(this.collaboration,this.broker,profiles);
       const research = new Research(config.runtime.researchHosts);
       let artifacts!: Artifacts;
@@ -158,10 +170,10 @@ export class Daemon {
   }
   private async open(): Promise<void> {
     if (this.stopping) return;
-    const models = builtinModels();
-    for (const agent of this.config.mate.agents) { requireSecret(process.env, agent.model.apiKeyEnv); if (!models.getModel(agent.model.provider, agent.model.id)) throw new Error(`Unknown provider/model for ${agent.id}`); }
-    await this.container?.recover(); if (this.stopping) return;
+    if(this.container){const root=Object.values(this.memoryRoots)[0];if(!root)throw new Error('Container probe requires an Agent workspace');await this.container.probe(root);}if(this.stopping)return;
     this.store.recover();this.adapter?.recover();this.supervisor.recoverSessions();
+    const models=builtinModels();for(const agent of this.config.mate.agents){requireSecret(process.env,agent.model.apiKeyEnv);if(!models.getModel(agent.model.provider,agent.model.id))throw new Error(`Unknown provider/model for ${agent.id}`);}
+    const slackConfig=slackRuntimeConfig(this.config);if(slackConfig&&this.slackRuntime)this.slackRuntime.transport.configure(Object.fromEntries(slackConfig.agents.map(agent=>[agent.id,requireSecret(process.env,agent.botTokenEnv)])));
     await this.adapter?.start(this.abort.signal);if(this.stopping)return;
     this.collaboration.output.gate?.adoptPending();
     this.loopPromise=this.loop();this.log.info({},'Mate daemon started');

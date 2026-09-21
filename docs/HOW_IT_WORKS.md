@@ -103,8 +103,8 @@ tasks.list按owned、assigned、available、all-visible分页；cursor绑定acto
 | 当前环境 | environment.info → EnvironmentCapabilities → Broker.effectiveGrants + capability ports | `mate.environment.v1`只读快照；opaque grant/label、相对路径、exec/network、known-URL、actor adapter与current-target支持；动作重新授权 |
 | 交流空间 | ToolRouter → Directory → acting Slack client | 已加入空间/成员/DM；权限变化重查，有界分页 |
 | 历史 | ToolRouter → ConversationHistory → 可选 HistorySource | 本地分页/搜索/around；acting installation有界回填；quiet ingestion与明确coverage/gap |
-| 文件 | ToolRouter → Broker → SandboxBackend → 固定SRT helper | read/list/stat/search/write/edit/move/remove/mkdir及binary；root/symlink检查 |
-| shell | Broker → ControlledBackend → ContainerBackend | 固定本地镜像、单授权root、可停止/恢复，无host credentials/socket挂载 |
+| 文件 | ToolRouter → Broker → AdmittedBackend → Linux ContainerBackend / macOS SandboxBackend → 固定helper | read/list/stat/search/write/edit/move/remove/mkdir及binary；root/symlink检查；Linux与shell共用资源和清理熔断 |
+| shell | Broker → AdmittedBackend → ControlledBackend → ContainerBackend | 固定本地镜像、单授权root、可停止/恢复，无host credentials/socket挂载；cleanup不确定后拒绝新执行 |
 | 已知URL | Research.read | allowlist公共HTTPS IPv4、无cookies、重定向/DNS检查；不是搜索服务 |
 | 附件输入 | Attachments.save → acting files.info/download → Broker.write_bytes | visible message中的fileId；下载前后ACL/运行状态检查；不接受模型任意URL/token |
 | 附件输出 | Artifacts preflight → immutable outbox/draft → staged upload → share | actor+target在读文件前检查；冻结内容；分享前重查；fileId/phase持久化，unknown按分享证据对账 |
@@ -112,7 +112,7 @@ tasks.list按owned、assigned、available、all-visible分页；cursor绑定acto
 
 [WorkspaceAccess](../src/capabilities/workspaces.ts)在run进入模型前原子准备当前work的配置grant，works.select在其action事务中准备新work；environment.info不会补授权。配置workspace按canonical root合并，label只帮助选择，不参与授权。[Broker](../src/policy/broker.ts)是参数规范化、唯一有效grant判定、work/stop、持久action和执行边界。环境查询与执行共用这项判定，旧报告不能绕过撤销/过期/切work/review seat。未知写操作保守阻挡相关root的后续变更；未知exec阻挡该Agent后续变更，仍可读取核实。不能以新action ID或换session绕过。
 
-私有workspace是通用工作空间，MEMORY.md只是恢复入口。配置Docker后私有root可exec；镜像决定真实工具链。network默认none，owner可选bridge，后者包含可路由局域网及互联网，并非“仅公网”。review seat强制none。镜像不会自动拉取。
+私有workspace是通用工作空间，MEMORY.md只是恢复入口。配置Docker后私有root可exec；镜像决定真实工具链。network默认none，owner可选bridge，后者包含可路由局域网及互联网，并非“仅公网”。review seat强制none。镜像不会自动拉取。低配默认全局1个run和1个backend operation；FIFO等待可停止，worker空闲五分钟关闭。Linux启动在Slack前清理本scope并实测固定helper和PID namespace；无法确认container cleanup会熔断新操作直到recover。
 
 当前大小限制：file.read 64KiB；文本写/编辑/文件搜索对象最高1MB；binary read每次32KiB；write_bytes/附件输入/二进制发布最高1MB，文本发布64KiB。工具限制不等于任意模型都能一次消费最大结果：每run最多50,000保守token额度（JSON字节估计）且还受provider context限制；大文件宜search、分块或exec提取后读取。保留文件内容，输出截断有明确标记。
 
@@ -135,5 +135,5 @@ sessions.checkpoint保存自述检查点；sessions.reset在run结束或崩溃�
 - 没有通用搜索、浏览器、第三方登录/集成目录；已知URL读取、配置镜像里的CLI和可信adapter是现有入口。也没有让模型自行增建身份/扩大grant的入口。
 - Slack搜索只查本地可见缓存，历史补抓/目录分页有界；不是整个workspace的完整搜索。大文件/超长频道需有界读取或显式知情继续。
 - unknown严格保留；没有通用“自动证明外部效果不存在”或任意owner清账工具。文件可核查、Slack消息/附件有对账路径，证据不足时需明确报告阻塞。
-- 单workspace、单daemon、共享SQLite和串行执行/发送。多主机、高吞吐、热加载工具未实现。macOS SRT/Docker边界已实测，其他OS未验。
+- 单workspace、单daemon、共享SQLite，默认串行run/backend操作且可配置。多主机、高吞吐、热加载工具未实现。macOS SRT及Docker Linux VM中的amd64容器边界已实测；原生Ubuntu宿主、systemd和loopback workspace尚未验。
 - 真实Slack/provider尚未接线验收；剩余检查是权限、事件、协议、usage和错误兼容，不是“模型能否自主合作”。

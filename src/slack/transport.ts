@@ -10,7 +10,14 @@ export class CanonicalSlackTransport implements ExternalMessageTransport {
   readonly clients=new Map<string,WebClient>();
   private readonly abort=new AbortController();
   close():void{this.abort.abort();}
-  constructor(readonly store:Store,readonly mapper:SlackMapper,tokens:Record<string,string>){
+  constructor(readonly store:Store,readonly mapper:SlackMapper,tokens?:Record<string,string>){if(tokens)this.add(tokens);}
+  configure(tokens:Record<string,string>):void{
+    if(this.clients.size)throw new Error('Slack transport is already configured');
+    const expected=this.mapper.config.agents.map(agent=>agent.id).sort(),actual=Object.keys(tokens).sort();
+    if(JSON.stringify(actual)!==JSON.stringify(expected))throw new Error('Slack transport tokens must cover every bound Agent');
+    this.add(tokens);
+  }
+  private add(tokens:Record<string,string>):void{
     for(const [actor,token]of Object.entries(tokens))this.clients.set(actor,new WebClient(token,{retryConfig:{retries:0},rejectRateLimitedCalls:true,timeout:15000,fetch:(input,init)=>fetch(input,{...init,signal:AbortSignal.any([this.abort.signal,...(init?.signal?[init.signal]:[])])})}));
   }
   pendingInput(target:ConversationTarget):boolean {

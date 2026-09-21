@@ -1,6 +1,6 @@
 import { fixtureTarget, externalThread } from '../helpers/canonical-slack.js';
-import{afterEach,expect,it}from 'vitest';
-import{mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,realpathSync,existsSync}from 'node:fs';
+import{afterEach,expect,it,vi}from 'vitest';
+import{chmodSync,mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,realpathSync,existsSync}from 'node:fs';
 import{tmpdir}from 'node:os';
 import{join}from 'node:path';
 import{Store,encode,hash}from '../../src/storage/store.js';
@@ -13,7 +13,8 @@ import{operationDocumentation,ToolRouter}from '../../src/runtime/tools.js';
 import{Messages,Output,migrateCurrentRuntime}from '../helpers/canonical-slack.js';
 import{Collaboration}from '../../src/collaboration/service.js';
 import{Broker}from '../../src/policy/broker.js';
-const roots:string[]=[];afterEach(()=>roots.splice(0).forEach(root=>rmSync(root,{recursive:true,force:true})));
+import{ContainerBackend}from '../../src/execution/container.js';
+const roots:string[]=[];afterEach(()=>{vi.restoreAllMocks();roots.splice(0).forEach(root=>rmSync(root,{recursive:true,force:true}));});
 function fixture(legacy=false){
  const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-migrate-')));roots.push(root);const data=join(root,'data'),path=join(data,'state','mate.sqlite'),own=join(data,'agents','research'),shared=join(root,'shared');
  for(const dir of [join(data,'state'),own,shared])mkdirSync(dir,{recursive:true});writeFileSync(join(own,'MEMORY.md'),'private synthetic knowledge');
@@ -55,13 +56,15 @@ it('legacy identity requires explicit attestation; revoked grants stay revoked',
  expect((await migrateConfiguration(f.previous,f.next,join(f.root,'backup'),true)).legacyIdentityAttested).toBe(true);
  const s=new Store(f.path);expect(s.db.prepare('SELECT revoked FROM grants WHERE id=?').get(f.grant)).toEqual({revoked:1});s.close();
 });
-it('explicitly migrates the pre-limits runtime policy hash',async()=>{
- const f=fixture();const raw=structuredClone(f.previous) as any;delete raw.runtime.limits;
+it('explicitly migrates the pre-limits and pre-container-resources runtime policy hash',async()=>{
+ const f=fixture(),binary=join(f.root,'docker-cli');writeFileSync(binary,'synthetic');chmodSync(binary,0o700);
+ const previous=daemonConfigSchema.parse({...f.previous,runtime:{...f.previous.runtime,docker:{binary,host:'unix:///var/run/docker.sock',image:`sha256:${'a'.repeat(64)}`}}}),next=structuredClone(previous);next.mate.agents[0]!.role='post-resource-default';
+ const raw=structuredClone(previous) as any;delete raw.runtime.limits;delete raw.runtime.docker.resources;vi.spyOn(ContainerBackend.prototype,'recover').mockResolvedValue();
  f.store.db.prepare("UPDATE runtime_meta SET value=? WHERE key='configuration'").run(encode(raw));
  f.store.db.prepare("UPDATE runtime_meta SET value=? WHERE key='policy'").run(hash(encode(raw.runtime)));f.store.close();
  expect(()=>daemonConfigSchema.parse(raw)).not.toThrow();
- await migrateConfiguration(f.previous,f.next,join(f.root,'backup'));
- const s=new Store(f.path);try{expect(storedConfiguration(s)).toEqual(f.next);expect(s.db.prepare("SELECT value FROM runtime_meta WHERE key='policy'").get()).toEqual({value:hash(encode(f.next.runtime))});}finally{s.close();}
+ await migrateConfiguration(previous,next,join(f.root,'backup'));
+ const s=new Store(f.path);try{expect(storedConfiguration(s)).toEqual(next);expect(s.db.prepare("SELECT value FROM runtime_meta WHERE key='policy'").get()).toEqual({value:hash(encode(next.runtime))});}finally{s.close();}
 });
 it('a failed migration transaction leaves the old configuration/session/grants usable and retains a complete backup',async()=>{
  const f=fixture();const before=(f.router.sessions.status('research') as any).session;
@@ -80,7 +83,7 @@ it('a migrated configuration starts locally and can add persistent peers beyond 
  for(let n=2;n<=4;n++)f.next.mate.agents.push({...structuredClone(f.next.mate.agents[0]!),id:'peer'+n,name:'Peer '+n});
  const next=daemonConfigSchema.parse(f.next);await migrateConfiguration(f.previous,next,join(f.root,'backup'));
  const {Daemon}=await import('../../src/daemon/app.js');const refs=next.adapters.slack!.bindings.map(a=>a.botTokenEnv),saved=refs.map(ref=>process.env[ref]);refs.forEach(ref=>process.env[ref]='synthetic-local-only');
- try{const daemon=new Daemon(next,{info:()=>{},error:()=>{}});try{expect(daemon.store.db.prepare('SELECT count(*) n FROM agents').get()).toEqual({n:4});expect(existsSync(join(f.data,'agents','peer4','MEMORY.md'))).toBe(true);}finally{await daemon.close();}}
+ try{const daemon=await Daemon.create(next,{info:()=>{},error:()=>{}});try{expect(daemon.store.db.prepare('SELECT count(*) n FROM agents').get()).toEqual({n:4});expect(existsSync(join(f.data,'agents','peer4','MEMORY.md'))).toBe(true);}finally{await daemon.close();}}
  finally{refs.forEach((ref,i)=>{if(saved[i]===undefined)delete process.env[ref];else process.env[ref]=saved[i];});}
 });
 
@@ -123,7 +126,7 @@ it('adds the first Slack installation to a canonical local-origin store without 
  await migrateConfiguration(previous,next,join(root,'backup'));
  const saved=process.env.RESEARCH_BOT_TOKEN;process.env.RESEARCH_BOT_TOKEN='synthetic';
  try{for(let n=0;n<2;n++){
-   const daemon=new Daemon(next,{info:()=>{},error:()=>{}});
+   const daemon=await Daemon.create(next,{info:()=>{},error:()=>{}});
    expect(daemon.store.db.prepare("SELECT 1 FROM runtime_meta WHERE key='reference_migration_v16'").get()).toBeUndefined();
    await daemon.close();
  }}finally{if(saved===undefined)delete process.env.RESEARCH_BOT_TOKEN;else process.env.RESEARCH_BOT_TOKEN=saved;}

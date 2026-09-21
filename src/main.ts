@@ -31,7 +31,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     process.stdout.write(JSON.stringify({ checkScope: 'configuration_model_and_secret_references', externalConnectivityChecked: false,
       adapters: { slackConfigured: !!config.adapters.slack, localConfigured: !!config.adapters.local },
       requiredSlackBotScopes:config.adapters.slack?[...requiredSlackBotScopes]:[],agents: report, containerConfigured: !!config.runtime.docker,
-      runtimeLimits:config.runtime.limits }, null, 2) + '\n');
+      containerFileIsolation:process.platform==='linux'&&!!config.runtime.docker,containerResources:config.runtime.docker?.resources??null,runtimeLimits:config.runtime.limits }, null, 2) + '\n');
     if (report.some(r => !r.modelKnown || r.missingEnv.length)) process.exitCode = 1; return;
   }
   if (command === 'restore') {
@@ -55,7 +55,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     process.stdout.write('Consistent database and memory checkpoint created.\n'); return;
   }
   const log = pino({ level: 'info', redact: ['token','apiKey','authorization','*.token','*.apiKey','*.authorization'] },pino.destination(2));
-  const daemon = new Daemon(config, log);
+  const daemon = await Daemon.create(config, log);
   const consoleAbort=new AbortController();
   let closing: Promise<void> | undefined;
   const close = () => { consoleAbort.abort();closing ??= daemon.close(); return closing; };

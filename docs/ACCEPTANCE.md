@@ -40,19 +40,20 @@
 | 作者预算/ACL/事项阻挡一批提醒 | tick在LIMIT前筛选；其他合法作者仍可触发 |
 | owner stop/cancel、daemon死亡 | generation fence、worker abort、容器PID namespace清理、文件helper lifeline；resume不清债务 |
 | admission等待、前置异常、backend失败 | queued Agent可单独停止；account/beginRun/执行异常统一释放slot；memory recovery和正式文件/exec共享backend上限 |
+| Docker create/start/cleanup不确定 | 始终尝试按随机name强制删除；create未确认时No-such不作成功证据；cleanup不确定熔断新操作，startup/offline recover按dataDir scope清理后才解除 |
 | reset请求后run中断、owner reset与旧run收尾交错 | 一次轮换、取消不续跑、暂停保持；不覆盖新session |
 | 配置迁移事务写失败 | 旧配置/session/grants一致保留，已有完整备份；保守fenced recovery不回滚为active |
 | 压缩后memory刷新失败 | 先失效view，再失败；真实RPC验证无主推理、无使用旧包冒充当前 |
 
 ## 本地验证与外部边界
 
-普通检查的当前精确数量记录在最新模块review；默认跳过7项需要显式本地SRT/Docker权限的测试。真实隔离集曾单独执行7/7通过；详见对应review记录。
+普通检查的当前精确数量记录在最新模块review；默认跳过8项需要显式本地SRT/Docker权限的测试。V1b真实隔离集以固定Node 24 amd64 image单独执行8/8通过；详见对应review记录。
 
 普通集调用真实Pi loop、Node worker与IPC，Slack/provider采用合成transport。真实隔离集使用现有固定本地镜像，覆盖跨root/secret/network、停止/超时/daemon死亡、二进制及network策略；不拉镜像、不连接外部服务。
 
 未进行真实Slack/provider验收。上线前核对安装身份/scopes、频道及DM事件、bot echo、429、unknown对账、附件分享、provider usage/错误格式与停止时延；逐项步骤见[实验运行手册](EXPERIMENT_RUNBOOK.md)。这些是协议接线与运行契约，不是证明模型能自发作出相同决策。
 
-当前边界详见[HOW_IT_WORKS](HOW_IT_WORKS.md)：本地freshness不是Slack全局原子事务；没有通用search/browser/第三方登录；review seat为更保守的全对话隔离；大小/分页/单run输入有界；没有通用unknown强行清账；单daemon/workspace，其他OS未验证。
+当前边界详见[HOW_IT_WORKS](HOW_IT_WORKS.md)：本地freshness不是Slack全局原子事务；没有通用search/browser/第三方登录；review seat为更保守的全对话隔离；大小/分页/单run输入有界；没有通用unknown强行清账；单daemon/workspace；原生Ubuntu宿主、systemd与loopback容量边界仍待后续gate。
 
 ## 独立审核轨迹
 

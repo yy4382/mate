@@ -32,7 +32,7 @@ it('bounds backend operations and releases a slot after cancellation or failure'
 
 it('releases run admission when pre-run accounting throws',async()=>{
   const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-admission-error-')));cleanup.push(()=>rmSync(root,{recursive:true,force:true}));
-  const raw=JSON.parse(readFileSync(resolve('mate.local.example.json'),'utf8'));raw.runtime.dataDir=join(root,'data');const daemon=new Daemon(daemonConfigSchema.parse(raw),{info:()=>{},error:()=>{}});cleanup.push(()=>daemon.close());
+  const raw=JSON.parse(readFileSync(resolve('mate.local.example.json'),'utf8'));raw.runtime.dataDir=join(root,'data');const daemon=await Daemon.create(daemonConfigSchema.parse(raw),{info:()=>{},error:()=>{}});cleanup.push(()=>daemon.close());
   const work=daemon.collaboration.createWork('accounting-failure',{conversationId:'team-room'});daemon.collaboration.enqueue('research',work,'retain-input',{});
   const account=vi.spyOn(daemon.collaboration.ledger,'account').mockImplementationOnce(()=>{throw new Error('synthetic accounting failure');});
   await expect(daemon.supervisor.step('research')).rejects.toThrow('synthetic accounting failure');
@@ -46,7 +46,7 @@ it('shares backend admission with concurrent private-memory recovery',async()=>{
   const raw=JSON.parse(readFileSync(resolve('mate.local.example.json'),'utf8'));raw.runtime.dataDir=join(root,'data');raw.runtime.limits={maxActiveRuns:2,maxBackendOperations:1,workerIdleMs:300000};
   let active=0,maximum=0;const releases:(()=>void)[]=[];
   vi.spyOn(SandboxBackend.prototype,'execute').mockImplementation(async()=>{active++;maximum=Math.max(maximum,active);await new Promise<void>(resolve=>releases.push(resolve));active--;return{code:0,stdout:'memory',stderr:'',truncated:false};});
-  const daemon=new Daemon(daemonConfigSchema.parse(raw),{info:()=>{},error:()=>{}});cleanup.push(()=>daemon.close());
+  const daemon=await Daemon.create(daemonConfigSchema.parse(raw),{info:()=>{},error:()=>{}});cleanup.push(()=>daemon.close());
   const work=daemon.collaboration.createWork('recovery-admission',{conversationId:'team-room'}),signal=new AbortController().signal;
   const first=daemon.supervisor.recovery('research',work,signal),second=daemon.supervisor.recovery('writer',work,signal);
   await vi.waitFor(()=>expect(releases).toHaveLength(1));expect(maximum).toBe(1);releases.shift()!();
@@ -59,7 +59,7 @@ it('production Daemon runs one Agent at a time, cancels a queued Agent, preserve
   const raw=JSON.parse(readFileSync(resolve('mate.local.example.json'),'utf8'));raw.runtime.dataDir=join(root,'data');raw.runtime.limits={maxActiveRuns:1,maxBackendOperations:1,workerIdleMs:600};
   raw.mate.agents.push({...raw.mate.agents[0],id:'observer',name:'Observer'});raw.adapters.local.rooms[0].agents.push('observer');const config=daemonConfigSchema.parse(raw);
   const previous=process.env.MODEL_API_KEY;process.env.MODEL_API_KEY='synthetic';cleanup.push(()=>{if(previous===undefined)delete process.env.MODEL_API_KEY;else process.env.MODEL_API_KEY=previous;});
-  const daemon=new Daemon(config,{info:()=>{},error:()=>{}});cleanup.push(()=>daemon.close());vi.spyOn(daemon.supervisor,'recovery').mockResolvedValue('memory');
+  const daemon=await Daemon.create(config,{info:()=>{},error:()=>{}});cleanup.push(()=>daemon.close());vi.spyOn(daemon.supervisor,'recovery').mockResolvedValue('memory');
   const started:string[]=[],closed:string[]=[];let releaseResearch!:()=>void;const researchGate=new Promise<void>(resolve=>releaseResearch=resolve);
   cleanup.push(()=>releaseResearch());
   vi.spyOn(daemon.supervisor,'factory').mockImplementation(agent=>({close(){closed.push(agent.id);},async run(){started.push(agent.id);if(agent.id==='research')await researchGate;return{tokens:1,cost:0,certain:true,waiting:false,continuation:false};}}));

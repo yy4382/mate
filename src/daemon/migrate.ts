@@ -17,9 +17,9 @@ import {sameConfiguration,daemonConfigSchema,slackRuntimeConfig,assertConfigurat
 import {Store,encode,hash}from '../storage/store.js';
 import {acquireLock}from './lock.js';
 import {backup}from './backup.js';
-import {executionScope}from './paths.js';
+import {executionProtectedPaths,executionScope}from './paths.js';
 import {ContainerBackend}from '../execution/container.js';
-import {canonicalRoot}from '../execution/paths.js';
+import {canonicalRoot,within}from '../execution/paths.js';
 import {buildBaseline}from '../runtime/prompt.js';
 import {operationDocumentation}from '../runtime/tools.js';
 import {repairTranscript}from '../runtime/context.js';
@@ -65,11 +65,14 @@ export async function migrateConfiguration(previous:DaemonConfig,next:DaemonConf
   const oldIds=(s.db.prepare('SELECT id FROM agents ORDER BY id').all() as {id:string}[]).map(a=>a.id);
   if(encode(oldIds)!==encode(previous.mate.agents.map(a=>a.id).sort()))throw new Error('Previous Agent identities do not match database');
   assertConfigurationEvolution(previous,next);
-  const configured=normalizeConfiguredWorkspaces(next.runtime.workspaceGrants,[projectRoot,state,join(data,'agents')]);
+  const agentsDir=join(data,'agents'),protectedRoots=executionProtectedPaths(projectRoot,state,agentsDir,next.runtime.docker);
+  const configured=normalizeConfiguredWorkspaces(next.runtime.workspaceGrants,protectedRoots);
+  const privateForbidden=protectedRoots.filter(root=>root!==realpathSync(agentsDir));
   const roots=new Map<string,Map<string,string[]>>();
   for(const agent of next.mate.agents){
-   const own=join(data,'agents',agent.id);
+   const own=join(agentsDir,agent.id);
    if(existsSync(own)&&lstatSync(own).isSymbolicLink())throw new Error('Agent memory must not be a symlink');
+   if(existsSync(own))canonicalRoot(own,privateForbidden);else if(privateForbidden.some(path=>within(resolve(own),path)||within(path,resolve(own))))throw new Error('Protected root overlap');
    // New Agent private directories are created by normal daemon startup.
    const desired=new Map<string,string[]>([[existsSync(own)?canonicalRoot(own,[projectRoot,state]):resolve(own),next.runtime.docker?['read','write','exec']:['read','write']]]);
    for(const grant of configured.filter(g=>g.agentId===agent.id)){

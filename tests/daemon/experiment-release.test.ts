@@ -39,7 +39,7 @@ it('runs the preconfigured team through the permanent daemon while preserving in
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'mate-experiment-'))); cleanup.push(() => rmSync(root, { recursive: true, force: true }));
   const config = example('mate.local.example.json'); config.runtime.dataDir = join(root, 'data');
   const previous = process.env.MODEL_API_KEY; process.env.MODEL_API_KEY = 'synthetic'; cleanup.push(() => { if (previous === undefined) delete process.env.MODEL_API_KEY; else process.env.MODEL_API_KEY = previous; });
-  const daemon = new Daemon(config, { info: () => {}, error: () => {} }); cleanup.push(() => daemon.close());
+  const daemon = await Daemon.create(config, { info: () => {}, error: () => {} }); cleanup.push(() => daemon.close());
   vi.spyOn(daemon.supervisor, 'recovery').mockResolvedValue('synthetic recovery');
   const ownerRuns: string[] = []; let ownerMessageId = '';
   vi.spyOn(daemon.supervisor, 'factory').mockImplementation(agent => ({ close() {}, async run(_spec, hooks) {

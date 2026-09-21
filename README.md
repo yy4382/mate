@@ -40,7 +40,7 @@ mentions模式由@mention、DM或watch触发；participate对普通消息合并n
 
 dataDir/state是数据库；dataDir/agents/AGENT_ID是私有持久workspace。MEMORY.md是恢复入口，知识内容和文件组织由Agent决定；notes/artifacts是起始目录。每run及压缩后刷新有界memory/checkpoint，提供截断和完整读取路径。
 
-文件工具经SRT，当前实测macOS。shell必须配置本地Docker兼容引擎和已存在的固定镜像，不拉取镜像、不执行host shell、不挂载host credentials/socket。
+Ubuntu部署中，结构化文件操作和shell都经同一个Docker隔离后端；macOS本地开发的文件操作继续使用已验证的SRT，shell仍走Docker。应用不自动拉取镜像、不执行host shell、不把host credentials或Docker socket挂进Agent容器。Slack示例中的全零image只是必须替换的占位值。
 
 runtime.docker字段：
 
@@ -48,8 +48,11 @@ runtime.docker字段：
 - host：unix:///…/docker.sock。
 - image：sha256:后64位固定镜像ID。
 - network：none（默认）或bridge（可路由局域网和互联网）。
+- resources.memoryMb/cpus/pids/tmpfsMb：每次短生命周期容器的硬限制；默认512MiB、1 CPU、64进程和64MiB tmpfs。
 
-镜像须包含需要的工具，并支持当前UID/GID访问/workspace。私有root在配置Docker后获得exec。workspaceGrants指定agentId、绝对root和read/write/exec，可用可选的小写label帮助Agent选择；应用、DB和其他Agent私有目录不可作为共享grant。需要并行改同一项目时配置独立worktree。scope内直接执行，停止/取消由daemon和backend落实。environment.info按当前work报告仍有效的grant、相对路径规则、执行/网络、已知URL读取及输入输出adapter支持；它是会在每次动作时重验的快照，不是授权token。
+固定镜像须包含`/usr/local/bin/node`、`/bin/sh`及需要的工具，并支持当前UID/GID访问`/workspace`。启动取得单实例锁后先清理本dataDir scope的遗留容器，再实际探测固定helper读写、helper侧越界拒绝、shell PID namespace清理；探针通过前不启动Slack adapter或模型run。任一操作只有在`docker rm --force --volumes`确认后才返回；清理结果不确定会熔断该backend，后续执行全部拒绝，直到显式startup/offline recover成功。create请求本身不确定时，`No such container`不足以解除不确定性。
+
+私有root在配置Docker后获得exec。workspaceGrants指定agentId、绝对root和read/write/exec，可用可选的小写label帮助Agent选择；应用、DB和其他Agent私有目录不可作为共享grant。需要并行改同一项目时配置独立worktree。scope内直接执行，停止/取消由daemon和backend落实。environment.info按当前work报告仍有效的grant、相对路径规则、执行/网络、已知URL读取及输入输出adapter支持；它是会在每次动作时重验的快照，不是授权token。
 
 research.read是allowlist已知公共HTTPS URL读取，不是搜索。attachments.save接可见Slack消息中的fileId，保存到授权目录；artifact.publish/revise发布自身artifacts文件并经过同一门控。文本发布上限64KiB，binary/下载1MB。完整工具限制见[调用链说明](docs/HOW_IT_WORKS.md)。
 
@@ -101,4 +104,4 @@ MATE_DOCKER_IMAGE=sha256:EXISTING_64_HEX_IMAGE_ID \
 pnpm test tests/execution/sandbox.test.ts
 ```
 
-普通集含真实Pi loop、Node worker/IPC与合成Slack/provider；可选集实际运行SRT/Docker。真实Slack/provider待验的是scopes、事件、跨频道/DM接线、unknown对账、usage与错误协议，不要求证明模型会作出预设协作决策。详细故障与多选择证据见[验收表](docs/ACCEPTANCE.md)。
+普通集含真实Pi loop、Node worker/IPC与合成Slack/provider；可选集实际运行SRT/Docker。V1b在本机Docker Linux VM中以固定Node 24 amd64 image跑过8项真实隔离测试；原生Ubuntu宿主与systemd属于后续部署gate，不能由这项结果代替。真实Slack/provider待验的是scopes、事件、跨频道/DM接线、unknown对账、usage与错误协议，不要求证明模型会作出预设协作决策。详细故障与多选择证据见[验收表](docs/ACCEPTANCE.md)。

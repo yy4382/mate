@@ -105,3 +105,12 @@ it.skipIf(process.env.MATE_SANDBOX_TEST !== '1')('real binary sandbox roundtrip 
  const connected=await backend.execute({root,operation:command,timeoutMs:10000});expect(connected.code).toBe(0);expect(connected.stdout).toContain('eth0');
  const isolated=await backend.execute({root,operation:command,network:'none',timeoutMs:10000});expect(isolated.code).toBe(0);expect(isolated.stdout).not.toContain('eth0');
 },30000);
+it.skipIf(process.env.MATE_SANDBOX_TEST !== '1')('unified container fixed helper passes startup probe and structured file semantics',async()=>{
+ const root=temp(),backend=new ContainerBackend({binary:'/usr/local/bin/docker',image:process.env.MATE_DOCKER_IMAGE!,host:process.env.MATE_DOCKER_HOST!,scope:`mate-test-helper-${randomUUID()}`,resources:{memoryMb:128,cpus:0.5,pids:16,tmpfsMb:8}});
+ await backend.recover();await backend.probe(root);
+ const value='容器内固定 helper';expect((await backend.execute({root,operation:{kind:'write',path:'notes/value',content:value},timeoutMs:20000})).code).toBe(0);
+ expect((await backend.execute({root,operation:{kind:'read',path:'notes/value'},timeoutMs:20000})).stdout).toBe(value);
+ const environment=await backend.execute({root,operation:{kind:'exec',cwd:'.',command:'test ! -e /var/run/docker.sock && printf isolated'},timeoutMs:20000});expect(environment).toMatchObject({code:0,stdout:'isolated'});
+ await expect(backend.execute({root,operation:{kind:'write',path:'../escape',content:'bad'},timeoutMs:20000})).rejects.toThrow('escapes');
+ await backend.recover();
+},60000);
