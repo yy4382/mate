@@ -91,7 +91,7 @@ it('preserves review-seat isolation when a peer sends an internal DM before rest
  expect(second.collaboration.ledger.account('bob').tokens).toBe(1);
 });
 it('Slack background membership and history never pass internal identifiers to its mapper',async()=>{
- const {SlackService}=await import('../../src/daemon/slack.js');const f=setup(),run=f.run('alice');
+ const {SlackService}=await import('../../src/slack/service.js');const f=setup(),run=f.run('alice');
  const dm=await f.directory.openDM(run,'open',{kind:'agent',id:'bob'},signal) as {conversationId:string};
  f.messages.references.createMessage(dm.conversationId,'opaque-root');f.messages.watch('alice',{...dm,threadId:'opaque-root'},true);
  const target=vi.fn(()=>{throw new Error('internal identifier reached Slack');});
@@ -109,6 +109,7 @@ it('rejects unsupported internal artifact/projection before recording a send int
 it('revision cannot smuggle unsupported artifacts into an internal target',async()=>{
  const f=setup(),run=f.run('alice'),dm=await f.directory.openDM(run,'open',{kind:'agent',id:'bob'},signal) as {conversationId:string};
  f.messages.references.createConversation('channel','external','external');f.messages.membership('alice','external',true);
+ vi.spyOn(f.messages,'requirePublication').mockImplementation(()=>{}); // Explicit synthetic external capability for this revision test.
  f.output.queueArtifact('alice',{conversationId:'external'},'caption',{} as any,'artifact',{run});
  expect(()=>f.output.gate!.revise(run,'artifact',1,'caption',dm)).toThrow('not supported');
  expect(f.s.output('artifact')?.state).toBe('held');expect(f.s.output('artifact:revision:2')).toBeUndefined();

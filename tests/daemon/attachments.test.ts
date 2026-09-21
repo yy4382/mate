@@ -9,7 +9,7 @@ import {Messages,Output}from '../helpers/canonical-slack.js';
 import {Collaboration}from '../../src/collaboration/service.js';
 import {Broker}from '../../src/policy/broker.js';
 import {ToolRouter}from '../../src/runtime/tools.js';
-import {Attachments}from '../../src/daemon/attachments.js';
+import {Attachments}from '../../src/slack/attachments.js';
 import {Artifacts}from '../../src/daemon/artifacts.js';
 import {WebSlackTransport}from '../fixtures/v16/src/slack/transport.js';
 import {configFixture}from '../helpers/config.js';

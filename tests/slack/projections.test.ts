@@ -87,7 +87,7 @@ it('owner status paginates old faults and authorizes disclosure explicitly',asyn
 });
 
 it('management pages retain valid JSON and continuation through the actual Slack admin reply queue',async()=>{
- const {Controls}=await import('../../src/daemon/control.js'),{SlackService}=await import('../../src/daemon/slack.js');
+ const {Controls}=await import('../../src/daemon/control.js'),{SlackService}=await import('../../src/slack/service.js');
  const f=await setup();for(let n=0;n<25;n++)await f.send(`queue-${n}`);
  const controls=new Controls(f.c,{} as any,{} as any,undefined,(...args)=>f.service.control(...args));
  const slack=new SlackService(f.c,f.transport,{bindPeerEchoes(){}} as any,controls);

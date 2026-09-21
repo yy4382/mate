@@ -4,7 +4,7 @@ Deployment format version 2 keeps the internal team separate from platform insta
 
 `adapters.slack` contains a workspace `teamId`, `principals` (Slack user ID → stable internal human ID), and `bindings`. Each binding names an `agentId` and its `slackAppId`, `slackUserId`, `slackBotId`, `botTokenEnv`, `appTokenEnv`, and `channels` participation policy. Only a subset of the team needs an installation. A missing binding never borrows another Agent's bot token.
 
-`adapters.local` describes trusted host identities (`humans`) and explicit internal rooms (`rooms`, each with `id`, `agents`, and `humans`). These are host-controlled inputs, not identities a model may claim. E2c3a only adds this configuration contract; the full local daemon lifecycle and persistent room setup are E2c3b acceptance requirements, not yet a delivered entry point.
+`adapters.local` describes trusted host identities (`humans`) and explicit internal rooms (`rooms`, each with `id`, `agents`, and `humans`). These are host-controlled inputs, not identities a model may claim. The same daemon can run without a Slack adapter. `start` runs continuously; `local` also accepts a trusted host JSONL console on stdin. See [LOCAL_CONSOLE](LOCAL_CONSOLE.md).
 
 The previous flattened Slack format remains accepted at the configuration boundary. It is normalized before comparisons and persistence. Legacy human owners retain the already-used scoped message identity `JSON.stringify(['slack', teamId, 'user', slackUserId])`; the adapter maps authenticated Slack controls to that principal before core authorization. Existing stored request bytes, hashes, receipts, message bodies, and audit records are not rewritten by this conversion.
 

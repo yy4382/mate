@@ -8,8 +8,10 @@ import type { SlackMapper } from './mapper.js';
 /** No automatic write retries. Immutable outbox identity crosses this boundary unchanged. */
 export class CanonicalSlackTransport implements ExternalMessageTransport {
   readonly clients=new Map<string,WebClient>();
+  private readonly abort=new AbortController();
+  close():void{this.abort.abort();}
   constructor(readonly store:Store,readonly mapper:SlackMapper,tokens:Record<string,string>){
-    for(const [actor,token]of Object.entries(tokens))this.clients.set(actor,new WebClient(token,{retryConfig:{retries:0},rejectRateLimitedCalls:true,timeout:15000}));
+    for(const [actor,token]of Object.entries(tokens))this.clients.set(actor,new WebClient(token,{retryConfig:{retries:0},rejectRateLimitedCalls:true,timeout:15000,fetch:(input,init)=>fetch(input,{...init,signal:AbortSignal.any([this.abort.signal,...(init?.signal?[init.signal]:[])])})}));
   }
   pendingInput(target:ConversationTarget):boolean {
     const external=this.mapper.target(target);

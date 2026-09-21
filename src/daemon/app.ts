@@ -1,30 +1,28 @@
+import type {AdapterLifecycle} from './adapter.js';
+import {SlackRuntime} from '../slack/runtime.js';
+import {initializeCanonicalStore} from '../storage/internal-schema.js';
+import {localConversations} from '../local/application.js';
+import {LocalAdapter} from '../local/input.js';
+import {configureLocalRooms} from '../local/rooms.js';
 import {migrateProjections} from '../storage/projection-schema.js';
 import {migrateProjectionImports} from '../storage/projection-import-schema.js';
-import {Projections} from '../conversations/projections.js';
-import {ProjectionImports} from '../conversations/projection-imports.js';
-import {SlackProjectionTransport,SlackProjectionInput} from '../slack/projections.js';
-import {SlackProjectionService} from '../slack/projection-service.js';
 import {TeamDirectory} from '../conversations/team-directory.js';
 import {migrateInternalConversations} from '../storage/internal-schema.js';
 import { migrateCanonicalConversations } from '../slack/canonical-migration.js';
 import { slackApplication } from '../slack/application.js';
-import { CanonicalSlackNormalizer } from '../slack/normalize.js';
 
 import { CanonicalOutput as Output } from '../conversations/output.js';
 import { storedConfiguration,saveConfiguration } from './migrate.js';
-import {Attachments}from './attachments.js';
+import {Attachments}from '../slack/attachments.js';
 import { Directory } from '../slack/directory.js';
 import { mkdirSync, writeFileSync, existsSync, realpathSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { App } from '@slack/bolt';
-import { ManagedSocket } from '../slack/socket.js';
 import { builtinModels } from '@earendil-works/pi-ai/providers/all';
 import { sameConfiguration, daemonConfigSchema, slackRuntimeConfig, type DaemonConfig } from './config.js';
 import { requireSecret } from '../config.js';
 import { Store, hash } from '../storage/store.js';
 
 import { CanonicalSlackTransport as WebSlackTransport } from '../slack/transport.js';
-import { DurableReceiver } from '../slack/receiver.js';
 import { Collaboration } from '../collaboration/service.js';
 import { Broker } from '../policy/broker.js';
 import { SandboxBackend, type ExecutionBackend } from '../execution/backend.js';
@@ -33,9 +31,7 @@ import { canonicalRoot, within } from '../execution/paths.js';
 import { Supervisor } from '../runtime/supervisor.js';
 import { ToolRouter } from '../runtime/tools.js';
 import { acquireLock } from './lock.js';
-import { Ingress } from './ingress.js';
 import { Controls } from './control.js';
-import { SlackService } from './slack.js';
 import { Research } from './research.js';
 import { Artifacts } from './artifacts.js';
 import { executionScope } from './paths.js';
@@ -46,13 +42,20 @@ export class Daemon {
   readonly collaboration: Collaboration;
   readonly broker: Broker;
   readonly supervisor: Supervisor;
-  readonly slack: SlackService;
-  readonly projections:SlackProjectionService;
+  readonly controls:Controls;
+  readonly local:LocalAdapter|undefined;
+  readonly adapter:AdapterLifecycle|undefined;
+  private readonly slackRuntime:SlackRuntime|undefined;
+  /** Compatibility inspection surface; production lifecycle uses the adapter port. */
+  get slack(){if(!this.slackRuntime)throw new Error('Slack adapter unavailable');return this.slackRuntime.service;}
+  get projections(){if(!this.slackRuntime)throw new Error('Slack adapter unavailable');return this.slackRuntime.projections;}
   readonly memoryRoots: Record<string, string> = {};
   readonly backend: ExecutionBackend;
   private release: () => void;
   private container: ContainerBackend | undefined;
-  private apps: App[] = [];
+  private readonly abort=new AbortController();
+  private background?:Promise<void>;
+  private opening?:Promise<void>;
   private stopping = false;
   private paused = false;
   private runs = new Set<Promise<unknown>>();
@@ -63,7 +66,6 @@ export class Daemon {
   constructor(input: unknown, readonly log: Log, readonly projectRoot = resolve('.')) {
     const config=this.config=daemonConfigSchema.parse(input);
     const slackConfig=slackRuntimeConfig(config);
-    if(!slackConfig)throw new Error('Local daemon lifecycle is not installed yet');
     const data = config.runtime.dataDir;
     mkdirSync(data, { recursive: true, mode: 0o700 });
     if (lstatSync(data).isSymbolicLink() || within(realpathSync(projectRoot), realpathSync(data))) throw new Error('Data directory must be outside the application checkout and not a symlink');
@@ -73,25 +75,26 @@ export class Daemon {
     let opened: Store | undefined;
     try {
       this.store = opened = new Store(join(state, 'mate.sqlite'));
+      this.store.db.exec('BEGIN IMMEDIATE');
       const previous=storedConfiguration(this.store);
       if(previous&&!sameConfiguration(previous,config))throw new Error('Configuration changed; run explicit offline migration');
       if(!previous&&this.store.db.prepare('SELECT 1 FROM agents').get())throw new Error('Legacy configuration requires explicit offline migration');
       const policyHash = hash(JSON.stringify(config.runtime));
       const oldPolicy = this.store.db.prepare("SELECT value FROM runtime_meta WHERE key='policy'").get() as { value: string } | undefined;
       if (oldPolicy && oldPolicy.value !== policyHash) throw new Error('Runtime policy changed; explicit policy migration required');
-      this.store.db.prepare("INSERT INTO runtime_meta VALUES('policy',?) ON CONFLICT DO NOTHING").run(policyHash);
       const c = config.mate;
       if(!this.store.db.prepare("SELECT 1 FROM runtime_meta WHERE key='conversation_format'").get()){
         if(previous)throw new Error('Canonical conversation storage requires explicit offline migration');
 
       }
-      migrateCanonicalConversations(this.store,slackConfig);
+      if(slackConfig)migrateCanonicalConversations(this.store,slackConfig);else initializeCanonicalStore(this.store);
       if(previous&&Number(this.store.db.pragma('user_version',{simple:true}))<20)throw new Error('Internal conversations require explicit offline migration');
       migrateInternalConversations(this.store);migrateProjections(this.store);migrateProjectionImports(this.store);
-      const {messages,mapper,argumentsCodec}=slackApplication(this.store,slackConfig,c);
+      const slackApp=slackConfig?slackApplication(this.store,slackConfig,c):undefined;
+      const messages=slackApp?.messages??localConversations(this.store,c);
       messages.writes.assertFormat();
-      const transport=new WebSlackTransport(this.store,mapper,Object.fromEntries(slackConfig.agents.map(a=>[a.id,requireSecret(process.env,a.botTokenEnv)])));
-      const output=new Output(messages,transport);
+      const transport=slackApp&&slackConfig?new WebSlackTransport(this.store,slackApp.mapper,Object.fromEntries(slackConfig.agents.map(a=>[a.id,requireSecret(process.env,a.botTokenEnv)]))):undefined;
+      const output=new Output(messages,transport??{post:async()=>{throw new Error('External transport unavailable');},pendingInput:()=>false,classify:()=>({kind:'rejected',reason:'External transport unavailable'})});
       this.collaboration = new Collaboration(this.store, messages, output, c);
       const files = new SandboxBackend();
       if (config.runtime.docker) this.container = new ContainerBackend({ ...config.runtime.docker, scope: executionScope(data) });
@@ -99,8 +102,8 @@ export class Daemon {
       this.broker = new Broker(this.store, this.collaboration, this.backend, [projectRoot, state]);
       const research = new Research(config.runtime.researchHosts);
       let artifacts!: Artifacts;
-      const attachments=new Attachments(this.collaboration,this.broker,transport.clients);
-      const router = new ToolRouter(this.collaboration, this.broker, { attachment:(...args)=>attachments.save(...args),environment:actor=>({workspace:'/workspace',execConfigured:!!config.runtime.docker,image:config.runtime.docker?.image??null,network:this.collaboration.seats.active(actor)?'none':config.runtime.docker?.network??'none',researchHosts:this.collaboration.seats.active(actor)?[]:config.runtime.researchHosts,toolchain:'Installed in the pinned image; inspect with exec. No host credentials inherited.'}),research: (url, signal) => research.read(url, signal), publish: (...args) => artifacts.publish(...args) }, new TeamDirectory(messages,new Directory(messages, transport.clients,mapper)), (actor,workId)=>this.ensureGrants(actor,workId),value=>argumentsCodec.args(value));
+      const attachments=transport?new Attachments(this.collaboration,this.broker,transport.clients):undefined;
+      const router = new ToolRouter(this.collaboration, this.broker, { attachment:(...args)=>{if(!attachments)throw new Error('Attachment adapter unavailable');return attachments.save(...args);},environment:actor=>({workspace:'/workspace',execConfigured:!!config.runtime.docker,image:config.runtime.docker?.image??null,network:this.collaboration.seats.active(actor)?'none':config.runtime.docker?.network??'none',researchHosts:this.collaboration.seats.active(actor)?[]:config.runtime.researchHosts,toolchain:'Installed in the pinned image; inspect with exec. No host credentials inherited.'}),research: (url, signal) => research.read(url, signal), publish: (...args) => artifacts.publish(...args) }, new TeamDirectory(messages,transport?new Directory(messages,transport.clients,transport.mapper):undefined), (actor,workId)=>this.ensureGrants(actor,workId),value=>slackApp?.argumentsCodec.args(value)??value);
       this.supervisor = new Supervisor(this.collaboration, router, c, undefined, async (agentId, workId, signal) => {
         this.ensureGrants(agentId, workId);
         const result = await files.execute({ root: this.memoryRoots[agentId]!, operation: { kind: 'read', path: 'MEMORY.md' }, timeoutMs: 10000 }, signal);
@@ -117,14 +120,16 @@ export class Daemon {
         if (!existsSync(join(root, 'MEMORY.md'))) writeFileSync(join(root, 'MEMORY.md'), `# ${agent.name}\n\nPrivate memory entry. Keep durable lessons and links to notes here.\n`, { flag: 'wx', mode: 0o600 });
       }
       for (const grant of config.runtime.workspaceGrants) canonicalRoot(grant.root, [projectRoot, state, agentsDir]);
-      const projections=new Projections(messages,new Map([['slack',new SlackProjectionTransport(transport)]]));
-      const imports=new ProjectionImports(this.collaboration,projections),projectionInput=new SlackProjectionInput(projections,imports,transport);
-      this.projections=new SlackProjectionService(projections,imports,projectionInput,transport);
-      const ingress = new Ingress(this.collaboration,new CanonicalSlackNormalizer(messages,mapper,output,projectionInput)), controls = new Controls(this.collaboration, this.supervisor, this.broker, actor=>this.verifyReviewWorkspace(actor),(user,command,id,args)=>this.projections.control(user,command,id,args));
-      this.slack = new SlackService(this.collaboration, transport, ingress, controls, () => this.stopping);
-      artifacts = new Artifacts(this.collaboration, this.broker, this.slack, this.memoryRoots);
-      saveConfiguration(this.store,config);
-    } catch (error) { opened?.close(); this.release(); throw error; }
+      this.controls=new Controls(this.collaboration,this.supervisor,this.broker,actor=>this.verifyReviewWorkspace(actor),(user,command,id,args)=>this.slackRuntime?.projections.control(user,command,id,args));
+      this.adapter=this.slackRuntime=transport?new SlackRuntime(this.collaboration,transport,this.controls,message=>this.log.error({},message)):undefined;
+      this.local=config.adapters.local?new LocalAdapter(this.collaboration,config.adapters.local.humans):undefined;
+      artifacts = new Artifacts(this.collaboration,this.broker,this.slackRuntime?.service??{upload:async()=>{throw new Error('Artifact adapter unavailable');}},this.memoryRoots);
+      this.store.atomic(()=>{configureLocalRooms(this.collaboration,previous?.adapters.local,config.adapters.local);saveConfiguration(this.store,config);});
+      this.store.db.exec('COMMIT');
+    } catch (error) {
+      try{if(opened?.db.inTransaction)opened.db.exec('ROLLBACK');}finally{try{opened?.close();}finally{this.release();}}
+      throw error;
+    }
   }
   private verifyReviewWorkspace(actor:string):string {
     const root=this.memoryRoots[actor],agent=this.collaboration.agents.get(actor);
@@ -145,58 +150,71 @@ export class Daemon {
       }
     }
   }
-  start(): Promise<void> { return this.startPromise ??= this.open(); }
+  start(): Promise<void> {
+    if(!this.startPromise){this.opening=this.open();this.startPromise=this.opening.catch(async error=>{await this.close();throw error;});}
+    return this.startPromise;
+  }
   private async open(): Promise<void> {
     if (this.stopping) return;
     const models = builtinModels();
     for (const agent of this.config.mate.agents) { requireSecret(process.env, agent.model.apiKeyEnv); if (!models.getModel(agent.model.provider, agent.model.id)) throw new Error(`Unknown provider/model for ${agent.id}`); }
-    await this.container?.recover(); if (this.stopping) return; this.store.recover(); this.projections.core.recover(); this.supervisor.recoverSessions();
-    await this.slack.verify(); if (this.stopping) return;
-    await this.slack.membership(); if (this.stopping) return;
-    await this.slack.catchUp(); await this.projections.catchUp(); if (this.stopping) return;
+    await this.container?.recover(); if (this.stopping) return;
+    this.store.recover();this.adapter?.recover();this.supervisor.recoverSessions();
+    await this.adapter?.start(this.abort.signal);if(this.stopping)return;
     this.collaboration.output.gate?.adoptPending();
-    for (const agent of slackRuntimeConfig(this.config)!.agents) {
-      const socket = new ManagedSocket(requireSecret(process.env, agent.appTokenEnv));
-      const receiver = new DurableReceiver(this.store, agent.slackAppId, this.config.adapters.slack!.teamId, socket, () => this.log.error({ agentId: agent.id }, 'Slack receiver error; uncommitted events are not acknowledged'), () => this.slack.replay());
-      const app = new App({ token: requireSecret(process.env, agent.botTokenEnv), receiver });
-      app.event(/.*/, async () => {}); app.command('/team', async () => {});
-      this.apps.push(app); await app.start(); if (this.stopping) return;
-    }
-    this.loopPromise = this.loop(); this.log.info({}, 'Mate daemon started');
+    this.loopPromise=this.loop();this.log.info({},'Mate daemon started');
+  }
+  private async flushExternal():Promise<void>{
+    try{
+      for(const row of this.collaboration.output.ready(20,'external')){
+        if(this.stopping||this.paused)return;
+        const target=this.collaboration.messages.records.targetedEffect('outbox',row.id).target;
+        if(this.collaboration.messages.references.conversation(target.conversationId).authority==='external')await this.collaboration.output.send(row.id);
+      }
+    }catch{this.log.error({},'External output flush failed; durable state retained');}
+    if(!this.stopping&&!this.paused)try{await this.adapter?.flush();}catch{this.log.error({},'Adapter maintenance failed; internal scheduling continues');}
   }
   private async loop(): Promise<void> {
-    let nextReconcile = 0, nextMembership = Date.now() + 300000;
     while (!this.stopping) {
+      try{if(!this.paused)this.adapter?.poll();}catch{this.log.error({},'Adapter replay failed; internal scheduling continues');}
       try {
-        this.slack.replay(); this.projections.imports.replay();
         if (!this.paused) {
           this.collaboration.tick();
-          for (const row of this.collaboration.output.ready()) await this.collaboration.output.send(row.id);
-          this.slack.ingress.bindPeerEchoes(); this.collaboration.activateDelegations();
-          await this.projections.core.flush();
-          await this.slack.flushAdmin();
-          if (!this.paused && !this.stopping) for (const agent of this.collaboration.agents.list()) {
-            const run = this.supervisor.step(agent.id); this.runs.add(run); void run.finally(() => this.runs.delete(run));
+          for(const row of this.collaboration.output.ready(20,'internal')){
+            const target=this.collaboration.messages.records.targetedEffect('outbox',row.id).target;
+            if(this.collaboration.messages.references.conversation(target.conversationId).authority==='internal')await this.collaboration.output.send(row.id);
           }
-          if (Date.now() >= nextReconcile) { await this.slack.reconcile(); await this.projections.reconcile(); nextReconcile = Date.now() + 60000; }
-          if (Date.now() >= nextMembership) { await this.slack.membership(); await this.slack.catchUp(); await this.projections.catchUp(); nextMembership = Date.now() + 300000; }
+          this.collaboration.activateDelegations();
+          if(!this.background)this.background=this.flushExternal().finally(()=>{delete this.background;});
+          if (!this.paused && !this.stopping) for (const agent of this.collaboration.agents.list()) {
+            const run=this.supervisor.step(agent.id).catch(()=>{this.log.error({agentId:agent.id},'Agent scheduling failed');});
+            this.runs.add(run);void run.then(()=>this.runs.delete(run));
+          }
         }
-      } catch { this.log.error({}, 'Daemon tick failed; durable state retained'); }
-      await new Promise(resolve => setTimeout(resolve, 500));
+      }catch{this.log.error({},'Daemon tick failed; durable state retained');}
+      if(!this.stopping)await new Promise<void>(resolve=>{
+        const wake=()=>{clearTimeout(timer);this.abort.signal.removeEventListener('abort',wake);resolve();};
+        const timer=setTimeout(wake,500);this.abort.signal.addEventListener('abort',wake,{once:true});
+      });
     }
   }
   async checkpoint(destination: string): Promise<void> {
     this.paused = true;
-    try { await Promise.allSettled([...this.runs]); await this.supervisor.drain(); await backup(this.store, this.config.runtime.dataDir, destination); }
+    try { await this.background;await Promise.allSettled([...this.runs]); await this.supervisor.drain(); await backup(this.store, this.config.runtime.dataDir, destination); }
     finally { this.paused = false; }
   }
   close(): Promise<void> { return this.closePromise ??= this.shutdown(); }
   private async shutdown(): Promise<void> {
-    this.stopping = true; this.supervisor.close();
-    await Promise.allSettled(this.apps.map(app => app.stop()));
-    await this.startPromise?.catch(() => {}); await this.loopPromise; await Promise.allSettled([...this.runs]);
-    await this.supervisor.drain();
-    // Destroy any remaining namespace before releasing the singleton lock.
-    await this.container?.recover(); this.store.close(); this.release();
+    this.stopping=true;this.abort.abort();
+    const failures:unknown[]=[];
+    const settle=async(action:()=>unknown)=>{try{await action();}catch(error){failures.push(error);}};
+    try{
+      await settle(()=>this.supervisor.close());await settle(()=>this.adapter?.close());
+      await settle(()=>this.opening?.catch(()=>{}));await settle(()=>this.loopPromise);await settle(()=>this.background);
+      await Promise.allSettled([...this.runs]);await settle(()=>this.supervisor.drain());
+      // A failed adapter close must not bypass execution cleanup or release the lock early.
+      await settle(()=>this.container?.recover());
+    }finally{try{this.store.close();}finally{this.release();}}
+    if(failures.length)throw new AggregateError(failures,'Daemon cleanup failed after draining owned work');
   }
 }

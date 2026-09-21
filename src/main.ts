@@ -1,3 +1,4 @@
+import {LocalConsole} from './local/console.js';
 import { migrateConfiguration } from './daemon/migrate.js';
 import { readFileSync, existsSync, mkdirSync, cpSync, realpathSync } from 'node:fs';
 import { resolve, join } from 'node:path';
@@ -15,7 +16,7 @@ import { backup } from './daemon/backup.js';
 export async function main(args = process.argv.slice(2)): Promise<void> {
   const [command, configPath, destination] = args;
   if (command === 'models') { process.stdout.write(JSON.stringify(builtinModels().getModels(configPath).map(m => ({ provider: m.provider, id: m.id, contextWindow: m.contextWindow })), null, 2) + '\n'); return; }
-  if (!['check','start','backup','restore','migrate'].includes(command ?? '') || !configPath) throw new Error('Usage: mate check|start CONFIG; mate backup CONFIG DESTINATION; mate restore CONFIG BACKUP; mate models [PROVIDER]');
+  if (!['check','start','local','backup','restore','migrate'].includes(command ?? '') || !configPath) throw new Error('Usage: mate check|start|local CONFIG; mate backup CONFIG DESTINATION; mate restore CONFIG BACKUP; mate models [PROVIDER]');
   const config = daemonConfigSchema.parse(JSON.parse(readFileSync(resolve(configPath), 'utf8')));
   if(command==='migrate'){
     if(!destination||!args[3])throw new Error('Usage: mate migrate OLD_CONFIG NEW_CONFIG BACKUP [--accept-legacy-identity]');
@@ -49,11 +50,16 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     } finally { store.close(); release(); }
     process.stdout.write('Consistent database and memory checkpoint created.\n'); return;
   }
-  const log = pino({ level: 'info', redact: ['token','apiKey','authorization','*.token','*.apiKey','*.authorization'] });
+  const log = pino({ level: 'info', redact: ['token','apiKey','authorization','*.token','*.apiKey','*.authorization'] },pino.destination(2));
   const daemon = new Daemon(config, log);
+  const consoleAbort=new AbortController();
   let closing: Promise<void> | undefined;
-  const close = () => { closing ??= daemon.close(); return closing; };
+  const close = () => { consoleAbort.abort();closing ??= daemon.close(); return closing; };
   process.once('SIGINT', () => { void close(); }); process.once('SIGTERM', () => { void close(); });
-  try { await daemon.start(); } catch { await close(); throw new Error('Daemon startup failed; check installation identities, credentials and sandbox configuration'); }
+  try {
+    if(command==='local'&&!daemon.local)throw new Error('Configure adapters.local before using the local console');
+    await daemon.start();
+    if(command==='local'){await new LocalConsole(daemon.local!,daemon.controls).serve(process.stdin,process.stdout,consoleAbort.signal);await close();}
+  } catch { await close(); throw new Error('Daemon startup failed; check installation identities, credentials and sandbox configuration'); }
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) main().catch(error => { process.stderr.write(`${error instanceof Error ? error.message : 'Mate failed'}\n`); process.exitCode = 1; });

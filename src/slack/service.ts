@@ -1,9 +1,9 @@
-import {slackPrincipal} from '../slack/legacy-codec.js';
+import {slackPrincipal} from './principals.js';
 import type { WebClient } from '@slack/web-api';
 import type { Collaboration } from '../collaboration/service.js';
-import type { Controls } from './control.js';
-import type { Ingress } from './ingress.js';
-import type { CanonicalSlackTransport as WebSlackTransport } from '../slack/transport.js';
+import type { Controls } from '../daemon/control.js';
+import type { Ingress } from '../daemon/ingress.js';
+import type { CanonicalSlackTransport as WebSlackTransport } from './transport.js';
 import type { DispatchEnvelope } from '../conversations/output.js';
 
 import { encode } from '../storage/store.js';

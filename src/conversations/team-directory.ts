@@ -9,7 +9,8 @@ export class TeamDirectory implements ConversationDirectory {
   constructor(readonly messages:Conversations,readonly external?:ConversationDirectory){}
   async spaces(actor:string):Promise<SpacesResult>{
     const m=this.messages;m.agent(actor);m.requireReadable(actor);
-    const external=this.external?await this.external.spaces(actor):{spaces:[],incomplete:false};
+    let external:SpacesResult={spaces:[],incomplete:false};
+    if(this.external)try{external=await this.external.spaces(actor);}catch{external={spaces:[],incomplete:true,retry:'External directory unavailable; internal spaces remain available'};}
     m.requireReadable(actor);
     const rows=m.store.db.prepare("SELECT c.id,c.kind FROM conversation_identities c JOIN channel_access a ON a.channel=c.id WHERE c.authority='internal' AND a.agent_id=? AND a.active=1").all(actor) as {id:string;kind:'channel'|'dm'}[];
     return{...external,spaces:[...external.spaces,...rows.map(row=>({conversationId:row.id,kind:row.kind,archived:false}))]};

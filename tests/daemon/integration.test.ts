@@ -20,7 +20,7 @@ import { acquireLock } from '../../src/daemon/lock.js';
 import { backup } from '../../src/daemon/backup.js';
 import { Research, publicIPv4 } from '../../src/daemon/research.js';
 import { Controls } from '../../src/daemon/control.js';
-import { SlackService } from '../../src/daemon/slack.js';
+import { SlackService } from '../../src/slack/service.js';
 import { CanonicalSlackTransport as WebSlackTransport } from '../../src/slack/transport.js';
 import { Artifacts } from '../../src/daemon/artifacts.js';
 const cleanups: (() => void)[] = [];

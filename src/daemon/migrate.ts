@@ -1,3 +1,4 @@
+import {configureLocalRooms} from '../local/rooms.js';
 import {localApplication} from '../local/application.js';
 import {initializeCanonicalStore} from '../storage/internal-schema.js';
 import {migrateProjections} from '../storage/projection-schema.js';
@@ -81,6 +82,7 @@ export async function migrateConfiguration(previous:DaemonConfig,next:DaemonConf
     if(!allowed)s.db.prepare('UPDATE grants SET revoked=1 WHERE id=?').run(grant.id);
     else if(!grant.revoked&&grant.expires>Date.now())s.db.prepare('UPDATE grants SET operations=? WHERE id=?').run(encode(allowed),grant.id);
    }
+   configureLocalRooms(c,previous.adapters.local,next.adapters.local);
    saveConfiguration(s,next);
    s.audit('configuration_migration',{backup:resolve(destination),oldHash:hash(encode(previous)),newHash:hash(encode(next)),legacyIdentityAttested:!recorded,grantPolicy:'removed roots revoked; active grants match new policy; revoked/expired grants preserved; budgets unchanged'});
   });

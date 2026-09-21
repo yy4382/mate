@@ -12,7 +12,7 @@ import type { References } from './references.js';
 export class Conversations {
   private readonly versions=new Map<string,number>();
   private readonly ingestion:MessageIngestion;
-  constructor(readonly store:Store,readonly agents:AgentDirectory,readonly references:References,readonly records:ConversationRecords,readonly writes:CanonicalWrites,readonly policy:ParticipationPolicy,readonly matchesText:(expected:string,observed:string)=>boolean=(a,b)=>a===b){
+  constructor(readonly store:Store,readonly agents:AgentDirectory,readonly references:References,readonly records:ConversationRecords,readonly writes:CanonicalWrites,readonly policy:ParticipationPolicy,readonly matchesText:(expected:string,observed:string)=>boolean=(a,b)=>a===b,readonly requirePublication:(actor:string,target:ConversationTarget)=>void=()=>{}){
     this.ingestion=new MessageIngestion(store,references,records,writes,agents,policy,matchesText);
   }
   agent(id:string):AgentDefinition{return this.agents.get(id);}

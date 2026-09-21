@@ -10,5 +10,5 @@ export function validateOutputIntent(messages:Conversations,actor:string,target:
   if(messages.references.conversation(target.conversationId).authority==='internal'){
     new InternalMessages(messages).requireSupported(target);
     if(artifact)throw new Error('Internal artifacts are not supported');
-  }
+  }else messages.requirePublication(actor,target);
 }

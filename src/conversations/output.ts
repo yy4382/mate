@@ -29,6 +29,7 @@ export class CanonicalOutput {
   gate?:CanonicalFreshnessGate;
   artifacts?:CanonicalArtifactTransport;
   private dispatchQueue:Promise<unknown>=Promise.resolve();
+  private internalQueue:Promise<unknown>=Promise.resolve();
   constructor(readonly messages:Conversations,readonly transport:ExternalMessageTransport,readonly clock:()=>number=Date.now){}
   matchesText(expected:string,observed:string):boolean{return this.transport.matchesText?.(expected,observed)??expected===observed;}
   queue(actor:string,target:ConversationTarget,text:string,id:string=randomUUID(),basis?:SendBasis):string {
@@ -57,12 +58,14 @@ export class CanonicalOutput {
     if(artifact&&s.db.prepare("SELECT 1 FROM outbox WHERE id!=? AND agent_id=? AND state IN ('sending','unknown') AND json_extract(request,'$.artifact.contentHash')=?").get(row.id,row.agent_id,artifact.contentHash))return false;
     return true;
   }
-  ready(limit=20):{id:string}[]{
+  ready(limit=20,authority?:'internal'|'external'):{id:string}[]{
     z.number().int().min(1).max(1000).parse(limit);
     const ready:{id:string}[]=[];
     // Apply all dispatch eligibility before LIMIT, preserving independent room progress.
     for(const row of this.messages.store.db.prepare("SELECT * FROM outbox WHERE state='pending' ORDER BY rowid").iterate() as IterableIterator<Effect>){
-      if(this.eligible(row,this.envelope(row)))ready.push({id:row.id});
+      const request=this.envelope(row);
+      if(authority&&this.messages.references.conversation(request.target.conversationId).authority!==authority)continue;
+      if(this.eligible(row,request))ready.push({id:row.id});
       if(ready.length===limit)break;
     }
     return ready;
@@ -100,7 +103,12 @@ export class CanonicalOutput {
       s.audit('artifact_published',{outputId:id,actor:row.agent_id,target:request.target,fileId});
     });
   }
-  send(id:string):Promise<void>{const next=this.dispatchQueue.then(()=>this.sendNow(id));this.dispatchQueue=next.catch(()=>{});return next;}
+  send(id:string):Promise<void>{
+    if(!this.messages.store.output(id))return Promise.resolve();
+    const target=this.messages.records.targetedEffect('outbox',id).target;
+    const key=this.messages.references.conversation(target.conversationId).authority==='internal'?'internalQueue':'dispatchQueue';
+    const next=this[key].then(()=>this.sendNow(id));this[key]=next.catch(()=>{});return next;
+  }
   private async sendNow(id:string):Promise<void>{
     const s=this.messages.store,row=s.output(id);if(!row||row.state!=='pending')return;
     const request=this.envelope(row);
@@ -121,6 +129,9 @@ export class CanonicalOutput {
         const message=internal.commit(request.target,{kind:'agent',id:row.agent_id},request.text,binding.work_id,system?'system':'participant');
         s.transitionOutput(id,'sending','sent',{messageId:message.id});
       });return;
+    }
+    try{this.messages.requirePublication(row.agent_id,request.target);}catch{
+      s.transitionOutput(id,'pending','failed',{reason:'external_publication_unavailable'});return;
     }
     if(this.gate&&!this.gate.dispatch(id))return;
     const artifact=JSON.parse(row.request).artifact as ArtifactPayload|undefined;
