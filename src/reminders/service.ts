@@ -15,12 +15,13 @@ export class Reminders{
   if(input.anchor && this.c.messages.message(actor,input.anchor.messageId).deleted)throw new Error('Reminder anchor is not visible');
   z.enum(['private','conversation_receipt']).parse(input.projection??'private');
  }
- private event(r:Reminder,kind:string,payload:unknown):void{this.c.store.db.prepare('INSERT INTO reminder_events(reminder_id,version,kind,at,payload) VALUES(?,?,?,?,?)').run(r.id,r.version,kind,Date.now(),encode(payload));}
+ private event(r:Reminder,kind:string,payload:unknown):void{const s=this.c.store;if(Number(s.db.pragma('user_version',{simple:true}))>=23)s.db.prepare('INSERT INTO reminder_events(reminder_id,version,kind,at,payload,actor_id) VALUES(?,?,?,?,?,?)').run(r.id,r.version,kind,Date.now(),encode(payload),r.agent_id);else s.db.prepare('INSERT INTO reminder_events(reminder_id,version,kind,at,payload) VALUES(?,?,?,?,?)').run(r.id,r.version,kind,Date.now(),encode(payload));}
  read(actor:string,id:string):Reminder{const r=this.c.store.db.prepare('SELECT * FROM schedules WHERE id=? AND agent_id=?').get(id,actor) as Reminder|undefined;if(!r)throw new Error('Unknown owned reminder');this.c.messages.records.mutableTarget('schedules',id);this.c.messages.requireAccess(actor,JSON.parse(r.target).conversationId);return r;}
  list(actor:string,before=Number.MAX_SAFE_INTEGER):(Reminder&{cursor:number})[]{const rows=this.c.store.db.prepare("SELECT r.*,r.rowid cursor FROM schedules r JOIN channel_access a ON a.agent_id=r.agent_id AND a.channel=json_extract(r.target,'$.conversationId') AND a.active=1 WHERE r.agent_id=? AND r.rowid<? ORDER BY r.rowid DESC LIMIT 100").all(actor,before) as (Reminder&{cursor:number})[];for(const row of rows)this.c.messages.records.mutableTarget('schedules',row.id);return rows;}
  create(actor:string,workId:string,input:ReminderInput):Reminder{
   this.c.active(workId);this.validate(actor,input);const s=this.c.store,id=randomUUID();return s.atomic(()=>{
    s.db.prepare('INSERT INTO schedules(id,agent_id,work_id,task_id,target,next_at,cron,timezone,content,anchor,legacy,projection) VALUES(?,?,?,?,?,?,?,?,?,?,0,?)').run(id,actor,workId,input.taskId??null,encode(input.target),input.nextAt,input.cron??null,input.timezone,input.content,input.anchor?encode(input.anchor):null,input.projection??'private');
+   if(Number(s.db.pragma('user_version',{simple:true}))>=23)s.db.prepare('INSERT INTO reminder_event_baselines VALUES(?,1,?)').run(id,Date.now());
    this.c.messages.writes.mutable('schedules',id);
    const reminder=this.read(actor,id);this.event(reminder,'created',{budgetPolicy:'persistent_agent_account_and_bound_work_cap'});return reminder;
   });
@@ -70,7 +71,8 @@ export class Reminders{
    let output:string|null=null;if(r.projection==='conversation_receipt'){
     output=`${firing}:receipt`;c.messages.writes.queueOutput(r.agent_id,output,{target,text:`Reminder ${r.id} fired for ${r.agent_id} (version ${r.version}, due ${new Date(r.next_at).toISOString()}).`});s.db.prepare('INSERT INTO output_work VALUES(?,?)').run(output,r.work_id);s.db.prepare("INSERT INTO system_projections VALUES(?,'reminder',?,?)").run(output,r.id,r.version);c.output.gate?.queued(r.agent_id,output);
    }
-   s.db.prepare('INSERT INTO reminder_firings(id,reminder_id,due_at,version,delivery_id,output_id) VALUES(?,?,?,?,?,?)').run(firing,r.id,r.next_at,r.version,delivery,output);
+   if(Number(s.db.pragma('user_version',{simple:true}))>=23)s.db.prepare('INSERT INTO reminder_firings(id,reminder_id,due_at,version,delivery_id,output_id,actor_id) VALUES(?,?,?,?,?,?,?)').run(firing,r.id,r.next_at,r.version,delivery,output,r.agent_id);
+   else s.db.prepare('INSERT INTO reminder_firings(id,reminder_id,due_at,version,delivery_id,output_id) VALUES(?,?,?,?,?,?)').run(firing,r.id,r.next_at,r.version,delivery,output);
    if(r.cron)s.db.prepare('UPDATE schedules SET next_at=?,version=version+1 WHERE id=?').run(CronExpressionParser.parse(r.cron,{currentDate:now,tz:r.timezone}).next().getTime(),r.id);
    else s.db.prepare('UPDATE schedules SET active=0,version=version+1 WHERE id=?').run(r.id);
    this.event({...r,version:r.version+1},'fired',{dueAt:r.next_at,deliveryId:delivery,outputId:output,catchUp:'coalesce_to_one'});

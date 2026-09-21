@@ -13,6 +13,7 @@ import { conversationTargetSchema as targetSchema, type ConversationTarget as Ta
 import type { TeamSettings } from '../domain/agents.js';
 import {TaskBoard} from '../coordination/board.js';
 import {TaskTransitions,type TaskPatch} from '../coordination/transitions.js';
+import {OperationsView} from '../operations/view.js';
 
 export interface Work { id: string; target: string; state: string; max_runs: number; max_tokens: number; max_cost: number; runs: number; tokens: number; cost: number }
 export interface Task { legacy:number; message_key:string|null; created_by:string|null; id: string; work_id: string; parent_id: string | null; target: string; title: string; owner: string | null; assigned_to: string | null; status: string; version: number; waiting_on: string | null; result: string | null; outbox_id: string | null }
@@ -23,8 +24,9 @@ export class Collaboration {
   readonly ledger: BudgetLedger;
   readonly attention: Attention;
   readonly board:TaskBoard;
+  readonly operations:OperationsView;
   private readonly taskTransitions:TaskTransitions;
-  constructor(readonly store: Store, readonly messages: Messages, readonly output: Output, readonly config: TeamSettings) { this.agents=new ConfiguredAgents(config.agents); this.config={agents:this.agents.list(),ownerUserIds:[...config.ownerUserIds],budgets:{...config.budgets}}; this.reminders=new Reminders(this); this.ledger = new BudgetLedger(store, config); this.attention = new Attention(messages); this.seats = new ReviewSeats(messages,config.ownerUserIds);this.taskTransitions=new TaskTransitions(store);this.board=new TaskBoard(this); }
+  constructor(readonly store: Store, readonly messages: Messages, readonly output: Output, readonly config: TeamSettings) { this.agents=new ConfiguredAgents(config.agents); this.config={agents:this.agents.list(),ownerUserIds:[...config.ownerUserIds],budgets:{...config.budgets}}; this.reminders=new Reminders(this); this.ledger = new BudgetLedger(store, config); this.attention = new Attention(messages); this.seats = new ReviewSeats(messages,config.ownerUserIds);this.taskTransitions=new TaskTransitions(store);this.board=new TaskBoard(this);this.operations=new OperationsView(this); }
   work(id: string): Work { const work = this.store.db.prepare('SELECT * FROM works WHERE id=?').get(id) as Work | undefined; if (!work) throw new Error('Unknown work'); this.messages.records.mutableTarget('works',id); return work; }
   task(id: string): Task { const task = this.store.db.prepare('SELECT * FROM tasks WHERE id=?').get(id) as Task | undefined; if (!task) throw new Error('Unknown task'); this.messages.records.mutableTarget('tasks',id); return task; }
   list(agentId: string): Task[] {
@@ -242,7 +244,7 @@ export class Collaboration {
       if (operation !== 'resume') {
         for (const run of runs) {
           this.store.db.prepare('UPDATE agents SET generation=generation+1 WHERE id=?').run(run.agent_id);
-          this.store.db.prepare("UPDATE runs SET state='interrupted' WHERE id=?").run(run.id);
+          this.store.transitionRun(run.id,'interrupted');
           this.store.db.prepare("UPDATE actions SET state='unknown' WHERE run_id=? AND state='executing'").run(run.id);
         }
       }

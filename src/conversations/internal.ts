@@ -12,7 +12,7 @@ export class InternalMessages {
   requireSupported(target:ConversationTarget):void {
     const m=this.messages;m.references.validateTarget(target);
     if(m.references.conversation(target.conversationId).authority!=='internal')throw new Error('Internal conversation required');
-    if(![18,19,20,21,22].includes(Number(m.store.db.pragma('user_version',{simple:true}))))throw new Error('Internal conversation migration required');
+    if(![18,19,20,21,22,23].includes(Number(m.store.db.pragma('user_version',{simple:true}))))throw new Error('Internal conversation migration required');
     if(m.store.db.pragma('user_version',{simple:true})===18&&m.store.db.prepare("SELECT 1 FROM conversation_bindings WHERE conversation_id=? AND mode='projection'").get(target.conversationId))throw new Error('Internal projection delivery is not installed');
     if(Number(m.store.db.pragma('user_version',{simple:true}))>=19&&m.store.db.prepare("SELECT 1 FROM conversation_bindings b LEFT JOIN projection_bindings p USING(provider,workspace,external_id) WHERE b.conversation_id=? AND b.mode='projection' AND p.id IS NULL").get(target.conversationId))throw new Error('projection binding configuration missing');
   }

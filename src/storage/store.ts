@@ -11,7 +11,10 @@ export function encode(value: unknown): string {
 export function hash(value: string): string { return createHash('sha256').update(value).digest('hex'); }
 export interface RunToken { id: string; agentId: string; sessionId: string; generation: number; deliveryId: string }
 export interface Delivery { id: string; agent_id: string; payload: string; status: string; created_at: number; priority: number }
-export interface Effect { id: string; agent_id: string; request_hash: string; request: string; state: string; receipt: string | null }
+export interface Effect { id: string; agent_id: string; request_hash: string; request: string; state: string; receipt: string | null; created_at?:number|null }
+export type OperationalFactInput=
+  |{at?:number;source:'runtime';sourceId:string;kind:'run_completed'|'run_failed'|'run_interrupted';actorId:string;subject:{type:'run';id:string}}
+  |{at?:number;source:'internal_dm';sourceId:string;kind:'internal_dm_created';actorId:string;subject:{type:'internal_dm';id:string};counts:{members:2}};
 
 /** Only the trusted daemon owns this connection; never expose SQL over worker IPC. */
 export class Store {
@@ -27,7 +30,7 @@ export class Store {
       this.db.prepare('VACUUM INTO ?').run(backup); chmodSync(backup, 0o600);
     }
     if (version === 0) this.atomic(() => this.db.exec(schema));
-    else if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22].includes(Number(version))) { this.db.close(); throw new Error('Unsupported database version'); }
+    else if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23].includes(Number(version))) { this.db.close(); throw new Error('Unsupported database version'); }
     if (Number(version) < 2) this.atomic(() => this.db.exec(messageSchema));
     if (Number(version) < 3) this.atomic(() => this.db.exec(collaborationSchema));
     if (Number(version) < 4) this.atomic(() => this.db.exec(policySchema));
@@ -52,6 +55,21 @@ export class Store {
   close(): void { this.db.close(); }
   async backup(path: string): Promise<void> { await this.db.backup(path); }
   audit(kind: string, body: unknown): void { this.db.prepare('INSERT INTO audit(at,kind,body) VALUES(?,?,?)').run(Date.now(), kind, encode(body)); }
+  /** Narrow owner-facing facts only. Callers must already own the business transaction. */
+  operationalFact(input:OperationalFactInput):void {
+    if(Number(this.db.pragma('user_version',{simple:true}))<23)return;
+    if(!this.db.inTransaction)throw new Error('Operational fact requires transaction');
+    const counts:Record<string,number>='counts'in input?input.counts:{};
+    if(Object.values(counts).some(value=>!Number.isSafeInteger(value)||value<0))throw new Error('Invalid operational fact counts');
+    const values=[input.at??Date.now(),input.source,input.sourceId,input.kind,input.actorId,input.subject.type,input.subject.id,null,null,encode(counts)] as const;
+    const changed=this.db.prepare('INSERT INTO operational_facts(at,source,source_id,kind,actor_id,subject_type,subject_id,target_type,target_id,counts) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(source,source_id) DO NOTHING').run(...values).changes;
+    if(!changed){
+      const columns=input.at===undefined?'source,source_id,kind,actor_id,subject_type,subject_id,target_type,target_id,counts':'at,source,source_id,kind,actor_id,subject_type,subject_id,target_type,target_id,counts';
+      const old=this.db.prepare(`SELECT ${columns} FROM operational_facts WHERE source=? AND source_id=?`).get(input.source,input.sourceId);
+      const expected=input.at===undefined?{source:values[1],source_id:values[2],kind:values[3],actor_id:values[4],subject_type:values[5],subject_id:values[6],target_type:values[7],target_id:values[8],counts:values[9]}:{at:values[0],source:values[1],source_id:values[2],kind:values[3],actor_id:values[4],subject_type:values[5],subject_id:values[6],target_type:values[7],target_id:values[8],counts:values[9]};
+      if(encode(old)!==encode(expected))throw new Error('Operational fact identity conflict');
+    }
+  }
   register(agentId: string, configVersion: string, initialMessages: unknown[]): string {
     return this.atomic(() => {
       const old = this.db.prepare('SELECT s.id,s.config_version FROM sessions s JOIN agents a ON a.session_id=s.id WHERE a.id=?').get(agentId) as { id: string; config_version: string } | undefined;
@@ -122,7 +140,7 @@ export class Store {
       if (!error && delivery.status !== 'injected') throw new Error('Cannot complete uninjected delivery');
       if (!error && this.db.prepare("SELECT 1 FROM actions WHERE run_id=? AND state='executing'").get(token.id)) throw new Error('Cannot complete with executing actions');
       if (error) this.db.prepare("UPDATE actions SET state='unknown' WHERE run_id=? AND state='executing'").run(token.id);
-      this.db.prepare('UPDATE runs SET state=?,error=? WHERE id=?').run(error ? 'failed' : 'complete', error ?? null, token.id);
+      this.transitionRun(token.id,error?'failed':'complete',error);
       if (!error) this.db.prepare("UPDATE deliveries SET status='handled' WHERE id=?").run(token.deliveryId);
       // Failed input remains durable, but requires explicit resume to avoid an error hot loop.
       else this.db.prepare('UPDATE agents SET paused=1 WHERE id=?').run(token.agentId);
@@ -134,8 +152,9 @@ export class Store {
   }
   pause(agentId: string): void {
     this.atomic(() => {
+      const active=this.db.prepare("SELECT id FROM runs WHERE agent_id=? AND state='active'").all(agentId) as {id:string}[];
       this.db.prepare('UPDATE agents SET paused=1,generation=generation+1 WHERE id=?').run(agentId);
-      this.db.prepare("UPDATE runs SET state='interrupted' WHERE agent_id=? AND state='active'").run(agentId);
+      for(const run of active)this.transitionRun(run.id,'interrupted');
       this.db.prepare("UPDATE actions SET state='unknown' WHERE agent_id=? AND state='executing'").run(agentId);
     });
   }
@@ -143,13 +162,22 @@ export class Store {
   /** Call only after obtaining the daemon single-instance lock and terminating old workers. */
   recover(): void {
     this.atomic(() => {
+      const active=this.db.prepare("SELECT id,agent_id FROM runs WHERE state='active'").all() as {id:string;agent_id:string}[];
       this.db.prepare('UPDATE agents SET generation=generation+1').run();
-      this.db.prepare("UPDATE runs SET state='interrupted' WHERE state='active'").run();
+      for(const run of active)this.transitionRun(run.id,'interrupted');
       this.db.prepare("UPDATE actions SET state='unknown' WHERE state='executing'").run();
       this.db.prepare("UPDATE outbox SET state='failed',receipt=json_set(receipt,'$.reason','artifact_not_shared_before_restart') WHERE state='sending' AND json_extract(request,'$.artifact') IS NOT NULL AND json_extract(receipt,'$.phase')='staging'").run();
       this.db.prepare("UPDATE outbox SET state='unknown' WHERE state='sending'").run();
       this.audit('startup_recovery', {});
     });
+  }
+  /** Every runtime active→terminal transition and its owner fact share this transaction boundary. */
+  transitionRun(id:string,state:'complete'|'failed'|'interrupted',error?:string):void {
+    if(!this.db.inTransaction)throw new Error('Run transition requires transaction');
+    const run=this.db.prepare("SELECT agent_id FROM runs WHERE id=? AND state='active'").get(id) as {agent_id:string}|undefined;
+    if(!run)throw new Error('Run is not active');
+    if(this.db.prepare("UPDATE runs SET state=?,error=? WHERE id=? AND state='active'").run(state,error??null,id).changes!==1)throw new Error('Run state conflict');
+    this.operationalFact({source:'runtime',sourceId:`${id}:${state}`,kind:state==='complete'?'run_completed':state==='failed'?'run_failed':'run_interrupted',actorId:run.agent_id,subject:{type:'run',id}});
   }
   journal(sessionId: string): unknown[] { return (this.db.prepare('SELECT message FROM entries WHERE session_id=? ORDER BY seq').all(sessionId) as { message: string }[]).map(r => JSON.parse(r.message)); }
   snapshot(sessionId: string, messages: unknown[]): void {
@@ -182,7 +210,8 @@ export class Store {
         if (old.state === 'prepared') this.db.prepare("UPDATE actions SET run_id=? WHERE id=? AND state='prepared' AND NOT EXISTS(SELECT 1 FROM runs WHERE runs.id=actions.run_id AND runs.state='active')").run(token.id, id);
         return this.action(id)!;
       }
-      this.db.prepare("INSERT INTO actions(id,agent_id,run_id,request_hash,request,state) VALUES(?,?,?,?,?,'prepared')").run(id, token.agentId, token.id, hash(body), body);
+      if(Number(this.db.pragma('user_version',{simple:true}))>=23)this.db.prepare("INSERT INTO actions(id,agent_id,run_id,request_hash,request,state,created_at) VALUES(?,?,?,?,?,'prepared',?)").run(id, token.agentId, token.id, hash(body), body,Date.now());
+      else this.db.prepare("INSERT INTO actions(id,agent_id,run_id,request_hash,request,state) VALUES(?,?,?,?,?,'prepared')").run(id, token.agentId, token.id, hash(body), body);
       return this.action(id)!;
     });
   }
@@ -205,7 +234,8 @@ export class Store {
       if (old) { if (old.agent_id !== agentId || old.request_hash !== hash(body)) throw new Error('Output identity conflict'); return old; }
       if(Number(this.db.pragma('user_version',{simple:true}))>=17){
         if(!routingTarget)throw new Error('Canonical output routing required');
-        this.db.prepare("INSERT INTO outbox(id,agent_id,request_hash,request,state,target) VALUES(?,?,?,?,'pending',?)").run(id,agentId,hash(body),body,routingTarget);
+        if(Number(this.db.pragma('user_version',{simple:true}))>=23)this.db.prepare("INSERT INTO outbox(id,agent_id,request_hash,request,state,target,created_at) VALUES(?,?,?,?,'pending',?,?)").run(id,agentId,hash(body),body,routingTarget,Date.now());
+        else this.db.prepare("INSERT INTO outbox(id,agent_id,request_hash,request,state,target) VALUES(?,?,?,?,'pending',?)").run(id,agentId,hash(body),body,routingTarget);
       }else this.db.prepare("INSERT INTO outbox(id,agent_id,request_hash,request,state) VALUES(?,?,?,?,'pending')").run(id, agentId, hash(body), body);
       return this.output(id)!;
     });

@@ -9,6 +9,7 @@ import {migrateProjections} from '../storage/projection-schema.js';
 import {migrateProjectionImports} from '../storage/projection-import-schema.js';
 import {migrateHistoryIndexes} from '../storage/history-schema.js';
 import {migrateCoordinationRecovery} from '../storage/coordination-schema.js';
+import {migrateOperationsView} from '../storage/operations-schema.js';
 import {TeamDirectory} from '../conversations/team-directory.js';
 import {migrateInternalConversations} from '../storage/internal-schema.js';
 import { migrateCanonicalConversations } from '../slack/canonical-migration.js';
@@ -93,7 +94,8 @@ export class Daemon {
       if(slackConfig)migrateCanonicalConversations(this.store,slackConfig);else initializeCanonicalStore(this.store);
       if(previous&&Number(this.store.db.pragma('user_version',{simple:true}))<21)throw new Error('Conversation storage requires explicit offline migration');
       if(previous&&Number(this.store.db.pragma('user_version',{simple:true}))<22)throw new Error('Coordination storage requires explicit offline migration');
-      migrateInternalConversations(this.store);migrateProjections(this.store);migrateProjectionImports(this.store);migrateHistoryIndexes(this.store);migrateCoordinationRecovery(this.store);
+      if(previous&&Number(this.store.db.pragma('user_version',{simple:true}))<23)throw new Error('Operations view storage requires explicit offline migration');
+      migrateInternalConversations(this.store);migrateProjections(this.store);migrateProjectionImports(this.store);migrateHistoryIndexes(this.store);migrateCoordinationRecovery(this.store);migrateOperationsView(this.store);
       const slackApp=slackConfig?slackApplication(this.store,slackConfig,c):undefined;
       const messages=slackApp?.messages??localConversations(this.store,c);
       messages.writes.assertFormat();

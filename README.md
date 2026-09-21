@@ -57,7 +57,7 @@ research.read是allowlist已知公共HTTPS URL读取，不是搜索。attachment
 
 只有ownerUserIds可用/team：
 
-- status、tasks、schedules
+- status、activity [JSON]、tasks、schedules（均为安全结构化视图；activity可分页/过滤）
 - stop|resume|cancel WORK_ID
 - agent-stop|agent-resume AGENT_ID
 - agent-reset AGENT_ID CHECKPOINT：保留持久身份/工作，更换上下文后保持paused

@@ -1,4 +1,4 @@
-> 2026-09-21：E1–E3已完成平台无关会话、投影、动态配置、参与和有界历史；E4a补齐协作恢复面。E4b owner activity 与 E4c 工具组合仍待实现。当前阶段与债务见IMPLEMENTATION_PLAN和ARCHITECTURE。
+> 2026-09-21：E1–E3已完成平台无关会话、投影、动态配置、参与和有界历史；E4a补齐协作恢复面，E4b补齐owner安全状态/activity。E4c 工具组合仍待实现。当前阶段与债务见IMPLEMENTATION_PLAN和ARCHITECTURE。
 
 # Mate 当前调用链、能力与边界
 
@@ -82,6 +82,14 @@ Slack没有这里所需的“比较整个房间版本后原子发送”事务。
 tasks.list按owned、assigned、available、all-visible分页；cursor绑定actor和查询。每次最多扫描200个候选，即使某页因当前ACL/snapshot全部不可见，也返回scan continuation而不在低配VPS上扫完整表。tasks.events另行分页并返回历史coverage。普通peer review的review状态在claim/unclaim时保留；transfer明确选择继续review或退回doing。独立blind review仍走review seat。tasks.wait建立持久依赖并释放run，等待者仍能处理其他对话。新任务与状态投影是可见信息，不代替Agent自己的讨论判断。
 
 [Reminders](../src/reminders/service.ts)由作者管理content、target、可选anchor/task、时间、cron、version和日志。完成task不取消提醒；事项pause/cancel仍控制其触发。默认`private`只原子写author delivery与firing，不产生outbox、conversation event或peer attention；显式`conversation_receipt`才生成无正文的固定回执。delivery携带firingId；Agent处理后用reminders.finish幂等记录completed、failed或deferred，summary保持作者私有。deferred只描述本次结果，不自动安排下一次唤醒。log分别分页scheduler events与firings，并分开展示delivery、run、receipt和语义result。cancel默认取消未来，显式cancelPending可撤回尚未被run选中的队列，已选中/注入单独报告。
+
+## Owner状态与activity
+
+[OperationsView](../src/operations/view.ts)是local控制入口、Slack `/team`和未来网页共用的owner-only应用服务，认证在service内部完成。`status`直接查询Agent暂停/active run、账户预算、works、unknown action/output、held draft和due reminder的权威状态；DTO只含ID、状态、计数、额度和安全引用，不返回action/outbox request、receipt、run error、task/reminder/result正文、路径或模型输出。`tasks`和`schedules`控制命令也改为相应安全activity视图，不再直接暴露数据库行。
+
+`activity`按时间稳定合并task event、reminder event/firing以及run/action/outbox的安全状态投影。查询可按source、actor和kind过滤；opaque cursor绑定完整查询并分别保存各source的位置，返回每个source的continuation和coverage。旧action/outbox没有可信时间，因此v23保持`created_at=NULL`并报告gap，不用迁移时刻伪造历史。task和reminder的旧记录也沿用各自baseline/legacy coverage。
+
+只有缺少已有事件来源的internal DM创建元数据和run完成/失败/中断写入`operational_facts`。fact不存DM正文、参与者列表、工具参数、receipt、错误、私有memory或模型输出；唯一source key支持幂等，写入失败会回滚同事务中的DM或run状态变化。读取status/activity不写event、delivery、outbox或attention，也不唤醒Agent。未来投影到保留频道时仍需adapter选择category和公开级别；核心不会自行创建或发送该频道。
 
 ## 工具与执行的实际路径
 

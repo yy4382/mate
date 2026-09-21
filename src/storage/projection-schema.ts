@@ -2,7 +2,7 @@ import type {Store} from './store.js';
 /** Explicit offline additive migration; configuration and network are not touched. */
 export function migrateProjections(store:Store):void {
   store.atomic(()=>{
-    const version=store.db.pragma('user_version',{simple:true});if(version===19||version===20||version===21||version===22)return;
+    const version=store.db.pragma('user_version',{simple:true});if(version===19||version===20||version===21||version===22||version===23)return;
     if(version!==18)throw new Error('Internal conversation schema required');
     store.db.exec(`
       CREATE TABLE projection_bindings(

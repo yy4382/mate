@@ -55,7 +55,7 @@ export class TeamDirectory implements ConversationDirectory {
     if(principal.kind!=='agent'||old&&JSON.parse(old.request).route!=='internal'){
       if(!this.external)throw new Error('External directory unavailable');return this.external.openDM(run,actionId,principal,signal);
     }
-    if(![18,19,20,21,22].includes(Number(s.db.pragma('user_version',{simple:true}))))throw new Error('Internal conversation migration required');
+    if(![18,19,20,21,22,23].includes(Number(s.db.pragma('user_version',{simple:true}))))throw new Error('Internal conversation migration required');
     m.agent(principal.id);
     if(principal.id===run.agentId)throw new Error('DM requires another Agent');
     return s.atomic(()=>{
@@ -66,8 +66,9 @@ export class TeamDirectory implements ConversationDirectory {
       if(action.state!=='prepared')throw new Error('Internal DM action is not executable');
       const pair=encode([run.agentId,principal.id].sort());
       let row=s.db.prepare('SELECT conversation_id FROM internal_dm_pairs WHERE pair=?').get(pair) as {conversation_id:string}|undefined;
+      let created=false;
       if(!row){
-        const conversation=m.references.createConversation('dm','internal');row={conversation_id:conversation.id};
+        const conversation=m.references.createConversation('dm','internal');row={conversation_id:conversation.id};created=true;
         s.db.prepare('INSERT INTO internal_dm_pairs VALUES(?,?)').run(pair,conversation.id);
         for(const actor of [run.agentId,principal.id]){
           s.db.prepare("INSERT INTO internal_members VALUES(?,'agent',?)").run(conversation.id,actor);m.membership(actor,conversation.id,true);
@@ -75,7 +76,9 @@ export class TeamDirectory implements ConversationDirectory {
       }
       // Existing pair identity does not grant permission again after revocation.
       m.requireAccess(run.agentId,row.conversation_id);m.requireAccess(principal.id,row.conversation_id);
-      s.startAction(run,actionId);const target={conversationId:row.conversation_id};s.settleAction(run,actionId,'succeeded',target);return target;
+      s.startAction(run,actionId);
+      if(created)s.operationalFact({source:'internal_dm',sourceId:row.conversation_id,kind:'internal_dm_created',actorId:run.agentId,subject:{type:'internal_dm',id:row.conversation_id},counts:{members:2}});
+      const target={conversationId:row.conversation_id};s.settleAction(run,actionId,'succeeded',target);return target;
     });
   }
 }

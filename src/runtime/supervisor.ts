@@ -34,7 +34,7 @@ export class Supervisor {
       if (!binding) throw new Error('Delivery has no trusted work budget');
       const work = c.work(binding.work_id), tokenCap = Math.min(50000, account.max_tokens-account.tokens, work.max_tokens - work.tokens), costCap = Math.min(2, account.max_cost-account.cost, work.max_cost - work.cost);
       if(work.runs>=work.max_runs || tokenCap<=0 || costCap<=0) {
-        s.atomic(()=>{s.db.prepare("UPDATE works SET state='paused' WHERE id=?").run(work.id);s.db.prepare("UPDATE runs SET state='failed',error='Work budget exhausted' WHERE id=?").run(run.id);});
+        s.atomic(()=>{s.db.prepare("UPDATE works SET state='paused' WHERE id=?").run(work.id);s.transitionRun(run.id,'failed','Work budget exhausted');});
         return true;
       }
       c.reserve(run, work.id, tokenCap, costCap);

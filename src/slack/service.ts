@@ -7,6 +7,11 @@ import type { CanonicalSlackTransport as WebSlackTransport } from './transport.j
 import type { DispatchEnvelope } from '../conversations/output.js';
 
 import { encode } from '../storage/store.js';
+export function formatControlReply(value:unknown,limit=15000):string{
+  const full=typeof value==='string'?value:encode(value);if(Buffer.byteLength(full)<=limit)return full;
+  const fields=value&&typeof value==='object'?Object.fromEntries(Object.entries(value as Record<string,unknown>).map(([key,item])=>[key,Array.isArray(item)?{items:item.length}:item&&typeof item==='object'&&'atLeast'in item?{atLeast:(item as any).atLeast,truncated:(item as any).truncated}:typeof item])):{};
+  return encode({format:'mate.control-overflow.v1',truncated:true,bytes:Buffer.byteLength(full),fields,hint:'Use activity with a smaller limit/source/actor/kind filter, or the local control adapter for the complete structured result.'});
+}
 export class SlackService {
   private reconcileAfter = 0;
   constructor(readonly c: Collaboration, readonly transport: WebSlackTransport, readonly ingress: Ingress, readonly controls: Controls, readonly stopping: () => boolean = () => false) {}
@@ -104,7 +109,7 @@ export class SlackService {
             if (team !== this.transport.mapper.config.teamId || !/^U[A-Z0-9]+$/.test(user ?? '') || !/^[CDG][A-Z0-9]+$/.test(channel ?? '')) throw new Error('Invalid control identity');
             let text = body.text ?? '';
             let reply: string;
-            try { reply = this.controls.execute(this.transport.mapper.config.principalIds ? (slackPrincipal(this.transport.mapper.config,user) as {id:string}).id : user, text); } catch (error) { reply = String(error); }
+            try { reply=formatControlReply(this.controls.execute(this.transport.mapper.config.principalIds ? (slackPrincipal(this.transport.mapper.config,user) as {id:string}).id : user, text)); } catch (error) { reply = String(error); }
             s.db.prepare('INSERT INTO admin_replies VALUES(?,?,?,?,?,\'pending\') ON CONFLICT DO NOTHING').run(`${row.app_id}:${row.event_id}`, agent.id, channel, user, reply.slice(0, 15000));
             s.db.prepare('UPDATE ingress SET normalized=1 WHERE app_id=? AND event_id=?').run(row.app_id, row.event_id);
           });

@@ -6,6 +6,7 @@ import {migrateProjectionImports} from '../storage/projection-import-schema.js';
 import {migrateInternalConversations} from '../storage/internal-schema.js';
 import {migrateHistoryIndexes} from '../storage/history-schema.js';
 import {migrateCoordinationRecovery} from '../storage/coordination-schema.js';
+import {migrateOperationsView} from '../storage/operations-schema.js';
 import { slackApplication } from '../slack/application.js';
 import { migrateCanonicalConversations } from '../slack/canonical-migration.js';
 import { CanonicalOutput as Output } from '../conversations/output.js';
@@ -66,7 +67,7 @@ export async function migrateConfiguration(previous:DaemonConfig,next:DaemonConf
   s.atomic(()=>{
    const oldSlack=slackRuntimeConfig(previous),newSlack=slackRuntimeConfig(next);
    if(oldSlack)migrateCanonicalConversations(s,oldSlack);else initializeCanonicalStore(s);
-   migrateInternalConversations(s);migrateProjections(s);migrateProjectionImports(s);migrateHistoryIndexes(s);migrateCoordinationRecovery(s);
+   migrateInternalConversations(s);migrateProjections(s);migrateProjectionImports(s);migrateHistoryIndexes(s);migrateCoordinationRecovery(s);migrateOperationsView(s);
    const {messages}=(newSlack?slackApplication(s,newSlack,next.mate):localApplication(s,next.mate)),c=new Collaboration(s,messages,new Output(messages,{post:async()=>{throw new Error('Offline migration cannot publish');},pendingInput:()=>false,classify:()=>({kind:'unknown'})}),next.mate);
    const baseline=(agent:import('../domain/agents.js').AgentDefinition)=>buildBaseline(agent,operationDocumentation);
    const lifecycle=new SessionLifecycle(c,baseline);
