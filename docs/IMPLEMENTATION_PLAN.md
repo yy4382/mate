@@ -207,3 +207,13 @@ E3细分为两个依赖顺序gate：E3a目录能力发现、平台支持的join/
 E3a PASS：review_e3a_participation，271普通checks/7环境skip。确定拒绝误记unknown导致后续退出永久阻塞的P2已修复并独立复验；参与能力和mute/direct/defer规则已接生产工具及prompt。E3b进入具体历史契约的独立设计复核后实施。
 
 E3b PASS：review_e3b_history，289普通checks/7环境skip。实现本地page/search/around、acting installation有界fetch、明确coverage/gap与quiet ingestion。红队发现并复验全表/临时排序、坏条目整页回滚、gap/exhausted混同、quiet伪未读、Slack隐藏wrapper、跨installation revision/delete/same-revision附件泄露及无target搜索临时B-tree；均已修复。v21保存每Agent的revision+body snapshot，历史revision证据不可变；离线迁移的旧数据body只能按最高observation或current做有审计的best-effort回填。E3整体完成，进入E4。
+
+E4按用户体验与架构风险拆成三个顺序gate，不把activity或重构压过协作能力本身：
+
+| gate | 目标/接口 | 依赖 | 验收 | 状态 |
+|---|---|---|---|---|
+| E4a 协作恢复面 | 先集中task transition/event invariant，再实现platform-neutral TaskBoard分页/read/events；reminder firing/result双游标与可选回执 | E3 PASS | 超过100个旧任务/事件仍可发现且recovery摘要给coverage；外部message-task还需actor snapshot可见；review可保留地接手或显式退回doing；private reminder不发频道，fired/run/result分开；索引计划适合低配VPS | 设计PASS，review_e4_architecture；待实现 |
+| E4b owner status/activity | OperationsView直接读权威状态并合并domain events；仅为无事件来源的事实增加窄operational_facts；Controls/local/未来Slack或web共用 | E4a PASS | owner在service内认证；per-source cursor/coverage；不读raw request/receipt/error/result/正文/path；operational fact有唯一source key与事务故障测试；读取不唤醒Agent，投影策略留adapter | TODO |
+| E4c 工具模块组合 | ToolModule元数据与按领域handler；schema/说明/seat/action-work策略随handler注册；补齐任务/提醒prompt与文档 | E4b PASS | 现有operation/receipt重放兼容；未知工具/工具发现/seat隔离/预算与work检查不退化；不做通用插件框架，不规定任务树或总管流程 | TODO |
+
+E4a–c分别经过独立软件工程/产品语义红队。E4b的activity是供人类查看与未来adapter投影的事实索引，不是第二份业务状态、全量日志平台或Agent唤醒源；E4c只解决当前composition内聚性，不提前实现动态插件系统。
