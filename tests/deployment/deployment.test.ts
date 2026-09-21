@@ -57,6 +57,7 @@ it('renders fixed systemd boundaries and a syntax-valid allowlist wrapper', () =
   const mount = renderMountUnit(mounts[0]!), service = renderService(mounts, 512, ['/srv/shared']), wrapper = renderMaintenanceWrapper(['/srv/shared']);
   expect(mount).toContain('Options=loop,rw,nodev,nosuid');
   expect(service).toContain('SupplementaryGroups=docker'); expect(service).toContain('ProtectSystem=strict'); expect(service).toContain('CapabilityBoundingSet='); expect(service).toContain('MemoryMax=512M'); expect(service).toContain('/srv/shared');
+  expect(wrapper).toContain('--property=EnvironmentFile=/etc/mate/mate.env');
   expect(wrapper).toContain('case "${1-}"'); expect(wrapper).not.toContain('eval '); expect(wrapper).not.toContain(' "$@"\n'); expect(wrapper).toContain('checkpoint_name "$2"');
   const root = mkdtempSync(join(tmpdir(), 'mate-wrapper-')); roots.push(root); const path = join(root, 'matectl'); writeFileSync(path, wrapper); expect(() => execFileSync('/bin/sh', ['-n', path])).not.toThrow();
 });

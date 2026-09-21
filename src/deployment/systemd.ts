@@ -38,6 +38,7 @@ export function renderService(mounts: readonly ManagedMount[], memoryMaxMiB: num
 const unitProperties = [
   '--working-directory=/opt/mate/current',
   '--property=User=mate', '--property=Group=mate', '--property=SupplementaryGroups=docker',
+  '--property=EnvironmentFile=/etc/mate/mate.env',
   '--property=UMask=0077', '--property=NoNewPrivileges=yes', '--property=PrivateTmp=yes',
   '--property=PrivateDevices=yes', '--property=ProtectHome=yes', '--property=ProtectSystem=strict', '--property=ReadWritePaths=/var/lib/mate',
   '--property=ProtectKernelTunables=yes', '--property=ProtectKernelModules=yes', '--property=ProtectControlGroups=yes',
