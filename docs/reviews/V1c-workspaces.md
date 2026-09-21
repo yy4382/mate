@@ -14,4 +14,6 @@
 
 同一目标机的完整测试随后又找出5个daemon集成用例依赖测试宿主平台。它们验证container recover/probe与Slack启动顺序、失败先后、控制路径隔离和grant升级，不验证Linux managed workspace，因此现在统一显式注入unmanaged macOS开发契约；所有带Docker的相关`Daemon.create`调用均已显式化。Linux缺manifest、有效manifest、全root探针和逐操作重验仍由显式Linux部署测试承担。该增量经同一独立审查者核对实际diff并复跑integration+workspaces 48/48，判定PASS，无P0/P1/P2。
 
+真实隔离套件原本把Docker CLI固定为macOS常见的`/usr/local/bin/docker`，无法在Debian标准`/usr/bin/docker`路径运行。套件现支持显式`MATE_DOCKER_BINARY`并继续保留原默认值，全部backend与直接scope核查共用同一binary。独立复审确认没有残留硬编码或静默跳过路径，代码gate PASS；目标机真实运行结果另记在最终验收段。
+
 最终V1c gate仍未标PASS：必须在Ubuntu 24.04 x86_64原生宿主完成真实预分配ext4 loop mount、ENOSPC、mount丢失失败关闭和重启恢复。中途QEMU环境仅用于发现上述问题，未形成完整验收；相关VM、镜像、overlay、seed、密钥、运行库、端口和临时容器已全部清理。更新后的OrbStack 2.2.3 `ubuntu` machine仍处于`creating`，待其可用后只用标准OrbStack路径完成剩余证据。V2 restore对预先挂载root的适配仍是下一模块范围。

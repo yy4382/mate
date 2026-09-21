@@ -10,13 +10,14 @@ import { SandboxBackend } from '../../src/execution/backend.js';
 import { ContainerBackend, ControlledBackend } from '../../src/execution/container.js';
 
 const roots: string[] = [];
+const dockerBinary=process.env.MATE_DOCKER_BINARY??'/usr/local/bin/docker';
 function temp() { const root = realpathSync(mkdtempSync(`${tmpdir()}/mate-isolation-`)); roots.push(root); return root; }
 afterEach(() => roots.splice(0).forEach(p => rmSync(p, { recursive: true, force: true })));
 // Requires permission for SRT's local proxy sockets. Explicit opt-in prevents mock results being called real isolation.
 it.skipIf(process.env.MATE_SANDBOX_TEST !== '1')('real file sandbox and container isolate files, env, network and background processes', async () => {
   const root = temp(), sibling = temp(); writeFileSync(`${sibling}/secret`, 'synthetic-secret');
   const files = new SandboxBackend(resolve('dist/src/execution/runner.js'));
-  const commands = new ContainerBackend({ binary: '/usr/local/bin/docker', image: process.env.MATE_DOCKER_IMAGE!, host: process.env.MATE_DOCKER_HOST!, scope: 'mate-test-isolation' });
+  const commands = new ContainerBackend({ binary: dockerBinary, image: process.env.MATE_DOCKER_IMAGE!, host: process.env.MATE_DOCKER_HOST!, scope: 'mate-test-isolation' });
   const backend = new ControlledBackend(files, commands);
   const execute = (command: string, signal?: AbortSignal) => backend.execute({ root, operation: { kind: 'exec', cwd: '.', command }, timeoutMs: 10000 }, signal);
   const written = await backend.execute({ root, operation: { kind: 'write', path: 'MEMORY.md', content: 'synthetic memory' }, timeoutMs: 10000 });
@@ -41,7 +42,7 @@ it.skipIf(process.env.MATE_SANDBOX_TEST !== '1')('real file sandbox and containe
 }, 20000);
 it.skipIf(process.env.MATE_SANDBOX_TEST !== '1')('container destroys detached sessions after normal exit, abort and timeout', async () => {
   const root = temp();
-  const backend = new ContainerBackend({ binary: '/usr/local/bin/docker', image: process.env.MATE_DOCKER_IMAGE!, host: process.env.MATE_DOCKER_HOST!, scope: 'mate-test-detached' });
+  const backend = new ContainerBackend({ binary: dockerBinary, image: process.env.MATE_DOCKER_IMAGE!, host: process.env.MATE_DOCKER_HOST!, scope: 'mate-test-detached' });
   for (const mode of ['normal','abort','timeout']) {
     const controller = new AbortController();
     const command = `setsid sh -c 'sleep 2; echo escaped > ${mode}.txt' </dev/null >/dev/null 2>&1 & ${mode === 'normal' ? 'exit 0' : 'sleep 20'}`;
@@ -54,14 +55,14 @@ it.skipIf(process.env.MATE_SANDBOX_TEST !== '1')('container destroys detached se
 }, 30000);
 it.skipIf(process.env.MATE_SANDBOX_TEST !== '1')('startup cleanup removes only this daemon scope orphaned containers', async () => {
   const scope = `test-${randomUUID()}`, host = process.env.MATE_DOCKER_HOST!, image = process.env.MATE_DOCKER_IMAGE!;
-  const cli = (args: string[]) => promisify(execFile)('/usr/local/bin/docker', ['--host', host, ...args], { timeout: 10000 });
+  const cli = (args: string[]) => promisify(execFile)(dockerBinary, ['--host', host, ...args], { timeout: 10000 });
   const containers: string[] = [];
   try {
     for (const label of [scope, `${scope}-other`]) {
       const result = await cli(['run', '--detach', '--pull', 'never', '--network', 'none', '--read-only', '--log-driver', 'none', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--pids-limit', '32', '--label', `mate.execution=${label}`, image, 'sleep', '30']);
       containers.push(result.stdout.trim());
     }
-    await new ContainerBackend({ binary: '/usr/local/bin/docker', image, host, scope }).recover();
+    await new ContainerBackend({ binary: dockerBinary, image, host, scope }).recover();
     await expect(cli(['inspect', containers[0]!])).rejects.toThrow();
     expect((await cli(['inspect', '--format', '{{.State.Running}}', containers[1]!])).stdout.trim()).toBe('true');
   } finally { for (const id of containers) await cli(['rm', '--force', id]).catch(() => {}); }
@@ -100,13 +101,13 @@ it.skipIf(process.env.MATE_SANDBOX_TEST !== '1')('real binary sandbox roundtrip 
  const root=temp(),files=new SandboxBackend(resolve('dist/src/execution/runner.js')),bytes=Buffer.from([0,255,128,12]);
  expect((await files.execute({root,operation:{kind:'write_bytes',path:'binary',base64:bytes.toString('base64')},timeoutMs:10000})).code).toBe(0);
  const read=await files.execute({root,operation:{kind:'read_bytes',path:'binary',offset:0,length:32768},timeoutMs:10000});expect(Buffer.from(JSON.parse(read.stdout).base64,'base64')).toEqual(bytes);
- const backend=new ContainerBackend({binary:'/usr/local/bin/docker',image:process.env.MATE_DOCKER_IMAGE!,host:process.env.MATE_DOCKER_HOST!,scope:'mate-test-network-config',network:'bridge'});
+ const backend=new ContainerBackend({binary:dockerBinary,image:process.env.MATE_DOCKER_IMAGE!,host:process.env.MATE_DOCKER_HOST!,scope:'mate-test-network-config',network:'bridge'});
  const command={kind:'exec' as const,cwd:'.',command:'cat /proc/net/route'};
  const connected=await backend.execute({root,operation:command,timeoutMs:10000});expect(connected.code).toBe(0);expect(connected.stdout).toContain('eth0');
  const isolated=await backend.execute({root,operation:command,network:'none',timeoutMs:10000});expect(isolated.code).toBe(0);expect(isolated.stdout).not.toContain('eth0');
 },30000);
 it.skipIf(process.env.MATE_SANDBOX_TEST !== '1')('unified container fixed helper passes startup probe and structured file semantics',async()=>{
- const root=temp(),backend=new ContainerBackend({binary:'/usr/local/bin/docker',image:process.env.MATE_DOCKER_IMAGE!,host:process.env.MATE_DOCKER_HOST!,scope:`mate-test-helper-${randomUUID()}`,resources:{memoryMb:128,cpus:0.5,pids:16,tmpfsMb:8}});
+ const root=temp(),backend=new ContainerBackend({binary:dockerBinary,image:process.env.MATE_DOCKER_IMAGE!,host:process.env.MATE_DOCKER_HOST!,scope:`mate-test-helper-${randomUUID()}`,resources:{memoryMb:128,cpus:0.5,pids:16,tmpfsMb:8}});
  await backend.recover();await backend.probe(root);
  const value='容器内固定 helper';expect((await backend.execute({root,operation:{kind:'write',path:'notes/value',content:value},timeoutMs:20000})).code).toBe(0);
  expect((await backend.execute({root,operation:{kind:'read',path:'notes/value'},timeoutMs:20000})).stdout).toBe(value);
