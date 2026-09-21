@@ -1,3 +1,4 @@
+import {slackControlCommand} from './capabilities.js';
 import {slackPrincipal} from './principals.js';
 import type { WebClient } from '@slack/web-api';
 import type { Collaboration } from '../collaboration/service.js';
@@ -108,7 +109,7 @@ export class SlackService {
       const body = JSON.parse(row.body), agent = this.transport.mapper.config.agents.find(a => a.slackAppId === row.app_id);
       if (!agent) continue;
       try {
-        if (body.command === '/team') {
+        if (body.command === slackControlCommand) {
           s.atomic(() => {
             const team = body.team_id ?? body.team?.id, user = body.user_id ?? body.user?.id, channel = body.channel_id ?? body.channel?.id;
             if (team !== this.transport.mapper.config.teamId || !/^U[A-Z0-9]+$/.test(user ?? '') || !/^[CDG][A-Z0-9]+$/.test(channel ?? '')) throw new Error('Invalid control identity');

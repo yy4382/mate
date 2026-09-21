@@ -1,3 +1,4 @@
+import {slackControlCommand,slackWireEvents} from './capabilities.js';
 import {App} from '@slack/bolt';
 import {ManagedSocket} from './socket.js';
 import {DurableReceiver} from './receiver.js';
@@ -47,7 +48,7 @@ export class SlackRuntime implements AdapterLifecycle {
         const socket=new ManagedSocket(requireSecret(process.env,agent.appTokenEnv));
         const receiver=new DurableReceiver(this.c.store,agent.slackAppId,this.transport.mapper.config.teamId,socket,()=>this.report('Slack receiver error; uncommitted events are not acknowledged'),()=>this.service.replay());
         const app=new App({token:requireSecret(process.env,agent.botTokenEnv),receiver});
-        app.event(/.*/,async()=>{});app.command('/team',async()=>{});
+        for(const event of slackWireEvents)app.event(event,async()=>{});app.command(slackControlCommand,async()=>{});
         this.apps.push(app);await app.start();if(this.stopped)return;
       }
     }catch(error){await this.stopResources();throw error;}

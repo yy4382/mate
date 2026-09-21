@@ -1,10 +1,5 @@
 import { z } from 'zod';
-/** Bot scopes required by every full-featured Mate Slack binding. */
-export const requiredSlackBotScopes=Object.freeze([
-  'app_mentions:read','chat:write','channels:read','channels:history','channels:join','channels:manage',
-  'groups:read','groups:history','groups:write','im:read','im:history','im:write','mpim:read','mpim:history','mpim:write',
-  'files:read','files:write','users:read'
-] as const);
+export {requiredSlackBotScopes} from './capabilities.js';
 export const slackTs = z.string().regex(/^\d{1,16}\.\d{1,6}$/);
 const fileMetadata=z.object({id:z.string().regex(/^F[A-Z0-9]+$/),name:z.string().max(500).optional(),title:z.string().max(500).optional(),mimetype:z.string().max(200).optional(),size:z.number().nonnegative().optional()});
 const outputMetadata=z.object({event_type:z.string(),event_payload:z.record(z.string(),z.unknown()).optional()}).optional();

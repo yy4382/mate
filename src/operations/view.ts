@@ -1,5 +1,7 @@
 import {z} from 'zod';
-import type {Collaboration} from '../collaboration/service.js';
+import type Database from 'better-sqlite3';
+import type {TeamSettings} from '../domain/agents.js';
+import type {AgentDirectory} from '../agents/directory.js';
 import {encode,hash} from '../storage/store.js';
 
 export const activitySourceSchema=z.enum(['task','reminder_event','reminder_firing','run','action','output','runtime','internal_dm']);
@@ -33,7 +35,7 @@ export interface OperationsStatus{
 
 /** Owner-only, platform-neutral projection over authoritative operational state. */
 export class OperationsView{
-  constructor(readonly c:Collaboration){}
+  constructor(readonly c:{config:TeamSettings;agents:AgentDirectory;store:{db:Database.Database}}){}
   private owner(owner:string):void{if(!this.c.config.ownerUserIds.includes(owner))throw new Error('Owner only');}
   status(owner:string):OperationsStatus{
     this.owner(owner);const s=this.c.store,now=Date.now(),cap=100;

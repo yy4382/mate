@@ -79,6 +79,10 @@ case "${'$'}{1-}" in
     exec /usr/bin/node ${shellQuote(`${upgradeController}/dist/src/deployment/cli.js`)} "$1"
     ;;
 
+  status|logs)
+    [ "${'$'}#" -eq 1 ] || { echo "Read-only commands take no arguments" >&2; exit 1; }
+    exec /usr/bin/node ${shellQuote(`${upgradeController}/dist/src/deployment/cli.js`)} "$1"
+    ;;
   doctor)
     [ "${'$'}#" -eq 1 ] || { echo "Usage: matectl doctor" >&2; exit 1; }
     exec /usr/bin/systemd-run --quiet --collect --wait --pipe ${unitProperties} ${writeProperties} \\
@@ -118,7 +122,7 @@ case "${'$'}{1-}" in
       --property=ReadOnlyPaths=/var/backups/mate /usr/bin/node "$ENTRY" restore "$CONFIG" "$source"
     ;;
   *)
-    echo "Usage: matectl doctor|offline-probe|backup NAME|restore NAME [--replace CURRENT_NAME]" >&2
+    echo "Usage: matectl status|logs|doctor|offline-probe|backup NAME|restore NAME [--replace CURRENT_NAME]" >&2
     exit 1
     ;;
 esac

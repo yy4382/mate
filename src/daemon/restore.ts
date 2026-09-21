@@ -152,3 +152,6 @@ export async function finishDeploymentRestoreCheckpoint(oldConfig:DaemonConfig,n
   await assertRestoredDatabase(join(data,'state','mate.sqlite'),target.manifest);await rm(path);await fsyncDirectory(dirname(path));
  }finally{unlock();}
 }
+
+/** Read-only, content-free recovery status; uses the same parser as restore. */
+export async function restoreProgress(dataDir:string){const journal=await readJournal(join(dataDir,'control','restore.json'));return journal?{phase:journal.phase,databaseComplete:journal.databaseComplete,completedAgents:journal.completedAgents.length}:null;}
