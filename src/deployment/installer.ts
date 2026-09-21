@@ -119,6 +119,7 @@ export function preflightDeployment(spec: DeploymentSpec, config: DaemonConfig, 
 }
 
 function serviceIdentity(host: InstallerHost): { uid: number; gid: number } {
+  ensureDirectory('/etc/sysusers.d', 0, 0, 0o755);
   atomicExact('/etc/sysusers.d/mate.conf', 'u mate - "Mate daemon" /var/lib/mate /usr/sbin/nologin\n', 0, 0, 0o644);
   checked(host, '/usr/bin/systemd-sysusers', ['/etc/sysusers.d/mate.conf'], 'Cannot create Mate service identity');
   const uid = Number(checked(host, '/usr/bin/id', ['-u', 'mate'], 'Cannot resolve mate uid')), gid = Number(checked(host, '/usr/bin/id', ['-g', 'mate'], 'Cannot resolve mate gid'));
