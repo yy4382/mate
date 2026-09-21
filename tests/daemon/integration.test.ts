@@ -144,8 +144,8 @@ it('private exec grant upgrades preserve revocation and expiry and require confi
   if(docker)vi.spyOn((daemon as any).container,'recover').mockResolvedValue(undefined);
   daemon.collaboration.messages.references.createConversation('channel','external','CTEST');
   try{for(const state of ['valid','revoked','expired']){
-   const work=daemon.collaboration.createWork(state,{conversationId:'CTEST'}),grant=daemon.broker.issueGrant('UOWNER','research',work,daemon.memoryRoots.research!,['read','write'],Date.now()+100000);
-   if(state==='revoked')daemon.broker.revoke('UOWNER',grant);if(state==='expired')daemon.store.db.prepare('UPDATE grants SET expires=1 WHERE id=?').run(grant);
+   const work=daemon.collaboration.createWork(state,{conversationId:'CTEST'}),grant=daemon.broker.issueGrant(daemon.config.mate.ownerUserIds[0]!,'research',work,daemon.memoryRoots.research!,['read','write'],Date.now()+100000);
+   if(state==='revoked')daemon.broker.revoke(daemon.config.mate.ownerUserIds[0]!,grant);if(state==='expired')daemon.store.db.prepare('UPDATE grants SET expires=1 WHERE id=?').run(grant);
    (daemon as any).ensureGrants('research',work);
    const row=daemon.store.db.prepare('SELECT operations,revoked,expires FROM grants WHERE id=?').get(grant) as any;
    expect(JSON.parse(row.operations).includes('exec')).toBe(!!docker&&state==='valid');if(state==='revoked')expect(row.revoked).toBe(1);if(state==='expired')expect(row.expires).toBe(1);

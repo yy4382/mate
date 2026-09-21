@@ -25,7 +25,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   }
   if (command === 'check') {
     const models = builtinModels();
-    const report = config.mate.agents.map(a => ({ agent: a.id, modelKnown: !!models.getModel(a.model.provider, a.model.id), missingEnv: [a.botTokenEnv, a.appTokenEnv, a.model.apiKeyEnv].filter(ref => !process.env[ref]) }));
+    const report = config.mate.agents.map(a => ({ agent: a.id, modelKnown: !!models.getModel(a.model.provider, a.model.id), missingEnv: [a.model.apiKeyEnv,...(config.adapters.slack?.bindings.filter(b=>b.agentId===a.id).flatMap(b=>[b.botTokenEnv,b.appTokenEnv])??[])].filter(ref => !process.env[ref]) }));
     process.stdout.write(JSON.stringify({ localOnly: true, agents: report, containerConfigured: !!config.runtime.docker }, null, 2) + '\n');
     if (report.some(r => !r.modelKnown || r.missingEnv.length)) process.exitCode = 1; return;
   }

@@ -1,3 +1,4 @@
+import {slackPrincipal} from './principals.js';
 import { z } from 'zod';
 import { References } from '../conversations/references.js';
 import type { ConversationTarget } from '../domain/conversations.js';
@@ -71,13 +72,4 @@ export class LegacyConversationCodec {
   }
 }
 
-export function slackPrincipal(config:MateConfig,user?:string,bot?:string):Principal {
-    const byUser = user ? config.agents.find(a => a.slackUserId === user) : undefined;
-    const byBot = bot ? config.agents.find(a => a.slackBotId === bot) : undefined;
-    if (user && bot && (byUser || byBot) && byUser?.id !== byBot?.id) throw new Error('Conflicting legacy author identities');
-    const agent = byUser ?? byBot;
-    if (agent) return { kind: 'agent', id: agent.id };
-    if (bot) return { kind: 'external', id: encode(['slack', config.teamId, 'bot', bot]) };
-    if (user) return { kind: 'human', id: encode(['slack', config.teamId, 'user', user]) };
-    return { kind: 'unknown' };
-  }
+export {slackPrincipal} from './principals.js';

@@ -1,3 +1,4 @@
+import {slackPrincipal} from './principals.js';
 import { z } from 'zod';
 import type { MateConfig } from '../config.js';
 import { References } from '../conversations/references.js';
@@ -33,8 +34,8 @@ export class LegacyArguments {
     }
     if(Object.hasOwn(args,'user')){
       if(Object.hasOwn(args,'principal'))throw new Error('Mixed legacy and canonical principal arguments');
-      const user=z.string().regex(/^U[A-Z0-9]+$/).parse(args.user),agent=this.config.agents.find(a=>a.slackUserId===user);
-      delete args.user;args.principal=agent?{kind:'agent',id:agent.id}:{kind:'human',id:encode(['slack',this.config.teamId,'user',user])};
+      const user=z.string().regex(/^U[A-Z0-9]+$/).parse(args.user);
+      delete args.user;args.principal=slackPrincipal(this.config,user);
     }
     return args;
   }

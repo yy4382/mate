@@ -4,7 +4,7 @@ import{mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,realpathSync,exis
 import{tmpdir}from 'node:os';
 import{join}from 'node:path';
 import{Store,encode,hash}from '../../src/storage/store.js';
-import{daemonConfigSchema}from '../../src/daemon/config.js';
+import{daemonConfigSchema,slackRuntimeConfig}from '../../src/daemon/config.js';
 import{migrateConfiguration,saveConfiguration,storedConfiguration}from '../../src/daemon/migrate.js';
 import{acquireLock}from '../../src/daemon/lock.js';
 import{configFixture}from '../helpers/config.js';
@@ -20,9 +20,9 @@ function fixture(legacy=false){
  const previous=daemonConfigSchema.parse({mate:configFixture,runtime:{dataDir:data,workspaceGrants:[{agentId:'research',root:shared,operations:['read','write']}]}});
  const store=new Store(path),base=buildBaseline(previous.mate.agents[0]!,operationDocumentation);store.register('research',base.configVersion,base.messages);
  if(!legacy)saveConfiguration(store,previous);else store.db.prepare("INSERT INTO runtime_meta VALUES('policy',?)").run(hash(encode(previous.runtime)));
- const messages=new Messages(store,previous.mate),c=new Collaboration(store,messages,new Output(messages,{post:async()=>({ts:'100.000002'})}),previous.mate);messages.membership('research','CTEST',true);
+ const messages=new Messages(store,slackRuntimeConfig(previous)!),c=new Collaboration(store,messages,new Output(messages,{post:async()=>({ts:'100.000002'})}),previous.mate);messages.membership('research','CTEST',true);
  const broker=new Broker(store,c,{execute:async()=>({code:0,stdout:'',stderr:'',truncated:false})},['/synthetic-protected']),router=new ToolRouter(c,broker),work=c.createWork('migration',{conversationId:'CTEST'});
- c.ledger.account('research');const grant=broker.issueGrant('UOWNER','research',work,shared,['read','write'],Date.now()+100000);
+ c.ledger.account('research');const grant=broker.issueGrant(previous.mate.ownerUserIds[0]!,'research',work,shared,['read','write'],Date.now()+100000);
  const next=structuredClone(previous);next.mate.agents[0]!.role='An evolving research role';next.runtime.workspaceGrants[0]!.operations=['read'];
  return{root,data,path,own,previous,next,store,c,router,work,broker,grant};
 }
@@ -47,10 +47,10 @@ it('migration requires lock, exact previous configuration and stable workspace/A
  const f=fixture();f.store.close();const dest=join(f.root,'backup');
  const release=acquireLock(join(f.data,'state','daemon.lock'));await expect(migrateConfiguration(f.previous,f.next,dest)).rejects.toThrow('Another Mate');release();
  const wrong=structuredClone(f.previous);wrong.mate.agents[0]!.role='wrong old role';await expect(migrateConfiguration(wrong,f.next,dest)).rejects.toThrow('Previous configuration');
- const rebound=structuredClone(f.next);rebound.mate.agents[0]!.slackUserId='UOTHER';await expect(migrateConfiguration(f.previous,rebound,dest)).rejects.toThrow('rebound');expect(existsSync(dest)).toBe(false);
+ const rebound=structuredClone(f.next);rebound.adapters.slack!.bindings[0]!.slackUserId='UOTHER';await expect(migrateConfiguration(f.previous,rebound,dest)).rejects.toThrow('rebound');expect(existsSync(dest)).toBe(false);
 });
 it('legacy identity requires explicit attestation; revoked grants stay revoked',async()=>{
- const f=fixture(true);f.broker.revoke('UOWNER',f.grant);f.store.close();
+ const f=fixture(true);f.broker.revoke(f.previous.mate.ownerUserIds[0]!,f.grant);f.store.close();
  await expect(migrateConfiguration(f.previous,f.next,join(f.root,'backup'))).rejects.toThrow('accept-legacy-identity');
  expect((await migrateConfiguration(f.previous,f.next,join(f.root,'backup'),true)).legacyIdentityAttested).toBe(true);
  const s=new Store(f.path);expect(s.db.prepare('SELECT revoked FROM grants WHERE id=?').get(f.grant)).toEqual({revoked:1});s.close();
@@ -69,9 +69,9 @@ it('pending model reset migrates exactly once and retains its requested continua
 });
 it('a migrated configuration starts locally and can add persistent peers beyond the old three-Agent cap',async()=>{
  const f=fixture();f.store.close();
- for(let n=2;n<=4;n++)f.next.mate.agents.push({...structuredClone(f.next.mate.agents[0]!),id:'peer'+n,name:'Peer '+n,slackAppId:'A'+n,slackUserId:'U'+n,slackBotId:'B'+n,botTokenEnv:'PEER'+n+'_BOT',appTokenEnv:'PEER'+n+'_APP'});
+ for(let n=2;n<=4;n++)f.next.mate.agents.push({...structuredClone(f.next.mate.agents[0]!),id:'peer'+n,name:'Peer '+n});
  const next=daemonConfigSchema.parse(f.next);await migrateConfiguration(f.previous,next,join(f.root,'backup'));
- const {Daemon}=await import('../../src/daemon/app.js');const refs=next.mate.agents.map(a=>a.botTokenEnv),saved=refs.map(ref=>process.env[ref]);refs.forEach(ref=>process.env[ref]='synthetic-local-only');
+ const {Daemon}=await import('../../src/daemon/app.js');const refs=next.adapters.slack!.bindings.map(a=>a.botTokenEnv),saved=refs.map(ref=>process.env[ref]);refs.forEach(ref=>process.env[ref]='synthetic-local-only');
  try{const daemon=new Daemon(next,{info:()=>{},error:()=>{}});try{expect(daemon.store.db.prepare('SELECT count(*) n FROM agents').get()).toEqual({n:4});expect(existsSync(join(f.data,'agents','peer4','MEMORY.md'))).toBe(true);}finally{await daemon.close();}}
  finally{refs.forEach((ref,i)=>{if(saved[i]===undefined)delete process.env[ref];else process.env[ref]=saved[i];});}
 });
@@ -79,9 +79,9 @@ it('a migrated configuration starts locally and can add persistent peers beyond 
 it('migrates real legacy configuration key order without rewriting immutable effect evidence', async () => {
  const f=fixture();
  // R8 serialized model after Slack installation fields, before channels.
- const a=f.previous.mate.agents[0]!;
+ const a=slackRuntimeConfig(f.previous)!.agents[0]!;
  const oldAgent={id:a.id,name:a.name,role:a.role,slackAppId:a.slackAppId,slackUserId:a.slackUserId,slackBotId:a.slackBotId,botTokenEnv:a.botTokenEnv,appTokenEnv:a.appTokenEnv,model:a.model,channels:a.channels};
- const legacy={...f.previous,mate:{...f.previous.mate,agents:[oldAgent]}};
+ const legacy={runtime:f.previous.runtime,mate:{...configFixture,agents:[oldAgent]}};
  expect(encode(legacy)).not.toBe(encode(f.previous));
  f.store.db.prepare("UPDATE runtime_meta SET value=? WHERE key='configuration'").run(encode(legacy));
  const outbox='legacy-unknown';
@@ -100,4 +100,30 @@ it('migrates real legacy configuration key order without rewriting immutable eff
   expect(current.session_id).not.toBe(session);
   expect(s.db.prepare('SELECT config_version FROM sessions WHERE id=?').get(current.session_id)).toEqual({config_version:buildBaseline(a,operationDocumentation).configVersion});
  }finally{s.close();}
+});
+
+it('adds the first Slack installation to a canonical local-origin store without fabricating legacy provenance',async()=>{
+ const {localApplication}=await import('../../src/local/application.js');
+ const {migrateProjections}=await import('../../src/storage/projection-schema.js');
+ const {migrateProjectionImports}=await import('../../src/storage/projection-import-schema.js');
+ const {Daemon}=await import('../../src/daemon/app.js');
+ const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-local-migration-')));roots.push(root);
+ const data=join(root,'data');mkdirSync(join(data,'state'),{recursive:true});mkdirSync(join(data,'agents','research'),{recursive:true});
+ const next=daemonConfigSchema.parse({mate:configFixture,runtime:{dataDir:data}}),previous=structuredClone(next);previous.adapters={};
+ const s=new Store(join(data,'state','mate.sqlite'));localApplication(s,previous.mate);migrateProjections(s);migrateProjectionImports(s);
+ const base=buildBaseline(previous.mate.agents[0]!,operationDocumentation);s.register('research',base.configVersion,base.messages);saveConfiguration(s,previous);s.close();
+ await migrateConfiguration(previous,next,join(root,'backup'));
+ const saved=process.env.RESEARCH_BOT_TOKEN;process.env.RESEARCH_BOT_TOKEN='synthetic';
+ try{for(let n=0;n<2;n++){
+   const daemon=new Daemon(next,{info:()=>{},error:()=>{}});
+   expect(daemon.store.db.prepare("SELECT 1 FROM runtime_meta WHERE key='reference_migration_v16'").get()).toBeUndefined();
+   await daemon.close();
+ }}finally{if(saved===undefined)delete process.env.RESEARCH_BOT_TOKEN;else process.env.RESEARCH_BOT_TOKEN=saved;}
+});
+
+it('missing legacy provenance cannot turn preserved historical effects into local-origin data',async()=>{
+ const f=fixture();
+ f.store.queueOutput('research','legacy-proof',{target:{channel:'CTEST'},text:'legacy'},JSON.stringify({conversationId:'CTEST'}));
+ f.store.db.prepare("DELETE FROM runtime_meta WHERE key='reference_migration_v16'").run();f.store.close();
+ await expect(migrateConfiguration(f.previous,f.next,join(f.root,'backup'))).rejects.toThrow('provenance');
 });

@@ -1,0 +1,15 @@
+# Deployment configuration
+
+Deployment format version 2 keeps the internal team separate from platform installations. `mate.agents` contains only `id`, `name`, `role`, and the model/provider secret reference. `mate.ownerUserIds` contains internal human principal IDs. It does not contain Slack user IDs unless that was explicitly chosen as an internal identity in a new deployment.
+
+`adapters.slack` contains a workspace `teamId`, `principals` (Slack user ID → stable internal human ID), and `bindings`. Each binding names an `agentId` and its `slackAppId`, `slackUserId`, `slackBotId`, `botTokenEnv`, `appTokenEnv`, and `channels` participation policy. Only a subset of the team needs an installation. A missing binding never borrows another Agent's bot token.
+
+`adapters.local` describes trusted host identities (`humans`) and explicit internal rooms (`rooms`, each with `id`, `agents`, and `humans`). These are host-controlled inputs, not identities a model may claim. E2c3a only adds this configuration contract; the full local daemon lifecycle and persistent room setup are E2c3b acceptance requirements, not yet a delivered entry point.
+
+The previous flattened Slack format remains accepted at the configuration boundary. It is normalized before comparisons and persistence. Legacy human owners retain the already-used scoped message identity `JSON.stringify(['slack', teamId, 'user', slackUserId])`; the adapter maps authenticated Slack controls to that principal before core authorization. Existing stored request bytes, hashes, receipts, message bodies, and audit records are not rewritten by this conversion.
+
+Identity mappings outlive permissions. To remove an owner, remove the internal principal from `mate.ownerUserIds`, keeping the Slack mapping. Removing/rebinding existing Agents, installations, human mappings, or the workspace is rejected by offline migration. New mappings in an existing workspace must preserve the default scoped identity of any earlier observations. A new deployment may choose friendly human IDs. A mapped human ID cannot alias a different Slack user's default scoped identity.
+
+Configuration changes still require the existing offline `migrate OLD_CONFIG NEW_CONFIG BACKUP` operation. It validates the recorded old configuration, takes the singleton lock, creates a backup, and applies the new baseline and grants transactionally. Revoked/expired execution grants and outstanding unknown effects remain preserved. Adding the first Slack installation to a canonical local-origin store does not manufacture historical Slack migration evidence.
+
+Provider and Slack token values stay in environment variables; configuration contains only secret reference names. `check` reports model availability and missing references for the complete team and configured installations.

@@ -1,3 +1,5 @@
+import {localApplication} from '../local/application.js';
+import {initializeCanonicalStore} from '../storage/internal-schema.js';
 import {migrateProjections} from '../storage/projection-schema.js';
 import {migrateProjectionImports} from '../storage/projection-import-schema.js';
 import {migrateInternalConversations} from '../storage/internal-schema.js';
@@ -7,7 +9,7 @@ import { CanonicalOutput as Output } from '../conversations/output.js';
 import {existsSync,lstatSync,realpathSync}from 'node:fs';
 import {join,resolve}from 'node:path';
 import type {AgentMessage}from '@earendil-works/pi-agent-core';
-import {sameConfiguration,type DaemonConfig}from './config.js';
+import {sameConfiguration,daemonConfigSchema,slackRuntimeConfig,assertConfigurationEvolution,type DaemonConfig}from './config.js';
 import {Store,encode,hash}from '../storage/store.js';
 import {acquireLock}from './lock.js';
 import {backup}from './backup.js';
@@ -22,10 +24,10 @@ import {SessionLifecycle}from '../runtime/sessions.js';
 import {Collaboration}from '../collaboration/service.js';
 
 export function storedConfiguration(store:Store):DaemonConfig|undefined{
- const row=store.db.prepare("SELECT value FROM runtime_meta WHERE key='configuration'").get() as {value:string}|undefined;return row?JSON.parse(row.value):undefined;
+ const row=store.db.prepare("SELECT value FROM runtime_meta WHERE key='configuration'").get() as {value:string}|undefined;return row?daemonConfigSchema.parse(JSON.parse(row.value)):undefined;
 }
 export function saveConfiguration(store:Store,config:DaemonConfig):void{
- store.db.prepare("INSERT INTO runtime_meta VALUES('configuration',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(encode(config));
+ store.db.prepare("INSERT INTO runtime_meta VALUES('configuration',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(encode(daemonConfigSchema.parse(config)));
  store.db.prepare("INSERT INTO runtime_meta VALUES('policy',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(hash(encode(config.runtime)));
 }
 /** Explicit local owner operation. No Slack or model credentials required. */
@@ -43,11 +45,7 @@ export async function migrateConfiguration(previous:DaemonConfig,next:DaemonConf
   if(!policy||policy.value!==hash(encode(previous.runtime)))throw new Error('Previous runtime policy does not match database');
   const oldIds=(s.db.prepare('SELECT id FROM agents ORDER BY id').all() as {id:string}[]).map(a=>a.id);
   if(encode(oldIds)!==encode(previous.mate.agents.map(a=>a.id).sort()))throw new Error('Previous Agent identities do not match database');
-  if(previous.mate.teamId!==next.mate.teamId)throw new Error('Workspace identity cannot be rebound');
-  for(const old of previous.mate.agents){
-   const agent=next.mate.agents.find(a=>a.id===old.id);
-   if(!agent||['slackAppId','slackUserId','slackBotId'].some(key=>agent[key as keyof typeof agent]!==old[key as keyof typeof old]))throw new Error('Existing Agent identities cannot be removed or rebound');
-  }
+  assertConfigurationEvolution(previous,next);
   const roots=new Map<string,Map<string,string[]>>();
   for(const agent of next.mate.agents){
    const own=join(data,'agents',agent.id);
@@ -63,9 +61,10 @@ export async function migrateConfiguration(previous:DaemonConfig,next:DaemonConf
   s.recover();
   await backup(s,data,resolve(destination));
   s.atomic(()=>{
-   migrateCanonicalConversations(s,previous.mate);
+   const oldSlack=slackRuntimeConfig(previous),newSlack=slackRuntimeConfig(next);
+   if(oldSlack)migrateCanonicalConversations(s,oldSlack);else initializeCanonicalStore(s);
    migrateInternalConversations(s);migrateProjections(s);migrateProjectionImports(s);
-   const {messages}=slackApplication(s,next.mate),c=new Collaboration(s,messages,new Output(messages,{post:async()=>{throw new Error('Offline migration cannot publish');},pendingInput:()=>false,classify:()=>({kind:'unknown'})}),next.mate);
+   const {messages}=(newSlack?slackApplication(s,newSlack,next.mate):localApplication(s,next.mate)),c=new Collaboration(s,messages,new Output(messages,{post:async()=>{throw new Error('Offline migration cannot publish');},pendingInput:()=>false,classify:()=>({kind:'unknown'})}),next.mate);
    const baseline=(agent:import('../domain/agents.js').AgentDefinition)=>buildBaseline(agent,operationDocumentation);
    const lifecycle=new SessionLifecycle(c,baseline);
    for(const agent of next.mate.agents){

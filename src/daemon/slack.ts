@@ -1,3 +1,4 @@
+import {slackPrincipal} from '../slack/legacy-codec.js';
 import type { WebClient } from '@slack/web-api';
 import type { Collaboration } from '../collaboration/service.js';
 import type { Controls } from './control.js';
@@ -102,7 +103,7 @@ export class SlackService {
             if (team !== this.transport.mapper.config.teamId || !/^U[A-Z0-9]+$/.test(user ?? '') || !/^[CDG][A-Z0-9]+$/.test(channel ?? '')) throw new Error('Invalid control identity');
             let text = body.text ?? '';
             let reply: string;
-            try { reply = this.controls.execute(user, text); } catch (error) { reply = String(error); }
+            try { reply = this.controls.execute(this.transport.mapper.config.principalIds ? (slackPrincipal(this.transport.mapper.config,user) as {id:string}).id : user, text); } catch (error) { reply = String(error); }
             s.db.prepare('INSERT INTO admin_replies VALUES(?,?,?,?,?,\'pending\') ON CONFLICT DO NOTHING').run(`${row.app_id}:${row.event_id}`, agent.id, channel, user, reply.slice(0, 15000));
             s.db.prepare('UPDATE ingress SET normalized=1 WHERE app_id=? AND event_id=?').run(row.app_id, row.event_id);
           });

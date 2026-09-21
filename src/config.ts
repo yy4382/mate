@@ -25,7 +25,7 @@ export const configSchema = z.object({
     if (new Set(values).size !== values.length) ctx.addIssue({ code: 'custom', message: `Duplicate agent ${key}` });
   }
 });
-export type MateConfig = z.infer<typeof configSchema>;
+export type MateConfig = z.infer<typeof configSchema> & { principalIds?: Record<string,string> };
 export type AgentConfig = MateConfig['agents'][number];
 
 /** Errors contain reference names only, never secret values. */

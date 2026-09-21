@@ -19,7 +19,7 @@ import { join, resolve } from 'node:path';
 import { App } from '@slack/bolt';
 import { ManagedSocket } from '../slack/socket.js';
 import { builtinModels } from '@earendil-works/pi-ai/providers/all';
-import { sameConfiguration, type DaemonConfig } from './config.js';
+import { sameConfiguration, daemonConfigSchema, slackRuntimeConfig, type DaemonConfig } from './config.js';
 import { requireSecret } from '../config.js';
 import { Store, hash } from '../storage/store.js';
 
@@ -59,7 +59,11 @@ export class Daemon {
   private loopPromise?: Promise<void>;
   private startPromise?: Promise<void>;
   private closePromise?: Promise<void>;
-  constructor(readonly config: DaemonConfig, readonly log: Log, readonly projectRoot = resolve('.')) {
+  readonly config:DaemonConfig;
+  constructor(input: unknown, readonly log: Log, readonly projectRoot = resolve('.')) {
+    const config=this.config=daemonConfigSchema.parse(input);
+    const slackConfig=slackRuntimeConfig(config);
+    if(!slackConfig)throw new Error('Local daemon lifecycle is not installed yet');
     const data = config.runtime.dataDir;
     mkdirSync(data, { recursive: true, mode: 0o700 });
     if (lstatSync(data).isSymbolicLink() || within(realpathSync(projectRoot), realpathSync(data))) throw new Error('Data directory must be outside the application checkout and not a symlink');
@@ -81,12 +85,12 @@ export class Daemon {
         if(previous)throw new Error('Canonical conversation storage requires explicit offline migration');
 
       }
-      migrateCanonicalConversations(this.store,c);
+      migrateCanonicalConversations(this.store,slackConfig);
       if(previous&&Number(this.store.db.pragma('user_version',{simple:true}))<20)throw new Error('Internal conversations require explicit offline migration');
       migrateInternalConversations(this.store);migrateProjections(this.store);migrateProjectionImports(this.store);
-      const {messages,mapper,argumentsCodec}=slackApplication(this.store,c);
+      const {messages,mapper,argumentsCodec}=slackApplication(this.store,slackConfig,c);
       messages.writes.assertFormat();
-      const transport=new WebSlackTransport(this.store,mapper,Object.fromEntries(c.agents.map(a=>[a.id,requireSecret(process.env,a.botTokenEnv)])));
+      const transport=new WebSlackTransport(this.store,mapper,Object.fromEntries(slackConfig.agents.map(a=>[a.id,requireSecret(process.env,a.botTokenEnv)])));
       const output=new Output(messages,transport);
       this.collaboration = new Collaboration(this.store, messages, output, c);
       const files = new SandboxBackend();
@@ -145,15 +149,15 @@ export class Daemon {
   private async open(): Promise<void> {
     if (this.stopping) return;
     const models = builtinModels();
-    for (const agent of this.config.mate.agents) { requireSecret(process.env, agent.appTokenEnv); requireSecret(process.env, agent.model.apiKeyEnv); if (!models.getModel(agent.model.provider, agent.model.id)) throw new Error(`Unknown provider/model for ${agent.id}`); }
+    for (const agent of this.config.mate.agents) { requireSecret(process.env, agent.model.apiKeyEnv); if (!models.getModel(agent.model.provider, agent.model.id)) throw new Error(`Unknown provider/model for ${agent.id}`); }
     await this.container?.recover(); if (this.stopping) return; this.store.recover(); this.projections.core.recover(); this.supervisor.recoverSessions();
     await this.slack.verify(); if (this.stopping) return;
     await this.slack.membership(); if (this.stopping) return;
     await this.slack.catchUp(); await this.projections.catchUp(); if (this.stopping) return;
     this.collaboration.output.gate?.adoptPending();
-    for (const agent of this.config.mate.agents) {
+    for (const agent of slackRuntimeConfig(this.config)!.agents) {
       const socket = new ManagedSocket(requireSecret(process.env, agent.appTokenEnv));
-      const receiver = new DurableReceiver(this.store, agent.slackAppId, this.config.mate.teamId, socket, () => this.log.error({ agentId: agent.id }, 'Slack receiver error; uncommitted events are not acknowledged'), () => this.slack.replay());
+      const receiver = new DurableReceiver(this.store, agent.slackAppId, this.config.adapters.slack!.teamId, socket, () => this.log.error({ agentId: agent.id }, 'Slack receiver error; uncommitted events are not acknowledged'), () => this.slack.replay());
       const app = new App({ token: requireSecret(process.env, agent.botTokenEnv), receiver });
       app.event(/.*/, async () => {}); app.command('/team', async () => {});
       this.apps.push(app); await app.start(); if (this.stopping) return;

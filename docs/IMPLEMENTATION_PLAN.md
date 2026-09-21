@@ -195,3 +195,7 @@ E2c2继续按确认风险细分：c2a核心projection授权/状态/原子入队/
 E2c2a PASS：review_e2c2a_projection，238普通checks/7环境skip；c2b开始前需落实projection查询分页和旧故障可发现性（c2a非阻塞P2）。
 
 E2c2b PASS：review_e2c2b_slack_projection，245普通checks/7环境skip；真实Slack回复截断破坏游标的阻塞已修复并经实际admin queue路径验证。E2c2整体完成，进入c3配置解绑与完整本地常驻入口。
+
+E2c3按可独立审查的风险拆成c3a/c3b顺序gate：c3a统一配置兼容解析、纯Agent定义与可选平台binding、稳定human映射/owner权限分离及离线身份迁移；c3b同一daemon的可选adapter生命周期、完整local常驻入口、持久room ACL与外部故障隔离。c3a的local配置可解析/用于应用服务，但尚不宣称local常驻daemon可启动；c3b通过才完成c3。两者均需实际代码与软件工程独立红队，不能以配置类型存在代替可用入口。c3a验收旧快照规范化不改变wire/hash、owner撤销不改author、binding子集保留内部Agent、禁止身份移除/换绑；c3b验收见ARCHITECTURE。
+
+E2c3a PASS：review_e2c3a_configuration，252普通checks/7环境skip；修复local-origin首次绑定Slack后启动被错误拒绝的P1，独立复验包括已有本地消息正文不变。完整记录reviews/E2c3a-configuration.md。进入c3b同一daemon可选adapter生命周期与本地常驻入口。

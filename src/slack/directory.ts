@@ -3,7 +3,7 @@ import type { WebClient } from '@slack/web-api';
 import type { RunToken } from '../storage/store.js';
 import type { Conversations as Messages } from '../conversations/messages.js';
 import type { SlackMapper } from './mapper.js';
-import { slackPrincipal } from './legacy-codec.js';
+import { slackPrincipal,slackUserForPrincipal } from './principals.js';
 import type { Principal } from '../domain/messages.js';
 import { LegacyArguments } from './legacy-arguments.js';
 
@@ -50,16 +50,9 @@ export class Directory implements ConversationDirectory {
     this.messages.requireAccess(actor, conversationId);
     return { members, incomplete: !!cursor };
   }
-  private externalUser(principal:Exclude<Principal,{kind:'unknown'}>):string {
-    if(principal.kind==='agent'){
-      const agent=this.mapper.config.agents.find(a=>a.id===principal.id);if(!agent)throw new Error('Agent has no Slack identity');return agent.slackUserId;
-    }
-    let parts:unknown;try{parts=JSON.parse(principal.id);}catch{throw new Error('Principal does not belong to this adapter');}
-    if(principal.kind!=='human'||!Array.isArray(parts)||parts.length!==4||parts[0]!=='slack'||parts[1]!==this.mapper.config.teamId||parts[2]!=='user'||typeof parts[3]!=='string'||!/^U[A-Z0-9]+$/.test(parts[3]))throw new Error('Principal does not belong to this adapter');return parts[3];
-  }
   async openDM(run: RunToken, actionId: string, principal: Exclude<Principal,{kind:'unknown'}>, signal: AbortSignal): Promise<OpenDMResult> {
     const s = this.messages.store, client = this.client(run.agentId);
-    const user=this.externalUser(principal);
+    const user=slackUserForPrincipal(this.mapper.config,principal);
     s.assertRun(run); signal.throwIfAborted();
     if (!/^U[A-Z0-9]+$/.test(user)) throw new Error('Invalid Slack user');
     const action = this.messages.writes.prepareAction(run, actionId, { operation: 'conversations.openDM', principal });

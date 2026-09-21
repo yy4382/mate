@@ -16,7 +16,17 @@ export function migrateCanonicalConversations(store: Store, config: MateConfig):
     if (marker) {
       if (marker.value !== canonicalConversationFormat || ![17,18,19,20].includes(Number(store.db.pragma('user_version', { simple: true })))) throw new Error('Unsupported conversation data format');
       const source = store.db.prepare("SELECT value FROM runtime_meta WHERE key='reference_migration_v16'").get() as {value:string}|undefined;
-      if (!source || JSON.parse(source.value).workspace !== config.teamId) throw new Error('Conversation migration workspace mismatch');
+      // Local-origin canonical stores have no legacy Slack provenance. Their installation
+      // identity is governed by the persisted configuration, not a fabricated migration.
+      if (source && JSON.parse(source.value).workspace !== config.teamId) throw new Error('Conversation migration workspace mismatch');
+      if(!source){
+        for(const table of ['messages','message_revisions']){
+          if(store.db.prepare(`SELECT 1 FROM ${table} WHERE json_extract(body,'$.format') IS NOT 'mate.message.v2' LIMIT 1`).get())throw new Error('Legacy messages require migration provenance');
+        }
+        if(store.db.prepare("SELECT 1 FROM outbox WHERE json_extract(request,'$.format') IS NOT 'mate.effect.v2' LIMIT 1").get())throw new Error('Legacy outputs require migration provenance');
+        if(store.db.prepare("SELECT 1 FROM actions WHERE json_extract(request,'$.format') IS NOT 'mate.effect.v2' AND (json_extract(request,'$.target') IS NOT NULL OR json_extract(request,'$.args.target') IS NOT NULL OR json_extract(request,'$.operation')='conversations.openDM') LIMIT 1").get())throw new Error('Legacy conversation actions require migration provenance');
+      }
+
       return;
     }
     if (store.db.pragma('user_version', { simple: true }) !== 16) throw new Error('Unsupported legacy conversation schema');

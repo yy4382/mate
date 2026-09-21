@@ -18,7 +18,7 @@ export class SlackProjectionService {
   }
   /** Controls verifies owner before invoking this callback. Still verify here for direct use. */
   control(user:string,command:string,id:string|undefined,args:string[]):string|undefined {
-    if(!this.slack.mapper.config.ownerUserIds.includes(user))throw new Error('Owner only');
+    if(!this.slack.mapper.config.ownerUserIds.some(raw=>(this.slack.mapper.config.principalIds?.[raw]??raw)===user))throw new Error('Owner only');
     const s=this.core.messages.store;
     if(command==='conversations'||command==='projection-bindings'){
       const options=pageSchema.parse(id?JSON.parse([id,...args].join(' ')):{});
