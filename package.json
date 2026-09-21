@@ -12,7 +12,8 @@
     "test": "pnpm run build && vitest run",
     "check": "pnpm test",
     "start": "node dist/src/main.js start",
-    "config:check": "node dist/src/main.js check"
+    "config:check": "node dist/src/main.js check",
+    "deploy": "node dist/src/deployment/cli.js"
   },
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "0.0.77",

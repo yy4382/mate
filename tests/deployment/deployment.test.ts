@@ -1,0 +1,74 @@
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, expect, it } from 'vitest';
+import { daemonConfigSchema } from '../../src/daemon/config.js';
+import { createDeploymentPlan } from '../../src/deployment/plan.js';
+import { createReleaseManifest } from '../../src/deployment/release.js';
+import { deploymentSpecSchema } from '../../src/deployment/spec.js';
+import { renderMaintenanceWrapper, renderMountUnit, renderService } from '../../src/deployment/systemd.js';
+import { preflightDeployment, type InstallerHost } from '../../src/deployment/installer.js';
+
+const roots: string[] = [];
+afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+
+function config() {
+  return daemonConfigSchema.parse({ version: 2, mate: { ownerUserIds: ['owner'], budgets: { maxRuns: 10, maxTokens: 10000, maxCostUsd: 2, runTimeoutMs: 60000 }, agents: [
+    { id: 'research', name: 'Research', role: 'Research', model: { provider: 'anthropic', id: 'model', apiKeyEnv: 'MODEL_KEY' } },
+    { id: 'writer', name: 'Writer', role: 'Writer', model: { provider: 'anthropic', id: 'model', apiKeyEnv: 'MODEL_KEY' } },
+  ] }, adapters: { local: { humans: ['owner'], rooms: [{ id: 'room', agents: ['research', 'writer'], humans: ['owner'] }] } }, runtime: {
+    dataDir: '/var/lib/mate', workspaceManifest: '/etc/mate/workspaces.json', docker: { binary: '/usr/bin/docker', host: 'unix:///var/run/docker.sock', image: `sha256:${'a'.repeat(64)}`, resources: { memoryMb: 256, cpus: 1, pids: 64, tmpfsMb: 64 } },
+    limits: { maxActiveRuns: 1, maxBackendOperations: 2, workerIdleMs: 300000 }, workspaceGrants: [
+      { agentId: 'research', root: '/srv/shared', operations: ['read'] }, { agentId: 'writer', root: '/srv/shared', operations: ['read', 'write'] },
+    ], researchHosts: [],
+  } });
+}
+function spec() { return deploymentSpecSchema.parse({ version: 1, release: { source: '/candidate', gitCommit: 'abcdef1234567' }, configSource: '/input/mate.json', privateWorkspaces: [{ agentId: 'writer', capacityMiB: 768 }], externalWorkspaces: [{ root: '/srv/shared', capacityMiB: 1024 }] }); }
+const facts = { directoryBytes: () => 100 * 1024 * 1024, canonical: (path: string) => path };
+
+it('plans the fixed managed topology, shared external root, two releases, storage and memory bounds', () => {
+  const plan = createDeploymentPlan(spec(), config(), facts);
+  expect(plan.workspaces).toEqual([
+    expect.objectContaining({ kind: 'private', agentId: 'research', root: '/var/lib/mate/agents/research', capacityBytes: 512 * 1024 * 1024 }),
+    expect.objectContaining({ kind: 'private', agentId: 'writer', root: '/var/lib/mate/agents/writer', capacityBytes: 768 * 1024 * 1024 }),
+    expect.objectContaining({ kind: 'external', root: '/srv/shared', capacityBytes: 1024 * 1024 * 1024 }),
+  ]);
+  expect(plan.release).toMatchObject({ retainedCopies: 2, candidateBytes: 100 * 1024 * 1024, reservedBytes: 200 * 1024 * 1024 });
+  expect(plan.memory).toEqual({ daemonMiB: 512, maxConcurrentContainers: 2, perContainerMiB: 256, upperBoundMiB: 1024 });
+  expect(plan.storage.totalRequiredBytes).toBe(plan.storage.backingBytes + plan.storage.stateReserveBytes + plan.storage.releaseReserveBytes);
+});
+
+it('rejects topology gaps, extra entries, aliases, nesting and control-root grants', () => {
+  const base = spec(), cfg = config();
+  expect(() => createDeploymentPlan({ ...base, externalWorkspaces: [] }, cfg, facts)).toThrow('exactly cover');
+  expect(() => createDeploymentPlan({ ...base, externalWorkspaces: [...base.externalWorkspaces, { root: '/srv/extra', capacityMiB: 64 }] }, cfg, facts)).toThrow('exactly cover');
+  expect(() => createDeploymentPlan({ ...base, privateWorkspaces: [{ agentId: 'missing', capacityMiB: 64 }] }, cfg, facts)).toThrow('unknown Agent');
+  expect(() => createDeploymentPlan(base, cfg, { ...facts, canonical: path => path === '/srv/shared' ? '/srv/alias-target' : path })).toThrow('canonical');
+  const nested = daemonConfigSchema.parse({ ...cfg, runtime: { ...cfg.runtime, workspaceGrants: [{ agentId: 'research', root: '/var/lib/mate/shared', operations: ['read'] }] } });
+  expect(() => createDeploymentPlan({ ...base, externalWorkspaces: [{ root: '/var/lib/mate/shared', capacityMiB: 64 }] }, nested, facts)).toThrow(/overlap|must not/);
+});
+
+it('renders fixed systemd boundaries and a syntax-valid allowlist wrapper', () => {
+  const mounts = [{ root: '/var/lib/mate/agents/research', backingFile: '/var/lib/mate-volumes/private-research.ext4', unitName: 'var-lib-mate-agents-research.mount' }];
+  const mount = renderMountUnit(mounts[0]!), service = renderService(mounts, 512, ['/srv/shared']), wrapper = renderMaintenanceWrapper(['/srv/shared']);
+  expect(mount).toContain('Options=loop,rw,nodev,nosuid');
+  expect(service).toContain('SupplementaryGroups=docker'); expect(service).toContain('ProtectSystem=strict'); expect(service).toContain('CapabilityBoundingSet='); expect(service).toContain('MemoryMax=512M'); expect(service).toContain('/srv/shared');
+  expect(wrapper).toContain('case "${1-}"'); expect(wrapper).not.toContain('eval '); expect(wrapper).not.toContain(' "$@"\n'); expect(wrapper).toContain('checkpoint_name "$2"');
+  const root = mkdtempSync(join(tmpdir(), 'mate-wrapper-')); roots.push(root); const path = join(root, 'matectl'); writeFileSync(path, wrapper); expect(() => execFileSync('/bin/sh', ['-n', path])).not.toThrow();
+});
+
+it('binds release identity to lockfile, runtime, dependency inventory and native addons', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'mate-release-')); roots.push(root); mkdirSync(join(root, 'dist')); mkdirSync(join(root, 'node_modules')); mkdirSync(join(root, 'node_modules', 'pkg')); writeFileSync(join(root, 'dist', 'main.js'), 'one'); writeFileSync(join(root, 'node_modules', 'pkg', 'addon.node'), 'native'); writeFileSync(join(root, 'package.json'), '{}'); writeFileSync(join(root, 'pnpm-lock.yaml'), 'lockfileVersion: 9'); symlinkSync('pkg', join(root, 'node_modules', 'alias'));
+  const runtime = { platform: 'linux' as const, arch: 'x64', node: 'v24.21.0', modulesAbi: '137', packageManager: 'pnpm@10.33.0' };
+  const first = await createReleaseManifest(root, 'abcdef1234567', runtime); expect(first.nativeAddons).toHaveLength(1); expect(first.target).toMatchObject({ arch: 'x64', node: 'v24.21.0', modulesAbi: '137' });
+  writeFileSync(join(root, 'dist', 'main.js'), 'two'); const second = await createReleaseManifest(root, 'abcdef1234567', runtime); expect(second.releaseId).not.toBe(first.releaseId);
+  symlinkSync('/tmp', join(root, 'node_modules', 'escape')); await expect(createReleaseManifest(root, 'abcdef1234567', runtime)).rejects.toThrow('relative');
+});
+
+it('preflights through a fake host without mutating it and refuses resource or baseline gaps', () => {
+  const calls: string[] = [], host: InstallerHost = { platform: 'linux', arch: 'x64', node: 'v24.21.0', euid: () => 1000, read: () => 'ID=debian\nVERSION_ID="13"\n', assertRootExecutable: path => { calls.push(`binary:${path}`); }, run: (binary, args) => { calls.push(`${binary} ${args.join(' ')}`); return { code: binary === '/usr/bin/systemctl' ? 3 : 0, stdout: '{}', stderr: '' }; }, directoryBytes: () => 1024, canonical: path => path, availableBytes: () => 10 * 1024 ** 3, memoryMiB: () => 4096, existingInstall: () => undefined };
+  expect(preflightDeployment(spec(), config(), host).target.os).toBe('debian'); expect(calls.some(value => value.includes('image inspect'))).toBe(true); expect(calls.filter(value => value.startsWith('/')).every(value => !value.includes('mkfs'))).toBe(true);
+  expect(() => preflightDeployment(spec(), config(), { ...host, memoryMiB: () => 100 })).toThrow('memory');
+  expect(() => preflightDeployment(spec(), config(), { ...host, platform: 'darwin' })).toThrow('Debian 13');
+});

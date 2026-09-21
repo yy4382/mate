@@ -1,7 +1,7 @@
 import {LocalConsole} from './local/console.js';
 import { migrateConfiguration } from './daemon/migrate.js';
 import { lstatSync, readFileSync } from 'node:fs';
-import { resolve, join } from 'node:path';
+import { resolve, join, dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import pino from 'pino';
 import { builtinModels } from '@earendil-works/pi-ai/providers/all';
@@ -16,12 +16,22 @@ import {restoreCheckpoint} from './daemon/restore.js';
 import {sealCheckpointForService} from './daemon/checkpoint-format.js';
 import {requiredSlackBotScopes} from './slack/protocol.js';
 import {verifyDeploymentWorkspaces} from './deployment/runtime.js';
+import {runDoctor} from './deployment/doctor.js';
+import {runOfflineProbe} from './deployment/probe.js';
 
 export async function main(args = process.argv.slice(2)): Promise<void> {
   const [command, configPath, destination] = args;
   if (command === 'models') { process.stdout.write(JSON.stringify(builtinModels().getModels(configPath).map(m => ({ provider: m.provider, id: m.id, contextWindow: m.contextWindow })), null, 2) + '\n'); return; }
-  if (!['check','start','local','backup','restore','checkpoint-seal','migrate'].includes(command ?? '') || !configPath) throw new Error('Usage: mate check|start|local CONFIG; mate backup CONFIG DESTINATION; mate checkpoint-seal CONFIG CHECKPOINT SERVICE_UID SERVICE_GID; mate restore CONFIG BACKUP [--replace CURRENT_CHECKPOINT]; mate models [PROVIDER]');
+  if (!['check','doctor','offline-probe','start','local','backup','restore','checkpoint-seal','migrate'].includes(command ?? '') || !configPath) throw new Error('Usage: mate check|doctor|offline-probe|start|local CONFIG; mate backup CONFIG DESTINATION; mate checkpoint-seal CONFIG CHECKPOINT SERVICE_UID SERVICE_GID; mate restore CONFIG BACKUP [--replace CURRENT_CHECKPOINT]; mate models [PROVIDER]');
   const config = daemonConfigSchema.parse(JSON.parse(readFileSync(resolve(configPath), 'utf8')));
+  const releaseRoot=process.argv[1]?dirname(dirname(dirname(resolve(process.argv[1])))):resolve('.');
+  if(command==='doctor'){
+    if(destination&&destination!=='--allow-missing-secrets')throw new Error('Unknown doctor option');if(args[3])throw new Error('Unknown doctor option');
+    const report=await runDoctor(config,undefined,{releaseRoot,requireSecrets:destination!=='--allow-missing-secrets'});process.stdout.write(`${JSON.stringify(report,null,2)}\n`);if(!report.healthy)process.exitCode=1;return;
+  }
+  if(command==='offline-probe'){
+    if(destination)throw new Error('Unknown offline-probe option');const report=await runOfflineProbe(config,releaseRoot);process.stdout.write(`${JSON.stringify(report,null,2)}\n`);return;
+  }
   if(command==='checkpoint-seal'){
     if(!destination||!/^\d+$/.test(args[3]??'')||!/^\d+$/.test(args[4]??'')||args[5])throw new Error('Usage: mate checkpoint-seal CONFIG CHECKPOINT SERVICE_UID SERVICE_GID');
     const serviceUid=Number(args[3]),serviceGid=Number(args[4]);if(!Number.isSafeInteger(serviceUid)||!Number.isSafeInteger(serviceGid))throw new Error('Service uid/gid must be safe integers');
