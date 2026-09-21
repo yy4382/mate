@@ -27,6 +27,13 @@ it('accepts exact independent preallocated ext4 loopback mounts and returns thei
  expect([...verified.roots]).toEqual([['research',`${data}/agents/research`],['writer',`${data}/agents/writer`]]);expect(verified.externalRoots).toEqual(['/srv/project']);expect(verified.protectedPaths).toEqual([manifestPath,...f.manifest.mounts.map(item=>item.backingFile)]);
 });
 
+it('accepts equivalent systemd hardening mount layers but rejects a conflicting stack',()=>{
+ const f=fixture();f.mounts.push({...f.mounts[0]!});
+ expect(()=>verifyWorkspaceManifest(manifestPath,{dataDir:data,stateDir:state,agentIds:['research','writer'],externalRoots:['/srv/project']},f.host)).not.toThrow();
+ f.mounts.push({...f.mounts[0]!,source:'/dev/loop999',majorMinor:'7:999'});
+ expect(()=>verifyWorkspaceManifest(manifestPath,{dataDir:data,stateDir:state,agentIds:['research','writer'],externalRoots:['/srv/project']},f.host)).toThrow('conflicting mount layers');
+});
+
 it('accepts ext4 metadata overhead at the 64 MiB minimum and enforces the 16 MiB allowance',()=>{
  const minimum=64*1024*1024,prepare=(usable:number)=>{const f=fixture();for(const entry of f.manifest.mounts){entry.capacityBytes=minimum;const backing=f.pathFacts.get(entry.backingFile)!;backing.size=minimum;backing.blocks=minimum/512;}f.host.statfs=()=>({type:0xef53,bsize:4096,blocks:usable/4096,bavail:Math.max(0,usable/4096-1024),files:16384,ffree:16000});return f;};
  const representative=prepare(55*1024*1024);expect(()=>verifyWorkspaceManifest(manifestPath,{dataDir:data,stateDir:state,agentIds:['research','writer'],externalRoots:['/srv/project']},representative.host)).not.toThrow();

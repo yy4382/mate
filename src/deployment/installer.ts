@@ -71,7 +71,7 @@ export const nodeInstallerHost = (): InstallerHost => ({
 });
 
 function checked(host: InstallerHost, binary: string, args: readonly string[], label: string): string {
-  const result = host.run(binary, args); if (result.code !== 0) throw new Error(`${label}: ${result.stderr.trim().slice(0, 500)}`); return result.stdout.trim();
+  const result = host.run(binary, args); if (result.code !== 0) throw new Error(`${label}: ${(result.stderr.trim() || result.stdout.trim()).slice(0, 1000)}`); return result.stdout.trim();
 }
 function hash(value: string): string { return createHash('sha256').update(value).digest('hex'); }
 function stable(value: unknown): string {
@@ -166,7 +166,7 @@ async function publishRelease(host: InstallerHost, spec: DeploymentSpec, journal
     owner(item.stage, 0, 0, 0o755, 'directory');
     for (const name of readdirSync(item.stage)) checked(host, '/usr/bin/rm', ['-rf', '--one-file-system', '--', join(item.stage, name)], 'Cannot reset bound release staging');
     for (const name of ['dist', 'node_modules', 'package.json', 'pnpm-lock.yaml']) checked(host, '/usr/bin/cp', ['-a', '--reflink=auto', join(source, name), join(item.stage, name)], `Cannot copy release ${name}`);
-    checked(host, '/usr/bin/chown', ['-R', 'root:root', item.stage], 'Cannot seal release ownership'); checked(host, '/usr/bin/chmod', ['-R', 'go-w', item.stage], 'Cannot seal release modes');
+    checked(host, '/usr/bin/chown', ['-hR', 'root:root', item.stage], 'Cannot seal release ownership'); checked(host, '/usr/bin/chmod', ['-R', 'go-w', item.stage], 'Cannot seal release modes');
     const manifest = await createReleaseManifest(item.stage, spec.release.gitCommit); atomicExact(join(item.stage, 'RELEASE.json'), `${JSON.stringify(manifest, null, 2)}\n`, 0, 0, 0o444);
     journal = { ...journal, release: { ...journal.release, releaseId: manifest.releaseId, status: 'copied' } }; replaceJournal(journalPath, journal);
   }

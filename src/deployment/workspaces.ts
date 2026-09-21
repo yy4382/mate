@@ -77,8 +77,10 @@ export function verifyWorkspaceManifest(path:string,expected:WorkspaceExpectatio
   if(backingLink.size!==entry.capacityBytes||backingLink.blocks*512<entry.capacityBytes)throw new Error('Workspace backing file is sparse or has the wrong capacity');
   const rootStat=host.stat(root);if(rootStat.uid!==entry.ownerUid||rootStat.gid!==entry.ownerGid||rootStat.uid!==host.uid()||rootStat.gid!==host.gid()||(rootStat.mode&0o077)!==0)throw new Error('Workspace mount owner or mode does not match the daemon');
   if(rootStat.dev===state.dev||devices.has(rootStat.dev))throw new Error('Workspace mount must use a distinct filesystem');devices.add(rootStat.dev);
-  const matches=mounts.filter(mount=>resolve(mount.target)===root);if(matches.length!==1)throw new Error('Workspace root is not one exact mountpoint');
-  const mount=matches[0]!;if(mount.root!=='/'||mount.filesystem!=='ext4'||!mount.source.startsWith('/dev/loop')||!mount.options.includes('rw')||!mount.options.includes('nodev')||!mount.options.includes('nosuid'))throw new Error('Workspace mount is not the required ext4 loopback boundary');
+  const matches=mounts.filter(mount=>resolve(mount.target)===root);if(matches.length<1)throw new Error('Workspace root is not one exact mountpoint');
+  const mount=matches[0]!,equivalent=(candidate:MountFacts)=>candidate.root===mount.root&&candidate.filesystem===mount.filesystem&&candidate.source===mount.source&&candidate.majorMinor===mount.majorMinor&&candidate.backingFile===mount.backingFile&&['rw','nodev','nosuid'].every(option=>candidate.options.includes(option));
+  if(mount.root!=='/'||mount.filesystem!=='ext4'||!mount.source.startsWith('/dev/loop')||!mount.options.includes('rw')||!mount.options.includes('nodev')||!mount.options.includes('nosuid'))throw new Error('Workspace mount is not the required ext4 loopback boundary');
+  if(!matches.every(equivalent))throw new Error('Workspace root has conflicting mount layers');
   if(host.realpath(mount.backingFile)!==backing)throw new Error('Workspace loopback identity does not match its manifest');
   const filesystem=host.statfs(root),total=BigInt(filesystem.bsize)*BigInt(filesystem.blocks),declared=BigInt(entry.capacityBytes),metadataAllowance=declared/10n>16n*1024n*1024n?declared/10n:16n*1024n*1024n;
   if(filesystem.type!==0xef53||total>declared||total+metadataAllowance<declared)throw new Error('Workspace filesystem capacity does not match its manifest');
