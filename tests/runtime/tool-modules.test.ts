@@ -1,0 +1,103 @@
+import {afterEach,expect,it} from 'vitest';
+import {Store} from '../../src/storage/store.js';
+import {configSchema} from '../../src/config.js';
+import {configFixture} from '../helpers/config.js';
+import {Messages,Output,migrateCurrentRuntime} from '../helpers/canonical-slack.js';
+import {Collaboration} from '../../src/collaboration/service.js';
+import {Broker} from '../../src/policy/broker.js';
+import {ToolRouter,builtInToolSpecs,fingerprintToolSpecs,operationContractFingerprint,operationDocumentation,validateToolModules,type ToolModule} from '../../src/runtime/tools.js';
+import {fixtureTarget} from '../helpers/canonical-slack.js';
+import type {ConversationDirectory} from '../../src/conversations/directory.js';
+import {buildBaseline} from '../../src/runtime/prompt.js';
+
+const stores:Store[]=[];afterEach(()=>stores.splice(0).forEach(store=>store.close()));
+function setup(directory?:ConversationDirectory){
+  const config=configSchema.parse(configFixture),store=new Store(':memory:');stores.push(store);const messages=new Messages(store,config);migrateCurrentRuntime(store);
+  const c=new Collaboration(store,messages,new Output(messages,{post:async()=>({ts:'200.000001'})}),config),broker=new Broker(store,c,{execute:async()=>({code:0,stdout:'',stderr:'',truncated:false})},[]);
+  store.register('research','v1',[]);messages.membership('research','CTEST',true);const work=c.createWork('tools',fixtureTarget('CTEST','100.000001'));c.enqueue('research',work,'start',{});const run=store.beginRun('research')!;store.input(run,{});
+  return{store,c,work,run,router:new ToolRouter(c,broker,undefined,directory),broker};
+}
+const expected=`
+history.page history.search history.around history.fetch
+conversations.capabilities conversations.discover conversations.join conversations.leave conversations.refresh conversations.list conversations.members conversations.openDM
+attention.peek attention.read attention.resolve attention.defer attention.mute
+messages.recent messages.read messages.search messages.send messages.watch inbox.list inbox.read inbox.ack
+works.list works.select tasks.list tasks.read tasks.events tasks.byMessage tasks.intents tasks.retry tasks.continue tasks.discard tasks.create tasks.claim tasks.unclaim tasks.transfer tasks.wait tasks.update tasks.delegate
+reminders.list reminders.read reminders.log reminders.finish reminders.create reminders.edit reminders.cancel schedules.list schedules.create schedules.cancel
+actions.list actions.read sessions.status sessions.checkpoint sessions.reset environment.info budget.read agents drafts.list drafts.read drafts.retry drafts.continue drafts.revise drafts.discard
+file.read_bytes file.write_bytes file.read file.write file.list file.stat file.search file.mkdir file.move file.remove file.edit exec attachments.save research.read artifact.publish artifact.revise`.trim().split(/\s+/);
+
+it('registers every public operation exactly once with complete policies and stable documentation order',async()=>{
+  expect(builtInToolSpecs.map(entry=>entry.name)).toEqual(expected);expect(new Set(expected).size).toBe(expected.length);expect(Object.isFrozen(builtInToolSpecs)).toBe(true);
+  const allowed={work:['none','current','task','reminder','select','broker-managed'],seat:['deny','redacted-read','clean-workspace','held-send'],effect:['pure-read','atomic-recorded','broker-recorded','adapter-recorded'],replay:['immutable','refreshable','boundary-owned']};
+  for(const entry of builtInToolSpecs){expect(Object.isFrozen(entry)).toBe(true);expect(entry.description.length).toBeGreaterThan(10);expect(typeof entry.schema.parse).toBe('function');expect(allowed.work).toContain(entry.workPolicy);expect(allowed.seat).toContain(entry.seatPolicy);expect(allowed.effect).toContain(entry.effectPolicy);expect(allowed.replay).toContain(entry.replayPolicy);expect(typeof entry.authorize).toBe('function');expect(typeof entry.postAwait).toBe('function');expect(typeof entry.handler).toBe('function');}
+  expect(operationDocumentation).toContain(`Tool contract: ${operationContractFingerprint}`);expect(operationDocumentation.match(/Available: (.*)\.\n/)?.[1]?.split(', ')).toEqual(expected);
+  const changed=fingerprintToolSpecs([{...builtInToolSpecs[0]!,description:builtInToolSpecs[0]!.description+' changed'},...builtInToolSpecs.slice(1)] as any);expect(changed).not.toBe(operationContractFingerprint);
+  const agent=configSchema.parse(configFixture).agents[0]!;expect(buildBaseline(agent,operationDocumentation.replace(operationContractFingerprint,changed)).configVersion).not.toBe(buildBaseline(agent,operationDocumentation).configVersion);
+  const {router,run,work}=setup(),listed=(await router.call(run,work,'list','tools.list',{},new AbortController().signal)).value as {name:string}[];expect(listed.map(item=>item.name)).toEqual(expected);
+  for(const name of expected){const described=(await router.call(run,work,`describe-${name}`,'tools.describe',{name},new AbortController().signal)).value as any;expect(described.name).toBe(name);expect(described.inputSchema).toHaveProperty('$schema');}
+});
+
+it('fails closed for duplicate, reserved, incomplete and unknown module specifications',()=>{
+  setup();const base=builtInToolSpecs[0]!;
+  const build=(modules:ToolModule[])=>validateToolModules(modules);
+  expect(()=>build([{domain:'x',specs:[base,base]}])).toThrow(/duplicate/);
+  expect(()=>build([{domain:'x',specs:[{...base,name:'tools.escape'}]}])).toThrow(/reserved/);
+  expect(()=>build([{domain:'x',specs:[{...base,authorize:undefined} as any]}])).toThrow(/Incomplete/);
+  expect(()=>build([{domain:'x',specs:[{...base,workPolicy:'ambient'} as any]}])).toThrow(/unknown/);
+  expect(()=>build([{domain:'x',specs:[{...base,effectPolicy:'atomic-recorded'} as any]}])).toThrow(/effect/);
+  expect(()=>build([{domain:'x',specs:[]}])).toThrow(/module/);
+});
+
+it('preserves immutable and refreshable replay while unknown or executing calls never dispatch',async()=>{
+  const {router,run,work,store}=setup(),signal=new AbortController().signal;
+  const checkpoint=await router.call(run,work,'checkpoint','sessions.checkpoint',{text:'first'},signal);expect((checkpoint.value as any).checkpoint.text).toBe('first');
+  expect(await router.call(run,work,'checkpoint','sessions.checkpoint',{text:'first'},signal)).toEqual(checkpoint);
+  await expect(router.call(run,work,'checkpoint','sessions.checkpoint',{text:'changed'},signal)).rejects.toThrow(/identity conflict/);expect((router.sessions.status('research') as any).checkpoint.text).toBe('first');
+  expect(((await router.call(run,work,'status','sessions.status',{},signal)).value as any).checkpoint.text).toBe('first');store.db.prepare("UPDATE agent_checkpoints SET text='fresh' WHERE agent_id='research'").run();expect(((await router.call(run,work,'status','sessions.status',{},signal)).value as any).checkpoint.text).toBe('fresh');
+  const before=(store.db.prepare('SELECT count(*) n FROM actions').get() as {n:number}).n;await expect(router.call(run,work,'unknown','missing.operation',{},signal)).rejects.toThrow('Unknown operation');expect((store.db.prepare('SELECT count(*) n FROM actions').get() as {n:number}).n).toBe(before);
+  const args={target:fixtureTarget('CTEST','100.000001'),title:'must not appear'},actionId=`${run.sessionId}:busy`;store.prepareAction(run,actionId,{workId:work,operation:'tasks.create',args});store.startAction(run,actionId);
+  await expect(router.call(run,work,'busy','tasks.create',args,signal)).rejects.toThrow('Uncertain tool action');expect((store.db.prepare('SELECT count(*) n FROM tasks').get() as {n:number}).n).toBe(0);
+});
+
+it('replays pre-module receipts with the original selected-work request identity',async()=>{
+  const {router,run,work,store,c}=setup(),other=c.createWork('other',{conversationId:'CTEST'}),taskId=c.createTask('research',other,{conversationId:'CTEST'},'cross-work'),args={taskId,expectedVersion:0,status:'done' as const,result:'legacy'},actionId=`${run.sessionId}:legacy-cross-work`;
+  store.prepareAction(run,actionId,{workId:work,operation:'tasks.update',args});store.startAction(run,actionId);store.settleAction(run,actionId,'succeeded',{value:{legacyReceipt:true},wait:false});
+  await expect(router.call(run,work,'legacy-cross-work','tasks.update',args,new AbortController().signal)).resolves.toEqual({value:{legacyReceipt:true},wait:false});expect(c.task(taskId).status).toBe('todo');
+});
+
+it('authorizes task and reminder effects against their bound work while retaining legacy receipt identity',async()=>{
+  const {router,run,work,c,store}=setup(),other=c.createWork('other',{conversationId:'CTEST'}),taskId=c.createTask('research',other,{conversationId:'CTEST'},'cross-work');c.claim('research',taskId);const signal=new AbortController().signal;
+  const held=(await router.call(run,work,'cross-task','tasks.update',{taskId,expectedVersion:c.task(taskId).version,status:'done',result:'evidence'},signal)).value as {intentId:string;holdId:string};
+  expect(store.db.prepare("SELECT work_id FROM task_intents WHERE id=?").get(`${run.sessionId}:cross-task`)).toEqual({work_id:other});
+  const unrelated=c.createWork('unrelated',{conversationId:'CTEST'});c.selectWork(run,unrelated);store.db.prepare('UPDATE works SET tokens=max_tokens WHERE id=?').run(unrelated);
+  await router.call(run,work,'continue-cross-task','tasks.continue',{intentId:held.intentId,holdId:held.holdId,acknowledge:'apply_despite_unread_or_changes'},signal);expect(c.task(taskId).status).toBe('done');
+  const reminder=(await router.call(run,work,'cross-reminder','reminders.create',{target:{conversationId:'CTEST'},content:'follow the task',nextAt:Date.now()+10000,timezone:'UTC',taskId},signal)).value as {work_id:string};expect(reminder.work_id).toBe(other);
+  const request=JSON.parse((store.action(`${run.sessionId}:cross-reminder`) as any).request);expect(request.workId).toBe(unrelated);
+});
+
+it('binds canonical message claims to the existing task work instead of an unrelated selected work',async()=>{
+  const {router,run,work,c,store}=setup(),target=fixtureTarget('CTEST','100.000001'),bound=c.createWork('bound-message',target),messageId=target.threadId!;
+  c.messages.record({id:messageId,conversationId:target.conversationId,rootId:messageId,order:'100000001',revision:'100000001',text:'claim this',author:{kind:'human',id:'UOWNER'},origin:'participant',mentions:[],attachments:[],deleted:false},['research']);
+  c.createTask('research',bound,target,'claim this',undefined,{messageKey:messageId});const unrelated=c.createWork('unrelated-message',target);c.selectWork(run,unrelated);store.db.prepare('UPDATE works SET tokens=max_tokens WHERE id=?').run(unrelated);
+  await expect(router.call(run,work,'claim-message','tasks.claim',{message:{messageId},expectedVersion:0},new AbortController().signal)).resolves.toHaveProperty('value');
+  expect(store.db.prepare('SELECT work_id FROM task_intents WHERE id=?').get(`${run.sessionId}:claim-message`)).toEqual({work_id:bound});
+});
+
+it('applies post-await run fences and current-work policy centrally',async()=>{
+  let release!:()=>void,started!:()=>void;const entered=new Promise<void>(resolve=>started=resolve),gate=new Promise<void>(resolve=>release=resolve);
+  const directory={spaces:async()=>{started();await gate;return{spaces:[],incomplete:false};}} as unknown as ConversationDirectory;
+  const first=setup(directory),pending=first.router.call(first.run,first.work,'spaces','conversations.list',{},new AbortController().signal);await entered;first.store.finish(first.run);release();await expect(pending).rejects.toThrow(/run/i);
+  const second=setup();second.store.db.prepare("UPDATE works SET state='paused' WHERE id=?").run(second.work);
+  await expect(second.router.call(second.run,second.work,'watch','messages.watch',{target:{conversationId:'CTEST'},active:true},new AbortController().signal)).rejects.toThrow(/paused|cancelled/);
+  await expect(second.router.call(second.run,second.work,'status','sessions.status',{},new AbortController().signal)).resolves.toHaveProperty('value');
+});
+
+it('uses one seat policy for direct calls, tools.call, list and describe',async()=>{
+  const {router,run,work,store}=setup();store.db.prepare('INSERT INTO review_seats VALUES(?,?,?,?,1)').run('research',JSON.stringify({conversationId:'CTEST'}),'brief','/synthetic');const signal=new AbortController().signal;
+  const names=((await router.call(run,work,'list','tools.list',{},signal)).value as {name:string}[]).map(item=>item.name);expect(names).not.toContain('tasks.list');expect(names).toContain('messages.send');
+  await expect(router.call(run,work,'describe-denied','tools.describe',{name:'tasks.list'},signal)).rejects.toThrow(/isolates/);
+  await expect(router.call(run,work,'direct-denied','tasks.list',{},signal)).rejects.toThrow(/isolates/);
+  await expect(router.call(run,work,'alias-denied','tools.call',{name:'tasks.list',input:{}},signal)).rejects.toThrow(/isolates/);
+  await expect(router.call(run,work,'describe-held','tools.describe',{name:'messages.send'},signal)).resolves.toHaveProperty('value');
+});

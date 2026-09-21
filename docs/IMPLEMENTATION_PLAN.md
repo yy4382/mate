@@ -27,7 +27,7 @@ Git：在codex/vps-first-release本地分支管理；先保存已审核及进行
 | E1 核心模块边界 | 提取conversation/attention/gate/review领域服务、平台目录port及显式composition；架构依赖检查 | E0 PASS | 原行为回归、核心不导入Slack SDK/模块及daemon；说明兼容债务，不假称ID已解耦 | PASS，review_e1_boundaries，178 tests |
 | E2 内部身份与引用 | Agent定义/平台binding、opaque内部引用、Slack映射与local adapter、迁移清单 | E1 PASS | 非Slack标识全链路、本地同伴通信、同外部多App去重、旧库/JSON/unknown恢复、配置兼容 | PASS，E2a–E2c3b |
 | E3 参与和历史 | directory参与控制、attention规则、分页搜索与around/history coverage | E2 PASS | mute mention/DM、defer、撤权并发、局部读不授全局view、新成员历史、unsupported明确 | PASS，E3a–E3b |
-| E4 协作与持续工作 | 按领域分拆工具处理器；任务/提醒语义与文档；结构化状态/activity查询 | E3 PASS | 自主直接协作、认领/让位、等待/复核/后台提醒、恢复、系统事件不循环唤醒 | TODO |
+| E4 协作与持续工作 | 按领域分拆工具处理器；任务/提醒语义与文档；结构化状态/activity查询 | E3 PASS | 自主直接协作、认领/让位、等待/复核/后台提醒、恢复、系统事件不循环唤醒 | PASS，E4a/E4b/E4c |
 | E5 工作能力与prompt | 环境/研究路径/成果闭环、手册与充分的行为约定；按前序工具同步完善 | E4 PASS | 实际授权环境能力发现与失败、附件到成果、prompt/tool/environment覆盖矩阵 | TODO |
 | E6 实验验收 | 预配置少量成员的多选择场景、本地入口与真实接入操作说明 | E5 PASS | pnpm检查、故障恢复、独立架构审计；真实Slack/provider明确单列未验项 | TODO |
 
@@ -214,10 +214,12 @@ E4按用户体验与架构风险拆成三个顺序gate，不把activity或重构
 |---|---|---|---|---|
 | E4a 协作恢复面 | 先集中task transition/event invariant，再实现platform-neutral TaskBoard分页/read/events；reminder firing/result双游标与可选回执 | E3 PASS | 超过100个旧任务/事件仍可发现且recovery摘要给coverage；外部message-task还需actor snapshot可见；review可保留地接手或显式退回doing；private reminder不发频道，fired/run/result分开；索引计划适合低配VPS | PASS，review_e4a，299普通checks/7环境skip |
 | E4b owner status/activity | OperationsView直接读权威状态并合并domain events；仅为无事件来源的事实增加窄operational_facts；Controls/local/未来Slack或web共用 | E4a PASS | owner在service内认证；per-source cursor/coverage；不读raw request/receipt/error/result/正文/path；operational fact有唯一source key与事务故障测试；读取不唤醒Agent，投影策略留adapter | PASS，review_e4b，309普通checks/7环境skip |
-| E4c 工具模块组合 | ToolModule元数据与按领域handler；schema/说明/seat/action-work策略随handler注册；补齐任务/提醒prompt与文档 | E4b PASS | 现有operation/receipt重放兼容；未知工具/工具发现/seat隔离/预算与work检查不退化；不做通用插件框架，不规定任务树或总管流程 | TODO |
+| E4c 工具模块组合 | ToolModule元数据与按领域handler；schema/说明/seat/action-work策略随handler注册；补齐任务/提醒prompt与文档 | E4b PASS | 现有operation/receipt重放兼容；未知工具/工具发现/seat隔离/预算与work检查不退化；不做通用插件框架，不规定任务树或总管流程 | PASS，review_e4c，314普通checks/7环境skip |
 
 E4a–c分别经过独立软件工程/产品语义红队。E4b的activity是供人类查看与未来adapter投影的事实索引，不是第二份业务状态、全量日志平台或Agent唤醒源；E4c只解决当前composition内聚性，不提前实现动态插件系统。
 
 E4a PASS：review_e4a，299普通checks/7环境skip。集中TaskTransitions/TaskBoard、v22 evidence-only迁移、review接手语义、外部message snapshot可见性、低配有界分页与private reminder firing/run/receipt/result恢复面。红队发现并复验mutation绕过、事务边界、run状态遗漏、冲突creator误回填、legacy误标、稀疏无界扫描及parent owner取消不可见child draft；全部修复，进入E4b owner status/activity。
 
 E4b PASS：review_e4b，309普通checks/7环境skip。新增owner鉴权的platform-neutral OperationsView、权威状态DTO、多来源activity向量游标/coverage及窄事务事实，local与Slack control共用。红队发现并复验可变legacy导致coverage误报、低配查询缺索引、Slack截断生成坏JSON、事实契约过宽/投影丢字段及run终态绕过事实；全部修复。状态集合当前有明确的100项上限与truncated/atLeast但无继续游标，按单用户首版规模非阻断延期，进入E4c。
+
+E4c PASS：review_e4c，314普通checks/7环境skip。82个operation拆为四个固定内建ToolModule，完整判别spec与中央解析/seat/work/effect/replay/transaction/fence执行取代单体switch；旧request identity和回执兼容。红队发现并复验seat标签未被中央充分消费、held intent与canonical message claim错误受无关selected work阻挡、完整工具契约未进入session configVersion；全部修复。生产不接受运行时module注入，contract fingerprint覆盖schema/description/四策略。E4整体完成，进入E5真实工作能力与prompt覆盖。

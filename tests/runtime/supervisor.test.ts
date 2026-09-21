@@ -21,7 +21,7 @@ function setup(factory?: (id: string) => Worker) {
   supervisor.register();
   for (const agent of config.agents) for (const channel of ['CTEST','CTWO']) messages.membership(agent.id, channel, true);
   const work = collaboration.createWork('human:one', fixtureTarget('CTEST','100.000001'));
-  cleanups.push(() => { supervisor.close(); store.close(); }); return { config, store, collaboration, supervisor, router, work };
+  cleanups.push(() => { supervisor.close(); store.close(); }); return { config, store, collaboration, supervisor, router, broker, work };
 }
 function last(store: Store, agent: string) {
   const row = store.db.prepare('SELECT session_id FROM agents WHERE id=?').get(agent) as { session_id: string };
@@ -179,20 +179,6 @@ it('discovery aliases preserve grants, receipts and strict actor schemas for fil
  await expect(router.call(run,work,'spoof','tools.call',{name:'file.list',input:{grantId:'missing',path:'.',agentId:'writer'}},signal)).rejects.toThrow();
  await expect(router.call(run,work,'recurse','tools.call',{name:'tools.call',input:{}},signal)).rejects.toThrow('Unknown');
 });
-it('registered adapters cannot bypass a review seat through direct or discovery calls',async()=>{
- const{store,collaboration:c,work,router}=setup();c.enqueue('research',work,'adapter',{});const run=store.beginRun('research')!;store.input(run,{});const signal=new AbortController().signal;
- const {z}=await import('zod');let called=0;router.environment.register({name:'custom.external',description:'test',schema:z.object({}).strict(),execute:async()=>{called++;return{value:'external'};}});
- store.db.prepare('INSERT INTO review_seats VALUES(?,?,?,?,1)').run('research',JSON.stringify({conversationId:'CTEST'}),'brief','/synthetic');
- await expect(router.call(run,work,'direct','custom.external',{},signal)).rejects.toThrow('review seat');
- await expect(router.call(run,work,'alias','tools.call',{name:'custom.external',input:{}},signal)).rejects.toThrow('review seat');expect(called).toBe(0);
-});
-it('prototype-named registered adapters still obey stopped work',async()=>{
- const{store,collaboration:c,work,router}=setup();c.enqueue('research',work,'adapter-work',{});const run=store.beginRun('research')!;store.input(run,{});const {z}=await import('zod');let called=0;
- router.environment.register({name:'constructor',description:'test',schema:z.object({}).strict(),execute:async()=>{called++;return{value:null};}});
- store.db.prepare("UPDATE works SET state='paused' WHERE id=?").run(work);
- await expect(router.call(run,work,'stopped-adapter','tools.call',{name:'constructor',input:{}},new AbortController().signal)).rejects.toThrow();expect(called).toBe(0);
-});
-
 it('model context replacement waits for run completion and retains durable identity and debt',async()=>{
  let created=0,closed=0,first=true;let restored='';
  const{store,collaboration:c,work,supervisor,router}=setup(()=>{created++;return{close:()=>{closed++;},run:async(spec,hooks)=>{

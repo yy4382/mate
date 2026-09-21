@@ -1,4 +1,4 @@
-> 2026-09-21：E1–E3已完成平台无关会话、投影、动态配置、参与和有界历史；E4a补齐协作恢复面，E4b补齐owner安全状态/activity。E4c 工具组合仍待实现。当前阶段与债务见IMPLEMENTATION_PLAN和ARCHITECTURE。
+> 2026-09-21：E1–E3已完成平台无关会话、投影、动态配置、参与和有界历史；E4a补齐协作恢复面，E4b补齐owner安全状态/activity，E4c已把工具组合拆为内建领域模块并统一策略执行。当前阶段与债务见IMPLEMENTATION_PLAN和ARCHITECTURE。
 
 # Mate 当前调用链、能力与边界
 
@@ -22,7 +22,7 @@ flowchart TD
   Restore --> Worker[WorkerClient → serveWorker → Engine]
   Worker --> Pi[Pi Agent.continue]
   Pi --> Journal[message_end → IPC → journal ACK]
-  Journal --> Tool[ToolRouter.call → ToolEnvironment]
+  Journal --> Tool[ToolRouter.call → policy executor → ToolModule]
   Tool --> Pi
   Pi --> Finish[结算 / finish / snapshot / continuation]
 ```
@@ -93,9 +93,13 @@ tasks.list按owned、assigned、available、all-visible分页；cursor绑定acto
 
 ## 工具与执行的实际路径
 
+`ToolRouter`只处理发现别名、严格解析、seat/work策略、动作重放和await后的run/abort/ACL/work fence。82个内建operation由conversation-history、coordination-reminders、session-status和capabilities四个静态`ToolModule`组合；每个spec必须同时注册schema、说明、work/seat/effect/replay策略、参数授权器、fence和handler。缺字段、未知策略、重复名字、保留`tools.*`或不相容的effect/replay/seat组合会在启动时失败。生产Router只装配这组经审核的静态模块，不接受运行时module注入；未来增加平台或CLI能力时应通过同一完整spec组合并重新发布，而不是在路由switch或adapter里另开授权旁路。
+
+`atomic-recorded`本地操作把原operation+args、领域写入和settle放在一个SQLite事务；immutable重放返回旧回执，refreshable读取重查当前状态，executing/unknown不重放。为兼容重构前已经落盘的回执，action identity仍保留调用时所选work；task/reminder（包括held intent）workPolicy另行把授权和实际领域写入绑定到对象所属work。broker/adapter边界已有自己的receipt，不再由Router套第二份action。direct调用与`tools.call`、list、describe使用同一spec和seat策略。name、description、输入JSON schema及四类策略形成稳定contract fingerprint并进入system prompt hash；任何这些契约变化都要求显式session配置迁移。
+
 | 能力 | 调用链 | 当前契约 |
 |---|---|---|
-| 发现 | ToolEnvironment.list/describe/execute | 精确Zod schema；可信host adapter可扩展，模型不能安装adapter |
+| 发现 | ToolRouter registry → ToolModule specs | 精确Zod schema和稳定顺序；direct/alias/list/describe同一策略；模型不能安装module |
 | 交流空间 | ToolRouter → Directory → acting Slack client | 已加入空间/成员/DM；权限变化重查，有界分页 |
 | 历史 | ToolRouter → ConversationHistory → 可选 HistorySource | 本地分页/搜索/around；acting installation有界回填；quiet ingestion与明确coverage/gap |
 | 文件 | ToolRouter → Broker → SandboxBackend → 固定SRT helper | read/list/stat/search/write/edit/move/remove/mkdir及binary；root/symlink检查 |

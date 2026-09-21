@@ -46,7 +46,7 @@ Harness 让这些选择可观察、可执行、可恢复。预算和授权约束
 | FreshnessGate | 基于已呈现版本检查send和任务变更；持久draft/held decision；显式结果 | 不审查观点质量、命令风险；不以全workspace变化锁住一个thread |
 | AgentRuntime | 单Agent主通道、自然断点通知、跨事项上下文、恢复/换session | 不将run永久绑定一个task/work；不让普通消息无条件中断执行 |
 | BudgetLedger | Agent持续账户+可选事项额度、预留/结算、暂停与补额 | 不把账户ID当ACL；不靠每次human消息创建新预算，也不允许模型自行无限增额 |
-| ToolEnvironment | 工具注册、能力说明、workspace、文件/终端/研究/附件与扩展adapter | 不把一次性无网络容器等同于所有Agent唯一合法环境 |
+| ToolModule registry | 内建领域工具的schema、说明、work/seat/effect/replay策略、授权、fence与handler；组合workspace、文件/终端/研究/附件adapter | 不允许模型动态安装module，不把一次性无网络容器等同于所有Agent唯一合法环境 |
 | ExecutionBoundary | 规范化副作用、身份/授权/停止、receipt、可替换backend | 当前无Jev/命令审查；未来审查独立扩展，不借消息门控恢复它 |
 
 一个run可以处理多个授权事项；每个有成本动作绑定daemon验证的预算账户和operation identity，taskRef用于归属而非普遍权限。账户选择不能抹掉债务、重置循环额度或伪造owner授权。一个事项额度耗尽不应让整个Agent失去读取其他消息的能力；可有显式、有限的控制/通知预算，并单独记账。
