@@ -49,7 +49,7 @@ runtime.docker字段：
 - image：sha256:后64位固定镜像ID。
 - network：none（默认）或bridge（可路由局域网和互联网）。
 
-镜像须包含需要的工具，并支持当前UID/GID访问/workspace。私有root在配置Docker后获得exec。workspaceGrants指定agentId、绝对root和read/write/exec；应用、DB和其他Agent私有目录不可作为共享grant。需要并行改同一项目时配置独立worktree。scope内直接执行，停止/取消由daemon和backend落实。
+镜像须包含需要的工具，并支持当前UID/GID访问/workspace。私有root在配置Docker后获得exec。workspaceGrants指定agentId、绝对root和read/write/exec，可用可选的小写label帮助Agent选择；应用、DB和其他Agent私有目录不可作为共享grant。需要并行改同一项目时配置独立worktree。scope内直接执行，停止/取消由daemon和backend落实。environment.info按当前work报告仍有效的grant、相对路径规则、执行/网络、已知URL读取及输入输出adapter支持；它是会在每次动作时重验的快照，不是授权token。
 
 research.read是allowlist已知公共HTTPS URL读取，不是搜索。attachments.save接可见Slack消息中的fileId，保存到授权目录；artifact.publish/revise发布自身artifacts文件并经过同一门控。文本发布上限64KiB，binary/下载1MB。完整工具限制见[调用链说明](docs/HOW_IT_WORKS.md)。
 

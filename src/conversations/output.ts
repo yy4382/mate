@@ -21,6 +21,8 @@ export interface ExternalMessageTransport {
   matchesText?(expected:string,observed:string):boolean;
 }
 export interface CanonicalArtifactTransport {
+  configured(actor:string):boolean;
+  supports(actor:string,target:ConversationTarget):boolean;
   upload(request:DispatchEnvelope,artifact:ArtifactPayload,prepared:(fileId:string)=>void,beforeShare:()=>boolean):Promise<{fileId:string}>;
 }
 
@@ -31,6 +33,13 @@ export class CanonicalOutput {
   private dispatchQueue:Promise<unknown>=Promise.resolve();
   private internalQueue:Promise<unknown>=Promise.resolve();
   constructor(readonly messages:Conversations,readonly transport:ExternalMessageTransport,readonly clock:()=>number=Date.now){}
+  artifactConfigured(actor:string):boolean{return this.artifacts?.configured(actor)===true;}
+  requireArtifactSupport(actor:string,target:ConversationTarget):void{
+    this.messages.requireAccess(actor,target.conversationId);
+    if(this.messages.references.conversation(target.conversationId).authority!=='external')throw new Error('Artifact target is not supported');
+    this.messages.requirePublication(actor,target);
+    if(!this.artifacts?.configured(actor)||!this.artifacts.supports(actor,target))throw new Error('Artifact adapter unavailable for Agent or target');
+  }
   matchesText(expected:string,observed:string):boolean{return this.transport.matchesText?.(expected,observed)??expected===observed;}
   queue(actor:string,target:ConversationTarget,text:string,id:string=randomUUID(),basis?:SendBasis):string {
     validateOutputIntent(this.messages,actor,target,text);

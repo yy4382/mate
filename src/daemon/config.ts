@@ -6,6 +6,7 @@ import {agentDefinition,agentDefinitionSchema,budgetSettingsSchema,agentIdSchema
 import type {MateConfig} from '../config.js';
 
 const human = z.string().min(1).max(1000);
+const workspaceLabel=z.string().regex(/^[a-z][a-z0-9-]{0,62}$/).refine(value=>value!=='private-workspace'&&!value.startsWith('private-'),'Reserved workspace label');
 const slackUser = z.string().regex(/^U[A-Z0-9]+$/);
 const bindingSchema = z.object({
   agentId:agentIdSchema, slackAppId:z.string().regex(/^A[A-Z0-9]+$/),
@@ -24,7 +25,7 @@ const modernConfigSchema = z.object({
   runtime: z.object({
     dataDir: path,
     docker: z.object({ binary: path, host: z.string().startsWith('unix:///'), image: z.string().regex(/^sha256:[a-f0-9]{64}$/),network:z.enum(['none','bridge']).optional() }).strict().optional(),
-    workspaceGrants: z.array(z.object({ agentId: z.string(), root: path, operations: z.array(z.enum(['read','write','exec'])).min(1) }).strict()).default([]),
+    workspaceGrants: z.array(z.object({ agentId: z.string(), root: path, operations: z.array(z.enum(['read','write','exec'])).min(1),label:workspaceLabel.optional() }).strict()).default([]),
     researchHosts: z.array(z.string().regex(/^[a-z0-9][a-z0-9.-]*[a-z0-9]$/)).default([]),
   }).strict()
  }).strict().superRefine((c,ctx)=>{

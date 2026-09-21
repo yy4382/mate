@@ -9,6 +9,7 @@ import { operationSchema, permissionFor, type Permission, type Operation, type E
 
 const policyVersion = 'mate-scope-2';
 interface Grant { id: string; agent_id: string; work_id: string; root: string; operations: string; expires: number; revoked: number; }
+export interface EffectiveGrant {id:string;root:string;operations:Permission[];expires:number}
 export class Broker {
   private queue: Promise<unknown> = Promise.resolve();
   constructor(readonly store: Store, readonly collaboration: Collaboration, private backend: ExecutionBackend,
@@ -30,16 +31,33 @@ export class Broker {
     return op.kind === 'exec' ? { ...op, cwd: relative(root, checkedPath(root, op.cwd)) || '.' }
       : { ...op, path: relative(root, checkedPath(root, op.path)) || '.', ...(op.kind==='move' ? {destination:relative(root,checkedPath(root,op.destination)) || '.'} : {}) };
   }
-  private grant(run: RunToken, workId: string, id: string, op: Operation): Grant {
+  private assertScope(run:RunToken,workId:string):{seatRoot?:string}{
     this.store.assertRun(run);
     this.collaboration.assertActionWork(run,workId);
     const binding = this.store.db.prepare('SELECT work_id FROM delivery_work WHERE delivery_id=?').get(run.deliveryId) as { work_id: string } | undefined;
     if (this.collaboration.currentWork(run, binding?.work_id ?? '') !== workId) throw new Error('Run work mismatch');
     this.collaboration.messages.requireAccess(run.agentId, JSON.parse(this.collaboration.work(workId).target).conversationId);
+    const seat=this.collaboration.seats.active(run.agentId);return seat?{seatRoot:seat.workspace}:{};
+  }
+  private effective(run:RunToken,workId:string,grant:Grant,permission?:Permission):boolean{
+    const scope=this.assertScope(run,workId);
+    if(grant.agent_id!==run.agentId||grant.work_id!==workId||grant.revoked||grant.expires<=this.clock())return false;
+    const operations=z.array(z.enum(['read','write','exec'])).parse(JSON.parse(grant.operations));
+    if(permission&&!operations.includes(permission))return false;
+    if(scope.seatRoot&&grant.root!==scope.seatRoot)return false;
+    try{if(canonicalRoot(grant.root,this.protectedRoots)!==grant.root)throw new Error('changed');}
+    catch{throw new Error('Grant root unavailable or changed');}
+    return true;
+  }
+  effectiveGrants(run:RunToken,workId:string):EffectiveGrant[]{
+    this.assertScope(run,workId);
+    const rows=this.store.db.prepare('SELECT * FROM grants WHERE agent_id=? AND work_id=? ORDER BY rowid').all(run.agentId,workId) as Grant[];
+    return rows.filter(row=>this.effective(run,workId,row)).map(row=>({id:row.id,root:row.root,operations:z.array(z.enum(['read','write','exec'])).parse(JSON.parse(row.operations)),expires:row.expires}));
+  }
+  private grant(run: RunToken, workId: string, id: string, op: Operation): Grant {
     const grant = this.store.db.prepare('SELECT * FROM grants WHERE id=?').get(id) as Grant | undefined;
-    if (!grant || grant.agent_id !== run.agentId || grant.work_id !== workId || grant.revoked || grant.expires <= this.clock() || !(JSON.parse(grant.operations) as string[]).includes(permissionFor(op))) throw new Error('Grant does not cover action');
-    const seat=this.collaboration.seats.active(run.agentId);if(seat&&grant.root!==seat.workspace)throw new Error('Review seat permits only its clean private workspace');
-    if (canonicalRoot(grant.root, this.protectedRoots) !== grant.root) throw new Error('Grant root changed');
+    const seat=this.collaboration.seats.active(run.agentId);if(grant&&seat&&grant.root!==seat.workspace)throw new Error('Review seat permits only its clean private workspace');
+    if (!grant || !this.effective(run,workId,grant,permissionFor(op))) throw new Error('Grant does not cover action');
     checkedPath(grant.root, op.kind === 'exec' ? op.cwd : op.path);
     if(op.kind==='move')checkedPath(grant.root,op.destination);
     if(permissionFor(op)==='write' && (relative(grant.root,checkedPath(grant.root,op.kind==='exec'?op.cwd:op.path))==='' || (op.kind==='move' && relative(grant.root,checkedPath(grant.root,op.destination))==='')))throw new Error('Cannot mutate workspace root');

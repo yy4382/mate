@@ -8,6 +8,7 @@ import type {RunToken}from '../storage/store.js';
 /** Only file IDs on an observed, currently visible message are accepted; URLs/credentials are never model arguments. */
 export class Attachments{
  constructor(readonly c:Collaboration,readonly broker:Broker,readonly clients:Map<string,WebClient>){}
+ configured(actor:string):boolean{return !!this.clients.get(actor)?.token;}
  private visible(run:RunToken,args:AttachmentArgs):void{
   const m=this.c.messages;m.store.assertRun(run);
   const message=m.message(run.agentId,args.message.messageId);

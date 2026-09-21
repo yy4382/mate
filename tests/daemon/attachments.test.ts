@@ -28,7 +28,7 @@ it('downloads visible binary attachments, freezes/publishes the same bytes and h
  const{root,c,broker,run,work,target,files,args,signal}=setup(),bytes=Buffer.from([0,255,1,128]);const fetched=vi.fn(async()=>new Response(bytes));vi.stubGlobal('fetch',fetched);
  await files.save(run,work,'download',args,signal);expect(readFileSync(`${root}/${args.path}`)).toEqual(bytes);expect(fetched.mock.calls).toHaveLength(1);
  const call=(fetched.mock.calls as any)[0];expect(call[1].headers.Authorization).toBe('Bearer synthetic-token');expect(call[1].redirect).toBe('error');
- let snapshot:any;const artifacts=new Artifacts(c,broker,{upload:async(_request,artifact,prepared,beforeShare)=>{snapshot=artifact;prepared('FOUT');if(!beforeShare())throw new Error('deferred');return{fileId:'FOUT'};}},{research:root});
+ let snapshot:any;const artifacts=new Artifacts(c,broker,{configured:()=>true,supports:()=>true,upload:async(_request,artifact,prepared,beforeShare)=>{snapshot=artifact;prepared('FOUT');if(!beforeShare())throw new Error('deferred');return{fileId:'FOUT'};}},{research:root});
  const draft=await artifacts.publish(run,work,'publish',{grantId:args.grantId,path:args.path,title:'picture',target,format:'binary'},signal)as any;expect(draft.artifact.bytes).toBe(4);expect(draft.artifact.content).toBeUndefined();
  writeFileSync(`${root}/${args.path}`,'later');c.output.gate!.continueOnce(run,draft.draftId,1,draft.holdId);await c.output.send(draft.draftId);expect(Buffer.from(snapshot.content,'base64')).toEqual(bytes);expect(snapshot.filename).toBe('picture.png');
 });

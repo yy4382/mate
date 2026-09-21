@@ -24,6 +24,7 @@ import {buildBaseline}from '../runtime/prompt.js';
 import {operationDocumentation}from '../runtime/tools.js';
 import {repairTranscript}from '../runtime/context.js';
 import {SessionLifecycle}from '../runtime/sessions.js';
+import {normalizeConfiguredWorkspaces}from '../capabilities/workspaces.js';
 
 import {Collaboration}from '../collaboration/service.js';
 
@@ -50,15 +51,15 @@ export async function migrateConfiguration(previous:DaemonConfig,next:DaemonConf
   const oldIds=(s.db.prepare('SELECT id FROM agents ORDER BY id').all() as {id:string}[]).map(a=>a.id);
   if(encode(oldIds)!==encode(previous.mate.agents.map(a=>a.id).sort()))throw new Error('Previous Agent identities do not match database');
   assertConfigurationEvolution(previous,next);
+  const configured=normalizeConfiguredWorkspaces(next.runtime.workspaceGrants,[projectRoot,state,join(data,'agents')]);
   const roots=new Map<string,Map<string,string[]>>();
   for(const agent of next.mate.agents){
    const own=join(data,'agents',agent.id);
    if(existsSync(own)&&lstatSync(own).isSymbolicLink())throw new Error('Agent memory must not be a symlink');
    // New Agent private directories are created by normal daemon startup.
    const desired=new Map<string,string[]>([[existsSync(own)?canonicalRoot(own,[projectRoot,state]):resolve(own),next.runtime.docker?['read','write','exec']:['read','write']]]);
-   for(const grant of next.runtime.workspaceGrants.filter(g=>g.agentId===agent.id)){
-    const root=canonicalRoot(grant.root,[projectRoot,state,join(data,'agents')]);
-    desired.set(root,[...new Set([...(desired.get(root)??[]),...grant.operations])]);
+   for(const grant of configured.filter(g=>g.agentId===agent.id)){
+    desired.set(grant.root,[...new Set([...(desired.get(grant.root)??[]),...grant.operations])]);
    }roots.set(agent.id,desired);
   }
   if(previous.runtime.docker)await new ContainerBackend({...previous.runtime.docker,scope:executionScope(data)}).recover();

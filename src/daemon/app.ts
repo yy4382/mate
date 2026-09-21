@@ -38,6 +38,8 @@ import { acquireLock } from './lock.js';
 import { Controls } from './control.js';
 import { Research } from './research.js';
 import { Artifacts } from './artifacts.js';
+import {EnvironmentCapabilities} from '../capabilities/environment.js';
+import {normalizeConfiguredWorkspaces,workspaceProfiles,WorkspaceAccess} from '../capabilities/workspaces.js';
 import { executionScope } from './paths.js';
 import { backup } from './backup.js';
 export interface Log { info(data: object, message: string): void; error(data: object, message: string): void }
@@ -45,6 +47,7 @@ export class Daemon {
   readonly store: Store;
   readonly collaboration: Collaboration;
   readonly broker: Broker;
+  readonly workspaceAccess:WorkspaceAccess;
   readonly supervisor: Supervisor;
   readonly controls:Controls;
   readonly local:LocalAdapter|undefined;
@@ -102,20 +105,6 @@ export class Daemon {
       const transport=slackApp&&slackConfig?new WebSlackTransport(this.store,slackApp.mapper,Object.fromEntries(slackConfig.agents.map(a=>[a.id,requireSecret(process.env,a.botTokenEnv)]))):undefined;
       const output=new Output(messages,transport??{post:async()=>{throw new Error('External transport unavailable');},pendingInput:()=>false,classify:()=>({kind:'rejected',reason:'External transport unavailable'})});
       this.collaboration = new Collaboration(this.store, messages, output, c);
-      const files = new SandboxBackend();
-      if (config.runtime.docker) this.container = new ContainerBackend({ ...config.runtime.docker, scope: executionScope(data) });
-      this.backend = new ControlledBackend(files, this.container ?? { execute: async () => { throw new Error('Container execution is not configured'); } });
-      this.broker = new Broker(this.store, this.collaboration, this.backend, [projectRoot, state]);
-      const research = new Research(config.runtime.researchHosts);
-      let artifacts!: Artifacts;
-      const attachments=transport?new Attachments(this.collaboration,this.broker,transport.clients):undefined;
-      const router = new ToolRouter(this.collaboration, this.broker, { attachment:(...args)=>{if(!attachments)throw new Error('Attachment adapter unavailable');return attachments.save(...args);},environment:actor=>({workspace:'/workspace',execConfigured:!!config.runtime.docker,image:config.runtime.docker?.image??null,network:this.collaboration.seats.active(actor)?'none':config.runtime.docker?.network??'none',researchHosts:this.collaboration.seats.active(actor)?[]:config.runtime.researchHosts,toolchain:'Installed in the pinned image; inspect with exec. No host credentials inherited.'}),research: (url, signal) => research.read(url, signal), publish: (...args) => artifacts.publish(...args) }, new TeamDirectory(messages,transport?new Directory(messages,transport.clients,transport.mapper):undefined), (actor,workId)=>this.ensureGrants(actor,workId),value=>slackApp?.argumentsCodec.args(value)??value,transport?new SlackHistory(messages,transport):undefined);
-      this.supervisor = new Supervisor(this.collaboration, router, c, undefined, async (agentId, workId, signal) => {
-        this.ensureGrants(agentId, workId);
-        const result = await files.execute({ root: this.memoryRoots[agentId]!, operation: { kind: 'read', path: 'MEMORY.md' }, timeoutMs: 10000 }, signal);
-        if (result.code !== 0 || result.truncated) throw new Error('Private memory recovery read failed'); return result.stdout;
-      });
-      this.supervisor.register();
       const agentsDir = join(data, 'agents'); mkdirSync(agentsDir, { recursive: true, mode: 0o700 });
       if (lstatSync(agentsDir).isSymbolicLink()) throw new Error('Agents directory must not be a symlink');
       for (const agent of this.collaboration.agents.list()) {
@@ -125,11 +114,27 @@ export class Daemon {
         for (const dir of ['notes','artifacts']) mkdirSync(join(root, dir), { recursive: true, mode: 0o700 });
         if (!existsSync(join(root, 'MEMORY.md'))) writeFileSync(join(root, 'MEMORY.md'), `# ${agent.name}\n\nPrivate memory entry. Keep durable lessons and links to notes here.\n`, { flag: 'wx', mode: 0o600 });
       }
-      for (const grant of config.runtime.workspaceGrants) canonicalRoot(grant.root, [projectRoot, state, agentsDir]);
+      const profiles=workspaceProfiles(this.memoryRoots,normalizeConfiguredWorkspaces(config.runtime.workspaceGrants,[projectRoot,state,agentsDir]),!!config.runtime.docker);
+      const files = new SandboxBackend();
+      if (config.runtime.docker) this.container = new ContainerBackend({ ...config.runtime.docker, scope: executionScope(data) });
+      this.backend = new ControlledBackend(files, this.container ?? { execute: async () => { throw new Error('Container execution is not configured'); } });
+      this.broker = new Broker(this.store, this.collaboration, this.backend, [projectRoot, state]);
+      const workspaceAccess=this.workspaceAccess=new WorkspaceAccess(this.collaboration,this.broker,profiles);
+      const research = new Research(config.runtime.researchHosts);
+      let artifacts!: Artifacts;
+      const attachments=transport?new Attachments(this.collaboration,this.broker,transport.clients):undefined;
+      const environment=new EnvironmentCapabilities(this.collaboration,this.broker,profiles,{image:config.runtime.docker?.image??null,network:config.runtime.docker?.network??'none',researchHosts:config.runtime.researchHosts,attachmentConfigured:actor=>attachments?.configured(actor)??false,artifactSupported:(actor,target)=>artifacts?.supports(actor,target)??false});
+      const router = new ToolRouter(this.collaboration, this.broker, { attachment:(...args)=>{if(!attachments)throw new Error('Attachment adapter unavailable');return attachments.save(...args);},environment:(run,workId)=>environment.read(run,workId),research: (url, signal) => research.read(url, signal), publish: (...args) => artifacts.publish(...args) }, new TeamDirectory(messages,transport?new Directory(messages,transport.clients,transport.mapper):undefined), (actor,workId)=>workspaceAccess.provision(actor,workId),value=>slackApp?.argumentsCodec.args(value)??value,transport?new SlackHistory(messages,transport):undefined);
+      this.supervisor = new Supervisor(this.collaboration, router, c, undefined, async (agentId, workId, signal) => {
+        workspaceAccess.provision(agentId, workId);
+        const result = await files.execute({ root: this.memoryRoots[agentId]!, operation: { kind: 'read', path: 'MEMORY.md' }, timeoutMs: 10000 }, signal);
+        if (result.code !== 0 || result.truncated) throw new Error('Private memory recovery read failed'); return result.stdout;
+      });
+      this.supervisor.register();
       this.controls=new Controls(this.collaboration,this.supervisor,this.broker,actor=>this.verifyReviewWorkspace(actor),(user,command,id,args)=>this.slackRuntime?.projections.control(user,command,id,args));
       this.adapter=this.slackRuntime=transport?new SlackRuntime(this.collaboration,transport,this.controls,message=>this.log.error({},message)):undefined;
       this.local=config.adapters.local?new LocalAdapter(this.collaboration,config.adapters.local.humans):undefined;
-      artifacts = new Artifacts(this.collaboration,this.broker,this.slackRuntime?.service??{upload:async()=>{throw new Error('Artifact adapter unavailable');}},this.memoryRoots);
+      artifacts = new Artifacts(this.collaboration,this.broker,this.slackRuntime?.service,this.memoryRoots);
       this.store.atomic(()=>{configureLocalRooms(this.collaboration,previous?.adapters.local,config.adapters.local);saveConfiguration(this.store,config);});
       this.store.db.exec('COMMIT');
     } catch (error) {
@@ -144,17 +149,6 @@ export class Daemon {
     for(const dir of ['notes','artifacts']){const path=join(root,dir);if(lstatSync(path).isSymbolicLink()||readdirSync(path).length)throw new Error('Review workspace contains prior material');}
     const memory=join(root,'MEMORY.md');if(lstatSync(memory).isSymbolicLink()||lstatSync(memory).nlink!==1||readFileSync(memory,'utf8')!==`# ${agent.name}\n\nPrivate memory entry. Keep durable lessons and links to notes here.\n`)throw new Error('Review memory contains prior material');
     return root;
-  }
-  private ensureGrants(agentId: string, workId: string): void {
-    const grants = [{ root: this.memoryRoots[agentId]!, operations: (this.config.runtime.docker ? ['read','write','exec'] : ['read','write']) as ('read'|'write'|'exec')[] }, ...this.config.runtime.workspaceGrants.filter(g => g.agentId === agentId && !this.collaboration.seats.active(agentId))];
-    for (const grant of grants) {
-      const root = realpathSync(grant.root);
-      const existing=this.store.db.prepare('SELECT id,operations,revoked,expires FROM grants WHERE agent_id=? AND work_id=? AND root=? ORDER BY rowid DESC LIMIT 1').get(agentId,workId,root) as {id:string;operations:string;revoked:number;expires:number}|undefined;
-      if(!existing)this.broker.issueGrant(this.config.mate.ownerUserIds[0]!,agentId,workId,root,grant.operations,Date.now()+365*86400000);
-      else if(root===this.memoryRoots[agentId] && this.config.runtime.docker && !existing.revoked && existing.expires>Date.now() && !JSON.parse(existing.operations).includes('exec')){
-        this.store.atomic(()=>{this.store.db.prepare('UPDATE grants SET operations=? WHERE id=?').run(JSON.stringify([...JSON.parse(existing.operations),'exec']),existing.id);this.store.audit('private_workspace_exec_upgrade',{grantId:existing.id,agentId,workId});});
-      }
-    }
   }
   start(): Promise<void> {
     if(!this.startPromise){this.opening=this.open();this.startPromise=this.opening.catch(async error=>{await this.close();throw error;});}

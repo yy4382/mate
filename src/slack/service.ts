@@ -15,6 +15,11 @@ export function formatControlReply(value:unknown,limit=15000):string{
 export class SlackService {
   private reconcileAfter = 0;
   constructor(readonly c: Collaboration, readonly transport: WebSlackTransport, readonly ingress: Ingress, readonly controls: Controls, readonly stopping: () => boolean = () => false) {}
+  configured(actor:string):boolean{return !!this.transport.clients.get(actor)?.token;}
+  supports(actor:string,target:import('../domain/conversations.js').ConversationTarget):boolean{
+    if(!this.configured(actor))return false;
+    try{return this.c.messages.references.conversation(target.conversationId).authority==='external'&&!!this.transport.mapper.target(target).channel;}catch{return false;}
+  }
   async verify(): Promise<void> {
     for (const agent of this.transport.mapper.config.agents) {
       if (this.stopping()) return;

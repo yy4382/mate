@@ -35,7 +35,7 @@ E5按“先让Agent准确知道能做什么，再验证完整工作闭环”的�
 
 | gate | 目标/接口 | 依赖 | 验收 | 状态 |
 |---|---|---|---|---|
-| E5a 当前工作环境能力 | `EnvironmentCapabilities`应用服务与`mate.environment.v1` DTO；`environment.info`返回当前work可用grant、隔离/网络、资料读取及输入输出adapter状态 | E4 PASS、E5设计红队PASS | 不泄露宿主路径/secret；grant撤销/过期、work切换、无Docker、无Slack binding、review seat均如实反映；配置workspace有稳定可读名称 | 设计PASS，待实施 |
+| E5a 当前工作环境能力 | `EnvironmentCapabilities`应用服务与`mate.environment.v1` DTO；`environment.info`返回当前work可用grant、隔离/网络、资料读取及输入输出adapter状态 | E4 PASS、E5设计红队PASS | 不泄露宿主路径/secret；grant撤销/过期、work切换、无Docker、无Slack binding、review seat均如实反映；配置workspace有稳定可读名称 | PASS，review_e5a_capabilities，323 tests |
 | E5b 工作输入到成果闭环与行为约定 | 通过正式ToolRouter走附件保存、文件处理、受限URL读取、成果冻结/修改/发送；prompt、操作手册和可执行能力矩阵同步 | E5a PASS | 合成Slack附件到成果全链路、失败/恢复/held路径；明确URL读取不是搜索，列出可达替代路径；prompt/tool/environment契约互相核对 | TODO |
 
 E2按恢复风险细分顺序gate：E2a内部Agent定义与查询边界（配置兼容投影、worker/生命周期/预算不依赖bot字段，PASS，review_e2a_identity，183 tests）；E2b内部会话/消息与外部映射及迁移（清单见REFERENCE_MIGRATION，E2b1引用目录/迁移基础PASS review_e2b1_references 190 tests，E2b2服务切换实施中）；E2c本地适配器及内部直接通信、Slack接线。E2a不会宣称旧部署配置和消息引用已解耦；后两者通过才允许E3。

@@ -14,7 +14,7 @@ export type EffectPolicy='pure-read'|'atomic-recorded'|'broker-recorded'|'adapte
 export type ReplayPolicy='immutable'|'refreshable'|'boundary-owned';
 
 export interface AdditionalTools {
-  environment?(actor:string):unknown;
+  environment?(run:RunToken,workId:string):unknown;
   attachment?(run:RunToken,workId:string,actionId:string,args:import('../capabilities/artifacts.js').AttachmentArgs,signal:AbortSignal):Promise<unknown>;
   research(url:string,signal:AbortSignal):Promise<unknown>;
   publish(run:RunToken,workId:string,actionId:string,args:import('../capabilities/artifacts.js').PublishArgs,signal:AbortSignal):Promise<unknown>;
