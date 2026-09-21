@@ -14,7 +14,7 @@ export function migrateCanonicalConversations(store: Store, config: MateConfig):
   store.atomic(() => {
     const marker = store.db.prepare("SELECT value FROM runtime_meta WHERE key='conversation_format'").get() as { value: string } | undefined;
     if (marker) {
-      if (marker.value !== canonicalConversationFormat || ![17,18,19,20,21].includes(Number(store.db.pragma('user_version', { simple: true })))) throw new Error('Unsupported conversation data format');
+      if (marker.value !== canonicalConversationFormat || ![17,18,19,20,21,22].includes(Number(store.db.pragma('user_version', { simple: true })))) throw new Error('Unsupported conversation data format');
       const source = store.db.prepare("SELECT value FROM runtime_meta WHERE key='reference_migration_v16'").get() as {value:string}|undefined;
       // Local-origin canonical stores have no legacy Slack provenance. Their installation
       // identity is governed by the persisted configuration, not a fabricated migration.

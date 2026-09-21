@@ -4,7 +4,7 @@ import type {Store} from './store.js';
 export function migrateHistoryIndexes(store:Store):void {
   store.atomic(()=>{
     const version=Number(store.db.pragma('user_version',{simple:true}));
-    if(version===21)return;
+    if(version===21||version===22)return;
     if(version!==20)throw new Error('Projection import schema required');
     store.db.exec(`
       CREATE TABLE message_visibility_next(

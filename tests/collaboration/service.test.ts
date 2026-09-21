@@ -1,7 +1,7 @@
 import { fixtureTarget, externalThread } from '../helpers/canonical-slack.js';
 import { afterEach, expect, it } from 'vitest';
 import { Store } from '../../src/storage/store.js';
-import { Messages, Output } from '../helpers/canonical-slack.js';
+import { Messages, Output,migrateCurrentRuntime } from '../helpers/canonical-slack.js';
 import { Collaboration } from '../../src/collaboration/service.js';
 import { configSchema } from '../../src/config.js';
 import { configFixture } from '../helpers/config.js';
@@ -10,7 +10,7 @@ const target = fixtureTarget('CTEST','100.000001');
 function setup() {
   const config = configSchema.parse({ ...configFixture, agents: [configFixture.agents[0], { ...configFixture.agents[0], id: 'engineer', slackAppId: 'ATWO', slackBotId: 'BTWO', slackUserId: 'UTWO', botTokenEnv: 'ENGINEER_BOT', appTokenEnv: 'ENGINEER_APP' }] });
   const db = new Store(':memory:'); stores.push(db);
-  const messages = new Messages(db, config); for (const a of config.agents) { db.register(a.id, 'v1', []); messages.membership(a.id, 'CTEST', true); }
+  const messages = new Messages(db, config);migrateCurrentRuntime(db); for (const a of config.agents) { db.register(a.id, 'v1', []); messages.membership(a.id, 'CTEST', true); }
   const output = new Output(messages, { post: async () => ({ ts: '101.000001' }) });
   const service = new Collaboration(db, messages, output, config); const work = service.createWork('human:one', target);
   return { db, service, work, output };

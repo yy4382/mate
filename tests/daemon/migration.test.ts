@@ -10,7 +10,7 @@ import{acquireLock}from '../../src/daemon/lock.js';
 import{configFixture}from '../helpers/config.js';
 import{buildBaseline}from '../../src/runtime/prompt.js';
 import{operationDocumentation,ToolRouter}from '../../src/runtime/tools.js';
-import{Messages,Output}from '../helpers/canonical-slack.js';
+import{Messages,Output,migrateCurrentRuntime}from '../helpers/canonical-slack.js';
 import{Collaboration}from '../../src/collaboration/service.js';
 import{Broker}from '../../src/policy/broker.js';
 const roots:string[]=[];afterEach(()=>roots.splice(0).forEach(root=>rmSync(root,{recursive:true,force:true})));
@@ -20,7 +20,7 @@ function fixture(legacy=false){
  const previous=daemonConfigSchema.parse({mate:configFixture,runtime:{dataDir:data,workspaceGrants:[{agentId:'research',root:shared,operations:['read','write']}]}});
  const store=new Store(path),base=buildBaseline(previous.mate.agents[0]!,operationDocumentation);store.register('research',base.configVersion,base.messages);
  if(!legacy)saveConfiguration(store,previous);else store.db.prepare("INSERT INTO runtime_meta VALUES('policy',?)").run(hash(encode(previous.runtime)));
- const messages=new Messages(store,slackRuntimeConfig(previous)!),c=new Collaboration(store,messages,new Output(messages,{post:async()=>({ts:'100.000002'})}),previous.mate);messages.membership('research','CTEST',true);
+ const messages=new Messages(store,slackRuntimeConfig(previous)!);migrateCurrentRuntime(store);const c=new Collaboration(store,messages,new Output(messages,{post:async()=>({ts:'100.000002'})}),previous.mate);messages.membership('research','CTEST',true);
  const broker=new Broker(store,c,{execute:async()=>({code:0,stdout:'',stderr:'',truncated:false})},['/synthetic-protected']),router=new ToolRouter(c,broker),work=c.createWork('migration',{conversationId:'CTEST'});
  c.ledger.account('research');const grant=broker.issueGrant(previous.mate.ownerUserIds[0]!,'research',work,shared,['read','write'],Date.now()+100000);
  const next=structuredClone(previous);next.mate.agents[0]!.role='An evolving research role';next.runtime.workspaceGrants[0]!.operations=['read'];

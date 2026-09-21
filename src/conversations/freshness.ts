@@ -6,6 +6,7 @@ import {encode} from '../storage/store.js';
 import type {CanonicalAttention as Attention} from './attention.js';
 import {conversationTargetSchema as targetSchema,type ConversationTarget as Target} from '../domain/conversations.js';
 import type {Conversations as Messages} from './messages.js';
+import {TaskTransitions,type TransitionTask}from '../coordination/transitions.js';
 export interface SendBasis {run:RunToken;viewToken?:string|undefined;systemProjection?:boolean}
 interface Draft{id:string;agent_id:string;outbox_id:string;revision:number;hold_id:string|null;reason:string|null;accepted_revision:number|null;continue_until:number}
 /** Freshness never evaluates message quality or command execution. */
@@ -60,9 +61,9 @@ export class CanonicalFreshnessGate{
    validateOutputIntent(this.messages,run.agentId,target,text,!!(artifact??request.artifact));
    s.transitionOutput(d.outbox_id,'held','failed',{reason:'draft_revised'});const next=`${id}:revision:${revision+1}`;this.messages.writes.queueOutput(run.agentId,next,{target,text,...((artifact??request.artifact)?{artifact:artifact??request.artifact}:{})});
    s.db.prepare('INSERT INTO output_work SELECT ?,work_id FROM output_work WHERE output_id=?').run(next,d.outbox_id);
-   const linked=s.db.prepare("SELECT id,assigned_to FROM tasks WHERE outbox_id=? AND status='draft'").all(d.outbox_id) as {id:string;assigned_to:string|null}[];
+   const linked=s.db.prepare("SELECT * FROM tasks WHERE outbox_id=? AND status='draft'").all(d.outbox_id) as (TransitionTask&{assigned_to:string|null})[];
    for(const task of linked)if(task.assigned_to)this.messages.requireAccess(task.assigned_to,target.conversationId);
-   s.db.prepare("UPDATE tasks SET outbox_id=?,target=?,version=version+1 WHERE outbox_id=? AND status='draft'").run(next,encode(target),d.outbox_id);
+   const transitions=new TaskTransitions(s);for(const task of linked)transitions.change(task,{outbox_id:next,target:encode(target)},{action:'draft_revised',actor:run.agentId,cause:{previousOutboxId:d.outbox_id}});
    for(const task of linked)this.messages.writes.mutable('tasks',task.id);
    s.db.prepare('UPDATE drafts SET revision=revision+1,outbox_id=?,accepted_revision=NULL WHERE id=?').run(next,id);this.hold(this.draft(run.agentId,id),'draft_revised');return this.describe(run.agentId,id);
   });

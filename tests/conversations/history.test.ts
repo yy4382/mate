@@ -12,13 +12,14 @@ import {migrateInternalConversations} from '../../src/storage/internal-schema.js
 import {migrateProjections} from '../../src/storage/projection-schema.js';
 import {migrateProjectionImports} from '../../src/storage/projection-import-schema.js';
 import {migrateHistoryIndexes} from '../../src/storage/history-schema.js';
+import {migrateCoordinationRecovery}from '../../src/storage/coordination-schema.js';
 
 const stores:Store[]=[];
 afterEach(()=>stores.splice(0).forEach(store=>store.close()));
 
 function setup(source?:HistorySource){
   const store=new Store(':memory:');stores.push(store);migrateCanonicalConversations(store,configFixture);
-  migrateInternalConversations(store);migrateProjections(store);migrateProjectionImports(store);migrateHistoryIndexes(store);
+  migrateInternalConversations(store);migrateProjections(store);migrateProjectionImports(store);migrateHistoryIndexes(store);migrateCoordinationRecovery(store);
   const {messages,mapper}=slackApplication(store,configFixture);store.register('research','history',[]);
   store.enqueue('research','start',{});const run=store.beginRun('research')!;store.input(run,{});
   const external=mapper.conversation('CTEST');messages.membership('research',external,true);
@@ -138,7 +139,7 @@ it('one installation cannot advance another installation visible revision or fre
   const peer={...structuredClone(configFixture.agents[0]!),id:'peer',name:'Peer',slackAppId:'ATWO',slackUserId:'UTWO',slackBotId:'BTWO',botTokenEnv:'PEER_BOT_TOKEN',appTokenEnv:'PEER_APP_TOKEN'};
   const config={...configFixture,agents:[configFixture.agents[0]!,peer]};
   let remote:MessageDTO[]=[];const source:HistorySource={fetch:async()=>({messages:remote,nextCursor:null,exhausted:true,scope:'channel_top_level',gaps:[],available:true})};
-  const store=new Store(':memory:');stores.push(store);migrateCanonicalConversations(store,config);migrateInternalConversations(store);migrateProjections(store);migrateProjectionImports(store);migrateHistoryIndexes(store);
+  const store=new Store(':memory:');stores.push(store);migrateCanonicalConversations(store,config);migrateInternalConversations(store);migrateProjections(store);migrateProjectionImports(store);migrateHistoryIndexes(store);migrateCoordinationRecovery(store);
   const {messages,mapper}=slackApplication(store,config);for(const actor of ['research','peer']){store.register(actor,'history',[]);store.enqueue(actor,'start',{});}
   const research=store.beginRun('research')!,peerRun=store.beginRun('peer')!;store.input(research,{});store.input(peerRun,{});
   const external=mapper.conversation('CTEST');messages.membership('research',external,true);messages.membership('peer',external,true);

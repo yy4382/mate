@@ -45,14 +45,14 @@ export class Supervisor {
         const selectedWork=c.work(c.currentWork(run,work.id));
         const reference=await this.recovery(agentId,selectedWork.id,abort.signal);s.assertRun(run);
         const bound=(text:string)=>{while(Buffer.byteLength(text)>8000)text=text.slice(0,Math.floor(text.length*0.9));return text;};
-        const memory=bound(reference),allTasks=c.list(agentId);
+        const memory=bound(reference),taskRecovery=seat?null:c.board.recovery(agentId,20);
         const checkpoint=s.db.prepare('SELECT text,version FROM agent_checkpoints WHERE agent_id=?').get(agentId) as {text:string;version:number}|undefined;
         const checkpointText=checkpoint?bound(checkpoint.text):undefined;
         const recovery=encode({memory,memoryHash:hash(reference),memoryNeedsOrganization:memory!==reference,
           warning:memory!==reference?'Memory entry exceeds recovery budget. Read full MEMORY.md through file tools; this excerpt is incomplete.':undefined,
           checkpoint:checkpoint?{text:checkpointText,version:checkpoint.version,hash:hash(checkpoint.text),truncated:checkpointText!==checkpoint.text,fullTool:'sessions.status'}:null,
           work:seat?{id:selectedWork.id,state:selectedWork.state,target:seat.target,reviewSeat:true}:selectedWork,
-          tasks:allTasks.slice(0,20).map(t=>({id:t.id,workId:t.work_id,owner:t.owner,status:t.status,title:t.title.slice(0,100),waitingOn:t.waiting_on})),tasksTotal:allTasks.length,
+          tasks:taskRecovery,
           account:c.ledger.account(agentId),
           uncertainActions:s.db.prepare("SELECT id,state FROM actions WHERE agent_id=? AND state IN ('unknown','executing') ORDER BY rowid DESC LIMIT 20").all(agentId),
           actionHistoryTool:'actions.list',

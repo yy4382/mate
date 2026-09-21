@@ -12,9 +12,10 @@ import type { Broker } from '../policy/broker.js';
 import type { ConversationDirectory } from '../conversations/directory.js';
 import { conversationTargetSchema as targetSchema } from '../domain/conversations.js';
 import type { ToolReply } from './engine.js';
+import {taskRelationSchema}from '../coordination/board.js';
 const id = z.string().min(1).max(500), text = z.string().max(35000);
 const messageRef=z.object({messageId:id}).strict();
-const reminderInput={target:targetSchema,content:z.string().min(1).max(12000),nextAt:z.number().int().nonnegative(),timezone:id,cron:id.optional(),taskId:id.optional(),anchor:messageRef.optional()};
+const reminderInput={target:targetSchema,content:z.string().min(1).max(12000),nextAt:z.number().int().nonnegative(),timezone:id,cron:id.optional(),taskId:id.optional(),anchor:messageRef.optional(),projection:z.enum(['private','conversation_receipt']).optional()};
 const fileSchemas = Object.fromEntries(operationSchema.options.filter(schema=>schema.shape.kind.value!=='exec').map(schema=>[`file.${schema.shape.kind.value}`,(schema as z.ZodObject).omit({kind:true}).extend({grantId:id})]));
 const schemas: Record<string,z.ZodType> = {
   ...fileSchemas,
@@ -26,7 +27,8 @@ const schemas: Record<string,z.ZodType> = {
   'sessions.reset':z.object({text:z.string().min(1).max(20000)}).strict(),
   'reminders.list':z.object({before:z.number().int().positive().optional()}).strict(),
   'reminders.read':z.object({reminderId:id}).strict(),
-  'reminders.log':z.object({reminderId:id,before:z.number().int().positive().optional()}).strict(),
+  'reminders.log':z.object({reminderId:id,before:z.number().int().positive().optional(),eventCursor:z.number().int().positive().optional(),firingCursor:id.optional()}).strict(),
+  'reminders.finish':z.object({firingId:id,status:z.enum(['completed','failed','deferred']),summary:z.string().max(12000).optional()}).strict(),
   'reminders.create':z.object(reminderInput).strict(),
   'reminders.edit':z.object({...reminderInput,reminderId:id,expectedVersion:z.number().int().positive()}).strict(),
   'reminders.cancel':z.object({reminderId:id,expectedVersion:z.number().int().positive(),cancelPending:z.boolean().optional()}).strict(),
@@ -38,7 +40,7 @@ const schemas: Record<string,z.ZodType> = {
   'tasks.continue':z.object({intentId:id,holdId:id,acknowledge:z.literal('apply_despite_unread_or_changes')}).strict(),
   'tasks.discard':z.object({intentId:id}).strict(),
   'tasks.unclaim':z.object({taskId:id,expectedVersion:z.number().int().nonnegative(),viewToken:id.optional()}).strict(),
-  'tasks.transfer':z.object({taskId:id,peerId:id,expectedVersion:z.number().int().nonnegative(),viewToken:id.optional()}).strict(),
+  'tasks.transfer':z.object({taskId:id,peerId:id,expectedVersion:z.number().int().nonnegative(),reviewDisposition:z.enum(['preserve_review','return_for_changes']).optional(),viewToken:id.optional()}).strict(),
   'drafts.list':z.object({}).strict(),
   'drafts.read':z.object({draftId:id}).strict(),
   'drafts.retry':z.object({draftId:id,revision:z.number().int().positive(),viewToken:id.optional()}).strict(),
@@ -66,10 +68,11 @@ const schemas: Record<string,z.ZodType> = {
   'artifact.revise':z.object({draftId:id,revision:z.number().int().positive(),grantId:id,path:id,title:z.string().min(1).max(200),target:targetSchema,format:z.enum(['text','binary']).optional(),text:text.optional()}).strict(),
   'messages.recent': z.object({ conversationId: id }).strict(),
   'tasks.read': z.object({ taskId: id }).strict(),
+  'tasks.events':z.object({taskId:id,cursor:id.optional(),limit:z.number().int().min(1).max(100).optional()}).strict(),
   agents: z.object({}).strict(), 'messages.read': z.object({ target: targetSchema }).strict(),
   'messages.search': z.object({ query: text }).strict(), 'messages.send': z.object({ target: targetSchema, text,viewToken:id.optional() }).strict(),
   'messages.watch': z.object({ target: targetSchema, active: z.boolean() }).strict(),
-  'tasks.list': z.object({}).strict(), 'tasks.create': z.object({ target: targetSchema, title: text, viewToken:id.optional() }).strict(),
+  'tasks.list': z.object({relation:taskRelationSchema.optional(),status:id.optional(),target:targetSchema.optional(),cursor:id.optional(),limit:z.number().int().min(1).max(100).optional()}).strict(), 'tasks.create': z.object({ target: targetSchema, title: text, viewToken:id.optional() }).strict(),
   'tasks.claim': z.union([z.object({taskId:id,expectedVersion:z.number().int().nonnegative(),viewToken:id.optional()}).strict(),z.object({message:messageRef,expectedVersion:z.number().int().nonnegative(),viewToken:id.optional()}).strict()]), 'tasks.delegate': z.object({ taskId: id, peerId: id, title: text, viewToken:id.optional() }).strict(),
   'tasks.wait': z.object({ taskId: id, dependencyId: id,expectedVersion:z.number().int().nonnegative(),viewToken:id.optional() }).strict(),
   'tasks.update': z.object({ taskId: id, status: z.enum(['doing','review','done','cancelled','failed']), result: text.optional(),expectedVersion:z.number().int().nonnegative(),viewToken:id.optional() }).strict(),
@@ -105,6 +108,13 @@ const capabilityDescriptions:Record<string,string>={
  'conversations.refresh':'Read current external membership and reconcile unknown join/leave when the desired state is observed. A negative observation alone does not settle a timed-out request.',
  'attention.mute':'Suppress ordinary target activity; direct personal mentions and DMs still surface. Does not mark input read or stop an already active run.',
  'attention.defer':'Explicitly postpone a target, including direct requests, until a timestamp. New input stays unread; expiry produces a durable wakeup if permitted. Does not cancel existing work.',
+ 'tasks.list':'Page current authorized tasks by relation: owned, assigned, available, or all-visible. Follow cursor even when a sparse page has no items. Listing never claims work; inspect version before mutation.',
+ 'tasks.read':'Read one currently authorized task through its message/draft visibility boundary.',
+ 'tasks.events':'Page a task transition stream and inspect coverage; historicalComplete=false means events before completeAfterVersion were not reconstructed.',
+ 'tasks.transfer':'Transfer owned work with CAS. For review tasks, reviewDisposition is required: preserve_review keeps review; return_for_changes changes it to doing.',
+ 'reminders.create':'Create an author-owned wakeup. projection defaults to private; conversation_receipt emits only a fixed content-free receipt when fired.',
+ 'reminders.log':'Page scheduler events and firings independently. Each firing separates delivery, run, optional receipt, and author-declared semantic result state.',
+ 'reminders.finish':'Idempotently record completed, failed, or deferred for one owned firing. Deferred does not reschedule; edit or create a reminder for another wakeup.',
 
  'file.read_bytes':'Read up to 32 KiB binary bytes at an offset, returning base64, file size and full SHA256. Files up to 1 MB.',
  'file.write_bytes':'Atomically write canonical base64 bytes, decoded size up to 1 MB, in the granted workspace.',
@@ -149,7 +159,8 @@ export class ToolRouter {
     if (!Object.hasOwn(schemas,operation)) throw new Error('Unknown operation');
     // Parsing is deliberately repeated in the daemon, independently of model-side tool validation.
     const args = schemas[operation]!.parse(input) as Record<string, any>;
-    const readOnly = ['actions.list','actions.read','sessions.status','reminders.list','reminders.read','reminders.log','environment.info','tasks.byMessage','tasks.intents','drafts.list','drafts.read','attention.peek','attention.read','attention.resolve','attention.defer','attention.mute','agents','works.list','budget.read','tasks.read','tasks.list','messages.read','messages.recent','messages.search','schedules.list','inbox.list','inbox.read','conversations.list','conversations.members','conversations.capabilities','conversations.discover','conversations.refresh'];
+    const readOnly = ['actions.list','actions.read','sessions.status','reminders.list','reminders.read','reminders.log','environment.info','tasks.byMessage','tasks.intents','drafts.list','drafts.read','attention.peek','attention.read','attention.resolve','attention.defer','attention.mute','agents','works.list','budget.read','tasks.read','tasks.events','tasks.list','messages.read','messages.recent','messages.search','schedules.list','inbox.list','inbox.read','conversations.list','conversations.members','conversations.capabilities','conversations.discover','conversations.refresh'];
+    if(args.taskId)c.board.read(actor,args.taskId);
     if (!readOnly.includes(operation) && !operation.startsWith('history.') && operation !== 'works.select') c.assertActionWork(run, args.taskId ? c.task(args.taskId).work_id : workId);
     if(args.message)c.messages.message(actor,args.message.messageId);
     if(args.anchor)c.messages.message(actor,args.anchor.messageId);
@@ -157,7 +168,6 @@ export class ToolRouter {
     if(args.scheduleId)c.reminders.read(actor,args.scheduleId);
     if(args.target)c.messages.requireAccess(actor,args.target.conversationId);
     if(args.conversationId&&!['conversations.capabilities','conversations.join','conversations.leave','conversations.refresh'].includes(operation))c.messages.requireAccess(actor,args.conversationId);
-    if(args.taskId)c.messages.requireAccess(actor,JSON.parse(c.task(args.taskId).target).conversationId);
     if(args.deliveryId){const delivery=s.delivery(args.deliveryId);if(delivery.agent_id!==actor)throw new Error('Private inbox');const target=JSON.parse(delivery.payload).target;if(target)c.messages.requireAccess(actor,target.conversationId);}
     const actionId = `${run.sessionId}:${callId}`;
     if (operation.startsWith('conversations.')) {
@@ -192,12 +202,12 @@ export class ToolRouter {
       const existing = c.messages.writes.prepareAction(run, actionId, operation === 'works.select' ? { operation, args } : { workId, operation, args });
       if(args.intentId)this.coordination.describe(actor,args.intentId);
       if(args.draftId)this.gate.describe(actor,args.draftId);
-      const refresh = ['actions.list','actions.read','sessions.status','reminders.list','reminders.read','reminders.log','tasks.byMessage','tasks.intents','drafts.list','drafts.read','attention.peek','budget.read','works.list','tasks.list','messages.search','schedules.list','inbox.list'].includes(operation);
+      const refresh = ['actions.list','actions.read','sessions.status','reminders.list','reminders.read','reminders.log','tasks.byMessage','tasks.intents','drafts.list','drafts.read','attention.peek','budget.read','works.list','tasks.read','tasks.events','tasks.list','messages.search','schedules.list','inbox.list'].includes(operation);
       if (existing.state === 'succeeded' && !refresh) return JSON.parse(existing.receipt!) as ToolReply;
       if(existing.state==='succeeded' && refresh){s.db.prepare("UPDATE actions SET state='prepared',run_id=? WHERE id=?").run(run.id,actionId);existing.state='prepared';}
       if (existing.state !== 'prepared') throw new Error('Uncertain tool action');
       s.startAction(run, actionId);
-      if (args.taskId) c.messages.requireAccess(actor, JSON.parse(c.task(args.taskId).target).conversationId);
+      if (args.taskId) c.board.read(actor,args.taskId);
       let value: unknown = null, wait = false;
       switch (operation) {
         case 'actions.list':{
@@ -214,7 +224,7 @@ export class ToolRouter {
           }
           const target=request.args?.target??request.target;
           if(target?.conversationId)c.messages.requireAccess(actor,target.conversationId);
-          if(request.args?.taskId)c.messages.requireAccess(actor,JSON.parse(c.task(request.args.taskId).target).conversationId);
+          if(request.args?.taskId)c.board.read(actor,request.args.taskId);
           if(request.workId)c.messages.requireAccess(actor,JSON.parse(c.work(request.workId).target).conversationId);
           value={...row,request,receipt:row.receipt?JSON.parse(row.receipt):null};break;
         }
@@ -223,7 +233,8 @@ export class ToolRouter {
         case 'sessions.reset':value=this.sessions.request(run,workId,actionId,args.text);wait=true;break;
         case 'reminders.list':{const items=c.reminders.list(actor,args.before);value={items,nextCursor:items.length===100?items.at(-1)!.cursor:null};break;}
         case 'reminders.read':value=c.reminders.read(actor,args.reminderId);break;
-        case 'reminders.log':value=c.reminders.log(actor,args.reminderId,args.before);break;
+        case 'reminders.log':value=c.reminders.log(actor,args.reminderId,args.eventCursor??args.before,args.firingCursor);break;
+        case 'reminders.finish':value=c.reminders.finish(actor,args.firingId,args.status,args.summary);break;
         case 'reminders.create':value=c.reminders.create(actor,workId,args as any);break;
         case 'reminders.edit':value=c.reminders.edit(actor,args.reminderId,args.expectedVersion,args as any);break;
         case 'reminders.cancel':value=c.reminders.cancel(actor,args.reminderId,args.expectedVersion,args.cancelPending);break;
@@ -248,13 +259,14 @@ export class ToolRouter {
         case 'works.list': value=s.db.prepare("SELECT w.* FROM works w JOIN channel_access a ON a.channel=json_extract(w.target,'$.conversationId') WHERE a.agent_id=? AND a.active=1 ORDER BY w.rowid DESC LIMIT 100").all(actor); for(const row of value as {id:string}[])c.messages.records.mutableTarget('works',row.id); break;
         case 'works.select': c.selectWork(run,args.workId); this.provision?.(actor,args.workId); value={work:c.work(args.workId),grants:s.db.prepare('SELECT id,operations FROM grants WHERE agent_id=? AND work_id=? AND revoked=0 AND expires>?').all(actor,args.workId,Date.now())}; break;
         case 'agents': value = c.agents.list().map(a => ({ id: a.id, name: a.name, role: a.role })); break;
-        case 'tasks.read': { const task = c.task(args.taskId); c.messages.requireAccess(actor, JSON.parse(task.target).conversationId); value = task; break; }
+        case 'tasks.read':value=c.board.read(actor,args.taskId);break;
+        case 'tasks.events':value=c.board.events(actor,args.taskId,args.cursor,args.limit);break;
         case 'messages.recent': value = c.messages.recent(actor, args.conversationId); break;
         case 'messages.read': value = c.messages.read(actor, args.target); break;
         case 'messages.search': value = c.messages.search(actor, args.query); break;
         case 'messages.send': c.send(actor, workId, args.target, args.text, actionId,{run,viewToken:args.viewToken});value=this.gate.describe(actor,actionId);break;
         case 'messages.watch': c.messages.watch(actor, args.target, args.active); break;
-        case 'tasks.list': value = c.list(actor); break;
+        case 'tasks.list': value = c.board.list(actor,{relation:args.relation??'all-visible',status:args.status,target:args.target,cursor:args.cursor,limit:args.limit}); break;
         case 'tasks.create': {const task=this.coordination.create(run,workId,args.target,args.title,args.viewToken);value={task,messageDraft:this.gate.describe(actor,task.outbox_id!)};break;}
         case 'tasks.claim':value=this.coordination.submit(run,workId,actionId,operation,args,args.viewToken);break;
         case 'tasks.delegate': value = c.delegate(actor, args.taskId, args.peerId, args.title,{run,viewToken:args.viewToken}); break;

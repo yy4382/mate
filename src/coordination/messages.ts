@@ -11,8 +11,8 @@ export class MessageTasks{
   const message=this.c.messages.message(actor,ref.messageId);
   if(message.deleted)throw new Error('Message not visible or deleted');return message;
  }
- find(actor:string,ref:Ref):Task|undefined{const m=this.message(actor,ref);this.c.activateDelegations();return this.c.store.db.prepare('SELECT *,0 legacy FROM tasks WHERE message_key=?').get(m.id) as Task|undefined;}
- private target(actor:string,args:any):Target{if(args.message){const m=this.message(actor,args.message);if(!m.rootId)throw new Error('Message root is unknown');return{conversationId:m.conversationId,threadId:m.rootId};}const t=this.c.task(args.taskId);this.c.messages.requireAccess(actor,JSON.parse(t.target).conversationId);return JSON.parse(t.target);}
+ find(actor:string,ref:Ref):Task|undefined{const m=this.message(actor,ref);this.c.activateDelegations();return this.c.store.db.prepare('SELECT * FROM tasks WHERE message_key=?').get(m.id) as Task|undefined;}
+ private target(actor:string,args:any):Target{if(args.message){const m=this.message(actor,args.message);if(!m.rootId)throw new Error('Message root is unknown');return{conversationId:m.conversationId,threadId:m.rootId};}this.c.board.read(actor,args.taskId);return JSON.parse(this.c.task(args.taskId).target);}
  submit(run:RunToken,workId:string,id:string,operation:string,args:any,viewToken?:string):unknown{
   const s=this.c.store;return s.atomic(()=>{s.assertRun(run);const target=this.target(run.agentId,args),old=s.db.prepare('SELECT * FROM task_intents WHERE id=?').get(id) as Intent|undefined;
    if(old){if(old.agent_id!==run.agentId||old.operation!==operation||old.args!==encode(args))throw new Error('Task intent identity conflict');return this.describe(run.agentId,id);}
@@ -38,23 +38,18 @@ export class MessageTasks{
     if(args.expectedVersion!==0)throw new Error('Task version conflict');
     const bound=s.db.prepare('SELECT work_id FROM message_work WHERE message_key=?').get(key) as {work_id:string}|undefined;
     const work=bound?.work_id??i.work_id;c.assertActionWork(run,work);
-    const taskId=c.createTask(run.agentId,work,target,message.text.slice(0,500)||'Message task');s.db.prepare('UPDATE tasks SET message_key=? WHERE id=?').run(key,taskId);task=c.task(taskId);
+    const taskId=c.createTask(run.agentId,work,target,message.text.slice(0,500)||'Message task',undefined,{messageKey:key});task=c.task(taskId);
    }
   }else task=c.task(args.taskId);
   c.assertActionWork(run,task.work_id);c.messages.requireAccess(run.agentId,JSON.parse(task.target).conversationId);
   if(task.version!==args.expectedVersion)throw new Error('Task version conflict');
   const previousVersion=task.version;
   switch(i.operation){
-   case 'tasks.claim':c.claim(run.agentId,task.id);break;
-   case 'tasks.wait':c.wait(run.agentId,task.id,args.dependencyId);break;
-   case 'tasks.update':c.update(run.agentId,task.id,args.status,args.result);break;
-   case 'tasks.unclaim':case 'tasks.transfer':{
-    if(task.owner!==run.agentId||!['doing','waiting','review'].includes(task.status))throw new Error('Task not owned or terminal');
-    const peer=i.operation==='tasks.transfer'?args.peerId:null;if(peer){c.messages.agent(peer);c.messages.requireAccess(peer,target.conversationId);}
-    s.db.prepare("UPDATE tasks SET owner=?,assigned_to=NULL,status=?,waiting_on=NULL,version=version+1 WHERE id=? AND version=?").run(peer,peer?'doing':'todo',task.id,args.expectedVersion);
-    s.db.prepare('INSERT INTO task_events(task_id,at,body) VALUES(?,?,?)').run(task.id,Date.now(),encode({action:i.operation,actor:run.agentId,peer}));
-    if(peer)c.enqueue(peer,task.work_id,`transfer:${task.id}:${task.version+1}`,{kind:'task_transfer',taskId:task.id,target});break;
-   }
+   case 'tasks.claim':c.claim(run.agentId,task.id,args.expectedVersion);break;
+   case 'tasks.wait':c.wait(run.agentId,task.id,args.dependencyId,args.expectedVersion);break;
+   case 'tasks.update':c.update(run.agentId,task.id,args.status,args.result,args.expectedVersion);break;
+   case 'tasks.unclaim':c.unclaim(run.agentId,task.id,args.expectedVersion);break;
+   case 'tasks.transfer':c.transfer(run.agentId,task.id,args.peerId,args.expectedVersion,args.reviewDisposition);break;
    default:throw new Error('Invalid task operation');
   }
   task=c.task(task.id);
@@ -70,6 +65,6 @@ export class MessageTasks{
   s.db.prepare("UPDATE task_intents SET state='applied',hold_id=NULL,receipt=? WHERE id=?").run(encode({format:'mate.task-intent.v2',task}),id);return this.describe(run.agentId,id);
  }
  create(run:RunToken,workId:string,target:Target,title:string,viewToken?:string):Task{
-  return this.c.store.atomic(()=>{const id=this.c.createTask(run.agentId,workId,target,title),outputId=`task-create:${id}`;this.c.send(run.agentId,workId,target,title,outputId,{run,viewToken});this.c.store.db.prepare("UPDATE tasks SET status='draft',outbox_id=? WHERE id=?").run(outputId,id);return this.c.task(id);});
+  return this.c.store.atomic(()=>{const id=this.c.createTask(run.agentId,workId,target,title),outputId=`task-create:${id}`;this.c.send(run.agentId,workId,target,title,outputId,{run,viewToken});return this.c.draftTask(run.agentId,id,outputId);});
  }
 }

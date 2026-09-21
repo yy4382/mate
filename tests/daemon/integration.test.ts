@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { Store } from '../../src/storage/store.js';
 import { configSchema } from '../../src/config.js';
 import { configFixture } from '../helpers/config.js';
-import { Messages, Output } from '../helpers/canonical-slack.js';
+import { Messages, Output,migrateCurrentRuntime } from '../helpers/canonical-slack.js';
 import { Collaboration } from '../../src/collaboration/service.js';
 import { Broker } from '../../src/policy/broker.js';
 import { Supervisor } from '../../src/runtime/supervisor.js';
@@ -27,7 +27,7 @@ const cleanups: (() => void)[] = [];
 afterEach(() => cleanups.splice(0).forEach(fn => fn()));
 function setup() {
   const config = configSchema.parse({ ...configFixture, budgets: { ...configFixture.budgets, maxTokens: 300000 }, agents: [configFixture.agents[0], { ...configFixture.agents[0], id: 'writer', name: 'Writer', slackAppId: 'ATWO', slackUserId: 'UTWO', slackBotId: 'BTWO', botTokenEnv: 'WRITER_BOT', appTokenEnv: 'WRITER_APP' }] });
-  const store = new Store(':memory:'), messages = new Messages(store, config), post = vi.fn(async () => ({ ts: `101.${String(post.mock.calls.length).padStart(6,'0')}` }));
+  const store = new Store(':memory:'), messages = new Messages(store, config);migrateCurrentRuntime(store);const post = vi.fn(async () => ({ ts: `101.${String(post.mock.calls.length).padStart(6,'0')}` }));
   const c = new Collaboration(store, messages, new Output(messages, { post }), config), ingress = new Ingress(c,new CanonicalSlackNormalizer(messages,messages.mapper,c.output));
   const backend = { execute: vi.fn(async () => ({ code: 0, stdout: 'artifact evidence', stderr: '', truncated: false })) };
   const broker = new Broker(store, c, backend, ['/synthetic/protected']);

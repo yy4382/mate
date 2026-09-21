@@ -5,6 +5,11 @@ import {slackApplication} from '../../src/slack/application.js';
 import {CanonicalSlackTransport} from '../../src/slack/transport.js';
 import {CanonicalSlackNormalizer} from '../../src/slack/normalize.js';
 import {migrateCanonicalConversations} from '../../src/slack/canonical-migration.js';
+import {migrateInternalConversations}from '../../src/storage/internal-schema.js';
+import {migrateProjections}from '../../src/storage/projection-schema.js';
+import {migrateProjectionImports}from '../../src/storage/projection-import-schema.js';
+import {migrateHistoryIndexes}from '../../src/storage/history-schema.js';
+import {migrateCoordinationRecovery}from '../../src/storage/coordination-schema.js';
 import type {Store} from '../../src/storage/store.js';
 import type {MateConfig} from '../../src/config.js';
 import type {MessageDTO} from '../../src/domain/messages.js';
@@ -31,6 +36,11 @@ export class Messages extends Conversations {
     else super.record(message,visibleTo);
   }
   normalize(appId:string,eventId:string):void{if(!this.output)throw new Error('Fixture output missing');new CanonicalSlackNormalizer(this,this.mapper,this.output).normalize(appId,eventId);}
+}
+
+/** Complete the explicit offline schema chain for fixtures that construct current runtime services. */
+export function migrateCurrentRuntime(store:Store):void{
+  migrateInternalConversations(store);migrateProjections(store);migrateProjectionImports(store);migrateHistoryIndexes(store);migrateCoordinationRecovery(store);
 }
 /** Fake only the remote HTTP response; mapping, receipts and core dispatch are production code. */
 export class Output extends CanonicalOutput {

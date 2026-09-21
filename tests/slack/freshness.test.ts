@@ -2,12 +2,12 @@ import { fixtureTarget, externalThread } from '../helpers/canonical-slack.js';
 import {afterEach,expect,it,vi} from 'vitest';
 import type {AgentMessage} from '@earendil-works/pi-agent-core';
 import {Store} from '../../src/storage/store.js';
-import {Messages,Output} from '../helpers/canonical-slack.js';
+import {Messages,Output,migrateCurrentRuntime} from '../helpers/canonical-slack.js';
 import {Collaboration} from '../../src/collaboration/service.js';
 import {CanonicalFreshnessGate as FreshnessGate} from '../../src/conversations/freshness.js';
 import {configFixture} from '../helpers/config.js';
 const stores:Store[]=[];afterEach(()=>stores.splice(0).forEach(s=>s.close()));const target=fixtureTarget('CTEST','100.000001');
-function setup(){const s=new Store(':memory:');stores.push(s);s.register('research','v1',[]);const m=new Messages(s,configFixture);m.membership('research','CTEST',true);let now=1000;const post=vi.fn(async()=>({ts:`200.${String(post.mock.calls.length).padStart(6,'0')}`}));const o=new Output(m,{post},()=>now);const c=new Collaboration(s,m,o,configFixture),g=new FreshnessGate(m,c.attention,()=>now);o.gate=g;const w=c.createWork('human',target);c.enqueue('research',w,'start',{});const run=s.beginRun('research')!;s.input(run,{});
+function setup(){const s=new Store(':memory:');stores.push(s);s.register('research','v1',[]);const m=new Messages(s,configFixture);migrateCurrentRuntime(s);m.membership('research','CTEST',true);let now=1000;const post=vi.fn(async()=>({ts:`200.${String(post.mock.calls.length).padStart(6,'0')}`}));const o=new Output(m,{post},()=>now);const c=new Collaboration(s,m,o,configFixture),g=new FreshnessGate(m,c.attention,()=>now);o.gate=g;const w=c.createWork('human',target);c.enqueue('research',w,'start',{});const run=s.beginRun('research')!;s.input(run,{});
  const read=()=>{const v=c.attention.read(run,target) as any;c.attention.presented(run,{role:'toolResult',toolCallId:'read',toolName:'mate',content:[{type:'text',text:JSON.stringify(v)}],isError:false,timestamp:0} as AgentMessage);return v.viewToken as string;};
  const change=(n:number)=>m.record({team:'TTEST',channel:'CTEST',thread:externalThread(target),ts:`${100+n}.000001`,revision:`${100+n}.000001`,text:'new information',user:'UOWNER',deleted:false},['research']);
  return{s,m,c,g,o,w,run,post,read,change,time:(v:number)=>{now=v;}};}
@@ -39,7 +39,7 @@ it('owner Agent stop prevents an already continued pending draft from dispatchin
 });
 it('revising a delegation updates its output reference before activation',()=>{
  const{s,c,g,w,run}=setup();const parent=c.createTask('research',w,target,'parent');c.claim('research',parent);
- const id=c.send('research',w,target,'delegated','delegate',{run});const child=c.createTask('research',w,target,'child',parent);s.db.prepare("UPDATE tasks SET outbox_id=?,status='draft' WHERE id=?").run(id,child);
+ const id=c.send('research',w,target,'delegated','delegate',{run});const child=c.createTask('research',w,target,'child',parent);c.draftTask('research',child,id);
  g.revise(run,id,1,'revised delegation');c.activateDelegations();expect(c.task(child).status).toBe('draft');expect(c.task(child).outbox_id).toBe('delegate:revision:2');
 });
 it('durable related ingress blocks dispatch until normalized, then the changed view holds',async()=>{

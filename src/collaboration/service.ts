@@ -11,24 +11,25 @@ import { Store, encode, type RunToken } from '../storage/store.js';
 import { Conversations as Messages } from '../conversations/messages.js';
 import { conversationTargetSchema as targetSchema, type ConversationTarget as Target } from '../domain/conversations.js';
 import type { TeamSettings } from '../domain/agents.js';
+import {TaskBoard} from '../coordination/board.js';
+import {TaskTransitions,type TaskPatch} from '../coordination/transitions.js';
 
 export interface Work { id: string; target: string; state: string; max_runs: number; max_tokens: number; max_cost: number; runs: number; tokens: number; cost: number }
-export interface Task { legacy:number; message_key:string|null; id: string; work_id: string; parent_id: string | null; target: string; title: string; owner: string | null; assigned_to: string | null; status: string; version: number; waiting_on: string | null; result: string | null; outbox_id: string | null }
+export interface Task { legacy:number; message_key:string|null; created_by:string|null; id: string; work_id: string; parent_id: string | null; target: string; title: string; owner: string | null; assigned_to: string | null; status: string; version: number; waiting_on: string | null; result: string | null; outbox_id: string | null }
 export class Collaboration {
   readonly agents: AgentDirectory;
   readonly reminders:Reminders;
   readonly seats: ReviewSeats;
   readonly ledger: BudgetLedger;
   readonly attention: Attention;
-  constructor(readonly store: Store, readonly messages: Messages, readonly output: Output, readonly config: TeamSettings) { this.agents=new ConfiguredAgents(config.agents); this.config={agents:this.agents.list(),ownerUserIds:[...config.ownerUserIds],budgets:{...config.budgets}}; this.reminders=new Reminders(this); this.ledger = new BudgetLedger(store, config); this.attention = new Attention(messages); this.seats = new ReviewSeats(messages,config.ownerUserIds); }
+  readonly board:TaskBoard;
+  private readonly taskTransitions:TaskTransitions;
+  constructor(readonly store: Store, readonly messages: Messages, readonly output: Output, readonly config: TeamSettings) { this.agents=new ConfiguredAgents(config.agents); this.config={agents:this.agents.list(),ownerUserIds:[...config.ownerUserIds],budgets:{...config.budgets}}; this.reminders=new Reminders(this); this.ledger = new BudgetLedger(store, config); this.attention = new Attention(messages); this.seats = new ReviewSeats(messages,config.ownerUserIds);this.taskTransitions=new TaskTransitions(store);this.board=new TaskBoard(this); }
   work(id: string): Work { const work = this.store.db.prepare('SELECT * FROM works WHERE id=?').get(id) as Work | undefined; if (!work) throw new Error('Unknown work'); this.messages.records.mutableTarget('works',id); return work; }
-  task(id: string): Task { const task = this.store.db.prepare("SELECT *, (message_key IS NULL AND status!='draft') legacy FROM tasks WHERE id=?").get(id) as Task | undefined; if (!task) throw new Error('Unknown task'); this.messages.records.mutableTarget('tasks',id); return task; }
+  task(id: string): Task { const task = this.store.db.prepare('SELECT * FROM tasks WHERE id=?').get(id) as Task | undefined; if (!task) throw new Error('Unknown task'); this.messages.records.mutableTarget('tasks',id); return task; }
   list(agentId: string): Task[] {
-    this.messages.agent(agentId);
     if(this.messages.isolated(agentId))return [];
-    const rows = this.store.db.prepare("SELECT t.*, (t.message_key IS NULL AND t.status!='draft') legacy FROM tasks t JOIN channel_access a ON a.channel=json_extract(t.target,'$.conversationId') WHERE a.agent_id=? AND a.active=1 ORDER BY t.rowid DESC LIMIT 100").all(agentId) as Task[];
-    for(const row of rows)this.messages.records.mutableTarget('tasks',row.id);
-    return rows;
+    return this.board.list(agentId,{relation:'all-visible',limit:100}).items.map(item=>this.task(item.id));
   }
   currentWork(run: RunToken, fallback: string): string {
     this.store.assertRun(run);
@@ -48,7 +49,7 @@ export class Collaboration {
     });
   }
   active(workId: string): Work { const work = this.work(workId); if (work.state !== 'active') throw new Error('Work paused or cancelled'); return work; }
-  private event(taskId: string, body: unknown): void { this.store.db.prepare('INSERT INTO task_events(task_id,at,body) VALUES(?,?,?)').run(taskId, Date.now(), encode(body)); }
+  private transition(task:Task,patch:TaskPatch,event:{action:string;actor?:string;cause?:unknown},expectedVersion=task.version):Task{return this.taskTransitions.change(task,patch,event,expectedVersion);}
   /** Work identifies an activity; it never grants or replenishes an Agent account. */
   createWork(origin: string, target: Target): string {
     targetSchema.parse(target);
@@ -103,26 +104,27 @@ export class Collaboration {
       if (tokens > row.token_cap || cost > row.cost_cap) this.store.db.prepare("UPDATE works SET state='paused' WHERE id=? AND state!='cancelled'").run(row.work_id);
     });
   }
-  createTask(agentId: string, workId: string, target: Target, title: string, parentId?: string): string {
+  createTask(agentId: string, workId: string, target: Target, title: string, parentId?: string,initial?:{messageKey?:string}): string {
     targetSchema.parse(target); z.string().min(1).max(500).parse(title); this.messages.requireAccess(agentId, target.conversationId);
     return this.store.atomic(() => {
       this.active(workId);
-      if (parentId) { const parent = this.task(parentId); if (parent.work_id !== workId || parent.owner !== agentId || !['doing','waiting','review'].includes(parent.status)) throw new Error('Invalid parent task'); }
+      if (parentId) { this.board.read(agentId,parentId);const parent = this.task(parentId); if (parent.work_id !== workId || parent.owner !== agentId || !['doing','waiting','review'].includes(parent.status)) throw new Error('Invalid parent task'); }
       const id = randomUUID();
-      this.store.db.prepare("INSERT INTO tasks(id,work_id,parent_id,target,title,status) VALUES(?,?,?,?,?,'todo')").run(id, workId, parentId ?? null, encode(target), title);
+      this.store.db.prepare("INSERT INTO tasks(id,work_id,parent_id,target,title,status,created_by,message_key,legacy) VALUES(?,?,?,?,?,'todo',?,?,0)").run(id, workId, parentId ?? null, encode(target), title,agentId,initial?.messageKey??null);
       this.messages.writes.mutable('tasks',id);
-      this.event(id, { action: 'create', agentId }); return id;
+      this.taskTransitions.created(this.task(id),agentId);return id;
     });
   }
-  claim(agentId: string, id: string): Task {
+  claim(agentId: string, id: string,expectedVersion?:number): Task {
     return this.store.atomic(() => {
-      const task = this.task(id); this.active(task.work_id); this.messages.requireAccess(agentId, (JSON.parse(task.target) as Target).conversationId);
-      if (this.store.db.prepare("UPDATE tasks SET owner=?,status='doing',version=version+1 WHERE id=? AND owner IS NULL AND status='todo' AND (assigned_to IS NULL OR assigned_to=?)").run(agentId, id, agentId).changes !== 1) throw new Error('Task already claimed or unavailable');
-      this.event(id, { action: 'claim', agentId }); return this.task(id);
+      this.board.read(agentId,id);const task = this.task(id); this.active(task.work_id);
+      if(expectedVersion!==undefined&&task.version!==expectedVersion)throw new Error('Task version conflict');
+      if(task.owner!==null||!['todo','review'].includes(task.status)||(task.assigned_to!==null&&task.assigned_to!==agentId))throw new Error('Task already claimed or unavailable');
+      return this.transition(task,{owner:agentId,status:task.status==='review'?'review':'doing'},{action:'claim',actor:agentId});
     });
   }
   private owned(agentId: string, id: string): Task {
-    const task = this.task(id); this.active(task.work_id); this.messages.requireAccess(agentId, JSON.parse(task.target).conversationId);
+    this.board.read(agentId,id);const task = this.task(id); this.active(task.work_id);
     if (task.owner !== agentId || ['done','cancelled','failed','draft'].includes(task.status)) throw new Error('Task not owned or terminal'); return task;
   }
   delegate(agentId: string, parentId: string, peerId: string, title: string, basis?:SendBasis): string {
@@ -132,7 +134,7 @@ export class Collaboration {
       this.messages.requireAccess(peerId, target.conversationId);
       const id = this.createTask(agentId, parent.work_id, target, title, parentId);
       const outputId = this.send(agentId, parent.work_id, target, `${peer.name}: ${title}\nMate task: ${id}`, undefined, basis);
-      this.store.db.prepare("UPDATE tasks SET status='draft',assigned_to=?,outbox_id=? WHERE id=?").run(peerId, outputId, id);
+      this.transition(this.task(id),{status:'draft',assigned_to:peerId,outbox_id:outputId},{action:'delegation_draft',actor:agentId});
       return id;
     });
   }
@@ -142,29 +144,26 @@ export class Collaboration {
       const tasks = this.store.db.prepare("SELECT t.* FROM tasks t JOIN outbox o ON o.id=t.outbox_id JOIN works w ON w.id=t.work_id WHERE t.status='draft' AND o.state='sent' AND w.state='active'").all() as Task[];
       for (const task of tasks) {
         const key=this.messages.records.confirmedMessageId(task.outbox_id!);
-        this.store.db.prepare("UPDATE tasks SET status='todo',message_key=? WHERE id=?").run(key,task.id);
+        this.transition(task,{status:'todo',message_key:key},{action:'visible_delegation',cause:{outboxId:task.outbox_id}});
         this.enqueue(task.assigned_to??this.store.output(task.outbox_id!)!.agent_id, task.work_id, `delegate:${task.id}`, { kind: 'delegation', taskId: task.id, target: JSON.parse(task.target), receivedAt: Date.now() });
-        this.event(task.id, { action: 'visible_delegation' });
       }
       const failed = this.store.db.prepare("SELECT t.* FROM tasks t JOIN outbox o ON o.id=t.outbox_id JOIN works w ON w.id=t.work_id WHERE t.status='draft' AND o.state='failed' AND w.state='active'").all() as Task[];
       for (const task of failed) {
-        this.store.db.prepare("UPDATE tasks SET status='failed',result='Delegation delivery failed',version=version+1 WHERE id=?").run(task.id);
-        this.event(task.id, { action: 'delegation_failed' }); this.wakeDependents(this.task(task.id));
+        const failedTask=this.transition(task,{status:'failed',result:'Delegation delivery failed'},{action:'delegation_failed',cause:{outboxId:task.outbox_id}});this.wakeDependents(failedTask);
       }
     });
   }
   private wakeDependents(task: Task): void {
     const waiters = this.store.db.prepare("SELECT * FROM tasks WHERE waiting_on=? AND status='waiting'").all(task.id) as Task[];
     for (const waiter of waiters) {
-      this.store.db.prepare("UPDATE tasks SET status='doing',waiting_on=NULL,version=version+1 WHERE id=?").run(waiter.id);
+      this.transition(waiter,{status:'doing',waiting_on:null},{action:'dependency_wake',cause:{dependencyId:task.id,dependencyVersion:task.version}});
       const delivery=this.messages.writes.enqueue(waiter.owner!, `dependency:${waiter.id}:${task.id}:${task.version}`, { kind: 'dependency', taskId: waiter.id, dependencyId: task.id, target: JSON.parse(waiter.target) },50);
       this.bindDelivery(delivery,waiter.work_id);
     }
   }
-  wait(agentId: string, taskId: string, dependencyId: string): void {
+  wait(agentId: string, taskId: string, dependencyId: string,expectedVersion?:number): void {
     this.store.atomic(() => {
-      const task = this.owned(agentId, taskId), dependency = this.task(dependencyId);
-      this.messages.requireAccess(agentId,JSON.parse(dependency.target).conversationId);
+      const task = this.owned(agentId, taskId);this.board.read(agentId,dependencyId);const dependency = this.task(dependencyId);if(expectedVersion!==undefined&&task.version!==expectedVersion)throw new Error('Task version conflict');
       if (taskId === dependencyId) throw new Error('Invalid dependency');
       const queue = [dependency.id], visited = new Set<string>();
       while (queue.length) {
@@ -176,29 +175,44 @@ export class Collaboration {
         queue.push(...children.map(c => c.id));
       }
       if (['done','cancelled','failed'].includes(dependency.status)) {
-        if(task.status==='waiting'){this.store.db.prepare("UPDATE tasks SET status='doing',waiting_on=NULL,version=version+1 WHERE id=?").run(task.id);this.event(task.id,{action:'dependency_already_terminal',dependencyId});}
+        if(task.status==='waiting')this.transition(task,{status:'doing',waiting_on:null},{action:'dependency_already_terminal',actor:agentId,cause:{dependencyId}});
         this.enqueue(agentId, task.work_id, `dependency:${taskId}:${dependencyId}:${dependency.version}`, { kind: 'dependency', taskId, dependencyId, target: JSON.parse(task.target) }); return;
       }
-      this.store.db.prepare("UPDATE tasks SET status='waiting',waiting_on=?,version=version+1 WHERE id=?").run(dependencyId, taskId);
-      this.event(taskId, { action: 'wait', dependencyId });
+      this.transition(task,{status:'waiting',waiting_on:dependencyId},{action:'wait',actor:agentId,cause:{dependencyId}});
     });
   }
-  update(agentId: string, id: string, status: 'doing' | 'review' | 'done' | 'cancelled' | 'failed', result?: string): void {
+  update(agentId: string, id: string, status: 'doing' | 'review' | 'done' | 'cancelled' | 'failed', result?: string,expectedVersion?:number): void {
     this.store.atomic(() => {
-      let task = this.task(id);
+      this.board.read(agentId,id);let task = this.task(id);
       if (task.status === 'draft' && status === 'cancelled' && task.parent_id && this.owned(agentId, task.parent_id).work_id === task.work_id) {
         const output = task.outbox_id ? this.store.output(task.outbox_id) : undefined;
         if (output?.state === 'pending') this.store.transitionOutput(output.id, 'pending', 'failed', { reason: 'delegation_cancelled' });
       } else task = this.owned(agentId, id);
+      if(expectedVersion!==undefined&&task.version!==expectedVersion)throw new Error('Task version conflict');
       if ((status === 'done' || status === 'review') && !result?.trim()) throw new Error('Evidence/result required');
       if (status === 'done' && this.store.db.prepare("SELECT 1 FROM tasks WHERE parent_id=? AND status NOT IN ('done','cancelled','failed')").get(id)) throw new Error('Unfinished child tasks');
-      this.store.db.prepare('UPDATE tasks SET status=?,result=?,waiting_on=NULL,version=version+1 WHERE id=?').run(status, result ?? task.result, id);
-      this.event(id, { action: status, result });
+      const updated=this.transition(task,{status,result:result??task.result,waiting_on:null},{action:status,actor:agentId});
       if (['done','cancelled','failed'].includes(status)) {
-        this.wakeDependents(this.task(id));
+        this.wakeDependents(updated);
       }
     });
   }
+  /** Publish metadata is part of the same versioned task transition as its event. */
+  draftTask(agentId:string,id:string,outboxId:string,assignedTo?:string):Task{return this.store.atomic(()=>{
+    const task=this.task(id);if(task.created_by!==agentId)throw new Error('Task creator only');
+    return this.transition(task,{status:'draft',outbox_id:outboxId,assigned_to:assignedTo??task.assigned_to},{action:'draft',actor:agentId});
+  });}
+  unclaim(agentId:string,id:string,expectedVersion:number):Task{return this.store.atomic(()=>{
+    const task=this.owned(agentId,id);return this.transition(task,{owner:null,assigned_to:null,status:task.status==='review'?'review':'todo',waiting_on:null},{action:'tasks.unclaim',actor:agentId},expectedVersion);
+  });}
+  transfer(agentId:string,id:string,peerId:string,expectedVersion:number,reviewDisposition?:'preserve_review'|'return_for_changes'):Task{return this.store.atomic(()=>{
+    const task=this.owned(agentId,id),target=JSON.parse(task.target) as Target;this.board.read(peerId,id);
+    if(task.status==='review'&&!reviewDisposition)throw new Error('Review transfer requires disposition');
+    if(task.status!=='review'&&reviewDisposition)throw new Error('Review disposition applies only to review tasks');
+    const status=task.status==='review'&&reviewDisposition==='preserve_review'?'review':'doing';
+    const updated=this.transition(task,{owner:peerId,assigned_to:null,status,waiting_on:null},{action:'tasks.transfer',actor:agentId,cause:{peerId,reviewDisposition:reviewDisposition??null}},expectedVersion);
+    this.enqueue(peerId,task.work_id,`transfer:${task.id}:${updated.version}`,{kind:'task_transfer',taskId:task.id,target});return updated;
+  });}
   schedule(agentId:string,workId:string,target:Target,nextAt:number,timezone:string,cron?:string,taskId?:string):string{return this.reminders.create(agentId,workId,{target,nextAt,timezone,cron,taskId,content:'Follow up on the referenced conversation or task.'}).id;}
   cancelSchedule(agentId:string,id:string):void{const r=this.reminders.read(agentId,id);this.reminders.cancel(agentId,id,r.version);}
   reschedule(agentId:string,id:string,nextAt:number):void{const r=this.reminders.read(agentId,id);this.reminders.edit(agentId,id,r.version,{target:JSON.parse(r.target),content:r.content,nextAt,timezone:r.timezone,cron:r.cron??undefined,taskId:r.task_id??undefined,anchor:r.anchor?JSON.parse(r.anchor):undefined});}
@@ -234,7 +248,8 @@ export class Collaboration {
       }
       if (operation === 'cancel') {
         this.reminders.cancelWork(workId);
-        this.store.db.prepare("UPDATE tasks SET status='cancelled',version=version+1 WHERE work_id=? AND status NOT IN ('done','cancelled','failed')").run(workId);
+        const tasks=this.store.db.prepare("SELECT * FROM tasks WHERE work_id=? AND status NOT IN ('done','cancelled','failed')").all(workId) as Task[];
+        for(const task of tasks)this.transition(task,{status:'cancelled',waiting_on:null},{action:'work_cancelled',cause:{ownerId}});
       }
       this.store.audit('work_control', { ownerId, workId, operation }); return runs.map(r => r.id);
     });

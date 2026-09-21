@@ -1,4 +1,4 @@
-> 2026-09-21：E1已拆分应用会话服务与Slack解析adapter，软件工程gate通过。E2起逐步替换平台实体；本文件下文为R8行为快照，不代表新架构全部完成。当前阶段与债务见IMPLEMENTATION_PLAN和ARCHITECTURE。
+> 2026-09-21：E1–E3已完成平台无关会话、投影、动态配置、参与和有界历史；E4a补齐协作恢复面。E4b owner activity 与 E4c 工具组合仍待实现。当前阶段与债务见IMPLEMENTATION_PLAN和ARCHITECTURE。
 
 # Mate 当前调用链、能力与边界
 
@@ -75,11 +75,13 @@ Slack没有这里所需的“比较整个房间版本后原子发送”事务。
 
 直接路径：A messages.send @B → gate/outbox → confirmed → Messages.record → B持久delivery → B下一run。无需总管、父任务或委派树；自己的echo去重。同伴可以选择回复、核实、补充、暂缓或沉默。
 
-需要追踪所有权时，[MessageTasks](../src/coordination/messages.ts)的 tasks.claim 接原始messageRef或既有taskId，唯一message_key加version CAS。hold时不提前占有任务；继续也不能抢占另一个owner。unclaim/transfer/update都有版本约束。tasks.create先发可见消息，confirmed后才激活任务；历史无法证明原始消息来源的旧task标legacy，不猜测合并。
+需要追踪所有权时，[MessageTasks](../src/coordination/messages.ts)的 tasks.claim 接原始messageRef或既有taskId，唯一message_key加version CAS。所有按taskId的读取和变更都先经过[TaskBoard](../src/coordination/board.ts)的同一可见性判断；external message-task必须有行动Agent自己的installation snapshot，不能只凭频道ACL或猜到ID读取/变更。hold时不提前占有任务；继续也不能抢占另一个owner。unclaim/transfer/update都有版本约束。tasks.create先发可见消息，confirmed后才激活任务；未发布或发布失败的task只向creator、assignee或owner开放。历史无法证明原始消息来源且没有message binding的旧task才标legacy，不猜测合并。
 
-tasks.wait建立持久依赖并释放run，等待者仍能处理其他对话。新任务与状态投影是可见信息，不代替Agent自己的讨论判断。
+`TaskTransitions`把状态、owner、assignee、等待依赖、message/outbox binding和对应event作为同一事务提交；自动dependency wake、delegation发布/失败、draft revision和work cancel也走同一边界。v22迁移只按唯一create actor、draft outbox actor、assigned actor依次回填createdBy；无法证明时保持unknown，并为旧event写明从哪个version之后才完整。
 
-[Reminders](../src/reminders/service.ts)由作者管理content、target、可选anchor/task、时间、cron、version和日志。完成task不取消提醒；事项pause/cancel仍控制其触发。tick原子写delivery/firing/固定可见回执，只唤醒作者，cron错过多次合并一次。回执不发布模型撰写正文，也不唤醒其他Agent。cancel默认取消未来，显式cancelPending可撤回尚未被run选中的队列，已选中/注入单独报告。
+tasks.list按owned、assigned、available、all-visible分页；cursor绑定actor和查询。每次最多扫描200个候选，即使某页因当前ACL/snapshot全部不可见，也返回scan continuation而不在低配VPS上扫完整表。tasks.events另行分页并返回历史coverage。普通peer review的review状态在claim/unclaim时保留；transfer明确选择继续review或退回doing。独立blind review仍走review seat。tasks.wait建立持久依赖并释放run，等待者仍能处理其他对话。新任务与状态投影是可见信息，不代替Agent自己的讨论判断。
+
+[Reminders](../src/reminders/service.ts)由作者管理content、target、可选anchor/task、时间、cron、version和日志。完成task不取消提醒；事项pause/cancel仍控制其触发。默认`private`只原子写author delivery与firing，不产生outbox、conversation event或peer attention；显式`conversation_receipt`才生成无正文的固定回执。delivery携带firingId；Agent处理后用reminders.finish幂等记录completed、failed或deferred，summary保持作者私有。deferred只描述本次结果，不自动安排下一次唤醒。log分别分页scheduler events与firings，并分开展示delivery、run、receipt和语义result。cancel默认取消未来，显式cancelPending可撤回尚未被run选中的队列，已选中/注入单独报告。
 
 ## 工具与执行的实际路径
 
@@ -107,7 +109,7 @@ Jev、分类SDK、逐命令审批和相关配置已移除。未来命令审查�
 
 [完整prompt](../src/runtime/prompt.ts)描述持续同伴、自主注意力、真实人类/peer工作输入、自由知识组织、复用消息任务、进展/交接、跟进与收据。角色可通过对话和memory演化；配置身份、授权不随文本改变。
 
-每run读取最新MEMORY入口；压缩时 Engine → invalidateViews → refreshRecovery RPC → Supervisor重新读取memory、checkpoint、当前选中事项、任务索引和未知动作引用，下一模型输入使用新包。memory/checkpoint各8KB摘录并附hash/截断和完整读取入口；refresh失败则运行失败，不冒充已刷新。原始文件不被截断。MEMORY入口应保持可读且不超过底层64KiB read限制。
+每run读取最新MEMORY入口；压缩时 Engine → invalidateViews → refreshRecovery RPC → Supervisor重新读取memory、checkpoint、当前选中事项、TaskBoard分类摘要/coverage/continuation和未知动作引用，下一模型输入使用新包。恢复摘要不复制完整task result。memory/checkpoint各8KB摘录并附hash/截断和完整读取入口；refresh失败则运行失败，不冒充已刷新。原始文件不被截断。MEMORY入口应保持可读且不超过底层64KiB read限制。
 
 sessions.checkpoint保存自述检查点；sessions.reset在run结束或崩溃恢复后替换上下文，关闭旧worker，绑定原事项的continuation，cancelled事项不再续跑，paused不绕过。所有身份/预算/任务/提醒/草稿/未知效果仍保留。owner agent-reset先停止，替换后保持paused，需显式resume。
 

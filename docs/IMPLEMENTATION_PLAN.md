@@ -212,8 +212,10 @@ E4按用户体验与架构风险拆成三个顺序gate，不把activity或重构
 
 | gate | 目标/接口 | 依赖 | 验收 | 状态 |
 |---|---|---|---|---|
-| E4a 协作恢复面 | 先集中task transition/event invariant，再实现platform-neutral TaskBoard分页/read/events；reminder firing/result双游标与可选回执 | E3 PASS | 超过100个旧任务/事件仍可发现且recovery摘要给coverage；外部message-task还需actor snapshot可见；review可保留地接手或显式退回doing；private reminder不发频道，fired/run/result分开；索引计划适合低配VPS | 设计PASS，review_e4_architecture；待实现 |
+| E4a 协作恢复面 | 先集中task transition/event invariant，再实现platform-neutral TaskBoard分页/read/events；reminder firing/result双游标与可选回执 | E3 PASS | 超过100个旧任务/事件仍可发现且recovery摘要给coverage；外部message-task还需actor snapshot可见；review可保留地接手或显式退回doing；private reminder不发频道，fired/run/result分开；索引计划适合低配VPS | PASS，review_e4a，299普通checks/7环境skip |
 | E4b owner status/activity | OperationsView直接读权威状态并合并domain events；仅为无事件来源的事实增加窄operational_facts；Controls/local/未来Slack或web共用 | E4a PASS | owner在service内认证；per-source cursor/coverage；不读raw request/receipt/error/result/正文/path；operational fact有唯一source key与事务故障测试；读取不唤醒Agent，投影策略留adapter | TODO |
 | E4c 工具模块组合 | ToolModule元数据与按领域handler；schema/说明/seat/action-work策略随handler注册；补齐任务/提醒prompt与文档 | E4b PASS | 现有operation/receipt重放兼容；未知工具/工具发现/seat隔离/预算与work检查不退化；不做通用插件框架，不规定任务树或总管流程 | TODO |
 
 E4a–c分别经过独立软件工程/产品语义红队。E4b的activity是供人类查看与未来adapter投影的事实索引，不是第二份业务状态、全量日志平台或Agent唤醒源；E4c只解决当前composition内聚性，不提前实现动态插件系统。
+
+E4a PASS：review_e4a，299普通checks/7环境skip。集中TaskTransitions/TaskBoard、v22 evidence-only迁移、review接手语义、外部message snapshot可见性、低配有界分页与private reminder firing/run/receipt/result恢复面。红队发现并复验mutation绕过、事务边界、run状态遗漏、冲突creator误回填、legacy误标、稀疏无界扫描及parent owner取消不可见child draft；全部修复，进入E4b owner status/activity。

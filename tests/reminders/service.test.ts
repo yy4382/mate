@@ -1,7 +1,7 @@
 import { fixtureTarget, externalThread } from '../helpers/canonical-slack.js';
 import {afterEach,expect,it}from 'vitest';
 import {Store}from '../../src/storage/store.js';
-import {Messages,Output}from '../helpers/canonical-slack.js';
+import {Messages,Output,migrateCurrentRuntime}from '../helpers/canonical-slack.js';
 import {Collaboration}from '../../src/collaboration/service.js';
 import {Broker}from '../../src/policy/broker.js';
 import {ToolRouter}from '../../src/runtime/tools.js';
@@ -10,8 +10,8 @@ import {configFixture}from '../helpers/config.js';
 const stores:Store[]=[];afterEach(()=>stores.splice(0).forEach(s=>s.close()));
 const target=fixtureTarget('CTEST','100.000001');
 function setup(){const s=new Store(':memory:');stores.push(s);const config=configSchema.parse({...configFixture,agents:[{...configFixture.agents[0],channels:{CTEST:'participate'}},{...configFixture.agents[0],id:'writer',slackUserId:'UTWO',slackAppId:'ATWO',slackBotId:'BTWO',botTokenEnv:'WRITER_BOT',appTokenEnv:'WRITER_APP',channels:{CTEST:'participate'}}]});
- const m=new Messages(s,config);for(const actor of ['research','writer']){s.register(actor,'v1',[]);m.membership(actor,'CTEST',true);}let posts=0;const output=new Output(m,{post:async()=>({ts:`200.${String(++posts).padStart(6,'0')}`})}),c=new Collaboration(s,m,output,config),broker=new Broker(s,c,{execute:async()=>({code:0,stdout:'',stderr:'',truncated:false})},[]),router=new ToolRouter(c,broker),work=c.createWork('source',target);return{s,m,c,router,work,output};}
-const input={target,content:'Check whether the completed change is still healthy',nextAt:1000,timezone:'Asia/Shanghai'};
+ const m=new Messages(s,config);migrateCurrentRuntime(s);for(const actor of ['research','writer']){s.register(actor,'v1',[]);m.membership(actor,'CTEST',true);}let posts=0;const output=new Output(m,{post:async()=>({ts:`200.${String(++posts).padStart(6,'0')}`})}),c=new Collaboration(s,m,output,config),broker=new Broker(s,c,{execute:async()=>({code:0,stdout:'',stderr:'',truncated:false})},[]),router=new ToolRouter(c,broker),work=c.createWork('source',target);return{s,m,c,router,work,output};}
+const input={target,content:'Check whether the completed change is still healthy',nextAt:1000,timezone:'Asia/Shanghai',projection:'conversation_receipt' as const};
 it('reminders survive completed tasks and wake only their author; fixed receipts do not wake channel peers',async()=>{
  const{s,c,work,output}=setup();const task=c.createTask('research',work,target,'change');c.claim('research',task);const reminder=c.reminders.create('research',work,{...input,taskId:task});c.update('research',task,'done','verified');expect(c.reminders.read('research',reminder.id).active).toBe(1);
  c.tick(2000);c.tick(2000);const deliveries=s.db.prepare('SELECT * FROM deliveries').all()as any[];expect(deliveries).toHaveLength(1);expect(deliveries[0].agent_id).toBe('research');expect(JSON.parse(deliveries[0].payload).content).toBe(input.content);
