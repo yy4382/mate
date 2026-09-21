@@ -59,7 +59,7 @@ export async function runDoctor(config: DaemonConfig, env: DoctorEnvironment = n
     if (!current.startsWith(prefix)) throw new Error('Current release escapes the managed release directory');
     const manifest = await verifyRelease(current);
     if (resolve(managedLayout.releases, manifest.releaseId) !== current) throw new Error('Current release path does not match its content identity');
-    for (const entry of manifest.inventory) { const stat = lstatSync(join(current, entry.path)); if (stat.uid !== 0 || (stat.mode & 0o022) !== 0) throw new Error(`Release entry is not immutable root-owned content: ${entry.path}`); }
+    for (const entry of manifest.inventory) { const stat = lstatSync(join(current, entry.path)); if (stat.uid !== 0 || (entry.type !== 'symlink' && (stat.mode & 0o022) !== 0)) throw new Error(`Release entry is not immutable root-owned content: ${entry.path}`); }
     const root = lstatSync(current); if (root.uid !== 0 || (root.mode & 0o022) !== 0) throw new Error('Release root is not immutable root-owned content');
     return manifest.releaseId;
   });
