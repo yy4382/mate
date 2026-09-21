@@ -22,6 +22,11 @@ type InstallJournal = z.infer<typeof journalSchema>;
 const completedSchema = z.object({ version: z.literal(1), inputIdentity: z.string().regex(/^[a-f0-9]{64}$/), releaseId: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 const completedPath = join(managedLayout.data, 'control', 'installation.json');
 function pathExists(path: string): boolean { try { lstatSync(path); return true; } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error; } }
+function canonicalFuturePath(path: string): string {
+  const raw = resolve(path), tail: string[] = []; let current = raw;
+  while (!pathExists(current)) { const parent = dirname(current); if (parent === current) throw new Error(`Cannot resolve deployment path: ${path}`); tail.unshift(basename(current)); current = parent; }
+  return resolve(realpathSync(current), ...tail);
+}
 
 export interface CommandResult { code: number; stdout: string; stderr: string }
 export interface InstallerHost {
@@ -50,7 +55,7 @@ function directoryBytes(path: string): number {
 }
 export const nodeInstallerHost = (): InstallerHost => ({
   platform: process.platform, arch: process.arch, node: process.version,
-  euid: () => process.geteuid?.() ?? -1, run, directoryBytes, canonical: realpathSync,
+  euid: () => process.geteuid?.() ?? -1, run, directoryBytes, canonical: canonicalFuturePath,
   read: path => readFileSync(path, 'utf8'), assertRootExecutable: path => { const stat = lstatSync(path); if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== 0 || (stat.mode & 0o022) !== 0 || (stat.mode & 0o111) === 0) throw new Error(`Host executable is not protected: ${path}`); },
   availableBytes: path => { const stat = statfsSync(path); return Number(BigInt(stat.bavail) * BigInt(stat.bsize)); },
   memoryMiB: () => { const match = /^MemTotal:\s+(\d+)\s+kB$/m.exec(readFileSync('/proc/meminfo', 'utf8')); if (!match) throw new Error('Cannot read host memory'); return Math.floor(Number(match[1]) / 1024); },
