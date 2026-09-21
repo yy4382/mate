@@ -1,5 +1,5 @@
-import type { MateConfig } from '../config.js';
-import type { Store } from '../storage/store.js';
+import type { MateConfig } from '../../../../../src/config.js';
+import type { Store } from '../../../../../src/storage/store.js';
 import { slackConversationStorage } from './conversation-storage.js';
 /** Legacy Slack facade. Application code imports conversations directly. */
 import { Messages as ConversationMessages } from '../conversations/messages.js';

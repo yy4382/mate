@@ -1,6 +1,6 @@
-import { slackConversationStorage } from '../slack/conversation-storage.js';
-import { migrateLegacyReferences } from '../slack/reference-migration.js';
-import { Output } from '../conversations/output.js';
+import { slackApplication } from '../slack/application.js';
+import { migrateCanonicalConversations } from '../slack/canonical-migration.js';
+import { CanonicalOutput as Output } from '../conversations/output.js';
 import {existsSync,lstatSync,realpathSync}from 'node:fs';
 import {join,resolve}from 'node:path';
 import type {AgentMessage}from '@earendil-works/pi-agent-core';
@@ -15,7 +15,7 @@ import {buildBaseline}from '../runtime/prompt.js';
 import {operationDocumentation}from '../runtime/tools.js';
 import {repairTranscript}from '../runtime/context.js';
 import {SessionLifecycle}from '../runtime/sessions.js';
-import {Messages}from '../conversations/messages.js';
+
 import {Collaboration}from '../collaboration/service.js';
 
 export function storedConfiguration(store:Store):DaemonConfig|undefined{
@@ -34,7 +34,6 @@ export async function migrateConfiguration(previous:DaemonConfig,next:DaemonConf
  const release=acquireLock(join(state,'daemon.lock'));let store:Store|undefined;
  try{
   store=new Store(join(state,'mate.sqlite'));const s=store,recorded=storedConfiguration(s);
-  if(s.db.pragma('user_version',{simple:true})===17)throw new Error('Canonical conversation runtime switch is not yet available');
   if(recorded&&!sameConfiguration(recorded,previous))throw new Error('Previous configuration does not match persisted configuration');
   if(!recorded&&!acceptLegacyIdentity)throw new Error('Legacy identity snapshot unavailable; supply trusted OLD_CONFIG and --accept-legacy-identity explicitly');
   const policy=s.db.prepare("SELECT value FROM runtime_meta WHERE key='policy'").get() as {value:string}|undefined;
@@ -61,8 +60,8 @@ export async function migrateConfiguration(previous:DaemonConfig,next:DaemonConf
   s.recover();
   await backup(s,data,resolve(destination));
   s.atomic(()=>{
-   migrateLegacyReferences(s,previous.mate.teamId);
-   const messages=new Messages(s,next.mate,slackConversationStorage(s,next.mate)),c=new Collaboration(s,messages,new Output(messages,{post:async()=>{throw new Error('Offline migration cannot publish');}}),next.mate);
+   migrateCanonicalConversations(s,previous.mate);
+   const {messages}=slackApplication(s,next.mate),c=new Collaboration(s,messages,new Output(messages,{post:async()=>{throw new Error('Offline migration cannot publish');},pendingInput:()=>false,classify:()=>({kind:'unknown'})}),next.mate);
    const baseline=(agent:import('../domain/agents.js').AgentDefinition)=>buildBaseline(agent,operationDocumentation);
    const lifecycle=new SessionLifecycle(c,baseline);
    for(const agent of next.mate.agents){

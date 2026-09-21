@@ -1,6 +1,8 @@
-import { migrateLegacyReferences } from '../slack/reference-migration.js';
-import { slackConversationStorage } from '../slack/conversation-storage.js';
-import { Output } from '../conversations/output.js';
+import { migrateCanonicalConversations } from '../slack/canonical-migration.js';
+import { slackApplication } from '../slack/application.js';
+import { CanonicalSlackNormalizer } from '../slack/normalize.js';
+
+import { CanonicalOutput as Output } from '../conversations/output.js';
 import { storedConfiguration,saveConfiguration } from './migrate.js';
 import {Attachments}from './attachments.js';
 import { Directory } from '../slack/directory.js';
@@ -12,8 +14,8 @@ import { builtinModels } from '@earendil-works/pi-ai/providers/all';
 import { sameConfiguration, type DaemonConfig } from './config.js';
 import { requireSecret } from '../config.js';
 import { Store, hash } from '../storage/store.js';
-import { Messages } from '../conversations/messages.js';
-import { WebSlackTransport } from '../slack/transport.js';
+
+import { CanonicalSlackTransport as WebSlackTransport } from '../slack/transport.js';
 import { DurableReceiver } from '../slack/receiver.js';
 import { Collaboration } from '../collaboration/service.js';
 import { Broker } from '../policy/broker.js';
@@ -58,8 +60,6 @@ export class Daemon {
     let opened: Store | undefined;
     try {
       this.store = opened = new Store(join(state, 'mate.sqlite'));
-      // E2b2c conversion is tested offline but its runtime switch is not installed yet.
-      if(this.store.db.pragma('user_version',{simple:true})===17)throw new Error('Canonical conversation runtime switch is not yet available');
       const previous=storedConfiguration(this.store);
       if(previous&&!sameConfiguration(previous,config))throw new Error('Configuration changed; run explicit offline migration');
       if(!previous&&this.store.db.prepare('SELECT 1 FROM agents').get())throw new Error('Legacy configuration requires explicit offline migration');
@@ -68,12 +68,15 @@ export class Daemon {
       if (oldPolicy && oldPolicy.value !== policyHash) throw new Error('Runtime policy changed; explicit policy migration required');
       this.store.db.prepare("INSERT INTO runtime_meta VALUES('policy',?) ON CONFLICT DO NOTHING").run(policyHash);
       const c = config.mate;
-      if (!this.store.db.prepare("SELECT 1 FROM runtime_meta WHERE key='reference_migration_v16'").get()) {
-        if (previous) throw new Error('Conversation references require explicit offline migration');
-        migrateLegacyReferences(this.store,c.teamId);
+      if(!this.store.db.prepare("SELECT 1 FROM runtime_meta WHERE key='conversation_format'").get()){
+        if(previous)throw new Error('Canonical conversation storage requires explicit offline migration');
+
       }
-      const transport = new WebSlackTransport(Object.fromEntries(c.agents.map(a => [a.id, requireSecret(process.env, a.botTokenEnv)])));
-      const messages = new Messages(this.store, c, slackConversationStorage(this.store, c)), output = new Output(messages, transport);
+      migrateCanonicalConversations(this.store,c);
+      const {messages,mapper,argumentsCodec}=slackApplication(this.store,c);
+      messages.writes.assertFormat();
+      const transport=new WebSlackTransport(this.store,mapper,Object.fromEntries(c.agents.map(a=>[a.id,requireSecret(process.env,a.botTokenEnv)])));
+      const output=new Output(messages,transport);
       this.collaboration = new Collaboration(this.store, messages, output, c);
       const files = new SandboxBackend();
       if (config.runtime.docker) this.container = new ContainerBackend({ ...config.runtime.docker, scope: executionScope(data) });
@@ -82,7 +85,7 @@ export class Daemon {
       const research = new Research(config.runtime.researchHosts);
       let artifacts!: Artifacts;
       const attachments=new Attachments(this.collaboration,this.broker,transport.clients);
-      const router = new ToolRouter(this.collaboration, this.broker, { attachment:(...args)=>attachments.save(...args),environment:actor=>({workspace:'/workspace',execConfigured:!!config.runtime.docker,image:config.runtime.docker?.image??null,network:this.collaboration.seats.active(actor)?'none':config.runtime.docker?.network??'none',researchHosts:this.collaboration.seats.active(actor)?[]:config.runtime.researchHosts,toolchain:'Installed in the pinned image; inspect with exec. No host credentials inherited.'}),research: (url, signal) => research.read(url, signal), publish: (...args) => artifacts.publish(...args) }, new Directory(messages, transport.clients), (actor,workId)=>this.ensureGrants(actor,workId));
+      const router = new ToolRouter(this.collaboration, this.broker, { attachment:(...args)=>attachments.save(...args),environment:actor=>({workspace:'/workspace',execConfigured:!!config.runtime.docker,image:config.runtime.docker?.image??null,network:this.collaboration.seats.active(actor)?'none':config.runtime.docker?.network??'none',researchHosts:this.collaboration.seats.active(actor)?[]:config.runtime.researchHosts,toolchain:'Installed in the pinned image; inspect with exec. No host credentials inherited.'}),research: (url, signal) => research.read(url, signal), publish: (...args) => artifacts.publish(...args) }, new Directory(messages, transport.clients,mapper), (actor,workId)=>this.ensureGrants(actor,workId),value=>argumentsCodec.args(value));
       this.supervisor = new Supervisor(this.collaboration, router, c, undefined, async (agentId, workId, signal) => {
         this.ensureGrants(agentId, workId);
         const result = await files.execute({ root: this.memoryRoots[agentId]!, operation: { kind: 'read', path: 'MEMORY.md' }, timeoutMs: 10000 }, signal);
@@ -99,7 +102,7 @@ export class Daemon {
         if (!existsSync(join(root, 'MEMORY.md'))) writeFileSync(join(root, 'MEMORY.md'), `# ${agent.name}\n\nPrivate memory entry. Keep durable lessons and links to notes here.\n`, { flag: 'wx', mode: 0o600 });
       }
       for (const grant of config.runtime.workspaceGrants) canonicalRoot(grant.root, [projectRoot, state, agentsDir]);
-      const ingress = new Ingress(this.collaboration), controls = new Controls(this.collaboration, this.supervisor, this.broker, actor=>this.verifyReviewWorkspace(actor));
+      const ingress = new Ingress(this.collaboration,new CanonicalSlackNormalizer(messages,mapper,output)), controls = new Controls(this.collaboration, this.supervisor, this.broker, actor=>this.verifyReviewWorkspace(actor));
       this.slack = new SlackService(this.collaboration, transport, ingress, controls, () => this.stopping);
       artifacts = new Artifacts(this.collaboration, this.broker, this.slack, this.memoryRoots);
       saveConfiguration(this.store,config);

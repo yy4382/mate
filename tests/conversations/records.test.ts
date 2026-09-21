@@ -5,7 +5,7 @@ import { compareMessageOrder } from '../../src/domain/messages.js';
 import { References } from '../../src/conversations/references.js';
 import { LegacyConversationCodec } from '../../src/slack/legacy-codec.js';
 import { migrateLegacyReferences } from '../../src/slack/reference-migration.js';
-import { Messages } from '../../src/slack/messages.js';
+import { Messages } from '../fixtures/v16/src/slack/messages.js';
 import { configFixture } from '../helpers/config.js';
 
 const stores: Store[] = [];

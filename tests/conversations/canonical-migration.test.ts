@@ -3,8 +3,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store, encode } from '../../src/storage/store.js';
-import { Messages, Output } from '../../src/slack/messages.js';
-import { Collaboration } from '../../src/collaboration/service.js';
+import { Messages, Output } from '../fixtures/v16/src/slack/messages.js';
+import { Collaboration } from '../fixtures/legacy/collaboration.js';
 import { migrateCanonicalConversations } from '../../src/slack/canonical-migration.js';
 import { configFixture } from '../helpers/config.js';
 const cleanup: (() => void)[] = [];
@@ -71,6 +71,6 @@ it('reads mixed versioned bodies and effects without falling back for unknown fo
   expect(records.message(id)?.text).toBe('canonical update');
   s.db.prepare('UPDATE messages SET body=? WHERE key=?').run(encode({format:'mate.message.v999',message:old}),id);
   expect(()=>records.message(id)).toThrow('Unsupported stored message format');
-  s.queueOutput('research','future',{format:'mate.effect.v999',target:{conversationId:'CTEST'},text:'not a v1 fallback'});
+  s.queueOutput('research','future',{format:'mate.effect.v999',target:{conversationId:'CTEST'},text:'not a v1 fallback'},encode({conversationId:'CTEST'}));
   expect(()=>records.targetedEffect('outbox','future')).toThrow('Unsupported stored effect format');
 });

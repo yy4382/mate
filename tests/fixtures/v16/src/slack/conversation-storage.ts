@@ -1,9 +1,9 @@
-import type { MateConfig } from '../config.js';
-import type { Store } from '../storage/store.js';
-import { References } from '../conversations/references.js';
-import { ConversationRecords } from '../storage/conversations.js';
+import type { MateConfig } from '../../../../../src/config.js';
+import type { Store } from '../../../../../src/storage/store.js';
+import { References } from '../../../../../src/conversations/references.js';
+import { ConversationRecords } from '../../../../../src/storage/conversations.js';
 import { ConversationWrites } from '../storage/conversation-writes.js';
-import { LegacyConversationCodec } from './legacy-codec.js';
+import { LegacyFixtureWriter as LegacyConversationCodec } from './legacy-writer.js';
 
 /** Explicit composition for the temporary v1 persistence adapter. */
 export function slackConversationStorage(store: Store, config: MateConfig) {

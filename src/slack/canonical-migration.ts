@@ -7,7 +7,7 @@ import { migrateLegacyReferences } from './reference-migration.js';
 export const canonicalConversationFormat = 'mate.conversations.v2';
 
 /** Offline data conversion. The caller owns the process lock and pre-migration backup.
- * Not wired to production until the canonical writer and recovery reader pass together.
+ * Fresh empty stores use the same conversion; existing stores require the offline command.
  */
 export function migrateCanonicalConversations(store: Store, config: MateConfig): void {
   store.atomic(() => {
@@ -22,6 +22,7 @@ export function migrateCanonicalConversations(store: Store, config: MateConfig):
     migrateLegacyReferences(store, config.teamId);
     // Preserve primary keys/FKs while removing the legacy NOT NULL root constraint.
     store.db.exec(`
+      ALTER TABLE outbox ADD COLUMN target TEXT NOT NULL DEFAULT '{}';
       ALTER TABLE messages ADD COLUMN canonical_thread TEXT;
       UPDATE messages SET canonical_thread=thread;
       ALTER TABLE messages DROP COLUMN thread;
@@ -101,8 +102,30 @@ export function migrateCanonicalConversations(store: Store, config: MateConfig):
       if (payload.target) payload.target = codec.target(payload.target);
       if (payload.anchor) payload.anchor = {messageId:localMessage(payload.anchor.channel,payload.anchor.ts)};
       if (payload.messageKey && payload.revision) payload.revision = revision(payload.revision);
+      if(payload.messageKey){
+        const row=store.db.prepare('SELECT body FROM messages WHERE key=?').get(payload.messageKey) as {body:string}|undefined;
+        if(row)payload.source=codec.message(row.body).author;
+      }
+      if(payload.channel){payload.conversationId=codec.target({channel:payload.channel}).conversationId;delete payload.channel;}
       store.db.prepare('UPDATE deliveries SET payload=? WHERE id=?').run(encode(payload),row.id);
     }
+    for(const row of store.db.prepare('SELECT id,request FROM outbox').all() as {id:string;request:string}[]){
+      store.db.prepare('UPDATE outbox SET target=? WHERE id=?').run(encode(codec.target(JSON.parse(row.request).target)),row.id);
+    }
+    store.db.exec(`
+      CREATE INDEX outbox_scope ON outbox(json_extract(target,'$.conversationId'),json_extract(target,'$.threadId'),state);
+      CREATE TRIGGER outbox_target_required BEFORE INSERT ON outbox WHEN json_type(NEW.target,'$.conversationId') IS NOT 'text'
+        OR NOT EXISTS(SELECT 1 FROM conversation_identities WHERE id=json_extract(NEW.target,'$.conversationId'))
+        OR (json_type(NEW.target,'$.threadId') IS NOT NULL AND NOT EXISTS(SELECT 1 FROM message_identities WHERE id=json_extract(NEW.target,'$.threadId') AND root_id=id AND conversation_id=json_extract(NEW.target,'$.conversationId')))
+        BEGIN SELECT RAISE(ABORT,'Canonical output routing required'); END;
+      CREATE TRIGGER outbox_target_immutable BEFORE UPDATE OF target ON outbox WHEN NEW.target IS NOT OLD.target
+        BEGIN SELECT RAISE(ABORT,'Output target is immutable'); END;
+      CREATE INDEX task_conversation ON tasks(json_extract(target,'$.conversationId'));
+      CREATE INDEX work_conversation ON works(json_extract(target,'$.conversationId'));
+      CREATE INDEX schedule_conversation ON schedules(json_extract(target,'$.conversationId'));
+      CREATE INDEX intent_conversation ON task_intents(json_extract(target,'$.conversationId'));
+    `);
+    store.db.exec('DROP TABLE canonical_targets');
     store.db.prepare('UPDATE sessions SET context_epoch=context_epoch+1').run();
     store.db.pragma('user_version=17');
     store.db.prepare("INSERT INTO runtime_meta(key,value) VALUES('conversation_format',?)").run(canonicalConversationFormat);

@@ -1,11 +1,15 @@
 import type { ConversationDirectory, Space, SpacesResult, MembersResult, OpenDMResult } from '../conversations/directory.js';
 import type { WebClient } from '@slack/web-api';
 import type { RunToken } from '../storage/store.js';
-import type { Messages } from '../conversations/messages.js';
+import type { Conversations as Messages } from '../conversations/messages.js';
+import type { SlackMapper } from './mapper.js';
+import { slackPrincipal } from './legacy-codec.js';
+import type { Principal } from '../domain/messages.js';
+import { LegacyArguments } from './legacy-arguments.js';
 
 /** Identity and membership come from the acting bot's authenticated Slack client. */
 export class Directory implements ConversationDirectory {
-  constructor(readonly messages: Messages, readonly clients: Map<string, WebClient>) {}
+  constructor(readonly messages: Messages, readonly clients: Map<string, WebClient>,readonly mapper:SlackMapper) {}
   private client(actor: string): WebClient {
     this.messages.agent(actor);
     const client = this.clients.get(actor); if (!client) throw new Error('Slack client unavailable'); return client;
@@ -17,44 +21,60 @@ export class Directory implements ConversationDirectory {
       const result = await client.users.conversations({ types: 'public_channel,private_channel,im,mpim', limit: 200, ...(cursor ? { cursor } : {}) });
       for (const c of result.channels ?? []) if (c.id && /^[CDG][A-Z0-9]+$/.test(c.id)) {
         channels.push(c);
-        spaces.push({ channel: c.id, name: c.name, purpose: c.purpose?.value, user: c.user, archived: !!c.is_archived, kind: c.is_im ? 'dm' : 'channel' });
+        spaces.push({ conversationId: this.mapper.conversation(c.id), name: c.name, purpose: c.purpose?.value, principal: c.user?slackPrincipal(this.mapper.config,c.user):undefined, archived: !!c.is_archived, kind: c.is_im ? 'dm' : 'channel' });
       }
       cursor = result.response_metadata?.next_cursor || undefined; pages++;
     } while (cursor && pages < 10);
     if (version !== this.messages.membershipVersion(actor)) return { spaces: [], incomplete: true, retry: 'membership changed during discovery' };
     for (const c of channels) {
-      this.messages.membership(actor, c.id!, !c.is_archived);
-      if (c.is_im && c.user && !c.is_archived) this.messages.store.db.prepare("UPDATE actions SET state='succeeded',receipt=? WHERE agent_id=? AND state='unknown' AND json_extract(request,'$.operation')='conversations.openDM' AND json_extract(request,'$.user')=?").run(JSON.stringify({channel:c.id}), actor, c.user);
+      this.messages.membership(actor, this.mapper.conversation(c.id!), !c.is_archived);
+      if(c.is_im&&c.user&&!c.is_archived){
+        const codec=new LegacyArguments(this.messages.references,this.mapper.config),principal=slackPrincipal(this.mapper.config,c.user);
+        for(const row of this.messages.store.db.prepare("SELECT id,request FROM actions WHERE agent_id=? AND state='unknown' AND json_extract(request,'$.operation')='conversations.openDM'").all(actor) as {id:string;request:string}[]){
+          const request=codec.effect(JSON.parse(row.request));
+          if(JSON.stringify(request.principal)===JSON.stringify(principal))this.messages.store.db.prepare("UPDATE actions SET state='succeeded',receipt=? WHERE id=?").run(JSON.stringify({conversationId:this.mapper.conversation(c.id!)}),row.id);
+        }
+      }
     }
     return { spaces, incomplete: !!cursor };
   }
-  async members(actor: string, channel: string): Promise<MembersResult> {
-    this.messages.requireAccess(actor, channel);
-    const client = this.client(actor), members: string[] = []; let cursor: string | undefined, pages = 0;
+  async members(actor: string, conversationId: string): Promise<MembersResult> {
+    this.messages.requireAccess(actor, conversationId);
+    const channel=this.mapper.target({conversationId}).channel,client = this.client(actor), members: Principal[] = []; let cursor: string | undefined, pages = 0;
     do {
       const result = await client.conversations.members({ channel, limit: 200, ...(cursor ? { cursor } : {}) });
-      members.push(...(result.members ?? [])); cursor = result.response_metadata?.next_cursor || undefined; pages++;
+      members.push(...(result.members ?? []).map(user=>slackPrincipal(this.mapper.config,user))); cursor = result.response_metadata?.next_cursor || undefined; pages++;
     } while (cursor && pages < 10);
-    this.messages.requireAccess(actor, channel);
+    this.messages.requireAccess(actor, conversationId);
     return { members, incomplete: !!cursor };
   }
-  async openDM(run: RunToken, actionId: string, user: string, signal: AbortSignal): Promise<OpenDMResult> {
+  private externalUser(principal:Exclude<Principal,{kind:'unknown'}>):string {
+    if(principal.kind==='agent'){
+      const agent=this.mapper.config.agents.find(a=>a.id===principal.id);if(!agent)throw new Error('Agent has no Slack identity');return agent.slackUserId;
+    }
+    let parts:unknown;try{parts=JSON.parse(principal.id);}catch{throw new Error('Principal does not belong to this adapter');}
+    if(principal.kind!=='human'||!Array.isArray(parts)||parts.length!==4||parts[0]!=='slack'||parts[1]!==this.mapper.config.teamId||parts[2]!=='user'||typeof parts[3]!=='string'||!/^U[A-Z0-9]+$/.test(parts[3]))throw new Error('Principal does not belong to this adapter');return parts[3];
+  }
+  async openDM(run: RunToken, actionId: string, principal: Exclude<Principal,{kind:'unknown'}>, signal: AbortSignal): Promise<OpenDMResult> {
     const s = this.messages.store, client = this.client(run.agentId);
+    const user=this.externalUser(principal);
     s.assertRun(run); signal.throwIfAborted();
     if (!/^U[A-Z0-9]+$/.test(user)) throw new Error('Invalid Slack user');
-    const action = s.prepareAction(run, actionId, { operation: 'conversations.openDM', user });
-    if (action.state === 'succeeded') return JSON.parse(action.receipt!);
+    const action = this.messages.writes.prepareAction(run, actionId, { operation: 'conversations.openDM', principal });
+    if (action.state === 'succeeded') {const receipt=JSON.parse(action.receipt!);return receipt.conversationId?receipt:{conversationId:this.mapper.conversation(receipt.channel)};}
     if (action.state === 'failed') return { status: 'failed', receipt: JSON.parse(action.receipt!) };
-    if (action.state !== 'prepared' || s.db.prepare("SELECT 1 FROM actions WHERE agent_id=? AND state IN ('executing','unknown') AND json_extract(request,'$.operation')='conversations.openDM' AND json_extract(request,'$.user')=?").get(run.agentId, user)) throw new Error('DM opening outcome unknown; inspect spaces before retry');
+    const codec=new LegacyArguments(this.messages.references,this.mapper.config);
+    const uncertain=(s.db.prepare("SELECT request FROM actions WHERE agent_id=? AND state IN ('executing','unknown') AND json_extract(request,'$.operation')='conversations.openDM'").all(run.agentId) as {request:string}[]).some(row=>JSON.stringify(codec.effect(JSON.parse(row.request)).principal)===JSON.stringify(principal));
+    if(action.state!=='prepared'||uncertain)throw new Error('DM opening outcome unknown; inspect spaces before retry');
     const identity = await client.users.info({ user });
-    if (identity.user?.id !== user || identity.user.deleted || (identity.user.team_id && identity.user.team_id !== this.messages.config.teamId)) throw new Error('User is not an active workspace member');
+    if (identity.user?.id !== user || identity.user.deleted || (identity.user.team_id && identity.user.team_id !== this.mapper.config.teamId)) throw new Error('User is not an active workspace member');
     signal.throwIfAborted(); s.startAction(run, actionId);
     try {
       const result = await client.conversations.open({ users: user, return_im: true });
       if (!result.channel?.id || !/^D[A-Z0-9]+$/.test(result.channel.id)) throw new Error('Invalid DM receipt');
       signal.throwIfAborted(); s.assertRun(run);
-      const target = { channel: result.channel.id };
-      s.atomic(() => { this.messages.membership(run.agentId, target.channel, true); s.settleAction(run, actionId, 'succeeded', target); });
+      const target = { conversationId: this.mapper.conversation(result.channel.id) };
+      s.atomic(() => { this.messages.membership(run.agentId, target.conversationId, true); s.settleAction(run, actionId, 'succeeded', target); });
       return target;
     } catch (error) {
       const failure = error as {code?: string; data?: {error?: string}};

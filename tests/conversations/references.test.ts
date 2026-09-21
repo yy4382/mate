@@ -6,7 +6,7 @@ import Database from 'better-sqlite3';
 import { Store, encode } from '../../src/storage/store.js';
 import { References } from '../../src/conversations/references.js';
 import { migrateLegacyReferences } from '../../src/slack/reference-migration.js';
-import { Messages } from '../../src/slack/messages.js';
+import { Messages } from '../fixtures/v16/src/slack/messages.js';
 import { configFixture } from '../helpers/config.js';
 
 const cleanups: (() => void)[] = [];

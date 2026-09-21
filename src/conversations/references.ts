@@ -36,6 +36,18 @@ export class References {
       .get(locator.provider, locator.workspace, locator.externalId) as { conversation_id: string } | undefined)?.conversation_id;
   }
 
+  primaryBinding(id: string): ExternalConversation {
+    this.conversation(id);
+    const row=this.store.db.prepare("SELECT provider,workspace,external_id externalId FROM conversation_bindings WHERE conversation_id=? AND mode='primary'").get(id) as ExternalConversation|undefined;
+    if(!row)throw new Error('Primary conversation binding missing');return row;
+  }
+
+  messageBinding(id:string,provider:string,workspace:string,externalId:string):ExternalMessage|undefined {
+    this.message(id);
+    const row=this.store.db.prepare('SELECT external_message messageId FROM message_bindings WHERE message_id=? AND provider=? AND workspace=? AND external_conversation=?').get(id,provider,workspace,externalId) as {messageId:string}|undefined;
+    return row?{provider,workspace,externalId,messageId:row.messageId}:undefined;
+  }
+
   bindConversation(locator: ExternalConversation, id: string, mode: 'primary' | 'projection'): void {
     this.locator(locator);
     this.store.atomic(() => {

@@ -1,7 +1,7 @@
-import type { Target } from '../conversations/messages.js';
+import type { ConversationTarget as Target } from '../domain/conversations.js';
 
 export interface AttachmentArgs {
-  message: { channel: string; ts: string };
+  message: { messageId: string };
   fileId: string;
   grantId: string;
   path: string;
@@ -17,3 +17,5 @@ export interface PublishArgs {
   revision?: number;
   format?: 'text' | 'binary';
 }
+
+export interface ArtifactPayload {title:string;content:string;contentHash:string;encoding?:'base64';filename?:string}

@@ -1,13 +1,14 @@
+import { fixtureTarget, externalThread } from '../helpers/canonical-slack.js';
 import {afterEach,expect,it} from 'vitest';
 import type {AgentMessage} from '@earendil-works/pi-agent-core';
 import {Store} from '../../src/storage/store.js';
-import {Messages,Output} from '../../src/slack/messages.js';
+import {Messages,Output} from '../helpers/canonical-slack.js';
 import {Collaboration} from '../../src/collaboration/service.js';
 import {configFixture} from '../helpers/config.js';
 const stores:Store[]=[];afterEach(()=>stores.splice(0).forEach(s=>s.close()));
 function setup(){const s=new Store(':memory:');stores.push(s);s.register('research','v1',[]);const m=new Messages(s,configFixture);m.membership('research','CTEST',true);const c=new Collaboration(s,m,new Output(m,{post:async()=>({ts:'200.000001'})}),configFixture);s.enqueue('research','start',{});const run=s.beginRun('research')!;s.input(run,{});return{s,m,c,a:c.attention,run};}
-const target={channel:'CTEST',thread:'100.000001'};
-function message(n=0){return{team:'TTEST',channel:'CTEST',thread:target.thread,ts:`${100+n}.000001`,revision:`${100+n}.000001`,text:`synthetic ${n}`,user:'UOWNER',deleted:false};}
+const target=fixtureTarget('CTEST','100.000001');
+function message(n=0){return{team:'TTEST',channel:'CTEST',thread:externalThread(target),ts:`${100+n}.000001`,revision:`${100+n}.000001`,text:`synthetic ${n}`,user:'UOWNER',deleted:false};}
 function result(value:unknown):AgentMessage{return{role:'toolResult',toolCallId:'read',toolName:'mate',content:[{type:'text',text:JSON.stringify(value)}],isError:false,timestamp:0};}
 it('only journaled complete pages establish a current view; finish does not resolve attention',()=>{
  const{s,m,a,run}=setup();for(let n=0;n<22;n++)m.record(message(n),['research']);
@@ -40,7 +41,7 @@ it('new visibility of an already stored message invalidates the formerly empty v
  m.record(message(),['research']);expect(a.valid(run,target,view.viewToken)).toBe(false);expect(a.peek('research')).toMatchObject([{unseen:1}]);
 });
 it('channel mute suppresses a thread deferred wakeup',()=>{
- const{s,a,c}=setup();a.state('research',target,'defer',100);a.state('research',{channel:'CTEST'},'mute',1);c.tick(101);
+ const{s,a,c}=setup();a.state('research',target,'defer',100);a.state('research',{conversationId:'CTEST'},'mute',1);c.tick(101);
  expect(s.db.prepare("SELECT count(*) n FROM deliveries WHERE json_extract(payload,'$.kind')='attention_due'").get()).toEqual({n:0});
 });
 it('late acknowledgment of an old snapshot never regresses the seen revision',()=>{

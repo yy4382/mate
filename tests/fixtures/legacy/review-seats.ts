@@ -1,0 +1,27 @@
+// Frozen v16 fixture writer: only builds historical migration input. Never imported by production.
+import {z} from 'zod';
+import type {Messages,Target} from '../v16/src/conversations/messages.js';
+import {targetSchema} from '../v16/src/conversations/messages.js';
+import {encode} from '../../../src/storage/store.js';
+export interface ReviewSeat{agent_id:string;target:string;brief:string;workspace:string;active:number}
+export class ReviewSeats{
+ constructor(readonly messages:Messages){}
+ active(actor:string):ReviewSeat|undefined{return this.messages.store.db.prepare('SELECT * FROM review_seats WHERE agent_id=? AND active=1').get(actor) as ReviewSeat|undefined;}
+ activate(owner:string,actor:string,target:Target,brief:string,verifyCleanWorkspace:(actor:string)=>string):void{
+  const s=this.messages.store;if(!this.messages.config.ownerUserIds.includes(owner))throw new Error('Owner only');targetSchema.parse(target);z.string().min(1).max(20000).parse(brief);this.messages.requireAccess(actor,target.channel);
+  s.atomic(()=>{
+   if(s.db.prepare('SELECT 1 FROM outbox WHERE agent_id=?').get(actor)||s.db.prepare('SELECT 1 FROM runs WHERE agent_id=?').get(actor)||s.db.prepare("SELECT 1 FROM entries e JOIN sessions se ON se.id=e.session_id WHERE se.agent_id=? AND e.key NOT LIKE 'initial:%'").get(actor)||s.db.prepare('SELECT 1 FROM snapshots sp JOIN sessions se ON se.id=sp.session_id WHERE se.agent_id=?').get(actor))throw new Error('Review seat requires an unused identity with clean context');
+   const workspace=verifyCleanWorkspace(actor);
+   if(s.db.prepare('SELECT 1 FROM review_seats WHERE agent_id=?').get(actor))throw new Error('Use a new reviewer identity for another independent seat');
+   s.db.prepare('INSERT INTO review_seats VALUES(?,?,?,?,1)').run(actor,encode(target),brief,workspace);
+   this.messages.persistence.writes.mutable('review_seats',actor);
+   s.db.prepare('UPDATE grants SET revoked=1 WHERE agent_id=? AND root!=?').run(actor,workspace);
+   s.audit('review_seat_activated',{owner,actor,target,workspace,baseline:'unused identity; daemon-verified empty private workspace; owner-provided role and brief'});
+  });
+ }
+ release(owner:string,actor:string):void{
+  if(!this.messages.config.ownerUserIds.includes(owner))throw new Error('Owner only');
+  this.messages.store.db.prepare('UPDATE review_seats SET active=0 WHERE agent_id=?').run(actor);
+  this.messages.store.audit('review_seat_released',{owner,actor});
+ }
+}

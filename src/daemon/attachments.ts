@@ -4,14 +4,14 @@ import type {WebClient}from '@slack/web-api';
 import type {Collaboration}from '../collaboration/service.js';
 import type {Broker}from '../policy/broker.js';
 import type {RunToken}from '../storage/store.js';
-import {messageKey,type NormalMessage}from '../conversations/messages.js';
+
 /** Only file IDs on an observed, currently visible message are accepted; URLs/credentials are never model arguments. */
 export class Attachments{
  constructor(readonly c:Collaboration,readonly broker:Broker,readonly clients:Map<string,WebClient>){}
  private visible(run:RunToken,args:AttachmentArgs):void{
-  const m=this.c.messages;m.store.assertRun(run);m.requireReadable(run.agentId);m.requireAccess(run.agentId,args.message.channel);
-  const row=m.store.db.prepare('SELECT m.body FROM messages m JOIN message_visibility v ON v.key=m.key WHERE v.agent_id=? AND m.key=? AND m.deleted=0').get(run.agentId,messageKey({team:this.c.config.teamId,...args.message})) as {body:string}|undefined;
-  if(!row||!(JSON.parse(row.body) as NormalMessage).files?.some(file=>file.id===args.fileId))throw new Error('Attachment is not on a visible message');
+  const m=this.c.messages;m.store.assertRun(run);
+  const message=m.message(run.agentId,args.message.messageId);
+  if(message.deleted||!message.attachments.some(file=>file.id===args.fileId))throw new Error('Attachment is not on a visible message');
  }
  async save(run:RunToken,workId:string,actionId:string,args:AttachmentArgs,signal:AbortSignal):Promise<unknown>{
   this.visible(run,args);this.c.assertActionWork(run,workId);signal=AbortSignal.any([signal,AbortSignal.timeout(30000)]);

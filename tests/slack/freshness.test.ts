@@ -1,14 +1,15 @@
+import { fixtureTarget, externalThread } from '../helpers/canonical-slack.js';
 import {afterEach,expect,it,vi} from 'vitest';
 import type {AgentMessage} from '@earendil-works/pi-agent-core';
 import {Store} from '../../src/storage/store.js';
-import {Messages,Output} from '../../src/slack/messages.js';
+import {Messages,Output} from '../helpers/canonical-slack.js';
 import {Collaboration} from '../../src/collaboration/service.js';
-import {FreshnessGate} from '../../src/slack/freshness.js';
+import {CanonicalFreshnessGate as FreshnessGate} from '../../src/conversations/freshness.js';
 import {configFixture} from '../helpers/config.js';
-const stores:Store[]=[];afterEach(()=>stores.splice(0).forEach(s=>s.close()));const target={channel:'CTEST',thread:'100.000001'};
+const stores:Store[]=[];afterEach(()=>stores.splice(0).forEach(s=>s.close()));const target=fixtureTarget('CTEST','100.000001');
 function setup(){const s=new Store(':memory:');stores.push(s);s.register('research','v1',[]);const m=new Messages(s,configFixture);m.membership('research','CTEST',true);let now=1000;const post=vi.fn(async()=>({ts:`200.${String(post.mock.calls.length).padStart(6,'0')}`}));const o=new Output(m,{post},()=>now);const c=new Collaboration(s,m,o,configFixture),g=new FreshnessGate(m,c.attention,()=>now);o.gate=g;const w=c.createWork('human',target);c.enqueue('research',w,'start',{});const run=s.beginRun('research')!;s.input(run,{});
  const read=()=>{const v=c.attention.read(run,target) as any;c.attention.presented(run,{role:'toolResult',toolCallId:'read',toolName:'mate',content:[{type:'text',text:JSON.stringify(v)}],isError:false,timestamp:0} as AgentMessage);return v.viewToken as string;};
- const change=(n:number)=>m.record({team:'TTEST',channel:'CTEST',thread:target.thread,ts:`${100+n}.000001`,revision:`${100+n}.000001`,text:'new information',user:'UOWNER',deleted:false},['research']);
+ const change=(n:number)=>m.record({team:'TTEST',channel:'CTEST',thread:externalThread(target),ts:`${100+n}.000001`,revision:`${100+n}.000001`,text:'new information',user:'UOWNER',deleted:false},['research']);
  return{s,m,c,g,o,w,run,post,read,change,time:(v:number)=>{now=v;}};}
 it('missing view holds a durable draft; explicit continue is bounded and never pretends it was read',async()=>{
  const{s,c,g,o,w,run,post}=setup();const id=c.send('research',w,target,'draft','draft',{run});await o.send(id);expect(post).not.toHaveBeenCalled();const d=g.describe('research',id) as any;expect(d.status).toBe('held');
@@ -43,25 +44,25 @@ it('revising a delegation updates its output reference before activation',()=>{
 });
 it('durable related ingress blocks dispatch until normalized, then the changed view holds',async()=>{
  const{s,c,m,o,w,run,post,read}=setup();const id=c.send('research',w,target,'draft','one',{run,viewToken:read()});
- s.ingest('AONE','pending',{team_id:'TTEST',event:{type:'message',channel:'CTEST',thread_ts:target.thread,ts:'150.000001',user:'UOWNER',text:'arrived before ACK'}});
+ s.ingest('AONE','pending',{team_id:'TTEST',event:{type:'message',channel:'CTEST',thread_ts:externalThread(target),ts:'150.000001',user:'UOWNER',text:'arrived before ACK'}});
  await o.send(id);expect(post).not.toHaveBeenCalled();m.normalize('AONE','pending');await o.send(id);expect(s.output(id)?.state).toBe('held');expect(post).not.toHaveBeenCalled();
 });
 it('artifact drafts freeze bytes, preserve them on caption revision and hold changes before sharing',async()=>{
  const{s,c,g,o,w,run,read,change}=setup();const artifact={title:'result',content:'fixed evidence',contentHash:'hash'};
- const upload=vi.fn(async(_actor:any,_target:any,_text:any,payload:any,prepared:any,beforeShare:any)=>{expect(payload.content).toBe('fixed evidence');prepared('FFILE');change(2);if(!beforeShare())throw new Error('not shared');return{fileId:'FFILE'};});o.artifacts={upload};
+ const upload=vi.fn(async(_request:any,payload:any,prepared:any,beforeShare:any)=>{expect(payload.content).toBe('fixed evidence');prepared('FFILE');change(2);if(!beforeShare())throw new Error('not shared');return{fileId:'FFILE'};});o.artifacts={upload};
  o.queueArtifact('research',target,'caption',artifact,'artifact',{run,viewToken:read()});s.db.prepare('INSERT INTO output_work VALUES(?,?)').run('artifact',w);
  await o.send('artifact');expect(s.output('artifact')?.state).toBe('held');expect(upload).toHaveBeenCalledOnce();
  const revised=g.revise(run,'artifact',1,'new caption') as any;expect(JSON.parse(s.output('artifact:revision:2')!.request).artifact.content).toBe('fixed evidence');expect(revised.artifact.content).toBeUndefined();g.discard(run,'artifact',2);await o.send('artifact:revision:2');expect(upload).toHaveBeenCalledOnce();
 });
 it('artifact unknown keeps allocated file identity across recovery and needs matching sharing evidence',async()=>{
- const{s,g,o,w,run,c}=setup();o.artifacts={upload:async(_a,_t,_text,_artifact,prepared,beforeShare)=>{prepared('FFILE');expect(beforeShare()).toBe(true);throw new Error('lost after share');}};
+ const{s,g,o,w,run,c}=setup();o.artifacts={upload:async(_request,_artifact,prepared,beforeShare)=>{prepared('FFILE');expect(beforeShare()).toBe(true);throw new Error('lost after share');}};
  o.queueArtifact('research',target,'caption',{title:'result',content:'frozen',contentHash:'hash'},'artifact',{run});s.db.prepare('INSERT INTO output_work VALUES(?,?)').run('artifact',w);
  const draft=g.describe('research','artifact') as any;g.continueOnce(run,'artifact',1,draft.holdId);await o.send('artifact');s.recover();expect(JSON.parse(s.output('artifact')!.receipt!).fileId).toBe('FFILE');
- expect(()=>o.reconcileArtifact('artifact','FOTHER',{channel:'CTEST',thread:target.thread,ts:'201.000001',user:'UONE'})).toThrow('mismatch');
- o.reconcileArtifact('artifact','FFILE',{channel:'CTEST',thread:target.thread,ts:'201.000001',user:'UONE'});expect(s.output('artifact')?.state).toBe('sent');expect(c.attention.revision(target,'research')).toBeGreaterThan(0);
+ expect(()=>o.reconcileArtifact('artifact','FOTHER',{id:'proof',conversationId:'CTEST',rootId:target.threadId,order:'201000001',revision:'201000001',author:{kind:'agent',id:'research'},origin:'participant',mentions:[],deleted:false,text:'',attachments:[{id:'FFILE'}]})).toThrow('mismatch');
+ o.reconcileArtifact('artifact','FFILE',{id:'proof',conversationId:'CTEST',rootId:target.threadId,order:'201000001',revision:'201000001',author:{kind:'agent',id:'research'},origin:'participant',mentions:[],deleted:false,text:'',attachments:[{id:'FFILE'}]});expect(s.output('artifact')?.state).toBe('sent');expect(c.attention.revision(target,'research')).toBeGreaterThan(0);
 });
 it('pause during artifact byte staging prevents the visible sharing step',async()=>{
- const{s,g,o,w,run}=setup();let shared=false;o.artifacts={upload:async(_a,_t,_text,_artifact,prepared,beforeShare)=>{prepared('FFILE');s.db.prepare("UPDATE works SET state='paused' WHERE id=?").run(w);if(!beforeShare())throw new Error('not shared');shared=true;return{fileId:'FFILE'};}};
+ const{s,g,o,w,run}=setup();let shared=false;o.artifacts={upload:async(_request,_artifact,prepared,beforeShare)=>{prepared('FFILE');s.db.prepare("UPDATE works SET state='paused' WHERE id=?").run(w);if(!beforeShare())throw new Error('not shared');shared=true;return{fileId:'FFILE'};}};
  o.queueArtifact('research',target,'caption',{title:'r',content:'f',contentHash:'hash'},'artifact',{run});s.db.prepare('INSERT INTO output_work VALUES(?,?)').run('artifact',w);const draft=g.describe('research','artifact') as any;g.continueOnce(run,'artifact',1,draft.holdId);await o.send('artifact');expect(shared).toBe(false);expect(s.output('artifact')?.state).toBe('pending');
 });
 it('a failure before file sharing is definite and does not block future drafts as unknown',async()=>{
@@ -69,7 +70,7 @@ it('a failure before file sharing is definite and does not block future drafts a
  o.queueArtifact('research',target,'caption',{title:'r',content:'f',contentHash:'hash'},'artifact',{run});const draft=g.describe('research','artifact') as any;g.continueOnce(run,'artifact',1,draft.holdId);await o.send('artifact');expect(s.output('artifact')?.state).toBe('failed');expect(JSON.parse(s.output('artifact')!.receipt!).reason).toBe('artifact_not_shared');
 });
 it('publication captions require their own exact presented page before a fresh view is valid',async()=>{
- const{s,c,g,o,run,read}=setup();o.artifacts={upload:async(_a,_t,_text,_artifact,prepared,beforeShare)=>{prepared('FFILE');if(!beforeShare())throw new Error('deferred');return{fileId:'FFILE'};}};
+ const{s,c,g,o,run,read}=setup();o.artifacts={upload:async(_request,_artifact,prepared,beforeShare)=>{prepared('FFILE');if(!beforeShare())throw new Error('deferred');return{fileId:'FFILE'};}};
  o.queueArtifact('research',target,'NEW EVIDENCE',{title:'result',content:'body',contentHash:'hash'},'artifact',{run,viewToken:read()});await o.send('artifact');
  const page=c.attention.read(run,target) as any;const present=(v:any)=>c.attention.presented(run,{role:'toolResult',toolCallId:'read',toolName:'mate',content:[{type:'text',text:JSON.stringify(v)}],isError:false,timestamp:0} as AgentMessage);
  present(page);expect(c.attention.valid(run,target,page.viewToken)).toBe(false);const next=c.attention.read(run,target,page.nextCursor) as any;expect(next.publications[0]).toMatchObject({fileId:'FFILE',caption:'NEW EVIDENCE',title:'result'});
@@ -81,7 +82,7 @@ it('crash recovery distinguishes unshared staging from uncertain sharing',()=>{
  s.recover();expect(s.output('staged')?.state).toBe('failed');expect(s.output('shared')?.state).toBe('unknown');expect(JSON.parse(s.output('shared')!.receipt!).fileId).toBe('FSHARED');
 });
 it('bounded publication coverage retains the newest evidence and never claims full coverage',()=>{
- const{s,c,run}=setup();for(let i=0;i<101;i++){const id=`published-${i}`,fileId=`F${i}`;c.messages.persistence.writes.queueOutput('research',id,{target,text:`caption-${i}`,artifact:{title:'t',content:'c',contentHash:'h'}});s.transitionOutput(id,'pending','sending');s.transitionOutput(id,'sending','sent',{fileId});s.db.prepare('INSERT INTO conversation_events(channel,thread,message_key,revision,kind) VALUES(?,?,?,?,?)').run(target.channel,target.thread,`artifact:${fileId}`,fileId,'artifact');}
+ const{s,c,run}=setup();for(let i=0;i<101;i++){const id=`published-${i}`,fileId=`F${i}`;c.messages.writes.queueOutput('research',id,{target,text:`caption-${i}`,artifact:{title:'t',content:'c',contentHash:'h'}});s.transitionOutput(id,'pending','sending');s.transitionOutput(id,'sending','sent',{fileId});s.db.prepare('INSERT INTO conversation_events(channel,thread,message_key,revision,kind) VALUES(?,?,?,?,?)').run(target.conversationId,externalThread(target),`artifact:${fileId}`,fileId,'artifact');}
  let page=c.attention.read(run,target) as any;const publications:any[]=[];while(true){expect(page.coverage.complete).toBe(false);publications.push(...page.publications);if(!page.nextCursor)break;page=c.attention.read(run,target,page.nextCursor);}
  expect(publications).toHaveLength(100);expect(publications.at(-1).caption).toBe('caption-100');expect(publications[0].caption).toBe('caption-1');
 });

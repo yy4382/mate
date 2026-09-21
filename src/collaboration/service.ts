@@ -1,15 +1,16 @@
 import { ConfiguredAgents, type AgentDirectory } from '../agents/directory.js';
-import { Output } from '../conversations/output.js';
+import { CanonicalOutput as Output } from '../conversations/output.js';
 import {Reminders,type Reminder}from '../reminders/service.js';
 import type { SendBasis } from '../conversations/freshness.js';
 import { ReviewSeats } from '../conversations/review-seats.js';
-import { Attention } from '../conversations/attention.js';
+import { CanonicalAttention as Attention } from '../conversations/attention.js';
 import { BudgetLedger } from '../budget/ledger.js';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { Store, encode, type RunToken } from '../storage/store.js';
-import { Messages, targetSchema, type Target } from '../conversations/messages.js';
-import type { MateConfig } from '../config.js';
+import { Conversations as Messages } from '../conversations/messages.js';
+import { conversationTargetSchema as targetSchema, type ConversationTarget as Target } from '../domain/conversations.js';
+import type { TeamSettings } from '../domain/agents.js';
 
 export interface Work { id: string; target: string; state: string; max_runs: number; max_tokens: number; max_cost: number; runs: number; tokens: number; cost: number }
 export interface Task { legacy:number; message_key:string|null; id: string; work_id: string; parent_id: string | null; target: string; title: string; owner: string | null; assigned_to: string | null; status: string; version: number; waiting_on: string | null; result: string | null; outbox_id: string | null }
@@ -19,14 +20,14 @@ export class Collaboration {
   readonly seats: ReviewSeats;
   readonly ledger: BudgetLedger;
   readonly attention: Attention;
-  constructor(readonly store: Store, readonly messages: Messages, readonly output: Output, readonly config: MateConfig) { this.agents=new ConfiguredAgents(config.agents); this.reminders=new Reminders(this); this.ledger = new BudgetLedger(store, config); this.attention = new Attention(messages); this.seats = new ReviewSeats(messages); }
-  work(id: string): Work { const work = this.store.db.prepare('SELECT * FROM works WHERE id=?').get(id) as Work | undefined; if (!work) throw new Error('Unknown work'); this.messages.persistence.records.mutableTarget('works',id); return work; }
-  task(id: string): Task { const task = this.store.db.prepare("SELECT *, (message_key IS NULL AND status!='draft') legacy FROM tasks WHERE id=?").get(id) as Task | undefined; if (!task) throw new Error('Unknown task'); this.messages.persistence.records.mutableTarget('tasks',id); return task; }
+  constructor(readonly store: Store, readonly messages: Messages, readonly output: Output, readonly config: TeamSettings) { this.agents=new ConfiguredAgents(config.agents); this.config={agents:this.agents.list(),ownerUserIds:[...config.ownerUserIds],budgets:{...config.budgets}}; this.reminders=new Reminders(this); this.ledger = new BudgetLedger(store, config); this.attention = new Attention(messages); this.seats = new ReviewSeats(messages,config.ownerUserIds); }
+  work(id: string): Work { const work = this.store.db.prepare('SELECT * FROM works WHERE id=?').get(id) as Work | undefined; if (!work) throw new Error('Unknown work'); this.messages.records.mutableTarget('works',id); return work; }
+  task(id: string): Task { const task = this.store.db.prepare("SELECT *, (message_key IS NULL AND status!='draft') legacy FROM tasks WHERE id=?").get(id) as Task | undefined; if (!task) throw new Error('Unknown task'); this.messages.records.mutableTarget('tasks',id); return task; }
   list(agentId: string): Task[] {
     this.messages.agent(agentId);
     if(this.messages.isolated(agentId))return [];
-    const rows = this.store.db.prepare("SELECT t.*, (t.message_key IS NULL AND t.status!='draft') legacy FROM tasks t JOIN canonical_targets ct ON ct.object_type='tasks' AND ct.object_id=t.id JOIN channel_access a ON a.channel=ct.conversation_id WHERE a.agent_id=? AND a.active=1 ORDER BY t.rowid DESC LIMIT 100").all(agentId) as Task[];
-    for(const row of rows)this.messages.persistence.records.mutableTarget('tasks',row.id);
+    const rows = this.store.db.prepare("SELECT t.*, (t.message_key IS NULL AND t.status!='draft') legacy FROM tasks t JOIN channel_access a ON a.channel=json_extract(t.target,'$.conversationId') WHERE a.agent_id=? AND a.active=1 ORDER BY t.rowid DESC LIMIT 100").all(agentId) as Task[];
+    for(const row of rows)this.messages.records.mutableTarget('tasks',row.id);
     return rows;
   }
   currentWork(run: RunToken, fallback: string): string {
@@ -40,7 +41,7 @@ export class Collaboration {
   }
   selectWork(run: RunToken, workId: string): void {
     this.assertActionWork(run,workId); const work=this.active(workId);
-    this.messages.requireAccess(run.agentId, JSON.parse(work.target).channel);
+    this.messages.requireAccess(run.agentId, JSON.parse(work.target).conversationId);
     this.store.atomic(()=>{
       this.store.db.prepare('INSERT INTO run_context VALUES(?,?) ON CONFLICT(run_id) DO UPDATE SET work_id=excluded.work_id').run(run.id,workId);
       this.store.db.prepare('INSERT INTO delivery_context VALUES(?,?) ON CONFLICT(delivery_id) DO UPDATE SET work_id=excluded.work_id').run(run.deliveryId,workId);
@@ -55,7 +56,7 @@ export class Collaboration {
       const old = this.store.db.prepare('SELECT id FROM works WHERE origin=?').get(origin) as { id: string } | undefined; if (old) return old.id;
       const id = randomUUID(), b = this.config.budgets;
       this.store.db.prepare('INSERT INTO works(id,origin,target,max_runs,max_tokens,max_cost) VALUES(?,?,?,?,?,?)').run(id, origin, encode(target), b.maxRuns, b.maxTokens, b.maxCostUsd);
-      this.messages.persistence.writes.mutable('works',id);
+      this.messages.writes.mutable('works',id);
       return id;
     });
   }
@@ -66,7 +67,7 @@ export class Collaboration {
     this.store.db.prepare('INSERT INTO delivery_work VALUES(?,?) ON CONFLICT DO NOTHING').run(deliveryId, workId);
   }
   enqueue(agentId: string, workId: string, key: string, payload: unknown): string {
-    return this.store.atomic(() => { this.active(workId); const id = this.messages.persistence.writes.enqueue(agentId, key, payload, 50); this.bindDelivery(id, workId); return id; });
+    return this.store.atomic(() => { this.active(workId); const id = this.messages.writes.enqueue(agentId, key, payload, 50); this.bindDelivery(id, workId); return id; });
   }
   send(agentId: string, workId: string, target: Target, text: string, id: string = randomUUID(), basis?:SendBasis): string {
     return this.store.atomic(() => {
@@ -103,34 +104,34 @@ export class Collaboration {
     });
   }
   createTask(agentId: string, workId: string, target: Target, title: string, parentId?: string): string {
-    targetSchema.parse(target); z.string().min(1).max(500).parse(title); this.messages.requireAccess(agentId, target.channel);
+    targetSchema.parse(target); z.string().min(1).max(500).parse(title); this.messages.requireAccess(agentId, target.conversationId);
     return this.store.atomic(() => {
       this.active(workId);
       if (parentId) { const parent = this.task(parentId); if (parent.work_id !== workId || parent.owner !== agentId || !['doing','waiting','review'].includes(parent.status)) throw new Error('Invalid parent task'); }
       const id = randomUUID();
       this.store.db.prepare("INSERT INTO tasks(id,work_id,parent_id,target,title,status) VALUES(?,?,?,?,?,'todo')").run(id, workId, parentId ?? null, encode(target), title);
-      this.messages.persistence.writes.mutable('tasks',id);
+      this.messages.writes.mutable('tasks',id);
       this.event(id, { action: 'create', agentId }); return id;
     });
   }
   claim(agentId: string, id: string): Task {
     return this.store.atomic(() => {
-      const task = this.task(id); this.active(task.work_id); this.messages.requireAccess(agentId, (JSON.parse(task.target) as Target).channel);
+      const task = this.task(id); this.active(task.work_id); this.messages.requireAccess(agentId, (JSON.parse(task.target) as Target).conversationId);
       if (this.store.db.prepare("UPDATE tasks SET owner=?,status='doing',version=version+1 WHERE id=? AND owner IS NULL AND status='todo' AND (assigned_to IS NULL OR assigned_to=?)").run(agentId, id, agentId).changes !== 1) throw new Error('Task already claimed or unavailable');
       this.event(id, { action: 'claim', agentId }); return this.task(id);
     });
   }
   private owned(agentId: string, id: string): Task {
-    const task = this.task(id); this.active(task.work_id); this.messages.requireAccess(agentId, JSON.parse(task.target).channel);
+    const task = this.task(id); this.active(task.work_id); this.messages.requireAccess(agentId, JSON.parse(task.target).conversationId);
     if (task.owner !== agentId || ['done','cancelled','failed','draft'].includes(task.status)) throw new Error('Task not owned or terminal'); return task;
   }
   delegate(agentId: string, parentId: string, peerId: string, title: string, basis?:SendBasis): string {
     return this.store.atomic(() => {
       const parent = this.owned(agentId, parentId), target = JSON.parse(parent.target) as Target;
       const peer = this.messages.agent(peerId); if (peerId === agentId) throw new Error('Cannot delegate to self');
-      this.messages.requireAccess(peerId, target.channel);
+      this.messages.requireAccess(peerId, target.conversationId);
       const id = this.createTask(agentId, parent.work_id, target, title, parentId);
-      const outputId = this.send(agentId, parent.work_id, target, `<@${peer.slackUserId}> ${title}\nMate task: ${id}`, undefined, basis);
+      const outputId = this.send(agentId, parent.work_id, target, `${peer.name}: ${title}\nMate task: ${id}`, undefined, basis);
       this.store.db.prepare("UPDATE tasks SET status='draft',assigned_to=?,outbox_id=? WHERE id=?").run(peerId, outputId, id);
       return id;
     });
@@ -140,8 +141,7 @@ export class Collaboration {
     this.store.atomic(() => {
       const tasks = this.store.db.prepare("SELECT t.* FROM tasks t JOIN outbox o ON o.id=t.outbox_id JOIN works w ON w.id=t.work_id WHERE t.status='draft' AND o.state='sent' AND w.state='active'").all() as Task[];
       for (const task of tasks) {
-        const receipt=JSON.parse(this.store.output(task.outbox_id!)!.receipt!) as {ts:string};
-        const key=encode([this.config.teamId,JSON.parse(task.target).channel,receipt.ts]);
+        const key=this.messages.records.confirmedMessageId(task.outbox_id!);
         this.store.db.prepare("UPDATE tasks SET status='todo',message_key=? WHERE id=?").run(key,task.id);
         this.enqueue(task.assigned_to??this.store.output(task.outbox_id!)!.agent_id, task.work_id, `delegate:${task.id}`, { kind: 'delegation', taskId: task.id, target: JSON.parse(task.target), receivedAt: Date.now() });
         this.event(task.id, { action: 'visible_delegation' });
@@ -157,14 +157,14 @@ export class Collaboration {
     const waiters = this.store.db.prepare("SELECT * FROM tasks WHERE waiting_on=? AND status='waiting'").all(task.id) as Task[];
     for (const waiter of waiters) {
       this.store.db.prepare("UPDATE tasks SET status='doing',waiting_on=NULL,version=version+1 WHERE id=?").run(waiter.id);
-      const delivery=this.messages.persistence.writes.enqueue(waiter.owner!, `dependency:${waiter.id}:${task.id}:${task.version}`, { kind: 'dependency', taskId: waiter.id, dependencyId: task.id, target: JSON.parse(waiter.target) },50);
+      const delivery=this.messages.writes.enqueue(waiter.owner!, `dependency:${waiter.id}:${task.id}:${task.version}`, { kind: 'dependency', taskId: waiter.id, dependencyId: task.id, target: JSON.parse(waiter.target) },50);
       this.bindDelivery(delivery,waiter.work_id);
     }
   }
   wait(agentId: string, taskId: string, dependencyId: string): void {
     this.store.atomic(() => {
       const task = this.owned(agentId, taskId), dependency = this.task(dependencyId);
-      this.messages.requireAccess(agentId,JSON.parse(dependency.target).channel);
+      this.messages.requireAccess(agentId,JSON.parse(dependency.target).conversationId);
       if (taskId === dependencyId) throw new Error('Invalid dependency');
       const queue = [dependency.id], visited = new Set<string>();
       while (queue.length) {
@@ -209,8 +209,8 @@ export class Collaboration {
       for(const item of deferred){
         const target=JSON.parse(item.target) as Target;
         this.store.db.prepare('UPDATE attention_state SET deferred_until=0 WHERE agent_id=? AND target=?').run(item.agent_id,item.target);
-        const channelMuted=this.store.db.prepare('SELECT 1 FROM attention_state WHERE agent_id=? AND target=? AND muted=1').get(item.agent_id,encode({channel:target.channel}));
-        if(item.muted || channelMuted || !this.messages.access(item.agent_id,target.channel))continue;
+        const channelMuted=this.store.db.prepare('SELECT 1 FROM attention_state WHERE agent_id=? AND target=? AND muted=1').get(item.agent_id,encode({conversationId:target.conversationId}));
+        if(item.muted || channelMuted || !this.messages.access(item.agent_id,target.conversationId))continue;
         const work=this.createWork(`attention:${item.agent_id}:${item.target}`,target);
         if(this.work(work).state==='active')this.enqueue(item.agent_id,work,`defer:${item.target}:${item.deferred_until}`,{kind:'attention_due',target});
       }

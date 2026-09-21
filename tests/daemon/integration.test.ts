@@ -1,4 +1,5 @@
-import { SlackMessageNormalizer } from '../../src/slack/normalize.js';
+import { fixtureTarget, externalThread } from '../helpers/canonical-slack.js';
+import { CanonicalSlackNormalizer } from '../../src/slack/normalize.js';
 import { afterEach, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -6,7 +7,7 @@ import { join } from 'node:path';
 import { Store } from '../../src/storage/store.js';
 import { configSchema } from '../../src/config.js';
 import { configFixture } from '../helpers/config.js';
-import { Messages, Output } from '../../src/slack/messages.js';
+import { Messages, Output } from '../helpers/canonical-slack.js';
 import { Collaboration } from '../../src/collaboration/service.js';
 import { Broker } from '../../src/policy/broker.js';
 import { Supervisor } from '../../src/runtime/supervisor.js';
@@ -20,27 +21,27 @@ import { backup } from '../../src/daemon/backup.js';
 import { Research, publicIPv4 } from '../../src/daemon/research.js';
 import { Controls } from '../../src/daemon/control.js';
 import { SlackService } from '../../src/daemon/slack.js';
-import { WebSlackTransport } from '../../src/slack/transport.js';
+import { CanonicalSlackTransport as WebSlackTransport } from '../../src/slack/transport.js';
 import { Artifacts } from '../../src/daemon/artifacts.js';
 const cleanups: (() => void)[] = [];
 afterEach(() => cleanups.splice(0).forEach(fn => fn()));
 function setup() {
   const config = configSchema.parse({ ...configFixture, budgets: { ...configFixture.budgets, maxTokens: 300000 }, agents: [configFixture.agents[0], { ...configFixture.agents[0], id: 'writer', name: 'Writer', slackAppId: 'ATWO', slackUserId: 'UTWO', slackBotId: 'BTWO', botTokenEnv: 'WRITER_BOT', appTokenEnv: 'WRITER_APP' }] });
   const store = new Store(':memory:'), messages = new Messages(store, config), post = vi.fn(async () => ({ ts: `101.${String(post.mock.calls.length).padStart(6,'0')}` }));
-  const c = new Collaboration(store, messages, new Output(messages, { post }), config), ingress = new Ingress(c);
+  const c = new Collaboration(store, messages, new Output(messages, { post }), config), ingress = new Ingress(c,new CanonicalSlackNormalizer(messages,messages.mapper,c.output));
   const backend = { execute: vi.fn(async () => ({ code: 0, stdout: 'artifact evidence', stderr: '', truncated: false })) };
   const broker = new Broker(store, c, backend, ['/synthetic/protected']);
-  cleanups.push(() => store.close()); return { store, c, ingress, broker, post, backend };
+  cleanups.push(() => store.close()); return { store, c, ingress, broker, post, backend, mapper:messages.mapper };
 }
 it('two Agents can coordinate through one canonical message and direct peer feedback without a task tree',async()=>{
- const{store,c,ingress,broker,post}=setup(),router=new ToolRouter(c,broker),target={channel:'CTEST',thread:'100.000001'};
+ const{store,c,ingress,broker,post}=setup(),router=new ToolRouter(c,broker),target=fixtureTarget('CTEST','100.000001');
  let task:any,view='',phase='claim',step=0;
  const supervisor=new Supervisor(c,router,c.config,agent=>({close:()=>{},run:async(spec,hooks)=>{
   step=0;const engine=new Engine({...model,contextWindow:200000},()=>{
    let operation:string|undefined,args:any={};
    if(step++===0){operation='attention.read';args={target};}
    else if(step===2){
-    if(phase==='claim'){operation='tasks.claim';args={message:{channel:target.channel,ts:target.thread},expectedVersion:0,viewToken:view};}
+    if(phase==='claim'){operation='tasks.claim';args={message:{messageId:target.threadId},expectedVersion:0,viewToken:view};}
     else if(phase==='feedback'){operation='messages.send';args={target,text:'<@UONE> Independent evidence: 2+2=4.',viewToken:view};}
     else{operation='tasks.update';args={taskId:task.id,expectedVersion:task.version,status:'done',result:'Verified 2+2=4',viewToken:view};}
    }
@@ -48,11 +49,11 @@ it('two Agents can coordinate through one canonical message and direct peer feed
    const stream=createAssistantMessageEventStream();stream.push({type:'done',reason:message.stopReason as 'stop'|'toolUse',message});return stream;
   });return engine.run(spec,{...hooks,tool:async(id,op,args)=>{const result=await hooks.tool(id,op,args);if(op==='attention.read')view=(result.value as any).viewToken;if(op==='tasks.claim')task=(result.value as any).result;return result;}});
  }}));cleanups.unshift(()=>supervisor.close());supervisor.register();for(const agent of c.config.agents)c.messages.membership(agent.id,'CTEST',true);
- store.ingest('AONE','root',{team_id:'TTEST',event:{type:'message',channel:'CTEST',ts:target.thread,user:'UOWNER',text:'<@UONE> Verify 2+2'}});ingress.replay('AONE','root');await supervisor.step('research');expect(task.owner).toBe('research');
+ store.ingest('AONE','root',{team_id:'TTEST',event:{type:'message',channel:'CTEST',ts:externalThread(target),user:'UOWNER',text:'<@UONE> Verify 2+2'}});ingress.replay('AONE','root');await supervisor.step('research');expect(task.owner).toBe('research');
  for(const row of c.output.ready())await c.output.send(row.id);
  phase='feedback';c.enqueue('writer',task.work_id,'peer-check',{target});await supervisor.step('writer');for(const row of c.output.ready())await c.output.send(row.id);
  phase='finish';await supervisor.step('research');expect(c.task(task.id).status).toBe('done');for(const row of c.output.ready())await c.output.send(row.id);
- expect(c.list('research')).toHaveLength(1);expect(c.task(task.id).message_key).toBe(JSON.stringify(['TTEST','CTEST',target.thread]));expect(JSON.stringify(post.mock.calls)).toContain('Independent evidence');expect(store.db.prepare("SELECT count(*) n FROM runs WHERE state='failed'").get()).toEqual({n:0});
+ expect(c.list('research')).toHaveLength(1);expect(c.task(task.id).message_key).toBe(JSON.stringify(['TTEST','CTEST',externalThread(target)]));expect(JSON.stringify(post.mock.calls)).toContain('Independent evidence');expect(store.db.prepare("SELECT count(*) n FROM runs WHERE state='failed'").get()).toEqual({n:0});
 });
 it('peer messages can wake an Agent using its existing finite account without a human budget root', async () => {
   const {store,c,ingress}=setup(); for(const agent of c.config.agents){store.register(agent.id,'v1',[]);c.messages.membership(agent.id,'CTEST',true);}
@@ -78,16 +79,16 @@ it('public research rejects local/metadata destinations before HTTP', async () =
 it('controls are owner-only, durable replay applies once, and unknown admin sends never retry', async () => {
   const {store,c,ingress,broker}=setup(); const supervisor=new Supervisor(c,new ToolRouter(c,broker),c.config);supervisor.register();cleanups.unshift(()=>supervisor.close());
   const controls=new Controls(c,supervisor,broker); expect(()=>controls.execute('UONE','status')).toThrow('Owner');
-  const work=c.createWork('human:root',{channel:'CTEST',thread:'100.000001'});
-  const transport=new WebSlackTransport({research:'synthetic',writer:'synthetic'}); const ephemeral=vi.fn(async()=>{throw new Error('connection lost')}); transport.clients.get('research')!.chat.postEphemeral=ephemeral as any;
+  const work=c.createWork('human:root',fixtureTarget('CTEST','100.000001'));
+  const transport=new WebSlackTransport(store,ingress.normalizer instanceof CanonicalSlackNormalizer?ingress.normalizer.mapper:(()=>{throw new Error();})(),{research:'synthetic',writer:'synthetic'}); const ephemeral=vi.fn(async()=>{throw new Error('connection lost')}); transport.clients.get('research')!.chat.postEphemeral=ephemeral as any;
   const slack=new SlackService(c,transport,ingress,controls);
   store.ingest('AONE','cmd',{command:'/team',team_id:'TTEST',user_id:'UOWNER',channel_id:'CTEST',text:`stop ${work}`});slack.replay();slack.replay();expect(c.work(work).state).toBe('paused');
   expect(store.db.prepare('SELECT count(*) n FROM admin_replies').get()).toEqual({n:1});await slack.flushAdmin();await slack.flushAdmin();expect(ephemeral).toHaveBeenCalledOnce();
 });
 it('artifact upload is scoped to own artifact directory and uncertain publication cannot be repeated with a new ID', async () => {
   const {store,c,broker}=setup();new ToolRouter(c,broker);store.register('research','v1',[]);c.messages.membership('research','CTEST',true);const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-artifact-')));cleanups.push(()=>rmSync(root,{recursive:true,force:true}));mkdirSync(join(root,'artifacts'));
-  const target={channel:'CTEST',thread:'100.000001'}, work=c.createWork('human:artifact',target);c.enqueue('research',work,'one',{});const run=store.beginRun('research')!;store.input(run,{});const grant=broker.issueGrant('UOWNER','research',work,root,['read'],Date.now()+100000);
-  const upload=vi.fn(async(_a:any,_t:any,_text:any,_artifact:any,prepared:any,beforeShare:any)=>{prepared('FFILE');beforeShare();throw new Error('lost after send')});const artifacts=new Artifacts(c,broker,{upload},{research:root});const signal=new AbortController().signal;
+  const target=fixtureTarget('CTEST','100.000001'), work=c.createWork('human:artifact',target);c.enqueue('research',work,'one',{});const run=store.beginRun('research')!;store.input(run,{});const grant=broker.issueGrant('UOWNER','research',work,root,['read'],Date.now()+100000);
+  const upload=vi.fn(async(_request:any,_artifact:any,prepared:any,beforeShare:any)=>{prepared('FFILE');beforeShare();throw new Error('lost after send')});const artifacts=new Artifacts(c,broker,{upload},{research:root});const signal=new AbortController().signal;
   await expect(artifacts.publish(run,work,'private',{grantId:grant,path:'MEMORY.md',target,title:'bad'},signal)).rejects.toThrow('Only own');
   await expect(artifacts.publish(run,work,'traversal',{grantId:grant,path:'artifacts/../MEMORY.md',target,title:'bad'},signal)).rejects.toThrow('Only own');
   const draft=await artifacts.publish(run,work,'first',{grantId:grant,path:'artifacts/result.txt',target,title:'result'},signal) as any;expect(draft.status).toBe('held');expect(upload).not.toHaveBeenCalled();
@@ -95,7 +96,7 @@ it('artifact upload is scoped to own artifact directory and uncertain publicatio
   await expect(artifacts.publish(run,work,'second',{grantId:grant,path:'artifacts/result.txt',target,title:'result'},signal)).rejects.toThrow('unknown');expect(upload).toHaveBeenCalledOnce();
 });
 it('paused or delayed output cannot starve later active work', async () => {
-  const {store,c,post}=setup();store.register('research','v1',[]);c.messages.membership('research','CTEST',true);const target={channel:'CTEST',thread:'100.000001'};
+  const {store,c,post}=setup();store.register('research','v1',[]);c.messages.membership('research','CTEST',true);const target=fixtureTarget('CTEST','100.000001');
   const paused=c.createWork('human:paused',target), active=c.createWork('human:active',target);
   for(let n=0;n<25;n++) c.send('research',paused,target,`paused-${n}`);
   c.control('UOWNER',paused,'pause');
@@ -113,11 +114,11 @@ it('stop during startup retains the singleton lock until startup settles and nev
   } finally {await daemon.close();for(const ref of refs){if(saved[ref]===undefined)delete process.env[ref];else process.env[ref]=saved[ref];}rmSync(root,{recursive:true,force:true});}
 });
 it('offline replies in watched threads are durably ingested and maintain a separate pagination checkpoint', async () => {
-  const {store,c,ingress,broker}=setup();const supervisor=new Supervisor(c,new ToolRouter(c,broker),c.config);supervisor.register();cleanups.unshift(()=>supervisor.close());c.messages.membership('research','CTEST',true);c.messages.watch('research',{channel:'CTEST',thread:'100.000001'},true);
-  const transport=new WebSlackTransport({research:'synthetic',writer:'synthetic'});transport.clients.get('research')!.conversations.history=vi.fn(async()=>({ok:true,messages:[]})) as any;
+  const {store,c,ingress,broker}=setup();const supervisor=new Supervisor(c,new ToolRouter(c,broker),c.config);supervisor.register();cleanups.unshift(()=>supervisor.close());c.messages.membership('research','CTEST',true);c.messages.watch('research',fixtureTarget('CTEST','100.000001'),true);
+  const transport=new WebSlackTransport(store,ingress.normalizer instanceof CanonicalSlackNormalizer?ingress.normalizer.mapper:(()=>{throw new Error();})(),{research:'synthetic',writer:'synthetic'});transport.clients.get('research')!.conversations.history=vi.fn(async()=>({ok:true,messages:[]})) as any;
   const replies=vi.fn(async()=>({ok:true,messages:[{ts:'101.000001',thread_ts:'100.000001',user:'UOWNER',text:'offline reply'}]}));transport.clients.get('research')!.conversations.replies=replies as any;
   const slack=new SlackService(c,transport,ingress,new Controls(c,supervisor,broker));await slack.catchUp();slack.replay();
-  expect(c.messages.read('research',{channel:'CTEST',thread:'100.000001'}).map(m=>m.text)).toContain('offline reply');expect(replies).toHaveBeenCalledOnce();expect(store.db.prepare("SELECT ts FROM slack_cursors WHERE channel='CTEST:100.000001'").get()).toEqual({ts:'101.000001'});
+  expect(c.messages.read('research',fixtureTarget('CTEST','100.000001')).map(m=>m.text)).toContain('offline reply');expect(replies).toHaveBeenCalledOnce();expect(store.db.prepare("SELECT ts FROM slack_cursors WHERE channel='CTEST:100.000001'").get()).toEqual({ts:'101.000001'});
 });
 it('execution cleanup scope is identical through canonical and aliased parent directories', async () => {
   const {symlinkSync}=await import('node:fs');const {executionScope}=await import('../../src/daemon/paths.js');const root=mkdtempSync(join(tmpdir(),'mate-scope-'));mkdirSync(join(root,'real','data'),{recursive:true});symlinkSync(join(root,'real'),join(root,'alias'));
@@ -141,8 +142,9 @@ it('private exec grant upgrades preserve revocation and expiry and require confi
  try{for(const docker of [undefined,{binary:'/usr/local/bin/docker',host:'unix:///synthetic.sock',image:`sha256:${'0'.repeat(64)}`}]){
   const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-grants-')));const daemon=new Daemon({mate:configSchema.parse(configFixture),runtime:{dataDir:root,researchHosts:[],workspaceGrants:[],...(docker?{docker}:{})}},{info:()=>{},error:()=>{}});
   if(docker)vi.spyOn((daemon as any).container,'recover').mockResolvedValue(undefined);
+  daemon.collaboration.messages.references.createConversation('channel','external','CTEST');
   try{for(const state of ['valid','revoked','expired']){
-   const work=daemon.collaboration.createWork(state,{channel:'CTEST'}),grant=daemon.broker.issueGrant('UOWNER','research',work,daemon.memoryRoots.research!,['read','write'],Date.now()+100000);
+   const work=daemon.collaboration.createWork(state,{conversationId:'CTEST'}),grant=daemon.broker.issueGrant('UOWNER','research',work,daemon.memoryRoots.research!,['read','write'],Date.now()+100000);
    if(state==='revoked')daemon.broker.revoke('UOWNER',grant);if(state==='expired')daemon.store.db.prepare('UPDATE grants SET expires=1 WHERE id=?').run(grant);
    (daemon as any).ensureGrants('research',work);
    const row=daemon.store.db.prepare('SELECT operations,revoked,expires FROM grants WHERE id=?').get(grant) as any;
@@ -155,8 +157,8 @@ it('private exec grant upgrades preserve revocation and expiry and require confi
 it('artifact publication snapshots survive content edits and explicit revision replaces the frozen bytes',async()=>{
  const{store,c,broker,backend}=setup();new ToolRouter(c,broker);store.register('research','v1',[]);c.messages.membership('research','CTEST',true);
  const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-artifact-revise-')));cleanups.push(()=>rmSync(root,{recursive:true,force:true}));mkdirSync(join(root,'artifacts'));
- const target={channel:'CTEST'},work=c.createWork('artifact',target);c.enqueue('research',work,'one',{});const run=store.beginRun('research')!;store.input(run,{});const grantId=broker.issueGrant('UOWNER','research',work,root,['read'],Date.now()+100000);
- const uploads:any[]=[];const artifacts=new Artifacts(c,broker,{upload:async(_a,_t,text,artifact,prepared,beforeShare)=>{prepared('FFILE');if(!beforeShare())throw new Error('deferred');uploads.push({text,artifact});return{fileId:'FFILE'};}},{research:root});const args={grantId,path:'artifacts/result.txt',target,title:'result'},signal=new AbortController().signal;
+ const target={conversationId:'CTEST'},work=c.createWork('artifact',target);c.enqueue('research',work,'one',{});const run=store.beginRun('research')!;store.input(run,{});const grantId=broker.issueGrant('UOWNER','research',work,root,['read'],Date.now()+100000);
+ const uploads:any[]=[];const artifacts=new Artifacts(c,broker,{upload:async({text},artifact,prepared,beforeShare)=>{prepared('FFILE');if(!beforeShare())throw new Error('deferred');uploads.push({text,artifact});return{fileId:'FFILE'};}},{research:root});const args={grantId,path:'artifacts/result.txt',target,title:'result'},signal=new AbortController().signal;
  const draft=await artifacts.publish(run,work,'first',args,signal) as any;backend.execute.mockResolvedValue({code:0,stdout:'new file content',stderr:'',truncated:false});
  expect((await artifacts.publish(run,work,'first',args,signal) as any).artifact.bytes).toBe(Buffer.byteLength('artifact evidence'));expect(JSON.parse(store.output('first')!.request).artifact.content).toBe('artifact evidence');
  const revised=await artifacts.publish(run,work,'revision',{...args,draftId:draft.draftId,revision:1},signal) as any;expect(revised.artifact.bytes).toBe(Buffer.byteLength('new file content'));
@@ -164,21 +166,21 @@ it('artifact publication snapshots survive content edits and explicit revision r
 });
 it('Slack file allocation is persisted before transfer; only proven file shares reconcile unknown publication',async()=>{
  const{store,c,broker,ingress}=setup();new ToolRouter(c,broker);store.register('research','v1',[]);c.messages.membership('research','CTEST',true);
- const transport=new WebSlackTransport({research:'synthetic'}),service=new SlackService(c,transport,ingress,new Controls(c,{} as any,broker));const client=transport.clients.get('research')!;
+ const transport=new WebSlackTransport(store,ingress.normalizer instanceof CanonicalSlackNormalizer?ingress.normalizer.mapper:(()=>{throw new Error();})(),{research:'synthetic'}),service=new SlackService(c,transport,ingress,new Controls(c,{} as any,broker));const client=transport.clients.get('research')!;
  client.files.getUploadURLExternal=vi.fn(async()=>({ok:true,file_id:'FFILE',upload_url:'https://files.slack.com/upload/v1/synthetic'})) as any;
  client.files.completeUploadExternal=vi.fn(async()=>{throw new Error('lost receipt after share');}) as any;
  const fetchMock=vi.fn(async()=>({ok:true,body:{cancel:async()=>{}}}));vi.stubGlobal('fetch',fetchMock);
- const target={channel:'CTEST',thread:'100.000001'},work=c.createWork('upload',target);c.enqueue('research',work,'one',{});const run=store.beginRun('research')!;store.input(run,{});c.output.artifacts=service;c.output.queueArtifact('research',target,'caption',{title:'file',content:'frozen',contentHash:'hash'},'upload',{run});store.db.prepare('INSERT INTO output_work VALUES(?,?)').run('upload',work);const draft=c.output.gate!.describe('research','upload') as any;
+ const target=fixtureTarget('CTEST','100.000001'),work=c.createWork('upload',target);c.enqueue('research',work,'one',{});const run=store.beginRun('research')!;store.input(run,{});c.output.artifacts=service;c.output.queueArtifact('research',target,'caption',{title:'file',content:'frozen',contentHash:'hash'},'upload',{run});store.db.prepare('INSERT INTO output_work VALUES(?,?)').run('upload',work);const draft=c.output.gate!.describe('research','upload') as any;
  try{c.output.gate!.continueOnce(run,'upload',1,draft.holdId);await c.output.send('upload');expect(JSON.parse(store.output('upload')!.receipt!).fileId).toBe('FFILE');expect(fetchMock).toHaveBeenCalledOnce();
   client.files.info=vi.fn(async()=>({ok:true,file:{id:'FFILE',user:'UONE',shares:{private:{CTEST:[{ts:'200.000001',thread_ts:'100.000001'}]}}}})) as any;
   await service.reconcile();expect(store.output('upload')?.state).toBe('sent');expect(client.files.completeUploadExternal).toHaveBeenCalledOnce();
  }finally{vi.unstubAllGlobals();}
 });
 it('peer publication attention includes captions and respects page ACK, mute and revoked channel access',async()=>{
- const{store,c,broker}=setup();new ToolRouter(c,broker);for(const actor of ['research','writer']){store.register(actor,'v1',[]);c.messages.membership(actor,'CTEST',true);}
- const target={channel:'CTEST',thread:'100.000001'},work=c.createWork('peer-artifact',target);for(const actor of ['research','writer'])c.enqueue(actor,work,actor,{});
+ const{store,c,broker,ingress}=setup();new ToolRouter(c,broker);for(const actor of ['research','writer']){store.register(actor,'v1',[]);c.messages.membership(actor,'CTEST',true);}
+ const target=fixtureTarget('CTEST','100.000001'),work=c.createWork('peer-artifact',target);for(const actor of ['research','writer'])c.enqueue(actor,work,actor,{});
  const run=store.beginRun('research')!,peer=store.beginRun('writer')!;store.input(run,{});store.input(peer,{});
- c.output.artifacts={upload:async(_a,_t,_text,_artifact,prepared,beforeShare)=>{prepared('FFILE');if(!beforeShare())throw new Error('deferred');return{fileId:'FFILE'};}};
+ c.output.artifacts={upload:async(_request,_artifact,prepared,beforeShare)=>{prepared('FFILE');if(!beforeShare())throw new Error('deferred');return{fileId:'FFILE'};}};
  c.output.queueArtifact('research',target,'peer caption',{title:'result',content:'frozen',contentHash:'hash'},'artifact',{run});const draft=c.output.gate!.describe('research','artifact') as any;c.output.gate!.continueOnce(run,'artifact',1,draft.holdId);await c.output.send('artifact');
  expect(c.attention.peek('writer')).toEqual([{target,revision:expect.any(Number),unseen:1}]);let page=c.attention.read(peer,target) as any;
  const present=(value:any)=>c.attention.presented(peer,{role:'toolResult',toolCallId:'p',toolName:'mate',content:[{type:'text',text:JSON.stringify(value)}],isError:false,timestamp:0});
@@ -186,16 +188,16 @@ it('peer publication attention includes captions and respects page ACK, mute and
  c.attention.state('writer',target,'mute',1);expect(c.attention.peek('writer')).toEqual([]);c.messages.membership('writer','CTEST',false);expect(()=>c.attention.read(peer,target)).toThrow('access');
 });
 it('Slack artifact echoes replace publication projection without double unread after exact presentation',async()=>{
- const{store,c,broker}=setup();new ToolRouter(c,broker);for(const actor of ['research','writer']){store.register(actor,'v1',[]);c.messages.membership(actor,'CTEST',true);}const target={channel:'CTEST',thread:'100.000001'},work=c.createWork('echo-artifact',target);for(const actor of ['research','writer'])c.enqueue(actor,work,actor,{});
- const run=store.beginRun('research')!,peer=store.beginRun('writer')!;store.input(run,{});store.input(peer,{});c.output.artifacts={upload:async(_a,_t,_text,_artifact,prepared,beforeShare)=>{prepared('FFILE');if(!beforeShare())throw new Error('deferred');return{fileId:'FFILE'};}};
- c.output.queueArtifact('research',target,'caption',{title:'result',content:'f',contentHash:'hash'},'artifact',{run});const draft=c.output.gate!.describe('research','artifact')as any;c.output.gate!.continueOnce(run,'artifact',1,draft.holdId);await c.output.send('artifact');
+ const{store,c,broker,ingress}=setup();new ToolRouter(c,broker);for(const actor of ['research','writer']){store.register(actor,'v1',[]);c.messages.membership(actor,'CTEST',true);}const target=fixtureTarget('CTEST','100.000001'),work=c.createWork('echo-artifact',target);for(const actor of ['research','writer'])c.enqueue(actor,work,actor,{});
+ const run=store.beginRun('research')!,peer=store.beginRun('writer')!;store.input(run,{});store.input(peer,{});c.output.artifacts={upload:async(_request,_artifact,prepared,beforeShare)=>{prepared('FFILE');if(!beforeShare())throw new Error('deferred');return{fileId:'FFILE'};}};
+ c.output.queueArtifact('research',target,'Done 🎉 https://example.com',{title:'result',content:'f',contentHash:'hash'},'artifact',{run});const draft=c.output.gate!.describe('research','artifact')as any;c.output.gate!.continueOnce(run,'artifact',1,draft.holdId);await c.output.send('artifact');
  let page=c.attention.read(peer,target)as any;while(true){c.attention.presented(peer,{role:'toolResult',toolCallId:'p',toolName:'mate',content:[{type:'text',text:JSON.stringify(page)}],isError:false,timestamp:0});if(!page.nextCursor)break;page=c.attention.read(peer,target,page.nextCursor);}
- store.ingest('ATWO','echo-file',{team_id:'TTEST',event:{type:'message',channel:'CTEST',ts:'201.000001',thread_ts:target.thread,text:'caption',user:'UONE',files:[{id:'FFILE',title:'result'}]}});new SlackMessageNormalizer(c.messages).normalize('ATWO','echo-file');
- expect(c.attention.peek('writer')).toEqual([{target,revision:expect.any(Number),unseen:0}]);const after=c.attention.read(peer,target)as any;expect(after.publications).toEqual([]);expect(after.messages[0].files[0].id).toBe('FFILE');
+ store.ingest('ATWO','echo-file',{team_id:'TTEST',event:{type:'message',channel:'CTEST',ts:'201.000001',thread_ts:externalThread(target),text:'Done :tada: <https://example.com>',user:'UONE',files:[{id:'FFILE',title:'result'}]}});ingress.normalizer.normalize('ATWO','echo-file');
+ expect(c.attention.peek('writer')).toEqual([{target,revision:expect.any(Number),unseen:0}]);const after=c.attention.read(peer,target)as any;expect(after.publications).toEqual([]);expect(after.messages[0].attachments[0].id).toBe('FFILE');
 });
 it.each(['defer','discard','continue','revise','retry'] as const)('the same changed discussion permits the Agent choice %s through the Pi loop without a task tree',async choice=>{
- const{store,c,broker,post}=setup(),router=new ToolRouter(c,broker),target={channel:'CTEST',thread:'100.000001'};let view='',draft:any,step=0,now=200;
- const change=()=>c.messages.record({team:'TTEST',channel:'CTEST',thread:target.thread,ts:`${now++}.000001`,revision:`${now}.000001`,user:'UTWO',text:'new peer evidence',deleted:false},['research']);
+ const{store,c,broker,post,mapper}=setup(),router=new ToolRouter(c,broker),target=fixtureTarget('CTEST','100.000001');let view='',draft:any,step=0,now=200;
+ const change=()=>c.messages.record(mapper.message({channel:'CTEST',thread:externalThread(target),ts:`${now++}.000001`,revision:`${now}.000001`,user:'UTWO',text:'new peer evidence',deleted:false}),['research']);
  const supervisor=new Supervisor(c,router,c.config,()=>({close:()=>{},run:async(spec,hooks)=>{
   const engine=new Engine({...model,contextWindow:200000},()=>{
    let operation:string|undefined,args:any={};step++;
@@ -220,14 +222,14 @@ it.each(['defer','discard','continue','revise','retry'] as const)('the same chan
  if(choice==='defer'||choice==='discard')expect(post).not.toHaveBeenCalled();else expect(post).toHaveBeenCalledOnce();
  if(choice==='defer'){expect(c.output.gate!.list('research')).toHaveLength(1);expect(c.attention.peek('research')).toEqual([]);}
  if(choice==='revise')expect(JSON.stringify(post.mock.calls)).toContain('revised conclusion');
- const seen=store.db.prepare("SELECT revision FROM attention_seen WHERE agent_id='research' AND key=?").get(JSON.stringify(['TTEST','CTEST','201.000001']));
+ const seen=store.db.prepare("SELECT revision FROM attention_seen WHERE agent_id='research' AND key=?").get(mapper.messageId('CTEST','201.000001'));
  if(choice==='continue')expect(seen).toBeUndefined();
- if(choice==='retry')expect(seen).toEqual({revision:'202.000001'});
+ if(choice==='retry')expect(seen).toEqual({revision:'202000001'});
 });
 it('unknown output and unnormalized ingress do not starve unrelated targets before the ready batch limit',async()=>{
- const{store,c,broker,post}=setup();new ToolRouter(c,broker);store.register('research','v1',[]);for(const channel of ['CTEST','CTWO','CTHREE'])c.messages.membership('research',channel,true);
- const work=c.createWork('fairness',{channel:'CTEST'});c.enqueue('research',work,'run',{});const run=store.beginRun('research')!;store.input(run,{});
- const enqueue=(channel:string,id:string)=>{const output=c.send('research',work,{channel},id,id,{run});const draft=c.output.gate!.describe('research',output) as any;c.output.gate!.continueOnce(run,output,draft.revision,draft.holdId);return output;};
+ const{store,c,broker,post}=setup();new ToolRouter(c,broker);store.register('research','v1',[]);c.messages.references.createConversation('channel','external','CTHREE');c.messages.references.bindConversation({provider:'slack',workspace:'TTEST',externalId:'CTHREE'},'CTHREE','primary');for(const channel of ['CTEST','CTWO','CTHREE'])c.messages.membership('research',channel,true);
+ const work=c.createWork('fairness',{conversationId:'CTEST'});c.enqueue('research',work,'run',{});const run=store.beginRun('research')!;store.input(run,{});
+ const enqueue=(channel:string,id:string)=>{const output=c.send('research',work,{conversationId:channel},id,id,{run});const draft=c.output.gate!.describe('research',output) as any;c.output.gate!.continueOnce(run,output,draft.revision,draft.holdId);return output;};
  const unknown=enqueue('CTEST','unknown');store.transitionOutput(unknown,'pending','sending');store.transitionOutput(unknown,'sending','unknown');
  for(let i=0;i<25;i++)enqueue('CTEST','blocked-'+i);
  store.ingest('AONE','pending-ingress',{team_id:'TTEST',event:{channel:'CTWO',type:'message',ts:'100.000001',user:'UOWNER',text:'normalize first'}});

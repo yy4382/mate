@@ -144,3 +144,7 @@ review_e0_architecture检查现有SQL后同意合并“领域契约切换”和�
 这些修订是普通工程决策，没有需要用户裁决的产品分叉。V1/V2独立审核必须验证上述契约；V0设计通过不等于Linux已经验证。
 
 V0复审补充：loopback磁盘文件必须实际预分配宿主空间；启动/恢复检查mount身份、容量，挂载失败不回退普通目录。文件helper共用Docker资源限制/清理熔断，不继承宿主env，不从可写workspace加载代码。恢复拒绝部分/损坏备份，先确认目标mount再恢复，不跟随symlink。review_v0_deployment仅设计PASS，执行验证属于V1/V2。
+
+### E2b2c路由落地决策（2026-09-21）
+
+与review_e2b2c_canonical讨论后，v17删除E2b2b过渡canonical_targets镜像：可变对象以所属target JSON为权威、表达式索引供查询；outbox以同一行不可更改的canonical target供路由，原wire/hash/receipt独立保留。迁移和新writer均在同事务写入；DB校验routing引用及不可变性，reader核对wire解释。这样unknown和附件可见性查询不需要每次JS全库扫描，也不会因遗漏索引行而遗漏unknown。旧版本解释仅保留于兼容adapter，旧writer位于测试夹具。新消息与effects使用显式payload版本，不能通过ID前缀猜测。

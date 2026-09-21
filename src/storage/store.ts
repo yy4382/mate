@@ -199,15 +199,18 @@ export class Store {
       if (this.db.prepare("UPDATE actions SET state=?,receipt=? WHERE id=? AND agent_id=? AND run_id=? AND state='executing'").run(state, encode(receipt), id, token.agentId, token.id).changes !== 1) throw new Error('Action is not executing');
     });
   }
-  queueOutput(agentId: string, id: string, request: unknown): Effect {
+  queueOutput(agentId: string, id: string, request: unknown, routingTarget?: string): Effect {
     return this.atomic(() => {
       const body = encode(request), old = this.output(id);
       if (old) { if (old.agent_id !== agentId || old.request_hash !== hash(body)) throw new Error('Output identity conflict'); return old; }
-      this.db.prepare("INSERT INTO outbox(id,agent_id,request_hash,request,state) VALUES(?,?,?,?,'pending')").run(id, agentId, hash(body), body);
+      if(this.db.pragma('user_version',{simple:true})===17){
+        if(!routingTarget)throw new Error('Canonical output routing required');
+        this.db.prepare("INSERT INTO outbox(id,agent_id,request_hash,request,state,target) VALUES(?,?,?,?,'pending',?)").run(id,agentId,hash(body),body,routingTarget);
+      }else this.db.prepare("INSERT INTO outbox(id,agent_id,request_hash,request,state) VALUES(?,?,?,?,'pending')").run(id, agentId, hash(body), body);
       return this.output(id)!;
     });
   }
-  output(id: string): Effect | undefined { return this.db.prepare('SELECT * FROM outbox WHERE id=?').get(id) as Effect | undefined; }
+  output(id: string): Effect | undefined { return this.db.prepare('SELECT id,agent_id,request_hash,request,state,receipt FROM outbox WHERE id=?').get(id) as Effect | undefined; }
   transitionOutput(id: string, from: string, to: 'sending' | 'sent' | 'unknown' | 'failed' | 'pending' | 'held', receipt?: unknown): void {
     const allowed: Record<string, string[]> = { held: ['pending','failed'], pending: ['sending', 'failed','held'], sending: ['sent', 'unknown', 'failed', 'pending'], unknown: ['sent', 'failed'] };
     if (!allowed[from]?.includes(to)) throw new Error('Invalid output transition');

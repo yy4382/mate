@@ -1,11 +1,12 @@
+import { fixtureTarget, externalThread } from '../helpers/canonical-slack.js';
 import { afterEach, expect, it } from 'vitest';
 import { Store } from '../../src/storage/store.js';
-import { Messages, Output } from '../../src/slack/messages.js';
+import { Messages, Output } from '../helpers/canonical-slack.js';
 import { Collaboration } from '../../src/collaboration/service.js';
 import { configSchema } from '../../src/config.js';
 import { configFixture } from '../helpers/config.js';
 const stores: Store[] = [];
-const target = { channel: 'CTEST', thread: '100.000001' };
+const target = fixtureTarget('CTEST','100.000001');
 function setup() {
   const config = configSchema.parse({ ...configFixture, agents: [configFixture.agents[0], { ...configFixture.agents[0], id: 'engineer', slackAppId: 'ATWO', slackBotId: 'BTWO', slackUserId: 'UTWO', botTokenEnv: 'ENGINEER_BOT', appTokenEnv: 'ENGINEER_APP' }] });
   const db = new Store(':memory:'); stores.push(db);

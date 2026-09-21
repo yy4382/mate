@@ -1,20 +1,21 @@
 import type { RunToken } from '../storage/store.js';
-import type { Target } from './messages.js';
+import type { ConversationTarget as Target } from '../domain/conversations.js';
+import type { Principal } from '../domain/messages.js';
 
 export interface Space {
-  channel: string;
+  conversationId: string;
   name?: string | undefined;
   purpose?: string | undefined;
-  user?: string | undefined;
+  principal?: Principal | undefined;
   archived: boolean;
   kind: 'channel' | 'dm';
 }
 export interface SpacesResult { spaces: Space[]; incomplete: boolean; retry?: string }
-export interface MembersResult { members: string[]; incomplete: boolean }
+export interface MembersResult { members: Principal[]; incomplete: boolean }
 export type OpenDMResult = Target | { status: 'failed'; receipt: unknown };
-/** Application-owned port. E1 retains legacy reference shapes until E2 migration. */
+/** Application-owned port. Provider adapters translate external identifiers. */
 export interface ConversationDirectory {
   spaces(actor: string): Promise<SpacesResult>;
-  members(actor: string, channel: string): Promise<MembersResult>;
-  openDM(run: RunToken, actionId: string, user: string, signal: AbortSignal): Promise<OpenDMResult>;
+  members(actor: string, conversationId: string): Promise<MembersResult>;
+  openDM(run: RunToken, actionId: string, principal: Exclude<Principal,{kind:'unknown'}>, signal: AbortSignal): Promise<OpenDMResult>;
 }

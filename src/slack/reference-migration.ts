@@ -9,6 +9,7 @@ const legacyTarget = z.object({ channel: channelId, thread: timestamp.optional()
 
 /** Offline, trusted legacy adapter. Wire payloads and journal bytes are never rewritten. */
 export function migrateLegacyReferences(store: Store, workspace: string): void {
+  if(store.db.pragma('user_version',{simple:true})!==16)throw new Error('Legacy reference migration only supports schema 16');
   z.string().regex(/^T[A-Z0-9]+$/).parse(workspace);
   const references = new References(store);
   const conversation = (channel: string): string => {

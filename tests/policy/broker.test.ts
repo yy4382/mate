@@ -1,10 +1,11 @@
+import { fixtureTarget, externalThread } from '../helpers/canonical-slack.js';
 import { afterEach, expect, it, vi } from 'vitest';
 import { mkdtempSync, realpathSync, symlinkSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { Store } from '../../src/storage/store.js';
 import { configSchema } from '../../src/config.js';
 import { configFixture } from '../helpers/config.js';
-import { Messages, Output } from '../../src/slack/messages.js';
+import { Messages, Output } from '../helpers/canonical-slack.js';
 import { Collaboration } from '../../src/collaboration/service.js';
 import { Broker } from '../../src/policy/broker.js';
 const cleanups: (() => void)[] = [];
@@ -14,7 +15,7 @@ function setup() {
   const config = configSchema.parse(configFixture); db.register('research', 'v1', []);
   const messages = new Messages(db, config); messages.membership('research', 'CTEST', true);
   const collaboration = new Collaboration(db, messages, new Output(messages, { post: async () => ({ ts: '101.000001' }) }), config);
-  const work = collaboration.createWork('human:one', { channel: 'CTEST', thread: '100.000001' });
+  const work = collaboration.createWork('human:one', fixtureTarget('CTEST','100.000001'));
   collaboration.enqueue('research', work, 'one', {}); const run = db.beginRun('research')!; db.input(run, {});
   const execute = vi.fn(async () => ({ code: 0, stdout: 'ok', stderr: '', truncated: false }));
   const broker = new Broker(db, collaboration, { execute }, ['/synthetic/protected'], () => 1000);
@@ -60,7 +61,7 @@ it('expired scope and a foreign work cannot reach the execution backend', async 
   const { db, collaboration, run, work, grant, execute } = setup();
   const later = new Broker(db, collaboration, { execute }, ['/synthetic/protected'], () => 200000);
   await expect(later.execute(run, work, 'expired', grant, { kind: 'exec', cwd: '.', command: 'true' })).rejects.toThrow('Grant');
-  const other = collaboration.createWork('human:other', { channel: 'CTEST', thread: '100.000001' });
+  const other = collaboration.createWork('human:other', fixtureTarget('CTEST','100.000001'));
   await expect(new Broker(db, collaboration, { execute }, [], () => 1000).execute(run, other, 'foreign', grant, { kind: 'read', path: 'note' })).rejects.toThrow('mismatch');
   expect(execute).not.toHaveBeenCalled();
 });
@@ -68,12 +69,12 @@ it('switching activity cannot bypass uncertain effects on the same resources',as
   const {root,run,broker,work,grant,execute,collaboration:c}=setup();
   execute.mockRejectedValueOnce(new Error('lost'));
   await expect(broker.execute(run,work,'first',grant,{kind:'write',path:'note',content:'x'})).rejects.toThrow('lost');
-  const other=c.createWork('other',{channel:'CTEST'});const otherGrant=broker.issueGrant('UOWNER','research',other,root,['write'],100000);c.selectWork(run,other);
+  const other=c.createWork('other',{conversationId:'CTEST'});const otherGrant=broker.issueGrant('UOWNER','research',other,root,['write'],100000);c.selectWork(run,other);
   expect(await broker.execute(run,other,'second',otherGrant,{kind:'write',path:'note',content:'x'})).toMatchObject({status:'action_unknown'});
   expect(execute).toHaveBeenCalledTimes(1);
 });
 it('a review seat rejects even a valid grant to another workspace',async()=>{
- const{root,db,run,broker,work,grant,execute}=setup();db.db.prepare('INSERT INTO review_seats VALUES(?,?,?,?,1)').run('research',JSON.stringify({channel:'CTEST'}),'synthetic owner brief',`${root}/clean`);
+ const{root,db,run,broker,work,grant,execute}=setup();db.db.prepare('INSERT INTO review_seats VALUES(?,?,?,?,1)').run('research',JSON.stringify({conversationId:'CTEST'}),'synthetic owner brief',`${root}/clean`);
  await expect(broker.execute(run,work,'outside-review',grant,{kind:'write',path:'note',content:'x'})).rejects.toThrow('clean private workspace');expect(execute).not.toHaveBeenCalled();
 });
 it('structured capabilities respect permission families, both move paths and unknown mutations',async()=>{
@@ -87,6 +88,6 @@ it('structured capabilities respect permission families, both move paths and unk
  await broker.execute(run,work,'inspect',reader,{kind:'stat',path:'y'});expect(execute).toHaveBeenCalledTimes(3);
 });
 it('review-seat private exec forces no network even when the environment permits networking',async()=>{
- const{root,db,run,broker,work,grant,execute}=setup();db.db.prepare('INSERT INTO review_seats VALUES(?,?,?,?,1)').run('research',JSON.stringify({channel:'CTEST'}),'brief',root);
+ const{root,db,run,broker,work,grant,execute}=setup();db.db.prepare('INSERT INTO review_seats VALUES(?,?,?,?,1)').run('research',JSON.stringify({conversationId:'CTEST'}),'brief',root);
  await broker.execute(run,work,'seat-exec',grant,{kind:'exec',cwd:'.',command:'true'});expect(execute.mock.calls[0]).toBeDefined();expect((execute.mock.calls as any)[0][0].network).toBe('none');
 });

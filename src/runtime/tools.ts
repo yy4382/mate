@@ -3,16 +3,16 @@ import { buildBaseline } from './prompt.js';
 import { ToolEnvironment } from './environment.js';
 import { operationSchema } from '../execution/backend.js';
 import { MessageTasks } from '../coordination/messages.js';
-import { FreshnessGate } from '../conversations/freshness.js';
+import { CanonicalFreshnessGate as FreshnessGate } from '../conversations/freshness.js';
 import { z } from 'zod';
 import type { RunToken } from '../storage/store.js';
 import type { Collaboration } from '../collaboration/service.js';
 import type { Broker } from '../policy/broker.js';
 import type { ConversationDirectory } from '../conversations/directory.js';
-import { targetSchema,slackTs } from '../conversations/messages.js';
+import { conversationTargetSchema as targetSchema } from '../domain/conversations.js';
 import type { ToolReply } from './engine.js';
 const id = z.string().min(1).max(500), text = z.string().max(35000);
-const messageRef=z.object({channel:id,ts:slackTs}).strict();
+const messageRef=z.object({messageId:id}).strict();
 const reminderInput={target:targetSchema,content:z.string().min(1).max(12000),nextAt:z.number().int().nonnegative(),timezone:id,cron:id.optional(),taskId:id.optional(),anchor:messageRef.optional()};
 const fileSchemas = Object.fromEntries(operationSchema.options.filter(schema=>schema.shape.kind.value!=='exec').map(schema=>[`file.${schema.shape.kind.value}`,(schema as z.ZodObject).omit({kind:true}).extend({grantId:id})]));
 const schemas: Record<string,z.ZodType> = {
@@ -29,7 +29,7 @@ const schemas: Record<string,z.ZodType> = {
   'reminders.edit':z.object({...reminderInput,reminderId:id,expectedVersion:z.number().int().positive()}).strict(),
   'reminders.cancel':z.object({reminderId:id,expectedVersion:z.number().int().positive(),cancelPending:z.boolean().optional()}).strict(),
   'environment.info':z.object({}).strict(),
-  'attachments.save':z.object({message:messageRef,fileId:z.string().regex(/^F[A-Z0-9]+$/),grantId:id,path:id}).strict(),
+  'attachments.save':z.object({message:messageRef,fileId:id,grantId:id,path:id}).strict(),
   'tasks.byMessage':z.object({message:messageRef}).strict(),
   'tasks.intents':z.object({}).strict(),
   'tasks.retry':z.object({intentId:id,viewToken:id.optional()}).strict(),
@@ -52,12 +52,12 @@ const schemas: Record<string,z.ZodType> = {
   'works.select': z.object({ workId: id }).strict(),
   'budget.read': z.object({}).strict(),
   'conversations.list': z.object({}).strict(),
-  'conversations.members': z.object({ channel: id }).strict(),
-  'conversations.openDM': z.object({ user: z.string().regex(/^U[A-Z0-9]+$/) }).strict(),
+  'conversations.members': z.object({ conversationId: id }).strict(),
+  'conversations.openDM': z.object({ principal: z.object({kind:z.enum(['human','agent','external']),id}).strict() }).strict(),
   'research.read': z.object({ url: z.string().url().max(4000) }).strict(),
   'artifact.publish': z.object({ grantId: id, path: id, title: z.string().min(1).max(200), target: targetSchema,format:z.enum(['text','binary']).optional(),text:text.optional(),viewToken:id.optional() }).strict(),
   'artifact.revise':z.object({draftId:id,revision:z.number().int().positive(),grantId:id,path:id,title:z.string().min(1).max(200),target:targetSchema,format:z.enum(['text','binary']).optional(),text:text.optional()}).strict(),
-  'messages.recent': z.object({ channel: id }).strict(),
+  'messages.recent': z.object({ conversationId: id }).strict(),
   'tasks.read': z.object({ taskId: id }).strict(),
   agents: z.object({}).strict(), 'messages.read': z.object({ target: targetSchema }).strict(),
   'messages.search': z.object({ query: text }).strict(), 'messages.send': z.object({ target: targetSchema, text,viewToken:id.optional() }).strict(),
@@ -107,7 +107,7 @@ export class ToolRouter {
   readonly gate:FreshnessGate;
   readonly coordination:MessageTasks;
   readonly sessions:SessionLifecycle;
-  constructor(readonly collaboration: Collaboration, readonly broker: Broker, readonly additional?: AdditionalTools, readonly directory?: ConversationDirectory, readonly provision?: (actor:string,workId:string)=>void) {this.sessions=new SessionLifecycle(collaboration,agent=>buildBaseline(agent,operationDocumentation));this.coordination=new MessageTasks(collaboration);this.gate=new FreshnessGate(collaboration.messages,collaboration.attention);collaboration.output.gate=this.gate;
+  constructor(readonly collaboration: Collaboration, readonly broker: Broker, readonly additional?: AdditionalTools, readonly directory?: ConversationDirectory, readonly provision?: (actor:string,workId:string)=>void,readonly normalizeInput:(value:unknown)=>unknown=value=>value) {this.sessions=new SessionLifecycle(collaboration,agent=>buildBaseline(agent,operationDocumentation));this.coordination=new MessageTasks(collaboration);this.gate=new FreshnessGate(collaboration.messages,collaboration.attention);collaboration.output.gate=this.gate;
     for(const [name,schema]of Object.entries(schemas))this.environment.register({name,schema,description:capabilityDescriptions[name]??`Mate ${name} capability; current actor, work, grants and submission gates apply.`,execute:(context,input)=>this.dispatch(context.run,context.workId,context.callId,name,input,context.signal)});
   }
   async call(run: RunToken, workId: string, callId: string, operation: string, input: unknown, signal: AbortSignal): Promise<ToolReply> {
@@ -118,7 +118,7 @@ export class ToolRouter {
     if(!Object.hasOwn(schemas,operation) && !operation.startsWith('tools.')){workId=this.collaboration.currentWork(run,workId);this.collaboration.assertActionWork(run,workId);}
     if(operation==='tools.list'){discoverySchemas['tools.list'].parse(input);return {value:this.environment.list().filter(item=>!this.collaboration.seats.active(run.agentId)||seatOperations.includes(item.name))};}
     if(operation==='tools.describe'){const request=discoverySchemas['tools.describe'].parse(input);if(this.collaboration.seats.active(run.agentId)&&!seatOperations.includes(request.name))throw new Error('Independent review seat isolates this input path');return {value:this.environment.describe(request.name)};}
-    return this.environment.execute({run,workId,callId,signal},operation,input);
+    return this.environment.execute({run,workId,callId,signal},operation,this.normalizeInput(input));
   }
   private async dispatch(run: RunToken, workId: string, callId: string, operation: string, input: unknown, signal: AbortSignal): Promise<ToolReply> {
     const c = this.collaboration, s = c.store, actor = run.agentId;
@@ -130,16 +130,18 @@ export class ToolRouter {
     const args = schemas[operation]!.parse(input) as Record<string, any>;
     const readOnly = ['actions.list','actions.read','sessions.status','reminders.list','reminders.read','reminders.log','environment.info','tasks.byMessage','tasks.intents','drafts.list','drafts.read','attention.peek','attention.read','attention.resolve','attention.defer','attention.mute','agents','works.list','budget.read','tasks.read','tasks.list','messages.read','messages.recent','messages.search','schedules.list','inbox.list','inbox.read','conversations.list','conversations.members'];
     if (!readOnly.includes(operation) && operation !== 'works.select') c.assertActionWork(run, args.taskId ? c.task(args.taskId).work_id : workId);
+    if(args.message)c.messages.message(actor,args.message.messageId);
+    if(args.anchor)c.messages.message(actor,args.anchor.messageId);
     if(args.reminderId)c.reminders.read(actor,args.reminderId);
     if(args.scheduleId)c.reminders.read(actor,args.scheduleId);
-    if(args.target)c.messages.requireAccess(actor,args.target.channel);
-    if(args.channel)c.messages.requireAccess(actor,args.channel);
-    if(args.taskId)c.messages.requireAccess(actor,JSON.parse(c.task(args.taskId).target).channel);
-    if(args.deliveryId){const delivery=s.delivery(args.deliveryId);if(delivery.agent_id!==actor)throw new Error('Private inbox');const target=JSON.parse(delivery.payload).target;if(target)c.messages.requireAccess(actor,target.channel);}
+    if(args.target)c.messages.requireAccess(actor,args.target.conversationId);
+    if(args.conversationId)c.messages.requireAccess(actor,args.conversationId);
+    if(args.taskId)c.messages.requireAccess(actor,JSON.parse(c.task(args.taskId).target).conversationId);
+    if(args.deliveryId){const delivery=s.delivery(args.deliveryId);if(delivery.agent_id!==actor)throw new Error('Private inbox');const target=JSON.parse(delivery.payload).target;if(target)c.messages.requireAccess(actor,target.conversationId);}
     const actionId = `${run.sessionId}:${callId}`;
     if (operation.startsWith('conversations.')) {
       if (!this.directory) throw new Error('Directory unavailable');
-      const value = operation === 'conversations.openDM' ? await this.directory.openDM(run, actionId, args.user, signal) : operation === 'conversations.members' ? await this.directory.members(actor, args.channel) : await this.directory.spaces(actor);
+      const value = operation === 'conversations.openDM' ? await this.directory.openDM(run, actionId, args.principal, signal) : operation === 'conversations.members' ? await this.directory.members(actor, args.conversationId) : await this.directory.spaces(actor);
       s.assertRun(run); signal.throwIfAborted(); return { value };
     }
     if(operation==='environment.info')return{value:this.additional?.environment?.(actor)??{configured:false}};
@@ -152,7 +154,7 @@ export class ToolRouter {
     }
     // All local effects and their receipts commit together. Crash replay returns the recorded value.
     return s.atomic(() => {
-      const existing = c.messages.persistence.writes.prepareAction(run, actionId, operation === 'works.select' ? { operation, args } : { workId, operation, args });
+      const existing = c.messages.writes.prepareAction(run, actionId, operation === 'works.select' ? { operation, args } : { workId, operation, args });
       if(args.intentId)this.coordination.describe(actor,args.intentId);
       if(args.draftId)this.gate.describe(actor,args.draftId);
       const refresh = ['actions.list','actions.read','sessions.status','reminders.list','reminders.read','reminders.log','tasks.byMessage','tasks.intents','drafts.list','drafts.read','attention.peek','budget.read','works.list','tasks.list','messages.search','schedules.list','inbox.list'].includes(operation);
@@ -160,7 +162,7 @@ export class ToolRouter {
       if(existing.state==='succeeded' && refresh){s.db.prepare("UPDATE actions SET state='prepared',run_id=? WHERE id=?").run(run.id,actionId);existing.state='prepared';}
       if (existing.state !== 'prepared') throw new Error('Uncertain tool action');
       s.startAction(run, actionId);
-      if (args.taskId) c.messages.requireAccess(actor, JSON.parse(c.task(args.taskId).target).channel);
+      if (args.taskId) c.messages.requireAccess(actor, JSON.parse(c.task(args.taskId).target).conversationId);
       let value: unknown = null, wait = false;
       switch (operation) {
         case 'actions.list':{
@@ -176,9 +178,9 @@ export class ToolRouter {
             value={id:args.actionId,state:(row as any).state,operation:request.operation,receiptUnavailable:'Use the current read capability; historical read bodies are not replayed.'};break;
           }
           const target=request.args?.target??request.target;
-          if(target?.channel)c.messages.requireAccess(actor,target.channel);
-          if(request.args?.taskId)c.messages.requireAccess(actor,JSON.parse(c.task(request.args.taskId).target).channel);
-          if(request.workId)c.messages.requireAccess(actor,JSON.parse(c.work(request.workId).target).channel);
+          if(target?.conversationId)c.messages.requireAccess(actor,target.conversationId);
+          if(request.args?.taskId)c.messages.requireAccess(actor,JSON.parse(c.task(request.args.taskId).target).conversationId);
+          if(request.workId)c.messages.requireAccess(actor,JSON.parse(c.work(request.workId).target).conversationId);
           value={...row,request,receipt:row.receipt?JSON.parse(row.receipt):null};break;
         }
         case 'sessions.status':value=this.sessions.status(actor);break;
@@ -191,7 +193,7 @@ export class ToolRouter {
         case 'reminders.edit':value=c.reminders.edit(actor,args.reminderId,args.expectedVersion,args as any);break;
         case 'reminders.cancel':value=c.reminders.cancel(actor,args.reminderId,args.expectedVersion,args.cancelPending);break;
         case 'tasks.byMessage':value=this.coordination.find(actor,args.message)??null;break;
-        case 'tasks.intents':value=(s.db.prepare("SELECT i.id FROM task_intents i JOIN canonical_targets ct ON ct.object_type='task_intents' AND ct.object_id=i.id JOIN channel_access a ON a.agent_id=i.agent_id AND a.channel=ct.conversation_id WHERE i.agent_id=? AND a.active=1 AND i.state='held'").all(actor) as {id:string}[]).map(i=>this.coordination.describe(actor,i.id));break;
+        case 'tasks.intents':value=(s.db.prepare("SELECT i.id FROM task_intents i JOIN channel_access a ON a.agent_id=i.agent_id AND a.channel=json_extract(i.target,'$.conversationId') WHERE i.agent_id=? AND a.active=1 AND i.state='held'").all(actor) as {id:string}[]).map(i=>this.coordination.describe(actor,i.id));break;
         case 'tasks.retry':value=this.coordination.retry(run,args.intentId,args.viewToken);break;
         case 'tasks.continue':value=this.coordination.continue(run,args.intentId,args.holdId);break;
         case 'tasks.discard':value=this.coordination.discard(run,args.intentId);break;
@@ -208,11 +210,11 @@ export class ToolRouter {
         case 'attention.defer': c.attention.state(actor,args.target,'defer',args.until);break;
         case 'attention.mute': c.attention.state(actor,args.target,'mute',Number(args.active));break;
         case 'budget.read': value=c.ledger.account(actor); break;
-        case 'works.list': value=s.db.prepare("SELECT w.* FROM works w JOIN canonical_targets ct ON ct.object_type='works' AND ct.object_id=w.id JOIN channel_access a ON a.channel=ct.conversation_id WHERE a.agent_id=? AND a.active=1 ORDER BY w.rowid DESC LIMIT 100").all(actor); for(const row of value as {id:string}[])c.messages.persistence.records.mutableTarget('works',row.id); break;
+        case 'works.list': value=s.db.prepare("SELECT w.* FROM works w JOIN channel_access a ON a.channel=json_extract(w.target,'$.conversationId') WHERE a.agent_id=? AND a.active=1 ORDER BY w.rowid DESC LIMIT 100").all(actor); for(const row of value as {id:string}[])c.messages.records.mutableTarget('works',row.id); break;
         case 'works.select': c.selectWork(run,args.workId); this.provision?.(actor,args.workId); value={work:c.work(args.workId),grants:s.db.prepare('SELECT id,operations FROM grants WHERE agent_id=? AND work_id=? AND revoked=0 AND expires>?').all(actor,args.workId,Date.now())}; break;
-        case 'agents': value = c.config.agents.map(a => ({ id: a.id, name: a.name, role: a.role, slackUserId: a.slackUserId })); break;
-        case 'tasks.read': { const task = c.task(args.taskId); c.messages.requireAccess(actor, JSON.parse(task.target).channel); value = task; break; }
-        case 'messages.recent': value = c.messages.recent(actor, args.channel); break;
+        case 'agents': value = c.agents.list().map(a => ({ id: a.id, name: a.name, role: a.role })); break;
+        case 'tasks.read': { const task = c.task(args.taskId); c.messages.requireAccess(actor, JSON.parse(task.target).conversationId); value = task; break; }
+        case 'messages.recent': value = c.messages.recent(actor, args.conversationId); break;
         case 'messages.read': value = c.messages.read(actor, args.target); break;
         case 'messages.search': value = c.messages.search(actor, args.query); break;
         case 'messages.send': c.send(actor, workId, args.target, args.text, actionId,{run,viewToken:args.viewToken});value=this.gate.describe(actor,actionId);break;
@@ -230,11 +232,11 @@ export class ToolRouter {
           const delivery = s.delivery(args.deliveryId);
           if (delivery.agent_id !== actor) throw new Error('Private inbox');
           const payload = JSON.parse(delivery.payload);
-          if (payload.target?.channel) c.messages.requireAccess(actor, payload.target.channel);
+          if (payload.target?.conversationId) c.messages.requireAccess(actor, payload.target.conversationId);
           if (operation === 'inbox.ack') s.db.prepare('INSERT INTO inbox_reads VALUES(?,?,?) ON CONFLICT DO NOTHING').run(delivery.id, actor, Date.now());
           value = { ...delivery, payload }; break;
         }
-        case 'inbox.list': value = (s.db.prepare("SELECT id,payload,status FROM deliveries WHERE agent_id=? AND status!='handled' ORDER BY created_at LIMIT 50").all(actor) as { id: string; payload: string; status: string }[]).filter(d => { const target = JSON.parse(d.payload).target; if (!target?.channel) return true; try { c.messages.requireAccess(actor, target.channel); return true; } catch { return false; } }).map(d => ({ id: d.id, status: d.status, kind: JSON.parse(d.payload).kind })); break;
+        case 'inbox.list': value = (s.db.prepare("SELECT id,payload,status FROM deliveries WHERE agent_id=? AND status!='handled' ORDER BY created_at LIMIT 50").all(actor) as { id: string; payload: string; status: string }[]).filter(d => { const target = JSON.parse(d.payload).target; if (!target?.conversationId) return true; try { c.messages.requireAccess(actor, target.conversationId); return true; } catch { return false; } }).map(d => ({ id: d.id, status: d.status, kind: JSON.parse(d.payload).kind })); break;
       }
       if(['tasks.wait','tasks.retry','tasks.continue'].includes(operation))wait=(value as any)?.result?.status==='waiting';
       const result = { value, wait }; s.settleAction(run, actionId, 'succeeded', result); return result;

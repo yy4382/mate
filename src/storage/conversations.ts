@@ -6,6 +6,7 @@ import type { Store } from './store.js';
 export interface LegacyPayloadDecoder {
   target(value: unknown): ConversationTarget;
   message(body: string): MessageDTO;
+  confirmedMessage?(target: unknown, receipt: unknown): string;
 }
 
 /** Persistence interpretation only. Application services must enforce actor visibility. */
@@ -50,8 +51,39 @@ export class ConversationRecords {
     };
   }
 
+  taskIntentResult(receipt:string):unknown {
+    const value=JSON.parse(receipt);
+    if(Object.hasOwn(value,'format')){
+      if(value.format!=='mate.task-intent.v2')throw new Error('Unsupported task intent receipt');
+      return value.task;
+    }
+    // Unversioned historical intent receipts are known v1 evidence, never rewritten.
+    return {...value,target:JSON.stringify(this.legacy.target(JSON.parse(value.target)))};
+  }
+
+  confirmedMessageId(id: string): string {
+    const effect = this.targetedEffect('outbox', id);
+    if (effect.state !== 'sent' || !effect.original.receipt) throw new Error('Output is not confirmed');
+    const request = JSON.parse(effect.original.request), receipt = JSON.parse(effect.original.receipt);
+    const messageId = request.format === 'mate.effect.v2' ? receipt.messageId : this.legacy.confirmedMessage?.(request.target, receipt);
+    if (typeof messageId !== 'string') throw new Error('Confirmed message identity missing');
+    const identity = this.references.message(messageId);
+    if (identity.conversationId !== effect.target.conversationId || identity.rootId !== (effect.target.threadId ?? messageId)) throw new Error('Confirmed message location mismatch');
+    return messageId;
+  }
+
   private checkedTarget(type: string, id: string, stored: unknown, canonical = false): ConversationTarget {
-    const decoded = canonical ? this.references.validateTarget(conversationTargetSchema.parse(stored)) : this.legacy.target(stored), indexed = this.references.indexedTarget(type, id);
+    const decoded = canonical ? this.references.validateTarget(conversationTargetSchema.parse(stored)) : this.legacy.target(stored);
+    if(canonical&&['works','tasks','schedules','task_intents','review_seats'].includes(type))return decoded;
+    const marker=this.store.db.prepare("SELECT value FROM runtime_meta WHERE key='conversation_format'").get() as {value:string}|undefined;
+    if(marker&&marker.value!=='mate.conversations.v2')throw new Error('Unsupported conversation data format');
+    if(type==='outbox'&&marker){
+      const row=this.store.db.prepare('SELECT target FROM outbox WHERE id=?').get(id) as {target:string};
+      const routing=this.references.validateTarget(conversationTargetSchema.parse(JSON.parse(row.target)));
+      if(routing.conversationId!==decoded.conversationId||routing.threadId!==decoded.threadId)throw new Error('Output routing target mismatch');return decoded;
+    }
+    if(marker)return decoded;
+    const indexed = this.references.indexedTarget(type, id);
     if (!indexed || indexed.conversationId !== decoded.conversationId || indexed.threadId !== decoded.threadId) throw new Error('Canonical target index missing or inconsistent');
     return decoded;
   }

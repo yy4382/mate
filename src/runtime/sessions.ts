@@ -23,7 +23,7 @@ export class SessionLifecycle{
    s.db.prepare("UPDATE session_resets SET state='applied',new_session=? WHERE id=?").run(next,request.id);
    s.db.prepare("UPDATE deliveries SET status='handled' WHERE id=?").run(request.delivery_id);
    if(this.c.work(request.work_id).state!=='cancelled'){
-    const delivery=this.c.messages.persistence.writes.enqueue(actor,`session-reset:${request.id}`,{kind:'session_continuation',checkpointId:request.id,priorDeliveryId:request.delivery_id,target:JSON.parse(this.c.work(request.work_id).target)});this.c.bindDelivery(delivery,request.work_id);
+    const delivery=this.c.messages.writes.enqueue(actor,`session-reset:${request.id}`,{kind:'session_continuation',checkpointId:request.id,priorDeliveryId:request.delivery_id,target:JSON.parse(this.c.work(request.work_id).target)});this.c.bindDelivery(delivery,request.work_id);
    }
    return true;
   });

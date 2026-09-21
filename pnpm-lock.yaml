@@ -17,6 +17,9 @@ importers:
       '@earendil-works/pi-ai':
         specifier: 0.86.0
         version: 0.86.0(ws@8.21.3)(zod@4.6.5)
+      '@emoji-mart/data':
+        specifier: 1.2.1
+        version: 1.2.1
       '@slack/bolt':
         specifier: 5.1.0
         version: 5.1.0(@types/express@5.0.6)(undici@7.29.1)
@@ -180,6 +183,9 @@ packages:
   '@earendil-works/pi-telemetry@0.86.0':
     resolution: {integrity: sha512-vbKNbFpFe6BgeL+N5/EKsZzGa9I2X+pz2icibNNA8JxTlVk2UHup5DXSKYl4yMG5VlXz5aWq4CBJCqb3pRO4fg==}
     engines: {node: '>=22.19.0'}
+
+  '@emoji-mart/data@1.2.1':
+    resolution: {integrity: sha512-no2pQMWiBy6gpBEiqGeU77/bFejDqUTRY7KX+0+iur13op3bqUsXdnwoZs6Xb1zbv0gAj5VvS1PWoUUckSr5Dw==}
 
   '@esbuild/aix-ppc64@0.28.2':
     resolution: {integrity: sha512-XExcO+dvLKvVtNTibSTBej1NCAbaGhWn9Ww1ZPx80qsahhPFe/8jgWP0IchNe0F3HwkU7n8ejhH8bjonqht8mQ==}
@@ -1908,6 +1914,8 @@ snapshots:
       - zod
 
   '@earendil-works/pi-telemetry@0.86.0': {}
+
+  '@emoji-mart/data@1.2.1': {}
 
   '@esbuild/aix-ppc64@0.28.2':
     optional: true

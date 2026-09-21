@@ -1,3 +1,4 @@
+import { fixtureTarget, externalThread } from '../helpers/canonical-slack.js';
 import{afterEach,expect,it}from 'vitest';
 import{mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,realpathSync,existsSync}from 'node:fs';
 import{tmpdir}from 'node:os';
@@ -9,7 +10,7 @@ import{acquireLock}from '../../src/daemon/lock.js';
 import{configFixture}from '../helpers/config.js';
 import{buildBaseline}from '../../src/runtime/prompt.js';
 import{operationDocumentation,ToolRouter}from '../../src/runtime/tools.js';
-import{Messages,Output}from '../../src/slack/messages.js';
+import{Messages,Output}from '../helpers/canonical-slack.js';
 import{Collaboration}from '../../src/collaboration/service.js';
 import{Broker}from '../../src/policy/broker.js';
 const roots:string[]=[];afterEach(()=>roots.splice(0).forEach(root=>rmSync(root,{recursive:true,force:true})));
@@ -20,14 +21,14 @@ function fixture(legacy=false){
  const store=new Store(path),base=buildBaseline(previous.mate.agents[0]!,operationDocumentation);store.register('research',base.configVersion,base.messages);
  if(!legacy)saveConfiguration(store,previous);else store.db.prepare("INSERT INTO runtime_meta VALUES('policy',?)").run(hash(encode(previous.runtime)));
  const messages=new Messages(store,previous.mate),c=new Collaboration(store,messages,new Output(messages,{post:async()=>({ts:'100.000002'})}),previous.mate);messages.membership('research','CTEST',true);
- const broker=new Broker(store,c,{execute:async()=>({code:0,stdout:'',stderr:'',truncated:false})},['/synthetic-protected']),router=new ToolRouter(c,broker),work=c.createWork('migration',{channel:'CTEST'});
+ const broker=new Broker(store,c,{execute:async()=>({code:0,stdout:'',stderr:'',truncated:false})},['/synthetic-protected']),router=new ToolRouter(c,broker),work=c.createWork('migration',{conversationId:'CTEST'});
  c.ledger.account('research');const grant=broker.issueGrant('UOWNER','research',work,shared,['read','write'],Date.now()+100000);
  const next=structuredClone(previous);next.mate.agents[0]!.role='An evolving research role';next.runtime.workspaceGrants[0]!.operations=['read'];
  return{root,data,path,own,previous,next,store,c,router,work,broker,grant};
 }
 it('offline migration backs up memory, updates baseline and grants, preserves debt, tasks, reminders and unknown receipts',async()=>{
- const f=fixture(),{store,c,work}=f;const task=c.createTask('research',work,{channel:'CTEST'},'ongoing');
- const reminder=c.reminders.create('research',work,{target:{channel:'CTEST'},content:'future follow-up',nextAt:Date.now()+100000,timezone:'UTC'});
+ const f=fixture(),{store,c,work}=f;const task=c.createTask('research',work,{conversationId:'CTEST'},'ongoing');
+ const reminder=c.reminders.create('research',work,{target:{conversationId:'CTEST'},content:'future follow-up',nextAt:Date.now()+100000,timezone:'UTC'});
  c.enqueue('research',work,'unfinished',{});const run=store.beginRun('research')!;store.input(run,{role:'user',content:'PRESERVE_HISTORY',timestamp:0});c.reserve(run,work,500,0.1);
  store.prepareAction(run,'OLD_UNKNOWN',{workId:work,operation:{kind:'exec',command:'synthetic'}});store.startAction(run,'OLD_UNKNOWN');
  f.router.sessions.checkpoint('research','durable checkpoint');store.close();
@@ -84,7 +85,7 @@ it('migrates real legacy configuration key order without rewriting immutable eff
  expect(encode(legacy)).not.toBe(encode(f.previous));
  f.store.db.prepare("UPDATE runtime_meta SET value=? WHERE key='configuration'").run(encode(legacy));
  const outbox='legacy-unknown';
- f.store.queueOutput('research',outbox,{target:{channel:'CTEST'},text:'unchanged legacy wire'});
+ f.store.queueOutput('research',outbox,{target:{channel:'CTEST'},text:'unchanged legacy wire'},JSON.stringify({conversationId:'CTEST'}));
  f.store.transitionOutput(outbox,'pending','sending');f.store.transitionOutput(outbox,'sending','unknown');
  const before=f.store.output(outbox)!;
  const session=(f.router.sessions.status('research') as {session:string}).session;

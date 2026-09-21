@@ -6,7 +6,7 @@
 
 Git：在codex/vps-first-release本地分支管理；先保存已审核及进行中工作的明确checkpoint，以后按独立审核gate提交。checkpoint不表示进行中模块已审核。私有参考、秘密和运行数据不入库；不推送远端。
 
-下方E0–E6仍是核心实现依赖，E2b2c目前未完成。新增首版必交部署模块：
+下方E0–E6仍是核心实现依赖，E2b2c已通过独立审核。新增首版必交部署模块：
 
 | 模块 | 目标/接口 | 依赖 | 验收与验证 | 状态 |
 |---|---|---|---|---|
@@ -39,7 +39,7 @@ E2b2在独立架构讨论后细分如下（不改变E2验收范围）：
 |---|---|---|---|---|
 | E2b2a 旧载荷解释边界 | MessageDTO、LegacyConversationCodec、ConversationRecords；只读，不接生产 | E2b1 | 身份/根冲突拒绝、精确排序、wire原样、读取不写；明确不等于完成平台解耦 | PASS，review_e2b2a_codecs，197 tests |
 | E2b2b 存储一致性接入 | 集中writer、backfill、所有create/update同事务维护canonical索引、目标SQL消费 | E2b2a PASS | 缺失索引失败关闭、rollback、重开、draft ACL/reminder eligibility/unknown阻挡不退化 | PASS，review_e2b2b_storage，202 tests |
-| E2b2c 领域契约与canonical存储切换 | 服务/工具内部Target/MessageDTO；可变存储版本迁移与现有Slack external最小适配 | E2b2b PASS | ACL/freshness/task/reminder/new writer/recovery一起切；两次重开、原wire不变、旧action等价重试/变参拒绝 | 实施中（迁移/版本reader先验证，未接生产） |
+| E2b2c 领域契约与canonical存储切换 | 服务/工具内部Target/MessageDTO；可变存储版本迁移与现有Slack external最小适配 | E2b2b PASS | ACL/freshness/task/reminder/new writer/recovery一起切；两次重开、原wire不变、旧action等价重试/变参拒绝 | PASS，review_e2b2c_canonical，220项通过 |
 | E2c 内部通信与适配器 | 内部原子消息/delivery、投影及完整local接入；config解绑 | E2b2c PASS | 内部提交/投影失败、外部确认/echo/根回复、非Slack完整链路 | TODO |
 
 基础gate不接生产、不改SQL，避免半切换；生产writer、索引维护与查询读者仍必须同gate切换。此拆分已与review_e0_architecture讨论同意。
