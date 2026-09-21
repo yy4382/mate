@@ -122,7 +122,7 @@ review_e0_architecture检查现有SQL后同意合并“领域契约切换”和�
 
 下一独立gate再实现internal原子message/delivery、投影与完整local接入。前gate对internal send明确unsupported，不假造Slack ID。调整减少临时facade，不缩小最终E2范围。
 
-## V0 首版部署架构复核（用户新标准，待独立讨论）
+## V0 首版部署架构复核（用户新标准，独立复审PASS）
 
 首版包含Linux VPS部署准备和Agent沙盒隔离。沿用一个可信daemon+SQLite，每Agent独立session/workspace，工具经broker与ExecutionBackend，不向模型暴露宿主或Docker socket。复用已有Docker命令沙盒（每次执行短生命周期、只挂载授权workspace、资源上限、清理PID namespace），文件操作的Linux隔离实现需要实际验证。daemon是可信控制面，应使用专用非root账户；Docker管理权限仅给控制面，不传进Agent执行环境。
 
@@ -131,3 +131,16 @@ review_e0_architecture检查现有SQL后同意合并“领域契约切换”和�
 低配置VPS需可配置全局模型run/执行并发与每次执行资源，预算/恢复语义保持。部署必须给出固定版本依赖、服务启动方式、可重复安装/诊断、升级回滚及停止操作。优先宿主systemd管理可信daemon、Docker只承载Agent命令，避免daemon容器内管理宿主路径的额外映射复杂度。开发验证可在本机Linux VM/容器内进行，但不假称真实VPS已验。
 
 独立review应检验隔离边界、低配资源、可维护部署和最小接入；不把当前macOS隔离结果当Linux证据，也不以模型聪明程度作为阻塞。
+
+### V0红队修订：首版部署契约
+
+- 支持目标固定为Ubuntu 24.04 LTS x86_64、Node24、Docker Engine及systemd；其他发行版/架构不冒充已验。Linux结构化文件操作优先使用同一受控Docker环境内的固定文件helper，宿主SRT保留为已验证macOS开发后端。共享operation schema与Broker回执，不新建权限/动作状态机。启动前实际探针检查读写、越界拒绝及命令namespace清理；探针失败不接Slack、不消费模型run。
+- 首版默认全局1个active run、1个exec admission，可配置；等待admission时可取消，采用轮转公平调度。结束run后关闭或有限TTL淘汰worker，重建从持久context恢复。容器memory/cpu/pids可配置，必须处理OOM/ENOSPC并释放资源。workspace使用部署层硬容量边界：安装时为每个Agent建立可配置容量的独立ext4 loopback文件系统（默认512MiB），预留控制面DB空间；运行时水位只补充诊断，不代替容量界限。外部grants由owner配置其容量边界并在部署清单明确，不默认授权整宿主目录。
+- namespace删除未确认时，ExecutionBackend熔断新的沙盒执行，Broker保留unknown回执；daemon进入退出/重启恢复路径，不把抛错当作已终止。shutdown使用finally关闭连接并释放锁；systemd超时强杀不等于Docker进程已清除，下次启动取得单实例锁后先清理所属scope，无法确认则不调度。测试Docker不可用、强杀、停止中排队及不触及其他scope。
+- 备份首版采用停止daemon后的离线一致备份；安全复制symlink本体而不跟随，不允许链接扩大备份范围，特殊文件明确失败。清单标明纳入dataDir数据库/Agent内容、排除外部grant roots并列出路径，以及配置/镜像标识；secrets需要独立重新提供。原绝对路径恢复是首版明确限制。loopback容量容器由安装层重建，备份包含其挂载内容而非重复复制磁盘文件；恢复前核验容量和挂载点。验收失败残留、损坏、完成标记、同路径干净VM恢复及升级回滚。
+- V1执行隔离必须用真实Linux kernel、明确Docker daemon与bind mount所在宿主，不使用特权嵌套容器冒充默认环境。V2用能运行systemd的干净Linux VM或等价真实系统，按手册安装；记录kernel/distro/UID/Node/Docker/image。Docker binary测试改为可配置。Linux VM是可在本地完成的验证目标，不要求获得用户VPS凭证才开发。
+- 信任边界：daemon、Pi worker、固定helper代码属于可信控制面；Pi worker持有provider key，模型输入与任意exec不可信。被沙盒隔离的是Agent工具执行及私有workspace访问，不宣称防御SDK/可信worker代码本身被攻破。专用非root用户不是Docker管理权限的安全边界；拒绝给Agent挂载Docker socket、daemon状态、凭证目录或其他Agent私有root。模型不能通过工具参数变更这些挂载。
+
+这些修订是普通工程决策，没有需要用户裁决的产品分叉。V1/V2独立审核必须验证上述契约；V0设计通过不等于Linux已经验证。
+
+V0复审补充：loopback磁盘文件必须实际预分配宿主空间；启动/恢复检查mount身份、容量，挂载失败不回退普通目录。文件helper共用Docker资源限制/清理熔断，不继承宿主env，不从可写workspace加载代码。恢复拒绝部分/损坏备份，先确认目标mount再恢复，不跟随symlink。review_v0_deployment仅设计PASS，执行验证属于V1/V2。
