@@ -185,6 +185,16 @@ V2c把初装部署落实为固定Debian模块，而不是通用资源编排框�
 
 systemd单位由确定性renderer生成，mount名只取真实`systemd-escape --path`结果。主服务与maintenance one-shot都用mate UID/GID、临时docker supplementary group、固定environment、`ProtectSystem`等hardening；在该namespace里`ReadWritePaths=/var/lib/mate`会形成与原ext4/loop完全等价的重复mount layer，验证器只在root/source/device/backing/必需options全部一致时接受，任何冲突叠挂仍失败。root-owned `matectl`只把简单checkpoint名称映射到固定根和固定命令，不透传property/env/config/executable。doctor保持被动；offline-probe和disable使用daemon lock、scope recover及双向probe。初装完成前service不连接任何adapter，完成后仍disabled/inactive；升级事务继续留给V2d。
 
+### V2d实现阶段架构复核
+
+V2d不解除普通`migrateConfiguration`对managed配置的拒绝。现入口在备份前打开Store并混合锁、scope recovery、备份和配置变更；实现先提取一个部署专用的离线迁移事务，它只接受已验证的旧/新配置、已打开Store和固定workspace边界，不管理systemd、`/etc`、release或checkpoint。迁移事务与业务变化在同一SQLite事务写入upgrade ID、配置摘要和完成标记，使“DB已提交、deployment journal未推进”可以识别为同一次完成，不重复轮换session。code-only upgrade也写同一标记。
+
+普通managed restore继续严格用一个config校验目标与当前checkpoint。candidate回滚另设部署专用窄接口：deployment journal分别绑定旧目标配置/identity与新当前配置/identity，先证明Agent集合、private/external root、manifest/backing/capacity、mount unit、data路径和service身份完全相同，再分别验证两份checkpoint。不能为升级全局放宽configuration hash。restore完成到旧config/current恢复之间仍由deployment journal阻止启动。
+
+deployment journal成为启动和全部维护入口的统一门禁：candidate、rollback、未知或损坏状态禁止正常启动；activated只有在release/config/topology与journal完全一致时允许启动，但普通restore仍拒绝；restore journal始终阻止启动。root运维锁串行编排命令，daemon lock在打开Store和scope recovery之前建立数据边界，父命令不能持有daemon lock等待需要同一锁的子进程。activate持久记录`everActivated`；fix-forward继承不可回滚属性，不能覆盖为普通candidate。release manifest尚未证明旧代码兼容新DB/config，因此首版不提供code-only rollback。
+
+V2d按三道独立gate交付：V2d1先落升级journal、统一门禁、离线迁移和跨配置restore窄接口；V2d2再接root编排、candidate rollback、不可逆activate/finalize和fix-forward；V2d3最后提供有限status/logs、Socket Mode配置手册与真实Debian演练。candidate检查只调用离线迁移、doctor/probe和专门的构造兼容检查，不能构造可`start()`的普通Daemon；测试直接断言Slack/provider transport、ACK、run与outbox均未发生。
+
 ### E2b2c路由落地决策（2026-09-21）
 
 与review_e2b2c_canonical讨论后，v17删除E2b2b过渡canonical_targets镜像：可变对象以所属target JSON为权威、表达式索引供查询；outbox以同一行不可更改的canonical target供路由，原wire/hash/receipt独立保留。迁移和新writer均在同事务写入；DB校验routing引用及不可变性，reader核对wire解释。这样unknown和附件可见性查询不需要每次JS全库扫描，也不会因遗漏索引行而遗漏unknown。旧版本解释仅保留于兼容adapter，旧writer位于测试夹具。新消息与effects使用显式payload版本，不能通过ID前缀猜测。

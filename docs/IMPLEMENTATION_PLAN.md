@@ -30,7 +30,15 @@ V2必须先通过本轮独立部署架构复核，再按以下依赖顺序实现
 | V2a 部署架构更新 | Debian 13真实目标、release/config/data/backing/unit分层、service账户Docker控制、mount unit、doctor、恢复与回滚契约 | V1 PASS | 独立红队检查权限、失败/重试、升级/恢复一致性、低配复杂度及与现代码兼容性 | PASS；`review_v2_architecture`四轮，见`reviews/V2a-deployment-architecture.md` |
 | V2b checkpoint v2与managed restore | inventory+hash/allocated size、symlink本体、特殊文件/控制目录排除；root封存只读checkpoint；外部checkpoint驱动的持久journal与decision后可重入roll-forward；v1兼容路径 | V2a PASS | relative path规范化/重复/prefix collision、symlink与TOCTOU换入、mode恢复顺序、损坏/缺项/额外项、封存权限、decision前无修改、跨root kill续作、decision后checkpoint篡改/替换阻断与修复续作、接近ENOSPC、external不触碰、错误mount/config/capacity、同路径replace与再次启动 | PASS；`review_v2b_checkpoint`多轮，见`reviews/V2b-checkpoint-restore.md`；本机与ncDE均386通过/10跳过，ncDE原生故障演练PASS |
 | V2c Debian部署包与doctor | first-party deployment spec与plan/preflight/install/disable入口；release identity/layout；service account；private/external ext4 mount units；systemd service；被动doctor/offline-probe；root allowlist maintenance wrapper | V2b PASS | fake-host单元契约+目标机实际安装；spec覆盖、磁盘/内存plan、掉电staging幂等、不一致拒绝、缺mount/image/socket失败关闭、无secret不自启、disable保留数据；wrapper拒绝路径穿越/任意command/property/env和root直跑，核对oneshot UID/GID/supplementary group | PASS；`review_d`六轮，见`reviews/V2c-debian-deployment.md`；本机与ncDE均402通过/10跳过，ncDE固定拓扑初装、幂等、systemd身份、doctor/probe、fail-closed、disable与原状恢复PASS |
-| V2d 运维与Slack接线闭环 | 离线backup/restore、非活动candidate→不可逆activate→finalize/fix-forward、停止、日志诊断、Socket Mode配置与最小scopes runbook | V2c PASS | ncDE本地adapter经systemd持久化/重启/恢复演练；candidate无外部连接/ACK/run/outbox，activate后拒绝checkpoint rollback；Slack/provider缺失项明确且只剩用户配置/真实连接 | TODO |
+| V2d 运维与Slack接线闭环 | 离线backup/restore、非活动candidate→不可逆activate→finalize/fix-forward、停止、日志诊断、Socket Mode配置与最小scopes runbook | V2c PASS | ncDE本地adapter经systemd持久化/重启/恢复演练；candidate无外部连接/ACK/run/outbox，activate后拒绝checkpoint rollback；Slack/provider缺失项明确且只剩用户配置/真实连接 | TODO；按V2d1–V2d3顺序gate实施 |
+
+V2d实现前由独立只读架构红队`review_e0_architecture`复核。普通managed restore不能直接承担跨配置candidate回滚，普通`migrateConfiguration`也不能解除managed拒绝；二者先提取窄的部署专用边界，保持原入口严格。每个子gate独立代码/软件工程红队通过后才进入下一个：
+
+| gate | 目标/接口 | 依赖 | 验收 | 状态 |
+|---|---|---|---|---|
+| V2d1 升级协议与离线迁移边界 | versioned deployment journal；固定topology/config/release identity；统一启动/维护门禁；共享离线迁移事务与DB upgrade marker；分别验证旧目标/新当前配置的部署专用restore窄接口 | V2c PASS | DB commit/journal两侧中断；重复迁移不重复session轮换；损坏/未知journal失败关闭；candidate阻止start；activated允许匹配启动但阻止普通restore；普通migrate/restore契约不放宽 | TODO |
+| V2d2 root编排与升级闭环 | root固定staged输入、封存checkpoint、发布candidate release/config/current、离线检查、candidate rollback、不可逆activate、finalize、继承everActivated的fix-forward | V2d1 PASS | 每个rename/fsync窗口重启恢复；源替换拒绝；candidate失败可回滚；candidate零外部行为；activated启动失败保留journal且旧checkpoint不可回滚；fix-forward不重获rollback权 | TODO |
+| V2d3 运维/Slack接线与原生演练 | 有限只读status/logs；systemd runbook；由代码scope生成的Socket Mode app/bot/event/slash配置；ncDE本地adapter升级/重启/恢复 | V2d2 PASS | Debian真实演练；日志不泄secret；`connections:write`、bot scopes、`commands`、事件、频道邀请和重新安装明确；只剩真实token/ID/Slack/provider连接 | TODO |
 
 ---
 
