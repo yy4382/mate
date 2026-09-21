@@ -56,7 +56,7 @@ function directoryBytes(path: string): number {
 export const nodeInstallerHost = (): InstallerHost => ({
   platform: process.platform, arch: process.arch, node: process.version,
   euid: () => process.geteuid?.() ?? -1, run, directoryBytes, canonical: canonicalFuturePath,
-  read: path => readFileSync(path, 'utf8'), assertRootExecutable: path => { const stat = lstatSync(path); if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== 0 || (stat.mode & 0o022) !== 0 || (stat.mode & 0o111) === 0) throw new Error(`Host executable is not protected: ${path}`); },
+  read: path => readFileSync(path, 'utf8'), assertRootExecutable: path => { const link = lstatSync(path), stat = lstatSync(realpathSync(path)); if ((!link.isFile() && !link.isSymbolicLink()) || link.uid !== 0 || !stat.isFile() || stat.isSymbolicLink() || stat.uid !== 0 || (stat.mode & 0o022) !== 0 || (stat.mode & 0o111) === 0) throw new Error(`Host executable is not protected: ${path}`); },
   availableBytes: path => { const stat = statfsSync(path); return Number(BigInt(stat.bavail) * BigInt(stat.bsize)); },
   memoryMiB: () => { const match = /^MemTotal:\s+(\d+)\s+kB$/m.exec(readFileSync('/proc/meminfo', 'utf8')); if (!match) throw new Error('Cannot read host memory'); return Math.floor(Number(match[1]) / 1024); },
   existingInstall: () => {
