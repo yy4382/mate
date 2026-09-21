@@ -139,6 +139,14 @@ it('binds and completes a transaction-created mountpoint left by a mkdir interru
   expect(resumed.volumes[0]).toMatchObject({ rootExisted: false, rootDev: lstatSync(mountRoot).dev, rootIno: lstatSync(mountRoot).ino });
 });
 
+it('allows preflight accounting to reach recovery for planned staging created before inode binding', () => {
+  const root = mkdtempSync(join(tmpdir(), 'mate-unbound-staging-')); roots.push(root); const releases = join(root, 'releases'), control = join(root, 'control'), releaseStage = join(releases, '.stage'), volumeStage = join(root, '.volume'); mkdirSync(releases); mkdirSync(control); mkdirSync(releaseStage); writeFileSync(join(releaseStage, 'partial'), Buffer.alloc(4096, 1)); writeFileSync(volumeStage, Buffer.alloc(4096, 2), { mode: 0o600 }); chmodSync(volumeStage, 0o600);
+  const mountRoot = join(root, 'mount'), journalPath = join(control, 'install-v1.json');
+  writeFileSync(journalPath, `${JSON.stringify({ version: 1, transaction: '44444444-4444-4444-8444-444444444444', inputIdentity: 'f'.repeat(64), uid: process.getuid!(), gid: process.getgid!(), directories: [], release: { stage: releaseStage, status: 'planned' }, volumes: [{ backingFile: join(root, 'workspace.ext4'), stage: volumeStage, root: mountRoot, rootExisted: false, status: 'planned' }], phase: 'resources' })}\n`, { mode: 0o600 }); chmodSync(journalPath, 0o600);
+  const state = inspectExistingInstallation({ bootstrapJournal: join(root, 'bootstrap.json'), controlJournal: journalPath, completed: join(control, 'installation.json'), current: join(root, 'current'), releases }, process.getuid!(), process.getgid!());
+  expect(state).toMatchObject({ complete: false }); expect(state!.consumedBytes).toBeGreaterThan(0);
+});
+
 it('recognizes a deployed CLI reached through the current release symlink', () => {
   const root = mkdtempSync(join(tmpdir(), 'mate-main-link-')); roots.push(root); mkdirSync(join(root, 'release')); const main = join(root, 'release', 'main.js'); writeFileSync(main, ''); symlinkSync(join(root, 'release'), join(root, 'current'));
   expect(isMainModule(join(root, 'current', 'main.js'), pathToFileURL(realpathSync(main)).href)).toBe(true);

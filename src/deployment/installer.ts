@@ -65,15 +65,20 @@ function directoryBytes(path: string): number {
   const visit = (current: string): void => { const stat = lstatSync(current); if (stat.isFile()) total += stat.blocks * 512; else if (stat.isDirectory()) for (const name of readdirSync(current)) visit(join(current, name)); };
   visit(path); return total;
 }
-function boundResourceBytes(candidates: readonly string[], dev: number | undefined, ino: number | undefined, kind: 'file' | 'directory'): number {
+function boundResourceBytes(candidates: readonly string[], dev: number | undefined, ino: number | undefined, kind: 'file' | 'directory', allowUnbound: boolean): number {
   const existing = candidates.filter(pathExists).map(path => ({ path, stat: lstatSync(path) }));
   if (!existing.length) return 0;
-  if (dev === undefined || ino === undefined) throw new Error(`Existing ${kind} resource lacks a journal identity`);
+  if (dev === undefined || ino === undefined) {
+    if (existing.length > 1) throw new Error(`Unbound ${kind} resource exists at both staging and final paths`);
+    const item = existing[0]!, matchesKind = kind === 'file' ? item.stat.isFile() && !item.stat.isSymbolicLink() : item.stat.isDirectory() && !item.stat.isSymbolicLink();
+    if (!allowUnbound || !matchesKind) throw new Error(`Existing ${kind} resource lacks a journal identity`);
+    return kind === 'file' ? item.stat.blocks * 512 : directoryBytes(item.path);
+  }
   for (const item of existing) {
     const matchesKind = kind === 'file' ? item.stat.isFile() && !item.stat.isSymbolicLink() : item.stat.isDirectory() && !item.stat.isSymbolicLink();
     if (!matchesKind || item.stat.dev !== dev || item.stat.ino !== ino) throw new Error(`Journal-bound ${kind} resource identity differs: ${item.path}`);
   }
-  if (existing.length > 1) throw new Error(`Journal-bound ${kind} resource exists at both staging and final paths`);
+  if (existing.length > 1 && new Set(existing.map(item => `${item.stat.dev}:${item.stat.ino}`)).size !== 1) throw new Error(`Journal-bound ${kind} resource exists at both staging and final paths with different identities`);
   return kind === 'file' ? existing[0]!.stat.blocks * 512 : directoryBytes(existing[0]!.path);
 }
 export function inspectExistingInstallation(paths: InstallationPaths = installationPaths, rootUid = 0, rootGid = 0): ExistingInstallation | undefined {
@@ -92,9 +97,15 @@ export function inspectExistingInstallation(paths: InstallationPaths = installat
       if (completed.inputIdentity !== journal.inputIdentity || completed.releaseId !== journal.release.releaseId) throw new Error('Installation marker and unfinished journal differ');
     }
     const releaseFinal = journal.release.releaseId ? join(paths.releases, journal.release.releaseId) : undefined;
-    const releaseBytes = boundResourceBytes([journal.release.stage, ...(releaseFinal ? [releaseFinal] : [])], journal.release.stageDev, journal.release.stageIno, 'directory');
+    let releaseBytes: number;
+    if (journal.release.status === 'planned') releaseBytes = boundResourceBytes([journal.release.stage], journal.release.stageDev, journal.release.stageIno, 'directory', true);
+    else if (journal.release.status === 'copied') {
+      const hasStage = pathExists(journal.release.stage), stagedBytes = boundResourceBytes([journal.release.stage], journal.release.stageDev, journal.release.stageIno, 'directory', false);
+      const finalBytes = releaseFinal ? boundResourceBytes([releaseFinal], hasStage ? undefined : journal.release.stageDev, hasStage ? undefined : journal.release.stageIno, 'directory', hasStage) : 0;
+      releaseBytes = stagedBytes + finalBytes;
+    } else releaseBytes = releaseFinal ? boundResourceBytes([releaseFinal], journal.release.stageDev, journal.release.stageIno, 'directory', false) : 0;
     const volumeBytes = journal.volumes.reduce((sum, volume) => {
-      return sum + boundResourceBytes([volume.stage, volume.backingFile], volume.stageDev, volume.stageIno, 'file');
+      return sum + boundResourceBytes([volume.stage, volume.backingFile], volume.stageDev, volume.stageIno, 'file', volume.status === 'planned');
     }, 0);
     return { inputIdentity: journal.inputIdentity, ...(journal.release.releaseId ? { releaseId: journal.release.releaseId } : {}), complete: false, consumedBytes: releaseBytes + volumeBytes };
   }
@@ -246,10 +257,12 @@ async function publishRelease(host: InstallerHost, spec: DeploymentSpec, journal
   if (!releaseId) throw new Error('Copied release journal is missing its content identity');
   const final = join(managedLayout.releases, releaseId), staged = existsSync(item.stage) ? await verifyRelease(item.stage, releaseId) : undefined;
   if (journal.release.status === 'copied') {
-    if (existsSync(final)) { const existing = await verifyRelease(final, releaseId); if (staged && existing.inventorySha256 !== staged.inventorySha256) throw new Error('Existing release identity differs'); if (staged) { checked(host, '/usr/bin/rm', ['-rf', '--one-file-system', '--', item.stage], 'Cannot remove duplicate release staging'); fsyncDirectory(managedLayout.releases); } }
-    else { renameSync(item.stage, final); fsyncDirectory(managedLayout.releases); }
-    journal = { ...journal, release: { ...journal.release, status: 'published' } }; replaceJournal(journalPath, journal);
+    if (existsSync(final)) {
+      const existing = await verifyRelease(final, releaseId); if (staged && existing.inventorySha256 !== staged.inventorySha256) throw new Error('Existing release identity differs');
+      const finalIdentity = lstatSync(final); journal = { ...journal, release: { ...journal.release, stageDev: finalIdentity.dev, stageIno: finalIdentity.ino, status: 'published' } }; replaceJournal(journalPath, journal);
+    } else { renameSync(item.stage, final); fsyncDirectory(managedLayout.releases); journal = { ...journal, release: { ...journal.release, status: 'published' } }; replaceJournal(journalPath, journal); }
   }
+  if (journal.release.status === 'published' && existsSync(item.stage)) { await verifyRelease(item.stage, releaseId); checked(host, '/usr/bin/rm', ['-rf', '--one-file-system', '--', item.stage], 'Cannot remove duplicate release staging'); fsyncDirectory(managedLayout.releases); }
   return { journal, manifest: await verifyRelease(final), path: final };
 }
 
@@ -372,7 +385,7 @@ export async function installDeployment(spec: DeploymentSpec, config: DaemonConf
     const existingRelease = existing?.releaseId ? lstatSync(join(managedLayout.releases, existing.releaseId)) : undefined;
     journal = { version: 1, transaction, inputIdentity: requestedIdentity, ...identity, directories: layoutEntries(identity.uid, identity.gid),
       release: { stage: join(managedLayout.releases, `.mate-install-${transaction}-release`), ...(existingRelease ? { stageDev: existingRelease.dev, stageIno: existingRelease.ino, releaseId: existing!.releaseId } : {}), status: existing ? 'published' : 'planned' },
-      volumes: plan.workspaces.map(item => { const final = existing ? lstatSync(item.backingFile) : undefined; return { backingFile: item.backingFile, stage: join(managedLayout.volumes, `.mate-install-${transaction}-${basename(item.backingFile)}`), ...mountpointIntent(item.root), ...(final ? { stageDev: final.dev, stageIno: final.ino } : {}), status: existing ? 'initialized' as const : 'planned' as const }; }), phase: existing ? 'published' : 'resources' }; replaceJournal(journalPath, journal);
+      volumes: plan.workspaces.map(item => { const final = existing ? lstatSync(item.backingFile) : undefined; return { backingFile: item.backingFile, stage: join(managedLayout.volumes, `.mate-install-${transaction}-${basename(item.backingFile)}`), ...(existing ? { root: item.root, rootExisted: true } : mountpointIntent(item.root)), ...(final ? { stageDev: final.dev, stageIno: final.ino } : {}), status: existing ? 'initialized' as const : 'planned' as const }; }), phase: existing ? 'published' : 'resources' }; replaceJournal(journalPath, journal);
   }
   journal = prepareLayout(journalPath, journal);
   if (journalPath === bootstrapJournalPath) { renameSync(bootstrapJournalPath, controlJournalPath); fsyncDirectory('/var/lib'); fsyncDirectory(dirname(controlJournalPath)); journalPath = controlJournalPath; }
