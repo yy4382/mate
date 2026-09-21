@@ -126,7 +126,19 @@ Jev、分类SDK、逐命令审批和相关配置已移除。未来命令审查�
 
 sessions.checkpoint保存自述检查点；sessions.reset在run结束或崩溃恢复后替换上下文，关闭旧worker，绑定原事项的continuation，cancelled事项不再续跑，paused不绕过。所有身份/预算/任务/提醒/草稿/未知效果仍保留。owner agent-reset先停止，替换后保持paused，需显式resume。
 
-配置/工具prompt版本变化走[离线迁移](../src/daemon/migrate.ts)：锁 → 验证OLD_CONFIG → 旧容器恢复/fence → 数据库+私有文件备份 → 事务更换baseline并保留history、更新grants和配置快照。角色/model/channels/runtime可改、可新增Agent；已有Slack身份/workspace不可重绑定或删除。撤销/过期grant不复活，removed roots撤权，预算不重置。旧库没有身份快照时，显式legacy选项是owner对旧配置的声明，不是假造机器证据。用法见[README](../README.md)。
+开发机或没有workspace manifest的unmanaged环境，配置/工具prompt版本变化仍可走[离线迁移](../src/daemon/migrate.ts)：锁 → 验证OLD_CONFIG → 旧容器恢复/fence → 数据库+私有文件备份 → 事务更换baseline并保留history、更新grants和配置快照。角色/model/channels/runtime可改、可新增Agent；已有Slack身份/workspace不可重绑定或删除。撤销/过期grant不复活，removed roots撤权，预算不重置。旧库没有身份快照时，显式legacy选项是owner对旧配置的声明，不是假造机器证据。
+
+带workspace manifest的managed部署暂不允许直接调用这条旧迁移路径，因为它会在root封存checkpoint前修改数据库。V2部署升级必须走停服务、创建并root封存checkpoint、验证candidate、再迁移的部署事务；首版还要求Agent和mount topology不变。V2d完成前，CLI会明确拒绝managed migration，而不会把unmanaged兼容路径冒充生产升级。
+
+## Checkpoint v2与受管恢复
+
+[backup](../src/daemon/backup.ts)在daemon停止调度并排空执行后截断SQLite WAL，对数据库和每个Agent私有workspace逐项流式复制、hash与inventory。相对路径必须规范且唯一；目录、普通文件和symlink本体分别记录，特殊文件直接拒绝。`lost+found`、control journal、external grants和backing images不进入checkpoint。完成标记最后写入并fsync；失败目录没有`COMPLETE.json`，只能由root wrapper按预先记录的目录device/inode清理，不能把一个后来替换的路径当作失败产物删除。
+
+managed backup由部署wrapper预建service-owned空目录。备份完成后，root调用`mate checkpoint-seal CONFIG CHECKPOINT SERVICE_UID SERVICE_GID`；CLI核对live dataDir的预期部署身份，封存函数要求checkpoint父目录精确为`root:<service group> 0750`、完成树仍精确属于service身份。它自顶向下先用`O_NOFOLLOW`目录fd执行`fchown/fchmod/fsync`撤销service写权限，再枚举子项；普通文件也只通过nofollow fd修改，symlink使用`lchown`。最终目录/文件为`root:<service group> 0750/0640`并再次复核完整identity。主service已经停止、同一daemon lock已取得、backup子进程已退出和root控制父目录仍是wrapper必须保持的并发前提。
+
+[restore](../src/daemon/restore.ts)先验证root封存、配置摘要、Agent集合、容器镜像、external physical roots、payload inventory和checkpoint inode。取得daemon lock后，它验证Docker控制路径并清理当前execution scope，然后才扫描live workspace；Linux managed mount身份、可用block/inode和state数据库空间均在decision前证明。replace非空状态还必须提供能精确证明当前live bytes的已封存checkpoint。任何失败都不会写restore journal或修改live数据。
+
+decision持久化后只能roll forward。每个Agent root清除并恢复后单独记账，SQLite最后以同目录临时文件、hash、fsync和rename替换；Daemon在打开SQLite前发现journal会拒绝启动。重启时已完成root按inventory复核，未完成root继续；已决策恢复不再依赖旧current checkpoint仍存在。目标源损坏或inode被替换会保留journal并阻断，root修复同一个封存source identity后可继续。version 1只保留原有“dataDir必须不存在”的unmanaged兼容恢复。
 
 ## 与参考体验仍有区别
 

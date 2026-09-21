@@ -25,6 +25,7 @@ import { CanonicalSlackTransport as WebSlackTransport } from '../../src/slack/tr
 import { Artifacts } from '../../src/daemon/artifacts.js';
 import {ContainerBackend} from '../../src/execution/container.js';
 import {nodeWorkspaceHost} from '../../src/deployment/workspaces.js';
+import {daemonConfigSchema} from '../../src/daemon/config.js';
 const cleanups: (() => void)[] = [];
 const unmanagedDeploymentEnvironment={platform:'darwin' as const,workspaceHost:nodeWorkspaceHost()};
 afterEach(() => {vi.restoreAllMocks();cleanups.splice(0).forEach(fn => fn());});
@@ -67,10 +68,11 @@ it('peer messages can wake an Agent using its existing finite account without a 
   c.reserve(run,binding.work_id,20,0.1);expect(c.ledger.account('writer')).toMatchObject({max_tokens:before.max_tokens,tokens:20,runs:1});
 });
 it('kernel lock excludes a second daemon; backup restores SQLite plus private memory', async () => {
-  const root=mkdtempSync(join(tmpdir(),'mate-checkpoint-')), data=join(root,'data'); mkdirSync(join(data,'agents','research'),{recursive:true}); writeFileSync(join(data,'agents','research','MEMORY.md'),'synthetic lesson');
+  const root=mkdtempSync(join(tmpdir(),'mate-checkpoint-')), data=join(root,'data'); mkdirSync(join(data,'agents','research'),{recursive:true});mkdirSync(join(data,'state')); writeFileSync(join(data,'agents','research','MEMORY.md'),'synthetic lesson');
   const release=acquireLock(join(root,'lock')); expect(()=>acquireLock(join(root,'lock'))).toThrow('Another Mate'); release(); const again=acquireLock(join(root,'lock')); again();
-  const store=new Store(join(data,'mate.sqlite')); store.register('research','v1',[{role:'user',content:'persisted'}]);
-  try { await backup(store,data,join(root,'checkpoint')); const restored=new Store(join(root,'checkpoint','mate.sqlite')); expect(restored.db.prepare('SELECT count(*) n FROM entries').get()).toEqual({n:1}); restored.close(); expect(readFileSync(join(root,'checkpoint','agents','research','MEMORY.md'),'utf8')).toBe('synthetic lesson'); }
+  const store=new Store(join(data,'state','mate.sqlite')); store.register('research','v1',[{role:'user',content:'persisted'}]);
+  const checkpointConfig=daemonConfigSchema.parse({mate:configFixture,runtime:{dataDir:data,workspaceGrants:[],researchHosts:[]}});
+  try { await backup(store,data,join(root,'checkpoint'),checkpointConfig); const restored=new Store(join(root,'checkpoint','mate.sqlite')); expect(restored.db.prepare('SELECT count(*) n FROM entries').get()).toEqual({n:1}); restored.close(); expect(readFileSync(join(root,'checkpoint','agents','research','MEMORY.md'),'utf8')).toBe('synthetic lesson'); }
   finally {store.close();rmSync(root,{recursive:true,force:true});}
 });
 it('public research rejects local/metadata destinations before HTTP', async () => {

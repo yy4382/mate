@@ -1,6 +1,6 @@
 import {LocalConsole} from './local/console.js';
 import { migrateConfiguration } from './daemon/migrate.js';
-import { readFileSync, existsSync, mkdirSync, cpSync, realpathSync } from 'node:fs';
+import { lstatSync, readFileSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import pino from 'pino';
@@ -12,14 +12,24 @@ import { Store, hash } from './storage/store.js';
 import { ContainerBackend } from './execution/container.js';
 import { assertDockerControlIsolation,executionScope } from './daemon/paths.js';
 import { backup } from './daemon/backup.js';
+import {restoreCheckpoint} from './daemon/restore.js';
+import {sealCheckpointForService} from './daemon/checkpoint-format.js';
 import {requiredSlackBotScopes} from './slack/protocol.js';
 import {verifyDeploymentWorkspaces} from './deployment/runtime.js';
 
 export async function main(args = process.argv.slice(2)): Promise<void> {
   const [command, configPath, destination] = args;
   if (command === 'models') { process.stdout.write(JSON.stringify(builtinModels().getModels(configPath).map(m => ({ provider: m.provider, id: m.id, contextWindow: m.contextWindow })), null, 2) + '\n'); return; }
-  if (!['check','start','local','backup','restore','migrate'].includes(command ?? '') || !configPath) throw new Error('Usage: mate check|start|local CONFIG; mate backup CONFIG DESTINATION; mate restore CONFIG BACKUP; mate models [PROVIDER]');
+  if (!['check','start','local','backup','restore','checkpoint-seal','migrate'].includes(command ?? '') || !configPath) throw new Error('Usage: mate check|start|local CONFIG; mate backup CONFIG DESTINATION; mate checkpoint-seal CONFIG CHECKPOINT SERVICE_UID SERVICE_GID; mate restore CONFIG BACKUP [--replace CURRENT_CHECKPOINT]; mate models [PROVIDER]');
   const config = daemonConfigSchema.parse(JSON.parse(readFileSync(resolve(configPath), 'utf8')));
+  if(command==='checkpoint-seal'){
+    if(!destination||!/^\d+$/.test(args[3]??'')||!/^\d+$/.test(args[4]??'')||args[5])throw new Error('Usage: mate checkpoint-seal CONFIG CHECKPOINT SERVICE_UID SERVICE_GID');
+    const serviceUid=Number(args[3]),serviceGid=Number(args[4]);if(!Number.isSafeInteger(serviceUid)||!Number.isSafeInteger(serviceGid))throw new Error('Service uid/gid must be safe integers');
+    const data=lstatSync(resolve(config.runtime.dataDir));if(!data.isDirectory()||data.isSymbolicLink())throw new Error('Managed data directory must be a directory');
+    if(data.uid!==serviceUid||data.gid!==serviceGid)throw new Error('Managed data directory owner does not match the deployment identity');
+    const lockPath=join(config.runtime.dataDir,'state','daemon.lock'),lock=lstatSync(lockPath);if(!lock.isFile()||lock.isSymbolicLink()||lock.uid!==serviceUid||lock.gid!==serviceGid||(lock.mode&0o777)!==0o600)throw new Error('Managed daemon lock identity does not match the deployment identity');
+    const release=acquireLock(lockPath);try{await sealCheckpointForService(destination,serviceUid,serviceGid);}finally{release();}process.stdout.write('Checkpoint sealed for managed restore.\n');return;
+  }
   if(command==='migrate'){
     if(!destination||!args[3])throw new Error('Usage: mate migrate OLD_CONFIG NEW_CONFIG BACKUP [--accept-legacy-identity]');
     if(args[4]&&args[4]!=='--accept-legacy-identity')throw new Error('Unknown migration option');
@@ -37,12 +47,8 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   }
   if (command === 'restore') {
     if (!destination) throw new Error('Backup directory required');
-    const manifest = JSON.parse(readFileSync(join(resolve(destination), 'COMPLETE.json'), 'utf8'));
-    if (manifest.version !== 1 || manifest.dataDir !== resolve(config.runtime.dataDir)) throw new Error('Restore requires a complete checkpoint and its original data directory');
-    if (existsSync(config.runtime.dataDir)) throw new Error('Restore requires absent destination; move the previous data directory aside first');
-    mkdirSync(join(config.runtime.dataDir, 'state'), { recursive: true, mode: 0o700 });
-    cpSync(join(destination, 'mate.sqlite'), join(config.runtime.dataDir, 'state', 'mate.sqlite'), { errorOnExist: true, force: false });
-    cpSync(join(destination, 'agents'), join(config.runtime.dataDir, 'agents'), { recursive: true, errorOnExist: true, force: false });
+    if(args[3]&&args[3]!=='--replace')throw new Error('Unknown restore option');if(args[3]==='--replace'&&!args[4])throw new Error('Current checkpoint required after --replace');if(args[5])throw new Error('Unknown restore option');
+    await restoreCheckpoint(config,destination,{...(args[4]?{currentCheckpoint:args[4]}:{})});
     process.stdout.write('Checkpoint restored; start performs fenced recovery before scheduling.\n'); return;
   }
   if (command === 'backup') {
@@ -53,7 +59,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
       if (config.runtime.docker) await new ContainerBackend({ ...config.runtime.docker, scope: executionScope(config.runtime.dataDir) }).recover();
       verifyDeploymentWorkspaces(config);
       store=new Store(join(state, 'mate.sqlite'));
-      store.recover(); await backup(store, config.runtime.dataDir, resolve(destination));
+      store.recover(); await backup(store, config.runtime.dataDir, resolve(destination),config);
     } finally { store?.close(); release(); }
     process.stdout.write('Consistent database and memory checkpoint created.\n'); return;
   }

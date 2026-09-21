@@ -79,7 +79,7 @@ Agent账户是持续累计额度；新消息、work、reset、配置迁移不补
 
 ## 显式升级与备份
 
-先停止daemon。角色、模型、频道策略、环境、工具prompt变更通过离线迁移，保留历史/任务/提醒/草稿/预算和私有文件：
+先停止daemon。以下离线迁移是开发机或没有workspace manifest的unmanaged兼容路径，保留历史/任务/提醒/草稿/预算和私有文件：
 
 ```sh
 pnpm node dist/src/main.js migrate mate.old.json mate.local.json /ABSOLUTE/upgrade-backup
@@ -87,15 +87,19 @@ pnpm node dist/src/main.js migrate mate.old.json mate.local.json /ABSOLUTE/upgra
 pnpm node dist/src/main.js migrate mate.old.json mate.local.json /ABSOLUTE/legacy-backup --accept-legacy-identity
 ```
 
-只升级代码/prompt而配置未变时，可把同一配置文件作为OLD和NEW。新增Agent可迁移；已有Agent的Slack身份或workspace不能重绑/删除。迁移核对旧快照和runtime hash，持有内核锁，清理旧配置执行容器，fence旧run并备份，事务更新。被撤销/过期grant不会复活。没有历史身份快照时，legacy选项是owner声明，不能机器证明旧身份。
+只升级代码/prompt而配置未变时，可把同一配置文件作为OLD和NEW。新增Agent可迁移；已有Agent的Slack身份或workspace不能重绑/删除。迁移核对旧快照和runtime hash，持有内核锁，清理旧配置执行容器，fence旧run并备份，事务更新。被撤销/过期grant不会复活。没有历史身份快照时，legacy选项是owner声明，不能机器证明旧身份。带workspace manifest的managed部署会拒绝这条入口；它必须由后续部署事务先生成并root封存checkpoint，首版还要求Agent/mount topology不变。
 
 ```sh
 pnpm node dist/src/main.js backup mate.local.json /ABSOLUTE/checkpoint
-# 将旧dataDir整体移开，原dataDir必须不存在：
+# managed checkpoint在backup子进程退出后由root封存：
+sudo node dist/src/main.js checkpoint-seal mate.local.json /ABSOLUTE/checkpoint SERVICE_UID SERVICE_GID
+# managed replace还要提供能证明当前live状态的已封存checkpoint：
+pnpm node dist/src/main.js restore mate.local.json /ABSOLUTE/target-checkpoint --replace /ABSOLUTE/current-checkpoint
+# unmanaged v2迁移备份和version 1兼容恢复都要求将旧dataDir整体移开、原dataDir不存在：
 pnpm node dist/src/main.js restore mate.local.json /ABSOLUTE/checkpoint
 ```
 
-备份目的目录必须未存在且在live dataDir之外，父目录须存在；包含SQLite与私有文件，带COMPLETE.json才可恢复。恢复到原绝对dataDir。不要删库或删session来绕过升级检查。
+备份目的目录必须未存在或是空的规范目录，并位于live dataDir之外；包含SQLite与私有文件，`COMPLETE.json`最后发布。managed部署的root wrapper应预建service-owned目录，并在成功后封存为`root:<service group> 0750/0640`；失败目录只能按预先记录的device/inode清理。恢复到原绝对dataDir。不要删库或删session来绕过升级检查。完整生产wrapper和systemd接线属于V2c/V2d，当前不要用unmanaged迁移替代它。
 
 ## 验证
 

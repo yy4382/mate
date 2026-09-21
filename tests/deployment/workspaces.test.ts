@@ -17,7 +17,7 @@ function fixture(){
  const pathFacts=new Map<string,PathFacts>([[manifestPath,{kind:'file',uid:0,gid:1000,dev:1,ino:1,nlink:1,size:100,blocks:8,mode:0o100640}],[data,{kind:'directory',uid:1000,gid:1000,dev:1,ino:2,nlink:1,size:0,blocks:0,mode:0o40700}],[state,{kind:'directory',uid:1000,gid:1000,dev:1,ino:3,nlink:1,size:0,blocks:0,mode:0o40700}]]);
  const mounts:MountFacts[]=[];let dev=100;
  for(const mount of manifest.mounts){dev++;pathFacts.set(mount.root,{kind:'directory',uid:1000,gid:1000,dev,ino:dev,nlink:1,size:0,blocks:0,mode:0o40700});pathFacts.set(mount.backingFile,{kind:'file',uid:0,gid:0,dev:1,ino:dev,nlink:1,size:capacity,blocks:capacity/512,mode:0o100600});mounts.push({target:mount.root,root:'/',filesystem:'ext4',source:`/dev/loop${dev}`,majorMinor:`7:${dev}`,options:['rw','nosuid','nodev'],backingFile:mount.backingFile});}
- const host:WorkspaceHost={read:path=>{if(path===manifestPath)return JSON.stringify(manifest);throw new Error(`unexpected read ${path}`);},readProtected:path=>{const value=pathFacts.get(path);if(!value)throw new Error('missing');return{text:JSON.stringify(manifest),facts:value};},realpath:path=>path,lstat:path=>{const value=pathFacts.get(path);if(!value)throw Object.assign(new Error('missing'),{code:'ENOENT'});return value;},stat:path=>{const value=pathFacts.get(path);if(!value)throw Object.assign(new Error('missing'),{code:'ENOENT'});return value;},statfs:()=>({type:0xef53,bsize:4096,blocks:Math.floor(capacity*.95/4096)}),mounts:()=>mounts,uid:()=>1000,gid:()=>1000};
+ const host:WorkspaceHost={read:path=>{if(path===manifestPath)return JSON.stringify(manifest);throw new Error(`unexpected read ${path}`);},readProtected:path=>{const value=pathFacts.get(path);if(!value)throw new Error('missing');return{text:JSON.stringify(manifest),facts:value};},realpath:path=>path,lstat:path=>{const value=pathFacts.get(path);if(!value)throw Object.assign(new Error('missing'),{code:'ENOENT'});return value;},stat:path=>{const value=pathFacts.get(path);if(!value)throw Object.assign(new Error('missing'),{code:'ENOENT'});return value;},statfs:()=>({type:0xef53,bsize:4096,blocks:Math.floor(capacity*.95/4096),bavail:Math.floor(capacity*.9/4096),files:16384,ffree:16000}),mounts:()=>mounts,uid:()=>1000,gid:()=>1000};
  return{manifest,pathFacts,mounts,host};
 }
 afterEach(()=>vi.restoreAllMocks());
@@ -28,7 +28,7 @@ it('accepts exact independent preallocated ext4 loopback mounts and returns thei
 });
 
 it('accepts ext4 metadata overhead at the 64 MiB minimum and enforces the 16 MiB allowance',()=>{
- const minimum=64*1024*1024,prepare=(usable:number)=>{const f=fixture();for(const entry of f.manifest.mounts){entry.capacityBytes=minimum;const backing=f.pathFacts.get(entry.backingFile)!;backing.size=minimum;backing.blocks=minimum/512;}f.host.statfs=()=>({type:0xef53,bsize:4096,blocks:usable/4096});return f;};
+ const minimum=64*1024*1024,prepare=(usable:number)=>{const f=fixture();for(const entry of f.manifest.mounts){entry.capacityBytes=minimum;const backing=f.pathFacts.get(entry.backingFile)!;backing.size=minimum;backing.blocks=minimum/512;}f.host.statfs=()=>({type:0xef53,bsize:4096,blocks:usable/4096,bavail:Math.max(0,usable/4096-1024),files:16384,ffree:16000});return f;};
  const representative=prepare(55*1024*1024);expect(()=>verifyWorkspaceManifest(manifestPath,{dataDir:data,stateDir:state,agentIds:['research','writer'],externalRoots:['/srv/project']},representative.host)).not.toThrow();
  const boundary=prepare(minimum-16*1024*1024);expect(()=>verifyWorkspaceManifest(manifestPath,{dataDir:data,stateDir:state,agentIds:['research','writer'],externalRoots:['/srv/project']},boundary.host)).not.toThrow();
  const undersized=prepare(minimum-16*1024*1024-4096);expect(()=>verifyWorkspaceManifest(manifestPath,{dataDir:data,stateDir:state,agentIds:['research','writer'],externalRoots:['/srv/project']},undersized.host)).toThrow('capacity');
@@ -41,8 +41,8 @@ it.each([
  ['untrusted manifest',(f:ReturnType<typeof fixture>)=>{f.pathFacts.get(manifestPath)!.uid=1000;},'root-owned'],
  ['wrong owner',(f:ReturnType<typeof fixture>)=>{f.pathFacts.get(`${data}/agents/research`)!.uid=0;},'owner'],
  ['unsafe mount',(f:ReturnType<typeof fixture>)=>{f.mounts[0]!.options=['rw'];},'ext4 loopback'],
- ['undersized filesystem',(f:ReturnType<typeof fixture>)=>{f.host.statfs=()=>({type:0xef53,bsize:4096,blocks:(capacity-52*1024*1024)/4096});},'capacity'],
- ['oversized filesystem',(f:ReturnType<typeof fixture>)=>{f.host.statfs=()=>({type:0xef53,bsize:4096,blocks:capacity/4096+1});},'capacity']
+ ['undersized filesystem',(f:ReturnType<typeof fixture>)=>{f.host.statfs=()=>({type:0xef53,bsize:4096,blocks:(capacity-52*1024*1024)/4096,bavail:(capacity-60*1024*1024)/4096,files:16384,ffree:16000});},'capacity'],
+ ['oversized filesystem',(f:ReturnType<typeof fixture>)=>{f.host.statfs=()=>({type:0xef53,bsize:4096,blocks:capacity/4096+1,bavail:capacity/4096,files:16384,ffree:16000});},'capacity']
 ] as const)('rejects %s instead of accepting an ordinary or unbounded directory',(_name,mutate,message)=>{
  const f=fixture();mutate(f);expect(()=>verifyWorkspaceManifest(manifestPath,{dataDir:data,stateDir:state,agentIds:['research','writer'],externalRoots:['/srv/project']},f.host)).toThrow(message);
 });

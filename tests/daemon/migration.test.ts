@@ -1,6 +1,6 @@
 import { fixtureTarget, externalThread } from '../helpers/canonical-slack.js';
 import{afterEach,expect,it,vi}from 'vitest';
-import{chmodSync,mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,realpathSync,existsSync}from 'node:fs';
+import{chmodSync,mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,realpathSync,existsSync,renameSync}from 'node:fs';
 import{tmpdir}from 'node:os';
 import{join}from 'node:path';
 import{Store,encode,hash}from '../../src/storage/store.js';
@@ -14,6 +14,7 @@ import{Messages,Output,migrateCurrentRuntime}from '../helpers/canonical-slack.js
 import{Collaboration}from '../../src/collaboration/service.js';
 import{Broker}from '../../src/policy/broker.js';
 import{ContainerBackend}from '../../src/execution/container.js';
+import{restoreCheckpoint}from '../../src/daemon/restore.js';
 const roots:string[]=[];afterEach(()=>{vi.restoreAllMocks();roots.splice(0).forEach(root=>rmSync(root,{recursive:true,force:true}));});
 function fixture(legacy=false){
  const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-migrate-')));roots.push(root);const data=join(root,'data'),path=join(data,'state','mate.sqlite'),own=join(data,'agents','research'),shared=join(root,'shared');
@@ -44,6 +45,10 @@ it('offline migration backs up memory, updates baseline and grants, preserves de
   expect(reopened.db.prepare('SELECT text FROM agent_checkpoints').get()).toEqual({text:'durable checkpoint'});
  }finally{reopened.close();}
 });
+it('restores an unmanaged v2 migration checkpoint into an absent data directory',async()=>{
+ const f=fixture(),backupPath=join(f.root,'backup');f.store.close();await migrateConfiguration(f.previous,f.next,backupPath);renameSync(f.data,join(f.root,'migrated-data'));
+ expect(await restoreCheckpoint(f.previous,backupPath)).toBe('v2');expect(readFileSync(join(f.own,'MEMORY.md'),'utf8')).toBe('private synthetic knowledge');const restored=new Store(f.path);try{expect(storedConfiguration(restored)).toEqual(f.previous);}finally{restored.close();}
+});
 it('migration requires lock, exact previous configuration and stable workspace/Agent identities',async()=>{
  const f=fixture();f.store.close();const dest=join(f.root,'backup');
  const release=acquireLock(join(f.data,'state','daemon.lock'));await expect(migrateConfiguration(f.previous,f.next,dest)).rejects.toThrow('Another Mate');release();
@@ -71,6 +76,10 @@ it('Linux migration refuses to back up or persist a container policy without ver
  const next=daemonConfigSchema.parse({...f.next,runtime:{...f.next.runtime,docker:{binary,host:`unix://${join(f.root,'docker.sock')}`,image:`sha256:${'a'.repeat(64)}`}}});vi.spyOn(ContainerBackend.prototype,'recover').mockResolvedValue();
  await expect(migrateConfiguration(f.previous,next,destination,false,project,{platform:'linux',workspaceHost:{} as never})).rejects.toThrow('requires a workspace manifest');expect(existsSync(destination)).toBe(false);
  const store=new Store(f.path);try{expect(storedConfiguration(store)).toEqual(f.previous);}finally{store.close();}
+});
+it('keeps managed deployment upgrades behind the sealed checkpoint workflow',async()=>{
+ const f=fixture();f.store.close();const manifest=join(f.root,'workspaces.json'),managed=daemonConfigSchema.parse({...f.previous,runtime:{...f.previous.runtime,workspaceManifest:manifest}});writeFileSync(manifest,'{}');
+ await expect(migrateConfiguration(managed,managed,join(f.root,'backup'))).rejects.toThrow('sealed checkpoint upgrade workflow');expect(existsSync(join(f.root,'backup'))).toBe(false);
 });
 it('a failed migration transaction leaves the old configuration/session/grants usable and retains a complete backup',async()=>{
  const f=fixture();const before=(f.router.sessions.status('research') as any).session;

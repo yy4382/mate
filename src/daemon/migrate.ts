@@ -52,6 +52,7 @@ function matchesRecordedRuntimePolicy(store:Store,previous:DaemonConfig,policy:s
 }
 /** Explicit local owner operation. No Slack or model credentials required. */
 export async function migrateConfiguration(previous:DaemonConfig,next:DaemonConfig,destination:string,acceptLegacyIdentity=false,projectRoot=resolve('.'),environment:DeploymentEnvironment=nodeDeploymentEnvironment()):Promise<{backup:string;agents:string[];legacyIdentityAttested:boolean}>{
+ if(previous.runtime.workspaceManifest||next.runtime.workspaceManifest)throw new Error('Managed deployment migration requires the sealed checkpoint upgrade workflow');
  const data=previous.runtime.dataDir,state=join(data,'state');
  for(const path of [data,state,join(data,'agents')])if(lstatSync(path).isSymbolicLink())throw new Error('Migration paths must not be symlinks');
  if(resolve(data)!==resolve(next.runtime.dataDir)||lstatSync(data).isSymbolicLink()||lstatSync(state).isSymbolicLink())throw new Error('Migration requires the same non-symlink data directory');
@@ -86,7 +87,7 @@ export async function migrateConfiguration(previous:DaemonConfig,next:DaemonConf
    }roots.set(agent.id,desired);
   }
   s.recover();
-  await backup(s,data,resolve(destination));
+  await backup(s,data,resolve(destination),previous);
   s.atomic(()=>{
    const oldSlack=slackRuntimeConfig(previous),newSlack=slackRuntimeConfig(next);
    if(oldSlack)migrateCanonicalConversations(s,oldSlack);else initializeCanonicalStore(s);

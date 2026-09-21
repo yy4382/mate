@@ -41,7 +41,7 @@ import { Artifacts } from './artifacts.js';
 import {EnvironmentCapabilities} from '../capabilities/environment.js';
 import {normalizeConfiguredWorkspaces,workspaceProfiles,WorkspaceAccess} from '../capabilities/workspaces.js';
 import { assertDockerControlIsolation,executionProtectedPaths,executionScope,pathVariants } from './paths.js';
-import { backup } from './backup.js';
+import {assertNoRestoreInProgress} from './restore.js';
 import {FairAdmission} from '../concurrency/admission.js';
 import {AdmittedBackend} from '../execution/admitted.js';
 import {DeploymentBoundaryBackend,nodeDeploymentEnvironment,verifyDeploymentWorkspaces,type DeploymentEnvironment} from '../deployment/runtime.js';
@@ -84,6 +84,7 @@ export class Daemon {
     const state=join(data,'state');mkdirSync(state,{recursive:true,mode:0o700});if(lstatSync(state).isSymbolicLink())throw new Error('State path must not be a symlink');
     const release=acquireLock(join(state,'daemon.lock'));let transferred=false;
     try{
+      await assertNoRestoreInProgress(data);
       const agentsDir=join(data,'agents');assertDockerControlIsolation(projectRoot,state,agentsDir,config.runtime.workspaceGrants,config.runtime.docker,config.runtime.workspaceManifest?[config.runtime.workspaceManifest]:[]);
       const container=config.runtime.docker?new ContainerBackend({...config.runtime.docker,scope:executionScope(data)}):undefined;
       await container?.recover();
@@ -220,11 +221,6 @@ export class Daemon {
         const timer=setTimeout(wake,500);this.abort.signal.addEventListener('abort',wake,{once:true});
       });
     }
-  }
-  async checkpoint(destination: string): Promise<void> {
-    this.paused = true;
-    try { await this.background;await Promise.allSettled([...this.runs]); await this.supervisor.drain();if(this.managedWorkspaceBoundary)verifyDeploymentWorkspaces(this.config,this.deploymentEnvironment);await backup(this.store, this.config.runtime.dataDir, destination); }
-    finally { this.paused = false; }
   }
   close(): Promise<void> { return this.closePromise ??= this.shutdown(); }
   private async shutdown(): Promise<void> {
