@@ -32,15 +32,7 @@ export class CanonicalSlackNormalizer {
                 if(message.conversationId===expected.conversationId&&message.rootId===(expected.threadId??message.id)&&this.output.matchesText(JSON.parse(out.request).text,message.text)&&!message.deleted)this.output.confirm(out.id,out.request_hash,{message,receipt:{ts}});
               }
             }
-            // Projection provenance is separate from dispatch confirmation. Even an early
-            // authenticated echo must not turn a fixed system receipt into peer work.
-            if(metadata?.event_type==='mate_outbox'&&typeof metadata.event_payload?.id==='string'){
-              const out=s.output(metadata.event_payload.id);
-              if(out&&out.request_hash===metadata.event_payload.request_hash&&message.author.kind==='agent'&&message.author.id===out.agent_id&&this.output.matchesText(JSON.parse(out.request).text,message.text)){
-                const target=this.messages.records.targetedEffect('outbox',out.id).target;
-                if(target.conversationId===message.conversationId&&message.rootId===(target.threadId??message.id)&&s.db.prepare('SELECT 1 FROM system_projections WHERE output_id=? UNION ALL SELECT 1 FROM task_projections WHERE output_id=?').get(out.id,out.id))message={...message,origin:'system'};
-              }
-            }
+            message=systemOrigin(this.messages,message,metadata);
             this.messages.record(message,[installation.id]);
           }
         }
@@ -48,4 +40,14 @@ export class CanonicalSlackNormalizer {
       s.db.prepare('UPDATE ingress SET normalized=1 WHERE app_id=? AND event_id=?').run(appId,eventId);
     });
   }
+}
+
+/** Shared by live events and history: system status provenance requires known effect proof. */
+export function systemOrigin(messages:Conversations,message:import('../domain/messages.js').MessageDTO,metadata:unknown):import('../domain/messages.js').MessageDTO {
+  const proof=metadata as {event_type?:string;event_payload?:{id?:unknown;request_hash?:unknown}}|undefined;
+  if(proof?.event_type!=='mate_outbox'||typeof proof.event_payload?.id!=='string')return message;
+  const s=messages.store,out=s.output(proof.event_payload.id);
+  if(!out||out.request_hash!==proof.event_payload.request_hash||message.author.kind!=='agent'||message.author.id!==out.agent_id||!messages.matchesText(JSON.parse(out.request).text,message.text))return message;
+  const target=messages.records.targetedEffect('outbox',out.id).target;
+  return target.conversationId===message.conversationId&&message.rootId===(target.threadId??message.id)&&s.db.prepare('SELECT 1 FROM system_projections WHERE output_id=? UNION ALL SELECT 1 FROM task_projections WHERE output_id=?').get(out.id,out.id)?{...message,origin:'system'}:message;
 }

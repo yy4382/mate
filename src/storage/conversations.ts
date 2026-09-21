@@ -15,19 +15,25 @@ export class ConversationRecords {
 
   private requireLegacy():LegacyPayloadDecoder {if(!this.legacy)throw new Error('Legacy adapter required');return this.legacy;}
 
-  message(id: string): MessageDTO | undefined {
-    const row = this.store.db.prepare('SELECT body FROM messages WHERE key=?').get(id) as { body: string } | undefined;
-    if (!row) return undefined;
-    const body = JSON.parse(row.body);
+  stored(id:string,bodyText:string):MessageDTO {
+    const body = JSON.parse(bodyText);
     let message: MessageDTO;
     if (Object.hasOwn(body,'format')) {
       if (body.format !== 'mate.message.v2') throw new Error('Unsupported stored message format');
       message = parseMessage(body.message);
       const identity = this.references.message(message.id);
       if (message.conversationId !== identity.conversationId || message.rootId !== identity.rootId) throw new Error('Stored message reference mismatch');
-    } else message = this.requireLegacy().message(row.body);
+    } else message = this.requireLegacy().message(bodyText);
     if (message.id !== id) throw new Error('Stored message identity mismatch');
     return message;
+  }
+  message(id: string): MessageDTO | undefined {
+    const row = this.store.db.prepare('SELECT body FROM messages WHERE key=?').get(id) as { body: string } | undefined;
+    return row?this.stored(id,row.body):undefined;
+  }
+  revision(id:string,revision:string):MessageDTO|undefined {
+    const row=this.store.db.prepare('SELECT body FROM message_revisions WHERE key=? AND revision=?').get(id,revision) as {body:string}|undefined;
+    return row?this.stored(id,row.body):undefined;
   }
 
   mutableTarget(type: 'works' | 'tasks' | 'schedules' | 'task_intents' | 'review_seats', id: string): ConversationTarget {

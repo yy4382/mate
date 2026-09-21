@@ -15,7 +15,12 @@ export class CanonicalAttention {
   private epoch(session:string):number { return (this.messages.store.db.prepare('SELECT context_epoch FROM sessions WHERE id=?').get(session) as {context_epoch:number}).context_epoch; }
   revision(target:Target,actor?:string):number {
     targetSchema.parse(target);
-    return (this.messages.store.db.prepare('SELECT COALESCE(MAX(seq),0) revision FROM conversation_events WHERE channel=? AND (? IS NULL OR thread=?) AND (audience IS NULL OR audience=?)').get(target.conversationId,target.threadId??null,target.threadId??null,actor??null) as {revision:number}).revision;
+    if(!this.messages.visibilitySnapshots)return (this.messages.store.db.prepare('SELECT COALESCE(MAX(seq),0) revision FROM conversation_events WHERE channel=? AND (? IS NULL OR thread=?) AND (audience IS NULL OR audience=?)').get(target.conversationId,target.threadId??null,target.threadId??null,actor??null) as {revision:number}).revision;
+    return (this.messages.store.db.prepare(`SELECT COALESCE(MAX(e.seq),0) revision FROM conversation_events e
+      JOIN conversation_identities c ON c.id=e.channel LEFT JOIN message_visibility v ON v.key=e.message_key AND v.agent_id=?
+      WHERE e.channel=? AND (? IS NULL OR e.thread=?) AND (e.audience IS NULL OR e.audience=?)
+      AND (? IS NULL OR c.authority='internal' OR e.kind NOT IN ('message','edit','delete','files_enriched','location_enriched','visibility') OR v.revision=e.revision)`)
+      .get(actor??null,target.conversationId,target.threadId??null,target.threadId??null,actor??null,actor??null) as {revision:number}).revision;
   }
   private publications(actor:string,target?:Target):Publication[]{
     const publications:Publication[]=[];
@@ -41,20 +46,23 @@ export class CanonicalAttention {
   peek(actor:string,now=Date.now(),scope?:Target):{target:Target;revision:number;unseen:number}[] | {isolated:true;notice:string}[] {
     if(this.messages.isolated(actor))return[{isolated:true,notice:'Independent review seat; discussion inputs are withheld.'}];
     const s=this.messages.store;this.messages.agent(actor);
-    const rows=s.db.prepare(`SELECT m.channel,m.thread,m.key,m.revision,MAX(e.seq) seq,seen.revision seen FROM messages m
+    const rows=s.db.prepare(`SELECT m.channel,m.thread,m.key,o.revision observed,MAX(e.seq) seq,seen.revision seen FROM messages m
       JOIN message_visibility v ON v.key=m.key AND v.agent_id=? JOIN channel_access a ON a.agent_id=v.agent_id AND a.channel=m.channel AND a.active=1
-      JOIN conversation_events e ON e.message_key=m.key AND (e.audience IS NULL OR e.audience=v.agent_id) LEFT JOIN attention_seen seen ON seen.agent_id=v.agent_id AND seen.key=m.key
+      JOIN message_observations o ON o.agent_id=v.agent_id AND o.key=m.key
+        AND NOT EXISTS(SELECT 1 FROM message_observations newer WHERE newer.agent_id=o.agent_id AND newer.key=o.key AND (length(newer.revision)>length(o.revision) OR (length(newer.revision)=length(o.revision) AND newer.revision>o.revision)))
+      JOIN conversation_events e ON e.message_key=m.key AND e.revision=o.revision AND (e.audience IS NULL OR e.audience=v.agent_id)
+      LEFT JOIN attention_seen seen ON seen.agent_id=v.agent_id AND seen.key=m.key
       WHERE (? IS NULL OR m.channel=?) AND (? IS NULL OR m.thread=?)
-      GROUP BY m.key`).all(actor,scope?.conversationId??null,scope?.conversationId??null,scope?.threadId??null,scope?.threadId??null) as {channel:string;thread:string|null;key:string;revision:string;seq:number;seen:string|null}[];
+      GROUP BY m.key,o.revision`).all(actor,scope?.conversationId??null,scope?.conversationId??null,scope?.threadId??null,scope?.threadId??null) as {channel:string;thread:string|null;key:string;observed:string;seq:number;seen:string|null}[];
     const groups=new Map<string,{target:Target;revision:number;unseen:number}>();
     for(const row of rows){
-      const message=this.messages.records.message(row.key)!;
+      const message=this.messages.message(actor,row.key);
       if(message.author.kind==='agent'&&message.author.id===actor)continue;
       const target:Target={conversationId:row.channel,...(row.thread?{threadId:row.thread}:{})},key=encode(target);
       const states=s.db.prepare('SELECT resolved,deferred_until,muted FROM attention_state WHERE agent_id=? AND target IN (?,?)').all(actor,key,encode({conversationId:row.channel})) as {resolved:number;deferred_until:number;muted:number}[];
       const direct=directRequest(actor,message,this.messages.references.conversation(row.channel).kind);
       if(states.some(st=>(st.muted&&!direct)||st.deferred_until>now||st.resolved>=row.seq))continue;
-      const group=groups.get(key)??{target,revision:0,unseen:0};group.revision=Math.max(group.revision,row.seq);group.unseen+=Number(row.seen!==row.revision);groups.set(key,group);
+      const group=groups.get(key)??{target,revision:0,unseen:0};group.revision=Math.max(group.revision,row.seq);group.unseen+=Number(row.seen!==row.observed);groups.set(key,group);
     }
     for(const publication of this.publications(actor,scope)){
       if(publication.sender===actor)continue;const target=publication.target,key=encode(target);
@@ -78,7 +86,7 @@ export class CanonicalAttention {
       const rows=s.db.prepare('SELECT m.key FROM messages m JOIN message_visibility v ON v.key=m.key WHERE v.agent_id=? AND m.channel=? AND (? IS NULL OR m.thread=?) ORDER BY length(m.ts),m.ts LIMIT 10001').all(run.agentId,target.conversationId,target.threadId??null,target.threadId??null) as {key:string}[];
       const pages:NormalMessage[][]=[[]];let bytes=0,complete=rows.length<=10000;
       for(const row of rows.slice(0,10000)){
-        const message=this.messages.records.message(row.key)!;
+        const message=this.messages.message(run.agentId,row.key);
         if(message.deleted)message.text='';
         if(Buffer.byteLength(encode(message))>120000){message.text=message.text.slice(0,25000);complete=false;}
         const size=Buffer.byteLength(encode(message));
@@ -122,7 +130,7 @@ export class CanonicalAttention {
       for(const echo of echoed)s.db.prepare('INSERT INTO attention_seen VALUES(?,?,?) ON CONFLICT(agent_id,key) DO UPDATE SET revision=excluded.revision').run(run.agentId,echo.id,echo.revision);
     }
     if(view.complete) for(const msg of result.messages as NormalMessage[]) {
-      const key=messageKey(msg),current=this.messages.records.message(key);
+      const key=messageKey(msg),current=this.messages.message(run.agentId,key);
       if(current&&encode(current.attachments??[])!==encode(msg.attachments??[]))continue;
       const old=s.db.prepare('SELECT revision FROM attention_seen WHERE agent_id=? AND key=?').get(run.agentId,key) as {revision:string}|undefined;
       if(!old||revisionNumber(msg.revision)>revisionNumber(old.revision))s.db.prepare('INSERT INTO attention_seen VALUES(?,?,?) ON CONFLICT(agent_id,key) DO UPDATE SET revision=excluded.revision').run(run.agentId,key,msg.revision);

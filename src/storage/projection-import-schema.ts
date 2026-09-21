@@ -1,7 +1,7 @@
 import type {Store} from './store.js';
 export function migrateProjectionImports(store:Store):void {
   store.atomic(()=>{
-    const version=store.db.pragma('user_version',{simple:true});if(version===20)return;
+    const version=store.db.pragma('user_version',{simple:true});if(version===20||version===21)return;
     if(version!==19)throw new Error('Projection schema required');
     store.db.exec(`
       ALTER TABLE projection_bindings ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0;

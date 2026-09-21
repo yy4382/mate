@@ -1,3 +1,4 @@
+import {ConversationHistory,historySchemas,type HistorySource} from '../conversations/history.js';
 import { SessionLifecycle } from './sessions.js';
 import { buildBaseline } from './prompt.js';
 import { ToolEnvironment } from './environment.js';
@@ -17,6 +18,7 @@ const reminderInput={target:targetSchema,content:z.string().min(1).max(12000),ne
 const fileSchemas = Object.fromEntries(operationSchema.options.filter(schema=>schema.shape.kind.value!=='exec').map(schema=>[`file.${schema.shape.kind.value}`,(schema as z.ZodObject).omit({kind:true}).extend({grantId:id})]));
 const schemas: Record<string,z.ZodType> = {
   ...fileSchemas,
+  ...historySchemas,
   'actions.list':z.object({before:z.number().int().positive().optional()}).strict(),
   'actions.read':z.object({actionId:id}).strict(),
   'sessions.status':z.object({}).strict(),
@@ -91,6 +93,11 @@ export interface AdditionalTools {
 type ToolContext={run:RunToken;workId:string;callId:string;signal:AbortSignal};
 const seatOperations=['actions.list','actions.read','sessions.status','sessions.checkpoint','sessions.reset','environment.info','agents','budget.read','attention.peek','messages.send','drafts.list','drafts.read','drafts.retry','drafts.continue','drafts.revise','drafts.discard',...Object.keys(fileSchemas),'exec'];
 const capabilityDescriptions:Record<string,string>={
+ 'history.page':'Page current authorized local history, with precise canonical before/after anchors and opaque cursor. Current internal room members may read earlier room history. Coverage is local/live, not full platform history; no viewToken.',
+ 'history.search':'Bounded text/author search over current authorized local history. Follow nextCursor even when a scan batch has no hits. No platform search or reading acknowledgment.',
+ 'history.around':'Retrieve nearby authorized context around a canonical message anchor. Replies use thread context; top-level anchors use conversation context. Reports side counts/truncation; no full-view proof.',
+ 'history.fetch':'Fetch one bounded page from the acting installation under current access and run fencing. Canonical before/after anchors and query-bound cursor. Quiet acquisition creates no new work or read acknowledgment; inspect gaps/coverage. Use page/search afterward.',
+
  'conversations.capabilities':'Inspect implemented participation operations and platform conditions, optionally for a conversation. Unsupported is explicit; capability availability does not grant access.',
  'conversations.discover':'Page public space metadata through the configured adapter. Discovery never grants message access. Follow nextCursor; does not enumerate private rooms.',
  'conversations.join':'Request joining a discovered public external channel; receipt may be succeeded, failed, unknown or unsupported. Unknown is not retried blindly.',
@@ -119,8 +126,9 @@ export class ToolRouter {
   readonly environment=new ToolEnvironment<ToolContext,ToolReply>();
   readonly gate:FreshnessGate;
   readonly coordination:MessageTasks;
+  readonly history:ConversationHistory;
   readonly sessions:SessionLifecycle;
-  constructor(readonly collaboration: Collaboration, readonly broker: Broker, readonly additional?: AdditionalTools, readonly directory?: ConversationDirectory, readonly provision?: (actor:string,workId:string)=>void,readonly normalizeInput:(value:unknown)=>unknown=value=>value) {this.sessions=new SessionLifecycle(collaboration,agent=>buildBaseline(agent,operationDocumentation));this.coordination=new MessageTasks(collaboration);this.gate=new FreshnessGate(collaboration.messages,collaboration.attention);collaboration.output.gate=this.gate;
+  constructor(readonly collaboration: Collaboration, readonly broker: Broker, readonly additional?: AdditionalTools, readonly directory?: ConversationDirectory, readonly provision?: (actor:string,workId:string)=>void,readonly normalizeInput:(value:unknown)=>unknown=value=>value,historySource?:HistorySource) {this.history=new ConversationHistory(collaboration.messages,historySource);this.sessions=new SessionLifecycle(collaboration,agent=>buildBaseline(agent,operationDocumentation));this.coordination=new MessageTasks(collaboration);this.gate=new FreshnessGate(collaboration.messages,collaboration.attention);collaboration.output.gate=this.gate;
     for(const [name,schema]of Object.entries(schemas))this.environment.register({name,schema,description:capabilityDescriptions[name]??`Mate ${name} capability; current actor, work, grants and submission gates apply.`,execute:(context,input)=>this.dispatch(context.run,context.workId,context.callId,name,input,context.signal)});
   }
   async call(run: RunToken, workId: string, callId: string, operation: string, input: unknown, signal: AbortSignal): Promise<ToolReply> {
@@ -142,7 +150,7 @@ export class ToolRouter {
     // Parsing is deliberately repeated in the daemon, independently of model-side tool validation.
     const args = schemas[operation]!.parse(input) as Record<string, any>;
     const readOnly = ['actions.list','actions.read','sessions.status','reminders.list','reminders.read','reminders.log','environment.info','tasks.byMessage','tasks.intents','drafts.list','drafts.read','attention.peek','attention.read','attention.resolve','attention.defer','attention.mute','agents','works.list','budget.read','tasks.read','tasks.list','messages.read','messages.recent','messages.search','schedules.list','inbox.list','inbox.read','conversations.list','conversations.members','conversations.capabilities','conversations.discover','conversations.refresh'];
-    if (!readOnly.includes(operation) && operation !== 'works.select') c.assertActionWork(run, args.taskId ? c.task(args.taskId).work_id : workId);
+    if (!readOnly.includes(operation) && !operation.startsWith('history.') && operation !== 'works.select') c.assertActionWork(run, args.taskId ? c.task(args.taskId).work_id : workId);
     if(args.message)c.messages.message(actor,args.message.messageId);
     if(args.anchor)c.messages.message(actor,args.anchor.messageId);
     if(args.reminderId)c.reminders.read(actor,args.reminderId);
@@ -166,6 +174,10 @@ export class ToolRouter {
         default:value=await this.directory.spaces(actor);
       }
       s.assertRun(run); signal.throwIfAborted(); return { value };
+    }
+    if(operation.startsWith('history.')){
+      const value=operation==='history.fetch'?await this.history.fetch(run,args,signal):operation==='history.page'?this.history.page(run,args):operation==='history.search'?this.history.search(run,args):this.history.around(run,args);
+      s.assertRun(run);signal.throwIfAborted();return{value};
     }
     if(operation==='environment.info')return{value:this.additional?.environment?.(actor)??{configured:false}};
     if(operation==='attachments.save'){if(!this.additional?.attachment)throw new Error('Attachment adapter unavailable');return{value:await this.additional.attachment(run,workId,actionId,args as any,signal)};}

@@ -26,7 +26,7 @@ Git：在codex/vps-first-release本地分支管理；先保存已审核及进行
 | E0 架构与差异基线 | ARCHITECTURE、EXPERIMENT_GAPS、本计划、审核规则 | 用户最新范围、Raft证据、实际代码 | 独立红队讨论依赖、迁移、确认语义与范围；修复设计阻塞 | PASS，review_e0_architecture |
 | E1 核心模块边界 | 提取conversation/attention/gate/review领域服务、平台目录port及显式composition；架构依赖检查 | E0 PASS | 原行为回归、核心不导入Slack SDK/模块及daemon；说明兼容债务，不假称ID已解耦 | PASS，review_e1_boundaries，178 tests |
 | E2 内部身份与引用 | Agent定义/平台binding、opaque内部引用、Slack映射与local adapter、迁移清单 | E1 PASS | 非Slack标识全链路、本地同伴通信、同外部多App去重、旧库/JSON/unknown恢复、配置兼容 | PASS，E2a–E2c3b |
-| E3 参与和历史 | directory参与控制、attention规则、分页搜索与around/history coverage | E2 PASS | mute mention/DM、defer、撤权并发、局部读不授全局view、新成员历史、unsupported明确 | TODO |
+| E3 参与和历史 | directory参与控制、attention规则、分页搜索与around/history coverage | E2 PASS | mute mention/DM、defer、撤权并发、局部读不授全局view、新成员历史、unsupported明确 | PASS，E3a–E3b |
 | E4 协作与持续工作 | 按领域分拆工具处理器；任务/提醒语义与文档；结构化状态/activity查询 | E3 PASS | 自主直接协作、认领/让位、等待/复核/后台提醒、恢复、系统事件不循环唤醒 | TODO |
 | E5 工作能力与prompt | 环境/研究路径/成果闭环、手册与充分的行为约定；按前序工具同步完善 | E4 PASS | 实际授权环境能力发现与失败、附件到成果、prompt/tool/environment覆盖矩阵 | TODO |
 | E6 实验验收 | 预配置少量成员的多选择场景、本地入口与真实接入操作说明 | E5 PASS | pnpm检查、故障恢复、独立架构审计；真实Slack/provider明确单列未验项 | TODO |
@@ -205,3 +205,5 @@ E2c3b PASS：review_e2c3b_lifecycle，262普通checks/7环境skip；同一daemon
 E3细分为两个依赖顺序gate：E3a目录能力发现、平台支持的join/leave与持久动作回执，以及普通mute/直接mention/DM/defer规则；E3b有界分页历史/搜索/around与覆盖信息、当前ACL下的按需历史来源。E3a验收发现不授读取、unknown不盲重试、退出撤权、能力不支持明确、mute允许直接请求而defer保持暂缓；E3b验收局部检索不签发整目标view、游标/范围与coverage、历史读取撤权竞态、新成员当前权限与未缓存缺口。各自独立软件工程与语义红队，二者通过才完成E3。
 
 E3a PASS：review_e3a_participation，271普通checks/7环境skip。确定拒绝误记unknown导致后续退出永久阻塞的P2已修复并独立复验；参与能力和mute/direct/defer规则已接生产工具及prompt。E3b进入具体历史契约的独立设计复核后实施。
+
+E3b PASS：review_e3b_history，289普通checks/7环境skip。实现本地page/search/around、acting installation有界fetch、明确coverage/gap与quiet ingestion。红队发现并复验全表/临时排序、坏条目整页回滚、gap/exhausted混同、quiet伪未读、Slack隐藏wrapper、跨installation revision/delete/same-revision附件泄露及无target搜索临时B-tree；均已修复。v21保存每Agent的revision+body snapshot，历史revision证据不可变；离线迁移的旧数据body只能按最高observation或current做有审计的best-effort回填。E3整体完成，进入E4。

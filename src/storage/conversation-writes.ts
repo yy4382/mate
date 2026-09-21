@@ -23,7 +23,7 @@ export class CanonicalWrites {
   }
   assertFormat(): void {
     const marker = this.store.db.prepare("SELECT value FROM runtime_meta WHERE key='conversation_format'").get() as {value:string}|undefined;
-    if (marker?.value !== 'mate.conversations.v2' || ![17,18,19,20].includes(Number(this.store.db.pragma('user_version',{simple:true})))) throw new Error('Canonical conversation migration required');
+    if (marker?.value !== 'mate.conversations.v2' || ![17,18,19,20,21].includes(Number(this.store.db.pragma('user_version',{simple:true})))) throw new Error('Canonical conversation migration required');
   }
   private target(input:unknown):ConversationTarget {
     this.assertFormat();
@@ -46,8 +46,16 @@ export class CanonicalWrites {
     this.store.db.prepare(`INSERT INTO messages(key,channel,ts,thread,revision,body,deleted) VALUES(?,?,?,?,?,?,?)
       ON CONFLICT(key) DO UPDATE SET thread=excluded.thread,revision=excluded.revision,body=excluded.body,deleted=excluded.deleted`)
       .run(message.id,message.conversationId,message.order,message.rootId,message.revision,body,Number(message.deleted));
+    // A revision row is evidence, not a mutable cache slot. Installation-specific
+    // representations of the same revision live in message_visibility snapshots.
     this.store.db.prepare('INSERT INTO message_revisions(key,revision,body) VALUES(?,?,?) ON CONFLICT DO NOTHING').run(message.id,message.revision,body);
     return message;
+  }
+  revision(input:MessageDTO):MessageDTO {
+    this.assertFormat();if(!this.store.db.inTransaction)throw new Error('Message revision write requires an authoritative transaction');
+    const message=parseMessage(input),identity=this.references.message(message.id);
+    if(identity.conversationId!==message.conversationId||identity.rootId!==message.rootId)throw new Error('Message revision identity mismatch');
+    this.store.db.prepare('INSERT INTO message_revisions(key,revision,body) VALUES(?,?,?) ON CONFLICT DO NOTHING').run(message.id,message.revision,encode({format:'mate.message.v2',message}));return message;
   }
   queueOutput(actor:string,id:string,input:{target:ConversationTarget;text:string;[key:string]:unknown}): Effect {
     return this.store.atomic(()=>{

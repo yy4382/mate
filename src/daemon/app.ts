@@ -1,3 +1,4 @@
+import {SlackHistory} from '../slack/history.js';
 import type {AdapterLifecycle} from './adapter.js';
 import {SlackRuntime} from '../slack/runtime.js';
 import {initializeCanonicalStore} from '../storage/internal-schema.js';
@@ -6,6 +7,7 @@ import {LocalAdapter} from '../local/input.js';
 import {configureLocalRooms} from '../local/rooms.js';
 import {migrateProjections} from '../storage/projection-schema.js';
 import {migrateProjectionImports} from '../storage/projection-import-schema.js';
+import {migrateHistoryIndexes} from '../storage/history-schema.js';
 import {TeamDirectory} from '../conversations/team-directory.js';
 import {migrateInternalConversations} from '../storage/internal-schema.js';
 import { migrateCanonicalConversations } from '../slack/canonical-migration.js';
@@ -88,8 +90,8 @@ export class Daemon {
 
       }
       if(slackConfig)migrateCanonicalConversations(this.store,slackConfig);else initializeCanonicalStore(this.store);
-      if(previous&&Number(this.store.db.pragma('user_version',{simple:true}))<20)throw new Error('Internal conversations require explicit offline migration');
-      migrateInternalConversations(this.store);migrateProjections(this.store);migrateProjectionImports(this.store);
+      if(previous&&Number(this.store.db.pragma('user_version',{simple:true}))<21)throw new Error('Conversation storage requires explicit offline migration');
+      migrateInternalConversations(this.store);migrateProjections(this.store);migrateProjectionImports(this.store);migrateHistoryIndexes(this.store);
       const slackApp=slackConfig?slackApplication(this.store,slackConfig,c):undefined;
       const messages=slackApp?.messages??localConversations(this.store,c);
       messages.writes.assertFormat();
@@ -103,7 +105,7 @@ export class Daemon {
       const research = new Research(config.runtime.researchHosts);
       let artifacts!: Artifacts;
       const attachments=transport?new Attachments(this.collaboration,this.broker,transport.clients):undefined;
-      const router = new ToolRouter(this.collaboration, this.broker, { attachment:(...args)=>{if(!attachments)throw new Error('Attachment adapter unavailable');return attachments.save(...args);},environment:actor=>({workspace:'/workspace',execConfigured:!!config.runtime.docker,image:config.runtime.docker?.image??null,network:this.collaboration.seats.active(actor)?'none':config.runtime.docker?.network??'none',researchHosts:this.collaboration.seats.active(actor)?[]:config.runtime.researchHosts,toolchain:'Installed in the pinned image; inspect with exec. No host credentials inherited.'}),research: (url, signal) => research.read(url, signal), publish: (...args) => artifacts.publish(...args) }, new TeamDirectory(messages,transport?new Directory(messages,transport.clients,transport.mapper):undefined), (actor,workId)=>this.ensureGrants(actor,workId),value=>slackApp?.argumentsCodec.args(value)??value);
+      const router = new ToolRouter(this.collaboration, this.broker, { attachment:(...args)=>{if(!attachments)throw new Error('Attachment adapter unavailable');return attachments.save(...args);},environment:actor=>({workspace:'/workspace',execConfigured:!!config.runtime.docker,image:config.runtime.docker?.image??null,network:this.collaboration.seats.active(actor)?'none':config.runtime.docker?.network??'none',researchHosts:this.collaboration.seats.active(actor)?[]:config.runtime.researchHosts,toolchain:'Installed in the pinned image; inspect with exec. No host credentials inherited.'}),research: (url, signal) => research.read(url, signal), publish: (...args) => artifacts.publish(...args) }, new TeamDirectory(messages,transport?new Directory(messages,transport.clients,transport.mapper):undefined), (actor,workId)=>this.ensureGrants(actor,workId),value=>slackApp?.argumentsCodec.args(value)??value,transport?new SlackHistory(messages,transport):undefined);
       this.supervisor = new Supervisor(this.collaboration, router, c, undefined, async (agentId, workId, signal) => {
         this.ensureGrants(agentId, workId);
         const result = await files.execute({ root: this.memoryRoots[agentId]!, operation: { kind: 'read', path: 'MEMORY.md' }, timeoutMs: 10000 }, signal);

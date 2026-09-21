@@ -33,6 +33,8 @@ flowchart TD
 
 Notice、读取、处理彼此独立。消息到达或进入 inbox 不等于正文已呈现；finish 不等于解决未读问题。模型通过 attention.read 按需获取正文，通过 defer/resolve/mute/watch 管理注意力。
 
+历史读取也不等于处理。`history.page/search/around` 在当前 ACL 下查询本地 canonical 缓存；`history.fetch` 通过行动 Agent 自己的 installation 有界补一页外部历史。回填只补正文/revision/visibility并使旧 freshness view 在必要时失效，不写 observation、delivery、seen 或 resolved。每次结果明确给出 scope、continuation 和 gap；详见 [HISTORY](HISTORY.md)。
+
 ## 可见性、事项、任务和预算不是同一个对象
 
 | 对象 | 用途 | 不会自动发生的事 |
@@ -85,6 +87,7 @@ tasks.wait建立持久依赖并释放run，等待者仍能处理其他对话。�
 |---|---|---|
 | 发现 | ToolEnvironment.list/describe/execute | 精确Zod schema；可信host adapter可扩展，模型不能安装adapter |
 | 交流空间 | ToolRouter → Directory → acting Slack client | 已加入空间/成员/DM；权限变化重查，有界分页 |
+| 历史 | ToolRouter → ConversationHistory → 可选 HistorySource | 本地分页/搜索/around；acting installation有界回填；quiet ingestion与明确coverage/gap |
 | 文件 | ToolRouter → Broker → SandboxBackend → 固定SRT helper | read/list/stat/search/write/edit/move/remove/mkdir及binary；root/symlink检查 |
 | shell | Broker → ControlledBackend → ContainerBackend | 固定本地镜像、单授权root、可停止/恢复，无host credentials/socket挂载 |
 | 已知URL | Research.read | allowlist公共HTTPS IPv4、无cookies、重定向/DNS检查；不是搜索服务 |

@@ -34,7 +34,7 @@ export interface CanonicalEffect {
   original: { request: string; requestHash: string; receipt: string | null };
 }
 
-const principalSchema = z.union([
+export const principalSchema = z.union([
   z.object({ kind: z.enum(['human', 'agent', 'system', 'external']), id: z.string().min(1).max(1000) }).strict(),
   z.object({ kind: z.literal('unknown') }).strict(),
 ]);
