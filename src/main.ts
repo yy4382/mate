@@ -12,6 +12,7 @@ import { Store, hash } from './storage/store.js';
 import { ContainerBackend } from './execution/container.js';
 import { executionScope } from './daemon/paths.js';
 import { backup } from './daemon/backup.js';
+import {requiredSlackBotScopes} from './slack/protocol.js';
 
 export async function main(args = process.argv.slice(2)): Promise<void> {
   const [command, configPath, destination] = args;
@@ -27,7 +28,9 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   if (command === 'check') {
     const models = builtinModels();
     const report = config.mate.agents.map(a => ({ agent: a.id, modelKnown: !!models.getModel(a.model.provider, a.model.id), missingEnv: [a.model.apiKeyEnv,...(config.adapters.slack?.bindings.filter(b=>b.agentId===a.id).flatMap(b=>[b.botTokenEnv,b.appTokenEnv])??[])].filter(ref => !process.env[ref]) }));
-    process.stdout.write(JSON.stringify({ localOnly: true, agents: report, containerConfigured: !!config.runtime.docker }, null, 2) + '\n');
+    process.stdout.write(JSON.stringify({ checkScope: 'configuration_model_and_secret_references', externalConnectivityChecked: false,
+      adapters: { slackConfigured: !!config.adapters.slack, localConfigured: !!config.adapters.local },
+      requiredSlackBotScopes:config.adapters.slack?[...requiredSlackBotScopes]:[],agents: report, containerConfigured: !!config.runtime.docker }, null, 2) + '\n');
     if (report.some(r => !r.modelKnown || r.missingEnv.length)) process.exitCode = 1; return;
   }
   if (command === 'restore') {

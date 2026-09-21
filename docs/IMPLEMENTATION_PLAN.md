@@ -29,7 +29,7 @@ Git：在codex/vps-first-release本地分支管理；先保存已审核及进行
 | E3 参与和历史 | directory参与控制、attention规则、分页搜索与around/history coverage | E2 PASS | mute mention/DM、defer、撤权并发、局部读不授全局view、新成员历史、unsupported明确 | PASS，E3a–E3b |
 | E4 协作与持续工作 | 按领域分拆工具处理器；任务/提醒语义与文档；结构化状态/activity查询 | E3 PASS | 自主直接协作、认领/让位、等待/复核/后台提醒、恢复、系统事件不循环唤醒 | PASS，E4a/E4b/E4c |
 | E5 工作能力与prompt | 环境/研究路径/成果闭环、手册与充分的行为约定；按前序工具同步完善 | E4 PASS | 实际授权环境能力发现与失败、附件到成果、prompt/tool/environment覆盖矩阵 | PASS，E5a/E5b，review_e5b_workflow_prompt |
-| E6 实验验收 | 预配置少量成员的多选择场景、本地入口与真实接入操作说明 | E5 PASS | pnpm检查、故障恢复、独立架构审计；真实Slack/provider明确单列未验项 | TODO |
+| E6 实验验收 | 预配置少量成员的多选择场景、本地入口与真实接入操作说明 | E5 PASS | pnpm检查、故障恢复、独立架构审计；真实Slack/provider明确单列未验项 | PASS，review_e6_experiment，333 tests |
 
 E5按“先让Agent准确知道能做什么，再验证完整工作闭环”的依赖拆分：
 

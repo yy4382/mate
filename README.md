@@ -4,7 +4,7 @@ Mate 是个人单 Slack workspace 中的持久 Agent 团队。每个 Agent 有�
 
 运行层使用 **Pi Agent Core + pi-ai**；使用 **pnpm**；没有 pi-coding-agent、Jev或逐命令审批。当前能力、函数调用链和与Raft的差别见[HOW_IT_WORKS](docs/HOW_IT_WORKS.md)，设计依据见[项目定位](docs/PROJECT_DIRECTION.md)与[消息门控调研](docs/MESSAGE_GATING_RESEARCH.md)。
 
-开发按[模块计划](docs/IMPLEMENTATION_PLAN.md)逐个实施、独立红队审核；记录在[reviews](docs/reviews/)，当前验证见[ACCEPTANCE](docs/ACCEPTANCE.md)。只评harness，不评模型智能。
+开发按[模块计划](docs/IMPLEMENTATION_PLAN.md)逐个实施、独立红队审核；记录在[reviews](docs/reviews/)，当前验证见[ACCEPTANCE](docs/ACCEPTANCE.md)，能力与证据关系见[CAPABILITY_MATRIX](docs/CAPABILITY_MATRIX.md)。只评harness，不评模型智能。
 
 ## 本地运行
 
@@ -13,22 +13,22 @@ pnpm 10.33.0；workspace配置固定Node 24.21.0和原生依赖构建。
 ```sh
 pnpm install --frozen-lockfile
 pnpm run check
-cp mate.example.json mate.local.json
+cp mate.local.example.json mate.local.json
 pnpm node dist/src/main.js models anthropic
 ```
 
-修改身份、频道、模型和绝对dataDir。dataDir必须在应用checkout外。通过终端环境/秘密管理器提供[.env.example](.env.example)中的变量；程序不自动读.env。模型目录只证明Pi识别该model，不证明账户可调用。
+本地示例预配置两个成员和一个内部房间；修改模型和绝对dataDir。Slack示例是[mate.example.json](mate.example.json)，其中Agent身份与平台binding分开。dataDir必须在应用checkout外。通过终端环境/秘密管理器提供[.env.example](.env.example)中的变量；程序不自动读.env。模型目录只证明Pi识别该model，不证明账户可调用。
 
 ```sh
 pnpm node dist/src/main.js check mate.local.json
-pnpm node dist/src/main.js start mate.local.json
+pnpm node dist/src/main.js local mate.local.json
 ```
 
-check只做本地校验；start会连接Slack及配置的provider。退出用SIGINT/SIGTERM，等待执行清理。日志不打印凭证或原始Slack正文。
+check只做本地校验；local通过JSONL提供本地人类入口，start连接配置的Slack及provider。退出用SIGINT/SIGTERM，等待执行清理。日志不打印凭证或原始Slack正文。完整本地请求示例和真实Slack逐项验收见[实验运行手册](docs/EXPERIMENT_RUNBOOK.md)。
 
 ## Slack配置
 
-每Agent一个app，Socket Mode的app token授予connections:write。Bot scopes：app_mentions:read、chat:write、channels:read/history、groups:read/history、im:read/history/write、mpim:read/history、files:read/write、users:read。订阅app_mention、message.channels/groups/im、member_joined_channel/member_left_channel。邀请bot到相应频道；私有频道权限不由配置自动授予。
+每Agent一个app，Socket Mode的app token授予connections:write。Bot scopes：app_mentions:read、chat:write、channels:read、channels:history、channels:join、channels:manage、groups:read、groups:history、groups:write、im:read、im:history、im:write、mpim:read、mpim:history、mpim:write、files:read、files:write、users:read。订阅app_mention、message.channels/groups/im、member_joined_channel/member_left_channel。邀请bot到相应频道；私有频道权限不由配置自动授予。首板使用预配置成员，不会自动创建Slack app。
 
 其中一个app注册/team（commands scope），无需公共HTTP receiver。启动验证team/user/bot/app identity。正式使用前应验证当前安装的scopes、事件和bot echo；开发未连接真实Slack或发送消息。
 

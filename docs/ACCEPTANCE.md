@@ -1,6 +1,6 @@
 # Mate harness 验收
 
-2026-09-20。假设模型足够智能，验证它的合理选择是否可执行、可观察、可恢复；不评测模型主动性或协作质量。R1–R8逐模块独立红队通过，最终gate见[实施计划](IMPLEMENTATION_PLAN.md)。[当前调用链](HOW_IT_WORKS.md)解释具体函数与剩余差异。
+2026-09-21。假设模型足够智能，验证它的合理选择是否可执行、可观察、可恢复；不评测模型主动性或协作质量。各模块独立红队gate见[实施计划](IMPLEMENTATION_PLAN.md)。[当前调用链](HOW_IT_WORKS.md)解释具体函数与剩余差异。
 
 ## 产品语义与证据
 
@@ -9,6 +9,7 @@
 | 一Agent跨channel/thread/DM连续，peer独立 | runtime/supervisor：真实worker进程、同session/PID和独立环境；slack/conversations：顶层目标/DM发现与对账 |
 | 主动感知、暂缓、沉默 | attention：seen/resolve/defer/mute分离、分页ACK、晚到/编辑/删除；Engine通知在模型边界进入持久输入，不强杀工具 |
 | 同一变化下的多种合理决策 | daemon/integration五种真实Pi loop分支：defer保留、discard静默、continue、revise后发送、重读retry；无task tree；continue不推进seen |
+| 预配置团队和本地实验入口 | daemon/experiment-release：Slack/local示例共享平台无关Agent定义；真实Daemon让同一输入下一个成员显式发言、另一个保持沉默；local JSONL复用同一服务和持久库 |
 | 消息任务而非重复任务对象 | coordination/messages：canonical message_key、并发owner CAS、held无提前副作用、unclaim/transfer/update；创建可见消息confirmed后激活 |
 | 同伴直接讨论与证据修订 | daemon/integration：A认领原始消息、B直接反馈、A更新；peer可凭已有账户唤醒，无必需人类预算根 |
 | 跨事项选择 | supervisor：读取/切换独立；run成本仍归起始事项；selected work暂停/恢复与账户债务保持 |
@@ -47,7 +48,7 @@
 
 普通集调用真实Pi loop、Node worker与IPC，Slack/provider采用合成transport。真实隔离集使用现有固定本地镜像，覆盖跨root/secret/network、停止/超时/daemon死亡、二进制及network策略；不拉镜像、不连接外部服务。
 
-未进行真实Slack/provider验收。上线前核对安装身份/scopes、频道及DM事件、bot echo、429、unknown对账、附件分享、provider usage/错误格式与停止时延；这些是协议接线与运行契约，不是证明模型能自发作出相同决策。
+未进行真实Slack/provider验收。上线前核对安装身份/scopes、频道及DM事件、bot echo、429、unknown对账、附件分享、provider usage/错误格式与停止时延；逐项步骤见[实验运行手册](EXPERIMENT_RUNBOOK.md)。这些是协议接线与运行契约，不是证明模型能自发作出相同决策。
 
 当前边界详见[HOW_IT_WORKS](HOW_IT_WORKS.md)：本地freshness不是Slack全局原子事务；没有通用search/browser/第三方登录；review seat为更保守的全对话隔离；大小/分页/单run输入有界；没有通用unknown强行清账；单daemon/workspace，其他OS未验证。
 
