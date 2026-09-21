@@ -9,7 +9,7 @@ import { createDeploymentPlan } from '../../src/deployment/plan.js';
 import { createReleaseManifest } from '../../src/deployment/release.js';
 import { deploymentSpecSchema } from '../../src/deployment/spec.js';
 import { renderMaintenanceWrapper, renderMountUnit, renderService } from '../../src/deployment/systemd.js';
-import { initializePublishedVolume, inspectExistingInstallation, preflightDeployment, prepareMountpoint, remainingRequiredBytes, syncPayloadTree, type InstallerHost } from '../../src/deployment/installer.js';
+import { initializePublishedVolume, inspectExistingInstallation, preflightDeployment, prepareMountpoint, remainingRequiredBytes, removeBoundReleaseCleanup, syncPayloadTree, type InstallerHost } from '../../src/deployment/installer.js';
 import { isMainModule } from '../../src/main.js';
 import { isDeploymentMainModule } from '../../src/deployment/cli.js';
 
@@ -145,6 +145,13 @@ it('allows preflight accounting to reach recovery for planned staging created be
   writeFileSync(journalPath, `${JSON.stringify({ version: 1, transaction: '44444444-4444-4444-8444-444444444444', inputIdentity: 'f'.repeat(64), uid: process.getuid!(), gid: process.getgid!(), directories: [], release: { stage: releaseStage, status: 'planned' }, volumes: [{ backingFile: join(root, 'workspace.ext4'), stage: volumeStage, root: mountRoot, rootExisted: false, status: 'planned' }], phase: 'resources' })}\n`, { mode: 0o600 }); chmodSync(journalPath, 0o600);
   const state = inspectExistingInstallation({ bootstrapJournal: join(root, 'bootstrap.json'), controlJournal: journalPath, completed: join(control, 'installation.json'), current: join(root, 'current'), releases }, process.getuid!(), process.getgid!());
   expect(state).toMatchObject({ complete: false }); expect(state!.consumedBytes).toBeGreaterThan(0);
+});
+
+it('resumes cleanup of a partially deleted release staging directory by bound inode', () => {
+  const parent = mkdtempSync(join(tmpdir(), 'mate-release-cleanup-')); roots.push(parent); const stage = join(parent, '.stage'); mkdirSync(stage); mkdirSync(join(stage, 'node_modules')); writeFileSync(join(stage, 'node_modules', 'remaining'), 'partial'); const identity = lstatSync(stage), calls: string[] = [];
+  const host = { run: (binary: string, args: readonly string[]) => { calls.push(`${binary} ${args.join(' ')}`); if (binary === '/usr/bin/rm') rmSync(stage, { recursive: true }); return { code: 0, stdout: '', stderr: '' }; } } as unknown as InstallerHost;
+  removeBoundReleaseCleanup(host, stage, parent, identity.dev, identity.ino); expect(calls.some(call => call.startsWith('/usr/bin/rm '))).toBe(true); expect(() => lstatSync(stage)).toThrow();
+  mkdirSync(stage); expect(() => removeBoundReleaseCleanup(host, stage, parent, identity.dev, identity.ino)).toThrow('identity changed');
 });
 
 it('recognizes a deployed CLI reached through the current release symlink', () => {

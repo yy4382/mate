@@ -15,7 +15,7 @@ import { assertSafeUnitName, managedLayout, renderMaintenanceWrapper, renderMoun
 const journalSchema = z.object({
   version: z.literal(1), transaction: z.string().uuid(), inputIdentity: z.string().regex(/^[a-f0-9]{64}$/), uid: z.number().int().nonnegative(), gid: z.number().int().nonnegative(),
   directories: z.array(z.object({ path: z.string(), uid: z.number().int().nonnegative(), gid: z.number().int().nonnegative(), mode: z.number().int().nonnegative(), existed: z.boolean(), dev: z.number().int().nonnegative().optional(), ino: z.number().int().positive().optional(), status: z.enum(['planned', 'complete']) }).strict()),
-  release: z.object({ stage: z.string(), stageDev: z.number().int().nonnegative().optional(), stageIno: z.number().int().positive().optional(), releaseId: z.string().regex(/^[a-f0-9]{64}$/).optional(), status: z.enum(['planned', 'copied', 'published']) }).strict(),
+  release: z.object({ stage: z.string(), stageDev: z.number().int().nonnegative().optional(), stageIno: z.number().int().positive().optional(), cleanupDev: z.number().int().nonnegative().optional(), cleanupIno: z.number().int().positive().optional(), releaseId: z.string().regex(/^[a-f0-9]{64}$/).optional(), status: z.enum(['planned', 'copied', 'published']) }).strict(),
   volumes: z.array(z.object({ backingFile: z.string(), stage: z.string(), stageDev: z.number().int().nonnegative().optional(), stageIno: z.number().int().positive().optional(), root: z.string(), rootExisted: z.boolean(), rootDev: z.number().int().nonnegative().optional(), rootIno: z.number().int().positive().optional(), status: z.enum(['planned', 'formatted', 'published', 'initialized']) }).strict()),
   phase: z.enum(['resources', 'units', 'mounted', 'probed', 'published']),
 }).strict();
@@ -259,11 +259,23 @@ async function publishRelease(host: InstallerHost, spec: DeploymentSpec, journal
   if (journal.release.status === 'copied') {
     if (existsSync(final)) {
       const existing = await verifyRelease(final, releaseId); if (staged && existing.inventorySha256 !== staged.inventorySha256) throw new Error('Existing release identity differs');
-      const finalIdentity = lstatSync(final); journal = { ...journal, release: { ...journal.release, stageDev: finalIdentity.dev, stageIno: finalIdentity.ino, status: 'published' } }; replaceJournal(journalPath, journal);
+      const finalIdentity = lstatSync(final), cleanupIdentity = staged ? lstatSync(item.stage) : undefined;
+      journal = { ...journal, release: { ...journal.release, stageDev: finalIdentity.dev, stageIno: finalIdentity.ino, ...(cleanupIdentity ? { cleanupDev: cleanupIdentity.dev, cleanupIno: cleanupIdentity.ino } : {}), status: 'published' } }; replaceJournal(journalPath, journal);
     } else { renameSync(item.stage, final); fsyncDirectory(managedLayout.releases); journal = { ...journal, release: { ...journal.release, status: 'published' } }; replaceJournal(journalPath, journal); }
   }
-  if (journal.release.status === 'published' && existsSync(item.stage)) { await verifyRelease(item.stage, releaseId); checked(host, '/usr/bin/rm', ['-rf', '--one-file-system', '--', item.stage], 'Cannot remove duplicate release staging'); fsyncDirectory(managedLayout.releases); }
+  if (journal.release.status === 'published' && (journal.release.cleanupDev !== undefined || journal.release.cleanupIno !== undefined)) {
+    if (journal.release.cleanupDev === undefined || journal.release.cleanupIno === undefined) throw new Error('Release cleanup journal identity is incomplete');
+    removeBoundReleaseCleanup(host, item.stage, managedLayout.releases, journal.release.cleanupDev, journal.release.cleanupIno);
+    const { cleanupDev: _cleanupDev, cleanupIno: _cleanupIno, ...release } = journal.release; journal = { ...journal, release }; replaceJournal(journalPath, journal);
+  } else if (journal.release.status === 'published' && existsSync(item.stage)) throw new Error('Published release has an unbound staging cleanup path');
   return { journal, manifest: await verifyRelease(final), path: final };
+}
+
+export function removeBoundReleaseCleanup(host: InstallerHost, stage: string, parent: string, dev: number, ino: number): void {
+  if (!existsSync(stage)) return;
+  const cleanup = lstatSync(stage);
+  if (!cleanup.isDirectory() || cleanup.isSymbolicLink() || cleanup.dev !== dev || cleanup.ino !== ino) throw new Error('Release cleanup staging identity changed');
+  checked(host, '/usr/bin/rm', ['-rf', '--one-file-system', '--', stage], 'Cannot remove duplicate release staging'); fsyncDirectory(parent);
 }
 
 function emptyMountpoint(root: string, uid: number, gid: number, expected?: { dev: number; ino: number }): void {
