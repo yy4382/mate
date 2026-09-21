@@ -11,14 +11,14 @@ import {within} from '../execution/paths.js';
 import {acquireLock} from './lock.js';
 import {ContainerBackend} from '../execution/container.js';
 import {assertDockerControlIsolation,executionScope} from './paths.js';
-import {assertDeploymentRollbackAuthorization,readDeploymentJournal,type DeploymentJournal} from '../deployment/upgrade.js';
+import {assertDeploymentRollbackAuthorization,readDeploymentJournal,deploymentUpgradeInProgress,type DeploymentJournal} from '../deployment/upgrade.js';
 
 const identitySchema=z.object({path:z.string(),device:z.number().int(),inode:z.number().int(),manifestDevice:z.number().int(),manifestInode:z.number().int(),manifestHash:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
 const journalSchema=z.object({version:z.literal(1),phase:z.enum(['planned','decided']),configurationHash:z.string(),target:identitySchema,current:identitySchema.optional(),completedAgents:z.array(z.string()),databaseComplete:z.boolean()}).strict().superRefine((value,ctx)=>{if(new Set(value.completedAgents).size!==value.completedAgents.length)ctx.addIssue({code:'custom',message:'Restore journal contains duplicate Agent completions'});});
 type RestoreJournal=z.infer<typeof journalSchema>;
 export type RestorePhase='decision'|`agent:${string}`|'database';
 export interface RestoreOptions{currentCheckpoint?:string;environment?:DeploymentEnvironment;projectRoot?:string;afterPhase?:(phase:RestorePhase)=>void|Promise<void>}
-interface RestoreTestingOptions extends RestoreOptions{checkpointOwnerUid?:number;checkpointOwnerGid?:number}
+interface RestoreTestingOptions extends RestoreOptions{checkpointOwnerUid?:number;checkpointOwnerGid?:number;retainJournal?:boolean}
 
 function identityEqual(left:CheckpointIdentity,right:CheckpointIdentity):boolean{return encode(left)===encode(right);}
 async function exists(path:string):Promise<boolean>{try{await lstat(path);return true;}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return false;throw error;}}
@@ -87,7 +87,7 @@ async function managedRestore(targetConfig:DaemonConfig,currentConfig:DaemonConf
  const source=await verifyCheckpoint(journal.target.path,targetConfig,{requiredOwnerUid:checkpointOwnerUid,requiredOwnerGid:checkpointOwnerGid});if(!identityEqual(source.identity,journal.target))throw new Error('Restore checkpoint changed after decision');
  for(const agent of source.manifest.agents){assertBoundary();const root=roots.get(agent.agentId)!;if(journal.completedAgents.includes(agent.agentId))await assertRestoredWorkspace(root,agent.entries,agent.agentId);else{await restoreWorkspace(source.root,agent.agentId,root,agent.entries);assertBoundary();await assertRestoredWorkspace(root,agent.entries,agent.agentId);journal={...journal,completedAgents:[...journal.completedAgents,agent.agentId]};await atomicJson(journalPath,journal);await options.afterPhase?.(`agent:${agent.agentId}`);}}
  if(journal.databaseComplete)await assertRestoredDatabase(databasePath,source.manifest);else if(databaseAlreadyRestored){journal={...journal,databaseComplete:true};await atomicJson(journalPath,journal);}else{await rm(`${databasePath}-wal`,{force:true});await rm(`${databasePath}-shm`,{force:true});await removeNamedTemps(state,'.mate.sqlite.restore-');await fsyncDirectory(state);await restoreRegularFile(join(source.root,'mate.sqlite'),databasePath,source.manifest.database);await assertRestoredDatabase(databasePath,source.manifest);journal={...journal,databaseComplete:true};await atomicJson(journalPath,journal);await options.afterPhase?.('database');}
- await rm(journalPath);await fsyncDirectory(control);
+ if(!options.retainJournal){await rm(journalPath);await fsyncDirectory(control);}
  }finally{release();}
 }
 
@@ -109,7 +109,7 @@ async function restore(config:DaemonConfig,checkpoint:string,options:RestoreTest
 }
 
 export async function restoreCheckpoint(config:DaemonConfig,checkpoint:string,options:RestoreOptions={}):Promise<'v1'|'v2'>{
- if(readDeploymentJournal(config.runtime.dataDir))throw new Error('Ordinary restore is blocked while a deployment upgrade journal exists');
+ if(deploymentUpgradeInProgress(config.runtime.dataDir))throw new Error('Ordinary restore is blocked while a deployment upgrade journal exists');
  return restore(config,checkpoint,options);
 }
 
@@ -119,7 +119,7 @@ async function deploymentRestore(oldConfig:DaemonConfig,newConfig:DaemonConfig,j
  const ownerUid=options.checkpointOwnerUid??0,environment=options.environment??nodeDeploymentEnvironment(),ownerGid=options.checkpointOwnerGid??environment.workspaceHost.gid();
  const [verifiedTarget,verifiedCurrent]=await Promise.all([verifyCheckpoint(target,oldConfig,{requiredOwnerUid:ownerUid,requiredOwnerGid:ownerGid}),verifyCheckpoint(current,newConfig,{requiredOwnerUid:ownerUid,requiredOwnerGid:ownerGid})]);
  if(!identityEqual(verifiedTarget.identity,journal.checkpoints.rollback)||!identityEqual(verifiedCurrent.identity,journal.checkpoints.candidate!))throw new Error('Deployment rollback checkpoint was replaced');
- await managedRestore(oldConfig,newConfig,target,{...options,currentCheckpoint:current,environment});return'v2';
+ await managedRestore(oldConfig,newConfig,target,{...options,currentCheckpoint:current,environment,retainJournal:true});return'v2';
 }
 
 /** Deployment-only rollback. The ordinary restore API intentionally cannot cross configuration identities. */
@@ -137,4 +137,18 @@ export async function restoreCheckpointForTesting(config:DaemonConfig,checkpoint
 /** Test-only ownership seam for the deployment rollback contract. */
 export async function restoreDeploymentCheckpointForTesting(oldConfig:DaemonConfig,newConfig:DaemonConfig,journal:DeploymentJournal,options:RestoreTestingOptions={}):Promise<'v2'>{
  if(!process.env.VITEST)throw new Error('Checkpoint ownership overrides are test-only');return deploymentRestore(oldConfig,newConfig,journal,options);
+}
+
+/** Root orchestration calls this only after durably recording that deployment restore returned. */
+export async function finishDeploymentRestoreCheckpoint(oldConfig:DaemonConfig,newConfig:DaemonConfig):Promise<void>{
+ const data=newConfig.runtime.dataDir,journal=readDeploymentJournal(data,{requiredOwnerUid:0,requiredOwnerGid:process.getgid?.()??-1});if(!journal)throw new Error('Deployment restore journal required');
+ assertDeploymentRollbackAuthorization(journal,oldConfig,newConfig,journal.checkpoints.rollback.path,journal.checkpoints.candidate!.path);
+ const unlock=acquireLock(join(data,'state','daemon.lock'));try{
+  const path=join(data,'control','restore.json'),restore=await readJournal(path);if(!restore)return;
+  if(restore.phase!=='decided'||!restore.databaseComplete||!identityEqual(restore.target,journal.checkpoints.rollback)||restore.configurationHash!==journal.old.configurationHash||encode([...restore.completedAgents].sort())!==encode(oldConfig.mate.agents.map(a=>a.id).sort()))throw new Error('Deployment restore has not completed');
+  const target=await verifyCheckpoint(restore.target.path,oldConfig,{requiredOwnerUid:0,requiredOwnerGid:process.getgid?.()??-1});
+  const boundary=verifyDeploymentWorkspaces(oldConfig);if(!boundary)throw new Error('Managed restore workspace boundary unavailable');
+  for(const agent of target.manifest.agents)await assertRestoredWorkspace(boundary.roots.get(agent.agentId)!,agent.entries,agent.agentId);
+  await assertRestoredDatabase(join(data,'state','mate.sqlite'),target.manifest);await rm(path);await fsyncDirectory(dirname(path));
+ }finally{unlock();}
 }

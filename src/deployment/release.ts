@@ -11,6 +11,7 @@ const inventoryEntrySchema = z.discriminatedUnion('type', [
 ]);
 export const releaseManifestSchema = z.object({
   version: z.literal(1), releaseId: z.string().regex(hashPattern), gitCommit: z.string().regex(/^[a-f0-9]{7,64}$/),
+  recoveryProtocol:z.number().int().positive(),
   target: z.object({ platform: z.literal('linux'), arch: z.literal('x64'), node: z.string().regex(/^v24\./), modulesAbi: z.string().regex(/^\d+$/), packageManager: z.literal('pnpm@10.33.0') }).strict(),
   lockSha256: z.string().regex(hashPattern), inventorySha256: z.string().regex(hashPattern), dependencyInventorySha256: z.string().regex(hashPattern),
   nativeAddons: z.array(z.object({ path: z.string().min(1), sha256: z.string().regex(hashPattern) }).strict()),
@@ -85,7 +86,7 @@ export async function createReleaseManifest(rootPath: string, gitCommit: string,
   const inventory = await inventoryTree(root), lock = inventory.find(item => item.path === 'pnpm-lock.yaml');
   if (!lock || lock.type !== 'file') throw new Error('Release lockfile is missing');
   const inventorySha256 = digest(stable(inventory)), base = {
-    version: 1 as const, gitCommit, target: { platform: 'linux' as const, arch: 'x64' as const, node: runtime.node, modulesAbi: runtime.modulesAbi, packageManager: 'pnpm@10.33.0' as const },
+    version: 1 as const, gitCommit, recoveryProtocol:1, target: { platform: 'linux' as const, arch: 'x64' as const, node: runtime.node, modulesAbi: runtime.modulesAbi, packageManager: 'pnpm@10.33.0' as const },
     lockSha256: lock.sha256, inventorySha256, dependencyInventorySha256: dependencyInventory(inventory),
     nativeAddons: inventory.filter((item): item is Extract<InventoryEntry, { type: 'file' }> => item.type === 'file' && item.path.endsWith('.node')).map(item => ({ path: item.path, sha256: item.sha256 })), inventory,
   };

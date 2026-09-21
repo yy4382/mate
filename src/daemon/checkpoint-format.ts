@@ -97,11 +97,11 @@ async function assertPayload(root:string,manifest:CheckpointManifest):Promise<vo
  if(encode((await readdir(root)).sort())!==encode(top)||encode((await readdir(join(root,'agents'))).sort())!==encode(agentNames))throw new Error('Checkpoint payload changed while validating');
 }
 export interface CheckpointTrust{requiredOwnerUid?:number;requiredOwnerGid?:number}
-interface CheckpointSealingHost{
+export interface CheckpointSealingHost{
  uid():number;
  lchown(path:string,uid:number,gid:number):Promise<void>;
  lstat(path:string):Promise<Stats>;
- open(path:string,flags:number):Promise<Pick<Awaited<ReturnType<typeof open>>,'stat'|'chown'|'chmod'|'sync'|'close'>>;
+ open(path:string,flags:number):Promise<{stat():Promise<Stats>;chown(uid:number,gid:number):Promise<void>;chmod(mode:number):Promise<void>;sync():Promise<void>;close():Promise<void>}>;
 }
 const nodeCheckpointSealingHost:CheckpointSealingHost={uid:()=>process.geteuid?.()??process.getuid?.()??-1,lchown,lstat,open:(path,flags)=>open(path,flags)};
 export async function verifyCheckpoint(path:string,config?:DaemonConfig,trust:CheckpointTrust={}):Promise<VerifiedCheckpoint>{
@@ -133,18 +133,19 @@ async function assertManagedOwnership(root:string,gid:number,host:CheckpointSeal
 }
 
 /** Root-only deployment boundary: make a completed checkpoint immutable to the service user. */
-export async function sealCheckpointForService(path:string,serviceUid:number,serviceGid:number):Promise<VerifiedCheckpoint>{
- const host=nodeCheckpointSealingHost;
+async function sealCheckpoint(path:string,serviceUid:number,serviceGid:number,resume?:IncompleteCheckpointIdentity,host:CheckpointSealingHost=nodeCheckpointSealingHost):Promise<VerifiedCheckpoint>{
  if(host.uid()!==0)throw new Error('Checkpoint sealing must run as root');
  if(!Number.isSafeInteger(serviceUid)||serviceUid<0||!Number.isSafeInteger(serviceGid)||serviceGid<0)throw new Error('Checkpoint service uid/gid must be valid');
- const before=await verifyCheckpoint(path,undefined,{requiredOwnerUid:serviceUid,requiredOwnerGid:serviceGid}),rootIdentity=await lstat(before.root),parent=dirname(before.root),parentStat=await host.lstat(parent);
+ const before=await verifyCheckpoint(path,undefined,resume?{}:{requiredOwnerUid:serviceUid,requiredOwnerGid:serviceGid}),rootIdentity=await lstat(before.root),parent=dirname(before.root),parentStat=await host.lstat(parent);
  if(!parentStat.isDirectory()||parentStat.isSymbolicLink()||parentStat.uid!==0||parentStat.gid!==serviceGid||(parentStat.mode&0o777)!==0o750)throw new Error('Checkpoint parent must be root:service-group 0750');
+ if(resume&&(resolve(resume.path)!==before.root||resume.device!==rootIdentity.dev||resume.inode!==rootIdentity.ino))throw new Error('Checkpoint sealing resume identity changed');
  const sealHandle=async(current:string,expected:Stats,kind:'directory'|'file')=>{
   const flags=constants.O_RDONLY|constants.O_NOFOLLOW|(kind==='directory'?constants.O_DIRECTORY:0),handle=await host.open(current,flags);
   try{const opened=await handle.stat();if(opened.dev!==expected.dev||opened.ino!==expected.ino||(kind==='directory'?!opened.isDirectory():!opened.isFile())||opened.nlink!==expected.nlink)throw new Error('Checkpoint entry changed while sealing');await handle.chown(0,serviceGid);await handle.chmod(kind==='directory'?0o750:0o640);await handle.sync();const after=await handle.stat();if(after.dev!==opened.dev||after.ino!==opened.ino)throw new Error('Checkpoint entry changed while sealing');}finally{await handle.close();}
  };
  const visit=async(current:string,expected?:Stats):Promise<void>=>{
   const stat=expected??await host.lstat(current);
+  if(resume&&(![0,serviceUid].includes(stat.uid)||stat.gid!==serviceGid))throw new Error('Checkpoint sealing resume owner changed');
   if(stat.isSymbolicLink()){await host.lchown(current,0,serviceGid);const after=await host.lstat(current);if(!after.isSymbolicLink()||after.dev!==stat.dev||after.ino!==stat.ino||after.uid!==0||after.gid!==serviceGid)throw new Error('Checkpoint symlink changed while sealing');return;}
   if(stat.isDirectory()){
    // Revoke service writes through the pinned directory fd before enumerating its children.
@@ -160,6 +161,12 @@ export async function sealCheckpointForService(path:string,serviceUid:number,ser
  return after;
 }
 
+export async function sealCheckpointForService(path:string,serviceUid:number,serviceGid:number):Promise<VerifiedCheckpoint>{return sealCheckpoint(path,serviceUid,serviceGid);}
+/** Upgrade-only restart boundary: the root journal must have pinned this directory before backup. */
+export async function resumeCheckpointSealForService(path:string,serviceUid:number,serviceGid:number,identity:IncompleteCheckpointIdentity):Promise<VerifiedCheckpoint>{return sealCheckpoint(path,serviceUid,serviceGid,identity);}
+/** Test-only ownership host; production entry points do not accept it. */
+export async function resumeCheckpointSealForTesting(path:string,serviceUid:number,serviceGid:number,identity:IncompleteCheckpointIdentity,host:CheckpointSealingHost):Promise<VerifiedCheckpoint>{if(!process.env.VITEST)throw new Error('Checkpoint sealing host override is test-only');return sealCheckpoint(path,serviceUid,serviceGid,identity,host);}
+
 export function sameCheckpointIdentity(left:CheckpointIdentity,right:CheckpointIdentity):boolean{
  return left.path===right.path&&left.device===right.device&&left.inode===right.inode&&left.manifestDevice===right.manifestDevice&&left.manifestInode===right.manifestInode&&left.manifestHash===right.manifestHash;
 }
@@ -173,11 +180,15 @@ export async function inspectIncompleteCheckpoint(path:string):Promise<Incomplet
 }
 
 /** Root-only cleanup paired with the identity captured before invoking the service-user backup. */
-export async function removeIncompleteCheckpoint(identity:IncompleteCheckpointIdentity):Promise<void>{
+async function cleanupIncompleteCheckpoint(identity:IncompleteCheckpointIdentity,keepRoot:boolean):Promise<void>{
  if((process.geteuid?.()??process.getuid?.()??-1)!==0)throw new Error('Incomplete checkpoint cleanup must run as root');
  const current=await inspectIncompleteCheckpoint(identity.path);if(current.device!==identity.device||current.inode!==identity.inode)throw new Error('Incomplete checkpoint directory was replaced');
- const parent=dirname(identity.path),parentBefore=await lstat(parent);await rm(identity.path,{recursive:true});const parentAfter=await lstat(parent);if(parentBefore.dev!==parentAfter.dev||parentBefore.ino!==parentAfter.ino)throw new Error('Checkpoint parent changed during cleanup');await fsyncDirectory(parent);
+ const parent=dirname(identity.path),parentBefore=await lstat(parent);if(keepRoot){for(const name of await readdir(identity.path))await rm(join(identity.path,name),{recursive:true,force:true});await fsyncDirectory(identity.path);}else await rm(identity.path,{recursive:true});const parentAfter=await lstat(parent);if(parentBefore.dev!==parentAfter.dev||parentBefore.ino!==parentAfter.ino)throw new Error('Checkpoint parent changed during cleanup');await fsyncDirectory(parent);
 }
+export async function removeIncompleteCheckpoint(identity:IncompleteCheckpointIdentity):Promise<void>{return cleanupIncompleteCheckpoint(identity,false);}
+/** Preserve the directory inode already pinned by the root upgrade journal. */
+export async function resetIncompleteCheckpoint(identity:IncompleteCheckpointIdentity):Promise<void>{return cleanupIncompleteCheckpoint(identity,true);}
+
 export async function publishCheckpoint(root:string,manifest:CheckpointManifest):Promise<void>{
  const validated=validateCheckpointManifest(manifest);await sealTree(root);const temporary=join(root,`.COMPLETE-${randomUUID()}`),handle=await open(temporary,constants.O_CREAT|constants.O_EXCL|constants.O_WRONLY|constants.O_NOFOLLOW,0o600);let published=false;
  try{await handle.writeFile(JSON.stringify(validated));await handle.sync();await handle.close();await chmod(temporary,0o640);await fsyncPath(temporary);await rename(temporary,join(root,'COMPLETE.json'));published=true;await fsyncDirectory(root);await fsyncDirectory(dirname(root));}

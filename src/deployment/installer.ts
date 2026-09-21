@@ -11,7 +11,7 @@ import { createReleaseManifest, verifyRelease, type ReleaseManifest } from './re
 import { createDeploymentPlan, type DeploymentPlan, type PlannedWorkspace } from './plan.js';
 import { deploymentSpecSchema, type DeploymentSpec } from './spec.js';
 import { assertSafeUnitName, managedLayout, renderMaintenanceWrapper, renderMountUnit, renderService, type ManagedMount } from './systemd.js';
-import {readDeploymentJournal} from './upgrade.js';
+import {readDeploymentJournal,deploymentUpgradeInProgress} from './upgrade.js';
 
 const journalSchema = z.object({
   version: z.literal(1), transaction: z.string().uuid(), inputIdentity: z.string().regex(/^[a-f0-9]{64}$/), uid: z.number().int().nonnegative(), gid: z.number().int().nonnegative(),
@@ -379,14 +379,14 @@ function workspaceManifest(plan: DeploymentPlan, uid: number, gid: number): stri
   return `${JSON.stringify({ version: 1, mounts: plan.workspaces.map(item => ({ kind: item.kind, ...(item.agentId ? { agentId: item.agentId } : {}), root: item.root, backingFile: item.backingFile, capacityBytes: item.capacityBytes, ownerUid: uid, ownerGid: gid })) }, null, 2)}\n`;
 }
 
-function publishCurrent(release: string): void {
-  if (pathExists(managedLayout.current)) { const stat = lstatSync(managedLayout.current); if (!stat.isSymbolicLink() || realpathSync(managedLayout.current) !== release) throw new Error('Existing current release differs; upgrades belong to the V2d transaction'); return; }
-  const temporary = join('/opt/mate', `.current.mate-${randomUUID()}`); symlinkSync(release, temporary); renameSync(temporary, managedLayout.current); fsyncDirectory('/opt/mate');
+function publishReleaseLink(path:string,release: string,label:string): void {
+  if (pathExists(path)) { const stat = lstatSync(path); if (!stat.isSymbolicLink() || realpathSync(path) !== release) throw new Error(`Existing ${label} release differs; upgrades belong to the V2d transaction`); return; }
+  const temporary = join('/opt/mate', `.${label}.mate-${randomUUID()}`); symlinkSync(release, temporary); renameSync(temporary,path); fsyncDirectory('/opt/mate');
 }
 
 export async function installDeployment(spec: DeploymentSpec, config: DaemonConfig, host: InstallerHost = nodeInstallerHost()): Promise<{ plan: DeploymentPlan; releaseId: string; serviceStarted: false }> {
   if (host.euid() !== 0) throw new Error('Deployment installation must run as root');
-  if(readDeploymentJournal(config.runtime.dataDir,{requiredOwnerUid:0}))throw new Error('Deployment upgrade journal blocks installation');
+  if(deploymentUpgradeInProgress(config.runtime.dataDir))throw new Error('Deployment upgrade journal blocks installation');
   const plan = preflightDeployment(spec, config, host), identity = serviceIdentity(host), requestedIdentity = inputIdentity(spec, config, plan, host);
   if (pathExists(bootstrapJournalPath) && pathExists(controlJournalPath)) throw new Error('Both bootstrap and control install journals exist');
   let journalPath = pathExists(controlJournalPath) ? controlJournalPath : bootstrapJournalPath;
@@ -409,7 +409,8 @@ export async function installDeployment(spec: DeploymentSpec, config: DaemonConf
   atomicExact(managedLayout.config, configText, 0, identity.gid, 0o640); atomicExact(managedLayout.environment, envText, 0, identity.gid, 0o640); atomicExact(managedLayout.manifest, workspaceManifest(plan, identity.uid, identity.gid), 0, identity.gid, 0o640);
   for (const unit of units) atomicExact(join('/etc/systemd/system', unit.unitName), renderMountUnit(unit), 0, 0, 0o644);
   atomicExact(managedLayout.service, renderService(units, spec.daemonMemoryMiB, plan.workspaces.filter(item => item.kind === 'external').map(item => item.root)), 0, 0, 0o644);
-  atomicExact(managedLayout.wrapper, renderMaintenanceWrapper(plan.workspaces.filter(item => item.kind === 'external').map(item => item.root)), 0, 0, 0o755);
+  publishReleaseLink(managedLayout.controller,published.path,'controller');
+  atomicExact(managedLayout.wrapper, renderMaintenanceWrapper(plan.workspaces.filter(item => item.kind === 'external').map(item => item.root),managedLayout.controller), 0, 0, 0o755);
   journal = { ...journal, phase: 'units' }; replaceJournal(journalPath, journal);
   checked(host, '/usr/bin/systemctl', ['daemon-reload'], 'Cannot reload systemd'); for (const unit of units) checked(host, '/usr/bin/systemctl', ['enable', '--now', unit.unitName], `Cannot enable ${unit.unitName}`);
   journal = { ...journal, phase: 'mounted' }; replaceJournal(journalPath, journal);
@@ -417,14 +418,14 @@ export async function installDeployment(spec: DeploymentSpec, config: DaemonConf
   checked(host, '/usr/bin/systemd-run', [...properties, '/usr/bin/node', entry, 'doctor', managedLayout.config, '--allow-missing-secrets'], 'Candidate doctor failed');
   checked(host, '/usr/bin/systemd-run', [...properties, '/usr/bin/node', entry, 'offline-probe', managedLayout.config], 'Candidate offline probe failed');
   journal = { ...journal, phase: 'probed' }; replaceJournal(journalPath, journal);
-  publishCurrent(published.path); checked(host, '/usr/bin/systemctl', ['disable', '--now', 'mate.service'], 'Cannot keep mate.service disabled after installation');
+  publishReleaseLink(managedLayout.current,published.path,'current'); checked(host, '/usr/bin/systemctl', ['disable', '--now', 'mate.service'], 'Cannot keep mate.service disabled after installation');
   journal = { ...journal, phase: 'published' }; replaceJournal(journalPath, journal); atomicExact(completedPath, `${JSON.stringify({ version: 1, inputIdentity: requestedIdentity, releaseId: published.manifest.releaseId }, null, 2)}\n`, 0, 0, 0o600); unlinkSync(journalPath); fsyncDirectory(dirname(journalPath));
   return { plan, releaseId: published.manifest.releaseId, serviceStarted: false };
 }
 
 export function disableDeployment(config: DaemonConfig, host: InstallerHost = nodeInstallerHost()): void {
   if (host.euid() !== 0) throw new Error('Deployment disable must run as root');
-  if(readDeploymentJournal(config.runtime.dataDir,{requiredOwnerUid:0}))throw new Error('Deployment upgrade journal blocks disable');
+  if(deploymentUpgradeInProgress(config.runtime.dataDir))throw new Error('Deployment upgrade journal blocks disable');
   checked(host, '/usr/bin/systemctl', ['disable', '--now', 'mate.service'], 'Cannot stop Mate service');
   checked(host, managedLayout.wrapper, ['offline-probe'], 'Cannot recover and verify the stopped execution scope');
   const manifest = JSON.parse(readFileSync(config.runtime.workspaceManifest!, 'utf8')) as { mounts: Array<{ root: string }> }, units = manifest.mounts.map(item => checked(host, '/usr/bin/systemd-escape', ['--path', '--suffix=mount', item.root], 'Cannot derive mount unit'));

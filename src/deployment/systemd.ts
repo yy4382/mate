@@ -1,7 +1,7 @@
 import { basename, resolve } from 'node:path';
 
 export const managedLayout = Object.freeze({
-  releases: '/opt/mate/releases', current: '/opt/mate/current', configDir: '/etc/mate',
+  releases: '/opt/mate/releases', current: '/opt/mate/current', controller: '/opt/mate/controller', configDir: '/etc/mate',
   config: '/etc/mate/mate.json', environment: '/etc/mate/mate.env', manifest: '/etc/mate/workspaces.json',
   data: '/var/lib/mate', volumes: '/var/lib/mate-volumes', checkpoints: '/var/backups/mate',
   service: '/etc/systemd/system/mate.service', wrapper: '/usr/local/sbin/matectl',
@@ -45,7 +45,8 @@ const unitProperties = [
   '--property=CapabilityBoundingSet=', '--property=RestrictSUIDSGID=yes', '--property=LockPersonality=yes',
 ].join(' ');
 
-export function renderMaintenanceWrapper(externalRoots: readonly string[] = []): string {
+export function renderMaintenanceWrapper(externalRoots: readonly string[] = [], upgradeController: string = managedLayout.current): string {
+  if(resolve(upgradeController)!==upgradeController||/[\0\r\n]/.test(upgradeController))throw new Error('Invalid upgrade controller path');
   if (externalRoots.some(root => resolve(root) !== root)) throw new Error('Invalid maintenance workspace root');
   const writeProperties = externalRoots.map(root => `--property=ReadWritePaths=${shellQuote(root)}`).join(' ');
   return `#!/bin/sh
@@ -73,6 +74,11 @@ checkpoint_name() {
 }
 
 case "${'$'}{1-}" in
+  candidate|resume|rollback|activate|finalize|fix-forward)
+    [ "${'$'}#" -eq 1 ] || { echo "Upgrade commands take no arguments" >&2; exit 1; }
+    exec /usr/bin/node ${shellQuote(`${upgradeController}/dist/src/deployment/cli.js`)} "$1"
+    ;;
+
   doctor)
     [ "${'$'}#" -eq 1 ] || { echo "Usage: matectl doctor" >&2; exit 1; }
     exec /usr/bin/systemd-run --quiet --collect --wait --pipe ${unitProperties} ${writeProperties} \\

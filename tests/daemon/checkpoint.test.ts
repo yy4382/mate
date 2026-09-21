@@ -1,10 +1,11 @@
+import {lstat as lstatAsync,open as openAsync} from 'node:fs/promises';
 import {afterEach,expect,it,vi} from 'vitest';
 import {chmodSync,existsSync,lstatSync,mkdtempSync,mkdirSync,readFileSync,readdirSync,realpathSync,renameSync,rmSync,symlinkSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
-import {backup} from '../../src/daemon/backup.js';
-import {inspectIncompleteCheckpoint,removeIncompleteCheckpoint,restoreRegularFile,sealCheckpointForService,validateCheckpointManifest,verifyCheckpoint} from '../../src/daemon/checkpoint-format.js';
+import {backup,backupDeploymentSnapshot} from '../../src/daemon/backup.js';
+import {resumeCheckpointSealForTesting,type CheckpointSealingHost,inspectIncompleteCheckpoint,removeIncompleteCheckpoint,restoreRegularFile,sealCheckpointForService,validateCheckpointManifest,verifyCheckpoint} from '../../src/daemon/checkpoint-format.js';
 import {restoreCheckpointForTesting as restoreCheckpoint,restoreDeploymentCheckpointForTesting} from '../../src/daemon/restore.js';
 import {daemonConfigSchema,type DaemonConfig} from '../../src/daemon/config.js';
 import {Store} from '../../src/storage/store.js';
@@ -44,6 +45,10 @@ it('creates a strict v2 inventory without following symlinks or including extern
  const research=verified.manifest.agents[0]!.entries;expect(research).toContainEqual(expect.objectContaining({path:'notes/memory-link',type:'symlink',target:'../MEMORY.md'}));expect(research.some(entry=>entry.path.startsWith('lost+found'))).toBe(false);expect(JSON.stringify(verified.manifest)).not.toContain('sentinel');expect(readFileSync(join(f.external,'sentinel'),'utf8')).toBe('external');
  expect(lstatSync(checkpoint).mode&0o022).toBe(0);expect(lstatSync(join(checkpoint,'mate.sqlite')).mode&0o022).toBe(0);
  writeFileSync(join(checkpoint,'agents','research','extra'),'tamper');await expect(verifyCheckpoint(checkpoint,f.config)).rejects.toThrow('inventory');
+});
+
+it('takes a deployment recovery snapshot without constructing Store or migrating an unknown candidate schema',async()=>{
+ const f=managedFixture(['research']),store=seed(f,'candidate');store.db.pragma('user_version = 999');store.close();const checkpoint=join(f.root,'raw-candidate');mkdirSync(checkpoint,{mode:0o700});await backupDeploymentSnapshot(f.data,checkpoint,f.config);expect((await verifyCheckpoint(checkpoint,f.config)).manifest.database.path).toBe('mate.sqlite');expect(()=>new Store(join(f.state,'mate.sqlite'))).toThrow('Unsupported database version');
 });
 
 it('rejects special workspace files and malformed inventory paths instead of broadening the snapshot',async()=>{
@@ -100,7 +105,7 @@ it('keeps cross-configuration checkpoint verification inside the unactivated dep
  const targetIdentity=(await verifyCheckpoint(target,oldConfig)).identity,currentIdentity=(await verifyCheckpoint(current,nextConfig)).identity,oldReleaseId='b'.repeat(64),nextReleaseId='c'.repeat(64),old=releaseIdentity(oldConfig,join(f.root,oldReleaseId),oldReleaseId),journal=parseDeploymentJournal({version:1,upgradeId:'44444444-4444-4444-8444-444444444444',attempt:{id:'44444444-4444-4444-8444-444444444444',previous:old},phase:'candidate',everActivated:false,old,next:releaseIdentity(nextConfig,join(f.root,nextReleaseId),nextReleaseId),topology,checkpoints:{rollback:targetIdentity,candidate:currentIdentity}});
  const drift=structuredClone(nextConfig);drift.runtime.workspaceGrants[0]!.root=join(f.root,'different-external');await expect(restoreDeploymentCheckpointForTesting(oldConfig,drift,journal,{environment:f.environment,...checkpointTrust(target)})).rejects.toThrow('configuration identity');
  writeFileSync(unitPath,'drifted mount');await expect(restoreDeploymentCheckpointForTesting(oldConfig,nextConfig,journal,{environment:f.environment,...checkpointTrust(target)})).rejects.toThrow('mount unit');writeFileSync(unitPath,'fixed mount');
- await restoreDeploymentCheckpointForTesting(oldConfig,nextConfig,journal,{environment:f.environment,...checkpointTrust(target)});expect(readFileSync(join(f.agents,'research','MEMORY.md'),'utf8')).toBe('old-research');const restored=new Store(join(f.state,'mate.sqlite'));expect(restored.db.prepare("SELECT count(*) n FROM audit WHERE kind='candidate'").get()).toEqual({n:0});restored.close();
+ await restoreDeploymentCheckpointForTesting(oldConfig,nextConfig,journal,{environment:f.environment,...checkpointTrust(target)});expect(existsSync(join(f.control,'restore.json'))).toBe(true);await restoreDeploymentCheckpointForTesting(oldConfig,nextConfig,journal,{environment:f.environment,...checkpointTrust(target)});expect(readFileSync(join(f.agents,'research','MEMORY.md'),'utf8')).toBe('old-research');const restored=new Store(join(f.state,'mate.sqlite'));expect(restored.db.prepare("SELECT count(*) n FROM audit WHERE kind='candidate'").get()).toEqual({n:0});restored.close();
  const activated=parseDeploymentJournal({...journal,phase:'activated',everActivated:true});await expect(restoreDeploymentCheckpointForTesting(oldConfig,nextConfig,activated,{environment:f.environment,...checkpointTrust(target)})).rejects.toThrow('Activated deployment');
 });
 
@@ -126,4 +131,15 @@ it.each([true,false])('finishes a database-complete=%s decided resume without re
 it('keeps version 1 on its original absent-dataDir compatibility path',async()=>{
  const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-v1-restore-'))),data=join(root,'data'),checkpoint=join(root,'checkpoint');mkdirSync(join(checkpoint,'agents','research'),{recursive:true});writeFileSync(join(checkpoint,'agents','research','MEMORY.md'),'legacy');const database=new Store(join(checkpoint,'mate.sqlite'));database.register('research','v1',[]);database.close();writeFileSync(join(checkpoint,'COMPLETE.json'),JSON.stringify({version:1,dataDir:data,at:new Date().toISOString()}));
  const config=daemonConfigSchema.parse({mate:configFixture,runtime:{dataDir:data,workspaceGrants:[],researchHosts:[]}});cleanups.push(()=>rmSync(root,{recursive:true,force:true}));expect(await restoreCheckpoint(config,checkpoint)).toBe('v1');expect(readFileSync(join(data,'agents','research','MEMORY.md'),'utf8')).toBe('legacy');await expect(restoreCheckpoint(config,checkpoint)).rejects.toThrow('absent destination');
+});
+
+it('resumes partial checkpoint ownership sealing only for the root-journal-pinned directory',async()=>{
+ const f=managedFixture(['research']),store=seed(f,'target'),checkpoint=await take(store,f,'checkpoint');store.close();chmodSync(f.root,0o750);const actual=lstatSync(checkpoint),bound={path:checkpoint,device:actual.dev,inode:actual.ino},uid=actual.uid,gid=actual.gid,owners=new Map<string,number>();let writes=0,interrupt=true;
+ const facts=async(path:string)=>{const stat=await lstatAsync(path);return Object.assign(stat,{uid:path===f.root?0:owners.get(path)??uid,gid});};
+ const host:CheckpointSealingHost={uid:()=>0,lstat:facts,lchown:async(path,owner)=>{owners.set(path,owner);},open:async(path,flags)=>{
+  const handle=await openAsync(path,flags);return{stat:async()=>{const stat=await handle.stat();return Object.assign(stat,{uid:owners.get(path)??uid,gid});},chown:async(owner)=>{if(interrupt&&++writes===2)throw new Error('sealing interrupted');owners.set(path,owner);},chmod:mode=>handle.chmod(mode),sync:()=>handle.sync(),close:()=>handle.close()};
+ }};
+ await expect(resumeCheckpointSealForTesting(checkpoint,uid,gid,bound,host)).rejects.toThrow('sealing interrupted');expect(owners.get(checkpoint)).toBe(0);interrupt=false;
+ await expect(resumeCheckpointSealForTesting(checkpoint,uid,gid,{...bound,inode:bound.inode+1},host)).rejects.toThrow('resume identity changed');
+ const verified=await resumeCheckpointSealForTesting(checkpoint,uid,gid,bound,host);expect(verified.identity.inode).toBe(bound.inode);expect([...owners.values()].every(owner=>owner===0)).toBe(true);await verifyCheckpoint(checkpoint,f.config);
 });
