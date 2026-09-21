@@ -1,10 +1,10 @@
 import { z } from 'zod';
-import type { MateConfig } from '../config.js';
+import type { TeamSettings } from '../domain/agents.js';
 import type { Store, RunToken } from '../storage/store.js';
 export interface Account { agent_id: string; max_runs: number; max_tokens: number; max_cost: number; runs: number; tokens: number; cost: number }
 /** Persistent finite account. Only config seeds it; only the owner changes limits. */
 export class BudgetLedger {
-  constructor(readonly store: Store, readonly config: MateConfig) {}
+  constructor(readonly store: Store, readonly config: TeamSettings) {}
   account(actor: string): Account {
     if (!this.config.agents.some(a=>a.id===actor)) throw new Error('Unknown Agent');
     return this.store.atomic(()=>{

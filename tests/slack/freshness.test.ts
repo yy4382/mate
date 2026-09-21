@@ -81,7 +81,7 @@ it('crash recovery distinguishes unshared staging from uncertain sharing',()=>{
  s.recover();expect(s.output('staged')?.state).toBe('failed');expect(s.output('shared')?.state).toBe('unknown');expect(JSON.parse(s.output('shared')!.receipt!).fileId).toBe('FSHARED');
 });
 it('bounded publication coverage retains the newest evidence and never claims full coverage',()=>{
- const{s,c,run}=setup();for(let i=0;i<101;i++){const id=`published-${i}`,fileId=`F${i}`;s.queueOutput('research',id,{target,text:`caption-${i}`,artifact:{title:'t',content:'c',contentHash:'h'}});s.transitionOutput(id,'pending','sending');s.transitionOutput(id,'sending','sent',{fileId});s.db.prepare('INSERT INTO conversation_events(channel,thread,message_key,revision,kind) VALUES(?,?,?,?,?)').run(target.channel,target.thread,`artifact:${fileId}`,fileId,'artifact');}
+ const{s,c,run}=setup();for(let i=0;i<101;i++){const id=`published-${i}`,fileId=`F${i}`;c.messages.persistence.writes.queueOutput('research',id,{target,text:`caption-${i}`,artifact:{title:'t',content:'c',contentHash:'h'}});s.transitionOutput(id,'pending','sending');s.transitionOutput(id,'sending','sent',{fileId});s.db.prepare('INSERT INTO conversation_events(channel,thread,message_key,revision,kind) VALUES(?,?,?,?,?)').run(target.channel,target.thread,`artifact:${fileId}`,fileId,'artifact');}
  let page=c.attention.read(run,target) as any;const publications:any[]=[];while(true){expect(page.coverage.complete).toBe(false);publications.push(...page.publications);if(!page.nextCursor)break;page=c.attention.read(run,target,page.nextCursor);}
  expect(publications).toHaveLength(100);expect(publications.at(-1).caption).toBe('caption-100');expect(publications[0].caption).toBe('caption-1');
 });

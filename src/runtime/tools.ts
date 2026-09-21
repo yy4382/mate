@@ -3,13 +3,13 @@ import { buildBaseline } from './prompt.js';
 import { ToolEnvironment } from './environment.js';
 import { operationSchema } from '../execution/backend.js';
 import { MessageTasks } from '../coordination/messages.js';
-import { FreshnessGate } from '../slack/freshness.js';
+import { FreshnessGate } from '../conversations/freshness.js';
 import { z } from 'zod';
 import type { RunToken } from '../storage/store.js';
 import type { Collaboration } from '../collaboration/service.js';
 import type { Broker } from '../policy/broker.js';
-import type { Directory } from '../slack/directory.js';
-import { targetSchema,slackTs } from '../slack/messages.js';
+import type { ConversationDirectory } from '../conversations/directory.js';
+import { targetSchema,slackTs } from '../conversations/messages.js';
 import type { ToolReply } from './engine.js';
 const id = z.string().min(1).max(500), text = z.string().max(35000);
 const messageRef=z.object({channel:id,ts:slackTs}).strict();
@@ -79,9 +79,9 @@ const discoverySchemas={
 export const operationDocumentation = `Use tools.list to discover capabilities and tools.describe with {name} for exact schemas. Call the named operation directly, or tools.call with {name,input}. Available: ${Object.keys(schemas).join(', ')}.\n` + Object.entries(discoverySchemas).map(([name, schema]) => `${name}: ${JSON.stringify(z.toJSONSchema(schema))}`).join('\n');
 export interface AdditionalTools {
   environment?(actor:string):unknown;
-  attachment?(run:RunToken,workId:string,actionId:string,args:import('../daemon/attachments.js').AttachmentArgs,signal:AbortSignal):Promise<unknown>;
+  attachment?(run:RunToken,workId:string,actionId:string,args:import('../capabilities/artifacts.js').AttachmentArgs,signal:AbortSignal):Promise<unknown>;
   research(url: string, signal: AbortSignal): Promise<unknown>;
-  publish(run: RunToken, workId: string, actionId: string, args: import('../daemon/artifacts.js').PublishArgs, signal: AbortSignal): Promise<unknown>;
+  publish(run: RunToken, workId: string, actionId: string, args: import('../capabilities/artifacts.js').PublishArgs, signal: AbortSignal): Promise<unknown>;
 }
 type ToolContext={run:RunToken;workId:string;callId:string;signal:AbortSignal};
 const seatOperations=['actions.list','actions.read','sessions.status','sessions.checkpoint','sessions.reset','environment.info','agents','budget.read','attention.peek','messages.send','drafts.list','drafts.read','drafts.retry','drafts.continue','drafts.revise','drafts.discard',...Object.keys(fileSchemas),'exec'];
@@ -107,7 +107,7 @@ export class ToolRouter {
   readonly gate:FreshnessGate;
   readonly coordination:MessageTasks;
   readonly sessions:SessionLifecycle;
-  constructor(readonly collaboration: Collaboration, readonly broker: Broker, readonly additional?: AdditionalTools, readonly directory?: Directory, readonly provision?: (actor:string,workId:string)=>void) {this.sessions=new SessionLifecycle(collaboration,agent=>buildBaseline(agent,operationDocumentation));this.coordination=new MessageTasks(collaboration);this.gate=new FreshnessGate(collaboration.messages,collaboration.attention);collaboration.output.gate=this.gate;
+  constructor(readonly collaboration: Collaboration, readonly broker: Broker, readonly additional?: AdditionalTools, readonly directory?: ConversationDirectory, readonly provision?: (actor:string,workId:string)=>void) {this.sessions=new SessionLifecycle(collaboration,agent=>buildBaseline(agent,operationDocumentation));this.coordination=new MessageTasks(collaboration);this.gate=new FreshnessGate(collaboration.messages,collaboration.attention);collaboration.output.gate=this.gate;
     for(const [name,schema]of Object.entries(schemas))this.environment.register({name,schema,description:capabilityDescriptions[name]??`Mate ${name} capability; current actor, work, grants and submission gates apply.`,execute:(context,input)=>this.dispatch(context.run,context.workId,context.callId,name,input,context.signal)});
   }
   async call(run: RunToken, workId: string, callId: string, operation: string, input: unknown, signal: AbortSignal): Promise<ToolReply> {
@@ -152,7 +152,7 @@ export class ToolRouter {
     }
     // All local effects and their receipts commit together. Crash replay returns the recorded value.
     return s.atomic(() => {
-      const existing = s.prepareAction(run, actionId, operation === 'works.select' ? { operation, args } : { workId, operation, args });
+      const existing = c.messages.persistence.writes.prepareAction(run, actionId, operation === 'works.select' ? { operation, args } : { workId, operation, args });
       if(args.intentId)this.coordination.describe(actor,args.intentId);
       if(args.draftId)this.gate.describe(actor,args.draftId);
       const refresh = ['actions.list','actions.read','sessions.status','reminders.list','reminders.read','reminders.log','tasks.byMessage','tasks.intents','drafts.list','drafts.read','attention.peek','budget.read','works.list','tasks.list','messages.search','schedules.list','inbox.list'].includes(operation);
@@ -191,7 +191,7 @@ export class ToolRouter {
         case 'reminders.edit':value=c.reminders.edit(actor,args.reminderId,args.expectedVersion,args as any);break;
         case 'reminders.cancel':value=c.reminders.cancel(actor,args.reminderId,args.expectedVersion,args.cancelPending);break;
         case 'tasks.byMessage':value=this.coordination.find(actor,args.message)??null;break;
-        case 'tasks.intents':value=(s.db.prepare("SELECT i.id FROM task_intents i JOIN channel_access a ON a.agent_id=i.agent_id AND a.channel=json_extract(i.target,'$.channel') WHERE i.agent_id=? AND a.active=1 AND i.state='held'").all(actor) as {id:string}[]).map(i=>this.coordination.describe(actor,i.id));break;
+        case 'tasks.intents':value=(s.db.prepare("SELECT i.id FROM task_intents i JOIN canonical_targets ct ON ct.object_type='task_intents' AND ct.object_id=i.id JOIN channel_access a ON a.agent_id=i.agent_id AND a.channel=ct.conversation_id WHERE i.agent_id=? AND a.active=1 AND i.state='held'").all(actor) as {id:string}[]).map(i=>this.coordination.describe(actor,i.id));break;
         case 'tasks.retry':value=this.coordination.retry(run,args.intentId,args.viewToken);break;
         case 'tasks.continue':value=this.coordination.continue(run,args.intentId,args.holdId);break;
         case 'tasks.discard':value=this.coordination.discard(run,args.intentId);break;
@@ -208,7 +208,7 @@ export class ToolRouter {
         case 'attention.defer': c.attention.state(actor,args.target,'defer',args.until);break;
         case 'attention.mute': c.attention.state(actor,args.target,'mute',Number(args.active));break;
         case 'budget.read': value=c.ledger.account(actor); break;
-        case 'works.list': value=s.db.prepare("SELECT w.* FROM works w JOIN channel_access a ON a.channel=json_extract(w.target,'$.channel') WHERE a.agent_id=? AND a.active=1 ORDER BY w.rowid DESC LIMIT 100").all(actor); break;
+        case 'works.list': value=s.db.prepare("SELECT w.* FROM works w JOIN canonical_targets ct ON ct.object_type='works' AND ct.object_id=w.id JOIN channel_access a ON a.channel=ct.conversation_id WHERE a.agent_id=? AND a.active=1 ORDER BY w.rowid DESC LIMIT 100").all(actor); for(const row of value as {id:string}[])c.messages.persistence.records.mutableTarget('works',row.id); break;
         case 'works.select': c.selectWork(run,args.workId); this.provision?.(actor,args.workId); value={work:c.work(args.workId),grants:s.db.prepare('SELECT id,operations FROM grants WHERE agent_id=? AND work_id=? AND revoked=0 AND expires>?').all(actor,args.workId,Date.now())}; break;
         case 'agents': value = c.config.agents.map(a => ({ id: a.id, name: a.name, role: a.role, slackUserId: a.slackUserId })); break;
         case 'tasks.read': { const task = c.task(args.taskId); c.messages.requireAccess(actor, JSON.parse(task.target).channel); value = task; break; }

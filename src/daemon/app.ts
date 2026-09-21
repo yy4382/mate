@@ -1,3 +1,6 @@
+import { migrateLegacyReferences } from '../slack/reference-migration.js';
+import { slackConversationStorage } from '../slack/conversation-storage.js';
+import { Output } from '../conversations/output.js';
 import { storedConfiguration,saveConfiguration } from './migrate.js';
 import {Attachments}from './attachments.js';
 import { Directory } from '../slack/directory.js';
@@ -6,10 +9,10 @@ import { join, resolve } from 'node:path';
 import { App } from '@slack/bolt';
 import { ManagedSocket } from '../slack/socket.js';
 import { builtinModels } from '@earendil-works/pi-ai/providers/all';
-import type { DaemonConfig } from './config.js';
+import { sameConfiguration, type DaemonConfig } from './config.js';
 import { requireSecret } from '../config.js';
 import { Store, hash } from '../storage/store.js';
-import { Messages, Output } from '../slack/messages.js';
+import { Messages } from '../conversations/messages.js';
 import { WebSlackTransport } from '../slack/transport.js';
 import { DurableReceiver } from '../slack/receiver.js';
 import { Collaboration } from '../collaboration/service.js';
@@ -55,16 +58,22 @@ export class Daemon {
     let opened: Store | undefined;
     try {
       this.store = opened = new Store(join(state, 'mate.sqlite'));
+      // E2b2c conversion is tested offline but its runtime switch is not installed yet.
+      if(this.store.db.pragma('user_version',{simple:true})===17)throw new Error('Canonical conversation runtime switch is not yet available');
       const previous=storedConfiguration(this.store);
-      if(previous&&JSON.stringify(previous)!==JSON.stringify(config))throw new Error('Configuration changed; run explicit offline migration');
+      if(previous&&!sameConfiguration(previous,config))throw new Error('Configuration changed; run explicit offline migration');
       if(!previous&&this.store.db.prepare('SELECT 1 FROM agents').get())throw new Error('Legacy configuration requires explicit offline migration');
       const policyHash = hash(JSON.stringify(config.runtime));
       const oldPolicy = this.store.db.prepare("SELECT value FROM runtime_meta WHERE key='policy'").get() as { value: string } | undefined;
       if (oldPolicy && oldPolicy.value !== policyHash) throw new Error('Runtime policy changed; explicit policy migration required');
       this.store.db.prepare("INSERT INTO runtime_meta VALUES('policy',?) ON CONFLICT DO NOTHING").run(policyHash);
       const c = config.mate;
+      if (!this.store.db.prepare("SELECT 1 FROM runtime_meta WHERE key='reference_migration_v16'").get()) {
+        if (previous) throw new Error('Conversation references require explicit offline migration');
+        migrateLegacyReferences(this.store,c.teamId);
+      }
       const transport = new WebSlackTransport(Object.fromEntries(c.agents.map(a => [a.id, requireSecret(process.env, a.botTokenEnv)])));
-      const messages = new Messages(this.store, c), output = new Output(messages, transport);
+      const messages = new Messages(this.store, c, slackConversationStorage(this.store, c)), output = new Output(messages, transport);
       this.collaboration = new Collaboration(this.store, messages, output, c);
       const files = new SandboxBackend();
       if (config.runtime.docker) this.container = new ContainerBackend({ ...config.runtime.docker, scope: executionScope(data) });
@@ -82,7 +91,7 @@ export class Daemon {
       this.supervisor.register();
       const agentsDir = join(data, 'agents'); mkdirSync(agentsDir, { recursive: true, mode: 0o700 });
       if (lstatSync(agentsDir).isSymbolicLink()) throw new Error('Agents directory must not be a symlink');
-      for (const agent of c.agents) {
+      for (const agent of this.collaboration.agents.list()) {
         const root = join(data, 'agents', agent.id); mkdirSync(root, { recursive: true, mode: 0o700 });
         if (lstatSync(root).isSymbolicLink()) throw new Error('Agent memory must not be a symlink');
         this.memoryRoots[agent.id] = canonicalRoot(root, [projectRoot, state]);
@@ -97,7 +106,7 @@ export class Daemon {
     } catch (error) { opened?.close(); this.release(); throw error; }
   }
   private verifyReviewWorkspace(actor:string):string {
-    const root=this.memoryRoots[actor],agent=this.config.mate.agents.find(a=>a.id===actor);
+    const root=this.memoryRoots[actor],agent=this.collaboration.agents.get(actor);
     if(!root||!agent)throw new Error('Unknown review identity');
     const names=readdirSync(root);if(names.some(name=>!['MEMORY.md','notes','artifacts'].includes(name)))throw new Error('Review workspace is not clean');
     for(const dir of ['notes','artifacts']){const path=join(root,dir);if(lstatSync(path).isSymbolicLink()||readdirSync(path).length)throw new Error('Review workspace contains prior material');}
@@ -144,7 +153,7 @@ export class Daemon {
           for (const row of this.collaboration.output.ready()) await this.collaboration.output.send(row.id);
           this.slack.ingress.bindPeerEchoes(); this.collaboration.activateDelegations();
           await this.slack.flushAdmin();
-          if (!this.paused && !this.stopping) for (const agent of this.config.mate.agents) {
+          if (!this.paused && !this.stopping) for (const agent of this.collaboration.agents.list()) {
             const run = this.supervisor.step(agent.id); this.runs.add(run); void run.finally(() => this.runs.delete(run));
           }
           if (Date.now() >= nextReconcile) { await this.slack.reconcile(); nextReconcile = Date.now() + 60000; }

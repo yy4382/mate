@@ -1,3 +1,55 @@
+# 首个可用版本的交付标准（用户更新，2026-09-21）
+
+目标：可部署到低配置Linux VPS、Agent之间沙盒隔离、通过Slack操作的可用应用。不是只交本机实验框架。默认沿用少量预配置Agent、Pi Core、SQLite单daemon、现有Socket Mode；不将动态Slack App provisioning、网页或改进Agent列为首版前置。
+
+停止条件（或）：所有当前可做的开发/验证/打包/文档完成，之后只需接入真实Slack/provider配置与部署到VPS；或遇到无法依据现有授权/方向决定且必须由用户裁决的关键架构/功能问题。缺少部署凭证不阻塞本地开发、Linux验证或部署产物准备。不得因单个模块通过而结束整个任务。
+
+Git：在codex/vps-first-release本地分支管理；先保存已审核及进行中工作的明确checkpoint，以后按独立审核gate提交。checkpoint不表示进行中模块已审核。私有参考、秘密和运行数据不入库；不推送远端。
+
+下方E0–E6仍是核心实现依赖，E2b2c目前未完成。新增首版必交部署模块：
+
+| 模块 | 目标/接口 | 依赖 | 验收与验证 | 状态 |
+|---|---|---|---|---|
+| V0 部署/隔离设计复核 | Linux单机部署、进程权限、Agent私有挂载、执行资源上限、持久目录、Slack接入、低配并发策略 | 当前架构与用户新标准 | 独立架构红队讨论；避免VM/容器套娃和不必要基础设施 | 设计中 |
+| V1 Linux运行与沙盒 | VPS兼容文件/命令隔离，配置化资源与并发上限，启动依赖检查与失败关闭 | E2–E5及V0 PASS | 真Linux环境的Agent相互读写/进程/secret/socket/停止与重启清理验证；非mock隔离与协议测试分开 | TODO |
+| V2 部署包与Slack操作闭环 | 固定构建/运行依赖、服务管理、示例配置、诊断、迁移备份恢复、Slack操作手册 | V1 PASS、E6 | 从干净Linux环境按文档安装/启动本地替身协议；持久化/重启/恢复；凭证接入与目标机验收步骤明确 | TODO |
+| V3 发布候选审核 | 完整功能/架构/隔离红队，Git可复现版本和操作清单 | E6、V2 PASS | 已知阻塞清零，只剩真实连接与部署操作；明确不能把未做验证称为通过 | TODO |
+
+---
+
+# 当前轮：实验版本 E0–E6（2026-09-21）
+
+用户要求：架构设计为独立阶段，与独立红队讨论；每个后续gate额外验收软件工程质量，尤其架构边界与可维护性。历史R1–R8通过不代表此次平台解耦和Raft语义差异已解决。
+
+| 模块 | 目标/接口 | 依赖 | 验收与验证 | 状态 |
+|---|---|---|---|---|
+| E0 架构与差异基线 | ARCHITECTURE、EXPERIMENT_GAPS、本计划、审核规则 | 用户最新范围、Raft证据、实际代码 | 独立红队讨论依赖、迁移、确认语义与范围；修复设计阻塞 | PASS，review_e0_architecture |
+| E1 核心模块边界 | 提取conversation/attention/gate/review领域服务、平台目录port及显式composition；架构依赖检查 | E0 PASS | 原行为回归、核心不导入Slack SDK/模块及daemon；说明兼容债务，不假称ID已解耦 | PASS，review_e1_boundaries，178 tests |
+| E2 内部身份与引用 | Agent定义/平台binding、opaque内部引用、Slack映射与local adapter、迁移清单 | E1 PASS | 非Slack标识全链路、本地同伴通信、同外部多App去重、旧库/JSON/unknown恢复、配置兼容 | TODO |
+| E3 参与和历史 | directory参与控制、attention规则、分页搜索与around/history coverage | E2 PASS | mute mention/DM、defer、撤权并发、局部读不授全局view、新成员历史、unsupported明确 | TODO |
+| E4 协作与持续工作 | 按领域分拆工具处理器；任务/提醒语义与文档；结构化状态/activity查询 | E3 PASS | 自主直接协作、认领/让位、等待/复核/后台提醒、恢复、系统事件不循环唤醒 | TODO |
+| E5 工作能力与prompt | 环境/研究路径/成果闭环、手册与充分的行为约定；按前序工具同步完善 | E4 PASS | 实际授权环境能力发现与失败、附件到成果、prompt/tool/environment覆盖矩阵 | TODO |
+| E6 实验验收 | 预配置少量成员的多选择场景、本地入口与真实接入操作说明 | E5 PASS | pnpm检查、故障恢复、独立架构审计；真实Slack/provider明确单列未验项 | TODO |
+
+E2按恢复风险细分顺序gate：E2a内部Agent定义与查询边界（配置兼容投影、worker/生命周期/预算不依赖bot字段，PASS，review_e2a_identity，183 tests）；E2b内部会话/消息与外部映射及迁移（清单见REFERENCE_MIGRATION，E2b1引用目录/迁移基础PASS review_e2b1_references 190 tests，E2b2服务切换实施中）；E2c本地适配器及内部直接通信、Slack接线。E2a不会宣称旧部署配置和消息引用已解耦；后两者通过才允许E3。
+
+E2b2在独立架构讨论后细分如下（不改变E2验收范围）：
+
+| gate | 目标/接口 | 依赖 | 验收 | 状态 |
+|---|---|---|---|---|
+| E2b2a 旧载荷解释边界 | MessageDTO、LegacyConversationCodec、ConversationRecords；只读，不接生产 | E2b1 | 身份/根冲突拒绝、精确排序、wire原样、读取不写；明确不等于完成平台解耦 | PASS，review_e2b2a_codecs，197 tests |
+| E2b2b 存储一致性接入 | 集中writer、backfill、所有create/update同事务维护canonical索引、目标SQL消费 | E2b2a PASS | 缺失索引失败关闭、rollback、重开、draft ACL/reminder eligibility/unknown阻挡不退化 | PASS，review_e2b2b_storage，202 tests |
+| E2b2c 领域契约与canonical存储切换 | 服务/工具内部Target/MessageDTO；可变存储版本迁移与现有Slack external最小适配 | E2b2b PASS | ACL/freshness/task/reminder/new writer/recovery一起切；两次重开、原wire不变、旧action等价重试/变参拒绝 | 实施中（迁移/版本reader先验证，未接生产） |
+| E2c 内部通信与适配器 | 内部原子消息/delivery、投影及完整local接入；config解绑 | E2b2c PASS | 内部提交/投影失败、外部确认/echo/根回复、非Slack完整链路 | TODO |
+
+基础gate不接生产、不改SQL，避免半切换；生产writer、索引维护与查询读者仍必须同gate切换。此拆分已与review_e0_architecture讨论同意。
+
+每模块不得在前一gate通过前实现；必要时按具体风险拆小gate。代码验证后才启动独立红队，阻塞修复后复审。凭证缺失只阻塞对应真实集成。生产部署、完整动态创建表单/Slack provisioning、SSH部署、独立网页与改进Agent不作实验前置。
+
+---
+
+以下为历史记录；当前执行以上表及E系列review为准。
+
 # Mate 实施计划
 
 2026-09-20；依据 HANDOFF、技术设计、v1 scope 与本地 Raft 只读证据。工作目录与已保存项目 mate 路径均为 `/Users/chris/Developer/demo/mate`。

@@ -1,3 +1,5 @@
+> 2026-09-21：E1已拆分应用会话服务与Slack解析adapter，软件工程gate通过。E2起逐步替换平台实体；本文件下文为R8行为快照，不代表新架构全部完成。当前阶段与债务见IMPLEMENTATION_PLAN和ARCHITECTURE。
+
 # Mate 当前调用链、能力与边界
 
 2026-09-20，R1–R8 已逐模块通过独立红队，最终验收见 [ACCEPTANCE](ACCEPTANCE.md)。本文件描述当前代码；[PROJECT_DIRECTION](PROJECT_DIRECTION.md)解释为何重构，[实施计划](IMPLEMENTATION_PLAN.md)与[审核记录](reviews/)保留各 gate 的证据。

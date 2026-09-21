@@ -1,8 +1,9 @@
 import { WebClient } from '@slack/web-api';
-import type { SlackTransport, Target } from './messages.js';
+import type { Target } from '../conversations/messages.js';
+import type { MessageTransport } from '../conversations/output.js';
 import { encode, hash } from '../storage/store.js';
 /** No automatic write retries: the durable outbox owns uncertainty. */
-export class WebSlackTransport implements SlackTransport {
+export class WebSlackTransport implements MessageTransport {
   readonly clients = new Map<string, WebClient>();
   constructor(tokens: Record<string, string>) {
     for (const [agent, token] of Object.entries(tokens)) this.clients.set(agent, new WebClient(token, {

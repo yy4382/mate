@@ -1,9 +1,10 @@
+import type { AttachmentArgs } from '../capabilities/artifacts.js';
+export type { AttachmentArgs } from '../capabilities/artifacts.js';
 import type {WebClient}from '@slack/web-api';
 import type {Collaboration}from '../collaboration/service.js';
 import type {Broker}from '../policy/broker.js';
 import type {RunToken}from '../storage/store.js';
-import {messageKey,type NormalMessage}from '../slack/messages.js';
-export interface AttachmentArgs{message:{channel:string;ts:string};fileId:string;grantId:string;path:string}
+import {messageKey,type NormalMessage}from '../conversations/messages.js';
 /** Only file IDs on an observed, currently visible message are accepted; URLs/credentials are never model arguments. */
 export class Attachments{
  constructor(readonly c:Collaboration,readonly broker:Broker,readonly clients:Map<string,WebClient>){}

@@ -1,14 +1,13 @@
 import { z } from 'zod';
 
-const id = z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/);
-const secretRef = z.string().regex(/^[A-Z][A-Z0-9_]*$/);
-const agentSchema = z.object({
-  id, name: z.string().min(1), role: z.string().min(1),
+import { agentDefinitionSchema, budgetSettingsSchema, secretReferenceSchema as secretRef } from './domain/agents.js';
+
+// Legacy Slack deployment format; adapter fields are projected out before runtime use.
+const agentSchema = agentDefinitionSchema.extend({
   slackAppId: z.string().regex(/^A[A-Z0-9]+$/),
   slackUserId: z.string().regex(/^U[A-Z0-9]+$/),
   slackBotId: z.string().regex(/^B[A-Z0-9]+$/),
   botTokenEnv: secretRef, appTokenEnv: secretRef,
-  model: z.object({ provider: z.string().min(1), id: z.string().min(1), apiKeyEnv: secretRef }).strict(),
   channels: z.record(z.string().regex(/^[CDG][A-Z0-9]+$/), z.enum(['mentions', 'participate'])),
 }).strict();
 
@@ -16,8 +15,7 @@ export const configSchema = z.object({
   teamId: z.string().regex(/^T[A-Z0-9]+$/),
   ownerUserIds: z.array(z.string().regex(/^U[A-Z0-9]+$/)).min(1),
   agents: z.array(agentSchema).min(1),
-  budgets: z.object({ maxRuns: z.number().int().positive(), maxTokens: z.number().int().positive(),
-    maxCostUsd: z.number().positive(), runTimeoutMs: z.number().int().positive() }).strict(),
+  budgets: budgetSettingsSchema,
 }).strict().superRefine((config, ctx) => {
   if (config.agents.some(agent => config.ownerUserIds.includes(agent.slackUserId))) {
     ctx.addIssue({ code: 'custom', message: 'Owner identity must not be an agent bot identity' });

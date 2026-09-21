@@ -1,5 +1,5 @@
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
-import type { MateConfig } from '../config.js';
+import type { AgentDefinition, BudgetSettings } from '../domain/agents.js';
 import { encode, hash, type RunToken } from '../storage/store.js';
 import type { Collaboration } from '../collaboration/service.js';
 import { WorkerClient } from './client.js';
@@ -11,17 +11,17 @@ export class Supervisor {
   private effects = new Set<Promise<unknown>>();
   private workers = new Map<string, Worker>();
   private active = new Map<string, { run: RunToken; abort: AbortController }>();
-  constructor(readonly collaboration: Collaboration, readonly router: ToolRouter, readonly config: MateConfig,
-    readonly factory: (agent: MateConfig['agents'][number]) => Worker = agent => new WorkerClient(agent.model.provider, agent.model.id, process.env[agent.model.apiKeyEnv] ?? ''),
+  constructor(readonly collaboration: Collaboration, readonly router: ToolRouter, readonly config: { budgets: BudgetSettings },
+    readonly factory: (agent: AgentDefinition) => Worker = agent => new WorkerClient(agent.model.provider, agent.model.id, process.env[agent.model.apiKeyEnv] ?? ''),
     readonly recovery: (agentId: string, workId: string, signal: AbortSignal) => Promise<string> = async () => '') {}
   register(): void {
-    for (const agent of this.config.agents) {
+    for (const agent of this.collaboration.agents.list()) {
       const baseline=this.router.sessions.baseline(agent);
       this.collaboration.store.register(agent.id,baseline.configVersion,baseline.messages);
       this.collaboration.ledger.account(agent.id);
     }
   }
-  recoverSessions(): void {for(const agent of this.config.agents)if(this.router.sessions.apply(agent.id)){this.workers.get(agent.id)?.close();this.workers.delete(agent.id);}}
+  recoverSessions(): void {for(const agent of this.collaboration.agents.list())if(this.router.sessions.apply(agent.id)){this.workers.get(agent.id)?.close();this.workers.delete(agent.id);}}
   async step(agentId: string): Promise<boolean> {
     if (this.active.has(agentId)) return false;
     const c = this.collaboration, s = c.store, account = c.ledger.account(agentId);
@@ -60,7 +60,7 @@ export class Supervisor {
         s.audit('recovery_refresh',{runId:run.id,memoryHash:hash(reference),checkpointVersion:checkpoint?.version??null});return recovery;
       };
       const recovery=await buildRecovery();
-      const agent = this.config.agents.find(a => a.id === agentId)!;
+      const agent = this.collaboration.agents.get(agentId);
       worker = this.workers.get(agentId) ?? this.factory(agent); this.workers.set(agentId, worker);
       let seq = 0, lastNotice = '';
       const messages = repairTranscript(s.context(run.sessionId) as AgentMessage[], id => {

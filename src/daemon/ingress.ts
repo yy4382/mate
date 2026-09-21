@@ -1,6 +1,7 @@
+import { SlackMessageNormalizer } from '../slack/normalize.js';
 import { encode } from '../storage/store.js';
 import type { Collaboration } from '../collaboration/service.js';
-import { messageKey, type NormalMessage } from '../slack/messages.js';
+import { messageKey, type NormalMessage } from '../conversations/messages.js';
 /** Message provenance selects an activity; each recipient spends its existing Agent account. */
 export class Ingress {
   constructor(readonly collaboration: Collaboration) {}
@@ -14,7 +15,7 @@ export class Ingress {
       const agent = c.config.agents.find(a => a.slackAppId === appId); if (!agent) throw new Error('Unknown app');
       // DMs received through this authenticated bot connection establish visibility.
       if (event?.type === 'message' && /^D[A-Z0-9]+$/.test(event.channel)) c.messages.membership(agent.id, event.channel, true);
-      c.messages.normalize(appId, eventId);
+      new SlackMessageNormalizer(c.messages).normalize(appId, eventId);
       const pending = s.db.prepare("SELECT d.id,d.agent_id,d.payload FROM deliveries d LEFT JOIN delivery_work w ON w.delivery_id=d.id WHERE w.work_id IS NULL AND d.status='pending'").all() as { id: string; agent_id: string; payload: string }[];
       for (const delivery of pending) {
         const payload = JSON.parse(delivery.payload); if (!payload.messageKey) continue;

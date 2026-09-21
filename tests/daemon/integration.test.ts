@@ -1,3 +1,4 @@
+import { SlackMessageNormalizer } from '../../src/slack/normalize.js';
 import { afterEach, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -189,7 +190,7 @@ it('Slack artifact echoes replace publication projection without double unread a
  const run=store.beginRun('research')!,peer=store.beginRun('writer')!;store.input(run,{});store.input(peer,{});c.output.artifacts={upload:async(_a,_t,_text,_artifact,prepared,beforeShare)=>{prepared('FFILE');if(!beforeShare())throw new Error('deferred');return{fileId:'FFILE'};}};
  c.output.queueArtifact('research',target,'caption',{title:'result',content:'f',contentHash:'hash'},'artifact',{run});const draft=c.output.gate!.describe('research','artifact')as any;c.output.gate!.continueOnce(run,'artifact',1,draft.holdId);await c.output.send('artifact');
  let page=c.attention.read(peer,target)as any;while(true){c.attention.presented(peer,{role:'toolResult',toolCallId:'p',toolName:'mate',content:[{type:'text',text:JSON.stringify(page)}],isError:false,timestamp:0});if(!page.nextCursor)break;page=c.attention.read(peer,target,page.nextCursor);}
- store.ingest('ATWO','echo-file',{team_id:'TTEST',event:{type:'message',channel:'CTEST',ts:'201.000001',thread_ts:target.thread,text:'caption',user:'UONE',files:[{id:'FFILE',title:'result'}]}});c.messages.normalize('ATWO','echo-file');
+ store.ingest('ATWO','echo-file',{team_id:'TTEST',event:{type:'message',channel:'CTEST',ts:'201.000001',thread_ts:target.thread,text:'caption',user:'UONE',files:[{id:'FFILE',title:'result'}]}});new SlackMessageNormalizer(c.messages).normalize('ATWO','echo-file');
  expect(c.attention.peek('writer')).toEqual([{target,revision:expect.any(Number),unseen:0}]);const after=c.attention.read(peer,target)as any;expect(after.publications).toEqual([]);expect(after.messages[0].files[0].id).toBe('FFILE');
 });
 it.each(['defer','discard','continue','revise','retry'] as const)('the same changed discussion permits the Agent choice %s through the Pi loop without a task tree',async choice=>{

@@ -137,3 +137,37 @@ CREATE TABLE session_resets(id TEXT PRIMARY KEY,agent_id TEXT NOT NULL REFERENCE
 CREATE UNIQUE INDEX one_pending_reset ON session_resets(agent_id) WHERE state='requested';
 PRAGMA user_version=15;
 `;
+
+/** Identity mappings only: message content and side-effect receipts retain one source of truth. */
+export const referenceSchema = `
+CREATE TABLE conversation_identities(
+ id TEXT PRIMARY KEY,
+ kind TEXT NOT NULL CHECK(kind IN ('channel','dm')),
+ authority TEXT NOT NULL CHECK(authority IN ('internal','external'))
+);
+CREATE TABLE conversation_bindings(
+ provider TEXT NOT NULL,workspace TEXT NOT NULL,external_id TEXT NOT NULL,
+ conversation_id TEXT NOT NULL REFERENCES conversation_identities(id),
+ mode TEXT NOT NULL CHECK(mode IN ('primary','projection')),
+ PRIMARY KEY(provider,workspace,external_id)
+);
+CREATE UNIQUE INDEX one_primary_conversation_binding ON conversation_bindings(conversation_id) WHERE mode='primary';
+CREATE TABLE message_identities(
+ id TEXT PRIMARY KEY,
+ conversation_id TEXT NOT NULL REFERENCES conversation_identities(id),
+ root_id TEXT REFERENCES message_identities(id) DEFERRABLE INITIALLY DEFERRED
+);
+CREATE TABLE message_bindings(
+ provider TEXT NOT NULL,workspace TEXT NOT NULL,external_conversation TEXT NOT NULL,external_message TEXT NOT NULL,
+ message_id TEXT NOT NULL REFERENCES message_identities(id),
+ PRIMARY KEY(provider,workspace,external_conversation,external_message),
+ FOREIGN KEY(provider,workspace,external_conversation) REFERENCES conversation_bindings(provider,workspace,external_id)
+);
+CREATE TABLE canonical_targets(
+ object_type TEXT NOT NULL,object_id TEXT NOT NULL,
+ conversation_id TEXT NOT NULL REFERENCES conversation_identities(id),
+ thread_id TEXT REFERENCES message_identities(id),
+ PRIMARY KEY(object_type,object_id)
+);
+PRAGMA user_version=16;
+`;

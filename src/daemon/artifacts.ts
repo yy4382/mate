@@ -1,3 +1,6 @@
+import type { ArtifactOutputTransport } from '../conversations/output.js';
+import type { PublishArgs } from '../capabilities/artifacts.js';
+export type { PublishArgs } from '../capabilities/artifacts.js';
 import {createHash}from 'node:crypto';
 import {basename}from 'node:path';
 import { relative } from 'node:path';
@@ -6,9 +9,8 @@ import type { RunToken } from '../storage/store.js';
 import { hash } from '../storage/store.js';
 import type { Broker } from '../policy/broker.js';
 import type { Collaboration } from '../collaboration/service.js';
-import type { Target,ArtifactOutputTransport } from '../slack/messages.js';
+import type { Target } from '../conversations/messages.js';
 import type { ExecutionResult } from '../execution/backend.js';
-export interface PublishArgs {grantId:string;path:string;title:string;target:Target;text?:string;viewToken?:string;draftId?:string;revision?:number;format?:'text'|'binary'}
 export class Artifacts {
   constructor(readonly collaboration: Collaboration, readonly broker: Broker, transport: ArtifactOutputTransport, readonly memoryRoots: Record<string, string>) {collaboration.output.artifacts=transport;}
   async publish(run: RunToken, workId: string, actionId: string, args: PublishArgs, signal: AbortSignal): Promise<unknown> {
@@ -27,7 +29,7 @@ export class Artifacts {
     signal.throwIfAborted();s.assertRun(run);c.assertActionWork(run,workId);c.messages.requireAccess(run.agentId,args.target.channel);
     const artifact={title:args.title,content,contentHash,filename:basename(args.path),...(encoding?{encoding}:{})};
     return s.atomic(()=>{
-      const action=s.prepareAction(run,actionId,{kind:'artifact_draft',workId,args,contentHash:artifact.contentHash});
+      const action=c.messages.persistence.writes.prepareAction(run,actionId,{kind:'artifact_draft',workId,args,contentHash:artifact.contentHash});
       if(action.state==='succeeded'){const receipt=JSON.parse(action.receipt!);return gate.describe(run.agentId,receipt.draftId);}
       if(action.state!=='prepared')throw new Error('Publication preparation outcome unknown');
       // Changing target/action ID cannot resend an uncertain identical publication.

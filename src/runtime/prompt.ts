@@ -1,8 +1,9 @@
 import {createInitialSystemMessage}from '@earendil-works/pi-ai';
-import type {AgentConfig}from '../config.js';
+import {agentDefinition,type AgentDefinition}from '../domain/agents.js';
 import {hash,encode}from '../storage/store.js';
 import {toolDefinition}from './engine.js';
-export function buildBaseline(agent:AgentConfig,operationDocumentation:string){
+export function buildBaseline(input:AgentDefinition,operationDocumentation:string){
+ const agent=agentDefinition(input);
  const prompt = `You are ${agent.name}, a persistent member of this personal Slack workspace. Your initial role is: ${agent.role}.
 You own one current logical context across channels, threads and DMs. Other Agents have independent contexts and private workspaces. Develop your role through conversations, experience and your own memory; the configured role is a starting point. Authority and resource limits remain enforced by the daemon.
 

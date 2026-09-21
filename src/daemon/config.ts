@@ -15,3 +15,15 @@ export const daemonConfigSchema = z.object({
   if (grant.operations.includes('exec') && !c.runtime.docker) ctx.addIssue({ code: 'custom', message: 'Execution grants require container configuration' });
 } });
 export type DaemonConfig = z.infer<typeof daemonConfigSchema>;
+
+/** Config identity is structural. Wire requests use a different, immutable byte hash. */
+export function sameConfiguration(left: DaemonConfig, right: DaemonConfig): boolean {
+  const normalize = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(normalize);
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, normalize(item)]));
+    }
+    return value;
+  };
+  return JSON.stringify(normalize(daemonConfigSchema.parse(left))) === JSON.stringify(normalize(daemonConfigSchema.parse(right)));
+}

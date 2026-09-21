@@ -3,7 +3,7 @@ import type { Collaboration } from '../collaboration/service.js';
 import type { Controls } from './control.js';
 import type { Ingress } from './ingress.js';
 import type { WebSlackTransport } from '../slack/transport.js';
-import type { Target } from '../slack/messages.js';
+import type { Target } from '../conversations/messages.js';
 import { encode } from '../storage/store.js';
 export class SlackService {
   private reconcileAfter = 0;
@@ -148,7 +148,7 @@ export class SlackService {
       } catch { /* keep unknown; never resend blindly */ }
     }
   }
-  async upload(agentId:string,target:Target,text:string,artifact:import('../slack/messages.js').ArtifactPayload,prepared:(fileId:string)=>void,beforeShare:()=>boolean):Promise<{fileId:string}>{
+  async upload(agentId:string,target:Target,text:string,artifact:import('../conversations/output.js').ArtifactPayload,prepared:(fileId:string)=>void,beforeShare:()=>boolean):Promise<{fileId:string}>{
     const client=this.transport.clients.get(agentId)!;
     const filename=artifact.filename??`${artifact.title.replace(/[^a-zA-Z0-9._-]/g,'_')}.txt`,bytes=Buffer.from(artifact.content,artifact.encoding==='base64'?'base64':'utf8');
     const allocated=await client.files.getUploadURLExternal({filename,length:bytes.length});

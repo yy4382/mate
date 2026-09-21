@@ -1,28 +1,33 @@
+import { ConfiguredAgents, type AgentDirectory } from '../agents/directory.js';
+import { Output } from '../conversations/output.js';
 import {Reminders,type Reminder}from '../reminders/service.js';
-import type { SendBasis } from '../slack/freshness.js';
-import { ReviewSeats } from '../slack/review-seats.js';
-import { Attention } from '../slack/attention.js';
+import type { SendBasis } from '../conversations/freshness.js';
+import { ReviewSeats } from '../conversations/review-seats.js';
+import { Attention } from '../conversations/attention.js';
 import { BudgetLedger } from '../budget/ledger.js';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { Store, encode, type RunToken } from '../storage/store.js';
-import { Messages, Output, targetSchema, type Target } from '../slack/messages.js';
+import { Messages, targetSchema, type Target } from '../conversations/messages.js';
 import type { MateConfig } from '../config.js';
 
 export interface Work { id: string; target: string; state: string; max_runs: number; max_tokens: number; max_cost: number; runs: number; tokens: number; cost: number }
 export interface Task { legacy:number; message_key:string|null; id: string; work_id: string; parent_id: string | null; target: string; title: string; owner: string | null; assigned_to: string | null; status: string; version: number; waiting_on: string | null; result: string | null; outbox_id: string | null }
 export class Collaboration {
+  readonly agents: AgentDirectory;
   readonly reminders:Reminders;
   readonly seats: ReviewSeats;
   readonly ledger: BudgetLedger;
   readonly attention: Attention;
-  constructor(readonly store: Store, readonly messages: Messages, readonly output: Output, readonly config: MateConfig) { this.reminders=new Reminders(this); this.ledger = new BudgetLedger(store, config); this.attention = new Attention(messages); this.seats = new ReviewSeats(messages); }
-  work(id: string): Work { const work = this.store.db.prepare('SELECT * FROM works WHERE id=?').get(id) as Work | undefined; if (!work) throw new Error('Unknown work'); return work; }
-  task(id: string): Task { const task = this.store.db.prepare("SELECT *, (message_key IS NULL AND status!='draft') legacy FROM tasks WHERE id=?").get(id) as Task | undefined; if (!task) throw new Error('Unknown task'); return task; }
+  constructor(readonly store: Store, readonly messages: Messages, readonly output: Output, readonly config: MateConfig) { this.agents=new ConfiguredAgents(config.agents); this.reminders=new Reminders(this); this.ledger = new BudgetLedger(store, config); this.attention = new Attention(messages); this.seats = new ReviewSeats(messages); }
+  work(id: string): Work { const work = this.store.db.prepare('SELECT * FROM works WHERE id=?').get(id) as Work | undefined; if (!work) throw new Error('Unknown work'); this.messages.persistence.records.mutableTarget('works',id); return work; }
+  task(id: string): Task { const task = this.store.db.prepare("SELECT *, (message_key IS NULL AND status!='draft') legacy FROM tasks WHERE id=?").get(id) as Task | undefined; if (!task) throw new Error('Unknown task'); this.messages.persistence.records.mutableTarget('tasks',id); return task; }
   list(agentId: string): Task[] {
     this.messages.agent(agentId);
     if(this.messages.isolated(agentId))return [];
-    return this.store.db.prepare("SELECT t.*, (t.message_key IS NULL AND t.status!='draft') legacy FROM tasks t JOIN channel_access a ON a.channel=json_extract(t.target,'$.channel') WHERE a.agent_id=? AND a.active=1 ORDER BY t.rowid DESC LIMIT 100").all(agentId) as Task[];
+    const rows = this.store.db.prepare("SELECT t.*, (t.message_key IS NULL AND t.status!='draft') legacy FROM tasks t JOIN canonical_targets ct ON ct.object_type='tasks' AND ct.object_id=t.id JOIN channel_access a ON a.channel=ct.conversation_id WHERE a.agent_id=? AND a.active=1 ORDER BY t.rowid DESC LIMIT 100").all(agentId) as Task[];
+    for(const row of rows)this.messages.persistence.records.mutableTarget('tasks',row.id);
+    return rows;
   }
   currentWork(run: RunToken, fallback: string): string {
     this.store.assertRun(run);
@@ -50,6 +55,7 @@ export class Collaboration {
       const old = this.store.db.prepare('SELECT id FROM works WHERE origin=?').get(origin) as { id: string } | undefined; if (old) return old.id;
       const id = randomUUID(), b = this.config.budgets;
       this.store.db.prepare('INSERT INTO works(id,origin,target,max_runs,max_tokens,max_cost) VALUES(?,?,?,?,?,?)').run(id, origin, encode(target), b.maxRuns, b.maxTokens, b.maxCostUsd);
+      this.messages.persistence.writes.mutable('works',id);
       return id;
     });
   }
@@ -60,7 +66,7 @@ export class Collaboration {
     this.store.db.prepare('INSERT INTO delivery_work VALUES(?,?) ON CONFLICT DO NOTHING').run(deliveryId, workId);
   }
   enqueue(agentId: string, workId: string, key: string, payload: unknown): string {
-    return this.store.atomic(() => { this.active(workId); const id = this.store.enqueue(agentId, key, payload, 50); this.bindDelivery(id, workId); return id; });
+    return this.store.atomic(() => { this.active(workId); const id = this.messages.persistence.writes.enqueue(agentId, key, payload, 50); this.bindDelivery(id, workId); return id; });
   }
   send(agentId: string, workId: string, target: Target, text: string, id: string = randomUUID(), basis?:SendBasis): string {
     return this.store.atomic(() => {
@@ -103,6 +109,7 @@ export class Collaboration {
       if (parentId) { const parent = this.task(parentId); if (parent.work_id !== workId || parent.owner !== agentId || !['doing','waiting','review'].includes(parent.status)) throw new Error('Invalid parent task'); }
       const id = randomUUID();
       this.store.db.prepare("INSERT INTO tasks(id,work_id,parent_id,target,title,status) VALUES(?,?,?,?,?,'todo')").run(id, workId, parentId ?? null, encode(target), title);
+      this.messages.persistence.writes.mutable('tasks',id);
       this.event(id, { action: 'create', agentId }); return id;
     });
   }
@@ -150,7 +157,7 @@ export class Collaboration {
     const waiters = this.store.db.prepare("SELECT * FROM tasks WHERE waiting_on=? AND status='waiting'").all(task.id) as Task[];
     for (const waiter of waiters) {
       this.store.db.prepare("UPDATE tasks SET status='doing',waiting_on=NULL,version=version+1 WHERE id=?").run(waiter.id);
-      const delivery=this.store.enqueue(waiter.owner!, `dependency:${waiter.id}:${task.id}:${task.version}`, { kind: 'dependency', taskId: waiter.id, dependencyId: task.id, target: JSON.parse(waiter.target) },50);
+      const delivery=this.messages.persistence.writes.enqueue(waiter.owner!, `dependency:${waiter.id}:${task.id}:${task.version}`, { kind: 'dependency', taskId: waiter.id, dependencyId: task.id, target: JSON.parse(waiter.target) },50);
       this.bindDelivery(delivery,waiter.work_id);
     }
   }

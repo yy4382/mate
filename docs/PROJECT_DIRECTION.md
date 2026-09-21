@@ -1,3 +1,7 @@
+> 2026-09-21首版标准更新：交付可部署到低配置Linux VPS、Agent之间沙盒隔离、可通过Slack操作的应用。部署产物与Linux隔离验证进入首版；预配置成员可接受。详见IMPLEMENTATION_PLAN最上方交付/停止标准，此项覆盖此前“VPS后置”的范围表述。
+
+> 2026-09-21实验版新阶段：平台解耦、Raft差异及软件工程验收以[ARCHITECTURE](ARCHITECTURE.md)、[EXPERIMENT_GAPS](EXPERIMENT_GAPS.md)和实施计划E0–E6为准。下方R1–R8完成仅指历史范围。
+
 # Mate 项目重新定位
 
 2026-09-20。当前产品方向，覆盖旧交接稿/技术设计中与此冲突的假设。这是产品约束；R1–R8已实现并独立审核，最新验收见[ACCEPTANCE](ACCEPTANCE.md)。 当前代码说明仍见 [HOW_IT_WORKS](HOW_IT_WORKS.md)，实施状态见 [IMPLEMENTATION_PLAN](IMPLEMENTATION_PLAN.md)。

@@ -264,3 +264,19 @@ it('recovery refresh rereads memory, the latest checkpoint and the selected work
  expect(reads).toBe(2);expect(fresh.memory).toBe('new domain knowledge');expect(fresh.checkpoint.text).toBe('updated active context');expect(fresh.work.id).toBe(other);expect(fresh.account.tokens).toBe(50000);expect(c.ledger.account('research').tokens).toBe(5);
  expect(store.db.prepare("SELECT count(*) n FROM audit WHERE kind='recovery_refresh'").get()).toEqual({n:2});
 });
+
+it('worker factories receive platform-independent definitions through the member directory', async () => {
+  const f = setup();
+  let received: unknown;
+  const supervisor = new Supervisor(f.collaboration, f.router, { budgets: f.config.budgets }, definition => {
+    received = definition;
+    return { run: async () => ({ certain: true, tokens: 1, cost: 0, continuation: false, waiting: false }), close() {} };
+  });
+  try {
+    f.collaboration.enqueue('research', f.work, 'independent-definition', {});
+    await supervisor.step('research');
+    expect(received).toEqual({ id: 'research', name: 'Research', role: 'Find evidence', model: f.config.agents[0]!.model });
+    expect(received).not.toHaveProperty('slackAppId');
+    expect(received).not.toHaveProperty('botTokenEnv');
+  } finally { supervisor.close(); }
+});

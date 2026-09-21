@@ -74,3 +74,29 @@ it('a migrated configuration starts locally and can add persistent peers beyond 
  try{const daemon=new Daemon(next,{info:()=>{},error:()=>{}});try{expect(daemon.store.db.prepare('SELECT count(*) n FROM agents').get()).toEqual({n:4});expect(existsSync(join(f.data,'agents','peer4','MEMORY.md'))).toBe(true);}finally{await daemon.close();}}
  finally{refs.forEach((ref,i)=>{if(saved[i]===undefined)delete process.env[ref];else process.env[ref]=saved[i];});}
 });
+
+it('migrates real legacy configuration key order without rewriting immutable effect evidence', async () => {
+ const f=fixture();
+ // R8 serialized model after Slack installation fields, before channels.
+ const a=f.previous.mate.agents[0]!;
+ const oldAgent={id:a.id,name:a.name,role:a.role,slackAppId:a.slackAppId,slackUserId:a.slackUserId,slackBotId:a.slackBotId,botTokenEnv:a.botTokenEnv,appTokenEnv:a.appTokenEnv,model:a.model,channels:a.channels};
+ const legacy={...f.previous,mate:{...f.previous.mate,agents:[oldAgent]}};
+ expect(encode(legacy)).not.toBe(encode(f.previous));
+ f.store.db.prepare("UPDATE runtime_meta SET value=? WHERE key='configuration'").run(encode(legacy));
+ const outbox='legacy-unknown';
+ f.store.queueOutput('research',outbox,{target:{channel:'CTEST'},text:'unchanged legacy wire'});
+ f.store.transitionOutput(outbox,'pending','sending');f.store.transitionOutput(outbox,'sending','unknown');
+ const before=f.store.output(outbox)!;
+ const session=(f.router.sessions.status('research') as {session:string}).session;
+ f.store.db.prepare('UPDATE sessions SET config_version=? WHERE id=?').run('legacy-baseline-hash',session);
+ f.store.close();
+ await migrateConfiguration(f.previous,f.previous,join(f.root,'backup'));
+ const s=new Store(f.path);
+ try{
+  expect(s.output(outbox)).toEqual(before);
+  expect(storedConfiguration(s)).toEqual(f.previous);
+  const current=s.db.prepare("SELECT session_id FROM agents WHERE id='research'").get() as {session_id:string};
+  expect(current.session_id).not.toBe(session);
+  expect(s.db.prepare('SELECT config_version FROM sessions WHERE id=?').get(current.session_id)).toEqual({config_version:buildBaseline(a,operationDocumentation).configVersion});
+ }finally{s.close();}
+});

@@ -1,5 +1,11 @@
 # Mate development instructions
 
+## First usable release and stopping conditions
+
+- The first usable release must be deployable on a low-resource Linux VPS, isolate Agents with sandboxes, and be operable through Slack. VPS packaging and Linux isolation validation are release requirements, not post-experiment extras.
+- Continue until all feasible development and validation are complete and only actual Slack/provider connection and VPS deployment remain, OR a critical architecture/product decision genuinely requires the user. Do not stop at intermediate module checkpoints.
+- Use local Git branches/commits for checkpoints and reviewed modules. Never include private reference evidence, secrets or runtime data; no remote push without authorization.
+
 ## Product and runtime
 
 - Build Mate: a personal Slack environment for persistent, autonomous Agent colleagues. The product baseline is `docs/PROJECT_DIRECTION.md`; the model chooses attention, collaboration, work organization, and whether to speak.
@@ -19,9 +25,9 @@
 
 1. Read `docs/HANDOFF.md` and the design/reference materials before implementation.
 2. First produce a reasonable module breakdown in `docs/IMPLEMENTATION_PLAN.md`. Each module needs a goal, interfaces, dependencies, acceptance criteria and meaningful validation. Explain major design changes against the handoff.
-3. Implement modules sequentially in dependency order. Do not start implementing the next module until the current module passes the independent review gate below.
+3. Before implementation, treat `docs/ARCHITECTURE.md` as a separate design stage. Discuss it with an independent red-team reviewer, resolve architecture blockers and record the decision before code modules begin. Implement modules sequentially in dependency order. Do not start implementing the next module until the current module passes the independent review gate below.
 4. After each module is implemented and its appropriate checks pass, spawn an **independent red-team subagent** that did not implement that module. The user explicitly authorizes and requires these reviewer subagents. Use a fresh reviewer context where practical; provide requirements, exact diff/files and tests, rather than only the author's explanation.
-5. The reviewer must inspect the actual code and relevant tests, challenge assumptions and failure/recovery paths, and report reproducible findings with file locations and severity. Reviewer is read-only except for temporary test artifacts and does not replace implementation ownership.
+5. The reviewer must inspect the actual code and relevant tests, challenge assumptions and failure/recovery paths, and explicitly review software engineering quality: dependency direction, cohesion, separation of concerns, API contracts, maintainability, migration strategy and avoidable complexity. A runnable happy path is insufficient; architecture/engineering acceptance blockers must be fixed, and report reproducible findings with file locations and severity. Reviewer is read-only except for temporary test artifacts and does not replace implementation ownership.
 6. Fix blocking findings and ask the independent reviewer to recheck the changed areas. Resolve critical/high issues and any correctness or acceptance blocker before moving on; document any nonblocking deferred item with its rationale. Do not label self-review as independent red-team review.
 7. Record module scope, checks, reviewer identity/task, findings, repairs and final disposition in `docs/reviews/`. Update the implementation plan after each gate. If reviewer tools are unavailable, report that concrete blocker; do not silently bypass the user's gate.
 8. Continue autonomously through authorized local implementation and checks; do not stop after planning or after the first module. Keep the user informed in Chinese. Missing external credentials should not block unrelated local work; clearly distinguish mocked checks from real integrations.

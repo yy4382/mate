@@ -1,16 +1,17 @@
+import type { ConversationDirectory, Space, SpacesResult, MembersResult, OpenDMResult } from '../conversations/directory.js';
 import type { WebClient } from '@slack/web-api';
 import type { RunToken } from '../storage/store.js';
-import type { Messages } from './messages.js';
+import type { Messages } from '../conversations/messages.js';
 
 /** Identity and membership come from the acting bot's authenticated Slack client. */
-export class Directory {
+export class Directory implements ConversationDirectory {
   constructor(readonly messages: Messages, readonly clients: Map<string, WebClient>) {}
   private client(actor: string): WebClient {
     this.messages.agent(actor);
     const client = this.clients.get(actor); if (!client) throw new Error('Slack client unavailable'); return client;
   }
-  async spaces(actor: string): Promise<unknown> {
-    const client = this.client(actor), spaces = [], channels = [];
+  async spaces(actor: string): Promise<SpacesResult> {
+    const client = this.client(actor), spaces: Space[] = [], channels = [];
     const version = this.messages.membershipVersion(actor); let cursor: string | undefined, pages = 0;
     do {
       const result = await client.users.conversations({ types: 'public_channel,private_channel,im,mpim', limit: 200, ...(cursor ? { cursor } : {}) });
@@ -27,7 +28,7 @@ export class Directory {
     }
     return { spaces, incomplete: !!cursor };
   }
-  async members(actor: string, channel: string): Promise<unknown> {
+  async members(actor: string, channel: string): Promise<MembersResult> {
     this.messages.requireAccess(actor, channel);
     const client = this.client(actor), members: string[] = []; let cursor: string | undefined, pages = 0;
     do {
@@ -37,7 +38,7 @@ export class Directory {
     this.messages.requireAccess(actor, channel);
     return { members, incomplete: !!cursor };
   }
-  async openDM(run: RunToken, actionId: string, user: string, signal: AbortSignal): Promise<unknown> {
+  async openDM(run: RunToken, actionId: string, user: string, signal: AbortSignal): Promise<OpenDMResult> {
     const s = this.messages.store, client = this.client(run.agentId);
     s.assertRun(run); signal.throwIfAborted();
     if (!/^U[A-Z0-9]+$/.test(user)) throw new Error('Invalid Slack user');

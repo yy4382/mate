@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import type {Collaboration,Task} from '../collaboration/service.js';
 import {encode,type RunToken} from '../storage/store.js';
-import {messageKey,type NormalMessage,type Target} from '../slack/messages.js';
+import {messageKey,type NormalMessage,type Target} from '../conversations/messages.js';
 interface Ref{channel:string;ts:string}
 interface Intent{id:string;agent_id:string;work_id:string;operation:string;args:string;target:string;state:string;hold_id:string|null;receipt:string|null}
 export class MessageTasks{
@@ -17,11 +17,12 @@ export class MessageTasks{
   const s=this.c.store;return s.atomic(()=>{s.assertRun(run);const target=this.target(run.agentId,args),old=s.db.prepare('SELECT * FROM task_intents WHERE id=?').get(id) as Intent|undefined;
    if(old){if(old.agent_id!==run.agentId||old.operation!==operation||old.args!==encode(args))throw new Error('Task intent identity conflict');return this.describe(run.agentId,id);}
    s.db.prepare('INSERT INTO task_intents VALUES(?,?,?,?,?,?,?,NULL,NULL)').run(id,run.agentId,workId,operation,encode(args),encode(target),'held');
+   this.c.messages.persistence.writes.mutable('task_intents',id);
    return this.tryApply(run,id,viewToken,false);
   });
  }
  describe(actor:string,id:string):unknown{const i=this.intent(actor,id);return{intentId:i.id,status:i.state,holdId:i.hold_id,target:JSON.parse(i.target),result:i.receipt?JSON.parse(i.receipt):null,choices:['retry_with_view','discard','continue_once']};}
- private intent(actor:string,id:string):Intent{const i=this.c.store.db.prepare('SELECT * FROM task_intents WHERE id=? AND agent_id=?').get(id,actor) as Intent|undefined;if(!i)throw new Error('Unknown task intent');this.c.messages.requireAccess(actor,JSON.parse(i.target).channel);return i;}
+ private intent(actor:string,id:string):Intent{const i=this.c.store.db.prepare('SELECT * FROM task_intents WHERE id=? AND agent_id=?').get(id,actor) as Intent|undefined;if(!i)throw new Error('Unknown task intent');this.c.messages.persistence.records.mutableTarget('task_intents',id);this.c.messages.requireAccess(actor,JSON.parse(i.target).channel);return i;}
  retry(run:RunToken,id:string,viewToken?:string):unknown{return this.c.store.atomic(()=>this.tryApply(run,id,viewToken,false));}
  continue(run:RunToken,id:string,holdId:string):unknown{return this.c.store.atomic(()=>{const i=this.intent(run.agentId,id);if(i.state!=='held'||i.hold_id!==holdId)throw new Error('Task hold receipt conflict');return this.tryApply(run,id,undefined,true);});}
  discard(run:RunToken,id:string):unknown{this.c.store.assertRun(run);const i=this.intent(run.agentId,id);if(i.state!=='held')throw new Error('Task intent is not held');this.c.store.db.prepare("UPDATE task_intents SET state='discarded' WHERE id=?").run(id);return this.describe(run.agentId,id);}

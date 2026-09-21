@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { chmodSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
-import { schema, messageSchema, collaborationSchema, policySchema, runtimeSchema, daemonSchema, scopedExecutionSchema, conversationSchema, budgetSchema, attentionSchema, freshnessSchema, reviewSeatSchema, messageTaskSchema, reminderSchema, sessionLifecycleSchema } from './schema.js';
+import { schema, messageSchema, collaborationSchema, policySchema, runtimeSchema, daemonSchema, scopedExecutionSchema, conversationSchema, budgetSchema, attentionSchema, freshnessSchema, reviewSeatSchema, messageTaskSchema, reminderSchema, sessionLifecycleSchema, referenceSchema } from './schema.js';
 
 export function encode(value: unknown): string {
   const encoded = JSON.stringify(value);
@@ -21,13 +21,13 @@ export class Store {
     this.db.pragma('foreign_keys = ON'); this.db.pragma('journal_mode = WAL');
     this.db.pragma('synchronous = FULL'); this.db.pragma('busy_timeout = 5000');
     const version = this.db.pragma('user_version', { simple: true });
-    if (Number(version) > 0 && Number(version) < 15 && path !== ':memory:') {
+    if (Number(version) > 0 && Number(version) < 16 && path !== ':memory:') {
       // SQLite creates a consistent backup before changing any legacy schema.
-      const backup = `${path}.pre-v${Number(version) < 8 ? 8 : Number(version) < 9 ? 9 : Number(version) < 10 ? 10 : Number(version) < 11 ? 11 : Number(version) < 12 ? 12 : Number(version) < 13 ? 13 : Number(version) < 14 ? 14 : 15}-${randomUUID()}.sqlite`;
+      const backup = `${path}.pre-v${Number(version) < 8 ? 8 : Number(version) < 9 ? 9 : Number(version) < 10 ? 10 : Number(version) < 11 ? 11 : Number(version) < 12 ? 12 : Number(version) < 13 ? 13 : Number(version) < 14 ? 14 : Number(version) < 15 ? 15 : 16}-${randomUUID()}.sqlite`;
       this.db.prepare('VACUUM INTO ?').run(backup); chmodSync(backup, 0o600);
     }
     if (version === 0) this.atomic(() => this.db.exec(schema));
-    else if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].includes(Number(version))) { this.db.close(); throw new Error('Unsupported database version'); }
+    else if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17].includes(Number(version))) { this.db.close(); throw new Error('Unsupported database version'); }
     if (Number(version) < 2) this.atomic(() => this.db.exec(messageSchema));
     if (Number(version) < 3) this.atomic(() => this.db.exec(collaborationSchema));
     if (Number(version) < 4) this.atomic(() => this.db.exec(policySchema));
@@ -46,6 +46,7 @@ export class Store {
     if(Number(version)<13)this.atomic(()=>this.db.exec(messageTaskSchema));
     if(Number(version)<14)this.atomic(()=>this.db.exec(reminderSchema));
     if(Number(version)<15)this.atomic(()=>this.db.exec(sessionLifecycleSchema));
+    if(Number(version)<16)this.atomic(()=>this.db.exec(referenceSchema));
   }
   atomic<T>(fn: () => T): T { return this.db.transaction(fn).immediate(); }
   close(): void { this.db.close(); }
