@@ -24,7 +24,9 @@ import { SlackService } from '../../src/slack/service.js';
 import { CanonicalSlackTransport as WebSlackTransport } from '../../src/slack/transport.js';
 import { Artifacts } from '../../src/daemon/artifacts.js';
 import {ContainerBackend} from '../../src/execution/container.js';
+import {nodeWorkspaceHost} from '../../src/deployment/workspaces.js';
 const cleanups: (() => void)[] = [];
+const unmanagedDeploymentEnvironment={platform:'darwin' as const,workspaceHost:nodeWorkspaceHost()};
 afterEach(() => {vi.restoreAllMocks();cleanups.splice(0).forEach(fn => fn());});
 function setup() {
   const config = configSchema.parse({ ...configFixture, budgets: { ...configFixture.budgets, maxTokens: 300000 }, agents: [configFixture.agents[0], { ...configFixture.agents[0], id: 'writer', name: 'Writer', slackAppId: 'ATWO', slackUserId: 'UTWO', slackBotId: 'BTWO', botTokenEnv: 'WRITER_BOT', appTokenEnv: 'WRITER_APP' }] });
@@ -120,7 +122,7 @@ it('recovers and probes the configured container before opening the Slack adapte
   const config={mate:configSchema.parse({...configFixture,agents:[{...configFixture.agents[0],model:{provider:'anthropic',id:'claude-haiku-4-5',apiKeyEnv:'MODEL_API_KEY'}}]}),runtime:{dataDir:root,docker:{binary,host:'unix:///var/run/docker.sock',image:`sha256:${'a'.repeat(64)}`,network:'none' as const},workspaceGrants:[],researchHosts:[]}};
   const refs=['RESEARCH_BOT_TOKEN','RESEARCH_APP_TOKEN','MODEL_API_KEY'],saved=Object.fromEntries(refs.map(ref=>[ref,process.env[ref]]));for(const ref of refs)process.env[ref]='synthetic';
   vi.spyOn(ContainerBackend.prototype,'recover').mockImplementation(async()=>{order.push('recover');});vi.spyOn(ContainerBackend.prototype,'probe').mockImplementation(async()=>{order.push('probe');});
-  const daemon=await Daemon.create(config,{info:()=>{},error:()=>{}});vi.spyOn(daemon.adapter!,'start').mockImplementation(async()=>{order.push('slack');});vi.spyOn(daemon.adapter!,'close').mockResolvedValue();
+  const daemon=await Daemon.create(config,{info:()=>{},error:()=>{}},process.cwd(),unmanagedDeploymentEnvironment);vi.spyOn(daemon.adapter!,'start').mockImplementation(async()=>{order.push('slack');});vi.spyOn(daemon.adapter!,'close').mockResolvedValue();
   try{await daemon.start();expect(order.slice(0,3)).toEqual(['recover','probe','slack']);}finally{await daemon.close();for(const ref of refs){if(saved[ref]===undefined)delete process.env[ref];else process.env[ref]=saved[ref];}rmSync(root,{recursive:true,force:true});}
 });
 it('does not open Slack when the real container startup probe fails',async()=>{
@@ -129,7 +131,7 @@ it('does not open Slack when the real container startup probe fails',async()=>{
   const config={mate:configSchema.parse({...configFixture,agents:[{...configFixture.agents[0],model:{provider:'anthropic',id:'claude-haiku-4-5',apiKeyEnv:'MODEL_API_KEY'}}]}),runtime:{dataDir:root,docker:{binary,host:'unix:///var/run/docker.sock',image:`sha256:${'a'.repeat(64)}`},workspaceGrants:[],researchHosts:[]}};
   const refs=['RESEARCH_BOT_TOKEN','RESEARCH_APP_TOKEN','MODEL_API_KEY'],saved=Object.fromEntries(refs.map(ref=>[ref,process.env[ref]]));for(const ref of refs)process.env[ref]='synthetic';
   vi.spyOn(ContainerBackend.prototype,'recover').mockResolvedValue();vi.spyOn(ContainerBackend.prototype,'probe').mockRejectedValue(new Error('synthetic probe failure'));
-  const daemon=await Daemon.create(config,{info:()=>{},error:()=>{}}),start=vi.spyOn(daemon.adapter!,'start');vi.spyOn(daemon.adapter!,'close').mockResolvedValue();
+  const daemon=await Daemon.create(config,{info:()=>{},error:()=>{}},process.cwd(),unmanagedDeploymentEnvironment),start=vi.spyOn(daemon.adapter!,'start');vi.spyOn(daemon.adapter!,'close').mockResolvedValue();
   try{await expect(daemon.start()).rejects.toThrow('synthetic probe failure');expect(start).not.toHaveBeenCalled();}finally{await daemon.close();for(const ref of refs){if(saved[ref]===undefined)delete process.env[ref];else process.env[ref]=saved[ref];}rmSync(root,{recursive:true,force:true});}
 });
 it('recovers the local execution scope before missing external credentials can fail startup',async()=>{
@@ -137,7 +139,7 @@ it('recovers the local execution scope before missing external credentials can f
   const config={mate:configSchema.parse({...configFixture,agents:[{...configFixture.agents[0],model:{provider:'anthropic',id:'claude-haiku-4-5',apiKeyEnv:'MODEL_API_KEY'}}]}),runtime:{dataDir:root,docker:{binary,host:'unix:///var/run/docker.sock',image:`sha256:${'a'.repeat(64)}`},workspaceGrants:[],researchHosts:[]}};
   const refs=['RESEARCH_BOT_TOKEN','RESEARCH_APP_TOKEN','MODEL_API_KEY'],saved=Object.fromEntries(refs.map(ref=>[ref,process.env[ref]]));delete process.env.RESEARCH_BOT_TOKEN;delete process.env.RESEARCH_APP_TOKEN;process.env.MODEL_API_KEY='synthetic';
   vi.spyOn(ContainerBackend.prototype,'recover').mockImplementation(async()=>{order.push('recover');});vi.spyOn(ContainerBackend.prototype,'probe').mockImplementation(async()=>{order.push('probe');});
-  const daemon=await Daemon.create(config,{info:()=>{},error:()=>{}}),start=vi.spyOn(daemon.adapter!,'start');
+  const daemon=await Daemon.create(config,{info:()=>{},error:()=>{}},process.cwd(),unmanagedDeploymentEnvironment),start=vi.spyOn(daemon.adapter!,'start');
   try{await expect(daemon.start()).rejects.toThrow('RESEARCH_BOT_TOKEN');expect(order.slice(0,2)).toEqual(['recover','probe']);expect(start).not.toHaveBeenCalled();}finally{await daemon.close();for(const ref of refs){if(saved[ref]===undefined)delete process.env[ref];else process.env[ref]=saved[ref];}rmSync(root,{recursive:true,force:true});}
 });
 it('recovers the container scope before database policy or workspace validation can reject construction',async()=>{
@@ -146,10 +148,10 @@ it('recovers the container scope before database policy or workspace validation 
   const root=realpathSync(mkdtempSync(join(tmpdir(),`mate-recover-before-${failure}-`))),data=join(root,'data'),binary=join(root,'docker-cli'),shared=join(root,'shared');writeFileSync(binary,'synthetic');chmodSync(binary,0o700);mkdirSync(shared);
   const config={mate:configSchema.parse(configFixture),runtime:{dataDir:data,docker:{binary,host:`unix://${join(root,'docker.sock')}`,image:`sha256:${'a'.repeat(64)}`},workspaceGrants:failure==='workspace'?[{agentId:'research',root:shared,operations:['read'] as const}]:[],researchHosts:[]}};
   try{
-   const first=await Daemon.create(config,{info:()=>{},error:()=>{}});
+   const first=await Daemon.create(config,{info:()=>{},error:()=>{}},process.cwd(),unmanagedDeploymentEnvironment);
    if(failure==='policy')first.store.db.prepare("UPDATE runtime_meta SET value='mismatch' WHERE key='policy'").run();
    await first.close();if(failure==='workspace')rmSync(shared,{recursive:true,force:true});recover.mockClear();
-   await expect(Daemon.create(config,{info:()=>{},error:()=>{}})).rejects.toThrow(failure==='policy'?'Runtime policy':'ENOENT');expect(recover).toHaveBeenCalledOnce();
+   await expect(Daemon.create(config,{info:()=>{},error:()=>{}},process.cwd(),unmanagedDeploymentEnvironment)).rejects.toThrow(failure==='policy'?'Runtime policy':'ENOENT');expect(recover).toHaveBeenCalledOnce();
    const release=acquireLock(join(data,'state','daemon.lock'));release();
   }finally{rmSync(root,{recursive:true,force:true});}
  }
@@ -158,7 +160,7 @@ it('releases the singleton lock if paths change after container recovery but bef
  const {Daemon}=await import('../../src/daemon/app.js'),root=realpathSync(mkdtempSync(join(tmpdir(),'mate-factory-lock-'))),data=join(root,'data'),project=join(root,'project'),binary=join(root,'docker-cli');mkdirSync(project);writeFileSync(binary,'synthetic');chmodSync(binary,0o700);
  const config={mate:configSchema.parse(configFixture),runtime:{dataDir:data,docker:{binary,host:`unix://${join(root,'docker.sock')}`,image:`sha256:${'a'.repeat(64)}`},workspaceGrants:[],researchHosts:[]}};
  vi.spyOn(ContainerBackend.prototype,'recover').mockImplementation(async()=>rmSync(project,{recursive:true,force:true}));
- try{await expect(Daemon.create(config,{info:()=>{},error:()=>{}},project)).rejects.toThrow();const release=acquireLock(join(data,'state','daemon.lock'));release();}
+ try{await expect(Daemon.create(config,{info:()=>{},error:()=>{}},project,unmanagedDeploymentEnvironment)).rejects.toThrow();const release=acquireLock(join(data,'state','daemon.lock'));release();}
  finally{rmSync(root,{recursive:true,force:true});}
 });
 it('offline replies in watched threads are durably ingested and maintain a separate pagination checkpoint', async () => {
@@ -191,26 +193,26 @@ it('configured grants cannot contain Docker control paths or host pseudo filesys
   const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-control-root-'))),data=join(root,'data'),tools=join(root,'tools'),socketDir=join(root,'socket');mkdirSync(tools,{recursive:true});mkdirSync(socketDir,{recursive:true});
   const binary=join(tools,'docker');writeFileSync(binary,'synthetic');chmodSync(binary,0o700);const grantRoot=kind==='binary'?tools:kind==='socket'?socketDir:'/dev';
   const input={mate:configSchema.parse(configFixture),runtime:{dataDir:data,docker:{binary,host:`unix://${join(socketDir,'docker.sock')}`,image:`sha256:${'a'.repeat(64)}`},workspaceGrants:[{agentId:'research',root:grantRoot,operations:['read','write','exec']}],researchHosts:[]}};
-  try{await expect(Daemon.create(input,{info:()=>{},error:()=>{}})).rejects.toThrow('Protected root overlap');}finally{rmSync(root,{recursive:true,force:true});}
+  try{await expect(Daemon.create(input,{info:()=>{},error:()=>{}},process.cwd(),unmanagedDeploymentEnvironment)).rejects.toThrow('Protected root overlap');}finally{rmSync(root,{recursive:true,force:true});}
  }
 });
 it('private Agent workspaces cannot contain the trusted Docker CLI',async()=>{
  const{Daemon}=await import('../../src/daemon/app.js');const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-private-control-'))),data=join(root,'data'),own=join(data,'agents','research');mkdirSync(own,{recursive:true});
  const binary=join(own,'docker');writeFileSync(binary,'synthetic');chmodSync(binary,0o700);
  const input={mate:configSchema.parse(configFixture),runtime:{dataDir:data,docker:{binary,host:`unix://${join(root,'docker.sock')}`,image:`sha256:${'a'.repeat(64)}`},workspaceGrants:[],researchHosts:[]}};
- try{await expect(Daemon.create(input,{info:()=>{},error:()=>{}})).rejects.toThrow('Protected root overlap');}finally{rmSync(root,{recursive:true,force:true});}
+ try{await expect(Daemon.create(input,{info:()=>{},error:()=>{}},process.cwd(),unmanagedDeploymentEnvironment)).rejects.toThrow('Protected root overlap');}finally{rmSync(root,{recursive:true,force:true});}
 });
 it.each(['private','configured'] as const)('never executes a Docker control binary from an Agent %s workspace',async kind=>{
  const{Daemon}=await import('../../src/daemon/app.js');const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-host-control-'))),data=join(root,'data'),workspace=kind==='private'?join(data,'agents','research'):join(root,'shared'),binary=join(workspace,'docker'),marker=join(root,'HOST_CODE_RAN');mkdirSync(workspace,{recursive:true});writeFileSync(binary,`#!/bin/sh\ntouch ${JSON.stringify(marker)}\nexit 1\n`);chmodSync(binary,0o700);
  const input={mate:configSchema.parse(configFixture),runtime:{dataDir:data,docker:{binary,host:`unix://${join(root,'docker.sock')}`,image:`sha256:${'a'.repeat(64)}`},workspaceGrants:kind==='configured'?[{agentId:'research',root:workspace,operations:['read','write','exec'] as const}]:[],researchHosts:[]}};
- try{await expect(Daemon.create(input,{info:()=>{},error:()=>{}})).rejects.toThrow('Protected root overlap');expect(existsSync(marker)).toBe(false);const release=acquireLock(join(data,'state','daemon.lock'));release();}
+ try{await expect(Daemon.create(input,{info:()=>{},error:()=>{}},process.cwd(),unmanagedDeploymentEnvironment)).rejects.toThrow('Protected root overlap');expect(existsSync(marker)).toBe(false);const release=acquireLock(join(data,'state','daemon.lock'));release();}
  finally{rmSync(root,{recursive:true,force:true});}
 });
 it('private exec grant upgrades preserve revocation and expiry and require configured Docker',async()=>{
  const{Daemon}=await import('../../src/daemon/app.js');const saved=process.env.RESEARCH_BOT_TOKEN;process.env.RESEARCH_BOT_TOKEN='synthetic';vi.spyOn(ContainerBackend.prototype,'recover').mockResolvedValue();
  try{for(const enabled of [false,true]){
   const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-grants-'))),binary=join(root,'docker-cli');if(enabled){writeFileSync(binary,'synthetic');chmodSync(binary,0o700);}const docker=enabled?{binary,host:'unix:///synthetic.sock',image:`sha256:${'0'.repeat(64)}`}:undefined;
-  const daemon=await Daemon.create({mate:configSchema.parse(configFixture),runtime:{dataDir:root,researchHosts:[],workspaceGrants:[],...(docker?{docker}:{})}},{info:()=>{},error:()=>{}});
+  const daemon=await Daemon.create({mate:configSchema.parse(configFixture),runtime:{dataDir:root,researchHosts:[],workspaceGrants:[],...(docker?{docker}:{})}},{info:()=>{},error:()=>{}},process.cwd(),unmanagedDeploymentEnvironment);
   daemon.collaboration.messages.references.createConversation('channel','external','CTEST');
   try{for(const state of ['valid','revoked','expired']){
    const work=daemon.collaboration.createWork(state,{conversationId:'CTEST'}),grant=daemon.broker.issueGrant(daemon.config.mate.ownerUserIds[0]!,'research',work,daemon.memoryRoots.research!,['read','write'],Date.now()+100000);

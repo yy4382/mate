@@ -12,4 +12,6 @@
 
 在Debian 13目标机复跑时，旧策略兼容测试暴露了宿主平台隐式依赖：它在Linux上会先正确触发“容器配置必须有workspace manifest”，因而无法到达自己要验证的旧hash迁移。修复只让该测试显式使用macOS开发环境契约并使用独立project目录；相邻Linux测试仍验证无manifest时迁移在备份和持久化前失败。`/root/review_v1c_workspace`复审实际diff并独立复跑11/11，判定PASS且没有P0/P1/P2；本地完整测试仍为373项通过、8项环境skip。
 
+同一目标机的完整测试随后又找出5个daemon集成用例依赖测试宿主平台。它们验证container recover/probe与Slack启动顺序、失败先后、控制路径隔离和grant升级，不验证Linux managed workspace，因此现在统一显式注入unmanaged macOS开发契约；所有带Docker的相关`Daemon.create`调用均已显式化。Linux缺manifest、有效manifest、全root探针和逐操作重验仍由显式Linux部署测试承担。该增量经同一独立审查者核对实际diff并复跑integration+workspaces 48/48，判定PASS，无P0/P1/P2。
+
 最终V1c gate仍未标PASS：必须在Ubuntu 24.04 x86_64原生宿主完成真实预分配ext4 loop mount、ENOSPC、mount丢失失败关闭和重启恢复。中途QEMU环境仅用于发现上述问题，未形成完整验收；相关VM、镜像、overlay、seed、密钥、运行库、端口和临时容器已全部清理。更新后的OrbStack 2.2.3 `ubuntu` machine仍处于`creating`，待其可用后只用标准OrbStack路径完成剩余证据。V2 restore对预先挂载root的适配仍是下一模块范围。
