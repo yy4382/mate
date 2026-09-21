@@ -7,22 +7,26 @@ import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { SandboxBackend } from '../../src/execution/backend.js';
-import { ContainerBackend, ControlledBackend } from '../../src/execution/container.js';
+import { ContainerBackend } from '../../src/execution/container.js';
 
 const roots: string[] = [];
 const dockerBinary=process.env.MATE_DOCKER_BINARY??'/usr/local/bin/docker';
+const allRealBackends=process.env.MATE_SANDBOX_TEST==='1';
+const srtEnabled=allRealBackends||process.env.MATE_SRT_TEST==='1';
+const containerEnabled=allRealBackends||process.env.MATE_CONTAINER_TEST==='1';
 function temp() { const root = realpathSync(mkdtempSync(`${tmpdir()}/mate-isolation-`)); roots.push(root); return root; }
 afterEach(() => roots.splice(0).forEach(p => rmSync(p, { recursive: true, force: true })));
 // Requires permission for SRT's local proxy sockets. Explicit opt-in prevents mock results being called real isolation.
-it.skipIf(process.env.MATE_SANDBOX_TEST !== '1')('real file sandbox and container isolate files, env, network and background processes', async () => {
+it.skipIf(!srtEnabled)('real SRT file sandbox reads and writes its granted root', async () => {
+  const root=temp(),backend=new SandboxBackend(resolve('dist/src/execution/runner.js'));
+  const written=await backend.execute({root,operation:{kind:'write',path:'MEMORY.md',content:'synthetic memory'},timeoutMs:10000});
+  expect(written.code,written.stderr).toBe(0);expect(readFileSync(`${root}/MEMORY.md`,'utf8')).toBe('synthetic memory');
+  expect((await backend.execute({root,operation:{kind:'read',path:'MEMORY.md'},timeoutMs:10000})).stdout).toBe('synthetic memory');
+});
+it.skipIf(!containerEnabled)('real container isolates files, env, network and background processes', async () => {
   const root = temp(), sibling = temp(); writeFileSync(`${sibling}/secret`, 'synthetic-secret');
-  const files = new SandboxBackend(resolve('dist/src/execution/runner.js'));
-  const commands = new ContainerBackend({ binary: dockerBinary, image: process.env.MATE_DOCKER_IMAGE!, host: process.env.MATE_DOCKER_HOST!, scope: 'mate-test-isolation' });
-  const backend = new ControlledBackend(files, commands);
+  const backend = new ContainerBackend({ binary: dockerBinary, image: process.env.MATE_DOCKER_IMAGE!, host: process.env.MATE_DOCKER_HOST!, scope: 'mate-test-isolation' });
   const execute = (command: string, signal?: AbortSignal) => backend.execute({ root, operation: { kind: 'exec', cwd: '.', command }, timeoutMs: 10000 }, signal);
-  const written = await backend.execute({ root, operation: { kind: 'write', path: 'MEMORY.md', content: 'synthetic memory' }, timeoutMs: 10000 });
-  expect(written.code, written.stderr).toBe(0); expect(readFileSync(`${root}/MEMORY.md`, 'utf8')).toBe('synthetic memory');
-  expect((await backend.execute({ root, operation: { kind: 'read', path: 'MEMORY.md' }, timeoutMs: 10000 })).stdout).toBe('synthetic memory');
   expect((await execute(`/bin/cat '${sibling}/secret'`)).code).not.toBe(0);
   expect((await execute(`printf bad > '${sibling}/escape'`)).code).not.toBe(0); expect(existsSync(`${sibling}/escape`)).toBe(false);
   process.env.MATE_SYNTHETIC_SECRET = 'do-not-inherit';
@@ -40,7 +44,7 @@ it.skipIf(process.env.MATE_SANDBOX_TEST !== '1')('real file sandbox and containe
   await expect(running).rejects.toThrow('aborted');
   await new Promise(r => setTimeout(r, 2100)); expect(existsSync(`${root}/late.txt`)).toBe(false);
 }, 20000);
-it.skipIf(process.env.MATE_SANDBOX_TEST !== '1')('container destroys detached sessions after normal exit, abort and timeout', async () => {
+it.skipIf(!containerEnabled)('container destroys detached sessions after normal exit, abort and timeout', async () => {
   const root = temp();
   const backend = new ContainerBackend({ binary: dockerBinary, image: process.env.MATE_DOCKER_IMAGE!, host: process.env.MATE_DOCKER_HOST!, scope: 'mate-test-detached' });
   for (const mode of ['normal','abort','timeout']) {
@@ -53,7 +57,7 @@ it.skipIf(process.env.MATE_SANDBOX_TEST !== '1')('container destroys detached se
     await new Promise(r => setTimeout(r, 2100)); expect(existsSync(`${root}/${mode}.txt`)).toBe(false);
   }
 }, 30000);
-it.skipIf(process.env.MATE_SANDBOX_TEST !== '1')('startup cleanup removes only this daemon scope orphaned containers', async () => {
+it.skipIf(!containerEnabled)('startup cleanup removes only this daemon scope orphaned containers', async () => {
   const scope = `test-${randomUUID()}`, host = process.env.MATE_DOCKER_HOST!, image = process.env.MATE_DOCKER_IMAGE!;
   const cli = (args: string[]) => promisify(execFile)(dockerBinary, ['--host', host, ...args], { timeout: 10000 });
   const containers: string[] = [];
@@ -68,7 +72,7 @@ it.skipIf(process.env.MATE_SANDBOX_TEST !== '1')('startup cleanup removes only t
   } finally { for (const id of containers) await cli(['rm', '--force', id]).catch(() => {}); }
 }, 30000);
 
-it.skipIf(process.env.MATE_SANDBOX_TEST !== '1')('fixed file helper exits when its daemon IPC owner is killed', async () => {
+it.skipIf(!srtEnabled)('fixed file helper exits when its daemon IPC owner is killed', async () => {
   const root = temp(); await promisify(execFile)('/usr/bin/mkfifo', [`${root}/blocked`]);
   const script = `import { SandboxBackend } from ${JSON.stringify(new URL('../../dist/src/execution/backend.js', import.meta.url).href)}; await new SandboxBackend().execute({root:${JSON.stringify(root)},operation:{kind:'read',path:'blocked'},timeoutMs:60000});`;
   const parent = spawn(process.execPath, ['--input-type=module','-e',script], { stdio: ['ignore','ignore','ignore'] });
@@ -81,7 +85,7 @@ it.skipIf(process.env.MATE_SANDBOX_TEST !== '1')('fixed file helper exits when i
   } finally { parent.kill('SIGKILL'); if (helper) { try { process.kill(-helper,'SIGKILL'); } catch {} } }
 }, 10000);
 
-it.skipIf(process.env.MATE_SANDBOX_TEST !== '1')('real sandbox supports large stdin writes and structured organization',async()=>{
+it.skipIf(!srtEnabled)('real sandbox supports large stdin writes and structured organization',async()=>{
  const root=temp(),backend=new SandboxBackend(resolve('dist/src/execution/runner.js'));
  const run=(operation:import('../../src/execution/backend.js').Operation)=>backend.execute({root,operation,timeoutMs:10000});
  const value='资料\n'.repeat(40000);expect((await run({kind:'write',path:'notes/large',content:value})).code).toBe(0);expect(readFileSync(`${root}/notes/large`,'utf8')).toBe(value);
@@ -90,23 +94,26 @@ it.skipIf(process.env.MATE_SANDBOX_TEST !== '1')('real sandbox supports large st
  expect((await run({kind:'remove',path:'notes/moved'})).code).toBe(0);
 },30000);
 
-it.skipIf(process.env.MATE_SANDBOX_TEST !== '1')('runner preserves a Unicode scalar split across stdin chunks',async()=>{
+it.skipIf(!srtEnabled)('runner preserves a Unicode scalar split across stdin chunks',async()=>{
  const root=temp(),value=Buffer.from(JSON.stringify({root,operation:{kind:'write',path:'unicode',content:'你'},timeoutMs:10000}));
  const child=spawn(process.execPath,[resolve('dist/src/execution/runner.js')],{stdio:['pipe','pipe','pipe','ipc']});let stderr='';child.stderr!.on('data',b=>stderr+=String(b));
  const done=new Promise<number|null>((r,j)=>{child.once('error',j);child.once('close',r);});
  const split=value.indexOf(Buffer.from('你'))+1;child.stdin!.write(value.subarray(0,split));await new Promise(r=>setTimeout(r,400));child.stdin!.end(value.subarray(split));
  expect(await done,stderr).toBe(0);expect(readFileSync(`${root}/unicode`,'utf8')).toBe('你');
 },15000);
-it.skipIf(process.env.MATE_SANDBOX_TEST !== '1')('real binary sandbox roundtrip and configured container networking preserve explicit isolation overrides',async()=>{
+it.skipIf(!srtEnabled)('real binary SRT sandbox roundtrip preserves bytes',async()=>{
  const root=temp(),files=new SandboxBackend(resolve('dist/src/execution/runner.js')),bytes=Buffer.from([0,255,128,12]);
  expect((await files.execute({root,operation:{kind:'write_bytes',path:'binary',base64:bytes.toString('base64')},timeoutMs:10000})).code).toBe(0);
  const read=await files.execute({root,operation:{kind:'read_bytes',path:'binary',offset:0,length:32768},timeoutMs:10000});expect(Buffer.from(JSON.parse(read.stdout).base64,'base64')).toEqual(bytes);
+});
+it.skipIf(!containerEnabled)('configured container networking preserves explicit isolation overrides',async()=>{
+ const root=temp();
  const backend=new ContainerBackend({binary:dockerBinary,image:process.env.MATE_DOCKER_IMAGE!,host:process.env.MATE_DOCKER_HOST!,scope:'mate-test-network-config',network:'bridge'});
  const command={kind:'exec' as const,cwd:'.',command:'cat /proc/net/route'};
  const connected=await backend.execute({root,operation:command,timeoutMs:10000});expect(connected.code).toBe(0);expect(connected.stdout).toContain('eth0');
  const isolated=await backend.execute({root,operation:command,network:'none',timeoutMs:10000});expect(isolated.code).toBe(0);expect(isolated.stdout).not.toContain('eth0');
 },30000);
-it.skipIf(process.env.MATE_SANDBOX_TEST !== '1')('unified container fixed helper passes startup probe and structured file semantics',async()=>{
+it.skipIf(!containerEnabled)('unified container fixed helper passes startup probe and structured file semantics',async()=>{
  const root=temp(),backend=new ContainerBackend({binary:dockerBinary,image:process.env.MATE_DOCKER_IMAGE!,host:process.env.MATE_DOCKER_HOST!,scope:`mate-test-helper-${randomUUID()}`,resources:{memoryMb:128,cpus:0.5,pids:16,tmpfsMb:8}});
  await backend.recover();await backend.probe(root);
  const value='容器内固定 helper';expect((await backend.execute({root,operation:{kind:'write',path:'notes/value',content:value},timeoutMs:20000})).code).toBe(0);

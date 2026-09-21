@@ -14,6 +14,6 @@ E 的身份和 work 来自 daemon 绑定的 RunToken；grant 由配置 owner 创
 
 ## 验证范围
 
-普通check为mock执行器和SDK传输；真实沙箱需先build，然后提供MATE_DOCKER_IMAGE（本地镜像sha256）、MATE_DOCKER_HOST（unix socket）和可选的MATE_DOCKER_BINARY（默认`/usr/local/bin/docker`），运行 `MATE_SANDBOX_TEST=1 pnpm exec vitest run tests/execution/sandbox.test.ts`（项目Node 24 PATH）。2026-09-21在macOS+本地Docker实际验证自有文件读写、兄弟目录读写拒绝、环境秘密不继承、本地HTTP出站拒绝、setsid正常/abort/timeout后无残留写入。SRT代理socket与Docker socket需外层环境允许。
+普通check为mock执行器和SDK传输。真实容器验收需先build，然后提供MATE_DOCKER_IMAGE（本地镜像sha256）、MATE_DOCKER_HOST（unix socket）和可选的MATE_DOCKER_BINARY（默认`/usr/local/bin/docker`），运行 `MATE_CONTAINER_TEST=1 pnpm exec vitest run tests/execution/sandbox.test.ts`（项目Node 24 PATH）。SRT验收单独使用`MATE_SRT_TEST=1`并需要平台支持其本地代理；旧`MATE_SANDBOX_TEST=1`等价于同时启用两个profile。2026-09-21在macOS+本地Docker实际验证两个profile；Linux生产使用container profile，验证自有文件读写、兄弟目录读写拒绝、环境秘密不继承、本地HTTP出站拒绝、setsid正常/abort/timeout后无残留写入。Docker socket需外层环境允许。
 
 未验证Linux/Windows或真实Jev分类/延迟。当前网络deny-all，后续研究工具应有独立受控网络适配器；不能用无限制shell补足。容器镜像需具备实际任务的工具链；本地busybox测试不表示Node/Python工程镜像已配置。

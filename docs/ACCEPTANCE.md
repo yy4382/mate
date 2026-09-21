@@ -47,13 +47,13 @@
 
 ## 本地验证与外部边界
 
-普通检查的当前精确数量记录在最新模块review；默认跳过8项需要显式本地SRT/Docker权限的测试。V1b真实隔离集以固定Node 24 amd64 image单独执行8/8通过；详见对应review记录。
+普通检查的当前精确数量记录在最新模块review；默认跳过10项需要显式本地权限的真实后端测试，其中container与SRT profile各5项。V1b历史真实隔离结果及当前V1c目标机结果分别以对应review为准。
 
 普通集调用真实Pi loop、Node worker与IPC，Slack/provider采用合成transport。真实隔离集使用现有固定本地镜像，覆盖跨root/secret/network、停止/超时/daemon死亡、二进制及network策略；不拉镜像、不连接外部服务。
 
 未进行真实Slack/provider验收。上线前核对安装身份/scopes、频道及DM事件、bot echo、429、unknown对账、附件分享、provider usage/错误格式与停止时延；逐项步骤见[实验运行手册](EXPERIMENT_RUNBOOK.md)。这些是协议接线与运行契约，不是证明模型能自发作出相同决策。
 
-当前边界详见[HOW_IT_WORKS](HOW_IT_WORKS.md)：本地freshness不是Slack全局原子事务；没有通用search/browser/第三方登录；review seat为更保守的全对话隔离；大小/分页/单run输入有界；没有通用unknown强行清账；单daemon/workspace；原生Ubuntu宿主、systemd与loopback容量边界仍待后续gate。
+当前边界详见[HOW_IT_WORKS](HOW_IT_WORKS.md)：本地freshness不是Slack全局原子事务；没有通用search/browser/第三方登录；review seat为更保守的全对话隔离；大小/分页/单run输入有界；没有通用unknown强行清账；单daemon/workspace；systemd服务、备份恢复和完整部署闭环仍待部署gate。
 
 ## 独立审核轨迹
 

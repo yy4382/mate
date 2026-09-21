@@ -101,9 +101,10 @@ pnpm node dist/src/main.js restore mate.local.json /ABSOLUTE/checkpoint
 
 ```sh
 pnpm run check
-MATE_SANDBOX_TEST=1 MATE_DOCKER_HOST=unix:///ABSOLUTE/docker.sock \
+MATE_CONTAINER_TEST=1 MATE_DOCKER_BINARY=/usr/bin/docker \
+MATE_DOCKER_HOST=unix:///var/run/docker.sock \
 MATE_DOCKER_IMAGE=sha256:EXISTING_64_HEX_IMAGE_ID \
 pnpm test tests/execution/sandbox.test.ts
 ```
 
-普通集含真实Pi loop、Node worker/IPC与合成Slack/provider；可选集实际运行SRT/Docker。V1b在本机Docker Linux VM中以固定Node 24 amd64 image跑过8项真实隔离测试；原生Ubuntu宿主与systemd属于后续部署gate，不能由这项结果代替。真实Slack/provider待验的是scopes、事件、跨频道/DM接线、unknown对账、usage与错误协议，不要求证明模型会作出预设协作决策。详细故障与多选择证据见[验收表](docs/ACCEPTANCE.md)。
+普通集含真实Pi loop、Node worker/IPC与合成Slack/provider；Linux生产验收用container profile。SRT后端另用`MATE_SRT_TEST=1`，旧`MATE_SANDBOX_TEST=1`仅兼容需要同时运行两个profile的环境。V1b在本机Docker Linux VM中以固定Node 24 amd64 image跑过真实隔离测试；原生Linux宿主与systemd属于部署gate，不能由这项结果代替。真实Slack/provider待验的是scopes、事件、跨频道/DM接线、unknown对账、usage与错误协议，不要求证明模型会作出预设协作决策。详细故障与多选择证据见[验收表](docs/ACCEPTANCE.md)。
