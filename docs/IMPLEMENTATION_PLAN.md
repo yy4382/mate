@@ -189,3 +189,7 @@ R8 PASS，review_r8。五种合法决策通过真实Pi loop与持久状态验证
 | E2c3 | 内部Agent配置与平台binding独立；local/Slack组合入口与迁移 | E2c2 PASS | 无Slack配置的完整运行路径；旧配置兼容与身份不重绑；配置/端口不泄漏进核心 | TODO |
 
 每个子模块通过独立红队后继续；E2c1不把尚未支持的附件/投影伪装为成功。新内部DM必须接入现有生产目录，Slack轮询只访问属于自身adapter的external会话；不能留下局部实现使daemon崩溃。旧持久openDM动作按原路由恢复，只有新动作选择internal peer通信。
+
+E2c2继续按确认风险细分：c2a核心projection授权/状态/原子入队/绑定确认，测试fake transport协议及故障；c2b真实Slack适配、导入/延迟根/revision、多App去重及owner管理接线。两个均需独立红队；c2a中未接线的adapter不得标为可用。参考ARCHITECTURE末尾的确认、旧根anchor、停用、drift与防反射契约。
+
+E2c2a PASS：review_e2c2a_projection，238普通checks/7环境skip；c2b开始前需落实projection查询分页和旧故障可发现性（c2a非阻塞P2）。

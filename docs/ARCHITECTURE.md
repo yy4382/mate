@@ -158,3 +158,17 @@ DM仅允许当前有效run中的已注册Agent与同伴创建，排序pair唯一
 本地adapter使用同一消息/attention/工作服务与真正无Slack初始化，可信主机输入只接受已配置human身份和显式成员；不构造假Slack locator。schema18新增内部pair、成员、整数序列和local幂等回执，17→18为显式事务升级。非空旧格式库不能通过local bootstrap跳过adapter迁移。internal artifact和尚未接入的projection在写入前拒绝。review seat的输入隔离/恢复规则继续适用，盲审发言保留held/continue选择。
 
 验收包括反向openDM/重复动作/变参、撤权重试、事务故障注入与重开、真实Supervisor入口可调度、peer发给reviewer及恢复、external unknown回归。此复核是设计通过，非代码gate。
+
+### E2c2 projection 设计补齐
+
+依据review_e2b2c_canonical逐项约束：projection_bindings是conversation_bindings唯一external locator的附属配置（复合FK），不是第二路由表。owner显式`disclose:true`授权向指定外部空间披露未来内容，并指定固定publisher；导入白名单另列且必须符合internal成员资格，不授历史读取权。publisher/locator不可原地变更；binding可停用，派发前及异步权限检查后重新检查binding和publisher权限，unknown只保留原证据对账。
+
+每个canonical message+binding至多一个projection，内部提交同时入队；只投影首次消息快照。源binding导入不会反射回原binding，允许转发其他明确披露binding。导入消息后续编辑/删除在内部按外部revision单调更新；已发布其他副本标记过时而不自动重写，避免把镜像副作用当原消息权威。对本来由内部投影出去的外部副本编辑/删除只记录drift，永远不改internal原文。
+
+projection状态独立于canonical outbox。派发前持久冻结wire payload/hash，重启使用原payload；HTTP/echo共用原子confirm，核验sending/unknown/sent、hash、publisher、locator/root/content并绑定原canonical messageId；冲突拒绝，不写新message/delivery。每个失败在结构化projection查询可见。
+
+默认仅向前。新reply引用binding建立前的旧根时记dependency-held/missing_historical_root，不自动披露旧根或猜顶层。owner可显式创建只含“earlier conversation; content not shared”的根锚点，确认后再派发reply；根正在投影但尚未确认则标waiting_root_receipt；根失败/unknown可见且禁止盲重投。锚点也使用同一confirmation/outbox契约。
+
+导入thread root未映射时，原始已认证事件进入独立持久pending-dependency表，正常ingress标已处理以免堵住批次。已绑定根到来后唤醒重放，重查当前import许可/内部membership；其他输入继续前进。不合格metadata不能冒充confirmation：未绑定的新locator按正常授权输入处理，已是投影副本的locator只记录drift。多App使用external locator+revision去重，源码author/principal由adapter认证上下文映射。
+
+c2按依赖分两个代码gate：c2a核心projection状态/授权/原子排队/confirmed绑定/本地协议故障测试；c2b Slack wire/echo和import/revision/dependency、生产接线与管理入口。c2a未连接的外部projection不能开启为可用功能，c2b通过才完成c2；两个gate都独立红队。这个拆分只缩小审核单位，不删任何最终验收。

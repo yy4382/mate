@@ -1,3 +1,4 @@
+import {queueProjections} from './projection-queue.js';
 import {randomUUID} from 'node:crypto';
 import type {ConversationTarget} from '../domain/conversations.js';
 import type {MessageDTO,Principal} from '../domain/messages.js';
@@ -9,8 +10,9 @@ export class InternalMessages {
   requireSupported(target:ConversationTarget):void {
     const m=this.messages;m.references.validateTarget(target);
     if(m.references.conversation(target.conversationId).authority!=='internal')throw new Error('Internal conversation required');
-    if(m.store.db.pragma('user_version',{simple:true})!==18)throw new Error('Internal conversation migration required');
-    if(m.store.db.prepare("SELECT 1 FROM conversation_bindings WHERE conversation_id=? AND mode='projection'").get(target.conversationId))throw new Error('Internal projection delivery is not installed');
+    if(![18,19].includes(Number(m.store.db.pragma('user_version',{simple:true}))))throw new Error('Internal conversation migration required');
+    if(m.store.db.pragma('user_version',{simple:true})===18&&m.store.db.prepare("SELECT 1 FROM conversation_bindings WHERE conversation_id=? AND mode='projection'").get(target.conversationId))throw new Error('Internal projection delivery is not installed');
+    if(m.store.db.pragma('user_version',{simple:true})===19&&m.store.db.prepare("SELECT 1 FROM conversation_bindings b LEFT JOIN projection_bindings p USING(provider,workspace,external_id) WHERE b.conversation_id=? AND b.mode='projection' AND p.id IS NULL").get(target.conversationId))throw new Error('Projection binding configuration missing');
   }
   /** Trusted callers supply author and active work; model tools cannot invoke this method directly. */
   commit(target:ConversationTarget,author:Principal,text:string,workId:string,origin:'participant'|'system'='participant'):MessageDTO {
@@ -28,6 +30,7 @@ export class InternalMessages {
     s.db.prepare('INSERT INTO message_work VALUES(?,?)').run(id,workId);
     const recipients=(s.db.prepare('SELECT agent_id FROM channel_access WHERE channel=? AND active=1').all(target.conversationId) as {agent_id:string}[]).map(r=>r.agent_id);
     m.record(message,recipients);
+    queueProjections(m,message);
     return message;
   }
 }
