@@ -16,7 +16,7 @@ const journalSchema = z.object({
   version: z.literal(1), transaction: z.string().uuid(), inputIdentity: z.string().regex(/^[a-f0-9]{64}$/), uid: z.number().int().nonnegative(), gid: z.number().int().nonnegative(),
   directories: z.array(z.object({ path: z.string(), uid: z.number().int().nonnegative(), gid: z.number().int().nonnegative(), mode: z.number().int().nonnegative(), existed: z.boolean(), dev: z.number().int().nonnegative().optional(), ino: z.number().int().positive().optional(), status: z.enum(['planned', 'complete']) }).strict()),
   release: z.object({ stage: z.string(), stageDev: z.number().int().nonnegative().optional(), stageIno: z.number().int().positive().optional(), releaseId: z.string().regex(/^[a-f0-9]{64}$/).optional(), status: z.enum(['planned', 'copied', 'published']) }).strict(),
-  volumes: z.array(z.object({ backingFile: z.string(), stage: z.string(), stageDev: z.number().int().nonnegative().optional(), stageIno: z.number().int().positive().optional(), status: z.enum(['planned', 'formatted', 'published', 'initialized']) }).strict()),
+  volumes: z.array(z.object({ backingFile: z.string(), stage: z.string(), stageDev: z.number().int().nonnegative().optional(), stageIno: z.number().int().positive().optional(), root: z.string(), rootExisted: z.boolean(), rootDev: z.number().int().nonnegative().optional(), rootIno: z.number().int().positive().optional(), status: z.enum(['planned', 'formatted', 'published', 'initialized']) }).strict()),
   phase: z.enum(['resources', 'units', 'mounted', 'probed', 'published']),
 }).strict();
 type InstallJournal = z.infer<typeof journalSchema>;
@@ -65,6 +65,17 @@ function directoryBytes(path: string): number {
   const visit = (current: string): void => { const stat = lstatSync(current); if (stat.isFile()) total += stat.blocks * 512; else if (stat.isDirectory()) for (const name of readdirSync(current)) visit(join(current, name)); };
   visit(path); return total;
 }
+function boundResourceBytes(candidates: readonly string[], dev: number | undefined, ino: number | undefined, kind: 'file' | 'directory'): number {
+  const existing = candidates.filter(pathExists).map(path => ({ path, stat: lstatSync(path) }));
+  if (!existing.length) return 0;
+  if (dev === undefined || ino === undefined) throw new Error(`Existing ${kind} resource lacks a journal identity`);
+  for (const item of existing) {
+    const matchesKind = kind === 'file' ? item.stat.isFile() && !item.stat.isSymbolicLink() : item.stat.isDirectory() && !item.stat.isSymbolicLink();
+    if (!matchesKind || item.stat.dev !== dev || item.stat.ino !== ino) throw new Error(`Journal-bound ${kind} resource identity differs: ${item.path}`);
+  }
+  if (existing.length > 1) throw new Error(`Journal-bound ${kind} resource exists at both staging and final paths`);
+  return kind === 'file' ? existing[0]!.stat.blocks * 512 : directoryBytes(existing[0]!.path);
+}
 export function inspectExistingInstallation(paths: InstallationPaths = installationPaths, rootUid = 0, rootGid = 0): ExistingInstallation | undefined {
   const journals = [paths.bootstrapJournal, paths.controlJournal].filter(pathExists);
   if (journals.length > 1) throw new Error('Both bootstrap and control install journals exist');
@@ -80,11 +91,10 @@ export function inspectExistingInstallation(paths: InstallationPaths = installat
       owner(paths.completed, rootUid, rootGid, 0o600, 'file'); const completed = completedSchema.parse(JSON.parse(readFileSync(paths.completed, 'utf8')));
       if (completed.inputIdentity !== journal.inputIdentity || completed.releaseId !== journal.release.releaseId) throw new Error('Installation marker and unfinished journal differ');
     }
-    const releasePath = journal.release.status === 'published' && journal.release.releaseId ? join(paths.releases, journal.release.releaseId) : journal.release.stage;
-    const releaseBytes = pathExists(releasePath) ? directoryBytes(releasePath) : 0;
+    const releaseFinal = journal.release.releaseId ? join(paths.releases, journal.release.releaseId) : undefined;
+    const releaseBytes = boundResourceBytes([journal.release.stage, ...(releaseFinal ? [releaseFinal] : [])], journal.release.stageDev, journal.release.stageIno, 'directory');
     const volumeBytes = journal.volumes.reduce((sum, volume) => {
-      const path = volume.status === 'planned' || volume.status === 'formatted' ? volume.stage : volume.backingFile;
-      if (!pathExists(path)) return sum; const stat = lstatSync(path); return sum + (stat.isFile() && !stat.isSymbolicLink() ? stat.blocks * 512 : 0);
+      return sum + boundResourceBytes([volume.stage, volume.backingFile], volume.stageDev, volume.stageIno, 'file');
     }, 0);
     return { inputIdentity: journal.inputIdentity, ...(journal.release.releaseId ? { releaseId: journal.release.releaseId } : {}), complete: false, consumedBytes: releaseBytes + volumeBytes };
   }
@@ -196,6 +206,13 @@ function layoutEntries(uid: number, gid: number): InstallJournal['directories'] 
   });
 }
 
+function mountpointIntent(root: string): Pick<InstallJournal['volumes'][number], 'root' | 'rootExisted' | 'rootDev' | 'rootIno'> {
+  if (!pathExists(root)) return { root, rootExisted: false };
+  const stat = lstatSync(root);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || readdirSync(root).length !== 0) throw new Error(`Existing workspace mountpoint must be an empty directory: ${root}`);
+  return { root, rootExisted: true, rootDev: stat.dev, rootIno: stat.ino };
+}
+
 function prepareLayout(journalPath: string, journal: InstallJournal): InstallJournal {
   for (let index = 0; index < journal.directories.length; index++) {
     let entry = journal.directories[index]!;
@@ -215,7 +232,7 @@ async function publishRelease(host: InstallerHost, spec: DeploymentSpec, journal
     if (!existsSync(item.stage)) {
       if (item.stageDev !== undefined) throw new Error('Recorded release staging directory disappeared'); mkdirSync(item.stage, { mode: 0o755 }); fsyncDirectory(dirname(item.stage)); const created = lstatSync(item.stage);
       journal = { ...journal, release: { ...item, stageDev: created.dev, stageIno: created.ino } }; replaceJournal(journalPath, journal);
-    } else if (item.stageDev === undefined) throw new Error('Unbound release staging directory requires manual inspection');
+    } else if (item.stageDev === undefined) { owner(item.stage, 0, 0, 0o755, 'directory'); const created = lstatSync(item.stage); journal = { ...journal, release: { ...item, stageDev: created.dev, stageIno: created.ino } }; replaceJournal(journalPath, journal); }
     const currentItem = journal.release, stageStat = lstatSync(item.stage); if (stageStat.dev !== currentItem.stageDev || stageStat.ino !== currentItem.stageIno) throw new Error('Release staging identity changed');
     owner(item.stage, 0, 0, 0o755, 'directory');
     for (const name of readdirSync(item.stage)) checked(host, '/usr/bin/rm', ['-rf', '--one-file-system', '--', join(item.stage, name)], 'Cannot reset bound release staging');
@@ -229,19 +246,42 @@ async function publishRelease(host: InstallerHost, spec: DeploymentSpec, journal
   if (!releaseId) throw new Error('Copied release journal is missing its content identity');
   const final = join(managedLayout.releases, releaseId), staged = existsSync(item.stage) ? await verifyRelease(item.stage, releaseId) : undefined;
   if (journal.release.status === 'copied') {
-    if (existsSync(final)) { const existing = await verifyRelease(final, releaseId); if (staged && existing.inventorySha256 !== staged.inventorySha256) throw new Error('Existing release identity differs'); }
+    if (existsSync(final)) { const existing = await verifyRelease(final, releaseId); if (staged && existing.inventorySha256 !== staged.inventorySha256) throw new Error('Existing release identity differs'); if (staged) { checked(host, '/usr/bin/rm', ['-rf', '--one-file-system', '--', item.stage], 'Cannot remove duplicate release staging'); fsyncDirectory(managedLayout.releases); } }
     else { renameSync(item.stage, final); fsyncDirectory(managedLayout.releases); }
     journal = { ...journal, release: { ...journal.release, status: 'published' } }; replaceJournal(journalPath, journal);
   }
   return { journal, manifest: await verifyRelease(final), path: final };
 }
 
-function emptyMountpoint(root: string, uid: number, gid: number): void {
+function emptyMountpoint(root: string, uid: number, gid: number, expected?: { dev: number; ino: number }): void {
   if (!existsSync(dirname(root))) throw new Error(`Managed mount parent must already exist: ${dirname(root)}`);
   if (!existsSync(root)) { mkdirSync(root, { mode: 0o700 }); chownSync(root, uid, gid); chmodSync(root, 0o700); fsyncDirectory(dirname(root)); }
   const stat = lstatSync(root); if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`Managed mountpoint is unsafe: ${root}`);
+  if (expected && (stat.dev !== expected.dev || stat.ino !== expected.ino)) throw new Error(`Managed mountpoint identity changed: ${root}`);
   const visible = readdirSync(root).filter(name => name !== 'lost+found'); if (visible.length) throw new Error(`Managed mountpoint is not empty: ${root}`);
   if (stat.dev === lstatSync(dirname(root)).dev && (stat.uid !== uid || stat.gid !== gid || (stat.mode & 0o777) !== 0o700)) throw new Error(`Managed mountpoint underlay identity mismatch: ${root}`);
+}
+
+export function prepareMountpoint(host: InstallerHost, workspace: PlannedWorkspace, uid: number, gid: number, journalPath: string, journal: InstallJournal, index: number, creator = { uid: 0, gid: 0 }): InstallJournal {
+  let record = journal.volumes[index]!;
+  const mounted = mountedWorkspace(host, workspace.root);
+  if (mounted !== undefined) {
+    if (record.rootDev === undefined || record.rootIno === undefined) throw new Error(`Mounted workspace lacks a journal-bound underlay: ${workspace.root}`);
+    assertMountedBacking(host, workspace, mounted); return journal;
+  }
+  const parent = lstatSync(dirname(workspace.root)), privateParent = dirname(workspace.root) === join(managedLayout.data, 'agents');
+  const protectedOwner = parent.uid === 0 || (parent.uid === uid && (parent.mode & 0o077) === 0);
+  if (!parent.isDirectory() || parent.isSymbolicLink() || (parent.mode & 0o022) !== 0 || !protectedOwner || (privateParent && parent.uid !== uid)) throw new Error(`Workspace mount parent is not protected: ${dirname(workspace.root)}`);
+  if (record.rootDev === undefined || record.rootIno === undefined) {
+    if (!pathExists(workspace.root)) { mkdirSync(workspace.root, { mode: 0o700 }); fsyncDirectory(dirname(workspace.root)); }
+    const stat = lstatSync(workspace.root), recoverableCreatedRoot = !record.rootExisted && stat.uid === creator.uid && stat.gid === creator.gid && (stat.mode & 0o777) === 0o700;
+    if (!stat.isDirectory() || stat.isSymbolicLink() || readdirSync(workspace.root).length !== 0 || (record.rootExisted ? false : !recoverableCreatedRoot)) throw new Error(`Unbound workspace mountpoint is not the transaction-created empty directory: ${workspace.root}`);
+    record = { ...record, rootDev: stat.dev, rootIno: stat.ino }; journal = { ...journal, volumes: journal.volumes.map((value, at) => at === index ? record : value) }; replaceJournal(journalPath, journal);
+  }
+  const expected = { dev: record.rootDev, ino: record.rootIno }; const stat = lstatSync(workspace.root);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || stat.dev !== expected.dev || stat.ino !== expected.ino || readdirSync(workspace.root).length !== 0) throw new Error(`Journal-bound workspace mountpoint changed: ${workspace.root}`);
+  chownSync(workspace.root, uid, gid); chmodSync(workspace.root, 0o700); fsyncDirectory(workspace.root); fsyncDirectory(dirname(workspace.root));
+  return journal;
 }
 
 function assertMountedBacking(host: InstallerHost, workspace: PlannedWorkspace, output: string): void {
@@ -251,15 +291,22 @@ function assertMountedBacking(host: InstallerHost, workspace: PlannedWorkspace, 
   if (!loops.includes(source)) throw new Error(`Existing workspace mount does not use its managed backing: ${workspace.root}`);
 }
 
-export function initializePublishedVolume(host: InstallerHost, workspace: PlannedWorkspace, uid: number, gid: number): void {
-  emptyMountpoint(workspace.root, uid, gid);
-  const mounted = host.run('/usr/bin/findmnt', ['--noheadings', '--mountpoint', workspace.root, '--output', 'SOURCE,FSTYPE,OPTIONS']);
-  if (mounted.code === 0) assertMountedBacking(host, workspace, mounted.stdout);
-  else checked(host, '/usr/bin/mount', ['-o', 'loop,rw,nodev,nosuid', workspace.backingFile, workspace.root], 'Cannot initialize workspace mount');
+function mountedWorkspace(host: InstallerHost, root: string): string | undefined {
+  const result = host.run('/usr/bin/findmnt', ['--noheadings', '--mountpoint', root, '--output', 'TARGET,SOURCE,FSTYPE,OPTIONS']);
+  if (result.code !== 0) return undefined;
+  const fields = result.stdout.trim().split(/\s+/);
+  return fields[0] === root ? fields.slice(1).join(' ') : undefined;
+}
+
+export function initializePublishedVolume(host: InstallerHost, workspace: PlannedWorkspace, uid: number, gid: number, expectedMountpoint?: { dev: number; ino: number }): void {
+  const mounted = mountedWorkspace(host, workspace.root);
+  if (mounted !== undefined) assertMountedBacking(host, workspace, mounted);
+  else { emptyMountpoint(workspace.root, uid, gid, expectedMountpoint); checked(host, '/usr/bin/mount', ['-o', 'loop,rw,nodev,nosuid', workspace.backingFile, workspace.root], 'Cannot initialize workspace mount'); }
   checked(host, '/usr/bin/chown', [`${uid}:${gid}`, workspace.root], 'Cannot set workspace owner');
   checked(host, '/usr/bin/chmod', ['0700', workspace.root], 'Cannot set workspace mode');
   fsyncDirectory(workspace.root);
   checked(host, '/usr/bin/umount', [workspace.root], 'Cannot unmount initialized workspace');
+  emptyMountpoint(workspace.root, uid, gid, expectedMountpoint);
   fsyncFile(workspace.backingFile);
 }
 
@@ -269,7 +316,7 @@ function prepareVolume(host: InstallerHost, workspace: PlannedWorkspace, uid: nu
     if (!existsSync(record.stage)) {
       if (record.stageDev !== undefined) throw new Error('Recorded workspace staging file disappeared'); const fd = openSync(record.stage, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600); closeSync(fd); fsyncDirectory(dirname(record.stage)); const created = lstatSync(record.stage);
       record = { ...record, stageDev: created.dev, stageIno: created.ino }; journal = { ...journal, volumes: journal.volumes.map((value, at) => at === index ? record : value) }; replaceJournal(journalPath, journal);
-    } else if (record.stageDev === undefined) throw new Error('Unbound workspace staging file requires manual inspection');
+    } else if (record.stageDev === undefined) { owner(record.stage, 0, 0, 0o600, 'file'); const created = lstatSync(record.stage); record = { ...record, stageDev: created.dev, stageIno: created.ino }; journal = { ...journal, volumes: journal.volumes.map((value, at) => at === index ? record : value) }; replaceJournal(journalPath, journal); }
     const stageIdentity = lstatSync(record.stage); if (stageIdentity.dev !== record.stageDev || stageIdentity.ino !== record.stageIno) throw new Error('Workspace staging identity changed');
     owner(record.stage, 0, 0, 0o600, 'file');
     checked(host, '/usr/bin/truncate', ['--size', String(workspace.capacityBytes), record.stage], 'Cannot size workspace backing');
@@ -291,7 +338,8 @@ function prepareVolume(host: InstallerHost, workspace: PlannedWorkspace, uid: nu
     if (checked(host, '/usr/sbin/blkid', ['-p', '-s', 'TYPE', '-o', 'value', workspace.backingFile], 'Cannot inspect published workspace filesystem') !== 'ext4') throw new Error('Published workspace backing is not ext4');
   }
   if (record.status === 'published') {
-    initializePublishedVolume(host, workspace, uid, gid);
+    journal = prepareMountpoint(host, workspace, uid, gid, journalPath, journal, index); record = journal.volumes[index]!;
+    initializePublishedVolume(host, workspace, uid, gid, { dev: record.rootDev!, ino: record.rootIno! });
     record = { ...record, status: 'initialized' }; journal = { ...journal, volumes: journal.volumes.map((value, at) => at === index ? record : value) }; replaceJournal(journalPath, journal);
   }
   return journal;
@@ -320,9 +368,11 @@ export async function installDeployment(spec: DeploymentSpec, config: DaemonConf
   else {
     const transaction = randomUUID(), existing = host.existingInstall();
     if (existing) journalPath = controlJournalPath;
+    if (existing && (!existing.complete || !existing.releaseId)) throw new Error('Unfinished installation journal disappeared before resume');
+    const existingRelease = existing?.releaseId ? lstatSync(join(managedLayout.releases, existing.releaseId)) : undefined;
     journal = { version: 1, transaction, inputIdentity: requestedIdentity, ...identity, directories: layoutEntries(identity.uid, identity.gid),
-      release: { stage: join(managedLayout.releases, `.mate-install-${transaction}-release`), ...(existing ? { releaseId: existing.releaseId } : {}), status: existing ? 'published' : 'planned' },
-      volumes: plan.workspaces.map(item => { const final = existing ? lstatSync(item.backingFile) : undefined; return { backingFile: item.backingFile, stage: join(managedLayout.volumes, `.mate-install-${transaction}-${basename(item.backingFile)}`), ...(final ? { stageDev: final.dev, stageIno: final.ino } : {}), status: existing ? 'initialized' as const : 'planned' as const }; }), phase: existing ? 'published' : 'resources' }; replaceJournal(journalPath, journal);
+      release: { stage: join(managedLayout.releases, `.mate-install-${transaction}-release`), ...(existingRelease ? { stageDev: existingRelease.dev, stageIno: existingRelease.ino, releaseId: existing!.releaseId } : {}), status: existing ? 'published' : 'planned' },
+      volumes: plan.workspaces.map(item => { const final = existing ? lstatSync(item.backingFile) : undefined; return { backingFile: item.backingFile, stage: join(managedLayout.volumes, `.mate-install-${transaction}-${basename(item.backingFile)}`), ...mountpointIntent(item.root), ...(final ? { stageDev: final.dev, stageIno: final.ino } : {}), status: existing ? 'initialized' as const : 'planned' as const }; }), phase: existing ? 'published' : 'resources' }; replaceJournal(journalPath, journal);
   }
   journal = prepareLayout(journalPath, journal);
   if (journalPath === bootstrapJournalPath) { renameSync(bootstrapJournalPath, controlJournalPath); fsyncDirectory('/var/lib'); fsyncDirectory(dirname(controlJournalPath)); journalPath = controlJournalPath; }
