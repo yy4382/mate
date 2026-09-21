@@ -21,7 +21,7 @@ export function renderMountUnit(mount: ManagedMount): string {
   if (!mount.unitName.endsWith('.mount') || !mount.unitName || resolve(mount.root) !== mount.root || resolve(mount.backingFile) !== mount.backingFile || /[\0\r\n]/.test(mount.root + mount.backingFile)) {
     throw new Error('Invalid managed mount unit input');
   }
-  return `[Unit]\nDescription=Mate managed workspace\nBefore=mate.service\n\n[Mount]\nWhat=${JSON.stringify(mount.backingFile)}\nWhere=${JSON.stringify(mount.root)}\nType=ext4\nOptions=loop,rw,nodev,nosuid\nTimeoutSec=90\n\n[Install]\nWantedBy=multi-user.target\n`;
+  return `[Unit]\nDescription=Mate managed workspace\nBefore=mate.service\n\n[Mount]\nWhat=${mount.backingFile}\nWhere=${mount.root}\nType=ext4\nOptions=loop,rw,nodev,nosuid\nTimeoutSec=90\n\n[Install]\nWantedBy=multi-user.target\n`;
 }
 
 function shellQuote(value: string): string { return `'${value.replaceAll("'", `'"'"'`)}'`; }
@@ -31,7 +31,7 @@ export function renderService(mounts: readonly ManagedMount[], memoryMaxMiB: num
   if (new Set(names).size !== names.length) throw new Error('Duplicate mount unit name');
   if (!Number.isInteger(memoryMaxMiB) || memoryMaxMiB < 128 || externalRoots.some(root => resolve(root) !== root)) throw new Error('Invalid service resource plan');
   const requires = lineList(['docker.service', ...names]);
-  const writable = lineList(['/var/lib/mate', ...externalRoots].map(value => JSON.stringify(value)));
+  const writable = lineList(['/var/lib/mate', ...externalRoots]);
   return `[Unit]\nDescription=Mate autonomous agent daemon\nWants=network-online.target\nAfter=network-online.target ${requires}\nRequires=${requires}\nRequiresMountsFor=/var/lib/mate /etc/mate\n\n[Service]\nType=simple\nUser=mate\nGroup=mate\nSupplementaryGroups=docker\nWorkingDirectory=/opt/mate/current\nEnvironmentFile=/etc/mate/mate.env\nExecStart=/usr/bin/node /opt/mate/current/dist/src/main.js start /etc/mate/mate.json\nRestart=on-failure\nRestartSec=5\nTimeoutStopSec=120\nKillMode=mixed\nMemoryMax=${memoryMaxMiB}M\nUMask=0077\nNoNewPrivileges=yes\nPrivateTmp=yes\nPrivateDevices=yes\nProtectHome=yes\nProtectSystem=strict\nProtectKernelTunables=yes\nProtectKernelModules=yes\nProtectControlGroups=yes\nCapabilityBoundingSet=\nReadWritePaths=${writable}\nRestrictSUIDSGID=yes\nLockPersonality=yes\n\n[Install]\nWantedBy=multi-user.target\n`;
 }
 

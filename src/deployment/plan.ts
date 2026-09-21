@@ -32,7 +32,7 @@ export function createDeploymentPlan(rawSpec: DeploymentSpec, config: DaemonConf
   const agents = [...config.mate.agents.map(agent => agent.id)].sort(), agentSet = new Set(agents), privateByAgent = new Map<string, number>();
   for (const item of spec.privateWorkspaces) { if (!agentSet.has(item.agentId)) throw new Error('Private workspace override names an unknown Agent'); if (privateByAgent.has(item.agentId)) throw new Error('Duplicate private workspace spec'); privateByAgent.set(item.agentId, item.capacityMiB); }
   const grants = [...new Set(config.runtime.workspaceGrants.map(grant => facts.canonical(grant.root)))].sort();
-  if ([source, configSource, ...grants].some(path => /[\0\r\n]/.test(path))) throw new Error('Deployment paths must not contain control characters');
+  if ([source, configSource, ...grants].some(path => !/^\/[A-Za-z0-9_./-]+$/.test(path))) throw new Error('Managed deployment paths must use systemd-safe absolute characters');
   const externalByRoot = new Map<string, number>();
   for (const item of spec.externalWorkspaces) { const root = facts.canonical(item.root); if (root !== item.root || externalByRoot.has(root)) throw new Error('External workspace specs must be unique canonical paths'); externalByRoot.set(root, item.capacityMiB); }
   if (JSON.stringify([...externalByRoot.keys()].sort()) !== JSON.stringify(grants)) throw new Error('External workspace spec must exactly cover configured grants');
