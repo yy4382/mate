@@ -3,11 +3,12 @@ import type { Supervisor } from '../runtime/supervisor.js';
 import type { Broker } from '../policy/broker.js';
 import { encode } from '../storage/store.js';
 export class Controls {
-  constructor(readonly collaboration: Collaboration, readonly supervisor: Supervisor, readonly broker: Broker, readonly verifyReviewWorkspace: (actor:string)=>string = ()=>{throw new Error('Clean workspace verification unavailable');}) {}
+  constructor(readonly collaboration: Collaboration, readonly supervisor: Supervisor, readonly broker: Broker, readonly verifyReviewWorkspace: (actor:string)=>string = ()=>{throw new Error('Clean workspace verification unavailable');},readonly platformControl?:(user:string,command:string,id:string|undefined,args:string[])=>string|undefined) {}
   execute(user: string, text: string): string {
     const c = this.collaboration, s = c.store;
     if (!c.config.ownerUserIds.includes(user)) throw new Error('Owner only');
     const [command, id, ...rest] = text.trim().split(/\s+/);
+    const platform=command?this.platformControl?.(user,command,id,rest):undefined;if(platform!==undefined)return platform;
     switch (command) {
       case 'status': return encode({ accounts: c.config.agents.map(a=>c.ledger.account(a.id)), agents: s.db.prepare('SELECT id,session_id,paused,generation FROM agents').all(), activeRuns: s.db.prepare("SELECT id,agent_id FROM runs WHERE state='active'").all(), works: s.db.prepare('SELECT id,state,runs,max_runs,tokens,max_tokens,cost,max_cost FROM works ORDER BY rowid DESC LIMIT 20').all(), unknown: s.db.prepare("SELECT id,agent_id,state FROM actions WHERE state='unknown'").all(), unknownOutputs: s.db.prepare("SELECT id,agent_id FROM outbox WHERE state='unknown'").all() });
       case 'review-seat': {
@@ -39,7 +40,7 @@ export class Controls {
         const work = c.work(id); if (work.state === 'cancelled' || runs! < work.runs || tokens! < work.tokens || dollars! < work.cost) throw new Error('Budget below usage or cancelled work');
         s.db.prepare('UPDATE works SET max_runs=?,max_tokens=?,max_cost=? WHERE id=?').run(runs!, tokens!, dollars!, id); s.audit('owner_budget', { user, id, runs, tokens, dollars }); return `Budget updated for ${id}; resume separately if paused`;
       }
-      default: return 'Commands: status; tasks; schedules; stop|resume|cancel WORK_ID; agent-stop|agent-resume AGENT_ID; agent-reset AGENT_ID CHECKPOINT; revoke GRANT_ID; budget WORK_ID MAX_RUNS MAX_TOKENS MAX_USD; agent-budget AGENT_ID MAX_RUNS MAX_TOKENS MAX_USD';
+      default: return 'Commands: status; tasks; schedules; conversations; projection-bindings; projection-add CONVERSATION_ID JSON; projections CONVERSATION_ID JSON; projection-inputs BINDING_ID JSON; projection-enable BINDING_ID true|false; projection-anchor BINDING_ID ROOT_ID; stop|resume|cancel WORK_ID; agent-stop|agent-resume AGENT_ID; agent-reset AGENT_ID CHECKPOINT; revoke GRANT_ID; budget WORK_ID MAX_RUNS MAX_TOKENS MAX_USD; agent-budget AGENT_ID MAX_RUNS MAX_TOKENS MAX_USD';
     }
   }
 }

@@ -5,7 +5,7 @@ import { rawMessage } from './protocol.js';
 
 /** Authenticated ingress -> canonical facts. Unmatched metadata remains ordinary input. */
 export class CanonicalSlackNormalizer {
-  constructor(readonly messages:Conversations,readonly mapper:SlackMapper,readonly output:CanonicalOutput){}
+  constructor(readonly messages:Conversations,readonly mapper:SlackMapper,readonly output:CanonicalOutput,readonly projections?:{handle(event:unknown):boolean}){}
   normalize(appId:string,eventId:string):void {
     const s=this.messages.store;s.atomic(()=>{
       const row=s.db.prepare('SELECT body FROM ingress WHERE app_id=? AND event_id=? AND normalized=0').get(appId,eventId) as {body:string}|undefined;
@@ -15,6 +15,7 @@ export class CanonicalSlackNormalizer {
       const parsed=rawMessage.safeParse(body.event);
       if(parsed.success){
         const event=parsed.data;
+        if(this.projections?.handle(event)){s.db.prepare('UPDATE ingress SET normalized=1 WHERE app_id=? AND event_id=?').run(appId,eventId);return;}
         if((event.type==='member_left_channel'||event.type==='member_joined_channel')&&event.user===installation.slackUserId)this.messages.membership(installation.id,this.mapper.conversation(event.channel),event.type==='member_joined_channel');
         if(event.type==='message'||event.type==='app_mention'){
           if(/^D[A-Z0-9]+$/.test(event.channel))this.messages.membership(installation.id,this.mapper.conversation(event.channel),true);

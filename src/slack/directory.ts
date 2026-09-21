@@ -20,6 +20,8 @@ export class Directory implements ConversationDirectory {
     do {
       const result = await client.users.conversations({ types: 'public_channel,private_channel,im,mpim', limit: 200, ...(cursor ? { cursor } : {}) });
       for (const c of result.channels ?? []) if (c.id && /^[CDG][A-Z0-9]+$/.test(c.id)) {
+        const bound=this.messages.references.findConversation({provider:'slack',workspace:this.mapper.config.teamId,externalId:c.id});
+        if(bound&&this.messages.references.conversation(bound).authority==='internal')continue;
         channels.push(c);
         spaces.push({ conversationId: this.mapper.conversation(c.id), name: c.name, purpose: c.purpose?.value, principal: c.user?slackPrincipal(this.mapper.config,c.user):undefined, archived: !!c.is_archived, kind: c.is_im ? 'dm' : 'channel' });
       }

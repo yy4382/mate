@@ -26,6 +26,8 @@ export class SlackService {
       const stored = this.c.store.db.prepare("SELECT a.channel FROM channel_access a JOIN conversation_bindings b ON b.conversation_id=a.channel WHERE b.provider='slack' AND b.mode='primary' AND b.workspace=? AND a.agent_id=?").all(this.transport.mapper.config.teamId,agent.id) as { channel: string }[];
       for (const channel of new Set([...Object.keys(agent.channels), ...stored.map(r => this.transport.mapper.target({conversationId:r.channel}).channel)])) {
         if (this.stopping()) return;
+        const bound=this.c.messages.references.findConversation({provider:'slack',workspace:this.transport.mapper.config.teamId,externalId:channel});
+        if(bound&&this.c.messages.references.conversation(bound).authority==='internal')continue;
         // Failure closes permission until a successful membership check.
         this.c.messages.membership(agent.id, this.transport.mapper.conversation(channel), false);
         try { const info = await client.conversations.info({ channel }); this.c.messages.membership(agent.id, this.transport.mapper.conversation(channel), info.channel?.is_member === true || (channel.startsWith('D') && info.channel?.is_im === true)); }

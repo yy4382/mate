@@ -43,7 +43,7 @@ export class MessageIngestion {
       }
       if(kind){
         this.writes.message(effective);
-        if(conversation.authority==='internal'&&this.store.db.pragma('user_version',{simple:true})===19&&old){
+        if(conversation.authority==='internal'&&Number(this.store.db.pragma('user_version',{simple:true}))>=19&&old){
           this.store.db.prepare("UPDATE projection_outbox SET drift='source_changed',state=CASE WHEN state IN ('pending','held') THEN 'failed' ELSE state END,reason=CASE WHEN state IN ('pending','held') THEN 'source_changed_before_publication' ELSE reason END WHERE message_id=? AND anchor=0 AND source_revision!=?").run(effective.id,effective.revision);
         }
         this.store.db.prepare('INSERT INTO conversation_events(channel,thread,message_key,revision,kind) VALUES(?,?,?,?,?)')

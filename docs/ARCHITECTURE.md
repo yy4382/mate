@@ -172,3 +172,16 @@ projection状态独立于canonical outbox。派发前持久冻结wire payload/ha
 导入thread root未映射时，原始已认证事件进入独立持久pending-dependency表，正常ingress标已处理以免堵住批次。已绑定根到来后唤醒重放，重查当前import许可/内部membership；其他输入继续前进。不合格metadata不能冒充confirmation：未绑定的新locator按正常授权输入处理，已是投影副本的locator只记录drift。多App使用external locator+revision去重，源码author/principal由adapter认证上下文映射。
 
 c2按依赖分两个代码gate：c2a核心projection状态/授权/原子排队/confirmed绑定/本地协议故障测试；c2b Slack wire/echo和import/revision/dependency、生产接线与管理入口。c2a未连接的外部projection不能开启为可用功能，c2b通过才完成c2；两个gate都独立红队。这个拆分只缩小审核单位，不删任何最终验收。
+
+### E2c3 配置与适配器生命周期独立设计讨论
+
+review_e2c2b_slack_projection已阅读现config/daemon/migrate/main，认定方向可行并提出以下必要修订，全部采纳，无用户决策分叉：
+
+- 规范配置中mate只持有Agent定义、持续预算和内部owner授权名单；adapters.slack单列workspace、稳定human principal映射及安装binding，允许部分Agent无Slack；adapters.local声明可信human与房间。旧扁平配置只在统一兼容入口转换，持久快照/比较/CLI/迁移都使用同一入口。adapter内部可生成legacy兼容view，runtime不再要求bot字段。
+- 身份映射与owner授权分离：旧owner默认映射到已有scoped Slack human principal，撤销owner仍保留映射。Slack command认证workspace/安装后映射raw user，再交核心Controls。旧审计不改写；offline迁移禁止改变已有映射或让映射消失后回退，禁止旧workspace/Agent安装身份重绑或静默移除。新安装可添加。已有workspace新显式映射须保持原默认principal，避免改写先前已观察身份。
+- local room按配置一次播种，重启核对identity且不重授撤销membership。变更由显式offline migration对旧/新成员差集应用（只新增成员首次grant，移除成员撤销；相同成员保留当前撤销状态），不隐式删除消息/房间事实。新空库可无Slack；旧载荷仍经原adapter兼容解释。
+- 一个Daemon与同一Supervisor/ToolRouter/Store；AdapterLifecycle提供有取消/失败契约的verify/start/poll/flush/close，使用共享stop signal，close幂等，部分启动失败关闭已开连接，最后释放DB/单例锁。核心调度独立于adapter周期网络失败；不将整个旧循环简单搬入adapter，也不建泛型插件框架。
+- 把Socket、目录、附件下载及artifact transport一起放到Slack组合边界；保持现有窄能力接口。未绑定Slack的Agent可以内部收发与工作，外部动作明确unavailable，不借用其他Agent安装，也不把旧外部action改为内部。组合目录故障返回内部spaces及external incomplete。
+- 本地常驻入口通过同一运行时接收可信主机输入/查询输出与owner控制，不引入HTTP或独立业务状态；已有停止、预算、工具/隔离规则一致。
+
+验收：旧配置等价规范化与两次重启、原wire/hash不变；部分Slack绑定/全local实际运行；owner撤权保持author identity；房间重复启动不恢复权限；网络周期失败不挡内部调度；部分启动/取消释放连接和锁。讨论结论及此记录是c3实现前设计决策，不代表代码已验收。

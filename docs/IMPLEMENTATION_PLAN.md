@@ -193,3 +193,5 @@ R8 PASS，review_r8。五种合法决策通过真实Pi loop与持久状态验证
 E2c2继续按确认风险细分：c2a核心projection授权/状态/原子入队/绑定确认，测试fake transport协议及故障；c2b真实Slack适配、导入/延迟根/revision、多App去重及owner管理接线。两个均需独立红队；c2a中未接线的adapter不得标为可用。参考ARCHITECTURE末尾的确认、旧根anchor、停用、drift与防反射契约。
 
 E2c2a PASS：review_e2c2a_projection，238普通checks/7环境skip；c2b开始前需落实projection查询分页和旧故障可发现性（c2a非阻塞P2）。
+
+E2c2b PASS：review_e2c2b_slack_projection，245普通checks/7环境skip；真实Slack回复截断破坏游标的阻塞已修复并经实际admin queue路径验证。E2c2整体完成，进入c3配置解绑与完整本地常驻入口。

@@ -6,7 +6,7 @@ import type {Principal} from '../domain/messages.js';
 import type {Conversations} from './messages.js';
 import type {DispatchFailure} from './output.js';
 
-export interface ProjectionBinding extends ExternalConversation {id:string;conversationId:string;publisher:string;enabled:boolean;imports:Principal[]}
+export interface ProjectionBinding extends ExternalConversation {id:string;conversationId:string;publisher:string;enabled:boolean;imports:Principal[];createdAt:number}
 export interface ProjectionWire {text:string;target:ExternalConversation;thread?:string}
 export interface ProjectionDispatch {id:string;publisher:string;wire:ProjectionWire;requestHash:string}
 export interface ProjectionEvidence {publisher:string;locator:ExternalMessage;root:string;text:string}
@@ -25,8 +25,8 @@ export class Projections {
   private serial:Promise<unknown>=Promise.resolve();
   constructor(readonly messages:Conversations,readonly transports:ReadonlyMap<string,ProjectionTransport>,readonly clock:()=>number=Date.now){}
   binding(id:string):ProjectionBinding {
-    const row=this.messages.store.db.prepare('SELECT p.*,b.conversation_id FROM projection_bindings p JOIN conversation_bindings b USING(provider,workspace,external_id) WHERE p.id=?').get(id) as {id:string;provider:string;workspace:string;external_id:string;conversation_id:string;publisher:string;enabled:number;imports:string}|undefined;
-    if(!row)throw new Error('Unknown projection binding');return{id:row.id,provider:row.provider,workspace:row.workspace,externalId:row.external_id,conversationId:row.conversation_id,publisher:row.publisher,enabled:!!row.enabled,imports:JSON.parse(row.imports)};
+    const row=this.messages.store.db.prepare('SELECT p.*,b.conversation_id FROM projection_bindings p JOIN conversation_bindings b USING(provider,workspace,external_id) WHERE p.id=?').get(id) as {id:string;provider:string;workspace:string;external_id:string;conversation_id:string;publisher:string;enabled:number;imports:string;created_at?:number}|undefined;
+    if(!row)throw new Error('Unknown projection binding');return{id:row.id,provider:row.provider,workspace:row.workspace,externalId:row.external_id,conversationId:row.conversation_id,publisher:row.publisher,enabled:!!row.enabled,imports:JSON.parse(row.imports),createdAt:row.created_at??0};
   }
   /** Trusted owner configuration only; never exposed as a model tool. */
   configure(conversationId:string,locator:ExternalConversation,publisher:string,imports:Principal[],disclose:boolean):string {
@@ -40,7 +40,8 @@ export class Projections {
     }
     return s.atomic(()=>{
       m.references.bindConversation(locator,conversationId,'projection');
-      const id=randomUUID();s.db.prepare('INSERT INTO projection_bindings VALUES(?,?,?,?,?,1,?)').run(id,locator.provider,locator.workspace,locator.externalId,publisher,encode(imports));
+      const id=randomUUID();s.db.prepare('INSERT INTO projection_bindings(id,provider,workspace,external_id,publisher,enabled,imports) VALUES(?,?,?,?,?,1,?)').run(id,locator.provider,locator.workspace,locator.externalId,publisher,encode(imports));
+      if(Number(s.db.pragma('user_version',{simple:true}))>=20)s.db.prepare('UPDATE projection_bindings SET created_at=? WHERE id=?').run(this.clock(),id);
       s.audit('projection_disclosure_authorized',{bindingId:id,conversationId,locator,publisher,imports});return id;
     });
   }
@@ -54,9 +55,11 @@ export class Projections {
     const row=this.messages.store.db.prepare('SELECT * FROM projection_outbox WHERE id=?').get(id) as Projection|undefined;
     if(!row)throw new Error('Unknown projection');return row;
   }
-  list(actor:string,conversationId:string):Projection[] {
+  list(actor:string,conversationId:string,options:{before?:number;problemsOnly?:boolean}={}):{items:(Projection&{cursor:number})[];nextCursor:number|null} {
     this.messages.requireReadable(actor);this.messages.requireAccess(actor,conversationId);
-    return this.messages.store.db.prepare('SELECT p.* FROM projection_outbox p JOIN message_identities m ON m.id=p.message_id JOIN message_visibility v ON v.key=m.id WHERE m.conversation_id=? AND v.agent_id=? ORDER BY p.rowid DESC LIMIT 100').all(conversationId,actor) as Projection[];
+    const before=z.number().int().positive().parse(options.before??Number.MAX_SAFE_INTEGER);
+    const rows=this.messages.store.db.prepare("SELECT p.*,p.rowid cursor FROM projection_outbox p JOIN message_identities m ON m.id=p.message_id JOIN message_visibility v ON v.key=m.id WHERE m.conversation_id=? AND v.agent_id=? AND p.rowid<? AND (?=0 OR p.state IN ('held','unknown','failed') OR p.drift IS NOT NULL) ORDER BY p.rowid DESC LIMIT 101").all(conversationId,actor,before,Number(options.problemsOnly??false)) as (Projection&{cursor:number})[];
+    const items=rows.slice(0,100);return{items,nextCursor:rows.length>100?items.at(-1)!.cursor:null};
   }
   /** Only owner authorization may disclose that an old root exists; never includes old text. */
   anchor(bindingId:string,rootId:string):string {

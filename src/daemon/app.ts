@@ -1,3 +1,9 @@
+import {migrateProjections} from '../storage/projection-schema.js';
+import {migrateProjectionImports} from '../storage/projection-import-schema.js';
+import {Projections} from '../conversations/projections.js';
+import {ProjectionImports} from '../conversations/projection-imports.js';
+import {SlackProjectionTransport,SlackProjectionInput} from '../slack/projections.js';
+import {SlackProjectionService} from '../slack/projection-service.js';
 import {TeamDirectory} from '../conversations/team-directory.js';
 import {migrateInternalConversations} from '../storage/internal-schema.js';
 import { migrateCanonicalConversations } from '../slack/canonical-migration.js';
@@ -41,6 +47,7 @@ export class Daemon {
   readonly broker: Broker;
   readonly supervisor: Supervisor;
   readonly slack: SlackService;
+  readonly projections:SlackProjectionService;
   readonly memoryRoots: Record<string, string> = {};
   readonly backend: ExecutionBackend;
   private release: () => void;
@@ -75,8 +82,8 @@ export class Daemon {
 
       }
       migrateCanonicalConversations(this.store,c);
-      if(previous&&this.store.db.pragma('user_version',{simple:true})===17)throw new Error('Internal conversations require explicit offline migration');
-      migrateInternalConversations(this.store);
+      if(previous&&Number(this.store.db.pragma('user_version',{simple:true}))<20)throw new Error('Internal conversations require explicit offline migration');
+      migrateInternalConversations(this.store);migrateProjections(this.store);migrateProjectionImports(this.store);
       const {messages,mapper,argumentsCodec}=slackApplication(this.store,c);
       messages.writes.assertFormat();
       const transport=new WebSlackTransport(this.store,mapper,Object.fromEntries(c.agents.map(a=>[a.id,requireSecret(process.env,a.botTokenEnv)])));
@@ -106,7 +113,10 @@ export class Daemon {
         if (!existsSync(join(root, 'MEMORY.md'))) writeFileSync(join(root, 'MEMORY.md'), `# ${agent.name}\n\nPrivate memory entry. Keep durable lessons and links to notes here.\n`, { flag: 'wx', mode: 0o600 });
       }
       for (const grant of config.runtime.workspaceGrants) canonicalRoot(grant.root, [projectRoot, state, agentsDir]);
-      const ingress = new Ingress(this.collaboration,new CanonicalSlackNormalizer(messages,mapper,output)), controls = new Controls(this.collaboration, this.supervisor, this.broker, actor=>this.verifyReviewWorkspace(actor));
+      const projections=new Projections(messages,new Map([['slack',new SlackProjectionTransport(transport)]]));
+      const imports=new ProjectionImports(this.collaboration,projections),projectionInput=new SlackProjectionInput(projections,imports,transport);
+      this.projections=new SlackProjectionService(projections,imports,projectionInput,transport);
+      const ingress = new Ingress(this.collaboration,new CanonicalSlackNormalizer(messages,mapper,output,projectionInput)), controls = new Controls(this.collaboration, this.supervisor, this.broker, actor=>this.verifyReviewWorkspace(actor),(user,command,id,args)=>this.projections.control(user,command,id,args));
       this.slack = new SlackService(this.collaboration, transport, ingress, controls, () => this.stopping);
       artifacts = new Artifacts(this.collaboration, this.broker, this.slack, this.memoryRoots);
       saveConfiguration(this.store,config);
@@ -136,10 +146,10 @@ export class Daemon {
     if (this.stopping) return;
     const models = builtinModels();
     for (const agent of this.config.mate.agents) { requireSecret(process.env, agent.appTokenEnv); requireSecret(process.env, agent.model.apiKeyEnv); if (!models.getModel(agent.model.provider, agent.model.id)) throw new Error(`Unknown provider/model for ${agent.id}`); }
-    await this.container?.recover(); if (this.stopping) return; this.store.recover(); this.supervisor.recoverSessions();
+    await this.container?.recover(); if (this.stopping) return; this.store.recover(); this.projections.core.recover(); this.supervisor.recoverSessions();
     await this.slack.verify(); if (this.stopping) return;
     await this.slack.membership(); if (this.stopping) return;
-    await this.slack.catchUp(); if (this.stopping) return;
+    await this.slack.catchUp(); await this.projections.catchUp(); if (this.stopping) return;
     this.collaboration.output.gate?.adoptPending();
     for (const agent of this.config.mate.agents) {
       const socket = new ManagedSocket(requireSecret(process.env, agent.appTokenEnv));
@@ -154,17 +164,18 @@ export class Daemon {
     let nextReconcile = 0, nextMembership = Date.now() + 300000;
     while (!this.stopping) {
       try {
-        this.slack.replay();
+        this.slack.replay(); this.projections.imports.replay();
         if (!this.paused) {
           this.collaboration.tick();
           for (const row of this.collaboration.output.ready()) await this.collaboration.output.send(row.id);
           this.slack.ingress.bindPeerEchoes(); this.collaboration.activateDelegations();
+          await this.projections.core.flush();
           await this.slack.flushAdmin();
           if (!this.paused && !this.stopping) for (const agent of this.collaboration.agents.list()) {
             const run = this.supervisor.step(agent.id); this.runs.add(run); void run.finally(() => this.runs.delete(run));
           }
-          if (Date.now() >= nextReconcile) { await this.slack.reconcile(); nextReconcile = Date.now() + 60000; }
-          if (Date.now() >= nextMembership) { await this.slack.membership(); await this.slack.catchUp(); nextMembership = Date.now() + 300000; }
+          if (Date.now() >= nextReconcile) { await this.slack.reconcile(); await this.projections.reconcile(); nextReconcile = Date.now() + 60000; }
+          if (Date.now() >= nextMembership) { await this.slack.membership(); await this.slack.catchUp(); await this.projections.catchUp(); nextMembership = Date.now() + 300000; }
         }
       } catch { this.log.error({}, 'Daemon tick failed; durable state retained'); }
       await new Promise(resolve => setTimeout(resolve, 500));

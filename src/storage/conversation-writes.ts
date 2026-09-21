@@ -23,7 +23,7 @@ export class CanonicalWrites {
   }
   assertFormat(): void {
     const marker = this.store.db.prepare("SELECT value FROM runtime_meta WHERE key='conversation_format'").get() as {value:string}|undefined;
-    if (marker?.value !== 'mate.conversations.v2' || ![17,18,19].includes(Number(this.store.db.pragma('user_version',{simple:true})))) throw new Error('Canonical conversation migration required');
+    if (marker?.value !== 'mate.conversations.v2' || ![17,18,19,20].includes(Number(this.store.db.pragma('user_version',{simple:true})))) throw new Error('Canonical conversation migration required');
   }
   private target(input:unknown):ConversationTarget {
     this.assertFormat();

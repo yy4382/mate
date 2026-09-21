@@ -33,7 +33,7 @@ export class LocalAdapter {
       if(old){if(old.request_hash!==requestHash)throw new Error('Local event identity conflict');return{messageId:old.message_id};}
       const parent=target.threadId?s.db.prepare('SELECT work_id FROM message_work WHERE message_key=?').get(target.threadId) as {work_id:string}|undefined:undefined;
       const work=parent?.work_id??c.createWork(`local:${eventId}`,target);
-      const message=internal.commit(target,{kind:'human',id:human},text,work);
+      const message=internal.ingest(target,{kind:'human',id:human},text,work);
       s.db.prepare('INSERT INTO local_inputs VALUES(?,?,?)').run(eventId,requestHash,message.id);
       return{messageId:message.id};
     });
