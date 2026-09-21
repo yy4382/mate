@@ -148,3 +148,13 @@ V0复审补充：loopback磁盘文件必须实际预分配宿主空间；启动/
 ### E2b2c路由落地决策（2026-09-21）
 
 与review_e2b2c_canonical讨论后，v17删除E2b2b过渡canonical_targets镜像：可变对象以所属target JSON为权威、表达式索引供查询；outbox以同一行不可更改的canonical target供路由，原wire/hash/receipt独立保留。迁移和新writer均在同事务写入；DB校验routing引用及不可变性，reader核对wire解释。这样unknown和附件可见性查询不需要每次JS全库扫描，也不会因遗漏索引行而遗漏unknown。旧版本解释仅保留于兼容adapter，旧writer位于测试夹具。新消息与effects使用显式payload版本，不能通过ID前缀猜测。
+
+### E2c1 实现前独立设计复核
+
+review_e2b2c_canonical同意E2c1/c2/c3拆分，全部通过才算E2。c1采用独立InternalMessages提交用例及组合目录：internal发送在无await的事务内最终校验ACL/gate，分配数据库整数顺序，提交message/revision/visibility、先message_work后delivery/delivery_work、固定messageId的sent receipt。内部事务失败全回滚，不制造unknown；external仍走原确认流程。收件人使用自己持续预算，不强制任务树。
+
+DM仅允许当前有效run中的已注册Agent与同伴创建，排序pair唯一。重试不恢复撤销权限；第三人不可借ID读取。新openDM action保存明确internal路由；旧action无此路由仍送原adapter，包括prepared/unknown/succeeded，禁止隐式转换语义。目录和Slack巡检按authority/provider分流，配置拆分留c3但c1就必须接通生产。
+
+本地adapter使用同一消息/attention/工作服务与真正无Slack初始化，可信主机输入只接受已配置human身份和显式成员；不构造假Slack locator。schema18新增内部pair、成员、整数序列和local幂等回执，17→18为显式事务升级。非空旧格式库不能通过local bootstrap跳过adapter迁移。internal artifact和尚未接入的projection在写入前拒绝。review seat的输入隔离/恢复规则继续适用，盲审发言保留held/continue选择。
+
+验收包括反向openDM/重复动作/变参、撤权重试、事务故障注入与重开、真实Supervisor入口可调度、peer发给reviewer及恢复、external unknown回归。此复核是设计通过，非代码gate。

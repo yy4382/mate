@@ -23,7 +23,7 @@ export class SlackService {
     for (const agent of this.transport.mapper.config.agents) {
       if (this.stopping()) return;
       const client = this.transport.clients.get(agent.id)!;
-      const stored = this.c.store.db.prepare('SELECT channel FROM channel_access WHERE agent_id=?').all(agent.id) as { channel: string }[];
+      const stored = this.c.store.db.prepare("SELECT a.channel FROM channel_access a JOIN conversation_bindings b ON b.conversation_id=a.channel WHERE b.provider='slack' AND b.mode='primary' AND b.workspace=? AND a.agent_id=?").all(this.transport.mapper.config.teamId,agent.id) as { channel: string }[];
       for (const channel of new Set([...Object.keys(agent.channels), ...stored.map(r => this.transport.mapper.target({conversationId:r.channel}).channel)])) {
         if (this.stopping()) return;
         // Failure closes permission until a successful membership check.
@@ -37,7 +37,7 @@ export class SlackService {
     for (const agent of this.transport.mapper.config.agents) {
       if (this.stopping()) return;
       const client = this.transport.clients.get(agent.id)!;
-      const channels = this.c.store.db.prepare('SELECT channel FROM channel_access WHERE agent_id=? AND active=1').all(agent.id) as { channel: string }[];
+      const channels = this.c.store.db.prepare("SELECT a.channel FROM channel_access a JOIN conversation_bindings b ON b.conversation_id=a.channel WHERE b.provider='slack' AND b.mode='primary' AND b.workspace=? AND a.agent_id=? AND a.active=1").all(this.transport.mapper.config.teamId,agent.id) as { channel: string }[];
       for (const { channel:conversationId } of channels) {
         const {channel}=this.transport.mapper.target({conversationId});
         if (this.stopping()) return;
@@ -63,7 +63,7 @@ export class SlackService {
   }
   async catchUpThreads(): Promise<void> {
     const s = this.c.store;
-    const watches = s.db.prepare('SELECT t.* FROM thread_watches t JOIN channel_access a ON a.agent_id=t.agent_id AND a.channel=t.channel WHERE a.active=1').all() as { agent_id: string; channel: string; thread: string }[];
+    const watches = s.db.prepare("SELECT t.* FROM thread_watches t JOIN channel_access a ON a.agent_id=t.agent_id AND a.channel=t.channel JOIN conversation_bindings b ON b.conversation_id=t.channel WHERE a.active=1 AND b.provider='slack' AND b.mode='primary' AND b.workspace=?").all(this.transport.mapper.config.teamId) as { agent_id: string; channel: string; thread: string }[];
     for (const internal of watches) {
       const target=this.transport.mapper.target({conversationId:internal.channel,threadId:internal.thread}),watch={agent_id:internal.agent_id,channel:target.channel,thread:target.thread!};
       if (this.stopping()) return;
@@ -124,7 +124,7 @@ export class SlackService {
     for (const row of rows) {
       const {artifact}=JSON.parse(row.request);
       const canonical=this.c.messages.records.targetedEffect('outbox',row.id).target;
-      if(!this.c.messages.access(row.agent_id,canonical.conversationId))continue;
+      if(!this.c.messages.access(row.agent_id,canonical.conversationId)||this.c.messages.references.conversation(canonical.conversationId).authority!=='external')continue;
       const target=this.transport.mapper.target(canonical);
       try {
         const client = this.transport.clients.get(row.agent_id)!;

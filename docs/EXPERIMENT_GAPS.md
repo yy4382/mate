@@ -15,6 +15,6 @@
 | 工具/成果 | file/exec/附件/URL read已有 | 环境可发现；研究路径不能误称搜索；成果闭环 | 按需外部服务 |
 | 人类掌握 | owner controls有，信息分散 | 结构化状态/活动查询与基本本地入口 | 网页、创建表单、改进Agent |
 | 平台解耦 | target/Agent/调度/通信依赖Slack | 内部模型、应用服务、local/Slack adapter，分阶段真实迁移 | CLI/其他平台完整产品 |
-| 部署 | 本地隔离已验，真实Slack/provider未验 | 本地实验和真实接入步骤，清楚标识模拟 | VPS HTTPS、直接SSH，无缓存平台 |
+| 部署 | macOS隔离已验，真实Slack/provider未验 | 用户更新首版标准：Linux VPS沙盒隔离、部署包及真实Linux验证，见V0–V3 | HTTPS、直接SSH，无缓存平台 |
 
 核心：身份/注意力/历史/协作/提醒/工作能力/基本人类介入。技术支撑：平台解耦。未来功能不等同装饰：网页和集成可能提升核心体验，但非本轮前置。QoL：收藏/排序/头像/分享样式。Raft官方生命周期描述人类创建Agent，不能从action prepare推断无限自主spawn。

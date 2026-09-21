@@ -32,7 +32,7 @@ it('keeps application services independent of adapters and daemon composition', 
     for (const dependency of dependencies(readFileSync(path, 'utf8'))) {
       const destination = dependency.startsWith('.')
         ? relative(sourceRoot, resolve(dirname(path), dependency)) : dependency;
-      if (/^(slack|daemon|adapters)\//.test(destination) || destination.startsWith('@slack/')) {
+      if (/^(slack|local|daemon|adapters)\//.test(destination) || destination.startsWith('@slack/')) {
         violations.push(`${name} → ${dependency}`);
       }
     }

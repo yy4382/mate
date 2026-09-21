@@ -1,3 +1,4 @@
+import {beginCanonicalSchema,finishCanonicalSchema} from '../storage/canonical-schema.js';
 import type { MateConfig } from '../config.js';
 import { References } from '../conversations/references.js';
 import { encode, type Store } from '../storage/store.js';
@@ -13,27 +14,14 @@ export function migrateCanonicalConversations(store: Store, config: MateConfig):
   store.atomic(() => {
     const marker = store.db.prepare("SELECT value FROM runtime_meta WHERE key='conversation_format'").get() as { value: string } | undefined;
     if (marker) {
-      if (marker.value !== canonicalConversationFormat || store.db.pragma('user_version', { simple: true }) !== 17) throw new Error('Unsupported conversation data format');
+      if (marker.value !== canonicalConversationFormat || ![17,18].includes(Number(store.db.pragma('user_version', { simple: true })))) throw new Error('Unsupported conversation data format');
       const source = store.db.prepare("SELECT value FROM runtime_meta WHERE key='reference_migration_v16'").get() as {value:string}|undefined;
       if (!source || JSON.parse(source.value).workspace !== config.teamId) throw new Error('Conversation migration workspace mismatch');
       return;
     }
     if (store.db.pragma('user_version', { simple: true }) !== 16) throw new Error('Unsupported legacy conversation schema');
     migrateLegacyReferences(store, config.teamId);
-    // Preserve primary keys/FKs while removing the legacy NOT NULL root constraint.
-    store.db.exec(`
-      ALTER TABLE outbox ADD COLUMN target TEXT NOT NULL DEFAULT '{}';
-      ALTER TABLE messages ADD COLUMN canonical_thread TEXT;
-      UPDATE messages SET canonical_thread=thread;
-      ALTER TABLE messages DROP COLUMN thread;
-      ALTER TABLE messages RENAME COLUMN canonical_thread TO thread;
-      DROP INDEX conversation_event_target;
-      ALTER TABLE conversation_events ADD COLUMN canonical_thread TEXT;
-      UPDATE conversation_events SET canonical_thread=thread;
-      ALTER TABLE conversation_events DROP COLUMN thread;
-      ALTER TABLE conversation_events RENAME COLUMN canonical_thread TO thread;
-      CREATE INDEX conversation_event_target ON conversation_events(channel,thread,seq);
-    `);
+    beginCanonicalSchema(store);
     const refs = new References(store), codec = new LegacyConversationCodec(refs, config);
     const target = (value: string) => encode(codec.target(JSON.parse(value)));
     const localMessage = (channel: string, ts: string): string => {
@@ -112,19 +100,7 @@ export function migrateCanonicalConversations(store: Store, config: MateConfig):
     for(const row of store.db.prepare('SELECT id,request FROM outbox').all() as {id:string;request:string}[]){
       store.db.prepare('UPDATE outbox SET target=? WHERE id=?').run(encode(codec.target(JSON.parse(row.request).target)),row.id);
     }
-    store.db.exec(`
-      CREATE INDEX outbox_scope ON outbox(json_extract(target,'$.conversationId'),json_extract(target,'$.threadId'),state);
-      CREATE TRIGGER outbox_target_required BEFORE INSERT ON outbox WHEN json_type(NEW.target,'$.conversationId') IS NOT 'text'
-        OR NOT EXISTS(SELECT 1 FROM conversation_identities WHERE id=json_extract(NEW.target,'$.conversationId'))
-        OR (json_type(NEW.target,'$.threadId') IS NOT NULL AND NOT EXISTS(SELECT 1 FROM message_identities WHERE id=json_extract(NEW.target,'$.threadId') AND root_id=id AND conversation_id=json_extract(NEW.target,'$.conversationId')))
-        BEGIN SELECT RAISE(ABORT,'Canonical output routing required'); END;
-      CREATE TRIGGER outbox_target_immutable BEFORE UPDATE OF target ON outbox WHEN NEW.target IS NOT OLD.target
-        BEGIN SELECT RAISE(ABORT,'Output target is immutable'); END;
-      CREATE INDEX task_conversation ON tasks(json_extract(target,'$.conversationId'));
-      CREATE INDEX work_conversation ON works(json_extract(target,'$.conversationId'));
-      CREATE INDEX schedule_conversation ON schedules(json_extract(target,'$.conversationId'));
-      CREATE INDEX intent_conversation ON task_intents(json_extract(target,'$.conversationId'));
-    `);
+    finishCanonicalSchema(store);
     store.db.exec('DROP TABLE canonical_targets');
     store.db.prepare('UPDATE sessions SET context_epoch=context_epoch+1').run();
     store.db.pragma('user_version=17');

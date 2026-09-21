@@ -179,3 +179,13 @@ R7b PASS，review_r7b，167 tests及独立额外4项通过。迁移命令与完�
 R7c PASS，review_r7c，普通170 tests；独立runtime36及真实RPC故障注入通过。完整prompt已对照产品定位和Raft参考，恢复包在压缩后实际重读memory/checkpoint/selected work并进入下一模型输入。R7整体完成，进入R8多选择语义验收、outbox公平性和当前文档收口。
 
 R8 PASS，review_r8。五种合法决策通过真实Pi loop与持久状态验证，修复outbox前序unknown/ingress阻挡造成的批次饥饿；当前文档完整重写并保留明确差异。独立176 tests、类型检查通过，实现方真实本地隔离7/7；详情reviews/R8-product-semantics.md。R1–R8全部完成；真实Slack/provider协议接线仍未验，不属于模型性能/智能验收。
+
+### E2c 子模块（内部通信完整范围不缩减）
+
+| gate | 目标/接口 | 依赖 | 验收与验证 | 状态 |
+|---|---|---|---|---|
+| E2c1 | 持久内部DM、原子消息/delivery、local入口；production按authority路由 | E2b2c PASS | pair唯一/重开/事务回滚/同ID变参拒绝；gate/ACL/停止/work绑定/review seat；本地会话不误入Slack巡检；历史openDM原路由保留 | PASS，review_e2c1_internal，229 tests |
+| E2c2 | 独立projection outbox、可信echo归并、人类回复导入 | E2c1 PASS | 投影失败不撤销内部提交；unknown不盲重投；早到echo/线程根缺失暂存/撤权/不循环唤醒 | TODO |
+| E2c3 | 内部Agent配置与平台binding独立；local/Slack组合入口与迁移 | E2c2 PASS | 无Slack配置的完整运行路径；旧配置兼容与身份不重绑；配置/端口不泄漏进核心 | TODO |
+
+每个子模块通过独立红队后继续；E2c1不把尚未支持的附件/投影伪装为成功。新内部DM必须接入现有生产目录，Slack轮询只访问属于自身adapter的external会话；不能留下局部实现使daemon崩溃。旧持久openDM动作按原路由恢复，只有新动作选择internal peer通信。

@@ -1,7 +1,9 @@
+import {validateOutputIntent} from './output-intent.js';
+import {InternalMessages} from './internal.js';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { MessageDTO } from '../domain/messages.js';
-import { conversationTargetSchema, type ConversationTarget } from '../domain/conversations.js';
+import { type ConversationTarget } from '../domain/conversations.js';
 import type { Effect } from '../storage/store.js';
 import type { Conversations } from './messages.js';
 import type { CanonicalFreshnessGate, SendBasis } from './freshness.js';
@@ -30,17 +32,12 @@ export class CanonicalOutput {
   constructor(readonly messages:Conversations,readonly transport:ExternalMessageTransport,readonly clock:()=>number=Date.now){}
   matchesText(expected:string,observed:string):boolean{return this.transport.matchesText?.(expected,observed)??expected===observed;}
   queue(actor:string,target:ConversationTarget,text:string,id:string=randomUUID(),basis?:SendBasis):string {
-    this.validate(actor,target,text);
+    validateOutputIntent(this.messages,actor,target,text);
     this.messages.store.atomic(()=>{this.messages.writes.queueOutput(actor,id,{target,text});this.gate?.queued(actor,id,basis);});return id;
   }
   queueArtifact(actor:string,target:ConversationTarget,text:string,artifact:ArtifactPayload,id:string,basis:SendBasis):string {
-    this.validate(actor,target,text);
+    validateOutputIntent(this.messages,actor,target,text,true);
     this.messages.store.atomic(()=>{this.messages.writes.queueOutput(actor,id,{target,text,artifact});this.gate?.queued(actor,id,basis);});return id;
-  }
-  private validate(actor:string,target:ConversationTarget,text:string):void {
-    this.messages.references.validateTarget(conversationTargetSchema.parse(target));this.messages.requireAccess(actor,target.conversationId);
-    z.string().min(1).max(35000).parse(text);
-    if(this.messages.references.conversation(target.conversationId).authority!=='external')throw new Error('Internal delivery is not installed');
   }
   private envelope(row:Effect):DispatchEnvelope {
     const effect=this.messages.records.targetedEffect('outbox',row.id),body=JSON.parse(row.request);
@@ -53,7 +50,7 @@ export class CanonicalOutput {
     if(work?.state==='cancelled')return true;
     if(work&&work.state!=='active')return false;
     if((JSON.parse(row.receipt??'null')?.retryAt??0)>this.clock())return false;
-    if(this.gate&&(this.transport.pendingInput(request.target)||s.db.prepare(`SELECT 1 FROM outbox o
+    if(this.gate&&((this.messages.references.conversation(request.target.conversationId).authority==='external'&&this.transport.pendingInput(request.target))||s.db.prepare(`SELECT 1 FROM outbox o
       WHERE o.id!=? AND o.state IN ('sending','unknown') AND json_extract(o.target,'$.conversationId')=? AND (json_extract(o.target,'$.threadId') IS NULL OR ? IS NULL OR json_extract(o.target,'$.threadId')=?)`)
       .get(row.id,request.target.conversationId,request.target.threadId??null,request.target.threadId??null)))return false;
     const artifact=JSON.parse(row.request).artifact;
@@ -75,6 +72,7 @@ export class CanonicalOutput {
     const s=this.messages.store;s.atomic(()=>{
       const row=s.output(id);if(!row||!['sending','unknown','sent'].includes(row.state))throw new Error('Output was not dispatched');
       const request=this.envelope(row),message=confirmation.message;
+      if(this.messages.references.conversation(request.target.conversationId).authority!=='external')throw new Error('External confirmation cannot commit internal messages');
       if(row.request_hash!==requestHash||message.author.kind!=='agent'||message.author.id!==row.agent_id||message.deleted||message.conversationId!==request.target.conversationId||!this.matchesText(request.text,message.text)||message.rootId!==(request.target.threadId??message.id))throw new Error('Confirmation evidence mismatch');
       if(JSON.parse(row.request).artifact)throw new Error('Artifact requires publication evidence');
       if(row.state==='sent'){
@@ -110,6 +108,20 @@ export class CanonicalOutput {
     if(work?.state==='cancelled'){s.transitionOutput(id,'pending','failed',{reason:'work_cancelled'});return;}
     if(!this.eligible(row,request))return;
     if(!this.messages.access(row.agent_id,request.target.conversationId)){s.transitionOutput(id,'pending','failed',{reason:'access_revoked'});return;}
+    if(this.messages.references.conversation(request.target.conversationId).authority==='internal'){
+      s.atomic(()=>{
+        const internal=new InternalMessages(this.messages);internal.requireSupported(request.target);
+        if(JSON.parse(row.request).artifact)throw new Error('Internal artifacts are not supported');
+        this.messages.requireAccess(row.agent_id,request.target.conversationId);
+        if(this.gate&&!this.gate.dispatch(id))return;
+        const binding=s.db.prepare('SELECT work_id FROM output_work WHERE output_id=?').get(id) as {work_id:string}|undefined;
+        if(!binding)throw new Error('Internal output requires work binding');
+        s.transitionOutput(id,'pending','sending');
+        const system=!!s.db.prepare('SELECT 1 FROM system_projections WHERE output_id=? UNION ALL SELECT 1 FROM task_projections WHERE output_id=?').get(id,id);
+        const message=internal.commit(request.target,{kind:'agent',id:row.agent_id},request.text,binding.work_id,system?'system':'participant');
+        s.transitionOutput(id,'sending','sent',{messageId:message.id});
+      });return;
+    }
     if(this.gate&&!this.gate.dispatch(id))return;
     const artifact=JSON.parse(row.request).artifact as ArtifactPayload|undefined;
     s.transitionOutput(id,'pending','sending',artifact?{phase:'staging'}:undefined);

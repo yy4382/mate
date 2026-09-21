@@ -1,3 +1,5 @@
+import {TeamDirectory} from '../conversations/team-directory.js';
+import {migrateInternalConversations} from '../storage/internal-schema.js';
 import { migrateCanonicalConversations } from '../slack/canonical-migration.js';
 import { slackApplication } from '../slack/application.js';
 import { CanonicalSlackNormalizer } from '../slack/normalize.js';
@@ -73,6 +75,8 @@ export class Daemon {
 
       }
       migrateCanonicalConversations(this.store,c);
+      if(previous&&this.store.db.pragma('user_version',{simple:true})===17)throw new Error('Internal conversations require explicit offline migration');
+      migrateInternalConversations(this.store);
       const {messages,mapper,argumentsCodec}=slackApplication(this.store,c);
       messages.writes.assertFormat();
       const transport=new WebSlackTransport(this.store,mapper,Object.fromEntries(c.agents.map(a=>[a.id,requireSecret(process.env,a.botTokenEnv)])));
@@ -85,7 +89,7 @@ export class Daemon {
       const research = new Research(config.runtime.researchHosts);
       let artifacts!: Artifacts;
       const attachments=new Attachments(this.collaboration,this.broker,transport.clients);
-      const router = new ToolRouter(this.collaboration, this.broker, { attachment:(...args)=>attachments.save(...args),environment:actor=>({workspace:'/workspace',execConfigured:!!config.runtime.docker,image:config.runtime.docker?.image??null,network:this.collaboration.seats.active(actor)?'none':config.runtime.docker?.network??'none',researchHosts:this.collaboration.seats.active(actor)?[]:config.runtime.researchHosts,toolchain:'Installed in the pinned image; inspect with exec. No host credentials inherited.'}),research: (url, signal) => research.read(url, signal), publish: (...args) => artifacts.publish(...args) }, new Directory(messages, transport.clients,mapper), (actor,workId)=>this.ensureGrants(actor,workId),value=>argumentsCodec.args(value));
+      const router = new ToolRouter(this.collaboration, this.broker, { attachment:(...args)=>attachments.save(...args),environment:actor=>({workspace:'/workspace',execConfigured:!!config.runtime.docker,image:config.runtime.docker?.image??null,network:this.collaboration.seats.active(actor)?'none':config.runtime.docker?.network??'none',researchHosts:this.collaboration.seats.active(actor)?[]:config.runtime.researchHosts,toolchain:'Installed in the pinned image; inspect with exec. No host credentials inherited.'}),research: (url, signal) => research.read(url, signal), publish: (...args) => artifacts.publish(...args) }, new TeamDirectory(messages,new Directory(messages, transport.clients,mapper)), (actor,workId)=>this.ensureGrants(actor,workId),value=>argumentsCodec.args(value));
       this.supervisor = new Supervisor(this.collaboration, router, c, undefined, async (agentId, workId, signal) => {
         this.ensureGrants(agentId, workId);
         const result = await files.execute({ root: this.memoryRoots[agentId]!, operation: { kind: 'read', path: 'MEMORY.md' }, timeoutMs: 10000 }, signal);

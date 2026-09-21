@@ -1,3 +1,4 @@
+import {validateOutputIntent} from './output-intent.js';
 import type { ArtifactPayload } from '../capabilities/artifacts.js';
 import {randomUUID} from 'node:crypto';
 import type {RunToken} from '../storage/store.js';
@@ -56,6 +57,7 @@ export class CanonicalFreshnessGate{
  revise(run:RunToken,id:string,revision:number,text:string,target?:Target,artifact?:ArtifactPayload):unknown{
   const s=this.messages.store;return s.atomic(()=>{const d=this.editable(run,id,revision,false),request=this.request(d);target=target??request.target;targetSchema.parse(target);this.messages.requireAccess(run.agentId,target.conversationId);
    if(!text.trim()||text.length>35000)throw new Error('Invalid message text');
+   validateOutputIntent(this.messages,run.agentId,target,text,!!(artifact??request.artifact));
    s.transitionOutput(d.outbox_id,'held','failed',{reason:'draft_revised'});const next=`${id}:revision:${revision+1}`;this.messages.writes.queueOutput(run.agentId,next,{target,text,...((artifact??request.artifact)?{artifact:artifact??request.artifact}:{})});
    s.db.prepare('INSERT INTO output_work SELECT ?,work_id FROM output_work WHERE output_id=?').run(next,d.outbox_id);
    const linked=s.db.prepare("SELECT id,assigned_to FROM tasks WHERE outbox_id=? AND status='draft'").all(d.outbox_id) as {id:string;assigned_to:string|null}[];
