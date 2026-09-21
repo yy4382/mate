@@ -237,7 +237,7 @@ function prepareLayout(journalPath: string, journal: InstallJournal): InstallJou
   return journal;
 }
 
-async function publishRelease(host: InstallerHost, spec: DeploymentSpec, journalPath: string, journal: InstallJournal): Promise<{ journal: InstallJournal; manifest: ReleaseManifest; path: string }> {
+export async function publishRelease(host: InstallerHost, spec: DeploymentSpec, journalPath: string, journal: InstallJournal, releaseRoot: string = managedLayout.releases): Promise<{ journal: InstallJournal; manifest: ReleaseManifest; path: string }> {
   const source = realpathSync(spec.release.source), item = journal.release;
   if (item.status === 'planned') {
     if (!existsSync(item.stage)) {
@@ -255,17 +255,17 @@ async function publishRelease(host: InstallerHost, spec: DeploymentSpec, journal
   }
   const releaseId = journal.release.releaseId;
   if (!releaseId) throw new Error('Copied release journal is missing its content identity');
-  const final = join(managedLayout.releases, releaseId), staged = existsSync(item.stage) ? await verifyRelease(item.stage, releaseId) : undefined;
+  const final = join(releaseRoot, releaseId), staged = journal.release.status === 'copied' && existsSync(item.stage) ? await verifyRelease(item.stage, releaseId) : undefined;
   if (journal.release.status === 'copied') {
     if (existsSync(final)) {
       const existing = await verifyRelease(final, releaseId); if (staged && existing.inventorySha256 !== staged.inventorySha256) throw new Error('Existing release identity differs');
       const finalIdentity = lstatSync(final), cleanupIdentity = staged ? lstatSync(item.stage) : undefined;
       journal = { ...journal, release: { ...journal.release, stageDev: finalIdentity.dev, stageIno: finalIdentity.ino, ...(cleanupIdentity ? { cleanupDev: cleanupIdentity.dev, cleanupIno: cleanupIdentity.ino } : {}), status: 'published' } }; replaceJournal(journalPath, journal);
-    } else { renameSync(item.stage, final); fsyncDirectory(managedLayout.releases); journal = { ...journal, release: { ...journal.release, status: 'published' } }; replaceJournal(journalPath, journal); }
+    } else { renameSync(item.stage, final); fsyncDirectory(releaseRoot); journal = { ...journal, release: { ...journal.release, status: 'published' } }; replaceJournal(journalPath, journal); }
   }
   if (journal.release.status === 'published' && (journal.release.cleanupDev !== undefined || journal.release.cleanupIno !== undefined)) {
     if (journal.release.cleanupDev === undefined || journal.release.cleanupIno === undefined) throw new Error('Release cleanup journal identity is incomplete');
-    removeBoundReleaseCleanup(host, item.stage, managedLayout.releases, journal.release.cleanupDev, journal.release.cleanupIno);
+    removeBoundReleaseCleanup(host, item.stage, releaseRoot, journal.release.cleanupDev, journal.release.cleanupIno);
     const { cleanupDev: _cleanupDev, cleanupIno: _cleanupIno, ...release } = journal.release; journal = { ...journal, release }; replaceJournal(journalPath, journal);
   } else if (journal.release.status === 'published' && existsSync(item.stage)) throw new Error('Published release has an unbound staging cleanup path');
   return { journal, manifest: await verifyRelease(final), path: final };

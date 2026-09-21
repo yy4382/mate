@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { chmodSync, linkSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, linkSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -9,7 +9,7 @@ import { createDeploymentPlan } from '../../src/deployment/plan.js';
 import { createReleaseManifest } from '../../src/deployment/release.js';
 import { deploymentSpecSchema } from '../../src/deployment/spec.js';
 import { renderMaintenanceWrapper, renderMountUnit, renderService } from '../../src/deployment/systemd.js';
-import { initializePublishedVolume, inspectExistingInstallation, preflightDeployment, prepareMountpoint, remainingRequiredBytes, removeBoundReleaseCleanup, syncPayloadTree, type InstallerHost } from '../../src/deployment/installer.js';
+import { initializePublishedVolume, inspectExistingInstallation, preflightDeployment, prepareMountpoint, publishRelease, remainingRequiredBytes, removeBoundReleaseCleanup, syncPayloadTree, type InstallerHost } from '../../src/deployment/installer.js';
 import { isMainModule } from '../../src/main.js';
 import { isDeploymentMainModule } from '../../src/deployment/cli.js';
 
@@ -152,6 +152,16 @@ it('resumes cleanup of a partially deleted release staging directory by bound in
   const host = { run: (binary: string, args: readonly string[]) => { calls.push(`${binary} ${args.join(' ')}`); if (binary === '/usr/bin/rm') rmSync(stage, { recursive: true }); return { code: 0, stdout: '', stderr: '' }; } } as unknown as InstallerHost;
   removeBoundReleaseCleanup(host, stage, parent, identity.dev, identity.ino); expect(calls.some(call => call.startsWith('/usr/bin/rm '))).toBe(true); expect(() => lstatSync(stage)).toThrow();
   mkdirSync(stage); expect(() => removeBoundReleaseCleanup(host, stage, parent, identity.dev, identity.ino)).toThrow('identity changed');
+});
+
+it('resumes the full published release path after duplicate staging is partly deleted', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'mate-publish-cleanup-')); roots.push(root); const releases = join(root, 'releases'); mkdirSync(releases); const source = join(root, 'source'); mkdirSync(source); mkdirSync(join(source, 'dist')); mkdirSync(join(source, 'node_modules')); writeFileSync(join(source, 'dist', 'main.js'), 'main'); writeFileSync(join(source, 'node_modules', 'dep.js'), 'dep'); writeFileSync(join(source, 'package.json'), '{}'); writeFileSync(join(source, 'pnpm-lock.yaml'), 'lockfileVersion: 9');
+  const manifest = await createReleaseManifest(source, 'abcdef1234567', { platform: 'linux', arch: 'x64', node: 'v24.21.0', modulesAbi: '137', packageManager: 'pnpm@10.33.0' }), final = join(releases, manifest.releaseId); cpSync(source, final, { recursive: true }); writeFileSync(join(final, 'RELEASE.json'), `${JSON.stringify(manifest, null, 2)}\n`); const finalIdentity = lstatSync(final);
+  const stage = join(releases, '.stage'); cpSync(final, stage, { recursive: true }); const cleanupIdentity = lstatSync(stage); rmSync(join(stage, 'package.json'));
+  const journalPath = join(root, 'journal.json'), journal = { version: 1 as const, transaction: '55555555-5555-4555-8555-555555555555', inputIdentity: '1'.repeat(64), uid: process.getuid!(), gid: process.getgid!(), directories: [], release: { stage, stageDev: finalIdentity.dev, stageIno: finalIdentity.ino, cleanupDev: cleanupIdentity.dev, cleanupIno: cleanupIdentity.ino, releaseId: manifest.releaseId, status: 'published' as const }, volumes: [], phase: 'resources' as const }; writeFileSync(journalPath, `${JSON.stringify(journal)}\n`, { mode: 0o600 }); chmodSync(journalPath, 0o600);
+  const host = { run: (binary: string, args: readonly string[]) => { if (binary === '/usr/bin/rm') rmSync(args.at(-1)!, { recursive: true, force: true }); return { code: 0, stdout: '', stderr: '' }; } } as unknown as InstallerHost;
+  const result = await publishRelease(host, { ...spec(), release: { source, gitCommit: 'abcdef1234567' } }, journalPath, journal, releases);
+  expect(result.path).toBe(final); expect(result.journal.release).not.toHaveProperty('cleanupDev'); expect(() => lstatSync(stage)).toThrow();
 });
 
 it('recognizes a deployed CLI reached through the current release symlink', () => {
