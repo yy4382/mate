@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { daemonConfigSchema } from '../daemon/config.js';
@@ -15,4 +15,5 @@ export async function deploymentMain(args = process.argv.slice(2)): Promise<void
   process.stdout.write(`${JSON.stringify(await installDeployment(spec, config, host), null, 2)}\n`);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) deploymentMain().catch(error => { process.stderr.write(`${error instanceof Error ? error.message : 'Mate deployment failed'}\n`); process.exitCode = 1; });
+export function isDeploymentMainModule(argument:string|undefined,moduleUrl=import.meta.url):boolean{return !!argument&&moduleUrl===pathToFileURL(realpathSync(resolve(argument))).href;}
+if (isDeploymentMainModule(process.argv[1])) deploymentMain().catch(error => { process.stderr.write(`${error instanceof Error ? error.message : 'Mate deployment failed'}\n`); process.exitCode = 1; });
