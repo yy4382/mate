@@ -46,7 +46,7 @@ function safeRelative(root: string, path: string): string {
 }
 
 async function inventoryTree(root: string): Promise<InventoryEntry[]> {
-  const entries: InventoryEntry[] = [];
+  const entries: InventoryEntry[] = [], hardlinks = new Map<string, { expected: number; count: number; path: string }>();
   const visit = async (path: string): Promise<void> => {
     const stat = lstatSync(path), itemPath = safeRelative(root, path), mode = stat.mode & 0o7777;
     if (stat.isSymbolicLink()) {
@@ -61,12 +61,16 @@ async function inventoryTree(root: string): Promise<InventoryEntry[]> {
       for (const name of readdirSync(path).sort()) await visit(join(path, name));
       return;
     }
-    if (!stat.isFile() || stat.nlink !== 1) throw new Error(`Release contains unsupported file: ${itemPath}`);
+    if (!stat.isFile()) throw new Error(`Release contains unsupported file: ${itemPath}`);
+    const identity = `${stat.dev}:${stat.ino}`, links = hardlinks.get(identity);
+    if (links) { if (links.expected !== stat.nlink) throw new Error(`Release hardlink identity changed: ${itemPath}`); links.count++; }
+    else hardlinks.set(identity, { expected: stat.nlink, count: 1, path: itemPath });
     entries.push({ path: itemPath, type: 'file', size: stat.size, mode, sha256: await fileHash(path) });
   };
   for (const name of ['dist', 'node_modules', 'package.json', 'pnpm-lock.yaml']) {
     const path = join(root, name); if (!lstatSync(path)) throw new Error(`Missing release input: ${name}`); await visit(path);
   }
+  for (const links of hardlinks.values()) if (links.count !== links.expected) throw new Error(`Release file has a hardlink outside the immutable tree: ${links.path}`);
   return entries.sort((left, right) => left.path.localeCompare(right.path));
 }
 

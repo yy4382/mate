@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { daemonConfigSchema } from '../../src/daemon/config.js';
 import { createDeploymentPlan } from '../../src/deployment/plan.js';
@@ -64,6 +64,14 @@ it('binds release identity to lockfile, runtime, dependency inventory and native
   const first = await createReleaseManifest(root, 'abcdef1234567', runtime); expect(first.nativeAddons).toHaveLength(1); expect(first.target).toMatchObject({ arch: 'x64', node: 'v24.21.0', modulesAbi: '137' });
   writeFileSync(join(root, 'dist', 'main.js'), 'two'); const second = await createReleaseManifest(root, 'abcdef1234567', runtime); expect(second.releaseId).not.toBe(first.releaseId);
   symlinkSync('/tmp', join(root, 'node_modules', 'escape')); await expect(createReleaseManifest(root, 'abcdef1234567', runtime)).rejects.toThrow('relative');
+});
+
+it('accepts pnpm-style hardlinks only when every link is inside the immutable release tree', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'mate-release-links-')); roots.push(root); mkdirSync(join(root, 'dist')); mkdirSync(join(root, 'node_modules')); writeFileSync(join(root, 'dist', 'main.js'), 'main'); writeFileSync(join(root, 'node_modules', 'one.js'), 'shared'); linkSync(join(root, 'node_modules', 'one.js'), join(root, 'node_modules', 'two.js')); writeFileSync(join(root, 'package.json'), '{}'); writeFileSync(join(root, 'pnpm-lock.yaml'), 'lockfileVersion: 9');
+  const runtime = { platform: 'linux' as const, arch: 'x64', node: 'v24.21.0', modulesAbi: '137', packageManager: 'pnpm@10.33.0' };
+  await expect(createReleaseManifest(root, 'abcdef1234567', runtime)).resolves.toMatchObject({ version: 1 });
+  const outside = join(dirname(root), `${basename(root)}-outside`); writeFileSync(outside, 'external'); linkSync(outside, join(root, 'node_modules', 'outside.js'));
+  await expect(createReleaseManifest(root, 'abcdef1234567', runtime)).rejects.toThrow('outside the immutable tree'); rmSync(outside, { force: true });
 });
 
 it('preflights through a fake host without mutating it and refuses resource or baseline gaps', () => {
