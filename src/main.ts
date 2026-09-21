@@ -10,9 +10,10 @@ import { Daemon } from './daemon/app.js';
 import { acquireLock } from './daemon/lock.js';
 import { Store, hash } from './storage/store.js';
 import { ContainerBackend } from './execution/container.js';
-import { executionScope } from './daemon/paths.js';
+import { assertDockerControlIsolation,executionScope } from './daemon/paths.js';
 import { backup } from './daemon/backup.js';
 import {requiredSlackBotScopes} from './slack/protocol.js';
+import {verifyDeploymentWorkspaces} from './deployment/runtime.js';
 
 export async function main(args = process.argv.slice(2)): Promise<void> {
   const [command, configPath, destination] = args;
@@ -31,7 +32,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     process.stdout.write(JSON.stringify({ checkScope: 'configuration_model_and_secret_references', externalConnectivityChecked: false,
       adapters: { slackConfigured: !!config.adapters.slack, localConfigured: !!config.adapters.local },
       requiredSlackBotScopes:config.adapters.slack?[...requiredSlackBotScopes]:[],agents: report, containerConfigured: !!config.runtime.docker,
-      containerFileIsolation:process.platform==='linux'&&!!config.runtime.docker,containerResources:config.runtime.docker?.resources??null,runtimeLimits:config.runtime.limits }, null, 2) + '\n');
+      containerFileIsolation:process.platform==='linux'&&!!config.runtime.docker,workspaceManifest:config.runtime.workspaceManifest??null,containerResources:config.runtime.docker?.resources??null,runtimeLimits:config.runtime.limits }, null, 2) + '\n');
     if (report.some(r => !r.modelKnown || r.missingEnv.length)) process.exitCode = 1; return;
   }
   if (command === 'restore') {
@@ -46,12 +47,14 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   }
   if (command === 'backup') {
     if (!destination) throw new Error('Backup destination required');
-    const release = acquireLock(join(config.runtime.dataDir, 'state', 'daemon.lock'));
-    const store = new Store(join(config.runtime.dataDir, 'state', 'mate.sqlite'));
+    const state=join(config.runtime.dataDir,'state'),agentsDir=join(config.runtime.dataDir,'agents'),release = acquireLock(join(state, 'daemon.lock'));let store:Store|undefined;
     try {
+      assertDockerControlIsolation(resolve('.'),state,agentsDir,config.runtime.workspaceGrants,config.runtime.docker,config.runtime.workspaceManifest?[config.runtime.workspaceManifest]:[]);
       if (config.runtime.docker) await new ContainerBackend({ ...config.runtime.docker, scope: executionScope(config.runtime.dataDir) }).recover();
+      verifyDeploymentWorkspaces(config);
+      store=new Store(join(state, 'mate.sqlite'));
       store.recover(); await backup(store, config.runtime.dataDir, resolve(destination));
-    } finally { store.close(); release(); }
+    } finally { store?.close(); release(); }
     process.stdout.write('Consistent database and memory checkpoint created.\n'); return;
   }
   const log = pino({ level: 'info', redact: ['token','apiKey','authorization','*.token','*.apiKey','*.authorization'] },pino.destination(2));

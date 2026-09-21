@@ -40,6 +40,8 @@ mentions模式由@mention、DM或watch触发；participate对普通消息合并n
 
 dataDir/state是数据库；dataDir/agents/AGENT_ID是私有持久workspace。MEMORY.md是恢复入口，知识内容和文件组织由Agent决定；notes/artifacts是起始目录。每run及压缩后刷新有界memory/checkpoint，提供截断和完整读取路径。
 
+Linux容器部署必须配置`runtime.workspaceManifest`。manifest逐一声明私有workspace以及显式外部grant的mountpoint、ext4 backing file、硬容量和owner。daemon在创建MEMORY.md或连接Slack前核对：每个root是独立的ext4 loopback mount，backing file已实际分配而非稀疏占位，容量、设备、owner、`rw,nodev,nosuid`和loop identity全部匹配。缺失、共享设备或普通目录会直接终止；不会退回dataDir里的普通文件夹。`environment.info`会把已验证的硬容量随effective grant报告给Agent。
+
 Ubuntu部署中，结构化文件操作和shell都经同一个Docker隔离后端；macOS本地开发的文件操作继续使用已验证的SRT，shell仍走Docker。应用不自动拉取镜像、不执行host shell、不把host credentials或Docker socket挂进Agent容器。Slack示例中的全零image只是必须替换的占位值。
 
 runtime.docker字段：

@@ -17,7 +17,7 @@ import {sameConfiguration,daemonConfigSchema,slackRuntimeConfig,assertConfigurat
 import {Store,encode,hash}from '../storage/store.js';
 import {acquireLock}from './lock.js';
 import {backup}from './backup.js';
-import {executionProtectedPaths,executionScope}from './paths.js';
+import {assertDockerControlIsolation,executionProtectedPaths,executionScope,pathVariants}from './paths.js';
 import {ContainerBackend}from '../execution/container.js';
 import {canonicalRoot,within}from '../execution/paths.js';
 import {buildBaseline}from '../runtime/prompt.js';
@@ -25,6 +25,7 @@ import {operationDocumentation}from '../runtime/tools.js';
 import {repairTranscript}from '../runtime/context.js';
 import {SessionLifecycle}from '../runtime/sessions.js';
 import {normalizeConfiguredWorkspaces}from '../capabilities/workspaces.js';
+import {nodeDeploymentEnvironment,verifyDeploymentWorkspaces,type DeploymentEnvironment}from '../deployment/runtime.js';
 
 import {Collaboration}from '../collaboration/service.js';
 
@@ -50,13 +51,18 @@ function matchesRecordedRuntimePolicy(store:Store,previous:DaemonConfig,policy:s
  return false;
 }
 /** Explicit local owner operation. No Slack or model credentials required. */
-export async function migrateConfiguration(previous:DaemonConfig,next:DaemonConfig,destination:string,acceptLegacyIdentity=false,projectRoot=resolve('.')):Promise<{backup:string;agents:string[];legacyIdentityAttested:boolean}>{
+export async function migrateConfiguration(previous:DaemonConfig,next:DaemonConfig,destination:string,acceptLegacyIdentity=false,projectRoot=resolve('.'),environment:DeploymentEnvironment=nodeDeploymentEnvironment()):Promise<{backup:string;agents:string[];legacyIdentityAttested:boolean}>{
  const data=previous.runtime.dataDir,state=join(data,'state');
  for(const path of [data,state,join(data,'agents')])if(lstatSync(path).isSymbolicLink())throw new Error('Migration paths must not be symlinks');
  if(resolve(data)!==resolve(next.runtime.dataDir)||lstatSync(data).isSymbolicLink()||lstatSync(state).isSymbolicLink())throw new Error('Migration requires the same non-symlink data directory');
  if(!existsSync(join(state,'mate.sqlite')))throw new Error('Migration requires an existing database');
  const release=acquireLock(join(state,'daemon.lock'));let store:Store|undefined;
  try{
+  const agentsDir=join(data,'agents');
+  assertDockerControlIsolation(projectRoot,state,agentsDir,previous.runtime.workspaceGrants,previous.runtime.docker,previous.runtime.workspaceManifest?[previous.runtime.workspaceManifest]:[]);
+  assertDockerControlIsolation(projectRoot,state,agentsDir,next.runtime.workspaceGrants,next.runtime.docker,next.runtime.workspaceManifest?[next.runtime.workspaceManifest]:[]);
+  if(previous.runtime.docker)await new ContainerBackend({...previous.runtime.docker,scope:executionScope(data)}).recover();
+  const verifiedWorkspaces=verifyDeploymentWorkspaces(next,environment);
   store=new Store(join(state,'mate.sqlite'));const s=store,recorded=storedConfiguration(s);
   if(recorded&&!sameConfiguration(recorded,previous))throw new Error('Previous configuration does not match persisted configuration');
   if(!recorded&&!acceptLegacyIdentity)throw new Error('Legacy identity snapshot unavailable; supply trusted OLD_CONFIG and --accept-legacy-identity explicitly');
@@ -65,9 +71,9 @@ export async function migrateConfiguration(previous:DaemonConfig,next:DaemonConf
   const oldIds=(s.db.prepare('SELECT id FROM agents ORDER BY id').all() as {id:string}[]).map(a=>a.id);
   if(encode(oldIds)!==encode(previous.mate.agents.map(a=>a.id).sort()))throw new Error('Previous Agent identities do not match database');
   assertConfigurationEvolution(previous,next);
-  const agentsDir=join(data,'agents'),protectedRoots=executionProtectedPaths(projectRoot,state,agentsDir,next.runtime.docker);
+  const protectedRoots=[...executionProtectedPaths(projectRoot,state,agentsDir,next.runtime.docker),...(verifiedWorkspaces?.protectedPaths??[])];
   const configured=normalizeConfiguredWorkspaces(next.runtime.workspaceGrants,protectedRoots);
-  const privateForbidden=protectedRoots.filter(root=>root!==realpathSync(agentsDir));
+  const privateBase=new Set(pathVariants(agentsDir)),privateForbidden=protectedRoots.filter(root=>!privateBase.has(root));
   const roots=new Map<string,Map<string,string[]>>();
   for(const agent of next.mate.agents){
    const own=join(agentsDir,agent.id);
@@ -79,7 +85,6 @@ export async function migrateConfiguration(previous:DaemonConfig,next:DaemonConf
     desired.set(grant.root,[...new Set([...(desired.get(grant.root)??[]),...grant.operations])]);
    }roots.set(agent.id,desired);
   }
-  if(previous.runtime.docker)await new ContainerBackend({...previous.runtime.docker,scope:executionScope(data)}).recover();
   s.recover();
   await backup(s,data,resolve(destination));
   s.atomic(()=>{

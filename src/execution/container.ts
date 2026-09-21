@@ -1,6 +1,6 @@
 import {spawn} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
-import {accessSync,constants,existsSync,lstatSync,realpathSync,unlinkSync} from 'node:fs';
+import {accessSync,constants,existsSync,lstatSync,readFileSync,realpathSync,unlinkSync,writeFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {dirname,isAbsolute,relative,resolve,sep} from 'node:path';
 import {z} from 'zod';
@@ -52,12 +52,17 @@ export class ContainerBackend implements ExecutionBackend {
   /** Actual startup exercise: fixed helper I/O, helper-side escape rejection and PID namespace cleanup. */
   async probe(inputRoot:string):Promise<void>{
     if(this.fused)throw new Error(`Container execution is fenced: ${this.fused}`);
-    const root=realpathSync(inputRoot),name=`.mate-probe-${randomUUID()}`,outside=resolve(root,'..',name);
+    const root=realpathSync(inputRoot),name=`.mate-probe-${randomUUID()}`,outside=resolve(root,'..',name),hostPath=resolve(root,name),containerNonce=`container-${randomUUID()}`,hostNonce=`host-${randomUUID()}`;
     try{
-      const write=await this.execute({root,operation:{kind:'write',path:name,content:'mate-container-probe'},timeoutMs:15000});
+      const write=await this.execute({root,operation:{kind:'write',path:name,content:containerNonce},timeoutMs:15000});
       if(write.code!==0)throw new Error(`File write probe failed: ${write.stderr.slice(0,500)}`);
+      if(!existsSync(hostPath)||lstatSync(hostPath).isSymbolicLink()||!lstatSync(hostPath).isFile()||readFileSync(hostPath,'utf8')!==containerNonce){
+        const cleanup=await this.run(root,{kind:'remove',path:name},'none',15000,false);if(cleanup.code!==0)throw new Error(`Mismatched workspace cleanup failed: ${cleanup.stderr.slice(0,500)}`);
+        throw new Error('Container write is not visible in the host workspace');
+      }
+      writeFileSync(hostPath,hostNonce,{encoding:'utf8',flag:'w'});
       const read=await this.execute({root,operation:{kind:'read',path:name},timeoutMs:15000});
-      if(read.code!==0||read.stdout!=='mate-container-probe')throw new Error('File read probe failed');
+      if(read.code!==0||read.stdout!==hostNonce)throw new Error('Host write is not visible in the container workspace');
       const escape=await this.run(root,{kind:'write',path:`../${name}`,content:'escape'},'none',15000,false);
       if(escape.code===0||existsSync(outside))throw new Error('File escape probe was not rejected');
       const remove=await this.execute({root,operation:{kind:'remove',path:name},timeoutMs:15000});

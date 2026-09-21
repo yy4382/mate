@@ -21,7 +21,7 @@ V1按低配资源控制、隔离后端、部署层workspace边界的依赖顺序
 |---|---|---|---|---|
 | V1a 运行与执行admission | 可取消的FIFO `FairAdmission`；生产默认全局1个active run和1个backend操作；有限worker idle回收 | V0、E6 PASS | 多Agent公平顺序、排队时stop/shutdown、slot异常释放、同Agent不重复排队、重启持久上下文不变 | PASS；`review_v1a_admission`两轮，见`reviews/V1a-admission.md` |
 | V1b Linux统一容器隔离 | `ContainerBackend`支持固定file helper与exec、配置化memory/cpu/pids/tmpfs；启动probe；cleanup不确定后熔断直到recover | V1a PASS | mock协议故障矩阵；真实Linux验证跨root/secret/socket/network、文件语义、停止/超时/daemon死亡、scope恢复 | PASS；`review_v1b_container`三轮，见`reviews/V1b-container.md`；原生Ubuntu宿主验证留V1c/V2 |
-| V1c workspace容量与启动边界 | 部署workspace manifest/probe核验每Agent独立mount、ext4类型/容量/owner；缺失不得回退普通目录 | V1b PASS | loopback文件真实预分配、mount身份/容量错误失败关闭、ENOSPC、重启/恢复；外部grant明确排除 | TODO |
+| V1c workspace容量与启动边界 | 部署workspace manifest/probe核验每Agent独立mount、ext4类型/容量/owner；缺失不得回退普通目录 | V1b PASS | loopback文件真实预分配、mount身份/容量错误失败关闭、ENOSPC、重启/恢复；外部grant明确排除 | 代码/测试独立review PASS；Ubuntu 24.04原生环境验收待OrbStack machine就绪，见`reviews/V1c-workspaces.md` |
 
 ---
 

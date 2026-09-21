@@ -31,7 +31,7 @@ pnpm node dist/src/main.js local mate.local.json
 
 每个 app 开启 Socket Mode，app token scope 为 `connections:write`。Bot scopes：`app_mentions:read`、`chat:write`、`channels:read`、`channels:history`、`channels:join`、`channels:manage`、`groups:read`、`groups:history`、`groups:write`、`im:read`、`im:history`、`im:write`、`mpim:read`、`mpim:history`、`mpim:write`、`files:read`、`files:write`、`users:read`。其中 `channels:join` 支持加入公开频道，`channels:manage`/`groups:write` 支持从相应频道离开。订阅 `app_mention`、`message.channels`、`message.groups`、`message.im`、`member_joined_channel`、`member_left_channel`。其中一个 app 再注册 `/team` 并获得 `commands` scope。把各 bot 邀请到相应频道；私有频道仍只能被邀请加入，配置不会替 Slack 授权。
 
-启动前把示例中的全零Docker image替换成目标机已存在镜像的完整`sha256:` image ID；镜像须含`/usr/local/bin/node`与`/bin/sh`。运行 `check`。报告中的 `checkScope:configuration_model_and_secret_references` 与 `externalConnectivityChecked:false` 明确表示它只验证配置、模型目录和所需环境变量引用，并列出程序功能需要的 bot scopes；它不检查dataDir可写性、镜像存在、token授权、安装身份或网络。`start`会在连接Slack前实际清理本scope并运行容器读写、越界和PID namespace探针，失败即退出。随后启动 daemon：
+启动前把示例中的全零Docker image替换成目标机已存在镜像的完整`sha256:` image ID；镜像须含`/usr/local/bin/node`与`/bin/sh`。Linux部署还必须由部署层按`runtime.workspaceManifest`预先建立每Agent独立的预分配ext4 loopback mount；配置了外部workspace grant时也必须在manifest中逐一声明其独立容量边界。运行 `check`。报告中的 `checkScope:configuration_model_and_secret_references` 与 `externalConnectivityChecked:false` 明确表示它只验证配置、模型目录、manifest路径字段和所需环境变量引用，并列出程序功能需要的 bot scopes；它不检查mount、dataDir可写性、镜像存在、token授权、安装身份或网络。`start`会先清理本scope，再核对manifest的mount identity、容量、owner和预分配证据，然后运行容器读写、越界和PID namespace探针；任何失败都在连接Slack前退出。随后启动 daemon：
 
 ```sh
 pnpm node dist/src/main.js check mate.production.json

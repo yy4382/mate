@@ -18,5 +18,5 @@
       ]
     }
   },
-  "runtime": {"dataDir": "/var/lib/mate", "docker": {"binary": "/usr/bin/docker", "host": "unix:///var/run/docker.sock", "image": "sha256:0000000000000000000000000000000000000000000000000000000000000000", "network": "none", "resources": {"memoryMb": 512, "cpus": 1, "pids": 64, "tmpfsMb": 64}}, "limits": {"maxActiveRuns": 1, "maxBackendOperations": 1, "workerIdleMs": 300000}, "workspaceGrants": [], "researchHosts": ["example.com"]}
+  "runtime": {"dataDir": "/var/lib/mate", "workspaceManifest": "/etc/mate/workspaces.json", "docker": {"binary": "/usr/bin/docker", "host": "unix:///var/run/docker.sock", "image": "sha256:0000000000000000000000000000000000000000000000000000000000000000", "network": "none", "resources": {"memoryMb": 512, "cpus": 1, "pids": 64, "tmpfsMb": 64}}, "limits": {"maxActiveRuns": 1, "maxBackendOperations": 1, "workerIdleMs": 300000}, "workspaceGrants": [], "researchHosts": ["example.com"]}
 }

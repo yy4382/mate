@@ -11,7 +11,7 @@ export const environmentReportSchema=z.object({
   workId:z.string(),
   snapshotAt:z.number().int(),
   authorization:z.literal('informational_snapshot_rechecked_on_every_action'),
-  workspaces:z.object({pathStyle:z.literal('relative_to_grant'),execMountPoint:z.literal('/workspace'),simultaneouslyMounted:z.literal(false),grants:z.array(z.object({id:z.string(),label:z.string(),kind:z.enum(['private','configured','unmapped']),operations:z.array(z.enum(['read','write','exec'])),expires:z.number().int()})),unavailable:z.array(z.object({label:z.string(),kind:z.enum(['private','configured']),reason:z.literal('configured_grant_not_effective')}))}),
+  workspaces:z.object({pathStyle:z.literal('relative_to_grant'),execMountPoint:z.literal('/workspace'),simultaneouslyMounted:z.literal(false),grants:z.array(z.object({id:z.string(),label:z.string(),kind:z.enum(['private','configured','unmapped']),operations:z.array(z.enum(['read','write','exec'])),expires:z.number().int(),capacityBytes:z.number().int().nullable()})),unavailable:z.array(z.object({label:z.string(),kind:z.enum(['private','configured']),reason:z.literal('configured_grant_not_effective')}))}),
   execution:z.object({status:availability,network:z.enum(['none','bridge']),image:z.string().nullable(),reason:z.string().optional()}),
   research:z.object({status:availability,mode:z.literal('known_public_https_url_only'),allowedHosts:z.array(z.string()),search:z.literal(false),reason:z.string().optional()}),
   attachmentInput:z.object({status:availability,scope:z.literal('visible_external_message_file'),reason:z.string().optional()}),
@@ -44,5 +44,5 @@ export class EnvironmentCapabilities {
       artifactOutput:{adapterStatus:artifactAdapter?'configured':'unavailable',status:artifactSupported?'configured':'unavailable',scope:'supported_external_target_only',...(!artifactSupported?{reason:seat?'Independent review isolates external outputs.':!artifactAdapter?'No artifact output adapter is configured for this Agent.':'The current work target does not support artifact output.'}:{})}
     });
   }
-  private safeGrant(actor:string,grant:EffectiveGrant){const profile=this.byRoot.get(`${actor}\0${grant.root}`);return{id:grant.id,label:profile?.label??`grant-${grant.id.slice(0,12)}`,kind:profile?.kind??'unmapped',operations:grant.operations,expires:grant.expires};}
+  private safeGrant(actor:string,grant:EffectiveGrant){const profile=this.byRoot.get(`${actor}\0${grant.root}`);return{id:grant.id,label:profile?.label??`grant-${grant.id.slice(0,12)}`,kind:profile?.kind??'unmapped',operations:grant.operations,expires:grant.expires,capacityBytes:profile?.capacityBytes??null};}
 }

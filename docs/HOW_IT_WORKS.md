@@ -110,7 +110,7 @@ tasks.list按owned、assigned、available、all-visible分页；cursor绑定acto
 | 附件输出 | Artifacts preflight → immutable outbox/draft → staged upload → share | actor+target在读文件前检查；冻结内容；分享前重查；fileId/phase持久化，unknown按分享证据对账 |
 | 历史执行 | actions.list/read | 只当前Agent；执行请求/回执可查，其他对象通过当前ACL工具读取 |
 
-[WorkspaceAccess](../src/capabilities/workspaces.ts)在run进入模型前原子准备当前work的配置grant，works.select在其action事务中准备新work；environment.info不会补授权。配置workspace按canonical root合并，label只帮助选择，不参与授权。[Broker](../src/policy/broker.ts)是参数规范化、唯一有效grant判定、work/stop、持久action和执行边界。环境查询与执行共用这项判定，旧报告不能绕过撤销/过期/切work/review seat。未知写操作保守阻挡相关root的后续变更；未知exec阻挡该Agent后续变更，仍可读取核实。不能以新action ID或换session绕过。
+[WorkspaceAccess](../src/capabilities/workspaces.ts)在run进入模型前原子准备当前work的配置grant，works.select在其action事务中准备新work；environment.info不会补授权。配置workspace按canonical root合并，label只帮助选择，不参与授权。[Broker](../src/policy/broker.ts)是参数规范化、唯一有效grant判定、work/stop、持久action和执行边界。环境查询与执行共用这项判定，旧报告不能绕过撤销/过期/切work/review seat。Linux production在构造Store和写入Agent文件前读取部署manifest，核对每个私有root和外部grant是独立、预分配、容量匹配的ext4 loopback mount；容量随grant进入environment.info。未知写操作保守阻挡相关root的后续变更；未知exec阻挡该Agent后续变更，仍可读取核实。不能以新action ID或换session绕过。
 
 私有workspace是通用工作空间，MEMORY.md只是恢复入口。配置Docker后私有root可exec；镜像决定真实工具链。network默认none，owner可选bridge，后者包含可路由局域网及互联网，并非“仅公网”。review seat强制none。镜像不会自动拉取。低配默认全局1个run和1个backend operation；FIFO等待可停止，worker空闲五分钟关闭。Linux启动在Slack前清理本scope并实测固定helper和PID namespace；无法确认container cleanup会熔断新操作直到recover。
 
@@ -135,5 +135,5 @@ sessions.checkpoint保存自述检查点；sessions.reset在run结束或崩溃�
 - 没有通用搜索、浏览器、第三方登录/集成目录；已知URL读取、配置镜像里的CLI和可信adapter是现有入口。也没有让模型自行增建身份/扩大grant的入口。
 - Slack搜索只查本地可见缓存，历史补抓/目录分页有界；不是整个workspace的完整搜索。大文件/超长频道需有界读取或显式知情继续。
 - unknown严格保留；没有通用“自动证明外部效果不存在”或任意owner清账工具。文件可核查、Slack消息/附件有对账路径，证据不足时需明确报告阻塞。
-- 单workspace、单daemon、共享SQLite，默认串行run/backend操作且可配置。多主机、高吞吐、热加载工具未实现。macOS SRT及Docker Linux VM中的amd64容器边界已实测；原生Ubuntu宿主、systemd和loopback workspace尚未验。
+- 单workspace、单daemon、共享SQLite，默认串行run/backend操作且可配置。多主机、高吞吐、热加载工具未实现。macOS SRT及Docker Linux VM中的amd64容器边界已实测；loopback workspace的启动验证已实现但尚未在原生Ubuntu宿主实际挂载验收，systemd安装也仍属后续部署gate。
 - 真实Slack/provider尚未接线验收；剩余检查是权限、事件、协议、usage和错误兼容，不是“模型能否自主合作”。

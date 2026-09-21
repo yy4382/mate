@@ -66,6 +66,12 @@ it('explicitly migrates the pre-limits and pre-container-resources runtime polic
  await migrateConfiguration(previous,next,join(f.root,'backup'));
  const s=new Store(f.path);try{expect(storedConfiguration(s)).toEqual(next);expect(s.db.prepare("SELECT value FROM runtime_meta WHERE key='policy'").get()).toEqual({value:hash(encode(next.runtime))});}finally{s.close();}
 });
+it('Linux migration refuses to back up or persist a container policy without verified workspace mounts',async()=>{
+ const f=fixture(),binary=join(f.root,'docker-cli'),project=join(f.root,'checkout'),destination=join(f.root,'backup');writeFileSync(binary,'synthetic');chmodSync(binary,0o700);mkdirSync(project);f.store.close();
+ const next=daemonConfigSchema.parse({...f.next,runtime:{...f.next.runtime,docker:{binary,host:`unix://${join(f.root,'docker.sock')}`,image:`sha256:${'a'.repeat(64)}`}}});vi.spyOn(ContainerBackend.prototype,'recover').mockResolvedValue();
+ await expect(migrateConfiguration(f.previous,next,destination,false,project,{platform:'linux',workspaceHost:{} as never})).rejects.toThrow('requires a workspace manifest');expect(existsSync(destination)).toBe(false);
+ const store=new Store(f.path);try{expect(storedConfiguration(store)).toEqual(f.previous);}finally{store.close();}
+});
 it('a failed migration transaction leaves the old configuration/session/grants usable and retains a complete backup',async()=>{
  const f=fixture();const before=(f.router.sessions.status('research') as any).session;
  f.store.db.exec("CREATE TRIGGER reject_configuration BEFORE UPDATE ON runtime_meta WHEN NEW.key='configuration' BEGIN SELECT RAISE(ABORT,'synthetic persistence failure'); END");f.store.close();

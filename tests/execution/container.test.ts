@@ -1,5 +1,5 @@
 import {afterEach,expect,it,vi} from 'vitest';
-import {chmodSync,mkdtempSync,realpathSync,rmSync,writeFileSync} from 'node:fs';
+import {chmodSync,mkdtempSync,realpathSync,rmSync,writeFileSync,readFileSync,unlinkSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {resolve} from 'node:path';
 import {ContainerBackend,type ContainerCommandRunner} from '../../src/execution/container.js';
@@ -59,7 +59,7 @@ it('returns deterministic OOM or ENOSPC exits after confirmed cleanup without po
 });
 
 it('startup probe exercises helper I/O, helper-side traversal rejection and namespace cleanup',async()=>{
-  const content=new Map<string,string>(),inputs:unknown[]=[];let currentCreate:string[]=[];
+  const inputs:unknown[]=[];let currentCreate:string[]=[],workspace='';
   const runner:ContainerCommandRunner=async(args,_timeout,_signal,input)=>{
     if(args[0]==='create'){currentCreate=args;return result();}
     if(args[0]==='rm'||args[0]==='ps')return result();
@@ -67,11 +67,17 @@ it('startup probe exercises helper I/O, helper-side traversal rejection and name
     if(input===undefined){expect(currentCreate).toContain('/bin/sh');return result();}
     const op=JSON.parse(input) as any;inputs.push(op);
     if(String(op.path).startsWith('../'))return result('',1,'Path escapes root');
-    if(op.kind==='write'){content.set(op.path,op.content);return result('{"sha256":"synthetic"}');}
-    if(op.kind==='read')return result(content.get(op.path));
-    if(op.kind==='remove'){content.delete(op.path);return result('{}');}
+    if(op.kind==='write'){writeFileSync(`${workspace}/${op.path}`,op.content);return result('{"sha256":"synthetic"}');}
+    if(op.kind==='read')return result(readFileSync(`${workspace}/${op.path}`,'utf8'));
+    if(op.kind==='remove'){unlinkSync(`${workspace}/${op.path}`);return result('{}');}
     return result();
   };
-  const backend=new ContainerBackend(config(),{runner,helperPath:helper()});await backend.recover();await backend.probe(root());
-  expect(inputs.map((input:any)=>input.kind)).toEqual(['write','read','write','remove']);expect((inputs[2] as any).path).toMatch(/^\.\.\/\.mate-probe-/);expect(content.size).toBe(0);expect(backend.status()).toEqual({fused:false});
+  const backend=new ContainerBackend(config(),{runner,helperPath:helper()});await backend.recover();workspace=root();await backend.probe(workspace);
+  expect(inputs.map((input:any)=>input.kind)).toEqual(['write','read','write','remove']);expect((inputs[2] as any).path).toMatch(/^\.\.\/\.mate-probe-/);expect(backend.status()).toEqual({fused:false});
+});
+
+it('startup probe rejects a Docker daemon whose bind source is not the host workspace',async()=>{
+  const isolated=new Map<string,string>();
+  const runner:ContainerCommandRunner=async(args,_timeout,_signal,input)=>{if(args[0]!=='start'||input===undefined)return result();const op=JSON.parse(input) as any;if(op.kind==='write'){isolated.set(op.path,op.content);return result('{}');}if(op.kind==='read')return result(isolated.get(op.path));if(op.kind==='remove'){isolated.delete(op.path);return result('{}');}return result();};
+  const backend=new ContainerBackend(config(),{runner,helperPath:helper()});await backend.recover();await expect(backend.probe(root())).rejects.toThrow('not visible in the host workspace');expect(backend.status().fused).toBe(true);expect(isolated.size).toBe(0);
 });

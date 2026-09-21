@@ -17,6 +17,7 @@ export interface WorkspaceProfile {
   label:string;
   kind:'private'|'configured';
   operations:Permission[];
+  capacityBytes?:number|undefined;
 }
 
 function compatibilityLabel(agentId:string,root:string):string {
@@ -49,10 +50,10 @@ export function normalizeConfiguredWorkspaces(input:readonly ConfiguredWorkspace
   return profiles.sort((a,b)=>a.agentId.localeCompare(b.agentId)||a.label.localeCompare(b.label));
 }
 
-export function workspaceProfiles(privateRoots:Readonly<Record<string,string>>,configured:readonly WorkspaceProfile[],execution:boolean):WorkspaceProfile[]{
+export function workspaceProfiles(privateRoots:Readonly<Record<string,string>>,configured:readonly WorkspaceProfile[],execution:boolean,capacityByRoot:ReadonlyMap<string,number>=new Map()):WorkspaceProfile[]{
   const profiles:WorkspaceProfile[]=[];
-  for(const [agentId,root] of Object.entries(privateRoots))profiles.push({agentId,root:canonicalRoot(root,[]),label:'private-workspace',kind:'private',operations:execution?['exec','read','write']:['read','write']});
-  profiles.push(...configured);
+  for(const [agentId,raw] of Object.entries(privateRoots)){const root=canonicalRoot(raw,[]);profiles.push({agentId,root,label:'private-workspace',kind:'private',operations:execution?['exec','read','write']:['read','write'],...(capacityByRoot.has(root)?{capacityBytes:capacityByRoot.get(root)!}:{})});}
+  profiles.push(...configured.map(profile=>capacityByRoot.has(profile.root)?{...profile,capacityBytes:capacityByRoot.get(profile.root)!}:profile));
   return profiles.sort((a,b)=>a.agentId.localeCompare(b.agentId)||Number(a.kind==='configured')-Number(b.kind==='configured')||a.label.localeCompare(b.label));
 }
 

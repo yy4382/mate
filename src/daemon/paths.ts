@@ -20,11 +20,11 @@ export function pathVariants(path:string):string[]{
 }
 function overlaps(left:string,right:string):boolean{return within(left,right)||within(right,left);}
 /** Must run before invoking Docker: reject lexical/canonical control overlap without requiring workspaces to exist. */
-export function assertDockerControlIsolation(projectRoot:string,state:string,agentsDir:string,workspaces:readonly WorkspaceRoot[],docker?:DockerControlPaths):void{
+export function assertDockerControlIsolation(projectRoot:string,state:string,agentsDir:string,workspaces:readonly WorkspaceRoot[],docker?:DockerControlPaths,extraControls:readonly string[]=[]):void{
  if(!docker)return;
- const controls=[docker.binary,dockerSocketPath(docker.host)].flatMap(pathVariants),privateRoots=pathVariants(agentsDir);
+ const controls=[docker.binary,dockerSocketPath(docker.host),...extraControls].flatMap(pathVariants),privateRoots=pathVariants(agentsDir);
  if(privateRoots.some(root=>controls.some(control=>overlaps(root,control))))throw new Error('Protected root overlap');
- const protectedRoots=executionProtectedPaths(projectRoot,state,agentsDir,docker);
+ const protectedRoots=[...executionProtectedPaths(projectRoot,state,agentsDir,docker),...controls];
  for(const workspace of workspaces)if(pathVariants(workspace.root).some(root=>protectedRoots.some(protectedPath=>overlaps(root,protectedPath))))throw new Error('Protected root overlap');
 }
 /** Roots that an Agent grant must never contain or be contained by. */
