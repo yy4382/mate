@@ -14,6 +14,7 @@ import { assertSafeUnitName, managedLayout, renderMaintenanceWrapper, renderMoun
 
 const journalSchema = z.object({
   version: z.literal(1), transaction: z.string().uuid(), inputIdentity: z.string().regex(/^[a-f0-9]{64}$/), uid: z.number().int().nonnegative(), gid: z.number().int().nonnegative(),
+  directories: z.array(z.object({ path: z.string(), uid: z.number().int().nonnegative(), gid: z.number().int().nonnegative(), mode: z.number().int().nonnegative(), existed: z.boolean(), dev: z.number().int().nonnegative().optional(), ino: z.number().int().positive().optional(), status: z.enum(['planned', 'complete']) }).strict()),
   release: z.object({ stage: z.string(), stageDev: z.number().int().nonnegative().optional(), stageIno: z.number().int().positive().optional(), releaseId: z.string().regex(/^[a-f0-9]{64}$/).optional(), status: z.enum(['planned', 'copied', 'published']) }).strict(),
   volumes: z.array(z.object({ backingFile: z.string(), stage: z.string(), stageDev: z.number().int().nonnegative().optional(), stageIno: z.number().int().positive().optional(), status: z.enum(['planned', 'formatted', 'published', 'initialized']) }).strict()),
   phase: z.enum(['resources', 'units', 'mounted', 'probed', 'published']),
@@ -21,6 +22,8 @@ const journalSchema = z.object({
 type InstallJournal = z.infer<typeof journalSchema>;
 const completedSchema = z.object({ version: z.literal(1), inputIdentity: z.string().regex(/^[a-f0-9]{64}$/), releaseId: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 const completedPath = join(managedLayout.data, 'control', 'installation.json');
+const bootstrapJournalPath = '/var/lib/.mate-install-v1.json';
+const controlJournalPath = join(managedLayout.data, 'control', 'install-v1.json');
 function pathExists(path: string): boolean { try { lstatSync(path); return true; } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error; } }
 function canonicalFuturePath(path: string): string {
   const raw = resolve(path), tail: string[] = []; let current = raw;
@@ -79,7 +82,7 @@ function stable(value: unknown): string {
 function inputIdentity(spec: DeploymentSpec, config: DaemonConfig, plan: DeploymentPlan, host: InstallerHost): string { return hash(stable({ spec, config, plan, environment: spec.environmentSource ? host.read(spec.environmentSource) : '' })); }
 function fsyncDirectory(path: string): void { const fd = openSync(path, constants.O_RDONLY | constants.O_DIRECTORY); try { fsyncSync(fd); } finally { closeSync(fd); } }
 function ensureDirectory(path: string, uid: number, gid: number, mode: number): void {
-  if (!existsSync(path)) mkdirSync(path, { mode });
+  if (!existsSync(path)) { mkdirSync(path, { mode }); chownSync(path, uid, gid); chmodSync(path, mode); fsyncDirectory(dirname(path)); }
   const stat = lstatSync(path); if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== uid || stat.gid !== gid || (stat.mode & 0o777) !== mode) throw new Error(`Managed directory identity mismatch: ${path}`);
 }
 function atomicExact(path: string, content: string, uid: number, gid: number, mode: number): void {
@@ -127,11 +130,29 @@ function serviceIdentity(host: InstallerHost): { uid: number; gid: number } {
   return { uid, gid };
 }
 
-function prepareLayout(uid: number, gid: number): void {
-  ensureDirectory('/opt/mate', 0, 0, 0o755); ensureDirectory(managedLayout.releases, 0, 0, 0o755);
-  ensureDirectory(managedLayout.configDir, 0, gid, 0o750); ensureDirectory(managedLayout.data, uid, gid, 0o700);
-  for (const part of ['state', 'agents', 'control']) ensureDirectory(join(managedLayout.data, part), uid, gid, 0o700);
-  ensureDirectory(managedLayout.volumes, 0, gid, 0o710); ensureDirectory(managedLayout.checkpoints, 0, gid, 0o750);
+function layoutEntries(uid: number, gid: number): InstallJournal['directories'] {
+  return [
+    { path: '/opt/mate', uid: 0, gid: 0, mode: 0o755 }, { path: managedLayout.releases, uid: 0, gid: 0, mode: 0o755 },
+    { path: managedLayout.configDir, uid: 0, gid, mode: 0o750 }, { path: managedLayout.data, uid, gid, mode: 0o700 },
+    ...['state', 'agents', 'control'].map(part => ({ path: join(managedLayout.data, part), uid, gid, mode: 0o700 })),
+    { path: managedLayout.volumes, uid: 0, gid, mode: 0o710 }, { path: managedLayout.checkpoints, uid: 0, gid, mode: 0o750 },
+  ].map(item => {
+    if (!pathExists(item.path)) return { ...item, existed: false, status: 'planned' as const };
+    owner(item.path, item.uid, item.gid, item.mode, 'directory'); const stat = lstatSync(item.path); return { ...item, existed: true, dev: stat.dev, ino: stat.ino, status: 'complete' as const };
+  });
+}
+
+function prepareLayout(journalPath: string, journal: InstallJournal): InstallJournal {
+  for (let index = 0; index < journal.directories.length; index++) {
+    let entry = journal.directories[index]!;
+    if (entry.status === 'complete') { const stat = lstatSync(entry.path); if (stat.dev !== entry.dev || stat.ino !== entry.ino) throw new Error(`Managed directory identity changed: ${entry.path}`); owner(entry.path, entry.uid, entry.gid, entry.mode, 'directory'); continue; }
+    if (!pathExists(entry.path)) mkdirSync(entry.path, { mode: entry.mode });
+    const stat = lstatSync(entry.path), provisionalOwner = stat.uid === 0 && stat.gid === 0, finalOwner = stat.uid === entry.uid && stat.gid === entry.gid && (stat.mode & 0o777) === entry.mode;
+    if (!stat.isDirectory() || stat.isSymbolicLink() || (!provisionalOwner && !finalOwner) || readdirSync(entry.path).length !== 0) throw new Error(`Planned managed directory is not a new empty transaction directory: ${entry.path}`);
+    chownSync(entry.path, entry.uid, entry.gid); chmodSync(entry.path, entry.mode); fsyncDirectory(dirname(entry.path));
+    const completed = lstatSync(entry.path); entry = { ...entry, dev: completed.dev, ino: completed.ino, status: 'complete' }; journal = { ...journal, directories: journal.directories.map((value, at) => at === index ? entry : value) }; replaceJournal(journalPath, journal);
+  }
+  return journal;
 }
 
 async function publishRelease(host: InstallerHost, spec: DeploymentSpec, journalPath: string, journal: InstallJournal): Promise<{ journal: InstallJournal; manifest: ReleaseManifest; path: string }> {
@@ -217,16 +238,20 @@ function publishCurrent(release: string): void {
 
 export async function installDeployment(spec: DeploymentSpec, config: DaemonConfig, host: InstallerHost = nodeInstallerHost()): Promise<{ plan: DeploymentPlan; releaseId: string; serviceStarted: false }> {
   if (host.euid() !== 0) throw new Error('Deployment installation must run as root');
-  const plan = preflightDeployment(spec, config, host), identity = serviceIdentity(host); prepareLayout(identity.uid, identity.gid);
-  const journalPath = join(managedLayout.data, 'control', 'install-v1.json'), requestedIdentity = inputIdentity(spec, config, plan, host);
+  const plan = preflightDeployment(spec, config, host), identity = serviceIdentity(host), requestedIdentity = inputIdentity(spec, config, plan, host);
+  if (pathExists(bootstrapJournalPath) && pathExists(controlJournalPath)) throw new Error('Both bootstrap and control install journals exist');
+  let journalPath = pathExists(controlJournalPath) ? controlJournalPath : bootstrapJournalPath;
   let journal: InstallJournal;
   if (existsSync(journalPath)) { owner(journalPath, 0, 0, 0o600, 'file'); journal = journalSchema.parse(JSON.parse(readFileSync(journalPath, 'utf8'))); if (journal.inputIdentity !== requestedIdentity || journal.uid !== identity.uid || journal.gid !== identity.gid) throw new Error('An unfinished installation has a different identity'); }
   else {
     const transaction = randomUUID(), existing = host.existingInstall();
-    journal = { version: 1, transaction, inputIdentity: requestedIdentity, ...identity,
+    if (existing) journalPath = controlJournalPath;
+    journal = { version: 1, transaction, inputIdentity: requestedIdentity, ...identity, directories: layoutEntries(identity.uid, identity.gid),
       release: { stage: join(managedLayout.releases, `.mate-install-${transaction}-release`), ...(existing ? { releaseId: existing.releaseId } : {}), status: existing ? 'published' : 'planned' },
       volumes: plan.workspaces.map(item => { const final = existing ? lstatSync(item.backingFile) : undefined; return { backingFile: item.backingFile, stage: join(managedLayout.volumes, `.mate-install-${transaction}-${basename(item.backingFile)}`), ...(final ? { stageDev: final.dev, stageIno: final.ino } : {}), status: existing ? 'initialized' as const : 'planned' as const }; }), phase: existing ? 'published' : 'resources' }; replaceJournal(journalPath, journal);
   }
+  journal = prepareLayout(journalPath, journal);
+  if (journalPath === bootstrapJournalPath) { renameSync(bootstrapJournalPath, controlJournalPath); fsyncDirectory('/var/lib'); fsyncDirectory(dirname(controlJournalPath)); journalPath = controlJournalPath; }
   const published = await publishRelease(host, spec, journalPath, journal); journal = published.journal;
   for (let index = 0; index < plan.workspaces.length; index++) journal = prepareVolume(host, plan.workspaces[index]!, identity.uid, identity.gid, journalPath, journal, index);
   const units = mountUnits(host, plan), configText = `${JSON.stringify(config, null, 2)}\n`, envText = spec.environmentSource ? readFileSync(realpathSync(spec.environmentSource), 'utf8') : '';
