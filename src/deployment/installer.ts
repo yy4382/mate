@@ -11,6 +11,7 @@ import { createReleaseManifest, verifyRelease, type ReleaseManifest } from './re
 import { createDeploymentPlan, type DeploymentPlan, type PlannedWorkspace } from './plan.js';
 import { deploymentSpecSchema, type DeploymentSpec } from './spec.js';
 import { assertSafeUnitName, managedLayout, renderMaintenanceWrapper, renderMountUnit, renderService, type ManagedMount } from './systemd.js';
+import {readDeploymentJournal} from './upgrade.js';
 
 const journalSchema = z.object({
   version: z.literal(1), transaction: z.string().uuid(), inputIdentity: z.string().regex(/^[a-f0-9]{64}$/), uid: z.number().int().nonnegative(), gid: z.number().int().nonnegative(),
@@ -385,6 +386,7 @@ function publishCurrent(release: string): void {
 
 export async function installDeployment(spec: DeploymentSpec, config: DaemonConfig, host: InstallerHost = nodeInstallerHost()): Promise<{ plan: DeploymentPlan; releaseId: string; serviceStarted: false }> {
   if (host.euid() !== 0) throw new Error('Deployment installation must run as root');
+  if(readDeploymentJournal(config.runtime.dataDir,{requiredOwnerUid:0}))throw new Error('Deployment upgrade journal blocks installation');
   const plan = preflightDeployment(spec, config, host), identity = serviceIdentity(host), requestedIdentity = inputIdentity(spec, config, plan, host);
   if (pathExists(bootstrapJournalPath) && pathExists(controlJournalPath)) throw new Error('Both bootstrap and control install journals exist');
   let journalPath = pathExists(controlJournalPath) ? controlJournalPath : bootstrapJournalPath;
@@ -422,6 +424,7 @@ export async function installDeployment(spec: DeploymentSpec, config: DaemonConf
 
 export function disableDeployment(config: DaemonConfig, host: InstallerHost = nodeInstallerHost()): void {
   if (host.euid() !== 0) throw new Error('Deployment disable must run as root');
+  if(readDeploymentJournal(config.runtime.dataDir,{requiredOwnerUid:0}))throw new Error('Deployment upgrade journal blocks disable');
   checked(host, '/usr/bin/systemctl', ['disable', '--now', 'mate.service'], 'Cannot stop Mate service');
   checked(host, managedLayout.wrapper, ['offline-probe'], 'Cannot recover and verify the stopped execution scope');
   const manifest = JSON.parse(readFileSync(config.runtime.workspaceManifest!, 'utf8')) as { mounts: Array<{ root: string }> }, units = manifest.mounts.map(item => checked(host, '/usr/bin/systemd-escape', ['--path', '--suffix=mount', item.root], 'Cannot derive mount unit'));

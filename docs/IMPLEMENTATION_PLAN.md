@@ -36,7 +36,7 @@ V2d实现前由独立只读架构红队`review_e0_architecture`复核。普通ma
 
 | gate | 目标/接口 | 依赖 | 验收 | 状态 |
 |---|---|---|---|---|
-| V2d1 升级协议与离线迁移边界 | versioned deployment journal；固定topology/config/release identity；统一启动/维护门禁；共享离线迁移事务与DB upgrade marker；分别验证旧目标/新当前配置的部署专用restore窄接口 | V2c PASS | DB commit/journal两侧中断；重复迁移不重复session轮换；损坏/未知journal失败关闭；candidate阻止start；activated允许匹配启动但阻止普通restore；普通migrate/restore契约不放宽 | TODO |
+| V2d1 升级协议与离线迁移边界 | versioned deployment journal；固定topology/config/release identity；统一启动/维护门禁；共享离线迁移事务与DB upgrade marker；分别验证旧目标/新当前配置的部署专用restore窄接口 | V2c PASS | DB commit/journal两侧中断；重复迁移不重复session轮换；损坏/未知journal失败关闭；candidate阻止start；activated允许匹配启动但阻止普通restore；普通migrate/restore契约不放宽 | PASS；`review_e2b2b_storage`两轮，完整409 tests、聚焦31 tests，见`reviews/V2d1-upgrade-protocol.md` |
 | V2d2 root编排与升级闭环 | root固定staged输入、封存checkpoint、发布candidate release/config/current、离线检查、candidate rollback、不可逆activate、finalize、继承everActivated的fix-forward | V2d1 PASS | 每个rename/fsync窗口重启恢复；源替换拒绝；candidate失败可回滚；candidate零外部行为；activated启动失败保留journal且旧checkpoint不可回滚；fix-forward不重获rollback权 | TODO |
 | V2d3 运维/Slack接线与原生演练 | 有限只读status/logs；systemd runbook；由代码scope生成的Socket Mode app/bot/event/slash配置；ncDE本地adapter升级/重启/恢复 | V2d2 PASS | Debian真实演练；日志不泄secret；`connections:write`、bot scopes、`commands`、事件、频道邀请和重新安装明确；只剩真实token/ID/Slack/provider连接 | TODO |
 

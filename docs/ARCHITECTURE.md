@@ -195,6 +195,8 @@ deployment journal成为启动和全部维护入口的统一门禁：candidate�
 
 V2d按三道独立gate交付：V2d1先落升级journal、统一门禁、离线迁移和跨配置restore窄接口；V2d2再接root编排、candidate rollback、不可逆activate/finalize和fix-forward；V2d3最后提供有限status/logs、Socket Mode配置手册与真实Debian演练。candidate检查只调用离线迁移、doctor/probe和专门的构造兼容检查，不能构造可`start()`的普通Daemon；测试直接断言Slack/provider transport、ACK、run与outbox均未发生。
 
+V2d1实现将整个升级事务`upgradeId`与每次数据库迁移`attempt.id`分离。初次A→B attempt从journal的原始旧identity开始；activate后B→C fix-forward继续保留原`upgradeId`、原rollback checkpoint和`everActivated=true`，但以新attempt绑定previous=B、next=C。SQLite完成marker按attempt ID持久保存，同时记录所属upgrade ID，因此同attempt可精确重放，后续attempt不覆盖历史证据。journal持久转移禁止activated退回candidate/rollback，固定原始old、topology和rollback identity；只有fix-forward可以更新next，且新attempt.previous必须等于上一已生效next。V2d2还必须实现一个有证据的例外：若B→C attempt在SQLite提交前失败，要替换成B→D，编排器必须同时证明C attempt没有DB marker且数据库配置仍为B，再原子写入替代attempt；普通journal写入不能自行声称该事实。
+
 ### E2b2c路由落地决策（2026-09-21）
 
 与review_e2b2c_canonical讨论后，v17删除E2b2b过渡canonical_targets镜像：可变对象以所属target JSON为权威、表达式索引供查询；outbox以同一行不可更改的canonical target供路由，原wire/hash/receipt独立保留。迁移和新writer均在同事务写入；DB校验routing引用及不可变性，reader核对wire解释。这样unknown和附件可见性查询不需要每次JS全库扫描，也不会因遗漏索引行而遗漏unknown。旧版本解释仅保留于兼容adapter，旧writer位于测试夹具。新消息与effects使用显式payload版本，不能通过ID前缀猜测。

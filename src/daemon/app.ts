@@ -46,8 +46,9 @@ import {FairAdmission} from '../concurrency/admission.js';
 import {AdmittedBackend} from '../execution/admitted.js';
 import {DeploymentBoundaryBackend,nodeDeploymentEnvironment,verifyDeploymentWorkspaces,type DeploymentEnvironment} from '../deployment/runtime.js';
 import type {VerifiedWorkspaces} from '../deployment/workspaces.js';
+import {assertDeploymentOperationAllowed,type DeploymentJournalTrust} from '../deployment/upgrade.js';
 export interface Log { info(data: object, message: string): void; error(data: object, message: string): void }
-export interface DaemonEnvironment extends DeploymentEnvironment {}
+export interface DaemonEnvironment extends DeploymentEnvironment {deploymentJournalTrust?:DeploymentJournalTrust}
 export class Daemon {
   readonly store: Store;
   readonly collaboration: Collaboration;
@@ -84,6 +85,7 @@ export class Daemon {
     const state=join(data,'state');mkdirSync(state,{recursive:true,mode:0o700});if(lstatSync(state).isSymbolicLink())throw new Error('State path must not be a symlink');
     const release=acquireLock(join(state,'daemon.lock'));let transferred=false;
     try{
+      await assertDeploymentOperationAllowed('start',{config,releaseRoot:projectRoot},environment.deploymentJournalTrust??{requiredOwnerUid:0,requiredOwnerGid:process.getgid?.()??-1});
       await assertNoRestoreInProgress(data);
       const agentsDir=join(data,'agents');assertDockerControlIsolation(projectRoot,state,agentsDir,config.runtime.workspaceGrants,config.runtime.docker,config.runtime.workspaceManifest?[config.runtime.workspaceManifest]:[]);
       const container=config.runtime.docker?new ContainerBackend({...config.runtime.docker,scope:executionScope(data)}):undefined;

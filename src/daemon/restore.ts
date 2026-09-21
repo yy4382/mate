@@ -11,6 +11,7 @@ import {within} from '../execution/paths.js';
 import {acquireLock} from './lock.js';
 import {ContainerBackend} from '../execution/container.js';
 import {assertDockerControlIsolation,executionScope} from './paths.js';
+import {assertDeploymentRollbackAuthorization,readDeploymentJournal,type DeploymentJournal} from '../deployment/upgrade.js';
 
 const identitySchema=z.object({path:z.string(),device:z.number().int(),inode:z.number().int(),manifestDevice:z.number().int(),manifestInode:z.number().int(),manifestHash:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
 const journalSchema=z.object({version:z.literal(1),phase:z.enum(['planned','decided']),configurationHash:z.string(),target:identitySchema,current:identitySchema.optional(),completedAgents:z.array(z.string()),databaseComplete:z.boolean()}).strict().superRefine((value,ctx)=>{if(new Set(value.completedAgents).size!==value.completedAgents.length)ctx.addIssue({code:'custom',message:'Restore journal contains duplicate Agent completions'});});
@@ -55,16 +56,17 @@ function restoredShape(entries:readonly CheckpointEntry[]):string{return encode(
 async function assertRestoredWorkspace(root:string,entries:readonly CheckpointEntry[],agentId:string):Promise<void>{if(restoredShape(await inventoryWorkspace(root))!==restoredShape(entries))throw new Error(`Completed restore workspace changed: ${agentId}`);}
 async function assertRestoredDatabase(path:string,manifest:CheckpointManifest):Promise<void>{const actual=await inventoryRegularFile(path),expected=manifest.database;if(actual.size!==expected.size||actual.sha256!==expected.sha256||actual.mode!==expected.mode)throw new Error('Completed restored database changed');}
 
-async function managedRestore(config:DaemonConfig,checkpointPath:string,options:RestoreTestingOptions):Promise<void>{
- const environment=options.environment??nodeDeploymentEnvironment(),checkpointOwnerUid=options.checkpointOwnerUid??0,checkpointOwnerGid=options.checkpointOwnerGid??environment.workspaceHost.gid(),target=await verifyCheckpoint(checkpointPath,config,{requiredOwnerUid:checkpointOwnerUid,requiredOwnerGid:checkpointOwnerGid}),dataDir=resolve(config.runtime.dataDir);
+async function managedRestore(targetConfig:DaemonConfig,currentConfig:DaemonConfig,checkpointPath:string,options:RestoreTestingOptions):Promise<void>{
+ const environment=options.environment??nodeDeploymentEnvironment(),checkpointOwnerUid=options.checkpointOwnerUid??0,checkpointOwnerGid=options.checkpointOwnerGid??environment.workspaceHost.gid(),target=await verifyCheckpoint(checkpointPath,targetConfig,{requiredOwnerUid:checkpointOwnerUid,requiredOwnerGid:checkpointOwnerGid}),dataDir=resolve(currentConfig.runtime.dataDir);
+ if(resolve(targetConfig.runtime.dataDir)!==dataDir)throw new Error('Managed restore configurations require the same data directory');
  const state=join(dataDir,'state'),control=join(dataDir,'control');for(const path of [dataDir,state,control]){const stat=await lstat(path);if(!stat.isDirectory()||stat.isSymbolicLink()||await realpath(path)!==resolve(path))throw new Error('Managed restore control paths must be existing canonical directories');}
  const release=acquireLock(join(state,'daemon.lock')),journalPath=join(control,'restore.json');try{
   await removeNamedTemps(control,'.restore-');
-  assertDockerControlIsolation(options.projectRoot??resolve('.'),state,join(dataDir,'agents'),config.runtime.workspaceGrants,config.runtime.docker,config.runtime.workspaceManifest?[config.runtime.workspaceManifest]:[]);
-  if(config.runtime.docker)await new ContainerBackend({...config.runtime.docker,scope:executionScope(dataDir)}).recover();
+  assertDockerControlIsolation(options.projectRoot??resolve('.'),state,join(dataDir,'agents'),currentConfig.runtime.workspaceGrants,currentConfig.runtime.docker,currentConfig.runtime.workspaceManifest?[currentConfig.runtime.workspaceManifest]:[]);
+  if(currentConfig.runtime.docker)await new ContainerBackend({...currentConfig.runtime.docker,scope:executionScope(dataDir)}).recover();
   let journal=await readJournal(journalPath);if(journal?.phase==='decided')await removeNamedTemps(state,'.mate.sqlite.restore-');
- const verified=verifyDeploymentWorkspaces(config,environment);if(!verified)throw new Error('Managed version 2 restore requires verified Linux workspace mounts');const roots=new Map<string,string>();for(const agent of config.mate.agents){const root=verified.roots.get(agent.id);if(!root)throw new Error(`Verified private workspace missing: ${agent.id}`);roots.set(agent.id,root);}
- const assertBoundary=()=>{const current=verifyDeploymentWorkspaces(config,environment);if(!current||current.boundaryIdentity!==verified.boundaryIdentity)throw new Error('Workspace deployment boundary changed during restore');};
+ const verified=verifyDeploymentWorkspaces(currentConfig,environment);if(!verified)throw new Error('Managed version 2 restore requires verified Linux workspace mounts');const roots=new Map<string,string>();for(const agent of currentConfig.mate.agents){const root=verified.roots.get(agent.id);if(!root)throw new Error(`Verified private workspace missing: ${agent.id}`);roots.set(agent.id,root);}
+ const assertBoundary=()=>{const current=verifyDeploymentWorkspaces(currentConfig,environment);if(!current||current.boundaryIdentity!==verified.boundaryIdentity)throw new Error('Workspace deployment boundary changed during restore');};
  const assertOutside=(checkpoint:VerifiedCheckpoint)=>{for(const protectedRoot of [dataDir,...roots.values(),...verified.externalRoots])if(within(protectedRoot,checkpoint.root)||within(checkpoint.root,protectedRoot))throw new Error('Checkpoint source must be outside live and granted roots');};assertOutside(target);
  for(const [agentId,root] of roots){const filesystem=verified.filesystemByRoot.get(root);if(!filesystem)throw new Error('Workspace filesystem facts unavailable');const current=await inventoryWorkspace(root),reclaim=current.reduce((total,entry)=>total+(entry.type==='file'?BigInt(entry.allocatedBytes):BigInt(filesystem.bsize)),0n),available=BigInt(filesystem.bavail)*BigInt(filesystem.bsize)+reclaim,availableInodes=BigInt(filesystem.ffree+current.length);if(requiredBytes(agentManifest(target.manifest,agentId).entries,filesystem.bsize)>available||BigInt(agentManifest(target.manifest,agentId).entries.length+8)>availableInodes)throw new Error(`Checkpoint cannot fit private workspace capacity: ${agentId}`);}
  const databasePath=join(state,'mate.sqlite');let databaseAlreadyRestored=false;
@@ -72,17 +74,17 @@ async function managedRestore(config:DaemonConfig,checkpointPath:string,options:
  if(!journal?.databaseComplete&&!databaseAlreadyRestored){const stateFilesystem=environment.workspaceHost.statfs(state),databasePayload=Math.max(target.manifest.database.size,target.manifest.database.allocatedBytes),databaseBytes=(BigInt(databasePayload)+BigInt(stateFilesystem.bsize)-1n)/BigInt(stateFilesystem.bsize)*BigInt(stateFilesystem.bsize);if(databaseBytes+1024n*1024n>BigInt(stateFilesystem.bavail)*BigInt(stateFilesystem.bsize)||stateFilesystem.ffree<2)throw new Error('Checkpoint database cannot fit state filesystem capacity');}
  if(journal){
   if(journal.configurationHash!==target.manifest.configurationHash||!identityEqual(journal.target,target.identity))throw new Error('Restore journal is bound to a different or replaced checkpoint');
-  if(journal.current&&journal.phase==='planned'){const current=await verifyCheckpoint(journal.current.path,config,{requiredOwnerUid:checkpointOwnerUid,requiredOwnerGid:checkpointOwnerGid});assertOutside(current);if(!identityEqual(current.identity,journal.current))throw new Error('Restore journal current-state checkpoint was replaced');await assertLiveMatches(current,roots,dataDir);}
+  if(journal.current&&journal.phase==='planned'){const current=await verifyCheckpoint(journal.current.path,currentConfig,{requiredOwnerUid:checkpointOwnerUid,requiredOwnerGid:checkpointOwnerGid});assertOutside(current);if(!identityEqual(current.identity,journal.current))throw new Error('Restore journal current-state checkpoint was replaced');await assertLiveMatches(current,roots,dataDir);}
   if(journal.completedAgents.some((agentId,index)=>target.manifest.agents[index]?.agentId!==agentId))throw new Error('Restore journal Agent completion order is invalid');
  }else{
   const hasCurrent=await exists(join(state,'mate.sqlite'))||await Promise.all([...roots.values()].map(nonempty)).then(values=>values.some(Boolean));let current:VerifiedCheckpoint|undefined;
-  if(hasCurrent){if(!options.currentCheckpoint)throw new Error('Replacing nonempty state requires its verified current checkpoint');current=await verifyCheckpoint(options.currentCheckpoint,config,{requiredOwnerUid:checkpointOwnerUid,requiredOwnerGid:checkpointOwnerGid});assertOutside(current);await assertLiveMatches(current,roots,dataDir);}
+  if(hasCurrent){if(!options.currentCheckpoint)throw new Error('Replacing nonempty state requires its verified current checkpoint');current=await verifyCheckpoint(options.currentCheckpoint,currentConfig,{requiredOwnerUid:checkpointOwnerUid,requiredOwnerGid:checkpointOwnerGid});assertOutside(current);await assertLiveMatches(current,roots,dataDir);}
   journal={version:1,phase:'planned',configurationHash:target.manifest.configurationHash,target:target.identity,...(current?{current:current.identity}:{}),completedAgents:[],databaseComplete:false};await atomicJson(journalPath,journal);
   journal={...journal,phase:'decided'};await atomicJson(journalPath,journal);await options.afterPhase?.('decision');
  }
  if(journal.phase==='planned'){journal={...journal,phase:'decided'};await atomicJson(journalPath,journal);await options.afterPhase?.('decision');}
  // Re-verify every payload and the bound inode/hash after the durable decision before any destructive step.
- const source=await verifyCheckpoint(journal.target.path,config,{requiredOwnerUid:checkpointOwnerUid,requiredOwnerGid:checkpointOwnerGid});if(!identityEqual(source.identity,journal.target))throw new Error('Restore checkpoint changed after decision');
+ const source=await verifyCheckpoint(journal.target.path,targetConfig,{requiredOwnerUid:checkpointOwnerUid,requiredOwnerGid:checkpointOwnerGid});if(!identityEqual(source.identity,journal.target))throw new Error('Restore checkpoint changed after decision');
  for(const agent of source.manifest.agents){assertBoundary();const root=roots.get(agent.agentId)!;if(journal.completedAgents.includes(agent.agentId))await assertRestoredWorkspace(root,agent.entries,agent.agentId);else{await restoreWorkspace(source.root,agent.agentId,root,agent.entries);assertBoundary();await assertRestoredWorkspace(root,agent.entries,agent.agentId);journal={...journal,completedAgents:[...journal.completedAgents,agent.agentId]};await atomicJson(journalPath,journal);await options.afterPhase?.(`agent:${agent.agentId}`);}}
  if(journal.databaseComplete)await assertRestoredDatabase(databasePath,source.manifest);else if(databaseAlreadyRestored){journal={...journal,databaseComplete:true};await atomicJson(journalPath,journal);}else{await rm(`${databasePath}-wal`,{force:true});await rm(`${databasePath}-shm`,{force:true});await removeNamedTemps(state,'.mate.sqlite.restore-');await fsyncDirectory(state);await restoreRegularFile(join(source.root,'mate.sqlite'),databasePath,source.manifest.database);await assertRestoredDatabase(databasePath,source.manifest);journal={...journal,databaseComplete:true};await atomicJson(journalPath,journal);await options.afterPhase?.('database');}
  await rm(journalPath);await fsyncDirectory(control);
@@ -103,13 +105,36 @@ async function restore(config:DaemonConfig,checkpoint:string,options:RestoreTest
  if(version===1){if(options.currentCheckpoint)throw new Error('Legacy checkpoint does not support managed replacement');await restoreLegacyCheckpoint(config,checkpoint);return'v1';}
  if(version!==2)throw new Error('Unsupported checkpoint version');
  if(!config.runtime.workspaceManifest){if(options.currentCheckpoint)throw new Error('Unmanaged version 2 restore requires absent destination, not replacement');await restoreUnmanagedCheckpoint(config,checkpoint);return'v2';}
- await managedRestore(config,checkpoint,options);return'v2';
+ await managedRestore(config,config,checkpoint,options);return'v2';
 }
 
-export async function restoreCheckpoint(config:DaemonConfig,checkpoint:string,options:RestoreOptions={}):Promise<'v1'|'v2'>{return restore(config,checkpoint,options);}
+export async function restoreCheckpoint(config:DaemonConfig,checkpoint:string,options:RestoreOptions={}):Promise<'v1'|'v2'>{
+ if(readDeploymentJournal(config.runtime.dataDir))throw new Error('Ordinary restore is blocked while a deployment upgrade journal exists');
+ return restore(config,checkpoint,options);
+}
+
+async function deploymentRestore(oldConfig:DaemonConfig,newConfig:DaemonConfig,journal:DeploymentJournal,options:RestoreTestingOptions):Promise<'v2'>{
+ const target=journal.checkpoints.rollback.path,current=journal.checkpoints.candidate?.path;if(!current)throw new Error('Deployment rollback requires its bound candidate checkpoint');
+ assertDeploymentRollbackAuthorization(journal,oldConfig,newConfig,target,current);
+ const ownerUid=options.checkpointOwnerUid??0,environment=options.environment??nodeDeploymentEnvironment(),ownerGid=options.checkpointOwnerGid??environment.workspaceHost.gid();
+ const [verifiedTarget,verifiedCurrent]=await Promise.all([verifyCheckpoint(target,oldConfig,{requiredOwnerUid:ownerUid,requiredOwnerGid:ownerGid}),verifyCheckpoint(current,newConfig,{requiredOwnerUid:ownerUid,requiredOwnerGid:ownerGid})]);
+ if(!identityEqual(verifiedTarget.identity,journal.checkpoints.rollback)||!identityEqual(verifiedCurrent.identity,journal.checkpoints.candidate!))throw new Error('Deployment rollback checkpoint was replaced');
+ await managedRestore(oldConfig,newConfig,target,{...options,currentCheckpoint:current,environment});return'v2';
+}
+
+/** Deployment-only rollback. The ordinary restore API intentionally cannot cross configuration identities. */
+export async function restoreDeploymentCheckpoint(oldConfig:DaemonConfig,newConfig:DaemonConfig,options:RestoreOptions={}):Promise<'v2'>{
+ const journal=readDeploymentJournal(newConfig.runtime.dataDir,{requiredOwnerUid:0,requiredOwnerGid:process.getgid?.()??-1});if(!journal)throw new Error('Deployment rollback requires an upgrade journal');
+ return deploymentRestore(oldConfig,newConfig,journal,options);
+}
 
 /** Test-only ownership seam; production callers must use restoreCheckpoint's root-owned checkpoint contract. */
 export async function restoreCheckpointForTesting(config:DaemonConfig,checkpoint:string,options:RestoreTestingOptions={}):Promise<'v1'|'v2'>{
  if(!process.env.VITEST)throw new Error('Checkpoint ownership overrides are test-only');
  return restore(config,checkpoint,options);
+}
+
+/** Test-only ownership seam for the deployment rollback contract. */
+export async function restoreDeploymentCheckpointForTesting(oldConfig:DaemonConfig,newConfig:DaemonConfig,journal:DeploymentJournal,options:RestoreTestingOptions={}):Promise<'v2'>{
+ if(!process.env.VITEST)throw new Error('Checkpoint ownership overrides are test-only');return deploymentRestore(oldConfig,newConfig,journal,options);
 }

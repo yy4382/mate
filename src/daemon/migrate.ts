@@ -26,6 +26,8 @@ import {repairTranscript}from '../runtime/context.js';
 import {SessionLifecycle}from '../runtime/sessions.js';
 import {normalizeConfiguredWorkspaces}from '../capabilities/workspaces.js';
 import {nodeDeploymentEnvironment,verifyDeploymentWorkspaces,type DeploymentEnvironment}from '../deployment/runtime.js';
+import type {VerifiedWorkspaces} from '../deployment/workspaces.js';
+import {z} from 'zod';
 
 import {Collaboration}from '../collaboration/service.js';
 
@@ -50,6 +52,83 @@ function matchesRecordedRuntimePolicy(store:Store,previous:DaemonConfig,policy:s
  }
  return false;
 }
+
+const deploymentMigrationMarkerSchema=z.object({version:z.literal(1),upgradeId:z.string().uuid(),attemptId:z.string().uuid(),oldConfigurationHash:z.string().regex(/^[a-f0-9]{64}$/),newConfigurationHash:z.string().regex(/^[a-f0-9]{64}$/),topologyIdentity:z.string().regex(/^[a-f0-9]{64}$/),status:z.literal('complete')}).strict();
+export type DeploymentMigrationMarker=z.infer<typeof deploymentMigrationMarkerSchema>;
+export interface OfflineMigrationOptions{
+ projectRoot:string;
+ verifiedWorkspaces?:VerifiedWorkspaces;
+ legacyIdentityAttested:boolean;
+ auditSource:string;
+ deployment?:Omit<DeploymentMigrationMarker,'version'|'oldConfigurationHash'|'newConfigurationHash'|'status'>;
+}
+export interface OfflineMigrationResult{agents:string[];legacyIdentityAttested:boolean;replayed:boolean}
+
+function assertMigrationIdentity(s:Store,previous:DaemonConfig,next:DaemonConfig,legacyIdentityAttested:boolean):DaemonConfig|undefined{
+ const recorded=storedConfiguration(s);
+ if(recorded&&!sameConfiguration(recorded,previous))throw new Error('Previous configuration does not match persisted configuration');
+ if(!recorded&&!legacyIdentityAttested)throw new Error('Legacy identity snapshot unavailable; supply trusted OLD_CONFIG and --accept-legacy-identity explicitly');
+ const policy=s.db.prepare("SELECT value FROM runtime_meta WHERE key='policy'").get() as {value:string}|undefined;
+ if(!policy||!matchesRecordedRuntimePolicy(s,previous,policy.value))throw new Error('Previous runtime policy does not match database');
+ const oldIds=(s.db.prepare('SELECT id FROM agents ORDER BY id').all() as {id:string}[]).map(agent=>agent.id);
+ if(encode(oldIds)!==encode(previous.mate.agents.map(agent=>agent.id).sort()))throw new Error('Previous Agent identities do not match database');
+ assertConfigurationEvolution(previous,next);return recorded;
+}
+
+function prepareMigrationBoundary(s:Store,previous:DaemonConfig,next:DaemonConfig,options:OfflineMigrationOptions):Map<string,Map<string,string[]>>{
+ assertMigrationIdentity(s,previous,next,options.legacyIdentityAttested);
+ const data=previous.runtime.dataDir,state=join(data,'state'),agentsDir=join(data,'agents');
+ if(resolve(data)!==resolve(next.runtime.dataDir))throw new Error('Migration requires the same data directory');
+ const protectedRoots=[...executionProtectedPaths(options.projectRoot,state,agentsDir,next.runtime.docker),...(options.verifiedWorkspaces?.protectedPaths??[])],configured=normalizeConfiguredWorkspaces(next.runtime.workspaceGrants,protectedRoots);
+ const privateBase=new Set(pathVariants(agentsDir)),privateForbidden=protectedRoots.filter(root=>!privateBase.has(root)),roots=new Map<string,Map<string,string[]>>();
+ for(const agent of next.mate.agents){
+  const own=options.verifiedWorkspaces?.roots.get(agent.id)??join(agentsDir,agent.id);
+  if(options.verifiedWorkspaces&&!options.verifiedWorkspaces.roots.has(agent.id))throw new Error(`Verified private workspace missing: ${agent.id}`);
+  if(existsSync(own)&&lstatSync(own).isSymbolicLink())throw new Error('Agent memory must not be a symlink');
+  if(existsSync(own))canonicalRoot(own,privateForbidden);else if(privateForbidden.some(path=>within(resolve(own),path)||within(path,resolve(own))))throw new Error('Protected root overlap');
+  const desired=new Map<string,string[]>([[existsSync(own)?canonicalRoot(own,[options.projectRoot,state]):resolve(own),next.runtime.docker?['read','write','exec']:['read','write']]]);
+  for(const grant of configured.filter(grant=>grant.agentId===agent.id))desired.set(grant.root,[...new Set([...(desired.get(grant.root)??[]),...grant.operations])]);roots.set(agent.id,desired);
+ }
+ return roots;
+}
+
+/** The only database-changing part of configuration migration. Callers own locking, backup/checkpoint and workspace verification. */
+export function applyOfflineConfigurationMigration(s:Store,previous:DaemonConfig,next:DaemonConfig,options:OfflineMigrationOptions):OfflineMigrationResult{
+ const oldConfigurationHash=hash(encode(previous)),newConfigurationHash=hash(encode(next)),requestedMarker=options.deployment?deploymentMigrationMarkerSchema.parse({version:1,...options.deployment,oldConfigurationHash,newConfigurationHash,status:'complete'}):undefined;
+ const markerKey=requestedMarker?`deployment_upgrade_v1:${requestedMarker.attemptId}`:undefined,markerRow=markerKey?s.db.prepare('SELECT value FROM runtime_meta WHERE key=?').get(markerKey) as {value:string}|undefined:s.db.prepare("SELECT value FROM runtime_meta WHERE key LIKE 'deployment_upgrade_v1:%' LIMIT 1").get() as {value:string}|undefined;
+ if(markerRow){
+  const marker=deploymentMigrationMarkerSchema.parse(JSON.parse(markerRow.value));
+  if(!requestedMarker)throw new Error('Database contains managed deployment upgrade history');
+  if(encode(marker)!==encode(requestedMarker))throw new Error('Deployment migration attempt is bound to different identities');
+  const recorded=storedConfiguration(s),policy=s.db.prepare("SELECT value FROM runtime_meta WHERE key='policy'").get() as {value:string}|undefined;
+  if(!recorded||!sameConfiguration(recorded,next)||!policy||policy.value!==hash(encode(next.runtime)))throw new Error('Completed deployment marker does not match persisted configuration');
+  return{agents:next.mate.agents.map(agent=>agent.id),legacyIdentityAttested:options.legacyIdentityAttested,replayed:true};
+ }
+ const roots=prepareMigrationBoundary(s,previous,next,options);
+ s.atomic(()=>{
+  const concurrent=markerKey?s.db.prepare('SELECT value FROM runtime_meta WHERE key=?').get(markerKey) as {value:string}|undefined:undefined;
+  if(concurrent)throw new Error('Deployment upgrade marker appeared during migration');
+  const oldSlack=slackRuntimeConfig(previous),newSlack=slackRuntimeConfig(next);
+  if(oldSlack)migrateCanonicalConversations(s,oldSlack);else initializeCanonicalStore(s);
+  migrateInternalConversations(s);migrateProjections(s);migrateProjectionImports(s);migrateHistoryIndexes(s);migrateCoordinationRecovery(s);migrateOperationsView(s);
+  const {messages}=(newSlack?slackApplication(s,newSlack,next.mate):localApplication(s,next.mate)),c=new Collaboration(s,messages,new Output(messages,{post:async()=>{throw new Error('Offline migration cannot publish');},pendingInput:()=>false,classify:()=>({kind:'unknown'})}),next.mate);
+  const baseline=(agent:import('../domain/agents.js').AgentDefinition)=>buildBaseline(agent,operationDocumentation),lifecycle=new SessionLifecycle(c,baseline);
+  for(const agent of next.mate.agents){
+   const initial=baseline(agent),row=s.db.prepare('SELECT session_id FROM agents WHERE id=?').get(agent.id) as {session_id:string}|undefined;
+   if(!row){s.register(agent.id,initial.configVersion,initial.messages);continue;}
+   if(lifecycle.apply(agent.id))continue;
+   const history=repairTranscript(s.context(row.session_id) as AgentMessage[],id=>{const action=s.action(`${row.session_id}:${id}`);return action?encode({recoveredAction:action.id,state:action.state,receipt:action.receipt?JSON.parse(action.receipt):null}):undefined;});
+   s.rotateSession(agent.id,initial.configVersion,[...initial.messages,...history.filter(message=>message.role!=='system')],'configuration_migration');
+  }
+  for(const grant of s.db.prepare('SELECT id,agent_id,root,revoked,expires FROM grants').all() as {id:string;agent_id:string;root:string;revoked:number;expires:number}[]){
+   const allowed=roots.get(grant.agent_id)?.get(grant.root);if(!allowed)s.db.prepare('UPDATE grants SET revoked=1 WHERE id=?').run(grant.id);else if(!grant.revoked&&grant.expires>Date.now())s.db.prepare('UPDATE grants SET operations=? WHERE id=?').run(encode(allowed),grant.id);
+  }
+  configureLocalRooms(c,previous.adapters.local,next.adapters.local);saveConfiguration(s,next);
+  if(requestedMarker)s.db.prepare('INSERT INTO runtime_meta(key,value) VALUES(?,?)').run(markerKey,encode(requestedMarker));
+  s.audit('configuration_migration',{source:options.auditSource,oldHash:oldConfigurationHash,newHash:newConfigurationHash,legacyIdentityAttested:options.legacyIdentityAttested,deploymentUpgradeId:requestedMarker?.upgradeId??null,deploymentAttemptId:requestedMarker?.attemptId??null,grantPolicy:'removed roots revoked; active grants match new policy; revoked/expired grants preserved; budgets unchanged'});
+ });
+ return{agents:next.mate.agents.map(agent=>agent.id),legacyIdentityAttested:options.legacyIdentityAttested,replayed:false};
+}
 /** Explicit local owner operation. No Slack or model credentials required. */
 export async function migrateConfiguration(previous:DaemonConfig,next:DaemonConfig,destination:string,acceptLegacyIdentity=false,projectRoot=resolve('.'),environment:DeploymentEnvironment=nodeDeploymentEnvironment()):Promise<{backup:string;agents:string[];legacyIdentityAttested:boolean}>{
  if(previous.runtime.workspaceManifest||next.runtime.workspaceManifest)throw new Error('Managed deployment migration requires the sealed checkpoint upgrade workflow');
@@ -64,55 +143,9 @@ export async function migrateConfiguration(previous:DaemonConfig,next:DaemonConf
   assertDockerControlIsolation(projectRoot,state,agentsDir,next.runtime.workspaceGrants,next.runtime.docker,next.runtime.workspaceManifest?[next.runtime.workspaceManifest]:[]);
   if(previous.runtime.docker)await new ContainerBackend({...previous.runtime.docker,scope:executionScope(data)}).recover();
   const verifiedWorkspaces=verifyDeploymentWorkspaces(next,environment);
-  store=new Store(join(state,'mate.sqlite'));const s=store,recorded=storedConfiguration(s);
-  if(recorded&&!sameConfiguration(recorded,previous))throw new Error('Previous configuration does not match persisted configuration');
-  if(!recorded&&!acceptLegacyIdentity)throw new Error('Legacy identity snapshot unavailable; supply trusted OLD_CONFIG and --accept-legacy-identity explicitly');
-  const policy=s.db.prepare("SELECT value FROM runtime_meta WHERE key='policy'").get() as {value:string}|undefined;
-  if(!policy||!matchesRecordedRuntimePolicy(s,previous,policy.value))throw new Error('Previous runtime policy does not match database');
-  const oldIds=(s.db.prepare('SELECT id FROM agents ORDER BY id').all() as {id:string}[]).map(a=>a.id);
-  if(encode(oldIds)!==encode(previous.mate.agents.map(a=>a.id).sort()))throw new Error('Previous Agent identities do not match database');
-  assertConfigurationEvolution(previous,next);
-  const protectedRoots=[...executionProtectedPaths(projectRoot,state,agentsDir,next.runtime.docker),...(verifiedWorkspaces?.protectedPaths??[])];
-  const configured=normalizeConfiguredWorkspaces(next.runtime.workspaceGrants,protectedRoots);
-  const privateBase=new Set(pathVariants(agentsDir)),privateForbidden=protectedRoots.filter(root=>!privateBase.has(root));
-  const roots=new Map<string,Map<string,string[]>>();
-  for(const agent of next.mate.agents){
-   const own=join(agentsDir,agent.id);
-   if(existsSync(own)&&lstatSync(own).isSymbolicLink())throw new Error('Agent memory must not be a symlink');
-   if(existsSync(own))canonicalRoot(own,privateForbidden);else if(privateForbidden.some(path=>within(resolve(own),path)||within(path,resolve(own))))throw new Error('Protected root overlap');
-   // New Agent private directories are created by normal daemon startup.
-   const desired=new Map<string,string[]>([[existsSync(own)?canonicalRoot(own,[projectRoot,state]):resolve(own),next.runtime.docker?['read','write','exec']:['read','write']]]);
-   for(const grant of configured.filter(g=>g.agentId===agent.id)){
-    desired.set(grant.root,[...new Set([...(desired.get(grant.root)??[]),...grant.operations])]);
-   }roots.set(agent.id,desired);
-  }
-  s.recover();
+  store=new Store(join(state,'mate.sqlite'));const s=store,recorded=storedConfiguration(s),migrationOptions={projectRoot,...(verifiedWorkspaces?{verifiedWorkspaces}:{}),legacyIdentityAttested:!recorded&&acceptLegacyIdentity,auditSource:resolve(destination)};prepareMigrationBoundary(s,previous,next,migrationOptions);s.recover();
   await backup(s,data,resolve(destination),previous);
-  s.atomic(()=>{
-   const oldSlack=slackRuntimeConfig(previous),newSlack=slackRuntimeConfig(next);
-   if(oldSlack)migrateCanonicalConversations(s,oldSlack);else initializeCanonicalStore(s);
-   migrateInternalConversations(s);migrateProjections(s);migrateProjectionImports(s);migrateHistoryIndexes(s);migrateCoordinationRecovery(s);migrateOperationsView(s);
-   const {messages}=(newSlack?slackApplication(s,newSlack,next.mate):localApplication(s,next.mate)),c=new Collaboration(s,messages,new Output(messages,{post:async()=>{throw new Error('Offline migration cannot publish');},pendingInput:()=>false,classify:()=>({kind:'unknown'})}),next.mate);
-   const baseline=(agent:import('../domain/agents.js').AgentDefinition)=>buildBaseline(agent,operationDocumentation);
-   const lifecycle=new SessionLifecycle(c,baseline);
-   for(const agent of next.mate.agents){
-    const initial=baseline(agent),row=s.db.prepare('SELECT session_id FROM agents WHERE id=?').get(agent.id) as {session_id:string}|undefined;
-    if(!row){s.register(agent.id,initial.configVersion,initial.messages);continue;}
-    if(lifecycle.apply(agent.id))continue;
-    const history=repairTranscript(s.context(row.session_id) as AgentMessage[],id=>{
-     const action=s.action(`${row.session_id}:${id}`);return action?encode({recoveredAction:action.id,state:action.state,receipt:action.receipt?JSON.parse(action.receipt):null}):undefined;
-    });
-    s.rotateSession(agent.id,initial.configVersion,[...initial.messages,...history.filter(message=>message.role!=='system')],'configuration_migration');
-   }
-   for(const grant of s.db.prepare('SELECT id,agent_id,root,revoked,expires FROM grants').all() as {id:string;agent_id:string;root:string;revoked:number;expires:number}[]){
-    const allowed=roots.get(grant.agent_id)?.get(grant.root);
-    if(!allowed)s.db.prepare('UPDATE grants SET revoked=1 WHERE id=?').run(grant.id);
-    else if(!grant.revoked&&grant.expires>Date.now())s.db.prepare('UPDATE grants SET operations=? WHERE id=?').run(encode(allowed),grant.id);
-   }
-   configureLocalRooms(c,previous.adapters.local,next.adapters.local);
-   saveConfiguration(s,next);
-   s.audit('configuration_migration',{backup:resolve(destination),oldHash:hash(encode(previous)),newHash:hash(encode(next)),legacyIdentityAttested:!recorded,grantPolicy:'removed roots revoked; active grants match new policy; revoked/expired grants preserved; budgets unchanged'});
-  });
-  return{backup:resolve(destination),agents:next.mate.agents.map(a=>a.id),legacyIdentityAttested:!recorded};
+  const result=applyOfflineConfigurationMigration(s,previous,next,migrationOptions);
+  return{backup:resolve(destination),agents:result.agents,legacyIdentityAttested:result.legacyIdentityAttested};
  }finally{store?.close();release();}
 }
