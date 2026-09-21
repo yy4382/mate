@@ -15,6 +15,14 @@ Git：在codex/vps-first-release本地分支管理；先保存已审核及进行
 | V2 部署包与Slack操作闭环 | 固定构建/运行依赖、服务管理、示例配置、诊断、迁移备份恢复、Slack操作手册 | V1 PASS、E6 | 从干净Linux环境按文档安装/启动本地替身协议；持久化/重启/恢复；凭证接入与目标机验收步骤明确 | TODO |
 | V3 发布候选审核 | 完整功能/架构/隔离红队，Git可复现版本和操作清单 | E6、V2 PASS | 已知阻塞清零，只剩真实连接与部署操作；明确不能把未做验证称为通过 | TODO |
 
+V1按低配资源控制、隔离后端、部署层workspace边界的依赖顺序细分；V0已完成独立架构讨论，每个实现gate仍分别做独立代码红队：
+
+| gate | 目标/接口 | 依赖 | 验收 | 状态 |
+|---|---|---|---|---|
+| V1a 运行与执行admission | 可取消的FIFO `FairAdmission`；生产默认全局1个active run和1个backend操作；有限worker idle回收 | V0、E6 PASS | 多Agent公平顺序、排队时stop/shutdown、slot异常释放、同Agent不重复排队、重启持久上下文不变 | PASS；`review_v1a_admission`两轮，见`reviews/V1a-admission.md` |
+| V1b Linux统一容器隔离 | `ContainerBackend`支持固定file helper与exec、配置化memory/cpu/pids/tmpfs；启动probe；cleanup不确定后熔断直到recover | V1a PASS | mock协议故障矩阵；真实Linux验证跨root/secret/socket/network、文件语义、停止/超时/daemon死亡、scope恢复 | TODO |
+| V1c workspace容量与启动边界 | 部署workspace manifest/probe核验每Agent独立mount、ext4类型/容量/owner；缺失不得回退普通目录 | V1b PASS | loopback文件真实预分配、mount身份/容量错误失败关闭、ENOSPC、重启/恢复；外部grant明确排除 | TODO |
+
 ---
 
 # 当前轮：实验版本 E0–E6（2026-09-21）

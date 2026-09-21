@@ -9,6 +9,7 @@ it('normalizes old deployment once and keeps pure Agent definitions separate fro
  expect(c.mate.agents[0]).not.toHaveProperty('slackAppId');
  expect(c.mate.ownerUserIds).toEqual([slackHumanId(configFixture.teamId,'UOWNER')]);
  expect(slackPrincipal(slackRuntimeConfig(c)!,'UOWNER')).toEqual(slackPrincipal(configFixture,'UOWNER'));
+ expect(c.runtime.limits).toEqual({maxActiveRuns:1,maxBackendOperations:1,workerIdleMs:300000});
 });
 it('owner removal retains human author identity and cannot implicitly rebind previously observed humans',()=>{
  const before=daemonConfigSchema.parse(legacy()),after=structuredClone(before);

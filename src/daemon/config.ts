@@ -25,6 +25,7 @@ const modernConfigSchema = z.object({
   runtime: z.object({
     dataDir: path,
     docker: z.object({ binary: path, host: z.string().startsWith('unix:///'), image: z.string().regex(/^sha256:[a-f0-9]{64}$/),network:z.enum(['none','bridge']).optional() }).strict().optional(),
+    limits:z.object({maxActiveRuns:z.number().int().min(1).max(32),maxBackendOperations:z.number().int().min(1).max(32),workerIdleMs:z.number().int().min(1).max(3600000)}).strict().default({maxActiveRuns:1,maxBackendOperations:1,workerIdleMs:300000}),
     workspaceGrants: z.array(z.object({ agentId: z.string(), root: path, operations: z.array(z.enum(['read','write','exec'])).min(1),label:workspaceLabel.optional() }).strict()).default([]),
     researchHosts: z.array(z.string().regex(/^[a-z0-9][a-z0-9.-]*[a-z0-9]$/)).default([]),
   }).strict()

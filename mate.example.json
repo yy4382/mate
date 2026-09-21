@@ -18,5 +18,5 @@
       ]
     }
   },
-  "runtime": {"dataDir": "/var/lib/mate", "workspaceGrants": [], "researchHosts": ["example.com"]}
+  "runtime": {"dataDir": "/var/lib/mate", "limits": {"maxActiveRuns": 1, "maxBackendOperations": 1, "workerIdleMs": 300000}, "workspaceGrants": [], "researchHosts": ["example.com"]}
 }

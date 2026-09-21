@@ -9,5 +9,5 @@
     ]
   },
   "adapters": {"local": {"humans": ["owner"], "rooms": [{"id": "team-room", "agents": ["research", "writer"], "humans": ["owner"]}]}},
-  "runtime": {"dataDir": "/var/lib/mate-local", "workspaceGrants": [], "researchHosts": ["example.com"]}
+  "runtime": {"dataDir": "/var/lib/mate-local", "limits": {"maxActiveRuns": 1, "maxBackendOperations": 1, "workerIdleMs": 300000}, "workspaceGrants": [], "researchHosts": ["example.com"]}
 }

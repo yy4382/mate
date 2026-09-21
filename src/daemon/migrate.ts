@@ -35,6 +35,20 @@ export function saveConfiguration(store:Store,config:DaemonConfig):void{
  store.db.prepare("INSERT INTO runtime_meta VALUES('configuration',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(encode(daemonConfigSchema.parse(config)));
  store.db.prepare("INSERT INTO runtime_meta VALUES('policy',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(hash(encode(config.runtime)));
 }
+function matchesRecordedRuntimePolicy(store:Store,previous:DaemonConfig,policy:string):boolean{
+ if(policy===hash(encode(previous.runtime)))return true;
+ const row=store.db.prepare("SELECT value FROM runtime_meta WHERE key='configuration'").get() as {value:string}|undefined;
+ if(row){
+  const raw=JSON.parse(row.value) as {runtime?:unknown};
+  if(raw.runtime&&sameConfiguration(daemonConfigSchema.parse(raw),previous)&&policy===hash(encode(raw.runtime)))return true;
+ }
+ const defaults={maxActiveRuns:1,maxBackendOperations:1,workerIdleMs:300000};
+ if(encode(previous.runtime.limits)===encode(defaults)){
+  const {limits:_,...preLimitsRuntime}=previous.runtime;
+  if(policy===hash(encode(preLimitsRuntime)))return true;
+ }
+ return false;
+}
 /** Explicit local owner operation. No Slack or model credentials required. */
 export async function migrateConfiguration(previous:DaemonConfig,next:DaemonConfig,destination:string,acceptLegacyIdentity=false,projectRoot=resolve('.')):Promise<{backup:string;agents:string[];legacyIdentityAttested:boolean}>{
  const data=previous.runtime.dataDir,state=join(data,'state');
@@ -47,7 +61,7 @@ export async function migrateConfiguration(previous:DaemonConfig,next:DaemonConf
   if(recorded&&!sameConfiguration(recorded,previous))throw new Error('Previous configuration does not match persisted configuration');
   if(!recorded&&!acceptLegacyIdentity)throw new Error('Legacy identity snapshot unavailable; supply trusted OLD_CONFIG and --accept-legacy-identity explicitly');
   const policy=s.db.prepare("SELECT value FROM runtime_meta WHERE key='policy'").get() as {value:string}|undefined;
-  if(!policy||policy.value!==hash(encode(previous.runtime)))throw new Error('Previous runtime policy does not match database');
+  if(!policy||!matchesRecordedRuntimePolicy(s,previous,policy.value))throw new Error('Previous runtime policy does not match database');
   const oldIds=(s.db.prepare('SELECT id FROM agents ORDER BY id').all() as {id:string}[]).map(a=>a.id);
   if(encode(oldIds)!==encode(previous.mate.agents.map(a=>a.id).sort()))throw new Error('Previous Agent identities do not match database');
   assertConfigurationEvolution(previous,next);

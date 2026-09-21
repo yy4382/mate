@@ -22,6 +22,7 @@
 | 完整行为prompt与memory恢复 | runtime/prompt对照产品方向/参考材料独立审查；Engine/真实IPC压缩后刷新最新memory/checkpoint，失败不继续用旧包 |
 | 独立review seat | supervisor/policy：unused身份+clean workspace、对话/peer路径统一屏蔽、私有文件/离线exec、opaque held后continue |
 | 持续预算与公平性 | Agent账户不随新消息/work/reset补额；work耗尽不暂停全Agent；reminder触发与outbox筛选先排除阻挡再LIMIT，无关事项可前进 |
+| 低配VPS进程资源准入 | 默认全局1个active run和1个backend operation；FIFO等待可取消；异常/停止释放slot；空闲worker有限TTL回收；持久工作不依赖内存队列 |
 
 测试位置：上述名称均位于[tests](../tests/)，具体断言可检索对应能力。所有数据均为合成fixture，不使用私有Raft memory。
 
@@ -38,6 +39,7 @@
 | 一个频道有大量被阻挡输出 | unknown/相关ingress在ready LIMIT前过滤；其他频道仍可派发 |
 | 作者预算/ACL/事项阻挡一批提醒 | tick在LIMIT前筛选；其他合法作者仍可触发 |
 | owner stop/cancel、daemon死亡 | generation fence、worker abort、容器PID namespace清理、文件helper lifeline；resume不清债务 |
+| admission等待、前置异常、backend失败 | queued Agent可单独停止；account/beginRun/执行异常统一释放slot；memory recovery和正式文件/exec共享backend上限 |
 | reset请求后run中断、owner reset与旧run收尾交错 | 一次轮换、取消不续跑、暂停保持；不覆盖新session |
 | 配置迁移事务写失败 | 旧配置/session/grants一致保留，已有完整备份；保守fenced recovery不回滚为active |
 | 压缩后memory刷新失败 | 先失效view，再失败；真实RPC验证无主推理、无使用旧包冒充当前 |

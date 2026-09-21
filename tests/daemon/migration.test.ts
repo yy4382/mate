@@ -55,6 +55,14 @@ it('legacy identity requires explicit attestation; revoked grants stay revoked',
  expect((await migrateConfiguration(f.previous,f.next,join(f.root,'backup'),true)).legacyIdentityAttested).toBe(true);
  const s=new Store(f.path);expect(s.db.prepare('SELECT revoked FROM grants WHERE id=?').get(f.grant)).toEqual({revoked:1});s.close();
 });
+it('explicitly migrates the pre-limits runtime policy hash',async()=>{
+ const f=fixture();const raw=structuredClone(f.previous) as any;delete raw.runtime.limits;
+ f.store.db.prepare("UPDATE runtime_meta SET value=? WHERE key='configuration'").run(encode(raw));
+ f.store.db.prepare("UPDATE runtime_meta SET value=? WHERE key='policy'").run(hash(encode(raw.runtime)));f.store.close();
+ expect(()=>daemonConfigSchema.parse(raw)).not.toThrow();
+ await migrateConfiguration(f.previous,f.next,join(f.root,'backup'));
+ const s=new Store(f.path);try{expect(storedConfiguration(s)).toEqual(f.next);expect(s.db.prepare("SELECT value FROM runtime_meta WHERE key='policy'").get()).toEqual({value:hash(encode(f.next.runtime))});}finally{s.close();}
+});
 it('a failed migration transaction leaves the old configuration/session/grants usable and retains a complete backup',async()=>{
  const f=fixture();const before=(f.router.sessions.status('research') as any).session;
  f.store.db.exec("CREATE TRIGGER reject_configuration BEFORE UPDATE ON runtime_meta WHEN NEW.key='configuration' BEGIN SELECT RAISE(ABORT,'synthetic persistence failure'); END");f.store.close();

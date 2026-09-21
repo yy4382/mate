@@ -53,6 +53,8 @@ runtime.docker字段：
 
 research.read是allowlist已知公共HTTPS URL读取，不是搜索。attachments.save接可见Slack消息中的fileId，保存到授权目录；artifact.publish/revise发布自身artifacts文件并经过同一门控。文本发布上限64KiB，binary/下载1MB。完整工具限制见[调用链说明](docs/HOW_IT_WORKS.md)。
 
+低配机器默认通过`runtime.limits`限制进程内资源：`maxActiveRuns:1`让所有Agent公平排队执行run，`maxBackendOperations:1`限制同时进行的文件/命令操作，`workerIdleMs:300000`在空闲五分钟后释放模型worker。停止Agent或关闭daemon会撤销尚未取得槽位的等待；执行失败也会释放槽位。消息、任务、提醒和上下文仍保存在SQLite中，进程内队列不承担持久化职责。`check`会回显最终生效的限制。
+
 ## 管理、预算与上下文
 
 只有ownerUserIds可用/team：

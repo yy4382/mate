@@ -42,6 +42,8 @@ import {EnvironmentCapabilities} from '../capabilities/environment.js';
 import {normalizeConfiguredWorkspaces,workspaceProfiles,WorkspaceAccess} from '../capabilities/workspaces.js';
 import { executionScope } from './paths.js';
 import { backup } from './backup.js';
+import {FairAdmission} from '../concurrency/admission.js';
+import {AdmittedBackend} from '../execution/admitted.js';
 export interface Log { info(data: object, message: string): void; error(data: object, message: string): void }
 export class Daemon {
   readonly store: Store;
@@ -115,9 +117,9 @@ export class Daemon {
         if (!existsSync(join(root, 'MEMORY.md'))) writeFileSync(join(root, 'MEMORY.md'), `# ${agent.name}\n\nPrivate memory entry. Keep durable lessons and links to notes here.\n`, { flag: 'wx', mode: 0o600 });
       }
       const profiles=workspaceProfiles(this.memoryRoots,normalizeConfiguredWorkspaces(config.runtime.workspaceGrants,[projectRoot,state,agentsDir]),!!config.runtime.docker);
-      const files = new SandboxBackend();
+      const files = new SandboxBackend(),backendAdmission=new FairAdmission(config.runtime.limits.maxBackendOperations),admittedFiles=new AdmittedBackend(files,backendAdmission);
       if (config.runtime.docker) this.container = new ContainerBackend({ ...config.runtime.docker, scope: executionScope(data) });
-      this.backend = new ControlledBackend(files, this.container ?? { execute: async () => { throw new Error('Container execution is not configured'); } });
+      this.backend = new AdmittedBackend(new ControlledBackend(files, this.container ?? { execute: async () => { throw new Error('Container execution is not configured'); } }),backendAdmission);
       this.broker = new Broker(this.store, this.collaboration, this.backend, [projectRoot, state]);
       const workspaceAccess=this.workspaceAccess=new WorkspaceAccess(this.collaboration,this.broker,profiles);
       const research = new Research(config.runtime.researchHosts);
@@ -127,9 +129,9 @@ export class Daemon {
       const router = new ToolRouter(this.collaboration, this.broker, { attachment:(...args)=>{if(!attachments)throw new Error('Attachment adapter unavailable');return attachments.save(...args);},environment:(run,workId)=>environment.read(run,workId),research: (url, signal) => research.read(url, signal), publish: (...args) => artifacts.publish(...args) }, new TeamDirectory(messages,transport?new Directory(messages,transport.clients,transport.mapper):undefined), (actor,workId)=>workspaceAccess.provision(actor,workId),value=>slackApp?.argumentsCodec.args(value)??value,transport?new SlackHistory(messages,transport):undefined);
       this.supervisor = new Supervisor(this.collaboration, router, c, undefined, async (agentId, workId, signal) => {
         workspaceAccess.provision(agentId, workId);
-        const result = await files.execute({ root: this.memoryRoots[agentId]!, operation: { kind: 'read', path: 'MEMORY.md' }, timeoutMs: 10000 }, signal);
+        const result = await admittedFiles.execute({ root: this.memoryRoots[agentId]!, operation: { kind: 'read', path: 'MEMORY.md' }, timeoutMs: 10000 }, signal);
         if (result.code !== 0 || result.truncated) throw new Error('Private memory recovery read failed'); return result.stdout;
-      });
+      },{runAdmission:new FairAdmission(config.runtime.limits.maxActiveRuns),workerIdleMs:config.runtime.limits.workerIdleMs});
       this.supervisor.register();
       this.controls=new Controls(this.collaboration,this.supervisor,this.broker,actor=>this.verifyReviewWorkspace(actor),(user,command,id,args)=>this.slackRuntime?.projections.control(user,command,id,args));
       this.adapter=this.slackRuntime=transport?new SlackRuntime(this.collaboration,transport,this.controls,message=>this.log.error({},message)):undefined;
