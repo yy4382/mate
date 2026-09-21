@@ -1,3 +1,4 @@
+import {directRequest} from './attention-policy.js';
 import { randomUUID } from 'node:crypto';
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
 import { encode, type RunToken } from '../storage/store.js';
@@ -37,23 +38,25 @@ export class CanonicalAttention {
     }
     return publications.sort((a,b)=>a.revision-b.revision);
   }
-  peek(actor:string,now=Date.now()):unknown[] {
+  peek(actor:string,now=Date.now(),scope?:Target):{target:Target;revision:number;unseen:number}[] | {isolated:true;notice:string}[] {
     if(this.messages.isolated(actor))return[{isolated:true,notice:'Independent review seat; discussion inputs are withheld.'}];
     const s=this.messages.store;this.messages.agent(actor);
     const rows=s.db.prepare(`SELECT m.channel,m.thread,m.key,m.revision,MAX(e.seq) seq,seen.revision seen FROM messages m
       JOIN message_visibility v ON v.key=m.key AND v.agent_id=? JOIN channel_access a ON a.agent_id=v.agent_id AND a.channel=m.channel AND a.active=1
       JOIN conversation_events e ON e.message_key=m.key AND (e.audience IS NULL OR e.audience=v.agent_id) LEFT JOIN attention_seen seen ON seen.agent_id=v.agent_id AND seen.key=m.key
-      GROUP BY m.key`).all(actor) as {channel:string;thread:string|null;key:string;revision:string;seq:number;seen:string|null}[];
+      WHERE (? IS NULL OR m.channel=?) AND (? IS NULL OR m.thread=?)
+      GROUP BY m.key`).all(actor,scope?.conversationId??null,scope?.conversationId??null,scope?.threadId??null,scope?.threadId??null) as {channel:string;thread:string|null;key:string;revision:string;seq:number;seen:string|null}[];
     const groups=new Map<string,{target:Target;revision:number;unseen:number}>();
     for(const row of rows){
       const message=this.messages.records.message(row.key)!;
       if(message.author.kind==='agent'&&message.author.id===actor)continue;
       const target:Target={conversationId:row.channel,...(row.thread?{threadId:row.thread}:{})},key=encode(target);
       const states=s.db.prepare('SELECT resolved,deferred_until,muted FROM attention_state WHERE agent_id=? AND target IN (?,?)').all(actor,key,encode({conversationId:row.channel})) as {resolved:number;deferred_until:number;muted:number}[];
-      if(states.some(st=>st.muted||st.deferred_until>now||st.resolved>=row.seq))continue;
+      const direct=directRequest(actor,message,this.messages.references.conversation(row.channel).kind);
+      if(states.some(st=>(st.muted&&!direct)||st.deferred_until>now||st.resolved>=row.seq))continue;
       const group=groups.get(key)??{target,revision:0,unseen:0};group.revision=Math.max(group.revision,row.seq);group.unseen+=Number(row.seen!==row.revision);groups.set(key,group);
     }
-    for(const publication of this.publications(actor)){
+    for(const publication of this.publications(actor,scope)){
       if(publication.sender===actor)continue;const target=publication.target,key=encode(target);
       const states=s.db.prepare('SELECT resolved,deferred_until,muted FROM attention_state WHERE agent_id=? AND target IN (?,?)').all(actor,key,encode({conversationId:target.conversationId})) as {resolved:number;deferred_until:number;muted:number}[];
       if(states.some(st=>st.muted||st.deferred_until>now||st.resolved>=publication.revision))continue;

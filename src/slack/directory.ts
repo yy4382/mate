@@ -1,3 +1,4 @@
+import {SlackParticipation} from './participation.js';
 import type { ConversationDirectory, Space, SpacesResult, MembersResult, OpenDMResult } from '../conversations/directory.js';
 import type { WebClient } from '@slack/web-api';
 import type { RunToken } from '../storage/store.js';
@@ -9,7 +10,13 @@ import { LegacyArguments } from './legacy-arguments.js';
 
 /** Identity and membership come from the acting bot's authenticated Slack client. */
 export class Directory implements ConversationDirectory {
-  constructor(readonly messages: Messages, readonly clients: Map<string, WebClient>,readonly mapper:SlackMapper) {}
+  constructor(readonly messages: Messages, readonly clients: Map<string, WebClient>,readonly mapper:SlackMapper) {this.participation=new SlackParticipation(messages,clients,mapper);}
+  readonly participation:SlackParticipation;
+  capabilities(actor:string,conversationId?:string){return this.participation.capabilities(actor,conversationId);}
+  discover(actor:string,cursor?:string){return this.participation.discover(actor,cursor);}
+  joinCandidate(run:RunToken,actionId:string,candidateId:string,signal:AbortSignal){return this.participation.joinCandidate(run,actionId,candidateId,signal);}
+  membership(run:RunToken,actionId:string,conversationId:string,operation:'join'|'leave',signal:AbortSignal){return this.participation.change(run,actionId,conversationId,operation,signal);}
+  refresh(actor:string,conversationId:string,signal:AbortSignal){return this.participation.refresh(actor,conversationId,signal);}
   private client(actor: string): WebClient {
     this.messages.agent(actor);
     const client = this.clients.get(actor); if (!client) throw new Error('Slack client unavailable'); return client;

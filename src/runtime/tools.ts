@@ -51,6 +51,11 @@ const schemas: Record<string,z.ZodType> = {
   'works.list': z.object({}).strict(),
   'works.select': z.object({ workId: id }).strict(),
   'budget.read': z.object({}).strict(),
+  'conversations.capabilities':z.object({conversationId:id.optional()}).strict(),
+  'conversations.discover':z.object({cursor:z.string().min(1).max(10000).optional()}).strict(),
+  'conversations.join':z.union([z.object({conversationId:id}).strict(),z.object({candidateId:id}).strict()]),
+  'conversations.leave':z.object({conversationId:id}).strict(),
+  'conversations.refresh':z.object({conversationId:id}).strict(),
   'conversations.list': z.object({}).strict(),
   'conversations.members': z.object({ conversationId: id }).strict(),
   'conversations.openDM': z.object({ principal: z.object({kind:z.enum(['human','agent','external']),id}).strict() }).strict(),
@@ -86,6 +91,14 @@ export interface AdditionalTools {
 type ToolContext={run:RunToken;workId:string;callId:string;signal:AbortSignal};
 const seatOperations=['actions.list','actions.read','sessions.status','sessions.checkpoint','sessions.reset','environment.info','agents','budget.read','attention.peek','messages.send','drafts.list','drafts.read','drafts.retry','drafts.continue','drafts.revise','drafts.discard',...Object.keys(fileSchemas),'exec'];
 const capabilityDescriptions:Record<string,string>={
+ 'conversations.capabilities':'Inspect implemented participation operations and platform conditions, optionally for a conversation. Unsupported is explicit; capability availability does not grant access.',
+ 'conversations.discover':'Page public space metadata through the configured adapter. Discovery never grants message access. Follow nextCursor; does not enumerate private rooms.',
+ 'conversations.join':'Request joining a discovered public external channel; receipt may be succeeded, failed, unknown or unsupported. Unknown is not retried blindly.',
+ 'conversations.leave':'Leave an external channel with a durable receipt; successful completion removes local access. Internal rooms and DMs use attention controls instead.',
+ 'conversations.refresh':'Read current external membership and reconcile unknown join/leave when the desired state is observed. A negative observation alone does not settle a timed-out request.',
+ 'attention.mute':'Suppress ordinary target activity; direct personal mentions and DMs still surface. Does not mark input read or stop an already active run.',
+ 'attention.defer':'Explicitly postpone a target, including direct requests, until a timestamp. New input stays unread; expiry produces a durable wakeup if permitted. Does not cancel existing work.',
+
  'file.read_bytes':'Read up to 32 KiB binary bytes at an offset, returning base64, file size and full SHA256. Files up to 1 MB.',
  'file.write_bytes':'Atomically write canonical base64 bytes, decoded size up to 1 MB, in the granted workspace.',
  'attachments.save':'Download a file attached to a visible message into a granted workspace path (up to 1 MB). File ID must occur on that message; uses the acting Agent credential.',
@@ -128,20 +141,30 @@ export class ToolRouter {
     if (!Object.hasOwn(schemas,operation)) throw new Error('Unknown operation');
     // Parsing is deliberately repeated in the daemon, independently of model-side tool validation.
     const args = schemas[operation]!.parse(input) as Record<string, any>;
-    const readOnly = ['actions.list','actions.read','sessions.status','reminders.list','reminders.read','reminders.log','environment.info','tasks.byMessage','tasks.intents','drafts.list','drafts.read','attention.peek','attention.read','attention.resolve','attention.defer','attention.mute','agents','works.list','budget.read','tasks.read','tasks.list','messages.read','messages.recent','messages.search','schedules.list','inbox.list','inbox.read','conversations.list','conversations.members'];
+    const readOnly = ['actions.list','actions.read','sessions.status','reminders.list','reminders.read','reminders.log','environment.info','tasks.byMessage','tasks.intents','drafts.list','drafts.read','attention.peek','attention.read','attention.resolve','attention.defer','attention.mute','agents','works.list','budget.read','tasks.read','tasks.list','messages.read','messages.recent','messages.search','schedules.list','inbox.list','inbox.read','conversations.list','conversations.members','conversations.capabilities','conversations.discover','conversations.refresh'];
     if (!readOnly.includes(operation) && operation !== 'works.select') c.assertActionWork(run, args.taskId ? c.task(args.taskId).work_id : workId);
     if(args.message)c.messages.message(actor,args.message.messageId);
     if(args.anchor)c.messages.message(actor,args.anchor.messageId);
     if(args.reminderId)c.reminders.read(actor,args.reminderId);
     if(args.scheduleId)c.reminders.read(actor,args.scheduleId);
     if(args.target)c.messages.requireAccess(actor,args.target.conversationId);
-    if(args.conversationId)c.messages.requireAccess(actor,args.conversationId);
+    if(args.conversationId&&!['conversations.capabilities','conversations.join','conversations.leave','conversations.refresh'].includes(operation))c.messages.requireAccess(actor,args.conversationId);
     if(args.taskId)c.messages.requireAccess(actor,JSON.parse(c.task(args.taskId).target).conversationId);
     if(args.deliveryId){const delivery=s.delivery(args.deliveryId);if(delivery.agent_id!==actor)throw new Error('Private inbox');const target=JSON.parse(delivery.payload).target;if(target)c.messages.requireAccess(actor,target.conversationId);}
     const actionId = `${run.sessionId}:${callId}`;
     if (operation.startsWith('conversations.')) {
       if (!this.directory) throw new Error('Directory unavailable');
-      const value = operation === 'conversations.openDM' ? await this.directory.openDM(run, actionId, args.principal, signal) : operation === 'conversations.members' ? await this.directory.members(actor, args.conversationId) : await this.directory.spaces(actor);
+      let value:unknown;
+      switch(operation){
+        case 'conversations.openDM':value=await this.directory.openDM(run,actionId,args.principal,signal);break;
+        case 'conversations.members':value=await this.directory.members(actor,args.conversationId);break;
+        case 'conversations.capabilities':value=this.directory.capabilities?.(actor,args.conversationId)??{discover:false,join:false,leave:false,refresh:false,notes:['Adapter does not implement participation controls']};break;
+        case 'conversations.discover':value=await this.directory.discover?.(actor,args.cursor)??{supported:false,reason:'Discovery unavailable'};break;
+        case 'conversations.join':if(args.candidateId){value=await this.directory.joinCandidate?.(run,actionId,args.candidateId,signal)??{status:'unsupported',reason:'Candidate joining unavailable'};break;}
+        case 'conversations.leave':value=await this.directory.membership?.(run,actionId,args.conversationId,operation==='conversations.join'?'join':'leave',signal)??{status:'unsupported',reason:'Membership control unavailable'};break;
+        case 'conversations.refresh':value=await this.directory.refresh?.(actor,args.conversationId,signal)??{status:'unsupported',reason:'Membership source unavailable'};break;
+        default:value=await this.directory.spaces(actor);
+      }
       s.assertRun(run); signal.throwIfAborted(); return { value };
     }
     if(operation==='environment.info')return{value:this.additional?.environment?.(actor)??{configured:false}};

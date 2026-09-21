@@ -203,3 +203,5 @@ E2c3a PASS：review_e2c3a_configuration，252普通checks/7环境skip；修复lo
 E2c3b PASS：review_e2c3b_lifecycle，262普通checks/7环境skip；同一daemon的local JSONL入口、可选Slack生命周期、房间ACL迁移及外部故障隔离已接通，最后清理异常不跳过排空的修订也经独立复审。E2c与E2整体完成，进入E3参与/注意力/历史。
 
 E3细分为两个依赖顺序gate：E3a目录能力发现、平台支持的join/leave与持久动作回执，以及普通mute/直接mention/DM/defer规则；E3b有界分页历史/搜索/around与覆盖信息、当前ACL下的按需历史来源。E3a验收发现不授读取、unknown不盲重试、退出撤权、能力不支持明确、mute允许直接请求而defer保持暂缓；E3b验收局部检索不签发整目标view、游标/范围与coverage、历史读取撤权竞态、新成员当前权限与未缓存缺口。各自独立软件工程与语义红队，二者通过才完成E3。
+
+E3a PASS：review_e3a_participation，271普通checks/7环境skip。确定拒绝误记unknown导致后续退出永久阻塞的P2已修复并独立复验；参与能力和mute/direct/defer规则已接生产工具及prompt。E3b进入具体历史契约的独立设计复核后实施。

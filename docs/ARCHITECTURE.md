@@ -185,3 +185,15 @@ review_e2c2b_slack_projection已阅读现config/daemon/migrate/main，认定方�
 - 本地常驻入口通过同一运行时接收可信主机输入/查询输出与owner控制，不引入HTTP或独立业务状态；已有停止、预算、工具/隔离规则一致。
 
 验收：旧配置等价规范化与两次重启、原wire/hash不变；部分Slack绑定/全local实际运行；owner撤权保持author identity；房间重复启动不恢复权限；网络周期失败不挡内部调度；部分启动/取消释放连接和锁。讨论结论及此记录是c3实现前设计决策，不代表代码已验收。
+
+### E3b implementation design — bounded history and coverage
+
+Proposed application service `ConversationHistory` owns canonical local history/search/around; a narrow `HistorySource` port performs optional bounded platform reads. This supplements existing read/attention APIs rather than silently changing legacy action results. New local query pages have current Agent ACL and message visibility checks, opaque query-bound cursors and explicit `local_visible` coverage; they never issue a freshness viewToken or acknowledge body presentation. Search scans a bounded batch and can return a continuation even when that batch contains no matches. Around returns nearby authorized messages around an authorized anchor, not only the hit.
+
+Internal room history is authoritative locally. Current room membership authorizes historical room reads (independent review seats still cannot read). Explicit history retrieval can expose older messages to a newly added member without creating a new incoming work request or marking them seen/resolved. External history remains constrained by the acting installation's current authenticated platform access; it must not expose messages merely because some other Agent cached them.
+
+`HistorySource` receives canonical target, before/after canonical anchors, bounded limit, cursor and stop signal. Slack owns locator/timestamp translation and transport credentials. It rechecks membership/run/readability after awaits and before transactionally recording the returned page for that actor. Historical acquisition is a separate trusted ingestion mode: persist message/revision and visibility, but do not produce fresh delivery or advance attention seen/resolved. Pending true event delivery remains distinct. Adapter failure/unsupported source is explicit; local content remains accessible.
+
+Remote coverage reports the requested range, returned page, continuation, whether that range was exhausted, and limitations (platform retention/deletions unknown; channel history does not guarantee thread bodies). No claim of complete platform search. Local cursor contents are query metadata, not authorization grants; every page rechecks ACL and review-seat isolation. Data edits/new arrivals may affect live pagination and are reported as such; this is not a snapshot or freshness proof. Provider/canonical cursors cannot be reused under a different actor, target or query. First implementation uses bounded linear scanning for legacy-compatible text matching rather than introducing an unnecessary indexing service.
+
+Before code, discuss the internal-current-membership history contract, quiet history acquisition and coverage semantics with independent red team; this extends the E0 design with concrete read contracts rather than introducing a new product subsystem.

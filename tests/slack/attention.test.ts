@@ -48,3 +48,19 @@ it('late acknowledgment of an old snapshot never regresses the seen revision',()
  const{m,a,run}=setup();m.record(message(),['research']);const old=a.read(run,target);m.record({...message(),revision:'200.000001',text:'edit'},['research']);const current=a.read(run,target);
  a.presented(run,result(current));a.presented(run,result(old));expect(a.peek('research')).toMatchObject([{unseen:0}]);
 });
+it('personal mentions pierce ordinary mute in both wakeup delivery and attention, but defer retains them until due',()=>{
+ const{s,m,c,a}=setup();a.state('research',{conversationId:'CTEST'},'mute',1);
+ m.record({...message(),text:'background'},['research']);expect(a.peek('research')).toEqual([]);
+ const direct={...message(1),text:'<@UONE> direct request'};m.record(direct,['research']);expect(a.peek('research')).toMatchObject([{unseen:1}]);
+ expect(s.db.prepare("SELECT count(*) n FROM deliveries WHERE json_extract(payload,'$.kind')='message'").get()).toEqual({n:1});
+ a.state('research',target,'defer',Date.now()+100000);m.record({...message(2),text:'<@UONE> later direct request'},['research']);expect(a.peek('research')).toEqual([]);
+ expect(s.db.prepare("SELECT count(*) n FROM deliveries WHERE json_extract(payload,'$.kind')='message'").get()).toEqual({n:1});
+ c.tick(Date.now()+100001);c.tick(Date.now()+100001);expect(a.peek('research')).toMatchObject([{unseen:2}]);
+ expect(s.db.prepare("SELECT count(*) n FROM deliveries WHERE json_extract(payload,'$.kind')='attention_due'").get()).toEqual({n:1});
+});
+it('DM input pierces mute without a mention; system receipts never turn into direct requests',()=>{
+ const{s,m,a}=setup(),dm=m.mapper.conversation('DPEER');m.membership('research',dm,true);a.state('research',{conversationId:dm},'mute',1);
+ m.record({...message(),channel:'DPEER',text:'DM'},['research']);expect(a.peek('research')).toMatchObject([{unseen:1}]);
+ expect(s.db.prepare("SELECT count(*) n FROM deliveries WHERE json_extract(payload,'$.kind')='message'").get()).toEqual({n:1});
+ m.record({...message(1),channel:'DPEER',systemGenerated:true,text:'system status'},['research']);expect(a.peek('research')).toMatchObject([{unseen:1}]);
+});

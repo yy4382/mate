@@ -1,3 +1,4 @@
+import {directRequest} from './attention-policy.js';
 import type { AgentDirectory } from '../agents/directory.js';
 import { compareMessageOrder, parseMessage, type MessageDTO } from '../domain/messages.js';
 import type { ConversationTarget } from '../domain/conversations.js';
@@ -66,14 +67,14 @@ export class MessageIngestion {
         }
         if(!this.store.db.prepare('INSERT INTO message_observations VALUES(?,?,?) ON CONFLICT DO NOTHING').run(actor,effective.id,effective.revision).changes)continue;
         if(effective.deleted||effective.origin==='system'||effective.author.kind==='agent'&&effective.author.id===actor)continue;
-        const direct=conversation.kind==='dm'||effective.mentions.some(p=>p.kind==='agent'&&p.id===actor);
+        const direct=directRequest(actor,effective,conversation.kind);
         const watched=!!this.store.db.prepare('SELECT 1 FROM channel_watches WHERE agent_id=? AND channel=?').get(actor,effective.conversationId)
           ||!!this.store.db.prepare('SELECT 1 FROM thread_watches WHERE agent_id=? AND channel=? AND thread=?').get(actor,effective.conversationId,effective.rootId);
         if(!direct&&!watched&&!this.policy.participates(actor,effective.conversationId))continue;
         const target:ConversationTarget={conversationId:effective.conversationId,...(effective.rootId?{threadId:effective.rootId}:{})};
         const now=Date.now();
-        if(this.store.db.prepare('SELECT 1 FROM attention_state WHERE agent_id=? AND target IN (?,?) AND (muted=1 OR deferred_until>?)')
-          .get(actor,encode({conversationId:effective.conversationId}),encode(target),now))continue;
+        if(this.store.db.prepare('SELECT 1 FROM attention_state WHERE agent_id=? AND target IN (?,?) AND ((muted=1 AND ?=0) OR deferred_until>?)')
+          .get(actor,encode({conversationId:effective.conversationId}),encode(target),Number(direct),now))continue;
         const work=this.store.db.prepare('SELECT work_id FROM message_work WHERE message_key=?').get(effective.id) as {work_id:string}|undefined;
         const notice=!direct&&!watched,bucket=Math.floor(now/20000);
         const delivery=this.writes.enqueue(actor,notice?`notice:${effective.conversationId}:${work?.work_id??'unbound'}:${bucket}`:`message:${effective.id}:${effective.revision}`,{

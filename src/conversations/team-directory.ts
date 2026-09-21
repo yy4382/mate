@@ -7,6 +7,31 @@ import type {Conversations} from './messages.js';
 /** Internal team identity first; optional external directory handles its own identities. */
 export class TeamDirectory implements ConversationDirectory {
   constructor(readonly messages:Conversations,readonly external?:ConversationDirectory){}
+  capabilities(actor:string,conversationId?:string):import('./directory.js').DirectoryCapabilities {
+    this.messages.agent(actor);this.messages.requireReadable(actor);
+    if(conversationId&&this.messages.references.conversation(conversationId).authority==='internal')return{discover:false,join:false,leave:false,refresh:false,notes:['Internal room membership is host-managed. Use watch/mute/defer to choose attention; peer DMs use openDM.']};
+    return this.external?.capabilities?.(actor,conversationId)??{discover:false,join:false,leave:false,refresh:false,notes:['No external directory binding; existing internal rooms and peer DMs remain available.']};
+  }
+  async discover(actor:string,cursor?:string):Promise<import('./directory.js').DiscoveryResult>{
+    this.messages.agent(actor);this.messages.requireReadable(actor);
+    if(!this.external?.discover)return{spaces:[],nextCursor:null,coverage:'public_metadata',supported:false,reason:'External discovery unavailable'};
+    const result=await this.external.discover(actor,cursor);this.messages.requireReadable(actor);return result;
+  }
+  async joinCandidate(run:RunToken,actionId:string,candidateId:string,signal:AbortSignal):Promise<import('./directory.js').MembershipResult>{
+    this.messages.store.assertRun(run);signal.throwIfAborted();this.messages.requireReadable(run.agentId);
+    if(!this.external?.joinCandidate)throw new Error('External candidate joining unavailable');
+    return this.external.joinCandidate(run,actionId,candidateId,signal);
+  }
+  async membership(run:RunToken,actionId:string,conversationId:string,operation:'join'|'leave',signal:AbortSignal):Promise<import('./directory.js').MembershipResult>{
+    this.messages.store.assertRun(run);signal.throwIfAborted();this.messages.requireReadable(run.agentId);
+    if(this.messages.references.conversation(conversationId).authority==='internal'||!this.external?.membership)return{status:'unsupported',conversationId,reason:'Internal room membership is host-managed; external adapter required for join/leave'};
+    return this.external.membership(run,actionId,conversationId,operation,signal);
+  }
+  async refresh(actor:string,conversationId:string,signal:AbortSignal):Promise<import('./directory.js').MembershipResult>{
+    this.messages.agent(actor);this.messages.requireReadable(actor);signal.throwIfAborted();
+    if(this.messages.references.conversation(conversationId).authority==='internal'||!this.external?.refresh)return{status:'unsupported',conversationId,reason:'No external membership source'};
+    return this.external.refresh(actor,conversationId,signal);
+  }
   async spaces(actor:string):Promise<SpacesResult>{
     const m=this.messages;m.agent(actor);m.requireReadable(actor);
     let external:SpacesResult={spaces:[],incomplete:false};

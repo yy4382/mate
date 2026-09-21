@@ -210,7 +210,8 @@ export class Collaboration {
         const target=JSON.parse(item.target) as Target;
         this.store.db.prepare('UPDATE attention_state SET deferred_until=0 WHERE agent_id=? AND target=?').run(item.agent_id,item.target);
         const channelMuted=this.store.db.prepare('SELECT 1 FROM attention_state WHERE agent_id=? AND target=? AND muted=1').get(item.agent_id,encode({conversationId:target.conversationId}));
-        if(item.muted || channelMuted || !this.messages.access(item.agent_id,target.conversationId))continue;
+        if(!this.messages.access(item.agent_id,target.conversationId))continue;
+        if((item.muted||channelMuted)&&!this.attention.peek(item.agent_id,now,target).some(item=>'target' in item))continue;
         const work=this.createWork(`attention:${item.agent_id}:${item.target}`,target);
         if(this.work(work).state==='active')this.enqueue(item.agent_id,work,`defer:${item.target}:${item.deferred_until}`,{kind:'attention_due',target});
       }

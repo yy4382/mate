@@ -31,7 +31,8 @@ export class SlackService {
         if(bound&&this.c.messages.references.conversation(bound).authority==='internal')continue;
         // Failure closes permission until a successful membership check.
         this.c.messages.membership(agent.id, this.transport.mapper.conversation(channel), false);
-        try { const info = await client.conversations.info({ channel }); this.c.messages.membership(agent.id, this.transport.mapper.conversation(channel), info.channel?.is_member === true || (channel.startsWith('D') && info.channel?.is_im === true)); }
+        const version=this.c.messages.membershipVersion(agent.id);
+        try { const info = await client.conversations.info({ channel }); if(this.stopping()||version!==this.c.messages.membershipVersion(agent.id))continue;this.c.messages.membership(agent.id, this.transport.mapper.conversation(channel), info.channel?.is_member === true || (channel.startsWith('D') && info.channel?.is_im === true)); }
         catch { this.c.store.audit('membership_unavailable', { agentId: agent.id, channel }); }
       }
     }
