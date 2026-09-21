@@ -1,7 +1,8 @@
 import { execFileSync } from 'node:child_process';
-import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterEach, expect, it } from 'vitest';
 import { daemonConfigSchema } from '../../src/daemon/config.js';
 import { createDeploymentPlan } from '../../src/deployment/plan.js';
@@ -9,6 +10,7 @@ import { createReleaseManifest } from '../../src/deployment/release.js';
 import { deploymentSpecSchema } from '../../src/deployment/spec.js';
 import { renderMaintenanceWrapper, renderMountUnit, renderService } from '../../src/deployment/systemd.js';
 import { preflightDeployment, type InstallerHost } from '../../src/deployment/installer.js';
+import { isMainModule } from '../../src/main.js';
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -79,4 +81,9 @@ it('preflights through a fake host without mutating it and refuses resource or b
   expect(preflightDeployment(spec(), config(), host).target.os).toBe('debian'); expect(calls.some(value => value.includes('image inspect'))).toBe(true); expect(calls.filter(value => value.startsWith('/')).every(value => !value.includes('mkfs'))).toBe(true);
   expect(() => preflightDeployment(spec(), config(), { ...host, memoryMiB: () => 100 })).toThrow('memory');
   expect(() => preflightDeployment(spec(), config(), { ...host, platform: 'darwin' })).toThrow('Debian 13');
+});
+
+it('recognizes a deployed CLI reached through the current release symlink', () => {
+  const root = mkdtempSync(join(tmpdir(), 'mate-main-link-')); roots.push(root); mkdirSync(join(root, 'release')); const main = join(root, 'release', 'main.js'); writeFileSync(main, ''); symlinkSync(join(root, 'release'), join(root, 'current'));
+  expect(isMainModule(join(root, 'current', 'main.js'), pathToFileURL(realpathSync(main)).href)).toBe(true);
 });

@@ -1,6 +1,6 @@
 import {LocalConsole} from './local/console.js';
 import { migrateConfiguration } from './daemon/migrate.js';
-import { lstatSync, readFileSync } from 'node:fs';
+import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { resolve, join, dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import pino from 'pino';
@@ -85,4 +85,5 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     if(command==='local'){await new LocalConsole(daemon.local!,daemon.controls).serve(process.stdin,process.stdout,consoleAbort.signal);await close();}
   } catch { await close(); throw new Error('Daemon startup failed; check installation identities, credentials and sandbox configuration'); }
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) main().catch(error => { process.stderr.write(`${error instanceof Error ? error.message : 'Mate failed'}\n`); process.exitCode = 1; });
+export function isMainModule(argument:string|undefined,moduleUrl=import.meta.url):boolean{return !!argument&&moduleUrl===pathToFileURL(realpathSync(resolve(argument))).href;}
+if (isMainModule(process.argv[1])) main().catch(error => { process.stderr.write(`${error instanceof Error ? error.message : 'Mate failed'}\n`); process.exitCode = 1; });
