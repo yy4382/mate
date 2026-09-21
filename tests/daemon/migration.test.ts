@@ -57,13 +57,13 @@ it('legacy identity requires explicit attestation; revoked grants stay revoked',
  const s=new Store(f.path);expect(s.db.prepare('SELECT revoked FROM grants WHERE id=?').get(f.grant)).toEqual({revoked:1});s.close();
 });
 it('explicitly migrates the pre-limits and pre-container-resources runtime policy hash',async()=>{
- const f=fixture(),binary=join(f.root,'docker-cli');writeFileSync(binary,'synthetic');chmodSync(binary,0o700);
+ const f=fixture(),binary=join(f.root,'docker-cli'),project=join(f.root,'checkout');writeFileSync(binary,'synthetic');chmodSync(binary,0o700);mkdirSync(project);
  const previous=daemonConfigSchema.parse({...f.previous,runtime:{...f.previous.runtime,docker:{binary,host:'unix:///var/run/docker.sock',image:`sha256:${'a'.repeat(64)}`}}}),next=structuredClone(previous);next.mate.agents[0]!.role='post-resource-default';
  const raw=structuredClone(previous) as any;delete raw.runtime.limits;delete raw.runtime.docker.resources;vi.spyOn(ContainerBackend.prototype,'recover').mockResolvedValue();
  f.store.db.prepare("UPDATE runtime_meta SET value=? WHERE key='configuration'").run(encode(raw));
  f.store.db.prepare("UPDATE runtime_meta SET value=? WHERE key='policy'").run(hash(encode(raw.runtime)));f.store.close();
  expect(()=>daemonConfigSchema.parse(raw)).not.toThrow();
- await migrateConfiguration(previous,next,join(f.root,'backup'));
+ await migrateConfiguration(previous,next,join(f.root,'backup'),false,project,{platform:'darwin',workspaceHost:{} as never});
  const s=new Store(f.path);try{expect(storedConfiguration(s)).toEqual(next);expect(s.db.prepare("SELECT value FROM runtime_meta WHERE key='policy'").get()).toEqual({value:hash(encode(next.runtime))});}finally{s.close();}
 });
 it('Linux migration refuses to back up or persist a container policy without verified workspace mounts',async()=>{
