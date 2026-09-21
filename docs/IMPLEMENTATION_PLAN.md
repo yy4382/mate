@@ -28,7 +28,7 @@ Git：在codex/vps-first-release本地分支管理；先保存已审核及进行
 | E2 内部身份与引用 | Agent定义/平台binding、opaque内部引用、Slack映射与local adapter、迁移清单 | E1 PASS | 非Slack标识全链路、本地同伴通信、同外部多App去重、旧库/JSON/unknown恢复、配置兼容 | PASS，E2a–E2c3b |
 | E3 参与和历史 | directory参与控制、attention规则、分页搜索与around/history coverage | E2 PASS | mute mention/DM、defer、撤权并发、局部读不授全局view、新成员历史、unsupported明确 | PASS，E3a–E3b |
 | E4 协作与持续工作 | 按领域分拆工具处理器；任务/提醒语义与文档；结构化状态/activity查询 | E3 PASS | 自主直接协作、认领/让位、等待/复核/后台提醒、恢复、系统事件不循环唤醒 | PASS，E4a/E4b/E4c |
-| E5 工作能力与prompt | 环境/研究路径/成果闭环、手册与充分的行为约定；按前序工具同步完善 | E4 PASS | 实际授权环境能力发现与失败、附件到成果、prompt/tool/environment覆盖矩阵 | 设计PASS，实施E5a/E5b |
+| E5 工作能力与prompt | 环境/研究路径/成果闭环、手册与充分的行为约定；按前序工具同步完善 | E4 PASS | 实际授权环境能力发现与失败、附件到成果、prompt/tool/environment覆盖矩阵 | PASS，E5a/E5b，review_e5b_workflow_prompt |
 | E6 实验验收 | 预配置少量成员的多选择场景、本地入口与真实接入操作说明 | E5 PASS | pnpm检查、故障恢复、独立架构审计；真实Slack/provider明确单列未验项 | TODO |
 
 E5按“先让Agent准确知道能做什么，再验证完整工作闭环”的依赖拆分：
@@ -36,7 +36,7 @@ E5按“先让Agent准确知道能做什么，再验证完整工作闭环”的�
 | gate | 目标/接口 | 依赖 | 验收 | 状态 |
 |---|---|---|---|---|
 | E5a 当前工作环境能力 | `EnvironmentCapabilities`应用服务与`mate.environment.v1` DTO；`environment.info`返回当前work可用grant、隔离/网络、资料读取及输入输出adapter状态 | E4 PASS、E5设计红队PASS | 不泄露宿主路径/secret；grant撤销/过期、work切换、无Docker、无Slack binding、review seat均如实反映；配置workspace有稳定可读名称 | PASS，review_e5a_capabilities，323 tests |
-| E5b 工作输入到成果闭环与行为约定 | 通过正式ToolRouter走附件保存、文件处理、受限URL读取、成果冻结/修改/发送；prompt、操作手册和可执行能力矩阵同步 | E5a PASS | 合成Slack附件到成果全链路、失败/恢复/held路径；明确URL读取不是搜索，列出可达替代路径；prompt/tool/environment契约互相核对 | TODO |
+| E5b 工作输入到成果闭环与行为约定 | 通过正式ToolRouter走附件保存、文件处理、受限URL读取、成果冻结/修改/发送；prompt、操作手册和可执行能力矩阵同步 | E5a PASS | 合成Slack附件到成果全链路、失败/恢复/held路径；明确URL读取不是搜索，列出可达替代路径；prompt/tool/environment契约互相核对 | PASS，review_e5b_workflow_prompt，330 tests |
 
 E2按恢复风险细分顺序gate：E2a内部Agent定义与查询边界（配置兼容投影、worker/生命周期/预算不依赖bot字段，PASS，review_e2a_identity，183 tests）；E2b内部会话/消息与外部映射及迁移（清单见REFERENCE_MIGRATION，E2b1引用目录/迁移基础PASS review_e2b1_references 190 tests，E2b2服务切换实施中）；E2c本地适配器及内部直接通信、Slack接线。E2a不会宣称旧部署配置和消息引用已解耦；后两者通过才允许E3。
 

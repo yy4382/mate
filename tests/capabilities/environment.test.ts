@@ -21,7 +21,7 @@ function harness(execution:ExecutionBackend={execute:async()=>({code:0,stdout:''
   const messages=new Messages(store,configFixture);messages.membership('research','CTEST',true);const collaboration=new Collaboration(store,messages,new Output(messages,{post:async()=>({ts:'200.000001'})}),configFixture);
   const container=capabilities.container??true,broker=new Broker(store,collaboration,execution,[]),profiles=workspaceProfiles({research:path.privateRoot},normalizeConfiguredWorkspaces([{agentId:'research',root:path.project,operations:['read'],label:'project'}],[]),container),access=new WorkspaceAccess(collaboration,broker,profiles);
   const target=fixtureTarget('CTEST','100.000001'),work=collaboration.createWork('environment',target);collaboration.enqueue('research',work,'start',{});const run=store.beginRun('research')!;store.input(run,{});
-  const environment=new EnvironmentCapabilities(collaboration,broker,profiles,{image:container?`sha256:${'0'.repeat(64)}`:null,network:container?'bridge':'none',researchHosts:capabilities.researchHosts??['example.com'],attachmentConfigured:()=>capabilities.attachments??true,artifactSupported:(_actor,target)=>(capabilities.artifacts??true)&&collaboration.messages.references.conversation(target.conversationId).authority==='external'});
+  const environment=new EnvironmentCapabilities(collaboration,broker,profiles,{image:container?`sha256:${'0'.repeat(64)}`:null,network:container?'bridge':'none',researchHosts:capabilities.researchHosts??['example.com'],attachmentConfigured:()=>capabilities.attachments??true,artifactConfigured:()=>capabilities.artifacts??true,artifactSupported:(_actor,target)=>(capabilities.artifacts??true)&&collaboration.messages.references.conversation(target.conversationId).authority==='external'});
   const router=new ToolRouter(collaboration,broker,{environment:(token,current)=>environment.read(token,current),research:async()=>({}),publish:async()=>({})},undefined,(actor,current)=>access.provision(actor,current));
   return{...path,store,messages,collaboration,broker,profiles,access,environment,router,target,work,run};
 }
@@ -59,7 +59,7 @@ it('reports only effective current-work capabilities without mutating authorizat
 
 it('reports artifact output against the current target instead of actor binding alone',()=>{
   const h=harness();h.access.provision('research',h.work);h.messages.references.createConversation('channel','internal','internal-room');h.messages.membership('research','internal-room',true);const internal=h.collaboration.createWork('internal',{conversationId:'internal-room'});h.collaboration.selectWork(h.run,internal);h.access.provision('research',internal);
-  expect(h.environment.read(h.run,internal).artifactOutput).toMatchObject({status:'unavailable',scope:'supported_external_target_only'});
+  expect(h.environment.read(h.run,internal).artifactOutput).toMatchObject({adapterStatus:'configured',status:'unavailable',scope:'supported_external_target_only',reason:'The current work target does not support artifact output.'});
 });
 
 it('work selection provisions the selected work and review seats redact external capabilities',async()=>{

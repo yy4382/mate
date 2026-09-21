@@ -1,4 +1,4 @@
-import {afterEach,expect,it} from 'vitest';
+import {afterEach,expect,it,vi} from 'vitest';
 import {Store} from '../../src/storage/store.js';
 import {configSchema} from '../../src/config.js';
 import {configFixture} from '../helpers/config.js';
@@ -9,6 +9,7 @@ import {ToolRouter,builtInToolSpecs,fingerprintToolSpecs,operationContractFinger
 import {fixtureTarget} from '../helpers/canonical-slack.js';
 import type {ConversationDirectory} from '../../src/conversations/directory.js';
 import {buildBaseline} from '../../src/runtime/prompt.js';
+import {environmentReportSchema} from '../../src/capabilities/environment.js';
 
 const stores:Store[]=[];afterEach(()=>stores.splice(0).forEach(store=>store.close()));
 function setup(directory?:ConversationDirectory){
@@ -29,6 +30,7 @@ file.read_bytes file.write_bytes file.read file.write file.list file.stat file.s
 
 it('registers every public operation exactly once with complete policies and stable documentation order',async()=>{
   expect(builtInToolSpecs.map(entry=>entry.name)).toEqual(expected);expect(new Set(expected).size).toBe(expected.length);expect(Object.isFrozen(builtInToolSpecs)).toBe(true);
+  expect(operationContractFingerprint).toBe('e161d9d7aebae87a53abeb60bfdfa0f8cbfe01059e5aac38e5a55e8897ac7ab1');
   const allowed={work:['none','current','task','reminder','select','broker-managed'],seat:['deny','redacted-read','clean-workspace','held-send'],effect:['pure-read','atomic-recorded','broker-recorded','adapter-recorded'],replay:['immutable','refreshable','boundary-owned']};
   for(const entry of builtInToolSpecs){expect(Object.isFrozen(entry)).toBe(true);expect(entry.description.length).toBeGreaterThan(10);expect(typeof entry.schema.parse).toBe('function');expect(allowed.work).toContain(entry.workPolicy);expect(allowed.seat).toContain(entry.seatPolicy);expect(allowed.effect).toContain(entry.effectPolicy);expect(allowed.replay).toContain(entry.replayPolicy);expect(typeof entry.authorize).toBe('function');expect(typeof entry.postAwait).toBe('function');expect(typeof entry.handler).toBe('function');}
   expect(operationDocumentation).toContain(`Tool contract: ${operationContractFingerprint}`);expect(operationDocumentation.match(/Available: (.*)\.\n/)?.[1]?.split(', ')).toEqual(expected);
@@ -100,4 +102,41 @@ it('uses one seat policy for direct calls, tools.call, list and describe',async(
   await expect(router.call(run,work,'direct-denied','tasks.list',{},signal)).rejects.toThrow(/isolates/);
   await expect(router.call(run,work,'alias-denied','tools.call',{name:'tasks.list',input:{}},signal)).rejects.toThrow(/isolates/);
   await expect(router.call(run,work,'describe-held','tools.describe',{name:'messages.send'},signal)).resolves.toHaveProperty('value');
+});
+
+it('keeps known-URL research a receipt-free read and puts the reachable alternatives in the real baseline',async()=>{
+  const base=setup(),research=vi.fn(async(url:string)=>({url,body:'evidence',truncated:false})),router=new ToolRouter(base.c,base.broker,{environment:()=>({}),research,publish:async()=>({})}),signal=new AbortController().signal;
+  const before=base.store.db.prepare('SELECT count(*) n FROM actions').get();const result=await router.call(base.run,base.work,'known-url','research.read',{url:'https://example.com/source'},signal);
+  expect(result.value).toEqual({url:'https://example.com/source',body:'evidence',truncated:false});expect(research).toHaveBeenCalledOnce();expect(base.store.db.prepare('SELECT count(*) n FROM actions').get()).toEqual(before);
+  expect(builtInToolSpecs.find(spec=>spec.name==='research.read')).toMatchObject({effectPolicy:'pure-read',replayPolicy:'boundary-owned',workPolicy:'current'});
+  expect(builtInToolSpecs.find(spec=>spec.name==='environment.info')).toMatchObject({effectPolicy:'pure-read',replayPolicy:'boundary-owned',workPolicy:'current'});
+  expect(environmentReportSchema.parse({format:'mate.environment.v1',workId:'work',snapshotAt:1,authorization:'informational_snapshot_rechecked_on_every_action',workspaces:{pathStyle:'relative_to_grant',execMountPoint:'/workspace',simultaneouslyMounted:false,grants:[],unavailable:[]},execution:{status:'unavailable',network:'none',image:null},research:{status:'unavailable',mode:'known_public_https_url_only',allowedHosts:[],search:false},attachmentInput:{status:'unavailable',scope:'visible_external_message_file'},artifactOutput:{adapterStatus:'configured',status:'unavailable',scope:'supported_external_target_only'}})).toMatchObject({authorization:'informational_snapshot_rechecked_on_every_action',workspaces:{pathStyle:'relative_to_grant',simultaneouslyMounted:false},research:{search:false},artifactOutput:{adapterStatus:'configured',status:'unavailable'}});
+  const built=buildBaseline(configSchema.parse(configFixture).agents[0]!,operationDocumentation),baseline=JSON.stringify(built.messages[0]);
+  expect(built.configVersion).toBe('8c3475cf08dd7260babd26e6a0bcc2a9bc6767c14c64c7d3c8be8610c5277e50');
+  for(const required of [
+    'Before choosing a workspace or external path, call environment.info for the current work',
+    'versioned informational snapshot, not an authorization token',
+    'File paths and exec cwd are relative to that grant',
+    '/workspace is only the path seen inside one exec container, and different grants are not mounted together',
+    'not that the network is currently healthy',
+    'It is not search, browsing or URL discovery',
+    'use an actually reported networked exec tool if suitable, ask a human or peer for a URL, inspect existing files/history',
+    'An attachment caption or metadata is not its content',
+    'if the write outcome is unknown, the file may have changed',
+    'distinguishes whether an artifact adapter exists for you from whether the current work target supports it',
+    'artifact.publish/revise separately preflight the actual explicit target',
+    'Publication freezes file bytes into a durable draft',
+    'use artifact.revise to freeze a new version',
+    'Held, staged, sent, failed and unknown are distinct'
+  ])expect(baseline).toContain(required);
+});
+
+it('rejects a research result when its run stops or aborts while the boundary is awaiting',async()=>{
+  const stopped=setup();let releaseStop!:()=>void,enterStop!:()=>void;const stopEntered=new Promise<void>(resolve=>enterStop=resolve),stopGate=new Promise<void>(resolve=>releaseStop=resolve);
+  const stoppedRouter=new ToolRouter(stopped.c,stopped.broker,{environment:()=>({}),research:async()=>{enterStop();await stopGate;return{body:'late'};},publish:async()=>({})});
+  const stoppedCall=stoppedRouter.call(stopped.run,stopped.work,'stopped-research','research.read',{url:'https://example.com/source'},new AbortController().signal);await stopEntered;stopped.store.finish(stopped.run);releaseStop();await expect(stoppedCall).rejects.toThrow(/run/i);
+
+  const aborted=setup(),controller=new AbortController();let releaseAbort!:()=>void,enterAbort!:()=>void;const abortEntered=new Promise<void>(resolve=>enterAbort=resolve),abortGate=new Promise<void>(resolve=>releaseAbort=resolve);
+  const abortedRouter=new ToolRouter(aborted.c,aborted.broker,{environment:()=>({}),research:async()=>{enterAbort();await abortGate;return{body:'late'};},publish:async()=>({})});
+  const abortedCall=abortedRouter.call(aborted.run,aborted.work,'aborted-research','research.read',{url:'https://example.com/source'},controller.signal);await abortEntered;controller.abort();releaseAbort();await expect(abortedCall).rejects.toThrow();
 });

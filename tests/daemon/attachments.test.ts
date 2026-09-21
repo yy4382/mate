@@ -32,6 +32,21 @@ it('downloads visible binary attachments, freezes/publishes the same bytes and h
  const draft=await artifacts.publish(run,work,'publish',{grantId:args.grantId,path:args.path,title:'picture',target,format:'binary'},signal)as any;expect(draft.artifact.bytes).toBe(4);expect(draft.artifact.content).toBeUndefined();
  writeFileSync(`${root}/${args.path}`,'later');c.output.gate!.continueOnce(run,draft.draftId,1,draft.holdId);await c.output.send(draft.draftId);expect(Buffer.from(snapshot.content,'base64')).toEqual(bytes);expect(snapshot.filename).toBe('picture.png');
 });
+it('runs the visible attachment to revised artifact delivery loop through the formal ToolRouter',async()=>{
+ const{root,c,broker,run,work,target,files,args,signal}=setup(),source=Buffer.from([0,255,1,128]);vi.stubGlobal('fetch',async()=>new Response(source));let uploaded:any;
+ const artifacts=new Artifacts(c,broker,{configured:()=>true,supports:()=>true,upload:async(request,artifact,prepared,beforeShare)=>{uploaded={request,artifact};prepared('FRESULT');if(!beforeShare())throw new Error('deferred');return{fileId:'FRESULT'};}},{research:root});
+ const router=new ToolRouter(c,broker,{attachment:(...input)=>files.save(...input),environment:()=>({}),research:async()=>({}),publish:(...input)=>artifacts.publish(...input)}),grantId=args.grantId;
+ const saved=await router.call(run,work,'save','attachments.save',{...args,path:'source.bin'},signal);expect(saved.value).toMatchObject({fileId:'FFILE',path:'source.bin',bytes:4});
+ const read=await router.call(run,work,'read-source','file.read_bytes',{grantId,path:'source.bin',offset:0,length:32},signal);expect(JSON.parse((read.value as any).stdout).base64).toBe(source.toString('base64'));
+ await router.call(run,work,'mkdir-artifacts','file.mkdir',{grantId,path:'artifacts'},signal);await router.call(run,work,'write-result','file.write',{grantId,path:'artifacts/result.txt',content:'first evidence'},signal);
+ const first=(await router.call(run,work,'publish','artifact.publish',{grantId,path:'artifacts/result.txt',title:'Result',target,text:'Initial result'},signal)).value as any;expect(first).toMatchObject({status:'held',revision:1,artifact:{bytes:14}});
+ const original=JSON.parse(c.store.output(first.draftId)!.request).artifact;expect(original.content).toBe('first evidence');
+ await router.call(run,work,'rewrite-result','file.write',{grantId,path:'artifacts/result.txt',content:'revised evidence'},signal);expect(JSON.parse(c.store.output(first.draftId)!.request).artifact.content).toBe('first evidence');
+ const revised=(await router.call(run,work,'revise-publication','artifact.revise',{draftId:first.draftId,revision:first.revision,grantId,path:'artifacts/result.txt',title:'Result',target,text:'Revised result'},signal)).value as any;expect(revised).toMatchObject({status:'held',revision:2,artifact:{bytes:16}});
+ await router.call(run,work,'continue-publication','drafts.continue',{draftId:first.draftId,revision:revised.revision,holdId:revised.holdId,acknowledge:'send_despite_unread_or_changes'},signal);
+ const outbox=(c.store.db.prepare('SELECT outbox_id FROM drafts WHERE id=?').get(first.draftId) as {outbox_id:string}).outbox_id;await c.output.send(outbox);
+ expect(c.store.output(outbox)?.state).toBe('sent');expect(uploaded.request.text).toBe('Revised result');expect(uploaded.artifact.content).toBe('revised evidence');expect(uploaded.artifact.contentHash).not.toBe(original.contentHash);
+});
 it('rejects unrelated files, credential-bearing redirects/hosts and revocation during download',async()=>{
  const{root,m,run,work,files,args,signal,client}=setup();const fetcher=vi.fn(async()=>new Response(Buffer.alloc(4)));vi.stubGlobal('fetch',fetcher);
  await expect(files.save(run,work,'foreign',{...args,fileId:'FOTHER'},signal)).rejects.toThrow('visible');expect(client.files.info).not.toHaveBeenCalled();

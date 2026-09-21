@@ -13,7 +13,8 @@
 | 同伴直接讨论与证据修订 | daemon/integration：A认领原始消息、B直接反馈、A更新；peer可凭已有账户唤醒，无必需人类预算根 |
 | 跨事项选择 | supervisor：读取/切换独立；run成本仍归起始事项；selected work暂停/恢复与账户债务保持 |
 | 灵活私有workspace | execution/policy：目录、搜索、编辑、移动、删除、exec、root和双路径检查；真实SRT Unicode/二进制往返 |
-| 附件作为输入和可见成果 | daemon/attachments、slack/freshness：acting identity、可见message/fileId、下载前后ACL、binary冻结、分享前重查、unknown fileId对账、echo去重 |
+| 当前work能力可发现 | capabilities/environment：effective grant、稳定label、relative path、无Docker/adapter、撤销/过期/切work/review seat；报告只读且不是授权token |
+| 附件作为输入和可见成果 | daemon/attachments、slack/freshness：正式ToolRouter贯通acting identity、可见message/fileId、文件处理、冻结/revise/continue、分享前重查、unknown fileId对账、echo去重 |
 | 作者提醒独立于task完成 | reminders：内容/锚点/version、改期/取消/log、只唤醒作者、任务结束后仍触发、漏期合并、pending与已选中区分 |
 | 受控更换context，身份不断 | supervisor：model reset after-run/recovery、owner reset留paused、旧view失效、未知动作/债务/任务/提醒保留；跨session自身执行receipt可查 |
 | 角色/工具/配置演进 | daemon/migration：旧配置匹配、身份不可重绑、备份、事务回滚、pending reset一次应用、四Agent本地启动、撤销grant保留 |
@@ -42,7 +43,7 @@
 
 ## 本地验证与外部边界
 
-普通检查：`pnpm run check`，176 passed；默认跳过7项需要显式本地SRT/Docker权限的测试。真实隔离集单独执行，7/7通过；详见最终review记录。
+普通检查的当前精确数量记录在最新模块review；默认跳过7项需要显式本地SRT/Docker权限的测试。真实隔离集曾单独执行7/7通过；详见对应review记录。
 
 普通集调用真实Pi loop、Node worker与IPC，Slack/provider采用合成transport。真实隔离集使用现有固定本地镜像，覆盖跨root/secret/network、停止/超时/daemon死亡、二进制及network策略；不拉镜像、不连接外部服务。
 

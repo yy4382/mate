@@ -1,4 +1,4 @@
-> 2026-09-21：E1–E3已完成平台无关会话、投影、动态配置、参与和有界历史；E4a补齐协作恢复面，E4b补齐owner安全状态/activity，E4c已把工具组合拆为内建领域模块并统一策略执行。当前阶段与债务见IMPLEMENTATION_PLAN和ARCHITECTURE。
+> 2026-09-21：E1–E4已完成平台无关会话/投影/动态配置、参与/历史、协作恢复、owner activity和工具模块；E5补齐当前work真实能力发现、输入到成果闭环及prompt/证据矩阵。当前阶段与债务见IMPLEMENTATION_PLAN和ARCHITECTURE。
 
 # Mate 当前调用链、能力与边界
 
@@ -100,16 +100,17 @@ tasks.list按owned、assigned、available、all-visible分页；cursor绑定acto
 | 能力 | 调用链 | 当前契约 |
 |---|---|---|
 | 发现 | ToolRouter registry → ToolModule specs | 精确Zod schema和稳定顺序；direct/alias/list/describe同一策略；模型不能安装module |
+| 当前环境 | environment.info → EnvironmentCapabilities → Broker.effectiveGrants + capability ports | `mate.environment.v1`只读快照；opaque grant/label、相对路径、exec/network、known-URL、actor adapter与current-target支持；动作重新授权 |
 | 交流空间 | ToolRouter → Directory → acting Slack client | 已加入空间/成员/DM；权限变化重查，有界分页 |
 | 历史 | ToolRouter → ConversationHistory → 可选 HistorySource | 本地分页/搜索/around；acting installation有界回填；quiet ingestion与明确coverage/gap |
 | 文件 | ToolRouter → Broker → SandboxBackend → 固定SRT helper | read/list/stat/search/write/edit/move/remove/mkdir及binary；root/symlink检查 |
 | shell | Broker → ControlledBackend → ContainerBackend | 固定本地镜像、单授权root、可停止/恢复，无host credentials/socket挂载 |
 | 已知URL | Research.read | allowlist公共HTTPS IPv4、无cookies、重定向/DNS检查；不是搜索服务 |
 | 附件输入 | Attachments.save → acting files.info/download → Broker.write_bytes | visible message中的fileId；下载前后ACL/运行状态检查；不接受模型任意URL/token |
-| 附件输出 | Artifacts → immutable outbox/draft → staged upload → share | 冻结内容；分享前重查；fileId/phase持久化，unknown按分享证据对账 |
+| 附件输出 | Artifacts preflight → immutable outbox/draft → staged upload → share | actor+target在读文件前检查；冻结内容；分享前重查；fileId/phase持久化，unknown按分享证据对账 |
 | 历史执行 | actions.list/read | 只当前Agent；执行请求/回执可查，其他对象通过当前ACL工具读取 |
 
-[Broker](../src/policy/broker.ts)是参数规范化、grant、work/stop、持久action和执行边界。未知写操作保守阻挡相关root的后续变更；未知exec阻挡该Agent后续变更，仍可读取核实。不能以新action ID或换session绕过。
+[WorkspaceAccess](../src/capabilities/workspaces.ts)在run进入模型前原子准备当前work的配置grant，works.select在其action事务中准备新work；environment.info不会补授权。配置workspace按canonical root合并，label只帮助选择，不参与授权。[Broker](../src/policy/broker.ts)是参数规范化、唯一有效grant判定、work/stop、持久action和执行边界。环境查询与执行共用这项判定，旧报告不能绕过撤销/过期/切work/review seat。未知写操作保守阻挡相关root的后续变更；未知exec阻挡该Agent后续变更，仍可读取核实。不能以新action ID或换session绕过。
 
 私有workspace是通用工作空间，MEMORY.md只是恢复入口。配置Docker后私有root可exec；镜像决定真实工具链。network默认none，owner可选bridge，后者包含可路由局域网及互联网，并非“仅公网”。review seat强制none。镜像不会自动拉取。
 
@@ -119,7 +120,7 @@ Jev、分类SDK、逐命令审批和相关配置已移除。未来命令审查�
 
 ## Session演进、角色与恢复
 
-[完整prompt](../src/runtime/prompt.ts)描述持续同伴、自主注意力、真实人类/peer工作输入、自由知识组织、复用消息任务、进展/交接、跟进与收据。角色可通过对话和memory演化；配置身份、授权不随文本改变。
+[完整prompt](../src/runtime/prompt.ts)描述持续同伴、自主注意力、真实人类/peer工作输入、自由知识组织、复用消息任务、进展/交接、跟进与收据，也明确当前环境快照、relative grant路径、known-URL与search区别、附件写入unknown和成果冻结/对账。角色可通过对话和memory演化；配置身份、授权不随文本改变。逐体验对照见[能力矩阵](CAPABILITY_MATRIX.md)。
 
 每run读取最新MEMORY入口；压缩时 Engine → invalidateViews → refreshRecovery RPC → Supervisor重新读取memory、checkpoint、当前选中事项、TaskBoard分类摘要/coverage/continuation和未知动作引用，下一模型输入使用新包。恢复摘要不复制完整task result。memory/checkpoint各8KB摘录并附hash/截断和完整读取入口；refresh失败则运行失败，不冒充已刷新。原始文件不被截断。MEMORY入口应保持可读且不超过底层64KiB read限制。
 
