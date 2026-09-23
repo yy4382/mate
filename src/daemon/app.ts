@@ -51,9 +51,9 @@ import {FairAdmission} from '../concurrency/admission.js';
 import {AdmittedBackend} from '../execution/admitted.js';
 import {DeploymentBoundaryBackend,nodeDeploymentEnvironment,verifyDeploymentWorkspaces,type DeploymentEnvironment} from '../deployment/runtime.js';
 import type {VerifiedWorkspaces} from '../deployment/workspaces.js';
-import {assertDeploymentOperationAllowed,type DeploymentJournalTrust} from '../deployment/upgrade.js';
+import {assertLinuxOperationAllowed} from '../deployment/linux-upgrade-guard.js';
 export interface Log { info(data: object, message: string): void; error(data: object, message: string): void }
-export interface DaemonEnvironment extends DeploymentEnvironment {deploymentJournalTrust?:DeploymentJournalTrust}
+export interface DaemonEnvironment extends DeploymentEnvironment {}
 export class Daemon {
   readonly store: Store;
   readonly collaboration: Collaboration;
@@ -98,7 +98,7 @@ export class Daemon {
     if(config.runtime.linuxUsers)for(const path of [data,state]){const status=lstatSync(path);if(!status.isDirectory()||status.uid!==process.getuid?.()||status.gid!==process.getgid?.()||(status.mode&0o777)!==0o700)throw new Error(`Mate control directory must be private and owned by Mate: ${path}`);}
     const release=acquireLock(join(state,'daemon.lock'));let transferred=false;
     try{
-      await assertDeploymentOperationAllowed('start',{config,releaseRoot:projectRoot},environment.deploymentJournalTrust??{requiredOwnerUid:0,requiredOwnerGid:process.getgid?.()??-1});
+      assertLinuxOperationAllowed('start',config);
       await assertNoRestoreInProgress(data);
       const agentsDir=join(data,'agents');assertDockerControlIsolation(projectRoot,state,agentsDir,config.runtime.workspaceGrants,config.runtime.docker,config.runtime.workspaceManifest?[config.runtime.workspaceManifest]:[]);
       const container=config.runtime.docker?new ContainerBackend({...config.runtime.docker,scope:executionScope(data)}):undefined;

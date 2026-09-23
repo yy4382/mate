@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {backup,backupDeploymentSnapshot} from '../../src/daemon/backup.js';
 import {resumeCheckpointSealForTesting,type CheckpointSealingHost,inspectIncompleteCheckpoint,removeIncompleteCheckpoint,restoreRegularFile,sealCheckpointForService,validateCheckpointManifest,verifyCheckpoint} from '../../src/daemon/checkpoint-format.js';
-import {restoreCheckpointForTesting as restoreCheckpoint,restoreDeploymentCheckpointForTesting} from '../../src/daemon/restore.js';
+import {restoreCheckpointForTesting as restoreCheckpoint} from '../../src/daemon/restore.js';
 import {daemonConfigSchema,type DaemonConfig} from '../../src/daemon/config.js';
 import {Store} from '../../src/storage/store.js';
 import {configFixture} from '../helpers/config.js';
@@ -14,8 +14,6 @@ import {nodeWorkspaceHost,type MountFacts,type PathFacts,type WorkspaceHost,type
 import type {DeploymentEnvironment} from '../../src/deployment/runtime.js';
 import {Daemon} from '../../src/daemon/app.js';
 import {ContainerBackend} from '../../src/execution/container.js';
-import {createDeploymentTopology,parseDeploymentJournal,releaseIdentity} from '../../src/deployment/upgrade.js';
-import {createHash} from 'node:crypto';
 
 const cleanups:(()=>void|Promise<void>)[]=[];afterEach(async()=>{vi.restoreAllMocks();for(const cleanup of cleanups.splice(0).reverse())await cleanup();});
 const capacity=64*1024*1024;
@@ -94,19 +92,6 @@ it('persists the decision, resumes across Agent roots, gates daemon startup, and
  await restoreCheckpoint(f.config,target,{currentCheckpoint:current,environment:f.environment,...checkpointTrust(target)});expect(existsSync(join(f.control,'restore.json'))).toBe(false);expect(existsSync(join(f.state,'mate.sqlite-wal'))).toBe(false);expect(existsSync(join(f.state,'mate.sqlite-shm'))).toBe(false);expect(readFileSync(join(f.agents,'writer','MEMORY.md'),'utf8')).toBe('target-writer');expect(readFileSync(join(f.external,'sentinel'),'utf8')).toBe('external');
  expect(lstatSync(join(f.agents,'writer','MEMORY.md')).mode&0o7777).toBe(0o640);expect(lstatSync(join(f.agents,'writer','notes')).mode&0o7777).toBe(0o750);expect(lstatSync(join(f.agents,'writer','notes','one.txt')).mode&0o7777).toBe(0o600);
  const restored=new Store(join(f.state,'mate.sqlite'));expect(restored.db.prepare("SELECT count(*) n FROM audit WHERE kind='newer'").get()).toEqual({n:0});restored.close();
-});
-
-it('keeps cross-configuration checkpoint verification inside the unactivated deployment rollback boundary',async()=>{
- vi.spyOn(ContainerBackend.prototype,'recover').mockResolvedValue();const f=managedFixture(['research']),oldConfig=f.config,store=seed(f,'old'),target=await take(store,f,'rollback-checkpoint');store.audit('candidate',{});writeFileSync(join(f.agents,'research','MEMORY.md'),'candidate-research');
- const nextConfig=structuredClone(oldConfig);nextConfig.mate.agents[0]!.role='Candidate role';const current=join(f.root,'candidate-checkpoint');mkdirSync(current,{mode:0o700});await backup(store,f.data,current,nextConfig);store.close();
- await expect(restoreCheckpoint(nextConfig,target,{currentCheckpoint:current,environment:f.environment,...checkpointTrust(target)})).rejects.toThrow('configuration');
- const manifest=JSON.parse(readFileSync(nextConfig.runtime.workspaceManifest!,'utf8')) as WorkspaceManifest,servicePath=join(f.root,'mate.service'),unitPath=join(f.root,'research.mount'),externalUnitPath=join(f.root,'external.mount');writeFileSync(servicePath,'fixed service');writeFileSync(unitPath,'fixed mount');writeFileSync(externalUnitPath,'fixed external mount');const fileHash=(path:string)=>createHash('sha256').update(readFileSync(path)).digest('hex');
- const researchBacking=lstatSync(manifest.mounts[0]!.backingFile),externalBacking=lstatSync(manifest.mounts[1]!.backingFile),topology=createDeploymentTopology(oldConfig,{manifest,manifestPath:nextConfig.runtime.workspaceManifest!,manifestSha256:fileHash(nextConfig.runtime.workspaceManifest!),service:{unitPath:servicePath,sha256:fileHash(servicePath),memoryMaxMiB:384},mountUnits:[{root:join(f.agents,'research'),backingFile:manifest.mounts[0]!.backingFile,backingDevice:researchBacking.dev,backingInode:researchBacking.ino,capacityBytes:capacity,unitPath,sha256:fileHash(unitPath)},{root:f.external,backingFile:manifest.mounts[1]!.backingFile,backingDevice:externalBacking.dev,backingInode:externalBacking.ino,capacityBytes:capacity,unitPath:externalUnitPath,sha256:fileHash(externalUnitPath)}]});
- const targetIdentity=(await verifyCheckpoint(target,oldConfig)).identity,currentIdentity=(await verifyCheckpoint(current,nextConfig)).identity,oldReleaseId='b'.repeat(64),nextReleaseId='c'.repeat(64),old=releaseIdentity(oldConfig,join(f.root,oldReleaseId),oldReleaseId),journal=parseDeploymentJournal({version:1,upgradeId:'44444444-4444-4444-8444-444444444444',attempt:{id:'44444444-4444-4444-8444-444444444444',previous:old},phase:'candidate',everActivated:false,old,next:releaseIdentity(nextConfig,join(f.root,nextReleaseId),nextReleaseId),topology,checkpoints:{rollback:targetIdentity,candidate:currentIdentity}});
- const drift=structuredClone(nextConfig);drift.runtime.workspaceGrants[0]!.root=join(f.root,'different-external');await expect(restoreDeploymentCheckpointForTesting(oldConfig,drift,journal,{environment:f.environment,...checkpointTrust(target)})).rejects.toThrow('configuration identity');
- writeFileSync(unitPath,'drifted mount');await expect(restoreDeploymentCheckpointForTesting(oldConfig,nextConfig,journal,{environment:f.environment,...checkpointTrust(target)})).rejects.toThrow('mount unit');writeFileSync(unitPath,'fixed mount');
- await restoreDeploymentCheckpointForTesting(oldConfig,nextConfig,journal,{environment:f.environment,...checkpointTrust(target)});expect(existsSync(join(f.control,'restore.json'))).toBe(true);await restoreDeploymentCheckpointForTesting(oldConfig,nextConfig,journal,{environment:f.environment,...checkpointTrust(target)});expect(readFileSync(join(f.agents,'research','MEMORY.md'),'utf8')).toBe('old-research');const restored=new Store(join(f.state,'mate.sqlite'));expect(restored.db.prepare("SELECT count(*) n FROM audit WHERE kind='candidate'").get()).toEqual({n:0});restored.close();
- const activated=parseDeploymentJournal({...journal,phase:'activated',everActivated:true});await expect(restoreDeploymentCheckpointForTesting(oldConfig,nextConfig,activated,{environment:f.environment,...checkpointTrust(target)})).rejects.toThrow('Activated deployment');
 });
 
 it('makes no data decision on missing current proof or insufficient capacity and only resumes from the bound source',async()=>{

@@ -2,11 +2,11 @@
 
 Mate 是个人单 Slack workspace 中的持久 Agent 团队。每个 Agent 有跨频道/DM连续上下文、私有工作空间、持续预算以及可自主使用的沟通、消息任务、提醒和执行工具。模型决定关注什么、如何合作、是否发言和怎样组织知识。
 
-运行层使用 **Pi Agent Core + pi-ai**；使用 **pnpm**；没有 pi-coding-agent、Jev或逐命令审批。当前能力、函数调用链和与Raft的差别见[HOW_IT_WORKS](docs/HOW_IT_WORKS.md)，设计依据见[项目定位](docs/PROJECT_DIRECTION.md)与[消息门控调研](docs/MESSAGE_GATING_RESEARCH.md)。
+运行层使用 **Pi Agent Core + pi-ai**；使用 **pnpm**；没有 pi-coding-agent 或 Jev。普通 Agent 命令不逐条审批，系统级命令需要用户逐条同意。当前能力、函数调用链和与Raft的差别见[HOW_IT_WORKS](docs/HOW_IT_WORKS.md)，设计依据见[项目定位](docs/PROJECT_DIRECTION.md)与[消息门控调研](docs/MESSAGE_GATING_RESEARCH.md)。
 
 开发按[模块计划](docs/IMPLEMENTATION_PLAN.md)逐个实施、独立红队审核；记录在[reviews](docs/reviews/)，当前验证见[ACCEPTANCE](docs/ACCEPTANCE.md)，能力与证据关系见[CAPABILITY_MATRIX](docs/CAPABILITY_MATRIX.md)。只评harness，不评模型智能。
 
-Debian 13固定拓扑首次部署使用版本库内的plan/preflight/install/disable入口、systemd units和受限`matectl`；完整流程见[DEPLOYMENT](docs/DEPLOYMENT.md)。安装不会因缺少secret自动启动主服务。
+Debian 13 首版部署以每 Agent 独立 Linux 用户运行普通命令，Mate 的状态和凭证保持 root-only；系统级命令逐条经 Slack owner 确认。安装使用 plan/preflight/install、systemd slices 和 `matectl`；完整流程见[部署说明](docs/DEPLOYMENT.md)。安装不会因缺少 secret 自动启动主服务。
 
 ## 本地运行
 
@@ -40,23 +40,9 @@ mentions模式由@mention、DM或watch触发；participate对普通消息合并n
 
 ## Workspace与执行环境
 
-dataDir/state是数据库；dataDir/agents/AGENT_ID是私有持久workspace。MEMORY.md是恢复入口，知识内容和文件组织由Agent决定；notes/artifacts是起始目录。每run及压缩后刷新有界memory/checkpoint，提供截断和完整读取路径。
+`dataDir/state` 是 Mate 的 root-only 数据库；每位 Agent 的私人 home 由 `runtime.linuxUsers` 指定，`MEMORY.md` 是恢复入口，`notes/artifacts` 是起始目录，内容组织由 Agent 自己决定。`runtime.sharedRoot` 是同伴默认可读的普通 VPS 目录，各 Agent 对自己的共享子目录有写权限。命令和结构化文件操作使用同一 Agent UID/GID，正常网络和宿主文件布局可用；Mate 不把自己的凭证或控制身份交给 Agent。Agent 长任务在 systemd scope 中继续运行，可列出、停止并受 slice 配额约束。
 
-Linux容器部署必须配置`runtime.workspaceManifest`。manifest逐一声明私有workspace以及显式外部grant的mountpoint、ext4 backing file、硬容量和owner。daemon在创建MEMORY.md或连接Slack前核对：每个root是独立的ext4 loopback mount，backing file已实际分配而非稀疏占位，容量、设备、owner、`rw,nodev,nosuid`和loop identity全部匹配。缺失、共享设备或普通目录会直接终止；不会退回dataDir里的普通文件夹。`environment.info`会把已验证的硬容量随effective grant报告给Agent。
-
-Debian 13部署中，结构化文件操作和shell都经同一个Docker隔离后端；macOS本地开发的文件操作继续使用已验证的SRT，shell仍走Docker。应用不自动拉取镜像、不执行host shell、不把host credentials或Docker socket挂进Agent容器。Slack示例中的全零image只是必须替换的占位值。
-
-runtime.docker字段：
-
-- binary：Docker CLI绝对路径。
-- host：unix:///…/docker.sock。
-- image：sha256:后64位固定镜像ID。
-- network：none（默认）或bridge（可路由局域网和互联网）。
-- resources.memoryMb/cpus/pids/tmpfsMb：每次短生命周期容器的硬限制；默认512MiB、1 CPU、64进程和64MiB tmpfs。
-
-固定镜像须包含`/usr/local/bin/node`、`/bin/sh`及需要的工具，并支持当前UID/GID访问`/workspace`。启动取得单实例锁后先清理本dataDir scope的遗留容器，再实际探测固定helper读写、helper侧越界拒绝、shell PID namespace清理；探针通过前不启动Slack adapter或模型run。任一操作只有在`docker rm --force --volumes`确认后才返回；清理结果不确定会熔断该backend，后续执行全部拒绝，直到显式startup/offline recover成功。create请求本身不确定时，`No such container`不足以解除不确定性。
-
-私有root在配置Docker后获得exec。workspaceGrants指定agentId、绝对root和read/write/exec，可用可选的小写label帮助Agent选择；应用、DB和其他Agent私有目录不可作为共享grant。需要并行改同一项目时配置独立worktree。scope内直接执行，停止/取消由daemon和backend落实。environment.info按当前work报告仍有效的grant、相对路径规则、执行/网络、已知URL读取及输入输出adapter支持；它是会在每次动作时重验的快照，不是授权token。
+`workspaceGrants` 仍可授予额外项目目录的 read/write/exec 能力，但不会改变 Linux 文件权限。`environment.info` 报告当前工作环境和有效 grant；它是可重验的能力快照，不是权限令牌。
 
 research.read是allowlist已知公共HTTPS URL读取，不是搜索。attachments.save接可见Slack消息中的fileId，保存到授权目录；artifact.publish/revise发布自身artifacts文件并经过同一门控。文本发布上限64KiB，binary/下载1MB。完整工具限制见[调用链说明](docs/HOW_IT_WORKS.md)。
 
@@ -81,36 +67,8 @@ Agent账户是持续累计额度；新消息、work、reset、配置迁移不补
 
 ## 显式升级与备份
 
-先停止daemon。以下离线迁移是开发机或没有workspace manifest的unmanaged兼容路径，保留历史/任务/提醒/草稿/预算和私有文件：
-
-```sh
-pnpm node dist/src/main.js migrate mate.old.json mate.local.json /ABSOLUTE/upgrade-backup
-# 只有升级旧库且确实没有配置快照时，明确声明所提供旧配置可信：
-pnpm node dist/src/main.js migrate mate.old.json mate.local.json /ABSOLUTE/legacy-backup --accept-legacy-identity
-```
-
-只升级代码/prompt而配置未变时，可把同一配置文件作为OLD和NEW。新增Agent可迁移；已有Agent的Slack身份或workspace不能重绑/删除。迁移核对旧快照和runtime hash，持有内核锁，清理旧配置执行容器，fence旧run并备份，事务更新。被撤销/过期grant不会复活。没有历史身份快照时，legacy选项是owner声明，不能机器证明旧身份。带workspace manifest的managed部署会拒绝这条入口；它必须由后续部署事务先生成并root封存checkpoint，首版还要求Agent/mount topology不变。
-
-```sh
-pnpm node dist/src/main.js backup mate.local.json /ABSOLUTE/checkpoint
-# managed checkpoint在backup子进程退出后由root封存：
-sudo node dist/src/main.js checkpoint-seal mate.local.json /ABSOLUTE/checkpoint SERVICE_UID SERVICE_GID
-# managed replace还要提供能证明当前live状态的已封存checkpoint：
-pnpm node dist/src/main.js restore mate.local.json /ABSOLUTE/target-checkpoint --replace /ABSOLUTE/current-checkpoint
-# unmanaged v2迁移备份和version 1兼容恢复都要求将旧dataDir整体移开、原dataDir不存在：
-pnpm node dist/src/main.js restore mate.local.json /ABSOLUTE/checkpoint
-```
-
-备份目的目录必须未存在或是空的规范目录，并位于live dataDir之外；包含SQLite与私有文件，`COMPLETE.json`最后发布。managed部署由root-owned `matectl`在固定checkpoint根预建service-owned目录，并在成功后封存为`root:<service group> 0750/0640`；失败目录只能按预先记录的device/inode清理。恢复到原绝对dataDir。不要删库或删session来绕过升级检查；不要用unmanaged迁移替代managed部署事务。
+先停止主服务和 Agent 后台任务。`matectl backup NAME` 保存 SQLite 与私人 home；`matectl restore TARGET --replace CURRENT` 先验证当前状态的 checkpoint，再恢复目标数据及 Agent UID/GID。共享工作目录另按普通 VPS 文件备份方式处理。代码升级用 `matectl upgrade SPEC`、`rollback`、`finalize`，不改数据；配置变更用明确的离线迁移，并保持现有 Linux UID/GID/home 稳定。详见[运维手册](docs/OPERATIONS_RUNBOOK.md)。
 
 ## 验证
 
-```sh
-pnpm run check
-MATE_CONTAINER_TEST=1 MATE_DOCKER_BINARY=/usr/bin/docker \
-MATE_DOCKER_HOST=unix:///var/run/docker.sock \
-MATE_DOCKER_IMAGE=sha256:EXISTING_64_HEX_IMAGE_ID \
-pnpm test tests/execution/sandbox.test.ts
-```
-
-普通集含真实Pi loop、Node worker/IPC与合成Slack/provider；Linux生产验收用container profile。SRT后端另用`MATE_SRT_TEST=1`，旧`MATE_SANDBOX_TEST=1`仅兼容需要同时运行两个profile的环境。V1b在本机Docker Linux VM中以固定Node 24 amd64 image跑过真实隔离测试；原生Linux宿主与systemd属于部署gate，不能由这项结果代替。真实Slack/provider待验的是scopes、事件、跨频道/DM接线、unknown对账、usage与错误协议，不要求证明模型会作出预设协作决策。详细故障与多选择证据见[验收表](docs/ACCEPTANCE.md)。
+`pnpm check`、`pnpm typecheck` 和针对性集成测试覆盖本地逻辑与合成 Slack/provider 流程。Debian 13 上还须做两 Agent UID/文件权限/后台任务的小型原生 smoke；真实 Slack/provider 接线、usage 和错误协议另行验收。本地通过不能冒充 VPS 或外部服务已验证。详细证据见[验收表](docs/ACCEPTANCE.md)。

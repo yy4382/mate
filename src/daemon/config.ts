@@ -102,6 +102,10 @@ export function slackRuntimeConfig(config:DaemonConfig):MateConfig|undefined{
 /** Persisted observations cannot change authors when an owner grant is removed. */
 export function assertConfigurationEvolution(previous:DaemonConfig,next:DaemonConfig):void{
   for(const agent of previous.mate.agents)if(!next.mate.agents.some(a=>a.id===agent.id))throw new Error('Existing Agent identities cannot be removed or rebound');
+  if(previous.runtime.linuxUsers||next.runtime.linuxUsers){
+    const before=previous.runtime.linuxUsers,after=next.runtime.linuxUsers;
+    if(!before||!after||previous.runtime.sharedRoot!==next.runtime.sharedRoot||Object.keys(before).sort().join(',')!==Object.keys(after).sort().join(',')||Object.entries(before).some(([id,user])=>{const current=after[id];return !current||current.uid!==user.uid||current.gid!==user.gid||current.home!==user.home||current.username!==user.username;}))throw new Error('Linux deployment UID, GID, home and shared-root topology must remain stable during configuration migration');
+  }
   const before=previous.adapters.slack,after=next.adapters.slack;
   if(before){
     if(!after||before.teamId!==after.teamId)throw new Error('Workspace identity cannot be removed or rebound');

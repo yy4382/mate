@@ -1,52 +1,8 @@
-# Debian 13 / systemd 运维手册
+# Debian 13 运维手册
 
-适用范围：x86_64 Debian 13、系统级 Docker、Node 24、pnpm 10.33.0。首次安装复用 [DEPLOYMENT.md](DEPLOYMENT.md) 的 installer；升级使用 V2d controller。改变 Agent 集合、workspace/mount/backing、service unit 或 Docker 安全拓扑不属于原地升级支持范围。以下是操作说明，本地测试不会执行外部安装、启动 Slack 或访问 VPS。
+适用对象：已按 [部署步骤](DEPLOYMENT.md) 安装的 Linux 用户版 Mate。所有 `matectl` 命令由人以 root 在受信终端执行；Agent 的普通 shell 始终以其自身 UID 运行。系统级 Agent 请求另外逐条经 Slack owner 确认，不能用运维命令绕过审批。没有真实 Slack/provider/VPS 验证前，只能说本地合成验收通过。
 
-## 正常构建与安装
-
-1. 通过发行版的正常 APT 安装途径准备 `git ca-certificates curl gnupg build-essential python3 pkg-config libsqlite3-dev e2fsprogs util-linux systemd`；通过 [Docker Debian 安装说明](https://docs.docker.com/engine/install/debian/) 配置系统 Docker。预先构建或拉取正式 sandbox image，配置使用其完整 sha256 image ID。不要使用 rootless/临时 Docker socket 替代正式环境。
-2. 使用可信的软件包渠道正常安装 Node 24（例如 [NodeSource Debian 安装说明](https://github.com/nodesource/distributions) 的 24.x APT repository）；确认 `/usr/bin/node --version` 是 24.x，`/usr/bin/node -p process.arch` 是 `x64`。系统服务固定使用 `/usr/bin/node`，用户 shell 中的版本管理器不替代它。不要解包 `.deb` 后拼接库路径或复制某台开发机的 native addon。
-3. 用 Node 安装随附的 npm **仅引导安装包管理器**：`sudo npm install --global pnpm@10.33.0`。项目依赖和测试统一使用 pnpm；不生成 npm lockfile。确认 `pnpm --version` 为 10.33.0。
-4. 在完整、已审阅的源码 checkout 中执行以下命令。构建时 Node 必须与目标系统 `/usr/bin/node` 的版本及 ABI 一致。生产目录必须全新；同名目录已存在时换新目录，不在旧发布上覆盖安装。
-
-```sh
-MATE_COMMIT=$(git rev-parse HEAD)
-pnpm install --frozen-lockfile
-pnpm test
-install -d -m 0755 /var/tmp/mate-release
-cp package.json pnpm-lock.yaml /var/tmp/mate-release/
-cp -a dist /var/tmp/mate-release/
-(cd /var/tmp/mate-release && pnpm install --prod --frozen-lockfile --package-import-method=copy)
-pnpm --silent run deploy release-manifest /var/tmp/mate-release "$MATE_COMMIT" > /var/tmp/mate-RELEASE.json
-mv /var/tmp/mate-RELEASE.json /var/tmp/mate-release/RELEASE.json
-```
-
-`pnpm test` 包含正式 TypeScript 构建；production install 保留完整正式依赖，并按项目 `onlyBuiltDependencies` 构建 `better-sqlite3` / `fs-ext`。copy import 防止 pnpm store 的外部 hardlink 违反不可变 release inventory。`release-manifest` 复用正式 release inventory/校验边界，覆盖 dist、lockfile、node_modules 和 native addons；不能只传 verifier 文件，也不能手工删除依赖。工作树必须干净且 commit 与构建源码一致。
-
-首次安装前创建专用无登录系统账户（若已存在先核对其身份，不覆盖）：`sudo adduser --system --group --home /var/lib/mate --no-create-home --shell /usr/sbin/nologin mate`。不把 mate 永久加入 docker 组。installer 创建环境文件；可以先保持为空，此时普通 doctor 将明确报告缺失 secret，安装时的离线 candidate 检查允许缺失。
-
-首次安装：按 [部署说明](DEPLOYMENT.md) 准备 config 和 spec，`release.source` 指向上述完整目录，`gitCommit` 填对应 commit；执行 plan/preflight/install。root 命令可使用 `/usr/bin/node /ABSOLUTE/SOURCE/dist/src/deployment/cli.js` 替代依赖 sudo PATH 的 pnpm 包装。首次 installer 不启动服务。
-
-## Slack：每位 Agent 一套 App
-
-配置能力来自 [capabilities.ts](../src/slack/capabilities.ts)：SDK 方法、事件订阅和 `/team` command 共用注册表；运行时读取相同 command/wire-event 常量，OAuth 自检读取相同 scopes 集合。测试扫描 adapter 的 SDK 调用，防止新增调用忘记更新能力表。
-
-为每个 Agent 生成独立 manifest（不需要任何凭证，也不联网）：
-
-```sh
-pnpm --silent run deploy slack-manifest research > /var/tmp/mate-research-slack.json
-pnpm --silent run deploy slack-manifest writer > /var/tmp/mate-writer-slack.json
-```
-
-在 Slack 创建 App 时导入对应 JSON。每个 Agent 独立 App/bot 安装绑定到同一个目标 workspace；记录真实 `teamId`、`slackAppId`、`slackBotId`、`slackUserId`，按 `mate.example.json` 填写 binding，不能共享一个 bot 身份来代表多个 Agent。manifest 设置 Socket Mode、全部 bot events、`/team` 和 bot OAuth scopes，包括 `commands`、聊天、会话历史/成员与文件能力。完整权限清单以生成文件为准，不在本手册维护第二份静态列表。[Slack manifest 规范](https://docs.slack.dev/reference/app-manifest/)
-
-在每个 App 的 Basic Information → App-Level Tokens 中创建 **仅 `connections:write`** 的 app-level token（`xapp-…`），另行安装 App 到 workspace，取得 bot token（`xoxb-…`）。App token 不替代 bot token，也不放入 bot OAuth scopes。Socket Mode 不需要公开 HTTP request URL。[Socket Mode 配置](https://docs.slack.dev/apis/events-api/using-socket-mode/)
-
-启用 App Home 的 Messages tab，并允许用户从 Messages tab 发送消息。把各 Agent App 分别邀请到需要参与的频道；私有频道必须由有权限的人邀请。OAuth scopes 变更后，对每个 App **重新安装到 workspace**；更新 bindings 与 token 环境引用，保留每个 App 对应关系。多个 App 的同名 `/team` 是同一 owner 控制入口，Slack 实际路由到哪个安装实例由 Slack 决定；任一实例都必须维持 owner 检查。
-
-将凭证按配置所引用的环境变量写入 `/etc/mate/mate.env`，保留 `root:mate 0640`；不要放入源码、manifest 或命令行参数，不把文件内容贴进测试记录。没有凭证时仅进行 manifest/config/doctor/status/logs 等离线检查；完成真实授权和 provider transport/accounting 检查前不能宣称 Slack/provider 集成已验证。
-
-## 只读检查与启动
+## 日常检查
 
 ```sh
 sudo matectl status
@@ -54,52 +10,48 @@ sudo matectl logs
 sudo matectl doctor
 ```
 
-`status` 固定查看 `mate.service` 的 systemd ActiveState，组合平台中立 OperationsView 的 Agent/active-run/paused/unknown action/unknown output/held draft/due reminder 计数、root upgrade journal、deployment journal 和 restore journal。它不构造 Daemon，不加载 secret 环境文件，不执行迁移或恢复。升级/restore 未完成为 `recovery-pending`；journal 无法解析为 `recovery-unreadable`；停止、未知服务状态、无法读取数据库都不会显示健康。`running` 只说明本地进程与读取状态正常，不证明 Slack/provider 连通。计数截断会明确标示；status 和系统状态是相邻时刻快照，并非跨系统原子事务。
+`status` 和 `logs` 只读取固定的服务状态、恢复标记与结构化运营记录，不输出原始 journald 文本或秘密。`doctor` 报告安装身份、私人/共享目录和配额是否仍符合配置。Agent 可用自身的 `process.list` / `process.stop` 管理后台任务；owner 的 Slack 控制入口也可列出、停止指定 Agent 的后台任务。Mate 从 systemd 和 `/proc` 读取当前事实，不另建一份可能过时的后台任务表。
 
-`logs` 固定为 `mate.service` 的平台中立持久运行事实：过去 **24 小时，最多 100 条** run completed/failed/interrupted 或 internal DM created 事件，只输出时间和固定事件名。它**不读取或回显原始 journald**，因为异常栈、第三方 SDK 日志可能包含秘密；不输出 Agent/消息/工具标识、正文、工具参数/结果、文件内容或环境值。`available=false` 表示查询不可用，`moreAvailable` 表示历史还有记录，不保证这些记录仍在 24 小时窗口内。这不是完整审计日志，历史事实覆盖以 OperationsView 的持久记录为限。两个命令都不接受额外 flags、unit、时间、路径、environment 或任意 journalctl 参数。
+## 备份与恢复
 
-首次安装完成并配置好 secrets 后：
+先停止主服务，并通过 Agent 或 owner 控制入口停止所有 Mate 管理的 Agent 后台任务；备份/恢复入口也会复查，未停止则拒绝。共享工作目录是 Agent 共同使用的普通 VPS 目录，不包含在 Mate 的私人 memory/SQLite checkpoint 内；按一般文件备份办法单独备份 `/srv/mate/shared`，保留 UID/GID 和权限。
 
 ```sh
-sudo matectl offline-probe
-sudo systemctl enable --now mate.service
-sudo matectl status
+sudo systemctl stop mate.service
+sudo matectl backup before-change
+sudo matectl restore older --replace before-change
+sudo matectl doctor
+sudo systemctl start mate.service
 ```
 
-offline probe 必须在服务停止时运行；它验证本地隔离和工作区，不启动 Slack/provider。
+`backup NAME` 在 `/var/backups/mate/NAME` 保存 SQLite 与每位 Agent 私人 home，并最后发布完成标记。`restore` 会校验目标 checkpoint；若现有状态非空，`--replace CURRENT` 必须指向与当前状态完全匹配的另一份 checkpoint，避免拿过期备份盲目覆盖。恢复支持中断后用相同参数继续；恢复文件归属回到配置的 Agent UID/GID。保留 checkpoint，不要通过删除状态或恢复记录来绕过校验。灾难恢复到全新机器需要先恢复相同 UID/GID 和目录拓扑，再由管理员根据实际保留的数据安排恢复；不应假设换 UID 后仍能直接读取私人资料。
 
-## candidate、恢复、激活与 finalize
+## 代码升级与配置变更
 
-先构建完整新 release，再把它和新配置固定到 root 控制的 staging。确保没有未完成升级；`/opt/mate/staged-release` 必须不存在，不覆盖活跃 attempt 的输入。
-
-```sh
-sudo cp -a /var/tmp/mate-release /opt/mate/staged-release
-sudo chown -R root:root /opt/mate/staged-release
-sudo chmod -R go-w /opt/mate/staged-release
-sudo install -o root -g root -m 0600 /ABSOLUTE/new-mate.json /etc/mate/staged-config.json
-sudo matectl candidate
-sudo matectl status
-```
-
-candidate 先绑定 staged release/config，停止服务，封存 rollback checkpoint，再通过 journal 迁移 DB、原子发布 config/current 并做离线 doctor/probe。整个 candidate 阶段不启动 daemon、Slack/provider、ACK/run/outbox。中断后保持相同 staged 输入，执行 `sudo matectl resume`；不要手工删除 journal 或改 current symlink。`/opt/mate/controller` 保留已知可用控制器，避免坏 candidate 阻断维护入口。
-
-尚未激活时，可执行 `sudo matectl rollback`：验证封存的旧 checkpoint 和新当前 checkpoint，再恢复旧数据、配置和 current。服务保持停止；检查后由操作员重新启动。不能只退代码而保留新 DB/config。
-
-确认 candidate 后：
+普通代码升级只替换经过验证的 release，不改 SQLite、Agent home、共享目录或配置：
 
 ```sh
-sudo matectl activate
-sudo matectl status
-sudo matectl logs
+sudo systemctl stop mate.service
+# 先确认 Agent 后台任务已停止，并另取一份 backup。
+sudo matectl backup before-upgrade
+sudo matectl upgrade /ABSOLUTE/new-mate.deploy.json
+sudo matectl doctor
+sudo systemctl start mate.service
+# 观察后先再次停止服务和后台任务，再选择其一：
+sudo systemctl stop mate.service
 sudo matectl finalize
+# 或：sudo matectl rollback
+# 完成检查后 sudo systemctl start mate.service
 ```
 
-activate 在允许启动之前持久化 `everActivated`。一旦激活，即使启动失败，也只能 fix-forward：准备新的完整 staged release/config，执行 `sudo matectl fix-forward`，离线成功后再次 activate，再 finalize。已提交的 B→C attempt 必须先完成到 C；尚未提交的 attempt 只有在 controller 验证 DB 无提交 marker、持久 config 仍为 B 时才允许替换为 B→D。不要凭人的猜测覆盖已绑定 staged 输入；命令会依据持久证据决定是否接受替换。
+`upgrade` 要求新 spec 的配置与当前安装配置相同；候选发布物通过 release 校验和离线 doctor 后才原子切换 `current`。升级留下 root-only 记录，直到 `finalize` 或 `rollback`；两者均要求服务和后台任务停止。`rollback` 只回退代码版本，因为此升级没有触碰状态。若新代码启动后修改了数据库格式，不能把代码回退视为数据回退：先核验适配性，必要时按 checkpoint 恢复。配置变更需先停机、备份并使用明确的 `mate migrate OLD_CONFIG NEW_CONFIG BACKUP` 离线流程；现有 Agent 的 UID/GID/home 与共享根不允许通过该流程改变。配置文件和凭证由 root 审核并更新，不随代码升级悄悄替换。
 
-finalize 验证当前发布，将 controller 发布到已验证 release 后清理升级 journal；不会删除 checkpoint 或旧数据。后续需要改变 topology 时须先制定独立迁移方案，不能靠修改 systemd/config 绕过核验。
+## 停用与原生 smoke
 
-## 备份、恢复与停用
+```sh
+sudo /usr/bin/node /opt/mate/current/dist/src/deployment/cli.js disable /etc/mate/mate.json
+```
 
-先 `sudo systemctl stop mate.service`，再执行 `sudo matectl backup NAME`。固定 `/var/backups/mate` 下的 NAME 仅允许简单名称，长度不超过 64；checkpoint 由服务用户生成、root 封存。普通恢复使用 `sudo matectl restore OLD_NAME --replace CURRENT_NAME`，CURRENT_NAME 必须是当前状态对应的已封存 checkpoint；空环境恢复可省略 replace。restore 中断后使用同一 checkpoint 参数重入，status 会显示 pending。存在 deployment upgrade journal 时普通 restore/backup 等严格入口仍被阻断，使用 upgrade 命令恢复。恢复完成后检查，再启动服务。
+停用只停止主服务，保留 Agent 后台任务、私人/共享文件、数据库、checkpoint 和发布物；如需结束后台任务，明确从 `process.list` 识别并逐项停止。
 
-停用沿用 `deploy disable /etc/mate/mate.json`，保留 state/backings/checkpoints/releases；不要 rm 数据来“解除”恢复锁。原始系统日志若需管理员进一步调查，必须在受信终端单独处理，不作为 matectl 的可转发输出。
+在 Debian 13 上做少量原生 smoke：使用 `setpriv --reuid=UID --regid=GID --clear-groups` 分别以两位 Agent 身份尝试读自己的和同伴的 `MEMORY.md`、写自己的和同伴的共享目录、读 `/var/lib/mate/state` 与 `/etc/mate/mate.env`、控制 `mate.service`。预期自己的私人资料可读写，同伴私人资料和 Mate 控制面不可达；共享资料可读，只有自己的目录可写。再由 Agent 启动 `sleep` 一类可停止的长任务，检查列表、停止与列表消失。使用合成数据，不触碰真实私人 memory；记录 UID、命令、退出码，不记录秘密正文。此项是目标机验收，不由 macOS 测试声称完成。

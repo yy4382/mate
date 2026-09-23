@@ -9,13 +9,13 @@ import {tmpdir} from 'node:os';
 import {spawnSync} from 'node:child_process';
 import {diagnosticLogs,diagnosticStatus,type RecoveryState} from '../../src/operations/diagnostics.js';
 import {readRecoveryState,deploymentDiagnostics,readOperationsSnapshot} from '../../src/deployment/diagnostics.js';
-import {renderMaintenanceWrapper} from '../../src/deployment/systemd.js';
+import {renderLinuxMaintenanceWrapper} from '../../src/deployment/linux-installer.js';
 import {slackAppManifest,slackMethods,slackWireEvents,slackEventSubscriptions,slackControlCommand,requiredSlackAppScopes,requiredSlackBotScopes} from '../../src/slack/capabilities.js';
 import type {ActivityItem,OperationsStatus} from '../../src/operations/view.js';
 import {deploymentMain} from '../../src/deployment/cli.js';
 const dirs:string[]=[];function temp(){const dir=mkdtempSync(join(tmpdir(),'mate-diagnostics-'));dirs.push(dir);return dir;}
 afterEach(()=>{vi.restoreAllMocks();for(const dir of dirs.splice(0))rmSync(dir,{recursive:true,force:true});});
-const clear:RecoveryState={upgrade:null,root:null,restore:null,invalid:false};
+const clear:RecoveryState={restore:null,invalid:false};
 const secret='xoxb-SUPER_SECRET /tmp/private-body tool arguments';
 function status():OperationsStatus{return {at:1,agents:[{id:secret,registered:true,paused:false,generation:1,sessionId:secret,activeRun:null,budget:null}],works:{items:[],atLeast:0,truncated:false},uncertainActions:{items:[],atLeast:0,truncated:false},uncertainOutputs:{items:[],atLeast:0,truncated:false},heldDrafts:{items:[],atLeast:0,truncated:false},dueReminders:{items:[],atLeast:0,truncated:false}};}
 it('projects only operational counts, fixed events and recovery states, never arbitrary identifiers or bodies',()=>{
@@ -24,22 +24,22 @@ it('projects only operational counts, fixed events and recovery states, never ar
  const event:ActivityItem={at:100000000,source:'runtime',sourceId:secret,kind:'runtime.run_failed',actorId:secret,subject:{type:secret,id:secret},target:null,state:secret,counts:{[secret]:1}};
  const logs=diagnosticLogs([event,{...event,kind:secret},{...event,at:0},...Array.from({length:110},()=>event)],100000000);
  expect(logs.events).toHaveLength(100);expect(logs.events[0]).toEqual({at:100000000,event:'runtime.run_failed'});expect(JSON.stringify(logs)).not.toContain(secret);
- expect(diagnosticStatus(s,'active',{...clear,upgrade:{phase:secret,everActivated:false}}).health).toBe('recovery-unreadable');
+ expect(diagnosticStatus(s,'active',{...clear,restore:{phase:secret,databaseComplete:false,completedAgents:0}}).health).toBe('recovery-unreadable');
 });
-it('reports candidate, activated fix-forward, root-only publication and restore as pending, never healthy',()=>{
- for(const recovery of [{...clear,upgrade:{phase:'candidate',everActivated:false}},{...clear,upgrade:{phase:'fix-forward',everActivated:true}},{...clear,root:{step:'config',mode:'candidate'}},{...clear,restore:{phase:'decided',databaseComplete:false,completedAgents:1}}])expect(diagnosticStatus(status(),'active',recovery).health).toBe('recovery-pending');
+it('reports Linux upgrade and restore as pending, never healthy',()=>{
+ for(const recovery of [{...clear,linuxUpgrade:{phase:'pending' as const}},{...clear,restore:{phase:'decided',databaseComplete:false,completedAgents:1}}])expect(diagnosticStatus(status(),'active',recovery).health).toBe('recovery-pending');
  expect(diagnosticStatus(null,'unknown',clear).health).toBe('service-not-active');
 });
 it('reads recovery failures opaquely without exposing journal contents',async()=>{
  const dir=temp();mkdirSync(join(dir,'control'));expect(await readRecoveryState(dir)).toEqual(clear);
- for(const name of ['deployment-v1.json','deployment-root-v1.json','restore.json'])writeFileSync(join(dir,'control',name),secret);
+ for(const name of ['linux-upgrade.json','restore.json'])writeFileSync(join(dir,'control',name),secret);
  const result=await readRecoveryState(dir);expect(result.invalid).toBe(true);expect(JSON.stringify(result)).not.toContain(secret);
- for(const name of ['deployment-v1.json','deployment-root-v1.json'])rmSync(join(dir,'control',name));
+ rmSync(join(dir,'control','linux-upgrade.json'));
  writeFileSync(join(dir,'control','restore.json'),JSON.stringify({version:1,phase:'decided',configurationHash:secret,target:{path:secret,device:1,inode:1,manifestDevice:1,manifestInode:1,manifestHash:'a'.repeat(64)},completedAgents:[secret],databaseComplete:false}));
  const restoring=await readRecoveryState(dir);expect(restoring.restore).toEqual({phase:'decided',databaseComplete:false,completedAgents:1});expect(restoring.invalid).toBe(false);expect(JSON.stringify(restoring)).not.toContain(secret);
 });
 it('rejects wrapper arguments before executing any controller/systemd/journal command',()=>{
- const dir=temp(),wrapper=join(dir,'matectl');writeFileSync(wrapper,renderMaintenanceWrapper());
+ const dir=temp(),wrapper=join(dir,'matectl');writeFileSync(wrapper,renderLinuxMaintenanceWrapper());
  // Only substitute the root identity check so the allowlist can execute on developer hosts.
  const script=readFileSync(wrapper,'utf8').replace('$(id -u)','0');writeFileSync(wrapper,script);
  for(const args of [['status','--unit=ssh'],['logs','--since=1970'],['logs','; touch /tmp/NEVER'],['journalctl'],['status','$(echo secret)']]){

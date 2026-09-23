@@ -46,22 +46,6 @@ it('offline migration backs up memory, updates baseline and grants, preserves de
  }finally{reopened.close();}
 });
 
-it('commits the deployment upgrade marker with the migration and replays the same upgrade without rotating sessions twice',()=>{
- const f=fixture(),upgradeId='11111111-1111-4111-8111-111111111111',topologyIdentity='a'.repeat(64),before=(f.store.db.prepare("SELECT session_id FROM agents WHERE id='research'").get() as {session_id:string}).session_id;
- const first=applyOfflineConfigurationMigration(f.store,f.previous,f.next,{projectRoot:process.cwd(),legacyIdentityAttested:false,auditSource:'sealed-checkpoint',deployment:{upgradeId,attemptId:upgradeId,topologyIdentity}}),after=(f.store.db.prepare("SELECT session_id FROM agents WHERE id='research'").get() as {session_id:string}).session_id;
- expect(first.replayed).toBe(false);expect(after).not.toBe(before);
- const second=applyOfflineConfigurationMigration(f.store,f.previous,f.next,{projectRoot:process.cwd(),legacyIdentityAttested:false,auditSource:'sealed-checkpoint',deployment:{upgradeId,attemptId:upgradeId,topologyIdentity}});
- expect(second.replayed).toBe(true);expect((f.store.db.prepare("SELECT session_id FROM agents WHERE id='research'").get() as {session_id:string}).session_id).toBe(after);
- expect(()=>applyOfflineConfigurationMigration(f.store,f.previous,f.next,{projectRoot:process.cwd(),legacyIdentityAttested:false,auditSource:'sealed-checkpoint',deployment:{upgradeId,attemptId:upgradeId,topologyIdentity:'b'.repeat(64)}})).toThrow('attempt is bound');
- const third=structuredClone(f.next),fixAttempt='22222222-2222-4222-8222-222222222222';third.mate.agents[0]!.role='A third role';expect(applyOfflineConfigurationMigration(f.store,f.next,third,{projectRoot:process.cwd(),legacyIdentityAttested:false,auditSource:'fix-forward-checkpoint',deployment:{upgradeId,attemptId:fixAttempt,topologyIdentity}}).replayed).toBe(false);expect(storedConfiguration(f.store)).toEqual(third);expect(applyOfflineConfigurationMigration(f.store,f.next,third,{projectRoot:process.cwd(),legacyIdentityAttested:false,auditSource:'fix-forward-checkpoint',deployment:{upgradeId,attemptId:fixAttempt,topologyIdentity}}).replayed).toBe(true);f.store.close();
-});
-
-it('rolls back all business changes when the durable deployment marker cannot commit',()=>{
- const f=fixture(),before=(f.store.db.prepare("SELECT session_id FROM agents WHERE id='research'").get() as {session_id:string}).session_id;
- f.store.db.exec("CREATE TRIGGER reject_deployment_marker BEFORE INSERT ON runtime_meta WHEN NEW.key LIKE 'deployment_upgrade_v1:%' BEGIN SELECT RAISE(ABORT,'synthetic marker failure'); END");
- expect(()=>applyOfflineConfigurationMigration(f.store,f.previous,f.next,{projectRoot:process.cwd(),legacyIdentityAttested:false,auditSource:'sealed-checkpoint',deployment:{upgradeId:'33333333-3333-4333-8333-333333333333',attemptId:'33333333-3333-4333-8333-333333333333',topologyIdentity:'b'.repeat(64)}})).toThrow('synthetic marker failure');
- expect(storedConfiguration(f.store)).toEqual(f.previous);expect((f.store.db.prepare("SELECT session_id FROM agents WHERE id='research'").get() as {session_id:string}).session_id).toBe(before);expect(f.store.db.prepare("SELECT value FROM runtime_meta WHERE key LIKE 'deployment_upgrade_v1:%'").get()).toBeUndefined();f.store.close();
-});
 it('restores an unmanaged v2 migration checkpoint into an absent data directory',async()=>{
  const f=fixture(),backupPath=join(f.root,'backup');f.store.close();await migrateConfiguration(f.previous,f.next,backupPath);renameSync(f.data,join(f.root,'migrated-data'));
  expect(await restoreCheckpoint(f.previous,backupPath)).toBe('v2');expect(readFileSync(join(f.own,'MEMORY.md'),'utf8')).toBe('private synthetic knowledge');const restored=new Store(f.path);try{expect(storedConfiguration(restored)).toEqual(f.previous);}finally{restored.close();}

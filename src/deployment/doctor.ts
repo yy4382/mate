@@ -1,9 +1,7 @@
-import { accessSync, constants, lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import type { DaemonConfig } from '../daemon/config.js';
-import { dockerSocketPath } from '../daemon/paths.js';
-import { verifyDeploymentWorkspaces } from './runtime.js';
 import { managedLayout } from './systemd.js';
 import { verifyRelease } from './release.js';
 
@@ -42,6 +40,7 @@ function requiredSecretReferences(config: DaemonConfig): string[] {
 export interface DoctorOptions { releaseRoot?: string; requireSecrets?: boolean }
 
 export async function runDoctor(config: DaemonConfig, env: DoctorEnvironment = nodeEnvironment(), options: DoctorOptions = {}): Promise<DoctorReport> {
+  if (!config.runtime.linuxUsers || !config.runtime.sharedRoot) throw new Error('Debian Linux-user deployment configuration required');
   const checks: DoctorCheck[] = [];
   const check = async (name: string, action: () => string | Promise<string>, failure = true): Promise<void> => {
     try { checks.push({ name, status: failure ? 'pass' : 'info', detail: await action() }); }
@@ -53,7 +52,9 @@ export async function runDoctor(config: DaemonConfig, env: DoctorEnvironment = n
     if (values.ID !== 'debian' || values.VERSION_ID !== '13') throw new Error('Only Debian 13 x86_64 is an accepted production baseline');
     return `Debian 13 ${env.arch}, ${env.node}, ABI ${env.modulesAbi}`;
   });
-  await check('configuration-ownership', () => { protectedFile(managedLayout.config, env.gid, 0o640); protectedFile(managedLayout.manifest, env.gid, 0o640); protectedFile(managedLayout.environment, env.gid, 0o640); return 'configuration, environment reference and workspace manifest are protected'; });
+  await check('configuration-ownership', () => {
+    protectedFile(managedLayout.config, 0, 0o600); protectedFile(managedLayout.environment, 0, 0o600); return 'configuration and credentials are root-only';
+  });
   await check('release-identity', async () => {
     const current = realpathSync(options.releaseRoot ?? managedLayout.current), prefix = `${managedLayout.releases}${sep}`;
     if (!current.startsWith(prefix)) throw new Error('Current release escapes the managed release directory');
@@ -63,13 +64,33 @@ export async function runDoctor(config: DaemonConfig, env: DoctorEnvironment = n
     const root = lstatSync(current); if (root.uid !== 0 || (root.mode & 0o022) !== 0) throw new Error('Release root is not immutable root-owned content');
     return manifest.releaseId;
   });
-  await check('workspace-boundaries', () => { const result = verifyDeploymentWorkspaces(config); if (!result) throw new Error('Managed workspace manifest was not verified'); return `${result.roots.size} private and ${result.externalRoots.length} external workspace mounts`; });
-  await check('docker-control', () => {
-    if (!config.runtime.docker) throw new Error('Managed deployment requires Docker configuration');
-    accessSync(realpathSync(config.runtime.docker.binary), constants.X_OK); accessSync(dockerSocketPath(config.runtime.docker.host), constants.R_OK | constants.W_OK);
-    const result = env.run(config.runtime.docker.binary, ['--host', config.runtime.docker.host, 'image', 'inspect', config.runtime.docker.image]);
-    if (result.code !== 0) throw new Error(`Pinned Docker image is unavailable: ${result.stderr.slice(0, 300)}`);
-    return config.runtime.docker.image;
+  await check('linux-identities', () => {
+    for (const [agentId, user] of Object.entries(config.runtime.linuxUsers!)) {
+      if (!user.username) throw new Error(`${agentId}: managed deployment requires a username`);
+      const account = env.run('/usr/bin/getent', ['passwd', user.username]);
+      const fields = account.stdout.trim().split(':');
+      if (account.code !== 0 || fields.length !== 7 || Number(fields[2]) !== user.uid || Number(fields[3]) !== user.gid || fields[5] !== user.home) throw new Error(`${agentId}: Linux account differs from configuration`);
+      for (const [path, mode] of [[user.home, 0o700], [join(user.home, 'notes'), 0o700], [join(user.home, 'artifacts'), 0o700]] as const) {
+        const stat = lstatSync(path);
+        if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== user.uid || stat.gid !== user.gid || (stat.mode & 0o777) !== mode) throw new Error(`${agentId}: private directory ownership or mode differs: ${path}`);
+      }
+      const memory = lstatSync(join(user.home, 'MEMORY.md'));
+      if (!memory.isFile() || memory.isSymbolicLink() || memory.uid !== user.uid || memory.gid !== user.gid || (memory.mode & 0o777) !== 0o600) throw new Error(`${agentId}: private memory entry differs`);
+      const sharedWork = lstatSync(join(config.runtime.sharedRoot!, agentId));
+      if (!sharedWork.isDirectory() || sharedWork.isSymbolicLink() || sharedWork.uid !== user.uid || sharedWork.gid !== user.gid || (sharedWork.mode & 0o777) !== 0o755) throw new Error(`${agentId}: shared work directory differs`);
+      const slice = env.run('/usr/bin/systemctl', ['show', `mate-agent-${user.uid}.slice`, '-p', 'LoadState', '-p', 'MemoryMax', '-p', 'TasksMax', '-p', 'CPUQuotaPerSecUSec', '--no-pager']);
+      const values = Object.fromEntries(slice.stdout.split('\n').filter(Boolean).map(line => { const at = line.indexOf('='); return [line.slice(0, at), line.slice(at + 1)]; }));
+      if (slice.code !== 0 || values.LoadState !== 'loaded' || !Number.isFinite(Number(values.MemoryMax)) || Number(values.MemoryMax) < 1 || !Number.isFinite(Number(values.TasksMax)) || Number(values.TasksMax) < 1 || !values.CPUQuotaPerSecUSec || values.CPUQuotaPerSecUSec === 'infinity') throw new Error(`${agentId}: finite process quotas are unavailable`);
+    }
+    const root = lstatSync(config.runtime.dataDir), state = lstatSync(join(config.runtime.dataDir, 'state')), shared = lstatSync(config.runtime.sharedRoot!);
+    if ([root, state].some(stat => !stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== 0 || stat.gid !== 0 || (stat.mode & 0o777) !== 0o700)) throw new Error('Mate data and state must be root-only');
+    if (!shared.isDirectory() || shared.isSymbolicLink() || shared.uid !== 0 || (shared.mode & 0o777) !== 0o755) throw new Error('Shared root must be root-owned and peer-readable');
+    return `${Object.keys(config.runtime.linuxUsers!).length} Linux identities and private homes checked`;
+  });
+  await check('system-approval', () => {
+    const eligible = config.runtime.systemAgents ?? [];
+    if (eligible.length && (!config.adapters.slack || !config.mate.ownerUserIds.length)) throw new Error('System-eligible Agents need a configured Slack owner approval path');
+    return `${eligible.length} Agent(s) eligible to request individual owner-approved system commands`;
   });
   await check('secret-references', () => {
     const missing = requiredSecretReferences(config).filter(name => !process.env[name]?.trim());

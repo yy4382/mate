@@ -3,6 +3,7 @@
 ## First usable release and stopping conditions
 
 - The first usable release must be deployable on a low-resource Linux VPS, isolate Agents using separate unprivileged Linux users, and be operable through Slack. Docker/gVisor is not the default Agent execution boundary. VPS packaging and focused Linux permission/process validation are release requirements, not post-experiment extras.
+- This is a pre-release experiment with no existing production deployment to preserve. Implement the Linux-user release as the sole supported deployment path; remove obsolete Docker deployment compatibility instead of maintaining parallel installers, migration shims, or fallback behavior for an imagined old installation.
 - Continue until all feasible development and validation are complete and only actual Slack/provider connection and VPS deployment remain, OR a critical architecture/product decision genuinely requires the user. Do not stop at intermediate module checkpoints.
 - Use local Git branches/commits for checkpoints and reviewed tickets. Never include private reference evidence, secrets or runtime data; no remote push without authorization.
 

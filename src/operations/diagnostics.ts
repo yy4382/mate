@@ -1,15 +1,13 @@
 import type {ActivityItem,OperationsStatus} from './view.js';
 
-export type RecoveryState={upgrade:null|{phase:string;everActivated:boolean};root:null|{step:string;mode:string};restore:null|{phase:string;databaseComplete:boolean;completedAgents:number};invalid:boolean};
+export type RecoveryState={restore:null|{phase:string;databaseComplete:boolean;completedAgents:number};linuxUpgrade?:null|{phase:'pending'};invalid:boolean};
 export type ServiceState='active'|'inactive'|'activating'|'deactivating'|'failed'|'reloading'|'unknown';
-const phases=['preparing','candidate','rollback','activated','fix-forward'];
-const steps=['prepared','checkpoint','journal','release','migrated','config','current','checked','rollback-checkpoint','rollback','restored','old-config','old-current','activated','finalizing'];
 /** An allowlist projection, never a regex scrub of potentially confidential strings. */
 export function diagnosticStatus(operations:OperationsStatus|null,service:ServiceState,recovery:RecoveryState){
- const invalid=recovery.invalid||!!(recovery.upgrade&&!phases.includes(recovery.upgrade.phase))||!!(recovery.root&&(!steps.includes(recovery.root.step)||!['candidate','fix-forward'].includes(recovery.root.mode)))||!!(recovery.restore&&!['planned','decided'].includes(recovery.restore.phase));
- const pending=!!(recovery.upgrade||recovery.root||recovery.restore);
+ const invalid=recovery.invalid||!!(recovery.restore&&!['planned','decided'].includes(recovery.restore.phase));
+ const pending=!!(recovery.restore||recovery.linuxUpgrade);
  return {service,health:invalid?'recovery-unreadable':pending?'recovery-pending':service!=='active'?'service-not-active':!operations?'operations-unavailable':operations.agents.some(a=>!a.registered||a.paused)||operations.uncertainActions.atLeast>0||operations.uncertainOutputs.atLeast>0?'attention-required':'running',
-  recovery:invalid?{invalid:true}:{upgrade:recovery.upgrade?{phase:recovery.upgrade.phase,everActivated:recovery.upgrade.everActivated}:null,root:recovery.root?{step:recovery.root.step,mode:recovery.root.mode}:null,restore:recovery.restore?{phase:recovery.restore.phase,databaseComplete:recovery.restore.databaseComplete,completedAgents:recovery.restore.completedAgents}:null},
+  recovery:invalid?{invalid:true}:{restore:recovery.restore?{phase:recovery.restore.phase,databaseComplete:recovery.restore.databaseComplete,completedAgents:recovery.restore.completedAgents}:null,...(recovery.linuxUpgrade?{linuxUpgrade:recovery.linuxUpgrade}:{})},
   operations:operations?{agents:operations.agents.length,unregisteredAgents:operations.agents.filter(a=>!a.registered).length,pausedAgents:operations.agents.filter(a=>a.paused).length,activeRuns:operations.agents.filter(a=>a.activeRun).length,
    uncertainActions:operations.uncertainActions.atLeast,uncertainOutputs:operations.uncertainOutputs.atLeast,heldDrafts:operations.heldDrafts.atLeast,dueReminders:operations.dueReminders.atLeast,
    countsTruncated:[operations.uncertainActions,operations.uncertainOutputs,operations.heldDrafts,operations.dueReminders].some(p=>p.truncated)}:null};
