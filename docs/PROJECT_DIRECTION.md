@@ -1,10 +1,10 @@
-> 2026-09-21首版标准更新：交付可部署到低配置Linux VPS、Agent之间沙盒隔离、可通过Slack操作的应用。部署产物与Linux隔离验证进入首版；预配置成员可接受。详见IMPLEMENTATION_PLAN最上方交付/停止标准，此项覆盖此前“VPS后置”的范围表述。
+> 首版标准：可部署到低配置 Linux VPS、Agent 之间有沙盒隔离、可通过 Slack 操作。部署产物与 Linux 原生隔离验证属于首版；预配置成员可接受。开发流程与停止条件见 [AGENTS.md](../AGENTS.md)。
 
-> 2026-09-21实验版新阶段：平台解耦、Raft差异及软件工程验收以[ARCHITECTURE](ARCHITECTURE.md)、[EXPERIMENT_GAPS](EXPERIMENT_GAPS.md)和实施计划E0–E6为准。下方R1–R8完成仅指历史范围。
+> 平台解耦、Raft 差异及软件工程约束见 [ARCHITECTURE](ARCHITECTURE.md) 和 [EXPERIMENT_GAPS](EXPERIMENT_GAPS.md)；旧阶段编号仅供追溯历史证据。
 
 # Mate 项目重新定位
 
-2026-09-20。当前产品方向，覆盖旧交接稿/技术设计中与此冲突的假设。这是产品约束；R1–R8已实现并独立审核，最新验收见[ACCEPTANCE](ACCEPTANCE.md)。 当前代码说明仍见 [HOW_IT_WORKS](HOW_IT_WORKS.md)，实施状态见 [IMPLEMENTATION_PLAN](IMPLEMENTATION_PLAN.md)。
+2026-09-20。当前产品方向，覆盖旧交接稿/技术设计中与此冲突的假设。这是产品约束；已完成范围的证据见[验收记录](ACCEPTANCE.md)。当前代码说明见 [HOW_IT_WORKS](HOW_IT_WORKS.md)；当前工作由 [Matt skills](../.agents/skills/ask-matt/SKILL.md) 管理。
 
 ## 产品定义
 

@@ -1,6 +1,6 @@
 # Debian 13 / systemd 运维手册
 
-适用范围：x86_64 Debian 13、系统级 Docker、Node 24、pnpm 10.33.0。首次安装复用 [DEPLOYMENT.md](DEPLOYMENT.md) 的 installer；升级使用 V2d controller。改变 Agent 集合、workspace/mount/backing、service unit 或 Docker 安全拓扑不属于原地升级支持范围。以下是操作说明，本地测试不会执行外部安装、启动 Slack 或访问 VPS。
+适用范围：x86_64 Debian 13、系统级 Docker、Node 24、pnpm 10.33.0。首次安装复用 [DEPLOYMENT.md](DEPLOYMENT.md) 的 installer；升级使用独立 recovery controller。改变 Agent 集合、workspace/mount/backing、service unit 或 Docker 安全拓扑不属于原地升级支持范围。以下是操作说明，本地测试不会执行外部安装、启动 Slack 或访问 VPS。
 
 ## 正常构建与安装
 

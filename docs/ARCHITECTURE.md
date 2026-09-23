@@ -1,4 +1,6 @@
-# Mate 实验版架构设计
+# Mate 实验版架构设计（历史决策与演进记录）
+
+> 本文记录当时的设计讨论及后续修订，不是当前待办或最终实现说明。产品约束见 [PROJECT_DIRECTION](PROJECT_DIRECTION.md)，当前代码见 [HOW_IT_WORKS](HOW_IT_WORKS.md)，待决问题按仓库内的 Matt skills 进入 issue tracker。
 
 状态：E0 独立红队讨论及复审 PASS，2026-09-21。本文为目标设计，不声明代码已经符合。取代旧设计对 Slack 为核心实体、静态团队、固定协作流程的假设。保留 pnpm、Pi Core + pi-ai、SQLite、单 daemon、每 Agent 单主 run。
 

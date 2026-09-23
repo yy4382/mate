@@ -1,6 +1,6 @@
 # E5 工作能力架构设计 — PASS
 
-日期：2026-09-21。独立只读红队：`/root/review_e5_architecture`。范围：`docs/ARCHITECTURE.md` E5设计、`docs/IMPLEMENTATION_PLAN.md` E5a/E5b及实际Environment/ToolRouter/Broker/附件/成果/研究/配置代码。此结论仅允许进入E5a，不代表代码gate通过。
+日期：2026-09-21。独立只读红队：`/root/review_e5_architecture`。范围：`docs/ARCHITECTURE.md` E5设计、现归档于`docs/archive/IMPLEMENTATION_PLAN-2026-09-21.md`的E5a/E5b计划及实际Environment/ToolRouter/Broker/附件/成果/研究/配置代码。此结论仅允许进入E5a，不代表代码gate通过。
 
 初审不通过，四项P1代码前阻塞：pure-read `environment.info`会通过provision写grant；环境服务可能复制Broker授权判断；workspace label/重复root/旧配置迁移未闭合；adapter availability缺少actor/target范围且artifact可能冻结后才失败。另纠正了“下载失败一定无文件”对Broker unknown不成立。两项P2是`/workspace`与公开相对路径混淆，以及能力矩阵可能退化为关键词镜像。
 

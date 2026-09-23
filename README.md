@@ -4,7 +4,7 @@ Mate 是个人单 Slack workspace 中的持久 Agent 团队。每个 Agent 有�
 
 运行层使用 **Pi Agent Core + pi-ai**；使用 **pnpm**；没有 pi-coding-agent、Jev或逐命令审批。当前能力、函数调用链和与Raft的差别见[HOW_IT_WORKS](docs/HOW_IT_WORKS.md)，设计依据见[项目定位](docs/PROJECT_DIRECTION.md)与[消息门控调研](docs/MESSAGE_GATING_RESEARCH.md)。
 
-开发按[模块计划](docs/IMPLEMENTATION_PLAN.md)逐个实施、独立红队审核；记录在[reviews](docs/reviews/)，当前验证见[ACCEPTANCE](docs/ACCEPTANCE.md)，能力与证据关系见[CAPABILITY_MATRIX](docs/CAPABILITY_MATRIX.md)。只评harness，不评模型智能。
+开发工作通过仓库内的 [Matt skills](.agents/skills/ask-matt/SKILL.md) 和 [GitHub issue tracker](docs/agents/issue-tracker.md) 管理；[旧阶段计划](docs/archive/IMPLEMENTATION_PLAN-2026-09-21.md)与[历史审核记录](docs/reviews/)只作证据参考。[验收记录](docs/ACCEPTANCE.md)和[能力矩阵](docs/CAPABILITY_MATRIX.md)区分已验证能力与待验项目。只评harness，不评模型智能。
 
 Debian 13固定拓扑首次部署使用版本库内的plan/preflight/install/disable入口、systemd units和受限`matectl`；完整流程见[DEPLOYMENT](docs/DEPLOYMENT.md)。安装不会因缺少secret自动启动主服务。
 
@@ -113,4 +113,4 @@ MATE_DOCKER_IMAGE=sha256:EXISTING_64_HEX_IMAGE_ID \
 pnpm test tests/execution/sandbox.test.ts
 ```
 
-普通集含真实Pi loop、Node worker/IPC与合成Slack/provider；Linux生产验收用container profile。SRT后端另用`MATE_SRT_TEST=1`，旧`MATE_SANDBOX_TEST=1`仅兼容需要同时运行两个profile的环境。V1b在本机Docker Linux VM中以固定Node 24 amd64 image跑过真实隔离测试；原生Linux宿主与systemd属于部署gate，不能由这项结果代替。真实Slack/provider待验的是scopes、事件、跨频道/DM接线、unknown对账、usage与错误协议，不要求证明模型会作出预设协作决策。详细故障与多选择证据见[验收表](docs/ACCEPTANCE.md)。
+普通集含真实Pi loop、Node worker/IPC与合成Slack/provider；Linux生产验收用container profile。SRT后端另用`MATE_SRT_TEST=1`，旧`MATE_SANDBOX_TEST=1`仅兼容需要同时运行两个profile的环境。历史上在本机Docker Linux VM中以固定Node 24 amd64 image跑过真实隔离测试；原生Linux宿主与systemd属于部署验收，不能由这项结果代替。真实Slack/provider待验的是scopes、事件、跨频道/DM接线、unknown对账、usage与错误协议，不要求证明模型会作出预设协作决策。详细故障与多选择证据见[验收表](docs/ACCEPTANCE.md)。

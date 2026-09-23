@@ -1,3 +1,5 @@
+> 历史快照：此文件保留旧阶段的设计与审核出处，不是当前任务清单。当前工作使用仓库的 Matt skills 和 GitHub issue tracker。
+
 # 首个可用版本的交付标准（用户更新，2026-09-21）
 
 目标：可部署到低配置Linux VPS、Agent之间沙盒隔离、通过Slack操作的可用应用。不是只交本机实验框架。默认沿用少量预配置Agent、Pi Core、SQLite单daemon、现有Socket Mode；不将动态Slack App provisioning、网页或改进Agent列为首版前置。

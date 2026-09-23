@@ -1,6 +1,8 @@
 # 实验版差异与能力分期
 
-2026-09-21。基线是已实现R1–R8，不等同完整Raft复刻。来源：本地只读raft-prompt-sep14及channel/session/memory证据；官方 https://docs.raft.build/features/agents/workspace/ 、 https://docs.raft.build/features/agents/reminders/ 、 https://docs.raft.build/features/messaging/channels/ 、 https://docs.raft.build/features/collaboration/tasks/ 、 https://docs.raft.build/features/messaging/activity/ 、 https://docs.raft.build/search-your-raft/ 。不复制私有memory或身份进测试。
+> 历史比较快照，不是当前任务清单。未完成的设计与实现进入 Matt skills 管理的 issue tracker。
+
+2026-09-21。基线是当时已实现的范围，不等同完整Raft复刻。来源：本地只读raft-prompt-sep14及channel/session/memory证据；官方 https://docs.raft.build/features/agents/workspace/ 、 https://docs.raft.build/features/agents/reminders/ 、 https://docs.raft.build/features/messaging/channels/ 、 https://docs.raft.build/features/collaboration/tasks/ 、 https://docs.raft.build/features/messaging/activity/ 、 https://docs.raft.build/search-your-raft/ 。不复制私有memory或身份进测试。
 
 | 大类/小点 | 当前事实 | 实验版现在 | 日常版/未来 |
 |---|---|---|---|

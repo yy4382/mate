@@ -1,8 +1,8 @@
-> 2026-09-21：E1–E4已完成平台无关会话/投影/动态配置、参与/历史、协作恢复、owner activity和工具模块；E5补齐当前work真实能力发现、输入到成果闭环及prompt/证据矩阵。当前阶段与债务见IMPLEMENTATION_PLAN和ARCHITECTURE。
+> 本文解释当前代码路径，不管理待办。历史阶段与债务记录见[归档计划](archive/IMPLEMENTATION_PLAN-2026-09-21.md)；架构见[ARCHITECTURE](ARCHITECTURE.md)。
 
 # Mate 当前调用链、能力与边界
 
-2026-09-20，R1–R8 已逐模块通过独立红队，最终验收见 [ACCEPTANCE](ACCEPTANCE.md)。本文件描述当前代码；[PROJECT_DIRECTION](PROJECT_DIRECTION.md)解释为何重构，[实施计划](IMPLEMENTATION_PLAN.md)与[审核记录](reviews/)保留各 gate 的证据。
+2026-09-20，旧阶段已逐模块通过独立红队，历史验收见 [ACCEPTANCE](ACCEPTANCE.md)。本文件描述代码；[PROJECT_DIRECTION](PROJECT_DIRECTION.md)解释产品方向，[归档计划](archive/IMPLEMENTATION_PLAN-2026-09-21.md)与[审核记录](reviews/)保留各 gate 的证据。
 
 验收只问：假设模型足够智能，工具、环境、prompt 和状态机是否允许它实现目标，并在并发、重启、失败时保持契约。脚本化模型用于选择分支，不是模型性能评测。
 
@@ -132,7 +132,7 @@ sessions.checkpoint保存自述检查点；sessions.reset在run结束或崩溃�
 
 开发机或没有workspace manifest的unmanaged环境，配置/工具prompt版本变化仍可走[离线迁移](../src/daemon/migrate.ts)：锁 → 验证OLD_CONFIG → 旧容器恢复/fence → 数据库+私有文件备份 → 事务更换baseline并保留history、更新grants和配置快照。角色/model/channels/runtime可改、可新增Agent；已有Slack身份/workspace不可重绑定或删除。撤销/过期grant不复活，removed roots撤权，预算不重置。旧库没有身份快照时，显式legacy选项是owner对旧配置的声明，不是假造机器证据。
 
-带workspace manifest的managed部署暂不允许直接调用这条旧迁移路径，因为它会在root封存checkpoint前修改数据库。V2部署升级必须走停服务、创建并root封存checkpoint、验证candidate、再迁移的部署事务；首版还要求Agent和mount topology不变。V2d完成前，CLI会明确拒绝managed migration，而不会把unmanaged兼容路径冒充生产升级。
+带workspace manifest的managed部署不允许直接调用这条旧迁移路径，因为它会在root封存checkpoint前修改数据库。受管升级走停服务、创建并root封存checkpoint、验证candidate、再迁移的部署事务；当前还要求Agent和mount topology不变。CLI拒绝把unmanaged兼容迁移路径用于受管部署。
 
 ## Checkpoint v2与受管恢复
 

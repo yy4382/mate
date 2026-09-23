@@ -1,8 +1,8 @@
 # Debian 13 首次部署
 
-完整安装前提、Slack manifest、只读运维和 V2d 升级步骤见 [运维手册](OPERATIONS_RUNBOOK.md)。
+完整安装前提、Slack manifest、只读运维和升级步骤见 [运维手册](OPERATIONS_RUNBOOK.md)。
 
-V2c只支持Debian 13 x86_64、Node 24、pnpm 10.33、systemd和系统Docker的固定拓扑首次安装及同一身份幂等重跑。升级release、改变Agent或mount topology、candidate/activate/rollback属于V2d；installer遇到已有非V2c安装或不同identity会停止，不接管或覆盖。
+首次安装只支持 Debian 13 x86_64、Node 24、pnpm 10.33、systemd 和系统 Docker 的固定拓扑，以及同一身份的幂等重跑。升级 release 使用独立的 candidate/activate/rollback 流程；改变 Agent 或 mount topology 不属于当前原地升级能力。installer 遇到非受管安装或不同 identity 会停止，不接管或覆盖。
 
 ## 准备候选
 
@@ -52,7 +52,7 @@ sudo systemctl enable --now mate.service
 
 `doctor`只读配置、release、mount、image/socket、secret引用和service状态；不取scope、不建库、不recover、不写nonce，也不连接Slack/provider。`offline-probe`要求主服务停止，取得同一daemon lock后recover本deployment scope，并对所有private/external root做双向container probe。
 
-维护入口还支持无参数的 `status`、`logs` 及 V2d upgrade 命令；具体语义见运维手册。checkpoint只能是`/var/backups/mate`下最长64字符的简单名称；wrapper不接受任意config、绝对路径、命令、property或environment参数。backup由mate身份创建后再由root封存，restore只读封存checkpoint。
+维护入口还支持无参数的 `status`、`logs` 及升级命令；具体语义见运维手册。checkpoint只能是`/var/backups/mate`下最长64字符的简单名称；wrapper不接受任意config、绝对路径、命令、property或environment参数。backup由mate身份创建后再由root封存，restore只读封存checkpoint。
 
 非破坏性停用：
 
@@ -60,4 +60,4 @@ sudo systemctl enable --now mate.service
 sudo pnpm run deploy disable /etc/mate/mate.json
 ```
 
-它先停止主服务并执行scope recovery/probe，再按逆序正常停止mount units；EBUSY会失败，不使用lazy unmount。state、backing、checkpoint、unit和release全部保留。V2c没有删除数据或backing的命令。
+它先停止主服务并执行scope recovery/probe，再按逆序正常停止mount units；EBUSY会失败，不使用lazy unmount。state、backing、checkpoint、unit和release全部保留。部署工具没有删除数据或backing的命令。
