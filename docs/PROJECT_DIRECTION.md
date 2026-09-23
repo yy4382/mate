@@ -1,10 +1,6 @@
-> 2026-09-23首版标准更新：交付可部署到低配置Linux VPS、以每Agent独立非特权Linux用户隔离私人资料和普通执行、可通过Slack操作的应用。默认执行不依赖Docker/gVisor；系统级命令须逐条获得用户界面明确同意。部署产物与有针对性的Linux权限/进程验证进入首版；预配置成员可接受。详见[ADR](adr/0001-linux-users-for-agent-execution.md)及IMPLEMENTATION_PLAN最上方交付/停止标准；此项覆盖此前“VPS后置”和“必须容器沙盒隔离”的表述。
-
-> 2026-09-21实验版新阶段：平台解耦、Raft差异及软件工程验收以[ARCHITECTURE](ARCHITECTURE.md)、[EXPERIMENT_GAPS](EXPERIMENT_GAPS.md)和实施计划E0–E6为准。下方R1–R8完成仅指历史范围。
-
 # Mate 项目重新定位
 
-2026-09-20。当前产品方向，覆盖旧交接稿/技术设计中与此冲突的假设。这是产品约束；R1–R8已实现并独立审核，最新验收见[ACCEPTANCE](ACCEPTANCE.md)。 当前代码说明仍见 [HOW_IT_WORKS](HOW_IT_WORKS.md)，实施状态见 [IMPLEMENTATION_PLAN](IMPLEMENTATION_PLAN.md)。
+首版交付目标：可部署到低配置 Debian 13 VPS、每位 Agent 使用独立非特权 Linux 用户、通过 Slack 操作。私人记忆和笔记、Mate 控制数据由常规 Unix 权限保护；普通文件、网络、工具链和长任务保持熟悉的 Linux 使用方式。系统级命令必须先在用户界面逐条取得明确同意。选择理由见 [ADR](adr/0001-linux-users-for-agent-execution.md)。
 
 ## 产品定义
 
@@ -20,7 +16,7 @@ Harness 让这些选择可观察、可执行、可恢复。预算和授权约束
 | 任务所有权 | [createTask/claim](../src/collaboration/service.ts) 只认领独立task ID，同一消息可另建多个任务 | 原始消息是规范工作锚点；原子claim既有消息、unclaim/移交与状态更新；新任务先产生可见消息，再成为同一任务投影；数据库存元数据不构成第二套不相干工作 |
 | 跨工作行动 | [ToolRouter](../src/runtime/tools.ts) 连其他work的tasks.read也拒绝 | 读取按身份/可见性；Agent可切换或并列处理多个授权事项。任务归属、预算账户、调度run、授权分别建模 |
 | 注意力 | [inbox工具](../src/runtime/tools.ts)与[finish](../src/storage/store.ts) 将队列消费近似当成处理完成 | 接收、通知、呈现正文、处理/暂缓独立；忙碌时通知存在，模型在断点选择读取；结束run不清空未读或替模型决定已处理 |
-| 工作空间 | [ensureGrants](../src/daemon/app.ts) 私有root仅read/write，另禁止其exec grant | Agent在自己的授权workspace中组织任意资料、脚本、代码、记忆；提供查找、编辑、移动与实际执行能力。MEMORY.md是恢复入口，不是内容分类白名单 |
+| 工作空间 | Agent以稳定Linux身份使用私人目录及共享工作区 | Agent自行组织资料、脚本、代码、记忆；提供查找、编辑、移动与实际执行能力。MEMORY.md是恢复入口，不是内容分类白名单 |
 | 提醒 | [schedule](../src/collaboration/service.ts) 只有时间/target并绑旧work预算，任务完成自动取消 | 作者拥有、明确目的、可见锚点、可改期/取消、有触发记录；后续提醒可独立于已完成任务存活；按显式持续预算策略计费 |
 | 连续身份 | [register](../src/storage/store.ts) 配置变化拒绝启动且无迁移工具 | 逻辑Agent身份与可替换session分开；角色可由对话/memory演化；受控换session、工具配置更新、压缩后恢复入口均可用 |
 | prompt与真实工具 | [Supervisor.register](../src/runtime/supervisor.ts) 的概括规则+固定工具表 | 完整行为约定与可发现工具目录：复用消息任务、主动查历史、长任务检查点、进展与交接、对等沟通、读/不读及发/不发。工具能力按环境配置接入，不把“研究”定义成只读URL |
@@ -48,7 +44,7 @@ Harness 让这些选择可观察、可执行、可恢复。预算和授权约束
 | FreshnessGate | 基于已呈现版本检查send和任务变更；持久draft/held decision；显式结果 | 不审查观点质量、命令风险；不以全workspace变化锁住一个thread |
 | AgentRuntime | 单Agent主通道、自然断点通知、跨事项上下文、恢复/换session | 不将run永久绑定一个task/work；不让普通消息无条件中断执行 |
 | BudgetLedger | Agent持续账户+可选事项额度、预留/结算、暂停与补额 | 不把账户ID当ACL；不靠每次human消息创建新预算，也不允许模型自行无限增额 |
-| ToolModule registry | 内建领域工具的schema、说明、work/seat/effect/replay策略、授权、fence与handler；组合workspace、文件/终端/研究/附件adapter | 不允许模型动态安装module，不把一次性无网络容器等同于所有Agent唯一合法环境 |
+| ToolModule registry | 内建领域工具的schema、说明、work/seat/effect/replay策略、授权、fence与handler；组合workspace、文件/终端/研究/附件adapter | 工具目录不替代正常的Linux文件、命令和网络能力 |
 | ExecutionBoundary | 规范化副作用、身份/授权/停止、receipt、可替换backend | 普通命令不逐条审核；系统级宿主命令逐条等待用户界面批准，不借消息门控代替执行授权 |
 
 一个run可以处理多个授权事项；每个有成本动作绑定daemon验证的预算账户和operation identity，taskRef用于归属而非普遍权限。账户选择不能抹掉债务、重置循环额度或伪造owner授权。一个事项额度耗尽不应让整个Agent失去读取其他消息的能力；可有显式、有限的控制/通知预算，并单独记账。

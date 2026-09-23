@@ -2,9 +2,9 @@
 
 Mate 是个人单 Slack workspace 中的持久 Agent 团队。每个 Agent 有跨频道/DM连续上下文、私有工作空间、持续预算以及可自主使用的沟通、消息任务、提醒和执行工具。模型决定关注什么、如何合作、是否发言和怎样组织知识。
 
-运行层使用 **Pi Agent Core + pi-ai**；使用 **pnpm**；没有 pi-coding-agent 或 Jev。普通 Agent 命令不逐条审批，系统级命令需要用户逐条同意。当前能力、函数调用链和与Raft的差别见[HOW_IT_WORKS](docs/HOW_IT_WORKS.md)，设计依据见[项目定位](docs/PROJECT_DIRECTION.md)与[消息门控调研](docs/MESSAGE_GATING_RESEARCH.md)。
+运行层使用 **Pi Agent Core + pi-ai**；使用 **pnpm**；没有 pi-coding-agent 或 Jev。普通 Agent 命令不逐条审批，系统级命令需要用户逐条同意。[当前实现状态](docs/HOW_IT_WORKS.md)、[项目方向](docs/PROJECT_DIRECTION.md)与[消息门控调研](docs/MESSAGE_GATING_RESEARCH.md)分别说明现状、目标和相关设计依据。
 
-开发按[模块计划](docs/IMPLEMENTATION_PLAN.md)逐个实施、独立红队审核；记录在[reviews](docs/reviews/)，当前验证见[ACCEPTANCE](docs/ACCEPTANCE.md)，能力与证据关系见[CAPABILITY_MATRIX](docs/CAPABILITY_MATRIX.md)。只评harness，不评模型智能。
+开发按 GitHub Issues 中的当前规格与票据推进；[首版目标](docs/IMPLEMENTATION_PLAN.md)和[验收边界](docs/ACCEPTANCE.md)说明交付范围。只评 harness，不评模型智能。
 
 Debian 13 首版部署以每 Agent 独立 Linux 用户运行普通命令，Mate 的状态和凭证保持 root-only；系统级命令逐条经 Slack owner 确认。安装使用 plan/preflight/install、systemd slices 和 `matectl`；完整流程见[部署说明](docs/DEPLOYMENT.md)。安装不会因缺少 secret 自动启动主服务。
 
@@ -71,4 +71,4 @@ Agent账户是持续累计额度；新消息、work、reset、配置迁移不补
 
 ## 验证
 
-`pnpm check`、`pnpm typecheck` 和针对性集成测试覆盖本地逻辑与合成 Slack/provider 流程。Debian 13 上还须做两 Agent UID/文件权限/后台任务的小型原生 smoke；真实 Slack/provider 接线、usage 和错误协议另行验收。本地通过不能冒充 VPS 或外部服务已验证。详细证据见[验收表](docs/ACCEPTANCE.md)。
+`pnpm check`、`pnpm typecheck` 和针对性集成测试覆盖本地逻辑与合成 Slack/provider 流程。Debian 13 上还须做两 Agent UID/文件权限/后台任务的小型原生 smoke；真实 Slack/provider 接线、usage 和错误协议另行验收。本地通过不能冒充 VPS 或外部服务已验证。详见[验收边界](docs/ACCEPTANCE.md)。

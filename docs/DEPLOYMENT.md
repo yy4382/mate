@@ -1,6 +1,6 @@
 # Debian 13 部署
 
-首版部署使用普通 Linux 用户隔离 Agent，不需要 Docker 镜像或 workspace mount。这里是待人执行的步骤；本地合成测试不等于已接通 Slack/provider，也不等于已在目标 VPS 安装。运维命令见 [运维手册](OPERATIONS_RUNBOOK.md)。
+首版部署使用普通 Linux 用户隔离 Agent。这里是待人执行的步骤；本地合成测试不等于已接通 Slack/provider，也不等于已在目标 VPS 安装。运维命令见 [运维手册](OPERATIONS_RUNBOOK.md)。
 
 ## 准备系统和 Agent 身份
 
