@@ -106,11 +106,14 @@ it('revisits an exhausted unknown projection when Slack evidence appears later',
  const client=f.transport.clients.get('research')!,row=f.core.get(sent.projection.id),wire=JSON.parse(row.wire!),base=Math.floor(f.core.binding(f.bindingId).createdAt/1000);let visible=false;
  const evidence={ts:`${base+10}.000001`,user:'UONE',bot_id:'BONE',text:wire.text,metadata:{event_type:'mate_projection',event_payload:{id:row.id,request_hash:row.request_hash}}};
  client.conversations.history=vi.fn(async({oldest}:any)=>({ok:true,messages:[{ts:`${base+20}.000001`,user:'UOWNER',text:'unrelated'},...(visible&&Number(oldest)<=base+10?[evidence]:[])]})) as any;
- await f.service.reconcile();expect(f.core.get(row.id).state).toBe('unknown');visible=true;await f.service.reconcile();expect(f.core.get(row.id).state).toBe('sent');
+ const now=Date.now();await f.service.reconcile(now);expect(f.core.get(row.id).state).toBe('unknown');visible=true;
+ await f.service.reconcile(now+60_000);expect(f.core.get(row.id).state).toBe('unknown');
+ await f.service.reconcile(now+15*60_000);expect(f.core.get(row.id).state).toBe('sent');
 });
 it('reconciles an unknown projection beyond five Slack pages',async()=>{
  const f=await setup(),sent=await f.send('deep-projection');f.post.mockRejectedValueOnce(new Error('lost receipt'));await f.core.send(sent.projection.id);
  const client=f.transport.clients.get('research')!,row=f.core.get(sent.projection.id),wire=JSON.parse(row.wire!);
  const history=vi.fn(async({cursor}:any)=>{const page=cursor?Number(cursor):0;return{ok:true,messages:page===6?[{ts:'30.000001',user:'UONE',bot_id:'BONE',text:wire.text,metadata:{event_type:'mate_projection',event_payload:{id:row.id,request_hash:row.request_hash}}}]:[],response_metadata:{next_cursor:page<6?String(page+1):''}};});
- client.conversations.history=history as any;await f.service.reconcile();expect(f.core.get(row.id).state).toBe('sent');expect(history).toHaveBeenCalledTimes(7);
+ client.conversations.history=history as any;for(let round=0;round<4&&f.core.get(row.id).state==='unknown';round++)await f.service.reconcile();
+ expect(f.core.get(row.id).state).toBe('sent');expect(history).toHaveBeenCalledTimes(7);
 });

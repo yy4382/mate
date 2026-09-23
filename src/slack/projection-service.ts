@@ -6,7 +6,7 @@ import type {ProjectionImports} from '../conversations/projection-imports.js';
 import type {CanonicalSlackTransport} from './transport.js';
 import type {SlackProjectionInput} from './projections.js';
 import {slackPrincipal} from './legacy-codec.js';
-import {recoverSlackHistory,scanSlackPages} from './history-recovery.js';
+import {recoverSlackHistory,scanSlackPages,slackScanDue,scheduleSlackScan} from './history-recovery.js';
 
 const pageSchema=z.object({before:z.number().int().positive().optional(),problemsOnly:z.boolean().optional()}).strict();
 /** Owner-facing Slack wiring and bounded protocol recovery; no canonical mutation rules here. */
@@ -51,17 +51,21 @@ export class SlackProjectionService {
     }
     throw new Error('Unknown projection command');
   }
-  async reconcile():Promise<void>{
+  async reconcile(now=Date.now()):Promise<void>{
     const s=this.core.messages.store;
-    const query=()=>s.db.prepare("SELECT rowid seq,id,binding_id,wire FROM projection_outbox WHERE state='unknown' AND rowid>? ORDER BY rowid LIMIT 20").all(this.reconcileAfter) as {seq:number;id:string;binding_id:string;wire:string}[];
+    const query=()=>s.db.prepare("SELECT rowid seq,id,binding_id,wire FROM projection_outbox WHERE state='unknown' AND rowid>? ORDER BY rowid LIMIT 4").all(this.reconcileAfter) as {seq:number;id:string;binding_id:string;wire:string}[];
     let rows=query();if(!rows.length&&this.reconcileAfter){this.reconcileAfter=0;rows=query();}
     this.reconcileAfter=rows.at(-1)?.seq??0;
     for(const row of rows){
+      const retryKey=`slack_projection_retry_v1:${row.id}`;
+      if(!slackScanDue(s,retryKey,now))continue;
       const b=this.core.binding(row.binding_id),wire=JSON.parse(row.wire),client=this.slack.clients.get(b.publisher);if(b.provider!=='slack'||b.workspace!==this.slack.mapper.config.teamId||!client)continue;
       try{
-        await scanSlackPages<any>({store:s,key:`slack_projection_reconcile_v1:${row.id}`,
+        const outcome=await scanSlackPages<any>({store:s,key:`slack_projection_reconcile_v1:${row.id}`,maxPages:2,
           fetch:async cursor=>{const args={channel:b.externalId,limit:100,include_all_metadata:true,oldest:String(b.createdAt/1000),inclusive:true,...(cursor?{cursor}:{})};const response=wire.thread?await client.conversations.replies({...args,ts:wire.thread}):await client.conversations.history(args);return{messages:response.messages??[],next:response.response_metadata?.next_cursor||undefined};},
           visit:messages=>{for(const message of messages){if(message.ts)this.input.handle({...message,type:'message',channel:b.externalId});if(this.core.get(row.id).state!=='unknown')return true;}return false;}});
+        if(outcome==='exhausted')scheduleSlackScan(s,retryKey,now+15*60_000);
+        else if(outcome==='found')s.db.prepare('DELETE FROM runtime_meta WHERE key=?').run(retryKey);
       }catch{s.audit('projection_reconciliation_unavailable',{projectionId:row.id,reason:'durable_page_retained'});}
     }
   }

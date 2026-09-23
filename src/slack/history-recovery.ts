@@ -2,9 +2,10 @@ import type {Store} from '../storage/store.js';
 
 interface RecoveryState{oldest?:string;cursor?:string;newest:string}
 export interface HistoryPage<T>{messages:readonly T[];next:string|undefined}
-export interface PageScanOptions<T=any>{store:Store;key:string;fetch(cursor:string|undefined):Promise<HistoryPage<T>>;visit(messages:readonly T[]):void|boolean|Promise<void|boolean>}
+export interface PageScanOptions<T=any>{store:Store;key:string;maxPages?:number;current?:()=>boolean;fetch(cursor:string|undefined):Promise<HistoryPage<T>>;visit(messages:readonly T[]):void|boolean|Promise<void|boolean>}
 export interface HistoryRecoveryOptions<T=any>{
  store:Store;agentId:string;cursorKey:string;initialOldest:string|undefined;
+ current?:()=>boolean;
  fetch(state:{oldest:string|undefined;cursor:string|undefined}):Promise<HistoryPage<T>>;
  timestamp(message:T):string|undefined;ingest(message:T):void;
 }
@@ -22,22 +23,39 @@ function persist(store:Store,key:string,state:RecoveryState):void{store.db.prepa
 function invalidCursor(error:unknown):boolean{const value=error as {data?:{error?:string}};return value?.data?.error==='invalid_cursor';}
 
 /** Generic durable traversal used where a complete Slack scan is required. */
-export async function scanSlackPages<T>(options:PageScanOptions<T>):Promise<'found'|'exhausted'> {
+export async function scanSlackPages<T>(options:PageScanOptions<T>):Promise<'found'|'exhausted'|'paused'> {
+ if(options.maxPages!==undefined&&(!Number.isSafeInteger(options.maxPages)||options.maxPages<1))throw new Error('Invalid Slack scan page budget');
  const row=options.store.db.prepare('SELECT value FROM runtime_meta WHERE key=?').get(options.key) as {value:string}|undefined;
  let cursor:string|undefined;if(row){const value=JSON.parse(row.value) as {cursor?:unknown};if(value.cursor!==undefined&&typeof value.cursor!=='string')throw new Error('Invalid durable Slack page scan state');cursor=value.cursor;}
- const seen=new Set<string>();let invalidResets=0;
+ const seen=new Set<string>();let invalidResets=0,pages=0;
  while(true){
   try{
-   const page=await options.fetch(cursor),found=await options.visit(page.messages),next=page.next||undefined;
+   const page=await options.fetch(cursor);
+   if(options.current&&!options.current())throw new Error('Slack scan invalidated');
+   const found=await options.visit(page.messages),next=page.next||undefined;
+   if(options.current&&!options.current())throw new Error('Slack scan invalidated');
    if(found){options.store.db.prepare('DELETE FROM runtime_meta WHERE key=?').run(options.key);return'found';}
    if(next&&(next===cursor||seen.has(next))){options.store.db.prepare('DELETE FROM runtime_meta WHERE key=?').run(options.key);throw new Error('Slack page cursor repeated');}
    if(!next){options.store.db.prepare('DELETE FROM runtime_meta WHERE key=?').run(options.key);return'exhausted';}
    seen.add(next);cursor=next;persist(options.store,options.key,{cursor,newest:'0.000000'});
+   if(++pages===(options.maxPages??Infinity))return'paused';
   }catch(error){
    if(invalidCursor(error)&&cursor&&invalidResets++===0){cursor=undefined;seen.clear();options.store.db.prepare('DELETE FROM runtime_meta WHERE key=?').run(options.key);continue;}
    throw error;
   }
  }
+}
+
+/** Exhausted unknown effects retry later; a partial scan retains its page cursor. */
+export function slackScanDue(store:Store,key:string,now:number):boolean{
+ const row=store.db.prepare('SELECT value FROM runtime_meta WHERE key=?').get(key) as {value:string}|undefined;
+ if(!row)return true;
+ const state=JSON.parse(row.value) as {nextAt?:unknown};
+ if(typeof state.nextAt!=='number'||!Number.isFinite(state.nextAt))throw new Error('Invalid Slack reconciliation schedule');
+ return now>=state.nextAt;
+}
+export function scheduleSlackScan(store:Store,key:string,nextAt:number):void{
+ store.db.prepare('INSERT INTO runtime_meta VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key,JSON.stringify({nextAt}));
 }
 
 /** Durable page cursor: a crash repeats at most one page, while ingest remains idempotent. */
@@ -46,6 +64,7 @@ export async function recoverSlackHistory<T>(options:HistoryRecoveryOptions<T>):
  try{
   while(true){
    const page=await options.fetch({oldest:state.oldest,cursor:state.cursor});
+   if(options.current&&!options.current())throw new Error('Slack history recovery invalidated');
    for(const message of page.messages){options.ingest(message);const timestamp=options.timestamp(message);if(timestamp&&integer(timestamp)>integer(state.newest))state={...state,newest:timestamp};}
    const next=page.next||undefined;
    if(next&&(next===state.cursor||seen.has(next)))throw new Error('Slack history cursor repeated');

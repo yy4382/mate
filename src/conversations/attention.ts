@@ -12,13 +12,23 @@ interface ViewPage {messages:NormalMessage[];publications:Publication[]}
 interface View {id:string;agent_id:string;session_id:string;epoch:number;target:string;revision:number;pages:string;complete:number}
 export class CanonicalAttention {
   constructor(readonly messages:Messages) {}
+  /** A transport reports a source gap without teaching the core its provider. */
+  recordExternalHistoryGap(actor:string,reason:string):void{
+    this.messages.agent(actor);
+    if(!/^[a-z][a-z0-9_]{0,100}$/.test(reason))throw new Error('Invalid history gap reason');
+    const s=this.messages.store;s.atomic(()=>{
+      s.db.prepare('UPDATE sessions SET context_epoch=context_epoch+1 WHERE agent_id=?').run(actor);
+      const channels=s.db.prepare("SELECT a.channel FROM channel_access a JOIN conversation_identities c ON c.id=a.channel WHERE a.agent_id=? AND a.active=1 AND c.authority='external'").all(actor) as {channel:string}[];
+      for(const {channel} of channels)s.db.prepare('INSERT INTO conversation_events(channel,thread,message_key,revision,kind,audience) VALUES(?,?,?,?,?,?)').run(channel,null,reason,String(Date.now()),'recovery_gap',actor);
+    });
+  }
   private epoch(session:string):number { return (this.messages.store.db.prepare('SELECT context_epoch FROM sessions WHERE id=?').get(session) as {context_epoch:number}).context_epoch; }
   revision(target:Target,actor?:string):number {
     targetSchema.parse(target);
-    if(!this.messages.visibilitySnapshots)return (this.messages.store.db.prepare('SELECT COALESCE(MAX(seq),0) revision FROM conversation_events WHERE channel=? AND (? IS NULL OR thread=?) AND (audience IS NULL OR audience=?)').get(target.conversationId,target.threadId??null,target.threadId??null,actor??null) as {revision:number}).revision;
+    if(!this.messages.visibilitySnapshots)return (this.messages.store.db.prepare("SELECT COALESCE(MAX(seq),0) revision FROM conversation_events WHERE channel=? AND (? IS NULL OR thread=? OR (kind='recovery_gap' AND thread IS NULL)) AND (audience IS NULL OR audience=?)").get(target.conversationId,target.threadId??null,target.threadId??null,actor??null) as {revision:number}).revision;
     return (this.messages.store.db.prepare(`SELECT COALESCE(MAX(e.seq),0) revision FROM conversation_events e
       JOIN conversation_identities c ON c.id=e.channel LEFT JOIN message_visibility v ON v.key=e.message_key AND v.agent_id=?
-      WHERE e.channel=? AND (? IS NULL OR e.thread=?) AND (e.audience IS NULL OR e.audience=?)
+      WHERE e.channel=? AND (? IS NULL OR e.thread=? OR (e.kind='recovery_gap' AND e.thread IS NULL)) AND (e.audience IS NULL OR e.audience=?)
       AND (? IS NULL OR c.authority='internal' OR e.kind NOT IN ('message','edit','delete','files_enriched','location_enriched','visibility') OR v.revision=e.revision)`)
       .get(actor??null,target.conversationId,target.threadId??null,target.threadId??null,actor??null,actor??null) as {revision:number}).revision;
   }
@@ -109,8 +119,9 @@ export class CanonicalAttention {
   private response(view:View,page:number):unknown {
     const pages=JSON.parse(view.pages) as (NormalMessage[]|ViewPage)[];if(!Number.isSafeInteger(page)||page<0||page>=pages.length)throw new Error('Invalid view page');
     const current=pages[page]!;const contents=Array.isArray(current)?{messages:current}:{messages:current.messages,publications:current.publications};
-    const target=JSON.parse(view.target) as Target,gap=!!this.messages.store.db.prepare("SELECT 1 FROM conversation_events WHERE kind='recovery_gap' AND audience=? AND channel=? AND seq<=? AND (? IS NULL OR thread=?) LIMIT 1").get(view.agent_id,target.conversationId,view.revision,target.threadId??null,target.threadId??null);
-    return {viewToken:view.id,page,target,...contents,coverage:{revision:view.revision,pageCount:pages.length,complete:!!view.complete,scope:'locally observed and visible messages',gaps:gap?['slack_offline_edits_and_deletes_not_reconstructible']:[]},nextCursor:page+1<pages.length?`${view.id}:${page+1}`:null};
+    const target=JSON.parse(view.target) as Target;
+    const gaps=(this.messages.store.db.prepare("SELECT DISTINCT message_key reason FROM conversation_events WHERE kind='recovery_gap' AND audience=? AND channel=? AND seq<=? AND (? IS NULL OR thread IS NULL OR thread=?)").all(view.agent_id,target.conversationId,view.revision,target.threadId??null,target.threadId??null) as {reason:string}[]).map(row=>row.reason);
+    return {viewToken:view.id,page,target,...contents,coverage:{revision:view.revision,pageCount:pages.length,complete:!!view.complete,scope:'locally observed and visible messages',gaps},nextCursor:page+1<pages.length?`${view.id}:${page+1}`:null};
   }
   /** Called atomically with journal commit, never when the tool merely returns over IPC. */
   presented(run:RunToken,message:AgentMessage):void {

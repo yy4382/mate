@@ -182,10 +182,12 @@ it('discovers and catches up a first DM that arrived while Mate was offline',asy
   writer.conversations.info=vi.fn(async()=>({ok:true,channel:{is_member:false}})) as any;
   const slack=new SlackService(c,transport,ingress,new Controls(c,supervisor,broker));
   expect(c.messages.references.findConversation({provider:'slack',workspace:'TTEST',externalId:'DOFFLINE'})).toBeUndefined();
-  slack.bootstrapRecovery(1000);await slack.discoverMembership();await slack.membership();await slack.catchUp();slack.replay();
+  slack.bootstrapRecovery(1000);slack.bootstrapRecovery(1100);await slack.discoverMembership();await slack.membership();await slack.catchUp(true);slack.replay();
   const conversationId=c.messages.references.findConversation({provider:'slack',workspace:'TTEST',externalId:'DOFFLINE'})!;
   expect(c.messages.access('research',conversationId)).toBe(true);
   expect(c.messages.read('research',{conversationId}).map(message=>message.text)).toContain('first offline DM');
+  store.enqueue('research','offline-dm-view',{});const run=store.beginRun('research')!;store.input(run,{});
+  expect((c.attention.read(run,{conversationId}) as {coverage:{gaps:string[]}}).coverage.gaps).toContain('slack_offline_edits_and_deletes_not_reconstructible');
   expect(history.mock.calls.some(call=>call[0].channel==='DOFFLINE'&&call[0].oldest==='1.000000')).toBe(true);
 });
 it('discovers a first offline mention in an old thread that was never watched',async()=>{
@@ -193,11 +195,13 @@ it('discovers a first offline mention in an old thread that was never watched',a
   const transport=new WebSlackTransport(store,ingress.normalizer instanceof CanonicalSlackNormalizer?ingress.normalizer.mapper:(()=>{throw new Error();})(),{research:'synthetic',writer:'synthetic'}),client=transport.clients.get('research')!;
   const history=vi.fn(async({oldest}:any)=>oldest?{ok:true,messages:[]}:{ok:true,messages:[{ts:'0.500000',user:'UOWNER',text:'old root',reply_count:1,latest_reply:'2.000001'}]});client.conversations.history=history as any;
   const replies=vi.fn(async()=>({ok:true,messages:[{ts:'0.500000',user:'UOWNER',text:'old root'},{ts:'2.000001',thread_ts:'0.500000',user:'UOWNER',text:'<@UONE> offline question'}]}));client.conversations.replies=replies as any;
-  const slack=new SlackService(c,transport,ingress,new Controls(c,{} as any,broker));slack.bootstrapRecovery(1000);expect(await slack.catchUp()).toBe(true);slack.replay();
+  const slack=new SlackService(c,transport,ingress,new Controls(c,{} as any,broker));slack.bootstrapRecovery(1000);slack.bootstrapRecovery(1100);expect(await slack.catchUp(true)).toBe(true);slack.replay();
   const root=c.messages.references.findMessage({provider:'slack',workspace:'TTEST',externalId:'CTEST',messageId:'0.500000'});
   expect(root).toBeDefined();
   const target={conversationId:fixtureTarget('CTEST').conversationId,threadId:root!};
   expect(c.messages.read('research',target).map(message=>message.text)).toEqual(['old root','<@UONE> offline question']);expect(replies).toHaveBeenCalledOnce();
+  store.enqueue('research','old-thread-view',{});const run=store.beginRun('research')!;store.input(run,{});
+  expect((c.attention.read(run,target) as {coverage:{gaps:string[]}}).coverage.gaps).toContain('slack_offline_edits_and_deletes_not_reconstructible');
   expect(store.db.prepare("SELECT count(*) n FROM ingress WHERE event_id LIKE 'thread-discovery:%'").get()).toEqual({n:1});expect(store.db.prepare("SELECT count(*) n FROM deliveries WHERE agent_id='research' AND status='pending'").get()).toEqual({n:1});
 });
 it('fences pre-restart Slack views and drafts because history cannot replay deleted messages',async()=>{
@@ -223,9 +227,51 @@ it('drains a Slack history backlog beyond ten pages before advancing its cursor'
   const {store,c,ingress,broker}=setup();for(const agent of c.config.agents)store.register(agent.id,'v1',[]);c.messages.membership('research',fixtureTarget('CTEST').conversationId,true);
   const transport=new WebSlackTransport(store,ingress.normalizer instanceof CanonicalSlackNormalizer?ingress.normalizer.mapper:(()=>{throw new Error();})(),{research:'synthetic',writer:'synthetic'}),client=transport.clients.get('research')!;
   let interrupted=false;const history=vi.fn(async({cursor}:any)=>{const page=cursor?Number(cursor):0;if(page===6&&!interrupted){interrupted=true;throw new Error('temporary Slack failure');}const messages=Array.from({length:100},(_,offset)=>{const n=page*100+offset+1;return{ts:`${n}.000001`,user:'UOWNER',text:`offline ${n}`};});return{ok:true,messages,response_metadata:{next_cursor:page<10?String(page+1):''}};});client.conversations.history=history as any;
-  const slack=new SlackService(c,transport,ingress,new Controls(c,{} as any,broker));slack.bootstrapRecovery(0);expect(await slack.catchUp()).toBe(false);const callsBefore=history.mock.calls.length;expect(await slack.catchUp()).toBe(true);
-  expect(history.mock.calls[callsBefore]![0]).toMatchObject({cursor:'6'});expect(store.db.prepare("SELECT count(*) n FROM ingress WHERE event_id LIKE 'history:CTEST:%'").get()).toEqual({n:1100});
+  const slack=new SlackService(c,transport,ingress,new Controls(c,{} as any,broker));slack.bootstrapRecovery(0);expect(await slack.catchUp(true)).toBe(false);const callsBefore=history.mock.calls.length;expect(await slack.catchUp(true)).toBe(true);
+  expect(history.mock.calls.slice(callsBefore).some(call=>call[0].oldest&&call[0].cursor==='6')).toBe(true);expect(store.db.prepare("SELECT count(*) n FROM ingress WHERE event_id LIKE 'history:CTEST:%'").get()).toEqual({n:1100});
   expect(store.db.prepare("SELECT ts FROM slack_cursors WHERE agent_id='research' AND channel='CTEST'").get()).toEqual({ts:'1100.000001'});
+});
+it('budgets periodic old-thread scans without blocking top-level recovery and restarts after a socket gap',async()=>{
+ const{store,c,ingress,broker}=setup();for(const agent of c.config.agents)store.register(agent.id,'v1',[]);c.messages.membership('research','CTEST',true);
+ const transport=new WebSlackTransport(store,ingress.normalizer instanceof CanonicalSlackNormalizer?ingress.normalizer.mapper:(()=>{throw new Error();})(),{research:'synthetic',writer:'synthetic'}),client=transport.clients.get('research')!;
+ const history=vi.fn(async({oldest,cursor}:any)=>{if(oldest)return{ok:true,messages:[]};const page=cursor?Number(cursor):0;return{ok:true,messages:[],response_metadata:{next_cursor:page<3?String(page+1):''}};});client.conversations.history=history as any;
+ const slack=new SlackService(c,transport,ingress,new Controls(c,{} as any,broker));slack.bootstrapRecovery(0);
+ expect(await slack.catchUp()).toBe(false);expect(history.mock.calls.filter(call=>!call[0].oldest)).toHaveLength(2);
+ expect(history.mock.calls.filter(call=>call[0].oldest)).toHaveLength(1);
+ expect(await slack.catchUp()).toBe(true);expect(history.mock.calls.filter(call=>!call[0].oldest)).toHaveLength(4);
+ expect(await slack.catchUp()).toBe(true);expect(history.mock.calls.filter(call=>!call[0].oldest)).toHaveLength(4);
+ slack.recordTransportGap('research');expect(await slack.catchUp()).toBe(false);expect(history.mock.calls.filter(call=>!call[0].oldest)).toHaveLength(6);
+ expect(history.mock.calls.filter(call=>!call[0].oldest).at(-2)![0].cursor).toBeUndefined();
+});
+it('resumes a bounded old-thread scan while top-level checkpoints advance',async()=>{
+ const{store,c,ingress,broker}=setup();for(const agent of c.config.agents)store.register(agent.id,'v1',[]);c.messages.membership('research','CTEST',true);
+ const transport=new WebSlackTransport(store,ingress.normalizer instanceof CanonicalSlackNormalizer?ingress.normalizer.mapper:(()=>{throw new Error();})(),{research:'synthetic',writer:'synthetic'}),client=transport.clients.get('research')!;
+ let top=0;const history=vi.fn(async({oldest,cursor}:any)=>{
+   if(oldest)return{ok:true,messages:[{ts:`${++top}.000001`,user:'UOWNER',text:'new top-level'}]};
+   const page=cursor?Number(cursor):0;return{ok:true,messages:[],response_metadata:{next_cursor:page<4?String(page+1):''}};
+ });client.conversations.history=history as any;
+ const slack=new SlackService(c,transport,ingress,new Controls(c,{} as any,broker));slack.bootstrapRecovery(0);
+ expect(await slack.catchUp()).toBe(false);expect(await slack.catchUp()).toBe(false);expect(await slack.catchUp()).toBe(true);
+ expect(history.mock.calls.filter(call=>!call[0].oldest).map(call=>call[0].cursor)).toEqual([undefined,'1','2','3','4']);
+ expect(history.mock.calls.filter(call=>call[0].oldest).map(call=>call[0].oldest)).toEqual(['0.000000','1.000001','2.000001']);
+});
+it('a socket gap invalidates a pending old-thread page before it can restore the stale cursor',async()=>{
+ const{store,c,ingress,broker}=setup();for(const agent of c.config.agents)store.register(agent.id,'v1',[]);c.messages.membership('research','CTEST',true);
+ const transport=new WebSlackTransport(store,ingress.normalizer instanceof CanonicalSlackNormalizer?ingress.normalizer.mapper:(()=>{throw new Error();})(),{research:'synthetic',writer:'synthetic'}),client=transport.clients.get('research')!;
+ const {deferred}=await import('../helpers/pi.js'),gate=deferred();let pending=false,once=true;
+ const history=vi.fn(async({oldest,cursor}:any)=>{
+   if(oldest)return{ok:true,messages:[]};
+   if(cursor==='1'&&once){once=false;pending=true;await gate.promise;}
+   return{ok:true,messages:[],response_metadata:{next_cursor:cursor==='1'?'2':'1'}};
+ });client.conversations.history=history as any;
+ const slack=new SlackService(c,transport,ingress,new Controls(c,{} as any,broker));slack.bootstrapRecovery(0);
+ const first=slack.catchUp();await vi.waitFor(()=>expect(pending).toBe(true));slack.recordTransportGap('research');gate.resolve();
+ expect(await first).toBe(false);
+ const scanKey='slack_changed_threads_v1:research:CTEST',dueKey='slack_changed_thread_due_v1:research';
+ expect(store.db.prepare('SELECT value FROM runtime_meta WHERE key=?').get(scanKey)).toBeUndefined();
+ expect(store.db.prepare('SELECT value FROM runtime_meta WHERE key=?').get(dueKey)).toBeUndefined();
+ const before=history.mock.calls.length;expect(await slack.catchUp()).toBe(false);
+ expect(history.mock.calls[before]![0].cursor).toBeUndefined();
 });
 it('execution cleanup scope is identical through canonical and aliased parent directories', async () => {
   const {symlinkSync}=await import('node:fs');const {executionScope}=await import('../../src/daemon/paths.js');const root=mkdtempSync(join(tmpdir(),'mate-scope-'));mkdirSync(join(root,'real','data'),{recursive:true});symlinkSync(join(root,'real'),join(root,'alias'));
@@ -236,6 +282,11 @@ it('Socket SDK pending URL startup cancels promptly and a late HTTP response can
   const socket=new ManagedSocket('synthetic',async()=>{fetching=true;await gate.promise;return new Response(JSON.stringify({ok:true,url:'wss://invalid.example'}),{status:200,headers:{'content-type':'application/json'}});});
   const starting=socket.start();const rejected=expect(starting).rejects.toThrow('cancelled');await vi.waitFor(()=>expect(fetching).toBe(true));await socket.disconnect();await rejected;
   gate.resolve();await new Promise(resolve=>setTimeout(resolve,20));expect(socket.client.websocket).toBeUndefined();
+});
+it('reports a live Socket Mode disconnect but ignores shutdown disconnects',async()=>{
+ const {ManagedSocket}=await import('../../src/slack/socket.js'),socket=new ManagedSocket('synthetic'),onGap=vi.fn();socket.onDisconnect(onGap);
+ socket.client.emit('close');expect(onGap).toHaveBeenCalledOnce();
+ await socket.disconnect();socket.client.emit('close');expect(onGap).toHaveBeenCalledOnce();
 });
 
 it('configured project grants cannot overlap the private Agent memory tree', async () => {
@@ -307,14 +358,19 @@ it('Slack file allocation is persisted before transfer; only proven file shares 
 it('resumes unknown text reconciliation beyond five pages after a restart',async()=>{
  const{store,c,broker,ingress}=setup();store.register('research','v1',[]);c.messages.membership('research','CTEST',true);const target={conversationId:'CTEST'},work=c.createWork('unknown-reconcile',target),id=c.send('research',work,target,'durable output');store.transitionOutput(id,'pending','sending');store.transitionOutput(id,'sending','unknown');
  const transport=new WebSlackTransport(store,ingress.normalizer instanceof CanonicalSlackNormalizer?ingress.normalizer.mapper:(()=>{throw new Error();})(),{research:'synthetic'}),client=transport.clients.get('research')!,requestHash=store.output(id)!.request_hash;let interrupted=false;
- const history=vi.fn(async({cursor}:any)=>{const page=cursor?Number(cursor):0;if(page===3&&!interrupted){interrupted=true;throw new Error('temporary failure');}const messages=page===6?[{ts:'20.000001',user:'UONE',bot_id:'BONE',text:'durable output',metadata:{event_type:'mate_outbox',event_payload:{id,request_hash:requestHash}}}]:[];return{ok:true,messages,response_metadata:{next_cursor:page<6?String(page+1):''}};});client.conversations.history=history as any;
+ const history=vi.fn(async({cursor}:any)=>{const page=cursor?Number(cursor):0;if(page===1&&!interrupted){interrupted=true;throw new Error('temporary failure');}const messages=page===6?[{ts:'20.000001',user:'UONE',bot_id:'BONE',text:'durable output',metadata:{event_type:'mate_outbox',event_payload:{id,request_hash:requestHash}}}]:[];return{ok:true,messages,response_metadata:{next_cursor:page<6?String(page+1):''}};});client.conversations.history=history as any;
  await new SlackService(c,transport,ingress,new Controls(c,{} as any,broker)).reconcile();expect(store.output(id)?.state).toBe('unknown');
- const before=history.mock.calls.length;await new SlackService(c,transport,ingress,new Controls(c,{} as any,broker)).reconcile();expect(history.mock.calls[before]![0]).toMatchObject({cursor:'3'});expect(store.output(id)?.state).toBe('sent');
+ const before=history.mock.calls.length,service=new SlackService(c,transport,ingress,new Controls(c,{} as any,broker));
+ for(let round=0;round<4&&store.output(id)?.state==='unknown';round++)await service.reconcile();
+ expect(history.mock.calls[before]![0]).toMatchObject({cursor:'1'});expect(store.output(id)?.state).toBe('sent');
 });
 it('revisits an exhausted unknown text send when Slack evidence appears later',async()=>{
  const{store,c,broker,ingress}=setup();store.register('research','v1',[]);c.messages.membership('research','CTEST',true);const target={conversationId:'CTEST'},work=c.createWork('delayed-evidence',target),id=c.send('research',work,target,'eventually visible');store.transitionOutput(id,'pending','sending');store.transitionOutput(id,'sending','unknown');
  const transport=new WebSlackTransport(store,ingress.normalizer instanceof CanonicalSlackNormalizer?ingress.normalizer.mapper:(()=>{throw new Error();})(),{research:'synthetic'}),client=transport.clients.get('research')!,hash=store.output(id)!.request_hash;let visible=false;client.conversations.history=vi.fn(async()=>({ok:true,messages:visible?[{ts:'21.000001',user:'UONE',bot_id:'BONE',text:'eventually visible',metadata:{event_type:'mate_outbox',event_payload:{id,request_hash:hash}}}]:[]})) as any;
- const service=new SlackService(c,transport,ingress,new Controls(c,{} as any,broker));await service.reconcile();expect(store.output(id)?.state).toBe('unknown');visible=true;await service.reconcile();expect(store.output(id)?.state).toBe('sent');
+ const service=new SlackService(c,transport,ingress,new Controls(c,{} as any,broker)),now=Date.now();await service.reconcile(now);expect(store.output(id)?.state).toBe('unknown');visible=true;
+ await service.reconcile(now+60_000);expect(store.output(id)?.state).toBe('unknown');
+ await service.reconcile(now+15*60_000);expect(store.output(id)?.state).toBe('sent');
+ expect((client.conversations.history as ReturnType<typeof vi.fn>).mock.calls.every(call=>call[0].oldest===undefined)).toBe(true);
 });
 it('keeps scanning after a forged unknown-send marker',async()=>{
  const{store,c,broker,ingress}=setup();store.register('research','v1',[]);c.messages.membership('research','CTEST',true);const target={conversationId:'CTEST'},work=c.createWork('forged-marker',target),id=c.send('research',work,target,'real output');store.transitionOutput(id,'pending','sending');store.transitionOutput(id,'sending','unknown');

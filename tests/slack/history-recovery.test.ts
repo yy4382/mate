@@ -36,3 +36,10 @@ it('bounds an invalid-cursor rescan instead of looping forever on a broken page'
  await expect(scanSlackPages({store,key:'slack_scan:expired',fetch,visit:()=>false})).rejects.toThrow('expired');
  expect(fetch).toHaveBeenCalledTimes(4);
 });
+it('pauses a reconciliation scan after its page budget and resumes durably',async()=>{
+ const store=setup(),key='slack_scan:budget',fetch=vi.fn(async(cursor:string|undefined)=>{const page=cursor?Number(cursor):0;return{messages:[page],next:page<4?String(page+1):undefined};});
+ expect(await scanSlackPages({store,key,maxPages:2,fetch,visit:()=>false})).toBe('paused');
+ expect(await scanSlackPages({store,key,maxPages:2,fetch,visit:()=>false})).toBe('paused');
+ expect(await scanSlackPages({store,key,maxPages:2,fetch,visit:()=>false})).toBe('exhausted');
+ expect(fetch.mock.calls.map(call=>call[0])).toEqual([undefined,'1','2','3','4']);
+});

@@ -23,6 +23,7 @@ export class ManagedSocket implements SocketTransport {
     });
   }
   on(event: string, listener: (event: Envelope) => void): unknown { return this.client.on(event, value => { if (!this.closed) listener(value); }); }
+  onDisconnect(listener:()=>void):void{this.client.on('close',()=>{if(!this.closed)listener();});}
   async start(): Promise<unknown> {
     if (this.closed) throw new Error('Socket closed');
     const cancelled = new Promise<never>((_resolve, reject) => { this.rejectStart = reject; });

@@ -44,6 +44,7 @@ export class SlackRuntime implements AdapterLifecycle {
       await this.service.verify();if(this.stopped)return;
       for(const agent of this.transport.mapper.config.agents){
         const socket=new ManagedSocket(requireSecret(process.env,agent.appTokenEnv));
+        socket.onDisconnect(()=>{if(!this.stopped){this.service.recordTransportGap(agent.id);this.nextMembership=0;}});
         const receiver=new DurableReceiver(this.c.store,agent.slackAppId,this.transport.mapper.config.teamId,socket,()=>this.report('Slack receiver error; uncommitted events are not acknowledged'),()=>this.service.replay());
         const app=new App({token:requireSecret(process.env,agent.botTokenEnv),receiver});
         for(const event of slackWireEvents)app.event(event,async()=>{});app.command(slackControlCommand,async()=>{});
@@ -54,7 +55,7 @@ export class SlackRuntime implements AdapterLifecycle {
       // event concurrent with catch-up is either received live or found by it.
       await this.service.discoverMembership();if(this.stopped)return;
       await this.service.membership();if(this.stopped)return;
-      if(!await this.service.catchUp())throw new Error('Slack history recovery did not complete');if(this.stopped)return;
+      if(!await this.service.catchUp(true))throw new Error('Slack history recovery did not complete');if(this.stopped)return;
       if(!await this.projections.catchUp())throw new Error('Slack projection history recovery did not complete');if(this.stopped)return;
     }catch(error){await this.stopResources();throw error;}
     finally{signal.removeEventListener('abort',abort);}

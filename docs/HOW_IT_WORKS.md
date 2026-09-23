@@ -35,9 +35,9 @@ Notice、读取、处理彼此独立。消息到达或进入 inbox 不等于正�
 
 历史读取也不等于处理。`history.page/search/around` 在当前 ACL 下查询本地 canonical 缓存；`history.fetch` 通过行动 Agent 自己的 installation 有界补一页外部历史。回填只补正文/revision/visibility并使旧 freshness view 在必要时失效，不写 observation、delivery、seen 或 resolved。每次结果明确给出 scope、continuation 和 gap；详见 [HISTORY](HISTORY.md)。
 
-Slack adapter 启动时先记录接收责任水位并连接各 App 的 Socket，再发现频道/DM、核对 membership、分页补齐离线消息与投影回复。它还扫描频道旧 root 的 `latest_reply`，发现停机期间在未 watch 的旧 thread 中首次出现的回复；旧 root 只作为历史导入，不产生新的工作通知。每页进度保存在 SQLite，失败后可以继续。Agent 主动发起的目录查询仍有分页上限，启动恢复会遍历完整目录。
+Slack adapter 启动时先记录接收责任水位并连接各 App 的 Socket，再发现频道/DM、核对 membership、分页补齐离线消息与投影回复。它还扫描频道旧 root 的 `latest_reply`，发现停机期间在未 watch 的旧 thread 中首次出现的回复；旧 root 只作为历史导入，不产生新的工作通知。每页进度保存在 SQLite，失败后可以继续。启动会完整扫描；运行期间按页预算继续未完扫描，正常情况下每小时重新检查旧线程，Socket 断线后立即安排下一轮检查。Agent 主动发起的目录查询仍有分页上限，启动恢复会遍历完整目录。
 
-Slack history/replies 无法重建停机期间删除的消息，也不能保证取得旧消息的每次编辑。重启时 adapter 使停机前的 view token 和已接受讨论版本失效，并在新读取的 `coverage.gaps` 中标记 `slack_offline_edits_and_deletes_not_reconstructible`。本地缓存可能仍有旧版本；这个标记告知 Agent 需要自行判断是否进一步核实，不能被解释成缺失的编辑或删除已经恢复。
+Slack history/replies 无法重建停机或 Socket 断线期间删除的消息，也不能保证取得旧消息的每次编辑。重启或断线时 adapter 使先前的 view token 和已接受讨论版本失效，并在新读取的 `coverage.gaps` 中标记 `slack_offline_edits_and_deletes_not_reconstructible`；频道缺口也覆盖之后才发现的旧 thread。本地缓存可能仍有旧版本；这个标记告知 Agent 需要自行判断是否进一步核实，不能被解释成缺失的编辑或删除已经恢复。
 
 ## 可见性、事项、任务和预算不是同一个对象
 
