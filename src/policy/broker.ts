@@ -4,7 +4,7 @@ import { relative } from 'node:path';
 import { z } from 'zod';
 import { Store, encode, type RunToken } from '../storage/store.js';
 import { Collaboration } from '../collaboration/service.js';
-import { canonicalRoot, checkedPath } from '../execution/paths.js';
+import { canonicalRoot, checkedPath, within } from '../execution/paths.js';
 import { operationSchema, permissionFor, type Permission, type Operation, type ExecutionBackend } from '../execution/backend.js';
 
 const policyVersion = 'mate-scope-2';
@@ -13,13 +13,19 @@ export interface EffectiveGrant {id:string;root:string;operations:Permission[];e
 export class Broker {
   private queue: Promise<unknown> = Promise.resolve();
   constructor(readonly store: Store, readonly collaboration: Collaboration, private backend: ExecutionBackend,
-    private protectedRoots: string[], private clock: () => number = Date.now) {}
+    private protectedRoots: string[], private clock: () => number = Date.now,private seatNetworkIsolated=true,private privateRoots:Readonly<Record<string,string>>={}) {}
+  private assertPrivateScope(agentId:string,root:string):void{
+    for(const [owner,privateRoot] of Object.entries(this.privateRoots)){
+      if((within(root,privateRoot)||within(privateRoot,root))&&(owner!==agentId||root!==privateRoot))throw new Error('Another Agent private workspace is not available');
+    }
+  }
   issueGrant(ownerId: string, agentId: string, workId: string, root: string, operations: Permission[], expires: number): string {
     if (!this.collaboration.config.ownerUserIds.includes(ownerId)) throw new Error('Owner only');
     this.collaboration.messages.agent(agentId); this.collaboration.work(workId);
     z.array(z.enum(['read','write','exec'])).min(1).parse(operations); z.number().int().positive().safe().parse(expires);
     if (expires <= this.clock()) throw new Error('Grant already expired');
     const canonical = canonicalRoot(root, this.protectedRoots), id = randomUUID();
+    this.assertPrivateScope(agentId,canonical);
     this.store.db.prepare('INSERT INTO grants(id,agent_id,work_id,root,operations,expires) VALUES(?,?,?,?,?,?)').run(id, agentId, workId, canonical, encode(operations), expires);
     this.store.audit('grant', { ownerId, id, agentId, workId, root: canonical, operations, expires }); return id;
   }
@@ -47,6 +53,7 @@ export class Broker {
     if(scope.seatRoot&&grant.root!==scope.seatRoot)return false;
     try{if(canonicalRoot(grant.root,this.protectedRoots)!==grant.root)throw new Error('changed');}
     catch{throw new Error('Grant root unavailable or changed');}
+    this.assertPrivateScope(run.agentId,grant.root);
     return true;
   }
   effectiveGrants(run:RunToken,workId:string):EffectiveGrant[]{
@@ -84,7 +91,7 @@ export class Broker {
       this.store.startAction(run, actionId);
     });
     try {
-      const result = await this.backend.execute({ root: grant.root, operation: op, timeoutMs: Math.min(60000, this.collaboration.config.budgets.runTimeoutMs),...(this.collaboration.seats.active(run.agentId)?{network:'none' as const}:{}) }, signal);
+      const result = await this.backend.execute({ agentId:run.agentId,root: grant.root, operation: op, timeoutMs: Math.min(60000, this.collaboration.config.budgets.runTimeoutMs),...(this.seatNetworkIsolated&&this.collaboration.seats.active(run.agentId)?{network:'none' as const}:{}) }, signal);
       this.store.settleAction(run, actionId, result.code === 0 ? 'succeeded' : 'failed', result);
       return result;
     } catch (error) {

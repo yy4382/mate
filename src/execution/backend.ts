@@ -18,7 +18,7 @@ export const operationSchema = z.discriminatedUnion('kind', [
 export type Permission = 'read' | 'write' | 'exec';
 export function permissionFor(op: Operation): Permission { return ['read','read_bytes','list','stat','search'].includes(op.kind) ? 'read' : op.kind === 'exec' ? 'exec' : 'write'; }
 export type Operation = z.infer<typeof operationSchema>;
-export interface ExecutionRequest { root: string; operation: Operation; timeoutMs: number;network?:'none' }
+export interface ExecutionRequest { root: string; operation: Operation; timeoutMs: number;network?:'none';agentId?:string }
 export interface ExecutionResult { code: number; stdout: string; stderr: string; truncated: boolean }
 export interface ExecutionBackend { execute(request: ExecutionRequest, signal?: AbortSignal): Promise<ExecutionResult> }
 /** Each invocation has its own SRT singleton and process group. No host-shell fallback. */

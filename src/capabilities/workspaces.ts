@@ -59,13 +59,13 @@ export function workspaceProfiles(privateRoots:Readonly<Record<string,string>>,c
 
 /** Provisioning is a state transition performed before the model can observe a work. */
 export class WorkspaceAccess {
-  constructor(readonly collaboration:Collaboration,readonly broker:Broker,readonly profiles:readonly WorkspaceProfile[]){}
+  constructor(readonly collaboration:Collaboration,readonly broker:Broker,readonly profiles:readonly WorkspaceProfile[],private stableLinuxAccess=false){}
   provision(agentId:string,workId:string):void {
     const c=this.collaboration,s=c.store,owner=c.config.ownerUserIds[0];if(!owner)throw new Error('Workspace provisioning requires an owner');
     s.atomic(()=>{
       for(const profile of this.profiles.filter(item=>item.agentId===agentId&&(!c.seats.active(agentId)||item.kind==='private'))){
         const existing=s.db.prepare('SELECT id,operations,revoked,expires FROM grants WHERE agent_id=? AND work_id=? AND root=? ORDER BY rowid DESC LIMIT 1').get(agentId,workId,profile.root) as {id:string;operations:string;revoked:number;expires:number}|undefined;
-        if(!existing){this.broker.issueGrant(owner,agentId,workId,profile.root,profile.operations,Date.now()+365*86400000);continue;}
+        if(!existing){this.broker.issueGrant(owner,agentId,workId,profile.root,profile.operations,this.stableLinuxAccess?Number.MAX_SAFE_INTEGER:Date.now()+365*86400000);continue;}
         if(existing.revoked||existing.expires<=Date.now())continue;
         const operations=JSON.parse(existing.operations) as Permission[];
         if(JSON.stringify([...operations].sort())!==JSON.stringify(profile.operations)){

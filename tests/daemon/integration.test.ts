@@ -81,6 +81,33 @@ it('public research rejects local/metadata destinations before HTTP', async () =
   await expect(new Research(['example.com']).read('https://127.0.0.1',new AbortController().signal)).rejects.toThrow('outside');
   await expect(new Research(['example.com']).read('https://secret@example.com',new AbortController().signal)).rejects.toThrow('outside');
 });
+it('starts the Linux-user route with a separate private home and peer-visible shared work root',async()=>{
+  const {Daemon}=await import('../../src/daemon/app.js');
+  const base=realpathSync(mkdtempSync(join(tmpdir(),'mate-linux-daemon-'))),data=join(base,'data'),home=join(base,'private-research'),sharedRoot=join(base,'shared');
+  mkdirSync(home,{mode:0o700});for(const dir of ['notes','artifacts'])mkdirSync(join(home,dir),{mode:0o700});writeFileSync(join(home,'MEMORY.md'),'# Research\n\nPrivate memory entry. Keep durable lessons and links to notes here.\n',{mode:0o600});
+  mkdirSync(sharedRoot,{mode:0o755});chmodSync(sharedRoot,0o755);mkdirSync(join(sharedRoot,'research'),{mode:0o755});chmodSync(join(sharedRoot,'research'),0o755);
+  const user={uid:process.getuid!(),gid:process.getgid!(),home,username:'research'};
+  const input={mate:configSchema.parse(configFixture),runtime:{dataDir:data,linuxUsers:{research:user},sharedRoot,workspaceGrants:[],researchHosts:[]}};
+  mkdirSync(join(data,'state'),{recursive:true,mode:0o700});chmodSync(data,0o700);chmodSync(join(data,'state'),0o755);
+  await expect(Daemon.create(input,{info:()=>{},error:()=>{}},process.cwd(),unmanagedDeploymentEnvironment)).rejects.toThrow('Mate control directory');
+  chmodSync(join(data,'state'),0o700);
+  const daemon=await Daemon.create(input,{info:()=>{},error:()=>{}},process.cwd(),unmanagedDeploymentEnvironment);
+  try{
+    expect(daemon.memoryRoots.research).toBe(realpathSync(home));
+    expect(daemon.workspaceAccess.profiles.filter(profile=>profile.agentId==='research').map(profile=>profile.label)).toEqual(['private-workspace','shared','shared-own']);
+    expect(existsSync(join(home,'MEMORY.md'))).toBe(true);
+  }finally{await daemon.close();rmSync(base,{recursive:true,force:true});}
+});
+it('requires distinct non-root Linux identities and one shared root for the team',()=>{
+  const other={...configFixture.agents[0]!,id:'bob',name:'Bob',slackAppId:'ATWO',slackUserId:'UTWO',slackBotId:'BTWO',botTokenEnv:'BOB_BOT',appTokenEnv:'BOB_APP'};
+  const mate=configSchema.parse({...configFixture,agents:[configFixture.agents[0],other]});
+  const input={mate,runtime:{dataDir:'/var/lib/mate',sharedRoot:'/srv/mate/shared',linuxUsers:{research:{uid:1001,gid:1001,home:'/srv/mate/private/research'},bob:{uid:1002,gid:1002,home:'/srv/mate/private/bob'}}}};
+  expect(daemonConfigSchema.safeParse(input).success).toBe(true);
+  expect(daemonConfigSchema.safeParse({...input,runtime:{...input.runtime,sharedRoot:undefined}}).success).toBe(false);
+  expect(daemonConfigSchema.safeParse({...input,runtime:{...input.runtime,workspaceManifest:'/var/lib/mate/old-manifest.json'}}).success).toBe(false);
+  expect(daemonConfigSchema.safeParse({...input,runtime:{...input.runtime,linuxUsers:{...input.runtime.linuxUsers,bob:{uid:1001,gid:1002,home:'/srv/mate/private/bob'}}}}).success).toBe(false);
+  expect(daemonConfigSchema.safeParse({...input,runtime:{...input.runtime,linuxUsers:{...input.runtime.linuxUsers,bob:{uid:0,gid:1002,home:'/srv/mate/private/bob'}}}}).success).toBe(false);
+});
 it('controls are owner-only, durable replay applies once, and unknown admin sends never retry', async () => {
   const {store,c,ingress,broker}=setup(); const supervisor=new Supervisor(c,new ToolRouter(c,broker),c.config);supervisor.register();cleanups.unshift(()=>supervisor.close());
   const controls=new Controls(c,supervisor,broker); expect(()=>controls.execute('UONE','status')).toThrow('Owner');

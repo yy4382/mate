@@ -30,7 +30,7 @@ file.read_bytes file.write_bytes file.read file.write file.list file.stat file.s
 
 it('registers every public operation exactly once with complete policies and stable documentation order',async()=>{
   expect(builtInToolSpecs.map(entry=>entry.name)).toEqual(expected);expect(new Set(expected).size).toBe(expected.length);expect(Object.isFrozen(builtInToolSpecs)).toBe(true);
-  expect(operationContractFingerprint).toBe('e161d9d7aebae87a53abeb60bfdfa0f8cbfe01059e5aac38e5a55e8897ac7ab1');
+  expect(operationContractFingerprint).toBe('4c1530474626313270db0fe9952edaa1ccf802c365e5cf86eb41bb1872a26036');
   const allowed={work:['none','current','task','reminder','select','broker-managed'],seat:['deny','redacted-read','clean-workspace','held-send'],effect:['pure-read','atomic-recorded','broker-recorded','adapter-recorded'],replay:['immutable','refreshable','boundary-owned']};
   for(const entry of builtInToolSpecs){expect(Object.isFrozen(entry)).toBe(true);expect(entry.description.length).toBeGreaterThan(10);expect(typeof entry.schema.parse).toBe('function');expect(allowed.work).toContain(entry.workPolicy);expect(allowed.seat).toContain(entry.seatPolicy);expect(allowed.effect).toContain(entry.effectPolicy);expect(allowed.replay).toContain(entry.replayPolicy);expect(typeof entry.authorize).toBe('function');expect(typeof entry.postAwait).toBe('function');expect(typeof entry.handler).toBe('function');}
   expect(operationDocumentation).toContain(`Tool contract: ${operationContractFingerprint}`);expect(operationDocumentation.match(/Available: (.*)\.\n/)?.[1]?.split(', ')).toEqual(expected);
@@ -112,12 +112,12 @@ it('keeps known-URL research a receipt-free read and puts the reachable alternat
   expect(builtInToolSpecs.find(spec=>spec.name==='environment.info')).toMatchObject({effectPolicy:'pure-read',replayPolicy:'boundary-owned',workPolicy:'current'});
   expect(environmentReportSchema.parse({format:'mate.environment.v1',workId:'work',snapshotAt:1,authorization:'informational_snapshot_rechecked_on_every_action',workspaces:{pathStyle:'relative_to_grant',execMountPoint:'/workspace',simultaneouslyMounted:false,grants:[],unavailable:[]},execution:{status:'unavailable',network:'none',image:null},research:{status:'unavailable',mode:'known_public_https_url_only',allowedHosts:[],search:false},attachmentInput:{status:'unavailable',scope:'visible_external_message_file'},artifactOutput:{adapterStatus:'configured',status:'unavailable',scope:'supported_external_target_only'}})).toMatchObject({authorization:'informational_snapshot_rechecked_on_every_action',workspaces:{pathStyle:'relative_to_grant',simultaneouslyMounted:false},research:{search:false},artifactOutput:{adapterStatus:'configured',status:'unavailable'}});
   const built=buildBaseline(configSchema.parse(configFixture).agents[0]!,operationDocumentation),baseline=JSON.stringify(built.messages[0]);
-  expect(built.configVersion).toBe('8c3475cf08dd7260babd26e6a0bcc2a9bc6767c14c64c7d3c8be8610c5277e50');
+  expect(built.configVersion).toBe('c3a69e96bffeac86641d3047787197cfe04dd9a551c715dc8a9348fe5440bc34');
   for(const required of [
     'Before choosing a workspace or external path, call environment.info for the current work',
     'versioned informational snapshot, not an authorization token',
-    'File paths and exec cwd are relative to that grant',
-    '/workspace is only the path seen inside one exec container, and different grants are not mounted together',
+    'File-tool paths and exec cwd are relative to that grant',
+    'host-mode grant entries show their absolute roots, and ordinary shell access follows your Linux user\'s permissions',
     'not that the network is currently healthy',
     'It is not search, browsing or URL discovery',
     'use an actually reported networked exec tool if suitable, ask a human or peer for a URL, inspect existing files/history',

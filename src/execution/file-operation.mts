@@ -4,6 +4,8 @@ import { dirname, resolve, relative, isAbsolute, sep } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import type { Operation } from './backend.js';
 const root = process.argv[2]!;
+const privateMode=process.argv[3]!=='022';
+process.umask(privateMode?0o077:0o022);
 const operation = JSON.parse(readFileSync(0,'utf8')) as Exclude<Operation,{kind:'exec'}>;
 function checked(path:string):string {
   const full=resolve(root,path), rel=relative(root,full);
@@ -27,7 +29,7 @@ function save(path:string,value:string|Buffer) {
       writeFileSync(`${history}/${Date.now()}-${randomUUID()}`,old,{flag:'wx',mode:0o600});
       for(const oldName of readdirSync(history).sort().slice(0,-5))unlinkSync(checked(relative(root,`${history}/${oldName}`)));
     }
-    writeFileSync(temp,value,{flag:'wx',mode:0o600});const fd=openSync(temp,'r');try{fsyncSync(fd);}finally{closeSync(fd);}
+    writeFileSync(temp,value,{flag:'wx',mode:privateMode?0o600:0o644});const fd=openSync(temp,'r');try{fsyncSync(fd);}finally{closeSync(fd);}
     renameSync(temp,path);const dir=openSync(dirname(path),'r');try{fsyncSync(dir);}finally{closeSync(dir);}
     json({sha256:hash(value)});
   }finally{try{unlinkSync(temp);}catch{}}

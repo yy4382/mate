@@ -19,7 +19,7 @@ import { CanonicalOutput as Output } from '../conversations/output.js';
 import { storedConfiguration,saveConfiguration } from './migrate.js';
 import {Attachments}from '../slack/attachments.js';
 import { Directory } from '../slack/directory.js';
-import { mkdirSync, writeFileSync, existsSync, realpathSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync, realpathSync, lstatSync, readdirSync, readFileSync, chownSync, chmodSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { builtinModels } from '@earendil-works/pi-ai/providers/all';
 import { sameConfiguration, daemonConfigSchema, slackRuntimeConfig, type DaemonConfig } from './config.js';
@@ -31,6 +31,7 @@ import { Collaboration } from '../collaboration/service.js';
 import { Broker } from '../policy/broker.js';
 import { SandboxBackend, type ExecutionBackend } from '../execution/backend.js';
 import { ContainerBackend, ControlledBackend } from '../execution/container.js';
+import {LinuxUserBackend} from '../execution/linux-user.js';
 import { canonicalRoot, within } from '../execution/paths.js';
 import { Supervisor } from '../runtime/supervisor.js';
 import { ToolRouter } from '../runtime/tools.js';
@@ -81,8 +82,10 @@ export class Daemon {
   readonly config:DaemonConfig;
   static async create(input:unknown,log:Log,projectRoot=resolve('.'),environment:DaemonEnvironment=nodeDeploymentEnvironment()):Promise<Daemon>{
     const config=daemonConfigSchema.parse(input),data=config.runtime.dataDir;
+    if(config.runtime.linuxUsers&&process.platform==='linux'&&process.getuid?.()!==0)throw new Error('Mate must run as root to switch Agent Linux users');
     mkdirSync(data,{recursive:true,mode:0o700});if(lstatSync(data).isSymbolicLink()||within(realpathSync(projectRoot),realpathSync(data)))throw new Error('Data directory must be outside the application checkout and not a symlink');
     const state=join(data,'state');mkdirSync(state,{recursive:true,mode:0o700});if(lstatSync(state).isSymbolicLink())throw new Error('State path must not be a symlink');
+    if(config.runtime.linuxUsers)for(const path of [data,state]){const status=lstatSync(path);if(!status.isDirectory()||status.uid!==process.getuid?.()||status.gid!==process.getgid?.()||(status.mode&0o777)!==0o700)throw new Error(`Mate control directory must be private and owned by Mate: ${path}`);}
     const release=acquireLock(join(state,'daemon.lock'));let transferred=false;
     try{
       await assertDeploymentOperationAllowed('start',{config,releaseRoot:projectRoot},environment.deploymentJournalTrust??{requiredOwnerUid:0,requiredOwnerGid:process.getgid?.()??-1});
@@ -130,29 +133,50 @@ export class Daemon {
       const agentsDir = join(data, 'agents');if(!verifiedWorkspaces)mkdirSync(agentsDir, { recursive: true, mode: 0o700 });
       if (lstatSync(agentsDir).isSymbolicLink()) throw new Error('Agents directory must not be a symlink');
       for (const agent of this.collaboration.agents.list()) {
-        const root = verifiedWorkspaces?.roots.get(agent.id)??join(data, 'agents', agent.id);if(!verifiedWorkspaces)mkdirSync(root, { recursive: true, mode: 0o700 });
+        const linux=config.runtime.linuxUsers?.[agent.id];
+        const root = linux?.home??verifiedWorkspaces?.roots.get(agent.id)??join(data, 'agents', agent.id);
+        if(linux){
+          if(!existsSync(root))throw new Error(`Linux Agent home must be provisioned first: ${agent.id}`);
+          const status=lstatSync(root);
+          if(!status.isDirectory()||status.uid!==linux.uid||status.gid!==linux.gid||(status.mode&0o777)!==0o700)throw new Error(`Linux Agent home must be private and owned by its user: ${agent.id}`);
+          if(within(realpathSync(data),realpathSync(root))||within(realpathSync(root),realpathSync(data)))throw new Error('Linux Agent home must be outside Mate data');
+        }else if(!verifiedWorkspaces)mkdirSync(root, { recursive: true, mode: 0o700 });
         if (lstatSync(root).isSymbolicLink()) throw new Error('Agent memory must not be a symlink');
         this.memoryRoots[agent.id] = canonicalRoot(root, [projectRoot, state]);
-        for (const dir of ['notes','artifacts']) mkdirSync(join(root, dir), { recursive: true, mode: 0o700 });
-        if (!existsSync(join(root, 'MEMORY.md'))) writeFileSync(join(root, 'MEMORY.md'), `# ${agent.name}\n\nPrivate memory entry. Keep durable lessons and links to notes here.\n`, { flag: 'wx', mode: 0o600 });
+        for (const dir of ['notes','artifacts']) {const path=join(root,dir);if(!existsSync(path)){if(linux)throw new Error(`Provision Linux Agent private directory before startup: ${path}`);mkdirSync(path,{mode:0o700});}if(linux){const status=lstatSync(path);if(!status.isDirectory()||status.uid!==linux.uid||status.gid!==linux.gid||(status.mode&0o700)!==0o700)throw new Error(`Linux Agent private directory is not writable by its user: ${path}`);}}
+        const memory=join(root,'MEMORY.md');if (!existsSync(memory)){if(linux)throw new Error(`Provision Linux Agent memory entry before startup: ${agent.id}`);writeFileSync(memory, `# ${agent.name}\n\nPrivate memory entry. Keep durable lessons and links to notes here.\n`, { flag: 'wx', mode: 0o600 });}if(linux){const status=lstatSync(memory);if(!status.isFile()||status.uid!==linux.uid||status.gid!==linux.gid||(status.mode&0o600)!==0o600)throw new Error(`Linux Agent memory entry is not writable by its user: ${agent.id}`);}
       }
+      if(config.runtime.linuxUsers){const homes=Object.values(this.memoryRoots);for(const [index,root] of homes.entries())for(const other of homes.slice(index+1))if(within(root,other)||within(other,root))throw new Error('Linux Agent homes overlap');}
       const protectedRoots=[...executionProtectedPaths(projectRoot,state,agentsDir,config.runtime.docker),...(verifiedWorkspaces?.protectedPaths??[])],privateBase=new Set(pathVariants(agentsDir));
       const privateForbidden=protectedRoots.filter(root=>!privateBase.has(root));for(const root of Object.values(this.memoryRoots))canonicalRoot(root,privateForbidden);
-      const profiles=workspaceProfiles(this.memoryRoots,normalizeConfiguredWorkspaces(config.runtime.workspaceGrants,protectedRoots),!!config.runtime.docker,verifiedWorkspaces?.capacityByRoot);
-      const rawFiles:ExecutionBackend=this.container&&process.platform==='linux'?this.container:new SandboxBackend(),rawCommands:ExecutionBackend=this.container??{ execute: async () => { throw new Error('Container execution is not configured'); } };
+      const sharedProfiles:typeof config.runtime.workspaceGrants=[];
+      if(config.runtime.sharedRoot){
+        const shared=canonicalRoot(config.runtime.sharedRoot,[...protectedRoots,...Object.values(this.memoryRoots)]),stat=lstatSync(shared);
+        if((process.platform==='linux'&&stat.uid!==0)||(stat.mode&0o022)||(stat.mode&0o005)!==0o005)throw new Error('Shared root must be root-owned and readable, not writable, by Agents');
+        for(const [agentId,user] of Object.entries(config.runtime.linuxUsers??{})){
+          const own=join(shared,agentId);
+          if(!existsSync(own)){mkdirSync(own,{mode:0o755});chmodSync(own,0o755);chownSync(own,user.uid,user.gid);}
+          const ownStat=lstatSync(own);
+          if(!ownStat.isDirectory()||ownStat.uid!==user.uid||ownStat.gid!==user.gid||(ownStat.mode&0o777)!==0o755)throw new Error(`Shared Agent directory must be owned by its user and peer-readable: ${agentId}`);
+          sharedProfiles.push({agentId,root:shared,operations:['read'],label:'shared'},{agentId,root:own,operations:['read','write','exec'],label:'shared-own'});
+        }
+      }
+      const profiles=workspaceProfiles(this.memoryRoots,normalizeConfiguredWorkspaces([...config.runtime.workspaceGrants,...sharedProfiles],[...protectedRoots,...(config.runtime.linuxUsers?Object.values(this.memoryRoots):[])]),!!(config.runtime.docker||config.runtime.linuxUsers),verifiedWorkspaces?.capacityByRoot);
+      const linuxBackend=config.runtime.linuxUsers?new LinuxUserBackend(config.runtime.linuxUsers):undefined;
+      const rawFiles:ExecutionBackend=linuxBackend??(this.container&&process.platform==='linux'?this.container:new SandboxBackend()),rawCommands:ExecutionBackend=linuxBackend??this.container??{ execute: async () => { throw new Error('Execution backend is not configured'); } };
       const files=verifiedWorkspaces?new DeploymentBoundaryBackend(rawFiles,config,deploymentEnvironment,verifiedWorkspaces):rawFiles,commands=verifiedWorkspaces?new DeploymentBoundaryBackend(rawCommands,config,deploymentEnvironment,verifiedWorkspaces):rawCommands;
       const backendAdmission=new FairAdmission(config.runtime.limits.maxBackendOperations),admittedFiles=new AdmittedBackend(files,backendAdmission);
       this.backend = new AdmittedBackend(new ControlledBackend(files,commands),backendAdmission);
-      this.broker = new Broker(this.store, this.collaboration, this.backend, privateForbidden);
-      const workspaceAccess=this.workspaceAccess=new WorkspaceAccess(this.collaboration,this.broker,profiles);
+      this.broker = new Broker(this.store, this.collaboration, this.backend, privateForbidden,Date.now,!linuxBackend,config.runtime.linuxUsers?this.memoryRoots:{});
+      const workspaceAccess=this.workspaceAccess=new WorkspaceAccess(this.collaboration,this.broker,profiles,!!linuxBackend);
       const research = new Research(config.runtime.researchHosts);
       let artifacts!: Artifacts;
       const attachments=transport?new Attachments(this.collaboration,this.broker,transport.clients):undefined;
-      const environment=new EnvironmentCapabilities(this.collaboration,this.broker,profiles,{image:config.runtime.docker?.image??null,network:config.runtime.docker?.network??'none',researchHosts:config.runtime.researchHosts,attachmentConfigured:actor=>attachments?.configured(actor)??false,artifactConfigured:actor=>artifacts?.configured(actor)??false,artifactSupported:(actor,target)=>artifacts?.supports(actor,target)??false});
+      const environment=new EnvironmentCapabilities(this.collaboration,this.broker,profiles,{image:config.runtime.docker?.image??null,network:linuxBackend?'host':config.runtime.docker?.network??'none',linuxUser:!!linuxBackend,researchHosts:config.runtime.researchHosts,attachmentConfigured:actor=>attachments?.configured(actor)??false,artifactConfigured:actor=>artifacts?.configured(actor)??false,artifactSupported:(actor,target)=>artifacts?.supports(actor,target)??false});
       const router = new ToolRouter(this.collaboration, this.broker, { attachment:(...args)=>{if(!attachments)throw new Error('Attachment adapter unavailable');return attachments.save(...args);},environment:(run,workId)=>environment.read(run,workId),research: (url, signal) => research.read(url, signal), publish: (...args) => artifacts.publish(...args) }, new TeamDirectory(messages,transport?new Directory(messages,transport.clients,transport.mapper):undefined), (actor,workId)=>workspaceAccess.provision(actor,workId),value=>slackApp?.argumentsCodec.args(value)??value,transport?new SlackHistory(messages,transport):undefined);
       this.supervisor = new Supervisor(this.collaboration, router, c, undefined, async (agentId, workId, signal) => {
         workspaceAccess.provision(agentId, workId);
-        const result = await admittedFiles.execute({ root: this.memoryRoots[agentId]!, operation: { kind: 'read', path: 'MEMORY.md' }, timeoutMs: 10000 }, signal);
+        const result = await admittedFiles.execute({ agentId,root: this.memoryRoots[agentId]!, operation: { kind: 'read', path: 'MEMORY.md' }, timeoutMs: 10000 }, signal);
         if (result.code !== 0 || result.truncated) throw new Error('Private memory recovery read failed'); return result.stdout;
       },{runAdmission:new FairAdmission(config.runtime.limits.maxActiveRuns),workerIdleMs:config.runtime.limits.workerIdleMs});
       this.supervisor.register();

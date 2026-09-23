@@ -16,12 +16,12 @@ import {daemonConfigSchema} from '../../src/daemon/config.js';
 
 const cleanup:(()=>void)[]=[];afterEach(()=>{cleanup.splice(0).forEach(fn=>fn());vi.restoreAllMocks();});
 function roots(){const base=mkdtempSync(join(tmpdir(),'mate-environment-')),privateRoot=join(base,'private'),project=join(base,'project'),other=join(base,'other');for(const path of [privateRoot,project,other])mkdirSync(path);cleanup.push(()=>rmSync(base,{recursive:true,force:true}));return{base,privateRoot,project,other};}
-function harness(execution:ExecutionBackend={execute:async()=>({code:0,stdout:'',stderr:'',truncated:false})},capabilities:{container?:boolean;attachments?:boolean;artifacts?:boolean;researchHosts?:string[];capacityBytes?:number}={}){
+function harness(execution:ExecutionBackend={execute:async()=>({code:0,stdout:'',stderr:'',truncated:false})},capabilities:{container?:boolean;linuxUser?:boolean;attachments?:boolean;artifacts?:boolean;researchHosts?:string[];capacityBytes?:number}={}){
   const path=roots(),store=new Store(':memory:');cleanup.push(()=>store.close());store.register('research','v1',[]);
   const messages=new Messages(store,configFixture);messages.membership('research','CTEST',true);const collaboration=new Collaboration(store,messages,new Output(messages,{post:async()=>({ts:'200.000001'})}),configFixture);
-  const container=capabilities.container??true,broker=new Broker(store,collaboration,execution,[]),capacities=capabilities.capacityBytes===undefined?new Map<string,number>():new Map([[realpathSync(path.privateRoot),capabilities.capacityBytes],[realpathSync(path.project),capabilities.capacityBytes]]),profiles=workspaceProfiles({research:path.privateRoot},normalizeConfiguredWorkspaces([{agentId:'research',root:path.project,operations:['read'],label:'project'}],[]),container,capacities),access=new WorkspaceAccess(collaboration,broker,profiles);
+  const container=capabilities.container??!capabilities.linuxUser,broker=new Broker(store,collaboration,execution,[]),capacities=capabilities.capacityBytes===undefined?new Map<string,number>():new Map([[realpathSync(path.privateRoot),capabilities.capacityBytes],[realpathSync(path.project),capabilities.capacityBytes]]),profiles=workspaceProfiles({research:path.privateRoot},normalizeConfiguredWorkspaces([{agentId:'research',root:path.project,operations:['read'],label:'project'}],[]),container||!!capabilities.linuxUser,capacities),access=new WorkspaceAccess(collaboration,broker,profiles);
   const target=fixtureTarget('CTEST','100.000001'),work=collaboration.createWork('environment',target);collaboration.enqueue('research',work,'start',{});const run=store.beginRun('research')!;store.input(run,{});
-  const environment=new EnvironmentCapabilities(collaboration,broker,profiles,{image:container?`sha256:${'0'.repeat(64)}`:null,network:container?'bridge':'none',researchHosts:capabilities.researchHosts??['example.com'],attachmentConfigured:()=>capabilities.attachments??true,artifactConfigured:()=>capabilities.artifacts??true,artifactSupported:(_actor,target)=>(capabilities.artifacts??true)&&collaboration.messages.references.conversation(target.conversationId).authority==='external'});
+  const environment=new EnvironmentCapabilities(collaboration,broker,profiles,{image:container?`sha256:${'0'.repeat(64)}`:null,network:capabilities.linuxUser?'host':container?'bridge':'none',linuxUser:!!capabilities.linuxUser,researchHosts:capabilities.researchHosts??['example.com'],attachmentConfigured:()=>capabilities.attachments??true,artifactConfigured:()=>capabilities.artifacts??true,artifactSupported:(_actor,target)=>(capabilities.artifacts??true)&&collaboration.messages.references.conversation(target.conversationId).authority==='external'});
   const router=new ToolRouter(collaboration,broker,{environment:(token,current)=>environment.read(token,current),research:async()=>({}),publish:async()=>({})},undefined,(actor,current)=>access.provision(actor,current));
   return{...path,store,messages,collaboration,broker,profiles,access,environment,router,target,work,run};
 }
@@ -55,6 +55,12 @@ it('reports only effective current-work capabilities without mutating authorizat
   const second=(await h.router.call(h.run,h.work,'environment-two','environment.info',{},new AbortController().signal)).value as any;expect(second.workspaces.grants.map((grant:any)=>grant.label)).toEqual(['private-workspace']);expect(second.workspaces.unavailable).toEqual([{label:'project',kind:'configured',reason:'configured_grant_not_effective'}]);
   await expect(h.broker.execute(h.run,h.work,'stale',project.id,{kind:'read',path:'.'})).rejects.toThrow('Grant does not cover action');
   const privateGrant=second.workspaces.grants[0];h.broker.revoke('UOWNER',privateGrant.id);const withoutExec=h.environment.read(h.run,h.work);expect(withoutExec.execution).toMatchObject({status:'unavailable',network:'none',image:null});
+});
+
+it('reports each host workspace by its own stable absolute path',()=>{
+  const h=harness(undefined,{linuxUser:true});h.access.provision('research',h.work);const report=h.environment.read(h.run,h.work);
+  expect(report.workspaces).toMatchObject({pathStyle:'host',execMountPoint:null,simultaneouslyMounted:true,grants:[{label:'private-workspace',hostRoot:realpathSync(h.privateRoot)},{label:'project',hostRoot:realpathSync(h.project)}]});
+  expect(report.execution).toMatchObject({status:'configured',network:'host',image:null});
 });
 
 it('reports artifact output against the current target instead of actor binding alone',()=>{
