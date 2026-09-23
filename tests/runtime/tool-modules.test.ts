@@ -10,6 +10,7 @@ import {fixtureTarget} from '../helpers/canonical-slack.js';
 import type {ConversationDirectory} from '../../src/conversations/directory.js';
 import {buildBaseline} from '../../src/runtime/prompt.js';
 import {environmentReportSchema} from '../../src/capabilities/environment.js';
+import {ProcessNotRunningError} from '../../src/execution/linux-processes.js';
 
 const stores:Store[]=[];afterEach(()=>stores.splice(0).forEach(store=>store.close()));
 function setup(directory?:ConversationDirectory){
@@ -26,11 +27,11 @@ messages.recent messages.read messages.search messages.send messages.watch inbox
 works.list works.select tasks.list tasks.read tasks.events tasks.byMessage tasks.intents tasks.retry tasks.continue tasks.discard tasks.create tasks.claim tasks.unclaim tasks.transfer tasks.wait tasks.update tasks.delegate
 reminders.list reminders.read reminders.log reminders.finish reminders.create reminders.edit reminders.cancel schedules.list schedules.create schedules.cancel
 actions.list actions.read sessions.status sessions.checkpoint sessions.reset environment.info budget.read agents drafts.list drafts.read drafts.retry drafts.continue drafts.revise drafts.discard
-file.read_bytes file.write_bytes file.read file.write file.list file.stat file.search file.mkdir file.move file.remove file.edit exec attachments.save research.read artifact.publish artifact.revise`.trim().split(/\s+/);
+file.read_bytes file.write_bytes file.read file.write file.list file.stat file.search file.mkdir file.move file.remove file.edit exec processes.list processes.stop attachments.save research.read artifact.publish artifact.revise`.trim().split(/\s+/);
 
 it('registers every public operation exactly once with complete policies and stable documentation order',async()=>{
   expect(builtInToolSpecs.map(entry=>entry.name)).toEqual(expected);expect(new Set(expected).size).toBe(expected.length);expect(Object.isFrozen(builtInToolSpecs)).toBe(true);
-  expect(operationContractFingerprint).toBe('4c1530474626313270db0fe9952edaa1ccf802c365e5cf86eb41bb1872a26036');
+  expect(operationContractFingerprint).toBe('92b4d0bd082c0fa94441698051430fb99932bced8d925858a841935ba085d11f');
   const allowed={work:['none','current','task','reminder','select','broker-managed'],seat:['deny','redacted-read','clean-workspace','held-send'],effect:['pure-read','atomic-recorded','broker-recorded','adapter-recorded'],replay:['immutable','refreshable','boundary-owned']};
   for(const entry of builtInToolSpecs){expect(Object.isFrozen(entry)).toBe(true);expect(entry.description.length).toBeGreaterThan(10);expect(typeof entry.schema.parse).toBe('function');expect(allowed.work).toContain(entry.workPolicy);expect(allowed.seat).toContain(entry.seatPolicy);expect(allowed.effect).toContain(entry.effectPolicy);expect(allowed.replay).toContain(entry.replayPolicy);expect(typeof entry.authorize).toBe('function');expect(typeof entry.postAwait).toBe('function');expect(typeof entry.handler).toBe('function');}
   expect(operationDocumentation).toContain(`Tool contract: ${operationContractFingerprint}`);expect(operationDocumentation.match(/Available: (.*)\.\n/)?.[1]?.split(', ')).toEqual(expected);
@@ -104,6 +105,38 @@ it('uses one seat policy for direct calls, tools.call, list and describe',async(
   await expect(router.call(run,work,'describe-held','tools.describe',{name:'messages.send'},signal)).resolves.toHaveProperty('value');
 });
 
+it('lets an Agent inspect and stop only its current Linux scope with a durable stop receipt',async()=>{
+  const base=setup(),unit='mate-agent-1001-123e4567-e89b-42d3-a456-426614174000.scope';
+  const list=vi.fn(()=>[{unit,pids:[4101]}]),stop=vi.fn(()=>({unit,stopped:true}));
+  const router=new ToolRouter(base.c,base.broker,{processes:{list,stop},research:async()=>({}),publish:async()=>({})}),signal=new AbortController().signal;
+  expect((await router.call(base.run,base.work,'process-list','processes.list',{},signal)).value).toEqual([{unit,pids:[4101]}]);
+  const stopped=await router.call(base.run,base.work,'process-stop','tools.call',{name:'processes.stop',input:{unit}},signal);
+  expect(stopped.value).toEqual({unit,stopped:true});expect(stop).toHaveBeenCalledExactlyOnceWith('research',unit);
+  expect((await router.call(base.run,base.work,'process-stop','processes.stop',{unit},signal)).value).toMatchObject({status:'succeeded',receipt:{unit,stopped:true}});
+  expect(stop).toHaveBeenCalledTimes(1);
+});
+
+it('keeps an uncertain process-stop receipt when systemd cannot confirm cleanup',async()=>{
+  const base=setup(),unit='mate-agent-1001-123e4567-e89b-42d3-a456-426614174000.scope';
+  const stop=vi.fn(()=>{throw new Error('systemd stop result unknown');});
+  const router=new ToolRouter(base.c,base.broker,{processes:{list:()=>[{unit,pids:[4101]}],stop},research:async()=>({}),publish:async()=>({})}),signal=new AbortController().signal;
+  await expect(router.call(base.run,base.work,'stop-uncertain','processes.stop',{unit},signal)).rejects.toThrow('systemd stop result unknown');
+  expect(base.store.action(`${base.run.sessionId}:stop-uncertain`)?.state).toBe('unknown');
+  expect((await router.call(base.run,base.work,'stop-uncertain','processes.stop',{unit},signal)).value).toMatchObject({status:'action_unknown'});
+  expect(stop).toHaveBeenCalledTimes(1);
+  expect((await router.call(base.run,base.work,'list-after-uncertain','processes.list',{},signal)).value).toEqual([{unit,pids:[4101]}]);
+});
+
+it('records a pre-stop refusal as failed without claiming an uncertain effect',async()=>{
+  const base=setup(),unit='mate-agent-1001-123e4567-e89b-42d3-a456-426614174000.scope';
+  const stop=vi.fn(()=>{throw new ProcessNotRunningError('Agent scope is not running');});
+  const router=new ToolRouter(base.c,base.broker,{processes:{list:()=>[],stop},research:async()=>({}),publish:async()=>({})}),signal=new AbortController().signal;
+  await expect(router.call(base.run,base.work,'stop-missing','processes.stop',{unit},signal)).rejects.toThrow('not running');
+  expect(base.store.action(`${base.run.sessionId}:stop-missing`)?.state).toBe('failed');
+  expect((await router.call(base.run,base.work,'stop-missing','processes.stop',{unit},signal)).value).toMatchObject({status:'failed',receipt:{reason:'Agent scope is not running'}});
+  expect(stop).toHaveBeenCalledTimes(1);
+});
+
 it('keeps known-URL research a receipt-free read and puts the reachable alternatives in the real baseline',async()=>{
   const base=setup(),research=vi.fn(async(url:string)=>({url,body:'evidence',truncated:false})),router=new ToolRouter(base.c,base.broker,{environment:()=>({}),research,publish:async()=>({})}),signal=new AbortController().signal;
   const before=base.store.db.prepare('SELECT count(*) n FROM actions').get();const result=await router.call(base.run,base.work,'known-url','research.read',{url:'https://example.com/source'},signal);
@@ -112,7 +145,7 @@ it('keeps known-URL research a receipt-free read and puts the reachable alternat
   expect(builtInToolSpecs.find(spec=>spec.name==='environment.info')).toMatchObject({effectPolicy:'pure-read',replayPolicy:'boundary-owned',workPolicy:'current'});
   expect(environmentReportSchema.parse({format:'mate.environment.v1',workId:'work',snapshotAt:1,authorization:'informational_snapshot_rechecked_on_every_action',workspaces:{pathStyle:'relative_to_grant',execMountPoint:'/workspace',simultaneouslyMounted:false,grants:[],unavailable:[]},execution:{status:'unavailable',network:'none',image:null},research:{status:'unavailable',mode:'known_public_https_url_only',allowedHosts:[],search:false},attachmentInput:{status:'unavailable',scope:'visible_external_message_file'},artifactOutput:{adapterStatus:'configured',status:'unavailable',scope:'supported_external_target_only'}})).toMatchObject({authorization:'informational_snapshot_rechecked_on_every_action',workspaces:{pathStyle:'relative_to_grant',simultaneouslyMounted:false},research:{search:false},artifactOutput:{adapterStatus:'configured',status:'unavailable'}});
   const built=buildBaseline(configSchema.parse(configFixture).agents[0]!,operationDocumentation),baseline=JSON.stringify(built.messages[0]);
-  expect(built.configVersion).toBe('c3a69e96bffeac86641d3047787197cfe04dd9a551c715dc8a9348fe5440bc34');
+  expect(built.configVersion).toBe('9656a366a8fb25cd4642828c7ff01f040fc2a5ce872f6aff998923c6f39fbec9');
   for(const required of [
     'Before choosing a workspace or external path, call environment.info for the current work',
     'versioned informational snapshot, not an authorization token',

@@ -2,12 +2,19 @@ import {afterEach, expect, it} from 'vitest';
 import {mkdtempSync, readFileSync, realpathSync, rmSync, statSync} from 'node:fs';
 import {tmpdir, homedir} from 'node:os';
 import {join} from 'node:path';
-import {LinuxUserBackend} from '../../src/execution/linux-user.js';
+import {LinuxUserBackend,linuxScopeCommand} from '../../src/execution/linux-user.js';
 
 const roots:string[]=[];
 afterEach(()=>{for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true});});
 function workspace(){const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-linux-user-')));roots.push(root);return root;}
 const identity={uid:process.getuid!(),gid:process.getgid!(),home:homedir()};
+
+it('places each Linux call in its Agent slice with groups cleared before the command',()=>{
+  const call=linuxScopeCommand({uid:1001,gid:1001,home:'/srv/agents/alice'},'/srv/agents/alice','/bin/sh',['-c','sleep 30 &'], 'mate-agent-1001-test');
+  expect(call.command).toBe('/usr/bin/systemd-run');
+  expect(call.unit).toBe('mate-agent-1001-test.scope');
+  expect(call.args).toEqual(expect.arrayContaining(['--scope','--collect','--slice=mate-agent-1001.slice','--working-directory=/srv/agents/alice','--expand-environment=no','/usr/bin/setpriv','--reuid=1001','--regid=1001','--clear-groups','--no-new-privs','/bin/sh','-c','sleep 30 &']));
+});
 
 it('runs file tools and shell under one stable host identity and path',async()=>{
   const root=workspace(),backend=new LinuxUserBackend({alice:identity});
@@ -20,6 +27,22 @@ it('runs file tools and shell under one stable host identity and path',async()=>
   expect(created.code).toBe(0);
   expect((await backend.execute({...request,operation:{kind:'read',path:'shell.txt'}})).stdout).toBe('from-shell');
   expect(readFileSync(join(root,'shell.txt'),'utf8')).toBe('from-shell');
+});
+
+it('returns after a normal background shell command without waiting for inherited output pipes',async()=>{
+  if(process.platform==='linux'&&process.getuid?.()===0)return; // The privileged branch is covered by the Debian scope test.
+  const root=workspace(),backend=new LinuxUserBackend({alice:identity});
+  const result=await backend.execute({agentId:'alice',root,timeoutMs:500,operation:{kind:'exec',cwd:'.',command:'sleep 2 &'}});
+  expect(result).toMatchObject({code:0,truncated:true});
+});
+
+it('keeps complete foreground output when its pipes close normally',async()=>{
+  if(process.platform==='linux'&&process.getuid?.()===0)return;
+  const root=workspace(),backend=new LinuxUserBackend({alice:identity});
+  const result=await backend.execute({agentId:'alice',root,timeoutMs:5000,operation:{kind:'exec',cwd:'.',command:'head -c 60000 /dev/zero | tr "\\000" x'}});
+  expect(result.code).toBe(0);
+  expect(result.stdout).toBe('x'.repeat(60000));
+  expect(result.truncated).toBe(false);
 });
 
 it('rejects missing identity, forbidden review networking and escaped cwd before spawn',async()=>{

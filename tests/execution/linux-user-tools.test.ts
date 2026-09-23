@@ -9,6 +9,7 @@ import {Collaboration} from '../../src/collaboration/service.js';
 import {Broker} from '../../src/policy/broker.js';
 import {ToolRouter} from '../../src/runtime/tools.js';
 import {LinuxUserBackend} from '../../src/execution/linux-user.js';
+import {LinuxProcessManager} from '../../src/execution/linux-processes.js';
 import {configFixture} from '../helpers/config.js';
 
 const cleanup:(()=>void)[]=[];
@@ -25,7 +26,8 @@ it('runs two Agents through direct file/exec calls and tools.call with stable ho
   const collaboration=new Collaboration(store,messages,new Output(messages,{post:async()=>({ts:'200.000001'})}),config);
   const identities={research:native?{uid:65534,gid:65534,home:alice}:{uid:process.getuid!(),gid:process.getgid!(),home:homedir()},bob:native?{uid:1,gid:1,home:bob}:{uid:process.getuid!(),gid:process.getgid!(),home:homedir()}};
   const backend=new LinuxUserBackend(identities);
-  const broker=new Broker(store,collaboration,backend,[]),router=new ToolRouter(collaboration,broker);
+  const manager=native?new LinuxProcessManager({research:65534,bob:1}):undefined;
+  const broker=new Broker(store,collaboration,backend,[]),router=new ToolRouter(collaboration,broker,manager?{processes:manager,research:async()=>({}),publish:async()=>({})}:undefined);
   const runs=new Map<string,{run:ReturnType<Store['beginRun']>;work:string}>();
   for(const [agentId,root] of [['research',alice],['bob',bob]] as const){
     store.register(agentId,'v1',[]);messages.membership(agentId,'CTEST',true);
@@ -50,5 +52,14 @@ it('runs two Agents through direct file/exec calls and tools.call with stable ho
     expect((await router.call(bobRun.run!,bobRun.work,'shared-read','tools.call',{name:'file.read',input:{grantId:reader,path:'research/result.txt'}},signal)).value).toMatchObject({code:0,stdout:'visible'});
     expect((await router.call(bobRun.run!,bobRun.work,'shared-no-write','file.write',{grantId:reader,path:'research/result.txt',content:'overwrite'},signal)).value).toMatchObject({code:1});
     expect((await router.call(bobRun.run!,bobRun.work,'private-denied','exec',{grantId:reader,cwd:'.',command:`cat ${alice}/note.txt`},signal)).value).toMatchObject({code:1});
+    const background=await router.call(aliceRun.run!,aliceRun.work,'background','exec',{grantId:writer,cwd:'.',command:'sleep 30 &'},signal);
+    expect((background.value as {code:number}).code).toBe(0);
+    try{
+      const old=((await router.call(aliceRun.run!,aliceRun.work,'background-list','processes.list',{},signal)).value as {unit:string;pids:number[]}[]).filter(scope=>scope.pids.length);
+      expect(old).toHaveLength(1);expect(old[0]!.pids.length).toBeGreaterThan(0);
+      expect(new LinuxProcessManager({research:65534}).list('research')).toEqual(old);
+      expect((await router.call(aliceRun.run!,aliceRun.work,'background-stop','tools.call',{name:'processes.stop',input:{unit:old[0]!.unit}},signal)).value).toEqual({unit:old[0]!.unit,stopped:true});
+      expect(manager!.list('research')).toEqual([]);
+    }finally{for(const scope of manager!.list('research'))try{manager!.stop('research',scope.unit);}catch{/* Synthetic scope expires shortly if cleanup cannot complete. */}}
   }
 });

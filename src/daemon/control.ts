@@ -1,8 +1,10 @@
 import type { Collaboration } from '../collaboration/service.js';
 import type { Supervisor } from '../runtime/supervisor.js';
 import type { Broker } from '../policy/broker.js';
+import type {LinuxProcessManager} from '../execution/linux-processes.js';
+import {ProcessNotRunningError} from '../execution/linux-processes.js';
 export class Controls {
-  constructor(readonly collaboration: Collaboration, readonly supervisor: Supervisor, readonly broker: Broker, readonly verifyReviewWorkspace: (actor:string)=>string = ()=>{throw new Error('Clean workspace verification unavailable');},readonly platformControl?:(user:string,command:string,id:string|undefined,args:string[])=>string|undefined) {}
+  constructor(readonly collaboration: Collaboration, readonly supervisor: Supervisor, readonly broker: Broker, readonly verifyReviewWorkspace: (actor:string)=>string = ()=>{throw new Error('Clean workspace verification unavailable');},readonly platformControl?:(user:string,command:string,id:string|undefined,args:string[])=>string|undefined,readonly processes?:LinuxProcessManager) {}
   execute(user: string, text: string): unknown {
     const c = this.collaboration, s = c.store;
     if (!c.config.ownerUserIds.includes(user)) throw new Error('Owner only');
@@ -10,6 +12,8 @@ export class Controls {
     const platform=command?this.platformControl?.(user,command,id,rest):undefined;if(platform!==undefined)return platform;
     switch (command) {
       case 'status': return c.operations.status(user);
+      case 'processes': if(!id)throw new Error('Agent ID required');c.messages.agent(id);if(!this.processes)throw new Error('Linux process control unavailable');return this.processes.list(id);
+      case 'process-stop': if(!id||rest.length!==1)throw new Error('process-stop AGENT_ID UNIT');c.messages.agent(id);if(!this.processes)throw new Error('Linux process control unavailable');try{return this.processes.stop(id,rest[0]!);}catch(error){if(error instanceof ProcessNotRunningError)return{unit:rest[0],stopped:false,reason:'not_running'};throw error;}
       case 'activity': return c.operations.activity(user,id?JSON.parse([id,...rest].join(' ')):{});
       case 'review-seat': {
         if(!id)throw new Error('Agent ID required');const input=JSON.parse(rest.join(' '));
@@ -40,7 +44,7 @@ export class Controls {
         const work = c.work(id); if (work.state === 'cancelled' || runs! < work.runs || tokens! < work.tokens || dollars! < work.cost) throw new Error('Budget below usage or cancelled work');
         s.db.prepare('UPDATE works SET max_runs=?,max_tokens=?,max_cost=? WHERE id=?').run(runs!, tokens!, dollars!, id); s.audit('owner_budget', { user, id, runs, tokens, dollars }); return `Budget updated for ${id}; resume separately if paused`;
       }
-      default: return 'Commands: status; activity [JSON]; tasks; schedules; conversations; projection-bindings; projection-add CONVERSATION_ID JSON; projections CONVERSATION_ID JSON; projection-inputs BINDING_ID JSON; projection-enable BINDING_ID true|false; projection-anchor BINDING_ID ROOT_ID; stop|resume|cancel WORK_ID; agent-stop|agent-resume AGENT_ID; agent-reset AGENT_ID CHECKPOINT; revoke GRANT_ID; budget WORK_ID MAX_RUNS MAX_TOKENS MAX_USD; agent-budget AGENT_ID MAX_RUNS MAX_TOKENS MAX_USD';
+      default: return 'Commands: status; processes AGENT_ID; process-stop AGENT_ID UNIT; activity [JSON]; tasks; schedules; conversations; projection-bindings; projection-add CONVERSATION_ID JSON; projections CONVERSATION_ID JSON; projection-inputs BINDING_ID JSON; projection-enable BINDING_ID true|false; projection-anchor BINDING_ID ROOT_ID; stop|resume|cancel WORK_ID; agent-stop|agent-resume AGENT_ID; agent-reset AGENT_ID CHECKPOINT; revoke GRANT_ID; budget WORK_ID MAX_RUNS MAX_TOKENS MAX_USD; agent-budget AGENT_ID MAX_RUNS MAX_TOKENS MAX_USD';
     }
   }
 }

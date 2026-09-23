@@ -24,6 +24,7 @@ import { SlackService } from '../../src/slack/service.js';
 import { CanonicalSlackTransport as WebSlackTransport } from '../../src/slack/transport.js';
 import { Artifacts } from '../../src/daemon/artifacts.js';
 import {ContainerBackend} from '../../src/execution/container.js';
+import {ProcessNotRunningError,type LinuxProcessManager} from '../../src/execution/linux-processes.js';
 import {nodeWorkspaceHost} from '../../src/deployment/workspaces.js';
 import {daemonConfigSchema} from '../../src/daemon/config.js';
 const cleanups: (() => void)[] = [];
@@ -116,6 +117,22 @@ it('controls are owner-only, durable replay applies once, and unknown admin send
   const slack=new SlackService(c,transport,ingress,controls);
   store.ingest('AONE','cmd',{command:'/team',team_id:'TTEST',user_id:'UOWNER',channel_id:'CTEST',text:`stop ${work}`});slack.replay();slack.replay();expect(c.work(work).state).toBe('paused');
   expect(store.db.prepare('SELECT count(*) n FROM admin_replies').get()).toEqual({n:1});await slack.flushAdmin();await slack.flushAdmin();expect(ephemeral).toHaveBeenCalledOnce();
+});
+it('lets only the owner list and stop an Agent Linux scope through controls',()=>{
+  const {c,broker}=setup(),unit='mate-agent-1001-123e4567-e89b-42d3-a456-426614174000.scope';
+  const list=vi.fn(()=>[{unit,pids:[4101]}]),stop=vi.fn(()=>({unit,stopped:true}));
+  const controls=new Controls(c,{} as Supervisor,broker,undefined,undefined,{list,stop} as unknown as LinuxProcessManager);
+  expect(()=>controls.execute('UONE','processes research')).toThrow('Owner only');
+  expect(controls.execute('UOWNER','processes research')).toEqual([{unit,pids:[4101]}]);
+  expect(controls.execute('UOWNER',`process-stop research ${unit}`)).toEqual({unit,stopped:true});
+  expect(list).toHaveBeenCalledWith('research');expect(stop).toHaveBeenCalledWith('research',unit);
+});
+it('reports a repeated owner stop as no longer running after a crash before control receipt commit',()=>{
+  const {c,broker}=setup(),unit='mate-agent-1001-123e4567-e89b-42d3-a456-426614174000.scope';
+  const stop=vi.fn().mockReturnValueOnce({unit,stopped:true}).mockImplementationOnce(()=>{throw new ProcessNotRunningError('Agent scope is not running');});
+  const controls=new Controls(c,{} as Supervisor,broker,undefined,undefined,{list:()=>[],stop} as unknown as LinuxProcessManager);
+  expect(controls.execute('UOWNER',`process-stop research ${unit}`)).toEqual({unit,stopped:true});
+  expect(controls.execute('UOWNER',`process-stop research ${unit}`)).toEqual({unit,stopped:false,reason:'not_running'});
 });
 it('artifact upload is scoped to own artifact directory and uncertain publication cannot be repeated with a new ID', async () => {
   const {store,c,broker}=setup();new ToolRouter(c,broker);store.register('research','v1',[]);c.messages.membership('research','CTEST',true);const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-artifact-')));cleanups.push(()=>rmSync(root,{recursive:true,force:true}));mkdirSync(join(root,'artifacts'));

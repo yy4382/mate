@@ -32,6 +32,7 @@ import { Broker } from '../policy/broker.js';
 import { SandboxBackend, type ExecutionBackend } from '../execution/backend.js';
 import { ContainerBackend, ControlledBackend } from '../execution/container.js';
 import {LinuxUserBackend} from '../execution/linux-user.js';
+import {LinuxProcessManager} from '../execution/linux-processes.js';
 import { canonicalRoot, within } from '../execution/paths.js';
 import { Supervisor } from '../runtime/supervisor.js';
 import { ToolRouter } from '../runtime/tools.js';
@@ -82,7 +83,11 @@ export class Daemon {
   readonly config:DaemonConfig;
   static async create(input:unknown,log:Log,projectRoot=resolve('.'),environment:DaemonEnvironment=nodeDeploymentEnvironment()):Promise<Daemon>{
     const config=daemonConfigSchema.parse(input),data=config.runtime.dataDir;
-    if(config.runtime.linuxUsers&&process.platform==='linux'&&process.getuid?.()!==0)throw new Error('Mate must run as root to switch Agent Linux users');
+    if(config.runtime.linuxUsers&&process.platform==='linux'){
+      if(process.getuid?.()!==0)throw new Error('Mate must run as root to switch Agent Linux users');
+      const processes=new LinuxProcessManager(Object.fromEntries(Object.entries(config.runtime.linuxUsers).map(([agentId,user])=>[agentId,user.uid])));
+      for(const agent of config.mate.agents)processes.verifyQuota(agent.id);
+    }
     mkdirSync(data,{recursive:true,mode:0o700});if(lstatSync(data).isSymbolicLink()||within(realpathSync(projectRoot),realpathSync(data)))throw new Error('Data directory must be outside the application checkout and not a symlink');
     const state=join(data,'state');mkdirSync(state,{recursive:true,mode:0o700});if(lstatSync(state).isSymbolicLink())throw new Error('State path must not be a symlink');
     if(config.runtime.linuxUsers)for(const path of [data,state]){const status=lstatSync(path);if(!status.isDirectory()||status.uid!==process.getuid?.()||status.gid!==process.getgid?.()||(status.mode&0o777)!==0o700)throw new Error(`Mate control directory must be private and owned by Mate: ${path}`);}
@@ -163,6 +168,7 @@ export class Daemon {
       }
       const profiles=workspaceProfiles(this.memoryRoots,normalizeConfiguredWorkspaces([...config.runtime.workspaceGrants,...sharedProfiles],[...protectedRoots,...(config.runtime.linuxUsers?Object.values(this.memoryRoots):[])]),!!(config.runtime.docker||config.runtime.linuxUsers),verifiedWorkspaces?.capacityByRoot);
       const linuxBackend=config.runtime.linuxUsers?new LinuxUserBackend(config.runtime.linuxUsers):undefined;
+      const linuxProcesses=config.runtime.linuxUsers?new LinuxProcessManager(Object.fromEntries(Object.entries(config.runtime.linuxUsers).map(([agentId,user])=>[agentId,user.uid]))):undefined;
       const rawFiles:ExecutionBackend=linuxBackend??(this.container&&process.platform==='linux'?this.container:new SandboxBackend()),rawCommands:ExecutionBackend=linuxBackend??this.container??{ execute: async () => { throw new Error('Execution backend is not configured'); } };
       const files=verifiedWorkspaces?new DeploymentBoundaryBackend(rawFiles,config,deploymentEnvironment,verifiedWorkspaces):rawFiles,commands=verifiedWorkspaces?new DeploymentBoundaryBackend(rawCommands,config,deploymentEnvironment,verifiedWorkspaces):rawCommands;
       const backendAdmission=new FairAdmission(config.runtime.limits.maxBackendOperations),admittedFiles=new AdmittedBackend(files,backendAdmission);
@@ -173,14 +179,14 @@ export class Daemon {
       let artifacts!: Artifacts;
       const attachments=transport?new Attachments(this.collaboration,this.broker,transport.clients):undefined;
       const environment=new EnvironmentCapabilities(this.collaboration,this.broker,profiles,{image:config.runtime.docker?.image??null,network:linuxBackend?'host':config.runtime.docker?.network??'none',linuxUser:!!linuxBackend,researchHosts:config.runtime.researchHosts,attachmentConfigured:actor=>attachments?.configured(actor)??false,artifactConfigured:actor=>artifacts?.configured(actor)??false,artifactSupported:(actor,target)=>artifacts?.supports(actor,target)??false});
-      const router = new ToolRouter(this.collaboration, this.broker, { attachment:(...args)=>{if(!attachments)throw new Error('Attachment adapter unavailable');return attachments.save(...args);},environment:(run,workId)=>environment.read(run,workId),research: (url, signal) => research.read(url, signal), publish: (...args) => artifacts.publish(...args) }, new TeamDirectory(messages,transport?new Directory(messages,transport.clients,transport.mapper):undefined), (actor,workId)=>workspaceAccess.provision(actor,workId),value=>slackApp?.argumentsCodec.args(value)??value,transport?new SlackHistory(messages,transport):undefined);
+      const router = new ToolRouter(this.collaboration, this.broker, { attachment:(...args)=>{if(!attachments)throw new Error('Attachment adapter unavailable');return attachments.save(...args);},environment:(run,workId)=>environment.read(run,workId),...(linuxProcesses?{processes:linuxProcesses}:{}),research: (url, signal) => research.read(url, signal), publish: (...args) => artifacts.publish(...args) }, new TeamDirectory(messages,transport?new Directory(messages,transport.clients,transport.mapper):undefined), (actor,workId)=>workspaceAccess.provision(actor,workId),value=>slackApp?.argumentsCodec.args(value)??value,transport?new SlackHistory(messages,transport):undefined);
       this.supervisor = new Supervisor(this.collaboration, router, c, undefined, async (agentId, workId, signal) => {
         workspaceAccess.provision(agentId, workId);
         const result = await admittedFiles.execute({ agentId,root: this.memoryRoots[agentId]!, operation: { kind: 'read', path: 'MEMORY.md' }, timeoutMs: 10000 }, signal);
         if (result.code !== 0 || result.truncated) throw new Error('Private memory recovery read failed'); return result.stdout;
       },{runAdmission:new FairAdmission(config.runtime.limits.maxActiveRuns),workerIdleMs:config.runtime.limits.workerIdleMs});
       this.supervisor.register();
-      this.controls=new Controls(this.collaboration,this.supervisor,this.broker,actor=>this.verifyReviewWorkspace(actor),(user,command,id,args)=>this.slackRuntime?.projections.control(user,command,id,args));
+      this.controls=new Controls(this.collaboration,this.supervisor,this.broker,actor=>this.verifyReviewWorkspace(actor),(user,command,id,args)=>this.slackRuntime?.projections.control(user,command,id,args),linuxProcesses);
       this.adapter=this.slackRuntime=transport?new SlackRuntime(this.collaboration,transport,this.controls,message=>this.log.error({},message)):undefined;
       this.local=config.adapters.local?new LocalAdapter(this.collaboration,config.adapters.local.humans):undefined;
       artifacts = new Artifacts(this.collaboration,this.broker,this.slackRuntime?.service,this.memoryRoots);

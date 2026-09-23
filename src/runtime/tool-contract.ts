@@ -15,6 +15,7 @@ export type ReplayPolicy='immutable'|'refreshable'|'boundary-owned';
 
 export interface AdditionalTools {
   environment?(run:RunToken,workId:string):unknown;
+  processes?:{list(agentId:string):unknown;stop(agentId:string,unit:string):unknown};
   attachment?(run:RunToken,workId:string,actionId:string,args:import('../capabilities/artifacts.js').AttachmentArgs,signal:AbortSignal):Promise<unknown>;
   research(url:string,signal:AbortSignal):Promise<unknown>;
   publish(run:RunToken,workId:string,actionId:string,args:import('../capabilities/artifacts.js').PublishArgs,signal:AbortSignal):Promise<unknown>;
