@@ -115,7 +115,7 @@ it('stop during startup retains the singleton lock until startup settles and nev
   const log={info:()=>{},error:()=>{}};const daemon=await Daemon.create(config,log);const verify=vi.spyOn(daemon.slack,'verify').mockImplementation(()=>gate.promise);const membership=vi.spyOn(daemon.slack,'membership');
   try {
     const starting=daemon.start();await vi.waitFor(()=>expect(verify).toHaveBeenCalledOnce());const closing=daemon.close();expect(()=>acquireLock(join(root,'state','daemon.lock'))).toThrow('Another Mate');
-    gate.resolve();await starting;await closing;expect(membership).not.toHaveBeenCalled();const release=acquireLock(join(root,'state','daemon.lock'));release();
+    gate.resolve();await expect(starting).rejects.toThrow('stopped during startup');await closing;expect(membership).not.toHaveBeenCalled();const release=acquireLock(join(root,'state','daemon.lock'));release();
   } finally {await daemon.close();for(const ref of refs){if(saved[ref]===undefined)delete process.env[ref];else process.env[ref]=saved[ref];}rmSync(root,{recursive:true,force:true});}
 });
 it('recovers and probes the configured container before opening the Slack adapter',async()=>{

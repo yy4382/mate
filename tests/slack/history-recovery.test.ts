@@ -7,10 +7,11 @@ function setup(){const store=new Store(':memory:');stores.push(store);store.regi
 function options(store:Store,fetch:(state:{oldest:string|undefined;cursor:string|undefined})=>Promise<{messages:{ts:string}[];next:string|undefined}>){return{store,agentId:'research',cursorKey:'C',initialOldest:'10.000000',fetch,timestamp:(message:{ts:string})=>message.ts,ingest:vi.fn()};}
 
 it('resumes from the page cursor persisted before a transient failure',async()=>{
- const store=setup(),first=vi.fn(async({cursor}:{cursor:string|undefined})=>{if(cursor==='page-2')throw new Error('offline');return{messages:[{ts:'11.000000'}],next:'page-2'};}),input=options(store,first);
+ const store=setup(),first=vi.fn(async({cursor}:{cursor:string|undefined})=>{if(cursor==='page-2')throw new Error('offline');return{messages:[{ts:'11.000000'}],next:'page-2'};}),onPage=vi.fn(),input={...options(store,first),onPage};
  expect(await recoverSlackHistory(input)).toBe(false);
  const resumed=vi.fn(async()=>({messages:[{ts:'12.000000'}],next:undefined}));expect(await recoverSlackHistory({...input,fetch:resumed})).toBe(true);
  expect(resumed).toHaveBeenCalledWith({oldest:'10.000000',cursor:'page-2'});expect(store.db.prepare("SELECT ts FROM slack_cursors WHERE agent_id='research' AND channel='C'").get()).toEqual({ts:'12.000000'});
+ expect(onPage).toHaveBeenCalledTimes(2);
 });
 it('drops an expired page cursor but retains the original oldest boundary for an idempotent rescan',async()=>{
  const store=setup(),expired=Object.assign(new Error('expired'),{data:{error:'invalid_cursor'}}),first=vi.fn(async({cursor}:{cursor:string|undefined})=>{if(cursor)throw expired;return{messages:[{ts:'11.000000'}],next:'expired'};}),input=options(store,first);

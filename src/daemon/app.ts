@@ -85,8 +85,8 @@ export class Daemon {
     const state=join(data,'state');mkdirSync(state,{recursive:true,mode:0o700});if(lstatSync(state).isSymbolicLink())throw new Error('State path must not be a symlink');
     const release=acquireLock(join(state,'daemon.lock'));let transferred=false;
     try{
-      await assertDeploymentOperationAllowed('start',{config,releaseRoot:projectRoot},environment.deploymentJournalTrust??{requiredOwnerUid:0,requiredOwnerGid:process.getgid?.()??-1});
       await assertNoRestoreInProgress(data);
+      await assertDeploymentOperationAllowed('start',{config,releaseRoot:projectRoot,...(environment.enforceFinalizedRelease!==undefined?{enforceFinalizedRelease:environment.enforceFinalizedRelease}:{})},environment.deploymentJournalTrust??{requiredOwnerUid:0,requiredOwnerGid:process.getgid?.()??-1});
       const agentsDir=join(data,'agents');assertDockerControlIsolation(projectRoot,state,agentsDir,config.runtime.workspaceGrants,config.runtime.docker,config.runtime.workspaceManifest?[config.runtime.workspaceManifest]:[]);
       const container=config.runtime.docker?new ContainerBackend({...config.runtime.docker,scope:executionScope(data)}):undefined;
       await container?.recover();
@@ -175,18 +175,18 @@ export class Daemon {
     const memory=join(root,'MEMORY.md');if(lstatSync(memory).isSymbolicLink()||lstatSync(memory).nlink!==1||readFileSync(memory,'utf8')!==`# ${agent.name}\n\nPrivate memory entry. Keep durable lessons and links to notes here.\n`)throw new Error('Review memory contains prior material');
     return root;
   }
-  start(): Promise<void> {
-    if(!this.startPromise){this.opening=this.open();this.startPromise=this.opening.catch(async error=>{await this.close();throw error;});}
+  start(progress?:()=>void): Promise<void> {
+    if(!this.startPromise){this.opening=this.open(progress);this.startPromise=this.opening.catch(async error=>{await this.close();throw error;});}
     return this.startPromise;
   }
-  private async open(): Promise<void> {
-    if (this.stopping) return;
+  private async open(progress?:()=>void): Promise<void> {
+    if (this.stopping) throw new Error('Daemon stopped during startup');
     if(this.managedWorkspaceBoundary)verifyDeploymentWorkspaces(this.config,this.deploymentEnvironment);
-    if(this.container){const roots=this.containerProbeRoots.length?this.containerProbeRoots:[Object.values(this.memoryRoots)[0]!];if(!roots[0])throw new Error('Container probe requires an Agent workspace');for(const root of roots)await this.container.probe(root);}if(this.stopping)return;
+    if(this.container){const roots=this.containerProbeRoots.length?this.containerProbeRoots:[Object.values(this.memoryRoots)[0]!];if(!roots[0])throw new Error('Container probe requires an Agent workspace');for(const root of roots){await this.container.probe(root);progress?.();}}if(this.stopping)throw new Error('Daemon stopped during startup');
     this.store.recover();this.adapter?.recover();this.supervisor.recoverSessions();
     const models=builtinModels();for(const agent of this.config.mate.agents){requireSecret(process.env,agent.model.apiKeyEnv);if(!models.getModel(agent.model.provider,agent.model.id))throw new Error(`Unknown provider/model for ${agent.id}`);}
     const slackConfig=slackRuntimeConfig(this.config);if(slackConfig&&this.slackRuntime)this.slackRuntime.transport.configure(Object.fromEntries(slackConfig.agents.map(agent=>[agent.id,requireSecret(process.env,agent.botTokenEnv)])));
-    await this.adapter?.start(this.abort.signal);if(this.stopping)return;
+    await this.adapter?.start(this.abort.signal,progress);if(this.stopping)throw new Error('Daemon stopped during startup');
     this.collaboration.output.gate?.adoptPending();
     this.loopPromise=this.loop();this.log.info({},'Mate daemon started');
   }

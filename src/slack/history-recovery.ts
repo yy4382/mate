@@ -2,10 +2,11 @@ import type {Store} from '../storage/store.js';
 
 interface RecoveryState{oldest?:string;cursor?:string;newest:string}
 export interface HistoryPage<T>{messages:readonly T[];next:string|undefined}
-export interface PageScanOptions<T=any>{store:Store;key:string;maxPages?:number;current?:()=>boolean;fetch(cursor:string|undefined):Promise<HistoryPage<T>>;visit(messages:readonly T[]):void|boolean|Promise<void|boolean>}
+export interface PageScanOptions<T=any>{store:Store;key:string;maxPages?:number;current?:()=>boolean;onPage?:(()=>void)|undefined;fetch(cursor:string|undefined):Promise<HistoryPage<T>>;visit(messages:readonly T[]):void|boolean|Promise<void|boolean>}
 export interface HistoryRecoveryOptions<T=any>{
  store:Store;agentId:string;cursorKey:string;initialOldest:string|undefined;
  current?:()=>boolean;
+ onPage?:(()=>void)|undefined;
  fetch(state:{oldest:string|undefined;cursor:string|undefined}):Promise<HistoryPage<T>>;
  timestamp(message:T):string|undefined;ingest(message:T):void;
 }
@@ -34,10 +35,11 @@ export async function scanSlackPages<T>(options:PageScanOptions<T>):Promise<'fou
    if(options.current&&!options.current())throw new Error('Slack scan invalidated');
    const found=await options.visit(page.messages),next=page.next||undefined;
    if(options.current&&!options.current())throw new Error('Slack scan invalidated');
-   if(found){options.store.db.prepare('DELETE FROM runtime_meta WHERE key=?').run(options.key);return'found';}
+   if(found){options.store.db.prepare('DELETE FROM runtime_meta WHERE key=?').run(options.key);options.onPage?.();return'found';}
    if(next&&(next===cursor||seen.has(next))){options.store.db.prepare('DELETE FROM runtime_meta WHERE key=?').run(options.key);throw new Error('Slack page cursor repeated');}
-   if(!next){options.store.db.prepare('DELETE FROM runtime_meta WHERE key=?').run(options.key);return'exhausted';}
+   if(!next){options.store.db.prepare('DELETE FROM runtime_meta WHERE key=?').run(options.key);options.onPage?.();return'exhausted';}
    seen.add(next);cursor=next;persist(options.store,options.key,{cursor,newest:'0.000000'});
+   options.onPage?.();
    if(++pages===(options.maxPages??Infinity))return'paused';
   }catch(error){
    if(invalidCursor(error)&&cursor&&invalidResets++===0){cursor=undefined;seen.clear();options.store.db.prepare('DELETE FROM runtime_meta WHERE key=?').run(options.key);continue;}
@@ -68,8 +70,8 @@ export async function recoverSlackHistory<T>(options:HistoryRecoveryOptions<T>):
    for(const message of page.messages){options.ingest(message);const timestamp=options.timestamp(message);if(timestamp&&integer(timestamp)>integer(state.newest))state={...state,newest:timestamp};}
    const next=page.next||undefined;
    if(next&&(next===state.cursor||seen.has(next)))throw new Error('Slack history cursor repeated');
-   if(!next){options.store.atomic(()=>{options.store.db.prepare('INSERT INTO slack_cursors VALUES(?,?,?) ON CONFLICT(agent_id,channel) DO UPDATE SET ts=excluded.ts').run(options.agentId,options.cursorKey,state.newest);options.store.db.prepare('DELETE FROM runtime_meta WHERE key=?').run(key);});return true;}
-   seen.add(next);state={...state,cursor:next};persist(options.store,key,state);
+   if(!next){options.store.atomic(()=>{options.store.db.prepare('INSERT INTO slack_cursors VALUES(?,?,?) ON CONFLICT(agent_id,channel) DO UPDATE SET ts=excluded.ts').run(options.agentId,options.cursorKey,state.newest);options.store.db.prepare('DELETE FROM runtime_meta WHERE key=?').run(key);});options.onPage?.();return true;}
+   seen.add(next);state={...state,cursor:next};persist(options.store,key,state);options.onPage?.();
   }
  }catch(error){
   if(invalidCursor(error)&&state.cursor){state={...(state.oldest?{oldest:state.oldest}:{}),newest:state.newest};persist(options.store,key,state);}

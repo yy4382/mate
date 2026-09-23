@@ -6,7 +6,8 @@ import { pathToFileURL } from 'node:url';
 import { afterEach, expect, it } from 'vitest';
 import { daemonConfigSchema } from '../../src/daemon/config.js';
 import { createDeploymentPlan } from '../../src/deployment/plan.js';
-import { createReleaseManifest } from '../../src/deployment/release.js';
+import { assertSameReleasePayload,createReleaseManifest,verifyRelease } from '../../src/deployment/release.js';
+import {assertDeploymentOperationAllowed,assertFinalizedReleaseRuntime} from '../../src/deployment/upgrade.js';
 import { deploymentSpecSchema } from '../../src/deployment/spec.js';
 import { renderMaintenanceWrapper, renderMountUnit, renderService } from '../../src/deployment/systemd.js';
 import { initializePublishedVolume, inspectExistingInstallation, preflightDeployment, prepareMountpoint, publishRelease, remainingRequiredBytes, removeBoundReleaseCleanup, syncPayloadTree, type InstallerHost } from '../../src/deployment/installer.js';
@@ -57,7 +58,7 @@ it('renders fixed systemd boundaries and a syntax-valid allowlist wrapper', () =
   const mounts = [{ root: '/var/lib/mate/agents/research', backingFile: '/var/lib/mate-volumes/private-research.ext4', unitName: 'var-lib-mate-agents-research.mount' }];
   const mount = renderMountUnit(mounts[0]!), service = renderService(mounts, 512, ['/srv/shared']), wrapper = renderMaintenanceWrapper(['/srv/shared']);
   expect(mount).toContain('Options=loop,rw,nodev,nosuid');
-  expect(service).toContain('SupplementaryGroups=docker'); expect(service).toContain('ProtectSystem=strict'); expect(service).toContain('CapabilityBoundingSet='); expect(service).toContain('MemoryMax=512M'); expect(service).toContain('/srv/shared');
+  expect(service).toContain('Type=notify');expect(service).toContain('NotifyAccess=all');expect(service).toContain('TimeoutStartSec=900');expect(service).toContain('SupplementaryGroups=docker'); expect(service).toContain('ProtectSystem=strict'); expect(service).toContain('CapabilityBoundingSet='); expect(service).toContain('MemoryMax=512M'); expect(service).toContain('/srv/shared');
   expect(wrapper).toContain('--property=EnvironmentFile=/etc/mate/mate.env');
   expect(wrapper).toContain('case "${1-}"'); expect(wrapper).not.toContain('eval '); expect(wrapper).not.toContain(' "$@"\n'); expect(wrapper).toContain('checkpoint_name "$2"');
   const root = mkdtempSync(join(tmpdir(), 'mate-wrapper-')); roots.push(root); const path = join(root, 'matectl'); writeFileSync(path, wrapper); expect(() => execFileSync('/bin/sh', ['-n', path])).not.toThrow();
@@ -67,6 +68,16 @@ it('binds release identity to lockfile, runtime, dependency inventory and native
   const root = mkdtempSync(join(tmpdir(), 'mate-release-')); roots.push(root); mkdirSync(join(root, 'dist')); mkdirSync(join(root, 'node_modules')); mkdirSync(join(root, 'node_modules', 'pkg')); writeFileSync(join(root, 'dist', 'main.js'), 'one'); writeFileSync(join(root, 'node_modules', 'pkg', 'addon.node'), 'native'); writeFileSync(join(root, 'package.json'), '{}'); writeFileSync(join(root, 'pnpm-lock.yaml'), 'lockfileVersion: 9'); symlinkSync('pkg', join(root, 'node_modules', 'alias'));
   const runtime = { platform: 'linux' as const, arch: 'x64', node: 'v24.21.0', modulesAbi: '137', packageManager: 'pnpm@10.33.0' };
   const first = await createReleaseManifest(root, 'abcdef1234567', runtime); expect(first.nativeAddons).toHaveLength(1); expect(first.target).toMatchObject({ arch: 'x64', node: 'v24.21.0', modulesAbi: '137' });
+  writeFileSync(join(root,'RELEASE.json'),`${JSON.stringify(first,null,2)}\n`);
+  await expect(verifyRelease(root,first.releaseId,runtime)).resolves.toMatchObject({releaseId:first.releaseId});
+  await expect(verifyRelease(root,first.releaseId,{...runtime,node:'v24.20.0'})).rejects.toThrow('current Node runtime and ABI');
+  await expect(assertFinalizedReleaseRuntime(root,runtime)).resolves.toBeUndefined();
+  await expect(assertFinalizedReleaseRuntime(root,{...runtime,modulesAbi:'999'})).rejects.toThrow('current Node runtime and ABI');
+  expect(()=>assertSameReleasePayload(first,{...first,inventory:first.inventory.map(entry=>entry.path==='dist/main.js'&&entry.type==='file'?{...entry,sha256:'b'.repeat(64)}:entry)})).toThrow('Copied release payload differs');
+  const managed=structuredClone(config());managed.runtime.dataDir=join(root,'data');mkdirSync(join(managed.runtime.dataDir,'control'),{recursive:true});
+  await expect(assertDeploymentOperationAllowed('start',{config:managed,releaseRoot:root,enforceFinalizedRelease:true,releaseRuntime:runtime})).resolves.toBeUndefined();
+  await expect(assertDeploymentOperationAllowed('start',{config:managed,releaseRoot:root,enforceFinalizedRelease:true,releaseRuntime:{...runtime,node:'v24.20.0'}})).rejects.toThrow('current Node runtime and ABI');
+  rmSync(join(root,'RELEASE.json'));
   writeFileSync(join(root, 'dist', 'main.js'), 'two'); const second = await createReleaseManifest(root, 'abcdef1234567', runtime); expect(second.releaseId).not.toBe(first.releaseId);
   symlinkSync('/tmp', join(root, 'node_modules', 'escape')); await expect(createReleaseManifest(root, 'abcdef1234567', runtime)).rejects.toThrow('relative');
 });
@@ -79,15 +90,17 @@ it('accepts pnpm-style hardlinks only when every link is inside the immutable re
   await expect(createReleaseManifest(root, 'abcdef1234567', runtime)).rejects.toThrow('outside the immutable tree'); rmSync(outside, { force: true });
 });
 
-it('preflights through a fake host without mutating it and refuses resource or baseline gaps', () => {
-  const calls: string[] = [], host: InstallerHost = { platform: 'linux', arch: 'x64', node: 'v24.21.0', euid: () => 1000, read: () => 'ID=debian\nVERSION_ID="13"\n', assertRootExecutable: path => { calls.push(`binary:${path}`); }, run: (binary, args) => { calls.push(`${binary} ${args.join(' ')}`); return { code: binary === '/usr/bin/systemctl' ? 3 : 0, stdout: '{}', stderr: '' }; }, directoryBytes: () => 1024, canonical: path => path, availableBytes: () => 10 * 1024 ** 3, memoryMiB: () => 4096, existingInstall: () => undefined };
-  expect(preflightDeployment(spec(), config(), host).target.os).toBe('debian'); expect(calls.some(value => value.includes('image inspect'))).toBe(true); expect(calls.filter(value => value.startsWith('/')).every(value => !value.includes('mkfs'))).toBe(true);
-  expect(() => preflightDeployment(spec(), config(), { ...host, memoryMiB: () => 100 })).toThrow('memory');
-  expect(() => preflightDeployment(spec(), config(), { ...host, platform: 'darwin' })).toThrow('Debian 13');
+it('preflights through a fake host without mutating it and refuses resource or baseline gaps', async() => {
+  const calls: string[] = [],runtime={platform:'linux',arch:'x64',node:'v24.21.0',modulesAbi:'137',packageManager:'pnpm@10.33.0'} as const,hash='a'.repeat(64),manifest={version:1 as const,releaseId:hash,gitCommit:'abcdef1234567',recoveryProtocol:1,target:runtime,lockSha256:hash,inventorySha256:hash,dependencyInventorySha256:hash,nativeAddons:[],inventory:[]};
+  const host: InstallerHost = { platform: 'linux', arch: 'x64', node: 'v24.21.0', euid: () => 1000, read: () => 'ID=debian\nVERSION_ID="13"\n', assertRootExecutable: path => { calls.push(`binary:${path}`); }, run: (binary, args) => { calls.push(`${binary} ${args.join(' ')}`); return { code: binary === '/usr/bin/systemctl' ? 3 : 0, stdout: '{}', stderr: '' }; }, directoryBytes: () => 1024, canonical: path => path, availableBytes: () => 10 * 1024 ** 3, memoryMiB: () => 4096, existingInstall: () => undefined,systemNodeRuntime:()=>runtime,verifySourceRelease:async()=>manifest };
+  expect((await preflightDeployment(spec(), config(), host)).target.os).toBe('debian'); expect(calls).toContain('binary:/usr/bin/systemd-notify');expect(calls.some(value => value.includes('image inspect'))).toBe(true); expect(calls.filter(value => value.startsWith('/')).every(value => !value.includes('mkfs'))).toBe(true);
+  await expect(preflightDeployment(spec(), config(), { ...host, memoryMiB: () => 100 })).rejects.toThrow('memory');
+  await expect(preflightDeployment(spec(), config(), { ...host, platform: 'darwin' })).rejects.toThrow('Debian 13');
   const plan = createDeploymentPlan(spec(), config(), host), consumedBytes = plan.storage.totalRequiredBytes - 4096;
-  expect(() => preflightDeployment(spec(), config(), { ...host, availableBytes: () => 4096, existingInstall: () => ({ inputIdentity: 'identity-does-not-match', complete: false, consumedBytes }) })).toThrow('differs');
+  await expect(preflightDeployment(spec(), config(), { ...host, availableBytes: () => 4096, existingInstall: () => ({ inputIdentity: 'identity-does-not-match', complete: false, consumedBytes }) })).rejects.toThrow('differs');
   expect(remainingRequiredBytes(plan, { inputIdentity: 'same', complete: false, consumedBytes })).toBe(4096);
   expect(remainingRequiredBytes(plan, { inputIdentity: 'same', releaseId: 'a'.repeat(64), complete: true, consumedBytes: 0 })).toBe(0);
+  await expect(preflightDeployment(spec(),config(),{...host,verifySourceRelease:async()=>({...manifest,gitCommit:'bbbbbbb'})})).rejects.toThrow('source commit');
 });
 
 it('finishes ownership and unmount when resuming an already-mounted workspace', () => {
@@ -156,10 +169,10 @@ it('resumes cleanup of a partially deleted release staging directory by bound in
 
 it('resumes the full published release path after duplicate staging is partly deleted', async () => {
   const root = mkdtempSync(join(tmpdir(), 'mate-publish-cleanup-')); roots.push(root); const releases = join(root, 'releases'); mkdirSync(releases); const source = join(root, 'source'); mkdirSync(source); mkdirSync(join(source, 'dist')); mkdirSync(join(source, 'node_modules')); writeFileSync(join(source, 'dist', 'main.js'), 'main'); writeFileSync(join(source, 'node_modules', 'dep.js'), 'dep'); writeFileSync(join(source, 'package.json'), '{}'); writeFileSync(join(source, 'pnpm-lock.yaml'), 'lockfileVersion: 9');
-  const manifest = await createReleaseManifest(source, 'abcdef1234567', { platform: 'linux', arch: 'x64', node: 'v24.21.0', modulesAbi: '137', packageManager: 'pnpm@10.33.0' }), final = join(releases, manifest.releaseId); cpSync(source, final, { recursive: true }); writeFileSync(join(final, 'RELEASE.json'), `${JSON.stringify(manifest, null, 2)}\n`); const finalIdentity = lstatSync(final);
+  const manifest = await createReleaseManifest(source, 'abcdef1234567', { platform: 'linux', arch: 'x64', node: 'v24.21.0', modulesAbi: '137', packageManager: 'pnpm@10.33.0' }), final = join(releases, manifest.releaseId);writeFileSync(join(source,'RELEASE.json'),`${JSON.stringify(manifest,null,2)}\n`); cpSync(source, final, { recursive: true }); const finalIdentity = lstatSync(final);
   const stage = join(releases, '.stage'); cpSync(final, stage, { recursive: true }); const cleanupIdentity = lstatSync(stage); rmSync(join(stage, 'package.json'));
   const journalPath = join(root, 'journal.json'), journal = { version: 1 as const, transaction: '55555555-5555-4555-8555-555555555555', inputIdentity: '1'.repeat(64), uid: process.getuid!(), gid: process.getgid!(), directories: [], release: { stage, stageDev: finalIdentity.dev, stageIno: finalIdentity.ino, cleanupDev: cleanupIdentity.dev, cleanupIno: cleanupIdentity.ino, releaseId: manifest.releaseId, status: 'published' as const }, volumes: [], phase: 'resources' as const }; writeFileSync(journalPath, `${JSON.stringify(journal)}\n`, { mode: 0o600 }); chmodSync(journalPath, 0o600);
-  const host = { run: (binary: string, args: readonly string[]) => { if (binary === '/usr/bin/rm') rmSync(args.at(-1)!, { recursive: true, force: true }); return { code: 0, stdout: '', stderr: '' }; } } as unknown as InstallerHost;
+  const host = { run: (binary: string, args: readonly string[]) => { if (binary === '/usr/bin/rm') rmSync(args.at(-1)!, { recursive: true, force: true }); return { code: 0, stdout: '', stderr: '' }; },systemNodeRuntime:()=>({platform:'linux',arch:'x64',node:'v24.21.0',modulesAbi:'137',packageManager:'pnpm@10.33.0'}),verifySourceRelease:async()=>manifest } as unknown as InstallerHost;
   const result = await publishRelease(host, { ...spec(), release: { source, gitCommit: 'abcdef1234567' } }, journalPath, journal, releases);
   expect(result.path).toBe(final); expect(result.journal.release).not.toHaveProperty('cleanupDev'); expect(() => lstatSync(stage)).toThrow();
 });

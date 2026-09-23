@@ -20,7 +20,7 @@ export async function deploymentMain(args = process.argv.slice(2)): Promise<void
   if (command === 'disable') { const config = daemonConfigSchema.parse(JSON.parse(readFileSync(resolve(input), 'utf8'))); disableDeployment(config); process.stdout.write('Mate is disabled; state, backings, units and checkpoints were retained.\n'); return; }
   const { spec, config } = readDeploymentInputs(input), host = nodeInstallerHost();
   if (command === 'plan') { process.stdout.write(`${JSON.stringify(createDeploymentPlan(spec, config, host), null, 2)}\n`); return; }
-  if (command === 'preflight') { process.stdout.write(`${JSON.stringify(preflightDeployment(spec, config, host), null, 2)}\n`); return; }
+  if (command === 'preflight') { process.stdout.write(`${JSON.stringify(await preflightDeployment(spec, config, host), null, 2)}\n`); return; }
   process.stdout.write(`${JSON.stringify(await installDeployment(spec, config, host), null, 2)}\n`);
 }
 

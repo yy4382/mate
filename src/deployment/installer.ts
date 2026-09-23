@@ -7,10 +7,10 @@ import {
 import { basename, dirname, join, resolve } from 'node:path';
 import { z } from 'zod';
 import { daemonConfigSchema, type DaemonConfig } from '../daemon/config.js';
-import { createReleaseManifest, verifyRelease, type ReleaseManifest } from './release.js';
+import { assertReleaseRuntime,assertSameReleasePayload,createReleaseManifest, verifyRelease, type ReleaseManifest, type ReleaseRuntime } from './release.js';
 import { createDeploymentPlan, type DeploymentPlan, type PlannedWorkspace } from './plan.js';
 import { deploymentSpecSchema, type DeploymentSpec } from './spec.js';
-import { assertSafeUnitName, managedLayout, renderMaintenanceWrapper, renderMountUnit, renderService, type ManagedMount } from './systemd.js';
+import { assertSafeUnitName, managedLayout, renderMaintenanceWrapper, renderMountUnit, renderService, transientUnitProperties, type ManagedMount } from './systemd.js';
 import {readDeploymentJournal,deploymentUpgradeInProgress} from './upgrade.js';
 
 const journalSchema = z.object({
@@ -55,6 +55,8 @@ export interface InstallerHost {
   availableBytes(path: string): number;
   memoryMiB(): number;
   existingInstall(): ExistingInstallation | undefined;
+  systemNodeRuntime():ReleaseRuntime;
+  verifySourceRelease(path:string,runtime:ReleaseRuntime):Promise<ReleaseManifest>;
 }
 
 function run(binary: string, args: readonly string[]): CommandResult {
@@ -127,6 +129,8 @@ export const nodeInstallerHost = (): InstallerHost => ({
   },
   memoryMiB: () => { const match = /^MemTotal:\s+(\d+)\s+kB$/m.exec(readFileSync('/proc/meminfo', 'utf8')); if (!match) throw new Error('Cannot read host memory'); return Math.floor(Number(match[1]) / 1024); },
   existingInstall: () => inspectExistingInstallation(),
+  systemNodeRuntime:()=>{const result=run('/usr/bin/node',['-p','JSON.stringify({platform:process.platform,arch:process.arch,node:process.version,modulesAbi:process.versions.modules})']);if(result.code!==0)throw new Error('Cannot inspect /usr/bin/node runtime');return{...JSON.parse(result.stdout) as Omit<ReleaseRuntime,'packageManager'>,packageManager:'pnpm@10.33.0'};},
+  verifySourceRelease:(path,runtime)=>verifyRelease(path,undefined,runtime),
 });
 
 function checked(host: InstallerHost, binary: string, args: readonly string[], label: string): string {
@@ -176,10 +180,13 @@ export function readDeploymentInputs(specPath: string): { spec: DeploymentSpec; 
   return { spec, config };
 }
 
-export function preflightDeployment(spec: DeploymentSpec, config: DaemonConfig, host: InstallerHost = nodeInstallerHost()): DeploymentPlan {
+export async function preflightDeployment(spec: DeploymentSpec, config: DaemonConfig, host: InstallerHost = nodeInstallerHost()): Promise<DeploymentPlan> {
   const plan = createDeploymentPlan(spec, config, host), os = Object.fromEntries(host.read('/etc/os-release').split('\n').filter(line => line.includes('=')).map(line => { const at = line.indexOf('='); return [line.slice(0, at), line.slice(at + 1).replace(/^"|"$/g, '')]; }));
   if (host.platform !== 'linux' || host.arch !== 'x64' || os.ID !== 'debian' || os.VERSION_ID !== '13' || !/^v24\./.test(host.node)) throw new Error('Supported installer host is Debian 13 x86_64 with Node 24');
-  for (const binary of ['/usr/bin/systemctl', '/usr/bin/systemd-run', '/usr/bin/systemd-escape', '/usr/bin/systemd-sysusers', '/usr/bin/getent', '/usr/sbin/mkfs.ext4', '/usr/bin/fallocate', '/usr/bin/mount', '/usr/bin/umount', '/usr/bin/findmnt', '/usr/sbin/losetup', '/usr/sbin/blkid', '/usr/bin/docker']) host.assertRootExecutable(binary);
+  for (const binary of ['/usr/bin/node','/usr/bin/systemctl', '/usr/bin/systemd-run', '/usr/bin/systemd-notify', '/usr/bin/systemd-escape', '/usr/bin/systemd-sysusers', '/usr/bin/getent', '/usr/sbin/mkfs.ext4', '/usr/bin/fallocate', '/usr/bin/mount', '/usr/bin/umount', '/usr/bin/findmnt', '/usr/sbin/losetup', '/usr/sbin/blkid', '/usr/bin/docker']) host.assertRootExecutable(binary);
+  const runtime=host.systemNodeRuntime(),manifest=await host.verifySourceRelease(spec.release.source,runtime);
+  assertReleaseRuntime(manifest,runtime);
+  if(runtime.platform!=='linux'||runtime.arch!=='x64'||!/^v24\./.test(runtime.node)||manifest.gitCommit!==spec.release.gitCommit)throw new Error('The protected /usr/bin/node runtime, ABI and source commit must match the release target');
   checked(host, '/usr/bin/docker', ['--host', config.runtime.docker!.host, 'image', 'inspect', config.runtime.docker!.image], 'Pinned Docker image is unavailable');
   const existing = host.existingInstall(), identity = inputIdentity(spec, config, plan, host);
   if (existing && existing.inputIdentity !== identity) throw new Error('Existing managed installation differs; upgrades belong to the V2d transaction');
@@ -239,7 +246,9 @@ function prepareLayout(journalPath: string, journal: InstallJournal): InstallJou
 }
 
 export async function publishRelease(host: InstallerHost, spec: DeploymentSpec, journalPath: string, journal: InstallJournal, releaseRoot: string = managedLayout.releases): Promise<{ journal: InstallJournal; manifest: ReleaseManifest; path: string }> {
-  const source = realpathSync(spec.release.source), item = journal.release;
+  const source = realpathSync(spec.release.source),runtime=host.systemNodeRuntime(),sourceManifest=await host.verifySourceRelease(source,runtime),item = journal.release;
+  assertReleaseRuntime(sourceManifest,runtime);
+  if(sourceManifest.gitCommit!==spec.release.gitCommit)throw new Error('Source release commit differs from deployment spec');
   if (item.status === 'planned') {
     if (!existsSync(item.stage)) {
       if (item.stageDev !== undefined) throw new Error('Recorded release staging directory disappeared'); mkdirSync(item.stage, { mode: 0o755 }); fsyncDirectory(dirname(item.stage)); const created = lstatSync(item.stage);
@@ -250,16 +259,17 @@ export async function publishRelease(host: InstallerHost, spec: DeploymentSpec, 
     for (const name of readdirSync(item.stage)) checked(host, '/usr/bin/rm', ['-rf', '--one-file-system', '--', join(item.stage, name)], 'Cannot reset bound release staging');
     for (const name of ['dist', 'node_modules', 'package.json', 'pnpm-lock.yaml']) checked(host, '/usr/bin/cp', ['-a', '--reflink=auto', join(source, name), join(item.stage, name)], `Cannot copy release ${name}`);
     checked(host, '/usr/bin/chown', ['-hR', 'root:root', item.stage], 'Cannot seal release ownership'); checked(host, '/usr/bin/chmod', ['-R', 'go-w', item.stage], 'Cannot seal release modes');
-    const manifest = await createReleaseManifest(item.stage, spec.release.gitCommit); atomicExact(join(item.stage, 'RELEASE.json'), `${JSON.stringify(manifest, null, 2)}\n`, 0, 0, 0o444);
+    const manifest = await createReleaseManifest(item.stage, spec.release.gitCommit,runtime);assertSameReleasePayload(sourceManifest,manifest);atomicExact(join(item.stage, 'RELEASE.json'), `${JSON.stringify(manifest, null, 2)}\n`, 0, 0, 0o444);
     syncPayloadTree(item.stage);
     journal = { ...journal, release: { ...journal.release, releaseId: manifest.releaseId, status: 'copied' } }; replaceJournal(journalPath, journal);
   }
   const releaseId = journal.release.releaseId;
   if (!releaseId) throw new Error('Copied release journal is missing its content identity');
-  const final = join(releaseRoot, releaseId), staged = journal.release.status === 'copied' && existsSync(item.stage) ? await verifyRelease(item.stage, releaseId) : undefined;
+  const final = join(releaseRoot, releaseId), staged = journal.release.status === 'copied' && existsSync(item.stage) ? await verifyRelease(item.stage, releaseId,runtime) : undefined;
+  if(staged)assertSameReleasePayload(sourceManifest,staged);
   if (journal.release.status === 'copied') {
     if (existsSync(final)) {
-      const existing = await verifyRelease(final, releaseId); if (staged && existing.inventorySha256 !== staged.inventorySha256) throw new Error('Existing release identity differs');
+      const existing = await verifyRelease(final, releaseId,runtime);assertSameReleasePayload(sourceManifest,existing);if (staged && existing.inventorySha256 !== staged.inventorySha256) throw new Error('Existing release identity differs');
       const finalIdentity = lstatSync(final), cleanupIdentity = staged ? lstatSync(item.stage) : undefined;
       journal = { ...journal, release: { ...journal.release, stageDev: finalIdentity.dev, stageIno: finalIdentity.ino, ...(cleanupIdentity ? { cleanupDev: cleanupIdentity.dev, cleanupIno: cleanupIdentity.ino } : {}), status: 'published' } }; replaceJournal(journalPath, journal);
     } else { renameSync(item.stage, final); fsyncDirectory(releaseRoot); journal = { ...journal, release: { ...journal.release, status: 'published' } }; replaceJournal(journalPath, journal); }
@@ -269,7 +279,8 @@ export async function publishRelease(host: InstallerHost, spec: DeploymentSpec, 
     removeBoundReleaseCleanup(host, item.stage, releaseRoot, journal.release.cleanupDev, journal.release.cleanupIno);
     const { cleanupDev: _cleanupDev, cleanupIno: _cleanupIno, ...release } = journal.release; journal = { ...journal, release }; replaceJournal(journalPath, journal);
   } else if (journal.release.status === 'published' && existsSync(item.stage)) throw new Error('Published release has an unbound staging cleanup path');
-  return { journal, manifest: await verifyRelease(final), path: final };
+  const manifest=await verifyRelease(final,undefined,runtime);assertSameReleasePayload(sourceManifest,manifest);
+  return { journal, manifest, path: final };
 }
 
 export function removeBoundReleaseCleanup(host: InstallerHost, stage: string, parent: string, dev: number, ino: number): void {
@@ -387,7 +398,7 @@ function publishReleaseLink(path:string,release: string,label:string): void {
 export async function installDeployment(spec: DeploymentSpec, config: DaemonConfig, host: InstallerHost = nodeInstallerHost()): Promise<{ plan: DeploymentPlan; releaseId: string; serviceStarted: false }> {
   if (host.euid() !== 0) throw new Error('Deployment installation must run as root');
   if(deploymentUpgradeInProgress(config.runtime.dataDir))throw new Error('Deployment upgrade journal blocks installation');
-  const plan = preflightDeployment(spec, config, host), identity = serviceIdentity(host), requestedIdentity = inputIdentity(spec, config, plan, host);
+  const plan = await preflightDeployment(spec, config, host), identity = serviceIdentity(host), requestedIdentity = inputIdentity(spec, config, plan, host);
   if (pathExists(bootstrapJournalPath) && pathExists(controlJournalPath)) throw new Error('Both bootstrap and control install journals exist');
   let journalPath = pathExists(controlJournalPath) ? controlJournalPath : bootstrapJournalPath;
   let journal: InstallJournal;
@@ -414,9 +425,9 @@ export async function installDeployment(spec: DeploymentSpec, config: DaemonConf
   journal = { ...journal, phase: 'units' }; replaceJournal(journalPath, journal);
   checked(host, '/usr/bin/systemctl', ['daemon-reload'], 'Cannot reload systemd'); for (const unit of units) checked(host, '/usr/bin/systemctl', ['enable', '--now', unit.unitName], `Cannot enable ${unit.unitName}`);
   journal = { ...journal, phase: 'mounted' }; replaceJournal(journalPath, journal);
-  const entry = join(published.path, 'dist/src/main.js'), properties = ['--quiet', '--collect', '--wait', '--pipe', `--working-directory=${published.path}`, '--property=User=mate', '--property=Group=mate', '--property=SupplementaryGroups=docker', '--property=EnvironmentFile=/etc/mate/mate.env', '--property=UMask=0077', '--property=NoNewPrivileges=yes', '--property=PrivateTmp=yes', '--property=ProtectHome=yes', '--property=ProtectSystem=strict', '--property=ReadWritePaths=/var/lib/mate', ...plan.workspaces.filter(item => item.kind === 'external').map(item => `--property=ReadWritePaths=${item.root}`)];
-  checked(host, '/usr/bin/systemd-run', [...properties, '/usr/bin/node', entry, 'doctor', managedLayout.config, '--allow-missing-secrets'], 'Candidate doctor failed');
-  checked(host, '/usr/bin/systemd-run', [...properties, '/usr/bin/node', entry, 'offline-probe', managedLayout.config], 'Candidate offline probe failed');
+  const entry = join(published.path, 'dist/src/main.js'),external=plan.workspaces.filter(item => item.kind === 'external').map(item => item.root);
+  checked(host, '/usr/bin/systemd-run', [...transientUnitProperties(published.path,external,{environment:true}), '--property=ReadOnlyPaths=/etc/mate', '/usr/bin/node', entry, 'doctor', managedLayout.config, '--allow-missing-secrets'], 'Candidate doctor failed');
+  checked(host, '/usr/bin/systemd-run', [...transientUnitProperties(published.path,external), '/usr/bin/node', entry, 'offline-probe', managedLayout.config], 'Candidate offline probe failed');
   journal = { ...journal, phase: 'probed' }; replaceJournal(journalPath, journal);
   publishReleaseLink(managedLayout.current,published.path,'current'); checked(host, '/usr/bin/systemctl', ['disable', '--now', 'mate.service'], 'Cannot keep mate.service disabled after installation');
   journal = { ...journal, phase: 'published' }; replaceJournal(journalPath, journal); atomicExact(completedPath, `${JSON.stringify({ version: 1, inputIdentity: requestedIdentity, releaseId: published.manifest.releaseId }, null, 2)}\n`, 0, 0, 0o600); unlinkSync(journalPath); fsyncDirectory(dirname(journalPath));

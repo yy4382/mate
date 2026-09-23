@@ -5,7 +5,7 @@ import {z} from 'zod';
 import {daemonConfigSchema,type DaemonConfig} from '../daemon/config.js';
 import type Database from 'better-sqlite3';
 import {encode,hash} from '../storage/store.js';
-import {verifyRelease} from './release.js';
+import {currentReleaseRuntime,verifyRelease,type ReleaseRuntime} from './release.js';
 import {workspaceManifestSchema,type WorkspaceManifest} from './workspaces.js';
 
 const digestPattern=/^[a-f0-9]{64}$/;
@@ -41,7 +41,7 @@ export const deploymentJournalSchema=z.object({
 export type DeploymentJournal=z.infer<typeof deploymentJournalSchema>;
 export type DeploymentOperation='start'|'offline-probe'|'backup'|'restore'|'migrate'|'checkpoint-seal'|'install'|'disable';
 export interface DeploymentJournalTrust{requiredOwnerUid?:number;requiredOwnerGid?:number}
-export interface RuntimeDeploymentIdentity{config:DaemonConfig;releaseRoot:string}
+export interface RuntimeDeploymentIdentity{config:DaemonConfig;releaseRoot:string;enforceFinalizedRelease?:boolean;releaseRuntime?:ReleaseRuntime}
 
 function stable(value:unknown):string{
  if(Array.isArray(value))return`[${value.map(stable).join(',')}]`;
@@ -159,6 +159,7 @@ export async function assertRuntimeDeploymentIdentity(journal:DeploymentJournal,
  const root=realpathSync(runtime.releaseRoot);if(root!==expected.releasePath)throw new Error('Active release path does not match the deployment journal');
  const release=await verifyRelease(root,expected.releaseId);if(release.releaseId!==expected.releaseId)throw new Error('Active release identity does not match the deployment journal');
 }
+export async function assertFinalizedReleaseRuntime(releaseRoot:string,runtime:ReleaseRuntime=currentReleaseRuntime()):Promise<void>{await verifyRelease(realpathSync(releaseRoot),undefined,runtime);}
 
 export async function assertDeploymentOperationAllowed(operation:DeploymentOperation,runtime:RuntimeDeploymentIdentity,trust:DeploymentJournalTrust={}):Promise<DeploymentJournal|undefined>{
  const rootPath=join(runtime.config.runtime.dataDir,'control','deployment-root-v1.json'),rootStat=lstatIfPresent(rootPath);
@@ -167,9 +168,9 @@ export async function assertDeploymentOperationAllowed(operation:DeploymentOpera
   const root=parseRootUpgrade(JSON.parse(protectedBytes(rootPath).toString('utf8')));
   if(!['checked','activated','finalizing'].includes(root.step))throw new Error(`Root deployment upgrade ${root.step} blocks ${operation}`);
  }
- const journal=readDeploymentJournal(runtime.config.runtime.dataDir,trust);if(!journal){if(rootStat)throw new Error('Root upgrade lacks deployment journal');return undefined;}
- if(operation==='offline-probe'&&journal.phase==='candidate'&&!journal.everActivated){await assertRuntimeDeploymentIdentity(journal,runtime);return journal;}
- if((operation==='start'||operation==='offline-probe')&&(journal.phase==='activated'||journal.phase==='fix-forward')&&journal.everActivated){await assertRuntimeDeploymentIdentity(journal,runtime);return journal;}
+ const journal=readDeploymentJournal(runtime.config.runtime.dataDir,trust);if(!journal){if(rootStat)throw new Error('Root upgrade lacks deployment journal');if(runtime.enforceFinalizedRelease)await assertFinalizedReleaseRuntime(runtime.releaseRoot,runtime.releaseRuntime);return undefined;}
+ if(operation==='offline-probe'&&journal.phase==='candidate'&&!journal.everActivated){await assertRuntimeDeploymentIdentity(journal,runtime);if(runtime.enforceFinalizedRelease)await assertFinalizedReleaseRuntime(runtime.releaseRoot,runtime.releaseRuntime);return journal;}
+ if((operation==='start'||operation==='offline-probe')&&(journal.phase==='activated'||journal.phase==='fix-forward')&&journal.everActivated){await assertRuntimeDeploymentIdentity(journal,runtime);if(runtime.enforceFinalizedRelease)await assertFinalizedReleaseRuntime(runtime.releaseRoot,runtime.releaseRuntime);return journal;}
  throw new Error(`Deployment upgrade ${journal.phase} blocks ${operation}`);
 }
 

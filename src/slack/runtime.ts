@@ -34,14 +34,14 @@ export class SlackRuntime implements AdapterLifecycle {
     this.service=new SlackService(c,transport,ingress,controls,()=>this.stopped);
   }
   recover():void{this.projections.core.recover();}
-  start(signal:AbortSignal):Promise<void>{return this.opening??=this.open(signal);}
-  private async open(signal:AbortSignal):Promise<void>{
+  start(signal:AbortSignal,progress?:()=>void):Promise<void>{return this.opening??=this.open(signal,progress);}
+  private async open(signal:AbortSignal,progress?:()=>void):Promise<void>{
     const abort=()=>{void this.close();};signal.addEventListener('abort',abort,{once:true});
     try{
       signal.throwIfAborted();if(this.stopped)throw new Error('Slack adapter closed');
       for(const agent of this.transport.mapper.config.agents)requireSecret(process.env,agent.appTokenEnv);
       this.service.bootstrapRecovery();
-      await this.service.verify();if(this.stopped)return;
+      await this.service.verify();progress?.();if(this.stopped)return;
       for(const agent of this.transport.mapper.config.agents){
         const socket=new ManagedSocket(requireSecret(process.env,agent.appTokenEnv));
         socket.onDisconnect(()=>{if(!this.stopped){this.service.recordTransportGap(agent.id);this.nextMembership=0;}});
@@ -50,13 +50,13 @@ export class SlackRuntime implements AdapterLifecycle {
         for(const event of slackWireEvents)app.event(event,async()=>{});app.command(slackControlCommand,async()=>{});
         this.apps.push(app);
       }
-      await Promise.all(this.apps.map(app=>app.start()));if(this.stopped)return;
+      await Promise.all(this.apps.map(app=>app.start()));progress?.();if(this.stopped)return;
       // Open every durable socket before discovering membership/history so an
       // event concurrent with catch-up is either received live or found by it.
-      await this.service.discoverMembership();if(this.stopped)return;
-      await this.service.membership();if(this.stopped)return;
-      if(!await this.service.catchUp(true))throw new Error('Slack history recovery did not complete');if(this.stopped)return;
-      if(!await this.projections.catchUp())throw new Error('Slack projection history recovery did not complete');if(this.stopped)return;
+      await this.service.discoverMembership(true,progress);if(this.stopped)return;
+      await this.service.membership(true,progress);if(this.stopped)return;
+      if(!await this.service.catchUp(true,progress))throw new Error('Slack history recovery did not complete');if(this.stopped)return;
+      if(!await this.projections.catchUp(progress))throw new Error('Slack projection history recovery did not complete');if(this.stopped)return;
     }catch(error){await this.stopResources();throw error;}
     finally{signal.removeEventListener('abort',abort);}
   }

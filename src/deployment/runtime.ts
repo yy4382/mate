@@ -3,7 +3,7 @@ import type {DaemonConfig} from '../daemon/config.js';
 import {nodeWorkspaceHost,verifyWorkspaceManifest,type VerifiedWorkspaces,type WorkspaceHost} from './workspaces.js';
 import type {ExecutionBackend,ExecutionRequest,ExecutionResult} from '../execution/backend.js';
 
-export interface DeploymentEnvironment {platform:NodeJS.Platform;workspaceHost:WorkspaceHost}
+export interface DeploymentEnvironment {platform:NodeJS.Platform;workspaceHost:WorkspaceHost;enforceFinalizedRelease?:boolean}
 export function nodeDeploymentEnvironment():DeploymentEnvironment{return{platform:process.platform,workspaceHost:nodeWorkspaceHost()};}
 
 /** Shared startup/offline boundary: Linux container execution never receives an ordinary-directory fallback. */

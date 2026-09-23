@@ -69,20 +69,20 @@ export class SlackProjectionService {
       }catch{s.audit('projection_reconciliation_unavailable',{projectionId:row.id,reason:'durable_page_retained'});}
     }
   }
-  private async history(b:ProjectionBinding,thread?:string):Promise<boolean>{
+  private async history(b:ProjectionBinding,thread?:string,progress?:()=>void):Promise<boolean>{
     const s=this.core.messages.store,client=this.slack.clients.get(b.publisher),installation=this.slack.mapper.config.agents.find(a=>a.id===b.publisher);if(!client||!installation)return false;
     const cursorKey=`projection:${b.id}:${thread??'top'}`;
     const saved=s.db.prepare('SELECT ts FROM slack_cursors WHERE agent_id=? AND channel=?').get(b.publisher,cursorKey) as {ts:string}|undefined;
-    const recovered=await recoverSlackHistory({store:s,agentId:b.publisher,cursorKey,initialOldest:saved?.ts??String(b.createdAt/1000),
+    const recovered=await recoverSlackHistory({store:s,agentId:b.publisher,cursorKey,initialOldest:saved?.ts??String(b.createdAt/1000),onPage:progress,
       fetch:async state=>{const args={channel:b.externalId,limit:100,include_all_metadata:true,...(state.oldest?{oldest:state.oldest,inclusive:true}:{}),...(state.cursor?{cursor:state.cursor}:{})};const response=thread?await client.conversations.replies({...args,ts:thread}):await client.conversations.history(args);return{messages:response.messages??[],next:response.response_metadata?.next_cursor||undefined};},
       timestamp:message=>message.ts,ingest:message=>{if(message.ts)s.ingest(installation.slackAppId,`projection-history:${b.id}:${message.ts}:${message.edited?.ts??message.ts}`,{team_id:this.slack.mapper.config.teamId,event:{...message,type:'message',channel:b.externalId,...(thread?{thread_ts:thread}:{})}});}});
     if(!recovered)s.audit('projection_history_gap',{bindingId:b.id,thread,reason:'history_unavailable_or_incomplete'});return recovered;
   }
-  async catchUp():Promise<boolean>{
-    let complete=true;for(const b of this.bindings())if(b.enabled&&!await this.history(b))complete=false;
+  async catchUp(progress?:()=>void):Promise<boolean>{
+    let complete=true;for(const b of this.bindings())if(b.enabled&&!await this.history(b,undefined,progress))complete=false;
     // Startup must cover every known root; per-thread watermarks make repeats cheap.
     const s=this.core.messages.store;
     const roots=s.db.prepare("SELECT p.id,mb.external_message root FROM message_bindings mb JOIN message_identities m ON m.id=mb.message_id AND m.root_id=m.id JOIN projection_bindings p ON p.provider=mb.provider AND p.workspace=mb.workspace AND p.external_id=mb.external_conversation WHERE p.enabled=1 AND p.provider='slack' AND p.workspace=? ORDER BY mb.rowid").all(this.slack.mapper.config.teamId) as {id:string;root:string}[];
-    for(const root of roots)if(!await this.history(this.core.binding(root.id),root.root))complete=false;return complete;
+    for(const root of roots)if(!await this.history(this.core.binding(root.id),root.root,progress))complete=false;return complete;
   }
 }

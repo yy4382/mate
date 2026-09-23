@@ -19,6 +19,8 @@ import {verifyDeploymentWorkspaces} from './deployment/runtime.js';
 import {runDoctor} from './deployment/doctor.js';
 import {runOfflineProbe} from './deployment/probe.js';
 import {assertDeploymentOperationAllowed} from './deployment/upgrade.js';
+import {completeManagedStartup} from './deployment/readiness.js';
+import {nodeDeploymentEnvironment} from './deployment/runtime.js';
 
 export async function main(args = process.argv.slice(2)): Promise<void> {
   const [command, configPath, destination] = args;
@@ -76,14 +78,14 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     process.stdout.write('Consistent database and memory checkpoint created.\n'); return;
   }
   const log = pino({ level: 'info', redact: ['token','apiKey','authorization','*.token','*.apiKey','*.authorization'] },pino.destination(2));
-  const daemon = await Daemon.create(config, log);
+  const daemon = await Daemon.create(config, log,releaseRoot,{...nodeDeploymentEnvironment(),enforceFinalizedRelease:command==='start'});
   const consoleAbort=new AbortController();
   let closing: Promise<void> | undefined;
   const close = () => { consoleAbort.abort();closing ??= daemon.close(); return closing; };
   process.once('SIGINT', () => { void close(); }); process.once('SIGTERM', () => { void close(); });
   try {
     if(command==='local'&&!daemon.local)throw new Error('Configure adapters.local before using the local console');
-    await daemon.start();
+    if(command==='start')await completeManagedStartup(progress=>daemon.start(progress));else await daemon.start();
     if(command==='local'){await new LocalConsole(daemon.local!,daemon.controls).serve(process.stdin,process.stdout,consoleAbort.signal);await close();}
   } catch { await close(); throw new Error('Daemon startup failed; check installation identities, credentials and sandbox configuration'); }
 }

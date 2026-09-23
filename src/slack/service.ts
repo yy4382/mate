@@ -42,14 +42,14 @@ export class SlackService {
    * makes a DM first opened while Mate was offline discoverable: there may be
    * no local binding yet for membership() or catchUp() to inspect.
    */
-  async discoverMembership(required=true):Promise<boolean>{
+  async discoverMembership(required=true,progress?:()=>void):Promise<boolean>{
     const directory=new Directory(this.c.messages,this.transport.clients,this.transport.mapper);
     for(let attempt=0;attempt<3;attempt++){
       let complete=true;
       try{
         for(const agent of this.transport.mapper.config.agents){
           if(this.stopping())return false;
-          const result=await directory.spaces(agent.id,Number.POSITIVE_INFINITY);
+          const result=await directory.spaces(agent.id,Number.POSITIVE_INFINITY,progress);
           if(result.incomplete){complete=false;break;}
         }
       }catch(error){
@@ -89,7 +89,7 @@ export class SlackService {
     this.c.store.db.prepare('DELETE FROM runtime_meta WHERE substr(key,1,?)=?').run(historyPrefix.length,historyPrefix);
     this.c.store.audit('slack_offline_delete_gap_fenced',{agentId});
   }
-  async membership(required=true): Promise<boolean> {
+  async membership(required=true,progress?:()=>void): Promise<boolean> {
     let complete=true;
     for (const agent of this.transport.mapper.config.agents) {
       if (this.stopping()) return false;
@@ -102,13 +102,13 @@ export class SlackService {
         // Failure closes permission until a successful membership check.
         this.c.messages.membership(agent.id, this.transport.mapper.conversation(channel), false);
         const version=this.c.messages.membershipVersion(agent.id);
-        try { const info = await client.conversations.info({ channel }); if(this.stopping()||version!==this.c.messages.membershipVersion(agent.id))continue;this.c.messages.membership(agent.id, this.transport.mapper.conversation(channel), info.channel?.is_member === true || (channel.startsWith('D') && info.channel?.is_im === true)); }
+        try { const info = await client.conversations.info({ channel }); if(this.stopping()||version!==this.c.messages.membershipVersion(agent.id))continue;this.c.messages.membership(agent.id, this.transport.mapper.conversation(channel), info.channel?.is_member === true || (channel.startsWith('D') && info.channel?.is_im === true));progress?.(); }
         catch {complete=false;this.c.store.audit('membership_unavailable', { agentId: agent.id, channel }); }
       }
     }
     if(required&&!complete)throw new Error('Slack membership verification did not complete');return complete;
   }
-  async catchUp(forceFullOldThreads=false): Promise<boolean> {
+  async catchUp(forceFullOldThreads=false,progress?:()=>void): Promise<boolean> {
     const recoveryStarted=`${Math.floor(Date.now()/1000)}.000000`;let complete=true;
     for (const agent of this.transport.mapper.config.agents) {
       if (this.stopping()) return false;
@@ -122,8 +122,8 @@ export class SlackService {
         if (this.stopping()) return false;
         const checkpoint = this.c.store.db.prepare('SELECT ts FROM slack_cursors WHERE agent_id=? AND channel=?').get(agent.id, channel) as { ts: string } | undefined;
         const oldest = checkpoint?.ts ?? global?.ts;
-        if(oldest&&scanOldThreads&&!await this.catchUpChangedThreads(agent.id,agent.slackAppId,channel,oldest,client,forceFullOldThreads?undefined:2,current)){complete=false;changedComplete=false;}
-        const recovered=await recoverSlackHistory({store:this.c.store,agentId:agent.id,cursorKey:channel,initialOldest:oldest,current,
+        if(oldest&&scanOldThreads&&!await this.catchUpChangedThreads(agent.id,agent.slackAppId,channel,oldest,client,forceFullOldThreads?undefined:2,current,progress)){complete=false;changedComplete=false;}
+        const recovered=await recoverSlackHistory({store:this.c.store,agentId:agent.id,cursorKey:channel,initialOldest:oldest,current,onPage:progress,
           fetch:async state=>{if(this.stopping())throw new Error('stopping');const result=await client.conversations.history({channel,limit:100,include_all_metadata:true,...(state.oldest?{oldest:state.oldest,inclusive:true}:{}),...(state.cursor?{cursor:state.cursor}:{})});return{messages:result.messages??[],next:result.response_metadata?.next_cursor||undefined};},
           timestamp:(message:any)=>message.ts,ingest:(msg:any)=>{if(msg.ts)this.c.store.ingest(agent.slackAppId,`history:${channel}:${msg.ts}:${msg.edited?.ts??msg.ts}`,{team_id:this.transport.mapper.config.teamId,event:{...msg,type:'message',channel}});}});
         if(!recovered){complete=false;this.c.store.audit('history_gap',{agentId:agent.id,channel,oldest:oldest??null,reason:'Slack history unavailable or incomplete; durable page retained'});}
@@ -131,12 +131,12 @@ export class SlackService {
       if(!current())complete=false;
       if(scanOldThreads&&changedComplete&&current())scheduleSlackScan(this.c.store,changedDueKey,Date.now()+60*60_000);
     }
-    if(!await this.catchUpThreads())complete=false;
+    if(!await this.catchUpThreads(progress))complete=false;
     if(complete)for(const agent of this.transport.mapper.config.agents)this.c.store.db.prepare('INSERT INTO slack_cursors VALUES(?,?,?) ON CONFLICT(agent_id,channel) DO UPDATE SET ts=excluded.ts').run(agent.id,'*',recoveryStarted);
     return complete;
   }
   /** Finds replies written while offline even when the old root was never watched locally. */
-  private async catchUpChangedThreads(agentId:string,appId:string,channel:string,oldest:string,client:WebClient,maxPages:number|undefined,current:()=>boolean):Promise<boolean>{
+  private async catchUpChangedThreads(agentId:string,appId:string,channel:string,oldest:string,client:WebClient,maxPages:number|undefined,current:()=>boolean,progress?:()=>void):Promise<boolean>{
     const scanKey=`slack_changed_threads_v1:${agentId}:${channel}`,anchorKey=`slack_changed_thread_anchor_v1:${agentId}:${channel}`;
     const saved=this.c.store.db.prepare('SELECT value FROM runtime_meta WHERE key=?').get(anchorKey) as {value:string}|undefined;
     const anchor=saved?JSON.parse(saved.value) as {oldest?:unknown}:{oldest};
@@ -144,7 +144,7 @@ export class SlackService {
     if(!saved)this.c.store.db.prepare('INSERT INTO runtime_meta VALUES(?,?)').run(anchorKey,JSON.stringify(anchor));
     oldest=anchor.oldest;
     try{
-      const outcome=await scanSlackPages<any>({store:this.c.store,key:scanKey,current,...(maxPages?{maxPages}:{}),
+      const outcome=await scanSlackPages<any>({store:this.c.store,key:scanKey,current,onPage:progress,...(maxPages?{maxPages}:{}),
         fetch:async cursor=>{if(this.stopping())throw new Error('stopping');const result=await client.conversations.history({channel,limit:100,include_all_metadata:true,...(cursor?{cursor}:{})});return{messages:result.messages??[],next:result.response_metadata?.next_cursor||undefined};},
         visit:async roots=>{for(const root of roots){
           if(this.stopping())throw new Error('stopping');const thread=typeof root.ts==='string'?root.ts:undefined,latest=typeof root.latest_reply==='string'?root.latest_reply:undefined;
@@ -154,7 +154,7 @@ export class SlackService {
           // a message that predates Mate's responsibility boundary.
           const rootMessage=this.transport.mapper.message({channel,ts:thread,revision:root.edited?.ts??thread,text:root.text??'',deleted:false,user:root.user,bot:root.bot_id,files:root.files});
           this.c.messages.recordHistory(systemOrigin(this.c.messages,rootMessage,root.metadata),[agentId]);
-          const recovered=await recoverSlackHistory({store:this.c.store,agentId,cursorKey:`${channel}:${thread}`,initialOldest:oldest,current,
+          const recovered=await recoverSlackHistory({store:this.c.store,agentId,cursorKey:`${channel}:${thread}`,initialOldest:oldest,current,onPage:progress,
             fetch:async state=>{if(this.stopping())throw new Error('stopping');const result=await client.conversations.replies({channel,ts:thread,limit:100,include_all_metadata:true,oldest,inclusive:true,...(state.cursor?{cursor:state.cursor}:{})});return{messages:result.messages??[],next:result.response_metadata?.next_cursor||undefined};},
             timestamp:(message:any)=>message.ts,ingest:(message:any)=>{if(message.ts&&compareSlackTimestamps(message.ts,oldest)>=0)this.c.store.ingest(appId,`thread-discovery:${channel}:${message.ts}:${message.edited?.ts??message.ts}`,{team_id:this.transport.mapper.config.teamId,event:{...message,type:'message',channel,thread_ts:message.thread_ts??thread}});}});
           if(!recovered)throw new Error('Slack changed thread recovery incomplete');
@@ -163,7 +163,7 @@ export class SlackService {
       return outcome!=='paused';
     }catch(error){this.c.store.audit('history_gap',{agentId,channel,oldest,reason:'changed_thread_scan_unavailable',error:String(error)});return false;}
   }
-  async catchUpThreads(): Promise<boolean> {
+  async catchUpThreads(progress?:()=>void): Promise<boolean> {
     let complete=true;
     const s = this.c.store;
     const watches = s.db.prepare("SELECT t.* FROM thread_watches t JOIN channel_access a ON a.agent_id=t.agent_id AND a.channel=t.channel JOIN conversation_bindings b ON b.conversation_id=t.channel WHERE a.active=1 AND b.provider='slack' AND b.mode='primary' AND b.workspace=?").all(this.transport.mapper.config.teamId) as { agent_id: string; channel: string; thread: string }[];
@@ -175,7 +175,7 @@ export class SlackService {
       const checkpoint = s.db.prepare('SELECT ts FROM slack_cursors WHERE agent_id=? AND channel=?').get(agent.id, cursorKey) as { ts: string } | undefined;
       const oldest = checkpoint?.ts ?? watch.thread;
       const generation=this.transportGeneration.get(agent.id)??0,current=()=>this.currentTransport(agent.id,generation);
-      const recovered=await recoverSlackHistory({store:s,agentId:agent.id,cursorKey,initialOldest:oldest,current,
+      const recovered=await recoverSlackHistory({store:s,agentId:agent.id,cursorKey,initialOldest:oldest,current,onPage:progress,
         fetch:async state=>{if(this.stopping())throw new Error('stopping');const result=await client.conversations.replies({channel:watch.channel,ts:watch.thread,limit:100,include_all_metadata:true,...(state.oldest?{oldest:state.oldest,inclusive:true}:{}),...(state.cursor?{cursor:state.cursor}:{})});return{messages:result.messages??[],next:result.response_metadata?.next_cursor||undefined};},
         timestamp:message=>message.ts,ingest:msg=>{if(msg.ts)s.ingest(agent.slackAppId,`thread-history:${watch.channel}:${msg.ts}:${msg.edited?.ts??msg.ts}`,{team_id:this.transport.mapper.config.teamId,event:{...msg,type:'message',channel:watch.channel,thread_ts:msg.thread_ts??watch.thread}});}});
       if(!recovered){complete=false;s.audit('history_gap',{...watch,reason:'thread_history_unavailable_or_incomplete'});}

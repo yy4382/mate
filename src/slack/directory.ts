@@ -21,7 +21,7 @@ export class Directory implements ConversationDirectory {
     this.messages.agent(actor);
     const client = this.clients.get(actor); if (!client) throw new Error('Slack client unavailable'); return client;
   }
-  async spaces(actor: string, maxPages = 10): Promise<SpacesResult> {
+  async spaces(actor: string, maxPages = 10, onPage?:()=>void): Promise<SpacesResult> {
     const client = this.client(actor), spaces: Space[] = [], channels = [];
     const version = this.messages.membershipVersion(actor); let cursor: string | undefined, pages = 0;const seen=new Set<string>();
     do {
@@ -34,7 +34,7 @@ export class Directory implements ConversationDirectory {
       }
       const next=result.response_metadata?.next_cursor || undefined;
       if(next&&seen.has(next))throw new Error('Slack conversation cursor repeated');
-      if(next)seen.add(next);cursor=next; pages++;
+      if(next)seen.add(next);cursor=next; pages++;onPage?.();
     } while (cursor && pages < maxPages);
     if (version !== this.messages.membershipVersion(actor)) return { spaces: [], incomplete: true, retry: 'membership changed during discovery' };
     for (const c of channels) {

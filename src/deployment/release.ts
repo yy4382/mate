@@ -27,7 +27,7 @@ export interface ReleaseRuntime {
   modulesAbi: string;
   packageManager: string;
 }
-const nodeRuntime = (): ReleaseRuntime => ({ platform: process.platform, arch: process.arch, node: process.version, modulesAbi: process.versions.modules, packageManager: 'pnpm@10.33.0' });
+export const currentReleaseRuntime = (): ReleaseRuntime => ({ platform: process.platform, arch: process.arch, node: process.version, modulesAbi: process.versions.modules, packageManager: 'pnpm@10.33.0' });
 
 function stable(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
@@ -79,7 +79,7 @@ function dependencyInventory(inventory: readonly InventoryEntry[]): string {
   return digest(stable(inventory.filter(item => item.path === 'node_modules' || item.path.startsWith('node_modules/'))));
 }
 
-export async function createReleaseManifest(rootPath: string, gitCommit: string, runtime: ReleaseRuntime = nodeRuntime()): Promise<ReleaseManifest> {
+export async function createReleaseManifest(rootPath: string, gitCommit: string, runtime: ReleaseRuntime = currentReleaseRuntime()): Promise<ReleaseManifest> {
   const root = realpathSync(rootPath);
   if (runtime.platform !== 'linux' || runtime.arch !== 'x64' || !/^v24\./.test(runtime.node) || runtime.packageManager !== 'pnpm@10.33.0') throw new Error('Release must be built on the supported Debian x86_64 Node 24 runtime with pnpm 10.33.0');
   if (!/^[a-f0-9]{7,64}$/.test(gitCommit)) throw new Error('Invalid source commit identity');
@@ -93,9 +93,24 @@ export async function createReleaseManifest(rootPath: string, gitCommit: string,
   return releaseManifestSchema.parse({ ...base, releaseId: digest(stable(base)) });
 }
 
-export async function verifyRelease(rootPath: string, expectedId?: string): Promise<ReleaseManifest> {
+export function assertReleaseRuntime(manifest:ReleaseManifest,runtime:ReleaseRuntime=currentReleaseRuntime()):void{
+  const expected={platform:runtime.platform,arch:runtime.arch,node:runtime.node,modulesAbi:runtime.modulesAbi,packageManager:runtime.packageManager};
+  if(stable(manifest.target)!==stable(expected))throw new Error('Release target does not match the current Node runtime and ABI');
+}
+
+/** Ownership sealing may change modes; the copied bytes and link targets may not change. */
+export function assertSameReleasePayload(source:ReleaseManifest,copied:ReleaseManifest):void{
+  const content=(manifest:ReleaseManifest)=>manifest.inventory.map(entry=>entry.type==='file'
+    ?{path:entry.path,type:entry.type,size:entry.size,sha256:entry.sha256}
+    :entry.type==='symlink'?{path:entry.path,type:entry.type,target:entry.target}
+    :{path:entry.path,type:entry.type});
+  if(source.gitCommit!==copied.gitCommit||stable(source.target)!==stable(copied.target)||stable(content(source))!==stable(content(copied)))throw new Error('Copied release payload differs from verified source');
+}
+
+export async function verifyRelease(rootPath: string, expectedId?: string, runtime:ReleaseRuntime|undefined=process.platform==='linux'?currentReleaseRuntime():undefined): Promise<ReleaseManifest> {
   const root = realpathSync(rootPath), stored = releaseManifestSchema.parse(JSON.parse(readFileSync(join(root, 'RELEASE.json'), 'utf8')));
   const recomputed = await createReleaseManifest(root, stored.gitCommit, stored.target);
   if (stable(recomputed) !== stable(stored) || (expectedId && stored.releaseId !== expectedId)) throw new Error('Release identity or inventory does not match immutable contents');
+  if(runtime)assertReleaseRuntime(stored,runtime);
   return stored;
 }
