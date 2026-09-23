@@ -96,7 +96,7 @@ sudo matectl finalize
 
 activate 在允许启动之前持久化 `everActivated`。一旦激活，即使启动失败，也只能 fix-forward：准备新的完整 staged release/config，执行 `sudo matectl fix-forward`，离线成功后再次 activate，再 finalize。已提交的 B→C attempt 必须先完成到 C；尚未提交的 attempt 只有在 controller 验证 DB 无提交 marker、持久 config 仍为 B 时才允许替换为 B→D。不要凭人的猜测覆盖已绑定 staged 输入；命令会依据持久证据决定是否接受替换。
 
-finalize 验证当前发布，将 controller 发布到已验证 release 后清理升级 journal；不会删除 checkpoint 或旧数据。后续需要改变 topology 时须先制定独立迁移方案，不能靠修改 systemd/config 绕过核验。
+finalize 验证当前发布，将 controller 发布到已验证 release，保留 current、controller、previous 指向的 release，并清理本次升级的临时 checkpoint、旧的未保留 release 与升级 journal。常规命名备份和运行数据不会被清理。清理先在 root journal 中持久记录目标目录身份，中断后仅继续删除身份匹配的目录；身份不符时停下由操作员调查。后续需要改变 topology 时须先制定独立迁移方案，不能靠修改 systemd/config 绕过核验。
 
 ## 备份、恢复与停用
 
