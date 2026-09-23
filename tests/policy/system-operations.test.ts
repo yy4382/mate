@@ -91,6 +91,30 @@ it('fails an uncertain approval notice visibly and invalidates any stale button'
   }finally{store.close();}
 });
 
+it('keeps an uncertain owner result notification queryable without blindly reposting it',async()=>{
+  const {store,collaboration,work,run,execute,system}=setup();
+  try{
+    system.request(run,work,'result-notice',command);system.decide('UOWNER','result-notice','approve');await system.dispatchApproved();
+    expect(system.pendingResults()).toHaveLength(1);expect(system.claimResultNotice('result-notice')).toBe(true);
+    const fresh=new SystemOperations(store,collaboration,['research'],{execute},()=>1000);fresh.recover();
+    expect(fresh.pendingResults()).toEqual([]);
+    expect(fresh.ownerStatus('UOWNER','result-notice')).toMatchObject({status:'succeeded',receipt:{stdout:'installed'}});
+    expect(()=>fresh.ownerStatus('UOTHER','result-notice')).toThrow('Owner');
+  }finally{store.close();}
+});
+
+it('does not confuse a late approval-notice receipt with the expired result notice',()=>{
+  const {store,work,run,system}=setup();
+  try{
+    system.request(run,work,'notice-expired',command);expect(system.claimNotice('notice-expired')).toBe(true);
+    system.expire(601001);system.settleNotice('notice-expired','sent');
+    expect(system.pendingResults()).toHaveLength(1);
+    expect(system.claimResultNotice('notice-expired')).toBe(true);system.settleNotice('notice-expired','unknown');
+    system.settleResultNotice('notice-expired','sent');expect(system.pendingResults()).toEqual([]);
+    expect(system.ownerStatus('UOWNER','notice-expired').status).toBe('expired');
+  }finally{store.close();}
+});
+
 it('denies unqualified or independently reviewing Agents',()=>{
   const {store,collaboration,work,run,execute}=setup();
   try{

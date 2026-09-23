@@ -62,6 +62,7 @@ export class SlackRuntime implements AdapterLifecycle {
     await this.projections.core.flush();if(this.stopped)return;
     await this.service.flushAdmin();if(this.stopped)return;
     await this.service.flushApprovals();if(this.stopped)return;
+    await this.service.flushResults();if(this.stopped)return;
     if(Date.now()>=this.nextReconcile){this.nextReconcile=Date.now()+60000;await this.service.reconcile();if(this.stopped)return;await this.projections.reconcile();}
     if(!this.stopped&&Date.now()>=this.nextMembership){this.nextMembership=Date.now()+300000;await this.service.membership();if(this.stopped)return;await this.service.catchUp();if(this.stopped)return;await this.projections.catchUp();}
   }

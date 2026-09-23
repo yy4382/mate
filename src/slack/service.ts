@@ -171,6 +171,22 @@ export class SlackService {
       }catch{if(claimed)this.system.settleNotice(request.id,'unknown');}
     }
   }
+  async flushResults():Promise<void>{
+    if(!this.system)return;
+    const rawOwner=this.transport.mapper.config.ownerUserIds.find(id=>/^U[A-Z0-9]+$/.test(id));if(!rawOwner)return;
+    for(const request of this.system.pendingResults()){
+      if(this.stopping())return;
+      let claimed=false;
+      try{
+        const client=this.transport.clients.get(request.agentId);if(!client)throw new Error('Missing Agent Slack client');
+        const opened=await client.conversations.open({users:rawOwner});const channel=opened.channel?.id;if(!channel)throw new Error('Owner DM unavailable');
+        const receipt=JSON.stringify(request.receipt);const text=`System request ${request.id} (${request.agentId}): ${request.status}. ${receipt.slice(0,2000)}${receipt.length>2000?' [truncated; use system-status and system-output REQUEST_ID stdout|stderr OFFSET]':''}`;
+        if(!this.system.claimResultNotice(request.id))continue;claimed=true;
+        await client.chat.postMessage({channel,text});
+        this.system.settleResultNotice(request.id,'sent');
+      }catch{if(claimed)this.system.settleResultNotice(request.id,'unknown');}
+    }
+  }
   async reconcile(): Promise<void> {
     const s = this.c.store;
     const rows = s.db.prepare("SELECT rowid seq,id,agent_id,request FROM outbox WHERE state='unknown' AND rowid>? ORDER BY rowid LIMIT 20").all(this.reconcileAfter) as { seq: number; id: string; agent_id: string; request: string }[];

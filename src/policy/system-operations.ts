@@ -18,7 +18,7 @@ export class SystemOperations {
   private row(id:string):RequestRow|undefined{return this.store.db.prepare('SELECT * FROM system_requests WHERE id=?').get(id) as RequestRow|undefined;}
   private view(row:RequestRow):SystemRequest{return{id:row.id,agentId:row.agent_id,workId:row.work_id,command:JSON.parse(row.request) as SystemCommand,expires:row.expires,status:row.status,decisionBy:row.decision_by,receipt:row.receipt?{...JSON.parse(row.receipt),warning:mutableSystemInputsWarning}:null,warning:mutableSystemInputsWarning};}
   private expireOne(row:RequestRow,at=this.clock()):RequestRow{
-    if(row.status==='pending'||row.status==='approved')if(row.expires<=at){this.store.db.prepare("UPDATE system_requests SET status='expired',receipt=? WHERE id=? AND status IN ('pending','approved')").run(encode({reason:'approval_expired'}),row.id);return this.row(row.id)!;}
+    if(row.status==='pending'||row.status==='approved')if(row.expires<=at){this.store.db.prepare("UPDATE system_requests SET status='expired',receipt=?,notice_state='pending' WHERE id=? AND status IN ('pending','approved')").run(encode({reason:'approval_expired'}),row.id);return this.row(row.id)!;}
     return row;
   }
   request(run:RunToken,workId:string,id:string,input:unknown):SystemRequest{
@@ -38,15 +38,30 @@ export class SystemOperations {
     const row=this.row(id);if(!row||row.agent_id!==agentId)throw new Error('Unknown own system request');
     return this.store.atomic(()=>this.view(this.expireOne(row)));
   }
+  ownerStatus(owner:string,id:string):SystemRequest{
+    if(!this.collaboration.config.ownerUserIds.includes(owner))throw new Error('Owner only');
+    const row=this.row(id);if(!row)throw new Error('Unknown system request');return this.store.atomic(()=>this.view(this.expireOne(row)));
+  }
+  ownerOutput(owner:string,id:string,stream:'stdout'|'stderr',offset:number):{id:string;status:SystemStatus;stream:string;offset:number;total:number;chunk:string;nextOffset:number|null}{
+    if(!Number.isSafeInteger(offset)||offset<0)throw new Error('Invalid system output offset');
+    const request=this.ownerStatus(owner,id),receipt=request.receipt as {stdout?:unknown;stderr?:unknown}|null;
+    const output=receipt?.[stream];if(typeof output!=='string')throw new Error('System output is not available');
+    if(offset>output.length)throw new Error('System output offset exceeds length');
+    const chunk=output.slice(offset,offset+2000),nextOffset=offset+chunk.length;
+    return{id,status:request.status,stream,offset,total:output.length,chunk,nextOffset:nextOffset<output.length?nextOffset:null};
+  }
   pending():SystemRequest[]{
     this.expire();return(this.store.db.prepare("SELECT * FROM system_requests WHERE status='pending' ORDER BY rowid").all() as RequestRow[]).map(row=>this.view(row));
   }
   pendingNotices():SystemRequest[]{
     this.expire();return(this.store.db.prepare("SELECT * FROM system_requests WHERE status='pending' AND notice_state='pending' ORDER BY rowid LIMIT 20").all() as RequestRow[]).map(row=>this.view(row));
   }
+  pendingResults():SystemRequest[]{return(this.store.db.prepare("SELECT * FROM system_requests WHERE status IN ('succeeded','failed','unknown','expired') AND notice_state='pending' ORDER BY rowid LIMIT 20").all() as RequestRow[]).map(row=>this.view(row));}
+  claimResultNotice(id:string):boolean{return this.store.db.prepare("UPDATE system_requests SET notice_state='sending' WHERE id=? AND status IN ('succeeded','failed','unknown','expired') AND notice_state='pending'").run(id).changes===1;}
+  settleResultNotice(id:string,state:'sent'|'unknown'):void{this.store.db.prepare("UPDATE system_requests SET notice_state=? WHERE id=? AND notice_state='sending' AND status IN ('succeeded','failed','unknown','expired')").run(state,id);}
   claimNotice(id:string):boolean{return this.store.db.prepare("UPDATE system_requests SET notice_state='sending' WHERE id=? AND status='pending' AND notice_state='pending'").run(id).changes===1;}
   settleNotice(id:string,state:'sent'|'unknown'):void{this.store.atomic(()=>{
-    const row=this.row(id);if(!row||row.notice_state!=='sending')return;
+    const row=this.row(id);if(!row||row.status!=='pending'||row.notice_state!=='sending')return;
     if(state==='sent'){this.store.db.prepare("UPDATE system_requests SET notice_state='sent' WHERE id=? AND notice_state='sending'").run(id);return;}
     this.failNotice(row);
   });}
@@ -74,8 +89,9 @@ export class SystemOperations {
   }
   recover():void{
     this.store.atomic(()=>{const running=this.store.db.prepare("SELECT * FROM system_requests WHERE status='executing'").all() as RequestRow[];
-      for(const row of running){this.store.db.prepare("UPDATE system_requests SET status='unknown',receipt=? WHERE id=? AND status='executing'").run(encode({reason:'interrupted_after_execution_boundary'}),row.id);this.wake(row.agent_id,row.work_id,row.id,'unknown');}
+      for(const row of running){this.store.db.prepare("UPDATE system_requests SET status='unknown',receipt=?,notice_state='pending' WHERE id=? AND status='executing'").run(encode({reason:'interrupted_after_execution_boundary'}),row.id);this.wake(row.agent_id,row.work_id,row.id,'unknown');}
       for(const row of this.store.db.prepare("SELECT * FROM system_requests WHERE notice_state='sending' AND status='pending'").all() as RequestRow[])this.failNotice(row);
+      this.store.db.prepare("UPDATE system_requests SET notice_state='unknown' WHERE notice_state='sending' AND status IN ('succeeded','failed','unknown','expired')").run();
     });this.expire();
   }
   async dispatchApproved():Promise<void>{
@@ -83,14 +99,14 @@ export class SystemOperations {
     try{this.expire();for(const row of this.store.db.prepare("SELECT * FROM system_requests WHERE status='approved' ORDER BY rowid").all() as RequestRow[]){
       const claimed=this.store.atomic(()=>{const current=this.expireOne(this.row(row.id)!);if(current.status!=='approved')return false;
         if(!this.eligible.includes(current.agent_id)||this.collaboration.seats.active(current.agent_id)){
-          this.store.db.prepare("UPDATE system_requests SET status='failed',receipt=? WHERE id=? AND status='approved'").run(encode({reason:'system_eligibility_unavailable'}),row.id);
+          this.store.db.prepare("UPDATE system_requests SET status='failed',receipt=?,notice_state='pending' WHERE id=? AND status='approved'").run(encode({reason:'system_eligibility_unavailable'}),row.id);
           this.wake(current.agent_id,current.work_id,row.id,'failed');return false;
         }
         this.store.db.prepare("UPDATE system_requests SET status='executing' WHERE id=? AND status='approved'").run(row.id);return true;});
       if(!claimed)continue;
       try{const result=await this.executor.execute(JSON.parse(row.request) as SystemCommand);
-        this.store.atomic(()=>{this.store.db.prepare("UPDATE system_requests SET status=?,receipt=? WHERE id=? AND status='executing'").run(result.code===0?'succeeded':'failed',encode(result),row.id);this.wake(row.agent_id,row.work_id,row.id,result.code===0?'succeeded':'failed');});
-      }catch(error){this.store.atomic(()=>{this.store.db.prepare("UPDATE system_requests SET status='unknown',receipt=? WHERE id=? AND status='executing'").run(encode({reason:'privileged_execution_outcome_unknown',detail:String(error)}),row.id);this.wake(row.agent_id,row.work_id,row.id,'unknown');});}
+        this.store.atomic(()=>{this.store.db.prepare("UPDATE system_requests SET status=?,receipt=?,notice_state='pending' WHERE id=? AND status='executing'").run(result.code===0?'succeeded':'failed',encode(result),row.id);this.wake(row.agent_id,row.work_id,row.id,result.code===0?'succeeded':'failed');});
+      }catch(error){this.store.atomic(()=>{this.store.db.prepare("UPDATE system_requests SET status='unknown',receipt=?,notice_state='pending' WHERE id=? AND status='executing'").run(encode({reason:'privileged_execution_outcome_unknown',detail:String(error)}),row.id);this.wake(row.agent_id,row.work_id,row.id,'unknown');});}
     }}finally{this.dispatching=false;}
   }
   private wake(agentId:string,workId:string,id:string,status:SystemStatus):void{
