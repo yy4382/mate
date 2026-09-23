@@ -1,6 +1,6 @@
-# 首个可用版本的交付标准（用户更新，2026-09-21）
+# 首个可用版本的交付标准（用户更新，2026-09-23）
 
-目标：可部署到低配置Linux VPS、Agent之间沙盒隔离、通过Slack操作的可用应用。不是只交本机实验框架。默认沿用少量预配置Agent、Pi Core、SQLite单daemon、现有Socket Mode；不将动态Slack App provisioning、网页或改进Agent列为首版前置。
+目标：可部署到低配置Linux VPS、Agent以独立非特权Linux用户隔离私人资料和普通执行、通过Slack操作的可用应用。Docker/gVisor不再是默认执行后端；系统级命令逐条由用户在界面批准。不是只交本机实验框架。默认沿用少量预配置Agent、Pi Core、SQLite单daemon、现有Socket Mode；不将动态Slack App provisioning、网页或改进Agent列为首版前置。下方V1/V2的Docker设计与PASS属于此前实现记录，不能当作新Linux用户路线的验收；新路线的spec/tickets另行替换受影响部署与执行gate。
 
 停止条件（或）：所有当前可做的开发/验证/打包/文档完成，之后只需接入真实Slack/provider配置与部署到VPS；或遇到无法依据现有授权/方向决定且必须由用户裁决的关键架构/功能问题。缺少部署凭证不阻塞本地开发、Linux验证或部署产物准备。不得因单个模块通过而结束整个任务。
 

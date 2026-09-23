@@ -2,7 +2,7 @@
 
 ## First usable release and stopping conditions
 
-- The first usable release must be deployable on a low-resource Linux VPS, isolate Agents with sandboxes, and be operable through Slack. VPS packaging and Linux isolation validation are release requirements, not post-experiment extras.
+- The first usable release must be deployable on a low-resource Linux VPS, isolate Agents using separate unprivileged Linux users, and be operable through Slack. Docker/gVisor is not the default Agent execution boundary. VPS packaging and focused Linux permission/process validation are release requirements, not post-experiment extras.
 - Continue until all feasible development and validation are complete and only actual Slack/provider connection and VPS deployment remain, OR a critical architecture/product decision genuinely requires the user. Do not stop at intermediate module checkpoints.
 - Use local Git branches/commits for checkpoints and reviewed tickets. Never include private reference evidence, secrets or runtime data; no remote push without authorization.
 
@@ -17,7 +17,7 @@
 - Message freshness gating surfaces concurrent changes and preserves the Agent's choices to revise, retry, stay silent, or explicitly continue. It is not command review or model-quality filtering. Preserve unread/seen/deferred distinctions; never claim Slack offers an atomic room-version send contract.
 - Review product-semantic fidelity and reachable alternative choices as well as correctness/recovery. Passing a scripted happy path does not establish the entire action space.
 - Use pnpm for dependency installation and scripts. Do not reintroduce npm lockfiles.
-- No Jev or per-command review is currently required. Keep deterministic scoped grants, durable action receipts, and a controlled ExecutionBackend. Future review must extend the broker boundary rather than spread provider-specific logic through workers/tools.
+- Ordinary Agent commands need no per-command review. Every system-privileged command requires explicit user approval in the UI before execution; rejection, expiry, or unavailable UI means no execution. Keep deterministic scoped grants, durable action receipts, and a controlled ExecutionBackend. The approval boundary belongs in the broker, not scattered through workers/tools.
 - Evaluate harness capability assuming an arbitrarily intelligent model: tools, environment, system prompt, reachable control flows, persistence and recovery. Do not make model performance or spontaneous collaboration quality a delivery blocker. Scripted model tests are valid harness tests; real provider checks concern transport/protocol/accounting compatibility only.
 - Prefer mature, widely used, well-fitting libraries. Treat researched versions as candidates to verify, not an already tested lockfile.
 
@@ -30,7 +30,7 @@ The flow is the engineering skills in `.agents/skills/`; this section records th
 3. **Tickets → implementation.** One ticket per fresh context. `/implement` works `/tdd` at the pre-agreed seams, runs the project's validation commands, and commits with the ticket referenced in the message (`#N`).
 4. **Independent review is required.** `/implement` closes with `/code-review`: the Engineering and Spec axes run as parallel sub-agents that did not write the code, and reviewers are read-only. A runnable happy path is not acceptance — failure and recovery paths must be challenged, and findings report `file:line` and severity.
 5. **Fix blocking findings before the next ticket; reviews are not persisted.** The report lives in the conversation; the durable trace is the commit referencing the ticket and the ticket itself. Do not label self-review as the independent review.
-6. **Validation** uses the project's own commands — `package.json` (`pnpm check`, `pnpm typecheck`) — plus the platform-specific tests that container and deployment paths declare. Real Slack / provider / VPS integration is outside the per-ticket loop unless asked for; missing credentials never block unrelated local work, and mocked checks must stay distinguishable from real integrations.
+6. **Validation** uses the project's own commands — `package.json` (`pnpm check`, `pnpm typecheck`) — plus focused Linux user, permission, process, and deployment checks relevant to the changed path. Real Slack / provider / VPS integration is outside the per-ticket loop unless asked for; missing credentials never block unrelated local work, and mocked checks must stay distinguishable from real integrations.
 7. **Correct a ticket only for a genuine requirement change**, confirmed with the user first, and never rewrite acceptance criteria to match what was built. A cross-ticket or spec-level finding goes back to the user.
 8. **Work through the backlog autonomously.** Continue until all feasible local development and validation is complete and only the Slack/provider connection and VPS deployment remain, or a critical product/architecture decision genuinely needs the user. Do not stop at intermediate checkpoints. Keep the user informed in Chinese.
 

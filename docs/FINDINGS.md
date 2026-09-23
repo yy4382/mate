@@ -11,9 +11,9 @@
 
 ---
 
-## F1 沙盒
+## F1 沙盒（历史研究；2026-09-23由Linux用户路线取代）
 
-**状态：待议。问题（review 发现）：per-op 短生命周期容器开销不可接受，需要改为每 Agent 的持久隔离，并解决进程终止语义与目标机能力限制。**
+**状态：历史研究。** 用户现决定以每Agent独立Linux用户为首版默认执行边界，不再选择下述Docker/gVisor或bubblewrap作为默认后端；这些性能与运行时事实仍是候选路线的历史证据，不是待实施方案。当前决定见[ADR](adr/0001-linux-users-for-agent-execution.md)。
 
 **对原计划的影响**：现有执行后端与部署资源预算建立在 per-op 容器 + 全局串行之上（V1b/V2 已按此验收）。修改意味着把 `src/execution/*`、workspace/grant 挂载语义、部署 plan 与 `environment.info` 契约一起重新设计成新模块，按独立红队 gate 实施，而不是修补现有实现。
 
