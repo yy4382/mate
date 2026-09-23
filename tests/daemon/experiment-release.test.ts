@@ -21,8 +21,10 @@ it('ships matching two-Agent examples with platform bindings outside Agent ident
   expect(slack.adapters.local).toBeUndefined();
   expect(local.adapters.slack).toBeUndefined();
   expect(local.adapters.local?.rooms).toEqual([{ id: 'team-room', agents: ['research', 'writer'], humans: ['owner'] }]);
-  const docs=[readFileSync(resolve('README.md'),'utf8'),readFileSync(resolve('docs/EXPERIMENT_RUNBOOK.md'),'utf8')];
-  for(const scope of requiredSlackBotScopes)for(const document of docs)expect(document).toContain(scope);
+  const operations=readFileSync(resolve('docs/OPERATIONS.md'),'utf8');
+  expect(operations).toContain('slack-manifest');
+  expect(operations).toContain('完整权限清单以生成文件为准');
+  expect(requiredSlackBotScopes).toContain('commands');
 });
 
 it('labels configuration checks without claiming external Slack or provider connectivity', async () => {

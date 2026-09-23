@@ -1,10 +1,10 @@
 > 首版标准：可部署到低配置 Linux VPS、Agent 之间有沙盒隔离、可通过 Slack 操作。部署产物与 Linux 原生隔离验证属于首版；预配置成员可接受。开发流程与停止条件见 [AGENTS.md](../AGENTS.md)。
 
-> 平台解耦、Raft 差异及软件工程约束见 [ARCHITECTURE](ARCHITECTURE.md) 和 [EXPERIMENT_GAPS](EXPERIMENT_GAPS.md)；旧阶段编号仅供追溯历史证据。
+> 历史架构讨论与 Raft 差异证据保存在 `docs/archive/`；旧阶段编号仅供追溯。
 
 # Mate 项目重新定位
 
-2026-09-20。当前产品方向，覆盖旧交接稿/技术设计中与此冲突的假设。这是产品约束；已完成范围的证据见[验收记录](ACCEPTANCE.md)。当前代码说明见 [HOW_IT_WORKS](HOW_IT_WORKS.md)；当前工作由 [Matt skills](../.agents/skills/ask-matt/SKILL.md) 管理。
+2026-09-20。当前产品方向，覆盖旧交接稿/技术设计中与此冲突的假设。这是产品约束；当前实现以源码、测试和配置 schema 为准，工作由 [Matt skills](../.agents/skills/ask-matt/SKILL.md) 管理。
 
 ## 产品定义
 
@@ -12,21 +12,21 @@ Mate 为个人 Slack workspace 中持续存在的 Agent 提供自主工作的环
 
 Harness 让这些选择可观察、可执行、可恢复。预算和授权约束真实资源及副作用；调度保证每 Agent 只有一个主执行通道；这些机制不得附带规定固定的协作流程、角色层级或单个 work 内的思考范围。假设模型足够智能，验收可达性与契约，不评测模型聪明程度。
 
-## 必须恢复的语义
+## 核心行为约束
 
-| 领域 | 重构前偏移（历史）与源码位置 | 新方向与可验证的行为 |
-|---|---|---|
-| 消息空间 | [targetSchema](../src/slack/messages.ts) 强制 thread；缺频道/成员发现和建立DM入口 | channel、thread、DM是交流位置；可发现已授权空间、发送顶层消息、另开讨论、主动联系同伴，回复复用准确target |
-| 任务所有权 | [createTask/claim](../src/collaboration/service.ts) 只认领独立task ID，同一消息可另建多个任务 | 原始消息是规范工作锚点；原子claim既有消息、unclaim/移交与状态更新；新任务先产生可见消息，再成为同一任务投影；数据库存元数据不构成第二套不相干工作 |
-| 跨工作行动 | [ToolRouter](../src/runtime/tools.ts) 连其他work的tasks.read也拒绝 | 读取按身份/可见性；Agent可切换或并列处理多个授权事项。任务归属、预算账户、调度run、授权分别建模 |
-| 注意力 | [inbox工具](../src/runtime/tools.ts)与[finish](../src/storage/store.ts) 将队列消费近似当成处理完成 | 接收、通知、呈现正文、处理/暂缓独立；忙碌时通知存在，模型在断点选择读取；结束run不清空未读或替模型决定已处理 |
-| 工作空间 | [ensureGrants](../src/daemon/app.ts) 私有root仅read/write，另禁止其exec grant | Agent在自己的授权workspace中组织任意资料、脚本、代码、记忆；提供查找、编辑、移动与实际执行能力。MEMORY.md是恢复入口，不是内容分类白名单 |
-| 提醒 | [schedule](../src/collaboration/service.ts) 只有时间/target并绑旧work预算，任务完成自动取消 | 作者拥有、明确目的、可见锚点、可改期/取消、有触发记录；后续提醒可独立于已完成任务存活；按显式持续预算策略计费 |
-| 连续身份 | [register](../src/storage/store.ts) 配置变化拒绝启动且无迁移工具 | 逻辑Agent身份与可替换session分开；角色可由对话/memory演化；受控换session、工具配置更新、压缩后恢复入口均可用 |
-| prompt与真实工具 | [Supervisor.register](../src/runtime/supervisor.ts) 的概括规则+固定工具表 | 完整行为约定与可发现工具目录：复用消息任务、主动查历史、长任务检查点、进展与交接、对等沟通、读/不读及发/不发。工具能力按环境配置接入，不把“研究”定义成只读URL |
-| 消息门控 | [Output](../src/slack/messages.ts) 有去重/回执，无基于已呈现上下文的检查 | 消息或任务变更前告知相关讨论的变化；保留草稿、修改、原样重试、放弃、明确知情继续。模型拥有最后的沟通判断，详见[调研](MESSAGE_GATING_RESEARCH.md) |
+| 领域 | 目标与可验证的行为 |
+|---|---|
+| 消息空间 | channel、thread、DM 是交流位置；Agent 可发现已授权空间、发送顶层消息、另开讨论、主动联系同伴，回复复用准确 target。 |
+| 任务所有权 | 原始消息是规范工作锚点；可原子认领、让位、移交与更新。新任务先产生可见消息，再成为同一任务的投影。 |
+| 跨工作行动 | 读取按身份与可见性判断；Agent 可切换或并列处理多个授权事项。任务归属、预算账户、run 调度和授权分别建模。 |
+| 注意力 | 接收、通知、呈现正文、处理与暂缓相互独立；模型在断点选择读取，结束 run 不清空未读。 |
+| 工作空间 | Agent 可在授权 workspace 中组织资料、脚本、代码和记忆，并使用真实文件与执行工具。MEMORY.md 是恢复入口，不是知识分类白名单。 |
+| 提醒 | 作者拥有提醒，可改期、取消并查看触发记录；提醒可在关联任务结束后继续存在，费用按显式持续预算策略记账。 |
+| 连续身份 | 逻辑 Agent 身份与可替换 session 分离；角色可通过对话与 memory 演化，受控换 session 和恢复入口可用。 |
+| Prompt 与工具 | 行为约定说明主动查历史、复用消息任务、长任务检查点、进展交接、对等沟通，以及读与不读、发与不发的选择；工具目录按环境发现。 |
+| 消息门控 | 发送或任务变更前告知相关讨论的变化；保留草稿、修改、重试、放弃、暂缓与知情继续，模型拥有最终沟通判断。历史依据见[调研](archive/MESSAGE_GATING_RESEARCH.md)。 |
 
-私有memory内容由Agent管理，不强制“只能短期状态/偏好”、不要求研究知识必须进入Obsidian。后续对话明确纠正了这种划分；原始对话仅保留在本地私有证据，路径见HANDOFF。Obsidian等外部公共知识空间是另行配置的能力，首期不是强制依赖。
+私有 memory 内容由 Agent 管理，不强制“只能短期状态/偏好”、不要求研究知识必须进入 Obsidian。原始讨论仅保留在本地私有证据，索引见[历史交接记录](archive/HANDOFF.md)。Obsidian 等外部公共知识空间是另行配置的能力，首期不是强制依赖。
 
 ## 分工：模型与harness
 
@@ -53,11 +53,9 @@ Harness 让这些选择可观察、可执行、可恢复。预算和授权约束
 
 执行环境要支持任务需要的联网、工具链和文件操作，具体能力仍由用户配置/授权。backend及实际停止/恢复测试随模块交付；部署配置仍决定工具链、网络和授权。
 
-## 重构优先级与验收原则
+## 验收原则
 
-先改消息/注意力/预算对象，随后接入门控与消息任务，再恢复灵活工作空间、提醒、session和prompt。避免在旧work锁定模型上叠加更多工具。
-
-保留Pi Core + pi-ai、pnpm、SQLite持久日志、身份/ACL、单Agent单主run、outbox和unknown不盲目重放、可停止的ExecutionBackend。当前实现是可复用基础；A–H PASS只代表旧模块契约通过，不代表新定位完成。
+保留 Pi Core + pi-ai、pnpm、SQLite 持久日志、身份/ACL、单 Agent 单主 run、outbox 和 unknown 不盲目重放、可停止的 ExecutionBackend。这些基础能力不能代替完整产品语义的验收。
 
 验收用合成消息和脚本化模型，覆盖多种合法决策：直接对话而无任务树；看到新讨论后暂缓；跨事项继续旧任务；修改/保留/放弃草稿；任务被别人认领后让位；盲审不读他人结论；任务结束后仍按约定跟进。验证模型的选择能够兑现，不要求模型作出我们偏爱的选择。
 

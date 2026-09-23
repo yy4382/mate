@@ -1,6 +1,6 @@
-# Debian 13 / systemd 运维手册
+# Debian 13 部署与运维
 
-适用范围：x86_64 Debian 13、系统级 Docker、Node 24、pnpm 10.33.0。首次安装复用 [DEPLOYMENT.md](DEPLOYMENT.md) 的 installer；升级使用独立 recovery controller。改变 Agent 集合、workspace/mount/backing、service unit 或 Docker 安全拓扑不属于原地升级支持范围。以下是操作说明，本地测试不会执行外部安装、启动 Slack 或访问 VPS。
+适用范围：x86_64 Debian 13、系统级 Docker、Node 24、pnpm 10.33.0。首次安装由仓库内的 plan/preflight/install 完成；升级使用独立 recovery controller。改变 Agent 集合、workspace/mount/backing、service unit 或 Docker 安全拓扑不属于原地升级支持范围。以下命令是操作步骤；文档编辑和本地测试不会执行外部安装、启动 Slack 或访问 VPS。
 
 ## 正常构建与安装
 
@@ -13,6 +13,7 @@
 MATE_COMMIT=$(git rev-parse HEAD)
 pnpm install --frozen-lockfile
 pnpm test
+pnpm typecheck
 install -d -m 0755 /var/tmp/mate-release
 cp package.json pnpm-lock.yaml /var/tmp/mate-release/
 cp -a dist /var/tmp/mate-release/
@@ -25,7 +26,17 @@ mv /var/tmp/mate-RELEASE.json /var/tmp/mate-release/RELEASE.json
 
 首次安装前创建专用无登录系统账户（若已存在先核对其身份，不覆盖）：`sudo adduser --system --group --home /var/lib/mate --no-create-home --shell /usr/sbin/nologin mate`。不把 mate 永久加入 docker 组。installer 创建环境文件；可以先保持为空，此时普通 doctor 将明确报告缺失 secret，安装时的离线 candidate 检查允许缺失。
 
-首次安装：按 [部署说明](DEPLOYMENT.md) 准备 config 和 spec，`release.source` 指向上述完整目录，`gitCommit` 填对应 commit；执行 plan/preflight/install。root 命令可使用 `/usr/bin/node /ABSOLUTE/SOURCE/dist/src/deployment/cli.js` 替代依赖 sudo PATH 的 pnpm 包装。首次 installer 不启动服务。
+复制 [mate.example.json](../mate.example.json) 与 [mate.deploy.example.json](../mate.deploy.example.json)，填写目标机配置和 deployment spec。受管配置固定使用 `/var/lib/mate`、`/etc/mate/workspaces.json`、`/usr/bin/docker` 与 `unix:///var/run/docker.sock`；镜像必须是目标机已有的完整 sha256 ID。`release.source` 指向上述完整目录，`gitCommit` 填实际源码提交。每个外部 workspace grant root 必须恰好出现在 spec 中，且其父目录已存在，最终叶目录不存在或为空。私有 workspace 的默认容量为 512 MiB。
+
+```sh
+pnpm run deploy plan /ABSOLUTE/mate.deploy.json
+sudo pnpm run deploy preflight /ABSOLUTE/mate.deploy.json
+sudo pnpm run deploy install /ABSOLUTE/mate.deploy.json
+```
+
+plan 报告保留两份 release、状态目录、实际预分配的 backing、现有镜像和内存上界。preflight 根据实际目标文件系统检查剩余空间，核对受支持的系统、精确 Node 版本/native ABI、镜像、内存、服务停止状态与旧安装身份；不写宿主。install 先持久记录事务，再创建并验证目录、release、backing 和 mount unit，最后离线检查 candidate。中断后必须使用**相同** spec、配置与 release 重跑 install；身份不同会拒绝。installer 只支持首次受管安装及同一身份重跑，不隐式接管其他安装或升级 release。
+
+安装会生成受保护的 release、配置、数据/backing/checkpoint 目录、每 root 一个 mount unit、`mate.service` 与受限的 `matectl`，但不会启用或启动主服务。主服务使用 systemd `Type=notify`：完成执行环境、凭据、Slack 初始化与历史追赶后才报告 ready；停滞会在启动限期内失败。root 命令可使用 `/usr/bin/node /ABSOLUTE/SOURCE/dist/src/deployment/cli.js`，避免依赖 sudo 的 pnpm PATH。
 
 ## Slack：每位 Agent 一套 App
 
@@ -40,11 +51,15 @@ pnpm --silent run deploy slack-manifest writer > /var/tmp/mate-writer-slack.json
 
 在 Slack 创建 App 时导入对应 JSON。每个 Agent 独立 App/bot 安装绑定到同一个目标 workspace；记录真实 `teamId`、`slackAppId`、`slackBotId`、`slackUserId`，按 `mate.example.json` 填写 binding，不能共享一个 bot 身份来代表多个 Agent。manifest 设置 Socket Mode、全部 bot events、`/team` 和 bot OAuth scopes，包括 `commands`、聊天、会话历史/成员与文件能力。完整权限清单以生成文件为准，不在本手册维护第二份静态列表。[Slack manifest 规范](https://docs.slack.dev/reference/app-manifest/)
 
+需要把内部会话展示在专用 Slack 频道时，使用[内部会话展示指南](PROJECTIONS.md)的显式绑定与披露流程。
+
 在每个 App 的 Basic Information → App-Level Tokens 中创建 **仅 `connections:write`** 的 app-level token（`xapp-…`），另行安装 App 到 workspace，取得 bot token（`xoxb-…`）。App token 不替代 bot token，也不放入 bot OAuth scopes。Socket Mode 不需要公开 HTTP request URL。[Socket Mode 配置](https://docs.slack.dev/apis/events-api/using-socket-mode/)
 
 启用 App Home 的 Messages tab，并允许用户从 Messages tab 发送消息。把各 Agent App 分别邀请到需要参与的频道；私有频道必须由有权限的人邀请。OAuth scopes 变更后，对每个 App **重新安装到 workspace**；更新 bindings 与 token 环境引用，保留每个 App 对应关系。多个 App 的同名 `/team` 是同一 owner 控制入口，Slack 实际路由到哪个安装实例由 Slack 决定；任一实例都必须维持 owner 检查。
 
 将凭证按配置所引用的环境变量写入 `/etc/mate/mate.env`，保留 `root:mate 0640`；不要放入源码、manifest 或命令行参数，不把文件内容贴进测试记录。没有凭证时仅进行 manifest/config/doctor/status/logs 等离线检查；完成真实授权和 provider transport/accounting 检查前不能宣称 Slack/provider 集成已验证。
+
+首次真实接线的记录应区分本地合成检查与实际 workspace/provider 结果。核对每个 App 的安装身份和权限、顶层/thread/DM 输入输出、内部 Agent DM、附件下载与成果分享、held 草稿的各个合法选择、owner 与非 owner 控制、429/unknown 重启对账，以及 provider usage、错误、取消和超时协议。脚本化模型可以验证 harness 的选择路径；真实接线只验证传输、授权和记账契约，不以模型是否主动选择某个协作剧本作为通过条件。实际连接完成前，不能把合成协议测试称为真实 Slack/provider 验收。
 
 ## 只读检查与启动
 
@@ -57,6 +72,8 @@ sudo matectl doctor
 `status` 固定查看 `mate.service` 的 systemd ActiveState，组合平台中立 OperationsView 的 Agent/active-run/paused/unknown action/unknown output/held draft/due reminder 计数、root upgrade journal、deployment journal 和 restore journal。它不构造 Daemon，不加载 secret 环境文件，不执行迁移或恢复。升级/restore 未完成为 `recovery-pending`；journal 无法解析为 `recovery-unreadable`；停止、未知服务状态、无法读取数据库都不会显示健康。`running` 只说明本地进程与读取状态正常，不证明 Slack/provider 连通。计数截断会明确标示；status 和系统状态是相邻时刻快照，并非跨系统原子事务。
 
 `logs` 固定为 `mate.service` 的平台中立持久运行事实：过去 **24 小时，最多 100 条** run completed/failed/interrupted 或 internal DM created 事件，只输出时间和固定事件名。它**不读取或回显原始 journald**，因为异常栈、第三方 SDK 日志可能包含秘密；不输出 Agent/消息/工具标识、正文、工具参数/结果、文件内容或环境值。`available=false` 表示查询不可用，`moreAvailable` 表示历史还有记录，不保证这些记录仍在 24 小时窗口内。这不是完整审计日志，历史事实覆盖以 OperationsView 的持久记录为限。两个命令都不接受额外 flags、unit、时间、路径、environment 或任意 journalctl 参数。
+
+`doctor` 只读核对配置、release、mount、镜像/socket、secret 引用与服务状态，不执行数据库迁移、恢复或网络连接。`offline-probe` 要求主服务已停止，取得同一 daemon lock 后恢复本部署的执行 scope，并验证 workspace 与隔离执行；它不连接 Slack/provider。
 
 首次安装完成并配置好 secrets 后：
 
@@ -102,4 +119,10 @@ finalize 验证当前发布，将 controller 发布到已验证 release，保留
 
 先 `sudo systemctl stop mate.service`，再执行 `sudo matectl backup NAME`。固定 `/var/backups/mate` 下的 NAME 仅允许简单名称，长度不超过 64；checkpoint 由服务用户生成、root 封存。普通恢复使用 `sudo matectl restore OLD_NAME --replace CURRENT_NAME`，CURRENT_NAME 必须是当前状态对应的已封存 checkpoint；空环境恢复可省略 replace。restore 中断后使用同一 checkpoint 参数重入，status 会显示 pending。存在 deployment upgrade journal 时普通 restore/backup 等严格入口仍被阻断，使用 upgrade 命令恢复。恢复完成后检查，再启动服务。
 
-停用沿用 `deploy disable /etc/mate/mate.json`，保留 state/backings/checkpoints/releases；不要 rm 数据来“解除”恢复锁。原始系统日志若需管理员进一步调查，必须在受信终端单独处理，不作为 matectl 的可转发输出。
+非破坏性停用使用：
+
+```sh
+sudo pnpm run deploy disable /etc/mate/mate.json
+```
+
+它停止主服务、恢复并验证执行 scope，再按逆序正常停止 mount units；`EBUSY` 会失败，不使用 lazy unmount。state、backing、checkpoint、unit 和 release 全部保留；部署工具不提供删除数据/backing 的命令。不要 rm 数据来“解除”恢复锁。原始系统日志若需管理员进一步调查，必须在受信终端单独处理，不作为 matectl 的可转发输出。

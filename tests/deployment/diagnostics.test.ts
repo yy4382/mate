@@ -65,7 +65,7 @@ it('derives manifest permissions from every SDK call and shares runtime events a
 
 it('documents a silent pnpm manifest command whose stdout is parseable JSON',()=>{
  const dir=temp();writeFileSync(join(dir,'package.json'),JSON.stringify({scripts:{emit:`node -e "console.log(JSON.stringify({ok:true}))"`}}));const command=spawnSync('pnpm',['--silent','run','emit'],{cwd:dir,encoding:'utf8'});expect(command.status).toBe(0);expect(JSON.parse(command.stdout)).toEqual({ok:true});expect(slackAppManifest('alice').features.bot_user.display_name).toBe('mate_alice');
- const runbook=readFileSync('docs/OPERATIONS_RUNBOOK.md','utf8');for(const line of runbook.split('\n').filter(line=>line.includes('> /var/tmp/mate-')))expect(line).toContain('pnpm --silent run deploy');
+ const runbook=readFileSync('docs/OPERATIONS.md','utf8');for(const line of runbook.split('\n').filter(line=>line.includes('> /var/tmp/mate-')))expect(line).toContain('pnpm --silent run deploy');
 });
 
 it('reads persisted SQLite with OperationsView and leaves data/schema unchanged',()=>{

@@ -7,11 +7,11 @@
 | 来源 | 已核对事实 | 对Mate的意义 |
 |---|---|---|
 | [Raft官方文章，2026-05-21](https://raft.build/resources/blog/is-having-agents-in-the-room-meant-to-be-chaotic/) | inbox让Agent主动取用信息；held draft对比构思依据与当前讨论状态，让Agent重新选择 | 最贴近本项目目标的方向；文章不是完整服务器协议，不能由此宣称审计过其实现 |
-| 本地[Raft prompt](reference/raft-prompt-sep14.md)，Sending messages / Message Notifications | 有saved draft、send-draft、显式anyway、reviewer-isolation；忙碌时有content-free notice | 展示模型实际拥有的交互选项；盲审下门控不能泄露正文/作者/模型已见游标 |
+| 本地[Raft prompt](../reference/raft-prompt-sep14.md)，Sending messages / Message Notifications | 有saved draft、send-draft、显式anyway、reviewer-isolation；忙碌时有content-free notice | 展示模型实际拥有的交互选项；盲审下门控不能泄露正文/作者/模型已见游标 |
 | HANDOFF所列9月14日原始session，JSONL 226、320、517、531行工具回执 | 实际发生发送held、保存草稿，以及任务更新未应用；226/517为成员变更，320/531为任务状态通知 | 证明不是仅写在prompt的愿景。事件型变化也可能触发；不复制私有消息/身份到报告或测试 |
 | [OpenClaw steering queue](https://docs.openclaw.ai/concepts/queue-steering) | 区分steer/followup/collect/interrupt；普通steer不杀死已经运行的工具，在执行边界处理输入 | 运行中送达/调度与提交时freshness是不同层，可以组合 |
 | [Claude Code Agent Teams](https://code.claude.com/docs/en/agent-teams) | 同伴独立context、直接通信、mailbox送达与共享任务认领；另有完成/空闲hooks | 可参考通信/任务契约；所查文档不足以证明有Raft式held draft，不将两者混称 |
-| 已安装Pi Core 0.86.0 [声明](../node_modules/@earendil-works/pi-agent-core/dist/agent.d.ts) | 有steer、followUp和context/turn hooks；调研时Mate尚未接入；现由模型调用边界的notice RPC接入 | 不需要换成coding-agent；仍须验证IPC、持久化、hook顺序，不把内存队列当持久inbox |
+| 已安装Pi Core 0.86.0 [声明](../../node_modules/.pnpm/@earendil-works+pi-agent-core@0.86.0_ws@8.21.3_zod@4.6.5/node_modules/@earendil-works/pi-agent-core/dist/agent.d.ts) | 有steer、followUp和context/turn hooks；调研时Mate尚未接入；现由模型调用边界的notice RPC接入 | 不需要换成coding-agent；仍须验证IPC、持久化、hook顺序，不把内存队列当持久inbox |
 
 Claude文档还描述auto mode的消息分类检查，那属于另一类安全策略，不是我们要引入的freshness机制。本轮没有启用第三方消息分类或命令审查。外部网页为本次查询快照；不据其版本信息推断本项目兼容性。
 

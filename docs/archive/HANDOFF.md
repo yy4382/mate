@@ -1,6 +1,6 @@
 # Mate 开发交接
 
-> 新产品基线：[PROJECT_DIRECTION](PROJECT_DIRECTION.md)，消息门控研究：[MESSAGE_GATING_RESEARCH](MESSAGE_GATING_RESEARCH.md)。R1–R8已按新方向实现并独立审核，当前验收见[ACCEPTANCE](ACCEPTANCE.md)。以下为历史交接，不应按旧方案机械扩展。
+> 新产品基线：[PROJECT_DIRECTION](../PROJECT_DIRECTION.md)，消息门控研究：[MESSAGE_GATING_RESEARCH](MESSAGE_GATING_RESEARCH.md)。R1–R8已按新方向实现并独立审核，当前验收见[ACCEPTANCE](ACCEPTANCE.md)。以下为历史交接，不应按旧方案机械扩展。
 
 > 历史交接。2026-09-20用户已决定改用pnpm、删除Jev和逐命令审批；本文件相关要求已被覆盖。当前实现/扩展边界见 [HOW_IT_WORKS](HOW_IT_WORKS.md)。
 
@@ -58,7 +58,7 @@
 
 ## 开始工作的要求
 
-当时的执行要求是先建旧阶段计划，再按模块实施和红队审核；现已由仓库内的 Matt skills 接管。原计划保存在 [历史归档](archive/IMPLEMENTATION_PLAN-2026-09-21.md)，不再作为当前待办入口。
+当时的执行要求是先建旧阶段计划，再按模块实施和红队审核；现已由仓库内的 Matt skills 接管。原计划保存在 [历史归档](IMPLEMENTATION_PLAN-2026-09-21.md)，不再作为当前待办入口。
 
 红队关注正确性、跨频道连续性、上下文协议、重复/乱序/崩溃恢复、任务归属、授权/审批绕过、协作死循环和验收遗漏。提供具体文件位置、复现和影响；不是泛泛要求“更安全”。审查不通过不得把模块标为完成。
 

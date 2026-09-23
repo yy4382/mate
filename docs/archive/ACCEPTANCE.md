@@ -1,6 +1,6 @@
 # Mate harness 验收
 
-2026-09-21 的历史验收快照。假设模型足够智能，验证它的合理选择是否可执行、可观察、可恢复；不评测模型主动性或协作质量。旧模块 gate 见[归档计划](archive/IMPLEMENTATION_PLAN-2026-09-21.md)；本文件不管理当前待办。[当前调用链](HOW_IT_WORKS.md)解释具体函数与剩余差异。
+2026-09-21 的历史验收快照。假设模型足够智能，验证它的合理选择是否可执行、可观察、可恢复；不评测模型主动性或协作质量。旧模块 gate 见[归档计划](IMPLEMENTATION_PLAN-2026-09-21.md)；本文件不管理当前待办。[当前调用链](HOW_IT_WORKS.md)解释具体函数与剩余差异。
 
 ## 产品语义与证据
 
@@ -24,7 +24,7 @@
 | 持续预算与公平性 | Agent账户不随新消息/work/reset补额；work耗尽不暂停全Agent；reminder触发与outbox筛选先排除阻挡再LIMIT，无关事项可前进 |
 | 低配VPS进程资源准入 | 默认全局1个active run和1个backend operation；FIFO等待可取消；异常/停止释放slot；空闲worker有限TTL回收；持久工作不依赖内存队列 |
 
-测试位置：上述名称均位于[tests](../tests/)，具体断言可检索对应能力。所有数据均为合成fixture，不使用私有Raft memory。
+测试位置：上述名称均位于[tests](../../tests/)，具体断言可检索对应能力。所有数据均为合成fixture，不使用私有Raft memory。
 
 ## 故障矩阵
 
@@ -57,6 +57,6 @@
 
 ## 独立审核轨迹
 
-每个模块通过后才实施后续模块：[R1a/R1b–R7c记录](reviews/)。R7a红队发现并修复旧unknown不可查和历史回执ACL旁路；R5/R6发现并修复adapter seat旁路、UTF-8分块损坏、附件ACK/echo竞态、提醒批次饥饿。R8补充outbox公平性及多分支语义验证。最终gate和确切测试数记录在[R8审核](reviews/R8-product-semantics.md)。
+每个模块通过后才实施后续模块：[R1a/R1b–R7c记录](../reviews/)。R7a红队发现并修复旧unknown不可查和历史回执ACL旁路；R5/R6发现并修复adapter seat旁路、UTF-8分块损坏、附件ACK/echo竞态、提醒批次饥饿。R8补充outbox公平性及多分支语义验证。最终gate和确切测试数记录在[R8审核](../reviews/R8-product-semantics.md)。
 
 未推送、部署、创建外部资源或发送真实Slack消息。

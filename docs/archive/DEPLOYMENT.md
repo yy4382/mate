@@ -24,7 +24,7 @@ mv /var/tmp/mate-RELEASE.json /var/tmp/mate-release/RELEASE.json
 
 `MATE_COMMIT` 必须是构建源码的实际提交，`release.source` 指向这个带 `RELEASE.json` 的完整目录。构建、生成 manifest 和目标机 `/usr/bin/node` 必须使用相同的精确 Node 版本与 ABI。`package.json`通过pnpm的`onlyBuiltDependencies`明确批准`fs-ext`和`better-sqlite3`。release manifest会记录精确Node版本/ABI、lockfile、`dist`、实际依赖inventory和所有`.node`内容hash；内部symlink必须留在release内，hardlink的全部链接也必须都在同一不可变release树中。
 
-复制并修改[mate.example.json](../mate.example.json)和[mate.deploy.example.json](../mate.deploy.example.json)。managed配置固定使用`/var/lib/mate`、`/etc/mate/workspaces.json`、`/usr/bin/docker`和`unix:///var/run/docker.sock`。Docker image必须是目标机已有的完整sha256 ID。private容量没有override时为512 MiB；每个唯一external grant root必须在deployment spec中恰好出现一次，其父目录必须已经存在，最终叶目录必须不存在或为空。首版部署路径只接受systemd安全的绝对路径字符。
+复制并修改[mate.example.json](../../mate.example.json)和[mate.deploy.example.json](../../mate.deploy.example.json)。managed配置固定使用`/var/lib/mate`、`/etc/mate/workspaces.json`、`/usr/bin/docker`和`unix:///var/run/docker.sock`。Docker image必须是目标机已有的完整sha256 ID。private容量没有override时为512 MiB；每个唯一external grant root必须在deployment spec中恰好出现一次，其父目录必须已经存在，最终叶目录必须不存在或为空。首版部署路径只接受systemd安全的绝对路径字符。
 
 plan和preflight不写宿主：
 

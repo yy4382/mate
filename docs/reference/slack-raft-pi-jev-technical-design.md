@@ -1,6 +1,6 @@
-> 当前产品基线见[PROJECT_DIRECTION](../PROJECT_DIRECTION.md)及[MESSAGE_GATING_RESEARCH](../MESSAGE_GATING_RESEARCH.md)。旧work/run绑定与能力收窄不再作为新设计默认值。
+> 当前产品基线见[PROJECT_DIRECTION](../PROJECT_DIRECTION.md)；消息门控的历史调研见[MESSAGE_GATING_RESEARCH](../archive/MESSAGE_GATING_RESEARCH.md)。旧work/run绑定与能力收窄不再作为新设计默认值。
 
-> 历史设计：2026-09-20用户决定移除Jev与逐命令审批，改用pnpm。当前实际调用链、feature缺口及未来扩展方案以 [HOW_IT_WORKS](../HOW_IT_WORKS.md) 为准；原文保留为设计演进记录。
+> 历史设计：2026-09-20用户决定移除Jev与逐命令审批，改用pnpm。当前实现以源码、测试与配置 schema 为准；[旧调用链说明](../archive/HOW_IT_WORKS.md)仅保留设计演进记录。
 
 # Slack 持久多 Agent：Pi Core + Jev 技术方案
 
