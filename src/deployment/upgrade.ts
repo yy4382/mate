@@ -23,13 +23,15 @@ export const topologySchema=z.object({
 export type DeploymentTopology=z.infer<typeof topologySchema>;
 
 const fileIdentity=z.object({device:z.number().int().nonnegative(),inode:z.number().int().positive(),sha256:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
+const checkpointStage=z.object({path:absolute,device:z.number().int().nonnegative().optional(),inode:z.number().int().positive().optional()}).strict().refine(value=>(value.device===undefined)===(value.inode===undefined),'Checkpoint stage device and inode must be recorded together');
+const pruneTarget=z.object({path:absolute,device:z.number().int().nonnegative(),inode:z.number().int().positive()}).strict();
 const releaseIdentityShape=releaseIdentitySchema;
 export const rootUpgradeSchema=z.object({version:z.literal(1),upgradeId:z.string().uuid(),attemptId:z.string().uuid(),
  step:z.enum(['prepared','checkpoint','journal','release','migrated','config','current','checked','rollback-checkpoint','rollback','restored','old-config','old-current','activated','finalizing']),
  mode:z.enum(['candidate','fix-forward']),oldConfig:daemonConfigSchema,previousConfig:daemonConfigSchema,nextConfig:daemonConfigSchema,
  old:releaseIdentityShape,previous:releaseIdentityShape,next:releaseIdentityShape,controller:releaseIdentityShape,topology:topologySchema,
  source:z.object({releaseDevice:z.number(),releaseInode:z.number(),config:fileIdentity}).strict(),
- rollback:checkpointIdentitySchema.optional(),candidate:checkpointIdentitySchema.optional(),rollbackConfig:daemonConfigSchema.optional(),checkpointStages:z.record(z.string(),z.object({path:z.string(),device:z.number(),inode:z.number()}).strict()).optional(),
+ rollback:checkpointIdentitySchema.optional(),candidate:checkpointIdentitySchema.optional(),rollbackConfig:daemonConfigSchema.optional(),checkpointStages:z.record(z.string(),checkpointStage).optional(),pruneTargets:z.array(pruneTarget).optional(),
 }).strict();
 export type RootUpgrade=z.infer<typeof rootUpgradeSchema>;
 

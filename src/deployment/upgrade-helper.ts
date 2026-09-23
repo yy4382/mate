@@ -14,14 +14,14 @@ import {runOfflineProbe} from './probe.js';
 import {readRootUpgrade} from './upgrade.js';
 import {upgradePaths,upgradeCheckpointPath} from './upgrade-layout.js';
 import {assertConfigurationTopology,deploymentMigrationAttempt,readDeploymentJournal} from './upgrade.js';
-import {verifyRelease} from './release.js';
+import {currentReleaseRuntime,verifyRelease} from './release.js';
 import {assertNoRestoreInProgress} from '../daemon/restore.js';
 
 /** Fixed-command, service-user entry. Deliberately has no Daemon, Slack or provider transport construction. */
 export async function upgradeHelper(action:string,releaseRoot:string):Promise<void>{
  if(!['checkpoint-rollback','checkpoint-candidate','migrate','probe','restore','finish-restore'].includes(action))throw new Error('Unknown upgrade helper operation');
  const state=readRootUpgrade(upgradePaths.data);if(!state)throw new Error('Root upgrade journal required');
- const recoveryAction=['checkpoint-rollback','checkpoint-candidate','restore','finish-restore'].includes(action),identity=recoveryAction?state.controller:state.next;if(realpathSync(releaseRoot)!==identity.releasePath)throw new Error('Upgrade helper release mismatch');await verifyRelease(releaseRoot,identity.releaseId);
+ const recoveryAction=['checkpoint-rollback','checkpoint-candidate','restore','finish-restore'].includes(action),identity=recoveryAction?state.controller:state.next;if(realpathSync(releaseRoot)!==identity.releasePath)throw new Error('Upgrade helper release mismatch');await verifyRelease(releaseRoot,identity.releaseId,currentReleaseRuntime());
  const config=action==='checkpoint-rollback'?state.previousConfig:action==='checkpoint-candidate'?state.rollbackConfig??state.nextConfig:state.nextConfig;
  const journal=readDeploymentJournal(upgradePaths.data,{requiredOwnerUid:0,requiredOwnerGid:process.getgid?.()??-1});
  if(action!=='checkpoint-rollback'&&(!journal||journal.upgradeId!==state.upgradeId||journal.attempt.id!==state.attemptId))throw new Error('Upgrade helper journal identity mismatch');

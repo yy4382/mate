@@ -1,6 +1,6 @@
 import {createHash} from 'node:crypto';
 import {afterEach,expect,it,vi} from 'vitest';
-import {existsSync,lstatSync,mkdtempSync,mkdirSync,readFileSync,realpathSync,renameSync,rmSync,symlinkSync,writeFileSync} from 'node:fs';
+import {existsSync,lstatSync,mkdtempSync,mkdirSync,readFileSync,readdirSync,realpathSync,renameSync,rmSync,symlinkSync,unlinkSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {daemonConfigSchema} from '../../src/daemon/config.js';
@@ -11,24 +11,32 @@ import {buildBaseline} from '../../src/runtime/prompt.js';
 import {operationDocumentation} from '../../src/runtime/tools.js';
 import {createReleaseManifest} from '../../src/deployment/release.js';
 import {configurationIdentity,createDeploymentTopology,deploymentJournalPath,deploymentMigrationAttempt,readDeploymentJournal,replaceUncommittedDeploymentAttempt,assertDeploymentOperationAllowed} from '../../src/deployment/upgrade.js';
-import {readRootUpgrade,rootUpgradePath,runUpgrade,type UpgradeHost,type UpgradePaths} from '../../src/deployment/upgrade-orchestrator.js';
-import {upgradeHelperRelease} from '../../src/deployment/upgrade-host.js';
+import {finalizeRetention,readRootUpgrade,rootUpgradePath,runUpgrade,type UpgradeHost,type UpgradePaths} from '../../src/deployment/upgrade-orchestrator.js';
+import {assertUpgradeCheckpointCapacity,requiredUpgradeCheckpointBytes,upgradeHelperRelease} from '../../src/deployment/upgrade-host.js';
 import {configFixture} from '../helpers/config.js';
 import type {WorkspaceManifest} from '../../src/deployment/workspaces.js';
 const roots:string[]=[],stores:Store[]=[];afterEach(()=>{vi.restoreAllMocks();for(const s of stores.splice(0))s.close();for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true});});
 const digest=(v:string|Buffer)=>createHash('sha256').update(v).digest('hex');
+it('reserves both checkpoint copies, metadata headroom, and inodes at the exact capacity boundary',()=>{
+ const snapshot={bytes:1024*1024,inodes:20},required=requiredUpgradeCheckpointBytes(snapshot.bytes);expect(required).toBe(snapshot.bytes*2+64*1024*1024);
+ expect(()=>assertUpgradeCheckpointCapacity(snapshot,{bytes:required,inodes:104})).not.toThrow();
+ expect(()=>assertUpgradeCheckpointCapacity(snapshot,{bytes:required-1,inodes:104})).toThrow('Insufficient checkpoint capacity');
+ expect(()=>assertUpgradeCheckpointCapacity(snapshot,{bytes:required,inodes:103})).toThrow('Insufficient checkpoint capacity');
+});
 async function release(path:string,label:string){mkdirSync(join(path,'dist'),{recursive:true});mkdirSync(join(path,'node_modules'));writeFileSync(join(path,'dist','main.js'),label);writeFileSync(join(path,'package.json'),'{}');writeFileSync(join(path,'pnpm-lock.yaml'),'lockfileVersion: 9\n');const m=await createReleaseManifest(path,'abcdef1',{platform:'linux',arch:'x64',node:'v24.21.0',modulesAbi:'137',packageManager:'pnpm@10.33.0'});writeFileSync(join(path,'RELEASE.json'),JSON.stringify(m));return m;}
 async function fixture(){
  const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-root-upgrade-')));roots.push(root);
- const paths:UpgradePaths={data:join(root,'data'),config:join(root,'etc','mate.json'),current:join(root,'opt','current'),controller:join(root,'opt','controller'),releases:join(root,'opt','releases'),stagedRelease:join(root,'opt','staged-release'),stagedConfig:join(root,'etc','staged-config.json'),checkpoints:join(root,'backups'),service:join(root,'mate.service')};
+ const paths:UpgradePaths={data:join(root,'data'),config:join(root,'etc','mate.json'),current:join(root,'opt','current'),controller:join(root,'opt','controller'),previous:join(root,'opt','previous'),releases:join(root,'opt','releases'),stagedRelease:join(root,'opt','staged-release'),stagedConfig:join(root,'etc','staged-config.json'),checkpoints:join(root,'backups'),service:join(root,'mate.service')};
  for(const dir of [join(paths.data,'control'),join(paths.data,'state'),join(paths.data,'agents','research'),join(root,'etc'),paths.releases,paths.checkpoints])mkdirSync(dir,{recursive:true});
- const oldStage=join(root,'old-release'),oldRelease=await release(oldStage,'A'),oldPath=join(paths.releases,oldRelease.releaseId);renameSync(oldStage,oldPath);symlinkSync(oldPath,paths.current);symlinkSync(oldPath,paths.controller);
+ const oldStage=join(root,'old-release'),oldRelease=await release(oldStage,'A'),oldPath=join(paths.releases,oldRelease.releaseId);renameSync(oldStage,oldPath);symlinkSync(oldPath,paths.current);symlinkSync(oldPath,paths.controller);symlinkSync(oldPath,paths.previous);
  const manifestPath=join(root,'workspaces.json'),backing=join(root,'research.ext4'),workspace=join(paths.data,'agents','research'),uid=process.getuid!(),gid=process.getgid!(),manifest:WorkspaceManifest={version:1,mounts:[{kind:'private',agentId:'research',root:workspace,backingFile:backing,capacityBytes:64*1024*1024,ownerUid:uid,ownerGid:gid}]};
  writeFileSync(manifestPath,JSON.stringify(manifest));writeFileSync(backing,'synthetic backing');writeFileSync(join(root,'docker'),'synthetic docker',{mode:0o755});writeFileSync(paths.service,'fixed service');const mountPath=join(root,'research.mount');writeFileSync(mountPath,'fixed mount');
  const old=daemonConfigSchema.parse({mate:configFixture,runtime:{dataDir:paths.data,workspaceManifest:manifestPath,docker:{binary:join(root,'docker'),host:'unix:///var/run/docker.sock',image:`sha256:${'a'.repeat(64)}`}}});old.adapters={};const next=structuredClone(old);next.mate.agents[0]!.role='B';writeFileSync(paths.config,JSON.stringify(old));
  const topology=createDeploymentTopology(old,{manifest,manifestPath,manifestSha256:digest(readFileSync(manifestPath)),service:{unitPath:paths.service,sha256:digest(readFileSync(paths.service)),memoryMaxMiB:384},mountUnits:[{root:workspace,backingFile:backing,backingDevice:lstatSync(backing).dev,backingInode:lstatSync(backing).ino,capacityBytes:64*1024*1024,unitPath:mountPath,sha256:digest(readFileSync(mountPath))}]});
  const s=new Store(join(paths.data,'state','mate.sqlite'));stores.push(s);localApplication(s,old.mate);const base=buildBaseline(old.mate.agents[0]!,operationDocumentation);s.register('research',base.configVersion,base.messages);saveConfiguration(s,old);
- let running=true;const events:string[]=[],host:UpgradeHost={uid,gid,serviceUid:uid,serviceGid:gid,active:()=>running,stop:async()=>{events.push('stop');running=false;},start:async()=>{events.push('start');running=true;},topology:()=>topology,
+ let running=true;const events:string[]=[],host:UpgradeHost={uid,gid,serviceUid:uid,serviceGid:gid,runtime:{platform:'linux',arch:'x64',node:'v24.21.0',modulesAbi:'137',packageManager:'pnpm@10.33.0'},active:()=>running,stop:async()=>{events.push('stop');running=false;},start:async()=>{events.push('start');running=true;},topology:()=>topology,
+  capacity:()=>{},
+  retention:(state,paths)=>finalizeRetention(state,paths,host,false),
   checkpoint:async(kind,state)=>{events.push(`checkpoint:${kind}`);const path=state.checkpointStages![kind]!.path,stat=lstatSync(path);return{path,device:stat.dev,inode:stat.ino,manifestDevice:stat.dev,manifestInode:stat.ino,manifestHash:'a'.repeat(64)};},
   migrate:async(state,journal)=>{events.push('migrate');applyOfflineConfigurationMigration(s,state.previousConfig,state.nextConfig,{projectRoot:state.next.releasePath,legacyIdentityAttested:false,auditSource:'test-root-upgrade',deployment:deploymentMigrationAttempt(journal,state.previousConfig,state.nextConfig)});},
   probe:async()=>{events.push('offline-probe');},restore:async state=>{events.push('restore');saveConfiguration(s,state.oldConfig);},finishRestore:async()=>{},
@@ -40,10 +48,10 @@ async function fixture(){
 }
 
 it('candidate remains offline, activated start failure is irreversible, and successful activation can finalize',async()=>{
- const f=await fixture();await runUpgrade('candidate',f.host,f.paths);expect(f.events).toEqual(['stop','checkpoint:rollback','migrate','offline-probe']);expect(readRootUpgrade(f.paths.data,f.host.uid)?.step).toBe('checked');
+ const f=await fixture(),oldRelease=realpathSync(f.paths.current);await runUpgrade('candidate',f.host,f.paths);expect(f.events).toEqual(['stop','checkpoint:rollback','migrate','offline-probe']);expect(readRootUpgrade(f.paths.data,f.host.uid)?.step).toBe('checked');
  const journal=readDeploymentJournal(f.paths.data)!;expect(journal.phase).toBe('candidate');expect(storedConfiguration(f.s)).toEqual(f.next);
  const start=vi.spyOn(f.host,'start').mockRejectedValueOnce(new Error('start failed'));await expect(runUpgrade('activate',f.host,f.paths)).rejects.toThrow('start failed');expect(readDeploymentJournal(f.paths.data)?.everActivated).toBe(true);
- await expect(runUpgrade('rollback',f.host,f.paths)).rejects.toThrow('fix-forward only');await runUpgrade('activate',f.host,f.paths);expect(start).toHaveBeenCalledTimes(2);await runUpgrade('finalize',f.host,f.paths);expect(existsSync(deploymentJournalPath(f.paths.data))).toBe(false);expect(existsSync(rootUpgradePath(f.paths.data))).toBe(false);expect(realpathSync(f.paths.controller)).toBe(realpathSync(f.paths.current));
+ await expect(runUpgrade('rollback',f.host,f.paths)).rejects.toThrow('fix-forward only');await runUpgrade('activate',f.host,f.paths);expect(start).toHaveBeenCalledTimes(2);await runUpgrade('finalize',f.host,f.paths);expect(existsSync(deploymentJournalPath(f.paths.data))).toBe(false);expect(existsSync(rootUpgradePath(f.paths.data))).toBe(false);expect(realpathSync(f.paths.controller)).toBe(realpathSync(f.paths.current));expect(realpathSync(f.paths.previous)).toBe(oldRelease);expect(readdirSync(f.paths.releases).filter(name=>/^[a-f0-9]{64}$/.test(name))).toHaveLength(2);expect(readdirSync(f.paths.checkpoints).filter(name=>name.startsWith('upgrade-'))).toEqual([]);
 });
 
 it('fixes forward from a damaged activated release through the independent recovery controller',async()=>{
@@ -56,8 +64,23 @@ it('routes every recovery helper through the controller and only candidate work 
  for(const action of ['migrate','probe'] as const)expect(upgradeHelperRelease(state,action)).toBe(state.next.releasePath);
 });
 
-it.each(['controller:symlink','controller:rename','controller:directory-sync'])('resumes controller publication after %s',async boundary=>{
+it.each(['previous:symlink','previous:rename','previous:directory-sync','controller:symlink','controller:rename','controller:directory-sync','retention:rename','retention:remove'])('resumes controller publication and retention after %s',async boundary=>{
  const f=await fixture();await runUpgrade('candidate',f.host,f.paths);await runUpgrade('activate',f.host,f.paths);let interrupted=false;f.host.boundary=name=>{if(name===boundary&&!interrupted){interrupted=true;throw new Error('crash');}};await expect(runUpgrade('finalize',f.host,f.paths)).rejects.toThrow('crash');delete f.host.boundary;await runUpgrade('resume',f.host,f.paths);expect(realpathSync(f.paths.controller)).toBe(realpathSync(f.paths.current));expect(existsSync(rootUpgradePath(f.paths.data))).toBe(false);
+});
+
+it.each(['retention:rename','retention:remove'])('resumes bounded checkpoint and release cleanup after rollback %s',async boundary=>{
+ const f=await fixture();await runUpgrade('candidate',f.host,f.paths);let interrupted=false;f.host.boundary=name=>{if(name===boundary&&!interrupted){interrupted=true;throw new Error('crash');}};await expect(runUpgrade('rollback',f.host,f.paths)).rejects.toThrow('crash');delete f.host.boundary;await runUpgrade('resume',f.host,f.paths);
+ expect(readdirSync(f.paths.checkpoints).filter(name=>name.includes(f.root))).toEqual([]);expect(readdirSync(f.paths.checkpoints).filter(name=>name.startsWith('upgrade-')||name.startsWith('.mate-prune-'))).toEqual([]);expect(readdirSync(f.paths.releases).filter(name=>/^[a-f0-9]{64}$/.test(name))).toHaveLength(1);
+});
+
+it('keeps repeated candidate rollbacks bounded',async()=>{
+ const f=await fixture();for(const label of ['C','D','E']){await f.stage(label);await runUpgrade('candidate',f.host,f.paths);await runUpgrade('rollback',f.host,f.paths);expect(readdirSync(f.paths.checkpoints).filter(name=>name.startsWith('upgrade-')||name.startsWith('.mate-prune-'))).toEqual([]);expect(readdirSync(f.paths.releases).filter(name=>/^[a-f0-9]{64}$/.test(name))).toHaveLength(1);}
+});
+
+it('recovers the older managed layout without a previous link and creates it on first finalization',async()=>{
+ const f=await fixture(),old=realpathSync(f.paths.current);unlinkSync(f.paths.previous);
+ await runUpgrade('candidate',f.host,f.paths);await runUpgrade('rollback',f.host,f.paths);expect(existsSync(f.paths.previous)).toBe(false);
+ await f.stage('C');await runUpgrade('candidate',f.host,f.paths);await runUpgrade('activate',f.host,f.paths);await runUpgrade('finalize',f.host,f.paths);expect(realpathSync(f.paths.previous)).toBe(old);
 });
 
 it('does not publish a damaged activated release as the recovery controller',async()=>{
@@ -118,7 +141,35 @@ it('rejects malformed root journals instead of relying only on their step label'
 });
 
 it('can abandon preparation only when there is no migration marker and all live identities remain old',async()=>{
- const f=await fixture();f.host.checkpoint=async()=>{throw new Error('checkpoint full');};await expect(runUpgrade('candidate',f.host,f.paths)).rejects.toThrow('checkpoint full');await runUpgrade('rollback',f.host,f.paths);expect(storedConfiguration(f.s)).toEqual(f.old);expect(existsSync(rootUpgradePath(f.paths.data))).toBe(false);expect(f.events).not.toContain('restore');
+ const f=await fixture();f.host.checkpoint=async(kind,state)=>{writeFileSync(join(state.checkpointStages![kind]!.path,'partial-copy'),'incomplete');throw new Error('checkpoint full');};await expect(runUpgrade('candidate',f.host,f.paths)).rejects.toThrow('checkpoint full');await runUpgrade('rollback',f.host,f.paths);expect(storedConfiguration(f.s)).toEqual(f.old);expect(existsSync(rootUpgradePath(f.paths.data))).toBe(false);expect(f.events).not.toContain('restore');expect(readdirSync(f.paths.checkpoints).filter(name=>name.startsWith('upgrade-')||name.startsWith('.mate-prune-'))).toEqual([]);
+});
+
+it.each(['checkpoint:rollback:planned','checkpoint:rollback:mkdir','checkpoint:rollback:chown','checkpoint:rollback:bound'])('resumes checkpoint staging after %s',async boundary=>{
+ const f=await fixture();let interrupted=false;f.host.boundary=name=>{if(name===boundary&&!interrupted){interrupted=true;throw new Error('crash');}};
+ await expect(runUpgrade('candidate',f.host,f.paths)).rejects.toThrow('crash');const pending=readRootUpgrade(f.paths.data,f.host.uid)!;expect(pending.checkpointStages?.rollback?.path).toBe(join(f.paths.checkpoints,`upgrade-${pending.upgradeId}-rollback`));
+ delete f.host.boundary;await runUpgrade('resume',f.host,f.paths);expect(readRootUpgrade(f.paths.data,f.host.uid)?.step).toBe('checked');expect(f.events.filter(event=>event==='checkpoint:rollback')).toHaveLength(1);
+});
+
+it.each(['checkpoint:rollback:planned','checkpoint:rollback:mkdir','checkpoint:rollback:chown','checkpoint:rollback:bound'])('abandons a checkpoint preparation interrupted after %s without leaked staging',async boundary=>{
+ const f=await fixture();let interrupted=false;f.host.boundary=name=>{if(name===boundary&&!interrupted){interrupted=true;throw new Error('crash');}};
+ await expect(runUpgrade('candidate',f.host,f.paths)).rejects.toThrow('crash');delete f.host.boundary;await runUpgrade('rollback',f.host,f.paths);
+ expect(readRootUpgrade(f.paths.data,f.host.uid)).toBeUndefined();expect(readdirSync(f.paths.checkpoints).filter(name=>name.startsWith('upgrade-')||name.startsWith('.mate-prune-'))).toEqual([]);expect(f.events).not.toContain('migrate');
+});
+
+it.each(['checkpoint:candidate:planned','checkpoint:candidate:mkdir','checkpoint:candidate:chown','checkpoint:candidate:bound'])('resumes rollback checkpoint staging after %s',async boundary=>{
+ const f=await fixture();await runUpgrade('candidate',f.host,f.paths);let interrupted=false;f.host.boundary=name=>{if(name===boundary&&!interrupted){interrupted=true;throw new Error('crash');}};
+ await expect(runUpgrade('rollback',f.host,f.paths)).rejects.toThrow('crash');const pending=readRootUpgrade(f.paths.data,f.host.uid)!;expect(pending.checkpointStages?.candidate?.path).toBe(join(f.paths.checkpoints,`upgrade-${pending.upgradeId}-candidate`));
+ delete f.host.boundary;await runUpgrade('resume',f.host,f.paths);expect(readRootUpgrade(f.paths.data,f.host.uid)).toBeUndefined();expect(f.events.filter(event=>event==='checkpoint:candidate')).toHaveLength(1);
+});
+
+it('refuses cleanup when a renamed checkpoint is replaced by a different directory',async()=>{
+ const f=await fixture();await runUpgrade('candidate',f.host,f.paths);f.host.boundary=name=>{if(name==='retention:rename')throw new Error('crash');};await expect(runUpgrade('rollback',f.host,f.paths)).rejects.toThrow('crash');
+ const trash=readdirSync(f.paths.checkpoints).find(name=>name.startsWith('.mate-prune-'))!;expect(trash).toBeDefined();const original=join(f.paths.checkpoints,trash),saved=`${original}.saved`;renameSync(original,saved);mkdirSync(original);
+ delete f.host.boundary;await expect(runUpgrade('resume',f.host,f.paths)).rejects.toThrow('cleanup identity changed');expect(existsSync(original)).toBe(true);expect(existsSync(saved)).toBe(true);
+});
+
+it('does not delete an unrelated hex-named directory from the releases area',async()=>{
+ const f=await fixture(),unrelated=join(f.paths.releases,'f'.repeat(64));mkdirSync(unrelated);writeFileSync(join(unrelated,'private.txt'),'unrelated');await runUpgrade('candidate',f.host,f.paths);await expect(runUpgrade('rollback',f.host,f.paths)).rejects.toThrow();expect(existsSync(join(unrelated,'private.txt'))).toBe(true);
 });
 
 it('can fix forward again after committed and published C fails its offline check',async()=>{

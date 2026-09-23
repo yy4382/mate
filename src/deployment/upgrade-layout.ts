@@ -3,7 +3,7 @@ import {managedLayout} from './systemd.js';
 
 /** Fixed root-controlled paths shared by the controller and service-user helper. */
 export const upgradePaths=Object.freeze({
- data:managedLayout.data,config:managedLayout.config,current:managedLayout.current,controller:managedLayout.controller,
+ data:managedLayout.data,config:managedLayout.config,current:managedLayout.current,controller:managedLayout.controller,previous:managedLayout.previous,
  releases:managedLayout.releases,stagedRelease:'/opt/mate/staged-release',stagedConfig:'/etc/mate/staged-config.json',
  checkpoints:managedLayout.checkpoints,service:managedLayout.service,
 });

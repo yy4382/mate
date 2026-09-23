@@ -92,15 +92,18 @@ it('accepts pnpm-style hardlinks only when every link is inside the immutable re
 
 it('preflights through a fake host without mutating it and refuses resource or baseline gaps', async() => {
   const calls: string[] = [],runtime={platform:'linux',arch:'x64',node:'v24.21.0',modulesAbi:'137',packageManager:'pnpm@10.33.0'} as const,hash='a'.repeat(64),manifest={version:1 as const,releaseId:hash,gitCommit:'abcdef1234567',recoveryProtocol:1,target:runtime,lockSha256:hash,inventorySha256:hash,dependencyInventorySha256:hash,nativeAddons:[],inventory:[]};
-  const host: InstallerHost = { platform: 'linux', arch: 'x64', node: 'v24.21.0', euid: () => 1000, read: () => 'ID=debian\nVERSION_ID="13"\n', assertRootExecutable: path => { calls.push(`binary:${path}`); }, run: (binary, args) => { calls.push(`${binary} ${args.join(' ')}`); return { code: binary === '/usr/bin/systemctl' ? 3 : 0, stdout: '{}', stderr: '' }; }, directoryBytes: () => 1024, canonical: path => path, availableBytes: () => 10 * 1024 ** 3, memoryMiB: () => 4096, existingInstall: () => undefined,systemNodeRuntime:()=>runtime,verifySourceRelease:async()=>manifest };
+  const host: InstallerHost = { platform: 'linux', arch: 'x64', node: 'v24.21.0', euid: () => 1000, read: () => 'ID=debian\nVERSION_ID="13"\n', assertRootExecutable: path => { calls.push(`binary:${path}`); }, run: (binary, args) => { calls.push(`${binary} ${args.join(' ')}`); return { code: binary === '/usr/bin/systemctl' ? 3 : 0, stdout: '{}', stderr: '' }; }, directoryBytes: () => 1024, canonical: path => path, availableBytes: () => 10 * 1024 ** 3,filesystemDevice:()=>1, memoryMiB: () => 4096, existingInstall: () => undefined,systemNodeRuntime:()=>runtime,verifySourceRelease:async()=>manifest };
   expect((await preflightDeployment(spec(), config(), host)).target.os).toBe('debian'); expect(calls).toContain('binary:/usr/bin/systemd-notify');expect(calls.some(value => value.includes('image inspect'))).toBe(true); expect(calls.filter(value => value.startsWith('/')).every(value => !value.includes('mkfs'))).toBe(true);
   await expect(preflightDeployment(spec(), config(), { ...host, memoryMiB: () => 100 })).rejects.toThrow('memory');
   await expect(preflightDeployment(spec(), config(), { ...host, platform: 'darwin' })).rejects.toThrow('Debian 13');
   const plan = createDeploymentPlan(spec(), config(), host), consumedBytes = plan.storage.totalRequiredBytes - 4096;
   await expect(preflightDeployment(spec(), config(), { ...host, availableBytes: () => 4096, existingInstall: () => ({ inputIdentity: 'identity-does-not-match', complete: false, consumedBytes }) })).rejects.toThrow('differs');
-  expect(remainingRequiredBytes(plan, { inputIdentity: 'same', complete: false, consumedBytes })).toBe(4096);
+  expect(remainingRequiredBytes(plan, { inputIdentity: 'same', complete: false, consumedBytes,releaseBytes:plan.release.reservedBytes-2048,volumeBytes:plan.storage.backingBytes-2048 })).toBe(plan.storage.stateReserveBytes+4096);
   expect(remainingRequiredBytes(plan, { inputIdentity: 'same', releaseId: 'a'.repeat(64), complete: true, consumedBytes: 0 })).toBe(0);
   await expect(preflightDeployment(spec(),config(),{...host,verifySourceRelease:async()=>({...manifest,gitCommit:'bbbbbbb'})})).rejects.toThrow('source commit');
+  await expect(preflightDeployment(spec(),config(),{...host,filesystemDevice:path=>path==='/opt/mate/releases'?1:2,availableBytes:path=>path==='/opt/mate/releases'?plan.release.reservedBytes-1:10*1024**3})).rejects.toThrow('/opt/mate/releases filesystem');
+  await expect(preflightDeployment(spec(),config(),{...host,filesystemDevice:path=>path==='/var/lib/mate-volumes'?3:2,availableBytes:path=>path==='/var/lib/mate-volumes'?plan.storage.backingBytes-1:10*1024**3})).rejects.toThrow('/var/lib/mate-volumes filesystem');
+  await expect(preflightDeployment(spec(),config(),{...host,filesystemDevice:path=>path==='/var/lib/mate'?4:2,availableBytes:path=>path==='/var/lib/mate'?plan.storage.stateReserveBytes-1:10*1024**3})).rejects.toThrow('/var/lib/mate filesystem');
 });
 
 it('finishes ownership and unmount when resuming an already-mounted workspace', () => {

@@ -33,6 +33,7 @@ function canonicalFuturePath(path: string): string {
   while (!pathExists(current)) { const parent = dirname(current); if (parent === current) throw new Error(`Cannot resolve deployment path: ${path}`); tail.unshift(basename(current)); current = parent; }
   return resolve(realpathSync(current), ...tail);
 }
+function existingFilesystemPath(path:string):string{let current=resolve(path);while(!pathExists(current)){const parent=dirname(current);if(parent===current)throw new Error(`Cannot resolve deployment filesystem: ${path}`);current=parent;}return realpathSync(current);}
 
 export interface CommandResult { code: number; stdout: string; stderr: string }
 export interface ExistingInstallation {
@@ -40,6 +41,8 @@ export interface ExistingInstallation {
   releaseId?: string;
   complete: boolean;
   consumedBytes: number;
+  releaseBytes?:number;
+  volumeBytes?:number;
 }
 export interface InstallerHost {
   platform: NodeJS.Platform;
@@ -57,6 +60,7 @@ export interface InstallerHost {
   existingInstall(): ExistingInstallation | undefined;
   systemNodeRuntime():ReleaseRuntime;
   verifySourceRelease(path:string,runtime:ReleaseRuntime):Promise<ReleaseManifest>;
+  filesystemDevice(path:string):number;
 }
 
 function run(binary: string, args: readonly string[]): CommandResult {
@@ -110,18 +114,18 @@ export function inspectExistingInstallation(paths: InstallationPaths = installat
     const volumeBytes = journal.volumes.reduce((sum, volume) => {
       return sum + boundResourceBytes([volume.stage, volume.backingFile], volume.stageDev, volume.stageIno, 'file', volume.status === 'planned');
     }, 0);
-    return { inputIdentity: journal.inputIdentity, ...(journal.release.releaseId ? { releaseId: journal.release.releaseId } : {}), complete: false, consumedBytes: releaseBytes + volumeBytes };
+    return { inputIdentity: journal.inputIdentity, ...(journal.release.releaseId ? { releaseId: journal.release.releaseId } : {}), complete: false, consumedBytes: releaseBytes + volumeBytes,releaseBytes,volumeBytes };
   }
   if (!pathExists(paths.completed)) { if (pathExists(paths.current)) throw new Error('Existing current release is not a V2c managed installation'); return undefined; }
   owner(paths.completed, rootUid, rootGid, 0o600, 'file'); const value = completedSchema.parse(JSON.parse(readFileSync(paths.completed, 'utf8')));
   const current = lstatSync(paths.current); if (!current.isSymbolicLink() || realpathSync(paths.current) !== realpathSync(join(paths.releases, value.releaseId))) throw new Error('Managed installation marker and current release differ');
-  return { ...value, complete: true, consumedBytes: 0 };
+  return { ...value, complete: true, consumedBytes: 0,releaseBytes:0,volumeBytes:0 };
 }
 export const nodeInstallerHost = (): InstallerHost => ({
   platform: process.platform, arch: process.arch, node: process.version,
   euid: () => process.geteuid?.() ?? -1, run, directoryBytes, canonical: canonicalFuturePath,
   read: path => readFileSync(path, 'utf8'), assertRootExecutable: path => { const link = lstatSync(path), stat = lstatSync(realpathSync(path)); if ((!link.isFile() && !link.isSymbolicLink()) || link.uid !== 0 || !stat.isFile() || stat.isSymbolicLink() || stat.uid !== 0 || (stat.mode & 0o022) !== 0 || (stat.mode & 0o111) === 0) throw new Error(`Host executable is not protected: ${path}`); },
-  availableBytes: path => { const stat = statfsSync(path); return Number(BigInt(stat.bavail) * BigInt(stat.bsize)); },
+  availableBytes: path => { const stat = statfsSync(existingFilesystemPath(path)); return Number(BigInt(stat.bavail) * BigInt(stat.bsize)); },
   dockerImageBytes: reference => {
     const inspected = run('/usr/bin/docker', ['--host', 'unix:///var/run/docker.sock', 'image', 'inspect', '--format={{.Size}}', reference]);
     if (inspected.code !== 0) return undefined;
@@ -131,6 +135,7 @@ export const nodeInstallerHost = (): InstallerHost => ({
   existingInstall: () => inspectExistingInstallation(),
   systemNodeRuntime:()=>{const result=run('/usr/bin/node',['-p','JSON.stringify({platform:process.platform,arch:process.arch,node:process.version,modulesAbi:process.versions.modules})']);if(result.code!==0)throw new Error('Cannot inspect /usr/bin/node runtime');return{...JSON.parse(result.stdout) as Omit<ReleaseRuntime,'packageManager'>,packageManager:'pnpm@10.33.0'};},
   verifySourceRelease:(path,runtime)=>verifyRelease(path,undefined,runtime),
+  filesystemDevice:path=>lstatSync(existingFilesystemPath(path)).dev,
 });
 
 function checked(host: InstallerHost, binary: string, args: readonly string[], label: string): string {
@@ -190,16 +195,20 @@ export async function preflightDeployment(spec: DeploymentSpec, config: DaemonCo
   checked(host, '/usr/bin/docker', ['--host', config.runtime.docker!.host, 'image', 'inspect', config.runtime.docker!.image], 'Pinned Docker image is unavailable');
   const existing = host.existingInstall(), identity = inputIdentity(spec, config, plan, host);
   if (existing && existing.inputIdentity !== identity) throw new Error('Existing managed installation differs; upgrades belong to the V2d transaction');
-  const requiredBytes = remainingRequiredBytes(plan, existing);
-  if (requiredBytes > 0 && host.availableBytes('/') < requiredBytes) throw new Error(`Insufficient disk space for remaining deployment resources (${requiredBytes} bytes required)`);
+  const resources=remainingDeploymentResources(plan,existing),groups=new Map<number,{path:string;bytes:number}>();
+  for(const resource of [{path:managedLayout.releases,bytes:resources.release},{path:managedLayout.volumes,bytes:resources.backing},{path:managedLayout.data,bytes:resources.state}]){const device=host.filesystemDevice(resource.path),current=groups.get(device);groups.set(device,{path:current?.path??resource.path,bytes:(current?.bytes??0)+resource.bytes});}
+  for(const group of groups.values())if(group.bytes>0&&host.availableBytes(group.path)<group.bytes)throw new Error(`Insufficient disk space on ${group.path} filesystem for remaining deployment resources (${group.bytes} bytes required)`);
   if (host.memoryMiB() < plan.memory.upperBoundMiB) throw new Error('Host memory is below the configured daemon and concurrent container upper bound');
   const active = host.run('/usr/bin/systemctl', ['is-active', '--quiet', 'mate.service']); if (active.code === 0) throw new Error('mate.service must be stopped before installation');
   return plan;
 }
 
 export function remainingRequiredBytes(plan: DeploymentPlan, existing: ExistingInstallation | undefined): number {
-  if (existing?.complete) return 0;
-  return Math.max(0, plan.storage.totalRequiredBytes - (existing?.consumedBytes ?? 0));
+  const value=remainingDeploymentResources(plan,existing);return value.release+value.backing+value.state;
+}
+export function remainingDeploymentResources(plan:DeploymentPlan,existing:ExistingInstallation|undefined):{release:number;backing:number;state:number}{
+  if(existing?.complete)return{release:0,backing:0,state:0};
+  return{release:Math.max(0,plan.release.reservedBytes-(existing?.releaseBytes??0)),backing:Math.max(0,plan.storage.backingBytes-(existing?.volumeBytes??0)),state:plan.storage.stateReserveBytes};
 }
 
 function serviceIdentity(host: InstallerHost): { uid: number; gid: number } {
@@ -421,6 +430,7 @@ export async function installDeployment(spec: DeploymentSpec, config: DaemonConf
   for (const unit of units) atomicExact(join('/etc/systemd/system', unit.unitName), renderMountUnit(unit), 0, 0, 0o644);
   atomicExact(managedLayout.service, renderService(units, spec.daemonMemoryMiB, plan.workspaces.filter(item => item.kind === 'external').map(item => item.root)), 0, 0, 0o644);
   publishReleaseLink(managedLayout.controller,published.path,'controller');
+  publishReleaseLink(managedLayout.previous,published.path,'previous');
   atomicExact(managedLayout.wrapper, renderMaintenanceWrapper(plan.workspaces.filter(item => item.kind === 'external').map(item => item.root),managedLayout.controller), 0, 0, 0o755);
   journal = { ...journal, phase: 'units' }; replaceJournal(journalPath, journal);
   checked(host, '/usr/bin/systemctl', ['daemon-reload'], 'Cannot reload systemd'); for (const unit of units) checked(host, '/usr/bin/systemctl', ['enable', '--now', unit.unitName], `Cannot enable ${unit.unitName}`);
