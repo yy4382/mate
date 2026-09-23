@@ -30,7 +30,7 @@ export class Store {
       this.db.prepare('VACUUM INTO ?').run(backup); chmodSync(backup, 0o600);
     }
     if (version === 0) this.atomic(() => this.db.exec(schema));
-    else if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23].includes(Number(version))) { this.db.close(); throw new Error('Unsupported database version'); }
+    else if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24].includes(Number(version))) { this.db.close(); throw new Error('Unsupported database version'); }
     if (Number(version) < 2) this.atomic(() => this.db.exec(messageSchema));
     if (Number(version) < 3) this.atomic(() => this.db.exec(collaborationSchema));
     if (Number(version) < 4) this.atomic(() => this.db.exec(policySchema));

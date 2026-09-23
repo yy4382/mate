@@ -28,6 +28,7 @@ const modernConfigSchema = z.object({
     docker: z.object({ binary: path, host: z.string().startsWith('unix:///'), image: z.string().regex(/^sha256:[a-f0-9]{64}$/),network:z.enum(['none','bridge']).optional(),
       resources:z.object({memoryMb:z.number().int().min(64).max(4096),cpus:z.number().min(0.1).max(8),pids:z.number().int().min(8).max(512),tmpfsMb:z.number().int().min(1).max(1024)}).strict().default({memoryMb:512,cpus:1,pids:64,tmpfsMb:64}) }).strict().optional(),
     linuxUsers:z.record(agentIdSchema,z.object({uid:z.number().int().positive(),gid:z.number().int().positive(),home:path,username:z.string().regex(/^[a-z_][a-z0-9_-]*$/).optional()}).strict()).optional(),
+    systemAgents:z.array(agentIdSchema).optional(),
     sharedRoot:path.optional(),
     limits:z.object({maxActiveRuns:z.number().int().min(1).max(32),maxBackendOperations:z.number().int().min(1).max(32),workerIdleMs:z.number().int().min(1).max(3600000)}).strict().default({maxActiveRuns:1,maxBackendOperations:1,workerIdleMs:300000}),
     workspaceGrants: z.array(z.object({ agentId: z.string(), root: path, operations: z.array(z.enum(['read','write','exec'])).min(1),label:workspaceLabel.optional() }).strict()).default([]),
@@ -47,6 +48,8 @@ const modernConfigSchema = z.object({
     if(Object.keys(c.runtime.linuxUsers).length!==ids.size||Object.keys(c.runtime.linuxUsers).some(id=>!ids.has(id)))fail('Every Agent requires exactly one Linux user');
   }
   if(c.runtime.sharedRoot&&!c.runtime.linuxUsers)fail('Shared root requires Linux users');
+  unique(c.runtime.systemAgents??[],'system Agent eligibility');
+  if(c.runtime.systemAgents?.some(id=>!ids.has(id)||!c.runtime.linuxUsers?.[id]))fail('System eligibility requires a configured Agent Linux user');
   for(const grant of c.runtime.workspaceGrants){
     if(!ids.has(grant.agentId))fail('Unknown grant agent');
     if(grant.operations.includes('exec')&&!c.runtime.docker&&!c.runtime.linuxUsers)fail('Execution grants require a configured execution backend');

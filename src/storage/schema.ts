@@ -171,3 +171,15 @@ CREATE TABLE canonical_targets(
 );
 PRAGMA user_version=16;
 `;
+
+/** Privileged requests are separate from ordinary Agent actions: approval may arrive after its run ended. */
+export const systemOperationsSchema = `
+CREATE TABLE system_requests(
+ id TEXT PRIMARY KEY,agent_id TEXT NOT NULL REFERENCES agents(id),work_id TEXT NOT NULL REFERENCES works(id),
+ request_hash TEXT NOT NULL,request TEXT NOT NULL,expires INTEGER NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected','expired','executing','succeeded','failed','unknown')),
+ decision_by TEXT,receipt TEXT,notice_state TEXT NOT NULL DEFAULT 'pending' CHECK(notice_state IN ('pending','sending','sent','unknown'))
+);
+CREATE INDEX system_requests_pending ON system_requests(status,expires);
+PRAGMA user_version=24;
+`;

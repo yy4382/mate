@@ -25,6 +25,7 @@ import { CanonicalSlackTransport as WebSlackTransport } from '../../src/slack/tr
 import { Artifacts } from '../../src/daemon/artifacts.js';
 import {ContainerBackend} from '../../src/execution/container.js';
 import {ProcessNotRunningError,type LinuxProcessManager} from '../../src/execution/linux-processes.js';
+import {SystemOperations} from '../../src/policy/system-operations.js';
 import {nodeWorkspaceHost} from '../../src/deployment/workspaces.js';
 import {daemonConfigSchema} from '../../src/daemon/config.js';
 const cleanups: (() => void)[] = [];
@@ -108,6 +109,8 @@ it('requires distinct non-root Linux identities and one shared root for the team
   expect(daemonConfigSchema.safeParse({...input,runtime:{...input.runtime,workspaceManifest:'/var/lib/mate/old-manifest.json'}}).success).toBe(false);
   expect(daemonConfigSchema.safeParse({...input,runtime:{...input.runtime,linuxUsers:{...input.runtime.linuxUsers,bob:{uid:1001,gid:1002,home:'/srv/mate/private/bob'}}}}).success).toBe(false);
   expect(daemonConfigSchema.safeParse({...input,runtime:{...input.runtime,linuxUsers:{...input.runtime.linuxUsers,bob:{uid:0,gid:1002,home:'/srv/mate/private/bob'}}}}).success).toBe(false);
+  expect(daemonConfigSchema.safeParse({...input,runtime:{...input.runtime,systemAgents:['research']}}).success).toBe(true);
+  expect(daemonConfigSchema.safeParse({...input,runtime:{...input.runtime,systemAgents:['unknown']}}).success).toBe(false);
 });
 it('controls are owner-only, durable replay applies once, and unknown admin sends never retry', async () => {
   const {store,c,ingress,broker}=setup(); const supervisor=new Supervisor(c,new ToolRouter(c,broker),c.config);supervisor.register();cleanups.unshift(()=>supervisor.close());
@@ -133,6 +136,47 @@ it('reports a repeated owner stop as no longer running after a crash before cont
   const controls=new Controls(c,{} as Supervisor,broker,undefined,undefined,{list:()=>[],stop} as unknown as LinuxProcessManager);
   expect(controls.execute('UOWNER',`process-stop research ${unit}`)).toEqual({unit,stopped:true});
   expect(controls.execute('UOWNER',`process-stop research ${unit}`)).toEqual({unit,stopped:false,reason:'not_running'});
+});
+it('routes a system request through a human Slack confirmation button before privileged dispatch',async()=>{
+  const {store,c,ingress,broker}=setup(),execute=vi.fn(async()=>({code:0,stdout:'done',stderr:'',truncated:false}));
+  store.register('research','v1',[]);c.messages.membership('research','CTEST',true);
+  const work=c.createWork('system-approval',fixtureTarget('CTEST','100.000001'));c.enqueue('research',work,'start',{});const run=store.beginRun('research')!;store.input(run,{});
+  const system=new SystemOperations(store,c,['research'],{execute},()=>1000),router=new ToolRouter(c,broker,{system,research:async()=>({}),publish:async()=>({})});
+  const mapper=ingress.normalizer instanceof CanonicalSlackNormalizer?ingress.normalizer.mapper:(()=>{throw new Error();})();
+  const transport=new WebSlackTransport(store,mapper,{research:'synthetic',writer:'synthetic'});
+  const client=transport.clients.get('research')!,post=vi.fn(async(_request:unknown)=>({ok:true,ts:'200.000001'}));
+  client.conversations.open=vi.fn().mockRejectedValueOnce(new Error('DM lookup unavailable')).mockResolvedValue({ok:true,channel:{id:'DOWNER'}}) as any;client.chat.postMessage=post as any;
+  const slack=new SlackService(c,transport,ingress,{} as Controls,()=>false,system),input={program:'/usr/bin/apt-get',args:['install','example'],cwd:'/tmp'};
+  const requested=(await router.call(run,work,'root-command','tools.call',{name:'system.request',input},new AbortController().signal)).value as {id:string;status:string};
+  expect(requested.status).toBe('pending');await system.dispatchApproved();expect(execute).not.toHaveBeenCalled();
+  await slack.flushApprovals();expect(post).not.toHaveBeenCalled();expect(system.pendingNotices()).toHaveLength(1);
+  await slack.flushApprovals();expect(post).toHaveBeenCalledOnce();
+  const blocks=(post.mock.calls[0]![0] as any).blocks;expect(JSON.stringify(blocks)).toContain('not frozen');expect(JSON.stringify(blocks)).toContain('confirm');
+  store.ingest('AONE','clicked',{type:'block_actions',team:{id:'TTEST'},user:{id:'UOWNER'},actions:[{action_id:'mate_system_approve',value:requested.id}]});
+  slack.replay();expect(store.db.prepare("SELECT kind,body FROM audit WHERE kind='ingress_rejected'").all()).toEqual([]);expect(system.status('research',requested.id).status).toBe('approved');await system.dispatchApproved();expect(execute).toHaveBeenCalledOnce();
+  expect((await router.call(run,work,'root-status','system.status',{requestId:requested.id},new AbortController().signal)).value).toMatchObject({status:'succeeded',receipt:{stdout:'done'}});
+  const denied=(await router.call(run,work,'root-denied','system.request',input,new AbortController().signal)).value as {id:string};
+  store.ingest('AONE','not-owner',{type:'block_actions',team:{id:'TTEST'},user:{id:'UOTHER'},actions:[{action_id:'mate_system_approve',value:denied.id}]});
+  slack.replay();expect(system.status('research',denied.id).status).toBe('pending');
+  store.ingest('AONE','rejected',{type:'block_actions',team:{id:'TTEST'},user:{id:'UOWNER'},actions:[{action_id:'mate_system_reject',value:denied.id}]});
+  slack.replay();await system.dispatchApproved();expect(system.status('research',denied.id).status).toBe('rejected');expect(execute).toHaveBeenCalledOnce();
+});
+it('keeps direct system-tool refusal, expiry and changed-request replay visible without running anything',async()=>{
+  const {store,c,broker}=setup(),execute=vi.fn(async()=>({code:0,stdout:'unexpected',stderr:'',truncated:false}));
+  store.register('research','v1',[]);c.messages.membership('research','CTEST',true);
+  const work=c.createWork('system-refusal',fixtureTarget('CTEST','100.000001'));c.enqueue('research',work,'start',{});const run=store.beginRun('research')!;store.input(run,{});
+  const system=new SystemOperations(store,c,['research'],{execute},()=>1000),router=new ToolRouter(c,broker,{system,research:async()=>({}),publish:async()=>({})}),signal=new AbortController().signal;
+  const input={program:'/usr/bin/apt-get',args:['install','example'],cwd:'/tmp'};
+  const first=(await router.call(run,work,'refused','system.request',input,signal)).value as {id:string};
+  await expect(router.call(run,work,'refused','tools.call',{name:'system.request',input:{...input,args:['remove','example']}},signal)).rejects.toThrow('identity');
+  system.decide('UOWNER',first.id,'reject');
+  expect((await router.call(run,work,'refused-status','system.status',{requestId:first.id},signal)).value).toMatchObject({status:'rejected',receipt:{reason:'approval_rejected'}});
+  const second=(await router.call(run,work,'timed-out','tools.call',{name:'system.request',input},signal)).value as {id:string};
+  system.expire(601001);
+  expect((await router.call(run,work,'expired-status','system.status',{requestId:second.id},signal)).value).toMatchObject({status:'expired',receipt:{reason:'approval_expired'}});
+  store.db.prepare('INSERT INTO review_seats VALUES(?,?,?,?,1)').run('research','{}','brief','/tmp/clean');
+  await expect(router.call(run,work,'review-system','system.request',input,signal)).rejects.toThrow(/review|isolates/);
+  await system.dispatchApproved();expect(execute).not.toHaveBeenCalled();
 });
 it('artifact upload is scoped to own artifact directory and uncertain publication cannot be repeated with a new ID', async () => {
   const {store,c,broker}=setup();new ToolRouter(c,broker);store.register('research','v1',[]);c.messages.membership('research','CTEST',true);const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-artifact-')));cleanups.push(()=>rmSync(root,{recursive:true,force:true}));mkdirSync(join(root,'artifacts'));

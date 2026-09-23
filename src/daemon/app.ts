@@ -10,6 +10,7 @@ import {migrateProjectionImports} from '../storage/projection-import-schema.js';
 import {migrateHistoryIndexes} from '../storage/history-schema.js';
 import {migrateCoordinationRecovery} from '../storage/coordination-schema.js';
 import {migrateOperationsView} from '../storage/operations-schema.js';
+import {migrateSystemOperations} from '../storage/system-operations-schema.js';
 import {TeamDirectory} from '../conversations/team-directory.js';
 import {migrateInternalConversations} from '../storage/internal-schema.js';
 import { migrateCanonicalConversations } from '../slack/canonical-migration.js';
@@ -33,6 +34,8 @@ import { SandboxBackend, type ExecutionBackend } from '../execution/backend.js';
 import { ContainerBackend, ControlledBackend } from '../execution/container.js';
 import {LinuxUserBackend} from '../execution/linux-user.js';
 import {LinuxProcessManager} from '../execution/linux-processes.js';
+import {SystemOperations} from '../policy/system-operations.js';
+import {PrivilegedBackend} from '../execution/privileged.js';
 import { canonicalRoot, within } from '../execution/paths.js';
 import { Supervisor } from '../runtime/supervisor.js';
 import { ToolRouter } from '../runtime/tools.js';
@@ -55,6 +58,7 @@ export class Daemon {
   readonly store: Store;
   readonly collaboration: Collaboration;
   readonly broker: Broker;
+  readonly system:SystemOperations;
   readonly workspaceAccess:WorkspaceAccess;
   readonly supervisor: Supervisor;
   readonly controls:Controls;
@@ -73,6 +77,7 @@ export class Daemon {
   private readonly deploymentEnvironment:DeploymentEnvironment;
   private readonly abort=new AbortController();
   private background?:Promise<void>;
+  private privileged?:Promise<void>;
   private opening?:Promise<void>;
   private stopping = false;
   private paused = false;
@@ -128,13 +133,14 @@ export class Daemon {
       if(previous&&Number(this.store.db.pragma('user_version',{simple:true}))<21)throw new Error('Conversation storage requires explicit offline migration');
       if(previous&&Number(this.store.db.pragma('user_version',{simple:true}))<22)throw new Error('Coordination storage requires explicit offline migration');
       if(previous&&Number(this.store.db.pragma('user_version',{simple:true}))<23)throw new Error('Operations view storage requires explicit offline migration');
-      migrateInternalConversations(this.store);migrateProjections(this.store);migrateProjectionImports(this.store);migrateHistoryIndexes(this.store);migrateCoordinationRecovery(this.store);migrateOperationsView(this.store);
+      migrateInternalConversations(this.store);migrateProjections(this.store);migrateProjectionImports(this.store);migrateHistoryIndexes(this.store);migrateCoordinationRecovery(this.store);migrateOperationsView(this.store);migrateSystemOperations(this.store);
       const slackApp=slackConfig?slackApplication(this.store,slackConfig,c):undefined;
       const messages=slackApp?.messages??localConversations(this.store,c);
       messages.writes.assertFormat();
       const transport=slackApp&&slackConfig?new WebSlackTransport(this.store,slackApp.mapper):undefined;
       const output=new Output(messages,transport??{post:async()=>{throw new Error('External transport unavailable');},pendingInput:()=>false,classify:()=>({kind:'rejected',reason:'External transport unavailable'})});
       this.collaboration = new Collaboration(this.store, messages, output, c);
+      this.system=new SystemOperations(this.store,this.collaboration,config.runtime.systemAgents??[],new PrivilegedBackend());
       const agentsDir = join(data, 'agents');if(!verifiedWorkspaces)mkdirSync(agentsDir, { recursive: true, mode: 0o700 });
       if (lstatSync(agentsDir).isSymbolicLink()) throw new Error('Agents directory must not be a symlink');
       for (const agent of this.collaboration.agents.list()) {
@@ -179,7 +185,7 @@ export class Daemon {
       let artifacts!: Artifacts;
       const attachments=transport?new Attachments(this.collaboration,this.broker,transport.clients):undefined;
       const environment=new EnvironmentCapabilities(this.collaboration,this.broker,profiles,{image:config.runtime.docker?.image??null,network:linuxBackend?'host':config.runtime.docker?.network??'none',linuxUser:!!linuxBackend,researchHosts:config.runtime.researchHosts,attachmentConfigured:actor=>attachments?.configured(actor)??false,artifactConfigured:actor=>artifacts?.configured(actor)??false,artifactSupported:(actor,target)=>artifacts?.supports(actor,target)??false});
-      const router = new ToolRouter(this.collaboration, this.broker, { attachment:(...args)=>{if(!attachments)throw new Error('Attachment adapter unavailable');return attachments.save(...args);},environment:(run,workId)=>environment.read(run,workId),...(linuxProcesses?{processes:linuxProcesses}:{}),research: (url, signal) => research.read(url, signal), publish: (...args) => artifacts.publish(...args) }, new TeamDirectory(messages,transport?new Directory(messages,transport.clients,transport.mapper):undefined), (actor,workId)=>workspaceAccess.provision(actor,workId),value=>slackApp?.argumentsCodec.args(value)??value,transport?new SlackHistory(messages,transport):undefined);
+      const router = new ToolRouter(this.collaboration, this.broker, { attachment:(...args)=>{if(!attachments)throw new Error('Attachment adapter unavailable');return attachments.save(...args);},environment:(run,workId)=>environment.read(run,workId),...(linuxProcesses?{processes:linuxProcesses}:{}),system:this.system,research: (url, signal) => research.read(url, signal), publish: (...args) => artifacts.publish(...args) }, new TeamDirectory(messages,transport?new Directory(messages,transport.clients,transport.mapper):undefined), (actor,workId)=>workspaceAccess.provision(actor,workId),value=>slackApp?.argumentsCodec.args(value)??value,transport?new SlackHistory(messages,transport):undefined);
       this.supervisor = new Supervisor(this.collaboration, router, c, undefined, async (agentId, workId, signal) => {
         workspaceAccess.provision(agentId, workId);
         const result = await admittedFiles.execute({ agentId,root: this.memoryRoots[agentId]!, operation: { kind: 'read', path: 'MEMORY.md' }, timeoutMs: 10000 }, signal);
@@ -187,7 +193,7 @@ export class Daemon {
       },{runAdmission:new FairAdmission(config.runtime.limits.maxActiveRuns),workerIdleMs:config.runtime.limits.workerIdleMs});
       this.supervisor.register();
       this.controls=new Controls(this.collaboration,this.supervisor,this.broker,actor=>this.verifyReviewWorkspace(actor),(user,command,id,args)=>this.slackRuntime?.projections.control(user,command,id,args),linuxProcesses);
-      this.adapter=this.slackRuntime=transport?new SlackRuntime(this.collaboration,transport,this.controls,message=>this.log.error({},message)):undefined;
+      this.adapter=this.slackRuntime=transport?new SlackRuntime(this.collaboration,transport,this.controls,message=>this.log.error({},message),this.system):undefined;
       this.local=config.adapters.local?new LocalAdapter(this.collaboration,config.adapters.local.humans):undefined;
       artifacts = new Artifacts(this.collaboration,this.broker,this.slackRuntime?.service,this.memoryRoots);
       this.store.atomic(()=>{configureLocalRooms(this.collaboration,previous?.adapters.local,config.adapters.local);saveConfiguration(this.store,config);});
@@ -213,7 +219,7 @@ export class Daemon {
     if (this.stopping) return;
     if(this.managedWorkspaceBoundary)verifyDeploymentWorkspaces(this.config,this.deploymentEnvironment);
     if(this.container){const roots=this.containerProbeRoots.length?this.containerProbeRoots:[Object.values(this.memoryRoots)[0]!];if(!roots[0])throw new Error('Container probe requires an Agent workspace');for(const root of roots)await this.container.probe(root);}if(this.stopping)return;
-    this.store.recover();this.adapter?.recover();this.supervisor.recoverSessions();
+    this.store.recover();this.system.recover();this.adapter?.recover();this.supervisor.recoverSessions();
     const models=builtinModels();for(const agent of this.config.mate.agents){requireSecret(process.env,agent.model.apiKeyEnv);if(!models.getModel(agent.model.provider,agent.model.id))throw new Error(`Unknown provider/model for ${agent.id}`);}
     const slackConfig=slackRuntimeConfig(this.config);if(slackConfig&&this.slackRuntime)this.slackRuntime.transport.configure(Object.fromEntries(slackConfig.agents.map(agent=>[agent.id,requireSecret(process.env,agent.botTokenEnv)])));
     await this.adapter?.start(this.abort.signal);if(this.stopping)return;
@@ -241,6 +247,7 @@ export class Daemon {
             if(this.collaboration.messages.references.conversation(target.conversationId).authority==='internal')await this.collaboration.output.send(row.id);
           }
           this.collaboration.activateDelegations();
+          if(!this.privileged)this.privileged=this.system.dispatchApproved().catch(()=>{this.log.error({},'Privileged execution dispatch failed; durable state retained');}).finally(()=>{delete this.privileged;});
           if(!this.background)this.background=this.flushExternal().finally(()=>{delete this.background;});
           if (!this.paused && !this.stopping) for (const agent of this.collaboration.agents.list()) {
             const run=this.supervisor.step(agent.id).catch(()=>{this.log.error({agentId:agent.id},'Agent scheduling failed');});
@@ -261,7 +268,7 @@ export class Daemon {
     const settle=async(action:()=>unknown)=>{try{await action();}catch(error){failures.push(error);}};
     try{
       await settle(()=>this.supervisor.close());await settle(()=>this.adapter?.close());
-      await settle(()=>this.opening?.catch(()=>{}));await settle(()=>this.loopPromise);await settle(()=>this.background);
+      await settle(()=>this.opening?.catch(()=>{}));await settle(()=>this.loopPromise);await settle(()=>this.background);await settle(()=>this.privileged);
       await Promise.allSettled([...this.runs]);await settle(()=>this.supervisor.drain());
       // A failed adapter close must not bypass execution cleanup or release the lock early.
       await settle(()=>this.container?.recover());

@@ -4,7 +4,7 @@ import type {Store} from './store.js';
 export function migrateOperationsView(store:Store):void {
   store.atomic(()=>{
     const version=Number(store.db.pragma('user_version',{simple:true}));
-    if(version===23)return;
+    if(version===23||version===24)return;
     if(version!==22)throw new Error('Coordination recovery migration required');
     const now=Date.now();
     store.db.exec(`

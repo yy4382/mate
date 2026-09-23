@@ -27,11 +27,11 @@ messages.recent messages.read messages.search messages.send messages.watch inbox
 works.list works.select tasks.list tasks.read tasks.events tasks.byMessage tasks.intents tasks.retry tasks.continue tasks.discard tasks.create tasks.claim tasks.unclaim tasks.transfer tasks.wait tasks.update tasks.delegate
 reminders.list reminders.read reminders.log reminders.finish reminders.create reminders.edit reminders.cancel schedules.list schedules.create schedules.cancel
 actions.list actions.read sessions.status sessions.checkpoint sessions.reset environment.info budget.read agents drafts.list drafts.read drafts.retry drafts.continue drafts.revise drafts.discard
-file.read_bytes file.write_bytes file.read file.write file.list file.stat file.search file.mkdir file.move file.remove file.edit exec processes.list processes.stop attachments.save research.read artifact.publish artifact.revise`.trim().split(/\s+/);
+file.read_bytes file.write_bytes file.read file.write file.list file.stat file.search file.mkdir file.move file.remove file.edit exec processes.list processes.stop system.request system.status attachments.save research.read artifact.publish artifact.revise`.trim().split(/\s+/);
 
 it('registers every public operation exactly once with complete policies and stable documentation order',async()=>{
   expect(builtInToolSpecs.map(entry=>entry.name)).toEqual(expected);expect(new Set(expected).size).toBe(expected.length);expect(Object.isFrozen(builtInToolSpecs)).toBe(true);
-  expect(operationContractFingerprint).toBe('92b4d0bd082c0fa94441698051430fb99932bced8d925858a841935ba085d11f');
+  expect(operationContractFingerprint).toBe('9575fca3e1238ffe6a337b94bacb2b3b41ee759b672e27ae8e11b2cbb358a6e5');
   const allowed={work:['none','current','task','reminder','select','broker-managed'],seat:['deny','redacted-read','clean-workspace','held-send'],effect:['pure-read','atomic-recorded','broker-recorded','adapter-recorded'],replay:['immutable','refreshable','boundary-owned']};
   for(const entry of builtInToolSpecs){expect(Object.isFrozen(entry)).toBe(true);expect(entry.description.length).toBeGreaterThan(10);expect(typeof entry.schema.parse).toBe('function');expect(allowed.work).toContain(entry.workPolicy);expect(allowed.seat).toContain(entry.seatPolicy);expect(allowed.effect).toContain(entry.effectPolicy);expect(allowed.replay).toContain(entry.replayPolicy);expect(typeof entry.authorize).toBe('function');expect(typeof entry.postAwait).toBe('function');expect(typeof entry.handler).toBe('function');}
   expect(operationDocumentation).toContain(`Tool contract: ${operationContractFingerprint}`);expect(operationDocumentation.match(/Available: (.*)\.\n/)?.[1]?.split(', ')).toEqual(expected);
@@ -145,7 +145,7 @@ it('keeps known-URL research a receipt-free read and puts the reachable alternat
   expect(builtInToolSpecs.find(spec=>spec.name==='environment.info')).toMatchObject({effectPolicy:'pure-read',replayPolicy:'boundary-owned',workPolicy:'current'});
   expect(environmentReportSchema.parse({format:'mate.environment.v1',workId:'work',snapshotAt:1,authorization:'informational_snapshot_rechecked_on_every_action',workspaces:{pathStyle:'relative_to_grant',execMountPoint:'/workspace',simultaneouslyMounted:false,grants:[],unavailable:[]},execution:{status:'unavailable',network:'none',image:null},research:{status:'unavailable',mode:'known_public_https_url_only',allowedHosts:[],search:false},attachmentInput:{status:'unavailable',scope:'visible_external_message_file'},artifactOutput:{adapterStatus:'configured',status:'unavailable',scope:'supported_external_target_only'}})).toMatchObject({authorization:'informational_snapshot_rechecked_on_every_action',workspaces:{pathStyle:'relative_to_grant',simultaneouslyMounted:false},research:{search:false},artifactOutput:{adapterStatus:'configured',status:'unavailable'}});
   const built=buildBaseline(configSchema.parse(configFixture).agents[0]!,operationDocumentation),baseline=JSON.stringify(built.messages[0]);
-  expect(built.configVersion).toBe('9656a366a8fb25cd4642828c7ff01f040fc2a5ce872f6aff998923c6f39fbec9');
+  expect(built.configVersion).toBe('e3c3e7e7f42e8078ae77e061aff54c960e085839cf79312cb3edf21834f8ca25');
   for(const required of [
     'Before choosing a workspace or external path, call environment.info for the current work',
     'versioned informational snapshot, not an authorization token',

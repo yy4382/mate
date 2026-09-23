@@ -7,6 +7,7 @@ import {migrateInternalConversations} from '../storage/internal-schema.js';
 import {migrateHistoryIndexes} from '../storage/history-schema.js';
 import {migrateCoordinationRecovery} from '../storage/coordination-schema.js';
 import {migrateOperationsView} from '../storage/operations-schema.js';
+import {migrateSystemOperations} from '../storage/system-operations-schema.js';
 import { slackApplication } from '../slack/application.js';
 import { migrateCanonicalConversations } from '../slack/canonical-migration.js';
 import { CanonicalOutput as Output } from '../conversations/output.js';
@@ -110,7 +111,7 @@ export function applyOfflineConfigurationMigration(s:Store,previous:DaemonConfig
   if(concurrent)throw new Error('Deployment upgrade marker appeared during migration');
   const oldSlack=slackRuntimeConfig(previous),newSlack=slackRuntimeConfig(next);
   if(oldSlack)migrateCanonicalConversations(s,oldSlack);else initializeCanonicalStore(s);
-  migrateInternalConversations(s);migrateProjections(s);migrateProjectionImports(s);migrateHistoryIndexes(s);migrateCoordinationRecovery(s);migrateOperationsView(s);
+  migrateInternalConversations(s);migrateProjections(s);migrateProjectionImports(s);migrateHistoryIndexes(s);migrateCoordinationRecovery(s);migrateOperationsView(s);migrateSystemOperations(s);
   const {messages}=(newSlack?slackApplication(s,newSlack,next.mate):localApplication(s,next.mate)),c=new Collaboration(s,messages,new Output(messages,{post:async()=>{throw new Error('Offline migration cannot publish');},pendingInput:()=>false,classify:()=>({kind:'unknown'})}),next.mate);
   const baseline=(agent:import('../domain/agents.js').AgentDefinition)=>buildBaseline(agent,operationDocumentation),lifecycle=new SessionLifecycle(c,baseline);
   for(const agent of next.mate.agents){

@@ -11,6 +11,7 @@ import {migrateProjectionImports}from '../../src/storage/projection-import-schem
 import {migrateHistoryIndexes}from '../../src/storage/history-schema.js';
 import {migrateCoordinationRecovery}from '../../src/storage/coordination-schema.js';
 import {migrateOperationsView}from '../../src/storage/operations-schema.js';
+import {migrateSystemOperations} from '../../src/storage/system-operations-schema.js';
 import type {Store} from '../../src/storage/store.js';
 import type {MateConfig} from '../../src/config.js';
 import type {MessageDTO} from '../../src/domain/messages.js';
@@ -41,7 +42,7 @@ export class Messages extends Conversations {
 
 /** Complete the explicit offline schema chain for fixtures that construct current runtime services. */
 export function migrateCurrentRuntime(store:Store):void{
-  migrateInternalConversations(store);migrateProjections(store);migrateProjectionImports(store);migrateHistoryIndexes(store);migrateCoordinationRecovery(store);migrateOperationsView(store);
+  migrateInternalConversations(store);migrateProjections(store);migrateProjectionImports(store);migrateHistoryIndexes(store);migrateCoordinationRecovery(store);migrateOperationsView(store);migrateSystemOperations(store);
 }
 /** Fake only the remote HTTP response; mapping, receipts and core dispatch are production code. */
 export class Output extends CanonicalOutput {
