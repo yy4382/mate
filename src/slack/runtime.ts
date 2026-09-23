@@ -40,17 +40,22 @@ export class SlackRuntime implements AdapterLifecycle {
     try{
       signal.throwIfAborted();if(this.stopped)throw new Error('Slack adapter closed');
       for(const agent of this.transport.mapper.config.agents)requireSecret(process.env,agent.appTokenEnv);
+      this.service.bootstrapRecovery();
       await this.service.verify();if(this.stopped)return;
-      await this.service.membership();if(this.stopped)return;
-      await this.service.catchUp();if(this.stopped)return;
-      await this.projections.catchUp();if(this.stopped)return;
       for(const agent of this.transport.mapper.config.agents){
         const socket=new ManagedSocket(requireSecret(process.env,agent.appTokenEnv));
         const receiver=new DurableReceiver(this.c.store,agent.slackAppId,this.transport.mapper.config.teamId,socket,()=>this.report('Slack receiver error; uncommitted events are not acknowledged'),()=>this.service.replay());
         const app=new App({token:requireSecret(process.env,agent.botTokenEnv),receiver});
         for(const event of slackWireEvents)app.event(event,async()=>{});app.command(slackControlCommand,async()=>{});
-        this.apps.push(app);await app.start();if(this.stopped)return;
+        this.apps.push(app);
       }
+      await Promise.all(this.apps.map(app=>app.start()));if(this.stopped)return;
+      // Open every durable socket before discovering membership/history so an
+      // event concurrent with catch-up is either received live or found by it.
+      await this.service.discoverMembership();if(this.stopped)return;
+      await this.service.membership();if(this.stopped)return;
+      if(!await this.service.catchUp())throw new Error('Slack history recovery did not complete');if(this.stopped)return;
+      if(!await this.projections.catchUp())throw new Error('Slack projection history recovery did not complete');if(this.stopped)return;
     }catch(error){await this.stopResources();throw error;}
     finally{signal.removeEventListener('abort',abort);}
   }
@@ -60,7 +65,7 @@ export class SlackRuntime implements AdapterLifecycle {
     await this.projections.core.flush();if(this.stopped)return;
     await this.service.flushAdmin();if(this.stopped)return;
     if(Date.now()>=this.nextReconcile){this.nextReconcile=Date.now()+60000;await this.service.reconcile();if(this.stopped)return;await this.projections.reconcile();}
-    if(!this.stopped&&Date.now()>=this.nextMembership){this.nextMembership=Date.now()+300000;await this.service.membership();if(this.stopped)return;await this.service.catchUp();if(this.stopped)return;await this.projections.catchUp();}
+    if(!this.stopped&&Date.now()>=this.nextMembership){this.nextMembership=Date.now()+300000;await this.service.discoverMembership(false);if(this.stopped)return;await this.service.membership(false);if(this.stopped)return;await this.service.catchUp();if(this.stopped)return;await this.projections.catchUp();}
   }
   private stopResources():Promise<void>{
     this.stopped=true;this.transport.close();

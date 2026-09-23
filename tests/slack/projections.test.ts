@@ -95,3 +95,22 @@ it('management pages retain valid JSON and continuation through the actual Slack
  const reply=f.s.db.prepare("SELECT text FROM admin_replies WHERE id='AONE:owner-command'").get() as {text:string};
  expect(reply.text.length).toBeLessThanOrEqual(12000);const page=JSON.parse(reply.text);expect(page.items).toHaveLength(20);expect(page.nextCursor).not.toBeNull();
 });
+it('durably drains projection history beyond the former five-page boundary',async()=>{
+ const f=await setup(),client=f.transport.clients.get('research')!,history=vi.fn(async({cursor}:any)=>{const page=cursor?Number(cursor):0,messages=Array.from({length:100},(_,offset)=>({ts:`${page*100+offset+1}.000001`,user:'UOWNER',text:'projection backlog'}));return{ok:true,messages,response_metadata:{next_cursor:page<5?String(page+1):''}};});
+ client.conversations.history=history as any;client.conversations.replies=vi.fn(async()=>({ok:true,messages:[]})) as any;
+ expect(await f.service.catchUp()).toBe(true);expect(history).toHaveBeenCalledTimes(6);
+ expect(f.s.db.prepare("SELECT count(*) n FROM ingress WHERE event_id LIKE 'projection-history:%'").get()).toEqual({n:600});
+});
+it('revisits an exhausted unknown projection when Slack evidence appears later',async()=>{
+ const f=await setup(),sent=await f.send('delayed-projection');f.post.mockRejectedValueOnce(new Error('lost receipt'));await f.core.send(sent.projection.id);expect(f.core.get(sent.projection.id).state).toBe('unknown');
+ const client=f.transport.clients.get('research')!,row=f.core.get(sent.projection.id),wire=JSON.parse(row.wire!),base=Math.floor(f.core.binding(f.bindingId).createdAt/1000);let visible=false;
+ const evidence={ts:`${base+10}.000001`,user:'UONE',bot_id:'BONE',text:wire.text,metadata:{event_type:'mate_projection',event_payload:{id:row.id,request_hash:row.request_hash}}};
+ client.conversations.history=vi.fn(async({oldest}:any)=>({ok:true,messages:[{ts:`${base+20}.000001`,user:'UOWNER',text:'unrelated'},...(visible&&Number(oldest)<=base+10?[evidence]:[])]})) as any;
+ await f.service.reconcile();expect(f.core.get(row.id).state).toBe('unknown');visible=true;await f.service.reconcile();expect(f.core.get(row.id).state).toBe('sent');
+});
+it('reconciles an unknown projection beyond five Slack pages',async()=>{
+ const f=await setup(),sent=await f.send('deep-projection');f.post.mockRejectedValueOnce(new Error('lost receipt'));await f.core.send(sent.projection.id);
+ const client=f.transport.clients.get('research')!,row=f.core.get(sent.projection.id),wire=JSON.parse(row.wire!);
+ const history=vi.fn(async({cursor}:any)=>{const page=cursor?Number(cursor):0;return{ok:true,messages:page===6?[{ts:'30.000001',user:'UONE',bot_id:'BONE',text:wire.text,metadata:{event_type:'mate_projection',event_payload:{id:row.id,request_hash:row.request_hash}}}]:[],response_metadata:{next_cursor:page<6?String(page+1):''}};});
+ client.conversations.history=history as any;await f.service.reconcile();expect(f.core.get(row.id).state).toBe('sent');expect(history).toHaveBeenCalledTimes(7);
+});

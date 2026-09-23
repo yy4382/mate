@@ -35,6 +35,10 @@ Notice、读取、处理彼此独立。消息到达或进入 inbox 不等于正�
 
 历史读取也不等于处理。`history.page/search/around` 在当前 ACL 下查询本地 canonical 缓存；`history.fetch` 通过行动 Agent 自己的 installation 有界补一页外部历史。回填只补正文/revision/visibility并使旧 freshness view 在必要时失效，不写 observation、delivery、seen 或 resolved。每次结果明确给出 scope、continuation 和 gap；详见 [HISTORY](HISTORY.md)。
 
+Slack adapter 启动时先记录接收责任水位并连接各 App 的 Socket，再发现频道/DM、核对 membership、分页补齐离线消息与投影回复。它还扫描频道旧 root 的 `latest_reply`，发现停机期间在未 watch 的旧 thread 中首次出现的回复；旧 root 只作为历史导入，不产生新的工作通知。每页进度保存在 SQLite，失败后可以继续。Agent 主动发起的目录查询仍有分页上限，启动恢复会遍历完整目录。
+
+Slack history/replies 无法重建停机期间删除的消息，也不能保证取得旧消息的每次编辑。重启时 adapter 使停机前的 view token 和已接受讨论版本失效，并在新读取的 `coverage.gaps` 中标记 `slack_offline_edits_and_deletes_not_reconstructible`。本地缓存可能仍有旧版本；这个标记告知 Agent 需要自行判断是否进一步核实，不能被解释成缺失的编辑或删除已经恢复。
+
 ## 可见性、事项、任务和预算不是同一个对象
 
 | 对象 | 用途 | 不会自动发生的事 |
@@ -145,7 +149,7 @@ decision持久化后只能roll forward。每个Agent root清除并恢复后单�
 - 前端是Slack；没有Raft自有消息服务的全局提交事务。消息任务可以锚定可见thread消息，不只顶层消息；这是Mate的明确扩展。
 - 独立review seat目前由owner在从未运行过的身份和干净workspace启用，隔离所有对话/共享workspace/外部研究，强于仅目标隔离；不自动生成临时review Agent，也不提供选择性资料包。owner提供的role/brief本身仍是输入。
 - 没有通用搜索、浏览器、第三方登录/集成目录；已知URL读取、配置镜像里的CLI和可信adapter是现有入口。也没有让模型自行增建身份/扩大grant的入口。
-- Slack搜索只查本地可见缓存，历史补抓/目录分页有界；不是整个workspace的完整搜索。大文件/超长频道需有界读取或显式知情继续。
+- Slack搜索只查本地可见缓存；Agent 主动发起的历史与目录查询每次有界，启动恢复用持久 cursor 遍历接收责任范围。它不是整个 workspace 的完整搜索；大文件/超长频道仍需有界读取或显式知情继续。
 - unknown严格保留；没有通用“自动证明外部效果不存在”或任意owner清账工具。文件可核查、Slack消息/附件有对账路径，证据不足时需明确报告阻塞。
 - 单workspace、单daemon、共享SQLite，默认串行run/backend操作且可配置。多主机、高吞吐、热加载工具未实现。macOS SRT、Docker容器边界、Debian 13原生ext4 loop workspace、专用账户、持久mount unit、systemd service、被动doctor和offline probe已实测；managed release升级/activate/fix-forward仍属后续部署gate。
 - 真实Slack/provider尚未接线验收；剩余检查是权限、事件、协议、usage和错误兼容，不是“模型能否自主合作”。

@@ -109,7 +109,8 @@ export class CanonicalAttention {
   private response(view:View,page:number):unknown {
     const pages=JSON.parse(view.pages) as (NormalMessage[]|ViewPage)[];if(!Number.isSafeInteger(page)||page<0||page>=pages.length)throw new Error('Invalid view page');
     const current=pages[page]!;const contents=Array.isArray(current)?{messages:current}:{messages:current.messages,publications:current.publications};
-    return {viewToken:view.id,page,target:JSON.parse(view.target),...contents,coverage:{revision:view.revision,pageCount:pages.length,complete:!!view.complete,scope:'locally observed and visible messages'},nextCursor:page+1<pages.length?`${view.id}:${page+1}`:null};
+    const target=JSON.parse(view.target) as Target,gap=!!this.messages.store.db.prepare("SELECT 1 FROM conversation_events WHERE kind='recovery_gap' AND audience=? AND channel=? AND seq<=? AND (? IS NULL OR thread=?) LIMIT 1").get(view.agent_id,target.conversationId,view.revision,target.threadId??null,target.threadId??null);
+    return {viewToken:view.id,page,target,...contents,coverage:{revision:view.revision,pageCount:pages.length,complete:!!view.complete,scope:'locally observed and visible messages',gaps:gap?['slack_offline_edits_and_deletes_not_reconstructible']:[]},nextCursor:page+1<pages.length?`${view.id}:${page+1}`:null};
   }
   /** Called atomically with journal commit, never when the tool merely returns over IPC. */
   presented(run:RunToken,message:AgentMessage):void {

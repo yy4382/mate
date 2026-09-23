@@ -6,12 +6,12 @@ import type {ProjectionImports} from '../conversations/projection-imports.js';
 import type {CanonicalSlackTransport} from './transport.js';
 import type {SlackProjectionInput} from './projections.js';
 import {slackPrincipal} from './legacy-codec.js';
+import {recoverSlackHistory,scanSlackPages} from './history-recovery.js';
 
 const pageSchema=z.object({before:z.number().int().positive().optional(),problemsOnly:z.boolean().optional()}).strict();
 /** Owner-facing Slack wiring and bounded protocol recovery; no canonical mutation rules here. */
 export class SlackProjectionService {
   private reconcileAfter=0;
-  private threadAfter=0;
   constructor(readonly core:Projections,readonly imports:ProjectionImports,readonly input:SlackProjectionInput,readonly slack:CanonicalSlackTransport){}
   private bindings():ProjectionBinding[]{
     return(this.core.messages.store.db.prepare("SELECT id FROM projection_bindings WHERE provider='slack' AND workspace=?").all(this.slack.mapper.config.teamId) as {id:string}[]).map(row=>this.core.binding(row.id));
@@ -53,48 +53,32 @@ export class SlackProjectionService {
   }
   async reconcile():Promise<void>{
     const s=this.core.messages.store;
-    const rows=s.db.prepare("SELECT rowid seq,id,binding_id,wire FROM projection_outbox WHERE state='unknown' AND rowid>? ORDER BY rowid LIMIT 20").all(this.reconcileAfter) as {seq:number;id:string;binding_id:string;wire:string}[];
+    const query=()=>s.db.prepare("SELECT rowid seq,id,binding_id,wire FROM projection_outbox WHERE state='unknown' AND rowid>? ORDER BY rowid LIMIT 20").all(this.reconcileAfter) as {seq:number;id:string;binding_id:string;wire:string}[];
+    let rows=query();if(!rows.length&&this.reconcileAfter){this.reconcileAfter=0;rows=query();}
     this.reconcileAfter=rows.at(-1)?.seq??0;
     for(const row of rows){
       const b=this.core.binding(row.binding_id),wire=JSON.parse(row.wire),client=this.slack.clients.get(b.publisher);if(b.provider!=='slack'||b.workspace!==this.slack.mapper.config.teamId||!client)continue;
       try{
-        let cursor:string|undefined,pages=0;
-        do{
-          const args={channel:b.externalId,limit:100,include_all_metadata:true,...(cursor?{cursor}:{})};
-          const response=wire.thread?await client.conversations.replies({...args,ts:wire.thread}):await client.conversations.history(args);
-          for(const message of response.messages??[])if(message.ts)this.input.handle({...message,type:'message',channel:b.externalId});
-          cursor=response.response_metadata?.next_cursor||undefined;pages++;
-        }while(cursor&&pages<5&&this.core.get(row.id).state==='unknown');
-        if(cursor&&this.core.get(row.id).state==='unknown')s.audit('projection_reconciliation_gap',{projectionId:row.id,reason:'page_cap'});
-      }catch{s.audit('projection_reconciliation_unavailable',{projectionId:row.id});}
+        await scanSlackPages<any>({store:s,key:`slack_projection_reconcile_v1:${row.id}`,
+          fetch:async cursor=>{const args={channel:b.externalId,limit:100,include_all_metadata:true,oldest:String(b.createdAt/1000),inclusive:true,...(cursor?{cursor}:{})};const response=wire.thread?await client.conversations.replies({...args,ts:wire.thread}):await client.conversations.history(args);return{messages:response.messages??[],next:response.response_metadata?.next_cursor||undefined};},
+          visit:messages=>{for(const message of messages){if(message.ts)this.input.handle({...message,type:'message',channel:b.externalId});if(this.core.get(row.id).state!=='unknown')return true;}return false;}});
+      }catch{s.audit('projection_reconciliation_unavailable',{projectionId:row.id,reason:'durable_page_retained'});}
     }
   }
-  private async history(b:ProjectionBinding,thread?:string):Promise<void>{
-    const s=this.core.messages.store,client=this.slack.clients.get(b.publisher),installation=this.slack.mapper.config.agents.find(a=>a.id===b.publisher);if(!client||!installation)return;
+  private async history(b:ProjectionBinding,thread?:string):Promise<boolean>{
+    const s=this.core.messages.store,client=this.slack.clients.get(b.publisher),installation=this.slack.mapper.config.agents.find(a=>a.id===b.publisher);if(!client||!installation)return false;
     const cursorKey=`projection:${b.id}:${thread??'top'}`;
     const saved=s.db.prepare('SELECT ts FROM slack_cursors WHERE agent_id=? AND channel=?').get(b.publisher,cursorKey) as {ts:string}|undefined;
-    const oldest=saved?.ts??String(b.createdAt/1000),integer=(value:string)=>{const[a,z='']=value.split('.');return BigInt(a!)*1000000n+BigInt(z.padEnd(6,'0'));};
-    let cursor:string|undefined,pages=0,newest=oldest;
-    try{
-      do{
-        const args={channel:b.externalId,oldest,limit:100,include_all_metadata:true,...(cursor?{cursor}:{})};
-        const response=thread?await client.conversations.replies({...args,ts:thread}):await client.conversations.history(args);
-        for(const message of response.messages??[])if(message.ts){
-          s.ingest(installation.slackAppId,`projection-history:${b.id}:${message.ts}:${message.edited?.ts??message.ts}`,{team_id:this.slack.mapper.config.teamId,event:{...message,type:'message',channel:b.externalId,...(thread?{thread_ts:thread}:{})}});
-          if(integer(message.ts)>integer(newest))newest=message.ts;
-        }
-        cursor=response.response_metadata?.next_cursor||undefined;pages++;
-      }while(cursor&&pages<5);
-      if(cursor)s.audit('projection_history_gap',{bindingId:b.id,thread,reason:'page_cap'});
-      else s.db.prepare('INSERT INTO slack_cursors VALUES(?,?,?) ON CONFLICT(agent_id,channel) DO UPDATE SET ts=excluded.ts').run(b.publisher,cursorKey,newest);
-    }catch{s.audit('projection_history_gap',{bindingId:b.id,thread,reason:'history_unavailable'});}
+    const recovered=await recoverSlackHistory({store:s,agentId:b.publisher,cursorKey,initialOldest:saved?.ts??String(b.createdAt/1000),
+      fetch:async state=>{const args={channel:b.externalId,limit:100,include_all_metadata:true,...(state.oldest?{oldest:state.oldest,inclusive:true}:{}),...(state.cursor?{cursor:state.cursor}:{})};const response=thread?await client.conversations.replies({...args,ts:thread}):await client.conversations.history(args);return{messages:response.messages??[],next:response.response_metadata?.next_cursor||undefined};},
+      timestamp:message=>message.ts,ingest:message=>{if(message.ts)s.ingest(installation.slackAppId,`projection-history:${b.id}:${message.ts}:${message.edited?.ts??message.ts}`,{team_id:this.slack.mapper.config.teamId,event:{...message,type:'message',channel:b.externalId,...(thread?{thread_ts:thread}:{})}});}});
+    if(!recovered)s.audit('projection_history_gap',{bindingId:b.id,thread,reason:'history_unavailable_or_incomplete'});return recovered;
   }
-  async catchUp():Promise<void>{
-    for(const b of this.bindings())if(b.enabled)await this.history(b);
-    // Rotate across all known roots rather than only the most recent threads.
+  async catchUp():Promise<boolean>{
+    let complete=true;for(const b of this.bindings())if(b.enabled&&!await this.history(b))complete=false;
+    // Startup must cover every known root; per-thread watermarks make repeats cheap.
     const s=this.core.messages.store;
-    const roots=s.db.prepare("SELECT mb.rowid seq,p.id,mb.external_message root FROM message_bindings mb JOIN message_identities m ON m.id=mb.message_id AND m.root_id=m.id JOIN projection_bindings p ON p.provider=mb.provider AND p.workspace=mb.workspace AND p.external_id=mb.external_conversation WHERE p.enabled=1 AND p.provider='slack' AND p.workspace=? AND mb.rowid>? ORDER BY mb.rowid LIMIT 10").all(this.slack.mapper.config.teamId,this.threadAfter) as {seq:number;id:string;root:string}[];
-    this.threadAfter=roots.at(-1)?.seq??0;
-    for(const root of roots)await this.history(this.core.binding(root.id),root.root);
+    const roots=s.db.prepare("SELECT p.id,mb.external_message root FROM message_bindings mb JOIN message_identities m ON m.id=mb.message_id AND m.root_id=m.id JOIN projection_bindings p ON p.provider=mb.provider AND p.workspace=mb.workspace AND p.external_id=mb.external_conversation WHERE p.enabled=1 AND p.provider='slack' AND p.workspace=? ORDER BY mb.rowid").all(this.slack.mapper.config.teamId) as {id:string;root:string}[];
+    for(const root of roots)if(!await this.history(this.core.binding(root.id),root.root))complete=false;return complete;
   }
 }

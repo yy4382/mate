@@ -21,9 +21,9 @@ export class Directory implements ConversationDirectory {
     this.messages.agent(actor);
     const client = this.clients.get(actor); if (!client) throw new Error('Slack client unavailable'); return client;
   }
-  async spaces(actor: string): Promise<SpacesResult> {
+  async spaces(actor: string, maxPages = 10): Promise<SpacesResult> {
     const client = this.client(actor), spaces: Space[] = [], channels = [];
-    const version = this.messages.membershipVersion(actor); let cursor: string | undefined, pages = 0;
+    const version = this.messages.membershipVersion(actor); let cursor: string | undefined, pages = 0;const seen=new Set<string>();
     do {
       const result = await client.users.conversations({ types: 'public_channel,private_channel,im,mpim', limit: 200, ...(cursor ? { cursor } : {}) });
       for (const c of result.channels ?? []) if (c.id && /^[CDG][A-Z0-9]+$/.test(c.id)) {
@@ -32,8 +32,10 @@ export class Directory implements ConversationDirectory {
         channels.push(c);
         spaces.push({ conversationId: this.mapper.conversation(c.id), name: c.name, purpose: c.purpose?.value, principal: c.user?slackPrincipal(this.mapper.config,c.user):undefined, archived: !!c.is_archived, kind: c.is_im ? 'dm' : 'channel' });
       }
-      cursor = result.response_metadata?.next_cursor || undefined; pages++;
-    } while (cursor && pages < 10);
+      const next=result.response_metadata?.next_cursor || undefined;
+      if(next&&seen.has(next))throw new Error('Slack conversation cursor repeated');
+      if(next)seen.add(next);cursor=next; pages++;
+    } while (cursor && pages < maxPages);
     if (version !== this.messages.membershipVersion(actor)) return { spaces: [], incomplete: true, retry: 'membership changed during discovery' };
     for (const c of channels) {
       this.messages.membership(actor, this.mapper.conversation(c.id!), !c.is_archived);
