@@ -1,4 +1,5 @@
 import { isRetryableAssistantError } from "@earendil-works/pi-ai/utils/retry";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { z } from "zod";
 
 /**
@@ -126,11 +127,6 @@ export function faultOf(error: unknown): WorkerFault | undefined {
   return (error as Marked)[MARKER] ?? (error instanceof FaultError ? error.fault : undefined);
 }
 
-/** The category an error crossed the boundary with, or `undefined` if it carries none. */
-export function faultCategory(error: unknown): FaultCategory | undefined {
-  return faultOf(error)?.category;
-}
-
 /**
  * Attach a fault to an error raised where the stage is known locally, returning the same object
  * so existing `catch`/`rethrow` call sites keep working.
@@ -138,6 +134,40 @@ export function faultCategory(error: unknown): FaultCategory | undefined {
 export function classified<T>(error: T, fault: WorkerFault): T {
   if (error && typeof error === "object") Object.defineProperty(error, MARKER, { value: fault });
   return error;
+}
+
+/**
+ * The boundary constructors. The stage names where the failure happened; the category names what
+ * a human or the recovery loop must do about it. A credential problem is a credential problem
+ * whether the model provider rejected the call or the worker never got a key to call with, so the
+ * category is shared while the stage stays honest about which boundary saw it.
+ */
+export function modelFault(category: "credential_config" | "aborted", reason: string): WorkerFault {
+  return fault("model", category, reason, undefined, "the model call failed");
+}
+
+/** The worker could not start: it has no usable credential or cannot resolve the model. */
+export function workerCredentialFault(reason: string): WorkerFault {
+  return fault(
+    "worker",
+    "credential_config",
+    reason,
+    undefined,
+    "the worker credential is unusable",
+  );
+}
+
+export function abortFault(reason: string): WorkerFault {
+  return fault("worker", "aborted", reason, undefined, "the run was aborted");
+}
+
+/** A model call that never came back is still the model boundary's failure, wherever it was seen. */
+export function transientFault(reason: string): WorkerFault {
+  return fault("model", "transient_model", reason, undefined, "the model did not answer in time");
+}
+
+export function protocolFault(reason: string): WorkerFault {
+  return fault("worker", "shared_persistence", reason, undefined, "the worker protocol failed");
 }
 
 /** Give every error crossing the boundary one shape. An already-classified error keeps its own
@@ -158,14 +188,9 @@ export function toWorkerFault(
         ? error
         : String(error ?? "");
   const driver = driverCode(failure);
+  if (stage === "model") return classifyModelFailure(message, options.reason);
   // Nothing throwable crossed this boundary: the caller stated the reason itself.
-  if (!message)
-    return {
-      stage,
-      category: stage === "model" ? "credential_config" : "shared_persistence",
-      reason: bounded(options.reason, "the operation failed"),
-    };
-  if (stage === "model") return modelFault(message, options.reason);
+  if (!message) return protocolFault(options.reason ?? "the operation failed");
   if (stage === "tool") return new RefusalError(options.reason ?? message).fault;
   if (stage === "execution")
     return fault(
@@ -189,29 +214,26 @@ function fault(
   return optionalDetail({ stage, category, reason: bounded(reason, fallback) }, detail);
 }
 
-function modelFault(message: string, reason?: string | undefined): WorkerFault {
+function classifyModelFailure(message: string, reason?: string | undefined): WorkerFault {
   const text = reason ?? message;
-  if (/abort/i.test(message))
-    return { stage: "model", category: "aborted", reason: bounded(text, "the run was aborted") };
-  if (isCredentialFailure(message))
-    return {
-      stage: "model",
-      category: "credential_config",
-      reason: bounded(text, "the model credential was rejected"),
-    };
-  // The provider library owns provider-failure classification; re-deriving HTTP status and
-  // retry wording here would drift from the transport those rules describe.
-  if (isRetryableAssistantError({ stopReason: "error", errorMessage: message } as never))
-    return {
-      stage: "model",
-      category: "transient_model",
-      reason: bounded(text, "the model provider failed transiently"),
-    };
-  return {
-    stage: "model",
-    category: "credential_config",
-    reason: bounded(text, "the model call failed"),
-  };
+  if (isAbort(message)) return modelFault("aborted", text);
+  if (isCredentialFailure(message)) return modelFault("credential_config", text);
+  // The provider library owns provider-failure classification; re-deriving HTTP status and retry
+  // wording here would drift from the transport those rules describe. Anything it does not
+  // recognise is read as retryable: waiting with backoff is the recoverable reading of an
+  // unexplained model-boundary failure, and ticket #46 pauses the agent when a category says a
+  // human must act.
+  if (isRetryableAssistantError(assistantFailure(message))) return transientFault(text);
+  return fault("model", "transient_model", text, undefined, "the model call failed");
+}
+
+function isAbort(message: string): boolean {
+  return /\babort(?:ed|ing)?\b/i.test(message);
+}
+
+/** The classifier only reads these two fields; the rest of a provider message is not needed. */
+function assistantFailure(errorMessage: string): AssistantMessage {
+  return { stopReason: "error", errorMessage } as AssistantMessage;
 }
 
 function persistenceFault(message: string, driver?: string): WorkerFault {
@@ -240,21 +262,43 @@ export function faultError(fault: WorkerFault): FaultError {
   return new FaultError(parsed.data);
 }
 
-/** A filtered reason is safe to store and print: bounded, single-line and free of secrets. */
+/**
+ * A filtered reason is safe to store and print: bounded, single-line, and stripped of the
+ * material that must not leave an operation's owner — credentials, secret-bearing flags, SQL
+ * statements and filesystem locations. It is lossy on purpose; the operation's own module holds
+ * the unfiltered detail.
+ */
 export function filterReason(text: unknown): string {
   if (typeof text !== "string") return "";
-  return text
+  const filtered = text
     .replace(/\u001b\[[0-9;]*m/g, "")
-    .replace(/\b(?:select|insert|update|delete|create|alter|drop)\b[^]*/gi, "[redacted sql]")
-    .replace(/\b(?:bearer|api[_-]?key|secret|password)\b\s*[:=]?\s*\S+/gi, "$1 [redacted]")
+    // A SQL statement cannot be quoted partially without leaking the schema it names.
+    .replace(
+      /\b(?:select|insert\s+into|update\s+\w+\s+set|delete\s+from|create\s+table|alter\s+table|drop\s+table)\b[^;]*/gi,
+      "[redacted sql]",
+    )
+    .replace(
+      /\b(?:no such table|no such column|UNIQUE constraint failed)\b[^;]*/gi,
+      "[redacted sql]",
+    )
+    // ``Authorization: Basic <base64>`` and ``--token=<value>`` carry credentials as bare values.
+    .replace(/\b(bearer|basic)\s+\S+/gi, "$1 [redacted]")
+    .replace(
+      /(--?(?:token|password|passwd|secret|api[_-]?key|auth)\s*[=:]\s*)(\S+)/gi,
+      "$1[redacted]",
+    )
+    // "api key <value>", "token is <value>", "password: <value>" all name a secret and then it.
+    .replace(
+      /\b(api[ _-]?key|secret|password|passwd|token)\b((?:\s*(?:is|was|:|=))?\s+)\S+/gi,
+      "$1$2[redacted]",
+    )
     .replace(/\b(?:sk|pk|rk|xox[baprs]|ghp|github_pat)[-_][A-Za-z0-9_-]{6,}/gi, "[redacted]")
-    .replace(/\b[A-Za-z0-9_-]{32,}\b/g, "[redacted]")
+    .replace(/\b[A-Za-z0-9_+/=-]{32,}\b/g, "[redacted]")
     .replace(/(?:\/[\w.@+-]+){2,}/g, "[path]")
     .replace(/[\r\n\t]+/g, " ")
     .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, MAX_REASON)
     .trim();
+  return filtered.slice(0, MAX_REASON).trim();
 }
 
 /** The single-line, bounded summary the caller records for an owner-visible failure. */
@@ -264,7 +308,7 @@ export function describeFault(fault: WorkerFault): string {
   return filterReason(parts.join(": "));
 }
 
-/** Recovery reads this instead of re-deriving retry safety from error text. */
+/** The recovery interface: ticket #46 reads the category's disposition, never the reason text. */
 export function retryDisposition(fault: WorkerFault): FaultDisposition {
   switch (fault.category) {
     case "transient_model":
@@ -307,8 +351,9 @@ function persistenceDefault(driver?: string): string {
   return (driver && driverReasons[driver]) ?? "the durable record is unavailable";
 }
 
+/** Credential and configuration problems need a human, so they must not look retryable. */
 function isCredentialFailure(message: string): boolean {
-  return /api[ _-]?key|unauthori[sz]ed|authentication|credential|invalid key|\b401\b|forbidden|permission denied|no such model|model not found|unknown provider/i.test(
+  return /api[ _-]?key|unauthori[sz]ed|authentication|credential|invalid key|\b40[13]\b|forbidden|permission denied|no such model|model not found|unknown provider/i.test(
     message,
   );
 }

@@ -70,7 +70,7 @@ only when every blocker is committed on the branch.
 | #46 | 对暂时模型故障持久退避并自动继续 | in progress | `0e7b6f8` (worktree `.worktrees/t46`) | — |
 | #47 | 保持正常让位后的持久继续与恢复输入 | in progress | `0e7b6f8` (worktree `.worktrees/t47`) | — |
 | #48 | 使进程查询与停止可取消且不阻塞 daemon | **done** | `fab5692` (worktree `.worktrees/t48`) | `9e69c30`, merged as `3838cad` |
-| #49 | 让内部应用在 Slack 离线时启动和运行 | pending | — | — |
+| #49 | 让内部应用在 Slack 离线时启动和运行 | in progress | `d412adf` (worktree `.worktrees/t49`) | — |
 | #50 | 按安装和目标范围恢复 Slack 操作 | pending | — | — |
 | #51 | 给 owner 提供分范围、可操作的故障诊断 | pending | — | — |
 | #52 | 统一 Linux 维护所用的宿主操作与路径事实 | **done** | `6395c75` (worktree `.worktrees/t52`) | `aac16f1`, merged as `fab5692` |
@@ -223,7 +223,7 @@ None yet.
 | #38 | `113241f`, merged `8c729e6` | `pnpm typecheck` + `pnpm check` on the exact merged tree (written with `git write-tree`, archived, validated in a temp dir) | 59 files / 461 tests, exit 0; legacy anchor-less state absent from `src/` |
 | #44 | `cd13f9a`, merged `9076ccb` | same isolated-tree method | 60 files / 479 tests, exit 0; the invite suite covers human invite, non-member, self-invite, non-team target, already-in-channel, refusal, timeout and query recovery |
 | #45 | `0e7b6f8` | `pnpm typecheck` + `pnpm check` in an isolated `git archive` copy | 61 files / 484 tests, exit 0; `src/runtime/fault.ts` is the one shared result (7 stages, the five required categories plus `aborted`, and a `retryDisposition`), and the protocol test spawns the compiled worker fixture through the production `WorkerClient` over IPC rather than an in-memory stub |
-| #44 (hardening) | `c15f754` | merge aborted: sibling of the merged `cd13f9a`, forked from `02dafa9`; delta sent back for re-application on `0e7b6f8` | — |
+| #44 (hardening) | `47b6227`, merged `d412adf` | re-applied on `0e7b6f8` after the sibling `c15f754` was rejected; 2 files; isolated-tree verification 61 files / 484 tests, exit 0 |
 | #39 | `4cc68c9`, merged `e898228` | `pnpm typecheck` + `pnpm check` on the merged MAIN tree before committing the merge | 58 files / 431 tests, exit 0; conflict-free; type seam checked by hand (`ToolHandler<Schema>`/`ToolAuthorize<Schema>` both derive from the one zod schema) and the architecture test asserts the removed research reader, its host allow-list, its prompt hints and `daemon/research.ts` are gone |
 | #52 | `053a643` (worktree) | `pnpm check` in `.worktrees/t52` | 62 files / 419 tests, exit 0 — merge pending #36 finishing |
 | #36 | `a2288ce` | `pnpm check` in an isolated `git archive` copy | 57 files / 398 tests, exit 0; all preserved-baseline tests confirmed present; old schema modules fully unreferenced; `Store` is the single entry onto `openCurrentDatabase` |

@@ -5,11 +5,14 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { EngineHooks, EngineResult, RunSpec } from "./engine.js";
 import {
+  abortFault,
   classifyRpcStage,
   faultError,
+  protocolFault,
   toWorkerFault,
+  transientFault,
   workerFaultSchema,
-  type FaultStage,
+  type WorkerFault,
 } from "./fault.js";
 const rpcSchema = z
   .object({
@@ -68,15 +71,11 @@ export class WorkerClient {
       serialization: "json",
     });
     this.child.on("error", (error) =>
-      this.active?.reject(faultError(toWorkerFault(error, "worker"))),
+      this.active?.reject(faultError(protocolFault(error.message))),
     );
     this.child.on("exit", () =>
       this.active?.reject(
-        faultError(
-          toWorkerFault(new Error("Worker exited"), "worker", {
-            reason: "worker exited; usage and unfinished effects are uncertain",
-          }),
-        ),
+        faultError(protocolFault("worker exited; usage and unfinished effects are uncertain")),
       ),
     );
   }
@@ -86,8 +85,7 @@ export class WorkerClient {
     timeoutMs: number,
     signal: AbortSignal,
   ): Promise<EngineResult> {
-    if (this.active || !this.child.connected)
-      throw faultError(toWorkerFault(null, "worker", { reason: "worker unavailable" }));
+    if (this.active || !this.child.connected) throw faultError(protocolFault("worker unavailable"));
     const nonce = randomUUID();
     return new Promise((resolve, reject) => {
       let settled = false,
@@ -105,21 +103,23 @@ export class WorkerClient {
           reject(error);
         } else resolve(result!);
       };
-      const fail = (stage: FaultStage, error: unknown, reason?: string) =>
-        finish(faultError(toWorkerFault(error, stage, reason === undefined ? {} : { reason })));
-      const onAbort = () => fail("worker", new Error("Worker run aborted"));
-      const timer = setTimeout(() => fail("worker", new Error("Worker run timed out")), timeoutMs);
+      const fail = (fault: WorkerFault) => finish(faultError(fault));
+      const onAbort = () => fail(abortFault("the run was aborted before the worker finished"));
+      // A worker that never answers is the transient case ticket #46 must back off and retry.
+      const timer = setTimeout(
+        () => fail(transientFault("the worker did not answer within the run timeout")),
+        timeoutMs,
+      );
       this.active = { nonce, reject: (error) => finish(error) };
       const onMessage = async (raw: unknown) => {
         if (Buffer.byteLength(JSON.stringify(raw)) > 2_000_000) {
-          fail("worker", new Error("Oversize worker message"));
+          fail(protocolFault("oversize worker message"));
           return;
         }
         const envelope = raw as {
           nonce?: string;
           type?: string;
           result?: unknown;
-          error?: string;
           fault?: unknown;
         };
         if (envelope.nonce !== nonce || settled) return;
@@ -128,18 +128,18 @@ export class WorkerClient {
           // reconstructing one from the text it also sends for compatibility.
           const fault = workerFaultSchema.safeParse(envelope.fault);
           if (fault.success) finish(faultError(fault.data));
-          else fail("worker", new Error(envelope.error ?? "Worker failed"));
+          else fail(protocolFault("the worker reported an unreadable failure"));
           return;
         }
         if (envelope.type === "done") {
           const parsed = resultSchema.safeParse(envelope.result);
-          if (!parsed.success || busy) fail("worker", new Error("Invalid worker completion"));
+          if (!parsed.success || busy) fail(protocolFault("invalid worker completion"));
           else finish(undefined, parsed.data as EngineResult);
           return;
         }
         const parsed = rpcSchema.safeParse(raw);
         if (!parsed.success || busy || parsed.data.id <= sequence) {
-          fail("worker", new Error("Invalid worker RPC"));
+          fail(protocolFault("invalid worker RPC"));
           return;
         }
         busy = true;
@@ -201,14 +201,7 @@ export class WorkerClient {
           // shared shape, so a refusal stays a refusal and a durable-write failure stays a
           // persistence failure instead of both arriving as one opaque string.
           const fault = toWorkerFault(error, classifyRpcStage(call.kind));
-          if (!settled)
-            this.child.send({
-              type: "reply",
-              nonce,
-              id: call.id,
-              error: fault.reason,
-              fault,
-            });
+          if (!settled) this.child.send({ type: "reply", nonce, id: call.id, fault });
         } finally {
           busy = false;
         }
@@ -220,11 +213,7 @@ export class WorkerClient {
     });
   }
   close(): void {
-    this.active?.reject(
-      faultError(
-        toWorkerFault(null, "worker", { reason: "worker closed before the run finished" }),
-      ),
-    );
+    this.active?.reject(faultError(protocolFault("worker closed before the run finished")));
     this.child.kill("SIGKILL");
   }
 }

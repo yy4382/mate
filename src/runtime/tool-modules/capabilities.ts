@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { operationSchema } from "../../execution/backend.js";
+import { classified } from "../fault.js";
 import {
   ProcessStopRejectedError,
   ProcessWaitInterruptedError,
@@ -156,18 +157,24 @@ const definitions: ToolSpec[] = [
         settle("succeeded", result);
         return { value: result };
       } catch (error) {
-        if (error instanceof ProcessStopRejectedError)
+        if (error instanceof ProcessStopRejectedError) {
           settle("failed", { reason: error.message, unit: args.unit });
-        else
-          settle("unknown", {
-            reason: "process_stop_outcome_unknown",
-            unit: args.unit,
-            cause:
-              error instanceof ProcessWaitInterruptedError
-                ? "cancelled_or_timed_out"
-                : "stop_failed",
-          });
-        throw error;
+          throw error;
+        }
+        settle("unknown", {
+          reason: "process_stop_outcome_unknown",
+          unit: args.unit,
+          cause:
+            error instanceof ProcessWaitInterruptedError ? "cancelled_or_timed_out" : "stop_failed",
+        });
+        // A refused stop was decided before anything ran; anything else failed after the stop
+        // crossed the boundary, so its outcome is recorded as unknown and must be reported as
+        // such rather than as a refusal.
+        throw classified(error, {
+          stage: "execution",
+          category: "unknown_effect",
+          reason: "the stop outcome could not be confirmed",
+        });
       }
     },
   }),

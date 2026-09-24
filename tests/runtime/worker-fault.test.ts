@@ -11,6 +11,7 @@ import { Supervisor } from "../../src/runtime/supervisor.js";
 import { WorkerClient } from "../../src/runtime/client.js";
 import { ToolRouter } from "../../src/runtime/tools.js";
 import {
+  classified,
   faultOf,
   refusal,
   retryDisposition,
@@ -122,6 +123,70 @@ it("keeps credentials and unfiltered third-party exception text out of caller-vi
   expect(recordedFault(store).reason.trim().length).toBeGreaterThan(0);
 }, 20000);
 
+it("reports a worker that starts without a usable credential as a configuration problem", async () => {
+  // A missing API key is the documented operator mistake; the worker never reaches a model call.
+  const worker = new WorkerClient(faultModel.provider, faultModel.id, "configured", fixture, {
+    MATE_FAULT_SCENARIO: "none",
+    MATE_FAULT_NO_KEY: "1",
+  });
+  try {
+    await expect(
+      worker.run(
+        { sessionId: "s", messages: baseline(), recovery: "", maxTurns: 2 },
+        { journal: async () => {}, tool: async () => ({ value: null }) },
+        5000,
+        new AbortController().signal,
+      ),
+    ).rejects.toSatisfy((error: unknown) => {
+      const fault = faultOf(error);
+      return fault?.category === "credential_config" && retryDisposition(fault) === "human_action";
+    });
+  } finally {
+    worker.close();
+  }
+}, 20000);
+
+it("carries an unconfirmed external effect across the boundary as one the caller must verify", async () => {
+  // The caller owns the tool, so it classifies this one. The model still gets a usable result and
+  // the run continues; what must survive is that a started effect is never reported as absent.
+  const { store, collaboration: c, router, work } = setup("none");
+  c.enqueue("research", work, "effect", {});
+  const run = store.beginRun("research")!;
+  store.input(run, {});
+  const failingBroker = new Broker(
+    store,
+    c,
+    {
+      execute: async () => {
+        throw Object.assign(new Error("remote command connection reset"), { code: "ECONNRESET" });
+      },
+    } as never,
+    { research: "/tmp" },
+  );
+  const categories: (FaultCategory | undefined)[] = [];
+  await new ToolRouter(c, failingBroker)
+    .call(run, work, "exec", "exec", { command: "true", cwd: "." }, new AbortController().signal)
+    .catch((error: unknown) => categories.push(faultOf(error)?.category));
+  await failingBroker
+    .execute(
+      run,
+      work,
+      "write-effect",
+      { kind: "write", path: ".", content: "x" },
+      new AbortController().signal,
+    )
+    .catch((error: unknown) => categories.push(faultOf(error)?.category));
+  expect(categories).toEqual(["unknown_effect", "unknown_effect"]);
+  // Both started actions stay durably recorded as unknown rather than reported as never run. The
+  // router prefixes its call id with the session; this direct broker call uses the id as given.
+  expect(store.action(`${run.sessionId}:exec`)?.state).toBe("unknown");
+  expect(store.action("write-effect")?.state).toBe("unknown");
+  // A refusal decided before any effect is a different class from the unknown effect above.
+  await expect(
+    router.call(run, work, "missing", "missing.operation", {}, new AbortController().signal),
+  ).rejects.toSatisfy((error: unknown) => faultOf(error)?.category === "definite_tool_refusal");
+}, 20000);
+
 it("a caller-side refusal reaches the worker as a definite refusal, not as a fault or an unknown effect", async () => {
   const worker = new WorkerClient(faultModel.provider, faultModel.id, "key", fixture, {
     MATE_FAULT_SCENARIO: "refused",
@@ -155,48 +220,6 @@ it("a caller-side refusal reaches the worker as a definite refusal, not as a fau
   } finally {
     worker.close();
   }
-}, 20000);
-
-it("marks an error thrown after an effect may have started as an unknown external effect", async () => {
-  const { store, collaboration: c, router, work } = setup("none");
-  c.enqueue("research", work, "effect", {});
-  const run = store.beginRun("research")!;
-  store.input(run, {});
-  const failingBroker = new Broker(
-    store,
-    c,
-    {
-      execute: async () => {
-        throw Object.assign(new Error("remote command connection reset"), { code: "ECONNRESET" });
-      },
-    } as never,
-    { research: "/tmp" },
-  );
-  const failing = new ToolRouter(c, failingBroker);
-  const categories: (FaultCategory | undefined)[] = [];
-  // A valid operation that reaches the backend and fails there: the action was started, so its
-  // external effect cannot be assumed absent.
-  await failing
-    .call(run, work, "exec", "exec", { command: "true", cwd: "." }, new AbortController().signal)
-    .catch((error: unknown) => categories.push(faultOf(error)?.category));
-  await failingBroker
-    .execute(
-      run,
-      work,
-      "write-effect",
-      { kind: "write", path: ".", content: "x" },
-      new AbortController().signal,
-    )
-    .catch((error: unknown) => categories.push(faultOf(error)?.category));
-  // A refusal decided before any effect is a different class from the unknown effect above.
-  await expect(
-    router.call(run, work, "missing", "missing.operation", {}, new AbortController().signal),
-  ).rejects.toSatisfy((error: unknown) => faultOf(error)?.category === "definite_tool_refusal");
-  expect(categories).toEqual(["unknown_effect", "unknown_effect"]);
-  // Both started actions are durably recorded as unknown rather than reported as never run. The
-  // router prefixes its call id with the session; this direct broker call uses the id as given.
-  expect(store.action(`${run.sessionId}:exec`)?.state).toBe("unknown");
-  expect(store.action("write-effect")?.state).toBe("unknown");
 }, 20000);
 
 it("keeps a shared-persistence failure distinguishable after crossing the worker boundary", async () => {

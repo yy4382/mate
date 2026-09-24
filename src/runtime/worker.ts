@@ -8,14 +8,19 @@ import {
 import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/pi-agent-core/harness/context";
 import { z } from "zod";
 import { Engine, type RunSpec, type ToolReply } from "./engine.js";
-import { faultError, toWorkerFault, workerFaultSchema, type WorkerFault } from "./fault.js";
+import {
+  workerCredentialFault,
+  faultError,
+  protocolFault,
+  toWorkerFault,
+  workerFaultSchema,
+  type WorkerFault,
+} from "./fault.js";
 
 /** A malformed reply fault is still a failure: never fall back to trusting the raw payload. */
 function parseFault(raw: unknown): WorkerFault {
   const parsed = workerFaultSchema.safeParse(raw);
-  return parsed.success
-    ? parsed.data
-    : toWorkerFault(null, "worker", { reason: "The caller reported a failure" });
+  return parsed.success ? parsed.data : protocolFault("the caller reported a malformed failure");
 }
 
 export async function summarizeWithPi(
@@ -56,10 +61,14 @@ const startSchema = z.object({
   }),
 });
 /** The worker end of the protocol: failures leave as one shared fault shape, not as strings. */
-export function serveWorker(engine: Engine, models?: Models): void {
+export function serveWorker(engine: Engine, models?: Models, startupFault?: WorkerFault): void {
   let nonce: string | undefined,
     counter = 0,
     active = false;
+  // A failure that happened before any run existed (an unusable credential, an unresolvable
+  // model) has no run to name. It is held here and reported to the first run the caller starts,
+  // because an unsolicited envelope carrying no nonce is dropped by the caller by design.
+  let pendingStartup: WorkerFault | undefined = startupFault;
   let abort = new AbortController();
   const pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
   function fail(
@@ -69,7 +78,7 @@ export function serveWorker(engine: Engine, models?: Models): void {
     failedNonce: string | undefined = nonce,
   ): void {
     const fault: WorkerFault = toWorkerFault(error, stage, { reason: message });
-    process.send?.({ type: "failed", nonce: failedNonce, fault, error: fault.reason });
+    process.send?.({ type: "failed", nonce: failedNonce, fault });
   }
   function rpc(kind: string, payload: unknown): Promise<unknown> {
     return new Promise((resolve, reject) => {
@@ -100,7 +109,6 @@ export function serveWorker(engine: Engine, models?: Models): void {
       type?: string;
       nonce?: string;
       id?: number;
-      error?: string;
       fault?: unknown;
       value?: unknown;
     };
@@ -113,7 +121,7 @@ export function serveWorker(engine: Engine, models?: Models): void {
       pending.delete(message.id);
       // The caller classified its own failure; keep that class instead of re-deriving it from
       // text that has already crossed the boundary.
-      if (message.error || message.fault) waiter?.reject(faultError(parseFault(message.fault)));
+      if (message.fault !== undefined) waiter?.reject(faultError(parseFault(message.fault)));
       else waiter?.resolve(message.value);
       return;
     }
@@ -126,6 +134,13 @@ export function serveWorker(engine: Engine, models?: Models): void {
     }
     if (active) {
       fail("Worker already active", null, "worker", message.nonce);
+      return;
+    }
+    if (pendingStartup) {
+      // This worker cannot serve any run. Report why against the run the caller just started.
+      const fault = pendingStartup;
+      pendingStartup = undefined;
+      process.send?.({ type: "failed", nonce: message.nonce, fault });
       return;
     }
     active = true;
@@ -167,25 +182,21 @@ export function serveWorker(engine: Engine, models?: Models): void {
     }
   });
 }
-/** A worker that cannot start still reports the shared fault shape to the caller that spawned it. */
-function reportStartFailure(reason: string): never {
-  process.send?.({
-    type: "failed",
-    nonce: undefined,
-    fault: toWorkerFault(null, "worker", { reason }),
-    error: reason,
-  });
-  process.exit(1);
-}
 if (process.env.MATE_WORKER === "1") {
   const models = builtinModels();
   const model = models.getModel(process.env.MATE_PROVIDER!, process.env.MATE_MODEL!);
-  if (!model || !process.env.MATE_MODEL_KEY)
-    reportStartFailure("Worker model or credential unavailable");
+  // An unusable credential is a configuration problem a human must fix, never a transient one.
+  // The engine below is a placeholder: `serveWorker` refuses every run while a startup fault is
+  // pending, so the model it would have used is never reached.
   serveWorker(
-    new Engine(model, (m, context, options) =>
-      models.streamSimple(m, context, { ...options, apiKey: process.env.MATE_MODEL_KEY!, env: {} }),
-    ),
+    new Engine({ ...(model ?? models.getModels()[0]!) }, () => {
+      throw new Error("unreachable");
+    }),
     models,
+    !model
+      ? workerCredentialFault("the configured model is unknown to this worker")
+      : process.env.MATE_MODEL_KEY
+        ? undefined
+        : workerCredentialFault("the worker has no model credential"),
   );
 }
