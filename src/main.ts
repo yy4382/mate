@@ -8,7 +8,7 @@ import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { daemonConfigSchema } from "./daemon/config.js";
 import { Daemon } from "./daemon/app.js";
 import { acquireLock } from "./daemon/lock.js";
-import { Store, hash } from "./storage/store.js";
+import { Store } from "./storage/store.js";
 import { backup } from "./daemon/backup.js";
 import { restoreCheckpoint } from "./daemon/restore.js";
 import { requiredSlackBotScopes } from "./slack/protocol.js";

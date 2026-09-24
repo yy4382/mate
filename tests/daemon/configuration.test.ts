@@ -119,3 +119,16 @@ it("rejects removed container and workspace-grant configuration", () => {
     daemonConfigSchema.parse({ mate: configFixture, runtime: { dataDir: "/synthetic/mate" } }),
   ).toThrow();
 });
+it("rejects the retired legacy quota settings instead of ignoring them", () => {
+  const input = current();
+  expect(() =>
+    daemonConfigSchema.parse({
+      ...input,
+      mate: {
+        ...input.mate,
+        budgets: { maxRuns: 10, maxTokens: 1000, maxCostUsd: 1, runTimeoutMs: 1000 },
+      },
+    }),
+  ).toThrow(/budgets/);
+  expect(daemonConfigSchema.parse(input).mate.runTimeoutMs).toBe(input.mate.runTimeoutMs);
+});

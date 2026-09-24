@@ -57,7 +57,7 @@ only when every blocker is committed on the branch.
 |---|---|---|---|---|
 | #34 | 建立统一格式检查并完成机械排版 | **done** | `eb74e0e` | `a8b00ce` + `e85a3ca` + `7c6e061` + `a91edb4` |
 | #35 | 用单一当前 schema 初始化新数据库 | **done** | `d049b00` | `b1fcca9` + `beb5fdd` + `12aab7b` + `6b9d256` |
-| #36 | 让所有入口使用当前数据库格式 | in progress | `b1fcca9` | — |
+| #36 | 让所有入口使用当前数据库格式 | in progress | `b1fcca9` | `a2288ce` (review follow-ups pending) |
 | #37 | 统一应用装配与关闭流程 | pending | — | — |
 | #38 | 由任务模块负责消息关联任务的完整发布流程 | pending | — | — |
 | #39 | 让工具输入类型和领域授权各有明确归属 | pending | — | — |
@@ -133,3 +133,13 @@ None yet.
   another ticket is mid-edit there; merges wait until the main-tree ticket commits and the
   tree is clean. Merge commits require a green `pnpm check` before the merge is committed
   (verified with `git merge --no-commit`).
+
+## Orchestrator verification results (run by the orchestrator, pinned Node 24.21.0)
+
+| Ticket | Commit(s) | Command | Result |
+|---|---|---|---|
+| #34 | `a91edb4` | `pnpm check` / `pnpm typecheck` | 61 files / 411 tests, exit 0; negative control: unformatted line makes the gate exit 1; formatter idempotent on the tree |
+| #35 | `b1fcca9`…`6b9d256` | `pnpm check` at `b1fcca9` | 62 files / 416 tests, exit 0 (agent reports 418 at `6b9d256`) |
+| #48 | `c4a69a7` (worktree) | `pnpm check` in `.worktrees/t48` | 61 files / 425 tests, exit 0 — merge pending #36 finishing |
+| #52 | `053a643` (worktree) | `pnpm check` in `.worktrees/t52` | 62 files / 419 tests, exit 0 — merge pending #36 finishing |
+| #36 | `a2288ce` | `pnpm check` in an isolated `git archive` copy | 57 files / 398 tests, exit 0; all preserved-baseline tests confirmed present; old schema modules fully unreferenced; `Store` is the single entry onto `openCurrentDatabase` |
