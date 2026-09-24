@@ -160,6 +160,25 @@ const definitions: ToolSpec[] = [
     },
   }),
   spec({
+    name: "conversations.invite",
+    schema: z.object({ conversationId: id, agentId: id }).strict(),
+    description:
+      "Invite one configured teammate Agent to an external channel this Agent is currently in, using this Agent's own Slack identity. Slack's public and private channel permissions decide the request. A sent request is not success: the teammate's access changes only when Slack's member list confirms it, and an unconfirmed outcome is verified by reading that list instead of inviting again.",
+    replayScope: "work",
+    seatPolicy: "deny",
+    effectPolicy: "adapter-recorded",
+    replayPolicy: "boundary-owned",
+    // The inviter's current membership of the channel the call names is re-checked around the
+    // call; the directory owns the team-identity, self-invitation and internal-room rules.
+    authorize: (context, args) => targetWork(context, args.conversationId),
+    handler: async ({ directory, run, actionId, signal }, args) => {
+      if (!directory?.invite) throw new Error("Channel invitation unavailable");
+      return {
+        value: await directory.invite(run, actionId, args.conversationId, args.agentId, signal),
+      };
+    },
+  }),
+  spec({
     name: "attention.peek",
     schema: z.object({}).strict(),
     description: "Inspect content-free unread attention summaries.",

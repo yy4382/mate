@@ -7,6 +7,7 @@ export const slackMethods = {
   "conversations.replies": ["channels:history", "groups:history", "im:history", "mpim:history"],
   "conversations.members": ["channels:read", "groups:read", "im:read", "mpim:read"],
   "conversations.open": ["im:write", "mpim:write"],
+  "conversations.invite": ["channels:write.invites", "groups:write.invites"],
   "users.conversations": ["channels:read", "groups:read", "im:read", "mpim:read"],
   "users.info": ["users:read"],
   "chat.postMessage": ["chat:write"],

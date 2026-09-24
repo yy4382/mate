@@ -1,18 +1,72 @@
 import { SlackMembership } from "./membership.js";
 import type {
   ConversationDirectory,
+  InviteResult,
   Space,
   SpacesResult,
   MembersResult,
   OpenDMResult,
 } from "../conversations/directory.js";
 import type { WebClient } from "@slack/web-api";
-import type { RunToken } from "../storage/store.js";
+import type { Effect, RunToken } from "../storage/store.js";
 import type { Conversations as Messages } from "../conversations/messages.js";
 import type { SlackMapper } from "./mapper.js";
 import { slackPrincipal, slackUserForPrincipal } from "./principals.js";
 import type { Principal } from "../domain/messages.js";
 import { LegacyArguments } from "./legacy-arguments.js";
+
+/**
+ * Slack's definite refusal of one invitation, including a workspace policy that forbids it. Every
+ * other platform answer is treated as possibly having left an effect behind.
+ * https://docs.slack.dev/reference/methods/conversations.invite/
+ */
+const inviteRefusals = new Set([
+  "access_denied",
+  "accesslimited",
+  "account_inactive",
+  "app_cannot_join_channel",
+  "cant_invite",
+  "cant_invite_self",
+  "channel_not_found",
+  "deprecated_endpoint",
+  "ekm_access_denied",
+  "enterprise_is_restricted",
+  "external_channel_migrating",
+  "invalid_arg_name",
+  "invalid_arguments",
+  "invalid_array_arg",
+  "invalid_auth",
+  "invalid_charset",
+  "invalid_form_data",
+  "invalid_post_type",
+  "invitee_cant_see_channel",
+  "is_archived",
+  "method_deprecated",
+  "method_not_supported_for_channel_type",
+  "missing_post_type",
+  "missing_scope",
+  "no_external_invite_permission",
+  "no_permission",
+  "no_user",
+  "not_allowed_token_type",
+  "not_authed",
+  "not_in_channel",
+  "org_login_required",
+  "org_user_not_in_team",
+  "ratelimited",
+  "restricted_action",
+  "token_revoked",
+  "user_not_found",
+]);
+/** The platform reason and whether Slack states the request was not carried out at all. */
+function inviteFailure(error: unknown): { reason?: string; definite: boolean } {
+  const failure = error as { code?: string; data?: { error?: string } };
+  if (failure?.code === "slack_webapi_rate_limited_error")
+    return { reason: "ratelimited", definite: true };
+  if (failure?.code !== "slack_webapi_platform_error") return { definite: false };
+  const reason = failure.data?.error;
+  return reason ? { reason, definite: inviteRefusals.has(reason) } : { definite: false };
+}
 
 /** Identity and membership come from the acting bot's authenticated Slack client. */
 export class Directory implements ConversationDirectory {
@@ -140,6 +194,248 @@ export class Directory implements ConversationDirectory {
     } while (cursor && pages < 10);
     this.messages.requireAccess(actor, conversationId);
     return { members, incomplete: !!cursor };
+  }
+  /**
+   * Invites one configured team Agent into an external channel through this Agent's own
+   * installation. The inviter's current membership, the target identity and the platform's own
+   * public/private permission decide the request; the invited Agent gains access only from a
+   * member read that names it, and an unconfirmed attempt is verified through that read instead of
+   * a second invitation.
+   */
+  async invite(
+    run: RunToken,
+    actionId: string,
+    conversationId: string,
+    agentId: string,
+    signal: AbortSignal,
+  ): Promise<InviteResult> {
+    const m = this.messages,
+      s = m.store,
+      client = this.client(run.agentId),
+      target = m.agent(agentId);
+    if (target.id === run.agentId) throw new Error("An Agent cannot invite itself");
+    const identity = m.references.conversation(conversationId);
+    if (identity.authority !== "external" || identity.kind !== "channel")
+      throw new Error("Only an external channel carries platform invitations");
+    m.requireReadable(run.agentId);
+    // The inviter's own current membership is the prerequisite for the platform request.
+    m.requireAccess(run.agentId, conversationId);
+    const user = slackUserForPrincipal(this.mapper.config, { kind: "agent", id: agentId });
+    if (!/^U[A-Z0-9]+$/.test(user)) throw new Error("Invalid Slack user");
+    s.assertRun(run);
+    signal.throwIfAborted();
+    const channel = this.mapper.target({ conversationId }).channel,
+      action = m.writes.prepareAction(run, actionId, {
+        operation: "conversations.invite",
+        conversationId,
+        agentId,
+      });
+    if (action.state === "succeeded" || action.state === "failed")
+      return JSON.parse(action.receipt!) as InviteResult;
+    // A previous attempt may have reached Slack without a confirmed result, including this same
+    // action after a pause or restart fenced it. The platform's member list decides that outcome,
+    // and no second invitation is sent while it stays unconfirmed.
+    const uncertain = this.uncertainInvites(run.agentId, conversationId, agentId);
+    if (uncertain.length) {
+      // Another attempt for this channel and target is still crossing the boundary; its own
+      // record decides the outcome, so this call neither refutes it nor starts a second one.
+      if (uncertain.some((row) => row.id !== actionId && row.state === "executing"))
+        return this.record(run, actionId, {
+          status: "unknown",
+          conversationId,
+          agentId,
+          reason: "invitation_in_flight",
+        });
+      const fact = await this.memberFact(run, conversationId, agentId);
+      if (fact === "member") return this.confirm(run, actionId, conversationId, agentId, uncertain);
+      if (fact === "absent") {
+        // A complete member list that omits the target is the platform's evidence that the
+        // earlier request did not land. This call still sends nothing: retrying is the caller's
+        // deliberate next decision, never an automatic repeat of an unresolved invitation.
+        const earlier: InviteResult = {
+          status: "failed",
+          conversationId,
+          agentId,
+          reason: "not_a_member_after_uncertain_attempt",
+          verification: "membership_query",
+        };
+        for (const row of uncertain) this.refine(row.id, run.agentId, "failed", earlier);
+        return this.record(run, actionId, {
+          status: "failed",
+          conversationId,
+          agentId,
+          reason: "not_sent_earlier_attempt_absent",
+          verification: "membership_query",
+        });
+      }
+      return this.record(run, actionId, {
+        status: "unknown",
+        conversationId,
+        agentId,
+        reason: "invitation_outcome_unverified",
+      });
+    }
+    if (action.state !== "prepared") throw new Error("Invitation action is not executable");
+    s.startAction(run, actionId);
+    try {
+      return await this.attempt(run, actionId, conversationId, agentId, client, channel, user);
+    } catch (error) {
+      // A started action must never stay executing: a run cannot complete with one, and the
+      // caller learns the external effect is unknown instead of losing the request.
+      this.record(run, actionId, {
+        status: "unknown",
+        conversationId,
+        agentId,
+        reason: "invitation_outcome_unknown",
+      });
+      throw error;
+    }
+  }
+  /** Sends one invitation and turns the platform's answer into a definite or unconfirmed result. */
+  private async attempt(
+    run: RunToken,
+    actionId: string,
+    conversationId: string,
+    agentId: string,
+    client: WebClient,
+    channel: string,
+    user: string,
+  ): Promise<InviteResult> {
+    try {
+      await client.conversations.invite({ channel, users: user });
+    } catch (error) {
+      const failure = inviteFailure(error);
+      // Slack stating the target is already in the channel is itself a membership fact.
+      if (failure.reason === "already_in_channel") {
+        const fact = await this.memberFact(run, conversationId, agentId);
+        if (fact === "member")
+          return this.confirm(run, actionId, conversationId, agentId, [], "already_in_channel");
+        return this.record(run, actionId, {
+          status: "unknown",
+          conversationId,
+          agentId,
+          reason:
+            fact === "absent" ? "membership_evidence_conflict" : "invitation_outcome_unverified",
+        });
+      }
+      return this.record(
+        run,
+        actionId,
+        failure.definite
+          ? {
+              status: "failed",
+              conversationId,
+              agentId,
+              reason: failure.reason ?? "platform_refused",
+            }
+          : {
+              status: "unknown",
+              conversationId,
+              agentId,
+              reason: failure.reason ?? "invitation_outcome_unknown",
+            },
+      );
+    }
+    // An accepted request is not membership: only the member list that names the target grants it.
+    const fact = await this.memberFact(run, conversationId, agentId);
+    if (fact === "member") return this.confirm(run, actionId, conversationId, agentId, []);
+    return this.record(run, actionId, {
+      status: "unknown",
+      conversationId,
+      agentId,
+      reason: "invitation_accepted_membership_unconfirmed",
+    });
+  }
+  /**
+   * Reads the platform's current member list through this Agent's own installation. An unavailable
+   * or incomplete listing can confirm a member but never absence.
+   */
+  private async memberFact(
+    run: RunToken,
+    conversationId: string,
+    agentId: string,
+  ): Promise<"member" | "absent" | "unknown"> {
+    try {
+      const { members, incomplete } = await this.members(run.agentId, conversationId);
+      if (members.some((member) => member.kind === "agent" && member.id === agentId))
+        return "member";
+      return incomplete ? "unknown" : "absent";
+    } catch {
+      return "unknown";
+    }
+  }
+  /** Invitations by this Agent for this channel and target whose Slack outcome is not confirmed. */
+  private uncertainInvites(
+    agentId: string,
+    conversationId: string,
+    targetAgentId: string,
+  ): Effect[] {
+    return (
+      this.messages.store.db
+        .prepare(
+          "SELECT * FROM actions WHERE agent_id=? AND state IN ('executing','unknown') AND json_extract(request,'$.operation')='conversations.invite'",
+        )
+        .all(agentId) as Effect[]
+    ).filter((row) => {
+      const request = JSON.parse(row.request) as { conversationId?: unknown; agentId?: unknown };
+      return request.conversationId === conversationId && request.agentId === targetAgentId;
+    });
+  }
+  /**
+   * Records the one fact that grants access: the platform's member list named the target. Earlier
+   * uncertain attempts for the same channel and target become definite with the same evidence.
+   */
+  private confirm(
+    run: RunToken,
+    actionId: string,
+    conversationId: string,
+    agentId: string,
+    others: readonly Effect[],
+    reason?: string,
+  ): InviteResult {
+    const s = this.messages.store,
+      result: InviteResult = {
+        status: "succeeded",
+        conversationId,
+        agentId,
+        verification: "membership_query",
+        ...(reason ? { reason } : {}),
+      };
+    s.assertRun(run);
+    s.atomic(() => {
+      this.messages.membership(agentId, conversationId, true);
+      for (const row of others)
+        if (row.id !== actionId) this.refine(row.id, run.agentId, "succeeded", result);
+      this.record(run, actionId, result);
+    });
+    return result;
+  }
+  /**
+   * One definite outcome onto this call's own durable record. Starting and settling share one
+   * transaction, so a failure never leaves the action executing and the run unable to complete.
+   */
+  private record(run: RunToken, actionId: string, result: InviteResult): InviteResult {
+    const s = this.messages.store;
+    try {
+      s.atomic(() => {
+        if (s.action(actionId)?.state === "prepared") s.startAction(run, actionId);
+        s.settleAction(run, actionId, result.status, result);
+      });
+      return result;
+    } catch {
+      /* The run was fenced while this call was in flight, or the action is already settled. */
+    }
+    this.refine(actionId, run.agentId, result.status, result);
+    return result;
+  }
+  /** Only the conservative unknown a pause or restart left is refined; a recorded effect is not. */
+  private refine(
+    id: string,
+    agentId: string,
+    state: InviteResult["status"],
+    receipt: unknown,
+  ): void {
+    this.messages.store.refineFencedAction(id, agentId, state, receipt);
   }
   async openDM(
     run: RunToken,
