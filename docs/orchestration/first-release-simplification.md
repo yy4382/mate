@@ -58,7 +58,7 @@ only when every blocker is committed on the branch.
 | #34 | 建立统一格式检查并完成机械排版 | **done** | `eb74e0e` | `a8b00ce` + `e85a3ca` + `7c6e061` + `a91edb4` |
 | #35 | 用单一当前 schema 初始化新数据库 | **done** | `d049b00` | `b1fcca9` + `beb5fdd` + `12aab7b` + `6b9d256` |
 | #36 | 让所有入口使用当前数据库格式 | **done** | `b1fcca9` | `a2288ce` + `3751639` + `6395c75` + `8abca0d` + `2b1c0fb` + `2b56276` |
-| #37 | 统一应用装配与关闭流程 | in progress | `fab5692` | — |
+| #37 | 统一应用装配与关闭流程 | review | `fab5692` | `f8612ed` + `3c5e9db` (agent finishing review) |
 | #38 | 由任务模块负责消息关联任务的完整发布流程 | pending | — | — |
 | #39 | 让工具输入类型和领域授权各有明确归属 | pending | — | — |
 | #40 | 交付有界且可继续的历史查询 | pending | — | — |
@@ -69,7 +69,7 @@ only when every blocker is committed on the branch.
 | #45 | 在工作进程协议中保留故障类别与阶段 | pending | — | — |
 | #46 | 对暂时模型故障持久退避并自动继续 | pending | — | — |
 | #47 | 保持正常让位后的持久继续与恢复输入 | pending | — | — |
-| #48 | 使进程查询与停止可取消且不阻塞 daemon | re-applying | `fab5692` (worktree `.worktrees/t48`) | `5ed6bc2` on old base; re-apply after #52 pending |
+| #48 | 使进程查询与停止可取消且不阻塞 daemon | **done** | `fab5692` (worktree `.worktrees/t48`) | `9e69c30`, merged as `3838cad` |
 | #49 | 让内部应用在 Slack 离线时启动和运行 | pending | — | — |
 | #50 | 按安装和目标范围恢复 Slack 操作 | pending | — | — |
 | #51 | 给 owner 提供分范围、可操作的故障诊断 | pending | — | — |
@@ -150,7 +150,9 @@ None yet.
 |---|---|---|---|
 | #34 | `a91edb4` | `pnpm check` / `pnpm typecheck` | 61 files / 411 tests, exit 0; negative control: unformatted line makes the gate exit 1; formatter idempotent on the tree |
 | #35 | `b1fcca9`…`6b9d256` | `pnpm check` at `b1fcca9` | 62 files / 416 tests, exit 0 (agent reports 418 at `6b9d256`) |
-| #48 | `c4a69a7` (worktree) | `pnpm check` in `.worktrees/t48` | 61 files / 425 tests, exit 0 — merge pending #36 finishing |
+| #48 | `c4a69a7` (worktree) | `pnpm check` in `.worktrees/t48` | 61 files / 425 tests, exit 0 (first base) |
+| #48 (reworked) | `9e69c30`, merged `3838cad` | `pnpm typecheck` + `pnpm check` on the merged MAIN tree before committing the merge | 59 files / 431 tests, exit 0 |
+| #37 | `3c5e9db` | `pnpm typecheck` + `pnpm check` in an isolated `git archive` copy | 59 files / 417 tests, exit 0; the assembly test covers both entries, the ordered shutdown, and no repeated confirmed external operation after restart |
 | #52 | `053a643` (worktree) | `pnpm check` in `.worktrees/t52` | 62 files / 419 tests, exit 0 — merge pending #36 finishing |
 | #36 | `a2288ce` | `pnpm check` in an isolated `git archive` copy | 57 files / 398 tests, exit 0; all preserved-baseline tests confirmed present; old schema modules fully unreferenced; `Store` is the single entry onto `openCurrentDatabase` |
 | #36 (final) | `2b56276` | `pnpm typecheck` + `pnpm check` in the MAIN tree | 57 files / 402 tests, exit 0; 62→57 file and 416→402 test drop is exactly the migration-path tests; every preserved-baseline test confirmed present by path |
@@ -161,7 +163,7 @@ None yet.
 | Ticket | First landing | Conflict cause | Re-applied as | Merged as |
 |---|---|---|---|---|
 | #48 | `8e5c3c8`..`c4a69a7` @ `d049b00` | #36 deleted the migration/schema chain #48's base still had | `5ed6bc2` @ `6395c75` | — |
-| #48 | `5ed6bc2` @ `6395c75` | #52 replaced the ad-hoc `LinuxInstallerHost` seam with the single `HostOperations` entry while #48 called `new LinuxProcessManager(...)` directly | `9e69c30` @ `fab5692` (merges with #52; waits for #37 to clear the main tree) | pending |
+| #48 | `5ed6bc2` @ `6395c75` | #52 replaced the ad-hoc `LinuxInstallerHost` seam with the single `HostOperations` entry while #48 called `new LinuxProcessManager(...)` directly | `9e69c30` @ `fab5692` | `3838cad` (one mechanical conflict in `tests/operations/view.test.ts`, resolved by the orchestrator: #48's `await` + #37's `f.local!` fixture) |
 | #52 | `dffb1d3`..`053a643` @ `d049b00` | #36 deleted the migration path #52 had modified | `aac16f1` @ `6395c75` | `fab5692` |
 | #36 | `a2288ce` @ `b1fcca9` | none | — | `2b56276` (6 commits kept) |
 
