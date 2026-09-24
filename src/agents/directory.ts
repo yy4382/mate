@@ -1,4 +1,4 @@
-import { agentDefinition, type AgentDefinition } from '../domain/agents.js';
+import { agentDefinition, type AgentDefinition } from "../domain/agents.js";
 
 /** Runtime consumers query identities, not platform installations. */
 export interface AgentDirectory {
@@ -13,18 +13,19 @@ export class ConfiguredAgents implements AgentDirectory {
   constructor(agents: readonly AgentDefinition[]) {
     for (const input of agents) {
       const definition = agentDefinition(input);
-      if (this.definitions.has(definition.id)) throw new Error(`Duplicate Agent identity: ${definition.id}`);
+      if (this.definitions.has(definition.id))
+        throw new Error(`Duplicate Agent identity: ${definition.id}`);
       this.definitions.set(definition.id, definition);
     }
   }
 
   list(): AgentDefinition[] {
-    return [...this.definitions.values()].map(definition => structuredClone(definition));
+    return [...this.definitions.values()].map((definition) => structuredClone(definition));
   }
 
   get(id: string): AgentDefinition {
     const definition = this.definitions.get(id);
-    if (!definition) throw new Error('Unknown Agent');
+    if (!definition) throw new Error("Unknown Agent");
     return structuredClone(definition);
   }
 }

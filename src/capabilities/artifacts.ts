@@ -1,4 +1,4 @@
-import type { ConversationTarget as Target } from '../domain/conversations.js';
+import type { ConversationTarget as Target } from "../domain/conversations.js";
 
 export interface AttachmentArgs {
   message: { messageId: string };
@@ -13,7 +13,13 @@ export interface PublishArgs {
   viewToken?: string;
   draftId?: string;
   revision?: number;
-  format?: 'text' | 'binary';
+  format?: "text" | "binary";
 }
 
-export interface ArtifactPayload {title:string;content:string;contentHash:string;encoding?:'base64';filename?:string}
+export interface ArtifactPayload {
+  title: string;
+  content: string;
+  contentHash: string;
+  encoding?: "base64";
+  filename?: string;
+}

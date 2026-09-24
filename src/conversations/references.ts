@@ -1,6 +1,14 @@
-import { randomUUID } from 'node:crypto';
-import type { Store } from '../storage/store.js';
-import { referenceSchema, conversationTargetSchema, type ConversationIdentity, type ConversationTarget, type ExternalConversation, type ExternalMessage, type MessageIdentity } from '../domain/conversations.js';
+import { randomUUID } from "node:crypto";
+import type { Store } from "../storage/store.js";
+import {
+  referenceSchema,
+  conversationTargetSchema,
+  type ConversationIdentity,
+  type ConversationTarget,
+  type ExternalConversation,
+  type ExternalMessage,
+  type MessageIdentity,
+} from "../domain/conversations.js";
 
 /** Trusted application/adapter boundary. These methods do not grant read or send access. */
 export class References {
@@ -8,137 +16,232 @@ export class References {
 
   conversation(id: string): ConversationIdentity {
     referenceSchema.parse(id);
-    const row = this.store.db.prepare('SELECT * FROM conversation_identities WHERE id=?').get(id) as ConversationIdentity | undefined;
-    if (!row) throw new Error('Unknown conversation identity');
+    const row = this.store.db
+      .prepare("SELECT * FROM conversation_identities WHERE id=?")
+      .get(id) as ConversationIdentity | undefined;
+    if (!row) throw new Error("Unknown conversation identity");
     return row;
   }
 
-  createConversation(kind: ConversationIdentity['kind'], authority: ConversationIdentity['authority'], id: string = randomUUID()): ConversationIdentity {
+  createConversation(
+    kind: ConversationIdentity["kind"],
+    authority: ConversationIdentity["authority"],
+    id: string = randomUUID(),
+  ): ConversationIdentity {
     referenceSchema.parse(id);
     return this.store.atomic(() => {
-      const old = this.store.db.prepare('SELECT * FROM conversation_identities WHERE id=?').get(id) as ConversationIdentity | undefined;
+      const old = this.store.db
+        .prepare("SELECT * FROM conversation_identities WHERE id=?")
+        .get(id) as ConversationIdentity | undefined;
       if (old) {
-        if (old.kind !== kind || old.authority !== authority) throw new Error('Conversation identity conflict');
+        if (old.kind !== kind || old.authority !== authority)
+          throw new Error("Conversation identity conflict");
         return old;
       }
-      this.store.db.prepare('INSERT INTO conversation_identities VALUES(?,?,?)').run(id, kind, authority);
+      this.store.db
+        .prepare("INSERT INTO conversation_identities VALUES(?,?,?)")
+        .run(id, kind, authority);
       return this.conversation(id);
     });
   }
 
   private locator(locator: ExternalConversation): void {
-    referenceSchema.parse(locator.provider); referenceSchema.parse(locator.workspace); referenceSchema.parse(locator.externalId);
+    referenceSchema.parse(locator.provider);
+    referenceSchema.parse(locator.workspace);
+    referenceSchema.parse(locator.externalId);
   }
 
   findConversation(locator: ExternalConversation): string | undefined {
     this.locator(locator);
-    return (this.store.db.prepare('SELECT conversation_id FROM conversation_bindings WHERE provider=? AND workspace=? AND external_id=?')
-      .get(locator.provider, locator.workspace, locator.externalId) as { conversation_id: string } | undefined)?.conversation_id;
+    return (
+      this.store.db
+        .prepare(
+          "SELECT conversation_id FROM conversation_bindings WHERE provider=? AND workspace=? AND external_id=?",
+        )
+        .get(locator.provider, locator.workspace, locator.externalId) as
+        { conversation_id: string } | undefined
+    )?.conversation_id;
   }
 
   primaryBinding(id: string): ExternalConversation {
     this.conversation(id);
-    const row=this.store.db.prepare("SELECT provider,workspace,external_id externalId FROM conversation_bindings WHERE conversation_id=? AND mode='primary'").get(id) as ExternalConversation|undefined;
-    if(!row)throw new Error('Primary conversation binding missing');return row;
+    const row = this.store.db
+      .prepare(
+        "SELECT provider,workspace,external_id externalId FROM conversation_bindings WHERE conversation_id=? AND mode='primary'",
+      )
+      .get(id) as ExternalConversation | undefined;
+    if (!row) throw new Error("Primary conversation binding missing");
+    return row;
   }
 
-  messageBinding(id:string,provider:string,workspace:string,externalId:string):ExternalMessage|undefined {
+  messageBinding(
+    id: string,
+    provider: string,
+    workspace: string,
+    externalId: string,
+  ): ExternalMessage | undefined {
     this.message(id);
-    const row=this.store.db.prepare('SELECT external_message messageId FROM message_bindings WHERE message_id=? AND provider=? AND workspace=? AND external_conversation=?').get(id,provider,workspace,externalId) as {messageId:string}|undefined;
-    return row?{provider,workspace,externalId,messageId:row.messageId}:undefined;
+    const row = this.store.db
+      .prepare(
+        "SELECT external_message messageId FROM message_bindings WHERE message_id=? AND provider=? AND workspace=? AND external_conversation=?",
+      )
+      .get(id, provider, workspace, externalId) as { messageId: string } | undefined;
+    return row ? { provider, workspace, externalId, messageId: row.messageId } : undefined;
   }
 
-  bindConversation(locator: ExternalConversation, id: string, mode: 'primary' | 'projection'): void {
+  bindConversation(
+    locator: ExternalConversation,
+    id: string,
+    mode: "primary" | "projection",
+  ): void {
     this.locator(locator);
     this.store.atomic(() => {
       const conversation = this.conversation(id);
-      if ((conversation.authority === 'internal') !== (mode === 'projection')) throw new Error('Binding authority mismatch');
-      const old = this.store.db.prepare('SELECT conversation_id,mode FROM conversation_bindings WHERE provider=? AND workspace=? AND external_id=?')
-        .get(locator.provider, locator.workspace, locator.externalId) as { conversation_id: string; mode: string } | undefined;
+      if ((conversation.authority === "internal") !== (mode === "projection"))
+        throw new Error("Binding authority mismatch");
+      const old = this.store.db
+        .prepare(
+          "SELECT conversation_id,mode FROM conversation_bindings WHERE provider=? AND workspace=? AND external_id=?",
+        )
+        .get(locator.provider, locator.workspace, locator.externalId) as
+        { conversation_id: string; mode: string } | undefined;
       if (old) {
-        if (old.conversation_id !== id || old.mode !== mode) throw new Error('External conversation already bound');
+        if (old.conversation_id !== id || old.mode !== mode)
+          throw new Error("External conversation already bound");
         return;
       }
-      this.store.db.prepare('INSERT INTO conversation_bindings VALUES(?,?,?,?,?)').run(locator.provider, locator.workspace, locator.externalId, id, mode);
+      this.store.db
+        .prepare("INSERT INTO conversation_bindings VALUES(?,?,?,?,?)")
+        .run(locator.provider, locator.workspace, locator.externalId, id, mode);
     });
   }
 
   message(id: string): MessageIdentity {
     referenceSchema.parse(id);
-    const row = this.store.db.prepare('SELECT id,conversation_id conversationId,root_id rootId FROM message_identities WHERE id=?').get(id) as MessageIdentity | undefined;
-    if (!row) throw new Error('Unknown message identity');
+    const row = this.store.db
+      .prepare(
+        "SELECT id,conversation_id conversationId,root_id rootId FROM message_identities WHERE id=?",
+      )
+      .get(id) as MessageIdentity | undefined;
+    if (!row) throw new Error("Unknown message identity");
     return row;
   }
 
   /** A root may have identity without loaded content. Never invent text or membership. */
-  createMessage(conversationId: string, id: string = randomUUID(), rootId: string = id): MessageIdentity {
-    referenceSchema.parse(id); referenceSchema.parse(rootId); this.conversation(conversationId);
+  createMessage(
+    conversationId: string,
+    id: string = randomUUID(),
+    rootId: string = id,
+  ): MessageIdentity {
+    referenceSchema.parse(id);
+    referenceSchema.parse(rootId);
+    this.conversation(conversationId);
     return this.store.atomic(() => {
-      const old = this.store.db.prepare('SELECT id FROM message_identities WHERE id=?').get(id);
+      const old = this.store.db.prepare("SELECT id FROM message_identities WHERE id=?").get(id);
       if (old) {
         const message = this.message(id);
-        if (message.conversationId !== conversationId || message.rootId !== null && message.rootId !== rootId) throw new Error('Message identity conflict');
+        if (
+          message.conversationId !== conversationId ||
+          (message.rootId !== null && message.rootId !== rootId)
+        )
+          throw new Error("Message identity conflict");
         if (message.rootId !== null) return message;
       }
       if (id !== rootId) {
         const root = this.message(rootId);
-        if (root.conversationId !== conversationId || root.rootId !== root.id) throw new Error('Invalid thread root');
+        if (root.conversationId !== conversationId || root.rootId !== root.id)
+          throw new Error("Invalid thread root");
       }
-      this.store.db.prepare('INSERT INTO message_identities VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET root_id=excluded.root_id').run(id, conversationId, rootId);
+      this.store.db
+        .prepare(
+          "INSERT INTO message_identities VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET root_id=excluded.root_id",
+        )
+        .run(id, conversationId, rootId);
       return this.message(id);
     });
   }
 
   /** A referenced message may not have loaded thread metadata yet. */
   reserveMessage(conversationId: string, id: string = randomUUID()): MessageIdentity {
-    referenceSchema.parse(id); this.conversation(conversationId);
+    referenceSchema.parse(id);
+    this.conversation(conversationId);
     return this.store.atomic(() => {
-      this.store.db.prepare('INSERT INTO message_identities VALUES(?,?,NULL) ON CONFLICT(id) DO NOTHING').run(id, conversationId);
+      this.store.db
+        .prepare("INSERT INTO message_identities VALUES(?,?,NULL) ON CONFLICT(id) DO NOTHING")
+        .run(id, conversationId);
       const message = this.message(id);
-      if (message.conversationId !== conversationId) throw new Error('Message identity conflict');
+      if (message.conversationId !== conversationId) throw new Error("Message identity conflict");
       return message;
     });
   }
 
   findMessage(locator: ExternalMessage): string | undefined {
-    this.locator(locator); referenceSchema.parse(locator.messageId);
-    return (this.store.db.prepare('SELECT message_id FROM message_bindings WHERE provider=? AND workspace=? AND external_conversation=? AND external_message=?')
-      .get(locator.provider, locator.workspace, locator.externalId, locator.messageId) as { message_id: string } | undefined)?.message_id;
+    this.locator(locator);
+    referenceSchema.parse(locator.messageId);
+    return (
+      this.store.db
+        .prepare(
+          "SELECT message_id FROM message_bindings WHERE provider=? AND workspace=? AND external_conversation=? AND external_message=?",
+        )
+        .get(locator.provider, locator.workspace, locator.externalId, locator.messageId) as
+        { message_id: string } | undefined
+    )?.message_id;
   }
 
   bindMessage(locator: ExternalMessage, id: string): void {
-    this.locator(locator); referenceSchema.parse(locator.messageId);
+    this.locator(locator);
+    referenceSchema.parse(locator.messageId);
     this.store.atomic(() => {
-      const conversationId = this.findConversation(locator), message = this.message(id);
-      if (conversationId !== message.conversationId) throw new Error('Message binding conversation mismatch');
+      const conversationId = this.findConversation(locator),
+        message = this.message(id);
+      if (conversationId !== message.conversationId)
+        throw new Error("Message binding conversation mismatch");
       const old = this.findMessage(locator);
       if (old) {
-        if (old !== id) throw new Error('External message already bound');
+        if (old !== id) throw new Error("External message already bound");
         return;
       }
-      this.store.db.prepare('INSERT INTO message_bindings VALUES(?,?,?,?,?)').run(locator.provider, locator.workspace, locator.externalId, locator.messageId, id);
+      this.store.db
+        .prepare("INSERT INTO message_bindings VALUES(?,?,?,?,?)")
+        .run(locator.provider, locator.workspace, locator.externalId, locator.messageId, id);
     });
   }
 
   validateTarget(target: ConversationTarget): ConversationTarget {
-    conversationTargetSchema.parse(target); this.conversation(target.conversationId);
+    conversationTargetSchema.parse(target);
+    this.conversation(target.conversationId);
     if (target.threadId) {
       const root = this.message(target.threadId);
-      if (root.conversationId !== target.conversationId || root.rootId !== root.id) throw new Error('Invalid target thread');
+      if (root.conversationId !== target.conversationId || root.rootId !== root.id)
+        throw new Error("Invalid target thread");
     }
     return target;
   }
 
   /** Derived index; caller must read its authoritative object and update in the same transaction. */
   indexTarget(objectType: string, objectId: string, target: ConversationTarget): void {
-    referenceSchema.parse(objectType); referenceSchema.parse(objectId); this.validateTarget(target);
-    this.store.db.prepare('INSERT INTO canonical_targets VALUES(?,?,?,?) ON CONFLICT(object_type,object_id) DO UPDATE SET conversation_id=excluded.conversation_id,thread_id=excluded.thread_id')
+    referenceSchema.parse(objectType);
+    referenceSchema.parse(objectId);
+    this.validateTarget(target);
+    this.store.db
+      .prepare(
+        "INSERT INTO canonical_targets VALUES(?,?,?,?) ON CONFLICT(object_type,object_id) DO UPDATE SET conversation_id=excluded.conversation_id,thread_id=excluded.thread_id",
+      )
       .run(objectType, objectId, target.conversationId, target.threadId ?? null);
   }
 
   indexedTarget(objectType: string, objectId: string): ConversationTarget | undefined {
-    const row = this.store.db.prepare('SELECT conversation_id,thread_id FROM canonical_targets WHERE object_type=? AND object_id=?')
-      .get(objectType, objectId) as { conversation_id: string; thread_id: string | null } | undefined;
-    return row ? { conversationId: row.conversation_id, ...(row.thread_id ? { threadId: row.thread_id } : {}) } : undefined;
+    const row = this.store.db
+      .prepare(
+        "SELECT conversation_id,thread_id FROM canonical_targets WHERE object_type=? AND object_id=?",
+      )
+      .get(objectType, objectId) as
+      { conversation_id: string; thread_id: string | null } | undefined;
+    return row
+      ? {
+          conversationId: row.conversation_id,
+          ...(row.thread_id ? { threadId: row.thread_id } : {}),
+        }
+      : undefined;
   }
 }

@@ -1,9 +1,9 @@
-import type {Store} from './store.js';
+import type { Store } from "./store.js";
 
 /** Structural changes shared by the legacy conversion and empty canonical bootstrap. */
-export function beginCanonicalSchema(store:Store):void {
-    // Preserve primary keys/FKs while removing the legacy NOT NULL root constraint.
-    store.db.exec(`
+export function beginCanonicalSchema(store: Store): void {
+  // Preserve primary keys/FKs while removing the legacy NOT NULL root constraint.
+  store.db.exec(`
       ALTER TABLE outbox ADD COLUMN target TEXT NOT NULL DEFAULT '{}';
       ALTER TABLE messages ADD COLUMN canonical_thread TEXT;
       UPDATE messages SET canonical_thread=thread;
@@ -17,8 +17,8 @@ export function beginCanonicalSchema(store:Store):void {
       CREATE INDEX conversation_event_target ON conversation_events(channel,thread,seq);
     `);
 }
-export function finishCanonicalSchema(store:Store):void {
-    store.db.exec(`
+export function finishCanonicalSchema(store: Store): void {
+  store.db.exec(`
       CREATE INDEX outbox_scope ON outbox(json_extract(target,'$.conversationId'),json_extract(target,'$.threadId'),state);
       CREATE TRIGGER outbox_target_required BEFORE INSERT ON outbox WHEN json_type(NEW.target,'$.conversationId') IS NOT 'text'
         OR NOT EXISTS(SELECT 1 FROM conversation_identities WHERE id=json_extract(NEW.target,'$.conversationId'))

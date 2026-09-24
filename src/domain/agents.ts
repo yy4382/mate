@@ -1,25 +1,31 @@
-import { z } from 'zod';
+import { z } from "zod";
 
 // Stable internal identity is independent of provider installation and credentials.
 export const agentIdSchema = z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/);
 export const secretReferenceSchema = z.string().regex(/^[A-Z][A-Z0-9_]*$/);
-export const agentDefinitionSchema = z.object({
-  id: agentIdSchema,
-  name: z.string().min(1),
-  role: z.string().min(1),
-  model: z.object({
-    provider: z.string().min(1),
-    id: z.string().min(1),
-    apiKeyEnv: secretReferenceSchema,
-  }).strict(),
-}).strict();
+export const agentDefinitionSchema = z
+  .object({
+    id: agentIdSchema,
+    name: z.string().min(1),
+    role: z.string().min(1),
+    model: z
+      .object({
+        provider: z.string().min(1),
+        id: z.string().min(1),
+        apiKeyEnv: secretReferenceSchema,
+      })
+      .strict(),
+  })
+  .strict();
 /** Read only while upgrading pre-release configurations that carried quotas. */
-export const legacyBudgetSettingsSchema = z.object({
-  maxRuns: z.number().int().positive(),
-  maxTokens: z.number().int().positive(),
-  maxCostUsd: z.number().positive(),
-  runTimeoutMs: z.number().int().positive(),
-}).strict();
+export const legacyBudgetSettingsSchema = z
+  .object({
+    maxRuns: z.number().int().positive(),
+    maxTokens: z.number().int().positive(),
+    maxCostUsd: z.number().positive(),
+    runTimeoutMs: z.number().int().positive(),
+  })
+  .strict();
 export type AgentDefinition = z.infer<typeof agentDefinitionSchema>;
 export interface TeamSettings {
   agents: readonly AgentDefinition[];

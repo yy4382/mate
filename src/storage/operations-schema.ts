@@ -1,12 +1,12 @@
-import type {Store} from './store.js';
+import type { Store } from "./store.js";
 
 /** Additive owner-operations migration. It never invents timestamps or facts for old rows. */
-export function migrateOperationsView(store:Store):void {
-  store.atomic(()=>{
-    const version=Number(store.db.pragma('user_version',{simple:true}));
-    if(version===23||version===24||version===25)return;
-    if(version!==22)throw new Error('Coordination recovery migration required');
-    const now=Date.now();
+export function migrateOperationsView(store: Store): void {
+  store.atomic(() => {
+    const version = Number(store.db.pragma("user_version", { simple: true }));
+    if (version === 23 || version === 24 || version === 25) return;
+    if (version !== 22) throw new Error("Coordination recovery migration required");
+    const now = Date.now();
     store.db.exec(`
       ALTER TABLE actions ADD COLUMN created_at INTEGER;
       ALTER TABLE outbox ADD COLUMN created_at INTEGER;
@@ -74,8 +74,22 @@ export function migrateOperationsView(store:Store):void {
       CREATE INDEX reminder_baseline_gaps ON reminder_event_baselines(reminder_id) WHERE historical_complete=0;
       PRAGMA user_version=23;
     `);
-    store.db.prepare("INSERT INTO reminder_event_baselines SELECT id,CASE WHEN EXISTS(SELECT 1 FROM reminder_events e WHERE e.reminder_id=schedules.id AND e.kind='legacy_migrated') THEN 0 ELSE 1 END,? FROM schedules").run(now);
-    store.db.prepare("INSERT INTO runtime_meta(key,value) VALUES('operations_view_since',?) ON CONFLICT(key) DO NOTHING").run(String(now));
-    store.db.prepare("INSERT INTO audit(at,kind,body) VALUES(?,'operations_view_migration',?)").run(now,JSON.stringify({policy:'old actions and outputs keep unknown time; operational facts begin now; no synthetic history'}));
+    store.db
+      .prepare(
+        "INSERT INTO reminder_event_baselines SELECT id,CASE WHEN EXISTS(SELECT 1 FROM reminder_events e WHERE e.reminder_id=schedules.id AND e.kind='legacy_migrated') THEN 0 ELSE 1 END,? FROM schedules",
+      )
+      .run(now);
+    store.db
+      .prepare(
+        "INSERT INTO runtime_meta(key,value) VALUES('operations_view_since',?) ON CONFLICT(key) DO NOTHING",
+      )
+      .run(String(now));
+    store.db.prepare("INSERT INTO audit(at,kind,body) VALUES(?,'operations_view_migration',?)").run(
+      now,
+      JSON.stringify({
+        policy:
+          "old actions and outputs keep unknown time; operational facts begin now; no synthetic history",
+      }),
+    );
   });
 }
