@@ -10,7 +10,10 @@ import { LocalConsole } from "../../src/local/console.js";
 import { formatControlReply } from "../../src/slack/service.js";
 import type { TeamSettings } from "../../src/domain/agents.js";
 import { anchoredTask } from "../helpers/canonical-slack.js";
+import Database from "better-sqlite3";
 import { recordSlackReadiness } from "../../src/slack/readiness.js";
+import { OperationsView } from "../../src/operations/view.js";
+import { ConfiguredAgents } from "../../src/agents/directory.js";
 
 const settings: TeamSettings = {
   agents: ["alice", "bob"].map((id) => ({
@@ -190,6 +193,82 @@ it("reports each held Agent's recovery wait with its scope, stage and next execu
   expect(() => c.operations.status("intruder")).toThrow("Owner only");
 });
 
+it("reports one unavailable source without erasing the other three", () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(50000);
+  const dir = mkdtempSync(join(tmpdir(), "mate-diagnosis-"));
+  dirs.push(dir);
+  const data = join(dir, "data");
+  mkdirSync(join(data, "state"), { recursive: true });
+  const path = join(data, "state", "mate.sqlite");
+  const store = new Store(path),
+    app = localApplication(store, settings);
+  stores.push(store);
+  for (const agent of settings.agents) store.register(agent.id, "v1", []);
+  const target = app.local!.createRoom("room", ["alice"], ["owner"]),
+    work = app.collaboration.createWork("operations", target);
+  app.collaboration.enqueue("alice", work, "durable", { kind: "synthetic" });
+  const token = store.beginRun("alice", Date.now(), true)!;
+  store.finish(token, "PRIVATE_RUN_ERROR", "model_failure", {
+    resume: { kind: "retry", attempt: 1, nextAt: 500, reason: "PRIVATE_RUN_ERROR" },
+  });
+  store.audit("run_failure", {
+    agentId: "alice",
+    runId: token.id,
+    fault: { stage: "model", category: "transient_model", reason: "provider rate limited" },
+    resume: "retry",
+  });
+  recordSlackReadiness(store, {
+    updatedAt: 5,
+    installations: [
+      { agentId: "bob", state: "connecting", reason: "connecting", attempts: 1, changedAt: 5 },
+    ],
+  });
+  store.close();
+
+  // The execution source cannot answer on this database; the other three still must.
+  const raw = new Database(path);
+  raw.exec("DROP TABLE actions");
+  const view = new OperationsView({
+    config: settings,
+    agents: new ConfiguredAgents(settings.agents),
+    store: { db: raw },
+    service: () => "inactive",
+  });
+  const report = view.status("owner").diagnosis;
+  expect(report.sources).toEqual({
+    daemon: "read",
+    slack: "read",
+    agents: "read",
+    execution: "unavailable",
+  });
+  expect(report.conditions).toContainEqual(
+    expect.objectContaining({
+      source: "agents",
+      scope: { kind: "agent", agentId: "alice" },
+      need: "automatic_wait",
+      reason: "provider rate limited",
+    }),
+  );
+  expect(report.conditions).toContainEqual(
+    expect.objectContaining({ source: "slack", need: "automatic_wait", reason: "connecting" }),
+  );
+  expect(report.conditions).toContainEqual(
+    expect.objectContaining({ source: "daemon", need: "configuration_fix" }),
+  );
+  expect(view.status("owner").uncertainActions).toEqual({
+    items: [],
+    atLeast: 0,
+    truncated: false,
+  });
+  // The activity view over the same database isolates the same source. It is asked for a source
+  // this database still has: the activity feed itself is not a diagnostic source.
+  expect(
+    view.activity("owner", { sources: ["runtime"], limit: 1 }).diagnosis.sources.execution,
+  ).toBe("unavailable");
+  raw.close();
+});
+
 it("never lets an older fault record describe the attempt that holds the Agent now", () => {
   const f = setup(),
     c = f.collaboration,
@@ -350,10 +429,17 @@ it("filters a durable failure record before it reaches owner output", () => {
     },
     resume: "hold",
   });
-  const encoded = JSON.stringify(c.operations.status("owner").diagnosis);
+  const diagnosis = c.operations.status("owner").diagnosis,
+    condition = diagnosis.conditions.find(
+      (item) => item.source === "agents" && item.scope.kind === "agent",
+    ),
+    encoded = JSON.stringify(diagnosis);
   expect(encoded).not.toContain("PRIVATE0123456789");
   expect(encoded).not.toContain("message_visibility");
-  expect(encoded).toContain("model");
+  // The stored reason really was read and really was filtered: the fallback wording carries no
+  // redaction marker, so this cannot pass by reporting the disposition alone.
+  expect(condition?.stage).toBe("model");
+  expect(condition?.reason).toContain("[redacted sql]");
 });
 
 it("reproduces the same scoped diagnosis from durable records after a restart", () => {

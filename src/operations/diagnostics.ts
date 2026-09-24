@@ -1,7 +1,10 @@
 import type { ActivityItem, OperationsStatus } from "./view.js";
-import { diagnosisNeeds, type DiagnosisNeed, type ServiceState } from "./diagnosis.js";
-
-export type { ServiceState } from "./diagnosis.js";
+import {
+  diagnosisNeeds,
+  type DiagnosisNeed,
+  type DiagnosisReport,
+  type ServiceState,
+} from "./diagnosis.js";
 export type RecoveryState = {
   restore: null | { phase: string; databaseComplete: boolean; completedAgents: number };
   linuxUpgrade?: null | { phase: "pending" };
@@ -12,8 +15,9 @@ const humanNeeds = diagnosisNeeds.filter((need) => need !== "automatic_wait");
 /** An allowlist projection, never a regex scrub of potentially confidential strings. */
 export function diagnosticStatus(
   operations: OperationsStatus | null,
-  service: ServiceState,
+  service: ServiceState | null,
   recovery: RecoveryState,
+  diagnosis: DiagnosisReport | null = operations?.diagnosis ?? null,
 ) {
   const invalid =
     recovery.invalid ||
@@ -21,7 +25,7 @@ export function diagnosticStatus(
   const pending = !!(recovery.restore || recovery.linuxUpgrade);
   // Which of the owner's three readings each source reported, as counts only: this projection
   // still carries no identifier, reason or exception text.
-  const conditions = operations?.diagnosis.conditions ?? [],
+  const conditions = diagnosis?.conditions ?? [],
     needs = Object.fromEntries(
       diagnosisNeeds.map((need) => [need, conditions.filter((item) => item.need === need).length]),
     ) as Record<DiagnosisNeed, number>;

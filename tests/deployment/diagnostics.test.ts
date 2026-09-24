@@ -335,6 +335,33 @@ it("keeps each diagnostic source's result when another source fails", () => {
     action: null,
     nextAttemptAt: 500,
   });
+
+  // A third deployment can still answer the Agent and Slack sources while the owner status cannot
+  // list unresolved execution results: that one source stays unavailable instead of being
+  // re-labelled as an empty all-clear.
+  const partialData = seededDeployment();
+  const partial = new Database(join(partialData, "state", "mate.sqlite"));
+  partial.exec("DROP TABLE actions");
+  partial.close();
+  const partialSnapshot = readOperationsSnapshot(
+    daemonConfigSchema.parse(daemonFixture(partialData)),
+    "status",
+    "active",
+  );
+  expect(partialSnapshot.available).toBe(true);
+  expect(partialSnapshot.diagnosis.sources).toEqual({
+    daemon: "read",
+    slack: "read",
+    agents: "read",
+    execution: "unavailable",
+  });
+  expect(partialSnapshot.diagnosis.conditions).toContainEqual(
+    expect.objectContaining({
+      source: "agents",
+      scope: { kind: "agent", agentId: "research" },
+      reason: "provider rate limited",
+    }),
+  );
 });
 
 it("reports a daemon that is not running as its own scoped condition", () => {
@@ -399,6 +426,28 @@ it("counts what needs a person apart from what the runtime waits out on its own"
   });
   // The offline projection stays an allowlist: a condition's scope, reason and action never enter it.
   expect(JSON.stringify(output)).not.toContain(secret);
+  // The rollup counts the report the caller emits, not whatever the status carried internally.
+  const emitted = {
+    ...s.diagnosis,
+    conditions: [
+      {
+        source: "daemon" as const,
+        scope: { kind: "daemon" as const },
+        stage: null,
+        need: "failure_review" as const,
+        reason: "The service manager did not report the state of mate.service",
+        action: "Check mate.service with systemctl and the Mate service journal.",
+        nextAttemptAt: null,
+      },
+    ],
+  };
+  expect(diagnosticStatus(status(), "unknown", clear, emitted).needs).toEqual({
+    automatic_wait: 0,
+    configuration_fix: 0,
+    verify_unknown_effect: 0,
+    failure_review: 1,
+    awaitingPerson: 1,
+  });
 });
 
 it("does not connect to Slack/provider when collecting diagnostics without credentials", async () => {

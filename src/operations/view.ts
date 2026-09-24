@@ -82,6 +82,12 @@ export interface OperationsPage<T> {
   atLeast: number;
   truncated: boolean;
 }
+/** The unresolved execution results one guarded read reports. */
+interface ExecutionPages {
+  actions: OperationsPage<OperationsStatus["uncertainActions"]["items"][number]>;
+  outputs: OperationsPage<OperationsStatus["uncertainOutputs"]["items"][number]>;
+  requests: { id: string; agentId: string }[];
+}
 export interface OperationsStatus {
   at: number;
   agents: {
@@ -198,14 +204,13 @@ export class OperationsView {
       "SELECT id,state FROM works ORDER BY id DESC LIMIT ?",
       cap + 1,
     );
-    const uncertainActions = page<OperationsStatus["uncertainActions"]["items"][number]>(
-      "SELECT id,agent_id agentId,run_id runId,state FROM actions WHERE state IN ('executing','unknown') ORDER BY id DESC LIMIT ?",
-      cap + 1,
-    );
-    const uncertainOutputs = page<OperationsStatus["uncertainOutputs"]["items"][number]>(
-      "SELECT id,agent_id agentId,state FROM outbox WHERE state='unknown' ORDER BY id DESC LIMIT ?",
-      cap + 1,
-    );
+    // The unresolved execution results are the one fact that is also a diagnostic source of its
+    // own, so they are read through a guard: a failure here is reported as that source being
+    // unavailable instead of erasing the daemon, Slack and Agent facts read beside it. The counts
+    // below stay empty in that case, which `diagnosis.sources.execution` states outright.
+    const execution = this.executionPages(cap),
+      uncertainActions = execution?.actions ?? { items: [], atLeast: 0, truncated: false },
+      uncertainOutputs = execution?.outputs ?? { items: [], atLeast: 0, truncated: false };
     const heldDrafts = page<OperationsStatus["heldDrafts"]["items"][number]>(
       "SELECT d.id draftId,d.agent_id agentId,d.outbox_id outputId,d.revision,o.state FROM outbox o INDEXED BY output_held_status JOIN drafts d INDEXED BY draft_output_lookup ON d.outbox_id=o.id WHERE o.state='held' ORDER BY o.id DESC LIMIT ?",
       cap + 1,
@@ -220,10 +225,7 @@ export class OperationsView {
     // from the same rows rather than from a second, independent guess at the state. Each source is
     // still read on its own: a Slack record this process cannot read never hides an Agent's wait,
     // and a wait never hides Slack's own answer.
-    const diagnosis = this.diagnosisOf(now, {
-      actions: uncertainActions.items,
-      outputs: uncertainOutputs.items,
-    });
+    const diagnosis = this.diagnosisOf(now, execution);
     return {
       at: now,
       agents,
@@ -240,19 +242,14 @@ export class OperationsView {
    * reproduces it. The agent and execution lists are passed in because the caller has already read
    * them inside this instant; the daemon and Slack sources are read here, each on its own.
    */
-  private diagnosisOf(
-    now: number,
-    facts: {
-      actions: readonly { id: string; agentId: string; runId: string }[];
-      outputs: readonly { id: string; agentId: string }[];
-    },
-  ): DiagnosisReport {
+  private diagnosisOf(now: number, execution: ExecutionPages | null): DiagnosisReport {
     // `collectDiagnosis` reads each source on its own and classifies the daemon and Slack facts, so
     // a source this process cannot read never hides another source's result.
     return collectDiagnosis(
       {
-        // Absent means the entry cannot state it: an in-process view is only reachable while the
-        // process that owns this database is answering, so that is the fact it reports.
+        // Absent means the entry that serves this view cannot state the daemon fact: an in-process
+        // view is only reachable while the process that owns this database is answering, so that is
+        // the fact it reports. The offline deployment reader always supplies the service manager's.
         daemon: () => (this.c.service ? this.c.service() : "active"),
         slack: () => {
           const record = readSlackReadinessRecord(this.c.store);
@@ -260,11 +257,56 @@ export class OperationsView {
           return record.state === "read" ? record.readiness : null;
         },
         agents: () => agentConditions(this.agentInputs()),
-        execution: () => executionConditions(facts),
+        execution: () => {
+          if (!execution) throw new Error("Unresolved execution results unavailable");
+          return executionConditions({
+            actions: execution.actions.items,
+            outputs: execution.outputs.items,
+            requests: execution.requests,
+          });
+        },
       },
       now,
     );
   }
+  /**
+   * The unresolved execution results, read in one guarded attempt so that failing to read them
+   * reports one unavailable source instead of an owner view that answers nothing. An action in
+   * `executing` or `unknown`, an output in `unknown` and a privileged request in `executing` or
+   * `unknown` have crossed the external boundary without a confirmed result; an output still
+   * `sending` is being settled by the output loop, so it is not an unresolved result yet.
+   */
+  private executionPages(cap: number): ExecutionPages | null {
+    try {
+      const db = this.c.store.db,
+        page = <T>(sql: string): OperationsPage<T> => {
+          const rows = db.prepare(sql).all(cap + 1) as T[];
+          return {
+            items: rows.slice(0, cap),
+            atLeast: rows.length > cap ? cap + 1 : rows.length,
+            truncated: rows.length > cap,
+          };
+        };
+      return {
+        actions: page<OperationsStatus["uncertainActions"]["items"][number]>(
+          "SELECT id,agent_id agentId,run_id runId,state FROM actions WHERE state IN ('executing','unknown') ORDER BY id DESC LIMIT ?",
+        ),
+        outputs: page<OperationsStatus["uncertainOutputs"]["items"][number]>(
+          "SELECT id,agent_id agentId,state FROM outbox WHERE state='unknown' ORDER BY id DESC LIMIT ?",
+        ),
+        // Privileged requests are read here rather than added to the status DTO: the owner needs
+        // the condition, and the request lifecycle is already reported by the approval surface.
+        requests: db
+          .prepare(
+            "SELECT id,agent_id agentId FROM system_requests WHERE status IN ('executing','unknown') ORDER BY id DESC LIMIT ?",
+          )
+          .all(cap) as { id: string; agentId: string }[],
+      };
+    } catch {
+      return null;
+    }
+  }
+
   /** Every configured Agent's durable recovery state, with the fault its last failure recorded. */
   private agentInputs(): AgentDiagnosisInput[] {
     const rows = new Map(
@@ -409,26 +451,7 @@ export class OperationsView {
           )
         : null,
       sources: sourceState,
-      diagnosis: this.diagnosisOf(Date.now(), this.uncertain()),
-    };
-  }
-  /** The unresolved execution results the diagnosis reports, read from the same durable records. */
-  private uncertain(): {
-    actions: { id: string; agentId: string; runId: string }[];
-    outputs: { id: string; agentId: string }[];
-  } {
-    const db = this.c.store.db;
-    return {
-      actions: db
-        .prepare(
-          "SELECT id,agent_id agentId,run_id runId FROM actions WHERE state IN ('executing','unknown') ORDER BY id DESC LIMIT 100",
-        )
-        .all() as { id: string; agentId: string; runId: string }[],
-      outputs: db
-        .prepare(
-          "SELECT id,agent_id agentId FROM outbox WHERE state='unknown' ORDER BY id DESC LIMIT 100",
-        )
-        .all() as { id: string; agentId: string }[],
+      diagnosis: this.diagnosisOf(Date.now(), this.executionPages(100)),
     };
   }
   private fetch(

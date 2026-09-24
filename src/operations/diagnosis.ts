@@ -41,18 +41,42 @@ export const diagnosisNeeds = [
   "automatic_wait",
 ] as const;
 
-/** The one place the shared retry disposition becomes the owner's classification. */
+/**
+ * The one place the shared retry disposition becomes the owner's words. Classification, the next
+ * action and the statement used when no fault was recorded live in one row per disposition, so a
+ * disposition cannot get a need without the action and the wording that belong to it.
+ */
+const ownerReadings: Record<
+  FaultDisposition,
+  { need: DiagnosisNeed; action: string | null; statement: string }
+> = {
+  retry_backoff: {
+    need: "automatic_wait",
+    action: null,
+    statement: "The last attempt failed transiently; the next attempt is scheduled",
+  },
+  human_action: {
+    need: "configuration_fix",
+    action: "Fix this Agent's model credential or configuration, then agent-resume it.",
+    statement: "The Agent is held after a credential or configuration failure",
+  },
+  verify_effect: {
+    need: "verify_unknown_effect",
+    action:
+      "This Agent stopped with an unresolved execution result; check its activity, then agent-resume it.",
+    statement: "The Agent stopped with an unresolved external execution result",
+  },
+  no_retry: {
+    need: "failure_review",
+    action:
+      "This Agent stopped after a failure that is not safe to retry; check its activity, then agent-resume it once the cause is resolved.",
+    statement: "The Agent stopped after a failure that is not safe to retry",
+  },
+};
+
+/** The owner's classification of one disposition. */
 export function diagnosisNeed(disposition: FaultDisposition): DiagnosisNeed {
-  switch (disposition) {
-    case "retry_backoff":
-      return "automatic_wait";
-    case "human_action":
-      return "configuration_fix";
-    case "verify_effect":
-      return "verify_unknown_effect";
-    case "no_retry":
-      return "failure_review";
-  }
+  return ownerReadings[disposition].need;
 }
 
 /**
@@ -65,7 +89,8 @@ export type DiagnosisScope =
   | { kind: "slack_installation"; agentId: string }
   | { kind: "slack_target"; agentId: string; channel: string; conversationId: string }
   | { kind: "action"; agentId: string; actionId: string; runId: string }
-  | { kind: "output"; agentId: string; outputId: string };
+  | { kind: "output"; agentId: string; outputId: string }
+  | { kind: "system_request"; agentId: string; requestId: string };
 
 export const diagnosisSources = ["daemon", "slack", "agents", "execution"] as const;
 export type DiagnosisSource = (typeof diagnosisSources)[number];
@@ -185,13 +210,16 @@ export function agentConditions(agents: readonly AgentDiagnosisInput[]): Diagnos
 }
 
 /**
- * The execution results an owner has to verify. An action in `executing` or `unknown` and an
- * output in `unknown` have crossed the external boundary without a confirmed result: neither may
- * be reported as a refusal, and neither may be repeated before its result is checked.
+ * The execution results an owner has to verify. An action in `executing` or `unknown`, an output in
+ * `unknown` and a privileged request in `executing` or `unknown` have crossed the external boundary
+ * without a confirmed result: none of them may be reported as a refusal, and none may be repeated
+ * before its result is checked. Each keeps its own scope, because the three are recorded, retried
+ * and released differently.
  */
 export function executionConditions(input: {
   actions: readonly { id: string; agentId: string; runId: string }[];
   outputs: readonly { id: string; agentId: string }[];
+  requests: readonly { id: string; agentId: string }[];
 }): DiagnosisCondition[] {
   return [
     ...input.actions.map((action) => ({
@@ -215,6 +243,19 @@ export function executionConditions(input: {
       need: "verify_unknown_effect" as const,
       reason: "This outbound message crossed the external boundary without a confirmed result",
       action: "Check whether this message reached its target before sending it again.",
+      nextAttemptAt: null,
+    })),
+    ...input.requests.map((request) => ({
+      source: "execution" as const,
+      scope: {
+        kind: "system_request" as const,
+        agentId: request.agentId,
+        requestId: request.id,
+      },
+      stage: "execution" as const,
+      need: "verify_unknown_effect" as const,
+      reason: "This privileged command crossed the external boundary without a confirmed result",
+      action: "Check this request's recorded result before it is approved again.",
       nextAttemptAt: null,
     })),
   ];
@@ -241,8 +282,10 @@ export function slackConditions(slack: SlackReadiness | null): DiagnosisConditio
                 installation.state === "needs-human"
                   ? ("configuration_fix" as const)
                   : ("automatic_wait" as const),
-              reason: installation.reason,
-              action: installation.action ?? null,
+              reason: filterReason(installation.reason) || "Slack installation is not ready",
+              // The readiness record states platform codes today, but this view re-filters whatever
+              // it reads so a foreign string cannot carry a credential into owner output.
+              action: installation.action ? filterReason(installation.action) || null : null,
               nextAttemptAt:
                 installation.state === "needs-human" ? null : (installation.nextAttemptAt ?? null),
             },
@@ -260,7 +303,7 @@ export function slackConditions(slack: SlackReadiness | null): DiagnosisConditio
       },
       stage: null,
       need: "automatic_wait",
-      reason: target.reason,
+      reason: filterReason(target.reason) || "Slack target is not ready",
       action: null,
       nextAttemptAt: null,
     });
@@ -280,6 +323,20 @@ export function daemonConditions(service: ServiceState | null): DiagnosisConditi
         need: "automatic_wait",
         reason: `mate.service is ${service}`,
         action: null,
+        nextAttemptAt: null,
+      },
+    ];
+  // "unknown" is the service manager not answering, which is not the same fact as a stopped
+  // service: telling the owner to start a service that may already run would be wrong.
+  if (service === "unknown")
+    return [
+      {
+        source: "daemon",
+        scope: { kind: "daemon" },
+        stage: null,
+        need: "failure_review",
+        reason: "The service manager did not report the state of mate.service",
+        action: "Check mate.service with systemctl and the Mate service journal.",
         nextAttemptAt: null,
       },
     ];
@@ -303,16 +360,7 @@ export function daemonConditions(service: ServiceState | null): DiagnosisConditi
  * vocabulary (`activity`, `agent-resume`), and never run text.
  */
 export function resumeInstruction(hold: FaultDisposition): string | null {
-  switch (hold) {
-    case "retry_backoff":
-      return null;
-    case "human_action":
-      return "Fix this Agent's model credential or configuration, then agent-resume it.";
-    case "verify_effect":
-      return "This Agent stopped with an unresolved execution result; check its activity, then agent-resume it.";
-    case "no_retry":
-      return "This Agent stopped after a failure that is not safe to retry; check its activity, then agent-resume it once the cause is resolved.";
-  }
+  return ownerReadings[hold].action;
 }
 
 /**
@@ -323,17 +371,7 @@ export function resumeInstruction(hold: FaultDisposition): string | null {
 function ownerReason(fault: WorkerFault | null, hold: FaultDisposition): string {
   const written = fault && workerFaultSchema.safeParse(fault);
   const filtered = written?.success ? filterReason(written.data.reason) : "";
-  if (filtered) return filtered;
-  switch (hold) {
-    case "retry_backoff":
-      return "The last attempt failed transiently; the next attempt is scheduled";
-    case "human_action":
-      return "The Agent is held after a credential or configuration failure";
-    case "verify_effect":
-      return "The Agent stopped with an unresolved external execution result";
-    case "no_retry":
-      return "The Agent stopped after a failure that is not safe to retry";
-  }
+  return filtered || ownerReadings[hold].statement;
 }
 
 /** A person's work comes before an automatic wait, and a stable scope keeps the order readable. */
@@ -357,5 +395,7 @@ function scopeKey(scope: DiagnosisScope): string {
       return `action:${scope.agentId}:${scope.actionId}`;
     case "output":
       return `output:${scope.agentId}:${scope.outputId}`;
+    case "system_request":
+      return `request:${scope.agentId}:${scope.requestId}`;
   }
 }

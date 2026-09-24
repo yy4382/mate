@@ -128,6 +128,28 @@ it("recovers approved requests but never replays an uncertain executing request 
   }
 });
 
+it("reports an unconfirmed privileged command as a scoped execution result to verify", async () => {
+  const { store, collaboration, work, run, system } = setup();
+  try {
+    system.request(run, work, "in-flight", command);
+    system.decide("UOWNER", "in-flight", "approve");
+    store.db.prepare("UPDATE system_requests SET status='executing' WHERE id='in-flight'").run();
+    // The owner sees which Agent and which request crossed the boundary without a confirmed
+    // result, and that the next step is to check the recorded result rather than approve again.
+    expect(collaboration.operations.status("UOWNER").diagnosis.conditions).toContainEqual({
+      source: "execution",
+      scope: { kind: "system_request", agentId: "research", requestId: "in-flight" },
+      stage: "execution",
+      need: "verify_unknown_effect",
+      reason: "This privileged command crossed the external boundary without a confirmed result",
+      action: "Check this request's recorded result before it is approved again.",
+      nextAttemptAt: null,
+    });
+  } finally {
+    store.close();
+  }
+});
+
 it("fences a privileged command still executing when this process shuts down", async () => {
   const { store, work, run, execute, system } = setup();
   try {

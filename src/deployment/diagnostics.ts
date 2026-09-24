@@ -67,7 +67,8 @@ export async function deploymentDiagnostics(host: HostOperations, command: "stat
   const { status, items, available, more } = snapshot;
   return {
     unit: "mate.service",
-    ...diagnosticStatus(status, service, recovery),
+    // The counts and the health rollup read the report this entry emits, not the view's inner one.
+    ...diagnosticStatus(status, service, recovery, snapshot.diagnosis),
     // The daemon running and Slack being ready are separate facts an operator checks separately.
     slack: snapshot.slack,
     // Every source above is reported with whether it answered, and a failed source never erases
@@ -90,7 +91,10 @@ export interface OperationsSnapshot {
   diagnosis: DiagnosisReport;
 }
 
-/** The report of a deployment whose configuration or database could not be read at all. */
+/**
+ * The report of a deployment whose configuration or database could not be read at all. No source
+ * answered here, so every one of them is reported unavailable instead of as an empty all-clear.
+ */
 function emptySnapshot(service: ServiceState | null): OperationsSnapshot {
   return {
     status: null,
@@ -99,12 +103,24 @@ function emptySnapshot(service: ServiceState | null): OperationsSnapshot {
     more: false,
     slack: null,
     diagnosis: collectDiagnosis({
-      daemon: () => service,
-      slack: () => null,
-      agents: () => [],
-      execution: () => [],
+      daemon: () => requiredService(service),
+      slack: () => {
+        throw new Error("Slack readiness unavailable");
+      },
+      agents: () => {
+        throw new Error("Owner operations status unavailable");
+      },
+      execution: () => {
+        throw new Error("Owner operations status unavailable");
+      },
     }),
   };
+}
+
+/** The service manager's answer, or a failure of that source alone when there is none. */
+function requiredService(service: ServiceState | null): ServiceState {
+  if (service === null) throw new Error("Service state unavailable");
+  return service;
 }
 
 /** Read-only snapshot shared with offline callers; errors remain opaque. */
@@ -125,8 +141,9 @@ export function readOperationsSnapshot(
         config: config.mate,
         agents: new ConfiguredAgents(config.mate.agents),
         store: { db },
-        // A missing service-manager answer is stated as the view's own default, not as a fact.
-        ...(service ? { service: () => service } : {}),
+        // This reader states the service manager's answer, never the in-process default: without
+        // one, the daemon source is reported unavailable rather than assumed to be running.
+        service: () => requiredService(service),
       }),
       owner = config.mate.ownerUserIds[0];
     if (!owner) throw new Error("Missing owner");
@@ -157,6 +174,10 @@ export function readOperationsSnapshot(
     // of them intact.
     const fromStatus = (source: "agents" | "execution") => () => {
       if (!status) throw new Error("Owner operations status unavailable");
+      // The owner status reports which of its own sources answered; a source that failed there is
+      // unavailable here too, instead of being re-labelled as an empty answer.
+      if (status.diagnosis.sources[source] !== "read")
+        throw new Error(`Owner operations source unavailable: ${source}`);
       return status.diagnosis.conditions.filter((condition) => condition.source === source);
     };
     return {
