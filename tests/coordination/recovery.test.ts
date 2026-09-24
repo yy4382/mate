@@ -1,10 +1,15 @@
 import { afterEach, expect, it } from "vitest";
 import { Store } from "../../src/storage/store.js";
-import { Messages, Output, fixtureTarget, externalThread } from "../helpers/canonical-slack.js";
+import {
+  Messages,
+  Output,
+  fixtureTarget,
+  externalThread,
+  anchoredTask,
+} from "../helpers/canonical-slack.js";
 import { configFixture } from "../helpers/config.js";
 import { configSchema } from "../../src/config.js";
 import { Collaboration } from "../../src/collaboration/service.js";
-import { TaskTransitions } from "../../src/coordination/transitions.js";
 
 const stores: Store[] = [];
 afterEach(() => stores.splice(0).forEach((store) => store.close()));
@@ -52,7 +57,17 @@ function setup() {
 it("pages every authorized task with query-bound cursors and enforces external installation snapshots", () => {
   const { c, messages, work } = setup();
   const ids = [];
-  for (let i = 0; i < 105; i++) ids.push(c.createTask("research", work, target, `task ${i}`));
+  for (let i = 0; i < 105; i++)
+    ids.push(
+      c.createTask({
+        agentId: "research",
+        workId: work,
+        target,
+        title: `task ${i}`,
+        messageKey: messages.anchor(target),
+        pendingOutboxId: `fixture-anchor:${i}`,
+      }),
+    );
   const first = c.board.list("research", { relation: "available", limit: 40 });
   expect(first.items).toHaveLength(40);
   expect(first.cursor).toBeTruthy();
@@ -81,8 +96,13 @@ it("pages every authorized task with query-bound cursors and enforces external i
     deleted: false,
   };
   messages.record(message, ["research"]);
-  const messageTask = c.createTask("research", work, target, "private title", undefined, {
+  const messageTask = c.createTask({
+    agentId: "research",
+    workId: work,
+    target,
+    title: "private title",
     messageKey: messages.mapper.messageId("CTEST", externalThread(target)),
+    pendingOutboxId: "fixture-private-title",
   });
   expect(c.board.read("research", messageTask).title).toBe("private title");
   expect(() => c.board.read("peer", messageTask)).toThrow("not visible");
@@ -90,13 +110,18 @@ it("pages every authorized task with query-bound cursors and enforces external i
 });
 
 it("returns a scan continuation instead of exhausting a low-resource request on sparse visibility", () => {
-  const { store, c, work } = setup(),
-    insert = store.db.prepare(
-      "INSERT INTO tasks(id,work_id,target,title,status,created_by,legacy) VALUES(?,?,?,'hidden','draft','research',0)",
-    );
+  const { store, c, work, messages } = setup();
+  // 205 unpublished tasks of another Agent: each is anchored, none is visible to the reader.
   store.atomic(() => {
-    for (let i = 0; i < 205; i++)
-      insert.run(`z${String(i).padStart(3, "0")}`, work, JSON.stringify(target));
+    for (let i = 0; i < 205; i++) {
+      const id = `z${String(i).padStart(3, "0")}`,
+        anchor = messages.anchor(target, ["research"]);
+      store.db
+        .prepare(
+          "INSERT INTO tasks(id,work_id,target,title,status,created_by,message_key,outbox_id) VALUES(?,?,?,'hidden','draft','research',?,?)",
+        )
+        .run(id, work, JSON.stringify(target), anchor, `pending:${id}`);
+    }
   });
   const first = c.board.list("peer", { relation: "all-visible", limit: 20 });
   expect(first.items).toEqual([]);
@@ -112,9 +137,14 @@ it("returns a scan continuation instead of exhausting a low-resource request on 
 
 it("does not widen a failed unpublished task beyond its creator or assignee", () => {
   const { c, work } = setup(),
-    id = c.createTask("research", work, target, "unpublished private title"),
+    id = c.draftTask({
+      agentId: "research",
+      workId: work,
+      target,
+      title: "unpublished private title",
+      pendingOutboxId: "failed-publication",
+    }),
     output = c.send("research", work, target, "unpublished", "failed-publication");
-  c.draftTask("research", id, output);
   c.store.transitionOutput(output, "pending", "failed", { reason: "synthetic" });
   c.activateDelegations();
   expect(c.task(id).status).toBe("failed");
@@ -124,11 +154,18 @@ it("does not widen a failed unpublished task beyond its creator or assignee", ()
 
 it("does not let a transferred parent owner cancel an invisible child draft", () => {
   const { c, work } = setup(),
-    parent = c.createTask("research", work, target, "parent");
+    parent = anchoredTask(c, "research", work, target, "parent");
   c.claim("research", parent);
-  const child = c.createTask("research", work, target, "private child", parent),
+  const child = c.draftTask({
+      agentId: "research",
+      workId: work,
+      target,
+      title: "private child",
+      parentId: parent,
+      assignedTo: "peer",
+      pendingOutboxId: "private-child-output",
+    }),
     output = c.send("research", work, target, "private child", "private-child-output");
-  c.draftTask("research", child, output, "peer");
   c.transfer("research", parent, "third", c.task(parent).version);
   expect(() => c.board.read("third", child)).toThrow("not visible");
   expect(() => c.update("third", child, "cancelled", undefined, c.task(child).version)).toThrow(
@@ -139,7 +176,7 @@ it("does not let a transferred parent owner cancel an invisible child draft", ()
 
 it("keeps peer review in review until an explicit return-for-changes transition", () => {
   const { c, work } = setup(),
-    id = c.createTask("research", work, target, "review flow");
+    id = anchoredTask(c, "research", work, target, "review flow");
   c.claim("research", id);
   c.update("research", id, "review", "implementation evidence");
   let task = c.task(id);
@@ -164,8 +201,8 @@ it("keeps peer review in review until an explicit return-for-changes transition"
 
 it("keeps automatic dependency and work-cancel transitions in the same versioned event stream", () => {
   const { store, c, work } = setup(),
-    waiter = c.createTask("research", work, target, "waiter"),
-    dependency = c.createTask("peer", work, target, "dependency");
+    waiter = anchoredTask(c, "research", work, target, "waiter"),
+    dependency = anchoredTask(c, "peer", work, target, "dependency");
   c.claim("research", waiter);
   c.claim("peer", dependency);
   c.wait("research", waiter, dependency);
@@ -192,13 +229,13 @@ it("keeps automatic dependency and work-cancel transitions in the same versioned
 
 it("rolls task state back when event persistence fails at the transition boundary", () => {
   const { store, c, work } = setup(),
-    id = c.createTask("research", work, target, "atomic transition"),
+    id = anchoredTask(c, "research", work, target, "atomic transition"),
     task = c.task(id);
   store.db.exec(
     `CREATE TRIGGER reject_task_event BEFORE INSERT ON task_events WHEN NEW.task_id='${id}' BEGIN SELECT RAISE(ABORT,'event rejected'); END`,
   );
   expect(() =>
-    new TaskTransitions(store).change(
+    c.tasks.change(
       task,
       { owner: "research", status: "doing" },
       { action: "claim", actor: "research" },
@@ -266,7 +303,7 @@ it("records private reminder transport and semantic result separately with indep
 
 it("uses bounded ordering indexes for task, event and firing pages", () => {
   const { store, c, work } = setup(),
-    id = c.createTask("research", work, target, "indexed");
+    id = anchoredTask(c, "research", work, target, "indexed");
   c.claim("research", id);
   c.reminders.create("research", work, {
     target,

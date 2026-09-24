@@ -6,6 +6,7 @@ import { Controls } from "../../src/daemon/control.js";
 import { LocalConsole } from "../../src/local/console.js";
 import { formatControlReply } from "../../src/slack/service.js";
 import type { TeamSettings } from "../../src/domain/agents.js";
+import { anchoredTask } from "../helpers/canonical-slack.js";
 
 const settings: TeamSettings = {
   agents: ["alice", "bob"].map((id) => ({
@@ -44,7 +45,7 @@ it("returns owner-only authoritative status without sensitive bodies and local c
   const f = setup(),
     c = f.collaboration,
     s = f.store;
-  const task = c.createTask("alice", f.work, f.target, "PRIVATE_TASK_TITLE");
+  const task = anchoredTask(c, "alice", f.work, f.target, "PRIVATE_TASK_TITLE");
   c.claim("alice", task);
   c.update("alice", task, "done", "PRIVATE_TASK_RESULT");
   c.reminders.create("alice", f.work, {
@@ -130,7 +131,7 @@ it("merges safe activity with a query-bound vector cursor and never wakes an Age
   const f = setup(),
     c = f.collaboration,
     s = f.store;
-  const task = c.createTask("alice", f.work, f.target, "PRIVATE_TASK");
+  const task = anchoredTask(c, "alice", f.work, f.target, "PRIVATE_TASK");
   c.claim("alice", task);
   c.update("alice", task, "done", "PRIVATE_RESULT");
   const reminder = c.reminders.create("alice", f.work, {
@@ -325,8 +326,8 @@ it("pages a sparse actor and kind filter without loss or duplicates", () => {
   const f = setup(),
     c = f.collaboration;
   for (let i = 0; i < 125; i++) {
-    c.createTask("bob", f.work, f.target, `peer ${i}`);
-    c.createTask("alice", f.work, f.target, `own ${i}`);
+    anchoredTask(c, "bob", f.work, f.target, `peer ${i}`);
+    anchoredTask(c, "alice", f.work, f.target, `own ${i}`);
   }
   let cursor: string | undefined,
     items: any[] = [];

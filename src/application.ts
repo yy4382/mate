@@ -21,6 +21,7 @@ import { ToolRouter } from "./runtime/tools.js";
 import { defaultRuntimeLimits, type RuntimeLimits } from "./runtime/limits.js";
 import { ConfiguredAgents } from "./agents/directory.js";
 import { Collaboration } from "./collaboration/service.js";
+import { taskAnchors, type TaskAnchors } from "./coordination/tasks.js";
 import { CanonicalAttention } from "./conversations/attention.js";
 import { CanonicalFreshnessGate } from "./conversations/freshness.js";
 import { Conversations } from "./conversations/messages.js";
@@ -111,6 +112,8 @@ export class Application {
   readonly messages: Conversations;
   readonly output: CanonicalOutput;
   readonly collaboration: Collaboration;
+  /** The one owner of a task's association with the message it is published as. */
+  readonly tasks: TaskAnchors;
   readonly system: SystemOperations;
   readonly broker: Broker;
   readonly artifacts: Artifacts;
@@ -144,17 +147,35 @@ export class Application {
     // Freshness needs the one attention instance this application uses. The gate built from it
     // is wired into the output and the tool router at construction, never installed afterwards.
     this.attention = new CanonicalAttention(this.messages);
-    this.gate = new CanonicalFreshnessGate(this.messages, this.attention);
     this.transport =
       slackApp && slack ? new CanonicalSlackTransport(store, slackApp.mapper) : undefined;
     this.output = new CanonicalOutput(
       this.messages,
       this.transport ?? unavailableTransport,
       Date.now,
-      this.gate,
+      undefined,
       artifactTransport,
     );
-    this.collaboration = new Collaboration(store, this.messages, this.output, team, this.attention);
+    // The task module is built before the gate so a revised publication reaches the tasks that
+    // follow it. The gate and the collaboration service then share this one instance, and the
+    // callbacks below resolve the service lazily because it is built last.
+    this.tasks = taskAnchors(store, {
+      messages: this.messages,
+      output: this.output,
+      board: { visible: (actor, task) => this.collaboration.board.visible(actor, task) },
+      bindOutputWork: (outputId, workId) => this.collaboration.bindOutputWork(outputId, workId),
+      notify: (agentId, task) => this.collaboration.notifyTaskAssignee(agentId, task),
+    });
+    this.gate = new CanonicalFreshnessGate(this.messages, this.attention, Date.now, this.tasks);
+    this.collaboration = new Collaboration(
+      store,
+      this.messages,
+      this.output,
+      team,
+      this.attention,
+      this.tasks,
+    );
+    this.output.attachGate(this.gate);
     this.system = new SystemOperations(
       store,
       this.collaboration,

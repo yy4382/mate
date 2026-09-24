@@ -1,7 +1,7 @@
 import { fixtureTarget, externalThread } from "../helpers/canonical-slack.js";
 import { afterEach, expect, it } from "vitest";
 import { Store } from "../../src/storage/store.js";
-import { Messages, Output } from "../helpers/canonical-slack.js";
+import { Messages, Output, anchoredTask } from "../helpers/canonical-slack.js";
 import { Collaboration } from "../../src/collaboration/service.js";
 import { configSchema } from "../../src/config.js";
 import { configFixture } from "../helpers/config.js";
@@ -38,10 +38,10 @@ function setup() {
 afterEach(() => stores.splice(0).forEach((s) => s.close()));
 it("claim has exactly one owner; waiting keeps ownership and dependency completion wakes once", () => {
   const { db, service, work } = setup();
-  const parent = service.createTask("research", work, target, "research");
+  const parent = anchoredTask(service, "research", work, target, "research");
   service.claim("research", parent);
   expect(() => service.claim("engineer", parent)).toThrow("claimed");
-  const child = service.createTask("research", work, target, "verify", parent);
+  const child = anchoredTask(service, "research", work, target, "verify", parent);
   service.claim("engineer", child);
   expect(() => service.wait("engineer", child, parent)).toThrow("cycle");
   service.wait("research", parent, child);
@@ -56,7 +56,7 @@ it("claim has exactly one owner; waiting keeps ownership and dependency completi
 });
 it("delegation remains unclaimable until visible send, inherits root and activates once", async () => {
   const { db, service, work, output } = setup();
-  const parent = service.createTask("research", work, target, "parent");
+  const parent = anchoredTask(service, "research", work, target, "parent");
   service.claim("research", parent);
   const child = service.delegate("research", parent, "engineer", "challenge hypothesis");
   expect(service.task(child).work_id).toBe(work);
@@ -101,7 +101,7 @@ it("cancelled work cannot be resumed after a bound run is interrupted", () => {
 });
 it("failed visible delegation releases parent and draft may be cancelled by its creator", () => {
   const { db, service, work } = setup();
-  const parent = service.createTask("research", work, target, "parent");
+  const parent = anchoredTask(service, "research", work, target, "parent");
   service.claim("research", parent);
   const child = service.delegate("research", parent, "engineer", "verify");
   service.wait("research", parent, child);
@@ -139,7 +139,7 @@ it("owner stop fences active work, blocks pending sends, leaves other work runna
 });
 it("wakeups catch up once, retain origin, are transactional and outlive their task", () => {
   const { db, service, work } = setup();
-  const task = service.createTask("research", work, target, "watch");
+  const task = anchoredTask(service, "research", work, target, "watch");
   service.claim("research", task);
   const input = {
     target,

@@ -1,6 +1,6 @@
 import { ConfiguredAgents, type AgentDirectory } from "../agents/directory.js";
 import { CanonicalOutput as Output } from "../conversations/output.js";
-import { Reminders } from "../reminders/service.js";
+import { Reminders, type Reminder } from "../reminders/service.js";
 import type { SendBasis } from "../conversations/freshness.js";
 import { ReviewSeats } from "../conversations/review-seats.js";
 import { CanonicalAttention as Attention } from "../conversations/attention.js";
@@ -14,7 +14,7 @@ import {
 } from "../domain/conversations.js";
 import type { TeamSettings } from "../domain/agents.js";
 import { TaskBoard } from "../coordination/board.js";
-import { TaskTransitions, type TaskPatch } from "../coordination/transitions.js";
+import { TaskAnchors, taskAnchors, type TaskRow } from "../coordination/tasks.js";
 import { OperationsView } from "../operations/view.js";
 import { UsageLedger } from "../usage/ledger.js";
 
@@ -23,23 +23,8 @@ export interface Work {
   target: string;
   state: string;
 }
-export interface Task {
-  legacy: number;
-  message_key: string | null;
-  created_by: string | null;
-  id: string;
-  work_id: string;
-  parent_id: string | null;
-  target: string;
-  title: string;
-  owner: string | null;
-  assigned_to: string | null;
-  status: string;
-  version: number;
-  waiting_on: string | null;
-  result: string | null;
-  outbox_id: string | null;
-}
+/** One task row, with the anchor that makes it the canonical task for a message. */
+export type Task = TaskRow;
 export class Collaboration {
   readonly agents: AgentDirectory;
   readonly reminders: Reminders;
@@ -47,7 +32,7 @@ export class Collaboration {
   readonly usage: UsageLedger;
   readonly board: TaskBoard;
   readonly operations: OperationsView;
-  private readonly taskTransitions: TaskTransitions;
+  readonly tasks: TaskAnchors;
   constructor(
     readonly store: Store,
     readonly messages: Messages,
@@ -55,6 +40,8 @@ export class Collaboration {
     readonly config: TeamSettings,
     /** One attention instance per application; the freshness gate and this service share it. */
     readonly attention: Attention = new Attention(messages),
+    /** One task module per application, built by the assembly so freshness can reach it too. */
+    taskModule?: TaskAnchors,
   ) {
     this.agents = new ConfiguredAgents(config.agents);
     this.config = {
@@ -65,9 +52,52 @@ export class Collaboration {
     this.reminders = new Reminders(this);
     this.usage = new UsageLedger(store);
     this.seats = new ReviewSeats(messages, config.ownerUserIds);
-    this.taskTransitions = new TaskTransitions(store);
     this.board = new TaskBoard(this);
+    this.tasks =
+      taskModule ??
+      taskAnchors(store, {
+        messages: this.messages,
+        output: this.output,
+        board: { visible: (actor, task) => this.board.visible(actor, task) },
+        bindOutputWork: (outputId, workId) => this.bindOutputWork(outputId, workId),
+        notify: (agentId, task) => this.notifyTaskAssignee(agentId, task),
+      });
     this.operations = new OperationsView(this);
+    // A revised publication must reach the tasks that follow it. When the caller supplied the
+    // application's task module the gate already knows it; an embedded caller that let this
+    // service build its own module gets the same wiring here.
+    if (!taskModule) this.output.gate?.attachRevisions(this.tasks);
+  }
+  /** The one rule for what may own a child task: same work, same owner, still open. */
+  private requireParent(agentId: string, workId: string, parentId: string | undefined): void {
+    if (!parentId) return;
+    this.board.read(agentId, parentId);
+    const parent = this.task(parentId);
+    if (
+      parent.work_id !== workId ||
+      parent.owner !== agentId ||
+      !["doing", "waiting", "review"].includes(parent.status)
+    )
+      throw new Error("Invalid parent task");
+  }
+  /** Bind a queued publication to the activity that owns it. */
+  bindOutputWork(outputId: string, workId: string): void {
+    const old = this.store.db
+      .prepare("SELECT work_id FROM output_work WHERE output_id=?")
+      .get(outputId) as { work_id: string } | undefined;
+    if (old && old.work_id !== workId) throw new Error("Output work conflict");
+    this.store.db
+      .prepare("INSERT INTO output_work VALUES(?,?) ON CONFLICT DO NOTHING")
+      .run(outputId, workId);
+  }
+  /** The durable wakeup a newly visible delegated task owes its assignee. */
+  notifyTaskAssignee(assignee: string, task: Task): void {
+    this.enqueue(assignee, task.work_id, `delegate:${task.id}`, {
+      kind: "delegation",
+      taskId: task.id,
+      target: JSON.parse(task.target),
+      receivedAt: Date.now(),
+    });
   }
   work(id: string): Work {
     const work = this.store.db.prepare("SELECT id,target,state FROM works WHERE id=?").get(id) as
@@ -77,11 +107,7 @@ export class Collaboration {
     return work;
   }
   task(id: string): Task {
-    const task = this.store.db.prepare("SELECT * FROM tasks WHERE id=?").get(id) as
-      Task | undefined;
-    if (!task) throw new Error("Unknown task");
-    this.messages.records.mutableTarget("tasks", id);
-    return task;
+    return this.tasks.task(id);
   }
   list(agentId: string): Task[] {
     if (this.messages.isolated(agentId)) return [];
@@ -123,14 +149,6 @@ export class Collaboration {
     const work = this.work(workId);
     if (work.state !== "active") throw new Error("Work paused or cancelled");
     return work;
-  }
-  private transition(
-    task: Task,
-    patch: TaskPatch,
-    event: { action: string; actor?: string; cause?: unknown },
-    expectedVersion = task.version,
-  ): Task {
-    return this.taskTransitions.change(task, patch, event, expectedVersion);
   }
   /** Work identifies an activity and its owner-controlled lifecycle. */
   createWork(origin: string, target: Target): string {
@@ -176,13 +194,7 @@ export class Collaboration {
     return this.store.atomic(() => {
       this.active(workId);
       this.output.queue(agentId, target, text, id, basis);
-      const old = this.store.db
-        .prepare("SELECT work_id FROM output_work WHERE output_id=?")
-        .get(id) as { work_id: string } | undefined;
-      if (old && old.work_id !== workId) throw new Error("Output work conflict");
-      this.store.db
-        .prepare("INSERT INTO output_work VALUES(?,?) ON CONFLICT DO NOTHING")
-        .run(id, workId);
+      this.bindOutputWork(id, workId);
       return id;
     });
   }
@@ -207,46 +219,28 @@ export class Collaboration {
         .run(run.id, workId);
     });
   }
-  createTask(
-    agentId: string,
-    workId: string,
-    target: Target,
-    title: string,
-    parentId?: string,
-    initial?: { messageKey?: string },
-  ): string {
-    targetSchema.parse(target);
-    z.string().min(1).max(500).parse(title);
-    this.messages.requireAccess(agentId, target.conversationId);
+  /**
+   * Create a task anchored to the message it will own, or to the publication that will produce it.
+   * The caller supplies the reserved publication identity, so the anchor exists before the message
+   * does and a retry cannot produce a second canonical task.
+   */
+  createTask(input: {
+    agentId: string;
+    workId: string;
+    target: Target;
+    title: string;
+    parentId?: string | undefined;
+    messageKey?: string | undefined;
+    pendingOutboxId: string;
+  }): string {
+    targetSchema.parse(input.target);
+    z.string().min(1).max(500).parse(input.title);
+    if (!input.messageKey && !input.pendingOutboxId)
+      throw new Error("Task requires a message anchor or a queued publication");
     return this.store.atomic(() => {
-      this.active(workId);
-      if (parentId) {
-        this.board.read(agentId, parentId);
-        const parent = this.task(parentId);
-        if (
-          parent.work_id !== workId ||
-          parent.owner !== agentId ||
-          !["doing", "waiting", "review"].includes(parent.status)
-        )
-          throw new Error("Invalid parent task");
-      }
-      const id = randomUUID();
-      this.store.db
-        .prepare(
-          "INSERT INTO tasks(id,work_id,parent_id,target,title,status,created_by,message_key,legacy) VALUES(?,?,?,?,?,'todo',?,?,0)",
-        )
-        .run(
-          id,
-          workId,
-          parentId ?? null,
-          encode(target),
-          title,
-          agentId,
-          initial?.messageKey ?? null,
-        );
-      this.messages.writes.mutable("tasks", id);
-      this.taskTransitions.created(this.task(id), agentId);
-      return id;
+      this.active(input.workId);
+      this.requireParent(input.agentId, input.workId, input.parentId);
+      return this.tasks.create(input);
     });
   }
   claim(agentId: string, id: string, expectedVersion?: number): Task {
@@ -262,14 +256,25 @@ export class Collaboration {
         (task.assigned_to !== null && task.assigned_to !== agentId)
       )
         throw new Error("Task already claimed or unavailable");
-      return this.transition(
+      return this.tasks.change(
         task,
         { owner: agentId, status: task.status === "review" ? "review" : "doing" },
         { action: "claim", actor: agentId },
       );
     });
   }
-  private owned(agentId: string, id: string): Task {
+  /** The precondition a claim must still satisfy at the version the caller inspected. */
+  claimable(agentId: string, id: string): boolean {
+    this.board.read(agentId, id);
+    const task = this.task(id);
+    this.active(task.work_id);
+    return (
+      task.owner === null &&
+      ["todo", "review"].includes(task.status) &&
+      (task.assigned_to === null || task.assigned_to === agentId)
+    );
+  }
+  owned(agentId: string, id: string): Task {
     this.board.read(agentId, id);
     const task = this.task(id);
     this.active(task.work_id);
@@ -290,62 +295,123 @@ export class Collaboration {
       const peer = this.messages.agent(peerId);
       if (peerId === agentId) throw new Error("Cannot delegate to self");
       this.messages.requireAccess(peerId, target.conversationId);
-      const id = this.createTask(agentId, parent.work_id, target, title, parentId);
-      const outputId = this.send(
+      const outputId = `delegate:${randomUUID()}`,
+        id = this.createTask({
+          agentId,
+          workId: parent.work_id,
+          target,
+          title,
+          parentId,
+          pendingOutboxId: outputId,
+        });
+      this.tasks.change(
+        this.task(id),
+        { status: "draft", assigned_to: peerId, outbox_id: outputId },
+        { action: "delegation_draft", actor: agentId, cause: { peerId } },
+      );
+      this.send(
         agentId,
         parent.work_id,
         target,
         `${peer.name}: ${title}\nMate task: ${id}`,
-        undefined,
+        outputId,
         basis,
       );
-      this.transition(
-        this.task(id),
-        { status: "draft", assigned_to: peerId, outbox_id: outputId },
-        { action: "delegation_draft", actor: agentId },
-      );
+      // The task module's own poll links the task to the message once the publication is
+      // confirmed, so a failed, unknown or restarted publication never produces a second task.
       return id;
     });
   }
-  /** Idempotent poll: activate only after a durable visible send receipt. */
+  /**
+   * Create a task that waits for its own publication to become visible: anchored to the reserved
+   * publication, unclaimable and invisible to other Agents until then.
+   */
+  draftTask(input: {
+    agentId: string;
+    workId: string;
+    target: Target;
+    title: string;
+    parentId?: string | undefined;
+    assignedTo?: string | undefined;
+    pendingOutboxId: string;
+  }): string {
+    targetSchema.parse(input.target);
+    return this.store.atomic(() => {
+      this.active(input.workId);
+      this.requireParent(input.agentId, input.workId, input.parentId);
+      return this.tasks.draft(input);
+    });
+  }
+  /**
+   * Attach an already-queued visible publication to the task it publishes, so the task and its
+   * event move with the message in one transaction. The publication must not already anchor
+   * another task.
+   */
+  attachPublication(agentId: string, id: string, outboxId: string): Task {
+    return this.store.atomic(() => {
+      const task = this.task(id);
+      if (task.created_by !== agentId) throw new Error("Task creator only");
+      if (this.tasks.findForOutbox(outboxId).length)
+        throw new Error("Publication already anchors a task");
+      return this.tasks.change(
+        task,
+        { status: "draft", outbox_id: outboxId },
+        { action: "draft", actor: agentId, cause: { outputId: outboxId } },
+      );
+    });
+  }
+  /** Link one confirmed publication to the task that anchored it, whatever produced it. */
+  private confirmPublication(agentId: string, outboxId: string, wake = true): void {
+    if (this.store.output(outboxId)?.state !== "sent") return;
+    const task = this.tasks.findForOutbox(outboxId)[0];
+    if (!task) return;
+    const messageKey = this.messages.records.confirmedMessageId(outboxId),
+      reconciled = this.tasks.confirm(
+        agentId,
+        outboxId,
+        messageKey,
+        JSON.parse(task.target).conversationId,
+      );
+    // A paused or cancelled activity still gets the anchor, so its task cannot be created twice;
+    // only a runnable assignee is woken.
+    if (!wake) return;
+    for (const row of reconciled)
+      if (row.id === task.id && row.parent_id && row.assigned_to)
+        this.tasks.notifyAssignee(row.assigned_to, row);
+  }
+  /**
+   * The task module's own poll: a task whose publication became visible gets its confirmed anchor,
+   * and one whose publication is known not to have arrived stops waiting. Idempotent, so a restart
+   * or a repeated pass cannot create a second task.
+   */
   activateDelegations(): void {
     this.store.atomic(() => {
-      const tasks = this.store.db
+      // Every task whose publication has not produced a message is reconciled, whatever its work
+      // item is doing: which message a task is anchored to is not a scheduling decision. The
+      // index on `outbox_id` plus `message_key IS NULL` keeps this to the publications in flight.
+      const unreconciled = this.store.db
         .prepare(
-          "SELECT t.* FROM tasks t JOIN outbox o ON o.id=t.outbox_id JOIN works w ON w.id=t.work_id WHERE t.status='draft' AND o.state='sent' AND w.state='active'",
+          "SELECT t.*,o.agent_id publisher,o.state outbox_state,o.receipt outbox_receipt,w.state work_state FROM tasks t JOIN outbox o ON o.id=t.outbox_id JOIN works w ON w.id=t.work_id WHERE t.message_key IS NULL AND o.state IN ('sent','failed','unknown')",
         )
-        .all() as Task[];
-      for (const task of tasks) {
-        const key = this.messages.records.confirmedMessageId(task.outbox_id!);
-        this.transition(
-          task,
-          { status: "todo", message_key: key },
-          { action: "visible_delegation", cause: { outboxId: task.outbox_id } },
-        );
-        this.enqueue(
-          task.assigned_to ?? this.store.output(task.outbox_id!)!.agent_id,
-          task.work_id,
-          `delegate:${task.id}`,
-          {
-            kind: "delegation",
-            taskId: task.id,
-            target: JSON.parse(task.target),
-            receivedAt: Date.now(),
-          },
-        );
-      }
-      const failed = this.store.db
-        .prepare(
-          "SELECT t.* FROM tasks t JOIN outbox o ON o.id=t.outbox_id JOIN works w ON w.id=t.work_id WHERE t.status='draft' AND o.state='failed' AND w.state='active'",
-        )
-        .all() as Task[];
-      for (const task of failed) {
-        const failedTask = this.transition(
-          task,
-          { status: "failed", result: "Delegation delivery failed" },
-          { action: "delegation_failed", cause: { outboxId: task.outbox_id } },
-        );
-        this.wakeDependents(failedTask);
+        .all() as (Task & {
+        publisher: string;
+        outbox_state: string;
+        outbox_receipt: string | null;
+        work_state: string;
+      })[];
+      for (const task of unreconciled) {
+        if (task.outbox_state === "sent") {
+          this.confirmPublication(task.publisher, task.outbox_id!, task.work_state === "active");
+          continue;
+        }
+        const receipt = JSON.parse(task.outbox_receipt ?? "null") as { reason?: string } | null,
+          reason = receipt?.reason ?? "publication_outcome_unknown",
+          failed = this.tasks.reflectUndelivered(task.publisher, task.outbox_id!, {
+            state: task.outbox_state === "unknown" ? "unknown" : "failed",
+            reason,
+          });
+        for (const row of failed)
+          if (row.id === task.id && task.work_state === "active") this.wakeDependents(row);
       }
     });
   }
@@ -354,7 +420,7 @@ export class Collaboration {
       .prepare("SELECT * FROM tasks WHERE waiting_on=? AND status='waiting'")
       .all(task.id) as Task[];
     for (const waiter of waiters) {
-      this.transition(
+      this.tasks.change(
         waiter,
         { status: "doing", waiting_on: null },
         {
@@ -402,7 +468,7 @@ export class Collaboration {
       }
       if (["done", "cancelled", "failed"].includes(dependency.status)) {
         if (task.status === "waiting")
-          this.transition(
+          this.tasks.change(
             task,
             { status: "doing", waiting_on: null },
             { action: "dependency_already_terminal", actor: agentId, cause: { dependencyId } },
@@ -415,7 +481,7 @@ export class Collaboration {
         );
         return;
       }
-      this.transition(
+      this.tasks.change(
         task,
         { status: "waiting", waiting_on: dependencyId },
         { action: "wait", actor: agentId, cause: { dependencyId } },
@@ -457,7 +523,7 @@ export class Collaboration {
           .get(id)
       )
         throw new Error("Unfinished child tasks");
-      const updated = this.transition(
+      const updated = this.tasks.change(
         task,
         { status, result: result ?? task.result, waiting_on: null },
         { action: status, actor: agentId },
@@ -467,22 +533,19 @@ export class Collaboration {
       }
     });
   }
-  /** Publish metadata is part of the same versioned task transition as its event. */
-  draftTask(agentId: string, id: string, outboxId: string, assignedTo?: string): Task {
+  /** Publish a freshly created task as its own visible message, in one transaction. */
+  publishTask(agentId: string, id: string, text: string, basis?: SendBasis): Task {
     return this.store.atomic(() => {
-      const task = this.task(id);
-      if (task.created_by !== agentId) throw new Error("Task creator only");
-      return this.transition(
-        task,
-        { status: "draft", outbox_id: outboxId, assigned_to: assignedTo ?? task.assigned_to },
-        { action: "draft", actor: agentId },
-      );
+      const outboxId = this.tasks.publish(agentId, id, text, basis);
+      this.tasks.markPublished(id, outboxId, this.task(id).version);
+      return this.task(id);
     });
   }
+  /** Release ownership and hand the task to whoever claims it next. */
   unclaim(agentId: string, id: string, expectedVersion: number): Task {
     return this.store.atomic(() => {
       const task = this.owned(agentId, id);
-      return this.transition(
+      return this.tasks.change(
         task,
         {
           owner: null,
@@ -495,6 +558,7 @@ export class Collaboration {
       );
     });
   }
+  /** Hand work to a peer with the same versioned transition and its event. */
   transfer(
     agentId: string,
     id: string,
@@ -512,7 +576,7 @@ export class Collaboration {
         throw new Error("Review disposition applies only to review tasks");
       const status =
         task.status === "review" && reviewDisposition === "preserve_review" ? "review" : "doing";
-      const updated = this.transition(
+      const updated = this.tasks.change(
         task,
         { owner: peerId, assigned_to: null, status, waiting_on: null },
         {
@@ -529,6 +593,43 @@ export class Collaboration {
       });
       return updated;
     });
+  }
+  schedule(
+    agentId: string,
+    workId: string,
+    target: Target,
+    nextAt: number,
+    timezone: string,
+    cron?: string,
+    taskId?: string,
+  ): string {
+    return this.reminders.create(agentId, workId, {
+      target,
+      nextAt,
+      timezone,
+      cron,
+      taskId,
+      content: "Follow up on the referenced conversation or task.",
+    }).id;
+  }
+  cancelSchedule(agentId: string, id: string): void {
+    const r = this.reminders.read(agentId, id);
+    this.reminders.cancel(agentId, id, r.version);
+  }
+  reschedule(agentId: string, id: string, nextAt: number): void {
+    const r = this.reminders.read(agentId, id);
+    this.reminders.edit(agentId, id, r.version, {
+      target: JSON.parse(r.target),
+      content: r.content,
+      nextAt,
+      timezone: r.timezone,
+      cron: r.cron ?? undefined,
+      taskId: r.task_id ?? undefined,
+      anchor: r.anchor ? JSON.parse(r.anchor) : undefined,
+    });
+  }
+  schedules(agentId: string): Reminder[] {
+    return this.reminders.list(agentId);
   }
   tick(now = Date.now()): void {
     this.store.atomic(() => {
@@ -597,7 +698,7 @@ export class Collaboration {
           )
           .all(workId) as Task[];
         for (const task of tasks)
-          this.transition(
+          this.tasks.change(
             task,
             { status: "cancelled", waiting_on: null },
             { action: "work_cancelled", cause: { ownerId } },

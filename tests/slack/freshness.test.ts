@@ -2,7 +2,7 @@ import { fixtureTarget, externalThread } from "../helpers/canonical-slack.js";
 import { afterEach, expect, it, vi } from "vitest";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { Store } from "../../src/storage/store.js";
-import { Messages, Output } from "../helpers/canonical-slack.js";
+import { Messages, Output, anchoredTask } from "../helpers/canonical-slack.js";
 import { Collaboration } from "../../src/collaboration/service.js";
 import { CanonicalAttention } from "../../src/conversations/attention.js";
 import type { CanonicalArtifactTransport } from "../../src/conversations/output.js";
@@ -170,17 +170,30 @@ it("owner Agent stop prevents an already continued pending draft from dispatchin
   expect(o.ready()).toEqual([]);
   expect(post).not.toHaveBeenCalled();
 });
-it("revising a delegation updates its output reference before activation", () => {
+it("revising a publication follows through to the task anchored to it", () => {
   const { s, c, g, w, run } = setup();
-  const parent = c.createTask("research", w, target, "parent");
+  const parent = anchoredTask(c, "research", w, target, "parent");
   c.claim("research", parent);
-  const id = c.send("research", w, target, "delegated", "delegate", { run });
-  const child = c.createTask("research", w, target, "child", parent);
-  c.draftTask("research", child, id);
+  const id = c.send("research", w, target, "delegated", "delegate", { run }),
+    child = c.draftTask({
+      agentId: "research",
+      workId: w,
+      target,
+      title: "child",
+      parentId: parent,
+      pendingOutboxId: id,
+    });
+  // Freshness moves the outbound message; the task module decides that the task follows it.
+  expect(c.task(child).outbox_id).toBe(id);
   g.revise(run, id, 1, "revised delegation");
-  c.activateDelegations();
   expect(c.task(child).status).toBe("draft");
   expect(c.task(child).outbox_id).toBe("delegate:revision:2");
+  // The replacement publication still waits for its own freshness decision, so the task stays an
+  // unclaimable draft anchored to it rather than being published by the revision.
+  c.activateDelegations();
+  expect(s.output("delegate:revision:2")?.state).toBe("held");
+  expect(c.task(child).status).toBe("draft");
+  expect(s.db.prepare("SELECT COUNT(*) n FROM tasks WHERE title='child'").get()).toEqual({ n: 1 });
 });
 it("durable related ingress blocks dispatch until normalized, then the changed view holds", async () => {
   const { s, c, m, o, w, run, post, read } = setup();

@@ -49,13 +49,25 @@ export type ArtifactTransportProvider = () => CanonicalArtifactTransport | undef
 export class CanonicalOutput {
   private dispatchQueue: Promise<unknown> = Promise.resolve();
   private internalQueue: Promise<unknown> = Promise.resolve();
+  /** Set once by the application assembly, which must build the task module before the gate. */
+  private freshness: CanonicalFreshnessGate | undefined;
   constructor(
     readonly messages: Conversations,
     readonly transport: ExternalMessageTransport,
     readonly clock: () => number = Date.now,
-    readonly gate?: CanonicalFreshnessGate,
+    gate?: CanonicalFreshnessGate,
     readonly artifacts: ArtifactTransportProvider = () => undefined,
-  ) {}
+  ) {
+    this.freshness = gate;
+  }
+  get gate(): CanonicalFreshnessGate | undefined {
+    return this.freshness;
+  }
+  attachGate(gate: CanonicalFreshnessGate): void {
+    if (this.freshness && this.freshness !== gate)
+      throw new Error("Freshness gate is already attached");
+    this.freshness = gate;
+  }
   artifactConfigured(actor: string): boolean {
     return this.artifacts()?.configured(actor) === true;
   }
@@ -81,7 +93,7 @@ export class CanonicalOutput {
     validateOutputIntent(this.messages, actor, target, text);
     this.messages.store.atomic(() => {
       this.messages.writes.queueOutput(actor, id, { target, text });
-      this.gate?.queued(actor, id, basis);
+      this.freshness?.queued(actor, id, basis);
     });
     return id;
   }
@@ -96,7 +108,7 @@ export class CanonicalOutput {
     validateOutputIntent(this.messages, actor, target, text, true);
     this.messages.store.atomic(() => {
       this.messages.writes.queueOutput(actor, id, { target, text, artifact });
-      this.gate?.queued(actor, id, basis);
+      this.freshness?.queued(actor, id, basis);
     });
     return id;
   }
@@ -125,7 +137,7 @@ export class CanonicalOutput {
     if (work && work.state !== "active") return false;
     if ((JSON.parse(row.receipt ?? "null")?.retryAt ?? 0) > this.clock()) return false;
     if (
-      this.gate &&
+      this.freshness &&
       ((this.messages.references.conversation(request.target.conversationId).authority ===
         "external" &&
         this.transport.pendingInput(request.target)) ||
@@ -311,7 +323,7 @@ export class CanonicalOutput {
         if (JSON.parse(row.request).artifact)
           throw new Error("Internal artifacts are not supported");
         this.messages.requireAccess(row.agent_id, request.target.conversationId);
-        if (this.gate && !this.gate.dispatch(id)) return;
+        if (this.freshness && !this.freshness.dispatch(id)) return;
         const binding = s.db
           .prepare("SELECT work_id FROM output_work WHERE output_id=?")
           .get(id) as { work_id: string } | undefined;
@@ -339,7 +351,7 @@ export class CanonicalOutput {
       s.transitionOutput(id, "pending", "failed", { reason: "external_publication_unavailable" });
       return;
     }
-    if (this.gate && !this.gate.dispatch(id)) return;
+    if (this.freshness && !this.freshness.dispatch(id)) return;
     const artifact = JSON.parse(row.request).artifact as ArtifactPayload | undefined;
     s.transitionOutput(id, "pending", "sending", artifact ? { phase: "staging" } : undefined);
     if (artifact) {
@@ -391,7 +403,7 @@ export class CanonicalOutput {
             !this.messages.access(row.agent_id, request.target.conversationId)
           )
             return false;
-          if (this.gate && !this.gate.dispatch(row.id)) return false;
+          if (this.freshness && !this.freshness.dispatch(row.id)) return false;
           s.transitionOutput(row.id, "pending", "sending", { fileId, phase: "sharing" });
           sharing = true;
           return true;

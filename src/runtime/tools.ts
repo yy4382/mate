@@ -161,11 +161,17 @@ export class ToolRouter {
     );
     this.coordination = new MessageTasks(collaboration);
     // The application assembly wires one gate onto the output before this router exists; a
-    // router built on its own keeps an equivalent gate for its own held-send policy instead
-    // of reaching back and installing a collaborator onto another object.
+    // router built on its own keeps an equivalent gate for its own held-send policy instead of
+    // reaching back and installing a collaborator onto another object. Either way the gate can
+    // reach the one task module, so a revised publication still reaches the task that follows it.
     this.gate =
       collaboration.output.gate ??
-      new FreshnessGate(collaboration.messages, collaboration.attention);
+      new FreshnessGate(
+        collaboration.messages,
+        collaboration.attention,
+        Date.now,
+        collaboration.tasks,
+      );
   }
   async call(
     run: RunToken,

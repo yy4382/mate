@@ -83,9 +83,12 @@ CREATE TABLE attention_state(agent_id TEXT NOT NULL,target TEXT NOT NULL,resolve
 CREATE TABLE works(id TEXT PRIMARY KEY, origin TEXT NOT NULL UNIQUE, target TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'active');
 CREATE TABLE work_runs(run_id TEXT PRIMARY KEY REFERENCES runs(id), work_id TEXT NOT NULL REFERENCES works(id));
 CREATE TABLE message_work(message_key TEXT PRIMARY KEY REFERENCES messages(key), work_id TEXT NOT NULL REFERENCES works(id));
-CREATE TABLE tasks(id TEXT PRIMARY KEY, work_id TEXT NOT NULL REFERENCES works(id), parent_id TEXT REFERENCES tasks(id), target TEXT NOT NULL, title TEXT NOT NULL, owner TEXT REFERENCES agents(id), assigned_to TEXT REFERENCES agents(id), status TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 0, waiting_on TEXT REFERENCES tasks(id), result TEXT, outbox_id TEXT REFERENCES outbox(id), message_key TEXT REFERENCES messages(key), created_by TEXT REFERENCES agents(id), legacy INTEGER NOT NULL DEFAULT 1 CHECK(legacy IN (0,1)));
-CREATE UNIQUE INDEX canonical_message_task ON tasks(message_key) WHERE message_key IS NOT NULL;
+-- A task is anchored to a confirmed message or to the publication that will produce one; the
+-- publication anchor is the task's own reservation, so it is deliberately not a foreign key.
+CREATE TABLE tasks(id TEXT PRIMARY KEY, work_id TEXT NOT NULL REFERENCES works(id), parent_id TEXT REFERENCES tasks(id), target TEXT NOT NULL, title TEXT NOT NULL, owner TEXT REFERENCES agents(id), assigned_to TEXT REFERENCES agents(id), status TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 0, waiting_on TEXT REFERENCES tasks(id), result TEXT, outbox_id TEXT, message_key TEXT REFERENCES messages(key), created_by TEXT REFERENCES agents(id), CHECK(message_key IS NOT NULL OR outbox_id IS NOT NULL));
+CREATE UNIQUE INDEX canonical_message_task ON tasks(message_key);
 CREATE INDEX task_message_lookup ON tasks(message_key);
+CREATE INDEX task_publication_lookup ON tasks(outbox_id);
 CREATE TABLE task_events(id INTEGER PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), at INTEGER NOT NULL, body TEXT NOT NULL);
 CREATE TABLE task_event_baselines(
  task_id TEXT PRIMARY KEY REFERENCES tasks(id),

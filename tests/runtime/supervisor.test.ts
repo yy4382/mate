@@ -5,7 +5,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { Store } from "../../src/storage/store.js";
 import { configSchema } from "../../src/config.js";
 import { configFixture } from "../helpers/config.js";
-import { Messages, Output } from "../helpers/canonical-slack.js";
+import { Messages, Output, anchoredTask } from "../helpers/canonical-slack.js";
 import { Collaboration } from "../../src/collaboration/service.js";
 import { CanonicalAttention } from "../../src/conversations/attention.js";
 import { CanonicalFreshnessGate } from "../../src/conversations/freshness.js";
@@ -218,7 +218,7 @@ it("local tools use immutable receipts and can claim another visible activity", 
   ).toEqual(created);
   expect(c.list("research")).toHaveLength(1);
   const other = c.createWork("human:other", target),
-    task = c.createTask("research", other, target, "other");
+    task = anchoredTask(c, "research", other, target, "other");
   const held = (
     await router.call(
       run,
@@ -273,7 +273,7 @@ it("recovery is bounded even with large task results; memory callback is injecte
   );
   cleanups.unshift(() => supervisor.close());
   for (let n = 0; n < 3; n++) {
-    const task = c.createTask("research", work, fixtureTarget("CTEST", "100.000001"), "big");
+    const task = anchoredTask(c, "research", work, fixtureTarget("CTEST", "100.000001"), "big");
     c.claim("research", task);
     c.update("research", task, "review", "x".repeat(35000));
   }
@@ -708,7 +708,7 @@ it("model context replacement waits for run completion and retains durable ident
   });
   const before = (router.sessions.status("research") as any).session,
     peer = (router.sessions.status("writer") as any).session;
-  const task = c.createTask("research", work, { conversationId: "CTEST" }, "durable task");
+  const task = anchoredTask(c, "research", work, { conversationId: "CTEST" }, "durable task");
   const reminder = c.reminders.create("research", work, {
     target: { conversationId: "CTEST" },
     content: "later",

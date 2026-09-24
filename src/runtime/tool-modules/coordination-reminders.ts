@@ -62,16 +62,19 @@ function ownedReminder(context: ToolExecutionContext, reminderId: string): strin
  * A task mutation is attributed to the work item its own reference names, and that work item must
  * still be active for this Agent.
  */
-function taskWorkOf(
-  context: ToolExecutionContext,
-  args: { taskId?: string | undefined; message?: { messageId: string } | undefined },
-): string {
+function taskWorkOf(context: ToolExecutionContext, args: TaskReference): string {
   fence(context);
   return activeWork(
     context,
     context.coordination.workOf(context.run.agentId, args, context.workId),
   );
 }
+/** One task mutation, named either by its own id or by the visible message it is anchored to. */
+const taskRef = <Extra extends z.ZodRawShape>(extra: Extra) =>
+  z.union([
+    z.object({ taskId: id, ...extra }).strict(),
+    z.object({ anchor: messageRef, ...extra }).strict(),
+  ]);
 const taskMutation = <Schema extends z.ZodType<TaskReference, any>>(
   name: string,
   schema: Schema,
@@ -330,38 +333,36 @@ const definitions: ToolSpec[] = [
           viewToken: id.optional(),
         })
         .strict(),
+      z
+        .object({
+          anchor: messageRef,
+          expectedVersion: z.number().int().nonnegative(),
+          viewToken: id.optional(),
+        })
+        .strict(),
     ]),
-    "Claim a visible task with CAS, possibly after freshness confirmation.",
+    "Claim the task a visible message anchors, or a visible task by id, with CAS, possibly after freshness confirmation.",
     ({ coordination, run, workId, actionId }, args) => ({
       value: coordination.submit(run, workId, actionId, "tasks.claim", args, args.viewToken),
     }),
   ),
   taskMutation(
     "tasks.unclaim",
-    z
-      .object({
-        taskId: id,
-        expectedVersion: z.number().int().nonnegative(),
-        viewToken: id.optional(),
-      })
-      .strict(),
-    "Release an owned task with CAS.",
+    taskRef({ expectedVersion: z.number().int().nonnegative(), viewToken: id.optional() }),
+    "Release an owned task, named by id or by the message it anchors, with CAS.",
     ({ coordination, run, workId, actionId }, args) => ({
       value: coordination.submit(run, workId, actionId, "tasks.unclaim", args, args.viewToken),
     }),
   ),
   taskMutation(
     "tasks.transfer",
-    z
-      .object({
-        taskId: id,
-        peerId: id,
-        expectedVersion: z.number().int().nonnegative(),
-        reviewDisposition: z.enum(["preserve_review", "return_for_changes"]).optional(),
-        viewToken: id.optional(),
-      })
-      .strict(),
-    "Transfer owned work with CAS and explicit review disposition.",
+    taskRef({
+      peerId: id,
+      expectedVersion: z.number().int().nonnegative(),
+      reviewDisposition: z.enum(["preserve_review", "return_for_changes"]).optional(),
+      viewToken: id.optional(),
+    }),
+    "Transfer owned work, named by task id or message anchor, with CAS and explicit review disposition.",
     ({ coordination, run, workId, actionId }, args) => ({
       value: coordination.submit(run, workId, actionId, "tasks.transfer", args, args.viewToken),
     }),
@@ -391,16 +392,13 @@ const definitions: ToolSpec[] = [
   ),
   taskMutation(
     "tasks.update",
-    z
-      .object({
-        taskId: id,
-        status: z.enum(["doing", "review", "done", "cancelled", "failed"]),
-        result: text.optional(),
-        expectedVersion: z.number().int().nonnegative(),
-        viewToken: id.optional(),
-      })
-      .strict(),
-    "Update owned task state and optional result with CAS.",
+    taskRef({
+      status: z.enum(["doing", "review", "done", "cancelled", "failed"]),
+      result: text.optional(),
+      expectedVersion: z.number().int().nonnegative(),
+      viewToken: id.optional(),
+    }),
+    "Update owned task state and optional result, named by task id or message anchor, with CAS.",
     ({ coordination, run, workId, actionId }, args) => ({
       value: coordination.submit(run, workId, actionId, "tasks.update", args, args.viewToken),
     }),

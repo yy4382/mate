@@ -1,7 +1,7 @@
 import { fixtureTarget, externalThread } from "../helpers/canonical-slack.js";
 import { afterEach, expect, it, vi } from "vitest";
 import { Store } from "../../src/storage/store.js";
-import { Messages, Output } from "../helpers/canonical-slack.js";
+import { Messages, Output, anchoredTask } from "../helpers/canonical-slack.js";
 import { Collaboration } from "../../src/collaboration/service.js";
 import { Broker } from "../../src/policy/broker.js";
 import { ToolRouter } from "../../src/runtime/tools.js";
@@ -58,7 +58,7 @@ const input = {
 };
 it("reminders survive completed tasks and wake only their author; fixed receipts do not wake channel peers", async () => {
   const { s, c, work, output } = setup();
-  const task = c.createTask("research", work, target, "change");
+  const task = anchoredTask(c, "research", work, target, "change");
   c.claim("research", task);
   const reminder = c.reminders.create("research", work, { ...input, taskId: task });
   c.update("research", task, "done", "verified");
@@ -92,7 +92,7 @@ it("keeps firing a reminder that is attached to a finished task of its own work 
   const { s, c } = setup();
   // The reminder is attached to a task that lives in a work item of its own, not the source work.
   const attached = c.createWork("attached-source", target);
-  const task = c.createTask("research", attached, target, "attached change");
+  const task = anchoredTask(c, "research", attached, target, "attached change");
   c.claim("research", task);
   const reminder = c.reminders.create("research", attached, { ...input, taskId: task });
   c.update("research", task, "done", "verified");
