@@ -113,6 +113,28 @@ async function setup() {
     send,
   };
 }
+it("keeps one binding's incomplete history from standing for another binding's coverage", async () => {
+  const f = await setup();
+  // A second channel presents the same internal room, so the publisher has two independent targets.
+  const imports = f.core.binding(f.bindingId).imports,
+    other = f.core.configure(
+      f.target.conversationId,
+      { provider: "slack", workspace: "TTEST", externalId: "DOTHER" },
+      "research",
+      imports,
+      true,
+    );
+  f.transport.clients.get("research")!.conversations.history = vi.fn(async ({ channel }: any) => {
+    if (channel === "DOTHER") throw new Error("Slack history unavailable");
+    return { ok: true, messages: [], response_metadata: {} };
+  }) as never;
+  // One binding's failure is its own fact: the other one stays recovered.
+  await expect(f.service.catchUpBinding(other)).resolves.toBe(false);
+  await expect(f.service.catchUpBinding(f.bindingId)).resolves.toBe(true);
+  // The whole-publisher answer still reports the failure, and a repeated attempt is cheap.
+  await expect(f.service.catchUp()).resolves.toBe(false);
+  await expect(f.service.catchUpBinding(f.bindingId)).resolves.toBe(true);
+});
 it("authenticates Slack projection echo before HTTP and records external copy drift without changing the original", async () => {
   const f = await setup(),
     sent = await f.send();

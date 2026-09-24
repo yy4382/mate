@@ -61,6 +61,14 @@ export interface SourcePage {
   gaps: string[];
   available: boolean;
 }
+/**
+ * Why a local read of one target still waits for its adapter's coverage. The adapter owns the
+ * platform fact; the core only decides that a local view may not be presented as current while
+ * that target's history has not been caught up.
+ */
+export interface LocalCoveragePort {
+  coverageWait(actor: string, conversationId: string): Error | undefined;
+}
 /** Adapter verifies the acting installation. Canonical IDs and a fenced run cross this port. */
 export interface HistorySource {
   fetch(
@@ -95,7 +103,20 @@ export class ConversationHistory {
   constructor(
     readonly messages: Conversations,
     readonly source?: HistorySource,
+    /** Local coverage of one external target; absent means nothing waits. */
+    readonly coverage?: LocalCoveragePort,
   ) {}
+  /**
+   * A local page may only describe the target once that target's history was caught up. Remote
+   * acquisition is not gated here: fetching is how the caller completes that coverage.
+   */
+  private requireCoverage(run: RunToken, target?: ConversationTarget): void {
+    if (!target || !this.coverage) return;
+    if (this.messages.references.conversation(target.conversationId).authority !== "external")
+      return;
+    const waiting = this.coverage.coverageWait(run.agentId, target.conversationId);
+    if (waiting) throw waiting;
+  }
   /** Identity and target visibility the owning module applies to one history request. */
   authorize(run: RunToken, target?: ConversationTarget): void {
     const m = this.messages;
@@ -210,6 +231,7 @@ export class ConversationHistory {
   }
   private query(run: RunToken, input: Query, operation: string) {
     this.authorize(run, input.target);
+    this.requireCoverage(run, input.target);
     const key = this.key(run, operation, input),
       position = this.decode(input.cursor, key)?.position;
     const before = this.boundary(run, input, input.before),
@@ -387,8 +409,9 @@ export class ConversationHistory {
     // walk, so it names its direction and the two-sided read hands no cursor off.
     if (input.cursor && !input.direction)
       throw new Error("A history walk continuation needs its direction");
-    const direction: Direction = input.direction ?? "before",
-      owner = this.aroundKey(run, anchor.id, direction),
+    const direction: Direction = input.direction ?? "before";
+    this.requireCoverage(run, target);
+    const owner = this.aroundKey(run, anchor.id, direction),
       cursor = input.cursor
         ? this.decode(input.cursor, owner, "another anchor, direction or query")
         : undefined,

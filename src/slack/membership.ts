@@ -2,6 +2,7 @@ import type { WebClient } from "@slack/web-api";
 import type { Conversations } from "../conversations/messages.js";
 import type { SlackMapper } from "./mapper.js";
 import type { MembershipObservation } from "../conversations/directory.js";
+import type { SlackBoundaryReadiness } from "./readiness.js";
 
 /**
  * Reads the platform's current membership fact for one external conversation.
@@ -12,10 +13,18 @@ export class SlackMembership {
     readonly messages: Conversations,
     readonly clients: Map<string, WebClient>,
     readonly mapper: SlackMapper,
+    /** Connection readiness; absent means no wait is known. */
+    readonly readiness?: SlackBoundaryReadiness,
   ) {}
+  /**
+   * The confirmation read waits for its own installation's connection, but never for the target's
+   * own permission fact: this call is what establishes that fact, so waiting on it would deadlock.
+   */
   private client(actor: string): WebClient {
     this.messages.agent(actor);
     this.messages.requireReadable(actor);
+    const waiting = this.readiness?.waitingFor(actor);
+    if (waiting) throw waiting;
     const client = this.clients.get(actor);
     if (!client) throw new Error("Agent has no Slack installation");
     return client;

@@ -144,11 +144,19 @@ export class Application {
     const slackApp = slack ? slackApplication(store, slack.config, team) : undefined;
     this.messages = slackApp?.messages ?? coreConversations(store, team);
     this.messages.writes.assertFormat();
-    // Freshness needs the one attention instance this application uses. The gate built from it
-    // is wired into the output and the tool router at construction, never installed afterwards.
-    this.attention = new CanonicalAttention(this.messages);
+    // The Slack transport is what knows whether one external target's history was caught up, so
+    // the transport exists before the attention and history views that must wait for it.
     this.transport =
       slackApp && slack ? new CanonicalSlackTransport(store, slackApp.mapper) : undefined;
+    const coverage = this.transport
+      ? {
+          coverageWait: (actor: string, conversationId: string) =>
+            this.transport!.waitingForTarget(actor, conversationId, "history"),
+        }
+      : undefined;
+    // Freshness needs the one attention instance this application uses. The gate built from it
+    // is wired into the output and the tool router at construction, never installed afterwards.
+    this.attention = new CanonicalAttention(this.messages, coverage);
     this.output = new CanonicalOutput(
       this.messages,
       this.transport ?? unavailableTransport,
@@ -230,6 +238,7 @@ export class Application {
       directory,
       (value) => slackApp?.argumentsCodec.args(value) ?? value,
       transport ? new SlackHistory(this.messages, transport) : undefined,
+      coverage,
     );
     this.supervisor = new Supervisor(
       this.collaboration,

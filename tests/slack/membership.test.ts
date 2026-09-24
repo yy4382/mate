@@ -18,6 +18,7 @@ import {
   slackMethods,
 } from "../../src/slack/capabilities.js";
 import { configFixture } from "../helpers/config.js";
+import { confirmRememberedChannels } from "../helpers/slack-maintenance.js";
 const cleanup: (() => void)[] = [];
 afterEach(() => cleanup.splice(0).forEach((fn) => fn()));
 const signal = new AbortController().signal;
@@ -196,7 +197,7 @@ it("platform revocation closes access at the next membership sync", async () => 
     id = f.mapper.conversation("CNEW");
   f.m.membership("research", id, true);
   f.api.info.mockResolvedValue({ ok: true, channel: { id: "CNEW", is_member: false } });
-  expect(await f.service().membership(true)).toBe(true);
+  expect(await confirmRememberedChannels(f.service(), "research")).toBe(true);
   expect(f.m.access("research", id)).toBe(false);
 });
 it("refresh reports the membership the platform currently shows and never joins or leaves", async () => {

@@ -43,6 +43,10 @@ import {
 } from "../../src/execution/linux-processes.js";
 import { SystemOperations } from "../../src/policy/system-operations.js";
 import { daemonConfigSchema } from "../../src/daemon/config.js";
+import {
+  confirmRememberedChannels,
+  recoverRememberedChannels,
+} from "../helpers/slack-maintenance.js";
 import { daemonFixture } from "../helpers/daemon-config.js";
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -125,7 +129,7 @@ it("keeps an inaccessible listed DM closed without blocking other Slack conversa
   transport.clients.get("writer")!.conversations.info = info as any;
   const discovered = await directory.spaces("research");
   expect(discovered.spaces.map((space) => space.conversationId)).not.toContain(stale);
-  await expect(service.membership(true)).resolves.toBe(true);
+  await expect(confirmRememberedChannels(service, "research")).resolves.toBe(true);
   expect(c.messages.access("research", stale)).toBe(false);
   expect(c.messages.access("research", active)).toBe(true);
   expect(info).not.toHaveBeenCalledWith({ channel: "DSLACKBOT" });
@@ -135,17 +139,14 @@ it("keeps an inaccessible listed DM closed without blocking other Slack conversa
   info.mockImplementation(async () => {
     throw new Error("network unavailable");
   });
-  await expect(service.membership(true)).rejects.toThrow(
-    "Slack membership verification did not complete",
-  );
+  // One channel without a platform answer leaves the whole-scope confirmation incomplete.
+  await expect(confirmRememberedChannels(service, "research")).resolves.toBe(false);
   expect(c.messages.access("research", active)).toBe(false);
   info.mockImplementation(async ({ channel }) => {
     if (channel === "CTEST") throw { data: { error: "channel_not_found" } };
     return { channel: { is_im: channel.startsWith("D"), is_member: true } };
   });
-  await expect(service.membership(true)).rejects.toThrow(
-    "Slack membership verification did not complete",
-  );
+  await expect(confirmRememberedChannels(service, "research")).resolves.toBe(false);
 });
 it("two Agents can coordinate through one canonical message and direct peer feedback without a task tree", async () => {
   const { store, c, ingress, broker, post } = setup(),
@@ -1096,7 +1097,8 @@ it("reports the daemon running before Slack connects and stops a pending connect
   const sockets = slackSockets();
   const daemon = await Daemon.create(config, log, process.cwd(), { slackSocket: sockets.socket });
   const verify = vi.spyOn(daemon.slack, "verifyAgent").mockImplementation(() => gate.promise);
-  const membership = vi.spyOn(daemon.slack, "membership");
+  const confirmations = vi.spyOn(daemon.slack, "confirmMembership"),
+    recoveries = vi.spyOn(daemon.slack, "recoverChannel");
   try {
     // Startup does not wait for the Slack connection: the daemon is running while this
     // installation is still connecting, and the two facts are reported separately.
@@ -1110,8 +1112,9 @@ it("reports the daemon running before Slack connects and stops a pending connect
     expect(() => acquireLock(join(root, "state", "daemon.lock"))).toThrow("Another Mate");
     gate.resolve();
     await closing;
-    // A stop during the pending connection never lets membership or history catch-up run after it.
-    expect(membership).not.toHaveBeenCalled();
+    // A stop during the pending connection never lets target verification or history catch-up run.
+    expect(confirmations).not.toHaveBeenCalled();
+    expect(recoveries).not.toHaveBeenCalled();
     // The socket that attempt opened is closed instead of being left live.
     expect(sockets.forAgent("research")!.disconnects).toBeGreaterThan(0);
     const release = acquireLock(join(root, "state", "daemon.lock"));
@@ -1153,7 +1156,7 @@ it("offline replies in watched threads are durably ingested and maintain a separ
   }));
   transport.clients.get("research")!.conversations.replies = replies as any;
   const slack = new SlackService(c, transport, ingress, new Controls(c, supervisor, broker));
-  await slack.catchUp();
+  await recoverRememberedChannels(slack, "research");
   slack.replay();
   expect(
     c.messages.read("research", fixtureTarget("CTEST", "100.000001")).map((m) => m.text),

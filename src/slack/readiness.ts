@@ -19,18 +19,115 @@ export interface SlackInstallationReadiness {
   attempts: number;
   changedAt: number;
 }
+/**
+ * Platform conditions of one external target: a Slack channel or DM this installation acts on.
+ * The platform channel is the unit, because membership is a fact about a channel — one internal
+ * room can be projected into several channels, and each of them carries its own facts. A target
+ * that is not ready holds the operations that name it, and it never revokes the installation's
+ * other, already verified targets.
+ */
+export interface SlackTargetReadiness {
+  agentId: string;
+  /** The platform channel these conditions describe; the identity every boundary call names. */
+  channel: string;
+  /** The conversation this channel currently carries: the channel itself, or a projected room. */
+  conversationId: string;
+  /**
+   * What the platform last stated about this Agent's membership. `unconfirmed` means no current
+   * evidence exists, so a previously cached grant may not be used to cross the boundary.
+   */
+  permission: "unconfirmed" | "confirmed" | "denied";
+  /** Whether this target's local history was caught up on the current connection. */
+  history: "pending" | "complete";
+  /** Stable reason for the current conditions, e.g. `membership_unconfirmed`. */
+  reason: string;
+  changedAt: number;
+}
 export interface SlackReadiness {
   updatedAt: number;
   installations: SlackInstallationReadiness[];
+  /** Reported per target; absent in a record written before targets were reported. */
+  targets?: SlackTargetReadiness[];
 }
+/** Which of a target's conditions one operation actually needs before it may cross the boundary. */
+export type SlackTargetNeed = "permission" | "history";
 /**
- * One installation is usable only when its own connection, permission and history are ready.
- * Readiness this process never published (an embedded application, a harness) reports nothing to
- * wait for; only an installation this runtime has an opinion about can hold work back.
+ * One installation is usable when its own connection and identity are verified. Its targets then
+ * carry the permission and history conditions that hold the operations naming them. Readiness this
+ * process never published (an embedded application, a harness) reports nothing to wait for; only an
+ * installation this runtime has an opinion about can hold work back.
  */
 export function slackReady(readiness: SlackReadiness | undefined, agentId: string): boolean {
   if (!readiness) return true;
   return readiness.installations.find((entry) => entry.agentId === agentId)?.state === "ready";
+}
+/**
+ * Why one target's own conditions make work wait, or undefined when they do not. This answer says
+ * nothing about the installation: an internal conversation is never held by a Slack fact. A target
+ * this readiness never reported has no pending condition to wait for.
+ */
+export function slackTargetWaitReason(
+  readiness: SlackReadiness | undefined,
+  agentId: string,
+  channel: string,
+  need: SlackTargetNeed,
+): string | undefined {
+  if (!readiness) return undefined;
+  const target = readiness.targets?.find(
+    (entry) => entry.agentId === agentId && entry.channel === channel,
+  );
+  // Unreported conditions and a definite denial are not waits: the access check answers them.
+  if (!target || target.permission === "denied") return undefined;
+  if (need === "permission" && target.permission === "unconfirmed")
+    return `Slack target ${channel} of ${agentId} has no confirmed permission yet (${target.reason})`;
+  if (need === "history" && target.history === "pending")
+    return `Slack target ${channel} of ${agentId} is still catching up on history (${target.reason}); history.fetch can still read remote pages for it`;
+  return undefined;
+}
+/**
+ * Why work naming one target waits before it crosses the platform boundary. The installation gate
+ * comes first: without a connection no target condition can be established.
+ */
+export function slackBoundaryWaitReason(
+  readiness: SlackReadiness | undefined,
+  agentId: string,
+  channel: string,
+  need: SlackTargetNeed,
+): string | undefined {
+  return (
+    slackWaitReason(readiness, agentId) ?? slackTargetWaitReason(readiness, agentId, channel, need)
+  );
+}
+/** The readiness facts an adapter consults before it crosses the Slack boundary for one target. */
+export interface SlackBoundaryReadiness {
+  waitingFor(actor: string): Error | undefined;
+  /**
+   * The second argument names the target as its conversation or as its platform channel; the
+   * holder resolves whichever it needs, so the gate cannot be skipped by naming one instead of
+   * the other. Absent when the holder has no per-target readiness to report.
+   */
+  waitingForTarget?(
+    actor: string,
+    conversationId: string,
+    need: SlackTargetNeed,
+  ): Error | undefined;
+}
+/**
+ * The one policy every boundary call applies: the installation's own condition first, then the
+ * permission of the target the call names. A call that names no target waits for its installation
+ * only, and readiness this process never published waits for nothing.
+ */
+export function slackBoundaryWait(
+  readiness: SlackBoundaryReadiness | undefined,
+  actor: string,
+  channel?: string,
+  need: SlackTargetNeed = "permission",
+): Error | undefined {
+  if (!readiness) return undefined;
+  return (
+    readiness.waitingFor(actor) ??
+    (channel ? readiness.waitingForTarget?.(actor, channel, need) : undefined)
+  );
 }
 /** Why Slack-dependent work waits, or undefined when nothing waits. Never carries credentials. */
 export function slackWaitReason(
@@ -153,7 +250,28 @@ export function readSlackReadiness(source: { db: Database.Database }): SlackRead
       )
     )
       return null;
-    return { updatedAt: parsed.updatedAt, installations: parsed.installations };
+    // A record written before targets were reported keeps its installation facts and simply
+    // reports no target condition; an unreadable target list invalidates the record.
+    const targets = parsed.targets ?? [];
+    if (
+      !Array.isArray(targets) ||
+      targets.some(
+        (entry) =>
+          !entry ||
+          typeof entry.agentId !== "string" ||
+          typeof entry.channel !== "string" ||
+          typeof entry.conversationId !== "string" ||
+          typeof entry.reason !== "string" ||
+          !["unconfirmed", "confirmed", "denied"].includes(entry.permission) ||
+          !["pending", "complete"].includes(entry.history),
+      )
+    )
+      return null;
+    return {
+      updatedAt: parsed.updatedAt,
+      installations: parsed.installations,
+      ...(parsed.targets ? { targets } : {}),
+    };
   } catch {
     return null;
   }

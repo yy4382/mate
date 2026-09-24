@@ -6,7 +6,15 @@ import type {
   DispatchFailure,
   MessageConfirmation,
 } from "../conversations/output.js";
-import { slackReady, slackWaitReason, type SlackReadiness } from "./readiness.js";
+import {
+  slackBoundaryWaitReason,
+  slackReady,
+  slackTargetWaitReason,
+  slackWaitReason,
+  type SlackBoundaryReadiness,
+  type SlackReadiness,
+  type SlackTargetNeed,
+} from "./readiness.js";
 import type { ConversationTarget } from "../domain/conversations.js";
 import type { Store } from "../storage/store.js";
 import type { SlackMapper } from "./mapper.js";
@@ -19,13 +27,20 @@ export class SlackNotReadyError extends Error {
   }
 }
 /**
- * Readiness of each installation, published by the Slack runtime that owns the connection. Every
- * caller that would otherwise cross this boundary for a not-ready installation reads it here, so
- * the work waits with its durable record instead of failing or reporting an unknown outcome.
+ * Readiness of each installation and of each target it acts on, published by the Slack runtime
+ * that owns the connection. Every caller that would otherwise cross this boundary for a not-ready
+ * installation or target reads it here, so the work waits with its durable record instead of
+ * failing or reporting an unknown outcome.
  */
-export interface SlackReadinessPort {
+export interface SlackReadinessPort extends SlackBoundaryReadiness {
   readyFor(actor: string): boolean;
   waitingFor(actor: string): SlackNotReadyError | undefined;
+  /** Why work naming one target waits, when that target's own conditions are not established. */
+  waitingForTarget(
+    actor: string,
+    conversationId: string,
+    need: SlackTargetNeed,
+  ): SlackNotReadyError | undefined;
   readyAgents(): readonly string[];
 }
 /** No automatic write retries. Immutable outbox identity crosses this boundary unchanged. */
@@ -45,6 +60,38 @@ export class CanonicalSlackTransport implements ExternalMessageTransport, SlackR
   }
   waitingFor(actor: string): SlackNotReadyError | undefined {
     const reason = slackWaitReason(this.readiness, actor);
+    return reason ? new SlackNotReadyError(reason) : undefined;
+  }
+  /**
+   * A target whose permission is still unconfirmed waits, even if its access is cached as granted.
+   * The target is named by the conversation the caller has, or by the platform channel itself for
+   * a caller that only knows that; this adapter resolves the one it needs, so neither way to name
+   * a target can quietly skip its conditions.
+   */
+  waitingForTarget(
+    actor: string,
+    conversationId: string,
+    need: SlackTargetNeed,
+  ): SlackNotReadyError | undefined {
+    // The installation's own condition answers first, so a not-ready installation reports why it
+    // waits even for a conversation this adapter cannot route yet.
+    const installation = this.waitingFor(actor);
+    if (installation) return installation;
+    let channel = conversationId;
+    try {
+      channel = this.mapper.target({ conversationId }).channel;
+    } catch {
+      /* The caller may already have named the platform channel; the lookup below decides. */
+    }
+    return this.waitingForChannel(actor, channel, need);
+  }
+  /** The same wait named directly by platform channel, for a caller that only has the channel. */
+  waitingForChannel(
+    actor: string,
+    channel: string,
+    need: SlackTargetNeed,
+  ): SlackNotReadyError | undefined {
+    const reason = slackBoundaryWaitReason(this.readiness, actor, channel, need);
     return reason ? new SlackNotReadyError(reason) : undefined;
   }
   readyAgents(): readonly string[] {
@@ -89,6 +136,20 @@ export class CanonicalSlackTransport implements ExternalMessageTransport, SlackR
         }),
       );
   }
+  /**
+   * True while one target's permission has no current platform answer. Only the target's own fact
+   * decides this, so an internal conversation is never held by its installation's Slack state.
+   */
+  pendingPermission(actor: string, target: ConversationTarget): boolean {
+    let channel: string;
+    try {
+      channel = this.mapper.target(target).channel;
+    } catch {
+      // An internal or unrouted conversation is not a Slack target and never waits for one.
+      return false;
+    }
+    return !!slackTargetWaitReason(this.readiness, actor, channel, "permission");
+  }
   pendingInput(target: ConversationTarget): boolean {
     const external = this.mapper.target(target);
     return !!this.store.db
@@ -98,7 +159,11 @@ export class CanonicalSlackTransport implements ExternalMessageTransport, SlackR
       .get(external.channel);
   }
   async post(request: DispatchEnvelope): Promise<MessageConfirmation> {
-    const waiting = this.waitingFor(request.actor);
+    const waiting = this.waitingForTarget(
+      request.actor,
+      request.target.conversationId,
+      "permission",
+    );
     if (waiting) throw waiting;
     const client = this.clients.get(request.actor);
     if (!client) throw new Error("Missing Slack client");

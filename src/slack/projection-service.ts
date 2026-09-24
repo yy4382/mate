@@ -275,25 +275,33 @@ export class SlackProjectionService {
       });
     return recovered;
   }
+  /** Every known root thread below one binding; per-thread watermarks make repeats cheap. */
+  private roots(bindingId: string): string[] {
+    return (
+      this.core.messages.store.db
+        .prepare(
+          "SELECT mb.external_message root FROM message_bindings mb JOIN message_identities m ON m.id=mb.message_id AND m.root_id=m.id JOIN projection_bindings p ON p.provider=mb.provider AND p.workspace=mb.workspace AND p.external_id=mb.external_conversation WHERE p.enabled=1 AND p.id=? ORDER BY mb.rowid",
+        )
+        .all(bindingId) as { root: string }[]
+    ).map((row) => row.root);
+  }
+  /**
+   * Recovers the coverage of one binding: its channel and the known thread roots below it. One
+   * binding's incomplete history is this binding's own fact, so the connection runtime can keep
+   * every other projected conversation in service.
+   */
+  async catchUpBinding(bindingId: string, progress?: () => void): Promise<boolean> {
+    const b = this.core.binding(bindingId);
+    let complete = true;
+    if (b.enabled && !(await this.history(b, undefined, progress))) complete = false;
+    for (const root of this.roots(b.id))
+      if (!(await this.history(b, root, progress))) complete = false;
+    return complete;
+  }
   async catchUp(progress?: () => void, publishers?: ReadonlySet<string>): Promise<boolean> {
     let complete = true;
     for (const b of this.bindings(publishers))
-      if (b.enabled && !(await this.history(b, undefined, progress))) complete = false;
-    // Startup must cover every known root; per-thread watermarks make repeats cheap.
-    const s = this.core.messages.store;
-    const roots = (
-      s.db
-        .prepare(
-          "SELECT p.id,p.publisher,mb.external_message root FROM message_bindings mb JOIN message_identities m ON m.id=mb.message_id AND m.root_id=m.id JOIN projection_bindings p ON p.provider=mb.provider AND p.workspace=mb.workspace AND p.external_id=mb.external_conversation WHERE p.enabled=1 AND p.provider='slack' AND p.workspace=? ORDER BY mb.rowid",
-        )
-        .all(this.slack.mapper.config.teamId) as {
-        id: string;
-        publisher: string;
-        root: string;
-      }[]
-    ).filter((row) => !publishers || publishers.has(row.publisher));
-    for (const root of roots)
-      if (!(await this.history(this.core.binding(root.id), root.root, progress))) complete = false;
+      if (!(await this.catchUpBinding(b.id, progress))) complete = false;
     return complete;
   }
 }
