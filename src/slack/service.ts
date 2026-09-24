@@ -103,7 +103,7 @@ export class SlackService {
         for (const agent of this.transport.mapper.config.agents) {
           if (this.stopping()) return false;
           const result = await directory.spaces(agent.id, Number.POSITIVE_INFINITY, progress);
-          if (result.incomplete) {
+          if (result.coverage.some((entry) => !entry.complete)) {
             complete = false;
             break;
           }

@@ -54,11 +54,19 @@ function setup(directory?: ConversationDirectory) {
   c.enqueue("research", work, "start", {});
   const run = store.beginRun("research")!;
   store.input(run, {});
-  return { store, c, work, run, router: new ToolRouter(c, broker, undefined, directory), broker };
+  return {
+    store,
+    c,
+    messages,
+    work,
+    run,
+    router: new ToolRouter(c, broker, undefined, directory),
+    broker,
+  };
 }
 const expected = `
 history.page history.search history.around history.fetch
-conversations.capabilities conversations.discover conversations.join conversations.leave conversations.refresh conversations.list conversations.members conversations.openDM
+conversations.refresh conversations.list conversations.members conversations.openDM
 attention.peek attention.read attention.resolve attention.defer attention.mute
 messages.recent messages.read messages.search messages.send messages.watch inbox.list inbox.read inbox.ack
 works.list works.select tasks.list tasks.read tasks.events tasks.byMessage tasks.intents tasks.retry tasks.continue tasks.discard tasks.create tasks.claim tasks.unclaim tasks.transfer tasks.wait tasks.update tasks.delegate
@@ -120,6 +128,74 @@ it("registers every public operation exactly once with complete policies and sta
     expect(described.name).toBe(name);
     expect(described.inputSchema).toHaveProperty("$schema");
   }
+});
+
+it("offers no self-service channel membership or unjoined-channel search", () => {
+  const removed = [
+    "conversations.capabilities",
+    "conversations.discover",
+    "conversations.join",
+    "conversations.leave",
+  ];
+  const names = builtInToolSpecs.map((entry) => entry.name);
+  for (const name of removed) expect(names).not.toContain(name);
+  const baseline = JSON.stringify(
+    buildBaseline(configSchema.parse(configFixture).agents[0]!, operationDocumentation).messages[0],
+  );
+  for (const name of removed) expect(baseline).not.toContain(name);
+  expect(baseline).toContain("cannot join or leave a channel");
+});
+
+it("keeps mute, follow and defer as the Agent's own attention choices", async () => {
+  const { router, run, work, messages } = setup(),
+    signal = new AbortController().signal,
+    target = { conversationId: "CTEST" },
+    speak = (ts: string, text = "ordinary background activity") =>
+      messages.record(
+        {
+          team: "TTEST",
+          channel: "CTEST",
+          ts,
+          thread: ts,
+          revision: ts,
+          text,
+          user: "UOWNER",
+          deleted: false,
+        },
+        ["research"],
+      ),
+    inbox = async (callId: string) =>
+      (
+        (await router.call(run, work, callId, "inbox.list", {}, signal)).value as {
+          kind?: string;
+        }[]
+      )
+        .map((delivery) => delivery.kind)
+        // The fixture's own work-start delivery carries no message kind.
+        .filter((kind) => kind === "notice" || kind === "message");
+  // CTEST is a mentions-only channel: ordinary activity stays quiet until followed.
+  speak("101.000001");
+  expect(await inbox("inbox-quiet")).toEqual([]);
+  await router.call(run, work, "follow", "messages.watch", { target, active: true }, signal);
+  speak("102.000001");
+  expect(await inbox("inbox-followed")).toEqual(["message"]);
+  await router.call(run, work, "mute", "attention.mute", { target, active: true }, signal);
+  speak("103.000001");
+  expect(await inbox("inbox-muted")).toEqual(["message"]);
+  speak("104.000001", "<@UONE> a direct request still surfaces");
+  expect(await inbox("inbox-mute-direct")).toEqual(["message", "message"]);
+  await router.call(run, work, "unmute", "attention.mute", { target, active: false }, signal);
+  await router.call(
+    run,
+    work,
+    "defer",
+    "attention.defer",
+    { target, until: Date.now() + 60000 },
+    signal,
+  );
+  speak("105.000001");
+  speak("106.000001", "<@UONE> defer postpones even a direct request");
+  expect(await inbox("inbox-deferred")).toEqual(["message", "message"]);
 });
 
 it("fails closed for duplicate, reserved, incomplete and unknown module specifications", () => {
@@ -308,7 +384,7 @@ it("applies post-await run fences while attention preferences remain available a
     spaces: async () => {
       started();
       await gate;
-      return { spaces: [], incomplete: false };
+      return { spaces: [], coverage: [] };
     },
   } as unknown as ConversationDirectory;
   const first = setup(directory),
@@ -745,12 +821,12 @@ it("rechecks run eligibility and visibility after an awaited operation is overta
     list: async () => {
       enterStop();
       await stopGate;
-      return { spaces: [], incomplete: false };
+      return { spaces: [], coverage: [] };
     },
     spaces: async () => {
       enterStop();
       await stopGate;
-      return { spaces: [], incomplete: false };
+      return { spaces: [], coverage: [] };
     },
   } as unknown as ConversationDirectory;
   const stoppedRouter = new ToolRouter(stopped.c, stopped.broker, undefined, stoppedDirectory);
@@ -775,7 +851,7 @@ it("rechecks run eligibility and visibility after an awaited operation is overta
     spaces: async () => {
       enterAbort();
       await abortGate;
-      return { spaces: [], incomplete: false };
+      return { spaces: [], coverage: [] };
     },
   } as unknown as ConversationDirectory;
   const abortedRouter = new ToolRouter(aborted.c, aborted.broker, undefined, abortedDirectory);

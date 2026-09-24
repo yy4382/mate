@@ -88,6 +88,45 @@ it("opens one durable peer DM, commits work-bound delivery and never calls an ex
     f.directory.openDM(a, "new-open", { kind: "agent", id: "bob" }, signal),
   ).rejects.toThrow("access denied");
 });
+it("member view and peer DM creation answer under the acting Agent's current access", async () => {
+  const f = setup(),
+    a = f.run("alice"),
+    dm = (await f.directory.openDM(a, "a-open", { kind: "agent", id: "bob" }, signal)) as {
+      conversationId: string;
+    };
+  const work = f.collaboration.createWork("member-view", dm);
+  f.collaboration.enqueue("alice", work, "member-view", {});
+  const router = new ToolRouter(
+      f.collaboration,
+      new Broker(
+        f.s,
+        f.collaboration,
+        { execute: async () => ({ code: 0, stdout: "", stderr: "", truncated: false }) },
+        {},
+      ),
+      undefined,
+      f.directory,
+    ),
+    call = (operation: string, input: unknown) =>
+      router.call(a, work, operation, operation, input, signal),
+    members = async (conversationId: string) =>
+      ((await call("conversations.members", { conversationId })).value as any).members
+        .map((member: any) => member.id)
+        .sort();
+  expect(await members(dm.conversationId)).toEqual(["alice", "bob"]);
+  await expect(
+    call("conversations.openDM", { principal: { kind: "agent", id: "bob" } }),
+  ).resolves.toHaveProperty("value");
+  f.messages.membership("bob", dm.conversationId, false);
+  expect(await members(dm.conversationId)).toEqual(["alice"]);
+  f.messages.membership("alice", dm.conversationId, false);
+  await expect(
+    call("conversations.members", { conversationId: dm.conversationId }),
+  ).rejects.toThrow("access denied");
+  await expect(
+    call("conversations.openDM", { principal: { kind: "agent", id: "bob" } }),
+  ).rejects.toThrow("access denied");
+});
 it("rolls back an interrupted internal commit and retries once after reopening", async () => {
   const dir = mkdtempSync(join(tmpdir(), "mate-internal-"));
   cleanup.unshift(() => rmSync(dir, { recursive: true, force: true }));
@@ -172,7 +211,7 @@ it("routes persisted external DM actions back to their original adapter", async 
   });
   const openDM = vi.fn(async () => ({ conversationId: "original-external" }));
   const directory = new TeamDirectory(f.messages, {
-    spaces: async () => ({ spaces: [], incomplete: false }),
+    spaces: async () => ({ spaces: [], coverage: [] }),
     members: async () => ({ members: [], incomplete: false }),
     openDM,
   });

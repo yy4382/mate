@@ -114,7 +114,9 @@ it("directory uses acting identity, paginates and opens an active workspace user
     ]),
     m.mapper,
   );
-  expect(await directory.spaces("research")).toMatchObject({ incomplete: false });
+  expect(await directory.spaces("research")).toMatchObject({
+    coverage: [{ source: "external", complete: true }],
+  });
   expect(conversations).toHaveBeenCalledTimes(2);
   expect(m.access("research", m.mapper.conversation("CSECOND"))).toBe(true);
   await expect(directory.members("research", m.mapper.conversation("CSECRET"))).rejects.toThrow(
@@ -265,7 +267,12 @@ it("late directory results cannot restore revoked channel visibility", async () 
   const pending = d.spaces("research");
   m.membership("research", "CTEST", false);
   resolve({ channels: [{ id: "CTEST" }] });
-  expect(await pending).toMatchObject({ spaces: [], incomplete: true });
+  expect(await pending).toMatchObject({
+    spaces: [],
+    coverage: [
+      { source: "external", complete: false, reason: "membership changed during discovery" },
+    ],
+  });
   expect(m.access("research", "CTEST")).toBe(false);
 });
 it("definitive DM rejection permits retry and uncertain receipt can reconcile through discovery", async () => {

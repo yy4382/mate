@@ -396,8 +396,15 @@ it("rejects unbound external output before an intent and returns internal spaces
     },
   });
   expect(await directory.spaces("research")).toMatchObject({
-    incomplete: true,
     spaces: [{ conversationId: "local-room" }],
+    coverage: [
+      {
+        source: "external",
+        complete: false,
+        reason: "External directory unavailable; internal spaces remain available",
+      },
+      { source: "internal", complete: true },
+    ],
   });
 });
 it("a stalled adapter flush or rejected replay cannot block internal scheduling; shutdown retains lock until drain", async () => {
