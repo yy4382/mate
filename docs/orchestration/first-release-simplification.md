@@ -126,7 +126,7 @@ treat a shared-tree failure as merge damage after that.
 ## Outcome
 
 All 20 tickets of spec #33 landed on `codex/first-release-simplification`. Final integration at
-`490da12`: `pnpm typecheck` exit 0 and `pnpm check` exit 0 — **72 test files / 579 tests**, format
+`15c6510` (after #53's post-review fixes): `pnpm typecheck` exit 0 and `pnpm check` exit 0 — **72 test files / 579 tests**, format
 check + build + full suite, at the pinned Node 24.21.0 (baseline was 61 files / 411 tests, so the
 effort added 11 test files and 168 tests while deleting 13 obsolete schema/migration modules).
 
@@ -138,6 +138,21 @@ Honest limits of this result, recorded so nobody mistakes it for more than it is
 - Real Slack, model-provider and VPS connectivity were never exercised; every Slack/provider path
   is covered with the real application plus a controllable transport or a scripted model, and no
   simulated result is presented as a real integration.
+
+## Post-merge follow-up on #53
+
+After #53 was merged as `490da12`, its implementer reported that the independent review had
+returned no blocking findings but several real non-blocking ones, and that its worktree had
+already been cleaned up, so it applied them in the main tree: the native script's process scope
+name now matches `LinuxProcessManager.unitPattern` and is listed by the project's own
+`LinuxProcessManager.list()` (the previous name would have been filtered out, which made the
+script's "discoverable by the installed code" claim false), `docs/OPERATIONS.md` no longer
+states that `backup`/`restore` refuse while `start`/`offline-probe` are allowed with a pending
+upgrade, and a restart test no longer claims to perform the upgrade the native script owns.
+Committed as `15c6510` and re-verified by the orchestrator on the main tree.
+
+Also removed: a 0-byte stray file named `typescript` that a ticket implementer had accidentally
+created at the repository root and left untracked; it was never part of any commit.
 
 ## Tracker synchronization
 
