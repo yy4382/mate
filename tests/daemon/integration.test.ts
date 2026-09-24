@@ -50,7 +50,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   cleanups.splice(0).forEach((fn) => fn());
 });
-function setup(options: { freshness?: boolean } = {}) {
+function setup(options: { gate?: boolean } = {}) {
   const config = configSchema.parse({
     ...configFixture,
     agents: [
@@ -75,9 +75,10 @@ function setup(options: { freshness?: boolean } = {}) {
   const attention = new CanonicalAttention(messages),
     gate = new CanonicalFreshnessGate(messages, attention),
     artifactTransport: { current?: CanonicalArtifactTransport } = {},
-    // Freshness holding is not the subject of every outbox test; the application always wires it.
+    // The application always wires the gate. An outbox test that measures eligibility only
+    // composes the pre-gate output, which also skips the pending-input and in-flight guards.
     output =
-      options.freshness === false
+      options.gate === false
         ? new Output(messages, { post }, Date.now, undefined, () => artifactTransport.current)
         : new Output(messages, { post }, Date.now, gate, () => artifactTransport.current);
   const c = new Collaboration(store, messages, output, config, attention),
@@ -890,7 +891,7 @@ it("uncertain artifact publication cannot be repeated with a new ID", async () =
   expect(upload).toHaveBeenCalledOnce();
 });
 it("paused or delayed output cannot starve later active work", async () => {
-  const { store, c, post } = setup({ freshness: false });
+  const { store, c, post } = setup({ gate: false });
   store.register("research", "v1", []);
   c.messages.membership("research", "CTEST", true);
   const target = fixtureTarget("CTEST", "100.000001");

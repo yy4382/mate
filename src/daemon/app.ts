@@ -283,7 +283,6 @@ export class Daemon {
         store: this.store,
         team: c,
         ...(config.adapters.local ? { local: config.adapters.local } : {}),
-        ...(slackConfig ? { slackConfig } : {}),
         runtime: {
           limits: config.runtime.limits,
           researchHosts: config.runtime.researchHosts,
@@ -527,36 +526,30 @@ export class Daemon {
     return (this.closePromise ??= this.shutdown());
   }
   /**
-   * Ordered shutdown. Each step runs even when an earlier one failed, so one stuck resource
-   * cannot keep the database or the single-instance lock open.
+   * Shutdown of this entry: stop accepting new work, run the application's ordered close, then
+   * release the database and finally the single-instance lock. A step that never settles keeps
+   * the database open on purpose; releasing it while owned work is still live would break the
+   * durability guarantee this order protects.
    */
   private async shutdown(): Promise<void> {
     const failures: unknown[] = [];
-    const settle = async (step: () => unknown) => {
-      try {
-        await step();
-      } catch (error) {
-        failures.push(error);
-      }
-    };
+    // The loop stops polling and ticking before anything else can wait.
+    this.stopping = true;
+    this.abort.abort();
     try {
-      // 1. Stop intake: the loop stops polling and ticking, and the adapter stops replaying input.
-      this.stopping = true;
-      this.abort.abort();
-      await settle(() => this.adapter?.close());
-      // 2. Stop advancing business state: abort queued and active runs and close their workers.
-      await settle(() => this.application.stopAdvancing());
-      // 3. Collect the local work this process already started.
-      await settle(() => this.opening?.catch(() => {}));
-      await settle(() => this.loopPromise);
-      await settle(() => this.background);
-      await settle(() => this.privileged);
-      await Promise.allSettled([...this.runs]);
-      await settle(() => this.application.drainWork());
-      // 4. External effects this process can no longer confirm stay as persistent unknowns.
-      await settle(() => this.application.fenceUnconfirmedEffects());
+      await this.application.close({
+        stopIntake: () => this.adapter?.close(),
+        settleOwnedWork: async () => {
+          await this.opening?.catch(() => {});
+          await this.loopPromise;
+          await this.background;
+          await this.privileged;
+          await Promise.allSettled([...this.runs]);
+        },
+      });
+    } catch (error) {
+      failures.push(error);
     } finally {
-      // 5. Release the database, then the single-instance lock.
       try {
         this.store.close();
       } finally {

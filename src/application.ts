@@ -10,7 +10,6 @@ import { LocalAdapter } from "./local/input.js";
 import type { LocalSettings } from "./local/rooms.js";
 import { Broker } from "./policy/broker.js";
 import { SystemOperations } from "./policy/system-operations.js";
-import type { PrivilegedExecutor } from "./policy/system-operations.js";
 import { PrivilegedBackend } from "./execution/privileged.js";
 import { AdmittedBackend } from "./execution/admitted.js";
 import type { ExecutionBackend } from "./execution/backend.js";
@@ -46,9 +45,11 @@ export interface ApplicationRuntime {
   systemAgents?: readonly string[];
   researchHosts: readonly string[];
 }
-/** External Slack facilities this entry owns, including the artifact adapter created later. */
+/** External Slack facilities this entry owns. */
 export interface SlackPorts {
   config: MateConfig;
+  /** The artifact adapter the Slack runtime creates after the core it publishes through, looked
+   * up lazily for that construction cycle. The entry must have created it before it returns. */
   artifacts: ArtifactTransportProvider;
 }
 /** What an entry supplies from outside the application: host identity and external adapters. */
@@ -58,11 +59,9 @@ export interface ApplicationPorts {
   /** Private workspace of each Agent, keyed by Agent id. */
   memoryRoots: Record<string, string>;
   slack?: SlackPorts;
-  privileged?: PrivilegedExecutor;
   linuxProcesses?: LinuxProcessManager;
+  /** Scripted worker for harnesses; the deployed application runs the real worker process. */
   workerFactory?: (agent: AgentDefinition) => Worker;
-  /** Read one Agent's private memory entry for run recovery. */
-  recoverMemory?: (agentId: string, workId: string, signal: AbortSignal) => Promise<string>;
   reviewWorkspace?: (actor: string) => string;
   controlProjection?: (
     user: string,
@@ -70,7 +69,13 @@ export interface ApplicationPorts {
     id: string | undefined,
     args: string[],
   ) => string | undefined;
-  clock?: () => number;
+}
+/** What an entry owns outside the application while it shuts down. */
+export interface ApplicationShutdown {
+  /** Stop this entry's input adapter: no new external input becomes internal work. */
+  stopIntake?: () => unknown;
+  /** Work this entry started outside the application: replay loop, adapter flush, scheduling. */
+  settleOwnedWork?: () => Promise<unknown>;
 }
 export interface ApplicationInput {
   store: Store;
@@ -81,6 +86,9 @@ export interface ApplicationInput {
   runtime?: Partial<ApplicationRuntime>;
   ports: ApplicationPorts;
 }
+
+/** No external artifact adapter is configured for this application. */
+const noArtifacts: ArtifactTransportProvider = () => undefined;
 
 /** A local-only application refuses external publication instead of dropping it silently. */
 const unavailableTransport: ExternalMessageTransport = {
@@ -117,6 +125,7 @@ export class Application {
   readonly transport: CanonicalSlackTransport | undefined;
   /** Admitted ordinary-execution backend every file, command and process tool goes through. */
   readonly backend: ExecutionBackend;
+  private closing?: Promise<void>;
   static create(input: ApplicationInput): Application {
     return new Application(input);
   }
@@ -128,8 +137,8 @@ export class Application {
         ...(input.runtime?.sharedRoot ? { sharedRoot: input.runtime.sharedRoot } : {}),
         ...(input.runtime?.systemAgents ? { systemAgents: input.runtime.systemAgents } : {}),
       },
-      clock = ports.clock ?? Date.now,
-      slack = ports.slack;
+      slack = ports.slack,
+      artifactTransport = slack?.artifacts ?? noArtifacts;
     // One message layer: the Slack adapter's canonical mapper, or the core-only composition.
     const slackApp = slack ? slackApplication(store, slack.config, team) : undefined;
     this.messages = slackApp?.messages ?? coreConversations(store, team);
@@ -137,23 +146,22 @@ export class Application {
     // Freshness needs the one attention instance this application uses. The gate built from it
     // is wired into the output and the tool router at construction, never installed afterwards.
     this.attention = new CanonicalAttention(this.messages);
-    this.gate = new CanonicalFreshnessGate(this.messages, this.attention, clock);
+    this.gate = new CanonicalFreshnessGate(this.messages, this.attention);
     this.transport =
       slackApp && slack ? new CanonicalSlackTransport(store, slackApp.mapper) : undefined;
     this.output = new CanonicalOutput(
       this.messages,
       this.transport ?? unavailableTransport,
-      clock,
+      Date.now,
       this.gate,
-      slack?.artifacts ?? (() => undefined),
+      artifactTransport,
     );
     this.collaboration = new Collaboration(store, this.messages, this.output, team, this.attention);
     this.system = new SystemOperations(
       store,
       this.collaboration,
       runtime.systemAgents ?? [],
-      ports.privileged ?? new PrivilegedBackend(),
-      clock,
+      new PrivilegedBackend(),
     );
     const admittedBackend = new AdmittedBackend(
       ports.backend,
@@ -165,7 +173,7 @@ export class Application {
     this.artifacts = new Artifacts(
       this.collaboration,
       this.broker,
-      slack?.artifacts ?? (() => undefined),
+      artifactTransport,
       this.memoryRoots,
     );
     const transport = this.transport,
@@ -210,7 +218,7 @@ export class Application {
       this.router,
       team,
       ports.workerFactory,
-      ports.recoverMemory ?? this.recoverMemory(admittedBackend),
+      this.recoverMemory(admittedBackend),
       {
         runAdmission: new FairAdmission(runtime.limits.maxActiveRuns),
         workerIdleMs: runtime.limits.workerIdleMs,
@@ -227,20 +235,48 @@ export class Application {
     );
     this.local = input.local ? new LocalAdapter(this.collaboration, input.local.humans) : undefined;
   }
-  /** Shutdown step: stop accepting runs and abort the queued and active ones, which also
-   * collects the local worker processes this application owns. */
-  stopAdvancing(): void {
-    this.supervisor.close();
+  /**
+   * Ordered shutdown, shared by every entry: stop advancing business state and collect the local
+   * worker processes, stop this entry's intake, settle the work the entry started, then record
+   * every external effect this process can no longer confirm as a persistent unknown result.
+   * Each step still runs when an earlier one failed; a step that never settles keeps the database
+   * open, because releasing it while owned work is still live would break the guarantee this
+   * order protects. The caller releases its own database and single-instance lock afterwards.
+   */
+  close(shutdown: ApplicationShutdown = {}): Promise<void> {
+    return (this.closing ??= this.shutdown(shutdown));
   }
-  /** Shutdown step: wait for tool and delegation work already started here to settle. */
-  async drainWork(): Promise<void> {
-    await this.supervisor.drain();
+  private async shutdown(shutdown: ApplicationShutdown): Promise<void> {
+    const failures: unknown[] = [];
+    const settle = async (step: () => unknown) => {
+      try {
+        await step();
+      } catch (error) {
+        failures.push(error);
+      }
+    };
+    await settle(() => this.supervisor.close());
+    await settle(() => shutdown.stopIntake?.());
+    await settle(() => shutdown.settleOwnedWork?.());
+    await settle(() => this.supervisor.drain());
+    await settle(() => this.fenceUnconfirmedEffects());
+    if (failures.length)
+      throw new AggregateError(failures, "Application shutdown failed after draining owned work");
   }
-  /** Shutdown step, before the database is released: every external effect this process can no
-   * longer confirm becomes a persistent unknown result its owner can still verify. */
-  fenceUnconfirmedEffects(): void {
-    this.system.fenceUnconfirmed();
-    this.collaboration.store.fenceUnconfirmedEffects();
+  /** One failing domain must not leave the other effects looking merely in progress. */
+  private fenceUnconfirmedEffects(): void {
+    const failures: unknown[] = [];
+    const fence = (step: () => unknown) => {
+      try {
+        step();
+      } catch (error) {
+        failures.push(error);
+      }
+    };
+    fence(() => this.system.fenceUnconfirmed());
+    fence(() => this.collaboration.store.fenceUnconfirmedEffects());
+    if (failures.length)
+      throw new AggregateError(failures, "Recording unconfirmed external effects failed");
   }
   private recoverMemory(backend: ExecutionBackend) {
     return async (agentId: string, _workId: string, signal: AbortSignal): Promise<string> => {

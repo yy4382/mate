@@ -82,6 +82,28 @@ function last(store: Store, agent: string) {
     throw new Error("No assistant result");
   return { session: row.session_id, data: JSON.parse(message.content[0].text) };
 }
+it("refuses to start a worker process after its workers were collected", async () => {
+  let created = 0;
+  const f = setup(() => {
+    created++;
+    return {
+      run: async () => ({
+        certain: true,
+        tokens: 1,
+        cost: 0,
+        continuation: false,
+        waiting: false,
+      }),
+      close() {},
+    };
+  });
+  f.collaboration.enqueue("research", f.work, "after-shutdown", {});
+  // Shutdown stops advancing work and collects workers before the database is released; a run
+  // prepared in that window must not spawn a new worker process.
+  f.supervisor.close();
+  expect(await f.supervisor.step("research")).toBe(false);
+  expect(created).toBe(0);
+});
 it("real worker processes retain cross-channel context and isolate Agent state and inherited secrets", async () => {
   process.env.SYNTHETIC_SLACK_SECRET = "must-not-inherit";
   try {

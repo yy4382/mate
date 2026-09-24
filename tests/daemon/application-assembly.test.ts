@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Application } from "../../src/application.js";
@@ -128,9 +128,9 @@ it("gives the daemon and the local entry the same assembled application with not
     daemon = await Daemon.create(config, log);
   cleanups.push(() => daemon.close());
   // The real (database-backed) local entry, assembled by the same Application.create.
-  const store = new Store(":memory:"),
-    local = localApplication(store, settings);
-  cleanups.push(() => store.close());
+  const localStore = new Store(":memory:"),
+    local = localApplication(localStore, settings);
+  cleanups.push(() => localStore.close());
   for (const [entry, application] of [
     ["daemon", daemon.application],
     ["local", local],
@@ -153,7 +153,33 @@ it("gives the daemon and the local entry the same assembled application with not
     expect(application.local, entry).toBeDefined();
   }
   expect(daemon.application.transport).toBeDefined();
+  expect(daemon.application.artifacts.transport()).toBe(daemon.slack);
   expect(local.transport).toBeUndefined();
+  // The assembled gate is each entry's live dispatch policy, not a duplicate object: an output
+  // published without a freshness basis reaches that gate and is held as a durable draft.
+  const entries = [
+    {
+      entry: "daemon",
+      application: daemon.application,
+      store: daemon.store,
+      collaboration: daemon.collaboration,
+    },
+    { entry: "local", application: local, store: localStore, collaboration: local.collaboration },
+  ];
+  for (const { entry, application, store, collaboration } of entries) {
+    if (entry === "local") {
+      store.register("research", "v1", []);
+      application.local!.createRoom("local-room", ["research"], ["owner"]);
+    }
+    const target = { conversationId: "local-room" },
+      work = collaboration.createWork(`gate:${entry}`, target);
+    collaboration.enqueue("research", work, "start", {});
+    const run = store.beginRun("research")!;
+    store.input(run, {});
+    collaboration.send("research", work, target, "held body", `held:${entry}`, { run });
+    expect(store.output(`held:${entry}`)!.state, entry).toBe("held");
+    expect(application.gate.list("research"), entry).toHaveLength(1);
+  }
 });
 it("stops intake, stops advancing work, collects workers, records the unconfirmed effect, then releases the database and the lock", async () => {
   credentials();
@@ -190,10 +216,10 @@ it("stops intake, stops advancing work, collects workers, records the unconfirme
   vi.spyOn(daemon.supervisor, "drain").mockImplementation(async () => {
     order.push("work.drain");
   });
-  const fence = daemon.application.fenceUnconfirmedEffects.bind(daemon.application);
-  vi.spyOn(daemon.application, "fenceUnconfirmedEffects").mockImplementation(() => {
+  const fenceMessages = daemon.store.fenceUnconfirmedEffects.bind(daemon.store);
+  vi.spyOn(daemon.store, "fenceUnconfirmedEffects").mockImplementation(() => {
     order.push("effects.fence");
-    fence();
+    fenceMessages();
   });
   const closeStore = daemon.store.close.bind(daemon.store);
   let stateAtRelease: string | undefined,
@@ -219,8 +245,8 @@ it("stops intake, stops advancing work, collects workers, records the unconfirme
   await daemon.close();
   sending.catch(() => {});
   expect(order).toEqual([
-    "intake.close",
     "work.stop",
+    "intake.close",
     "work.drain",
     "effects.fence",
     "database.close",
@@ -284,4 +310,95 @@ it("does not repeat a confirmed external operation after a restart and keeps int
   expect(
     second.store.db.prepare("SELECT session_id FROM agents WHERE id='research'").get(),
   ).toEqual(session);
+});
+
+it("still fences message effects when the privileged fence fails", async () => {
+  credentials();
+  const { config } = deployment(),
+    daemon = await Daemon.create(config, log);
+  cleanups.push(() => daemon.close().catch(() => {}));
+  const target = externalTarget(daemon),
+    { work, run } = openRun(daemon, target);
+  vi.spyOn(daemon.application.transport!, "post").mockImplementation(() => new Promise(() => {}));
+  const id = queueExternal(daemon, work, run, "unconfirmed", "sent before shutdown");
+  void daemon.collaboration.output.send(id).catch(() => {});
+  await vi.waitFor(() => expect(daemon.store.output(id)!.state).toBe("sending"));
+  // One failing fence must not leave the other external effects looking merely in progress.
+  vi.spyOn(daemon.system, "fenceUnconfirmed").mockImplementation(() => {
+    throw new Error("privileged fence failed");
+  });
+  const closeStore = daemon.store.close.bind(daemon.store);
+  let stateAtRelease: string | undefined;
+  vi.spyOn(daemon.store, "close").mockImplementation(() => {
+    stateAtRelease = (
+      daemon.store.db.prepare("SELECT state FROM outbox WHERE id=?").get(id) as { state: string }
+    ).state;
+    closeStore();
+  });
+  await expect(daemon.close()).rejects.toThrow("cleanup failed");
+  expect(stateAtRelease).toBe("unknown");
+  const release = acquireLock(join(config.runtime.dataDir, "state", "daemon.lock"));
+  release();
+});
+
+it("closes the local entry through the same ordered shutdown without releasing the caller's store", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "mate-local-close-"))),
+    memoryRoots = Object.fromEntries(
+      ["research", "writer"].map((agentId) => [agentId, join(root, agentId)]),
+    );
+  cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+  for (const [agentId, memoryRoot] of Object.entries(memoryRoots)) {
+    mkdirSync(memoryRoot, { recursive: true, mode: 0o700 });
+    writeFileSync(join(memoryRoot, "MEMORY.md"), `PRIVATE_MEMORY_${agentId.toUpperCase()}`, {
+      mode: 0o600,
+    });
+  }
+  const store = new Store(":memory:");
+  cleanups.push(() => store.close());
+  let recovery = "";
+  const local = localApplication(
+    store,
+    {
+      ...settings,
+      agents: [...settings.agents, { ...settings.agents[0]!, id: "writer", name: "Writer" }],
+    },
+    {
+      memoryRoots,
+      workerFactory: () => ({
+        run: (spec, _hooks, _timeout, signal) =>
+          new Promise((_, reject) => {
+            recovery = spec.recovery;
+            signal.addEventListener("abort", () => reject(new Error("worker collected")), {
+              once: true,
+            });
+          }),
+        close() {},
+      }),
+    },
+  );
+  for (const agentId of ["research", "writer"]) store.register(agentId, "v1", []);
+  local.local!.createRoom("local-room", ["research", "writer"], ["owner"]);
+  const target = { conversationId: "local-room" },
+    work = local.collaboration.createWork("local-close", target);
+  // One active run holds a broker action inside its execution boundary; another Agent runs a
+  // worker that hangs until the application collects it.
+  local.collaboration.enqueue("research", work, "holder", {});
+  const holder = store.beginRun("research")!;
+  store.input(holder, {});
+  store.prepareAction(holder, "action-1", { kind: "exec", args: [] });
+  store.startAction(holder, "action-1");
+  local.collaboration.enqueue("writer", work, "run", {});
+  const stepping = local.supervisor.step("writer");
+  await vi.waitFor(() => expect(recovery).toContain("PRIVATE_MEMORY_WRITER"));
+  await local.close();
+  await stepping;
+  // The application stopped advancing work, collected its worker and fenced the action.
+  expect(store.db.prepare("SELECT state FROM runs WHERE agent_id='writer'").get()).toEqual({
+    state: "failed",
+  });
+  expect(store.db.prepare("SELECT state FROM actions WHERE id='action-1'").get()).toEqual({
+    state: "unknown",
+  });
+  // The embedded entry owns no database: its caller keeps it open after the application closed.
+  expect(store.db.open).toBe(true);
 });

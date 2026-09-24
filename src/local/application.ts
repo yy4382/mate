@@ -10,8 +10,6 @@ export interface LocalApplicationPorts {
   backend?: ApplicationPorts["backend"];
   memoryRoots?: Record<string, string>;
   workerFactory?: (agent: AgentDefinition) => Worker;
-  recoverMemory?: ApplicationPorts["recoverMemory"];
-  clock?: () => number;
 }
 
 /** The current user runs ordinary commands inside each Agent's own workspace. */
@@ -44,8 +42,6 @@ export function localApplication(
       backend: ports.backend ?? new LinuxUserBackend(localIdentities(memoryRoots)),
       memoryRoots,
       ...(ports.workerFactory ? { workerFactory: ports.workerFactory } : {}),
-      ...(ports.recoverMemory ? { recoverMemory: ports.recoverMemory } : {}),
-      ...(ports.clock ? { clock: ports.clock } : {}),
     },
   });
 }
