@@ -18,3 +18,6 @@ pnpm-lock.yaml
 .worktrees/
 data/
 mate.local.json
+
+# The pnpm content-addressable store: package metadata, never source.
+.pnpm-store/
