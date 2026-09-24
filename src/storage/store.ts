@@ -312,11 +312,12 @@ export class Store {
         return;
       }
       // An explicit completion still has to be earned: a delivery whose input never reached the
-      // model cannot be reported as handled. A yield instead keeps the input durable for the next
-      // run of this channel, and so does a delivery that never reached the model at all.
+      // model cannot be reported as handled, so that caller is refused below rather than served.
       if (state === "complete" && this.delivery(token.deliveryId).status !== "injected")
         throw new Error("Cannot complete uninjected delivery");
-      if (state === "yielded" || this.delivery(token.deliveryId).status === "pending") {
+      // A yield keeps the delivery exactly where it is, so the next run of this channel resumes
+      // the same input instead of the delivery being reported as handled.
+      if (state === "yielded") {
         this.transitionRun(token.id, isYield(resolved) ? resolved : "turn_budget");
         return;
       }
@@ -329,14 +330,18 @@ export class Store {
     });
   }
   /**
-   * Why the run that most recently served one delivery stopped, or `null` when it has never run.
-   * Keyed by the delivery rather than the Agent: a resumption needs the reason its own input was
-   * left with, and another delivery's run must not answer for it.
+   * Why the run that most recently *finished* serving one delivery stopped, or `null` when none
+   * has. Keyed by the delivery rather than the Agent: a resumption needs the reason its own input
+   * was left with, and another delivery's run must not answer for it.
+   *
+   * A recorded reason is required, which is what excludes the run that is starting right now: it
+   * is inserted before this is asked, so answering with its still-empty row would report "never
+   * ran" for every resumption and make the yield-specific wording unreachable.
    */
   lastStopReason(deliveryId: string): RunStopReason | null {
     const row = this.db
       .prepare(
-        "SELECT stop_reason FROM runs WHERE delivery_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1",
+        "SELECT stop_reason FROM runs WHERE delivery_id=? AND stop_reason IS NOT NULL ORDER BY created_at DESC,rowid DESC LIMIT 1",
       )
       .get(deliveryId) as { stop_reason: RunStopReason | null } | undefined;
     return row?.stop_reason ?? null;

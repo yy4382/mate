@@ -14,6 +14,7 @@ import { Broker } from "../../src/policy/broker.js";
 import { Supervisor, type Worker } from "../../src/runtime/supervisor.js";
 import { ToolRouter } from "../../src/runtime/tools.js";
 import { UsageLedger } from "../../src/usage/ledger.js";
+import { diagnosticLogs } from "../../src/operations/diagnostics.js";
 
 /**
  * The run module owns the recovery input a resumption is built from; the scheduler owns run
@@ -152,9 +153,11 @@ it("the run module gathers checkpoint, work, tasks, usage and unknown operations
 
 it("a normal yield stays resumable and is distinguishable from a model fault and a human pause", async () => {
   const f = setup();
-  let run = 0;
-  const supervisor = scheduled(f, async (attempt) => {
+  let run = 0,
+    resumedInput = "";
+  const supervisor = scheduled(f, async (attempt, spec) => {
     run++;
+    if (attempt > 1) resumedInput = JSON.stringify(spec.messages);
     return {
       tokens: 0,
       cost: 0,
@@ -180,6 +183,9 @@ it("a normal yield stays resumable and is distinguishable from a model fault and
   });
   // The resumed run continues the same delivery, and no duplicate continuation is queued for it.
   expect(await supervisor.step("research")).toBe(true);
+  // The resumption knows it is continuing a yield, not an interrupted delivery, so it says so.
+  expect(resumedInput).toContain("Continue the same durable inbox delivery");
+  expect(resumedInput).not.toContain("Resume the interrupted inbox delivery");
   expect(f.store.delivery(delivery).status).toBe("handled");
   expect(f.store.db.prepare("SELECT count(*) n FROM deliveries").get()).toEqual({ n: 1 });
   expect(run).toBe(2);
@@ -513,6 +519,70 @@ it("records an owner pause and a stopped work item as their own conditions that 
   expect(f.collaboration.control("UOWNER", other, "pause")).toEqual([stopped.id]);
   expect(runRow(f.store)).toMatchObject({ state: "interrupted", stopReason: "work_stopped" });
   expect(f.store.beginRun("research", Date.now(), true)).toBeUndefined();
+  supervisor.close();
+});
+
+it("keeps a seated reviewer on a neutral turn timestamp when its own run resumes", async () => {
+  const f = setup();
+  const seen: { content: string; timestamp: number }[][] = [];
+  const supervisor = scheduled(f, async (attempt, spec) => {
+    seen.push(
+      (spec.messages as { content: unknown; timestamp: number }[]).map((message) => ({
+        content: String(message.content),
+        timestamp: message.timestamp,
+      })),
+    );
+    // The first run yields with the delivery unfinished, so the second one resumes it.
+    return { tokens: 0, cost: 0, certain: true, waiting: false, continuation: attempt === 1 };
+  });
+  for (const agent of ["research", "peer"]) f.messages.membership(agent, "CTEST", true);
+  f.collaboration.seats.activate(
+    "UOWNER",
+    "research",
+    target,
+    "Independently audit the invoice total.",
+    () => "/synthetic/clean-review-root",
+  );
+  const delivery = f.collaboration.enqueue("research", f.work, "seat-yield", {
+    text: "WITHHELD_PEER_CONCLUSION",
+    target,
+  });
+  expect(await supervisor.step("research")).toBe(true);
+  expect(f.store.delivery(delivery).status).toBe("injected");
+  expect(await supervisor.step("research")).toBe(true);
+  // Both the first brief and the resumed turn sit on the neutral timestamp the seat always uses,
+  // so nothing in the reviewer's own record is derived from outside its brief.
+  const brief = seen[0]!.find((message) => message.content.includes("Independently audit"))!;
+  const resumed = seen[1]!.findLast((message) =>
+    message.content.includes("Continue the same durable inbox delivery"),
+  )!;
+  expect(brief.timestamp).toBe(0);
+  expect(resumed.timestamp).toBe(0);
+  expect(JSON.stringify(seen)).not.toContain("WITHHELD_PEER_CONCLUSION");
+  supervisor.close();
+});
+
+it("makes a normal yield visible in the owner-facing diagnostic log", async () => {
+  const f = setup();
+  let attempt = 0;
+  const supervisor = scheduled(f, async () => ({
+    tokens: 0,
+    cost: 0,
+    certain: true,
+    waiting: false,
+    continuation: ++attempt === 1,
+  }));
+  f.messages.membership("research", "CTEST", true);
+  f.collaboration.enqueue("research", f.work, "visible-yield", {});
+  expect(await supervisor.step("research")).toBe(true);
+  // The owner's view reads the durable fact the yield wrote, through the same path the deployed
+  // application uses, so a normal yield is visible rather than silently dropped.
+  const page = f.collaboration.operations.activity("UOWNER", { sources: ["runtime"] });
+  expect(page.items.map((item) => item.kind)).toContain("runtime.run_yielded");
+  expect(diagnosticLogs(page.items).events).toContainEqual({
+    at: expect.any(Number),
+    event: "runtime.run_yielded",
+  });
   supervisor.close();
 });
 
