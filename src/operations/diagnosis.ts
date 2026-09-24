@@ -282,10 +282,11 @@ export function slackConditions(slack: SlackReadiness | null): DiagnosisConditio
                 installation.state === "needs-human"
                   ? ("configuration_fix" as const)
                   : ("automatic_wait" as const),
+              // The reason is a platform string, so it is filtered like a worker fault's. The
+              // action is this module's own wording and names the configuration reference the
+              // operator has to change; filtering it would redact the one actionable name.
               reason: filterReason(installation.reason) || "Slack installation is not ready",
-              // The readiness record states platform codes today, but this view re-filters whatever
-              // it reads so a foreign string cannot carry a credential into owner output.
-              action: installation.action ? filterReason(installation.action) || null : null,
+              action: installation.action ?? null,
               nextAttemptAt:
                 installation.state === "needs-human" ? null : (installation.nextAttemptAt ?? null),
             },

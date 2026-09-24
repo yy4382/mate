@@ -86,7 +86,10 @@ export interface OperationsPage<T> {
 interface ExecutionPages {
   actions: OperationsPage<OperationsStatus["uncertainActions"]["items"][number]>;
   outputs: OperationsPage<OperationsStatus["uncertainOutputs"]["items"][number]>;
-  requests: { id: string; agentId: string }[];
+  requests: OperationsPage<{ id: string; agentId: string; state: string }>;
+}
+function emptyPage<T>(): OperationsPage<T> {
+  return { items: [], atLeast: 0, truncated: false };
 }
 export interface OperationsStatus {
   at: number;
@@ -108,6 +111,8 @@ export interface OperationsStatus {
   works: OperationsPage<{ id: string; state: string }>;
   uncertainActions: OperationsPage<{ id: string; agentId: string; runId: string; state: string }>;
   uncertainOutputs: OperationsPage<{ id: string; agentId: string; state: string }>;
+  /** Privileged requests whose external result is still unconfirmed, bounded like the two above. */
+  uncertainSystemRequests: OperationsPage<{ id: string; agentId: string; state: string }>;
   heldDrafts: OperationsPage<{
     draftId: string;
     agentId: string;
@@ -209,8 +214,9 @@ export class OperationsView {
     // unavailable instead of erasing the daemon, Slack and Agent facts read beside it. The counts
     // below stay empty in that case, which `diagnosis.sources.execution` states outright.
     const execution = this.executionPages(cap),
-      uncertainActions = execution?.actions ?? { items: [], atLeast: 0, truncated: false },
-      uncertainOutputs = execution?.outputs ?? { items: [], atLeast: 0, truncated: false };
+      uncertainActions = execution?.actions ?? emptyPage(),
+      uncertainOutputs = execution?.outputs ?? emptyPage(),
+      uncertainSystemRequests = execution?.requests ?? emptyPage();
     const heldDrafts = page<OperationsStatus["heldDrafts"]["items"][number]>(
       "SELECT d.id draftId,d.agent_id agentId,d.outbox_id outputId,d.revision,o.state FROM outbox o INDEXED BY output_held_status JOIN drafts d INDEXED BY draft_output_lookup ON d.outbox_id=o.id WHERE o.state='held' ORDER BY o.id DESC LIMIT ?",
       cap + 1,
@@ -232,6 +238,7 @@ export class OperationsView {
       works,
       uncertainActions,
       uncertainOutputs,
+      uncertainSystemRequests,
       heldDrafts,
       dueReminders,
       diagnosis,
@@ -262,7 +269,7 @@ export class OperationsView {
           return executionConditions({
             actions: execution.actions.items,
             outputs: execution.outputs.items,
-            requests: execution.requests,
+            requests: execution.requests.items,
           });
         },
       },
@@ -294,13 +301,9 @@ export class OperationsView {
         outputs: page<OperationsStatus["uncertainOutputs"]["items"][number]>(
           "SELECT id,agent_id agentId,state FROM outbox WHERE state='unknown' ORDER BY id DESC LIMIT ?",
         ),
-        // Privileged requests are read here rather than added to the status DTO: the owner needs
-        // the condition, and the request lifecycle is already reported by the approval surface.
-        requests: db
-          .prepare(
-            "SELECT id,agent_id agentId FROM system_requests WHERE status IN ('executing','unknown') ORDER BY id DESC LIMIT ?",
-          )
-          .all(cap) as { id: string; agentId: string }[],
+        requests: page<{ id: string; agentId: string; state: string }>(
+          "SELECT id,agent_id agentId,status state FROM system_requests WHERE status IN ('executing','unknown') ORDER BY id DESC LIMIT ?",
+        ),
       };
     } catch {
       return null;

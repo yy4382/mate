@@ -1,6 +1,7 @@
 import type { ActivityItem, OperationsStatus } from "./view.js";
 import {
   diagnosisNeeds,
+  diagnosisSources,
   type DiagnosisNeed,
   type DiagnosisReport,
   type ServiceState,
@@ -28,27 +29,38 @@ export function diagnosticStatus(
   const conditions = diagnosis?.conditions ?? [],
     needs = Object.fromEntries(
       diagnosisNeeds.map((need) => [need, conditions.filter((item) => item.need === need).length]),
-    ) as Record<DiagnosisNeed, number>;
+    ) as Record<DiagnosisNeed, number>,
+    // A source that did not answer is not an all-clear: the report is incomplete, and only the
+    // owner can decide what to do about that.
+    unavailableSources = diagnosis
+      ? diagnosisSources.filter((source) => diagnosis.sources[source] === "unavailable").length
+      : 0;
   return {
     service,
     health: invalid
       ? "recovery-unreadable"
       : pending
         ? "recovery-pending"
-        : service !== "active"
-          ? "service-not-active"
-          : !operations
-            ? "operations-unavailable"
-            : operations.agents.some((a) => !a.registered || a.paused) ||
-                operations.uncertainActions.atLeast > 0 ||
-                operations.uncertainOutputs.atLeast > 0 ||
-                humanNeeds.some((need) => needs[need] > 0)
-              ? "attention-required"
-              : "running",
+        : // Nobody established whether the daemon runs, so no state can be reported for it.
+          service === null
+          ? "attention-required"
+          : service !== "active"
+            ? "service-not-active"
+            : !operations
+              ? "operations-unavailable"
+              : operations.agents.some((a) => !a.registered || a.paused) ||
+                  operations.uncertainActions.atLeast > 0 ||
+                  operations.uncertainOutputs.atLeast > 0 ||
+                  operations.uncertainSystemRequests.atLeast > 0 ||
+                  humanNeeds.some((need) => needs[need] > 0) ||
+                  unavailableSources > 0
+                ? "attention-required"
+                : "running",
     /** Automatic waits are the runtime's own work; the other three are a person's. */
     needs: {
       ...needs,
       awaitingPerson: humanNeeds.reduce((total, need) => total + needs[need], 0),
+      unavailableSources,
     },
     recovery: invalid
       ? { invalid: true }
@@ -70,11 +82,13 @@ export function diagnosticStatus(
           activeRuns: operations.agents.filter((a) => a.activeRun).length,
           uncertainActions: operations.uncertainActions.atLeast,
           uncertainOutputs: operations.uncertainOutputs.atLeast,
+          uncertainSystemRequests: operations.uncertainSystemRequests.atLeast,
           heldDrafts: operations.heldDrafts.atLeast,
           dueReminders: operations.dueReminders.atLeast,
           countsTruncated: [
             operations.uncertainActions,
             operations.uncertainOutputs,
+            operations.uncertainSystemRequests,
             operations.heldDrafts,
             operations.dueReminders,
           ].some((p) => p.truncated),

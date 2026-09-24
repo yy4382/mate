@@ -112,6 +112,7 @@ function status(): OperationsStatus {
     works: { items: [], atLeast: 0, truncated: false },
     uncertainActions: { items: [], atLeast: 0, truncated: false },
     uncertainOutputs: { items: [], atLeast: 0, truncated: false },
+    uncertainSystemRequests: { items: [], atLeast: 0, truncated: false },
     heldDrafts: { items: [], atLeast: 0, truncated: false },
     dueReminders: { items: [], atLeast: 0, truncated: false },
     diagnosis: {
@@ -423,6 +424,7 @@ it("counts what needs a person apart from what the runtime waits out on its own"
     verify_unknown_effect: 1,
     failure_review: 0,
     awaitingPerson: 1,
+    unavailableSources: 0,
   });
   // The offline projection stays an allowlist: a condition's scope, reason and action never enter it.
   expect(JSON.stringify(output)).not.toContain(secret);
@@ -447,7 +449,26 @@ it("counts what needs a person apart from what the runtime waits out on its own"
     verify_unknown_effect: 0,
     failure_review: 1,
     awaitingPerson: 1,
+    unavailableSources: 0,
   });
+  // A source that did not answer is never an all-clear, and no daemon fact is not "not active".
+  const blind = {
+    ...s.diagnosis,
+    sources: { ...s.diagnosis.sources, execution: "unavailable" as const },
+  };
+  expect(diagnosticStatus(status(), "active", clear, blind)).toMatchObject({
+    health: "attention-required",
+    needs: { awaitingPerson: 1, unavailableSources: 1 },
+  });
+  expect(diagnosticStatus(status(), null, clear).health).toBe("attention-required");
+  // A privileged request waiting on an unconfirmed result is an unresolved execution result too.
+  const requests = status();
+  requests.uncertainSystemRequests = {
+    items: [{ id: "request-1", agentId: "research", state: "unknown" }],
+    atLeast: 1,
+    truncated: false,
+  };
+  expect(diagnosticStatus(requests, "active", clear).health).toBe("attention-required");
 });
 
 it("does not connect to Slack/provider when collecting diagnostics without credentials", async () => {
