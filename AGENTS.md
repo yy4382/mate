@@ -3,7 +3,7 @@
 ## First usable release and stopping conditions
 
 - The first usable release must be deployable on a low-resource Linux VPS, isolate Agents using separate unprivileged Linux users, and be operable through Slack. VPS packaging and focused Linux permission/process validation are release requirements, not post-experiment extras.
-- This is a pre-release experiment with no existing production deployment to preserve. Implement the Linux-user release as the sole supported deployment path.
+- This is a pre-release experiment with no existing production deployment to preserve. Implement the Linux-user release as the sole supported deployment path. For compatibility decisions in the first-release simplification, follow [ADR-0002](docs/adr/0002-first-release-compatibility-reset.md).
 - When a major decision changes, remove superseded implementation, configuration, tests, and operating instructions rather than maintaining a parallel path. Keep one short first-principles explanation of the new choice; Git history preserves the detailed past. Do not retain an abandoned plan or acceptance checklist as a current requirement.
 - Continue until all feasible development and validation are complete and only actual Slack/provider connection and VPS deployment remain, OR a critical architecture/product decision genuinely requires the user. Do not stop at intermediate module checkpoints.
 - Use local Git branches/commits for checkpoints and reviewed tickets. Never include private reference evidence, secrets or runtime data; no remote push without authorization.
