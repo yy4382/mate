@@ -1,4 +1,4 @@
-import { SlackParticipation } from "./participation.js";
+import { SlackMembership } from "./membership.js";
 import type {
   ConversationDirectory,
   Space,
@@ -21,29 +21,11 @@ export class Directory implements ConversationDirectory {
     readonly clients: Map<string, WebClient>,
     readonly mapper: SlackMapper,
   ) {
-    this.participation = new SlackParticipation(messages, clients, mapper);
+    this.membershipFacts = new SlackMembership(messages, clients, mapper);
   }
-  readonly participation: SlackParticipation;
-  capabilities(actor: string, conversationId?: string) {
-    return this.participation.capabilities(actor, conversationId);
-  }
-  discover(actor: string, cursor?: string) {
-    return this.participation.discover(actor, cursor);
-  }
-  joinCandidate(run: RunToken, actionId: string, candidateId: string, signal: AbortSignal) {
-    return this.participation.joinCandidate(run, actionId, candidateId, signal);
-  }
-  membership(
-    run: RunToken,
-    actionId: string,
-    conversationId: string,
-    operation: "join" | "leave",
-    signal: AbortSignal,
-  ) {
-    return this.participation.change(run, actionId, conversationId, operation, signal);
-  }
+  private readonly membershipFacts: SlackMembership;
   refresh(actor: string, conversationId: string, signal: AbortSignal) {
-    return this.participation.refresh(actor, conversationId, signal);
+    return this.membershipFacts.refresh(actor, conversationId, signal);
   }
   private client(actor: string): WebClient {
     this.messages.agent(actor);
@@ -84,6 +66,7 @@ export class Directory implements ConversationDirectory {
           channels.push(c);
           spaces.push({
             conversationId: this.mapper.conversation(c.id),
+            source: "external",
             name: c.name,
             purpose: c.purpose?.value,
             principal: c.user ? slackPrincipal(this.mapper.config, c.user) : undefined,
@@ -99,7 +82,12 @@ export class Directory implements ConversationDirectory {
       onPage?.();
     } while (cursor && pages < maxPages);
     if (version !== this.messages.membershipVersion(actor))
-      return { spaces: [], incomplete: true, retry: "membership changed during discovery" };
+      return {
+        spaces: [],
+        coverage: [
+          { source: "external", complete: false, reason: "membership changed during discovery" },
+        ],
+      };
     for (const conversationId of inaccessibleSystemDms)
       this.messages.membership(actor, conversationId, false);
     for (const c of channels) {
@@ -120,7 +108,16 @@ export class Directory implements ConversationDirectory {
         }
       }
     }
-    return { spaces, incomplete: !!cursor };
+    return {
+      spaces,
+      coverage: [
+        {
+          source: "external",
+          complete: !cursor,
+          reason: cursor ? "listing stopped before the last page" : undefined,
+        },
+      ],
+    };
   }
   async members(actor: string, conversationId: string): Promise<MembersResult> {
     this.messages.requireAccess(actor, conversationId);

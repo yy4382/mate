@@ -4,40 +4,43 @@ import type { Principal } from "../domain/messages.js";
 
 export interface Space {
   conversationId: string;
+  /** Who decides membership: the Mate host for internal rooms, the platform for external ones. */
+  source: "internal" | "external";
+  kind: "channel" | "dm";
   name?: string | undefined;
   purpose?: string | undefined;
   principal?: Principal | undefined;
   archived: boolean;
-  kind: "channel" | "dm";
+}
+/** Whether one source's catalog was read completely, and why not when it was not. */
+export interface SpaceCoverage {
+  source: "internal" | "external";
+  complete: boolean;
+  reason?: string | undefined;
 }
 export interface SpacesResult {
   spaces: Space[];
-  incomplete: boolean;
-  retry?: string;
+  coverage: SpaceCoverage[];
 }
 export interface MembersResult {
   members: Principal[];
   incomplete: boolean;
 }
 export type OpenDMResult = Target | { status: "failed"; receipt: unknown };
+/** Membership as the platform currently reports it for one external conversation. */
+export interface MembershipObservation {
+  status: "succeeded" | "unsupported";
+  conversationId: string;
+  active?: boolean | undefined;
+  reason?: string | undefined;
+}
 /** Application-owned port. Provider adapters translate external identifiers. */
 export interface ConversationDirectory {
-  capabilities?(actor: string, conversationId?: string): DirectoryCapabilities;
-  discover?(actor: string, cursor?: string): Promise<DiscoveryResult>;
-  joinCandidate?(
-    run: RunToken,
-    actionId: string,
-    candidateId: string,
-    signal: AbortSignal,
-  ): Promise<MembershipResult>;
-  membership?(
-    run: RunToken,
-    actionId: string,
+  refresh?(
+    actor: string,
     conversationId: string,
-    operation: "join" | "leave",
     signal: AbortSignal,
-  ): Promise<MembershipResult>;
-  refresh?(actor: string, conversationId: string, signal: AbortSignal): Promise<MembershipResult>;
+  ): Promise<MembershipObservation>;
   spaces(actor: string): Promise<SpacesResult>;
   members(actor: string, conversationId: string): Promise<MembersResult>;
   openDM(
@@ -46,31 +49,4 @@ export interface ConversationDirectory {
     principal: Exclude<Principal, { kind: "unknown" }>,
     signal: AbortSignal,
   ): Promise<OpenDMResult>;
-}
-
-export interface DirectoryCapabilities {
-  discover: boolean;
-  join: boolean;
-  leave: boolean;
-  refresh: boolean;
-  notes: string[];
-}
-export interface DiscoveredSpace {
-  candidateId: string;
-  name?: string | undefined;
-  purpose?: string | undefined;
-  archived: boolean;
-}
-export interface DiscoveryResult {
-  spaces: DiscoveredSpace[];
-  nextCursor: string | null;
-  coverage: "public_metadata";
-  supported: boolean;
-  reason?: string;
-}
-export interface MembershipResult {
-  status: "succeeded" | "failed" | "unknown" | "unsupported";
-  conversationId: string;
-  active?: boolean;
-  reason?: string;
 }

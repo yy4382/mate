@@ -95,105 +95,10 @@ function ownDelivery(context: ToolExecutionContext, deliveryId: string): string 
 const definitions: ToolSpec[] = [
   ...historySpecs,
   spec({
-    name: "conversations.capabilities",
-    schema: z.object({ conversationId: id.optional() }).strict(),
-    description:
-      "Inspect implemented participation operations and platform conditions without granting access.",
-    replayScope: "work",
-    seatPolicy: "deny",
-    effectPolicy: "pure-read",
-    replayPolicy: "boundary-owned",
-    authorize: selectedWork,
-    handler: ({ directory, run }, args) => {
-      if (!directory) throw new Error("Directory unavailable");
-      return {
-        value: directory.capabilities?.(run.agentId, args.conversationId) ?? {
-          discover: false,
-          join: false,
-          leave: false,
-          refresh: false,
-          notes: ["Adapter does not implement participation controls"],
-        },
-      };
-    },
-  }),
-  spec({
-    name: "conversations.discover",
-    schema: z.object({ cursor: z.string().min(1).max(10000).optional() }).strict(),
-    description: "Page public space metadata through the adapter without granting message access.",
-    replayScope: "work",
-    seatPolicy: "deny",
-    effectPolicy: "pure-read",
-    replayPolicy: "boundary-owned",
-    authorize: selectedWork,
-    handler: async ({ directory, run }, args) => {
-      if (!directory) throw new Error("Directory unavailable");
-      return {
-        value: (await directory.discover?.(run.agentId, args.cursor)) ?? {
-          supported: false,
-          reason: "Discovery unavailable",
-        },
-      };
-    },
-  }),
-  spec({
-    name: "conversations.join",
-    schema: z.union([
-      z.object({ conversationId: id }).strict(),
-      z.object({ candidateId: id }).strict(),
-    ]),
-    description: "Join a discovered public external channel with a durable adapter receipt.",
-    replayScope: "work",
-    seatPolicy: "deny",
-    effectPolicy: "adapter-recorded",
-    replayPolicy: "boundary-owned",
-    authorize: (context) => activeWork(context),
-    handler: async ({ directory, run, actionId, signal }, args) => {
-      if (!directory) throw new Error("Directory unavailable");
-      if ("candidateId" in args)
-        return {
-          value: (await directory.joinCandidate?.(run, actionId, args.candidateId, signal)) ?? {
-            status: "unsupported",
-            reason: "Candidate joining unavailable",
-          },
-        };
-      return {
-        value: (await directory.membership?.(
-          run,
-          actionId,
-          args.conversationId,
-          "join",
-          signal,
-        )) ?? { status: "unsupported", reason: "Membership control unavailable" },
-      };
-    },
-  }),
-  spec({
-    name: "conversations.leave",
-    schema: z.object({ conversationId: id }).strict(),
-    description: "Leave an external channel with a durable adapter receipt.",
-    replayScope: "work",
-    seatPolicy: "deny",
-    effectPolicy: "adapter-recorded",
-    replayPolicy: "boundary-owned",
-    authorize: (context) => activeWork(context),
-    handler: async ({ directory, run, actionId, signal }, args) => {
-      if (!directory) throw new Error("Directory unavailable");
-      return {
-        value: (await directory.membership?.(
-          run,
-          actionId,
-          args.conversationId,
-          "leave",
-          signal,
-        )) ?? { status: "unsupported", reason: "Membership control unavailable" },
-      };
-    },
-  }),
-  spec({
     name: "conversations.refresh",
     schema: z.object({ conversationId: id }).strict(),
-    description: "Observe current external membership and reconcile uncertain membership writes.",
+    description:
+      "Re-read this Agent's own current membership of one external channel through its own installation and update local access. It answers for external channels only: a DM exists because the platform opened it, internal rooms are host-managed, and this operation never joins or leaves.",
     replayScope: "work",
     seatPolicy: "deny",
     effectPolicy: "adapter-recorded",
@@ -201,18 +106,15 @@ const definitions: ToolSpec[] = [
     authorize: selectedWork,
     handler: async ({ directory, run, signal }, args) => {
       if (!directory) throw new Error("Directory unavailable");
-      return {
-        value: (await directory.refresh?.(run.agentId, args.conversationId, signal)) ?? {
-          status: "unsupported",
-          reason: "Membership source unavailable",
-        },
-      };
+      if (!directory.refresh) throw new Error("Membership source unavailable");
+      return { value: await directory.refresh(run.agentId, args.conversationId, signal) };
     },
   }),
   spec({
     name: "conversations.list",
     schema: z.object({}).strict(),
-    description: "List conversation spaces currently available to this Agent.",
+    description:
+      "List the conversations this Agent currently has: each one's source (internal host-managed room or external platform conversation), type, and per-source catalog coverage, so an incomplete listing is visible.",
     replayScope: "work",
     seatPolicy: "deny",
     effectPolicy: "pure-read",
@@ -226,7 +128,8 @@ const definitions: ToolSpec[] = [
   spec({
     name: "conversations.members",
     schema: z.object({ conversationId: id }).strict(),
-    description: "List current members of one authorized conversation.",
+    description:
+      "List the current members of one conversation this Agent can read, using its own identity and current access; external conversations also need the platform read permission for that conversation. The result states whether the member list was read completely.",
     replayScope: "work",
     seatPolicy: "deny",
     effectPolicy: "pure-read",
@@ -244,7 +147,8 @@ const definitions: ToolSpec[] = [
         principal: z.object({ kind: z.enum(["human", "agent", "external"]), id }).strict(),
       })
       .strict(),
-    description: "Open or find a direct conversation through the directory boundary.",
+    description:
+      "Open or find a direct conversation with one person, configured teammate or external principal through this Agent's own identity and installation; an existing DM still requires current access.",
     replayScope: "work",
     seatPolicy: "deny",
     effectPolicy: "adapter-recorded",
