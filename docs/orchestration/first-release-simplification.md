@@ -59,13 +59,13 @@ only when every blocker is committed on the branch.
 | #35 | 用单一当前 schema 初始化新数据库 | **done** | `d049b00` | `b1fcca9` + `beb5fdd` + `12aab7b` + `6b9d256` |
 | #36 | 让所有入口使用当前数据库格式 | **done** | `b1fcca9` | `a2288ce` + `3751639` + `6395c75` + `8abca0d` + `2b1c0fb` + `2b56276` |
 | #37 | 统一应用装配与关闭流程 | **done** | `fab5692` | `f8612ed` + `3c5e9db` + `c4592d7` + `1066f1c` |
-| #38 | 由任务模块负责消息关联任务的完整发布流程 | in progress | `1066f1c` (worktree `.worktrees/t38`) | — |
+| #38 | 由任务模块负责消息关联任务的完整发布流程 | **done** | `02dafa9` (re-applied) | `113241f`, merged as `8c729e6` |
 | #39 | 让工具输入类型和领域授权各有明确归属 | **done** | `1066f1c` (worktree `.worktrees/t39`) | `f96c1a2` + `4cc68c9`, merged as `e898228`; follow-up `412aac5` was a sibling of `4cc68c9`, so its 14-line delta is being re-checked against #42 on the merged base |
 | #40 | 交付有界且可继续的历史查询 | **done** | `02dafa9` (re-applied; worktree `.worktrees/t40`) | `9eda16a`, merged as `013be6c` |
 | #41 | 保留注意力与持久投递的独立状态 | pending | — | — |
 | #42 | 让提醒独立于关联任务继续运行 | **done** | `e898228` (worktree `.worktrees/t42`) | `1c51589`, merged as `0f71592`; sibling `1909d03` (extra tests) being reconciled on the merged base |
 | #43 | 将会话发现收敛到现有成员空间 | **done** | `ddd86b4` (worktree `.worktrees/t43`) | `1c206f4`, merged as `6a25110` |
-| #44 | 让频道内 Agent 邀请另一名团队 Agent | in progress | `6a25110` (worktree `.worktrees/t44`) | — |
+| #44 | 让频道内 Agent 邀请另一名团队 Agent | **done** | `02dafa9` (worktree `.worktrees/t44`) | `cd13f9a`, merged as `9076ccb` |
 | #45 | 在工作进程协议中保留故障类别与阶段 | pending | — | — |
 | #46 | 对暂时模型故障持久退避并自动继续 | pending | — | — |
 | #47 | 保持正常让位后的持久继续与恢复输入 | pending | — | — |
@@ -220,6 +220,8 @@ None yet.
 | #42 | `1c51589`, merged `0f71592` | `pnpm typecheck` + `pnpm check` on the merged MAIN tree before committing the merge | 58 files / 435 tests, exit 0; conflict-free |
 | #43 | `1c206f4`, merged `6a25110` | `pnpm typecheck` + `pnpm check` on the merged MAIN tree before committing the merge | 58 files / 441 tests, exit 0; conflict-free; the merge preserved the orchestrator's ledger file |
 | #40 | `9eda16a`, merged `013be6c` | `pnpm check` in an isolated `git archive` copy of the merge commit | 58 files / 454 tests, exit 0; the retired `messages.recent/read/search` names are absent from the tool modules and the exact-catalogue assertion pins `history.*` |
+| #38 | `113241f`, merged `8c729e6` | `pnpm typecheck` + `pnpm check` on the exact merged tree (written with `git write-tree`, archived, validated in a temp dir) | 59 files / 461 tests, exit 0; legacy anchor-less state absent from `src/` |
+| #44 | `cd13f9a`, merged `9076ccb` | same isolated-tree method | 60 files / 479 tests, exit 0; the invite suite covers human invite, non-member, self-invite, non-team target, already-in-channel, refusal, timeout and query recovery |
 | #39 | `4cc68c9`, merged `e898228` | `pnpm typecheck` + `pnpm check` on the merged MAIN tree before committing the merge | 58 files / 431 tests, exit 0; conflict-free; type seam checked by hand (`ToolHandler<Schema>`/`ToolAuthorize<Schema>` both derive from the one zod schema) and the architecture test asserts the removed research reader, its host allow-list, its prompt hints and `daemon/research.ts` are gone |
 | #52 | `053a643` (worktree) | `pnpm check` in `.worktrees/t52` | 62 files / 419 tests, exit 0 — merge pending #36 finishing |
 | #36 | `a2288ce` | `pnpm check` in an isolated `git archive` copy | 57 files / 398 tests, exit 0; all preserved-baseline tests confirmed present; old schema modules fully unreferenced; `Store` is the single entry onto `openCurrentDatabase` |
