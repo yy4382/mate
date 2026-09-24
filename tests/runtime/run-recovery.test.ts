@@ -225,8 +225,8 @@ it("a failed run does not retry its own delivery in a hot loop", async () => {
   expect(f.store.delivery(delivery).status).toBe("injected");
   for (let attempt = 0; attempt < 20; attempt++)
     expect(await supervisor.step("research")).toBe(false);
-  // One attempt, one run row and one owner fact: no backoff policy exists yet, so the pause is
-  // what keeps a deterministically failing delivery from spinning.
+  // One attempt, one run row and one owner fact: this failure is not transient, so the hold its
+  // failure policy recorded is what keeps a deterministically failing delivery from spinning.
   expect(f.store.db.prepare("SELECT count(*) n FROM runs").get()).toEqual({ n: 1 });
   expect(
     f.store.db.prepare("SELECT count(*) n FROM operational_facts WHERE kind='run_failed'").get(),

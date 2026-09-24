@@ -2,6 +2,8 @@ import Database from "better-sqlite3";
 import { createHash, randomUUID } from "node:crypto";
 import { openCurrentDatabase } from "./initialize.js";
 import { isYield, runStateForStopReason, type RunStopReason } from "../runtime/outcome.js";
+import type { ResumeAction } from "../runtime/resume.js";
+import type { FaultDisposition } from "../runtime/fault.js";
 
 export function encode(value: unknown): string {
   const encoded = JSON.stringify(value);
@@ -25,6 +27,28 @@ export interface Delivery {
   status: string;
   created_at: number;
   priority: number;
+}
+/** How far one Agent's run channel has got through the recovery of a failed attempt. */
+export interface AgentResume {
+  /** Consecutive transient-failure attempts already waited out; grows the next interval. */
+  attempt: number;
+  /** Earliest instant the next automatic attempt may start. `0` means none is scheduled. */
+  nextAttemptAt: number;
+  /**
+   * The disposition the Agent is held by: `retry_backoff` while an automatic attempt is scheduled,
+   * a person's disposition while its channel waits for one, and `null` while the channel is open.
+   * A person's own pause is not recorded here; that is the `paused` state.
+   */
+  hold: FaultDisposition | null;
+}
+/** What ending a run does about the Agent's next attempt, on top of the stop reason. */
+export interface EndRunOptions {
+  /**
+   * The failure policy's decision for this Agent's channel. A `hold` is what pauses the Agent, and
+   * a decision that schedules or simply ends the attempt releases the pause the failure recorded.
+   * Omitting it holds the channel, which is how a failure nobody classified stays stopped.
+   */
+  resume?: ResumeAction;
 }
 export interface Effect {
   id: string;
@@ -53,6 +77,12 @@ export type OperationalFactInput =
       subject: { type: "internal_dm"; id: string };
       counts: { members: 2 };
     };
+
+/**
+ * Dropping an automatic attempt clears the schedule and its growing attempt count but keeps a
+ * disposition a person has to release, because stopping the channel again does not fix that failure.
+ */
+const dropSchedule = "CASE WHEN resume_hold='retry_backoff' THEN NULL ELSE resume_hold END";
 
 /** Only the trusted daemon owns this connection; never expose SQL over worker IPC. */
 export class Store {
@@ -218,13 +248,53 @@ export class Store {
       return id;
     });
   }
+  /** The durable resumption state of one Agent; an unknown Agent has none. */
+  resumeState(agentId: string): AgentResume {
+    const row = this.db
+      .prepare("SELECT next_attempt_at,resume_attempt,resume_hold FROM agents WHERE id=?")
+      .get(agentId) as
+      | { next_attempt_at: number; resume_attempt: number; resume_hold: FaultDisposition | null }
+      | undefined;
+    return {
+      attempt: row?.resume_attempt ?? 0,
+      nextAttemptAt: row?.next_attempt_at ?? 0,
+      hold: row?.resume_hold ?? null,
+    };
+  }
+  /**
+   * Whether this Agent may start a run at `now`: registered, not paused by a person, not held for
+   * one, and not waiting out the interval a transient failure persisted. `beginRun` applies the
+   * same rule inside its transaction; a caller reads it first only to avoid queueing for a run that
+   * must not start, so waiting or being held never occupies a run slot another Agent could use.
+   */
+  runnable(agentId: string, now = Date.now()): boolean {
+    const row = this.db
+      .prepare("SELECT paused,next_attempt_at,resume_hold FROM agents WHERE id=?")
+      .get(agentId) as
+      { paused: number; next_attempt_at: number; resume_hold: FaultDisposition | null } | undefined;
+    return Boolean(
+      row &&
+      !row.paused &&
+      row.next_attempt_at <= now &&
+      (row.resume_hold === null || row.resume_hold === "retry_backoff"),
+    );
+  }
   beginRun(agentId: string, now = Date.now(), requireWork = false): RunToken | undefined {
     return this.atomic(() => {
       const agent = this.db.prepare("SELECT * FROM agents WHERE id=?").get(agentId) as
-        { session_id: string; generation: number; paused: number } | undefined;
+        | {
+            session_id: string;
+            generation: number;
+            paused: number;
+            next_attempt_at: number;
+            resume_hold: FaultDisposition | null;
+          }
+        | undefined;
       if (
         !agent ||
         agent.paused ||
+        agent.next_attempt_at > now ||
+        (agent.resume_hold !== null && agent.resume_hold !== "retry_backoff") ||
         this.db.prepare("SELECT 1 FROM runs WHERE agent_id=? AND state='active'").get(agentId)
       )
         return;
@@ -241,7 +311,11 @@ export class Store {
         generation: agent.generation + 1,
         deliveryId: delivery.id,
       };
-      this.db.prepare("UPDATE agents SET generation=? WHERE id=?").run(token.generation, agentId);
+      // Claiming the scheduled attempt consumes the stored instant but keeps the attempt count,
+      // which is what makes the next interval grow; the hold is rewritten when this attempt ends.
+      this.db
+        .prepare("UPDATE agents SET generation=?,next_attempt_at=0 WHERE id=?")
+        .run(token.generation, agentId);
       this.db
         .prepare(
           "INSERT INTO runs(id,agent_id,session_id,generation,delivery_id,state,created_at) VALUES(?,?,?,?,?,'active',?)",
@@ -283,12 +357,23 @@ export class Store {
    * The reason alone decides the persisted state (`runStateForStopReason`), so a caller cannot
    * write a state that contradicts the reason it gave, and a failure can never be stored as a
    * completion.
+   *
+   * `options` carries the failure policy's decision for this Agent's channel, recorded in the same
+   * transaction as the run end and its started-effect fencing: a hold is what pauses the Agent, a
+   * decision that schedules its own next attempt or simply ends the attempt releases the pause.
+   * Failed input always stays durable, so no decision here can lose the work.
    */
-  finish(token: RunToken, error?: string, reason?: RunStopReason): void {
+  finish(
+    token: RunToken,
+    error?: string,
+    reason?: RunStopReason,
+    options: EndRunOptions = {},
+  ): void {
     this.atomic(() => {
       this.assertRun(token);
       const resolved: RunStopReason = reason ?? (error ? "model_failure" : "complete"),
-        state = runStateForStopReason[resolved];
+        state = runStateForStopReason[resolved],
+        resume = options.resume ?? { kind: "hold", hold: "no_retry", reason: error ?? resolved };
       if (error && state !== "failed")
         throw new Error("A failed run cannot be recorded as " + resolved);
       if (state === "failed") {
@@ -301,10 +386,11 @@ export class Store {
             .prepare("UPDATE actions SET state='unknown' WHERE run_id=? AND state='executing'")
             .run(token.id);
         this.transitionRun(token.id, resolved, error);
-        // Failed input remains durable, but requires explicit resume to avoid an error hot loop.
-        // Whether a specific failure may resume by itself belongs to the failure policy that owns
-        // backoff; until that policy releases the pause, no failure may retry its own delivery.
-        this.db.prepare("UPDATE agents SET paused=1 WHERE id=?").run(token.agentId);
+        // Failed input remains durable, but only a decision that releases the pause may retry its
+        // own delivery; every hold keeps the Agent stopped for the person who has to act.
+        if (resume.kind === "hold")
+          this.db.prepare("UPDATE agents SET paused=1 WHERE id=?").run(token.agentId);
+        this.recordResume(token.agentId, resume);
         return;
       }
       if (state === "interrupted") {
@@ -315,9 +401,11 @@ export class Store {
       // model cannot be reported as handled, so that caller is refused below rather than served.
       if (state === "complete" && this.delivery(token.deliveryId).status !== "injected")
         throw new Error("Cannot complete uninjected delivery");
-      // A yield keeps the delivery exactly where it is, so the next run of this channel resumes
-      // the same input instead of the delivery being reported as handled.
-      if (state === "yielded") {
+      // A yield gave up its execution slot without a failure, so its channel carries no schedule
+      // and no hold into the resumption it is waiting for, and the delivery stays exactly where it
+      // is: the next run of this channel resumes the same input instead of reporting it handled.
+      this.clearResume(token.agentId);
+      if (state === "yielded" || this.delivery(token.deliveryId).status === "pending") {
         this.transitionRun(token.id, isYield(resolved) ? resolved : "turn_budget");
         return;
       }
@@ -328,6 +416,35 @@ export class Store {
       this.transitionRun(token.id, resolved);
       this.db.prepare("UPDATE deliveries SET status='handled' WHERE id=?").run(token.deliveryId);
     });
+  }
+  /**
+   * Persist what the channel does next: wait out an instant for another attempt, stay held until a
+   * person releases it, or add nothing at all. An attempt a stop already governs keeps the count of
+   * transient failures it had reached, so a restart after that stop does not restart the interval.
+   * The caller owns the transaction.
+   */
+  private recordResume(agentId: string, resume: ResumeAction): void {
+    if (resume.kind === "retry") {
+      this.db
+        .prepare(
+          "UPDATE agents SET next_attempt_at=?,resume_attempt=?,resume_hold='retry_backoff' WHERE id=?",
+        )
+        .run(resume.nextAt, resume.attempt, agentId);
+      return;
+    }
+    if (resume.kind === "hold") {
+      this.db
+        .prepare("UPDATE agents SET next_attempt_at=0,resume_attempt=0,resume_hold=? WHERE id=?")
+        .run(resume.hold, agentId);
+      return;
+    }
+    this.db.prepare("UPDATE agents SET next_attempt_at=0,resume_hold=NULL WHERE id=?").run(agentId);
+  }
+  /** The channel is open and healthy again: nothing scheduled, nothing waiting for a person. */
+  private clearResume(agentId: string): void {
+    this.db
+      .prepare("UPDATE agents SET next_attempt_at=0,resume_attempt=0,resume_hold=NULL WHERE id=?")
+      .run(agentId);
   }
   /**
    * Why the run that most recently *finished* serving one delivery stopped, or `null` when none
@@ -357,15 +474,47 @@ export class Store {
       const active = this.db
         .prepare("SELECT id FROM runs WHERE agent_id=? AND state='active'")
         .all(agentId) as { id: string }[];
-      this.db.prepare("UPDATE agents SET paused=1,generation=generation+1 WHERE id=?").run(agentId);
+      // A person's stop cancels the automatic attempt this Agent had scheduled, while a
+      // disposition they still have to release stays visible: the failure behind it did not go
+      // away, and stopping the channel again does not fix it.
+      this.db
+        .prepare(
+          `UPDATE agents SET paused=1,generation=generation+1,next_attempt_at=0,resume_attempt=0,
+            resume_hold=${dropSchedule} WHERE id=?`,
+        )
+        .run(agentId);
       for (const run of active) this.transitionRun(run.id, "owner_pause");
       this.db
         .prepare("UPDATE actions SET state='unknown' WHERE agent_id=? AND state='executing'")
         .run(agentId);
     });
   }
+  /**
+   * Stop the scheduled attempt of every Agent with an unfinished delivery for this work item. A
+   * person stopping or cancelling the work outranks an automatic attempt. The schedule belongs to
+   * the Agent's one channel rather than to a delivery, so the whole channel stops waiting here and
+   * an unfinished delivery of a still-active work item is simply retried when it next starts. A
+   * disposition a person still has to release stays, because the failure behind it did not go away.
+   */
+  dropScheduledAttempts(workId: string): void {
+    this.atomic(() => {
+      this.db
+        .prepare(
+          `UPDATE agents SET next_attempt_at=0,resume_attempt=0,resume_hold=${dropSchedule}
+            WHERE id IN (SELECT d.agent_id FROM deliveries d
+              LEFT JOIN delivery_work dw ON dw.delivery_id=d.id
+              LEFT JOIN delivery_context dc ON dc.delivery_id=d.id
+              WHERE COALESCE(dc.work_id,dw.work_id)=? AND d.status!='handled')`,
+        )
+        .run(workId);
+    });
+  }
+  /** A person's explicit resume outranks any stored attempt time or hold: run now, from scratch. */
   resume(agentId: string): void {
-    this.db.prepare("UPDATE agents SET paused=0 WHERE id=?").run(agentId);
+    this.atomic(() => {
+      this.db.prepare("UPDATE agents SET paused=0 WHERE id=?").run(agentId);
+      this.clearResume(agentId);
+    });
   }
   /** Call only after obtaining the daemon single-instance lock and terminating old workers. */
   recover(): void {

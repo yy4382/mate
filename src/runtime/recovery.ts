@@ -2,7 +2,9 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Collaboration } from "../collaboration/service.js";
 import { encode, hash, type RunToken } from "../storage/store.js";
 import { UsageLedger } from "../usage/ledger.js";
+import type { WorkerFault } from "./fault.js";
 import { isYield, type RunStopReason } from "./outcome.js";
+import { resumeAction, type ResumeAction } from "./resume.js";
 
 /**
  * The lifecycle of one resumption, as the run module sees it. A delivery that has not been
@@ -54,6 +56,16 @@ export class RunRecovery {
         timestamp: seat ? 0 : Date.now(),
       },
     };
+  }
+
+  /**
+   * What this Agent's channel does about one failed attempt: schedule the next automatic attempt
+   * for a genuinely transient fault, hold the channel for a person, or add nothing because the stop
+   * that ended the run already governs it. The answer is durable state plus the shared fault
+   * disposition, so it is a decision this module makes rather than one the scheduler interprets.
+   */
+  failure(agentId: string, fault: WorkerFault, now = Date.now()): ResumeAction {
+    return resumeAction(fault, this.c.store.resumeState(agentId).attempt, now);
   }
 
   /**

@@ -8,7 +8,7 @@ import { ToolRouter, operationDocumentation } from "./tools.js";
 import { repairTranscript } from "./context.js";
 import { FairAdmission, type Admission } from "../concurrency/admission.js";
 import { UsageLedger } from "../usage/ledger.js";
-import { describeFault, toWorkerFault } from "./fault.js";
+import { abortFault, describeFault, faultError, toWorkerFault } from "./fault.js";
 import type { RunStopReason } from "./outcome.js";
 import { RunRecovery } from "./recovery.js";
 export interface Worker {
@@ -81,6 +81,11 @@ export class Supervisor {
   async step(agentId: string): Promise<boolean> {
     if (this.stopped || this.closed || this.active.has(agentId) || this.queued.has(agentId))
       return false;
+    // A paused Agent, or one waiting out the interval a transient failure persisted or held for a
+    // person, starts nothing here: reading the rule before admission is what keeps that wait from
+    // occupying a run slot another Agent could use. `beginRun` applies the same rule again inside
+    // its transaction, because this read is only a snapshot.
+    if (!this.collaboration.store.runnable(agentId)) return false;
     const waiting = new AbortController();
     this.queued.set(agentId, waiting);
     let release: () => void;
@@ -112,9 +117,11 @@ export class Supervisor {
         const buildRecovery = async (): Promise<string> => this.runs.build(run, abort.signal);
         const recovery = await buildRecovery();
         // Shutdown may have arrived while this run was preparing: never start a new worker
-        // process after the application stopped advancing work.
+        // process after the application stopped advancing work. The run was stopped rather than
+        // failed, so it is reported as an abort: the failure policy adds no hold for it, and the
+        // delivery waits for the next run of this channel after a restart.
         if (this.stopped || this.closed)
-          throw new Error("Supervisor stopped while starting this run");
+          throw faultError(abortFault("supervisor stopped while starting this run"));
         const agent = this.collaboration.agents.get(agentId);
         worker = this.workers.get(agentId) ?? this.factory(agent);
         this.workers.set(agentId, worker);
@@ -211,14 +218,28 @@ export class Supervisor {
         this.workers.delete(agentId);
         // A run that never reached the worker failed in this process; the run module reads the
         // shared fault instead of the message text to decide what happens next.
-        const fault = toWorkerFault(error, "recovery");
+        const fault = toWorkerFault(error, "recovery"),
+          action = this.runs.failure(agentId, fault);
         try {
-          s.finish(run, describeFault(fault), "model_failure");
+          // The run module decided what this Agent's channel does next; this records it together
+          // with the run end. Only a transient model fault is tried again, and only from the
+          // instant it scheduled; a hold pauses this Agent for the person who has to act, while a
+          // stop that person or this process already asked for adds nothing. Either way the
+          // pending delivery stays.
+          s.finish(run, describeFault(fault), "model_failure", { resume: action });
         } catch {
           /* already fenced by stop */
         }
         this.router.sessions.apply(agentId);
-        s.audit("run_failure", { agentId, runId: run.id, fault });
+        s.audit("run_failure", {
+          agentId,
+          runId: run.id,
+          fault,
+          resume: action.kind,
+          ...(action.kind === "retry"
+            ? { attempt: action.attempt, nextAttemptAt: action.nextAt }
+            : {}),
+        });
       } finally {
         this.active.delete(agentId);
         this.scheduleIdle(agentId);
