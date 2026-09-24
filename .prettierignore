@@ -1,0 +1,13 @@
+# Vendored skill definitions and their lockfile are maintained by the skills tooling.
+.agents/
+skills-lock.json
+
+# Prose documentation is owned by its own tickets; the formatting pass covers source,
+# tests and configuration, where a mechanical change cannot hide a behaviour change.
+*.md
+docs/
+
+# Generated build output and the generated lockfile.
+dist/
+coverage/
+pnpm-lock.yaml

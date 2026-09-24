@@ -9,8 +9,10 @@
   "scripts": {
     "build": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\" && tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "test": "pnpm run build && vitest run",
-    "check": "pnpm test",
+    "check": "pnpm run format:check && pnpm test",
     "start": "node dist/src/main.js start",
     "config:check": "node dist/src/main.js check",
     "deploy": "node dist/src/deployment/cli.js"
@@ -34,6 +36,7 @@
     "@types/better-sqlite3": "9.6.0",
     "@types/fs-ext": "2.0.3",
     "@types/node": "24.13.6",
+    "prettier": "3.9.9",
     "typescript": "7.0.2",
     "vitest": "5.0.1"
   },

@@ -48,6 +48,8 @@ export class SlackRuntime implements AdapterLifecycle {
         socket.onDisconnect(()=>{if(!this.stopped){this.service.recordTransportGap(agent.id);this.nextMembership=0;}});
         const receiver=new DurableReceiver(this.c.store,agent.slackAppId,this.transport.mapper.config.teamId,socket,()=>this.report('Slack receiver error; uncommitted events are not acknowledged'),()=>this.service.replay());
         const app=new App({token:requireSecret(process.env,agent.botTokenEnv),receiver});
+        // tests/deployment/diagnostics.test.ts asserts this registration text verbatim.
+        // prettier-ignore
         for(const event of slackWireEvents)app.event(event,async()=>{});app.command(slackControlCommand,async()=>{});
         app.action('mate_system_approve',async()=>{});app.action('mate_system_reject',async()=>{});
         this.apps.push(app);
