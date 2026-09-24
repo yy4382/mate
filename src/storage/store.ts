@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { createHash, randomUUID } from "node:crypto";
 import { openCurrentDatabase } from "./initialize.js";
-import type { RunStopReason } from "../runtime/outcome.js";
+import { isYield, runStateForStopReason, type RunStopReason } from "../runtime/outcome.js";
 
 export function encode(value: unknown): string {
   const encoded = JSON.stringify(value);
@@ -280,14 +280,18 @@ export class Store {
    * `yielded` rather than as a finished or failed run, so a resumption, the recovery input and the
    * owner view can all tell a normal yield from a fault or a pause.
    *
-   * `pauseAgent` belongs to the caller's failure policy. The store only records it, so deciding
-   * which failure needs a human stays with the module that owns that decision.
+   * The reason alone decides the persisted state (`runStateForStopReason`), so a caller cannot
+   * write a state that contradicts the reason it gave, and a failure can never be stored as a
+   * completion.
    */
-  finish(token: RunToken, error?: string, reason?: RunStopReason, pauseAgent = true): void {
+  finish(token: RunToken, error?: string, reason?: RunStopReason): void {
     this.atomic(() => {
       this.assertRun(token);
-      const delivery = this.delivery(token.deliveryId);
-      if (error) {
+      const resolved: RunStopReason = reason ?? (error ? "model_failure" : "complete"),
+        state = runStateForStopReason[resolved];
+      if (error && state !== "failed")
+        throw new Error("A failed run cannot be recorded as " + resolved);
+      if (state === "failed") {
         if (
           this.db
             .prepare("SELECT 1 FROM actions WHERE run_id=? AND state='executing'")
@@ -296,35 +300,45 @@ export class Store {
           this.db
             .prepare("UPDATE actions SET state='unknown' WHERE run_id=? AND state='executing'")
             .run(token.id);
-        this.transitionRun(token.id, "failed", reason ?? "model_failure", error);
+        this.transitionRun(token.id, resolved, error);
         // Failed input remains durable, but requires explicit resume to avoid an error hot loop.
-        if (pauseAgent) this.db.prepare("UPDATE agents SET paused=1 WHERE id=?").run(token.agentId);
+        // Whether a specific failure may resume by itself belongs to the failure policy that owns
+        // backoff; until that policy releases the pause, no failure may retry its own delivery.
+        this.db.prepare("UPDATE agents SET paused=1 WHERE id=?").run(token.agentId);
+        return;
+      }
+      if (state === "interrupted") {
+        this.transitionRun(token.id, resolved, error);
         return;
       }
       // An explicit completion still has to be earned: a delivery whose input never reached the
-      // model cannot be reported as handled. A caller that states a yield instead keeps the input
-      // durable for the next run of this channel.
-      if ((reason ?? "complete") === "complete" && delivery.status !== "injected")
+      // model cannot be reported as handled. A yield instead keeps the input durable for the next
+      // run of this channel, and so does a delivery that never reached the model at all.
+      if (state === "complete" && this.delivery(token.deliveryId).status !== "injected")
         throw new Error("Cannot complete uninjected delivery");
-      if (reason === "yielded" || delivery.status === "pending") {
-        this.transitionRun(token.id, "yielded", "yielded");
+      if (state === "yielded" || this.delivery(token.deliveryId).status === "pending") {
+        this.transitionRun(token.id, isYield(resolved) ? resolved : "turn_budget");
         return;
       }
       if (
         this.db.prepare("SELECT 1 FROM actions WHERE run_id=? AND state='executing'").get(token.id)
       )
         throw new Error("Cannot complete with executing actions");
-      this.transitionRun(token.id, "complete", reason ?? "complete");
+      this.transitionRun(token.id, resolved);
       this.db.prepare("UPDATE deliveries SET status='handled' WHERE id=?").run(token.deliveryId);
     });
   }
-  /** Why the most recent run of one Agent stopped, or `null` when it has never run. */
-  stopReasonOf(agentId: string): RunStopReason | null {
+  /**
+   * Why the run that most recently served one delivery stopped, or `null` when it has never run.
+   * Keyed by the delivery rather than the Agent: a resumption needs the reason its own input was
+   * left with, and another delivery's run must not answer for it.
+   */
+  lastStopReason(deliveryId: string): RunStopReason | null {
     const row = this.db
       .prepare(
-        "SELECT stop_reason FROM runs WHERE agent_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1",
+        "SELECT stop_reason FROM runs WHERE delivery_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1",
       )
-      .get(agentId) as { stop_reason: RunStopReason | null } | undefined;
+      .get(deliveryId) as { stop_reason: RunStopReason | null } | undefined;
     return row?.stop_reason ?? null;
   }
   delivery(id: string): Delivery {
@@ -339,7 +353,7 @@ export class Store {
         .prepare("SELECT id FROM runs WHERE agent_id=? AND state='active'")
         .all(agentId) as { id: string }[];
       this.db.prepare("UPDATE agents SET paused=1,generation=generation+1 WHERE id=?").run(agentId);
-      for (const run of active) this.transitionRun(run.id, "interrupted", "owner_pause");
+      for (const run of active) this.transitionRun(run.id, "owner_pause");
       this.db
         .prepare("UPDATE actions SET state='unknown' WHERE agent_id=? AND state='executing'")
         .run(agentId);
@@ -356,7 +370,7 @@ export class Store {
         agent_id: string;
       }[];
       this.db.prepare("UPDATE agents SET generation=generation+1").run();
-      for (const run of active) this.transitionRun(run.id, "interrupted", "interrupted");
+      for (const run of active) this.transitionRun(run.id, "interrupted");
       this.markUnconfirmed();
       this.audit("startup_recovery", {});
     });
@@ -385,14 +399,16 @@ export class Store {
       .run().changes;
     return changes;
   }
-  /** Every runtime active→terminal transition and its owner fact share this transaction boundary. */
-  transitionRun(
-    id: string,
-    state: "complete" | "failed" | "interrupted" | "yielded",
-    reason: RunStopReason,
-    error?: string,
-  ): void {
+  /**
+   * Every runtime active→terminal transition and its owner fact share this transaction boundary.
+   * The state is derived from the reason rather than accepted from the caller, so the pair stored
+   * on the run row can never disagree with the stop the caller reported.
+   */
+  transitionRun(id: string, reason: RunStopReason, error?: string): void {
     if (!this.db.inTransaction) throw new Error("Run transition requires transaction");
+    const state = runStateForStopReason[reason];
+    if (error && state !== "failed")
+      throw new Error("A failed run cannot be recorded as " + reason);
     const run = this.db
       .prepare("SELECT agent_id FROM runs WHERE id=? AND state='active'")
       .get(id) as { agent_id: string } | undefined;

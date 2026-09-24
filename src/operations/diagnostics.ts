@@ -71,6 +71,7 @@ export function diagnosticLogs(items: readonly ActivityItem[], now = Date.now())
   const kinds = [
     "runtime.run_completed",
     "runtime.run_failed",
+    "runtime.run_yielded",
     "runtime.run_interrupted",
     "internal_dm.internal_dm_created",
   ];

@@ -170,7 +170,9 @@ it("a normal yield stays resumable and is distinguishable from a model fault and
   const yielded = runRow(f.store)!;
   expect(yielded.state).not.toBe("failed");
   expect(yielded.state).not.toBe("interrupted");
-  expect(yielded.stopReason).toBe("yielded");
+  // A run that stops on its own turn budget is recorded as a turn-budget yield, which is a
+  // different condition from a run that released its slot to wait for an external result.
+  expect(yielded.stopReason).toBe("turn_budget");
   // The unfinished delivery stays durable instead of being reported as handled.
   expect(f.store.delivery(delivery).status).toBe("injected");
   expect(f.store.db.prepare("SELECT paused FROM agents WHERE id='research'").get()).toEqual({
@@ -184,7 +186,8 @@ it("a normal yield stays resumable and is distinguishable from a model fault and
   expect(await supervisor.step("research")).toBe(false);
   supervisor.close();
 
-  // A model fault keeps the input but pauses the Agent: it is a different condition.
+  // A model fault keeps the input but pauses the Agent, so it retries only after an explicit
+  // resume: a different condition from the yield above, which resumes by itself.
   const faulty = setup();
   const failing = scheduled(faulty, async () => {
     throw new Error("model unavailable");
@@ -195,12 +198,41 @@ it("a normal yield stays resumable and is distinguishable from a model fault and
   expect(runRow(faulty.store)).toMatchObject({ state: "failed", stopReason: "model_failure" });
   expect(faulty.store.delivery(input).status).toBe("injected");
   expect(faulty.store.db.prepare("SELECT paused FROM agents WHERE id='research'").get()).toEqual({
-    paused: 0,
+    paused: 1,
   });
+  // The failed delivery is not retried on its own, however often the scheduler polls.
+  for (let attempt = 0; attempt < 5; attempt++) expect(await failing.step("research")).toBe(false);
+  expect(faulty.store.db.prepare("SELECT count(*) n FROM runs").get()).toEqual({ n: 1 });
   failing.close();
 });
 
-it("a shared-persistence fault does not pause the Agent the way a model fault does", async () => {
+it("a failed run does not retry its own delivery in a hot loop", async () => {
+  const f = setup();
+  const supervisor = scheduled(f, async () => {
+    // A failure the durable record itself produced: it will fail identically every time until a
+    // human acts, so the scheduler must not pick the same delivery up again by itself.
+    throw Object.assign(new Error("SQLITE_BUSY: database is locked"), { code: "SQLITE_BUSY" });
+  });
+  f.messages.membership("research", "CTEST", true);
+  const delivery = f.collaboration.enqueue("research", f.work, "hot-loop", {});
+  expect(await supervisor.step("research")).toBe(true);
+  expect(f.store.delivery(delivery).status).toBe("injected");
+  for (let attempt = 0; attempt < 20; attempt++)
+    expect(await supervisor.step("research")).toBe(false);
+  // One attempt, one run row and one owner fact: no backoff policy exists yet, so the pause is
+  // what keeps a deterministically failing delivery from spinning.
+  expect(f.store.db.prepare("SELECT count(*) n FROM runs").get()).toEqual({ n: 1 });
+  expect(
+    f.store.db.prepare("SELECT count(*) n FROM operational_facts WHERE kind='run_failed'").get(),
+  ).toEqual({ n: 1 });
+  // The input is still there for the explicit resume that releases it.
+  f.store.resume("research");
+  expect(await supervisor.step("research")).toBe(true);
+  expect(f.store.db.prepare("SELECT count(*) n FROM runs").get()).toEqual({ n: 2 });
+  supervisor.close();
+});
+
+it("keeps a shared-persistence failure distinguishable while still refusing a self-retry", async () => {
   const f = setup();
   const supervisor = scheduled(f, async () => {
     throw Object.assign(new Error("SQLITE_BUSY: database is locked"), { code: "SQLITE_BUSY" });
@@ -218,6 +250,11 @@ it("a shared-persistence fault does not pause the Agent the way a model fault do
     ).body,
   ).fault;
   expect(fault).toMatchObject({ stage: "persistence", category: "shared_persistence" });
+  // A failure the record itself produced is still a failure: it waits for the resume that owns
+  // the decision, instead of spinning against a store that cannot record the outcome.
+  expect(f.store.db.prepare("SELECT paused FROM agents WHERE id='research'").get()).toEqual({
+    paused: 1,
+  });
   supervisor.close();
 });
 
@@ -356,6 +393,9 @@ it("a scripted model can collaborate with a peer, yield, and continue on the sam
   expect(f.store.delivery(delivery).status).toBe("handled");
   const reset = f.store.db.prepare("SELECT state FROM session_resets").get() as { state: string };
   expect(reset.state).toBe("applied");
+  // Releasing the slot for a context replacement is a wait for the work to come back, recorded
+  // separately from a turn-budget yield so the two never read as the same condition.
+  expect(runRow(f.store)).toMatchObject({ state: "yielded", stopReason: "external_wait" });
   // The continuation runs on the same single channel and keeps the logical session.
   expect(await supervisor.step("research")).toBe(true);
   expect(observed).toEqual(["collaborated", "continued"]);
@@ -371,9 +411,13 @@ it("a scripted model can collaborate with a peer, yield, and continue on the sam
 it("a seated blind reviewer receives its brief and recovery without any peer conclusion", async () => {
   const f = setup();
   let recovery = "",
-    input = "";
+    input = "",
+    delivered: { content: string; timestamp: number }[] = [];
   const supervisor = scheduled(f, async (_run, spec, hooks: any) => {
     recovery = spec.recovery;
+    delivered = (spec.messages as { role: string; content: unknown; timestamp: number }[]).map(
+      (message) => ({ content: String(message.content), timestamp: message.timestamp }),
+    );
     input = JSON.stringify(spec.messages) + (await hooks.notice?.());
     return { tokens: 0, cost: 0, certain: true, waiting: false, continuation: false };
   });
@@ -413,6 +457,10 @@ it("a seated blind reviewer receives its brief and recovery without any peer con
   expect(input).toContain("Independently compute 2+2");
   expect(input).not.toContain("WITHHELD_PEER_CONCLUSION");
   expect(input).not.toContain("UTWO");
+  // The brief reaches the seat on a neutral turn: no wall-clock value the reviewer could
+  // correlate with anything outside its own brief.
+  const brief = delivered.find((message) => message.content.includes("Independently compute"))!;
+  expect(brief.timestamp).toBe(0);
   const package_ = JSON.parse(recovery);
   expect(package_.work).toMatchObject({ id: f.work, reviewSeat: true });
   expect(package_.tasks).toBeNull();
@@ -429,6 +477,74 @@ it("a seated blind reviewer receives its brief and recovery without any peer con
     await expect(f.router.call(run, f.work, operation, operation, args, signal)).rejects.toThrow(
       "isolates",
     );
+  supervisor.close();
+});
+
+it("records an owner pause and a stopped work item as their own conditions that never self-resume", () => {
+  const f = setup();
+  // Registering is what creates each Agent's row and logical session; no scheduler step runs here.
+  const supervisor = scheduled(f, async () => ({
+    tokens: 0,
+    cost: 0,
+    certain: true,
+    waiting: false,
+    continuation: false,
+  }));
+  f.messages.membership("research", "CTEST", true);
+  // A human pause ends the run under its own reason and keeps the Agent stopped.
+  f.collaboration.enqueue("research", f.work, "paused", {});
+  const paused = f.store.beginRun("research")!;
+  f.store.input(paused, { role: "user", content: "input" });
+  f.store.pause("research");
+  expect(runRow(f.store)).toMatchObject({ state: "interrupted", stopReason: "owner_pause" });
+  expect(f.store.beginRun("research")).toBeUndefined();
+  f.store.resume("research");
+  const resumed = f.store.beginRun("research")!;
+  expect(resumed).toBeDefined();
+  f.store.input(resumed, { role: "user", content: "input" });
+  f.store.finish(resumed);
+
+  // Stopping the work item ends its run under the work reason, and the owner has to resume it.
+  const other = f.collaboration.createWork("human:two", fixtureTarget("CTWO", "100.000001"));
+  f.messages.membership("research", "CTWO", true);
+  f.collaboration.enqueue("research", other, "stopped", {});
+  const stopped = f.store.beginRun("research")!;
+  f.store.input(stopped, { role: "user", content: "input" });
+  expect(f.collaboration.control("UOWNER", other, "pause")).toEqual([stopped.id]);
+  expect(runRow(f.store)).toMatchObject({ state: "interrupted", stopReason: "work_stopped" });
+  expect(f.store.beginRun("research", Date.now(), true)).toBeUndefined();
+  supervisor.close();
+});
+
+it("never leaves a run stuck active when recording its outcome fails", async () => {
+  const f = setup();
+  const supervisor = scheduled(f, async () => ({
+    tokens: 0,
+    cost: 0,
+    certain: true,
+    waiting: false,
+    continuation: false,
+  }));
+  f.messages.membership("research", "CTEST", true);
+  const delivery = f.collaboration.enqueue("research", f.work, "snapshot-failure", {});
+  // The durable write that finishes the run fails once. The run's transition and the snapshot
+  // share one transaction, so the failure must leave the channel usable rather than wedged.
+  const snapshot = f.store.snapshot.bind(f.store);
+  let calls = 0;
+  f.store.snapshot = ((...args: Parameters<typeof snapshot>) => {
+    if (++calls === 1) throw new Error("synthetic snapshot failure");
+    return snapshot(...args);
+  }) as typeof f.store.snapshot;
+  expect(await supervisor.step("research")).toBe(true);
+  expect(f.store.db.prepare("SELECT count(*) n FROM runs WHERE state='active'").get()).toEqual({
+    n: 0,
+  });
+  expect(runRow(f.store)?.state).toBe("failed");
+  // The input survives for the explicit resume that retries it.
+  expect(f.store.delivery(delivery).status).toBe("injected");
+  f.store.resume("research");
+  expect(await supervisor.step("research")).toBe(true);
+  expect(f.store.delivery(delivery).status).toBe("handled");
   supervisor.close();
 });
 

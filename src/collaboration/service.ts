@@ -684,7 +684,7 @@ export class Collaboration {
           this.store.db
             .prepare("UPDATE agents SET generation=generation+1 WHERE id=?")
             .run(run.agent_id);
-          this.store.transitionRun(run.id, "interrupted", "work_stopped");
+          this.store.transitionRun(run.id, "work_stopped");
           this.store.db
             .prepare("UPDATE actions SET state='unknown' WHERE run_id=? AND state='executing'")
             .run(run.id);
