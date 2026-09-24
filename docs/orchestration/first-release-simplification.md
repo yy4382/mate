@@ -61,7 +61,7 @@ only when every blocker is committed on the branch.
 | #37 | 统一应用装配与关闭流程 | **done** | `fab5692` | `f8612ed` + `3c5e9db` + `c4592d7` + `1066f1c` |
 | #38 | 由任务模块负责消息关联任务的完整发布流程 | in progress | `1066f1c` (worktree `.worktrees/t38`) | — |
 | #39 | 让工具输入类型和领域授权各有明确归属 | **done** | `1066f1c` (worktree `.worktrees/t39`) | `f96c1a2` + `4cc68c9`, merged as `e898228`; follow-up `412aac5` was a sibling of `4cc68c9`, so its 14-line delta is being re-checked against #42 on the merged base |
-| #40 | 交付有界且可继续的历史查询 | in progress | `e898228` (worktree `.worktrees/t40`) | — |
+| #40 | 交付有界且可继续的历史查询 | **done** | `02dafa9` (re-applied; worktree `.worktrees/t40`) | `9eda16a`, merged as `013be6c` |
 | #41 | 保留注意力与持久投递的独立状态 | pending | — | — |
 | #42 | 让提醒独立于关联任务继续运行 | **done** | `e898228` (worktree `.worktrees/t42`) | `1c51589`, merged as `0f71592`; sibling `1909d03` (extra tests) being reconciled on the merged base |
 | #43 | 将会话发现收敛到现有成员空间 | **done** | `ddd86b4` (worktree `.worktrees/t43`) | `1c206f4`, merged as `6a25110` |
@@ -92,6 +92,16 @@ Merge safety held throughout: the merge that was interrupted mid-conflict was ab
 the branch tip was a committed, green merge, so no half-merged state survived. Lesson
 recorded: resuming a stopped implementer session is cheaper than re-implementing, and a
 ticket is not "done" until its commit is an ancestor of the branch tip.
+
+## Verification hazard (orchestrator, corrected once)
+
+While a ticket is being implemented in the MAIN tree, a `pnpm check` run there measures that
+ticket's in-flight files as well as the merge, so a red result cannot be attributed to the
+merge. This produced one false alarm: a format failure from ticket #45's untracked
+`tests/runtime/worker-fault.test.ts` was briefly read as a broken #40 merge. The merge commit
+was in fact green, confirmed afterwards in an isolated `git archive` copy. Rule: verify a
+merge commit in an isolated copy whenever another ticket is editing the main tree, and only
+treat a shared-tree failure as merge damage after that.
 
 ## Findings escalated to the user
 
@@ -189,6 +199,7 @@ None yet.
 | #37 (final) | `1066f1c` | `pnpm typecheck` + `pnpm check` on the MAIN tree | 59 files / 432 tests, exit 0 (agent reports the same) |
 | #42 | `1c51589`, merged `0f71592` | `pnpm typecheck` + `pnpm check` on the merged MAIN tree before committing the merge | 58 files / 435 tests, exit 0; conflict-free |
 | #43 | `1c206f4`, merged `6a25110` | `pnpm typecheck` + `pnpm check` on the merged MAIN tree before committing the merge | 58 files / 441 tests, exit 0; conflict-free; the merge preserved the orchestrator's ledger file |
+| #40 | `9eda16a`, merged `013be6c` | `pnpm check` in an isolated `git archive` copy of the merge commit | 58 files / 454 tests, exit 0; the retired `messages.recent/read/search` names are absent from the tool modules and the exact-catalogue assertion pins `history.*` |
 | #39 | `4cc68c9`, merged `e898228` | `pnpm typecheck` + `pnpm check` on the merged MAIN tree before committing the merge | 58 files / 431 tests, exit 0; conflict-free; type seam checked by hand (`ToolHandler<Schema>`/`ToolAuthorize<Schema>` both derive from the one zod schema) and the architecture test asserts the removed research reader, its host allow-list, its prompt hints and `daemon/research.ts` are gone |
 | #52 | `053a643` (worktree) | `pnpm check` in `.worktrees/t52` | 62 files / 419 tests, exit 0 — merge pending #36 finishing |
 | #36 | `a2288ce` | `pnpm check` in an isolated `git archive` copy | 57 files / 398 tests, exit 0; all preserved-baseline tests confirmed present; old schema modules fully unreferenced; `Store` is the single entry onto `openCurrentDatabase` |
