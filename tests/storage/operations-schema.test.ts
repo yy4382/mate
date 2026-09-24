@@ -90,11 +90,6 @@ it("timestamps only new effects and supports bounded activity indexes", () => {
         "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM task_event_baselines WHERE historical_complete=0",
       )
       .all(),
-    s.db
-      .prepare(
-        "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM reminder_event_baselines WHERE historical_complete=0",
-      )
-      .all(),
     s.db.prepare("EXPLAIN QUERY PLAN SELECT COUNT(*) FROM actions WHERE created_at IS NULL").all(),
   ].flat() as { detail: string }[];
   const details = plans.map((row) => row.detail).join("\n");
@@ -112,7 +107,6 @@ it("timestamps only new effects and supports bounded activity indexes", () => {
     "output_held_status",
     "schedule_due_status",
     "task_baseline_gaps",
-    "reminder_baseline_gaps",
     "action_missing_activity_time",
   ])
     expect(details).toContain(index);

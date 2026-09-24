@@ -257,6 +257,55 @@ it("keeps identity, session, deliveries, tasks and reminders across a restart in
     reminder.id,
   ]);
 });
+it("fires a reminder that came due across a restart for its author and its work item", async () => {
+  credentials();
+  const { c } = config(),
+    d = await daemon(c),
+    target = { conversationId: "local-room" },
+    work = d.collaboration.createWork("restart-reminder", target),
+    task = d.collaboration.createTask("research", work, target, "finish before the reminder"),
+    reminder = d.collaboration.reminders.create("research", work, {
+      target,
+      content: "check the change after the restart",
+      nextAt: Date.now() + 600000,
+      timezone: "UTC",
+      taskId: task,
+    });
+  d.collaboration.claim("research", task);
+  d.collaboration.update("research", task, "done", "verified");
+  await d.close();
+  const reopened = await daemon(c);
+  // The finished task left the reminder active; only its due time triggers it.
+  expect(reopened.collaboration.reminders.read("research", reminder.id).active).toBe(1);
+  reopened.collaboration.tick(Date.now() + 700000);
+  const delivery = reopened.store.db
+    .prepare("SELECT id,agent_id,payload FROM deliveries WHERE agent_id='research'")
+    .get() as { id: string; agent_id: string; payload: string };
+  expect(delivery.agent_id).toBe("research");
+  expect(JSON.parse(delivery.payload)).toMatchObject({
+    kind: "reminder",
+    reminderId: reminder.id,
+    content: "check the change after the restart",
+  });
+  expect(
+    reopened.store.db
+      .prepare("SELECT work_id FROM delivery_work WHERE delivery_id=?")
+      .get(delivery.id),
+  ).toEqual({ work_id: work });
+  expect(
+    reopened.store.db
+      .prepare("SELECT actor_id FROM reminder_firings WHERE reminder_id=?")
+      .get(reminder.id),
+  ).toEqual({ actor_id: "research" });
+  expect(
+    reopened.store.db
+      .prepare("SELECT actor_id,kind FROM reminder_events WHERE reminder_id=? ORDER BY seq DESC")
+      .get(reminder.id),
+  ).toEqual({ actor_id: "research", kind: "fired" });
+  // The due firing is the author's own durable delivery, resumable as the author's run.
+  const run = reopened.store.beginRun("research")!;
+  expect([run.agentId, run.deliveryId]).toEqual(["research", delivery.id]);
+});
 it("applies a changed configuration in place and re-baselines only the changed Agent", async () => {
   credentials();
   const { c } = config(),

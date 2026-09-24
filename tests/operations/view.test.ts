@@ -268,34 +268,30 @@ it("rolls runtime and internal DM state back when their required fact cannot com
   );
 });
 
-it("keeps reminder history coverage incomplete after editing a migrated reminder", () => {
+it("reports reminder activity as complete because every stored reminder is current-format", () => {
   const f = setup(),
     c = f.collaboration,
-    s = f.store,
     reminder = c.reminders.create("alice", f.work, {
       target: f.target,
-      content: "legacy purpose",
+      content: "first purpose",
       nextAt: 50000,
       timezone: "UTC",
     });
-  s.db.prepare("UPDATE schedules SET legacy=1 WHERE id=?").run(reminder.id);
-  s.db
-    .prepare("UPDATE reminder_event_baselines SET historical_complete=0 WHERE reminder_id=?")
-    .run(reminder.id);
   c.reminders.edit("alice", reminder.id, reminder.version, {
     target: f.target,
     content: "edited purpose",
     nextAt: 60000,
     timezone: "UTC",
   });
-  expect(s.db.prepare("SELECT legacy FROM schedules WHERE id=?").get(reminder.id)).toEqual({
-    legacy: 0,
+  expect(c.reminders.read("alice", reminder.id)).toMatchObject({
+    content: "edited purpose",
+    version: 2,
   });
   expect(
     c.operations.activity("owner", { sources: ["reminder_event", "reminder_firing"] }).sources,
   ).toMatchObject({
-    reminder_event: { coverage: { historicalComplete: false, gapCount: 1 } },
-    reminder_firing: { coverage: { historicalComplete: false, gapCount: 1 } },
+    reminder_event: { coverage: { historicalComplete: true, gapCount: 0 } },
+    reminder_firing: { coverage: { historicalComplete: true, gapCount: 0 } },
   });
 });
 
