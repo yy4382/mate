@@ -72,9 +72,9 @@ only when every blocker is committed on the branch.
 | #48 | 使进程查询与停止可取消且不阻塞 daemon | **done** | `fab5692` (worktree `.worktrees/t48`) | `9e69c30`, merged as `3838cad` |
 | #49 | 让内部应用在 Slack 离线时启动和运行 | **done** | `d412adf` (worktree `.worktrees/t49`) | `367bb2a` merged as `b933b52`; review fix `3451ce5` cherry-picked as `1f4e6c1` |
 | #50 | 按安装和目标范围恢复 Slack 操作 | **done** | `fc977cf` (worktree `.worktrees/t50`) | `b7a5fdf` (re-applied into #49's readiness model), merged as `066e317` |
-| #51 | 给 owner 提供分范围、可操作的故障诊断 | **done** | `066e317` (worktree `.worktrees/t51`) | `b34e6c4`, merged as `5ad7fab` |
+| #51 | 给 owner 提供分范围、可操作的故障诊断 | **done** | `066e317` (worktree `.worktrees/t51`) | `b34e6c4` merged as `5ad7fab`; review fixes `6efe101`/`4ee4e9f`/`e289c2c` cherry-picked as `b79c516`/`206f9c9`/`00dec88` |
 | #52 | 统一 Linux 维护所用的宿主操作与路径事实 | **done** | `6395c75` (worktree `.worktrees/t52`) | `aac16f1`, merged as `fab5692` |
-| #53 | 验证完整 Linux 安装、升级、备份与恢复 | in progress | `5ad7fab` (worktree `.worktrees/t53`) | — |
+| #53 | 验证完整 Linux 安装、升级、备份与恢复 | **done** | `5ad7fab` (worktree `.worktrees/t53`) | `4cdd744`+`352d789`+`ff07110`, merged as `490da12` |
 
 ## Quota interruption and recovery
 
@@ -122,6 +122,22 @@ merge. This produced one false alarm: a format failure from ticket #45's untrack
 was in fact green, confirmed afterwards in an isolated `git archive` copy. Rule: verify a
 merge commit in an isolated copy whenever another ticket is editing the main tree, and only
 treat a shared-tree failure as merge damage after that.
+
+## Outcome
+
+All 20 tickets of spec #33 landed on `codex/first-release-simplification`. Final integration at
+`490da12`: `pnpm typecheck` exit 0 and `pnpm check` exit 0 — **72 test files / 579 tests**, format
+check + build + full suite, at the pinned Node 24.21.0 (baseline was 61 files / 411 tests, so the
+effort added 11 test files and 168 tests while deleting 13 obsolete schema/migration modules).
+
+Honest limits of this result, recorded so nobody mistakes it for more than it is:
+- Native Linux validation (real Agent UID, directory ownership/modes, systemd slice/scope,
+  `/proc`+cgroup ownership, disk/inode enforcement) was NOT executed: this host is macOS. It is a
+  runnable procedure against the project's real commands and must be run by a person on a
+  resettable Linux host before the first release is called deployable.
+- Real Slack, model-provider and VPS connectivity were never exercised; every Slack/provider path
+  is covered with the real application plus a controllable transport or a scripted model, and no
+  simulated result is presented as a real integration.
 
 ## Tracker synchronization
 
