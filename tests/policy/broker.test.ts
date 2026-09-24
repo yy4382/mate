@@ -8,6 +8,7 @@ import { configFixture } from '../helpers/config.js';
 import { Messages, Output } from '../helpers/canonical-slack.js';
 import { Collaboration } from '../../src/collaboration/service.js';
 import { Broker } from '../../src/policy/broker.js';
+import { ToolRouter } from '../../src/runtime/tools.js';
 
 const cleanups: (() => void)[] = [];
 afterEach(() => cleanups.splice(0).forEach(stop => stop()));
@@ -34,6 +35,15 @@ it('runs an ordinary command as the Agent identity without a file grant or human
   expect(execute).toHaveBeenCalledOnce();
   expect(execute.mock.calls[0]![0]).toMatchObject({ agentId: 'research', root: home, operation: command });
   expect(store.action('once')?.state).toBe('succeeded');
+});
+
+it('keeps ordinary Linux tools available when the attributed work is paused', async () => {
+  const { collaboration, run, broker, work, execute } = setup();
+  const router = new ToolRouter(collaboration, broker);
+  collaboration.store.db.prepare("UPDATE works SET state='paused' WHERE id=?").run(work);
+  const result = await router.call(run, work, 'paused-read', 'file.read', { path: 'MEMORY.md' }, new AbortController().signal);
+  expect(result.value).toMatchObject({ code: 0, stdout: 'ok' });
+  expect(execute).toHaveBeenCalledOnce();
 });
 
 it('keeps one action identity immutable and returns an uncertain result for a lost receipt', async () => {

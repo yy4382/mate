@@ -70,10 +70,8 @@ export async function runDoctor(config: DaemonConfig, env: DoctorEnvironment = n
       const account = env.run('/usr/bin/getent', ['passwd', user.username]);
       const fields = account.stdout.trim().split(':');
       if (account.code !== 0 || fields.length !== 7 || Number(fields[2]) !== user.uid || Number(fields[3]) !== user.gid || fields[5] !== user.home) throw new Error(`${agentId}: Linux account differs from configuration`);
-      for (const [path, mode] of [[user.home, 0o700], [join(user.home, 'notes'), 0o700], [join(user.home, 'artifacts'), 0o700]] as const) {
-        const stat = lstatSync(path);
-        if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== user.uid || stat.gid !== user.gid || (stat.mode & 0o777) !== mode) throw new Error(`${agentId}: private directory ownership or mode differs: ${path}`);
-      }
+      const home = lstatSync(user.home);
+      if (!home.isDirectory() || home.isSymbolicLink() || home.uid !== user.uid || home.gid !== user.gid || (home.mode & 0o777) !== 0o700) throw new Error(`${agentId}: private directory ownership or mode differs: ${user.home}`);
       const memory = lstatSync(join(user.home, 'MEMORY.md'));
       if (!memory.isFile() || memory.isSymbolicLink() || memory.uid !== user.uid || memory.gid !== user.gid || (memory.mode & 0o777) !== 0o600) throw new Error(`${agentId}: private memory entry differs`);
       const sharedWork = lstatSync(join(config.runtime.sharedRoot!, agentId));

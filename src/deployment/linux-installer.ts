@@ -118,10 +118,12 @@ export async function installLinuxDeployment(spec: DeploymentSpec, config: Daemo
   for (const agent of plan.agents) {
     exactDirectory(dirname(agent.home), 0, 0, 0o755);
     exactDirectory(agent.home, agent.uid, agent.gid, 0o700);
-    for (const name of ['notes', 'artifacts']) exactDirectory(join(agent.home, name), agent.uid, agent.gid, 0o700);
     const definition = config.mate.agents.find(item => item.id === agent.agentId)!;
     const memory = join(agent.home, 'MEMORY.md');
-    if (!existsSync(memory)) exactFile(memory, `# ${definition.name}\n\nPrivate memory entry.\n`, agent.uid, agent.gid, 0o600);
+    if (!existsSync(memory)) {
+      for (const name of ['notes', 'artifacts']) exactDirectory(join(agent.home, name), agent.uid, agent.gid, 0o700);
+      exactFile(memory, `# ${definition.name}\n\nPrivate memory entry.\n`, agent.uid, agent.gid, 0o600);
+    }
     else { const stat = lstatSync(memory); if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== agent.uid || stat.gid !== agent.gid || (stat.mode & 0o777) !== 0o600) throw new Error(`Private memory ownership differs: ${memory}`); }
     exactDirectory(join(plan.sharedRoot, agent.agentId), agent.uid, agent.gid, 0o755);
   }

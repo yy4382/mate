@@ -9,10 +9,8 @@ export class Broker {
 
   private assertScope(run: RunToken, workId: string): void {
     this.store.assertRun(run);
-    this.collaboration.assertActionWork(run, workId);
     const binding = this.store.db.prepare('SELECT work_id FROM delivery_work WHERE delivery_id=?').get(run.deliveryId) as { work_id: string } | undefined;
     if (this.collaboration.currentWork(run, binding?.work_id ?? '') !== workId) throw new Error('Run work mismatch');
-    this.collaboration.messages.requireAccess(run.agentId, JSON.parse(this.collaboration.work(workId).target).conversationId);
   }
 
   async execute(run: RunToken, workId: string, actionId: string, input: unknown, signal?: AbortSignal): Promise<unknown> {

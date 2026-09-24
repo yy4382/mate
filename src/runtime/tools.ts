@@ -72,12 +72,12 @@ export class ToolRouter{
     entry.authorize(this.context(run,selected,callId,operation,signal,selected),args);
     const context=this.context(run,this.resolveWork(entry,run,selected,args),callId,operation,signal,selected);
     if(entry.effectPolicy==='atomic-recorded')return this.atomic(entry,context,args);
-    const result=await entry.handler(context,args);entry.postAwait(context);entry.authorize(context,args);if(entry.workPolicy!=='none'&&entry.workPolicy!=='select')c.assertActionWork(run,context.workId);this.authorizeSeat(entry,run);const safe=this.seatResult(entry,context,result);return{value:safe.value,...(safe.wait?{wait:true}:{})};
+    const result=await entry.handler(context,args);entry.postAwait(context);entry.authorize(context,args);if(!['none','select','broker-managed'].includes(entry.workPolicy))c.assertActionWork(run,context.workId);this.authorizeSeat(entry,run);const safe=this.seatResult(entry,context,result);return{value:safe.value,...(safe.wait?{wait:true}:{})};
   }
   private context(run:RunToken,workId:string,callId:string,operation:string,signal:AbortSignal,requestWorkId:string):ToolExecutionContext{return{operation,run,workId,requestWorkId,actionId:`${run.sessionId}:${callId}`,signal,collaboration:this.collaboration,broker:this.broker,...(this.additional?{additional:this.additional}:{}),...(this.directory?{directory:this.directory}:{}),history:this.history,sessions:this.sessions,coordination:this.coordination,gate:this.gate};}
   private resolveWork(entry:ToolSpec,run:RunToken,selected:string,args:Record<string,any>):string{
     const c=this.collaboration;
-    if(entry.workPolicy==='none'||entry.workPolicy==='select')return selected;
+    if(entry.workPolicy==='none'||entry.workPolicy==='select'||entry.workPolicy==='broker-managed')return selected;
     let bound=selected;
     if(entry.workPolicy==='task')bound=this.taskWork(run,args,selected);
     if(entry.workPolicy==='task'&&args.intentId){const row=c.store.db.prepare('SELECT work_id,args,target FROM task_intents WHERE id=? AND agent_id=?').get(args.intentId,run.agentId) as {work_id:string;args:string;target:string}|undefined;if(!row)throw new Error('Unknown task intent');c.messages.requireAccess(run.agentId,JSON.parse(row.target).conversationId);bound=this.taskWork(run,JSON.parse(row.args),row.work_id);}

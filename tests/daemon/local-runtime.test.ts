@@ -1,5 +1,5 @@
 import {afterEach,expect,it,vi} from 'vitest';
-import {mkdtempSync,rmSync,realpathSync,writeFileSync} from 'node:fs';
+import {existsSync,mkdtempSync,rmSync,realpathSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {execFileSync} from 'node:child_process';
@@ -20,6 +20,16 @@ function config(){
  return{c,root};
 }
 async function daemon(c:unknown){const d=await Daemon.create(c,{info:()=>{},error:()=>{}});clean.push(()=>d.close());return d;}
+it('keeps an Agent-owned workspace layout across daemon restarts',async()=>{
+ const {c}=config(),first=await daemon(c),home=first.memoryRoots.research!;
+ await first.close();
+ rmSync(join(home,'notes'),{recursive:true});rmSync(join(home,'artifacts'),{recursive:true});
+ const second=await daemon(c);
+ expect(second.memoryRoots.research).toBe(home);
+ expect(existsSync(join(home,'MEMORY.md'))).toBe(true);
+ expect(existsSync(join(home,'notes'))).toBe(false);
+ expect(existsSync(join(home,'artifacts'))).toBe(false);
+});
 function credentials(){const previous=process.env.MODEL_API_KEY;process.env.MODEL_API_KEY='synthetic';clean.push(()=>{if(previous===undefined)delete process.env.MODEL_API_KEY;else process.env.MODEL_API_KEY=previous;});}
 it('uses the same permanent daemon, Supervisor, tool/gate and local console without Slack credentials',async()=>{
  credentials();const {c}=config(),d=await daemon(c),console=new LocalConsole(d.local!,d.controls);
