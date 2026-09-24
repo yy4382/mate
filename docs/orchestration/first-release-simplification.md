@@ -126,7 +126,7 @@ treat a shared-tree failure as merge damage after that.
 ## Outcome
 
 All 20 tickets of spec #33 landed on `codex/first-release-simplification`. Final integration at
-`15c6510` (after #53's post-review fixes): `pnpm typecheck` exit 0 and `pnpm check` exit 0 — **72 test files / 579 tests**, format
+`9620beb` (after #53's two review rounds): `pnpm typecheck` exit 0 and `pnpm check` exit 0 — **72 test files / 579 tests**, format
 check + build + full suite, at the pinned Node 24.21.0 (baseline was 61 files / 411 tests, so the
 effort added 11 test files and 168 tests while deleting 13 obsolete schema/migration modules).
 
@@ -149,7 +149,15 @@ name now matches `LinuxProcessManager.unitPattern` and is listed by the project'
 script's "discoverable by the installed code" claim false), `docs/OPERATIONS.md` no longer
 states that `backup`/`restore` refuse while `start`/`offline-probe` are allowed with a pending
 upgrade, and a restart test no longer claims to perform the upgrade the native script owns.
-Committed as `15c6510` and re-verified by the orchestrator on the main tree.
+Committed as `15c6510` and re-verified by the orchestrator on the main tree. A second review
+round then found and fixed two blocking defects in the native maintenance script itself
+(`02740f9`: the `matectl upgrade`/`finalize` entry, the restore proof order and its
+`--checkpoint TARGET --workspace HOME` arguments, live-workspace verification) plus the
+remaining nits (`9620beb`: the `--expectConfig` allowlist and structural config comparison,
+`comparePayload` now walking the checkpoint payload so an unlisted entry is reported,
+`phaseDigest` recomputed and compared by `report` so a fabricated attestation is refused, the
+attestation carrying releaseBefore/After, `expect_owner` naming a missing path, and readiness
+requiring active+running). Re-verified at `9620beb`: 72 files / 582 tests green.
 
 Also removed: a 0-byte stray file named `typescript` that a ticket implementer had accidentally
 created at the repository root and left untracked; it was never part of any commit.
