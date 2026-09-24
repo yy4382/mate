@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { Store } from "../../src/storage/store.js";
-import { configSchema } from "../../src/config.js";
+import { configSchema, type MateConfig } from "../../src/config.js";
 import { configFixture } from "../helpers/config.js";
 import { Messages, Output, anchoredTask } from "../helpers/canonical-slack.js";
 import { Collaboration } from "../../src/collaboration/service.js";
@@ -38,6 +38,25 @@ afterEach(() => {
   });
   roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true }));
 });
+/** The assembly under test: one message store, gate, collaboration service, transport and router. */
+function assemble(
+  store: Store,
+  config: MateConfig,
+  post: () => Promise<{ ts: string }> = async () => ({ ts: "200.000001" }),
+) {
+  const messages = new Messages(store, config),
+    attention = new CanonicalAttention(messages),
+    gate = new CanonicalFreshnessGate(messages, attention),
+    output = new Output(messages, { post }, Date.now, gate),
+    c = new Collaboration(store, messages, output, config, attention),
+    broker = new Broker(
+      store,
+      c,
+      { execute: async () => ({ code: 0, stdout: "", stderr: "", truncated: false }) },
+      {},
+    );
+  return { store, messages, attention, gate, output, c, broker };
+}
 /** One application on a real database file, so building it twice restarts the same data. */
 function reopen(path: string) {
   const config = configSchema.parse({
@@ -59,23 +78,8 @@ function reopen(path: string) {
     }),
     store = new Store(path);
   stores.push(store);
-  const messages = new Messages(store, config),
-    attention = new CanonicalAttention(messages),
-    gate = new CanonicalFreshnessGate(messages, attention),
-    c = new Collaboration(
-      store,
-      messages,
-      new Output(messages, { post: async () => ({ ts: "200.000001" }) }, Date.now, gate),
-      config,
-      attention,
-    ),
-    broker = new Broker(
-      store,
-      c,
-      { execute: async () => ({ code: 0, stdout: "", stderr: "", truncated: false }) },
-      {},
-    );
-  return { store, messages, c, attention, gate, router: new ToolRouter(c, broker) };
+  const app = assemble(store, config);
+  return { ...app, router: new ToolRouter(app.c, app.broker) };
 }
 /** The supervisor journals every tool result; that journal is what records presentation. */
 function journal(value: unknown): AgentMessage {
@@ -92,36 +96,20 @@ function setup(directory?: ConversationDirectory) {
   const config = configSchema.parse(configFixture),
     store = new Store(":memory:");
   stores.push(store);
-  const messages = new Messages(store, config);
-  const attention = new CanonicalAttention(messages),
-    gate = new CanonicalFreshnessGate(messages, attention),
-    c = new Collaboration(
-      store,
-      messages,
-      new Output(messages, { post: async () => ({ ts: "200.000001" }) }, Date.now, gate),
-      config,
-      attention,
-    ),
-    broker = new Broker(
-      store,
-      c,
-      { execute: async () => ({ code: 0, stdout: "", stderr: "", truncated: false }) },
-      {},
-    );
+  const post = vi.fn(async () => ({ ts: "200.000001" })),
+    app = assemble(store, config, post);
   store.register("research", "v1", []);
-  messages.membership("research", "CTEST", true);
-  const work = c.createWork("tools", fixtureTarget("CTEST", "100.000001"));
-  c.enqueue("research", work, "start", {});
+  app.messages.membership("research", "CTEST", true);
+  const work = app.c.createWork("tools", fixtureTarget("CTEST", "100.000001"));
+  app.c.enqueue("research", work, "start", {});
   const run = store.beginRun("research")!;
   store.input(run, {});
   return {
-    store,
-    c,
-    messages,
+    ...app,
+    post,
     work,
     run,
-    router: new ToolRouter(c, broker, undefined, directory),
-    broker,
+    router: new ToolRouter(app.c, app.broker, undefined, directory),
   };
 }
 const expected = `
@@ -435,8 +423,48 @@ it("keeps a quiet history read from presenting, processing or waking anybody", a
   ).toBe(due);
 });
 
+it("passes attention.read's own cursor back to the same frozen view", async () => {
+  const { router, run, work, messages } = setup(),
+    signal = new AbortController().signal,
+    target = { conversationId: "CTEST" },
+    thread = externalThread(fixtureTarget("CTEST", "100.000001")),
+    texts = Array.from({ length: 22 }, (_, n) => `synthetic ${n}`),
+    read = async (callId: string, input: unknown) =>
+      (await router.call(run, work, callId, "attention.read", input, signal)).value as {
+        viewToken: string;
+        page: number;
+        nextCursor: string | null;
+        messages: { text: string }[];
+      };
+  texts.forEach((text, n) =>
+    messages.record(
+      {
+        team: "TTEST",
+        channel: "CTEST",
+        ts: `${100 + n}.000001`,
+        thread,
+        revision: `${100 + n}.000001`,
+        text,
+        user: "UOWNER",
+        deleted: false,
+      },
+      ["research"],
+    ),
+  );
+  const first = await read("read-first", { target });
+  expect(first.page).toBe(0);
+  expect(first.nextCursor).toBe(`${first.viewToken}:1`);
+  const second = await read("read-next", { target, cursor: first.nextCursor });
+  expect(second.viewToken).toBe(first.viewToken);
+  expect(second.page).toBe(1);
+  expect(second.nextCursor).toBeNull();
+  expect([...first.messages, ...second.messages].map((message) => message.text)).toEqual(texts);
+  // A later read opens a new view instead of extending the frozen one.
+  expect((await read("read-fresh", { target })).viewToken).not.toBe(first.viewToken);
+});
+
 it("keeps silence and every pre-send choice reachable on a held draft", async () => {
-  const { router, run, work, store, c } = setup(),
+  const { router, run, work, c, post } = setup(),
     signal = new AbortController().signal,
     target = { conversationId: "CTEST" },
     propose = async (callId: string, text: string) =>
@@ -447,15 +475,12 @@ it("keeps silence and every pre-send choice reachable on a held draft", async ()
         holdId: string | null;
         choices: string[];
         text: string;
-      },
-    sent = () =>
-      (store.db.prepare("SELECT count(*) n FROM outbox WHERE state='sent'").get() as { n: number })
-        .n;
+      };
   // Silence is reachable: proposing output only creates a draft, and nothing is delivered for it.
   const first = await propose("propose", "first proposal");
   expect(first.status).toBe("held");
   expect(first.choices).toEqual(["retry_with_view", "revise", "discard", "continue_once"]);
-  expect(sent()).toBe(0);
+  expect(post).not.toHaveBeenCalled();
   // Revise, then discard the revised draft.
   const revised = (
     await router.call(
@@ -541,8 +566,13 @@ it("keeps silence and every pre-send choice reachable on a held draft", async ()
       )
     ).value,
   ).toMatchObject({ status: "pending" });
-  // The Agent chose every one of those; the router itself never delivered anything.
-  expect(sent()).toBe(0);
+  // Silence is real rather than only a draft state: the discarded draft never reaches the
+  // transport, while the draft the Agent informedly continued is delivered when the output
+  // worker runs it.
+  await c.output.send(first.draftId);
+  expect(post).not.toHaveBeenCalled();
+  await c.output.send(third.draftId);
+  expect(post).toHaveBeenCalledOnce();
 });
 
 it("fails closed for duplicate, reserved, incomplete and unknown module specifications", () => {

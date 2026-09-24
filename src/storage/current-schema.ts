@@ -10,6 +10,13 @@
  * Constraints and indexes below are part of the format, not decoration: they are
  * what makes the single SQLite transaction the correctness boundary for messages,
  * tasks, deliveries, reminders, usage, drafts and operation results.
+ *
+ * `user_version` identifies the structures this release requires, not every
+ * structure a file may hold. Gaining a structure or changing what an existing one
+ * means requires a bump, because an older file must not be read as current.
+ * Dropping a structure this release no longer uses does not: `initialize` tolerates
+ * structures an earlier build of the same revision left behind and never rewrites
+ * them, so an upgraded file keeps every row while this program stops using them.
  */
 export const FORMAT_APPLICATION_ID = 0x4d415445; // "MATE"
 export const FORMAT_REVISION = 26;

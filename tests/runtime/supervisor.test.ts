@@ -307,6 +307,31 @@ it("inbox list/read show own durable deliveries without revealing a revoked chan
   await expect(
     router.call(run, work, "read", "inbox.read", { deliveryId: secret }, signal),
   ).rejects.toThrow();
+  // A stored payload whose target names no conversation is refused, not read with no access check
+  // at all. This release's own writer validates targets, so only an outside writer could store it.
+  const malformed = "malformed-delivery";
+  store.db
+    .prepare(
+      "INSERT INTO deliveries(id,agent_id,dedupe,payload,priority,created_at) VALUES(?,?,?,?,?,?)",
+    )
+    .run(
+      malformed,
+      "research",
+      "malformed",
+      JSON.stringify({ kind: "notice", target: { threadId: "not-a-conversation" } }),
+      50,
+      Date.now(),
+    );
+  expect(
+    (
+      ((await router.call(run, work, "list-after", "inbox.list", {}, signal)).value ?? []) as {
+        id: string;
+      }[]
+    ).map((delivery) => delivery.id),
+  ).not.toContain(malformed);
+  await expect(
+    router.call(run, work, "read-malformed", "inbox.read", { deliveryId: malformed }, signal),
+  ).rejects.toThrow("not a conversation");
   expect(
     (await router.call(run, work, "read", "inbox.read", { deliveryId: first }, signal)).value,
   ).toMatchObject({ id: first, agent_id: "research", payload: { kind: "notice" } });
