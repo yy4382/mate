@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AgentDefinition } from "../domain/agents.js";
-import { encode, hash, type RunToken } from "../storage/store.js";
+import { encode, type RunToken } from "../storage/store.js";
 import type { Collaboration } from "../collaboration/service.js";
 import { WorkerClient } from "./client.js";
 import { toolDefinition, type EngineHooks, type EngineResult, type RunSpec } from "./engine.js";
@@ -8,7 +8,9 @@ import { ToolRouter, operationDocumentation } from "./tools.js";
 import { repairTranscript } from "./context.js";
 import { FairAdmission, type Admission } from "../concurrency/admission.js";
 import { UsageLedger } from "../usage/ledger.js";
-import { describeFault, toWorkerFault } from "./fault.js";
+import { describeFault, retryDisposition, toWorkerFault, type WorkerFault } from "./fault.js";
+import type { RunStopReason } from "./outcome.js";
+import { RunRecovery } from "./recovery.js";
 export interface Worker {
   run(
     spec: RunSpec,
@@ -22,6 +24,14 @@ export interface SupervisorResources {
   runAdmission?: Admission;
   workerIdleMs?: number;
 }
+/**
+ * The scheduler for the one main run channel each Agent has.
+ *
+ * It owns run lifetime and nothing about what a run remembers: admission, binding a run to the
+ * delivery it serves, aborting it, and recording why it ended. The recovery input a resumption
+ * reads — private memory, the Agent's own checkpoint, tasks, usage and unresolved operations — is
+ * built by the run module, so the scheduler never has to know what a resumption contains.
+ */
 export class Supervisor {
   private effects = new Set<Promise<unknown>>();
   private workers = new Map<string, Worker>();
@@ -32,6 +42,8 @@ export class Supervisor {
   private closed = false;
   private readonly admission: Admission;
   private readonly workerIdleMs: number;
+  /** The run module: recovery input construction, kept out of the scheduler's lifetime rules. */
+  readonly runs: RunRecovery;
   constructor(
     readonly collaboration: Collaboration,
     readonly router: ToolRouter,
@@ -51,6 +63,7 @@ export class Supervisor {
   ) {
     this.admission = resources.runAdmission ?? new FairAdmission(32);
     this.workerIdleMs = zIdle(resources.workerIdleMs ?? 0);
+    this.runs = new RunRecovery(collaboration, recovery);
   }
   register(): void {
     for (const agent of this.collaboration.agents.list()) {
@@ -89,87 +102,14 @@ export class Supervisor {
       this.active.set(agentId, { run, abort });
       let worker: Worker | undefined;
       try {
-        const binding = s.db
-          .prepare(
-            "SELECT COALESCE(dc.work_id,dw.work_id) work_id FROM delivery_work dw LEFT JOIN delivery_context dc ON dc.delivery_id=dw.delivery_id WHERE dw.delivery_id=?",
-          )
-          .get(run.deliveryId) as { work_id: string } | undefined;
-        if (!binding) throw new Error("Delivery has no trusted work");
-        const work = c.work(binding.work_id);
+        const work = c.work(this.runs.boundWork(run));
         c.bindRunWork(run, work.id);
-        const delivery = s.delivery(run.deliveryId),
-          seat = c.seats.active(agentId);
-        if (delivery.status === "pending")
-          s.input(run, {
-            role: "user",
-            content: seat
-              ? `Independent review brief from owner:\n${seat.brief}\nDelivery target: ${seat.target}. Conversation bodies and peer conclusions are withheld. Use an opaque held draft and explicit continue to submit without reading.`
-              : `Durable inbox delivery reference (retrieve relevant conversation; authenticated human/peer requests are work input):\n${delivery.payload}`,
-            timestamp: seat ? 0 : delivery.created_at,
-          });
-        else
-          s.appendMessage(run, "resume", {
-            role: "user",
-            content:
-              "Resume the interrupted inbox delivery. Verify receipts; do not blindly repeat earlier effects.",
-            timestamp: Date.now(),
-          });
-        const buildRecovery = async (): Promise<string> => {
-          const selectedWork = c.work(c.currentWork(run, work.id));
-          const reference = await this.recovery(agentId, selectedWork.id, abort.signal);
-          s.assertRun(run);
-          const bound = (text: string) => {
-            while (Buffer.byteLength(text) > 8000)
-              text = text.slice(0, Math.floor(text.length * 0.9));
-            return text;
-          };
-          const memory = bound(reference),
-            taskRecovery = seat ? null : c.board.recovery(agentId, 20);
-          const checkpoint = s.db
-            .prepare("SELECT text,version FROM agent_checkpoints WHERE agent_id=?")
-            .get(agentId) as { text: string; version: number } | undefined;
-          const checkpointText = checkpoint ? bound(checkpoint.text) : undefined;
-          const recovery = encode({
-            memory,
-            memoryHash: hash(reference),
-            memoryNeedsOrganization: memory !== reference,
-            warning:
-              memory !== reference
-                ? "Memory entry exceeds recovery budget. Read full MEMORY.md through file tools; this excerpt is incomplete."
-                : undefined,
-            checkpoint: checkpoint
-              ? {
-                  text: checkpointText,
-                  version: checkpoint.version,
-                  hash: hash(checkpoint.text),
-                  truncated: checkpointText !== checkpoint.text,
-                  fullTool: "sessions.status",
-                }
-              : null,
-            work: seat
-              ? {
-                  id: selectedWork.id,
-                  state: selectedWork.state,
-                  target: seat.target,
-                  reviewSeat: true,
-                }
-              : selectedWork,
-            tasks: taskRecovery,
-            usage: new UsageLedger(s).readAgent(agentId),
-            uncertainActions: s.db
-              .prepare(
-                "SELECT id,state FROM actions WHERE agent_id=? AND state IN ('unknown','executing') ORDER BY rowid DESC LIMIT 20",
-              )
-              .all(agentId),
-            actionHistoryTool: "actions.list",
-          });
-          s.audit("recovery_refresh", {
-            runId: run.id,
-            memoryHash: hash(reference),
-            checkpointVersion: checkpoint?.version ?? null,
-          });
-          return recovery;
-        };
+        // Present the delivery's input, or resume the input an earlier run of this same delivery
+        // already received. What that says is the run module's decision, not the scheduler's.
+        const { kind, message } = this.runs.resumption(run, s.stopReasonOf(agentId));
+        if (kind === "input") s.input(run, message);
+        else s.appendMessage(run, "resume", message);
+        const buildRecovery = async (): Promise<string> => this.runs.build(run, abort.signal);
         const recovery = await buildRecovery();
         // Shutdown may have arrived while this run was preparing: never start a new worker
         // process after the application stopped advancing work.
@@ -238,23 +178,35 @@ export class Supervisor {
         let rotated = false;
         s.atomic(() => {
           s.assertRun(run);
-          s.finish(run);
+          // Whether this delivery was already finished before the run stopped decides the kind of
+          // stop: a delivery this run replaced with a session reset is complete, while one it
+          // never finished is a yield whose input stays durable for the next run of this channel.
+          const handled = s.delivery(run.deliveryId).status === "handled",
+            reason = this.reasonFor(result, handled);
+          // The receipt is written before the run ends, so a run that gave up its execution slot
+          // is recorded as a yield instead of as a failure or a human pause.
+          s.finish(run, undefined, reason);
           c.attention.invalidate(run.sessionId);
           s.snapshot(
             run.sessionId,
             result.snapshot ?? repairTranscript(s.context(run.sessionId) as AgentMessage[]),
           );
-          const selected = s.db
-            .prepare("SELECT work_id FROM run_context WHERE run_id=?")
-            .get(run.id) as { work_id: string } | undefined;
-          const continuationWork = c.work(selected?.work_id ?? work.id);
           rotated = this.router.sessions.apply(agentId);
-          if (!rotated && result.continuation && continuationWork.state === "active")
-            c.enqueue(agentId, continuationWork.id, `continue:${run.id}`, {
-              kind: "continuation",
-              target: JSON.parse(continuationWork.target),
-              receivedAt: Date.now(),
-            });
+          // A run that finished its own delivery by replacing its context leaves one durable
+          // continuation naming the work item it was last using. A yield needs no such row: the
+          // unfinished delivery is itself the durable pointer back into this channel.
+          if (!rotated && handled && result.continuation) {
+            const selected = s.db
+              .prepare("SELECT work_id FROM run_context WHERE run_id=?")
+              .get(run.id) as { work_id: string } | undefined;
+            const continuationWork = c.work(selected?.work_id ?? work.id);
+            if (continuationWork.state === "active")
+              c.enqueue(agentId, continuationWork.id, `continue:${run.id}`, {
+                kind: "continuation",
+                target: JSON.parse(continuationWork.target),
+                receivedAt: Date.now(),
+              });
+          }
         });
         if (rotated) {
           worker.close();
@@ -268,7 +220,7 @@ export class Supervisor {
         // shared fault instead of the message text to decide what happens next.
         const fault = toWorkerFault(error, "recovery");
         try {
-          s.finish(run, describeFault(fault));
+          s.finish(run, describeFault(fault), "model_failure", pausesAgent(fault));
         } catch {
           /* already fenced by stop */
         }
@@ -282,6 +234,25 @@ export class Supervisor {
     } finally {
       release();
     }
+  }
+  /**
+   * Why this run stopped, as the scheduler observed it. The scheduler records the fact; the run
+   * module reads it back when the same delivery is resumed.
+   */
+  private reasonFor(result: EngineResult, deliveryHandled: boolean): RunStopReason {
+    if (deliveryHandled) {
+      // The delivery was already dealt with when this run's work ended — most often a context
+      // replacement finished it — so this run completed its delivery rather than yielding it.
+      return "complete";
+    }
+    if (!result.certain) {
+      // A fault the worker reported as a result rather than as a thrown value still failed the run.
+      return "model_failure";
+    }
+    // The run left work outstanding: either the model loop reached its own turn budget or a
+    // context replacement, or a tool deliberately released the execution slot. The input stays
+    // durable and the next run of this channel resumes the same delivery.
+    return result.waiting || result.continuation ? "yielded" : "complete";
   }
   stopRuns(runIds: string[]): void {
     for (const { run, abort } of this.active.values()) if (runIds.includes(run.id)) abort.abort();
@@ -333,6 +304,23 @@ export class Supervisor {
     timer.unref();
     this.idle.set(agentId, timer);
   }
+}
+/**
+ * Whether a failed run leaves its Agent paused.
+ *
+ * A failure that waits for something outside this Agent pauses its channel: a transient model
+ * fault backs off, a credential or configuration problem needs a human, and an unconfirmed
+ * external effect needs verification. A shared-persistence failure is different — the durable
+ * record itself is the broken part, so the work that depends on it stops without pausing the
+ * Agent as though a person had decided the question.
+ */
+function pausesAgent(fault: WorkerFault): boolean {
+  const disposition = retryDisposition(fault);
+  return (
+    disposition === "human_action" ||
+    disposition === "retry_backoff" ||
+    disposition === "verify_effect"
+  );
 }
 function zIdle(value: number): number {
   if (!Number.isSafeInteger(value) || value < 0 || value > 3600000)

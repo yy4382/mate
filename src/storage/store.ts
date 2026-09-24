@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import { createHash, randomUUID } from "node:crypto";
 import { openCurrentDatabase } from "./initialize.js";
+import type { RunStopReason } from "../runtime/outcome.js";
 
 export function encode(value: unknown): string {
   const encoded = JSON.stringify(value);
@@ -39,7 +40,7 @@ export type OperationalFactInput =
       at?: number;
       source: "runtime";
       sourceId: string;
-      kind: "run_completed" | "run_failed" | "run_interrupted";
+      kind: "run_completed" | "run_failed" | "run_yielded" | "run_interrupted";
       actorId: string;
       subject: { type: "run"; id: string };
     }
@@ -273,27 +274,58 @@ export class Store {
       this.append(token.sessionId, `${token.id}:${key}`, message);
     });
   }
-  finish(token: RunToken, error?: string): void {
+  /**
+   * End one run. The caller states why it stopped, because the scheduler is what observed it: a
+   * run that yields its execution slot with the delivery still unfinished is recorded as
+   * `yielded` rather than as a finished or failed run, so a resumption, the recovery input and the
+   * owner view can all tell a normal yield from a fault or a pause.
+   *
+   * `pauseAgent` belongs to the caller's failure policy. The store only records it, so deciding
+   * which failure needs a human stays with the module that owns that decision.
+   */
+  finish(token: RunToken, error?: string, reason?: RunStopReason, pauseAgent = true): void {
     this.atomic(() => {
       this.assertRun(token);
       const delivery = this.delivery(token.deliveryId);
-      if (!error && delivery.status !== "injected")
+      if (error) {
+        if (
+          this.db
+            .prepare("SELECT 1 FROM actions WHERE run_id=? AND state='executing'")
+            .get(token.id)
+        )
+          this.db
+            .prepare("UPDATE actions SET state='unknown' WHERE run_id=? AND state='executing'")
+            .run(token.id);
+        this.transitionRun(token.id, "failed", reason ?? "model_failure", error);
+        // Failed input remains durable, but requires explicit resume to avoid an error hot loop.
+        if (pauseAgent) this.db.prepare("UPDATE agents SET paused=1 WHERE id=?").run(token.agentId);
+        return;
+      }
+      // An explicit completion still has to be earned: a delivery whose input never reached the
+      // model cannot be reported as handled. A caller that states a yield instead keeps the input
+      // durable for the next run of this channel.
+      if ((reason ?? "complete") === "complete" && delivery.status !== "injected")
         throw new Error("Cannot complete uninjected delivery");
+      if (reason === "yielded" || delivery.status === "pending") {
+        this.transitionRun(token.id, "yielded", "yielded");
+        return;
+      }
       if (
-        !error &&
         this.db.prepare("SELECT 1 FROM actions WHERE run_id=? AND state='executing'").get(token.id)
       )
         throw new Error("Cannot complete with executing actions");
-      if (error)
-        this.db
-          .prepare("UPDATE actions SET state='unknown' WHERE run_id=? AND state='executing'")
-          .run(token.id);
-      this.transitionRun(token.id, error ? "failed" : "complete", error);
-      if (!error)
-        this.db.prepare("UPDATE deliveries SET status='handled' WHERE id=?").run(token.deliveryId);
-      // Failed input remains durable, but requires explicit resume to avoid an error hot loop.
-      else this.db.prepare("UPDATE agents SET paused=1 WHERE id=?").run(token.agentId);
+      this.transitionRun(token.id, "complete", reason ?? "complete");
+      this.db.prepare("UPDATE deliveries SET status='handled' WHERE id=?").run(token.deliveryId);
     });
+  }
+  /** Why the most recent run of one Agent stopped, or `null` when it has never run. */
+  stopReasonOf(agentId: string): RunStopReason | null {
+    const row = this.db
+      .prepare(
+        "SELECT stop_reason FROM runs WHERE agent_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1",
+      )
+      .get(agentId) as { stop_reason: RunStopReason | null } | undefined;
+    return row?.stop_reason ?? null;
   }
   delivery(id: string): Delivery {
     const row = this.db.prepare("SELECT * FROM deliveries WHERE id=?").get(id) as
@@ -307,7 +339,7 @@ export class Store {
         .prepare("SELECT id FROM runs WHERE agent_id=? AND state='active'")
         .all(agentId) as { id: string }[];
       this.db.prepare("UPDATE agents SET paused=1,generation=generation+1 WHERE id=?").run(agentId);
-      for (const run of active) this.transitionRun(run.id, "interrupted");
+      for (const run of active) this.transitionRun(run.id, "interrupted", "owner_pause");
       this.db
         .prepare("UPDATE actions SET state='unknown' WHERE agent_id=? AND state='executing'")
         .run(agentId);
@@ -324,7 +356,7 @@ export class Store {
         agent_id: string;
       }[];
       this.db.prepare("UPDATE agents SET generation=generation+1").run();
-      for (const run of active) this.transitionRun(run.id, "interrupted");
+      for (const run of active) this.transitionRun(run.id, "interrupted", "interrupted");
       this.markUnconfirmed();
       this.audit("startup_recovery", {});
     });
@@ -354,7 +386,12 @@ export class Store {
     return changes;
   }
   /** Every runtime active→terminal transition and its owner fact share this transaction boundary. */
-  transitionRun(id: string, state: "complete" | "failed" | "interrupted", error?: string): void {
+  transitionRun(
+    id: string,
+    state: "complete" | "failed" | "interrupted" | "yielded",
+    reason: RunStopReason,
+    error?: string,
+  ): void {
     if (!this.db.inTransaction) throw new Error("Run transition requires transaction");
     const run = this.db
       .prepare("SELECT agent_id FROM runs WHERE id=? AND state='active'")
@@ -362,8 +399,8 @@ export class Store {
     if (!run) throw new Error("Run is not active");
     if (
       this.db
-        .prepare("UPDATE runs SET state=?,error=? WHERE id=? AND state='active'")
-        .run(state, error ?? null, id).changes !== 1
+        .prepare("UPDATE runs SET state=?,stop_reason=?,error=? WHERE id=? AND state='active'")
+        .run(state, reason, error ?? null, id).changes !== 1
     )
       throw new Error("Run state conflict");
     this.operationalFact({
@@ -374,7 +411,9 @@ export class Store {
           ? "run_completed"
           : state === "failed"
             ? "run_failed"
-            : "run_interrupted",
+            : state === "yielded"
+              ? "run_yielded"
+              : "run_interrupted",
       actorId: run.agent_id,
       subject: { type: "run", id },
     });
