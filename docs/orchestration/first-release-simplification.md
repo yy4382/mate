@@ -58,9 +58,9 @@ only when every blocker is committed on the branch.
 | #34 | 建立统一格式检查并完成机械排版 | **done** | `eb74e0e` | `a8b00ce` + `e85a3ca` + `7c6e061` + `a91edb4` |
 | #35 | 用单一当前 schema 初始化新数据库 | **done** | `d049b00` | `b1fcca9` + `beb5fdd` + `12aab7b` + `6b9d256` |
 | #36 | 让所有入口使用当前数据库格式 | **done** | `b1fcca9` | `a2288ce` + `3751639` + `6395c75` + `8abca0d` + `2b1c0fb` + `2b56276` |
-| #37 | 统一应用装配与关闭流程 | review | `fab5692` | `f8612ed` + `3c5e9db` (agent finishing review) |
-| #38 | 由任务模块负责消息关联任务的完整发布流程 | pending | — | — |
-| #39 | 让工具输入类型和领域授权各有明确归属 | pending | — | — |
+| #37 | 统一应用装配与关闭流程 | **done** | `fab5692` | `f8612ed` + `3c5e9db` + `c4592d7` + `1066f1c` |
+| #38 | 由任务模块负责消息关联任务的完整发布流程 | in progress | `1066f1c` (worktree `.worktrees/t38`) | — |
+| #39 | 让工具输入类型和领域授权各有明确归属 | in progress | `1066f1c` (worktree `.worktrees/t39`) | — |
 | #40 | 交付有界且可继续的历史查询 | pending | — | — |
 | #41 | 保留注意力与持久投递的独立状态 | pending | — | — |
 | #42 | 让提醒独立于关联任务继续运行 | pending | — | — |
@@ -153,6 +153,7 @@ None yet.
 | #48 | `c4a69a7` (worktree) | `pnpm check` in `.worktrees/t48` | 61 files / 425 tests, exit 0 (first base) |
 | #48 (reworked) | `9e69c30`, merged `3838cad` | `pnpm typecheck` + `pnpm check` on the merged MAIN tree before committing the merge | 59 files / 431 tests, exit 0 |
 | #37 | `3c5e9db` | `pnpm typecheck` + `pnpm check` in an isolated `git archive` copy | 59 files / 417 tests, exit 0; the assembly test covers both entries, the ordered shutdown, and no repeated confirmed external operation after restart |
+| #37 (final) | `1066f1c` | `pnpm typecheck` + `pnpm check` on the MAIN tree | 59 files / 432 tests, exit 0 (agent reports the same) |
 | #52 | `053a643` (worktree) | `pnpm check` in `.worktrees/t52` | 62 files / 419 tests, exit 0 — merge pending #36 finishing |
 | #36 | `a2288ce` | `pnpm check` in an isolated `git archive` copy | 57 files / 398 tests, exit 0; all preserved-baseline tests confirmed present; old schema modules fully unreferenced; `Store` is the single entry onto `openCurrentDatabase` |
 | #36 (final) | `2b56276` | `pnpm typecheck` + `pnpm check` in the MAIN tree | 57 files / 402 tests, exit 0; 62→57 file and 416→402 test drop is exactly the migration-path tests; every preserved-baseline test confirmed present by path |
