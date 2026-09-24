@@ -107,6 +107,31 @@ it("recovers approved requests but never replays an uncertain executing request 
   }
 });
 
+it("fences a privileged command still executing when this process shuts down", async () => {
+  const { store, work, run, execute, system } = setup();
+  try {
+    system.request(run, work, "in-flight", command);
+    system.decide("UOWNER", "in-flight", "approve");
+    store.db.prepare("UPDATE system_requests SET status='executing' WHERE id='in-flight'").run();
+    const deliveries = () =>
+      (store.db.prepare("SELECT count(*) n FROM deliveries").get() as { n: number }).n;
+    const before = deliveries();
+    // Shutdown records the unconfirmable result once, and the Agent keeps a durable notice.
+    system.fenceUnconfirmed();
+    expect(system.status("research", "in-flight")).toMatchObject({
+      status: "unknown",
+      receipt: { reason: "interrupted_after_execution_boundary" },
+    });
+    expect(deliveries()).toBe(before + 1);
+    system.fenceUnconfirmed();
+    expect(deliveries()).toBe(before + 1);
+    await system.dispatchApproved();
+    expect(execute).not.toHaveBeenCalled();
+  } finally {
+    store.close();
+  }
+});
+
 it("rechecks review-seat and system eligibility immediately before privileged dispatch", async () => {
   const { store, collaboration, work, run, execute, system } = setup();
   try {

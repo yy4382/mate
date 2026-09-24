@@ -18,6 +18,9 @@ import { configSchema } from "../../src/config.js";
 import { configFixture } from "../helpers/config.js";
 import { Messages, Output } from "../helpers/canonical-slack.js";
 import { Collaboration } from "../../src/collaboration/service.js";
+import { CanonicalAttention } from "../../src/conversations/attention.js";
+import { CanonicalFreshnessGate } from "../../src/conversations/freshness.js";
+import type { CanonicalArtifactTransport } from "../../src/conversations/output.js";
 import { Broker } from "../../src/policy/broker.js";
 import { Supervisor } from "../../src/runtime/supervisor.js";
 import { ToolRouter } from "../../src/runtime/tools.js";
@@ -47,7 +50,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   cleanups.splice(0).forEach((fn) => fn());
 });
-function setup() {
+function setup(options: { freshness?: boolean } = {}) {
   const config = configSchema.parse({
     ...configFixture,
     agents: [
@@ -69,8 +72,16 @@ function setup() {
   const post = vi.fn(async () => ({
     ts: `101.${String(post.mock.calls.length).padStart(6, "0")}`,
   }));
-  const c = new Collaboration(store, messages, new Output(messages, { post }), config),
-    ingress = new Ingress(c, new CanonicalSlackNormalizer(messages, messages.mapper, c.output));
+  const attention = new CanonicalAttention(messages),
+    gate = new CanonicalFreshnessGate(messages, attention),
+    artifactTransport: { current?: CanonicalArtifactTransport } = {},
+    // Freshness holding is not the subject of every outbox test; the application always wires it.
+    output =
+      options.freshness === false
+        ? new Output(messages, { post }, Date.now, undefined, () => artifactTransport.current)
+        : new Output(messages, { post }, Date.now, gate, () => artifactTransport.current);
+  const c = new Collaboration(store, messages, output, config, attention),
+    ingress = new Ingress(c, new CanonicalSlackNormalizer(messages, messages.mapper, output));
   const backend = {
     execute: vi.fn(async () => ({
       code: 0,
@@ -81,7 +92,7 @@ function setup() {
   };
   const broker = new Broker(store, c, backend, { research: "/tmp", writer: "/tmp" });
   cleanups.push(() => store.close());
-  return { store, c, ingress, broker, post, backend, mapper: messages.mapper };
+  return { store, c, ingress, broker, post, backend, mapper: messages.mapper, artifactTransport };
 }
 it("keeps an inaccessible listed DM closed without blocking other Slack conversations", async () => {
   const { store, c, ingress, broker, mapper } = setup();
@@ -833,7 +844,7 @@ it("lets the owner page through long system output within Slack control reply li
   expect(formatControlReply(second)).not.toContain("mate.control-overflow.v1");
 });
 it("uncertain artifact publication cannot be repeated with a new ID", async () => {
-  const { store, c, broker } = setup();
+  const { store, c, broker, artifactTransport } = setup();
   new ToolRouter(c, broker);
   store.register("research", "v1", []);
   c.messages.membership("research", "CTEST", true);
@@ -850,12 +861,10 @@ it("uncertain artifact publication cannot be repeated with a new ID", async () =
     beforeShare();
     throw new Error("lost after send");
   });
-  const artifacts = new Artifacts(
-    c,
-    broker,
-    { configured: () => true, supports: () => true, upload },
-    { research: root },
-  );
+  artifactTransport.current = { configured: () => true, supports: () => true, upload };
+  const artifacts = new Artifacts(c, broker, () => artifactTransport.current, {
+    research: root,
+  });
   const signal = new AbortController().signal;
   const draft = (await artifacts.publish(
     run,
@@ -881,7 +890,7 @@ it("uncertain artifact publication cannot be repeated with a new ID", async () =
   expect(upload).toHaveBeenCalledOnce();
 });
 it("paused or delayed output cannot starve later active work", async () => {
-  const { store, c, post } = setup();
+  const { store, c, post } = setup({ freshness: false });
   store.register("research", "v1", []);
   c.messages.membership("research", "CTEST", true);
   const target = fixtureTarget("CTEST", "100.000001");
@@ -1005,7 +1014,7 @@ it("Socket SDK pending URL startup cancels promptly and a late HTTP response can
 });
 
 it("artifact publication snapshots survive content edits and explicit revision replaces the frozen bytes", async () => {
-  const { store, c, broker, backend } = setup();
+  const { store, c, broker, backend, artifactTransport } = setup();
   new ToolRouter(c, broker);
   store.register("research", "v1", []);
   c.messages.membership("research", "CTEST", true);
@@ -1018,21 +1027,24 @@ it("artifact publication snapshots survive content edits and explicit revision r
   const run = store.beginRun("research")!;
   store.input(run, {});
   const uploads: any[] = [];
-  const artifacts = new Artifacts(
-    c,
-    broker,
-    {
-      configured: () => true,
-      supports: () => true,
-      upload: async ({ text }, artifact, prepared, beforeShare) => {
-        prepared("FFILE");
-        if (!beforeShare()) throw new Error("deferred");
-        uploads.push({ text, artifact });
-        return { fileId: "FFILE" };
-      },
+  artifactTransport.current = {
+    configured: () => true,
+    supports: () => true,
+    upload: async (
+      { text }: { text: string },
+      artifact: unknown,
+      prepared: (fileId: string) => void,
+      beforeShare: () => boolean,
+    ) => {
+      prepared("FFILE");
+      if (!beforeShare()) throw new Error("deferred");
+      uploads.push({ text, artifact });
+      return { fileId: "FFILE" };
     },
-    { research: root },
-  );
+  };
+  const artifacts = new Artifacts(c, broker, () => artifactTransport.current, {
+    research: root,
+  });
   const args = { path: "artifacts/result.txt", target, title: "result" },
     signal = new AbortController().signal;
   const draft = (await artifacts.publish(run, work, "first", args, signal)) as any;
@@ -1060,7 +1072,7 @@ it("artifact publication snapshots survive content edits and explicit revision r
   expect(store.output("first:revision:2")?.state).toBe("sent");
 });
 it("Slack file allocation is persisted before transfer; only proven file shares reconcile unknown publication", async () => {
-  const { store, c, broker, ingress } = setup();
+  const { store, c, broker, ingress, artifactTransport } = setup();
   new ToolRouter(c, broker);
   store.register("research", "v1", []);
   c.messages.membership("research", "CTEST", true);
@@ -1090,7 +1102,7 @@ it("Slack file allocation is persisted before transfer; only proven file shares 
   c.enqueue("research", work, "one", {});
   const run = store.beginRun("research")!;
   store.input(run, {});
-  c.output.artifacts = service;
+  artifactTransport.current = service;
   c.output.queueArtifact(
     "research",
     target,
@@ -1122,7 +1134,7 @@ it("Slack file allocation is persisted before transfer; only proven file shares 
   }
 });
 it("peer publication attention includes captions and respects page ACK, mute and revoked channel access", async () => {
-  const { store, c, broker, ingress } = setup();
+  const { store, c, broker, ingress, artifactTransport } = setup();
   new ToolRouter(c, broker);
   for (const actor of ["research", "writer"]) {
     store.register(actor, "v1", []);
@@ -1135,7 +1147,7 @@ it("peer publication attention includes captions and respects page ACK, mute and
     peer = store.beginRun("writer")!;
   store.input(run, {});
   store.input(peer, {});
-  c.output.artifacts = {
+  artifactTransport.current = {
     configured: () => true,
     supports: () => true,
     upload: async (_request, _artifact, prepared, beforeShare) => {
@@ -1178,7 +1190,7 @@ it("peer publication attention includes captions and respects page ACK, mute and
   expect(() => c.attention.read(peer, target)).toThrow("access");
 });
 it("Slack artifact echoes replace publication projection without double unread after exact presentation", async () => {
-  const { store, c, broker, ingress } = setup();
+  const { store, c, broker, ingress, artifactTransport } = setup();
   new ToolRouter(c, broker);
   for (const actor of ["research", "writer"]) {
     store.register(actor, "v1", []);
@@ -1191,7 +1203,7 @@ it("Slack artifact echoes replace publication projection without double unread a
     peer = store.beginRun("writer")!;
   store.input(run, {});
   store.input(peer, {});
-  c.output.artifacts = {
+  artifactTransport.current = {
     configured: () => true,
     supports: () => true,
     upload: async (_request, _artifact, prepared, beforeShare) => {

@@ -28,7 +28,7 @@ function setup() {
   };
   const app = localApplication(s, settings);
   for (const a of settings.agents) s.register(a.id, "test", []);
-  const target = app.input.createRoom("local-room", ["alice", "bob"], ["owner"]);
+  const target = app.local!.createRoom("local-room", ["alice", "bob"], ["owner"]);
   let n = 0;
   const evidence = (r: ProjectionDispatch): ProjectionEvidence => {
     const id = `remote-${++n}`;
@@ -61,7 +61,7 @@ function setup() {
       true,
     );
   const input = (id: string, t: ConversationTarget = target) =>
-    app.input.receive("owner", id, t, `message ${id}`).messageId;
+    app.local!.receive("owner", id, t, `message ${id}`).messageId;
   const projection = (binding: string, message: string) =>
     p.get(
       (

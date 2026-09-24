@@ -6,6 +6,8 @@ import { configSchema } from "../../src/config.js";
 import { configFixture } from "../helpers/config.js";
 import { Messages, Output } from "../helpers/canonical-slack.js";
 import { Collaboration } from "../../src/collaboration/service.js";
+import { CanonicalAttention } from "../../src/conversations/attention.js";
+import { CanonicalFreshnessGate } from "../../src/conversations/freshness.js";
 import { Broker } from "../../src/policy/broker.js";
 import { Supervisor, type Worker } from "../../src/runtime/supervisor.js";
 import { WorkerClient } from "../../src/runtime/client.js";
@@ -31,8 +33,14 @@ function setup(factory?: (id: string) => Worker) {
   });
   const store = new Store(":memory:"),
     messages = new Messages(store, config);
-  const output = new Output(messages, { post: async () => ({ ts: "100.000002" }) }),
-    collaboration = new Collaboration(store, messages, output, config);
+  const attention = new CanonicalAttention(messages),
+    output = new Output(
+      messages,
+      { post: async () => ({ ts: "100.000002" }) },
+      Date.now,
+      new CanonicalFreshnessGate(messages, attention),
+    ),
+    collaboration = new Collaboration(store, messages, output, config, attention);
   const broker = new Broker(
     store,
     collaboration,

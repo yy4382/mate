@@ -1,4 +1,4 @@
-import type { CanonicalArtifactTransport as ArtifactOutputTransport } from "../conversations/output.js";
+import type { ArtifactTransportProvider } from "../conversations/output.js";
 import type { PublishArgs } from "../capabilities/artifacts.js";
 export type { PublishArgs } from "../capabilities/artifacts.js";
 import { createHash } from "node:crypto";
@@ -10,20 +10,20 @@ import type { Collaboration } from "../collaboration/service.js";
 import type { ConversationTarget } from "../domain/conversations.js";
 
 import type { ExecutionResult } from "../execution/backend.js";
+/** Publication tool. The external artifact adapter is looked up, never installed here. */
 export class Artifacts {
   constructor(
     readonly collaboration: Collaboration,
     readonly broker: Broker,
-    readonly transport: ArtifactOutputTransport | undefined,
+    readonly transport: ArtifactTransportProvider,
     readonly memoryRoots: Record<string, string>,
-  ) {
-    if (transport) collaboration.output.artifacts = transport;
-  }
+  ) {}
   configured(actor: string): boolean {
-    return this.transport?.configured(actor) === true;
+    return this.transport()?.configured(actor) === true;
   }
   supports(actor: string, target: ConversationTarget): boolean {
-    return this.transport?.configured(actor) === true && this.transport.supports(actor, target);
+    const transport = this.transport();
+    return transport?.configured(actor) === true && transport.supports(actor, target);
   }
   async publish(
     run: RunToken,

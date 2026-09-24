@@ -27,7 +27,7 @@ function setup() {
   stores.push(store);
   const app = localApplication(store, settings);
   for (const agent of settings.agents) store.register(agent.id, "v1", []);
-  const target = app.input.createRoom("room", ["alice", "bob"], ["owner"]),
+  const target = app.local!.createRoom("room", ["alice", "bob"], ["owner"]),
     work = app.collaboration.createWork("operations", target);
   return { store, ...app, target, work };
 }
@@ -110,7 +110,7 @@ it("returns owner-only authoritative status without sensitive bodies and local c
   const controls = new Controls(c, {} as any, {} as any);
   expect(controls.execute("owner", "status")).toEqual(status);
   expect(
-    new LocalConsole(f.input, controls).execute({
+    new LocalConsole(f.local!, controls).execute({
       id: "status",
       op: "control",
       human: "owner",

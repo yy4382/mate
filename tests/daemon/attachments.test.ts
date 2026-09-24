@@ -7,6 +7,9 @@ import { spawnSync } from "node:child_process";
 import { Store } from "../../src/storage/store.js";
 import { Messages, Output } from "../helpers/canonical-slack.js";
 import { Collaboration } from "../../src/collaboration/service.js";
+import { CanonicalAttention } from "../../src/conversations/attention.js";
+import { CanonicalFreshnessGate } from "../../src/conversations/freshness.js";
+import type { CanonicalArtifactTransport } from "../../src/conversations/output.js";
 import { Broker } from "../../src/policy/broker.js";
 import { ToolRouter } from "../../src/runtime/tools.js";
 import { Attachments } from "../../src/slack/attachments.js";
@@ -28,12 +31,17 @@ function setup() {
   s.register("research", "v1", []);
   const m = new Messages(s, configFixture);
   m.membership("research", "CTEST", true);
-  const c = new Collaboration(
-    s,
-    m,
-    new Output(m, { post: async () => ({ ts: "200.000001" }) }),
-    configFixture,
-  );
+  const attention = new CanonicalAttention(m),
+    gate = new CanonicalFreshnessGate(m, attention),
+    artifactTransport: { current?: CanonicalArtifactTransport } = {},
+    output = new Output(
+      m,
+      { post: async () => ({ ts: "200.000001" }) },
+      Date.now,
+      gate,
+      () => artifactTransport.current,
+    );
+  const c = new Collaboration(s, m, output, configFixture, attention);
   const broker = new Broker(
     s,
     c,
@@ -97,10 +105,24 @@ function setup() {
       path: "artifacts/picture.png",
     },
     signal = new AbortController().signal;
-  return { root, s, m, c, broker, run, work, target, files, args, signal, client };
+  return {
+    root,
+    s,
+    m,
+    c,
+    broker,
+    run,
+    work,
+    target,
+    files,
+    args,
+    signal,
+    client,
+    artifactTransport,
+  };
 }
 it("downloads visible binary attachments, freezes/publishes the same bytes and hides payload bulk from model drafts", async () => {
-  const { root, c, broker, run, work, target, files, args, signal } = setup(),
+  const { root, c, broker, run, work, target, files, args, signal, artifactTransport } = setup(),
     bytes = Buffer.from([0, 255, 1, 128]);
   const fetched = vi.fn(async () => new Response(bytes));
   vi.stubGlobal("fetch", fetched);
@@ -111,21 +133,19 @@ it("downloads visible binary attachments, freezes/publishes the same bytes and h
   expect(call[1].headers.Authorization).toBe("Bearer synthetic-token");
   expect(call[1].redirect).toBe("error");
   let snapshot: any;
-  const artifacts = new Artifacts(
-    c,
-    broker,
-    {
-      configured: () => true,
-      supports: () => true,
-      upload: async (_request, artifact, prepared, beforeShare) => {
-        snapshot = artifact;
-        prepared("FOUT");
-        if (!beforeShare()) throw new Error("deferred");
-        return { fileId: "FOUT" };
-      },
+  artifactTransport.current = {
+    configured: () => true,
+    supports: () => true,
+    upload: async (_request, artifact, prepared, beforeShare) => {
+      snapshot = artifact;
+      prepared("FOUT");
+      if (!beforeShare()) throw new Error("deferred");
+      return { fileId: "FOUT" };
     },
-    { research: root },
-  );
+  };
+  const artifacts = new Artifacts(c, broker, () => artifactTransport.current, {
+    research: root,
+  });
   const draft = (await artifacts.publish(
     run,
     work,
@@ -142,25 +162,23 @@ it("downloads visible binary attachments, freezes/publishes the same bytes and h
   expect(snapshot.filename).toBe("picture.png");
 });
 it("runs the visible attachment to revised artifact delivery loop through the formal ToolRouter", async () => {
-  const { root, c, broker, run, work, target, files, args, signal } = setup(),
+  const { root, c, broker, run, work, target, files, args, signal, artifactTransport } = setup(),
     source = Buffer.from([0, 255, 1, 128]);
   vi.stubGlobal("fetch", async () => new Response(source));
   let uploaded: any;
-  const artifacts = new Artifacts(
-    c,
-    broker,
-    {
-      configured: () => true,
-      supports: () => true,
-      upload: async (request, artifact, prepared, beforeShare) => {
-        uploaded = { request, artifact };
-        prepared("FRESULT");
-        if (!beforeShare()) throw new Error("deferred");
-        return { fileId: "FRESULT" };
-      },
+  artifactTransport.current = {
+    configured: () => true,
+    supports: () => true,
+    upload: async (request, artifact, prepared, beforeShare) => {
+      uploaded = { request, artifact };
+      prepared("FRESULT");
+      if (!beforeShare()) throw new Error("deferred");
+      return { fileId: "FRESULT" };
     },
-    { research: root },
-  );
+  };
+  const artifacts = new Artifacts(c, broker, () => artifactTransport.current, {
+    research: root,
+  });
   const router = new ToolRouter(c, broker, {
     attachment: (...input) => files.save(...input),
     environment: () => ({}),

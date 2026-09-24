@@ -54,15 +54,19 @@ function setup() {
     },
     receipt: { external: "receipt" },
   });
-  const output = new CanonicalOutput(messages, {
-    post: async (request) => {
-      requests.push(request);
-      return confirmation(request);
+  const output = new CanonicalOutput(
+    messages,
+    {
+      post: async (request) => {
+        requests.push(request);
+        return confirmation(request);
+      },
+      pendingInput: () => false,
+      classify: () => ({ kind: "unknown" }),
     },
-    pendingInput: () => false,
-    classify: () => ({ kind: "unknown" }),
-  });
-  output.gate = gate;
+    Date.now,
+    gate,
+  );
   s.enqueue("research", "start", {});
   const run = s.beginRun("research")!;
   s.input(run, {});

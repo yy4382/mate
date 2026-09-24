@@ -158,8 +158,12 @@ export class ToolRouter {
       buildBaseline(agent, operationDocumentation),
     );
     this.coordination = new MessageTasks(collaboration);
-    this.gate = new FreshnessGate(collaboration.messages, collaboration.attention);
-    collaboration.output.gate = this.gate;
+    // The application assembly wires one gate onto the output before this router exists; a
+    // router built on its own keeps an equivalent gate for its own held-send policy instead
+    // of reaching back and installing a collaborator onto another object.
+    this.gate =
+      collaboration.output.gate ??
+      new FreshnessGate(collaboration.messages, collaboration.attention);
   }
   async call(
     run: RunToken,

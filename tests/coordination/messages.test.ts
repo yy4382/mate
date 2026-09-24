@@ -3,6 +3,8 @@ import { afterEach, expect, it } from "vitest";
 import { Store } from "../../src/storage/store.js";
 import { Messages, Output } from "../helpers/canonical-slack.js";
 import { Collaboration } from "../../src/collaboration/service.js";
+import { CanonicalAttention } from "../../src/conversations/attention.js";
+import { CanonicalFreshnessGate } from "../../src/conversations/freshness.js";
 import { Broker } from "../../src/policy/broker.js";
 import { ToolRouter } from "../../src/runtime/tools.js";
 import { configFixture } from "../helpers/config.js";
@@ -30,11 +32,14 @@ function setup() {
   const s = new Store(":memory:");
   stores.push(s);
   const m = new Messages(s, config);
-  const c = new Collaboration(
+  const attention = new CanonicalAttention(m),
+    gate = new CanonicalFreshnessGate(m, attention),
+    c = new Collaboration(
       s,
       m,
-      new Output(m, { post: async () => ({ ts: "200.000001" }) }),
+      new Output(m, { post: async () => ({ ts: "200.000001" }) }, Date.now, gate),
       config,
+      attention,
     ),
     router = new ToolRouter(
       c,

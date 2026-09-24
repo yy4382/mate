@@ -1,6 +1,11 @@
 /** Synthetic Slack fixtures translated through the production adapter into the canonical core. */
 import { Conversations } from "../../src/conversations/messages.js";
 import { CanonicalOutput, type ExternalMessageTransport } from "../../src/conversations/output.js";
+import type {
+  ArtifactTransportProvider,
+  CanonicalArtifactTransport,
+} from "../../src/conversations/output.js";
+import type { CanonicalFreshnessGate } from "../../src/conversations/freshness.js";
 import { slackApplication } from "../../src/slack/application.js";
 import { CanonicalSlackTransport } from "../../src/slack/transport.js";
 import { CanonicalSlackNormalizer } from "../../src/slack/normalize.js";
@@ -94,6 +99,8 @@ export class Output extends CanonicalOutput {
     messages: Messages,
     transport: { post(...args: any[]): Promise<{ ts: string }> },
     clock: () => number = Date.now,
+    gate?: CanonicalFreshnessGate,
+    artifacts: ArtifactTransportProvider = () => undefined,
   ) {
     const boundary = new CanonicalSlackTransport(messages.store, messages.mapper, {});
     const adapter: ExternalMessageTransport = {
@@ -118,7 +125,7 @@ export class Output extends CanonicalOutput {
         };
       },
     };
-    super(messages, adapter, clock);
+    super(messages, adapter, clock, gate, artifacts);
     messages.output = this;
   }
 }

@@ -1,50 +1,51 @@
+import { Application } from "../application.js";
+import type { ApplicationPorts } from "../application.js";
 import type { Store } from "../storage/store.js";
-import { ConfiguredAgents } from "../agents/directory.js";
-import type { TeamSettings } from "../domain/agents.js";
-import { References } from "../conversations/references.js";
-import { ConversationRecords } from "../storage/conversations.js";
-import { CanonicalWrites } from "../storage/conversation-writes.js";
-import { Conversations } from "../conversations/messages.js";
-import { CanonicalOutput } from "../conversations/output.js";
-import { CanonicalFreshnessGate } from "../conversations/freshness.js";
-import { Collaboration } from "../collaboration/service.js";
-import { TeamDirectory } from "../conversations/team-directory.js";
-import { LocalAdapter } from "./input.js";
+import type { AgentDefinition, TeamSettings } from "../domain/agents.js";
+import type { Worker } from "../runtime/supervisor.js";
+import { LinuxUserBackend, type LinuxIdentity } from "../execution/linux-user.js";
 
-/** A real local composition: no Slack config, fake locator or alternate business model. */
-export function localApplication(store: Store, settings: TeamSettings) {
-  const messages = localConversations(store, settings);
-  const output = new CanonicalOutput(messages, {
-    post: async () => {
-      throw new Error("External transport unavailable");
-    },
-    pendingInput: () => false,
-    classify: () => ({ kind: "rejected", reason: "External transport unavailable" }),
-  });
-  const collaboration = new Collaboration(store, messages, output, settings);
-  output.gate = new CanonicalFreshnessGate(messages, collaboration.attention);
-  const directory = new TeamDirectory(messages),
-    input = new LocalAdapter(collaboration, settings.ownerUserIds);
-  return { messages, output, collaboration, directory, input };
+/** Host facilities an embedded caller may replace; everything else comes from the assembly. */
+export interface LocalApplicationPorts {
+  backend?: ApplicationPorts["backend"];
+  memoryRoots?: Record<string, string>;
+  workerFactory?: (agent: AgentDefinition) => Worker;
+  recoverMemory?: ApplicationPorts["recoverMemory"];
+  clock?: () => number;
 }
 
-/** Application composition shared by the local-only daemon and small embedded harnesses. */
-export function localConversations(store: Store, settings: TeamSettings): Conversations {
-  const agents = new ConfiguredAgents(settings.agents),
-    references = new References(store);
-  const records = new ConversationRecords(store, references),
-    writes = new CanonicalWrites(store, references);
-  const messages = new Conversations(
-    store,
-    agents,
-    references,
-    records,
-    writes,
-    { participates: () => true },
-    undefined,
-    () => {
-      throw new Error("External publication unavailable");
-    },
+/** The current user runs ordinary commands inside each Agent's own workspace. */
+function localIdentities(memoryRoots: Record<string, string>): Record<string, LinuxIdentity> {
+  const uid = process.getuid?.(),
+    gid = process.getgid?.();
+  if (uid === undefined || gid === undefined) return {};
+  return Object.fromEntries(
+    Object.entries(memoryRoots).map(([agentId, home]) => [agentId, { uid, gid, home }]),
   );
-  return messages;
+}
+
+/**
+ * Local JSONL development entry (and the harness that embeds it): the same complete application
+ * the daemon builds, with no external adapter. It owns no data directory, so the caller passes an
+ * open store and, when the Agents need a private workspace, its memory roots and execution
+ * identity. Agent sessions are registered by the caller that owns the store lifetime.
+ */
+export function localApplication(
+  store: Store,
+  settings: TeamSettings,
+  ports: LocalApplicationPorts = {},
+): Application {
+  const memoryRoots = ports.memoryRoots ?? {};
+  return Application.create({
+    store,
+    team: settings,
+    local: { humans: [...settings.ownerUserIds], rooms: [] },
+    ports: {
+      backend: ports.backend ?? new LinuxUserBackend(localIdentities(memoryRoots)),
+      memoryRoots,
+      ...(ports.workerFactory ? { workerFactory: ports.workerFactory } : {}),
+      ...(ports.recoverMemory ? { recoverMemory: ports.recoverMemory } : {}),
+      ...(ports.clock ? { clock: ports.clock } : {}),
+    },
+  });
 }

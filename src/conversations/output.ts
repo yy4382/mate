@@ -39,27 +39,33 @@ export interface CanonicalArtifactTransport {
     beforeShare: () => boolean,
   ): Promise<{ fileId: string }>;
 }
+/** The external artifact adapter is created after the core it publishes through, so callers wire a lookup. */
+export type ArtifactTransportProvider = () => CanonicalArtifactTransport | undefined;
 
-/** Core owns intent, gating, confirmation and delivery. External identity belongs to adapters. */
+/** Core owns intent, gating, confirmation and delivery. External identity belongs to adapters.
+ * Freshness gating and artifact publication are application policy: the application assembly
+ * supplies them here, at construction, and no caller installs a collaborator afterwards.
+ */
 export class CanonicalOutput {
-  gate?: CanonicalFreshnessGate;
-  artifacts?: CanonicalArtifactTransport;
   private dispatchQueue: Promise<unknown> = Promise.resolve();
   private internalQueue: Promise<unknown> = Promise.resolve();
   constructor(
     readonly messages: Conversations,
     readonly transport: ExternalMessageTransport,
     readonly clock: () => number = Date.now,
+    readonly gate?: CanonicalFreshnessGate,
+    readonly artifacts: ArtifactTransportProvider = () => undefined,
   ) {}
   artifactConfigured(actor: string): boolean {
-    return this.artifacts?.configured(actor) === true;
+    return this.artifacts()?.configured(actor) === true;
   }
   requireArtifactSupport(actor: string, target: ConversationTarget): void {
     this.messages.requireAccess(actor, target.conversationId);
     if (this.messages.references.conversation(target.conversationId).authority !== "external")
       throw new Error("Artifact target is not supported");
     this.messages.requirePublication(actor, target);
-    if (!this.artifacts?.configured(actor) || !this.artifacts.supports(actor, target))
+    const artifacts = this.artifacts();
+    if (!artifacts?.configured(actor) || !artifacts.supports(actor, target))
       throw new Error("Artifact adapter unavailable for Agent or target");
   }
   matchesText(expected: string, observed: string): boolean {
@@ -366,8 +372,9 @@ export class CanonicalOutput {
     let fileId: string | undefined,
       sharing = false;
     try {
-      if (!this.artifacts) throw new Error("Artifact transport unavailable");
-      const receipt = await this.artifacts.upload(
+      const artifacts = this.artifacts();
+      if (!artifacts) throw new Error("Artifact transport unavailable");
+      const receipt = await artifacts.upload(
         request,
         artifact,
         (id) => {

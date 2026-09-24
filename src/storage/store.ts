@@ -325,15 +325,33 @@ export class Store {
       }[];
       this.db.prepare("UPDATE agents SET generation=generation+1").run();
       for (const run of active) this.transitionRun(run.id, "interrupted");
-      this.db.prepare("UPDATE actions SET state='unknown' WHERE state='executing'").run();
-      this.db
-        .prepare(
-          "UPDATE outbox SET state='failed',receipt=json_set(receipt,'$.reason','artifact_not_shared_before_restart') WHERE state='sending' AND json_extract(request,'$.artifact') IS NOT NULL AND json_extract(receipt,'$.phase')='staging'",
-        )
-        .run();
-      this.db.prepare("UPDATE outbox SET state='unknown' WHERE state='sending'").run();
+      this.markUnconfirmed();
       this.audit("startup_recovery", {});
     });
+  }
+  /** Call after intake and local workers stopped, before the database is released: every
+   * external effect this process can no longer confirm becomes a persistent unknown result
+   * instead of staying "in progress" for the next process to guess about. */
+  fenceUnconfirmedEffects(): void {
+    this.atomic(() => {
+      const changes = this.markUnconfirmed();
+      if (changes) this.audit("unconfirmed_effects_fenced", { changes });
+    });
+  }
+  /** Caller owns the transaction. Returns how many persisted effects changed state. */
+  private markUnconfirmed(): number {
+    let changes = this.db
+      .prepare("UPDATE actions SET state='unknown' WHERE state='executing'")
+      .run().changes;
+    changes += this.db
+      .prepare(
+        "UPDATE outbox SET state='failed',receipt=json_set(receipt,'$.reason','artifact_not_shared_before_restart') WHERE state='sending' AND json_extract(request,'$.artifact') IS NOT NULL AND json_extract(receipt,'$.phase')='staging'",
+      )
+      .run().changes;
+    changes += this.db
+      .prepare("UPDATE outbox SET state='unknown' WHERE state='sending'")
+      .run().changes;
+    return changes;
   }
   /** Every runtime active→terminal transition and its owner fact share this transaction boundary. */
   transitionRun(id: string, state: "complete" | "failed" | "interrupted", error?: string): void {

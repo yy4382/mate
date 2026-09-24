@@ -82,3 +82,20 @@ it("opens the application database only through the single storage entry", () =>
   }
   expect(offenders).toEqual([]);
 });
+
+// The application assembly supplies the freshness gate and the artifact transport where the
+// output is constructed. A later write onto another object would silently leave an entry
+// without the collaborator its dispatch policy depends on.
+it("never installs the freshness gate or the artifact transport onto a constructed object", () => {
+  const offenders: string[] = [];
+  for (const path of sourceFiles(sourceRoot)) {
+    const name = relative(sourceRoot, path);
+    for (const line of readFileSync(path, "utf8").split("\n")) {
+      if (!/\.(gate|artifacts)\s*=(?!=)/.test(line)) continue;
+      if (/^\s*(readonly|private readonly|public readonly)\s/.test(line)) continue;
+      if (/^\s*this\.(gate|artifacts)\s*=/.test(line)) continue;
+      offenders.push(`${name}: ${line.trim()}`);
+    }
+  }
+  expect(offenders).toEqual([]);
+});

@@ -4,6 +4,8 @@ const path = z.string().refine(isAbsolute, "Absolute path required");
 import { agentDefinitionSchema, agentIdSchema, secretReferenceSchema } from "../domain/agents.js";
 import { encode, type Store } from "../storage/store.js";
 import type { MateConfig } from "../config.js";
+import { defaultRuntimeLimits, runtimeLimitsSchema } from "../runtime/limits.js";
+export type { RuntimeLimits } from "../runtime/limits.js";
 
 const human = z.string().min(1).max(1000);
 const slackUser = z.string().regex(/^U[A-Z0-9]+$/);
@@ -72,14 +74,7 @@ const modernConfigSchema = z
           .optional(),
         systemAgents: z.array(agentIdSchema).optional(),
         sharedRoot: path.optional(),
-        limits: z
-          .object({
-            maxActiveRuns: z.number().int().min(1).max(32),
-            maxBackendOperations: z.number().int().min(1).max(32),
-            workerIdleMs: z.number().int().min(1).max(3600000),
-          })
-          .strict()
-          .default({ maxActiveRuns: 1, maxBackendOperations: 1, workerIdleMs: 300000 }),
+        limits: runtimeLimitsSchema.default(defaultRuntimeLimits),
         researchHosts: z.array(z.string().regex(/^[a-z0-9][a-z0-9.-]*[a-z0-9]$/)).default([]),
       })
       .strict(),

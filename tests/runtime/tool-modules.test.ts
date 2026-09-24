@@ -4,6 +4,8 @@ import { configSchema } from "../../src/config.js";
 import { configFixture } from "../helpers/config.js";
 import { Messages, Output } from "../helpers/canonical-slack.js";
 import { Collaboration } from "../../src/collaboration/service.js";
+import { CanonicalAttention } from "../../src/conversations/attention.js";
+import { CanonicalFreshnessGate } from "../../src/conversations/freshness.js";
 import { Broker } from "../../src/policy/broker.js";
 import {
   ToolRouter,
@@ -27,11 +29,14 @@ function setup(directory?: ConversationDirectory) {
     store = new Store(":memory:");
   stores.push(store);
   const messages = new Messages(store, config);
-  const c = new Collaboration(
+  const attention = new CanonicalAttention(messages),
+    gate = new CanonicalFreshnessGate(messages, attention),
+    c = new Collaboration(
       store,
       messages,
-      new Output(messages, { post: async () => ({ ts: "200.000001" }) }),
+      new Output(messages, { post: async () => ({ ts: "200.000001" }) }, Date.now, gate),
       config,
+      attention,
     ),
     broker = new Broker(
       store,

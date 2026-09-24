@@ -125,13 +125,13 @@ it("rolls back an interrupted internal commit and retries once after reopening",
 });
 it("local human input uses the real Supervisor and isolated Agent sessions without Slack configuration", async () => {
   const f = setup(),
-    room = f.input.createRoom("opaque-local-room", ["alice", "bob"], ["local-owner"]);
-  const input = f.input.receive("local-owner", "human-1", room, "please investigate");
-  expect(f.input.receive("local-owner", "human-1", room, "please investigate")).toEqual(input);
-  expect(() => f.input.receive("local-owner", "human-1", room, "different")).toThrow(
+    room = f.local!.createRoom("opaque-local-room", ["alice", "bob"], ["local-owner"]);
+  const input = f.local!.receive("local-owner", "human-1", room, "please investigate");
+  expect(f.local!.receive("local-owner", "human-1", room, "please investigate")).toEqual(input);
+  expect(() => f.local!.receive("local-owner", "human-1", room, "different")).toThrow(
     "identity conflict",
   );
-  expect(() => f.input.receive("intruder", "bad", room, "attack")).toThrow("Unknown local human");
+  expect(() => f.local!.receive("intruder", "bad", room, "attack")).toThrow("Unknown local human");
   const broker = new Broker(
     f.s,
     f.collaboration,
@@ -303,13 +303,13 @@ it("revision cannot smuggle unsupported artifacts into an internal target", asyn
 });
 it("retains local human input under a paused activity without starting a run", () => {
   const f = setup(),
-    room = f.input.createRoom("room", ["alice"], ["local-owner"]);
-  const root = f.input.receive("local-owner", "root", room, "start");
+    room = f.local!.createRoom("room", ["alice"], ["local-owner"]);
+  const root = f.local!.receive("local-owner", "root", room, "start");
   const work = f.s.db
     .prepare("SELECT work_id FROM message_work WHERE message_key=?")
     .get(root.messageId) as { work_id: string };
   f.s.db.prepare("UPDATE works SET state='paused' WHERE id=?").run(work.work_id);
-  const reply = f.input.receive(
+  const reply = f.local!.receive(
     "local-owner",
     "steering",
     { ...room, threadId: root.messageId },

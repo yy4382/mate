@@ -1,16 +1,9 @@
-import { SlackHistory } from "../slack/history.js";
 import type { AdapterLifecycle } from "./adapter.js";
 import { SlackRuntime } from "../slack/runtime.js";
-import { localConversations } from "../local/application.js";
-import { LocalAdapter } from "../local/input.js";
 import { configureLocalRooms } from "../local/rooms.js";
-import { TeamDirectory } from "../conversations/team-directory.js";
-import { slackApplication } from "../slack/application.js";
+import type { LocalAdapter } from "../local/input.js";
 
-import { CanonicalOutput as Output } from "../conversations/output.js";
 import { storedConfiguration, saveConfiguration } from "./config.js";
-import { Attachments } from "../slack/attachments.js";
-import { Directory } from "../slack/directory.js";
 import {
   mkdirSync,
   writeFileSync,
@@ -34,32 +27,25 @@ import {
 import { requireSecret } from "../config.js";
 import { Store } from "../storage/store.js";
 
-import { CanonicalSlackTransport as WebSlackTransport } from "../slack/transport.js";
 import { Collaboration } from "../collaboration/service.js";
 import { Broker } from "../policy/broker.js";
 import type { ExecutionBackend } from "../execution/backend.js";
 import { LinuxUserBackend } from "../execution/linux-user.js";
 import { LinuxProcessManager } from "../execution/linux-processes.js";
 import { SystemOperations } from "../policy/system-operations.js";
-import { PrivilegedBackend } from "../execution/privileged.js";
 import { canonicalRoot, within } from "../execution/paths.js";
 import { Supervisor } from "../runtime/supervisor.js";
-import { ToolRouter } from "../runtime/tools.js";
-import { acquireLock } from "./lock.js";
 import { Controls } from "./control.js";
-import { Research } from "./research.js";
-import { Artifacts } from "./artifacts.js";
-import { EnvironmentCapabilities } from "../capabilities/environment.js";
+import { acquireLock } from "./lock.js";
 import { reservedAgentHomePaths, pathVariants } from "./paths.js";
 import { assertNoRestoreInProgress } from "./restore.js";
-import { FairAdmission } from "../concurrency/admission.js";
-import { AdmittedBackend } from "../execution/admitted.js";
 import { assertLinuxOperationAllowed } from "../deployment/linux-upgrade-guard.js";
 import { nodeHostOperations, type HostOperations } from "../deployment/host.js";
 import { initialMemory } from "../agents/workspace.js";
 import { buildBaseline } from "../runtime/prompt.js";
 import { operationDocumentation } from "../runtime/tools.js";
 import { repairTranscript } from "../runtime/context.js";
+import { Application } from "../application.js";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 export interface Log {
   info(data: object, message: string): void;
@@ -67,6 +53,8 @@ export interface Log {
 }
 export class Daemon {
   readonly store: Store;
+  /** The one application assembly: every collaborator below is wired there before use. */
+  readonly application: Application;
   readonly collaboration: Collaboration;
   readonly broker: Broker;
   readonly system: SystemOperations;
@@ -185,33 +173,11 @@ export class Daemon {
           `This data directory holds Agents that are not in the configuration (${orphans.join(", ")}). Add them back to the configuration, restore the database from a checkpoint, or start with a new, empty data directory.`,
         );
       const c = config.mate;
-      const slackApp = slackConfig ? slackApplication(this.store, slackConfig, c) : undefined;
-      const messages = slackApp?.messages ?? localConversations(this.store, c);
-      messages.writes.assertFormat();
-      const transport =
-        slackApp && slackConfig ? new WebSlackTransport(this.store, slackApp.mapper) : undefined;
-      const output = new Output(
-        messages,
-        transport ?? {
-          post: async () => {
-            throw new Error("External transport unavailable");
-          },
-          pendingInput: () => false,
-          classify: () => ({ kind: "rejected", reason: "External transport unavailable" }),
-        },
-      );
-      this.collaboration = new Collaboration(this.store, messages, output, c);
-      this.system = new SystemOperations(
-        this.store,
-        this.collaboration,
-        config.runtime.systemAgents ?? [],
-        new PrivilegedBackend(),
-      );
       const agentsDir = join(data, "agents");
       if (!config.runtime.linuxUsers) mkdirSync(agentsDir, { recursive: true, mode: 0o700 });
       if (existsSync(agentsDir) && lstatSync(agentsDir).isSymbolicLink())
         throw new Error("Agents directory must not be a symlink");
-      for (const agent of this.collaboration.agents.list()) {
+      for (const agent of c.agents) {
         const linux = config.runtime.linuxUsers?.[agent.id];
         const root = linux?.home ?? join(data, "agents", agent.id);
         if (linux) {
@@ -302,7 +268,6 @@ export class Daemon {
             { uid: process.getuid!(), gid: process.getgid!(), home },
           ]),
         );
-      const linuxBackend = new LinuxUserBackend(identities);
       const linuxProcesses = config.runtime.linuxUsers
         ? new LinuxProcessManager(
             Object.fromEntries(
@@ -313,69 +278,37 @@ export class Daemon {
             ),
           )
         : undefined;
-      const backendAdmission = new FairAdmission(config.runtime.limits.maxBackendOperations),
-        admittedFiles = new AdmittedBackend(linuxBackend, backendAdmission);
-      this.backend = admittedFiles;
-      this.broker = new Broker(this.store, this.collaboration, this.backend, this.memoryRoots);
-      const research = new Research(config.runtime.researchHosts);
-      let artifacts!: Artifacts;
-      const attachments = transport
-        ? new Attachments(this.collaboration, this.broker, transport.clients)
-        : undefined;
-      const environment = new EnvironmentCapabilities(this.collaboration, {
-        homes: this.memoryRoots,
-        ...(config.runtime.sharedRoot ? { sharedRoot: config.runtime.sharedRoot } : {}),
-        access: process.platform === "linux" ? "linux_user_permissions" : "local_user_permissions",
-        researchHosts: config.runtime.researchHosts,
-        attachmentConfigured: (actor) => attachments?.configured(actor) ?? false,
-        artifactConfigured: (actor) => artifacts?.configured(actor) ?? false,
-        artifactSupported: (actor, target) => artifacts?.supports(actor, target) ?? false,
+      // One assembly gives this entry a complete application; everything below is already wired.
+      this.application = Application.create({
+        store: this.store,
+        team: c,
+        ...(config.adapters.local ? { local: config.adapters.local } : {}),
+        ...(slackConfig ? { slackConfig } : {}),
+        runtime: {
+          limits: config.runtime.limits,
+          researchHosts: config.runtime.researchHosts,
+          ...(config.runtime.sharedRoot ? { sharedRoot: config.runtime.sharedRoot } : {}),
+          ...(config.runtime.systemAgents ? { systemAgents: config.runtime.systemAgents } : {}),
+        },
+        ports: {
+          backend: new LinuxUserBackend(identities),
+          memoryRoots: this.memoryRoots,
+          ...(slackConfig
+            ? { slack: { config: slackConfig, artifacts: () => this.slackRuntime?.service } }
+            : {}),
+          ...(linuxProcesses ? { linuxProcesses } : {}),
+          reviewWorkspace: (actor) => this.verifyReviewWorkspace(actor),
+          controlProjection: (user, command, id, args) =>
+            this.slackRuntime?.projections.control(user, command, id, args),
+        },
       });
-      const router = new ToolRouter(
-        this.collaboration,
-        this.broker,
-        {
-          attachment: (...args) => {
-            if (!attachments) throw new Error("Attachment adapter unavailable");
-            return attachments.save(...args);
-          },
-          environment: (run, workId) => environment.read(run, workId),
-          ...(linuxProcesses ? { processes: linuxProcesses } : {}),
-          system: this.system,
-          research: (url, signal) => research.read(url, signal),
-          publish: (...args) => artifacts.publish(...args),
-        },
-        new TeamDirectory(
-          messages,
-          transport ? new Directory(messages, transport.clients, transport.mapper) : undefined,
-        ),
-        (value) => slackApp?.argumentsCodec.args(value) ?? value,
-        transport ? new SlackHistory(messages, transport) : undefined,
-      );
-      this.supervisor = new Supervisor(
-        this.collaboration,
-        router,
-        c,
-        undefined,
-        async (agentId, workId, signal) => {
-          const result = await admittedFiles.execute(
-            {
-              agentId,
-              root: this.memoryRoots[agentId]!,
-              operation: { kind: "read", path: "MEMORY.md" },
-              timeoutMs: 10000,
-            },
-            signal,
-          );
-          if (result.code !== 0 || result.truncated)
-            throw new Error("Private memory recovery read failed");
-          return result.stdout;
-        },
-        {
-          runAdmission: new FairAdmission(config.runtime.limits.maxActiveRuns),
-          workerIdleMs: config.runtime.limits.workerIdleMs,
-        },
-      );
+      this.collaboration = this.application.collaboration;
+      this.broker = this.application.broker;
+      this.system = this.application.system;
+      this.supervisor = this.application.supervisor;
+      this.controls = this.application.controls;
+      this.local = this.application.local;
+      this.backend = this.application.backend;
       if (configurationChanged) {
         // A changed configuration can change the baseline each Agent starts from.
         // Fence any run left by the previous process, then move affected sessions to
@@ -412,36 +345,24 @@ export class Daemon {
         }
       }
       this.supervisor.register();
-      this.controls = new Controls(
-        this.collaboration,
-        this.supervisor,
-        this.broker,
-        (actor) => this.verifyReviewWorkspace(actor),
-        (user, command, id, args) =>
-          this.slackRuntime?.projections.control(user, command, id, args),
-        linuxProcesses,
-        this.system,
-      );
-      this.adapter = this.slackRuntime = transport
-        ? new SlackRuntime(
-            this.collaboration,
-            transport,
-            this.controls,
-            (message) => this.log.error({}, message),
-            this.system,
-          )
-        : undefined;
-      this.local = config.adapters.local
-        ? new LocalAdapter(this.collaboration, config.adapters.local.humans)
-        : undefined;
-      artifacts = new Artifacts(
-        this.collaboration,
-        this.broker,
-        this.slackRuntime?.service,
-        this.memoryRoots,
-      );
+      const slackTransport = this.application.transport;
+      this.adapter = this.slackRuntime =
+        slackConfig && slackTransport
+          ? new SlackRuntime(
+              this.collaboration,
+              slackTransport,
+              this.controls,
+              (message) => this.log.error({}, message),
+              this.system,
+            )
+          : undefined;
       this.store.atomic(() => {
-        configureLocalRooms(this.collaboration, previous?.adapters.local, config.adapters.local);
+        configureLocalRooms(
+          this.collaboration,
+          this.local,
+          previous?.adapters.local,
+          config.adapters.local,
+        );
         saveConfiguration(this.store, config);
         if (configurationChanged)
           this.store.audit("configuration_change", {
@@ -518,7 +439,7 @@ export class Daemon {
       );
     await this.adapter?.start(this.abort.signal, progress);
     if (this.stopping) throw new Error("Daemon stopped during startup");
-    this.collaboration.output.gate?.adoptPending();
+    this.application.gate.adoptPending();
     this.loopPromise = this.loop();
     this.log.info({}, "Mate daemon started");
   }
@@ -605,27 +526,37 @@ export class Daemon {
   close(): Promise<void> {
     return (this.closePromise ??= this.shutdown());
   }
+  /**
+   * Ordered shutdown. Each step runs even when an earlier one failed, so one stuck resource
+   * cannot keep the database or the single-instance lock open.
+   */
   private async shutdown(): Promise<void> {
-    this.stopping = true;
-    this.abort.abort();
     const failures: unknown[] = [];
-    const settle = async (action: () => unknown) => {
+    const settle = async (step: () => unknown) => {
       try {
-        await action();
+        await step();
       } catch (error) {
         failures.push(error);
       }
     };
     try {
-      await settle(() => this.supervisor.close());
+      // 1. Stop intake: the loop stops polling and ticking, and the adapter stops replaying input.
+      this.stopping = true;
+      this.abort.abort();
       await settle(() => this.adapter?.close());
+      // 2. Stop advancing business state: abort queued and active runs and close their workers.
+      await settle(() => this.application.stopAdvancing());
+      // 3. Collect the local work this process already started.
       await settle(() => this.opening?.catch(() => {}));
       await settle(() => this.loopPromise);
       await settle(() => this.background);
       await settle(() => this.privileged);
       await Promise.allSettled([...this.runs]);
-      await settle(() => this.supervisor.drain());
+      await settle(() => this.application.drainWork());
+      // 4. External effects this process can no longer confirm stay as persistent unknowns.
+      await settle(() => this.application.fenceUnconfirmedEffects());
     } finally {
+      // 5. Release the database, then the single-instance lock.
       try {
         this.store.close();
       } finally {

@@ -4,6 +4,8 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { Store } from "../../src/storage/store.js";
 import { Messages, Output } from "../helpers/canonical-slack.js";
 import { Collaboration } from "../../src/collaboration/service.js";
+import { CanonicalAttention } from "../../src/conversations/attention.js";
+import type { CanonicalArtifactTransport } from "../../src/conversations/output.js";
 import { CanonicalFreshnessGate as FreshnessGate } from "../../src/conversations/freshness.js";
 import { configFixture } from "../helpers/config.js";
 const stores: Store[] = [];
@@ -19,10 +21,17 @@ function setup() {
   const post = vi.fn(async () => ({
     ts: `200.${String(post.mock.calls.length).padStart(6, "0")}`,
   }));
-  const o = new Output(m, { post }, () => now);
-  const c = new Collaboration(s, m, o, configFixture),
-    g = new FreshnessGate(m, c.attention, () => now);
-  o.gate = g;
+  const attention = new CanonicalAttention(m),
+    g = new FreshnessGate(m, attention, () => now);
+  const artifacts: { current?: CanonicalArtifactTransport } = {},
+    o = new Output(
+      m,
+      { post },
+      () => now,
+      g,
+      () => artifacts.current,
+    );
+  const c = new Collaboration(s, m, o, configFixture, attention);
   const w = c.createWork("human", target);
   c.enqueue("research", w, "start", {});
   const run = s.beginRun("research")!;
@@ -64,6 +73,7 @@ function setup() {
     post,
     read,
     change,
+    artifacts,
     time: (v: number) => {
       now = v;
     },
@@ -194,7 +204,7 @@ it("durable related ingress blocks dispatch until normalized, then the changed v
   expect(post).not.toHaveBeenCalled();
 });
 it("artifact drafts freeze bytes, preserve them on caption revision and hold changes before sharing", async () => {
-  const { s, c, g, o, w, run, read, change } = setup();
+  const { s, c, g, o, w, run, read, change, artifacts } = setup();
   const artifact = { title: "result", content: "fixed evidence", contentHash: "hash" };
   const upload = vi.fn(async (_request: any, payload: any, prepared: any, beforeShare: any) => {
     expect(payload.content).toBe("fixed evidence");
@@ -203,7 +213,7 @@ it("artifact drafts freeze bytes, preserve them on caption revision and hold cha
     if (!beforeShare()) throw new Error("not shared");
     return { fileId: "FFILE" };
   });
-  o.artifacts = { configured: () => true, supports: () => true, upload };
+  artifacts.current = { configured: () => true, supports: () => true, upload };
   o.queueArtifact("research", target, "caption", artifact, "artifact", { run, viewToken: read() });
   s.db.prepare("INSERT INTO output_work VALUES(?,?)").run("artifact", w);
   await o.send("artifact");
@@ -219,8 +229,8 @@ it("artifact drafts freeze bytes, preserve them on caption revision and hold cha
   expect(upload).toHaveBeenCalledOnce();
 });
 it("artifact unknown keeps allocated file identity across recovery and needs matching sharing evidence", async () => {
-  const { s, g, o, w, run, c } = setup();
-  o.artifacts = {
+  const { s, g, o, w, run, c, artifacts } = setup();
+  artifacts.current = {
     configured: () => true,
     supports: () => true,
     upload: async (_request, _artifact, prepared, beforeShare) => {
@@ -275,9 +285,9 @@ it("artifact unknown keeps allocated file identity across recovery and needs mat
   expect(c.attention.revision(target, "research")).toBeGreaterThan(0);
 });
 it("pause during artifact byte staging prevents the visible sharing step", async () => {
-  const { s, g, o, w, run } = setup();
+  const { s, g, o, w, run, artifacts } = setup();
   let shared = false;
-  o.artifacts = {
+  artifacts.current = {
     configured: () => true,
     supports: () => true,
     upload: async (_request, _artifact, prepared, beforeShare) => {
@@ -304,8 +314,8 @@ it("pause during artifact byte staging prevents the visible sharing step", async
   expect(s.output("artifact")?.state).toBe("pending");
 });
 it("a failure before file sharing is definite and does not block future drafts as unknown", async () => {
-  const { s, g, o, run } = setup();
-  o.artifacts = {
+  const { s, g, o, run, artifacts } = setup();
+  artifacts.current = {
     configured: () => true,
     supports: () => true,
     upload: async () => {
@@ -327,8 +337,8 @@ it("a failure before file sharing is definite and does not block future drafts a
   expect(JSON.parse(s.output("artifact")!.receipt!).reason).toBe("artifact_not_shared");
 });
 it("publication captions require their own exact presented page before a fresh view is valid", async () => {
-  const { s, c, g, o, run, read } = setup();
-  o.artifacts = {
+  const { s, c, g, o, run, read, artifacts } = setup();
+  artifacts.current = {
     configured: () => true,
     supports: () => true,
     upload: async (_request, _artifact, prepared, beforeShare) => {

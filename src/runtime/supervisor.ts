@@ -27,6 +27,7 @@ export class Supervisor {
   private active = new Map<string, { run: RunToken; abort: AbortController }>();
   private queued = new Map<string, AbortController>();
   private idle = new Map<string, NodeJS.Timeout>();
+  private closed = false;
   private readonly admission: Admission;
   private readonly workerIdleMs: number;
   constructor(
@@ -63,7 +64,7 @@ export class Supervisor {
       }
   }
   async step(agentId: string): Promise<boolean> {
-    if (this.active.has(agentId) || this.queued.has(agentId)) return false;
+    if (this.closed || this.active.has(agentId) || this.queued.has(agentId)) return false;
     const waiting = new AbortController();
     this.queued.set(agentId, waiting);
     let release: () => void;
@@ -167,6 +168,9 @@ export class Supervisor {
           return recovery;
         };
         const recovery = await buildRecovery();
+        // Shutdown may have arrived while this run was preparing: never start a new worker
+        // process after the application has collected its workers.
+        if (this.closed) throw new Error("Supervisor closed while starting this run");
         const agent = this.collaboration.agents.get(agentId);
         worker = this.workers.get(agentId) ?? this.factory(agent);
         this.workers.set(agentId, worker);
@@ -287,6 +291,7 @@ export class Supervisor {
     while (this.effects.size) await Promise.allSettled([...this.effects]);
   }
   close(): void {
+    this.closed = true;
     for (const abort of this.queued.values()) abort.abort();
     this.queued.clear();
     for (const timer of this.idle.values()) clearTimeout(timer);

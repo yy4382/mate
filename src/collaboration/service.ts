@@ -44,7 +44,6 @@ export class Collaboration {
   readonly agents: AgentDirectory;
   readonly reminders: Reminders;
   readonly seats: ReviewSeats;
-  readonly attention: Attention;
   readonly usage: UsageLedger;
   readonly board: TaskBoard;
   readonly operations: OperationsView;
@@ -54,6 +53,8 @@ export class Collaboration {
     readonly messages: Messages,
     readonly output: Output,
     readonly config: TeamSettings,
+    /** One attention instance per application; the freshness gate and this service share it. */
+    readonly attention: Attention = new Attention(messages),
   ) {
     this.agents = new ConfiguredAgents(config.agents);
     this.config = {
@@ -63,7 +64,6 @@ export class Collaboration {
     };
     this.reminders = new Reminders(this);
     this.usage = new UsageLedger(store);
-    this.attention = new Attention(messages);
     this.seats = new ReviewSeats(messages, config.ownerUserIds);
     this.taskTransitions = new TaskTransitions(store);
     this.board = new TaskBoard(this);

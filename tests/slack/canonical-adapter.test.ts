@@ -33,9 +33,8 @@ function setup(unknownThread = true) {
   const transport = new CanonicalSlackTransport(s, app.mapper, {}),
     post = vi.fn(async () => ({ ts: "10.000001" }));
   transport.clients.set("research", { chat: { postMessage: post } } as any);
-  const output = new CanonicalOutput(app.messages, transport),
-    gate = new CanonicalFreshnessGate(app.messages, new CanonicalAttention(app.messages));
-  output.gate = gate;
+  const gate = new CanonicalFreshnessGate(app.messages, new CanonicalAttention(app.messages)),
+    output = new CanonicalOutput(app.messages, transport, Date.now, gate);
   s.enqueue("research", "start", {});
   const run = s.beginRun("research")!;
   s.input(run, {});

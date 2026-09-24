@@ -286,7 +286,10 @@ export class SystemOperations {
       }
     });
   }
-  recover(): void {
+  /** A privileged command inside its execution boundary whose result this process cannot
+   * confirm becomes a persistent unknown result, and its owner gets the durable notice. Safe to
+   * call again: only rows still marked executing change. */
+  fenceUnconfirmed(): void {
     this.store.atomic(() => {
       const running = this.store.db
         .prepare("SELECT * FROM system_requests WHERE status='executing'")
@@ -299,6 +302,11 @@ export class SystemOperations {
           .run(encode({ reason: "interrupted_after_execution_boundary" }), row.id);
         this.wake(row.agent_id, row.work_id, row.id, "unknown");
       }
+    });
+  }
+  recover(): void {
+    this.fenceUnconfirmed();
+    this.store.atomic(() => {
       for (const row of this.store.db
         .prepare("SELECT * FROM system_requests WHERE notice_state='sending' AND status='pending'")
         .all() as RequestRow[])

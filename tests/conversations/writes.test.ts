@@ -2,6 +2,7 @@ import { afterEach, expect, it } from "vitest";
 import { Store, encode } from "../../src/storage/store.js";
 import { Messages, Output, fixtureTarget } from "../helpers/canonical-slack.js";
 import { Collaboration } from "../../src/collaboration/service.js";
+import { CanonicalAttention } from "../../src/conversations/attention.js";
 import { CanonicalFreshnessGate } from "../../src/conversations/freshness.js";
 import { configFixture } from "../helpers/config.js";
 
@@ -17,19 +18,24 @@ function setup() {
   cleanup.push(() => s.close());
   s.register("research", "v1", []);
   const m = new Messages(s, configFixture),
-    output = new Output(m, { post: async () => ({ ts: "50.000001" }) });
-  const c = new Collaboration(s, m, output, configFixture);
+    attention = new CanonicalAttention(m),
+    gate = new CanonicalFreshnessGate(m, attention),
+    output = new Output(m, { post: async () => ({ ts: "50.000001" }) }, Date.now, gate);
+  const c = new Collaboration(s, m, output, configFixture, attention);
   m.membership("research", "CTEST", true);
   m.membership("research", "CTWO", true);
-  return { s, m, output, c };
+  return { s, m, output, c, gate };
 }
 it("keeps an unknown output's frozen wire evidence and holds overlapping scopes behind it", () => {
-  const { s, m, c, output } = setup();
-  output.queue("research", { conversationId: "CTEST" }, "first wire", "old");
+  const { s, m, output, gate } = setup();
+  // An earlier dispatch whose outcome is unknown, written straight to the outbox.
+  m.writes.queueOutput("research", "old", {
+    target: { conversationId: "CTEST" },
+    text: "first wire",
+  });
   s.transitionOutput("old", "pending", "sending");
   s.transitionOutput("old", "sending", "unknown", { reason: "lost reply" });
   const before = s.output("old")!;
-  output.gate = new CanonicalFreshnessGate(m, c.attention);
   const otherThread = m.mapper.messageId("CTEST", "100.000002");
   m.references.createMessage("CTEST", otherThread);
   output.queue("research", { conversationId: "CTEST" }, "whole room", "room");
@@ -37,9 +43,10 @@ it("keeps an unknown output's frozen wire evidence and holds overlapping scopes 
   expect(output.ready()).toEqual([]);
   expect(s.output("room")?.state).toBe("held");
   expect(s.output("ok")?.state).toBe("held");
-  expect(
-    c.output.gate!.list("research").map((draft) => (draft as { draftId: string }).draftId),
-  ).toEqual(["ok", "room"]);
+  expect(gate.list("research").map((draft) => (draft as { draftId: string }).draftId)).toEqual([
+    "ok",
+    "room",
+  ]);
   expect(s.output("old")).toEqual(before);
   expect(before.receipt).toContain("lost reply");
 });
