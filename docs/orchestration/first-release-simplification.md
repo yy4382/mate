@@ -71,8 +71,8 @@ only when every blocker is committed on the branch.
 | #47 | 保持正常让位后的持久继续与恢复输入 | **done** | `d412adf` (worktree `.worktrees/t47`) | `ad456b1` merged as `612f35e`; reconciliation `4f95df6` merged as `16f1bf9`; follow-up `9eb40e0` cherry-picked as `5172463` |
 | #48 | 使进程查询与停止可取消且不阻塞 daemon | **done** | `fab5692` (worktree `.worktrees/t48`) | `9e69c30`, merged as `3838cad` |
 | #49 | 让内部应用在 Slack 离线时启动和运行 | **done** | `d412adf` (worktree `.worktrees/t49`) | `367bb2a` merged as `b933b52`; review fix `3451ce5` cherry-picked as `1f4e6c1` |
-| #50 | 按安装和目标范围恢复 Slack 操作 | re-applying | `fc977cf` (worktree `.worktrees/t50`) | `052b9e9` on the pre-#49 base; 5 conflicts with #49's readiness model, re-application in flight |
-| #51 | 给 owner 提供分范围、可操作的故障诊断 | pending | — | — |
+| #50 | 按安装和目标范围恢复 Slack 操作 | **done** | `fc977cf` (worktree `.worktrees/t50`) | `b7a5fdf` (re-applied into #49's readiness model), merged as `066e317` |
+| #51 | 给 owner 提供分范围、可操作的故障诊断 | in progress | `066e317` (worktree `.worktrees/t51`) | — |
 | #52 | 统一 Linux 维护所用的宿主操作与路径事实 | **done** | `6395c75` (worktree `.worktrees/t52`) | `aac16f1`, merged as `fab5692` |
 | #53 | 验证完整 Linux 安装、升级、备份与恢复 | pending | — | — |
 
