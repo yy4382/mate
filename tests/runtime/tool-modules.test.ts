@@ -64,7 +64,7 @@ messages.recent messages.read messages.search messages.send messages.watch inbox
 works.list works.select tasks.list tasks.read tasks.events tasks.byMessage tasks.intents tasks.retry tasks.continue tasks.discard tasks.create tasks.claim tasks.unclaim tasks.transfer tasks.wait tasks.update tasks.delegate
 reminders.list reminders.read reminders.log reminders.finish reminders.create reminders.edit reminders.cancel schedules.list schedules.create schedules.cancel
 actions.list actions.read sessions.status sessions.checkpoint sessions.reset environment.info usage.read agents drafts.list drafts.read drafts.retry drafts.continue drafts.revise drafts.discard
-file.read_bytes file.write_bytes file.read file.write file.list file.stat file.search file.mkdir file.move file.remove file.edit exec processes.list processes.stop system.request system.status attachments.save research.read artifact.publish artifact.revise`
+file.read_bytes file.write_bytes file.read file.write file.list file.stat file.search file.mkdir file.move file.remove file.edit exec processes.list processes.stop system.request system.status attachments.save artifact.publish artifact.revise`
   .trim()
   .split(/\s+/);
 
@@ -74,7 +74,7 @@ it("registers every public operation exactly once with complete policies and sta
   expect(Object.isFrozen(builtInToolSpecs)).toBe(true);
   expect(operationContractFingerprint).toMatch(/^[a-f0-9]{64}$/);
   const allowed = {
-    work: ["none", "current", "task", "reminder", "select", "broker-managed"],
+    replayScope: ["work", "session"],
     seat: ["deny", "redacted-read", "clean-workspace", "held-send"],
     effect: ["pure-read", "atomic-recorded", "broker-recorded", "adapter-recorded"],
     replay: ["immutable", "refreshable", "boundary-owned"],
@@ -83,12 +83,11 @@ it("registers every public operation exactly once with complete policies and sta
     expect(Object.isFrozen(entry)).toBe(true);
     expect(entry.description.length).toBeGreaterThan(10);
     expect(typeof entry.schema.parse).toBe("function");
-    expect(allowed.work).toContain(entry.workPolicy);
+    expect(allowed.replayScope).toContain(entry.replayScope);
     expect(allowed.seat).toContain(entry.seatPolicy);
     expect(allowed.effect).toContain(entry.effectPolicy);
     expect(allowed.replay).toContain(entry.replayPolicy);
     expect(typeof entry.authorize).toBe("function");
-    expect(typeof entry.postAwait).toBe("function");
     expect(typeof entry.handler).toBe("function");
   }
   expect(operationDocumentation).toContain(`Tool contract: ${operationContractFingerprint}`);
@@ -135,7 +134,7 @@ it("fails closed for duplicate, reserved, incomplete and unknown module specific
     /Incomplete/,
   );
   expect(() =>
-    build([{ domain: "x", specs: [{ ...base, workPolicy: "ambient" } as any] }]),
+    build([{ domain: "x", specs: [{ ...base, replayScope: "ambient" } as any] }]),
   ).toThrow(/unknown/);
   expect(() =>
     build([{ domain: "x", specs: [{ ...base, effectPolicy: "atomic-recorded" } as any] }]),
@@ -381,7 +380,6 @@ it("lets an Agent inspect and stop only its current Linux scope with a durable s
     stop = vi.fn(() => ({ unit, stopped: true }));
   const router = new ToolRouter(base.c, base.broker, {
       processes: { list, stop },
-      research: async () => ({}),
       publish: async () => ({}),
     }),
     signal = new AbortController().signal;
@@ -411,7 +409,6 @@ it("lets an Agent inspect and stop its Linux scope after the attributed work pau
   const stop = vi.fn(() => ({ unit, stopped: true }));
   const router = new ToolRouter(base.c, base.broker, {
     processes: { list: () => [{ unit, pids: [4101] }], stop },
-    research: async () => ({}),
     publish: async () => ({}),
   });
   base.store.db.prepare("UPDATE works SET state='paused' WHERE id=?").run(base.work);
@@ -530,7 +527,6 @@ it("keeps an uncertain process-stop receipt when systemd cannot confirm cleanup"
   });
   const router = new ToolRouter(base.c, base.broker, {
       processes: { list: () => [{ unit, pids: [4101] }], stop },
-      research: async () => ({}),
       publish: async () => ({}),
     }),
     signal = new AbortController().signal;
@@ -557,7 +553,6 @@ it("records a pre-stop refusal as failed without claiming an uncertain effect", 
   });
   const router = new ToolRouter(base.c, base.broker, {
       processes: { list: () => [], stop },
-      research: async () => ({}),
       publish: async () => ({}),
     }),
     signal = new AbortController().signal;
@@ -590,7 +585,6 @@ it("keeps a cancelled stop's unknown result recoverable through the run that was
   });
   const router = new ToolRouter(base.c, base.broker, {
       processes: { list: async () => [{ unit, pids: [4101] }], stop },
-      research: async () => ({}),
       publish: async () => ({}),
     }),
     stopping = router.call(
@@ -654,7 +648,6 @@ it("records a stop refused before the boundary as failed even when its run was f
   });
   const router = new ToolRouter(base.c, base.broker, {
       processes: { list: async () => [], stop },
-      research: async () => ({}),
       publish: async () => ({}),
     }),
     stopping = router.call(
@@ -677,12 +670,10 @@ it("records a stop refused before the boundary as failed even when its run was f
   });
 });
 
-it("keeps known-URL research a receipt-free read and puts the reachable alternatives in the real baseline", async () => {
+it("keeps environment.info a receipt-free read and states the ordinary Linux network capability", async () => {
   const base = setup(),
-    research = vi.fn(async (url: string) => ({ url, body: "evidence", truncated: false })),
     router = new ToolRouter(base.c, base.broker, {
       environment: () => ({}),
-      research,
       publish: async () => ({}),
     }),
     signal = new AbortController().signal;
@@ -690,31 +681,21 @@ it("keeps known-URL research a receipt-free read and puts the reachable alternat
   const result = await router.call(
     base.run,
     base.work,
-    "known-url",
-    "research.read",
-    { url: "https://example.com/source" },
+    "environment",
+    "environment.info",
+    {},
     signal,
   );
-  expect(result.value).toEqual({
-    url: "https://example.com/source",
-    body: "evidence",
-    truncated: false,
-  });
-  expect(research).toHaveBeenCalledOnce();
+  expect(result.value).toEqual({});
   expect(base.store.db.prepare("SELECT count(*) n FROM actions").get()).toEqual(before);
-  expect(builtInToolSpecs.find((spec) => spec.name === "research.read")).toMatchObject({
-    effectPolicy: "pure-read",
-    replayPolicy: "boundary-owned",
-    workPolicy: "none",
-  });
   expect(builtInToolSpecs.find((spec) => spec.name === "environment.info")).toMatchObject({
     effectPolicy: "pure-read",
     replayPolicy: "boundary-owned",
-    workPolicy: "none",
+    replayScope: "work",
   });
   expect(
     environmentReportSchema.parse({
-      format: "mate.environment.v2",
+      format: "mate.environment.v3",
       workId: "work",
       snapshotAt: 1,
       filesystem: {
@@ -723,12 +704,6 @@ it("keeps known-URL research a receipt-free read and puts the reachable alternat
         access: "linux_user_permissions",
       },
       execution: { status: "configured", network: "host" },
-      research: {
-        status: "unavailable",
-        mode: "known_public_https_url_only",
-        allowedHosts: [],
-        search: false,
-      },
       attachmentInput: { status: "unavailable", scope: "visible_external_message_file" },
       artifactOutput: {
         adapterStatus: "configured",
@@ -738,7 +713,7 @@ it("keeps known-URL research a receipt-free read and puts the reachable alternat
     }),
   ).toMatchObject({
     filesystem: { access: "linux_user_permissions" },
-    research: { search: false },
+    execution: { network: "host" },
     artifactOutput: { adapterStatus: "configured", status: "unavailable" },
   });
   const built = buildBaseline(configSchema.parse(configFixture).agents[0]!, operationDocumentation),
@@ -748,8 +723,8 @@ it("keeps known-URL research a receipt-free read and puts the reachable alternat
     "Ordinary file tools and shell commands use your Linux user account and the same host paths",
     "An absolute path names that path; a relative path starts in your home directory",
     "environment.info can show your home and shared-work paths",
-    "It is not search, browsing or URL discovery",
-    "use an actually reported networked exec tool if suitable, ask a human or peer for a URL, inspect existing files/history",
+    "Ordinary networking goes through your own Linux user rather than a dedicated tool",
+    "No dedicated URL-reading or search tool exists, so report what the network actually does as an environment fact",
     "An attachment caption or metadata is not its content",
     "if the write outcome is unknown, the file may have changed",
     "distinguishes whether an artifact adapter exists for you from whether the current work target supports it",
@@ -761,26 +736,30 @@ it("keeps known-URL research a receipt-free read and puts the reachable alternat
     expect(baseline).toContain(required);
 });
 
-it("rejects a research result when its run stops or aborts while the boundary is awaiting", async () => {
+it("rechecks run eligibility and visibility after an awaited operation is overtaken", async () => {
   const stopped = setup();
   let releaseStop!: () => void, enterStop!: () => void;
   const stopEntered = new Promise<void>((resolve) => (enterStop = resolve)),
     stopGate = new Promise<void>((resolve) => (releaseStop = resolve));
-  const stoppedRouter = new ToolRouter(stopped.c, stopped.broker, {
-    environment: () => ({}),
-    research: async () => {
+  const stoppedDirectory = {
+    list: async () => {
       enterStop();
       await stopGate;
-      return { body: "late" };
+      return { spaces: [], incomplete: false };
     },
-    publish: async () => ({}),
-  });
+    spaces: async () => {
+      enterStop();
+      await stopGate;
+      return { spaces: [], incomplete: false };
+    },
+  } as unknown as ConversationDirectory;
+  const stoppedRouter = new ToolRouter(stopped.c, stopped.broker, undefined, stoppedDirectory);
   const stoppedCall = stoppedRouter.call(
     stopped.run,
     stopped.work,
-    "stopped-research",
-    "research.read",
-    { url: "https://example.com/source" },
+    "stopped-list",
+    "conversations.list",
+    {},
     new AbortController().signal,
   );
   await stopEntered;
@@ -788,30 +767,74 @@ it("rejects a research result when its run stops or aborts while the boundary is
   releaseStop();
   await expect(stoppedCall).rejects.toThrow(/run/i);
 
-  const aborted = setup(),
-    controller = new AbortController();
+  const aborted = setup();
   let releaseAbort!: () => void, enterAbort!: () => void;
   const abortEntered = new Promise<void>((resolve) => (enterAbort = resolve)),
     abortGate = new Promise<void>((resolve) => (releaseAbort = resolve));
-  const abortedRouter = new ToolRouter(aborted.c, aborted.broker, {
-    environment: () => ({}),
-    research: async () => {
+  const abortedDirectory = {
+    spaces: async () => {
       enterAbort();
       await abortGate;
-      return { body: "late" };
+      return { spaces: [], incomplete: false };
     },
-    publish: async () => ({}),
-  });
+  } as unknown as ConversationDirectory;
+  const abortedRouter = new ToolRouter(aborted.c, aborted.broker, undefined, abortedDirectory);
+  const controller = new AbortController();
   const abortedCall = abortedRouter.call(
     aborted.run,
     aborted.work,
-    "aborted-research",
-    "research.read",
-    { url: "https://example.com/source" },
+    "aborted-list",
+    "conversations.list",
+    {},
     controller.signal,
   );
   await abortEntered;
   controller.abort();
   releaseAbort();
   await expect(abortedCall).rejects.toThrow();
+});
+
+it("rechecks an operation's own visibility against access withdrawn while it awaited", async () => {
+  const base = setup(),
+    messageId = "MVISIBLE",
+    target = fixtureTarget("CTEST", "100.000001");
+  base.c.messages.record(
+    {
+      id: messageId,
+      conversationId: target.conversationId,
+      rootId: messageId,
+      order: "100000001",
+      revision: "100000001",
+      text: "an attached brief",
+      author: { kind: "human", id: "UOWNER" },
+      origin: "participant",
+      mentions: [],
+      attachments: [],
+      deleted: false,
+    },
+    ["research"],
+  );
+  let release!: () => void, entered!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve)),
+    started = new Promise<void>((resolve) => (entered = resolve));
+  const router = new ToolRouter(base.c, base.broker, {
+    attachment: async () => {
+      entered();
+      await gate;
+      return { saved: true };
+    },
+    publish: async () => ({}),
+  });
+  const call = router.call(
+    base.run,
+    base.work,
+    "save-while-awaiting",
+    "attachments.save",
+    { message: { messageId }, fileId: "FFILE", path: "brief.txt" },
+    new AbortController().signal,
+  );
+  await started;
+  base.c.messages.membership("research", "CTEST", false);
+  release();
+  await expect(call).rejects.toThrow();
 });

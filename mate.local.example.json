@@ -26,7 +26,6 @@
   },
   "runtime": {
     "dataDir": "/var/lib/mate-local",
-    "limits": { "maxActiveRuns": 1, "maxBackendOperations": 1, "workerIdleMs": 300000 },
-    "researchHosts": ["example.com"]
+    "limits": { "maxActiveRuns": 1, "maxBackendOperations": 1, "workerIdleMs": 300000 }
   }
 }

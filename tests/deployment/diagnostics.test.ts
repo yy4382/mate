@@ -274,7 +274,7 @@ it("reads persisted SQLite with OperationsView and leaves data/schema unchanged"
       ],
     },
     adapters: { local: { humans: ["owner"], rooms: [] } },
-    runtime: { dataDir: dir, researchHosts: [] },
+    runtime: { dataDir: dir },
   });
   const path = join(dir, "state", "mate.sqlite"),
     store = new Store(path);

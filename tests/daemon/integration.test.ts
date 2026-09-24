@@ -31,7 +31,6 @@ import { Ingress } from "../../src/daemon/ingress.js";
 import { acquireLock } from "../../src/daemon/lock.js";
 import { backup } from "../../src/daemon/backup.js";
 import { nodeHostOperations } from "../../src/deployment/host.js";
-import { Research, publicIPv4 } from "../../src/daemon/research.js";
 import { Controls, PendingControl } from "../../src/daemon/control.js";
 import { SlackService, formatControlReply } from "../../src/slack/service.js";
 import { Directory } from "../../src/slack/directory.js";
@@ -299,25 +298,6 @@ it("kernel lock excludes a second daemon; backup restores SQLite plus private me
     rmSync(root, { recursive: true, force: true });
   }
 });
-it("public research rejects local/metadata destinations before HTTP", async () => {
-  for (const ip of [
-    "127.0.0.1",
-    "169.254.169.254",
-    "10.0.0.1",
-    "100.64.0.1",
-    "172.16.0.1",
-    "192.168.1.1",
-    "::1",
-  ])
-    expect(publicIPv4(ip)).toBe(false);
-  expect(publicIPv4("93.184.216.34")).toBe(true);
-  await expect(
-    new Research(["example.com"]).read("https://127.0.0.1", new AbortController().signal),
-  ).rejects.toThrow("outside");
-  await expect(
-    new Research(["example.com"]).read("https://secret@example.com", new AbortController().signal),
-  ).rejects.toThrow("outside");
-});
 it("starts the Linux-user route with a separate private home and peer-visible shared work root", async () => {
   const { Daemon } = await import("../../src/daemon/app.js");
   const base = realpathSync(mkdtempSync(join(tmpdir(), "mate-linux-daemon-"))),
@@ -339,7 +319,6 @@ it("starts the Linux-user route with a separate private home and peer-visible sh
   const input = daemonFixture(data, configFixture, {
     linuxUsers: { research: user },
     sharedRoot,
-    researchHosts: [],
   });
   mkdirSync(join(data, "state"), { recursive: true, mode: 0o700 });
   chmodSync(data, 0o700);
@@ -698,7 +677,6 @@ it("routes a system request through a human Slack confirmation button before pri
   const system = new SystemOperations(store, c, ["research"], { execute }, () => 1000),
     router = new ToolRouter(c, broker, {
       system,
-      research: async () => ({}),
       publish: async () => ({}),
     });
   const mapper =
@@ -859,7 +837,6 @@ it("keeps direct system-tool refusal, expiry and changed-request replay visible 
   const system = new SystemOperations(store, c, ["research"], { execute }, () => 1000),
     router = new ToolRouter(c, broker, {
       system,
-      research: async () => ({}),
       publish: async () => ({}),
     }),
     signal = new AbortController().signal;
@@ -1097,19 +1074,15 @@ it("stop during startup retains the singleton lock until startup settles and nev
   const { deferred } = await import("../helpers/pi.js");
   const root = mkdtempSync(join(tmpdir(), "mate-start-stop-")),
     gate = deferred();
-  const config = daemonFixture(
-    root,
-    {
-      ...configFixture,
-      agents: [
-        {
-          ...configFixture.agents[0],
-          model: { provider: "anthropic", id: "claude-haiku-4-5", apiKeyEnv: "MODEL_API_KEY" },
-        },
-      ],
-    },
-    { researchHosts: [] },
-  );
+  const config = daemonFixture(root, {
+    ...configFixture,
+    agents: [
+      {
+        ...configFixture.agents[0],
+        model: { provider: "anthropic", id: "claude-haiku-4-5", apiKeyEnv: "MODEL_API_KEY" },
+      },
+    ],
+  });
   const refs = ["RESEARCH_BOT_TOKEN", "RESEARCH_APP_TOKEN", "MODEL_API_KEY"],
     saved = Object.fromEntries(refs.map((ref) => [ref, process.env[ref]]));
   for (const ref of refs) process.env[ref] = "synthetic";

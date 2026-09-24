@@ -110,7 +110,6 @@ const config = () =>
         alice: { uid: 2001, gid: 2001, username: "mate-alice", home: "/srv/mate/private/alice" },
         bob: { uid: 2002, gid: 2002, username: "mate-bob", home: "/srv/mate/private/bob" },
       },
-      researchHosts: [],
     },
   });
 const spec = (source = "/candidate", gitCommit = "abcdef1234567") =>
@@ -387,7 +386,6 @@ function restoreFixture(): RestoreFixture {
           { uid, gid, username: `mate-${agentId}`, home },
         ]),
       ),
-      researchHosts: [],
     },
   });
   return {

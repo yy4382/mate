@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import { expect, it } from "vitest";
 
@@ -98,4 +98,43 @@ it("never installs the freshness gate or the artifact transport onto a construct
     }
   }
   expect(offenders).toEqual([]);
+});
+
+// The shared router owns call lifetime, cancellation, input validation and replay identity. Which
+// task, message, permission or work item a call means belongs to the tool module that declares the
+// operation, so the shared surface must not read those out of the request by field name or look
+// them up in another domain's tables.
+it("keeps per-domain reference meaning out of the shared tool router", () => {
+  const offenders: string[] = [];
+  for (const name of ["runtime/tools.ts", "runtime/tool-contract.ts"]) {
+    const text = readFileSync(resolve(sourceRoot, name), "utf8");
+    for (const match of text.matchAll(/\bargs\s*\.\s*([A-Za-z_$][\w$]*)/g))
+      offenders.push(`${name}: reads args.${match[1]}`);
+    for (const table of ["task_intents", "reminder_firings", "message_work", "channel_access"])
+      if (text.includes(table)) offenders.push(`${name}: queries ${table}`);
+    for (const obsolete of ["authorizeReferences", "resolveWork", "taskWork", "postAwait"])
+      if (text.includes(obsolete)) offenders.push(`${name}: keeps ${obsolete}`);
+  }
+  expect(offenders).toEqual([]);
+});
+
+// AC4: ordinary Linux file, command and network ability replaces the dedicated URL reader, so the
+// removed capability must not leave a tool, a host allow-list, a prompt hint or a config field.
+it("removes the dedicated research reader, its host allow-list and its prompt hints", () => {
+  const offenders: string[] = [];
+  for (const path of sourceFiles(sourceRoot)) {
+    const name = relative(sourceRoot, path),
+      text = readFileSync(path, "utf8");
+    for (const removed of [
+      "research.read",
+      "researchHosts",
+      "allowedHosts",
+      "known_public_https_url_only",
+      "ResearchTransport",
+      "publicIPv4",
+    ])
+      if (text.includes(removed)) offenders.push(`${name}: ${removed}`);
+  }
+  expect(offenders).toEqual([]);
+  expect(existsSync(resolve(sourceRoot, "daemon/research.ts"))).toBe(false);
 });

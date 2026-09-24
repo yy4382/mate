@@ -5,7 +5,6 @@ import { slackApplication } from "./slack/application.js";
 import { CanonicalSlackTransport } from "./slack/transport.js";
 import { Artifacts } from "./daemon/artifacts.js";
 import { Controls } from "./daemon/control.js";
-import { Research } from "./daemon/research.js";
 import { LocalAdapter } from "./local/input.js";
 import type { LocalSettings } from "./local/rooms.js";
 import { Broker } from "./policy/broker.js";
@@ -38,12 +37,11 @@ import type { Store } from "./storage/store.js";
 import type { MateConfig } from "./config.js";
 import type { AgentDefinition, TeamSettings } from "./domain/agents.js";
 
-/** Runtime limits, shared work root, privileged eligibility and research hosts. */
+/** Runtime limits, shared work root and privileged eligibility. */
 export interface ApplicationRuntime {
   limits: RuntimeLimits;
   sharedRoot?: string;
   systemAgents?: readonly string[];
-  researchHosts: readonly string[];
 }
 /** External Slack facilities this entry owns. */
 export interface SlackPorts {
@@ -134,7 +132,6 @@ export class Application {
     const { store, team, ports } = input,
       runtime: ApplicationRuntime = {
         limits: input.runtime?.limits ?? defaultRuntimeLimits,
-        researchHosts: input.runtime?.researchHosts ?? [],
         ...(input.runtime?.sharedRoot ? { sharedRoot: input.runtime.sharedRoot } : {}),
         ...(input.runtime?.systemAgents ? { systemAgents: input.runtime.systemAgents } : {}),
       },
@@ -185,12 +182,10 @@ export class Application {
         homes: this.memoryRoots,
         ...(runtime.sharedRoot ? { sharedRoot: runtime.sharedRoot } : {}),
         access: process.platform === "linux" ? "linux_user_permissions" : "local_user_permissions",
-        researchHosts: runtime.researchHosts,
         attachmentConfigured: (actor) => attachments?.configured(actor) ?? false,
         artifactConfigured: (actor) => this.artifacts.configured(actor),
         artifactSupported: (actor, target) => this.artifacts.supports(actor, target),
       }),
-      research = new Research([...runtime.researchHosts]),
       directory = new TeamDirectory(
         this.messages,
         transport ? new Directory(this.messages, transport.clients, transport.mapper) : undefined,
@@ -207,7 +202,6 @@ export class Application {
         environment: (run, workId) => environment.read(run, workId),
         ...(ports.linuxProcesses ? { processes: ports.linuxProcesses } : {}),
         system: this.system,
-        research: (url, signal) => research.read(url, signal),
         publish: (...args) => this.artifacts.publish(...args),
       },
       directory,

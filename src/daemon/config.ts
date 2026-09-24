@@ -75,7 +75,6 @@ const modernConfigSchema = z
         systemAgents: z.array(agentIdSchema).optional(),
         sharedRoot: path.optional(),
         limits: runtimeLimitsSchema.default(defaultRuntimeLimits),
-        researchHosts: z.array(z.string().regex(/^[a-z0-9][a-z0-9.-]*[a-z0-9]$/)).default([]),
       })
       .strict(),
   })

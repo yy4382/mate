@@ -73,9 +73,7 @@ it("runs two Agents through direct file/exec calls and tools.call with stable ho
     router = new ToolRouter(
       collaboration,
       broker,
-      manager
-        ? { processes: manager, research: async () => ({}), publish: async () => ({}) }
-        : undefined,
+      manager ? { processes: manager, publish: async () => ({}) } : undefined,
     );
   const runs = new Map<string, { run: ReturnType<Store["beginRun"]>; work: string }>();
   for (const [agentId, root] of [
@@ -314,7 +312,6 @@ it("keeps another Agent's real command running while a slow systemctl stop is aw
   );
   const router = new ToolRouter(collaboration, broker, {
     processes: manager,
-    research: async () => ({}),
     publish: async () => ({}),
   });
   const runs = new Map<string, { run: ReturnType<Store["beginRun"]>; work: string }>();

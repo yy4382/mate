@@ -65,6 +65,24 @@ it("task wait suppresses the rest of a batch and releases the model loop", async
   expect(result).toMatchObject({ waiting: true, continuation: false });
   expect(tool).toHaveBeenCalledOnce();
 });
+it("returns an invalid or refused tool call to the model as a local result instead of failing the run", async () => {
+  const journaled: AgentMessage[] = [],
+    tool = vi.fn(async () => {
+      throw new Error("Unknown operation");
+    }),
+    result = await new Engine(
+      model,
+      scripted([call(), answer([{ type: "text", text: "adjusted" }])]),
+    ).run(spec(), {
+      journal: async (message) => void journaled.push(message),
+      tool,
+    });
+  expect(tool).toHaveBeenCalledOnce();
+  expect(result).toMatchObject({ continuation: false, certain: true });
+  const refused = journaled.find((message) => message.role === "toolResult");
+  expect(refused).toMatchObject({ isError: true, toolCallId: "c" });
+  expect(JSON.stringify(refused)).toContain("Unknown operation");
+});
 it("provider calls have durable unknown-before-request and known-after-response records without a quota", async () => {
   const calls = Array.from({ length: 5 }, () => call());
   const responses = [...calls, answer([{ type: "text", text: "done" }])];

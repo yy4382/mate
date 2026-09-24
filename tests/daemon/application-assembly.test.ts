@@ -34,19 +34,15 @@ function deployment() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "mate-assembly-"))),
     data = join(root, "data");
   cleanups.push(() => rmSync(root, { recursive: true, force: true }));
-  const config = daemonFixture(
-    data,
-    {
-      ...configFixture,
-      agents: [
-        {
-          ...configFixture.agents[0],
-          model: { provider: "anthropic", id: "claude-haiku-4-5", apiKeyEnv: "MODEL_API_KEY" },
-        },
-      ],
-    },
-    { researchHosts: [] },
-  );
+  const config = daemonFixture(data, {
+    ...configFixture,
+    agents: [
+      {
+        ...configFixture.agents[0],
+        model: { provider: "anthropic", id: "claude-haiku-4-5", apiKeyEnv: "MODEL_API_KEY" },
+      },
+    ],
+  });
   config.adapters.local = {
     humans: ["owner"],
     rooms: [{ id: "local-room", agents: ["research"], humans: ["owner"] }],

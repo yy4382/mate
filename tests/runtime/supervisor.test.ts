@@ -544,7 +544,7 @@ it("fresh review seat withholds bodies through tools, notice, recovery and held 
     ["inbox.list", {}],
     ["tasks.list", {}],
     ["conversations.members", { conversationId: "CTEST" }],
-    ["research.read", { url: "https://example.com" }],
+    ["attachments.save", { message: { messageId: "M1" }, fileId: "F1", path: "brief.txt" }],
   ] as const)
     await expect(router.call(run, work, op, op, args, signal)).rejects.toThrow("isolates");
   const result = await router.call(
