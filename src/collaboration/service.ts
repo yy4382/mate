@@ -6,7 +6,7 @@ import { ReviewSeats } from "../conversations/review-seats.js";
 import { CanonicalAttention as Attention } from "../conversations/attention.js";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { Store, encode, type RunToken } from "../storage/store.js";
+import { Store, encode, type Delivery, type RunToken } from "../storage/store.js";
 import { Conversations as Messages } from "../conversations/messages.js";
 import {
   conversationTargetSchema as targetSchema,
@@ -25,6 +25,19 @@ export interface Work {
 }
 /** One task row, with the anchor that makes it the canonical task for a message. */
 export type Task = TaskRow;
+/**
+ * The conversation a delivery's own payload names. A delivery that names no target at all is
+ * private input; one that names a target without naming a conversation is refused rather than
+ * waved through with no access check.
+ */
+function deliveryDestination(payload: unknown): string | null {
+  const target = (payload as { target?: unknown } | null)?.target;
+  if (target === undefined || target === null) return null;
+  const conversationId = (target as { conversationId?: unknown }).conversationId;
+  if (typeof conversationId !== "string" || !conversationId)
+    throw new Error("Delivery target is not a conversation");
+  return conversationId;
+}
 export class Collaboration {
   readonly agents: AgentDirectory;
   readonly reminders: Reminders;
@@ -182,6 +195,46 @@ export class Collaboration {
       this.bindDelivery(id, workId);
       return id;
     });
+  }
+  /**
+   * This Agent's own durable deliveries that are not handled yet, as content-free metadata:
+   * another Agent's delivery never appears, and one whose target this Agent may no longer read
+   * drops out instead of staying as a stale reference. The query bounds the arrivals it considers
+   * to the fifty earliest, so fewer than fifty may be visible. The scheduler - not this list -
+   * decides which delivery runs next and when a delivery stops being relevant, so one waiting on a
+   * paused or cancelled work item stays listed here.
+   */
+  inbox(agentId: string): { id: string; status: string; kind: unknown }[] {
+    return (
+      this.store.db
+        .prepare(
+          "SELECT id,payload,status FROM deliveries WHERE agent_id=? AND status!='handled' ORDER BY created_at LIMIT 50",
+        )
+        .all(agentId) as { id: string; payload: string; status: string }[]
+    ).flatMap((row) => {
+      const payload = JSON.parse(row.payload) as { kind?: unknown };
+      let destination: string | null;
+      try {
+        destination = deliveryDestination(payload);
+      } catch {
+        // Metadata about a delivery whose target is not a conversation is not readable either.
+        return [];
+      }
+      if (destination && !this.messages.access(agentId, destination)) return [];
+      return [{ id: row.id, status: row.status, kind: payload.kind }];
+    });
+  }
+  /** One own delivery with its payload decoded, re-read under the Agent's current target access. */
+  ownDelivery(
+    agentId: string,
+    deliveryId: string,
+  ): Omit<Delivery, "payload"> & { payload: unknown } {
+    const delivery = this.store.delivery(deliveryId);
+    if (delivery.agent_id !== agentId) throw new Error("Private inbox");
+    const payload = JSON.parse(delivery.payload) as unknown;
+    const destination = deliveryDestination(payload);
+    if (destination) this.messages.requireAccess(agentId, destination);
+    return { ...delivery, payload };
   }
   send(
     agentId: string,

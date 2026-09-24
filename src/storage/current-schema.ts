@@ -10,6 +10,13 @@
  * Constraints and indexes below are part of the format, not decoration: they are
  * what makes the single SQLite transaction the correctness boundary for messages,
  * tasks, deliveries, reminders, usage, drafts and operation results.
+ *
+ * `user_version` identifies the structures this release requires, not every
+ * structure a file may hold. Gaining a structure or changing what an existing one
+ * means requires a bump, because an older file must not be read as current.
+ * Dropping a structure this release no longer uses does not: `initialize` tolerates
+ * structures an earlier build of the same revision left behind and never rewrites
+ * them, so an upgraded file keeps every row while this program stops using them.
  */
 export const FORMAT_APPLICATION_ID = 0x4d415445; // "MATE"
 export const FORMAT_REVISION = 26;
@@ -133,7 +140,6 @@ CREATE TABLE runs(id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agents(
  error TEXT, created_at INTEGER NOT NULL);
 CREATE UNIQUE INDEX one_active_run ON runs(agent_id) WHERE state='active';
 CREATE TABLE run_context(run_id TEXT PRIMARY KEY REFERENCES runs(id),work_id TEXT NOT NULL REFERENCES works(id));
-CREATE TABLE inbox_reads(delivery_id TEXT PRIMARY KEY REFERENCES deliveries(id), agent_id TEXT NOT NULL REFERENCES agents(id), read_at INTEGER NOT NULL);
 
 -- Outbound messages, drafts and the freshness hold around them.
 CREATE TABLE outbox(id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agents(id), request_hash TEXT NOT NULL, request TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN ('held','pending','sending','sent','unknown','failed')),receipt TEXT, target TEXT NOT NULL DEFAULT '{}', created_at INTEGER);

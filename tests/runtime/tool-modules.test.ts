@@ -1,6 +1,10 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { Store } from "../../src/storage/store.js";
-import { configSchema } from "../../src/config.js";
+import { configSchema, type MateConfig } from "../../src/config.js";
 import { configFixture } from "../helpers/config.js";
 import { Messages, Output, anchoredTask } from "../helpers/canonical-slack.js";
 import { Collaboration } from "../../src/collaboration/service.js";
@@ -16,7 +20,7 @@ import {
   validateToolModules,
   type ToolModule,
 } from "../../src/runtime/tools.js";
-import { fixtureTarget } from "../helpers/canonical-slack.js";
+import { externalThread, fixtureTarget } from "../helpers/canonical-slack.js";
 import type { ConversationDirectory } from "../../src/conversations/directory.js";
 import { buildBaseline } from "../../src/runtime/prompt.js";
 import { environmentReportSchema } from "../../src/capabilities/environment.js";
@@ -26,49 +30,93 @@ import {
   ProcessWaitInterruptedError,
 } from "../../src/execution/linux-processes.js";
 
-const stores: Store[] = [];
-afterEach(() => stores.splice(0).forEach((store) => store.close()));
-function setup(directory?: ConversationDirectory) {
-  const config = configSchema.parse(configFixture),
-    store = new Store(":memory:");
-  stores.push(store);
-  const messages = new Messages(store, config);
-  const attention = new CanonicalAttention(messages),
+const stores: Store[] = [],
+  roots: string[] = [];
+afterEach(() => {
+  stores.splice(0).forEach((store) => {
+    if (store.db.open) store.close();
+  });
+  roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true }));
+});
+/** The assembly under test: one message store, gate, collaboration service, transport and router. */
+function assemble(
+  store: Store,
+  config: MateConfig,
+  post: () => Promise<{ ts: string }> = async () => ({ ts: "200.000001" }),
+) {
+  const messages = new Messages(store, config),
+    attention = new CanonicalAttention(messages),
     gate = new CanonicalFreshnessGate(messages, attention),
-    c = new Collaboration(
-      store,
-      messages,
-      new Output(messages, { post: async () => ({ ts: "200.000001" }) }, Date.now, gate),
-      config,
-      attention,
-    ),
+    output = new Output(messages, { post }, Date.now, gate),
+    c = new Collaboration(store, messages, output, config, attention),
     broker = new Broker(
       store,
       c,
       { execute: async () => ({ code: 0, stdout: "", stderr: "", truncated: false }) },
       {},
     );
+  return { store, messages, attention, gate, output, c, broker };
+}
+/** One application on a real database file, so building it twice restarts the same data. */
+function reopen(path: string) {
+  const config = configSchema.parse({
+      ...configFixture,
+      agents: [
+        { ...configFixture.agents[0], channels: { CTEST: "participate" } },
+        {
+          ...configFixture.agents[0],
+          id: "peer",
+          name: "Peer",
+          slackAppId: "ATWO",
+          slackUserId: "UTWO",
+          slackBotId: "BTWO",
+          botTokenEnv: "PEER_BOT_TOKEN",
+          appTokenEnv: "PEER_APP_TOKEN",
+          channels: { CTEST: "participate" },
+        },
+      ],
+    }),
+    store = new Store(path);
+  stores.push(store);
+  const app = assemble(store, config);
+  return { ...app, router: new ToolRouter(app.c, app.broker) };
+}
+/** The supervisor journals every tool result; that journal is what records presentation. */
+function journal(value: unknown): AgentMessage {
+  return {
+    role: "toolResult",
+    toolCallId: "journal",
+    toolName: "mate",
+    content: [{ type: "text", text: JSON.stringify(value) }],
+    isError: false,
+    timestamp: 0,
+  };
+}
+function setup(directory?: ConversationDirectory) {
+  const config = configSchema.parse(configFixture),
+    store = new Store(":memory:");
+  stores.push(store);
+  const post = vi.fn(async () => ({ ts: "200.000001" })),
+    app = assemble(store, config, post);
   store.register("research", "v1", []);
-  messages.membership("research", "CTEST", true);
-  const work = c.createWork("tools", fixtureTarget("CTEST", "100.000001"));
-  c.enqueue("research", work, "start", {});
+  app.messages.membership("research", "CTEST", true);
+  const work = app.c.createWork("tools", fixtureTarget("CTEST", "100.000001"));
+  app.c.enqueue("research", work, "start", {});
   const run = store.beginRun("research")!;
   store.input(run, {});
   return {
-    store,
-    c,
-    messages,
+    ...app,
+    post,
     work,
     run,
-    router: new ToolRouter(c, broker, undefined, directory),
-    broker,
+    router: new ToolRouter(app.c, app.broker, undefined, directory),
   };
 }
 const expected = `
 history.page history.search history.around history.fetch
 conversations.refresh conversations.list conversations.members conversations.openDM conversations.invite
 attention.peek attention.read attention.resolve attention.defer attention.mute
-messages.send messages.watch inbox.list inbox.read inbox.ack
+messages.send messages.watch inbox.list inbox.read
 works.list works.select tasks.list tasks.read tasks.events tasks.byMessage tasks.intents tasks.retry tasks.continue tasks.discard tasks.create tasks.claim tasks.unclaim tasks.transfer tasks.wait tasks.update tasks.delegate
 reminders.list reminders.read reminders.log reminders.finish reminders.create reminders.edit reminders.cancel
 actions.list actions.read sessions.status sessions.checkpoint sessions.reset environment.info usage.read agents drafts.list drafts.read drafts.retry drafts.continue drafts.revise drafts.discard
@@ -228,6 +276,303 @@ it("keeps mute, follow and defer as the Agent's own attention choices", async ()
   speak("105.000001");
   speak("106.000001", "<@UONE> defer postpones even a direct request");
   expect(await inbox("inbox-deferred")).toEqual(["message", "message"]);
+});
+
+it("shows this Agent's own durable reminder delivery after a restart, never a peer's inbox", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mate-inbox-"));
+  roots.push(root);
+  const path = join(root, "state.sqlite");
+  const signal = new AbortController().signal,
+    target = fixtureTarget("CTEST", "100.000001"),
+    first = reopen(path);
+  for (const actor of ["research", "peer"]) {
+    first.store.register(actor, "v1", []);
+    first.messages.membership(actor, "CTEST", true);
+  }
+  const work = first.c.createWork("tools", target);
+  first.c.enqueue("research", work, "start", {});
+  const run = first.store.beginRun("research")!;
+  first.store.input(run, {});
+  first.c.reminders.create("research", work, {
+    target,
+    content: "Check whether the completed change is still healthy",
+    nextAt: 1000,
+    timezone: "Asia/Shanghai",
+    projection: "private",
+  });
+  first.c.tick(2000);
+  const peer = first.c.enqueue("peer", work, "peer-only", { kind: "delegation", target });
+  first.store.close();
+
+  const restarted = reopen(path),
+    listed = ((await restarted.router.call(run, work, "restarted-list", "inbox.list", {}, signal))
+      .value ?? []) as { id: string; status: string; kind?: string }[];
+  // The reminder this Agent set is still its own durable inbox input after the restart.
+  expect(listed.filter((delivery) => delivery.kind === "reminder")).toEqual([
+    { id: expect.any(String), status: "pending", kind: "reminder" },
+  ]);
+  // A peer's delivery is not this Agent's inbox, and its id is not a read handle for this Agent.
+  expect(listed.map((delivery) => delivery.id)).not.toContain(peer);
+  await expect(
+    restarted.router.call(run, work, "peer-delivery", "inbox.read", { deliveryId: peer }, signal),
+  ).rejects.toThrow("Private inbox");
+  const reminder = listed.find((delivery) => delivery.kind === "reminder")!;
+  expect(
+    (
+      await restarted.router.call(
+        run,
+        work,
+        "own-delivery",
+        "inbox.read",
+        { deliveryId: reminder.id },
+        signal,
+      )
+    ).value,
+  ).toMatchObject({
+    id: reminder.id,
+    agent_id: "research",
+    status: "pending",
+    payload: {
+      kind: "reminder",
+      content: "Check whether the completed change is still healthy",
+    },
+  });
+});
+
+it("advances scheduling and attention independently, so neither settles the other", async () => {
+  const { router, run, work, store, c, messages } = setup(),
+    signal = new AbortController().signal,
+    target = { conversationId: "CTEST" },
+    thread = externalThread(fixtureTarget("CTEST", "100.000001")),
+    speak = (ts: string) =>
+      messages.record(
+        {
+          team: "TTEST",
+          channel: "CTEST",
+          ts,
+          thread,
+          revision: ts,
+          text: "ordinary background activity",
+          user: "UOWNER",
+          deleted: false,
+        },
+        ["research"],
+      );
+  // A task change arrives as durable input while a peer message arrives as unread attention.
+  const delegation = c.enqueue("research", work, "task-change", { kind: "delegation", target });
+  speak("101.000001");
+  expect((await router.call(run, work, "peek", "attention.peek", {}, signal)).value).toMatchObject([
+    { unseen: 1 },
+  ]);
+  // Attention's own choice settles attention and leaves the delivery queue where the scheduler left it.
+  await router.call(
+    run,
+    work,
+    "resolve",
+    "attention.resolve",
+    { target, throughRevision: c.attention.revision(target, "research") },
+    signal,
+  );
+  expect(c.attention.peek("research")).toEqual([]);
+  expect(store.delivery(delegation).status).toBe("pending");
+  expect(store.delivery(run.deliveryId).status).toBe("injected");
+  // The scheduler's own completion settles the delivery it ran and leaves unread attention alone.
+  speak("102.000001");
+  expect(c.attention.peek("research")).toMatchObject([{ unseen: 1 }]);
+  store.finish(run);
+  expect(store.delivery(run.deliveryId).status).toBe("handled");
+  expect(store.delivery(delegation).status).toBe("pending");
+  expect(c.attention.peek("research")).toMatchObject([{ unseen: 1 }]);
+});
+
+it("keeps a quiet history read from presenting, processing or waking anybody", async () => {
+  const { router, run, work, store, c, messages } = setup(),
+    signal = new AbortController().signal,
+    target = { conversationId: "CTEST" },
+    counted = (sql: string) => (store.db.prepare(sql).get() as { n: number }).n;
+  messages.record(
+    {
+      team: "TTEST",
+      channel: "CTEST",
+      ts: "101.000001",
+      thread: externalThread(fixtureTarget("CTEST", "100.000001")),
+      revision: "101.000001",
+      text: "ordinary background activity",
+      user: "UOWNER",
+      deleted: false,
+    },
+    ["research"],
+  );
+  const deliveries = counted("SELECT count(*) n FROM deliveries"),
+    due = counted(
+      "SELECT count(*) n FROM deliveries WHERE json_extract(payload,'$.kind')='attention_due'",
+    );
+  const page = (await router.call(run, work, "page", "history.page", { target, limit: 5 }, signal))
+    .value as { messages: { text: string }[] };
+  expect(page.messages.map((message) => message.text)).toEqual(["ordinary background activity"]);
+  expect(page).not.toHaveProperty("viewToken");
+  // The read observed the discussion without presenting, processing or waking the Agent.
+  expect(counted("SELECT count(*) n FROM attention_presented")).toBe(0);
+  expect(counted("SELECT count(*) n FROM attention_seen")).toBe(0);
+  expect(c.attention.peek("research")).toMatchObject([{ unseen: 1 }]);
+  expect(counted("SELECT count(*) n FROM deliveries")).toBe(deliveries);
+  expect(
+    counted(
+      "SELECT count(*) n FROM deliveries WHERE json_extract(payload,'$.kind')='attention_due'",
+    ),
+  ).toBe(due);
+});
+
+it("passes attention.read's own cursor back to the same frozen view", async () => {
+  const { router, run, work, messages } = setup(),
+    signal = new AbortController().signal,
+    target = { conversationId: "CTEST" },
+    thread = externalThread(fixtureTarget("CTEST", "100.000001")),
+    texts = Array.from({ length: 22 }, (_, n) => `synthetic ${n}`),
+    read = async (callId: string, input: unknown) =>
+      (await router.call(run, work, callId, "attention.read", input, signal)).value as {
+        viewToken: string;
+        page: number;
+        nextCursor: string | null;
+        messages: { text: string }[];
+      };
+  texts.forEach((text, n) =>
+    messages.record(
+      {
+        team: "TTEST",
+        channel: "CTEST",
+        ts: `${100 + n}.000001`,
+        thread,
+        revision: `${100 + n}.000001`,
+        text,
+        user: "UOWNER",
+        deleted: false,
+      },
+      ["research"],
+    ),
+  );
+  const first = await read("read-first", { target });
+  expect(first.page).toBe(0);
+  expect(first.nextCursor).toBe(`${first.viewToken}:1`);
+  const second = await read("read-next", { target, cursor: first.nextCursor });
+  expect(second.viewToken).toBe(first.viewToken);
+  expect(second.page).toBe(1);
+  expect(second.nextCursor).toBeNull();
+  expect([...first.messages, ...second.messages].map((message) => message.text)).toEqual(texts);
+  // A later read opens a new view instead of extending the frozen one.
+  expect((await read("read-fresh", { target })).viewToken).not.toBe(first.viewToken);
+});
+
+it("keeps silence and every pre-send choice reachable on a held draft", async () => {
+  const { router, run, work, c, post } = setup(),
+    signal = new AbortController().signal,
+    target = { conversationId: "CTEST" },
+    propose = async (callId: string, text: string) =>
+      (await router.call(run, work, callId, "messages.send", { target, text }, signal)).value as {
+        draftId: string;
+        revision: number;
+        status: string;
+        holdId: string | null;
+        choices: string[];
+        text: string;
+      };
+  // Silence is reachable: proposing output only creates a draft, and nothing is delivered for it.
+  const first = await propose("propose", "first proposal");
+  expect(first.status).toBe("held");
+  expect(first.choices).toEqual(["retry_with_view", "revise", "discard", "continue_once"]);
+  expect(post).not.toHaveBeenCalled();
+  // Revise, then discard the revised draft.
+  const revised = (
+    await router.call(
+      run,
+      work,
+      "revise",
+      "drafts.revise",
+      { draftId: first.draftId, revision: first.revision, text: "revised proposal" },
+      signal,
+    )
+  ).value as { revision: number; status: string; text: string };
+  expect(revised).toMatchObject({ revision: 2, status: "held", text: "revised proposal" });
+  const discarded = (
+    await router.call(
+      run,
+      work,
+      "discard",
+      "drafts.discard",
+      { draftId: first.draftId, revision: revised.revision },
+      signal,
+    )
+  ).value as { status: string };
+  expect(discarded.status).toBe("failed");
+  // Retry only after a current view was actually presented.
+  const second = await propose("propose-again", "second proposal");
+  const view = (await router.call(run, work, "view", "attention.read", { target }, signal))
+    .value as { viewToken: string };
+  expect(
+    (
+      await router.call(
+        run,
+        work,
+        "retry-without-view",
+        "drafts.retry",
+        { draftId: second.draftId, revision: second.revision, viewToken: "foreign" },
+        signal,
+      )
+    ).value,
+  ).toMatchObject({ status: "held" });
+  c.attention.presented(run, journal(view));
+  const retried = (
+    await router.call(
+      run,
+      work,
+      "retry-with-view",
+      "drafts.retry",
+      { draftId: second.draftId, revision: second.revision, viewToken: view.viewToken },
+      signal,
+    )
+  ).value as { status: string };
+  expect(retried.status).toBe("pending");
+  // Informed continue needs the hold receipt the conflict reported.
+  const third = await propose("propose-once-more", "third proposal");
+  await expect(
+    router.call(
+      run,
+      work,
+      "continue-without-receipt",
+      "drafts.continue",
+      {
+        draftId: third.draftId,
+        revision: third.revision,
+        holdId: "not-the-reported-receipt",
+        acknowledge: "send_despite_unread_or_changes",
+      },
+      signal,
+    ),
+  ).rejects.toThrow("receipt");
+  expect(
+    (
+      await router.call(
+        run,
+        work,
+        "continue-with-receipt",
+        "drafts.continue",
+        {
+          draftId: third.draftId,
+          revision: third.revision,
+          holdId: third.holdId,
+          acknowledge: "send_despite_unread_or_changes",
+        },
+        signal,
+      )
+    ).value,
+  ).toMatchObject({ status: "pending" });
+  // Silence is real rather than only a draft state: the discarded draft never reaches the
+  // transport, while the draft the Agent informedly continued is delivered when the output
+  // worker runs it.
+  await c.output.send(first.draftId);
+  expect(post).not.toHaveBeenCalled();
+  await c.output.send(third.draftId);
+  expect(post).toHaveBeenCalledOnce();
 });
 
 it("fails closed for duplicate, reserved, incomplete and unknown module specifications", () => {
@@ -622,7 +967,32 @@ it("lets an Agent inspect and stop its Linux scope after the attributed work pau
   expect(stop).toHaveBeenCalledOnce();
 });
 
-it("keeps private recovery and inbox acknowledgement available after work pauses", async () => {
+it("retires the unused inbox acknowledgement instead of recording a second delivery state", async () => {
+  const { router, run, work, store } = setup(),
+    signal = new AbortController().signal;
+  expect(builtInToolSpecs.map((entry) => entry.name)).not.toContain("inbox.ack");
+  await expect(
+    router.call(run, work, "retired-ack", "inbox.ack", { deliveryId: run.deliveryId }, signal),
+  ).rejects.toThrow("Unknown operation");
+  expect(
+    store.db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='inbox_reads'")
+      .get(),
+  ).toBeUndefined();
+  // Listing and reading observe the durable delivery; the scheduler still owns its status.
+  await router.call(run, work, "list-not-handled", "inbox.list", {}, signal);
+  await router.call(
+    run,
+    work,
+    "read-not-handled",
+    "inbox.read",
+    { deliveryId: run.deliveryId },
+    signal,
+  );
+  expect(store.delivery(run.deliveryId).status).toBe("injected");
+});
+
+it("keeps private recovery and own inbox reads available after work pauses", async () => {
   const base = setup(),
     signal = new AbortController().signal;
   base.store.db.prepare("UPDATE works SET state='paused' WHERE id=?").run(base.work);
@@ -637,15 +1007,15 @@ it("keeps private recovery and inbox acknowledgement available after work pauses
   expect(checkpoint.value).toMatchObject({
     checkpoint: { text: "Continue the user objective later." },
   });
-  const acknowledged = await base.router.call(
+  const read = await base.router.call(
     base.run,
     base.work,
-    "paused-ack",
-    "inbox.ack",
+    "paused-read",
+    "inbox.read",
     { deliveryId: base.run.deliveryId },
     signal,
   );
-  expect(acknowledged.value).toMatchObject({ id: base.run.deliveryId });
+  expect(read.value).toMatchObject({ id: base.run.deliveryId });
 });
 
 it("lets an Agent discard its own held output after the attributed work pauses", async () => {

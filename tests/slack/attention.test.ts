@@ -71,6 +71,37 @@ it("peek, partial or altered responses never acknowledge body presentation", () 
   expect(a.valid(run, target, read.viewToken)).toBe(false);
   expect(a.peek("research")).toMatchObject([{ unseen: 1 }]);
 });
+it("keeps a paged snapshot frozen while its sending credential waits for every page", () => {
+  const { m, a, run } = setup(),
+    texts = Array.from({ length: 22 }, (_, n) => `synthetic ${n}`);
+  for (let n = 0; n < 22; n++) m.record(message(n), ["research"]);
+  const first = a.read(run, target) as any;
+  expect(first.page).toBe(0);
+  expect(first.coverage.pageCount).toBeGreaterThan(1);
+  expect(first.nextCursor).toBe(`${first.viewToken}:1`);
+  a.presented(run, result(first));
+  // Fewer pages were presented than the snapshot holds, so no send credential exists yet.
+  expect(a.valid(run, target, first.viewToken)).toBe(false);
+  // The snapshot is frozen: a message arriving after it was opened is not in its remaining page.
+  m.record(message(30), ["research"]);
+  const second = a.read(run, target, first.nextCursor) as any;
+  expect(second.viewToken).toBe(first.viewToken);
+  expect(second.nextCursor).toBeNull();
+  expect(
+    [...first.messages, ...second.messages].map((item: { text: string }) => item.text),
+  ).toEqual(texts);
+  a.presented(run, result(second));
+  // Every page is presented now, but the discussion moved on, so that credential is stale.
+  expect(a.valid(run, target, first.viewToken)).toBe(false);
+  const fresh = a.read(run, target) as any;
+  let page: any = fresh;
+  for (;;) {
+    a.presented(run, result(page));
+    if (!page.nextCursor) break;
+    page = a.read(run, target, page.nextCursor);
+  }
+  expect(a.valid(run, target, fresh.viewToken)).toBe(true);
+});
 it("editing, late older messages and context replacement invalidate receipts, duplicate events do not", () => {
   const { m, a, run } = setup();
   m.record(message(), ["research"]);
