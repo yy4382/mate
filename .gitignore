@@ -9,3 +9,4 @@ data/
 *.log
 docs/reference/raft-*.md
 mate.local.json
+.worktrees/
