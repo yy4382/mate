@@ -30,14 +30,14 @@ it('bounds backend operations and releases a slot after cancellation or failure'
   expect(calls).toEqual(['first','third','failure','after-failure']);
 });
 
-it('releases run admission when pre-run accounting throws',async()=>{
+it('releases run admission when run binding fails',async()=>{
   const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-admission-error-')));cleanup.push(()=>rmSync(root,{recursive:true,force:true}));
   const raw=JSON.parse(readFileSync(resolve('mate.local.example.json'),'utf8'));raw.runtime.dataDir=join(root,'data');const daemon=await Daemon.create(daemonConfigSchema.parse(raw),{info:()=>{},error:()=>{}});cleanup.push(()=>daemon.close());
-  const work=daemon.collaboration.createWork('accounting-failure',{conversationId:'team-room'});daemon.collaboration.enqueue('research',work,'retain-input',{});
-  const account=vi.spyOn(daemon.collaboration.ledger,'account').mockImplementationOnce(()=>{throw new Error('synthetic accounting failure');});
-  await expect(daemon.supervisor.step('research')).rejects.toThrow('synthetic accounting failure');
-  expect((daemon.supervisor as any).admission.snapshot()).toEqual({active:0,queued:0,limit:1});account.mockRestore();
-  vi.spyOn(daemon.supervisor,'factory').mockReturnValue({close(){},async run(){return{tokens:1,cost:0,certain:true,waiting:false,continuation:false};}});
+  const work=daemon.collaboration.createWork('binding-failure',{conversationId:'team-room'});daemon.collaboration.enqueue('research',work,'retain-input',{});
+  const binding=vi.spyOn(daemon.collaboration,'bindRunWork').mockImplementationOnce(()=>{throw new Error('synthetic binding failure');});
+  await expect(daemon.supervisor.step('research')).resolves.toBe(true);
+  expect((daemon.supervisor as any).admission.snapshot()).toEqual({active:0,queued:0,limit:1});binding.mockRestore();
+  daemon.store.resume('research');vi.spyOn(daemon.supervisor,'factory').mockReturnValue({close(){},async run(){return{tokens:1,cost:0,certain:true,waiting:false,continuation:false};}});
   await expect(daemon.supervisor.step('research')).resolves.toBe(true);
 });
 

@@ -23,7 +23,7 @@ export class Reminders{
    s.db.prepare('INSERT INTO schedules(id,agent_id,work_id,task_id,target,next_at,cron,timezone,content,anchor,legacy,projection) VALUES(?,?,?,?,?,?,?,?,?,?,0,?)').run(id,actor,workId,input.taskId??null,encode(input.target),input.nextAt,input.cron??null,input.timezone,input.content,input.anchor?encode(input.anchor):null,input.projection??'private');
    if(Number(s.db.pragma('user_version',{simple:true}))>=23)s.db.prepare('INSERT INTO reminder_event_baselines VALUES(?,1,?)').run(id,Date.now());
    this.c.messages.writes.mutable('schedules',id);
-   const reminder=this.read(actor,id);this.event(reminder,'created',{budgetPolicy:'persistent_agent_account_and_bound_work_cap'});return reminder;
+   const reminder=this.read(actor,id);this.event(reminder,'created',{});return reminder;
   });
  }
  edit(actor:string,id:string,expectedVersion:number,input:ReminderInput):unknown{
@@ -62,12 +62,11 @@ export class Reminders{
  });}
  cancelWork(workId:string):void{for(const r of this.c.store.db.prepare('SELECT * FROM schedules WHERE work_id=? AND active=1').all(workId) as Reminder[]){this.c.store.db.prepare('UPDATE schedules SET active=0,version=version+1 WHERE id=?').run(r.id);this.event({...r,version:r.version+1},'owner_work_cancelled',{});}}
  tick(now:number):void{
-  const c=this.c,s=c.store;for(const actor of c.config.agents)c.ledger.account(actor.id);
-  const due=s.db.prepare("SELECT r.* FROM schedules r JOIN works w ON w.id=r.work_id JOIN agents a ON a.id=r.agent_id JOIN budget_accounts b ON b.agent_id=r.agent_id JOIN channel_access acl ON acl.agent_id=r.agent_id AND acl.channel=json_extract(r.target,'$.conversationId') AND acl.active=1 WHERE r.active=1 AND r.next_at<=? AND w.state='active' AND a.paused=0 AND b.runs<b.max_runs AND b.tokens<b.max_tokens AND b.cost<b.max_cost AND w.runs<w.max_runs AND w.tokens<w.max_tokens AND w.cost<w.max_cost ORDER BY r.next_at,r.id LIMIT 100").all(now) as Reminder[];
+  const c=this.c,s=c.store;
+  const due=s.db.prepare("SELECT r.* FROM schedules r JOIN works w ON w.id=r.work_id JOIN agents a ON a.id=r.agent_id JOIN channel_access acl ON acl.agent_id=r.agent_id AND acl.channel=json_extract(r.target,'$.conversationId') AND acl.active=1 WHERE r.active=1 AND r.next_at<=? AND w.state='active' AND a.paused=0 ORDER BY r.next_at,r.id LIMIT 100").all(now) as Reminder[];
   for(const r of due){c.messages.records.mutableTarget('schedules',r.id);const target=JSON.parse(r.target) as Target;if(!c.messages.access(r.agent_id,target.conversationId))continue;
-   const account=c.ledger.account(r.agent_id),work=c.work(r.work_id);if(account.runs>=account.max_runs||account.tokens>=account.max_tokens||account.cost>=account.max_cost||work.runs>=work.max_runs||work.tokens>=work.max_tokens||work.cost>=work.max_cost)continue;
    const firing=`reminder:${r.id}:${r.version}:${r.next_at}`;
-   const delivery=c.enqueue(r.agent_id,r.work_id,firing,{kind:'reminder',firingId:firing,reminderId:r.id,version:r.version,content:r.content,taskId:r.task_id,anchor:r.anchor?JSON.parse(r.anchor):null,target,dueAt:r.next_at,receivedAt:now,budgetPolicy:'persistent_agent_account_and_bound_work_cap'});
+   const delivery=c.enqueue(r.agent_id,r.work_id,firing,{kind:'reminder',firingId:firing,reminderId:r.id,version:r.version,content:r.content,taskId:r.task_id,anchor:r.anchor?JSON.parse(r.anchor):null,target,dueAt:r.next_at,receivedAt:now});
    let output:string|null=null;if(r.projection==='conversation_receipt'){
     output=`${firing}:receipt`;c.messages.writes.queueOutput(r.agent_id,output,{target,text:`Reminder ${r.id} fired for ${r.agent_id} (version ${r.version}, due ${new Date(r.next_at).toISOString()}).`});s.db.prepare('INSERT INTO output_work VALUES(?,?)').run(output,r.work_id);s.db.prepare("INSERT INTO system_projections VALUES(?,'reminder',?,?)").run(output,r.id,r.version);c.output.gate?.queued(r.agent_id,output);
    }

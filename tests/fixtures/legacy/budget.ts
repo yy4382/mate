@@ -1,10 +1,11 @@
 import { z } from 'zod';
-import type { TeamSettings } from '../domain/agents.js';
-import type { Store, RunToken } from '../storage/store.js';
+import type { Store, RunToken } from '../../../src/storage/store.js';
+export const legacyBudgets = { maxRuns: 20, maxTokens: 100000, maxCostUsd: 5, runTimeoutMs: 120000 } as const;
+interface LegacyBudgetConfig { agents: { id: string }[]; ownerUserIds: string[]; budgets: typeof legacyBudgets }
 export interface Account { agent_id: string; max_runs: number; max_tokens: number; max_cost: number; runs: number; tokens: number; cost: number }
 /** Persistent finite account. Only config seeds it; only the owner changes limits. */
 export class BudgetLedger {
-  constructor(readonly store: Store, readonly config: TeamSettings) {}
+  constructor(readonly store: Store, readonly config: LegacyBudgetConfig) {}
   account(actor: string): Account {
     if (!this.config.agents.some(a=>a.id===actor)) throw new Error('Unknown Agent');
     return this.store.atomic(()=>{

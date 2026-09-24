@@ -33,12 +33,15 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   const [command, configPath, destination] = args;
   if (command === 'models') { process.stdout.write(JSON.stringify(builtinModels().getModels(configPath).map(m => ({ provider: m.provider, id: m.id, contextWindow: m.contextWindow })), null, 2) + '\n'); return; }
   if (!['check','doctor','offline-probe','start','local','backup','restore','migrate'].includes(command ?? '') || !configPath) throw new Error('Usage: mate check|doctor|offline-probe|start|local CONFIG; mate backup CONFIG DESTINATION; mate restore CONFIG BACKUP [--replace CURRENT_CHECKPOINT]; mate models [PROVIDER]');
-  const config = daemonConfigSchema.parse(JSON.parse(readFileSync(resolve(configPath), 'utf8')));
+  const rawConfig=JSON.parse(readFileSync(resolve(configPath), 'utf8'));
+  const legacyQuotaConfig=Boolean(rawConfig?.mate?.budgets);
+  const config = daemonConfigSchema.parse(rawConfig);
+  if(command==='start'&&legacyQuotaConfig)process.stderr.write('Mate: legacy mate.budgets quotas are ignored; only runTimeoutMs is used.\n');
   if(process.platform==='linux'&&!config.runtime.linuxUsers)throw new Error('Linux deployment requires one Linux user for every Agent');
   const releaseRoot=process.argv[1]?dirname(dirname(dirname(resolve(process.argv[1])))):resolve('.');
   if(command==='doctor'){
     if(destination&&destination!=='--allow-missing-secrets')throw new Error('Unknown doctor option');if(args[3])throw new Error('Unknown doctor option');
-    const report=await runDoctor(config,undefined,{releaseRoot,requireSecrets:destination!=='--allow-missing-secrets'});process.stdout.write(`${JSON.stringify(report,null,2)}\n`);if(!report.healthy)process.exitCode=1;return;
+    const report=await runDoctor(config,undefined,{releaseRoot,requireSecrets:destination!=='--allow-missing-secrets',legacyQuotaConfig});process.stdout.write(`${JSON.stringify(report,null,2)}\n`);if(!report.healthy)process.exitCode=1;return;
   }
   if(command==='offline-probe'){
     if(destination)throw new Error('Unknown offline-probe option');assertLinuxMaintenanceStopped(config);assertLinuxOperationAllowed('offline-probe',config);const report=await runOfflineProbe(config);process.stdout.write(`${JSON.stringify(report,null,2)}\n`);return;

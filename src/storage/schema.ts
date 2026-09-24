@@ -171,3 +171,20 @@ CREATE TABLE system_requests(
 CREATE INDEX system_requests_pending ON system_requests(status,expires);
 PRAGMA user_version=24;
 `;
+
+/** Calls before this migration are backfilled from durable assistant messages only. */
+export const modelUsageSchema = `
+CREATE TABLE model_usage(
+ run_id TEXT NOT NULL REFERENCES runs(id), call_index INTEGER NOT NULL,
+ agent_id TEXT NOT NULL REFERENCES agents(id), work_id TEXT REFERENCES works(id),
+ provider TEXT NOT NULL, model_id TEXT NOT NULL,
+ state TEXT NOT NULL CHECK(state IN ('unknown','known')),
+ input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER, cache_write_tokens INTEGER,
+ total_tokens INTEGER, estimated_cost_usd REAL,
+ source TEXT NOT NULL CHECK(source IN ('runtime','journal_backfill')),
+ PRIMARY KEY(run_id,call_index)
+);
+CREATE INDEX model_usage_agent ON model_usage(agent_id,run_id);
+CREATE INDEX model_usage_work ON model_usage(work_id,run_id);
+PRAGMA user_version=25;
+`;

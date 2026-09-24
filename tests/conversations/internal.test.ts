@@ -11,7 +11,7 @@ import {Broker} from '../../src/policy/broker.js';
 import {ToolRouter} from '../../src/runtime/tools.js';
 import {Supervisor} from '../../src/runtime/supervisor.js';
 import {TeamDirectory} from '../../src/conversations/team-directory.js';
-const settings:TeamSettings={agents:['alice','bob','outsider'].map(id=>({id,name:id,role:'colleague',model:{provider:'test',id:'test',apiKeyEnv:'TEST_KEY'}})),ownerUserIds:['local-owner'],budgets:{maxRuns:100,maxTokens:1000000,maxCostUsd:20,runTimeoutMs:10000}};
+const settings:TeamSettings={agents:['alice','bob','outsider'].map(id=>({id,name:id,role:'colleague',model:{provider:'test',id:'test',apiKeyEnv:'TEST_KEY'}})),ownerUserIds:['local-owner'],runTimeoutMs:10000};
 const cleanup:(()=>void)[]=[];afterEach(()=>cleanup.splice(0).reverse().forEach(fn=>fn()));
 function setup(path=':memory:'){
  const s=new Store(path);cleanup.push(()=>s.close());const app=localApplication(s,settings);
@@ -53,7 +53,7 @@ it('rolls back an interrupted internal commit and retries once after reopening',
  expect(second.s.db.prepare("SELECT count(*) n FROM deliveries WHERE agent_id='bob'").get()).toEqual({n:1});
  expect(()=>second.collaboration.send('alice',work,dm,'changed','send')).toThrow('identity conflict');
 });
-it('local human input uses the real Supervisor and isolated Agent budgets without Slack configuration',async()=>{
+it('local human input uses the real Supervisor and isolated Agent sessions without Slack configuration',async()=>{
  const f=setup(),room=f.input.createRoom('opaque-local-room',['alice','bob'],['local-owner']);
  const input=f.input.receive('local-owner','human-1',room,'please investigate');
  expect(f.input.receive('local-owner','human-1',room,'please investigate')).toEqual(input);
@@ -67,7 +67,7 @@ it('local human input uses the real Supervisor and isolated Agent budgets withou
  vi.useFakeTimers({toFake:['Date']});vi.setSystemTime(Date.now()+21000);
  try{await supervisor.step('alice');await supervisor.step('bob');}finally{vi.useRealTimers();}
  expect(seen).toHaveLength(2);expect(f.messages.message('alice',input.messageId).text).toBe('please investigate');
- expect(f.collaboration.ledger.account('alice').tokens).toBe(7);expect(f.collaboration.ledger.account('bob').tokens).toBe(7);
+ expect((f.s.db.prepare("SELECT count(*) n FROM runs WHERE state='complete'").get() as {n:number}).n).toBe(2);
 });
 it('routes persisted external DM actions back to their original adapter',async()=>{
  const f=setup(),run=f.run('alice');
@@ -88,7 +88,7 @@ it('preserves review-seat isolation when a peer sends an internal DM before rest
  const router=new ToolRouter(second.collaboration,broker,undefined,second.directory);let observed='';
  const supervisor=new Supervisor(second.collaboration,router,settings,()=>({close(){},async run(spec){observed=JSON.stringify(spec);return{tokens:1,cost:0,certain:true,waiting:false,continuation:false};}}));cleanup.push(()=>supervisor.close());supervisor.register();
  expect(await supervisor.step('bob')).toBe(true);expect(observed).toContain('independent brief');expect(observed).not.toContain('PRIVATE_PEER_ARGUMENT');
- expect(second.collaboration.ledger.account('bob').tokens).toBe(1);
+ expect((second.s.db.prepare("SELECT count(*) n FROM runs WHERE agent_id='bob' AND state='complete'").get() as {n:number}).n).toBe(1);
 });
 it('Slack background membership and history never pass internal identifiers to its mapper',async()=>{
  const {SlackService}=await import('../../src/slack/service.js');const f=setup(),run=f.run('alice');

@@ -13,8 +13,8 @@
 - Build Mate: a personal Slack environment for persistent, autonomous Agent colleagues. The product baseline is `docs/PROJECT_DIRECTION.md`; the model chooses attention, collaboration, work organization, and whether to speak.
 - Use `@earendil-works/pi-agent-core` and `@earendil-works/pi-ai`. The user explicitly rejected using `pi-coding-agent` as the runtime. Do not reintroduce it.
 - Preserve one active logical session/context per Agent across Slack channels, threads and DMs; different Agents have independent sessions and private memory.
-- Preserve autonomous peer collaboration, persistent inbox/tasks/wakeups, restart recovery, real tools, explicit output routing and controllable budgets.
-- Keep conversation visibility, canonical message-task ownership, run scheduling, budget attribution, and execution authorization separate. Do not make a work/budget ID a blanket read/action boundary or force peer collaboration through a task tree or lead.
+- Preserve autonomous peer collaboration, persistent inbox/tasks/wakeups, restart recovery, real tools, explicit output routing and durable model-usage records without token, cost or run quotas.
+- Keep conversation visibility, canonical message-task ownership, run scheduling, usage attribution, and execution authorization separate. Do not make a work ID a blanket read/action boundary or force peer collaboration through a task tree or lead.
 - Agent-owned workspace/memory is flexible; do not prescribe what private knowledge the Agent may retain. MEMORY.md is a recovery entry point, not the whole workspace capability.
 - Message freshness gating surfaces concurrent changes and preserves the Agent's choices to revise, retry, stay silent, or explicitly continue. It is not command review or model-quality filtering. Preserve unread/seen/deferred distinctions; never claim Slack offers an atomic room-version send contract.
 - Review product-semantic fidelity and reachable alternative choices as well as correctness/recovery. Passing a scripted happy path does not establish the entire action space.

@@ -18,6 +18,7 @@ export async function deploymentMain(args = process.argv.slice(2)): Promise<void
   if (!input || args[2] || !['plan', 'preflight', 'install', 'upgrade', 'disable'].includes(command ?? '')) throw new Error('Usage: mate-deploy plan|preflight|install|upgrade SPEC; mate-deploy rollback|finalize; mate-deploy disable CONFIG');
   if (command === 'disable') { const config = daemonConfigSchema.parse(JSON.parse(readFileSync(resolve(input), 'utf8'))); disableLinuxDeployment(config); process.stdout.write('Mate is disabled; state, homes and checkpoints were retained.\n'); return; }
   const { spec, config } = readLinuxDeploymentInputs(input), host = nodeLinuxInstallerHost();
+  if(command==='install'&&JSON.parse(readFileSync(spec.configSource,'utf8'))?.mate?.budgets)throw new Error('New installs must use runTimeoutMs; model quotas are unsupported');
   if (command === 'plan') { process.stdout.write(`${JSON.stringify(createLinuxDeploymentPlan(spec, config, host), null, 2)}\n`); return; }
   if (command === 'preflight') { process.stdout.write(`${JSON.stringify(preflightLinuxDeployment(spec, config, host), null, 2)}\n`); return; }
   if (command === 'upgrade') { process.stdout.write(`${JSON.stringify(await upgradeLinuxDeployment(spec, config, host), null, 2)}\n`); return; }

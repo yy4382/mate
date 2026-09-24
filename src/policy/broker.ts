@@ -27,7 +27,7 @@ export class Broker {
     this.store.atomic(() => { this.store.assertRun(run); this.store.startAction(run, actionId); });
     try {
       const result = await this.backend.execute({ agentId: run.agentId, root: home, operation,
-        timeoutMs: Math.min(60000, this.collaboration.config.budgets.runTimeoutMs) }, signal);
+        timeoutMs: Math.min(60000, this.collaboration.config.runTimeoutMs) }, signal);
       this.store.settleAction(run, actionId, result.code === 0 ? 'succeeded' : 'failed', result);
       return result;
     } catch (error) {

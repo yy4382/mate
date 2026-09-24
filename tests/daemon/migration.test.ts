@@ -22,21 +22,21 @@ function fixture(){
  saveConfiguration(store,previous);
  const messages=new Messages(store,slackRuntimeConfig(previous)!);migrateCurrentRuntime(store);const c=new Collaboration(store,messages,new Output(messages,{post:async()=>({ts:'100.000002'})}),previous.mate);messages.membership('research','CTEST',true);
  const broker=new Broker(store,c,{execute:async()=>({code:0,stdout:'',stderr:'',truncated:false})},{research:own}),router=new ToolRouter(c,broker),work=c.createWork('migration',{conversationId:'CTEST'});
- c.ledger.account('research');
+
  const next=structuredClone(previous);next.mate.agents[0]!.role='An evolving research role';
  return{root,data,path,own,previous,next,store,c,router,work,broker};
 }
-it('offline migration backs up memory, updates the baseline, and preserves debt, tasks, reminders and unknown receipts',async()=>{
+it('offline migration backs up memory, updates the baseline, and preserves tasks, reminders, context and unknown receipts',async()=>{
  const f=fixture(),{store,c,work}=f;const task=c.createTask('research',work,{conversationId:'CTEST'},'ongoing');
  const reminder=c.reminders.create('research',work,{target:{conversationId:'CTEST'},content:'future follow-up',nextAt:Date.now()+100000,timezone:'UTC'});
- c.enqueue('research',work,'unfinished',{});const run=store.beginRun('research')!;store.input(run,{role:'user',content:'PRESERVE_HISTORY',timestamp:0});c.reserve(run,work,500,0.1);
+ c.enqueue('research',work,'unfinished',{});const run=store.beginRun('research')!;store.input(run,{role:'user',content:'PRESERVE_HISTORY',timestamp:0});c.bindRunWork(run,work);
  store.prepareAction(run,'OLD_UNKNOWN',{workId:work,operation:{kind:'exec',command:'synthetic'}});store.startAction(run,'OLD_UNKNOWN');
  f.router.sessions.checkpoint('research','durable checkpoint');store.close();
  const result=await migrateConfiguration(f.previous,f.next,join(f.root,'backup'));expect(result.agents).toEqual(['research']);
  const reopened=new Store(f.path);try{
   const current=(reopened.db.prepare("SELECT session_id FROM agents WHERE id='research'").get() as any).session_id;
   expect(current).not.toBe(run.sessionId);expect(JSON.stringify(reopened.context(current))).toContain('PRESERVE_HISTORY');expect(JSON.stringify(reopened.context(current))).toContain('An evolving research role');
-  expect(reopened.action('OLD_UNKNOWN')?.state).toBe('unknown');expect(reopened.db.prepare("SELECT tokens FROM budget_accounts WHERE agent_id='research'").get()).toEqual({tokens:500});
+  expect(reopened.action('OLD_UNKNOWN')?.state).toBe('unknown');expect(reopened.db.prepare('SELECT work_id FROM run_context WHERE run_id=?').get(run.id)).toEqual({work_id:work});
   expect(reopened.db.prepare('SELECT id FROM tasks WHERE id=?').get(task)).toBeDefined();expect(reopened.db.prepare('SELECT id FROM schedules WHERE id=?').get(reminder.id)).toBeDefined();
   expect(storedConfiguration(reopened)).toEqual(f.next);expect(readFileSync(join(f.root,'backup','agents','research','MEMORY.md'),'utf8')).toBe('private synthetic knowledge');
   expect(reopened.db.prepare('SELECT text FROM agent_checkpoints').get()).toEqual({text:'durable checkpoint'});

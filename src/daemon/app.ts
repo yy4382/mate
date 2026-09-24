@@ -11,6 +11,7 @@ import {migrateHistoryIndexes} from '../storage/history-schema.js';
 import {migrateCoordinationRecovery} from '../storage/coordination-schema.js';
 import {migrateOperationsView} from '../storage/operations-schema.js';
 import {migrateSystemOperations} from '../storage/system-operations-schema.js';
+import {migrateModelUsage} from '../storage/model-usage-schema.js';
 import {TeamDirectory} from '../conversations/team-directory.js';
 import {migrateInternalConversations} from '../storage/internal-schema.js';
 import { migrateCanonicalConversations } from '../slack/canonical-migration.js';
@@ -49,6 +50,10 @@ import {FairAdmission} from '../concurrency/admission.js';
 import {AdmittedBackend} from '../execution/admitted.js';
 import {assertLinuxOperationAllowed} from '../deployment/linux-upgrade-guard.js';
 import {initialMemory} from '../agents/workspace.js';
+import {buildBaseline} from '../runtime/prompt.js';
+import {operationDocumentation} from '../runtime/tools.js';
+import {repairTranscript} from '../runtime/context.js';
+import type {AgentMessage} from '@earendil-works/pi-agent-core';
 export interface Log { info(data: object, message: string): void; error(data: object, message: string): void }
 export class Daemon {
   readonly store: Store;
@@ -76,6 +81,7 @@ export class Daemon {
   private loopPromise?: Promise<void>;
   private startPromise?: Promise<void>;
   private closePromise?: Promise<void>;
+  private recoveredDuringUpgrade = false;
   readonly config:DaemonConfig;
   static async create(input:unknown,log:Log,projectRoot=resolve('.')):Promise<Daemon>{
     const config=daemonConfigSchema.parse(input),data=config.runtime.dataDir;
@@ -106,6 +112,7 @@ export class Daemon {
     try {
       this.store = opened = new Store(join(state, 'mate.sqlite'));
       this.store.db.exec('BEGIN IMMEDIATE');
+      const beforeUsageSchema=Number(this.store.db.pragma('user_version',{simple:true}));
       const previous=storedConfiguration(this.store);
       if(previous&&!sameConfiguration(previous,config))throw new Error('Configuration changed; run explicit offline migration');
       if(!previous&&this.store.db.prepare('SELECT 1 FROM agents').get())throw new Error('Legacy configuration requires explicit offline migration');
@@ -121,7 +128,7 @@ export class Daemon {
       if(previous&&Number(this.store.db.pragma('user_version',{simple:true}))<21)throw new Error('Conversation storage requires explicit offline migration');
       if(previous&&Number(this.store.db.pragma('user_version',{simple:true}))<22)throw new Error('Coordination storage requires explicit offline migration');
       if(previous&&Number(this.store.db.pragma('user_version',{simple:true}))<23)throw new Error('Operations view storage requires explicit offline migration');
-      migrateInternalConversations(this.store);migrateProjections(this.store);migrateProjectionImports(this.store);migrateHistoryIndexes(this.store);migrateCoordinationRecovery(this.store);migrateOperationsView(this.store);migrateSystemOperations(this.store);
+      migrateInternalConversations(this.store);migrateProjections(this.store);migrateProjectionImports(this.store);migrateHistoryIndexes(this.store);migrateCoordinationRecovery(this.store);migrateOperationsView(this.store);migrateSystemOperations(this.store);migrateModelUsage(this.store);
       const slackApp=slackConfig?slackApplication(this.store,slackConfig,c):undefined;
       const messages=slackApp?.messages??localConversations(this.store,c);
       messages.writes.assertFormat();
@@ -172,6 +179,19 @@ export class Daemon {
         const result = await admittedFiles.execute({ agentId,root: this.memoryRoots[agentId]!, operation: { kind: 'read', path: 'MEMORY.md' }, timeoutMs: 10000 }, signal);
         if (result.code !== 0 || result.truncated) throw new Error('Private memory recovery read failed'); return result.stdout;
       },{runAdmission:new FairAdmission(config.runtime.limits.maxActiveRuns),workerIdleMs:config.runtime.limits.workerIdleMs});
+      if(previous&&beforeUsageSchema===24){
+        // The new resource policy changes the system prompt. Move existing sessions
+        // to that baseline without discarding their journal or pending delivery.
+        this.store.recover();
+        this.recoveredDuringUpgrade = true;
+        for(const agent of c.agents){
+          const baseline=buildBaseline(agent,operationDocumentation);
+          const row=this.store.db.prepare('SELECT a.session_id,s.config_version FROM agents a JOIN sessions s ON s.id=a.session_id WHERE a.id=?').get(agent.id) as {session_id:string;config_version:string}|undefined;
+          if(!row||row.config_version===baseline.configVersion)continue;
+          const history=repairTranscript(this.store.context(row.session_id) as AgentMessage[],id=>{const action=this.store.action(`${row.session_id}:${id}`);return action?JSON.stringify({recoveredAction:action.id,state:action.state,receipt:action.receipt?JSON.parse(action.receipt):null}):undefined;});
+          this.store.rotateSession(agent.id,baseline.configVersion,[...baseline.messages,...history.filter(message=>message.role!=='system')],'model_usage_policy_upgrade');
+        }
+      }
       this.supervisor.register();
       this.controls=new Controls(this.collaboration,this.supervisor,this.broker,actor=>this.verifyReviewWorkspace(actor),(user,command,id,args)=>this.slackRuntime?.projections.control(user,command,id,args),linuxProcesses,this.system);
       this.adapter=this.slackRuntime=transport?new SlackRuntime(this.collaboration,transport,this.controls,message=>this.log.error({},message),this.system):undefined;
@@ -198,7 +218,7 @@ export class Daemon {
   }
   private async open(progress?:()=>void): Promise<void> {
     if (this.stopping) throw new Error('Daemon stopped during startup');
-    this.store.recover();this.system.recover();this.adapter?.recover();this.supervisor.recoverSessions();
+    if(!this.recoveredDuringUpgrade)this.store.recover();this.system.recover();this.adapter?.recover();this.supervisor.recoverSessions();
     const models=builtinModels();for(const agent of this.config.mate.agents){requireSecret(process.env,agent.model.apiKeyEnv);if(!models.getModel(agent.model.provider,agent.model.id))throw new Error(`Unknown provider/model for ${agent.id}`);}
     const slackConfig=slackRuntimeConfig(this.config);if(slackConfig&&this.slackRuntime)this.slackRuntime.transport.configure(Object.fromEntries(slackConfig.agents.map(agent=>[agent.id,requireSecret(process.env,agent.botTokenEnv)])));
     await this.adapter?.start(this.abort.signal,progress);if(this.stopping)throw new Error('Daemon stopped during startup');

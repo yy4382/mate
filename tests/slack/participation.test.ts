@@ -1,3 +1,4 @@
+import {migrateCurrentRuntime} from '../helpers/canonical-slack.js';
 import {afterEach,expect,it,vi} from 'vitest';
 import type {WebClient} from '@slack/web-api';
 import {Store} from '../../src/storage/store.js';
@@ -13,7 +14,7 @@ import {configFixture} from '../helpers/config.js';
 const cleanup:(()=>void)[]=[];afterEach(()=>cleanup.splice(0).forEach(fn=>fn()));
 const signal=new AbortController().signal;
 function fixture(){
- const s=new Store(':memory:');cleanup.push(()=>s.close());migrateCanonicalConversations(s,configFixture);
+ const s=new Store(':memory:');cleanup.push(()=>s.close());migrateCanonicalConversations(s,configFixture);migrateCurrentRuntime(s);
  const {messages:m,mapper}=slackApplication(s,configFixture);s.register('research','baseline',[]);
  const api={list:vi.fn(async()=>({ok:true,channels:[{id:'CNEW',name:'new-public'}],response_metadata:{next_cursor:'next'}})),info:vi.fn(async()=>({ok:true,channel:{id:'CNEW',is_private:false,is_member:false}})),join:vi.fn(async()=>({ok:true,channel:{id:'CNEW',is_member:true}})),leave:vi.fn(async()=>({ok:true}))};
  const d=new Directory(m,new Map([['research',{conversations:api} as unknown as WebClient]]),mapper),directory=new TeamDirectory(m,d);

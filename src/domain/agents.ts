@@ -13,18 +13,18 @@ export const agentDefinitionSchema = z.object({
     apiKeyEnv: secretReferenceSchema,
   }).strict(),
 }).strict();
-export const budgetSettingsSchema = z.object({
+/** Read only while upgrading pre-release configurations that carried quotas. */
+export const legacyBudgetSettingsSchema = z.object({
   maxRuns: z.number().int().positive(),
   maxTokens: z.number().int().positive(),
   maxCostUsd: z.number().positive(),
   runTimeoutMs: z.number().int().positive(),
 }).strict();
 export type AgentDefinition = z.infer<typeof agentDefinitionSchema>;
-export type BudgetSettings = z.infer<typeof budgetSettingsSchema>;
 export interface TeamSettings {
   agents: readonly AgentDefinition[];
   ownerUserIds: readonly string[];
-  budgets: BudgetSettings;
+  runTimeoutMs: number;
 }
 
 /** Project only owned fields. Never leak adapter bindings to worker factories or prompts. */

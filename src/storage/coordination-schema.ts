@@ -4,7 +4,7 @@ import type {Store} from './store.js';
 export function migrateCoordinationRecovery(store:Store):void {
   store.atomic(()=>{
     const version=Number(store.db.pragma('user_version',{simple:true}));
-    if(version===22||version===23||version===24)return;
+    if(version===22||version===23||version===24||version===25)return;
     if(version!==21)throw new Error('History storage migration required');
     store.db.exec(`
       ALTER TABLE tasks ADD COLUMN created_by TEXT REFERENCES agents(id);

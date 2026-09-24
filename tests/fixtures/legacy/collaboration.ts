@@ -5,7 +5,7 @@ import {Reminders,type Reminder}from './reminders.js';
 import type { SendBasis } from '../v16/src/conversations/freshness.js';
 import { ReviewSeats } from './review-seats.js';
 import { Attention } from '../v16/src/conversations/attention.js';
-import { BudgetLedger } from '../../../src/budget/ledger.js';
+import { BudgetLedger, legacyBudgets } from './budget.js';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { Store, encode, type RunToken } from '../../../src/storage/store.js';
@@ -20,7 +20,7 @@ export class Collaboration {
   readonly seats: ReviewSeats;
   readonly ledger: BudgetLedger;
   readonly attention: Attention;
-  constructor(readonly store: Store, readonly messages: Messages, readonly output: Output, readonly config: MateConfig) { this.agents=new ConfiguredAgents(config.agents); this.reminders=new Reminders(this); this.ledger = new BudgetLedger(store, config); this.attention = new Attention(messages); this.seats = new ReviewSeats(messages); }
+  constructor(readonly store: Store, readonly messages: Messages, readonly output: Output, readonly config: MateConfig) { this.agents=new ConfiguredAgents(config.agents); this.reminders=new Reminders(this); this.ledger = new BudgetLedger(store, { agents: config.agents, ownerUserIds: config.ownerUserIds, budgets: legacyBudgets }); this.attention = new Attention(messages); this.seats = new ReviewSeats(messages); }
   work(id: string): Work { const work = this.store.db.prepare('SELECT * FROM works WHERE id=?').get(id) as Work | undefined; if (!work) throw new Error('Unknown work'); this.messages.persistence.records.mutableTarget('works',id); return work; }
   task(id: string): Task { const task = this.store.db.prepare("SELECT *, (message_key IS NULL AND status!='draft') legacy FROM tasks WHERE id=?").get(id) as Task | undefined; if (!task) throw new Error('Unknown task'); this.messages.persistence.records.mutableTarget('tasks',id); return task; }
   list(agentId: string): Task[] {
@@ -54,7 +54,7 @@ export class Collaboration {
     targetSchema.parse(target);
     return this.store.atomic(() => {
       const old = this.store.db.prepare('SELECT id FROM works WHERE origin=?').get(origin) as { id: string } | undefined; if (old) return old.id;
-      const id = randomUUID(), b = this.config.budgets;
+      const id = randomUUID(), b = legacyBudgets;
       this.store.db.prepare('INSERT INTO works(id,origin,target,max_runs,max_tokens,max_cost) VALUES(?,?,?,?,?,?)').run(id, origin, encode(target), b.maxRuns, b.maxTokens, b.maxCostUsd);
       this.messages.persistence.writes.mutable('works',id);
       return id;

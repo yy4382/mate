@@ -10,7 +10,7 @@ export async function summarizeWithPi(models: Models, engine: Engine, messages: 
   const summary = await generateSummaryWithUsage(messages, bounded, engine.model, 2000, undefined, undefined, 'off', { enabled: false, maxRetries: 0, baseDelayMs: 0 }, undefined, withAbortSignal(signal, BACKGROUND_CONTEXT));
   if (!summary.ok) throw new Error('Compaction failed'); return summary.value.text;
 }
-const startSchema = z.object({ type: z.literal('run'), nonce: z.string(), spec: z.object({ sessionId: z.string(), messages: z.array(z.unknown()), recovery: z.string().max(50000), tokenCap: z.number().int().positive(), costCap: z.number().nonnegative(), maxTurns: z.number().int().min(1).max(20) }) });
+const startSchema = z.object({ type: z.literal('run'), nonce: z.string(), spec: z.object({ sessionId: z.string(), messages: z.array(z.unknown()), recovery: z.string().max(50000), maxTurns: z.number().int().min(1).max(20) }) });
 /** Separate entrypoint allows tests to supply a synthetic stream without a production config switch. */
 export function serveWorker(engine: Engine, models?: Models): void {
   let nonce: string | undefined, counter = 0, active = false;
@@ -41,6 +41,8 @@ export function serveWorker(engine: Engine, models?: Models): void {
         invalidateViews: async()=>{await rpc('invalidateViews',null);},
         notice: async()=>await rpc('notice',null) as string|undefined,
         journal: async message => { await rpc('journal', message); },
+        usageBegin: async (callIndex, provider, modelId) => { await rpc('usageBegin', { callIndex, provider, modelId }); },
+        usageComplete: async (callIndex, message) => await rpc('usageComplete', { callIndex, message }) as boolean | undefined,
         tool: async (id, operation, args) => await rpc('tool', { id, operation, args }) as ToolReply,
         ...(models ? { summarize: async (messages, stream) => summarizeWithPi(models, engine, messages, stream, abort.signal) } : {})
       });

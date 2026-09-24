@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { isAbsolute } from 'node:path';
 const path = z.string().refine(isAbsolute, 'Absolute path required');
-import {agentDefinitionSchema,budgetSettingsSchema,agentIdSchema,secretReferenceSchema} from '../domain/agents.js';
+import {agentDefinitionSchema,legacyBudgetSettingsSchema,agentIdSchema,secretReferenceSchema} from '../domain/agents.js';
 import type {MateConfig} from '../config.js';
 
 const human = z.string().min(1).max(1000);
@@ -15,7 +15,7 @@ const bindingSchema = z.object({
 export const localRoomSchema=z.object({id:z.string().min(1).max(1000),agents:z.array(agentIdSchema).min(1),humans:z.array(human).min(1)}).strict();
 const modernConfigSchema = z.object({
   version:z.literal(2),
-  mate:z.object({agents:z.array(agentDefinitionSchema).min(1),ownerUserIds:z.array(human).min(1),budgets:budgetSettingsSchema}).strict(),
+  mate:z.object({agents:z.array(agentDefinitionSchema).min(1),ownerUserIds:z.array(human).min(1),runTimeoutMs:z.number().int().positive().optional(),budgets:legacyBudgetSettingsSchema.optional()}).strict().transform(({budgets,runTimeoutMs,...team})=>({...team,runTimeoutMs:runTimeoutMs??budgets?.runTimeoutMs??180000})),
   adapters:z.object({
     slack:z.object({teamId:z.string().regex(/^T[A-Z0-9]+$/),principals:z.record(slackUser,human),bindings:z.array(bindingSchema).min(1)}).strict().optional(),
     local:z.object({humans:z.array(human).min(1),rooms:z.array(localRoomSchema)}).strict().optional()
@@ -72,7 +72,7 @@ export function slackHumanId(teamId:string,userId:string):string{return JSON.str
 export function slackRuntimeConfig(config:DaemonConfig):MateConfig|undefined{
   const adapter=config.adapters.slack;if(!adapter)return undefined;
   return {teamId:adapter.teamId,principalIds:adapter.principals,
-    ownerUserIds:Object.keys(adapter.principals).filter(id=>config.mate.ownerUserIds.includes(adapter.principals[id]!)),budgets:config.mate.budgets,
+    ownerUserIds:Object.keys(adapter.principals).filter(id=>config.mate.ownerUserIds.includes(adapter.principals[id]!)),runTimeoutMs:config.mate.runTimeoutMs,
     agents:adapter.bindings.map(({agentId,...binding})=>({...config.mate.agents.find(a=>a.id===agentId)!,...binding}))};
 }
 

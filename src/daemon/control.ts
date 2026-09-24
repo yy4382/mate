@@ -39,16 +39,7 @@ export class Controls {
       }
       case 'agent-stop': if (!id) throw new Error('Agent ID required'); this.supervisor.stopAgent(id); return `Agent ${id} paused`;
       case 'agent-resume': if (!id) throw new Error('Agent ID required'); c.messages.agent(id); s.resume(id); return `Agent ${id} resumed`;
-      case 'agent-budget': {
-        const [runs,tokens,cost]=rest.map(Number); if(!id)throw new Error('Agent ID required');
-        c.ledger.setLimits(user,id,runs!,tokens!,cost!);return `Persistent budget updated for ${id}`;
-      }
-      case 'budget': {
-        const [runs, tokens, dollars] = rest.map(Number); if (!id || !Number.isInteger(runs) || runs! < 1 || !Number.isInteger(tokens) || tokens! < 1 || !Number.isFinite(dollars) || dollars! <= 0) throw new Error('budget WORK_ID MAX_RUNS MAX_TOKENS MAX_USD');
-        const work = c.work(id); if (work.state === 'cancelled' || runs! < work.runs || tokens! < work.tokens || dollars! < work.cost) throw new Error('Budget below usage or cancelled work');
-        s.db.prepare('UPDATE works SET max_runs=?,max_tokens=?,max_cost=? WHERE id=?').run(runs!, tokens!, dollars!, id); s.audit('owner_budget', { user, id, runs, tokens, dollars }); return `Budget updated for ${id}; resume separately if paused`;
-      }
-      default: return 'Commands: status; system-pending; system-status REQUEST_ID; system-output REQUEST_ID stdout|stderr OFFSET; processes AGENT_ID; process-stop AGENT_ID UNIT; activity [JSON]; tasks; schedules; conversations; projection-bindings; projection-add CONVERSATION_ID JSON; projections CONVERSATION_ID JSON; projection-inputs BINDING_ID JSON; projection-enable BINDING_ID true|false; projection-anchor BINDING_ID ROOT_ID; stop|resume|cancel WORK_ID; agent-stop|agent-resume AGENT_ID; agent-reset AGENT_ID CHECKPOINT; budget WORK_ID MAX_RUNS MAX_TOKENS MAX_USD; agent-budget AGENT_ID MAX_RUNS MAX_TOKENS MAX_USD';
+      default: return 'Commands: status; system-pending; system-status REQUEST_ID; system-output REQUEST_ID stdout|stderr OFFSET; processes AGENT_ID; process-stop AGENT_ID UNIT; activity [JSON]; tasks; schedules; conversations; projection-bindings; projection-add CONVERSATION_ID JSON; projections CONVERSATION_ID JSON; projection-inputs BINDING_ID JSON; projection-enable BINDING_ID true|false; projection-anchor BINDING_ID ROOT_ID; stop|resume|cancel WORK_ID; agent-stop|agent-resume AGENT_ID; agent-reset AGENT_ID CHECKPOINT';
     }
   }
 }

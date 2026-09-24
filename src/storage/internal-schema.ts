@@ -20,7 +20,7 @@ export function initializeCanonicalStore(store:Store):void {
 export function migrateInternalConversations(store:Store):void {
   store.atomic(()=>{
     const version=store.db.pragma('user_version',{simple:true});
-    if(version===18||version===19||version===20||version===21||version===22||version===23||version===24)return;
+    if(version===18||version===19||version===20||version===21||version===22||version===23||version===24||version===25)return;
     const marker=store.db.prepare("SELECT value FROM runtime_meta WHERE key='conversation_format'").get() as {value:string}|undefined;
     if(version!==17||marker?.value!=='mate.conversations.v2')throw new Error('Canonical schema required');
     store.db.exec(`

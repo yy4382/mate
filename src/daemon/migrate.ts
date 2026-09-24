@@ -8,6 +8,7 @@ import {migrateHistoryIndexes} from '../storage/history-schema.js';
 import {migrateCoordinationRecovery} from '../storage/coordination-schema.js';
 import {migrateOperationsView} from '../storage/operations-schema.js';
 import {migrateSystemOperations} from '../storage/system-operations-schema.js';
+import {migrateModelUsage} from '../storage/model-usage-schema.js';
 import { slackApplication } from '../slack/application.js';
 import { migrateCanonicalConversations } from '../slack/canonical-migration.js';
 import { CanonicalOutput as Output } from '../conversations/output.js';
@@ -61,7 +62,7 @@ export function applyOfflineConfigurationMigration(s:Store,previous:DaemonConfig
  s.atomic(()=>{
   const oldSlack=slackRuntimeConfig(previous),newSlack=slackRuntimeConfig(next);
   if(oldSlack)migrateCanonicalConversations(s,oldSlack);else initializeCanonicalStore(s);
-  migrateInternalConversations(s);migrateProjections(s);migrateProjectionImports(s);migrateHistoryIndexes(s);migrateCoordinationRecovery(s);migrateOperationsView(s);migrateSystemOperations(s);
+  migrateInternalConversations(s);migrateProjections(s);migrateProjectionImports(s);migrateHistoryIndexes(s);migrateCoordinationRecovery(s);migrateOperationsView(s);migrateSystemOperations(s);migrateModelUsage(s);
   const {messages}=(newSlack?slackApplication(s,newSlack,next.mate):localApplication(s,next.mate)),c=new Collaboration(s,messages,new Output(messages,{post:async()=>{throw new Error('Offline migration cannot publish');},pendingInput:()=>false,classify:()=>({kind:'unknown'})}),next.mate);
   const baseline=(agent:import('../domain/agents.js').AgentDefinition)=>buildBaseline(agent,operationDocumentation),lifecycle=new SessionLifecycle(c,baseline);
   for(const agent of next.mate.agents){
@@ -72,7 +73,7 @@ export function applyOfflineConfigurationMigration(s:Store,previous:DaemonConfig
    s.rotateSession(agent.id,initial.configVersion,[...initial.messages,...history.filter(message=>message.role!=='system')],'configuration_migration');
   }
   configureLocalRooms(c,previous.adapters.local,next.adapters.local);saveConfiguration(s,next);
-  s.audit('configuration_migration',{source:options.auditSource,oldHash:oldConfigurationHash,newHash:newConfigurationHash,budgets:'unchanged'});
+  s.audit('configuration_migration',{source:options.auditSource,oldHash:oldConfigurationHash,newHash:newConfigurationHash});
  });
  return{agents:next.mate.agents.map(agent=>agent.id)};
 }

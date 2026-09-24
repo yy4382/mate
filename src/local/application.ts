@@ -16,10 +16,12 @@ import {migrateProjectionImports}from '../storage/projection-import-schema.js';
 import {migrateHistoryIndexes}from '../storage/history-schema.js';
 import {migrateCoordinationRecovery}from '../storage/coordination-schema.js';
 import {migrateOperationsView}from '../storage/operations-schema.js';
+import {migrateSystemOperations}from '../storage/system-operations-schema.js';
+import {migrateModelUsage}from '../storage/model-usage-schema.js';
 
 /** A real local composition: no Slack config, fake locator or alternate business model. */
 export function localApplication(store:Store,settings:TeamSettings){
-  initializeCanonicalStore(store);migrateInternalConversations(store);migrateProjections(store);migrateProjectionImports(store);migrateHistoryIndexes(store);migrateCoordinationRecovery(store);migrateOperationsView(store);
+  initializeCanonicalStore(store);migrateInternalConversations(store);migrateProjections(store);migrateProjectionImports(store);migrateHistoryIndexes(store);migrateCoordinationRecovery(store);migrateOperationsView(store);migrateSystemOperations(store);migrateModelUsage(store);
   const messages=localConversations(store,settings);
   const output=new CanonicalOutput(messages,{post:async()=>{throw new Error('External transport unavailable');},pendingInput:()=>false,classify:()=>({kind:'rejected',reason:'External transport unavailable'})});
   const collaboration=new Collaboration(store,messages,output,settings);

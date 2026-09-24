@@ -17,7 +17,7 @@ const dirs:string[]=[];function temp(){const dir=mkdtempSync(join(tmpdir(),'mate
 afterEach(()=>{vi.restoreAllMocks();for(const dir of dirs.splice(0))rmSync(dir,{recursive:true,force:true});});
 const clear:RecoveryState={restore:null,invalid:false};
 const secret='xoxb-SUPER_SECRET /tmp/private-body tool arguments';
-function status():OperationsStatus{return {at:1,agents:[{id:secret,registered:true,paused:false,generation:1,sessionId:secret,activeRun:null,budget:null}],works:{items:[],atLeast:0,truncated:false},uncertainActions:{items:[],atLeast:0,truncated:false},uncertainOutputs:{items:[],atLeast:0,truncated:false},heldDrafts:{items:[],atLeast:0,truncated:false},dueReminders:{items:[],atLeast:0,truncated:false}};}
+function status():OperationsStatus{return {at:1,agents:[{id:secret,registered:true,paused:false,generation:1,sessionId:secret,activeRun:null,usage:{knownCalls:0,unknownCalls:0,backfilledCalls:0,inputTokens:0,outputTokens:0,cacheReadTokens:0,cacheWriteTokens:0,totalTokens:0,estimatedCostUsd:0}}],works:{items:[],atLeast:0,truncated:false},uncertainActions:{items:[],atLeast:0,truncated:false},uncertainOutputs:{items:[],atLeast:0,truncated:false},heldDrafts:{items:[],atLeast:0,truncated:false},dueReminders:{items:[],atLeast:0,truncated:false}};}
 it('projects only operational counts, fixed events and recovery states, never arbitrary identifiers or bodies',()=>{
  const s=status();s.uncertainActions={items:[{id:secret,agentId:secret,runId:secret,state:secret}],atLeast:1,truncated:false};
  const output=diagnosticStatus(s,'active',clear);expect(output.health).toBe('attention-required');expect(JSON.stringify(output)).not.toContain(secret);

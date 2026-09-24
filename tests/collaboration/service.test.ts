@@ -41,22 +41,20 @@ it('delegation remains unclaimable until visible send, inherits root and activat
   expect(db.db.prepare("SELECT count(*) n FROM deliveries WHERE dedupe LIKE 'delegate:%'").get()).toEqual({ n: 1 });
   expect(db.db.prepare('SELECT DISTINCT work_id FROM delivery_work').all()).toEqual([{ work_id: work }]);
 });
-it('budgets reserve before calls, persist unknown usage, and cannot reset through child runs', () => {
-  const { db, service, work } = setup(); db.db.prepare('UPDATE works SET max_runs=2,max_tokens=100,max_cost=1 WHERE id=?').run(work);
+it('a run binds to its delivery work across recovery without an allowance gate', () => {
+  const { db, service, work } = setup();
   service.enqueue('research', work, 'one', {}); const run = db.beginRun('research')!;
-  service.reserve(run, work, 60, 0.6); expect(service.work(work).tokens).toBe(60);
+  service.bindRunWork(run, work); expect(service.currentWork(run, work)).toBe(work);
   db.recover(); const next = db.beginRun('research')!;
-  expect(() => service.reserve(next, work, 60, 0.6)).toThrow('budget exhausted');
-  service.reserve(next, work, 40, 0.4); service.settleUsage(next.id, 20, 0.2); service.settleUsage(next.id, 0, 0);
-  expect(service.work(work).tokens).toBe(80); expect(service.work(work).runs).toBe(2);
+  service.bindRunWork(next, work); expect(service.currentWork(next, work)).toBe(work);
   db.input(next, {}); db.finish(next);
   service.enqueue('engineer', work, 'third', {}); const third = db.beginRun('engineer')!;
-  expect(() => service.reserve(third, work, 1, 0)).toThrow('budget exhausted');
+  service.bindRunWork(third, work);
 });
-it('late over-cap usage cannot resurrect cancelled work', () => {
+it('cancelled work cannot be resumed after a bound run is interrupted', () => {
   const { db, service, work } = setup(); service.enqueue('research', work, 'one', {});
-  const run = db.beginRun('research')!; service.reserve(run, work, 10, 0.1);
-  service.control('UOWNER', work, 'cancel'); service.settleUsage(run.id, 20, 0.2);
+  const run = db.beginRun('research')!; service.bindRunWork(run, work);
+  service.control('UOWNER', work, 'cancel');
   expect(service.work(work).state).toBe('cancelled');
   expect(() => service.control('UOWNER', work, 'resume')).toThrow('cannot resume');
 });
@@ -73,7 +71,7 @@ it('failed visible delegation releases parent and draft may be cancelled by its 
 it('owner stop fences active work, blocks pending sends, leaves other work runnable', async () => {
   const { db, service, work, output } = setup();
   const id = service.send('research', work, target, 'pending'); service.enqueue('research', work, 'one', {});
-  const run = db.beginRun('research')!; service.reserve(run, work, 10, 0);
+  const run = db.beginRun('research')!; service.bindRunWork(run, work);
   expect(() => service.control('UTWO', work, 'pause')).toThrow('Owner only');
   expect(service.control('UOWNER', work, 'pause')).toEqual([run.id]);
   expect(() => db.assertRun(run)).toThrow('Stale'); expect(db.beginRun('research')).toBeUndefined();
@@ -83,7 +81,7 @@ it('owner stop fences active work, blocks pending sends, leaves other work runna
   service.control('UOWNER', work, 'cancel'); await output.send(id); expect(db.output(id)?.state).toBe('failed');
   expect(() => service.control('UOWNER', work, 'resume')).toThrow('cannot resume');
 });
-it('wakeups catch up once, retain origin/budget, are transactional and outlive their task', () => {
+it('wakeups catch up once, retain origin, are transactional and outlive their task', () => {
   const { db, service, work } = setup(); const task = service.createTask('research', work, target, 'watch'); service.claim('research', task);
   const once = service.schedule('research', work, target, 1000, 'Asia/Shanghai', undefined, task);
   const recurring = service.schedule('research', work, target, 1000, 'Asia/Shanghai', '* * * * *', task);
@@ -95,13 +93,4 @@ it('wakeups catch up once, retain origin/budget, are transactional and outlive t
   expect(service.schedules('research').find(s => s.id === recurring)?.next_at).toBeGreaterThan(3600000);
   service.update('research', task, 'cancelled'); expect(service.schedules('research').find(s=>s.id===recurring)?.active).toBe(1);service.cancelSchedule('research',recurring);expect(service.schedules('research').every(s=>s.active===0)).toBe(true);
   expect(() => service.cancelSchedule('engineer', recurring)).toThrow('owned');
-});
-it('legacy shared-work debt is conservatively retained once per participating Agent',()=>{
-  const {db,service:c,work}=setup();c.enqueue('research',work,'legacy',{});const run=db.beginRun('research')!;db.input(run,{});
-  c.reserve(run,work,50,0.5);db.finish(run);
-  db.db.exec('DELETE FROM budget_runs; DELETE FROM budget_accounts');
-  const account=c.ledger.account('research');expect(account.tokens).toBe(50);
-  expect(c.ledger.account('research')).toEqual(account);
-  c.settleUsage(run.id,10,0.1);expect(c.ledger.account('research').tokens).toBe(10);
-  c.settleUsage(run.id,0,0);expect(c.ledger.account('research').tokens).toBe(10);
 });

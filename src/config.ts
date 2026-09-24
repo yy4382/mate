@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { agentDefinitionSchema, budgetSettingsSchema, secretReferenceSchema as secretRef } from './domain/agents.js';
+import { agentDefinitionSchema, legacyBudgetSettingsSchema, secretReferenceSchema as secretRef } from './domain/agents.js';
 
 // Legacy Slack deployment format; adapter fields are projected out before runtime use.
 const agentSchema = agentDefinitionSchema.extend({
@@ -15,8 +15,9 @@ export const configSchema = z.object({
   teamId: z.string().regex(/^T[A-Z0-9]+$/),
   ownerUserIds: z.array(z.string().regex(/^U[A-Z0-9]+$/)).min(1),
   agents: z.array(agentSchema).min(1),
-  budgets: budgetSettingsSchema,
-}).strict().superRefine((config, ctx) => {
+  runTimeoutMs: z.number().int().positive().optional(),
+  budgets: legacyBudgetSettingsSchema.optional(),
+}).strict().transform(({budgets,runTimeoutMs,...team})=>({...team,runTimeoutMs:runTimeoutMs??budgets?.runTimeoutMs??180000})).superRefine((config, ctx) => {
   if (config.agents.some(agent => config.ownerUserIds.includes(agent.slackUserId))) {
     ctx.addIssue({ code: 'custom', message: 'Owner identity must not be an agent bot identity' });
   }

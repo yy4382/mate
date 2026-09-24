@@ -1,3 +1,4 @@
+import {migrateCurrentRuntime} from '../helpers/canonical-slack.js';
 import {afterEach,expect,it,vi} from 'vitest';
 import {Store} from '../../src/storage/store.js';
 import {migrateCanonicalConversations} from '../../src/slack/canonical-migration.js';
@@ -18,7 +19,7 @@ import {configFixture} from '../helpers/config.js';
 const stores:Store[]=[];afterEach(()=>stores.splice(0).forEach(s=>s.close()));
 async function setup(){
  const config={...configFixture,agents:[configFixture.agents[0]!,{...configFixture.agents[0]!,id:'writer',name:'Writer',slackUserId:'UTWO',slackBotId:'BTWO',slackAppId:'ATWO',botTokenEnv:'WRITER_BOT',appTokenEnv:'WRITER_APP'}]};
- const s=new Store(':memory:');stores.push(s);migrateCanonicalConversations(s,config);migrateInternalConversations(s);migrateProjections(s);migrateProjectionImports(s);
+ const s=new Store(':memory:');stores.push(s);migrateCanonicalConversations(s,config);migrateInternalConversations(s);migrateProjections(s);migrateProjectionImports(s);migrateCurrentRuntime(s);
  for(const a of config.agents)s.register(a.id,'test',[]);
  const {messages,mapper}=slackApplication(s,config),transport=new CanonicalSlackTransport(s,mapper,{}),post=vi.fn(async(_args:any)=>({ts:'20.000001',channel:'CDISPLAY'}));
  transport.clients.set('research',{conversations:{info:async()=>({channel:{is_member:true}})},chat:{postMessage:post}} as any);

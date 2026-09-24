@@ -4,7 +4,6 @@ import {Reminders,type Reminder}from '../reminders/service.js';
 import type { SendBasis } from '../conversations/freshness.js';
 import { ReviewSeats } from '../conversations/review-seats.js';
 import { CanonicalAttention as Attention } from '../conversations/attention.js';
-import { BudgetLedger } from '../budget/ledger.js';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { Store, encode, type RunToken } from '../storage/store.js';
@@ -14,20 +13,21 @@ import type { TeamSettings } from '../domain/agents.js';
 import {TaskBoard} from '../coordination/board.js';
 import {TaskTransitions,type TaskPatch} from '../coordination/transitions.js';
 import {OperationsView} from '../operations/view.js';
+import {UsageLedger} from '../usage/ledger.js';
 
-export interface Work { id: string; target: string; state: string; max_runs: number; max_tokens: number; max_cost: number; runs: number; tokens: number; cost: number }
+export interface Work { id: string; target: string; state: string }
 export interface Task { legacy:number; message_key:string|null; created_by:string|null; id: string; work_id: string; parent_id: string | null; target: string; title: string; owner: string | null; assigned_to: string | null; status: string; version: number; waiting_on: string | null; result: string | null; outbox_id: string | null }
 export class Collaboration {
   readonly agents: AgentDirectory;
   readonly reminders:Reminders;
   readonly seats: ReviewSeats;
-  readonly ledger: BudgetLedger;
   readonly attention: Attention;
+  readonly usage: UsageLedger;
   readonly board:TaskBoard;
   readonly operations:OperationsView;
   private readonly taskTransitions:TaskTransitions;
-  constructor(readonly store: Store, readonly messages: Messages, readonly output: Output, readonly config: TeamSettings) { this.agents=new ConfiguredAgents(config.agents); this.config={agents:this.agents.list(),ownerUserIds:[...config.ownerUserIds],budgets:{...config.budgets}}; this.reminders=new Reminders(this); this.ledger = new BudgetLedger(store, config); this.attention = new Attention(messages); this.seats = new ReviewSeats(messages,config.ownerUserIds);this.taskTransitions=new TaskTransitions(store);this.board=new TaskBoard(this);this.operations=new OperationsView(this); }
-  work(id: string): Work { const work = this.store.db.prepare('SELECT * FROM works WHERE id=?').get(id) as Work | undefined; if (!work) throw new Error('Unknown work'); this.messages.records.mutableTarget('works',id); return work; }
+  constructor(readonly store: Store, readonly messages: Messages, readonly output: Output, readonly config: TeamSettings) { this.agents=new ConfiguredAgents(config.agents); this.config={agents:this.agents.list(),ownerUserIds:[...config.ownerUserIds],runTimeoutMs:config.runTimeoutMs}; this.reminders=new Reminders(this); this.usage=new UsageLedger(store); this.attention = new Attention(messages); this.seats = new ReviewSeats(messages,config.ownerUserIds);this.taskTransitions=new TaskTransitions(store);this.board=new TaskBoard(this);this.operations=new OperationsView(this); }
+  work(id: string): Work { const work = this.store.db.prepare('SELECT id,target,state FROM works WHERE id=?').get(id) as Work | undefined; if (!work) throw new Error('Unknown work'); this.messages.records.mutableTarget('works',id); return work; }
   task(id: string): Task { const task = this.store.db.prepare('SELECT * FROM tasks WHERE id=?').get(id) as Task | undefined; if (!task) throw new Error('Unknown task'); this.messages.records.mutableTarget('tasks',id); return task; }
   list(agentId: string): Task[] {
     if(this.messages.isolated(agentId))return [];
@@ -38,9 +38,7 @@ export class Collaboration {
     return (this.store.db.prepare('SELECT work_id FROM run_context WHERE run_id=?').get(run.id) as {work_id:string}|undefined)?.work_id ?? fallback;
   }
   assertActionWork(run: RunToken, workId: string): void {
-    this.store.assertRun(run);const work=this.active(workId);
-    const reserved=this.store.db.prepare('SELECT 1 FROM work_runs WHERE run_id=? AND work_id=?').get(run.id,workId);
-    if(!reserved && (work.runs>=work.max_runs || work.tokens>=work.max_tokens || work.cost>=work.max_cost)) throw new Error('Work budget exhausted');
+    this.store.assertRun(run);this.active(workId);
   }
   selectWork(run: RunToken, workId: string): void {
     this.assertActionWork(run,workId); const work=this.active(workId);
@@ -52,13 +50,13 @@ export class Collaboration {
   }
   active(workId: string): Work { const work = this.work(workId); if (work.state !== 'active') throw new Error('Work paused or cancelled'); return work; }
   private transition(task:Task,patch:TaskPatch,event:{action:string;actor?:string;cause?:unknown},expectedVersion=task.version):Task{return this.taskTransitions.change(task,patch,event,expectedVersion);}
-  /** Work identifies an activity; it never grants or replenishes an Agent account. */
+  /** Work identifies an activity and its owner-controlled lifecycle. */
   createWork(origin: string, target: Target): string {
     targetSchema.parse(target);
     return this.store.atomic(() => {
       const old = this.store.db.prepare('SELECT id FROM works WHERE origin=?').get(origin) as { id: string } | undefined; if (old) return old.id;
-      const id = randomUUID(), b = this.config.budgets;
-      this.store.db.prepare('INSERT INTO works(id,origin,target,max_runs,max_tokens,max_cost) VALUES(?,?,?,?,?,?)').run(id, origin, encode(target), b.maxRuns, b.maxTokens, b.maxCostUsd);
+      const id = randomUUID();
+      this.store.db.prepare('INSERT INTO works(id,origin,target) VALUES(?,?,?)').run(id, origin, encode(target));
       this.messages.writes.mutable('works',id);
       return id;
     });
@@ -80,30 +78,15 @@ export class Collaboration {
       this.store.db.prepare('INSERT INTO output_work VALUES(?,?) ON CONFLICT DO NOTHING').run(id, workId); return id;
     });
   }
-  /** Reserve worst-case allowance before model execution. Unknown usage retains the reservation. */
-  reserve(run: RunToken, workId: string, tokens: number, cost: number): void {
-    z.number().int().positive().parse(tokens); z.number().nonnegative().finite().parse(cost);
+  /** Bind a run to its delivery's activity without granting access or imposing a quota. */
+  bindRunWork(run: RunToken, workId: string): void {
     this.store.atomic(() => {
-      this.store.assertRun(run); const work = this.active(workId);
-      if (this.store.db.prepare('SELECT 1 FROM work_runs WHERE run_id=?').get(run.id)) throw new Error('Run already reserved');
+      this.store.assertRun(run); this.active(workId);
+      if (this.store.db.prepare('SELECT 1 FROM work_runs WHERE run_id=?').get(run.id)) throw new Error('Run already bound');
       const binding = this.store.db.prepare('SELECT COALESCE(dc.work_id,dw.work_id) work_id FROM delivery_work dw LEFT JOIN delivery_context dc ON dc.delivery_id=dw.delivery_id WHERE dw.delivery_id=?').get(run.deliveryId) as { work_id: string } | undefined;
       if (!binding || binding.work_id !== workId) throw new Error('Run work mismatch');
-      if (work.runs + 1 > work.max_runs || work.tokens + tokens > work.max_tokens || work.cost + cost > work.max_cost) throw new Error('Work budget exhausted');
-      this.ledger.reserve(run, tokens, cost);
       this.store.db.prepare('INSERT INTO run_context VALUES(?,?) ON CONFLICT DO NOTHING').run(run.id, workId);
-      this.store.db.prepare('UPDATE works SET runs=runs+1,tokens=tokens+?,cost=cost+? WHERE id=?').run(tokens, cost, workId);
-      this.store.db.prepare('INSERT INTO work_runs(run_id,work_id,token_cap,cost_cap) VALUES(?,?,?,?)').run(run.id, workId, tokens, cost);
-    });
-  }
-  settleUsage(runId: string, tokens: number, cost: number): void {
-    z.number().int().nonnegative().parse(tokens); z.number().finite().nonnegative().parse(cost);
-    this.store.atomic(() => {
-      this.ledger.settle(runId, tokens, cost);
-      const row = this.store.db.prepare('SELECT * FROM work_runs WHERE run_id=?').get(runId) as { work_id: string; token_cap: number; cost_cap: number; settled: number } | undefined;
-      if (!row || row.settled) return;
-      this.store.db.prepare('UPDATE works SET tokens=tokens+?,cost=MAX(0,cost+?) WHERE id=?').run(tokens - row.token_cap, cost - row.cost_cap, row.work_id);
-      this.store.db.prepare('UPDATE work_runs SET settled=1 WHERE run_id=?').run(runId);
-      if (tokens > row.token_cap || cost > row.cost_cap) this.store.db.prepare("UPDATE works SET state='paused' WHERE id=? AND state!='cancelled'").run(row.work_id);
+      this.store.db.prepare('INSERT INTO work_runs(run_id,work_id) VALUES(?,?)').run(run.id, workId);
     });
   }
   createTask(agentId: string, workId: string, target: Target, title: string, parentId?: string,initial?:{messageKey?:string}): string {

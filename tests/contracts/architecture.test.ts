@@ -5,7 +5,7 @@ import { expect, it } from 'vitest';
 const sourceRoot = resolve('src');
 const applicationLayers = new Set([
   'conversations', 'collaboration', 'coordination', 'reminders',
-  'runtime', 'budget', 'policy', 'capabilities', 'domain', 'agents',
+  'runtime', 'usage', 'policy', 'capabilities', 'domain', 'agents',
 ]);
 
 function sourceFiles(directory: string): string[] {

@@ -45,13 +45,12 @@ it('real worker processes retain cross-channel context and isolate Agent state a
     expect(second.data.env).not.toContain('SYNTHETIC_SLACK_SECRET'); expect(second.data.env).not.toContain('HOME');
   } finally { delete process.env.SYNTHETIC_SLACK_SECRET; }
 }, 15000);
-it('worker loss keeps reservation and input; explicit recovery resumes the same logical session', async () => {
+it('worker loss keeps input; explicit recovery resumes the same logical session', async () => {
   let failures = true;
   const { store, collaboration: c, supervisor, work } = setup(() => failures ? { run: async () => { throw new Error('killed'); }, close: () => {} } : new WorkerClient('test','test','key',new URL('../../dist/tests/helpers/worker-fixture.js',import.meta.url)));
   const delivery = c.enqueue('research', work, 'one', { text: 'recover me' });
-  await supervisor.step('research'); expect(store.delivery(delivery).status).toBe('injected'); expect(c.work(work).tokens).toBe(50000);
-  // The owner explicitly raises exhausted budget before resuming this synthetic test.
-  store.db.prepare('UPDATE works SET max_tokens=300000 WHERE id=?').run(work); store.resume('research'); failures = false;
+  await supervisor.step('research'); expect(store.delivery(delivery).status).toBe('injected');
+  store.resume('research'); failures = false;
   await supervisor.step('research'); expect(store.delivery(delivery).status).toBe('handled'); expect(JSON.stringify(last(store,'research').data.context)).toContain('recover me');
 }, 10000);
 it('local tools use immutable receipts and can claim another visible activity', async () => {
@@ -83,7 +82,7 @@ it('inbox list/read cannot reveal a revoked channel and ack never handles queued
 });
 it('invalid run IPC fails immediately instead of consuming the run timeout', async () => {
   const worker = new WorkerClient('test','test','key',new URL('../../dist/tests/helpers/worker-fixture.js',import.meta.url));
-  try { await expect(worker.run({ sessionId: 's', messages: [], recovery: 'x'.repeat(50001), tokenCap: 100, costCap: 1, maxTurns: 1 }, { journal: async () => {}, tool: async () => ({ value: null }) }, 10000, new AbortController().signal)).rejects.toThrow('Invalid worker run payload'); }
+  try { await expect(worker.run({ sessionId: 's', messages: [], recovery: 'x'.repeat(50001), maxTurns: 1 }, { journal: async () => {}, tool: async () => ({ value: null }) }, 10000, new AbortController().signal)).rejects.toThrow('Invalid worker run payload'); }
   finally { worker.close(); }
 }, 2000);
 it('crash after effect commit before tool-result journal restores its receipt without re-execution', async () => {
@@ -101,49 +100,45 @@ it('crash after effect commit before tool-result journal restores its receipt wi
   store.resume('research'); await supervisor.step('research'); expect(c.list('research')).toHaveLength(1);
   expect(restored).toContain('recoveredAction'); expect(restored).toContain('succeeded'); expect(restored).toContain('Historical receipt');
 });
-it('switching activity retains the Agent account and work stop targets the selected activity', async()=>{
+it('switching activity retains run ownership and stop targets the selected activity', async()=>{
   const {store,collaboration:c,work,router}=setup();
   const other=c.createWork('other',{conversationId:'CTWO'});c.enqueue('research',work,'one',{});
-  const run=store.beginRun('research')!;store.input(run,{});c.reserve(run,work,100,0.1);
-  const before=c.ledger.account('research');
+  const run=store.beginRun('research')!;store.input(run,{});c.bindRunWork(run,work);
   await router.call(run,work,'switch','works.select',{workId:other},new AbortController().signal);
   await router.call(run,work,'create','tasks.create',{target:{conversationId:'CTWO'},title:'new context'},new AbortController().signal);
-  expect(c.list('research')[0]?.work_id).toBe(other);expect(c.ledger.account('research')).toEqual(before);
+  expect(c.list('research')[0]?.work_id).toBe(other);
   expect(c.control('UOWNER',work,'pause')).toEqual([]);expect(c.control('UOWNER',other,'pause')).toEqual([run.id]);
 });
-it('an exhausted activity does not pause the Agent or starve another activity',async()=>{
-  const {store,collaboration:c,work,supervisor}=setup(()=>({close:()=>{},run:async()=>({tokens:1,cost:0,certain:true,waiting:false,continuation:false})}));
-  store.db.prepare('UPDATE works SET tokens=max_tokens WHERE id=?').run(work);
-  c.enqueue('research',work,'old',{});await supervisor.step('research');
-  const other=c.createWork('other',{conversationId:'CTWO'});const delivery=c.enqueue('research',other,'new',{});
-  await supervisor.step('research');expect(store.delivery(delivery).status).toBe('handled');
-  expect(store.db.prepare("SELECT paused FROM agents WHERE id='research'").get()).toEqual({paused:0});
+it('work selection is idempotent without quota columns',async()=>{
+  const {store,collaboration:c,work,router}=setup();const other=c.createWork('other',{conversationId:'CTWO'});
+  c.enqueue('research',work,'one',{});const run=store.beginRun('research')!;store.input(run,{});c.bindRunWork(run,work);
+  const signal=new AbortController().signal;
+  const first=await router.call(run,work,'switch','works.select',{workId:other},signal);
+  expect(await router.call(run,work,'switch','works.select',{workId:other},signal)).toEqual(first);
+  expect(store.db.prepare("SELECT 1 FROM pragma_table_info('works') WHERE name='max_tokens'").get()).toBeUndefined();
+  expect(c.currentWork(run,work)).toBe(other);
 });
-it('new messages and new work cannot erase unknown account usage',()=>{
-  const {store,collaboration:c,work}=setup();
-  c.ledger.setLimits('UOWNER','research',3,100,1);c.enqueue('research',work,'one',{});
-  const run=store.beginRun('research')!;store.input(run,{});c.reserve(run,work,100,0.5);store.finish(run);
-  const other=c.createWork('human:new',{conversationId:'CTWO'});c.enqueue('research',other,'two',{});const next=store.beginRun('research')!;
-  expect(()=>c.reserve(next,other,1,0)).toThrow('Agent budget exhausted');
-  expect(c.ledger.account('research').tokens).toBe(100);
+it('attributes each model call to the activity selected when that call begins',async()=>{
+  const {answer}=await import('../helpers/pi.js');
+  const {store,collaboration:c,work,supervisor:original,router}=setup();original.close();
+  const other=c.createWork('other',{conversationId:'CTWO'});
+  const supervisor=new Supervisor(c,router,{runTimeoutMs:10000},()=>({close(){},async run(_spec,hooks){
+    await hooks.usageBegin?.(1,'openai','synthetic');await hooks.usageComplete?.(1,answer([]));
+    await hooks.tool('select-work','works.select',{workId:other});
+    await hooks.usageBegin?.(2,'openai','synthetic');await hooks.usageComplete?.(2,answer([]));
+    return{tokens:24,cost:0,certain:true,waiting:false,continuation:false};
+  }}));cleanups.unshift(()=>supervisor.close());
+  c.enqueue('research',work,'two-model-calls',{});await supervisor.step('research');
+  expect(store.db.prepare('SELECT call_index,work_id FROM model_usage ORDER BY call_index').all()).toEqual([
+    {call_index:1,work_id:work},{call_index:2,work_id:other}
+  ]);
 });
 it('selected activity survives interrupted delivery recovery while its origin is paused',()=>{
   const {store,collaboration:c,work}=setup();const other=c.createWork('other',{conversationId:'CTWO'});
-  c.enqueue('research',work,'one',{});const first=store.beginRun('research')!;store.input(first,{});c.reserve(first,work,10,0.1);
+  c.enqueue('research',work,'one',{});const first=store.beginRun('research')!;store.input(first,{});c.bindRunWork(first,work);
   c.selectWork(first,other);c.control('UOWNER',work,'pause');store.recover();
   const next=store.beginRun('research',Date.now(),true)!;expect(next).toBeDefined();
-  c.reserve(next,other,10,0.1);expect(c.currentWork(next,work)).toBe(other);
-  expect(c.ledger.account('research').tokens).toBe(20);
-});
-it('work selection replays its receipt and distinguishes own reservation from exhausted unrelated work',async()=>{
-  const {store,collaboration:c,work,router}=setup();const other=c.createWork('other',{conversationId:'CTWO'});
-  c.enqueue('research',work,'one',{});const run=store.beginRun('research')!;store.input(run,{});c.reserve(run,work,100000,1);
-  const signal=new AbortController().signal;
-  await router.call(run,work,'create','tasks.create',{target:{conversationId:'CTEST'},title:'reserved allowance'},signal);
-  const first=await router.call(run,work,'switch','works.select',{workId:other},signal);
-  expect(await router.call(run,work,'switch','works.select',{workId:other},signal)).toEqual(first);
-  const exhausted=c.createWork('exhausted',{conversationId:'CTEST'});store.db.prepare('UPDATE works SET tokens=max_tokens WHERE id=?').run(exhausted);
-  await expect(router.call(run,work,'blocked','works.select',{workId:exhausted},signal)).rejects.toThrow('budget exhausted');
+  c.bindRunWork(next,other);expect(c.currentWork(next,work)).toBe(other);
 });
 it('cached attention.read rechecks current membership even with an expired presentation epoch',async()=>{
  const{store,collaboration:c,router,work}=setup();c.enqueue('research',work,'start',{});const run=store.beginRun('research')!;const args={target:{conversationId:'CTEST'}},signal=new AbortController().signal;
@@ -179,7 +174,7 @@ it('discovery aliases expose grant-free file tools and reject actor spoofing',as
  await expect(router.call(run,work,'spoof','tools.call',{name:'file.list',input:{path:'.',agentId:'writer'}},signal)).rejects.toThrow();
  await expect(router.call(run,work,'recurse','tools.call',{name:'tools.call',input:{}},signal)).rejects.toThrow('Unknown');
 });
-it('model context replacement waits for run completion and retains durable identity and debt',async()=>{
+it('model context replacement waits for run completion and retains durable identity',async()=>{
  let created=0,closed=0,first=true;let restored='';
  const{store,collaboration:c,work,supervisor,router}=setup(()=>{created++;return{close:()=>{closed++;},run:async(spec,hooks)=>{
   if(first){first=false;expect((await hooks.tool('reset','sessions.reset',{text:'Continue independent research; inspect unknown receipts.'})).wait).toBe(true);}
@@ -192,20 +187,20 @@ it('model context replacement waits for run completion and retains durable ident
  c.enqueue('research',work,'reset-one',{});await supervisor.step('research');
  expect((router.sessions.status('research') as any).session).not.toBe(before);expect((router.sessions.status('writer') as any).session).toBe(peer);
  expect(c.task(task).title).toBe('durable task');expect(c.reminders.read('research',reminder.id)).toBeDefined();
- expect(c.ledger.account('research').tokens).toBe(12);expect(closed).toBe(1);
+ expect(closed).toBe(1);
  await supervisor.step('research');expect(created).toBe(2);expect(restored).toContain('Continue independent research');
- expect(c.ledger.account('research').tokens).toBe(24);expect(store.db.prepare('SELECT count(*) n FROM session_resets').get()).toEqual({n:1});
+ expect(store.db.prepare('SELECT count(*) n FROM session_resets').get()).toEqual({n:1});
 });
 it('crash recovery applies a requested reset exactly once without erasing unknown actions or bypassing paused work',async()=>{
  const{store,collaboration:c,work,supervisor,router}=setup();c.enqueue('research',work,'reset-crash',{});
- const run=store.beginRun('research')!;store.input(run,{});c.reserve(run,work,123,0.1);
+ const run=store.beginRun('research')!;store.input(run,{});c.bindRunWork(run,work);
  store.prepareAction(run,'uncertain',{synthetic:true});store.startAction(run,'uncertain');
  const reply=await router.call(run,work,'reset','sessions.reset',{text:'recover carefully'},new AbortController().signal);expect(reply.wait).toBe(true);
  expect(router.sessions.apply('research')).toBe(false);
  store.db.prepare("UPDATE works SET state='paused' WHERE id=?").run(work);store.recover();supervisor.recoverSessions();
  const session=(router.sessions.status('research') as any).session;supervisor.recoverSessions();
  expect((router.sessions.status('research') as any).session).toBe(session);expect(session).not.toBe(run.sessionId);
- expect(store.action('uncertain')?.state).toBe('unknown');expect(c.ledger.account('research').tokens).toBe(123);
+ expect(store.action('uncertain')?.state).toBe('unknown');
  expect(store.beginRun('research',Date.now(),true)).toBeUndefined();
  expect(store.db.prepare("SELECT count(*) n FROM deliveries WHERE dedupe LIKE 'session-reset:%'").get()).toEqual({n:1});
 });
@@ -240,7 +235,7 @@ it('historical non-execution receipts cannot bypass current object ACL through i
  const result=await router.call(run,work,'read-history','actions.read',{actionId:run.sessionId+':cancel-history'},signal);
  expect(JSON.stringify(result)).not.toContain('WITHHELD_HISTORY');expect(JSON.stringify(result)).toContain('receiptUnavailable');
 });
-it('recovery refresh rereads memory, the latest checkpoint and the selected work without refilling account',async()=>{
+it('recovery refresh rereads memory, the latest checkpoint and the selected work',async()=>{
  const{store,collaboration:c,work,router,config,supervisor:original}=setup();original.close();let memory='old knowledge',fresh:any;
  const other=c.createWork('fresh-work',{conversationId:'CTWO'});let reads=0;
  const supervisor=new Supervisor(c,router,config,()=>({close:()=>{},run:async(spec,hooks)=>{
@@ -249,14 +244,14 @@ it('recovery refresh rereads memory, the latest checkpoint and the selected work
   memory='new domain knowledge';fresh=JSON.parse(await hooks.refreshRecovery!());return{tokens:5,cost:0,certain:true,waiting:false,continuation:false};
  }}),async()=>{reads++;return memory;});cleanups.unshift(()=>supervisor.close());
  c.enqueue('research',work,'refresh-memory',{});await supervisor.step('research');
- expect(reads).toBe(2);expect(fresh.memory).toBe('new domain knowledge');expect(fresh.checkpoint.text).toBe('updated active context');expect(fresh.work.id).toBe(other);expect(fresh.account.tokens).toBe(50000);expect(c.ledger.account('research').tokens).toBe(5);
+ expect(reads).toBe(2);expect(fresh.memory).toBe('new domain knowledge');expect(fresh.checkpoint.text).toBe('updated active context');expect(fresh.work.id).toBe(other);expect(fresh.usage.knownCalls).toBe(0);
  expect(store.db.prepare("SELECT count(*) n FROM audit WHERE kind='recovery_refresh'").get()).toEqual({n:2});
 });
 
 it('worker factories receive platform-independent definitions through the member directory', async () => {
   const f = setup();
   let received: unknown;
-  const supervisor = new Supervisor(f.collaboration, f.router, { budgets: f.config.budgets }, definition => {
+  const supervisor = new Supervisor(f.collaboration, f.router, { runTimeoutMs: f.config.runTimeoutMs }, definition => {
     received = definition;
     return { run: async () => ({ certain: true, tokens: 1, cost: 0, continuation: false, waiting: false }), close() {} };
   });

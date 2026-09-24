@@ -28,11 +28,17 @@ it('future cancellation leaves queued firings intact unless explicitly withdrawn
  const second=c.reminders.create('research',work,{...input,nextAt:3000});c.tick(3000);result=c.reminders.cancel('research',second.id,2,true)as any;expect(result.withdrawnCount).toBe(1);expect(result.previousFirings[0].status).toBe('handled');
  const run=s.beginRun('research')!;expect(run).toBeDefined();s.input(run,{});result=c.reminders.cancel('research',first.id,3,true)as any;expect(result.withdrawnCount).toBe(0);expect(result.previousFirings[0].status).toBe('injected');expect(s.db.prepare('SELECT state FROM runs WHERE id=?').get(run.id)).toEqual({state:'active'});
 });
-it('pause, revoked target and exhausted persistent budget defer firing without silently adding credits',()=>{
+it('paused work and revoked target defer firing until restored',()=>{
  const{s,m,c,work}=setup(),r=c.reminders.create('research',work,input);c.control('UOWNER',work,'pause');c.tick(2000);expect(c.reminders.read('research',r.id).version).toBe(1);c.control('UOWNER',work,'resume');
  m.membership('research','CTEST',false);c.tick(2000);expect(s.db.prepare('SELECT count(*) n FROM deliveries').get()).toEqual({n:0});m.membership('research','CTEST',true);
- const account=c.ledger.account('research');s.db.prepare('UPDATE budget_accounts SET runs=max_runs WHERE agent_id=?').run('research');c.tick(2000);expect(c.reminders.read('research',r.id).version).toBe(1);expect(c.ledger.account('research').runs).toBe(account.max_runs);
- c.ledger.setLimits('UOWNER','research',account.max_runs+1,account.max_tokens,account.max_cost);c.tick(2000);expect(c.reminders.read('research',r.id).version).toBe(2);expect(c.ledger.account('research').runs).toBe(account.max_runs);
+ c.tick(2000);expect(c.reminders.read('research',r.id).version).toBe(2);
+});
+it('reminder firing does not require a quota account',()=>{
+ const{s,c,work}=setup(),r=c.reminders.create('research',work,input);
+ expect(s.db.prepare("SELECT 1 FROM sqlite_master WHERE name='budget_accounts'").get()).toBeUndefined();
+ c.tick(2000);
+ expect(c.reminders.read('research',r.id).version).toBe(2);
+ expect(s.db.prepare("SELECT count(*) n FROM deliveries WHERE agent_id='research'").get()).toEqual({n:1});
 });
 it('cancelPending withdraws every pending firing even when the displayed log is bounded',()=>{
  const{s,c,work}=setup(),r=c.reminders.create('research',work,{...input,cron:'* * * * *'});for(let i=0;i<105;i++)c.tick(1000+i*60000);
@@ -51,11 +57,11 @@ it('an early authenticated Slack echo of a fixed reminder receipt cannot wake pe
 it('claimed but not yet injected deliveries are reported as running and cannot be withdrawn',()=>{
  const{s,c,work}=setup(),r=c.reminders.create('research',work,input);c.tick(2000);const run=s.beginRun('research')!;const cancelled=c.reminders.cancel('research',r.id,2,true)as any;expect(cancelled.withdrawnCount).toBe(0);expect(cancelled.previousFirings[0].running).toBe(1);s.input(run,{});expect(s.delivery(run.deliveryId).status).toBe('injected');
 });
-it('blocked earlier reminders cannot starve another author with available budget and access',()=>{
- const{s,c,work}=setup();for(let i=0;i<100;i++)c.reminders.create('research',work,{...input,nextAt:1});c.reminders.create('writer',work,{...input,nextAt:2});c.ledger.account('research');s.db.prepare("UPDATE budget_accounts SET runs=max_runs WHERE agent_id='research'").run();c.tick(3000);expect(s.db.prepare("SELECT count(*) n FROM deliveries WHERE agent_id='writer'").get()).toEqual({n:1});expect(s.db.prepare("SELECT count(*) n FROM deliveries WHERE agent_id='research'").get()).toEqual({n:0});
+it('paused authors do not starve another author within the firing batch limit',()=>{
+ const{s,c,work}=setup();for(let i=0;i<100;i++)c.reminders.create('research',work,{...input,nextAt:1});c.reminders.create('writer',work,{...input,nextAt:2});s.pause('research');c.tick(3000);expect(s.db.prepare("SELECT count(*) n FROM deliveries WHERE agent_id='writer'").get()).toEqual({n:1});expect(s.db.prepare("SELECT count(*) n FROM deliveries WHERE agent_id='research'").get()).toEqual({n:0});
 });
-it('revoked ACL and exhausted work caps are filtered before the firing batch limit',()=>{
- for(const condition of ['acl','work']){const{s,c,m,work}=setup();const allowed=c.createWork(`allowed-${condition}`,{conversationId:'CTEST'});for(let i=0;i<100;i++)c.reminders.create('research',work,{...input,nextAt:1});c.reminders.create('writer',allowed,{...input,nextAt:2});if(condition==='acl')m.membership('research','CTEST',false);else s.db.prepare('UPDATE works SET runs=max_runs WHERE id=?').run(work);c.tick(3000);expect(s.db.prepare("SELECT count(*) n FROM deliveries WHERE agent_id='writer'").get()).toEqual({n:1});}
+it('revoked ACL and paused work are filtered before the firing batch limit',()=>{
+ for(const condition of ['acl','work']){const{s,c,m,work}=setup();const allowed=c.createWork(`allowed-${condition}`,{conversationId:'CTEST'});for(let i=0;i<100;i++)c.reminders.create('research',work,{...input,nextAt:1});c.reminders.create('writer',allowed,{...input,nextAt:2});if(condition==='acl')m.membership('research','CTEST',false);else c.control('UOWNER',work,'pause');c.tick(3000);expect(s.db.prepare("SELECT count(*) n FROM deliveries WHERE agent_id='writer'").get()).toEqual({n:1});}
 });
 it('older author-owned reminders remain discoverable by cursor',()=>{
  const{c,work}=setup();const oldest=c.reminders.create('research',work,input);for(let i=0;i<100;i++)c.reminders.create('research',work,input);const first=c.reminders.list('research');expect(first).toHaveLength(100);const last=c.reminders.list('research',first.at(-1)!.cursor);expect(last.map(r=>r.id)).toEqual([oldest.id]);

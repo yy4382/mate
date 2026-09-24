@@ -32,7 +32,7 @@ import {daemonFixture} from '../helpers/daemon-config.js';
 const cleanups: (() => void)[] = [];
 afterEach(() => {vi.restoreAllMocks();cleanups.splice(0).forEach(fn => fn());});
 function setup() {
-  const config = configSchema.parse({ ...configFixture, budgets: { ...configFixture.budgets, maxTokens: 300000 }, agents: [configFixture.agents[0], { ...configFixture.agents[0], id: 'writer', name: 'Writer', slackAppId: 'ATWO', slackUserId: 'UTWO', slackBotId: 'BTWO', botTokenEnv: 'WRITER_BOT', appTokenEnv: 'WRITER_APP' }] });
+  const config = configSchema.parse({ ...configFixture, agents: [configFixture.agents[0], { ...configFixture.agents[0], id: 'writer', name: 'Writer', slackAppId: 'ATWO', slackUserId: 'UTWO', slackBotId: 'BTWO', botTokenEnv: 'WRITER_BOT', appTokenEnv: 'WRITER_APP' }] });
   const store = new Store(':memory:'), messages = new Messages(store, config);migrateCurrentRuntime(store);const post = vi.fn(async () => ({ ts: `101.${String(post.mock.calls.length).padStart(6,'0')}` }));
   const c = new Collaboration(store, messages, new Output(messages, { post }), config), ingress = new Ingress(c,new CanonicalSlackNormalizer(messages,messages.mapper,c.output));
   const backend = { execute: vi.fn(async () => ({ code: 0, stdout: 'artifact evidence', stderr: '', truncated: false })) };
@@ -98,13 +98,12 @@ it('two Agents can coordinate through one canonical message and direct peer feed
  phase='finish';await supervisor.step('research');expect(c.task(task.id).status).toBe('done');for(const row of c.output.ready())await c.output.send(row.id);
  expect(c.list('research')).toHaveLength(1);expect(c.task(task.id).message_key).toBe(JSON.stringify(['TTEST','CTEST',externalThread(target)]));expect(JSON.stringify(post.mock.calls)).toContain('Independent evidence');expect(store.db.prepare("SELECT count(*) n FROM runs WHERE state='failed'").get()).toEqual({n:0});
 });
-it('peer messages can wake an Agent using its existing finite account without a human budget root', async () => {
+it('peer messages wake an Agent without creating a human-owned quota', async () => {
   const {store,c,ingress}=setup(); for(const agent of c.config.agents){store.register(agent.id,'v1',[]);c.messages.membership(agent.id,'CTEST',true);}
-  const before=c.ledger.account('writer');
   store.ingest('ATWO','peer',{team_id:'TTEST',event:{type:'message',channel:'CTEST',ts:'100.000001',user:'UONE',bot_id:'BONE',text:'<@UTWO> help'}}); ingress.replay('ATWO','peer');
   const run=store.beginRun('writer',Date.now(),true)!; expect(run).toBeDefined();
   const binding=store.db.prepare('SELECT work_id FROM delivery_work WHERE delivery_id=?').get(run.deliveryId) as {work_id:string};
-  c.reserve(run,binding.work_id,20,0.1);expect(c.ledger.account('writer')).toMatchObject({max_tokens:before.max_tokens,tokens:20,runs:1});
+  c.bindRunWork(run,binding.work_id);expect(c.currentWork(run,binding.work_id)).toBe(binding.work_id);
 });
 it('kernel lock excludes a second daemon; backup restores SQLite plus private memory', async () => {
   const root=mkdtempSync(join(tmpdir(),'mate-checkpoint-')), data=join(root,'data'); mkdirSync(join(data,'agents','research'),{recursive:true});mkdirSync(join(data,'state')); writeFileSync(join(data,'agents','research','MEMORY.md'),'synthetic lesson');

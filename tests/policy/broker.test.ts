@@ -1,4 +1,4 @@
-import { fixtureTarget } from '../helpers/canonical-slack.js';
+import { fixtureTarget ,migrateCurrentRuntime} from '../helpers/canonical-slack.js';
 import { afterEach, expect, it, vi } from 'vitest';
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -17,7 +17,7 @@ function setup() {
   const store = new Store(':memory:');
   cleanups.push(() => { store.close(); rmSync(home, { recursive: true, force: true }); });
   const config = configSchema.parse(configFixture); store.register('research', 'v1', []);
-  const messages = new Messages(store, config); messages.membership('research', 'CTEST', true);
+  const messages = new Messages(store, config);migrateCurrentRuntime(store); messages.membership('research', 'CTEST', true);
   const collaboration = new Collaboration(store, messages, new Output(messages, { post: async () => ({ ts: '101.000001' }) }), config);
   const work = collaboration.createWork('human:one', fixtureTarget('CTEST', '100.000001'));
   collaboration.enqueue('research', work, 'one', {});

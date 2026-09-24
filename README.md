@@ -1,6 +1,6 @@
 # Mate
 
-Mate 是面向个人 Slack workspace 的持久 Agent 团队。每个 Agent 有跨频道与 DM 的连续上下文、私有工作空间和持续预算；模型自行决定关注、协作、工作组织与是否发言。首个可用版本的目标是可部署到低资源 Linux VPS、以独立的非特权 Linux 用户隔离 Agent，并能从 Slack 操作。
+Mate 是面向个人 Slack workspace 的持久 Agent 团队。每个 Agent 有跨频道与 DM 的连续上下文和私有工作空间；模型自行决定关注、协作、工作组织与是否发言。首个可用版本的目标是可部署到低资源 Linux VPS、以独立的非特权 Linux 用户隔离 Agent，并能从 Slack 操作。模型用量持久记录，但不设 token、费用或 run 次数额度。
 
 运行层使用 `@earendil-works/pi-agent-core` 与 `@earendil-works/pi-ai`，依赖与脚本使用 pnpm。普通命令无需逐条审批；系统级命令须由用户在 Slack 中明确批准。
 

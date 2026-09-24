@@ -3,6 +3,7 @@ import type Database from 'better-sqlite3';
 import type {TeamSettings} from '../domain/agents.js';
 import type {AgentDirectory} from '../agents/directory.js';
 import {encode,hash} from '../storage/store.js';
+import {UsageLedger,type UsageSummary} from '../usage/ledger.js';
 
 export const activitySourceSchema=z.enum(['task','reminder_event','reminder_firing','run','action','output','runtime','internal_dm']);
 export type ActivitySource=z.infer<typeof activitySourceSchema>;
@@ -25,8 +26,8 @@ interface Coverage{historicalComplete:boolean;availableSince:number|null;gapCoun
 export interface OperationsPage<T>{items:T[];atLeast:number;truncated:boolean}
 export interface OperationsStatus{
   at:number;
-  agents:{id:string;registered:boolean;paused:boolean|null;generation:number|null;sessionId:string|null;activeRun:{id:string;createdAt:number;workId:string|null}|null;budget:{agent_id:string;max_runs:number;max_tokens:number;max_cost:number;runs:number;tokens:number;cost:number}|null}[];
-  works:OperationsPage<{id:string;state:string;runs:number;max_runs:number;tokens:number;max_tokens:number;cost:number;max_cost:number}>;
+  agents:{id:string;registered:boolean;paused:boolean|null;generation:number|null;sessionId:string|null;activeRun:{id:string;createdAt:number;workId:string|null}|null;usage:UsageSummary}[];
+  works:OperationsPage<{id:string;state:string}>;
   uncertainActions:OperationsPage<{id:string;agentId:string;runId:string;state:string}>;
   uncertainOutputs:OperationsPage<{id:string;agentId:string;state:string}>;
   heldDrafts:OperationsPage<{draftId:string;agentId:string;outputId:string;revision:number;state:string}>;
@@ -40,13 +41,11 @@ export class OperationsView{
   status(owner:string):OperationsStatus{
     this.owner(owner);const s=this.c.store,now=Date.now(),cap=100;
     type RuntimeRow={id:string;session_id:string;paused:number;generation:number;run_id:string|null;run_created:number|null;work_id:string|null};
-    type Account=OperationsStatus['agents'][number]['budget']&{};
     const runtime=new Map((s.db.prepare(`SELECT a.id,a.session_id,a.paused,a.generation,r.id run_id,r.created_at run_created,rc.work_id
       FROM agents a LEFT JOIN runs r ON r.agent_id=a.id AND r.state='active' LEFT JOIN run_context rc ON rc.run_id=r.id`).all() as RuntimeRow[]).map(row=>[row.id,row]));
-    const accounts=new Map((s.db.prepare('SELECT agent_id,max_runs,max_tokens,max_cost,runs,tokens,cost FROM budget_accounts').all() as Account[]).map(row=>[row.agent_id,row]));
-    const agents=this.c.config.agents.map(agent=>{const row=runtime.get(agent.id),account=accounts.get(agent.id);return{id:agent.id,registered:Boolean(row),paused:row?Boolean(row.paused):null,generation:row?.generation??null,sessionId:row?.session_id??null,activeRun:row?.run_id?{id:row.run_id,createdAt:row.run_created!,workId:row.work_id??null}:null,budget:account??null};});
+    const agents=this.c.config.agents.map(agent=>{const row=runtime.get(agent.id);return{id:agent.id,registered:Boolean(row),paused:row?Boolean(row.paused):null,generation:row?.generation??null,sessionId:row?.session_id??null,activeRun:row?.run_id?{id:row.run_id,createdAt:row.run_created!,workId:row.work_id??null}:null,usage:UsageLedger.summaryFrom(s.db,agent.id)};});
     const page=<T>(sql:string,...args:unknown[]):OperationsPage<T>=>{const rows=s.db.prepare(sql).all(...args) as T[];return{items:rows.slice(0,cap),atLeast:rows.length>cap?cap+1:rows.length,truncated:rows.length>cap};};
-    const works=page<OperationsStatus['works']['items'][number]>('SELECT id,state,runs,max_runs,tokens,max_tokens,cost,max_cost FROM works ORDER BY id DESC LIMIT ?',cap+1);
+    const works=page<OperationsStatus['works']['items'][number]>('SELECT id,state FROM works ORDER BY id DESC LIMIT ?',cap+1);
     const uncertainActions=page<OperationsStatus['uncertainActions']['items'][number]>("SELECT id,agent_id agentId,run_id runId,state FROM actions WHERE state IN ('executing','unknown') ORDER BY id DESC LIMIT ?",cap+1);
     const uncertainOutputs=page<OperationsStatus['uncertainOutputs']['items'][number]>("SELECT id,agent_id agentId,state FROM outbox WHERE state='unknown' ORDER BY id DESC LIMIT ?",cap+1);
     const heldDrafts=page<OperationsStatus['heldDrafts']['items'][number]>("SELECT d.id draftId,d.agent_id agentId,d.outbox_id outputId,d.revision,o.state FROM outbox o INDEXED BY output_held_status JOIN drafts d INDEXED BY draft_output_lookup ON d.outbox_id=o.id WHERE o.state='held' ORDER BY o.id DESC LIMIT ?",cap+1);

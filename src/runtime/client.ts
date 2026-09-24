@@ -2,8 +2,9 @@ import { fork, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
+import type { AssistantMessage } from '@earendil-works/pi-ai';
 import type { EngineHooks, EngineResult, RunSpec } from './engine.js';
-const rpcSchema = z.object({ type: z.literal('rpc'), nonce: z.string(), id: z.number().int().positive(), kind: z.enum(['journal','tool','notice','invalidateViews','refreshRecovery']), payload: z.unknown() }).strict();
+const rpcSchema = z.object({ type: z.literal('rpc'), nonce: z.string(), id: z.number().int().positive(), kind: z.enum(['journal','tool','notice','invalidateViews','refreshRecovery','usageBegin','usageComplete']), payload: z.unknown() }).strict();
 const resultSchema = z.object({ tokens: z.number().int().nonnegative(), cost: z.number().finite().nonnegative(), certain: z.boolean(), waiting: z.boolean(), continuation: z.boolean(), snapshot: z.array(z.unknown()).optional() }).strict();
 export class WorkerClient {
   readonly child: ChildProcess;
@@ -46,6 +47,12 @@ export class WorkerClient {
           else if (call.kind === 'journal') {
             const msg = z.object({ role: z.enum(['system','user','assistant','toolResult']) }).passthrough().parse(call.payload);
             await hooks.journal(msg as AgentMessage);
+          } else if (call.kind === 'usageBegin') {
+            const begin = z.object({ callIndex: z.number().int().positive(), provider: z.string().min(1), modelId: z.string().min(1) }).strict().parse(call.payload);
+            await hooks.usageBegin?.(begin.callIndex, begin.provider, begin.modelId);
+          } else if (call.kind === 'usageComplete') {
+            const completed = z.object({ callIndex: z.number().int().positive(), message: z.object({ role: z.literal('assistant'), usage: z.unknown() }).passthrough() }).strict().parse(call.payload);
+            value = await hooks.usageComplete?.(completed.callIndex, completed.message as unknown as AssistantMessage);
           } else {
             const tool = z.object({ id: z.string().min(1).max(500), operation: z.string().max(100), args: z.unknown() }).strict().parse(call.payload);
             value = await hooks.tool(tool.id, tool.operation, tool.args);

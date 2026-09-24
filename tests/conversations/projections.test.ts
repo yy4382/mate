@@ -10,7 +10,7 @@ import type {ConversationTarget} from '../../src/domain/conversations.js';
 const stores:Store[]=[];afterEach(()=>stores.splice(0).forEach(s=>s.close()));
 function setup(){
  const s=new Store(':memory:');stores.push(s);
- const settings={agents:['alice','bob'].map(id=>({id,name:id,role:'colleague',model:{provider:'test',id:'test',apiKeyEnv:'TEST_KEY'}})),ownerUserIds:['owner'],budgets:{maxRuns:100,maxTokens:1000000,maxCostUsd:10,runTimeoutMs:10000}};
+ const settings={agents:['alice','bob'].map(id=>({id,name:id,role:'colleague',model:{provider:'test',id:'test',apiKeyEnv:'TEST_KEY'}})),ownerUserIds:['owner'],runTimeoutMs:10000};
  const app=localApplication(s,settings);migrateProjections(s);for(const a of settings.agents)s.register(a.id,'test',[]);
  const target=app.input.createRoom('local-room',['alice','bob'],['owner']);
  let n=0;const evidence=(r:ProjectionDispatch):ProjectionEvidence=>{const id=`remote-${++n}`;return{publisher:r.publisher,locator:{...r.wire.target,messageId:id},root:r.wire.thread??id,text:r.wire.text};};

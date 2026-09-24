@@ -5,9 +5,9 @@ import { byteTokens, compactionParts, repairTranscript } from './context.js';
 
 export const toolDefinition = { name: 'mate', description: 'Discover capabilities with tools.list ({}), inspect exact arguments with tools.describe ({name}), then use the named operation or tools.call ({name,input}). Actor and work are bound by the daemon. Visible replies require messages.send with an explicit target.',
   parameters: Type.Object({ operation: Type.String(), args: Type.Record(Type.String(), Type.Unknown()) }, { additionalProperties: false }) };
-export interface RunSpec { sessionId: string; messages: AgentMessage[]; recovery: string; tokenCap: number; costCap: number; maxTurns: number }
+export interface RunSpec { sessionId: string; messages: AgentMessage[]; recovery: string; maxTurns: number }
 export interface ToolReply { value: unknown; wait?: boolean }
-export interface EngineHooks { refreshRecovery?():Promise<string>; invalidateViews?():Promise<void>; notice?(): Promise<string | undefined>; journal(message: AgentMessage): Promise<void>; tool(id: string, operation: string, args: unknown): Promise<ToolReply>; summarize?(messages: AgentMessage[], stream: StreamFn): Promise<string> }
+export interface EngineHooks { refreshRecovery?():Promise<string>; invalidateViews?():Promise<void>; notice?(): Promise<string | undefined>; journal(message: AgentMessage): Promise<void>; tool(id: string, operation: string, args: unknown): Promise<ToolReply>; summarize?(messages: AgentMessage[], stream: StreamFn): Promise<string>; usageBegin?(callIndex: number, provider: string, modelId: string): Promise<void>; usageComplete?(callIndex: number, message: AssistantMessage): Promise<boolean | void> }
 export interface EngineResult { tokens: number; cost: number; certain: boolean; waiting: boolean; continuation: boolean; snapshot?: AgentMessage[] }
 
 /** One instance is retained for the lifetime of one Agent worker. */
@@ -17,31 +17,32 @@ export class Engine {
   abort(): void { this.agent?.abort(); }
   async run(spec: RunSpec, hooks: EngineHooks): Promise<EngineResult> {
     if (this.agent?.state.isStreaming) throw new Error('Agent already active');
-    let tokens = 0, cost = 0, certain = true, turns = 0, waiting = false, fault: unknown;
+    let tokens = 0, cost = 0, certain = true, turns = 0, waiting = false, fault: unknown, callIndex = 0;
     const safeStream: StreamFn = async (model, context, options) => {
       const output = createAssistantMessageEventStream();
       const inputCap = byteTokens(context);
-      const rate = Math.max(...Object.values(model.cost), 0) / 1e6;
-      const remaining = Math.min(spec.tokenCap - tokens, rate > 0 ? Math.floor((spec.costCap - cost) / rate) : Infinity);
-      const maxTokens = Math.min(options?.maxTokens ?? 2048, 2048, model.maxTokens, remaining - inputCap, model.contextWindow - inputCap);
+      const maxTokens = Math.min(options?.maxTokens ?? 2048, 2048, model.maxTokens, model.contextWindow - inputCap);
       if (maxTokens < 64) {
-        fault = new Error('Model budget or context exhausted');
+        fault = new Error('Model context exhausted');
         output.push({ type: 'error', reason: 'error', error: this.errorMessage(String(fault)) }); return output;
       }
-      // Reserve before invocation. An uncertain provider failure retains its full allowance.
-      tokens += inputCap + maxTokens; cost += (inputCap + maxTokens) * rate;
+      const index = ++callIndex;
       void (async () => {
         try {
+          await hooks.usageBegin?.(index, model.provider, model.id);
           const source = await this.stream(model, context, { ...options, maxTokens });
           const terminal = [];
           for await (const event of source) { if (event.type === 'done' || event.type === 'error') terminal.push(event); else output.push(event); }
           const message = await source.result();
           if (message.stopReason === 'error' || message.stopReason === 'aborted') certain = false;
           else {
-            const used = message.usage.totalTokens, charged = message.usage.cost.total;
-            if (!Number.isFinite(used) || used < 0 || !Number.isFinite(charged) || charged < 0) { certain = false; fault = new Error('Invalid provider usage'); }
-            else { tokens += used - inputCap - maxTokens; cost += charged - (inputCap + maxTokens) * rate; }
-            if (tokens > spec.tokenCap || cost > spec.costCap) fault = new Error('Provider usage exceeded reserved budget');
+            const usage = message.usage;
+            const counts = [usage?.input, usage?.output, usage?.cacheRead, usage?.cacheWrite, usage?.totalTokens];
+            const charged = usage?.cost?.total;
+            if (counts.some(value => !Number.isSafeInteger(value) || value < 0) ||
+                !Number.isFinite(charged) || charged < 0) certain = false;
+            else if ((await hooks.usageComplete?.(index, message)) === false) certain = false;
+            else { tokens += usage.totalTokens; cost += charged; }
           }
           for (const event of terminal) output.push(event);
         } catch (error) { certain = false; fault = error; output.push({ type: 'error', reason: 'error', error: this.errorMessage(String(error)) }); }

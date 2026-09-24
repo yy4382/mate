@@ -26,7 +26,7 @@ attention.peek attention.read attention.resolve attention.defer attention.mute
 messages.recent messages.read messages.search messages.send messages.watch inbox.list inbox.read inbox.ack
 works.list works.select tasks.list tasks.read tasks.events tasks.byMessage tasks.intents tasks.retry tasks.continue tasks.discard tasks.create tasks.claim tasks.unclaim tasks.transfer tasks.wait tasks.update tasks.delegate
 reminders.list reminders.read reminders.log reminders.finish reminders.create reminders.edit reminders.cancel schedules.list schedules.create schedules.cancel
-actions.list actions.read sessions.status sessions.checkpoint sessions.reset environment.info budget.read agents drafts.list drafts.read drafts.retry drafts.continue drafts.revise drafts.discard
+actions.list actions.read sessions.status sessions.checkpoint sessions.reset environment.info usage.read agents drafts.list drafts.read drafts.retry drafts.continue drafts.revise drafts.discard
 file.read_bytes file.write_bytes file.read file.write file.list file.stat file.search file.mkdir file.move file.remove file.edit exec processes.list processes.stop system.request system.status attachments.save research.read artifact.publish artifact.revise`.trim().split(/\s+/);
 
 it('registers every public operation exactly once with complete policies and stable documentation order',async()=>{
@@ -73,7 +73,7 @@ it('authorizes task and reminder effects against their bound work while retainin
   const {router,run,work,c,store}=setup(),other=c.createWork('other',{conversationId:'CTEST'}),taskId=c.createTask('research',other,{conversationId:'CTEST'},'cross-work');c.claim('research',taskId);const signal=new AbortController().signal;
   const held=(await router.call(run,work,'cross-task','tasks.update',{taskId,expectedVersion:c.task(taskId).version,status:'done',result:'evidence'},signal)).value as {intentId:string;holdId:string};
   expect(store.db.prepare("SELECT work_id FROM task_intents WHERE id=?").get(`${run.sessionId}:cross-task`)).toEqual({work_id:other});
-  const unrelated=c.createWork('unrelated',{conversationId:'CTEST'});c.selectWork(run,unrelated);store.db.prepare('UPDATE works SET tokens=max_tokens WHERE id=?').run(unrelated);
+  const unrelated=c.createWork('unrelated',{conversationId:'CTEST'});c.selectWork(run,unrelated);
   await router.call(run,work,'continue-cross-task','tasks.continue',{intentId:held.intentId,holdId:held.holdId,acknowledge:'apply_despite_unread_or_changes'},signal);expect(c.task(taskId).status).toBe('done');
   const reminder=(await router.call(run,work,'cross-reminder','reminders.create',{target:{conversationId:'CTEST'},content:'follow the task',nextAt:Date.now()+10000,timezone:'UTC',taskId},signal)).value as {work_id:string};expect(reminder.work_id).toBe(other);
   const request=JSON.parse((store.action(`${run.sessionId}:cross-reminder`) as any).request);expect(request.workId).toBe(unrelated);
@@ -82,7 +82,7 @@ it('authorizes task and reminder effects against their bound work while retainin
 it('binds canonical message claims to the existing task work instead of an unrelated selected work',async()=>{
   const {router,run,work,c,store}=setup(),target=fixtureTarget('CTEST','100.000001'),bound=c.createWork('bound-message',target),messageId=target.threadId!;
   c.messages.record({id:messageId,conversationId:target.conversationId,rootId:messageId,order:'100000001',revision:'100000001',text:'claim this',author:{kind:'human',id:'UOWNER'},origin:'participant',mentions:[],attachments:[],deleted:false},['research']);
-  c.createTask('research',bound,target,'claim this',undefined,{messageKey:messageId});const unrelated=c.createWork('unrelated-message',target);c.selectWork(run,unrelated);store.db.prepare('UPDATE works SET tokens=max_tokens WHERE id=?').run(unrelated);
+  c.createTask('research',bound,target,'claim this',undefined,{messageKey:messageId});const unrelated=c.createWork('unrelated-message',target);c.selectWork(run,unrelated);
   await expect(router.call(run,work,'claim-message','tasks.claim',{message:{messageId},expectedVersion:0},new AbortController().signal)).resolves.toHaveProperty('value');
   expect(store.db.prepare('SELECT work_id FROM task_intents WHERE id=?').get(`${run.sessionId}:claim-message`)).toEqual({work_id:bound});
 });

@@ -3,7 +3,7 @@ import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Store } from '../../src/storage/store.js';
-import { Messages, Output, fixtureTarget } from '../helpers/canonical-slack.js';
+import { Messages, Output, fixtureTarget ,migrateCurrentRuntime} from '../helpers/canonical-slack.js';
 import { Collaboration } from '../../src/collaboration/service.js';
 import { Broker } from '../../src/policy/broker.js';
 import { ToolRouter } from '../../src/runtime/tools.js';
@@ -18,7 +18,7 @@ function harness() {
   const store = new Store(':memory:');
   cleanup.push(() => { store.close(); rmSync(base, { recursive: true, force: true }); });
   store.register('research', 'v1', []);
-  const messages = new Messages(store, configFixture); messages.membership('research', 'CTEST', true);
+  const messages = new Messages(store, configFixture);migrateCurrentRuntime(store); messages.membership('research', 'CTEST', true);
   const collaboration = new Collaboration(store, messages, new Output(messages, { post: async () => ({ ts: '200.000001' }) }), configFixture);
   const work = collaboration.createWork('environment', fixtureTarget('CTEST', '100.000001'));
   collaboration.enqueue('research', work, 'start', {});

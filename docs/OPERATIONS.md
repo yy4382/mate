@@ -63,6 +63,8 @@ sudo matectl logs
 
 先停止 `mate.service` 和 Agent 后台任务；维护命令会复查。`sudo matectl backup NAME` 保存 SQLite 与每位 Agent 的私人 home，最后发布完成标记。共享目录另按普通 VPS 文件备份方式处理，并保留 UID/GID。`sudo matectl restore OLD --replace CURRENT` 要求 CURRENT 是当前状态的匹配 checkpoint；中断后用相同参数恢复，不删库或清理恢复标记来绕过检查。
 
-代码升级先构建完整新发布物、停机并备份，再运行 `sudo matectl upgrade /ABSOLUTE/new-mate.deploy.json`。它只替换已验证 release，不迁移数据库或 Agent 目录；用 `sudo matectl finalize` 确认，或在验证数据兼容性后用 `sudo matectl rollback` 回退代码。配置变更走显式离线 `migrate OLD_CONFIG NEW_CONFIG BACKUP`；现有 Agent 的 UID/GID/home 和共享根不得借此改变。原生操作细节与命令契约以安装器、`matectl` 和相关测试为准。
+代码升级先构建完整新发布物、停机并备份，再运行 `sudo matectl upgrade /ABSOLUTE/new-mate.deploy.json`。它替换已验证 release；新服务首次启动可执行版本化数据库迁移，因此回退到旧代码前必须核对数据库兼容性，必要时从升级前检查点恢复。验证后用 `sudo matectl finalize` 确认。配置变更走显式离线 `migrate OLD_CONFIG NEW_CONFIG BACKUP`；现有 Agent 的 UID/GID/home 和共享根不得借此改变。原生操作细节与命令契约以安装器、`matectl` 和相关测试为准。
+
+旧安装的 `mate.budgets` 仅供固定旧版 `matectl` 控制器解析；新服务完全忽略其中的运行次数、token 和费用额度，只沿用 `runTimeoutMs`。启动日志和 `matectl doctor` 会提示此兼容字段已失效。新安装的配置应只写 `mate.runTimeoutMs`，安装器会拒绝旧额度字段。历史模型用量只能从已保存且含有效用量的助手消息回填，升级前的累计值可能不完整；旧额度预留不算实际用量。旧版没有逐次记录模型调用时所选事项，因此回填记录的事项归属留空。
 
 停用使用 `sudo /usr/bin/node /opt/mate/current/dist/src/deployment/cli.js disable /etc/mate/mate.json`。它停止主服务，保留后台任务、文件、数据库、checkpoint 和发布物；需要结束后台任务时明确列出并逐项停止。

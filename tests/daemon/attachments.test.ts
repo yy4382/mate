@@ -5,7 +5,7 @@ import {tmpdir}from 'node:os';
 import {resolve}from 'node:path';
 import {spawnSync}from 'node:child_process';
 import {Store}from '../../src/storage/store.js';
-import {Messages,Output}from '../helpers/canonical-slack.js';
+import {Messages,Output,migrateCurrentRuntime}from '../helpers/canonical-slack.js';
 import {Collaboration}from '../../src/collaboration/service.js';
 import {Broker}from '../../src/policy/broker.js';
 import {ToolRouter}from '../../src/runtime/tools.js';
@@ -16,7 +16,7 @@ import {configFixture}from '../helpers/config.js';
 const cleanup:(()=>void)[]=[];afterEach(()=>{cleanup.splice(0).forEach(fn=>fn());vi.unstubAllGlobals();});
 function setup(){
  const root=realpathSync(mkdtempSync(`${tmpdir()}/mate-attachments-`)),s=new Store(':memory:');cleanup.push(()=>{s.close();rmSync(root,{recursive:true,force:true});});s.register('research','v1',[]);
- const m=new Messages(s,configFixture);m.membership('research','CTEST',true);const c=new Collaboration(s,m,new Output(m,{post:async()=>({ts:'200.000001'})}),configFixture);
+ const m=new Messages(s,configFixture);migrateCurrentRuntime(s);m.membership('research','CTEST',true);const c=new Collaboration(s,m,new Output(m,{post:async()=>({ts:'200.000001'})}),configFixture);
  const broker=new Broker(s,c,{execute:async request=>{const result=spawnSync(process.execPath,[resolve('dist/src/execution/file-operation.mjs'),root],{input:JSON.stringify(request.operation),encoding:'utf8'});return{code:result.status??1,stdout:result.stdout,stderr:result.stderr,truncated:false};}},{research:root});new ToolRouter(c,broker);
  const target=fixtureTarget('CTEST','100.000001'),work=c.createWork('attachment',target);c.enqueue('research',work,'one',{});const run=s.beginRun('research')!;s.input(run,{});
  s.ingest('AONE','attachment',{team_id:'TTEST',event:{type:'message',channel:'CTEST',ts:'100.000001',text:'source',user:'UOWNER',files:[{id:'FFILE',name:'picture.png',mimetype:'image/png',size:4,url_private:'https://ignored.invalid/'}]}});m.normalize('AONE','attachment');

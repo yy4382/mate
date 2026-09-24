@@ -7,11 +7,11 @@ import {LocalConsole}from '../../src/local/console.js';
 import {formatControlReply}from '../../src/slack/service.js';
 import type {TeamSettings}from '../../src/domain/agents.js';
 
-const settings:TeamSettings={agents:['alice','bob'].map(id=>({id,name:id,role:'colleague',model:{provider:'test',id:'test',apiKeyEnv:'TEST_KEY'}})),ownerUserIds:['owner'],budgets:{maxRuns:50,maxTokens:100000,maxCostUsd:20,runTimeoutMs:10000}};
+const settings:TeamSettings={agents:['alice','bob'].map(id=>({id,name:id,role:'colleague',model:{provider:'test',id:'test',apiKeyEnv:'TEST_KEY'}})),ownerUserIds:['owner'],runTimeoutMs:10000};
 const stores:Store[]=[];afterEach(()=>{vi.useRealTimers();stores.splice(0).forEach(store=>store.close());});
 function setup(){
  const store=new Store(':memory:');stores.push(store);const app=localApplication(store,settings);
- for(const agent of settings.agents){store.register(agent.id,'v1',[]);app.collaboration.ledger.account(agent.id);}
+ for(const agent of settings.agents)store.register(agent.id,'v1',[]);
  const target=app.input.createRoom('room',['alice','bob'],['owner']),work=app.collaboration.createWork('operations',target);
  return{store,...app,target,work};
 }
