@@ -153,3 +153,5 @@ None yet.
 | #48 | `c4a69a7` (worktree) | `pnpm check` in `.worktrees/t48` | 61 files / 425 tests, exit 0 — merge pending #36 finishing |
 | #52 | `053a643` (worktree) | `pnpm check` in `.worktrees/t52` | 62 files / 419 tests, exit 0 — merge pending #36 finishing |
 | #36 | `a2288ce` | `pnpm check` in an isolated `git archive` copy | 57 files / 398 tests, exit 0; all preserved-baseline tests confirmed present; old schema modules fully unreferenced; `Store` is the single entry onto `openCurrentDatabase` |
+| #36 (final) | `2b56276` | `pnpm typecheck` + `pnpm check` in the MAIN tree | 57 files / 402 tests, exit 0; 62→57 file and 416→402 test drop is exactly the migration-path tests; every preserved-baseline test confirmed present by path |
+| #52 (reworked) | `aac16f1`, merged `fab5692` | `pnpm typecheck` + `pnpm check` on the merged MAIN tree before committing the merge | 58 files / 409 tests, exit 0; merge was conflict-free after re-application |
