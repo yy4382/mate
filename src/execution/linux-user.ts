@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, statSync, realpathSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -10,6 +10,7 @@ import {
   type ExecutionRequest,
   type ExecutionResult,
 } from "./backend.js";
+import { killProcessGroup, stopUnit } from "./linux-processes.js";
 import { within } from "./paths.js";
 
 export interface LinuxIdentity {
@@ -130,7 +131,8 @@ export class LinuxUserBackend implements ExecutionBackend {
         errBytes = 0,
         truncated = false,
         interrupted = false,
-        settled = false;
+        settled = false,
+        stopping: Promise<void> | undefined;
       const collect = (parts: Buffer[], size: number, chunk: Buffer): number => {
         const available = 65536 - size;
         if (available <= 0) {
@@ -149,20 +151,13 @@ export class LinuxUserBackend implements ExecutionBackend {
         errBytes = collect(stderr, errBytes, chunk);
       });
       const stop = () => {
-        if (interrupted) return;
+        if (interrupted) return stopping;
         interrupted = true;
-        if (scope)
-          spawnSync("/usr/bin/systemctl", ["stop", "--", scope.unit], {
-            timeout: 10000,
-            env: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8" },
-            stdio: "ignore",
-          });
-        if (child.pid)
-          try {
-            process.kill(-child.pid, "SIGKILL");
-          } catch {
-            /* Already exited. */
-          }
+        killProcessGroup(child.pid);
+        // Killing the group is immediate; the scope stop is awaited, never blocked on, so other
+        // Agents keep working while systemd cleans up descendants that left the group.
+        stopping = stopUnit(scope?.unit);
+        return stopping;
       };
       const timer = setTimeout(stop, request.timeoutMs);
       signal?.addEventListener("abort", stop, { once: true });
@@ -184,15 +179,19 @@ export class LinuxUserBackend implements ExecutionBackend {
           child.stdout!.destroy();
           child.stderr!.destroy();
         }
-        if (interrupted)
-          reject(new Error("Linux user execution aborted or timed out; outcome may be unknown"));
-        else
-          resolvePromise({
-            code: code ?? 1,
-            stdout: Buffer.concat(stdout).toString("utf8"),
-            stderr: Buffer.concat(stderr).toString("utf8"),
-            truncated: truncated || openPipes,
-          });
+        const settle = () => {
+          if (interrupted)
+            reject(new Error("Linux user execution aborted or timed out; outcome may be unknown"));
+          else
+            resolvePromise({
+              code: code ?? 1,
+              stdout: Buffer.concat(stdout).toString("utf8"),
+              stderr: Buffer.concat(stderr).toString("utf8"),
+              truncated: truncated || openPipes,
+            });
+        };
+        if (stopping) void stopping.then(settle, settle);
+        else settle();
       };
       // A background child may inherit these pipes. Return after the shell exits, then close transient output capture.
       child.once("exit", (code) => {

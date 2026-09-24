@@ -82,6 +82,27 @@ it("refuses non-owner decisions, rejected and expired requests without execution
   }
 });
 
+it("never starts a system command while the approval interface produces no decision", async () => {
+  const { store, work, run, execute, system } = setup();
+  try {
+    system.request(run, work, "unanswered", command);
+    for (let attempt = 0; attempt < 3; attempt += 1) await system.dispatchApproved();
+    expect(execute).not.toHaveBeenCalled();
+    expect(system.status("research", "unanswered").status).toBe("pending");
+    // The approval window closes with no human decision: the command stays unstarted and the
+    // persistent record says why, so the Agent can request it again deliberately.
+    system.expire(601001);
+    await system.dispatchApproved();
+    expect(execute).not.toHaveBeenCalled();
+    expect(system.status("research", "unanswered")).toMatchObject({
+      status: "expired",
+      receipt: { reason: "approval_expired" },
+    });
+  } finally {
+    store.close();
+  }
+});
+
 it("recovers approved requests but never replays an uncertain executing request after restart", async () => {
   const { store, collaboration, work, run, execute, system } = setup();
   try {

@@ -117,6 +117,38 @@ it("keeps complete foreground output when its pipes close normally", async () =>
   expect(result.truncated).toBe(false);
 });
 
+it("cancels an ordinary command promptly while other work keeps running", async () => {
+  const root = workspace(),
+    backend = new LinuxUserBackend({ alice: identity }),
+    controller = new AbortController();
+  let ticks = 0;
+  const timer = setInterval(() => {
+    ticks += 1;
+  }, 10);
+  const request = { agentId: "alice", root, timeoutMs: 30000 };
+  try {
+    const running = backend.execute(
+      { ...request, operation: { kind: "exec", cwd: ".", command: "sleep 5" } },
+      controller.signal,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const started = Date.now();
+    controller.abort();
+    await expect(running).rejects.toThrow("outcome may be unknown");
+    expect(Date.now() - started).toBeLessThan(3000);
+    expect(ticks).toBeGreaterThan(1);
+    const timedOut = backend.execute({
+      ...request,
+      timeoutMs: 100,
+      operation: { kind: "exec", cwd: ".", command: "sleep 5" },
+    });
+    await expect(timedOut).rejects.toThrow("timed out");
+    expect(ticks).toBeGreaterThan(1);
+  } finally {
+    clearInterval(timer);
+  }
+});
+
 it("rejects missing identity, but accepts ordinary parent paths", async () => {
   const root = workspace(),
     backend = new LinuxUserBackend({ alice: identity });

@@ -3,6 +3,7 @@ import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
 import type { LocalAdapter } from "./input.js";
 import type { Controls } from "../daemon/control.js";
+import { PendingControl } from "../daemon/control.js";
 import { conversationTargetSchema } from "../domain/conversations.js";
 const base = { id: z.string().min(1).max(200), human: z.string().min(1).max(1000) };
 const request = z.discriminatedUnion("op", [
@@ -32,7 +33,7 @@ export class LocalConsole {
     readonly input: LocalAdapter,
     readonly controls: Controls,
   ) {}
-  execute(value: unknown): { id: string; result: unknown } {
+  async execute(value: unknown): Promise<{ id: string; result: unknown }> {
     const r = request.parse(value);
     // Check configured host identities even for owner controls.
     this.input.rooms(r.human);
@@ -43,8 +44,13 @@ export class LocalConsole {
         return { id: r.id, result: this.input.read(r.human, r.target, r.before) };
       case "rooms":
         return { id: r.id, result: this.input.rooms(r.human) };
-      case "control":
-        return { id: r.id, result: this.controls.execute(r.human, r.text) };
+      case "control": {
+        const outcome = this.controls.execute(r.human, r.text);
+        return {
+          id: r.id,
+          result: outcome instanceof PendingControl ? await outcome.result : outcome,
+        };
+      }
     }
   }
   async serve(source: Readable, destination: Writable, signal: AbortSignal): Promise<void> {
@@ -61,7 +67,7 @@ export class LocalConsole {
           if (line.length > 100000) throw new Error("Local request too large");
           const parsed = JSON.parse(line);
           id = typeof parsed?.id === "string" ? parsed.id.slice(0, 200) : null;
-          response = this.execute(parsed);
+          response = await this.execute(parsed);
         } catch (error) {
           response = { id, error: error instanceof Error ? error.message : "Local request failed" };
         }

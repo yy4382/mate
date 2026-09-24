@@ -108,7 +108,7 @@ it("uses the same permanent daemon, Supervisor, tool/gate and local console with
     },
   }));
   d.collaboration.messages.watch("research", { conversationId: "local-room" }, true);
-  console.execute({
+  await console.execute({
     id: "send",
     op: "send",
     human: "owner",
@@ -128,10 +128,15 @@ it("uses the same permanent daemon, Supervisor, tool/gate and local console with
   );
   expect(calls).toBeGreaterThan(0);
   expect(d.adapter).toBeUndefined();
-  expect(() =>
+  await expect(
     console.execute({ id: "bad", op: "control", human: "reader", text: "agent-stop research" }),
-  ).toThrow("Owner only");
-  console.execute({ id: "stop", op: "control", human: "owner", text: "agent-stop research" });
+  ).rejects.toThrow("Owner only");
+  await console.execute({
+    id: "stop",
+    op: "control",
+    human: "owner",
+    text: "agent-stop research",
+  });
   await d.close();
   const reopened = await daemon(c);
   expect(

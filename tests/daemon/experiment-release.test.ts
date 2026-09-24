@@ -131,15 +131,15 @@ it("runs the preconfigured team through the permanent daemon while preserving in
   }));
   const console = new LocalConsole(daemon.local!, daemon.controls);
   ownerMessageId = (
-    console.execute({
+    (await console.execute({
       id: "input",
       op: "send",
       human: "owner",
       eventId: "experiment-input",
       target: { conversationId: "team-room" },
       text: "Choose independently whether to respond.",
-    }).result as { messageId: string }
-  ).messageId;
+    })) as { result: { messageId: string } }
+  ).result.messageId;
   const queued = (
     daemon.store.db.prepare("SELECT agent_id,payload FROM deliveries ORDER BY agent_id").all() as {
       agent_id: string;

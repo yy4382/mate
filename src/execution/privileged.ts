@@ -1,5 +1,6 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { killProcessGroup, stopUnit } from "./linux-processes.js";
 import {
   systemCommandSchema,
   type PrivilegedExecutor,
@@ -53,8 +54,7 @@ export class PrivilegedBackend implements PrivilegedExecutor {
       let out = 0,
         err = 0,
         truncated = false,
-        done = false,
-        interrupted = false;
+        done = false;
       const capture = (target: Buffer[], used: number, chunk: Buffer) => {
         const kept = chunk.subarray(0, Math.max(0, 65536 - used));
         if (kept.length) target.push(kept);
@@ -67,31 +67,22 @@ export class PrivilegedBackend implements PrivilegedExecutor {
       child.stderr!.on("data", (chunk: Buffer) => {
         err = capture(stderr, err, chunk);
       });
-      const stop = () => {
+      const stop = async () => {
         if (done) return;
-        interrupted = true;
-        spawnSync("/usr/bin/systemctl", ["stop", "--", unit], {
-          timeout: 10000,
-          env: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8" },
-          stdio: "ignore",
-        });
-        if (child.pid)
-          try {
-            process.kill(-child.pid, "SIGKILL");
-          } catch {
-            /* Already exited. */
-          }
-        child.stdout!.destroy();
-        child.stderr!.destroy();
         done = true;
         finish();
+        killProcessGroup(child.pid);
+        await stopUnit(unit);
+        child.stdout!.destroy();
+        child.stderr!.destroy();
         reject(new Error("Privileged command outcome may be unknown"));
       };
-      const timer = setTimeout(stop, 60000);
-      signal?.addEventListener("abort", stop, { once: true });
+      const cancel = () => void stop();
+      const timer = setTimeout(cancel, 60000);
+      signal?.addEventListener("abort", cancel, { once: true });
       const finish = () => {
         clearTimeout(timer);
-        signal?.removeEventListener("abort", stop);
+        signal?.removeEventListener("abort", cancel);
       };
       child.once("error", (error) => {
         if (done) return;
@@ -103,14 +94,12 @@ export class PrivilegedBackend implements PrivilegedExecutor {
         if (done) return;
         done = true;
         finish();
-        if (interrupted) reject(new Error("Privileged command outcome may be unknown"));
-        else
-          resolve({
-            code: code ?? 1,
-            stdout: Buffer.concat(stdout).toString("utf8"),
-            stderr: Buffer.concat(stderr).toString("utf8"),
-            truncated,
-          });
+        resolve({
+          code: code ?? 1,
+          stdout: Buffer.concat(stdout).toString("utf8"),
+          stderr: Buffer.concat(stderr).toString("utf8"),
+          truncated,
+        });
       });
     });
   }

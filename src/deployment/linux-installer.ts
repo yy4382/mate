@@ -326,7 +326,7 @@ async function inactiveAndIdle(
     throw new Error("Stop mate.service before upgrade");
   const manager = hostProcessManager(host, rules);
   for (const agent of rules.agents)
-    if (manager.list(agent.identity.agentId).length)
+    if ((await manager.list(agent.identity.agentId)).length)
       throw new Error(`Stop ${agent.identity.agentId} background tasks before upgrade`);
 }
 export async function readLinuxUpgradeJournal(
