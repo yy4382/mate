@@ -23,7 +23,7 @@ function within(parent: string, child: string): boolean { return child === paren
 
 export function createLinuxDeploymentPlan(rawSpec: DeploymentSpec, config: DaemonConfig, facts: LinuxPlanFacts): LinuxDeploymentPlan {
   const spec = deploymentSpecSchema.parse(rawSpec), users = config.runtime.linuxUsers;
-  if (!users || !config.runtime.sharedRoot || config.runtime.docker || config.runtime.workspaceManifest) throw new Error('Linux deployment requires Agent Linux users and a shared root, without Docker or a mount manifest');
+  if (!users || !config.runtime.sharedRoot) throw new Error('Linux deployment requires Agent Linux users and a shared root');
   if (config.runtime.dataDir !== managedLayout.data) throw new Error('Managed Linux deployment requires /var/lib/mate');
   const source = facts.canonical(spec.release.source), configSource = facts.canonical(spec.configSource), environmentSource = spec.environmentSource ? facts.canonical(spec.environmentSource) : null;
   if (source !== spec.release.source || configSource !== spec.configSource || environmentSource !== (spec.environmentSource ?? null)) throw new Error('Deployment inputs must have canonical paths');

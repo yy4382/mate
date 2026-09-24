@@ -8,7 +8,7 @@ export const environmentReportSchema = z.object({
   format: z.literal('mate.environment.v2'),
   workId: z.string(),
   snapshotAt: z.number().int(),
-  filesystem: z.object({ home: z.string(), sharedRoot: z.string(), access: z.literal('linux_user_permissions') }),
+  filesystem: z.object({ home: z.string(), sharedRoot: z.string().optional(), access: z.enum(['linux_user_permissions','local_user_permissions']) }),
   execution: z.object({ status: availability, network: z.literal('host'), reason: z.string().optional() }),
   research: z.object({ status: availability, mode: z.literal('known_public_https_url_only'), allowedHosts: z.array(z.string()), search: z.literal(false), reason: z.string().optional() }),
   attachmentInput: z.object({ status: availability, scope: z.literal('visible_external_message_file'), reason: z.string().optional() }),
@@ -18,7 +18,8 @@ export type EnvironmentReport = z.infer<typeof environmentReportSchema>;
 
 export interface EnvironmentDeployment {
   homes: Readonly<Record<string, string>>;
-  sharedRoot: string;
+  sharedRoot?: string;
+  access?: 'linux_user_permissions'|'local_user_permissions';
   researchHosts: readonly string[];
   attachmentConfigured(actor: string): boolean;
   artifactConfigured(actor: string): boolean;
@@ -41,7 +42,7 @@ export class EnvironmentCapabilities {
     const artifactSupported = artifactAdapter && this.deployment.artifactSupported(run.agentId, target);
     return environmentReportSchema.parse({
       format: 'mate.environment.v2', workId, snapshotAt: Date.now(),
-      filesystem: { home, sharedRoot: this.deployment.sharedRoot, access: 'linux_user_permissions' },
+      filesystem: { home, ...(this.deployment.sharedRoot?{sharedRoot:this.deployment.sharedRoot}:{}), access: this.deployment.access??'linux_user_permissions' },
       execution: { status: 'configured', network: 'host' },
       research: { status: researchHosts.length ? 'configured' : 'unavailable', mode: 'known_public_https_url_only', allowedHosts: researchHosts, search: false,
         ...(!researchHosts.length ? { reason: 'No allowed known-URL research host for this context.' } : {}) },

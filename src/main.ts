@@ -10,12 +10,9 @@ import { daemonConfigSchema } from './daemon/config.js';
 import { Daemon } from './daemon/app.js';
 import { acquireLock } from './daemon/lock.js';
 import { Store, hash } from './storage/store.js';
-import { ContainerBackend } from './execution/container.js';
-import { assertDockerControlIsolation,executionScope } from './daemon/paths.js';
 import { backup } from './daemon/backup.js';
 import {restoreCheckpoint} from './daemon/restore.js';
 import {requiredSlackBotScopes} from './slack/protocol.js';
-import {verifyDeploymentWorkspaces} from './deployment/runtime.js';
 import {runDoctor} from './deployment/doctor.js';
 import {runOfflineProbe} from './deployment/probe.js';
 import {assertLinuxOperationAllowed} from './deployment/linux-upgrade-guard.js';
@@ -36,6 +33,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   if (command === 'models') { process.stdout.write(JSON.stringify(builtinModels().getModels(configPath).map(m => ({ provider: m.provider, id: m.id, contextWindow: m.contextWindow })), null, 2) + '\n'); return; }
   if (!['check','doctor','offline-probe','start','local','backup','restore','migrate'].includes(command ?? '') || !configPath) throw new Error('Usage: mate check|doctor|offline-probe|start|local CONFIG; mate backup CONFIG DESTINATION; mate restore CONFIG BACKUP [--replace CURRENT_CHECKPOINT]; mate models [PROVIDER]');
   const config = daemonConfigSchema.parse(JSON.parse(readFileSync(resolve(configPath), 'utf8')));
+  if(process.platform==='linux'&&!config.runtime.linuxUsers)throw new Error('Linux deployment requires one Linux user for every Agent');
   const releaseRoot=process.argv[1]?dirname(dirname(dirname(resolve(process.argv[1])))):resolve('.');
   if(command==='doctor'){
     if(destination&&destination!=='--allow-missing-secrets')throw new Error('Unknown doctor option');if(args[3])throw new Error('Unknown doctor option');
@@ -56,7 +54,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     process.stdout.write(JSON.stringify({ checkScope: 'configuration_model_and_secret_references', externalConnectivityChecked: false,
       adapters: { slackConfigured: !!config.adapters.slack, localConfigured: !!config.adapters.local },
       requiredSlackBotScopes:config.adapters.slack?[...requiredSlackBotScopes]:[],agents: report,
-      isolation: config.runtime.linuxUsers ? {mode:'linux-users',identities:Object.fromEntries(Object.entries(config.runtime.linuxUsers).map(([id,user])=>[id,{uid:user.uid,gid:user.gid,home:user.home}])),sharedRoot:config.runtime.sharedRoot} : {mode:'local-experiment'},runtimeLimits:config.runtime.limits }, null, 2) + '\n');
+      isolation: config.runtime.linuxUsers ? {mode:'linux-users',identities:Object.fromEntries(Object.entries(config.runtime.linuxUsers).map(([id,user])=>[id,{uid:user.uid,gid:user.gid,home:user.home}])),sharedRoot:config.runtime.sharedRoot} : {mode:'local-development'},runtimeLimits:config.runtime.limits }, null, 2) + '\n');
     if (report.some(r => !r.modelKnown || r.missingEnv.length)) process.exitCode = 1; return;
   }
   if (command === 'restore') {
@@ -68,11 +66,8 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   if (command === 'backup') {
     if (!destination) throw new Error('Backup destination required');
     assertLinuxMaintenanceStopped(config);assertLinuxOperationAllowed('backup',config);
-    const state=join(config.runtime.dataDir,'state'),agentsDir=join(config.runtime.dataDir,'agents'),release = acquireLock(join(state, 'daemon.lock'));let store:Store|undefined;
+    const state=join(config.runtime.dataDir,'state'),release = acquireLock(join(state, 'daemon.lock'));let store:Store|undefined;
     try {
-      assertDockerControlIsolation(resolve('.'),state,agentsDir,config.runtime.workspaceGrants,config.runtime.docker,config.runtime.workspaceManifest?[config.runtime.workspaceManifest]:[]);
-      if (config.runtime.docker) await new ContainerBackend({ ...config.runtime.docker, scope: executionScope(config.runtime.dataDir) }).recover();
-      verifyDeploymentWorkspaces(config);
       store=new Store(join(state, 'mate.sqlite'));
       store.recover(); await backup(store, config.runtime.dataDir, resolve(destination),config);
     } finally { store?.close(); release(); }
@@ -88,7 +83,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     if(command==='local'&&!daemon.local)throw new Error('Configure adapters.local before using the local console');
     await daemon.start();
     if(command==='local'){await new LocalConsole(daemon.local!,daemon.controls).serve(process.stdin,process.stdout,consoleAbort.signal);await close();}
-  } catch { await close(); throw new Error('Daemon startup failed; check installation identities, credentials and sandbox configuration'); }
+  } catch { await close(); throw new Error('Daemon startup failed; check installation identities and credentials'); }
 }
 export function isMainModule(argument:string|undefined,moduleUrl=import.meta.url):boolean{return !!argument&&moduleUrl===pathToFileURL(realpathSync(resolve(argument))).href;}
 if (isMainModule(process.argv[1])) main().catch(error => { process.stderr.write(`${error instanceof Error ? error.message : 'Mate failed'}\n`); process.exitCode = 1; });

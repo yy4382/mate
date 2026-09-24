@@ -19,7 +19,7 @@ cp mate.local.example.json mate.local.json
 pnpm node dist/src/main.js models anthropic
 ```
 
-本地示例预配置两个成员和一个内部房间；修改模型和绝对dataDir。Slack示例是[mate.example.json](mate.example.json)，其中Agent身份与平台binding分开。dataDir必须在应用checkout外。通过终端环境/秘密管理器提供[.env.example](.env.example)中的变量；程序不自动读.env。模型目录只证明Pi识别该model，不证明账户可调用。
+本地示例预配置两个成员和一个内部房间；修改模型和绝对dataDir。这个未配置 Linux 用户的示例只供非 Linux 开发机运行，在 Debian 部署时会被拒绝。Slack示例是[mate.example.json](mate.example.json)，其中Agent身份与平台binding分开。dataDir必须在应用checkout外。通过终端环境/秘密管理器提供[.env.example](.env.example)中的变量；程序不自动读.env。模型目录只证明Pi识别该model，不证明账户可调用。
 
 ```sh
 pnpm node dist/src/main.js check mate.local.json

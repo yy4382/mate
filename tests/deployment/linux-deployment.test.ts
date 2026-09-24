@@ -15,7 +15,7 @@ const config = () => daemonConfigSchema.parse({ version: 2, mate: { ownerUserIds
 ] }, adapters: { local: { humans: ['owner'], rooms: [] } }, runtime: { dataDir: '/var/lib/mate', sharedRoot: '/srv/mate/shared', linuxUsers: {
   alice: { uid: 2001, gid: 2001, username: 'mate-alice', home: '/srv/mate/private/alice' },
   bob: { uid: 2002, gid: 2002, username: 'mate-bob', home: '/srv/mate/private/bob' },
-}, workspaceGrants: [], researchHosts: [] } });
+}, researchHosts: [] } });
 const spec = () => deploymentSpecSchema.parse({ version: 1, release: { source: '/candidate', gitCommit: 'abcdef1234567' }, configSource: '/input/mate.json' });
 const facts = { canonical: (path: string) => path, directoryBytes: () => 123456 };
 

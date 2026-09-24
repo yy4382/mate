@@ -1,6 +1,6 @@
 import {afterEach,expect,it} from 'vitest';
 import {mkdtempSync,realpathSync,rmSync,writeFileSync,readFileSync,symlinkSync,existsSync} from 'node:fs';
-import {tmpdir} from 'node:os';
+import {tmpdir,homedir} from 'node:os';
 import {spawnSync} from 'node:child_process';
 import {resolve} from 'node:path';
 import type {Operation} from '../../src/execution/backend.js';
@@ -35,7 +35,8 @@ it('stdin accepts large Unicode/control-character writes without argv expansion'
 });
 it('backend decodes split Unicode output as a stream',async()=>{
  const root=temp(),helper=`${root}/synthetic.cjs`;writeFileSync(helper,"process.stdout.write(Buffer.from([0xe4]));setTimeout(()=>process.stdout.end(Buffer.from([0xbd,0xa0])),100);");
- const {SandboxBackend}=await import('../../src/execution/backend.js');const result=await new SandboxBackend(helper).execute({root,operation:{kind:'read',path:'x'},timeoutMs:2000});expect(result.stdout).toBe('你');
+ const {LinuxUserBackend}=await import('../../src/execution/linux-user.js');const backend=new LinuxUserBackend({test:{uid:process.getuid!(),gid:process.getgid!(),home:homedir()}});
+ const result=await backend.execute({agentId:'test',root,operation:{kind:'exec',cwd:'.',command:`${JSON.stringify(process.execPath)} ${JSON.stringify(helper)}`},timeoutMs:2000});expect(result.stdout).toBe('你');
 });
 it('binary operations accept a maximum-size canonical payload and bounded chunks without text loss',async()=>{
  const root=temp(),data=Buffer.alloc(1000000,255);const{operationSchema}=await import('../../src/execution/backend.js');

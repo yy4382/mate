@@ -70,7 +70,7 @@ it('documents a silent pnpm manifest command whose stdout is parseable JSON',()=
 
 it('reads persisted SQLite with OperationsView and leaves data/schema unchanged',()=>{
  const dir=temp();mkdirSync(join(dir,'state'));
- const config=daemonConfigSchema.parse({version:2,mate:{ownerUserIds:['owner'],budgets:{maxRuns:10,maxTokens:1000,maxCostUsd:1,runTimeoutMs:1000},agents:[{id:'alice',name:'Alice',role:'Colleague',model:{provider:'test',id:'test',apiKeyEnv:'MISSING_SECRET'}}]},adapters:{local:{humans:['owner'],rooms:[]}},runtime:{dataDir:dir,docker:{binary:'/usr/bin/docker',host:'unix:///var/run/docker.sock',image:'sha256:'+ 'a'.repeat(64)},workspaceGrants:[],researchHosts:[]}});
+ const config=daemonConfigSchema.parse({version:2,mate:{ownerUserIds:['owner'],budgets:{maxRuns:10,maxTokens:1000,maxCostUsd:1,runTimeoutMs:1000},agents:[{id:'alice',name:'Alice',role:'Colleague',model:{provider:'test',id:'test',apiKeyEnv:'MISSING_SECRET'}}]},adapters:{local:{humans:['owner'],rooms:[]}},runtime:{dataDir:dir,researchHosts:[]}});
  const path=join(dir,'state','mate.sqlite'),store=new Store(path);localApplication(store,config.mate);store.register('alice','v1',[]);
  store.db.prepare("INSERT INTO operational_facts(source_id,source,kind,actor_id,subject_type,subject_id,at,counts) VALUES('synthetic-runtime-fact','runtime','run_failed',?,'run',?,?,'{}')").run('alice',secret,Date.now());store.close();
  const before=readFileSync(path),snapshot=readOperationsSnapshot(config,'logs');expect(snapshot.available).toBe(true);expect(snapshot.items[0]?.kind).toBe('runtime.run_failed');

@@ -1,6 +1,6 @@
 import {spawn,spawnSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
-import {existsSync, lstatSync, realpathSync} from 'node:fs';
+import {existsSync, statSync, realpathSync} from 'node:fs';
 import {dirname, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {z} from 'zod';
@@ -32,14 +32,13 @@ export class LinuxUserBackend implements ExecutionBackend {
   async execute(request:ExecutionRequest,signal?:AbortSignal):Promise<ExecutionResult>{
     const op=operationSchema.parse(request.operation);
     z.number().int().min(1).max(300000).parse(request.timeoutMs);
-    if(request.network==='none')throw new Error('Linux user execution cannot provide network isolation');
     const identity=request.agentId?this.identities[request.agentId]:undefined;
     if(!identity)throw new Error('Linux user identity is not configured for Agent');
     if(signal?.aborted)throw new Error('Execution aborted');
     const root=realpathSync(request.root);
-    if(!lstatSync(root).isDirectory())throw new Error('Workspace root is not a directory');
+    if(!statSync(root).isDirectory())throw new Error('Workspace root is not a directory');
     const path=resolve(root,op.kind==='exec'?op.cwd:op.path);
-    if(op.kind==='exec'&&!lstatSync(path).isDirectory())throw new Error('Invalid command cwd');
+    if(op.kind==='exec'&&!statSync(path).isDirectory())throw new Error('Invalid command cwd');
     const shell=op.kind==='exec',privateHome=within(realpathSync(identity.home),path),umask=privateHome?'077':'022';
     const program=shell?'/bin/sh':process.execPath;
     const programArgs=shell?['-c',`umask ${umask}; ${op.command}`]:[this.helper,root,umask];

@@ -1,6 +1,6 @@
 import { fixtureTarget, externalThread } from '../helpers/canonical-slack.js';
 import{afterEach,expect,it,vi}from 'vitest';
-import{chmodSync,mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,realpathSync,existsSync,renameSync}from 'node:fs';
+import{mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,realpathSync,existsSync}from 'node:fs';
 import{tmpdir}from 'node:os';
 import{join}from 'node:path';
 import{Store,encode,hash}from '../../src/storage/store.js';
@@ -13,22 +13,20 @@ import{operationDocumentation,ToolRouter}from '../../src/runtime/tools.js';
 import{Messages,Output,migrateCurrentRuntime}from '../helpers/canonical-slack.js';
 import{Collaboration}from '../../src/collaboration/service.js';
 import{Broker}from '../../src/policy/broker.js';
-import{ContainerBackend}from '../../src/execution/container.js';
-import{restoreCheckpoint}from '../../src/daemon/restore.js';
 const roots:string[]=[];afterEach(()=>{vi.restoreAllMocks();roots.splice(0).forEach(root=>rmSync(root,{recursive:true,force:true}));});
 function fixture(legacy=false){
  const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-migrate-')));roots.push(root);const data=join(root,'data'),path=join(data,'state','mate.sqlite'),own=join(data,'agents','research'),shared=join(root,'shared');
  for(const dir of [join(data,'state'),own,shared])mkdirSync(dir,{recursive:true});writeFileSync(join(own,'MEMORY.md'),'private synthetic knowledge');
- const previous=daemonConfigSchema.parse({mate:configFixture,runtime:{dataDir:data,workspaceGrants:[{agentId:'research',root:shared,operations:['read','write']}]}});
+ const previous=daemonConfigSchema.parse({mate:configFixture,runtime:{dataDir:data}});
  const store=new Store(path),base=buildBaseline(previous.mate.agents[0]!,operationDocumentation);store.register('research',base.configVersion,base.messages);
  if(!legacy)saveConfiguration(store,previous);else store.db.prepare("INSERT INTO runtime_meta VALUES('policy',?)").run(hash(encode(previous.runtime)));
  const messages=new Messages(store,slackRuntimeConfig(previous)!);migrateCurrentRuntime(store);const c=new Collaboration(store,messages,new Output(messages,{post:async()=>({ts:'100.000002'})}),previous.mate);messages.membership('research','CTEST',true);
  const broker=new Broker(store,c,{execute:async()=>({code:0,stdout:'',stderr:'',truncated:false})},{research:own}),router=new ToolRouter(c,broker),work=c.createWork('migration',{conversationId:'CTEST'});
  c.ledger.account('research');
- const next=structuredClone(previous);next.mate.agents[0]!.role='An evolving research role';next.runtime.workspaceGrants[0]!.operations=['read'];
+ const next=structuredClone(previous);next.mate.agents[0]!.role='An evolving research role';
  return{root,data,path,own,previous,next,store,c,router,work,broker};
 }
-it('offline migration backs up memory, updates baseline and grants, preserves debt, tasks, reminders and unknown receipts',async()=>{
+it('offline migration backs up memory, updates the baseline, and preserves debt, tasks, reminders and unknown receipts',async()=>{
  const f=fixture(),{store,c,work}=f;const task=c.createTask('research',work,{conversationId:'CTEST'},'ongoing');
  const reminder=c.reminders.create('research',work,{target:{conversationId:'CTEST'},content:'future follow-up',nextAt:Date.now()+100000,timezone:'UTC'});
  c.enqueue('research',work,'unfinished',{});const run=store.beginRun('research')!;store.input(run,{role:'user',content:'PRESERVE_HISTORY',timestamp:0});c.reserve(run,work,500,0.1);
@@ -45,35 +43,11 @@ it('offline migration backs up memory, updates baseline and grants, preserves de
  }finally{reopened.close();}
 });
 
-it('restores an unmanaged v2 migration checkpoint into an absent data directory',async()=>{
- const f=fixture(),backupPath=join(f.root,'backup');f.store.close();await migrateConfiguration(f.previous,f.next,backupPath);renameSync(f.data,join(f.root,'migrated-data'));
- expect(await restoreCheckpoint(f.previous,backupPath)).toBe('v2');expect(readFileSync(join(f.own,'MEMORY.md'),'utf8')).toBe('private synthetic knowledge');const restored=new Store(f.path);try{expect(storedConfiguration(restored)).toEqual(f.previous);}finally{restored.close();}
-});
 it('migration requires lock, exact previous configuration and stable workspace/Agent identities',async()=>{
  const f=fixture();f.store.close();const dest=join(f.root,'backup');
  const release=acquireLock(join(f.data,'state','daemon.lock'));await expect(migrateConfiguration(f.previous,f.next,dest)).rejects.toThrow('Another Mate');release();
  const wrong=structuredClone(f.previous);wrong.mate.agents[0]!.role='wrong old role';await expect(migrateConfiguration(wrong,f.next,dest)).rejects.toThrow('Previous configuration');
  const rebound=structuredClone(f.next);rebound.adapters.slack!.bindings[0]!.slackUserId='UOTHER';await expect(migrateConfiguration(f.previous,rebound,dest)).rejects.toThrow('rebound');expect(existsSync(dest)).toBe(false);
-});
-it('explicitly migrates the pre-limits and pre-container-resources runtime policy hash',async()=>{
- const f=fixture(),binary=join(f.root,'docker-cli'),project=join(f.root,'checkout');writeFileSync(binary,'synthetic');chmodSync(binary,0o700);mkdirSync(project);
- const previous=daemonConfigSchema.parse({...f.previous,runtime:{...f.previous.runtime,docker:{binary,host:'unix:///var/run/docker.sock',image:`sha256:${'a'.repeat(64)}`}}}),next=structuredClone(previous);next.mate.agents[0]!.role='post-resource-default';
- const raw=structuredClone(previous) as any;delete raw.runtime.limits;delete raw.runtime.docker.resources;vi.spyOn(ContainerBackend.prototype,'recover').mockResolvedValue();
- f.store.db.prepare("UPDATE runtime_meta SET value=? WHERE key='configuration'").run(encode(raw));
- f.store.db.prepare("UPDATE runtime_meta SET value=? WHERE key='policy'").run(hash(encode(raw.runtime)));f.store.close();
- expect(()=>daemonConfigSchema.parse(raw)).not.toThrow();
- await migrateConfiguration(previous,next,join(f.root,'backup'),false,project,{platform:'darwin',workspaceHost:{} as never});
- const s=new Store(f.path);try{expect(storedConfiguration(s)).toEqual(next);expect(s.db.prepare("SELECT value FROM runtime_meta WHERE key='policy'").get()).toEqual({value:hash(encode(next.runtime))});}finally{s.close();}
-});
-it('Linux migration refuses to back up or persist a container policy without verified workspace mounts',async()=>{
- const f=fixture(),binary=join(f.root,'docker-cli'),project=join(f.root,'checkout'),destination=join(f.root,'backup');writeFileSync(binary,'synthetic');chmodSync(binary,0o700);mkdirSync(project);f.store.close();
- const next=daemonConfigSchema.parse({...f.next,runtime:{...f.next.runtime,docker:{binary,host:`unix://${join(f.root,'docker.sock')}`,image:`sha256:${'a'.repeat(64)}`}}});vi.spyOn(ContainerBackend.prototype,'recover').mockResolvedValue();
- await expect(migrateConfiguration(f.previous,next,destination,false,project,{platform:'linux',workspaceHost:{} as never})).rejects.toThrow('requires a workspace manifest');expect(existsSync(destination)).toBe(false);
- const store=new Store(f.path);try{expect(storedConfiguration(store)).toEqual(f.previous);}finally{store.close();}
-});
-it('keeps managed deployment upgrades behind the sealed checkpoint workflow',async()=>{
- const f=fixture();f.store.close();const manifest=join(f.root,'workspaces.json'),managed=daemonConfigSchema.parse({...f.previous,runtime:{...f.previous.runtime,workspaceManifest:manifest}});writeFileSync(manifest,'{}');
- await expect(migrateConfiguration(managed,managed,join(f.root,'backup'))).rejects.toThrow('sealed checkpoint upgrade workflow');expect(existsSync(join(f.root,'backup'))).toBe(false);
 });
 it('a failed migration transaction leaves the old configuration and session usable and retains a complete backup',async()=>{
  const f=fixture();const before=(f.router.sessions.status('research') as any).session;

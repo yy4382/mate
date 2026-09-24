@@ -41,6 +41,14 @@ it('uses the same permanent daemon, Supervisor, tool/gate and local console with
  expect(reopened.local!.read('reader',{conversationId:'local-room'}).messages.map(m=>m.text)).toContain('internal answer');
  expect(reopened.store.db.prepare("SELECT paused FROM agents WHERE id='research'").get()).toEqual({paused:1});
 });
+it('reports the local development home even without a shared Linux work root',async()=>{
+ const {c}=config(),d=await daemon(c),work=d.collaboration.createWork('environment',{conversationId:'local-room'});
+ d.collaboration.enqueue('research',work,'read-environment',{});
+ const run=d.store.beginRun('research')!;d.store.input(run,{});
+ const result=await d.supervisor.router.call(run,work,'environment-info','environment.info',{},new AbortController().signal);
+ expect(result.value).toMatchObject({filesystem:{home:d.memoryRoots.research,access:'local_user_permissions'}});
+ expect((result.value as {filesystem:Record<string,unknown>}).filesystem).not.toHaveProperty('sharedRoot');
+});
 it('keeps room revocations on restart and unchanged migration, applies only explicit membership deltas',async()=>{
  const {c,root}=config(),d=await daemon(c);
  d.local!.receive('owner','input',{conversationId:'local-room'},'durable');

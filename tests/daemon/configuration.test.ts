@@ -43,8 +43,9 @@ it('friendly human mappings round-trip for DM and cannot alias a default Slack i
  c.adapters.slack!.principals.UOTHER=slackHumanId(configFixture.teamId,'UOWNER');
  expect(()=>daemonConfigSchema.parse(c)).toThrow('aliases');
 });
-it('normalizes bounded container resources and rejects deployment limits outside the supported envelope',()=>{
- const input=legacy();(input.runtime as any).docker={binary:'/usr/bin/docker',host:'unix:///var/run/docker.sock',image:`sha256:${'a'.repeat(64)}`};
- const parsed=daemonConfigSchema.parse(input);expect(parsed.runtime.docker?.resources).toEqual({memoryMb:512,cpus:1,pids:64,tmpfsMb:64});
- const invalid=structuredClone(parsed);invalid.runtime.docker!.resources.memoryMb=32;expect(()=>daemonConfigSchema.parse(invalid)).toThrow();
+it('rejects removed container and workspace-grant configuration',()=>{
+ const input=legacy();
+ for(const field of [{docker:{binary:'/usr/bin/docker',host:'unix:///var/run/docker.sock',image:`sha256:${'a'.repeat(64)}`}},{workspaceGrants:[]},{workspaceManifest:'/old/manifest.json'}]){
+  expect(()=>daemonConfigSchema.parse({...input,runtime:{...input.runtime,...field}})).toThrow();
+ }
 });

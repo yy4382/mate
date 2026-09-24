@@ -26,7 +26,7 @@ it('backs up Linux Agent homes and restores private data with the Agent UID and 
   chmodSync(data, 0o700); chmodSync(home, 0o700);
   const memory = join(home, 'MEMORY.md'); writeFileSync(memory, 'first', { mode: 0o600 });
   const uid = process.getuid!(), gid = process.getgid!();
-  const config = daemonConfigSchema.parse({ version: 2, mate: { ownerUserIds: ['owner'], budgets: { maxRuns: 10, maxTokens: 1000, maxCostUsd: 1, runTimeoutMs: 1000 }, agents: [{ id: 'alice', name: 'Alice', role: 'Colleague', model: { provider: 'test', id: 'test', apiKeyEnv: 'KEY' } }] }, adapters: { local: { humans: ['owner'], rooms: [] } }, runtime: { dataDir: data, sharedRoot: shared, linuxUsers: { alice: { uid, gid, home, username: 'alice' } }, workspaceGrants: [], researchHosts: [] } });
+  const config = daemonConfigSchema.parse({ version: 2, mate: { ownerUserIds: ['owner'], budgets: { maxRuns: 10, maxTokens: 1000, maxCostUsd: 1, runTimeoutMs: 1000 }, agents: [{ id: 'alice', name: 'Alice', role: 'Colleague', model: { provider: 'test', id: 'test', apiKeyEnv: 'KEY' } }] }, adapters: { local: { humans: ['owner'], rooms: [] } }, runtime: { dataDir: data, sharedRoot: shared, linuxUsers: { alice: { uid, gid, home, username: 'alice' } }, researchHosts: [] } });
   const store = new Store(join(data, 'state', 'mate.sqlite'));
   const first = join(root, 'first'), current = join(root, 'current');
   await backup(store, data, first, config);
@@ -48,7 +48,7 @@ it('migrates Linux-user configuration using the real private home without requir
   mkdirSync(join(home, 'artifacts'), { mode: 0o700 });
   mkdirSync(shared, { mode: 0o755 }); chmodSync(data, 0o700); chmodSync(home, 0o700);
   writeFileSync(join(home, 'MEMORY.md'), 'private Linux memory', { mode: 0o600 });
-  const previous = daemonConfigSchema.parse({ version: 2, mate: { ownerUserIds: ['owner'], budgets: { maxRuns: 10, maxTokens: 1000, maxCostUsd: 1, runTimeoutMs: 1000 }, agents: [{ id: 'alice', name: 'Alice', role: 'Original', model: { provider: 'test', id: 'test', apiKeyEnv: 'KEY' } }] }, adapters: { local: { humans: ['owner'], rooms: [] } }, runtime: { dataDir: data, sharedRoot: shared, linuxUsers: { alice: { uid: process.getuid!(), gid: process.getgid!(), home, username: 'alice' } }, workspaceGrants: [], researchHosts: [] } });
+  const previous = daemonConfigSchema.parse({ version: 2, mate: { ownerUserIds: ['owner'], budgets: { maxRuns: 10, maxTokens: 1000, maxCostUsd: 1, runTimeoutMs: 1000 }, agents: [{ id: 'alice', name: 'Alice', role: 'Original', model: { provider: 'test', id: 'test', apiKeyEnv: 'KEY' } }] }, adapters: { local: { humans: ['owner'], rooms: [] } }, runtime: { dataDir: data, sharedRoot: shared, linuxUsers: { alice: { uid: process.getuid!(), gid: process.getgid!(), home, username: 'alice' } }, researchHosts: [] } });
   const next = structuredClone(previous); next.mate.agents[0]!.role = 'Updated';
   const store = new Store(join(data, 'state', 'mate.sqlite'));
   const baseline = buildBaseline(previous.mate.agents[0]!, operationDocumentation);

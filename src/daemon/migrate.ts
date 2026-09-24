@@ -18,16 +18,10 @@ import {sameConfiguration,daemonConfigSchema,slackRuntimeConfig,assertConfigurat
 import {Store,encode,hash}from '../storage/store.js';
 import {acquireLock}from './lock.js';
 import {backup}from './backup.js';
-import {assertDockerControlIsolation,executionProtectedPaths,executionScope,pathVariants}from './paths.js';
-import {ContainerBackend}from '../execution/container.js';
-import {canonicalRoot,within}from '../execution/paths.js';
 import {buildBaseline}from '../runtime/prompt.js';
 import {operationDocumentation}from '../runtime/tools.js';
 import {repairTranscript}from '../runtime/context.js';
 import {SessionLifecycle}from '../runtime/sessions.js';
-import {normalizeConfiguredWorkspaces}from '../capabilities/workspaces.js';
-import {nodeDeploymentEnvironment,verifyDeploymentWorkspaces,type DeploymentEnvironment}from '../deployment/runtime.js';
-import type {VerifiedWorkspaces} from '../deployment/workspaces.js';
 
 import {Collaboration}from '../collaboration/service.js';
 
@@ -55,7 +49,6 @@ function matchesRecordedRuntimePolicy(store:Store,previous:DaemonConfig,policy:s
 
 export interface OfflineMigrationOptions{
  projectRoot:string;
- verifiedWorkspaces?:VerifiedWorkspaces;
  legacyIdentityAttested:boolean;
  auditSource:string;
 }
@@ -72,28 +65,16 @@ function assertMigrationIdentity(s:Store,previous:DaemonConfig,next:DaemonConfig
  assertConfigurationEvolution(previous,next);return recorded;
 }
 
-function prepareMigrationBoundary(s:Store,previous:DaemonConfig,next:DaemonConfig,options:OfflineMigrationOptions):Map<string,Map<string,string[]>>{
+function prepareMigrationBoundary(s:Store,previous:DaemonConfig,next:DaemonConfig,options:OfflineMigrationOptions):void{
  assertMigrationIdentity(s,previous,next,options.legacyIdentityAttested);
- const data=previous.runtime.dataDir,state=join(data,'state'),agentsDir=join(data,'agents');
- if(resolve(data)!==resolve(next.runtime.dataDir))throw new Error('Migration requires the same data directory');
- const linuxHomes=Object.values(next.runtime.linuxUsers??{}).flatMap(user=>pathVariants(user.home));
- const protectedRoots=[...executionProtectedPaths(options.projectRoot,state,agentsDir,next.runtime.docker),...(options.verifiedWorkspaces?.protectedPaths??[]),...linuxHomes],configured=normalizeConfiguredWorkspaces(next.runtime.workspaceGrants,protectedRoots);
- const privateBase=new Set([...pathVariants(agentsDir),...linuxHomes]),privateForbidden=protectedRoots.filter(root=>!privateBase.has(root)),roots=new Map<string,Map<string,string[]>>();
- for(const agent of next.mate.agents){
-  const own=next.runtime.linuxUsers?.[agent.id]?.home??options.verifiedWorkspaces?.roots.get(agent.id)??join(agentsDir,agent.id);
-  if(options.verifiedWorkspaces&&!options.verifiedWorkspaces.roots.has(agent.id))throw new Error(`Verified private workspace missing: ${agent.id}`);
-  if(existsSync(own)&&lstatSync(own).isSymbolicLink())throw new Error('Agent memory must not be a symlink');
-  if(existsSync(own))canonicalRoot(own,privateForbidden);else if(privateForbidden.some(path=>within(resolve(own),path)||within(path,resolve(own))))throw new Error('Protected root overlap');
-  const desired=new Map<string,string[]>([[existsSync(own)?canonicalRoot(own,[options.projectRoot,state]):resolve(own),next.runtime.docker||next.runtime.linuxUsers?['read','write','exec']:['read','write']]]);
-  for(const grant of configured.filter(grant=>grant.agentId===agent.id))desired.set(grant.root,[...new Set([...(desired.get(grant.root)??[]),...grant.operations])]);roots.set(agent.id,desired);
- }
- return roots;
+ if(resolve(previous.runtime.dataDir)!==resolve(next.runtime.dataDir))throw new Error('Migration requires the same data directory');
+ for(const agent of next.mate.agents){const home=next.runtime.linuxUsers?.[agent.id]?.home;if(home&&(!existsSync(home)||lstatSync(home).isSymbolicLink()))throw new Error(`Provision the Linux Agent home before migration: ${agent.id}`);}
 }
 
 /** The only database-changing part of configuration migration. Callers own locking, backup/checkpoint and workspace verification. */
 export function applyOfflineConfigurationMigration(s:Store,previous:DaemonConfig,next:DaemonConfig,options:OfflineMigrationOptions):OfflineMigrationResult{
  const oldConfigurationHash=hash(encode(previous)),newConfigurationHash=hash(encode(next));
- const roots=prepareMigrationBoundary(s,previous,next,options);
+ prepareMigrationBoundary(s,previous,next,options);
  s.atomic(()=>{
   const oldSlack=slackRuntimeConfig(previous),newSlack=slackRuntimeConfig(next);
   if(oldSlack)migrateCanonicalConversations(s,oldSlack);else initializeCanonicalStore(s);
@@ -107,29 +88,20 @@ export function applyOfflineConfigurationMigration(s:Store,previous:DaemonConfig
    const history=repairTranscript(s.context(row.session_id) as AgentMessage[],id=>{const action=s.action(`${row.session_id}:${id}`);return action?encode({recoveredAction:action.id,state:action.state,receipt:action.receipt?JSON.parse(action.receipt):null}):undefined;});
    s.rotateSession(agent.id,initial.configVersion,[...initial.messages,...history.filter(message=>message.role!=='system')],'configuration_migration');
   }
-  for(const grant of s.db.prepare('SELECT id,agent_id,root,revoked,expires FROM grants').all() as {id:string;agent_id:string;root:string;revoked:number;expires:number}[]){
-   const allowed=roots.get(grant.agent_id)?.get(grant.root);if(!allowed)s.db.prepare('UPDATE grants SET revoked=1 WHERE id=?').run(grant.id);else if(!grant.revoked&&grant.expires>Date.now())s.db.prepare('UPDATE grants SET operations=? WHERE id=?').run(encode(allowed),grant.id);
-  }
   configureLocalRooms(c,previous.adapters.local,next.adapters.local);saveConfiguration(s,next);
-  s.audit('configuration_migration',{source:options.auditSource,oldHash:oldConfigurationHash,newHash:newConfigurationHash,legacyIdentityAttested:options.legacyIdentityAttested,grantPolicy:'removed roots revoked; active grants match new policy; revoked/expired grants preserved; budgets unchanged'});
+  s.audit('configuration_migration',{source:options.auditSource,oldHash:oldConfigurationHash,newHash:newConfigurationHash,legacyIdentityAttested:options.legacyIdentityAttested,budgets:'unchanged'});
  });
  return{agents:next.mate.agents.map(agent=>agent.id),legacyIdentityAttested:options.legacyIdentityAttested,replayed:false};
 }
 /** Explicit local owner operation. No Slack or model credentials required. */
-export async function migrateConfiguration(previous:DaemonConfig,next:DaemonConfig,destination:string,acceptLegacyIdentity=false,projectRoot=resolve('.'),environment:DeploymentEnvironment=nodeDeploymentEnvironment()):Promise<{backup:string;agents:string[];legacyIdentityAttested:boolean}>{
- if(previous.runtime.workspaceManifest||next.runtime.workspaceManifest)throw new Error('Managed deployment migration requires the sealed checkpoint upgrade workflow');
+export async function migrateConfiguration(previous:DaemonConfig,next:DaemonConfig,destination:string,acceptLegacyIdentity=false,projectRoot=resolve('.')):Promise<{backup:string;agents:string[];legacyIdentityAttested:boolean}>{
  const data=previous.runtime.dataDir,state=join(data,'state');
  for(const path of [data,state,...(previous.runtime.linuxUsers?Object.values(previous.runtime.linuxUsers).map(user=>user.home):[join(data,'agents')])])if(lstatSync(path).isSymbolicLink())throw new Error('Migration paths must not be symlinks');
  if(resolve(data)!==resolve(next.runtime.dataDir)||lstatSync(data).isSymbolicLink()||lstatSync(state).isSymbolicLink())throw new Error('Migration requires the same non-symlink data directory');
  if(!existsSync(join(state,'mate.sqlite')))throw new Error('Migration requires an existing database');
  const release=acquireLock(join(state,'daemon.lock'));let store:Store|undefined;
  try{
-  const agentsDir=join(data,'agents');
-  assertDockerControlIsolation(projectRoot,state,agentsDir,previous.runtime.workspaceGrants,previous.runtime.docker,previous.runtime.workspaceManifest?[previous.runtime.workspaceManifest]:[]);
-  assertDockerControlIsolation(projectRoot,state,agentsDir,next.runtime.workspaceGrants,next.runtime.docker,next.runtime.workspaceManifest?[next.runtime.workspaceManifest]:[]);
-  if(previous.runtime.docker)await new ContainerBackend({...previous.runtime.docker,scope:executionScope(data)}).recover();
-  const verifiedWorkspaces=verifyDeploymentWorkspaces(next,environment);
-  store=new Store(join(state,'mate.sqlite'));const s=store,recorded=storedConfiguration(s),migrationOptions={projectRoot,...(verifiedWorkspaces?{verifiedWorkspaces}:{}),legacyIdentityAttested:!recorded&&acceptLegacyIdentity,auditSource:resolve(destination)};prepareMigrationBoundary(s,previous,next,migrationOptions);s.recover();
+  store=new Store(join(state,'mate.sqlite'));const s=store,recorded=storedConfiguration(s),migrationOptions={projectRoot,legacyIdentityAttested:!recorded&&acceptLegacyIdentity,auditSource:resolve(destination)};prepareMigrationBoundary(s,previous,next,migrationOptions);s.recover();
   await backup(s,data,resolve(destination),previous);
   const result=applyOfflineConfigurationMigration(s,previous,next,migrationOptions);
   return{backup:resolve(destination),agents:result.agents,legacyIdentityAttested:result.legacyIdentityAttested};

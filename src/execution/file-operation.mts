@@ -1,4 +1,4 @@
-// Fixed helper inside the OS sandbox. Requests use stdin, never shell/argv data.
+// Fixed file helper launched under the Agent's Linux user. Requests use stdin.
 import { constants, openSync, readSync, readFileSync, closeSync, writeFileSync, renameSync, mkdirSync, lstatSync, unlinkSync, existsSync, readdirSync, fsyncSync, rmdirSync, fstatSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';

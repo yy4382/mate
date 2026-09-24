@@ -30,16 +30,14 @@ function harness() {
   return { store, collaboration, work, run, router, home, sharedRoot };
 }
 
-it('reports familiar host paths and network without creating a grant', async () => {
+it('reports familiar host paths and network without exposing a separate file-grant mechanism', async () => {
   const h = harness();
-  const before = h.store.db.prepare('SELECT count(*) n FROM grants').get();
   const value = (await h.router.call(h.run, h.work, 'environment', 'environment.info', {}, new AbortController().signal)).value;
   expect(environmentReportSchema.parse(value)).toMatchObject({ format: 'mate.environment.v2', workId: h.work,
     filesystem: { home: h.home, sharedRoot: h.sharedRoot, access: 'linux_user_permissions' },
     execution: { status: 'configured', network: 'host' }, research: { status: 'configured' },
     attachmentInput: { status: 'configured' }, artifactOutput: { status: 'configured' } });
   expect(JSON.stringify(value)).not.toContain('grant');
-  expect(h.store.db.prepare('SELECT count(*) n FROM grants').get()).toEqual(before);
 });
 
 it('reports the selected work without changing the Agent filesystem identity', async () => {

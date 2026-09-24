@@ -13,15 +13,3 @@ export function canonicalRoot(root: string, forbidden: string[]): string {
   }
   return canonical;
 }
-/** Reject symlink traversal even when it points back inside the grant. OS sandbox remains the race boundary. */
-export function checkedPath(root: string, path: string): string {
-  if (isAbsolute(path) || path.includes('\0')) throw new Error('Relative path required');
-  const full = resolve(root, path); if (!within(root, full)) throw new Error('Path escapes root');
-  let current = root;
-  for (const piece of relative(root, full).split(sep).filter(Boolean)) {
-    current = resolve(current, piece);
-    try { if (lstatSync(current).isSymbolicLink()) throw new Error('Symlinks are not allowed'); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-  }
-  return full;
-}
