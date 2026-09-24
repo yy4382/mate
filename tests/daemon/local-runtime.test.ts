@@ -30,6 +30,11 @@ it('keeps an Agent-owned workspace layout across daemon restarts',async()=>{
  expect(existsSync(join(home,'notes'))).toBe(false);
  expect(existsSync(join(home,'artifacts'))).toBe(false);
 });
+it('accepts an unused review workspace without optional starter directories',async()=>{
+ const {c}=config(),d=await daemon(c),home=d.memoryRoots.research!;
+ rmSync(join(home,'notes'),{recursive:true});rmSync(join(home,'artifacts'),{recursive:true});
+ expect(d.controls.execute('owner','review-seat research '+JSON.stringify({target:{conversationId:'local-room'},brief:'Review the proposal'}))).toContain('enabled');
+});
 function credentials(){const previous=process.env.MODEL_API_KEY;process.env.MODEL_API_KEY='synthetic';clean.push(()=>{if(previous===undefined)delete process.env.MODEL_API_KEY;else process.env.MODEL_API_KEY=previous;});}
 it('uses the same permanent daemon, Supervisor, tool/gate and local console without Slack credentials',async()=>{
  credentials();const {c}=config(),d=await daemon(c),console=new LocalConsole(d.local!,d.controls);

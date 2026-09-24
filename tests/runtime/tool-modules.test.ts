@@ -116,6 +116,17 @@ it('lets an Agent inspect and stop only its current Linux scope with a durable s
   expect(stop).toHaveBeenCalledTimes(1);
 });
 
+it('lets an Agent inspect and stop its Linux scope after the attributed work pauses',async()=>{
+  const base=setup(),unit='mate-agent-1001-123e4567-e89b-42d3-a456-426614174000.scope';
+  const stop=vi.fn(()=>({unit,stopped:true}));
+  const router=new ToolRouter(base.c,base.broker,{processes:{list:()=>[{unit,pids:[4101]}],stop},research:async()=>({}),publish:async()=>({})});
+  base.store.db.prepare("UPDATE works SET state='paused' WHERE id=?").run(base.work);
+  const signal=new AbortController().signal;
+  expect((await router.call(base.run,base.work,'paused-list','processes.list',{},signal)).value).toEqual([{unit,pids:[4101]}]);
+  expect((await router.call(base.run,base.work,'paused-stop','processes.stop',{unit},signal)).value).toEqual({unit,stopped:true});
+  expect(stop).toHaveBeenCalledOnce();
+});
+
 it('keeps an uncertain process-stop receipt when systemd cannot confirm cleanup',async()=>{
   const base=setup(),unit='mate-agent-1001-123e4567-e89b-42d3-a456-426614174000.scope';
   const stop=vi.fn(()=>{throw new Error('systemd stop result unknown');});
