@@ -30,10 +30,10 @@ const reminderInput = {
 };
 /**
  * Identity, visibility and work ownership of one call that names a target conversation and may
- * optionally name a task or a message anchor. Every reference is interpreted here, so the shared
- * router never has to recognise a field name.
+ * optionally name a task or a message anchor; it answers with the work item the call belongs to.
+ * Every reference is interpreted here, so the shared router never has to recognise a field name.
  */
-function reminderReferences(
+function reminderWork(
   context: ToolExecutionContext,
   args: {
     target: { conversationId: string };
@@ -48,7 +48,12 @@ function reminderReferences(
   if (args.anchor) c.messages.message(actor, args.anchor.messageId);
   return args.taskId ? c.board.read(actor, args.taskId).workId : context.workId;
 }
-/** Work item of one own reminder, re-read under current target access. */
+/**
+ * Work item of one own reminder, re-read under current target access. Activity here is the work
+ * container's own state, and ending the task a reminder mentions never changes it, so an author
+ * can still reschedule or cancel a commitment that outlives its task. Only the owner's explicit
+ * work pause or cancel withdraws that, and that path already cancels the work's reminders.
+ */
 function ownedReminder(context: ToolExecutionContext, reminderId: string): string {
   fence(context);
   return context.collaboration.reminders.read(context.run.agentId, reminderId).work_id;
@@ -484,7 +489,7 @@ const definitions: ToolSpec[] = [
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
-    authorize: (context, args) => activeWork(context, reminderReferences(context, args)),
+    authorize: (context, args) => activeWork(context, reminderWork(context, args)),
     handler: ({ collaboration: c, run, workId }, args) => ({
       value: c.reminders.create(run.agentId, workId, args),
     }),
@@ -500,7 +505,9 @@ const definitions: ToolSpec[] = [
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
     authorize: (context, args) => {
-      reminderReferences(context, args);
+      // The reminder owns the work item, so its own record decides attribution; reading the
+      // references keeps an edited target, task or anchor under current visibility.
+      reminderWork(context, args);
       return activeWork(context, ownedReminder(context, args.reminderId));
     },
     handler: ({ collaboration: c, run }, args) => ({

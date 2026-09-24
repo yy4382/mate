@@ -259,6 +259,90 @@ it("authorizes task and reminder effects against their bound work while retainin
   expect(request.workId).toBe(unrelated);
 });
 
+it("keeps an author's reminder reschedulable and cancellable after the task it mentions ended", async () => {
+  const { router, run, work, c } = setup(),
+    signal = new AbortController().signal,
+    target = { conversationId: "CTEST" };
+  // The reminder names a task in a work item of its own, so the task's lifecycle and the work
+  // item's lifecycle stay separate facts.
+  const attached = c.createWork("attached-source", target),
+    taskId = c.createTask("research", attached, target, "attached change");
+  c.claim("research", taskId);
+  const reminder = (
+    await router.call(
+      run,
+      work,
+      "own-reminder",
+      "reminders.create",
+      {
+        target,
+        content: "keep the commitment",
+        nextAt: Date.now() + 60000,
+        timezone: "UTC",
+        taskId,
+      },
+      signal,
+    )
+  ).value as { id: string; work_id: string; version: number };
+  expect(reminder.work_id).toBe(attached);
+  const held = (
+    await router.call(
+      run,
+      work,
+      "end-mentioned-task",
+      "tasks.update",
+      { taskId, status: "done", result: "verified", expectedVersion: c.task(taskId).version },
+      signal,
+    )
+  ).value as { intentId: string; holdId: string };
+  await router.call(
+    run,
+    work,
+    "apply-mentioned-task-end",
+    "tasks.continue",
+    {
+      intentId: held.intentId,
+      holdId: held.holdId,
+      acknowledge: "apply_despite_unread_or_changes",
+    },
+    signal,
+  );
+  expect(c.task(taskId).status).toBe("done");
+  // Ending the task neither cancels the reminder nor blocks its author from changing it.
+  expect(c.reminders.read("research", reminder.id).active).toBe(1);
+  const rescheduled = (
+    await router.call(
+      run,
+      work,
+      "reschedule-own-reminder",
+      "reminders.edit",
+      {
+        reminderId: reminder.id,
+        expectedVersion: reminder.version,
+        target,
+        content: "keep the commitment",
+        nextAt: Date.now() + 120000,
+        timezone: "UTC",
+        taskId,
+      },
+      signal,
+    )
+  ).value as { reminder: { version: number; active: number } };
+  expect(rescheduled.reminder).toMatchObject({ active: 1 });
+  const cancelled = (
+    await router.call(
+      run,
+      work,
+      "cancel-own-reminder",
+      "reminders.cancel",
+      { reminderId: reminder.id, expectedVersion: rescheduled.reminder.version },
+      signal,
+    )
+  ).value as { futureCancelled: boolean };
+  expect(cancelled.futureCancelled).toBe(true);
+  expect(c.reminders.read("research", reminder.id).active).toBe(0);
+});
+
 it("binds canonical message claims to the existing task work instead of an unrelated selected work", async () => {
   const { router, run, work, c, store } = setup(),
     target = fixtureTarget("CTEST", "100.000001"),
