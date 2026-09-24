@@ -52,13 +52,8 @@ it("ingests non-platform IDs with structured identity and numeric revision order
   ingestion.record(message(), ["research"]);
   ingestion.record({ ...message(), revision: "10", text: "changed" }, ["research"]);
   ingestion.record(message(), ["research"]);
-  expect(records.message("a-message")).toMatchObject({
-    text: "changed",
-    revision: "10",
-  });
-  expect(s.db.prepare("SELECT count(*) n FROM deliveries").get()).toEqual({
-    n: 2,
-  });
+  expect(records.message("a-message")).toMatchObject({ text: "changed", revision: "10" });
+  expect(s.db.prepare("SELECT count(*) n FROM deliveries").get()).toEqual({ n: 2 });
   expect(s.db.prepare("SELECT count(*) n FROM conversation_events").get()).toEqual({ n: 2 });
   expect(() => ingestion.record({ ...message(), order: "11" }, ["research"])).toThrow("immutable");
 });
@@ -104,7 +99,5 @@ it("enriches a deleted unknown root without reviving content or creating a wakeu
     deleted: true,
     text: "",
   });
-  expect(s.db.prepare("SELECT count(*) n FROM deliveries").get()).toEqual({
-    n: 0,
-  });
+  expect(s.db.prepare("SELECT count(*) n FROM deliveries").get()).toEqual({ n: 0 });
 });

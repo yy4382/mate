@@ -44,8 +44,5 @@ Use immutable receipts to distinguish prepared, queued, held, sent, failed and u
 Capability discovery
 ${operationDocumentation}`;
   const baseline = createInitialSystemMessage(prompt, [toolDefinition]);
-  return {
-    configVersion: hash(encode({ agent, prompt, toolDefinition })),
-    messages: [baseline],
-  };
+  return { configVersion: hash(encode({ agent, prompt, toolDefinition })), messages: [baseline] };
 }

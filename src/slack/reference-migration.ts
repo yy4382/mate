@@ -51,13 +51,7 @@ export function migrateLegacyReferences(store: Store, workspace: string): void {
     // Source identity includes workspace; a same-ts message in another channel is distinct.
     const messages = store.db
       .prepare("SELECT key,channel,ts,thread,deleted FROM messages")
-      .all() as {
-      key: string;
-      channel: string;
-      ts: string;
-      thread: string;
-      deleted: number;
-    }[];
+      .all() as { key: string; channel: string; ts: string; thread: string; deleted: number }[];
     for (const message of messages) {
       timestamp.parse(message.ts);
       timestamp.parse(message.thread);
@@ -73,12 +67,7 @@ export function migrateLegacyReferences(store: Store, workspace: string): void {
         references.createMessage(conversationId, message.key, rootId);
       }
       references.bindMessage(
-        {
-          provider: "slack",
-          workspace,
-          externalId: message.channel,
-          messageId: message.ts,
-        },
+        { provider: "slack", workspace, externalId: message.channel, messageId: message.ts },
         message.key,
       );
     }

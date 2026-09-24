@@ -57,10 +57,7 @@ it("accepts an unused review workspace without optional starter directories", as
     d.controls.execute(
       "owner",
       "review-seat research " +
-        JSON.stringify({
-          target: { conversationId: "local-room" },
-          brief: "Review the proposal",
-        }),
+        JSON.stringify({ target: { conversationId: "local-room" }, brief: "Review the proposal" }),
     ),
   ).toContain("enabled");
 });
@@ -97,13 +94,7 @@ it("uses the same permanent daemon, Supervisor, tool/gate and local console with
           acknowledge: "send_despite_unread_or_changes",
         });
       }
-      return {
-        tokens: 3,
-        cost: 0,
-        certain: true,
-        waiting: false,
-        continuation: false,
-      };
+      return { tokens: 3, cost: 0, certain: true, waiting: false, continuation: false };
     },
   }));
   d.collaboration.messages.watch("research", { conversationId: "local-room" }, true);
@@ -128,19 +119,9 @@ it("uses the same permanent daemon, Supervisor, tool/gate and local console with
   expect(calls).toBeGreaterThan(0);
   expect(d.adapter).toBeUndefined();
   expect(() =>
-    console.execute({
-      id: "bad",
-      op: "control",
-      human: "reader",
-      text: "agent-stop research",
-    }),
+    console.execute({ id: "bad", op: "control", human: "reader", text: "agent-stop research" }),
   ).toThrow("Owner only");
-  console.execute({
-    id: "stop",
-    op: "control",
-    human: "owner",
-    text: "agent-stop research",
-  });
+  console.execute({ id: "stop", op: "control", human: "owner", text: "agent-stop research" });
   await d.close();
   const reopened = await daemon(c);
   expect(
@@ -153,9 +134,7 @@ it("uses the same permanent daemon, Supervisor, tool/gate and local console with
 it("reports the local development home even without a shared Linux work root", async () => {
   const { c } = config(),
     d = await daemon(c),
-    work = d.collaboration.createWork("environment", {
-      conversationId: "local-room",
-    });
+    work = d.collaboration.createWork("environment", { conversationId: "local-room" });
   d.collaboration.enqueue("research", work, "read-environment", {});
   const run = d.store.beginRun("research")!;
   d.store.input(run, {});
@@ -168,10 +147,7 @@ it("reports the local development home even without a shared Linux work root", a
     new AbortController().signal,
   );
   expect(result.value).toMatchObject({
-    filesystem: {
-      home: d.memoryRoots.research,
-      access: "local_user_permissions",
-    },
+    filesystem: { home: d.memoryRoots.research, access: "local_user_permissions" },
   });
   expect((result.value as { filesystem: Record<string, unknown> }).filesystem).not.toHaveProperty(
     "sharedRoot",
@@ -316,12 +292,7 @@ it("JSONL console reports request errors and the real CLI starts, reads and cont
       target: { conversationId: "local-room" },
       text: "from real CLI",
     },
-    {
-      id: "read",
-      op: "read",
-      human: "owner",
-      target: { conversationId: "local-room" },
-    },
+    { id: "read", op: "read", human: "owner", target: { conversationId: "local-room" } },
   ];
   const result = execFileSync(process.execPath, [resolve("dist/src/main.js"), "local", path], {
     input: lines.map((x) => JSON.stringify(x)).join("\n") + "\n",
@@ -365,12 +336,8 @@ it("internal publication bypasses an unrelated in-flight external request and re
   m.references.createConversation("channel", "external", "external");
   m.membership("research", "external", true);
   vi.spyOn(m, "requirePublication").mockImplementation(() => {});
-  const internalWork = d.collaboration.createWork("internal", {
-      conversationId: "local-room",
-    }),
-    externalWork = d.collaboration.createWork("external", {
-      conversationId: "external",
-    });
+  const internalWork = d.collaboration.createWork("internal", { conversationId: "local-room" }),
+    externalWork = d.collaboration.createWork("external", { conversationId: "external" });
   d.collaboration.enqueue("research", internalWork, "manual-run", {});
   const run = s.beginRun("research")!;
   s.input(run, {});

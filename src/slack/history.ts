@@ -60,9 +60,7 @@ export class SlackHistory implements HistorySource {
     const latest = anchor(range.before),
       oldest = anchor(range.after);
     try {
-      const info = await client.conversations.info({
-        channel: location.channel,
-      });
+      const info = await client.conversations.info({ channel: location.channel });
       check();
       if (version !== m.membershipVersion(run.agentId))
         throw new Error("History membership changed");
@@ -105,11 +103,7 @@ export class SlackHistory implements HistorySource {
           gaps.push("unexpected_history_event");
           continue;
         }
-        const parsed = rawMessage.safeParse({
-          ...raw,
-          type: "message",
-          channel: location.channel,
-        });
+        const parsed = rawMessage.safeParse({ ...raw, type: "message", channel: location.channel });
         if (!parsed.success || !parsed.data.ts) {
           gaps.push("unreadable_message");
           continue;

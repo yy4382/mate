@@ -140,11 +140,7 @@ export class ConversationHistory {
       .object({
         key: z.string(),
         position: z
-          .object({
-            channel: id,
-            order: z.string().regex(/^(0|[1-9][0-9]*)$/),
-            id,
-          })
+          .object({ channel: id, order: z.string().regex(/^(0|[1-9][0-9]*)$/), id })
           .strict()
           .optional(),
         remote: z.string().optional(),

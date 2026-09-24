@@ -47,10 +47,7 @@ export function migrateCoordinationRecovery(store: Store): void {
     const baseline = store.db.prepare("INSERT INTO task_event_baselines VALUES(?,?,0,?)");
     const snapshot = store.db.prepare("INSERT INTO task_events(task_id,at,body) VALUES(?,?,?)");
     for (const task of tasks) {
-      const evidence = createActors.get(task.id) as {
-        actor: string | null;
-        count: number;
-      };
+      const evidence = createActors.get(task.id) as { actor: string | null; count: number };
       const fromEvent =
         evidence.count === 1 && evidence.actor && knownAgent.get(evidence.actor)
           ? { actor: evidence.actor }

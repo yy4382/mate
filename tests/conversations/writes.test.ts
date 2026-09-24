@@ -82,11 +82,7 @@ it("rolls back authoritative objects and their reference writes together", () =>
   expect(s.output("rolled-back")).toBeUndefined();
   expect(s.db.prepare("SELECT 1 FROM works WHERE origin='will-rollback'").get()).toBeUndefined();
   expect(
-    refs.findConversation({
-      provider: "slack",
-      workspace: "TTEST",
-      externalId: "CNEW",
-    }),
+    refs.findConversation({ provider: "slack", workspace: "TTEST", externalId: "CNEW" }),
   ).toBeUndefined();
   expect(s.db.prepare("SELECT * FROM canonical_targets").all()).toEqual(before);
   expect(() => m.persistence.writes.target("works", "no-authority", { channel: "CTEST" })).toThrow(
@@ -96,17 +92,11 @@ it("rolls back authoritative objects and their reference writes together", () =>
 
 it("indexes the stored delivery on dedupe and keeps reminder edits aligned with eligibility", () => {
   const { s, m, c, refs } = setup();
-  const one = m.persistence.writes.enqueue("research", "same", {
-    target: { channel: "CTEST" },
-  });
-  expect(
-    m.persistence.writes.enqueue("research", "same", {
-      target: { channel: "CTWO" },
-    }),
-  ).toBe(one);
-  expect(refs.indexedTarget("deliveries", one)).toEqual({
-    conversationId: "CTEST",
-  });
+  const one = m.persistence.writes.enqueue("research", "same", { target: { channel: "CTEST" } });
+  expect(m.persistence.writes.enqueue("research", "same", { target: { channel: "CTWO" } })).toBe(
+    one,
+  );
+  expect(refs.indexedTarget("deliveries", one)).toEqual({ conversationId: "CTEST" });
   const work = c.createWork("reminder", { channel: "CTEST" });
   const r = c.reminders.create("research", work, {
     target: { channel: "CTEST" },
@@ -169,9 +159,7 @@ it("never signs a complete view when a sent publication index is missing or poin
   expect(() => c.attention.read(run, target)).toThrow("index missing");
   refs.indexTarget("outbox", "artifact", { conversationId: "CTWO" });
   expect(() => c.attention.read(run, target)).toThrow("inconsistent");
-  expect(s.db.prepare("SELECT count(*) n FROM attention_views").get()).toEqual({
-    n: 0,
-  });
+  expect(s.db.prepare("SELECT count(*) n FROM attention_views").get()).toEqual({ n: 0 });
   refs.indexTarget("outbox", "artifact", original);
   const first = c.attention.read(run, target) as { nextCursor: string };
   expect(first.nextCursor).toBeTruthy();

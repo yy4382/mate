@@ -88,10 +88,7 @@ export class CanonicalSlackNormalizer {
                   this.output.matchesText(JSON.parse(out.request).text, message.text) &&
                   !message.deleted
                 )
-                  this.output.confirm(out.id, out.request_hash, {
-                    message,
-                    receipt: { ts },
-                  });
+                  this.output.confirm(out.id, out.request_hash, { message, receipt: { ts } });
               }
             }
             message = systemOrigin(this.messages, message, metadata);
@@ -113,11 +110,7 @@ export function systemOrigin(
   metadata: unknown,
 ): import("../domain/messages.js").MessageDTO {
   const proof = metadata as
-    | {
-        event_type?: string;
-        event_payload?: { id?: unknown; request_hash?: unknown };
-      }
-    | undefined;
+    { event_type?: string; event_payload?: { id?: unknown; request_hash?: unknown } } | undefined;
   if (proof?.event_type !== "mate_outbox" || typeof proof.event_payload?.id !== "string")
     return message;
   const s = messages.store,

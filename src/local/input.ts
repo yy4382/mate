@@ -49,10 +49,7 @@ export class LocalAdapter {
     human: string,
     input: ConversationTarget,
     before?: string,
-  ): {
-    messages: import("../domain/messages.js").MessageDTO[];
-    nextCursor: string | null;
-  } {
+  ): { messages: import("../domain/messages.js").MessageDTO[]; nextCursor: string | null } {
     if (!this.humans.has(human)) throw new Error("Unknown local human");
     const c = this.collaboration,
       target = c.messages.references.validateTarget(conversationTargetSchema.parse(input));

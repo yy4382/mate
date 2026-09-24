@@ -4,10 +4,7 @@ import type { Readable, Writable } from "node:stream";
 import type { LocalAdapter } from "./input.js";
 import type { Controls } from "../daemon/control.js";
 import { conversationTargetSchema } from "../domain/conversations.js";
-const base = {
-  id: z.string().min(1).max(200),
-  human: z.string().min(1).max(1000),
-};
+const base = { id: z.string().min(1).max(200), human: z.string().min(1).max(1000) };
 const request = z.discriminatedUnion("op", [
   z
     .object({
@@ -27,13 +24,7 @@ const request = z.discriminatedUnion("op", [
     })
     .strict(),
   z.object({ ...base, op: z.literal("rooms") }).strict(),
-  z
-    .object({
-      ...base,
-      op: z.literal("control"),
-      text: z.string().min(1).max(35000),
-    })
-    .strict(),
+  z.object({ ...base, op: z.literal("control"), text: z.string().min(1).max(35000) }).strict(),
 ]);
 /** Trusted host JSONL interface. It calls the same application and control services. */
 export class LocalConsole {
@@ -47,15 +38,9 @@ export class LocalConsole {
     this.input.rooms(r.human);
     switch (r.op) {
       case "send":
-        return {
-          id: r.id,
-          result: this.input.receive(r.human, r.eventId, r.target, r.text),
-        };
+        return { id: r.id, result: this.input.receive(r.human, r.eventId, r.target, r.text) };
       case "read":
-        return {
-          id: r.id,
-          result: this.input.read(r.human, r.target, r.before),
-        };
+        return { id: r.id, result: this.input.read(r.human, r.target, r.before) };
       case "rooms":
         return { id: r.id, result: this.input.rooms(r.human) };
       case "control":
@@ -78,10 +63,7 @@ export class LocalConsole {
           id = typeof parsed?.id === "string" ? parsed.id.slice(0, 200) : null;
           response = this.execute(parsed);
         } catch (error) {
-          response = {
-            id,
-            error: error instanceof Error ? error.message : "Local request failed",
-          };
+          response = { id, error: error instanceof Error ? error.message : "Local request failed" };
         }
         destination.write(JSON.stringify(response) + "\n");
       }

@@ -91,13 +91,7 @@ export class Attention {
         target?.channel ?? null,
         target?.thread ?? null,
         target?.thread ?? null,
-      ) as {
-      id: string;
-      agent_id: string;
-      request: string;
-      receipt: string;
-      seq: number;
-    }[];
+      ) as { id: string; agent_id: string; request: string; receipt: string; seq: number }[];
     return rows.reverse().map((row) => {
       this.messages.persistence.records.targetedEffect("outbox", row.id);
       const request = JSON.parse(row.request);
@@ -115,10 +109,7 @@ export class Attention {
   peek(actor: string, now = Date.now()): unknown[] {
     if (this.messages.isolated(actor))
       return [
-        {
-          isolated: true,
-          notice: "Independent review seat; discussion inputs are withheld.",
-        },
+        { isolated: true, notice: "Independent review seat; discussion inputs are withheld." },
       ];
     const s = this.messages.store,
       agent = this.messages.agent(actor);
@@ -236,10 +227,7 @@ export class Attention {
         bytes += size;
       }
       const published = this.publications(run.agentId, target),
-        snapshots: ViewPage[] = pages.map((messages) => ({
-          messages,
-          publications: [],
-        }));
+        snapshots: ViewPage[] = pages.map((messages) => ({ messages, publications: [] }));
       if (published.length > 100) complete = false;
       let publicationBytes = 0;
       for (const publication of published.slice(-100)) {

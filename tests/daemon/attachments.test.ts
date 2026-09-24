@@ -98,20 +98,7 @@ function setup() {
       path: "artifacts/picture.png",
     },
     signal = new AbortController().signal;
-  return {
-    root,
-    s,
-    m,
-    c,
-    broker,
-    run,
-    work,
-    target,
-    files,
-    args,
-    signal,
-    client,
-  };
+  return { root, s, m, c, broker, run, work, target, files, args, signal, client };
 }
 it("downloads visible binary attachments, freezes/publishes the same bytes and hides payload bulk from model drafts", async () => {
   const { root, c, broker, run, work, target, files, args, signal } = setup(),
@@ -189,11 +176,7 @@ it("runs the visible attachment to revised artifact delivery loop through the fo
     { ...args, path: "source.bin" },
     signal,
   );
-  expect(saved.value).toMatchObject({
-    fileId: "FFILE",
-    path: "source.bin",
-    bytes: 4,
-  });
+  expect(saved.value).toMatchObject({ fileId: "FFILE", path: "source.bin", bytes: 4 });
   const read = await router.call(
     run,
     work,
@@ -218,20 +201,11 @@ it("runs the visible attachment to revised artifact delivery loop through the fo
       work,
       "publish",
       "artifact.publish",
-      {
-        path: "artifacts/result.txt",
-        title: "Result",
-        target,
-        text: "Initial result",
-      },
+      { path: "artifacts/result.txt", title: "Result", target, text: "Initial result" },
       signal,
     )
   ).value as any;
-  expect(first).toMatchObject({
-    status: "held",
-    revision: 1,
-    artifact: { bytes: 14 },
-  });
+  expect(first).toMatchObject({ status: "held", revision: 1, artifact: { bytes: 14 } });
   const original = JSON.parse(c.store.output(first.draftId)!.request).artifact;
   expect(original.content).toBe("first evidence");
   await router.call(
@@ -262,11 +236,7 @@ it("runs the visible attachment to revised artifact delivery loop through the fo
       signal,
     )
   ).value as any;
-  expect(revised).toMatchObject({
-    status: "held",
-    revision: 2,
-    artifact: { bytes: 16 },
-  });
+  expect(revised).toMatchObject({ status: "held", revision: 2, artifact: { bytes: 16 } });
   await router.call(
     run,
     work,
@@ -301,21 +271,13 @@ it("rejects unrelated files, credential-bearing redirects/hosts and revocation d
   expect(client.files.info).not.toHaveBeenCalled();
   client.files.info = vi.fn(async () => ({
     ok: true,
-    file: {
-      id: "FFILE",
-      size: 4,
-      url_private: "https://files.slack.com.evil.invalid/files-pri/x",
-    },
+    file: { id: "FFILE", size: 4, url_private: "https://files.slack.com.evil.invalid/files-pri/x" },
   })) as any;
   await expect(files.save(run, work, "host", args, signal)).rejects.toThrow("download URL");
   expect(fetcher).not.toHaveBeenCalled();
   client.files.info = vi.fn(async () => ({
     ok: true,
-    file: {
-      id: "FFILE",
-      size: 4,
-      url_private: "https://files.slack.com/files-pri/x",
-    },
+    file: { id: "FFILE", size: 4, url_private: "https://files.slack.com/files-pri/x" },
   })) as any;
   fetcher.mockImplementation(async () => {
     m.membership("research", "CTEST", false);

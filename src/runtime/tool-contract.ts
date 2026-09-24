@@ -16,10 +16,7 @@ export type ReplayPolicy = "immutable" | "refreshable" | "boundary-owned";
 
 export interface AdditionalTools {
   environment?(run: RunToken, workId: string): unknown;
-  processes?: {
-    list(agentId: string): unknown;
-    stop(agentId: string, unit: string): unknown;
-  };
+  processes?: { list(agentId: string): unknown; stop(agentId: string, unit: string): unknown };
   system?: SystemOperations;
   attachment?(
     run: RunToken,

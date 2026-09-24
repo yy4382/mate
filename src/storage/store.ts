@@ -256,12 +256,7 @@ export class Store {
       this.db
         .prepare("UPDATE agents SET session_id=?,generation=generation+1 WHERE id=?")
         .run(id, agentId);
-      this.audit("session_rotated", {
-        agentId,
-        from: agent.session_id,
-        to: id,
-        reason,
-      });
+      this.audit("session_rotated", { agentId, from: agent.session_id, to: id, reason });
       return id;
     });
   }

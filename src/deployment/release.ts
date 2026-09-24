@@ -29,11 +29,7 @@ const inventoryEntrySchema = z.discriminatedUnion("type", [
     })
     .strict(),
   z
-    .object({
-      path: z.string().min(1),
-      type: z.literal("symlink"),
-      target: z.string().min(1),
-    })
+    .object({ path: z.string().min(1), type: z.literal("symlink"), target: z.string().min(1) })
     .strict(),
 ]);
 export const releaseManifestSchema = z
@@ -55,12 +51,7 @@ export const releaseManifestSchema = z
     inventorySha256: z.string().regex(hashPattern),
     dependencyInventorySha256: z.string().regex(hashPattern),
     nativeAddons: z.array(
-      z
-        .object({
-          path: z.string().min(1),
-          sha256: z.string().regex(hashPattern),
-        })
-        .strict(),
+      z.object({ path: z.string().min(1), sha256: z.string().regex(hashPattern) }).strict(),
     ),
     inventory: z.array(inventoryEntrySchema),
   })
@@ -151,12 +142,7 @@ async function inventoryTree(root: string): Promise<InventoryEntry[]> {
       if (links.expected !== stat.nlink)
         throw new Error(`Release hardlink identity changed: ${itemPath}`);
       links.count++;
-    } else
-      hardlinks.set(identity, {
-        expected: stat.nlink,
-        count: 1,
-        path: itemPath,
-      });
+    } else hardlinks.set(identity, { expected: stat.nlink, count: 1, path: itemPath });
     entries.push({
       path: itemPath,
       type: "file",
@@ -228,10 +214,7 @@ export async function createReleaseManifest(
         .map((item) => ({ path: item.path, sha256: item.sha256 })),
       inventory,
     };
-  return releaseManifestSchema.parse({
-    ...base,
-    releaseId: digest(stable(base)),
-  });
+  return releaseManifestSchema.parse({ ...base, releaseId: digest(stable(base)) });
 }
 
 export function assertReleaseRuntime(
@@ -254,12 +237,7 @@ export function assertSameReleasePayload(source: ReleaseManifest, copied: Releas
   const content = (manifest: ReleaseManifest) =>
     manifest.inventory.map((entry) =>
       entry.type === "file"
-        ? {
-            path: entry.path,
-            type: entry.type,
-            size: entry.size,
-            sha256: entry.sha256,
-          }
+        ? { path: entry.path, type: entry.type, size: entry.size, sha256: entry.sha256 }
         : entry.type === "symlink"
           ? { path: entry.path, type: entry.type, target: entry.target }
           : { path: entry.path, type: entry.type },

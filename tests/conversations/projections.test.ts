@@ -46,11 +46,7 @@ function setup() {
   const transport: ProjectionTransport = {
     prepare: (b, text, thread) => ({
       text,
-      target: {
-        provider: b.provider,
-        workspace: b.workspace,
-        externalId: b.externalId,
-      },
+      target: { provider: b.provider, workspace: b.workspace, externalId: b.externalId },
       ...(thread ? { thread } : {}),
     }),
     authorized,
@@ -76,19 +72,7 @@ function setup() {
           .get(binding, message) as { id: string }
       ).id,
     );
-  return {
-    s,
-    ...app,
-    p,
-    target,
-    post,
-    transport,
-    authorized,
-    evidence,
-    bind,
-    input,
-    projection,
-  };
+  return { s, ...app, p, target, post, transport, authorized, evidence, bind, input, projection };
 }
 it("projection failure leaves the canonical message and runnable recipient work committed", async () => {
   const f = setup(),
@@ -99,9 +83,7 @@ it("projection failure leaves the canonical message and runnable recipient work 
   await f.p.send(row.id);
   expect(f.p.get(row.id).state).toBe("unknown");
   expect(f.messages.message("bob", message).text).toBe("message first");
-  expect(f.s.db.prepare("SELECT count(*) n FROM delivery_work").get()).toEqual({
-    n: 2,
-  });
+  expect(f.s.db.prepare("SELECT count(*) n FROM delivery_work").get()).toEqual({ n: 2 });
   await f.p.send(row.id);
   expect(f.post).toHaveBeenCalledOnce();
   const frozen = f.p.get(row.id);
@@ -146,10 +128,7 @@ it("holds old roots without leaking history, then an explicitly authorized blank
     reply = f.input("reply", { ...f.target, threadId: old }),
     row = f.projection(b, reply);
   await f.p.send(row.id);
-  expect(f.p.get(row.id)).toMatchObject({
-    state: "held",
-    reason: "missing_historical_root",
-  });
+  expect(f.p.get(row.id)).toMatchObject({ state: "held", reason: "missing_historical_root" });
   expect(f.post).not.toHaveBeenCalled();
   const anchor = f.p.anchor(b, old);
   await f.p.send(anchor);
@@ -244,10 +223,7 @@ it("published mirrors track source drift without overwriting canonical content o
   await f.p.send(row.id);
   const m = f.messages.message("alice", id);
   f.messages.record({ ...m, revision: "100", deleted: true, text: "" }, ["alice", "bob"]);
-  expect(f.p.get(row.id)).toMatchObject({
-    state: "sent",
-    drift: "source_changed",
-  });
+  expect(f.p.get(row.id)).toMatchObject({ state: "sent", drift: "source_changed" });
   await f.p.send(row.id);
   expect(f.post).toHaveBeenCalledOnce();
   expect(() =>
@@ -286,9 +262,7 @@ it("reopens a real database with unknown frozen evidence and reconciles without 
       const request = f.post.mock.calls[0]![0];
       p.confirm(row.id, request.requestHash, f.evidence(request));
       expect(p.get(row.id).state).toBe("sent");
-      expect(s.db.prepare("SELECT count(*) n FROM messages").get()).toEqual({
-        n: 1,
-      });
+      expect(s.db.prepare("SELECT count(*) n FROM messages").get()).toEqual({ n: 1 });
       expect(s.db.prepare("SELECT count(*) n FROM delivery_work").get()).toEqual({ n: 2 });
     } finally {
       s.close();

@@ -45,11 +45,7 @@ it("binds release identity to lockfile, runtime, dependency inventory and native
   symlinkSync("pkg", join(root, "node_modules", "alias"));
   const first = await createReleaseManifest(root, "abcdef1234567", runtime);
   expect(first.nativeAddons).toHaveLength(1);
-  expect(first.target).toMatchObject({
-    arch: "x64",
-    node: "v24.21.0",
-    modulesAbi: "137",
-  });
+  expect(first.target).toMatchObject({ arch: "x64", node: "v24.21.0", modulesAbi: "137" });
   writeFileSync(join(root, "dist", "main.js"), "two");
   const second = await createReleaseManifest(root, "abcdef1234567", runtime);
   expect(second.releaseId).not.toBe(first.releaseId);

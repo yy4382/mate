@@ -25,18 +25,12 @@ it.skipIf(process.platform === "linux")(
     const config = daemonConfigSchema.parse(raw);
     const first = await Daemon.create(config, log);
     const store = first.store,
-      work = first.collaboration.createWork("old-work", {
-        conversationId: "team-room",
-      });
+      work = first.collaboration.createWork("old-work", { conversationId: "team-room" });
     const delivery = first.collaboration.enqueue("research", work, "pending-from-v24", {
       text: "CONTINUE_THIS_REQUEST",
     });
     const run = store.beginRun("research", Date.now(), true)!;
-    store.input(run, {
-      role: "user",
-      content: "CONTINUE_THIS_REQUEST",
-      timestamp: 0,
-    });
+    store.input(run, { role: "user", content: "CONTINUE_THIS_REQUEST", timestamp: 0 });
     first.collaboration.bindRunWork(run, work);
     store.appendMessage(run, "message:0", answer([{ type: "text", text: "earlier model output" }]));
     store.db.exec(`

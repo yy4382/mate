@@ -97,9 +97,7 @@ export class Controls {
       case "tasks":
         return c.operations.activity(user, { sources: ["task"] });
       case "schedules":
-        return c.operations.activity(user, {
-          sources: ["reminder_event", "reminder_firing"],
-        });
+        return c.operations.activity(user, { sources: ["reminder_event", "reminder_firing"] });
       case "stop":
       case "pause":
       case "cancel":

@@ -17,10 +17,7 @@ const nodeRunner: ReadinessRunner = (binary, args, environment) => {
     maxBuffer: 4096,
     env: environment,
   });
-  return {
-    code: result.status ?? 1,
-    stderr: result.stderr ?? String(result.error ?? ""),
-  };
+  return { code: result.status ?? 1, stderr: result.stderr ?? String(result.error ?? "") };
 };
 
 /** Complete the Type=notify start job only after Daemon.start() has finished. */

@@ -182,13 +182,9 @@ export class Reminders {
         .all(id) as { id: string }[]
     ).map((row) => row.id);
   }
-  private firings(id: string): {
-    delivery_id: string;
-    status: string;
-    due_at: number;
-    version: number;
-    running: number;
-  }[] {
+  private firings(
+    id: string,
+  ): { delivery_id: string; status: string; due_at: number; version: number; running: number }[] {
     return this.c.store.db
       .prepare(
         "SELECT f.delivery_id,d.status,f.due_at,f.version,EXISTS(SELECT 1 FROM runs run WHERE run.delivery_id=d.id AND run.state='active') running FROM reminder_firings f JOIN deliveries d ON d.id=f.delivery_id WHERE f.reminder_id=? ORDER BY f.rowid DESC LIMIT 100",
@@ -268,15 +264,14 @@ export class Reminders {
         .prepare("INSERT INTO reminder_firings VALUES(?,?,?,?,?,?)")
         .run(firing, r.id, r.next_at, r.version, delivery, output);
       if (r.cron)
-        s.db.prepare("UPDATE schedules SET next_at=?,version=version+1 WHERE id=?").run(
-          CronExpressionParser.parse(r.cron, {
-            currentDate: now,
-            tz: r.timezone,
-          })
-            .next()
-            .getTime(),
-          r.id,
-        );
+        s.db
+          .prepare("UPDATE schedules SET next_at=?,version=version+1 WHERE id=?")
+          .run(
+            CronExpressionParser.parse(r.cron, { currentDate: now, tz: r.timezone })
+              .next()
+              .getTime(),
+            r.id,
+          );
       else s.db.prepare("UPDATE schedules SET active=0,version=version+1 WHERE id=?").run(r.id);
       this.event({ ...r, version: r.version + 1 }, "fired", {
         dueAt: r.next_at,

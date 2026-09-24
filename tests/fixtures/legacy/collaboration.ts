@@ -231,13 +231,7 @@ export class Collaboration {
     this.store.atomic(() => {
       this.ledger.settle(runId, tokens, cost);
       const row = this.store.db.prepare("SELECT * FROM work_runs WHERE run_id=?").get(runId) as
-        | {
-            work_id: string;
-            token_cap: number;
-            cost_cap: number;
-            settled: number;
-          }
-        | undefined;
+        { work_id: string; token_cap: number; cost_cap: number; settled: number } | undefined;
       if (!row || row.settled) return;
       this.store.db
         .prepare("UPDATE works SET tokens=tokens+?,cost=MAX(0,cost+?) WHERE id=?")
@@ -426,21 +420,13 @@ export class Collaboration {
           this.store.db
             .prepare("UPDATE tasks SET status='doing',waiting_on=NULL,version=version+1 WHERE id=?")
             .run(task.id);
-          this.event(task.id, {
-            action: "dependency_already_terminal",
-            dependencyId,
-          });
+          this.event(task.id, { action: "dependency_already_terminal", dependencyId });
         }
         this.enqueue(
           agentId,
           task.work_id,
           `dependency:${taskId}:${dependencyId}:${dependency.version}`,
-          {
-            kind: "dependency",
-            taskId,
-            dependencyId,
-            target: JSON.parse(task.target),
-          },
+          { kind: "dependency", taskId, dependencyId, target: JSON.parse(task.target) },
         );
         return;
       }
@@ -533,12 +519,7 @@ export class Collaboration {
         .prepare(
           "SELECT agent_id,target,deferred_until,muted FROM attention_state WHERE deferred_until>0 AND deferred_until<=?",
         )
-        .all(now) as {
-        agent_id: string;
-        target: string;
-        deferred_until: number;
-        muted: number;
-      }[];
+        .all(now) as { agent_id: string; target: string; deferred_until: number; muted: number }[];
       for (const item of deferred) {
         const target = JSON.parse(item.target) as Target;
         this.store.db

@@ -450,10 +450,7 @@ async function managedRestore(
         await restoreLinuxOwnership(root, identity.uid, identity.gid, agent.entries);
         assertBoundary();
         await assertRestoredWorkspace(root, agent.entries, agent.agentId);
-        journal = {
-          ...journal,
-          completedAgents: [...journal.completedAgents, agent.agentId],
-        };
+        journal = { ...journal, completedAgents: [...journal.completedAgents, agent.agentId] };
         await atomicJson(journalPath, journal);
         await options.afterPhase?.(`agent:${agent.agentId}`);
       }

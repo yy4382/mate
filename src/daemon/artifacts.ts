@@ -73,10 +73,7 @@ export class Artifacts {
       content = bytes.toString("base64");
       encoding = "base64";
     } else {
-      content = await result(`${actionId}:read`, {
-        kind: "read",
-        path: args.path,
-      });
+      content = await result(`${actionId}:read`, { kind: "read", path: args.path });
       contentHash = hash(content);
     }
     signal.throwIfAborted();
@@ -121,9 +118,7 @@ export class Artifacts {
       s.startAction(run, actionId);
       let result: unknown;
       if (args.draftId) {
-        const previous = gate.describe(run.agentId, args.draftId) as {
-          artifact?: unknown;
-        };
+        const previous = gate.describe(run.agentId, args.draftId) as { artifact?: unknown };
         if (!previous.artifact) throw new Error("Not an artifact draft");
         result = gate.revise(
           run,

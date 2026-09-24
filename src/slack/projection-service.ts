@@ -14,10 +14,7 @@ import {
 } from "./history-recovery.js";
 
 const pageSchema = z
-  .object({
-    before: z.number().int().positive().optional(),
-    problemsOnly: z.boolean().optional(),
-  })
+  .object({ before: z.number().int().positive().optional(), problemsOnly: z.boolean().optional() })
   .strict();
 /** Owner-facing Slack wiring and bounded protocol recovery; no canonical mutation rules here. */
 export class SlackProjectionService {
@@ -57,9 +54,7 @@ export class SlackProjectionService {
             .prepare(
               "SELECT rowid cursor,id,kind,authority FROM conversation_identities WHERE rowid<? ORDER BY rowid DESC LIMIT 21",
             )
-            .all(options.before ?? Number.MAX_SAFE_INTEGER) as {
-            cursor: number;
-          }[],
+            .all(options.before ?? Number.MAX_SAFE_INTEGER) as { cursor: number }[],
         );
       const rows = s.db
         .prepare(
@@ -141,9 +136,7 @@ export class SlackProjectionService {
         .prepare(
           "SELECT rowid cursor,external_id externalId,external_revision revision,status,reason FROM projection_imports WHERE binding_id=? AND status!='applied' AND rowid<? ORDER BY rowid DESC LIMIT 21",
         )
-        .all(id, options.before ?? Number.MAX_SAFE_INTEGER) as {
-        cursor: number;
-      }[];
+        .all(id, options.before ?? Number.MAX_SAFE_INTEGER) as { cursor: number }[];
       return controlPage(rows);
     }
     throw new Error("Unknown projection command");
@@ -200,11 +193,7 @@ export class SlackProjectionService {
           visit: (messages) => {
             for (const message of messages) {
               if (message.ts)
-                this.input.handle({
-                  ...message,
-                  type: "message",
-                  channel: b.externalId,
-                });
+                this.input.handle({ ...message, type: "message", channel: b.externalId });
               if (this.core.get(row.id).state !== "unknown") return true;
             }
             return false;

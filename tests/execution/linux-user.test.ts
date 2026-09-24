@@ -13,11 +13,7 @@ function workspace() {
   roots.push(root);
   return root;
 }
-const identity = {
-  uid: process.getuid!(),
-  gid: process.getgid!(),
-  home: homedir(),
-};
+const identity = { uid: process.getuid!(), gid: process.getgid!(), home: homedir() };
 
 it("places each Linux call in its Agent slice with groups cleared before the command", () => {
   const call = linuxScopeCommand(
@@ -71,20 +67,11 @@ it("runs file tools and shell under one stable host identity and path", async ()
   });
   const created = await backend.execute({
     ...request,
-    operation: {
-      kind: "exec",
-      cwd: ".",
-      command: "printf from-shell > shell.txt",
-    },
+    operation: { kind: "exec", cwd: ".", command: "printf from-shell > shell.txt" },
   });
   expect(created.code).toBe(0);
   expect(
-    (
-      await backend.execute({
-        ...request,
-        operation: { kind: "read", path: "shell.txt" },
-      })
-    ).stdout,
+    (await backend.execute({ ...request, operation: { kind: "read", path: "shell.txt" } })).stdout,
   ).toBe("from-shell");
   expect(readFileSync(join(root, "shell.txt"), "utf8")).toBe("from-shell");
 });
@@ -123,11 +110,7 @@ it("keeps complete foreground output when its pipes close normally", async () =>
     agentId: "alice",
     root,
     timeoutMs: 5000,
-    operation: {
-      kind: "exec",
-      cwd: ".",
-      command: 'head -c 60000 /dev/zero | tr "\\000" x',
-    },
+    operation: { kind: "exec", cwd: ".", command: 'head -c 60000 /dev/zero | tr "\\000" x' },
   });
   expect(result.code).toBe(0);
   expect(result.stdout).toBe("x".repeat(60000));
@@ -178,9 +161,7 @@ it("does not inherit the Mate process environment", async () => {
 it("creates peer-readable work products without making private home files peer-readable", async () => {
   const privateRoot = workspace(),
     shared = workspace(),
-    backend = new LinuxUserBackend({
-      alice: { ...identity, home: privateRoot },
-    });
+    backend = new LinuxUserBackend({ alice: { ...identity, home: privateRoot } });
   for (const root of [privateRoot, shared]) {
     expect(
       (
@@ -198,11 +179,7 @@ it("creates peer-readable work products without making private home files peer-r
           agentId: "alice",
           root,
           timeoutMs: 5000,
-          operation: {
-            kind: "exec",
-            cwd: ".",
-            command: "printf work > shell.txt",
-          },
+          operation: { kind: "exec", cwd: ".", command: "printf work > shell.txt" },
         })
       ).code,
     ).toBe(0);

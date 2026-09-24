@@ -37,14 +37,7 @@ function setup(directory?: ConversationDirectory) {
     broker = new Broker(
       store,
       c,
-      {
-        execute: async () => ({
-          code: 0,
-          stdout: "",
-          stderr: "",
-          truncated: false,
-        }),
-      },
+      { execute: async () => ({ code: 0, stdout: "", stderr: "", truncated: false }) },
       {},
     );
   store.register("research", "v1", []);
@@ -53,14 +46,7 @@ function setup(directory?: ConversationDirectory) {
   c.enqueue("research", work, "start", {});
   const run = store.beginRun("research")!;
   store.input(run, {});
-  return {
-    store,
-    c,
-    work,
-    run,
-    router: new ToolRouter(c, broker, undefined, directory),
-    broker,
-  };
+  return { store, c, work, run, router: new ToolRouter(c, broker, undefined, directory), broker };
 }
 const expected = `
 history.page history.search history.around history.fetch
@@ -100,10 +86,7 @@ it("registers every public operation exactly once with complete policies and sta
   expect(operationDocumentation).toContain(`Tool contract: ${operationContractFingerprint}`);
   expect(operationDocumentation.match(/Available: (.*)\.\n/)?.[1]?.split(", ")).toEqual(expected);
   const changed = fingerprintToolSpecs([
-    {
-      ...builtInToolSpecs[0]!,
-      description: builtInToolSpecs[0]!.description + " changed",
-    },
+    { ...builtInToolSpecs[0]!, description: builtInToolSpecs[0]!.description + " changed" },
     ...builtInToolSpecs.slice(1),
   ] as any);
   expect(changed).not.toBe(operationContractFingerprint);
@@ -147,12 +130,7 @@ it("fails closed for duplicate, reserved, incomplete and unknown module specific
     build([{ domain: "x", specs: [{ ...base, workPolicy: "ambient" } as any] }]),
   ).toThrow(/unknown/);
   expect(() =>
-    build([
-      {
-        domain: "x",
-        specs: [{ ...base, effectPolicy: "atomic-recorded" } as any],
-      },
-    ]),
+    build([{ domain: "x", specs: [{ ...base, effectPolicy: "atomic-recorded" } as any] }]),
   ).toThrow(/effect/);
   expect(() => build([{ domain: "x", specs: [] }])).toThrow(/module/);
 });
@@ -192,16 +170,9 @@ it("preserves immutable and refreshable replay while unknown or executing calls 
   expect((store.db.prepare("SELECT count(*) n FROM actions").get() as { n: number }).n).toBe(
     before,
   );
-  const args = {
-      target: fixtureTarget("CTEST", "100.000001"),
-      title: "must not appear",
-    },
+  const args = { target: fixtureTarget("CTEST", "100.000001"), title: "must not appear" },
     actionId = `${run.sessionId}:busy`;
-  store.prepareAction(run, actionId, {
-    workId: work,
-    operation: "tasks.create",
-    args,
-  });
+  store.prepareAction(run, actionId, { workId: work, operation: "tasks.create", args });
   store.startAction(run, actionId);
   await expect(router.call(run, work, "busy", "tasks.create", args, signal)).rejects.toThrow(
     "Uncertain tool action",
@@ -213,23 +184,11 @@ it("replays pre-module receipts with the original selected-work request identity
   const { router, run, work, store, c } = setup(),
     other = c.createWork("other", { conversationId: "CTEST" }),
     taskId = c.createTask("research", other, { conversationId: "CTEST" }, "cross-work"),
-    args = {
-      taskId,
-      expectedVersion: 0,
-      status: "done" as const,
-      result: "legacy",
-    },
+    args = { taskId, expectedVersion: 0, status: "done" as const, result: "legacy" },
     actionId = `${run.sessionId}:legacy-cross-work`;
-  store.prepareAction(run, actionId, {
-    workId: work,
-    operation: "tasks.update",
-    args,
-  });
+  store.prepareAction(run, actionId, { workId: work, operation: "tasks.update", args });
   store.startAction(run, actionId);
-  store.settleAction(run, actionId, "succeeded", {
-    value: { legacyReceipt: true },
-    wait: false,
-  });
+  store.settleAction(run, actionId, "succeeded", { value: { legacyReceipt: true }, wait: false });
   await expect(
     router.call(run, work, "legacy-cross-work", "tasks.update", args, new AbortController().signal),
   ).resolves.toEqual({ value: { legacyReceipt: true }, wait: false });
@@ -248,12 +207,7 @@ it("authorizes task and reminder effects against their bound work while retainin
       work,
       "cross-task",
       "tasks.update",
-      {
-        taskId,
-        expectedVersion: c.task(taskId).version,
-        status: "done",
-        result: "evidence",
-      },
+      { taskId, expectedVersion: c.task(taskId).version, status: "done", result: "evidence" },
       signal,
     )
   ).value as { intentId: string; holdId: string };
@@ -319,9 +273,7 @@ it("binds canonical message claims to the existing task work instead of an unrel
     },
     ["research"],
   );
-  c.createTask("research", bound, target, "claim this", undefined, {
-    messageKey: messageId,
-  });
+  c.createTask("research", bound, target, "claim this", undefined, { messageKey: messageId });
   const unrelated = c.createWork("unrelated-message", target);
   c.selectWork(run, unrelated);
   await expect(
@@ -396,9 +348,7 @@ it("uses one seat policy for direct calls, tools.call, list and describe", async
     .run("research", JSON.stringify({ conversationId: "CTEST" }), "brief", "/synthetic");
   const signal = new AbortController().signal;
   const names = (
-    (await router.call(run, work, "list", "tools.list", {}, signal)).value as {
-      name: string;
-    }[]
+    (await router.call(run, work, "list", "tools.list", {}, signal)).value as { name: string }[]
   ).map((item) => item.name);
   expect(names).not.toContain("tasks.list");
   expect(names).toContain("messages.send");
@@ -543,11 +493,7 @@ it("lets an Agent revise and retain its held output after the attributed work pa
       base.work,
       "revise-held",
       "drafts.revise",
-      {
-        draftId: draft.draftId,
-        revision: draft.revision,
-        text: "revised proposal",
-      },
+      { draftId: draft.draftId, revision: draft.revision, text: "revised proposal" },
       signal,
     )
   ).value as { text: string; status: string; revision: number };
@@ -614,20 +560,13 @@ it("records a pre-stop refusal as failed without claiming an uncertain effect", 
   expect(
     (await router.call(base.run, base.work, "stop-missing", "processes.stop", { unit }, signal))
       .value,
-  ).toMatchObject({
-    status: "failed",
-    receipt: { reason: "Agent scope is not running" },
-  });
+  ).toMatchObject({ status: "failed", receipt: { reason: "Agent scope is not running" } });
   expect(stop).toHaveBeenCalledTimes(1);
 });
 
 it("keeps known-URL research a receipt-free read and puts the reachable alternatives in the real baseline", async () => {
   const base = setup(),
-    research = vi.fn(async (url: string) => ({
-      url,
-      body: "evidence",
-      truncated: false,
-    })),
+    research = vi.fn(async (url: string) => ({ url, body: "evidence", truncated: false })),
     router = new ToolRouter(base.c, base.broker, {
       environment: () => ({}),
       research,
@@ -677,10 +616,7 @@ it("keeps known-URL research a receipt-free read and puts the reachable alternat
         allowedHosts: [],
         search: false,
       },
-      attachmentInput: {
-        status: "unavailable",
-        scope: "visible_external_message_file",
-      },
+      attachmentInput: { status: "unavailable", scope: "visible_external_message_file" },
       artifactOutput: {
         adapterStatus: "configured",
         status: "unavailable",

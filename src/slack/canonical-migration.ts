@@ -109,9 +109,7 @@ export function migrateCanonicalConversations(store: Store, config: MateConfig):
     }[]) {
       const args = JSON.parse(row.args);
       if (args.message)
-        args.message = {
-          messageId: localMessage(args.message.channel, args.message.ts),
-        };
+        args.message = { messageId: localMessage(args.message.channel, args.message.ts) };
       store.db.prepare("UPDATE task_intents SET args=? WHERE id=?").run(encode(args), row.id);
     }
     for (const row of store.db.prepare("SELECT agent_id,target FROM attention_state").all() as {
@@ -220,9 +218,7 @@ export function migrateCanonicalConversations(store: Store, config: MateConfig):
       const payload = JSON.parse(row.payload);
       if (payload.target) payload.target = codec.target(payload.target);
       if (payload.anchor)
-        payload.anchor = {
-          messageId: localMessage(payload.anchor.channel, payload.anchor.ts),
-        };
+        payload.anchor = { messageId: localMessage(payload.anchor.channel, payload.anchor.ts) };
       if (payload.messageKey && payload.revision) payload.revision = revision(payload.revision);
       if (payload.messageKey) {
         const row = store.db
@@ -231,9 +227,7 @@ export function migrateCanonicalConversations(store: Store, config: MateConfig):
         if (row) payload.source = codec.message(row.body).author;
       }
       if (payload.channel) {
-        payload.conversationId = codec.target({
-          channel: payload.channel,
-        }).conversationId;
+        payload.conversationId = codec.target({ channel: payload.channel }).conversationId;
         delete payload.channel;
       }
       store.db.prepare("UPDATE deliveries SET payload=? WHERE id=?").run(encode(payload), row.id);

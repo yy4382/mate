@@ -7,10 +7,7 @@ import { encode } from "../../../../../src/storage/store.js";
 
 const timestamp = z.string().regex(/^\d{1,16}\.\d{1,6}$/);
 const targetSchema = z
-  .object({
-    channel: z.string().regex(/^[CDG][A-Z0-9]+$/),
-    thread: timestamp.optional(),
-  })
+  .object({ channel: z.string().regex(/^[CDG][A-Z0-9]+$/), thread: timestamp.optional() })
   .strict();
 const messageSchema = z
   .object({
@@ -99,19 +96,11 @@ export class LegacyFixtureWriter extends LegacyConversationCodec {
     if (old.deleted && old.thread === old.ts)
       this.fixtureReferences.reserveMessage(conversationId, id);
     else {
-      const target = this.ensureTarget({
-        channel: old.channel,
-        thread: old.thread,
-      });
+      const target = this.ensureTarget({ channel: old.channel, thread: old.thread });
       this.fixtureReferences.createMessage(conversationId, id, target.threadId!);
     }
     this.fixtureReferences.bindMessage(
-      {
-        provider: "slack",
-        workspace: old.team,
-        externalId: old.channel,
-        messageId: old.ts,
-      },
+      { provider: "slack", workspace: old.team, externalId: old.channel, messageId: old.ts },
       id,
     );
   }

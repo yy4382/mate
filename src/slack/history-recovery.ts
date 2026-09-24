@@ -146,10 +146,7 @@ export async function recoverSlackHistory<T>(options: HistoryRecoveryOptions<T>)
   const seen = new Set<string>();
   try {
     while (true) {
-      const page = await options.fetch({
-        oldest: state.oldest,
-        cursor: state.cursor,
-      });
+      const page = await options.fetch({ oldest: state.oldest, cursor: state.cursor });
       if (options.current && !options.current())
         throw new Error("Slack history recovery invalidated");
       for (const message of page.messages) {
@@ -180,10 +177,7 @@ export async function recoverSlackHistory<T>(options: HistoryRecoveryOptions<T>)
     }
   } catch (error) {
     if (invalidCursor(error) && state.cursor) {
-      state = {
-        ...(state.oldest ? { oldest: state.oldest } : {}),
-        newest: state.newest,
-      };
+      state = { ...(state.oldest ? { oldest: state.oldest } : {}), newest: state.newest };
       persist(options.store, key, state);
     }
     return false;

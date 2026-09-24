@@ -88,26 +88,14 @@ it("fails closed on missing mappings, a mismatched message body and target index
   migrateLegacyReferences(s, "TTEST");
   messages.record({ ...original, ts: "1.000001", thread: "1.000001", revision: "1.000001" }, []);
   migrateLegacyReferences(s, "TTEST");
-  s.db.prepare("UPDATE messages SET body=? WHERE key=?").run(
-    encode({
-      ...original,
-      ts: "1.000001",
-      thread: "1.000001",
-      revision: "1.000001",
-    }),
-    id,
-  );
+  s.db
+    .prepare("UPDATE messages SET body=? WHERE key=?")
+    .run(encode({ ...original, ts: "1.000001", thread: "1.000001", revision: "1.000001" }), id);
   expect(() => records.message(id)).toThrow("identity mismatch");
-  s.queueOutput("research", "output", {
-    target: { channel: "CTEST" },
-    text: "body",
-  });
+  s.queueOutput("research", "output", { target: { channel: "CTEST" }, text: "body" });
   expect(() => records.targetedEffect("outbox", "output")).toThrow("index missing");
   migrateLegacyReferences(s, "TTEST");
-  refs.indexTarget("outbox", "output", {
-    conversationId: "CTEST",
-    threadId: id,
-  });
+  refs.indexTarget("outbox", "output", { conversationId: "CTEST", threadId: id });
   expect(() => records.targetedEffect("outbox", "output")).toThrow("inconsistent");
 });
 
@@ -122,29 +110,17 @@ it("separates canonical target from immutable unknown wire evidence and rejects 
   s.enqueue("research", "trigger", {});
   const run = s.beginRun("research")!;
   s.prepareAction(run, "targeted", { args: { target: { channel: "CTEST" } } });
-  s.prepareAction(run, "indirect", {
-    operation: "task.read",
-    args: { taskId: "some-task" },
-  });
+  s.prepareAction(run, "indirect", { operation: "task.read", args: { taskId: "some-task" } });
   const old = s.output("output")!;
   migrateLegacyReferences(s, "TTEST");
   expect(records.targetedEffect("outbox", "output")).toEqual({
     id: "output",
     actor: "research",
     state: "unknown",
-    target: {
-      conversationId: "CTEST",
-      threadId: encode(["TTEST", "CTEST", "1.000001"]),
-    },
-    original: {
-      request: old.request,
-      requestHash: old.request_hash,
-      receipt: old.receipt,
-    },
+    target: { conversationId: "CTEST", threadId: encode(["TTEST", "CTEST", "1.000001"]) },
+    original: { request: old.request, requestHash: old.request_hash, receipt: old.receipt },
   });
-  expect(records.targetedEffect("actions", "targeted").target).toEqual({
-    conversationId: "CTEST",
-  });
+  expect(records.targetedEffect("actions", "targeted").target).toEqual({ conversationId: "CTEST" });
   expect(() => records.targetedEffect("actions", "indirect")).toThrow("no conversation target");
   expect(s.output("output")).toEqual(old);
 });
@@ -167,10 +143,7 @@ it("rejects contradictory author evidence independently of configuration order",
     [one, two],
     [two, one],
   ]) {
-    const codec = new LegacyConversationCodec(refs, {
-      ...configFixture,
-      agents,
-    });
+    const codec = new LegacyConversationCodec(refs, { ...configFixture, agents });
     for (const author of [
       { user: "UONE", bot: "BTWO" },
       { user: "UOTHER", bot: "BONE" },
@@ -181,9 +154,7 @@ it("rejects contradictory author evidence independently of configuration order",
       );
     }
     const { user: _user, bot: _bot, ...anonymous } = original;
-    expect(codec.message(encode(anonymous)).author).toEqual({
-      kind: "unknown",
-    });
+    expect(codec.message(encode(anonymous)).author).toEqual({ kind: "unknown" });
     expect(codec.message(encode({ ...anonymous, bot: "BONE" })).author).toEqual({
       kind: "agent",
       id: "research",

@@ -84,18 +84,9 @@ export class Attachments {
       run,
       workId,
       actionId,
-      {
-        kind: "write_bytes",
-        path: args.path,
-        base64: bytes.toString("base64"),
-      },
+      { kind: "write_bytes", path: args.path, base64: bytes.toString("base64") },
       signal,
     );
-    return {
-      fileId: args.fileId,
-      path: args.path,
-      bytes: bytes.length,
-      receipt,
-    };
+    return { fileId: args.fileId, path: args.path, bytes: bytes.length, receipt };
   }
 }

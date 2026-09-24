@@ -80,10 +80,7 @@ it("converts mutable references atomically, preserves evidence and reopens twice
   });
   expect(
     JSON.parse((s.db.prepare("SELECT target FROM works").get() as { target: string }).target),
-  ).toEqual({
-    conversationId: "CTEST",
-    threadId: encode(["TTEST", "CTEST", "1.000001"]),
-  });
+  ).toEqual({ conversationId: "CTEST", threadId: encode(["TTEST", "CTEST", "1.000001"]) });
   expect(s.output("output")).toEqual(before.output);
   expect(s.db.prepare("SELECT body FROM messages").get()).toEqual(before.body);
   expect(s.db.prepare("SELECT body FROM message_revisions").all()).toEqual(before.revisions);
@@ -138,9 +135,7 @@ it("keeps an unresolved root null and rolls schema/data/format back on invalid l
   expect(s.db.prepare("SELECT * FROM messages").all()).toEqual(original);
   s.db.prepare("DELETE FROM attention_seen").run();
   migrateCanonicalConversations(s, configFixture);
-  expect(s.db.prepare("SELECT thread FROM messages").get()).toEqual({
-    thread: null,
-  });
+  expect(s.db.prepare("SELECT thread FROM messages").get()).toEqual({ thread: null });
 });
 
 it("reads mixed versioned bodies and effects without falling back for unknown format markers", () => {
@@ -166,13 +161,9 @@ it("reads mixed versioned bodies and effects without falling back for unknown fo
   migrateCanonicalConversations(s, configFixture);
   const old = records.message(id)!;
   expect(old.order).toBe("1000001");
-  s.db.prepare("UPDATE messages SET body=? WHERE key=?").run(
-    encode({
-      format: "mate.message.v2",
-      message: { ...old, text: "canonical update" },
-    }),
-    id,
-  );
+  s.db
+    .prepare("UPDATE messages SET body=? WHERE key=?")
+    .run(encode({ format: "mate.message.v2", message: { ...old, text: "canonical update" } }), id);
   expect(records.message(id)?.text).toBe("canonical update");
   s.db
     .prepare("UPDATE messages SET body=? WHERE key=?")
@@ -181,11 +172,7 @@ it("reads mixed versioned bodies and effects without falling back for unknown fo
   s.queueOutput(
     "research",
     "future",
-    {
-      format: "mate.effect.v999",
-      target: { conversationId: "CTEST" },
-      text: "not a v1 fallback",
-    },
+    { format: "mate.effect.v999", target: { conversationId: "CTEST" }, text: "not a v1 fallback" },
     encode({ conversationId: "CTEST" }),
   );
   expect(() => records.targetedEffect("outbox", "future")).toThrow(

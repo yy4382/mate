@@ -112,16 +112,10 @@ it("rejects removed container and workspace-grant configuration", () => {
     { workspaceManifest: "/old/manifest.json" },
   ]) {
     expect(() =>
-      daemonConfigSchema.parse({
-        ...input,
-        runtime: { ...input.runtime, ...field },
-      }),
+      daemonConfigSchema.parse({ ...input, runtime: { ...input.runtime, ...field } }),
     ).toThrow();
   }
   expect(() =>
-    daemonConfigSchema.parse({
-      mate: configFixture,
-      runtime: { dataDir: "/synthetic/mate" },
-    }),
+    daemonConfigSchema.parse({ mate: configFixture, runtime: { dataDir: "/synthetic/mate" } }),
   ).toThrow();
 });

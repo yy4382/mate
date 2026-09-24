@@ -119,10 +119,7 @@ const definitions: ToolSpec[] = [
           args.conversationId,
           "join",
           signal,
-        )) ?? {
-          status: "unsupported",
-          reason: "Membership control unavailable",
-        },
+        )) ?? { status: "unsupported", reason: "Membership control unavailable" },
       };
     },
   }),
@@ -145,10 +142,7 @@ const definitions: ToolSpec[] = [
           args.conversationId,
           "leave",
           signal,
-        )) ?? {
-          status: "unsupported",
-          reason: "Membership control unavailable",
-        },
+        )) ?? { status: "unsupported", reason: "Membership control unavailable" },
       };
     },
   }),
@@ -199,9 +193,7 @@ const definitions: ToolSpec[] = [
     postAwait: fence,
     handler: async ({ directory, run }, args) => {
       if (!directory) throw new Error("Directory unavailable");
-      return {
-        value: await directory.members(run.agentId, args.conversationId),
-      };
+      return { value: await directory.members(run.agentId, args.conversationId) };
     },
   }),
   spec({
@@ -220,9 +212,7 @@ const definitions: ToolSpec[] = [
     postAwait: fence,
     handler: async ({ directory, run, actionId, signal }, args) => {
       if (!directory) throw new Error("Directory unavailable");
-      return {
-        value: await directory.openDM(run, actionId, args.principal, signal),
-      };
+      return { value: await directory.openDM(run, actionId, args.principal, signal) };
     },
   }),
   spec({
@@ -235,9 +225,7 @@ const definitions: ToolSpec[] = [
     replayPolicy: "refreshable",
     authorize: authorizeReferences,
     postAwait: fence,
-    handler: ({ collaboration: c, run }) => ({
-      value: c.attention.peek(run.agentId),
-    }),
+    handler: ({ collaboration: c, run }) => ({ value: c.attention.peek(run.agentId) }),
   }),
   spec({
     name: "attention.read",
@@ -257,10 +245,7 @@ const definitions: ToolSpec[] = [
   spec({
     name: "attention.resolve",
     schema: z
-      .object({
-        target: targetSchema,
-        throughRevision: z.number().int().nonnegative(),
-      })
+      .object({ target: targetSchema, throughRevision: z.number().int().nonnegative() })
       .strict(),
     description: "Resolve attention through a known revision without changing content history.",
     workPolicy: "none",
@@ -407,11 +392,7 @@ const definitions: ToolSpec[] = [
             return false;
           }
         })
-        .map((d) => ({
-          id: d.id,
-          status: d.status,
-          kind: JSON.parse(d.payload).kind,
-        }));
+        .map((d) => ({ id: d.id, status: d.status, kind: JSON.parse(d.payload).kind }));
       return { value };
     },
   }),

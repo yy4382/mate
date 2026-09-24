@@ -93,18 +93,10 @@ it("lets the Agent inspect or continue after an uncertain command without a glob
   const { run, broker, work, execute } = setup();
   execute.mockRejectedValueOnce(new Error("lost receipt"));
   await expect(
-    broker.execute(run, work, "uncertain", {
-      kind: "exec",
-      cwd: ".",
-      command: "true",
-    }),
+    broker.execute(run, work, "uncertain", { kind: "exec", cwd: ".", command: "true" }),
   ).rejects.toThrow("lost receipt");
   expect(
-    await broker.execute(run, work, "inspect", {
-      kind: "exec",
-      cwd: ".",
-      command: "pwd",
-    }),
+    await broker.execute(run, work, "inspect", { kind: "exec", cwd: ".", command: "pwd" }),
   ).toMatchObject({ code: 0 });
   expect(execute).toHaveBeenCalledTimes(2);
 });
@@ -131,14 +123,7 @@ it("runs an independent reviewer under that reviewer Agent identity", async () =
     .prepare("INSERT INTO review_seats VALUES(?,?,?,?,1)")
     .run("research", JSON.stringify(fixtureTarget("CTEST", "100.000001")), "clean brief", home);
   expect(
-    await broker.execute(run, work, "review-command", {
-      kind: "exec",
-      cwd: home,
-      command: "pwd",
-    }),
+    await broker.execute(run, work, "review-command", { kind: "exec", cwd: home, command: "pwd" }),
   ).toMatchObject({ code: 0 });
-  expect(execute.mock.calls[0]![0]).toMatchObject({
-    agentId: "research",
-    root: home,
-  });
+  expect(execute.mock.calls[0]![0]).toMatchObject({ agentId: "research", root: home });
 });

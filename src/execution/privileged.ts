@@ -11,12 +11,7 @@ export class PrivilegedBackend implements PrivilegedExecutor {
   async execute(
     input: SystemCommand,
     signal?: AbortSignal,
-  ): Promise<{
-    code: number;
-    stdout: string;
-    stderr: string;
-    truncated: boolean;
-  }> {
+  ): Promise<{ code: number; stdout: string; stderr: string; truncated: boolean }> {
     if (process.platform !== "linux" || process.getuid?.() !== 0)
       throw new Error("Privileged execution requires the Mate Linux root service");
     const command = systemCommandSchema.parse(input);
@@ -51,12 +46,7 @@ export class PrivilegedBackend implements PrivilegedExecutor {
           command.program,
           ...command.args,
         ],
-        {
-          cwd: command.cwd,
-          env,
-          detached: true,
-          stdio: ["ignore", "pipe", "pipe"],
-        },
+        { cwd: command.cwd, env, detached: true, stdio: ["ignore", "pipe", "pipe"] },
       );
       const stdout: Buffer[] = [],
         stderr: Buffer[] = [];

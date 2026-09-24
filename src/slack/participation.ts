@@ -308,11 +308,7 @@ export class SlackParticipation {
     if (version !== m.membershipVersion(actor))
       throw new Error("Membership changed during refresh");
     const active = info.channel.is_member && !info.channel.is_archived,
-      receipt: MembershipResult = {
-        status: "succeeded",
-        conversationId,
-        active,
-      };
+      receipt: MembershipResult = { status: "succeeded", conversationId, active };
     m.store.atomic(() => {
       m.membership(actor, conversationId, active);
       // Desired state observed is sufficient for this state-setting operation. A negative

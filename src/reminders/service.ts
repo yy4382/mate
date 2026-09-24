@@ -235,11 +235,7 @@ export class Reminders {
       firingCursor:
         firings.length > 50 && last
           ? Buffer.from(
-              encode({
-                dueAt: last.due_at,
-                version: last.version,
-                id: last.firing_id,
-              }),
+              encode({ dueAt: last.due_at, version: last.version, id: last.firing_id }),
             ).toString("base64url")
           : null,
     };
@@ -349,15 +345,14 @@ export class Reminders {
           )
           .run(firing, r.id, r.next_at, r.version, delivery, output);
       if (r.cron)
-        s.db.prepare("UPDATE schedules SET next_at=?,version=version+1 WHERE id=?").run(
-          CronExpressionParser.parse(r.cron, {
-            currentDate: now,
-            tz: r.timezone,
-          })
-            .next()
-            .getTime(),
-          r.id,
-        );
+        s.db
+          .prepare("UPDATE schedules SET next_at=?,version=version+1 WHERE id=?")
+          .run(
+            CronExpressionParser.parse(r.cron, { currentDate: now, tz: r.timezone })
+              .next()
+              .getTime(),
+            r.id,
+          );
       else s.db.prepare("UPDATE schedules SET active=0,version=version+1 WHERE id=?").run(r.id);
       this.event({ ...r, version: r.version + 1 }, "fired", {
         dueAt: r.next_at,

@@ -10,10 +10,7 @@ export const deploymentSpecSchema = z
   .object({
     version: z.literal(1),
     release: z
-      .object({
-        source: absolute,
-        gitCommit: z.string().regex(/^[a-f0-9]{7,64}$/),
-      })
+      .object({ source: absolute, gitCommit: z.string().regex(/^[a-f0-9]{7,64}$/) })
       .strict(),
     configSource: absolute,
     environmentSource: absolute.optional(),

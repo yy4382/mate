@@ -99,11 +99,7 @@ export async function runDoctor(
     failure = true,
   ): Promise<void> => {
     try {
-      checks.push({
-        name,
-        status: failure ? "pass" : "info",
-        detail: await action(),
-      });
+      checks.push({ name, status: failure ? "pass" : "info", detail: await action() });
     } catch (error) {
       checks.push({
         name,
@@ -288,9 +284,5 @@ export async function runDoctor(
     },
     false,
   );
-  return {
-    version: 1,
-    healthy: checks.every((item) => item.status !== "fail"),
-    checks,
-  };
+  return { version: 1, healthy: checks.every((item) => item.status !== "fail"), checks };
 }

@@ -35,13 +35,8 @@ export class SlackMessageNormalizer {
                   : ts;
             const previous = this.messages.store.db
               .prepare("SELECT thread FROM messages WHERE key=?")
-              .get(
-                messageKey({
-                  team: this.messages.config.teamId,
-                  channel: e.channel,
-                  ts,
-                }),
-              ) as { thread: string } | undefined;
+              .get(messageKey({ team: this.messages.config.teamId, channel: e.channel, ts })) as
+              { thread: string } | undefined;
             const msg: NormalMessage = {
               team: this.messages.config.teamId,
               channel: e.channel,

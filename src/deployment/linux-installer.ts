@@ -239,11 +239,7 @@ export async function installLinuxDeployment(
   spec: DeploymentSpec,
   config: DaemonConfig,
   host: LinuxInstallerHost,
-): Promise<{
-  plan: LinuxDeploymentPlan;
-  releaseId: string;
-  serviceStarted: false;
-}> {
+): Promise<{ plan: LinuxDeploymentPlan; releaseId: string; serviceStarted: false }> {
   if (host.euid() !== 0) throw new Error("Linux deployment installation must run as root");
   const plan = preflightLinuxDeployment(spec, config, host);
   exactDirectory("/opt/mate", 0, 0, 0o755);

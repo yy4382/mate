@@ -30,11 +30,7 @@ function invoke(root: string, op: Operation) {
 it("organizes files with hash-checked edits, non-overwriting moves and guarded removal", () => {
   const root = temp();
   expect(invoke(root, { kind: "mkdir", path: "notes" }).code).toBe(0);
-  const written = invoke(root, {
-    kind: "write",
-    path: "notes/one.md",
-    content: "one\ntwo\n",
-  });
+  const written = invoke(root, { kind: "write", path: "notes/one.md", content: "one\ntwo\n" });
   const hash = JSON.parse(written.stdout).sha256;
   expect(
     invoke(root, {
@@ -58,26 +54,14 @@ it("organizes files with hash-checked edits, non-overwriting moves and guarded r
     JSON.parse(invoke(root, { kind: "search", path: "notes", query: "three" }).stdout).matches[0],
   ).toMatchObject({ path: `${root}/notes/one.md`, line: 2, text: "three" });
   expect(
-    invoke(root, {
-      kind: "move",
-      path: "notes/one.md",
-      destination: "notes/two.md",
-    }).code,
+    invoke(root, { kind: "move", path: "notes/one.md", destination: "notes/two.md" }).code,
   ).toBe(0);
   expect(
-    invoke(root, {
-      kind: "move",
-      path: "notes/two.md",
-      destination: "notes/two.md.history",
-    }).code,
+    invoke(root, { kind: "move", path: "notes/two.md", destination: "notes/two.md.history" }).code,
   ).toBe(0);
   const stat = JSON.parse(invoke(root, { kind: "stat", path: "notes/two.md.history" }).stdout);
   expect(
-    invoke(root, {
-      kind: "remove",
-      path: "notes/two.md.history",
-      expectedHash: stat.sha256,
-    }).code,
+    invoke(root, { kind: "remove", path: "notes/two.md.history", expectedHash: stat.sha256 }).code,
   ).toBe(0);
   expect(invoke(root, { kind: "remove", path: "notes" }).code).not.toBe(0); // revision history remains
   expect(invoke(root, { kind: "remove", path: "." }).code).not.toBe(0);
@@ -138,12 +122,7 @@ it("binary operations accept a maximum-size canonical payload and bounded chunks
   });
   expect(invoke(root, op).code).toBe(0);
   const result = JSON.parse(
-    invoke(root, {
-      kind: "read_bytes",
-      path: "binary",
-      offset: 983040,
-      length: 32768,
-    }).stdout,
+    invoke(root, { kind: "read_bytes", path: "binary", offset: 983040, length: 32768 }).stdout,
   );
   expect(result.totalBytes).toBe(1000000);
   expect(Buffer.from(result.base64, "base64")).toEqual(data.subarray(983040));

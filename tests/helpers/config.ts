@@ -12,11 +12,7 @@ export const configFixture = {
       slackBotId: "BONE",
       botTokenEnv: "RESEARCH_BOT_TOKEN",
       appTokenEnv: "RESEARCH_APP_TOKEN",
-      model: {
-        provider: "anthropic",
-        id: "configured-model",
-        apiKeyEnv: "MODEL_API_KEY",
-      },
+      model: { provider: "anthropic", id: "configured-model", apiKeyEnv: "MODEL_API_KEY" },
       channels: { CTEST: "mentions" as const },
     },
   ],

@@ -22,10 +22,7 @@ function setup() {
   store.input(run, {});
   const transport = new CanonicalSlackTransport(store, mapper, {});
   const api: any = {
-    info: vi.fn(async () => ({
-      ok: true,
-      channel: { id: "CTEST", is_member: true },
-    })),
+    info: vi.fn(async () => ({ ok: true, channel: { id: "CTEST", is_member: true } })),
     history: vi.fn(async () => ({
       ok: true,
       messages: [
@@ -41,9 +38,7 @@ function setup() {
       response_metadata: { next_cursor: "" },
     })),
   };
-  transport.clients.set("research", {
-    conversations: api,
-  } as unknown as WebClient);
+  transport.clients.set("research", { conversations: api } as unknown as WebClient);
   return {
     store,
     messages,
@@ -66,11 +61,7 @@ it("uses the acting installation, maps a bounded page, and reports provider cont
     );
   expect(f.api.info).toHaveBeenCalledWith({ channel: "CTEST" });
   expect(f.api.history).toHaveBeenCalledWith(
-    expect.objectContaining({
-      channel: "CTEST",
-      limit: 1,
-      include_all_metadata: true,
-    }),
+    expect.objectContaining({ channel: "CTEST", limit: 1, include_all_metadata: true }),
   );
   expect(page.messages).toHaveLength(1);
   expect(page.messages[0]).toMatchObject({ text: "third", order: "3000001" });
@@ -131,11 +122,7 @@ it("translates canonical anchors and thread roots without exposing provider iden
     new AbortController().signal,
   );
   expect(f.api.replies).toHaveBeenCalledWith(
-    expect.objectContaining({
-      channel: "CTEST",
-      ts: "1.000001",
-      latest: "4.000001",
-    }),
+    expect.objectContaining({ channel: "CTEST", ts: "1.000001", latest: "4.000001" }),
   );
   expect(page.messages[0]).toMatchObject({
     conversationId: f.conversationId,
@@ -186,9 +173,7 @@ it("returns explicit unavailability for missing installations and provider failu
     exhausted: false,
     gaps: ["Agent has no Slack history installation"],
   });
-  f.transport.clients.set("research", {
-    conversations: f.api,
-  } as unknown as WebClient);
+  f.transport.clients.set("research", { conversations: f.api } as unknown as WebClient);
   f.api.info.mockRejectedValueOnce({ data: { error: "missing_scope" } });
   expect(
     await f.history.fetch(
@@ -197,10 +182,7 @@ it("returns explicit unavailability for missing installations and provider failu
       { limit: 10 },
       new AbortController().signal,
     ),
-  ).toMatchObject({
-    available: false,
-    gaps: ["Slack history unavailable: missing_scope"],
-  });
+  ).toMatchObject({ available: false, gaps: ["Slack history unavailable: missing_scope"] });
 });
 
 it("rejects live-event wrappers defensively instead of importing blank history messages", async () => {

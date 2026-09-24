@@ -46,10 +46,7 @@ export function compactionParts(
 ): { prefix: AgentMessage[]; tail: AgentMessage[] } | undefined {
   const lastUser = messages.findLastIndex((m) => m.role === "user");
   if (lastUser <= 1) return;
-  return {
-    prefix: messages.slice(1, lastUser),
-    tail: messages.slice(lastUser),
-  };
+  return { prefix: messages.slice(1, lastUser), tail: messages.slice(lastUser) };
 }
 export function byteTokens(messages: unknown): number {
   return Buffer.byteLength(JSON.stringify(messages), "utf8") + 1024;

@@ -264,10 +264,7 @@ export class Collaboration {
         throw new Error("Task already claimed or unavailable");
       return this.transition(
         task,
-        {
-          owner: agentId,
-          status: task.status === "review" ? "review" : "doing",
-        },
+        { owner: agentId, status: task.status === "review" ? "review" : "doing" },
         { action: "claim", actor: agentId },
       );
     });
@@ -408,22 +405,13 @@ export class Collaboration {
           this.transition(
             task,
             { status: "doing", waiting_on: null },
-            {
-              action: "dependency_already_terminal",
-              actor: agentId,
-              cause: { dependencyId },
-            },
+            { action: "dependency_already_terminal", actor: agentId, cause: { dependencyId } },
           );
         this.enqueue(
           agentId,
           task.work_id,
           `dependency:${taskId}:${dependencyId}:${dependency.version}`,
-          {
-            kind: "dependency",
-            taskId,
-            dependencyId,
-            target: JSON.parse(task.target),
-          },
+          { kind: "dependency", taskId, dependencyId, target: JSON.parse(task.target) },
         );
         return;
       }
@@ -486,11 +474,7 @@ export class Collaboration {
       if (task.created_by !== agentId) throw new Error("Task creator only");
       return this.transition(
         task,
-        {
-          status: "draft",
-          outbox_id: outboxId,
-          assigned_to: assignedTo ?? task.assigned_to,
-        },
+        { status: "draft", outbox_id: outboxId, assigned_to: assignedTo ?? task.assigned_to },
         { action: "draft", actor: agentId },
       );
     });
@@ -589,12 +573,7 @@ export class Collaboration {
         .prepare(
           "SELECT agent_id,target,deferred_until,muted FROM attention_state WHERE deferred_until>0 AND deferred_until<=?",
         )
-        .all(now) as {
-        agent_id: string;
-        target: string;
-        deferred_until: number;
-        muted: number;
-      }[];
+        .all(now) as { agent_id: string; target: string; deferred_until: number; muted: number }[];
       for (const item of deferred) {
         const target = JSON.parse(item.target) as Target;
         this.store.db

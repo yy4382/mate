@@ -15,14 +15,7 @@ const spec = (): RunSpec => ({
 });
 const call = () =>
   answer(
-    [
-      {
-        type: "toolCall",
-        id: "c",
-        name: "mate",
-        arguments: { operation: "agents", args: {} },
-      },
-    ],
+    [{ type: "toolCall", id: "c", name: "mate", arguments: { operation: "agents", args: {} } }],
     "toolUse",
   );
 it("journal acknowledgment gates execution and failures cannot become successful runs", async () => {

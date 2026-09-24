@@ -165,9 +165,7 @@ export class Conversations {
           OR (c.authority='internal' AND m.deleted=0 AND instr(lower(json_extract(m.body,'$.message.text')),lower(?))>0))
         ORDER BY length(m.ts) DESC,m.ts DESC,m.key DESC LIMIT ?`,
         )
-        .all(actor, channel, query, query, 100 - found.length) as {
-        key: string;
-      }[];
+        .all(actor, channel, query, query, 100 - found.length) as { key: string }[];
       for (const row of rows) found.push(this.message(actor, row.key));
       if (found.length === 100) break;
     }

@@ -78,11 +78,7 @@ const definitions: ToolSpec[] = [
         run,
         workId,
         actionId,
-        operationSchema.parse({
-          command: args.command,
-          cwd: args.cwd,
-          kind: "exec",
-        }),
+        operationSchema.parse({ command: args.command, cwd: args.cwd, kind: "exec" }),
         signal,
       ),
     }),
@@ -135,9 +131,7 @@ const definitions: ToolSpec[] = [
       } catch (error) {
         try {
           if (error instanceof ProcessStopRejectedError)
-            store.settleAction(run, actionId, "failed", {
-              reason: error.message,
-            });
+            store.settleAction(run, actionId, "failed", { reason: error.message });
           else
             store.settleAction(run, actionId, "unknown", {
               reason: "process_stop_outcome_unknown",
@@ -184,11 +178,7 @@ const definitions: ToolSpec[] = [
   spec({
     name: "attachments.save",
     schema: z
-      .object({
-        message: z.object({ messageId: id }).strict(),
-        fileId: id,
-        path: id,
-      })
+      .object({ message: z.object({ messageId: id }).strict(), fileId: id, path: id })
       .strict(),
     description:
       "Download a file attached to a visible message to an Agent-accessible path, up to 1 MB.",
@@ -200,9 +190,7 @@ const definitions: ToolSpec[] = [
     postAwait: fence,
     handler: async ({ additional, run, workId, actionId, signal }, args) => {
       if (!additional?.attachment) throw new Error("Attachment adapter unavailable");
-      return {
-        value: await additional.attachment(run, workId, actionId, args, signal),
-      };
+      return { value: await additional.attachment(run, workId, actionId, args, signal) };
     },
   }),
   spec({
@@ -241,9 +229,7 @@ const definitions: ToolSpec[] = [
     postAwait: fence,
     handler: async ({ additional, run, workId, actionId, signal }, args) => {
       if (!additional) throw new Error("Publication unavailable");
-      return {
-        value: await additional.publish(run, workId, actionId, args, signal),
-      };
+      return { value: await additional.publish(run, workId, actionId, args, signal) };
     },
   }),
   spec({
@@ -268,9 +254,7 @@ const definitions: ToolSpec[] = [
     postAwait: fence,
     handler: async ({ additional, run, workId, actionId, signal }, args) => {
       if (!additional) throw new Error("Publication unavailable");
-      return {
-        value: await additional.publish(run, workId, actionId, args, signal),
-      };
+      return { value: await additional.publish(run, workId, actionId, args, signal) };
     },
   }),
 ];

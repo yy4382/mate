@@ -29,10 +29,7 @@ export function formatControlReply(value: unknown, limit = 15000): string {
             Array.isArray(item)
               ? { items: item.length }
               : item && typeof item === "object" && "atLeast" in item
-                ? {
-                    atLeast: (item as any).atLeast,
-                    truncated: (item as any).truncated,
-                  }
+                ? { atLeast: (item as any).atLeast, truncated: (item as any).truncated }
                 : typeof item,
           ]),
         )
@@ -112,9 +109,7 @@ export class SlackService {
         }
       } catch (error) {
         if (required) throw error;
-        this.c.store.audit("membership_discovery_unavailable", {
-          error: String(error),
-        });
+        this.c.store.audit("membership_discovery_unavailable", { error: String(error) });
         return false;
       }
       if (complete) {
@@ -129,9 +124,7 @@ export class SlackService {
     }
     const error = new Error("Slack conversation discovery did not reach a complete snapshot");
     if (required) throw error;
-    this.c.store.audit("membership_discovery_unavailable", {
-      error: error.message,
-    });
+    this.c.store.audit("membership_discovery_unavailable", { error: error.message });
     return false;
   }
   /** Establishes the first durable responsibility boundary without importing pre-Mate history. */
@@ -179,9 +172,7 @@ export class SlackService {
         .prepare(
           "SELECT a.channel FROM channel_access a JOIN conversation_bindings b ON b.conversation_id=a.channel WHERE b.provider='slack' AND b.mode='primary' AND b.workspace=? AND a.agent_id=? AND a.active=1",
         )
-        .all(this.transport.mapper.config.teamId, agent.id) as {
-        channel: string;
-      }[];
+        .all(this.transport.mapper.config.teamId, agent.id) as { channel: string }[];
       for (const channel of new Set([
         ...Object.keys(agent.channels),
         ...stored.map((r) => this.transport.mapper.target({ conversationId: r.channel }).channel),
@@ -209,10 +200,7 @@ export class SlackService {
           progress?.();
         } catch {
           complete = false;
-          this.c.store.audit("membership_unavailable", {
-            agentId: agent.id,
-            channel,
-          });
+          this.c.store.audit("membership_unavailable", { agentId: agent.id, channel });
         }
       }
     }
@@ -238,9 +226,7 @@ export class SlackService {
         .prepare(
           "SELECT a.channel FROM channel_access a JOIN conversation_bindings b ON b.conversation_id=a.channel WHERE b.provider='slack' AND b.mode='primary' AND b.workspace=? AND a.agent_id=? AND a.active=1",
         )
-        .all(this.transport.mapper.config.teamId, agent.id) as {
-        channel: string;
-      }[];
+        .all(this.transport.mapper.config.teamId, agent.id) as { channel: string }[];
       for (const { channel: conversationId } of channels) {
         const { channel } = this.transport.mapper.target({ conversationId });
         if (this.stopping()) return false;
@@ -465,11 +451,7 @@ export class SlackService {
           conversationId: internal.channel,
           threadId: internal.thread,
         }),
-        watch = {
-          agent_id: internal.agent_id,
-          channel: target.channel,
-          thread: target.thread!,
-        };
+        watch = { agent_id: internal.agent_id, channel: target.channel, thread: target.thread! };
       if (this.stopping()) return false;
       const agent = this.transport.mapper.config.agents.find((a) => a.id === watch.agent_id)!,
         client = this.transport.clients.get(agent.id)!;
@@ -522,10 +504,7 @@ export class SlackService {
       });
       if (!recovered) {
         complete = false;
-        s.audit("history_gap", {
-          ...watch,
-          reason: "thread_history_unavailable_or_incomplete",
-        });
+        s.audit("history_gap", { ...watch, reason: "thread_history_unavailable_or_incomplete" });
       }
     }
     return complete;
@@ -603,11 +582,7 @@ export class SlackService {
               reply = formatControlReply(
                 this.controls.execute(
                   this.transport.mapper.config.principalIds
-                    ? (
-                        slackPrincipal(this.transport.mapper.config, user) as {
-                          id: string;
-                        }
-                      ).id
+                    ? (slackPrincipal(this.transport.mapper.config, user) as { id: string }).id
                     : user,
                   text,
                 ),
@@ -655,11 +630,9 @@ export class SlackService {
         .prepare("UPDATE admin_replies SET state='unknown' WHERE id=? AND state='pending'")
         .run(row.id);
       try {
-        await this.transport.clients.get(row.agent_id)!.chat.postEphemeral({
-          channel: row.channel,
-          user: row.user_id,
-          text: row.text,
-        });
+        await this.transport.clients
+          .get(row.agent_id)!
+          .chat.postEphemeral({ channel: row.channel, user: row.user_id, text: row.text });
         s.db.prepare("UPDATE admin_replies SET state='sent' WHERE id=?").run(row.id);
       } catch {
         s.audit("admin_reply_unknown", { id: row.id });
@@ -687,10 +660,7 @@ export class SlackService {
           ...request.command,
           expires: new Date(request.expires).toISOString(),
         });
-        const plain = (value: string) => ({
-          type: "plain_text" as const,
-          text: value,
-        });
+        const plain = (value: string) => ({ type: "plain_text" as const, text: value });
         const message = {
           channel,
           text: `System command approval requested by ${request.agentId}: ${request.id}`,
@@ -835,10 +805,7 @@ export class SlackService {
               ...(cursor ? { cursor } : {}),
             };
             const result = target.thread
-              ? await client.conversations.replies({
-                  ...options,
-                  ts: target.thread,
-                })
+              ? await client.conversations.replies({ ...options, ts: target.thread })
               : await client.conversations.history(options);
             return {
               messages: result.messages ?? [],
@@ -848,10 +815,7 @@ export class SlackService {
           visit: (messages) => {
             for (const msg of messages) {
               const metadata = msg.metadata as
-                | {
-                    event_type?: string;
-                    event_payload?: { id?: string; request_hash?: string };
-                  }
+                | { event_type?: string; event_payload?: { id?: string; request_hash?: string } }
                 | undefined;
               if (
                 msg.ts &&
@@ -905,10 +869,7 @@ export class SlackService {
     const client = this.transport.clients.get(agentId)!;
     const filename = artifact.filename ?? `${artifact.title.replace(/[^a-zA-Z0-9._-]/g, "_")}.txt`,
       bytes = Buffer.from(artifact.content, artifact.encoding === "base64" ? "base64" : "utf8");
-    const allocated = await client.files.getUploadURLExternal({
-      filename,
-      length: bytes.length,
-    });
+    const allocated = await client.files.getUploadURLExternal({ filename, length: bytes.length });
     if (!allocated.file_id || !allocated.upload_url) throw new Error("Missing upload allocation");
     prepared(allocated.file_id);
     const url = new URL(allocated.upload_url);

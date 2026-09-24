@@ -42,14 +42,7 @@ function setup() {
       new Broker(
         s,
         c,
-        {
-          execute: async () => ({
-            code: 0,
-            stdout: "",
-            stderr: "",
-            truncated: false,
-          }),
-        },
+        { execute: async () => ({ code: 0, stdout: "", stderr: "", truncated: false }) },
         {},
       ),
     );
@@ -153,9 +146,7 @@ it("peer claim after visible send but before polling reuses the pending task ins
   const draft = router.gate.describe("research", task.outbox_id!) as any;
   router.gate.continueOnce(runs[0]!, draft.draftId, 1, draft.holdId);
   await c.output.send(task.outbox_id!);
-  const message = {
-    messageId: c.messages.records.confirmedMessageId(task.outbox_id!),
-  };
+  const message = { messageId: c.messages.records.confirmedMessageId(task.outbox_id!) };
   const visible = router.coordination.find("peer", message)!;
   const held = router.coordination.submit(runs[1]!, work, "race", "tasks.claim", {
     message,
@@ -220,11 +211,7 @@ it("waiting is a gated CAS mutation and only releases the run after applying", a
     work,
     "wait",
     "tasks.wait",
-    {
-      taskId: task,
-      dependencyId: dependency,
-      expectedVersion: c.task(task).version,
-    },
+    { taskId: task, dependencyId: dependency, expectedVersion: c.task(task).version },
     signal,
   );
   expect(held.wait).toBe(false);

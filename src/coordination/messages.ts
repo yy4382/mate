@@ -209,10 +209,7 @@ export class MessageTasks {
     return this.c.store.atomic(() => {
       const id = this.c.createTask(run.agentId, workId, target, title),
         outputId = `task-create:${id}`;
-      this.c.send(run.agentId, workId, target, title, outputId, {
-        run,
-        viewToken,
-      });
+      this.c.send(run.agentId, workId, target, title, outputId, { run, viewToken });
       return this.c.draftTask(run.agentId, id, outputId);
     });
   }

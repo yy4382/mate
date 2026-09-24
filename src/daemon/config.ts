@@ -55,10 +55,7 @@ const modernConfigSchema = z
           .strict()
           .optional(),
         local: z
-          .object({
-            humans: z.array(human).min(1),
-            rooms: z.array(localRoomSchema),
-          })
+          .object({ humans: z.array(human).min(1), rooms: z.array(localRoomSchema) })
           .strict()
           .optional(),
       })
@@ -91,11 +88,7 @@ const modernConfigSchema = z
             workerIdleMs: z.number().int().min(1).max(3600000),
           })
           .strict()
-          .default({
-            maxActiveRuns: 1,
-            maxBackendOperations: 1,
-            workerIdleMs: 300000,
-          }),
+          .default({ maxActiveRuns: 1, maxBackendOperations: 1, workerIdleMs: 300000 }),
         researchHosts: z.array(z.string().regex(/^[a-z0-9][a-z0-9.-]*[a-z0-9]$/)).default([]),
       })
       .strict(),

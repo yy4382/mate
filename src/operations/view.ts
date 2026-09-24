@@ -83,17 +83,8 @@ export interface OperationsStatus {
     usage: UsageSummary;
   }[];
   works: OperationsPage<{ id: string; state: string }>;
-  uncertainActions: OperationsPage<{
-    id: string;
-    agentId: string;
-    runId: string;
-    state: string;
-  }>;
-  uncertainOutputs: OperationsPage<{
-    id: string;
-    agentId: string;
-    state: string;
-  }>;
+  uncertainActions: OperationsPage<{ id: string; agentId: string; runId: string; state: string }>;
+  uncertainOutputs: OperationsPage<{ id: string; agentId: string; state: string }>;
   heldDrafts: OperationsPage<{
     draftId: string;
     agentId: string;
@@ -116,11 +107,7 @@ export interface OperationsStatus {
 /** Owner-only, platform-neutral projection over authoritative operational state. */
 export class OperationsView {
   constructor(
-    readonly c: {
-      config: TeamSettings;
-      agents: AgentDirectory;
-      store: { db: Database.Database };
-    },
+    readonly c: { config: TeamSettings; agents: AgentDirectory; store: { db: Database.Database } },
   ) {}
   private owner(owner: string): void {
     if (!this.c.config.ownerUserIds.includes(owner)) throw new Error("Owner only");
@@ -158,11 +145,7 @@ export class OperationsView {
         generation: row?.generation ?? null,
         sessionId: row?.session_id ?? null,
         activeRun: row?.run_id
-          ? {
-              id: row.run_id,
-              createdAt: row.run_created!,
-              workId: row.work_id ?? null,
-            }
+          ? { id: row.run_id, createdAt: row.run_created!, workId: row.work_id ?? null }
           : null,
         usage: UsageLedger.summaryFrom(s.db, agent.id),
       };
@@ -197,15 +180,7 @@ export class OperationsView {
       now,
       cap + 1,
     );
-    return {
-      at: now,
-      agents,
-      works,
-      uncertainActions,
-      uncertainOutputs,
-      heldDrafts,
-      dueReminders,
-    };
+    return { at: now, agents, works, uncertainActions, uncertainOutputs, heldDrafts, dueReminders };
   }
   activity(
     owner: string,
@@ -399,42 +374,26 @@ export class OperationsView {
         const { n } = s.db
           .prepare("SELECT COUNT(*) n FROM task_event_baselines WHERE historical_complete=0")
           .get() as { n: number };
-        return {
-          historicalComplete: n === 0,
-          availableSince: null,
-          gapCount: n,
-        };
+        return { historicalComplete: n === 0, availableSince: null, gapCount: n };
       }
       case "reminder_event":
       case "reminder_firing": {
         const { n } = s.db
           .prepare("SELECT COUNT(*) n FROM reminder_event_baselines WHERE historical_complete=0")
           .get() as { n: number };
-        return {
-          historicalComplete: n === 0,
-          availableSince: null,
-          gapCount: n,
-        };
+        return { historicalComplete: n === 0, availableSince: null, gapCount: n };
       }
       case "action": {
         const { n } = s.db
           .prepare("SELECT COUNT(*) n FROM actions WHERE created_at IS NULL")
           .get() as { n: number };
-        return {
-          historicalComplete: n === 0,
-          availableSince: mark,
-          gapCount: n,
-        };
+        return { historicalComplete: n === 0, availableSince: mark, gapCount: n };
       }
       case "output": {
         const { n } = s.db
           .prepare("SELECT COUNT(*) n FROM outbox WHERE created_at IS NULL")
           .get() as { n: number };
-        return {
-          historicalComplete: n === 0,
-          availableSince: mark,
-          gapCount: n,
-        };
+        return { historicalComplete: n === 0, availableSince: mark, gapCount: n };
       }
       case "runtime":
       case "internal_dm":

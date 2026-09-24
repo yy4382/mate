@@ -46,14 +46,7 @@ function harness() {
   const broker = new Broker(
     store,
     collaboration,
-    {
-      execute: async () => ({
-        code: 0,
-        stdout: "",
-        stderr: "",
-        truncated: false,
-      }),
-    },
+    { execute: async () => ({ code: 0, stdout: "", stderr: "", truncated: false }) },
     { research: home },
   );
   const environment = new EnvironmentCapabilities(collaboration, {
@@ -87,11 +80,7 @@ it("reports familiar host paths and network without exposing a separate file-gra
   expect(environmentReportSchema.parse(value)).toMatchObject({
     format: "mate.environment.v2",
     workId: h.work,
-    filesystem: {
-      home: h.home,
-      sharedRoot: h.sharedRoot,
-      access: "linux_user_permissions",
-    },
+    filesystem: { home: h.home, sharedRoot: h.sharedRoot, access: "linux_user_permissions" },
     execution: { status: "configured", network: "host" },
     research: { status: "configured" },
     attachmentInput: { status: "configured" },

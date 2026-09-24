@@ -33,11 +33,7 @@ export class FreshnessGate {
     this.messages.requireAccess(actor, this.request(d).target.channel);
     return d;
   }
-  private request(d: Draft): {
-    target: Target;
-    text: string;
-    artifact?: ArtifactPayload;
-  } {
+  private request(d: Draft): { target: Target; text: string; artifact?: ArtifactPayload } {
     const effect = this.messages.persistence.records.targetedEffect("outbox", d.outbox_id);
     return JSON.parse(effect.original.request);
   }
@@ -174,9 +170,7 @@ export class FreshnessGate {
       targetSchema.parse(target);
       this.messages.requireAccess(run.agentId, target.channel);
       if (!text.trim() || text.length > 35000) throw new Error("Invalid message text");
-      s.transitionOutput(d.outbox_id, "held", "failed", {
-        reason: "draft_revised",
-      });
+      s.transitionOutput(d.outbox_id, "held", "failed", { reason: "draft_revised" });
       const next = `${id}:revision:${revision + 1}`;
       this.messages.persistence.writes.queueOutput(run.agentId, next, {
         target,

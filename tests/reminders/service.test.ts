@@ -43,14 +43,7 @@ function setup() {
     broker = new Broker(
       s,
       c,
-      {
-        execute: async () => ({
-          code: 0,
-          stdout: "",
-          stderr: "",
-          truncated: false,
-        }),
-      },
+      { execute: async () => ({ code: 0, stdout: "", stderr: "", truncated: false }) },
       {},
     ),
     router = new ToolRouter(c, broker),
@@ -68,10 +61,7 @@ it("reminders survive completed tasks and wake only their author; fixed receipts
   const { s, c, work, output } = setup();
   const task = c.createTask("research", work, target, "change");
   c.claim("research", task);
-  const reminder = c.reminders.create("research", work, {
-    ...input,
-    taskId: task,
-  });
+  const reminder = c.reminders.create("research", work, { ...input, taskId: task });
   c.update("research", task, "done", "verified");
   expect(c.reminders.read("research", reminder.id).active).toBe(1);
   c.tick(2000);
@@ -96,11 +86,7 @@ it("edits and cancellations are author-owned CAS operations; a completed task ma
   expect(() => c.reminders.edit("writer", r.id, 1, { ...input, content: "stolen" })).toThrow(
     "owned",
   );
-  c.reminders.edit("research", r.id, 1, {
-    ...input,
-    content: "new purpose",
-    nextAt: 3000,
-  });
+  c.reminders.edit("research", r.id, 1, { ...input, content: "new purpose", nextAt: 3000 });
   expect(() => c.reminders.cancel("research", r.id, 1)).toThrow("version");
   expect(c.reminders.read("research", r.id).content).toBe("new purpose");
   c.reminders.cancel("research", r.id, 2);
@@ -108,18 +94,12 @@ it("edits and cancellations are author-owned CAS operations; a completed task ma
 });
 it("future cancellation leaves queued firings intact unless explicitly withdrawn, and never pretends to stop injected work", () => {
   const { s, c, work } = setup();
-  const first = c.reminders.create("research", work, {
-    ...input,
-    cron: "* * * * *",
-  });
+  const first = c.reminders.create("research", work, { ...input, cron: "* * * * *" });
   c.tick(2000);
   let result = c.reminders.cancel("research", first.id, 2) as any;
   expect(result.withdrawnCount).toBe(0);
   expect(result.previousFirings[0].status).toBe("pending");
-  const second = c.reminders.create("research", work, {
-    ...input,
-    nextAt: 3000,
-  });
+  const second = c.reminders.create("research", work, { ...input, nextAt: 3000 });
   c.tick(3000);
   result = c.reminders.cancel("research", second.id, 2, true) as any;
   expect(result.withdrawnCount).toBe(1);
@@ -143,9 +123,7 @@ it("paused work and revoked target defer firing until restored", () => {
   c.control("UOWNER", work, "resume");
   m.membership("research", "CTEST", false);
   c.tick(2000);
-  expect(s.db.prepare("SELECT count(*) n FROM deliveries").get()).toEqual({
-    n: 0,
-  });
+  expect(s.db.prepare("SELECT count(*) n FROM deliveries").get()).toEqual({ n: 0 });
   m.membership("research", "CTEST", true);
   c.tick(2000);
   expect(c.reminders.read("research", r.id).version).toBe(2);
@@ -203,10 +181,7 @@ it("an early authenticated Slack echo of a fixed reminder receipt cannot wake pe
   const id = output.ready()[0]!.id,
     row = s.output(id)!,
     request = JSON.parse(row.request),
-    metadata = {
-      event_type: "mate_outbox",
-      event_payload: { id, request_hash: row.request_hash },
-    };
+    metadata = { event_type: "mate_outbox", event_payload: { id, request_hash: row.request_hash } };
   s.ingest("ATWO", "receipt-echo", {
     team_id: "TTEST",
     event: {
@@ -267,9 +242,7 @@ it("paused authors do not starve another author within the firing batch limit", 
 it("revoked ACL and paused work are filtered before the firing batch limit", () => {
   for (const condition of ["acl", "work"]) {
     const { s, c, m, work } = setup();
-    const allowed = c.createWork(`allowed-${condition}`, {
-      conversationId: "CTEST",
-    });
+    const allowed = c.createWork(`allowed-${condition}`, { conversationId: "CTEST" });
     for (let i = 0; i < 100; i++) c.reminders.create("research", work, { ...input, nextAt: 1 });
     c.reminders.create("writer", allowed, { ...input, nextAt: 2 });
     if (condition === "acl") m.membership("research", "CTEST", false);

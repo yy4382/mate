@@ -18,10 +18,7 @@ export const toolDefinition = {
   description:
     "Discover capabilities with tools.list ({}), inspect exact arguments with tools.describe ({name}), then use the named operation or tools.call ({name,input}). Actor and work are bound by the daemon. Visible replies require messages.send with an explicit target.",
   parameters: Type.Object(
-    {
-      operation: Type.String(),
-      args: Type.Record(Type.String(), Type.Unknown()),
-    },
+    { operation: Type.String(), args: Type.Record(Type.String(), Type.Unknown()) },
     { additionalProperties: false },
   ),
 };
@@ -84,21 +81,14 @@ export class Engine {
       );
       if (maxTokens < 64) {
         fault = new Error("Model context exhausted");
-        output.push({
-          type: "error",
-          reason: "error",
-          error: this.errorMessage(String(fault)),
-        });
+        output.push({ type: "error", reason: "error", error: this.errorMessage(String(fault)) });
         return output;
       }
       const index = ++callIndex;
       void (async () => {
         try {
           await hooks.usageBegin?.(index, model.provider, model.id);
-          const source = await this.stream(model, context, {
-            ...options,
-            maxTokens,
-          });
+          const source = await this.stream(model, context, { ...options, maxTokens });
           const terminal = [];
           for await (const event of source) {
             if (event.type === "done" || event.type === "error") terminal.push(event);
@@ -132,11 +122,7 @@ export class Engine {
         } catch (error) {
           certain = false;
           fault = error;
-          output.push({
-            type: "error",
-            reason: "error",
-            error: this.errorMessage(String(error)),
-          });
+          output.push({ type: "error", reason: "error", error: this.errorMessage(String(error)) });
         }
       })();
       return output;
@@ -209,12 +195,7 @@ export class Engine {
         if (fault) throw fault;
         if (waiting)
           return {
-            content: [
-              {
-                type: "text",
-                text: "Run already waiting; no further actions.",
-              },
-            ],
+            content: [{ type: "text", text: "Run already waiting; no further actions." }],
             details: null,
             terminate: true,
           };

@@ -37,11 +37,7 @@ function setup() {
   const system = new SystemOperations(store, collaboration, ["research"], { execute }, () => 1000);
   return { store, collaboration, work, run, execute, system };
 }
-const command = {
-  program: "/usr/bin/apt-get",
-  args: ["install", "-y", "example"],
-  cwd: "/tmp",
-};
+const command = { program: "/usr/bin/apt-get", args: ["install", "-y", "example"], cwd: "/tmp" };
 
 it("requires an exact one-time human decision before dispatching a system command", async () => {
   const { store, work, run, execute, system } = setup();
@@ -57,26 +53,15 @@ it("requires an exact one-time human decision before dispatching a system comman
     await system.dispatchApproved();
     expect(execute).not.toHaveBeenCalled();
     expect(() =>
-      system.request(run, work, "request-1", {
-        ...command,
-        args: ["remove", "example"],
-      }),
+      system.request(run, work, "request-1", { ...command, args: ["remove", "example"] }),
     ).toThrow("identity");
-    expect(system.decide("UOWNER", "request-1", "approve")).toMatchObject({
-      status: "approved",
-    });
-    expect(system.decide("UOWNER", "request-1", "approve")).toMatchObject({
-      status: "approved",
-    });
+    expect(system.decide("UOWNER", "request-1", "approve")).toMatchObject({ status: "approved" });
+    expect(system.decide("UOWNER", "request-1", "approve")).toMatchObject({ status: "approved" });
     await system.dispatchApproved();
     expect(execute).toHaveBeenCalledOnce();
     expect(system.status("research", "request-1")).toMatchObject({
       status: "succeeded",
-      receipt: {
-        code: 0,
-        stdout: "installed",
-        warning: expect.stringContaining("not freeze"),
-      },
+      receipt: { code: 0, stdout: "installed", warning: expect.stringContaining("not freeze") },
     });
     await system.dispatchApproved();
     expect(execute).toHaveBeenCalledOnce();
@@ -90,9 +75,7 @@ it("refuses non-owner decisions, rejected and expired requests without execution
   try {
     system.request(run, work, "denied", command);
     expect(() => system.decide("UOTHER", "denied", "approve")).toThrow("Owner");
-    expect(system.decide("UOWNER", "denied", "reject")).toMatchObject({
-      status: "rejected",
-    });
+    expect(system.decide("UOWNER", "denied", "reject")).toMatchObject({ status: "rejected" });
     expect(() => system.decide("UOWNER", "denied", "approve")).toThrow("already decided");
     system.request(run, work, "expired", command);
     system.expire(601001);
@@ -117,20 +100,12 @@ it("recovers approved requests but never replays an uncertain executing request 
     system.request(run, work, "in-flight", command);
     system.decide("UOWNER", "in-flight", "approve");
     store.db.prepare("UPDATE system_requests SET status='executing' WHERE id='in-flight'").run();
-    const before = (
-      store.db.prepare("SELECT count(*) n FROM deliveries").get() as {
-        n: number;
-      }
-    ).n;
+    const before = (store.db.prepare("SELECT count(*) n FROM deliveries").get() as { n: number }).n;
     fresh.recover();
     expect(fresh.status("research", "in-flight").status).toBe("unknown");
-    expect(
-      (
-        store.db.prepare("SELECT count(*) n FROM deliveries").get() as {
-          n: number;
-        }
-      ).n,
-    ).toBe(before + 1);
+    expect((store.db.prepare("SELECT count(*) n FROM deliveries").get() as { n: number }).n).toBe(
+      before + 1,
+    );
     await fresh.dispatchApproved();
     expect(execute).toHaveBeenCalledOnce();
   } finally {

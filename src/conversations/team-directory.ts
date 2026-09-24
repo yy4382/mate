@@ -110,11 +110,7 @@ export class TeamDirectory implements ConversationDirectory {
       this.messages.references.conversation(conversationId).authority === "internal" ||
       !this.external?.refresh
     )
-      return {
-        status: "unsupported",
-        conversationId,
-        reason: "No external membership source",
-      };
+      return { status: "unsupported", conversationId, reason: "No external membership source" };
     return this.external.refresh(actor, conversationId, signal);
   }
   async spaces(actor: string): Promise<SpacesResult> {
@@ -142,11 +138,7 @@ export class TeamDirectory implements ConversationDirectory {
       ...external,
       spaces: [
         ...external.spaces,
-        ...rows.map((row) => ({
-          conversationId: row.id,
-          kind: row.kind,
-          archived: false,
-        })),
+        ...rows.map((row) => ({ conversationId: row.id, kind: row.kind, archived: false })),
       ],
     };
   }

@@ -30,9 +30,10 @@ it("accepts equivalent legacy retries using original bytes and rejects changed t
   const refs = new References(s),
     compat = new LegacyArguments(refs, configFixture),
     writes = new CanonicalWrites(s, refs, (value) => compat.effect(value));
-  const target = compat.args({
-    target: { channel: "CTEST", thread: "1.000001" },
-  }).target as { conversationId: string; threadId: string };
+  const target = compat.args({ target: { channel: "CTEST", thread: "1.000001" } }).target as {
+    conversationId: string;
+    threadId: string;
+  };
   expect(
     writes.prepareAction(run, "action", {
       workId: "work",

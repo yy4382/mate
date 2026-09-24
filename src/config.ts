@@ -33,10 +33,7 @@ export const configSchema = z
   }))
   .superRefine((config, ctx) => {
     if (config.agents.some((agent) => config.ownerUserIds.includes(agent.slackUserId))) {
-      ctx.addIssue({
-        code: "custom",
-        message: "Owner identity must not be an agent bot identity",
-      });
+      ctx.addIssue({ code: "custom", message: "Owner identity must not be an agent bot identity" });
     }
     for (const key of [
       "id",
@@ -51,9 +48,7 @@ export const configSchema = z
         ctx.addIssue({ code: "custom", message: `Duplicate agent ${key}` });
     }
   });
-export type MateConfig = z.infer<typeof configSchema> & {
-  principalIds?: Record<string, string>;
-};
+export type MateConfig = z.infer<typeof configSchema> & { principalIds?: Record<string, string> };
 export type AgentConfig = MateConfig["agents"][number];
 
 /** Errors contain reference names only, never secret values. */

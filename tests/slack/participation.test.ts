@@ -31,10 +31,7 @@ function fixture() {
       ok: true,
       channel: { id: "CNEW", is_private: false, is_member: false },
     })),
-    join: vi.fn(async () => ({
-      ok: true,
-      channel: { id: "CNEW", is_member: true },
-    })),
+    join: vi.fn(async () => ({ ok: true, channel: { id: "CNEW", is_member: true } })),
     leave: vi.fn(async () => ({ ok: true })),
   };
   const d = new Directory(
@@ -62,14 +59,7 @@ function fixture() {
     new Broker(
       s,
       c,
-      {
-        execute: async () => ({
-          code: 0,
-          stdout: "",
-          stderr: "",
-          truncated: false,
-        }),
-      },
+      { execute: async () => ({ code: 0, stdout: "", stderr: "", truncated: false }) },
       {},
     ),
     undefined,
@@ -88,11 +78,7 @@ it("public discovery is paginated metadata without ACL; real tool join grants ac
   });
   const candidateId = result.spaces[0].candidateId;
   expect(
-    f.m.references.findConversation({
-      provider: "slack",
-      workspace: "TTEST",
-      externalId: "CNEW",
-    }),
+    f.m.references.findConversation({ provider: "slack", workspace: "TTEST", externalId: "CNEW" }),
   ).toBeUndefined();
   const joined = (
     await f.router.call(f.run, f.w, "join", "conversations.join", { candidateId }, signal)

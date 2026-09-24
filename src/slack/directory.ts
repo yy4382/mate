@@ -99,11 +99,7 @@ export class Directory implements ConversationDirectory {
       onPage?.();
     } while (cursor && pages < maxPages);
     if (version !== this.messages.membershipVersion(actor))
-      return {
-        spaces: [],
-        incomplete: true,
-        retry: "membership changed during discovery",
-      };
+      return { spaces: [], incomplete: true, retry: "membership changed during discovery" };
     for (const conversationId of inaccessibleSystemDms)
       this.messages.membership(actor, conversationId, false);
     for (const c of channels) {
@@ -120,12 +116,7 @@ export class Directory implements ConversationDirectory {
           if (JSON.stringify(request.principal) === JSON.stringify(principal))
             this.messages.store.db
               .prepare("UPDATE actions SET state='succeeded',receipt=? WHERE id=?")
-              .run(
-                JSON.stringify({
-                  conversationId: this.mapper.conversation(c.id!),
-                }),
-                row.id,
-              );
+              .run(JSON.stringify({ conversationId: this.mapper.conversation(c.id!) }), row.id);
         }
       }
     }
@@ -201,17 +192,12 @@ export class Directory implements ConversationDirectory {
     signal.throwIfAborted();
     s.startAction(run, actionId);
     try {
-      const result = await client.conversations.open({
-        users: user,
-        return_im: true,
-      });
+      const result = await client.conversations.open({ users: user, return_im: true });
       if (!result.channel?.id || !/^D[A-Z0-9]+$/.test(result.channel.id))
         throw new Error("Invalid DM receipt");
       signal.throwIfAborted();
       s.assertRun(run);
-      const target = {
-        conversationId: this.mapper.conversation(result.channel.id),
-      };
+      const target = { conversationId: this.mapper.conversation(result.channel.id) };
       s.atomic(() => {
         this.messages.membership(run.agentId, target.conversationId, true);
         s.settleAction(run, actionId, "succeeded", target);

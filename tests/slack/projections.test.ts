@@ -45,10 +45,7 @@ async function setup() {
   for (const a of config.agents) s.register(a.id, "test", []);
   const { messages, mapper } = slackApplication(s, config),
     transport = new CanonicalSlackTransport(s, mapper, {}),
-    post = vi.fn(async (_args: any) => ({
-      ts: "20.000001",
-      channel: "CDISPLAY",
-    }));
+    post = vi.fn(async (_args: any) => ({ ts: "20.000001", channel: "CDISPLAY" }));
   transport.clients.set("research", {
     conversations: { info: async () => ({ channel: { is_member: true } }) },
     chat: { postMessage: post },
@@ -177,28 +174,16 @@ it("durably defers unknown roots, lets unrelated input advance, then imports one
   expect(
     f.s.db.prepare("SELECT status FROM projection_imports WHERE external_id='21.000001'").get(),
   ).toEqual({ status: "pending_dependency" });
-  f.receive("independent", {
-    ts: "22.000001",
-    user: "UOWNER",
-    text: "unrelated human input",
-  });
+  f.receive("independent", { ts: "22.000001", user: "UOWNER", text: "unrelated human input" });
   expect(f.messages.read("writer", f.target).map((m) => m.text)).toContain("unrelated human input");
   await f.core.send(sent.projection.id);
   f.imports.replay();
   f.receive(
     "duplicate-other-app",
-    {
-      ts: "21.000001",
-      thread_ts: "20.000001",
-      user: "UOWNER",
-      text: "human reply",
-    },
+    { ts: "21.000001", thread_ts: "20.000001", user: "UOWNER", text: "human reply" },
     "ATWO",
   );
-  const replies = f.messages.read("writer", {
-    ...f.target,
-    threadId: sent.messageId,
-  });
+  const replies = f.messages.read("writer", { ...f.target, threadId: sent.messageId });
   expect(replies.map((m) => m.text)).toEqual(["private internal", "human reply"]);
   expect(
     f.s.db
@@ -222,11 +207,7 @@ it("rechecks import permission during delayed-root replay and never grants membe
     user: "UOWNER",
     text: "must remain inaccessible",
   });
-  f.receive("outsider", {
-    ts: "22.000001",
-    user: "UOTHER",
-    text: "unauthorized",
-  });
+  f.receive("outsider", { ts: "22.000001", user: "UOTHER", text: "unauthorized" });
   await f.core.send(sent.projection.id);
   f.core.setEnabled(f.bindingId, false);
   f.imports.replay();
@@ -247,20 +228,10 @@ it("multi-App edits remain monotonic and imports never reflect back to their sou
     true,
   );
   f.receive("first", { ts: "1.000001", user: "UOWNER", text: "first" });
-  f.receive("edit", {
-    ts: "1.000001",
-    edited: { ts: "3.000001" },
-    user: "UOWNER",
-    text: "edited",
-  });
+  f.receive("edit", { ts: "1.000001", edited: { ts: "3.000001" }, user: "UOWNER", text: "edited" });
   f.receive(
     "stale",
-    {
-      ts: "1.000001",
-      edited: { ts: "2.000001" },
-      user: "UOWNER",
-      text: "stale",
-    },
+    { ts: "1.000001", edited: { ts: "2.000001" }, user: "UOWNER", text: "stale" },
     "ATWO",
   );
   const message = f.messages.read("writer", f.target)[0]!;
@@ -269,18 +240,8 @@ it("multi-App edits remain monotonic and imports never reflect back to their sou
     f.s.db
       .prepare("SELECT binding_id,state,reason FROM projection_outbox WHERE message_id=?")
       .all(message.id),
-  ).toEqual([
-    {
-      binding_id: other,
-      state: "failed",
-      reason: "source_changed_before_publication",
-    },
-  ]);
-  f.receive("delete", {
-    subtype: "message_deleted",
-    deleted_ts: "1.000001",
-    event_ts: "4.000001",
-  });
+  ).toEqual([{ binding_id: other, state: "failed", reason: "source_changed_before_publication" }]);
+  f.receive("delete", { subtype: "message_deleted", deleted_ts: "1.000001", event_ts: "4.000001" });
   expect(f.messages.message("writer", message.id).deleted).toBe(true);
 });
 it("forged pending metadata is ordinary authorized human input and cannot confirm an unpublished mirror", async () => {
@@ -373,10 +334,7 @@ it("durably drains projection history beyond the former five-page boundary", asy
       };
     });
   client.conversations.history = history as any;
-  client.conversations.replies = vi.fn(async () => ({
-    ok: true,
-    messages: [],
-  })) as any;
+  client.conversations.replies = vi.fn(async () => ({ ok: true, messages: [] })) as any;
   expect(await f.service.catchUp()).toBe(true);
   expect(history).toHaveBeenCalledTimes(6);
   expect(

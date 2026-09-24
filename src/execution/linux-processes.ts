@@ -10,11 +10,7 @@ export interface ProcessScope {
 /** A stop was refused before systemctl stop was invoked, so no effect is uncertain. */
 export class ProcessStopRejectedError extends Error {}
 export class ProcessNotRunningError extends ProcessStopRejectedError {}
-export type SystemctlRunner = (args: string[]) => {
-  code: number;
-  stdout: string;
-  stderr: string;
-};
+export type SystemctlRunner = (args: string[]) => { code: number; stdout: string; stderr: string };
 const systemctl: SystemctlRunner = (args) => {
   const result = spawnSync("/usr/bin/systemctl", args, {
     encoding: "utf8",
@@ -23,11 +19,7 @@ const systemctl: SystemctlRunner = (args) => {
     maxBuffer: 65536,
   });
   if (result.error) throw result.error;
-  return {
-    code: result.status ?? 1,
-    stdout: result.stdout ?? "",
-    stderr: result.stderr ?? "",
-  };
+  return { code: result.status ?? 1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
 };
 function cgroupPids(group: string): number[] {
   if (!group.startsWith("/") || group.split("/").includes(".."))

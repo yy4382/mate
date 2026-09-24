@@ -80,25 +80,11 @@ function setup() {
     } as AgentMessage);
     return view.viewToken;
   };
-  return {
-    s,
-    messages,
-    attention,
-    gate,
-    output,
-    run,
-    target,
-    read,
-    requests,
-    confirmation,
-  };
+  return { s, messages, attention, gate, output, run, target, read, requests, confirmation };
 }
 it("uses canonical identity across presentation, freshness, confirmation and duplicate echo", async () => {
   const { output, read, run, target, s, messages, requests, confirmation } = setup();
-  output.queue("research", target, "answer", "send", {
-    run,
-    viewToken: read(),
-  });
+  output.queue("research", target, "answer", "send", { run, viewToken: read() });
   const original = s.output("send")!;
   await output.send("send");
   expect(requests[0]?.requestHash).toBe(original.request_hash);
@@ -113,10 +99,7 @@ it("keeps revise, silence and explicit continue reachable without a platform-sha
   const { output, gate, run, target, requests, s } = setup();
   output.queue("research", target, "first", "draft", { run });
   expect(s.output("draft")?.state).toBe("held");
-  const revised = gate.revise(run, "draft", 1, "revised") as {
-    revision: number;
-    holdId: string;
-  };
+  const revised = gate.revise(run, "draft", 1, "revised") as { revision: number; holdId: string };
   gate.continueOnce(run, "draft", revised.revision, revised.holdId);
   await output.send("draft:revision:2");
   expect(requests[0]?.text).toBe("revised");
@@ -124,9 +107,7 @@ it("keeps revise, silence and explicit continue reachable without a platform-sha
   gate.discard(run, "silent", 1);
   await output.send("silent");
   expect(requests).toHaveLength(1);
-  expect(s.db.prepare("SELECT count(*) n FROM attention_seen").get()).toEqual({
-    n: 0,
-  });
+  expect(s.db.prepare("SELECT count(*) n FROM attention_seen").get()).toEqual({ n: 0 });
 });
 it("rejects fabricated confirmations for held drafts before any message is committed", () => {
   const { output, run, target, s, confirmation } = setup();
@@ -143,7 +124,5 @@ it("rejects fabricated confirmations for held drafts before any message is commi
   expect(() => output.confirm("held", row.request_hash, confirmation(request))).toThrow(
     "not dispatched",
   );
-  expect(s.db.prepare("SELECT count(*) n FROM messages").get()).toEqual({
-    n: 0,
-  });
+  expect(s.db.prepare("SELECT count(*) n FROM messages").get()).toEqual({ n: 0 });
 });

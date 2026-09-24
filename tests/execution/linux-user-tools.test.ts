@@ -72,19 +72,12 @@ it("runs two Agents through direct file/exec calls and tools.call with stable ho
   };
   const backend = new LinuxUserBackend(identities);
   const manager = native ? new LinuxProcessManager({ research: 65534, bob: 1 }) : undefined;
-  const broker = new Broker(store, collaboration, backend, {
-      research: alice,
-      bob,
-    }),
+  const broker = new Broker(store, collaboration, backend, { research: alice, bob }),
     router = new ToolRouter(
       collaboration,
       broker,
       manager
-        ? {
-            processes: manager,
-            research: async () => ({}),
-            publish: async () => ({}),
-          }
+        ? { processes: manager, research: async () => ({}), publish: async () => ({}) }
         : undefined,
     );
   const runs = new Map<string, { run: ReturnType<Store["beginRun"]>; work: string }>();
@@ -114,10 +107,7 @@ it("runs two Agents through direct file/exec calls and tools.call with stable ho
       work,
       `${agentId}-exec`,
       "exec",
-      {
-        cwd: root,
-        command: 'printf "%s:%s:%s" "$HOME" "$PWD" "$(cat note.txt)"',
-      },
+      { cwd: root, command: 'printf "%s:%s:%s" "$HOME" "$PWD" "$(cat note.txt)"' },
       signal,
     );
     expect((command.value as { stdout: string }).stdout).toBe(

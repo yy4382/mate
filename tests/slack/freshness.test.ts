@@ -83,16 +83,11 @@ it("missing view holds a durable draft; explicit continue is bounded and never p
   await o.send(id);
   expect(post).toHaveBeenCalledOnce();
   expect(s.output(id)?.state).toBe("sent");
-  expect(s.db.prepare("SELECT count(*) n FROM attention_seen").get()).toEqual({
-    n: 0,
-  });
+  expect(s.db.prepare("SELECT count(*) n FROM attention_seen").get()).toEqual({ n: 0 });
 });
 it("queued changes hold at dispatch, can revise and retry with a new presented view", async () => {
   const { c, g, o, w, run, post, read, change } = setup();
-  const id = c.send("research", w, target, "v1", "draft", {
-    run,
-    viewToken: read(),
-  });
+  const id = c.send("research", w, target, "v1", "draft", { run, viewToken: read() });
   change(1);
   await o.send(id);
   expect(post).not.toHaveBeenCalled();
@@ -114,14 +109,8 @@ it("serial dispatch makes a later stale queued message held after the earlier lo
 });
 it("429 retries recheck discussion, unknown dispatch blocks another message even with explicit continue", async () => {
   const { c, g, o, w, run, post, read, change, s, time } = setup();
-  post.mockRejectedValueOnce({
-    code: "slack_webapi_rate_limited_error",
-    retryAfter: 1,
-  });
-  const id = c.send("research", w, target, "one", "one", {
-    run,
-    viewToken: read(),
-  });
+  post.mockRejectedValueOnce({ code: "slack_webapi_rate_limited_error", retryAfter: 1 });
+  const id = c.send("research", w, target, "one", "one", { run, viewToken: read() });
   await o.send(id);
   change(1);
   time(3000);
@@ -186,10 +175,7 @@ it("revising a delegation updates its output reference before activation", () =>
 });
 it("durable related ingress blocks dispatch until normalized, then the changed view holds", async () => {
   const { s, c, m, o, w, run, post, read } = setup();
-  const id = c.send("research", w, target, "draft", "one", {
-    run,
-    viewToken: read(),
-  });
+  const id = c.send("research", w, target, "draft", "one", { run, viewToken: read() });
   s.ingest("AONE", "pending", {
     team_id: "TTEST",
     event: {
@@ -210,11 +196,7 @@ it("durable related ingress blocks dispatch until normalized, then the changed v
 });
 it("artifact drafts freeze bytes, preserve them on caption revision and hold changes before sharing", async () => {
   const { s, c, g, o, w, run, read, change } = setup();
-  const artifact = {
-    title: "result",
-    content: "fixed evidence",
-    contentHash: "hash",
-  };
+  const artifact = { title: "result", content: "fixed evidence", contentHash: "hash" };
   const upload = vi.fn(async (_request: any, payload: any, prepared: any, beforeShare: any) => {
     expect(payload.content).toBe("fixed evidence");
     prepared("FFILE");
@@ -223,10 +205,7 @@ it("artifact drafts freeze bytes, preserve them on caption revision and hold cha
     return { fileId: "FFILE" };
   });
   o.artifacts = { configured: () => true, supports: () => true, upload };
-  o.queueArtifact("research", target, "caption", artifact, "artifact", {
-    run,
-    viewToken: read(),
-  });
+  o.queueArtifact("research", target, "caption", artifact, "artifact", { run, viewToken: read() });
   s.db.prepare("INSERT INTO output_work VALUES(?,?)").run("artifact", w);
   await o.send("artifact");
   expect(s.output("artifact")?.state).toBe("held");

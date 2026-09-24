@@ -7,10 +7,7 @@ import type { AgentConfig, MateConfig } from "../../../../../src/config.js";
 
 export const slackTs = z.string().regex(/^\d{1,16}\.\d{1,6}$/);
 export const targetSchema = z
-  .object({
-    channel: z.string().regex(/^[CDG][A-Z0-9]+$/),
-    thread: slackTs.optional(),
-  })
+  .object({ channel: z.string().regex(/^[CDG][A-Z0-9]+$/), thread: slackTs.optional() })
   .strict();
 export type Target = z.infer<typeof targetSchema>;
 export interface NormalMessage {
@@ -57,10 +54,7 @@ export class Messages {
   constructor(
     readonly store: Store,
     readonly config: MateConfig,
-    readonly persistence: {
-      records: ConversationRecords;
-      writes: ConversationWrites;
-    },
+    readonly persistence: { records: ConversationRecords; writes: ConversationWrites },
   ) {}
   agent(id: string): AgentConfig {
     const a = this.config.agents.find((a) => a.id === id);
@@ -90,9 +84,7 @@ export class Messages {
     this.agent(agentId);
     this.membershipVersions.set(agentId, this.membershipVersion(agentId) + 1);
     this.store.atomic(() => {
-      this.persistence.writes.target("membership", encode([agentId, channel]), {
-        channel,
-      });
+      this.persistence.writes.target("membership", encode([agentId, channel]), { channel });
       this.store.db
         .prepare(
           "INSERT INTO channel_access VALUES(?,?,?) ON CONFLICT(agent_id,channel) DO UPDATE SET active=excluded.active",

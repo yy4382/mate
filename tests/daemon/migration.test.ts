@@ -56,14 +56,7 @@ function fixture() {
   const broker = new Broker(
       store,
       c,
-      {
-        execute: async () => ({
-          code: 0,
-          stdout: "",
-          stderr: "",
-          truncated: false,
-        }),
-      },
+      { execute: async () => ({ code: 0, stdout: "", stderr: "", truncated: false }) },
       { research: own },
     ),
     router = new ToolRouter(c, broker),
@@ -71,19 +64,7 @@ function fixture() {
 
   const next = structuredClone(previous);
   next.mate.agents[0]!.role = "An evolving research role";
-  return {
-    root,
-    data,
-    path,
-    own,
-    previous,
-    next,
-    store,
-    c,
-    router,
-    work,
-    broker,
-  };
+  return { root, data, path, own, previous, next, store, c, router, work, broker };
 }
 it("offline migration backs up memory, updates the baseline, and preserves tasks, reminders, context and unknown receipts", async () => {
   const f = fixture(),
@@ -199,9 +180,7 @@ it("pending model reset migrates exactly once and retains its requested continua
   await migrateConfiguration(f.previous, f.next, join(f.root, "backup"));
   const s = new Store(f.path);
   try {
-    expect(s.db.prepare("SELECT state FROM session_resets").get()).toEqual({
-      state: "applied",
-    });
+    expect(s.db.prepare("SELECT state FROM session_resets").get()).toEqual({ state: "applied" });
     expect(
       s.db.prepare("SELECT count(*) n FROM deliveries WHERE dedupe LIKE 'session-reset:%'").get(),
     ).toEqual({ n: 1 });
@@ -229,10 +208,7 @@ it("a migrated configuration starts locally and can add persistent peers beyond 
     saved = refs.map((ref) => process.env[ref]);
   refs.forEach((ref) => (process.env[ref] = "synthetic-local-only"));
   try {
-    const daemon = await Daemon.create(next, {
-      info: () => {},
-      error: () => {},
-    });
+    const daemon = await Daemon.create(next, { info: () => {}, error: () => {} });
     try {
       expect(daemon.store.db.prepare("SELECT count(*) n FROM agents").get()).toEqual({ n: 4 });
       expect(existsSync(join(f.data, "agents", "peer4", "MEMORY.md"))).toBe(true);
@@ -274,10 +250,7 @@ it("adds the first Slack installation to a canonical local-origin store without 
   process.env.RESEARCH_BOT_TOKEN = "synthetic";
   try {
     for (let n = 0; n < 2; n++) {
-      const daemon = await Daemon.create(next, {
-        info: () => {},
-        error: () => {},
-      });
+      const daemon = await Daemon.create(next, { info: () => {}, error: () => {} });
       expect(
         daemon.store.db
           .prepare("SELECT 1 FROM runtime_meta WHERE key='reference_migration_v16'")

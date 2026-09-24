@@ -31,9 +31,7 @@ function setup() {
     db.register(a.id, "v1", []);
     messages.membership(a.id, "CTEST", true);
   }
-  const output = new Output(messages, {
-    post: async () => ({ ts: "101.000001" }),
-  });
+  const output = new Output(messages, { post: async () => ({ ts: "101.000001" }) });
   const service = new Collaboration(db, messages, output, config);
   const work = service.createWork("human:one", target);
   return { db, service, work, output };
@@ -53,9 +51,7 @@ it("claim has exactly one owner; waiting keeps ownership and dependency completi
   expect(() => service.update("research", parent, "done", "premature")).toThrow("Unfinished");
   service.update("engineer", child, "done", "synthetic evidence");
   expect(service.task(parent).status).toBe("doing");
-  expect(db.db.prepare("SELECT count(*) n FROM deliveries").get()).toEqual({
-    n: 1,
-  });
+  expect(db.db.prepare("SELECT count(*) n FROM deliveries").get()).toEqual({ n: 1 });
   expect(() => service.update("engineer", child, "done", "duplicate")).toThrow("terminal");
   service.update("research", parent, "done", "final evidence");
 });
@@ -164,9 +160,7 @@ it("wakeups catch up once, retain origin, are transactional and outlive their ta
   db.db.exec("DROP TRIGGER fail_wake");
   service.tick(3600000);
   service.tick(3600000);
-  expect(db.db.prepare("SELECT count(*) n FROM deliveries").get()).toEqual({
-    n: 2,
-  });
+  expect(db.db.prepare("SELECT count(*) n FROM deliveries").get()).toEqual({ n: 2 });
   expect(service.schedules("research").find((s) => s.id === once)?.active).toBe(0);
   expect(service.schedules("research").find((s) => s.id === recurring)?.next_at).toBeGreaterThan(
     3600000,

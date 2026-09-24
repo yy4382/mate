@@ -101,11 +101,7 @@ export function serveWorker(engine: Engine, models?: Models): void {
       return;
     }
     if (active) {
-      process.send?.({
-        type: "failed",
-        nonce: message.nonce,
-        error: "Worker already active",
-      });
+      process.send?.({ type: "failed", nonce: message.nonce, error: "Worker already active" });
       return;
     }
     active = true;
@@ -154,11 +150,7 @@ if (process.env.MATE_WORKER === "1") {
     throw new Error("Worker model or credential unavailable");
   serveWorker(
     new Engine(model, (m, context, options) =>
-      models.streamSimple(m, context, {
-        ...options,
-        apiKey: process.env.MATE_MODEL_KEY!,
-        env: {},
-      }),
+      models.streamSimple(m, context, { ...options, apiKey: process.env.MATE_MODEL_KEY!, env: {} }),
     ),
     models,
   );

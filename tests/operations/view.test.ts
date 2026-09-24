@@ -57,9 +57,7 @@ it("returns owner-only authoritative status without sensitive bodies and local c
   c.send("alice", f.work, f.target, "PRIVATE_UNKNOWN_OUTPUT", "unknown-output");
   s.transitionOutput("unknown-output", "held", "pending");
   s.transitionOutput("unknown-output", "pending", "sending");
-  s.transitionOutput("unknown-output", "sending", "unknown", {
-    secret: "PRIVATE_OUTPUT_RECEIPT",
-  });
+  s.transitionOutput("unknown-output", "sending", "unknown", { secret: "PRIVATE_OUTPUT_RECEIPT" });
   const token = run(f, "alice", "first");
   s.prepareAction(token, "action", { secret: "PRIVATE_ACTION_REQUEST" });
   s.startAction(token, "action");
@@ -161,10 +159,7 @@ it("merges safe activity with a query-bound vector cursor and never wakes an Age
   let cursor: string | undefined,
     all: any[] = [];
   do {
-    const page = c.operations.activity("owner", {
-      limit: 2,
-      ...(cursor ? { cursor } : {}),
-    });
+    const page = c.operations.activity("owner", { limit: 2, ...(cursor ? { cursor } : {}) });
     all.push(...page.items);
     cursor = page.cursor ?? undefined;
     if (all.length > 100) throw new Error("pagination loop");
@@ -261,10 +256,7 @@ it("rolls runtime and internal DM state back when their required fact cannot com
     sourceId: (target as any).conversationId,
     kind: "internal_dm_created" as const,
     actorId: "alice",
-    subject: {
-      type: "internal_dm" as const,
-      id: (target as any).conversationId,
-    },
+    subject: { type: "internal_dm" as const, id: (target as any).conversationId },
     counts: { members: 2 as const },
   };
   s.atomic(() => s.operationalFact(fact));
@@ -300,9 +292,7 @@ it("keeps reminder history coverage incomplete after editing a migrated reminder
     legacy: 0,
   });
   expect(
-    c.operations.activity("owner", {
-      sources: ["reminder_event", "reminder_firing"],
-    }).sources,
+    c.operations.activity("owner", { sources: ["reminder_event", "reminder_firing"] }).sources,
   ).toMatchObject({
     reminder_event: { coverage: { historicalComplete: false, gapCount: 1 } },
     reminder_firing: { coverage: { historicalComplete: false, gapCount: 1 } },
@@ -363,9 +353,7 @@ it("pages a sparse actor and kind filter without loss or duplicates", () => {
 it("keeps oversized Slack control responses valid and directs the owner to a narrower query", () => {
   const value = {
     works: {
-      items: Array.from({ length: 100 }, (_, i) => ({
-        id: `work-${i}-${"x".repeat(500)}`,
-      })),
+      items: Array.from({ length: 100 }, (_, i) => ({ id: `work-${i}-${"x".repeat(500)}` })),
       atLeast: 101,
       truncated: true,
     },

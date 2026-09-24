@@ -12,10 +12,7 @@ it("does nothing outside a systemd notify service", () => {
 });
 
 it("publishes readiness only through the fixed systemd notifier", () => {
-  const environment = {
-    NOTIFY_SOCKET: "/run/systemd/notify",
-    MODEL_API_KEY: "secret",
-  };
+  const environment = { NOTIFY_SOCKET: "/run/systemd/notify", MODEL_API_KEY: "secret" };
   const run = vi.fn<ReadinessRunner>().mockReturnValue({ code: 0, stderr: "" });
   notifyServiceReady(environment, run);
   expect(run).toHaveBeenCalledWith("/usr/bin/systemd-notify", ["--ready"], environment);

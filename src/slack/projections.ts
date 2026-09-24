@@ -35,18 +35,12 @@ export class SlackProjectionTransport implements ProjectionTransport {
     if (thread) slackTs.parse(thread);
     return {
       text,
-      target: {
-        provider: b.provider,
-        workspace: b.workspace,
-        externalId: b.externalId,
-      },
+      target: { provider: b.provider, workspace: b.workspace, externalId: b.externalId },
       ...(thread ? { thread } : {}),
     };
   }
   async authorized(b: ProjectionBinding): Promise<boolean> {
-    const result = await this.client(b).conversations.info({
-      channel: b.externalId,
-    });
+    const result = await this.client(b).conversations.info({ channel: b.externalId });
     return (
       !result.channel?.is_archived &&
       (result.channel?.is_member === true ||
@@ -54,20 +48,19 @@ export class SlackProjectionTransport implements ProjectionTransport {
     );
   }
   async post(r: ProjectionDispatch): Promise<ProjectionEvidence> {
-    const result = await this.client({
-      ...r.wire.target,
-      publisher: r.publisher,
-    }).chat.postMessage({
-      channel: r.wire.target.externalId,
-      ...(r.wire.thread ? { thread_ts: r.wire.thread } : {}),
-      text: r.wire.text,
-      metadata: {
-        event_type: "mate_projection",
-        event_payload: { id: r.id, request_hash: r.requestHash },
+    const result = await this.client({ ...r.wire.target, publisher: r.publisher }).chat.postMessage(
+      {
+        channel: r.wire.target.externalId,
+        ...(r.wire.thread ? { thread_ts: r.wire.thread } : {}),
+        text: r.wire.text,
+        metadata: {
+          event_type: "mate_projection",
+          event_payload: { id: r.id, request_hash: r.requestHash },
+        },
+        unfurl_links: false,
+        unfurl_media: false,
       },
-      unfurl_links: false,
-      unfurl_media: false,
-    });
+    );
     if (!result.ts || (result.channel && result.channel !== r.wire.target.externalId))
       throw new Error("Invalid projection Slack receipt");
     slackTs.parse(result.ts);
@@ -142,10 +135,7 @@ export class SlackProjectionInput {
         });
         return true;
       } catch {
-        s.audit("projection_evidence_rejected", {
-          bindingId: binding.id,
-          eventMessage: ts,
-        });
+        s.audit("projection_evidence_rejected", { bindingId: binding.id, eventMessage: ts });
       }
     }
     const integer = (value: string) => {

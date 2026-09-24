@@ -50,17 +50,11 @@ function save(path: string, value: string | Buffer) {
       const old = content(path),
         history = checked(`${path}.history`);
       mkdirSync(history, { recursive: true });
-      writeFileSync(`${history}/${Date.now()}-${randomUUID()}`, old, {
-        flag: "wx",
-        mode: 0o600,
-      });
+      writeFileSync(`${history}/${Date.now()}-${randomUUID()}`, old, { flag: "wx", mode: 0o600 });
       for (const oldName of readdirSync(history).sort().slice(0, -5))
         unlinkSync(checked(`${history}/${oldName}`));
     }
-    writeFileSync(temp, value, {
-      flag: "wx",
-      mode: privateMode ? 0o600 : 0o644,
-    });
+    writeFileSync(temp, value, { flag: "wx", mode: privateMode ? 0o600 : 0o644 });
     const fd = openSync(temp, "r");
     try {
       fsyncSync(fd);

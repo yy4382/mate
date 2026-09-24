@@ -9,10 +9,7 @@ const fileMetadata = z.object({
   size: z.number().nonnegative().optional(),
 });
 const outputMetadata = z
-  .object({
-    event_type: z.string(),
-    event_payload: z.record(z.string(), z.unknown()).optional(),
-  })
+  .object({ event_type: z.string(), event_payload: z.record(z.string(), z.unknown()).optional() })
   .optional();
 export const rawMessage = z
   .object({

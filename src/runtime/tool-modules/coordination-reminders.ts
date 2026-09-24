@@ -241,9 +241,7 @@ const definitions: ToolSpec[] = [
     replayPolicy: "immutable",
     authorize: authorizeReferences,
     postAwait: fence,
-    handler: ({ coordination, run }, args) => ({
-      value: coordination.discard(run, args.intentId),
-    }),
+    handler: ({ coordination, run }, args) => ({ value: coordination.discard(run, args.intentId) }),
   }),
   spec({
     name: "tasks.create",
@@ -257,12 +255,7 @@ const definitions: ToolSpec[] = [
     postAwait: fence,
     handler: ({ coordination, gate, run, workId }, args) => {
       const task = coordination.create(run, workId, args.target, args.title, args.viewToken);
-      return {
-        value: {
-          task,
-          messageDraft: gate.describe(run.agentId, task.outbox_id!),
-        },
-      };
+      return { value: { task, messageDraft: gate.describe(run.agentId, task.outbox_id!) } };
     },
   }),
   taskMutation(
@@ -374,12 +367,7 @@ const definitions: ToolSpec[] = [
     "Page this Agent’s durable reminders.",
     ({ collaboration: c, run }, args) => {
       const items = c.reminders.list(run.agentId, args.before);
-      return {
-        value: {
-          items,
-          nextCursor: items.length === 100 ? items.at(-1)!.cursor : null,
-        },
-      };
+      return { value: { items, nextCursor: items.length === 100 ? items.at(-1)!.cursor : null } };
     },
   ),
   reminderRead(
@@ -447,11 +435,7 @@ const definitions: ToolSpec[] = [
   spec({
     name: "reminders.edit",
     schema: z
-      .object({
-        ...reminderInput,
-        reminderId: id,
-        expectedVersion: z.number().int().positive(),
-      })
+      .object({ ...reminderInput, reminderId: id, expectedVersion: z.number().int().positive() })
       .strict(),
     description: "Edit an owned reminder with CAS without rewriting its historical baseline.",
     workPolicy: "reminder",

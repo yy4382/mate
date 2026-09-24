@@ -85,10 +85,7 @@ export class NodeResearchTransport implements ResearchTransport {
           lookup: (_hostname, _options, callback) =>
             callback(
               null,
-              addresses.map((address) => ({
-                address: address.address,
-                family: 4,
-              })),
+              addresses.map((address) => ({ address: address.address, family: 4 })),
             ),
         },
         (res) => {
@@ -128,12 +125,7 @@ export class Research {
     input: string,
     signal: AbortSignal,
     redirects = 0,
-  ): Promise<{
-    url: string;
-    contentType: string;
-    body: string;
-    truncated: boolean;
-  }> {
+  ): Promise<{ url: string; contentType: string; body: string; truncated: boolean }> {
     signal = AbortSignal.any([signal, AbortSignal.timeout(15000)]);
     signal.throwIfAborted();
     const url = new URL(input);

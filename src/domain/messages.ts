@@ -27,13 +27,7 @@ export interface MessageDTO {
   // Decimal integer strings preserve ordering beyond JS safe integer precision.
   order: string;
   revision: string;
-  attachments: {
-    id: string;
-    name?: string;
-    title?: string;
-    mimetype?: string;
-    size?: number;
-  }[];
+  attachments: { id: string; name?: string; title?: string; mimetype?: string; size?: number }[];
 }
 export interface CanonicalEffect {
   id: string;

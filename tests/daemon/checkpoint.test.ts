@@ -34,9 +34,7 @@ function fixture() {
     mkdirSync(path, { recursive: true, mode: 0o700 });
   writeFileSync(join(home, "MEMORY.md"), "target", { mode: 0o600 });
   const config = daemonFixture(data, configFixture, {
-    linuxUsers: {
-      research: { uid: process.getuid!(), gid: process.getgid!(), home },
-    },
+    linuxUsers: { research: { uid: process.getuid!(), gid: process.getgid!(), home } },
     sharedRoot,
   });
   const store = new Store(join(state, "mate.sqlite"));

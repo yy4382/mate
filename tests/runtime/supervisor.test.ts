@@ -32,21 +32,12 @@ function setup(factory?: (id: string) => Worker) {
   const store = new Store(":memory:"),
     messages = new Messages(store, config);
   migrateCurrentRuntime(store);
-  const output = new Output(messages, {
-      post: async () => ({ ts: "100.000002" }),
-    }),
+  const output = new Output(messages, { post: async () => ({ ts: "100.000002" }) }),
     collaboration = new Collaboration(store, messages, output, config);
   const broker = new Broker(
     store,
     collaboration,
-    {
-      execute: async () => ({
-        code: 0,
-        stdout: "",
-        stderr: "",
-        truncated: false,
-      }),
-    },
+    { execute: async () => ({ code: 0, stdout: "", stderr: "", truncated: false }) },
     { research: "/tmp", writer: "/tmp" },
   );
   const router = new ToolRouter(collaboration, broker);
@@ -214,13 +205,7 @@ it("recovery is bounded even with large task results; memory callback is injecte
     () => ({
       run: async (spec) => {
         seen = spec;
-        return {
-          tokens: 0,
-          cost: 0,
-          certain: true,
-          waiting: false,
-          continuation: false,
-        };
+        return { tokens: 0, cost: 0, certain: true, waiting: false, continuation: false };
       },
       close: () => {},
     }),
@@ -271,12 +256,7 @@ it("invalid run IPC fails immediately instead of consuming the run timeout", asy
   try {
     await expect(
       worker.run(
-        {
-          sessionId: "s",
-          messages: [],
-          recovery: "x".repeat(50001),
-          maxTurns: 1,
-        },
+        { sessionId: "s", messages: [], recovery: "x".repeat(50001), maxTurns: 1 },
         { journal: async () => {}, tool: async () => ({ value: null }) },
         10000,
         new AbortController().signal,
@@ -326,13 +306,7 @@ it("crash after effect commit before tool-result journal restores its receipt wi
         throw new Error("kill before result journal");
       }
       restored = JSON.stringify(spec.messages);
-      return {
-        tokens: 0,
-        cost: 0,
-        certain: true,
-        waiting: false,
-        continuation: false,
-      };
+      return { tokens: 0, cost: 0, certain: true, waiting: false, continuation: false };
     },
   }));
   c.enqueue("research", work, "crash-window", {});
@@ -402,13 +376,7 @@ it("attributes each model call to the activity selected when that call begins", 
       await hooks.tool("select-work", "works.select", { workId: other });
       await hooks.usageBegin?.(2, "openai", "synthetic");
       await hooks.usageComplete?.(2, answer([]));
-      return {
-        tokens: 24,
-        cost: 0,
-        certain: true,
-        waiting: false,
-        continuation: false,
-      };
+      return { tokens: 24, cost: 0, certain: true, waiting: false, continuation: false };
     },
   }));
   cleanups.unshift(() => supervisor.close());
@@ -462,13 +430,7 @@ it("fresh review seat withholds bodies through tools, notice, recovery and held 
     run: async (spec, hooks) => {
       captured = JSON.stringify(spec);
       captured += await hooks.notice?.();
-      return {
-        tokens: 1,
-        cost: 0,
-        certain: true,
-        waiting: false,
-        continuation: false,
-      };
+      return { tokens: 1, cost: 0, certain: true, waiting: false, continuation: false };
     },
   }));
   const target = fixtureTarget("CTEST", "100.000001");
@@ -642,13 +604,7 @@ it("model context replacement waits for run completion and retains durable ident
             ).wait,
           ).toBe(true);
         } else restored = JSON.stringify(spec.messages);
-        return {
-          tokens: 12,
-          cost: 0.01,
-          certain: true,
-          waiting: true,
-          continuation: false,
-        };
+        return { tokens: 12, cost: 0.01, certain: true, waiting: true, continuation: false };
       },
     };
   });
@@ -784,10 +740,7 @@ it("new contexts can discover and inspect their own old uncertain execution with
   expect(
     (await router.call(next, work, "read2", "actions.read", { actionId: "OLD-EXEC" }, signal))
       .value,
-  ).toMatchObject({
-    state: "unknown",
-    request: { operation: { command: "synthetic-command" } },
-  });
+  ).toMatchObject({ state: "unknown", request: { operation: { command: "synthetic-command" } } });
 });
 it("historical non-execution receipts cannot bypass current object ACL through indirect references", async () => {
   const { store, collaboration: c, work, router } = setup();
@@ -840,18 +793,10 @@ it("recovery refresh rereads memory, the latest checkpoint and the selected work
       run: async (spec, hooks) => {
         expect(JSON.parse(spec.recovery).memory).toBe("old knowledge");
         await hooks.tool("select", "works.select", { workId: other });
-        await hooks.tool("checkpoint", "sessions.checkpoint", {
-          text: "updated active context",
-        });
+        await hooks.tool("checkpoint", "sessions.checkpoint", { text: "updated active context" });
         memory = "new domain knowledge";
         fresh = JSON.parse(await hooks.refreshRecovery!());
-        return {
-          tokens: 5,
-          cost: 0,
-          certain: true,
-          waiting: false,
-          continuation: false,
-        };
+        return { tokens: 5, cost: 0, certain: true, waiting: false, continuation: false };
       },
     }),
     async () => {

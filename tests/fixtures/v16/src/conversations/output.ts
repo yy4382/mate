@@ -51,10 +51,7 @@ export class Output {
     this.messages.requireAccess(agentId, target.channel);
     z.string().min(1).max(35000).parse(text);
     this.messages.store.atomic(() => {
-      this.messages.persistence.writes.queueOutput(agentId, id, {
-        target,
-        text,
-      });
+      this.messages.persistence.writes.queueOutput(agentId, id, { target, text });
       this.gate?.queued(agentId, id, basis);
     });
     return id;
@@ -71,11 +68,7 @@ export class Output {
     this.messages.requireAccess(agentId, target.channel);
     z.string().min(1).max(35000).parse(text);
     this.messages.store.atomic(() => {
-      this.messages.persistence.writes.queueOutput(agentId, id, {
-        target,
-        text,
-        artifact,
-      });
+      this.messages.persistence.writes.queueOutput(agentId, id, { target, text, artifact });
       this.gate?.queued(agentId, id, basis);
     });
     return id;
@@ -121,12 +114,7 @@ export class Output {
           receipt.fileId,
           "artifact",
         );
-      s.audit("artifact_published", {
-        outputId: id,
-        actor,
-        target,
-        ...receipt,
-      });
+      s.audit("artifact_published", { outputId: id, actor, target, ...receipt });
     });
   }
   /** Evidence must come from a fresh Slack history response using the sender's credential. */
@@ -144,10 +132,7 @@ export class Output {
   ): void {
     const row = this.messages.store.output(id);
     if (!row || row.state !== "unknown") throw new Error("Output does not require reconciliation");
-    const { target, text } = JSON.parse(row.request) as {
-      target: Target;
-      text: string;
-    };
+    const { target, text } = JSON.parse(row.request) as { target: Target; text: string };
     if (JSON.parse(row.request).artifact)
       throw new Error("Artifact requires file sharing evidence");
     if (
@@ -263,9 +248,7 @@ export class Output {
       .get(id) as { state: string } | undefined;
     if (work && work.state !== "active") {
       if (work.state === "cancelled")
-        store.transitionOutput(id, "pending", "failed", {
-          reason: "work_cancelled",
-        });
+        store.transitionOutput(id, "pending", "failed", { reason: "work_cancelled" });
       return;
     }
     if (row.receipt && (JSON.parse(row.receipt) as { retryAt?: number }).retryAt! > now) return;
@@ -277,9 +260,7 @@ export class Output {
     try {
       this.messages.requireAccess(row.agent_id, target.channel);
     } catch {
-      store.transitionOutput(id, "pending", "failed", {
-        reason: "access_revoked",
-      });
+      store.transitionOutput(id, "pending", "failed", { reason: "access_revoked" });
       return;
     }
     // Ingress is durable before Slack ACK/replay. Wait for trusted replay to normalize
@@ -332,10 +313,7 @@ export class Output {
           },
           () => {
             if (store.output(id)?.state !== "sending") return false;
-            store.transitionOutput(id, "sending", "pending", {
-              fileId,
-              phase: "staging",
-            });
+            store.transitionOutput(id, "sending", "pending", { fileId, phase: "staging" });
             if (store.db.prepare("SELECT 1 FROM agents WHERE id=? AND paused=1").get(row.agent_id))
               return false;
             const state = store.db
@@ -354,10 +332,7 @@ export class Output {
             )
               return false;
             if (this.gate && !this.gate.dispatch(id)) return false;
-            store.transitionOutput(id, "pending", "sending", {
-              fileId,
-              phase: "sharing",
-            });
+            store.transitionOutput(id, "pending", "sending", { fileId, phase: "sharing" });
             shareStarted = true;
             return true;
           },
@@ -379,11 +354,7 @@ export class Output {
       receipt = await this.transport.post(row.agent_id, target, text, id);
       slackTs.parse(receipt.ts);
     } catch (error) {
-      const e = error as {
-        code?: string;
-        retryAfter?: number;
-        data?: { error?: string };
-      };
+      const e = error as { code?: string; retryAfter?: number; data?: { error?: string } };
       if (e.code === "slack_webapi_rate_limited_error" && Number.isFinite(e.retryAfter)) {
         store.transitionOutput(id, "sending", "pending", {
           retryAt: this.clock() + Math.max(1, e.retryAfter!) * 1000,
@@ -404,13 +375,8 @@ export class Output {
           "cannot_reply_to_message",
         ].includes(e.data?.error ?? "")
       )
-        store.transitionOutput(id, "sending", "failed", {
-          reason: e.data!.error,
-        });
-      else
-        store.transitionOutput(id, "sending", "unknown", {
-          reason: "request_outcome_unknown",
-        });
+        store.transitionOutput(id, "sending", "failed", { reason: e.data!.error });
+      else store.transitionOutput(id, "sending", "unknown", { reason: "request_outcome_unknown" });
       return;
     }
     // Receipt and replayable internal event commit together. If this fails,

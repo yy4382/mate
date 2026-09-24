@@ -112,12 +112,7 @@ export class CanonicalAttention {
         target?.conversationId ?? null,
         target?.threadId ?? null,
         target?.threadId ?? null,
-      ) as IterableIterator<{
-      id: string;
-      agent_id: string;
-      request: string;
-      receipt: string;
-    }>;
+      ) as IterableIterator<{ id: string; agent_id: string; request: string; receipt: string }>;
     for (const row of rows) {
       const effect = this.messages.records.targetedEffect("outbox", row.id),
         scope = effect.target;
@@ -168,10 +163,7 @@ export class CanonicalAttention {
   ): { target: Target; revision: number; unseen: number }[] | { isolated: true; notice: string }[] {
     if (this.messages.isolated(actor))
       return [
-        {
-          isolated: true,
-          notice: "Independent review seat; discussion inputs are withheld.",
-        },
+        { isolated: true, notice: "Independent review seat; discussion inputs are withheld." },
       ];
     const s = this.messages.store;
     this.messages.agent(actor);
@@ -316,10 +308,7 @@ export class CanonicalAttention {
         bytes += size;
       }
       const published = this.publications(run.agentId, target),
-        snapshots: ViewPage[] = pages.map((messages) => ({
-          messages,
-          publications: [],
-        }));
+        snapshots: ViewPage[] = pages.map((messages) => ({ messages, publications: [] }));
       if (published.length > 100) complete = false;
       let publicationBytes = 0;
       for (const publication of published.slice(-100)) {

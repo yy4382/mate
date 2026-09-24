@@ -67,11 +67,7 @@ it("quiet acquisition records visibility without observations, wakeups or false 
       mentions: [{ kind: "agent" as const, id: "research" }],
     };
   const baseline = Number(
-    (
-      f.store.db.prepare("SELECT count(*) n FROM deliveries").get() as {
-        n: number;
-      }
-    ).n,
+    (f.store.db.prepare("SELECT count(*) n FROM deliveries").get() as { n: number }).n,
   );
   f.messages.recordHistory(value, ["research"]);
   expect(f.store.db.prepare("SELECT count(*) n FROM message_observations").get()).toEqual({ n: 0 });
@@ -112,9 +108,7 @@ it("a quiet edit invalidates an established view without advancing seen state", 
     first = message(f.external, 10);
   f.messages.record(first, ["research"]);
   const target = { conversationId: f.external, threadId: first.id };
-  const page = collaboration.attention.read(f.run, target) as {
-    viewToken: string;
-  };
+  const page = collaboration.attention.read(f.run, target) as { viewToken: string };
   const result: AgentMessage = {
     role: "toolResult",
     toolCallId: "read",
@@ -166,10 +160,7 @@ it("local pages have exact nonrepeating cursors bound to actor, target and query
   f.messages.membership("research", room, true);
   for (let n = 1; n <= 4; n++)
     f.messages.recordHistory(message(room, n, n === 3 ? "needle" : ""), []);
-  const first = f.history.page(f.run, {
-    target: { conversationId: room },
-    limit: 1,
-  });
+  const first = f.history.page(f.run, { target: { conversationId: room }, limit: 1 });
   const second = f.history.page(f.run, {
     target: { conversationId: room },
     limit: 1,
@@ -198,11 +189,7 @@ it("local pages have exact nonrepeating cursors bound to actor, target and query
       cursor: found.nextCursor ?? first.nextCursor!,
     }),
   ).toThrow("another actor, target or query");
-  const around = f.history.around(f.run, {
-    messageId: "message-3",
-    before: 1,
-    after: 1,
-  });
+  const around = f.history.around(f.run, { messageId: "message-3", before: 1, after: 1 });
   expect(around.messages.map((item) => item.id)).toEqual(["message-2", "message-3", "message-4"]);
 });
 
@@ -218,11 +205,7 @@ it("global search walks multiple conversations in stable order without repeating
   const page = f.history.search(f.run, { query: "cross room", limit: 2 });
   expect(page.messages.map((item) => item.id)).toEqual(["message-11", "message-10"]);
   expect(page.nextCursor).toBeTruthy();
-  const next = f.history.search(f.run, {
-    query: "cross room",
-    limit: 2,
-    cursor: page.nextCursor!,
-  });
+  const next = f.history.search(f.run, { query: "cross room", limit: 2, cursor: page.nextCursor! });
   expect(next.messages.map((item) => item.id)).toEqual(["message-20"]);
   expect(next.nextCursor).toBeNull();
 });
@@ -240,11 +223,7 @@ it("bounded search exposes a continuation even when the scanned batch has no mat
   });
   expect(first.messages).toEqual([]);
   expect(first.nextCursor).toBeTruthy();
-  expect(first.coverage).toMatchObject({
-    scanLimited: true,
-    exhausted: false,
-    scanned: 1000,
-  });
+  expect(first.coverage).toMatchObject({ scanLimited: true, exhausted: false, scanned: 1000 });
   f.messages.recordHistory({ ...message(room, 1, "only oldest matches"), revision: "1002" }, []);
   const second = f.history.search(f.run, {
     target: { conversationId: room },
@@ -398,9 +377,7 @@ it("one installation cannot advance another installation visible revision or fre
     }),
     collaboration = new Collaboration(store, messages, output, config);
   const target = { conversationId: external, threadId: first.id },
-    view = collaboration.attention.read(peerRun, target) as {
-      viewToken: string;
-    };
+    view = collaboration.attention.read(peerRun, target) as { viewToken: string };
   collaboration.attention.presented(peerRun, {
     role: "toolResult",
     toolCallId: "read",

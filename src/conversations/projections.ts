@@ -156,10 +156,7 @@ export class Projections {
       this.messages.store.db
         .prepare("UPDATE projection_bindings SET enabled=? WHERE id=?")
         .run(Number(enabled), id);
-      this.messages.store.audit("projection_enabled", {
-        bindingId: id,
-        enabled,
-      });
+      this.messages.store.audit("projection_enabled", { bindingId: id, enabled });
     });
   }
   get(id: string): Projection {
@@ -189,10 +186,7 @@ export class Projections {
       cursor: number;
     })[];
     const items = rows.slice(0, 100);
-    return {
-      items,
-      nextCursor: rows.length > 100 ? items.at(-1)!.cursor : null,
-    };
+    return { items, nextCursor: rows.length > 100 ? items.at(-1)!.cursor : null };
   }
   /** Only owner authorization may disclose that an old root exists; never includes old text. */
   anchor(bindingId: string, rootId: string): string {
@@ -360,12 +354,7 @@ export class Projections {
       )
       .run(encode(wire), requestHash, id);
     try {
-      const evidence = await transport.post({
-        id,
-        publisher: b.publisher,
-        wire,
-        requestHash,
-      });
+      const evidence = await transport.post({ id, publisher: b.publisher, wire, requestHash });
       this.confirm(id, requestHash, evidence);
     } catch (error) {
       if (this.get(id).state === "sent") return;

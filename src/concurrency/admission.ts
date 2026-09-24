@@ -40,11 +40,7 @@ export class FairAdmission implements Admission {
     });
   }
   snapshot() {
-    return {
-      active: this.active,
-      queued: this.queue.length,
-      limit: this.limit,
-    };
+    return { active: this.active, queued: this.queue.length, limit: this.limit };
   }
   private drain(): void {
     while (this.active < this.limit && this.queue.length) {

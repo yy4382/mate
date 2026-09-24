@@ -33,11 +33,7 @@ export class SlackMapper {
   ) {}
   conversation(channel: string): string {
     if (!/^[CDG][A-Z0-9]+$/.test(channel)) throw new Error("Invalid external conversation");
-    const locator = {
-      provider: "slack",
-      workspace: this.config.teamId,
-      externalId: channel,
-    };
+    const locator = { provider: "slack", workspace: this.config.teamId, externalId: channel };
     const found = this.references.findConversation(locator);
     if (found) {
       if (this.references.conversation(found).authority !== "external")

@@ -199,14 +199,8 @@ it("DM input pierces mute without a mention; system receipts never turn into dir
       .prepare("SELECT count(*) n FROM deliveries WHERE json_extract(payload,'$.kind')='message'")
       .get(),
   ).toEqual({ n: 1 });
-  m.record(
-    {
-      ...message(1),
-      channel: "DPEER",
-      systemGenerated: true,
-      text: "system status",
-    },
-    ["research"],
-  );
+  m.record({ ...message(1), channel: "DPEER", systemGenerated: true, text: "system status" }, [
+    "research",
+  ]);
   expect(a.peek("research")).toMatchObject([{ unseen: 1 }]);
 });

@@ -97,12 +97,6 @@ export class BudgetLedger {
     this.store.db
       .prepare("UPDATE budget_accounts SET max_runs=?,max_tokens=?,max_cost=? WHERE agent_id=?")
       .run(runs, tokens, cost, actor);
-    this.store.audit("owner_agent_budget", {
-      owner,
-      actor,
-      runs,
-      tokens,
-      cost,
-    });
+    this.store.audit("owner_agent_budget", { owner, actor, runs, tokens, cost });
   }
 }

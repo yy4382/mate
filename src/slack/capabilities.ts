@@ -24,16 +24,8 @@ export const slackEventSubscriptions = [
   { event: "message.groups", wire: "message", scope: "groups:history" },
   { event: "message.im", wire: "message", scope: "im:history" },
   { event: "message.mpim", wire: "message", scope: "mpim:history" },
-  {
-    event: "member_joined_channel",
-    wire: "member_joined_channel",
-    scope: "channels:read",
-  },
-  {
-    event: "member_left_channel",
-    wire: "member_left_channel",
-    scope: "channels:read",
-  },
+  { event: "member_joined_channel", wire: "member_joined_channel", scope: "channels:read" },
+  { event: "member_left_channel", wire: "member_left_channel", scope: "channels:read" },
 ] as const;
 export const slackControlCommand = "/team";
 export const slackWireEvents = Object.freeze([
@@ -76,9 +68,7 @@ export function slackAppManifest(agentId: string) {
     oauth_config: { scopes: { bot: [...requiredSlackBotScopes] } },
     settings: {
       socket_mode_enabled: true,
-      event_subscriptions: {
-        bot_events: slackEventSubscriptions.map((e) => e.event),
-      },
+      event_subscriptions: { bot_events: slackEventSubscriptions.map((e) => e.event) },
       org_deploy_enabled: false,
       token_rotation_enabled: false,
     },

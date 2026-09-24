@@ -115,9 +115,7 @@ export async function backupDeploymentSnapshot(
   destination: string,
   config: DaemonConfig,
 ): Promise<void> {
-  const database = new Database(join(dataDir, "state", "mate.sqlite"), {
-    fileMustExist: true,
-  });
+  const database = new Database(join(dataDir, "state", "mate.sqlite"), { fileMustExist: true });
   try {
     database.pragma("busy_timeout = 5000");
     await backupDatabase(database, dataDir, destination, config, false);

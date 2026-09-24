@@ -78,11 +78,7 @@ export class ConversationRecords {
       actor: row.agent_id,
       state: row.state,
       target: this.checkedTarget(type, id, storedTarget, request.format === "mate.effect.v2"),
-      original: {
-        request: row.request,
-        requestHash: row.request_hash,
-        receipt: row.receipt,
-      },
+      original: { request: row.request, requestHash: row.request_hash, receipt: row.receipt },
     };
   }
 

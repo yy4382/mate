@@ -20,12 +20,7 @@ const config = () =>
     version: 2,
     mate: {
       ownerUserIds: ["owner"],
-      budgets: {
-        maxRuns: 10,
-        maxTokens: 10000,
-        maxCostUsd: 2,
-        runTimeoutMs: 60000,
-      },
+      budgets: { maxRuns: 10, maxTokens: 10000, maxCostUsd: 2, runTimeoutMs: 60000 },
       agents: [
         {
           id: "alice",
@@ -46,18 +41,8 @@ const config = () =>
       dataDir: "/var/lib/mate",
       sharedRoot: "/srv/mate/shared",
       linuxUsers: {
-        alice: {
-          uid: 2001,
-          gid: 2001,
-          username: "mate-alice",
-          home: "/srv/mate/private/alice",
-        },
-        bob: {
-          uid: 2002,
-          gid: 2002,
-          username: "mate-bob",
-          home: "/srv/mate/private/bob",
-        },
+        alice: { uid: 2001, gid: 2001, username: "mate-alice", home: "/srv/mate/private/alice" },
+        bob: { uid: 2002, gid: 2002, username: "mate-bob", home: "/srv/mate/private/bob" },
       },
       researchHosts: [],
     },
@@ -68,10 +53,7 @@ const spec = () =>
     release: { source: "/candidate", gitCommit: "abcdef1234567" },
     configSource: "/input/mate.json",
   });
-const facts = {
-  canonical: (path: string) => path,
-  directoryBytes: () => 123456,
-};
+const facts = { canonical: (path: string) => path, directoryBytes: () => 123456 };
 
 it("plans one ordinary Linux identity per Agent with a shared root, no Docker image or volumes", () => {
   const plan = createLinuxDeploymentPlan(spec(), config(), facts);
@@ -162,11 +144,7 @@ it("preflights Debian, normal passwd identities, disk, memory and inactive servi
           stderr: "",
         };
       if (binary === "/usr/bin/id")
-        return {
-          code: 0,
-          stdout: args[1] === "mate-alice" ? "2001\n" : "2002\n",
-          stderr: "",
-        };
+        return { code: 0, stdout: args[1] === "mate-alice" ? "2001\n" : "2002\n", stderr: "" };
       if (binary === "/usr/bin/node") return { code: 0, stdout: "v24.0.0\n", stderr: "" };
       return { code: 3, stdout: "", stderr: "" };
     },
@@ -178,10 +156,7 @@ it("preflights Debian, normal passwd identities, disk, memory and inactive servi
   expect(preflightLinuxDeployment(spec(), config(), host).mode).toBe("linux-users");
   expect(calls.some((call) => call.includes("docker"))).toBe(false);
   expect(() =>
-    preflightLinuxDeployment(spec(), config(), {
-      ...host,
-      memoryMiB: () => 128,
-    }),
+    preflightLinuxDeployment(spec(), config(), { ...host, memoryMiB: () => 128 }),
   ).toThrow("memory");
   expect(() => preflightLinuxDeployment(spec(), config(), { ...host, node: "v24.1.0" })).toThrow(
     "differs",
@@ -235,10 +210,6 @@ it("rejects system approval when no configured Slack owner can receive its reque
     (await runDoctor(c, env, { requireSecrets: false })).checks.find(
       (check) => check.name === "system-approval",
     );
-  expect(await approval(withSlack({ UOTHER: "other" }))).toMatchObject({
-    status: "fail",
-  });
-  expect(await approval(withSlack({ UOWNER: "owner" }))).toMatchObject({
-    status: "pass",
-  });
+  expect(await approval(withSlack({ UOTHER: "other" }))).toMatchObject({ status: "fail" });
+  expect(await approval(withSlack({ UOWNER: "owner" }))).toMatchObject({ status: "pass" });
 });

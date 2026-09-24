@@ -50,9 +50,7 @@ function setup() {
     store.register(actor, "v1", []);
     messages.membership(actor, "CTEST", true);
   }
-  const output = new Output(messages, {
-      post: async () => ({ ts: "200.000001" }),
-    }),
+  const output = new Output(messages, { post: async () => ({ ts: "200.000001" }) }),
     c = new Collaboration(store, messages, output, config),
     work = c.createWork("coordination-recovery", target);
   return { store, messages, c, work, output };
@@ -66,22 +64,14 @@ it("pages every authorized task with query-bound cursors and enforces external i
   expect(first.items).toHaveLength(40);
   expect(first.cursor).toBeTruthy();
   expect(() =>
-    c.board.list("research", {
-      relation: "owned",
-      limit: 40,
-      cursor: first.cursor!,
-    }),
+    c.board.list("research", { relation: "owned", limit: 40, cursor: first.cursor! }),
   ).toThrow("query mismatch");
   const second = c.board.list("research", {
       relation: "available",
       limit: 40,
       cursor: first.cursor!,
     }),
-    third = c.board.list("research", {
-      relation: "available",
-      limit: 40,
-      cursor: second.cursor!,
-    });
+    third = c.board.list("research", { relation: "available", limit: 40, cursor: second.cursor! });
   expect(new Set([...first.items, ...second.items, ...third.items].map((item) => item.id))).toEqual(
     new Set(ids),
   );
@@ -132,9 +122,7 @@ it("does not widen a failed unpublished task beyond its creator or assignee", ()
     id = c.createTask("research", work, target, "unpublished private title"),
     output = c.send("research", work, target, "unpublished", "failed-publication");
   c.draftTask("research", id, output);
-  c.store.transitionOutput(output, "pending", "failed", {
-    reason: "synthetic",
-  });
+  c.store.transitionOutput(output, "pending", "failed", { reason: "synthetic" });
   c.activateDelegations();
   expect(c.task(id).status).toBe("failed");
   expect(() => c.board.read("peer", id)).toThrow("not visible");
@@ -263,10 +251,7 @@ it("records private reminder transport and semantic result separately with indep
   });
   const firingId = payloads[0].firingId,
     done = c.reminders.finish("research", firingId, "deferred", "Need a fresh source");
-  expect(done).toMatchObject({
-    status: "deferred",
-    deferredDoesNotReschedule: true,
-  });
+  expect(done).toMatchObject({ status: "deferred", deferredDoesNotReschedule: true });
   expect(c.reminders.finish("research", firingId, "deferred", "Need a fresh source")).toEqual(done);
   expect(() => c.reminders.finish("research", firingId, "completed")).toThrow("conflict");
   reminder = c.reminders.read("research", reminder.id);

@@ -48,12 +48,7 @@ const fileEntry = z
   })
   .strict();
 const symlinkEntry = z
-  .object({
-    path: relativePath,
-    type: z.literal("symlink"),
-    mode,
-    target: z.string(),
-  })
+  .object({ path: relativePath, type: z.literal("symlink"), mode, target: z.string() })
   .strict();
 export const checkpointEntrySchema = z.discriminatedUnion("type", [
   directoryEntry,
@@ -72,12 +67,7 @@ export const checkpointManifestSchema = z
     at: z.iso.datetime(),
     configurationHash: z.string().regex(/^[a-f0-9]{64}$/),
     agents: z.array(
-      z
-        .object({
-          agentId: agentIdSchema,
-          entries: z.array(checkpointEntrySchema),
-        })
-        .strict(),
+      z.object({ agentId: agentIdSchema, entries: z.array(checkpointEntrySchema) }).strict(),
     ),
     database: fileInventory.extend({ sourceSha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict(),
   })
@@ -228,11 +218,7 @@ async function walk(root: string, copyRoot?: string): Promise<CheckpointEntry[]>
     if (relative === "lost+found" && before.isDirectory()) return;
     if (before.isDirectory()) {
       if (relative) {
-        entries.push({
-          path: relative,
-          type: "directory",
-          mode: permissions(before),
-        });
+        entries.push({ path: relative, type: "directory", mode: permissions(before) });
         if (destination) await mkdir(destination, { mode: 0o700 });
       }
       if ((await realpath(source)) !== resolve(source))
@@ -293,12 +279,7 @@ async function walk(root: string, copyRoot?: string): Promise<CheckpointEntry[]>
         (await realpath(parent)) !== resolve(parent)
       )
         throw new Error("Checkpoint symlink changed while reading");
-      entries.push({
-        path: relative,
-        type: "symlink",
-        mode: permissions(before),
-        target,
-      });
+      entries.push({ path: relative, type: "symlink", mode: permissions(before), target });
       return;
     }
     throw new Error(`Checkpoint contains unsupported special file: ${relative}`);
@@ -324,12 +305,7 @@ export async function inventoryWorkspace(root: string): Promise<CheckpointEntry[
 
 function payloadShape(entry: CheckpointEntry): unknown {
   return entry.type === "file"
-    ? {
-        path: entry.path,
-        type: entry.type,
-        size: entry.size,
-        sha256: entry.sha256,
-      }
+    ? { path: entry.path, type: entry.type, size: entry.size, sha256: entry.sha256 }
     : entry.type === "symlink"
       ? { path: entry.path, type: entry.type, target: entry.target }
       : { path: entry.path, type: entry.type };

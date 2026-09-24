@@ -39,10 +39,7 @@ export function localApplication(store: Store, settings: TeamSettings) {
       throw new Error("External transport unavailable");
     },
     pendingInput: () => false,
-    classify: () => ({
-      kind: "rejected",
-      reason: "External transport unavailable",
-    }),
+    classify: () => ({ kind: "rejected", reason: "External transport unavailable" }),
   });
   const collaboration = new Collaboration(store, messages, output, settings);
   output.gate = new CanonicalFreshnessGate(messages, collaboration.attention);

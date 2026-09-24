@@ -84,10 +84,7 @@ it("runs the preconfigured team through the permanent daemon while preserving in
     if (previous === undefined) delete process.env.MODEL_API_KEY;
     else process.env.MODEL_API_KEY = previous;
   });
-  const daemon = await Daemon.create(config, {
-    info: () => {},
-    error: () => {},
-  });
+  const daemon = await Daemon.create(config, { info: () => {}, error: () => {} });
   cleanup.push(() => daemon.close());
   vi.spyOn(daemon.supervisor, "recovery").mockResolvedValue("synthetic recovery");
   const ownerRuns: string[] = [];
@@ -102,17 +99,9 @@ it("runs the preconfigured team through the permanent daemon while preserving in
         .get(agent.id) as { payload: string };
       const payload = JSON.parse(delivery.payload);
       if (payload.messageKey !== ownerMessageId)
-        return {
-          tokens: 1,
-          cost: 0,
-          certain: true,
-          waiting: false,
-          continuation: false,
-        };
+        return { tokens: 1, cost: 0, certain: true, waiting: false, continuation: false };
       const view = (
-        await hooks.tool(`read-${agent.id}`, "attention.read", {
-          target: payload.target,
-        })
+        await hooks.tool(`read-${agent.id}`, "attention.read", { target: payload.target })
       ).value as any;
       if (
         !view.messages.some(
@@ -137,13 +126,7 @@ it("runs the preconfigured team through the permanent daemon while preserving in
           acknowledge: "send_despite_unread_or_changes",
         });
       }
-      return {
-        tokens: 2,
-        cost: 0,
-        certain: true,
-        waiting: false,
-        continuation: false,
-      };
+      return { tokens: 2, cost: 0, certain: true, waiting: false, continuation: false };
     },
   }));
   const console = new LocalConsole(daemon.local!, daemon.controls);
@@ -162,10 +145,7 @@ it("runs the preconfigured team through the permanent daemon while preserving in
       agent_id: string;
       payload: string;
     }[]
-  ).map((row) => ({
-    agentId: row.agent_id,
-    messageKey: JSON.parse(row.payload).messageKey,
-  }));
+  ).map((row) => ({ agentId: row.agent_id, messageKey: JSON.parse(row.payload).messageKey }));
   expect(queued).toEqual([
     { agentId: "research", messageKey: ownerMessageId },
     { agentId: "writer", messageKey: ownerMessageId },

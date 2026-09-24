@@ -36,35 +36,22 @@ it("keeps opaque identities, authority and projection routing independent of pro
   expect(() => r.validateTarget({ conversationId: dm.id, threadId: reply.id })).toThrow(
     "Invalid target",
   );
-  const locator = {
-    provider: "example",
-    workspace: "personal",
-    externalId: "space-9",
-  };
+  const locator = { provider: "example", workspace: "personal", externalId: "space-9" };
   r.bindConversation(locator, dm.id, "projection");
   expect(() => r.bindConversation(locator, channel.id, "primary")).toThrow("already bound");
   expect(() => r.bindConversation({ ...locator, externalId: "other" }, dm.id, "primary")).toThrow(
     "authority",
   );
   expect(() => r.createConversation("channel", "external", dm.id)).toThrow("identity conflict");
-  expect(s.db.prepare("SELECT count(*) n FROM channel_access").get()).toEqual({
-    n: 0,
-  });
-  expect(s.db.prepare("SELECT count(*) n FROM messages").get()).toEqual({
-    n: 0,
-  });
+  expect(s.db.prepare("SELECT count(*) n FROM channel_access").get()).toEqual({ n: 0 });
+  expect(s.db.prepare("SELECT count(*) n FROM messages").get()).toEqual({ n: 0 });
 });
 
 it("rejects cross-conversation message bindings and preserves globally distinct same-local-ID messages", () => {
   const { r } = setup();
   const a = r.createConversation("channel", "external", "old-channel");
   const b = r.createConversation("channel", "external");
-  const la = {
-    provider: "example",
-    workspace: "one",
-    externalId: "a",
-    messageId: "100",
-  };
+  const la = { provider: "example", workspace: "one", externalId: "a", messageId: "100" };
   const lb = { ...la, externalId: "b" };
   r.bindConversation(la, a.id, "primary");
   r.bindConversation(lb, b.id, "primary");
@@ -103,19 +90,14 @@ it("migrates old references and missing roots without rewriting immutable unknow
     text: "wire evidence",
   });
   s.transitionOutput("unknown", "pending", "sending");
-  s.transitionOutput("unknown", "sending", "unknown", {
-    reason: "lost response",
-  });
+  s.transitionOutput("unknown", "sending", "unknown", { reason: "lost response" });
   s.queueOutput("research", "artifact", {
     target: { channel: "CTEST" },
     text: "caption",
     artifact: { content: "frozen bytes", contentHash: "hash" },
   });
   s.transitionOutput("artifact", "pending", "sending");
-  s.transitionOutput("artifact", "sending", "unknown", {
-    fileId: "FFILE",
-    phase: "sharing",
-  });
+  s.transitionOutput("artifact", "sending", "unknown", { fileId: "FFILE", phase: "sharing" });
   const before = s.db.prepare("SELECT * FROM outbox ORDER BY id").all();
   const journal = s.context(s.register("research", "legacy", []));
   migrateLegacyReferences(s, "TTEST");
@@ -126,9 +108,7 @@ it("migrates old references and missing roots without rewriting immutable unknow
   });
   expect(r.message(encode(["TTEST", "CTEST", "102.000001"])).rootId).toBe(target.threadId);
   expect(r.message(encode(["TTEST", "CTWO", "102.000001"])).conversationId).toBe("CTWO");
-  expect(s.db.prepare("SELECT count(*) n FROM messages").get()).toEqual({
-    n: 2,
-  });
+  expect(s.db.prepare("SELECT count(*) n FROM messages").get()).toEqual({ n: 2 });
   expect(s.db.prepare("SELECT count(*) n FROM message_identities").get()).toEqual({ n: 4 });
   expect(s.db.prepare("SELECT * FROM outbox ORDER BY id").all()).toEqual(before);
   expect(s.context(s.register("research", "legacy", []))).toEqual(journal);
@@ -140,20 +120,12 @@ it("migrates old references and missing roots without rewriting immutable unknow
 it("rolls mapping and view changes back on a conflicting legacy reference", () => {
   const { s } = setup();
   s.register("research", "legacy", []);
-  s.queueOutput("research", "valid", {
-    target: { channel: "CTEST" },
-    text: "valid",
-  });
-  s.queueOutput("research", "invalid", {
-    target: { channel: "not-slack" },
-    text: "conflict",
-  });
+  s.queueOutput("research", "valid", { target: { channel: "CTEST" }, text: "valid" });
+  s.queueOutput("research", "invalid", { target: { channel: "not-slack" }, text: "conflict" });
   expect(() => migrateLegacyReferences(s, "TTEST")).toThrow();
   expect(s.db.prepare("SELECT count(*) n FROM conversation_identities").get()).toEqual({ n: 0 });
   expect(s.db.prepare("SELECT count(*) n FROM canonical_targets").get()).toEqual({ n: 0 });
-  expect(s.db.prepare("SELECT context_epoch FROM sessions").get()).toEqual({
-    context_epoch: 0,
-  });
+  expect(s.db.prepare("SELECT context_epoch FROM sessions").get()).toEqual({ context_epoch: 0 });
 });
 
 it("backs up a v15 database before adding identity mappings and preserves old wire bytes on reopen", () => {
@@ -162,10 +134,7 @@ it("backs up a v15 database before adding identity mappings and preserves old wi
   const path = join(dir, "state.sqlite");
   const original = new Store(path);
   original.register("research", "legacy", []);
-  original.queueOutput("research", "old", {
-    target: { channel: "CTEST" },
-    text: "same bytes",
-  });
+  original.queueOutput("research", "old", { target: { channel: "CTEST" }, text: "same bytes" });
   const effect = original.output("old");
   original.db.exec(
     "DROP TABLE canonical_targets; DROP TABLE message_bindings; DROP TABLE message_identities; DROP TABLE conversation_bindings; DROP TABLE conversation_identities; PRAGMA user_version=15",

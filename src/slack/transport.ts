@@ -92,11 +92,7 @@ export class CanonicalSlackTransport implements ExternalMessageTransport {
     return slackTextMatches(expected, observed);
   }
   classify(error: unknown): DispatchFailure {
-    const e = error as {
-      code?: string;
-      retryAfter?: number;
-      data?: { error?: string };
-    };
+    const e = error as { code?: string; retryAfter?: number; data?: { error?: string } };
     if (e?.code === "slack_webapi_rate_limited_error" && Number.isFinite(e.retryAfter))
       return { kind: "retry", afterMs: Math.max(1, e.retryAfter!) * 1000 };
     if (

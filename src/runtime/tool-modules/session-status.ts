@@ -28,10 +28,7 @@ const definitions: ToolSpec[] = [
           )
           .all(run.agentId, args.before ?? Number.MAX_SAFE_INTEGER);
       return {
-        value: {
-          items,
-          nextCursor: items.length === 100 ? (items.at(-1) as any).cursor : null,
-        },
+        value: { items, nextCursor: items.length === 100 ? (items.at(-1) as any).cursor : null },
       };
     },
   }),
@@ -66,13 +63,7 @@ const definitions: ToolSpec[] = [
       const target = request.args?.target ?? request.target;
       if (target?.conversationId) c.messages.requireAccess(actor, target.conversationId);
       if (request.args?.taskId) c.board.read(actor, request.args.taskId);
-      return {
-        value: {
-          ...row,
-          request,
-          receipt: row.receipt ? JSON.parse(row.receipt) : null,
-        },
-      };
+      return { value: { ...row, request, receipt: row.receipt ? JSON.parse(row.receipt) : null } };
     },
   }),
   spec({
@@ -97,9 +88,7 @@ const definitions: ToolSpec[] = [
     replayPolicy: "immutable",
     authorize: authorizeReferences,
     postAwait: fence,
-    handler: ({ sessions, run }, args) => ({
-      value: sessions.checkpoint(run.agentId, args.text),
-    }),
+    handler: ({ sessions, run }, args) => ({ value: sessions.checkpoint(run.agentId, args.text) }),
   }),
   spec({
     name: "sessions.reset",
@@ -142,9 +131,7 @@ const definitions: ToolSpec[] = [
     replayPolicy: "refreshable",
     authorize: authorizeReferences,
     postAwait: fence,
-    handler: ({ collaboration: c, run }) => ({
-      value: c.usage.summary(run.agentId),
-    }),
+    handler: ({ collaboration: c, run }) => ({ value: c.usage.summary(run.agentId) }),
   }),
   spec({
     name: "agents",
@@ -182,18 +169,12 @@ const definitions: ToolSpec[] = [
     replayPolicy: "refreshable",
     authorize: authorizeReferences,
     postAwait: fence,
-    handler: ({ gate, run }, args) => ({
-      value: gate.describe(run.agentId, args.draftId),
-    }),
+    handler: ({ gate, run }, args) => ({ value: gate.describe(run.agentId, args.draftId) }),
   }),
   spec({
     name: "drafts.retry",
     schema: z
-      .object({
-        draftId: id,
-        revision: z.number().int().positive(),
-        viewToken: id.optional(),
-      })
+      .object({ draftId: id, revision: z.number().int().positive(), viewToken: id.optional() })
       .strict(),
     description: "Retry a held draft after obtaining a current view.",
     workPolicy: "current",
@@ -258,9 +239,7 @@ const definitions: ToolSpec[] = [
     replayPolicy: "immutable",
     authorize: authorizeReferences,
     postAwait: fence,
-    handler: ({ gate, run }, args) => ({
-      value: gate.discard(run, args.draftId, args.revision),
-    }),
+    handler: ({ gate, run }, args) => ({ value: gate.discard(run, args.draftId, args.revision) }),
   }),
 ];
 

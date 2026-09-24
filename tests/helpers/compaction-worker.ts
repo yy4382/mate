@@ -8,10 +8,7 @@ class CompactingEngine extends Engine {
     spec: import("../../src/runtime/engine.js").RunSpec,
     hooks: import("../../src/runtime/engine.js").EngineHooks,
   ) {
-    return super.run(spec, {
-      ...hooks,
-      summarize: async () => "synthetic compacted history",
-    });
+    return super.run(spec, { ...hooks, summarize: async () => "synthetic compacted history" });
   }
 }
 serveWorker(

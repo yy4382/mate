@@ -47,11 +47,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
       JSON.stringify(
         builtinModels()
           .getModels(configPath)
-          .map((m) => ({
-            provider: m.provider,
-            id: m.id,
-            contextWindow: m.contextWindow,
-          })),
+          .map((m) => ({ provider: m.provider, id: m.id, contextWindow: m.contextWindow })),
         null,
         2,
       ) + "\n",

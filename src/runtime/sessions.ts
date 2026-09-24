@@ -15,10 +15,7 @@ interface Reset {
 export class SessionLifecycle {
   constructor(
     readonly c: Collaboration,
-    readonly baseline: (agent: AgentDefinition) => {
-      configVersion: string;
-      messages: unknown[];
-    },
+    readonly baseline: (agent: AgentDefinition) => { configVersion: string; messages: unknown[] },
   ) {}
   checkpoint(actor: string, text: string): unknown {
     z.string().min(1).max(20000).parse(text);
@@ -121,11 +118,7 @@ export class SessionLifecycle {
         baseline.configVersion,
         [
           ...baseline.messages,
-          {
-            role: "user",
-            content: `Owner-provided context checkpoint:\n${text}`,
-            timestamp: 0,
-          },
+          { role: "user", content: `Owner-provided context checkpoint:\n${text}`, timestamp: 0 },
         ],
         "owner_requested",
       );

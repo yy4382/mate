@@ -93,17 +93,13 @@ export class TaskTransitions {
         to = this.state(updated) as Record<string, unknown>;
       from.targetChanged = task.target !== updated.target;
       to.targetChanged = task.target !== updated.target;
-      this.store.db.prepare("INSERT INTO task_events(task_id,at,body) VALUES(?,?,?)").run(
-        task.id,
-        Date.now(),
-        encode({
-          ...event,
-          version,
-          from,
-          to,
-          resultChanged: task.result !== updated.result,
-        }),
-      );
+      this.store.db
+        .prepare("INSERT INTO task_events(task_id,at,body) VALUES(?,?,?)")
+        .run(
+          task.id,
+          Date.now(),
+          encode({ ...event, version, from, to, resultChanged: task.result !== updated.result }),
+        );
       return updated;
     });
   }

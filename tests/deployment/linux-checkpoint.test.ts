@@ -51,12 +51,7 @@ it("backs up Linux Agent homes and restores private data with the Agent UID and 
     version: 2,
     mate: {
       ownerUserIds: ["owner"],
-      budgets: {
-        maxRuns: 10,
-        maxTokens: 1000,
-        maxCostUsd: 1,
-        runTimeoutMs: 1000,
-      },
+      budgets: { maxRuns: 10, maxTokens: 1000, maxCostUsd: 1, runTimeoutMs: 1000 },
       agents: [
         {
           id: "alice",
@@ -104,19 +99,12 @@ it("migrates Linux-user configuration using the real private home without requir
   mkdirSync(shared, { mode: 0o755 });
   chmodSync(data, 0o700);
   chmodSync(home, 0o700);
-  writeFileSync(join(home, "MEMORY.md"), "private Linux memory", {
-    mode: 0o600,
-  });
+  writeFileSync(join(home, "MEMORY.md"), "private Linux memory", { mode: 0o600 });
   const previous = daemonConfigSchema.parse({
     version: 2,
     mate: {
       ownerUserIds: ["owner"],
-      budgets: {
-        maxRuns: 10,
-        maxTokens: 1000,
-        maxCostUsd: 1,
-        runTimeoutMs: 1000,
-      },
+      budgets: { maxRuns: 10, maxTokens: 1000, maxCostUsd: 1, runTimeoutMs: 1000 },
       agents: [
         {
           id: "alice",
@@ -131,12 +119,7 @@ it("migrates Linux-user configuration using the real private home without requir
       dataDir: data,
       sharedRoot: shared,
       linuxUsers: {
-        alice: {
-          uid: process.getuid!(),
-          gid: process.getgid!(),
-          home,
-          username: "alice",
-        },
+        alice: { uid: process.getuid!(), gid: process.getgid!(), home, username: "alice" },
       },
       researchHosts: [],
     },

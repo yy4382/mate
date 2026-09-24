@@ -330,9 +330,7 @@ export class CanonicalOutput {
     try {
       this.messages.requirePublication(row.agent_id, request.target);
     } catch {
-      s.transitionOutput(id, "pending", "failed", {
-        reason: "external_publication_unavailable",
-      });
+      s.transitionOutput(id, "pending", "failed", { reason: "external_publication_unavailable" });
       return;
     }
     if (this.gate && !this.gate.dispatch(id)) return;
@@ -354,10 +352,7 @@ export class CanonicalOutput {
         });
       else if (failure.kind === "rejected")
         s.transitionOutput(id, "sending", "failed", { reason: failure.reason });
-      else
-        s.transitionOutput(id, "sending", "unknown", {
-          reason: "request_outcome_unknown",
-        });
+      else s.transitionOutput(id, "sending", "unknown", { reason: "request_outcome_unknown" });
       return;
     }
     this.confirm(id, row.request_hash, confirmation);
@@ -383,20 +378,14 @@ export class CanonicalOutput {
         },
         () => {
           if (s.output(row.id)?.state !== "sending") return false;
-          s.transitionOutput(row.id, "sending", "pending", {
-            fileId,
-            phase: "staging",
-          });
+          s.transitionOutput(row.id, "sending", "pending", { fileId, phase: "staging" });
           if (
             !this.eligible(s.output(row.id)!, request) ||
             !this.messages.access(row.agent_id, request.target.conversationId)
           )
             return false;
           if (this.gate && !this.gate.dispatch(row.id)) return false;
-          s.transitionOutput(row.id, "pending", "sending", {
-            fileId,
-            phase: "sharing",
-          });
+          s.transitionOutput(row.id, "pending", "sending", { fileId, phase: "sharing" });
           sharing = true;
           return true;
         },

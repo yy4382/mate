@@ -155,26 +155,16 @@ export class ProjectionImports {
     if (!this.permitted(b, input.author)) return state("rejected", "import_access_denied");
     if (input.occurredAt < b.createdAt)
       return state("rejected", "message_precedes_disclosure_binding");
-    const locator = {
-      provider: b.provider,
-      workspace: b.workspace,
-      externalId: b.externalId,
-    };
+    const locator = { provider: b.provider, workspace: b.workspace, externalId: b.externalId };
     const root =
       input.externalRoot === input.externalId
         ? undefined
-        : m.references.findMessage({
-            ...locator,
-            messageId: input.externalRoot,
-          });
+        : m.references.findMessage({ ...locator, messageId: input.externalRoot });
     if (input.externalRoot !== input.externalId && !root)
       return state("pending_dependency", "root_mapping_missing");
     if (root && m.references.message(root).rootId !== root)
       return state("rejected", "invalid_thread_root");
-    const target = {
-      conversationId: b.conversationId,
-      ...(root ? { threadId: root } : {}),
-    };
+    const target = { conversationId: b.conversationId, ...(root ? { threadId: root } : {}) };
     if (row.message_id) {
       const old = m.records.message(row.message_id);
       if (!old) throw new Error("Imported canonical message missing");

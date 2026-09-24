@@ -37,15 +37,9 @@ it("resumes from the page cursor persisted before a transient failure", async ()
     onPage = vi.fn(),
     input = { ...options(store, first), onPage };
   expect(await recoverSlackHistory(input)).toBe(false);
-  const resumed = vi.fn(async () => ({
-    messages: [{ ts: "12.000000" }],
-    next: undefined,
-  }));
+  const resumed = vi.fn(async () => ({ messages: [{ ts: "12.000000" }], next: undefined }));
   expect(await recoverSlackHistory({ ...input, fetch: resumed })).toBe(true);
-  expect(resumed).toHaveBeenCalledWith({
-    oldest: "10.000000",
-    cursor: "page-2",
-  });
+  expect(resumed).toHaveBeenCalledWith({ oldest: "10.000000", cursor: "page-2" });
   expect(
     store.db
       .prepare("SELECT ts FROM slack_cursors WHERE agent_id='research' AND channel='C'")
@@ -55,9 +49,7 @@ it("resumes from the page cursor persisted before a transient failure", async ()
 });
 it("drops an expired page cursor but retains the original oldest boundary for an idempotent rescan", async () => {
   const store = setup(),
-    expired = Object.assign(new Error("expired"), {
-      data: { error: "invalid_cursor" },
-    }),
+    expired = Object.assign(new Error("expired"), { data: { error: "invalid_cursor" } }),
     first = vi.fn(async ({ cursor }: { cursor: string | undefined }) => {
       if (cursor) throw expired;
       return { messages: [{ ts: "11.000000" }], next: "expired" };
@@ -73,18 +65,12 @@ it("drops an expired page cursor but retains the original oldest boundary for an
     return { messages: [{ ts: "12.000000" }], next: undefined };
   });
   expect(await recoverSlackHistory({ ...input, fetch: resumed })).toBe(true);
-  expect(resumed).toHaveBeenCalledWith({
-    oldest: "10.000000",
-    cursor: undefined,
-  });
+  expect(resumed).toHaveBeenCalledWith({ oldest: "10.000000", cursor: undefined });
   expect(input.ingest).toHaveBeenCalledTimes(3);
 });
 it("fails closed on a repeated cursor without advancing the complete watermark", async () => {
   const store = setup(),
-    fetch = vi.fn(async () => ({
-      messages: [{ ts: "11.000000" }],
-      next: "same",
-    }));
+    fetch = vi.fn(async () => ({ messages: [{ ts: "11.000000" }], next: "same" }));
   expect(await recoverSlackHistory(options(store, fetch))).toBe(false);
   expect(
     store.db
@@ -114,33 +100,21 @@ it("persists a generic complete-scan cursor and clears it only after exhaustion"
         .value,
     ),
   ).toMatchObject({ cursor: "3" });
-  expect(
-    await scanSlackPages({
-      store,
-      key,
-      fetch,
-      visit: (messages) => messages[0] === 6,
-    }),
-  ).toBe("found");
+  expect(await scanSlackPages({ store, key, fetch, visit: (messages) => messages[0] === 6 })).toBe(
+    "found",
+  );
   expect(fetch.mock.calls.at(-1)?.[0]).toBe("6");
   expect(store.db.prepare("SELECT value FROM runtime_meta WHERE key=?").get(key)).toBeUndefined();
 });
 it("bounds an invalid-cursor rescan instead of looping forever on a broken page", async () => {
   const store = setup(),
-    expired = Object.assign(new Error("expired"), {
-      data: { error: "invalid_cursor" },
-    });
+    expired = Object.assign(new Error("expired"), { data: { error: "invalid_cursor" } });
   const fetch = vi.fn(async (cursor: string | undefined) => {
     if (cursor) throw expired;
     return { messages: [], next: "expired" };
   });
   await expect(
-    scanSlackPages({
-      store,
-      key: "slack_scan:expired",
-      fetch,
-      visit: () => false,
-    }),
+    scanSlackPages({ store, key: "slack_scan:expired", fetch, visit: () => false }),
   ).rejects.toThrow("expired");
   expect(fetch).toHaveBeenCalledTimes(4);
 });
@@ -149,37 +123,16 @@ it("pauses a reconciliation scan after its page budget and resumes durably", asy
     key = "slack_scan:budget",
     fetch = vi.fn(async (cursor: string | undefined) => {
       const page = cursor ? Number(cursor) : 0;
-      return {
-        messages: [page],
-        next: page < 4 ? String(page + 1) : undefined,
-      };
+      return { messages: [page], next: page < 4 ? String(page + 1) : undefined };
     });
-  expect(
-    await scanSlackPages({
-      store,
-      key,
-      maxPages: 2,
-      fetch,
-      visit: () => false,
-    }),
-  ).toBe("paused");
-  expect(
-    await scanSlackPages({
-      store,
-      key,
-      maxPages: 2,
-      fetch,
-      visit: () => false,
-    }),
-  ).toBe("paused");
-  expect(
-    await scanSlackPages({
-      store,
-      key,
-      maxPages: 2,
-      fetch,
-      visit: () => false,
-    }),
-  ).toBe("exhausted");
+  expect(await scanSlackPages({ store, key, maxPages: 2, fetch, visit: () => false })).toBe(
+    "paused",
+  );
+  expect(await scanSlackPages({ store, key, maxPages: 2, fetch, visit: () => false })).toBe(
+    "paused",
+  );
+  expect(await scanSlackPages({ store, key, maxPages: 2, fetch, visit: () => false })).toBe(
+    "exhausted",
+  );
   expect(fetch.mock.calls.map((call) => call[0])).toEqual([undefined, "1", "2", "3", "4"]);
 });

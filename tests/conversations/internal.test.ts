@@ -63,10 +63,7 @@ it("opens one durable peer DM, commits work-bound delivery and never calls an ex
     post = vi.spyOn(f.output.transport, "post"),
     pending = vi.spyOn(f.output.transport, "pendingInput");
   f.collaboration.send("alice", work, dm, "hello", "send", { run: a });
-  const draft = f.output.gate!.describe("alice", "send") as {
-    revision: number;
-    holdId: string;
-  };
+  const draft = f.output.gate!.describe("alice", "send") as { revision: number; holdId: string };
   f.output.gate!.continueOnce(a, "send", draft.revision, draft.holdId);
   await f.output.send("send");
   await f.output.send("send");
@@ -102,10 +99,7 @@ it("rolls back an interrupted internal commit and retries once after reopening",
     };
   const work = f.collaboration.createWork("activity", dm);
   f.collaboration.send("alice", work, dm, "durable", "send", { run });
-  const draft = f.output.gate!.describe("alice", "send") as {
-    revision: number;
-    holdId: string;
-  };
+  const draft = f.output.gate!.describe("alice", "send") as { revision: number; holdId: string };
   f.output.gate!.continueOnce(run, "send", draft.revision, draft.holdId);
   f.s.db.exec(
     "CREATE TRIGGER fail_delivery BEFORE INSERT ON delivery_work BEGIN SELECT RAISE(ABORT,'injected failure'); END;",
@@ -141,14 +135,7 @@ it("local human input uses the real Supervisor and isolated Agent sessions witho
   const broker = new Broker(
     f.s,
     f.collaboration,
-    {
-      execute: async () => ({
-        code: 0,
-        stdout: "",
-        stderr: "",
-        truncated: false,
-      }),
-    },
+    { execute: async () => ({ code: 0, stdout: "", stderr: "", truncated: false }) },
     {},
   );
   const router = new ToolRouter(f.collaboration, broker, undefined, f.directory),
@@ -157,13 +144,7 @@ it("local human input uses the real Supervisor and isolated Agent sessions witho
     close() {},
     async run(spec) {
       seen.push(JSON.stringify(spec));
-      return {
-        tokens: 7,
-        cost: 0.01,
-        certain: true,
-        waiting: false,
-        continuation: false,
-      };
+      return { tokens: 7, cost: 0.01, certain: true, waiting: false, continuation: false };
     },
   }));
   cleanup.push(() => supervisor.close());
@@ -218,13 +199,8 @@ it("preserves review-seat isolation when a peer sends an internal DM before rest
     () => "/synthetic-clean-workspace",
   );
   const work = f.collaboration.createWork("activity", dm);
-  f.collaboration.send("alice", work, dm, "PRIVATE_PEER_ARGUMENT", "send", {
-    run,
-  });
-  const draft = f.output.gate!.describe("alice", "send") as {
-    revision: number;
-    holdId: string;
-  };
+  f.collaboration.send("alice", work, dm, "PRIVATE_PEER_ARGUMENT", "send", { run });
+  const draft = f.output.gate!.describe("alice", "send") as { revision: number; holdId: string };
   f.output.gate!.continueOnce(run, "send", draft.revision, draft.holdId);
   await f.output.send("send");
   f.s.close();
@@ -235,14 +211,7 @@ it("preserves review-seat isolation when a peer sends an internal DM before rest
   const broker = new Broker(
     second.s,
     second.collaboration,
-    {
-      execute: async () => ({
-        code: 0,
-        stdout: "",
-        stderr: "",
-        truncated: false,
-      }),
-    },
+    { execute: async () => ({ code: 0, stdout: "", stderr: "", truncated: false }) },
     {},
   );
   const router = new ToolRouter(second.collaboration, broker, undefined, second.directory);
@@ -251,13 +220,7 @@ it("preserves review-seat isolation when a peer sends an internal DM before rest
     close() {},
     async run(spec) {
       observed = JSON.stringify(spec);
-      return {
-        tokens: 1,
-        cost: 0,
-        certain: true,
-        waiting: false,
-        continuation: false,
-      };
+      return { tokens: 1, cost: 0, certain: true, waiting: false, continuation: false };
     },
   }));
   cleanup.push(() => supervisor.close());
@@ -287,10 +250,7 @@ it("Slack background membership and history never pass internal identifiers to i
   });
   const transport = {
     mapper: {
-      config: {
-        teamId: "TEST",
-        agents: settings.agents.map((a) => ({ ...a, channels: {} })),
-      },
+      config: { teamId: "TEST", agents: settings.agents.map((a) => ({ ...a, channels: {} })) },
       target,
     },
     clients: new Map(settings.agents.map((a) => [a.id, {}])),
@@ -308,9 +268,7 @@ it("rejects unsupported internal artifact/projection before recording a send int
       conversationId: string;
     };
   expect(() =>
-    f.output.queueArtifact("alice", dm, "caption", {} as any, "artifact", {
-      run,
-    }),
+    f.output.queueArtifact("alice", dm, "caption", {} as any, "artifact", { run }),
   ).toThrow("not supported");
   expect(f.s.output("artifact")).toBeUndefined();
   f.messages.references.bindConversation(

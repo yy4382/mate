@@ -34,10 +34,7 @@ export class Broker {
     const request = { workId, operation, policyVersion: "linux-user-1" };
     const action = this.store.prepareAction(run, actionId, request);
     if (action.state === "succeeded" || action.state === "failed")
-      return {
-        status: action.state,
-        receipt: action.receipt ? JSON.parse(action.receipt) : null,
-      };
+      return { status: action.state, receipt: action.receipt ? JSON.parse(action.receipt) : null };
     if (action.state === "unknown" || action.state === "executing")
       return { status: "action_unknown", actionId };
     if (signal?.aborted) throw new Error("Action aborted before execution");

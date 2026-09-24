@@ -8,43 +8,25 @@
         "id": "research",
         "name": "Research",
         "role": "Find primary evidence, challenge assumptions, and record reusable findings.",
-        "model": {
-          "provider": "anthropic",
-          "id": "claude-haiku-4-5",
-          "apiKeyEnv": "MODEL_API_KEY"
-        }
+        "model": { "provider": "anthropic", "id": "claude-haiku-4-5", "apiKeyEnv": "MODEL_API_KEY" }
       },
       {
         "id": "writer",
         "name": "Writer",
         "role": "Independently verify evidence, revise drafts, and deliver clear artifacts.",
-        "model": {
-          "provider": "anthropic",
-          "id": "claude-haiku-4-5",
-          "apiKeyEnv": "MODEL_API_KEY"
-        }
+        "model": { "provider": "anthropic", "id": "claude-haiku-4-5", "apiKeyEnv": "MODEL_API_KEY" }
       }
     ]
   },
   "adapters": {
     "local": {
       "humans": ["owner"],
-      "rooms": [
-        {
-          "id": "team-room",
-          "agents": ["research", "writer"],
-          "humans": ["owner"]
-        }
-      ]
+      "rooms": [{ "id": "team-room", "agents": ["research", "writer"], "humans": ["owner"] }]
     }
   },
   "runtime": {
     "dataDir": "/var/lib/mate-local",
-    "limits": {
-      "maxActiveRuns": 1,
-      "maxBackendOperations": 1,
-      "workerIdleMs": 300000
-    },
+    "limits": { "maxActiveRuns": 1, "maxBackendOperations": 1, "workerIdleMs": 300000 },
     "researchHosts": ["example.com"]
   }
 }

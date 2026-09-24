@@ -100,19 +100,14 @@ it("directory uses acting identity, paginates and opens an active workspace user
       [
         "research",
         {
-          users: {
-            conversations,
-            info: async () => ({ user: { id: "UTWO", team_id: "TTEST" } }),
-          },
+          users: { conversations, info: async () => ({ user: { id: "UTWO", team_id: "TTEST" } }) },
           conversations: { open, members: async () => ({ members: ["UTWO"] }) },
         } as any,
       ],
     ]),
     m.mapper,
   );
-  expect(await directory.spaces("research")).toMatchObject({
-    incomplete: false,
-  });
+  expect(await directory.spaces("research")).toMatchObject({ incomplete: false });
   expect(conversations).toHaveBeenCalledTimes(2);
   expect(m.access("research", m.mapper.conversation("CSECOND"))).toBe(true);
   await expect(directory.members("research", m.mapper.conversation("CSECRET"))).rejects.toThrow(
@@ -151,9 +146,7 @@ it("uncertain DM opening is not replayed under a new action id", async () => {
       [
         "research",
         {
-          users: {
-            info: async () => ({ user: { id: "UTWO", team_id: "TTEST" } }),
-          },
+          users: { info: async () => ({ user: { id: "UTWO", team_id: "TTEST" } }) },
           conversations: { open },
         } as any,
       ],
@@ -199,9 +192,7 @@ it("v7 upgrade makes a private consistent backup and retains old targets and mes
       },
       ["research"],
     );
-    const output = new LegacyOutput(m, {
-      post: async () => ({ ts: "101.000001" }),
-    });
+    const output = new LegacyOutput(m, { post: async () => ({ ts: "101.000001" }) });
     output.queue("research", { channel: "CTEST", thread: "100.000001" }, "legacy reply", "legacy");
     initial.db.exec(
       "DROP TABLE canonical_targets; DROP TABLE message_bindings; DROP TABLE message_identities; DROP TABLE conversation_bindings; DROP TABLE conversation_identities; DROP TABLE session_resets; DROP TABLE agent_checkpoints; DROP TABLE reminder_firings; DROP TABLE reminder_events; DROP TABLE system_projections; ALTER TABLE schedules DROP COLUMN content; ALTER TABLE schedules DROP COLUMN anchor; ALTER TABLE schedules DROP COLUMN version; ALTER TABLE schedules DROP COLUMN legacy; DROP TABLE task_projections; DROP TABLE task_intents; DROP INDEX canonical_message_task; ALTER TABLE tasks DROP COLUMN message_key; DROP TABLE review_seats; DROP TABLE drafts; DROP TABLE attention_presented; DROP TABLE attention_views; DROP TABLE attention_seen; DROP TABLE attention_state; DROP TABLE channel_watches; ALTER TABLE sessions DROP COLUMN context_epoch; DROP TABLE budget_runs; DROP TABLE budget_accounts; DROP TABLE run_context; DROP TABLE delivery_context; DROP TABLE conversation_events; PRAGMA user_version=7",
@@ -223,9 +214,7 @@ it("v7 upgrade makes a private consistent backup and retains old targets and mes
     expect(statSync(backupPath).mode & 0o777).toBe(0o600);
     const old = new Database(backupPath, { readonly: true });
     expect(old.pragma("user_version", { simple: true })).toBe(7);
-    expect(old.prepare("SELECT id FROM agents").get()).toEqual({
-      id: "research",
-    });
+    expect(old.prepare("SELECT id FROM agents").get()).toEqual({ id: "research" });
     old.close();
     const reopened = new Store(path);
     reopened.close();
@@ -297,10 +286,7 @@ it("definitive DM rejection permits retry and uncertain receipt can reconcile th
   const run = s.beginRun("research")!;
   const open = vi
     .fn()
-    .mockRejectedValueOnce({
-      code: "slack_webapi_rate_limited_error",
-      retryAfter: 1,
-    })
+    .mockRejectedValueOnce({ code: "slack_webapi_rate_limited_error", retryAfter: 1 })
     .mockRejectedValueOnce(new Error("lost"));
   const d = new Directory(
     m,
@@ -310,9 +296,7 @@ it("definitive DM rejection permits retry and uncertain receipt can reconcile th
         {
           users: {
             info: async () => ({ user: { id: "UTWO", team_id: "TTEST" } }),
-            conversations: async () => ({
-              channels: [{ id: "DNEW", is_im: true, user: "UTWO" }],
-            }),
+            conversations: async () => ({ channels: [{ id: "DNEW", is_im: true, user: "UTWO" }] }),
           },
           conversations: { open },
         } as any,
@@ -389,10 +373,7 @@ it.each(["no_permission", "user_disabled"])(
     const run = s.beginRun("research")!;
     const open = vi
       .fn()
-      .mockRejectedValueOnce({
-        code: "slack_webapi_platform_error",
-        data: { error },
-      })
+      .mockRejectedValueOnce({ code: "slack_webapi_platform_error", data: { error } })
       .mockResolvedValueOnce({ channel: { id: "DNEW" } });
     const d = new Directory(
       m,
@@ -400,9 +381,7 @@ it.each(["no_permission", "user_disabled"])(
         [
           "research",
           {
-            users: {
-              info: async () => ({ user: { id: "UTWO", team_id: "TTEST" } }),
-            },
+            users: { info: async () => ({ user: { id: "UTWO", team_id: "TTEST" } }) },
             conversations: { open },
           } as any,
         ],

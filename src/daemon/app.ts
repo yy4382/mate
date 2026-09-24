@@ -216,10 +216,7 @@ export class Daemon {
             throw new Error("External transport unavailable");
           },
           pendingInput: () => false,
-          classify: () => ({
-            kind: "rejected",
-            reason: "External transport unavailable",
-          }),
+          classify: () => ({ kind: "rejected", reason: "External transport unavailable" }),
         },
       );
       this.collaboration = new Collaboration(this.store, messages, output, c);
@@ -261,10 +258,7 @@ export class Daemon {
             throw new Error(`Provision Linux Agent memory entry before startup: ${agent.id}`);
           for (const name of ["notes", "artifacts"])
             mkdirSync(join(root, name), { recursive: true, mode: 0o700 });
-          writeFileSync(memory, initialMemory(agent.name), {
-            flag: "wx",
-            mode: 0o600,
-          });
+          writeFileSync(memory, initialMemory(agent.name), { flag: "wx", mode: 0o600 });
         }
         if (linux) {
           const status = lstatSync(memory);

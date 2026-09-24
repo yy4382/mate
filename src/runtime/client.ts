@@ -90,12 +90,7 @@ export class WorkerClient {
           finish(new Error("Oversize worker message"));
           return;
         }
-        const envelope = raw as {
-          nonce?: string;
-          type?: string;
-          result?: unknown;
-          error?: string;
-        };
+        const envelope = raw as { nonce?: string; type?: string; result?: unknown; error?: string };
         if (envelope.nonce !== nonce || settled) return;
         if (envelope.type === "failed") {
           finish(new Error(envelope.error ?? "Worker failed"));
@@ -126,9 +121,7 @@ export class WorkerClient {
           else if (call.kind === "notice") value = await hooks.notice?.();
           else if (call.kind === "journal") {
             const msg = z
-              .object({
-                role: z.enum(["system", "user", "assistant", "toolResult"]),
-              })
+              .object({ role: z.enum(["system", "user", "assistant", "toolResult"]) })
               .passthrough()
               .parse(call.payload);
             await hooks.journal(msg as AgentMessage);
@@ -170,12 +163,7 @@ export class WorkerClient {
           if (!settled) this.child.send({ type: "reply", nonce, id: call.id, value });
         } catch (error) {
           if (!settled)
-            this.child.send({
-              type: "reply",
-              nonce,
-              id: call.id,
-              error: String(error),
-            });
+            this.child.send({ type: "reply", nonce, id: call.id, error: String(error) });
         } finally {
           busy = false;
         }

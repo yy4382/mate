@@ -103,10 +103,7 @@ it("projects only operational counts, fixed events and recovery states, never ar
     100000000,
   );
   expect(logs.events).toHaveLength(100);
-  expect(logs.events[0]).toEqual({
-    at: 100000000,
-    event: "runtime.run_failed",
-  });
+  expect(logs.events[0]).toEqual({ at: 100000000, event: "runtime.run_failed" });
   expect(JSON.stringify(logs)).not.toContain(secret);
   expect(
     diagnosticStatus(s, "active", {
@@ -118,14 +115,7 @@ it("projects only operational counts, fixed events and recovery states, never ar
 it("reports Linux upgrade and restore as pending, never healthy", () => {
   for (const recovery of [
     { ...clear, linuxUpgrade: { phase: "pending" as const } },
-    {
-      ...clear,
-      restore: {
-        phase: "decided",
-        databaseComplete: false,
-        completedAgents: 1,
-      },
-    },
+    { ...clear, restore: { phase: "decided", databaseComplete: false, completedAgents: 1 } },
   ])
     expect(diagnosticStatus(status(), "active", recovery).health).toBe("recovery-pending");
   expect(diagnosticStatus(null, "unknown", clear).health).toBe("service-not-active");
@@ -181,9 +171,7 @@ it("rejects wrapper arguments before executing any controller/systemd/journal co
     ["journalctl"],
     ["status", "$(echo secret)"],
   ]) {
-    const result = spawnSync("/bin/sh", [wrapper, ...args], {
-      encoding: "utf8",
-    });
+    const result = spawnSync("/bin/sh", [wrapper, ...args], { encoding: "utf8" });
     expect(result.status).toBe(1);
     expect(result.stderr).toMatch(/arguments|Usage/);
   }
@@ -238,14 +226,9 @@ it("documents a silent pnpm manifest command whose stdout is parseable JSON", ()
   const dir = temp();
   writeFileSync(
     join(dir, "package.json"),
-    JSON.stringify({
-      scripts: { emit: `node -e "console.log(JSON.stringify({ok:true}))"` },
-    }),
+    JSON.stringify({ scripts: { emit: `node -e "console.log(JSON.stringify({ok:true}))"` } }),
   );
-  const command = spawnSync("pnpm", ["--silent", "run", "emit"], {
-    cwd: dir,
-    encoding: "utf8",
-  });
+  const command = spawnSync("pnpm", ["--silent", "run", "emit"], { cwd: dir, encoding: "utf8" });
   expect(command.status).toBe(0);
   expect(JSON.parse(command.stdout)).toEqual({ ok: true });
   expect(slackAppManifest("alice").features.bot_user.display_name).toBe("mate_alice");
@@ -261,12 +244,7 @@ it("reads persisted SQLite with OperationsView and leaves data/schema unchanged"
     version: 2,
     mate: {
       ownerUserIds: ["owner"],
-      budgets: {
-        maxRuns: 10,
-        maxTokens: 1000,
-        maxCostUsd: 1,
-        runTimeoutMs: 1000,
-      },
+      budgets: { maxRuns: 10, maxTokens: 1000, maxCostUsd: 1, runTimeoutMs: 1000 },
       agents: [
         {
           id: "alice",
@@ -296,10 +274,7 @@ it("reads persisted SQLite with OperationsView and leaves data/schema unchanged"
   expect(JSON.stringify(diagnosticLogs(snapshot.items))).not.toContain(secret);
   expect(readFileSync(path)).toEqual(before);
   const absent = readOperationsSnapshot(
-    {
-      ...config,
-      runtime: { ...config.runtime, dataDir: join(dir, "missing") },
-    },
+    { ...config, runtime: { ...config.runtime, dataDir: join(dir, "missing") } },
     "status",
   );
   expect(absent.available).toBe(false);

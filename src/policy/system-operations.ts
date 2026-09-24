@@ -21,12 +21,7 @@ export interface PrivilegedExecutor {
   execute(
     command: SystemCommand,
     signal?: AbortSignal,
-  ): Promise<{
-    code: number;
-    stdout: string;
-    stderr: string;
-    truncated: boolean;
-  }>;
+  ): Promise<{ code: number; stdout: string; stderr: string; truncated: boolean }>;
 }
 export type SystemStatus =
   | "pending"
@@ -128,12 +123,7 @@ export class SystemOperations {
           "INSERT INTO system_requests(id,agent_id,work_id,request_hash,request,expires,status) VALUES(?,?,?,?,?,?,'pending')",
         )
         .run(id, run.agentId, workId, hash(body), body, expires);
-      this.store.audit("system_request", {
-        id,
-        agentId: run.agentId,
-        workId,
-        expires,
-      });
+      this.store.audit("system_request", { id, agentId: run.agentId, workId, expires });
       return this.view(this.row(id)!);
     });
   }
@@ -165,10 +155,7 @@ export class SystemOperations {
     if (!Number.isSafeInteger(offset) || offset < 0)
       throw new Error("Invalid system output offset");
     const request = this.ownerStatus(owner, id),
-      receipt = request.receipt as {
-        stdout?: unknown;
-        stderr?: unknown;
-      } | null;
+      receipt = request.receipt as { stdout?: unknown; stderr?: unknown } | null;
     const output = receipt?.[stream];
     if (typeof output !== "string") throw new Error("System output is not available");
     if (offset > output.length) throw new Error("System output offset exceeds length");
@@ -257,9 +244,7 @@ export class SystemOperations {
         "UPDATE system_requests SET notice_state='unknown',status='failed',receipt=? WHERE id=? AND status='pending' AND notice_state='sending'",
       )
       .run(
-        encode({
-          reason: "approval_notice_outcome_unknown; request again with a new ID",
-        }),
+        encode({ reason: "approval_notice_outcome_unknown; request again with a new ID" }),
         row.id,
       );
     this.wake(row.agent_id, row.work_id, row.id, "failed");
@@ -379,10 +364,7 @@ export class SystemOperations {
                 "UPDATE system_requests SET status='unknown',receipt=?,notice_state='pending' WHERE id=? AND status='executing'",
               )
               .run(
-                encode({
-                  reason: "privileged_execution_outcome_unknown",
-                  detail: String(error),
-                }),
+                encode({ reason: "privileged_execution_outcome_unknown", detail: String(error) }),
                 row.id,
               );
             this.wake(row.agent_id, row.work_id, row.id, "unknown");

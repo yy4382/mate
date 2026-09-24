@@ -79,10 +79,7 @@ function setup() {
       truncated: false,
     })),
   };
-  const broker = new Broker(store, c, backend, {
-    research: "/tmp",
-    writer: "/tmp",
-  });
+  const broker = new Broker(store, c, backend, { research: "/tmp", writer: "/tmp" });
   cleanups.push(() => store.close());
   return { store, c, ingress, broker, post, backend, mapper: messages.mapper };
 }
@@ -107,12 +104,7 @@ it("keeps an inaccessible listed DM closed without blocking other Slack conversa
   })) as any;
   const info = vi.fn(async ({ channel }: { channel: string }) => {
     if (channel === "DSLACKBOT") throw { data: { error: "channel_not_found" } };
-    return {
-      channel: {
-        is_im: channel.startsWith("D"),
-        is_member: channel.startsWith("C"),
-      },
-    };
+    return { channel: { is_im: channel.startsWith("D"), is_member: channel.startsWith("C") } };
   });
   transport.clients.get("research")!.conversations.info = info as any;
   transport.clients.get("writer")!.conversations.info = info as any;
@@ -161,18 +153,10 @@ it("two Agents can coordinate through one canonical message and direct peer feed
         } else if (step === 2) {
           if (phase === "claim") {
             operation = "tasks.claim";
-            args = {
-              message: { messageId: target.threadId },
-              expectedVersion: 0,
-              viewToken: view,
-            };
+            args = { message: { messageId: target.threadId }, expectedVersion: 0, viewToken: view };
           } else if (phase === "feedback") {
             operation = "messages.send";
-            args = {
-              target,
-              text: "<@UONE> Independent evidence: 2+2=4.",
-              viewToken: view,
-            };
+            args = { target, text: "<@UONE> Independent evidence: 2+2=4.", viewToken: view };
           } else {
             operation = "tasks.update";
             args = {
@@ -198,11 +182,7 @@ it("two Agents can coordinate through one canonical message and direct peer feed
             )
           : answer([{ type: "text", text: "yield" }]);
         const stream = createAssistantMessageEventStream();
-        stream.push({
-          type: "done",
-          reason: message.stopReason as "stop" | "toolUse",
-          message,
-        });
+        stream.push({ type: "done", reason: message.stopReason as "stop" | "toolUse", message });
         return stream;
       });
       return engine.run(spec, {
@@ -339,12 +319,7 @@ it("starts the Linux-user route with a separate private home and peer-visible sh
   chmodSync(sharedRoot, 0o755);
   mkdirSync(join(sharedRoot, "research"), { mode: 0o755 });
   chmodSync(join(sharedRoot, "research"), 0o755);
-  const user = {
-    uid: process.getuid!(),
-    gid: process.getgid!(),
-    home,
-    username: "research",
-  };
+  const user = { uid: process.getuid!(), gid: process.getgid!(), home, username: "research" };
   const input = daemonFixture(data, configFixture, {
     linuxUsers: { research: user },
     sharedRoot,
@@ -391,18 +366,13 @@ it("requires distinct non-root Linux identities and one shared root for the team
   );
   expect(daemonConfigSchema.safeParse(input).success).toBe(true);
   expect(
-    daemonConfigSchema.safeParse({
-      ...input,
-      runtime: { ...input.runtime, sharedRoot: undefined },
-    }).success,
+    daemonConfigSchema.safeParse({ ...input, runtime: { ...input.runtime, sharedRoot: undefined } })
+      .success,
   ).toBe(false);
   expect(
     daemonConfigSchema.safeParse({
       ...input,
-      runtime: {
-        ...input.runtime,
-        workspaceManifest: "/var/lib/mate/old-manifest.json",
-      },
+      runtime: { ...input.runtime, workspaceManifest: "/var/lib/mate/old-manifest.json" },
     }).success,
   ).toBe(false);
   expect(
@@ -522,12 +492,7 @@ it("reports a repeated owner stop as no longer running after a crash before cont
 });
 it("routes a system request through a human Slack confirmation button before privileged dispatch", async () => {
   const { store, c, ingress, broker } = setup(),
-    execute = vi.fn(async () => ({
-      code: 0,
-      stdout: "done",
-      stderr: "",
-      truncated: false,
-    }));
+    execute = vi.fn(async () => ({ code: 0, stdout: "done", stderr: "", truncated: false }));
   store.register("research", "v1", []);
   c.messages.membership("research", "CTEST", true);
   const work = c.createWork("system-approval", fixtureTarget("CTEST", "100.000001"));
@@ -558,11 +523,7 @@ it("routes a system request through a human Slack confirmation button before pri
     .mockResolvedValue({ ok: true, channel: { id: "DOWNER" } }) as any;
   client.chat.postMessage = post as any;
   const slack = new SlackService(c, transport, ingress, {} as Controls, () => false, system),
-    input = {
-      program: "/usr/bin/apt-get",
-      args: ["install", "example"],
-      cwd: "/tmp",
-    };
+    input = { program: "/usr/bin/apt-get", args: ["install", "example"], cwd: "/tmp" };
   const requested = (
     await router.call(
       run,
@@ -692,12 +653,7 @@ it("routes a system request through a human Slack confirmation button before pri
 });
 it("keeps direct system-tool refusal, expiry and changed-request replay visible without running anything", async () => {
   const { store, c, broker } = setup(),
-    execute = vi.fn(async () => ({
-      code: 0,
-      stdout: "unexpected",
-      stderr: "",
-      truncated: false,
-    }));
+    execute = vi.fn(async () => ({ code: 0, stdout: "unexpected", stderr: "", truncated: false }));
   store.register("research", "v1", []);
   c.messages.membership("research", "CTEST", true);
   const work = c.createWork("system-refusal", fixtureTarget("CTEST", "100.000001"));
@@ -711,11 +667,7 @@ it("keeps direct system-tool refusal, expiry and changed-request replay visible 
       publish: async () => ({}),
     }),
     signal = new AbortController().signal;
-  const input = {
-    program: "/usr/bin/apt-get",
-    args: ["install", "example"],
-    cwd: "/tmp",
-  };
+  const input = { program: "/usr/bin/apt-get", args: ["install", "example"], cwd: "/tmp" };
   const first = (await router.call(run, work, "refused", "system.request", input, signal))
     .value as { id: string };
   await expect(
@@ -724,10 +676,7 @@ it("keeps direct system-tool refusal, expiry and changed-request replay visible 
       work,
       "refused",
       "tools.call",
-      {
-        name: "system.request",
-        input: { ...input, args: ["remove", "example"] },
-      },
+      { name: "system.request", input: { ...input, args: ["remove", "example"] } },
       signal,
     ),
   ).rejects.toThrow("identity");
@@ -743,10 +692,7 @@ it("keeps direct system-tool refusal, expiry and changed-request replay visible 
         signal,
       )
     ).value,
-  ).toMatchObject({
-    status: "rejected",
-    receipt: { reason: "approval_rejected" },
-  });
+  ).toMatchObject({ status: "rejected", receipt: { reason: "approval_rejected" } });
   const second = (
     await router.call(
       run,
@@ -769,10 +715,7 @@ it("keeps direct system-tool refusal, expiry and changed-request replay visible 
         signal,
       )
     ).value,
-  ).toMatchObject({
-    status: "expired",
-    receipt: { reason: "approval_expired" },
-  });
+  ).toMatchObject({ status: "expired", receipt: { reason: "approval_expired" } });
   store.db
     .prepare("INSERT INTO review_seats VALUES(?,?,?,?,1)")
     .run("research", "{}", "brief", "/tmp/clean");
@@ -784,12 +727,7 @@ it("keeps direct system-tool refusal, expiry and changed-request replay visible 
 });
 it("rejects forged Slack approval envelopes and a request belonging to another Agent app", async () => {
   const { store, c, ingress } = setup(),
-    execute = vi.fn(async () => ({
-      code: 0,
-      stdout: "unexpected",
-      stderr: "",
-      truncated: false,
-    }));
+    execute = vi.fn(async () => ({ code: 0, stdout: "unexpected", stderr: "", truncated: false }));
   store.register("research", "v1", []);
   store.register("writer", "v1", []);
   c.messages.membership("writer", "CTEST", true);
@@ -814,11 +752,7 @@ it("rejects forged Slack approval envelopes and a request belonging to another A
       writer: "synthetic",
     }),
     slack = new SlackService(c, transport, ingress, {} as Controls, () => false, system);
-  const socket = {
-      on: () => {},
-      start: async () => {},
-      disconnect: async () => {},
-    },
+  const socket = { on: () => {}, start: async () => {}, disconnect: async () => {} },
     receiver = new DurableReceiver(
       store,
       "AONE",
@@ -836,18 +770,10 @@ it("rejects forged Slack approval envelopes and a request belonging to another A
     actions: [{ action_id: "mate_system_approve", value: request.id }],
   };
   await expect(
-    receiver.receive({
-      envelope_id: "wrong-app",
-      body: { ...body, api_app_id: "ATWO" },
-      ack,
-    }),
+    receiver.receive({ envelope_id: "wrong-app", body: { ...body, api_app_id: "ATWO" }, ack }),
   ).rejects.toThrow("app identity");
   await expect(
-    receiver.receive({
-      envelope_id: "wrong-team",
-      body: { ...body, team_id: "TOTHER" },
-      ack,
-    }),
+    receiver.receive({ envelope_id: "wrong-team", body: { ...body, team_id: "TOTHER" }, ack }),
   ).rejects.toThrow("workspace identity");
   expect(ack).not.toHaveBeenCalled();
   await receiver.receive({ envelope_id: "cross-app", body, ack });
@@ -984,11 +910,7 @@ it("stop during startup retains the singleton lock until startup settles and nev
       agents: [
         {
           ...configFixture.agents[0],
-          model: {
-            provider: "anthropic",
-            id: "claude-haiku-4-5",
-            apiKeyEnv: "MODEL_API_KEY",
-          },
+          model: { provider: "anthropic", id: "claude-haiku-4-5", apiKeyEnv: "MODEL_API_KEY" },
         },
       ],
     },
@@ -1044,12 +966,7 @@ it("offline replies in watched threads are durably ingested and maintain a separ
   const replies = vi.fn(async () => ({
     ok: true,
     messages: [
-      {
-        ts: "101.000001",
-        thread_ts: "100.000001",
-        user: "UOWNER",
-        text: "offline reply",
-      },
+      { ts: "101.000001", thread_ts: "100.000001", user: "UOWNER", text: "offline reply" },
     ],
   }));
   transport.clients.get("research")!.conversations.replies = replies as any;
@@ -1166,10 +1083,7 @@ it("Slack file allocation is persisted before transfer; only proven file shares 
   client.files.completeUploadExternal = vi.fn(async () => {
     throw new Error("lost receipt after share");
   }) as any;
-  const fetchMock = vi.fn(async () => ({
-    ok: true,
-    body: { cancel: async () => {} },
-  }));
+  const fetchMock = vi.fn(async () => ({ ok: true, body: { cancel: async () => {} } }));
   vi.stubGlobal("fetch", fetchMock);
   const target = fixtureTarget("CTEST", "100.000001"),
     work = c.createWork("upload", target);
@@ -1197,9 +1111,7 @@ it("Slack file allocation is persisted before transfer; only proven file shares 
       file: {
         id: "FFILE",
         user: "UONE",
-        shares: {
-          private: { CTEST: [{ ts: "200.000001", thread_ts: "100.000001" }] },
-        },
+        shares: { private: { CTEST: [{ ts: "200.000001", thread_ts: "100.000001" }] } },
       },
     })) as any;
     await service.reconcile();
@@ -1399,11 +1311,7 @@ it.each(["defer", "discard", "continue", "revise", "retry"] as const)(
             }
           } else if (step === 4 && choice === "retry") {
             operation = "drafts.retry";
-            args = {
-              draftId: draft.draftId,
-              revision: draft.revision,
-              viewToken: view,
-            };
+            args = { draftId: draft.draftId, revision: draft.revision, viewToken: view };
           } else if (step === 4 && choice === "revise") {
             operation = "drafts.continue";
             args = {
@@ -1427,11 +1335,7 @@ it.each(["defer", "discard", "continue", "revise", "retry"] as const)(
               )
             : answer([{ type: "text", text: "private turn completed" }]);
           const stream = createAssistantMessageEventStream();
-          stream.push({
-            type: "done",
-            reason: message.stopReason as "stop" | "toolUse",
-            message,
-          });
+          stream.push({ type: "done", reason: message.stopReason as "stop" | "toolUse", message });
           return stream;
         });
         return engine.run(spec, {

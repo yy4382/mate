@@ -8,10 +8,7 @@ import { encode } from "../storage/store.js";
 
 const timestamp = z.string().regex(/^\d{1,16}\.\d{1,6}$/);
 const targetSchema = z
-  .object({
-    channel: z.string().regex(/^[CDG][A-Z0-9]+$/),
-    thread: timestamp.optional(),
-  })
+  .object({ channel: z.string().regex(/^[CDG][A-Z0-9]+$/), thread: timestamp.optional() })
   .strict();
 const messageSchema = z
   .object({
@@ -102,10 +99,7 @@ export class LegacyConversationCodec {
       throw new Error("Legacy message conversation mismatch");
     // A self-thread deletion is only a fallback; all other roots are actual evidence.
     if (!(old.deleted && old.thread === old.ts)) {
-      const root = this.references.findMessage({
-        ...locator,
-        messageId: old.thread,
-      });
+      const root = this.references.findMessage({ ...locator, messageId: old.thread });
       if (!root || identity.rootId !== root) throw new Error("Legacy message thread mismatch");
     }
     return {

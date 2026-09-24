@@ -129,12 +129,7 @@ export class TaskBoard {
         .max(100)
         .parse(input.limit ?? 20);
     if (input.target) this.c.messages.references.validateTarget(input.target);
-    const bound = {
-        relation,
-        status: input.status ?? null,
-        target: input.target ?? null,
-        limit,
-      },
+    const bound = { relation, status: input.status ?? null, target: input.target ?? null, limit },
       signature = this.signature(actor, bound),
       before = this.decode(input.cursor, signature);
     const clauses = ["(? IS NULL OR id<?)"],
@@ -270,16 +265,11 @@ export class TaskBoard {
       .prepare(
         "SELECT complete_after_version,historical_complete FROM task_event_baselines WHERE task_id=?",
       )
-      .get(id) as {
-      complete_after_version: number;
-      historical_complete: number;
-    };
+      .get(id) as { complete_after_version: number; historical_complete: number };
     return {
-      items: rows.slice(0, limit).map((row) => ({
-        id: row.id,
-        at: row.at,
-        event: JSON.parse(row.body),
-      })),
+      items: rows
+        .slice(0, limit)
+        .map((row) => ({ id: row.id, at: row.at, event: JSON.parse(row.body) })),
       cursor: rows.length > limit ? this.encode(signature, String(rows[limit - 1]!.id)) : null,
       coverage: {
         historicalComplete: Boolean(baseline.historical_complete),
@@ -321,9 +311,6 @@ export class TaskBoard {
       complete &&= page.coverage.historicalComplete;
       legacy += page.coverage.legacyUnanchored;
     }
-    return {
-      categories,
-      coverage: { historicalComplete: complete, legacyUnanchored: legacy },
-    };
+    return { categories, coverage: { historicalComplete: complete, legacyUnanchored: legacy } };
   }
 }

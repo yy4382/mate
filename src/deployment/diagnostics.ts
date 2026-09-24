@@ -19,12 +19,7 @@ export function systemdState(): ServiceState {
   const result = spawnSync(
     "/usr/bin/systemctl",
     ["show", "--property=ActiveState", "--value", "mate.service"],
-    {
-      encoding: "utf8",
-      timeout: 5000,
-      maxBuffer: 4096,
-      env: { PATH: "/usr/bin:/bin", LANG: "C" },
-    },
+    { encoding: "utf8", timeout: 5000, maxBuffer: 4096, env: { PATH: "/usr/bin:/bin", LANG: "C" } },
   );
   const state = result.status === 0 ? result.stdout.trim() : "";
   return ["active", "inactive", "activating", "deactivating", "failed", "reloading"].includes(state)
@@ -98,10 +93,7 @@ export function readOperationsSnapshot(config: DaemonConfig, command: "status" |
     db.transaction(() => {
       status = view.status(owner);
       if (command === "logs") {
-        const page = view.activity(owner, {
-          sources: ["runtime", "internal_dm"],
-          limit: 100,
-        });
+        const page = view.activity(owner, { sources: ["runtime", "internal_dm"], limit: 100 });
         items = page.items;
         more = page.cursor !== null;
       }

@@ -9,11 +9,7 @@ export function slackPrincipal(config: MateConfig, user?: string, bot?: string):
     throw new Error("Conflicting legacy author identities");
   const agent = byUser ?? byBot;
   if (agent) return { kind: "agent", id: agent.id };
-  if (bot)
-    return {
-      kind: "external",
-      id: encode(["slack", config.teamId, "bot", bot]),
-    };
+  if (bot) return { kind: "external", id: encode(["slack", config.teamId, "bot", bot]) };
   if (user)
     return {
       kind: "human",

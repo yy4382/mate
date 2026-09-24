@@ -44,11 +44,7 @@ export function scripted(messages: AssistantMessage[]): StreamFn {
     const stream = createAssistantMessageEventStream();
     const message = messages[index++];
     if (!message) throw new Error("Synthetic script exhausted");
-    stream.push({
-      type: "done",
-      reason: message.stopReason as "stop" | "toolUse",
-      message,
-    });
+    stream.push({ type: "done", reason: message.stopReason as "stop" | "toolUse", message });
     return stream;
   };
 }

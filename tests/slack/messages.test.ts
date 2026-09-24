@@ -53,9 +53,7 @@ it("commits before ack, retries dedupe, database failure does not ack", async ()
   });
   const receiver = new DurableReceiver(db, "AONE", "TTEST", socket, () => {});
   const ack = vi.fn(async () => {
-    expect(db.db.prepare("SELECT count(*) n FROM ingress").get()).toEqual({
-      n: 1,
-    });
+    expect(db.db.prepare("SELECT count(*) n FROM ingress").get()).toEqual({ n: 1 });
   });
   const envelope = {
     envelope_id: "env",
@@ -69,11 +67,7 @@ it("commits before ack, retries dedupe, database failure does not ack", async ()
     "CREATE TRIGGER fail_ingress BEFORE INSERT ON ingress BEGIN SELECT RAISE(ABORT,'disk full'); END;",
   );
   await expect(
-    receiver.receive({
-      ...envelope,
-      envelope_id: "new",
-      body: { event_id: "new" },
-    }),
+    receiver.receive({ ...envelope, envelope_id: "new", body: { event_id: "new" } }),
   ).rejects.toThrow();
   expect(ack).toHaveBeenCalledTimes(2);
 });
@@ -81,9 +75,7 @@ it("multi-app observations deliver once per visible Agent, old revision cannot r
   const { db, messages, msg } = setup();
   messages.record(msg, ["research"]);
   messages.record(msg, ["research", "engineer"]);
-  expect(db.db.prepare("SELECT count(*) n FROM deliveries").get()).toEqual({
-    n: 2,
-  });
+  expect(db.db.prepare("SELECT count(*) n FROM deliveries").get()).toEqual({ n: 2 });
   messages.record({ ...msg, revision: "101.000001", text: "edited" }, ["research"]);
   messages.record({ ...msg, revision: "102.000001", deleted: true }, ["research"]);
   messages.record(msg, ["engineer"]);
@@ -113,12 +105,7 @@ it("normalizes edits/deletes and isolated DM without app_mention", () => {
     subtype: "message_changed",
     channel: "DPRIVATE",
     event_ts: "102.000001",
-    message: {
-      ts: "100.000001",
-      edited: { ts: "101.000001" },
-      user: "UOWNER",
-      text: "edited",
-    },
+    message: { ts: "100.000001", edited: { ts: "101.000001" }, user: "UOWNER", text: "edited" },
   });
   expect(messages.recent("research", messages.mapper.conversation("DPRIVATE"))[0]?.text).toBe(
     "edited",
@@ -141,10 +128,7 @@ it("cached reads and queued sends obey current membership", async () => {
   const output = new Output(messages, { post });
   const id = output.queue(
     "research",
-    {
-      conversationId: "CTEST",
-      threadId: messages.mapper.messageId("CTEST", msg.ts),
-    },
+    { conversationId: "CTEST", threadId: messages.mapper.messageId("CTEST", msg.ts) },
     "reply",
   );
   messages.membership("research", "CTEST", false);
@@ -165,41 +149,26 @@ it("background participation coalesces until window end, while explicit mentions
   const clock = vi.spyOn(Date, "now").mockReturnValue(1000);
   try {
     messages.record({ ...msg, text: "background one" }, ["research"]);
-    messages.record(
-      {
-        ...msg,
-        ts: "100.000002",
-        revision: "100.000002",
-        text: "background two",
-      },
-      ["research"],
-    );
-    expect(db.db.prepare("SELECT count(*) n FROM deliveries").get()).toEqual({
-      n: 1,
-    });
+    messages.record({ ...msg, ts: "100.000002", revision: "100.000002", text: "background two" }, [
+      "research",
+    ]);
+    expect(db.db.prepare("SELECT count(*) n FROM deliveries").get()).toEqual({ n: 1 });
     expect(messages.recent("research", "CTEST")).toHaveLength(2);
     expect(db.beginRun("research", 19999)).toBeUndefined();
     expect(db.beginRun("research", 20000)).toBeDefined();
     clock.mockReturnValue(21000);
     messages.record({ ...msg, text: "background one" }, ["research"]);
-    expect(db.db.prepare("SELECT count(*) n FROM deliveries").get()).toEqual({
-      n: 1,
-    });
+    expect(db.db.prepare("SELECT count(*) n FROM deliveries").get()).toEqual({ n: 1 });
   } finally {
     clock.mockRestore();
   }
 });
 it("send receipt directly wakes peer, echo and event_ts do not duplicate, self remains quiet", async () => {
   const { messages, db, msg } = setup();
-  const output = new Output(messages, {
-    post: async () => ({ ts: "103.000001" }),
-  });
+  const output = new Output(messages, { post: async () => ({ ts: "103.000001" }) });
   const id = output.queue(
     "research",
-    {
-      conversationId: "CTEST",
-      threadId: messages.mapper.messageId("CTEST", msg.ts),
-    },
+    { conversationId: "CTEST", threadId: messages.mapper.messageId("CTEST", msg.ts) },
     "<@UTWO> verify this",
   );
   await output.send(id);
@@ -225,10 +194,7 @@ it("send receipt directly wakes peer, echo and event_ts do not duplicate, self r
 });
 it("network uncertainty never retries; 429 waits until Retry-After and sends once", async () => {
   const { messages, db, msg } = setup();
-  const target = {
-    conversationId: "CTEST",
-    threadId: messages.mapper.messageId("CTEST", msg.ts),
-  };
+  const target = { conversationId: "CTEST", threadId: messages.mapper.messageId("CTEST", msg.ts) };
   let now = 1000;
   const post = vi
     .fn()
@@ -284,18 +250,12 @@ it("Slack internal_error can have partially succeeded and stays reconcilable", a
   const { messages, db, msg } = setup();
   const output = new Output(messages, {
     post: async () => {
-      throw {
-        code: "slack_webapi_platform_error",
-        data: { error: "internal_error" },
-      };
+      throw { code: "slack_webapi_platform_error", data: { error: "internal_error" } };
     },
   });
   const id = output.queue(
     "research",
-    {
-      conversationId: "CTEST",
-      threadId: messages.mapper.messageId("CTEST", msg.ts),
-    },
+    { conversationId: "CTEST", threadId: messages.mapper.messageId("CTEST", msg.ts) },
     "https://example.com",
   );
   await output.send(id);

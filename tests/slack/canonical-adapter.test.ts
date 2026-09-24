@@ -13,10 +13,7 @@ import { configFixture } from "../helpers/config.js";
 const stores: Store[] = [];
 afterEach(() => stores.splice(0).forEach((s) => s.close()));
 function setup(
-  unknownTarget: { channel: string; thread?: string } = {
-    channel: "CTEST",
-    thread: "1.000001",
-  },
+  unknownTarget: { channel: string; thread?: string } = { channel: "CTEST", thread: "1.000001" },
 ) {
   const s = new Store(":memory:");
   stores.push(s);
@@ -37,10 +34,7 @@ function setup(
       },
       ["research"],
     );
-  s.queueOutput("research", "old", {
-    target: unknownTarget,
-    text: "legacy reply",
-  });
+  s.queueOutput("research", "old", { target: unknownTarget, text: "legacy reply" });
   s.transitionOutput("old", "pending", "sending");
   s.transitionOutput("old", "sending", "unknown", { reason: "uncertain" });
   const original = s.output("old")!;
@@ -61,24 +55,10 @@ function setup(
   });
   const queue = (id: string, ts?: string) => {
     output.queue("research", target(ts), id, id, { run });
-    const draft = gate.describe("research", id) as {
-      revision: number;
-      holdId: string;
-    };
+    const draft = gate.describe("research", id) as { revision: number; holdId: string };
     gate.continueOnce(run, id, draft.revision, draft.holdId);
   };
-  return {
-    s,
-    ...app,
-    transport,
-    post,
-    output,
-    gate,
-    run,
-    target,
-    queue,
-    original,
-  };
+  return { s, ...app, transport, post, output, gate, run, target, queue, original };
 }
 it("old unknown and new canonical sends share precise blocking scopes without mirrored indexes", async () => {
   const f = setup();
@@ -133,10 +113,7 @@ it("authenticated legacy reconciliation preserves old wire and new dispatch carr
       thread_ts: "1.000001",
       metadata: {
         event_type: "mate_outbox",
-        event_payload: {
-          id: "new",
-          request_hash: f.s.output("new")!.request_hash,
-        },
+        event_payload: { id: "new", request_hash: f.s.output("new")!.request_hash },
       },
     }),
   );
@@ -171,10 +148,7 @@ it("normal history envelopes apply edited.ts and ignore older replay after resta
 it("routing is required and immutable, while legacy wire bytes stay unchanged", () => {
   const f = setup();
   expect(() =>
-    f.s.queueOutput("research", "unrouted", {
-      target: f.target(),
-      text: "body",
-    }),
+    f.s.queueOutput("research", "unrouted", { target: f.target(), text: "body" }),
   ).toThrow("routing required");
   expect(() =>
     f.s.db

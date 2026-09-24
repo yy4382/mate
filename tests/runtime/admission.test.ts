@@ -84,9 +84,7 @@ it("releases run admission when run binding fails", async () => {
     error: () => {},
   });
   cleanup.push(() => daemon.close());
-  const work = daemon.collaboration.createWork("binding-failure", {
-    conversationId: "team-room",
-  });
+  const work = daemon.collaboration.createWork("binding-failure", { conversationId: "team-room" });
   daemon.collaboration.enqueue("research", work, "retain-input", {});
   const binding = vi.spyOn(daemon.collaboration, "bindRunWork").mockImplementationOnce(() => {
     throw new Error("synthetic binding failure");
@@ -102,13 +100,7 @@ it("releases run admission when run binding fails", async () => {
   vi.spyOn(daemon.supervisor, "factory").mockReturnValue({
     close() {},
     async run() {
-      return {
-        tokens: 1,
-        cost: 0,
-        certain: true,
-        waiting: false,
-        continuation: false,
-      };
+      return { tokens: 1, cost: 0, certain: true, waiting: false, continuation: false };
     },
   });
   await expect(daemon.supervisor.step("research")).resolves.toBe(true);
@@ -119,11 +111,7 @@ it("shares backend admission with concurrent private-memory recovery", async () 
   cleanup.push(() => rmSync(root, { recursive: true, force: true }));
   const raw = JSON.parse(readFileSync(resolve("mate.local.example.json"), "utf8"));
   raw.runtime.dataDir = join(root, "data");
-  raw.runtime.limits = {
-    maxActiveRuns: 2,
-    maxBackendOperations: 1,
-    workerIdleMs: 300000,
-  };
+  raw.runtime.limits = { maxActiveRuns: 2, maxBackendOperations: 1, workerIdleMs: 300000 };
   let active = 0,
     maximum = 0;
   const releases: (() => void)[] = [];
@@ -161,16 +149,8 @@ it("production Daemon runs one Agent at a time, cancels a queued Agent, preserve
   cleanup.push(() => rmSync(root, { recursive: true, force: true }));
   const raw = JSON.parse(readFileSync(resolve("mate.local.example.json"), "utf8"));
   raw.runtime.dataDir = join(root, "data");
-  raw.runtime.limits = {
-    maxActiveRuns: 1,
-    maxBackendOperations: 1,
-    workerIdleMs: 600,
-  };
-  raw.mate.agents.push({
-    ...raw.mate.agents[0],
-    id: "observer",
-    name: "Observer",
-  });
+  raw.runtime.limits = { maxActiveRuns: 1, maxBackendOperations: 1, workerIdleMs: 600 };
+  raw.mate.agents.push({ ...raw.mate.agents[0], id: "observer", name: "Observer" });
   raw.adapters.local.rooms[0].agents.push("observer");
   const config = daemonConfigSchema.parse(raw);
   const previous = process.env.MODEL_API_KEY;
@@ -179,10 +159,7 @@ it("production Daemon runs one Agent at a time, cancels a queued Agent, preserve
     if (previous === undefined) delete process.env.MODEL_API_KEY;
     else process.env.MODEL_API_KEY = previous;
   });
-  const daemon = await Daemon.create(config, {
-    info: () => {},
-    error: () => {},
-  });
+  const daemon = await Daemon.create(config, { info: () => {}, error: () => {} });
   cleanup.push(() => daemon.close());
   vi.spyOn(daemon.supervisor, "recovery").mockResolvedValue("memory");
   const started: string[] = [],
@@ -197,13 +174,7 @@ it("production Daemon runs one Agent at a time, cancels a queued Agent, preserve
     async run() {
       started.push(agent.id);
       if (agent.id === "research") await researchGate;
-      return {
-        tokens: 1,
-        cost: 0,
-        certain: true,
-        waiting: false,
-        continuation: false,
-      };
+      return { tokens: 1, cost: 0, certain: true, waiting: false, continuation: false };
     },
   }));
   daemon.local!.receive(

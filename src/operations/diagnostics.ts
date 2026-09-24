@@ -1,11 +1,7 @@
 import type { ActivityItem, OperationsStatus } from "./view.js";
 
 export type RecoveryState = {
-  restore: null | {
-    phase: string;
-    databaseComplete: boolean;
-    completedAgents: number;
-  };
+  restore: null | { phase: string; databaseComplete: boolean; completedAgents: number };
   linuxUpgrade?: null | { phase: "pending" };
   invalid: boolean;
 };

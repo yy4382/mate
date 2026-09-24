@@ -95,11 +95,7 @@ it("restored transcript retains system/tool declarations and crosses channels", 
   await first.prompt("channel A: constraint");
   const messages = JSON.parse(JSON.stringify(first.state.messages)) as AgentMessage[];
   const second = new Agent({
-    initialState: {
-      messages,
-      model,
-      systemPrompt: "must not silently overwrite",
-    },
+    initialState: { messages, model, systemPrompt: "must not silently overwrite" },
     streamFn: scripted([answer([{ type: "text", text: "continued" }])]),
     sessionId: "logical-one",
   });
@@ -139,8 +135,5 @@ it("abort propagates to the running tool and settles without another model reque
   await run;
   expect(aborted).toBe(true);
   expect(agent.state.isStreaming).toBe(false);
-  expect(agent.state.messages.at(-1)).toMatchObject({
-    role: "assistant",
-    stopReason: "aborted",
-  });
+  expect(agent.state.messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "aborted" });
 });

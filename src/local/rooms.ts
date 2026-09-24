@@ -2,11 +2,7 @@ import type { Collaboration } from "../collaboration/service.js";
 import { LocalAdapter } from "./input.js";
 export interface LocalSettings {
   humans: readonly string[];
-  rooms: readonly {
-    id: string;
-    agents: readonly string[];
-    humans: readonly string[];
-  }[];
+  rooms: readonly { id: string; agents: readonly string[]; humans: readonly string[] }[];
 }
 
 /** Called inside the configuration transaction. A restart only asserts identity;

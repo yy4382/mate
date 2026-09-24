@@ -262,11 +262,7 @@ export class Supervisor {
           /* already fenced by stop */
         }
         this.router.sessions.apply(agentId);
-        s.audit("run_failure", {
-          agentId,
-          runId: run.id,
-          error: String(error),
-        });
+        s.audit("run_failure", { agentId, runId: run.id, error: String(error) });
       } finally {
         this.active.delete(agentId);
         this.scheduleIdle(agentId);

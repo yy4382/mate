@@ -39,11 +39,7 @@ export class CanonicalFreshnessGate {
     this.messages.requireAccess(actor, this.request(d).target.conversationId);
     return d;
   }
-  private request(d: Draft): {
-    target: Target;
-    text: string;
-    artifact?: ArtifactPayload;
-  } {
+  private request(d: Draft): { target: Target; text: string; artifact?: ArtifactPayload } {
     const effect = this.messages.records.targetedEffect("outbox", d.outbox_id);
     return { ...JSON.parse(effect.original.request), target: effect.target };
   }
@@ -83,9 +79,7 @@ export class CanonicalFreshnessGate {
     const s = this.messages.store;
     if (s.db.prepare("SELECT 1 FROM drafts WHERE outbox_id=?").get(id)) return;
     if (basis) s.assertRun(basis.run);
-    const request = {
-      target: this.messages.records.targetedEffect("outbox", id).target,
-    };
+    const request = { target: this.messages.records.targetedEffect("outbox", id).target };
     const projection = !!s.db.prepare("SELECT 1 FROM system_projections WHERE output_id=?").get(id);
     const valid =
       projection ||
@@ -188,9 +182,7 @@ export class CanonicalFreshnessGate {
         text,
         !!(artifact ?? request.artifact),
       );
-      s.transitionOutput(d.outbox_id, "held", "failed", {
-        reason: "draft_revised",
-      });
+      s.transitionOutput(d.outbox_id, "held", "failed", { reason: "draft_revised" });
       const next = `${id}:revision:${revision + 1}`;
       this.messages.writes.queueOutput(run.agentId, next, {
         target,
@@ -202,9 +194,7 @@ export class CanonicalFreshnessGate {
         .run(next, d.outbox_id);
       const linked = s.db
         .prepare("SELECT * FROM tasks WHERE outbox_id=? AND status='draft'")
-        .all(d.outbox_id) as (TransitionTask & {
-        assigned_to: string | null;
-      })[];
+        .all(d.outbox_id) as (TransitionTask & { assigned_to: string | null })[];
       for (const task of linked)
         if (task.assigned_to) this.messages.requireAccess(task.assigned_to, target.conversationId);
       const transitions = new TaskTransitions(s);
@@ -212,11 +202,7 @@ export class CanonicalFreshnessGate {
         transitions.change(
           task,
           { outbox_id: next, target: encode(target) },
-          {
-            action: "draft_revised",
-            actor: run.agentId,
-            cause: { previousOutboxId: d.outbox_id },
-          },
+          { action: "draft_revised", actor: run.agentId, cause: { previousOutboxId: d.outbox_id } },
         );
       for (const task of linked) this.messages.writes.mutable("tasks", task.id);
       s.db

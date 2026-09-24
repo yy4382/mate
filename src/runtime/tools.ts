@@ -355,9 +355,6 @@ export class ToolRouter {
       return result;
     const draftId = (result.value as { draftId?: unknown } | null)?.draftId;
     if (typeof draftId !== "string") throw new Error("Review-seat submission lacks an owned draft");
-    return {
-      ...result,
-      value: context.gate.describe(context.run.agentId, draftId),
-    };
+    return { ...result, value: context.gate.describe(context.run.agentId, draftId) };
   }
 }
