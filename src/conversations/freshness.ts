@@ -9,11 +9,17 @@ import {
   type ConversationTarget as Target,
 } from "../domain/conversations.js";
 import type { Conversations as Messages } from "./messages.js";
-import { TaskTransitions, type TransitionTask } from "../coordination/transitions.js";
 export interface SendBasis {
   run: RunToken;
   viewToken?: string | undefined;
   systemProjection?: boolean;
+}
+/**
+ * The task module's own reaction to a revision. Freshness moves the outbound message; which tasks
+ * follow that move is the task module's decision, supplied at construction, never written here.
+ */
+export interface PublicationRevisions {
+  republish(actor: string, previousOutboxId: string, nextOutboxId: string, target: Target): void;
 }
 interface Draft {
   id: string;
@@ -27,11 +33,25 @@ interface Draft {
 }
 /** Freshness never evaluates message quality or command execution. */
 export class CanonicalFreshnessGate {
+  private revisions: PublicationRevisions | undefined;
   constructor(
     readonly messages: Messages,
     readonly attention: Attention,
     readonly clock: () => number = Date.now,
-  ) {}
+    revisions?: PublicationRevisions,
+  ) {
+    this.revisions = revisions;
+  }
+  /**
+   * Supply the task module that follows a revised publication. The task module is built after the
+   * gate and its output, so the application assembly attaches it once, at construction time; a
+   * second, different module is refused rather than silently displacing the first.
+   */
+  attachRevisions(revisions: PublicationRevisions): void {
+    if (this.revisions && this.revisions !== revisions)
+      throw new Error("Publication revisions are already attached");
+    this.revisions = revisions;
+  }
   private draft(actor: string, id: string): Draft {
     const d = this.messages.store.db.prepare("SELECT * FROM drafts WHERE id=?").get(id) as
       Draft | undefined;
@@ -192,19 +212,9 @@ export class CanonicalFreshnessGate {
       s.db
         .prepare("INSERT INTO output_work SELECT ?,work_id FROM output_work WHERE output_id=?")
         .run(next, d.outbox_id);
-      const linked = s.db
-        .prepare("SELECT * FROM tasks WHERE outbox_id=? AND status='draft'")
-        .all(d.outbox_id) as (TransitionTask & { assigned_to: string | null })[];
-      for (const task of linked)
-        if (task.assigned_to) this.messages.requireAccess(task.assigned_to, target.conversationId);
-      const transitions = new TaskTransitions(s);
-      for (const task of linked)
-        transitions.change(
-          task,
-          { outbox_id: next, target: encode(target) },
-          { action: "draft_revised", actor: run.agentId, cause: { previousOutboxId: d.outbox_id } },
-        );
-      for (const task of linked) this.messages.writes.mutable("tasks", task.id);
+      // The revision is a message move; whatever published the previous output follows it through
+      // the task module, which owns that association.
+      this.revisions?.republish(run.agentId, d.outbox_id, next, target);
       s.db
         .prepare(
           "UPDATE drafts SET revision=revision+1,outbox_id=?,accepted_revision=NULL WHERE id=?",
@@ -257,7 +267,7 @@ export class CanonicalFreshnessGate {
     });
     return false;
   }
-  // Used for legacy queued output on startup: never silently grant a fresh baseline.
+  // Queued output that predates a decision: never silently grant a fresh baseline.
   adoptPending(): void {
     const s = this.messages.store;
     for (const row of s.db

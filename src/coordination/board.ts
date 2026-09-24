@@ -26,7 +26,6 @@ export interface TaskDTO {
   waitingOn: string | null;
   result: string | null;
   messageId: string | null;
-  legacy: boolean;
 }
 
 interface Cursor {
@@ -66,21 +65,15 @@ export class TaskBoard {
   private encode(signature: string, before: string): string {
     return Buffer.from(encode({ signature, before } satisfies Cursor)).toString("base64url");
   }
-  private visible(actor: string, row: TaskRow): boolean {
+  /**
+   * One task's visibility for one actor. A task whose message exists is visible exactly where that
+   * message is; a task whose publication is still pending is visible to the actors arranging it.
+   */
+  visible(actor: string, row: TaskRow): boolean {
     if (this.c.messages.isolated(actor))
       throw new Error("Independent review seat isolates task board");
     const target = JSON.parse(row.target) as ConversationTarget;
     if (!this.c.messages.access(actor, target.conversationId)) return false;
-    if (row.status === "draft" && row.created_by !== actor && row.assigned_to !== actor)
-      return false;
-    if (
-      !row.message_key &&
-      row.outbox_id &&
-      row.created_by !== actor &&
-      row.assigned_to !== actor &&
-      row.owner !== actor
-    )
-      return false;
     if (row.message_key) {
       const conversation = this.c.messages.references.conversation(target.conversationId);
       if (conversation.authority === "internal" && conversation.kind === "channel") return true;
@@ -90,7 +83,8 @@ export class TaskBoard {
         return false;
       }
     }
-    return row.status !== "draft" || row.created_by === actor || row.assigned_to === actor;
+    // Not published yet: only the actors arranging the publication may see it.
+    return row.created_by === actor || row.assigned_to === actor || row.owner === actor;
   }
   private dto(row: TaskRow): TaskDTO {
     this.c.messages.records.mutableTarget("tasks", row.id);
@@ -108,7 +102,6 @@ export class TaskBoard {
       waitingOn: row.waiting_on,
       result: row.result,
       messageId: row.message_key,
-      legacy: Boolean(row.legacy),
     };
   }
   list(
@@ -117,7 +110,7 @@ export class TaskBoard {
   ): {
     items: TaskDTO[];
     cursor: string | null;
-    coverage: { historicalComplete: boolean; legacyUnanchored: number };
+    coverage: { historicalComplete: boolean };
   } {
     this.c.messages.agent(actor);
     this.c.messages.requireReadable(actor);
@@ -213,10 +206,7 @@ export class TaskBoard {
     return {
       items: returned,
       cursor,
-      coverage: {
-        historicalComplete: gaps.n === 0,
-        legacyUnanchored: returned.filter((item) => item.legacy && !item.messageId).length,
-      },
+      coverage: { historicalComplete: gaps.n === 0 },
     };
   }
   read(actor: string, id: string): TaskDTO {
@@ -282,14 +272,13 @@ export class TaskBoard {
     limit = 20,
   ): {
     categories: Record<TaskRelation, { items: unknown[]; atLeast: number; cursor: string | null }>;
-    coverage: { historicalComplete: boolean; legacyUnanchored: number };
+    coverage: { historicalComplete: boolean };
   } {
     const categories = {} as Record<
       TaskRelation,
       { items: unknown[]; atLeast: number; cursor: string | null }
     >;
-    let complete = true,
-      legacy = 0;
+    let complete = true;
     for (const relation of taskRelationSchema.options) {
       const page = this.list(actor, { relation, limit }),
         items = page.items.map((item) => ({
@@ -301,7 +290,6 @@ export class TaskBoard {
           version: item.version,
           title: item.title.slice(0, 100),
           waitingOn: item.waitingOn,
-          legacy: item.legacy,
         }));
       categories[relation] = {
         items,
@@ -309,8 +297,7 @@ export class TaskBoard {
         cursor: page.cursor,
       };
       complete &&= page.coverage.historicalComplete;
-      legacy += page.coverage.legacyUnanchored;
     }
-    return { categories, coverage: { historicalComplete: complete, legacyUnanchored: legacy } };
+    return { categories, coverage: { historicalComplete: complete } };
   }
 }

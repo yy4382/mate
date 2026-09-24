@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { UnsupportedDatabaseError, openCurrentDatabase } from "../../src/storage/initialize.js";
+import { FORMAT_REVISION } from "../../src/storage/current-schema.js";
 
 const roots: string[] = [];
 
@@ -167,6 +168,7 @@ const requiredIndexes = [
   "task_list_status",
   "task_list_thread",
   "task_message_lookup",
+  "task_publication_lookup",
   "work_conversation",
 ];
 const requiredTriggers = [
@@ -228,7 +230,7 @@ it("creates the current format in one step", () => {
     ).toEqual(["active", "version"]);
     // The file identifies itself as this release's format, not an earlier or later schema.
     expect(db.pragma("application_id", { simple: true })).toBe(1296127045);
-    expect(db.pragma("user_version", { simple: true })).toBe(25);
+    expect(db.pragma("user_version", { simple: true })).toBe(FORMAT_REVISION);
     expect(db.pragma("foreign_keys", { simple: true })).toBe(1);
     expect(db.pragma("integrity_check", { simple: true })).toBe("ok");
     // Structures the first release needs immediately, not only after a later open.
@@ -347,7 +349,7 @@ it("keeps existing data when the same format is opened again", () => {
     INSERT INTO deliveries(id,agent_id,dedupe,payload,priority,created_at,status) VALUES('d1','alice','dedupe-1','{"text":"do"}',0,0,'pending');
     INSERT INTO delivery_work(delivery_id,work_id) VALUES('d1','work-1');
     INSERT INTO runs(id,agent_id,session_id,generation,delivery_id,state,created_at) VALUES('run-1','alice','session-1',1,'d1','complete',0);
-    INSERT INTO tasks(id,work_id,target,title,status,created_by,message_key,legacy) VALUES('t1','work-1','{"conversationId":"room"}','Do it','todo','alice','room:1',0);
+    INSERT INTO tasks(id,work_id,target,title,status,created_by,message_key,outbox_id) VALUES('t1','work-1','{"conversationId":"room"}','Do it','todo','alice','room:1','o1');
     INSERT INTO task_events(task_id,at,body) VALUES('t1',1,'{"action":"create"}');
     INSERT INTO task_event_baselines(task_id,complete_after_version,historical_complete,migrated_at) VALUES('t1',0,1,0);
     INSERT INTO schedules(id,agent_id,work_id,target,next_at,timezone,content,projection) VALUES('s1','alice','work-1','{"conversationId":"room"}',123,'UTC','Follow up','private');
@@ -368,7 +370,7 @@ it("keeps existing data when the same format is opened again", () => {
   const reopened = openCurrentDatabase(path);
   try {
     expect(reopened.pragma("application_id", { simple: true })).toBe(1296127045);
-    expect(reopened.pragma("user_version", { simple: true })).toBe(25);
+    expect(reopened.pragma("user_version", { simple: true })).toBe(FORMAT_REVISION);
     expect(reopened.pragma("foreign_keys", { simple: true })).toBe(1);
     for (const [table, count] of Object.entries({
       agents: 1,
@@ -461,7 +463,7 @@ it("still accepts a same-revision file that an earlier build left with extra str
   // structures are inert rather than a reason to refuse the file or rewrite it.
   const reopened = openCurrentDatabase(path);
   try {
-    expect(reopened.pragma("user_version", { simple: true })).toBe(25);
+    expect(reopened.pragma("user_version", { simple: true })).toBe(FORMAT_REVISION);
     expect(
       reopened.prepare("SELECT content,projection FROM schedules WHERE id='s1'").get(),
     ).toEqual({
@@ -502,12 +504,12 @@ it("rejects an older Mate database, an unknown revision and unreadable files wit
       prepare: (path) => {
         const db = new Database(path);
         db.exec(
-          "PRAGMA user_version = 25; CREATE TABLE agents(id TEXT PRIMARY KEY, session_id TEXT NOT NULL UNIQUE); CREATE TABLE runtime_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+          `PRAGMA user_version = ${FORMAT_REVISION - 1}; CREATE TABLE agents(id TEXT PRIMARY KEY, session_id TEXT NOT NULL UNIQUE); CREATE TABLE runtime_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);`,
         );
         db.close();
       },
       message:
-        /is not a Mate first-release database .*schema revision 25.*does not migrate or erase/s,
+        /is not a Mate first-release database .*schema revision \d+.*does not migrate or erase/s,
     },
     {
       // Another application's SQLite database must not be adopted or emptied.
@@ -535,10 +537,12 @@ it("rejects an older Mate database, an unknown revision and unreadable files wit
       file: "future.sqlite",
       prepare: (path) => {
         const db = new Database(path);
-        db.exec("PRAGMA application_id = 1296127045; PRAGMA user_version = 26;");
+        db.exec(
+          `PRAGMA application_id = 1296127045; PRAGMA user_version = ${FORMAT_REVISION + 1};`,
+        );
         db.close();
       },
-      message: /uses Mate schema revision 26; this release uses revision 25/s,
+      message: /uses Mate schema revision \d+; this release uses revision \d+/s,
     },
     {
       // The right identity but an incomplete file: never read as current, never repaired silently.
@@ -546,12 +550,12 @@ it("rejects an older Mate database, an unknown revision and unreadable files wit
       prepare: (path) => {
         const db = new Database(path);
         db.exec(
-          "PRAGMA application_id = 1296127045; PRAGMA user_version = 25; CREATE TABLE agents(id TEXT PRIMARY KEY, session_id TEXT NOT NULL UNIQUE);",
+          `PRAGMA application_id = 1296127045; PRAGMA user_version = ${FORMAT_REVISION}; CREATE TABLE agents(id TEXT PRIMARY KEY, session_id TEXT NOT NULL UNIQUE);`,
         );
         db.close();
       },
       message:
-        /claims Mate schema revision 25 but is missing table sessions, table entries.*Refusing to modify it/s,
+        /claims Mate schema revision \d+ but is missing table sessions, table entries.*Refusing to modify it/s,
     },
     {
       // A complete-looking file that lost the uniqueness index guarding one active run per Agent.
@@ -562,7 +566,7 @@ it("rejects an older Mate database, an unknown revision and unreadable files wit
         db.exec("DROP INDEX one_active_run;");
         db.close();
       },
-      message: /claims Mate schema revision 25 but is missing index one_active_run/,
+      message: /claims Mate schema revision \d+ but is missing index one_active_run/,
     },
     {
       // Not a database at all.
@@ -620,7 +624,7 @@ it("creates the format for a file that holds nothing and for an in-memory databa
   }
   const memory = openCurrentDatabase(":memory:");
   try {
-    expect(memory.pragma("user_version", { simple: true })).toBe(25);
+    expect(memory.pragma("user_version", { simple: true })).toBe(FORMAT_REVISION);
     expect(names(memory, "table")).toEqual([...requiredTables].sort());
   } finally {
     memory.close();

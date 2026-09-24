@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { Store } from "../../src/storage/store.js";
 import { configSchema } from "../../src/config.js";
 import { configFixture } from "../helpers/config.js";
-import { Messages, Output } from "../helpers/canonical-slack.js";
+import { Messages, Output, anchoredTask } from "../helpers/canonical-slack.js";
 import { Collaboration } from "../../src/collaboration/service.js";
 import { CanonicalAttention } from "../../src/conversations/attention.js";
 import { CanonicalFreshnessGate } from "../../src/conversations/freshness.js";
@@ -298,7 +298,7 @@ it("preserves immutable and refreshable replay while unknown or executing calls 
 it("replays pre-module receipts with the original selected-work request identity", async () => {
   const { router, run, work, store, c } = setup(),
     other = c.createWork("other", { conversationId: "CTEST" }),
-    taskId = c.createTask("research", other, { conversationId: "CTEST" }, "cross-work"),
+    taskId = anchoredTask(c, "research", other, { conversationId: "CTEST" }, "cross-work"),
     args = { taskId, expectedVersion: 0, status: "done" as const, result: "legacy" },
     actionId = `${run.sessionId}:legacy-cross-work`;
   store.prepareAction(run, actionId, { workId: work, operation: "tasks.update", args });
@@ -313,7 +313,7 @@ it("replays pre-module receipts with the original selected-work request identity
 it("authorizes task and reminder effects against their bound work while retaining legacy receipt identity", async () => {
   const { router, run, work, c, store } = setup(),
     other = c.createWork("other", { conversationId: "CTEST" }),
-    taskId = c.createTask("research", other, { conversationId: "CTEST" }, "cross-work");
+    taskId = anchoredTask(c, "research", other, { conversationId: "CTEST" }, "cross-work");
   c.claim("research", taskId);
   const signal = new AbortController().signal;
   const held = (
@@ -374,7 +374,7 @@ it("keeps an author's reminder reschedulable and cancellable after the task it m
   // The reminder names a task in a work item of its own, so the task's lifecycle and the work
   // item's lifecycle stay separate facts.
   const attached = c.createWork("attached-source", target),
-    taskId = c.createTask("research", attached, target, "attached change");
+    taskId = anchoredTask(c, "research", attached, target, "attached change");
   c.claim("research", taskId);
   const reminder = (
     await router.call(
@@ -472,7 +472,14 @@ it("binds canonical message claims to the existing task work instead of an unrel
     },
     ["research"],
   );
-  c.createTask("research", bound, target, "claim this", undefined, { messageKey: messageId });
+  c.createTask({
+    agentId: "research",
+    workId: bound,
+    target,
+    title: "claim this",
+    messageKey: messageId,
+    pendingOutboxId: "fixture-claim-this",
+  });
   const unrelated = c.createWork("unrelated-message", target);
   c.selectWork(run, unrelated);
   await expect(

@@ -20,6 +20,7 @@ import { storedConfiguration } from "../../src/daemon/config.js";
 import { Store } from "../../src/storage/store.js";
 import { TeamDirectory } from "../../src/conversations/team-directory.js";
 import { daemonFixture } from "../helpers/daemon-config.js";
+import { anchoredTask } from "../helpers/canonical-slack.js";
 const clean: (() => Promise<unknown> | void)[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -228,7 +229,7 @@ it("keeps identity, session, deliveries, tasks and reminders across a restart in
     ).session_id,
     work = d.collaboration.createWork("keep-work", target),
     delivery = d.collaboration.enqueue("research", work, "pending work", { text: "keep" }),
-    task = d.collaboration.createTask("research", work, target, "keep this task"),
+    task = anchoredTask(d.collaboration, "research", work, target, "keep this task"),
     reminder = d.collaboration.reminders.create("research", work, {
       target,
       content: "keep this reminder",
@@ -263,7 +264,7 @@ it("fires a reminder that came due across a restart for its author and its work 
     d = await daemon(c),
     target = { conversationId: "local-room" },
     work = d.collaboration.createWork("restart-reminder", target),
-    task = d.collaboration.createTask("research", work, target, "finish before the reminder"),
+    task = anchoredTask(d.collaboration, "research", work, target, "finish before the reminder"),
     reminder = d.collaboration.reminders.create("research", work, {
       target,
       content: "check the change after the restart",

@@ -10,6 +10,7 @@ import { Store } from "../../src/storage/store.js";
 import { acquireLock } from "../../src/daemon/lock.js";
 import { daemonFixture } from "../helpers/daemon-config.js";
 import { configFixture } from "../helpers/config.js";
+import { anchoredTask } from "../helpers/canonical-slack.js";
 import type { TeamSettings } from "../../src/domain/agents.js";
 import type { CanonicalSlackTransport } from "../../src/slack/transport.js";
 const cleanups: (() => Promise<unknown> | void)[] = [];
@@ -273,7 +274,8 @@ it("does not repeat a confirmed external operation after a restart and keeps int
   first.local!.receive("owner", "internal-1", { conversationId: "local-room" }, "kept history");
   const internalWork = first.collaboration.createWork("keep", { conversationId: "local-room" }),
     delivery = first.collaboration.enqueue("research", internalWork, "kept", { text: "keep" }),
-    task = first.collaboration.createTask(
+    task = anchoredTask(
+      first.collaboration,
       "research",
       internalWork,
       { conversationId: "local-room" },
