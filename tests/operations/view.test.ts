@@ -1,4 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Store } from "../../src/storage/store.js";
 import { localApplication } from "../../src/local/application.js";
 import { TeamDirectory } from "../../src/conversations/team-directory.js";
@@ -7,6 +10,7 @@ import { LocalConsole } from "../../src/local/console.js";
 import { formatControlReply } from "../../src/slack/service.js";
 import type { TeamSettings } from "../../src/domain/agents.js";
 import { anchoredTask } from "../helpers/canonical-slack.js";
+import { recordSlackReadiness } from "../../src/slack/readiness.js";
 
 const settings: TeamSettings = {
   agents: ["alice", "bob"].map((id) => ({
@@ -19,9 +23,11 @@ const settings: TeamSettings = {
   runTimeoutMs: 10000,
 };
 const stores: Store[] = [];
+const dirs: string[] = [];
 afterEach(() => {
   vi.useRealTimers();
   stores.splice(0).forEach((store) => store.close());
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 function setup() {
   const store = new Store(":memory:");
@@ -123,6 +129,338 @@ it("returns owner-only authoritative status without sensitive bodies and local c
     events: s.db.prepare("SELECT count(*) n FROM conversation_events").get(),
     outbox: s.db.prepare("SELECT count(*) n FROM outbox").get(),
   }).toEqual(before);
+});
+
+it("reports each held Agent's recovery wait with its scope, stage and next executable action", () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(30000);
+  const f = setup(),
+    c = f.collaboration,
+    s = f.store;
+  const transient = run(f, "alice", "transient"),
+    credential = run(f, "bob", "credential");
+  // The supervisor records the shared fault and the resume decision together; the view reads
+  // only what is durable.
+  s.finish(transient, "PRIVATE_MODEL_ERROR", "model_failure", {
+    resume: { kind: "retry", attempt: 2, nextAt: 62000, reason: "PRIVATE_MODEL_ERROR" },
+  });
+  s.audit("run_failure", {
+    agentId: "alice",
+    runId: transient.id,
+    fault: { stage: "model", category: "transient_model", reason: "provider rate limited" },
+    resume: "retry",
+  });
+  s.finish(credential, "PRIVATE_MODEL_ERROR", "model_failure", {
+    resume: { kind: "hold", hold: "human_action", reason: "PRIVATE_MODEL_ERROR" },
+  });
+  s.audit("run_failure", {
+    agentId: "bob",
+    runId: credential.id,
+    fault: { stage: "worker", category: "credential_config", reason: "model credential rejected" },
+    resume: "hold",
+  });
+  const diagnosis = c.operations.status("owner").diagnosis;
+  expect(diagnosis.sources).toEqual({
+    daemon: "read",
+    slack: "read",
+    agents: "read",
+    execution: "read",
+  });
+  // The daemon answering this view is running, and it is reported apart from every other fact.
+  expect(diagnosis.daemon).toBe("active");
+  expect(diagnosis.conditions).toContainEqual({
+    source: "agents",
+    scope: { kind: "agent", agentId: "alice" },
+    stage: "model",
+    need: "automatic_wait",
+    reason: "provider rate limited",
+    action: null,
+    nextAttemptAt: 62000,
+  });
+  // A credential failure is a configuration fix a person must make, not a wait.
+  expect(diagnosis.conditions).toContainEqual({
+    source: "agents",
+    scope: { kind: "agent", agentId: "bob" },
+    stage: "worker",
+    need: "configuration_fix",
+    reason: "model credential rejected",
+    action: "Fix this Agent's model credential or configuration, then agent-resume it.",
+    nextAttemptAt: null,
+  });
+  expect(() => c.operations.status("intruder")).toThrow("Owner only");
+});
+
+it("scopes unknown execution results and Slack readiness to the Agent, target and stage each names", () => {
+  const f = setup(),
+    c = f.collaboration,
+    s = f.store,
+    token = run(f, "alice", "unknown-run");
+  s.prepareAction(token, "unknown-action", { secret: "PRIVATE_ACTION_REQUEST" });
+  s.startAction(token, "unknown-action");
+  c.send("alice", f.work, f.target, "PRIVATE_UNKNOWN_OUTPUT", "unknown-output");
+  s.transitionOutput("unknown-output", "held", "pending");
+  s.transitionOutput("unknown-output", "pending", "sending");
+  s.transitionOutput("unknown-output", "sending", "unknown", { receipt: "PRIVATE_RECEIPT" });
+  recordSlackReadiness(s, {
+    updatedAt: 7,
+    installations: [
+      {
+        agentId: "bob",
+        state: "needs-human",
+        reason: "missing_scope",
+        action: "Grant the Slack app of bob the missing scopes and install it again.",
+        attempts: 1,
+        changedAt: 7,
+      },
+      {
+        agentId: "alice",
+        state: "waiting",
+        reason: "connection_unavailable",
+        nextAttemptAt: 99,
+        attempts: 2,
+        changedAt: 7,
+      },
+    ],
+    targets: [
+      {
+        agentId: "alice",
+        channel: "C-ROOM",
+        conversationId: "room",
+        permission: "unconfirmed",
+        history: "complete",
+        reason: "membership_unconfirmed",
+        changedAt: 7,
+      },
+    ],
+  });
+  const diagnosis = c.operations.status("owner").diagnosis;
+  // An operation that crossed the boundary without a confirmed result has to be verified, and the
+  // condition names the Agent, the operation and the run it belongs to.
+  expect(diagnosis.conditions).toContainEqual({
+    source: "execution",
+    scope: { kind: "action", agentId: "alice", actionId: "unknown-action", runId: token.id },
+    stage: "execution",
+    need: "verify_unknown_effect",
+    reason: "This operation crossed the external boundary without a confirmed result",
+    action: "Check this operation's recorded result in the Agent's activity; do not repeat it.",
+    nextAttemptAt: null,
+  });
+  expect(diagnosis.conditions).toContainEqual({
+    source: "execution",
+    scope: { kind: "output", agentId: "alice", outputId: "unknown-output" },
+    stage: "execution",
+    need: "verify_unknown_effect",
+    reason: "This outbound message crossed the external boundary without a confirmed result",
+    action: "Check whether this message reached its target before sending it again.",
+    nextAttemptAt: null,
+  });
+  // A permission problem is a configuration fix; a connection that is still coming up is a wait.
+  expect(diagnosis.conditions).toContainEqual({
+    source: "slack",
+    scope: { kind: "slack_installation", agentId: "bob" },
+    stage: null,
+    need: "configuration_fix",
+    reason: "missing_scope",
+    action: "Grant the Slack app of bob the missing scopes and install it again.",
+    nextAttemptAt: null,
+  });
+  expect(diagnosis.conditions).toContainEqual({
+    source: "slack",
+    scope: { kind: "slack_installation", agentId: "alice" },
+    stage: null,
+    need: "automatic_wait",
+    reason: "connection_unavailable",
+    action: null,
+    nextAttemptAt: 99,
+  });
+  // A target stays its own scope: it never answers for the installation or for another target.
+  expect(diagnosis.conditions).toContainEqual({
+    source: "slack",
+    scope: {
+      kind: "slack_target",
+      agentId: "alice",
+      channel: "C-ROOM",
+      conversationId: "room",
+    },
+    stage: null,
+    need: "automatic_wait",
+    reason: "membership_unconfirmed",
+    action: null,
+    nextAttemptAt: null,
+  });
+  // The owner's next step comes before the runtime's own waiting.
+  expect(diagnosis.conditions.at(-1)!.need).toBe("automatic_wait");
+  expect(diagnosis.slack).toMatchObject({ updatedAt: 7 });
+  const encoded = JSON.stringify(diagnosis);
+  for (const secret of ["PRIVATE_ACTION_REQUEST", "PRIVATE_UNKNOWN_OUTPUT", "PRIVATE_RECEIPT"])
+    expect(encoded).not.toContain(secret);
+});
+
+it("filters a durable failure record before it reaches owner output", () => {
+  const f = setup(),
+    c = f.collaboration,
+    s = f.store,
+    token = run(f, "alice", "secretive");
+  s.finish(token, "PRIVATE_RUN_ERROR", "model_failure", {
+    resume: { kind: "hold", hold: "human_action", reason: "PRIVATE_RUN_ERROR" },
+  });
+  s.audit("run_failure", {
+    agentId: "alice",
+    runId: token.id,
+    fault: {
+      stage: "model",
+      category: "credential_config",
+      reason:
+        "api key sk-live-PRIVATE0123456789 rejected; SELECT * FROM message_visibility WHERE agent_id='alice'",
+    },
+    resume: "hold",
+  });
+  const encoded = JSON.stringify(c.operations.status("owner").diagnosis);
+  expect(encoded).not.toContain("PRIVATE0123456789");
+  expect(encoded).not.toContain("message_visibility");
+  expect(encoded).toContain("model");
+});
+
+it("reproduces the same scoped diagnosis from durable records after a restart", () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(40000);
+  const dir = mkdtempSync(join(tmpdir(), "mate-diagnosis-"));
+  dirs.push(dir);
+  const data = join(dir, "data");
+  mkdirSync(join(data, "state"), { recursive: true });
+  const path = join(data, "state", "mate.sqlite");
+  let store = new Store(path),
+    app = localApplication(store, settings);
+  for (const agent of settings.agents) store.register(agent.id, "v1", []);
+  const target = app.local!.createRoom("room", ["alice", "bob"], ["owner"]),
+    work = app.collaboration.createWork("operations", target);
+  app.collaboration.enqueue("alice", work, "durable", { kind: "synthetic" });
+  const token = store.beginRun("alice", Date.now(), true)!;
+  store.prepareAction(token, "durable-action", { secret: "PRIVATE_ACTION_REQUEST" });
+  store.startAction(token, "durable-action");
+  store.finish(token, "PRIVATE_RUN_ERROR", "model_failure", {
+    resume: { kind: "hold", hold: "verify_effect", reason: "PRIVATE_RUN_ERROR" },
+  });
+  store.audit("run_failure", {
+    agentId: "alice",
+    runId: token.id,
+    fault: {
+      stage: "execution",
+      category: "unknown_effect",
+      reason: "the external effect could not be confirmed",
+    },
+    resume: "hold",
+  });
+  recordSlackReadiness(store, {
+    updatedAt: 8,
+    installations: [
+      {
+        agentId: "bob",
+        state: "connecting",
+        reason: "connecting",
+        nextAttemptAt: 41000,
+        attempts: 1,
+        changedAt: 8,
+      },
+    ],
+  });
+  const before = app.collaboration.operations.status("owner").diagnosis;
+  expect(before.conditions.length).toBeGreaterThanOrEqual(3);
+  store.close();
+
+  // A new process opens the same records: nothing in this diagnosis was remembered in memory.
+  store = new Store(path);
+  stores.push(store);
+  const reopened = localApplication(store, settings).collaboration.operations.status(
+    "owner",
+  ).diagnosis;
+  expect({ ...reopened, at: 0 }).toEqual({ ...before, at: 0 });
+  expect(reopened.sources).toEqual({
+    daemon: "read",
+    slack: "read",
+    agents: "read",
+    execution: "read",
+  });
+  expect(JSON.stringify(reopened)).not.toContain("PRIVATE_ACTION_REQUEST");
+  expect(JSON.stringify(reopened)).not.toContain("PRIVATE_RUN_ERROR");
+});
+
+it("reports the same scoped conditions in the activity view without private bodies", () => {
+  const f = setup(),
+    c = f.collaboration,
+    s = f.store,
+    token = run(f, "alice", "activity-held");
+  s.prepareAction(token, "activity-action", { secret: "PRIVATE_ACTION_REQUEST" });
+  s.startAction(token, "activity-action");
+  s.finish(token, "PRIVATE_RUN_ERROR", "model_failure", {
+    resume: { kind: "hold", hold: "verify_effect", reason: "PRIVATE_RUN_ERROR" },
+  });
+  s.audit("run_failure", {
+    agentId: "alice",
+    runId: token.id,
+    fault: {
+      stage: "execution",
+      category: "unknown_effect",
+      reason: "the external effect could not be confirmed",
+    },
+    resume: "hold",
+  });
+  recordSlackReadiness(s, {
+    updatedAt: 9,
+    installations: [
+      {
+        agentId: "bob",
+        state: "needs-human",
+        reason: "invalid_auth",
+        action:
+          "Replace the Slack tokens of bob in the Mate service environment, then restart Mate.",
+        attempts: 1,
+        changedAt: 9,
+      },
+    ],
+  });
+  const page = c.operations.activity("owner", {});
+  // The activity view carries the daemon fact, Slack readiness and the scoped conditions too.
+  expect(page.diagnosis.daemon).toBe("active");
+  expect(page.diagnosis.slack?.installations[0]).toMatchObject({
+    agentId: "bob",
+    state: "needs-human",
+  });
+  expect(page.diagnosis.conditions).toContainEqual(
+    expect.objectContaining({
+      source: "slack",
+      scope: { kind: "slack_installation", agentId: "bob" },
+      need: "configuration_fix",
+      action: "Replace the Slack tokens of bob in the Mate service environment, then restart Mate.",
+    }),
+  );
+  expect(page.diagnosis.conditions).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        source: "agents",
+        scope: { kind: "agent", agentId: "alice" },
+        stage: "execution",
+        need: "verify_unknown_effect",
+        action:
+          "This Agent stopped with an unresolved execution result; check its activity, then agent-resume it.",
+      }),
+      expect.objectContaining({
+        source: "execution",
+        scope: {
+          kind: "action",
+          agentId: "alice",
+          actionId: "activity-action",
+          runId: token.id,
+        },
+        stage: "execution",
+        need: "verify_unknown_effect",
+      }),
+    ]),
+  );
+  const encoded = JSON.stringify(page);
+  expect(encoded).not.toContain("PRIVATE_RUN_ERROR");
+  expect(encoded).not.toContain("PRIVATE_ACTION_REQUEST");
+  expect(() => c.operations.activity("intruder")).toThrow("Owner only");
 });
 
 it("merges safe activity with a query-bound vector cursor and never wakes an Agent", () => {

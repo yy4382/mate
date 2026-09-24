@@ -3,8 +3,18 @@ import type Database from "better-sqlite3";
 import type { TeamSettings } from "../domain/agents.js";
 import type { AgentDirectory } from "../agents/directory.js";
 import { encode, hash } from "../storage/store.js";
-import type { FaultDisposition } from "../runtime/fault.js";
+import { workerFaultSchema, type FaultDisposition, type WorkerFault } from "../runtime/fault.js";
 import { UsageLedger, type UsageSummary } from "../usage/ledger.js";
+import { readSlackReadinessRecord } from "../slack/readiness.js";
+import {
+  agentConditions,
+  collectDiagnosis,
+  executionConditions,
+  resumeInstruction,
+  type AgentDiagnosisInput,
+  type DiagnosisReport,
+  type ServiceState,
+} from "./diagnosis.js";
 
 export const activitySourceSchema = z.enum([
   "task",
@@ -109,13 +119,27 @@ export interface OperationsStatus {
     active: number;
     projection: string;
   }>;
+  /** The scoped, actionable fault diagnosis for the same instant as the counts above. */
+  diagnosis: DiagnosisReport;
+}
+
+/** What one owner view reads about the process serving it. */
+export interface OperationsViewPorts {
+  config: TeamSettings;
+  agents: AgentDirectory;
+  store: { db: Database.Database };
+  /**
+   * The daemon-process fact. An in-process view is only reachable while the process that owns this
+   * database is answering, so that is the fact it states by default; the offline deployment reader
+   * supplies the service manager's answer instead, because it reads the same database while the
+   * daemon may not be running.
+   */
+  service?: () => ServiceState | null;
 }
 
 /** Owner-only, platform-neutral projection over authoritative operational state. */
 export class OperationsView {
-  constructor(
-    readonly c: { config: TeamSettings; agents: AgentDirectory; store: { db: Database.Database } },
-  ) {}
+  constructor(readonly c: OperationsViewPorts) {}
   private owner(owner: string): void {
     if (!this.c.config.ownerUserIds.includes(owner)) throw new Error("Owner only");
   }
@@ -192,7 +216,98 @@ export class OperationsView {
       now,
       cap + 1,
     );
-    return { at: now, agents, works, uncertainActions, uncertainOutputs, heldDrafts, dueReminders };
+    // Every fact above is already durable before this view reads it, so the diagnosis is built
+    // from the same rows rather than from a second, independent guess at the state. Each source is
+    // still read on its own: a Slack record this process cannot read never hides an Agent's wait,
+    // and a wait never hides Slack's own answer.
+    const diagnosis = this.diagnosisOf(now, {
+      actions: uncertainActions.items,
+      outputs: uncertainOutputs.items,
+    });
+    return {
+      at: now,
+      agents,
+      works,
+      uncertainActions,
+      uncertainOutputs,
+      heldDrafts,
+      dueReminders,
+      diagnosis,
+    };
+  }
+  /**
+   * The scoped, actionable diagnosis for one instant, read from durable state alone so a restart
+   * reproduces it. The agent and execution lists are passed in because the caller has already read
+   * them inside this instant; the daemon and Slack sources are read here, each on its own.
+   */
+  private diagnosisOf(
+    now: number,
+    facts: {
+      actions: readonly { id: string; agentId: string; runId: string }[];
+      outputs: readonly { id: string; agentId: string }[];
+    },
+  ): DiagnosisReport {
+    // `collectDiagnosis` reads each source on its own and classifies the daemon and Slack facts, so
+    // a source this process cannot read never hides another source's result.
+    return collectDiagnosis(
+      {
+        // Absent means the entry cannot state it: an in-process view is only reachable while the
+        // process that owns this database is answering, so that is the fact it reports.
+        daemon: () => (this.c.service ? this.c.service() : "active"),
+        slack: () => {
+          const record = readSlackReadinessRecord(this.c.store);
+          if (record.state === "unreadable") throw new Error("Slack readiness is unreadable");
+          return record.state === "read" ? record.readiness : null;
+        },
+        agents: () => agentConditions(this.agentInputs()),
+        execution: () => executionConditions(facts),
+      },
+      now,
+    );
+  }
+  /** Every configured Agent's durable recovery state, with the fault its last failure recorded. */
+  private agentInputs(): AgentDiagnosisInput[] {
+    const rows = new Map(
+      (
+        this.c.store.db.prepare("SELECT id,next_attempt_at,resume_hold FROM agents").all() as {
+          id: string;
+          next_attempt_at: number;
+          resume_hold: FaultDisposition | null;
+        }[]
+      ).map((row) => [row.id, row]),
+    );
+    return this.c.config.agents.map((agent) => {
+      const row = rows.get(agent.id);
+      return {
+        agentId: agent.id,
+        hold: row?.resume_hold ?? null,
+        fault: this.recordedFault(agent.id),
+        nextAttemptAt: row?.next_attempt_at ?? 0,
+      };
+    });
+  }
+  /**
+   * The filtered fault the Agent's last failed attempt was recorded with. The supervisor writes it
+   * durably beside the resume decision, so this survives a restart; an Agent held without one still
+   * reports its disposition.
+   */
+  private recordedFault(agentId: string): WorkerFault | null {
+    try {
+      const row = this.c.store.db
+        .prepare(
+          // `json_valid` keeps one damaged record from failing the read for every Agent.
+          "SELECT body FROM audit WHERE kind='run_failure' AND json_valid(body) AND json_extract(body,'$.agentId')=? ORDER BY id DESC LIMIT 1",
+        )
+        .get(agentId) as { body: string } | undefined;
+      if (!row) return null;
+      const parsed = workerFaultSchema.safeParse(
+        (JSON.parse(row.body) as { fault?: unknown }).fault,
+      );
+      return parsed.success ? parsed.data : null;
+    } catch {
+      // A record this view cannot read still leaves the Agent's durable disposition to report.
+      return null;
+    }
   }
   activity(
     owner: string,
@@ -201,6 +316,8 @@ export class OperationsView {
     items: ActivityItem[];
     cursor: string | null;
     sources: Record<string, { position: Position | null; hasMore: boolean; coverage: Coverage }>;
+    /** The same scoped conditions the operations view reports, so the feed carries its own answer. */
+    diagnosis: DiagnosisReport;
   } {
     this.owner(owner);
     const parsed = activityInputSchema.parse(input),
@@ -282,6 +399,26 @@ export class OperationsView {
           )
         : null,
       sources: sourceState,
+      diagnosis: this.diagnosisOf(Date.now(), this.uncertain()),
+    };
+  }
+  /** The unresolved execution results the diagnosis reports, read from the same durable records. */
+  private uncertain(): {
+    actions: { id: string; agentId: string; runId: string }[];
+    outputs: { id: string; agentId: string }[];
+  } {
+    const db = this.c.store.db;
+    return {
+      actions: db
+        .prepare(
+          "SELECT id,agent_id agentId,run_id runId FROM actions WHERE state IN ('executing','unknown') ORDER BY id DESC LIMIT 100",
+        )
+        .all() as { id: string; agentId: string; runId: string }[],
+      outputs: db
+        .prepare(
+          "SELECT id,agent_id agentId FROM outbox WHERE state='unknown' ORDER BY id DESC LIMIT 100",
+        )
+        .all() as { id: string; agentId: string }[],
     };
   }
   private fetch(
@@ -410,25 +547,6 @@ export class OperationsView {
       case "run":
         return { historicalComplete: true, availableSince: null, gapCount: 0 };
     }
-  }
-}
-
-/**
- * The next step a person can take, from the shared retry disposition alone: a scheduled automatic
- * attempt needs nobody, while a held Agent names the action that releases it. Owner output stays an
- * allowlist projection, so this is a fixed instruction per disposition, in the owner's own
- * vocabulary (`activity`, `agent-resume`), and never run text.
- */
-function resumeInstruction(hold: FaultDisposition): string | null {
-  switch (hold) {
-    case "retry_backoff":
-      return null;
-    case "human_action":
-      return "Fix this Agent's model credential or configuration, then agent-resume it.";
-    case "verify_effect":
-      return "This Agent stopped with an unresolved execution result; check its activity, then agent-resume it.";
-    case "no_retry":
-      return "This Agent stopped after a failure that is not safe to retry; check its activity, then agent-resume it once the cause is resolved.";
   }
 }
 

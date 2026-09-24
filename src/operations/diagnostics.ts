@@ -1,12 +1,14 @@
 import type { ActivityItem, OperationsStatus } from "./view.js";
+import { diagnosisNeeds, type DiagnosisNeed, type ServiceState } from "./diagnosis.js";
 
+export type { ServiceState } from "./diagnosis.js";
 export type RecoveryState = {
   restore: null | { phase: string; databaseComplete: boolean; completedAgents: number };
   linuxUpgrade?: null | { phase: "pending" };
   invalid: boolean;
 };
-export type ServiceState =
-  "active" | "inactive" | "activating" | "deactivating" | "failed" | "reloading" | "unknown";
+/** The needs a person has to act on; an automatic wait is not one of them. */
+const humanNeeds = diagnosisNeeds.filter((need) => need !== "automatic_wait");
 /** An allowlist projection, never a regex scrub of potentially confidential strings. */
 export function diagnosticStatus(
   operations: OperationsStatus | null,
@@ -17,6 +19,12 @@ export function diagnosticStatus(
     recovery.invalid ||
     !!(recovery.restore && !["planned", "decided"].includes(recovery.restore.phase));
   const pending = !!(recovery.restore || recovery.linuxUpgrade);
+  // Which of the owner's three readings each source reported, as counts only: this projection
+  // still carries no identifier, reason or exception text.
+  const conditions = operations?.diagnosis.conditions ?? [],
+    needs = Object.fromEntries(
+      diagnosisNeeds.map((need) => [need, conditions.filter((item) => item.need === need).length]),
+    ) as Record<DiagnosisNeed, number>;
   return {
     service,
     health: invalid
@@ -29,9 +37,15 @@ export function diagnosticStatus(
             ? "operations-unavailable"
             : operations.agents.some((a) => !a.registered || a.paused) ||
                 operations.uncertainActions.atLeast > 0 ||
-                operations.uncertainOutputs.atLeast > 0
+                operations.uncertainOutputs.atLeast > 0 ||
+                humanNeeds.some((need) => needs[need] > 0)
               ? "attention-required"
               : "running",
+    /** Automatic waits are the runtime's own work; the other three are a person's. */
+    needs: {
+      ...needs,
+      awaitingPerson: humanNeeds.reduce((total, need) => total + needs[need], 0),
+    },
     recovery: invalid
       ? { invalid: true }
       : {
