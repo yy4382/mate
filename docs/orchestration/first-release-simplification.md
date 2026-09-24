@@ -93,6 +93,26 @@ the branch tip was a committed, green merge, so no half-merged state survived. L
 recorded: resuming a stopped implementer session is cheaper than re-implementing, and a
 ticket is not "done" until its commit is an ancestor of the branch tip.
 
+## Orchestrator incident: destructive git commands in the shared tree
+
+While merging #38 I ran `git stash -u` (intended to protect the tree before an isolated
+verification) followed by `git stash pop`, then a `git reset --hard` on the main tree. The
+stash was a no-op, and the reset discarded the TRACKED, uncommitted edits that ticket #45's
+implementer had in the shared tree at that moment. The implementer's untracked files
+(`src/runtime/fault.ts`, `tests/helpers/fault-worker.ts`, `tests/runtime/worker-fault.test.ts`)
+and its compiled `dist/src/runtime/fault.js` / `worker.js` survived, which is the recovery
+source. The implementer was told immediately, in plain terms, and asked to report what it
+finds before reconstructing.
+
+Rules added:
+- Never run `git stash`, `git reset --hard`, `git checkout -- .` or `git clean` in the MAIN
+  tree while an implementer is working in it. Those commands are only safe in a worktree that
+  no one else is using, or after the implementer has stopped.
+- To verify a merge without disturbing anything, write the merged index as a tree
+  (`git write-tree`), archive that tree into a temporary directory and validate there. This
+  needs no stash and no reset, and it measures exactly the merge result.
+- Protection before a risky step belongs in a copy (archive, worktree), not in the shared tree.
+
 ## Verification hazard (orchestrator, corrected once)
 
 While a ticket is being implemented in the MAIN tree, a `pnpm check` run there measures that
