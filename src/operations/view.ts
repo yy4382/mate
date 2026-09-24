@@ -3,6 +3,7 @@ import type Database from "better-sqlite3";
 import type { TeamSettings } from "../domain/agents.js";
 import type { AgentDirectory } from "../agents/directory.js";
 import { encode, hash } from "../storage/store.js";
+import type { FaultDisposition } from "../runtime/fault.js";
 import { UsageLedger, type UsageSummary } from "../usage/ledger.js";
 
 export const activitySourceSchema = z.enum([
@@ -80,6 +81,12 @@ export interface OperationsStatus {
     generation: number | null;
     sessionId: string | null;
     activeRun: { id: string; createdAt: number; workId: string | null } | null;
+    /** `null` while this Agent's channel is open; otherwise what it is waiting or held for. */
+    resumeHold: FaultDisposition | null;
+    /** When the scheduled automatic attempt may start, or `null` when none is scheduled. */
+    nextAttemptAt: number | null;
+    /** The next step a person can take for this Agent, or `null` when it needs no action. */
+    resumeAction: string | null;
     usage: UsageSummary;
   }[];
   works: OperationsPage<{ id: string; state: string }>;
@@ -125,12 +132,14 @@ export class OperationsView {
       run_id: string | null;
       run_created: number | null;
       work_id: string | null;
+      next_attempt_at: number;
+      resume_hold: FaultDisposition | null;
     };
     const runtime = new Map(
       (
         s.db
           .prepare(
-            `SELECT a.id,a.session_id,a.paused,a.generation,r.id run_id,r.created_at run_created,rc.work_id
+            `SELECT a.id,a.session_id,a.paused,a.generation,a.next_attempt_at,a.resume_hold,r.id run_id,r.created_at run_created,rc.work_id
       FROM agents a LEFT JOIN runs r ON r.agent_id=a.id AND r.state='active' LEFT JOIN run_context rc ON rc.run_id=r.id`,
           )
           .all() as RuntimeRow[]
@@ -147,6 +156,9 @@ export class OperationsView {
         activeRun: row?.run_id
           ? { id: row.run_id, createdAt: row.run_created!, workId: row.work_id ?? null }
           : null,
+        resumeHold: row?.resume_hold ?? null,
+        nextAttemptAt: row?.next_attempt_at ? row.next_attempt_at : null,
+        resumeAction: row?.resume_hold ? resumeInstruction(row.resume_hold) : null,
         usage: UsageLedger.summaryFrom(s.db, agent.id),
       };
     });
@@ -398,6 +410,25 @@ export class OperationsView {
       case "run":
         return { historicalComplete: true, availableSince: null, gapCount: 0 };
     }
+  }
+}
+
+/**
+ * The next step a person can take, from the shared retry disposition alone: a scheduled automatic
+ * attempt needs nobody, while a held Agent names the action that releases it. Owner output stays an
+ * allowlist projection, so this is a fixed instruction per disposition, in the owner's own
+ * vocabulary (`activity`, `agent-resume`), and never run text.
+ */
+function resumeInstruction(hold: FaultDisposition): string | null {
+  switch (hold) {
+    case "retry_backoff":
+      return null;
+    case "human_action":
+      return "Fix this Agent's model credential or configuration, then agent-resume it.";
+    case "verify_effect":
+      return "This Agent stopped with an unresolved execution result; check its activity, then agent-resume it.";
+    case "no_retry":
+      return "This Agent stopped after a failure that is not safe to retry; check its activity, then agent-resume it once the cause is resolved.";
   }
 }
 

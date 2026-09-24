@@ -56,6 +56,9 @@ function status(): OperationsStatus {
         generation: 1,
         sessionId: secret,
         activeRun: null,
+        resumeHold: null,
+        nextAttemptAt: null,
+        resumeAction: null,
         usage: {
           knownCalls: 0,
           unknownCalls: 0,

@@ -680,6 +680,10 @@ export class Collaboration {
           workId,
         );
       if (operation !== "resume") {
+        // A person stopping or cancelling this work outranks an automatic attempt: the Agents with
+        // an unfinished delivery for it stop waiting out a scheduled one instead of keeping a wait
+        // whose work can no longer run. Resuming the work lets them continue immediately.
+        this.store.dropScheduledAttempts(workId);
         for (const run of runs) {
           this.store.db
             .prepare("UPDATE agents SET generation=generation+1 WHERE id=?")
