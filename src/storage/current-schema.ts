@@ -12,7 +12,7 @@
  * tasks, deliveries, reminders, usage, drafts and operation results.
  */
 export const FORMAT_APPLICATION_ID = 0x4d415445; // "MATE"
-export const FORMAT_REVISION = 25;
+export const FORMAT_REVISION = 26;
 
 export const currentFormatSchema = `
 -- Agents, sessions and the durable conversation journal.
@@ -128,7 +128,8 @@ CREATE TABLE deliveries(id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES a
 CREATE TABLE delivery_work(delivery_id TEXT PRIMARY KEY REFERENCES deliveries(id), work_id TEXT NOT NULL REFERENCES works(id));
 CREATE TABLE delivery_context(delivery_id TEXT PRIMARY KEY REFERENCES deliveries(id),work_id TEXT NOT NULL REFERENCES works(id));
 CREATE TABLE runs(id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agents(id), session_id TEXT NOT NULL REFERENCES sessions(id),
- generation INTEGER NOT NULL, delivery_id TEXT NOT NULL REFERENCES deliveries(id), state TEXT NOT NULL CHECK(state IN ('active','complete','failed','interrupted')),
+ generation INTEGER NOT NULL, delivery_id TEXT NOT NULL REFERENCES deliveries(id), state TEXT NOT NULL CHECK(state IN ('active','complete','failed','interrupted','yielded')),
+ stop_reason TEXT CHECK(stop_reason IN ('complete','yielded','model_failure','owner_pause','work_stopped','interrupted')),
  error TEXT, created_at INTEGER NOT NULL);
 CREATE UNIQUE INDEX one_active_run ON runs(agent_id) WHERE state='active';
 CREATE TABLE run_context(run_id TEXT PRIMARY KEY REFERENCES runs(id),work_id TEXT NOT NULL REFERENCES works(id));
@@ -205,7 +206,7 @@ CREATE TABLE operational_facts(
  at INTEGER NOT NULL,
  source TEXT NOT NULL CHECK(source IN ('runtime','internal_dm')),
  source_id TEXT NOT NULL,
- kind TEXT NOT NULL CHECK(kind IN ('run_completed','run_failed','run_interrupted','internal_dm_created')),
+ kind TEXT NOT NULL CHECK(kind IN ('run_completed','run_failed','run_yielded','run_interrupted','internal_dm_created')),
  actor_id TEXT REFERENCES agents(id),
  subject_type TEXT NOT NULL CHECK(subject_type IN ('run','internal_dm')),
  subject_id TEXT NOT NULL,
@@ -213,7 +214,7 @@ CREATE TABLE operational_facts(
  target_id TEXT,
  counts TEXT NOT NULL DEFAULT '{}',
  CHECK(
-  source='runtime' AND kind IN ('run_completed','run_failed','run_interrupted') AND actor_id IS NOT NULL
+  source='runtime' AND kind IN ('run_completed','run_failed','run_yielded','run_interrupted') AND actor_id IS NOT NULL
    AND subject_type='run' AND target_type IS NULL AND target_id IS NULL AND counts='{}'
   OR source='internal_dm' AND kind='internal_dm_created' AND actor_id IS NOT NULL
    AND subject_type='internal_dm' AND target_type IS NULL AND target_id IS NULL
