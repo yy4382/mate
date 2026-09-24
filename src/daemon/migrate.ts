@@ -48,7 +48,7 @@ function assertMigrationIdentity(s:Store,previous:DaemonConfig,next:DaemonConfig
  assertConfigurationEvolution(previous,next);
 }
 
-function prepareMigrationBoundary(s:Store,previous:DaemonConfig,next:DaemonConfig,options:OfflineMigrationOptions):void{
+function prepareMigrationBoundary(s:Store,previous:DaemonConfig,next:DaemonConfig):void{
  assertMigrationIdentity(s,previous,next);
  if(resolve(previous.runtime.dataDir)!==resolve(next.runtime.dataDir))throw new Error('Migration requires the same data directory');
  for(const agent of next.mate.agents){const home=next.runtime.linuxUsers?.[agent.id]?.home;if(home&&(!existsSync(home)||lstatSync(home).isSymbolicLink()))throw new Error(`Provision the Linux Agent home before migration: ${agent.id}`);}
@@ -57,7 +57,7 @@ function prepareMigrationBoundary(s:Store,previous:DaemonConfig,next:DaemonConfi
 /** The only database-changing part of configuration migration. Callers own locking, backup/checkpoint and workspace verification. */
 export function applyOfflineConfigurationMigration(s:Store,previous:DaemonConfig,next:DaemonConfig,options:OfflineMigrationOptions):OfflineMigrationResult{
  const oldConfigurationHash=hash(encode(previous)),newConfigurationHash=hash(encode(next));
- prepareMigrationBoundary(s,previous,next,options);
+ prepareMigrationBoundary(s,previous,next);
  s.atomic(()=>{
   const oldSlack=slackRuntimeConfig(previous),newSlack=slackRuntimeConfig(next);
   if(oldSlack)migrateCanonicalConversations(s,oldSlack);else initializeCanonicalStore(s);
@@ -84,7 +84,7 @@ export async function migrateConfiguration(previous:DaemonConfig,next:DaemonConf
  if(!existsSync(join(state,'mate.sqlite')))throw new Error('Migration requires an existing database');
  const release=acquireLock(join(state,'daemon.lock'));let store:Store|undefined;
  try{
-  store=new Store(join(state,'mate.sqlite'));const s=store,migrationOptions={auditSource:resolve(destination)};prepareMigrationBoundary(s,previous,next,migrationOptions);s.recover();
+  store=new Store(join(state,'mate.sqlite'));const s=store,migrationOptions={auditSource:resolve(destination)};prepareMigrationBoundary(s,previous,next);s.recover();
   await backup(s,data,resolve(destination),previous);
   const result=applyOfflineConfigurationMigration(s,previous,next,migrationOptions);
   return{backup:resolve(destination),agents:result.agents};
