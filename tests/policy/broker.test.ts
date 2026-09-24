@@ -1,6 +1,6 @@
-import { fixtureTarget, externalThread } from '../helpers/canonical-slack.js';
+import { fixtureTarget } from '../helpers/canonical-slack.js';
 import { afterEach, expect, it, vi } from 'vitest';
-import { mkdtempSync, realpathSync, symlinkSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { Store } from '../../src/storage/store.js';
 import { configSchema } from '../../src/config.js';
@@ -8,86 +8,67 @@ import { configFixture } from '../helpers/config.js';
 import { Messages, Output } from '../helpers/canonical-slack.js';
 import { Collaboration } from '../../src/collaboration/service.js';
 import { Broker } from '../../src/policy/broker.js';
+
 const cleanups: (() => void)[] = [];
+afterEach(() => cleanups.splice(0).forEach(stop => stop()));
 function setup() {
-  const root = realpathSync(mkdtempSync(`${tmpdir()}/mate-policy-`)); const db = new Store(':memory:');
-  cleanups.push(() => { db.close(); rmSync(root, { recursive: true, force: true }); });
-  const config = configSchema.parse(configFixture); db.register('research', 'v1', []);
-  const messages = new Messages(db, config); messages.membership('research', 'CTEST', true);
-  const collaboration = new Collaboration(db, messages, new Output(messages, { post: async () => ({ ts: '101.000001' }) }), config);
-  const work = collaboration.createWork('human:one', fixtureTarget('CTEST','100.000001'));
-  collaboration.enqueue('research', work, 'one', {}); const run = db.beginRun('research')!; db.input(run, {});
-  const execute = vi.fn(async () => ({ code: 0, stdout: 'ok', stderr: '', truncated: false }));
-  const broker = new Broker(db, collaboration, { execute }, ['/synthetic/protected'], () => 1000);
-  const grant = broker.issueGrant('UOWNER', 'research', work, root, ['read','write','exec'], 100000);
-  return { root, db, collaboration, run, broker, work, grant, execute };
+  const home = realpathSync(mkdtempSync(`${tmpdir()}/mate-policy-`));
+  const store = new Store(':memory:');
+  cleanups.push(() => { store.close(); rmSync(home, { recursive: true, force: true }); });
+  const config = configSchema.parse(configFixture); store.register('research', 'v1', []);
+  const messages = new Messages(store, config); messages.membership('research', 'CTEST', true);
+  const collaboration = new Collaboration(store, messages, new Output(messages, { post: async () => ({ ts: '101.000001' }) }), config);
+  const work = collaboration.createWork('human:one', fixtureTarget('CTEST', '100.000001'));
+  collaboration.enqueue('research', work, 'one', {});
+  const run = store.beginRun('research')!; store.input(run, {});
+  const execute = vi.fn(async (_request: unknown) => ({ code: 0, stdout: 'ok', stderr: '', truncated: false }));
+  const broker = new Broker(store, collaboration, { execute }, { research: home });
+  return { home, store, collaboration, run, broker, work, execute };
 }
-afterEach(() => cleanups.splice(0).forEach(fn => fn()));
-it('scope checks cover file tools, symlink escapes, work and trusted actor', async () => {
-  const { root, run, broker, work, grant, execute } = setup();
-  await expect(broker.execute(run, work, 'a', grant, { kind: 'write', path: '../outside', content: 'x' })).rejects.toThrow('escapes');
-  symlinkSync('/tmp', `${root}/link`);
-  await expect(broker.execute(run, work, 'b', grant, { kind: 'read', path: 'link/secret' })).rejects.toThrow('Symlinks');
-  await expect(broker.execute({ ...run, agentId: 'other' }, work, 'c', grant, { kind: 'read', path: 'MEMORY.md' })).rejects.toThrow('Stale');
-  await broker.execute(run, work, 'd', grant, { kind: 'write', path: 'MEMORY.md', content: 'safe' }); expect(execute).toHaveBeenCalledTimes(1);
+
+it('runs an ordinary command as the Agent identity without a file grant or human review', async () => {
+  const { home, store, run, broker, work, execute } = setup();
+  const command = { kind: 'exec', cwd: home, command: 'printf safe' };
+  await broker.execute(run, work, 'once', command);
+  await broker.execute(run, work, 'once', command);
+  expect(execute).toHaveBeenCalledOnce();
+  expect(execute.mock.calls[0]![0]).toMatchObject({ agentId: 'research', root: home, operation: command });
+  expect(store.action('once')?.state).toBe('succeeded');
 });
-it('unknown effects block equivalent new action IDs instead of replaying', async () => {
-  const { db, run, broker, work, grant, execute } = setup();
+
+it('keeps one action identity immutable and returns an uncertain result for a lost receipt', async () => {
+  const { store, run, broker, work, execute } = setup();
   execute.mockRejectedValueOnce(new Error('lost receipt'));
-  const op = { kind: 'write', path: 'note', content: 'one' };
-  await expect(broker.execute(run, work, 'first', grant, op)).rejects.toThrow('lost receipt');
-  expect(db.action('first')?.state).toBe('unknown');
-  expect(await broker.execute(run, work, 'second', grant, op)).toMatchObject({ status: 'action_unknown' }); expect(execute).toHaveBeenCalledTimes(1);
-});
-it('scoped exec runs directly without a review service or per-command approval', async () => {
-  const { run, broker, work, grant, execute, db } = setup();
-  const command = { kind: 'exec', cwd: '.', command: 'printf safe' };
-  await broker.execute(run, work, 'exec-one', grant, command);
-  await broker.execute(run, work, 'exec-one', grant, command);
-  expect(execute).toHaveBeenCalledOnce(); expect(db.action('exec-one')?.state).toBe('succeeded');
-  expect(db.db.prepare("SELECT name FROM sqlite_master WHERE name='approvals'").get()).toBeUndefined();
-});
-it('revocation, immutable action identity and cancellation still guard direct execution', async () => {
-  const { run, broker, work, grant, execute } = setup();
   const command = { kind: 'exec', cwd: '.', command: 'printf first' };
-  await broker.execute(run, work, 'once', grant, command);
-  await expect(broker.execute(run, work, 'once', grant, { ...command, command: 'printf changed' })).rejects.toThrow('identity conflict');
-  const abort = new AbortController(); abort.abort();
-  await expect(broker.execute(run, work, 'aborted', grant, command, abort.signal)).rejects.toThrow('aborted');
-  broker.revoke('UOWNER', grant);
-  await expect(broker.execute(run, work, 'revoked', grant, command)).rejects.toThrow('Grant'); expect(execute).toHaveBeenCalledOnce();
+  await expect(broker.execute(run, work, 'first', command)).rejects.toThrow('lost receipt');
+  expect(store.action('first')?.state).toBe('unknown');
+  expect(await broker.execute(run, work, 'first', command)).toMatchObject({ status: 'action_unknown' });
+  await expect(broker.execute(run, work, 'first', { ...command, command: 'changed' })).rejects.toThrow('identity conflict');
+  expect(execute).toHaveBeenCalledOnce();
 });
-it('expired scope and a foreign work cannot reach the execution backend', async () => {
-  const { db, collaboration, run, work, grant, execute } = setup();
-  const later = new Broker(db, collaboration, { execute }, ['/synthetic/protected'], () => 200000);
-  await expect(later.execute(run, work, 'expired', grant, { kind: 'exec', cwd: '.', command: 'true' })).rejects.toThrow('Grant');
-  const other = collaboration.createWork('human:other', fixtureTarget('CTEST','100.000001'));
-  await expect(new Broker(db, collaboration, { execute }, [], () => 1000).execute(run, other, 'foreign', grant, { kind: 'read', path: 'note' })).rejects.toThrow('mismatch');
+
+it('lets the Agent inspect or continue after an uncertain command without a global lock', async () => {
+  const { run, broker, work, execute } = setup();
+  execute.mockRejectedValueOnce(new Error('lost receipt'));
+  await expect(broker.execute(run, work, 'uncertain', { kind: 'exec', cwd: '.', command: 'true' })).rejects.toThrow('lost receipt');
+  expect(await broker.execute(run, work, 'inspect', { kind: 'exec', cwd: '.', command: 'pwd' })).toMatchObject({ code: 0 });
+  expect(execute).toHaveBeenCalledTimes(2);
+});
+
+it('checks run, current work and cancellation before execution', async () => {
+  const { collaboration, run, broker, work, execute } = setup();
+  const command = { kind: 'exec', cwd: '.', command: 'true' };
+  await expect(broker.execute({ ...run, agentId: 'other' }, work, 'foreign', command)).rejects.toThrow('Stale');
+  const other = collaboration.createWork('human:other', fixtureTarget('CTEST', '100.000001'));
+  await expect(broker.execute(run, other, 'other', command)).rejects.toThrow('mismatch');
+  const abort = new AbortController(); abort.abort();
+  await expect(broker.execute(run, work, 'aborted', command, abort.signal)).rejects.toThrow('aborted');
   expect(execute).not.toHaveBeenCalled();
 });
-it('switching activity cannot bypass uncertain effects on the same resources',async()=>{
-  const {root,run,broker,work,grant,execute,collaboration:c}=setup();
-  execute.mockRejectedValueOnce(new Error('lost'));
-  await expect(broker.execute(run,work,'first',grant,{kind:'write',path:'note',content:'x'})).rejects.toThrow('lost');
-  const other=c.createWork('other',{conversationId:'CTEST'});const otherGrant=broker.issueGrant('UOWNER','research',other,root,['write'],100000);c.selectWork(run,other);
-  expect(await broker.execute(run,other,'second',otherGrant,{kind:'write',path:'note',content:'x'})).toMatchObject({status:'action_unknown'});
-  expect(execute).toHaveBeenCalledTimes(1);
-});
-it('a review seat rejects even a valid grant to another workspace',async()=>{
- const{root,db,run,broker,work,grant,execute}=setup();db.db.prepare('INSERT INTO review_seats VALUES(?,?,?,?,1)').run('research',JSON.stringify({conversationId:'CTEST'}),'synthetic owner brief',`${root}/clean`);
- await expect(broker.execute(run,work,'outside-review',grant,{kind:'write',path:'note',content:'x'})).rejects.toThrow('clean private workspace');expect(execute).not.toHaveBeenCalled();
-});
-it('structured capabilities respect permission families, both move paths and unknown mutations',async()=>{
- const{root,run,broker,work,grant,execute}=setup();const reader=broker.issueGrant('UOWNER','research',work,root,['read'],100000);
- await broker.execute(run,work,'list',reader,{kind:'list',path:'.'});
- await expect(broker.execute(run,work,'edit',reader,{kind:'edit',path:'x',oldText:'x',newText:'y',expectedHash:'0'.repeat(64)})).rejects.toThrow('Grant');
- await expect(broker.execute(run,work,'move',grant,{kind:'move',path:'x',destination:'../outside'})).rejects.toThrow('escapes');
- await expect(broker.execute(run,work,'root',grant,{kind:'remove',path:'.'})).rejects.toThrow('root');
- execute.mockRejectedValueOnce(new Error('lost receipt'));await expect(broker.execute(run,work,'uncertain',grant,{kind:'move',path:'x',destination:'y'})).rejects.toThrow('lost');
- expect(await broker.execute(run,work,'remove',grant,{kind:'remove',path:'y'})).toMatchObject({status:'action_unknown'});
- await broker.execute(run,work,'inspect',reader,{kind:'stat',path:'y'});expect(execute).toHaveBeenCalledTimes(3);
-});
-it('review-seat private exec forces no network even when the environment permits networking',async()=>{
- const{root,db,run,broker,work,grant,execute}=setup();db.db.prepare('INSERT INTO review_seats VALUES(?,?,?,?,1)').run('research',JSON.stringify({conversationId:'CTEST'}),'brief',root);
- await broker.execute(run,work,'seat-exec',grant,{kind:'exec',cwd:'.',command:'true'});expect(execute.mock.calls[0]).toBeDefined();expect((execute.mock.calls as any)[0][0].network).toBe('none');
+
+it('runs an independent reviewer under that reviewer Agent identity', async () => {
+  const { home, store, run, broker, work, execute } = setup();
+  store.db.prepare('INSERT INTO review_seats VALUES(?,?,?,?,1)').run('research', JSON.stringify(fixtureTarget('CTEST', '100.000001')), 'clean brief', home);
+  expect(await broker.execute(run, work, 'review-command', { kind: 'exec', cwd: home, command: 'pwd' })).toMatchObject({ code: 0 });
+  expect(execute.mock.calls[0]![0]).toMatchObject({ agentId: 'research', root: home });
 });

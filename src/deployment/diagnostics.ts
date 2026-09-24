@@ -1,4 +1,4 @@
-import {readFileSync} from 'node:fs';
+import {existsSync,readFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import Database from 'better-sqlite3';
@@ -7,8 +7,8 @@ import {restoreProgress} from '../daemon/restore.js';
 import {ConfiguredAgents} from '../agents/directory.js';
 import {OperationsView,type ActivityItem,type OperationsStatus} from '../operations/view.js';
 import {diagnosticLogs,diagnosticStatus,type RecoveryState,type ServiceState} from '../operations/diagnostics.js';
-import {readDeploymentJournal,readRootUpgrade} from './upgrade.js';
 import {managedLayout} from './systemd.js';
+import {readLinuxUpgradeJournal} from './linux-installer.js';
 
 export function systemdState():ServiceState{
  const result=spawnSync('/usr/bin/systemctl',['show','--property=ActiveState','--value','mate.service'],{encoding:'utf8',timeout:5000,maxBuffer:4096,env:{PATH:'/usr/bin:/bin',LANG:'C'}});
@@ -16,10 +16,9 @@ export function systemdState():ServiceState{
  return ['active','inactive','activating','deactivating','failed','reloading'].includes(state)?state as ServiceState:'unknown';
 }
 export async function readRecoveryState(data:string):Promise<RecoveryState>{
- const result:RecoveryState={upgrade:null,root:null,restore:null,invalid:false};
- try{const j=readDeploymentJournal(data,{requiredOwnerUid:0});if(j)result.upgrade={phase:j.phase,everActivated:j.everActivated};}catch{result.invalid=true;}
- try{const j=readRootUpgrade(data);if(j)result.root={step:j.step,mode:j.mode};}catch{result.invalid=true;}
+ const result:RecoveryState={restore:null,invalid:false};
  try{result.restore=await restoreProgress(data);}catch{result.invalid=true;}
+ const linux=join(data,'control','linux-upgrade.json');if(existsSync(linux))try{readLinuxUpgradeJournal(linux);result.linuxUpgrade={phase:'pending'};}catch{result.invalid=true;}
  return result;
 }
 /** No Daemon/Slack construction, secret environment loading, Store migration or recovery. */

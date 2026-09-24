@@ -1,12 +1,10 @@
 import { z } from 'zod';
 import { isAbsolute } from 'node:path';
-import { configSchema } from '../config.js';
 const path = z.string().refine(isAbsolute, 'Absolute path required');
-import {agentDefinition,agentDefinitionSchema,budgetSettingsSchema,agentIdSchema,secretReferenceSchema} from '../domain/agents.js';
+import {agentDefinitionSchema,budgetSettingsSchema,agentIdSchema,secretReferenceSchema} from '../domain/agents.js';
 import type {MateConfig} from '../config.js';
 
 const human = z.string().min(1).max(1000);
-const workspaceLabel=z.string().regex(/^[a-z][a-z0-9-]{0,62}$/).refine(value=>value!=='private-workspace'&&!value.startsWith('private-'),'Reserved workspace label');
 const slackUser = z.string().regex(/^U[A-Z0-9]+$/);
 const bindingSchema = z.object({
   agentId:agentIdSchema, slackAppId:z.string().regex(/^A[A-Z0-9]+$/),
@@ -24,11 +22,10 @@ const modernConfigSchema = z.object({
   }).strict(),
   runtime: z.object({
     dataDir: path,
-    workspaceManifest:path.optional(),
-    docker: z.object({ binary: path, host: z.string().startsWith('unix:///'), image: z.string().regex(/^sha256:[a-f0-9]{64}$/),network:z.enum(['none','bridge']).optional(),
-      resources:z.object({memoryMb:z.number().int().min(64).max(4096),cpus:z.number().min(0.1).max(8),pids:z.number().int().min(8).max(512),tmpfsMb:z.number().int().min(1).max(1024)}).strict().default({memoryMb:512,cpus:1,pids:64,tmpfsMb:64}) }).strict().optional(),
+    linuxUsers:z.record(agentIdSchema,z.object({uid:z.number().int().positive(),gid:z.number().int().positive(),home:path,username:z.string().regex(/^[a-z_][a-z0-9_-]*$/).optional()}).strict()).optional(),
+    systemAgents:z.array(agentIdSchema).optional(),
+    sharedRoot:path.optional(),
     limits:z.object({maxActiveRuns:z.number().int().min(1).max(32),maxBackendOperations:z.number().int().min(1).max(32),workerIdleMs:z.number().int().min(1).max(3600000)}).strict().default({maxActiveRuns:1,maxBackendOperations:1,workerIdleMs:300000}),
-    workspaceGrants: z.array(z.object({ agentId: z.string(), root: path, operations: z.array(z.enum(['read','write','exec'])).min(1),label:workspaceLabel.optional() }).strict()).default([]),
     researchHosts: z.array(z.string().regex(/^[a-z0-9][a-z0-9.-]*[a-z0-9]$/)).default([]),
   }).strict()
  }).strict().superRefine((c,ctx)=>{
@@ -36,10 +33,15 @@ const modernConfigSchema = z.object({
   const unique=(values:string[],label:string)=>{if(new Set(values).size!==values.length)fail(`Duplicate ${label}`);};
   unique(c.mate.agents.map(a=>a.id),'Agent identity');unique(c.mate.ownerUserIds,'owner');
   const ids=new Set(c.mate.agents.map(a=>a.id));
-  for(const grant of c.runtime.workspaceGrants){
-    if(!ids.has(grant.agentId))fail('Unknown grant agent');
-    if(grant.operations.includes('exec')&&!c.runtime.docker)fail('Execution grants require container configuration');
+  if(c.runtime.linuxUsers){
+    if(!c.runtime.sharedRoot)fail('Linux users require one shared work root');
+    unique(Object.values(c.runtime.linuxUsers).map(user=>String(user.uid)),'Linux UID');
+    unique(Object.values(c.runtime.linuxUsers).map(user=>user.home),'Linux home');
+    if(Object.keys(c.runtime.linuxUsers).length!==ids.size||Object.keys(c.runtime.linuxUsers).some(id=>!ids.has(id)))fail('Every Agent requires exactly one Linux user');
   }
+  if(c.runtime.sharedRoot&&!c.runtime.linuxUsers)fail('Shared root requires Linux users');
+  unique(c.runtime.systemAgents??[],'system Agent eligibility');
+  if(c.runtime.systemAgents?.some(id=>!ids.has(id)||!c.runtime.linuxUsers?.[id]))fail('System eligibility requires a configured Agent Linux user');
   const slack=c.adapters.slack;
   if(slack){
     for(const key of ['agentId','slackAppId','slackUserId','slackBotId','botTokenEnv','appTokenEnv'] as const)unique(slack.bindings.map(a=>a[key]),`Slack ${key}`);
@@ -63,21 +65,10 @@ const modernConfigSchema = z.object({
   }
 });
 
-/** Only the ingress compatibility parser knows the old flattened deployment shape. */
-export const daemonConfigSchema=z.preprocess(value=>{
-  if(!value||typeof value!=='object'||'version' in value)return value;
-  const input=value as Record<string,unknown>;
-  if('adapters' in input)return value;
-  if(!input.mate||typeof input.mate!=='object'||!('teamId' in input.mate))return value;
-  // Keep unknown top-level fields so strict validation rejects rather than silently discards them.
-  const legacy=configSchema.parse(input.mate);
-  const principals=Object.fromEntries(legacy.ownerUserIds.map(id=>[id,slackHumanId(legacy.teamId,id)]));
-  return {...input,version:2,mate:{agents:legacy.agents.map(agentDefinition),ownerUserIds:Object.values(principals),budgets:legacy.budgets},
-    adapters:{slack:{teamId:legacy.teamId,principals,bindings:legacy.agents.map(({id,slackAppId,slackUserId,slackBotId,botTokenEnv,appTokenEnv,channels})=>({agentId:id,slackAppId,slackUserId,slackBotId,botTokenEnv,appTokenEnv,channels}))}}};
-},modernConfigSchema);
+export const daemonConfigSchema=modernConfigSchema;
 export function slackHumanId(teamId:string,userId:string):string{return JSON.stringify(['slack',teamId,'user',userId]);}
 
-/** Adapter-only compatibility view. The runtime receives the complete pure team instead. */
+/** Present the configured Slack bindings to the Slack adapter. */
 export function slackRuntimeConfig(config:DaemonConfig):MateConfig|undefined{
   const adapter=config.adapters.slack;if(!adapter)return undefined;
   return {teamId:adapter.teamId,principalIds:adapter.principals,
@@ -88,6 +79,10 @@ export function slackRuntimeConfig(config:DaemonConfig):MateConfig|undefined{
 /** Persisted observations cannot change authors when an owner grant is removed. */
 export function assertConfigurationEvolution(previous:DaemonConfig,next:DaemonConfig):void{
   for(const agent of previous.mate.agents)if(!next.mate.agents.some(a=>a.id===agent.id))throw new Error('Existing Agent identities cannot be removed or rebound');
+  if(previous.runtime.linuxUsers||next.runtime.linuxUsers){
+    const before=previous.runtime.linuxUsers,after=next.runtime.linuxUsers;
+    if(!before||!after||previous.runtime.sharedRoot!==next.runtime.sharedRoot||Object.keys(before).sort().join(',')!==Object.keys(after).sort().join(',')||Object.entries(before).some(([id,user])=>{const current=after[id];return !current||current.uid!==user.uid||current.gid!==user.gid||current.home!==user.home||current.username!==user.username;}))throw new Error('Linux deployment UID, GID, home and shared-root topology must remain stable during configuration migration');
+  }
   const before=previous.adapters.slack,after=next.adapters.slack;
   if(before){
     if(!after||before.teamId!==after.teamId)throw new Error('Workspace identity cannot be removed or rebound');

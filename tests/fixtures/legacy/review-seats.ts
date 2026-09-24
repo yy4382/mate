@@ -1,4 +1,4 @@
-// Frozen v16 fixture writer: only builds historical migration input. Never imported by production.
+// Historical conversation fixture. No runtime authorization is derived from it.
 import {z} from 'zod';
 import type {Messages,Target} from '../v16/src/conversations/messages.js';
 import {targetSchema} from '../v16/src/conversations/messages.js';
@@ -15,8 +15,7 @@ export class ReviewSeats{
    if(s.db.prepare('SELECT 1 FROM review_seats WHERE agent_id=?').get(actor))throw new Error('Use a new reviewer identity for another independent seat');
    s.db.prepare('INSERT INTO review_seats VALUES(?,?,?,?,1)').run(actor,encode(target),brief,workspace);
    this.messages.persistence.writes.mutable('review_seats',actor);
-   s.db.prepare('UPDATE grants SET revoked=1 WHERE agent_id=? AND root!=?').run(actor,workspace);
-   s.audit('review_seat_activated',{owner,actor,target,workspace,baseline:'unused identity; daemon-verified empty private workspace; owner-provided role and brief'});
+   s.audit('review_seat_activated',{owner,actor,target,workspace,baseline:'unused identity; clean private workspace; owner-provided brief'});
   });
  }
  release(owner:string,actor:string):void{

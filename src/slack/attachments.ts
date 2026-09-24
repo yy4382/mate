@@ -27,7 +27,7 @@ export class Attachments{
   try{while(true){const part=await reader.read();if(part.done)break;size+=part.value.byteLength;if(size>1000000)throw new Error('Attachment exceeds 1 MB');chunks.push(part.value);}}finally{await reader.cancel();}
   const bytes=Buffer.concat(chunks);if(bytes.length!==info.file.size)throw new Error('Incomplete attachment download');
   this.visible(run,args);signal.throwIfAborted();this.c.assertActionWork(run,workId);
-  const receipt=await this.broker.execute(run,workId,actionId,args.grantId,{kind:'write_bytes',path:args.path,base64:bytes.toString('base64')},signal);
+  const receipt=await this.broker.execute(run,workId,actionId,{kind:'write_bytes',path:args.path,base64:bytes.toString('base64')},signal);
   return{fileId:args.fileId,path:args.path,bytes:bytes.length,receipt};
  }
 }

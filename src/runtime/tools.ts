@@ -57,7 +57,7 @@ export class ToolRouter{
   readonly history:ConversationHistory;
   readonly sessions:SessionLifecycle;
   private readonly specs:ReadonlyMap<string,ToolSpec>;
-  constructor(readonly collaboration:Collaboration,readonly broker:Broker,readonly additional?:AdditionalTools,readonly directory?:ConversationDirectory,readonly provision?:(actor:string,workId:string)=>void,readonly normalizeInput:(value:unknown)=>unknown=value=>value,historySource?:HistorySource){
+  constructor(readonly collaboration:Collaboration,readonly broker:Broker,readonly additional?:AdditionalTools,readonly directory?:ConversationDirectory,readonly normalizeInput:(value:unknown)=>unknown=value=>value,historySource?:HistorySource){
     this.specs=buildRegistry(builtInToolModules);this.history=new ConversationHistory(collaboration.messages,historySource);this.sessions=new SessionLifecycle(collaboration,agent=>buildBaseline(agent,operationDocumentation));this.coordination=new MessageTasks(collaboration);this.gate=new FreshnessGate(collaboration.messages,collaboration.attention);collaboration.output.gate=this.gate;
   }
   async call(run:RunToken,workId:string,callId:string,operation:string,input:unknown,signal:AbortSignal):Promise<ToolReply>{
@@ -74,7 +74,7 @@ export class ToolRouter{
     if(entry.effectPolicy==='atomic-recorded')return this.atomic(entry,context,args);
     const result=await entry.handler(context,args);entry.postAwait(context);entry.authorize(context,args);if(entry.workPolicy!=='none'&&entry.workPolicy!=='select')c.assertActionWork(run,context.workId);this.authorizeSeat(entry,run);const safe=this.seatResult(entry,context,result);return{value:safe.value,...(safe.wait?{wait:true}:{})};
   }
-  private context(run:RunToken,workId:string,callId:string,operation:string,signal:AbortSignal,requestWorkId:string):ToolExecutionContext{return{operation,run,workId,requestWorkId,actionId:`${run.sessionId}:${callId}`,signal,collaboration:this.collaboration,broker:this.broker,...(this.additional?{additional:this.additional}:{}),...(this.directory?{directory:this.directory}:{}),history:this.history,sessions:this.sessions,coordination:this.coordination,gate:this.gate,...(this.provision?{provision:this.provision}:{})};}
+  private context(run:RunToken,workId:string,callId:string,operation:string,signal:AbortSignal,requestWorkId:string):ToolExecutionContext{return{operation,run,workId,requestWorkId,actionId:`${run.sessionId}:${callId}`,signal,collaboration:this.collaboration,broker:this.broker,...(this.additional?{additional:this.additional}:{}),...(this.directory?{directory:this.directory}:{}),history:this.history,sessions:this.sessions,coordination:this.coordination,gate:this.gate};}
   private resolveWork(entry:ToolSpec,run:RunToken,selected:string,args:Record<string,any>):string{
     const c=this.collaboration;
     if(entry.workPolicy==='none'||entry.workPolicy==='select')return selected;

@@ -14,7 +14,6 @@ export class ReviewSeats{
    if(s.db.prepare('SELECT 1 FROM review_seats WHERE agent_id=?').get(actor))throw new Error('Use a new reviewer identity for another independent seat');
    s.db.prepare('INSERT INTO review_seats VALUES(?,?,?,?,1)').run(actor,encode(target),brief,workspace);
    this.messages.writes.mutable('review_seats',actor);
-   s.db.prepare('UPDATE grants SET revoked=1 WHERE agent_id=? AND root!=?').run(actor,workspace);
    s.audit('review_seat_activated',{owner,actor,target,workspace,baseline:'unused identity; daemon-verified empty private workspace; owner-provided role and brief'});
   });
  }

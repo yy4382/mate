@@ -6,7 +6,7 @@ import {FairAdmission} from '../../src/concurrency/admission.js';
 import {AdmittedBackend} from '../../src/execution/admitted.js';
 import {daemonConfigSchema} from '../../src/daemon/config.js';
 import {Daemon} from '../../src/daemon/app.js';
-import {SandboxBackend} from '../../src/execution/backend.js';
+import {LinuxUserBackend} from '../../src/execution/linux-user.js';
 
 const cleanup:(()=>Promise<unknown>|void)[]=[];
 afterEach(async()=>{vi.restoreAllMocks();for(const close of cleanup.splice(0).reverse())await close();});
@@ -45,7 +45,7 @@ it('shares backend admission with concurrent private-memory recovery',async()=>{
   const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-recovery-admission-')));cleanup.push(()=>rmSync(root,{recursive:true,force:true}));
   const raw=JSON.parse(readFileSync(resolve('mate.local.example.json'),'utf8'));raw.runtime.dataDir=join(root,'data');raw.runtime.limits={maxActiveRuns:2,maxBackendOperations:1,workerIdleMs:300000};
   let active=0,maximum=0;const releases:(()=>void)[]=[];
-  vi.spyOn(SandboxBackend.prototype,'execute').mockImplementation(async()=>{active++;maximum=Math.max(maximum,active);await new Promise<void>(resolve=>releases.push(resolve));active--;return{code:0,stdout:'memory',stderr:'',truncated:false};});
+  vi.spyOn(LinuxUserBackend.prototype,'execute').mockImplementation(async()=>{active++;maximum=Math.max(maximum,active);await new Promise<void>(resolve=>releases.push(resolve));active--;return{code:0,stdout:'memory',stderr:'',truncated:false};});
   const daemon=await Daemon.create(daemonConfigSchema.parse(raw),{info:()=>{},error:()=>{}});cleanup.push(()=>daemon.close());
   const work=daemon.collaboration.createWork('recovery-admission',{conversationId:'team-room'}),signal=new AbortController().signal;
   const first=daemon.supervisor.recovery('research',work,signal),second=daemon.supervisor.recovery('writer',work,signal);

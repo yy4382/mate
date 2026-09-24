@@ -6,6 +6,7 @@ import type {CanonicalFreshnessGate} from '../conversations/freshness.js';
 import type {RunToken} from '../storage/store.js';
 import type {Collaboration} from '../collaboration/service.js';
 import type {Broker} from '../policy/broker.js';
+import type {SystemOperations} from '../policy/system-operations.js';
 import type {ConversationDirectory} from '../conversations/directory.js';
 
 export type WorkPolicy='none'|'current'|'task'|'reminder'|'select'|'broker-managed';
@@ -15,6 +16,8 @@ export type ReplayPolicy='immutable'|'refreshable'|'boundary-owned';
 
 export interface AdditionalTools {
   environment?(run:RunToken,workId:string):unknown;
+  processes?:{list(agentId:string):unknown;stop(agentId:string,unit:string):unknown};
+  system?:SystemOperations;
   attachment?(run:RunToken,workId:string,actionId:string,args:import('../capabilities/artifacts.js').AttachmentArgs,signal:AbortSignal):Promise<unknown>;
   research(url:string,signal:AbortSignal):Promise<unknown>;
   publish(run:RunToken,workId:string,actionId:string,args:import('../capabilities/artifacts.js').PublishArgs,signal:AbortSignal):Promise<unknown>;
@@ -24,7 +27,6 @@ export interface ToolExecutionContext{
   operation:string;run:RunToken;workId:string;requestWorkId:string;actionId:string;signal:AbortSignal;
   collaboration:Collaboration;broker:Broker;additional?:AdditionalTools;directory?:ConversationDirectory;
   history:ConversationHistory;sessions:SessionLifecycle;coordination:MessageTasks;gate:CanonicalFreshnessGate;
-  provision?:(actor:string,workId:string)=>void;
 }
 export interface ToolHandlerResult{value:unknown;wait?:boolean}
 interface ToolSpecBase{

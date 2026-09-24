@@ -20,21 +20,22 @@ import { acquireLock } from '../../src/daemon/lock.js';
 import { backup } from '../../src/daemon/backup.js';
 import { Research, publicIPv4 } from '../../src/daemon/research.js';
 import { Controls } from '../../src/daemon/control.js';
-import { SlackService } from '../../src/slack/service.js';
+import { SlackService,formatControlReply } from '../../src/slack/service.js';
+import {DurableReceiver} from '../../src/slack/receiver.js';
 import { CanonicalSlackTransport as WebSlackTransport } from '../../src/slack/transport.js';
 import { Artifacts } from '../../src/daemon/artifacts.js';
-import {ContainerBackend} from '../../src/execution/container.js';
-import {nodeWorkspaceHost} from '../../src/deployment/workspaces.js';
+import {ProcessNotRunningError,type LinuxProcessManager} from '../../src/execution/linux-processes.js';
+import {SystemOperations} from '../../src/policy/system-operations.js';
 import {daemonConfigSchema} from '../../src/daemon/config.js';
+import {daemonFixture} from '../helpers/daemon-config.js';
 const cleanups: (() => void)[] = [];
-const unmanagedDeploymentEnvironment={platform:'darwin' as const,workspaceHost:nodeWorkspaceHost()};
 afterEach(() => {vi.restoreAllMocks();cleanups.splice(0).forEach(fn => fn());});
 function setup() {
   const config = configSchema.parse({ ...configFixture, budgets: { ...configFixture.budgets, maxTokens: 300000 }, agents: [configFixture.agents[0], { ...configFixture.agents[0], id: 'writer', name: 'Writer', slackAppId: 'ATWO', slackUserId: 'UTWO', slackBotId: 'BTWO', botTokenEnv: 'WRITER_BOT', appTokenEnv: 'WRITER_APP' }] });
   const store = new Store(':memory:'), messages = new Messages(store, config);migrateCurrentRuntime(store);const post = vi.fn(async () => ({ ts: `101.${String(post.mock.calls.length).padStart(6,'0')}` }));
   const c = new Collaboration(store, messages, new Output(messages, { post }), config), ingress = new Ingress(c,new CanonicalSlackNormalizer(messages,messages.mapper,c.output));
   const backend = { execute: vi.fn(async () => ({ code: 0, stdout: 'artifact evidence', stderr: '', truncated: false })) };
-  const broker = new Broker(store, c, backend, ['/synthetic/protected']);
+  const broker = new Broker(store, c, backend, { research: '/tmp', writer: '/tmp' });
   cleanups.push(() => store.close()); return { store, c, ingress, broker, post, backend, mapper:messages.mapper };
 }
 it('two Agents can coordinate through one canonical message and direct peer feedback without a task tree',async()=>{
@@ -71,7 +72,7 @@ it('kernel lock excludes a second daemon; backup restores SQLite plus private me
   const root=mkdtempSync(join(tmpdir(),'mate-checkpoint-')), data=join(root,'data'); mkdirSync(join(data,'agents','research'),{recursive:true});mkdirSync(join(data,'state')); writeFileSync(join(data,'agents','research','MEMORY.md'),'synthetic lesson');
   const release=acquireLock(join(root,'lock')); expect(()=>acquireLock(join(root,'lock'))).toThrow('Another Mate'); release(); const again=acquireLock(join(root,'lock')); again();
   const store=new Store(join(data,'state','mate.sqlite')); store.register('research','v1',[{role:'user',content:'persisted'}]);
-  const checkpointConfig=daemonConfigSchema.parse({mate:configFixture,runtime:{dataDir:data,workspaceGrants:[],researchHosts:[]}});
+  const checkpointConfig=daemonFixture(data);
   try { await backup(store,data,join(root,'checkpoint'),checkpointConfig); const restored=new Store(join(root,'checkpoint','mate.sqlite')); expect(restored.db.prepare('SELECT count(*) n FROM entries').get()).toEqual({n:1}); restored.close(); expect(readFileSync(join(root,'checkpoint','agents','research','MEMORY.md'),'utf8')).toBe('synthetic lesson'); }
   finally {store.close();rmSync(root,{recursive:true,force:true});}
 });
@@ -80,6 +81,34 @@ it('public research rejects local/metadata destinations before HTTP', async () =
   expect(publicIPv4('93.184.216.34')).toBe(true);
   await expect(new Research(['example.com']).read('https://127.0.0.1',new AbortController().signal)).rejects.toThrow('outside');
   await expect(new Research(['example.com']).read('https://secret@example.com',new AbortController().signal)).rejects.toThrow('outside');
+});
+it('starts the Linux-user route with a separate private home and peer-visible shared work root',async()=>{
+  const {Daemon}=await import('../../src/daemon/app.js');
+  const base=realpathSync(mkdtempSync(join(tmpdir(),'mate-linux-daemon-'))),data=join(base,'data'),home=join(base,'private-research'),sharedRoot=join(base,'shared');
+  mkdirSync(home,{mode:0o700});for(const dir of ['notes','artifacts'])mkdirSync(join(home,dir),{mode:0o700});writeFileSync(join(home,'MEMORY.md'),'# Research\n\nPrivate memory entry. Keep durable lessons and links to notes here.\n',{mode:0o600});
+  mkdirSync(sharedRoot,{mode:0o755});chmodSync(sharedRoot,0o755);mkdirSync(join(sharedRoot,'research'),{mode:0o755});chmodSync(join(sharedRoot,'research'),0o755);
+  const user={uid:process.getuid!(),gid:process.getgid!(),home,username:'research'};
+  const input=daemonFixture(data,configFixture,{linuxUsers:{research:user},sharedRoot,researchHosts:[]});
+  mkdirSync(join(data,'state'),{recursive:true,mode:0o700});chmodSync(data,0o700);chmodSync(join(data,'state'),0o755);
+  await expect(Daemon.create(input,{info:()=>{},error:()=>{}},process.cwd())).rejects.toThrow('Mate control directory');
+  chmodSync(join(data,'state'),0o700);
+  const daemon=await Daemon.create(input,{info:()=>{},error:()=>{}},process.cwd());
+  try{
+    expect(daemon.memoryRoots.research).toBe(realpathSync(home));
+    expect(daemon.config.runtime.sharedRoot).toBe(realpathSync(sharedRoot));
+    expect(existsSync(join(home,'MEMORY.md'))).toBe(true);
+  }finally{await daemon.close();rmSync(base,{recursive:true,force:true});}
+});
+it('requires distinct non-root Linux identities and one shared root for the team',()=>{
+  const other={...configFixture.agents[0]!,id:'bob',name:'Bob',slackAppId:'ATWO',slackUserId:'UTWO',slackBotId:'BTWO',botTokenEnv:'BOB_BOT',appTokenEnv:'BOB_APP'};
+  const input=daemonFixture('/var/lib/mate',{...configFixture,agents:[configFixture.agents[0],other]},{sharedRoot:'/srv/mate/shared',linuxUsers:{research:{uid:1001,gid:1001,home:'/srv/mate/private/research'},bob:{uid:1002,gid:1002,home:'/srv/mate/private/bob'}}});
+  expect(daemonConfigSchema.safeParse(input).success).toBe(true);
+  expect(daemonConfigSchema.safeParse({...input,runtime:{...input.runtime,sharedRoot:undefined}}).success).toBe(false);
+  expect(daemonConfigSchema.safeParse({...input,runtime:{...input.runtime,workspaceManifest:'/var/lib/mate/old-manifest.json'}}).success).toBe(false);
+  expect(daemonConfigSchema.safeParse({...input,runtime:{...input.runtime,linuxUsers:{...input.runtime.linuxUsers,bob:{uid:1001,gid:1002,home:'/srv/mate/private/bob'}}}}).success).toBe(false);
+  expect(daemonConfigSchema.safeParse({...input,runtime:{...input.runtime,linuxUsers:{...input.runtime.linuxUsers,bob:{uid:0,gid:1002,home:'/srv/mate/private/bob'}}}}).success).toBe(false);
+  expect(daemonConfigSchema.safeParse({...input,runtime:{...input.runtime,systemAgents:['research']}}).success).toBe(true);
+  expect(daemonConfigSchema.safeParse({...input,runtime:{...input.runtime,systemAgents:['unknown']}}).success).toBe(false);
 });
 it('controls are owner-only, durable replay applies once, and unknown admin sends never retry', async () => {
   const {store,c,ingress,broker}=setup(); const supervisor=new Supervisor(c,new ToolRouter(c,broker),c.config);supervisor.register();cleanups.unshift(()=>supervisor.close());
@@ -90,15 +119,110 @@ it('controls are owner-only, durable replay applies once, and unknown admin send
   store.ingest('AONE','cmd',{command:'/team',team_id:'TTEST',user_id:'UOWNER',channel_id:'CTEST',text:`stop ${work}`});slack.replay();slack.replay();expect(c.work(work).state).toBe('paused');
   expect(store.db.prepare('SELECT count(*) n FROM admin_replies').get()).toEqual({n:1});await slack.flushAdmin();await slack.flushAdmin();expect(ephemeral).toHaveBeenCalledOnce();
 });
-it('artifact upload is scoped to own artifact directory and uncertain publication cannot be repeated with a new ID', async () => {
+it('lets only the owner list and stop an Agent Linux scope through controls',()=>{
+  const {c,broker}=setup(),unit='mate-agent-1001-123e4567-e89b-42d3-a456-426614174000.scope';
+  const list=vi.fn(()=>[{unit,pids:[4101]}]),stop=vi.fn(()=>({unit,stopped:true}));
+  const controls=new Controls(c,{} as Supervisor,broker,undefined,undefined,{list,stop} as unknown as LinuxProcessManager);
+  expect(()=>controls.execute('UONE','processes research')).toThrow('Owner only');
+  expect(controls.execute('UOWNER','processes research')).toEqual([{unit,pids:[4101]}]);
+  expect(controls.execute('UOWNER',`process-stop research ${unit}`)).toEqual({unit,stopped:true});
+  expect(list).toHaveBeenCalledWith('research');expect(stop).toHaveBeenCalledWith('research',unit);
+});
+it('reports a repeated owner stop as no longer running after a crash before control receipt commit',()=>{
+  const {c,broker}=setup(),unit='mate-agent-1001-123e4567-e89b-42d3-a456-426614174000.scope';
+  const stop=vi.fn().mockReturnValueOnce({unit,stopped:true}).mockImplementationOnce(()=>{throw new ProcessNotRunningError('Agent scope is not running');});
+  const controls=new Controls(c,{} as Supervisor,broker,undefined,undefined,{list:()=>[],stop} as unknown as LinuxProcessManager);
+  expect(controls.execute('UOWNER',`process-stop research ${unit}`)).toEqual({unit,stopped:true});
+  expect(controls.execute('UOWNER',`process-stop research ${unit}`)).toEqual({unit,stopped:false,reason:'not_running'});
+});
+it('routes a system request through a human Slack confirmation button before privileged dispatch',async()=>{
+  const {store,c,ingress,broker}=setup(),execute=vi.fn(async()=>({code:0,stdout:'done',stderr:'',truncated:false}));
+  store.register('research','v1',[]);c.messages.membership('research','CTEST',true);
+  const work=c.createWork('system-approval',fixtureTarget('CTEST','100.000001'));c.enqueue('research',work,'start',{});const run=store.beginRun('research')!;store.input(run,{});
+  const system=new SystemOperations(store,c,['research'],{execute},()=>1000),router=new ToolRouter(c,broker,{system,research:async()=>({}),publish:async()=>({})});
+  const mapper=ingress.normalizer instanceof CanonicalSlackNormalizer?ingress.normalizer.mapper:(()=>{throw new Error();})();
+  const transport=new WebSlackTransport(store,mapper,{research:'synthetic',writer:'synthetic'});
+  const client=transport.clients.get('research')!,post=vi.fn(async(_request:unknown)=>({ok:true,ts:'200.000001'}));
+  client.conversations.open=vi.fn().mockRejectedValueOnce(new Error('DM lookup unavailable')).mockResolvedValue({ok:true,channel:{id:'DOWNER'}}) as any;client.chat.postMessage=post as any;
+  const slack=new SlackService(c,transport,ingress,{} as Controls,()=>false,system),input={program:'/usr/bin/apt-get',args:['install','example'],cwd:'/tmp'};
+  const requested=(await router.call(run,work,'root-command','tools.call',{name:'system.request',input},new AbortController().signal)).value as {id:string;status:string};
+  expect(requested.status).toBe('pending');await system.dispatchApproved();expect(execute).not.toHaveBeenCalled();
+  await slack.flushApprovals();expect(post).not.toHaveBeenCalled();expect(system.pendingNotices()).toHaveLength(1);
+  await slack.flushApprovals();expect(post).toHaveBeenCalledOnce();
+  const blocks=(post.mock.calls[0]![0] as any).blocks;expect(JSON.stringify(blocks)).toContain('not frozen');expect(JSON.stringify(blocks)).toContain('confirm');
+  store.ingest('AONE','clicked',{type:'block_actions',team:{id:'TTEST'},user:{id:'UOWNER'},actions:[{action_id:'mate_system_approve',value:requested.id}]});
+  slack.replay();expect(store.db.prepare("SELECT kind,body FROM audit WHERE kind='ingress_rejected'").all()).toEqual([]);expect(system.status('research',requested.id).status).toBe('approved');await system.dispatchApproved();expect(execute).toHaveBeenCalledOnce();
+  await slack.flushResults();expect(post).toHaveBeenCalledTimes(2);expect((post.mock.calls[1]![0] as {text:string}).text).toContain('succeeded');
+  expect((await router.call(run,work,'root-status','system.status',{requestId:requested.id},new AbortController().signal)).value).toMatchObject({status:'succeeded',receipt:{stdout:'done'}});
+  const controls=new Controls(c,{} as Supervisor,broker,undefined,undefined,undefined,system);
+  expect(controls.execute('UOWNER',`system-status ${requested.id}`)).toMatchObject({status:'succeeded'});
+  expect(()=>controls.execute('UOTHER',`system-status ${requested.id}`)).toThrow('Owner');
+  store.ingest('AONE','clicked-again',{type:'block_actions',team:{id:'TTEST'},user:{id:'UOWNER'},actions:[{action_id:'mate_system_approve',value:requested.id}]});
+  slack.replay();await system.dispatchApproved();expect(execute).toHaveBeenCalledOnce();
+  const denied=(await router.call(run,work,'root-denied','system.request',input,new AbortController().signal)).value as {id:string};
+  store.ingest('AONE','not-owner',{type:'block_actions',team:{id:'TTEST'},user:{id:'UOTHER'},actions:[{action_id:'mate_system_approve',value:denied.id}]});
+  slack.replay();expect(system.status('research',denied.id).status).toBe('pending');
+  store.ingest('AONE','rejected',{type:'block_actions',team:{id:'TTEST'},user:{id:'UOWNER'},actions:[{action_id:'mate_system_reject',value:denied.id}]});
+  slack.replay();await system.dispatchApproved();expect(system.status('research',denied.id).status).toBe('rejected');expect(execute).toHaveBeenCalledOnce();
+  const expired=(await router.call(run,work,'root-expired','system.request',input,new AbortController().signal)).value as {id:string};
+  system.expire(601001);store.ingest('AONE','late-click',{type:'block_actions',team:{id:'TTEST'},user:{id:'UOWNER'},actions:[{action_id:'mate_system_approve',value:expired.id}]});
+  slack.replay();await system.dispatchApproved();expect(system.status('research',expired.id).status).toBe('expired');expect(execute).toHaveBeenCalledOnce();
+  const disconnected=(await router.call(run,work,'no-ui','system.request',input,new AbortController().signal)).value as {id:string};
+  await system.dispatchApproved();expect(system.status('research',disconnected.id).status).toBe('pending');expect(execute).toHaveBeenCalledOnce();
+});
+it('keeps direct system-tool refusal, expiry and changed-request replay visible without running anything',async()=>{
+  const {store,c,broker}=setup(),execute=vi.fn(async()=>({code:0,stdout:'unexpected',stderr:'',truncated:false}));
+  store.register('research','v1',[]);c.messages.membership('research','CTEST',true);
+  const work=c.createWork('system-refusal',fixtureTarget('CTEST','100.000001'));c.enqueue('research',work,'start',{});const run=store.beginRun('research')!;store.input(run,{});
+  const system=new SystemOperations(store,c,['research'],{execute},()=>1000),router=new ToolRouter(c,broker,{system,research:async()=>({}),publish:async()=>({})}),signal=new AbortController().signal;
+  const input={program:'/usr/bin/apt-get',args:['install','example'],cwd:'/tmp'};
+  const first=(await router.call(run,work,'refused','system.request',input,signal)).value as {id:string};
+  await expect(router.call(run,work,'refused','tools.call',{name:'system.request',input:{...input,args:['remove','example']}},signal)).rejects.toThrow('identity');
+  system.decide('UOWNER',first.id,'reject');
+  expect((await router.call(run,work,'refused-status','system.status',{requestId:first.id},signal)).value).toMatchObject({status:'rejected',receipt:{reason:'approval_rejected'}});
+  const second=(await router.call(run,work,'timed-out','tools.call',{name:'system.request',input},signal)).value as {id:string};
+  system.expire(601001);
+  expect((await router.call(run,work,'expired-status','system.status',{requestId:second.id},signal)).value).toMatchObject({status:'expired',receipt:{reason:'approval_expired'}});
+  store.db.prepare('INSERT INTO review_seats VALUES(?,?,?,?,1)').run('research','{}','brief','/tmp/clean');
+  await expect(router.call(run,work,'review-system','system.request',input,signal)).rejects.toThrow(/review|isolates/);
+  await system.dispatchApproved();expect(execute).not.toHaveBeenCalled();
+});
+it('rejects forged Slack approval envelopes and a request belonging to another Agent app',async()=>{
+  const {store,c,ingress}=setup(),execute=vi.fn(async()=>({code:0,stdout:'unexpected',stderr:'',truncated:false}));
+  store.register('research','v1',[]);store.register('writer','v1',[]);c.messages.membership('writer','CTEST',true);
+  const work=c.createWork('cross-app-system',fixtureTarget('CTEST','100.000001'));c.enqueue('writer',work,'start',{});const run=store.beginRun('writer')!;store.input(run,{});
+  const system=new SystemOperations(store,c,['writer'],{execute},()=>1000),request=system.request(run,work,'writer-system',{program:'/usr/bin/id',args:[],cwd:'/tmp'});
+  const mapper=ingress.normalizer instanceof CanonicalSlackNormalizer?ingress.normalizer.mapper:(()=>{throw new Error();})();
+  const transport=new WebSlackTransport(store,mapper,{research:'synthetic',writer:'synthetic'}),slack=new SlackService(c,transport,ingress,{} as Controls,()=>false,system);
+  const socket={on:()=>{},start:async()=>{},disconnect:async()=>{}},receiver=new DurableReceiver(store,'AONE','TTEST',socket,()=>{},()=>slack.replay()),ack=vi.fn(async()=>{});
+  const body={type:'block_actions',api_app_id:'AONE',team_id:'TTEST',user:{id:'UOWNER'},actions:[{action_id:'mate_system_approve',value:request.id}]};
+  await expect(receiver.receive({envelope_id:'wrong-app',body:{...body,api_app_id:'ATWO'},ack})).rejects.toThrow('app identity');
+  await expect(receiver.receive({envelope_id:'wrong-team',body:{...body,team_id:'TOTHER'},ack})).rejects.toThrow('workspace identity');
+  expect(ack).not.toHaveBeenCalled();
+  await receiver.receive({envelope_id:'cross-app',body,ack});expect(ack).toHaveBeenCalledOnce();
+  await system.dispatchApproved();expect(system.status('writer',request.id).status).toBe('pending');expect(execute).not.toHaveBeenCalled();
+});
+it('lets the owner page through long system output within Slack control reply limits',async()=>{
+  const {store,c,broker}=setup(),execute=vi.fn(async()=>({code:0,stdout:'\0'.repeat(60000),stderr:'🙂'.repeat(10000),truncated:false}));
+  store.register('research','v1',[]);c.messages.membership('research','CTEST',true);
+  const work=c.createWork('long-system-output',fixtureTarget('CTEST','100.000001'));c.enqueue('research',work,'start',{});const run=store.beginRun('research')!;store.input(run,{});
+  const system=new SystemOperations(store,c,['research'],{execute},()=>1000),request=system.request(run,work,'long-result',{program:'/usr/bin/id',args:[],cwd:'/tmp'});
+  system.decide('UOWNER',request.id,'approve');await system.dispatchApproved();
+  const controls=new Controls(c,{} as Supervisor,broker,undefined,undefined,undefined,system);
+  const status=controls.execute('UOWNER',`system-status ${request.id}`) as {receipt:{stdoutMore:boolean;stderrMore:boolean}};
+  expect(status.receipt).toMatchObject({stdoutMore:true,stderrMore:true});expect(formatControlReply(status)).not.toContain('mate.control-overflow.v1');
+  const first=controls.execute('UOWNER',`system-output ${request.id} stdout 0`) as {chunk:string;nextOffset:number};
+  expect(first.chunk).toBe('\0'.repeat(2000));expect(first.nextOffset).toBe(2000);expect(formatControlReply(first)).not.toContain('mate.control-overflow.v1');
+  const second=controls.execute('UOWNER',`system-output ${request.id} stderr 0`) as {chunk:string;nextOffset:number};
+  expect(second.chunk).toBe('🙂'.repeat(1000));expect(formatControlReply(second)).not.toContain('mate.control-overflow.v1');
+});
+it('uncertain artifact publication cannot be repeated with a new ID', async () => {
   const {store,c,broker}=setup();new ToolRouter(c,broker);store.register('research','v1',[]);c.messages.membership('research','CTEST',true);const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-artifact-')));cleanups.push(()=>rmSync(root,{recursive:true,force:true}));mkdirSync(join(root,'artifacts'));
-  const target=fixtureTarget('CTEST','100.000001'), work=c.createWork('human:artifact',target);c.enqueue('research',work,'one',{});const run=store.beginRun('research')!;store.input(run,{});const grant=broker.issueGrant('UOWNER','research',work,root,['read'],Date.now()+100000);
+  const target=fixtureTarget('CTEST','100.000001'), work=c.createWork('human:artifact',target);c.enqueue('research',work,'one',{});const run=store.beginRun('research')!;store.input(run,{});
   const upload=vi.fn(async(_request:any,_artifact:any,prepared:any,beforeShare:any)=>{prepared('FFILE');beforeShare();throw new Error('lost after send')});const artifacts=new Artifacts(c,broker,{configured:()=>true,supports:()=>true,upload},{research:root});const signal=new AbortController().signal;
-  await expect(artifacts.publish(run,work,'private',{grantId:grant,path:'MEMORY.md',target,title:'bad'},signal)).rejects.toThrow('Only own');
-  await expect(artifacts.publish(run,work,'traversal',{grantId:grant,path:'artifacts/../MEMORY.md',target,title:'bad'},signal)).rejects.toThrow('Only own');
-  const draft=await artifacts.publish(run,work,'first',{grantId:grant,path:'artifacts/result.txt',target,title:'result'},signal) as any;expect(draft.status).toBe('held');expect(upload).not.toHaveBeenCalled();
+  const draft=await artifacts.publish(run,work,'first',{path:'artifacts/result.txt',target,title:'result'},signal) as any;expect(draft.status).toBe('held');expect(upload).not.toHaveBeenCalled();
   c.output.gate!.continueOnce(run,draft.draftId,draft.revision,draft.holdId);await c.output.send(draft.draftId);expect(store.output(draft.draftId)?.state).toBe('unknown');
-  await expect(artifacts.publish(run,work,'second',{grantId:grant,path:'artifacts/result.txt',target,title:'result'},signal)).rejects.toThrow('unknown');expect(upload).toHaveBeenCalledOnce();
+  await expect(artifacts.publish(run,work,'second',{path:'artifacts/result.txt',target,title:'result'},signal)).rejects.toThrow('unknown');expect(upload).toHaveBeenCalledOnce();
 });
 it('paused or delayed output cannot starve later active work', async () => {
   const {store,c,post}=setup();store.register('research','v1',[]);c.messages.membership('research','CTEST',true);const target=fixtureTarget('CTEST','100.000001');
@@ -110,60 +234,13 @@ it('paused or delayed output cannot starve later active work', async () => {
 });
 it('stop during startup retains the singleton lock until startup settles and never opens sockets afterward', async () => {
   const {Daemon}=await import('../../src/daemon/app.js');const {deferred}=await import('../helpers/pi.js');const root=mkdtempSync(join(tmpdir(),'mate-start-stop-')), gate=deferred();
-  const config={mate:configSchema.parse({...configFixture,agents:[{...configFixture.agents[0],model:{provider:'anthropic',id:'claude-haiku-4-5',apiKeyEnv:'MODEL_API_KEY'}}]}),runtime:{dataDir:root,workspaceGrants:[],researchHosts:[]}};
+  const config=daemonFixture(root,{...configFixture,agents:[{...configFixture.agents[0],model:{provider:'anthropic',id:'claude-haiku-4-5',apiKeyEnv:'MODEL_API_KEY'}}]},{researchHosts:[]});
   const refs=['RESEARCH_BOT_TOKEN','RESEARCH_APP_TOKEN','MODEL_API_KEY'], saved=Object.fromEntries(refs.map(ref=>[ref,process.env[ref]]));for(const ref of refs)process.env[ref]='synthetic';
   const log={info:()=>{},error:()=>{}};const daemon=await Daemon.create(config,log);const verify=vi.spyOn(daemon.slack,'verify').mockImplementation(()=>gate.promise);const membership=vi.spyOn(daemon.slack,'membership');
   try {
     const starting=daemon.start();await vi.waitFor(()=>expect(verify).toHaveBeenCalledOnce());const closing=daemon.close();expect(()=>acquireLock(join(root,'state','daemon.lock'))).toThrow('Another Mate');
-    gate.resolve();await expect(starting).rejects.toThrow('stopped during startup');await closing;expect(membership).not.toHaveBeenCalled();const release=acquireLock(join(root,'state','daemon.lock'));release();
+    gate.resolve();await expect(starting).rejects.toThrow('Daemon stopped during startup');await closing;expect(membership).not.toHaveBeenCalled();const release=acquireLock(join(root,'state','daemon.lock'));release();
   } finally {await daemon.close();for(const ref of refs){if(saved[ref]===undefined)delete process.env[ref];else process.env[ref]=saved[ref];}rmSync(root,{recursive:true,force:true});}
-});
-it('recovers and probes the configured container before opening the Slack adapter',async()=>{
-  const {Daemon}=await import('../../src/daemon/app.js');const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-container-start-'))),order:string[]=[];
-  const binary=join(root,'docker-cli');writeFileSync(binary,'synthetic');chmodSync(binary,0o700);
-  const config={mate:configSchema.parse({...configFixture,agents:[{...configFixture.agents[0],model:{provider:'anthropic',id:'claude-haiku-4-5',apiKeyEnv:'MODEL_API_KEY'}}]}),runtime:{dataDir:root,docker:{binary,host:'unix:///var/run/docker.sock',image:`sha256:${'a'.repeat(64)}`,network:'none' as const},workspaceGrants:[],researchHosts:[]}};
-  const refs=['RESEARCH_BOT_TOKEN','RESEARCH_APP_TOKEN','MODEL_API_KEY'],saved=Object.fromEntries(refs.map(ref=>[ref,process.env[ref]]));for(const ref of refs)process.env[ref]='synthetic';
-  vi.spyOn(ContainerBackend.prototype,'recover').mockImplementation(async()=>{order.push('recover');});vi.spyOn(ContainerBackend.prototype,'probe').mockImplementation(async()=>{order.push('probe');});
-  const daemon=await Daemon.create(config,{info:()=>{},error:()=>{}},process.cwd(),unmanagedDeploymentEnvironment);vi.spyOn(daemon.adapter!,'start').mockImplementation(async()=>{order.push('slack');});vi.spyOn(daemon.adapter!,'close').mockResolvedValue();
-  try{await daemon.start();expect(order.slice(0,3)).toEqual(['recover','probe','slack']);}finally{await daemon.close();for(const ref of refs){if(saved[ref]===undefined)delete process.env[ref];else process.env[ref]=saved[ref];}rmSync(root,{recursive:true,force:true});}
-});
-it('does not open Slack when the real container startup probe fails',async()=>{
-  const {Daemon}=await import('../../src/daemon/app.js');const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-container-fail-')));
-  const binary=join(root,'docker-cli');writeFileSync(binary,'synthetic');chmodSync(binary,0o700);
-  const config={mate:configSchema.parse({...configFixture,agents:[{...configFixture.agents[0],model:{provider:'anthropic',id:'claude-haiku-4-5',apiKeyEnv:'MODEL_API_KEY'}}]}),runtime:{dataDir:root,docker:{binary,host:'unix:///var/run/docker.sock',image:`sha256:${'a'.repeat(64)}`},workspaceGrants:[],researchHosts:[]}};
-  const refs=['RESEARCH_BOT_TOKEN','RESEARCH_APP_TOKEN','MODEL_API_KEY'],saved=Object.fromEntries(refs.map(ref=>[ref,process.env[ref]]));for(const ref of refs)process.env[ref]='synthetic';
-  vi.spyOn(ContainerBackend.prototype,'recover').mockResolvedValue();vi.spyOn(ContainerBackend.prototype,'probe').mockRejectedValue(new Error('synthetic probe failure'));
-  const daemon=await Daemon.create(config,{info:()=>{},error:()=>{}},process.cwd(),unmanagedDeploymentEnvironment),start=vi.spyOn(daemon.adapter!,'start');vi.spyOn(daemon.adapter!,'close').mockResolvedValue();
-  try{await expect(daemon.start()).rejects.toThrow('synthetic probe failure');expect(start).not.toHaveBeenCalled();}finally{await daemon.close();for(const ref of refs){if(saved[ref]===undefined)delete process.env[ref];else process.env[ref]=saved[ref];}rmSync(root,{recursive:true,force:true});}
-});
-it('recovers the local execution scope before missing external credentials can fail startup',async()=>{
-  const {Daemon}=await import('../../src/daemon/app.js');const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-recover-before-secret-'))),binary=join(root,'docker-cli'),order:string[]=[];writeFileSync(binary,'synthetic');chmodSync(binary,0o700);
-  const config={mate:configSchema.parse({...configFixture,agents:[{...configFixture.agents[0],model:{provider:'anthropic',id:'claude-haiku-4-5',apiKeyEnv:'MODEL_API_KEY'}}]}),runtime:{dataDir:root,docker:{binary,host:'unix:///var/run/docker.sock',image:`sha256:${'a'.repeat(64)}`},workspaceGrants:[],researchHosts:[]}};
-  const refs=['RESEARCH_BOT_TOKEN','RESEARCH_APP_TOKEN','MODEL_API_KEY'],saved=Object.fromEntries(refs.map(ref=>[ref,process.env[ref]]));delete process.env.RESEARCH_BOT_TOKEN;delete process.env.RESEARCH_APP_TOKEN;process.env.MODEL_API_KEY='synthetic';
-  vi.spyOn(ContainerBackend.prototype,'recover').mockImplementation(async()=>{order.push('recover');});vi.spyOn(ContainerBackend.prototype,'probe').mockImplementation(async()=>{order.push('probe');});
-  const daemon=await Daemon.create(config,{info:()=>{},error:()=>{}},process.cwd(),unmanagedDeploymentEnvironment),start=vi.spyOn(daemon.adapter!,'start');
-  try{await expect(daemon.start()).rejects.toThrow('RESEARCH_BOT_TOKEN');expect(order.slice(0,2)).toEqual(['recover','probe']);expect(start).not.toHaveBeenCalled();}finally{await daemon.close();for(const ref of refs){if(saved[ref]===undefined)delete process.env[ref];else process.env[ref]=saved[ref];}rmSync(root,{recursive:true,force:true});}
-});
-it('recovers the container scope before database policy or workspace validation can reject construction',async()=>{
- const {Daemon}=await import('../../src/daemon/app.js'),recover=vi.spyOn(ContainerBackend.prototype,'recover').mockResolvedValue();
- for(const failure of ['policy','workspace'] as const){
-  const root=realpathSync(mkdtempSync(join(tmpdir(),`mate-recover-before-${failure}-`))),data=join(root,'data'),binary=join(root,'docker-cli'),shared=join(root,'shared');writeFileSync(binary,'synthetic');chmodSync(binary,0o700);mkdirSync(shared);
-  const config={mate:configSchema.parse(configFixture),runtime:{dataDir:data,docker:{binary,host:`unix://${join(root,'docker.sock')}`,image:`sha256:${'a'.repeat(64)}`},workspaceGrants:failure==='workspace'?[{agentId:'research',root:shared,operations:['read'] as const}]:[],researchHosts:[]}};
-  try{
-   const first=await Daemon.create(config,{info:()=>{},error:()=>{}},process.cwd(),unmanagedDeploymentEnvironment);
-   if(failure==='policy')first.store.db.prepare("UPDATE runtime_meta SET value='mismatch' WHERE key='policy'").run();
-   await first.close();if(failure==='workspace')rmSync(shared,{recursive:true,force:true});recover.mockClear();
-   await expect(Daemon.create(config,{info:()=>{},error:()=>{}},process.cwd(),unmanagedDeploymentEnvironment)).rejects.toThrow(failure==='policy'?'Runtime policy':'ENOENT');expect(recover).toHaveBeenCalledOnce();
-   const release=acquireLock(join(data,'state','daemon.lock'));release();
-  }finally{rmSync(root,{recursive:true,force:true});}
- }
-});
-it('releases the singleton lock if paths change after container recovery but before construction',async()=>{
- const {Daemon}=await import('../../src/daemon/app.js'),root=realpathSync(mkdtempSync(join(tmpdir(),'mate-factory-lock-'))),data=join(root,'data'),project=join(root,'project'),binary=join(root,'docker-cli');mkdirSync(project);writeFileSync(binary,'synthetic');chmodSync(binary,0o700);
- const config={mate:configSchema.parse(configFixture),runtime:{dataDir:data,docker:{binary,host:`unix://${join(root,'docker.sock')}`,image:`sha256:${'a'.repeat(64)}`},workspaceGrants:[],researchHosts:[]}};
- vi.spyOn(ContainerBackend.prototype,'recover').mockImplementation(async()=>rmSync(project,{recursive:true,force:true}));
- try{await expect(Daemon.create(config,{info:()=>{},error:()=>{}},project,unmanagedDeploymentEnvironment)).rejects.toThrow();const release=acquireLock(join(data,'state','daemon.lock'));release();}
- finally{rmSync(root,{recursive:true,force:true});}
 });
 it('offline replies in watched threads are durably ingested and maintain a separate pagination checkpoint', async () => {
   const {store,c,ingress,broker}=setup();const supervisor=new Supervisor(c,new ToolRouter(c,broker),c.config);supervisor.register();cleanups.unshift(()=>supervisor.close());c.messages.membership('research','CTEST',true);c.messages.watch('research',fixtureTarget('CTEST','100.000001'),true);
@@ -172,172 +249,18 @@ it('offline replies in watched threads are durably ingested and maintain a separ
   const slack=new SlackService(c,transport,ingress,new Controls(c,supervisor,broker));await slack.catchUp();slack.replay();
   expect(c.messages.read('research',fixtureTarget('CTEST','100.000001')).map(m=>m.text)).toContain('offline reply');expect(replies).toHaveBeenCalledOnce();expect(store.db.prepare("SELECT ts FROM slack_cursors WHERE channel='CTEST:100.000001'").get()).toEqual({ts:'101.000001'});
 });
-it('discovers and catches up a first DM that arrived while Mate was offline',async()=>{
-  const {store,c,ingress,broker}=setup();const supervisor=new Supervisor(c,new ToolRouter(c,broker),c.config);supervisor.register();cleanups.unshift(()=>supervisor.close());
-  const transport=new WebSlackTransport(store,ingress.normalizer instanceof CanonicalSlackNormalizer?ingress.normalizer.mapper:(()=>{throw new Error();})(),{research:'synthetic',writer:'synthetic'}),client=transport.clients.get('research')!;
-  client.users.conversations=vi.fn(async()=>({ok:true,channels:[{id:'DOFFLINE',is_im:true,user:'UOWNER'}]})) as any;
-  client.conversations.info=vi.fn(async()=>({ok:true,channel:{id:'DOFFLINE',is_im:true,is_member:true}})) as any;
-  const history=vi.fn(async({channel}:any)=>({ok:true,messages:channel==='DOFFLINE'?[{ts:'1.000001',user:'UOWNER',text:'first offline DM'}]:[]}));client.conversations.history=history as any;
-  const writer=transport.clients.get('writer')!;writer.users.conversations=vi.fn(async()=>({ok:true,channels:[]})) as any;
-  writer.conversations.info=vi.fn(async()=>({ok:true,channel:{is_member:false}})) as any;
-  const slack=new SlackService(c,transport,ingress,new Controls(c,supervisor,broker));
-  expect(c.messages.references.findConversation({provider:'slack',workspace:'TTEST',externalId:'DOFFLINE'})).toBeUndefined();
-  slack.bootstrapRecovery(1000);slack.bootstrapRecovery(1100);await slack.discoverMembership();await slack.membership();await slack.catchUp(true);slack.replay();
-  const conversationId=c.messages.references.findConversation({provider:'slack',workspace:'TTEST',externalId:'DOFFLINE'})!;
-  expect(c.messages.access('research',conversationId)).toBe(true);
-  expect(c.messages.read('research',{conversationId}).map(message=>message.text)).toContain('first offline DM');
-  store.enqueue('research','offline-dm-view',{});const run=store.beginRun('research')!;store.input(run,{});
-  expect((c.attention.read(run,{conversationId}) as {coverage:{gaps:string[]}}).coverage.gaps).toContain('slack_offline_edits_and_deletes_not_reconstructible');
-  expect(history.mock.calls.some(call=>call[0].channel==='DOFFLINE'&&call[0].oldest==='1.000000')).toBe(true);
-});
-it('discovers a first offline mention in an old thread that was never watched',async()=>{
-  const {store,c,ingress,broker}=setup();for(const agent of c.config.agents)store.register(agent.id,'v1',[]);c.messages.membership('research','CTEST',true);
-  const transport=new WebSlackTransport(store,ingress.normalizer instanceof CanonicalSlackNormalizer?ingress.normalizer.mapper:(()=>{throw new Error();})(),{research:'synthetic',writer:'synthetic'}),client=transport.clients.get('research')!;
-  const history=vi.fn(async({oldest}:any)=>oldest?{ok:true,messages:[]}:{ok:true,messages:[{ts:'0.500000',user:'UOWNER',text:'old root',reply_count:1,latest_reply:'2.000001'}]});client.conversations.history=history as any;
-  const replies=vi.fn(async()=>({ok:true,messages:[{ts:'0.500000',user:'UOWNER',text:'old root'},{ts:'2.000001',thread_ts:'0.500000',user:'UOWNER',text:'<@UONE> offline question'}]}));client.conversations.replies=replies as any;
-  const slack=new SlackService(c,transport,ingress,new Controls(c,{} as any,broker));slack.bootstrapRecovery(1000);slack.bootstrapRecovery(1100);expect(await slack.catchUp(true)).toBe(true);slack.replay();
-  const root=c.messages.references.findMessage({provider:'slack',workspace:'TTEST',externalId:'CTEST',messageId:'0.500000'});
-  expect(root).toBeDefined();
-  const target={conversationId:fixtureTarget('CTEST').conversationId,threadId:root!};
-  expect(c.messages.read('research',target).map(message=>message.text)).toEqual(['old root','<@UONE> offline question']);expect(replies).toHaveBeenCalledOnce();
-  store.enqueue('research','old-thread-view',{});const run=store.beginRun('research')!;store.input(run,{});
-  expect((c.attention.read(run,target) as {coverage:{gaps:string[]}}).coverage.gaps).toContain('slack_offline_edits_and_deletes_not_reconstructible');
-  expect(store.db.prepare("SELECT count(*) n FROM ingress WHERE event_id LIKE 'thread-discovery:%'").get()).toEqual({n:1});expect(store.db.prepare("SELECT count(*) n FROM deliveries WHERE agent_id='research' AND status='pending'").get()).toEqual({n:1});
-});
-it('fences pre-restart Slack views and drafts because history cannot replay deleted messages',async()=>{
- const{store,c,ingress,broker}=setup();for(const agent of c.config.agents)store.register(agent.id,'v1',[]);c.messages.membership('research','CTEST',true);const transport=new WebSlackTransport(store,ingress.normalizer instanceof CanonicalSlackNormalizer?ingress.normalizer.mapper:(()=>{throw new Error();})(),{research:'synthetic',writer:'synthetic'}),slack=new SlackService(c,transport,ingress,new Controls(c,{} as any,broker));
- slack.bootstrapRecovery(1000);const before=(store.db.prepare("SELECT context_epoch FROM sessions WHERE agent_id='research'").get() as {context_epoch:number}).context_epoch;slack.bootstrapRecovery(2000);
- expect((store.db.prepare("SELECT context_epoch FROM sessions WHERE agent_id='research'").get() as {context_epoch:number}).context_epoch).toBe(before+1);expect(store.db.prepare("SELECT count(*) n FROM conversation_events WHERE kind='recovery_gap' AND audience='research'").get()).toEqual({n:1});
- store.enqueue('research','read-after-restart',{});const run=store.beginRun('research')!;store.input(run,{});
- const view=c.attention.read(run,{conversationId:'CTEST'}) as {coverage:{gaps:string[]}};
- expect(view.coverage.gaps).toContain('slack_offline_edits_and_deletes_not_reconstructible');
-});
-it('discovers every startup conversation page beyond the interactive listing cap',async()=>{
-  const {c,ingress,broker}=setup(),transport=new WebSlackTransport(c.store,ingress.normalizer instanceof CanonicalSlackNormalizer?ingress.normalizer.mapper:(()=>{throw new Error();})(),{research:'synthetic',writer:'synthetic'});
-  const listings:ReturnType<typeof vi.fn>[]=[];
-  for(const client of transport.clients.values()){
-    const listing=vi.fn(async({cursor}:any)=>{const page=cursor?Number(cursor):0;return{ok:true,channels:[],response_metadata:{next_cursor:page<10?String(page+1):''}};});
-    listings.push(listing);client.users.conversations=listing as any;
-  }
-  const slack=new SlackService(c,transport,ingress,new Controls(c,{} as any,broker));
-  expect(await slack.discoverMembership()).toBe(true);
-  for(const listing of listings)expect(listing).toHaveBeenCalledTimes(11);
-});
-it('drains a Slack history backlog beyond ten pages before advancing its cursor',async()=>{
-  const {store,c,ingress,broker}=setup();for(const agent of c.config.agents)store.register(agent.id,'v1',[]);c.messages.membership('research',fixtureTarget('CTEST').conversationId,true);
-  const transport=new WebSlackTransport(store,ingress.normalizer instanceof CanonicalSlackNormalizer?ingress.normalizer.mapper:(()=>{throw new Error();})(),{research:'synthetic',writer:'synthetic'}),client=transport.clients.get('research')!;
-  let interrupted=false;const history=vi.fn(async({cursor}:any)=>{const page=cursor?Number(cursor):0;if(page===6&&!interrupted){interrupted=true;throw new Error('temporary Slack failure');}const messages=Array.from({length:100},(_,offset)=>{const n=page*100+offset+1;return{ts:`${n}.000001`,user:'UOWNER',text:`offline ${n}`};});return{ok:true,messages,response_metadata:{next_cursor:page<10?String(page+1):''}};});client.conversations.history=history as any;
-  const slack=new SlackService(c,transport,ingress,new Controls(c,{} as any,broker));slack.bootstrapRecovery(0);expect(await slack.catchUp(true)).toBe(false);const callsBefore=history.mock.calls.length;expect(await slack.catchUp(true)).toBe(true);
-  expect(history.mock.calls.slice(callsBefore).some(call=>call[0].oldest&&call[0].cursor==='6')).toBe(true);expect(store.db.prepare("SELECT count(*) n FROM ingress WHERE event_id LIKE 'history:CTEST:%'").get()).toEqual({n:1100});
-  expect(store.db.prepare("SELECT ts FROM slack_cursors WHERE agent_id='research' AND channel='CTEST'").get()).toEqual({ts:'1100.000001'});
-});
-it('budgets periodic old-thread scans without blocking top-level recovery and restarts after a socket gap',async()=>{
- const{store,c,ingress,broker}=setup();for(const agent of c.config.agents)store.register(agent.id,'v1',[]);c.messages.membership('research','CTEST',true);
- const transport=new WebSlackTransport(store,ingress.normalizer instanceof CanonicalSlackNormalizer?ingress.normalizer.mapper:(()=>{throw new Error();})(),{research:'synthetic',writer:'synthetic'}),client=transport.clients.get('research')!;
- const history=vi.fn(async({oldest,cursor}:any)=>{if(oldest)return{ok:true,messages:[]};const page=cursor?Number(cursor):0;return{ok:true,messages:[],response_metadata:{next_cursor:page<3?String(page+1):''}};});client.conversations.history=history as any;
- const slack=new SlackService(c,transport,ingress,new Controls(c,{} as any,broker));slack.bootstrapRecovery(0);
- expect(await slack.catchUp()).toBe(false);expect(history.mock.calls.filter(call=>!call[0].oldest)).toHaveLength(2);
- expect(history.mock.calls.filter(call=>call[0].oldest)).toHaveLength(1);
- expect(await slack.catchUp()).toBe(true);expect(history.mock.calls.filter(call=>!call[0].oldest)).toHaveLength(4);
- expect(await slack.catchUp()).toBe(true);expect(history.mock.calls.filter(call=>!call[0].oldest)).toHaveLength(4);
- slack.recordTransportGap('research');expect(await slack.catchUp()).toBe(false);expect(history.mock.calls.filter(call=>!call[0].oldest)).toHaveLength(6);
- expect(history.mock.calls.filter(call=>!call[0].oldest).at(-2)![0].cursor).toBeUndefined();
-});
-it('resumes a bounded old-thread scan while top-level checkpoints advance',async()=>{
- const{store,c,ingress,broker}=setup();for(const agent of c.config.agents)store.register(agent.id,'v1',[]);c.messages.membership('research','CTEST',true);
- const transport=new WebSlackTransport(store,ingress.normalizer instanceof CanonicalSlackNormalizer?ingress.normalizer.mapper:(()=>{throw new Error();})(),{research:'synthetic',writer:'synthetic'}),client=transport.clients.get('research')!;
- let top=0;const history=vi.fn(async({oldest,cursor}:any)=>{
-   if(oldest)return{ok:true,messages:[{ts:`${++top}.000001`,user:'UOWNER',text:'new top-level'}]};
-   const page=cursor?Number(cursor):0;return{ok:true,messages:[],response_metadata:{next_cursor:page<4?String(page+1):''}};
- });client.conversations.history=history as any;
- const slack=new SlackService(c,transport,ingress,new Controls(c,{} as any,broker));slack.bootstrapRecovery(0);
- expect(await slack.catchUp()).toBe(false);expect(await slack.catchUp()).toBe(false);expect(await slack.catchUp()).toBe(true);
- expect(history.mock.calls.filter(call=>!call[0].oldest).map(call=>call[0].cursor)).toEqual([undefined,'1','2','3','4']);
- expect(history.mock.calls.filter(call=>call[0].oldest).map(call=>call[0].oldest)).toEqual(['0.000000','1.000001','2.000001']);
-});
-it('a socket gap invalidates a pending old-thread page before it can restore the stale cursor',async()=>{
- const{store,c,ingress,broker}=setup();for(const agent of c.config.agents)store.register(agent.id,'v1',[]);c.messages.membership('research','CTEST',true);
- const transport=new WebSlackTransport(store,ingress.normalizer instanceof CanonicalSlackNormalizer?ingress.normalizer.mapper:(()=>{throw new Error();})(),{research:'synthetic',writer:'synthetic'}),client=transport.clients.get('research')!;
- const {deferred}=await import('../helpers/pi.js'),gate=deferred();let pending=false,once=true;
- const history=vi.fn(async({oldest,cursor}:any)=>{
-   if(oldest)return{ok:true,messages:[]};
-   if(cursor==='1'&&once){once=false;pending=true;await gate.promise;}
-   return{ok:true,messages:[],response_metadata:{next_cursor:cursor==='1'?'2':'1'}};
- });client.conversations.history=history as any;
- const slack=new SlackService(c,transport,ingress,new Controls(c,{} as any,broker));slack.bootstrapRecovery(0);
- const first=slack.catchUp();await vi.waitFor(()=>expect(pending).toBe(true));slack.recordTransportGap('research');gate.resolve();
- expect(await first).toBe(false);
- const scanKey='slack_changed_threads_v1:research:CTEST',dueKey='slack_changed_thread_due_v1:research';
- expect(store.db.prepare('SELECT value FROM runtime_meta WHERE key=?').get(scanKey)).toBeUndefined();
- expect(store.db.prepare('SELECT value FROM runtime_meta WHERE key=?').get(dueKey)).toBeUndefined();
- const before=history.mock.calls.length;expect(await slack.catchUp()).toBe(false);
- expect(history.mock.calls[before]![0].cursor).toBeUndefined();
-});
-it('execution cleanup scope is identical through canonical and aliased parent directories', async () => {
-  const {symlinkSync}=await import('node:fs');const {executionScope}=await import('../../src/daemon/paths.js');const root=mkdtempSync(join(tmpdir(),'mate-scope-'));mkdirSync(join(root,'real','data'),{recursive:true});symlinkSync(join(root,'real'),join(root,'alias'));
-  try {expect(executionScope(join(root,'alias','data'))).toBe(executionScope(join(root,'real','data')));}finally{rmSync(root,{recursive:true,force:true});}
-});
 it('Socket SDK pending URL startup cancels promptly and a late HTTP response cannot create a websocket', async () => {
   const {ManagedSocket}=await import('../../src/slack/socket.js');const {deferred}=await import('../helpers/pi.js');const gate=deferred();let fetching=false;
   const socket=new ManagedSocket('synthetic',async()=>{fetching=true;await gate.promise;return new Response(JSON.stringify({ok:true,url:'wss://invalid.example'}),{status:200,headers:{'content-type':'application/json'}});});
   const starting=socket.start();const rejected=expect(starting).rejects.toThrow('cancelled');await vi.waitFor(()=>expect(fetching).toBe(true));await socket.disconnect();await rejected;
   gate.resolve();await new Promise(resolve=>setTimeout(resolve,20));expect(socket.client.websocket).toBeUndefined();
 });
-it('reports a live Socket Mode disconnect but ignores shutdown disconnects',async()=>{
- const {ManagedSocket}=await import('../../src/slack/socket.js'),socket=new ManagedSocket('synthetic'),onGap=vi.fn();socket.onDisconnect(onGap);
- socket.client.emit('close');expect(onGap).toHaveBeenCalledOnce();
- await socket.disconnect();socket.client.emit('close');expect(onGap).toHaveBeenCalledOnce();
-});
 
-it('configured project grants cannot overlap the private Agent memory tree', async () => {
-  const {Daemon}=await import('../../src/daemon/app.js');const root=mkdtempSync(join(tmpdir(),'mate-private-grants-'));mkdirSync(join(root,'agents'),{recursive:true});
-  const old=process.env.RESEARCH_BOT_TOKEN;process.env.RESEARCH_BOT_TOKEN='synthetic';
-  try {await expect(Daemon.create({mate:configSchema.parse(configFixture),runtime:{dataDir:root,researchHosts:[],workspaceGrants:[{agentId:'research',root:join(root,'agents'),operations:['read']}]}},{info:()=>{},error:()=>{}})).rejects.toThrow('Protected root overlap');}
-  finally{if(old===undefined)delete process.env.RESEARCH_BOT_TOKEN;else process.env.RESEARCH_BOT_TOKEN=old;rmSync(root,{recursive:true,force:true});}
-});
-it('configured grants cannot contain Docker control paths or host pseudo filesystems',async()=>{
- const{Daemon}=await import('../../src/daemon/app.js');
- for(const kind of ['binary','socket','device'] as const){
-  const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-control-root-'))),data=join(root,'data'),tools=join(root,'tools'),socketDir=join(root,'socket');mkdirSync(tools,{recursive:true});mkdirSync(socketDir,{recursive:true});
-  const binary=join(tools,'docker');writeFileSync(binary,'synthetic');chmodSync(binary,0o700);const grantRoot=kind==='binary'?tools:kind==='socket'?socketDir:'/dev';
-  const input={mate:configSchema.parse(configFixture),runtime:{dataDir:data,docker:{binary,host:`unix://${join(socketDir,'docker.sock')}`,image:`sha256:${'a'.repeat(64)}`},workspaceGrants:[{agentId:'research',root:grantRoot,operations:['read','write','exec']}],researchHosts:[]}};
-  try{await expect(Daemon.create(input,{info:()=>{},error:()=>{}},process.cwd(),unmanagedDeploymentEnvironment)).rejects.toThrow('Protected root overlap');}finally{rmSync(root,{recursive:true,force:true});}
- }
-});
-it('private Agent workspaces cannot contain the trusted Docker CLI',async()=>{
- const{Daemon}=await import('../../src/daemon/app.js');const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-private-control-'))),data=join(root,'data'),own=join(data,'agents','research');mkdirSync(own,{recursive:true});
- const binary=join(own,'docker');writeFileSync(binary,'synthetic');chmodSync(binary,0o700);
- const input={mate:configSchema.parse(configFixture),runtime:{dataDir:data,docker:{binary,host:`unix://${join(root,'docker.sock')}`,image:`sha256:${'a'.repeat(64)}`},workspaceGrants:[],researchHosts:[]}};
- try{await expect(Daemon.create(input,{info:()=>{},error:()=>{}},process.cwd(),unmanagedDeploymentEnvironment)).rejects.toThrow('Protected root overlap');}finally{rmSync(root,{recursive:true,force:true});}
-});
-it.each(['private','configured'] as const)('never executes a Docker control binary from an Agent %s workspace',async kind=>{
- const{Daemon}=await import('../../src/daemon/app.js');const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-host-control-'))),data=join(root,'data'),workspace=kind==='private'?join(data,'agents','research'):join(root,'shared'),binary=join(workspace,'docker'),marker=join(root,'HOST_CODE_RAN');mkdirSync(workspace,{recursive:true});writeFileSync(binary,`#!/bin/sh\ntouch ${JSON.stringify(marker)}\nexit 1\n`);chmodSync(binary,0o700);
- const input={mate:configSchema.parse(configFixture),runtime:{dataDir:data,docker:{binary,host:`unix://${join(root,'docker.sock')}`,image:`sha256:${'a'.repeat(64)}`},workspaceGrants:kind==='configured'?[{agentId:'research',root:workspace,operations:['read','write','exec'] as const}]:[],researchHosts:[]}};
- try{await expect(Daemon.create(input,{info:()=>{},error:()=>{}},process.cwd(),unmanagedDeploymentEnvironment)).rejects.toThrow('Protected root overlap');expect(existsSync(marker)).toBe(false);const release=acquireLock(join(data,'state','daemon.lock'));release();}
- finally{rmSync(root,{recursive:true,force:true});}
-});
-it('private exec grant upgrades preserve revocation and expiry and require configured Docker',async()=>{
- const{Daemon}=await import('../../src/daemon/app.js');const saved=process.env.RESEARCH_BOT_TOKEN;process.env.RESEARCH_BOT_TOKEN='synthetic';vi.spyOn(ContainerBackend.prototype,'recover').mockResolvedValue();
- try{for(const enabled of [false,true]){
-  const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-grants-'))),binary=join(root,'docker-cli');if(enabled){writeFileSync(binary,'synthetic');chmodSync(binary,0o700);}const docker=enabled?{binary,host:'unix:///synthetic.sock',image:`sha256:${'0'.repeat(64)}`}:undefined;
-  const daemon=await Daemon.create({mate:configSchema.parse(configFixture),runtime:{dataDir:root,researchHosts:[],workspaceGrants:[],...(docker?{docker}:{})}},{info:()=>{},error:()=>{}},process.cwd(),unmanagedDeploymentEnvironment);
-  daemon.collaboration.messages.references.createConversation('channel','external','CTEST');
-  try{for(const state of ['valid','revoked','expired']){
-   const work=daemon.collaboration.createWork(state,{conversationId:'CTEST'}),grant=daemon.broker.issueGrant(daemon.config.mate.ownerUserIds[0]!,'research',work,daemon.memoryRoots.research!,['read','write'],Date.now()+100000);
-   if(state==='revoked')daemon.broker.revoke(daemon.config.mate.ownerUserIds[0]!,grant);if(state==='expired')daemon.store.db.prepare('UPDATE grants SET expires=1 WHERE id=?').run(grant);
-   daemon.workspaceAccess.provision('research',work);
-   const row=daemon.store.db.prepare('SELECT operations,revoked,expires FROM grants WHERE id=?').get(grant) as any;
-   expect(JSON.parse(row.operations).includes('exec')).toBe(!!docker&&state==='valid');if(state==='revoked')expect(row.revoked).toBe(1);if(state==='expired')expect(row.expires).toBe(1);
-  }
-  expect(daemon.store.db.prepare("SELECT count(*) n FROM audit WHERE kind='workspace_grant_sync'").get()).toEqual({n:docker?1:0});
-  }finally{await daemon.close();rmSync(root,{recursive:true,force:true});}
- }}finally{if(saved===undefined)delete process.env.RESEARCH_BOT_TOKEN;else process.env.RESEARCH_BOT_TOKEN=saved;}
-});
 it('artifact publication snapshots survive content edits and explicit revision replaces the frozen bytes',async()=>{
  const{store,c,broker,backend}=setup();new ToolRouter(c,broker);store.register('research','v1',[]);c.messages.membership('research','CTEST',true);
  const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-artifact-revise-')));cleanups.push(()=>rmSync(root,{recursive:true,force:true}));mkdirSync(join(root,'artifacts'));
- const target={conversationId:'CTEST'},work=c.createWork('artifact',target);c.enqueue('research',work,'one',{});const run=store.beginRun('research')!;store.input(run,{});const grantId=broker.issueGrant('UOWNER','research',work,root,['read'],Date.now()+100000);
- const uploads:any[]=[];const artifacts=new Artifacts(c,broker,{configured:()=>true,supports:()=>true,upload:async({text},artifact,prepared,beforeShare)=>{prepared('FFILE');if(!beforeShare())throw new Error('deferred');uploads.push({text,artifact});return{fileId:'FFILE'};}},{research:root});const args={grantId,path:'artifacts/result.txt',target,title:'result'},signal=new AbortController().signal;
+ const target={conversationId:'CTEST'},work=c.createWork('artifact',target);c.enqueue('research',work,'one',{});const run=store.beginRun('research')!;store.input(run,{});
+ const uploads:any[]=[];const artifacts=new Artifacts(c,broker,{configured:()=>true,supports:()=>true,upload:async({text},artifact,prepared,beforeShare)=>{prepared('FFILE');if(!beforeShare())throw new Error('deferred');uploads.push({text,artifact});return{fileId:'FFILE'};}},{research:root});const args={path:'artifacts/result.txt',target,title:'result'},signal=new AbortController().signal;
  const draft=await artifacts.publish(run,work,'first',args,signal) as any;backend.execute.mockResolvedValue({code:0,stdout:'new file content',stderr:'',truncated:false});
  expect((await artifacts.publish(run,work,'first',args,signal) as any).artifact.bytes).toBe(Buffer.byteLength('artifact evidence'));expect(JSON.parse(store.output('first')!.request).artifact.content).toBe('artifact evidence');
  const revised=await artifacts.publish(run,work,'revision',{...args,draftId:draft.draftId,revision:1},signal) as any;expect(revised.artifact.bytes).toBe(Buffer.byteLength('new file content'));
@@ -354,32 +277,6 @@ it('Slack file allocation is persisted before transfer; only proven file shares 
   client.files.info=vi.fn(async()=>({ok:true,file:{id:'FFILE',user:'UONE',shares:{private:{CTEST:[{ts:'200.000001',thread_ts:'100.000001'}]}}}})) as any;
   await service.reconcile();expect(store.output('upload')?.state).toBe('sent');expect(client.files.completeUploadExternal).toHaveBeenCalledOnce();
  }finally{vi.unstubAllGlobals();}
-});
-it('resumes unknown text reconciliation beyond five pages after a restart',async()=>{
- const{store,c,broker,ingress}=setup();store.register('research','v1',[]);c.messages.membership('research','CTEST',true);const target={conversationId:'CTEST'},work=c.createWork('unknown-reconcile',target),id=c.send('research',work,target,'durable output');store.transitionOutput(id,'pending','sending');store.transitionOutput(id,'sending','unknown');
- const transport=new WebSlackTransport(store,ingress.normalizer instanceof CanonicalSlackNormalizer?ingress.normalizer.mapper:(()=>{throw new Error();})(),{research:'synthetic'}),client=transport.clients.get('research')!,requestHash=store.output(id)!.request_hash;let interrupted=false;
- const history=vi.fn(async({cursor}:any)=>{const page=cursor?Number(cursor):0;if(page===1&&!interrupted){interrupted=true;throw new Error('temporary failure');}const messages=page===6?[{ts:'20.000001',user:'UONE',bot_id:'BONE',text:'durable output',metadata:{event_type:'mate_outbox',event_payload:{id,request_hash:requestHash}}}]:[];return{ok:true,messages,response_metadata:{next_cursor:page<6?String(page+1):''}};});client.conversations.history=history as any;
- await new SlackService(c,transport,ingress,new Controls(c,{} as any,broker)).reconcile();expect(store.output(id)?.state).toBe('unknown');
- const before=history.mock.calls.length,service=new SlackService(c,transport,ingress,new Controls(c,{} as any,broker));
- for(let round=0;round<4&&store.output(id)?.state==='unknown';round++)await service.reconcile();
- expect(history.mock.calls[before]![0]).toMatchObject({cursor:'1'});expect(store.output(id)?.state).toBe('sent');
-});
-it('revisits an exhausted unknown text send when Slack evidence appears later',async()=>{
- const{store,c,broker,ingress}=setup();store.register('research','v1',[]);c.messages.membership('research','CTEST',true);const target={conversationId:'CTEST'},work=c.createWork('delayed-evidence',target),id=c.send('research',work,target,'eventually visible');store.transitionOutput(id,'pending','sending');store.transitionOutput(id,'sending','unknown');
- const transport=new WebSlackTransport(store,ingress.normalizer instanceof CanonicalSlackNormalizer?ingress.normalizer.mapper:(()=>{throw new Error();})(),{research:'synthetic'}),client=transport.clients.get('research')!,hash=store.output(id)!.request_hash;let visible=false;client.conversations.history=vi.fn(async()=>({ok:true,messages:visible?[{ts:'21.000001',user:'UONE',bot_id:'BONE',text:'eventually visible',metadata:{event_type:'mate_outbox',event_payload:{id,request_hash:hash}}}]:[]})) as any;
- const service=new SlackService(c,transport,ingress,new Controls(c,{} as any,broker)),now=Date.now();await service.reconcile(now);expect(store.output(id)?.state).toBe('unknown');visible=true;
- await service.reconcile(now+60_000);expect(store.output(id)?.state).toBe('unknown');
- await service.reconcile(now+15*60_000);expect(store.output(id)?.state).toBe('sent');
- expect((client.conversations.history as ReturnType<typeof vi.fn>).mock.calls.every(call=>call[0].oldest===undefined)).toBe(true);
-});
-it('keeps scanning after a forged unknown-send marker',async()=>{
- const{store,c,broker,ingress}=setup();store.register('research','v1',[]);c.messages.membership('research','CTEST',true);const target={conversationId:'CTEST'},work=c.createWork('forged-marker',target),id=c.send('research',work,target,'real output');store.transitionOutput(id,'pending','sending');store.transitionOutput(id,'sending','unknown');
- const transport=new WebSlackTransport(store,ingress.normalizer instanceof CanonicalSlackNormalizer?ingress.normalizer.mapper:(()=>{throw new Error();})(),{research:'synthetic'}),client=transport.clients.get('research')!,hash=store.output(id)!.request_hash;
- client.conversations.history=vi.fn(async()=>({ok:true,messages:[
-  {ts:'21.000001',user:'UOWNER',text:'forged',metadata:{event_type:'mate_outbox',event_payload:{id,request_hash:hash}}},
-  {ts:'22.000001',user:'UONE',bot_id:'BONE',text:'real output',metadata:{event_type:'mate_outbox',event_payload:{id,request_hash:hash}}},
- ]})) as any;
- await new SlackService(c,transport,ingress,new Controls(c,{} as any,broker)).reconcile();expect(store.output(id)?.state).toBe('sent');
 });
 it('peer publication attention includes captions and respects page ACK, mute and revoked channel access',async()=>{
  const{store,c,broker,ingress}=setup();new ToolRouter(c,broker);for(const actor of ['research','writer']){store.register(actor,'v1',[]);c.messages.membership(actor,'CTEST',true);}

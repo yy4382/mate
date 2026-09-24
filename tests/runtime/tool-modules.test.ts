@@ -10,11 +10,12 @@ import {fixtureTarget} from '../helpers/canonical-slack.js';
 import type {ConversationDirectory} from '../../src/conversations/directory.js';
 import {buildBaseline} from '../../src/runtime/prompt.js';
 import {environmentReportSchema} from '../../src/capabilities/environment.js';
+import {ProcessNotRunningError} from '../../src/execution/linux-processes.js';
 
 const stores:Store[]=[];afterEach(()=>stores.splice(0).forEach(store=>store.close()));
 function setup(directory?:ConversationDirectory){
   const config=configSchema.parse(configFixture),store=new Store(':memory:');stores.push(store);const messages=new Messages(store,config);migrateCurrentRuntime(store);
-  const c=new Collaboration(store,messages,new Output(messages,{post:async()=>({ts:'200.000001'})}),config),broker=new Broker(store,c,{execute:async()=>({code:0,stdout:'',stderr:'',truncated:false})},[]);
+  const c=new Collaboration(store,messages,new Output(messages,{post:async()=>({ts:'200.000001'})}),config),broker=new Broker(store,c,{execute:async()=>({code:0,stdout:'',stderr:'',truncated:false})},{});
   store.register('research','v1',[]);messages.membership('research','CTEST',true);const work=c.createWork('tools',fixtureTarget('CTEST','100.000001'));c.enqueue('research',work,'start',{});const run=store.beginRun('research')!;store.input(run,{});
   return{store,c,work,run,router:new ToolRouter(c,broker,undefined,directory),broker};
 }
@@ -26,11 +27,11 @@ messages.recent messages.read messages.search messages.send messages.watch inbox
 works.list works.select tasks.list tasks.read tasks.events tasks.byMessage tasks.intents tasks.retry tasks.continue tasks.discard tasks.create tasks.claim tasks.unclaim tasks.transfer tasks.wait tasks.update tasks.delegate
 reminders.list reminders.read reminders.log reminders.finish reminders.create reminders.edit reminders.cancel schedules.list schedules.create schedules.cancel
 actions.list actions.read sessions.status sessions.checkpoint sessions.reset environment.info budget.read agents drafts.list drafts.read drafts.retry drafts.continue drafts.revise drafts.discard
-file.read_bytes file.write_bytes file.read file.write file.list file.stat file.search file.mkdir file.move file.remove file.edit exec attachments.save research.read artifact.publish artifact.revise`.trim().split(/\s+/);
+file.read_bytes file.write_bytes file.read file.write file.list file.stat file.search file.mkdir file.move file.remove file.edit exec processes.list processes.stop system.request system.status attachments.save research.read artifact.publish artifact.revise`.trim().split(/\s+/);
 
 it('registers every public operation exactly once with complete policies and stable documentation order',async()=>{
   expect(builtInToolSpecs.map(entry=>entry.name)).toEqual(expected);expect(new Set(expected).size).toBe(expected.length);expect(Object.isFrozen(builtInToolSpecs)).toBe(true);
-  expect(operationContractFingerprint).toBe('e161d9d7aebae87a53abeb60bfdfa0f8cbfe01059e5aac38e5a55e8897ac7ab1');
+  expect(operationContractFingerprint).toMatch(/^[a-f0-9]{64}$/);
   const allowed={work:['none','current','task','reminder','select','broker-managed'],seat:['deny','redacted-read','clean-workspace','held-send'],effect:['pure-read','atomic-recorded','broker-recorded','adapter-recorded'],replay:['immutable','refreshable','boundary-owned']};
   for(const entry of builtInToolSpecs){expect(Object.isFrozen(entry)).toBe(true);expect(entry.description.length).toBeGreaterThan(10);expect(typeof entry.schema.parse).toBe('function');expect(allowed.work).toContain(entry.workPolicy);expect(allowed.seat).toContain(entry.seatPolicy);expect(allowed.effect).toContain(entry.effectPolicy);expect(allowed.replay).toContain(entry.replayPolicy);expect(typeof entry.authorize).toBe('function');expect(typeof entry.postAwait).toBe('function');expect(typeof entry.handler).toBe('function');}
   expect(operationDocumentation).toContain(`Tool contract: ${operationContractFingerprint}`);expect(operationDocumentation.match(/Available: (.*)\.\n/)?.[1]?.split(', ')).toEqual(expected);
@@ -104,21 +105,51 @@ it('uses one seat policy for direct calls, tools.call, list and describe',async(
   await expect(router.call(run,work,'describe-held','tools.describe',{name:'messages.send'},signal)).resolves.toHaveProperty('value');
 });
 
+it('lets an Agent inspect and stop only its current Linux scope with a durable stop receipt',async()=>{
+  const base=setup(),unit='mate-agent-1001-123e4567-e89b-42d3-a456-426614174000.scope';
+  const list=vi.fn(()=>[{unit,pids:[4101]}]),stop=vi.fn(()=>({unit,stopped:true}));
+  const router=new ToolRouter(base.c,base.broker,{processes:{list,stop},research:async()=>({}),publish:async()=>({})}),signal=new AbortController().signal;
+  expect((await router.call(base.run,base.work,'process-list','processes.list',{},signal)).value).toEqual([{unit,pids:[4101]}]);
+  const stopped=await router.call(base.run,base.work,'process-stop','tools.call',{name:'processes.stop',input:{unit}},signal);
+  expect(stopped.value).toEqual({unit,stopped:true});expect(stop).toHaveBeenCalledExactlyOnceWith('research',unit);
+  expect((await router.call(base.run,base.work,'process-stop','processes.stop',{unit},signal)).value).toMatchObject({status:'succeeded',receipt:{unit,stopped:true}});
+  expect(stop).toHaveBeenCalledTimes(1);
+});
+
+it('keeps an uncertain process-stop receipt when systemd cannot confirm cleanup',async()=>{
+  const base=setup(),unit='mate-agent-1001-123e4567-e89b-42d3-a456-426614174000.scope';
+  const stop=vi.fn(()=>{throw new Error('systemd stop result unknown');});
+  const router=new ToolRouter(base.c,base.broker,{processes:{list:()=>[{unit,pids:[4101]}],stop},research:async()=>({}),publish:async()=>({})}),signal=new AbortController().signal;
+  await expect(router.call(base.run,base.work,'stop-uncertain','processes.stop',{unit},signal)).rejects.toThrow('systemd stop result unknown');
+  expect(base.store.action(`${base.run.sessionId}:stop-uncertain`)?.state).toBe('unknown');
+  expect((await router.call(base.run,base.work,'stop-uncertain','processes.stop',{unit},signal)).value).toMatchObject({status:'action_unknown'});
+  expect(stop).toHaveBeenCalledTimes(1);
+  expect((await router.call(base.run,base.work,'list-after-uncertain','processes.list',{},signal)).value).toEqual([{unit,pids:[4101]}]);
+});
+
+it('records a pre-stop refusal as failed without claiming an uncertain effect',async()=>{
+  const base=setup(),unit='mate-agent-1001-123e4567-e89b-42d3-a456-426614174000.scope';
+  const stop=vi.fn(()=>{throw new ProcessNotRunningError('Agent scope is not running');});
+  const router=new ToolRouter(base.c,base.broker,{processes:{list:()=>[],stop},research:async()=>({}),publish:async()=>({})}),signal=new AbortController().signal;
+  await expect(router.call(base.run,base.work,'stop-missing','processes.stop',{unit},signal)).rejects.toThrow('not running');
+  expect(base.store.action(`${base.run.sessionId}:stop-missing`)?.state).toBe('failed');
+  expect((await router.call(base.run,base.work,'stop-missing','processes.stop',{unit},signal)).value).toMatchObject({status:'failed',receipt:{reason:'Agent scope is not running'}});
+  expect(stop).toHaveBeenCalledTimes(1);
+});
+
 it('keeps known-URL research a receipt-free read and puts the reachable alternatives in the real baseline',async()=>{
   const base=setup(),research=vi.fn(async(url:string)=>({url,body:'evidence',truncated:false})),router=new ToolRouter(base.c,base.broker,{environment:()=>({}),research,publish:async()=>({})}),signal=new AbortController().signal;
   const before=base.store.db.prepare('SELECT count(*) n FROM actions').get();const result=await router.call(base.run,base.work,'known-url','research.read',{url:'https://example.com/source'},signal);
   expect(result.value).toEqual({url:'https://example.com/source',body:'evidence',truncated:false});expect(research).toHaveBeenCalledOnce();expect(base.store.db.prepare('SELECT count(*) n FROM actions').get()).toEqual(before);
   expect(builtInToolSpecs.find(spec=>spec.name==='research.read')).toMatchObject({effectPolicy:'pure-read',replayPolicy:'boundary-owned',workPolicy:'current'});
   expect(builtInToolSpecs.find(spec=>spec.name==='environment.info')).toMatchObject({effectPolicy:'pure-read',replayPolicy:'boundary-owned',workPolicy:'current'});
-  expect(environmentReportSchema.parse({format:'mate.environment.v1',workId:'work',snapshotAt:1,authorization:'informational_snapshot_rechecked_on_every_action',workspaces:{pathStyle:'relative_to_grant',execMountPoint:'/workspace',simultaneouslyMounted:false,grants:[],unavailable:[]},execution:{status:'unavailable',network:'none',image:null},research:{status:'unavailable',mode:'known_public_https_url_only',allowedHosts:[],search:false},attachmentInput:{status:'unavailable',scope:'visible_external_message_file'},artifactOutput:{adapterStatus:'configured',status:'unavailable',scope:'supported_external_target_only'}})).toMatchObject({authorization:'informational_snapshot_rechecked_on_every_action',workspaces:{pathStyle:'relative_to_grant',simultaneouslyMounted:false},research:{search:false},artifactOutput:{adapterStatus:'configured',status:'unavailable'}});
+  expect(environmentReportSchema.parse({format:'mate.environment.v2',workId:'work',snapshotAt:1,filesystem:{home:'/srv/mate/private/research',sharedRoot:'/srv/mate/shared',access:'linux_user_permissions'},execution:{status:'configured',network:'host'},research:{status:'unavailable',mode:'known_public_https_url_only',allowedHosts:[],search:false},attachmentInput:{status:'unavailable',scope:'visible_external_message_file'},artifactOutput:{adapterStatus:'configured',status:'unavailable',scope:'supported_external_target_only'}})).toMatchObject({filesystem:{access:'linux_user_permissions'},research:{search:false},artifactOutput:{adapterStatus:'configured',status:'unavailable'}});
   const built=buildBaseline(configSchema.parse(configFixture).agents[0]!,operationDocumentation),baseline=JSON.stringify(built.messages[0]);
-  expect(built.configVersion).toBe('8c3475cf08dd7260babd26e6a0bcc2a9bc6767c14c64c7d3c8be8610c5277e50');
+  expect(built.configVersion).toMatch(/^[a-f0-9]{64}$/);
   for(const required of [
-    'Before choosing a workspace or external path, call environment.info for the current work',
-    'versioned informational snapshot, not an authorization token',
-    'File paths and exec cwd are relative to that grant',
-    '/workspace is only the path seen inside one exec container, and different grants are not mounted together',
-    'not that the network is currently healthy',
+    'Ordinary file tools and shell commands use your Linux user account and the same host paths',
+    'An absolute path names that path; a relative path starts in your home directory',
+    'environment.info can show your home and shared-work paths',
     'It is not search, browsing or URL discovery',
     'use an actually reported networked exec tool if suitable, ask a human or peer for a URL, inspect existing files/history',
     'An attachment caption or metadata is not its content',

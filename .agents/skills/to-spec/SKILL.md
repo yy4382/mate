@@ -16,7 +16,9 @@ The issue tracker and triage label vocabulary should have been provided to you. 
 
 Check with the user that these seams match their expectations.
 
-3. Write the spec using the template below, then publish it to the project issue tracker. Apply the `ready-for-agent` triage label - no need for additional triage.
+3. Draft the spec using the template below. Before publishing, give the draft and the user's stated needs to an independent, read-only design red-team subagent who did not draft it. Have them enumerate every proposed addition, including new terms, states, components, system capabilities or requirements, invariants, and mandatory workflows. For each, ask: Which user need requires it? Can an existing mechanism or no new mechanism meet that need? Is there a simpler choice with lower conceptual, architectural, and implementation cost? The reviewer reports unsupported complexity and unresolved tradeoffs, not implementation findings. Remove unsupported additions; bring genuinely unresolved product choices to the user and revise the draft. Repeat the review on changed design decisions until no unsupported additions remain.
+
+4. Publish the reviewed spec to the project issue tracker. Apply the `ready-for-agent` triage label - no need for additional triage. Keep the review in the conversation rather than creating a second design document.
 
 <spec-template>
 

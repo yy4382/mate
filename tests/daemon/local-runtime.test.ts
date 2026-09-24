@@ -5,17 +5,16 @@ import {join,resolve} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {PassThrough} from 'node:stream';
 import {Daemon} from '../../src/daemon/app.js';
-import {daemonConfigSchema} from '../../src/daemon/config.js';
 import {LocalConsole} from '../../src/local/console.js';
 import {migrateConfiguration} from '../../src/daemon/migrate.js';
 import {acquireLock} from '../../src/daemon/lock.js';
 import {TeamDirectory} from '../../src/conversations/team-directory.js';
-import {configFixture} from '../helpers/config.js';
+import {daemonFixture} from '../helpers/daemon-config.js';
 const clean:(()=>Promise<unknown>|void)[]=[];
 afterEach(async()=>{vi.restoreAllMocks();for(const fn of clean.splice(0).reverse())await fn();});
 function config(){
  const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-local-runtime-')));clean.push(()=>rmSync(root,{recursive:true,force:true}));
- const c=daemonConfigSchema.parse({mate:configFixture,runtime:{dataDir:join(root,'data')}});
+ const c=daemonFixture(join(root,'data'));
  c.mate.agents[0]!.model.id='claude-haiku-4-5';c.mate.ownerUserIds=['owner'];
  c.adapters={local:{humans:['owner','reader'],rooms:[{id:'local-room',agents:['research'],humans:['owner','reader']}]}};
  return{c,root};
@@ -40,6 +39,14 @@ it('uses the same permanent daemon, Supervisor, tool/gate and local console with
  await d.close();const reopened=await daemon(c);
  expect(reopened.local!.read('reader',{conversationId:'local-room'}).messages.map(m=>m.text)).toContain('internal answer');
  expect(reopened.store.db.prepare("SELECT paused FROM agents WHERE id='research'").get()).toEqual({paused:1});
+});
+it('reports the local development home even without a shared Linux work root',async()=>{
+ const {c}=config(),d=await daemon(c),work=d.collaboration.createWork('environment',{conversationId:'local-room'});
+ d.collaboration.enqueue('research',work,'read-environment',{});
+ const run=d.store.beginRun('research')!;d.store.input(run,{});
+ const result=await d.supervisor.router.call(run,work,'environment-info','environment.info',{},new AbortController().signal);
+ expect(result.value).toMatchObject({filesystem:{home:d.memoryRoots.research,access:'local_user_permissions'}});
+ expect((result.value as {filesystem:Record<string,unknown>}).filesystem).not.toHaveProperty('sharedRoot');
 });
 it('keeps room revocations on restart and unchanged migration, applies only explicit membership deltas',async()=>{
  const {c,root}=config(),d=await daemon(c);
@@ -107,12 +114,6 @@ it('internal publication bypasses an unrelated in-flight external request and re
  const sending=out.send('external-0');await vi.waitFor(()=>expect(s.output('external-0')!.state).toBe('sending'));
  await out.send('internal');expect(s.output('internal')!.state).toBe('sent');reject(new Error('offline'));await sending;
 });
-it('constructor failure rolls back identity/configuration writes so a corrected local configuration can retry',async()=>{
- const {c}=config(),invalid=structuredClone(c);invalid.runtime.workspaceGrants=[{agentId:'research',root:join(c.runtime.dataDir,'agents'),operations:['read']}];
- await expect(Daemon.create(invalid,{info:()=>{},error:()=>{}})).rejects.toThrow('Protected root overlap');
- const corrected=await daemon(c);expect(corrected.local!.rooms('owner')).toEqual([{conversationId:'local-room'}]);
-});
-
 it('an adapter close error still drains background work before DB close and lock release',async()=>{
  credentials();const {c}=config(),d=await daemon(c);let release!:()=>void;const gate=new Promise<void>(r=>release=r);
  const adapter={start:async()=>{},recover(){},poll(){},flush:vi.fn(()=>gate),close:async()=>{throw new Error('close failed');}};

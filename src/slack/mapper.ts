@@ -10,7 +10,7 @@ export interface SlackMessageInput {
   user?:string|undefined;bot?:string|undefined;system?:boolean|undefined;
   files?:{id:string;name?:string|undefined;title?:string|undefined;mimetype?:string|undefined;size?:number|undefined}[]|undefined;
 }
-/** Provider identity mapping only. Callers still enforce current membership and action grants. */
+/** Provider identity mapping only. Callers still enforce current membership and action authorization. */
 export class SlackMapper {
   constructor(readonly references:References,readonly config:MateConfig){}
   conversation(channel:string):string {

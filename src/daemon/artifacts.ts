@@ -3,8 +3,6 @@ import type { PublishArgs } from '../capabilities/artifacts.js';
 export type { PublishArgs } from '../capabilities/artifacts.js';
 import {createHash}from 'node:crypto';
 import {basename}from 'node:path';
-import { relative } from 'node:path';
-import { checkedPath } from '../execution/paths.js';
 import type { RunToken } from '../storage/store.js';
 import { hash } from '../storage/store.js';
 import type { Broker } from '../policy/broker.js';
@@ -19,9 +17,7 @@ export class Artifacts {
   async publish(run: RunToken, workId: string, actionId: string, args: PublishArgs, signal: AbortSignal): Promise<unknown> {
     const c=this.collaboration,s=c.store,gate=c.output.gate;if(!gate)throw new Error('Publication gate unavailable');
     s.assertRun(run);c.assertActionWork(run,workId);c.output.requireArtifactSupport(run.agentId,args.target);
-    const grant=s.db.prepare('SELECT root FROM grants WHERE id=?').get(args.grantId) as {root:string}|undefined;
-    if(!grant||grant.root!==this.memoryRoots[run.agentId]||!relative(grant.root,checkedPath(grant.root,args.path)).startsWith('artifacts/'))throw new Error('Only own artifacts/ files may be published');
-    const result=async(id:string,operation:unknown)=>{const read=await this.broker.execute(run,workId,id,args.grantId,operation,signal) as ExecutionResult|{receipt?:ExecutionResult};const file='code'in read?read:read.receipt;if(!file||file.code!==0||file.truncated)throw new Error('Artifact read failed or incomplete');return file.stdout;};
+    const result=async(id:string,operation:unknown)=>{const read=await this.broker.execute(run,workId,id,operation,signal) as ExecutionResult|{receipt?:ExecutionResult};const file='code'in read?read:read.receipt;if(!file||file.code!==0||file.truncated)throw new Error('Artifact read failed or incomplete');return file.stdout;};
     let content:string,encoding:'base64'|undefined,contentHash:string;
     if(args.format==='binary'){
       const stat=JSON.parse(await result(`${actionId}:stat`,{kind:'stat',path:args.path}));if(stat.type!=='file'||stat.size>1000000||!stat.sha256)throw new Error('Artifact must be a regular file up to 1 MB');

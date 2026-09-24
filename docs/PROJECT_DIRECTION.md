@@ -1,6 +1,6 @@
-> 首版标准：可部署到低配置 Linux VPS、Agent 之间有沙盒隔离、可通过 Slack 操作。部署产物与 Linux 原生隔离验证属于首版；预配置成员可接受。开发流程与停止条件见 [AGENTS.md](../AGENTS.md)。
+> 首版标准：可部署到低配置 Linux VPS、Agent 分别使用非特权 Linux 用户账号、可通过 Slack 操作。部署产物与 Linux 用户权限及进程的原生验证属于首版；预配置成员可接受。开发流程与停止条件见 [AGENTS.md](../AGENTS.md)。
 
-> 历史架构讨论与 Raft 差异证据保存在 `docs/archive/`；旧阶段编号仅供追溯。
+> Linux 用户方案的选择理由见[决策记录](adr/0001-linux-users-for-agent-execution.md)；旧阶段计划和废弃实施路线仅从 Git 历史追溯。
 
 # Mate 项目重新定位
 
@@ -21,6 +21,7 @@ Harness 让这些选择可观察、可执行、可恢复。预算和授权约束
 | 跨工作行动 | 读取按身份与可见性判断；Agent 可切换或并列处理多个授权事项。任务归属、预算账户、run 调度和授权分别建模。 |
 | 注意力 | 接收、通知、呈现正文、处理与暂缓相互独立；模型在断点选择读取，结束 run 不清空未读。 |
 | 工作空间 | Agent 可在授权 workspace 中组织资料、脚本、代码和记忆，并使用真实文件与执行工具。MEMORY.md 是恢复入口，不是知识分类白名单。 |
+| Linux 执行 | 每位 Agent 使用自己的非特权 Linux 用户账号和私人目录，普通文件与命令遵守 Unix 权限；同伴可读共享成果，但不能直接读取彼此的私人目录或 Mate 控制数据。 |
 | 提醒 | 作者拥有提醒，可改期、取消并查看触发记录；提醒可在关联任务结束后继续存在，费用按显式持续预算策略记账。 |
 | 连续身份 | 逻辑 Agent 身份与可替换 session 分离；角色可通过对话与 memory 演化，受控换 session 和恢复入口可用。 |
 | Prompt 与工具 | 行为约定说明主动查历史、复用消息任务、长任务检查点、进展交接、对等沟通，以及读与不读、发与不发的选择；工具目录按环境发现。 |
@@ -46,8 +47,8 @@ Harness 让这些选择可观察、可执行、可恢复。预算和授权约束
 | FreshnessGate | 基于已呈现版本检查send和任务变更；持久draft/held decision；显式结果 | 不审查观点质量、命令风险；不以全workspace变化锁住一个thread |
 | AgentRuntime | 单Agent主通道、自然断点通知、跨事项上下文、恢复/换session | 不将run永久绑定一个task/work；不让普通消息无条件中断执行 |
 | BudgetLedger | Agent持续账户+可选事项额度、预留/结算、暂停与补额 | 不把账户ID当ACL；不靠每次human消息创建新预算，也不允许模型自行无限增额 |
-| ToolModule registry | 内建领域工具的schema、说明、work/seat/effect/replay策略、授权、fence与handler；组合workspace、文件/终端/研究/附件adapter | 不允许模型动态安装module，不把一次性无网络容器等同于所有Agent唯一合法环境 |
-| ExecutionBoundary | 规范化副作用、身份/授权/停止、receipt、可替换backend | 当前无Jev/命令审查；未来审查独立扩展，不借消息门控恢复它 |
+| ToolModule registry | 内建领域工具的 schema、说明、effect/replay 策略、授权与 handler；组合文件、终端、研究和附件 adapter | 不把正常 Linux 文件、命令和网络能力缩成按事项租借的工具清单 |
+| ExecutionBoundary | 规范化副作用、身份/授权/停止、receipt、可替换 backend | 普通命令不逐条审核；系统级命令须在用户界面获得明确批准，不借消息门控代替执行授权 |
 
 一个run可以处理多个授权事项；每个有成本动作绑定daemon验证的预算账户和operation identity，taskRef用于归属而非普遍权限。账户选择不能抹掉债务、重置循环额度或伪造owner授权。一个事项额度耗尽不应让整个Agent失去读取其他消息的能力；可有显式、有限的控制/通知预算，并单独记账。
 

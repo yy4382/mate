@@ -69,8 +69,7 @@ export class Supervisor {
             tasks:taskRecovery,
             account:c.ledger.account(agentId),
             uncertainActions:s.db.prepare("SELECT id,state FROM actions WHERE agent_id=? AND state IN ('unknown','executing') ORDER BY rowid DESC LIMIT 20").all(agentId),
-            actionHistoryTool:'actions.list',
-            grants:s.db.prepare('SELECT id,operations,expires FROM grants WHERE agent_id=? AND work_id=? AND revoked=0 AND expires>? LIMIT 20').all(agentId,selectedWork.id,Date.now())});
+            actionHistoryTool:'actions.list'});
           s.audit('recovery_refresh',{runId:run.id,memoryHash:hash(reference),checkpointVersion:checkpoint?.version??null});return recovery;
         };
         const recovery=await buildRecovery();

@@ -15,7 +15,7 @@ afterEach(() => cleanups.splice(0).forEach(fn => fn()));
 function setup(factory?: (id: string) => Worker) {
   const config = configSchema.parse({ ...configFixture, agents: [configFixture.agents[0], { ...configFixture.agents[0], id: 'writer', name: 'Writer', slackAppId: 'ATWO', slackUserId: 'UTWO', slackBotId: 'BTWO', botTokenEnv: 'WRITER_BOT', appTokenEnv: 'WRITER_APP' }] });
   const store = new Store(':memory:'), messages = new Messages(store, config);migrateCurrentRuntime(store);const output = new Output(messages, { post: async () => ({ ts: '100.000002' }) }), collaboration = new Collaboration(store, messages, output, config);
-  const broker = new Broker(store, collaboration, { execute: async () => ({ code: 0, stdout: '', stderr: '', truncated: false }) }, ['/never']);
+  const broker = new Broker(store, collaboration, { execute: async () => ({ code: 0, stdout: '', stderr: '', truncated: false }) }, { research: '/tmp', writer: '/tmp' });
   const router = new ToolRouter(collaboration, broker);
   const supervisor = new Supervisor(collaboration, router, config, agent => factory?.(agent.id) ?? new WorkerClient('test', 'test', 'only-provider-secret', new URL('../../dist/tests/helpers/worker-fixture.js', import.meta.url)));
   supervisor.register();
@@ -171,12 +171,12 @@ it('review activation cannot wash an already used identity or accept an unverifi
  c.enqueue('research',work,'used',{});store.beginRun('research');expect(()=>c.seats.activate('UOWNER','research',target,'brief',()=>'/clean')).toThrow('unused');
 });
 
-it('discovery aliases preserve grants, receipts and strict actor schemas for file capabilities',async()=>{
+it('discovery aliases expose grant-free file tools and reject actor spoofing',async()=>{
  const {store,collaboration:c,work,router}=setup();c.enqueue('research',work,'files',{});const run=store.beginRun('research')!;store.input(run,{});const signal=new AbortController().signal;
  const list=await router.call(run,work,'list-tools','tools.list',{},signal);expect(JSON.stringify(list)).toContain('file.edit');
  const schema=await router.call(run,work,'schema','tools.describe',{name:'file.edit'},signal);expect(JSON.stringify(schema)).toContain('expectedHash');
- await expect(router.call(run,work,'read','tools.call',{name:'file.list',input:{grantId:'missing',path:'.'}},signal)).rejects.toThrow('Grant');
- await expect(router.call(run,work,'spoof','tools.call',{name:'file.list',input:{grantId:'missing',path:'.',agentId:'writer'}},signal)).rejects.toThrow();
+ expect((await router.call(run,work,'read','tools.call',{name:'file.list',input:{path:'.'}},signal)).value).toMatchObject({code:0});
+ await expect(router.call(run,work,'spoof','tools.call',{name:'file.list',input:{path:'.',agentId:'writer'}},signal)).rejects.toThrow();
  await expect(router.call(run,work,'recurse','tools.call',{name:'tools.call',input:{}},signal)).rejects.toThrow('Unknown');
 });
 it('model context replacement waits for run completion and retains durable identity and debt',async()=>{

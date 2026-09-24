@@ -16,7 +16,6 @@
     "deploy": "node dist/src/deployment/cli.js"
   },
   "dependencies": {
-    "@anthropic-ai/sandbox-runtime": "0.0.77",
     "@earendil-works/pi-agent-core": "0.86.0",
     "@earendil-works/pi-ai": "0.86.0",
     "@emoji-mart/data": "1.2.1",

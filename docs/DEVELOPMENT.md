@@ -8,16 +8,13 @@ pnpm check
 pnpm typecheck
 ```
 
-普通测试使用合成 Slack/provider 输入。需要真实容器隔离测试时，在支持 Docker 的 Linux 环境准备已有的固定镜像，再运行：
+普通测试使用合成 Slack/provider 输入。涉及 Linux 用户执行、后台进程和部署的改动还应运行相应的定向测试：
 
 ```sh
-MATE_CONTAINER_TEST=1 MATE_DOCKER_BINARY=/usr/bin/docker \
-MATE_DOCKER_HOST=unix:///var/run/docker.sock \
-MATE_DOCKER_IMAGE=sha256:EXISTING_64_HEX_IMAGE_ID \
-pnpm exec vitest run tests/execution/sandbox.test.ts
+pnpm exec vitest run tests/execution/linux-user.test.ts tests/execution/linux-processes.test.ts tests/deployment/linux-deployment.test.ts
 ```
 
-macOS 的 SRT 后端使用 `MATE_SRT_TEST=1` 单独验证。普通测试、真实本地隔离、ncDE 原生验收和真实 Slack/provider 连接是不同的证据；不能互相代替。当前 release 级别的待办与结论在 issue tracker 中，而非本文件。
+macOS 本地入口不模拟 Linux 用户权限。普通测试、Debian 上以真实 UID/GID 验证文件与进程边界，以及真实 Slack/provider 连接是不同的证据；不能互相代替。当前发布待办与结论在 issue tracker 中，而非本文件。
 
 ## 本地双成员入口
 

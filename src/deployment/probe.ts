@@ -1,23 +1,20 @@
-import { join, resolve } from 'node:path';
 import type { DaemonConfig } from '../daemon/config.js';
-import { acquireLock } from '../daemon/lock.js';
-import { assertDockerControlIsolation, executionScope } from '../daemon/paths.js';
-import { ContainerBackend } from '../execution/container.js';
-import { verifyDeploymentWorkspaces } from './runtime.js';
+import { LinuxProcessManager } from '../execution/linux-processes.js';
+import { lstatSync } from 'node:fs';
 
 /** Stateful deployment probe. The service wrapper must first prove mate.service is stopped. */
-export async function runOfflineProbe(config: DaemonConfig, projectRoot = resolve('.')): Promise<{ roots: string[] }> {
-  if (!config.runtime.docker || !config.runtime.workspaceManifest) throw new Error('Offline probe requires managed Docker and workspace configuration');
-  const state = join(config.runtime.dataDir, 'state'), agents = join(config.runtime.dataDir, 'agents');
-  const release = acquireLock(join(state, 'daemon.lock'));
-  try {
-    assertDockerControlIsolation(projectRoot, state, agents, config.runtime.workspaceGrants, config.runtime.docker, [config.runtime.workspaceManifest]);
-    const workspaces = verifyDeploymentWorkspaces(config);
-    if (!workspaces) throw new Error('Managed workspace verification is unavailable');
-    const backend = new ContainerBackend({ ...config.runtime.docker, scope: executionScope(config.runtime.dataDir) });
-    await backend.recover();
-    const roots = [...workspaces.roots.values(), ...workspaces.externalRoots];
-    for (const root of roots) await backend.probe(root);
+export async function runOfflineProbe(config: DaemonConfig): Promise<{ roots: string[] }> {
+  if (config.runtime.linuxUsers) {
+    if (process.getuid?.() !== 0) throw new Error('Linux user offline probe requires root');
+    const manager = new LinuxProcessManager(Object.fromEntries(Object.entries(config.runtime.linuxUsers).map(([id, user]) => [id, user.uid])));
+    const roots: string[] = [];
+    for (const [agentId, identity] of Object.entries(config.runtime.linuxUsers)) {
+      manager.verifyQuota(agentId);
+      const stat = lstatSync(identity.home);
+      if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== identity.uid || stat.gid !== identity.gid || (stat.mode & 0o777) !== 0o700) throw new Error(`Private Linux Agent home differs: ${agentId}`);
+      roots.push(identity.home);
+    }
     return { roots };
-  } finally { release(); }
+  }
+  throw new Error('Debian Linux-user deployment configuration required');
 }

@@ -46,10 +46,15 @@ function safeRelative(root: string, path: string): string {
   return value.split(sep).join('/');
 }
 
+export function assertSafeReleaseMode(mode: number, path: string): void {
+  if (mode & 0o6000) throw new Error(`Release cannot contain setuid or setgid bits: ${path}`);
+}
+
 async function inventoryTree(root: string): Promise<InventoryEntry[]> {
   const entries: InventoryEntry[] = [], hardlinks = new Map<string, { expected: number; count: number; path: string }>();
   const visit = async (path: string): Promise<void> => {
     const stat = lstatSync(path), itemPath = safeRelative(root, path), mode = stat.mode & 0o7777;
+    assertSafeReleaseMode(mode, itemPath);
     if (stat.isSymbolicLink()) {
       const target = readlinkSync(path);
       if (isAbsolute(target)) throw new Error(`Release symlink must be relative: ${itemPath}`);

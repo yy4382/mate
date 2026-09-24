@@ -9,6 +9,7 @@ import type { DispatchEnvelope } from '../conversations/output.js';
 import {Directory} from './directory.js';
 import {compareSlackTimestamps,recoverSlackHistory,scanSlackPages,slackScanDue,scheduleSlackScan} from './history-recovery.js';
 import {systemOrigin} from './normalize.js';
+import {mutableSystemInputsWarning,type SystemOperations} from '../policy/system-operations.js';
 
 import { encode } from '../storage/store.js';
 export function formatControlReply(value:unknown,limit=15000):string{
@@ -21,7 +22,7 @@ export class SlackService {
   private readonly gapsAwaitingDiscovery = new Set<string>();
   private readonly transportGeneration = new Map<string,number>();
   private currentTransport(agentId:string,generation:number):boolean{return (this.transportGeneration.get(agentId)??0)===generation;}
-  constructor(readonly c: Collaboration, readonly transport: WebSlackTransport, readonly ingress: Ingress, readonly controls: Controls, readonly stopping: () => boolean = () => false) {}
+  constructor(readonly c: Collaboration, readonly transport: WebSlackTransport, readonly ingress: Ingress, readonly controls: Controls, readonly stopping: () => boolean = () => false,readonly system?:SystemOperations) {}
   configured(actor:string):boolean{return !!this.transport.clients.get(actor)?.token;}
   supports(actor:string,target:import('../domain/conversations.js').ConversationTarget):boolean{
     if(!this.configured(actor))return false;
@@ -189,7 +190,21 @@ export class SlackService {
       const body = JSON.parse(row.body), agent = this.transport.mapper.config.agents.find(a => a.slackAppId === row.app_id);
       if (!agent) continue;
       try {
-        if (body.command === slackControlCommand) {
+        if(body.type==='block_actions'&&this.system){
+          s.atomic(()=>{
+            const team=body.team?.id??body.team_id,user=body.user?.id,channel=body.channel?.id,action=body.actions?.[0];
+            if(team!==this.transport.mapper.config.teamId||!/^U[A-Z0-9]+$/.test(user??'')||!action||!['mate_system_approve','mate_system_reject'].includes(action.action_id)||typeof action.value!=='string')throw new Error('Invalid system approval interaction');
+            let reply:string;
+            try{
+              const actor=slackPrincipal(this.transport.mapper.config,user);if(actor.kind!=='human')throw new Error('System approval requires a human');
+              this.system!.status(agent.id,action.value);
+              const result=this.system!.decide(this.transport.mapper.config.principalIds?actor.id:user,action.value,action.action_id==='mate_system_approve'?'approve':'reject');
+              reply=`System request ${result.id}: ${result.status}`;
+            }catch(error){reply=String(error);}
+            if(typeof channel==='string'&&/^[CDG][A-Z0-9]+$/.test(channel))s.db.prepare("INSERT INTO admin_replies VALUES(?,?,?,?,?,'pending') ON CONFLICT DO NOTHING").run(`${row.app_id}:${row.event_id}`,agent.id,channel,user,reply.slice(0,15000));
+            s.db.prepare('UPDATE ingress SET normalized=1 WHERE app_id=? AND event_id=?').run(row.app_id,row.event_id);
+          });
+        } else if (body.command === slackControlCommand) {
           s.atomic(() => {
             const team = body.team_id ?? body.team?.id, user = body.user_id ?? body.user?.id, channel = body.channel_id ?? body.channel?.id;
             if (team !== this.transport.mapper.config.teamId || !/^U[A-Z0-9]+$/.test(user ?? '') || !/^[CDG][A-Z0-9]+$/.test(channel ?? '')) throw new Error('Invalid control identity');
@@ -210,6 +225,46 @@ export class SlackService {
       s.db.prepare("UPDATE admin_replies SET state='unknown' WHERE id=? AND state='pending'").run(row.id);
       try { await this.transport.clients.get(row.agent_id)!.chat.postEphemeral({ channel: row.channel, user: row.user_id, text: row.text }); s.db.prepare("UPDATE admin_replies SET state='sent' WHERE id=?").run(row.id); }
       catch { s.audit('admin_reply_unknown', { id: row.id }); }
+    }
+  }
+  async flushApprovals():Promise<void>{
+    if(!this.system)return;
+    const rawOwner=this.transport.mapper.config.ownerUserIds.find(id=>/^U[A-Z0-9]+$/.test(id));if(!rawOwner)return;
+    for(const request of this.system.pendingNotices()){
+      if(this.stopping())return;
+      let claimed=false;
+      try{
+        const client=this.transport.clients.get(request.agentId);if(!client)throw new Error('Missing Agent Slack client');
+        const opened=await client.conversations.open({users:rawOwner});const channel=opened.channel?.id;if(!channel)throw new Error('Owner DM unavailable');
+        const details=JSON.stringify({agent:request.agentId,requestId:request.id,...request.command,expires:new Date(request.expires).toISOString()});
+        const plain=(value:string)=>({type:'plain_text' as const,text:value});
+        const message={channel,text:`System command approval requested by ${request.agentId}: ${request.id}`,blocks:[
+          {type:'section',text:plain(`System command request\n${details}\n${mutableSystemInputsWarning}`)},
+          {type:'actions',elements:[
+            {type:'button',action_id:'mate_system_approve',text:plain('Approve'),style:'danger',value:request.id,confirm:{title:plain('Approve system command?'),text:plain('Run this exact command request with system privileges? Invoked files and dependencies are not frozen.'),confirm:plain('Approve'),deny:plain('Cancel')}},
+            {type:'button',action_id:'mate_system_reject',text:plain('Reject'),value:request.id}
+          ]}
+        ]};
+        if(!this.system.claimNotice(request.id))continue;claimed=true;
+        await client.chat.postMessage(message);
+        this.system.settleNotice(request.id,'sent');
+      }catch{if(claimed)this.system.settleNotice(request.id,'unknown');}
+    }
+  }
+  async flushResults():Promise<void>{
+    if(!this.system)return;
+    const rawOwner=this.transport.mapper.config.ownerUserIds.find(id=>/^U[A-Z0-9]+$/.test(id));if(!rawOwner)return;
+    for(const request of this.system.pendingResults()){
+      if(this.stopping())return;
+      let claimed=false;
+      try{
+        const client=this.transport.clients.get(request.agentId);if(!client)throw new Error('Missing Agent Slack client');
+        const opened=await client.conversations.open({users:rawOwner});const channel=opened.channel?.id;if(!channel)throw new Error('Owner DM unavailable');
+        const receipt=JSON.stringify(request.receipt);const text=`System request ${request.id} (${request.agentId}): ${request.status}. ${receipt.slice(0,2000)}${receipt.length>2000?' [truncated; use system-status and system-output REQUEST_ID stdout|stderr OFFSET]':''}`;
+        if(!this.system.claimResultNotice(request.id))continue;claimed=true;
+        await client.chat.postMessage({channel,text});
+        this.system.settleResultNotice(request.id,'sent');
+      }catch{if(claimed)this.system.settleResultNotice(request.id,'unknown');}
     }
   }
   async reconcile(now=Date.now()): Promise<void> {

@@ -41,9 +41,6 @@ CREATE TABLE schedules(id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES ag
 PRAGMA user_version=3;
 `;
 export const policySchema = `
-CREATE TABLE grants(id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agents(id), work_id TEXT NOT NULL REFERENCES works(id), root TEXT NOT NULL, operations TEXT NOT NULL, expires INTEGER NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, exec_allowlist TEXT NOT NULL DEFAULT '[]');
-CREATE TABLE approvals(id TEXT PRIMARY KEY REFERENCES actions(id), agent_id TEXT NOT NULL REFERENCES agents(id), work_id TEXT NOT NULL REFERENCES works(id), run_id TEXT NOT NULL REFERENCES runs(id), grant_id TEXT NOT NULL REFERENCES grants(id), request_hash TEXT NOT NULL, expires INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending', decision_by TEXT, policy_version TEXT NOT NULL, classification TEXT);
-CREATE TABLE blocked_runs(run_id TEXT PRIMARY KEY REFERENCES runs(id));
 PRAGMA user_version=4;
 `;
 
@@ -57,16 +54,7 @@ CREATE TABLE admin_replies(id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCE
 CREATE TABLE slack_cursors(agent_id TEXT NOT NULL REFERENCES agents(id), channel TEXT NOT NULL, ts TEXT NOT NULL, PRIMARY KEY(agent_id,channel));
 PRAGMA user_version=6;
 `;
-/** One-way compatibility migration: retire review state without executing pending commands. */
 export const scopedExecutionSchema = `
-INSERT INTO audit(at,kind,body) SELECT CAST(strftime('%s','now') AS INTEGER)*1000,'retired_command_review',json_object('actionId',id,'status',status,'requestHash',request_hash) FROM approvals;
-UPDATE grants SET revoked=1 WHERE EXISTS(SELECT 1 FROM json_each(grants.operations) WHERE value='exec');
-UPDATE actions SET state='failed',receipt='{"reason":"command_review_removed; reauthorize scoped execution explicitly"}' WHERE state='prepared' AND json_extract(request,'$.operation.kind')='exec';
-UPDATE deliveries SET status='handled' WHERE json_extract(payload,'$.kind')='approval' AND status!='handled';
-UPDATE outbox SET state='failed',receipt='{"reason":"command_review_removed"}' WHERE id LIKE 'approval-notice:%' AND state='pending';
-DROP TABLE blocked_runs;
-DROP TABLE approvals;
-ALTER TABLE grants DROP COLUMN exec_allowlist;
 PRAGMA user_version=7;
 `;
 
@@ -170,4 +158,16 @@ CREATE TABLE canonical_targets(
  PRIMARY KEY(object_type,object_id)
 );
 PRAGMA user_version=16;
+`;
+
+/** Privileged requests are separate from ordinary Agent actions: approval may arrive after its run ended. */
+export const systemOperationsSchema = `
+CREATE TABLE system_requests(
+ id TEXT PRIMARY KEY,agent_id TEXT NOT NULL REFERENCES agents(id),work_id TEXT NOT NULL REFERENCES works(id),
+ request_hash TEXT NOT NULL,request TEXT NOT NULL,expires INTEGER NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected','expired','executing','succeeded','failed','unknown')),
+ decision_by TEXT,receipt TEXT,notice_state TEXT NOT NULL DEFAULT 'pending' CHECK(notice_state IN ('pending','sending','sent','unknown'))
+);
+CREATE INDEX system_requests_pending ON system_requests(status,expires);
+PRAGMA user_version=24;
 `;
