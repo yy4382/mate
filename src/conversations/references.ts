@@ -217,31 +217,4 @@ export class References {
     }
     return target;
   }
-
-  /** Derived index; caller must read its authoritative object and update in the same transaction. */
-  indexTarget(objectType: string, objectId: string, target: ConversationTarget): void {
-    referenceSchema.parse(objectType);
-    referenceSchema.parse(objectId);
-    this.validateTarget(target);
-    this.store.db
-      .prepare(
-        "INSERT INTO canonical_targets VALUES(?,?,?,?) ON CONFLICT(object_type,object_id) DO UPDATE SET conversation_id=excluded.conversation_id,thread_id=excluded.thread_id",
-      )
-      .run(objectType, objectId, target.conversationId, target.threadId ?? null);
-  }
-
-  indexedTarget(objectType: string, objectId: string): ConversationTarget | undefined {
-    const row = this.store.db
-      .prepare(
-        "SELECT conversation_id,thread_id FROM canonical_targets WHERE object_type=? AND object_id=?",
-      )
-      .get(objectType, objectId) as
-      { conversation_id: string; thread_id: string | null } | undefined;
-    return row
-      ? {
-          conversationId: row.conversation_id,
-          ...(row.thread_id ? { threadId: row.thread_id } : {}),
-        }
-      : undefined;
-  }
 }

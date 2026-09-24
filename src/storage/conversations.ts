@@ -58,9 +58,9 @@ export class ConversationRecords {
     const marker = this.store.db
       .prepare("SELECT value FROM runtime_meta WHERE key='conversation_format'")
       .get() as { value: string } | undefined;
-    if (marker && marker.value !== "mate.conversations.v2")
+    if (marker?.value !== "mate.conversations.v2")
       throw new Error("Unsupported conversation data format");
-    return this.checkedTarget(type, id, JSON.parse(row.target), !!marker);
+    return this.checkedTarget(type, id, JSON.parse(row.target), true);
   }
 
   /** Only effects with an explicit conversation target; not an action authorization API. */
@@ -125,35 +125,17 @@ export class ConversationRecords {
     const decoded = canonical
       ? this.references.validateTarget(conversationTargetSchema.parse(stored))
       : this.requireLegacy().target(stored);
-    if (canonical && ["works", "tasks", "schedules", "task_intents", "review_seats"].includes(type))
-      return decoded;
-    const marker = this.store.db
-      .prepare("SELECT value FROM runtime_meta WHERE key='conversation_format'")
-      .get() as { value: string } | undefined;
-    if (marker && marker.value !== "mate.conversations.v2")
-      throw new Error("Unsupported conversation data format");
-    if (type === "outbox" && marker) {
-      const row = this.store.db.prepare("SELECT target FROM outbox WHERE id=?").get(id) as {
-        target: string;
-      };
-      const routing = this.references.validateTarget(
-        conversationTargetSchema.parse(JSON.parse(row.target)),
-      );
-      if (
-        routing.conversationId !== decoded.conversationId ||
-        routing.threadId !== decoded.threadId
-      )
-        throw new Error("Output routing target mismatch");
-      return decoded;
-    }
-    if (marker) return decoded;
-    const indexed = this.references.indexedTarget(type, id);
-    if (
-      !indexed ||
-      indexed.conversationId !== decoded.conversationId ||
-      indexed.threadId !== decoded.threadId
-    )
-      throw new Error("Canonical target index missing or inconsistent");
+    // An output keeps its original request bytes and its routing target in the same
+    // row; the two must still describe the same conversation.
+    if (type !== "outbox" || !canonical) return decoded;
+    const row = this.store.db.prepare("SELECT target FROM outbox WHERE id=?").get(id) as {
+      target: string;
+    };
+    const routing = this.references.validateTarget(
+      conversationTargetSchema.parse(JSON.parse(row.target)),
+    );
+    if (routing.conversationId !== decoded.conversationId || routing.threadId !== decoded.threadId)
+      throw new Error("Output routing target mismatch");
     return decoded;
   }
 }
