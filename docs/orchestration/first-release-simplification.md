@@ -63,9 +63,9 @@ only when every blocker is committed on the branch.
 | #39 | 让工具输入类型和领域授权各有明确归属 | **done** | `1066f1c` (worktree `.worktrees/t39`) | `f96c1a2` + `4cc68c9`, merged as `e898228`; follow-up `412aac5` was a sibling of `4cc68c9`, so its 14-line delta is being re-checked against #42 on the merged base |
 | #40 | 交付有界且可继续的历史查询 | in progress | `e898228` (worktree `.worktrees/t40`) | — |
 | #41 | 保留注意力与持久投递的独立状态 | pending | — | — |
-| #42 | 让提醒独立于关联任务继续运行 | **done** | `e898228` (worktree `.worktrees/t42`) | `1c51589`, merged as `0f71592` |
-| #43 | 将会话发现收敛到现有成员空间 | pending | — | — |
-| #44 | 让频道内 Agent 邀请另一名团队 Agent | pending | — | — |
+| #42 | 让提醒独立于关联任务继续运行 | **done** | `e898228` (worktree `.worktrees/t42`) | `1c51589`, merged as `0f71592`; sibling `1909d03` (extra tests) being reconciled on the merged base |
+| #43 | 将会话发现收敛到现有成员空间 | **done** | `ddd86b4` (worktree `.worktrees/t43`) | `1c206f4`, merged as `6a25110` |
+| #44 | 让频道内 Agent 邀请另一名团队 Agent | in progress | `6a25110` (worktree `.worktrees/t44`) | — |
 | #45 | 在工作进程协议中保留故障类别与阶段 | pending | — | — |
 | #46 | 对暂时模型故障持久退避并自动继续 | pending | — | — |
 | #47 | 保持正常让位后的持久继续与恢复输入 | pending | — | — |
@@ -133,6 +133,14 @@ None yet.
   another ticket is mid-edit there; merges wait until the main-tree ticket commits and the
   tree is clean. Merge commits require a green `pnpm check` before the merge is committed
   (verified with `git merge --no-commit`).
+- **Sibling-commit drift (twice).** When an implementer keeps working after I merge its
+  stable commit, its next commit is a SIBLING (same parent), not a successor, so it never
+  contains the merged tree. Both times the agent was asked to re-check its delta against the
+  current base and land only what was genuinely missing: #39's follow-up turned out to be a
+  rename plus a regression test proving `reminders.cancel` still works after the task ends
+  (work-container activity, not task status, gates it), and #42's follow-up is extra test
+  hardening. Rule for the remaining tickets: treat a ticket as still open until its
+  implementer reports, and reconcile by re-checking the delta on the merged base.
 - **Per-worktree git index (hardening, verified).** By default every linked worktree of one
   repository shares `.git/index`, so parallel tickets race on `index.lock` and can stage each
   other's files (the same failure mode as the #35/#36 contamination, but across worktrees).
@@ -163,6 +171,7 @@ None yet.
 | #37 | `3c5e9db` | `pnpm typecheck` + `pnpm check` in an isolated `git archive` copy | 59 files / 417 tests, exit 0; the assembly test covers both entries, the ordered shutdown, and no repeated confirmed external operation after restart |
 | #37 (final) | `1066f1c` | `pnpm typecheck` + `pnpm check` on the MAIN tree | 59 files / 432 tests, exit 0 (agent reports the same) |
 | #42 | `1c51589`, merged `0f71592` | `pnpm typecheck` + `pnpm check` on the merged MAIN tree before committing the merge | 58 files / 435 tests, exit 0; conflict-free |
+| #43 | `1c206f4`, merged `6a25110` | `pnpm typecheck` + `pnpm check` on the merged MAIN tree before committing the merge | 58 files / 441 tests, exit 0; conflict-free; the merge preserved the orchestrator's ledger file |
 | #39 | `4cc68c9`, merged `e898228` | `pnpm typecheck` + `pnpm check` on the merged MAIN tree before committing the merge | 58 files / 431 tests, exit 0; conflict-free; type seam checked by hand (`ToolHandler<Schema>`/`ToolAuthorize<Schema>` both derive from the one zod schema) and the architecture test asserts the removed research reader, its host allow-list, its prompt hints and `daemon/research.ts` are gone |
 | #52 | `053a643` (worktree) | `pnpm check` in `.worktrees/t52` | 62 files / 419 tests, exit 0 — merge pending #36 finishing |
 | #36 | `a2288ce` | `pnpm check` in an isolated `git archive` copy | 57 files / 398 tests, exit 0; all preserved-baseline tests confirmed present; old schema modules fully unreferenced; `Store` is the single entry onto `openCurrentDatabase` |
