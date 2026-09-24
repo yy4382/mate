@@ -11,10 +11,10 @@ import type { WebClient } from "@slack/web-api";
 import type { Effect, RunToken } from "../storage/store.js";
 import type { Conversations as Messages } from "../conversations/messages.js";
 import type { SlackMapper } from "./mapper.js";
-import type { SlackReadinessPort } from "./transport.js";
 import { slackPrincipal, slackUserForPrincipal } from "./principals.js";
 import type { Principal } from "../domain/messages.js";
 import { LegacyArguments } from "./legacy-arguments.js";
+import { slackBoundaryWait, type SlackBoundaryReadiness } from "./readiness.js";
 
 /**
  * Slack's definite refusal of one invitation, including a workspace policy that forbids it. Every
@@ -75,19 +75,22 @@ export class Directory implements ConversationDirectory {
     readonly messages: Messages,
     readonly clients: Map<string, WebClient>,
     readonly mapper: SlackMapper,
-    /** Connection readiness of each installation; absent means no wait is known. */
-    readonly readiness?: Pick<SlackReadinessPort, "waitingFor">,
+    /** Connection and target readiness; absent means no wait is known. */
+    readonly readiness?: SlackBoundaryReadiness,
   ) {
-    this.membershipFacts = new SlackMembership(messages, clients, mapper);
+    this.membershipFacts = new SlackMembership(messages, clients, mapper, readiness);
   }
   private readonly membershipFacts: SlackMembership;
   refresh(actor: string, conversationId: string, signal: AbortSignal) {
     return this.membershipFacts.refresh(actor, conversationId, signal);
   }
-  private client(actor: string): WebClient {
+  /**
+   * One platform read through this installation. Naming a target also waits for that target's
+   * confirmed permission: a cached grant never authorizes a call whose permission is pending.
+   */
+  private client(actor: string, conversationId?: string): WebClient {
     this.messages.agent(actor);
-    // A platform read waits for its own installation instead of failing as a permission problem.
-    const waiting = this.readiness?.waitingFor(actor);
+    const waiting = slackBoundaryWait(this.readiness, actor, conversationId);
     if (waiting) throw waiting;
     const client = this.clients.get(actor);
     if (!client) throw new Error("Slack client unavailable");
@@ -182,7 +185,7 @@ export class Directory implements ConversationDirectory {
   async members(actor: string, conversationId: string): Promise<MembersResult> {
     this.messages.requireAccess(actor, conversationId);
     const channel = this.mapper.target({ conversationId }).channel,
-      client = this.client(actor),
+      client = this.client(actor, conversationId),
       members: Principal[] = [];
     let cursor: string | undefined,
       pages = 0;
@@ -217,7 +220,7 @@ export class Directory implements ConversationDirectory {
   ): Promise<InviteResult> {
     const m = this.messages,
       s = m.store,
-      client = this.client(run.agentId),
+      client = this.client(run.agentId, conversationId),
       target = m.agent(agentId);
     if (target.id === run.agentId) throw new Error("An Agent cannot invite itself");
     const identity = m.references.conversation(conversationId);

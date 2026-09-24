@@ -16,10 +16,18 @@ import {
   scheduleSlackScan,
 } from "./history-recovery.js";
 import { systemOrigin } from "./normalize.js";
+import { slackBoundaryWait } from "./readiness.js";
 import { mutableSystemInputsWarning, type SystemOperations } from "../policy/system-operations.js";
 
 import { encode } from "../storage/store.js";
 import type { AgentConfig as SlackInstallation } from "../config.js";
+/** One conversation this installation acts on, with the external channel it is bound to. */
+export interface SlackServiceTarget {
+  conversationId: string;
+  channel: string;
+  /** The projection binding this conversation presents; absent for a plain channel or DM. */
+  projectionId?: string;
+}
 export function formatControlReply(value: unknown, limit = 15000): string {
   const full = typeof value === "string" ? value : encode(value);
   if (Buffer.byteLength(full) <= limit) return full;
@@ -179,169 +187,196 @@ export class SlackService {
       .run(historyPrefix.length, historyPrefix);
     this.c.store.audit("slack_offline_delete_gap_fenced", { agentId });
   }
-  async membership(
-    required = true,
-    progress?: () => void,
-    scope?: readonly SlackInstallation[],
-  ): Promise<boolean> {
-    let complete = true;
-    for (const agent of scope ?? this.transport.mapper.config.agents) {
-      if (this.stopping()) return false;
-      const client = this.transport.clients.get(agent.id);
-      if (!client) {
-        complete = false;
-        continue;
-      }
-      const stored = this.c.store.db
+  /**
+   * Every external target this installation acts on: the channels it remembers, the channels its
+   * configuration names, and the conversations it publishes a projection into. Each target carries
+   * its own platform conditions, so one unfinished channel never speaks for the whole installation.
+   */
+  targets(agent: SlackInstallation): SlackServiceTarget[] {
+    const team = this.transport.mapper.config.teamId,
+      rows = this.c.store.db
         .prepare(
-          "SELECT a.channel FROM channel_access a JOIN conversation_bindings b ON b.conversation_id=a.channel WHERE b.provider='slack' AND b.mode='primary' AND b.workspace=? AND a.agent_id=? AND a.active=1",
+          `SELECT b.conversation_id conversationId,b.external_id channel,NULL projectionId
+             FROM conversation_bindings b JOIN channel_access a ON a.channel=b.conversation_id AND a.agent_id=?
+             WHERE b.provider='slack' AND b.workspace=? AND b.mode='primary'
+           UNION
+           SELECT cb.conversation_id conversationId,p.external_id channel,p.id projectionId
+             FROM projection_bindings p JOIN conversation_bindings cb USING(provider,workspace,external_id)
+             WHERE p.provider='slack' AND p.workspace=? AND p.publisher=?`,
         )
-        .all(this.transport.mapper.config.teamId, agent.id) as { channel: string }[];
-      for (const channel of new Set([
-        ...Object.keys(agent.channels),
-        ...stored.map((r) => this.transport.mapper.target({ conversationId: r.channel }).channel),
-      ])) {
-        if (this.stopping()) return false;
-        const bound = this.c.messages.references.findConversation({
-          provider: "slack",
-          workspace: this.transport.mapper.config.teamId,
-          externalId: channel,
-        });
-        if (bound && this.c.messages.references.conversation(bound).authority === "internal")
-          continue;
-        // Failure closes permission until a successful membership check.
-        this.c.messages.membership(agent.id, this.transport.mapper.conversation(channel), false);
-        const version = this.c.messages.membershipVersion(agent.id);
-        try {
-          const info = await client.conversations.info({ channel });
-          if (this.stopping() || version !== this.c.messages.membershipVersion(agent.id)) continue;
-          this.c.messages.membership(
-            agent.id,
-            this.transport.mapper.conversation(channel),
-            info.channel?.is_member === true ||
-              (channel.startsWith("D") && info.channel?.is_im === true),
-          );
-          progress?.();
-        } catch {
-          complete = false;
-          this.c.store.audit("membership_unavailable", { agentId: agent.id, channel });
-        }
-      }
+        .all(agent.id, team, team, agent.id) as {
+        conversationId: string;
+        channel: string;
+        projectionId: string | null;
+      }[],
+      targets = new Map(
+        rows.map((row) => [
+          row.channel,
+          {
+            conversationId: row.conversationId,
+            channel: row.channel,
+            ...(row.projectionId ? { projectionId: row.projectionId } : {}),
+          },
+        ]),
+      );
+    for (const channel of Object.keys(agent.channels)) {
+      if (targets.has(channel)) continue;
+      // A configured channel without a conversation binding yet carries no operation this
+      // installation could name; naming it here would create routing identity as a side effect.
+      const found = this.c.messages.references.findConversation({
+        provider: "slack",
+        workspace: team,
+        externalId: channel,
+      });
+      if (found && this.c.messages.references.conversation(found).authority === "external")
+        targets.set(channel, { conversationId: found, channel });
     }
-    if (required && !complete) throw new Error("Slack membership verification did not complete");
-    return complete;
+    return [...targets.values()];
   }
-  async catchUp(
-    forceFullOldThreads = false,
-    progress?: () => void,
-    scope?: readonly SlackInstallation[],
-  ): Promise<boolean> {
-    const recoveryStarted = `${Math.floor(Date.now() / 1000)}.000000`,
-      agents = scope ?? this.transport.mapper.config.agents;
-    let complete = true;
-    for (const agent of agents) {
-      if (this.stopping()) return false;
-      const generation = this.transportGeneration.get(agent.id) ?? 0,
-        current = () => this.currentTransport(agent.id, generation);
-      const client = this.transport.clients.get(agent.id);
-      if (!client) {
-        complete = false;
-        continue;
+  /**
+   * Confirms one target's current platform permission. A failed check closes the cached grant until
+   * a later check succeeds, so no operation crosses the boundary on a permission that is pending.
+   * A projection names its own internal conversation, whose membership stays host-managed: only the
+   * platform fact about the external channel is confirmed there, nothing is written to access.
+   */
+  async confirmMembership(
+    agent: SlackInstallation,
+    channel: string,
+    projectionConversation?: string,
+  ): Promise<"confirmed" | "denied" | "unavailable" | "superseded"> {
+    const client = this.transport.clients.get(agent.id);
+    if (!client) return "unavailable";
+    const conversationId = projectionConversation ?? this.transport.mapper.conversation(channel),
+      // The platform fact is the only thing that grants access, so access is written once this
+      // call has an answer. While it is in flight the target's own readiness keeps the boundary
+      // closed, so nothing crosses on the cached grant and local access never flickers away.
+      write = (member: boolean) =>
+        projectionConversation
+          ? undefined
+          : this.c.messages.membership(agent.id, conversationId, member);
+    const version = this.c.messages.membershipVersion(agent.id);
+    try {
+      const info = await client.conversations.info({ channel });
+      if (this.stopping()) return "unavailable";
+      if (!projectionConversation && version !== this.c.messages.membershipVersion(agent.id)) {
+        // A concurrent membership write during this read means this answer describes a past state.
+        // That write is the newer fact, so this check leaves it untouched and reports a re-check.
+        return "superseded";
       }
-      const changedDueKey = `slack_changed_thread_due_v1:${agent.id}`,
-        scanOldThreads =
-          forceFullOldThreads || slackScanDue(this.c.store, changedDueKey, Date.now());
-      let changedComplete = true;
-      const global = this.c.store.db
-        .prepare("SELECT ts FROM slack_cursors WHERE agent_id=? AND channel='*'")
-        .get(agent.id) as { ts: string } | undefined;
-      const channels = this.c.store.db
-        .prepare(
-          "SELECT a.channel FROM channel_access a JOIN conversation_bindings b ON b.conversation_id=a.channel WHERE b.provider='slack' AND b.mode='primary' AND b.workspace=? AND a.agent_id=? AND a.active=1",
-        )
-        .all(this.transport.mapper.config.teamId, agent.id) as { channel: string }[];
-      for (const { channel: conversationId } of channels) {
-        const { channel } = this.transport.mapper.target({ conversationId });
-        if (this.stopping()) return false;
-        const checkpoint = this.c.store.db
-          .prepare("SELECT ts FROM slack_cursors WHERE agent_id=? AND channel=?")
-          .get(agent.id, channel) as { ts: string } | undefined;
-        const oldest = checkpoint?.ts ?? global?.ts;
-        if (
-          oldest &&
-          scanOldThreads &&
-          !(await this.catchUpChangedThreads(
-            agent.id,
-            agent.slackAppId,
-            channel,
-            oldest,
-            client,
-            forceFullOldThreads ? undefined : 2,
-            current,
-            progress,
-          ))
-        ) {
-          complete = false;
-          changedComplete = false;
-        }
-        const recovered = await recoverSlackHistory({
-          store: this.c.store,
-          agentId: agent.id,
-          cursorKey: channel,
-          initialOldest: oldest,
-          current,
-          onPage: progress,
-          fetch: async (state) => {
-            if (this.stopping()) throw new Error("stopping");
-            const result = await client.conversations.history({
-              channel,
-              limit: 100,
-              include_all_metadata: true,
-              ...(state.oldest ? { oldest: state.oldest, inclusive: true } : {}),
-              ...(state.cursor ? { cursor: state.cursor } : {}),
-            });
-            return {
-              messages: result.messages ?? [],
-              next: result.response_metadata?.next_cursor || undefined,
-            };
-          },
-          timestamp: (message: any) => message.ts,
-          ingest: (msg: any) => {
-            if (msg.ts)
-              this.c.store.ingest(
-                agent.slackAppId,
-                `history:${channel}:${msg.ts}:${msg.edited?.ts ?? msg.ts}`,
-                {
-                  team_id: this.transport.mapper.config.teamId,
-                  event: { ...msg, type: "message", channel },
-                },
-              );
-          },
-        });
-        if (!recovered) {
-          complete = false;
-          this.c.store.audit("history_gap", {
-            agentId: agent.id,
-            channel,
-            oldest: oldest ?? null,
-            reason: "Slack history unavailable or incomplete; durable page retained",
-          });
-        }
-      }
-      if (!current()) complete = false;
-      if (scanOldThreads && changedComplete && current())
-        scheduleSlackScan(this.c.store, changedDueKey, Date.now() + 60 * 60_000);
+      const member =
+        info.channel?.is_member === true ||
+        (channel.startsWith("D") && info.channel?.is_im === true);
+      write(member);
+      return member ? "confirmed" : "denied";
+    } catch {
+      // Failure closes permission until a successful membership check.
+      write(false);
+      this.c.store.audit("membership_unavailable", { agentId: agent.id, channel });
+      return "unavailable";
     }
-    if (!(await this.catchUpThreads(progress, new Set(agents.map((agent) => agent.id)))))
+  }
+  /**
+   * Recovers the local coverage of one target: the channel itself, the threads that changed while
+   * Mate was offline, and the watched threads below it. Returns one target's own outcome so a
+   * caller can keep the coverage of every other target it acts on.
+   */
+  async recoverChannel(
+    agent: SlackInstallation,
+    conversationId: string,
+    options: {
+      forceFullOldThreads?: boolean;
+      scanOldThreads?: boolean;
+      progress?: (() => void) | undefined;
+      current?: () => boolean;
+    } = {},
+  ): Promise<"complete" | "incomplete" | "incomplete_threads"> {
+    const { channel } = this.transport.mapper.target({ conversationId }),
+      client = this.transport.clients.get(agent.id),
+      generation = this.transportGeneration.get(agent.id) ?? 0,
+      current = options.current ?? (() => this.currentTransport(agent.id, generation)),
+      progress = options.progress,
+      forceFullOldThreads = options.forceFullOldThreads ?? false,
+      scanOldThreads =
+        options.scanOldThreads ??
+        (forceFullOldThreads ||
+          slackScanDue(this.c.store, `slack_changed_thread_due_v1:${agent.id}`, Date.now()));
+    if (!client || !current()) return "incomplete";
+    const global = this.c.store.db
+      .prepare("SELECT ts FROM slack_cursors WHERE agent_id=? AND channel='*'")
+      .get(agent.id) as { ts: string } | undefined;
+    const checkpoint = this.c.store.db
+      .prepare("SELECT ts FROM slack_cursors WHERE agent_id=? AND channel=?")
+      .get(agent.id, channel) as { ts: string } | undefined;
+    // A channel this installation learns about later recovers forward from this boundary: history
+    // from before Mate was responsible for the channel is deliberately not imported, and the
+    // remote pages of it stay reachable through history.fetch.
+    const oldest = checkpoint?.ts ?? global?.ts;
+    let complete = true,
+      changedComplete = true;
+    if (
+      oldest &&
+      scanOldThreads &&
+      !(await this.catchUpChangedThreads(
+        agent.id,
+        agent.slackAppId,
+        channel,
+        oldest,
+        client,
+        forceFullOldThreads ? undefined : 2,
+        current,
+        progress,
+      ))
+    ) {
       complete = false;
-    if (complete)
-      for (const agent of agents)
-        this.c.store.db
-          .prepare(
-            "INSERT INTO slack_cursors VALUES(?,?,?) ON CONFLICT(agent_id,channel) DO UPDATE SET ts=excluded.ts",
-          )
-          .run(agent.id, "*", recoveryStarted);
-    return complete;
+      changedComplete = false;
+    }
+    const recovered = await recoverSlackHistory({
+      store: this.c.store,
+      agentId: agent.id,
+      cursorKey: channel,
+      initialOldest: oldest,
+      current,
+      onPage: progress,
+      fetch: async (state) => {
+        if (this.stopping()) throw new Error("stopping");
+        const result = await client.conversations.history({
+          channel,
+          limit: 100,
+          include_all_metadata: true,
+          ...(state.oldest ? { oldest: state.oldest, inclusive: true } : {}),
+          ...(state.cursor ? { cursor: state.cursor } : {}),
+        });
+        return {
+          messages: result.messages ?? [],
+          next: result.response_metadata?.next_cursor || undefined,
+        };
+      },
+      timestamp: (message: any) => message.ts,
+      ingest: (msg: any) => {
+        if (msg.ts)
+          this.c.store.ingest(
+            agent.slackAppId,
+            `history:${channel}:${msg.ts}:${msg.edited?.ts ?? msg.ts}`,
+            {
+              team_id: this.transport.mapper.config.teamId,
+              event: { ...msg, type: "message", channel },
+            },
+          );
+      },
+    });
+    if (!recovered) {
+      complete = false;
+      this.c.store.audit("history_gap", {
+        agentId: agent.id,
+        channel,
+        oldest: oldest ?? null,
+        reason: "Slack history unavailable or incomplete; durable page retained",
+      });
+    }
+    if (!(await this.catchUpThreads(progress, new Set([agent.id]), channel))) complete = false;
+    if (!current()) complete = false;
+    if (!complete) return changedComplete ? "incomplete" : "incomplete_threads";
+    return "complete";
   }
   /** Finds replies written while offline even when the old root was never watched locally. */
   private async catchUpChangedThreads(
@@ -468,7 +503,11 @@ export class SlackService {
       return false;
     }
   }
-  async catchUpThreads(progress?: () => void, scope?: ReadonlySet<string>): Promise<boolean> {
+  async catchUpThreads(
+    progress?: () => void,
+    scope?: ReadonlySet<string>,
+    conversationId?: string,
+  ): Promise<boolean> {
     let complete = true;
     const s = this.c.store;
     const watches = (
@@ -481,7 +520,11 @@ export class SlackService {
         channel: string;
         thread: string;
       }[]
-    ).filter((watch) => !scope || scope.has(watch.agent_id));
+    ).filter(
+      (watch) =>
+        (!scope || scope.has(watch.agent_id)) &&
+        (!conversationId || watch.channel === conversationId),
+    );
     for (const internal of watches) {
       const target = this.transport.mapper.target({
           conversationId: internal.channel,
@@ -956,7 +999,7 @@ export class SlackService {
     const { actor: agentId, text } = request,
       target = this.transport.mapper.target(request.target);
     // Refuse before allocating anything: the publication stays queued for recovery.
-    const waiting = this.transport.waitingFor(agentId);
+    const waiting = slackBoundaryWait(this.transport, agentId, request.target.conversationId);
     if (waiting) throw waiting;
     const client = this.transport.clients.get(agentId)!;
     const filename = artifact.filename ?? `${artifact.title.replace(/[^a-zA-Z0-9._-]/g, "_")}.txt`,

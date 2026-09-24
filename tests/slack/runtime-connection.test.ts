@@ -9,7 +9,7 @@ import { CanonicalFreshnessGate } from "../../src/conversations/freshness.js";
 import { Ingress } from "../../src/daemon/ingress.js";
 import { Controls } from "../../src/daemon/control.js";
 import { CanonicalSlackNormalizer } from "../../src/slack/normalize.js";
-import { CanonicalSlackTransport } from "../../src/slack/transport.js";
+import { CanonicalSlackTransport, SlackNotReadyError } from "../../src/slack/transport.js";
 import { SlackRuntime, type SlackRuntimeOptions } from "../../src/slack/runtime.js";
 import { readSlackReadiness } from "../../src/slack/readiness.js";
 import { slackSockets } from "../helpers/slack-connection.js";
@@ -242,4 +242,113 @@ it("does not claim ready when the socket drops during its own catch-up attempt",
   runtime.poll();
   await vi.waitFor(() => expect(runtime.readiness().ready).toBe(true), { timeout: 5000 });
   expect(sockets.created.filter((entry) => entry.agentId === "research")).toHaveLength(2);
+});
+/** Two external channels of one installation, so target facts are visible next to each other. */
+function targetChannels(transport: CanonicalSlackTransport) {
+  const client = transport.clients.get("research")!;
+  return {
+    client,
+    info: vi.fn(async ({ channel }: { channel: string }) => ({
+      channel: { id: channel, is_member: true },
+    })),
+    history: vi.fn(async () => ({ messages: [] })),
+  };
+}
+const envelope = (conversationId: string) => ({
+  id: `outbox-${conversationId}`,
+  actor: "research",
+  target: { conversationId },
+  text: "body",
+  requestHash: "hash",
+  originalRequest: "{}",
+});
+it("keeps one target's unconfirmed permission out of service without pausing its installation", async () => {
+  let clock = 1_000_000,
+    refuse = true;
+  const sockets = slackSockets(),
+    { runtime, transport, store, collaboration } = setup({
+      runtime: { socket: sockets.socket, now: () => clock },
+    }),
+    m = collaboration.messages;
+  // Grants cached by an earlier connection; neither may authorize work while unconfirmed.
+  m.membership("research", "CTEST", true);
+  m.membership("research", "CTWO", true);
+  const platform = targetChannels(transport);
+  platform.client.users.conversations = vi.fn(async () => ({ channels: [] })) as never;
+  platform.client.conversations.info = vi.fn(async ({ channel }: { channel: string }) => {
+    if (refuse && channel === "CTWO")
+      throw { code: "slack_webapi_platform_error", data: { error: "internal_error" } };
+    return { channel: { id: channel, is_member: true } };
+  }) as never;
+  platform.client.conversations.history = platform.history as never;
+  await runtime.start(new AbortController().signal);
+  // The installation is ready while one of its targets could not confirm its permission.
+  await vi.waitFor(() =>
+    expect(installation(runtime, "research")).toMatchObject({ state: "ready" }),
+  );
+  await vi.waitFor(() =>
+    expect(transport.waitingForTarget("research", "CTWO", "permission")).toBeInstanceOf(
+      SlackNotReadyError,
+    ),
+  );
+  expect(transport.waitingForTarget("research", "CTWO", "permission")!.reason).toContain(
+    "no confirmed permission",
+  );
+  // The other target of the same installation is verified and usable.
+  expect(transport.waitingForTarget("research", "CTEST", "permission")).toBeUndefined();
+  expect(transport.waitingForTarget("research", "CTEST", "history")).toBeUndefined();
+  const post = vi.fn(async () => ({ ts: "101.000001" }));
+  platform.client.chat.postMessage = post as never;
+  await expect(transport.post(envelope("CTWO"))).rejects.toThrow("no confirmed permission");
+  expect(post).not.toHaveBeenCalled();
+  await expect(transport.post(envelope("CTEST"))).resolves.toBeDefined();
+  expect(post).toHaveBeenCalledOnce();
+  // The read side of the failed target waits too; its history was never caught up.
+  expect(transport.waitingForTarget("research", "CTWO", "history")).toBeInstanceOf(
+    SlackNotReadyError,
+  );
+  // Recovery: the platform answers again and this target rejoins on its own schedule.
+  refuse = false;
+  clock += 60_000;
+  runtime.poll();
+  await vi.waitFor(() =>
+    expect(transport.waitingForTarget("research", "CTWO", "permission")).toBeUndefined(),
+  );
+  expect(
+    readSlackReadiness(store)
+      ?.targets?.filter((entry) => entry.agentId === "research")
+      .map((entry) => entry.permission),
+  ).toEqual(["confirmed", "confirmed"]);
+});
+it("re-confirms every target's permission after a connection gap instead of trusting the cache", async () => {
+  let clock = 1_000_000;
+  const sockets = slackSockets(),
+    { runtime, transport, store, collaboration } = setup({
+      runtime: { socket: sockets.socket, now: () => clock },
+    });
+  collaboration.messages.membership("research", "CTEST", true);
+  const platform = targetChannels(transport);
+  platform.client.users.conversations = vi.fn(async () => ({ channels: [] })) as never;
+  platform.client.conversations.info = platform.info as never;
+  platform.client.conversations.history = platform.history as never;
+  await runtime.start(new AbortController().signal);
+  await vi.waitFor(() => expect(runtime.readiness().ready).toBe(true));
+  await vi.waitFor(() =>
+    expect(transport.waitingForTarget("research", "CTEST", "history")).toBeUndefined(),
+  );
+  expect(collaboration.messages.access("research", "CTEST")).toBe(true);
+  sockets.forAgent("research")!.drop();
+  await vi.waitFor(() => expect(installation(runtime, "research").state).toBe("waiting"));
+  // The permission cached before the gap is gone: only a new platform check restores it.
+  const researchTargets = () =>
+    readSlackReadiness(store)?.targets?.filter((entry) => entry.agentId === "research") ?? [];
+  expect(researchTargets().length).toBeGreaterThan(0);
+  expect(researchTargets().every((t) => t.permission === "unconfirmed")).toBe(true);
+  clock += 1000;
+  runtime.poll();
+  await vi.waitFor(() => expect(runtime.readiness().ready).toBe(true));
+  await vi.waitFor(() =>
+    expect(transport.waitingForTarget("research", "CTEST", "permission")).toBeUndefined(),
+  );
+  expect(researchTargets().every((t) => t.permission === "confirmed")).toBe(true);
 });

@@ -11,6 +11,10 @@ import { Broker } from "../../src/policy/broker.js";
 import { ToolRouter } from "../../src/runtime/tools.js";
 import { Supervisor } from "../../src/runtime/supervisor.js";
 import { TeamDirectory } from "../../src/conversations/team-directory.js";
+import {
+  confirmRememberedChannels,
+  recoverRememberedChannels,
+} from "../helpers/slack-maintenance.js";
 const settings: TeamSettings = {
   agents: ["alice", "bob", "outsider"].map((id) => ({
     id,
@@ -295,8 +299,8 @@ it("Slack background membership and history never pass internal identifiers to i
     clients: new Map(settings.agents.map((a) => [a.id, {}])),
   };
   const slack = new SlackService(f.collaboration, transport as any, {} as any, {} as any);
-  await slack.membership();
-  await slack.catchUp();
+  await confirmRememberedChannels(slack, "alice");
+  await recoverRememberedChannels(slack, "alice");
   expect(target).not.toHaveBeenCalled();
   expect(f.messages.access("alice", dm.conversationId)).toBe(true);
 });

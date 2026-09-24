@@ -1,10 +1,11 @@
 import type { AttachmentArgs } from "../capabilities/artifacts.js";
 export type { AttachmentArgs } from "../capabilities/artifacts.js";
 import type { WebClient } from "@slack/web-api";
-import type { SlackReadinessPort } from "./transport.js";
 import type { Collaboration } from "../collaboration/service.js";
 import type { Broker } from "../policy/broker.js";
 import type { RunToken } from "../storage/store.js";
+import type { MessageDTO } from "../domain/messages.js";
+import { slackBoundaryWait, type SlackBoundaryReadiness } from "./readiness.js";
 
 /** Only file IDs on an observed, currently visible message are accepted; URLs/credentials are never model arguments. */
 export class Attachments {
@@ -12,18 +13,19 @@ export class Attachments {
     readonly c: Collaboration,
     readonly broker: Broker,
     readonly clients: Map<string, WebClient>,
-    /** Connection readiness of each installation; absent means no wait is known. */
-    readonly readiness?: Pick<SlackReadinessPort, "waitingFor">,
+    /** Connection and target readiness; absent means no wait is known. */
+    readonly readiness?: SlackBoundaryReadiness,
   ) {}
   configured(actor: string): boolean {
     return !!this.clients.get(actor)?.token;
   }
-  private visible(run: RunToken, args: AttachmentArgs): void {
+  private visible(run: RunToken, args: AttachmentArgs): MessageDTO {
     const m = this.c.messages;
     m.store.assertRun(run);
     const message = m.message(run.agentId, args.message.messageId);
     if (message.deleted || !message.attachments.some((file) => file.id === args.fileId))
       throw new Error("Attachment is not on a visible message");
+    return message;
   }
   async save(
     run: RunToken,
@@ -32,11 +34,12 @@ export class Attachments {
     args: AttachmentArgs,
     signal: AbortSignal,
   ): Promise<unknown> {
-    this.visible(run, args);
+    const message = this.visible(run, args);
     this.c.assertActionWork(run, workId);
     signal = AbortSignal.any([signal, AbortSignal.timeout(30000)]);
-    // A platform download waits for its own installation instead of failing as if it were gone.
-    const waiting = this.readiness?.waitingFor(run.agentId);
+    // A platform download waits for its own installation and target instead of failing as if the
+    // file were gone, so a cached permission never authorizes a download whose grant is pending.
+    const waiting = slackBoundaryWait(this.readiness, run.agentId, message.conversationId);
     if (waiting) throw waiting;
     const client = this.clients.get(run.agentId);
     if (!client?.token) throw new Error("Missing attachment client");

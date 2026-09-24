@@ -8,6 +8,7 @@ import {
 } from "../domain/conversations.js";
 import type { MessageDTO as NormalMessage } from "../domain/messages.js";
 import type { Conversations as Messages } from "./messages.js";
+import type { LocalCoveragePort } from "./history.js";
 const messageKey = (message: NormalMessage) => message.id;
 function revisionNumber(value: string): bigint {
   return BigInt(value);
@@ -36,7 +37,22 @@ interface View {
   complete: number;
 }
 export class CanonicalAttention {
-  constructor(readonly messages: Messages) {}
+  constructor(
+    readonly messages: Messages,
+    /** Local coverage of one external target; absent means nothing waits. */
+    readonly coverage?: LocalCoveragePort,
+  ) {}
+  /**
+   * A fresh snapshot may only be presented once its target's history was caught up, so a
+   * credential minted here never describes an incomplete view. A continuation keeps reading the
+   * frozen view it names; that view's own revision already decided what the caller saw.
+   */
+  private requireCoverage(actor: string, conversationId: string): void {
+    if (!this.coverage) return;
+    if (this.messages.references.conversation(conversationId).authority !== "external") return;
+    const waiting = this.coverage.coverageWait(actor, conversationId);
+    if (waiting) throw waiting;
+  }
   /** A transport reports a source gap without teaching the core its provider. */
   recordExternalHistoryGap(actor: string, reason: string): void {
     this.messages.agent(actor);
@@ -248,6 +264,7 @@ export class CanonicalAttention {
     s.assertRun(run);
     targetSchema.parse(target);
     this.messages.requireAccess(run.agentId, target.conversationId);
+    if (!cursor) this.requireCoverage(run.agentId, target.conversationId);
     let view: View,
       page = 0;
     if (cursor) {

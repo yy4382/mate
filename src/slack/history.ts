@@ -5,6 +5,7 @@ import type { ConversationTarget } from "../domain/conversations.js";
 import { compareMessageOrder, type MessageDTO } from "../domain/messages.js";
 import type { CanonicalSlackTransport } from "./transport.js";
 import { rawMessage } from "./protocol.js";
+import { slackBoundaryWait } from "./readiness.js";
 import { systemOrigin } from "./normalize.js";
 
 export class SlackHistory implements HistorySource {
@@ -37,9 +38,10 @@ export class SlackHistory implements HistorySource {
       gaps: [reason],
       available: false,
     });
-    // Reading remote history waits for its installation instead of reporting a platform refusal.
-    const waiting = this.transport.waitingFor(run.agentId);
-    if (waiting) return unavailable(waiting.reason);
+    // Reading remote history waits for its own installation and for the target's confirmed
+    // permission instead of reporting a platform refusal or trusting a stale cached grant.
+    const waiting = slackBoundaryWait(this.transport, run.agentId, target.conversationId);
+    if (waiting) return unavailable(waiting.message);
     if (!client) return unavailable("Agent has no Slack history installation");
     const location = mapper.target(target),
       version = m.membershipVersion(run.agentId);

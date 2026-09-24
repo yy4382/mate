@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { Store } from "../../src/storage/store.js";
 import { slackApplication } from "../../src/slack/application.js";
 import { CanonicalSlackTransport, SlackNotReadyError } from "../../src/slack/transport.js";
@@ -126,6 +126,117 @@ it("persists the readiness an owner view reads without constructing Slack", () =
   expect(readSlackReadiness(store)).toBeNull();
 });
 
+const target = (
+  conversationId: string,
+  permission: "confirmed" | "unconfirmed" | "denied",
+  history: "pending" | "complete",
+  reason: string,
+) => ({
+  agentId: "research",
+  channel: conversationId,
+  conversationId,
+  permission,
+  history,
+  reason,
+  changedAt: 3,
+});
+const ready = (targets: ReturnType<typeof target>[]): SlackReadiness => ({
+  updatedAt: 7,
+  installations: [
+    { agentId: "research", state: "ready", reason: "connected", attempts: 1, changedAt: 3 },
+  ],
+  targets,
+});
+it("waits for one target's own conditions without holding its installation's other targets", async () => {
+  const store = new Store(":memory:");
+  stores.push(store);
+  // The shared fixture binds the two platform conversations this test acts on.
+  const messages = new Messages(store, configSchema.parse(configFixture) as MateConfig),
+    transport = new CanonicalSlackTransport(store, messages.mapper, { research: "synthetic" });
+  const post = vi.fn(async () => ({ ts: "101.000001" }));
+  transport.clients.get("research")!.chat.postMessage = post as never;
+  const dispatch = (conversationId: string) =>
+    transport.post({
+      id: "outbox-1",
+      actor: "research",
+      target: fixtureTarget(conversationId, "100.000001"),
+      text: "body",
+      requestHash: "hash",
+      originalRequest: "{}",
+    });
+  // The installation's own connection is ready, so nothing waits for the installation itself.
+  transport.setReadiness(
+    ready([
+      target("CTEST", "unconfirmed", "pending", "membership_unconfirmed"),
+      target("CTWO", "confirmed", "complete", "connected"),
+    ]),
+  );
+  expect(transport.waitingFor("research")).toBeUndefined();
+  expect(transport.readyFor("research")).toBe(true);
+  expect(transport.waitingForTarget("research", "CTEST", "permission")).toBeInstanceOf(
+    SlackNotReadyError,
+  );
+  expect(transport.waitingForTarget("research", "CTEST", "permission")!.reason).toContain(
+    "no confirmed permission",
+  );
+  // A pending permission is not bypassed by dispatch: nothing reaches the platform.
+  await expect(dispatch("CTEST")).rejects.toThrow("Slack is not ready");
+  expect(post).not.toHaveBeenCalled();
+  // The already verified target of the same installation crosses normally.
+  await expect(dispatch("CTWO")).resolves.toMatchObject({ receipt: { ts: "101.000001" } });
+  expect(post).toHaveBeenCalledOnce();
+  // Confirmed permission with history still catching up only holds the local history views.
+  transport.setReadiness(ready([target("CTEST", "confirmed", "pending", "history_incomplete")]));
+  expect(transport.waitingForTarget("research", "CTEST", "permission")).toBeUndefined();
+  expect(transport.waitingForTarget("research", "CTEST", "history")!.reason).toContain(
+    "still catching up on history",
+  );
+  await expect(dispatch("CTEST")).resolves.toMatchObject({ receipt: { ts: "101.000001" } });
+  expect(post).toHaveBeenCalledTimes(2);
+  // A target this readiness never reported has no pending condition; only the installation applies.
+  expect(transport.waitingForTarget("research", "CTHIRD", "permission")).toBeUndefined();
+  // A platform denial is a definite answer for the access check, not a wait.
+  transport.setReadiness(ready([target("CTEST", "denied", "pending", "not_a_member")]));
+  expect(transport.waitingForTarget("research", "CTEST", "permission")).toBeUndefined();
+  expect(transport.waitingForTarget("research", "CTEST", "history")).toBeUndefined();
+});
+it("never holds an internal conversation on a Slack installation's state", () => {
+  const store = new Store(":memory:");
+  stores.push(store);
+  const messages = new Messages(store, configSchema.parse(configFixture) as MateConfig),
+    transport = new CanonicalSlackTransport(store, messages.mapper, { research: "synthetic" }),
+    internal = { conversationId: "local-room" };
+  // The installation cannot even connect, and one of its external targets has no answer either.
+  transport.setReadiness({
+    updatedAt: 7,
+    installations: [
+      {
+        agentId: "research",
+        state: "needs-human",
+        reason: "invalid_auth",
+        attempts: 2,
+        changedAt: 3,
+      },
+    ],
+    targets: [
+      {
+        agentId: "research",
+        channel: "CTEST",
+        conversationId: "CTEST",
+        permission: "unconfirmed",
+        history: "pending",
+        reason: "check",
+        changedAt: 3,
+      },
+    ],
+  });
+  expect(transport.waitingForTarget("research", "CTEST", "permission")).toBeInstanceOf(
+    SlackNotReadyError,
+  );
+  expect(transport.pendingPermission("research", { conversationId: "CTEST" })).toBe(true);
+  // A local room is not a Slack target: neither the installation nor a target fact holds it.
+  expect(transport.pendingPermission("research", internal)).toBe(false);
+});
 it("keeps an artifact publication queued while its installation is not ready", async () => {
   const store = new Store(":memory:");
   stores.push(store);

@@ -32,7 +32,7 @@ const historyDescription: Record<keyof typeof historySchemas, string> = {
   "history.around":
     "Read the nearest locally covered context around a canonical message anchor. `before` and `after` set the widths of that first read, which reports beforeTruncated/afterTruncated and no cursor. Passing `direction` together with `limit` instead walks one bounded direction away from the anchor, and only such a walk returns a continuation cursor. Live, read-only, and never a record of what you presented or of the whole conversation.",
   "history.fetch":
-    "Fetch one bounded page of remote history through this Agent's own platform installation and cache it locally for this Agent. Remote retention, filtering and paging decide what the page holds, so never read it as the whole workspace; follow the continuation cursor, then use local history. It wakes nobody and presents nothing.",
+    "Fetch one bounded page of remote history through this Agent's own platform installation and cache it locally for this Agent. Remote retention, filtering and paging decide what the page holds, so never read it as the whole workspace; follow the continuation cursor, then use local history. It wakes nobody and presents nothing. It is also the way to acquire remote pages while this target's own catch-up is still incomplete: the fetch waits for the connection and the confirmed permission, never for coverage it is itself completing.",
 };
 /** The history module decides whether this Agent may name the target the operation carried. */
 function historyTarget(context: ToolExecutionContext, target: ConversationTarget): string {
@@ -102,7 +102,7 @@ const definitions: ToolSpec[] = [
     name: "conversations.refresh",
     schema: z.object({ conversationId: id }).strict(),
     description:
-      "Re-read this Agent's own current membership of one external channel through its own installation and update local access. It answers for external channels only: a DM exists because the platform opened it, internal rooms are host-managed, and this operation never joins or leaves.",
+      "Re-read this Agent's own current membership of one external channel through its own installation and update local access. It answers for external channels only: a DM exists because the platform opened it, internal rooms are host-managed, and this operation never joins or leaves. It waits for this Agent's own connection, and it is what restores this Agent's local access after an earlier membership check did not complete; the connection's own schedule finishes that check.",
     replayScope: "work",
     seatPolicy: "deny",
     effectPolicy: "adapter-recorded",

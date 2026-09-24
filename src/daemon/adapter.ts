@@ -2,7 +2,8 @@ import type { SlackInstallationReadiness } from "../slack/readiness.js";
 
 /** What an adapter reports about its external installations, separate from this process running. */
 export interface AdapterReadiness {
-  /** True only when every installation this adapter serves is ready for platform work. */
+  /** True only when every installation this adapter serves is verified and connected. Each of its
+   * targets then carries the permission and history conditions that hold the work naming it. */
   ready: boolean;
   installations: SlackInstallationReadiness[];
 }

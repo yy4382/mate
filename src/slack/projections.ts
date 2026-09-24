@@ -14,6 +14,7 @@ import type { ProjectionImports } from "../conversations/projection-imports.js";
 /** Slack protocol only. Canonical permission, dependency and confirmation state are application-owned. */
 export class SlackProjectionTransport implements ProjectionTransport {
   constructor(readonly slack: CanonicalSlackTransport) {}
+  /** The gate names the binding's platform channel: that is what carries its conditions. */
   private client(binding: {
     publisher: string;
     workspace: string;
@@ -28,8 +29,13 @@ export class SlackProjectionTransport implements ProjectionTransport {
       throw new Error("Invalid Slack projection binding");
     const client = this.slack.clients.get(binding.publisher);
     if (!client) throw new Error("Projection publisher has no Slack client");
-    // A not-ready publisher keeps its projection pending; the durable record waits for recovery.
-    const waiting = this.slack.waitingFor(binding.publisher);
+    // A not-ready publisher or target keeps its projection pending; the durable record waits for
+    // recovery instead of publishing from a cached permission.
+    const waiting = this.slack.waitingForChannel(
+      binding.publisher,
+      binding.externalId,
+      "permission",
+    );
     if (waiting) throw waiting;
     return client;
   }
@@ -51,19 +57,20 @@ export class SlackProjectionTransport implements ProjectionTransport {
     );
   }
   async post(r: ProjectionDispatch): Promise<ProjectionEvidence> {
-    const result = await this.client({ ...r.wire.target, publisher: r.publisher }).chat.postMessage(
-      {
-        channel: r.wire.target.externalId,
-        ...(r.wire.thread ? { thread_ts: r.wire.thread } : {}),
-        text: r.wire.text,
-        metadata: {
-          event_type: "mate_projection",
-          event_payload: { id: r.id, request_hash: r.requestHash },
-        },
-        unfurl_links: false,
-        unfurl_media: false,
+    const result = await this.client({
+      ...r.wire.target,
+      publisher: r.publisher,
+    }).chat.postMessage({
+      channel: r.wire.target.externalId,
+      ...(r.wire.thread ? { thread_ts: r.wire.thread } : {}),
+      text: r.wire.text,
+      metadata: {
+        event_type: "mate_projection",
+        event_payload: { id: r.id, request_hash: r.requestHash },
       },
-    );
+      unfurl_links: false,
+      unfurl_media: false,
+    });
     if (!result.ts || (result.channel && result.channel !== r.wire.target.externalId))
       throw new Error("Invalid projection Slack receipt");
     slackTs.parse(result.ts);

@@ -57,6 +57,8 @@ export interface Log {
 export interface DaemonOptions {
   /** Scripted Slack socket for harnesses; the deployed application opens Socket Mode. */
   slackSocket?: (agent: AgentConfig) => SocketTransport;
+  /** Connection and target retry schedule for harnesses; a deployed Mate uses the defaults. */
+  slackBackoff?: { baseMs: number; maxMs: number };
 }
 export class Daemon {
   readonly store: Store;
@@ -383,6 +385,7 @@ export class Daemon {
                 onReadiness: (readiness) =>
                   this.log.info({ slack: readiness.installations }, "Slack readiness changed"),
                 ...(options.slackSocket ? { socket: options.slackSocket } : {}),
+                ...(options.slackBackoff ? { backoff: options.slackBackoff } : {}),
               },
             )
           : undefined;

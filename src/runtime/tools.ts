@@ -1,6 +1,10 @@
 import { z } from "zod";
 import { createHash } from "node:crypto";
-import { ConversationHistory, type HistorySource } from "../conversations/history.js";
+import {
+  ConversationHistory,
+  type HistorySource,
+  type LocalCoveragePort,
+} from "../conversations/history.js";
 import { SessionLifecycle } from "./sessions.js";
 import { buildBaseline } from "./prompt.js";
 import { MessageTasks } from "../coordination/messages.js";
@@ -154,9 +158,11 @@ export class ToolRouter {
     readonly directory?: ConversationDirectory,
     readonly normalizeInput: (value: unknown) => unknown = (value) => value,
     historySource?: HistorySource,
+    /** Local coverage of one external target; absent means nothing waits. */
+    coverage?: LocalCoveragePort,
   ) {
     this.specs = buildRegistry(builtInToolModules);
-    this.history = new ConversationHistory(collaboration.messages, historySource);
+    this.history = new ConversationHistory(collaboration.messages, historySource, coverage);
     this.sessions = new SessionLifecycle(collaboration, (agent) =>
       buildBaseline(agent, operationDocumentation),
     );

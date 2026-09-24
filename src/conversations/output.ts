@@ -26,6 +26,12 @@ export type DispatchFailure =
 export interface ExternalMessageTransport {
   post(request: DispatchEnvelope): Promise<MessageConfirmation>;
   pendingInput(target: ConversationTarget): boolean;
+  /**
+   * Whether one target's permission is still unconfirmed. Such a target keeps its durable record
+   * queued: the platform has not answered, so no external write may start and no revocation may be
+   * assumed from the silence.
+   */
+  pendingPermission?(actor: string, target: ConversationTarget): boolean;
   classify(error: unknown): DispatchFailure;
   matchesText?(expected: string, observed: string): boolean;
 }
@@ -136,6 +142,9 @@ export class CanonicalOutput {
     if (work?.state === "cancelled") return true;
     if (work && work.state !== "active") return false;
     if ((JSON.parse(row.receipt ?? "null")?.retryAt ?? 0) > this.clock()) return false;
+    // A target whose permission is still being confirmed waits in its durable record instead of
+    // being refused as revoked; a cached grant never authorizes the attempt either.
+    if (this.transport.pendingPermission?.(row.agent_id, request.target)) return false;
     if (
       this.freshness &&
       ((this.messages.references.conversation(request.target.conversationId).authority ===
