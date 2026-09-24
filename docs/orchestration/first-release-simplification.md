@@ -67,7 +67,7 @@ only when every blocker is committed on the branch.
 | #43 | 将会话发现收敛到现有成员空间 | **done** | `ddd86b4` (worktree `.worktrees/t43`) | `1c206f4`, merged as `6a25110` |
 | #44 | 让频道内 Agent 邀请另一名团队 Agent | **done** | `02dafa9` (worktree `.worktrees/t44`) | `cd13f9a`, merged as `9076ccb` |
 | #45 | 在工作进程协议中保留故障类别与阶段 | **done** | `9c7e2e3` (main tree) | `b64a2e7` (final revision; an earlier `0e7b6f8` re-commit sits in history) |
-| #46 | 对暂时模型故障持久退避并自动继续 | re-applying | `16f1bf9` (worktree `.worktrees/t46`) | `1470bd2` on an older base; conflicts with #47's failure policy, re-application in flight |
+| #46 | 对暂时模型故障持久退避并自动继续 | **done** | `16f1bf9` (worktree `.worktrees/t46`) | `db305eb`, merged (one orchestrator-resolved conflict in `src/storage/store.ts`) |
 | #47 | 保持正常让位后的持久继续与恢复输入 | **done** | `d412adf` (worktree `.worktrees/t47`) | `ad456b1` merged as `612f35e`; reconciliation `4f95df6` merged as `16f1bf9`; follow-up `9eb40e0` cherry-picked as `5172463` |
 | #48 | 使进程查询与停止可取消且不阻塞 daemon | **done** | `fab5692` (worktree `.worktrees/t48`) | `9e69c30`, merged as `3838cad` |
 | #49 | 让内部应用在 Slack 离线时启动和运行 | **done** | `d412adf` (worktree `.worktrees/t49`) | `367bb2a`, merged as `b933b52` |
