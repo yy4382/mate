@@ -199,9 +199,10 @@ export class Collaboration {
   /**
    * This Agent's own durable deliveries that are not handled yet, as content-free metadata:
    * another Agent's delivery never appears, and one whose target this Agent may no longer read
-   * drops out instead of staying as a stale reference. The list is bounded to the fifty earliest
-   * arrivals. The scheduler - not this list - decides which delivery runs next and when a delivery
-   * stops being relevant, so one waiting on a paused or cancelled work item stays listed here.
+   * drops out instead of staying as a stale reference. The query bounds the arrivals it considers
+   * to the fifty earliest, so fewer than fifty may be visible. The scheduler - not this list -
+   * decides which delivery runs next and when a delivery stops being relevant, so one waiting on a
+   * paused or cancelled work item stays listed here.
    */
   inbox(agentId: string): { id: string; status: string; kind: unknown }[] {
     return (
@@ -212,13 +213,14 @@ export class Collaboration {
         .all(agentId) as { id: string; payload: string; status: string }[]
     ).flatMap((row) => {
       const payload = JSON.parse(row.payload) as { kind?: unknown };
+      let destination: string | null;
       try {
-        const destination = deliveryDestination(payload);
-        if (destination && !this.messages.access(agentId, destination)) return [];
+        destination = deliveryDestination(payload);
       } catch {
         // Metadata about a delivery whose target is not a conversation is not readable either.
         return [];
       }
+      if (destination && !this.messages.access(agentId, destination)) return [];
       return [{ id: row.id, status: row.status, kind: payload.kind }];
     });
   }
