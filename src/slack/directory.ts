@@ -282,12 +282,16 @@ export class Directory implements ConversationDirectory {
     } catch (error) {
       // A started action must never stay executing: a run cannot complete with one, and the
       // caller learns the external effect is unknown instead of losing the request.
-      this.record(run, actionId, {
-        status: "unknown",
-        conversationId,
-        agentId,
-        reason: "invitation_outcome_unknown",
-      });
+      try {
+        this.record(run, actionId, {
+          status: "unknown",
+          conversationId,
+          agentId,
+          reason: "invitation_outcome_unknown",
+        });
+      } catch {
+        /* The original failure is the one the caller has to see. */
+      }
       throw error;
     }
   }
@@ -426,6 +430,11 @@ export class Directory implements ConversationDirectory {
       /* The run was fenced while this call was in flight, or the action is already settled. */
     }
     this.refine(actionId, run.agentId, result.status, result);
+    // Returning a definite result without a durable one would tell the caller its effect is
+    // settled when nothing recorded it. A fence leaves the row definite or unknown, never running.
+    const state = this.messages.store.action(actionId)?.state;
+    if (state === "prepared" || state === "executing")
+      throw new Error("Invitation result was not recorded");
     return result;
   }
   /** Only the conservative unknown a pause or restart left is refined; a recorded effect is not. */
