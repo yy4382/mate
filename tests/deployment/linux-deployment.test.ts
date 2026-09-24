@@ -7,6 +7,7 @@ import { assertConfigurationEvolution, daemonConfigSchema } from '../../src/daem
 import { deploymentSpecSchema } from '../../src/deployment/spec.js';
 import { createLinuxDeploymentPlan } from '../../src/deployment/linux-plan.js';
 import { preflightLinuxDeployment, renderAgentSlice, renderLinuxService, renderLinuxMaintenanceWrapper } from '../../src/deployment/linux-installer.js';
+import {runDoctor,type DoctorEnvironment} from '../../src/deployment/doctor.js';
 import type { LinuxInstallerHost as InstallerHost } from '../../src/deployment/linux-host.js';
 
 const config = () => daemonConfigSchema.parse({ version: 2, mate: { ownerUserIds: ['owner'], budgets: { maxRuns: 10, maxTokens: 10000, maxCostUsd: 2, runTimeoutMs: 60000 }, agents: [
@@ -67,4 +68,15 @@ it('preflights Debian, normal passwd identities, disk, memory and inactive servi
   expect(() => preflightLinuxDeployment(spec(), config(), { ...host, memoryMiB: () => 128 })).toThrow('memory');
   expect(() => preflightLinuxDeployment(spec(), config(), { ...host, node: 'v24.1.0' })).toThrow('differs');
   expect(() => preflightLinuxDeployment(spec(), config(), { ...host, run: (binary, args) => binary === '/usr/bin/systemctl' ? { code: 0, stdout: '', stderr: '' } : host.run(binary, args) })).toThrow('Stop mate.service');
+});
+
+it('rejects system approval when no configured Slack owner can receive its request', async () => {
+  const base=config();
+  const withSlack=(principals:Record<string,string>)=>daemonConfigSchema.parse({...base,
+    adapters:{slack:{teamId:'TTEST',principals,bindings:[{agentId:'alice',slackAppId:'AALICE',slackUserId:'UALICE',slackBotId:'BALICE',botTokenEnv:'ALICE_BOT',appTokenEnv:'ALICE_APP',channels:{}}]}},
+    runtime:{...base.runtime,systemAgents:['alice']}});
+  const env:DoctorEnvironment={platform:'linux',arch:'x64',node:'v24.0.0',modulesAbi:'137',uid:0,gid:0,read:()=> 'ID=debian\nVERSION_ID=13\n',run:()=>({code:1,stdout:'',stderr:''})};
+  const approval=async(c:ReturnType<typeof withSlack>)=>(await runDoctor(c,env,{requireSecrets:false})).checks.find(check=>check.name==='system-approval');
+  expect(await approval(withSlack({UOTHER:'other'}))).toMatchObject({status:'fail'});
+  expect(await approval(withSlack({UOWNER:'owner'}))).toMatchObject({status:'pass'});
 });

@@ -1,7 +1,7 @@
 import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import type { DaemonConfig } from '../daemon/config.js';
+import { slackRuntimeConfig, type DaemonConfig } from '../daemon/config.js';
 import { managedLayout } from './systemd.js';
 import { verifyRelease } from './release.js';
 
@@ -87,7 +87,10 @@ export async function runDoctor(config: DaemonConfig, env: DoctorEnvironment = n
   });
   await check('system-approval', () => {
     const eligible = config.runtime.systemAgents ?? [];
-    if (eligible.length && (!config.adapters.slack || !config.mate.ownerUserIds.length)) throw new Error('System-eligible Agents need a configured Slack owner approval path');
+    if (eligible.length) {
+      const slack = slackRuntimeConfig(config);
+      if (!slack?.ownerUserIds.length || eligible.some(id => !config.adapters.slack?.bindings.some(binding => binding.agentId === id))) throw new Error('System-eligible Agents need a mapped Slack owner and Agent installation for approval');
+    }
     return `${eligible.length} Agent(s) eligible to request individual owner-approved system commands`;
   });
   await check('secret-references', () => {

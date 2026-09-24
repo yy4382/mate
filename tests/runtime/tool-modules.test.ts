@@ -87,12 +87,12 @@ it('binds canonical message claims to the existing task work instead of an unrel
   expect(store.db.prepare('SELECT work_id FROM task_intents WHERE id=?').get(`${run.sessionId}:claim-message`)).toEqual({work_id:bound});
 });
 
-it('applies post-await run fences and current-work policy centrally',async()=>{
+it('applies post-await run fences while attention preferences remain available after work pauses',async()=>{
   let release!:()=>void,started!:()=>void;const entered=new Promise<void>(resolve=>started=resolve),gate=new Promise<void>(resolve=>release=resolve);
   const directory={spaces:async()=>{started();await gate;return{spaces:[],incomplete:false};}} as unknown as ConversationDirectory;
   const first=setup(directory),pending=first.router.call(first.run,first.work,'spaces','conversations.list',{},new AbortController().signal);await entered;first.store.finish(first.run);release();await expect(pending).rejects.toThrow(/run/i);
   const second=setup();second.store.db.prepare("UPDATE works SET state='paused' WHERE id=?").run(second.work);
-  await expect(second.router.call(second.run,second.work,'watch','messages.watch',{target:{conversationId:'CTEST'},active:true},new AbortController().signal)).rejects.toThrow(/paused|cancelled/);
+  await expect(second.router.call(second.run,second.work,'watch','messages.watch',{target:{conversationId:'CTEST'},active:true},new AbortController().signal)).resolves.toHaveProperty('value');
   await expect(second.router.call(second.run,second.work,'status','sessions.status',{},new AbortController().signal)).resolves.toHaveProperty('value');
 });
 
@@ -127,6 +127,34 @@ it('lets an Agent inspect and stop its Linux scope after the attributed work pau
   expect(stop).toHaveBeenCalledOnce();
 });
 
+it('keeps private recovery and inbox acknowledgement available after work pauses',async()=>{
+  const base=setup(),signal=new AbortController().signal;
+  base.store.db.prepare("UPDATE works SET state='paused' WHERE id=?").run(base.work);
+  const checkpoint=await base.router.call(base.run,base.work,'paused-checkpoint','sessions.checkpoint',{text:'Continue the user objective later.'},signal);
+  expect(checkpoint.value).toMatchObject({checkpoint:{text:'Continue the user objective later.'}});
+  const acknowledged=await base.router.call(base.run,base.work,'paused-ack','inbox.ack',{deliveryId:base.run.deliveryId},signal);
+  expect(acknowledged.value).toMatchObject({id:base.run.deliveryId});
+});
+
+it('lets an Agent discard its own held output after the attributed work pauses',async()=>{
+  const base=setup(),signal=new AbortController().signal;
+  const draft=(await base.router.call(base.run,base.work,'create-held','messages.send',{target:{conversationId:'CTEST'},text:'a proposed reply'},signal)).value as {draftId:string;revision:number;status:string};
+  expect(draft.status).toBe('held');
+  base.store.db.prepare("UPDATE works SET state='paused' WHERE id=?").run(base.work);
+  const discarded=(await base.router.call(base.run,base.work,'discard-held','drafts.discard',{draftId:draft.draftId,revision:draft.revision},signal)).value as {status:string};
+  expect(discarded.status).toBe('failed');
+});
+
+it('lets an Agent revise and retain its held output after the attributed work pauses',async()=>{
+  const base=setup(),signal=new AbortController().signal;
+  const draft=(await base.router.call(base.run,base.work,'create-revisable','messages.send',{target:{conversationId:'CTEST'},text:'initial proposal'},signal)).value as {draftId:string;revision:number;status:string};
+  expect(draft.status).toBe('held');
+  base.store.db.prepare("UPDATE works SET state='paused' WHERE id=?").run(base.work);
+  const revised=(await base.router.call(base.run,base.work,'revise-held','drafts.revise',{draftId:draft.draftId,revision:draft.revision,text:'revised proposal'},signal)).value as {text:string;status:string;revision:number};
+  expect(revised).toMatchObject({text:'revised proposal',status:'held',revision:draft.revision+1});
+  await expect(base.router.call(base.run,base.work,'retry-held','drafts.retry',{draftId:draft.draftId,revision:revised.revision},signal)).rejects.toThrow(/paused|cancelled/);
+});
+
 it('keeps an uncertain process-stop receipt when systemd cannot confirm cleanup',async()=>{
   const base=setup(),unit='mate-agent-1001-123e4567-e89b-42d3-a456-426614174000.scope';
   const stop=vi.fn(()=>{throw new Error('systemd stop result unknown');});
@@ -152,8 +180,8 @@ it('keeps known-URL research a receipt-free read and puts the reachable alternat
   const base=setup(),research=vi.fn(async(url:string)=>({url,body:'evidence',truncated:false})),router=new ToolRouter(base.c,base.broker,{environment:()=>({}),research,publish:async()=>({})}),signal=new AbortController().signal;
   const before=base.store.db.prepare('SELECT count(*) n FROM actions').get();const result=await router.call(base.run,base.work,'known-url','research.read',{url:'https://example.com/source'},signal);
   expect(result.value).toEqual({url:'https://example.com/source',body:'evidence',truncated:false});expect(research).toHaveBeenCalledOnce();expect(base.store.db.prepare('SELECT count(*) n FROM actions').get()).toEqual(before);
-  expect(builtInToolSpecs.find(spec=>spec.name==='research.read')).toMatchObject({effectPolicy:'pure-read',replayPolicy:'boundary-owned',workPolicy:'current'});
-  expect(builtInToolSpecs.find(spec=>spec.name==='environment.info')).toMatchObject({effectPolicy:'pure-read',replayPolicy:'boundary-owned',workPolicy:'current'});
+  expect(builtInToolSpecs.find(spec=>spec.name==='research.read')).toMatchObject({effectPolicy:'pure-read',replayPolicy:'boundary-owned',workPolicy:'none'});
+  expect(builtInToolSpecs.find(spec=>spec.name==='environment.info')).toMatchObject({effectPolicy:'pure-read',replayPolicy:'boundary-owned',workPolicy:'none'});
   expect(environmentReportSchema.parse({format:'mate.environment.v2',workId:'work',snapshotAt:1,filesystem:{home:'/srv/mate/private/research',sharedRoot:'/srv/mate/shared',access:'linux_user_permissions'},execution:{status:'configured',network:'host'},research:{status:'unavailable',mode:'known_public_https_url_only',allowedHosts:[],search:false},attachmentInput:{status:'unavailable',scope:'visible_external_message_file'},artifactOutput:{adapterStatus:'configured',status:'unavailable',scope:'supported_external_target_only'}})).toMatchObject({filesystem:{access:'linux_user_permissions'},research:{search:false},artifactOutput:{adapterStatus:'configured',status:'unavailable'}});
   const built=buildBaseline(configSchema.parse(configFixture).agents[0]!,operationDocumentation),baseline=JSON.stringify(built.messages[0]);
   expect(built.configVersion).toMatch(/^[a-f0-9]{64}$/);

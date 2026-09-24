@@ -47,6 +47,13 @@ it('reports the selected work without changing the Agent filesystem identity', a
   expect(value).toMatchObject({ workId: other, filesystem: { home: h.home, sharedRoot: h.sharedRoot } });
 });
 
+it('still reports the Agent environment after the attributed work pauses', async () => {
+  const h = harness();
+  h.store.db.prepare("UPDATE works SET state='paused' WHERE id=?").run(h.work);
+  const value = (await h.router.call(h.run, h.work, 'environment-paused', 'environment.info', {}, new AbortController().signal)).value;
+  expect(value).toMatchObject({ workId: h.work, filesystem: { home: h.home }, execution: { status: 'configured' } });
+});
+
 it('keeps ordinary execution available under the reviewer identity while withholding external adapters', async () => {
   const h = harness();
   h.store.db.prepare('INSERT INTO review_seats VALUES(?,?,?,?,1)').run('research', JSON.stringify(fixtureTarget('CTEST', '100.000001')), 'brief', h.home);

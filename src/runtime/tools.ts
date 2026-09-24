@@ -34,7 +34,7 @@ function buildRegistry(modules:readonly ToolModule[]):Map<string,ToolSpec>{
       if(typeof entry.schema?.parse!=='function'||!entry.description.trim()||!work.has(entry.workPolicy)||!seat.has(entry.seatPolicy)||!effect.has(entry.effectPolicy)||!replay.has(entry.replayPolicy)||typeof entry.authorize!=='function'||typeof entry.postAwait!=='function'||typeof entry.handler!=='function')throw new Error('Incomplete or unknown tool spec policy');
       if((entry.effectPolicy==='atomic-recorded')!==(entry.replayPolicy!=='boundary-owned'))throw new Error('Invalid effect and replay policy combination');
       if(entry.seatPolicy==='clean-workspace'&&(entry.workPolicy!=='broker-managed'||entry.effectPolicy!=='broker-recorded'))throw new Error('Invalid clean-workspace policy combination');
-      if(entry.seatPolicy==='held-send'&&(entry.workPolicy!=='current'||entry.effectPolicy!=='atomic-recorded'))throw new Error('Invalid held-send policy combination');
+      if(entry.seatPolicy==='held-send'&&(!['current','none'].includes(entry.workPolicy)||entry.effectPolicy!=='atomic-recorded'))throw new Error('Invalid held-send policy combination');
       if(entry.seatPolicy==='redacted-read'&&(entry.effectPolicy==='broker-recorded'||entry.effectPolicy==='adapter-recorded'))throw new Error('Invalid redacted-read policy combination');
       registry.set(entry.name,Object.freeze({...entry}));
     }

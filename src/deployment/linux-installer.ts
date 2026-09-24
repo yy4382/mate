@@ -82,16 +82,20 @@ function account(host: LinuxInstallerHost, agent: LinuxDeploymentPlan['agents'][
 async function publishLinuxRelease(plan: LinuxDeploymentPlan, host: LinuxInstallerHost): Promise<{ release: string; releaseId: string }> {
   const stage = join(managedLayout.releases, `.linux-stage-${randomUUID()}`);
   mkdirSync(stage, { mode: 0o755 });
-  for (const name of ['dist', 'node_modules', 'package.json', 'pnpm-lock.yaml']) checked(host, '/usr/bin/cp', ['-a', '--no-preserve=xattr,context', join(realpathSync(plan.release.source), name), join(stage, name)], `Cannot copy ${name}`);
-  checked(host, '/usr/bin/chown', ['-hR', 'root:root', stage], 'Cannot seal release owner');
-  checked(host, '/usr/bin/chmod', ['-R', 'u-s,g-s', stage], 'Cannot strip privileged release modes');
-  checked(host, '/usr/bin/chmod', ['-R', 'go-w', stage], 'Cannot seal release modes');
-  const manifest = await createReleaseManifest(stage, plan.release.gitCommit);
-  exactFile(join(stage, 'RELEASE.json'), `${JSON.stringify(manifest, null, 2)}\n`, 0, 0, 0o444);
-  const release = join(managedLayout.releases, manifest.releaseId);
-  if (existsSync(release)) { await verifyRelease(release, manifest.releaseId); rmSync(stage, { recursive: true }); }
-  else renameSync(stage, release);
-  return { release, releaseId: manifest.releaseId };
+  try {
+    for (const name of ['dist', 'node_modules', 'package.json', 'pnpm-lock.yaml']) checked(host, '/usr/bin/cp', ['-a', '--no-preserve=xattr,context', join(realpathSync(plan.release.source), name), join(stage, name)], `Cannot copy ${name}`);
+    checked(host, '/usr/bin/chown', ['-hR', 'root:root', stage], 'Cannot seal release owner');
+    checked(host, '/usr/bin/chmod', ['-R', 'u-s,g-s', stage], 'Cannot strip privileged release modes');
+    checked(host, '/usr/bin/chmod', ['-R', 'go-w', stage], 'Cannot seal release modes');
+    const manifest = await createReleaseManifest(stage, plan.release.gitCommit);
+    exactFile(join(stage, 'RELEASE.json'), `${JSON.stringify(manifest, null, 2)}\n`, 0, 0, 0o444);
+    const release = join(managedLayout.releases, manifest.releaseId);
+    if (existsSync(release)) await verifyRelease(release, manifest.releaseId);
+    else renameSync(stage, release);
+    return { release, releaseId: manifest.releaseId };
+  } finally {
+    if (existsSync(stage)) rmSync(stage, { recursive: true });
+  }
 }
 export function preflightLinuxDeployment(spec: DeploymentSpec, config: DaemonConfig, host: LinuxInstallerHost): LinuxDeploymentPlan {
   const plan = createLinuxDeploymentPlan(spec, config, host);

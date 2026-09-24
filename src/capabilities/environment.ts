@@ -31,7 +31,6 @@ export class EnvironmentCapabilities {
   constructor(readonly collaboration: Collaboration, readonly deployment: EnvironmentDeployment) {}
   read(run: RunToken, workId: string): EnvironmentReport {
     this.collaboration.store.assertRun(run);
-    this.collaboration.assertActionWork(run, workId);
     const home = this.deployment.homes[run.agentId];
     if (!home) throw new Error('Agent Linux home is not configured');
     const seat = this.collaboration.seats.active(run.agentId);
