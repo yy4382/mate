@@ -3,11 +3,9 @@ import type { ConversationTarget as Target } from '../domain/conversations.js';
 export interface AttachmentArgs {
   message: { messageId: string };
   fileId: string;
-  grantId: string;
   path: string;
 }
 export interface PublishArgs {
-  grantId: string;
   path: string;
   title: string;
   target: Target;

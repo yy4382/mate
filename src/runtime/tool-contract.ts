@@ -27,7 +27,6 @@ export interface ToolExecutionContext{
   operation:string;run:RunToken;workId:string;requestWorkId:string;actionId:string;signal:AbortSignal;
   collaboration:Collaboration;broker:Broker;additional?:AdditionalTools;directory?:ConversationDirectory;
   history:ConversationHistory;sessions:SessionLifecycle;coordination:MessageTasks;gate:CanonicalFreshnessGate;
-  provision?:(actor:string,workId:string)=>void;
 }
 export interface ToolHandlerResult{value:unknown;wait?:boolean}
 interface ToolSpecBase{

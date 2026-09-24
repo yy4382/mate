@@ -37,7 +37,7 @@ function setup() {
   const store = new Store(':memory:'), messages = new Messages(store, config);migrateCurrentRuntime(store);const post = vi.fn(async () => ({ ts: `101.${String(post.mock.calls.length).padStart(6,'0')}` }));
   const c = new Collaboration(store, messages, new Output(messages, { post }), config), ingress = new Ingress(c,new CanonicalSlackNormalizer(messages,messages.mapper,c.output));
   const backend = { execute: vi.fn(async () => ({ code: 0, stdout: 'artifact evidence', stderr: '', truncated: false })) };
-  const broker = new Broker(store, c, backend, ['/synthetic/protected']);
+  const broker = new Broker(store, c, backend, { research: '/tmp', writer: '/tmp' });
   cleanups.push(() => store.close()); return { store, c, ingress, broker, post, backend, mapper:messages.mapper };
 }
 it('two Agents can coordinate through one canonical message and direct peer feedback without a task tree',async()=>{
@@ -97,7 +97,7 @@ it('starts the Linux-user route with a separate private home and peer-visible sh
   const daemon=await Daemon.create(input,{info:()=>{},error:()=>{}},process.cwd(),unmanagedDeploymentEnvironment);
   try{
     expect(daemon.memoryRoots.research).toBe(realpathSync(home));
-    expect(daemon.workspaceAccess.profiles.filter(profile=>profile.agentId==='research').map(profile=>profile.label)).toEqual(['private-workspace','shared','shared-own']);
+    expect(daemon.config.runtime.sharedRoot).toBe(realpathSync(sharedRoot));
     expect(existsSync(join(home,'MEMORY.md'))).toBe(true);
   }finally{await daemon.close();rmSync(base,{recursive:true,force:true});}
 });
@@ -219,15 +219,13 @@ it('lets the owner page through long system output within Slack control reply li
   const second=controls.execute('UOWNER',`system-output ${request.id} stderr 0`) as {chunk:string;nextOffset:number};
   expect(second.chunk).toBe('🙂'.repeat(1000));expect(formatControlReply(second)).not.toContain('mate.control-overflow.v1');
 });
-it('artifact upload is scoped to own artifact directory and uncertain publication cannot be repeated with a new ID', async () => {
+it('uncertain artifact publication cannot be repeated with a new ID', async () => {
   const {store,c,broker}=setup();new ToolRouter(c,broker);store.register('research','v1',[]);c.messages.membership('research','CTEST',true);const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-artifact-')));cleanups.push(()=>rmSync(root,{recursive:true,force:true}));mkdirSync(join(root,'artifacts'));
-  const target=fixtureTarget('CTEST','100.000001'), work=c.createWork('human:artifact',target);c.enqueue('research',work,'one',{});const run=store.beginRun('research')!;store.input(run,{});const grant=broker.issueGrant('UOWNER','research',work,root,['read'],Date.now()+100000);
+  const target=fixtureTarget('CTEST','100.000001'), work=c.createWork('human:artifact',target);c.enqueue('research',work,'one',{});const run=store.beginRun('research')!;store.input(run,{});
   const upload=vi.fn(async(_request:any,_artifact:any,prepared:any,beforeShare:any)=>{prepared('FFILE');beforeShare();throw new Error('lost after send')});const artifacts=new Artifacts(c,broker,{configured:()=>true,supports:()=>true,upload},{research:root});const signal=new AbortController().signal;
-  await expect(artifacts.publish(run,work,'private',{grantId:grant,path:'MEMORY.md',target,title:'bad'},signal)).rejects.toThrow('Only own');
-  await expect(artifacts.publish(run,work,'traversal',{grantId:grant,path:'artifacts/../MEMORY.md',target,title:'bad'},signal)).rejects.toThrow('Only own');
-  const draft=await artifacts.publish(run,work,'first',{grantId:grant,path:'artifacts/result.txt',target,title:'result'},signal) as any;expect(draft.status).toBe('held');expect(upload).not.toHaveBeenCalled();
+  const draft=await artifacts.publish(run,work,'first',{path:'artifacts/result.txt',target,title:'result'},signal) as any;expect(draft.status).toBe('held');expect(upload).not.toHaveBeenCalled();
   c.output.gate!.continueOnce(run,draft.draftId,draft.revision,draft.holdId);await c.output.send(draft.draftId);expect(store.output(draft.draftId)?.state).toBe('unknown');
-  await expect(artifacts.publish(run,work,'second',{grantId:grant,path:'artifacts/result.txt',target,title:'result'},signal)).rejects.toThrow('unknown');expect(upload).toHaveBeenCalledOnce();
+  await expect(artifacts.publish(run,work,'second',{path:'artifacts/result.txt',target,title:'result'},signal)).rejects.toThrow('unknown');expect(upload).toHaveBeenCalledOnce();
 });
 it('paused or delayed output cannot starve later active work', async () => {
   const {store,c,post}=setup();store.register('research','v1',[]);c.messages.membership('research','CTEST',true);const target=fixtureTarget('CTEST','100.000001');
@@ -273,20 +271,6 @@ it('recovers the local execution scope before missing external credentials can f
   const daemon=await Daemon.create(config,{info:()=>{},error:()=>{}},process.cwd(),unmanagedDeploymentEnvironment),start=vi.spyOn(daemon.adapter!,'start');
   try{await expect(daemon.start()).rejects.toThrow('RESEARCH_BOT_TOKEN');expect(order.slice(0,2)).toEqual(['recover','probe']);expect(start).not.toHaveBeenCalled();}finally{await daemon.close();for(const ref of refs){if(saved[ref]===undefined)delete process.env[ref];else process.env[ref]=saved[ref];}rmSync(root,{recursive:true,force:true});}
 });
-it('recovers the container scope before database policy or workspace validation can reject construction',async()=>{
- const {Daemon}=await import('../../src/daemon/app.js'),recover=vi.spyOn(ContainerBackend.prototype,'recover').mockResolvedValue();
- for(const failure of ['policy','workspace'] as const){
-  const root=realpathSync(mkdtempSync(join(tmpdir(),`mate-recover-before-${failure}-`))),data=join(root,'data'),binary=join(root,'docker-cli'),shared=join(root,'shared');writeFileSync(binary,'synthetic');chmodSync(binary,0o700);mkdirSync(shared);
-  const config={mate:configSchema.parse(configFixture),runtime:{dataDir:data,docker:{binary,host:`unix://${join(root,'docker.sock')}`,image:`sha256:${'a'.repeat(64)}`},workspaceGrants:failure==='workspace'?[{agentId:'research',root:shared,operations:['read'] as const}]:[],researchHosts:[]}};
-  try{
-   const first=await Daemon.create(config,{info:()=>{},error:()=>{}},process.cwd(),unmanagedDeploymentEnvironment);
-   if(failure==='policy')first.store.db.prepare("UPDATE runtime_meta SET value='mismatch' WHERE key='policy'").run();
-   await first.close();if(failure==='workspace')rmSync(shared,{recursive:true,force:true});recover.mockClear();
-   await expect(Daemon.create(config,{info:()=>{},error:()=>{}},process.cwd(),unmanagedDeploymentEnvironment)).rejects.toThrow(failure==='policy'?'Runtime policy':'ENOENT');expect(recover).toHaveBeenCalledOnce();
-   const release=acquireLock(join(data,'state','daemon.lock'));release();
-  }finally{rmSync(root,{recursive:true,force:true});}
- }
-});
 it('releases the singleton lock if paths change after container recovery but before construction',async()=>{
  const {Daemon}=await import('../../src/daemon/app.js'),root=realpathSync(mkdtempSync(join(tmpdir(),'mate-factory-lock-'))),data=join(root,'data'),project=join(root,'project'),binary=join(root,'docker-cli');mkdirSync(project);writeFileSync(binary,'synthetic');chmodSync(binary,0o700);
  const config={mate:configSchema.parse(configFixture),runtime:{dataDir:data,docker:{binary,host:`unix://${join(root,'docker.sock')}`,image:`sha256:${'a'.repeat(64)}`},workspaceGrants:[],researchHosts:[]}};
@@ -312,12 +296,6 @@ it('Socket SDK pending URL startup cancels promptly and a late HTTP response can
   gate.resolve();await new Promise(resolve=>setTimeout(resolve,20));expect(socket.client.websocket).toBeUndefined();
 });
 
-it('configured project grants cannot overlap the private Agent memory tree', async () => {
-  const {Daemon}=await import('../../src/daemon/app.js');const root=mkdtempSync(join(tmpdir(),'mate-private-grants-'));mkdirSync(join(root,'agents'),{recursive:true});
-  const old=process.env.RESEARCH_BOT_TOKEN;process.env.RESEARCH_BOT_TOKEN='synthetic';
-  try {await expect(Daemon.create({mate:configSchema.parse(configFixture),runtime:{dataDir:root,researchHosts:[],workspaceGrants:[{agentId:'research',root:join(root,'agents'),operations:['read']}]}},{info:()=>{},error:()=>{}})).rejects.toThrow('Protected root overlap');}
-  finally{if(old===undefined)delete process.env.RESEARCH_BOT_TOKEN;else process.env.RESEARCH_BOT_TOKEN=old;rmSync(root,{recursive:true,force:true});}
-});
 it('configured grants cannot contain Docker control paths or host pseudo filesystems',async()=>{
  const{Daemon}=await import('../../src/daemon/app.js');
  for(const kind of ['binary','socket','device'] as const){
@@ -339,28 +317,11 @@ it.each(['private','configured'] as const)('never executes a Docker control bina
  try{await expect(Daemon.create(input,{info:()=>{},error:()=>{}},process.cwd(),unmanagedDeploymentEnvironment)).rejects.toThrow('Protected root overlap');expect(existsSync(marker)).toBe(false);const release=acquireLock(join(data,'state','daemon.lock'));release();}
  finally{rmSync(root,{recursive:true,force:true});}
 });
-it('private exec grant upgrades preserve revocation and expiry and require configured Docker',async()=>{
- const{Daemon}=await import('../../src/daemon/app.js');const saved=process.env.RESEARCH_BOT_TOKEN;process.env.RESEARCH_BOT_TOKEN='synthetic';vi.spyOn(ContainerBackend.prototype,'recover').mockResolvedValue();
- try{for(const enabled of [false,true]){
-  const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-grants-'))),binary=join(root,'docker-cli');if(enabled){writeFileSync(binary,'synthetic');chmodSync(binary,0o700);}const docker=enabled?{binary,host:'unix:///synthetic.sock',image:`sha256:${'0'.repeat(64)}`}:undefined;
-  const daemon=await Daemon.create({mate:configSchema.parse(configFixture),runtime:{dataDir:root,researchHosts:[],workspaceGrants:[],...(docker?{docker}:{})}},{info:()=>{},error:()=>{}},process.cwd(),unmanagedDeploymentEnvironment);
-  daemon.collaboration.messages.references.createConversation('channel','external','CTEST');
-  try{for(const state of ['valid','revoked','expired']){
-   const work=daemon.collaboration.createWork(state,{conversationId:'CTEST'}),grant=daemon.broker.issueGrant(daemon.config.mate.ownerUserIds[0]!,'research',work,daemon.memoryRoots.research!,['read','write'],Date.now()+100000);
-   if(state==='revoked')daemon.broker.revoke(daemon.config.mate.ownerUserIds[0]!,grant);if(state==='expired')daemon.store.db.prepare('UPDATE grants SET expires=1 WHERE id=?').run(grant);
-   daemon.workspaceAccess.provision('research',work);
-   const row=daemon.store.db.prepare('SELECT operations,revoked,expires FROM grants WHERE id=?').get(grant) as any;
-   expect(JSON.parse(row.operations).includes('exec')).toBe(!!docker&&state==='valid');if(state==='revoked')expect(row.revoked).toBe(1);if(state==='expired')expect(row.expires).toBe(1);
-  }
-  expect(daemon.store.db.prepare("SELECT count(*) n FROM audit WHERE kind='workspace_grant_sync'").get()).toEqual({n:docker?1:0});
-  }finally{await daemon.close();rmSync(root,{recursive:true,force:true});}
- }}finally{if(saved===undefined)delete process.env.RESEARCH_BOT_TOKEN;else process.env.RESEARCH_BOT_TOKEN=saved;}
-});
 it('artifact publication snapshots survive content edits and explicit revision replaces the frozen bytes',async()=>{
  const{store,c,broker,backend}=setup();new ToolRouter(c,broker);store.register('research','v1',[]);c.messages.membership('research','CTEST',true);
  const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-artifact-revise-')));cleanups.push(()=>rmSync(root,{recursive:true,force:true}));mkdirSync(join(root,'artifacts'));
- const target={conversationId:'CTEST'},work=c.createWork('artifact',target);c.enqueue('research',work,'one',{});const run=store.beginRun('research')!;store.input(run,{});const grantId=broker.issueGrant('UOWNER','research',work,root,['read'],Date.now()+100000);
- const uploads:any[]=[];const artifacts=new Artifacts(c,broker,{configured:()=>true,supports:()=>true,upload:async({text},artifact,prepared,beforeShare)=>{prepared('FFILE');if(!beforeShare())throw new Error('deferred');uploads.push({text,artifact});return{fileId:'FFILE'};}},{research:root});const args={grantId,path:'artifacts/result.txt',target,title:'result'},signal=new AbortController().signal;
+ const target={conversationId:'CTEST'},work=c.createWork('artifact',target);c.enqueue('research',work,'one',{});const run=store.beginRun('research')!;store.input(run,{});
+ const uploads:any[]=[];const artifacts=new Artifacts(c,broker,{configured:()=>true,supports:()=>true,upload:async({text},artifact,prepared,beforeShare)=>{prepared('FFILE');if(!beforeShare())throw new Error('deferred');uploads.push({text,artifact});return{fileId:'FFILE'};}},{research:root});const args={path:'artifacts/result.txt',target,title:'result'},signal=new AbortController().signal;
  const draft=await artifacts.publish(run,work,'first',args,signal) as any;backend.execute.mockResolvedValue({code:0,stdout:'new file content',stderr:'',truncated:false});
  expect((await artifacts.publish(run,work,'first',args,signal) as any).artifact.bytes).toBe(Buffer.byteLength('artifact evidence'));expect(JSON.parse(store.output('first')!.request).artifact.content).toBe('artifact evidence');
  const revised=await artifacts.publish(run,work,'revision',{...args,draftId:draft.draftId,revision:1},signal) as any;expect(revised.artifact.bytes).toBe(Buffer.byteLength('new file content'));

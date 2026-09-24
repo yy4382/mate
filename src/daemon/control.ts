@@ -39,7 +39,6 @@ export class Controls {
       }
       case 'agent-stop': if (!id) throw new Error('Agent ID required'); this.supervisor.stopAgent(id); return `Agent ${id} paused`;
       case 'agent-resume': if (!id) throw new Error('Agent ID required'); c.messages.agent(id); s.resume(id); return `Agent ${id} resumed`;
-      case 'revoke': if (!id) throw new Error('Grant ID required'); this.broker.revoke(user, id); for (const row of s.db.prepare("SELECT DISTINCT agent_id FROM actions WHERE state='executing' AND json_extract(request,'$.grantId')=?").all(id) as { agent_id: string }[]) this.supervisor.stopAgent(row.agent_id); return `Grant ${id} revoked`;
       case 'agent-budget': {
         const [runs,tokens,cost]=rest.map(Number); if(!id)throw new Error('Agent ID required');
         c.ledger.setLimits(user,id,runs!,tokens!,cost!);return `Persistent budget updated for ${id}`;
@@ -49,7 +48,7 @@ export class Controls {
         const work = c.work(id); if (work.state === 'cancelled' || runs! < work.runs || tokens! < work.tokens || dollars! < work.cost) throw new Error('Budget below usage or cancelled work');
         s.db.prepare('UPDATE works SET max_runs=?,max_tokens=?,max_cost=? WHERE id=?').run(runs!, tokens!, dollars!, id); s.audit('owner_budget', { user, id, runs, tokens, dollars }); return `Budget updated for ${id}; resume separately if paused`;
       }
-      default: return 'Commands: status; system-pending; system-status REQUEST_ID; system-output REQUEST_ID stdout|stderr OFFSET; processes AGENT_ID; process-stop AGENT_ID UNIT; activity [JSON]; tasks; schedules; conversations; projection-bindings; projection-add CONVERSATION_ID JSON; projections CONVERSATION_ID JSON; projection-inputs BINDING_ID JSON; projection-enable BINDING_ID true|false; projection-anchor BINDING_ID ROOT_ID; stop|resume|cancel WORK_ID; agent-stop|agent-resume AGENT_ID; agent-reset AGENT_ID CHECKPOINT; revoke GRANT_ID; budget WORK_ID MAX_RUNS MAX_TOKENS MAX_USD; agent-budget AGENT_ID MAX_RUNS MAX_TOKENS MAX_USD';
+      default: return 'Commands: status; system-pending; system-status REQUEST_ID; system-output REQUEST_ID stdout|stderr OFFSET; processes AGENT_ID; process-stop AGENT_ID UNIT; activity [JSON]; tasks; schedules; conversations; projection-bindings; projection-add CONVERSATION_ID JSON; projections CONVERSATION_ID JSON; projection-inputs BINDING_ID JSON; projection-enable BINDING_ID true|false; projection-anchor BINDING_ID ROOT_ID; stop|resume|cancel WORK_ID; agent-stop|agent-resume AGENT_ID; agent-reset AGENT_ID CHECKPOINT; budget WORK_ID MAX_RUNS MAX_TOKENS MAX_USD; agent-budget AGENT_ID MAX_RUNS MAX_TOKENS MAX_USD';
     }
   }
 }

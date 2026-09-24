@@ -59,7 +59,7 @@ it('local human input uses the real Supervisor and isolated Agent budgets withou
  expect(f.input.receive('local-owner','human-1',room,'please investigate')).toEqual(input);
  expect(()=>f.input.receive('local-owner','human-1',room,'different')).toThrow('identity conflict');
  expect(()=>f.input.receive('intruder','bad',room,'attack')).toThrow('Unknown local human');
- const broker=new Broker(f.s,f.collaboration,{execute:async()=>({code:0,stdout:'',stderr:'',truncated:false})},[]);
+ const broker=new Broker(f.s,f.collaboration,{execute:async()=>({code:0,stdout:'',stderr:'',truncated:false})},{});
  const router=new ToolRouter(f.collaboration,broker,undefined,f.directory),seen:string[]=[];
  const supervisor=new Supervisor(f.collaboration,router,settings,()=>({close(){},async run(spec){seen.push(JSON.stringify(spec));return{tokens:7,cost:0.01,certain:true,waiting:false,continuation:false};}}));
  cleanup.push(()=>supervisor.close());
@@ -84,7 +84,7 @@ it('preserves review-seat isolation when a peer sends an internal DM before rest
  const draft=f.output.gate!.describe('alice','send') as {revision:number;holdId:string};f.output.gate!.continueOnce(run,'send',draft.revision,draft.holdId);await f.output.send('send');
  f.s.close();cleanup.pop();const second=setup(path);
  expect(()=>second.messages.read('bob',dm)).toThrow('isolates');await expect(second.directory.members('bob',dm.conversationId)).rejects.toThrow('isolates');
- const broker=new Broker(second.s,second.collaboration,{execute:async()=>({code:0,stdout:'',stderr:'',truncated:false})},[]);
+ const broker=new Broker(second.s,second.collaboration,{execute:async()=>({code:0,stdout:'',stderr:'',truncated:false})},{});
  const router=new ToolRouter(second.collaboration,broker,undefined,second.directory);let observed='';
  const supervisor=new Supervisor(second.collaboration,router,settings,()=>({close(){},async run(spec){observed=JSON.stringify(spec);return{tokens:1,cost:0,certain:true,waiting:false,continuation:false};}}));cleanup.push(()=>supervisor.close());supervisor.register();
  expect(await supervisor.step('bob')).toBe(true);expect(observed).toContain('independent brief');expect(observed).not.toContain('PRIVATE_PEER_ARGUMENT');

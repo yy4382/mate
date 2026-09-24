@@ -20,7 +20,7 @@ function fixture(){
  const out=new CanonicalOutput(m,{post:async()=>{throw new Error('offline');},pendingInput:()=>false,classify:()=>({kind:'unknown'})});
  const c=new Collaboration(s,m,out,configFixture),home=mapper.conversation('CHOME');m.membership('research',home,true);
  const w=c.createWork('home',{conversationId:home});c.enqueue('research',w,'manual',{});const run=s.beginRun('research')!;s.input(run,{});
- const router=new ToolRouter(c,new Broker(s,c,{execute:async()=>({code:0,stdout:'',stderr:'',truncated:false})},[]),undefined,directory);
+ const router=new ToolRouter(c,new Broker(s,c,{execute:async()=>({code:0,stdout:'',stderr:'',truncated:false})},{}),undefined,directory);
  return{s,m,mapper,api,d,directory,c,run,w,router};
 }
 it('public discovery is paginated metadata without ACL; real tool join grants access and leave revokes it',async()=>{

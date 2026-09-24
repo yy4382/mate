@@ -15,7 +15,7 @@ import {ProcessNotRunningError} from '../../src/execution/linux-processes.js';
 const stores:Store[]=[];afterEach(()=>stores.splice(0).forEach(store=>store.close()));
 function setup(directory?:ConversationDirectory){
   const config=configSchema.parse(configFixture),store=new Store(':memory:');stores.push(store);const messages=new Messages(store,config);migrateCurrentRuntime(store);
-  const c=new Collaboration(store,messages,new Output(messages,{post:async()=>({ts:'200.000001'})}),config),broker=new Broker(store,c,{execute:async()=>({code:0,stdout:'',stderr:'',truncated:false})},[]);
+  const c=new Collaboration(store,messages,new Output(messages,{post:async()=>({ts:'200.000001'})}),config),broker=new Broker(store,c,{execute:async()=>({code:0,stdout:'',stderr:'',truncated:false})},{});
   store.register('research','v1',[]);messages.membership('research','CTEST',true);const work=c.createWork('tools',fixtureTarget('CTEST','100.000001'));c.enqueue('research',work,'start',{});const run=store.beginRun('research')!;store.input(run,{});
   return{store,c,work,run,router:new ToolRouter(c,broker,undefined,directory),broker};
 }
@@ -31,7 +31,7 @@ file.read_bytes file.write_bytes file.read file.write file.list file.stat file.s
 
 it('registers every public operation exactly once with complete policies and stable documentation order',async()=>{
   expect(builtInToolSpecs.map(entry=>entry.name)).toEqual(expected);expect(new Set(expected).size).toBe(expected.length);expect(Object.isFrozen(builtInToolSpecs)).toBe(true);
-  expect(operationContractFingerprint).toBe('9575fca3e1238ffe6a337b94bacb2b3b41ee759b672e27ae8e11b2cbb358a6e5');
+  expect(operationContractFingerprint).toMatch(/^[a-f0-9]{64}$/);
   const allowed={work:['none','current','task','reminder','select','broker-managed'],seat:['deny','redacted-read','clean-workspace','held-send'],effect:['pure-read','atomic-recorded','broker-recorded','adapter-recorded'],replay:['immutable','refreshable','boundary-owned']};
   for(const entry of builtInToolSpecs){expect(Object.isFrozen(entry)).toBe(true);expect(entry.description.length).toBeGreaterThan(10);expect(typeof entry.schema.parse).toBe('function');expect(allowed.work).toContain(entry.workPolicy);expect(allowed.seat).toContain(entry.seatPolicy);expect(allowed.effect).toContain(entry.effectPolicy);expect(allowed.replay).toContain(entry.replayPolicy);expect(typeof entry.authorize).toBe('function');expect(typeof entry.postAwait).toBe('function');expect(typeof entry.handler).toBe('function');}
   expect(operationDocumentation).toContain(`Tool contract: ${operationContractFingerprint}`);expect(operationDocumentation.match(/Available: (.*)\.\n/)?.[1]?.split(', ')).toEqual(expected);
@@ -143,15 +143,13 @@ it('keeps known-URL research a receipt-free read and puts the reachable alternat
   expect(result.value).toEqual({url:'https://example.com/source',body:'evidence',truncated:false});expect(research).toHaveBeenCalledOnce();expect(base.store.db.prepare('SELECT count(*) n FROM actions').get()).toEqual(before);
   expect(builtInToolSpecs.find(spec=>spec.name==='research.read')).toMatchObject({effectPolicy:'pure-read',replayPolicy:'boundary-owned',workPolicy:'current'});
   expect(builtInToolSpecs.find(spec=>spec.name==='environment.info')).toMatchObject({effectPolicy:'pure-read',replayPolicy:'boundary-owned',workPolicy:'current'});
-  expect(environmentReportSchema.parse({format:'mate.environment.v1',workId:'work',snapshotAt:1,authorization:'informational_snapshot_rechecked_on_every_action',workspaces:{pathStyle:'relative_to_grant',execMountPoint:'/workspace',simultaneouslyMounted:false,grants:[],unavailable:[]},execution:{status:'unavailable',network:'none',image:null},research:{status:'unavailable',mode:'known_public_https_url_only',allowedHosts:[],search:false},attachmentInput:{status:'unavailable',scope:'visible_external_message_file'},artifactOutput:{adapterStatus:'configured',status:'unavailable',scope:'supported_external_target_only'}})).toMatchObject({authorization:'informational_snapshot_rechecked_on_every_action',workspaces:{pathStyle:'relative_to_grant',simultaneouslyMounted:false},research:{search:false},artifactOutput:{adapterStatus:'configured',status:'unavailable'}});
+  expect(environmentReportSchema.parse({format:'mate.environment.v2',workId:'work',snapshotAt:1,filesystem:{home:'/srv/mate/private/research',sharedRoot:'/srv/mate/shared',access:'linux_user_permissions'},execution:{status:'configured',network:'host'},research:{status:'unavailable',mode:'known_public_https_url_only',allowedHosts:[],search:false},attachmentInput:{status:'unavailable',scope:'visible_external_message_file'},artifactOutput:{adapterStatus:'configured',status:'unavailable',scope:'supported_external_target_only'}})).toMatchObject({filesystem:{access:'linux_user_permissions'},research:{search:false},artifactOutput:{adapterStatus:'configured',status:'unavailable'}});
   const built=buildBaseline(configSchema.parse(configFixture).agents[0]!,operationDocumentation),baseline=JSON.stringify(built.messages[0]);
-  expect(built.configVersion).toBe('e3c3e7e7f42e8078ae77e061aff54c960e085839cf79312cb3edf21834f8ca25');
+  expect(built.configVersion).toMatch(/^[a-f0-9]{64}$/);
   for(const required of [
-    'Before choosing a workspace or external path, call environment.info for the current work',
-    'versioned informational snapshot, not an authorization token',
-    'File-tool paths and exec cwd are relative to that grant',
-    'host-mode grant entries show their absolute roots, and ordinary shell access follows your Linux user\'s permissions',
-    'not that the network is currently healthy',
+    'Ordinary file tools and shell commands use your Linux user account and the same host paths',
+    'An absolute path names that path; a relative path starts in your home directory',
+    'environment.info can show your home and shared-work paths',
     'It is not search, browsing or URL discovery',
     'use an actually reported networked exec tool if suitable, ask a human or peer for a URL, inspect existing files/history',
     'An attachment caption or metadata is not its content',

@@ -5,7 +5,7 @@ import {dirname, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {z} from 'zod';
 import {operationSchema,type ExecutionBackend,type ExecutionRequest,type ExecutionResult} from './backend.js';
-import {checkedPath} from './paths.js';
+import {within} from './paths.js';
 
 export interface LinuxIdentity {uid:number;gid:number;home:string;username?:string|undefined}
 const identitySchema=z.object({uid:z.number().int().nonnegative(),gid:z.number().int().nonnegative(),home:z.string().startsWith('/'),username:z.string().optional()}).strict();
@@ -38,10 +38,9 @@ export class LinuxUserBackend implements ExecutionBackend {
     if(signal?.aborted)throw new Error('Execution aborted');
     const root=realpathSync(request.root);
     if(!lstatSync(root).isDirectory())throw new Error('Workspace root is not a directory');
-    const path=checkedPath(root,op.kind==='exec'?op.cwd:op.path);
-    if(op.kind==='move')checkedPath(root,op.destination);
+    const path=resolve(root,op.kind==='exec'?op.cwd:op.path);
     if(op.kind==='exec'&&!lstatSync(path).isDirectory())throw new Error('Invalid command cwd');
-    const shell=op.kind==='exec',privateHome=root===realpathSync(identity.home),umask=privateHome?'077':'022';
+    const shell=op.kind==='exec',privateHome=within(realpathSync(identity.home),path),umask=privateHome?'077':'022';
     const program=shell?'/bin/sh':process.execPath;
     const programArgs=shell?['-c',`umask ${umask}; ${op.command}`]:[this.helper,root,umask];
     // The systemd scope survives a shell that leaves background children behind. setpriv clears root's inherited groups.

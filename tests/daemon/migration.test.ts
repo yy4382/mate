@@ -23,10 +23,10 @@ function fixture(legacy=false){
  const store=new Store(path),base=buildBaseline(previous.mate.agents[0]!,operationDocumentation);store.register('research',base.configVersion,base.messages);
  if(!legacy)saveConfiguration(store,previous);else store.db.prepare("INSERT INTO runtime_meta VALUES('policy',?)").run(hash(encode(previous.runtime)));
  const messages=new Messages(store,slackRuntimeConfig(previous)!);migrateCurrentRuntime(store);const c=new Collaboration(store,messages,new Output(messages,{post:async()=>({ts:'100.000002'})}),previous.mate);messages.membership('research','CTEST',true);
- const broker=new Broker(store,c,{execute:async()=>({code:0,stdout:'',stderr:'',truncated:false})},['/synthetic-protected']),router=new ToolRouter(c,broker),work=c.createWork('migration',{conversationId:'CTEST'});
- c.ledger.account('research');const grant=broker.issueGrant(previous.mate.ownerUserIds[0]!,'research',work,shared,['read','write'],Date.now()+100000);
+ const broker=new Broker(store,c,{execute:async()=>({code:0,stdout:'',stderr:'',truncated:false})},{research:own}),router=new ToolRouter(c,broker),work=c.createWork('migration',{conversationId:'CTEST'});
+ c.ledger.account('research');
  const next=structuredClone(previous);next.mate.agents[0]!.role='An evolving research role';next.runtime.workspaceGrants[0]!.operations=['read'];
- return{root,data,path,own,previous,next,store,c,router,work,broker,grant};
+ return{root,data,path,own,previous,next,store,c,router,work,broker};
 }
 it('offline migration backs up memory, updates baseline and grants, preserves debt, tasks, reminders and unknown receipts',async()=>{
  const f=fixture(),{store,c,work}=f;const task=c.createTask('research',work,{conversationId:'CTEST'},'ongoing');
@@ -40,7 +40,6 @@ it('offline migration backs up memory, updates baseline and grants, preserves de
   expect(current).not.toBe(run.sessionId);expect(JSON.stringify(reopened.context(current))).toContain('PRESERVE_HISTORY');expect(JSON.stringify(reopened.context(current))).toContain('An evolving research role');
   expect(reopened.action('OLD_UNKNOWN')?.state).toBe('unknown');expect(reopened.db.prepare("SELECT tokens FROM budget_accounts WHERE agent_id='research'").get()).toEqual({tokens:500});
   expect(reopened.db.prepare('SELECT id FROM tasks WHERE id=?').get(task)).toBeDefined();expect(reopened.db.prepare('SELECT id FROM schedules WHERE id=?').get(reminder.id)).toBeDefined();
-  expect(reopened.db.prepare('SELECT operations FROM grants WHERE id=?').get(f.grant)).toEqual({operations:'["read"]'});
   expect(storedConfiguration(reopened)).toEqual(f.next);expect(readFileSync(join(f.root,'backup','agents','research','MEMORY.md'),'utf8')).toBe('private synthetic knowledge');
   expect(reopened.db.prepare('SELECT text FROM agent_checkpoints').get()).toEqual({text:'durable checkpoint'});
  }finally{reopened.close();}
@@ -55,12 +54,6 @@ it('migration requires lock, exact previous configuration and stable workspace/A
  const release=acquireLock(join(f.data,'state','daemon.lock'));await expect(migrateConfiguration(f.previous,f.next,dest)).rejects.toThrow('Another Mate');release();
  const wrong=structuredClone(f.previous);wrong.mate.agents[0]!.role='wrong old role';await expect(migrateConfiguration(wrong,f.next,dest)).rejects.toThrow('Previous configuration');
  const rebound=structuredClone(f.next);rebound.adapters.slack!.bindings[0]!.slackUserId='UOTHER';await expect(migrateConfiguration(f.previous,rebound,dest)).rejects.toThrow('rebound');expect(existsSync(dest)).toBe(false);
-});
-it('legacy identity requires explicit attestation; revoked grants stay revoked',async()=>{
- const f=fixture(true);f.broker.revoke(f.previous.mate.ownerUserIds[0]!,f.grant);f.store.close();
- await expect(migrateConfiguration(f.previous,f.next,join(f.root,'backup'))).rejects.toThrow('accept-legacy-identity');
- expect((await migrateConfiguration(f.previous,f.next,join(f.root,'backup'),true)).legacyIdentityAttested).toBe(true);
- const s=new Store(f.path);expect(s.db.prepare('SELECT revoked FROM grants WHERE id=?').get(f.grant)).toEqual({revoked:1});s.close();
 });
 it('explicitly migrates the pre-limits and pre-container-resources runtime policy hash',async()=>{
  const f=fixture(),binary=join(f.root,'docker-cli'),project=join(f.root,'checkout');writeFileSync(binary,'synthetic');chmodSync(binary,0o700);mkdirSync(project);
@@ -82,11 +75,11 @@ it('keeps managed deployment upgrades behind the sealed checkpoint workflow',asy
  const f=fixture();f.store.close();const manifest=join(f.root,'workspaces.json'),managed=daemonConfigSchema.parse({...f.previous,runtime:{...f.previous.runtime,workspaceManifest:manifest}});writeFileSync(manifest,'{}');
  await expect(migrateConfiguration(managed,managed,join(f.root,'backup'))).rejects.toThrow('sealed checkpoint upgrade workflow');expect(existsSync(join(f.root,'backup'))).toBe(false);
 });
-it('a failed migration transaction leaves the old configuration/session/grants usable and retains a complete backup',async()=>{
+it('a failed migration transaction leaves the old configuration and session usable and retains a complete backup',async()=>{
  const f=fixture();const before=(f.router.sessions.status('research') as any).session;
  f.store.db.exec("CREATE TRIGGER reject_configuration BEFORE UPDATE ON runtime_meta WHEN NEW.key='configuration' BEGIN SELECT RAISE(ABORT,'synthetic persistence failure'); END");f.store.close();
  await expect(migrateConfiguration(f.previous,f.next,join(f.root,'backup'))).rejects.toThrow('synthetic persistence failure');
- const s=new Store(f.path);try{expect(storedConfiguration(s)).toEqual(f.previous);expect(s.db.prepare("SELECT session_id FROM agents WHERE id='research'").get()).toEqual({session_id:before});expect(s.db.prepare('SELECT operations FROM grants WHERE id=?').get(f.grant)).toEqual({operations:'["read","write"]'});expect(existsSync(join(f.root,'backup','COMPLETE.json'))).toBe(true);}finally{s.close();}
+ const s=new Store(f.path);try{expect(storedConfiguration(s)).toEqual(f.previous);expect(s.db.prepare("SELECT session_id FROM agents WHERE id='research'").get()).toEqual({session_id:before});expect(existsSync(join(f.root,'backup','COMPLETE.json'))).toBe(true);}finally{s.close();}
 });
 it('pending model reset migrates exactly once and retains its requested continuation',async()=>{
  const f=fixture();f.c.enqueue('research',f.work,'reset-during-upgrade',{});const run=f.store.beginRun('research')!;f.store.input(run,{});

@@ -27,32 +27,30 @@ it('runs two Agents through direct file/exec calls and tools.call with stable ho
   const identities={research:native?{uid:65534,gid:65534,home:alice}:{uid:process.getuid!(),gid:process.getgid!(),home:homedir()},bob:native?{uid:1,gid:1,home:bob}:{uid:process.getuid!(),gid:process.getgid!(),home:homedir()}};
   const backend=new LinuxUserBackend(identities);
   const manager=native?new LinuxProcessManager({research:65534,bob:1}):undefined;
-  const broker=new Broker(store,collaboration,backend,[]),router=new ToolRouter(collaboration,broker,manager?{processes:manager,research:async()=>({}),publish:async()=>({})}:undefined);
+  const broker=new Broker(store,collaboration,backend,{research:alice,bob}),router=new ToolRouter(collaboration,broker,manager?{processes:manager,research:async()=>({}),publish:async()=>({})}:undefined);
   const runs=new Map<string,{run:ReturnType<Store['beginRun']>;work:string}>();
   for(const [agentId,root] of [['research',alice],['bob',bob]] as const){
     store.register(agentId,'v1',[]);messages.membership(agentId,'CTEST',true);
     const work=collaboration.createWork(`linux-${agentId}`,fixtureTarget('CTEST','100.000001'));
     collaboration.enqueue(agentId,work,'start',{});const run=store.beginRun(agentId)!;store.input(run,{});
     runs.set(agentId,{run,work});
-    const grantId=broker.issueGrant('UOWNER',agentId,work,root,['read','write','exec'],Number.MAX_SAFE_INTEGER),signal=new AbortController().signal;
-    const saved=await router.call(run,work,`${agentId}-write`,'file.write',{grantId,path:'note.txt',content:agentId},signal);
-    expect((saved.value as {code:number}).code).toBe(0);
-    const command=await router.call(run,work,`${agentId}-exec`,'exec',{grantId,cwd:'.',command:'printf "%s:%s:%s" "$HOME" "$PWD" "$(cat note.txt)"'},signal);
+    const signal=new AbortController().signal;
+    const saved=await router.call(run,work,`${agentId}-write`,'file.write',{path:join(root,'note.txt'),content:agentId},signal);
+    expect(saved.value).toMatchObject({code:0,stderr:''});
+    const command=await router.call(run,work,`${agentId}-exec`,'exec',{cwd:root,command:'printf "%s:%s:%s" "$HOME" "$PWD" "$(cat note.txt)"'},signal);
     expect((command.value as {stdout:string}).stdout).toBe(`${identities[agentId].home}:${root}:${agentId}`);
-    const read=await router.call(run,work,`${agentId}-read`,'tools.call',{name:'file.read',input:{grantId,path:'note.txt'}},signal);
+    const read=await router.call(run,work,`${agentId}-read`,'tools.call',{name:'file.read',input:{path:join(root,'note.txt')}},signal);
     expect((read.value as {stdout:string}).stdout).toBe(agentId);
     expect(store.action(`${run.sessionId}:${agentId}-exec`)?.state).toBe('succeeded');
   }
   if(native){
     const shared=join(base,'shared'),own=join(shared,'research');mkdirSync(shared,{mode:0o755});chmodSync(shared,0o755);mkdirSync(own,{mode:0o755});chmodSync(own,0o755);chownSync(own,65534,65534);
     const aliceRun=runs.get('research')!,bobRun=runs.get('bob')!,signal=new AbortController().signal;
-    const writer=broker.issueGrant('UOWNER','research',aliceRun.work,own,['read','write','exec'],Number.MAX_SAFE_INTEGER);
-    expect((await router.call(aliceRun.run!,aliceRun.work,'shared-write','file.write',{grantId:writer,path:'result.txt',content:'visible'},signal)).value).toMatchObject({code:0});
-    const reader=broker.issueGrant('UOWNER','bob',bobRun.work,shared,['read','write','exec'],Number.MAX_SAFE_INTEGER);
-    expect((await router.call(bobRun.run!,bobRun.work,'shared-read','tools.call',{name:'file.read',input:{grantId:reader,path:'research/result.txt'}},signal)).value).toMatchObject({code:0,stdout:'visible'});
-    expect((await router.call(bobRun.run!,bobRun.work,'shared-no-write','file.write',{grantId:reader,path:'research/result.txt',content:'overwrite'},signal)).value).toMatchObject({code:1});
-    expect((await router.call(bobRun.run!,bobRun.work,'private-denied','exec',{grantId:reader,cwd:'.',command:`cat ${alice}/note.txt`},signal)).value).toMatchObject({code:1});
-    const background=await router.call(aliceRun.run!,aliceRun.work,'background','exec',{grantId:writer,cwd:'.',command:'sleep 30 &'},signal);
+    expect((await router.call(aliceRun.run!,aliceRun.work,'shared-write','file.write',{path:join(own,'result.txt'),content:'visible'},signal)).value).toMatchObject({code:0});
+    expect((await router.call(bobRun.run!,bobRun.work,'shared-read','tools.call',{name:'file.read',input:{path:join(own,'result.txt')}},signal)).value).toMatchObject({code:0,stdout:'visible'});
+    expect((await router.call(bobRun.run!,bobRun.work,'shared-no-write','file.write',{path:join(own,'result.txt'),content:'overwrite'},signal)).value).toMatchObject({code:1});
+    expect((await router.call(bobRun.run!,bobRun.work,'private-denied','exec',{cwd:shared,command:`cat ${alice}/note.txt`},signal)).value).toMatchObject({code:1});
+    const background=await router.call(aliceRun.run!,aliceRun.work,'background','exec',{cwd:own,command:'sleep 30 &'},signal);
     expect((background.value as {code:number}).code).toBe(0);
     try{
       const old=((await router.call(aliceRun.run!,aliceRun.work,'background-list','processes.list',{},signal)).value as {unit:string;pids:number[]}[]).filter(scope=>scope.pids.length);

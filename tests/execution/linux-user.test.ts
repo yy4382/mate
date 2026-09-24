@@ -1,7 +1,7 @@
 import {afterEach, expect, it} from 'vitest';
 import {mkdtempSync, readFileSync, realpathSync, rmSync, statSync} from 'node:fs';
 import {tmpdir, homedir} from 'node:os';
-import {join} from 'node:path';
+import {dirname,join} from 'node:path';
 import {LinuxUserBackend,linuxScopeCommand} from '../../src/execution/linux-user.js';
 
 const roots:string[]=[];
@@ -45,11 +45,12 @@ it('keeps complete foreground output when its pipes close normally',async()=>{
   expect(result.truncated).toBe(false);
 });
 
-it('rejects missing identity, forbidden review networking and escaped cwd before spawn',async()=>{
+it('rejects missing identity and unsupported network isolation, but accepts ordinary parent paths',async()=>{
   const root=workspace(),backend=new LinuxUserBackend({alice:identity});
   await expect(backend.execute({agentId:'bob',root,timeoutMs:1000,operation:{kind:'exec',cwd:'.',command:'id'}})).rejects.toThrow('Linux user');
   await expect(backend.execute({agentId:'alice',root,timeoutMs:1000,network:'none',operation:{kind:'exec',cwd:'.',command:'id'}})).rejects.toThrow('network isolation');
-  await expect(backend.execute({agentId:'alice',root,timeoutMs:1000,operation:{kind:'exec',cwd:'..',command:'id'}})).rejects.toThrow('escapes root');
+  const parent=await backend.execute({agentId:'alice',root,timeoutMs:1000,operation:{kind:'exec',cwd:'..',command:'pwd'}});
+  expect(parent).toMatchObject({code:0,stdout:`${dirname(root)}\n`});
 });
 
 it('does not inherit the Mate process environment',async()=>{

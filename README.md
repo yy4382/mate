@@ -58,7 +58,7 @@ mentions模式由@mention、DM或watch触发；participate对普通消息合并n
 - budget WORK_ID MAX_RUNS MAX_TOKENS MAX_USD
 - review-seat AGENT_ID {"target":{"channel":"…"},"brief":"…"}；review-release AGENT_ID
 
-review seat要求从未运行的身份和干净workspace，隔离对话/peer信息与网络。release停止Agent，随后需resume。
+普通同伴评审无需 `review-seat`。`review-seat` 用于用户指定一名未参与该项工作的 Agent 做独立盲审。Mate 给它审查任务说明和干净的私人目录，不把已有对话与同伴结论放进审查输入；审查发言先留待确认。它仍以自己的 Linux 用户账号使用普通文件、命令和网络，因此不能承诺彻底隔绝它主动从其他可访问来源获取信息。`review-release` 结束盲审并停止该 Agent，随后如需继续工作可 `agent-resume`。
 
 每位 Agent 的预算是持续累计的；新消息、切换工作事项、重置上下文或修改配置都不会自动增加预算。配置中的预算只在首次创建 Agent 时使用；用户提高累计上限后可恢复 Agent。若一次操作是否执行成功无法确认，Mate 不会擅自重试；Agent 可用 `actions.list/read` 查看已记录的执行结果。
 

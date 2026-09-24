@@ -1,8 +1,6 @@
 import {createHash} from 'node:crypto';
 import type {Permission} from '../execution/backend.js';
 import {canonicalRoot} from '../execution/paths.js';
-import type {Broker} from '../policy/broker.js';
-import type {Collaboration} from '../collaboration/service.js';
 
 export interface ConfiguredWorkspace {
   agentId:string;
@@ -55,24 +53,4 @@ export function workspaceProfiles(privateRoots:Readonly<Record<string,string>>,c
   for(const [agentId,raw] of Object.entries(privateRoots)){const root=canonicalRoot(raw,[]);profiles.push({agentId,root,label:'private-workspace',kind:'private',operations:execution?['exec','read','write']:['read','write'],...(capacityByRoot.has(root)?{capacityBytes:capacityByRoot.get(root)!}:{})});}
   profiles.push(...configured.map(profile=>capacityByRoot.has(profile.root)?{...profile,capacityBytes:capacityByRoot.get(profile.root)!}:profile));
   return profiles.sort((a,b)=>a.agentId.localeCompare(b.agentId)||Number(a.kind==='configured')-Number(b.kind==='configured')||a.label.localeCompare(b.label));
-}
-
-/** Provisioning is a state transition performed before the model can observe a work. */
-export class WorkspaceAccess {
-  constructor(readonly collaboration:Collaboration,readonly broker:Broker,readonly profiles:readonly WorkspaceProfile[],private stableLinuxAccess=false){}
-  provision(agentId:string,workId:string):void {
-    const c=this.collaboration,s=c.store,owner=c.config.ownerUserIds[0];if(!owner)throw new Error('Workspace provisioning requires an owner');
-    s.atomic(()=>{
-      for(const profile of this.profiles.filter(item=>item.agentId===agentId&&(!c.seats.active(agentId)||item.kind==='private'))){
-        const existing=s.db.prepare('SELECT id,operations,revoked,expires FROM grants WHERE agent_id=? AND work_id=? AND root=? ORDER BY rowid DESC LIMIT 1').get(agentId,workId,profile.root) as {id:string;operations:string;revoked:number;expires:number}|undefined;
-        if(!existing){this.broker.issueGrant(owner,agentId,workId,profile.root,profile.operations,this.stableLinuxAccess?Number.MAX_SAFE_INTEGER:Date.now()+365*86400000);continue;}
-        if(existing.revoked||existing.expires<=Date.now())continue;
-        const operations=JSON.parse(existing.operations) as Permission[];
-        if(JSON.stringify([...operations].sort())!==JSON.stringify(profile.operations)){
-          s.db.prepare('UPDATE grants SET operations=? WHERE id=?').run(JSON.stringify(profile.operations),existing.id);
-          s.audit('workspace_grant_sync',{grantId:existing.id,agentId,workId,operations:profile.operations});
-        }
-      }
-    });
-  }
 }

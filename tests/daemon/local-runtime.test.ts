@@ -107,12 +107,6 @@ it('internal publication bypasses an unrelated in-flight external request and re
  const sending=out.send('external-0');await vi.waitFor(()=>expect(s.output('external-0')!.state).toBe('sending'));
  await out.send('internal');expect(s.output('internal')!.state).toBe('sent');reject(new Error('offline'));await sending;
 });
-it('constructor failure rolls back identity/configuration writes so a corrected local configuration can retry',async()=>{
- const {c}=config(),invalid=structuredClone(c);invalid.runtime.workspaceGrants=[{agentId:'research',root:join(c.runtime.dataDir,'agents'),operations:['read']}];
- await expect(Daemon.create(invalid,{info:()=>{},error:()=>{}})).rejects.toThrow('Protected root overlap');
- const corrected=await daemon(c);expect(corrected.local!.rooms('owner')).toEqual([{conversationId:'local-room'}]);
-});
-
 it('an adapter close error still drains background work before DB close and lock release',async()=>{
  credentials();const {c}=config(),d=await daemon(c);let release!:()=>void;const gate=new Promise<void>(r=>release=r);
  const adapter={start:async()=>{},recover(){},poll(){},flush:vi.fn(()=>gate),close:async()=>{throw new Error('close failed');}};
