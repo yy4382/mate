@@ -264,16 +264,6 @@ CREATE INDEX model_usage_work ON model_usage(work_id,run_id);
 -- Markers read by the running application, present from the first open.
 INSERT INTO runtime_meta(key,value) VALUES('conversation_format','mate.conversations.v2');
 
-PRAGMA application_id = 1296127045;
-PRAGMA user_version = 25;
+PRAGMA application_id = ${FORMAT_APPLICATION_ID};
+PRAGMA user_version = ${FORMAT_REVISION};
 `;
-
-/** Structures the current format creates; the open entry checks a file against these before accepting it. */
-function createdObjects(keyword: string): string[] {
-  return [...currentFormatSchema.matchAll(new RegExp(`CREATE ${keyword}\\s+([a-z_]+)`, "g"))].map(
-    (match) => match[1]!,
-  );
-}
-export const currentFormatTables = createdObjects("TABLE");
-export const currentFormatIndexes = createdObjects("(?:UNIQUE )?INDEX");
-export const currentFormatTriggers = createdObjects("TRIGGER");

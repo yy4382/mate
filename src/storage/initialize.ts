@@ -1,17 +1,13 @@
 import Database from "better-sqlite3";
-import {
-  FORMAT_APPLICATION_ID,
-  FORMAT_REVISION,
-  currentFormatIndexes,
-  currentFormatSchema,
-  currentFormatTables,
-  currentFormatTriggers,
-} from "./current-schema.js";
+import { existsSync, statSync } from "node:fs";
+import { FORMAT_APPLICATION_ID, FORMAT_REVISION, currentFormatSchema } from "./current-schema.js";
 
-const nextAction =
-  "Mate does not migrate earlier databases: point runtime.dataDir at a new, empty directory, or move this file aside and let Mate create a fresh one.";
+const moveAside =
+  "Mate does not migrate or erase a database it does not recognise: if this file was not created by this release, move it aside and point runtime.dataDir at a new, empty directory.";
+const repair =
+  "Refusing to modify it: restore the database from a checkpoint, or start with a new data directory.";
 
-/** A file that is not this release's database format. The file is reported, never modified or removed. */
+/** A file that is not this release's database format. The file is reported, never deleted. */
 export class UnsupportedDatabaseError extends Error {
   constructor(
     readonly path: string,
@@ -25,24 +21,25 @@ export class UnsupportedDatabaseError extends Error {
 /**
  * The one entry that opens the current-format database.
  *
- * A new file is created with the single current schema in one transaction. An
- * existing file is accepted only when it is this release's format and complete;
- * anything else (an older Mate database, a database from another application, a
- * corrupt file) raises {@link UnsupportedDatabaseError} and is left exactly as
- * found, so startup never discards a directory the operator may still want.
+ * A new file (absent, or zero bytes and therefore holding nothing) is created
+ * with the single current schema in one transaction. An existing file is
+ * accepted only when it carries this release's identity, its revision and every
+ * structure the format declares; anything else - an older Mate database, a
+ * database from another application, a corrupt or incomplete file - raises
+ * {@link UnsupportedDatabaseError}.
+ *
+ * Opening a database that an interrupted writer left mid-transaction runs
+ * SQLite's own recovery, so a rejected file can lose an uncommitted transaction
+ * or leftover write-ahead files. Nothing else about it is rewritten: no table
+ * is dropped, no committed row is touched, and no file is ever deleted, so
+ * startup never clears a directory the operator may still want.
  */
 export function openCurrentDatabase(path: string): Database.Database {
-  let db: Database.Database;
+  const empty = !existsSync(path) || statSync(path).size === 0,
+    db = openWritable(path);
   try {
-    db = new Database(path);
-  } catch (cause) {
-    throw new Error(
-      `Cannot open Mate database at ${path}: ${cause instanceof Error ? cause.message : String(cause)}`,
-    );
-  }
-  try {
-    if (inspect(db, path) === "empty")
-      db.transaction(() => db.exec(currentFormatSchema)).immediate();
+    if (empty) createCurrentFormat(db, path);
+    else accept(db, path);
   } catch (error) {
     db.close();
     throw error;
@@ -51,16 +48,75 @@ export function openCurrentDatabase(path: string): Database.Database {
   db.pragma("foreign_keys = ON");
   db.pragma("journal_mode = WAL");
   db.pragma("synchronous = FULL");
+  return db;
+}
+
+function openWritable(path: string): Database.Database {
+  let db: Database.Database;
+  try {
+    db = new Database(path);
+  } catch (cause) {
+    throw new Error(
+      `Cannot open Mate database at ${path}: ${cause instanceof Error ? cause.message : String(cause)}`,
+    );
+  }
+  // Wait for a competing writer before classifying, not only before writing.
   db.pragma("busy_timeout = 5000");
   return db;
 }
 
-/** Classifies the file before anything is written to it. */
-function inspect(db: Database.Database, path: string): "empty" | "current" {
-  let applicationId: number, revision: number, objects: Set<string>;
+function createCurrentFormat(db: Database.Database, path: string): void {
   try {
-    applicationId = Number(db.pragma("application_id", { simple: true }));
-    revision = Number(db.pragma("user_version", { simple: true }));
+    db.transaction(() => db.exec(currentFormatSchema)).immediate();
+  } catch (error) {
+    // A second entry may classify the same new file at the same time; the loser
+    // accepts the database the winner created instead of reporting a collision.
+    try {
+      if (verdict(db).kind === "current") return;
+    } catch {
+      // An unreadable file keeps its own, more useful, error below.
+    }
+    throw error;
+  }
+}
+
+function accept(db: Database.Database, path: string): void {
+  let found: Verdict;
+  try {
+    found = verdict(db);
+  } catch (cause) {
+    throw unreadable(path, cause);
+  }
+  switch (found.kind) {
+    case "current":
+      return;
+    case "foreign":
+      throw new UnsupportedDatabaseError(
+        path,
+        `${path} is not a Mate first-release database (application id ${found.applicationId}, schema revision ${found.revision}). ${moveAside}`,
+      );
+    case "revision":
+      throw new UnsupportedDatabaseError(
+        path,
+        `${path} uses Mate schema revision ${found.revision}; this release uses revision ${FORMAT_REVISION}. ${moveAside}`,
+      );
+    case "incomplete":
+      throw new UnsupportedDatabaseError(
+        path,
+        `${path} claims Mate schema revision ${FORMAT_REVISION} but is missing ${found.missing.join(", ")}. ${repair}`,
+      );
+  }
+}
+
+type Verdict =
+  | { kind: "current" }
+  | { kind: "foreign"; applicationId: number; revision: number }
+  | { kind: "revision"; revision: number }
+  | { kind: "incomplete"; missing: string[] };
+
+function verdict(db: Database.Database): Verdict {
+  const applicationId = Number(db.pragma("application_id", { simple: true })),
+    revision = Number(db.pragma("user_version", { simple: true })),
     objects = new Set(
       (
         db.prepare("SELECT type,name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").all() as {
@@ -69,38 +125,44 @@ function inspect(db: Database.Database, path: string): "empty" | "current" {
         }[]
       ).map((row) => `${row.type}:${row.name}`),
     );
-  } catch (cause) {
-    throw new UnsupportedDatabaseError(
-      path,
-      `${path} cannot be read as a SQLite database (${cause instanceof Error ? cause.message : String(cause)}). ${nextAction}`,
-    );
+  if (applicationId !== FORMAT_APPLICATION_ID) return { kind: "foreign", applicationId, revision };
+  if (revision !== FORMAT_REVISION) return { kind: "revision", revision };
+  // The revision identifies the format; this check catches a file that claims the
+  // revision but lost structures (uniqueness indexes and triggers carry invariants).
+  const missing = [...formatObjects()]
+    .filter((object) => !objects.has(object))
+    .map((object) => object.replace(":", " "));
+  return missing.length ? { kind: "incomplete", missing } : { kind: "current" };
+}
+
+/** Structure names of the current format, read from a database the format itself created. */
+let formatStructure: Set<string> | undefined;
+function formatObjects(): Set<string> {
+  if (formatStructure) return formatStructure;
+  const template = new Database(":memory:");
+  try {
+    template.exec(currentFormatSchema);
+    const objects = template
+      .prepare("SELECT type,name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'")
+      .all() as { type: string; name: string }[];
+    if (!objects.length) throw new Error("Current format declares no structures");
+    return (formatStructure = new Set(objects.map((row) => `${row.type}:${row.name}`)));
+  } finally {
+    template.close();
   }
-  if (applicationId === 0 && revision === 0 && objects.size === 0) return "empty";
-  if (applicationId !== FORMAT_APPLICATION_ID)
-    throw new UnsupportedDatabaseError(
-      path,
-      `${path} is not a Mate first-release database (application id ${applicationId}, schema revision ${revision}). ${nextAction}`,
-    );
-  if (revision !== FORMAT_REVISION)
-    throw new UnsupportedDatabaseError(
-      path,
-      `${path} uses Mate schema revision ${revision}; this release uses revision ${FORMAT_REVISION}. ${nextAction}`,
-    );
-  // Uniqueness indexes and triggers carry invariants, so a partial file is not accepted as current.
-  const missing = (
-    [
-      ["table", currentFormatTables],
-      ["index", currentFormatIndexes],
-      ["trigger", currentFormatTriggers],
-    ] as const
-  )
-    .flatMap(([type, names]) => names.map((name) => ({ type, name })))
-    .filter(({ type, name }) => !objects.has(`${type}:${name}`))
-    .map(({ type, name }) => `${type} ${name}`);
-  if (missing.length)
-    throw new UnsupportedDatabaseError(
-      path,
-      `${path} claims Mate schema revision ${FORMAT_REVISION} but is missing ${missing.join(", ")}. Refusing to modify it: restore the database from a checkpoint, or start with a new data directory.`,
-    );
-  return "current";
+}
+
+function unreadable(path: string, cause: unknown): UnsupportedDatabaseError {
+  const code = (cause as { code?: string } | null)?.code ?? "",
+    detail = cause instanceof Error ? cause.message : String(cause);
+  // "Cannot read this" and "this is not ours" need different next actions, and neither is "throw the file away".
+  return code === "SQLITE_NOTADB"
+    ? new UnsupportedDatabaseError(
+        path,
+        `${path} is not a SQLite database (${detail}). Mate does not modify or delete it: if it was not created by this release, move it aside or point runtime.dataDir at a new, empty directory.`,
+      )
+    : new UnsupportedDatabaseError(
+        path,
+        `${path} could not be read (${code || "unknown error"}: ${detail}). Mate does not delete it: check that the Mate user can read the file and that no other process holds it, then start Mate again.`,
+      );
 }

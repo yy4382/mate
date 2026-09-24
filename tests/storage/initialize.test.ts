@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -14,10 +15,15 @@ function temporary(): string {
 }
 
 /** Every byte in the directory, so a rejected open is proven to touch nothing at all. */
-function directoryState(directory: string): { file: string; bytes: string }[] {
+function directoryState(directory: string): { file: string; sha256: string }[] {
   return readdirSync(directory)
     .sort()
-    .map((file) => ({ file, bytes: readFileSync(join(directory, file)).toString("base64") }));
+    .map((file) => ({
+      file,
+      sha256: createHash("sha256")
+        .update(readFileSync(join(directory, file)))
+        .digest("hex"),
+    }));
 }
 
 function rejected(path: string): Error {
@@ -29,7 +35,19 @@ function rejected(path: string): Error {
   throw new Error(`Expected the open entry to reject ${path}`);
 }
 
-/** The structures the first release persists: messages, members, deliveries, tasks, reminders, sessions, usage, drafts and operation results. */
+/**
+ * The structures the first release persists, mapped to acceptance criterion 1:
+ * messages (messages, message_revisions, message_visibility, message_observations,
+ * message_identities, message_bindings, conversation_events, message_work),
+ * members (channel_access, channel_watches, thread_watches, internal_members, internal_dm_pairs),
+ * deliveries (deliveries, delivery_work, delivery_context, runs, run_context, inbox_reads),
+ * tasks (tasks, task_events, task_event_baselines, task_intents, task_projections, works, work_runs),
+ * reminders (schedules, reminder_events, reminder_event_baselines, reminder_firings, system_projections),
+ * sessions (agents, sessions, entries, snapshots, agent_checkpoints, session_resets, review_seats),
+ * usage (model_usage), drafts (outbox, drafts, output_work),
+ * operation results (actions, system_requests, operational_facts),
+ * plus attention, projection, identity and daemon bookkeeping structures.
+ */
 const requiredTables = [
   "actions",
   "admin_replies",
@@ -396,7 +414,7 @@ it("rejects an older Mate database, an unknown revision and unreadable files wit
         db.close();
       },
       message:
-        /is not a Mate first-release database .*application id 0, schema revision 16.*does not migrate earlier databases/s,
+        /is not a Mate first-release database .*schema revision 16.*does not migrate or erase/s,
     },
     {
       // The migration chain's terminal revision, which never carried this release's identity.
@@ -409,7 +427,7 @@ it("rejects an older Mate database, an unknown revision and unreadable files wit
         db.close();
       },
       message:
-        /is not a Mate first-release database .*application id 0, schema revision 25.*does not migrate earlier databases/s,
+        /is not a Mate first-release database .*schema revision 25.*does not migrate or erase/s,
     },
     {
       // Another application's SQLite database must not be adopted or emptied.
@@ -421,6 +439,16 @@ it("rejects an older Mate database, an unknown revision and unreadable files wit
         db.close();
       },
       message: /is not a Mate first-release database .*application id 0, schema revision 0/s,
+    },
+    {
+      // A foreign SQLite file that happens to hold no tables is still not ours.
+      file: "foreign-empty.sqlite",
+      prepare: (path) => {
+        const db = new Database(path);
+        db.exec("CREATE TABLE temporary_note(id INTEGER PRIMARY KEY); DROP TABLE temporary_note;");
+        db.close();
+      },
+      message: /is not a Mate first-release database \(application id 0, schema revision 0\)/,
     },
     {
       // A future or foreign revision of this application's format.
@@ -460,7 +488,7 @@ it("rejects an older Mate database, an unknown revision and unreadable files wit
       // Not a database at all.
       file: "garbage.sqlite",
       prepare: (path) => writeFileSync(path, "this is not a sqlite database\n"),
-      message: /cannot be read as a SQLite database .*does not migrate earlier databases/s,
+      message: /is not a SQLite database .*does not modify or delete it/s,
     },
   ];
   for (const { file, prepare, message } of cases) {
@@ -494,4 +522,34 @@ it("reopens a copy made through the backup path used by checkpoints", async () =
   } finally {
     copy.close();
   }
+});
+
+it("creates the format for a file that holds nothing and for an in-memory database", () => {
+  const directory = temporary(),
+    zero = join(directory, "zero.sqlite");
+  writeFileSync(zero, "");
+  // A zero-length file stores nothing, so it is created afresh; a creation whose
+  // transaction rolled back leaves exactly this state and must stay retryable.
+  const created = openCurrentDatabase(zero);
+  try {
+    expect(names(created, "table")).toEqual([...requiredTables].sort());
+    expect(created.pragma("application_id", { simple: true })).toBe(1296127045);
+  } finally {
+    created.close();
+  }
+  const memory = openCurrentDatabase(":memory:");
+  try {
+    expect(memory.pragma("user_version", { simple: true })).toBe(25);
+    expect(names(memory, "table")).toEqual([...requiredTables].sort());
+  } finally {
+    memory.close();
+  }
+});
+
+it("reports a database it cannot open instead of creating one in its place", () => {
+  const directory = temporary(),
+    missing = join(directory, "absent", "mate.sqlite");
+  expect(() => openCurrentDatabase(missing)).toThrow(missing);
+  expect(existsSync(missing)).toBe(false);
+  expect(existsSync(join(directory, "absent"))).toBe(false);
 });
