@@ -129,7 +129,7 @@ CREATE TABLE delivery_work(delivery_id TEXT PRIMARY KEY REFERENCES deliveries(id
 CREATE TABLE delivery_context(delivery_id TEXT PRIMARY KEY REFERENCES deliveries(id),work_id TEXT NOT NULL REFERENCES works(id));
 CREATE TABLE runs(id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agents(id), session_id TEXT NOT NULL REFERENCES sessions(id),
  generation INTEGER NOT NULL, delivery_id TEXT NOT NULL REFERENCES deliveries(id), state TEXT NOT NULL CHECK(state IN ('active','complete','failed','interrupted','yielded')),
- stop_reason TEXT CHECK(stop_reason IN ('complete','yielded','model_failure','owner_pause','work_stopped','interrupted')),
+ stop_reason TEXT CHECK(stop_reason IN ('complete','turn_budget','external_wait','model_failure','owner_pause','work_stopped','interrupted')),
  error TEXT, created_at INTEGER NOT NULL);
 CREATE UNIQUE INDEX one_active_run ON runs(agent_id) WHERE state='active';
 CREATE TABLE run_context(run_id TEXT PRIMARY KEY REFERENCES runs(id),work_id TEXT NOT NULL REFERENCES works(id));

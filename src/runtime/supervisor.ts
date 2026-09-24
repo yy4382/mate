@@ -8,7 +8,7 @@ import { ToolRouter, operationDocumentation } from "./tools.js";
 import { repairTranscript } from "./context.js";
 import { FairAdmission, type Admission } from "../concurrency/admission.js";
 import { UsageLedger } from "../usage/ledger.js";
-import { describeFault, retryDisposition, toWorkerFault, type WorkerFault } from "./fault.js";
+import { describeFault, toWorkerFault } from "./fault.js";
 import type { RunStopReason } from "./outcome.js";
 import { RunRecovery } from "./recovery.js";
 export interface Worker {
@@ -106,7 +106,7 @@ export class Supervisor {
         c.bindRunWork(run, work.id);
         // Present the delivery's input, or resume the input an earlier run of this same delivery
         // already received. What that says is the run module's decision, not the scheduler's.
-        const { kind, message } = this.runs.resumption(run, s.stopReasonOf(agentId));
+        const { kind, message } = this.runs.resumption(run, s.lastStopReason(run.deliveryId));
         if (kind === "input") s.input(run, message);
         else s.appendMessage(run, "resume", message);
         const buildRecovery = async (): Promise<string> => this.runs.build(run, abort.signal);
@@ -178,35 +178,28 @@ export class Supervisor {
         let rotated = false;
         s.atomic(() => {
           s.assertRun(run);
-          // Whether this delivery was already finished before the run stopped decides the kind of
-          // stop: a delivery this run replaced with a session reset is complete, while one it
-          // never finished is a yield whose input stays durable for the next run of this channel.
-          const handled = s.delivery(run.deliveryId).status === "handled",
-            reason = this.reasonFor(result, handled);
-          // The receipt is written before the run ends, so a run that gave up its execution slot
-          // is recorded as a yield instead of as a failure or a human pause.
+          // A pending session reset is this run releasing its execution slot so the work can come
+          // back on a fresh context, which is a wait for an outside condition rather than a
+          // completion. It is read by delivery, so a reset left over from an earlier run of
+          // another delivery cannot answer for this one.
+          const resetRequested = Boolean(
+              s.db
+                .prepare("SELECT 1 FROM session_resets WHERE delivery_id=? AND state='requested'")
+                .get(run.deliveryId),
+            ),
+            reason = this.reasonFor(result, resetRequested);
+          // The stop reason is written before the run ends, so a run that gave up its execution
+          // slot is recorded as a yield instead of as a failure or a human pause.
           s.finish(run, undefined, reason);
           c.attention.invalidate(run.sessionId);
           s.snapshot(
             run.sessionId,
             result.snapshot ?? repairTranscript(s.context(run.sessionId) as AgentMessage[]),
           );
+          // The rotation is the run module's continuation: it marks this delivery handled and
+          // queues the session continuation that carries the work into the new context, so the
+          // scheduler does not build a second continuation record of its own.
           rotated = this.router.sessions.apply(agentId);
-          // A run that finished its own delivery by replacing its context leaves one durable
-          // continuation naming the work item it was last using. A yield needs no such row: the
-          // unfinished delivery is itself the durable pointer back into this channel.
-          if (!rotated && handled && result.continuation) {
-            const selected = s.db
-              .prepare("SELECT work_id FROM run_context WHERE run_id=?")
-              .get(run.id) as { work_id: string } | undefined;
-            const continuationWork = c.work(selected?.work_id ?? work.id);
-            if (continuationWork.state === "active")
-              c.enqueue(agentId, continuationWork.id, `continue:${run.id}`, {
-                kind: "continuation",
-                target: JSON.parse(continuationWork.target),
-                receivedAt: Date.now(),
-              });
-          }
         });
         if (rotated) {
           worker.close();
@@ -220,7 +213,7 @@ export class Supervisor {
         // shared fault instead of the message text to decide what happens next.
         const fault = toWorkerFault(error, "recovery");
         try {
-          s.finish(run, describeFault(fault), "model_failure", pausesAgent(fault));
+          s.finish(run, describeFault(fault), "model_failure");
         } catch {
           /* already fenced by stop */
         }
@@ -238,21 +231,20 @@ export class Supervisor {
   /**
    * Why this run stopped, as the scheduler observed it. The scheduler records the fact; the run
    * module reads it back when the same delivery is resumed.
+   *
+   * Only an outcome an Agent can observe decides this. `certain` deliberately plays no part: it
+   * reports whether the provider accounted for a call, and a run whose reply arrived but whose
+   * usage could not be recorded is still a finished run — the unknown call is the usage module's
+   * fact, not a stop reason. A real model failure is thrown by the model loop and recorded by the
+   * failure path instead.
    */
-  private reasonFor(result: EngineResult, deliveryHandled: boolean): RunStopReason {
-    if (deliveryHandled) {
-      // The delivery was already dealt with when this run's work ended — most often a context
-      // replacement finished it — so this run completed its delivery rather than yielding it.
-      return "complete";
-    }
-    if (!result.certain) {
-      // A fault the worker reported as a result rather than as a thrown value still failed the run.
-      return "model_failure";
-    }
-    // The run left work outstanding: either the model loop reached its own turn budget or a
-    // context replacement, or a tool deliberately released the execution slot. The input stays
-    // durable and the next run of this channel resumes the same delivery.
-    return result.waiting || result.continuation ? "yielded" : "complete";
+  private reasonFor(result: EngineResult, resetRequested: boolean): RunStopReason {
+    if (resetRequested) return "external_wait";
+    // The run left its delivery unfinished: the model loop reached its own turn budget, or the
+    // context pressure that compacts the transcript. The input stays durable and the next run of
+    // this channel resumes the same delivery.
+    if (result.waiting || result.continuation) return "turn_budget";
+    return "complete";
   }
   stopRuns(runIds: string[]): void {
     for (const { run, abort } of this.active.values()) if (runIds.includes(run.id)) abort.abort();
@@ -304,23 +296,6 @@ export class Supervisor {
     timer.unref();
     this.idle.set(agentId, timer);
   }
-}
-/**
- * Whether a failed run leaves its Agent paused.
- *
- * A failure that waits for something outside this Agent pauses its channel: a transient model
- * fault backs off, a credential or configuration problem needs a human, and an unconfirmed
- * external effect needs verification. A shared-persistence failure is different — the durable
- * record itself is the broken part, so the work that depends on it stops without pausing the
- * Agent as though a person had decided the question.
- */
-function pausesAgent(fault: WorkerFault): boolean {
-  const disposition = retryDisposition(fault);
-  return (
-    disposition === "human_action" ||
-    disposition === "retry_backoff" ||
-    disposition === "verify_effect"
-  );
 }
 function zIdle(value: number): number {
   if (!Number.isSafeInteger(value) || value < 0 || value > 3600000)

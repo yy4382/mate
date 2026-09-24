@@ -2,7 +2,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Collaboration } from "../collaboration/service.js";
 import { encode, hash, type RunToken } from "../storage/store.js";
 import { UsageLedger } from "../usage/ledger.js";
-import type { RunStopReason } from "./outcome.js";
+import { isYield, type RunStopReason } from "./outcome.js";
 
 /**
  * The lifecycle of one resumption, as the run module sees it. A delivery that has not been
@@ -37,7 +37,7 @@ export class RunRecovery {
    * The instruction a stopped run's same input carries on the way back in. It lives with the rest
    * of the resumption vocabulary, so the scheduler never has to interpret a stop reason itself.
    */
-  resumption(run: RunToken, reason: RunStopReason | null = null): DeliveryResumption {
+  resumption(run: RunToken, reason: RunStopReason | null): DeliveryResumption {
     const delivery = this.c.store.delivery(run.deliveryId),
       seat = this.c.seats.active(run.agentId);
     if (delivery.status === "pending")
@@ -46,11 +46,12 @@ export class RunRecovery {
       kind: "resume",
       message: {
         role: "user",
-        content:
-          reason === "yielded"
-            ? "Continue the same durable inbox delivery that this run had not finished. Re-read the recovery package; verify receipts and do not blindly repeat earlier effects."
-            : "Resume the interrupted inbox delivery. Verify receipts; do not blindly repeat earlier effects.",
-        timestamp: Date.now(),
+        content: isYield(reason)
+          ? "Continue the same durable inbox delivery that this run had not finished. Re-read the recovery package; verify receipts and do not blindly repeat earlier effects."
+          : "Resume the interrupted inbox delivery. Verify receipts; do not blindly repeat earlier effects.",
+        // A blind review seat reads no wall-clock value on any input path, so a resumed run keeps
+        // the same neutral turn timestamp its first input carried.
+        timestamp: seat ? 0 : Date.now(),
       },
     };
   }
@@ -146,7 +147,12 @@ export class RunRecovery {
     };
   }
 
-  /** Bound one reference text to the recovery budget, keeping the most recent material. */
+  /**
+   * Bound one reference text to the recovery budget. It keeps the beginning of the text and drops
+   * the end, the same rule the recovery package has always used; the warning it raises says the
+   * excerpt is incomplete, and `memoryNeedsOrganization` tells the model to read the full entry
+   * through its file tools rather than trusting the excerpt.
+   */
   private bound(text: string): string {
     while (Buffer.byteLength(text) > this.memoryBudget)
       text = text.slice(0, Math.floor(text.length * 0.9));
