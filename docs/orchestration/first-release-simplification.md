@@ -90,6 +90,12 @@ None yet.
 - The orchestrator verifies every sub-agent claim from the git tree and the real
   `pnpm check` / `pnpm typecheck` output; a ticket is only marked done here after
   its commit is on the branch and the suite is green at that commit.
+- Stall criterion for a running ticket implementer (refined after observing the
+  actual cadence): a gap of a few minutes with no repository write is normal for
+  reconnaissance plus a full validation run (the suite alone is ~6s across 61
+  files, plus `tsc` and build). Intervene only after roughly ten minutes with no
+  repository write, no commit and no completion notification — and prefer
+  re-briefing over a blind retry, so finished reconnaissance is not thrown away.
 - Baselines that later tickets may shrink but must not silently break: the
   current-checkpoint, backup and restore tests, restart/recovery tests, and the
   architecture/dependency contract tests in `tests/contracts/`. Tests that exist
