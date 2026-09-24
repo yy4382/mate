@@ -68,9 +68,9 @@ only when every blocker is committed on the branch.
 | #44 | 让频道内 Agent 邀请另一名团队 Agent | **done** | `02dafa9` (worktree `.worktrees/t44`) | `cd13f9a`, merged as `9076ccb` |
 | #45 | 在工作进程协议中保留故障类别与阶段 | **done** | `9c7e2e3` (main tree) | `b64a2e7` (final revision; an earlier `0e7b6f8` re-commit sits in history) |
 | #46 | 对暂时模型故障持久退避并自动继续 | in progress | `0e7b6f8` (worktree `.worktrees/t46`) | — |
-| #47 | 保持正常让位后的持久继续与恢复输入 | **done** | `d412adf` (worktree `.worktrees/t47`) | `ad456b1`, merged as `612f35e` |
+| #47 | 保持正常让位后的持久继续与恢复输入 | **done** | `d412adf` (worktree `.worktrees/t47`) | `ad456b1`, merged as `612f35e`; sibling `adcf3b9` being reconciled on `b933b52` |
 | #48 | 使进程查询与停止可取消且不阻塞 daemon | **done** | `fab5692` (worktree `.worktrees/t48`) | `9e69c30`, merged as `3838cad` |
-| #49 | 让内部应用在 Slack 离线时启动和运行 | in progress | `d412adf` (worktree `.worktrees/t49`) | — |
+| #49 | 让内部应用在 Slack 离线时启动和运行 | **done** | `d412adf` (worktree `.worktrees/t49`) | `367bb2a`, merged as `b933b52` |
 | #50 | 按安装和目标范围恢复 Slack 操作 | pending | — | — |
 | #51 | 给 owner 提供分范围、可操作的故障诊断 | pending | — | — |
 | #52 | 统一 Linux 维护所用的宿主操作与路径事实 | **done** | `6395c75` (worktree `.worktrees/t52`) | `aac16f1`, merged as `fab5692` |
@@ -224,6 +224,7 @@ None yet.
 | #44 | `cd13f9a`, merged `9076ccb` | same isolated-tree method | 60 files / 479 tests, exit 0; the invite suite covers human invite, non-member, self-invite, non-team target, already-in-channel, refusal, timeout and query recovery |
 | #45 (final) | `b64a2e7` | `pnpm typecheck` + `pnpm check` in an isolated `git archive` copy | 61 files / 485 tests, exit 0; the revision is the branch tip |
 | #47 | `ad456b1`, merged `612f35e` | isolated-tree method on the merged tree | 62 files / 493 tests, exit 0 |
+| #49 | `367bb2a`, merged `b933b52` | isolated-tree method on the merged tree | 66 files / 507 tests, exit 0 |
 | #46 | `ae6f4fe` | worktree green (63 files / 498 tests) but the MERGE broke one of its own assertions | found and blocked before merging: the #45 reason filter rewrites `api key <value>` to `[redacted]`, so an exact-string expectation in `tests/runtime/resume.test.ts` was stale; sent back for a test-only fix |
 | #45 | `0e7b6f8` | `pnpm typecheck` + `pnpm check` in an isolated `git archive` copy | 61 files / 484 tests, exit 0; `src/runtime/fault.ts` is the one shared result (7 stages, the five required categories plus `aborted`, and a `retryDisposition`), and the protocol test spawns the compiled worker fixture through the production `WorkerClient` over IPC rather than an in-memory stub |
 | #44 (hardening) | `47b6227`, merged `d412adf` | re-applied on `0e7b6f8` after the sibling `c15f754` was rejected; 2 files; isolated-tree verification 61 files / 484 tests, exit 0 |
