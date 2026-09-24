@@ -225,18 +225,35 @@ export function recordSlackReadiness(store: Store, readiness: SlackReadiness): v
     )
     .run(slackReadinessKey, JSON.stringify(readiness));
 }
-/** Read the persisted readiness; an unreadable record reports nothing instead of failing a view. */
-export function readSlackReadiness(source: { db: Database.Database }): SlackReadiness | null {
+/**
+ * What the persisted readiness source states: nothing was ever published, the published record
+ * cannot be read, or a readable record. A diagnostic that reports readiness needs the difference,
+ * because "this installation has no readiness yet" and "the readiness record is broken" are
+ * different facts with different next actions.
+ */
+export type SlackReadinessRecord =
+  { state: "absent" } | { state: "unreadable" } | { state: "read"; readiness: SlackReadiness };
+/** Read the persisted readiness record without deciding what an unreadable one means. */
+export function readSlackReadinessRecord(source: { db: Database.Database }): SlackReadinessRecord {
   let raw: { value: string } | undefined;
   try {
     raw = source.db.prepare("SELECT value FROM runtime_meta WHERE key=?").get(slackReadinessKey) as
       { value: string } | undefined;
   } catch {
-    return null;
+    return { state: "unreadable" };
   }
-  if (!raw) return null;
+  if (!raw) return { state: "absent" };
+  const readiness = parseSlackReadiness(raw.value);
+  return readiness ? { state: "read", readiness } : { state: "unreadable" };
+}
+/** Read the persisted readiness; an unreadable record reports nothing instead of failing a view. */
+export function readSlackReadiness(source: { db: Database.Database }): SlackReadiness | null {
+  const record = readSlackReadinessRecord(source);
+  return record.state === "read" ? record.readiness : null;
+}
+function parseSlackReadiness(value: string): SlackReadiness | null {
   try {
-    const parsed = JSON.parse(raw.value) as SlackReadiness;
+    const parsed = JSON.parse(value) as SlackReadiness;
     if (
       !parsed ||
       typeof parsed.updatedAt !== "number" ||

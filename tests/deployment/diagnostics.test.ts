@@ -1,4 +1,5 @@
 import net from "node:net";
+import Database from "better-sqlite3";
 import { localApplication } from "../../src/local/application.js";
 import { Store } from "../../src/storage/store.js";
 import { daemonConfigSchema } from "../../src/daemon/config.js";
@@ -45,6 +46,42 @@ afterEach(() => {
 });
 const clear: RecoveryState = { restore: null, invalid: false };
 const secret = "xoxb-SUPER_SECRET /tmp/private-body tool arguments";
+/** One deployment holding an Agent that recorded a transient failure and a Slack wait. */
+function seededDeployment(): string {
+  const dir = temp(),
+    data = join(dir, "data");
+  mkdirSync(join(data, "state"), { recursive: true });
+  const store = new Store(join(data, "state", "mate.sqlite"));
+  localApplication(store, daemonConfigSchema.parse(daemonFixture(data)).mate);
+  store.register("research", "v1", []);
+  // A real failed attempt, so the fault this view reports is the one the hold belongs to.
+  store.enqueue("research", "seeded", { kind: "synthetic" });
+  const token = store.beginRun("research", Date.now(), false)!;
+  store.finish(token, "provider rate limited", "model_failure", {
+    resume: { kind: "retry", attempt: 1, nextAt: 500, reason: "provider rate limited" },
+  });
+  store.audit("run_failure", {
+    agentId: "research",
+    runId: token.id,
+    fault: { stage: "model", category: "transient_model", reason: "provider rate limited" },
+    resume: "retry",
+  });
+  recordSlackReadiness(store, {
+    updatedAt: 5,
+    installations: [
+      {
+        agentId: "research",
+        state: "waiting",
+        reason: "connection_unavailable",
+        nextAttemptAt: 99,
+        attempts: 2,
+        changedAt: 5,
+      },
+    ],
+  });
+  store.close();
+  return data;
+}
 function status(): OperationsStatus {
   return {
     at: 1,
@@ -77,6 +114,13 @@ function status(): OperationsStatus {
     uncertainOutputs: { items: [], atLeast: 0, truncated: false },
     heldDrafts: { items: [], atLeast: 0, truncated: false },
     dueReminders: { items: [], atLeast: 0, truncated: false },
+    diagnosis: {
+      at: 1,
+      sources: { daemon: "read", slack: "read", agents: "read", execution: "read" },
+      daemon: "active",
+      slack: null,
+      conditions: [],
+    },
   };
 }
 it("projects only operational counts, fixed events and recovery states, never arbitrary identifiers or bodies", () => {
@@ -243,6 +287,120 @@ it("reports the daemon service state and the Slack readiness of each installatio
     ],
   });
 });
+it("keeps each diagnostic source's result when another source fails", () => {
+  // One deployment whose owner status read fails while its Slack record is intact.
+  const statusData = seededDeployment();
+  const broken = new Database(join(statusData, "state", "mate.sqlite"));
+  // The format entry refuses to open damaged data, so this injection writes around it on purpose.
+  broken.exec("DROP TABLE outbox");
+  broken.close();
+  const brokenConfig = daemonConfigSchema.parse(daemonFixture(statusData)),
+    snapshot = readOperationsSnapshot(brokenConfig, "status", "active");
+  expect(snapshot.available).toBe(false);
+  expect(snapshot.status).toBeNull();
+  expect(snapshot.slack?.installations[0]).toMatchObject({
+    agentId: "research",
+    state: "waiting",
+  });
+  expect(snapshot.diagnosis.daemon).toBe("active");
+  expect(snapshot.diagnosis.sources).toEqual({
+    daemon: "read",
+    slack: "read",
+    agents: "unavailable",
+    execution: "unavailable",
+  });
+
+  // The reverse: an unreadable Slack readiness record leaves the Agent's wait exactly as it is.
+  const slackData = seededDeployment();
+  const healthy = new Database(join(slackData, "state", "mate.sqlite"));
+  healthy
+    .prepare("UPDATE runtime_meta SET value=? WHERE key='slack_readiness_v1'")
+    .run("not a readiness record");
+  healthy.close();
+  const slackConfig = daemonConfigSchema.parse(daemonFixture(slackData)),
+    other = readOperationsSnapshot(slackConfig, "status", "active");
+  expect(other.slack).toBeNull();
+  expect(other.diagnosis.sources).toEqual({
+    daemon: "read",
+    slack: "unavailable",
+    agents: "read",
+    execution: "read",
+  });
+  expect(other.diagnosis.conditions).toContainEqual({
+    source: "agents",
+    scope: { kind: "agent", agentId: "research" },
+    stage: "model",
+    need: "automatic_wait",
+    reason: "provider rate limited",
+    action: null,
+    nextAttemptAt: 500,
+  });
+});
+
+it("reports a daemon that is not running as its own scoped condition", () => {
+  const dir = temp(),
+    data = join(dir, "data");
+  mkdirSync(join(data, "state"), { recursive: true });
+  new Store(join(data, "state", "mate.sqlite")).close();
+  const config = daemonConfigSchema.parse(daemonFixture(data)),
+    stopped = readOperationsSnapshot(config, "status", "inactive"),
+    starting = readOperationsSnapshot(config, "status", "activating");
+  expect(stopped.diagnosis.conditions).toContainEqual({
+    source: "daemon",
+    scope: { kind: "daemon" },
+    stage: null,
+    need: "configuration_fix",
+    reason: "mate.service is inactive",
+    action: "Start mate.service and check its status.",
+    nextAttemptAt: null,
+  });
+  expect(starting.diagnosis.conditions).toContainEqual({
+    source: "daemon",
+    scope: { kind: "daemon" },
+    stage: null,
+    need: "automatic_wait",
+    reason: "mate.service is activating",
+    action: null,
+    nextAttemptAt: null,
+  });
+  expect(diagnosticStatus(stopped.status, "inactive", clear).health).toBe("service-not-active");
+});
+
+it("counts what needs a person apart from what the runtime waits out on its own", () => {
+  const s = status();
+  s.diagnosis.conditions = [
+    {
+      source: "execution",
+      scope: { kind: "action", agentId: "alice", actionId: secret, runId: secret },
+      stage: "execution",
+      need: "verify_unknown_effect",
+      reason: secret,
+      action: secret,
+      nextAttemptAt: null,
+    },
+    {
+      source: "slack",
+      scope: { kind: "slack_installation", agentId: "bob" },
+      stage: null,
+      need: "automatic_wait",
+      reason: secret,
+      action: null,
+      nextAttemptAt: 5,
+    },
+  ];
+  const output = diagnosticStatus(s, "active", clear);
+  expect(output.health).toBe("attention-required");
+  expect(output.needs).toEqual({
+    automatic_wait: 1,
+    configuration_fix: 0,
+    verify_unknown_effect: 1,
+    failure_review: 0,
+    awaitingPerson: 1,
+  });
+  // The offline projection stays an allowlist: a condition's scope, reason and action never enter it.
+  expect(JSON.stringify(output)).not.toContain(secret);
+});
+
 it("does not connect to Slack/provider when collecting diagnostics without credentials", async () => {
   const connect = vi.spyOn(net.Socket.prototype, "connect").mockImplementation(() => {
     throw new Error("Unexpected socket connection");
