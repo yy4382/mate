@@ -181,6 +181,192 @@ it("local pages have exact nonrepeating cursors bound to actor, target and query
   expect(around.messages.map((item) => item.id)).toEqual(["message-2", "message-3", "message-4"]);
 });
 
+it("around pages away from the anchor one bounded direction at a time, even when a page is empty", () => {
+  const f = setup(),
+    room = f.messages.references.createConversation("channel", "internal", "around-room").id;
+  f.messages.membership("research", room, true);
+  for (let n = 1; n <= 5; n++) f.messages.recordHistory(message(room, n), []);
+  const ids = (page: { messages: MessageDTO[] }) => page.messages.map((item) => item.id);
+  const around = (input: Record<string, unknown>) =>
+    f.history.around(f.run, {
+      messageId: "message-3",
+      limit: 1,
+      direction: "before",
+      ...input,
+    }) as {
+      messages: MessageDTO[];
+      nextCursor: string | null;
+    };
+  expect(ids(f.history.around(f.run, { messageId: "message-3", before: 1, after: 1 }))).toEqual([
+    "message-2",
+    "message-3",
+    "message-4",
+  ]);
+  // The anchor names the position, so one step per call still pages the whole direction.
+  const nearest = around({});
+  expect(ids(nearest)).toEqual(["message-2"]);
+  const older = around({ cursor: nearest.nextCursor! });
+  expect(ids(older)).toEqual(["message-1"]);
+  expect(older.nextCursor).toBeNull();
+  const after = f.history.around(f.run, { messageId: "message-3", direction: "after", limit: 1 });
+  expect(ids(after)).toEqual(["message-4"]);
+  const later = f.history.around(f.run, {
+    messageId: "message-3",
+    direction: "after",
+    limit: 2,
+    cursor: after.nextCursor!,
+  });
+  expect(ids(later)).toEqual(["message-5"]);
+  expect(later.nextCursor).toBeNull();
+});
+
+it("the two-sided around read reports which sides have more and only continues as a directed walk", () => {
+  const f = setup(),
+    room = f.messages.references.createConversation("channel", "internal", "around-two-sided").id;
+  f.messages.membership("research", room, true);
+  for (let n = 1; n <= 5; n++) f.messages.recordHistory(message(room, n), []);
+  const opening = f.history.around(f.run, { messageId: "message-3", before: 1, after: 1 }) as {
+    messages: MessageDTO[];
+    nextCursor: string | null;
+    coverage: Record<string, unknown>;
+  };
+  expect(opening.messages.map((item) => item.id)).toEqual(["message-2", "message-3", "message-4"]);
+  expect(opening.nextCursor).toBeNull();
+  // The nearest read is not a page of one walk, so it names the truncation instead of a cursor.
+  expect(opening.coverage).toMatchObject({ beforeTruncated: true, afterTruncated: true });
+  const walkFrom = (input: Record<string, unknown>) =>
+    f.history.around(f.run, {
+      messageId: "message-3",
+      direction: "before",
+      limit: 1,
+      ...input,
+    }) as { messages: MessageDTO[] };
+  expect(walkFrom({}).messages.map((item) => item.id)).toEqual(["message-2"]);
+  // The same anchor and direction continue the walk from the page the directed read returned.
+  const nearest = f.history.around(f.run, {
+    messageId: "message-3",
+    direction: "before",
+    limit: 1,
+  }) as { nextCursor: string; messages: MessageDTO[] };
+  expect(
+    (
+      f.history.around(f.run, {
+        messageId: "message-3",
+        direction: "before",
+        limit: 1,
+        cursor: nearest.nextCursor,
+      }) as { messages: MessageDTO[] }
+    ).messages.map((item) => item.id),
+  ).toEqual(["message-1"]);
+});
+
+it("around refuses a continuation that does not say which way it walks", () => {
+  const f = setup(),
+    room = f.messages.references.createConversation("channel", "internal", "around-cursor").id;
+  f.messages.membership("research", room, true);
+  for (let n = 1; n <= 5; n++) f.messages.recordHistory(message(room, n), []);
+  const older = f.history.around(f.run, {
+    messageId: "message-3",
+    direction: "before",
+    limit: 1,
+  }) as { nextCursor: string };
+  // The cursor itself is opaque; only the directed call can say where it continues.
+  expect(() =>
+    f.history.around(f.run, { messageId: "message-3", limit: 1, cursor: older.nextCursor }),
+  ).toThrow("needs its direction");
+  expect(() =>
+    f.history.around(f.run, {
+      messageId: "message-3",
+      direction: "after",
+      limit: 1,
+      cursor: older.nextCursor,
+    }),
+  ).toThrow("another anchor, direction or query");
+});
+
+it("around binds a continuation to its anchor, direction and query instead of reusing another page", () => {
+  const f = setup(),
+    room = f.messages.references.createConversation("channel", "internal", "around-binding").id;
+  f.messages.membership("research", room, true);
+  for (let n = 1; n <= 5; n++) f.messages.recordHistory(message(room, n), []);
+  const later = f.history.around(f.run, { messageId: "message-3", direction: "after", limit: 1 });
+  expect(() =>
+    f.history.around(f.run, {
+      messageId: "message-3",
+      direction: "before",
+      limit: 1,
+      cursor: later.nextCursor!,
+    }),
+  ).toThrow("another anchor, direction or query");
+  expect(() =>
+    f.history.around(f.run, {
+      messageId: "message-4",
+      direction: "after",
+      limit: 1,
+      cursor: later.nextCursor!,
+    }),
+  ).toThrow("another anchor, direction or query");
+  expect(() =>
+    f.history.around(f.run, {
+      messageId: "message-3",
+      direction: "after",
+      limit: 1,
+      cursor: (
+        f.history.page(f.run, { target: { conversationId: room }, limit: 1 }) as {
+          nextCursor: string;
+        }
+      ).nextCursor,
+    }),
+  ).toThrow("another anchor, direction or query");
+});
+
+it("an around walk past a deleted block keeps going instead of reading the same rows again", () => {
+  const f = setup(),
+    room = f.messages.references.createConversation("channel", "internal", "deleted-walk").id;
+  f.messages.membership("research", room, true);
+  // The only live row sits below 1000 rows that are no longer visible.
+  f.messages.recordHistory({ ...message(room, 1, "the live one") }, []);
+  f.messages.recordHistory({ ...message(room, 2), deleted: true }, []);
+  for (let n = 3; n <= 1003; n++)
+    f.messages.recordHistory({ ...message(room, n), deleted: true }, []);
+  f.messages.recordHistory({ ...message(room, 1004, "the anchor") }, []);
+  const walk = (input: Record<string, unknown>) =>
+    f.history.around(f.run, {
+      messageId: "message-1004",
+      direction: "before",
+      limit: 1,
+      ...input,
+    }) as { messages: MessageDTO[]; nextCursor: string | null; coverage: { scanned: number } };
+  const empty = walk({});
+  expect(empty.messages).toEqual([]);
+  expect(empty.coverage.scanned).toBe(1000);
+  expect(empty.nextCursor).toBeTruthy();
+  // The continuation advances past the rows the empty page examined instead of rereading them.
+  const live = walk({ cursor: empty.nextCursor! });
+  expect(live.messages.map((item) => item.id)).toEqual(["message-1"]);
+  expect(live.nextCursor).toBeNull();
+});
+
+it("a page that ends exactly on the last row reports no continuation, while a truncated one does", () => {
+  const f = setup(),
+    room = f.messages.references.createConversation("channel", "internal", "exact-fit").id;
+  f.messages.membership("research", room, true);
+  for (let n = 1; n <= 3; n++) f.messages.recordHistory(message(room, n), []);
+  const exact = f.history.page(f.run, { target: { conversationId: room }, limit: 3 });
+  expect(exact.messages.map((item) => item.id)).toEqual(["message-3", "message-2", "message-1"]);
+  expect(exact.coverage).toMatchObject({ exhausted: true, scanLimited: false });
+  expect(exact.nextCursor).toBeNull();
+  f.messages.recordHistory(message(room, 4), []);
+  const truncated = f.history.page(f.run, { target: { conversationId: room }, limit: 3 });
+  expect(truncated.messages.map((item) => item.id)).toEqual([
+    "message-4",
+    "message-3",
+    "message-2",
+  ]);
+  expect(truncated.coverage).toMatchObject({ exhausted: false });
+  expect(truncated.nextCursor).toBeTruthy();
+});
+
 it("global search walks multiple conversations in stable order without repeating a cursor boundary", () => {
   const f = setup(),
     first = f.messages.references.createConversation("channel", "internal", "a-room").id,
@@ -209,6 +395,7 @@ it("bounded search exposes a continuation even when the scanned batch has no mat
     query: "only oldest matches",
     limit: 1,
   });
+  // An empty page is not the end: the match is older than the scanned batch.
   expect(first.messages).toEqual([]);
   expect(first.nextCursor).toBeTruthy();
   expect(first.coverage).toMatchObject({ scanLimited: true, exhausted: false, scanned: 1000 });
@@ -410,8 +597,17 @@ it("one installation cannot advance another installation visible revision or fre
     deleted: false,
   });
   expect(messages.read("peer", target)).toHaveLength(1);
-  expect(messages.search("peer", "revision two").map((item) => item.id)).toEqual([first.id]);
-  expect(messages.recent("peer", external).map((item) => item.id)).toEqual([first.id]);
+  const peerHistory = new ConversationHistory(messages);
+  expect(
+    peerHistory
+      .search(peerRun, { target: { conversationId: external }, query: "revision two", limit: 20 })
+      .messages.map((item) => item.id),
+  ).toEqual([first.id]);
+  expect(
+    peerHistory
+      .page(peerRun, { target: { conversationId: external }, limit: 20 })
+      .messages.map((item) => item.id),
+  ).toEqual([first.id]);
 });
 
 it("revocation or run fencing while a source is in flight prevents any returned content from committing", async () => {
@@ -439,4 +635,165 @@ it("revocation or run fencing while a source is in flight prevents any returned 
   });
   await expect(pending).rejects.toThrow("access");
   expect(f.messages.records.message("message-31")).toBeUndefined();
+});
+
+it("withdrawn permission is applied to the next page, search, around and fetch instead of a cached grant", async () => {
+  const source: HistorySource = {
+    fetch: async () => ({
+      messages: [message("CTEST", 40)],
+      nextCursor: null,
+      exhausted: true,
+      scope: "channel_top_level",
+      gaps: [],
+      available: true,
+    }),
+  };
+  const f = setup(source),
+    room = f.messages.references.createConversation("channel", "internal", "revoked-room").id;
+  f.messages.membership("research", room, true);
+  for (let n = 1; n <= 3; n++) f.messages.recordHistory(message(room, n), []);
+  f.messages.recordHistory(message(f.external, 4), ["research"]);
+  const opened = f.history.page(f.run, { target: { conversationId: room }, limit: 1 });
+  expect(opened.messages.map((item) => item.id)).toEqual(["message-3"]);
+  const openedAround = f.history.around(f.run, { messageId: "message-3", before: 1, after: 1 });
+  expect(openedAround.messages.map((item) => item.id)).toEqual(["message-2", "message-3"]);
+  f.messages.membership("research", room, false);
+  expect(() =>
+    f.history.page(f.run, {
+      target: { conversationId: room },
+      limit: 1,
+      cursor: opened.nextCursor!,
+    }),
+  ).toThrow("denied");
+  expect(() =>
+    f.history.search(f.run, { target: { conversationId: room }, query: "message", limit: 1 }),
+  ).toThrow("denied");
+  expect(() =>
+    f.history.around(f.run, { messageId: "message-3", direction: "before", limit: 1 }),
+  ).toThrow("denied");
+  f.messages.membership("research", f.external, false);
+  await expect(
+    f.history.fetch(
+      f.run,
+      { target: { conversationId: f.external }, limit: 20 },
+      new AbortController().signal,
+    ),
+  ).rejects.toThrow("denied");
+});
+
+it("a continuation reads current visibility instead of the grant the page was opened under", () => {
+  const f = setup();
+  for (const n of [1, 2, 3, 4, 5, 6])
+    f.messages.recordHistory(message(f.external, n), ["research"]);
+  const opening = f.history.page(f.run, { target: { conversationId: f.external }, limit: 2 });
+  expect(opening.messages.map((item) => item.id)).toEqual(["message-6", "message-5"]);
+  f.store.db
+    .prepare("DELETE FROM message_visibility WHERE agent_id='research' AND key='message-3'")
+    .run();
+  const next = f.history.page(f.run, {
+    target: { conversationId: f.external },
+    limit: 2,
+    cursor: opening.nextCursor!,
+  });
+  expect(next.messages.map((item) => item.id)).toEqual(["message-4", "message-2"]);
+  const last = f.history.page(f.run, {
+    target: { conversationId: f.external },
+    limit: 2,
+    cursor: next.nextCursor!,
+  });
+  expect(last.messages.map((item) => item.id)).toEqual(["message-1"]);
+  expect(last.nextCursor).toBeNull();
+});
+
+it("a quiet history read is live, marks nothing presented and produces no freshness credential", () => {
+  const f = setup(),
+    room = f.messages.references.createConversation("channel", "internal", "quiet-read").id,
+    output = new CanonicalOutput(f.messages, {
+      post: async () => {
+        throw new Error("offline");
+      },
+      pendingInput: () => false,
+      classify: () => ({ kind: "unknown" }),
+    }),
+    collaboration = new Collaboration(f.store, f.messages, output, configFixture);
+  f.messages.membership("research", room, true);
+  for (let n = 1; n <= 3; n++) f.messages.recordHistory(message(room, n), []);
+  const counted = (table: string) =>
+    (f.store.db.prepare(`SELECT count(*) n FROM ${table}`).get() as { n: number }).n;
+  const deliveries = counted("deliveries"),
+    observations = counted("message_observations"),
+    page = f.history.page(f.run, { target: { conversationId: room }, limit: 2 }) as Record<
+      string,
+      unknown
+    >;
+  expect(page).not.toHaveProperty("viewToken");
+  expect(page).not.toHaveProperty("revision");
+  const journaled: AgentMessage = {
+    role: "toolResult",
+    toolCallId: "page",
+    toolName: "mate",
+    content: [{ type: "text", text: JSON.stringify(page) }],
+    isError: false,
+    timestamp: 0,
+  };
+  // The journal reports every tool result; a page without a viewToken presents nothing.
+  collaboration.attention.presented(f.run, journaled);
+  expect(f.store.db.prepare("SELECT count(*) n FROM attention_presented").get()).toEqual({ n: 0 });
+  expect(f.store.db.prepare("SELECT count(*) n FROM attention_seen").get()).toEqual({ n: 0 });
+  expect(counted("deliveries")).toBe(deliveries);
+  expect(counted("message_observations")).toBe(observations);
+  expect(collaboration.attention.peek("research")).toEqual([]);
+  // A later query sees the newest message, so the read never froze the earlier result set.
+  f.messages.recordHistory(message(room, 4, "arrived later"), []);
+  expect(
+    f.history
+      .page(f.run, { target: { conversationId: room }, limit: 1 })
+      .messages.map((item) => item.text),
+  ).toEqual(["arrived later"]);
+});
+
+it("a quiet history read that discovers a change invalidates an older credential without advancing read state", () => {
+  const f = setup(),
+    output = new CanonicalOutput(f.messages, {
+      post: async () => {
+        throw new Error("offline");
+      },
+      pendingInput: () => false,
+      classify: () => ({ kind: "unknown" }),
+    }),
+    collaboration = new Collaboration(f.store, f.messages, output, configFixture),
+    first = message(f.external, 10, "the original conclusion");
+  f.messages.recordHistory(first, ["research"]);
+  const target = { conversationId: f.external, threadId: first.id },
+    view = collaboration.attention.read(f.run, target) as { viewToken: string };
+  collaboration.attention.presented(f.run, {
+    role: "toolResult",
+    toolCallId: "attention",
+    toolName: "mate",
+    content: [{ type: "text", text: JSON.stringify(view) }],
+    isError: false,
+    timestamp: 0,
+  });
+  expect(collaboration.attention.valid(f.run, target, view.viewToken)).toBe(true);
+  expect(
+    f.store.db
+      .prepare("SELECT revision FROM attention_seen WHERE agent_id=? AND key=?")
+      .get("research", first.id),
+  ).toEqual({ revision: "10" });
+  const counted = (table: string) =>
+    (f.store.db.prepare(`SELECT count(*) n FROM ${table}`).get() as { n: number }).n;
+  const deliveries = counted("deliveries"),
+    observations = counted("message_observations");
+  // The quiet read discovers the edit, so the older credential no longer describes the room.
+  f.messages.recordHistory({ ...first, revision: "11", text: "quietly revised" }, ["research"]);
+  f.history.page(f.run, { target: { conversationId: f.external }, limit: 20 });
+  expect(collaboration.attention.valid(f.run, target, view.viewToken)).toBe(false);
+  expect(
+    f.store.db
+      .prepare("SELECT revision FROM attention_seen WHERE agent_id=? AND key=?")
+      .get("research", first.id),
+  ).toEqual({ revision: "10" });
+  expect(counted("deliveries")).toBe(deliveries);
+  expect(counted("message_observations")).toBe(observations);
+  expect(collaboration.attention.peek("research")).toEqual([]);
 });
