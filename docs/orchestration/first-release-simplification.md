@@ -67,10 +67,10 @@ only when every blocker is committed on the branch.
 | #43 | 将会话发现收敛到现有成员空间 | **done** | `ddd86b4` (worktree `.worktrees/t43`) | `1c206f4`, merged as `6a25110` |
 | #44 | 让频道内 Agent 邀请另一名团队 Agent | **done** | `02dafa9` (worktree `.worktrees/t44`) | `cd13f9a`, merged as `9076ccb` |
 | #45 | 在工作进程协议中保留故障类别与阶段 | **done** | `9c7e2e3` (main tree) | `b64a2e7` (final revision; an earlier `0e7b6f8` re-commit sits in history) |
-| #46 | 对暂时模型故障持久退避并自动继续 | **done** | `16f1bf9` (worktree `.worktrees/t46`) | `db305eb`, merged (one orchestrator-resolved conflict in `src/storage/store.ts`) |
+| #46 | 对暂时模型故障持久退避并自动继续 | **done** | `16f1bf9` (worktree `.worktrees/t46`) | `db305eb` merged as `d9c5f68` (one orchestrator-resolved conflict in `src/storage/store.ts`); review fix `a3d5b9b` cherry-picked as `635d859` |
 | #47 | 保持正常让位后的持久继续与恢复输入 | **done** | `d412adf` (worktree `.worktrees/t47`) | `ad456b1` merged as `612f35e`; reconciliation `4f95df6` merged as `16f1bf9`; follow-up `9eb40e0` cherry-picked as `5172463` |
 | #48 | 使进程查询与停止可取消且不阻塞 daemon | **done** | `fab5692` (worktree `.worktrees/t48`) | `9e69c30`, merged as `3838cad` |
-| #49 | 让内部应用在 Slack 离线时启动和运行 | **done** | `d412adf` (worktree `.worktrees/t49`) | `367bb2a`, merged as `b933b52` |
+| #49 | 让内部应用在 Slack 离线时启动和运行 | **done** | `d412adf` (worktree `.worktrees/t49`) | `367bb2a` merged as `b933b52`; review fix `3451ce5` cherry-picked as `1f4e6c1` |
 | #50 | 按安装和目标范围恢复 Slack 操作 | in progress | `16f1bf9` (worktree `.worktrees/t50`) | — |
 | #51 | 给 owner 提供分范围、可操作的故障诊断 | pending | — | — |
 | #52 | 统一 Linux 维护所用的宿主操作与路径事实 | **done** | `6395c75` (worktree `.worktrees/t52`) | `aac16f1`, merged as `fab5692` |
@@ -226,6 +226,8 @@ None yet.
 | #47 | `ad456b1`, merged `612f35e` | isolated-tree method on the merged tree | 62 files / 493 tests, exit 0 |
 | #49 | `367bb2a`, merged `b933b52` | isolated-tree method on the merged tree | 66 files / 507 tests, exit 0 |
 | #41 | `a2844d2`, merged `8782568` | isolated-tree method on the merged tree | 66 files / 517 tests, exit 0 |
+| #46 | `db305eb` + `a3d5b9b`, merged `d9c5f68` / cherry-picked `635d859` | isolated-tree method on the merged tree | 68 files / 541 tests, exit 0 after the orchestrator combined both sides of one `Store.finish` conflict (#46's `clearResume`-on-yield and `recordResume` plus #47's corrected `lastStopReason` query) |
+| main after cherry-picks | `635d859` | `pnpm typecheck` + `pnpm check` in an isolated archive | 68 files / 543 tests, exit 0 |
 | #47 (follow-up) | `9eb40e0`, cherry-picked as `5172463` | `pnpm typecheck` + `pnpm check` on the main tree with no other ticket mid-edit | 66 files / 519 tests, exit 0; the follow-up makes the yield-resumption wording reachable (it had been dead because `lastStopReason` never excluded the current run) |
 | #46 | `ae6f4fe` | worktree green (63 files / 498 tests) but the MERGE broke one of its own assertions | found and blocked before merging: the #45 reason filter rewrites `api key <value>` to `[redacted]`, so an exact-string expectation in `tests/runtime/resume.test.ts` was stale; sent back for a test-only fix |
 | #45 | `0e7b6f8` | `pnpm typecheck` + `pnpm check` in an isolated `git archive` copy | 61 files / 484 tests, exit 0; `src/runtime/fault.ts` is the one shared result (7 stages, the five required categories plus `aborted`, and a `retryDisposition`), and the protocol test spawns the compiled worker fixture through the production `WorkerClient` over IPC rather than an in-memory stub |
