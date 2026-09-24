@@ -2,7 +2,7 @@ import { z } from "zod";
 import { isAbsolute } from "node:path";
 const path = z.string().refine(isAbsolute, "Absolute path required");
 import { agentDefinitionSchema, agentIdSchema, secretReferenceSchema } from "../domain/agents.js";
-import { encode, hash, type Store } from "../storage/store.js";
+import { encode, type Store } from "../storage/store.js";
 import type { MateConfig } from "../config.js";
 
 const human = z.string().min(1).max(1000);
@@ -261,11 +261,6 @@ export function saveConfiguration(store: Store, config: DaemonConfig): void {
       "INSERT INTO runtime_meta VALUES('configuration',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
     )
     .run(encode(daemonConfigSchema.parse(config)));
-  store.db
-    .prepare(
-      "INSERT INTO runtime_meta VALUES('policy',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-    )
-    .run(hash(encode(config.runtime)));
 }
 
 /** Config identity is structural. Wire requests use a different, immutable byte hash. */
