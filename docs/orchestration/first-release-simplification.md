@@ -76,6 +76,23 @@ only when every blocker is committed on the branch.
 | #52 | 统一 Linux 维护所用的宿主操作与路径事实 | **done** | `6395c75` (worktree `.worktrees/t52`) | `aac16f1`, merged as `fab5692` |
 | #53 | 验证完整 Linux 安装、升级、备份与恢复 | pending | — | — |
 
+## Quota interruption and recovery
+
+The account's model quota was exhausted mid-flight and four implementer sessions stopped
+without a final report. Recovery was done by inventory rather than assumption:
+
+| Ticket | State at interruption | Recovery |
+|---|---|---|
+| #38 | commits `85bc876`, `8f9fbd7` forked from `1066f1c` | worktree reset to main `02dafa9`; original session resumed to re-apply as one commit |
+| #40 | commit `b4b85d6` forked from `e898228` | same |
+| #43 | its extra `31a38a2` duplicated content already merged as `6a25110` | nothing to redo; verified already an ancestor-equivalent |
+| #44 | nothing committed (agent died before its first commit) | same session resumed with the full ticket brief |
+
+Merge safety held throughout: the merge that was interrupted mid-conflict was aborted, and
+the branch tip was a committed, green merge, so no half-merged state survived. Lesson
+recorded: resuming a stopped implementer session is cheaper than re-implementing, and a
+ticket is not "done" until its commit is an ancestor of the branch tip.
+
 ## Findings escalated to the user
 
 None yet.
