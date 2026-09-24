@@ -342,6 +342,20 @@ it("refuses an occupied database without a readable recorded configuration", asy
   await expect(Daemon.create(withoutPeer, log)).rejects.toThrow(
     /recorded in this data directory is not readable JSON/,
   );
+  // The same refusal applies when a readable configuration record is present and a
+  // database row belongs to no configured identity at all.
+  const recorded = new Store(path);
+  recorded.db
+    .prepare("UPDATE runtime_meta SET value=? WHERE key='configuration'")
+    .run(JSON.stringify(withoutPeer));
+  recorded.db
+    .prepare("INSERT INTO sessions(id,agent_id,config_version) VALUES('ghost-session','peer','v1')")
+    .run();
+  recorded.db.prepare("UPDATE agents SET session_id='ghost-session' WHERE id='peer'").run();
+  recorded.close();
+  await expect(Daemon.create(withoutPeer, log)).rejects.toThrow(
+    /holds Agents that are not in the configuration \(peer\)/,
+  );
 });
 it("refuses a configuration that removes an existing Agent identity", async () => {
   credentials();
