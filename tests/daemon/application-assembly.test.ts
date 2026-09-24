@@ -208,10 +208,15 @@ it("stops intake, stops advancing work, collects workers, records the unconfirme
       },
     },
   });
-  const closeWorkers = daemon.supervisor.close.bind(daemon.supervisor);
-  vi.spyOn(daemon.supervisor, "close").mockImplementation(() => {
+  const stopWork = daemon.supervisor.stopAdvancing.bind(daemon.supervisor);
+  vi.spyOn(daemon.supervisor, "stopAdvancing").mockImplementation(() => {
     order.push("work.stop");
-    closeWorkers();
+    stopWork();
+  });
+  const collectWorkers = daemon.supervisor.collectWorkers.bind(daemon.supervisor);
+  vi.spyOn(daemon.supervisor, "collectWorkers").mockImplementation(() => {
+    order.push("work.collect");
+    collectWorkers();
   });
   vi.spyOn(daemon.supervisor, "drain").mockImplementation(async () => {
     order.push("work.drain");
@@ -245,8 +250,9 @@ it("stops intake, stops advancing work, collects workers, records the unconfirme
   await daemon.close();
   sending.catch(() => {});
   expect(order).toEqual([
-    "work.stop",
     "intake.close",
+    "work.stop",
+    "work.collect",
     "work.drain",
     "effects.fence",
     "database.close",
@@ -355,7 +361,8 @@ it("closes the local entry through the same ordered shutdown without releasing t
   }
   const store = new Store(":memory:");
   cleanups.push(() => store.close());
-  let recovery = "";
+  let recovery = "",
+    collected = 0;
   const local = localApplication(
     store,
     {
@@ -372,7 +379,9 @@ it("closes the local entry through the same ordered shutdown without releasing t
               once: true,
             });
           }),
-        close() {},
+        close() {
+          collected++;
+        },
       }),
     },
   );
@@ -399,6 +408,7 @@ it("closes the local entry through the same ordered shutdown without releasing t
   expect(store.db.prepare("SELECT state FROM actions WHERE id='action-1'").get()).toEqual({
     state: "unknown",
   });
+  expect(collected).toBe(1);
   // The embedded entry owns no database: its caller keeps it open after the application closed.
   expect(store.db.open).toBe(true);
 });

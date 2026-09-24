@@ -1,5 +1,6 @@
 import { fixtureTarget, externalThread } from "../helpers/canonical-slack.js";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { deferred } from "../helpers/pi.js";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { Store } from "../../src/storage/store.js";
 import { configSchema } from "../../src/config.js";
@@ -82,27 +83,53 @@ function last(store: Store, agent: string) {
     throw new Error("No assistant result");
   return { session: row.session_id, data: JSON.parse(message.content[0].text) };
 }
-it("refuses to start a worker process after its workers were collected", async () => {
+it("never starts a worker process when shutdown arrives while a run is preparing", async () => {
   let created = 0;
-  const f = setup(() => {
-    created++;
-    return {
-      run: async () => ({
-        certain: true,
-        tokens: 1,
-        cost: 0,
-        continuation: false,
-        waiting: false,
-      }),
-      close() {},
-    };
-  });
-  f.collaboration.enqueue("research", f.work, "after-shutdown", {});
-  // Shutdown stops advancing work and collects workers before the database is released; a run
-  // prepared in that window must not spawn a new worker process.
-  f.supervisor.close();
-  expect(await f.supervisor.step("research")).toBe(false);
-  expect(created).toBe(0);
+  const f = setup(),
+    preparation = deferred(),
+    recovery = vi.fn(async () => {
+      entered();
+      await preparation.promise;
+      return "";
+    });
+  let entered!: () => void;
+  const preparing = new Promise<void>((resolve) => (entered = resolve));
+  const supervisor = new Supervisor(
+    f.collaboration,
+    f.router,
+    f.config,
+    () => {
+      created++;
+      return {
+        run: async () => ({
+          certain: true,
+          tokens: 1,
+          cost: 0,
+          continuation: false,
+          waiting: false,
+        }),
+        close() {},
+      };
+    },
+    recovery,
+  );
+  supervisor.register();
+  try {
+    f.collaboration.enqueue("research", f.work, "preparing", {});
+    const stepping = supervisor.step("research");
+    // Shutdown arrives inside the window between run preparation and worker creation.
+    await preparing;
+    supervisor.close();
+    preparation.resolve();
+    await stepping;
+    expect(recovery).toHaveBeenCalledOnce();
+    expect(created).toBe(0);
+    expect(f.store.db.prepare("SELECT state FROM runs WHERE agent_id='research'").get()).toEqual({
+      state: "failed",
+    });
+  } finally {
+    supervisor.close();
+  }
 });
 it("real worker processes retain cross-channel context and isolate Agent state and inherited secrets", async () => {
   process.env.SYNTHETIC_SLACK_SECRET = "must-not-inherit";

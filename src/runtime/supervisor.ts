@@ -27,6 +27,7 @@ export class Supervisor {
   private active = new Map<string, { run: RunToken; abort: AbortController }>();
   private queued = new Map<string, AbortController>();
   private idle = new Map<string, NodeJS.Timeout>();
+  private stopped = false;
   private closed = false;
   private readonly admission: Admission;
   private readonly workerIdleMs: number;
@@ -64,7 +65,8 @@ export class Supervisor {
       }
   }
   async step(agentId: string): Promise<boolean> {
-    if (this.closed || this.active.has(agentId) || this.queued.has(agentId)) return false;
+    if (this.stopped || this.closed || this.active.has(agentId) || this.queued.has(agentId))
+      return false;
     const waiting = new AbortController();
     this.queued.set(agentId, waiting);
     let release: () => void;
@@ -169,8 +171,9 @@ export class Supervisor {
         };
         const recovery = await buildRecovery();
         // Shutdown may have arrived while this run was preparing: never start a new worker
-        // process after the application has collected its workers.
-        if (this.closed) throw new Error("Supervisor closed while starting this run");
+        // process after the application stopped advancing work.
+        if (this.stopped || this.closed)
+          throw new Error("Supervisor stopped while starting this run");
         const agent = this.collaboration.agents.get(agentId);
         worker = this.workers.get(agentId) ?? this.factory(agent);
         this.workers.set(agentId, worker);
@@ -290,15 +293,24 @@ export class Supervisor {
   async drain(): Promise<void> {
     while (this.effects.size) await Promise.allSettled([...this.effects]);
   }
-  close(): void {
-    this.closed = true;
+  /** Stop advancing business state: refuse new runs, then abort the queued and active ones. */
+  stopAdvancing(): void {
+    this.stopped = true;
     for (const abort of this.queued.values()) abort.abort();
     this.queued.clear();
+    for (const { abort } of this.active.values()) abort.abort();
+  }
+  /** Collect local worker processes after their runs stopped advancing. */
+  collectWorkers(): void {
+    this.closed = true;
     for (const timer of this.idle.values()) clearTimeout(timer);
     this.idle.clear();
-    for (const { abort } of this.active.values()) abort.abort();
     for (const worker of this.workers.values()) worker.close();
     this.workers.clear();
+  }
+  close(): void {
+    this.stopAdvancing();
+    this.collectWorkers();
   }
   private clearIdle(agentId: string): void {
     const timer = this.idle.get(agentId);

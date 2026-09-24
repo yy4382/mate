@@ -72,7 +72,8 @@ export interface ApplicationPorts {
 }
 /** What an entry owns outside the application while it shuts down. */
 export interface ApplicationShutdown {
-  /** Stop this entry's input adapter: no new external input becomes internal work. */
+  /** Stop this entry's input adapter and its transport: no new external input becomes internal
+   * work, and a transport this application created is closed here. */
   stopIntake?: () => unknown;
   /** Work this entry started outside the application: replay loop, adapter flush, scheduling. */
   settleOwnedWork?: () => Promise<unknown>;
@@ -236,12 +237,13 @@ export class Application {
     this.local = input.local ? new LocalAdapter(this.collaboration, input.local.humans) : undefined;
   }
   /**
-   * Ordered shutdown, shared by every entry: stop advancing business state and collect the local
-   * worker processes, stop this entry's intake, settle the work the entry started, then record
-   * every external effect this process can no longer confirm as a persistent unknown result.
-   * Each step still runs when an earlier one failed; a step that never settles keeps the database
-   * open, because releasing it while owned work is still live would break the guarantee this
-   * order protects. The caller releases its own database and single-instance lock afterwards.
+   * Ordered shutdown, shared by every entry: stop intake, stop advancing business state, collect
+   * the local worker processes, settle the work the entry started, then record every external
+   * effect this process can no longer confirm as a persistent unknown result. Each step still
+   * runs when an earlier one failed; a step that never settles keeps the database open, because
+   * releasing it while owned work is still live would break the guarantee this order protects.
+   * The caller releases its own database and single-instance lock afterwards. The hooks of the
+   * first call are the ones that run; later calls return the same shutdown.
    */
   close(shutdown: ApplicationShutdown = {}): Promise<void> {
     return (this.closing ??= this.shutdown(shutdown));
@@ -255,8 +257,9 @@ export class Application {
         failures.push(error);
       }
     };
-    await settle(() => this.supervisor.close());
     await settle(() => shutdown.stopIntake?.());
+    await settle(() => this.supervisor.stopAdvancing());
+    await settle(() => this.supervisor.collectWorkers());
     await settle(() => shutdown.settleOwnedWork?.());
     await settle(() => this.supervisor.drain());
     await settle(() => this.fenceUnconfirmedEffects());
