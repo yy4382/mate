@@ -461,6 +461,25 @@ export class Store {
         throw new Error("Action is not executing");
     });
   }
+  /**
+   * Replaces the conservative unknown that a pause, cancel or recovery left on an action with the
+   * definite result the caller observed after that fencing. Only an unknown action can be refined,
+   * so a recorded effect is never overwritten by a later guess.
+   */
+  refineFencedAction(
+    id: string,
+    agentId: string,
+    state: "succeeded" | "failed" | "unknown",
+    receipt: unknown,
+  ): boolean {
+    return (
+      this.db
+        .prepare(
+          "UPDATE actions SET state=?,receipt=? WHERE id=? AND agent_id=? AND state='unknown'",
+        )
+        .run(state, encode(receipt), id, agentId).changes === 1
+    );
+  }
   queueOutput(agentId: string, id: string, request: unknown, routingTarget?: string): Effect {
     return this.atomic(() => {
       const body = encode(request),

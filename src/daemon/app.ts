@@ -115,7 +115,7 @@ export class Daemon {
           Object.entries(config.runtime.linuxUsers).map(([agentId, user]) => [agentId, user.uid]),
         ),
       );
-      for (const agent of config.mate.agents) processes.verifyQuota(agent.id);
+      for (const agent of config.mate.agents) await processes.verifyQuota(agent.id);
     }
     mkdirSync(data, { recursive: true, mode: 0o700 });
     if (lstatSync(data).isSymbolicLink() || within(realpathSync(projectRoot), realpathSync(data)))

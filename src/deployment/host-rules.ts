@@ -1,6 +1,10 @@
 import { dirname, join, resolve } from "node:path";
 import type { DaemonConfig } from "../daemon/config.js";
-import { LinuxProcessManager, agentSliceUnit } from "../execution/linux-processes.js";
+import {
+  LinuxProcessManager,
+  ProcessWaitInterruptedError,
+  agentSliceUnit,
+} from "../execution/linux-processes.js";
 import { pathExists, type HostOperations, type HostStat } from "./host.js";
 import { managedLayout } from "./systemd.js";
 
@@ -157,7 +161,18 @@ export function controlEntries(rules: HostRules): ManagedEntry[] {
 export function hostProcessManager(host: HostOperations, rules: HostRules): LinuxProcessManager {
   return new LinuxProcessManager(
     Object.fromEntries(rules.agents.map((agent) => [agent.identity.agentId, agent.identity.uid])),
-    (args) => host.run("/usr/bin/systemctl", args),
+    // Every systemctl wait is awaited, never blocked on. Maintenance runs as one-shot bounded host
+    // commands, so its wait is bounded by the host entry's own timeout; the daemon's process
+    // control uses the spawn-based runner that a run signal can cancel.
+    async (args, wait) => {
+      if (wait?.signal?.aborted)
+        throw new ProcessWaitInterruptedError(`systemctl ${args[0]} cancelled`);
+      return host.run(
+        "/usr/bin/systemctl",
+        args,
+        wait?.timeoutMs ? { timeoutMs: wait.timeoutMs } : undefined,
+      );
+    },
     (group) => host.processes.pids(group),
     (pid) => host.processes.uid(pid),
   );

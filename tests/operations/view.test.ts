@@ -38,7 +38,7 @@ function run(f: ReturnType<typeof setup>, actor: string, dedupe: string) {
   return token;
 }
 
-it("returns owner-only authoritative status without sensitive bodies and local controls reuse the DTO", () => {
+it("returns owner-only authoritative status without sensitive bodies and local controls reuse the DTO", async () => {
   vi.useFakeTimers();
   vi.setSystemTime(10000);
   const f = setup(),
@@ -110,7 +110,7 @@ it("returns owner-only authoritative status without sensitive bodies and local c
   const controls = new Controls(c, {} as any, {} as any);
   expect(controls.execute("owner", "status")).toEqual(status);
   expect(
-    new LocalConsole(f.input, controls).execute({
+    await new LocalConsole(f.input, controls).execute({
       id: "status",
       op: "control",
       human: "owner",

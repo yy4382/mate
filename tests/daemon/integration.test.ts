@@ -29,7 +29,7 @@ import { acquireLock } from "../../src/daemon/lock.js";
 import { backup } from "../../src/daemon/backup.js";
 import { nodeHostOperations } from "../../src/deployment/host.js";
 import { Research, publicIPv4 } from "../../src/daemon/research.js";
-import { Controls } from "../../src/daemon/control.js";
+import { Controls, PendingControl } from "../../src/daemon/control.js";
 import { SlackService, formatControlReply } from "../../src/slack/service.js";
 import { Directory } from "../../src/slack/directory.js";
 import { DurableReceiver } from "../../src/slack/receiver.js";
@@ -82,6 +82,10 @@ function setup() {
   const broker = new Broker(store, c, backend, { research: "/tmp", writer: "/tmp" });
   cleanups.push(() => store.close());
   return { store, c, ingress, broker, post, backend, mapper: messages.mapper };
+}
+async function ownerControl(controls: Controls, text: string): Promise<unknown> {
+  const outcome = controls.execute("UOWNER", text);
+  return outcome instanceof PendingControl ? await outcome.result : outcome;
 }
 it("keeps an inaccessible listed DM closed without blocking other Slack conversations", async () => {
   const { store, c, ingress, broker, mapper } = setup();
@@ -449,42 +453,222 @@ it("controls are owner-only, durable replay applies once, and unknown admin send
   await slack.flushAdmin();
   expect(ephemeral).toHaveBeenCalledOnce();
 });
-it("lets only the owner list and stop an Agent Linux scope through controls", () => {
+it("answers a slow owner systemd stop once, only after its result is known", async () => {
+  const { store, c, ingress, broker } = setup(),
+    unit = "mate-agent-1001-123e4567-e89b-42d3-a456-426614174000.scope";
+  for (const agent of c.config.agents) store.register(agent.id, "v1", []);
+  let release = () => {};
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const stop = vi.fn(async () => {
+    await blocked;
+    return { unit, stopped: true };
+  });
+  const controls = new Controls(c, {} as Supervisor, broker, undefined, undefined, {
+    list: async () => [],
+    stop,
+  } as unknown as LinuxProcessManager);
+  const transport = new WebSlackTransport(
+    store,
+    ingress.normalizer instanceof CanonicalSlackNormalizer
+      ? ingress.normalizer.mapper
+      : (() => {
+          throw new Error();
+        })(),
+    { research: "synthetic", writer: "synthetic" },
+  );
+  const slack = new SlackService(c, transport, ingress, controls);
+  store.ingest("AONE", "cmd-slow", {
+    command: "/team",
+    team_id: "TTEST",
+    user_id: "UOWNER",
+    channel_id: "CTEST",
+    text: `process-stop research ${unit}`,
+  });
+  slack.replay();
+  slack.replay();
+  expect(stop).toHaveBeenCalledOnce();
+  // The event is claimed with an honest interim reply the owner can read after a restart, and
+  // nothing is sent while the stop is still unconfirmed.
+  expect(store.db.prepare("SELECT state FROM admin_replies").get()).toEqual({
+    state: "computing",
+  });
+  expect(
+    (store.db.prepare("SELECT text FROM admin_replies").get() as { text: string }).text,
+  ).toContain("not confirmed");
+  expect(store.db.prepare("SELECT count(*) n FROM ingress WHERE normalized=0").get()).toEqual({
+    n: 0,
+  });
+  release();
+  await vi.waitFor(() =>
+    expect(store.db.prepare("SELECT state FROM admin_replies").get()).toEqual({ state: "pending" }),
+  );
+  expect(
+    (store.db.prepare("SELECT text FROM admin_replies").get() as { text: string }).text,
+  ).toContain("stopped");
+  expect(stop).toHaveBeenCalledOnce();
+});
+it("answers a slow owner systemd list once without re-reading it on every replay", async () => {
+  const { store, c, ingress, broker } = setup(),
+    unit = "mate-agent-1001-123e4567-e89b-42d3-a456-426614174000.scope";
+  for (const agent of c.config.agents) store.register(agent.id, "v1", []);
+  let release = () => {};
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const list = vi.fn(async () => {
+    await blocked;
+    return [{ unit, pids: [4101] }];
+  });
+  const controls = new Controls(c, {} as Supervisor, broker, undefined, undefined, {
+    list,
+    stop: async () => ({ unit, stopped: true }),
+  } as unknown as LinuxProcessManager);
+  const transport = new WebSlackTransport(
+    store,
+    ingress.normalizer instanceof CanonicalSlackNormalizer
+      ? ingress.normalizer.mapper
+      : (() => {
+          throw new Error();
+        })(),
+    { research: "synthetic", writer: "synthetic" },
+  );
+  const slack = new SlackService(c, transport, ingress, controls);
+  store.ingest("AONE", "cmd-read", {
+    command: "/team",
+    team_id: "TTEST",
+    user_id: "UOWNER",
+    channel_id: "CTEST",
+    text: "processes research",
+  });
+  slack.replay();
+  slack.replay();
+  expect(list).toHaveBeenCalledOnce();
+  expect(store.db.prepare("SELECT state FROM admin_replies").get()).toEqual({
+    state: "computing",
+  });
+  release();
+  await vi.waitFor(() =>
+    expect(store.db.prepare("SELECT state FROM admin_replies").get()).toEqual({ state: "pending" }),
+  );
+  expect(
+    (store.db.prepare("SELECT text FROM admin_replies").get() as { text: string }).text,
+  ).toContain("4101");
+  expect(list).toHaveBeenCalledOnce();
+});
+it("republishes an unconfirmed owner stop reply after a restart instead of losing the command", async () => {
+  const { store, c, ingress, broker } = setup(),
+    unit = "mate-agent-1001-123e4567-e89b-42d3-a456-426614174000.scope";
+  for (const agent of c.config.agents) store.register(agent.id, "v1", []);
+  const blocked = new Promise<void>(() => {});
+  const stop = vi.fn(async () => {
+    await blocked;
+    return { unit, stopped: true };
+  });
+  const controls = new Controls(c, {} as Supervisor, broker, undefined, undefined, {
+    list: async () => [],
+    stop,
+  } as unknown as LinuxProcessManager);
+  const transport = new WebSlackTransport(
+    store,
+    ingress.normalizer instanceof CanonicalSlackNormalizer
+      ? ingress.normalizer.mapper
+      : (() => {
+          throw new Error();
+        })(),
+    { research: "synthetic", writer: "synthetic" },
+  );
+  const slack = new SlackService(c, transport, ingress, controls);
+  store.ingest("AONE", "cmd-restart", {
+    command: "/team",
+    team_id: "TTEST",
+    user_id: "UOWNER",
+    channel_id: "CTEST",
+    text: `process-stop research ${unit}`,
+  });
+  slack.replay();
+  expect(store.db.prepare("SELECT state FROM admin_replies").get()).toEqual({
+    state: "computing",
+  });
+  // A daemon restart during the wait publishes the unconfirmed result and never replays the stop.
+  const restarted = new SlackService(c, transport, ingress, controls);
+  restarted.bootstrapRecovery();
+  expect(store.db.prepare("SELECT state FROM admin_replies").get()).toEqual({ state: "pending" });
+  expect(
+    (store.db.prepare("SELECT text FROM admin_replies").get() as { text: string }).text,
+  ).toContain("not confirmed");
+  restarted.replay();
+  expect(stop).toHaveBeenCalledOnce();
+  expect(store.db.prepare("SELECT count(*) n FROM ingress WHERE normalized=0").get()).toEqual({
+    n: 0,
+  });
+});
+it("lets only the owner list and stop an Agent Linux scope through controls", async () => {
   const { c, broker } = setup(),
     unit = "mate-agent-1001-123e4567-e89b-42d3-a456-426614174000.scope";
-  const list = vi.fn(() => [{ unit, pids: [4101] }]),
-    stop = vi.fn(() => ({ unit, stopped: true }));
+  const list = vi.fn(async () => [{ unit, pids: [4101] }]),
+    stop = vi.fn(async () => ({ unit, stopped: true }));
   const controls = new Controls(c, {} as Supervisor, broker, undefined, undefined, {
     list,
     stop,
   } as unknown as LinuxProcessManager);
   expect(() => controls.execute("UONE", "processes research")).toThrow("Owner only");
-  expect(controls.execute("UOWNER", "processes research")).toEqual([{ unit, pids: [4101] }]);
-  expect(controls.execute("UOWNER", `process-stop research ${unit}`)).toEqual({
+  await expect(ownerControl(controls, "processes research")).resolves.toEqual([
+    { unit, pids: [4101] },
+  ]);
+  await expect(ownerControl(controls, `process-stop research ${unit}`)).resolves.toEqual({
     unit,
     stopped: true,
   });
   expect(list).toHaveBeenCalledWith("research");
   expect(stop).toHaveBeenCalledWith("research", unit);
 });
-it("reports a repeated owner stop as no longer running after a crash before control receipt commit", () => {
+it("keeps other control requests completing while a slow systemd stop is still pending", async () => {
+  const { c, broker } = setup(),
+    unit = "mate-agent-1001-123e4567-e89b-42d3-a456-426614174000.scope",
+    list = vi.fn(async () => [{ unit, pids: [4101] }]);
+  let release = () => {};
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const stop = vi.fn(async () => {
+    await blocked;
+    return { unit, stopped: true };
+  });
+  const controls = new Controls(c, {} as Supervisor, broker, undefined, undefined, {
+    list,
+    stop,
+  } as unknown as LinuxProcessManager);
+  const stopping = controls.execute("UOWNER", `process-stop research ${unit}`);
+  expect(stopping).toBeInstanceOf(PendingControl);
+  await vi.waitFor(() => expect(stop).toHaveBeenCalledOnce());
+  await expect(ownerControl(controls, "processes research")).resolves.toEqual([
+    { unit, pids: [4101] },
+  ]);
+  expect(controls.execute("UOWNER", "status")).toBeDefined();
+  release();
+  await expect(stopping instanceof PendingControl ? stopping.result : stopping).resolves.toEqual({
+    unit,
+    stopped: true,
+  });
+});
+it("reports a repeated owner stop as no longer running after a crash before control receipt commit", async () => {
   const { c, broker } = setup(),
     unit = "mate-agent-1001-123e4567-e89b-42d3-a456-426614174000.scope";
   const stop = vi
     .fn()
-    .mockReturnValueOnce({ unit, stopped: true })
-    .mockImplementationOnce(() => {
-      throw new ProcessNotRunningError("Agent scope is not running");
-    });
+    .mockResolvedValueOnce({ unit, stopped: true })
+    .mockRejectedValueOnce(new ProcessNotRunningError("Agent scope is not running"));
   const controls = new Controls(c, {} as Supervisor, broker, undefined, undefined, {
-    list: () => [],
+    list: async () => [],
     stop,
   } as unknown as LinuxProcessManager);
-  expect(controls.execute("UOWNER", `process-stop research ${unit}`)).toEqual({
+  await expect(ownerControl(controls, `process-stop research ${unit}`)).resolves.toEqual({
     unit,
     stopped: true,
   });
-  expect(controls.execute("UOWNER", `process-stop research ${unit}`)).toEqual({
+  await expect(ownerControl(controls, `process-stop research ${unit}`)).resolves.toEqual({
     unit,
     stopped: false,
     reason: "not_running",

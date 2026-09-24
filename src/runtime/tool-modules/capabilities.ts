@@ -1,6 +1,9 @@
 import { z } from "zod";
 import { operationSchema } from "../../execution/backend.js";
-import { ProcessStopRejectedError } from "../../execution/linux-processes.js";
+import {
+  ProcessStopRejectedError,
+  ProcessWaitInterruptedError,
+} from "../../execution/linux-processes.js";
 import { systemCommandSchema } from "../../policy/system-operations.js";
 import { conversationTargetSchema as targetSchema } from "../../domain/conversations.js";
 import {
@@ -94,9 +97,9 @@ const definitions: ToolSpec[] = [
     replayPolicy: "boundary-owned",
     authorize: authorizeReferences,
     postAwait: fence,
-    handler: ({ additional, run }) => {
+    handler: async ({ additional, run, signal }) => {
       if (!additional?.processes) throw new Error("Linux process control unavailable");
-      return { value: additional.processes.list(run.agentId) };
+      return { value: await additional.processes.list(run.agentId, signal) };
     },
   }),
   spec({
@@ -109,7 +112,7 @@ const definitions: ToolSpec[] = [
     replayPolicy: "boundary-owned",
     authorize: authorizeReferences,
     postAwait: fence,
-    handler: ({ additional, run, workId, actionId, collaboration }, args) => {
+    handler: async ({ additional, run, workId, actionId, collaboration, signal }, args) => {
       if (!additional?.processes) throw new Error("Linux process control unavailable");
       const store = collaboration.store,
         request = { workId, operation: "processes.stop", unit: args.unit },
@@ -124,21 +127,39 @@ const definitions: ToolSpec[] = [
       if (action.state === "unknown" || action.state === "executing")
         return { value: { status: "action_unknown", actionId } };
       store.startAction(run, actionId);
-      try {
-        const result = additional.processes.stop(run.agentId, args.unit);
-        store.settleAction(run, actionId, "succeeded", result);
-        return { value: result };
-      } catch (error) {
+      // A refusal happened before systemctl stop, so nothing is uncertain; anything after the
+      // boundary keeps an unknown result the Agent can verify or retry deliberately. A cancel,
+      // pause or restart can fence the run while the wait is in flight, so the definite result is
+      // still written onto the conservative unknown those paths persisted.
+      const settle = (state: "succeeded" | "failed" | "unknown", receipt: unknown): void => {
         try {
-          if (error instanceof ProcessStopRejectedError)
-            store.settleAction(run, actionId, "failed", { reason: error.message });
-          else
-            store.settleAction(run, actionId, "unknown", {
-              reason: "process_stop_outcome_unknown",
-            });
+          store.settleAction(run, actionId, state, receipt);
+          return;
+        } catch {
+          /* The run was fenced while the wait was in flight. */
+        }
+        try {
+          store.refineFencedAction(actionId, run.agentId, state, receipt);
         } catch {
           /* Recovery owns uncertain state. */
         }
+      };
+      try {
+        const result = await additional.processes.stop(run.agentId, args.unit, signal);
+        settle("succeeded", result);
+        return { value: result };
+      } catch (error) {
+        if (error instanceof ProcessStopRejectedError)
+          settle("failed", { reason: error.message, unit: args.unit });
+        else
+          settle("unknown", {
+            reason: "process_stop_outcome_unknown",
+            unit: args.unit,
+            cause:
+              error instanceof ProcessWaitInterruptedError
+                ? "cancelled_or_timed_out"
+                : "stop_failed",
+          });
         throw error;
       }
     },
@@ -178,7 +199,11 @@ const definitions: ToolSpec[] = [
   spec({
     name: "attachments.save",
     schema: z
-      .object({ message: z.object({ messageId: id }).strict(), fileId: id, path: id })
+      .object({
+        message: z.object({ messageId: id }).strict(),
+        fileId: id,
+        path: id,
+      })
       .strict(),
     description:
       "Download a file attached to a visible message to an Agent-accessible path, up to 1 MB.",
@@ -190,7 +215,9 @@ const definitions: ToolSpec[] = [
     postAwait: fence,
     handler: async ({ additional, run, workId, actionId, signal }, args) => {
       if (!additional?.attachment) throw new Error("Attachment adapter unavailable");
-      return { value: await additional.attachment(run, workId, actionId, args, signal) };
+      return {
+        value: await additional.attachment(run, workId, actionId, args, signal),
+      };
     },
   }),
   spec({
@@ -229,7 +256,9 @@ const definitions: ToolSpec[] = [
     postAwait: fence,
     handler: async ({ additional, run, workId, actionId, signal }, args) => {
       if (!additional) throw new Error("Publication unavailable");
-      return { value: await additional.publish(run, workId, actionId, args, signal) };
+      return {
+        value: await additional.publish(run, workId, actionId, args, signal),
+      };
     },
   }),
   spec({
@@ -254,7 +283,9 @@ const definitions: ToolSpec[] = [
     postAwait: fence,
     handler: async ({ additional, run, workId, actionId, signal }, args) => {
       if (!additional) throw new Error("Publication unavailable");
-      return { value: await additional.publish(run, workId, actionId, args, signal) };
+      return {
+        value: await additional.publish(run, workId, actionId, args, signal),
+      };
     },
   }),
 ];

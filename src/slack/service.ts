@@ -3,6 +3,7 @@ import { slackPrincipal } from "./principals.js";
 import type { WebClient } from "@slack/web-api";
 import type { Collaboration } from "../collaboration/service.js";
 import type { Controls } from "../daemon/control.js";
+import { PendingControl } from "../daemon/control.js";
 import type { Ingress } from "../daemon/ingress.js";
 import type { CanonicalSlackTransport as WebSlackTransport } from "./transport.js";
 import type { DispatchEnvelope } from "../conversations/output.js";
@@ -129,6 +130,13 @@ export class SlackService {
   }
   /** Establishes the first durable responsibility boundary without importing pre-Mate history. */
   bootstrapRecovery(at = Date.now()): void {
+    // An owner control that was still waiting on systemd when Mate stopped keeps its interim
+    // result: publish it instead of losing the command, and never replay the command itself.
+    const unconfirmed = this.c.store.db
+      .prepare("UPDATE admin_replies SET state='pending' WHERE state='computing'")
+      .run().changes;
+    if (unconfirmed)
+      this.c.store.audit("admin_reply_unconfirmed", { replies: Number(unconfirmed) });
     const watermark = `${Math.floor(at / 1000)}.${String(at % 1000).padStart(3, "0")}000`;
     for (const agent of this.transport.mapper.config.agents) {
       const prior = this.c.store.db
@@ -566,39 +574,88 @@ export class SlackService {
               .run(row.app_id, row.event_id);
           });
         } else if (body.command === slackControlCommand) {
-          s.atomic(() => {
-            const team = body.team_id ?? body.team?.id,
-              user = body.user_id ?? body.user?.id,
-              channel = body.channel_id ?? body.channel?.id;
-            if (
-              team !== this.transport.mapper.config.teamId ||
-              !/^U[A-Z0-9]+$/.test(user ?? "") ||
-              !/^[CDG][A-Z0-9]+$/.test(channel ?? "")
-            )
-              throw new Error("Invalid control identity");
-            let text = body.text ?? "";
-            let reply: string;
-            try {
-              reply = formatControlReply(
-                this.controls.execute(
-                  this.transport.mapper.config.principalIds
-                    ? (slackPrincipal(this.transport.mapper.config, user) as { id: string }).id
-                    : user,
-                  text,
-                ),
-              );
-            } catch (error) {
-              reply = String(error);
-            }
-            s.db
-              .prepare(
-                "INSERT INTO admin_replies VALUES(?,?,?,?,?,'pending') ON CONFLICT DO NOTHING",
-              )
-              .run(`${row.app_id}:${row.event_id}`, agent.id, channel, user, reply.slice(0, 15000));
-            s.db
-              .prepare("UPDATE ingress SET normalized=1 WHERE app_id=? AND event_id=?")
-              .run(row.app_id, row.event_id);
-          });
+          const team = body.team_id ?? body.team?.id,
+            user = body.user_id ?? body.user?.id,
+            channel = body.channel_id ?? body.channel?.id;
+          if (
+            team !== this.transport.mapper.config.teamId ||
+            !/^U[A-Z0-9]+$/.test(user ?? "") ||
+            !/^[CDG][A-Z0-9]+$/.test(channel ?? "")
+          )
+            throw new Error("Invalid control identity");
+          const text = body.text ?? "",
+            key = `${row.app_id}:${row.event_id}`,
+            // Replaces the interim line written when the wait claimed the event. A restart may
+            // already have published that line, so the real result never overwrites it.
+            record = (value: unknown) =>
+              s.atomic(() => {
+                const reply = formatControlReply(value).slice(0, 15000);
+                if (
+                  s.db
+                    .prepare(
+                      "UPDATE admin_replies SET text=?,state='pending' WHERE id=? AND state='computing'",
+                    )
+                    .run(reply, key).changes !== 1
+                )
+                  s.db
+                    .prepare(
+                      "INSERT INTO admin_replies VALUES(?,?,?,?,?,'pending') ON CONFLICT DO NOTHING",
+                    )
+                    .run(key, agent.id, channel, user, reply);
+                s.db
+                  .prepare("UPDATE ingress SET normalized=1 WHERE app_id=? AND event_id=?")
+                  .run(row.app_id, row.event_id);
+              });
+          let outcome: unknown;
+          try {
+            outcome = this.controls.execute(
+              this.transport.mapper.config.principalIds
+                ? (slackPrincipal(this.transport.mapper.config, user) as { id: string }).id
+                : user,
+              text,
+            );
+          } catch (error) {
+            record(String(error));
+            continue;
+          }
+          if (outcome instanceof PendingControl) {
+            // The event is claimed with an honest interim reply in one durable step: replay would
+            // repeat the wait on every poll (stopping twice for a stop), and a restart must not
+            // consume the command without a trace.
+            s.atomic(() => {
+              s.db
+                .prepare("INSERT INTO admin_replies VALUES(?,?,?,?,?,'computing')")
+                .run(
+                  key,
+                  agent.id,
+                  channel,
+                  user,
+                  `${text}: accepted, but its result was not confirmed before Mate stopped. ${
+                    outcome.effectful
+                      ? "Check the host state before repeating this command."
+                      : "Run it again to see the current state."
+                  }`.slice(0, 15000),
+                );
+              s.db
+                .prepare("UPDATE ingress SET normalized=1 WHERE app_id=? AND event_id=?")
+                .run(row.app_id, row.event_id);
+            });
+            void outcome.result
+              .then(record, (error: unknown) => record(String(error)))
+              .catch((error) => {
+                try {
+                  s.atomic(() =>
+                    s.audit("ingress_rejected", {
+                      appId: row.app_id,
+                      eventId: row.event_id,
+                      error: String(error),
+                    }),
+                  );
+                } catch {
+                  /* Closing storage ends the reply; the interim line stays readable. */
+                }
+              });
+          } else record(outcome);
         } else this.ingress.replay(row.app_id, row.event_id);
       } catch (error) {
         s.atomic(() => {

@@ -18,7 +18,11 @@ import { fixtureTarget } from "../helpers/canonical-slack.js";
 import type { ConversationDirectory } from "../../src/conversations/directory.js";
 import { buildBaseline } from "../../src/runtime/prompt.js";
 import { environmentReportSchema } from "../../src/capabilities/environment.js";
-import { ProcessNotRunningError } from "../../src/execution/linux-processes.js";
+import {
+  ProcessNotRunningError,
+  ProcessStopRejectedError,
+  ProcessWaitInterruptedError,
+} from "../../src/execution/linux-processes.js";
 
 const stores: Store[] = [];
 afterEach(() => stores.splice(0).forEach((store) => store.close()));
@@ -388,7 +392,7 @@ it("lets an Agent inspect and stop only its current Linux scope with a durable s
     signal,
   );
   expect(stopped.value).toEqual({ unit, stopped: true });
-  expect(stop).toHaveBeenCalledExactlyOnceWith("research", unit);
+  expect(stop).toHaveBeenCalledExactlyOnceWith("research", unit, signal);
   expect(
     (await router.call(base.run, base.work, "process-stop", "processes.stop", { unit }, signal))
       .value,
@@ -561,6 +565,111 @@ it("records a pre-stop refusal as failed without claiming an uncertain effect", 
       .value,
   ).toMatchObject({ status: "failed", receipt: { reason: "Agent scope is not running" } });
   expect(stop).toHaveBeenCalledTimes(1);
+});
+
+it("keeps a cancelled stop's unknown result recoverable through the run that was fenced", async () => {
+  const base = setup(),
+    unit = "mate-agent-1001-123e4567-e89b-42d3-a456-426614174000.scope",
+    controller = new AbortController();
+  let attempts = 0;
+  const stop = vi.fn(async (_agentId: string, _unit: string, signal?: AbortSignal) => {
+    attempts += 1;
+    if (attempts > 1) return { unit, stopped: true };
+    return new Promise<never>((_resolve, reject) =>
+      signal?.addEventListener(
+        "abort",
+        () => reject(new ProcessWaitInterruptedError("systemctl stop cancelled")),
+        { once: true },
+      ),
+    );
+  });
+  const router = new ToolRouter(base.c, base.broker, {
+      processes: { list: async () => [{ unit, pids: [4101] }], stop },
+      research: async () => ({}),
+      publish: async () => ({}),
+    }),
+    stopping = router.call(
+      base.run,
+      base.work,
+      "stop-cancelled",
+      "processes.stop",
+      { unit },
+      controller.signal,
+    );
+  await vi.waitFor(() => expect(attempts).toBe(1));
+  // The production cancel: pausing the Agent fences the run and conservatively marks its executing
+  // action unknown before the aborted wait settles.
+  base.store.pause("research");
+  controller.abort();
+  await expect(stopping).rejects.toBeInstanceOf(ProcessWaitInterruptedError);
+  const action = base.store.action(`${base.run.sessionId}:stop-cancelled`);
+  expect(action?.state).toBe("unknown");
+  expect(JSON.parse(action!.receipt!)).toMatchObject({
+    reason: "process_stop_outcome_unknown",
+    unit,
+    cause: "cancelled_or_timed_out",
+  });
+  // Explicitly resumed work can inspect the scopes and try the stop again.
+  base.store.resume("research");
+  const resumed = base.store.beginRun("research")!;
+  base.store.input(resumed, {});
+  const list = await router.call(
+    resumed,
+    base.work,
+    "list-after-cancel",
+    "processes.list",
+    {},
+    new AbortController().signal,
+  );
+  expect(list.value).toEqual([{ unit, pids: [4101] }]);
+  const retried = await router.call(
+    resumed,
+    base.work,
+    "stop-again",
+    "processes.stop",
+    { unit },
+    new AbortController().signal,
+  );
+  expect(retried.value).toEqual({ unit, stopped: true });
+  expect(attempts).toBe(2);
+});
+
+it("records a stop refused before the boundary as failed even when its run was fenced", async () => {
+  const base = setup(),
+    unit = "mate-agent-1001-123e4567-e89b-42d3-a456-426614174000.scope",
+    controller = new AbortController();
+  const stop = vi.fn(async (_agentId: string, _unit: string, signal?: AbortSignal) => {
+    return new Promise<never>((_resolve, reject) =>
+      signal?.addEventListener(
+        "abort",
+        () => reject(new ProcessStopRejectedError("Stop cancelled before systemctl stop")),
+        { once: true },
+      ),
+    );
+  });
+  const router = new ToolRouter(base.c, base.broker, {
+      processes: { list: async () => [], stop },
+      research: async () => ({}),
+      publish: async () => ({}),
+    }),
+    stopping = router.call(
+      base.run,
+      base.work,
+      "stop-refused-fenced",
+      "processes.stop",
+      { unit },
+      controller.signal,
+    );
+  await vi.waitFor(() => expect(stop).toHaveBeenCalledOnce());
+  base.store.pause("research");
+  controller.abort();
+  await expect(stopping).rejects.toBeInstanceOf(ProcessStopRejectedError);
+  const action = base.store.action(`${base.run.sessionId}:stop-refused-fenced`);
+  expect(action?.state).toBe("failed");
+  expect(JSON.parse(action!.receipt!)).toEqual({
+    reason: "Stop cancelled before systemctl stop",
+    unit,
+  });
 });
 
 it("keeps known-URL research a receipt-free read and puts the reachable alternatives in the real baseline", async () => {

@@ -4,6 +4,17 @@ import type { Broker } from "../policy/broker.js";
 import type { LinuxProcessManager } from "../execution/linux-processes.js";
 import { ProcessNotRunningError } from "../execution/linux-processes.js";
 import type { SystemOperations } from "../policy/system-operations.js";
+/**
+ * A control command that is still waiting on systemd. Immediate commands never return this, so
+ * every caller can tell a deferred wait from an already-decided answer.
+ */
+export class PendingControl {
+  constructor(
+    readonly result: Promise<unknown>,
+    /** A stop may already have changed host state, so its event must be claimed before it settles. */
+    readonly effectful: boolean,
+  ) {}
+}
 export class Controls {
   constructor(
     readonly collaboration: Collaboration,
@@ -21,7 +32,11 @@ export class Controls {
     readonly processes?: LinuxProcessManager,
     readonly system?: SystemOperations,
   ) {}
-  execute(user: string, text: string): unknown {
+  /**
+   * Owner controls answer immediately except the two that wait on systemd; those return a
+   * {@link PendingControl} so a slow host operation cannot hold up other Agents or requests.
+   */
+  execute(user: string, text: string): unknown | PendingControl {
     const c = this.collaboration,
       s = c.store;
     if (!c.config.ownerUserIds.includes(user)) throw new Error("Owner only");
@@ -69,18 +84,21 @@ export class Controls {
         if (!id) throw new Error("Agent ID required");
         c.messages.agent(id);
         if (!this.processes) throw new Error("Linux process control unavailable");
-        return this.processes.list(id);
-      case "process-stop":
+        return new PendingControl(this.processes.list(id), false);
+      case "process-stop": {
         if (!id || rest.length !== 1) throw new Error("process-stop AGENT_ID UNIT");
         c.messages.agent(id);
         if (!this.processes) throw new Error("Linux process control unavailable");
-        try {
-          return this.processes.stop(id, rest[0]!);
-        } catch (error) {
-          if (error instanceof ProcessNotRunningError)
-            return { unit: rest[0], stopped: false, reason: "not_running" };
-          throw error;
-        }
+        const unit = rest[0]!;
+        return new PendingControl(
+          this.processes.stop(id, unit).catch((error: unknown) => {
+            if (error instanceof ProcessNotRunningError)
+              return { unit, stopped: false, reason: "not_running" };
+            throw error;
+          }),
+          true,
+        );
+      }
       case "activity":
         return c.operations.activity(user, id ? JSON.parse([id, ...rest].join(" ")) : {});
       case "review-seat": {

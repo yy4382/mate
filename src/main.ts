@@ -41,7 +41,7 @@ async function assertLinuxMaintenanceStopped(
   const rules = hostRules(config),
     manager = hostProcessManager(host, rules);
   for (const agent of rules.agents)
-    if (manager.list(agent.identity.agentId).length)
+    if ((await manager.list(agent.identity.agentId)).length)
       throw new Error(`Stop ${agent.identity.agentId} background tasks before maintenance`);
 }
 

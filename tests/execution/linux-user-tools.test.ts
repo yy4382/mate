@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, chmodSync, chownSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
@@ -9,7 +9,10 @@ import { Collaboration } from "../../src/collaboration/service.js";
 import { Broker } from "../../src/policy/broker.js";
 import { ToolRouter } from "../../src/runtime/tools.js";
 import { LinuxUserBackend } from "../../src/execution/linux-user.js";
-import { LinuxProcessManager } from "../../src/execution/linux-processes.js";
+import {
+  LinuxProcessManager,
+  ProcessStopRejectedError,
+} from "../../src/execution/linux-processes.js";
 import { configFixture } from "../helpers/config.js";
 
 const cleanup: (() => void)[] = [];
@@ -201,7 +204,18 @@ it("runs two Agents through direct file/exec calls and tools.call with stable ho
       ).filter((scope) => scope.pids.length);
       expect(old).toHaveLength(1);
       expect(old[0]!.pids.length).toBeGreaterThan(0);
-      expect(new LinuxProcessManager({ research: 65534 }).list("research")).toEqual(old);
+      expect(await new LinuxProcessManager({ research: 65534 }).list("research")).toEqual(old);
+      // Ownership is rechecked on the changed (asynchronous) path before any stop is sent:
+      // another Agent's UID refuses, and a wait cancelled during the check refuses too.
+      await expect(manager!.stop("bob", old[0]!.unit)).rejects.toBeInstanceOf(
+        ProcessStopRejectedError,
+      );
+      expect(await manager!.list("research")).toEqual(old);
+      const cancelled = new AbortController();
+      const stopping = manager!.stop("research", old[0]!.unit, cancelled.signal);
+      cancelled.abort();
+      await expect(stopping).rejects.toBeInstanceOf(ProcessStopRejectedError);
+      expect(await manager!.list("research")).toEqual(old);
       expect(
         (
           await router.call(
@@ -214,14 +228,133 @@ it("runs two Agents through direct file/exec calls and tools.call with stable ho
           )
         ).value,
       ).toEqual({ unit: old[0]!.unit, stopped: true });
-      expect(manager!.list("research")).toEqual([]);
+      expect(await manager!.list("research")).toEqual([]);
+      // A timed-out ordinary command inside a real scope is killed and its scope stopped without
+      // blocking the daemon, leaving nothing behind and an unknown outcome for the caller.
+      await expect(
+        backend.execute({
+          agentId: "research",
+          root: own,
+          timeoutMs: 200,
+          operation: { kind: "exec", cwd: own, command: "sleep 30" },
+        }),
+      ).rejects.toThrow("outcome may be unknown");
+      await expect
+        .poll(async () => (await manager!.list("research")).length, { timeout: 5000 })
+        .toBe(0);
     } finally {
-      for (const scope of manager!.list("research"))
+      for (const scope of await manager!.list("research"))
         try {
-          manager!.stop("research", scope.unit);
+          await manager!.stop("research", scope.unit);
         } catch {
           /* Synthetic scope expires shortly if cleanup cannot complete. */
         }
     }
   }
+});
+
+it("keeps another Agent's real command running while a slow systemctl stop is awaited", async () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "mate-linux-slow-")));
+  cleanup.push(() => rmSync(base, { recursive: true, force: true }));
+  const alice = join(base, "alice"),
+    bob = join(base, "bob");
+  mkdirSync(alice, { mode: 0o700 });
+  mkdirSync(bob, { mode: 0o700 });
+  const config = configSchema.parse({
+    ...configFixture,
+    agents: [
+      configFixture.agents[0],
+      {
+        ...configFixture.agents[0],
+        id: "bob",
+        name: "Bob",
+        slackAppId: "ATWO",
+        slackUserId: "UTWO",
+        slackBotId: "BTWO",
+        botTokenEnv: "BOB_BOT",
+        appTokenEnv: "BOB_APP",
+      },
+    ],
+  });
+  const store = new Store(":memory:");
+  cleanup.push(() => store.close());
+  const messages = new Messages(store, config);
+  const collaboration = new Collaboration(
+    store,
+    messages,
+    new Output(messages, { post: async () => ({ ts: "200.000001" }) }),
+    config,
+  );
+  const identity = { uid: process.getuid!(), gid: process.getgid!(), home: homedir() };
+  const broker = new Broker(
+    store,
+    collaboration,
+    new LinuxUserBackend({ research: identity, bob: identity }),
+    { research: alice, bob },
+  );
+  const unit = `mate-agent-${identity.uid}-123e4567-e89b-42d3-a456-426614174000.scope`,
+    group = `/mate-agent-${identity.uid}.slice/${unit}`,
+    scope = `Id=${unit}\nActiveState=active\nSlice=mate-agent-${identity.uid}.slice\nControlGroup=${group}\n`;
+  let release = () => {},
+    stopStarted = false,
+    stopSettled = false;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const manager = new LinuxProcessManager(
+    { research: identity.uid, bob: identity.uid },
+    async (args) => {
+      if (args[0] === "show") return { code: 0, stdout: scope, stderr: "" };
+      stopStarted = true;
+      await blocked;
+      return { code: 0, stdout: "", stderr: "" };
+    },
+    () => [],
+    () => identity.uid,
+  );
+  const router = new ToolRouter(collaboration, broker, {
+    processes: manager,
+    research: async () => ({}),
+    publish: async () => ({}),
+  });
+  const runs = new Map<string, { run: ReturnType<Store["beginRun"]>; work: string }>();
+  for (const agentId of ["research", "bob"]) {
+    store.register(agentId, "v1", []);
+    messages.membership(agentId, "CTEST", true);
+    const work = collaboration.createWork(`slow-${agentId}`, fixtureTarget("CTEST", "100.000001"));
+    collaboration.enqueue(agentId, work, "start", {});
+    const run = store.beginRun(agentId)!;
+    store.input(run, {});
+    runs.set(agentId, { run, work });
+  }
+  const signal = new AbortController().signal;
+  const stopping = router
+    .call(
+      runs.get("research")!.run!,
+      runs.get("research")!.work,
+      "slow-stop",
+      "processes.stop",
+      { unit },
+      signal,
+    )
+    .then((value) => {
+      stopSettled = true;
+      return value;
+    });
+  await vi.waitFor(() => expect(stopStarted).toBe(true));
+  const other = await router.call(
+    runs.get("bob")!.run!,
+    runs.get("bob")!.work,
+    "other-agent-exec",
+    "exec",
+    { cwd: bob, command: "printf alive" },
+    signal,
+  );
+  expect(other.value).toMatchObject({ code: 0, stdout: "alive" });
+  expect(store.action(`${runs.get("bob")!.run!.sessionId}:other-agent-exec`)?.state).toBe(
+    "succeeded",
+  );
+  expect(stopSettled).toBe(false);
+  release();
+  await expect(stopping).resolves.toMatchObject({ value: { unit, stopped: true } });
 });

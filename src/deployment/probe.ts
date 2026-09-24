@@ -14,7 +14,7 @@ export async function runOfflineProbe(
     manager = hostProcessManager(host, rules),
     roots: string[] = [];
   for (const agent of rules.agents) {
-    manager.verifyQuota(agent.identity.agentId);
+    await manager.verifyQuota(agent.identity.agentId);
     await assertAgentWorkspace(host, rules, agent);
     roots.push(agent.identity.home);
   }
