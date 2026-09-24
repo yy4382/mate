@@ -19,7 +19,7 @@
 | runtime | Pi循环、工具调用、上下文/恢复、每 Agent 串行调度 | 上述应用服务、ExecutionBroker | Slack API、平台身份规则 |
 | adapters/slack | 验签/接收、身份和引用映射、历史/目录/附件/传输、表单与平台差异 | 应用服务、domain、Slack SDK | 决定任务/注意力/预算业务规则 |
 | adapters/local | 本地输入/输出及可重复实验 | 同样的应用服务和domain | 为测试实现另一套业务逻辑 |
-| execution | Linux用户身份、系统级命令审批、回执与取消 | Store、明确的actor/run/work上下文 | 把消息门控当命令审核 |
+| execution | 以每位 Agent 的 Linux 用户账号运行普通命令；系统级命令先等用户批准；记录执行结果并支持停止 | Store、发起操作的 Agent 和当前运行信息 | 用发送消息前的检查代替系统命令审批 |
 | daemon | 配置转换、构造服务、调度、shutdown | 所有实现 | 在工具里临时构造SDK或通过全局服务定位器取依赖 |
 
 Store 暂时是共享 SQLite transaction/repository 基础设施；不为每张表制造接口。事务拥有者是执行用例的应用服务，跨状态原子操作保持同一连接。网络/执行器操作不得在数据库事务内等待。后续拆 repository 以实际独立职责为依据。

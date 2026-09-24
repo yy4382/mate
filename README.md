@@ -1,12 +1,12 @@
 # Mate
 
-Mate 是个人单 Slack workspace 中的持久 Agent 团队。每个 Agent 有跨频道/DM连续上下文、私有工作空间、持续预算以及可自主使用的沟通、消息任务、提醒和执行工具。模型决定关注什么、如何合作、是否发言和怎样组织知识。
+Mate 为一个个人 Slack 工作区提供持续工作的 Agent 团队。每个 Agent 在频道和私信（DM）之间延续同一段工作上下文，拥有私人目录、持续预算，以及可自主使用的沟通、任务、提醒和执行工具。模型决定关注什么、如何合作、是否发言和怎样组织知识。
 
-运行层使用 **Pi Agent Core + pi-ai**；使用 **pnpm**；没有 pi-coding-agent 或 Jev。普通 Agent 命令不逐条审批，系统级命令需要用户逐条同意。[当前实现状态](docs/HOW_IT_WORKS.md)、[项目方向](docs/PROJECT_DIRECTION.md)与[消息门控调研](docs/MESSAGE_GATING_RESEARCH.md)分别说明现状、目标和相关设计依据。
+运行层使用 **Pi Agent Core + pi-ai**；使用 **pnpm**；没有 pi-coding-agent 或 Jev。普通 Agent 命令不逐条审批；需要管理员权限的系统级命令（例如安装系统软件或管理服务）须由用户逐条同意。[当前实现状态](docs/HOW_IT_WORKS.md)、[项目方向](docs/PROJECT_DIRECTION.md)与[消息门控调研](docs/MESSAGE_GATING_RESEARCH.md)分别说明现状、目标和相关设计依据。
 
-开发按 GitHub Issues 中的当前规格与票据推进；[首版目标](docs/IMPLEMENTATION_PLAN.md)和[验收边界](docs/ACCEPTANCE.md)说明交付范围。只评 harness，不评模型智能。
+开发按 GitHub Issues 中的当前规格与票据推进；[首版目标](docs/IMPLEMENTATION_PLAN.md)和[验收边界](docs/ACCEPTANCE.md)说明交付范围。验收检查工具和运行环境能否支持 Agent 的选择，不评判模型是否足够聪明或主动。
 
-Debian 13 首版部署以每 Agent 独立 Linux 用户运行普通命令，Mate 的状态和凭证保持 root-only；系统级命令逐条经 Slack owner 确认。安装使用 plan/preflight/install、systemd slices 和 `matectl`；完整流程见[部署说明](docs/DEPLOYMENT.md)。安装不会因缺少 secret 自动启动主服务。
+Debian 13 首版部署为每位 Agent 创建独立的 Linux 用户账号，用该账号运行普通命令。Mate 的数据库和凭证只有系统管理员账号 root 可读；系统级命令须先由配置中的真人用户在 Slack 中逐条确认。安装步骤与系统资源限额见[部署说明](docs/DEPLOYMENT.md)。缺少凭证时，安装不会自动启动主服务。
 
 ## 本地运行
 
@@ -26,7 +26,7 @@ pnpm node dist/src/main.js check mate.local.json
 pnpm node dist/src/main.js local mate.local.json
 ```
 
-check只做本地校验；local通过JSONL提供本地人类入口，start连接配置的Slack及provider。退出用SIGINT/SIGTERM，等待执行清理。日志不打印凭证或原始Slack正文。完整本地请求示例和真实Slack逐项验收见[实验运行手册](docs/EXPERIMENT_RUNBOOK.md)。
+`check` 只做本地校验；`local` 通过每行一个 JSON 请求提供本地人类入口，`start` 连接配置的 Slack 和模型服务。退出用 SIGINT/SIGTERM，等待执行清理。日志不打印凭证或原始 Slack 正文。完整本地请求示例和真实 Slack 逐项验收见[实验运行手册](docs/EXPERIMENT_RUNBOOK.md)。
 
 ## Slack配置
 
@@ -40,11 +40,9 @@ mentions模式由@mention、DM或watch触发；participate对普通消息合并n
 
 ## Workspace与执行环境
 
-`dataDir/state` 是 Mate 的 root-only 数据库；每位 Agent 的私人 home 由 `runtime.linuxUsers` 指定，`MEMORY.md` 是恢复入口，`notes/artifacts` 是起始目录，内容组织由 Agent 自己决定。`runtime.sharedRoot` 是同伴默认可读的普通 VPS 目录，各 Agent 对自己的共享子目录有写权限。命令和结构化文件操作使用同一 Agent UID/GID，正常网络和宿主文件布局可用；Mate 不把自己的凭证或控制身份交给 Agent。Agent 长任务在 systemd scope 中继续运行，可列出、停止并受 slice 配额约束。
+`dataDir/state` 存放 Mate 的数据库，Agent 不能读取。每位 Agent 都有自己的 Linux 用户账号和私人目录；`runtime.linuxUsers` 指定账号编号与目录位置。`MEMORY.md` 是 Agent 恢复工作时首先读取的文件，`notes/artifacts` 是初始目录，之后由 Agent 自行组织文件。`runtime.sharedRoot` 指定同伴默认可读的共享目录，每位 Agent 只能修改自己的共享子目录。文件工具和普通命令都以该 Agent 的账号运行，看到相同的路径和文件权限；Mate 不把自身凭证交给 Agent。Agent 启动的长任务可在一次工具调用结束后继续运行，Agent 与用户可以查看和停止它，并受该账号的系统资源限额约束。
 
-`workspaceGrants` 仍可授予额外项目目录的 read/write/exec 能力，但不会改变 Linux 文件权限。`environment.info` 报告当前工作环境和有效 grant；它是可重验的能力快照，不是权限令牌。
-
-research.read是allowlist已知公共HTTPS URL读取，不是搜索。attachments.save接可见Slack消息中的fileId，保存到授权目录；artifact.publish/revise发布自身artifacts文件并经过同一门控。文本发布上限64KiB，binary/下载1MB。完整工具限制见[调用链说明](docs/HOW_IT_WORKS.md)。
+`research.read` 只能读取 Agent 已知网址且配置允许的公共 HTTPS 页面，不能搜索网页。`attachments.save` 可将 Agent 有权查看的 Slack 附件保存到它能写入的目录。`artifact.publish/revise` 用于发布或修改 Agent 的成果文件；文本发布上限为 64 KiB，二进制文件和下载上限为 1 MiB。
 
 低配机器默认通过`runtime.limits`限制进程内资源：`maxActiveRuns:1`让所有Agent公平排队执行run，`maxBackendOperations:1`限制同时进行的文件/命令操作，`workerIdleMs:300000`在空闲五分钟后释放模型worker。停止Agent或关闭daemon会撤销尚未取得槽位的等待；执行失败也会释放槽位。消息、任务、提醒和上下文仍保存在SQLite中，进程内队列不承担持久化职责。`check`会回显最终生效的限制。
 
@@ -58,17 +56,16 @@ research.read是allowlist已知公共HTTPS URL读取，不是搜索。attachment
 - agent-reset AGENT_ID CHECKPOINT：保留持久身份/工作，更换上下文后保持paused
 - agent-budget AGENT_ID MAX_RUNS MAX_TOKENS MAX_USD
 - budget WORK_ID MAX_RUNS MAX_TOKENS MAX_USD
-- revoke GRANT_ID
 - review-seat AGENT_ID {"target":{"channel":"…"},"brief":"…"}；review-release AGENT_ID
 
 review seat要求从未运行的身份和干净workspace，隔离对话/peer信息与网络。release停止Agent，随后需resume。
 
-Agent账户是持续累计额度；新消息、work、reset、配置迁移不补额。配置budgets只首次初始化；owner调整累计上限后按需resume。未知usage保留预留，unknown副作用不盲目重放。模型可通过actions.list/read检查自身执行回执；非执行对象使用各自当前ACL读取工具。
+每位 Agent 的预算是持续累计的；新消息、切换工作事项、重置上下文或修改配置都不会自动增加预算。配置中的预算只在首次创建 Agent 时使用；用户提高累计上限后可恢复 Agent。若一次操作是否执行成功无法确认，Mate 不会擅自重试；Agent 可用 `actions.list/read` 查看已记录的执行结果。
 
 ## 显式升级与备份
 
-先停止主服务和 Agent 后台任务。`matectl backup NAME` 保存 SQLite 与私人 home；`matectl restore TARGET --replace CURRENT` 先验证当前状态的 checkpoint，再恢复目标数据及 Agent UID/GID。共享工作目录另按普通 VPS 文件备份方式处理。代码升级用 `matectl upgrade SPEC`、`rollback`、`finalize`，不改数据；配置变更用明确的离线迁移，并保持现有 Linux UID/GID/home 稳定。详见[运维手册](docs/OPERATIONS_RUNBOOK.md)。
+先停止主服务和 Agent 后台任务。`matectl backup NAME` 保存数据库与私人目录；`matectl restore TARGET --replace CURRENT` 先验证当前状态的备份，再恢复目标数据和目录归属。共享工作目录另按普通 VPS 文件备份方式处理。代码升级用 `matectl upgrade SPEC`、`rollback`、`finalize`，不改数据；配置变更用明确的离线迁移，不自动更换现有 Agent 的 Linux 账号或私人目录位置。详见[运维手册](docs/OPERATIONS_RUNBOOK.md)。
 
 ## 验证
 
-`pnpm check`、`pnpm typecheck` 和针对性集成测试覆盖本地逻辑与合成 Slack/provider 流程。Debian 13 上还须做两 Agent UID/文件权限/后台任务的小型原生 smoke；真实 Slack/provider 接线、usage 和错误协议另行验收。本地通过不能冒充 VPS 或外部服务已验证。详见[验收边界](docs/ACCEPTANCE.md)。
+`pnpm check`、`pnpm typecheck` 和集成测试检查本地逻辑，并在测试中模拟 Slack 与模型服务。还须在 Debian 13 上用两个真实的 Linux 用户账号检查私人/共享文件权限，以及长任务的查看和停止。真实 Slack、模型服务和目标 VPS 的连接另行验收；本地测试通过不能代替这些检查。详见[验收边界](docs/ACCEPTANCE.md)。
