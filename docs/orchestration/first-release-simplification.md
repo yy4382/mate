@@ -55,9 +55,9 @@ only when every blocker is committed on the branch.
 
 | Ticket | Title | Status | Starting commit | Landing commit |
 |---|---|---|---|---|
-| #34 | 建立统一格式检查并完成机械排版 | **done** | `eb74e0e` | `a8b00ce` (config) + `e85a3ca` (mechanical pass) |
-| #35 | 用单一当前 schema 初始化新数据库 | in progress | `d049b00` | — |
-| #36 | 让所有入口使用当前数据库格式 | pending | — | — |
+| #34 | 建立统一格式检查并完成机械排版 | **done** | `eb74e0e` | `a8b00ce` + `e85a3ca` + `7c6e061` + `a91edb4` |
+| #35 | 用单一当前 schema 初始化新数据库 | **done** | `d049b00` | `b1fcca9` |
+| #36 | 让所有入口使用当前数据库格式 | in progress | `b1fcca9` | — |
 | #37 | 统一应用装配与关闭流程 | pending | — | — |
 | #38 | 由任务模块负责消息关联任务的完整发布流程 | pending | — | — |
 | #39 | 让工具输入类型和领域授权各有明确归属 | pending | — | — |
@@ -101,3 +101,17 @@ None yet.
   architecture/dependency contract tests in `tests/contracts/`. Tests that exist
   only for the removed migration chain, old tool entry points and old config
   compatibility are expected to leave with their tickets.
+
+## Findings escalated by ticket #34 (recorded, not a blocker)
+
+- `tests/deployment/diagnostics.test.ts:209-232` asserts the verbatim source text of a Slack
+  registration statement in `src/slack/runtime.ts`. That is a source-shape assertion rather
+  than a behaviour assertion, contrary to spec Testing Decision #1, and it forced both the
+  `// prettier-ignore` and the `printWidth: 100` choice in #34. It must not outlive the
+  refactor; the ticket that owns that surface should assert the observable behaviour instead.
+- `pnpm format` is not yet documented in `docs/DEVELOPMENT.md`, and `*.md` / `docs/` are
+  deliberately outside the format pass. Documentation work for the maintenance flow
+  (tickets #52/#53) should mention the formatting commands.
+- Prettier 3.9.9 is not perfectly idempotent for one file (`src/storage/operations-schema.ts`):
+  a single `pnpm format` run may need a second run. Worth revisiting only if it causes a real
+  failure; the check gate itself is reliable.
