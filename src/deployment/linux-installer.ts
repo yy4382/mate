@@ -9,6 +9,7 @@ import type { DeploymentSpec } from './spec.js';
 import { nodeLinuxInstallerHost, type LinuxInstallerHost } from './linux-host.js';
 import { runDoctor } from './doctor.js';
 import { LinuxProcessManager } from '../execution/linux-processes.js';
+import {initialMemory} from '../agents/workspace.js';
 
 export function renderLinuxService(plan: LinuxDeploymentPlan): string {
   return `[Unit]\nDescription=Mate autonomous Agent daemon\nWants=network-online.target\nAfter=network-online.target\n\n[Service]\nType=notify\nNotifyAccess=all\nUser=root\nGroup=root\nWorkingDirectory=${managedLayout.current}\nEnvironmentFile=${managedLayout.environment}\nExecStart=/usr/bin/node ${managedLayout.current}/dist/src/main.js start ${managedLayout.config}\nRestart=on-failure\nRestartSec=5\nTimeoutStartSec=900\nTimeoutStopSec=120\nKillMode=mixed\nMemoryMax=${plan.daemonMemoryMiB}M\nUMask=0077\n\n[Install]\nWantedBy=multi-user.target\n`;
@@ -122,7 +123,7 @@ export async function installLinuxDeployment(spec: DeploymentSpec, config: Daemo
     const memory = join(agent.home, 'MEMORY.md');
     if (!existsSync(memory)) {
       for (const name of ['notes', 'artifacts']) exactDirectory(join(agent.home, name), agent.uid, agent.gid, 0o700);
-      exactFile(memory, `# ${definition.name}\n\nPrivate memory entry.\n`, agent.uid, agent.gid, 0o600);
+      exactFile(memory, initialMemory(definition.name), agent.uid, agent.gid, 0o600);
     }
     else { const stat = lstatSync(memory); if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== agent.uid || stat.gid !== agent.gid || (stat.mode & 0o777) !== 0o600) throw new Error(`Private memory ownership differs: ${memory}`); }
     exactDirectory(join(plan.sharedRoot, agent.agentId), agent.uid, agent.gid, 0o755);

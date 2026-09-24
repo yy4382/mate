@@ -48,6 +48,7 @@ import {assertNoRestoreInProgress} from './restore.js';
 import {FairAdmission} from '../concurrency/admission.js';
 import {AdmittedBackend} from '../execution/admitted.js';
 import {assertLinuxOperationAllowed} from '../deployment/linux-upgrade-guard.js';
+import {initialMemory} from '../agents/workspace.js';
 export interface Log { info(data: object, message: string): void; error(data: object, message: string): void }
 export class Daemon {
   readonly store: Store;
@@ -141,7 +142,7 @@ export class Daemon {
         }else mkdirSync(root, { recursive: true, mode: 0o700 });
         if (lstatSync(root).isSymbolicLink()) throw new Error('Agent memory must not be a symlink');
         this.memoryRoots[agent.id] = canonicalRoot(root, [projectRoot, state]);
-        const memory=join(root,'MEMORY.md');if (!existsSync(memory)){if(linux)throw new Error(`Provision Linux Agent memory entry before startup: ${agent.id}`);for(const name of ['notes','artifacts'])mkdirSync(join(root,name),{recursive:true,mode:0o700});writeFileSync(memory, `# ${agent.name}\n\nPrivate memory entry. Keep durable lessons and links to notes here.\n`, { flag: 'wx', mode: 0o600 });}if(linux){const status=lstatSync(memory);if(!status.isFile()||status.uid!==linux.uid||status.gid!==linux.gid||(status.mode&0o600)!==0o600)throw new Error(`Linux Agent memory entry is not writable by its user: ${agent.id}`);}
+        const memory=join(root,'MEMORY.md');if (!existsSync(memory)){if(linux)throw new Error(`Provision Linux Agent memory entry before startup: ${agent.id}`);for(const name of ['notes','artifacts'])mkdirSync(join(root,name),{recursive:true,mode:0o700});writeFileSync(memory, initialMemory(agent.name), { flag: 'wx', mode: 0o600 });}if(linux){const status=lstatSync(memory);if(!status.isFile()||status.uid!==linux.uid||status.gid!==linux.gid||(status.mode&0o600)!==0o600)throw new Error(`Linux Agent memory entry is not writable by its user: ${agent.id}`);}
       }
       if(config.runtime.linuxUsers){const homes=Object.values(this.memoryRoots);for(const [index,root] of homes.entries())for(const other of homes.slice(index+1))if(within(root,other)||within(other,root))throw new Error('Linux Agent homes overlap');}
       const protectedRoots=reservedAgentHomePaths(projectRoot,state,agentsDir),privateBase=new Set(pathVariants(agentsDir));
@@ -188,7 +189,7 @@ export class Daemon {
     if(!root||!agent)throw new Error('Unknown review identity');
     const names=readdirSync(root);if(names.some(name=>!['MEMORY.md','notes','artifacts'].includes(name)))throw new Error('Review workspace is not clean');
     for(const dir of ['notes','artifacts']){if(!names.includes(dir))continue;const path=join(root,dir);if(lstatSync(path).isSymbolicLink()||readdirSync(path).length)throw new Error('Review workspace contains prior material');}
-    const memory=join(root,'MEMORY.md');if(lstatSync(memory).isSymbolicLink()||lstatSync(memory).nlink!==1||readFileSync(memory,'utf8')!==`# ${agent.name}\n\nPrivate memory entry. Keep durable lessons and links to notes here.\n`)throw new Error('Review memory contains prior material');
+    const memory=join(root,'MEMORY.md');if(lstatSync(memory).isSymbolicLink()||lstatSync(memory).nlink!==1||readFileSync(memory,'utf8')!==initialMemory(agent.name))throw new Error('Review memory contains prior material');
     return root;
   }
   start(progress?:()=>void): Promise<void> {
