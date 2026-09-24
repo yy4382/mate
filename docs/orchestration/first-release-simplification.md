@@ -181,10 +181,17 @@ The user reviewed the delivered result and reported three gaps, all confirmed ag
    `pnpm check` failed for reasons unrelated to the source; `.prettierignore` now names
    `.pnpm-store/` so the format scope cannot depend on `.gitignore`.
 3. **Documentation and tracker disagreed about native validation**: `docs/OPERATIONS.md:74`
-   states the procedure has never been run on any host, while #53 was closed. That is now
-   tracked honestly: #54 is open with the `ready-for-human` label and gates the "first release is
-   deployable" conclusion, and #53 carries a comment saying its closure covers only the delivered
-   half.
+   states the procedure has never been run on any host, while #53 was closed. **User instruction
+   (recorded here as binding): do not ask the user to perform real Linux testing until they
+   explicitly say otherwise.** The ticket that asked for it (#54) was therefore withdrawn, and
+   native validation is out of scope for now. It has NOT been reclassified as passed: it simply
+   is not being requested, and the "first release is deployable" conclusion stays unclaimed
+   rather than being asserted on the strength of simulated tests.
+
+Standing backlog after delivery: the user reports that the code itself still has many open
+problems. Those are to be found by systematic audit and fixed through the normal ticket flow,
+not inferred. The orchestrator's own working rule is to bring each finding with a `file:line`
+and evidence before any fix is attempted.
 
 Process correction accepted for future work: ticket implementers should read their own issue
 from the tracker (`gh issue view <n> --comments`), claim it as their first tracker write, and
