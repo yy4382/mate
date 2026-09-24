@@ -59,11 +59,37 @@ sudo matectl logs
 
 在 Debian 13 上另用两个真实 Agent 账号做原生检查：分别读自己的与同伴的 `MEMORY.md`，读同伴共享文件、只写自己的共享目录，尝试读取 Mate 数据库/凭证和控制服务；再启动、列出、停止一个长任务。使用合成文件记录 UID、命令和退出码，不读取真实私人记忆。macOS 模拟测试不能代替这些检查。
 
+## 原生 Linux 维护验证
+
+仓库测试里的宿主替换入口（`tests/deployment/host-operations.test.ts`、`tests/helpers/host.ts`）用**模拟宿主**证明维护流程只通过一个可替换入口，并注入故障来验证决定落盘后执行、完成项复验和中断恢复。它在任何平台都能跑，但**不**证明真实 UID、目录权限或进程控制。这些事实只能在一台可重置的 Debian 13 主机上验证：
+
+```sh
+sudo tests/native/linux-maintenance.sh /ABSOLUTE/mate.json /ABSOLUTE/mate.deploy.json /ABSOLUTE/release
+```
+
+前置条件是 `preflight`/`install` 所需的全部内容：两个已存在、UID/GID 互不相同的非特权 Agent 账号，root 预建的私人目录父路径，以及一个对应干净源码提交的完整发布物（见上文安装步骤）。脚本会依次执行 `preflight`、`install`、`doctor`、启动 `mate.service`、在 `mate-agent-<UID>.slice` 里启动/列出/停止一个 Agent 归属的进程、用同一份当前格式数据库记录两个 Agent 的会话/消息/任务/提醒/投递、`matectl backup` 并复核 checkpoint 清单与私人 home、`matectl restore --replace`、一次同格式的 `upgrade` + `finalize` + 重启、一次配置变更 + 重启，并确认被改动的 checkpoint 会被拒绝。任一检查失败即中止并以非零退出；结束时把证据写成 `/var/tmp/mate-maintenance-validation.json`，其中 `mode` 区分 `native` 与 `fixture`，`phases` 逐条列出检查项与结果。
+
+脚本内的权限探针由内核判定：以 Agent 账号运行 `setpriv` 后读自己的 `MEMORY.md`、写自己的共享目录必须成功，读同伴 home/`MEMORY.md`、写同伴共享目录、读 Mate 数据库/`mate.env`/`mate.service`、`systemctl stop mate.service` 必须失败。同一脚本不连接 Slack、模型供应商或 VPS，报告里也明确写出这一点；真实的 Slack/provider 连接仍需按上文单独核对，不能被这份报告或任何合成测试替代。
+
 ## 备份、升级与停用
 
-先停止 `mate.service` 和 Agent 后台任务；维护命令会复查。`sudo matectl backup NAME` 保存 SQLite 与每位 Agent 的私人 home，最后发布完成标记。共享目录另按普通 VPS 文件备份方式处理，并保留 UID/GID。`sudo matectl restore OLD --replace CURRENT` 要求 CURRENT 是当前状态的匹配 checkpoint；中断后用相同参数恢复，不删库或清理恢复标记来绕过检查。
+先停止 `mate.service` 和 Agent 后台任务；维护命令会复查。`sudo matectl backup NAME` 保存 SQLite 与每位 Agent 的私人 home，最后发布完成标记。共享目录另按普通 VPS 文件备份方式处理（例如 `cp -a` 或 `tar`，保持 UID/GID），checkpoint 不包含它。`sudo matectl restore OLD --replace CURRENT` 要求 CURRENT 是当前状态的匹配 checkpoint；中断后用相同参数重跑即可续做，不删库、不清理 `restore.json` 来绕过检查。
 
-代码升级先构建完整新发布物、停机并备份，再运行 `sudo matectl upgrade /ABSOLUTE/new-mate.deploy.json`。它替换已验证 release 并要求配置与已安装配置一致。首版只有一套数据库格式，没有版本化迁移：同格式内的程序升级与重启保留会话、投递、任务、提醒和身份，但把数据目录退回旧版程序不受支持，需要时从升级前检查点恢复（`sudo matectl restore`）。验证后用 `sudo matectl finalize` 确认。配置变更先按上面的步骤取一份 checkpoint，再停机替换 `/etc/mate/mate.json` 并启动一次 Mate 让它应用并记录；现有 Agent 身份、UID/GID/home 和共享根不得改变，`runtime.dataDir` 不变才延续原有数据。原生操作细节与命令契约以安装器、`matectl` 和相关测试为准。
+「换程序版本」和「恢复数据」是两件事，不要互相替代：
+
+| 目的 | 命令 | 数据后果 |
+|---|---|---|
+| 换程序版本 | 构建新发布物 → 停机 → 备份 → `sudo matectl upgrade /ABSOLUTE/new-mate.deploy.json` → 验证 → `sudo matectl finalize` | 替换 release 与 `current` 链接后重启。首版只有一套数据库格式，没有版本化迁移：同一格式内的程序升级保留会话、投递、任务、提醒和身份。 |
+| 恢复数据 | `sudo matectl restore NAME [--replace CURRENT]` | 用 checkpoint 里的数据库和私人 home 覆盖当前状态，只恢复数据，不改变程序版本；执行前必须先停服务并备份当前状态。 |
+| 改配置 | 停机 → 备份 → 替换 `/etc/mate/mate.json` → 启动一次让 Mate 应用并记录 → 需要时再停机 | 同一格式内保留会话、投递、任务、提醒和身份。现有 Agent 身份、UID/GID/home 和共享根不得改变；`runtime.dataDir` 不变才延续原有数据。 |
+
+把数据目录退回旧版程序不在支持范围内：需要退版本时，按上表先恢复升级前的 checkpoint。`matectl upgrade` 要求配置与已安装配置一致，所以改配置要在升级之前或之后单独完成，不要在同一次升级里顺带改。原生操作细节与命令契约以安装器、`matectl` 和相关测试为准。
+
+维护操作中途失败时，先看 `sudo matectl status`（或 `logs`）的 `diagnosis`：它会指出影响范围与下一步。三条路径互不替代：
+
+- 命令被中断或超时：重跑同一命令。备份额外确认完成标记；恢复读取 `restore.json` 跳过已完成项并复验，不会重复执行。
+- 升级已切换 release 但尚未确认：`sudo matectl rollback` 回到旧 release，或在验证之后 `sudo matectl finalize`。在待确认升级存在期间，启动、`offline-probe`、备份和恢复都被拒绝，直到二者之一完成。
+- 数据已被破坏或不一致：用 `sudo matectl restore` 从 checkpoint 恢复，不要手工改数据库或删除管理路径。
 
 配置只写 `mate.runTimeoutMs`；`mate.budgets` 等旧额度字段不再被接受，配置校验会直接拒绝整个文件。模型用量按每次 provider 调用持久记录为已知或未知，没有运行次数、token 或费用额度。
 

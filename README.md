@@ -32,4 +32,4 @@ pnpm node dist/src/main.js check mate.local.json
 pnpm node dist/src/main.js local mate.local.json
 ```
 
-`local` 是可信宿主的 JSONL 入口；具体请求和恢复验证见[本地开发说明](docs/DEVELOPMENT.md)。正式受管服务使用[运维步骤](docs/OPERATIONS.md)。普通测试的合成 Slack/provider 结果、目标机 Linux 用户权限与进程检查，以及真实账号连接是不同的验收证据；未完成的发布验收留在 issue tracker 中。
+`local` 是可信宿主的 JSONL 入口；具体请求和恢复验证见[本地开发说明](docs/DEVELOPMENT.md)。正式受管服务使用[运维步骤](docs/OPERATIONS.md)；其中 `tests/native/linux-maintenance.sh` 是在可重置 Debian 主机上跑完整安装、升级、备份与恢复的原生验证。普通测试的合成 Slack/provider 结果、替换宿主入口的模拟结果、目标机真实 Linux 用户权限与进程检查，以及真实账号连接是不同的验收证据，不能互相代替；未完成的发布验收留在 issue tracker 中。

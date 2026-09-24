@@ -226,29 +226,46 @@ async function restoreLinuxOwnership(
   }
   await host.chown(root, uid, gid);
 }
-function restoredShape(entries: readonly CheckpointEntry[]): string {
-  return encode(
-    entries.map((entry) =>
-      entry.type === "file"
-        ? {
-            path: entry.path,
-            type: entry.type,
-            mode: entry.mode,
-            size: entry.size,
-            sha256: entry.sha256,
-          }
-        : entry,
-    ),
-  );
+/** Post-restore verification keeps every recorded payload fact except allocation. */
+function restoredShape(entry: CheckpointEntry): string {
+  return entry.type === "file"
+    ? encode({
+        path: entry.path,
+        type: entry.type,
+        mode: entry.mode,
+        size: entry.size,
+        sha256: entry.sha256,
+      })
+    : encode(entry);
 }
+/**
+ * Re-inventory a completed Agent root and compare it with the checkpoint: content, permissions and
+ * file type (file, directory or symlink) must match, and every entry must belong to the Agent's
+ * Linux identity. This re-verification is what makes an interrupted restore safe to resume.
+ */
 async function assertRestoredWorkspace(
   host: HostOperations,
   root: string,
   entries: readonly CheckpointEntry[],
   agentId: string,
+  owner: { uid: number; gid: number },
 ): Promise<void> {
-  if (restoredShape(await inventoryWorkspace(host, root)) !== restoredShape(entries))
+  const actual = await inventoryWorkspace(host, root);
+  if (
+    actual.length !== entries.length ||
+    actual.some(
+      (entry, index) =>
+        entry.path !== entries[index]!.path ||
+        entry.type !== entries[index]!.type ||
+        restoredShape(entry) !== restoredShape(entries[index]!),
+    )
+  )
     throw new Error(`Completed restore workspace changed: ${agentId}`);
+  for (const path of [root, ...entries.map((entry) => join(root, ...entry.path.split("/")))]) {
+    const stat = await host.lstat(path);
+    if (stat.uid !== owner.uid || stat.gid !== owner.gid)
+      throw new Error(`Completed restore workspace ownership changed: ${agentId}`);
+  }
 }
 async function assertRestoredDatabase(
   host: HostOperations,
@@ -432,12 +449,12 @@ async function managedRestore(
       const identity = agents.get(agent.agentId)!.identity,
         root = roots.get(agent.agentId)!;
       if (journal.completedAgents.includes(agent.agentId))
-        await assertRestoredWorkspace(host, root, agent.entries, agent.agentId);
+        await assertRestoredWorkspace(host, root, agent.entries, agent.agentId, identity);
       else {
         await restoreWorkspace(host, source.root, agent.agentId, root, agent.entries);
         await restoreLinuxOwnership(host, root, identity.uid, identity.gid, agent.entries);
         await assertBoundary();
-        await assertRestoredWorkspace(host, root, agent.entries, agent.agentId);
+        await assertRestoredWorkspace(host, root, agent.entries, agent.agentId, identity);
         journal = {
           ...journal,
           completedAgents: [...journal.completedAgents, agent.agentId],
