@@ -268,7 +268,7 @@ it("rolls runtime and internal DM state back when their required fact cannot com
   );
 });
 
-it("reports reminder activity as complete because every stored reminder is current-format", () => {
+it("shows a current-format reminder's activity with complete coverage after an edit", () => {
   const f = setup(),
     c = f.collaboration,
     reminder = c.reminders.create("alice", f.work, {
@@ -287,9 +287,9 @@ it("reports reminder activity as complete because every stored reminder is curre
     content: "edited purpose",
     version: 2,
   });
-  expect(
-    c.operations.activity("owner", { sources: ["reminder_event", "reminder_firing"] }).sources,
-  ).toMatchObject({
+  const page = c.operations.activity("owner", { sources: ["reminder_event", "reminder_firing"] });
+  expect(page.items.map((item) => item.kind)).toEqual(["reminder.edited", "reminder.created"]);
+  expect(page.sources).toMatchObject({
     reminder_event: { coverage: { historicalComplete: true, gapCount: 0 } },
     reminder_firing: { coverage: { historicalComplete: true, gapCount: 0 } },
   });

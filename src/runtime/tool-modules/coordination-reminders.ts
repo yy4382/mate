@@ -499,7 +499,7 @@ const definitions: ToolSpec[] = [
     schema: z
       .object({ ...reminderInput, reminderId: id, expectedVersion: z.number().int().positive() })
       .strict(),
-    description: "Edit an owned reminder with CAS without rewriting its historical baseline.",
+    description: "Edit an owned reminder with CAS and keep its firing history intact.",
     replayScope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",

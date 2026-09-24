@@ -26,7 +26,9 @@ export class UnsupportedDatabaseError extends Error {
  * accepted only when it carries this release's identity, its revision and every
  * structure the format declares; anything else - an older Mate database, a
  * database from another application, a corrupt or incomplete file - raises
- * {@link UnsupportedDatabaseError}.
+ * {@link UnsupportedDatabaseError}. Structures an earlier build of this
+ * revision left behind are inert: they are tolerated and left untouched, so
+ * upgrading the program in place keeps every row of the same format.
  *
  * Opening a database that an interrupted writer left mid-transaction runs
  * SQLite's own recovery, so a rejected file can lose an uncommitted transaction

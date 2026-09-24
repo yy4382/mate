@@ -437,6 +437,49 @@ it("keeps existing data when the same format is opened again", () => {
   }
 });
 
+it("still accepts a same-revision file that an earlier build left with extra structures", () => {
+  const path = join(temporary(), "mate.sqlite"),
+    created = openCurrentDatabase(path);
+  created.exec(`
+    INSERT INTO agents(id,session_id) VALUES('alice','session-1');
+    INSERT INTO sessions(id,agent_id,config_version) VALUES('session-1','alice','v1');
+    INSERT INTO conversation_identities(id,kind,authority) VALUES('room','channel','internal');
+    INSERT INTO works(id,origin,target,state) VALUES('work-1','origin-1','{"conversationId":"room"}','active');
+    INSERT INTO schedules(id,agent_id,work_id,target,next_at,timezone,content,projection) VALUES('s1','alice','work-1','{"conversationId":"room"}',123,'UTC','Follow up','private');
+    INSERT INTO reminder_events(reminder_id,version,kind,at,payload,actor_id) VALUES('s1',1,'created',1,'{}','alice');
+    -- Structures an earlier build of this revision declared and this one does not.
+    ALTER TABLE schedules ADD COLUMN legacy INTEGER NOT NULL DEFAULT 1;
+    CREATE TABLE reminder_event_baselines(
+     reminder_id TEXT PRIMARY KEY REFERENCES schedules(id),
+     historical_complete INTEGER NOT NULL CHECK(historical_complete IN (0,1)),
+     migrated_at INTEGER NOT NULL
+    );
+    INSERT INTO reminder_event_baselines VALUES('s1',1,1);
+  `);
+  created.close();
+  // The revision identifies the format: every declared structure is present, so the leftover
+  // structures are inert rather than a reason to refuse the file or rewrite it.
+  const reopened = openCurrentDatabase(path);
+  try {
+    expect(reopened.pragma("user_version", { simple: true })).toBe(25);
+    expect(
+      reopened.prepare("SELECT content,projection FROM schedules WHERE id='s1'").get(),
+    ).toEqual({
+      content: "Follow up",
+      projection: "private",
+    });
+    expect(
+      reopened
+        .prepare(
+          "INSERT INTO schedules(id,agent_id,work_id,target,next_at,timezone,content,projection) VALUES('s2','alice','work-1','{\"conversationId\":\"room\"}',456,'UTC','still writable','private')",
+        )
+        .run().changes,
+    ).toBe(1);
+  } finally {
+    reopened.close();
+  }
+});
+
 it("rejects an older Mate database, an unknown revision and unreadable files without touching them", () => {
   const directory = temporary();
   const cases: { file: string; prepare: (path: string) => void; message: RegExp }[] = [

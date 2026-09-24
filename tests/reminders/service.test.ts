@@ -131,7 +131,12 @@ it("keeps the attributed work item an attribution rather than a message or file 
     stderr: "",
     truncated: false,
   }));
-  const broker = new Broker(s, c, { execute }, { research: "/home/research" });
+  const broker = new Broker(
+    s,
+    c,
+    { execute },
+    { research: "/home/research", writer: "/home/writer" },
+  );
   const reminder = c.reminders.create("research", work, { ...input, nextAt: 1000 });
   c.tick(2000);
   const delivery = s.db
@@ -148,18 +153,20 @@ it("keeps the attributed work item an attribution rather than a message or file 
   expect(c.messages.access("writer", "CTEST")).toBe(false);
   expect(() => c.selectWork(peer, work)).toThrow("access denied");
   expect(() => c.reminders.read("writer", reminder.id)).toThrow("owned");
-  // The same work item carries no filesystem permission: an ordinary command in a run bound to it
-  // still executes as that Agent's own Linux home.
+  expect(c.reminders.read("research", reminder.id).id).toBe(reminder.id);
+  // The same work item carries no filesystem permission: a command in a run bound to it executes as
+  // the acting Agent's own Linux home, never as the other Agent's.
   const author = s.beginRun("research")!;
-  await broker.execute(author, work, "work-scoped-command", {
+  await broker.execute(author, work, "author-command", {
     kind: "exec",
     cwd: ".",
     command: "id",
   });
-  expect(execute.mock.calls[0]![0]).toMatchObject({
-    agentId: "research",
-    root: "/home/research",
-  });
+  await broker.execute(peer, work, "peer-command", { kind: "exec", cwd: ".", command: "id" });
+  expect(execute.mock.calls.map((call) => call[0])).toMatchObject([
+    { agentId: "research", root: "/home/research" },
+    { agentId: "writer", root: "/home/writer" },
+  ]);
 });
 it("edits and cancellations are author-owned CAS operations; a completed task may remain an anchor", () => {
   const { c, work } = setup();
@@ -169,6 +176,7 @@ it("edits and cancellations are author-owned CAS operations; a completed task ma
   );
   c.reminders.edit("research", r.id, 1, { ...input, content: "new purpose", nextAt: 3000 });
   expect(() => c.reminders.cancel("research", r.id, 1)).toThrow("version");
+  expect(() => c.reminders.cancel("writer", r.id, 2)).toThrow("owned");
   expect(c.reminders.read("research", r.id).content).toBe("new purpose");
   c.reminders.cancel("research", r.id, 2);
   expect(c.reminders.read("research", r.id).active).toBe(0);
