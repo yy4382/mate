@@ -37,6 +37,9 @@ export class SlackHistory implements HistorySource {
       gaps: [reason],
       available: false,
     });
+    // Reading remote history waits for its installation instead of reporting a platform refusal.
+    const waiting = this.transport.waitingFor(run.agentId);
+    if (waiting) return unavailable(waiting.reason);
     if (!client) return unavailable("Agent has no Slack history installation");
     const location = mapper.target(target),
       version = m.membershipVersion(run.agentId);

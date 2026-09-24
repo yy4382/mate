@@ -179,23 +179,31 @@ export class SystemOperations {
         .all() as RequestRow[]
     ).map((row) => this.view(row));
   }
-  pendingNotices(): SystemRequest[] {
+  /**
+   * Notices of one Agent installation keep waiting while that installation is not ready; the
+   * filter also keeps a broken installation's backlog from starving a healthy one.
+   */
+  pendingNotices(agents?: readonly string[]): SystemRequest[] {
     this.expire();
     return (
       this.store.db
         .prepare(
-          "SELECT * FROM system_requests WHERE status='pending' AND notice_state='pending' ORDER BY rowid LIMIT 20",
+          `SELECT * FROM system_requests WHERE status='pending' AND notice_state='pending'${
+            agents ? " AND agent_id IN (SELECT value FROM json_each(?))" : ""
+          } ORDER BY rowid LIMIT 20`,
         )
-        .all() as RequestRow[]
+        .all(...(agents ? [JSON.stringify(agents)] : [])) as RequestRow[]
     ).map((row) => this.view(row));
   }
-  pendingResults(): SystemRequest[] {
+  pendingResults(agents?: readonly string[]): SystemRequest[] {
     return (
       this.store.db
         .prepare(
-          "SELECT * FROM system_requests WHERE status IN ('succeeded','failed','unknown','expired') AND notice_state='pending' ORDER BY rowid LIMIT 20",
+          `SELECT * FROM system_requests WHERE status IN ('succeeded','failed','unknown','expired') AND notice_state='pending'${
+            agents ? " AND agent_id IN (SELECT value FROM json_each(?))" : ""
+          } ORDER BY rowid LIMIT 20`,
         )
-        .all() as RequestRow[]
+        .all(...(agents ? [JSON.stringify(agents)] : [])) as RequestRow[]
     ).map((row) => this.view(row));
   }
   claimResultNotice(id: string): boolean {

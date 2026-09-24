@@ -16,6 +16,8 @@ export interface Envelope {
 }
 export interface SocketTransport {
   on(event: string, listener: (event: Envelope) => void): unknown;
+  /** The connection dropped; the owner of this socket decides how it recovers. */
+  onDisconnect(listener: () => void): void;
   start(): Promise<unknown>;
   disconnect(): Promise<unknown>;
 }

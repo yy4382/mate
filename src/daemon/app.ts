@@ -1,5 +1,6 @@
-import type { AdapterLifecycle } from "./adapter.js";
+import type { AdapterLifecycle, AdapterReadiness } from "./adapter.js";
 import { SlackRuntime } from "../slack/runtime.js";
+import type { SocketTransport } from "../slack/receiver.js";
 import { configureLocalRooms } from "../local/rooms.js";
 import type { LocalAdapter } from "../local/input.js";
 
@@ -47,9 +48,15 @@ import { operationDocumentation } from "../runtime/tools.js";
 import { repairTranscript } from "../runtime/context.js";
 import { Application } from "../application.js";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentConfig } from "../config.js";
 export interface Log {
   info(data: object, message: string): void;
   error(data: object, message: string): void;
+}
+/** Harness seams this entry accepts; a deployed Mate leaves every one of them unset. */
+export interface DaemonOptions {
+  /** Scripted Slack socket for harnesses; the deployed application opens Socket Mode. */
+  slackSocket?: (agent: AgentConfig) => SocketTransport;
 }
 export class Daemon {
   readonly store: Store;
@@ -87,7 +94,12 @@ export class Daemon {
   private closePromise?: Promise<void>;
   private recoveredDuringStartup = false;
   readonly config: DaemonConfig;
-  static async create(input: unknown, log: Log, projectRoot = resolve(".")): Promise<Daemon> {
+  static async create(
+    input: unknown,
+    log: Log,
+    projectRoot = resolve("."),
+    options: DaemonOptions = {},
+  ): Promise<Daemon> {
     // The daemon entry owns its own host entry, like the other process entries; its remaining
     // startup checks (data/state creation, worker quota) stay local to daemon startup.
     const host: HostOperations = nodeHostOperations(),
@@ -127,7 +139,7 @@ export class Daemon {
     try {
       await assertLinuxOperationAllowed(host, "start", config);
       await assertNoRestoreInProgress(host, data);
-      const daemon = new Daemon(config, log, projectRoot, release);
+      const daemon = new Daemon(config, log, projectRoot, release, options);
       transferred = true;
       return daemon;
     } finally {
@@ -139,6 +151,7 @@ export class Daemon {
     readonly log: Log,
     readonly projectRoot: string,
     release: () => void,
+    options: DaemonOptions,
   ) {
     this.config = config;
     this.release = release;
@@ -342,6 +355,19 @@ export class Daemon {
           );
         }
       }
+      // The operator's tokens become this application's Slack clients here, when the application
+      // is assembled. A missing bot token is one installation's problem, reported as readiness
+      // with the action it needs; it never keeps the other Agents or the internal work from
+      // starting.
+      if (slackConfig && this.application.transport)
+        this.application.transport.configure(
+          Object.fromEntries(
+            slackConfig.agents.flatMap((agent) => {
+              const token = process.env[agent.botTokenEnv]?.trim();
+              return token ? [[agent.id, token]] : [];
+            }),
+          ),
+        );
       this.supervisor.register();
       const slackTransport = this.application.transport;
       this.adapter = this.slackRuntime =
@@ -352,6 +378,12 @@ export class Daemon {
               this.controls,
               (message) => this.log.error({}, message),
               this.system,
+              {
+                // Daemon readiness and Slack readiness are separate facts; report each.
+                onReadiness: (readiness) =>
+                  this.log.info({ slack: readiness.installations }, "Slack readiness changed"),
+                ...(options.slackSocket ? { socket: options.slackSocket } : {}),
+              },
             )
           : undefined;
       this.store.atomic(() => {
@@ -425,26 +457,28 @@ export class Daemon {
       if (!models.getModel(agent.model.provider, agent.model.id))
         throw new Error(`Unknown provider/model for ${agent.id}`);
     }
-    const slackConfig = slackRuntimeConfig(this.config);
-    if (slackConfig && this.slackRuntime)
-      this.slackRuntime.transport.configure(
-        Object.fromEntries(
-          slackConfig.agents.map((agent) => [
-            agent.id,
-            requireSecret(process.env, agent.botTokenEnv),
-          ]),
-        ),
-      );
     await this.adapter?.start(this.abort.signal, progress);
     if (this.stopping) throw new Error("Daemon stopped during startup");
     this.application.gate.adoptPending();
     this.loopPromise = this.loop();
     this.log.info({}, "Mate daemon started");
   }
+  /**
+   * External-connection readiness, reported separately from this daemon running. The process is
+   * healthy with every installation waiting; only Slack-dependent work waits with it.
+   */
+  slackReadiness(): AdapterReadiness {
+    return this.adapter?.readiness?.() ?? { ready: true, installations: [] };
+  }
   private async flushExternal(): Promise<void> {
     try {
+      const slack = this.application.transport;
       for (const row of this.collaboration.output.ready(20, "external")) {
         if (this.stopping || this.paused) return;
+        // A Slack-dependent publication waits for its own installation: the durable outbox row
+        // stays pending, so nothing is marked failed or unknown while Slack is unreachable.
+        const actor = this.collaboration.messages.store.output(row.id)?.agent_id;
+        if (slack && actor && !slack.readyFor(actor)) continue;
         const target = this.collaboration.messages.records.targetedEffect("outbox", row.id).target;
         if (
           this.collaboration.messages.references.conversation(target.conversationId).authority ===

@@ -92,3 +92,23 @@ it("extends the startup deadline only after new recovery progress", async () => 
     ["--ready"],
   ]);
 });
+
+it("completes the managed start job from the daemon's own startup, not from Slack readiness", async () => {
+  const calls: string[][] = [],
+    run: ReadinessRunner = (_binary, args) => {
+      calls.push([...args]);
+      return { code: 0, stderr: "" };
+    };
+  // The installation is still connecting while the daemon starts; the service manager must still
+  // see the process as started instead of failing the start job and restarting the whole app.
+  const slack = { ready: false };
+  await completeManagedStartup(
+    async () => {
+      expect(slack.ready).toBe(false);
+    },
+    { NOTIFY_SOCKET: "/run/systemd/notify" },
+    run,
+  );
+  expect(calls).toEqual([["--ready"]]);
+  expect(slack.ready).toBe(false);
+});

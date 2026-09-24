@@ -30,6 +30,8 @@ import {
 import type { ActivityItem, OperationsStatus } from "../../src/operations/view.js";
 import { deploymentMain } from "../../src/deployment/cli.js";
 import { nodeHostOperations } from "../../src/deployment/host.js";
+import { recordSlackReadiness } from "../../src/slack/readiness.js";
+import { daemonFixture } from "../helpers/daemon-config.js";
 const host = nodeHostOperations();
 const dirs: string[] = [];
 function temp() {
@@ -191,6 +193,44 @@ it("rejects wrapper arguments before executing any controller/systemd/journal co
   }
   expect(script).not.toContain("journalctl");
   expect(script).toContain("status|logs)");
+});
+it("reports the daemon service state and the Slack readiness of each installation separately", () => {
+  const dir = temp(),
+    data = join(dir, "data");
+  mkdirSync(join(data, "state"), { recursive: true });
+  const store = new Store(join(data, "state", "mate.sqlite"));
+  recordSlackReadiness(store, {
+    updatedAt: 5,
+    installations: [
+      {
+        agentId: "research",
+        state: "waiting",
+        reason: "connection_unavailable",
+        nextAttemptAt: 99,
+        attempts: 2,
+        changedAt: 5,
+      },
+    ],
+  });
+  store.close();
+  const config = daemonConfigSchema.parse(daemonFixture(data)),
+    snapshot = readOperationsSnapshot(config, "status"),
+    status = diagnosticStatus(snapshot.status, "active", clear);
+  // The daemon is running while its Slack installation is not ready: two separate facts.
+  expect(status.service).toBe("active");
+  expect(snapshot.slack).toEqual({
+    updatedAt: 5,
+    installations: [
+      {
+        agentId: "research",
+        state: "waiting",
+        reason: "connection_unavailable",
+        nextAttemptAt: 99,
+        attempts: 2,
+        changedAt: 5,
+      },
+    ],
+  });
 });
 it("does not connect to Slack/provider when collecting diagnostics without credentials", async () => {
   const connect = vi.spyOn(net.Socket.prototype, "connect").mockImplementation(() => {

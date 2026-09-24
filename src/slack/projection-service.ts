@@ -25,12 +25,16 @@ export class SlackProjectionService {
     readonly input: SlackProjectionInput,
     readonly slack: CanonicalSlackTransport,
   ) {}
-  private bindings(): ProjectionBinding[] {
+  private bindings(publishers?: ReadonlySet<string>): ProjectionBinding[] {
     return (
       this.core.messages.store.db
-        .prepare("SELECT id FROM projection_bindings WHERE provider='slack' AND workspace=?")
-        .all(this.slack.mapper.config.teamId) as { id: string }[]
-    ).map((row) => this.core.binding(row.id));
+        .prepare(
+          "SELECT id,publisher FROM projection_bindings WHERE provider='slack' AND workspace=?",
+        )
+        .all(this.slack.mapper.config.teamId) as { id: string; publisher: string }[]
+    )
+      .filter((row) => !publishers || publishers.has(row.publisher))
+      .map((row) => this.core.binding(row.id));
   }
   /** Controls verifies owner before invoking this callback. Still verify here for direct use. */
   control(
@@ -271,17 +275,23 @@ export class SlackProjectionService {
       });
     return recovered;
   }
-  async catchUp(progress?: () => void): Promise<boolean> {
+  async catchUp(progress?: () => void, publishers?: ReadonlySet<string>): Promise<boolean> {
     let complete = true;
-    for (const b of this.bindings())
+    for (const b of this.bindings(publishers))
       if (b.enabled && !(await this.history(b, undefined, progress))) complete = false;
     // Startup must cover every known root; per-thread watermarks make repeats cheap.
     const s = this.core.messages.store;
-    const roots = s.db
-      .prepare(
-        "SELECT p.id,mb.external_message root FROM message_bindings mb JOIN message_identities m ON m.id=mb.message_id AND m.root_id=m.id JOIN projection_bindings p ON p.provider=mb.provider AND p.workspace=mb.workspace AND p.external_id=mb.external_conversation WHERE p.enabled=1 AND p.provider='slack' AND p.workspace=? ORDER BY mb.rowid",
-      )
-      .all(this.slack.mapper.config.teamId) as { id: string; root: string }[];
+    const roots = (
+      s.db
+        .prepare(
+          "SELECT p.id,p.publisher,mb.external_message root FROM message_bindings mb JOIN message_identities m ON m.id=mb.message_id AND m.root_id=m.id JOIN projection_bindings p ON p.provider=mb.provider AND p.workspace=mb.workspace AND p.external_id=mb.external_conversation WHERE p.enabled=1 AND p.provider='slack' AND p.workspace=? ORDER BY mb.rowid",
+        )
+        .all(this.slack.mapper.config.teamId) as {
+        id: string;
+        publisher: string;
+        root: string;
+      }[]
+    ).filter((row) => !publishers || publishers.has(row.publisher));
     for (const root of roots)
       if (!(await this.history(this.core.binding(root.id), root.root, progress))) complete = false;
     return complete;

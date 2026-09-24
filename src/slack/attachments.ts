@@ -11,6 +11,8 @@ export class Attachments {
     readonly c: Collaboration,
     readonly broker: Broker,
     readonly clients: Map<string, WebClient>,
+    /** Connection readiness of each installation; absent means no wait is known. */
+    readonly readiness?: { waitingFor(actor: string): Error | undefined },
   ) {}
   configured(actor: string): boolean {
     return !!this.clients.get(actor)?.token;
@@ -32,6 +34,9 @@ export class Attachments {
     this.visible(run, args);
     this.c.assertActionWork(run, workId);
     signal = AbortSignal.any([signal, AbortSignal.timeout(30000)]);
+    // A platform download waits for its own installation instead of failing as if it were gone.
+    const waiting = this.readiness?.waitingFor(run.agentId);
+    if (waiting) throw waiting;
     const client = this.clients.get(run.agentId);
     if (!client?.token) throw new Error("Missing attachment client");
     const info = await client.files.info({ file: args.fileId });

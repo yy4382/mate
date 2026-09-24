@@ -925,7 +925,12 @@ it("rejects forged Slack approval envelopes and a request belonging to another A
       writer: "synthetic",
     }),
     slack = new SlackService(c, transport, ingress, {} as Controls, () => false, system);
-  const socket = { on: () => {}, start: async () => {}, disconnect: async () => {} },
+  const socket = {
+      on: () => {},
+      onDisconnect: () => {},
+      start: async () => {},
+      disconnect: async () => {},
+    },
     receiver = new DurableReceiver(
       store,
       "AONE",
@@ -1069,9 +1074,10 @@ it("paused or delayed output cannot starve later active work", async () => {
   await c.output.send(ready);
   expect(post).toHaveBeenCalledOnce();
 });
-it("stop during startup retains the singleton lock until startup settles and never opens sockets afterward", async () => {
+it("reports the daemon running before Slack connects and stops a pending connection cleanly", async () => {
   const { Daemon } = await import("../../src/daemon/app.js");
   const { deferred } = await import("../helpers/pi.js");
+  const { slackSockets } = await import("../helpers/slack-connection.js");
   const root = mkdtempSync(join(tmpdir(), "mate-start-stop-")),
     gate = deferred();
   const config = daemonFixture(root, {
@@ -1087,18 +1093,27 @@ it("stop during startup retains the singleton lock until startup settles and nev
     saved = Object.fromEntries(refs.map((ref) => [ref, process.env[ref]]));
   for (const ref of refs) process.env[ref] = "synthetic";
   const log = { info: () => {}, error: () => {} };
-  const daemon = await Daemon.create(config, log);
-  const verify = vi.spyOn(daemon.slack, "verify").mockImplementation(() => gate.promise);
+  const sockets = slackSockets();
+  const daemon = await Daemon.create(config, log, process.cwd(), { slackSocket: sockets.socket });
+  const verify = vi.spyOn(daemon.slack, "verifyAgent").mockImplementation(() => gate.promise);
   const membership = vi.spyOn(daemon.slack, "membership");
   try {
-    const starting = daemon.start();
+    // Startup does not wait for the Slack connection: the daemon is running while this
+    // installation is still connecting, and the two facts are reported separately.
+    await daemon.start();
+    expect(daemon.slackReadiness()).toMatchObject({
+      ready: false,
+      installations: [{ agentId: "research", state: "connecting" }],
+    });
     await vi.waitFor(() => expect(verify).toHaveBeenCalledOnce());
     const closing = daemon.close();
     expect(() => acquireLock(join(root, "state", "daemon.lock"))).toThrow("Another Mate");
     gate.resolve();
-    await expect(starting).rejects.toThrow("Daemon stopped during startup");
     await closing;
+    // A stop during the pending connection never lets membership or history catch-up run after it.
     expect(membership).not.toHaveBeenCalled();
+    // The socket that attempt opened is closed instead of being left live.
+    expect(sockets.forAgent("research")!.disconnects).toBeGreaterThan(0);
     const release = acquireLock(join(root, "state", "daemon.lock"));
     release();
   } finally {

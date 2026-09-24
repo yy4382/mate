@@ -28,6 +28,9 @@ export class SlackProjectionTransport implements ProjectionTransport {
       throw new Error("Invalid Slack projection binding");
     const client = this.slack.clients.get(binding.publisher);
     if (!client) throw new Error("Projection publisher has no Slack client");
+    // A not-ready publisher keeps its projection pending; the durable record waits for recovery.
+    const waiting = this.slack.waitingFor(binding.publisher);
+    if (waiting) throw waiting;
     return client;
   }
   prepare(b: ProjectionBinding, text: string, thread?: string) {
