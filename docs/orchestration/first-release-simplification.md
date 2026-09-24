@@ -56,7 +56,7 @@ only when every blocker is committed on the branch.
 | Ticket | Title | Status | Starting commit | Landing commit |
 |---|---|---|---|---|
 | #34 | 建立统一格式检查并完成机械排版 | **done** | `eb74e0e` | `a8b00ce` + `e85a3ca` + `7c6e061` + `a91edb4` |
-| #35 | 用单一当前 schema 初始化新数据库 | **done** | `d049b00` | `b1fcca9` |
+| #35 | 用单一当前 schema 初始化新数据库 | **done** | `d049b00` | `b1fcca9` + `beb5fdd` + `12aab7b` + `6b9d256` |
 | #36 | 让所有入口使用当前数据库格式 | in progress | `b1fcca9` | — |
 | #37 | 统一应用装配与关闭流程 | pending | — | — |
 | #38 | 由任务模块负责消息关联任务的完整发布流程 | pending | — | — |
@@ -69,11 +69,11 @@ only when every blocker is committed on the branch.
 | #45 | 在工作进程协议中保留故障类别与阶段 | pending | — | — |
 | #46 | 对暂时模型故障持久退避并自动继续 | pending | — | — |
 | #47 | 保持正常让位后的持久继续与恢复输入 | pending | — | — |
-| #48 | 使进程查询与停止可取消且不阻塞 daemon | in progress | `d049b00` (worktree `.worktrees/t48`) | — |
+| #48 | 使进程查询与停止可取消且不阻塞 daemon | review | `d049b00` (worktree `.worktrees/t48`) | `8e5c3c8` + `d9b5626` + `c4a69a7` (merge pending) |
 | #49 | 让内部应用在 Slack 离线时启动和运行 | pending | — | — |
 | #50 | 按安装和目标范围恢复 Slack 操作 | pending | — | — |
 | #51 | 给 owner 提供分范围、可操作的故障诊断 | pending | — | — |
-| #52 | 统一 Linux 维护所用的宿主操作与路径事实 | in progress | `d049b00` (worktree `.worktrees/t52`) | — |
+| #52 | 统一 Linux 维护所用的宿主操作与路径事实 | review | `d049b00` (worktree `.worktrees/t52`) | `dffb1d3` + `22e9a2a` + `053a643` (merge pending) |
 | #53 | 验证完整 Linux 安装、升级、备份与恢复 | pending | — | — |
 
 ## Findings escalated to the user
