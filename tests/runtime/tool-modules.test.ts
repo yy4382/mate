@@ -74,7 +74,7 @@ it("registers every public operation exactly once with complete policies and sta
   expect(Object.isFrozen(builtInToolSpecs)).toBe(true);
   expect(operationContractFingerprint).toMatch(/^[a-f0-9]{64}$/);
   const allowed = {
-    scope: ["work", "session"],
+    replayScope: ["work", "session"],
     seat: ["deny", "redacted-read", "clean-workspace", "held-send"],
     effect: ["pure-read", "atomic-recorded", "broker-recorded", "adapter-recorded"],
     replay: ["immutable", "refreshable", "boundary-owned"],
@@ -83,7 +83,7 @@ it("registers every public operation exactly once with complete policies and sta
     expect(Object.isFrozen(entry)).toBe(true);
     expect(entry.description.length).toBeGreaterThan(10);
     expect(typeof entry.schema.parse).toBe("function");
-    expect(allowed.scope).toContain(entry.scope);
+    expect(allowed.replayScope).toContain(entry.replayScope);
     expect(allowed.seat).toContain(entry.seatPolicy);
     expect(allowed.effect).toContain(entry.effectPolicy);
     expect(allowed.replay).toContain(entry.replayPolicy);
@@ -133,9 +133,9 @@ it("fails closed for duplicate, reserved, incomplete and unknown module specific
   expect(() => build([{ domain: "x", specs: [{ ...base, authorize: undefined } as any] }])).toThrow(
     /Incomplete/,
   );
-  expect(() => build([{ domain: "x", specs: [{ ...base, scope: "ambient" } as any] }])).toThrow(
-    /unknown/,
-  );
+  expect(() =>
+    build([{ domain: "x", specs: [{ ...base, replayScope: "ambient" } as any] }]),
+  ).toThrow(/unknown/);
   expect(() =>
     build([{ domain: "x", specs: [{ ...base, effectPolicy: "atomic-recorded" } as any] }]),
   ).toThrow(/effect/);
@@ -691,7 +691,7 @@ it("keeps environment.info a receipt-free read and states the ordinary Linux net
   expect(builtInToolSpecs.find((spec) => spec.name === "environment.info")).toMatchObject({
     effectPolicy: "pure-read",
     replayPolicy: "boundary-owned",
-    scope: "work",
+    replayScope: "work",
   });
   expect(
     environmentReportSchema.parse({
@@ -723,8 +723,8 @@ it("keeps environment.info a receipt-free read and states the ordinary Linux net
     "Ordinary file tools and shell commands use your Linux user account and the same host paths",
     "An absolute path names that path; a relative path starts in your home directory",
     "environment.info can show your home and shared-work paths",
-    "Ordinary networking is available through your own Linux user",
-    "No dedicated URL-reading or search tool exists",
+    "Ordinary networking goes through your own Linux user rather than a dedicated tool",
+    "No dedicated URL-reading or search tool exists, so report what the network actually does as an environment fact",
     "An attachment caption or metadata is not its content",
     "if the write outcome is unknown, the file may have changed",
     "distinguishes whether an artifact adapter exists for you from whether the current work target supports it",

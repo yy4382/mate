@@ -56,7 +56,7 @@ const files = operationSchema.options
       name,
       schema: input,
       description: descriptions[name] ?? `Execute ${name} as the Agent Linux user.`,
-      scope: "work",
+      replayScope: "work",
       seatPolicy: "clean-workspace",
       effectPolicy: "broker-recorded",
       replayPolicy: "boundary-owned",
@@ -80,7 +80,7 @@ const definitions: ToolSpec[] = [
     schema: z.object({ command: z.string().max(16000), cwd: id }).strict(),
     description:
       "Run a shell command as the Agent Linux user. Use an absolute working directory or a path relative to the Agent home; background commands may keep running after this call.",
-    scope: "work",
+    replayScope: "work",
     seatPolicy: "clean-workspace",
     effectPolicy: "broker-recorded",
     replayPolicy: "boundary-owned",
@@ -100,7 +100,7 @@ const definitions: ToolSpec[] = [
     schema: z.object({}).strict(),
     description:
       "List currently running Linux scopes for your Agent user; state comes from systemd and /proc.",
-    scope: "work",
+    replayScope: "work",
     seatPolicy: "deny",
     effectPolicy: "pure-read",
     replayPolicy: "boundary-owned",
@@ -114,7 +114,7 @@ const definitions: ToolSpec[] = [
     name: "processes.stop",
     schema: z.object({ unit: id }).strict(),
     description: "Stop one of your Agent Linux scopes and its remaining processes.",
-    scope: "work",
+    replayScope: "work",
     seatPolicy: "deny",
     effectPolicy: "adapter-recorded",
     replayPolicy: "boundary-owned",
@@ -176,7 +176,7 @@ const definitions: ToolSpec[] = [
     schema: systemCommandSchema,
     description:
       "Request one system-level command. It will not run unless a human owner confirms this exact request in Slack; scripts and dependencies may change before execution.",
-    scope: "work",
+    replayScope: "work",
     seatPolicy: "deny",
     effectPolicy: "adapter-recorded",
     replayPolicy: "boundary-owned",
@@ -191,7 +191,7 @@ const definitions: ToolSpec[] = [
     schema: z.object({ requestId: id }).strict(),
     description:
       "Read the current result of one of your system-level requests, including denial, expiry or uncertain execution.",
-    scope: "work",
+    replayScope: "work",
     seatPolicy: "deny",
     effectPolicy: "pure-read",
     replayPolicy: "boundary-owned",
@@ -212,7 +212,7 @@ const definitions: ToolSpec[] = [
       .strict(),
     description:
       "Download a file attached to a visible message to an Agent-accessible path, up to 1 MB.",
-    scope: "work",
+    replayScope: "work",
     seatPolicy: "deny",
     effectPolicy: "adapter-recorded",
     replayPolicy: "boundary-owned",
@@ -241,7 +241,7 @@ const definitions: ToolSpec[] = [
       })
       .strict(),
     description: "Freeze an Agent-readable file and create a gated publication draft.",
-    scope: "work",
+    replayScope: "work",
     seatPolicy: "deny",
     effectPolicy: "adapter-recorded",
     replayPolicy: "boundary-owned",
@@ -267,7 +267,7 @@ const definitions: ToolSpec[] = [
       })
       .strict(),
     description: "Replace the frozen content for an existing publication draft.",
-    scope: "work",
+    replayScope: "work",
     seatPolicy: "deny",
     effectPolicy: "adapter-recorded",
     replayPolicy: "boundary-owned",

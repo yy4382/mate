@@ -17,7 +17,7 @@ export type ReplayPolicy = "immutable" | "refreshable" | "boundary-owned";
  * item selected when it arrived, plus the operation name and arguments. A "session" call is
  * recorded without that selection, for the operation that changes it itself.
  */
-export type CallScope = "work" | "session";
+export type ReplayScope = "work" | "session";
 
 export interface AdditionalTools {
   environment?(run: RunToken, workId: string): unknown;
@@ -71,8 +71,9 @@ export type ToolArguments<Schema extends z.ZodType> = z.output<Schema>;
 /**
  * The owning tool module interprets one operation's own object references: actor identity,
  * current visibility, and the work item the action belongs to. It returns that work item.
- * The router calls it before execution and again after every await, so a run that was fenced,
- * paused or lost visibility while the call was in flight is refused before its result is used.
+ * The router calls it before execution and again once the operation's await is over, so a run that
+ * was fenced, a work item that was paused or a membership that was withdrawn while the call was in
+ * flight is refused before its result is used. The work item itself is fixed for the call.
  */
 export type ToolAuthorize<Schema extends z.ZodType> = (
   context: ToolExecutionContext,
@@ -90,7 +91,7 @@ export interface ToolSpecInput<Schema extends z.ZodType> {
   name: string;
   schema: Schema;
   description: string;
-  scope: CallScope;
+  replayScope: ReplayScope;
   seatPolicy: SeatPolicy;
   effectPolicy: EffectPolicy;
   replayPolicy: ReplayPolicy;
@@ -102,7 +103,7 @@ interface ToolSpecBase {
   name: string;
   schema: z.ZodType;
   description: string;
-  scope: CallScope;
+  replayScope: ReplayScope;
   seatPolicy: SeatPolicy;
   effectPolicy: EffectPolicy;
   replayPolicy: ReplayPolicy;

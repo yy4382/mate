@@ -45,7 +45,6 @@ function reminderReferences(
   const actor = context.run.agentId,
     c = context.collaboration;
   c.messages.requireAccess(actor, args.target.conversationId);
-  if (args.taskId) c.board.read(actor, args.taskId);
   if (args.anchor) c.messages.message(actor, args.anchor.messageId);
   return args.taskId ? c.board.read(actor, args.taskId).workId : context.workId;
 }
@@ -68,7 +67,7 @@ function taskWorkOf(
     context.coordination.workOf(context.run.agentId, args, context.workId),
   );
 }
-export const taskMutation = <Schema extends z.ZodType<TaskReference, any>>(
+const taskMutation = <Schema extends z.ZodType<TaskReference, any>>(
   name: string,
   schema: Schema,
   description: string,
@@ -78,7 +77,7 @@ export const taskMutation = <Schema extends z.ZodType<TaskReference, any>>(
     name,
     schema,
     description,
-    scope: "work",
+    replayScope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
@@ -96,7 +95,7 @@ const reminderRead = <Schema extends z.ZodType>(
     name,
     schema,
     description,
-    scope: "work",
+    replayScope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "refreshable",
@@ -114,7 +113,7 @@ const definitions: ToolSpec[] = [
     name: "works.list",
     schema: z.object({}).strict(),
     description: "List currently visible work containers.",
-    scope: "work",
+    replayScope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "refreshable",
@@ -134,7 +133,7 @@ const definitions: ToolSpec[] = [
     schema: z.object({ workId: id }).strict(),
     description:
       "Select another visible active work context without changing Linux file permissions.",
-    scope: "session",
+    replayScope: "session",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
@@ -157,7 +156,7 @@ const definitions: ToolSpec[] = [
       .strict(),
     description:
       "Page current authorized tasks by relation. Listing never claims work; inspect version before mutation.",
-    scope: "work",
+    replayScope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "refreshable",
@@ -177,7 +176,7 @@ const definitions: ToolSpec[] = [
     schema: z.object({ taskId: id }).strict(),
     description:
       "Read one currently authorized task through its message or draft visibility boundary.",
-    scope: "work",
+    replayScope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "refreshable",
@@ -200,7 +199,7 @@ const definitions: ToolSpec[] = [
       })
       .strict(),
     description: "Page a task transition stream and inspect explicit historical coverage.",
-    scope: "work",
+    replayScope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "refreshable",
@@ -217,7 +216,7 @@ const definitions: ToolSpec[] = [
     name: "tasks.byMessage",
     schema: z.object({ message: messageRef }).strict(),
     description: "Find the canonical task attached to one visible message.",
-    scope: "work",
+    replayScope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "refreshable",
@@ -234,7 +233,7 @@ const definitions: ToolSpec[] = [
     name: "tasks.intents",
     schema: z.object({}).strict(),
     description: "List this Agent’s freshness-held task mutations.",
-    scope: "work",
+    replayScope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "refreshable",
@@ -253,7 +252,7 @@ const definitions: ToolSpec[] = [
     name: "tasks.retry",
     schema: z.object({ intentId: id, viewToken: id.optional() }).strict(),
     description: "Retry one held task mutation after obtaining a current view.",
-    scope: "work",
+    replayScope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
@@ -273,7 +272,7 @@ const definitions: ToolSpec[] = [
       })
       .strict(),
     description: "Explicitly apply one held task mutation despite the reported freshness conflict.",
-    scope: "work",
+    replayScope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
@@ -287,7 +286,7 @@ const definitions: ToolSpec[] = [
     name: "tasks.discard",
     schema: z.object({ intentId: id }).strict(),
     description: "Discard one own held task mutation.",
-    scope: "work",
+    replayScope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
@@ -298,7 +297,7 @@ const definitions: ToolSpec[] = [
     name: "tasks.create",
     schema: z.object({ target: targetSchema, title: text, viewToken: id.optional() }).strict(),
     description: "Create a task and an explicitly targeted visible draft.",
-    scope: "work",
+    replayScope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
@@ -462,7 +461,7 @@ const definitions: ToolSpec[] = [
       })
       .strict(),
     description: "Idempotently record the semantic result of one owned reminder firing.",
-    scope: "work",
+    replayScope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
@@ -481,7 +480,7 @@ const definitions: ToolSpec[] = [
     name: "reminders.create",
     schema: z.object(reminderInput).strict(),
     description: "Create an author-owned durable wakeup; projection defaults to private.",
-    scope: "work",
+    replayScope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
@@ -496,7 +495,7 @@ const definitions: ToolSpec[] = [
       .object({ ...reminderInput, reminderId: id, expectedVersion: z.number().int().positive() })
       .strict(),
     description: "Edit an owned reminder with CAS without rewriting its historical baseline.",
-    scope: "work",
+    replayScope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
@@ -518,7 +517,7 @@ const definitions: ToolSpec[] = [
       })
       .strict(),
     description: "Cancel future firings with CAS and optionally withdraw pending deliveries.",
-    scope: "work",
+    replayScope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
@@ -551,7 +550,7 @@ const definitions: ToolSpec[] = [
       })
       .strict(),
     description: "Compatibility wakeup creator with private projection.",
-    scope: "work",
+    replayScope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
@@ -578,7 +577,7 @@ const definitions: ToolSpec[] = [
       })
       .strict(),
     description: "Compatibility reminder cancellation with CAS.",
-    scope: "work",
+    replayScope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",

@@ -89,7 +89,8 @@ export class ConversationHistory {
     readonly messages: Conversations,
     readonly source?: HistorySource,
   ) {}
-  private authorize(run: RunToken, target?: ConversationTarget): void {
+  /** Identity and target visibility the owning module applies to one history request. */
+  authorize(run: RunToken, target?: ConversationTarget): void {
     const m = this.messages;
     m.store.assertRun(run);
     m.requireReadable(run.agentId);
@@ -275,11 +276,39 @@ export class ConversationHistory {
       },
     };
   }
+  /**
+   * Named schema fields: each one is read here, so renaming or deleting it in `historySchemas`
+   * breaks this translation instead of silently dropping the bound it carried.
+   */
   page(run: RunToken, value: unknown) {
-    return this.query(run, historySchemas["history.page"].parse(value), "page");
+    const input: z.output<(typeof historySchemas)["history.page"]> =
+      historySchemas["history.page"].parse(value);
+    return this.query(
+      run,
+      {
+        target: input.target,
+        limit: input.limit,
+        cursor: input.cursor,
+        before: input.before,
+        after: input.after,
+      },
+      "page",
+    );
   }
   search(run: RunToken, value: unknown) {
-    return this.query(run, historySchemas["history.search"].parse(value), "search");
+    const input: z.output<(typeof historySchemas)["history.search"]> =
+      historySchemas["history.search"].parse(value);
+    return this.query(
+      run,
+      {
+        target: input.target,
+        limit: input.limit,
+        cursor: input.cursor,
+        query: input.query,
+        author: input.author,
+      },
+      "search",
+    );
   }
   around(run: RunToken, value: unknown) {
     const input = historySchemas["history.around"].parse(value),

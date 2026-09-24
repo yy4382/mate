@@ -24,7 +24,7 @@ import {
 } from "./tool-contract.js";
 export type {
   AdditionalTools,
-  CallScope,
+  ReplayScope,
   EffectPolicy,
   ReplayPolicy,
   SeatPolicy,
@@ -47,7 +47,7 @@ export const builtInToolModules: readonly ToolModule[] = Object.freeze([
 function buildRegistry(modules: readonly ToolModule[]): Map<string, ToolSpec> {
   const registry = new Map<string, ToolSpec>(),
     domains = new Set<string>();
-  const scope = new Set(["work", "session"]),
+  const replayScope = new Set(["work", "session"]),
     seat = new Set(["deny", "redacted-read", "clean-workspace", "held-send"]),
     effect = new Set(["pure-read", "atomic-recorded", "broker-recorded", "adapter-recorded"]),
     replay = new Set(["immutable", "refreshable", "boundary-owned"]);
@@ -65,7 +65,7 @@ function buildRegistry(modules: readonly ToolModule[]): Map<string, ToolSpec> {
       if (
         typeof entry.schema?.parse !== "function" ||
         !entry.description.trim() ||
-        !scope.has(entry.scope) ||
+        !replayScope.has(entry.replayScope) ||
         !seat.has(entry.seatPolicy) ||
         !effect.has(entry.effectPolicy) ||
         !replay.has(entry.replayPolicy) ||
@@ -75,14 +75,18 @@ function buildRegistry(modules: readonly ToolModule[]): Map<string, ToolSpec> {
         throw new Error("Incomplete or unknown tool spec policy");
       if ((entry.effectPolicy === "atomic-recorded") !== (entry.replayPolicy !== "boundary-owned"))
         throw new Error("Invalid effect and replay policy combination");
+      // Which object a call names, and therefore which work item it belongs to, is interpreted by
+      // the owning tool module's `authorize`; the registry can only check the policies that stay
+      // declarative here. These two combinations keep a broker-recorded or held-send operation
+      // from claiming session-only replay identity.
       if (
         entry.seatPolicy === "clean-workspace" &&
-        (entry.effectPolicy !== "broker-recorded" || entry.scope !== "work")
+        (entry.effectPolicy !== "broker-recorded" || entry.replayScope !== "work")
       )
         throw new Error("Invalid clean-workspace policy combination");
       if (
         entry.seatPolicy === "held-send" &&
-        (entry.scope !== "work" || entry.effectPolicy !== "atomic-recorded")
+        (entry.replayScope !== "work" || entry.effectPolicy !== "atomic-recorded")
       )
         throw new Error("Invalid held-send policy combination");
       if (
@@ -107,10 +111,10 @@ export function fingerprintToolSpecs(specs: readonly ToolSpec[]): string {
       JSON.stringify({
         format: "mate.tool-contract.v1",
         operations: specs.map(
-          ({ name, description, scope, seatPolicy, effectPolicy, replayPolicy, schema }) => ({
+          ({ name, description, replayScope, seatPolicy, effectPolicy, replayPolicy, schema }) => ({
             name,
             description,
-            scope,
+            replayScope,
             seatPolicy,
             effectPolicy,
             replayPolicy,
@@ -216,6 +220,8 @@ export class ToolRouter {
     const context = this.context(run, bound, callId, operation, signal, selected);
     if (entry.effectPolicy === "atomic-recorded") return this.atomic(entry, context, args);
     const result = await entry.handler(context, args);
+    // Re-make the owning module's check now the await is over: a run fenced, a work item paused or
+    // a membership withdrawn while the call was in flight must not produce a usable result.
     entry.authorize(context, args);
     this.authorizeSeat(entry, run);
     const safe = this.seatResult(entry, context, result);
@@ -254,7 +260,7 @@ export class ToolRouter {
     const c = this.collaboration,
       s = c.store,
       request =
-        entry.scope === "session"
+        entry.replayScope === "session"
           ? { operation: entry.name, args }
           : { workId: context.requestWorkId, operation: entry.name, args };
     return s.atomic(() => {
