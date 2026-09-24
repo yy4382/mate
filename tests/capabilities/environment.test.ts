@@ -46,14 +46,12 @@ function harness() {
   const environment = new EnvironmentCapabilities(collaboration, {
     homes: { research: home },
     sharedRoot,
-    researchHosts: ["example.com"],
     attachmentConfigured: () => true,
     artifactConfigured: () => true,
     artifactSupported: () => true,
   });
   const router = new ToolRouter(collaboration, broker, {
     environment: (token, selected) => environment.read(token, selected),
-    research: async () => ({}),
     publish: async () => ({}),
   });
   return { store, collaboration, work, run, router, home, sharedRoot };
@@ -72,11 +70,10 @@ it("reports familiar host paths and network without exposing a separate file-gra
     )
   ).value;
   expect(environmentReportSchema.parse(value)).toMatchObject({
-    format: "mate.environment.v2",
+    format: "mate.environment.v3",
     workId: h.work,
     filesystem: { home: h.home, sharedRoot: h.sharedRoot, access: "linux_user_permissions" },
     execution: { status: "configured", network: "host" },
-    research: { status: "configured" },
     attachmentInput: { status: "configured" },
     artifactOutput: { status: "configured" },
   });
@@ -147,7 +144,6 @@ it("keeps ordinary execution available under the reviewer identity while withhol
   ).value;
   expect(value).toMatchObject({
     execution: { status: "configured", network: "host" },
-    research: { status: "unavailable" },
     attachmentInput: { status: "unavailable" },
     artifactOutput: { status: "unavailable" },
   });

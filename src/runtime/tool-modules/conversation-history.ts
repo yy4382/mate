@@ -2,11 +2,14 @@ import { z } from "zod";
 import { historySchemas } from "../../conversations/history.js";
 import { conversationTargetSchema as targetSchema } from "../../domain/conversations.js";
 import {
-  authorizeReferences,
+  activeWork,
   fence,
   id,
+  selectedWork,
   spec,
+  targetWork,
   text,
+  type ToolExecutionContext,
   type ToolModule,
   type ToolSpec,
 } from "../tool-contract.js";
@@ -25,12 +28,12 @@ const historySpecs = Object.entries(historySchemas).map(([name, schema]) =>
     name,
     schema,
     description: historyDescription[name]!,
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "pure-read",
     replayPolicy: "boundary-owned",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context, args) =>
+      targetWork(context, "target" in args ? args.target?.conversationId : undefined),
     handler: async ({ history, run, signal }, args) => ({
       value:
         name === "history.fetch"
@@ -43,6 +46,16 @@ const historySpecs = Object.entries(historySchemas).map(([name, schema]) =>
     }),
   }),
 );
+/** One own durable delivery, re-read under the acting Agent's current target access. */
+function ownDelivery(context: ToolExecutionContext, deliveryId: string): string {
+  fence(context);
+  const delivery = context.collaboration.store.delivery(deliveryId);
+  if (delivery.agent_id !== context.run.agentId) throw new Error("Private inbox");
+  const target = JSON.parse(delivery.payload).target;
+  if (target)
+    context.collaboration.messages.requireAccess(context.run.agentId, target.conversationId);
+  return context.workId;
+}
 
 const definitions: ToolSpec[] = [
   ...historySpecs,
@@ -51,12 +64,11 @@ const definitions: ToolSpec[] = [
     schema: z.object({ conversationId: id.optional() }).strict(),
     description:
       "Inspect implemented participation operations and platform conditions without granting access.",
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "pure-read",
     replayPolicy: "boundary-owned",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: selectedWork,
     handler: ({ directory, run }, args) => {
       if (!directory) throw new Error("Directory unavailable");
       return {
@@ -74,12 +86,11 @@ const definitions: ToolSpec[] = [
     name: "conversations.discover",
     schema: z.object({ cursor: z.string().min(1).max(10000).optional() }).strict(),
     description: "Page public space metadata through the adapter without granting message access.",
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "pure-read",
     replayPolicy: "boundary-owned",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: selectedWork,
     handler: async ({ directory, run }, args) => {
       if (!directory) throw new Error("Directory unavailable");
       return {
@@ -97,15 +108,14 @@ const definitions: ToolSpec[] = [
       z.object({ candidateId: id }).strict(),
     ]),
     description: "Join a discovered public external channel with a durable adapter receipt.",
-    workPolicy: "current",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "adapter-recorded",
     replayPolicy: "boundary-owned",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context) => activeWork(context),
     handler: async ({ directory, run, actionId, signal }, args) => {
       if (!directory) throw new Error("Directory unavailable");
-      if (args.candidateId)
+      if ("candidateId" in args)
         return {
           value: (await directory.joinCandidate?.(run, actionId, args.candidateId, signal)) ?? {
             status: "unsupported",
@@ -127,12 +137,11 @@ const definitions: ToolSpec[] = [
     name: "conversations.leave",
     schema: z.object({ conversationId: id }).strict(),
     description: "Leave an external channel with a durable adapter receipt.",
-    workPolicy: "current",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "adapter-recorded",
     replayPolicy: "boundary-owned",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context) => activeWork(context),
     handler: async ({ directory, run, actionId, signal }, args) => {
       if (!directory) throw new Error("Directory unavailable");
       return {
@@ -150,12 +159,11 @@ const definitions: ToolSpec[] = [
     name: "conversations.refresh",
     schema: z.object({ conversationId: id }).strict(),
     description: "Observe current external membership and reconcile uncertain membership writes.",
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "adapter-recorded",
     replayPolicy: "boundary-owned",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: selectedWork,
     handler: async ({ directory, run, signal }, args) => {
       if (!directory) throw new Error("Directory unavailable");
       return {
@@ -170,12 +178,11 @@ const definitions: ToolSpec[] = [
     name: "conversations.list",
     schema: z.object({}).strict(),
     description: "List conversation spaces currently available to this Agent.",
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "pure-read",
     replayPolicy: "boundary-owned",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: selectedWork,
     handler: async ({ directory, run }) => {
       if (!directory) throw new Error("Directory unavailable");
       return { value: await directory.spaces(run.agentId) };
@@ -185,12 +192,11 @@ const definitions: ToolSpec[] = [
     name: "conversations.members",
     schema: z.object({ conversationId: id }).strict(),
     description: "List current members of one authorized conversation.",
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "pure-read",
     replayPolicy: "boundary-owned",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context, args) => targetWork(context, args.conversationId),
     handler: async ({ directory, run }, args) => {
       if (!directory) throw new Error("Directory unavailable");
       return { value: await directory.members(run.agentId, args.conversationId) };
@@ -204,12 +210,11 @@ const definitions: ToolSpec[] = [
       })
       .strict(),
     description: "Open or find a direct conversation through the directory boundary.",
-    workPolicy: "current",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "adapter-recorded",
     replayPolicy: "boundary-owned",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context) => activeWork(context),
     handler: async ({ directory, run, actionId, signal }, args) => {
       if (!directory) throw new Error("Directory unavailable");
       return { value: await directory.openDM(run, actionId, args.principal, signal) };
@@ -219,12 +224,11 @@ const definitions: ToolSpec[] = [
     name: "attention.peek",
     schema: z.object({}).strict(),
     description: "Inspect content-free unread attention summaries.",
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "redacted-read",
     effectPolicy: "atomic-recorded",
     replayPolicy: "refreshable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: selectedWork,
     handler: ({ collaboration: c, run }) => ({ value: c.attention.peek(run.agentId) }),
   }),
   spec({
@@ -232,12 +236,11 @@ const definitions: ToolSpec[] = [
     schema: z.object({ target: targetSchema, cursor: id.optional() }).strict(),
     description:
       "Read current attention for an authorized target and receive a freshness view token.",
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context, args) => targetWork(context, args.target.conversationId),
     handler: ({ collaboration: c, run }, args) => ({
       value: c.attention.read(run, args.target, args.cursor),
     }),
@@ -248,12 +251,11 @@ const definitions: ToolSpec[] = [
       .object({ target: targetSchema, throughRevision: z.number().int().nonnegative() })
       .strict(),
     description: "Resolve attention through a known revision without changing content history.",
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context, args) => targetWork(context, args.target.conversationId),
     handler: ({ collaboration: c, run }, args) => {
       c.attention.state(run.agentId, args.target, "resolve", args.throughRevision);
       return { value: null };
@@ -263,12 +265,11 @@ const definitions: ToolSpec[] = [
     name: "attention.defer",
     schema: z.object({ target: targetSchema, until: z.number().int().nonnegative() }).strict(),
     description: "Postpone a target until a timestamp while keeping new input unread.",
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context, args) => targetWork(context, args.target.conversationId),
     handler: ({ collaboration: c, run }, args) => {
       c.attention.state(run.agentId, args.target, "defer", args.until);
       return { value: null };
@@ -278,12 +279,11 @@ const definitions: ToolSpec[] = [
     name: "attention.mute",
     schema: z.object({ target: targetSchema, active: z.boolean() }).strict(),
     description: "Suppress ordinary target activity while direct requests and DMs still surface.",
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context, args) => targetWork(context, args.target.conversationId),
     handler: ({ collaboration: c, run }, args) => {
       c.attention.state(run.agentId, args.target, "mute", Number(args.active));
       return { value: null };
@@ -293,12 +293,11 @@ const definitions: ToolSpec[] = [
     name: "messages.recent",
     schema: z.object({ conversationId: id }).strict(),
     description: "Read recent visible messages in one authorized conversation.",
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context, args) => targetWork(context, args.conversationId),
     handler: ({ collaboration: c, run }, args) => ({
       value: c.messages.recent(run.agentId, args.conversationId),
     }),
@@ -307,12 +306,11 @@ const definitions: ToolSpec[] = [
     name: "messages.read",
     schema: z.object({ target: targetSchema }).strict(),
     description: "Read the currently authorized message view for a target.",
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context, args) => targetWork(context, args.target.conversationId),
     handler: ({ collaboration: c, run }, args) => ({
       value: c.messages.read(run.agentId, args.target),
     }),
@@ -321,12 +319,11 @@ const definitions: ToolSpec[] = [
     name: "messages.search",
     schema: z.object({ query: text }).strict(),
     description: "Search currently visible messages through the bounded local index.",
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "refreshable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: selectedWork,
     handler: ({ collaboration: c, run }, args) => ({
       value: c.messages.search(run.agentId, args.query),
     }),
@@ -335,12 +332,12 @@ const definitions: ToolSpec[] = [
     name: "messages.send",
     schema: z.object({ target: targetSchema, text, viewToken: id.optional() }).strict(),
     description: "Queue an explicit visible reply through the freshness gate.",
-    workPolicy: "current",
+    scope: "work",
     seatPolicy: "held-send",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context, args) =>
+      activeWork(context, targetWork(context, args.target.conversationId)),
     handler: ({ collaboration: c, gate, run, workId, actionId }, args) => {
       c.send(run.agentId, workId, args.target, args.text, actionId, {
         run,
@@ -353,12 +350,11 @@ const definitions: ToolSpec[] = [
     name: "messages.watch",
     schema: z.object({ target: targetSchema, active: z.boolean() }).strict(),
     description: "Enable or disable ordinary attention for an authorized target.",
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context, args) => targetWork(context, args.target.conversationId),
     handler: ({ collaboration: c, run }, args) => {
       c.messages.watch(run.agentId, args.target, args.active);
       return { value: null };
@@ -368,12 +364,11 @@ const definitions: ToolSpec[] = [
     name: "inbox.list",
     schema: z.object({}).strict(),
     description: "List content-free private delivery metadata still relevant under current ACL.",
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "refreshable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: selectedWork,
     handler: ({ collaboration: c, run }) => {
       const value = (
         c.store.db
@@ -400,12 +395,11 @@ const definitions: ToolSpec[] = [
     name: "inbox.read",
     schema: z.object({ deliveryId: id }).strict(),
     description: "Read one own delivery under current target access.",
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context, args) => ownDelivery(context, args.deliveryId),
     handler: ({ collaboration: c }, args) => {
       const delivery = c.store.delivery(args.deliveryId);
       return { value: { ...delivery, payload: JSON.parse(delivery.payload) } };
@@ -415,12 +409,11 @@ const definitions: ToolSpec[] = [
     name: "inbox.ack",
     schema: z.object({ deliveryId: id }).strict(),
     description: "Acknowledge injection of one own delivery without marking it handled.",
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context, args) => ownDelivery(context, args.deliveryId),
     handler: ({ collaboration: c, run }, args) => {
       const delivery = c.store.delivery(args.deliveryId);
       c.store.db

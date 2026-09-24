@@ -6,7 +6,7 @@ import type { ConversationTarget } from "../domain/conversations.js";
 const availability = z.enum(["configured", "unavailable"]);
 export const environmentReportSchema = z
   .object({
-    format: z.literal("mate.environment.v2"),
+    format: z.literal("mate.environment.v3"),
     workId: z.string(),
     snapshotAt: z.number().int(),
     filesystem: z.object({
@@ -17,13 +17,6 @@ export const environmentReportSchema = z
     execution: z.object({
       status: availability,
       network: z.literal("host"),
-      reason: z.string().optional(),
-    }),
-    research: z.object({
-      status: availability,
-      mode: z.literal("known_public_https_url_only"),
-      allowedHosts: z.array(z.string()),
-      search: z.literal(false),
       reason: z.string().optional(),
     }),
     attachmentInput: z.object({
@@ -45,7 +38,6 @@ export interface EnvironmentDeployment {
   homes: Readonly<Record<string, string>>;
   sharedRoot?: string;
   access?: "linux_user_permissions" | "local_user_permissions";
-  researchHosts: readonly string[];
   attachmentConfigured(actor: string): boolean;
   artifactConfigured(actor: string): boolean;
   artifactSupported(actor: string, target: ConversationTarget): boolean;
@@ -62,14 +54,13 @@ export class EnvironmentCapabilities {
     const home = this.deployment.homes[run.agentId];
     if (!home) throw new Error("Agent Linux home is not configured");
     const seat = this.collaboration.seats.active(run.agentId);
-    const researchHosts = seat ? [] : [...this.deployment.researchHosts];
     const attachmentConfigured = !seat && this.deployment.attachmentConfigured(run.agentId);
     const target = JSON.parse(this.collaboration.work(workId).target) as ConversationTarget;
     const artifactAdapter = !seat && this.deployment.artifactConfigured(run.agentId);
     const artifactSupported =
       artifactAdapter && this.deployment.artifactSupported(run.agentId, target);
     return environmentReportSchema.parse({
-      format: "mate.environment.v2",
+      format: "mate.environment.v3",
       workId,
       snapshotAt: Date.now(),
       filesystem: {
@@ -78,15 +69,6 @@ export class EnvironmentCapabilities {
         access: this.deployment.access ?? "linux_user_permissions",
       },
       execution: { status: "configured", network: "host" },
-      research: {
-        status: researchHosts.length ? "configured" : "unavailable",
-        mode: "known_public_https_url_only",
-        allowedHosts: researchHosts,
-        search: false,
-        ...(!researchHosts.length
-          ? { reason: "No allowed known-URL research host for this context." }
-          : {}),
-      },
       attachmentInput: {
         status: attachmentConfigured ? "configured" : "unavailable",
         scope: "visible_external_message_file",

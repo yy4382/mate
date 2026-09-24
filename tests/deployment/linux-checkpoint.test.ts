@@ -65,7 +65,6 @@ it("backs up Linux Agent homes and restores private data with the Agent UID and 
       dataDir: data,
       sharedRoot: shared,
       linuxUsers: { alice: { uid, gid, home, username: "alice" } },
-      researchHosts: [],
     },
   });
   const store = new Store(join(data, "state", "mate.sqlite"));
@@ -120,7 +119,6 @@ it("checkpoints the real Linux Agent home rather than a legacy agents directory"
       linuxUsers: {
         alice: { uid: process.getuid!(), gid: process.getgid!(), home, username: "alice" },
       },
-      researchHosts: [],
     },
   });
   const store = new Store(join(data, "state", "mate.sqlite"));

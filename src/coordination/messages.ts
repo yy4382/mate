@@ -17,12 +17,38 @@ interface Intent {
   hold_id: string | null;
   receipt: string | null;
 }
+/** The object references one task mutation names in its own validated input. */
+export interface TaskReference {
+  taskId?: string | undefined;
+  message?: { messageId: string } | undefined;
+}
 export class MessageTasks {
   constructor(readonly c: Collaboration) {}
   private message(actor: string, ref: Ref): NormalMessage {
     const message = this.c.messages.message(actor, ref.messageId);
     if (message.deleted) throw new Error("Message not visible or deleted");
     return message;
+  }
+  /**
+   * Work ownership of one task mutation: the referenced task's work item, the work of the task
+   * already published from the referenced message, or the work the mutation was recorded with.
+   * Both references are re-read under the acting Agent's current visibility.
+   */
+  workOf(actor: string, args: TaskReference, fallback: string): string {
+    if (args.taskId) return this.c.board.read(actor, args.taskId).workId;
+    if (!args.message) return fallback;
+    const message = this.c.messages.message(actor, args.message.messageId),
+      row = this.c.store.db
+        .prepare(
+          "SELECT work_id FROM tasks WHERE message_key=? UNION ALL SELECT work_id FROM message_work WHERE message_key=? LIMIT 1",
+        )
+        .get(message.id, message.id) as { work_id: string } | undefined;
+    return row?.work_id ?? fallback;
+  }
+  /** Work item of one held mutation this Agent owns, re-read from the work its arguments name. */
+  holdWork(actor: string, id: string): string {
+    const held = this.intent(actor, id);
+    return this.workOf(actor, JSON.parse(held.args) as TaskReference, held.work_id);
   }
   find(actor: string, ref: Ref): Task | undefined {
     const m = this.message(actor, ref);

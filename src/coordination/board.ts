@@ -7,10 +7,10 @@ export const taskRelationSchema = z.enum(["owned", "assigned", "available", "all
 export type TaskRelation = z.infer<typeof taskRelationSchema>;
 export interface TaskListInput {
   relation: TaskRelation;
-  status?: string;
-  target?: ConversationTarget;
-  cursor?: string;
-  limit?: number;
+  status?: string | undefined;
+  target?: ConversationTarget | undefined;
+  cursor?: string | undefined;
+  limit?: number | undefined;
 }
 export interface TaskDTO {
   id: string;

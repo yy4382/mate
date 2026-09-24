@@ -285,7 +285,6 @@ export class Daemon {
         ...(config.adapters.local ? { local: config.adapters.local } : {}),
         runtime: {
           limits: config.runtime.limits,
-          researchHosts: config.runtime.researchHosts,
           ...(config.runtime.sharedRoot ? { sharedRoot: config.runtime.sharedRoot } : {}),
           ...(config.runtime.systemAgents ? { systemAgents: config.runtime.systemAgents } : {}),
         },

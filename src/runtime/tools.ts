@@ -24,12 +24,12 @@ import {
 } from "./tool-contract.js";
 export type {
   AdditionalTools,
+  CallScope,
   EffectPolicy,
   ReplayPolicy,
   SeatPolicy,
   ToolModule,
   ToolSpec,
-  WorkPolicy,
 } from "./tool-contract.js";
 
 const discoverySchemas = {
@@ -47,7 +47,7 @@ export const builtInToolModules: readonly ToolModule[] = Object.freeze([
 function buildRegistry(modules: readonly ToolModule[]): Map<string, ToolSpec> {
   const registry = new Map<string, ToolSpec>(),
     domains = new Set<string>();
-  const work = new Set(["none", "current", "task", "reminder", "select", "broker-managed"]),
+  const scope = new Set(["work", "session"]),
     seat = new Set(["deny", "redacted-read", "clean-workspace", "held-send"]),
     effect = new Set(["pure-read", "atomic-recorded", "broker-recorded", "adapter-recorded"]),
     replay = new Set(["immutable", "refreshable", "boundary-owned"]);
@@ -65,12 +65,11 @@ function buildRegistry(modules: readonly ToolModule[]): Map<string, ToolSpec> {
       if (
         typeof entry.schema?.parse !== "function" ||
         !entry.description.trim() ||
-        !work.has(entry.workPolicy) ||
+        !scope.has(entry.scope) ||
         !seat.has(entry.seatPolicy) ||
         !effect.has(entry.effectPolicy) ||
         !replay.has(entry.replayPolicy) ||
         typeof entry.authorize !== "function" ||
-        typeof entry.postAwait !== "function" ||
         typeof entry.handler !== "function"
       )
         throw new Error("Incomplete or unknown tool spec policy");
@@ -78,13 +77,12 @@ function buildRegistry(modules: readonly ToolModule[]): Map<string, ToolSpec> {
         throw new Error("Invalid effect and replay policy combination");
       if (
         entry.seatPolicy === "clean-workspace" &&
-        (entry.workPolicy !== "broker-managed" || entry.effectPolicy !== "broker-recorded")
+        (entry.effectPolicy !== "broker-recorded" || entry.scope !== "work")
       )
         throw new Error("Invalid clean-workspace policy combination");
       if (
         entry.seatPolicy === "held-send" &&
-        (!["current", "none"].includes(entry.workPolicy) ||
-          entry.effectPolicy !== "atomic-recorded")
+        (entry.scope !== "work" || entry.effectPolicy !== "atomic-recorded")
       )
         throw new Error("Invalid held-send policy combination");
       if (
@@ -109,10 +107,10 @@ export function fingerprintToolSpecs(specs: readonly ToolSpec[]): string {
       JSON.stringify({
         format: "mate.tool-contract.v1",
         operations: specs.map(
-          ({ name, description, workPolicy, seatPolicy, effectPolicy, replayPolicy, schema }) => ({
+          ({ name, description, scope, seatPolicy, effectPolicy, replayPolicy, schema }) => ({
             name,
             description,
-            workPolicy,
+            scope,
             seatPolicy,
             effectPolicy,
             replayPolicy,
@@ -209,21 +207,16 @@ export class ToolRouter {
     this.authorizeSeat(entry, run);
     const args = entry.schema.parse(this.normalizeInput(input)) as Record<string, any>,
       selected = c.currentWork(run, workId);
-    entry.authorize(this.context(run, selected, callId, operation, signal, selected), args);
-    const context = this.context(
-      run,
-      this.resolveWork(entry, run, selected, args),
-      callId,
-      operation,
-      signal,
-      selected,
+    // The owning tool module names the work item this call belongs to; the router never reads a
+    // field name to decide that. The pre-flight call is re-made after any await below.
+    const bound = entry.authorize(
+      this.context(run, selected, callId, operation, signal, selected),
+      args,
     );
+    const context = this.context(run, bound, callId, operation, signal, selected);
     if (entry.effectPolicy === "atomic-recorded") return this.atomic(entry, context, args);
     const result = await entry.handler(context, args);
-    entry.postAwait(context);
     entry.authorize(context, args);
-    if (!["none", "select", "broker-managed"].includes(entry.workPolicy))
-      c.assertActionWork(run, context.workId);
     this.authorizeSeat(entry, run);
     const safe = this.seatResult(entry, context, result);
     return { value: safe.value, ...(safe.wait ? { wait: true } : {}) };
@@ -253,58 +246,6 @@ export class ToolRouter {
       gate: this.gate,
     };
   }
-  private resolveWork(
-    entry: ToolSpec,
-    run: RunToken,
-    selected: string,
-    args: Record<string, any>,
-  ): string {
-    const c = this.collaboration;
-    if (
-      entry.workPolicy === "none" ||
-      entry.workPolicy === "select" ||
-      entry.workPolicy === "broker-managed"
-    )
-      return selected;
-    let bound = selected;
-    if (entry.workPolicy === "task") bound = this.taskWork(run, args, selected);
-    if (entry.workPolicy === "task" && args.intentId) {
-      const row = c.store.db
-        .prepare("SELECT work_id,args,target FROM task_intents WHERE id=? AND agent_id=?")
-        .get(args.intentId, run.agentId) as
-        { work_id: string; args: string; target: string } | undefined;
-      if (!row) throw new Error("Unknown task intent");
-      c.messages.requireAccess(run.agentId, JSON.parse(row.target).conversationId);
-      bound = this.taskWork(run, JSON.parse(row.args), row.work_id);
-    }
-    if (entry.workPolicy === "reminder") {
-      if (args.reminderId) bound = c.reminders.read(run.agentId, args.reminderId).work_id;
-      else if (args.scheduleId) bound = c.reminders.read(run.agentId, args.scheduleId).work_id;
-      else if (args.firingId) {
-        const row = c.store.db
-          .prepare(
-            "SELECT r.work_id FROM reminder_firings f JOIN schedules r ON r.id=f.reminder_id WHERE f.id=? AND r.agent_id=?",
-          )
-          .get(args.firingId, run.agentId) as { work_id: string } | undefined;
-        if (!row) throw new Error("Unknown owned reminder firing");
-        bound = row.work_id;
-      }
-    }
-    c.assertActionWork(run, bound);
-    return bound;
-  }
-  private taskWork(run: RunToken, args: Record<string, any>, fallback: string): string {
-    const c = this.collaboration;
-    if (args.taskId) return c.board.read(run.agentId, args.taskId).workId;
-    if (!args.message) return fallback;
-    const message = c.messages.message(run.agentId, args.message.messageId),
-      row = c.store.db
-        .prepare(
-          "SELECT work_id FROM tasks WHERE message_key=? UNION ALL SELECT work_id FROM message_work WHERE message_key=? LIMIT 1",
-        )
-        .get(message.id, message.id) as { work_id: string } | undefined;
-    return row?.work_id ?? fallback;
-  }
   private atomic(
     entry: ToolSpec,
     context: ToolExecutionContext,
@@ -313,13 +254,11 @@ export class ToolRouter {
     const c = this.collaboration,
       s = c.store,
       request =
-        entry.workPolicy === "select"
+        entry.scope === "session"
           ? { operation: entry.name, args }
           : { workId: context.requestWorkId, operation: entry.name, args };
     return s.atomic(() => {
       const existing = c.messages.writes.prepareAction(context.run, context.actionId, request);
-      if (args.intentId) context.coordination.describe(context.run.agentId, args.intentId);
-      if (args.draftId) context.gate.describe(context.run.agentId, args.draftId);
       if (existing.state === "succeeded" && entry.replayPolicy === "immutable")
         return JSON.parse(existing.receipt!) as ToolReply;
       if (existing.state === "succeeded" && entry.replayPolicy === "refreshable") {
@@ -332,7 +271,6 @@ export class ToolRouter {
       s.startAction(context.run, context.actionId);
       const result = entry.handler(context, args);
       if (isPromise(result)) throw new Error("Atomic tool handler returned a promise");
-      entry.postAwait(context);
       const safe = this.seatResult(entry, context, result),
         reply = { value: safe.value, wait: Boolean(safe.wait) };
       s.settleAction(context.run, context.actionId, "succeeded", reply);

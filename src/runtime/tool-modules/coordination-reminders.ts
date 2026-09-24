@@ -1,14 +1,19 @@
 import { z } from "zod";
 import { conversationTargetSchema as targetSchema } from "../../domain/conversations.js";
 import { taskRelationSchema } from "../../coordination/board.js";
+import type { TaskReference } from "../../coordination/messages.js";
 import {
-  authorizeReferences,
+  activeWork,
   fence,
   id,
   messageRef,
+  selectedWork,
   spec,
+  targetWork,
   text,
-  type AtomicToolSpec,
+  type ToolAuthorize,
+  type ToolHandler,
+  type ToolExecutionContext,
   type ToolModule,
   type ToolSpec,
 } from "../tool-contract.js";
@@ -23,54 +28,97 @@ const reminderInput = {
   anchor: messageRef.optional(),
   projection: z.enum(["private", "conversation_receipt"]).optional(),
 };
-const taskMutation = (
+/**
+ * Identity, visibility and work ownership of one call that names a target conversation and may
+ * optionally name a task or a message anchor. Every reference is interpreted here, so the shared
+ * router never has to recognise a field name.
+ */
+function reminderReferences(
+  context: ToolExecutionContext,
+  args: {
+    target: { conversationId: string };
+    taskId?: string | undefined;
+    anchor?: { messageId: string } | undefined;
+  },
+): string {
+  fence(context);
+  const actor = context.run.agentId,
+    c = context.collaboration;
+  c.messages.requireAccess(actor, args.target.conversationId);
+  if (args.taskId) c.board.read(actor, args.taskId);
+  if (args.anchor) c.messages.message(actor, args.anchor.messageId);
+  return args.taskId ? c.board.read(actor, args.taskId).workId : context.workId;
+}
+/** Work item of one own reminder, re-read under current target access. */
+function ownedReminder(context: ToolExecutionContext, reminderId: string): string {
+  fence(context);
+  return context.collaboration.reminders.read(context.run.agentId, reminderId).work_id;
+}
+/**
+ * A task mutation is attributed to the work item its own reference names, and that work item must
+ * still be active for this Agent.
+ */
+function taskWorkOf(
+  context: ToolExecutionContext,
+  args: { taskId?: string | undefined; message?: { messageId: string } | undefined },
+): string {
+  fence(context);
+  return activeWork(
+    context,
+    context.coordination.workOf(context.run.agentId, args, context.workId),
+  );
+}
+export const taskMutation = <Schema extends z.ZodType<TaskReference, any>>(
   name: string,
-  schema: z.ZodType,
+  schema: Schema,
   description: string,
-  handler: AtomicToolSpec["handler"],
+  handler: ToolHandler<Schema>,
 ): ToolSpec =>
   spec({
     name,
     schema,
     description,
-    workPolicy: "task",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context, args) => taskWorkOf(context, args),
     handler,
   });
-const reminderRead = (
+const reminderRead = <Schema extends z.ZodType>(
   name: string,
-  schema: z.ZodType,
+  schema: Schema,
   description: string,
-  handler: AtomicToolSpec["handler"],
+  authorize: ToolAuthorize<Schema>,
+  handler: ToolHandler<Schema>,
 ): ToolSpec =>
   spec({
     name,
     schema,
     description,
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "refreshable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize,
     handler,
   });
+/** A held task mutation this Agent owns is attributed to the work its own arguments name. */
+const heldMutation = (context: ToolExecutionContext, intentId: string): string => {
+  fence(context);
+  return activeWork(context, context.coordination.holdWork(context.run.agentId, intentId));
+};
 
 const definitions: ToolSpec[] = [
   spec({
     name: "works.list",
     schema: z.object({}).strict(),
     description: "List currently visible work containers.",
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "refreshable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: selectedWork,
     handler: ({ collaboration: c, run }) => {
       const value = c.store.db
         .prepare(
@@ -86,12 +134,11 @@ const definitions: ToolSpec[] = [
     schema: z.object({ workId: id }).strict(),
     description:
       "Select another visible active work context without changing Linux file permissions.",
-    workPolicy: "select",
+    scope: "session",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: selectedWork,
     handler: ({ collaboration: c, run }, args) => {
       c.selectWork(run, args.workId);
       return { value: { work: c.work(args.workId) } };
@@ -110,12 +157,11 @@ const definitions: ToolSpec[] = [
       .strict(),
     description:
       "Page current authorized tasks by relation. Listing never claims work; inspect version before mutation.",
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "refreshable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context, args) => targetWork(context, args.target?.conversationId),
     handler: ({ collaboration: c, run }, args) => ({
       value: c.board.list(run.agentId, {
         relation: args.relation ?? "all-visible",
@@ -131,12 +177,15 @@ const definitions: ToolSpec[] = [
     schema: z.object({ taskId: id }).strict(),
     description:
       "Read one currently authorized task through its message or draft visibility boundary.",
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "refreshable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context, args) => {
+      fence(context);
+      context.collaboration.board.read(context.run.agentId, args.taskId);
+      return context.workId;
+    },
     handler: ({ collaboration: c, run }, args) => ({
       value: c.board.read(run.agentId, args.taskId),
     }),
@@ -151,12 +200,15 @@ const definitions: ToolSpec[] = [
       })
       .strict(),
     description: "Page a task transition stream and inspect explicit historical coverage.",
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "refreshable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context, args) => {
+      fence(context);
+      context.collaboration.board.read(context.run.agentId, args.taskId);
+      return context.workId;
+    },
     handler: ({ collaboration: c, run }, args) => ({
       value: c.board.events(run.agentId, args.taskId, args.cursor, args.limit),
     }),
@@ -165,12 +217,15 @@ const definitions: ToolSpec[] = [
     name: "tasks.byMessage",
     schema: z.object({ message: messageRef }).strict(),
     description: "Find the canonical task attached to one visible message.",
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "refreshable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context, args) => {
+      fence(context);
+      context.collaboration.messages.message(context.run.agentId, args.message.messageId);
+      return context.workId;
+    },
     handler: ({ coordination, run }, args) => ({
       value: coordination.find(run.agentId, args.message) ?? null,
     }),
@@ -179,12 +234,11 @@ const definitions: ToolSpec[] = [
     name: "tasks.intents",
     schema: z.object({}).strict(),
     description: "List this Agent’s freshness-held task mutations.",
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "refreshable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: selectedWork,
     handler: ({ collaboration: c, coordination, run }) => ({
       value: (
         c.store.db
@@ -199,12 +253,11 @@ const definitions: ToolSpec[] = [
     name: "tasks.retry",
     schema: z.object({ intentId: id, viewToken: id.optional() }).strict(),
     description: "Retry one held task mutation after obtaining a current view.",
-    workPolicy: "task",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context, args) => heldMutation(context, args.intentId),
     handler: ({ coordination, run }, args) => {
       const value = coordination.retry(run, args.intentId, args.viewToken) as any;
       return { value, wait: value?.result?.status === "waiting" };
@@ -220,12 +273,11 @@ const definitions: ToolSpec[] = [
       })
       .strict(),
     description: "Explicitly apply one held task mutation despite the reported freshness conflict.",
-    workPolicy: "task",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context, args) => heldMutation(context, args.intentId),
     handler: ({ coordination, run }, args) => {
       const value = coordination.continue(run, args.intentId, args.holdId) as any;
       return { value, wait: value?.result?.status === "waiting" };
@@ -235,24 +287,23 @@ const definitions: ToolSpec[] = [
     name: "tasks.discard",
     schema: z.object({ intentId: id }).strict(),
     description: "Discard one own held task mutation.",
-    workPolicy: "task",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context, args) => heldMutation(context, args.intentId),
     handler: ({ coordination, run }, args) => ({ value: coordination.discard(run, args.intentId) }),
   }),
   spec({
     name: "tasks.create",
     schema: z.object({ target: targetSchema, title: text, viewToken: id.optional() }).strict(),
     description: "Create a task and an explicitly targeted visible draft.",
-    workPolicy: "current",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context, args) =>
+      activeWork(context, targetWork(context, args.target.conversationId)),
     handler: ({ coordination, gate, run, workId }, args) => {
       const task = coordination.create(run, workId, args.target, args.title, args.viewToken);
       return { value: { task, messageDraft: gate.describe(run.agentId, task.outbox_id!) } };
@@ -365,6 +416,7 @@ const definitions: ToolSpec[] = [
     "reminders.list",
     z.object({ before: z.number().int().positive().optional() }).strict(),
     "Page this Agent’s durable reminders.",
+    selectedWork,
     ({ collaboration: c, run }, args) => {
       const items = c.reminders.list(run.agentId, args.before);
       return { value: { items, nextCursor: items.length === 100 ? items.at(-1)!.cursor : null } };
@@ -374,6 +426,7 @@ const definitions: ToolSpec[] = [
     "reminders.read",
     z.object({ reminderId: id }).strict(),
     "Read one owned reminder under current target access.",
+    (context, args) => ownedReminder(context, args.reminderId),
     ({ collaboration: c, run }, args) => ({
       value: c.reminders.read(run.agentId, args.reminderId),
     }),
@@ -389,6 +442,7 @@ const definitions: ToolSpec[] = [
       })
       .strict(),
     "Page scheduler events and firings independently, including explicit result state.",
+    (context, args) => ownedReminder(context, args.reminderId),
     ({ collaboration: c, run }, args) => ({
       value: c.reminders.log(
         run.agentId,
@@ -408,12 +462,17 @@ const definitions: ToolSpec[] = [
       })
       .strict(),
     description: "Idempotently record the semantic result of one owned reminder firing.",
-    workPolicy: "reminder",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context, args) => {
+      fence(context);
+      return activeWork(
+        context,
+        context.collaboration.reminders.firingWork(context.run.agentId, args.firingId),
+      );
+    },
     handler: ({ collaboration: c, run }, args) => ({
       value: c.reminders.finish(run.agentId, args.firingId, args.status, args.summary),
     }),
@@ -422,12 +481,11 @@ const definitions: ToolSpec[] = [
     name: "reminders.create",
     schema: z.object(reminderInput).strict(),
     description: "Create an author-owned durable wakeup; projection defaults to private.",
-    workPolicy: "task",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context, args) => activeWork(context, reminderReferences(context, args)),
     handler: ({ collaboration: c, run, workId }, args) => ({
       value: c.reminders.create(run.agentId, workId, args),
     }),
@@ -438,12 +496,14 @@ const definitions: ToolSpec[] = [
       .object({ ...reminderInput, reminderId: id, expectedVersion: z.number().int().positive() })
       .strict(),
     description: "Edit an owned reminder with CAS without rewriting its historical baseline.",
-    workPolicy: "reminder",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context, args) => {
+      reminderReferences(context, args);
+      return activeWork(context, ownedReminder(context, args.reminderId));
+    },
     handler: ({ collaboration: c, run }, args) => ({
       value: c.reminders.edit(run.agentId, args.reminderId, args.expectedVersion, args),
     }),
@@ -458,12 +518,11 @@ const definitions: ToolSpec[] = [
       })
       .strict(),
     description: "Cancel future firings with CAS and optionally withdraw pending deliveries.",
-    workPolicy: "reminder",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context, args) => activeWork(context, ownedReminder(context, args.reminderId)),
     handler: ({ collaboration: c, run }, args) => ({
       value: c.reminders.cancel(
         run.agentId,
@@ -477,6 +536,7 @@ const definitions: ToolSpec[] = [
     "schedules.list",
     z.object({}).strict(),
     "Compatibility alias for listing this Agent’s reminders.",
+    selectedWork,
     ({ collaboration: c, run }) => ({ value: c.schedules(run.agentId) }),
   ),
   spec({
@@ -491,12 +551,11 @@ const definitions: ToolSpec[] = [
       })
       .strict(),
     description: "Compatibility wakeup creator with private projection.",
-    workPolicy: "task",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context, args) => activeWork(context, reminderReferences(context, args)),
     handler: ({ collaboration: c, run, workId }, args) => ({
       value: c.schedule(
         run.agentId,
@@ -519,12 +578,11 @@ const definitions: ToolSpec[] = [
       })
       .strict(),
     description: "Compatibility reminder cancellation with CAS.",
-    workPolicy: "reminder",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context, args) => activeWork(context, ownedReminder(context, args.scheduleId)),
     handler: ({ collaboration: c, run }, args) => ({
       value: c.reminders.cancel(
         run.agentId,

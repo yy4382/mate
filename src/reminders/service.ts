@@ -69,6 +69,20 @@ export class Reminders {
     this.c.messages.requireAccess(actor, JSON.parse(r.target).conversationId);
     return r;
   }
+  /**
+   * Work item of one firing this Agent owns, re-read with current target access so a firing
+   * carried across an await cannot act after membership was withdrawn.
+   */
+  firingWork(actor: string, firingId: string): string {
+    const row = this.c.store.db
+      .prepare(
+        "SELECT r.agent_id,r.work_id,r.target FROM reminder_firings f JOIN schedules r ON r.id=f.reminder_id WHERE f.id=?",
+      )
+      .get(firingId) as { agent_id: string; work_id: string; target: string } | undefined;
+    if (!row || row.agent_id !== actor) throw new Error("Unknown owned reminder firing");
+    this.c.messages.requireAccess(actor, JSON.parse(row.target).conversationId);
+    return row.work_id;
+  }
   list(actor: string, before = Number.MAX_SAFE_INTEGER): (Reminder & { cursor: number })[] {
     const rows = this.c.store.db
       .prepare(

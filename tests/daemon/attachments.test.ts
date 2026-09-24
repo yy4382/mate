@@ -182,7 +182,6 @@ it("runs the visible attachment to revised artifact delivery loop through the fo
   const router = new ToolRouter(c, broker, {
     attachment: (...input) => files.save(...input),
     environment: () => ({}),
-    research: async () => ({}),
     publish: (...input) => artifacts.publish(...input),
   });
   const saved = await router.call(

@@ -1,25 +1,34 @@
 import { z } from "zod";
 import { conversationTargetSchema as targetSchema } from "../../domain/conversations.js";
 import {
-  authorizeReferences,
+  activeWork,
   fence,
   id,
+  selectedWork,
   spec,
+  targetWork,
+  type ToolExecutionContext,
   type ToolModule,
   type ToolSpec,
 } from "../tool-contract.js";
+
+/** One own freshness-held draft, re-read under current target access before any use. */
+function ownDraft(context: ToolExecutionContext, draftId: string): string {
+  fence(context);
+  context.gate.describe(context.run.agentId, draftId);
+  return context.workId;
+}
 
 const definitions: ToolSpec[] = [
   spec({
     name: "actions.list",
     schema: z.object({ before: z.number().int().positive().optional() }).strict(),
     description: "List this Agent’s durable tool actions without exposing request bodies.",
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "redacted-read",
     effectPolicy: "atomic-recorded",
     replayPolicy: "refreshable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: selectedWork,
     handler: ({ collaboration: c, run }, args) => {
       const s = c.store,
         items = s.db
@@ -36,12 +45,11 @@ const definitions: ToolSpec[] = [
     name: "actions.read",
     schema: z.object({ actionId: id }).strict(),
     description: "Inspect one own durable action receipt under current object access.",
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "redacted-read",
     effectPolicy: "atomic-recorded",
     replayPolicy: "refreshable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: selectedWork,
     handler: ({ collaboration: c, run }, args) => {
       const actor = run.agentId,
         row = c.store.db
@@ -70,36 +78,33 @@ const definitions: ToolSpec[] = [
     name: "sessions.status",
     schema: z.object({}).strict(),
     description: "Read this Agent’s persistent logical session and checkpoint status.",
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "redacted-read",
     effectPolicy: "atomic-recorded",
     replayPolicy: "refreshable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: selectedWork,
     handler: ({ sessions, run }) => ({ value: sessions.status(run.agentId) }),
   }),
   spec({
     name: "sessions.checkpoint",
     schema: z.object({ text: z.string().min(1).max(20000) }).strict(),
     description: "Persist a private recovery checkpoint for this Agent.",
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "redacted-read",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: selectedWork,
     handler: ({ sessions, run }, args) => ({ value: sessions.checkpoint(run.agentId, args.text) }),
   }),
   spec({
     name: "sessions.reset",
     schema: z.object({ text: z.string().min(1).max(20000) }).strict(),
     description: "Request logical context replacement after the active run finishes.",
-    workPolicy: "current",
+    scope: "work",
     seatPolicy: "redacted-read",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context) => activeWork(context),
     handler: ({ sessions, run, workId, actionId }, args) => ({
       value: sessions.request(run, workId, actionId, args.text),
       wait: true,
@@ -109,13 +114,12 @@ const definitions: ToolSpec[] = [
     name: "environment.info",
     schema: z.object({}).strict(),
     description:
-      "Inspect your Linux home and shared paths, network access, known-URL research and optional adapter support.",
-    workPolicy: "none",
+      "Inspect your Linux home and shared paths, host network access and optional adapter support.",
+    scope: "work",
     seatPolicy: "redacted-read",
     effectPolicy: "pure-read",
     replayPolicy: "boundary-owned",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: selectedWork,
     handler: ({ additional, run, workId }) => ({
       value: additional?.environment?.(run, workId) ?? { configured: false },
     }),
@@ -125,24 +129,22 @@ const definitions: ToolSpec[] = [
     schema: z.object({}).strict(),
     description:
       "Read this Agent’s recorded model calls and token usage; USD cost is a price-table estimate.",
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "redacted-read",
     effectPolicy: "atomic-recorded",
     replayPolicy: "refreshable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: selectedWork,
     handler: ({ collaboration: c, run }) => ({ value: c.usage.summary(run.agentId) }),
   }),
   spec({
     name: "agents",
     schema: z.object({}).strict(),
     description: "List configured peer identities, names and roles.",
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "redacted-read",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: selectedWork,
     handler: ({ collaboration: c }) => ({
       value: c.agents.list().map((a) => ({ id: a.id, name: a.name, role: a.role })),
     }),
@@ -151,24 +153,22 @@ const definitions: ToolSpec[] = [
     name: "drafts.list",
     schema: z.object({}).strict(),
     description: "List this Agent’s freshness-held output drafts.",
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "redacted-read",
     effectPolicy: "atomic-recorded",
     replayPolicy: "refreshable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: selectedWork,
     handler: ({ gate, run }) => ({ value: gate.list(run.agentId) }),
   }),
   spec({
     name: "drafts.read",
     schema: z.object({ draftId: id }).strict(),
     description: "Read one own freshness-held output draft.",
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "redacted-read",
     effectPolicy: "atomic-recorded",
     replayPolicy: "refreshable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context, args) => ownDraft(context, args.draftId),
     handler: ({ gate, run }, args) => ({ value: gate.describe(run.agentId, args.draftId) }),
   }),
   spec({
@@ -177,12 +177,11 @@ const definitions: ToolSpec[] = [
       .object({ draftId: id, revision: z.number().int().positive(), viewToken: id.optional() })
       .strict(),
     description: "Retry a held draft after obtaining a current view.",
-    workPolicy: "current",
+    scope: "work",
     seatPolicy: "held-send",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context, args) => activeWork(context, ownDraft(context, args.draftId)),
     handler: ({ gate, run }, args) => ({
       value: gate.retry(run, args.draftId, args.revision, args.viewToken),
     }),
@@ -198,12 +197,11 @@ const definitions: ToolSpec[] = [
       })
       .strict(),
     description: "Explicitly send one held draft despite the reported freshness conflict.",
-    workPolicy: "current",
+    scope: "work",
     seatPolicy: "held-send",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context, args) => activeWork(context, ownDraft(context, args.draftId)),
     handler: ({ gate, run }, args) => ({
       value: gate.continueOnce(run, args.draftId, args.revision, args.holdId),
     }),
@@ -219,12 +217,14 @@ const definitions: ToolSpec[] = [
       })
       .strict(),
     description: "Replace the content or target of one own held draft.",
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "held-send",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context, args) => {
+      targetWork(context, args.target?.conversationId);
+      return ownDraft(context, args.draftId);
+    },
     handler: ({ gate, run }, args) => ({
       value: gate.revise(run, args.draftId, args.revision, args.text, args.target),
     }),
@@ -233,12 +233,11 @@ const definitions: ToolSpec[] = [
     name: "drafts.discard",
     schema: z.object({ draftId: id, revision: z.number().int().positive() }).strict(),
     description: "Discard one own held draft.",
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "held-send",
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context, args) => ownDraft(context, args.draftId),
     handler: ({ gate, run }, args) => ({ value: gate.discard(run, args.draftId, args.revision) }),
   }),
 ];

@@ -7,10 +7,12 @@ import {
 import { systemCommandSchema } from "../../policy/system-operations.js";
 import { conversationTargetSchema as targetSchema } from "../../domain/conversations.js";
 import {
-  authorizeReferences,
+  activeWork,
   fence,
   id,
+  selectedWork,
   spec,
+  targetWork,
   text,
   type ToolModule,
   type ToolSpec,
@@ -40,28 +42,36 @@ const descriptions: Record<string, string> = {
   "file.remove": "Remove a regular file or empty directory, optionally checking expectedHash.",
   "file.mkdir": "Create a directory and missing parents using the Agent Linux user.",
 };
-const files = Object.entries(fileSchemas).map(([name, schema]) =>
-  spec({
-    name,
-    schema,
-    description: descriptions[name] ?? `Execute ${name} as the Agent Linux user.`,
-    workPolicy: "broker-managed",
-    seatPolicy: "clean-workspace",
-    effectPolicy: "broker-recorded",
-    replayPolicy: "boundary-owned",
-    authorize: authorizeReferences,
-    postAwait: fence,
-    handler: async ({ broker, run, workId, actionId, signal }, args) => ({
-      value: await broker.execute(
-        run,
-        workId,
-        actionId,
-        operationSchema.parse({ ...args, kind: name.slice(5) }),
-        signal,
-      ),
-    }),
-  }),
-);
+/**
+ * Each file tool repeats the backend operation it performs without the discriminator. The tool
+ * schema and the handler arguments therefore come from the one backend definition, and the
+ * handler re-parses the same definition it was typed from.
+ */
+const files = operationSchema.options
+  .filter((schema) => schema.shape.kind.value !== "exec")
+  .map((schema) => {
+    const name = `file.${schema.shape.kind.value}`,
+      input = (schema as z.ZodObject).omit({ kind: true });
+    return spec({
+      name,
+      schema: input,
+      description: descriptions[name] ?? `Execute ${name} as the Agent Linux user.`,
+      scope: "work",
+      seatPolicy: "clean-workspace",
+      effectPolicy: "broker-recorded",
+      replayPolicy: "boundary-owned",
+      authorize: selectedWork,
+      handler: async ({ broker, run, workId, actionId, signal }, args) => ({
+        value: await broker.execute(
+          run,
+          workId,
+          actionId,
+          operationSchema.parse({ ...args, kind: schema.shape.kind.value }),
+          signal,
+        ),
+      }),
+    });
+  });
 
 const definitions: ToolSpec[] = [
   ...files,
@@ -70,12 +80,11 @@ const definitions: ToolSpec[] = [
     schema: z.object({ command: z.string().max(16000), cwd: id }).strict(),
     description:
       "Run a shell command as the Agent Linux user. Use an absolute working directory or a path relative to the Agent home; background commands may keep running after this call.",
-    workPolicy: "broker-managed",
+    scope: "work",
     seatPolicy: "clean-workspace",
     effectPolicy: "broker-recorded",
     replayPolicy: "boundary-owned",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: selectedWork,
     handler: async ({ broker, run, workId, actionId, signal }, args) => ({
       value: await broker.execute(
         run,
@@ -91,12 +100,11 @@ const definitions: ToolSpec[] = [
     schema: z.object({}).strict(),
     description:
       "List currently running Linux scopes for your Agent user; state comes from systemd and /proc.",
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "pure-read",
     replayPolicy: "boundary-owned",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: selectedWork,
     handler: async ({ additional, run, signal }) => {
       if (!additional?.processes) throw new Error("Linux process control unavailable");
       return { value: await additional.processes.list(run.agentId, signal) };
@@ -106,12 +114,11 @@ const definitions: ToolSpec[] = [
     name: "processes.stop",
     schema: z.object({ unit: id }).strict(),
     description: "Stop one of your Agent Linux scopes and its remaining processes.",
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "adapter-recorded",
     replayPolicy: "boundary-owned",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: selectedWork,
     handler: async ({ additional, run, workId, actionId, collaboration, signal }, args) => {
       if (!additional?.processes) throw new Error("Linux process control unavailable");
       const store = collaboration.store,
@@ -169,12 +176,11 @@ const definitions: ToolSpec[] = [
     schema: systemCommandSchema,
     description:
       "Request one system-level command. It will not run unless a human owner confirms this exact request in Slack; scripts and dependencies may change before execution.",
-    workPolicy: "current",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "adapter-recorded",
     replayPolicy: "boundary-owned",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context) => activeWork(context),
     handler: ({ additional, run, workId, actionId }, args) => {
       if (!additional?.system) throw new Error("System operation approval unavailable");
       return { value: additional.system.request(run, workId, actionId, args) };
@@ -185,12 +191,11 @@ const definitions: ToolSpec[] = [
     schema: z.object({ requestId: id }).strict(),
     description:
       "Read the current result of one of your system-level requests, including denial, expiry or uncertain execution.",
-    workPolicy: "none",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "pure-read",
     replayPolicy: "boundary-owned",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: selectedWork,
     handler: ({ additional, run }, args) => {
       if (!additional?.system) throw new Error("System operation approval unavailable");
       return { value: additional.system.status(run.agentId, args.requestId) };
@@ -207,32 +212,20 @@ const definitions: ToolSpec[] = [
       .strict(),
     description:
       "Download a file attached to a visible message to an Agent-accessible path, up to 1 MB.",
-    workPolicy: "broker-managed",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "adapter-recorded",
     replayPolicy: "boundary-owned",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context, args) => {
+      fence(context);
+      context.collaboration.messages.message(context.run.agentId, args.message.messageId);
+      return context.workId;
+    },
     handler: async ({ additional, run, workId, actionId, signal }, args) => {
       if (!additional?.attachment) throw new Error("Attachment adapter unavailable");
       return {
         value: await additional.attachment(run, workId, actionId, args, signal),
       };
-    },
-  }),
-  spec({
-    name: "research.read",
-    schema: z.object({ url: z.string().url().max(4000) }).strict(),
-    description: "Read one allowed research URL through the configured network boundary.",
-    workPolicy: "none",
-    seatPolicy: "deny",
-    effectPolicy: "pure-read",
-    replayPolicy: "boundary-owned",
-    authorize: authorizeReferences,
-    postAwait: fence,
-    handler: async ({ additional, signal }, args) => {
-      if (!additional) throw new Error("Research unavailable");
-      return { value: await additional.research(args.url, signal) };
     },
   }),
   spec({
@@ -248,12 +241,11 @@ const definitions: ToolSpec[] = [
       })
       .strict(),
     description: "Freeze an Agent-readable file and create a gated publication draft.",
-    workPolicy: "broker-managed",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "adapter-recorded",
     replayPolicy: "boundary-owned",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context, args) => targetWork(context, args.target.conversationId),
     handler: async ({ additional, run, workId, actionId, signal }, args) => {
       if (!additional) throw new Error("Publication unavailable");
       return {
@@ -275,12 +267,11 @@ const definitions: ToolSpec[] = [
       })
       .strict(),
     description: "Replace the frozen content for an existing publication draft.",
-    workPolicy: "broker-managed",
+    scope: "work",
     seatPolicy: "deny",
     effectPolicy: "adapter-recorded",
     replayPolicy: "boundary-owned",
-    authorize: authorizeReferences,
-    postAwait: fence,
+    authorize: (context, args) => targetWork(context, args.target.conversationId),
     handler: async ({ additional, run, workId, actionId, signal }, args) => {
       if (!additional) throw new Error("Publication unavailable");
       return {

@@ -69,7 +69,6 @@ const config = () =>
           home: "/srv/mate/private/bob",
         },
       },
-      researchHosts: [],
     },
   });
 const spec = () =>
