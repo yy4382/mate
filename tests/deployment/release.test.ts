@@ -16,11 +16,13 @@ import { afterEach, expect, it } from "vitest";
 import { assertSafeReleaseMode, createReleaseManifest } from "../../src/deployment/release.js";
 import { isMainModule } from "../../src/main.js";
 import { isDeploymentMainModule } from "../../src/deployment/cli.js";
+import { nodeHostOperations } from "../../src/deployment/host.js";
 
 const roots: string[] = [];
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
+const host = nodeHostOperations();
 const runtime = {
   platform: "linux" as const,
   arch: "x64",
@@ -43,14 +45,20 @@ it("binds release identity to lockfile, runtime, dependency inventory and native
   mkdirSync(join(root, "node_modules", "pkg"));
   writeFileSync(join(root, "node_modules", "pkg", "addon.node"), "native");
   symlinkSync("pkg", join(root, "node_modules", "alias"));
-  const first = await createReleaseManifest(root, "abcdef1234567", runtime);
+  const first = await createReleaseManifest(host, root, "abcdef1234567", runtime);
   expect(first.nativeAddons).toHaveLength(1);
-  expect(first.target).toMatchObject({ arch: "x64", node: "v24.21.0", modulesAbi: "137" });
+  expect(first.target).toMatchObject({
+    arch: "x64",
+    node: "v24.21.0",
+    modulesAbi: "137",
+  });
   writeFileSync(join(root, "dist", "main.js"), "two");
-  const second = await createReleaseManifest(root, "abcdef1234567", runtime);
+  const second = await createReleaseManifest(host, root, "abcdef1234567", runtime);
   expect(second.releaseId).not.toBe(first.releaseId);
   symlinkSync("/tmp", join(root, "node_modules", "escape"));
-  await expect(createReleaseManifest(root, "abcdef1234567", runtime)).rejects.toThrow("relative");
+  await expect(createReleaseManifest(host, root, "abcdef1234567", runtime)).rejects.toThrow(
+    "relative",
+  );
 });
 it("rejects privileged release modes before root-owned publication", async () => {
   expect(() => assertSafeReleaseMode(0o4755, "tool")).toThrow("setuid or setgid");
@@ -60,7 +68,7 @@ it("rejects privileged release modes before root-owned publication", async () =>
   writeFileSync(tool, "tool");
   chmodSync(tool, 0o4755);
   if (lstatSync(tool).mode & 0o6000)
-    await expect(createReleaseManifest(root, "abcdef1234567", runtime)).rejects.toThrow(
+    await expect(createReleaseManifest(host, root, "abcdef1234567", runtime)).rejects.toThrow(
       "setuid or setgid",
     );
 });
@@ -68,13 +76,13 @@ it("accepts pnpm-style hardlinks only when every link is inside the immutable re
   const root = release();
   writeFileSync(join(root, "node_modules", "one.js"), "shared");
   linkSync(join(root, "node_modules", "one.js"), join(root, "node_modules", "two.js"));
-  await expect(createReleaseManifest(root, "abcdef1234567", runtime)).resolves.toMatchObject({
+  await expect(createReleaseManifest(host, root, "abcdef1234567", runtime)).resolves.toMatchObject({
     version: 1,
   });
   const outside = join(dirname(root), `${basename(root)}-outside`);
   writeFileSync(outside, "external");
   linkSync(outside, join(root, "node_modules", "outside.js"));
-  await expect(createReleaseManifest(root, "abcdef1234567", runtime)).rejects.toThrow(
+  await expect(createReleaseManifest(host, root, "abcdef1234567", runtime)).rejects.toThrow(
     "outside the immutable tree",
   );
   rmSync(outside, { force: true });

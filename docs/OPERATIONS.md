@@ -55,7 +55,7 @@ sudo matectl status
 sudo matectl logs
 ```
 
-`doctor` 只读检查发布物、配置、Agent 账号、私人/共享目录、Mate 控制数据、资源限额和审批配置；`offline-probe` 要求主服务和 Agent 后台任务已停止，只验证本地账号与限额。服务使用 systemd `Type=notify`，完成凭证检查、Slack 初始化和历史追赶后才报告 ready。`status` 与 `logs` 只读固定的服务状态及结构化运行事实，不输出原始 journald 或秘密；本地 running 状态不证明 Slack/provider 连通。
+`doctor` 只读检查发布物、配置、Agent 账号、私人/共享目录、Mate 控制数据、资源限额和审批配置；`offline-probe` 要求主服务和 Agent 后台任务已停止，验证本地账号、限额，以及每位 Agent 的私人 home、MEMORY.md 与共享目录归属。服务使用 systemd `Type=notify`，完成凭证检查、Slack 初始化和历史追赶后才报告 ready。`status` 与 `logs` 只读固定的服务状态及结构化运行事实，不输出原始 journald 或秘密；本地 running 状态不证明 Slack/provider 连通。
 
 在 Debian 13 上另用两个真实 Agent 账号做原生检查：分别读自己的与同伴的 `MEMORY.md`，读同伴共享文件、只写自己的共享目录，尝试读取 Mate 数据库/凭证和控制服务；再启动、列出、停止一个长任务。使用合成文件记录 UID、命令和退出码，不读取真实私人记忆。macOS 模拟测试不能代替这些检查。
 

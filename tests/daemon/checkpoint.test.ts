@@ -12,12 +12,14 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { backup, backupDeploymentSnapshot } from "../../src/daemon/backup.js";
+import { nodeHostOperations } from "../../src/deployment/host.js";
 import { verifyCheckpoint } from "../../src/daemon/checkpoint-format.js";
 import { restoreCheckpointForTesting } from "../../src/daemon/restore.js";
 import { Store } from "../../src/storage/store.js";
 import { configFixture } from "../helpers/config.js";
 import { daemonFixture } from "../helpers/daemon-config.js";
 
+const host = nodeHostOperations();
 const cleanups: (() => void)[] = [];
 afterEach(() => {
   for (const cleanup of cleanups.splice(0).reverse()) cleanup();
@@ -34,7 +36,9 @@ function fixture() {
     mkdirSync(path, { recursive: true, mode: 0o700 });
   writeFileSync(join(home, "MEMORY.md"), "target", { mode: 0o600 });
   const config = daemonFixture(data, configFixture, {
-    linuxUsers: { research: { uid: process.getuid!(), gid: process.getgid!(), home } },
+    linuxUsers: {
+      research: { uid: process.getuid!(), gid: process.getgid!(), home },
+    },
     sharedRoot,
   });
   const store = new Store(join(state, "mate.sqlite"));
@@ -44,7 +48,7 @@ function fixture() {
 }
 async function take(f: ReturnType<typeof fixture>, name: string) {
   const path = join(f.root, name);
-  await backup(f.store, f.data, path, f.config);
+  await backup(host, f.store, f.data, path, f.config);
   return path;
 }
 function trust(path: string) {
@@ -56,7 +60,7 @@ it("backs up Linux Agent private files and the database, but not shared work", a
   const f = fixture();
   writeFileSync(join(f.config.runtime.sharedRoot!, "peer.txt"), "shared");
   const checkpoint = await take(f, "checkpoint"),
-    verified = await verifyCheckpoint(checkpoint, f.config);
+    verified = await verifyCheckpoint(host, checkpoint, f.config);
   expect(verified.manifest.agents.map((agent) => agent.agentId)).toEqual(["research"]);
   expect(readFileSync(join(checkpoint, "agents", "research", "MEMORY.md"), "utf8")).toBe("target");
   expect(existsSync(join(checkpoint, "agents", "research", "peer.txt"))).toBe(false);
@@ -72,7 +76,7 @@ it("restores only after a durable decision and resumes without replaying a comma
   const current = await take(f, "current");
   f.store.close();
   await expect(
-    restoreCheckpointForTesting(f.config, target, {
+    restoreCheckpointForTesting(host, f.config, target, {
       currentCheckpoint: current,
       ...trust(target),
       afterPhase: (phase) => {
@@ -82,7 +86,7 @@ it("restores only after a durable decision and resumes without replaying a comma
   ).rejects.toThrow("synthetic stop");
   expect(readFileSync(join(f.home, "MEMORY.md"), "utf8")).toBe("current");
   expect(existsSync(join(f.control, "restore.json"))).toBe(true);
-  await restoreCheckpointForTesting(f.config, target, trust(target));
+  await restoreCheckpointForTesting(host, f.config, target, trust(target));
   expect(readFileSync(join(f.home, "MEMORY.md"), "utf8")).toBe("target");
   expect(existsSync(join(f.control, "restore.json"))).toBe(false);
   const restored = new Store(join(f.state, "mate.sqlite"));
@@ -96,6 +100,8 @@ it("can snapshot a stopped deployment database without constructing Store", asyn
   const f = fixture();
   f.store.close();
   const checkpoint = join(f.root, "raw");
-  await backupDeploymentSnapshot(f.data, checkpoint, f.config);
-  expect((await verifyCheckpoint(checkpoint, f.config)).manifest.database.path).toBe("mate.sqlite");
+  await backupDeploymentSnapshot(host, f.data, checkpoint, f.config);
+  expect((await verifyCheckpoint(host, checkpoint, f.config)).manifest.database.path).toBe(
+    "mate.sqlite",
+  );
 });

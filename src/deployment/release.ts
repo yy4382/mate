@@ -1,14 +1,7 @@
 import { createHash } from "node:crypto";
-import {
-  createReadStream,
-  lstatSync,
-  readFileSync,
-  readdirSync,
-  readlinkSync,
-  realpathSync,
-} from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { z } from "zod";
+import type { HostOperations } from "./host.js";
 
 const hashPattern = /^[a-f0-9]{64}$/;
 const inventoryEntrySchema = z.discriminatedUnion("type", [
@@ -29,7 +22,11 @@ const inventoryEntrySchema = z.discriminatedUnion("type", [
     })
     .strict(),
   z
-    .object({ path: z.string().min(1), type: z.literal("symlink"), target: z.string().min(1) })
+    .object({
+      path: z.string().min(1),
+      type: z.literal("symlink"),
+      target: z.string().min(1),
+    })
     .strict(),
 ]);
 export const releaseManifestSchema = z
@@ -51,7 +48,12 @@ export const releaseManifestSchema = z
     inventorySha256: z.string().regex(hashPattern),
     dependencyInventorySha256: z.string().regex(hashPattern),
     nativeAddons: z.array(
-      z.object({ path: z.string().min(1), sha256: z.string().regex(hashPattern) }).strict(),
+      z
+        .object({
+          path: z.string().min(1),
+          sha256: z.string().regex(hashPattern),
+        })
+        .strict(),
     ),
     inventory: z.array(inventoryEntrySchema),
   })
@@ -66,11 +68,12 @@ export interface ReleaseRuntime {
   modulesAbi: string;
   packageManager: string;
 }
-export const currentReleaseRuntime = (): ReleaseRuntime => ({
-  platform: process.platform,
-  arch: process.arch,
-  node: process.version,
-  modulesAbi: process.versions.modules,
+/** The runtime facts of the host the release is built on, read from the host-operations entry. */
+export const releaseRuntime = (host: HostOperations): ReleaseRuntime => ({
+  platform: host.platform,
+  arch: host.arch,
+  node: host.node,
+  modulesAbi: host.modulesAbi,
   packageManager: "pnpm@10.33.0",
 });
 
@@ -85,16 +88,6 @@ function stable(value: unknown): string {
 }
 function digest(value: string | Buffer): string {
   return createHash("sha256").update(value).digest("hex");
-}
-async function fileHash(path: string): Promise<string> {
-  const hash = createHash("sha256");
-  await new Promise<void>((accept, reject) => {
-    const stream = createReadStream(path);
-    stream.on("data", (chunk) => hash.update(chunk));
-    stream.once("error", reject);
-    stream.once("end", accept);
-  });
-  return hash.digest("hex");
 }
 function safeRelative(root: string, path: string): string {
   const value = relative(root, path);
@@ -113,16 +106,16 @@ export function assertSafeReleaseMode(mode: number, path: string): void {
   if (mode & 0o6000) throw new Error(`Release cannot contain setuid or setgid bits: ${path}`);
 }
 
-async function inventoryTree(root: string): Promise<InventoryEntry[]> {
+async function inventoryTree(host: HostOperations, root: string): Promise<InventoryEntry[]> {
   const entries: InventoryEntry[] = [],
     hardlinks = new Map<string, { expected: number; count: number; path: string }>();
   const visit = async (path: string): Promise<void> => {
-    const stat = lstatSync(path),
+    const stat = await host.lstat(path),
       itemPath = safeRelative(root, path),
       mode = stat.mode & 0o7777;
     assertSafeReleaseMode(mode, itemPath);
     if (stat.isSymbolicLink()) {
-      const target = readlinkSync(path);
+      const target = await host.readlink(path);
       if (isAbsolute(target)) throw new Error(`Release symlink must be relative: ${itemPath}`);
       const destination = resolve(dirname(path), target);
       if (destination !== root && !destination.startsWith(`${root}${sep}`))
@@ -132,7 +125,7 @@ async function inventoryTree(root: string): Promise<InventoryEntry[]> {
     }
     if (stat.isDirectory()) {
       entries.push({ path: itemPath, type: "directory", mode });
-      for (const name of readdirSync(path).sort()) await visit(join(path, name));
+      for (const name of (await host.readdir(path)).sort()) await visit(join(path, name));
       return;
     }
     if (!stat.isFile()) throw new Error(`Release contains unsupported file: ${itemPath}`);
@@ -142,18 +135,29 @@ async function inventoryTree(root: string): Promise<InventoryEntry[]> {
       if (links.expected !== stat.nlink)
         throw new Error(`Release hardlink identity changed: ${itemPath}`);
       links.count++;
-    } else hardlinks.set(identity, { expected: stat.nlink, count: 1, path: itemPath });
+    } else
+      hardlinks.set(identity, {
+        expected: stat.nlink,
+        count: 1,
+        path: itemPath,
+      });
     entries.push({
       path: itemPath,
       type: "file",
       size: stat.size,
       mode,
-      sha256: await fileHash(path),
+      sha256: await host.sha256(path),
     });
   };
   for (const name of ["dist", "node_modules", "package.json", "pnpm-lock.yaml"]) {
     const path = join(root, name);
-    if (!lstatSync(path)) throw new Error(`Missing release input: ${name}`);
+    try {
+      await host.lstat(path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT")
+        throw new Error(`Missing release input: ${name}`);
+      throw error;
+    }
     await visit(path);
   }
   for (const links of hardlinks.values())
@@ -173,11 +177,12 @@ function dependencyInventory(inventory: readonly InventoryEntry[]): string {
 }
 
 export async function createReleaseManifest(
+  host: HostOperations,
   rootPath: string,
   gitCommit: string,
-  runtime: ReleaseRuntime = currentReleaseRuntime(),
+  runtime: ReleaseRuntime = releaseRuntime(host),
 ): Promise<ReleaseManifest> {
-  const root = realpathSync(rootPath);
+  const root = await host.canonical(rootPath);
   if (
     runtime.platform !== "linux" ||
     runtime.arch !== "x64" ||
@@ -188,7 +193,7 @@ export async function createReleaseManifest(
       "Release must be built on the supported Debian x86_64 Node 24 runtime with pnpm 10.33.0",
     );
   if (!/^[a-f0-9]{7,64}$/.test(gitCommit)) throw new Error("Invalid source commit identity");
-  const inventory = await inventoryTree(root),
+  const inventory = await inventoryTree(host, root),
     lock = inventory.find((item) => item.path === "pnpm-lock.yaml");
   if (!lock || lock.type !== "file") throw new Error("Release lockfile is missing");
   const inventorySha256 = digest(stable(inventory)),
@@ -214,13 +219,13 @@ export async function createReleaseManifest(
         .map((item) => ({ path: item.path, sha256: item.sha256 })),
       inventory,
     };
-  return releaseManifestSchema.parse({ ...base, releaseId: digest(stable(base)) });
+  return releaseManifestSchema.parse({
+    ...base,
+    releaseId: digest(stable(base)),
+  });
 }
 
-export function assertReleaseRuntime(
-  manifest: ReleaseManifest,
-  runtime: ReleaseRuntime = currentReleaseRuntime(),
-): void {
+export function assertReleaseRuntime(manifest: ReleaseManifest, runtime: ReleaseRuntime): void {
   const expected = {
     platform: runtime.platform,
     arch: runtime.arch,
@@ -237,7 +242,12 @@ export function assertSameReleasePayload(source: ReleaseManifest, copied: Releas
   const content = (manifest: ReleaseManifest) =>
     manifest.inventory.map((entry) =>
       entry.type === "file"
-        ? { path: entry.path, type: entry.type, size: entry.size, sha256: entry.sha256 }
+        ? {
+            path: entry.path,
+            type: entry.type,
+            size: entry.size,
+            sha256: entry.sha256,
+          }
         : entry.type === "symlink"
           ? { path: entry.path, type: entry.type, target: entry.target }
           : { path: entry.path, type: entry.type },
@@ -251,17 +261,18 @@ export function assertSameReleasePayload(source: ReleaseManifest, copied: Releas
 }
 
 export async function verifyRelease(
+  host: HostOperations,
   rootPath: string,
   expectedId?: string,
-  runtime: ReleaseRuntime | undefined = process.platform === "linux"
-    ? currentReleaseRuntime()
+  runtime: ReleaseRuntime | undefined = host.platform === "linux"
+    ? releaseRuntime(host)
     : undefined,
 ): Promise<ReleaseManifest> {
-  const root = realpathSync(rootPath),
+  const root = await host.canonical(rootPath),
     stored = releaseManifestSchema.parse(
-      JSON.parse(readFileSync(join(root, "RELEASE.json"), "utf8")),
+      JSON.parse(await host.readText(join(root, "RELEASE.json"))),
     );
-  const recomputed = await createReleaseManifest(root, stored.gitCommit, stored.target);
+  const recomputed = await createReleaseManifest(host, root, stored.gitCommit, stored.target);
   if (stable(recomputed) !== stable(stored) || (expectedId && stored.releaseId !== expectedId))
     throw new Error("Release identity or inventory does not match immutable contents");
   if (runtime) assertReleaseRuntime(stored, runtime);

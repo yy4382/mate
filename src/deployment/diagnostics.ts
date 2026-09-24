@@ -1,6 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { spawnSync } from "node:child_process";
 import Database from "better-sqlite3";
 import { daemonConfigSchema, type DaemonConfig } from "../daemon/config.js";
 import { restoreProgress } from "../daemon/restore.js";
@@ -13,30 +11,35 @@ import {
   type ServiceState,
 } from "../operations/diagnostics.js";
 import { managedLayout } from "./systemd.js";
-import { readLinuxUpgradeJournal } from "./linux-installer.js";
+import { linuxUpgradeJournalPath, readLinuxUpgradeJournal } from "./linux-installer.js";
+import { pathExists, type HostOperations } from "./host.js";
 
-export function systemdState(): ServiceState {
-  const result = spawnSync(
+/** One bounded service-manager query; a missing or slow systemctl reports "unknown", never a hang. */
+export function systemdState(host: HostOperations): ServiceState {
+  const result = host.run(
     "/usr/bin/systemctl",
     ["show", "--property=ActiveState", "--value", "mate.service"],
-    { encoding: "utf8", timeout: 5000, maxBuffer: 4096, env: { PATH: "/usr/bin:/bin", LANG: "C" } },
+    { timeoutMs: 5000 },
   );
-  const state = result.status === 0 ? result.stdout.trim() : "";
+  const state = result.code === 0 ? result.stdout.trim() : "";
   return ["active", "inactive", "activating", "deactivating", "failed", "reloading"].includes(state)
     ? (state as ServiceState)
     : "unknown";
 }
-export async function readRecoveryState(data: string): Promise<RecoveryState> {
+export async function readRecoveryState(
+  host: HostOperations,
+  data: string,
+): Promise<RecoveryState> {
   const result: RecoveryState = { restore: null, invalid: false };
   try {
-    result.restore = await restoreProgress(data);
+    result.restore = await restoreProgress(host, data);
   } catch {
     result.invalid = true;
   }
-  const linux = join(data, "control", "linux-upgrade.json");
-  if (existsSync(linux))
+  const linux = linuxUpgradeJournalPath(data);
+  if (await pathExists(host, linux))
     try {
-      readLinuxUpgradeJournal(linux);
+      await readLinuxUpgradeJournal(host, linux);
       result.linuxUpgrade = { phase: "pending" };
     } catch {
       result.invalid = true;
@@ -44,9 +47,9 @@ export async function readRecoveryState(data: string): Promise<RecoveryState> {
   return result;
 }
 /** No Daemon/Slack construction, secret environment loading, Store migration or recovery. */
-export async function deploymentDiagnostics(command: "status" | "logs") {
-  const recovery = await readRecoveryState(managedLayout.data),
-    service = systemdState();
+export async function deploymentDiagnostics(host: HostOperations, command: "status" | "logs") {
+  const recovery = await readRecoveryState(host, managedLayout.data),
+    service = systemdState(host);
   let snapshot: ReturnType<typeof readOperationsSnapshot> = {
     status: null,
     items: [],
@@ -54,7 +57,7 @@ export async function deploymentDiagnostics(command: "status" | "logs") {
     more: false,
   };
   try {
-    const config = daemonConfigSchema.parse(JSON.parse(readFileSync(managedLayout.config, "utf8")));
+    const config = daemonConfigSchema.parse(JSON.parse(await host.readText(managedLayout.config)));
     if (config.runtime.dataDir === managedLayout.data)
       snapshot = readOperationsSnapshot(config, command);
   } catch {
@@ -93,7 +96,10 @@ export function readOperationsSnapshot(config: DaemonConfig, command: "status" |
     db.transaction(() => {
       status = view.status(owner);
       if (command === "logs") {
-        const page = view.activity(owner, { sources: ["runtime", "internal_dm"], limit: 100 });
+        const page = view.activity(owner, {
+          sources: ["runtime", "internal_dm"],
+          limit: 100,
+        });
         items = page.items;
         more = page.cursor !== null;
       }

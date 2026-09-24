@@ -1,24 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
-import { constants } from "node:fs";
-import type { Stats } from "node:fs";
-import {
-  chmod,
-  lchown,
-  lstat,
-  mkdir,
-  open,
-  readdir,
-  readlink,
-  realpath,
-  rename,
-  rm,
-  symlink,
-} from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, posix, resolve } from "node:path";
 import { z } from "zod";
 import type { DaemonConfig } from "./config.js";
 import { encode, hash } from "../storage/store.js";
 import { agentIdSchema } from "../domain/agents.js";
+import type { HostHandle, HostOperations, HostStat } from "../deployment/host.js";
 
 const relativePath = z
   .string()
@@ -48,7 +34,12 @@ const fileEntry = z
   })
   .strict();
 const symlinkEntry = z
-  .object({ path: relativePath, type: z.literal("symlink"), mode, target: z.string() })
+  .object({
+    path: relativePath,
+    type: z.literal("symlink"),
+    mode,
+    target: z.string(),
+  })
   .strict();
 export const checkpointEntrySchema = z.discriminatedUnion("type", [
   directoryEntry,
@@ -67,7 +58,12 @@ export const checkpointManifestSchema = z
     at: z.iso.datetime(),
     configurationHash: z.string().regex(/^[a-f0-9]{64}$/),
     agents: z.array(
-      z.object({ agentId: agentIdSchema, entries: z.array(checkpointEntrySchema) }).strict(),
+      z
+        .object({
+          agentId: agentIdSchema,
+          entries: z.array(checkpointEntrySchema),
+        })
+        .strict(),
     ),
     database: fileInventory.extend({ sourceSha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict(),
   })
@@ -109,57 +105,47 @@ function sameIdentity(
     left.mtimeMs === right.mtimeMs
   );
 }
-async function fsyncPath(path: string): Promise<void> {
-  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+async function fsyncPath(host: HostOperations, path: string): Promise<void> {
+  const handle = await host.openForRead(path);
   try {
     await handle.sync();
   } finally {
     await handle.close();
   }
 }
-export async function fsyncDirectory(path: string): Promise<void> {
-  const handle = await open(path, constants.O_RDONLY | constants.O_DIRECTORY);
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
+export async function fsyncDirectory(host: HostOperations, path: string): Promise<void> {
+  await host.fsyncDirectory(path);
 }
 
 export async function inventoryRegularFile(
+  host: HostOperations,
   path: string,
   destination?: string,
 ): Promise<Omit<Extract<CheckpointEntry, { type: "file" }>, "path">> {
-  const source = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-  let target: Awaited<ReturnType<typeof open>> | undefined;
+  const source = await host.openForRead(path);
+  let target: HostHandle | undefined;
   try {
     const before = await source.stat();
     if (!before.isFile() || before.nlink !== 1)
       throw new Error("Checkpoint source must be one regular file without hard links");
-    if (destination)
-      target = await open(
-        destination,
-        constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
-        0o600,
-      );
+    if (destination) target = await host.createExclusive(destination, 0o600);
     const digest = createHash("sha256"),
       buffer = Buffer.allocUnsafe(1024 * 1024);
     let offset = 0;
     while (true) {
-      const { bytesRead } = await source.read(buffer, 0, buffer.length, offset);
+      const bytesRead = await source.read(buffer, 0, buffer.length, offset);
       if (!bytesRead) break;
       digest.update(buffer.subarray(0, bytesRead));
       if (target) {
         let written = 0;
         while (written < bytesRead)
-          written += (await target.write(buffer, written, bytesRead - written, offset + written))
-            .bytesWritten;
+          written += await target.write(buffer, written, bytesRead - written, offset + written);
       }
       offset += bytesRead;
     }
     if (target) await target.sync();
     const after = await source.stat(),
-      pathAfter = await lstat(path);
+      pathAfter = await host.lstat(path);
     if (
       !sameIdentity(before, after) ||
       after.nlink !== 1 ||
@@ -168,7 +154,7 @@ export async function inventoryRegularFile(
       pathAfter.ino !== after.ino ||
       offset !== before.size
     ) {
-      if (destination) await rm(destination, { force: true });
+      if (destination) await host.remove(destination);
       throw new Error("Checkpoint source changed while reading");
     }
     return {
@@ -209,52 +195,62 @@ export function validateCheckpointManifest(input: unknown): CheckpointManifest {
   return manifest;
 }
 
-async function walk(root: string, copyRoot?: string): Promise<CheckpointEntry[]> {
+async function walk(
+  host: HostOperations,
+  root: string,
+  copyRoot?: string,
+): Promise<CheckpointEntry[]> {
   const entries: CheckpointEntry[] = [];
   const visit = async (relative: string): Promise<void> => {
     const source = relative ? join(root, ...relative.split("/")) : root,
       destination = copyRoot && relative ? join(copyRoot, ...relative.split("/")) : copyRoot;
-    const before = await lstat(source);
+    const before = await host.lstat(source);
     if (relative === "lost+found" && before.isDirectory()) return;
     if (before.isDirectory()) {
       if (relative) {
-        entries.push({ path: relative, type: "directory", mode: permissions(before) });
-        if (destination) await mkdir(destination, { mode: 0o700 });
+        entries.push({
+          path: relative,
+          type: "directory",
+          mode: permissions(before),
+        });
+        if (destination) await host.mkdir(destination, 0o700);
       }
-      if ((await realpath(source)) !== resolve(source))
+      if ((await host.canonical(source)) !== resolve(source))
         throw new Error("Checkpoint directory changed into a link");
-      const names = (await readdir(source)).sort();
+      const names = (await host.readdir(source)).sort();
       for (const name of names) {
         if (!relative && name === "lost+found") continue;
         const child = relative ? `${relative}/${name}` : name;
         relativePath.parse(child);
         await visit(child);
       }
-      const after = await lstat(source),
-        again = (await readdir(source)).sort().filter((name) => relative || name !== "lost+found");
+      const after = await host.lstat(source),
+        again = (await host.readdir(source))
+          .sort()
+          .filter((name) => relative || name !== "lost+found");
       if (
         !after.isDirectory() ||
         before.dev !== after.dev ||
         before.ino !== after.ino ||
-        (await realpath(source)) !== resolve(source) ||
+        (await host.canonical(source)) !== resolve(source) ||
         JSON.stringify(names.filter((name) => relative || name !== "lost+found")) !==
           JSON.stringify(again)
       )
         throw new Error("Checkpoint directory changed while reading");
-      if (destination) await fsyncDirectory(destination);
+      if (destination) await fsyncDirectory(host, destination);
       return;
     }
     if (before.isFile()) {
       const parent = dirname(source),
-        parentBefore = await lstat(parent);
-      if ((await realpath(parent)) !== resolve(parent))
+        parentBefore = await host.lstat(parent);
+      if ((await host.canonical(parent)) !== resolve(parent))
         throw new Error("Checkpoint file parent changed into a link");
-      const details = await inventoryRegularFile(source, destination),
-        parentAfter = await lstat(parent);
+      const details = await inventoryRegularFile(host, source, destination),
+        parentAfter = await host.lstat(parent);
       if (
         parentBefore.dev !== parentAfter.dev ||
         parentBefore.ino !== parentAfter.ino ||
-        (await realpath(parent)) !== resolve(parent)
+        (await host.canonical(parent)) !== resolve(parent)
       )
         throw new Error("Checkpoint file parent changed while reading");
       entries.push({ path: relative, ...details });
@@ -262,24 +258,29 @@ async function walk(root: string, copyRoot?: string): Promise<CheckpointEntry[]>
     }
     if (before.isSymbolicLink()) {
       const parent = dirname(source),
-        parentBefore = await lstat(parent);
-      if ((await realpath(parent)) !== resolve(parent))
+        parentBefore = await host.lstat(parent);
+      if ((await host.canonical(parent)) !== resolve(parent))
         throw new Error("Checkpoint symlink parent changed into a link");
-      const target = await readlink(source);
-      if (destination) await symlink(target, destination);
-      const after = await lstat(source),
-        parentAfter = await lstat(parent);
+      const target = await host.readlink(source);
+      if (destination) await host.symlink(target, destination);
+      const after = await host.lstat(source),
+        parentAfter = await host.lstat(parent);
       if (
         !after.isSymbolicLink() ||
         before.dev !== after.dev ||
         before.ino !== after.ino ||
-        target !== (await readlink(source)) ||
+        target !== (await host.readlink(source)) ||
         parentBefore.dev !== parentAfter.dev ||
         parentBefore.ino !== parentAfter.ino ||
-        (await realpath(parent)) !== resolve(parent)
+        (await host.canonical(parent)) !== resolve(parent)
       )
         throw new Error("Checkpoint symlink changed while reading");
-      entries.push({ path: relative, type: "symlink", mode: permissions(before), target });
+      entries.push({
+        path: relative,
+        type: "symlink",
+        mode: permissions(before),
+        target,
+      });
       return;
     }
     throw new Error(`Checkpoint contains unsupported special file: ${relative}`);
@@ -289,23 +290,35 @@ async function walk(root: string, copyRoot?: string): Promise<CheckpointEntry[]>
   validateEntries(entries);
   return entries;
 }
-async function canonicalDirectory(root: string): Promise<string> {
-  const stat = await lstat(root);
+async function canonicalDirectory(host: HostOperations, root: string): Promise<string> {
+  const stat = await host.lstat(root);
   if (!stat.isDirectory() || stat.isSymbolicLink())
     throw new Error("Checkpoint workspace root must be a directory, not a symlink");
-  return realpath(root);
+  return host.canonical(root);
 }
-export async function copyWorkspace(root: string, destination: string): Promise<CheckpointEntry[]> {
-  await mkdir(destination, { mode: 0o700 });
-  return walk(await canonicalDirectory(root), destination);
+export async function copyWorkspace(
+  host: HostOperations,
+  root: string,
+  destination: string,
+): Promise<CheckpointEntry[]> {
+  await host.mkdir(destination, 0o700);
+  return walk(host, await canonicalDirectory(host, root), destination);
 }
-export async function inventoryWorkspace(root: string): Promise<CheckpointEntry[]> {
-  return walk(await canonicalDirectory(root));
+export async function inventoryWorkspace(
+  host: HostOperations,
+  root: string,
+): Promise<CheckpointEntry[]> {
+  return walk(host, await canonicalDirectory(host, root));
 }
 
 function payloadShape(entry: CheckpointEntry): unknown {
   return entry.type === "file"
-    ? { path: entry.path, type: entry.type, size: entry.size, sha256: entry.sha256 }
+    ? {
+        path: entry.path,
+        type: entry.type,
+        size: entry.size,
+        sha256: entry.sha256,
+      }
     : entry.type === "symlink"
       ? { path: entry.path, type: entry.type, target: entry.target }
       : { path: entry.path, type: entry.type };
@@ -313,11 +326,15 @@ function payloadShape(entry: CheckpointEntry): unknown {
 function payloadComparable(entries: readonly CheckpointEntry[]): string {
   return encode(entries.map(payloadShape));
 }
-async function assertPayload(root: string, manifest: CheckpointManifest): Promise<void> {
-  const top = (await readdir(root)).sort();
+async function assertPayload(
+  host: HostOperations,
+  root: string,
+  manifest: CheckpointManifest,
+): Promise<void> {
+  const top = (await host.readdir(root)).sort();
   if (encode(top) !== encode(["COMPLETE.json", "agents", "mate.sqlite"]))
     throw new Error("Checkpoint contains missing or extra top-level entries");
-  if (!(await lstat(join(root, "agents"))).isDirectory())
+  if (!(await host.lstat(join(root, "agents"))).isDirectory())
     throw new Error("Checkpoint agents payload must be a directory");
   for (const path of [
     root,
@@ -325,33 +342,33 @@ async function assertPayload(root: string, manifest: CheckpointManifest): Promis
     join(root, "mate.sqlite"),
     join(root, "COMPLETE.json"),
   ]) {
-    const stat = await lstat(path);
+    const stat = await host.lstat(path);
     if (!stat.isSymbolicLink() && (stat.mode & 0o022) !== 0)
       throw new Error("Checkpoint payload must be sealed against group or other writes");
   }
-  const agentNames = (await readdir(join(root, "agents"))).sort();
+  const agentNames = (await host.readdir(join(root, "agents"))).sort();
   if (encode(agentNames) !== encode(manifest.agents.map((agent) => agent.agentId)))
     throw new Error("Checkpoint Agent directories do not match inventory");
   const databasePath = join(root, "mate.sqlite"),
-    database = await inventoryRegularFile(databasePath);
+    database = await inventoryRegularFile(host, databasePath);
   if (database.size !== manifest.database.size || database.sha256 !== manifest.database.sha256)
     throw new Error("Checkpoint database does not match inventory");
   for (const agent of manifest.agents) {
     const agentRoot = join(root, "agents", agent.agentId),
-      agentRootStat = await lstat(agentRoot);
+      agentRootStat = await host.lstat(agentRoot);
     if (!agentRootStat.isDirectory() || agentRootStat.isSymbolicLink())
       throw new Error("Checkpoint Agent payload must be a directory");
     if ((agentRootStat.mode & 0o022) !== 0)
       throw new Error("Checkpoint payload must be sealed against group or other writes");
-    const actual = await inventoryWorkspace(agentRoot);
+    const actual = await inventoryWorkspace(host, agentRoot);
     if (actual.some((entry) => entry.type !== "symlink" && (entry.mode & 0o022) !== 0))
       throw new Error("Checkpoint payload must be sealed against group or other writes");
     if (payloadComparable(actual) !== payloadComparable(agent.entries))
       throw new Error(`Checkpoint workspace does not match inventory: ${agent.agentId}`);
   }
   if (
-    encode((await readdir(root)).sort()) !== encode(top) ||
-    encode((await readdir(join(root, "agents"))).sort()) !== encode(agentNames)
+    encode((await host.readdir(root)).sort()) !== encode(top) ||
+    encode((await host.readdir(join(root, "agents"))).sort()) !== encode(agentNames)
   )
     throw new Error("Checkpoint payload changed while validating");
 }
@@ -359,41 +376,21 @@ export interface CheckpointTrust {
   requiredOwnerUid?: number;
   requiredOwnerGid?: number;
 }
-export interface CheckpointSealingHost {
-  uid(): number;
-  lchown(path: string, uid: number, gid: number): Promise<void>;
-  lstat(path: string): Promise<Stats>;
-  open(
-    path: string,
-    flags: number,
-  ): Promise<{
-    stat(): Promise<Stats>;
-    chown(uid: number, gid: number): Promise<void>;
-    chmod(mode: number): Promise<void>;
-    sync(): Promise<void>;
-    close(): Promise<void>;
-  }>;
-}
-const nodeCheckpointSealingHost: CheckpointSealingHost = {
-  uid: () => process.geteuid?.() ?? process.getuid?.() ?? -1,
-  lchown,
-  lstat,
-  open: (path, flags) => open(path, flags),
-};
 export async function verifyCheckpoint(
+  host: HostOperations,
   path: string,
   config?: DaemonConfig,
   trust: CheckpointTrust = {},
 ): Promise<VerifiedCheckpoint> {
   const requested = resolve(path),
-    root = await realpath(requested);
+    root = await host.canonical(requested);
   if (root !== requested) throw new Error("Checkpoint path must be canonical");
-  const rootStat = await lstat(root);
+  const rootStat = await host.lstat(root);
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink())
     throw new Error("Checkpoint root must be a directory");
   const completePath = join(root, "COMPLETE.json"),
-    complete = await open(completePath, constants.O_RDONLY | constants.O_NOFOLLOW);
-  let completeStat, bytes;
+    complete = await host.openForRead(completePath);
+  let completeStat: HostStat, bytes;
   try {
     const before = await complete.stat();
     bytes = await complete.readFile();
@@ -415,10 +412,10 @@ export async function verifyCheckpoint(
     if (encode(manifest.agents.map((agent) => agent.agentId)) !== encode(expected))
       throw new Error("Checkpoint Agent identities do not match configuration");
   }
-  await assertPayload(root, manifest);
+  await assertPayload(host, root, manifest);
   if (trust.requiredOwnerUid !== undefined || trust.requiredOwnerGid !== undefined) {
     const inspect = async (path: string, kind: "directory" | "file" | "symlink") => {
-      const stat = await lstat(path);
+      const stat = await host.lstat(path);
       if (
         (trust.requiredOwnerUid !== undefined && stat.uid !== trust.requiredOwnerUid) ||
         (trust.requiredOwnerGid !== undefined && stat.gid !== trust.requiredOwnerGid)
@@ -442,8 +439,8 @@ export async function verifyCheckpoint(
         await inspect(join(agentRoot, ...entry.path.split("/")), entry.type);
     }
   }
-  const rootAfter = await lstat(root),
-    completeAfter = await open(completePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const rootAfter = await host.lstat(root),
+    completeAfter = await host.openForRead(completePath);
   try {
     const stat = await completeAfter.stat(),
       again = await completeAfter.readFile();
@@ -473,27 +470,27 @@ export async function verifyCheckpoint(
   };
 }
 
-async function sealTree(path: string): Promise<void> {
-  const stat = await lstat(path);
+async function sealTree(host: HostOperations, path: string): Promise<void> {
+  const stat = await host.lstat(path);
   if (stat.isSymbolicLink()) return;
   if (stat.isDirectory()) {
-    for (const name of await readdir(path)) await sealTree(join(path, name));
-    await chmod(path, 0o750);
-    await fsyncDirectory(path);
+    for (const name of await host.readdir(path)) await sealTree(host, join(path, name));
+    await host.chmod(path, 0o750);
+    await fsyncDirectory(host, path);
     return;
   }
   if (stat.isFile()) {
-    await chmod(path, 0o640);
-    await fsyncPath(path);
+    await host.chmod(path, 0o640);
+    await fsyncPath(host, path);
     return;
   }
   throw new Error("Cannot seal special checkpoint file");
 }
 
 async function assertManagedOwnership(
+  host: HostOperations,
   root: string,
   gid: number,
-  host: CheckpointSealingHost,
 ): Promise<void> {
   const visit = async (path: string): Promise<void> => {
     const stat = await host.lstat(path);
@@ -503,7 +500,7 @@ async function assertManagedOwnership(
     if (stat.isDirectory()) {
       if ((stat.mode & 0o777) !== 0o750)
         throw new Error(`Managed checkpoint directory mode was not sealed: ${path}`);
-      for (const name of await readdir(path)) await visit(join(path, name));
+      for (const name of await host.readdir(path)) await visit(join(path, name));
       return;
     }
     if (!stat.isFile() || (stat.mode & 0o777) !== 0o640)
@@ -514,13 +511,13 @@ async function assertManagedOwnership(
 
 /** Root-only deployment boundary: make a completed checkpoint immutable to the service user. */
 async function sealCheckpoint(
+  host: HostOperations,
   path: string,
   serviceUid: number,
   serviceGid: number,
   resume?: IncompleteCheckpointIdentity,
-  host: CheckpointSealingHost = nodeCheckpointSealingHost,
 ): Promise<VerifiedCheckpoint> {
-  if (host.uid() !== 0) throw new Error("Checkpoint sealing must run as root");
+  if (host.euid() !== 0) throw new Error("Checkpoint sealing must run as root");
   if (
     !Number.isSafeInteger(serviceUid) ||
     serviceUid < 0 ||
@@ -529,11 +526,12 @@ async function sealCheckpoint(
   )
     throw new Error("Checkpoint service uid/gid must be valid");
   const before = await verifyCheckpoint(
+      host,
       path,
       undefined,
       resume ? {} : { requiredOwnerUid: serviceUid, requiredOwnerGid: serviceGid },
     ),
-    rootIdentity = await lstat(before.root),
+    rootIdentity = await host.lstat(before.root),
     parent = dirname(before.root),
     parentStat = await host.lstat(parent);
   if (
@@ -551,12 +549,11 @@ async function sealCheckpoint(
       resume.inode !== rootIdentity.ino)
   )
     throw new Error("Checkpoint sealing resume identity changed");
-  const sealHandle = async (current: string, expected: Stats, kind: "directory" | "file") => {
-    const flags =
-        constants.O_RDONLY |
-        constants.O_NOFOLLOW |
-        (kind === "directory" ? constants.O_DIRECTORY : 0),
-      handle = await host.open(current, flags);
+  const sealHandle = async (current: string, expected: HostStat, kind: "directory" | "file") => {
+    const handle =
+      kind === "directory"
+        ? await host.openDirectoryForRead(current)
+        : await host.openForRead(current);
     try {
       const opened = await handle.stat();
       if (
@@ -576,7 +573,7 @@ async function sealCheckpoint(
       await handle.close();
     }
   };
-  const visit = async (current: string, expected?: Stats): Promise<void> => {
+  const visit = async (current: string, expected?: HostStat): Promise<void> => {
     const stat = expected ?? (await host.lstat(current));
     if (resume && (![0, serviceUid].includes(stat.uid) || stat.gid !== serviceGid))
       throw new Error("Checkpoint sealing resume owner changed");
@@ -596,8 +593,8 @@ async function sealCheckpoint(
     if (stat.isDirectory()) {
       // Revoke service writes through the pinned directory fd before enumerating its children.
       await sealHandle(current, stat, "directory");
-      for (const name of (await readdir(current)).sort()) await visit(join(current, name));
-      await fsyncDirectory(current);
+      for (const name of (await host.readdir(current)).sort()) await visit(join(current, name));
+      await fsyncDirectory(host, current);
       return;
     }
     if (stat.isFile()) {
@@ -607,43 +604,45 @@ async function sealCheckpoint(
     throw new Error("Cannot seal special checkpoint file");
   };
   await visit(before.root, rootIdentity);
-  await fsyncDirectory(parent);
-  const afterRoot = await lstat(before.root);
+  await fsyncDirectory(host, parent);
+  const afterRoot = await host.lstat(before.root);
   if (rootIdentity.dev !== afterRoot.dev || rootIdentity.ino !== afterRoot.ino)
     throw new Error("Checkpoint root changed while sealing");
-  await assertManagedOwnership(before.root, serviceGid, host);
-  const after = await verifyCheckpoint(before.root);
+  await assertManagedOwnership(host, before.root, serviceGid);
+  const after = await verifyCheckpoint(host, before.root);
   if (!sameCheckpointIdentity(before.identity, after.identity))
     throw new Error("Checkpoint identity changed while sealing");
   return after;
 }
 
 export async function sealCheckpointForService(
+  host: HostOperations,
   path: string,
   serviceUid: number,
   serviceGid: number,
 ): Promise<VerifiedCheckpoint> {
-  return sealCheckpoint(path, serviceUid, serviceGid);
+  return sealCheckpoint(host, path, serviceUid, serviceGid);
 }
 /** Upgrade-only restart boundary: the root journal must have pinned this directory before backup. */
 export async function resumeCheckpointSealForService(
+  host: HostOperations,
   path: string,
   serviceUid: number,
   serviceGid: number,
   identity: IncompleteCheckpointIdentity,
 ): Promise<VerifiedCheckpoint> {
-  return sealCheckpoint(path, serviceUid, serviceGid, identity);
+  return sealCheckpoint(host, path, serviceUid, serviceGid, identity);
 }
-/** Test-only ownership host; production entry points do not accept it. */
+/** Test-only ownership check; production entry points do not accept an ownership override. */
 export async function resumeCheckpointSealForTesting(
+  host: HostOperations,
   path: string,
   serviceUid: number,
   serviceGid: number,
   identity: IncompleteCheckpointIdentity,
-  host: CheckpointSealingHost,
 ): Promise<VerifiedCheckpoint> {
-  if (!process.env.VITEST) throw new Error("Checkpoint sealing host override is test-only");
-  return sealCheckpoint(path, serviceUid, serviceGid, identity, host);
+  if (!process.env.VITEST) throw new Error("Checkpoint sealing overrides are test-only");
+  return sealCheckpoint(host, path, serviceUid, serviceGid, identity);
 }
 
 export function sameCheckpointIdentity(
@@ -662,16 +661,17 @@ export function sameCheckpointIdentity(
 
 /** Capture the exact unfinished directory a privileged wrapper may remove after a failed backup. */
 export async function inspectIncompleteCheckpoint(
+  host: HostOperations,
   path: string,
 ): Promise<IncompleteCheckpointIdentity> {
   const requested = resolve(path),
-    root = await realpath(requested);
+    root = await host.canonical(requested);
   if (root !== requested) throw new Error("Incomplete checkpoint path must be canonical");
-  const stat = await lstat(root);
+  const stat = await host.lstat(root);
   if (!stat.isDirectory() || stat.isSymbolicLink())
     throw new Error("Incomplete checkpoint must be a directory");
   try {
-    await lstat(join(root, "COMPLETE.json"));
+    await host.lstat(join(root, "COMPLETE.json"));
     throw new Error("Completed checkpoint must never be removed as incomplete");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -681,106 +681,109 @@ export async function inspectIncompleteCheckpoint(
 
 /** Root-only cleanup paired with the identity captured before invoking the service-user backup. */
 async function cleanupIncompleteCheckpoint(
+  host: HostOperations,
   identity: IncompleteCheckpointIdentity,
   keepRoot: boolean,
 ): Promise<void> {
-  if ((process.geteuid?.() ?? process.getuid?.() ?? -1) !== 0)
-    throw new Error("Incomplete checkpoint cleanup must run as root");
-  const current = await inspectIncompleteCheckpoint(identity.path);
+  if (host.euid() !== 0) throw new Error("Incomplete checkpoint cleanup must run as root");
+  const current = await inspectIncompleteCheckpoint(host, identity.path);
   if (current.device !== identity.device || current.inode !== identity.inode)
     throw new Error("Incomplete checkpoint directory was replaced");
   const parent = dirname(identity.path),
-    parentBefore = await lstat(parent);
+    parentBefore = await host.lstat(parent);
   if (keepRoot) {
-    for (const name of await readdir(identity.path))
-      await rm(join(identity.path, name), { recursive: true, force: true });
-    await fsyncDirectory(identity.path);
-  } else await rm(identity.path, { recursive: true });
-  const parentAfter = await lstat(parent);
+    for (const name of await host.readdir(identity.path))
+      await host.remove(join(identity.path, name), { recursive: true });
+    await fsyncDirectory(host, identity.path);
+  } else await host.remove(identity.path, { recursive: true, force: false });
+  const parentAfter = await host.lstat(parent);
   if (parentBefore.dev !== parentAfter.dev || parentBefore.ino !== parentAfter.ino)
     throw new Error("Checkpoint parent changed during cleanup");
-  await fsyncDirectory(parent);
+  await fsyncDirectory(host, parent);
 }
 export async function removeIncompleteCheckpoint(
+  host: HostOperations,
   identity: IncompleteCheckpointIdentity,
 ): Promise<void> {
-  return cleanupIncompleteCheckpoint(identity, false);
+  return cleanupIncompleteCheckpoint(host, identity, false);
 }
 /** Preserve the directory inode already pinned by the root upgrade journal. */
 export async function resetIncompleteCheckpoint(
+  host: HostOperations,
   identity: IncompleteCheckpointIdentity,
 ): Promise<void> {
-  return cleanupIncompleteCheckpoint(identity, true);
+  return cleanupIncompleteCheckpoint(host, identity, true);
 }
 
-export async function publishCheckpoint(root: string, manifest: CheckpointManifest): Promise<void> {
+export async function publishCheckpoint(
+  host: HostOperations,
+  root: string,
+  manifest: CheckpointManifest,
+): Promise<void> {
   const validated = validateCheckpointManifest(manifest);
-  await sealTree(root);
+  await sealTree(host, root);
   const temporary = join(root, `.COMPLETE-${randomUUID()}`),
-    handle = await open(
-      temporary,
-      constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
-      0o600,
-    );
+    handle = await host.createExclusive(temporary, 0o600);
   let published = false;
   try {
     await handle.writeFile(JSON.stringify(validated));
     await handle.sync();
     await handle.close();
-    await chmod(temporary, 0o640);
-    await fsyncPath(temporary);
-    await rename(temporary, join(root, "COMPLETE.json"));
+    await host.chmod(temporary, 0o640);
+    await fsyncPath(host, temporary);
+    await host.rename(temporary, join(root, "COMPLETE.json"));
     published = true;
-    await fsyncDirectory(root);
-    await fsyncDirectory(dirname(root));
+    await fsyncDirectory(host, root);
+    await fsyncDirectory(host, dirname(root));
   } finally {
     if (!published) {
       await handle.close().catch(() => {});
-      await rm(temporary, { force: true });
+      await host.remove(temporary);
     }
   }
 }
 export async function restoreRegularFile(
+  host: HostOperations,
   source: string,
   destination: string,
   expected: { size: number; sha256: string; mode: number },
 ): Promise<void> {
   const sourceParent = dirname(source),
     destinationParent = dirname(destination),
-    sourceParentBefore = await lstat(sourceParent),
-    destinationParentBefore = await lstat(destinationParent);
+    sourceParentBefore = await host.lstat(sourceParent),
+    destinationParentBefore = await host.lstat(destinationParent);
   if (
     !sourceParentBefore.isDirectory() ||
     sourceParentBefore.isSymbolicLink() ||
-    (await realpath(sourceParent)) !== resolve(sourceParent) ||
+    (await host.canonical(sourceParent)) !== resolve(sourceParent) ||
     !destinationParentBefore.isDirectory() ||
     destinationParentBefore.isSymbolicLink() ||
-    (await realpath(destinationParent)) !== resolve(destinationParent)
+    (await host.canonical(destinationParent)) !== resolve(destinationParent)
   )
     throw new Error("Checkpoint copy parents must be canonical directories");
   const temporary = join(destinationParent, `.${basename(destination)}.restore-${randomUUID()}`);
   let renamed = false;
   try {
-    const actual = await inventoryRegularFile(source, temporary);
+    const actual = await inventoryRegularFile(host, source, temporary);
     if (actual.size !== expected.size || actual.sha256 !== expected.sha256)
       throw new Error("Checkpoint file changed while restoring");
-    const sourceParentAfter = await lstat(sourceParent),
-      destinationParentAfter = await lstat(destinationParent);
+    const sourceParentAfter = await host.lstat(sourceParent),
+      destinationParentAfter = await host.lstat(destinationParent);
     if (
       sourceParentBefore.dev !== sourceParentAfter.dev ||
       sourceParentBefore.ino !== sourceParentAfter.ino ||
       destinationParentBefore.dev !== destinationParentAfter.dev ||
       destinationParentBefore.ino !== destinationParentAfter.ino ||
-      (await realpath(sourceParent)) !== resolve(sourceParent) ||
-      (await realpath(destinationParent)) !== resolve(destinationParent)
+      (await host.canonical(sourceParent)) !== resolve(sourceParent) ||
+      (await host.canonical(destinationParent)) !== resolve(destinationParent)
     )
       throw new Error("Checkpoint copy parent changed while restoring");
-    await chmod(temporary, expected.mode);
-    await fsyncPath(temporary);
-    await rename(temporary, destination);
+    await host.chmod(temporary, expected.mode);
+    await fsyncPath(host, temporary);
+    await host.rename(temporary, destination);
     renamed = true;
-    await fsyncDirectory(destinationParent);
+    await fsyncDirectory(host, destinationParent);
   } finally {
-    if (!renamed) await rm(temporary, { force: true });
+    if (!renamed) await host.remove(temporary);
   }
 }

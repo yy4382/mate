@@ -1,39 +1,42 @@
 import { randomUUID } from "node:crypto";
-import {
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  realpathSync,
-  renameSync,
-  rmSync,
-  symlinkSync,
-  unlinkSync,
-  writeFileSync,
-  chownSync,
-  chmodSync,
-} from "node:fs";
 import { dirname, join } from "node:path";
 import { daemonConfigSchema, sameConfiguration, type DaemonConfig } from "../daemon/config.js";
 import { createReleaseManifest, verifyRelease } from "./release.js";
 import { createLinuxDeploymentPlan, type LinuxDeploymentPlan } from "./linux-plan.js";
 import { managedLayout } from "./systemd.js";
 import type { DeploymentSpec } from "./spec.js";
-import { nodeLinuxInstallerHost, type LinuxInstallerHost } from "./linux-host.js";
+import { pathExists, type HostOperations } from "./host.js";
+import {
+  agentQuota,
+  assertManagedEntry,
+  ensureAgentWorkspace,
+  ensureManagedDirectory,
+  ensureManagedFile,
+  hostProcessManager,
+  hostRules,
+  parentSliceUnits,
+  type AgentIdentity,
+  type ManagedEntry,
+} from "./host-rules.js";
 import { runDoctor } from "./doctor.js";
-import { LinuxProcessManager } from "../execution/linux-processes.js";
 import { initialMemory } from "../agents/workspace.js";
 
 export function renderLinuxService(plan: LinuxDeploymentPlan): string {
   return `[Unit]\nDescription=Mate autonomous Agent daemon\nWants=network-online.target\nAfter=network-online.target\n\n[Service]\nType=notify\nNotifyAccess=all\nUser=root\nGroup=root\nWorkingDirectory=${managedLayout.current}\nEnvironmentFile=${managedLayout.environment}\nExecStart=/usr/bin/node ${managedLayout.current}/dist/src/main.js start ${managedLayout.config}\nRestart=on-failure\nRestartSec=5\nTimeoutStartSec=900\nTimeoutStopSec=120\nKillMode=mixed\nMemoryMax=${plan.daemonMemoryMiB}M\nUMask=0077\n\n[Install]\nWantedBy=multi-user.target\n`;
 }
-export function renderAgentSlice(): string {
-  return "[Unit]\nDescription=Mate Agent process quota\n\n[Slice]\nMemoryMax=256M\nTasksMax=128\nCPUQuota=100%\n";
+export function renderAgentSlice(quota: typeof agentQuota = agentQuota): string {
+  return `[Unit]\nDescription=Mate Agent process quota\n\n[Slice]\nMemoryMax=${quota.memoryMiB}M\nTasksMax=${quota.tasksMax}\nCPUQuota=${quota.cpuQuota}\n`;
 }
 function renderParentSlice(): string {
   return "[Unit]\nDescription=Mate Agent process hierarchy\n\n[Slice]\n";
 }
 export function renderLinuxMaintenanceWrapper(): string {
+  // Every managed path in the generated wrapper comes from the one layout definition.
+  const current = managedLayout.current,
+    controller = managedLayout.controller,
+    config = managedLayout.config,
+    environment = managedLayout.environment,
+    checkpoints = managedLayout.checkpoints;
   return `#!/bin/sh
 set -eu
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
@@ -42,25 +45,25 @@ export PATH
 case "\${1-}" in
   status|logs)
     [ "$#" -eq 1 ] || { echo "Read-only command takes no arguments" >&2; exit 1; }
-    exec /usr/bin/node /opt/mate/current/dist/src/deployment/cli.js "$1" ;;
+    exec /usr/bin/node ${current}/dist/src/deployment/cli.js "$1" ;;
   doctor)
     [ "$#" -eq 1 ] || { echo "Command takes no arguments" >&2; exit 1; }
-    exec /usr/bin/systemd-run --quiet --collect --wait --pipe --property=EnvironmentFile=/etc/mate/mate.env \
-      /usr/bin/node /opt/mate/current/dist/src/main.js doctor /etc/mate/mate.json ;;
+    exec /usr/bin/systemd-run --quiet --collect --wait --pipe --property=EnvironmentFile=${environment} \
+      /usr/bin/node ${current}/dist/src/main.js doctor ${config} ;;
   offline-probe)
     [ "$#" -eq 1 ] || { echo "Command takes no arguments" >&2; exit 1; }
-    exec /usr/bin/node /opt/mate/current/dist/src/main.js "$1" /etc/mate/mate.json ;;
+    exec /usr/bin/node ${current}/dist/src/main.js "$1" ${config} ;;
   upgrade)
     [ "$#" -eq 2 ] || { echo "Usage: matectl upgrade SPEC" >&2; exit 1; }
-    exec /usr/bin/node /opt/mate/current/dist/src/deployment/cli.js upgrade "$2" ;;
+    exec /usr/bin/node ${current}/dist/src/deployment/cli.js upgrade "$2" ;;
   rollback|finalize)
     [ "$#" -eq 1 ] || { echo "Command takes no arguments" >&2; exit 1; }
-    exec /usr/bin/node /opt/mate/controller/dist/src/deployment/cli.js "$1" ;;
+    exec /usr/bin/node ${controller}/dist/src/deployment/cli.js "$1" ;;
   backup)
     [ "$#" -eq 2 ] || { echo "Usage: matectl backup NAME" >&2; exit 1; }
     case "$2" in ''|*[!A-Za-z0-9._-]*|.*|-*) echo "Invalid checkpoint name" >&2; exit 1;; esac
     [ "\${#2}" -le 64 ] || exit 1
-    exec /usr/bin/node /opt/mate/current/dist/src/main.js backup /etc/mate/mate.json "/var/backups/mate/$2" ;;
+    exec /usr/bin/node ${current}/dist/src/main.js backup ${config} "${checkpoints}/$2" ;;
   restore)
     [ "$#" -eq 2 ] || [ "$#" -eq 4 ] || { echo "Usage: matectl restore NAME [--replace CURRENT]" >&2; exit 1; }
     case "$2" in ''|*[!A-Za-z0-9._-]*|.*|-*) echo "Invalid checkpoint name" >&2; exit 1;; esac
@@ -69,55 +72,22 @@ case "\${1-}" in
       [ "$3" = --replace ] || exit 1
       case "$4" in ''|*[!A-Za-z0-9._-]*|.*|-*) echo "Invalid checkpoint name" >&2; exit 1;; esac
       [ "\${#4}" -le 64 ] || exit 1
-      exec /usr/bin/node /opt/mate/current/dist/src/main.js restore /etc/mate/mate.json "/var/backups/mate/$2" --replace "/var/backups/mate/$4"
+      exec /usr/bin/node ${current}/dist/src/main.js restore ${config} "${checkpoints}/$2" --replace "${checkpoints}/$4"
     fi
-    exec /usr/bin/node /opt/mate/current/dist/src/main.js restore /etc/mate/mate.json "/var/backups/mate/$2" ;;
+    exec /usr/bin/node ${current}/dist/src/main.js restore ${config} "${checkpoints}/$2" ;;
   *) echo "Usage: matectl status|logs|doctor|offline-probe|upgrade SPEC|rollback|finalize|backup NAME|restore NAME [--replace CURRENT]" >&2; exit 1;;
 esac
 `;
 }
-
-function checked(host: LinuxInstallerHost, binary: string, args: string[], label: string): string {
+function checked(host: HostOperations, binary: string, args: string[], label: string): string {
   const result = host.run(binary, args);
   if (result.code !== 0)
     throw new Error(`${label}: ${(result.stderr || result.stdout).trim().slice(0, 300)}`);
   return result.stdout.trim();
 }
-function exactDirectory(path: string, uid: number, gid: number, mode: number): void {
-  if (!existsSync(path)) {
-    mkdirSync(path);
-    chownSync(path, uid, gid);
-    chmodSync(path, mode);
-  }
-  const stat = lstatSync(path);
-  if (
-    !stat.isDirectory() ||
-    stat.isSymbolicLink() ||
-    stat.uid !== uid ||
-    stat.gid !== gid ||
-    (stat.mode & 0o777) !== mode
-  )
-    throw new Error(`Managed directory differs: ${path}`);
-}
-function exactFile(path: string, text: string, uid: number, gid: number, mode: number): void {
-  if (!existsSync(path)) {
-    writeFileSync(path, text, { flag: "wx", mode });
-    chownSync(path, uid, gid);
-    chmodSync(path, mode);
-  }
-  const stat = lstatSync(path);
-  if (
-    !stat.isFile() ||
-    stat.isSymbolicLink() ||
-    stat.nlink !== 1 ||
-    stat.uid !== uid ||
-    stat.gid !== gid ||
-    (stat.mode & 0o777) !== mode ||
-    readFileSync(path, "utf8") !== text
-  )
-    throw new Error(`Managed file differs: ${path}`);
-}
-function account(host: LinuxInstallerHost, agent: LinuxDeploymentPlan["agents"][number]): void {
+async function account(host: HostOperations, agent: AgentIdentity): Promise<void> {
+  if (!agent.username)
+    throw new Error(`Managed Linux deployment requires a preconfigured username: ${agent.agentId}`);
   const entry = checked(
     host,
     "/usr/bin/getent",
@@ -143,11 +113,12 @@ function account(host: LinuxInstallerHost, agent: LinuxDeploymentPlan["agents"][
     throw new Error(`${agent.agentId}: account has unexpected supplementary groups`);
 }
 async function publishLinuxRelease(
+  host: HostOperations,
+  rules: ReturnType<typeof hostRules>,
   plan: LinuxDeploymentPlan,
-  host: LinuxInstallerHost,
 ): Promise<{ release: string; releaseId: string }> {
   const stage = join(managedLayout.releases, `.linux-stage-${randomUUID()}`);
-  mkdirSync(stage, { mode: 0o755 });
+  await host.mkdir(stage, 0o755);
   try {
     for (const name of ["dist", "node_modules", "package.json", "pnpm-lock.yaml"])
       checked(
@@ -156,7 +127,7 @@ async function publishLinuxRelease(
         [
           "-a",
           "--no-preserve=xattr,context",
-          join(realpathSync(plan.release.source), name),
+          join(await host.canonical(plan.release.source), name),
           join(stage, name),
         ],
         `Cannot copy ${name}`,
@@ -169,25 +140,33 @@ async function publishLinuxRelease(
       "Cannot strip privileged release modes",
     );
     checked(host, "/usr/bin/chmod", ["-R", "go-w", stage], "Cannot seal release modes");
-    const manifest = await createReleaseManifest(stage, plan.release.gitCommit);
-    exactFile(join(stage, "RELEASE.json"), `${JSON.stringify(manifest, null, 2)}\n`, 0, 0, 0o444);
+    const manifest = await createReleaseManifest(host, stage, plan.release.gitCommit);
+    await ensureManagedFile(
+      host,
+      releaseEntry(join(stage, "RELEASE.json"), 0o444),
+      `${JSON.stringify(manifest, null, 2)}\n`,
+      rules,
+    );
     const release = join(managedLayout.releases, manifest.releaseId);
-    if (existsSync(release)) await verifyRelease(release, manifest.releaseId);
-    else renameSync(stage, release);
+    if (await pathExists(host, release)) await verifyRelease(host, release, manifest.releaseId);
+    else await host.rename(stage, release);
     return { release, releaseId: manifest.releaseId };
   } finally {
-    if (existsSync(stage)) rmSync(stage, { recursive: true });
+    if (await pathExists(host, stage)) await host.remove(stage, { recursive: true });
   }
 }
-export function preflightLinuxDeployment(
-  spec: DeploymentSpec,
-  config: DaemonConfig,
-  host: LinuxInstallerHost,
-): LinuxDeploymentPlan {
-  const plan = createLinuxDeploymentPlan(spec, config, host);
+function releaseEntry(path: string, mode: number): ManagedEntry {
+  return {
+    name: `release-${path.split("/").pop()}`,
+    path,
+    type: "file",
+    owner: "maintenance",
+    mode,
+  };
+}
+async function assertSupportedHost(host: HostOperations): Promise<void> {
   const os = Object.fromEntries(
-    host
-      .read("/etc/os-release")
+    (await host.readText("/etc/os-release"))
       .split("\n")
       .filter(Boolean)
       .map((line) => {
@@ -203,6 +182,14 @@ export function preflightLinuxDeployment(
     os.VERSION_ID !== "13"
   )
     throw new Error("Linux deployment requires Debian 13 x86_64 and Node 24");
+}
+export async function preflightLinuxDeployment(
+  host: HostOperations,
+  spec: DeploymentSpec,
+  config: DaemonConfig,
+): Promise<LinuxDeploymentPlan> {
+  const plan = await createLinuxDeploymentPlan(spec, config, host);
+  await assertSupportedHost(host);
   for (const binary of [
     "/usr/bin/systemctl",
     "/usr/bin/systemd-run",
@@ -214,7 +201,7 @@ export function preflightLinuxDeployment(
     "/usr/bin/chown",
     "/usr/bin/chmod",
   ])
-    host.assertRootExecutable(binary);
+    await host.assertRootExecutable(binary);
   const installedNode = checked(
     host,
     "/usr/bin/node",
@@ -225,10 +212,11 @@ export function preflightLinuxDeployment(
     throw new Error(
       `Deployment Node ${host.node} differs from fixed service Node ${installedNode}`,
     );
-  for (const agent of plan.agents) account(host, agent);
-  if (host.availableBytes("/") < plan.requiredBytes)
+  const rules = hostRules(config);
+  for (const agent of rules.agents) await account(host, agent.identity);
+  if ((await host.availableBytes("/")) < plan.requiredBytes)
     throw new Error(`Insufficient free disk space: ${plan.requiredBytes} bytes required`);
-  if (host.memoryMiB() < plan.daemonMemoryMiB + 256)
+  if ((await host.memoryMiB()) < plan.daemonMemoryMiB + 256)
     throw new Error("Host memory is below the daemon plus one Agent process quota");
   if (host.run("/usr/bin/systemctl", ["is-active", "--quiet", "mate.service"]).code === 0)
     throw new Error("Stop mate.service before installation");
@@ -236,65 +224,59 @@ export function preflightLinuxDeployment(
 }
 
 export async function installLinuxDeployment(
+  host: HostOperations,
   spec: DeploymentSpec,
   config: DaemonConfig,
-  host: LinuxInstallerHost,
-): Promise<{ plan: LinuxDeploymentPlan; releaseId: string; serviceStarted: false }> {
+): Promise<{
+  plan: LinuxDeploymentPlan;
+  releaseId: string;
+  serviceStarted: false;
+}> {
   if (host.euid() !== 0) throw new Error("Linux deployment installation must run as root");
-  const plan = preflightLinuxDeployment(spec, config, host);
-  exactDirectory("/opt/mate", 0, 0, 0o755);
-  exactDirectory(managedLayout.releases, 0, 0, 0o755);
-  exactDirectory(managedLayout.configDir, 0, 0, 0o700);
-  exactDirectory(managedLayout.data, 0, 0, 0o700);
-  for (const part of ["state", "control"])
-    exactDirectory(join(managedLayout.data, part), 0, 0, 0o700);
-  exactDirectory("/var/backups", 0, 0, 0o755);
-  exactDirectory(managedLayout.checkpoints, 0, 0, 0o700);
-  exactDirectory(dirname(plan.sharedRoot), 0, 0, 0o755);
-  exactDirectory(plan.sharedRoot, 0, 0, 0o755);
-  for (const agent of plan.agents) {
-    exactDirectory(dirname(agent.home), 0, 0, 0o755);
-    exactDirectory(agent.home, agent.uid, agent.gid, 0o700);
-    const definition = config.mate.agents.find((item) => item.id === agent.agentId)!;
-    const memory = join(agent.home, "MEMORY.md");
-    if (!existsSync(memory)) {
-      for (const name of ["notes", "artifacts"])
-        exactDirectory(join(agent.home, name), agent.uid, agent.gid, 0o700);
-      exactFile(memory, initialMemory(definition.name), agent.uid, agent.gid, 0o600);
-    } else {
-      const stat = lstatSync(memory);
-      if (
-        !stat.isFile() ||
-        stat.isSymbolicLink() ||
-        stat.uid !== agent.uid ||
-        stat.gid !== agent.gid ||
-        (stat.mode & 0o777) !== 0o600
-      )
-        throw new Error(`Private memory ownership differs: ${memory}`);
-    }
-    exactDirectory(join(plan.sharedRoot, agent.agentId), agent.uid, agent.gid, 0o755);
+  const plan = await preflightLinuxDeployment(host, spec, config),
+    rules = hostRules(config),
+    control = rules.control;
+  await ensureManagedDirectory(host, control.optDir, rules);
+  await ensureManagedDirectory(host, control.releases, rules);
+  await ensureManagedDirectory(host, control.configDir, rules);
+  await ensureManagedDirectory(host, control.data, rules);
+  await ensureManagedDirectory(host, control.state, rules);
+  await ensureManagedDirectory(host, control.controlDir, rules);
+  await ensureManagedDirectory(host, control.backupsParent, rules);
+  await ensureManagedDirectory(host, control.checkpoints, rules);
+  await ensureManagedDirectory(host, control.sharedRootParent, rules);
+  await ensureManagedDirectory(host, control.sharedRoot, rules);
+  for (const agent of rules.agents) {
+    const definition = config.mate.agents.find((item) => item.id === agent.identity.agentId)!;
+    await ensureAgentWorkspace(host, rules, agent, initialMemory(definition.name));
   }
-  const { release, releaseId } = await publishLinuxRelease(plan, host);
+  const { release, releaseId } = await publishLinuxRelease(host, rules, plan);
   const configText = `${JSON.stringify(config, null, 2)}\n`,
-    envText = plan.environmentSource ? host.read(plan.environmentSource) : "";
-  exactFile(managedLayout.config, configText, 0, 0, 0o600);
-  exactFile(managedLayout.environment, envText, 0, 0, 0o600);
-  for (const parent of ["mate.slice", "mate-agent.slice"])
-    exactFile(join("/etc/systemd/system", parent), renderParentSlice(), 0, 0, 0o644);
-  for (const agent of plan.agents)
-    exactFile(join("/etc/systemd/system", agent.slice), renderAgentSlice(), 0, 0, 0o644);
-  exactFile(managedLayout.service, renderLinuxService(plan), 0, 0, 0o644);
-  exactFile(managedLayout.wrapper, renderLinuxMaintenanceWrapper(), 0, 0, 0o755);
+    envText = plan.environmentSource ? await host.readText(plan.environmentSource) : "";
+  await ensureManagedFile(host, control.configFile, configText, rules);
+  await ensureManagedFile(host, control.environmentFile, envText, rules);
+  for (const entry of control.parentSlices)
+    await ensureManagedFile(host, entry, renderParentSlice(), rules);
+  for (const agent of rules.agents)
+    await ensureManagedFile(host, agent.slice, renderAgentSlice(), rules);
+  await ensureManagedFile(host, control.serviceFile, renderLinuxService(plan), rules);
+  await ensureManagedFile(host, control.wrapper, renderLinuxMaintenanceWrapper(), rules);
   for (const link of [managedLayout.current, managedLayout.controller]) {
-    if (existsSync(link)) {
-      if (realpathSync(link) !== release) throw new Error(`Existing release link differs: ${link}`);
+    if (await pathExists(host, link)) {
+      if ((await host.canonical(link)) !== release)
+        throw new Error(`Existing release link differs: ${link}`);
     } else checked(host, "/usr/bin/ln", ["-s", release, link], `Cannot publish ${link}`);
   }
   checked(host, "/usr/bin/systemctl", ["daemon-reload"], "Cannot reload systemd");
-  for (const parent of ["mate.slice", "mate-agent.slice"])
-    checked(host, "/usr/bin/systemctl", ["start", parent], `Cannot start ${parent}`);
-  for (const agent of plan.agents)
-    checked(host, "/usr/bin/systemctl", ["start", agent.slice], `Cannot start ${agent.slice}`);
+  for (const unit of parentSliceUnits)
+    checked(host, "/usr/bin/systemctl", ["start", unit], `Cannot start ${unit}`);
+  for (const agent of rules.agents)
+    checked(
+      host,
+      "/usr/bin/systemctl",
+      ["start", agent.sliceUnit],
+      `Cannot start ${agent.sliceUnit}`,
+    );
   checked(
     host,
     "/usr/bin/systemctl",
@@ -304,10 +286,10 @@ export async function installLinuxDeployment(
   return { plan, releaseId, serviceStarted: false };
 }
 
-export function disableLinuxDeployment(
+export async function disableLinuxDeployment(
+  host: HostOperations,
   config: DaemonConfig,
-  host: LinuxInstallerHost = nodeLinuxInstallerHost(),
-): void {
+): Promise<void> {
   if (host.euid() !== 0 || !config.runtime.linuxUsers)
     throw new Error("Linux deployment disable requires root and Linux identities");
   checked(
@@ -319,8 +301,20 @@ export function disableLinuxDeployment(
   // Stopping Mate does not silently kill Agent-owned background work; owners may inspect/stop it separately.
 }
 
-const linuxUpgradeJournal = join(managedLayout.data, "control", "linux-upgrade.json");
-function inactiveAndIdle(config: DaemonConfig, host: LinuxInstallerHost): void {
+export const linuxUpgradeJournalPath = (dataDir: string = managedLayout.data): string =>
+  join(dataDir, "control", "linux-upgrade.json");
+const upgradeJournalEntry = (path: string): ManagedEntry => ({
+  name: "linux-upgrade-journal",
+  path,
+  type: "file",
+  owner: "maintenance",
+  mode: 0o600,
+});
+async function inactiveAndIdle(
+  host: HostOperations,
+  config: DaemonConfig,
+  rules = hostRules(config),
+): Promise<void> {
   const service = host.run("/usr/bin/systemctl", [
     "show",
     "mate.service",
@@ -330,67 +324,72 @@ function inactiveAndIdle(config: DaemonConfig, host: LinuxInstallerHost): void {
   ]);
   if (service.code !== 0 || !["inactive", "failed"].includes(service.stdout.trim()))
     throw new Error("Stop mate.service before upgrade");
-  const identities = config.runtime.linuxUsers!;
-  const manager = new LinuxProcessManager(
-    Object.fromEntries(Object.entries(identities).map(([id, user]) => [id, user.uid])),
-  );
-  for (const id of Object.keys(identities))
-    if (manager.list(id).length) throw new Error(`Stop ${id} background tasks before upgrade`);
+  const manager = hostProcessManager(host, rules);
+  for (const agent of rules.agents)
+    if (manager.list(agent.identity.agentId).length)
+      throw new Error(`Stop ${agent.identity.agentId} background tasks before upgrade`);
 }
-export function readLinuxUpgradeJournal(path = linuxUpgradeJournal): {
+export async function readLinuxUpgradeJournal(
+  host: HostOperations,
+  path = linuxUpgradeJournalPath(),
+): Promise<{
   oldRelease: string;
   newRelease: string;
-} {
-  const stat = lstatSync(path);
-  if (
-    !stat.isFile() ||
-    stat.isSymbolicLink() ||
-    stat.uid !== 0 ||
-    stat.gid !== 0 ||
-    (stat.mode & 0o777) !== 0o600
-  )
-    throw new Error("Linux upgrade journal is not root-only");
-  const value = JSON.parse(readFileSync(path, "utf8")) as {
+}> {
+  await assertManagedEntry(host, upgradeJournalEntry(path));
+  const value = JSON.parse(await host.readText(path)) as {
     oldRelease?: string;
     newRelease?: string;
   };
-  for (const path of [value.oldRelease, value.newRelease])
-    if (!path || !path.startsWith(`${managedLayout.releases}/`) || realpathSync(path) !== path)
+  for (const release of [value.oldRelease, value.newRelease])
+    if (
+      !release ||
+      !release.startsWith(`${managedLayout.releases}/`) ||
+      (await host.canonical(release)) !== release
+    )
       throw new Error("Linux upgrade release identity is invalid");
   return value as { oldRelease: string; newRelease: string };
 }
-function switchReleaseLink(link: string, target: string): void {
-  const temporary = join("/opt/mate", `.release-link-${randomUUID()}`);
-  symlinkSync(target, temporary);
-  renameSync(temporary, link);
+async function installedConfig(host: HostOperations): Promise<DaemonConfig> {
+  return daemonConfigSchema.parse(JSON.parse(await host.readText(managedLayout.config)));
+}
+async function switchReleaseLink(
+  host: HostOperations,
+  link: string,
+  target: string,
+): Promise<void> {
+  const temporary = join(dirname(managedLayout.current), `.release-link-${randomUUID()}`);
+  await host.symlink(target, temporary);
+  await host.rename(temporary, link);
 }
 export async function upgradeLinuxDeployment(
+  host: HostOperations,
   spec: DeploymentSpec,
   config: DaemonConfig,
-  host: LinuxInstallerHost = nodeLinuxInstallerHost(),
 ): Promise<{ oldRelease: string; newRelease: string; serviceStarted: false }> {
   if (host.euid() !== 0) throw new Error("Linux upgrade requires root");
-  const plan = preflightLinuxDeployment(spec, config, host);
-  inactiveAndIdle(config, host);
-  if (existsSync(linuxUpgradeJournal))
+  const plan = await preflightLinuxDeployment(host, spec, config),
+    rules = hostRules(config),
+    journalPath = linuxUpgradeJournalPath();
+  await inactiveAndIdle(host, config, rules);
+  if (await pathExists(host, journalPath))
     throw new Error("Finish or roll back the previous upgrade first");
-  const installed = daemonConfigSchema.parse(
-    JSON.parse(readFileSync(managedLayout.config, "utf8")),
-  );
+  const installed = await installedConfig(host);
   if (!sameConfiguration(installed, config))
     throw new Error(
       "Upgrade uses the installed configuration: stop Mate, write the new configuration to the managed configuration file, start it once so Mate applies the change, then upgrade",
     );
   if (
     plan.environmentSource &&
-    host.read(plan.environmentSource) !== readFileSync(managedLayout.environment, "utf8")
+    (await host.readText(plan.environmentSource)) !==
+      (await host.readText(managedLayout.environment))
   )
     throw new Error("Code upgrade cannot silently change credentials");
-  const oldRelease = realpathSync(managedLayout.current);
-  await verifyRelease(oldRelease);
-  const { release: newRelease } = await publishLinuxRelease(plan, host);
+  const oldRelease = await host.canonical(managedLayout.current);
+  await verifyRelease(host, oldRelease);
+  const { release: newRelease } = await publishLinuxRelease(host, rules, plan);
   if (newRelease === oldRelease) throw new Error("Candidate is already the current release");
-  const doctor = await runDoctor(config, undefined, {
+  const doctor = await runDoctor(host, config, {
     releaseRoot: newRelease,
     requireSecrets: false,
   });
@@ -401,27 +400,34 @@ export async function upgradeLinuxDeployment(
         .map((check) => check.name)
         .join(", ")}`,
     );
-  exactFile(linuxUpgradeJournal, `${JSON.stringify({ oldRelease, newRelease })}\n`, 0, 0, 0o600);
-  switchReleaseLink(managedLayout.current, newRelease);
+  await ensureManagedFile(
+    host,
+    upgradeJournalEntry(journalPath),
+    `${JSON.stringify({ oldRelease, newRelease })}\n`,
+    rules,
+  );
+  await switchReleaseLink(host, managedLayout.current, newRelease);
   return { oldRelease, newRelease, serviceStarted: false };
 }
 export async function finishLinuxUpgrade(
+  host: HostOperations,
   command: "rollback" | "finalize",
-  host: LinuxInstallerHost = nodeLinuxInstallerHost(),
 ): Promise<void> {
   if (host.euid() !== 0) throw new Error("Linux upgrade maintenance requires root");
-  const config = daemonConfigSchema.parse(JSON.parse(readFileSync(managedLayout.config, "utf8")));
+  const config = await installedConfig(host);
   if (!config.runtime.linuxUsers) throw new Error("Linux identities are not configured");
-  inactiveAndIdle(config, host);
-  const journal = readLinuxUpgradeJournal();
-  await verifyRelease(journal.oldRelease);
-  await verifyRelease(journal.newRelease);
-  const current = realpathSync(managedLayout.current);
+  const rules = hostRules(config);
+  await inactiveAndIdle(host, config, rules);
+  const journal = await readLinuxUpgradeJournal(host);
+  await verifyRelease(host, journal.oldRelease);
+  await verifyRelease(host, journal.newRelease);
+  const current = await host.canonical(managedLayout.current);
   if (current !== journal.newRelease && current !== journal.oldRelease)
     throw new Error("Current release differs from the upgrade journal");
   // The controller remains pinned to the initially installed release, independent of candidate code.
-  await verifyRelease(realpathSync(managedLayout.controller));
-  if (command === "rollback") switchReleaseLink(managedLayout.current, journal.oldRelease);
+  await verifyRelease(host, await host.canonical(managedLayout.controller));
+  if (command === "rollback")
+    await switchReleaseLink(host, managedLayout.current, journal.oldRelease);
   else if (current !== journal.newRelease) throw new Error("Cannot finalize a rolled-back upgrade");
-  unlinkSync(linuxUpgradeJournal);
+  await host.unlink(linuxUpgradeJournalPath());
 }

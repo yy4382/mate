@@ -3,6 +3,9 @@ import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { within } from "./paths.js";
 
+/** One systemd slice per Agent Linux UID; the unit name derives from the UID, never from the Agent id. */
+export const agentSliceUnit = (uid: number): string => `mate-agent-${uid}.slice`;
+
 export interface ProcessScope {
   unit: string;
   pids: number[];
@@ -21,7 +24,7 @@ const systemctl: SystemctlRunner = (args) => {
   if (result.error) throw result.error;
   return { code: result.status ?? 1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
 };
-function cgroupPids(group: string): number[] {
+export function cgroupPids(group: string): number[] {
   if (!group.startsWith("/") || group.split("/").includes(".."))
     throw new Error("Invalid systemd control group");
   const base = "/sys/fs/cgroup",
@@ -48,7 +51,7 @@ function cgroupPids(group: string): number[] {
   visit(root, 0);
   return [...new Set(pids)].sort((a, b) => a - b);
 }
-function pidUid(pid: number): number | undefined {
+export function pidUid(pid: number): number | undefined {
   let status: string;
   try {
     status = readFileSync(`/proc/${pid}/status`, "utf8");
@@ -77,7 +80,7 @@ export class LinuxProcessManager {
     return uid!;
   }
   verifyQuota(agentId: string): void {
-    const slice = `mate-agent-${this.uid(agentId)}.slice`,
+    const slice = agentSliceUnit(this.uid(agentId)),
       result = this.run([
         "show",
         slice,
@@ -113,8 +116,9 @@ export class LinuxProcessManager {
       throw new Error("Agent systemd slice must have finite memory, task and CPU quota");
   }
   private unitPattern(uid: number): RegExp {
+    const prefix = agentSliceUnit(uid).replace(/\.slice$/, "");
     return new RegExp(
-      `^mate-agent-${uid}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.scope$`,
+      `^${prefix}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.scope$`,
     );
   }
   private show(uid: number, unit: string): { group: string; pids: number[]; active: boolean } {
@@ -150,7 +154,7 @@ export class LinuxProcessManager {
     );
     if (fields.LoadState === "not-found" || fields.ActiveState === "inactive")
       throw new ProcessNotRunningError("Agent scope is not running");
-    if (fields.Id !== unit || fields.Slice !== `mate-agent-${uid}.slice`)
+    if (fields.Id !== unit || fields.Slice !== agentSliceUnit(uid))
       throw new Error("Agent scope slice or identity mismatch");
     const group = fields.ControlGroup ?? "";
     if (!group.startsWith("/") || !group.endsWith(`/${unit}`) || group.split("/").includes(".."))
@@ -174,7 +178,7 @@ export class LinuxProcessManager {
         "--no-legend",
         "--no-pager",
         "--full",
-        `mate-agent-${uid}-*.scope`,
+        `${agentSliceUnit(uid).replace(/\.slice$/, "")}-*.scope`,
       ]);
     if (result.code !== 0)
       throw new Error(`Cannot list Agent processes: ${result.stderr.slice(0, 200)}`);
