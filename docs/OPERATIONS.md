@@ -71,7 +71,7 @@ sudo tests/native/linux-maintenance.sh /ABSOLUTE/mate.json /ABSOLUTE/mate.deploy
 
 脚本依次执行 `preflight`、`install`、一次 `doctor`（用 `--allow-missing-secrets`，因为验证机上没有真实凭证；检查仍覆盖其余项目并报告该来源为 info）、启动 `mate.service`（要求 `active`/`running`）、在 `mate-agent-<UID>.slice` 里以 `<slice>-<uuid>.scope` 命名启动一个 Agent 归属的进程并要求项目自己的进程查询能找到它、记录两个 Agent 的会话/消息/任务/提醒/投递、`matectl backup` 并复核 checkpoint 清单与私人 home、用 `cp -a` 备份共享根并复核 UID/GID 与内容、把私人文件改脏后再取一份 current-state、`matectl restore --replace`（要求恢复把该文件换回 checkpoint 内容，并逐项核对恢复后的私人 home）、一次同格式的 `matectl upgrade`（第二个 spec 给出新发布物时）+ `matectl finalize` + 重启、一次配置变更 + 重启（要求存储的配置已更新，且其他记录不变），并确认被改动的 checkpoint 会被拒绝。任一检查失败即中止并以非零退出。省略第二个 spec 时，升级步骤只断言项目自身对「候选就是当前发布物」的拒绝，不会被记成一次真实升级。
 
-结束时证据写成 `/var/tmp/mate-maintenance-validation.json`：`mode` 只允许 `native` 或 `fixture`，`native` 还必须在 `attestation` 里带 root、Linux、systemd 与 `matectl` 的事实，否则报告工具拒绝生成；`phases` 逐条列出检查项与结果，空列表会被拒绝。**本文档只给出这套程序，不表示它已经在任何主机上跑过**：本仓库的开发机是 macOS，脚本中的原生检查（真实 UID/GID、私人及共享目录权限、systemd scope 控制、完整维护路径）在那里没有执行，报告里也不会把它们记成通过。
+结束时证据写成 `/var/tmp/mate-maintenance-validation.json`：`mode` 只允许 `native` 或 `fixture`；`native` 还必须在 `attestation` 里带 root、Linux、systemd、`matectl` 的事实、升级前后的 release 链接，以及本轮 `phases` 的摘要——报告工具会用同样的算法重算该摘要并比对，摘要不符即拒绝生成，所以报告不能被改标成 `native`，也不能挪用到另一次运行；`phases` 逐条列出检查项与结果，空列表会被拒绝。**本文档只给出这套程序，不表示它已经在任何主机上跑过**：本仓库的开发机是 macOS，脚本中的原生检查（真实 UID/GID、私人及共享目录权限、systemd scope 控制、完整维护路径）在那里没有执行，报告里也不会把它们记成通过。
 
 脚本内的权限探针由内核判定：以 Agent 账号运行 `setpriv` 后读自己的 `MEMORY.md`、写自己的共享目录必须成功，读同伴 home/`MEMORY.md`、写同伴共享目录、读 Mate 数据库/`mate.env`/`mate.service`、`systemctl stop mate.service` 必须失败。同一脚本不连接 Slack、模型供应商或 VPS，报告里也明确写出这一点；真实的 Slack/provider 连接仍需按上文单独核对，不能被这份报告或任何合成测试替代。
 

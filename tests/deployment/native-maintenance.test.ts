@@ -32,6 +32,10 @@ afterEach(() => {
 function run(args: string[]): string {
   return execFileSync(process.execPath, [harness, ...args], { encoding: "utf8" });
 }
+/** The digest `report` recomputes over a phase directory; the script asks for the same value. */
+function phaseDigest(phases: string): string {
+  return run(["digest", "--phases", phases]).trim();
+}
 
 function fixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "mate-native-")));
@@ -291,6 +295,34 @@ it("verifies a checkpoint's manifest and private payload, and catches a changed 
     expect(report.checkpoint.payloadFaults.changed.join(" ")).toContain("MEMORY.md");
   }
   expect(failed).toBe(true);
+  // A checkpoint that carries an entry its manifest does not list must fail too: a restore is driven
+  // by the manifest, so the live tree would agree with the same incomplete list and only walking the
+  // checkpoint payload can see the difference.
+  const partial = join(f.root, "partial");
+  cpSync(checkpoint, partial, { recursive: true });
+  writeFileSync(join(partial, "agents", "alice", "never-inventoried.txt"), "unlisted payload");
+  let unlisted = false;
+  try {
+    run([
+      "verify",
+      "--release",
+      release,
+      "--store",
+      join(partial, "mate.sqlite"),
+      "--marker",
+      f.marker,
+      "--checkpoint",
+      partial,
+      "--workspace",
+      restored,
+    ]);
+  } catch (error) {
+    unlisted = true;
+    const report = JSON.parse((error as { stdout?: string }).stdout ?? "");
+    expect(report.checkpoint.passed).toBe(false);
+    expect(report.checkpoint.liveWorkspace.unlisted.join(" ")).toContain("never-inventoried.txt");
+  }
+  expect(unlisted).toBe(true);
 });
 
 it("labels the evidence native or fixture and never claims an external connection", () => {
@@ -313,7 +345,9 @@ it("labels the evidence native or fixture and never claims an external connectio
       node: "v24.21.0",
       releaseBefore: "/opt/mate/releases/1111111111111111",
       releaseAfter: "/opt/mate/releases/2222222222222222",
-      phaseDigest: "b".repeat(64),
+      // The digest must describe this phase directory: `report` recomputes it and refuses a
+      // document whose attestation belongs to a different run.
+      phaseDigest: phaseDigest(phases),
     })}\n`,
   );
   const document = join(f.root, "report.json"),
@@ -492,6 +526,52 @@ it("refuses to pass a configuration change that was never applied, and passes th
     passed: true,
     configuration: { expectation: "applied", passed: true },
   });
+  // A misspelled expectation must not fall back to the weaker "unchanged" check.
+  expect(() =>
+    run([
+      "verify",
+      "--release",
+      release,
+      "--store",
+      f.database,
+      "--marker",
+      f.marker,
+      "--expectConfig",
+      "aplyed",
+    ]),
+  ).toThrow();
+});
+
+it("refuses a native report whose attestation belongs to a different run", () => {
+  const f = fixture(),
+    phases = join(f.root, "phases"),
+    attestation = join(f.root, "attestation.json");
+  mkdirSync(phases);
+  writeFileSync(
+    join(phases, "install-and-checks.json"),
+    `${JSON.stringify({ name: "install-and-checks", status: "passed", detail: "ran" })}\n`,
+  );
+  const attested = (phaseDigestValue: string) =>
+    `${JSON.stringify({
+      platform: "linux",
+      euid: 0,
+      systemd: true,
+      maintenanceCommands: true,
+      releaseBefore: "/opt/mate/releases/1111111111111111",
+      phaseDigest: phaseDigestValue,
+    })}\n`;
+  // The digest of some other phase set is refused even though every host fact is correct.
+  writeFileSync(attestation, attested("f".repeat(64)));
+  expect(() =>
+    run(["report", "--mode", "native", "--phases", phases, "--attest", attestation]),
+  ).toThrow();
+  // The digest of this phase set is accepted.
+  writeFileSync(attestation, attested(phaseDigest(phases)));
+  const printed = JSON.parse(
+    run(["report", "--mode", "native", "--phases", phases, "--attest", attestation]),
+  );
+  expect(printed.mode).toBe("native");
+  expect(printed.attestation.phaseDigest).toBe(phaseDigest(phases));
 });
 
 it("refuses an unknown flag or a mode the native script does not use", () => {

@@ -35,12 +35,13 @@ import {
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const MODES = ["marker", "verify", "report"];
+const MODES = ["marker", "verify", "report", "digest"];
 /** Flags each mode accepts; anything else is refused rather than silently ignored. */
 const FLAGS = {
   marker: ["release", "store", "agent", "secondAgent", "out"],
   verify: ["release", "store", "marker", "checkpoint", "workspace", "expectConfig", "config"],
   report: ["mode", "phases", "out", "attest"],
+  digest: ["phases"],
 };
 
 export function parseNativeArguments(argv) {
@@ -277,19 +278,24 @@ export function inventoryPayload(root, entries) {
 export function comparePayload(checkpointRoot, liveRoot, entries) {
   const expected = new Map(entries.map((entry) => [entry.path, entry])),
     live = new Map(),
+    checkpointed = new Map(),
     missing = [],
     changed = [],
     unreadable = [],
     extra = [],
-    walk = (relative) => {
-      const path = relative ? join(liveRoot, ...relative.split("/")) : liveRoot;
-      const stat = lstatSync(path);
-      if (relative === "lost+found" && stat.isDirectory()) return;
-      if (relative) live.set(relative, stat);
-      if (!stat.isDirectory()) return;
-      for (const name of readdirSync(path).sort()) walk(relative ? `${relative}/${name}` : name);
+    unlisted = [],
+    walk = (root, into) => {
+      const visit = (relative) => {
+        const path = relative ? join(root, ...relative.split("/")) : root;
+        const stat = lstatSync(path);
+        if (relative === "lost+found" && stat.isDirectory()) return;
+        if (relative) into.set(relative, stat);
+        if (!stat.isDirectory()) return;
+        for (const name of readdirSync(path).sort()) visit(relative ? `${relative}/${name}` : name);
+      };
+      visit("");
     };
-  walk("");
+  walk(liveRoot, live);
   for (const entry of entries) {
     const stat = live.get(entry.path);
     if (!stat) {
@@ -327,16 +333,38 @@ export function comparePayload(checkpointRoot, liveRoot, entries) {
     }
   }
   for (const relative of live.keys()) if (!expected.has(relative)) extra.push(relative);
+  // The checkpoint payload must not hold anything the manifest fails to list. A restore is driven by
+  // the manifest, so without this walk a manifest that dropped a subtree would agree with the live
+  // tree it produced and the unlisted file would never be reported. Modes are not compared here:
+  // a published checkpoint is sealed, and the restore reapplies the manifest's modes.
+  walk(checkpointRoot, checkpointed);
+  for (const [relative, stat] of checkpointed) {
+    if (relative === "lost+found" && stat.isDirectory()) continue;
+    const entry = expected.get(relative);
+    if (!entry) unlisted.push(relative);
+    else if (entry.type === "directory" && !stat.isDirectory())
+      unlisted.push(`${relative}: checkpoint holds a non-directory`);
+    else if (entry.type === "file" && !stat.isFile())
+      unlisted.push(`${relative}: checkpoint holds a non-file`);
+    else if (entry.type === "symlink" && !stat.isSymbolicLink())
+      unlisted.push(`${relative}: checkpoint holds a non-symlink`);
+  }
   return {
     passed:
-      missing.length === 0 && changed.length === 0 && unreadable.length === 0 && extra.length === 0,
+      missing.length === 0 &&
+      changed.length === 0 &&
+      unreadable.length === 0 &&
+      extra.length === 0 &&
+      unlisted.length === 0,
     liveEntries: live.size,
     checkpointEntries: expected.size,
+    checkpointPayloadEntries: checkpointed.size,
     checkpointRoot: resolve(checkpointRoot),
     ...(missing.length ? { missing: missing.slice(0, 8) } : {}),
     ...(changed.length ? { changed: changed.slice(0, 8) } : {}),
     ...(unreadable.length ? { unreadable: unreadable.slice(0, 8) } : {}),
     ...(extra.length ? { extra: extra.slice(0, 8) } : {}),
+    ...(unlisted.length ? { unlisted: unlisted.slice(0, 8) } : {}),
   };
 }
 
@@ -397,9 +425,13 @@ export function verifyCheckpoint(checkpoint, agentId, liveWorkspace) {
  * Compare the live records with the marker taken before the maintenance step. `expectConfig` is the
  * caller's expectation for the stored configuration: `unchanged` after a backup, restore, upgrade or
  * restart, and `applied` (with `--config`) after a configuration change that Mate was meant to pick
- * up.
+ * up. A misspelled expectation is refused rather than silently treated as the weaker check.
  */
+export const CONFIG_EXPECTATIONS = ["unchanged", "applied"];
 export function verifyPreserved(release, options) {
+  const expectation = options.expectConfig ?? "unchanged";
+  if (!CONFIG_EXPECTATIONS.includes(expectation))
+    throw new Error(`Unknown --expectConfig value: ${expectation}`);
   const marker = JSON.parse(readFileSync(resolve(need(options, "marker")), "utf8"));
   const store = new release.Store(resolve(need(options, "store")));
   try {
@@ -411,7 +443,6 @@ export function verifyPreserved(release, options) {
           changed.push(`${recorded.agentId}.${name}`);
     }
     const stored = store.db.prepare(configurationQuery).all(),
-      expectation = options.expectConfig ?? "unchanged",
       configuration = { expectation, passed: false };
     if (expectation === "applied") {
       const expected = release.configSchema.parse(
@@ -420,7 +451,16 @@ export function verifyPreserved(release, options) {
       configuration.passed =
         stored.length === 1 && !!release.sameConfiguration(JSON.parse(stored[0].value), expected);
     } else {
-      configuration.passed = JSON.stringify(stored) === JSON.stringify(marker.configuration ?? []);
+      // The release's own structural comparison, so a candidate release that merely re-encodes an
+      // unchanged configuration does not look like a changed record.
+      const recorded = marker.configuration?.[0]?.value;
+      if (stored.length !== (marker.configuration ?? []).length) configuration.passed = false;
+      else if (stored.length === 1 && recorded !== undefined)
+        configuration.passed = release.sameConfiguration(
+          JSON.parse(stored[0].value),
+          release.configSchema.parse(JSON.parse(recorded)),
+        );
+      else configuration.passed = stored.length === 0;
     }
     const checkpoint = options.checkpoint
       ? verifyCheckpoint(
@@ -473,10 +513,24 @@ export function assertNativeAttestation(attestation) {
 }
 
 /**
+ * The digest that binds a report to the phase files it was built from. `buildReport` recomputes it
+ * over the same bytes, so an attestation carrying a digest for different evidence is refused.
+ */
+export function phaseDigest(directory) {
+  const digest = createHash("sha256");
+  for (const name of readdirSync(resolve(directory))
+    .filter((item) => item.endsWith(".json"))
+    .sort())
+    digest.update(name).update(readFileSync(join(resolve(directory), name)));
+  return digest.digest("hex");
+}
+
+/**
  * The document a run leaves behind: what was checked, where, and what only Linux can check.
  * `mode` keeps the two kinds of evidence apart, is restricted to the two known values, and a
- * `native` document additionally has to carry the host attestation the shell script collected.
- * The phase directory holds one JSON file per check, written as the run proceeds.
+ * `native` document additionally has to carry the host attestation the shell script collected, with
+ * a phase digest this function recomputes itself. The phase directory holds one JSON file per check,
+ * written as the run proceeds.
  */
 export function buildReport(mode, phasesDirectory, attestation) {
   if (!RUN_MODES.includes(mode)) throw new Error(`Unknown run mode: ${mode}`);
@@ -490,6 +544,14 @@ export function buildReport(mode, phasesDirectory, attestation) {
     .map((name) => JSON.parse(readFileSync(join(directory, name), "utf8")));
   if (!phases.length)
     throw new Error(`No phase reports in ${directory}; the run produced no evidence`);
+  if (mode === "native") {
+    const actual = phaseDigest(directory);
+    if (attestation.phaseDigest !== actual)
+      throw new Error(
+        "Native report phase digest does not match the phase files it was built from; " +
+          "the attestation belongs to a different run",
+      );
+  }
   return {
     kind: "mate-maintenance-validation",
     mode,
@@ -513,7 +575,13 @@ export async function nativeMaintenanceMain(argv = process.argv.slice(2)) {
     result = await writeMarker(await loadRelease(need(flags, "release")), flags);
   else if (mode === "verify")
     result = verifyPreserved(await loadRelease(need(flags, "release")), flags);
-  else {
+  else if (mode === "digest") {
+    // The shell script asks for this instead of computing the digest itself, so the algorithm that
+    // binds a report to its phases has exactly one definition.
+    const digest = phaseDigest(need(flags, "phases"));
+    process.stdout.write(`${digest}\n`);
+    return { passed: true, phaseDigest: digest };
+  } else {
     const attestation = flags.attest
       ? JSON.parse(readFileSync(resolve(flags.attest), "utf8"))
       : undefined;

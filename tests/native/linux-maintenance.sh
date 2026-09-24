@@ -152,15 +152,15 @@ await_service() { # await_service PHASE
 }
 # The host and run facts a `native` report has to attest; a run without them is a fixture. The
 # release links and the phase digest bind the document to what actually ran, so a report cannot be
-# relabelled or reused for a different run.
+# relabelled or reused for a different run. The digest comes from the harness itself, which also
+# recomputes it when it builds the report.
 write_attestation() {
+  digest=$("$NODE" "$HARNESS" digest --phases "$PHASES") ||
+    die "Could not digest the phase reports"
+  MATE_PHASE_DIGEST=$digest
+  export MATE_PHASE_DIGEST
   "$NODE" -e '
-    const fs=require("fs"),crypto=require("crypto"),path=require("path");
-    const dir=process.argv[2];
-    const digest=crypto.createHash("sha256");
-    for (const name of fs.readdirSync(dir).filter((n)=>n.endsWith(".json")).sort()) {
-      digest.update(name).update(fs.readFileSync(path.join(dir,name)));
-    }
+    const fs=require("fs");
     fs.writeFileSync(process.argv[1],JSON.stringify({
       platform: process.platform,
       euid: process.geteuid ? process.geteuid() : -1,
@@ -170,8 +170,8 @@ write_attestation() {
       node: process.version,
       releaseBefore: process.env.MATE_RELEASE_BEFORE ?? null,
       releaseAfter: process.env.MATE_RELEASE_AFTER ?? null,
-      phaseDigest: digest.digest("hex"),
-    },null,2)+"\n",{mode:0o600})' "$WORK/attestation.json" "$PHASES"
+      phaseDigest: process.env.MATE_PHASE_DIGEST,
+    },null,2)+"\n",{mode:0o600})' "$WORK/attestation.json"
 }
 
 log "Native maintenance validation on $(uname -srm)"
@@ -191,7 +191,8 @@ phase install-and-checks passed "preflight, install and doctor ran through the i
 # ---------------------------------------------------------------- real UID, GID and directory modes
 log "== real Agent UID, private and shared directory permissions =="
 expect_owner() { # expect_owner LABEL PATH UID GID MODE
-  actual=$(stat -c '%u %g %a' "$2")
+  actual=$(stat -c '%u %g %a' "$2" 2>/dev/null) ||
+    fail permissions "$1 does not exist or cannot be inspected: $2"
   [ "$actual" = "$3 $4 $5" ] || fail permissions "$1 is $actual, expected $3 $4 $5"
   phase "$1" passed "$1 is $actual"
 }
