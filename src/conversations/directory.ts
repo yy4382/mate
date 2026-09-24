@@ -57,6 +57,8 @@ export interface ConversationDirectory {
   /**
    * Invites one configured team Agent to an external channel the acting Agent is already in. The
    * target is named by team identity; an adapter resolves it through its own installation mapping.
+   * An adapter refuses a target that is not another configured team Agent, the acting Agent itself,
+   * an internal room, and any conversation the platform does not let this installation invite to.
    */
   invite?(
     run: RunToken,
