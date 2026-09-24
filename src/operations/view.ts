@@ -287,18 +287,28 @@ export class OperationsView {
     });
   }
   /**
-   * The filtered fault the Agent's last failed attempt was recorded with. The supervisor writes it
-   * durably beside the resume decision, so this survives a restart; an Agent held without one still
-   * reports its disposition.
+   * The filtered fault the failed attempt that holds this Agent's channel was recorded with. The
+   * supervisor records it durably beside the resume decision, so this survives a restart; an Agent
+   * held without one still reports its disposition.
+   *
+   * The record is accepted only for the run that ended in failure last, because the hold and the
+   * fault are two durable writes rather than one: a process that stopped between them would
+   * otherwise let an older fault describe the attempt that set the current hold.
    */
   private recordedFault(agentId: string): WorkerFault | null {
     try {
+      const failed = this.c.store.db
+        .prepare(
+          "SELECT id FROM runs WHERE agent_id=? AND state='failed' ORDER BY created_at DESC,rowid DESC LIMIT 1",
+        )
+        .get(agentId) as { id: string } | undefined;
+      if (!failed) return null;
       const row = this.c.store.db
         .prepare(
           // `json_valid` keeps one damaged record from failing the read for every Agent.
-          "SELECT body FROM audit WHERE kind='run_failure' AND json_valid(body) AND json_extract(body,'$.agentId')=? ORDER BY id DESC LIMIT 1",
+          "SELECT body FROM audit WHERE kind='run_failure' AND json_valid(body) AND json_extract(body,'$.agentId')=? AND json_extract(body,'$.runId')=? ORDER BY id DESC LIMIT 1",
         )
-        .get(agentId) as { body: string } | undefined;
+        .get(agentId, failed.id) as { body: string } | undefined;
       if (!row) return null;
       const parsed = workerFaultSchema.safeParse(
         (JSON.parse(row.body) as { fault?: unknown }).fault,

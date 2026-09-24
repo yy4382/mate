@@ -190,6 +190,41 @@ it("reports each held Agent's recovery wait with its scope, stage and next execu
   expect(() => c.operations.status("intruder")).toThrow("Owner only");
 });
 
+it("never lets an older fault record describe the attempt that holds the Agent now", () => {
+  const f = setup(),
+    c = f.collaboration,
+    s = f.store,
+    older = run(f, "alice", "older");
+  s.finish(older, "PRIVATE_RUN_ERROR", "model_failure", {
+    resume: { kind: "retry", attempt: 1, nextAt: 1, reason: "PRIVATE_RUN_ERROR" },
+  });
+  s.audit("run_failure", {
+    agentId: "alice",
+    runId: older.id,
+    fault: { stage: "model", category: "transient_model", reason: "provider rate limited" },
+    resume: "retry",
+  });
+  // The channel is released, a later attempt fails, and that attempt's fault record never lands.
+  // The hold and its fault are two durable writes, so the earlier attempt must not describe it.
+  s.resume("alice");
+  const newer = run(f, "alice", "newer");
+  s.finish(newer, "PRIVATE_RUN_ERROR", "model_failure", {
+    resume: { kind: "retry", attempt: 1, nextAt: 22, reason: "PRIVATE_RUN_ERROR" },
+  });
+  const condition = c.operations
+    .status("owner")
+    .diagnosis.conditions.find(
+      (item) =>
+        item.source === "agents" && item.scope.kind === "agent" && item.scope.agentId === "alice",
+    );
+  expect(condition).toMatchObject({
+    stage: null,
+    need: "automatic_wait",
+    reason: "The last attempt failed transiently; the next attempt is scheduled",
+    nextAttemptAt: 22,
+  });
+});
+
 it("scopes unknown execution results and Slack readiness to the Agent, target and stage each names", () => {
   const f = setup(),
     c = f.collaboration,

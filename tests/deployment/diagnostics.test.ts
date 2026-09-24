@@ -54,14 +54,15 @@ function seededDeployment(): string {
   const store = new Store(join(data, "state", "mate.sqlite"));
   localApplication(store, daemonConfigSchema.parse(daemonFixture(data)).mate);
   store.register("research", "v1", []);
-  store.db
-    .prepare(
-      "UPDATE agents SET next_attempt_at=500,resume_hold='retry_backoff' WHERE id='research'",
-    )
-    .run();
+  // A real failed attempt, so the fault this view reports is the one the hold belongs to.
+  store.enqueue("research", "seeded", { kind: "synthetic" });
+  const token = store.beginRun("research", Date.now(), false)!;
+  store.finish(token, "provider rate limited", "model_failure", {
+    resume: { kind: "retry", attempt: 1, nextAt: 500, reason: "provider rate limited" },
+  });
   store.audit("run_failure", {
     agentId: "research",
-    runId: "run-1",
+    runId: token.id,
     fault: { stage: "model", category: "transient_model", reason: "provider rate limited" },
     resume: "retry",
   });

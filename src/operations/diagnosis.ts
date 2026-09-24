@@ -30,6 +30,10 @@ export type ServiceState =
 export type DiagnosisNeed =
   "automatic_wait" | "configuration_fix" | "verify_unknown_effect" | "failure_review";
 
+/**
+ * The owner's readings, in the order they matter: an unresolved external effect first, because it
+ * cannot be repeated, and an automatic wait last, because nobody has to act on it.
+ */
 export const diagnosisNeeds = [
   "verify_unknown_effect",
   "configuration_fix",
