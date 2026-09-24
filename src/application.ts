@@ -257,9 +257,20 @@ export class Application {
         failures.push(error);
       }
     };
-    await settle(() => shutdown.stopIntake?.());
+    const start = (step: () => unknown): unknown => {
+      try {
+        return step();
+      } catch (error) {
+        failures.push(error);
+        return undefined;
+      }
+    };
+    // Intake stops first, but a transport that never finishes closing must not keep runs
+    // advancing: prevention and worker collection happen before its completion is awaited.
+    const intake = start(() => shutdown.stopIntake?.());
     await settle(() => this.supervisor.stopAdvancing());
     await settle(() => this.supervisor.collectWorkers());
+    await settle(() => intake);
     await settle(() => shutdown.settleOwnedWork?.());
     await settle(() => this.supervisor.drain());
     await settle(() => this.fenceUnconfirmedEffects());

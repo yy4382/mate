@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { deferred } from "../helpers/pi.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Application } from "../../src/application.js";
@@ -342,6 +343,59 @@ it("still fences message effects when the privileged fence fails", async () => {
     closeStore();
   });
   await expect(daemon.close()).rejects.toThrow("cleanup failed");
+  expect(stateAtRelease).toBe("unknown");
+  const release = acquireLock(join(config.runtime.dataDir, "state", "daemon.lock"));
+  release();
+});
+
+it("collects workers even when stopping intake never settles", async () => {
+  credentials();
+  const { config } = deployment(),
+    daemon = await Daemon.create(config, log);
+  cleanups.push(() => daemon.close().catch(() => {}));
+  const target = externalTarget(daemon),
+    { work, run } = openRun(daemon, target);
+  vi.spyOn(daemon.application.transport!, "post").mockImplementation(() => new Promise(() => {}));
+  const id = queueExternal(daemon, work, run, "unconfirmed", "sent before shutdown");
+  void daemon.collaboration.output.send(id).catch(() => {});
+  await vi.waitFor(() => expect(daemon.store.output(id)!.state).toBe("sending"));
+  const order: string[] = [],
+    intake = deferred();
+  Object.defineProperty(daemon, "adapter", {
+    value: {
+      start: async () => {},
+      recover() {},
+      poll() {},
+      flush: async () => {},
+      close: () => {
+        order.push("intake.close");
+        return intake.promise;
+      },
+    },
+  });
+  const stopWork = daemon.supervisor.stopAdvancing.bind(daemon.supervisor);
+  vi.spyOn(daemon.supervisor, "stopAdvancing").mockImplementation(() => {
+    order.push("work.stop");
+    stopWork();
+  });
+  const collectWorkers = daemon.supervisor.collectWorkers.bind(daemon.supervisor);
+  vi.spyOn(daemon.supervisor, "collectWorkers").mockImplementation(() => {
+    order.push("work.collect");
+    collectWorkers();
+  });
+  const closeStore = daemon.store.close.bind(daemon.store);
+  let stateAtRelease: string | undefined;
+  vi.spyOn(daemon.store, "close").mockImplementation(() => {
+    stateAtRelease = (
+      daemon.store.db.prepare("SELECT state FROM outbox WHERE id=?").get(id) as { state: string }
+    ).state;
+    closeStore();
+  });
+  const closing = daemon.close();
+  // A transport that never finishes closing must not keep runs advancing or workers alive.
+  await vi.waitFor(() => expect(order).toEqual(["intake.close", "work.stop", "work.collect"]));
+  intake.resolve();
+  await closing;
   expect(stateAtRelease).toBe("unknown");
   const release = acquireLock(join(config.runtime.dataDir, "state", "daemon.lock"));
   release();

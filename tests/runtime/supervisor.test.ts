@@ -127,6 +127,10 @@ it("never starts a worker process when shutdown arrives while a run is preparing
     expect(f.store.db.prepare("SELECT state FROM runs WHERE agent_id='research'").get()).toEqual({
       state: "failed",
     });
+    // Once stopped, the supervisor refuses a queued run outright.
+    f.collaboration.enqueue("research", f.work, "after-stop", {});
+    expect(await supervisor.step("research")).toBe(false);
+    expect(created).toBe(0);
   } finally {
     supervisor.close();
   }
