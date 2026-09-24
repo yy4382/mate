@@ -369,10 +369,18 @@ it("backs up each Agent's private home only, leaving shared directories to the f
   expect(readFileSync(join(checkpointAlice, "MEMORY.md"), "utf8")).toBe(`${f.homes.alice} memory`);
   expect(readFileSync(join(checkpointBob, "MEMORY.md"), "utf8")).toBe(`${f.homes.bob} memory`);
   // The documented shared-directory procedure is an ordinary file-level copy of the tree
-  // (`cp -a`); it must keep UID/GID and both Agents' contents, and it must not need the checkpoint.
+  // (`cp -a`): it must keep both Agents' content, modes and relative layout, and it must not need
+  // the checkpoint. Ownership across different accounts cannot be demonstrated by a process that is
+  // not root — `cp -a` running as one account can only ever produce that account's own UID/GID — so
+  // the cross-Agent UID/GID half of this rule is checked on a real Linux host, by
+  // `tests/native/linux-maintenance.sh`, which copies the shared root as root and then asserts each
+  // Agent's UID/GID and content on the copy.
   const copied = join(f.root, "shared-copy");
   cpSync(f.shared, copied, { recursive: true, preserveTimestamps: true });
-  expect(lstatSync(copied)).toMatchObject({ uid: f.uid, gid: f.gid });
-  expect(lstatSync(join(copied, "alice", "shared.txt"))).toMatchObject({ uid: f.uid, gid: f.gid });
+  expect(lstatSync(copied).isDirectory()).toBe(true);
+  expect(readFileSync(join(copied, "alice", "shared.txt"), "utf8")).toBe("alice shared work");
   expect(readFileSync(join(copied, "bob", "private-to-bob.txt"), "utf8")).toBe("bob shared work");
+  expect(lstatSync(join(copied, "alice")).mode & 0o777).toBe(0o755);
+  expect(lstatSync(join(copied, "alice", "shared.txt")).mode & 0o777).toBe(0o644);
+  expect(lstatSync(join(copied, "bob", "private-to-bob.txt")).mode & 0o777).toBe(0o600);
 });

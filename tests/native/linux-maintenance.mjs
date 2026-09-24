@@ -38,8 +38,8 @@ const MODES = ["marker", "verify", "report"];
 /** Flags each mode accepts; anything else is refused rather than silently ignored. */
 const FLAGS = {
   marker: ["release", "store", "agent", "secondAgent", "out"],
-  verify: ["release", "store", "marker", "checkpoint"],
-  report: ["mode", "phases", "out"],
+  verify: ["release", "store", "marker", "checkpoint", "workspace", "expectConfig", "config"],
+  report: ["mode", "phases", "out", "attest"],
 };
 
 export function parseNativeArguments(argv) {
@@ -82,16 +82,26 @@ export const preservedQueries = Object.freeze({
     "SELECT agent_id,work_id,content,next_at,active FROM schedules WHERE id=?",
     "reminderId",
   ],
-  configuration: ["SELECT value FROM runtime_meta WHERE key='configuration'", "none"],
 });
-/** The second Agent's rows exist so a restore cannot pass by leaving one Agent's data untouched. */
-/** Import the release's own modules, so verification uses the format under test, not a copy. */
+/**
+ * The stored configuration is checked on its own: applying a configuration change rewrites it by
+ * design, so it cannot be part of the "every recorded row unchanged" set.
+ */
+export const configurationQuery = "SELECT value FROM runtime_meta WHERE key='configuration'";
+
+/**
+ * Import the release's own modules, so verification uses the format under test, not a copy.
+ */
 export async function loadRelease(releaseRoot) {
   const root = resolve(releaseRoot);
   const load = (relative) => import(pathToFileURL(join(root, "dist", "src", relative)).href);
-  const store = await load("storage/store.js");
+  const [store, config] = await Promise.all([load("storage/store.js"), load("daemon/config.js")]);
   if (!store.Store) throw new Error(`Release at ${root} does not expose the Store entry`);
-  return { Store: store.Store };
+  return {
+    Store: store.Store,
+    sameConfiguration: config.sameConfiguration,
+    configSchema: config.daemonConfigSchema,
+  };
 }
 
 const argumentFor = (marker, key) =>
@@ -186,6 +196,9 @@ export async function writeMarker(release, options) {
     const marker = { at, first: markers[agentIds[0]], second: markers[agentIds[1]] };
     marker.first.rows = readPreserved(store, marker.first);
     marker.second.rows = readPreserved(store, marker.second);
+    // The stored configuration is compared separately: a maintenance step that applies a changed
+    // configuration is expected to rewrite this row, so it is not in the unchanged set.
+    marker.configuration = store.db.prepare(configurationQuery).all();
     writeFileSync(resolve(need(options, "out")), `${JSON.stringify(marker, null, 2)}\n`, {
       mode: 0o600,
     });
@@ -254,15 +267,96 @@ export function inventoryPayload(root, entries) {
   return { missing, changed, unreadable, entries: entries.length };
 }
 
-/** Verify a published checkpoint against its own manifest: integrity, types, payload and sealing. */
-export function verifyCheckpoint(checkpoint, agentId) {
+/**
+ * Compare a checkpoint's Agent payload with the live private workspace after a restore, walking the
+ * live tree itself instead of trusting the manifest. `inventoryPayload` alone cannot catch a
+ * manifest that dropped a subtree, because such a manifest agrees with itself; this walk sees the
+ * extra entries and the differing shape. `lost+found` is the one entry the checkpoint walk skips.
+ */
+export function comparePayload(checkpointRoot, liveRoot, entries) {
+  const expected = new Map(entries.map((entry) => [entry.path, entry])),
+    live = new Map(),
+    missing = [],
+    changed = [],
+    unreadable = [],
+    extra = [],
+    walk = (relative) => {
+      const path = relative ? join(liveRoot, ...relative.split("/")) : liveRoot;
+      const stat = lstatSync(path);
+      if (relative === "lost+found" && stat.isDirectory()) return;
+      if (relative) live.set(relative, stat);
+      if (!stat.isDirectory()) return;
+      for (const name of readdirSync(path).sort()) walk(relative ? `${relative}/${name}` : name);
+    };
+  walk("");
+  for (const entry of entries) {
+    const stat = live.get(entry.path);
+    if (!stat) {
+      missing.push(entry.path);
+      continue;
+    }
+    if (entry.type === "directory") {
+      if (!stat.isDirectory()) changed.push(`${entry.path}: not a directory`);
+      else if ((stat.mode & 0o777) !== entry.mode)
+        changed.push(
+          `${entry.path}: mode ${(stat.mode & 0o777).toString(8)} != ${entry.mode.toString(8)}`,
+        );
+      continue;
+    }
+    if (entry.type === "symlink") {
+      if (!stat.isSymbolicLink()) changed.push(`${entry.path}: not a symlink`);
+      else if (readlinkSync(join(liveRoot, ...entry.path.split("/"))) !== entry.target)
+        changed.push(`${entry.path}: symlink target changed to ${entry.target}`);
+      continue;
+    }
+    if (!stat.isFile()) changed.push(`${entry.path}: not a regular file`);
+    else if (stat.size !== entry.size)
+      changed.push(`${entry.path}: size ${stat.size} != ${entry.size}`);
+    else if ((stat.mode & 0o7777) !== entry.mode)
+      changed.push(
+        `${entry.path}: mode ${(stat.mode & 0o7777).toString(8)} != ${entry.mode.toString(8)}`,
+      );
+    else {
+      const path = join(liveRoot, ...entry.path.split("/"));
+      try {
+        if (sha256(path) !== entry.sha256) changed.push(`${entry.path}: content changed`);
+      } catch {
+        unreadable.push(entry.path);
+      }
+    }
+  }
+  for (const relative of live.keys()) if (!expected.has(relative)) extra.push(relative);
+  return {
+    passed:
+      missing.length === 0 && changed.length === 0 && unreadable.length === 0 && extra.length === 0,
+    liveEntries: live.size,
+    checkpointEntries: expected.size,
+    checkpointRoot: resolve(checkpointRoot),
+    ...(missing.length ? { missing: missing.slice(0, 8) } : {}),
+    ...(changed.length ? { changed: changed.slice(0, 8) } : {}),
+    ...(unreadable.length ? { unreadable: unreadable.slice(0, 8) } : {}),
+    ...(extra.length ? { extra: extra.slice(0, 8) } : {}),
+  };
+}
+
+/**
+ * Verify a published checkpoint against its own manifest: integrity, types, payload and sealing.
+ * When `liveWorkspace` is given, the restored private home is inventoried independently and compared
+ * with what the checkpoint carries, so a partial payload cannot pass by agreeing with a partial
+ * manifest alone.
+ */
+export function verifyCheckpoint(checkpoint, agentId, liveWorkspace) {
   const root = resolve(checkpoint),
     complete = join(root, "COMPLETE.json");
-  if (!existsSync(complete)) return { passed: false, checks: { completionMarker: false } };
+  if (!existsSync(complete)) return { passed: false, checks: { completionMarker: false }, agentId };
   const manifest = JSON.parse(readFileSync(complete, "utf8")),
     database = join(root, "mate.sqlite"),
     agent = (manifest.agents ?? []).find((item) => item.agentId === agentId),
     payload = agent ? inventoryPayload(join(root, "agents", agentId), agent.entries) : undefined,
+    live =
+      liveWorkspace && agent
+        ? comparePayload(join(root, "agents", agentId), liveWorkspace, agent.entries)
+        : undefined,
     checks = {
       currentFormat: manifest.version === 2,
       databasePresent: existsSync(database),
@@ -277,6 +371,8 @@ export function verifyCheckpoint(checkpoint, agentId) {
         payload.missing.length === 0 &&
         payload.changed.length === 0 &&
         payload.unreadable.length === 0,
+      // Only when a live workspace is named: its own inventory must be the checkpoint's inventory.
+      liveWorkspaceMatches: live ? live.passed : true,
     };
   return {
     passed: Object.values(checks).every(Boolean),
@@ -292,10 +388,16 @@ export function verifyCheckpoint(checkpoint, agentId) {
           },
         }
       : {}),
+    ...(live ? { liveWorkspace: live } : {}),
   };
 }
 
-/** Compare the live records with the marker taken before the maintenance step. */
+/**
+ * Compare the live records with the marker taken before the maintenance step. `expectConfig` is the
+ * caller's expectation for the stored configuration: `unchanged` after a backup, restore, upgrade or
+ * restart, and `applied` (with `--config`) after a configuration change that Mate was meant to pick
+ * up.
+ */
 export function verifyPreserved(release, options) {
   const marker = JSON.parse(readFileSync(resolve(need(options, "marker")), "utf8"));
   const store = new release.Store(resolve(need(options, "store")));
@@ -307,15 +409,32 @@ export function verifyPreserved(release, options) {
         if (JSON.stringify(current[name]) !== JSON.stringify(recorded.rows[name]))
           changed.push(`${recorded.agentId}.${name}`);
     }
+    const stored = store.db.prepare(configurationQuery).all(),
+      expectation = options.expectConfig ?? "unchanged",
+      configuration = { expectation, passed: false };
+    if (expectation === "applied") {
+      const expected = release.configSchema.parse(
+        JSON.parse(readFileSync(resolve(need(options, "config")), "utf8")),
+      );
+      configuration.passed =
+        stored.length === 1 && !!release.sameConfiguration(JSON.parse(stored[0].value), expected);
+    } else {
+      configuration.passed = JSON.stringify(stored) === JSON.stringify(marker.configuration ?? []);
+    }
     const checkpoint = options.checkpoint
-      ? verifyCheckpoint(options.checkpoint, marker.first.agentId)
+      ? verifyCheckpoint(
+          options.checkpoint,
+          marker.first.agentId,
+          options.workspace ? resolve(options.workspace) : undefined,
+        )
       : undefined;
     return {
-      passed: changed.length === 0 && (checkpoint?.passed ?? true),
+      passed: changed.length === 0 && configuration.passed && (checkpoint?.passed ?? true),
       agentId: marker.first.agentId,
       secondAgentId: marker.second.agentId,
       recorded: Object.keys(marker.first.rows).length + Object.keys(marker.second.rows).length,
       changed,
+      configuration,
       ...(checkpoint ? { checkpoint } : {}),
     };
   } finally {
@@ -323,12 +442,39 @@ export function verifyPreserved(release, options) {
   }
 }
 
+/** The only two kinds of run this document may describe; anything else is a caller mistake. */
+export const RUN_MODES = ["native", "fixture"];
 /**
- * The document a native run leaves behind: what was checked, where, and what only Linux can check.
- * `mode` is what keeps the two kinds of evidence apart — a fixture run can never claim to be native.
- * The phase directory holds one JSON file per check, written by the shell script as it runs.
+ * What a `native` document must attest about the host that produced it. The shell script writes
+ * these facts; without them a `native` label would be a self-declaration, which is exactly what the
+ * ticket forbids.
  */
-export function buildReport(mode, phasesDirectory) {
+export const NATIVE_ATTESTATION = Object.freeze({
+  platform: "linux",
+  euid: 0,
+  systemd: true,
+  maintenanceCommands: true,
+});
+export function assertNativeAttestation(attestation) {
+  const missing = Object.entries(NATIVE_ATTESTATION).filter(
+    ([key, value]) => attestation?.[key] !== value,
+  );
+  if (missing.length)
+    throw new Error(
+      `Native report needs host attestation (${missing.map(([key]) => key).join(", ")}); ` +
+        "a run that did not attest these facts must be reported as a fixture",
+    );
+}
+
+/**
+ * The document a run leaves behind: what was checked, where, and what only Linux can check.
+ * `mode` keeps the two kinds of evidence apart, is restricted to the two known values, and a
+ * `native` document additionally has to carry the host attestation the shell script collected.
+ * The phase directory holds one JSON file per check, written as the run proceeds.
+ */
+export function buildReport(mode, phasesDirectory, attestation) {
+  if (!RUN_MODES.includes(mode)) throw new Error(`Unknown run mode: ${mode}`);
+  if (mode === "native") assertNativeAttestation(attestation);
   const directory = resolve(phasesDirectory);
   if (!statSync(directory).isDirectory())
     throw new Error(`--phases needs the directory of phase reports: ${directory}`);
@@ -336,10 +482,13 @@ export function buildReport(mode, phasesDirectory) {
     .filter((name) => name.endsWith(".json"))
     .sort()
     .map((name) => JSON.parse(readFileSync(join(directory, name), "utf8")));
+  if (!phases.length)
+    throw new Error(`No phase reports in ${directory}; the run produced no evidence`);
   return {
     kind: "mate-maintenance-validation",
     mode,
     generatedAt: new Date().toISOString(),
+    ...(attestation ? { attestation } : {}),
     scope: {
       native:
         "Real Agent UIDs and GIDs, private and shared directory ownership and modes, systemd slice and scope process control, and the installed maintenance commands.",
@@ -359,7 +508,10 @@ export async function nativeMaintenanceMain(argv = process.argv.slice(2)) {
   else if (mode === "verify")
     result = verifyPreserved(await loadRelease(need(flags, "release")), flags);
   else {
-    const report = buildReport(need(flags, "mode"), need(flags, "phases"));
+    const attestation = flags.attest
+      ? JSON.parse(readFileSync(resolve(flags.attest), "utf8"))
+      : undefined;
+    const report = buildReport(need(flags, "mode"), need(flags, "phases"), attestation);
     if (flags.out)
       writeFileSync(resolve(flags.out), `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
     result = report;

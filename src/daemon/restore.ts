@@ -242,6 +242,9 @@ function restoredShape(entry: CheckpointEntry): string {
  * Re-inventory a completed Agent root and compare it with the checkpoint: content, permissions and
  * file type (file, directory or symlink) must match, and every entry must belong to the Agent's
  * Linux identity. This re-verification is what makes an interrupted restore safe to resume.
+ *
+ * The inventory walk is what the caller reports on when a restore is interrupted, so the failure
+ * names the offending path and what about it changed; an operator has to be able to act on it.
  */
 async function assertRestoredWorkspace(
   host: HostOperations,
@@ -251,20 +254,33 @@ async function assertRestoredWorkspace(
   owner: { uid: number; gid: number },
 ): Promise<void> {
   const actual = await inventoryWorkspace(host, root);
-  if (
-    actual.length !== entries.length ||
-    actual.some(
-      (entry, index) =>
-        entry.path !== entries[index]!.path ||
-        entry.type !== entries[index]!.type ||
-        restoredShape(entry) !== restoredShape(entries[index]!),
-    )
-  )
-    throw new Error(`Completed restore workspace changed: ${agentId}`);
+  if (actual.length !== entries.length)
+    throw new Error(
+      `Completed restore workspace changed: ${agentId} has ${actual.length} entries, expected ${entries.length}`,
+    );
+  for (const [index, entry] of actual.entries()) {
+    const expected = entries[index]!;
+    if (entry.path !== expected.path)
+      throw new Error(
+        `Completed restore workspace changed: ${agentId} expected ${expected.path}, found ${entry.path}`,
+      );
+    if (entry.type !== expected.type)
+      throw new Error(
+        `Completed restore workspace changed: ${agentId} ${entry.path} is a ${entry.type}, expected a ${expected.type}`,
+      );
+    if (restoredShape(entry) !== restoredShape(expected))
+      throw new Error(
+        `Completed restore workspace changed: ${agentId} ${entry.path} does not match the checkpoint`,
+      );
+  }
   for (const path of [root, ...entries.map((entry) => join(root, ...entry.path.split("/")))]) {
-    const stat = await host.lstat(path);
+    const stat = await host.lstat(path),
+      relative = path === root ? "." : path.slice(root.length + 1);
     if (stat.uid !== owner.uid || stat.gid !== owner.gid)
-      throw new Error(`Completed restore workspace ownership changed: ${agentId}`);
+      throw new Error(
+        `Completed restore workspace ownership changed: ${agentId} ${relative} is ` +
+          `${stat.uid}:${stat.gid}, expected ${owner.uid}:${owner.gid}`,
+      );
   }
 }
 async function assertRestoredDatabase(

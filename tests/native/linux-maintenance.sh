@@ -12,21 +12,26 @@
 # are never made, and this script does not claim them.
 #
 # Usage:
-#   tests/native/linux-maintenance.sh CONFIG DEPLOY_SPEC RELEASE_DIR [AGENT] [AGENT]
+#   tests/native/linux-maintenance.sh CONFIG DEPLOY_SPEC RELEASE_DIR [NEXT_SPEC] [AGENT] [AGENT]
 #
 #   CONFIG        the deployment configuration the installer copies to /etc/mate/mate.json
 #   DEPLOY_SPEC   the deployment spec JSON (release.source: RELEASE_DIR, configSource: CONFIG)
 #   RELEASE_DIR   a built release tree (dist/, node_modules/, package.json, pnpm-lock.yaml)
+#   NEXT_SPEC     an optional second deployment spec whose release.source is a different built
+#                 release; when given, the upgrade step installs it and the run proves that a new
+#                 program version keeps the same data. Without it the upgrade step asserts the
+#                 documented "candidate is already the current release" refusal instead.
 #   AGENT         Agent ids to validate; defaults to the first two Agents in CONFIG
 set -eu
 
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
-CONFIG=${1:?Usage: linux-maintenance.sh CONFIG DEPLOY_SPEC RELEASE_DIR [AGENT] [AGENT]}
+CONFIG=${1:?Usage: linux-maintenance.sh CONFIG DEPLOY_SPEC RELEASE_DIR [NEXT_SPEC] [AGENT] [AGENT]}
 SPEC=${2:?Provide the deployment spec JSON}
 RELEASE=${3:?Provide the built release directory}
-AGENT_ONE=${4-}
-AGENT_TWO=${5-}
+NEXT_SPEC=${4-}
+AGENT_ONE=${5-}
+AGENT_TWO=${6-}
 HERE=$(cd "$(dirname "$0")" && pwd)
 HARNESS="$HERE/linux-maintenance.mjs"
 NODE=${MATE_NODE:-/usr/bin/node}
@@ -42,6 +47,11 @@ die() { printf 'FAILED: %s\n' "$*" >&2; exit 1; }
 [ -f "$HARNESS" ] || die "Missing $HARNESS"
 command -v setpriv >/dev/null 2>&1 || die "setpriv is required"
 [ -x "$NODE" ] || die "No Node at $NODE"
+# Every permission probe runs through setpriv, so a broken setpriv would make "denied" meaningless.
+setpriv --reuid=0 --regid=0 --clear-groups /bin/true >/dev/null 2>&1 ||
+  die "setpriv cannot switch identity on this host; permission probes would be meaningless"
+UUID_SOURCE=/proc/sys/kernel/random/uuid
+[ -r "$UUID_SOURCE" ] || die "The daemon names Agent scopes with a UUID; $UUID_SOURCE is required"
 
 # Read one expression out of the deployment configuration as JSON. The expression is evaluated in
 # Node, where the configuration's own values are strings, so no configuration text reaches the shell.
@@ -107,13 +117,51 @@ HOME_TWO=$(printf '%s' "$TWO_ACCOUNT" | field home)
 [ "$UID_ONE" != "$UID_TWO" ] || die "The two Agents must have distinct UIDs"
 
 # Verify one marker against the live database, and optionally against a published checkpoint.
-verify_marker() { # verify_marker MARKER [CHECKPOINT]
-  if [ -n "${2-}" ]; then
+# `verify_marker MARKER [CHECKPOINT [WORKSPACE [EXPECT_CONFIG [CONFIG]]]]`
+verify_marker() {
+  marker=$1; checkpoint=${2-}; workspace=${3-}; expectation=${4-unchanged}; config=${5-}
+  if [ -n "$config" ]; then
+    if [ -n "$checkpoint" ]; then
+      "$NODE" "$HARNESS" verify --release "$RELEASE" --store "$DATA/state/mate.sqlite" \
+        --marker "$marker" --checkpoint "$checkpoint" --workspace "$workspace" \
+        --expectConfig "$expectation" --config "$config"
+    else
+      "$NODE" "$HARNESS" verify --release "$RELEASE" --store "$DATA/state/mate.sqlite" \
+        --marker "$marker" --expectConfig "$expectation" --config "$config"
+    fi
+  elif [ -n "$checkpoint" ]; then
     "$NODE" "$HARNESS" verify --release "$RELEASE" --store "$DATA/state/mate.sqlite" \
-      --marker "$1" --checkpoint "$2"
+      --marker "$marker" --checkpoint "$checkpoint" --workspace "$workspace" \
+      --expectConfig "$expectation"
   else
-    "$NODE" "$HARNESS" verify --release "$RELEASE" --store "$DATA/state/mate.sqlite" --marker "$1"
+    "$NODE" "$HARNESS" verify --release "$RELEASE" --store "$DATA/state/mate.sqlite" \
+      --marker "$marker" --expectConfig "$expectation"
   fi
+}
+# Wait for a genuinely running service, not for a crash-looping unit that is briefly "active".
+await_service() { # await_service PHASE
+  attempt=0
+  while [ "$attempt" -lt 120 ]; do
+    state=$(systemctl show --value --property=ActiveState mate.service)
+    sub=$(systemctl show --value --property=SubState mate.service)
+    [ "$state" = active ] && [ "$sub" = running ] && return 0
+    attempt=$((attempt + 1))
+    "$SLEEP" 0.5
+  done
+  fail "$1" "mate.service did not reach active/running: $(systemctl status mate.service --no-pager -l | tail -5)"
+}
+# The host facts a `native` report has to attest; a run without them is reported as a fixture.
+write_attestation() {
+  "$NODE" -e '
+    const fs=require("fs");
+    fs.writeFileSync(process.argv[1],JSON.stringify({
+      platform: process.platform,
+      euid: process.geteuid ? process.geteuid() : -1,
+      systemd: fs.existsSync("/run/systemd/system"),
+      maintenanceCommands: fs.existsSync("/usr/local/sbin/matectl"),
+      uname: require("node:os").release(),
+      node: process.version,
+    },null,2)+"\n",{mode:0o600})' "$WORK/attestation.json"
 }
 
 log "Native maintenance validation on $(uname -srm)"
@@ -180,41 +228,70 @@ denied "$UID_ONE" "$GID_ONE" agent-cannot-control-mate-service /usr/bin/systemct
 # ---------------------------------------------------------------- the application starts
 log "== start mate.service and reach readiness without Slack =="
 systemctl enable --now mate.service >/dev/null
-attempt=0
-while [ "$attempt" -lt 120 ]; do
-  [ "$(systemctl show --value --property=ActiveState mate.service)" = active ] && break
-  attempt=$((attempt + 1))
-  "$SLEEP" 0.5
-done
-[ "$(systemctl show --value --property=ActiveState mate.service)" = active ] ||
-  fail service-start "mate.service did not become active: $(systemctl status mate.service --no-pager -l | tail -5)"
-phase service-start passed "mate.service reported active; Slack readiness is reported separately"
+await_service service-start
+phase service-start passed "mate.service reported active/running; Slack readiness is reported separately"
 
 # ---------------------------------------------------------------- real process control
 log "== systemd slice and scope process control =="
-# The same naming the project's own process queries use: one slice per Agent UID, and scopes named
-# with that slice's prefix, so a process started here is discoverable by the installed code.
+# The daemon only recognises scopes named <slice-prefix>-<uuid>.scope (LinuxProcessManager.unitPattern),
+# so this check uses exactly that name and then asks the project's own listing code to find it.
 AGENT_SLICE="mate-agent-$UID_ONE.slice"
-SCOPE_UNIT="mate-agent-$UID_ONE-validation-$$.scope"
+SCOPE_UNIT="mate-agent-$UID_ONE-$(tr -d '\n' <"$UUID_SOURCE").scope"
 systemctl reset-failed "$SCOPE_UNIT" >/dev/null 2>&1 || true
-if systemd-run --quiet --scope --unit="$SCOPE_UNIT" --slice="$AGENT_SLICE" \
+# `systemd-run --scope` stays in the foreground for the command's whole lifetime, so start it in the
+# background and wait for the unit itself instead of for the command to finish.
+systemd-run --quiet --scope --unit="$SCOPE_UNIT" --slice="$AGENT_SLICE" \
   --property=MemoryMax=268435456 --property=TasksMax=128 \
-  setpriv --reuid="$UID_ONE" --regid="$GID_ONE" --clear-groups "$SLEEP" 60 >/dev/null 2>&1; then
-  main_pid=$(systemctl show --value --property=MainPID "$SCOPE_UNIT")
-  [ -n "$main_pid" ] && [ "$main_pid" != 0 ] || fail process-control "the scope reported no main process"
-  [ "$(stat -c '%u' "/proc/$main_pid")" = "$UID_ONE" ] ||
-    fail process-control "the scope process belongs to UID $(stat -c '%u' "/proc/$main_pid"), not $UID_ONE"
-  [ "$(systemctl show --value --property=Slice "$SCOPE_UNIT")" = "$AGENT_SLICE" ] ||
-    fail process-control "the scope did not run inside $AGENT_SLICE"
-  # The project's own listing query must find it, or an Agent could not see its own processes.
-  systemctl list-units --all --no-legend --plain "mate-agent-$UID_ONE-*.scope" |
-    grep -q "$SCOPE_UNIT" || fail process-control "$SCOPE_UNIT is not listed in $AGENT_SLICE"
-  systemctl stop "$SCOPE_UNIT"
-  [ ! -d "/proc/$main_pid" ] || fail process-control "process $main_pid survived the stop"
-  phase process-control passed "an Agent-owned process ran as UID $UID_ONE in $AGENT_SLICE, was listed, and stopped through systemctl"
-else
+  setpriv --reuid="$UID_ONE" --regid="$GID_ONE" --clear-groups "$SLEEP" 120 >/dev/null 2>&1 &
+scope_wait=0
+main_pid=0
+while [ "$scope_wait" -lt 40 ]; do
+  main_pid=$(systemctl show --value --property=MainPID "$SCOPE_UNIT" 2>/dev/null || echo 0)
+  [ -n "$main_pid" ] && [ "$main_pid" != 0 ] && break
+  scope_wait=$((scope_wait + 1))
+  "$SLEEP" 0.25
+done
+[ -n "$main_pid" ] && [ "$main_pid" != 0 ] ||
   fail process-control "could not create an Agent scope in $AGENT_SLICE"
-fi
+[ "$(stat -c '%u' "/proc/$main_pid")" = "$UID_ONE" ] ||
+  fail process-control "the scope process belongs to UID $(stat -c '%u' "/proc/$main_pid"), not $UID_ONE"
+[ "$(systemctl show --value --property=Slice "$SCOPE_UNIT")" = "$AGENT_SLICE" ] ||
+  fail process-control "the scope did not run inside $AGENT_SLICE"
+# The project's own listing query must return it, or an Agent could not see its own processes.
+"$NODE" -e '
+  const { LinuxProcessManager } = require(process.argv[1]);
+  const { execFileSync } = require("node:child_process");
+  const manager = new LinuxProcessManager(
+    { [process.argv[2]]: Number(process.argv[3]) },
+    (args) => {
+      try {
+        return {
+          code: 0,
+          stdout: execFileSync("/usr/bin/systemctl", args, { encoding: "utf8" }),
+          stderr: "",
+        };
+      } catch (error) {
+        return { code: error.status ?? 1, stdout: error.stdout ?? "", stderr: error.stderr ?? "" };
+      }
+    },
+  );
+  manager
+    .list(process.argv[2])
+    .then((scopes) => {
+      if (!scopes.some((scope) => scope.unit === process.argv[4]))
+        throw new Error("the listing did not return " + process.argv[4]);
+      process.stdout.write("listed\n");
+    })
+    .catch((error) => {
+      process.stderr.write(error.message + "\n");
+      process.exit(1);
+    });' \
+  "$RELEASE/dist/src/execution/linux-processes.js" "$AGENT_ONE" "$UID_ONE" "$SCOPE_UNIT" >/dev/null ||
+  fail process-control "the project's own process listing did not return $SCOPE_UNIT"
+systemctl stop "$SCOPE_UNIT"
+systemctl reset-failed "$SCOPE_UNIT" >/dev/null 2>&1 || true
+[ ! -d "/proc/$main_pid" ] || fail process-control "process $main_pid survived the stop"
+phase process-control passed "an Agent-owned process ran as UID $UID_ONE in $AGENT_SLICE, was listed by the project's own query, and stopped through systemctl"
 
 # ---------------------------------------------------------------- marker data
 log "== record the Agents' durable work before maintenance =="
@@ -236,21 +313,35 @@ verify_marker "$MARKER_ONE" "$TARGET_CHECKPOINT" >"$WORK/verify-checkpoint.json"
   fail backup "checkpoint verification failed: $(cat "$WORK/verify-checkpoint.json")"
 phase backup passed "matectl backup published a checkpoint whose manifest, payload and marker data verify"
 
+# The shared root is outside the checkpoint by design: an ordinary file-level backup carries it.
+cp -a "$SHARED" "$WORK/shared-backup"
+[ "$(stat -c '%u %g' "$WORK/shared-backup/$AGENT_TWO")" = "$UID_TWO $GID_TWO" ] ||
+  fail shared-backup "the shared-directory file backup did not keep $AGENT_TWO's UID/GID"
+[ "$(cat "$WORK/shared-backup/$AGENT_TWO/validation.txt")" = "agent-two shared note" ] ||
+  fail shared-backup "the shared-directory file backup did not keep $AGENT_TWO's content"
+[ "$(stat -c '%u %g' "$WORK/shared-backup/$AGENT_ONE")" = "$UID_ONE $GID_ONE" ] ||
+  fail shared-backup "the shared-directory file backup did not keep $AGENT_ONE's UID/GID"
+phase shared-backup passed "an ordinary file-level copy of the shared root kept each Agent's UID/GID and content"
+
 "$matectl" backup current-state >"$WORK/backup-current.log" 2>&1 ||
   fail backup "the second matectl backup failed: $(cat "$WORK/backup-current.log")"
+# Change the monitored private file after the target checkpoint, so a no-op restore cannot pass.
 printf 'native validation change after the checkpoint\n' >>"$HOME_ONE/notes/validation.txt"
 chown "$UID_ONE:$GID_ONE" "$HOME_ONE/notes/validation.txt"
+[ "$(cat "$HOME_ONE/notes/validation.txt")" = "agent-one private note
+native validation change after the checkpoint" ] ||
+  fail restore "could not stage the post-checkpoint change"
 "$matectl" restore target-state --replace current-state >"$WORK/restore.log" 2>&1 ||
   fail restore "matectl restore failed: $(cat "$WORK/restore.log")"
-verify_marker "$MARKER_ONE" >"$WORK/verify-restore.json" ||
+verify_marker "$MARKER_ONE" "$DATA/state/mate.sqlite" "$HOME_ONE" >"$WORK/verify-restore.json" ||
   fail restore "restored data differs from the marker: $(cat "$WORK/verify-restore.json")"
 [ "$(stat -c '%u %g %a' "$HOME_ONE")" = "$UID_ONE $GID_ONE 700" ] ||
   fail restore "the restored private home has the wrong owner or mode"
 [ "$(stat -c '%u %g %a' "$HOME_ONE/notes/validation.txt")" = "$UID_ONE $GID_ONE 600" ] ||
   fail restore "the restored private file has the wrong owner or mode"
-grep -q 'agent-one private note' "$HOME_ONE/notes/validation.txt" ||
-  fail restore "the restored private file content is wrong"
-phase restore passed "matectl restore kept the marker data, file content, owner and mode"
+[ "$(cat "$HOME_ONE/notes/validation.txt")" = "agent-one private note" ] ||
+  fail restore "the appended post-checkpoint line survived the restore, so state was not replaced"
+phase restore passed "matectl restore replaced the modified private file with the checkpoint's content, owner and mode"
 
 # A checkpoint that no longer matches its manifest must be refused, not silently applied.
 TAMPERED_CHECKPOINT="$WORK/tampered-checkpoint"
@@ -267,23 +358,36 @@ phase tamper-refusal passed "a changed checkpoint fails verification, and a non-
 # ---------------------------------------------------------------- program upgrade, config change, restart
 log "== program upgrade within the same first-release format =="
 systemctl stop mate.service >/dev/null 2>&1 || true
-"$NODE" "$RELEASE/dist/src/deployment/cli.js" upgrade "$SPEC" >"$WORK/upgrade.json" ||
-  fail program-upgrade "matectl upgrade failed: $(cat "$WORK/upgrade.json")"
-"$NODE" "$RELEASE/dist/src/deployment/cli.js" finalize >"$WORK/finalize.json" ||
-  fail program-upgrade "matectl finalize failed"
+RELEASE_BEFORE=$(readlink -f /opt/mate/current)
+if [ -n "${NEXT_SPEC-}" ]; then
+  [ -f "$NEXT_SPEC" ] || die "No candidate spec at $NEXT_SPEC"
+  # The candidate is a different built release: the project's own upgrade guard refuses a candidate
+  # that is already current, so this is what proves a program-version change rather than a rerun.
+  "$NODE" "$RELEASE/dist/src/deployment/cli.js" upgrade "$NEXT_SPEC" >"$WORK/upgrade.json" ||
+    fail program-upgrade "upgrade failed: $(cat "$WORK/upgrade.json")"
+  "$matectl" finalize >"$WORK/finalize.json" 2>&1 ||
+    fail program-upgrade "matectl finalize failed: $(cat "$WORK/finalize.json")"
+  RELEASE_AFTER=$(readlink -f /opt/mate/current)
+  [ "$RELEASE_AFTER" != "$RELEASE_BEFORE" ] ||
+    fail program-upgrade "the current release did not change, so no program version was installed"
+else
+  # Without a second release, assert the documented refusal rather than pretending to upgrade.
+  if "$NODE" "$RELEASE/dist/src/deployment/cli.js" upgrade "$SPEC" >"$WORK/upgrade.json" 2>&1; then
+    fail program-upgrade "upgrading to the already current release was accepted"
+  fi
+  grep -q "already the current release" "$WORK/upgrade.json" ||
+    fail program-upgrade "the same-release upgrade failed for an unexpected reason: $(cat "$WORK/upgrade.json")"
+  RELEASE_AFTER=$RELEASE_BEFORE
+  phase program-upgrade passed "the installed guard refused re-installing the current release; pass a second spec to validate a real version change"
+fi
 systemctl start mate.service
-attempt=0
-while [ "$attempt" -lt 120 ]; do
-  [ "$(systemctl show --value --property=ActiveState mate.service)" = active ] && break
-  attempt=$((attempt + 1))
-  "$SLEEP" 0.5
-done
-[ "$(systemctl show --value --property=ActiveState mate.service)" = active ] ||
-  fail program-upgrade "mate.service did not return after the upgrade"
+await_service program-upgrade
 systemctl stop mate.service >/dev/null 2>&1 || true
 verify_marker "$MARKER_ONE" >"$WORK/verify-upgrade.json" ||
   fail program-upgrade "records changed across the program upgrade: $(cat "$WORK/verify-upgrade.json")"
-phase program-upgrade passed "the new release started and every recorded session, delivery, task, reminder and identity survived"
+if [ -n "${NEXT_SPEC-}" ]; then
+  phase program-upgrade passed "release $RELEASE_BEFORE became $RELEASE_AFTER and every recorded session, delivery, task, reminder and identity survived"
+fi
 
 log "== configuration change in the same format =="
 CONFIG_NEXT="$WORK/mate.next.json"
@@ -293,24 +397,23 @@ CONFIG_NEXT="$WORK/mate.next.json"
   fs.writeFileSync(process.argv[2],JSON.stringify(c,null,2)+"\n",{mode:0o600})' "$CONFIG" "$CONFIG_NEXT"
 install -o root -g root -m 600 "$CONFIG_NEXT" /etc/mate/mate.json
 systemctl start mate.service
-attempt=0
-while [ "$attempt" -lt 120 ]; do
-  [ "$(systemctl show --value --property=ActiveState mate.service)" = active ] && break
-  attempt=$((attempt + 1))
-  "$SLEEP" 0.5
-done
+await_service configuration-change
 # Give Mate one clean start to apply and record the changed configuration, then stop it again.
 "$SLEEP" 2
 systemctl stop mate.service >/dev/null 2>&1 || true
-verify_marker "$MARKER_ONE" >"$WORK/verify-config.json" ||
+# The configuration row must have been rewritten to the new configuration; every other recorded row
+# must be untouched. Checking only the first half would pass when the change was never applied.
+verify_marker "$MARKER_ONE" "" "" applied /etc/mate/mate.json >"$WORK/verify-config.json" ||
   fail configuration-change "records changed across the configuration change: $(cat "$WORK/verify-config.json")"
 expect_owner mate-configuration-file-still-managed /etc/mate/mate.json 0 0 600
-phase configuration-change passed "Mate applied the changed configuration while keeping the recorded work and identity"
+phase configuration-change passed "Mate applied and recorded the changed configuration while keeping the recorded work and identity"
 
 # ---------------------------------------------------------------- report
 log "== report =="
+write_attestation
 DOCUMENT="$WORK/mate-maintenance-validation.json"
-"$NODE" "$HARNESS" report --mode native --phases "$PHASES" --out "$DOCUMENT" >/dev/null
+"$NODE" "$HARNESS" report --mode native --phases "$PHASES" --attest "$WORK/attestation.json" \
+  --out "$DOCUMENT" >/dev/null
 install -o root -g root -m 600 "$DOCUMENT" /var/tmp/mate-maintenance-validation.json
 cat "$DOCUMENT"
 log "Evidence copied to /var/tmp/mate-maintenance-validation.json"

@@ -64,10 +64,14 @@ sudo matectl logs
 仓库测试里的宿主替换入口（`tests/deployment/host-operations.test.ts`、`tests/helpers/host.ts`）用**模拟宿主**证明维护流程只通过一个可替换入口，并注入故障来验证决定落盘后执行、完成项复验和中断恢复。它在任何平台都能跑，但**不**证明真实 UID、目录权限或进程控制。这些事实只能在一台可重置的 Debian 13 主机上验证：
 
 ```sh
-sudo tests/native/linux-maintenance.sh /ABSOLUTE/mate.json /ABSOLUTE/mate.deploy.json /ABSOLUTE/release
+sudo tests/native/linux-maintenance.sh /ABSOLUTE/mate.json /ABSOLUTE/mate.deploy.json /ABSOLUTE/release /ABSOLUTE/new-mate.deploy.json
 ```
 
-前置条件是 `preflight`/`install` 所需的全部内容：两个已存在、UID/GID 互不相同的非特权 Agent 账号，root 预建的私人目录父路径，以及一个对应干净源码提交的完整发布物（见上文安装步骤）。脚本会依次执行 `preflight`、`install`、`doctor`、启动 `mate.service`、在 `mate-agent-<UID>.slice` 里启动/列出/停止一个 Agent 归属的进程、用同一份当前格式数据库记录两个 Agent 的会话/消息/任务/提醒/投递、`matectl backup` 并复核 checkpoint 清单与私人 home、`matectl restore --replace`、一次同格式的 `upgrade` + `finalize` + 重启、一次配置变更 + 重启，并确认被改动的 checkpoint 会被拒绝。任一检查失败即中止并以非零退出；结束时把证据写成 `/var/tmp/mate-maintenance-validation.json`，其中 `mode` 区分 `native` 与 `fixture`，`phases` 逐条列出检查项与结果。
+前置条件是 `preflight`/`install` 所需的全部内容：两个已存在、UID/GID 互不相同的非特权 Agent 账号，root 预建的私人目录父路径，以及一个对应干净源码提交的完整发布物（见上文安装步骤）。最后一个参数可省略：给出第二个 spec（其 `release.source` 是另一个已构建发布物）时，升级步骤安装它并证明换程序版本保留数据；省略时该步骤改为断言项目自身的拒绝行为（"candidate is already the current release"），不会被当作升级成功。
+
+脚本依次执行 `preflight`、`install`、`matectl doctor`、启动 `mate.service`（要求 `active`/`running`）、在 `mate-agent-<UID>.slice` 里以 `<slice>-<uuid>.scope` 命名启动一个 Agent 归属的进程并要求项目自己的进程查询能找到它、记录两个 Agent 的会话/消息/任务/提醒/投递、`matectl backup` 并复核 checkpoint 清单与私人 home、用 `cp -a` 备份共享根并复核 UID/GID 与内容、`matectl restore --replace`（在 checkpoint 之后改动过私人文件，要求恢复把它换回原内容）、一次同格式的 `upgrade` + `matectl finalize` + 重启、一次配置变更 + 重启（要求存储的配置已更新，且其他记录不变），并确认被改动的 checkpoint 会被拒绝。任一检查失败即中止并以非零退出。
+
+结束时证据写成 `/var/tmp/mate-maintenance-validation.json`：`mode` 只允许 `native` 或 `fixture`，`native` 还必须在 `attestation` 里带 root、Linux、systemd 与 `matectl` 的事实，否则报告工具拒绝生成；`phases` 逐条列出检查项与结果，空列表会被拒绝。**本文档只给出这套程序，不表示它已经在任何主机上跑过**：本仓库的开发机是 macOS，脚本中的原生检查（真实 UID/GID、私人及共享目录权限、systemd scope 控制、完整维护路径）在那里没有执行，报告里也不会把它们记成通过。
 
 脚本内的权限探针由内核判定：以 Agent 账号运行 `setpriv` 后读自己的 `MEMORY.md`、写自己的共享目录必须成功，读同伴 home/`MEMORY.md`、写同伴共享目录、读 Mate 数据库/`mate.env`/`mate.service`、`systemctl stop mate.service` 必须失败。同一脚本不连接 Slack、模型供应商或 VPS，报告里也明确写出这一点；真实的 Slack/provider 连接仍需按上文单独核对，不能被这份报告或任何合成测试替代。
 
@@ -88,7 +92,7 @@ sudo tests/native/linux-maintenance.sh /ABSOLUTE/mate.json /ABSOLUTE/mate.deploy
 维护操作中途失败时，先看 `sudo matectl status`（或 `logs`）的 `diagnosis`：它会指出影响范围与下一步。三条路径互不替代：
 
 - 命令被中断或超时：重跑同一命令。备份额外确认完成标记；恢复读取 `restore.json` 跳过已完成项并复验，不会重复执行。
-- 升级已切换 release 但尚未确认：`sudo matectl rollback` 回到旧 release，或在验证之后 `sudo matectl finalize`。在待确认升级存在期间，启动、`offline-probe`、备份和恢复都被拒绝，直到二者之一完成。
+- 升级已切换 release 但尚未确认：`sudo matectl rollback` 回到旧 release，或在验证之后 `sudo matectl finalize`。在待确认升级存在期间，`backup` 和 `restore` 被拒绝；`start` 与 `offline-probe` 只在 `current` 仍指向该次升级的新 release 时允许，所以你可以先启动验证再决定 finalize 还是 rollback。
 - 数据已被破坏或不一致：用 `sudo matectl restore` 从 checkpoint 恢复，不要手工改数据库或删除管理路径。
 
 配置只写 `mate.runTimeoutMs`；`mate.budgets` 等旧额度字段不再被接受，配置校验会直接拒绝整个文件。模型用量按每次 provider 调用持久记录为已知或未知，没有运行次数、token 或费用额度。

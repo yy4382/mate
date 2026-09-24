@@ -1,6 +1,7 @@
 import { afterEach, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
 import {
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -13,6 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Store } from "../../src/storage/store.js";
+import { daemonConfigSchema, saveConfiguration } from "../../src/daemon/config.js";
 
 /**
  * The verification half of `tests/native/linux-maintenance.sh`. This suite runs anywhere: it proves
@@ -39,7 +41,7 @@ function fixture() {
   return { root, database: join(state, "mate.sqlite"), marker: join(root, "marker.json") };
 }
 /** The built release the native script passes with --release; the worktree's own dist is enough. */
-const release = resolve(".");
+const release = resolve(import.meta.dirname, "..", "..");
 
 it("records one Agent's durable work and re-reads the same rows from the same database", () => {
   const f = fixture(),
@@ -59,7 +61,9 @@ it("records one Agent's durable work and re-reads the same rows from the same da
       ]),
     );
   expect(written).toMatchObject({ passed: true, agentId: "alice", secondAgentId: "bob" });
-  expect(written.recorded).toBeGreaterThan(8);
+  // Seven queries per Agent: identity, session, entries, delivery, work, task, reminder. The stored
+  // configuration is recorded separately because applying a configuration change rewrites it.
+  expect(written.recorded).toBe(14);
   // Every recorded table names the Agent or the row it belongs to, so a re-read is comparable.
   const marker = JSON.parse(readFileSync(f.marker, "utf8"));
   expect(marker.first.rows.identity).toEqual([{ id: "alice", paused: 0, resume_hold: null }]);
@@ -69,10 +73,11 @@ it("records one Agent's durable work and re-reads the same rows from the same da
   expect(marker.first.rows.reminder[0]).toMatchObject({ agent_id: "alice", active: 1 });
   expect(marker.first.rows.delivery[0]).toMatchObject({ agent_id: "alice", status: "pending" });
   expect(marker.second.rows.identity).toEqual([{ id: "bob", paused: 0, resume_hold: null }]);
+  expect(marker.first.rows).not.toHaveProperty("configuration");
   const verified = JSON.parse(
     run(["verify", "--release", release, "--store", f.database, "--marker", f.marker]),
   );
-  expect(verified).toMatchObject({ passed: true, changed: [] });
+  expect(verified).toMatchObject({ passed: true, changed: [], configuration: { passed: true } });
 });
 
 it("reports changed records instead of passing when a maintenance step lost or altered them", () => {
@@ -182,6 +187,7 @@ it("verifies a checkpoint's manifest and private payload, and catches a changed 
   );
   expect(verified).toMatchObject({ passed: true, changed: [] });
   expect(verified.checkpoint).toMatchObject({ passed: true, payloadEntries: expect.any(Number) });
+  expect(verified.checkpoint.payloadEntries).toBeGreaterThan(0);
   expect(verified.checkpoint.checks).toMatchObject({
     currentFormat: true,
     databaseIntegrity: true,
@@ -191,6 +197,76 @@ it("verifies a checkpoint's manifest and private payload, and catches a changed 
     agentInventoried: true,
     agentPayload: true,
   });
+  // After a real restore the live private home must match the checkpoint entry for entry, with the
+  // checkpoint's own modes reapplied. This is the comparison `matectl restore` then `verify
+  // --workspace` makes, and it catches a payload the manifest only partially describes.
+  const restored = join(f.root, "restored-home");
+  cpSync(join(checkpoint, "agents", "alice"), restored, { recursive: true });
+  for (const [path, mode] of [
+    [restored, 0o700],
+    [join(restored, "MEMORY.md"), 0o600],
+  ] as const)
+    chmodSync(path, mode);
+  const live = JSON.parse(
+    run([
+      "verify",
+      "--release",
+      release,
+      "--store",
+      join(checkpoint, "mate.sqlite"),
+      "--marker",
+      f.marker,
+      "--checkpoint",
+      checkpoint,
+      "--workspace",
+      restored,
+    ]),
+  );
+  expect(live.checkpoint.checks.liveWorkspaceMatches).toBe(true);
+  expect(live.checkpoint.liveWorkspace).toMatchObject({
+    passed: true,
+    liveEntries: expect.any(Number),
+  });
+  // A file the checkpoint never inventoried is an extra entry, not something to ignore.
+  writeFileSync(join(restored, "smuggled.txt"), "not in the checkpoint");
+  expect(() =>
+    run([
+      "verify",
+      "--release",
+      release,
+      "--store",
+      join(checkpoint, "mate.sqlite"),
+      "--marker",
+      f.marker,
+      "--checkpoint",
+      checkpoint,
+      "--workspace",
+      restored,
+    ]),
+  ).toThrow();
+  rmSync(join(restored, "smuggled.txt"));
+  chmodSync(join(restored, "MEMORY.md"), 0o644);
+  let mismatch = false;
+  try {
+    run([
+      "verify",
+      "--release",
+      release,
+      "--store",
+      join(checkpoint, "mate.sqlite"),
+      "--marker",
+      f.marker,
+      "--checkpoint",
+      checkpoint,
+      "--workspace",
+      restored,
+    ]);
+  } catch (error) {
+    mismatch = true;
+    const report = JSON.parse((error as { stdout?: string }).stdout ?? "");
+    expect(report.checkpoint.liveWorkspace.changed.join(" ")).toContain("MEMORY.md");
+  }
+  expect(mismatch).toBe(true);
   const tampered = join(f.root, "tampered");
   cpSync(checkpoint, tampered, { recursive: true });
   writeFileSync(join(tampered, "agents", "alice", "MEMORY.md"), "changed after the fact");
@@ -219,18 +295,41 @@ it("verifies a checkpoint's manifest and private payload, and catches a changed 
 
 it("labels the evidence native or fixture and never claims an external connection", () => {
   const f = fixture(),
-    phases = join(f.root, "phases");
+    phases = join(f.root, "phases"),
+    attestation = join(f.root, "attestation.json");
   mkdirSync(phases);
   writeFileSync(
     join(phases, "install-and-checks.json"),
     `${JSON.stringify({ name: "install-and-checks", status: "passed", detail: "ran" })}\n`,
   );
+  writeFileSync(
+    attestation,
+    `${JSON.stringify({
+      platform: "linux",
+      euid: 0,
+      systemd: true,
+      maintenanceCommands: true,
+      uname: "6.1.0-amd64",
+      node: "v24.21.0",
+    })}\n`,
+  );
   const document = join(f.root, "report.json"),
     printed = JSON.parse(
-      run(["report", "--mode", "native", "--phases", phases, "--out", document]),
+      run([
+        "report",
+        "--mode",
+        "native",
+        "--phases",
+        phases,
+        "--attest",
+        attestation,
+        "--out",
+        document,
+      ]),
     );
   expect(existsSync(document)).toBe(true);
   expect(printed).toMatchObject({ kind: "mate-maintenance-validation", mode: "native" });
+  expect(printed.attestation).toMatchObject({ platform: "linux", euid: 0, systemd: true });
   expect(printed.phases.map((phase: { name: string }) => phase.name)).toEqual([
     "install-and-checks",
   ]);
@@ -239,6 +338,140 @@ it("labels the evidence native or fixture and never claims an external connectio
   expect(printed.scope.native).toContain("Real Agent UIDs");
   expect(printed.scope.simulated).toContain("never stand in for a native result");
   expect(printed.scope.external).toContain("No Slack, model-provider or VPS connection");
+});
+
+it("refuses to label a run native without host facts, an unknown mode, or an empty phase set", () => {
+  const f = fixture(),
+    phases = join(f.root, "phases"),
+    attestation = join(f.root, "attestation.json");
+  mkdirSync(phases);
+  writeFileSync(
+    join(phases, "install-and-checks.json"),
+    `${JSON.stringify({ name: "install-and-checks", status: "passed", detail: "ran" })}\n`,
+  );
+  // A run that did not attest a root Linux host with systemd and the installed commands cannot call
+  // itself native, however it was invoked.
+  expect(() => run(["report", "--mode", "native", "--phases", phases])).toThrow();
+  writeFileSync(
+    attestation,
+    `${JSON.stringify({ platform: "darwin", euid: 501, systemd: false, maintenanceCommands: false })}\n`,
+  );
+  expect(() =>
+    run(["report", "--mode", "native", "--phases", phases, "--attest", attestation]),
+  ).toThrow();
+  // A fixture run is honest about itself and carries the same attestation without claiming native.
+  const fixtureReport = JSON.parse(
+    run(["report", "--mode", "fixture", "--phases", phases, "--attest", attestation]),
+  );
+  expect(fixtureReport.mode).toBe("fixture");
+  expect(() => run(["report", "--mode", "definitely-not-native", "--phases", phases])).toThrow();
+  // An empty phase directory is not evidence of anything.
+  const empty = join(f.root, "empty");
+  mkdirSync(empty);
+  expect(() => run(["report", "--mode", "fixture", "--phases", empty])).toThrow();
+});
+
+it("refuses to pass a configuration change that was never applied, and passes the applied one", () => {
+  const f = fixture(),
+    configPath = join(f.root, "mate.next.json");
+  run([
+    "marker",
+    "--release",
+    release,
+    "--store",
+    f.database,
+    "--agent",
+    "alice",
+    "--secondAgent",
+    "bob",
+    "--out",
+    f.marker,
+  ]);
+  const store = new Store(f.database);
+  try {
+    saveConfiguration(
+      store,
+      daemonConfigSchema.parse({
+        version: 2,
+        mate: {
+          ownerUserIds: ["owner"],
+          runTimeoutMs: 1000,
+          agents: [
+            {
+              id: "alice",
+              name: "Alice",
+              role: "R",
+              model: { provider: "t", id: "t", apiKeyEnv: "K" },
+            },
+          ],
+        },
+        adapters: { local: { humans: ["owner"], rooms: [] } },
+        runtime: { dataDir: join(f.root, "data") },
+      }),
+    );
+  } finally {
+    store.close();
+  }
+  const next = daemonConfigSchema.parse({
+    version: 2,
+    mate: {
+      ownerUserIds: ["owner"],
+      runTimeoutMs: 2000,
+      agents: [
+        {
+          id: "alice",
+          name: "Alice",
+          role: "R",
+          model: { provider: "t", id: "t", apiKeyEnv: "K" },
+        },
+      ],
+    },
+    adapters: { local: { humans: ["owner"], rooms: [] } },
+    runtime: { dataDir: join(f.root, "data") },
+  });
+  writeFileSync(configPath, `${JSON.stringify(next)}\n`);
+  // The recorded configuration is still the old one, so "applied" must fail: this is the assertion
+  // that a configuration-change phase cannot pass by never applying the change.
+  expect(() =>
+    run([
+      "verify",
+      "--release",
+      release,
+      "--store",
+      f.database,
+      "--marker",
+      f.marker,
+      "--expectConfig",
+      "applied",
+      "--config",
+      configPath,
+    ]),
+  ).toThrow();
+  const store2 = new Store(f.database);
+  try {
+    saveConfiguration(store2, next);
+  } finally {
+    store2.close();
+  }
+  const verified = JSON.parse(
+    run([
+      "verify",
+      "--release",
+      release,
+      "--store",
+      f.database,
+      "--marker",
+      f.marker,
+      "--expectConfig",
+      "applied",
+      "--config",
+      configPath,
+    ]),
+  );
+  expect(verified).toMatchObject({
+    passed: true,
+    configuration: { expectation: "applied", passed: true },
+  });
 });
 
 it("refuses an unknown flag or a mode the native script does not use", () => {

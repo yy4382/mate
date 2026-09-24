@@ -17,7 +17,7 @@ pnpm exec vitest run tests/execution/linux-user.test.ts tests/execution/linux-pr
 macOS 本地入口不模拟 Linux 用户权限。三类证据不能互相代替，改动相关路径时要说清自己给出的是哪一类：
 
 1. **仓库测试（任何平台）**。用真实 SQLite 和真实文件系统验证当前格式数据的备份、恢复与重启保留（`tests/daemon/checkpoint.test.ts`、`tests/deployment/linux-checkpoint.test.ts`、`tests/daemon/database-preservation.test.ts`），以及用可替换宿主入口验证维护流程（`tests/deployment/host-operations.test.ts`、`tests/helpers/host.ts`）。宿主替换入口是**模拟**宿主：它能证明流程不绕过唯一入口并验证故障注入后的恢复，不能证明真实 UID、目录权限或 systemd 行为。
-2. **原生 Linux（可重置的 Debian 13 主机）**。`tests/native/linux-maintenance.sh` 用真实 Agent 账号跑完安装、检查、备份、程序升级、配置变更、重启和恢复，并报告每一项结果；`tests/deployment/native-maintenance.test.ts` 在本机验证它的记录、清单核对和报告格式，并保持 `native` 与 `fixture` 两种结论分开。命令见[运维说明](OPERATIONS.md)。
+2. **原生 Linux（可重置的 Debian 13 主机）**。`tests/native/linux-maintenance.sh` 用真实 Agent 账号跑完安装、检查、备份、程序升级、配置变更、重启和恢复，并报告每一项结果；`tests/deployment/native-maintenance.test.ts` 在本机验证它的记录、清单核对和报告格式，并覆盖 `native` 报告必须带宿主事实、`fixture` 运行不能生成 `native` 报告这两条规则。命令见[运维说明](OPERATIONS.md)。这些检查需要 root、systemd 和真实 Agent 账号，在 macOS 开发机上**没有执行**，也不能由本机测试代替。
 3. **真实 Slack/provider/VPS 连接**。不进入每个 ticket 的循环，也不能由上面两类结果宣称完成。
 
 `pnpm check` 在开发 checkout 运行；Linux 发布目标还需以目标 Node ABI 执行 `pnpm build`、`pnpm typecheck` 和 `MATE_NATIVE_UID_TEST=1 pnpm exec vitest run tests/execution/linux-user-tools.test.ts`。完整测试集包含使用非 Linux 本地开发夹具的用例，不能把这些夹具在生产 Linux 配置下的失败当作 Agent 隔离结果，也不能用它们代替原生验证。

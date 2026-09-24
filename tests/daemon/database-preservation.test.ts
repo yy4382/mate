@@ -122,14 +122,16 @@ function preserved(seeded: Seeded) {
 const digest = (path: string): string =>
   createHash("sha256").update(readFileSync(path)).digest("hex");
 
-it("keeps sessions, deliveries, tasks, reminders and identity when the program version changes", () => {
+it("keeps sessions, deliveries, tasks, reminders and identity across a restart on the same database file", () => {
   const f = fixture(),
     first = seed(f.config, f.data);
   saveConfiguration(first.store, f.config);
   const before = preserved(first);
   first.store.close();
-  // A program upgrade replaces the release and restarts the process; it never rewrites the
-  // current-format database, so the same file must still hold every record.
+  // This is the restart half of a program-version change: the release is replaced and the process
+  // restarts, but nothing rewrites the current-format database, so the same file must still hold
+  // every record. The native script owns the other half — it runs a real `upgrade` + `finalize` and
+  // then re-reads these same rows — because installing a release is only possible on Linux.
   expect(lstatSync(join(f.state, "mate.sqlite")).isFile()).toBe(true);
   const after = openStore(f.config, f.data);
   try {
