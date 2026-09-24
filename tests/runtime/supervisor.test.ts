@@ -286,9 +286,9 @@ it("recovery is bounded even with large task results; memory callback is injecte
     store.db.prepare("SELECT count(*) n FROM audit WHERE kind='context_restore'").get(),
   ).toEqual({ n: 1 });
 });
-it("inbox list/read cannot reveal a revoked channel and ack never handles queued delivery", async () => {
+it("inbox list/read show own durable deliveries without revealing a revoked channel", async () => {
   const { store, collaboration: c, work, router } = setup();
-  const first = c.enqueue("research", work, "first", {});
+  const first = c.enqueue("research", work, "first", { kind: "notice" });
   const run = store.beginRun("research")!;
   store.input(run, {});
   const secret = c.enqueue("research", work, "secret", {
@@ -297,13 +297,20 @@ it("inbox list/read cannot reveal a revoked channel and ack never handles queued
   });
   c.messages.membership("research", "CTWO", false);
   const signal = new AbortController().signal;
-  expect(
-    JSON.stringify(await router.call(run, work, "list", "inbox.list", {}, signal)),
-  ).not.toContain(secret);
+  const listed = ((await router.call(run, work, "list", "inbox.list", {}, signal)).value ?? []) as {
+    id: string;
+    status: string;
+    kind?: string;
+  }[];
+  expect(listed).toContainEqual({ id: first, status: "injected", kind: "notice" });
+  expect(listed.map((delivery) => delivery.id)).not.toContain(secret);
   await expect(
     router.call(run, work, "read", "inbox.read", { deliveryId: secret }, signal),
   ).rejects.toThrow();
-  await router.call(run, work, "ack", "inbox.ack", { deliveryId: first }, signal);
+  expect(
+    (await router.call(run, work, "read", "inbox.read", { deliveryId: first }, signal)).value,
+  ).toMatchObject({ id: first, agent_id: "research", payload: { kind: "notice" } });
+  // Reading the inbox observes the delivery; the scheduler still owns its own status.
   expect(store.delivery(first).status).toBe("injected");
 });
 it("invalid run IPC fails immediately instead of consuming the run timeout", async () => {

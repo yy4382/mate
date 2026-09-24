@@ -92,11 +92,7 @@ const historySpecs = [
 /** One own durable delivery, re-read under the acting Agent's current target access. */
 function ownDelivery(context: ToolExecutionContext, deliveryId: string): string {
   fence(context);
-  const delivery = context.collaboration.store.delivery(deliveryId);
-  if (delivery.agent_id !== context.run.agentId) throw new Error("Private inbox");
-  const target = JSON.parse(delivery.payload).target;
-  if (target)
-    context.collaboration.messages.requireAccess(context.run.agentId, target.conversationId);
+  context.collaboration.ownDelivery(context.run.agentId, deliveryId);
   return context.workId;
 }
 
@@ -296,27 +292,7 @@ const definitions: ToolSpec[] = [
     effectPolicy: "atomic-recorded",
     replayPolicy: "refreshable",
     authorize: selectedWork,
-    handler: ({ collaboration: c, run }) => {
-      const value = (
-        c.store.db
-          .prepare(
-            "SELECT id,payload,status FROM deliveries WHERE agent_id=? AND status!='handled' ORDER BY created_at LIMIT 50",
-          )
-          .all(run.agentId) as { id: string; payload: string; status: string }[]
-      )
-        .filter((d) => {
-          const target = JSON.parse(d.payload).target;
-          if (!target?.conversationId) return true;
-          try {
-            c.messages.requireAccess(run.agentId, target.conversationId);
-            return true;
-          } catch {
-            return false;
-          }
-        })
-        .map((d) => ({ id: d.id, status: d.status, kind: JSON.parse(d.payload).kind }));
-      return { value };
-    },
+    handler: ({ collaboration: c, run }) => ({ value: c.inbox(run.agentId) }),
   }),
   spec({
     name: "inbox.read",
@@ -327,27 +303,9 @@ const definitions: ToolSpec[] = [
     effectPolicy: "atomic-recorded",
     replayPolicy: "immutable",
     authorize: (context, args) => ownDelivery(context, args.deliveryId),
-    handler: ({ collaboration: c }, args) => {
-      const delivery = c.store.delivery(args.deliveryId);
-      return { value: { ...delivery, payload: JSON.parse(delivery.payload) } };
-    },
-  }),
-  spec({
-    name: "inbox.ack",
-    schema: z.object({ deliveryId: id }).strict(),
-    description: "Acknowledge injection of one own delivery without marking it handled.",
-    replayScope: "work",
-    seatPolicy: "deny",
-    effectPolicy: "atomic-recorded",
-    replayPolicy: "immutable",
-    authorize: (context, args) => ownDelivery(context, args.deliveryId),
-    handler: ({ collaboration: c, run }, args) => {
-      const delivery = c.store.delivery(args.deliveryId);
-      c.store.db
-        .prepare("INSERT INTO inbox_reads VALUES(?,?,?) ON CONFLICT DO NOTHING")
-        .run(delivery.id, run.agentId, Date.now());
-      return { value: { ...delivery, payload: JSON.parse(delivery.payload) } };
-    },
+    handler: ({ collaboration: c, run }, args) => ({
+      value: c.ownDelivery(run.agentId, args.deliveryId),
+    }),
   }),
 ];
 

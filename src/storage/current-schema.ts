@@ -133,7 +133,6 @@ CREATE TABLE runs(id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agents(
  error TEXT, created_at INTEGER NOT NULL);
 CREATE UNIQUE INDEX one_active_run ON runs(agent_id) WHERE state='active';
 CREATE TABLE run_context(run_id TEXT PRIMARY KEY REFERENCES runs(id),work_id TEXT NOT NULL REFERENCES works(id));
-CREATE TABLE inbox_reads(delivery_id TEXT PRIMARY KEY REFERENCES deliveries(id), agent_id TEXT NOT NULL REFERENCES agents(id), read_at INTEGER NOT NULL);
 
 -- Outbound messages, drafts and the freshness hold around them.
 CREATE TABLE outbox(id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agents(id), request_hash TEXT NOT NULL, request TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN ('held','pending','sending','sent','unknown','failed')),receipt TEXT, target TEXT NOT NULL DEFAULT '{}', created_at INTEGER);

@@ -6,7 +6,7 @@ import { ReviewSeats } from "../conversations/review-seats.js";
 import { CanonicalAttention as Attention } from "../conversations/attention.js";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { Store, encode, type RunToken } from "../storage/store.js";
+import { Store, encode, type Delivery, type RunToken } from "../storage/store.js";
 import { Conversations as Messages } from "../conversations/messages.js";
 import {
   conversationTargetSchema as targetSchema,
@@ -25,6 +25,10 @@ export interface Work {
 }
 /** One task row, with the anchor that makes it the canonical task for a message. */
 export type Task = TaskRow;
+/** The conversation a delivery's own payload names, when it names one at all. */
+function deliveryDestination(payload: string): string | undefined {
+  return JSON.parse(payload).target?.conversationId;
+}
 export class Collaboration {
   readonly agents: AgentDirectory;
   readonly reminders: Reminders;
@@ -182,6 +186,37 @@ export class Collaboration {
       this.bindDelivery(id, workId);
       return id;
     });
+  }
+  /**
+   * This Agent's own durable deliveries that are still relevant under its current access. It is
+   * content-free metadata: another Agent's delivery never appears, and one whose target this Agent
+   * may no longer read drops out instead of staying as a stale reference.
+   */
+  inbox(agentId: string): { id: string; status: string; kind: unknown }[] {
+    return (
+      this.store.db
+        .prepare(
+          "SELECT id,payload,status FROM deliveries WHERE agent_id=? AND status!='handled' ORDER BY created_at LIMIT 50",
+        )
+        .all(agentId) as { id: string; payload: string; status: string }[]
+    )
+      .map((row) => ({ row, payload: JSON.parse(row.payload) as Record<string, unknown> }))
+      .filter(({ payload }) => {
+        const target = payload.target as { conversationId?: string } | undefined;
+        return !target?.conversationId || this.messages.access(agentId, target.conversationId);
+      })
+      .map(({ row, payload }) => ({ id: row.id, status: row.status, kind: payload.kind }));
+  }
+  /** One own delivery with its payload decoded, re-read under the Agent's current target access. */
+  ownDelivery(
+    agentId: string,
+    deliveryId: string,
+  ): Omit<Delivery, "payload"> & { payload: unknown } {
+    const delivery = this.store.delivery(deliveryId);
+    if (delivery.agent_id !== agentId) throw new Error("Private inbox");
+    const destination = deliveryDestination(delivery.payload);
+    if (destination) this.messages.requireAccess(agentId, destination);
+    return { ...delivery, payload: JSON.parse(delivery.payload) };
   }
   send(
     agentId: string,
