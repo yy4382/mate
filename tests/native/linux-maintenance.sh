@@ -84,7 +84,7 @@ phase() { # phase NAME STATUS DETAIL
 }
 fail() { phase "$1" failed "$2"; exit 1; }
 
-if [ -z "$AGENT_ONE" ] || [ -z "$AGENT_TWO" ]; then
+if [ -z "${AGENT_ONE-}" ] || [ -z "${AGENT_TWO-}" ]; then
   AGENTS=$(read_config 'c.mate.agents.map(a=>a.id).join(" ")')
   # shellcheck disable=SC2086 # the configuration lists the ids this validation runs over
   set -- $AGENTS
