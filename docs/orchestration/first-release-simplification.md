@@ -115,3 +115,21 @@ None yet.
 - Prettier 3.9.9 is not perfectly idempotent for one file (`src/storage/operations-schema.ts`):
   a single `pnpm format` run may need a second run. Worth revisiting only if it causes a real
   failure; the check gate itself is reliable.
+
+## Incidents and traps (verified)
+
+- **Shared-index contamination (#35 and #36).** Ticket #35's follow-up commit `beb5fdd`
+  briefly captured files #36 had staged in the one shared index (`src/daemon/migrate.ts`,
+  `src/slack/*-migration.ts`, ten `src/storage/*-schema.ts`). `12aab7b` restored those files
+  from `b1fcca9` without rewriting history, and #36's working tree kept its deletions, so no
+  work was lost. Lesson recorded: tickets running in the MAIN tree share one index, so a
+  ticket must stage its own paths (`git add -A` only when every pending change is its own).
+  From here on, independent tickets get their own worktree.
+- **Node version (orchestrator trap).** The default `node` on this machine is v26 while the
+  project pins Node 24.21.0. Under v26, `fs-ext` fails with `NODE_MODULE_VERSION 147 ...
+  requires 137` and ten test files error out, which reads as a broken ticket but is not. All
+  acceptance runs use `PATH=/Users/chris/.n/bin:$PATH` (node v24.21.0).
+- **Merge ordering.** Parallel ticket worktrees cannot be merged into the main tree while
+  another ticket is mid-edit there; merges wait until the main-tree ticket commits and the
+  tree is clean. Merge commits require a green `pnpm check` before the merge is committed
+  (verified with `git merge --no-commit`).
