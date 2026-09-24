@@ -62,13 +62,13 @@ only when every blocker is committed on the branch.
 | #38 | 由任务模块负责消息关联任务的完整发布流程 | **done** | `02dafa9` (re-applied) | `113241f`, merged as `8c729e6` |
 | #39 | 让工具输入类型和领域授权各有明确归属 | **done** | `1066f1c` (worktree `.worktrees/t39`) | `f96c1a2` + `4cc68c9`, merged as `e898228`; follow-up `412aac5` was a sibling of `4cc68c9`, so its 14-line delta is being re-checked against #42 on the merged base |
 | #40 | 交付有界且可继续的历史查询 | **done** | `02dafa9` (re-applied; worktree `.worktrees/t40`) | `9eda16a`, merged as `013be6c` |
-| #41 | 保留注意力与持久投递的独立状态 | in progress | `612f35e` (worktree `.worktrees/t41`) | — |
+| #41 | 保留注意力与持久投递的独立状态 | **done** | `612f35e` (worktree `.worktrees/t41`) | `44e7c9c`+`383fe7e`+`a2844d2`, merged as `8782568` |
 | #42 | 让提醒独立于关联任务继续运行 | **done** | `e898228` (worktree `.worktrees/t42`) | `1c51589`, merged as `0f71592`; sibling `1909d03` (extra tests) being reconciled on the merged base |
 | #43 | 将会话发现收敛到现有成员空间 | **done** | `ddd86b4` (worktree `.worktrees/t43`) | `1c206f4`, merged as `6a25110` |
 | #44 | 让频道内 Agent 邀请另一名团队 Agent | **done** | `02dafa9` (worktree `.worktrees/t44`) | `cd13f9a`, merged as `9076ccb` |
 | #45 | 在工作进程协议中保留故障类别与阶段 | **done** | `9c7e2e3` (main tree) | `b64a2e7` (final revision; an earlier `0e7b6f8` re-commit sits in history) |
 | #46 | 对暂时模型故障持久退避并自动继续 | re-applying | `16f1bf9` (worktree `.worktrees/t46`) | `1470bd2` on an older base; conflicts with #47's failure policy, re-application in flight |
-| #47 | 保持正常让位后的持久继续与恢复输入 | **done** | `d412adf` (worktree `.worktrees/t47`) | `ad456b1` merged as `612f35e`; reconciliation `4f95df6` merged as `16f1bf9` |
+| #47 | 保持正常让位后的持久继续与恢复输入 | **done** | `d412adf` (worktree `.worktrees/t47`) | `ad456b1` merged as `612f35e`; reconciliation `4f95df6` merged as `16f1bf9`; follow-up `9eb40e0` cherry-picked as `5172463` |
 | #48 | 使进程查询与停止可取消且不阻塞 daemon | **done** | `fab5692` (worktree `.worktrees/t48`) | `9e69c30`, merged as `3838cad` |
 | #49 | 让内部应用在 Slack 离线时启动和运行 | **done** | `d412adf` (worktree `.worktrees/t49`) | `367bb2a`, merged as `b933b52` |
 | #50 | 按安装和目标范围恢复 Slack 操作 | in progress | `16f1bf9` (worktree `.worktrees/t50`) | — |
@@ -225,6 +225,8 @@ None yet.
 | #45 (final) | `b64a2e7` | `pnpm typecheck` + `pnpm check` in an isolated `git archive` copy | 61 files / 485 tests, exit 0; the revision is the branch tip |
 | #47 | `ad456b1`, merged `612f35e` | isolated-tree method on the merged tree | 62 files / 493 tests, exit 0 |
 | #49 | `367bb2a`, merged `b933b52` | isolated-tree method on the merged tree | 66 files / 507 tests, exit 0 |
+| #41 | `a2844d2`, merged `8782568` | isolated-tree method on the merged tree | 66 files / 517 tests, exit 0 |
+| #47 (follow-up) | `9eb40e0`, cherry-picked as `5172463` | `pnpm typecheck` + `pnpm check` on the main tree with no other ticket mid-edit | 66 files / 519 tests, exit 0; the follow-up makes the yield-resumption wording reachable (it had been dead because `lastStopReason` never excluded the current run) |
 | #46 | `ae6f4fe` | worktree green (63 files / 498 tests) but the MERGE broke one of its own assertions | found and blocked before merging: the #45 reason filter rewrites `api key <value>` to `[redacted]`, so an exact-string expectation in `tests/runtime/resume.test.ts` was stale; sent back for a test-only fix |
 | #45 | `0e7b6f8` | `pnpm typecheck` + `pnpm check` in an isolated `git archive` copy | 61 files / 484 tests, exit 0; `src/runtime/fault.ts` is the one shared result (7 stages, the five required categories plus `aborted`, and a `retryDisposition`), and the protocol test spawns the compiled worker fixture through the production `WorkerClient` over IPC rather than an in-memory stub |
 | #44 (hardening) | `47b6227`, merged `d412adf` | re-applied on `0e7b6f8` after the sibling `c15f754` was rejected; 2 files; isolated-tree verification 61 files / 484 tests, exit 0 |
