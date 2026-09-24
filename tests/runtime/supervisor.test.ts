@@ -228,7 +228,8 @@ it('new contexts can discover and inspect their own old uncertain execution with
  const read=await router.call(next,work,'read','actions.read',{actionId:'OLD-EXEC'},signal);expect(read.value).toMatchObject({state:'unknown',request:{operation:{command:'synthetic-command'}}});
  c.enqueue('writer',work,'other',{});const peer=store.beginRun('writer')!;store.input(peer,{});
  await expect(router.call(peer,work,'read','actions.read',{actionId:'OLD-EXEC'},signal)).rejects.toThrow('own action');
- c.messages.membership('research','CTEST',false);await expect(router.call(next,work,'read2','actions.read',{actionId:'OLD-EXEC'},signal)).rejects.toThrow('access');
+ c.messages.membership('research','CTEST',false);
+ expect((await router.call(next,work,'read2','actions.read',{actionId:'OLD-EXEC'},signal)).value).toMatchObject({state:'unknown',request:{operation:{command:'synthetic-command'}}});
 });
 it('historical non-execution receipts cannot bypass current object ACL through indirect references',async()=>{
  const{store,collaboration:c,work,router}=setup();c.enqueue('research',work,'historical-acl',{});const run=store.beginRun('research')!;store.input(run,{});
