@@ -1,12 +1,8 @@
 import { z } from "zod";
 import { isAbsolute } from "node:path";
 const path = z.string().refine(isAbsolute, "Absolute path required");
-import {
-  agentDefinitionSchema,
-  legacyBudgetSettingsSchema,
-  agentIdSchema,
-  secretReferenceSchema,
-} from "../domain/agents.js";
+import { agentDefinitionSchema, agentIdSchema, secretReferenceSchema } from "../domain/agents.js";
+import { encode, hash, type Store } from "../storage/store.js";
 import type { MateConfig } from "../config.js";
 
 const human = z.string().min(1).max(1000);
@@ -36,14 +32,9 @@ const modernConfigSchema = z
       .object({
         agents: z.array(agentDefinitionSchema).min(1),
         ownerUserIds: z.array(human).min(1),
-        runTimeoutMs: z.number().int().positive().optional(),
-        budgets: legacyBudgetSettingsSchema.optional(),
+        runTimeoutMs: z.number().int().positive().default(180000),
       })
-      .strict()
-      .transform(({ budgets, runTimeoutMs, ...team }) => ({
-        ...team,
-        runTimeoutMs: runTimeoutMs ?? budgets?.runTimeoutMs ?? 180000,
-      })),
+      .strict(),
     adapters: z
       .object({
         slack: z
@@ -255,6 +246,27 @@ export function assertConfigurationEvolution(previous: DaemonConfig, next: Daemo
   }
 }
 export type DaemonConfig = z.infer<typeof daemonConfigSchema>;
+
+/** The configuration this data directory was last started with. */
+export function storedConfiguration(store: Store): DaemonConfig | undefined {
+  const row = store.db.prepare("SELECT value FROM runtime_meta WHERE key='configuration'").get() as
+    { value: string } | undefined;
+  return row ? daemonConfigSchema.parse(JSON.parse(row.value)) : undefined;
+}
+
+/** Record the running configuration so a later start can tell whether it changed. */
+export function saveConfiguration(store: Store, config: DaemonConfig): void {
+  store.db
+    .prepare(
+      "INSERT INTO runtime_meta VALUES('configuration',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+    )
+    .run(encode(daemonConfigSchema.parse(config)));
+  store.db
+    .prepare(
+      "INSERT INTO runtime_meta VALUES('policy',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+    )
+    .run(hash(encode(config.runtime)));
+}
 
 /** Config identity is structural. Wire requests use a different, immutable byte hash. */
 export function sameConfiguration(left: DaemonConfig, right: DaemonConfig): boolean {

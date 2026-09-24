@@ -4,7 +4,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { Store } from "../../src/storage/store.js";
 import { configSchema } from "../../src/config.js";
 import { configFixture } from "../helpers/config.js";
-import { Messages, Output, migrateCurrentRuntime } from "../helpers/canonical-slack.js";
+import { Messages, Output } from "../helpers/canonical-slack.js";
 import { Collaboration } from "../../src/collaboration/service.js";
 import { Broker } from "../../src/policy/broker.js";
 import { Supervisor, type Worker } from "../../src/runtime/supervisor.js";
@@ -31,7 +31,6 @@ function setup(factory?: (id: string) => Worker) {
   });
   const store = new Store(":memory:"),
     messages = new Messages(store, config);
-  migrateCurrentRuntime(store);
   const output = new Output(messages, { post: async () => ({ ts: "100.000002" }) }),
     collaboration = new Collaboration(store, messages, output, config);
   const broker = new Broker(

@@ -1,4 +1,4 @@
-import { fixtureTarget, migrateCurrentRuntime } from "../helpers/canonical-slack.js";
+import { fixtureTarget } from "../helpers/canonical-slack.js";
 import { afterEach, expect, it, vi } from "vitest";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -22,7 +22,6 @@ function setup() {
   const config = configSchema.parse(configFixture);
   store.register("research", "v1", []);
   const messages = new Messages(store, config);
-  migrateCurrentRuntime(store);
   messages.membership("research", "CTEST", true);
   const collaboration = new Collaboration(
     store,

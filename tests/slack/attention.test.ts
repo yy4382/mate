@@ -1,8 +1,4 @@
-import {
-  fixtureTarget,
-  externalThread,
-  migrateCurrentRuntime,
-} from "../helpers/canonical-slack.js";
+import { fixtureTarget, externalThread } from "../helpers/canonical-slack.js";
 import { afterEach, expect, it } from "vitest";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { Store } from "../../src/storage/store.js";
@@ -16,7 +12,6 @@ function setup() {
   stores.push(s);
   s.register("research", "v1", []);
   const m = new Messages(s, configFixture);
-  migrateCurrentRuntime(s);
   m.membership("research", "CTEST", true);
   const c = new Collaboration(
     s,

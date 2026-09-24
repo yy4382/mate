@@ -1,6 +1,7 @@
 import { afterEach, expect, it } from "vitest";
 import {
   chmodSync,
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -15,14 +16,9 @@ import { daemonConfigSchema } from "../../src/daemon/config.js";
 import { backup } from "../../src/daemon/backup.js";
 import { restoreCheckpointForTesting } from "../../src/daemon/restore.js";
 import { Store } from "../../src/storage/store.js";
-import {
-  migrateConfiguration,
-  saveConfiguration,
-  storedConfiguration,
-} from "../../src/daemon/migrate.js";
+import { saveConfiguration, storedConfiguration } from "../../src/daemon/config.js";
 import { buildBaseline } from "../../src/runtime/prompt.js";
 import { operationDocumentation } from "../../src/runtime/tools.js";
-import { initializeCanonicalStore } from "../../src/storage/internal-schema.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -51,7 +47,7 @@ it("backs up Linux Agent homes and restores private data with the Agent UID and 
     version: 2,
     mate: {
       ownerUserIds: ["owner"],
-      budgets: { maxRuns: 10, maxTokens: 1000, maxCostUsd: 1, runTimeoutMs: 1000 },
+      runTimeoutMs: 1000,
       agents: [
         {
           id: "alice",
@@ -87,7 +83,7 @@ it("backs up Linux Agent homes and restores private data with the Agent UID and 
   expect(lstatSync(home).mode & 0o777).toBe(0o700);
 });
 
-it("migrates Linux-user configuration using the real private home without requiring a legacy agents directory", async () => {
+it("checkpoints the real Linux Agent home rather than a legacy agents directory", async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "mate-linux-migrate-")));
   roots.push(root);
   const data = join(root, "data"),
@@ -100,11 +96,11 @@ it("migrates Linux-user configuration using the real private home without requir
   chmodSync(data, 0o700);
   chmodSync(home, 0o700);
   writeFileSync(join(home, "MEMORY.md"), "private Linux memory", { mode: 0o600 });
-  const previous = daemonConfigSchema.parse({
+  const config = daemonConfigSchema.parse({
     version: 2,
     mate: {
       ownerUserIds: ["owner"],
-      budgets: { maxRuns: 10, maxTokens: 1000, maxCostUsd: 1, runTimeoutMs: 1000 },
+      runTimeoutMs: 1000,
       agents: [
         {
           id: "alice",
@@ -124,22 +120,21 @@ it("migrates Linux-user configuration using the real private home without requir
       researchHosts: [],
     },
   });
-  const next = structuredClone(previous);
-  next.mate.agents[0]!.role = "Updated";
   const store = new Store(join(data, "state", "mate.sqlite"));
-  const baseline = buildBaseline(previous.mate.agents[0]!, operationDocumentation);
-  initializeCanonicalStore(store);
+  const baseline = buildBaseline(config.mate.agents[0]!, operationDocumentation);
   store.register("alice", baseline.configVersion, baseline.messages);
-  saveConfiguration(store, previous);
+  saveConfiguration(store, config);
+  const destination = join(root, "checkpoint");
+  await backup(store, data, destination, config);
   store.close();
-  const destination = join(root, "migration-backup");
-  await migrateConfiguration(previous, next, destination);
   expect(readFileSync(join(destination, "agents", "alice", "MEMORY.md"), "utf8")).toBe(
     "private Linux memory",
   );
-  const restored = new Store(join(data, "state", "mate.sqlite"));
+  expect(existsSync(join(destination, "agents", "alice", "notes"))).toBe(true);
+  expect(existsSync(join(data, "agents"))).toBe(false);
+  const restored = new Store(join(destination, "mate.sqlite"));
   try {
-    expect(storedConfiguration(restored)).toEqual(next);
+    expect(storedConfiguration(restored)).toEqual(config);
   } finally {
     restored.close();
   }

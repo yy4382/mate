@@ -1,8 +1,6 @@
-import { migrateCurrentRuntime } from "../helpers/canonical-slack.js";
 import { afterEach, expect, it, vi } from "vitest";
 import type { WebClient } from "@slack/web-api";
 import { Store } from "../../src/storage/store.js";
-import { migrateCanonicalConversations } from "../../src/slack/canonical-migration.js";
 import { slackApplication } from "../../src/slack/application.js";
 import { Directory } from "../../src/slack/directory.js";
 import { TeamDirectory } from "../../src/conversations/team-directory.js";
@@ -17,8 +15,6 @@ const signal = new AbortController().signal;
 function fixture() {
   const s = new Store(":memory:");
   cleanup.push(() => s.close());
-  migrateCanonicalConversations(s, configFixture);
-  migrateCurrentRuntime(s);
   const { messages: m, mapper } = slackApplication(s, configFixture);
   s.register("research", "baseline", []);
   const api = {

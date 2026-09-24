@@ -1,24 +1,14 @@
 import { SlackHistory } from "../slack/history.js";
 import type { AdapterLifecycle } from "./adapter.js";
 import { SlackRuntime } from "../slack/runtime.js";
-import { initializeCanonicalStore } from "../storage/internal-schema.js";
 import { localConversations } from "../local/application.js";
 import { LocalAdapter } from "../local/input.js";
 import { configureLocalRooms } from "../local/rooms.js";
-import { migrateProjections } from "../storage/projection-schema.js";
-import { migrateProjectionImports } from "../storage/projection-import-schema.js";
-import { migrateHistoryIndexes } from "../storage/history-schema.js";
-import { migrateCoordinationRecovery } from "../storage/coordination-schema.js";
-import { migrateOperationsView } from "../storage/operations-schema.js";
-import { migrateSystemOperations } from "../storage/system-operations-schema.js";
-import { migrateModelUsage } from "../storage/model-usage-schema.js";
 import { TeamDirectory } from "../conversations/team-directory.js";
-import { migrateInternalConversations } from "../storage/internal-schema.js";
-import { migrateCanonicalConversations } from "../slack/canonical-migration.js";
 import { slackApplication } from "../slack/application.js";
 
 import { CanonicalOutput as Output } from "../conversations/output.js";
-import { storedConfiguration, saveConfiguration } from "./migrate.js";
+import { storedConfiguration, saveConfiguration } from "./config.js";
 import { Attachments } from "../slack/attachments.js";
 import { Directory } from "../slack/directory.js";
 import {
@@ -36,12 +26,13 @@ import { join, resolve } from "node:path";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import {
   sameConfiguration,
+  assertConfigurationEvolution,
   daemonConfigSchema,
   slackRuntimeConfig,
   type DaemonConfig,
 } from "./config.js";
 import { requireSecret } from "../config.js";
-import { Store, hash } from "../storage/store.js";
+import { Store } from "../storage/store.js";
 
 import { CanonicalSlackTransport as WebSlackTransport } from "../slack/transport.js";
 import { Collaboration } from "../collaboration/service.js";
@@ -105,7 +96,7 @@ export class Daemon {
   private loopPromise?: Promise<void>;
   private startPromise?: Promise<void>;
   private closePromise?: Promise<void>;
-  private recoveredDuringUpgrade = false;
+  private recoveredDuringStartup = false;
   readonly config: DaemonConfig;
   static async create(input: unknown, log: Log, projectRoot = resolve(".")): Promise<Daemon> {
     const config = daemonConfigSchema.parse(input),
@@ -169,41 +160,15 @@ export class Daemon {
     try {
       this.store = opened = new Store(join(state, "mate.sqlite"));
       this.store.db.exec("BEGIN IMMEDIATE");
-      const beforeUsageSchema = Number(this.store.db.pragma("user_version", { simple: true }));
       const previous = storedConfiguration(this.store);
-      if (previous && !sameConfiguration(previous, config))
-        throw new Error("Configuration changed; run explicit offline migration");
-      if (!previous && this.store.db.prepare("SELECT 1 FROM agents").get())
-        throw new Error("Legacy configuration requires explicit offline migration");
-      const policyHash = hash(JSON.stringify(config.runtime));
-      const oldPolicy = this.store.db
-        .prepare("SELECT value FROM runtime_meta WHERE key='policy'")
-        .get() as { value: string } | undefined;
-      if (oldPolicy && oldPolicy.value !== policyHash)
-        throw new Error("Runtime policy changed; explicit policy migration required");
-      const c = config.mate;
-      if (
-        !this.store.db.prepare("SELECT 1 FROM runtime_meta WHERE key='conversation_format'").get()
-      ) {
-        if (previous)
-          throw new Error("Canonical conversation storage requires explicit offline migration");
+      // One format has one startup path: a changed configuration of this same release
+      // keeps every Agent identity and re-baselines only the sessions it invalidates.
+      let configurationChanged = false;
+      if (previous && !sameConfiguration(previous, config)) {
+        assertConfigurationEvolution(previous, config);
+        configurationChanged = true;
       }
-      if (slackConfig) migrateCanonicalConversations(this.store, slackConfig);
-      else initializeCanonicalStore(this.store);
-      if (previous && Number(this.store.db.pragma("user_version", { simple: true })) < 21)
-        throw new Error("Conversation storage requires explicit offline migration");
-      if (previous && Number(this.store.db.pragma("user_version", { simple: true })) < 22)
-        throw new Error("Coordination storage requires explicit offline migration");
-      if (previous && Number(this.store.db.pragma("user_version", { simple: true })) < 23)
-        throw new Error("Operations view storage requires explicit offline migration");
-      migrateInternalConversations(this.store);
-      migrateProjections(this.store);
-      migrateProjectionImports(this.store);
-      migrateHistoryIndexes(this.store);
-      migrateCoordinationRecovery(this.store);
-      migrateOperationsView(this.store);
-      migrateSystemOperations(this.store);
-      migrateModelUsage(this.store);
+      const c = config.mate;
       const slackApp = slackConfig ? slackApplication(this.store, slackConfig, c) : undefined;
       const messages = slackApp?.messages ?? localConversations(this.store, c);
       messages.writes.assertFormat();
@@ -395,11 +360,12 @@ export class Daemon {
           workerIdleMs: config.runtime.limits.workerIdleMs,
         },
       );
-      if (previous && beforeUsageSchema === 24) {
-        // The new resource policy changes the system prompt. Move existing sessions
-        // to that baseline without discarding their journal or pending delivery.
+      if (configurationChanged) {
+        // A changed configuration can change the baseline each Agent starts from.
+        // Fence any run left by the previous process, then move affected sessions to
+        // the new baseline without discarding their journal or pending delivery.
         this.store.recover();
-        this.recoveredDuringUpgrade = true;
+        this.recoveredDuringStartup = true;
         for (const agent of c.agents) {
           const baseline = buildBaseline(agent, operationDocumentation);
           const row = this.store.db
@@ -425,7 +391,7 @@ export class Daemon {
             agent.id,
             baseline.configVersion,
             [...baseline.messages, ...history.filter((message) => message.role !== "system")],
-            "model_usage_policy_upgrade",
+            "configuration_change",
           );
         }
       }
@@ -510,7 +476,7 @@ export class Daemon {
   }
   private async open(progress?: () => void): Promise<void> {
     if (this.stopping) throw new Error("Daemon stopped during startup");
-    if (!this.recoveredDuringUpgrade) this.store.recover();
+    if (!this.recoveredDuringStartup) this.store.recover();
     this.system.recover();
     this.adapter?.recover();
     this.supervisor.recoverSessions();

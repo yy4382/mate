@@ -261,8 +261,11 @@ CREATE INDEX task_activity_actor_kind ON task_events(COALESCE(json_extract(body,
 CREATE INDEX model_usage_agent ON model_usage(agent_id,run_id);
 CREATE INDEX model_usage_work ON model_usage(work_id,run_id);
 
--- Markers read by the running application, present from the first open.
+-- Markers read by the running application, present from the first open. Runtime and
+-- internal-DM activity is a going-forward record, so its owner view reports coverage
+-- from this database's creation instant rather than claiming earlier history.
 INSERT INTO runtime_meta(key,value) VALUES('conversation_format','mate.conversations.v2');
+INSERT INTO runtime_meta(key,value) VALUES('operations_view_since',CAST(strftime('%s','now') AS INTEGER)*1000);
 
 PRAGMA application_id = ${FORMAT_APPLICATION_ID};
 PRAGMA user_version = ${FORMAT_REVISION};

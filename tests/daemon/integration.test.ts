@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { Store } from "../../src/storage/store.js";
 import { configSchema } from "../../src/config.js";
 import { configFixture } from "../helpers/config.js";
-import { Messages, Output, migrateCurrentRuntime } from "../helpers/canonical-slack.js";
+import { Messages, Output } from "../helpers/canonical-slack.js";
 import { Collaboration } from "../../src/collaboration/service.js";
 import { Broker } from "../../src/policy/broker.js";
 import { Supervisor } from "../../src/runtime/supervisor.js";
@@ -65,7 +65,6 @@ function setup() {
   });
   const store = new Store(":memory:"),
     messages = new Messages(store, config);
-  migrateCurrentRuntime(store);
   const post = vi.fn(async () => ({
     ts: `101.${String(post.mock.calls.length).padStart(6, "0")}`,
   }));

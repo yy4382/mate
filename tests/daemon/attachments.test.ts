@@ -5,13 +5,13 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { Store } from "../../src/storage/store.js";
-import { Messages, Output, migrateCurrentRuntime } from "../helpers/canonical-slack.js";
+import { Messages, Output } from "../helpers/canonical-slack.js";
 import { Collaboration } from "../../src/collaboration/service.js";
 import { Broker } from "../../src/policy/broker.js";
 import { ToolRouter } from "../../src/runtime/tools.js";
 import { Attachments } from "../../src/slack/attachments.js";
 import { Artifacts } from "../../src/daemon/artifacts.js";
-import { WebSlackTransport } from "../fixtures/v16/src/slack/transport.js";
+import { CanonicalSlackTransport } from "../../src/slack/transport.js";
 import { configFixture } from "../helpers/config.js";
 const cleanup: (() => void)[] = [];
 afterEach(() => {
@@ -27,7 +27,6 @@ function setup() {
   });
   s.register("research", "v1", []);
   const m = new Messages(s, configFixture);
-  migrateCurrentRuntime(s);
   m.membership("research", "CTEST", true);
   const c = new Collaboration(
     s,
@@ -81,7 +80,7 @@ function setup() {
     },
   });
   m.normalize("AONE", "attachment");
-  const transport = new WebSlackTransport({ research: "synthetic-token" }),
+  const transport = new CanonicalSlackTransport(s, m.mapper, { research: "synthetic-token" }),
     client = transport.clients.get("research")!;
   client.files.info = vi.fn(async () => ({
     ok: true,

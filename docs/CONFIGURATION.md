@@ -6,7 +6,7 @@ The configuration separates Mate's Agent team from Slack accounts. `mate.agents`
 
 `adapters.local` names the people and rooms available through the local console. Only the host configuration can assign these identities; an Agent cannot claim to be a human by sending text. Mate can run without Slack; the `local` command reads one JSON request per input line from the host. See [本地开发入口](DEVELOPMENT.md).
 
-The Slack user-to-human mapping identifies which real person sent a message or approved a system-level command. Removing a person from `mate.ownerUserIds` removes their owner powers; it does not change the identity recorded on earlier messages. Configuration changes use the offline `migrate OLD_CONFIG NEW_CONFIG BACKUP` command while Mate is stopped. It checks the old configuration, makes a backup, and applies the new one together with the database change.
+The Slack user-to-human mapping identifies which real person sent a message or approved a system-level command. Removing a person from `mate.ownerUserIds` removes their owner powers; it does not change the identity recorded on earlier messages. Mate applies a changed configuration the next time it starts: stop Mate, replace the configuration file, and start it again. Agent identities and the data directory must stay the same; changing either is refused instead of being guessed. Sessions, deliveries, tasks, reminders and identity survive the change, and an Agent whose baseline changed starts a fresh context that keeps its journal.
 
 Provider and Slack token values stay in environment variables; configuration contains only secret reference names. `check` reports model availability and missing references for the complete team and configured installations.
 

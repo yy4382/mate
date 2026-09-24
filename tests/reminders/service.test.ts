@@ -1,7 +1,7 @@
 import { fixtureTarget, externalThread } from "../helpers/canonical-slack.js";
 import { afterEach, expect, it } from "vitest";
 import { Store } from "../../src/storage/store.js";
-import { Messages, Output, migrateCurrentRuntime } from "../helpers/canonical-slack.js";
+import { Messages, Output } from "../helpers/canonical-slack.js";
 import { Collaboration } from "../../src/collaboration/service.js";
 import { Broker } from "../../src/policy/broker.js";
 import { ToolRouter } from "../../src/runtime/tools.js";
@@ -30,7 +30,6 @@ function setup() {
     ],
   });
   const m = new Messages(s, config);
-  migrateCurrentRuntime(s);
   for (const actor of ["research", "writer"]) {
     s.register(actor, "v1", []);
     m.membership(actor, "CTEST", true);

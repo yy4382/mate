@@ -76,7 +76,6 @@ function requiredSecretReferences(config: DaemonConfig): string[] {
 export interface DoctorOptions {
   releaseRoot?: string;
   requireSecrets?: boolean;
-  legacyQuotaConfig?: boolean;
 }
 
 export async function runDoctor(
@@ -87,12 +86,6 @@ export async function runDoctor(
   if (!config.runtime.linuxUsers || !config.runtime.sharedRoot)
     throw new Error("Debian Linux-user deployment configuration required");
   const checks: DoctorCheck[] = [];
-  if (options.legacyQuotaConfig)
-    checks.push({
-      name: "legacy-model-quotas",
-      status: "info",
-      detail: "Legacy mate.budgets quotas are ignored; only runTimeoutMs is used.",
-    });
   const check = async (
     name: string,
     action: () => string | Promise<string>,

@@ -109,7 +109,7 @@ export async function backup(
   return backupDatabase(store.db, dataDir, destination, config, true);
 }
 
-/** Recovery snapshot which never constructs Store and therefore never runs a schema migration. Caller holds the daemon lock and has stopped/recovered the execution scope. */
+/** Recovery snapshot which never constructs Store, so checkpointing a stopped deployment cannot open its database for writing. Caller holds the daemon lock and has stopped/recovered the execution scope. */
 export async function backupDeploymentSnapshot(
   dataDir: string,
   destination: string,

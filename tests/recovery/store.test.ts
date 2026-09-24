@@ -86,7 +86,13 @@ it("disk reopen preserves session/context and marks incomplete effects unknown",
   db.input(run, { role: "user", content: "hello" });
   db.prepareAction(run, "action", { command: "test" });
   db.startAction(run, "action");
-  db.queueOutput("alice", "send", { channel: "A", text: "hello" });
+  db.db.prepare("INSERT INTO conversation_identities VALUES('A','channel','external')").run();
+  db.queueOutput(
+    "alice",
+    "send",
+    { format: "mate.effect.v2", target: { conversationId: "A" }, text: "hello" },
+    JSON.stringify({ conversationId: "A" }),
+  );
   db.transitionOutput("send", "pending", "sending");
   db.close();
   db = open(path);

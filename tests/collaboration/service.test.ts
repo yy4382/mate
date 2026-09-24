@@ -1,7 +1,7 @@
 import { fixtureTarget, externalThread } from "../helpers/canonical-slack.js";
 import { afterEach, expect, it } from "vitest";
 import { Store } from "../../src/storage/store.js";
-import { Messages, Output, migrateCurrentRuntime } from "../helpers/canonical-slack.js";
+import { Messages, Output } from "../helpers/canonical-slack.js";
 import { Collaboration } from "../../src/collaboration/service.js";
 import { configSchema } from "../../src/config.js";
 import { configFixture } from "../helpers/config.js";
@@ -26,7 +26,6 @@ function setup() {
   const db = new Store(":memory:");
   stores.push(db);
   const messages = new Messages(db, config);
-  migrateCurrentRuntime(db);
   for (const a of config.agents) {
     db.register(a.id, "v1", []);
     messages.membership(a.id, "CTEST", true);

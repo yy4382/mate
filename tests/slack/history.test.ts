@@ -1,7 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { WebClient } from "@slack/web-api";
 import { Store } from "../../src/storage/store.js";
-import { migrateCanonicalConversations } from "../../src/slack/canonical-migration.js";
 import { slackApplication } from "../../src/slack/application.js";
 import { CanonicalSlackTransport } from "../../src/slack/transport.js";
 import { SlackHistory } from "../../src/slack/history.js";
@@ -12,7 +11,6 @@ afterEach(() => stores.splice(0).forEach((store) => store.close()));
 function setup() {
   const store = new Store(":memory:");
   stores.push(store);
-  migrateCanonicalConversations(store, configFixture);
   store.register("research", "history", []);
   const { messages, mapper } = slackApplication(store, configFixture),
     conversationId = mapper.conversation("CTEST");

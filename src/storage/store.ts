@@ -1,24 +1,6 @@
 import Database from "better-sqlite3";
-import { chmodSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
-import {
-  schema,
-  messageSchema,
-  collaborationSchema,
-  policySchema,
-  runtimeSchema,
-  daemonSchema,
-  scopedExecutionSchema,
-  conversationSchema,
-  budgetSchema,
-  attentionSchema,
-  freshnessSchema,
-  reviewSeatSchema,
-  messageTaskSchema,
-  reminderSchema,
-  sessionLifecycleSchema,
-  referenceSchema,
-} from "./schema.js";
+import { openCurrentDatabase } from "./initialize.js";
 
 export function encode(value: unknown): string {
   const encoded = JSON.stringify(value);
@@ -74,54 +56,9 @@ export type OperationalFactInput =
 /** Only the trusted daemon owns this connection; never expose SQL over worker IPC. */
 export class Store {
   readonly db: Database.Database;
+  /** The one database entry: new files are created at the current format, existing files must already be it. */
   constructor(path: string) {
-    this.db = new Database(path);
-    this.db.pragma("foreign_keys = ON");
-    this.db.pragma("journal_mode = WAL");
-    this.db.pragma("synchronous = FULL");
-    this.db.pragma("busy_timeout = 5000");
-    const version = this.db.pragma("user_version", { simple: true });
-    if (Number(version) > 0 && Number(version) < 16 && path !== ":memory:") {
-      // SQLite creates a consistent backup before changing any legacy schema.
-      const backup = `${path}.pre-v${Number(version) < 8 ? 8 : Number(version) < 9 ? 9 : Number(version) < 10 ? 10 : Number(version) < 11 ? 11 : Number(version) < 12 ? 12 : Number(version) < 13 ? 13 : Number(version) < 14 ? 14 : Number(version) < 15 ? 15 : 16}-${randomUUID()}.sqlite`;
-      this.db.prepare("VACUUM INTO ?").run(backup);
-      chmodSync(backup, 0o600);
-    }
-    if (version === 0) this.atomic(() => this.db.exec(schema));
-    else if (
-      ![
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
-      ].includes(Number(version))
-    ) {
-      this.db.close();
-      throw new Error("Unsupported database version");
-    }
-    if (Number(version) < 2) this.atomic(() => this.db.exec(messageSchema));
-    if (Number(version) < 3) this.atomic(() => this.db.exec(collaborationSchema));
-    if (Number(version) < 4) this.atomic(() => this.db.exec(policySchema));
-    if (Number(version) < 5) this.atomic(() => this.db.exec(runtimeSchema));
-    if (Number(version) < 6) this.atomic(() => this.db.exec(daemonSchema));
-    if (Number(version) < 7) this.atomic(() => this.db.exec(scopedExecutionSchema));
-    if (Number(version) < 8) this.atomic(() => this.db.exec(conversationSchema));
-    if (Number(version) < 9) this.atomic(() => this.db.exec(budgetSchema));
-    if (Number(version) < 10) this.atomic(() => this.db.exec(attentionSchema));
-    if (Number(version) < 11) {
-      this.db.pragma("foreign_keys = OFF");
-      try {
-        this.atomic(() => {
-          this.db.exec(freshnessSchema);
-          if ((this.db.pragma("foreign_key_check") as unknown[]).length)
-            throw new Error("Freshness migration foreign key failure");
-        });
-      } finally {
-        this.db.pragma("foreign_keys = ON");
-      }
-    }
-    if (Number(version) < 12) this.atomic(() => this.db.exec(reviewSeatSchema));
-    if (Number(version) < 13) this.atomic(() => this.db.exec(messageTaskSchema));
-    if (Number(version) < 14) this.atomic(() => this.db.exec(reminderSchema));
-    if (Number(version) < 15) this.atomic(() => this.db.exec(sessionLifecycleSchema));
-    if (Number(version) < 16) this.atomic(() => this.db.exec(referenceSchema));
+    this.db = openCurrentDatabase(path);
   }
   atomic<T>(fn: () => T): T {
     return this.db.transaction(fn).immediate();
@@ -139,7 +76,6 @@ export class Store {
   }
   /** Narrow owner-facing facts only. Callers must already own the business transaction. */
   operationalFact(input: OperationalFactInput): void {
-    if (Number(this.db.pragma("user_version", { simple: true })) < 23) return;
     if (!this.db.inTransaction) throw new Error("Operational fact requires transaction");
     const counts: Record<string, number> = "counts" in input ? input.counts : {};
     if (Object.values(counts).some((value) => !Number.isSafeInteger(value) || value < 0))
@@ -483,18 +419,11 @@ export class Store {
             .run(token.id, id);
         return this.action(id)!;
       }
-      if (Number(this.db.pragma("user_version", { simple: true })) >= 23)
-        this.db
-          .prepare(
-            "INSERT INTO actions(id,agent_id,run_id,request_hash,request,state,created_at) VALUES(?,?,?,?,?,'prepared',?)",
-          )
-          .run(id, token.agentId, token.id, hash(body), body, Date.now());
-      else
-        this.db
-          .prepare(
-            "INSERT INTO actions(id,agent_id,run_id,request_hash,request,state) VALUES(?,?,?,?,?,'prepared')",
-          )
-          .run(id, token.agentId, token.id, hash(body), body);
+      this.db
+        .prepare(
+          "INSERT INTO actions(id,agent_id,run_id,request_hash,request,state,created_at) VALUES(?,?,?,?,?,'prepared',?)",
+        )
+        .run(id, token.agentId, token.id, hash(body), body, Date.now());
       return this.action(id)!;
     });
   }
@@ -541,26 +470,12 @@ export class Store {
           throw new Error("Output identity conflict");
         return old;
       }
-      if (Number(this.db.pragma("user_version", { simple: true })) >= 17) {
-        if (!routingTarget) throw new Error("Canonical output routing required");
-        if (Number(this.db.pragma("user_version", { simple: true })) >= 23)
-          this.db
-            .prepare(
-              "INSERT INTO outbox(id,agent_id,request_hash,request,state,target,created_at) VALUES(?,?,?,?,'pending',?,?)",
-            )
-            .run(id, agentId, hash(body), body, routingTarget, Date.now());
-        else
-          this.db
-            .prepare(
-              "INSERT INTO outbox(id,agent_id,request_hash,request,state,target) VALUES(?,?,?,?,'pending',?)",
-            )
-            .run(id, agentId, hash(body), body, routingTarget);
-      } else
-        this.db
-          .prepare(
-            "INSERT INTO outbox(id,agent_id,request_hash,request,state) VALUES(?,?,?,?,'pending')",
-          )
-          .run(id, agentId, hash(body), body);
+      if (!routingTarget) throw new Error("Canonical output routing required");
+      this.db
+        .prepare(
+          "INSERT INTO outbox(id,agent_id,request_hash,request,state,target,created_at) VALUES(?,?,?,?,'pending',?,?)",
+        )
+        .run(id, agentId, hash(body), body, routingTarget, Date.now());
       return this.output(id)!;
     });
   }

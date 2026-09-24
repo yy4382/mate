@@ -1,12 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { Store } from "../../src/storage/store.js";
-import {
-  Messages,
-  Output,
-  migrateCurrentRuntime,
-  fixtureTarget,
-  externalThread,
-} from "../helpers/canonical-slack.js";
+import { Messages, Output, fixtureTarget, externalThread } from "../helpers/canonical-slack.js";
 import { configFixture } from "../helpers/config.js";
 import { configSchema } from "../../src/config.js";
 import { Collaboration } from "../../src/collaboration/service.js";
@@ -45,7 +39,6 @@ function setup() {
   const store = new Store(":memory:");
   stores.push(store);
   const messages = new Messages(store, config);
-  migrateCurrentRuntime(store);
   for (const actor of config.agents.map((agent) => agent.id)) {
     store.register(actor, "v1", []);
     messages.membership(actor, "CTEST", true);

@@ -3,12 +3,7 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Store } from "../../src/storage/store.js";
-import {
-  Messages,
-  Output,
-  fixtureTarget,
-  migrateCurrentRuntime,
-} from "../helpers/canonical-slack.js";
+import { Messages, Output, fixtureTarget } from "../helpers/canonical-slack.js";
 import { Collaboration } from "../../src/collaboration/service.js";
 import { Broker } from "../../src/policy/broker.js";
 import { ToolRouter } from "../../src/runtime/tools.js";
@@ -31,7 +26,6 @@ function harness() {
   });
   store.register("research", "v1", []);
   const messages = new Messages(store, configFixture);
-  migrateCurrentRuntime(store);
   messages.membership("research", "CTEST", true);
   const collaboration = new Collaboration(
     store,

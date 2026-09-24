@@ -4,7 +4,7 @@ import type { DaemonConfig } from "../daemon/config.js";
 import { readLinuxUpgradeJournal } from "./linux-installer.js";
 import { managedLayout } from "./systemd.js";
 
-export type LinuxOperation = "start" | "offline-probe" | "backup" | "restore" | "migrate";
+export type LinuxOperation = "start" | "offline-probe" | "backup" | "restore";
 
 export function assertLinuxOperationAllowed(operation: LinuxOperation, config: DaemonConfig): void {
   if (!config.runtime.linuxUsers) return;

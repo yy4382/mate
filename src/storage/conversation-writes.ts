@@ -40,13 +40,8 @@ export class CanonicalWrites {
     const marker = this.store.db
       .prepare("SELECT value FROM runtime_meta WHERE key='conversation_format'")
       .get() as { value: string } | undefined;
-    if (
-      marker?.value !== "mate.conversations.v2" ||
-      ![17, 18, 19, 20, 21, 22, 23, 24, 25].includes(
-        Number(this.store.db.pragma("user_version", { simple: true })),
-      )
-    )
-      throw new Error("Canonical conversation migration required");
+    if (marker?.value !== "mate.conversations.v2")
+      throw new Error("Unsupported conversation data format");
   }
   private target(input: unknown): ConversationTarget {
     this.assertFormat();

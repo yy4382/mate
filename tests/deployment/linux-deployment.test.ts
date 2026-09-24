@@ -20,7 +20,7 @@ const config = () =>
     version: 2,
     mate: {
       ownerUserIds: ["owner"],
-      budgets: { maxRuns: 10, maxTokens: 10000, maxCostUsd: 2, runTimeoutMs: 60000 },
+      runTimeoutMs: 60000,
       agents: [
         {
           id: "alice",

@@ -1,13 +1,22 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { existsSync, mkdtempSync, rmSync, realpathSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
+import Database from "better-sqlite3";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { PassThrough } from "node:stream";
 import { Daemon } from "../../src/daemon/app.js";
 import { LocalConsole } from "../../src/local/console.js";
-import { migrateConfiguration } from "../../src/daemon/migrate.js";
 import { acquireLock } from "../../src/daemon/lock.js";
+import { storedConfiguration } from "../../src/daemon/config.js";
 import { TeamDirectory } from "../../src/conversations/team-directory.js";
 import { daemonFixture } from "../helpers/daemon-config.js";
 const clean: (() => Promise<unknown> | void)[] = [];
@@ -153,7 +162,7 @@ it("reports the local development home even without a shared Linux work root", a
     "sharedRoot",
   );
 });
-it("keeps room revocations on restart and unchanged migration, applies only explicit membership deltas", async () => {
+it("keeps room revocations across restart and configuration change, applying only explicit membership deltas", async () => {
   const { c, root } = config(),
     d = await daemon(c);
   d.local!.receive("owner", "input", { conversationId: "local-room" }, "durable");
@@ -173,7 +182,6 @@ it("keeps room revocations on restart and unchanged migration, applies only expl
   const next = structuredClone(c);
   next.mate.agents.push({ ...next.mate.agents[0]!, id: "peer" });
   next.adapters.local!.rooms[0]!.agents.push("peer");
-  await migrateConfiguration(c, next, join(root, "backup"));
   const migrated = await daemon(next);
   expect(migrated.collaboration.messages.access("research", "local-room")).toBe(false);
   expect(migrated.collaboration.messages.access("peer", "local-room")).toBe(true);
@@ -182,6 +190,114 @@ it("keeps room revocations on restart and unchanged migration, applies only expl
   );
   expect(migrated.local!.read("owner", { conversationId: "local-room" }).messages[0]!.text).toBe(
     "durable",
+  );
+});
+it("refuses an older database through the daemon entry without changing the file", async () => {
+  credentials();
+  const { c } = config(),
+    state = join(c.runtime.dataDir, "state");
+  mkdirSync(state, { recursive: true });
+  const path = join(state, "mate.sqlite"),
+    legacy = new Database(path);
+  legacy.exec(
+    "CREATE TABLE agents(id TEXT PRIMARY KEY, session_id TEXT NOT NULL UNIQUE); INSERT INTO agents VALUES('research','s'); PRAGMA user_version=16;",
+  );
+  legacy.close();
+  const before = readFileSync(path);
+  await expect(Daemon.create(c, { info: () => {}, error: () => {} })).rejects.toThrow(
+    /is not a Mate first-release database|uses Mate schema revision/,
+  );
+  expect(readFileSync(path)).toEqual(before);
+});
+it("keeps identity, session, deliveries, tasks and reminders across a restart in the same format", async () => {
+  credentials();
+  const { c } = config(),
+    d = await daemon(c),
+    target = { conversationId: "local-room" },
+    agent = d.collaboration.agents.get("research"),
+    session = (
+      d.store.db.prepare("SELECT session_id FROM agents WHERE id='research'").get() as {
+        session_id: string;
+      }
+    ).session_id,
+    work = d.collaboration.createWork("keep-work", target),
+    delivery = d.collaboration.enqueue("research", work, "pending work", { text: "keep" }),
+    task = d.collaboration.createTask("research", work, target, "keep this task"),
+    reminder = d.collaboration.reminders.create("research", work, {
+      target,
+      content: "keep this reminder",
+      nextAt: Date.now() + 600000,
+      timezone: "UTC",
+    });
+  await d.close();
+  const reopened = await daemon(c);
+  expect(reopened.collaboration.agents.get("research")).toEqual(agent);
+  expect(
+    reopened.store.db.prepare("SELECT session_id FROM agents WHERE id='research'").get(),
+  ).toEqual({ session_id: session });
+  expect(
+    reopened.store.db.prepare("SELECT status FROM deliveries WHERE id=?").get(delivery),
+  ).toEqual({ status: "pending" });
+  expect(
+    reopened.store.db
+      .prepare("SELECT work_id FROM delivery_work WHERE delivery_id=?")
+      .get(delivery),
+  ).toEqual({ work_id: work });
+  expect(reopened.store.db.prepare("SELECT title,status FROM tasks WHERE id=?").get(task)).toEqual({
+    title: "keep this task",
+    status: "todo",
+  });
+  expect(reopened.collaboration.reminders.list("research").map((row) => row.id)).toEqual([
+    reminder.id,
+  ]);
+});
+it("applies a changed configuration in place and re-baselines only the changed Agent", async () => {
+  credentials();
+  const { c } = config(),
+    d = await daemon(c),
+    before = (
+      d.store.db.prepare("SELECT session_id FROM agents WHERE id='research'").get() as {
+        session_id: string;
+      }
+    ).session_id;
+  d.local!.receive("owner", "kept", { conversationId: "local-room" }, "kept history");
+  const work = d.collaboration.createWork("config-change", { conversationId: "local-room" });
+  d.collaboration.enqueue("research", work, "start", {});
+  const run = d.store.beginRun("research")!;
+  d.store.input(run, { role: "user", content: "SESSION_JOURNAL", timestamp: 0 });
+  d.store.finish(run);
+  await d.close();
+  const next = structuredClone(c);
+  next.mate.agents[0]!.role = "An updated role";
+  const changed = await daemon(next),
+    after = (
+      changed.store.db.prepare("SELECT session_id FROM agents WHERE id='research'").get() as {
+        session_id: string;
+      }
+    ).session_id;
+  expect(changed.collaboration.agents.get("research").role).toBe("An updated role");
+  expect(storedConfiguration(changed.store)).toEqual(next);
+  expect(after).not.toBe(before);
+  expect(JSON.stringify(changed.store.context(after))).toContain("SESSION_JOURNAL");
+  expect(changed.local!.read("owner", { conversationId: "local-room" }).messages[0]!.text).toBe(
+    "kept history",
+  );
+  await changed.close();
+  const unchanged = await daemon(next);
+  expect(
+    unchanged.store.db.prepare("SELECT session_id FROM agents WHERE id='research'").get(),
+  ).toEqual({ session_id: after });
+});
+it("refuses a configuration that removes an existing Agent identity", async () => {
+  credentials();
+  const { c } = config();
+  c.mate.agents.push({ ...c.mate.agents[0]!, id: "peer", name: "Peer" });
+  const d = await daemon(c);
+  await d.close();
+  const next = structuredClone(c);
+  next.mate.agents = [next.mate.agents[0]!];
+  await expect(Daemon.create(next, { info: () => {}, error: () => {} })).rejects.toThrow(
+    "cannot be removed or rebound",
   );
 });
 it("rejects unbound external output before an intent and returns internal spaces when discovery fails", async () => {
@@ -308,19 +424,17 @@ it("JSONL console reports request errors and the real CLI starts, reads and cont
   expect(replies).toHaveLength(3);
   expect(replies[2].result.messages[0].text).toBe("from real CLI");
 });
-it("removing and explicitly re-adding a local room preserves history and requires migration to grant membership again", async () => {
+it("removing and explicitly re-adding a local room preserves history and requires an explicit membership delta again", async () => {
   const { c, root } = config(),
     d = await daemon(c);
   d.local!.receive("owner", "kept", { conversationId: "local-room" }, "kept history");
   await d.close();
   const removed = structuredClone(c);
   removed.adapters.local!.rooms = [];
-  await migrateConfiguration(c, removed, join(root, "removed-backup"));
   const r = await daemon(removed);
   expect(r.local!.rooms("owner")).toEqual([]);
   expect(r.collaboration.messages.access("research", "local-room")).toBe(false);
   await r.close();
-  await migrateConfiguration(removed, c, join(root, "added-backup"));
   const added = await daemon(c);
   expect(added.local!.read("owner", { conversationId: "local-room" }).messages[0]!.text).toBe(
     "kept history",

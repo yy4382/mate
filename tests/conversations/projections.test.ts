@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { afterEach, expect, it, vi } from "vitest";
 import { Store } from "../../src/storage/store.js";
 import { localApplication } from "../../src/local/application.js";
-import { migrateProjections } from "../../src/storage/projection-schema.js";
 import {
   Projections,
   type ProjectionTransport,
@@ -28,7 +27,6 @@ function setup() {
     runTimeoutMs: 10000,
   };
   const app = localApplication(s, settings);
-  migrateProjections(s);
   for (const a of settings.agents) s.register(a.id, "test", []);
   const target = app.input.createRoom("local-room", ["alice", "bob"], ["owner"]);
   let n = 0;

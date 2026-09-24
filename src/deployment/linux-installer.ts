@@ -379,7 +379,7 @@ export async function upgradeLinuxDeployment(
   );
   if (!sameConfiguration(installed, config))
     throw new Error(
-      "Code upgrade requires the installed configuration; change configuration through offline migration first",
+      "Upgrade uses the installed configuration: stop Mate, write the new configuration to the managed configuration file, start it once so Mate applies the change, then upgrade",
     );
   if (
     plan.environmentSource &&

@@ -1,8 +1,6 @@
 import { slackTextMatches } from "../../src/slack/text.js";
 import { afterEach, expect, it, vi } from "vitest";
 import { Store, encode } from "../../src/storage/store.js";
-import { Messages as LegacyMessages } from "../fixtures/v16/src/slack/messages.js";
-import { migrateCanonicalConversations } from "../../src/slack/canonical-migration.js";
 import { slackApplication } from "../../src/slack/application.js";
 import { CanonicalOutput } from "../../src/conversations/output.js";
 import { CanonicalAttention } from "../../src/conversations/attention.js";
@@ -12,35 +10,27 @@ import { CanonicalSlackNormalizer } from "../../src/slack/normalize.js";
 import { configFixture } from "../helpers/config.js";
 const stores: Store[] = [];
 afterEach(() => stores.splice(0).forEach((s) => s.close()));
-function setup(
-  unknownTarget: { channel: string; thread?: string } = { channel: "CTEST", thread: "1.000001" },
-) {
+function setup(unknownThread = true) {
   const s = new Store(":memory:");
   stores.push(s);
   s.register("research", "test", []);
-  const old = new LegacyMessages(s, configFixture);
-  old.membership("research", "CTEST", true);
-  for (const ts of ["1.000001", "2.000001"])
-    old.record(
-      {
-        team: "TTEST",
-        channel: "CTEST",
-        ts,
-        thread: ts,
-        revision: ts,
-        text: "root",
-        user: "UOWNER",
-        deleted: false,
-      },
-      ["research"],
-    );
-  s.queueOutput("research", "old", { target: unknownTarget, text: "legacy reply" });
+  const app = slackApplication(s, configFixture),
+    conversationId = app.mapper.conversation("CTEST"),
+    roots = ["1.000001", "2.000001"].map((ts) => app.mapper.messageId("CTEST", ts));
+  for (const root of roots) app.messages.references.createMessage(conversationId, root, root);
+  app.messages.membership("research", conversationId, true);
+  const unknownTarget = {
+    conversationId,
+    ...(unknownThread ? { threadId: roots[0]! } : {}),
+  };
+  app.messages.writes.queueOutput("research", "old", {
+    target: unknownTarget,
+    text: "uncertain reply",
+  });
   s.transitionOutput("old", "pending", "sending");
   s.transitionOutput("old", "sending", "unknown", { reason: "uncertain" });
   const original = s.output("old")!;
-  migrateCanonicalConversations(s, configFixture);
-  const app = slackApplication(s, configFixture),
-    transport = new CanonicalSlackTransport(s, app.mapper, {}),
+  const transport = new CanonicalSlackTransport(s, app.mapper, {}),
     post = vi.fn(async () => ({ ts: "10.000001" }));
   transport.clients.set("research", { chat: { postMessage: post } } as any);
   const output = new CanonicalOutput(app.messages, transport),
@@ -50,7 +40,7 @@ function setup(
   const run = s.beginRun("research")!;
   s.input(run, {});
   const target = (ts?: string) => ({
-    conversationId: app.mapper.conversation("CTEST"),
+    conversationId,
     ...(ts ? { threadId: app.mapper.messageId("CTEST", ts) } : {}),
   });
   const queue = (id: string, ts?: string) => {
@@ -60,7 +50,7 @@ function setup(
   };
   return { s, ...app, transport, post, output, gate, run, target, queue, original };
 }
-it("old unknown and new canonical sends share precise blocking scopes without mirrored indexes", async () => {
+it("an unknown send and new canonical sends share precise blocking scopes without a mirrored index", async () => {
   const f = setup();
   expect(
     f.s.db.prepare("SELECT 1 FROM sqlite_master WHERE name='canonical_targets'").get(),
@@ -75,13 +65,13 @@ it("old unknown and new canonical sends share precise blocking scopes without mi
   expect(f.post).toHaveBeenCalledOnce();
   expect(f.s.output("old")).toEqual(f.original);
 });
-it("an unknown top-level legacy send blocks replies in every thread", () => {
-  const f = setup({ channel: "CTEST" });
+it("an unknown top-level send blocks replies in every thread", () => {
+  const f = setup(false);
   f.queue("one", "1.000001");
   f.queue("two", "2.000001");
   expect(f.output.ready()).toEqual([]);
 });
-it("authenticated legacy reconciliation preserves old wire and new dispatch carries its stored hash", async () => {
+it("authenticated reconciliation preserves frozen wire and new dispatch carries its stored hash", async () => {
   const f = setup(),
     normalizer = new CanonicalSlackNormalizer(f.messages, f.mapper, f.output);
   f.s.ingest("AONE", "echo", {
@@ -92,7 +82,7 @@ it("authenticated legacy reconciliation preserves old wire and new dispatch carr
       thread_ts: "1.000001",
       ts: "5.000001",
       user: "UONE",
-      text: "legacy reply",
+      text: "uncertain reply",
       metadata: {
         event_type: "mate_outbox",
         event_payload: { id: "old", request_hash: f.original.request_hash },
@@ -118,7 +108,7 @@ it("authenticated legacy reconciliation preserves old wire and new dispatch carr
     }),
   );
 });
-it("normal history envelopes apply edited.ts and ignore older replay after restart migration", () => {
+it("normal history envelopes apply edited.ts and ignore an older replay", () => {
   const f = setup(),
     normalizer = new CanonicalSlackNormalizer(f.messages, f.mapper, f.output);
   const ingest = (id: string, event: unknown) => {
@@ -133,7 +123,6 @@ it("normal history envelopes apply edited.ts and ignore older replay after resta
     text: "offline edit",
     user: "UOWNER",
   });
-  migrateCanonicalConversations(f.s, configFixture);
   ingest("older", {
     type: "message",
     channel: "CTEST",
@@ -145,7 +134,7 @@ it("normal history envelopes apply edited.ts and ignore older replay after resta
     { text: "offline edit", revision: "3000001" },
   ]);
 });
-it("routing is required and immutable, while legacy wire bytes stay unchanged", () => {
+it("routing is required and immutable, while frozen wire bytes stay unchanged", () => {
   const f = setup();
   expect(() =>
     f.s.queueOutput("research", "unrouted", { target: f.target(), text: "body" }),

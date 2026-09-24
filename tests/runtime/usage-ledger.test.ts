@@ -1,13 +1,11 @@
 import { expect, it } from "vitest";
 import { Store } from "../../src/storage/store.js";
-import { modelUsageSchema } from "../../src/storage/schema.js";
 import { UsageLedger } from "../../src/usage/ledger.js";
 import { answer } from "../helpers/pi.js";
 
 it("records each provider call before execution and retains unknown usage after interruption", () => {
   const store = new Store(":memory:");
   try {
-    store.db.exec(modelUsageSchema);
     store.register("research", "v1", []);
     store.enqueue("research", "first", {});
     const run = store.beginRun("research")!;
@@ -38,7 +36,6 @@ it("records each provider call before execution and retains unknown usage after 
 it("rejects duplicate call identities and responses from a different model", () => {
   const store = new Store(":memory:");
   try {
-    store.db.exec(modelUsageSchema);
     store.register("research", "v1", []);
     store.enqueue("research", "first", {});
     const run = store.beginRun("research")!;

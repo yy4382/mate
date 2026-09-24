@@ -2,7 +2,7 @@ import { fixtureTarget, externalThread } from "../helpers/canonical-slack.js";
 import { afterEach, expect, it, vi } from "vitest";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { Store } from "../../src/storage/store.js";
-import { Messages, Output, migrateCurrentRuntime } from "../helpers/canonical-slack.js";
+import { Messages, Output } from "../helpers/canonical-slack.js";
 import { Collaboration } from "../../src/collaboration/service.js";
 import { CanonicalFreshnessGate as FreshnessGate } from "../../src/conversations/freshness.js";
 import { configFixture } from "../helpers/config.js";
@@ -14,7 +14,6 @@ function setup() {
   stores.push(s);
   s.register("research", "v1", []);
   const m = new Messages(s, configFixture);
-  migrateCurrentRuntime(s);
   m.membership("research", "CTEST", true);
   let now = 1000;
   const post = vi.fn(async () => ({

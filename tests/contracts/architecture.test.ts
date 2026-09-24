@@ -69,3 +69,16 @@ it("recognizes type-only and indirect import syntax in boundary checks", () => {
     "../adapters/e.js",
   ]);
 });
+
+it("opens the application database only through the single storage entry", () => {
+  // Inspection paths that must not create or write a database keep their own read-only
+  // connection: a checkpoint of a stopped deployment, and owner status/logs.
+  const readersOutsideTheEntry = new Set(["daemon/backup.ts", "deployment/diagnostics.ts"]);
+  const offenders: string[] = [];
+  for (const path of sourceFiles(sourceRoot)) {
+    const name = relative(sourceRoot, path);
+    if (name === "storage/initialize.ts" || readersOutsideTheEntry.has(name)) continue;
+    if (/new Database\s*\(/.test(readFileSync(path, "utf8"))) offenders.push(name);
+  }
+  expect(offenders).toEqual([]);
+});

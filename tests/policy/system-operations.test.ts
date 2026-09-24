@@ -2,12 +2,7 @@ import { expect, it, vi } from "vitest";
 import { Store } from "../../src/storage/store.js";
 import { configSchema } from "../../src/config.js";
 import { configFixture } from "../helpers/config.js";
-import {
-  Messages,
-  Output,
-  migrateCurrentRuntime,
-  fixtureTarget,
-} from "../helpers/canonical-slack.js";
+import { Messages, Output, fixtureTarget } from "../helpers/canonical-slack.js";
 import { Collaboration } from "../../src/collaboration/service.js";
 import { SystemOperations } from "../../src/policy/system-operations.js";
 
@@ -15,7 +10,6 @@ function setup() {
   const store = new Store(":memory:"),
     config = configSchema.parse(configFixture),
     messages = new Messages(store, config);
-  migrateCurrentRuntime(store);
   const collaboration = new Collaboration(
     store,
     messages,

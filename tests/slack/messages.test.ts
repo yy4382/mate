@@ -5,7 +5,7 @@ import { configFixture } from "../helpers/config.js";
 import { configSchema } from "../../src/config.js";
 import { DurableReceiver } from "../../src/slack/receiver.js";
 import { Messages, Output } from "../helpers/canonical-slack.js";
-import type { NormalMessage } from "../fixtures/v16/src/slack/messages.js";
+import type { PlatformMessage } from "../helpers/canonical-slack.js";
 const stores: Store[] = [];
 function setup() {
   const config = configSchema.parse({
@@ -29,7 +29,7 @@ function setup() {
   config.agents.forEach((a) => db.register(a.id, "v1", []));
   const messages = new Messages(db, config);
   config.agents.forEach((a) => messages.membership(a.id, "CTEST", true));
-  const msg: NormalMessage = {
+  const msg: PlatformMessage = {
     team: "TTEST",
     channel: "CTEST",
     ts: "100.000001",
@@ -71,15 +71,18 @@ it("commits before ack, retries dedupe, database failure does not ack", async ()
   ).rejects.toThrow();
   expect(ack).toHaveBeenCalledTimes(2);
 });
-it("multi-app observations deliver once per visible Agent, old revision cannot resurrect deletion", () => {
+it("multi-app observations deliver once per visible Agent and a stale replay cannot resurrect a deletion", () => {
   const { db, messages, msg } = setup();
   messages.record(msg, ["research"]);
   messages.record(msg, ["research", "engineer"]);
   expect(db.db.prepare("SELECT count(*) n FROM deliveries").get()).toEqual({ n: 2 });
   messages.record({ ...msg, revision: "101.000001", text: "edited" }, ["research"]);
   messages.record({ ...msg, revision: "102.000001", deleted: true }, ["research"]);
+  const canonical = db.db.prepare("SELECT revision,deleted FROM messages").get();
   messages.record(msg, ["engineer"]);
-  expect(messages.search("engineer", "synthetic")).toEqual([]);
+  expect(messages.search("research", "synthetic")).toEqual([]);
+  expect(messages.read("research", { conversationId: "CTEST" })).toEqual([]);
+  expect(db.db.prepare("SELECT revision,deleted FROM messages").get()).toEqual(canonical);
 });
 it("normalizes edits/deletes and isolated DM without app_mention", () => {
   const { db, messages } = setup();

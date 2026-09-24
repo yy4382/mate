@@ -1,27 +1,11 @@
 import { afterEach, expect, it } from "vitest";
 import { Store } from "../../src/storage/store.js";
-import {
-  initializeCanonicalStore,
-  migrateInternalConversations,
-} from "../../src/storage/internal-schema.js";
-import { migrateProjections } from "../../src/storage/projection-schema.js";
-import { migrateProjectionImports } from "../../src/storage/projection-import-schema.js";
-import { migrateHistoryIndexes } from "../../src/storage/history-schema.js";
-import { encode } from "../../src/storage/store.js";
 
 const stores: Store[] = [];
 afterEach(() => stores.splice(0).forEach((store) => store.close()));
-it("adds explicit conversation and thread history indexes as an idempotent v21 migration", () => {
+it("bounds canonical conversation and thread history with dedicated current-format indexes", () => {
   const store = new Store(":memory:");
   stores.push(store);
-  initializeCanonicalStore(store);
-  migrateInternalConversations(store);
-  migrateProjections(store);
-  migrateProjectionImports(store);
-  expect(store.db.pragma("user_version", { simple: true })).toBe(20);
-  migrateHistoryIndexes(store);
-  migrateHistoryIndexes(store);
-  expect(store.db.pragma("user_version", { simple: true })).toBe(21);
   expect(
     store.db
       .prepare(
@@ -102,62 +86,4 @@ it("adds explicit conversation and thread history indexes as an idempotent v21 m
       ...snapshotSearch,
     ].some((row) => row.detail.includes("SCAN m") || row.detail.includes("USE TEMP B-TREE")),
   ).toBe(false);
-});
-
-it("backfills the strongest actor-specific revision evidence without inventing missing observations", () => {
-  const store = new Store(":memory:");
-  stores.push(store);
-  initializeCanonicalStore(store);
-  migrateInternalConversations(store);
-  migrateProjections(store);
-  migrateProjectionImports(store);
-  store.register("observed", "v1", []);
-  store.register("legacy-visible", "v1", []);
-  store.db
-    .prepare("INSERT INTO conversation_identities VALUES(?,?,?)")
-    .run("room", "channel", "external");
-  store.db
-    .prepare("INSERT INTO message_identities VALUES(?,?,?)")
-    .run("message", "room", "message");
-  const body = (revision: string) =>
-    encode({
-      format: "mate.message.v2",
-      message: {
-        id: "message",
-        conversationId: "room",
-        rootId: "message",
-        author: { kind: "human", id: "owner" },
-        origin: "participant",
-        mentions: [],
-        text: `revision ${revision}`,
-        deleted: false,
-        order: "1",
-        revision,
-        attachments: [],
-      },
-    });
-  store.db
-    .prepare(
-      "INSERT INTO messages(key,channel,ts,thread,revision,body,deleted) VALUES(?,?,?,?,?,?,?)",
-    )
-    .run("message", "room", "1", "message", "2", body("2"), 0);
-  store.db.prepare("INSERT INTO message_revisions VALUES(?,?,?)").run("message", "1", body("1"));
-  store.db.prepare("INSERT INTO message_revisions VALUES(?,?,?)").run("message", "2", body("2"));
-  store.db.prepare("INSERT INTO message_visibility VALUES(?,?)").run("observed", "message");
-  store.db.prepare("INSERT INTO message_visibility VALUES(?,?)").run("legacy-visible", "message");
-  store.db
-    .prepare("INSERT INTO message_observations VALUES(?,?,?)")
-    .run("observed", "message", "1");
-  migrateHistoryIndexes(store);
-  expect(
-    store.db
-      .prepare("SELECT agent_id,revision,body FROM message_visibility ORDER BY agent_id")
-      .all(),
-  ).toEqual([
-    { agent_id: "legacy-visible", revision: "2", body: body("2") },
-    { agent_id: "observed", revision: "1", body: body("1") },
-  ]);
-  expect(
-    store.db.prepare("SELECT body FROM audit WHERE kind='history_visibility_backfill'").get(),
-  ).toBeDefined();
 });

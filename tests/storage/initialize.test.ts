@@ -371,7 +371,7 @@ it("keeps existing data when the same format is opened again", () => {
       actions: 1,
       system_requests: 1,
       operational_facts: 1,
-      runtime_meta: 2,
+      runtime_meta: 3,
     }))
       expect([
         table,
@@ -392,6 +392,17 @@ it("keeps existing data when the same format is opened again", () => {
     expect(
       reopened.prepare("SELECT value FROM runtime_meta WHERE key='test_marker'").get(),
     ).toEqual({ value: "kept" });
+    expect(
+      Number(
+        (
+          reopened
+            .prepare("SELECT value FROM runtime_meta WHERE key='operations_view_since'")
+            .get() as {
+            value: string;
+          }
+        ).value,
+      ),
+    ).toBeGreaterThan(0);
     // A reopened file is the same file: no backup copy, no second database, no wipe.
     reopened.close();
     expect(directoryState(directory)).toEqual(seeded);

@@ -17,15 +17,6 @@ export const agentDefinitionSchema = z
       .strict(),
   })
   .strict();
-/** Read only while upgrading pre-release configurations that carried quotas. */
-export const legacyBudgetSettingsSchema = z
-  .object({
-    maxRuns: z.number().int().positive(),
-    maxTokens: z.number().int().positive(),
-    maxCostUsd: z.number().positive(),
-    runTimeoutMs: z.number().int().positive(),
-  })
-  .strict();
 export type AgentDefinition = z.infer<typeof agentDefinitionSchema>;
 export interface TeamSettings {
   agents: readonly AgentDefinition[];

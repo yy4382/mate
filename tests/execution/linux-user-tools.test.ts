@@ -4,12 +4,7 @@ import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import { configSchema } from "../../src/config.js";
 import { Store } from "../../src/storage/store.js";
-import {
-  Messages,
-  Output,
-  migrateCurrentRuntime,
-  fixtureTarget,
-} from "../helpers/canonical-slack.js";
+import { Messages, Output, fixtureTarget } from "../helpers/canonical-slack.js";
 import { Collaboration } from "../../src/collaboration/service.js";
 import { Broker } from "../../src/policy/broker.js";
 import { ToolRouter } from "../../src/runtime/tools.js";
@@ -55,7 +50,6 @@ it("runs two Agents through direct file/exec calls and tools.call with stable ho
   const store = new Store(":memory:");
   cleanup.push(() => store.close());
   const messages = new Messages(store, config);
-  migrateCurrentRuntime(store);
   const collaboration = new Collaboration(
     store,
     messages,

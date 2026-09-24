@@ -244,7 +244,7 @@ it("reads persisted SQLite with OperationsView and leaves data/schema unchanged"
     version: 2,
     mate: {
       ownerUserIds: ["owner"],
-      budgets: { maxRuns: 10, maxTokens: 1000, maxCostUsd: 1, runTimeoutMs: 1000 },
+      runTimeoutMs: 1000,
       agents: [
         {
           id: "alice",

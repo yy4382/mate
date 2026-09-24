@@ -1,18 +1,12 @@
 import { afterEach, expect, it } from "vitest";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { Store } from "../../src/storage/store.js";
-import { migrateCanonicalConversations } from "../../src/slack/canonical-migration.js";
 import { slackApplication } from "../../src/slack/application.js";
 import { ConversationHistory, type HistorySource } from "../../src/conversations/history.js";
 import { CanonicalOutput } from "../../src/conversations/output.js";
 import { Collaboration } from "../../src/collaboration/service.js";
 import type { MessageDTO } from "../../src/domain/messages.js";
 import { configFixture } from "../helpers/config.js";
-import { migrateInternalConversations } from "../../src/storage/internal-schema.js";
-import { migrateProjections } from "../../src/storage/projection-schema.js";
-import { migrateProjectionImports } from "../../src/storage/projection-import-schema.js";
-import { migrateHistoryIndexes } from "../../src/storage/history-schema.js";
-import { migrateCoordinationRecovery } from "../../src/storage/coordination-schema.js";
 
 const stores: Store[] = [];
 afterEach(() => stores.splice(0).forEach((store) => store.close()));
@@ -20,12 +14,6 @@ afterEach(() => stores.splice(0).forEach((store) => store.close()));
 function setup(source?: HistorySource) {
   const store = new Store(":memory:");
   stores.push(store);
-  migrateCanonicalConversations(store, configFixture);
-  migrateInternalConversations(store);
-  migrateProjections(store);
-  migrateProjectionImports(store);
-  migrateHistoryIndexes(store);
-  migrateCoordinationRecovery(store);
   const { messages, mapper } = slackApplication(store, configFixture);
   store.register("research", "history", []);
   store.enqueue("research", "start", {});
@@ -348,12 +336,6 @@ it("one installation cannot advance another installation visible revision or fre
   };
   const store = new Store(":memory:");
   stores.push(store);
-  migrateCanonicalConversations(store, config);
-  migrateInternalConversations(store);
-  migrateProjections(store);
-  migrateProjectionImports(store);
-  migrateHistoryIndexes(store);
-  migrateCoordinationRecovery(store);
   const { messages, mapper } = slackApplication(store, config);
   for (const actor of ["research", "peer"]) {
     store.register(actor, "history", []);

@@ -12,8 +12,7 @@ import {
   type DispatchEnvelope,
   type MessageConfirmation,
 } from "../../src/conversations/output.js";
-import { slackConversationStorage } from "../fixtures/v16/src/slack/conversation-storage.js";
-import { migrateCanonicalConversations } from "../../src/slack/canonical-migration.js";
+import { slackApplication } from "../../src/slack/application.js";
 import { configFixture } from "../helpers/config.js";
 const stores: Store[] = [];
 afterEach(() => stores.splice(0).forEach((s) => s.close()));
@@ -21,10 +20,10 @@ function setup() {
   const s = new Store(":memory:");
   stores.push(s);
   s.register("research", "test", []);
-  migrateCanonicalConversations(s, configFixture);
   const refs = new References(s),
-    records = slackConversationStorage(s, configFixture).records,
-    writes = new CanonicalWrites(s, refs);
+    app = slackApplication(s, configFixture),
+    records = app.messages.records,
+    writes = app.messages.writes;
   const messages = new Conversations(
     s,
     new ConfiguredAgents(configFixture.agents),

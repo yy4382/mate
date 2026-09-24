@@ -174,12 +174,6 @@ export class TeamDirectory implements ConversationDirectory {
       if (!this.external) throw new Error("External directory unavailable");
       return this.external.openDM(run, actionId, principal, signal);
     }
-    if (
-      ![18, 19, 20, 21, 22, 23, 24, 25].includes(
-        Number(s.db.pragma("user_version", { simple: true })),
-      )
-    )
-      throw new Error("Internal conversation migration required");
     m.agent(principal.id);
     if (principal.id === run.agentId) throw new Error("DM requires another Agent");
     return s.atomic(() => {

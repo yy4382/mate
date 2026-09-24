@@ -1,10 +1,5 @@
-import { migrateCurrentRuntime } from "../helpers/canonical-slack.js";
 import { afterEach, expect, it, vi } from "vitest";
 import { Store } from "../../src/storage/store.js";
-import { migrateCanonicalConversations } from "../../src/slack/canonical-migration.js";
-import { migrateInternalConversations } from "../../src/storage/internal-schema.js";
-import { migrateProjections } from "../../src/storage/projection-schema.js";
-import { migrateProjectionImports } from "../../src/storage/projection-import-schema.js";
 import { slackApplication } from "../../src/slack/application.js";
 import { CanonicalOutput } from "../../src/conversations/output.js";
 import { CanonicalSlackTransport } from "../../src/slack/transport.js";
@@ -37,11 +32,6 @@ async function setup() {
   };
   const s = new Store(":memory:");
   stores.push(s);
-  migrateCanonicalConversations(s, config);
-  migrateInternalConversations(s);
-  migrateProjections(s);
-  migrateProjectionImports(s);
-  migrateCurrentRuntime(s);
   for (const a of config.agents) s.register(a.id, "test", []);
   const { messages, mapper } = slackApplication(s, config),
     transport = new CanonicalSlackTransport(s, mapper, {}),

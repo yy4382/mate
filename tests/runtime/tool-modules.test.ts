@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { Store } from "../../src/storage/store.js";
 import { configSchema } from "../../src/config.js";
 import { configFixture } from "../helpers/config.js";
-import { Messages, Output, migrateCurrentRuntime } from "../helpers/canonical-slack.js";
+import { Messages, Output } from "../helpers/canonical-slack.js";
 import { Collaboration } from "../../src/collaboration/service.js";
 import { Broker } from "../../src/policy/broker.js";
 import {
@@ -27,7 +27,6 @@ function setup(directory?: ConversationDirectory) {
     store = new Store(":memory:");
   stores.push(store);
   const messages = new Messages(store, config);
-  migrateCurrentRuntime(store);
   const c = new Collaboration(
       store,
       messages,

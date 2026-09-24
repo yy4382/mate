@@ -1,8 +1,4 @@
-import {
-  fixtureTarget,
-  externalThread,
-  migrateCurrentRuntime,
-} from "../helpers/canonical-slack.js";
+import { fixtureTarget, externalThread } from "../helpers/canonical-slack.js";
 import { it, expect } from "vitest";
 import { Store } from "../../src/storage/store.js";
 import { Messages, Output } from "../helpers/canonical-slack.js";
@@ -13,7 +9,6 @@ it("old view ACK cannot mark newly enriched file metadata seen", () => {
   try {
     s.register("research", "v1", []);
     const m = new Messages(s, configFixture);
-    migrateCurrentRuntime(s);
     m.membership("research", "CTEST", true);
     const c = new Collaboration(
       s,
@@ -74,7 +69,6 @@ it("publication ACK after Slack echo deduplicates unread", () => {
     s.register("research", "v1", []);
     s.register("writer", "v1", []);
     const m = new Messages(s, config);
-    migrateCurrentRuntime(s);
     m.membership("writer", "CTEST", true);
     const c = new Collaboration(
       s,

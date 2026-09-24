@@ -4,19 +4,29 @@ import { CanonicalOutput, type ExternalMessageTransport } from "../../src/conver
 import { slackApplication } from "../../src/slack/application.js";
 import { CanonicalSlackTransport } from "../../src/slack/transport.js";
 import { CanonicalSlackNormalizer } from "../../src/slack/normalize.js";
-import { migrateCanonicalConversations } from "../../src/slack/canonical-migration.js";
-import { migrateInternalConversations } from "../../src/storage/internal-schema.js";
-import { migrateProjections } from "../../src/storage/projection-schema.js";
-import { migrateProjectionImports } from "../../src/storage/projection-import-schema.js";
-import { migrateHistoryIndexes } from "../../src/storage/history-schema.js";
-import { migrateCoordinationRecovery } from "../../src/storage/coordination-schema.js";
-import { migrateOperationsView } from "../../src/storage/operations-schema.js";
-import { migrateSystemOperations } from "../../src/storage/system-operations-schema.js";
-import { migrateModelUsage } from "../../src/storage/model-usage-schema.js";
 import type { Store } from "../../src/storage/store.js";
 import type { MateConfig } from "../../src/config.js";
 import type { MessageDTO } from "../../src/domain/messages.js";
-import type { NormalMessage } from "../fixtures/v16/src/conversations/messages.js";
+/** Platform-shaped message input, the shape a Slack event carries before the adapter maps it. */
+export interface PlatformMessage {
+  team: string;
+  channel: string;
+  ts: string;
+  thread: string;
+  revision: string;
+  text: string;
+  user?: string;
+  bot?: string;
+  deleted: boolean;
+  systemGenerated?: boolean;
+  files?: {
+    id: string;
+    name?: string | undefined;
+    title?: string | undefined;
+    mimetype?: string | undefined;
+    size?: number | undefined;
+  }[];
+}
 export { conversationTargetSchema as targetSchema } from "../../src/domain/conversations.js";
 export const fixtureTarget = (channel = "CTEST", ts = "100.000001") => ({
   conversationId: channel,
@@ -26,7 +36,6 @@ export class Messages extends Conversations {
   readonly mapper: ReturnType<typeof slackApplication>["mapper"];
   output?: CanonicalOutput;
   constructor(store: Store, config: MateConfig) {
-    migrateCanonicalConversations(store, config);
     const app = slackApplication(store, config);
     super(
       store,
@@ -67,7 +76,7 @@ export class Messages extends Conversations {
       }
     }
   }
-  override record(message: MessageDTO | NormalMessage, visibleTo: readonly string[]): void {
+  override record(message: MessageDTO | PlatformMessage, visibleTo: readonly string[]): void {
     if ("team" in message) {
       const { bot, systemGenerated, ...rest } = message;
       super.record(this.mapper.message({ ...rest, bot, system: systemGenerated }), visibleTo);
@@ -79,17 +88,6 @@ export class Messages extends Conversations {
   }
 }
 
-/** Complete the explicit offline schema chain for fixtures that construct current runtime services. */
-export function migrateCurrentRuntime(store: Store): void {
-  migrateInternalConversations(store);
-  migrateProjections(store);
-  migrateProjectionImports(store);
-  migrateHistoryIndexes(store);
-  migrateCoordinationRecovery(store);
-  migrateOperationsView(store);
-  migrateSystemOperations(store);
-  migrateModelUsage(store);
-}
 /** Fake only the remote HTTP response; mapping, receipts and core dispatch are production code. */
 export class Output extends CanonicalOutput {
   constructor(

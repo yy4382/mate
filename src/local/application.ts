@@ -1,10 +1,6 @@
 import type { Store } from "../storage/store.js";
 import { ConfiguredAgents } from "../agents/directory.js";
 import type { TeamSettings } from "../domain/agents.js";
-import {
-  initializeCanonicalStore,
-  migrateInternalConversations,
-} from "../storage/internal-schema.js";
 import { References } from "../conversations/references.js";
 import { ConversationRecords } from "../storage/conversations.js";
 import { CanonicalWrites } from "../storage/conversation-writes.js";
@@ -14,25 +10,9 @@ import { CanonicalFreshnessGate } from "../conversations/freshness.js";
 import { Collaboration } from "../collaboration/service.js";
 import { TeamDirectory } from "../conversations/team-directory.js";
 import { LocalAdapter } from "./input.js";
-import { migrateProjections } from "../storage/projection-schema.js";
-import { migrateProjectionImports } from "../storage/projection-import-schema.js";
-import { migrateHistoryIndexes } from "../storage/history-schema.js";
-import { migrateCoordinationRecovery } from "../storage/coordination-schema.js";
-import { migrateOperationsView } from "../storage/operations-schema.js";
-import { migrateSystemOperations } from "../storage/system-operations-schema.js";
-import { migrateModelUsage } from "../storage/model-usage-schema.js";
 
 /** A real local composition: no Slack config, fake locator or alternate business model. */
 export function localApplication(store: Store, settings: TeamSettings) {
-  initializeCanonicalStore(store);
-  migrateInternalConversations(store);
-  migrateProjections(store);
-  migrateProjectionImports(store);
-  migrateHistoryIndexes(store);
-  migrateCoordinationRecovery(store);
-  migrateOperationsView(store);
-  migrateSystemOperations(store);
-  migrateModelUsage(store);
   const messages = localConversations(store, settings);
   const output = new CanonicalOutput(messages, {
     post: async () => {

@@ -1,6 +1,5 @@
 import { LocalConsole } from "./local/console.js";
 import { spawnSync } from "node:child_process";
-import { migrateConfiguration } from "./daemon/migrate.js";
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { resolve, join, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -55,28 +54,15 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     return;
   }
   if (
-    ![
-      "check",
-      "doctor",
-      "offline-probe",
-      "start",
-      "local",
-      "backup",
-      "restore",
-      "migrate",
-    ].includes(command ?? "") ||
+    !["check", "doctor", "offline-probe", "start", "local", "backup", "restore"].includes(
+      command ?? "",
+    ) ||
     !configPath
   )
     throw new Error(
       "Usage: mate check|doctor|offline-probe|start|local CONFIG; mate backup CONFIG DESTINATION; mate restore CONFIG BACKUP [--replace CURRENT_CHECKPOINT]; mate models [PROVIDER]",
     );
-  const rawConfig = JSON.parse(readFileSync(resolve(configPath), "utf8"));
-  const legacyQuotaConfig = Boolean(rawConfig?.mate?.budgets);
-  const config = daemonConfigSchema.parse(rawConfig);
-  if (command === "start" && legacyQuotaConfig)
-    process.stderr.write(
-      "Mate: legacy mate.budgets quotas are ignored; only runTimeoutMs is used.\n",
-    );
+  const config = daemonConfigSchema.parse(JSON.parse(readFileSync(resolve(configPath), "utf8")));
   if (process.platform === "linux" && !config.runtime.linuxUsers)
     throw new Error("Linux deployment requires one Linux user for every Agent");
   const releaseRoot = process.argv[1]
@@ -89,7 +75,6 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     const report = await runDoctor(config, undefined, {
       releaseRoot,
       requireSecrets: destination !== "--allow-missing-secrets",
-      legacyQuotaConfig,
     });
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     if (!report.healthy) process.exitCode = 1;
@@ -101,18 +86,6 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     assertLinuxOperationAllowed("offline-probe", config);
     const report = await runOfflineProbe(config);
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-    return;
-  }
-  if (command === "migrate") {
-    if (!destination || !args[3])
-      throw new Error("Usage: mate migrate OLD_CONFIG NEW_CONFIG BACKUP");
-    if (args[4]) throw new Error("Unknown migration option");
-    assertLinuxMaintenanceStopped(config);
-    assertLinuxOperationAllowed("migrate", config);
-    const next = daemonConfigSchema.parse(JSON.parse(readFileSync(resolve(destination), "utf8")));
-    process.stdout.write(
-      JSON.stringify(await migrateConfiguration(config, next, args[3]), null, 2) + "\n",
-    );
     return;
   }
   if (command === "check") {

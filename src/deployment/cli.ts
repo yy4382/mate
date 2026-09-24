@@ -57,8 +57,6 @@ export async function deploymentMain(args = process.argv.slice(2)): Promise<void
   }
   const { spec, config } = readLinuxDeploymentInputs(input),
     host = nodeLinuxInstallerHost();
-  if (command === "install" && JSON.parse(readFileSync(spec.configSource, "utf8"))?.mate?.budgets)
-    throw new Error("New installs must use runTimeoutMs; model quotas are unsupported");
   if (command === "plan") {
     process.stdout.write(
       `${JSON.stringify(createLinuxDeploymentPlan(spec, config, host), null, 2)}\n`,
