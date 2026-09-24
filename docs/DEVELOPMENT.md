@@ -16,6 +16,8 @@ pnpm exec vitest run tests/execution/linux-user.test.ts tests/execution/linux-pr
 
 macOS 本地入口不模拟 Linux 用户权限。普通测试、Debian 上以真实 UID/GID 验证文件与进程边界，以及真实 Slack/provider 连接是不同的证据；不能互相代替。当前发布待办与结论在 issue tracker 中，而非本文件。
 
+`pnpm check` 在开发 checkout 运行；Linux 发布目标还需以目标 Node ABI 执行 `pnpm build`、`pnpm typecheck` 和 `MATE_NATIVE_UID_TEST=1 pnpm exec vitest run tests/execution/linux-user-tools.test.ts`。完整测试集包含使用非 Linux 本地开发夹具的用例，不能把这些夹具在生产 Linux 配置下的失败当作 Agent 隔离结果，也不能用它们代替原生验证。
+
 ## 本地双成员入口
 
 复制 [mate.local.example.json](../mate.local.example.json) 为未提交的配置文件，把 `runtime.dataDir` 改为 checkout 外、当前用户可写的绝对目录。示例预配置 `research`、`writer` 和内部 `team-room`；本地入口不需要 Slack 身份。实际模型调用需要配置文件所引用的 provider 环境变量。

@@ -6,13 +6,14 @@
 
 系统需要 systemd、`/usr/bin/node` 24.x、pnpm 10.33.0，以及 `/usr/bin/systemd-run`、`/usr/bin/systemctl`、`/usr/bin/setpriv`、`/usr/bin/getent`。通过正常软件包渠道安装，不手工拼接 Node 或原生依赖。为每位 Agent 预建单独的普通账户，并核对 UID、GID、home 和附加组；不能把它们加入 root 或特权组。示例 `research` 和 `writer` 对应的 UID/GID 写入 [mate.example.json](../mate.example.json)，部署参数写入 [mate.deploy.example.json](../mate.deploy.example.json)。私人目录父路径须由 root 预建；安装器建立私人 home、起始文件、共享子目录和资源限额。
 
-在目标系统使用与服务相同的 Node ABI 构建完整发布物：
+先在开发 checkout 对拟发布提交运行 `pnpm check` 和 `pnpm typecheck`。在目标系统使用与服务相同的 Node ABI 构建完整发布物，并运行 Linux 定向验证：
 
 ```sh
 MATE_COMMIT=$(git rev-parse HEAD)
 pnpm install --frozen-lockfile
-pnpm check
+pnpm build
 pnpm typecheck
+MATE_NATIVE_UID_TEST=1 pnpm exec vitest run tests/execution/linux-user-tools.test.ts
 install -d -m 0755 /var/tmp/mate-release
 cp package.json pnpm-lock.yaml /var/tmp/mate-release/
 cp -a dist /var/tmp/mate-release/
