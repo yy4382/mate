@@ -21,6 +21,7 @@ import { backup } from '../../src/daemon/backup.js';
 import { Research, publicIPv4 } from '../../src/daemon/research.js';
 import { Controls } from '../../src/daemon/control.js';
 import { SlackService,formatControlReply } from '../../src/slack/service.js';
+import { Directory } from '../../src/slack/directory.js';
 import {DurableReceiver} from '../../src/slack/receiver.js';
 import { CanonicalSlackTransport as WebSlackTransport } from '../../src/slack/transport.js';
 import { Artifacts } from '../../src/daemon/artifacts.js';
@@ -38,6 +39,43 @@ function setup() {
   const broker = new Broker(store, c, backend, { research: '/tmp', writer: '/tmp' });
   cleanups.push(() => store.close()); return { store, c, ingress, broker, post, backend, mapper:messages.mapper };
 }
+it('keeps an inaccessible listed DM closed without blocking other Slack conversations', async () => {
+  const { store, c, ingress, broker, mapper } = setup();
+  for (const agent of c.config.agents) store.register(agent.id, 'v1', []);
+  const transport = new WebSlackTransport(store, mapper, { research: 'synthetic', writer: 'synthetic' });
+  const service = new SlackService(c, transport, ingress, new Controls(c, {} as any, broker));
+  const stale = mapper.conversation('DSLACKBOT'), active = mapper.conversation('DOWNER');
+  c.messages.membership('research', stale, true);
+  c.messages.membership('research', active, true);
+  const directory = new Directory(c.messages, transport.clients, mapper);
+  transport.clients.get('research')!.users.conversations = vi.fn(async () => ({ channels: [
+    { id: 'DSLACKBOT', user: 'USLACKBOT', is_im: true },
+    { id: 'DOWNER', user: 'UOWNER', is_im: true },
+  ] })) as any;
+  const info = vi.fn(async ({ channel }: { channel: string }) => {
+    if (channel === 'DSLACKBOT') throw { data: { error: 'channel_not_found' } };
+    return { channel: { is_im: channel.startsWith('D'), is_member: channel.startsWith('C') } };
+  });
+  transport.clients.get('research')!.conversations.info = info as any;
+  transport.clients.get('writer')!.conversations.info = info as any;
+  const discovered = await directory.spaces('research');
+  expect(discovered.spaces.map(space => space.conversationId)).not.toContain(stale);
+  await expect(service.membership(true)).resolves.toBe(true);
+  expect(c.messages.access('research', stale)).toBe(false);
+  expect(c.messages.access('research', active)).toBe(true);
+  expect(info).not.toHaveBeenCalledWith({ channel: 'DSLACKBOT' });
+  expect(info).toHaveBeenCalledWith({ channel: 'DOWNER' });
+  await directory.spaces('research');
+  expect(c.messages.access('research', stale)).toBe(false);
+  info.mockImplementation(async () => { throw new Error('network unavailable'); });
+  await expect(service.membership(true)).rejects.toThrow('Slack membership verification did not complete');
+  expect(c.messages.access('research', active)).toBe(false);
+  info.mockImplementation(async ({ channel }) => {
+    if (channel === 'CTEST') throw { data: { error: 'channel_not_found' } };
+    return { channel: { is_im: channel.startsWith('D'), is_member: true } };
+  });
+  await expect(service.membership(true)).rejects.toThrow('Slack membership verification did not complete');
+});
 it('two Agents can coordinate through one canonical message and direct peer feedback without a task tree',async()=>{
  const{store,c,ingress,broker,post}=setup(),router=new ToolRouter(c,broker),target=fixtureTarget('CTEST','100.000001');
  let task:any,view='',phase='claim',step=0;

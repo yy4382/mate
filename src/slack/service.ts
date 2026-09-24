@@ -95,7 +95,7 @@ export class SlackService {
     for (const agent of this.transport.mapper.config.agents) {
       if (this.stopping()) return false;
       const client = this.transport.clients.get(agent.id)!;
-      const stored = this.c.store.db.prepare("SELECT a.channel FROM channel_access a JOIN conversation_bindings b ON b.conversation_id=a.channel WHERE b.provider='slack' AND b.mode='primary' AND b.workspace=? AND a.agent_id=?").all(this.transport.mapper.config.teamId,agent.id) as { channel: string }[];
+      const stored = this.c.store.db.prepare("SELECT a.channel FROM channel_access a JOIN conversation_bindings b ON b.conversation_id=a.channel WHERE b.provider='slack' AND b.mode='primary' AND b.workspace=? AND a.agent_id=? AND a.active=1").all(this.transport.mapper.config.teamId,agent.id) as { channel: string }[];
       for (const channel of new Set([...Object.keys(agent.channels), ...stored.map(r => this.transport.mapper.target({conversationId:r.channel}).channel)])) {
         if (this.stopping()) return false;
         const bound=this.c.messages.references.findConversation({provider:'slack',workspace:this.transport.mapper.config.teamId,externalId:channel});

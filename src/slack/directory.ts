@@ -22,13 +22,16 @@ export class Directory implements ConversationDirectory {
     const client = this.clients.get(actor); if (!client) throw new Error('Slack client unavailable'); return client;
   }
   async spaces(actor: string, maxPages = 10, onPage?:()=>void): Promise<SpacesResult> {
-    const client = this.client(actor), spaces: Space[] = [], channels = [];
+    const client = this.client(actor), spaces: Space[] = [], channels = [], inaccessibleSystemDms: string[] = [];
     const version = this.messages.membershipVersion(actor); let cursor: string | undefined, pages = 0;const seen=new Set<string>();
     do {
       const result = await client.users.conversations({ types: 'public_channel,private_channel,im,mpim', limit: 200, ...(cursor ? { cursor } : {}) });
       for (const c of result.channels ?? []) if (c.id && /^[CDG][A-Z0-9]+$/.test(c.id)) {
         const bound=this.messages.references.findConversation({provider:'slack',workspace:this.mapper.config.teamId,externalId:c.id});
         if(bound&&this.messages.references.conversation(bound).authority==='internal')continue;
+        // Slack lists its own Slackbot DM but can reject conversations.info for it.
+        // It is not an Agent workspace; revoke any access persisted by an older run.
+        if(c.is_im&&c.user==='USLACKBOT'){if(bound)inaccessibleSystemDms.push(bound);continue;}
         channels.push(c);
         spaces.push({ conversationId: this.mapper.conversation(c.id), name: c.name, purpose: c.purpose?.value, principal: c.user?slackPrincipal(this.mapper.config,c.user):undefined, archived: !!c.is_archived, kind: c.is_im ? 'dm' : 'channel' });
       }
@@ -37,6 +40,7 @@ export class Directory implements ConversationDirectory {
       if(next)seen.add(next);cursor=next; pages++;onPage?.();
     } while (cursor && pages < maxPages);
     if (version !== this.messages.membershipVersion(actor)) return { spaces: [], incomplete: true, retry: 'membership changed during discovery' };
+    for(const conversationId of inaccessibleSystemDms)this.messages.membership(actor,conversationId,false);
     for (const c of channels) {
       this.messages.membership(actor, this.mapper.conversation(c.id!), !c.is_archived);
       if(c.is_im&&c.user&&!c.is_archived){
