@@ -201,6 +201,14 @@ export async function writeMarker(release, options) {
 }
 
 const sha256 = (path) => createHash("sha256").update(readFileSync(path)).digest("hex");
+/** A missing or unreadable file is reported by its own check, never as an integrity match. */
+const sha256OrUndefined = (path) => {
+  try {
+    return sha256(path);
+  } catch {
+    return undefined;
+  }
+};
 
 /**
  * Re-inventory one Agent payload against its manifest entries: every recorded file must still be a
@@ -257,12 +265,18 @@ export function verifyCheckpoint(checkpoint, agentId) {
     payload = agent ? inventoryPayload(join(root, "agents", agentId), agent.entries) : undefined,
     checks = {
       currentFormat: manifest.version === 2,
-      databaseIntegrity: manifest.database?.sha256 === sha256(database),
-      databaseRegularFile: lstatSync(database).isFile(),
-      databaseSealed: (lstatSync(database).mode & 0o022) === 0,
+      databasePresent: existsSync(database),
+      databaseIntegrity: manifest.database?.sha256 === sha256OrUndefined(database),
+      databaseRegularFile: existsSync(database) && lstatSync(database).isFile(),
+      databaseSealed: existsSync(database) && (lstatSync(database).mode & 0o022) === 0,
       rootSealed: (lstatSync(root).mode & 0o022) === 0,
       agentInventoried: !!agent,
-      agentPayload: !!payload && payload.missing.length === 0 && payload.changed.length === 0,
+      // An unreadable payload file is a failure too, not a silent pass.
+      agentPayload:
+        !!payload &&
+        payload.missing.length === 0 &&
+        payload.changed.length === 0 &&
+        payload.unreadable.length === 0,
     };
   return {
     passed: Object.values(checks).every(Boolean),
