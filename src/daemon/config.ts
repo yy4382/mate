@@ -221,7 +221,7 @@ export function assertConfigurationEvolution(previous: DaemonConfig, next: Daemo
       })
     )
       throw new Error(
-        "Linux deployment UID, GID, home and shared-root topology must remain stable during configuration migration",
+        "Linux deployment UID, GID, home and shared-root topology must remain stable when the configuration changes",
       );
   }
   const before = previous.adapters.slack,
@@ -251,7 +251,25 @@ export type DaemonConfig = z.infer<typeof daemonConfigSchema>;
 export function storedConfiguration(store: Store): DaemonConfig | undefined {
   const row = store.db.prepare("SELECT value FROM runtime_meta WHERE key='configuration'").get() as
     { value: string } | undefined;
-  return row ? daemonConfigSchema.parse(JSON.parse(row.value)) : undefined;
+  if (!row) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(row.value);
+  } catch {
+    throw new Error(
+      "The configuration recorded in this data directory is not readable JSON. Restore the database from a checkpoint, or start with a new, empty data directory.",
+    );
+  }
+  const result = daemonConfigSchema.safeParse(parsed);
+  if (!result.success)
+    throw new Error(
+      `The configuration recorded in this data directory is not supported by this release: ${result.error.issues
+        .map((issue) => `${issue.path.join(".") || "(root)"} ${issue.message}`)
+        .join(
+          "; ",
+        )}. Restore the database from a checkpoint, or start with a new, empty data directory.`,
+    );
+  return result.data;
 }
 
 /** Record the running configuration so a later start can tell whether it changed. */

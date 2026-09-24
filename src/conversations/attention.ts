@@ -66,19 +66,6 @@ export class CanonicalAttention {
   }
   revision(target: Target, actor?: string): number {
     targetSchema.parse(target);
-    if (!this.messages.visibilitySnapshots)
-      return (
-        this.messages.store.db
-          .prepare(
-            "SELECT COALESCE(MAX(seq),0) revision FROM conversation_events WHERE channel=? AND (? IS NULL OR thread=? OR (kind='recovery_gap' AND thread IS NULL)) AND (audience IS NULL OR audience=?)",
-          )
-          .get(
-            target.conversationId,
-            target.threadId ?? null,
-            target.threadId ?? null,
-            actor ?? null,
-          ) as { revision: number }
-      ).revision;
     return (
       this.messages.store.db
         .prepare(

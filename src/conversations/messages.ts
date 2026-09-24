@@ -12,7 +12,6 @@ import type { References } from "./references.js";
 export class Conversations {
   private readonly versions = new Map<string, number>();
   private readonly ingestion: MessageIngestion;
-  readonly visibilitySnapshots: boolean;
   constructor(
     readonly store: Store,
     readonly agents: AgentDirectory,
@@ -23,7 +22,6 @@ export class Conversations {
     readonly matchesText: (expected: string, observed: string) => boolean = (a, b) => a === b,
     readonly requirePublication: (actor: string, target: ConversationTarget) => void = () => {},
   ) {
-    this.visibilitySnapshots = Number(store.db.pragma("user_version", { simple: true })) >= 21;
     this.ingestion = new MessageIngestion(
       store,
       references,
@@ -109,15 +107,6 @@ export class Conversations {
     const current = this.records.message(id);
     if (!current) throw new Error("Message not found");
     this.requireAccess(actor, current.conversationId);
-    if (!this.visibilitySnapshots) {
-      if (
-        !this.store.db
-          .prepare("SELECT 1 FROM message_visibility WHERE agent_id=? AND key=?")
-          .get(actor, id)
-      )
-        throw new Error("Message not visible");
-      return current;
-    }
     const visible = this.store.db
       .prepare("SELECT revision,body FROM message_visibility WHERE agent_id=? AND key=?")
       .get(actor, id) as { revision: string; body: string } | undefined;
@@ -143,15 +132,7 @@ export class Conversations {
     this.requireReadable(actor);
     this.agents.get(actor);
     if (!query.trim() || query.length > 35000) throw new Error("Search query required");
-    if (!this.visibilitySnapshots) {
-      const rows = this.store.db
-        .prepare(
-          `SELECT m.key FROM messages m JOIN message_visibility v ON v.key=m.key JOIN channel_access a ON a.channel=m.channel AND a.agent_id=v.agent_id AND a.active=1 WHERE v.agent_id=? AND m.deleted=0 AND instr(lower(m.body),lower(?))>0 ORDER BY length(m.ts) DESC,m.ts DESC LIMIT 100`,
-        )
-        .all(actor, query) as { key: string }[];
-      return rows.map((row) => this.records.message(row.key)!);
-    }
-    // Legacy convenience search is memory-bounded. New callers needing explicit
+    // Convenience search is memory-bounded. Callers needing explicit
     // scan coverage and continuation use ConversationHistory.search.
     const found: MessageDTO[] = [];
     const channels = this.store.db
@@ -174,14 +155,6 @@ export class Conversations {
   recent(actor: string, conversationId: string): MessageDTO[] {
     this.requireReadable(actor);
     this.requireAccess(actor, conversationId);
-    if (!this.visibilitySnapshots) {
-      const rows = this.store.db
-        .prepare(
-          `SELECT m.key FROM messages m JOIN message_visibility v ON v.key=m.key WHERE v.agent_id=? AND m.channel=? AND m.deleted=0 ORDER BY length(m.ts) DESC,m.ts DESC,m.key DESC LIMIT 100`,
-        )
-        .all(actor, conversationId) as { key: string }[];
-      return rows.reverse().map((row) => this.records.message(row.key)!);
-    }
     const rows = this.store.db
       .prepare(
         `SELECT m.key FROM messages m INDEXED BY message_history_conversation JOIN conversation_identities c ON c.id=m.channel JOIN message_visibility v ON v.key=m.key AND v.agent_id=?

@@ -6,16 +6,31 @@ import { slackPrincipal } from "../../src/slack/legacy-codec.js";
 import { CanonicalSlackTransport as WebSlackTransport } from "../../src/slack/transport.js";
 import { Directory } from "../../src/slack/directory.js";
 import { configFixture } from "../helpers/config.js";
+import { configSchema } from "../../src/config.js";
 const stores: Store[] = [];
 afterEach(() => stores.splice(0).forEach((s) => s.close()));
-function setup() {
+const event = {
+  team: "TTEST",
+  channel: "CTEST",
+  ts: "102.000001",
+  thread: "102.000001",
+  revision: "102.000001",
+  text: "synthetic",
+  user: "UONE",
+  bot: "BONE",
+  deleted: false,
+};
+function fixtureFor(config: ReturnType<typeof configSchema.parse>) {
   const s = new Store(":memory:");
   stores.push(s);
   s.register("research", "v1", []);
-  const m = new Messages(s, configFixture);
+  const m = new Messages(s, config);
   m.membership("research", "CTEST", true);
   new Output(m, { post: async () => ({ ts: "999.000001" }) });
   return { s, m };
+}
+function setup() {
+  return fixtureFor(configFixture);
 }
 it("top-level messages omit thread_ts, become roots and can be reconciled without changing the request", async () => {
   const { s, m } = setup(),
@@ -162,6 +177,39 @@ it("uncertain DM opening is not replayed under a new action id", async () => {
     ),
   ).rejects.toThrow("unknown");
   expect(open).toHaveBeenCalledTimes(1);
+});
+it("rejects contradictory author evidence from one Slack event independently of configuration order", () => {
+  const one = configFixture.agents[0]!;
+  const two = {
+    ...one,
+    id: "writer",
+    name: "Writer",
+    slackAppId: "ATWO",
+    slackUserId: "UTWO",
+    slackBotId: "BTWO",
+    botTokenEnv: "WRITER_BOT",
+    appTokenEnv: "WRITER_APP",
+  };
+  for (const agents of [
+    [one, two],
+    [two, one],
+  ]) {
+    const { m } = fixtureFor(configSchema.parse({ ...configFixture, agents }));
+    for (const author of [
+      { user: "UONE", bot: "BTWO" },
+      { user: "UOTHER", bot: "BONE" },
+      { user: "UONE", bot: "BOTHER" },
+    ])
+      expect(() => m.mapper.message({ ...event, ...author })).toThrow(
+        "Conflicting legacy author identities",
+      );
+    const { user: _user, bot: _bot, ...anonymous } = event;
+    expect(m.mapper.message(anonymous).author).toEqual({ kind: "unknown" });
+    expect(m.mapper.message({ ...anonymous, bot: "BONE" }).author).toEqual({
+      kind: "agent",
+      id: "research",
+    });
+  }
 });
 it("normalizes deletion of a reply before or after observing its original message", () => {
   for (const originalFirst of [true, false]) {

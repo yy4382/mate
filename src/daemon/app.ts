@@ -168,6 +168,20 @@ export class Daemon {
         assertConfigurationEvolution(previous, config);
         configurationChanged = true;
       }
+      // A database always records the configuration it was started with. Without that
+      // record its Agent identities cannot be checked, so an occupied file is not
+      // adopted as a fresh start.
+      if (!previous) {
+        const orphans = (
+          this.store.db.prepare("SELECT id FROM agents ORDER BY id").all() as { id: string }[]
+        )
+          .map((row) => row.id)
+          .filter((id) => !config.mate.agents.some((agent) => agent.id === id));
+        if (orphans.length)
+          throw new Error(
+            `This data directory holds Agents that are not in the configuration (${orphans.join(", ")}) and no recorded configuration to compare against. Restore the database from a checkpoint, or start with a new, empty data directory.`,
+          );
+      }
       const c = config.mate;
       const slackApp = slackConfig ? slackApplication(this.store, slackConfig, c) : undefined;
       const messages = slackApp?.messages ?? localConversations(this.store, c);
@@ -427,6 +441,10 @@ export class Daemon {
       this.store.atomic(() => {
         configureLocalRooms(this.collaboration, previous?.adapters.local, config.adapters.local);
         saveConfiguration(this.store, config);
+        if (configurationChanged)
+          this.store.audit("configuration_change", {
+            agents: config.mate.agents.map((agent) => agent.id),
+          });
       });
       this.store.db.exec("COMMIT");
     } catch (error) {

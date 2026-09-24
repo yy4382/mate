@@ -54,18 +54,11 @@ export class Reminders {
   }
   private event(r: Reminder, kind: string, payload: unknown): void {
     const s = this.c.store;
-    if (Number(s.db.pragma("user_version", { simple: true })) >= 23)
-      s.db
-        .prepare(
-          "INSERT INTO reminder_events(reminder_id,version,kind,at,payload,actor_id) VALUES(?,?,?,?,?,?)",
-        )
-        .run(r.id, r.version, kind, Date.now(), encode(payload), r.agent_id);
-    else
-      s.db
-        .prepare(
-          "INSERT INTO reminder_events(reminder_id,version,kind,at,payload) VALUES(?,?,?,?,?)",
-        )
-        .run(r.id, r.version, kind, Date.now(), encode(payload));
+    s.db
+      .prepare(
+        "INSERT INTO reminder_events(reminder_id,version,kind,at,payload,actor_id) VALUES(?,?,?,?,?,?)",
+      )
+      .run(r.id, r.version, kind, Date.now(), encode(payload), r.agent_id);
   }
   read(actor: string, id: string): Reminder {
     const r = this.c.store.db
@@ -108,8 +101,7 @@ export class Reminders {
           input.anchor ? encode(input.anchor) : null,
           input.projection ?? "private",
         );
-      if (Number(s.db.pragma("user_version", { simple: true })) >= 23)
-        s.db.prepare("INSERT INTO reminder_event_baselines VALUES(?,1,?)").run(id, Date.now());
+      s.db.prepare("INSERT INTO reminder_event_baselines VALUES(?,1,?)").run(id, Date.now());
       this.c.messages.writes.mutable("schedules", id);
       const reminder = this.read(actor, id);
       this.event(reminder, "created", {});
@@ -332,18 +324,11 @@ export class Reminders {
           .run(output, r.id, r.version);
         c.output.gate?.queued(r.agent_id, output);
       }
-      if (Number(s.db.pragma("user_version", { simple: true })) >= 23)
-        s.db
-          .prepare(
-            "INSERT INTO reminder_firings(id,reminder_id,due_at,version,delivery_id,output_id,actor_id) VALUES(?,?,?,?,?,?,?)",
-          )
-          .run(firing, r.id, r.next_at, r.version, delivery, output, r.agent_id);
-      else
-        s.db
-          .prepare(
-            "INSERT INTO reminder_firings(id,reminder_id,due_at,version,delivery_id,output_id) VALUES(?,?,?,?,?,?)",
-          )
-          .run(firing, r.id, r.next_at, r.version, delivery, output);
+      s.db
+        .prepare(
+          "INSERT INTO reminder_firings(id,reminder_id,due_at,version,delivery_id,output_id,actor_id) VALUES(?,?,?,?,?,?,?)",
+        )
+        .run(firing, r.id, r.next_at, r.version, delivery, output, r.agent_id);
       if (r.cron)
         s.db
           .prepare("UPDATE schedules SET next_at=?,version=version+1 WHERE id=?")

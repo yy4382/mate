@@ -9,7 +9,6 @@ export function queueProjections(
   sourceBinding?: string,
 ): void {
   const s = messages.store;
-  if (Number(s.db.pragma("user_version", { simple: true })) < 19) return;
   if (!s.db.inTransaction) throw new Error("Projection queue requires message transaction");
   const author =
     message.author.kind === "agent"

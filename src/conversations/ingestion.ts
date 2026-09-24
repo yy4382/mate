@@ -79,11 +79,7 @@ export class MessageIngestion {
       }
       if (kind) {
         this.writes.message(effective);
-        if (
-          conversation.authority === "internal" &&
-          Number(this.store.db.pragma("user_version", { simple: true })) >= 19 &&
-          old
-        ) {
+        if (conversation.authority === "internal" && old) {
           this.store.db
             .prepare(
               "UPDATE projection_outbox SET drift='source_changed',state=CASE WHEN state IN ('pending','held') THEN 'failed' ELSE state END,reason=CASE WHEN state IN ('pending','held') THEN 'source_changed_before_publication' ELSE reason END WHERE message_id=? AND anchor=0 AND source_revision!=?",
@@ -120,40 +116,22 @@ export class MessageIngestion {
             .get(actor, effective.conversationId)
         )
           continue;
-        const version = Number(this.store.db.pragma("user_version", { simple: true }));
-        const prior =
-          version >= 21
-            ? (this.store.db
-                .prepare("SELECT revision,body FROM message_visibility WHERE agent_id=? AND key=?")
-                .get(actor, effective.id) as { revision: string; body: string } | undefined)
-            : (this.store.db
-                .prepare("SELECT 1 present FROM message_visibility WHERE agent_id=? AND key=?")
-                .get(actor, effective.id) as { present: number } | undefined);
-        const priorRevision = prior && "revision" in prior ? prior.revision : undefined,
+        const prior = this.store.db
+          .prepare("SELECT revision,body FROM message_visibility WHERE agent_id=? AND key=?")
+          .get(actor, effective.id) as { revision: string; body: string } | undefined;
+        const priorRevision = prior?.revision,
           newerPrior = priorRevision && compareMessageOrder(priorRevision, message.revision) > 0;
         const observedRevision = newerPrior ? priorRevision : message.revision;
-        const observedBody = newerPrior
-          ? (prior as { revision: string; body: string }).body
-          : encode({ format: "mate.message.v2", message });
+        const observedBody =
+          newerPrior && prior ? prior.body : encode({ format: "mate.message.v2", message });
         const visibilityChanged =
-          version >= 21
-            ? !prior ||
-              priorRevision !== observedRevision ||
-              (prior as { revision: string; body: string }).body !== observedBody
-            : !prior;
-        if (version >= 21)
-          this.store.db
-            .prepare(
-              "INSERT INTO message_visibility(agent_id,key,revision,body) VALUES(?,?,?,?) ON CONFLICT(agent_id,key) DO UPDATE SET revision=excluded.revision,body=excluded.body",
-            )
-            .run(actor, effective.id, observedRevision, observedBody);
-        else
-          this.store.db
-            .prepare(
-              "INSERT INTO message_visibility(agent_id,key) VALUES(?,?) ON CONFLICT DO NOTHING",
-            )
-            .run(actor, effective.id);
-        if (old && !globalEvent && (!prior || (version >= 21 && visibilityChanged)))
+          !prior || priorRevision !== observedRevision || prior.body !== observedBody;
+        this.store.db
+          .prepare(
+            "INSERT INTO message_visibility(agent_id,key,revision,body) VALUES(?,?,?,?) ON CONFLICT(agent_id,key) DO UPDATE SET revision=excluded.revision,body=excluded.body",
+          )
+          .run(actor, effective.id, observedRevision, observedBody);
+        if (old && !globalEvent && (!prior || visibilityChanged))
           this.store.db
             .prepare(
               "INSERT INTO conversation_events(channel,thread,message_key,revision,kind,audience) VALUES(?,?,?,?,?,?)",
@@ -172,7 +150,7 @@ export class MessageIngestion {
           this.store.db
             .prepare("DELETE FROM attention_seen WHERE agent_id=? AND key=?")
             .run(actor, message.id);
-        const observed = version >= 21 ? message : effective;
+        const observed = message;
         if (
           !observed.deleted &&
           observed.author.kind === "agent" &&

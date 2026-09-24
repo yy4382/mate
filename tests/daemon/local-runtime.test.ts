@@ -17,6 +17,7 @@ import { Daemon } from "../../src/daemon/app.js";
 import { LocalConsole } from "../../src/local/console.js";
 import { acquireLock } from "../../src/daemon/lock.js";
 import { storedConfiguration } from "../../src/daemon/config.js";
+import { Store } from "../../src/storage/store.js";
 import { TeamDirectory } from "../../src/conversations/team-directory.js";
 import { daemonFixture } from "../helpers/daemon-config.js";
 const clean: (() => Promise<unknown> | void)[] = [];
@@ -287,6 +288,60 @@ it("applies a changed configuration in place and re-baselines only the changed A
   expect(
     unchanged.store.db.prepare("SELECT session_id FROM agents WHERE id='research'").get(),
   ).toEqual({ session_id: after });
+});
+it("fences a run left active by the previous process before re-baselining a changed configuration", async () => {
+  credentials();
+  const { c } = config(),
+    target = { conversationId: "local-room" },
+    d = await daemon(c),
+    work = d.collaboration.createWork("crash", target);
+  d.collaboration.enqueue("research", work, "unfinished", {});
+  const run = d.store.beginRun("research")!;
+  d.store.input(run, { role: "user", content: "UNFINISHED", timestamp: 0 });
+  await d.close();
+  // A process that died with an active run leaves exactly this state behind.
+  expect(d.store.db.open).toBe(false);
+  const crashed = new Store(join(c.runtime.dataDir, "state", "mate.sqlite"));
+  crashed.db.prepare("UPDATE runs SET state='active' WHERE id=?").run(run.id);
+  crashed.close();
+  const next = structuredClone(c);
+  next.mate.agents[0]!.role = "An updated role";
+  const recovered = await daemon(next),
+    session = (
+      recovered.store.db.prepare("SELECT session_id FROM agents WHERE id='research'").get() as {
+        session_id: string;
+      }
+    ).session_id;
+  expect(recovered.store.db.prepare("SELECT state FROM runs WHERE id=?").get(run.id)).toEqual({
+    state: "interrupted",
+  });
+  expect(JSON.stringify(recovered.store.context(session))).toContain("UNFINISHED");
+  expect(
+    recovered.store.db.prepare("SELECT count(*) n FROM runs WHERE state='active'").get(),
+  ).toEqual({ n: 0 });
+});
+it("refuses an occupied database without a readable recorded configuration", async () => {
+  credentials();
+  const { c } = config();
+  c.mate.agents.push({ ...c.mate.agents[0]!, id: "peer", name: "Peer" });
+  const first = await daemon(c);
+  await first.close();
+  const path = join(c.runtime.dataDir, "state", "mate.sqlite"),
+    log = { info: () => {}, error: () => {} };
+  const withoutPeer = structuredClone(c);
+  withoutPeer.mate.agents = [withoutPeer.mate.agents[0]!];
+  const store = new Store(path);
+  store.db.prepare("DELETE FROM runtime_meta WHERE key='configuration'").run();
+  store.close();
+  await expect(Daemon.create(withoutPeer, log)).rejects.toThrow(
+    /holds Agents that are not in the configuration \(peer\)/,
+  );
+  const malformed = new Store(path);
+  malformed.db.prepare("INSERT INTO runtime_meta VALUES('configuration','not json')").run();
+  malformed.close();
+  await expect(Daemon.create(withoutPeer, log)).rejects.toThrow(
+    /recorded in this data directory is not readable JSON/,
+  );
 });
 it("refuses a configuration that removes an existing Agent identity", async () => {
   credentials();

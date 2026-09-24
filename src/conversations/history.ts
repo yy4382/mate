@@ -91,8 +91,6 @@ export class ConversationHistory {
   ) {}
   private authorize(run: RunToken, target?: ConversationTarget): void {
     const m = this.messages;
-    if (Number(m.store.db.pragma("user_version", { simple: true })) < 21)
-      throw new Error("History storage migration required");
     m.store.assertRun(run);
     m.requireReadable(run.agentId);
     if (target) {

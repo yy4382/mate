@@ -63,7 +63,7 @@ sudo matectl logs
 
 先停止 `mate.service` 和 Agent 后台任务；维护命令会复查。`sudo matectl backup NAME` 保存 SQLite 与每位 Agent 的私人 home，最后发布完成标记。共享目录另按普通 VPS 文件备份方式处理，并保留 UID/GID。`sudo matectl restore OLD --replace CURRENT` 要求 CURRENT 是当前状态的匹配 checkpoint；中断后用相同参数恢复，不删库或清理恢复标记来绕过检查。
 
-代码升级先构建完整新发布物、停机并备份，再运行 `sudo matectl upgrade /ABSOLUTE/new-mate.deploy.json`。它替换已验证 release 并要求配置与已安装配置一致。首版只有一套数据库格式，没有版本化迁移：同格式内的程序升级与重启保留会话、投递、任务、提醒和身份，但把数据目录退回旧版程序不受支持，需要时从升级前检查点恢复（`sudo matectl restore`）。验证后用 `sudo matectl finalize` 确认。配置变更在停机后替换 `/etc/mate/mate.json` 并启动一次 Mate 让它应用并记录；现有 Agent 身份、UID/GID/home 和共享根不得改变。原生操作细节与命令契约以安装器、`matectl` 和相关测试为准。
+代码升级先构建完整新发布物、停机并备份，再运行 `sudo matectl upgrade /ABSOLUTE/new-mate.deploy.json`。它替换已验证 release 并要求配置与已安装配置一致。首版只有一套数据库格式，没有版本化迁移：同格式内的程序升级与重启保留会话、投递、任务、提醒和身份，但把数据目录退回旧版程序不受支持，需要时从升级前检查点恢复（`sudo matectl restore`）。验证后用 `sudo matectl finalize` 确认。配置变更先按上面的步骤取一份 checkpoint，再停机替换 `/etc/mate/mate.json` 并启动一次 Mate 让它应用并记录；现有 Agent 身份、UID/GID/home 和共享根不得改变，`runtime.dataDir` 不变才延续原有数据。原生操作细节与命令契约以安装器、`matectl` 和相关测试为准。
 
 配置只写 `mate.runTimeoutMs`；`mate.budgets` 等旧额度字段不再被接受，配置校验会直接拒绝整个文件。模型用量按每次 provider 调用持久记录为已知或未知，没有运行次数、token 或费用额度。
 

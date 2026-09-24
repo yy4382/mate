@@ -136,10 +136,7 @@ export class Projections {
           publisher,
           encode(imports),
         );
-      if (Number(s.db.pragma("user_version", { simple: true })) >= 20)
-        s.db
-          .prepare("UPDATE projection_bindings SET created_at=? WHERE id=?")
-          .run(this.clock(), id);
+      s.db.prepare("UPDATE projection_bindings SET created_at=? WHERE id=?").run(this.clock(), id);
       s.audit("projection_disclosure_authorized", {
         bindingId: id,
         conversationId,
