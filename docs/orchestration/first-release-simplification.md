@@ -79,3 +79,19 @@ only when every blocker is committed on the branch.
 ## Findings escalated to the user
 
 None yet.
+
+## Orchestration notes
+
+- Independent tickets run in separate git worktrees forked from the branch commit
+  that satisfies their blockers, with `node_modules` symlinked to the main
+  checkout (verified: full suite green in a worktree). Their commits are merged
+  back into the branch one at a time, so each ticket still lands as its own
+  commit referencing its issue number.
+- The orchestrator verifies every sub-agent claim from the git tree and the real
+  `pnpm check` / `pnpm typecheck` output; a ticket is only marked done here after
+  its commit is on the branch and the suite is green at that commit.
+- Baselines that later tickets may shrink but must not silently break: the
+  current-checkpoint, backup and restore tests, restart/recovery tests, and the
+  architecture/dependency contract tests in `tests/contracts/`. Tests that exist
+  only for the removed migration chain, old tool entry points and old config
+  compatibility are expected to leave with their tickets.
