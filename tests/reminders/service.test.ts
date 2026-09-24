@@ -1,5 +1,5 @@
 import { fixtureTarget, externalThread } from "../helpers/canonical-slack.js";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { Store } from "../../src/storage/store.js";
 import { Messages, Output } from "../helpers/canonical-slack.js";
 import { Collaboration } from "../../src/collaboration/service.js";
@@ -78,6 +78,88 @@ it("reminders survive completed tasks and wake only their author; fixed receipts
     n: 0,
   });
   expect((c.reminders.log("research", reminder.id) as any).events[0].kind).toBe("fired");
+  // Every record of the firing names the reminder's author, not whoever else is around.
+  expect(
+    s.db.prepare("SELECT actor_id FROM reminder_firings WHERE reminder_id=?").get(reminder.id),
+  ).toEqual({ actor_id: "research" });
+  expect((c.reminders.log("research", reminder.id) as any).events[0].actor_id).toBe("research");
+  // The delivery is the author's durable inbox entry for the reminder's own work item.
+  expect(
+    s.db.prepare("SELECT work_id FROM delivery_work WHERE delivery_id=?").get(deliveries[0]!.id),
+  ).toEqual({ work_id: work });
+});
+it("keeps firing a reminder that is attached to a finished task of its own work item", () => {
+  const { s, c } = setup();
+  // The reminder is attached to a task that lives in a work item of its own, not the source work.
+  const attached = c.createWork("attached-source", target);
+  const task = c.createTask("research", attached, target, "attached change");
+  c.claim("research", task);
+  const reminder = c.reminders.create("research", attached, { ...input, taskId: task });
+  c.update("research", task, "done", "verified");
+  expect(c.reminders.read("research", reminder.id).active).toBe(1);
+  c.tick(2000);
+  const deliveries = s.db.prepare("SELECT id,agent_id,payload FROM deliveries").all() as {
+    id: string;
+    agent_id: string;
+    payload: string;
+  }[];
+  expect(deliveries).toHaveLength(1);
+  expect(deliveries[0]!.agent_id).toBe("research");
+  expect(JSON.parse(deliveries[0]!.payload)).toMatchObject({
+    kind: "reminder",
+    reminderId: reminder.id,
+    content: input.content,
+  });
+  // The firing is attributed to the reminder's own work item, not to whatever else is selected.
+  expect(
+    s.db.prepare("SELECT work_id FROM delivery_work WHERE delivery_id=?").get(deliveries[0]!.id),
+  ).toEqual({ work_id: attached });
+  expect(
+    s.db.prepare("SELECT actor_id FROM reminder_firings WHERE reminder_id=?").get(reminder.id),
+  ).toEqual({ actor_id: "research" });
+  // The due firing is the author's durable delivery and can resume as the author's own run.
+  const run = s.beginRun("research")!;
+  expect(run.agentId).toBe("research");
+  c.bindRunWork(run, attached);
+  expect(s.delivery(run.deliveryId).agent_id).toBe("research");
+});
+it("keeps the attributed work item an attribution rather than a message or file grant", async () => {
+  const { s, m, c, work } = setup();
+  const execute = vi.fn(async (_request: unknown) => ({
+    code: 0,
+    stdout: "ok",
+    stderr: "",
+    truncated: false,
+  }));
+  const broker = new Broker(s, c, { execute }, { research: "/home/research" });
+  const reminder = c.reminders.create("research", work, { ...input, nextAt: 1000 });
+  c.tick(2000);
+  const delivery = s.db
+    .prepare("SELECT id,agent_id FROM deliveries WHERE agent_id='research'")
+    .get() as { id: string; agent_id: string };
+  expect(delivery.agent_id).toBe("research");
+  expect(
+    s.db.prepare("SELECT work_id FROM delivery_work WHERE delivery_id=?").get(delivery.id),
+  ).toEqual({ work_id: work });
+  // A peer that knows the work item still needs current membership of the conversation it names.
+  c.enqueue("writer", work, "writer-start", {});
+  const peer = s.beginRun("writer")!;
+  m.membership("writer", "CTEST", false);
+  expect(c.messages.access("writer", "CTEST")).toBe(false);
+  expect(() => c.selectWork(peer, work)).toThrow("access denied");
+  expect(() => c.reminders.read("writer", reminder.id)).toThrow("owned");
+  // The same work item carries no filesystem permission: an ordinary command in a run bound to it
+  // still executes as that Agent's own Linux home.
+  const author = s.beginRun("research")!;
+  await broker.execute(author, work, "work-scoped-command", {
+    kind: "exec",
+    cwd: ".",
+    command: "id",
+  });
+  expect(execute.mock.calls[0]![0]).toMatchObject({
+    agentId: "research",
+    root: "/home/research",
+  });
 });
 it("edits and cancellations are author-owned CAS operations; a completed task may remain an anchor", () => {
   const { c, work } = setup();
@@ -151,7 +233,7 @@ it("cancelPending withdraws every pending firing even when the displayed log is 
     n: 0,
   });
 });
-it("router requires versions even through legacy schedule aliases and publishes no reminder body", async () => {
+it("router requires versions for cancellation and publishes no reminder body", async () => {
   const { s, c, router, work } = setup();
   c.enqueue("research", work, "start", {});
   const run = s.beginRun("research")!;
@@ -161,14 +243,14 @@ it("router requires versions even through legacy schedule aliases and publishes 
     r = result.value as any;
   expect(r.content).toBe(input.content);
   await expect(
-    router.call(run, work, "cancel", "schedules.cancel", { scheduleId: r.id }, signal),
+    router.call(run, work, "cancel", "reminders.cancel", { reminderId: r.id }, signal),
   ).rejects.toThrow();
   const cancelled = await router.call(
     run,
     work,
     "cancel-v",
-    "schedules.cancel",
-    { scheduleId: r.id, expectedVersion: 1 },
+    "reminders.cancel",
+    { reminderId: r.id, expectedVersion: 1 },
     signal,
   );
   expect((cancelled.value as any).futureCancelled).toBe(true);

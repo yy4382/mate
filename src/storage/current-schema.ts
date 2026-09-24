@@ -107,20 +107,14 @@ CREATE INDEX intent_conversation ON task_intents(json_extract(target,'$.conversa
 CREATE INDEX work_conversation ON works(json_extract(target,'$.conversationId'));
 
 -- Reminders stay owned by their author and outlive the task they mention.
-CREATE TABLE schedules(id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agents(id), work_id TEXT NOT NULL REFERENCES works(id), task_id TEXT REFERENCES tasks(id), target TEXT NOT NULL, next_at INTEGER NOT NULL, cron TEXT, timezone TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, content TEXT NOT NULL DEFAULT 'Legacy reminder: follow up on the referenced conversation or task.', anchor TEXT, version INTEGER NOT NULL DEFAULT 1, legacy INTEGER NOT NULL DEFAULT 1, projection TEXT NOT NULL DEFAULT 'conversation_receipt'
+CREATE TABLE schedules(id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agents(id), work_id TEXT NOT NULL REFERENCES works(id), task_id TEXT REFERENCES tasks(id), target TEXT NOT NULL, next_at INTEGER NOT NULL, cron TEXT, timezone TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, content TEXT NOT NULL, anchor TEXT, version INTEGER NOT NULL DEFAULT 1, projection TEXT NOT NULL
  CHECK(projection IN ('private','conversation_receipt')));
 CREATE TABLE reminder_events(seq INTEGER PRIMARY KEY AUTOINCREMENT,reminder_id TEXT NOT NULL REFERENCES schedules(id),version INTEGER NOT NULL,kind TEXT NOT NULL,at INTEGER NOT NULL,payload TEXT NOT NULL,actor_id TEXT REFERENCES agents(id));
-CREATE TABLE reminder_event_baselines(
- reminder_id TEXT PRIMARY KEY REFERENCES schedules(id),
- historical_complete INTEGER NOT NULL CHECK(historical_complete IN (0,1)),
- migrated_at INTEGER NOT NULL
-);
 CREATE TABLE reminder_firings(id TEXT PRIMARY KEY,reminder_id TEXT NOT NULL REFERENCES schedules(id),due_at INTEGER NOT NULL,version INTEGER NOT NULL,delivery_id TEXT NOT NULL REFERENCES deliveries(id),output_id TEXT REFERENCES outbox(id),result_status TEXT
  CHECK(result_status IN ('completed','failed','deferred')),result_summary TEXT,result_at INTEGER,actor_id TEXT REFERENCES agents(id),UNIQUE(reminder_id,due_at,version));
 CREATE TABLE system_projections(output_id TEXT PRIMARY KEY REFERENCES outbox(id),kind TEXT NOT NULL CHECK(kind='reminder'),entity_id TEXT NOT NULL,version INTEGER NOT NULL);
 CREATE INDEX schedule_conversation ON schedules(json_extract(target,'$.conversationId'));
 CREATE INDEX schedule_due_status ON schedules(active,next_at,id);
-CREATE INDEX reminder_baseline_gaps ON reminder_event_baselines(reminder_id) WHERE historical_complete=0;
 CREATE INDEX reminder_events_page ON reminder_events(reminder_id,seq DESC);
 CREATE INDEX reminder_firings_page ON reminder_firings(reminder_id,due_at DESC,version DESC,id DESC);
 

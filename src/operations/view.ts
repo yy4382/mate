@@ -377,12 +377,9 @@ export class OperationsView {
         return { historicalComplete: n === 0, availableSince: null, gapCount: n };
       }
       case "reminder_event":
-      case "reminder_firing": {
-        const { n } = s.db
-          .prepare("SELECT COUNT(*) n FROM reminder_event_baselines WHERE historical_complete=0")
-          .get() as { n: number };
-        return { historicalComplete: n === 0, availableSince: null, gapCount: n };
-      }
+      case "reminder_firing":
+        // Every stored reminder was written by this format, so its activity has no gap.
+        return { historicalComplete: true, availableSince: null, gapCount: 0 };
       case "action": {
         const { n } = s.db
           .prepare("SELECT COUNT(*) n FROM actions WHERE created_at IS NULL")

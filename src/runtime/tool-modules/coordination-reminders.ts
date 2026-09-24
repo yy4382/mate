@@ -531,68 +531,7 @@ const definitions: ToolSpec[] = [
       ),
     }),
   }),
-  reminderRead(
-    "schedules.list",
-    z.object({}).strict(),
-    "Compatibility alias for listing this Agent’s reminders.",
-    selectedWork,
-    ({ collaboration: c, run }) => ({ value: c.schedules(run.agentId) }),
-  ),
-  spec({
-    name: "schedules.create",
-    schema: z
-      .object({
-        target: targetSchema,
-        nextAt: z.number().int().positive(),
-        timezone: id,
-        cron: id.optional(),
-        taskId: id.optional(),
-      })
-      .strict(),
-    description: "Compatibility wakeup creator with private projection.",
-    replayScope: "work",
-    seatPolicy: "deny",
-    effectPolicy: "atomic-recorded",
-    replayPolicy: "immutable",
-    authorize: (context, args) => activeWork(context, reminderReferences(context, args)),
-    handler: ({ collaboration: c, run, workId }, args) => ({
-      value: c.schedule(
-        run.agentId,
-        workId,
-        args.target,
-        args.nextAt,
-        args.timezone,
-        args.cron,
-        args.taskId,
-      ),
-    }),
-  }),
-  spec({
-    name: "schedules.cancel",
-    schema: z
-      .object({
-        scheduleId: id,
-        expectedVersion: z.number().int().positive(),
-        cancelPending: z.boolean().optional(),
-      })
-      .strict(),
-    description: "Compatibility reminder cancellation with CAS.",
-    replayScope: "work",
-    seatPolicy: "deny",
-    effectPolicy: "atomic-recorded",
-    replayPolicy: "immutable",
-    authorize: (context, args) => activeWork(context, ownedReminder(context, args.scheduleId)),
-    handler: ({ collaboration: c, run }, args) => ({
-      value: c.reminders.cancel(
-        run.agentId,
-        args.scheduleId,
-        args.expectedVersion,
-        args.cancelPending,
-      ),
-    }),
-  }),
 ];
-
 export const coordinationRemindersModule: ToolModule = Object.freeze({
   domain: "coordination-reminders",
   specs: Object.freeze(definitions),

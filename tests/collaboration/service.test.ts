@@ -141,32 +141,35 @@ it("wakeups catch up once, retain origin, are transactional and outlive their ta
   const { db, service, work } = setup();
   const task = service.createTask("research", work, target, "watch");
   service.claim("research", task);
-  const once = service.schedule("research", work, target, 1000, "Asia/Shanghai", undefined, task);
-  const recurring = service.schedule(
-    "research",
-    work,
+  const input = {
     target,
-    1000,
-    "Asia/Shanghai",
-    "* * * * *",
-    task,
-  );
+    content: "Follow up on the referenced conversation or task.",
+    timezone: "Asia/Shanghai",
+    taskId: task,
+  };
+  const once = service.reminders.create("research", work, { ...input, nextAt: 1000 }).id;
+  const recurring = service.reminders.create("research", work, {
+    ...input,
+    nextAt: 1000,
+    cron: "* * * * *",
+  }).id;
   db.db.exec(
     "CREATE TRIGGER fail_wake BEFORE INSERT ON deliveries BEGIN SELECT RAISE(ABORT,'crash'); END;",
   );
   expect(() => service.tick(3600000)).toThrow("crash");
-  expect(service.schedules("research").every((s) => s.active === 1)).toBe(true);
+  expect(service.reminders.list("research").every((s) => s.active === 1)).toBe(true);
   db.db.exec("DROP TRIGGER fail_wake");
   service.tick(3600000);
   service.tick(3600000);
   expect(db.db.prepare("SELECT count(*) n FROM deliveries").get()).toEqual({ n: 2 });
-  expect(service.schedules("research").find((s) => s.id === once)?.active).toBe(0);
-  expect(service.schedules("research").find((s) => s.id === recurring)?.next_at).toBeGreaterThan(
-    3600000,
-  );
+  expect(service.reminders.list("research").find((s) => s.id === once)?.active).toBe(0);
+  expect(
+    service.reminders.list("research").find((s) => s.id === recurring)?.next_at,
+  ).toBeGreaterThan(3600000);
   service.update("research", task, "cancelled");
-  expect(service.schedules("research").find((s) => s.id === recurring)?.active).toBe(1);
-  service.cancelSchedule("research", recurring);
-  expect(service.schedules("research").every((s) => s.active === 0)).toBe(true);
-  expect(() => service.cancelSchedule("engineer", recurring)).toThrow("owned");
+  expect(service.reminders.list("research").find((s) => s.id === recurring)?.active).toBe(1);
+  const current = service.reminders.read("research", recurring);
+  service.reminders.cancel("research", recurring, current.version);
+  expect(service.reminders.list("research").every((s) => s.active === 0)).toBe(true);
+  expect(() => service.reminders.read("engineer", recurring)).toThrow("owned");
 });

@@ -114,7 +114,7 @@ export class Controls {
         return "Review isolation released; explicitly resume the Agent";
       case "tasks":
         return c.operations.activity(user, { sources: ["task"] });
-      case "schedules":
+      case "reminders":
         return c.operations.activity(user, { sources: ["reminder_event", "reminder_firing"] });
       case "stop":
       case "pause":
@@ -142,7 +142,7 @@ export class Controls {
         s.resume(id);
         return `Agent ${id} resumed`;
       default:
-        return "Commands: status; system-pending; system-status REQUEST_ID; system-output REQUEST_ID stdout|stderr OFFSET; processes AGENT_ID; process-stop AGENT_ID UNIT; activity [JSON]; tasks; schedules; conversations; projection-bindings; projection-add CONVERSATION_ID JSON; projections CONVERSATION_ID JSON; projection-inputs BINDING_ID JSON; projection-enable BINDING_ID true|false; projection-anchor BINDING_ID ROOT_ID; stop|resume|cancel WORK_ID; agent-stop|agent-resume AGENT_ID; agent-reset AGENT_ID CHECKPOINT";
+        return "Commands: status; system-pending; system-status REQUEST_ID; system-output REQUEST_ID stdout|stderr OFFSET; processes AGENT_ID; process-stop AGENT_ID UNIT; activity [JSON]; tasks; reminders; conversations; projection-bindings; projection-add CONVERSATION_ID JSON; projections CONVERSATION_ID JSON; projection-inputs BINDING_ID JSON; projection-enable BINDING_ID true|false; projection-anchor BINDING_ID ROOT_ID; stop|resume|cancel WORK_ID; agent-stop|agent-resume AGENT_ID; agent-reset AGENT_ID CHECKPOINT";
     }
   }
 }

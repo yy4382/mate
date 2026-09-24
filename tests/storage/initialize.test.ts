@@ -42,7 +42,7 @@ function rejected(path: string): Error {
  * members (channel_access, channel_watches, thread_watches, internal_members, internal_dm_pairs),
  * deliveries (deliveries, delivery_work, delivery_context, runs, run_context, inbox_reads),
  * tasks (tasks, task_events, task_event_baselines, task_intents, task_projections, works, work_runs),
- * reminders (schedules, reminder_events, reminder_event_baselines, reminder_firings, system_projections),
+ * reminders (schedules, reminder_events, reminder_firings, system_projections),
  * sessions (agents, sessions, entries, snapshots, agent_checkpoints, session_resets, review_seats),
  * usage (model_usage), drafts (outbox, drafts, output_work),
  * operation results (actions, system_requests, operational_facts),
@@ -88,7 +88,6 @@ const requiredTables = [
   "projection_bindings",
   "projection_imports",
   "projection_outbox",
-  "reminder_event_baselines",
   "reminder_events",
   "reminder_firings",
   "review_seats",
@@ -145,7 +144,6 @@ const requiredIndexes = [
   "reminder_activity_actor",
   "reminder_activity_actor_kind",
   "reminder_activity_kind",
-  "reminder_baseline_gaps",
   "reminder_events_page",
   "reminder_firing_activity",
   "reminder_firing_activity_actor",
@@ -200,6 +198,34 @@ it("creates the current format in one step", () => {
     expect(names(db, "table")).toEqual([...requiredTables].sort());
     expect(names(db, "index")).toEqual([...requiredIndexes].sort());
     expect(names(db, "trigger")).toEqual([...requiredTriggers].sort());
+    // A reminder keeps only the fields current behaviour reads: the old migration marker and the
+    // old-record defaults left with the old records they served.
+    expect(
+      (
+        db.prepare("SELECT name FROM pragma_table_info('schedules') ORDER BY name").all() as {
+          name: string;
+        }[]
+      ).map((row) => row.name),
+    ).toEqual([
+      "active",
+      "agent_id",
+      "anchor",
+      "content",
+      "cron",
+      "id",
+      "next_at",
+      "projection",
+      "target",
+      "task_id",
+      "timezone",
+      "version",
+      "work_id",
+    ]);
+    expect(
+      (db.pragma("table_info(schedules)") as { name: string; dflt_value: string | null }[])
+        .filter((column) => column.dflt_value !== null)
+        .map((column) => column.name),
+    ).toEqual(["active", "version"]);
     // The file identifies itself as this release's format, not an earlier or later schema.
     expect(db.pragma("application_id", { simple: true })).toBe(1296127045);
     expect(db.pragma("user_version", { simple: true })).toBe(25);

@@ -20,7 +20,6 @@ export interface Reminder {
   content: string;
   anchor: string | null;
   version: number;
-  legacy: number;
   projection: "private" | "conversation_receipt";
 }
 export interface ReminderInput {
@@ -100,7 +99,7 @@ export class Reminders {
     return s.atomic(() => {
       s.db
         .prepare(
-          "INSERT INTO schedules(id,agent_id,work_id,task_id,target,next_at,cron,timezone,content,anchor,legacy,projection) VALUES(?,?,?,?,?,?,?,?,?,?,0,?)",
+          "INSERT INTO schedules(id,agent_id,work_id,task_id,target,next_at,cron,timezone,content,anchor,projection) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
         )
         .run(
           id,
@@ -115,7 +114,6 @@ export class Reminders {
           input.anchor ? encode(input.anchor) : null,
           input.projection ?? "private",
         );
-      s.db.prepare("INSERT INTO reminder_event_baselines VALUES(?,1,?)").run(id, Date.now());
       this.c.messages.writes.mutable("schedules", id);
       const reminder = this.read(actor, id);
       this.event(reminder, "created", {});
@@ -130,7 +128,7 @@ export class Reminders {
       this.validate(actor, input);
       this.c.store.db
         .prepare(
-          "UPDATE schedules SET target=?,content=?,next_at=?,timezone=?,cron=?,task_id=?,anchor=?,projection=?,active=1,version=version+1,legacy=0 WHERE id=?",
+          "UPDATE schedules SET target=?,content=?,next_at=?,timezone=?,cron=?,task_id=?,anchor=?,projection=?,active=1,version=version+1 WHERE id=?",
         )
         .run(
           encode(input.target),

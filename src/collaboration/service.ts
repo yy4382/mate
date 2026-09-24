@@ -1,6 +1,6 @@
 import { ConfiguredAgents, type AgentDirectory } from "../agents/directory.js";
 import { CanonicalOutput as Output } from "../conversations/output.js";
-import { Reminders, type Reminder } from "../reminders/service.js";
+import { Reminders } from "../reminders/service.js";
 import type { SendBasis } from "../conversations/freshness.js";
 import { ReviewSeats } from "../conversations/review-seats.js";
 import { CanonicalAttention as Attention } from "../conversations/attention.js";
@@ -529,43 +529,6 @@ export class Collaboration {
       });
       return updated;
     });
-  }
-  schedule(
-    agentId: string,
-    workId: string,
-    target: Target,
-    nextAt: number,
-    timezone: string,
-    cron?: string,
-    taskId?: string,
-  ): string {
-    return this.reminders.create(agentId, workId, {
-      target,
-      nextAt,
-      timezone,
-      cron,
-      taskId,
-      content: "Follow up on the referenced conversation or task.",
-    }).id;
-  }
-  cancelSchedule(agentId: string, id: string): void {
-    const r = this.reminders.read(agentId, id);
-    this.reminders.cancel(agentId, id, r.version);
-  }
-  reschedule(agentId: string, id: string, nextAt: number): void {
-    const r = this.reminders.read(agentId, id);
-    this.reminders.edit(agentId, id, r.version, {
-      target: JSON.parse(r.target),
-      content: r.content,
-      nextAt,
-      timezone: r.timezone,
-      cron: r.cron ?? undefined,
-      taskId: r.task_id ?? undefined,
-      anchor: r.anchor ? JSON.parse(r.anchor) : undefined,
-    });
-  }
-  schedules(agentId: string): Reminder[] {
-    return this.reminders.list(agentId);
   }
   tick(now = Date.now()): void {
     this.store.atomic(() => {

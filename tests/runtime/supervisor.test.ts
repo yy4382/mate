@@ -449,6 +449,44 @@ it("attributes each model call to the activity selected when that call begins", 
     { call_index: 2, work_id: other },
   ]);
 });
+it("runs a reminder firing for its author and attributes its model usage to them and the work item", async () => {
+  const { answer } = await import("../helpers/pi.js");
+  const { store, collaboration: c, supervisor: original, router } = setup();
+  original.close();
+  // The reminder belongs to its author's own work item, which no run selected.
+  const reminderWork = c.createWork("reminder-source", { conversationId: "CTWO" });
+  const reminder = c.reminders.create("research", reminderWork, {
+    target: { conversationId: "CTWO" },
+    content: "check the promised follow-up",
+    nextAt: 1,
+    timezone: "UTC",
+  });
+  c.tick(2);
+  const supervisor = new Supervisor(c, router, { runTimeoutMs: 10000 }, () => ({
+    close() {},
+    async run(_spec, hooks) {
+      await hooks.usageBegin?.(1, "openai", "synthetic");
+      await hooks.usageComplete?.(1, answer([]));
+      return { tokens: 24, cost: 0, certain: true, waiting: false, continuation: false };
+    },
+  }));
+  cleanups.unshift(() => supervisor.close());
+  const deliveries = store.db.prepare("SELECT id,agent_id FROM deliveries").all() as {
+    id: string;
+    agent_id: string;
+  }[];
+  expect(deliveries).toEqual([{ id: expect.any(String), agent_id: "research" }]);
+  expect(
+    store.db
+      .prepare("SELECT work_id FROM delivery_work WHERE delivery_id=?")
+      .get(deliveries[0]!.id),
+  ).toEqual({ work_id: reminderWork });
+  await supervisor.step("research");
+  expect(store.db.prepare("SELECT agent_id,work_id FROM model_usage").all()).toEqual([
+    { agent_id: "research", work_id: reminderWork },
+  ]);
+  expect(reminder.agent_id).toBe("research");
+});
 it("selected activity survives interrupted delivery recovery while its origin is paused", () => {
   const { store, collaboration: c, work } = setup();
   const other = c.createWork("other", { conversationId: "CTWO" });
