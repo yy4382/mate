@@ -12,9 +12,24 @@ import {
   renderLinuxService,
   renderLinuxMaintenanceWrapper,
 } from "../../src/deployment/linux-installer.js";
-import { runDoctor, type DoctorEnvironment } from "../../src/deployment/doctor.js";
-import type { LinuxInstallerHost as InstallerHost } from "../../src/deployment/linux-host.js";
+import { runDoctor } from "../../src/deployment/doctor.js";
+import { SimulatedHost, deploymentCommands, type SimulatedHostOptions } from "../helpers/host.js";
 
+const binaries = [
+  "/usr/bin/systemctl",
+  "/usr/bin/systemd-run",
+  "/usr/bin/setpriv",
+  "/usr/bin/getent",
+  "/usr/bin/id",
+  "/usr/bin/node",
+  "/usr/bin/cp",
+  "/usr/bin/chown",
+  "/usr/bin/chmod",
+];
+const accounts = {
+  "mate-alice": { uid: 2001, gid: 2001, home: "/srv/mate/private/alice" },
+  "mate-bob": { uid: 2002, gid: 2002, home: "/srv/mate/private/bob" },
+};
 const config = () =>
   daemonConfigSchema.parse({
     version: 2,
@@ -41,8 +56,18 @@ const config = () =>
       dataDir: "/var/lib/mate",
       sharedRoot: "/srv/mate/shared",
       linuxUsers: {
-        alice: { uid: 2001, gid: 2001, username: "mate-alice", home: "/srv/mate/private/alice" },
-        bob: { uid: 2002, gid: 2002, username: "mate-bob", home: "/srv/mate/private/bob" },
+        alice: {
+          uid: 2001,
+          gid: 2001,
+          username: "mate-alice",
+          home: "/srv/mate/private/alice",
+        },
+        bob: {
+          uid: 2002,
+          gid: 2002,
+          username: "mate-bob",
+          home: "/srv/mate/private/bob",
+        },
       },
       researchHosts: [],
     },
@@ -53,15 +78,43 @@ const spec = () =>
     release: { source: "/candidate", gitCommit: "abcdef1234567" },
     configSource: "/input/mate.json",
   });
-const facts = { canonical: (path: string) => path, directoryBytes: () => 123456 };
+/** A Debian 13 host with a candidate release tree; every operation goes through the host entry. */
+function debianHost(overrides: SimulatedHostOptions = {}) {
+  const host = new SimulatedHost({
+    ...overrides,
+    directories: { "/candidate/node_modules": 0o755, ...overrides.directories },
+    executables: [...binaries, ...(overrides.executables ?? [])],
+    files: {
+      "/etc/os-release": 'ID=debian\nVERSION_ID="13"\n',
+      "/candidate/dist/main.js": "one",
+      "/candidate/package.json": "{}",
+      "/candidate/pnpm-lock.yaml": "lockfileVersion: 9",
+      ...overrides.files,
+    },
+  });
+  return host.onCommand(
+    overrides.run ?? deploymentCommands(host, { accounts, node: overrides.node ?? "v24.0.0" }),
+  );
+}
 
-it("plans one ordinary Linux identity per Agent with a shared root, no Docker image or volumes", () => {
-  const plan = createLinuxDeploymentPlan(spec(), config(), facts);
+it("plans one ordinary Linux identity per Agent with a shared root, no Docker image or volumes", async () => {
+  const plan = await createLinuxDeploymentPlan(spec(), config(), debianHost());
   expect(plan.mode).toBe("linux-users");
   expect(plan.agents.map((item) => [item.agentId, item.uid, item.home])).toEqual([
     ["alice", 2001, "/srv/mate/private/alice"],
     ["bob", 2002, "/srv/mate/private/bob"],
   ]);
+  expect(plan.agents.map((item) => item.slice)).toEqual([
+    "mate-agent-2001.slice",
+    "mate-agent-2002.slice",
+  ]);
+  expect(plan.permissions).toEqual({
+    mateData: "root:root 0700",
+    configAndSecrets: "root:root 0600",
+    privateHomes: "Agent UID:GID 0700",
+    sharedRoot: "root:root 0755",
+    sharedAgentDirectories: "Agent UID:GID 0755",
+  });
   expect(JSON.stringify(plan)).not.toContain("docker");
   expect(renderAgentSlice()).toContain("TasksMax=128");
   expect(renderLinuxService(plan)).toContain("User=root");
@@ -84,7 +137,7 @@ it("plans one ordinary Linux identity per Agent with a shared root, no Docker im
   }
 });
 
-it("rejects old loopback specs, control overlap, aliased paths and missing Linux usernames", () => {
+it("rejects old loopback specs, control overlap, aliased paths and missing Linux usernames", async () => {
   expect(() =>
     deploymentSpecSchema.parse({
       ...spec(),
@@ -95,13 +148,16 @@ it("rejects old loopback specs, control overlap, aliased paths and missing Linux
     ...config(),
     runtime: { ...config().runtime, sharedRoot: "/var/lib/mate/shared" },
   });
-  expect(() => createLinuxDeploymentPlan(spec(), overlapping, facts)).toThrow("overlaps");
-  expect(() =>
-    createLinuxDeploymentPlan(spec(), config(), {
-      ...facts,
-      canonical: (path) => (path === "/candidate" ? "/real-candidate" : path),
-    }),
-  ).toThrow("canonical");
+  await expect(createLinuxDeploymentPlan(spec(), overlapping, debianHost())).rejects.toThrow(
+    "overlaps",
+  );
+  await expect(
+    createLinuxDeploymentPlan(
+      spec(),
+      config(),
+      debianHost({ canonical: (path) => (path === "/candidate" ? "/real-candidate" : path) }),
+    ),
+  ).rejects.toThrow("canonical");
   const nameless = daemonConfigSchema.parse({
     ...config(),
     runtime: {
@@ -112,7 +168,9 @@ it("rejects old loopback specs, control overlap, aliased paths and missing Linux
       },
     },
   });
-  expect(() => createLinuxDeploymentPlan(spec(), nameless, facts)).toThrow("username");
+  await expect(createLinuxDeploymentPlan(spec(), nameless, debianHost())).rejects.toThrow(
+    "username",
+  );
 });
 
 it("keeps Linux UID and private-home identity stable through configuration migration", () => {
@@ -124,52 +182,32 @@ it("keeps Linux UID and private-home identity stable through configuration migra
   expect(() => assertConfigurationEvolution(previous, next)).toThrow("topology");
 });
 
-it("preflights Debian, normal passwd identities, disk, memory and inactive service without mutations", () => {
-  const calls: string[] = [];
-  const host: InstallerHost = {
-    platform: "linux",
-    arch: "x64",
-    node: "v24.0.0",
-    euid: () => 0,
-    read: () => 'ID=debian\nVERSION_ID="13"\n',
-    assertRootExecutable: (path) => {
-      calls.push(path);
-    },
-    run: (binary, args) => {
-      calls.push(`${binary} ${args.join(" ")}`);
-      if (binary === "/usr/bin/getent")
-        return {
-          code: 0,
-          stdout: `${args[1]}:x:${args[1] === "mate-alice" ? 2001 : 2002}:${args[1] === "mate-alice" ? 2001 : 2002}::/srv/mate/private/${args[1] === "mate-alice" ? "alice" : "bob"}:/bin/bash\n`,
-          stderr: "",
-        };
-      if (binary === "/usr/bin/id")
-        return { code: 0, stdout: args[1] === "mate-alice" ? "2001\n" : "2002\n", stderr: "" };
-      if (binary === "/usr/bin/node") return { code: 0, stdout: "v24.0.0\n", stderr: "" };
-      return { code: 3, stdout: "", stderr: "" };
-    },
-    directoryBytes: () => 123456,
-    canonical: (path) => path,
-    availableBytes: () => 1024 ** 3,
-    memoryMiB: () => 2048,
-  };
-  expect(preflightLinuxDeployment(spec(), config(), host).mode).toBe("linux-users");
-  expect(calls.some((call) => call.includes("docker"))).toBe(false);
-  expect(() =>
-    preflightLinuxDeployment(spec(), config(), { ...host, memoryMiB: () => 128 }),
-  ).toThrow("memory");
-  expect(() => preflightLinuxDeployment(spec(), config(), { ...host, node: "v24.1.0" })).toThrow(
-    "differs",
-  );
-  expect(() =>
-    preflightLinuxDeployment(spec(), config(), {
-      ...host,
-      run: (binary, args) =>
-        binary === "/usr/bin/systemctl"
-          ? { code: 0, stdout: "", stderr: "" }
-          : host.run(binary, args),
-    }),
-  ).toThrow("Stop mate.service");
+it("preflights Debian, normal passwd identities, disk, memory and inactive service without mutations", async () => {
+  const host = debianHost();
+  expect((await preflightLinuxDeployment(host, spec(), config())).mode).toBe("linux-users");
+  expect(host.commands.some((call) => call.binary.includes("docker"))).toBe(false);
+  expect(
+    host.ops.filter((event) =>
+      ["mkdir", "chown", "chmod", "createExclusive", "rename", "remove", "symlink"].includes(
+        event.op,
+      ),
+    ),
+  ).toEqual([]);
+  await expect(
+    preflightLinuxDeployment(debianHost({ memoryMiB: 128 }), spec(), config()),
+  ).rejects.toThrow("memory");
+  await expect(
+    preflightLinuxDeployment(debianHost({ node: "v24.1.0" }), spec(), config()),
+  ).rejects.toThrow("differs");
+  await expect(
+    preflightLinuxDeployment(
+      debianHost({
+        run: deploymentCommands(debianHost(), { accounts, activeState: "active" }),
+      }),
+      spec(),
+      config(),
+    ),
+  ).rejects.toThrow("Stop mate.service");
 });
 
 it("rejects system approval when no configured Slack owner can receive its request", async () => {
@@ -196,20 +234,14 @@ it("rejects system approval when no configured Slack owner can receive its reque
       },
       runtime: { ...base.runtime, systemAgents: ["alice"] },
     });
-  const env: DoctorEnvironment = {
-    platform: "linux",
-    arch: "x64",
-    node: "v24.0.0",
-    modulesAbi: "137",
-    uid: 0,
-    gid: 0,
-    read: () => "ID=debian\nVERSION_ID=13\n",
-    run: () => ({ code: 1, stdout: "", stderr: "" }),
-  };
   const approval = async (c: ReturnType<typeof withSlack>) =>
-    (await runDoctor(c, env, { requireSecrets: false })).checks.find(
+    (await runDoctor(debianHost(), c, { requireSecrets: false })).checks.find(
       (check) => check.name === "system-approval",
     );
-  expect(await approval(withSlack({ UOTHER: "other" }))).toMatchObject({ status: "fail" });
-  expect(await approval(withSlack({ UOWNER: "owner" }))).toMatchObject({ status: "pass" });
+  expect(await approval(withSlack({ UOTHER: "other" }))).toMatchObject({
+    status: "fail",
+  });
+  expect(await approval(withSlack({ UOWNER: "owner" }))).toMatchObject({
+    status: "pass",
+  });
 });

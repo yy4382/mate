@@ -1,9 +1,14 @@
-import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
-import { spawnSync } from "node:child_process";
 import { slackRuntimeConfig, type DaemonConfig } from "../daemon/config.js";
 import { managedLayout } from "./systemd.js";
 import { verifyRelease } from "./release.js";
+import type { HostOperations } from "./host.js";
+import {
+  assertAgentWorkspace,
+  assertManagedEntry,
+  controlEntries,
+  hostRules,
+} from "./host-rules.js";
 
 export type DoctorStatus = "pass" | "fail" | "info";
 export interface DoctorCheck {
@@ -15,50 +20,6 @@ export interface DoctorReport {
   version: 1;
   healthy: boolean;
   checks: DoctorCheck[];
-}
-export interface DoctorEnvironment {
-  platform: NodeJS.Platform;
-  arch: string;
-  node: string;
-  modulesAbi: string;
-  uid: number;
-  gid: number;
-  read(path: string): string;
-  run(binary: string, args: readonly string[]): { code: number; stdout: string; stderr: string };
-}
-
-const nodeEnvironment = (): DoctorEnvironment => ({
-  platform: process.platform,
-  arch: process.arch,
-  node: process.version,
-  modulesAbi: process.versions.modules,
-  uid: process.getuid?.() ?? -1,
-  gid: process.getgid?.() ?? -1,
-  read: (path) => readFileSync(path, "utf8"),
-  run: (binary, args) => {
-    const result = spawnSync(binary, [...args], {
-      encoding: "utf8",
-      env: { PATH: "/usr/sbin:/usr/bin:/sbin:/bin", LANG: "C.UTF-8" },
-    });
-    return {
-      code: result.status ?? 1,
-      stdout: result.stdout ?? "",
-      stderr: result.stderr ?? String(result.error ?? ""),
-    };
-  },
-});
-
-function protectedFile(path: string, gid: number, mode: number): void {
-  const stat = lstatSync(path);
-  if (
-    !stat.isFile() ||
-    stat.isSymbolicLink() ||
-    stat.nlink !== 1 ||
-    stat.uid !== 0 ||
-    stat.gid !== gid ||
-    (stat.mode & 0o777) !== mode
-  )
-    throw new Error(`${path} must be root-owned and mode ${mode.toString(8)}`);
 }
 
 function requiredSecretReferences(config: DaemonConfig): string[] {
@@ -78,13 +39,15 @@ export interface DoctorOptions {
   requireSecrets?: boolean;
 }
 
+/** Verify Debian deployment facts through the replaceable host-operations entry. */
 export async function runDoctor(
+  host: HostOperations,
   config: DaemonConfig,
-  env: DoctorEnvironment = nodeEnvironment(),
   options: DoctorOptions = {},
 ): Promise<DoctorReport> {
   if (!config.runtime.linuxUsers || !config.runtime.sharedRoot)
     throw new Error("Debian Linux-user deployment configuration required");
+  const rules = hostRules(config);
   const checks: DoctorCheck[] = [];
   const check = async (
     name: string,
@@ -92,7 +55,11 @@ export async function runDoctor(
     failure = true,
   ): Promise<void> => {
     try {
-      checks.push({ name, status: failure ? "pass" : "info", detail: await action() });
+      checks.push({
+        name,
+        status: failure ? "pass" : "info",
+        detail: await action(),
+      });
     } catch (error) {
       checks.push({
         name,
@@ -101,12 +68,11 @@ export async function runDoctor(
       });
     }
   };
-  await check("supported-runtime", () => {
-    if (env.platform !== "linux" || env.arch !== "x64" || !/^v24\./.test(env.node))
+  await check("supported-runtime", async () => {
+    if (host.platform !== "linux" || host.arch !== "x64" || !/^v24\./.test(host.node))
       throw new Error("Expected Debian deployment runtime: Linux x86_64 and Node 24");
     const values = Object.fromEntries(
-      env
-        .read("/etc/os-release")
+      (await host.readText("/etc/os-release"))
         .split("\n")
         .filter((line) => line.includes("="))
         .map((line) => {
@@ -116,80 +82,61 @@ export async function runDoctor(
     );
     if (values.ID !== "debian" || values.VERSION_ID !== "13")
       throw new Error("Only Debian 13 x86_64 is an accepted production baseline");
-    return `Debian 13 ${env.arch}, ${env.node}, ABI ${env.modulesAbi}`;
+    return `Debian 13 ${host.arch}, ${host.node}, ABI ${host.modulesAbi}`;
   });
-  await check("configuration-ownership", () => {
-    protectedFile(managedLayout.config, 0, 0o600);
-    protectedFile(managedLayout.environment, 0, 0o600);
-    return "configuration and credentials are root-only";
+  await check("managed-layout", async () => {
+    const entries = controlEntries(rules);
+    for (const entry of entries) await assertManagedEntry(host, entry, rules);
+    for (const agent of rules.agents) {
+      await assertAgentWorkspace(host, rules, agent);
+      await assertManagedEntry(host, agent.slice, rules);
+    }
+    return `${entries.length + rules.agents.length * 2} managed paths match the deployment rules`;
   });
   await check("release-identity", async () => {
-    const current = realpathSync(options.releaseRoot ?? managedLayout.current),
+    const current = await host.canonical(options.releaseRoot ?? managedLayout.current),
       prefix = `${managedLayout.releases}${sep}`;
     if (!current.startsWith(prefix))
       throw new Error("Current release escapes the managed release directory");
-    const manifest = await verifyRelease(current, undefined, {
-      platform: env.platform,
-      arch: env.arch,
-      node: env.node,
-      modulesAbi: env.modulesAbi,
+    const manifest = await verifyRelease(host, current, undefined, {
+      platform: host.platform,
+      arch: host.arch,
+      node: host.node,
+      modulesAbi: host.modulesAbi,
       packageManager: "pnpm@10.33.0",
     });
     if (resolve(managedLayout.releases, manifest.releaseId) !== current)
       throw new Error("Current release path does not match its content identity");
     for (const entry of manifest.inventory) {
-      const stat = lstatSync(join(current, entry.path));
+      const stat = await host.lstat(join(current, entry.path));
       if (stat.uid !== 0 || (entry.type !== "symlink" && (stat.mode & 0o022) !== 0))
         throw new Error(`Release entry is not immutable root-owned content: ${entry.path}`);
     }
-    const root = lstatSync(current);
+    const root = await host.lstat(current);
     if (root.uid !== 0 || (root.mode & 0o022) !== 0)
       throw new Error("Release root is not immutable root-owned content");
     return manifest.releaseId;
   });
-  await check("linux-identities", () => {
-    for (const [agentId, user] of Object.entries(config.runtime.linuxUsers!)) {
-      if (!user.username) throw new Error(`${agentId}: managed deployment requires a username`);
-      const account = env.run("/usr/bin/getent", ["passwd", user.username]);
-      const fields = account.stdout.trim().split(":");
+  await check("linux-identities", async () => {
+    for (const agent of rules.agents) {
+      const identity = agent.identity;
+      if (!identity.username)
+        throw new Error(`${identity.agentId}: managed deployment requires a username`);
+      const account = host.run("/usr/bin/getent", ["passwd", identity.username]),
+        fields = account.stdout.trim().split(":");
       if (
         account.code !== 0 ||
         fields.length !== 7 ||
-        Number(fields[2]) !== user.uid ||
-        Number(fields[3]) !== user.gid ||
-        fields[5] !== user.home
+        Number(fields[2]) !== identity.uid ||
+        Number(fields[3]) !== identity.gid ||
+        fields[5] !== identity.home
       )
-        throw new Error(`${agentId}: Linux account differs from configuration`);
-      const home = lstatSync(user.home);
-      if (
-        !home.isDirectory() ||
-        home.isSymbolicLink() ||
-        home.uid !== user.uid ||
-        home.gid !== user.gid ||
-        (home.mode & 0o777) !== 0o700
-      )
-        throw new Error(`${agentId}: private directory ownership or mode differs: ${user.home}`);
-      const memory = lstatSync(join(user.home, "MEMORY.md"));
-      if (
-        !memory.isFile() ||
-        memory.isSymbolicLink() ||
-        memory.uid !== user.uid ||
-        memory.gid !== user.gid ||
-        (memory.mode & 0o777) !== 0o600
-      )
-        throw new Error(`${agentId}: private memory entry differs`);
-      const sharedWork = lstatSync(join(config.runtime.sharedRoot!, agentId));
-      if (
-        !sharedWork.isDirectory() ||
-        sharedWork.isSymbolicLink() ||
-        sharedWork.uid !== user.uid ||
-        sharedWork.gid !== user.gid ||
-        (sharedWork.mode & 0o777) !== 0o755
-      )
-        throw new Error(`${agentId}: shared work directory differs`);
-      const slice = env.run("/usr/bin/systemctl", [
+        throw new Error(`${identity.agentId}: Linux account differs from configuration`);
+      if (host.run("/usr/bin/id", ["-G", identity.username!]).code !== 0)
+        throw new Error(`${identity.agentId}: Linux groups are unavailable`);
+      const slice = host.run("/usr/bin/systemctl", [
         "show",
-        `mate-agent-${user.uid}.slice`,
+        agent.sliceUnit,
         "-p",
         "LoadState",
         "-p",
@@ -219,30 +166,9 @@ export async function runDoctor(
         !values.CPUQuotaPerSecUSec ||
         values.CPUQuotaPerSecUSec === "infinity"
       )
-        throw new Error(`${agentId}: finite process quotas are unavailable`);
+        throw new Error(`${identity.agentId}: finite process quotas are unavailable`);
     }
-    const root = lstatSync(config.runtime.dataDir),
-      state = lstatSync(join(config.runtime.dataDir, "state")),
-      shared = lstatSync(config.runtime.sharedRoot!);
-    if (
-      [root, state].some(
-        (stat) =>
-          !stat.isDirectory() ||
-          stat.isSymbolicLink() ||
-          stat.uid !== 0 ||
-          stat.gid !== 0 ||
-          (stat.mode & 0o777) !== 0o700,
-      )
-    )
-      throw new Error("Mate data and state must be root-only");
-    if (
-      !shared.isDirectory() ||
-      shared.isSymbolicLink() ||
-      shared.uid !== 0 ||
-      (shared.mode & 0o777) !== 0o755
-    )
-      throw new Error("Shared root must be root-owned and peer-readable");
-    return `${Object.keys(config.runtime.linuxUsers!).length} Linux identities and private homes checked`;
+    return `${rules.agents.length} Linux identities, private homes and process slices checked`;
   });
   await check("system-approval", () => {
     const eligible = config.runtime.systemAgents ?? [];
@@ -272,10 +198,14 @@ export async function runDoctor(
   await check(
     "service-state",
     () => {
-      const result = env.run("/usr/bin/systemctl", ["is-active", "mate.service"]);
+      const result = host.run("/usr/bin/systemctl", ["is-active", "mate.service"]);
       return result.code === 0 ? "active" : "inactive";
     },
     false,
   );
-  return { version: 1, healthy: checks.every((item) => item.status !== "fail"), checks };
+  return {
+    version: 1,
+    healthy: checks.every((item) => item.status !== "fail"),
+    checks,
+  };
 }

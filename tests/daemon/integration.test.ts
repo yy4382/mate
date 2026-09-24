@@ -27,6 +27,7 @@ import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { Ingress } from "../../src/daemon/ingress.js";
 import { acquireLock } from "../../src/daemon/lock.js";
 import { backup } from "../../src/daemon/backup.js";
+import { nodeHostOperations } from "../../src/deployment/host.js";
 import { Research, publicIPv4 } from "../../src/daemon/research.js";
 import { Controls } from "../../src/daemon/control.js";
 import { SlackService, formatControlReply } from "../../src/slack/service.js";
@@ -270,7 +271,7 @@ it("kernel lock excludes a second daemon; backup restores SQLite plus private me
   store.register("research", "v1", [{ role: "user", content: "persisted" }]);
   const checkpointConfig = daemonFixture(data);
   try {
-    await backup(store, data, join(root, "checkpoint"), checkpointConfig);
+    await backup(nodeHostOperations(), store, data, join(root, "checkpoint"), checkpointConfig);
     const restored = new Store(join(root, "checkpoint", "mate.sqlite"));
     expect(restored.db.prepare("SELECT count(*) n FROM entries").get()).toEqual({ n: 1 });
     restored.close();

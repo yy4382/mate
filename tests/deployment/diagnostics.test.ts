@@ -29,6 +29,8 @@ import {
 } from "../../src/slack/capabilities.js";
 import type { ActivityItem, OperationsStatus } from "../../src/operations/view.js";
 import { deploymentMain } from "../../src/deployment/cli.js";
+import { nodeHostOperations } from "../../src/deployment/host.js";
+const host = nodeHostOperations();
 const dirs: string[] = [];
 function temp() {
   const dir = mkdtempSync(join(tmpdir(), "mate-diagnostics-"));
@@ -103,7 +105,10 @@ it("projects only operational counts, fixed events and recovery states, never ar
     100000000,
   );
   expect(logs.events).toHaveLength(100);
-  expect(logs.events[0]).toEqual({ at: 100000000, event: "runtime.run_failed" });
+  expect(logs.events[0]).toEqual({
+    at: 100000000,
+    event: "runtime.run_failed",
+  });
   expect(JSON.stringify(logs)).not.toContain(secret);
   expect(
     diagnosticStatus(s, "active", {
@@ -115,7 +120,14 @@ it("projects only operational counts, fixed events and recovery states, never ar
 it("reports Linux upgrade and restore as pending, never healthy", () => {
   for (const recovery of [
     { ...clear, linuxUpgrade: { phase: "pending" as const } },
-    { ...clear, restore: { phase: "decided", databaseComplete: false, completedAgents: 1 } },
+    {
+      ...clear,
+      restore: {
+        phase: "decided",
+        databaseComplete: false,
+        completedAgents: 1,
+      },
+    },
   ])
     expect(diagnosticStatus(status(), "active", recovery).health).toBe("recovery-pending");
   expect(diagnosticStatus(null, "unknown", clear).health).toBe("service-not-active");
@@ -123,10 +135,10 @@ it("reports Linux upgrade and restore as pending, never healthy", () => {
 it("reads recovery failures opaquely without exposing journal contents", async () => {
   const dir = temp();
   mkdirSync(join(dir, "control"));
-  expect(await readRecoveryState(dir)).toEqual(clear);
+  expect(await readRecoveryState(host, dir)).toEqual(clear);
   for (const name of ["linux-upgrade.json", "restore.json"])
     writeFileSync(join(dir, "control", name), secret);
-  const result = await readRecoveryState(dir);
+  const result = await readRecoveryState(host, dir);
   expect(result.invalid).toBe(true);
   expect(JSON.stringify(result)).not.toContain(secret);
   rmSync(join(dir, "control", "linux-upgrade.json"));
@@ -148,7 +160,7 @@ it("reads recovery failures opaquely without exposing journal contents", async (
       databaseComplete: false,
     }),
   );
-  const restoring = await readRecoveryState(dir);
+  const restoring = await readRecoveryState(host, dir);
   expect(restoring.restore).toEqual({
     phase: "decided",
     databaseComplete: false,
@@ -171,7 +183,9 @@ it("rejects wrapper arguments before executing any controller/systemd/journal co
     ["journalctl"],
     ["status", "$(echo secret)"],
   ]) {
-    const result = spawnSync("/bin/sh", [wrapper, ...args], { encoding: "utf8" });
+    const result = spawnSync("/bin/sh", [wrapper, ...args], {
+      encoding: "utf8",
+    });
     expect(result.status).toBe(1);
     expect(result.stderr).toMatch(/arguments|Usage/);
   }
@@ -185,7 +199,7 @@ it("does not connect to Slack/provider when collecting diagnostics without crede
   const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(() => {
     throw new Error("Unexpected external connection");
   });
-  const result = await deploymentDiagnostics("logs");
+  const result = await deploymentDiagnostics(host, "logs");
   expect(result.unit).toBe("mate.service");
   expect(result.logs?.content).toBe("structured-operational-events-only");
   expect(fetch).not.toHaveBeenCalled();
@@ -226,9 +240,14 @@ it("documents a silent pnpm manifest command whose stdout is parseable JSON", ()
   const dir = temp();
   writeFileSync(
     join(dir, "package.json"),
-    JSON.stringify({ scripts: { emit: `node -e "console.log(JSON.stringify({ok:true}))"` } }),
+    JSON.stringify({
+      scripts: { emit: `node -e "console.log(JSON.stringify({ok:true}))"` },
+    }),
   );
-  const command = spawnSync("pnpm", ["--silent", "run", "emit"], { cwd: dir, encoding: "utf8" });
+  const command = spawnSync("pnpm", ["--silent", "run", "emit"], {
+    cwd: dir,
+    encoding: "utf8",
+  });
   expect(command.status).toBe(0);
   expect(JSON.parse(command.stdout)).toEqual({ ok: true });
   expect(slackAppManifest("alice").features.bot_user.display_name).toBe("mate_alice");
@@ -274,7 +293,10 @@ it("reads persisted SQLite with OperationsView and leaves data/schema unchanged"
   expect(JSON.stringify(diagnosticLogs(snapshot.items))).not.toContain(secret);
   expect(readFileSync(path)).toEqual(before);
   const absent = readOperationsSnapshot(
-    { ...config, runtime: { ...config.runtime, dataDir: join(dir, "missing") } },
+    {
+      ...config,
+      runtime: { ...config.runtime, dataDir: join(dir, "missing") },
+    },
     "status",
   );
   expect(absent.available).toBe(false);

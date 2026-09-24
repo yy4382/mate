@@ -1,31 +1,22 @@
 import type { DaemonConfig } from "../daemon/config.js";
-import { LinuxProcessManager } from "../execution/linux-processes.js";
-import { lstatSync } from "node:fs";
+import type { HostOperations } from "./host.js";
+import { assertAgentWorkspace, hostProcessManager, hostRules } from "./host-rules.js";
 
 /** Stateful deployment probe. The service wrapper must first prove mate.service is stopped. */
-export async function runOfflineProbe(config: DaemonConfig): Promise<{ roots: string[] }> {
-  if (config.runtime.linuxUsers) {
-    if (process.getuid?.() !== 0) throw new Error("Linux user offline probe requires root");
-    const manager = new LinuxProcessManager(
-      Object.fromEntries(
-        Object.entries(config.runtime.linuxUsers).map(([id, user]) => [id, user.uid]),
-      ),
-    );
-    const roots: string[] = [];
-    for (const [agentId, identity] of Object.entries(config.runtime.linuxUsers)) {
-      manager.verifyQuota(agentId);
-      const stat = lstatSync(identity.home);
-      if (
-        !stat.isDirectory() ||
-        stat.isSymbolicLink() ||
-        stat.uid !== identity.uid ||
-        stat.gid !== identity.gid ||
-        (stat.mode & 0o777) !== 0o700
-      )
-        throw new Error(`Private Linux Agent home differs: ${agentId}`);
-      roots.push(identity.home);
-    }
-    return { roots };
+export async function runOfflineProbe(
+  host: HostOperations,
+  config: DaemonConfig,
+): Promise<{ roots: string[] }> {
+  if (!config.runtime.linuxUsers)
+    throw new Error("Debian Linux-user deployment configuration required");
+  if (host.euid() !== 0) throw new Error("Linux user offline probe requires root");
+  const rules = hostRules(config),
+    manager = hostProcessManager(host, rules),
+    roots: string[] = [];
+  for (const agent of rules.agents) {
+    manager.verifyQuota(agent.identity.agentId);
+    await assertAgentWorkspace(host, rules, agent);
+    roots.push(agent.identity.home);
   }
-  throw new Error("Debian Linux-user deployment configuration required");
+  return { roots };
 }

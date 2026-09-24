@@ -11,15 +11,18 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+
 import { join } from "node:path";
 import { daemonConfigSchema } from "../../src/daemon/config.js";
 import { backup } from "../../src/daemon/backup.js";
 import { restoreCheckpointForTesting } from "../../src/daemon/restore.js";
 import { Store } from "../../src/storage/store.js";
+import { nodeHostOperations } from "../../src/deployment/host.js";
 import { saveConfiguration, storedConfiguration } from "../../src/daemon/config.js";
 import { buildBaseline } from "../../src/runtime/prompt.js";
 import { operationDocumentation } from "../../src/runtime/tools.js";
 
+const host = nodeHostOperations();
 const roots: string[] = [];
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -68,11 +71,11 @@ it("backs up Linux Agent homes and restores private data with the Agent UID and 
   const store = new Store(join(data, "state", "mate.sqlite"));
   const first = join(root, "first"),
     current = join(root, "current");
-  await backup(store, data, first, config);
+  await backup(host, store, data, first, config);
   writeFileSync(memory, "second");
-  await backup(store, data, current, config);
+  await backup(host, store, data, current, config);
   store.close();
-  await restoreCheckpointForTesting(config, first, {
+  await restoreCheckpointForTesting(host, config, first, {
     currentCheckpoint: current,
     checkpointOwnerUid: uid,
     checkpointOwnerGid: gid,
@@ -125,7 +128,7 @@ it("checkpoints the real Linux Agent home rather than a legacy agents directory"
   store.register("alice", baseline.configVersion, baseline.messages);
   saveConfiguration(store, config);
   const destination = join(root, "checkpoint");
-  await backup(store, data, destination, config);
+  await backup(host, store, data, destination, config);
   store.close();
   expect(readFileSync(join(destination, "agents", "alice", "MEMORY.md"), "utf8")).toBe(
     "private Linux memory",

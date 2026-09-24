@@ -1,9 +1,9 @@
-import { lstat, mkdir, readdir, realpath } from "node:fs/promises";
-import { join, resolve, dirname, basename } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import Database from "better-sqlite3";
 import { within } from "../execution/paths.js";
 import type { Store } from "../storage/store.js";
 import type { DaemonConfig } from "./config.js";
+import type { HostOperations } from "../deployment/host.js";
 import {
   configurationHash,
   copyWorkspace,
@@ -12,6 +12,7 @@ import {
   type CheckpointManifest,
 } from "./checkpoint-format.js";
 async function backupDatabase(
+  host: HostOperations,
   database: Database.Database,
   dataDir: string,
   destination: string,
@@ -20,21 +21,21 @@ async function backupDatabase(
 ): Promise<void> {
   if (resolve(dataDir) !== resolve(config.runtime.dataDir))
     throw new Error("Backup data directory must match configuration");
-  const dataStat = await lstat(dataDir);
+  const dataStat = await host.lstat(dataDir);
   if (!dataStat.isDirectory() || dataStat.isSymbolicLink())
     throw new Error("Backup data directory must be a directory, not a symlink");
   const liveDatabasePath = join(dataDir, "state", "mate.sqlite");
-  if ((await realpath(database.name)) !== (await realpath(liveDatabasePath)))
+  if ((await host.canonical(database.name)) !== (await host.canonical(liveDatabasePath)))
     throw new Error("Backup connection must own the configured live database");
   const requested = resolve(destination),
-    parent = await realpath(dirname(requested)),
+    parent = await host.canonical(dirname(requested)),
     final = join(parent, basename(requested));
-  const dataRoot = await realpath(dataDir),
+  const dataRoot = await host.canonical(dataDir),
     otherRoots = await Promise.all(
       [
         ...Object.values(config.runtime.linuxUsers ?? {}).map((user) => user.home),
         ...(config.runtime.sharedRoot ? [config.runtime.sharedRoot] : []),
-      ].map((root) => realpath(root)),
+      ].map((root) => host.canonical(root)),
     );
   if (
     within(dataRoot, final) ||
@@ -43,14 +44,14 @@ async function backupDatabase(
   )
     throw new Error("Backup destination must be outside live data and Agent workspaces");
   try {
-    const existing = await lstat(final);
-    if (!existing.isDirectory() || existing.isSymbolicLink() || (await readdir(final)).length)
+    const existing = await host.lstat(final);
+    if (!existing.isDirectory() || existing.isSymbolicLink() || (await host.readdir(final)).length)
       throw new Error("Checkpoint destination must be absent or one empty directory");
-    if ((await realpath(final)) !== final)
+    if ((await host.canonical(final)) !== final)
       throw new Error("Checkpoint destination must be canonical");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    await mkdir(final, { mode: 0o700 });
+    await host.mkdir(final, 0o700);
   }
   if (
     requireIdle &&
@@ -59,29 +60,31 @@ async function backupDatabase(
   )
     throw new Error("Backup requires idle workers and executors");
   database.pragma("wal_checkpoint(TRUNCATE)");
-  const liveDatabase = await inventoryRegularFile(liveDatabasePath),
+  const liveDatabase = await inventoryRegularFile(host, liveDatabasePath),
     wal = `${liveDatabasePath}-wal`;
   try {
-    if ((await lstat(wal)).size) throw new Error("Backup database WAL changed after checkpoint");
+    if ((await host.lstat(wal)).size)
+      throw new Error("Backup database WAL changed after checkpoint");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
   {
     const staging = final;
     const agentsDir = join(staging, "agents");
-    await mkdir(agentsDir, { mode: 0o700 });
+    await host.mkdir(agentsDir, 0o700);
     const agents = [];
     for (const agentId of config.mate.agents.map((agent) => agent.id).sort())
       agents.push({
         agentId,
         entries: await copyWorkspace(
+          host,
           config.runtime.linuxUsers?.[agentId]?.home ?? join(dataDir, "agents", agentId),
           join(agentsDir, agentId),
         ),
       });
     const databasePath = join(staging, "mate.sqlite");
     await database.backup(databasePath);
-    const details = await inventoryRegularFile(databasePath);
+    const details = await inventoryRegularFile(host, databasePath);
     const databaseEntry: CheckpointManifest["database"] = {
       path: "mate.sqlite",
       ...details,
@@ -95,30 +98,34 @@ async function backupDatabase(
       agents,
       database: databaseEntry,
     };
-    await publishCheckpoint(staging, manifest);
+    await publishCheckpoint(host, staging, manifest);
   }
 }
 
 /** Caller stops scheduling and waits for workers/executors to settle before taking this checkpoint. */
 export async function backup(
+  host: HostOperations,
   store: Store,
   dataDir: string,
   destination: string,
   config: DaemonConfig,
 ): Promise<void> {
-  return backupDatabase(store.db, dataDir, destination, config, true);
+  return backupDatabase(host, store.db, dataDir, destination, config, true);
 }
 
 /** Recovery snapshot which never constructs Store, so checkpointing a stopped deployment cannot open its database for writing. Caller holds the daemon lock and has stopped/recovered the execution scope. */
 export async function backupDeploymentSnapshot(
+  host: HostOperations,
   dataDir: string,
   destination: string,
   config: DaemonConfig,
 ): Promise<void> {
-  const database = new Database(join(dataDir, "state", "mate.sqlite"), { fileMustExist: true });
+  const database = new Database(join(dataDir, "state", "mate.sqlite"), {
+    fileMustExist: true,
+  });
   try {
     database.pragma("busy_timeout = 5000");
-    await backupDatabase(database, dataDir, destination, config, false);
+    await backupDatabase(host, database, dataDir, destination, config, false);
   } finally {
     database.close();
   }

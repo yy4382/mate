@@ -55,6 +55,7 @@ import { assertNoRestoreInProgress } from "./restore.js";
 import { FairAdmission } from "../concurrency/admission.js";
 import { AdmittedBackend } from "../execution/admitted.js";
 import { assertLinuxOperationAllowed } from "../deployment/linux-upgrade-guard.js";
+import { nodeHostOperations, type HostOperations } from "../deployment/host.js";
 import { initialMemory } from "../agents/workspace.js";
 import { buildBaseline } from "../runtime/prompt.js";
 import { operationDocumentation } from "../runtime/tools.js";
@@ -99,7 +100,10 @@ export class Daemon {
   private recoveredDuringStartup = false;
   readonly config: DaemonConfig;
   static async create(input: unknown, log: Log, projectRoot = resolve(".")): Promise<Daemon> {
-    const config = daemonConfigSchema.parse(input),
+    // The daemon entry owns its own host entry, like the other process entries; its remaining
+    // startup checks (data/state creation, worker quota) stay local to daemon startup.
+    const host: HostOperations = nodeHostOperations(),
+      config = daemonConfigSchema.parse(input),
       data = config.runtime.dataDir;
     if (process.platform === "linux" && !config.runtime.linuxUsers)
       throw new Error("Linux deployment requires one Linux user for every Agent");
@@ -133,8 +137,8 @@ export class Daemon {
     const release = acquireLock(join(state, "daemon.lock"));
     let transferred = false;
     try {
-      assertLinuxOperationAllowed("start", config);
-      await assertNoRestoreInProgress(data);
+      await assertLinuxOperationAllowed(host, "start", config);
+      await assertNoRestoreInProgress(host, data);
       const daemon = new Daemon(config, log, projectRoot, release);
       transferred = true;
       return daemon;

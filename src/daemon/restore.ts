@@ -1,18 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { constants, lstatSync, realpathSync, statfsSync } from "node:fs";
-import {
-  chmod,
-  chown,
-  lchown,
-  lstat,
-  mkdir,
-  open,
-  readdir,
-  realpath,
-  rename,
-  rm,
-  symlink,
-} from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import type { DaemonConfig } from "./config.js";
@@ -29,7 +15,8 @@ import {
   type VerifiedCheckpoint,
 } from "./checkpoint-format.js";
 import { within } from "../execution/paths.js";
-import { acquireLock } from "./lock.js";
+import { assertManagedEntry, hostRules, type AgentEntries } from "../deployment/host-rules.js";
+import { pathExists, type HostOperations } from "../deployment/host.js";
 import { linuxUpgradeInProgress } from "../deployment/linux-upgrade-guard.js";
 
 const identitySchema = z
@@ -75,60 +62,57 @@ interface RestoreTestingOptions extends RestoreOptions {
 function identityEqual(left: CheckpointIdentity, right: CheckpointIdentity): boolean {
   return encode(left) === encode(right);
 }
-async function exists(path: string): Promise<boolean> {
-  try {
-    await lstat(path);
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-    throw error;
-  }
-}
-async function atomicJson(path: string, value: unknown): Promise<void> {
+async function atomicJson(host: HostOperations, path: string, value: unknown): Promise<void> {
   const parent = dirname(path),
     temporary = join(parent, `.restore-${randomUUID()}`),
-    handle = await open(
-      temporary,
-      constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
-      0o600,
-    );
+    handle = await host.createExclusive(temporary, 0o600);
   let renamed = false;
   try {
     await handle.writeFile(JSON.stringify(value));
     await handle.sync();
     await handle.close();
-    await rename(temporary, path);
+    await host.rename(temporary, path);
     renamed = true;
-    await fsyncDirectory(parent);
+    await fsyncDirectory(host, parent);
   } finally {
     if (!renamed) {
       await handle.close().catch(() => {});
-      await rm(temporary, { force: true });
+      await host.remove(temporary);
     }
   }
 }
-async function removeNamedTemps(directory: string, prefix: string): Promise<void> {
-  for (const name of await readdir(directory))
-    if (name.startsWith(prefix)) await rm(join(directory, name), { recursive: false, force: true });
-  await fsyncDirectory(directory);
+async function removeNamedTemps(
+  host: HostOperations,
+  directory: string,
+  prefix: string,
+): Promise<void> {
+  for (const name of await host.readdir(directory))
+    if (name.startsWith(prefix)) await host.remove(join(directory, name));
+  await fsyncDirectory(host, directory);
 }
-async function readJournal(path: string): Promise<RestoreJournal | undefined> {
-  if (!(await exists(path))) return undefined;
-  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+async function readJournal(
+  host: HostOperations,
+  path: string,
+): Promise<RestoreJournal | undefined> {
+  if (!(await pathExists(host, path))) return undefined;
+  const handle = await host.openForRead(path);
   try {
     return journalSchema.parse(JSON.parse((await handle.readFile()).toString("utf8")));
   } finally {
     await handle.close();
   }
 }
-export async function assertNoRestoreInProgress(dataDir: string): Promise<void> {
+export async function assertNoRestoreInProgress(
+  host: HostOperations,
+  dataDir: string,
+): Promise<void> {
   const control = join(dataDir, "control");
-  if (await exists(control)) {
-    const stat = await lstat(control);
+  if (await pathExists(host, control)) {
+    const stat = await host.lstat(control);
     if (!stat.isDirectory() || stat.isSymbolicLink())
       throw new Error("Restore control path must be a directory");
   }
-  if (await exists(join(control, "restore.json")))
+  if (await pathExists(host, join(control, "restore.json")))
     throw new Error("Managed restore is incomplete; resume the restore before starting Mate");
 }
 
@@ -151,74 +135,82 @@ function requiredBytes(entries: readonly CheckpointEntry[], blockSize: number): 
     16n * 1024n * 1024n,
   );
 }
-async function nonempty(path: string): Promise<boolean> {
-  if (!(await exists(path))) return false;
-  return (await readdir(path)).some((name) => name !== "lost+found");
+async function nonempty(host: HostOperations, path: string): Promise<boolean> {
+  if (!(await pathExists(host, path))) return false;
+  return (await host.readdir(path)).some((name) => name !== "lost+found");
 }
 async function assertLiveMatches(
+  host: HostOperations,
   checkpoint: VerifiedCheckpoint,
   roots: ReadonlyMap<string, string>,
   dataDir: string,
 ): Promise<void> {
   const databasePath = join(dataDir, "state", "mate.sqlite");
-  if (!(await exists(databasePath)))
+  if (!(await pathExists(host, databasePath)))
     throw new Error("Current state checkpoint does not match the live database");
-  const actual = await inventoryRegularFile(databasePath),
+  const actual = await inventoryRegularFile(host, databasePath),
     wal = `${databasePath}-wal`;
   if (
     actual.sha256 !== checkpoint.manifest.database.sourceSha256 ||
-    ((await exists(wal)) && (await lstat(wal)).size > 0)
+    ((await pathExists(host, wal)) && (await host.lstat(wal)).size > 0)
   )
     throw new Error("Current state checkpoint does not match the live database");
   for (const [agentId, root] of roots) {
     if (
-      !(await exists(root)) ||
-      encode(await inventoryWorkspace(root)) !==
+      !(await pathExists(host, root)) ||
+      encode(await inventoryWorkspace(host, root)) !==
         encode(agentManifest(checkpoint.manifest, agentId).entries)
     )
       throw new Error(`Current state checkpoint does not match live workspace: ${agentId}`);
   }
 }
-async function clearWorkspace(root: string): Promise<void> {
-  for (const name of await readdir(root))
-    if (name !== "lost+found") await rm(join(root, name), { recursive: true, force: true });
-  await fsyncDirectory(root);
+async function clearWorkspace(host: HostOperations, root: string): Promise<void> {
+  for (const name of await host.readdir(root))
+    if (name !== "lost+found") await host.remove(join(root, name), { recursive: true });
+  await fsyncDirectory(host, root);
 }
 async function restoreWorkspace(
+  host: HostOperations,
   checkpointRoot: string,
   agentId: string,
   root: string,
   entries: readonly CheckpointEntry[],
 ): Promise<void> {
-  const rootStat = await lstat(root);
+  const rootStat = await host.lstat(root);
   if (
     !rootStat.isDirectory() ||
     rootStat.isSymbolicLink() ||
-    (await realpath(root)) !== resolve(root)
+    (await host.canonical(root)) !== resolve(root)
   )
     throw new Error("Private workspace mount disappeared before restore");
-  await clearWorkspace(root);
+  await clearWorkspace(host, root);
   const sourceRoot = join(checkpointRoot, "agents", agentId);
   for (const entry of entries) {
     const destination = join(root, ...entry.path.split("/"));
-    if (entry.type === "directory") await mkdir(destination, { mode: 0o700 });
+    if (entry.type === "directory") await host.mkdir(destination, 0o700);
     else if (entry.type === "file")
-      await restoreRegularFile(join(sourceRoot, ...entry.path.split("/")), destination, entry);
+      await restoreRegularFile(
+        host,
+        join(sourceRoot, ...entry.path.split("/")),
+        destination,
+        entry,
+      );
     else {
       const temporary = `${destination}.restore-${randomUUID()}`;
-      await symlink(entry.target, temporary);
-      await rename(temporary, destination);
-      await fsyncDirectory(dirname(destination));
+      await host.symlink(entry.target, temporary);
+      await host.rename(temporary, destination);
+      await fsyncDirectory(host, dirname(destination));
     }
   }
   for (const entry of [...entries].reverse())
     if (entry.type === "directory") {
-      await chmod(join(root, ...entry.path.split("/")), entry.mode);
-      await fsyncDirectory(join(root, ...entry.path.split("/")));
+      await host.chmod(join(root, ...entry.path.split("/")), entry.mode);
+      await fsyncDirectory(host, join(root, ...entry.path.split("/")));
     }
-  await fsyncDirectory(root);
+  await fsyncDirectory(host, root);
 }
 async function restoreLinuxOwnership(
+  host: HostOperations,
   root: string,
   uid: number,
   gid: number,
@@ -226,13 +218,13 @@ async function restoreLinuxOwnership(
 ): Promise<void> {
   for (const entry of [...entries].reverse()) {
     const path = join(root, ...entry.path.split("/"));
-    if (entry.type === "symlink") await lchown(path, uid, gid);
+    if (entry.type === "symlink") await host.lchown(path, uid, gid);
     else {
-      await chown(path, uid, gid);
-      await chmod(path, entry.mode);
+      await host.chown(path, uid, gid);
+      await host.chmod(path, entry.mode);
     }
   }
-  await chown(root, uid, gid);
+  await host.chown(root, uid, gid);
 }
 function restoredShape(entries: readonly CheckpointEntry[]): string {
   return encode(
@@ -250,15 +242,20 @@ function restoredShape(entries: readonly CheckpointEntry[]): string {
   );
 }
 async function assertRestoredWorkspace(
+  host: HostOperations,
   root: string,
   entries: readonly CheckpointEntry[],
   agentId: string,
 ): Promise<void> {
-  if (restoredShape(await inventoryWorkspace(root)) !== restoredShape(entries))
+  if (restoredShape(await inventoryWorkspace(host, root)) !== restoredShape(entries))
     throw new Error(`Completed restore workspace changed: ${agentId}`);
 }
-async function assertRestoredDatabase(path: string, manifest: CheckpointManifest): Promise<void> {
-  const actual = await inventoryRegularFile(path),
+async function assertRestoredDatabase(
+  host: HostOperations,
+  path: string,
+  manifest: CheckpointManifest,
+): Promise<void> {
+  const actual = await inventoryRegularFile(host, path),
     expected = manifest.database;
   if (
     actual.size !== expected.size ||
@@ -269,54 +266,44 @@ async function assertRestoredDatabase(path: string, manifest: CheckpointManifest
 }
 
 async function managedRestore(
+  host: HostOperations,
   targetConfig: DaemonConfig,
   currentConfig: DaemonConfig,
   checkpointPath: string,
   options: RestoreTestingOptions,
 ): Promise<void> {
   const checkpointOwnerUid = options.checkpointOwnerUid ?? 0,
-    checkpointOwnerGid = options.checkpointOwnerGid ?? process.getgid?.() ?? 0,
-    target = await verifyCheckpoint(checkpointPath, targetConfig, {
+    checkpointOwnerGid = options.checkpointOwnerGid ?? host.egid(),
+    target = await verifyCheckpoint(host, checkpointPath, targetConfig, {
       requiredOwnerUid: checkpointOwnerUid,
       requiredOwnerGid: checkpointOwnerGid,
     }),
     dataDir = resolve(currentConfig.runtime.dataDir);
   if (resolve(targetConfig.runtime.dataDir) !== dataDir)
     throw new Error("Managed restore configurations require the same data directory");
-  const state = join(dataDir, "state"),
+  const rules = hostRules(currentConfig),
+    state = join(dataDir, "state"),
     control = join(dataDir, "control");
-  for (const path of [dataDir, state, control]) {
-    const stat = await lstat(path);
-    if (!stat.isDirectory() || stat.isSymbolicLink() || (await realpath(path)) !== resolve(path))
-      throw new Error("Managed restore control paths must be existing canonical directories");
-  }
-  const release = acquireLock(join(state, "daemon.lock")),
+  // The same managed-path rules that installation enforces guard the live control paths here.
+  for (const entry of rules.restoreBoundary) await assertManagedEntry(host, entry, rules);
+  const release = host.lockExclusive(join(state, "daemon.lock")),
     journalPath = join(control, "restore.json");
+  const agents = new Map<string, AgentEntries>(
+    rules.agents.map((agent) => [agent.identity.agentId, agent]),
+  );
   try {
-    await removeNamedTemps(control, ".restore-");
-    let journal = await readJournal(journalPath);
-    if (journal?.phase === "decided") await removeNamedTemps(state, ".mate.sqlite.restore-");
-    const linuxUsers = currentConfig.runtime.linuxUsers;
-    if (!linuxUsers) throw new Error("Restore requires Agent Linux users");
+    await removeNamedTemps(host, control, ".restore-");
+    let journal = await readJournal(host, journalPath);
+    if (journal?.phase === "decided") await removeNamedTemps(host, state, ".mate.sqlite.restore-");
     const roots = new Map<string, string>();
     for (const agent of currentConfig.mate.agents) {
-      const root = linuxUsers[agent.id]?.home;
-      if (!root) throw new Error(`Linux Agent home missing: ${agent.id}`);
-      roots.set(agent.id, root);
+      const entry = agents.get(agent.id);
+      if (!entry) throw new Error(`Linux Agent home missing: ${agent.id}`);
+      roots.set(agent.id, entry.identity.home);
     }
-    const assertBoundary = () => {
-      for (const [agentId, root] of roots) {
-        const identity = linuxUsers[agentId]!,
-          stat = lstatSync(root);
-        if (
-          realpathSync(root) !== resolve(root) ||
-          !stat.isDirectory() ||
-          stat.uid !== identity.uid ||
-          stat.gid !== identity.gid ||
-          (stat.mode & 0o777) !== 0o700
-        )
-          throw new Error(`Linux private home boundary changed: ${agentId}`);
-      }
+    const assertBoundary = async () => {
+      for (const entry of rules.restoreBoundary) await assertManagedEntry(host, entry, rules);
+      for (const agent of agents.values()) await assertManagedEntry(host, agent.home, rules);
     };
     const assertOutside = (checkpoint: VerifiedCheckpoint) => {
       for (const protectedRoot of [
@@ -328,20 +315,19 @@ async function managedRestore(
           throw new Error("Checkpoint source must be outside live data and Agent workspaces");
     };
     assertOutside(target);
-    assertBoundary();
+    await assertBoundary();
     for (const [agentId, root] of roots) {
-      const filesystem = statfsSync(root);
-      const current = await inventoryWorkspace(root),
+      const filesystem = await host.filesystem(root),
+        block = BigInt(filesystem.blockSize);
+      const current = await inventoryWorkspace(host, root),
         reclaim = current.reduce(
-          (total, entry) =>
-            total +
-            (entry.type === "file" ? BigInt(entry.allocatedBytes) : BigInt(filesystem.bsize)),
+          (total, entry) => total + (entry.type === "file" ? BigInt(entry.allocatedBytes) : block),
           0n,
         ),
-        available = BigInt(filesystem.bavail) * BigInt(filesystem.bsize) + reclaim,
-        availableInodes = BigInt(filesystem.ffree + current.length);
+        available = BigInt(filesystem.availableBlocks) * block + reclaim,
+        availableInodes = BigInt(filesystem.freeInodes + current.length);
       if (
-        requiredBytes(agentManifest(target.manifest, agentId).entries, filesystem.bsize) >
+        requiredBytes(agentManifest(target.manifest, agentId).entries, filesystem.blockSize) >
           available ||
         BigInt(agentManifest(target.manifest, agentId).entries.length + 8) > availableInodes
       )
@@ -349,28 +335,32 @@ async function managedRestore(
     }
     const databasePath = join(state, "mate.sqlite");
     let databaseAlreadyRestored = false;
-    if (journal?.phase === "decided" && !journal.databaseComplete && (await exists(databasePath))) {
+    if (
+      journal?.phase === "decided" &&
+      !journal.databaseComplete &&
+      (await pathExists(host, databasePath))
+    ) {
       try {
-        await assertRestoredDatabase(databasePath, target.manifest);
+        await assertRestoredDatabase(host, databasePath, target.manifest);
         databaseAlreadyRestored = true;
       } catch {
         /* The database still needs its atomic replacement. */
       }
     }
     if (!journal?.databaseComplete && !databaseAlreadyRestored) {
-      const stateFilesystem = statfsSync(state),
+      const stateFilesystem = await host.filesystem(state),
         databasePayload = Math.max(
           target.manifest.database.size,
           target.manifest.database.allocatedBytes,
         ),
         databaseBytes =
-          ((BigInt(databasePayload) + BigInt(stateFilesystem.bsize) - 1n) /
-            BigInt(stateFilesystem.bsize)) *
-          BigInt(stateFilesystem.bsize);
+          ((BigInt(databasePayload) + BigInt(stateFilesystem.blockSize) - 1n) /
+            BigInt(stateFilesystem.blockSize)) *
+          BigInt(stateFilesystem.blockSize);
       if (
         databaseBytes + 1024n * 1024n >
-          BigInt(stateFilesystem.bavail) * BigInt(stateFilesystem.bsize) ||
-        stateFilesystem.ffree < 2
+          BigInt(stateFilesystem.availableBlocks) * BigInt(stateFilesystem.blockSize) ||
+        stateFilesystem.freeInodes < 2
       )
         throw new Error("Checkpoint database cannot fit state filesystem capacity");
     }
@@ -381,14 +371,14 @@ async function managedRestore(
       )
         throw new Error("Restore journal is bound to a different or replaced checkpoint");
       if (journal.current && journal.phase === "planned") {
-        const current = await verifyCheckpoint(journal.current.path, currentConfig, {
+        const current = await verifyCheckpoint(host, journal.current.path, currentConfig, {
           requiredOwnerUid: checkpointOwnerUid,
           requiredOwnerGid: checkpointOwnerGid,
         });
         assertOutside(current);
         if (!identityEqual(current.identity, journal.current))
           throw new Error("Restore journal current-state checkpoint was replaced");
-        await assertLiveMatches(current, roots, dataDir);
+        await assertLiveMatches(host, current, roots, dataDir);
       }
       if (
         journal.completedAgents.some(
@@ -398,20 +388,18 @@ async function managedRestore(
         throw new Error("Restore journal Agent completion order is invalid");
     } else {
       const hasCurrent =
-        (await exists(join(state, "mate.sqlite"))) ||
-        (await Promise.all([...roots.values()].map(nonempty)).then((values) =>
-          values.some(Boolean),
-        ));
+        (await pathExists(host, join(state, "mate.sqlite"))) ||
+        (await Promise.all([...roots.values()].map((root) => nonempty(host, root)))).some(Boolean);
       let current: VerifiedCheckpoint | undefined;
       if (hasCurrent) {
         if (!options.currentCheckpoint)
           throw new Error("Replacing nonempty state requires its verified current checkpoint");
-        current = await verifyCheckpoint(options.currentCheckpoint, currentConfig, {
+        current = await verifyCheckpoint(host, options.currentCheckpoint, currentConfig, {
           requiredOwnerUid: checkpointOwnerUid,
           requiredOwnerGid: checkpointOwnerGid,
         });
         assertOutside(current);
-        await assertLiveMatches(current, roots, dataDir);
+        await assertLiveMatches(host, current, roots, dataDir);
       }
       journal = {
         version: 1,
@@ -422,61 +410,65 @@ async function managedRestore(
         completedAgents: [],
         databaseComplete: false,
       };
-      await atomicJson(journalPath, journal);
+      await atomicJson(host, journalPath, journal);
       journal = { ...journal, phase: "decided" };
-      await atomicJson(journalPath, journal);
+      await atomicJson(host, journalPath, journal);
       await options.afterPhase?.("decision");
     }
     if (journal.phase === "planned") {
       journal = { ...journal, phase: "decided" };
-      await atomicJson(journalPath, journal);
+      await atomicJson(host, journalPath, journal);
       await options.afterPhase?.("decision");
     }
     // Re-verify every payload and the bound inode/hash after the durable decision before any destructive step.
-    const source = await verifyCheckpoint(journal.target.path, targetConfig, {
+    const source = await verifyCheckpoint(host, journal.target.path, targetConfig, {
       requiredOwnerUid: checkpointOwnerUid,
       requiredOwnerGid: checkpointOwnerGid,
     });
     if (!identityEqual(source.identity, journal.target))
       throw new Error("Restore checkpoint changed after decision");
     for (const agent of source.manifest.agents) {
-      assertBoundary();
-      const root = roots.get(agent.agentId)!;
+      await assertBoundary();
+      const identity = agents.get(agent.agentId)!.identity,
+        root = roots.get(agent.agentId)!;
       if (journal.completedAgents.includes(agent.agentId))
-        await assertRestoredWorkspace(root, agent.entries, agent.agentId);
+        await assertRestoredWorkspace(host, root, agent.entries, agent.agentId);
       else {
-        await restoreWorkspace(source.root, agent.agentId, root, agent.entries);
-        const identity = linuxUsers[agent.agentId]!;
-        await restoreLinuxOwnership(root, identity.uid, identity.gid, agent.entries);
-        assertBoundary();
-        await assertRestoredWorkspace(root, agent.entries, agent.agentId);
-        journal = { ...journal, completedAgents: [...journal.completedAgents, agent.agentId] };
-        await atomicJson(journalPath, journal);
+        await restoreWorkspace(host, source.root, agent.agentId, root, agent.entries);
+        await restoreLinuxOwnership(host, root, identity.uid, identity.gid, agent.entries);
+        await assertBoundary();
+        await assertRestoredWorkspace(host, root, agent.entries, agent.agentId);
+        journal = {
+          ...journal,
+          completedAgents: [...journal.completedAgents, agent.agentId],
+        };
+        await atomicJson(host, journalPath, journal);
         await options.afterPhase?.(`agent:${agent.agentId}`);
       }
     }
-    if (journal.databaseComplete) await assertRestoredDatabase(databasePath, source.manifest);
+    if (journal.databaseComplete) await assertRestoredDatabase(host, databasePath, source.manifest);
     else if (databaseAlreadyRestored) {
       journal = { ...journal, databaseComplete: true };
-      await atomicJson(journalPath, journal);
+      await atomicJson(host, journalPath, journal);
     } else {
-      await rm(`${databasePath}-wal`, { force: true });
-      await rm(`${databasePath}-shm`, { force: true });
-      await removeNamedTemps(state, ".mate.sqlite.restore-");
-      await fsyncDirectory(state);
+      await host.remove(`${databasePath}-wal`);
+      await host.remove(`${databasePath}-shm`);
+      await removeNamedTemps(host, state, ".mate.sqlite.restore-");
+      await fsyncDirectory(host, state);
       await restoreRegularFile(
+        host,
         join(source.root, "mate.sqlite"),
         databasePath,
         source.manifest.database,
       );
-      await assertRestoredDatabase(databasePath, source.manifest);
+      await assertRestoredDatabase(host, databasePath, source.manifest);
       journal = { ...journal, databaseComplete: true };
-      await atomicJson(journalPath, journal);
+      await atomicJson(host, journalPath, journal);
       await options.afterPhase?.("database");
     }
     if (!options.retainJournal) {
-      await rm(journalPath);
-      await fsyncDirectory(control);
+      await host.remove(journalPath, { force: false });
+      await fsyncDirectory(host, control);
     }
   } finally {
     release();
@@ -484,37 +476,40 @@ async function managedRestore(
 }
 
 async function restore(
+  host: HostOperations,
   config: DaemonConfig,
   checkpoint: string,
   options: RestoreTestingOptions,
 ): Promise<void> {
   if (!config.runtime.linuxUsers) throw new Error("Restore requires Agent Linux users");
-  await managedRestore(config, config, checkpoint, options);
+  await managedRestore(host, config, config, checkpoint, options);
 }
 
 export async function restoreCheckpoint(
+  host: HostOperations,
   config: DaemonConfig,
   checkpoint: string,
   options: RestoreOptions = {},
 ): Promise<void> {
-  if (linuxUpgradeInProgress(config))
+  if (await linuxUpgradeInProgress(host, config))
     throw new Error("Ordinary restore is blocked while a Linux upgrade is pending");
-  return restore(config, checkpoint, options);
+  return restore(host, config, checkpoint, options);
 }
 
 /** Test-only ownership seam; production callers must use restoreCheckpoint's root-owned checkpoint contract. */
 export async function restoreCheckpointForTesting(
+  host: HostOperations,
   config: DaemonConfig,
   checkpoint: string,
   options: RestoreTestingOptions = {},
 ): Promise<void> {
   if (!process.env.VITEST) throw new Error("Checkpoint ownership overrides are test-only");
-  return restore(config, checkpoint, options);
+  return restore(host, config, checkpoint, options);
 }
 
 /** Read-only, content-free recovery status; uses the same parser as restore. */
-export async function restoreProgress(dataDir: string) {
-  const journal = await readJournal(join(dataDir, "control", "restore.json"));
+export async function restoreProgress(host: HostOperations, dataDir: string) {
+  const journal = await readJournal(host, join(dataDir, "control", "restore.json"));
   return journal
     ? {
         phase: journal.phase,
