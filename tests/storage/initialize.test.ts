@@ -14,7 +14,7 @@ function temporary(): string {
   return root;
 }
 
-/** Every byte in the directory, so a rejected open is proven to touch nothing at all. */
+/** Every byte in the directory: for these fixtures a rejected open leaves it byte-identical. */
 function directoryState(directory: string): { file: string; sha256: string }[] {
   return readdirSync(directory)
     .sort()
@@ -499,6 +499,7 @@ it("rejects an older Mate database, an unknown revision and unreadable files wit
     expect([file, error instanceof UnsupportedDatabaseError]).toEqual([file, true]);
     expect([file, error.message]).toEqual([file, expect.stringMatching(message)]);
     // Normal startup reports the problem; it does not clear or rewrite the directory.
+    // (SQLite may still complete its own recovery of a database an interrupted writer left behind.)
     expect([file, directoryState(directory)]).toEqual([file, before]);
   }
 });
@@ -549,7 +550,15 @@ it("creates the format for a file that holds nothing and for an in-memory databa
 it("reports a database it cannot open instead of creating one in its place", () => {
   const directory = temporary(),
     missing = join(directory, "absent", "mate.sqlite");
-  expect(() => openCurrentDatabase(missing)).toThrow(missing);
+  let error: Error | undefined;
+  try {
+    openCurrentDatabase(missing).close();
+  } catch (cause) {
+    error = cause as Error;
+  }
+  // The message names the path and the next operator action, not just the driver's words.
+  expect(error?.message).toContain(missing);
+  expect(error?.message).toMatch(/directory exists/);
   expect(existsSync(missing)).toBe(false);
   expect(existsSync(join(directory, "absent"))).toBe(false);
 });

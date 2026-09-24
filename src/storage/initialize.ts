@@ -56,8 +56,9 @@ function openWritable(path: string): Database.Database {
   try {
     db = new Database(path);
   } catch (cause) {
+    const { code, detail } = describe(cause);
     throw new Error(
-      `Cannot open Mate database at ${path}: ${cause instanceof Error ? cause.message : String(cause)}`,
+      `Cannot open Mate database at ${path} (${code || "unknown error"}: ${detail}). Check that the directory exists and that the Mate user can read and write it, then start Mate again.`,
     );
   }
   // Wait for a competing writer before classifying, not only before writing.
@@ -72,7 +73,7 @@ function createCurrentFormat(db: Database.Database, path: string): void {
     // A second entry may classify the same new file at the same time; the loser
     // accepts the database the winner created instead of reporting a collision.
     try {
-      if (verdict(db).kind === "current") return;
+      if (verdict(db, formatObjects()).kind === "current") return;
     } catch {
       // An unreadable file keeps its own, more useful, error below.
     }
@@ -81,9 +82,12 @@ function createCurrentFormat(db: Database.Database, path: string): void {
 }
 
 function accept(db: Database.Database, path: string): void {
+  // The expected structures come from the schema itself: a failure to build that
+  // list is this program's bug, not a fact about the operator's file.
+  const expected = formatObjects();
   let found: Verdict;
   try {
-    found = verdict(db);
+    found = verdict(db, expected);
   } catch (cause) {
     throw unreadable(path, cause);
   }
@@ -114,7 +118,7 @@ type Verdict =
   | { kind: "revision"; revision: number }
   | { kind: "incomplete"; missing: string[] };
 
-function verdict(db: Database.Database): Verdict {
+function verdict(db: Database.Database, expected: Set<string>): Verdict {
   const applicationId = Number(db.pragma("application_id", { simple: true })),
     revision = Number(db.pragma("user_version", { simple: true })),
     objects = new Set(
@@ -129,7 +133,7 @@ function verdict(db: Database.Database): Verdict {
   if (revision !== FORMAT_REVISION) return { kind: "revision", revision };
   // The revision identifies the format; this check catches a file that claims the
   // revision but lost structures (uniqueness indexes and triggers carry invariants).
-  const missing = [...formatObjects()]
+  const missing = [...expected]
     .filter((object) => !objects.has(object))
     .map((object) => object.replace(":", " "));
   return missing.length ? { kind: "incomplete", missing } : { kind: "current" };
@@ -152,9 +156,15 @@ function formatObjects(): Set<string> {
   }
 }
 
+function describe(cause: unknown): { code: string; detail: string } {
+  return {
+    code: (cause as { code?: string } | null)?.code ?? "",
+    detail: cause instanceof Error ? cause.message : String(cause),
+  };
+}
+
 function unreadable(path: string, cause: unknown): UnsupportedDatabaseError {
-  const code = (cause as { code?: string } | null)?.code ?? "",
-    detail = cause instanceof Error ? cause.message : String(cause);
+  const { code, detail } = describe(cause);
   // "Cannot read this" and "this is not ours" need different next actions, and neither is "throw the file away".
   return code === "SQLITE_NOTADB"
     ? new UnsupportedDatabaseError(
