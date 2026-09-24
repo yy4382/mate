@@ -17,14 +17,22 @@ import {
   type ToolSpec,
 } from "../tool-contract.js";
 
-const historyDescription: Record<string, string> = {
+/**
+ * The three kinds of history a model can reach are described apart on purpose: local coverage
+ * (what this Agent already has and currently may see), remote acquisition (one page through its
+ * own platform installation) and `attention.read` (a frozen paginated snapshot that records
+ * presentation and mints the sending credential). A quiet history read is none of the others.
+ * The map is keyed by the schema names, so a renamed operation breaks the lookup.
+ */
+const historyDescription: Record<keyof typeof historySchemas, string> = {
   "history.page":
-    "Page current authorized local history with canonical anchors and an opaque cursor. Coverage is local and live.",
+    "Read a bounded page of locally covered history, newest first per conversation, with a continuation cursor. Local coverage is live: it reflects the messages this Agent can see right now. It never records presentation and never mints the freshness view token messages.send uses, though a change it discovers leaves an older token stale.",
   "history.search":
-    "Bounded text or author search over current authorized local history. Empty pages may still have a cursor.",
-  "history.around": "Retrieve nearby authorized context around a canonical message anchor.",
+    "Bounded text or author search over locally covered history with a continuation cursor, newest first per conversation. Local coverage is live and describes only what this Agent can see now, never the whole workspace. A page can return nothing and still continue: follow the cursor.",
+  "history.around":
+    "Read the nearest locally covered context around a canonical message anchor. `before` and `after` set the widths of that first read, which reports beforeTruncated/afterTruncated and no cursor. Passing `direction` together with `limit` instead walks one bounded direction away from the anchor, and only such a walk returns a continuation cursor. Live, read-only, and never a record of what you presented or of the whole conversation.",
   "history.fetch":
-    "Fetch one bounded page through the acting installation. Quiet acquisition creates no work or read acknowledgment.",
+    "Fetch one bounded page of remote history through this Agent's own platform installation and cache it locally for this Agent. Remote retention, filtering and paging decide what the page holds, so never read it as the whole workspace; follow the continuation cursor, then use local history. It wakes nobody and presents nothing.",
 };
 /** The history module decides whether this Agent may name the target the operation carried. */
 function historyTarget(context: ToolExecutionContext, target: ConversationTarget): string {
@@ -36,7 +44,7 @@ const historySpecs = [
   spec({
     name: "history.page",
     schema: historySchemas["history.page"],
-    description: historyDescription["history.page"]!,
+    description: historyDescription["history.page"],
     replayScope: "work",
     seatPolicy: "deny",
     effectPolicy: "pure-read",
@@ -47,7 +55,7 @@ const historySpecs = [
   spec({
     name: "history.search",
     schema: historySchemas["history.search"],
-    description: historyDescription["history.search"]!,
+    description: historyDescription["history.search"],
     replayScope: "work",
     seatPolicy: "deny",
     effectPolicy: "pure-read",
@@ -59,7 +67,7 @@ const historySpecs = [
   spec({
     name: "history.around",
     schema: historySchemas["history.around"],
-    description: historyDescription["history.around"]!,
+    description: historyDescription["history.around"],
     replayScope: "work",
     seatPolicy: "deny",
     effectPolicy: "pure-read",
@@ -70,7 +78,7 @@ const historySpecs = [
   spec({
     name: "history.fetch",
     schema: historySchemas["history.fetch"],
-    description: historyDescription["history.fetch"]!,
+    description: historyDescription["history.fetch"],
     replayScope: "work",
     seatPolicy: "deny",
     effectPolicy: "pure-read",
@@ -174,7 +182,7 @@ const definitions: ToolSpec[] = [
     name: "attention.read",
     schema: z.object({ target: targetSchema, cursor: id.optional() }).strict(),
     description:
-      "Read current attention for an authorized target and receive a freshness view token.",
+      "Read the frozen paginated attention snapshot for an authorized target. This is the reading that records presentation and mints the freshness view token messages.send can use; history.page/search/around/fetch never do either.",
     replayScope: "work",
     seatPolicy: "deny",
     effectPolicy: "atomic-recorded",
@@ -227,45 +235,6 @@ const definitions: ToolSpec[] = [
       c.attention.state(run.agentId, args.target, "mute", Number(args.active));
       return { value: null };
     },
-  }),
-  spec({
-    name: "messages.recent",
-    schema: z.object({ conversationId: id }).strict(),
-    description: "Read recent visible messages in one authorized conversation.",
-    replayScope: "work",
-    seatPolicy: "deny",
-    effectPolicy: "atomic-recorded",
-    replayPolicy: "immutable",
-    authorize: (context, args) => targetWork(context, args.conversationId),
-    handler: ({ collaboration: c, run }, args) => ({
-      value: c.messages.recent(run.agentId, args.conversationId),
-    }),
-  }),
-  spec({
-    name: "messages.read",
-    schema: z.object({ target: targetSchema }).strict(),
-    description: "Read the currently authorized message view for a target.",
-    replayScope: "work",
-    seatPolicy: "deny",
-    effectPolicy: "atomic-recorded",
-    replayPolicy: "immutable",
-    authorize: (context, args) => targetWork(context, args.target.conversationId),
-    handler: ({ collaboration: c, run }, args) => ({
-      value: c.messages.read(run.agentId, args.target),
-    }),
-  }),
-  spec({
-    name: "messages.search",
-    schema: z.object({ query: text }).strict(),
-    description: "Search currently visible messages through the bounded local index.",
-    replayScope: "work",
-    seatPolicy: "deny",
-    effectPolicy: "atomic-recorded",
-    replayPolicy: "refreshable",
-    authorize: selectedWork,
-    handler: ({ collaboration: c, run }, args) => ({
-      value: c.messages.search(run.agentId, args.query),
-    }),
   }),
   spec({
     name: "messages.send",

@@ -25,11 +25,16 @@ export const historySchemas = {
       cursor,
     })
     .strict(),
+  // `before`/`after` are the context widths of the first call. A continuation pages one
+  // direction away from the anchor, so those widths stop describing the requested page.
   "history.around": z
     .object({
       messageId: id,
       before: z.number().int().min(0).max(50).default(10),
       after: z.number().int().min(0).max(50).default(10),
+      limit,
+      cursor,
+      direction: z.enum(["before", "after"]).optional(),
     })
     .strict(),
   "history.fetch": z
@@ -70,6 +75,8 @@ interface Position {
   order: string;
   id: string;
 }
+/** A continuation walks away from one anchor in exactly one of these directions. */
+type Direction = "before" | "after";
 interface Query {
   target?: ConversationTarget | undefined;
   limit: number;
@@ -117,6 +124,7 @@ export class ConversationHistory {
     return m.message(run.agentId, id);
   }
   private key(run: RunToken, operation: string, input: Query): string {
+    // `cursor` continues one page; every other field, including `limit`, is part of the query.
     const { cursor: _, ...rest } = input;
     return hash(
       encode({
@@ -127,7 +135,33 @@ export class ConversationHistory {
       }),
     );
   }
-  private decode(value: string | undefined, key: string): Cursor | undefined {
+  /**
+   * A continuation pages one direction away from one anchor, so it carries both. A cursor
+   * only continues the directed walk, where the anchor and direction are the caller's to
+   * repeat; `around` refuses to hand a two-sided page off as if it were such a walk.
+   */
+  private aroundKey(
+    run: RunToken,
+    anchor: string,
+    direction: Direction,
+    position?: Position,
+  ): string {
+    return hash(
+      encode({
+        actor: run.agentId,
+        operation: "around",
+        anchor,
+        direction,
+        ...(position ? { position } : {}),
+        order: "conversation_then_order_desc_id_desc",
+      }),
+    );
+  }
+  private decode(
+    value: string | undefined,
+    key: string,
+    owner = "another actor, target or query",
+  ): Cursor | undefined {
     if (!value) return;
     let parsed: unknown;
     try {
@@ -146,13 +180,23 @@ export class ConversationHistory {
       })
       .strict()
       .parse(parsed);
-    if (result.key !== key)
-      throw new Error("History cursor belongs to another actor, target or query");
+    if (result.key !== key) throw new Error(`History cursor belongs to ${owner}`);
     return result;
   }
   private cursor(value: Cursor): string {
     return Buffer.from(encode(value)).toString("base64url");
   }
+  /** Current permission decides one message's visibility, freshly per query. */
+  private visibleRow(run: RunToken, channel: string, key: string): MessageDTO | undefined {
+    return this.messages.store.db
+      .prepare(
+        `SELECT m.key FROM messages m JOIN conversation_identities c ON c.id=m.channel LEFT JOIN message_visibility v ON v.key=m.key AND v.agent_id=? WHERE m.channel=? AND m.key=? AND ((c.authority='internal' AND c.kind='channel') OR v.key IS NOT NULL)`,
+      )
+      .get(run.agentId, channel, key)
+      ? this.authorizedMessage(run, key)
+      : undefined;
+  }
+  /** The row that names where the next page in this direction resumes. */
   private boundary(run: RunToken, input: Query, id: string | undefined): MessageDTO | undefined {
     if (!id) return;
     const message = this.authorizedMessage(run, id);
@@ -242,9 +286,17 @@ export class ConversationHistory {
     }
     const results: MessageDTO[] = [];
     let scanned = 0,
+      more = false,
       last: Position | undefined;
-    for (const row of rows.slice(0, 1000)) {
+    for (const row of rows) {
+      if (scanned === 1000) {
+        // This row is left for the continuation, so the page it opens still has results.
+        more = true;
+        break;
+      }
       scanned++;
+      // Record the boundary before filtering: a page that matched nothing still has to
+      // name where the next page resumes, or it would read as the end of the history.
       last = { channel: row.channel, order: row.ts, id: row.key };
       const message = this.authorizedMessage(run, row.key);
       if (message.deleted) continue;
@@ -258,9 +310,13 @@ export class ConversationHistory {
       if (m.references.conversation(message.conversationId).authority === "internal")
         m.recordHistory(message, [run.agentId]);
       results.push(message);
-      if (results.length === input.limit) break;
+      if (results.length === input.limit) {
+        more = true;
+        break;
+      }
     }
-    const more = rows.length > scanned;
+    // Ending exactly on the last row leaves nothing for a continuation to open.
+    if (results.length === input.limit && rows.length === scanned) more = false;
     return {
       messages: results,
       nextCursor: more && last ? this.cursor({ key, position: last }) : null,
@@ -268,7 +324,7 @@ export class ConversationHistory {
         source: "local_visible",
         scope: input.target ?? "current_authorized_conversations",
         exhausted: !more,
-        scanLimited: scanned === 1000 && more,
+        scanLimited: more && scanned === 1000,
         scanned,
         live: true,
         order: "conversation_then_order_desc_id_desc",
@@ -310,68 +366,137 @@ export class ConversationHistory {
       "search",
     );
   }
+  /**
+   * The first call reads the nearest context on the widths the caller asked for. Supplying
+   * `direction` (before or after) instead asks for a bounded, resumable walk away from the
+   * anchor: a page that returns nothing still names where the next one resumes, so an empty
+   * page never reads as the end of the conversation.
+   */
   around(run: RunToken, value: unknown) {
-    const input = historySchemas["history.around"].parse(value),
+    // A private DM anchor is still gated by identity, readability and the run fence.
+    this.authorize(run);
+    const input: z.output<(typeof historySchemas)["history.around"]> =
+        historySchemas["history.around"].parse(value),
+      m = this.messages,
       anchor = this.authorizedMessage(run, input.messageId),
-      m = this.messages;
-    const target = {
-      conversationId: anchor.conversationId,
-      ...(anchor.rootId && anchor.rootId !== anchor.id ? { threadId: anchor.rootId } : {}),
+      target: ConversationTarget = {
+        conversationId: anchor.conversationId,
+        ...(anchor.rootId && anchor.rootId !== anchor.id ? { threadId: anchor.rootId } : {}),
+      };
+    // A two-sided read only reports what each direction holds; a continuation is a directed
+    // walk, so it names its direction and the two-sided read hands no cursor off.
+    if (input.cursor && !input.direction)
+      throw new Error("A history walk continuation needs its direction");
+    const direction: Direction = input.direction ?? "before",
+      owner = this.aroundKey(run, anchor.id, direction),
+      cursor = input.cursor
+        ? this.decode(input.cursor, owner, "another anchor, direction or query")
+        : undefined,
+      // The anchor is the position of the first page; a continuation resumes from the page it returned.
+      boundary: Position = cursor?.position ?? {
+        channel: anchor.conversationId,
+        order: anchor.order,
+        id: anchor.id,
+      },
+      index = target.threadId ? "message_history_thread" : "message_history_conversation",
+      thread = target.threadId ? "AND m.thread=?" : "",
+      cache = new Map<string, MessageDTO | undefined>();
+    const visible = (key: string): MessageDTO | undefined => {
+      if (!cache.has(key)) cache.set(key, this.visibleRow(run, target.conversationId, key));
+      return cache.get(key);
     };
-    // SQL selects closest neighbors, not an offset or the first page of all later history.
-    const side = (direction: "before" | "after", count: number) => {
-      if (!count) return { messages: [] as MessageDTO[], truncated: false };
+    /** Walk away from the boundary, stopping at the scan bound or after the requested width. */
+    const walk = (direction: Direction, want: number) => {
+      if (!want)
+        return { messages: [] as MessageDTO[], scanned: 0, more: false, nextCursor: null as null };
       const op = direction === "before" ? "<" : ">",
         sort = direction === "before" ? "DESC" : "ASC";
-      const thread = target.threadId ? "AND m.thread=?" : "";
-      const params: (string | number)[] = [
-        run.agentId,
-        target.conversationId,
-        ...(target.threadId ? [target.threadId] : []),
-        anchor.order,
-        anchor.order,
-        anchor.order,
-        anchor.order,
-        anchor.id,
-        1001,
-      ];
-      const index = target.threadId ? "message_history_thread" : "message_history_conversation";
       const rows = m.store.db
         .prepare(
-          `SELECT m.key FROM messages m INDEXED BY ${index} JOIN conversation_identities c ON c.id=m.channel LEFT JOIN message_visibility v ON v.key=m.key AND v.agent_id=? WHERE m.channel=? ${thread} AND ((c.authority='internal' AND c.kind='channel') OR v.key IS NOT NULL) AND (length(m.ts)${op}length(?) OR (length(m.ts)=length(?) AND (m.ts${op}? OR (m.ts=? AND m.key${op}?)))) ORDER BY length(m.ts) ${sort},m.ts ${sort},m.key ${sort} LIMIT ?`,
+          `SELECT m.key,m.ts FROM messages m INDEXED BY ${index} JOIN conversation_identities c ON c.id=m.channel LEFT JOIN message_visibility v ON v.key=m.key AND v.agent_id=? WHERE m.channel=? ${thread} AND ((c.authority='internal' AND c.kind='channel') OR v.key IS NOT NULL) AND (length(m.ts)${op}length(?) OR (length(m.ts)=length(?) AND (m.ts${op}? OR (m.ts=? AND m.key${op}?)))) ORDER BY length(m.ts) ${sort},m.ts ${sort},m.key ${sort} LIMIT ?`,
         )
-        .all(...params) as { key: string }[];
-      const visible: MessageDTO[] = [];
-      for (const row of rows.slice(0, 1000)) {
-        const value = this.authorizedMessage(run, row.key);
-        if (!value.deleted) visible.push(value);
-        if (visible.length === count + 1) break;
+        .all(
+          run.agentId,
+          target.conversationId,
+          ...(target.threadId ? [target.threadId] : []),
+          boundary.order,
+          boundary.order,
+          boundary.order,
+          boundary.order,
+          boundary.id,
+          1001,
+        ) as { key: string; ts: string }[];
+      const messages: MessageDTO[] = [];
+      let examined = 0,
+        more = false,
+        beyond: Position | undefined;
+      for (const row of rows) {
+        const position: Position = { channel: target.conversationId, order: row.ts, id: row.key };
+        // A continuation walks strictly beyond the last row this page examined, so a page
+        // that returned nothing still advances instead of reading the same rows again.
+        if (examined === 1000 || messages.length === want) {
+          more = true;
+          break;
+        }
+        examined++;
+        beyond = position;
+        const message = visible(row.key);
+        if (!message || message.deleted) continue;
+        messages.push(message);
       }
-      const messages = visible.slice(0, count);
+      // A page that ends exactly on the last row has nothing left for a continuation.
+      if (messages.length === want && rows.length === examined) {
+        more = false;
+        beyond = undefined;
+      }
       if (direction === "before") messages.reverse();
       return {
         messages,
-        truncated: visible.length > count || rows.length > 1000,
-        scanLimited: rows.length > 1000,
+        scanned: examined,
+        more,
+        nextCursor: more && beyond ? this.cursor({ key: owner, position: beyond }) : null,
       };
     };
-    const before = side("before", input.before),
-      after = side("after", input.after),
-      messages = [...before.messages, anchor, ...after.messages];
-    for (const message of messages)
+    const directions: Direction[] = input.direction ? [input.direction] : ["before", "after"];
+    // The first read reads both widths; a continuation walks one of them.
+    const pages = directions.map((direction) => {
+      const want = input.direction
+          ? input.limit
+          : direction === "before"
+            ? input.before
+            : input.after,
+        page = walk(direction, want);
+      return { direction, page };
+    });
+    const before = pages.find(({ direction }) => direction === "before"),
+      after = pages.find(({ direction }) => direction === "after"),
+      ordered = input.direction
+        ? pages[0]!.page.messages
+        : [...(before?.page.messages ?? []), anchor, ...(after?.page.messages ?? [])];
+
+    for (const message of ordered)
       if (m.references.conversation(message.conversationId).authority === "internal")
         m.recordHistory(message, [run.agentId]);
     return {
-      messages,
+      messages: ordered,
       anchorId: anchor.id,
+      // Only a directed walk continues; the two-sided read reports truncation per direction.
+      nextCursor: input.direction ? pages[0]!.page.nextCursor : null,
       coverage: {
         source: "local_visible",
         target,
-        beforeCount: before.messages.length,
-        afterCount: after.messages.length,
-        beforeTruncated: before.truncated,
-        afterTruncated: after.truncated,
-        scanLimited: before.scanLimited || after.scanLimited,
+        ...(input.direction
+          ? {
+              direction: input.direction,
+              scanned: pages[0]!.page.scanned,
+              scanLimited: pages[0]!.page.scanned === 1000 && pages[0]!.page.more,
+            }
+          : {
+              beforeCount: before?.page.messages.length ?? 0,
+              afterCount: after?.page.messages.length ?? 0,
+              beforeTruncated: !!before?.page.more,
+              afterTruncated: !!after?.page.more,
+            }),
         live: true,
         remoteComplete: false,
       },

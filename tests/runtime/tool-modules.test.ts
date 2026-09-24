@@ -68,7 +68,7 @@ const expected = `
 history.page history.search history.around history.fetch
 conversations.refresh conversations.list conversations.members conversations.openDM
 attention.peek attention.read attention.resolve attention.defer attention.mute
-messages.recent messages.read messages.search messages.send messages.watch inbox.list inbox.read inbox.ack
+messages.send messages.watch inbox.list inbox.read inbox.ack
 works.list works.select tasks.list tasks.read tasks.events tasks.byMessage tasks.intents tasks.retry tasks.continue tasks.discard tasks.create tasks.claim tasks.unclaim tasks.transfer tasks.wait tasks.update tasks.delegate
 reminders.list reminders.read reminders.log reminders.finish reminders.create reminders.edit reminders.cancel
 actions.list actions.read sessions.status sessions.checkpoint sessions.reset environment.info usage.read agents drafts.list drafts.read drafts.retry drafts.continue drafts.revise drafts.discard
@@ -144,6 +144,38 @@ it("offers no self-service channel membership or unjoined-channel search", () =>
   );
   for (const name of removed) expect(baseline).not.toContain(name);
   expect(baseline).toContain("cannot join or leave a channel");
+});
+
+it("describes local coverage, remote acquisition and attention.read as three different reads", () => {
+  const described = (name: string) =>
+      builtInToolSpecs.find((entry) => entry.name === name)!.description,
+    baseline = JSON.stringify(
+      buildBaseline(configSchema.parse(configFixture).agents[0]!, operationDocumentation)
+        .messages[0],
+    );
+  // Local coverage: what this Agent already has, live, ordered newest first per conversation.
+  for (const name of ["history.page", "history.search", "history.around"] as const) {
+    expect(described(name)).toMatch(/locally covered/i);
+    expect(described(name)).toMatch(/newest first per conversation|nearest locally covered/i);
+    expect(described(name)).toMatch(/live|read-only/i);
+  }
+  expect(described("history.page")).toMatch(/continuation cursor/i);
+  expect(described("history.page")).toMatch(/never records presentation/i);
+  expect(described("history.page")).toMatch(/never mints the freshness view token/i);
+  expect(described("history.search")).toMatch(/nothing and still continue/i);
+  // Remote acquisition: one page through this Agent's own installation, quiet.
+  expect(described("history.fetch")).toMatch(/remote history/i);
+  expect(described("history.fetch")).toMatch(/own platform installation/i);
+  expect(described("history.fetch")).toMatch(/continuation cursor/i);
+  expect(described("history.fetch")).toMatch(/wakes nobody and presents nothing/i);
+  // attention.read is the frozen snapshot that presents, and the only token source.
+  const attention = described("attention.read");
+  expect(attention).toMatch(/frozen/i);
+  expect(attention).toMatch(/records presentation/i);
+  expect(attention).toMatch(/mints the freshness view token/i);
+  expect(baseline).toContain("attention.read presents a paginated snapshot");
+  expect(baseline).toContain("never create a whole-target viewToken");
+  expect(baseline).toContain("only attention.read presents a whole-target snapshot");
 });
 
 it("keeps mute, follow and defer as the Agent's own attention choices", async () => {

@@ -86,6 +86,38 @@ it("uses the acting installation, maps a bounded page, and reports provider cont
   expect(missing.exhausted).toBe(false);
 });
 
+it("resumes a remote page through the provider cursor and reports an empty page that still continues", async () => {
+  const f = setup();
+  const first = await f.history.fetch(
+    f.run,
+    { conversationId: f.conversationId },
+    { limit: 2 },
+    new AbortController().signal,
+  );
+  expect(first.nextCursor).toBe("next");
+  expect(first.exhausted).toBe(false);
+  // The provider answers the continuation with no items but more pages behind it.
+  f.api.history.mockResolvedValueOnce({
+    ok: true,
+    messages: [],
+    has_more: true,
+    response_metadata: { next_cursor: "third" },
+  });
+  const empty = await f.history.fetch(
+    f.run,
+    { conversationId: f.conversationId },
+    { limit: 2, cursor: first.nextCursor! },
+    new AbortController().signal,
+  );
+  expect(f.api.history).toHaveBeenLastCalledWith(
+    expect.objectContaining({ channel: "CTEST", limit: 2, cursor: "next" }),
+  );
+  expect(empty.messages).toEqual([]);
+  expect(empty.nextCursor).toBe("third");
+  expect(empty.exhausted).toBe(false);
+  expect(empty.available).toBe(true);
+});
+
 it("translates canonical anchors and thread roots without exposing provider identifiers to the core", async () => {
   const f = setup(),
     root = f.mapper.message({

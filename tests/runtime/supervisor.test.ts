@@ -576,8 +576,6 @@ it("fresh review seat withholds bodies through tools, notice, recovery and held 
   const run = store.beginRun("research")!;
   const signal = new AbortController().signal;
   for (const [op, args] of [
-    ["messages.read", { target }],
-    ["messages.search", { query: "CONCLUSION" }],
     ["attention.read", { target }],
     ["inbox.list", {}],
     ["tasks.list", {}],
@@ -585,6 +583,9 @@ it("fresh review seat withholds bodies through tools, notice, recovery and held 
     ["attachments.save", { message: { messageId: "M1" }, fileId: "F1", path: "brief.txt" }],
   ] as const)
     await expect(router.call(run, work, op, op, args, signal)).rejects.toThrow("isolates");
+  // The retired bulk reads left the model entry surface, so no seat policy can reach them.
+  for (const op of ["messages.recent", "messages.read", "messages.search"] as const)
+    await expect(router.call(run, work, op, op, {}, signal)).rejects.toThrow("Unknown operation");
   const result = await router.call(
     run,
     work,
