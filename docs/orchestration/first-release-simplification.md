@@ -133,6 +133,16 @@ None yet.
   another ticket is mid-edit there; merges wait until the main-tree ticket commits and the
   tree is clean. Merge commits require a green `pnpm check` before the merge is committed
   (verified with `git merge --no-commit`).
+- **Parallelism policy (revised after two failed merges).** Tickets #48 and #52 were
+  implemented in worktrees forked from `d049b00` while #35/#36 restructured the storage
+  layer. Both produced genuine semantic conflicts (modify/delete on `src/daemon/migrate.ts`,
+  and conflicts in `src/main.ts`, `src/execution/linux-processes.ts`,
+  `src/runtime/tool-contract.ts`, `src/deployment/*`): the parallel base was a moving
+  target. Decision: the critical-path chain runs serially in the main tree, and a worktree
+  is used only for a ticket whose files are demonstrably disjoint from everything still in
+  flight. When a worktree ticket does conflict, the original implementer re-applies it onto
+  the new base as one fresh commit (recording the replaced range), rather than the
+  orchestrator forcing a merge that mixes two tickets in one commit.
 
 ## Orchestrator verification results (run by the orchestrator, pinned Node 24.21.0)
 
