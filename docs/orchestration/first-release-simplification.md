@@ -31,20 +31,24 @@ only when every blocker is committed on the branch.
 ## Execution rules
 
 1. One ticket per sub-agent context, running the `/implement` skill end to end.
-2. Tickets execute in dependency order. Sub-agents share one working tree, so
-   only work whose blockers are already committed may start.
-3. Every sub-agent finishes with `/code-review` against the ticket's starting
+2. Tickets execute in dependency order. Only work whose blockers are already
+   committed on the branch may start. Independent tickets may be implemented in
+   parallel in separate git worktrees, then merged back one at a time; every
+   ticket keeps its own commit referencing its issue number.
+3. This ledger is owned by the orchestrator. Ticket implementers never edit it,
+   so parallel tickets cannot conflict on it.
+4. Every sub-agent finishes with `/code-review` against the ticket's starting
    commit: Engineering and Spec axes as two parallel read-only sub-agents that
    did not write the code. Blocking findings are fixed and re-checked before the
    ticket is done.
-4. The ticket commit message references the ticket (`#N`). The commit is the
+5. The ticket commit message references the ticket (`#N`). The commit is the
    durable trace; review reports stay in the sub-agent conversation.
-5. A sub-agent stops for the orchestrator only when the work genuinely needs the
+6. A sub-agent stops for the orchestrator only when the work genuinely needs the
    user: a requirement change, a cross-ticket or spec-level finding, or access
    this machine cannot provide. Missing real Slack/provider/VPS connectivity is
    not such a blocker — those paths are validated with the real application,
    real SQLite and scripted model/transport replacements.
-6. The specification is the source of truth for acceptance. Acceptance criteria
+7. The specification is the source of truth for acceptance. Acceptance criteria
    are never rewritten to match what was built.
 
 ## Progress
