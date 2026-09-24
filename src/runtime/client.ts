@@ -4,6 +4,13 @@ import { z } from "zod";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { EngineHooks, EngineResult, RunSpec } from "./engine.js";
+import {
+  classifyRpcStage,
+  faultError,
+  toWorkerFault,
+  workerFaultSchema,
+  type FaultStage,
+} from "./fault.js";
 const rpcSchema = z
   .object({
     type: z.literal("rpc"),
@@ -34,14 +41,21 @@ const resultSchema = z
 export class WorkerClient {
   readonly child: ChildProcess;
   private active?: { nonce: string; reject(error: Error): void };
+  /**
+   * `workerEnv` is the synthetic-scenario hook for tests, alongside `entry`. The fixed identity
+   * and provider variables are applied after it, so a caller can add fixture inputs but cannot
+   * redirect which model, credential or entry mode the child runs with.
+   */
   constructor(
     provider: string,
     model: string,
     key: string,
     entry = new URL("./worker.js", import.meta.url),
+    workerEnv: Readonly<Record<string, string>> = {},
   ) {
     this.child = fork(entry, [], {
       env: {
+        ...workerEnv,
         PATH: "/usr/bin:/bin",
         LANG: "en_US.UTF-8",
         MATE_WORKER: "1",
@@ -53,9 +67,17 @@ export class WorkerClient {
       stdio: ["ignore", "ignore", "ignore", "ipc"],
       serialization: "json",
     });
-    this.child.on("error", (error) => this.active?.reject(error));
+    this.child.on("error", (error) =>
+      this.active?.reject(faultError(toWorkerFault(error, "worker"))),
+    );
     this.child.on("exit", () =>
-      this.active?.reject(new Error("Worker exited; usage and unfinished effects are uncertain")),
+      this.active?.reject(
+        faultError(
+          toWorkerFault(new Error("Worker exited"), "worker", {
+            reason: "worker exited; usage and unfinished effects are uncertain",
+          }),
+        ),
+      ),
     );
   }
   async run(
@@ -64,7 +86,8 @@ export class WorkerClient {
     timeoutMs: number,
     signal: AbortSignal,
   ): Promise<EngineResult> {
-    if (this.active || !this.child.connected) throw new Error("Worker unavailable");
+    if (this.active || !this.child.connected)
+      throw faultError(toWorkerFault(null, "worker", { reason: "worker unavailable" }));
     const nonce = randomUUID();
     return new Promise((resolve, reject) => {
       let settled = false,
@@ -82,29 +105,41 @@ export class WorkerClient {
           reject(error);
         } else resolve(result!);
       };
-      const onAbort = () => finish(new Error("Worker run aborted"));
-      const timer = setTimeout(() => finish(new Error("Worker run timed out")), timeoutMs);
+      const fail = (stage: FaultStage, error: unknown, reason?: string) =>
+        finish(faultError(toWorkerFault(error, stage, reason === undefined ? {} : { reason })));
+      const onAbort = () => fail("worker", new Error("Worker run aborted"));
+      const timer = setTimeout(() => fail("worker", new Error("Worker run timed out")), timeoutMs);
       this.active = { nonce, reject: (error) => finish(error) };
       const onMessage = async (raw: unknown) => {
         if (Buffer.byteLength(JSON.stringify(raw)) > 2_000_000) {
-          finish(new Error("Oversize worker message"));
+          fail("worker", new Error("Oversize worker message"));
           return;
         }
-        const envelope = raw as { nonce?: string; type?: string; result?: unknown; error?: string };
+        const envelope = raw as {
+          nonce?: string;
+          type?: string;
+          result?: unknown;
+          error?: string;
+          fault?: unknown;
+        };
         if (envelope.nonce !== nonce || settled) return;
         if (envelope.type === "failed") {
-          finish(new Error(envelope.error ?? "Worker failed"));
+          // The worker classified the failure at the stage it owns; keep that class rather than
+          // reconstructing one from the text it also sends for compatibility.
+          const fault = workerFaultSchema.safeParse(envelope.fault);
+          if (fault.success) finish(faultError(fault.data));
+          else fail("worker", new Error(envelope.error ?? "Worker failed"));
           return;
         }
         if (envelope.type === "done") {
           const parsed = resultSchema.safeParse(envelope.result);
-          if (!parsed.success || busy) finish(new Error("Invalid worker completion"));
+          if (!parsed.success || busy) fail("worker", new Error("Invalid worker completion"));
           else finish(undefined, parsed.data as EngineResult);
           return;
         }
         const parsed = rpcSchema.safeParse(raw);
         if (!parsed.success || busy || parsed.data.id <= sequence) {
-          finish(new Error("Invalid worker RPC"));
+          fail("worker", new Error("Invalid worker RPC"));
           return;
         }
         busy = true;
@@ -162,8 +197,18 @@ export class WorkerClient {
           }
           if (!settled) this.child.send({ type: "reply", nonce, id: call.id, value });
         } catch (error) {
+          // Classify the failure on the side that owns the operation. The worker receives the
+          // shared shape, so a refusal stays a refusal and a durable-write failure stays a
+          // persistence failure instead of both arriving as one opaque string.
+          const fault = toWorkerFault(error, classifyRpcStage(call.kind));
           if (!settled)
-            this.child.send({ type: "reply", nonce, id: call.id, error: String(error) });
+            this.child.send({
+              type: "reply",
+              nonce,
+              id: call.id,
+              error: fault.reason,
+              fault,
+            });
         } finally {
           busy = false;
         }
@@ -175,7 +220,11 @@ export class WorkerClient {
     });
   }
   close(): void {
-    this.active?.reject(new Error("Worker closed"));
+    this.active?.reject(
+      faultError(
+        toWorkerFault(null, "worker", { reason: "worker closed before the run finished" }),
+      ),
+    );
     this.child.kill("SIGKILL");
   }
 }

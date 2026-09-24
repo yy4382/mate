@@ -10,6 +10,7 @@ import type { Collaboration } from "../collaboration/service.js";
 import type { Broker } from "../policy/broker.js";
 import type { ConversationDirectory } from "../conversations/directory.js";
 import type { ToolReply } from "./engine.js";
+import { refusal } from "./fault.js";
 import { conversationHistoryModule } from "./tool-modules/conversation-history.js";
 import { coordinationRemindersModule } from "./tool-modules/coordination-reminders.js";
 import { sessionStatusModule } from "./tool-modules/session-status.js";
@@ -188,7 +189,7 @@ export class ToolRouter {
       const request = discoverySchemas["tools.call"].parse(input);
       operation = request.name;
       input = request.input;
-      if (operation.startsWith("tools.")) throw new Error("Unknown operation");
+      if (operation.startsWith("tools.")) throw refusal("Unknown operation");
     }
     if (operation === "tools.list") {
       discoverySchemas["tools.list"].parse(input);
@@ -202,7 +203,7 @@ export class ToolRouter {
     if (operation === "tools.describe") {
       const request = discoverySchemas["tools.describe"].parse(input),
         entry = this.specs.get(request.name);
-      if (!entry) throw new Error("Unknown operation");
+      if (!entry) throw refusal("Unknown operation");
       this.authorizeSeat(entry, run);
       return {
         value: {
@@ -213,7 +214,7 @@ export class ToolRouter {
       };
     }
     const entry = this.specs.get(operation);
-    if (!entry) throw new Error("Unknown operation");
+    if (!entry) throw refusal("Unknown operation");
     this.authorizeSeat(entry, run);
     const args = entry.schema.parse(this.normalizeInput(input)) as Record<string, any>,
       selected = c.currentWork(run, workId);

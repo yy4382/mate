@@ -8,6 +8,7 @@ import { ToolRouter, operationDocumentation } from "./tools.js";
 import { repairTranscript } from "./context.js";
 import { FairAdmission, type Admission } from "../concurrency/admission.js";
 import { UsageLedger } from "../usage/ledger.js";
+import { describeFault, toWorkerFault } from "./fault.js";
 export interface Worker {
   run(
     spec: RunSpec,
@@ -263,13 +264,16 @@ export class Supervisor {
         abort.abort();
         worker?.close();
         this.workers.delete(agentId);
+        // A run that never reached the worker failed in this process; the run module reads the
+        // shared fault instead of the message text to decide what happens next.
+        const fault = toWorkerFault(error, "recovery");
         try {
-          s.finish(run, String(error));
+          s.finish(run, describeFault(fault));
         } catch {
           /* already fenced by stop */
         }
         this.router.sessions.apply(agentId);
-        s.audit("run_failure", { agentId, runId: run.id, error: String(error) });
+        s.audit("run_failure", { agentId, runId: run.id, fault });
       } finally {
         this.active.delete(agentId);
         this.scheduleIdle(agentId);

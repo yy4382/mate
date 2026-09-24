@@ -12,6 +12,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { byteTokens, compactionParts, repairTranscript } from "./context.js";
+import { classified, toWorkerFault } from "./fault.js";
 
 export const toolDefinition = {
   name: "mate",
@@ -88,15 +89,31 @@ export class Engine {
       void (async () => {
         try {
           await hooks.usageBegin?.(index, model.provider, model.id);
-          const source = await this.stream(model, context, { ...options, maxTokens });
+          // A failure thrown while opening the provider stream is the model boundary's own fault.
+          // Classify it here, while the error object still exists, so the worker reports its class
+          // rather than a string; failures thrown by the other hooks keep their own classification.
+          let source;
+          try {
+            source = await this.stream(model, context, { ...options, maxTokens });
+          } catch (error) {
+            throw classified(error, toWorkerFault(error, "model"));
+          }
           const terminal = [];
           for await (const event of source) {
             if (event.type === "done" || event.type === "error") terminal.push(event);
             else output.push(event);
           }
           const message = await source.result();
-          if (message.stopReason === "error" || message.stopReason === "aborted") certain = false;
-          else {
+          if (message.stopReason === "error" || message.stopReason === "aborted") {
+            certain = false;
+            // The provider reported failure as a message rather than a thrown value. Classify it
+            // here, where the text is still available, instead of losing it in a plain string.
+            if (!fault)
+              fault = classified(
+                new Error(message.errorMessage ?? message.stopReason),
+                toWorkerFault(message.errorMessage ?? message.stopReason, "model"),
+              );
+          } else {
             const usage = message.usage;
             const counts = [
               usage?.input,
@@ -121,7 +138,9 @@ export class Engine {
           for (const event of terminal) output.push(event);
         } catch (error) {
           certain = false;
-          fault = error;
+          // Keep the thrown value itself: its code and retry classification are what the boundary
+          // needs, and `fault` is the value rethrown to the caller after the turn ends.
+          if (!fault) fault = error;
           output.push({ type: "error", reason: "error", error: this.errorMessage(String(error)) });
         }
       })();

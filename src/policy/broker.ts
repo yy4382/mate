@@ -1,6 +1,7 @@
 import { operationSchema, type ExecutionBackend } from "../execution/backend.js";
 import { Collaboration } from "../collaboration/service.js";
 import { Store, type RunToken } from "../storage/store.js";
+import { classified } from "../runtime/fault.js";
 
 /** Records ordinary Agent actions; Linux user permissions decide filesystem access. */
 export class Broker {
@@ -63,7 +64,13 @@ export class Broker {
       } catch {
         /* Stop/recovery may already own the uncertain action. */
       }
-      throw error;
+      // The action was started, so its external effect cannot be assumed absent. Keep the original
+      // error and record the class where the stage is known; the boundary filters the text.
+      throw classified(error, {
+        stage: "execution",
+        category: "unknown_effect",
+        reason: "an effect may have run before the failure",
+      });
     }
   }
 }

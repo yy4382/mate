@@ -8,6 +8,15 @@ import {
 import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/pi-agent-core/harness/context";
 import { z } from "zod";
 import { Engine, type RunSpec, type ToolReply } from "./engine.js";
+import { faultError, toWorkerFault, workerFaultSchema, type WorkerFault } from "./fault.js";
+
+/** A malformed reply fault is still a failure: never fall back to trusting the raw payload. */
+function parseFault(raw: unknown): WorkerFault {
+  const parsed = workerFaultSchema.safeParse(raw);
+  return parsed.success
+    ? parsed.data
+    : toWorkerFault(null, "worker", { reason: "The caller reported a failure" });
+}
 
 export async function summarizeWithPi(
   models: Models,
@@ -46,13 +55,22 @@ const startSchema = z.object({
     maxTurns: z.number().int().min(1).max(20),
   }),
 });
-/** Separate entrypoint allows tests to supply a synthetic stream without a production config switch. */
+/** The worker end of the protocol: failures leave as one shared fault shape, not as strings. */
 export function serveWorker(engine: Engine, models?: Models): void {
   let nonce: string | undefined,
     counter = 0,
     active = false;
   let abort = new AbortController();
   const pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
+  function fail(
+    message: string,
+    error: unknown,
+    stage: Parameters<typeof toWorkerFault>[1],
+    failedNonce: string | undefined = nonce,
+  ): void {
+    const fault: WorkerFault = toWorkerFault(error, stage, { reason: message });
+    process.send?.({ type: "failed", nonce: failedNonce, fault, error: fault.reason });
+  }
   function rpc(kind: string, payload: unknown): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const id = ++counter;
@@ -64,7 +82,13 @@ export function serveWorker(engine: Engine, models?: Models): void {
     abort.abort();
     engine.abort();
     for (const waiter of pending.values())
-      waiter.reject(new Error("Worker disconnected or aborted"));
+      waiter.reject(
+        faultError(
+          toWorkerFault("Worker disconnected or aborted", "worker", {
+            reason: "worker disconnected or aborted",
+          }),
+        ),
+      );
     pending.clear();
   };
   process.on("disconnect", () => {
@@ -77,6 +101,7 @@ export function serveWorker(engine: Engine, models?: Models): void {
       nonce?: string;
       id?: number;
       error?: string;
+      fault?: unknown;
       value?: unknown;
     };
     if (message.type === "abort" && message.nonce === nonce) {
@@ -86,22 +111,21 @@ export function serveWorker(engine: Engine, models?: Models): void {
     if (message.type === "reply" && message.nonce === nonce && message.id) {
       const waiter = pending.get(message.id);
       pending.delete(message.id);
-      if (message.error) waiter?.reject(new Error(message.error));
+      // The caller classified its own failure; keep that class instead of re-deriving it from
+      // text that has already crossed the boundary.
+      if (message.error || message.fault) waiter?.reject(faultError(parseFault(message.fault)));
       else waiter?.resolve(message.value);
       return;
     }
     const parsed = startSchema.safeParse(raw);
     if (!parsed.success) {
-      if (message.type === "run")
-        process.send?.({
-          type: "failed",
-          nonce: message.nonce,
-          error: "Invalid worker run payload",
-        });
+      // A rejected payload still names the run it refused, so the caller fails that run now
+      // instead of waiting for its timeout.
+      if (message.type === "run") fail("Invalid worker run payload", null, "worker", message.nonce);
       return;
     }
     if (active) {
-      process.send?.({ type: "failed", nonce: message.nonce, error: "Worker already active" });
+      fail("Worker already active", null, "worker", message.nonce);
       return;
     }
     active = true;
@@ -137,17 +161,27 @@ export function serveWorker(engine: Engine, models?: Models): void {
       });
       process.send?.({ type: "done", nonce, result });
     } catch (error) {
-      process.send?.({ type: "failed", nonce, error: String(error) });
+      fail("The worker run failed", error, "worker");
     } finally {
       active = false;
     }
   });
 }
+/** A worker that cannot start still reports the shared fault shape to the caller that spawned it. */
+function reportStartFailure(reason: string): never {
+  process.send?.({
+    type: "failed",
+    nonce: undefined,
+    fault: toWorkerFault(null, "worker", { reason }),
+    error: reason,
+  });
+  process.exit(1);
+}
 if (process.env.MATE_WORKER === "1") {
   const models = builtinModels();
   const model = models.getModel(process.env.MATE_PROVIDER!, process.env.MATE_MODEL!);
   if (!model || !process.env.MATE_MODEL_KEY)
-    throw new Error("Worker model or credential unavailable");
+    reportStartFailure("Worker model or credential unavailable");
   serveWorker(
     new Engine(model, (m, context, options) =>
       models.streamSimple(m, context, { ...options, apiKey: process.env.MATE_MODEL_KEY!, env: {} }),
