@@ -133,6 +133,14 @@ None yet.
   another ticket is mid-edit there; merges wait until the main-tree ticket commits and the
   tree is clean. Merge commits require a green `pnpm check` before the merge is committed
   (verified with `git merge --no-commit`).
+- **Per-worktree git index (hardening, verified).** By default every linked worktree of one
+  repository shares `.git/index`, so parallel tickets race on `index.lock` and can stage each
+  other's files (the same failure mode as the #35/#36 contamination, but across worktrees).
+  Each worktree now sets `extensions.worktreeConfig` plus a worktree-local
+  `core.indexFile = <gitdir>/index.worktree`, so a ticket's `git add`/`git commit` cannot
+  touch the main index or another worktree's. Verified by committing a probe file in
+  `.worktrees/t45`: the main HEAD, the main index and every sibling worktree were unaffected;
+  the probe commit was then reset away.
 - **Parallelism policy (revised after two failed merges).** Tickets #48 and #52 were
   implemented in worktrees forked from `d049b00` while #35/#36 restructured the storage
   layer. Both produced genuine semantic conflicts (modify/delete on `src/daemon/migrate.ts`,
