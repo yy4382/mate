@@ -66,7 +66,7 @@ function setup(directory?: ConversationDirectory) {
 }
 const expected = `
 history.page history.search history.around history.fetch
-conversations.refresh conversations.list conversations.members conversations.openDM
+conversations.refresh conversations.list conversations.members conversations.openDM conversations.invite
 attention.peek attention.read attention.resolve attention.defer attention.mute
 messages.send messages.watch inbox.list inbox.read inbox.ack
 works.list works.select tasks.list tasks.read tasks.events tasks.byMessage tasks.intents tasks.retry tasks.continue tasks.discard tasks.create tasks.claim tasks.unclaim tasks.transfer tasks.wait tasks.update tasks.delegate

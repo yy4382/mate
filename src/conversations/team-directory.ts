@@ -3,6 +3,7 @@ import { encode } from "../storage/store.js";
 import type { Principal } from "../domain/messages.js";
 import type {
   ConversationDirectory,
+  InviteResult,
   MembersResult,
   OpenDMResult,
   SpacesResult,
@@ -86,6 +87,32 @@ export class TeamDirectory implements ConversationDirectory {
       )
       .all(conversationId) as Principal[];
     return { members, incomplete: false };
+  }
+  /**
+   * An Agent invites one configured teammate into a conversation. Team identity, self-invitation
+   * and the inviter's current membership are decided here, before any adapter is asked; the
+   * platform's own public/private permission rules decide the request itself.
+   */
+  async invite(
+    run: RunToken,
+    actionId: string,
+    conversationId: string,
+    agentId: string,
+    signal: AbortSignal,
+  ): Promise<InviteResult> {
+    const m = this.messages;
+    m.store.assertRun(run);
+    signal.throwIfAborted();
+    m.requireReadable(run.agentId);
+    // The target comes from the configured team identity, never from a supplied platform id.
+    const target = m.agent(agentId);
+    if (target.id === run.agentId) throw new Error("An Agent cannot invite itself");
+    if (m.references.conversation(conversationId).authority === "internal")
+      throw new Error("Internal room membership is host-managed");
+    // The inviter's own current membership is the prerequisite; an invitee cannot bypass it.
+    m.requireAccess(run.agentId, conversationId);
+    if (!this.external?.invite) throw new Error("No external invitation source");
+    return this.external.invite(run, actionId, conversationId, agentId, signal);
   }
   async openDM(
     run: RunToken,
