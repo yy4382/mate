@@ -11,3 +11,10 @@ docs/
 dist/
 coverage/
 pnpm-lock.yaml
+
+# Paths that are already outside the project tree; listed so the formatting scope
+# does not silently depend on .gitignore, and so `pnpm format` can never rewrite
+# another ticket's checkout or a developer's local configuration.
+.worktrees/
+data/
+mate.local.json
