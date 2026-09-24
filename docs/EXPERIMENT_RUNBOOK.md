@@ -31,7 +31,7 @@ pnpm node dist/src/main.js local mate.local.json
 
 每个 app 开启 Socket Mode，app token scope 为 `connections:write`。Bot scopes：`app_mentions:read`、`chat:write`、`channels:read`、`channels:history`、`channels:join`、`channels:manage`、`groups:read`、`groups:history`、`groups:write`、`im:read`、`im:history`、`im:write`、`mpim:read`、`mpim:history`、`mpim:write`、`files:read`、`files:write`、`users:read`。其中 `channels:join` 支持加入公开频道，`channels:manage`/`groups:write` 支持从相应频道离开。订阅 `app_mention`、`message.channels`、`message.groups`、`message.im`、`member_joined_channel`、`member_left_channel`。其中一个 app 再注册 `/team` 并获得 `commands` scope。把各 bot 邀请到相应频道；私有频道仍只能被邀请加入，配置不会替 Slack 授权。
 
-目标 VPS 的安装和原生 UID 权限检查按 [Debian 13 部署](DEPLOYMENT.md) 进行。首版使用每位 Agent 独立的 Linux 用户，不需要 Docker 镜像或 loopback workspace mount。`check` 只核对配置、模型目录和环境变量引用，不检查 token 授权或网络；`matectl doctor` 与 `offline-probe` 核对安装和本地权限边界，也不代替真实 Slack/provider 接线。安装后通过 `mate.service` 启动 daemon：
+目标 VPS 的安装和原生 UID 权限检查按 [Debian 13 部署](DEPLOYMENT.md) 进行。首版使用每位 Agent 独立的 Linux 用户。`check` 只核对配置、模型目录和环境变量引用，不检查 token 授权或网络；`matectl doctor` 与 `offline-probe` 核对安装和本地权限边界，也不代替真实 Slack/provider 接线。安装后通过 `mate.service` 启动 daemon：
 
 ```sh
 sudo matectl doctor

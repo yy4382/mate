@@ -90,7 +90,7 @@ E2实现前必须提供实际表/JSON字段清单及迁移fixtures，逐项检�
 
 每个gate除正确性/故障恢复，还检查：依赖方向有自动约束；没有SDK类型污染核心；没有隐藏全局状态/双事实源；职责与命名一致；接口有错误/取消/版本/分页语义；配置与迁移可恢复；测试验证外部行为而非复制实现。对相关大类新增处理器必须分拆，不以文件搬家或interface包装掩盖耦合。架构或可维护性验收阻塞与功能阻塞同等处理。
 
-E0独立review讨论重点：分步迁移是否可执行、内部/外部消息确认语义是否一致、接口是否过宽或过度抽象、实验范围是否偷渡生产功能。审查需指出具体章节、影响和替代方案；修订后复审，结论写入reviews/E0-architecture.md。
+E0独立review讨论重点：分步迁移是否可执行、内部/外部消息确认语义是否一致、接口是否过宽或过度抽象、实验范围是否偷渡生产功能。审查需指出具体章节、影响和替代方案；修订后复审，结论只保留在会话中。
 
 ### E1 可验证的分步依赖范围
 
@@ -181,7 +181,7 @@ E3b独立设计复核（review_e3a_participation）通过方向，以下为实�
 
 review_e3b_history最终PASS。v21将external visibility升级为每Agent的revision+完整body snapshot，避免不同Slack installation的新版、删除或同revision附件展开互相覆盖；共享current只用于canonical最新缓存，不能作为actor读取授权。quiet fetch只更新证据与actor freshness，不制造observation/delivery/seen/unseen。v20缺少actor-specific body，迁移只能以最高observation对应revision body回填、无observation时采用current snapshot并写audit；旧same-revision变体无法还原，这是历史证据上限而非运行时静默猜测。
 
-历史查询必须适合低配VPS：target/thread查询强制expression index；无target搜索按`channel_access`稳定顺序逐频道走索引，总raw scan budget为1001，不进行跨频道临时排序。旧`messages.search/recent`也直接按actor snapshot筛选，不能先把所有key物化到JS。坏远端条目以嵌套savepoint隔离并形成gap，不能回滚同页正常条目；provider exhaustion与导入gap分别表达。完整记录见`reviews/E3b-history.md`。
+历史查询必须适合低配VPS：target/thread查询强制expression index；无target搜索按`channel_access`稳定顺序逐频道走索引，总raw scan budget为1001，不进行跨频道临时排序。旧`messages.search/recent`也直接按actor snapshot筛选，不能先把所有key物化到JS。坏远端条目以嵌套savepoint隔离并形成gap，不能回滚同页正常条目；provider exhaustion与导入gap分别表达。
 
 ### E4 实现前设计 — 协作恢复、owner activity 与工具组合
 
