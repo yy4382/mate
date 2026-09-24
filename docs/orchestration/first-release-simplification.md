@@ -155,3 +155,15 @@ None yet.
 | #36 | `a2288ce` | `pnpm check` in an isolated `git archive` copy | 57 files / 398 tests, exit 0; all preserved-baseline tests confirmed present; old schema modules fully unreferenced; `Store` is the single entry onto `openCurrentDatabase` |
 | #36 (final) | `2b56276` | `pnpm typecheck` + `pnpm check` in the MAIN tree | 57 files / 402 tests, exit 0; 62→57 file and 416→402 test drop is exactly the migration-path tests; every preserved-baseline test confirmed present by path |
 | #52 (reworked) | `aac16f1`, merged `fab5692` | `pnpm typecheck` + `pnpm check` on the merged MAIN tree before committing the merge | 58 files / 409 tests, exit 0; merge was conflict-free after re-application |
+
+## Re-application log (cross-ticket conflicts)
+
+| Ticket | First landing | Conflict cause | Re-applied as | Merged as |
+|---|---|---|---|---|
+| #48 | `8e5c3c8`..`c4a69a7` @ `d049b00` | #36 deleted the migration/schema chain #48's base still had | `5ed6bc2` @ `6395c75` | — |
+| #48 | `5ed6bc2` @ `6395c75` | #52 replaced the ad-hoc `LinuxInstallerHost` seam with the single `HostOperations` entry while #48 called `new LinuxProcessManager(...)` directly | `9e69c30` @ `fab5692` (merges with #52; waits for #37 to clear the main tree) | pending |
+| #52 | `dffb1d3`..`053a643` @ `d049b00` | #36 deleted the migration path #52 had modified | `aac16f1` @ `6395c75` | `fab5692` |
+| #36 | `a2288ce` @ `b1fcca9` | none | — | `2b56276` (6 commits kept) |
+
+Lesson that held throughout: when a worktree ticket conflicts, the fix is a re-application by its
+own implementer onto the new base, never a merge that mixes two tickets in one commit.
