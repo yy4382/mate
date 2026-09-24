@@ -1,0 +1,362 @@
+#!/usr/bin/env node
+/**
+ * Native maintenance verification helper.
+ *
+ * `tests/native/linux-maintenance.sh` drives the real maintenance commands on a resettable Debian
+ * host and calls this file for the three things a shell cannot do on its own:
+ *
+ *   marker   record one Agent's durable work (Agent identity, session, canonical message, task,
+ *            reminder and inbox delivery) in the current-format database through the release's own
+ *            Store, and write down exactly what was recorded;
+ *   verify   re-read those records after a program upgrade, a configuration change, a restart and a
+ *            restore, and verify a published checkpoint against its own manifest;
+ *   report   print the collected evidence as one machine-readable JSON document.
+ *
+ * Records are seeded through the same tables the daemon owns, then read back after each maintenance
+ * step. That is what makes the comparison meaningful: an upgrade, a configuration change or a
+ * restore that dropped, re-encoded or re-keyed any of these rows fails the check.
+ *
+ * On macOS only `verify` runs, against a caller-supplied data directory. It proves the verification
+ * itself works; it does not stand in for the native run. Real Agent UIDs, private and shared
+ * directory permissions and systemd process control stay in the shell script, and `report` records
+ * which checks a non-Linux host could not execute.
+ */
+import { createHash } from "node:crypto";
+import {
+  existsSync,
+  lstatSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+
+const MODES = ["marker", "verify", "report"];
+/** Flags each mode accepts; anything else is refused rather than silently ignored. */
+const FLAGS = {
+  marker: ["release", "store", "agent", "secondAgent", "out"],
+  verify: ["release", "store", "marker", "checkpoint"],
+  report: ["mode", "phases", "out"],
+};
+
+export function parseNativeArguments(argv) {
+  const [mode, ...rest] = argv;
+  if (!mode || !MODES.includes(mode))
+    throw new Error(`Usage: linux-maintenance.mjs ${MODES.join("|")} [--flag value]`);
+  const flags = {};
+  for (let index = 0; index < rest.length; index += 2) {
+    const flag = rest[index],
+      value = rest[index + 1];
+    if (!flag?.startsWith("--") || value === undefined)
+      throw new Error(`Missing value for ${flag ?? "(no flag)"}`);
+    const name = flag.slice(2);
+    if (!FLAGS[mode].includes(name)) throw new Error(`Unknown --${name} for ${mode}`);
+    flags[name] = value;
+  }
+  return { mode, flags };
+}
+const need = (flags, name) => {
+  if (!flags[name]) throw new Error(`--${name} is required`);
+  return flags[name];
+};
+
+/**
+ * The durable records a maintenance step must carry across unchanged. The reminder table is
+ * `schedules` and the stored configuration lives in `runtime_meta`, because those are the current
+ * format's own names; nothing here depends on a previous version's layout.
+ */
+export const preservedQueries = Object.freeze({
+  identity: ["SELECT id,paused,resume_hold FROM agents WHERE id=?", "agent"],
+  session: [
+    "SELECT s.id,s.config_version FROM sessions s JOIN agents a ON a.session_id=s.id WHERE a.id=?",
+    "agent",
+  ],
+  entries: ["SELECT seq,key FROM entries WHERE session_id=? ORDER BY seq", "sessionId"],
+  delivery: ["SELECT agent_id,dedupe,payload,status FROM deliveries WHERE id=?", "deliveryId"],
+  work: ["SELECT id,origin,target,state FROM works WHERE id=?", "workId"],
+  task: ["SELECT work_id,title,status FROM tasks WHERE id=?", "taskId"],
+  reminder: [
+    "SELECT agent_id,work_id,content,next_at,active FROM schedules WHERE id=?",
+    "reminderId",
+  ],
+  configuration: ["SELECT value FROM runtime_meta WHERE key='configuration'", "none"],
+});
+/** The second Agent's rows exist so a restore cannot pass by leaving one Agent's data untouched. */
+/** Import the release's own modules, so verification uses the format under test, not a copy. */
+export async function loadRelease(releaseRoot) {
+  const root = resolve(releaseRoot);
+  const load = (relative) => import(pathToFileURL(join(root, "dist", "src", relative)).href);
+  const store = await load("storage/store.js");
+  if (!store.Store) throw new Error(`Release at ${root} does not expose the Store entry`);
+  return { Store: store.Store };
+}
+
+const argumentFor = (marker, key) =>
+  ({
+    agent: marker.agentId,
+    sessionId: marker.sessionId,
+    deliveryId: marker.deliveryId,
+    workId: marker.workId,
+    taskId: marker.taskId,
+    reminderId: marker.reminderId,
+  })[key];
+
+/** Read every recorded row for one marker. Plain rows, so two reads compare by value. */
+export function readPreserved(store, marker, queries = preservedQueries) {
+  const rows = {};
+  for (const [name, [sql, key]] of Object.entries(queries)) {
+    const statement = store.db.prepare(sql);
+    if (key === "none") rows[name] = statement.all();
+    else rows[name] = statement.all(argumentFor(marker, key));
+  }
+  return rows;
+}
+
+/**
+ * Record one Agent's durable work in the current format, plus a second Agent's identity, session,
+ * task and delivery so a restore cannot pass by leaving one Agent's rows untouched. The Agent
+ * identity and session come from the Store's own registration entry; the canonical message, task,
+ * reminder and inbox delivery use the same tables the daemon writes, so re-reading them after a
+ * maintenance step proves what that step kept. The marker file lives outside the deployment, so no
+ * checkpoint and no private home ever sees it.
+ */
+export async function writeMarker(release, options) {
+  const store = new release.Store(resolve(options.store));
+  try {
+    const agentIds = [options.agent, need(options, "secondAgent")],
+      at = Date.now(),
+      markers = {};
+    for (const id of agentIds) {
+      const marker = (markers[id] = {
+        agentId: id,
+        sessionId: store.register(id, "native-maintenance-validation", [
+          { role: "user", content: `native maintenance validation context for ${id}` },
+        ]),
+        messageKey: `native-validation-message:${id}`,
+        workId: `native-validation-work:${id}`,
+        taskId: `native-validation-task:${id}`,
+        reminderId: `native-validation-reminder:${id}`,
+        deliveryId: store.enqueue(id, `native-validation:${id}`, {
+          kind: "native-validation",
+          agent: id,
+        }),
+      });
+      const target = JSON.stringify({ conversationId: `native-validation:${id}` });
+      store.db
+        .prepare(
+          "INSERT INTO messages(key,channel,ts,revision,body,deleted,thread) VALUES(?,?,?,?,?,0,NULL)",
+        )
+        .run(marker.messageKey, `native-validation:${id}`, "100.000001", "r1", `body for ${id}`);
+      store.db
+        .prepare(
+          "INSERT INTO works(id,origin,target,state) VALUES(?,?,?,'active') ON CONFLICT(id) DO NOTHING",
+        )
+        .run(marker.workId, `native-validation:${id}`, target);
+      store.db
+        .prepare(
+          "INSERT INTO tasks(id,work_id,target,title,status,message_key,created_by) VALUES(?,?,?,?,?,?,?)",
+        )
+        .run(
+          marker.taskId,
+          marker.workId,
+          target,
+          `native validation task ${id}`,
+          "todo",
+          marker.messageKey,
+          id,
+        );
+      store.db
+        .prepare(
+          "INSERT INTO schedules(id,agent_id,work_id,target,next_at,timezone,content,projection) VALUES(?,?,?,?,?,?,?,?)",
+        )
+        .run(
+          marker.reminderId,
+          id,
+          marker.workId,
+          target,
+          4_000_000_000_000,
+          "UTC",
+          `native validation reminder ${id}`,
+          "private",
+        );
+    }
+    const marker = { at, first: markers[agentIds[0]], second: markers[agentIds[1]] };
+    marker.first.rows = readPreserved(store, marker.first);
+    marker.second.rows = readPreserved(store, marker.second);
+    writeFileSync(resolve(need(options, "out")), `${JSON.stringify(marker, null, 2)}\n`, {
+      mode: 0o600,
+    });
+    return {
+      passed: true,
+      agentId: marker.first.agentId,
+      secondAgentId: marker.second.agentId,
+      recorded: Object.keys(marker.first.rows).length + Object.keys(marker.second.rows).length,
+    };
+  } finally {
+    store.close();
+  }
+}
+
+const sha256 = (path) => createHash("sha256").update(readFileSync(path)).digest("hex");
+
+/**
+ * Re-inventory one Agent payload against its manifest entries: every recorded file must still be a
+ * regular file with the recorded size and hash, every recorded directory a directory, and every
+ * recorded symlink a symlink with the recorded target.
+ *
+ * Modes are deliberately not compared here: a published checkpoint is sealed to root:service-group
+ * 0750/0640 on purpose, while the manifest keeps each entry's original mode for the restore to
+ * reapply. The restored private home's owner and mode are checked after the restore instead.
+ */
+export function inventoryPayload(root, entries) {
+  const missing = [],
+    changed = [],
+    unreadable = [];
+  for (const entry of entries) {
+    const path = join(root, ...entry.path.split("/"));
+    if (!existsSync(path)) {
+      missing.push(entry.path);
+      continue;
+    }
+    const stat = lstatSync(path);
+    if (entry.type === "directory") {
+      if (!stat.isDirectory()) changed.push(`${entry.path}: not a directory`);
+      continue;
+    }
+    if (entry.type === "symlink") {
+      if (!stat.isSymbolicLink()) changed.push(`${entry.path}: not a symlink`);
+      else if (readlinkSync(path) !== entry.target)
+        changed.push(`${entry.path}: target changed to ${readlinkSync(path)}`);
+      continue;
+    }
+    if (!stat.isFile()) changed.push(`${entry.path}: not a regular file`);
+    else if (stat.size !== entry.size)
+      changed.push(`${entry.path}: size ${stat.size} != ${entry.size}`);
+    else {
+      try {
+        if (sha256(path) !== entry.sha256) changed.push(`${entry.path}: content changed`);
+      } catch {
+        unreadable.push(entry.path);
+      }
+    }
+  }
+  return { missing, changed, unreadable, entries: entries.length };
+}
+
+/** Verify a published checkpoint against its own manifest: integrity, types, payload and sealing. */
+export function verifyCheckpoint(checkpoint, agentId) {
+  const root = resolve(checkpoint),
+    complete = join(root, "COMPLETE.json");
+  if (!existsSync(complete)) return { passed: false, checks: { completionMarker: false } };
+  const manifest = JSON.parse(readFileSync(complete, "utf8")),
+    database = join(root, "mate.sqlite"),
+    agent = (manifest.agents ?? []).find((item) => item.agentId === agentId),
+    payload = agent ? inventoryPayload(join(root, "agents", agentId), agent.entries) : undefined,
+    checks = {
+      currentFormat: manifest.version === 2,
+      databaseIntegrity: manifest.database?.sha256 === sha256(database),
+      databaseRegularFile: lstatSync(database).isFile(),
+      databaseSealed: (lstatSync(database).mode & 0o022) === 0,
+      rootSealed: (lstatSync(root).mode & 0o022) === 0,
+      agentInventoried: !!agent,
+      agentPayload: !!payload && payload.missing.length === 0 && payload.changed.length === 0,
+    };
+  return {
+    passed: Object.values(checks).every(Boolean),
+    checks,
+    agentId,
+    payloadEntries: payload?.entries ?? 0,
+    ...(payload && (payload.missing.length || payload.changed.length || payload.unreadable.length)
+      ? {
+          payloadFaults: {
+            missing: payload.missing.slice(0, 8),
+            changed: payload.changed.slice(0, 8),
+            unreadable: payload.unreadable.slice(0, 8),
+          },
+        }
+      : {}),
+  };
+}
+
+/** Compare the live records with the marker taken before the maintenance step. */
+export function verifyPreserved(release, options) {
+  const marker = JSON.parse(readFileSync(resolve(need(options, "marker")), "utf8"));
+  const store = new release.Store(resolve(need(options, "store")));
+  try {
+    const changed = [];
+    for (const recorded of [marker.first, marker.second]) {
+      const current = readPreserved(store, recorded);
+      for (const name of Object.keys(recorded.rows))
+        if (JSON.stringify(current[name]) !== JSON.stringify(recorded.rows[name]))
+          changed.push(`${recorded.agentId}.${name}`);
+    }
+    const checkpoint = options.checkpoint
+      ? verifyCheckpoint(options.checkpoint, marker.first.agentId)
+      : undefined;
+    return {
+      passed: changed.length === 0 && (checkpoint?.passed ?? true),
+      agentId: marker.first.agentId,
+      secondAgentId: marker.second.agentId,
+      recorded: Object.keys(marker.first.rows).length + Object.keys(marker.second.rows).length,
+      changed,
+      ...(checkpoint ? { checkpoint } : {}),
+    };
+  } finally {
+    store.close();
+  }
+}
+
+/**
+ * The document a native run leaves behind: what was checked, where, and what only Linux can check.
+ * `mode` is what keeps the two kinds of evidence apart — a fixture run can never claim to be native.
+ * The phase directory holds one JSON file per check, written by the shell script as it runs.
+ */
+export function buildReport(mode, phasesDirectory) {
+  const directory = resolve(phasesDirectory);
+  if (!statSync(directory).isDirectory())
+    throw new Error(`--phases needs the directory of phase reports: ${directory}`);
+  const phases = readdirSync(directory)
+    .filter((name) => name.endsWith(".json"))
+    .sort()
+    .map((name) => JSON.parse(readFileSync(join(directory, name), "utf8")));
+  return {
+    kind: "mate-maintenance-validation",
+    mode,
+    generatedAt: new Date().toISOString(),
+    scope: {
+      native:
+        "Real Agent UIDs and GIDs, private and shared directory ownership and modes, systemd slice and scope process control, and the installed maintenance commands.",
+      simulated:
+        "Repository tests with a replaceable host entry. They run on any platform and never stand in for a native result.",
+      external: "No Slack, model-provider or VPS connection is made or claimed by this document.",
+    },
+    phases,
+  };
+}
+
+export async function nativeMaintenanceMain(argv = process.argv.slice(2)) {
+  const { mode, flags } = parseNativeArguments(argv);
+  let result;
+  if (mode === "marker")
+    result = await writeMarker(await loadRelease(need(flags, "release")), flags);
+  else if (mode === "verify")
+    result = verifyPreserved(await loadRelease(need(flags, "release")), flags);
+  else {
+    const report = buildReport(need(flags, "mode"), need(flags, "phases"));
+    if (flags.out)
+      writeFileSync(resolve(flags.out), `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
+    result = report;
+  }
+  if (result.passed === false) process.exitCode = 1;
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  return result;
+}
+
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url)
+  nativeMaintenanceMain().catch((error) => {
+    process.stderr.write(`${error instanceof Error ? error.message : "Validation failed"}\n`);
+    process.exitCode = 1;
+  });
