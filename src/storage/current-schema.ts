@@ -25,7 +25,7 @@ export const currentFormatSchema = `
 -- Agents, sessions and the durable conversation journal.
 -- The last three columns are the Agent's own automatic-resume state: the earliest instant its next
 -- attempt may start (0 = now), how many transient failures it has already waited out, and the
--- disposition of the failure it is held by (NULL while its channel is open). A restart reads them
+-- disposition its channel is waiting or held for (NULL while it is running or open). A restart reads them
 -- instead of retrying densely, a held Agent waits for a person, and paused still outranks both.
 CREATE TABLE agents(id TEXT PRIMARY KEY, session_id TEXT NOT NULL UNIQUE, generation INTEGER NOT NULL DEFAULT 0, paused INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL DEFAULT 0, resume_attempt INTEGER NOT NULL DEFAULT 0, resume_hold TEXT
  CHECK(resume_hold IN ('retry_backoff','human_action','verify_effect','no_retry')));

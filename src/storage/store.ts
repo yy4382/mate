@@ -311,10 +311,12 @@ export class Store {
         generation: agent.generation + 1,
         deliveryId: delivery.id,
       };
-      // Claiming the scheduled attempt consumes the stored instant but keeps the attempt count,
-      // which is what makes the next interval grow; the hold is rewritten when this attempt ends.
+      // Claiming the scheduled attempt consumes the stored instant and the hold that named it,
+      // while keeping the attempt count that makes the next interval grow. The hold is written
+      // again by whichever decision ends this attempt; between the two, the channel is running
+      // rather than waiting or held.
       this.db
-        .prepare("UPDATE agents SET generation=?,next_attempt_at=0 WHERE id=?")
+        .prepare("UPDATE agents SET generation=?,next_attempt_at=0,resume_hold=NULL WHERE id=?")
         .run(token.generation, agentId);
       this.db
         .prepare(
@@ -497,16 +499,20 @@ export class Store {
    * disposition a person still has to release stays, because the failure behind it did not go away.
    */
   dropScheduledAttempts(workId: string): void {
+    const bound = (extra: string) =>
+      `SELECT d.agent_id FROM deliveries d
+        LEFT JOIN delivery_work dw ON dw.delivery_id=d.id
+        LEFT JOIN delivery_context dc ON dc.delivery_id=d.id ${extra}
+        WHERE d.status!='handled'`;
     this.atomic(() => {
       this.db
         .prepare(
           `UPDATE agents SET next_attempt_at=0,resume_attempt=0,resume_hold=${dropSchedule}
-            WHERE id IN (SELECT d.agent_id FROM deliveries d
-              LEFT JOIN delivery_work dw ON dw.delivery_id=d.id
-              LEFT JOIN delivery_context dc ON dc.delivery_id=d.id
-              WHERE COALESCE(dc.work_id,dw.work_id)=? AND d.status!='handled')`,
+            WHERE id IN (${bound("")} AND COALESCE(dc.work_id,dw.work_id)=?)
+              AND id NOT IN (${bound("JOIN works w ON w.id=COALESCE(dc.work_id,dw.work_id)")}
+                AND w.state='active' AND COALESCE(dc.work_id,dw.work_id)<>?)`,
         )
-        .run(workId);
+        .run(workId, workId);
     });
   }
   /** A person's explicit resume outranks any stored attempt time or hold: run now, from scratch. */

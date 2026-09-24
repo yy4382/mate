@@ -223,7 +223,29 @@ it("keeps a hold a person still has to release while dropping a work item's sche
   expect(db.resumeState("alice")).toMatchObject({ attempt: 2, nextAttemptAt: 900_000 });
   db.dropScheduledAttempts("work-one");
   expect(db.resumeState("alice")).toEqual({ attempt: 0, nextAttemptAt: 0, hold: null });
-  expect(db.beginRun("alice", 1_000)).toBeDefined();
+  const released = db.beginRun("alice", 1_000)!;
+  expect(released).toBeDefined();
+  db.input(released, { role: "user", content: "released" });
+  db.finish(released);
+
+  // A second work item this Agent is still working on keeps the wait its own failure earned: the
+  // stop only releases the channel when there is nothing else active for this Agent to run.
+  const third = db.enqueue("alice", "three", {});
+  db.db.prepare("INSERT INTO delivery_work VALUES(?,?)").run(third, "work-one");
+  const other = db.enqueue("alice", "two", {});
+  db.db.prepare("INSERT INTO works(id,origin,target) VALUES('work-two','test-two','{}')").run();
+  db.db.prepare("INSERT INTO delivery_work VALUES(?,?)").run(other, "work-two");
+  const waiting = db.beginRun("alice", 1_000)!;
+  db.finish(waiting, "model/transient_model: provider rate limited", "model_failure", {
+    resume: { kind: "retry", attempt: 2, nextAt: 900_000, reason: "rate limited" },
+  });
+  db.dropScheduledAttempts("work-one");
+  expect(db.resumeState("alice")).toMatchObject({ attempt: 2, nextAttemptAt: 900_000 });
+
+  // Once nothing else of this Agent is active, stopping the work releases the wait it stopped for.
+  db.db.prepare("UPDATE works SET state='paused' WHERE id='work-two'").run();
+  db.dropScheduledAttempts("work-one");
+  expect(db.resumeState("alice")).toEqual({ attempt: 0, nextAttemptAt: 0, hold: null });
 });
 it("adds no hold to an attempt that a stop already governs", () => {
   const db = open();

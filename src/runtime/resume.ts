@@ -56,11 +56,15 @@ export function resumeAction(
   const reason = describeFault(fault),
     disposition: FaultDisposition = retryDisposition(fault);
   if (disposition !== "retry_backoff") {
-    // An aborted attempt is how a person's stop, a work stop, or this process shutting down reaches
-    // the run module. Holding the channel for a human would make that stop permanent, so the
-    // attempt simply ends and its delivery stays for the next run of the same channel.
-    if (fault.category === "aborted") return { kind: "none", reason };
-    return { kind: "hold", hold: disposition, reason };
+    // A stop that a person or this process asked for arrives on the worker boundary: the caller's
+    // own abort plumbing reports it there. Holding the channel for a human would make that stop
+    // permanent, so the attempt simply ends and its delivery stays for the next run.
+    if (fault.category === "aborted" && fault.stage !== "model") return { kind: "none", reason };
+    // The model boundary reporting an aborted call is different: the provider stream ended without
+    // an answer, which is an unexplained model-boundary failure and is waited out and retried
+    // rather than turned into a stop nobody asked for. A provider message that merely says
+    // "connection aborted" therefore cannot bypass the growing interval.
+    if (fault.category !== "aborted") return { kind: "hold", hold: disposition, reason };
   }
   const attempt =
     (Number.isSafeInteger(previousAttempt) && previousAttempt > 0 ? previousAttempt : 0) + 1;

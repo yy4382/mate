@@ -89,6 +89,14 @@ it("projects only operational counts, fixed events and recovery states, never ar
   const output = diagnosticStatus(s, "active", clear);
   expect(output.health).toBe("attention-required");
   expect(JSON.stringify(output)).not.toContain(secret);
+  // An Agent held for a person is a paused Agent, so deployment health reports that it needs
+  // attention instead of reporting a stopped Agent as running.
+  const held = status();
+  held.agents[0]!.paused = true;
+  held.agents[0]!.resumeHold = "human_action";
+  held.agents[0]!.resumeAction = "Fix this Agent's model credential or configuration.";
+  expect(diagnosticStatus(held, "active", clear).health).toBe("attention-required");
+  expect(JSON.stringify(diagnosticStatus(held, "active", clear))).not.toContain(secret);
   const event: ActivityItem = {
     at: 100000000,
     source: "runtime",

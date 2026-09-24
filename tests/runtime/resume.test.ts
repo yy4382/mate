@@ -14,6 +14,7 @@ import { ToolRouter } from "../../src/runtime/tools.js";
 import {
   abortFault,
   faultError,
+  modelFault,
   type FaultCategory,
   type FaultStage,
   type WorkerFault,
@@ -91,6 +92,14 @@ it("holds every failure a person has to judge, and adds no hold to a deliberate 
   const action = resumeAction(stopped, 2, 5_000);
   expect(action.kind).toBe("none");
   expectReason(action, stopped);
+
+  // The model boundary reporting an aborted call is not somebody's decision: the provider stream
+  // ended without an answer, so that call waits out the interval like any unexplained model fault
+  // instead of bypassing the backoff and retrying on the next scheduler tick.
+  const providerAbort = modelFault("aborted", "connection aborted while reading");
+  const retried = resumeAction(providerAbort, 1, 5_000);
+  expect(retried).toMatchObject({ kind: "retry", attempt: 2, nextAt: 7_000 });
+  expectReason(retried, providerAbort);
 });
 
 /** Two Agents sharing one work item, with one run slot so a waiting Agent must not hold it. */
