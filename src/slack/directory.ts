@@ -11,6 +11,7 @@ import type { WebClient } from "@slack/web-api";
 import type { Effect, RunToken } from "../storage/store.js";
 import type { Conversations as Messages } from "../conversations/messages.js";
 import type { SlackMapper } from "./mapper.js";
+import type { SlackReadinessPort } from "./transport.js";
 import { slackPrincipal, slackUserForPrincipal } from "./principals.js";
 import type { Principal } from "../domain/messages.js";
 import { LegacyArguments } from "./legacy-arguments.js";
@@ -75,7 +76,7 @@ export class Directory implements ConversationDirectory {
     readonly clients: Map<string, WebClient>,
     readonly mapper: SlackMapper,
     /** Connection readiness of each installation; absent means no wait is known. */
-    readonly readiness?: { waitingFor(actor: string): Error | undefined },
+    readonly readiness?: Pick<SlackReadinessPort, "waitingFor">,
   ) {
     this.membershipFacts = new SlackMembership(messages, clients, mapper);
   }

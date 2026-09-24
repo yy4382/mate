@@ -3,6 +3,7 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Daemon } from "../../src/daemon/app.js";
+import { completeManagedStartup } from "../../src/deployment/readiness.js";
 import { daemonFixture } from "../helpers/daemon-config.js";
 import { configFixture } from "../helpers/config.js";
 import { slackSockets } from "../helpers/slack-connection.js";
@@ -155,8 +156,18 @@ it("keeps internal work running while Slack is offline and publishes what waited
     },
   }));
   const posted = confirmingPost(daemon.application.transport!);
-  // AC1: the daemon is running while its Slack installation is still connecting.
-  await daemon.start();
+  // AC1: through the real managed startup, the service manager is told the daemon started while
+  // this installation is still connecting, so it never fails the start job and restarts Mate.
+  const notifications: string[][] = [];
+  await completeManagedStartup(
+    (progress) => daemon.start(progress),
+    { NOTIFY_SOCKET: "/run/systemd/notify" },
+    (_binary, args) => {
+      notifications.push([...args]);
+      return { code: 0, stderr: "" };
+    },
+  );
+  expect(notifications).toEqual([["--ready"]]);
   expect(daemon.slackReadiness()).toMatchObject({
     ready: false,
     installations: [{ agentId: "research", state: "connecting" }],
@@ -214,6 +225,9 @@ it("keeps internal work running while Slack is offline and publishes what waited
     timeout: 5000,
   });
   expect(posted).toHaveBeenCalledOnce();
+  // Release the manual run that queued this publication, so the scheduler is free to serve the
+  // next internal turn while the installation is disconnected.
+  daemon.store.finish(run);
   // AC3: a socket dropped while running only takes its own installation out of service.
   sockets.forAgent("research")!.drop();
   await vi.waitFor(() => expect(daemon.slackReadiness().ready).toBe(false), { timeout: 5000 });
@@ -221,7 +235,13 @@ it("keeps internal work running while Slack is offline and publishes what waited
     state: "waiting",
     reason: "transport_gap",
   });
-  expect(
-    daemon.local!.read("owner", { conversationId: "local-room" }).messages.length,
-  ).toBeGreaterThan(0);
+  // Internal work keeps running while the installation is disconnected: a further Agent turn
+  // completes, not merely the owner's own message being stored.
+  const answers = () =>
+    daemon
+      .local!.read("owner", { conversationId: "local-room" })
+      .messages.filter((message) => message.author.kind === "agent").length;
+  const answered = answers();
+  daemon.local!.receive("owner", "after-drop", { conversationId: "local-room" }, "still there?");
+  await vi.waitFor(() => expect(answers()).toBeGreaterThan(answered), { timeout: 5000 });
 });

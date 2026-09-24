@@ -23,7 +23,11 @@ export interface SlackReadiness {
   updatedAt: number;
   installations: SlackInstallationReadiness[];
 }
-/** One installation is usable only when its own connection, permission and history are ready. */
+/**
+ * One installation is usable only when its own connection, permission and history are ready.
+ * Readiness this process never published (an embedded application, a harness) reports nothing to
+ * wait for; only an installation this runtime has an opinion about can hold work back.
+ */
 export function slackReady(readiness: SlackReadiness | undefined, agentId: string): boolean {
   if (!readiness) return true;
   return readiness.installations.find((entry) => entry.agentId === agentId)?.state === "ready";

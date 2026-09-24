@@ -1,6 +1,7 @@
 import type { AttachmentArgs } from "../capabilities/artifacts.js";
 export type { AttachmentArgs } from "../capabilities/artifacts.js";
 import type { WebClient } from "@slack/web-api";
+import type { SlackReadinessPort } from "./transport.js";
 import type { Collaboration } from "../collaboration/service.js";
 import type { Broker } from "../policy/broker.js";
 import type { RunToken } from "../storage/store.js";
@@ -12,7 +13,7 @@ export class Attachments {
     readonly broker: Broker,
     readonly clients: Map<string, WebClient>,
     /** Connection readiness of each installation; absent means no wait is known. */
-    readonly readiness?: { waitingFor(actor: string): Error | undefined },
+    readonly readiness?: Pick<SlackReadinessPort, "waitingFor">,
   ) {}
   configured(actor: string): boolean {
     return !!this.clients.get(actor)?.token;

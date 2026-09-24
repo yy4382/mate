@@ -473,12 +473,11 @@ export class Daemon {
   private async flushExternal(): Promise<void> {
     try {
       const slack = this.application.transport;
-      for (const row of this.collaboration.output.ready(20, "external")) {
+      // A Slack-dependent publication waits for its own installation: the durable outbox row
+      // stays pending, so nothing is marked failed or unknown while Slack is unreachable. The
+      // filter runs inside the queue scan, so a waiting installation's backlog hides nothing.
+      for (const row of this.collaboration.output.ready(20, "external", slack?.readyAgents())) {
         if (this.stopping || this.paused) return;
-        // A Slack-dependent publication waits for its own installation: the durable outbox row
-        // stays pending, so nothing is marked failed or unknown while Slack is unreachable.
-        const actor = this.collaboration.messages.store.output(row.id)?.agent_id;
-        if (slack && actor && !slack.readyFor(actor)) continue;
         const target = this.collaboration.messages.records.targetedEffect("outbox", row.id).target;
         if (
           this.collaboration.messages.references.conversation(target.conversationId).authority ===

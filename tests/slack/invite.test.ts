@@ -89,7 +89,8 @@ function fixture() {
   });
   transport.clients.set("research", client());
   transport.clients.set("writer", client());
-  const directory = new TeamDirectory(m, new Directory(m, transport.clients, mapper));
+  // The production wiring: platform reads consult the installation's readiness.
+  const directory = new TeamDirectory(m, new Directory(m, transport.clients, mapper, transport));
   const out = new CanonicalOutput(m, {
     post: async () => {
       throw new Error("offline");
@@ -129,6 +130,7 @@ function fixture() {
     c,
     normalizer,
     directory,
+    transport,
     runToken,
     work,
     router,
@@ -145,6 +147,46 @@ function fixture() {
     },
   };
 }
+it("makes platform reads and invitations wait for their own installation without recording an attempt", async () => {
+  const f = fixture(),
+    invited = f.mapper.conversation("CNEW");
+  f.m.membership("research", invited, true);
+  f.transport.setReadiness({
+    updatedAt: 1,
+    installations: [
+      {
+        agentId: "research",
+        state: "waiting",
+        reason: "transport_gap",
+        attempts: 1,
+        changedAt: 1,
+      },
+    ],
+  });
+  // A member read waits; it does not invent a permission answer from a stale cache.
+  await expect(f.directory.members("research", invited)).rejects.toThrow(/waiting to recover/);
+  expect(f.api.members).not.toHaveBeenCalled();
+  // A list still answers with the internal spaces it knows and reports external coverage missing.
+  const spaces = await f.directory.spaces("research");
+  expect(f.api.list).not.toHaveBeenCalled();
+  expect(spaces.coverage).toContainEqual({
+    source: "external",
+    complete: false,
+    reason: "External directory unavailable; internal spaces remain available",
+  });
+  // An invitation is refused before the platform boundary, so nothing becomes an unknown result.
+  await expect(
+    f.call("conversations.invite", { conversationId: invited, agentId: "writer" }),
+  ).rejects.toThrow(/waiting to recover/);
+  expect(f.api.invite).not.toHaveBeenCalled();
+  expect(
+    f.s.db
+      .prepare(
+        "SELECT count(*) n FROM actions WHERE json_extract(request,'$.operation')='conversations.invite'",
+      )
+      .get(),
+  ).toEqual({ n: 0 });
+});
 it("a human invitation still reaches the invited Agent through its own membership sync", () => {
   const f = fixture(),
     invited = f.mapper.conversation("CNEW");

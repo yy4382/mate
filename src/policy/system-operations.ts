@@ -181,7 +181,8 @@ export class SystemOperations {
   }
   /**
    * Notices of one Agent installation keep waiting while that installation is not ready; the
-   * filter also keeps a broken installation's backlog from starving a healthy one.
+   * filter also keeps a broken installation's backlog from starving a healthy one. Passing no
+   * filter means every installation; an empty list means none of them may cross the boundary.
    */
   pendingNotices(agents?: readonly string[]): SystemRequest[] {
     this.expire();

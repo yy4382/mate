@@ -39,6 +39,8 @@ interface Installation extends SlackInstallationReadiness {
   connecting?: Promise<void> | undefined;
   socket?: SocketTransport;
   app?: App;
+  /** Bumped whenever the connection this attempt is verifying is gone; see `disconnected`. */
+  generation: number;
 }
 
 /**
@@ -91,6 +93,7 @@ export class SlackRuntime implements AdapterLifecycle {
           reason: "starting",
           attempts: 0,
           changedAt: this.now(),
+          generation: 0,
         },
       ]),
     );
@@ -121,10 +124,34 @@ export class SlackRuntime implements AdapterLifecycle {
     // responsibility watermark. Everything that needs the platform happens in the background.
     this.service.bootstrapRecovery();
     this.publishReadiness();
-    this.advance(progress);
+    this.startDueAttempts(progress);
+  }
+  /**
+   * Keep background work for close(), and handle a rejection no in-attempt handler expected: an
+   * unhandled rejection ends the daemon process on this Node version, which is exactly the
+   * process-wide outage a per-installation failure must not cause.
+   */
+  private track(work: Promise<void>): void {
+    this.pending.add(work);
+    void work.then(
+      () => this.pending.delete(work),
+      () => {
+        this.pending.delete(work);
+        // Reported, never rethrown: the installation keeps whatever schedule it already has.
+        this.notice("Slack background work failed; the installation keeps its own retry schedule");
+      },
+    );
+  }
+  /** Operator-facing notice. A logger that throws must not change the connection state machine. */
+  private notice(message: string): void {
+    try {
+      this.report(message);
+    } catch {
+      /* The readiness record still carries this state. */
+    }
   }
   /** Start a connection attempt for every installation that is due for one. */
-  private advance(progress?: () => void): void {
+  private startDueAttempts(progress?: () => void): void {
     if (this.stopped) return;
     for (const installation of this.installations.values()) {
       if (installation.connecting || installation.state === "ready") continue;
@@ -132,20 +159,23 @@ export class SlackRuntime implements AdapterLifecycle {
       // revoked or under-scoped token forever would report hope instead of the action required.
       if (installation.state === "needs-human") continue;
       if ((installation.nextAttemptAt ?? 0) > this.now()) continue;
-      const attempt = this.attempt(installation, progress);
-      this.pending.add(attempt);
-      void attempt.finally(() => this.pending.delete(attempt));
+      this.track(this.attempt(installation, progress));
     }
   }
   private async attempt(installation: Installation, progress?: () => void): Promise<void> {
     if (this.stopped || installation.connecting) return;
+    const generation = installation.generation;
     installation.attempts += 1;
     this.transition(installation, { state: "connecting", reason: "connecting" });
     const running = this.connect(installation, progress);
     installation.connecting = running;
     try {
       await running;
-      if (this.stopped) return;
+      // The connection this attempt verified may have dropped while it finished; the dropped
+      // socket already scheduled its own attempt, so claiming ready here would strand it.
+      if (this.stopped || installation.generation !== generation) return;
+      // A fresh, complete connection starts its retry schedule from the base wait again.
+      installation.attempts = 0;
       this.transition(installation, { state: "ready", reason: "connected" });
     } catch (error) {
       if (this.stopped) return;
@@ -156,15 +186,17 @@ export class SlackRuntime implements AdapterLifecycle {
       // A credential or permission problem replaces the socket with the action a human owes;
       // a temporary failure keeps a live socket and waits for the next attempt.
       if (failure.state === "needs-human") {
-        await this.release(installation);
-        this.report(
-          `Slack installation ${installation.agentId} needs an operator: ${failure.reason}`,
-        );
+        await this.closeConnection(installation);
+        // The state and its wait schedule are recorded before the notice, so a failing reporter
+        // cannot leave this installation retrying every tick without an operator action.
         this.transition(installation, {
           state: "needs-human",
           reason: failure.reason,
           ...(failure.action ? { action: failure.action } : {}),
         });
+        this.notice(
+          `Slack installation ${installation.agentId} needs an operator: ${failure.reason}`,
+        );
       } else {
         this.transition(installation, {
           state: "waiting",
@@ -225,7 +257,7 @@ export class SlackRuntime implements AdapterLifecycle {
       agent.slackAppId,
       this.transport.mapper.config.teamId,
       socket,
-      () => this.report("Slack receiver error; uncommitted events are not acknowledged"),
+      () => this.notice("Slack receiver error; uncommitted events are not acknowledged"),
       () => this.service.replay(),
     );
     // Bolt's own token verification fires an auth.test whose rejection nobody awaits, which would
@@ -249,7 +281,7 @@ export class SlackRuntime implements AdapterLifecycle {
     try {
       await app.start();
     } catch (error) {
-      await this.release(installation);
+      await this.closeConnection(installation);
       throw error;
     }
   }
@@ -257,21 +289,18 @@ export class SlackRuntime implements AdapterLifecycle {
   private disconnected(agentId: string): void {
     const installation = this.installations.get(agentId);
     if (this.stopped || !installation) return;
+    installation.generation += 1;
     this.service.recordTransportGap(agentId);
     this.nextMembership = 0;
-    const released = this.release(installation);
-    const waiting = released.then(() => {
-      if (this.stopped || this.installations.get(agentId) !== installation) return;
-      this.transition(installation, {
-        state: "waiting",
-        reason: "transport_gap",
-        nextAttemptAt: this.now() + this.retryDelay(installation),
-      });
+    // Readiness stops claiming this installation is usable before the close is even awaited.
+    this.transition(installation, {
+      state: "waiting",
+      reason: "transport_gap",
+      nextAttemptAt: this.now() + this.retryDelay(installation),
     });
-    this.pending.add(waiting);
-    void waiting.finally(() => this.pending.delete(waiting));
+    this.track(this.closeConnection(installation));
   }
-  private async release(installation: Installation): Promise<void> {
+  private async closeConnection(installation: Installation): Promise<void> {
     const app = installation.app,
       socket = installation.socket;
     delete installation.app;
@@ -330,9 +359,13 @@ export class SlackRuntime implements AdapterLifecycle {
     try {
       recordSlackReadiness(this.c.store, readiness);
     } catch {
-      this.report("Slack readiness could not be recorded; the connection state is unaffected");
+      this.notice("Slack readiness could not be recorded; the connection state is unaffected");
     }
-    this.options.onReadiness?.(readiness);
+    try {
+      this.options.onReadiness?.(readiness);
+    } catch {
+      this.notice("Slack readiness reporting failed; the connection state is unaffected");
+    }
   }
   readiness(): AdapterReadiness {
     const { installations } = this.snapshot();
@@ -347,7 +380,7 @@ export class SlackRuntime implements AdapterLifecycle {
       this.projections.imports.replay();
       this.service.ingress.bindPeerEchoes();
       // Every daemon tick is a chance to retry a pending connection on its own schedule.
-      this.advance();
+      this.startDueAttempts();
     }
   }
   async flush(): Promise<void> {
@@ -389,6 +422,15 @@ export class SlackRuntime implements AdapterLifecycle {
   }
   private stopResources(): Promise<void> {
     this.stopped = true;
+    // Whatever the owner view reads next must not claim these installations are usable.
+    for (const installation of this.installations.values()) {
+      installation.state = "waiting";
+      installation.reason = "mate_stopped";
+      installation.changedAt = this.now();
+      delete installation.action;
+      delete installation.nextAttemptAt;
+    }
+    this.publishReadiness();
     this.transport.close();
     return (this.cleanup ??= Promise.allSettled(
       [...this.installations.values()].map((installation) =>

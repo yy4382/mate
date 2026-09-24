@@ -55,7 +55,7 @@ sudo matectl status
 sudo matectl logs
 ```
 
-`doctor` 只读检查发布物、配置、Agent 账号、私人/共享目录、Mate 控制数据、资源限额和审批配置；`offline-probe` 要求主服务和 Agent 后台任务已停止，验证本地账号、限额，以及每位 Agent 的私人 home、MEMORY.md 与共享目录归属。服务使用 systemd `Type=notify`，在自己的凭证检查与恢复完成后就报告 ready，不等待 Slack 连接和历史追赶：Slack 不可达时进程继续运行，内部会话、提醒和普通执行照常进行，daemon 运行与各 Slack 安装是否就绪分别记录在结构化运行事实中，需要 Slack 的操作等对应安装就绪后才执行，暂时故障自动重试，凭据或权限问题给出需要人工处理的动作。`status` 与 `logs` 只读固定的服务状态及结构化运行事实，不输出原始 journald 或秘密；本地 running 状态不证明 Slack/provider 连通。
+`doctor` 只读检查发布物、配置、Agent 账号、私人/共享目录、Mate 控制数据、资源限额和审批配置；`offline-probe` 要求主服务和 Agent 后台任务已停止，验证本地账号、限额，以及每位 Agent 的私人 home、MEMORY.md 与共享目录归属。服务使用 systemd `Type=notify`，在自己的恢复和调度启动完成后就报告 ready，不等待 Slack 连接和历史追赶（Slack 凭证在每次连接尝试时检查，结果作为该安装的就绪状态单独报告）：Slack 不可达时进程继续运行，内部会话、提醒和普通执行照常进行，daemon 运行与各 Slack 安装是否就绪分别记录在结构化运行事实中，需要 Slack 的操作等对应安装就绪后才执行，暂时故障自动重试，凭据或权限问题给出需要人工处理的动作。`status` 与 `logs` 只读固定的服务状态及结构化运行事实，不输出原始 journald 或秘密；本地 running 状态不证明 Slack/provider 连通。
 
 在 Debian 13 上另用两个真实 Agent 账号做原生检查：分别读自己的与同伴的 `MEMORY.md`，读同伴共享文件、只写自己的共享目录，尝试读取 Mate 数据库/凭证和控制服务；再启动、列出、停止一个长任务。使用合成文件记录 UID、命令和退出码，不读取真实私人记忆。macOS 模拟测试不能代替这些检查。
 

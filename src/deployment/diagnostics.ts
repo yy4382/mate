@@ -12,6 +12,8 @@ import {
 } from "../operations/diagnostics.js";
 import { managedLayout } from "./systemd.js";
 import { linuxUpgradeJournalPath, readLinuxUpgradeJournal } from "./linux-installer.js";
+// The readiness record is a plain runtime_meta codec with no Slack client behind it, so reporting
+// it costs this read-only entry no adapter construction.
 import { readSlackReadiness, type SlackReadiness } from "../slack/readiness.js";
 import { pathExists, type HostOperations } from "./host.js";
 

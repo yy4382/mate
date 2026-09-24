@@ -166,13 +166,23 @@ export class CanonicalOutput {
       return false;
     return true;
   }
-  ready(limit = 20, authority?: "internal" | "external"): { id: string }[] {
+  /**
+   * Dispatchable rows in queue order. `actors` restricts the answer to the installations that may
+   * cross their boundary right now: the filter runs before LIMIT, so the waiting backlog of one
+   * installation can never hide another's work.
+   */
+  ready(
+    limit = 20,
+    authority?: "internal" | "external",
+    actors?: readonly string[],
+  ): { id: string }[] {
     z.number().int().min(1).max(1000).parse(limit);
     const ready: { id: string }[] = [];
     // Apply all dispatch eligibility before LIMIT, preserving independent room progress.
     for (const row of this.messages.store.db
       .prepare("SELECT * FROM outbox WHERE state='pending' ORDER BY rowid")
       .iterate() as IterableIterator<Effect>) {
+      if (actors && !actors.includes(row.agent_id)) continue;
       const request = this.envelope(row);
       if (
         authority &&
@@ -426,10 +436,16 @@ export class CanonicalOutput {
           );
       });
     } catch (error) {
-      const failure = this.transport.classify(error);
       // Nothing crossed the sharing boundary, so a temporary condition returns the publication to
-      // its durable queue instead of recording it as a failed external effect.
-      if (!sharing && failure.kind === "retry" && Number.isFinite(failure.afterMs)) {
+      // its durable queue instead of recording it as a failed external effect. A concurrent
+      // confirmation or cancellation already decided this row, and its record stays untouched.
+      const failure = this.transport.classify(error);
+      if (
+        s.output(row.id)?.state === "sending" &&
+        !sharing &&
+        failure.kind === "retry" &&
+        Number.isFinite(failure.afterMs)
+      ) {
         s.transitionOutput(row.id, "sending", "pending", {
           retryAt: this.clock() + Math.max(1, failure.afterMs),
           ...(fileId ? { fileId } : {}),

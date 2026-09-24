@@ -212,3 +212,34 @@ it("treats a dropped socket as not ready and reconnects it through a fresh attem
   expect(sockets.created.length).toBeGreaterThan(connected);
   expect(installation(runtime, "research").state).toBe("ready");
 });
+
+it("does not claim ready when the socket drops during its own catch-up attempt", async () => {
+  let clock = 1_000_000;
+  const sockets = slackSockets(),
+    { runtime, transport } = setup({
+      agents: configFixture,
+      runtime: { socket: sockets.socket, now: () => clock },
+    }),
+    client = transport.clients.get("research")!;
+  // Hold the history catch-up so the drop lands while this attempt is still running.
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  client.conversations.history = vi.fn(async () => {
+    await held;
+    return { messages: [] };
+  }) as never;
+  await runtime.start(new AbortController().signal);
+  await vi.waitFor(() => expect(sockets.forAgent("research")).toBeDefined());
+  sockets.forAgent("research")!.drop();
+  await vi.waitFor(() => expect(installation(runtime, "research").state).toBe("waiting"));
+  release();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  // The attempt that finished belongs to a socket that is already gone: it must not report ready,
+  // or the scheduled reconnect would be skipped for good and Slack ingress would stay dead.
+  expect(installation(runtime, "research")).toMatchObject({ state: "waiting" });
+  expect(transport.readyFor("research")).toBe(false);
+  clock += 1000;
+  runtime.poll();
+  await vi.waitFor(() => expect(runtime.readiness().ready).toBe(true), { timeout: 5000 });
+  expect(sockets.created.filter((entry) => entry.agentId === "research")).toHaveLength(2);
+});

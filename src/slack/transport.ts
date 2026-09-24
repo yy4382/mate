@@ -62,10 +62,15 @@ export class CanonicalSlackTransport implements ExternalMessageTransport, SlackR
   /**
    * Install the bot clients of the Agents whose token is present. An Agent without a token keeps
    * no client and is reported as an installation that needs an operator, instead of failing the
-   * whole daemon startup for one missing secret.
+   * whole daemon startup for one missing secret. A token for an Agent this application does not
+   * serve is still a configuration error: it means the caller and the bindings disagree.
    */
   configure(tokens: Record<string, string>): void {
     if (this.clients.size) throw new Error("Slack transport is already configured");
+    const bound = new Set(this.mapper.config.agents.map((agent) => agent.id)),
+      unbound = Object.keys(tokens).filter((agentId) => !bound.has(agentId));
+    if (unbound.length)
+      throw new Error(`Slack transport tokens name unbound Agents: ${unbound.join(", ")}`);
     this.add(tokens);
   }
   private add(tokens: Record<string, string>): void {

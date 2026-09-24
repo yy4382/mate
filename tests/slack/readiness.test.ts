@@ -174,3 +174,57 @@ it("keeps an artifact publication queued while its installation is not ready", a
   expect(row.state).toBe("pending");
   expect(JSON.parse(row.receipt!).retryAt).toBeGreaterThanOrEqual(Date.now());
 });
+
+it("does not let a waiting installation's backlog hide another installation's publications", () => {
+  const store = new Store(":memory:");
+  stores.push(store);
+  const config = configSchema.parse({
+      ...configFixture,
+      agents: [
+        configFixture.agents[0],
+        {
+          ...configFixture.agents[0],
+          id: "writer",
+          name: "Writer",
+          slackAppId: "ATWO",
+          slackUserId: "UTWO",
+          slackBotId: "BTWO",
+          botTokenEnv: "WRITER_BOT",
+          appTokenEnv: "WRITER_APP",
+        },
+      ],
+    }) as MateConfig,
+    messages = new Messages(store, config),
+    attention = new CanonicalAttention(messages),
+    // No gate: these rows are dispatchable publications, not drafts awaiting a decision.
+    output = new Output(messages, { post: async () => ({ ts: "101.000001" }) }),
+    transport = new CanonicalSlackTransport(store, messages.mapper, {
+      research: "synthetic",
+      writer: "synthetic",
+    }),
+    collaboration = new Collaboration(store, messages, output, config, attention),
+    target = fixtureTarget("CTEST", "100.000001");
+  for (const agentId of ["research", "writer"]) {
+    store.register(agentId, "v1", []);
+    messages.membership(agentId, "CTEST", true);
+  }
+  transport.setReadiness({
+    updatedAt: 1,
+    installations: [
+      { agentId: "research", state: "ready", reason: "connected", attempts: 0, changedAt: 1 },
+      {
+        agentId: "writer",
+        state: "waiting",
+        reason: "transport_gap",
+        attempts: 1,
+        changedAt: 1,
+      },
+    ],
+  });
+  const work = collaboration.createWork("backlog", target);
+  for (let index = 0; index < 25; index++)
+    collaboration.send("writer", work, target, `blocked ${index}`, `blocked-${index}`);
+  collaboration.send("research", work, target, "ready body", "ready-one");
+  // The ready installation is served even though the waiting one owns the queue head.
+  expect(output.ready(20, "external", transport.readyAgents())).toEqual([{ id: "ready-one" }]);
+});
