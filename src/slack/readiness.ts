@@ -217,6 +217,8 @@ export class SlackOperatorActionError extends Error {
   }
 }
 export const slackReadinessKey = "slack_readiness_v1";
+/** The longest operator action the readiness record may carry into owner output. */
+const actionLimit = 200;
 /** Persist the current readiness so an owner view can report it without constructing Slack. */
 export function recordSlackReadiness(store: Store, readiness: SlackReadiness): void {
   store.db
@@ -263,7 +265,11 @@ function parseSlackReadiness(value: string): SlackReadiness | null {
           !entry ||
           typeof entry.agentId !== "string" ||
           typeof entry.reason !== "string" ||
-          !["connecting", "ready", "waiting", "needs-human"].includes(entry.state),
+          !["connecting", "ready", "waiting", "needs-human"].includes(entry.state) ||
+          // The action reaches owner output unfiltered because it names the configuration
+          // reference a person has to change, so the codec is where it is bounded.
+          (entry.action !== undefined &&
+            (typeof entry.action !== "string" || entry.action.length > actionLimit)),
       )
     )
       return null;

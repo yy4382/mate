@@ -124,6 +124,30 @@ it("persists the readiness an owner view reads without constructing Slack", () =
     .prepare("UPDATE runtime_meta SET value=? WHERE key='slack_readiness_v1'")
     .run(JSON.stringify({ updatedAt: 1, installations: [{ agentId: "research" }] }));
   expect(readSlackReadiness(store)).toBeNull();
+  // An action reaches owner output as written, so a non-string or oversized one invalidates the
+  // record instead of being printed.
+  for (const action of [42, "x".repeat(201)]) {
+    store.db.prepare("UPDATE runtime_meta SET value=? WHERE key='slack_readiness_v1'").run(
+      JSON.stringify({
+        updatedAt: 7,
+        installations: [
+          {
+            agentId: "research",
+            state: "needs-human",
+            reason: "invalid_auth",
+            action,
+            attempts: 1,
+            changedAt: 3,
+          },
+        ],
+      }),
+    );
+    expect(readSlackReadiness(store)).toBeNull();
+  }
+  recordSlackReadiness(store, snapshot("needs-human", "Set MODEL_API_KEY, then restart Mate."));
+  expect(readSlackReadiness(store)?.installations[0]?.action).toBe(
+    "Set MODEL_API_KEY, then restart Mate.",
+  );
 });
 
 const target = (
