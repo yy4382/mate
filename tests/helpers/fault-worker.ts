@@ -67,6 +67,13 @@ if (startGuard) {
       return failedReply("invalid api key provided: sk-live-abcdefghijklmnopqrstuvwxyz012345");
     if (stalled && scenario === "refused") return toolCall("refused", "missing.operation");
     if (stalled && scenario === "persistence") return toolCall("persist", "synthetic.persist");
+    // A provider failure that quotes schema, a secret and a private path is the leak the boundary
+    // must not carry into a durable diagnostic.
+    if (stalled && scenario === "leaky")
+      throw new SyntheticProviderError(
+        "EAUTH",
+        "invalid api key MATE_MODEL_KEY=abcd1234 rejected after INSERT OR REPLACE INTO memory(body) VALUES('private note') for /home/mate/research/MEMORY.md\n    at provider (/srv/app/provider.ts:12:3)",
+      );
     return complete();
   };
   // The production entry resolves its provider from the catalog and hands `serveWorker` the wired

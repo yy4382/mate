@@ -9,6 +9,7 @@ import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/pi-agent-co
 import { z } from "zod";
 import { Engine, type RunSpec, type ToolReply } from "./engine.js";
 import {
+  abortFault,
   workerCredentialFault,
   faultError,
   protocolFault,
@@ -90,14 +91,9 @@ export function serveWorker(engine: Engine, models?: Models, startupFault?: Work
   const stop = () => {
     abort.abort();
     engine.abort();
+    // A disconnect or abort stops the run; it says nothing about the durable store.
     for (const waiter of pending.values())
-      waiter.reject(
-        faultError(
-          toWorkerFault("Worker disconnected or aborted", "worker", {
-            reason: "worker disconnected or aborted",
-          }),
-        ),
-      );
+      waiter.reject(faultError(abortFault("the caller disconnected or aborted the run")));
     pending.clear();
   };
   process.on("disconnect", () => {
@@ -186,17 +182,24 @@ if (process.env.MATE_WORKER === "1") {
   const models = builtinModels();
   const model = models.getModel(process.env.MATE_PROVIDER!, process.env.MATE_MODEL!);
   // An unusable credential is a configuration problem a human must fix, never a transient one.
-  // The engine below is a placeholder: `serveWorker` refuses every run while a startup fault is
-  // pending, so the model it would have used is never reached.
+  // `serveWorker` refuses every run while a startup fault is pending, so the engine it is handed
+  // here is never used; a worker without a model has nothing to build one with.
+  const startupFault = !model
+    ? workerCredentialFault("the configured model is unknown to this worker")
+    : process.env.MATE_MODEL_KEY
+      ? undefined
+      : workerCredentialFault("the worker has no model credential");
   serveWorker(
-    new Engine({ ...(model ?? models.getModels()[0]!) }, () => {
-      throw new Error("unreachable");
-    }),
+    model
+      ? new Engine(model, (m, context, options) =>
+          models.streamSimple(m, context, {
+            ...options,
+            apiKey: process.env.MATE_MODEL_KEY!,
+            env: {},
+          }),
+        )
+      : ({} as Engine),
     models,
-    !model
-      ? workerCredentialFault("the configured model is unknown to this worker")
-      : process.env.MATE_MODEL_KEY
-        ? undefined
-        : workerCredentialFault("the worker has no model credential"),
+    startupFault,
   );
 }

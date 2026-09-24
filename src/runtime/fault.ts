@@ -142,8 +142,21 @@ export function classified<T>(error: T, fault: WorkerFault): T {
  * whether the model provider rejected the call or the worker never got a key to call with, so the
  * category is shared while the stage stays honest about which boundary saw it.
  */
-export function modelFault(category: "credential_config" | "aborted", reason: string): WorkerFault {
+export type ModelFaultCategory = "transient_model" | "credential_config" | "aborted";
+
+export function modelFault(category: ModelFaultCategory, reason: string): WorkerFault {
   return fault("model", category, reason, undefined, "the model call failed");
+}
+
+/** The shared durable record cannot supply what the run needs, so the run cannot safely continue. */
+export function persistenceFaultOf(reason: string, detail?: string): WorkerFault {
+  return fault(
+    "persistence",
+    "shared_persistence",
+    reason,
+    detail,
+    "the durable record is unavailable",
+  );
 }
 
 /** The worker could not start: it has no usable credential or cannot resolve the model. */
@@ -274,7 +287,7 @@ export function filterReason(text: unknown): string {
     .replace(/\u001b\[[0-9;]*m/g, "")
     // A SQL statement cannot be quoted partially without leaking the schema it names.
     .replace(
-      /\b(?:select|insert\s+into|update\s+\w+\s+set|delete\s+from|create\s+table|alter\s+table|drop\s+table)\b[^;]*/gi,
+      /\b(?:select|insert|update\s+\w+\s+set|delete|create\s+table|alter\s+table|drop\s+table|replace\s+into)\b[^;]*/gi,
       "[redacted sql]",
     )
     .replace(
@@ -287,9 +300,13 @@ export function filterReason(text: unknown): string {
       /(--?(?:token|password|passwd|secret|api[_-]?key|auth)\s*[=:]\s*)(\S+)/gi,
       "$1[redacted]",
     )
+    .replace(
+      /\b([A-Za-z0-9_]*?(?:api[_-]?key|access[_-]?token|model[_-]?key|secret|password|passwd|token))\s*[=:]\s*(\S+)/gi,
+      "$1=[redacted]",
+    )
     // "api key <value>", "token is <value>", "password: <value>" all name a secret and then it.
     .replace(
-      /\b(api[ _-]?key|secret|password|passwd|token)\b((?:\s*(?:is|was|:|=))?\s+)\S+/gi,
+      /\b(api[ _-]?key|secret|password|passwd|token)\b((?:\s+(?:is|was)\b)?\s*(?::|=)?\s*)(\S+)/gi,
       "$1$2[redacted]",
     )
     .replace(/\b(?:sk|pk|rk|xox[baprs]|ghp|github_pat)[-_][A-Za-z0-9_-]{6,}/gi, "[redacted]")

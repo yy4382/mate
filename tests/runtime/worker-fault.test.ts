@@ -123,6 +123,24 @@ it("keeps credentials and unfiltered third-party exception text out of caller-vi
   expect(recordedFault(store).reason.trim().length).toBeGreaterThan(0);
 }, 20000);
 
+it("strips credentials, SQL and private paths from a provider failure before it is recorded", async () => {
+  // A provider that fails with its own wording exercises classification of a message the worker
+  // never composed, which is where third-party text would otherwise reach the record intact.
+  const { store, collaboration: c, supervisor, work } = setup("leaky");
+  c.enqueue("research", work, "one", {});
+  await supervisor.step("research");
+  const diagnostic = JSON.stringify(recordedFault(store)) + runError(store);
+  for (const leak of [
+    "abcd1234",
+    "INSERT OR REPLACE INTO memory",
+    "private note",
+    "/home/mate/research/MEMORY.md",
+    "provider.ts",
+  ])
+    expect(diagnostic).not.toContain(leak);
+  expect(recordedFault(store).category).toBe("credential_config");
+}, 20000);
+
 it("reports a worker that starts without a usable credential as a configuration problem", async () => {
   // A missing API key is the documented operator mistake; the worker never reaches a model call.
   const worker = new WorkerClient(faultModel.provider, faultModel.id, "configured", fixture, {

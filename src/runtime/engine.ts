@@ -12,7 +12,13 @@ import {
 } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { byteTokens, compactionParts, repairTranscript } from "./context.js";
-import { classified, toWorkerFault } from "./fault.js";
+import {
+  classified,
+  describeFault,
+  modelFault,
+  persistenceFaultOf,
+  toWorkerFault,
+} from "./fault.js";
 
 export const toolDefinition = {
   name: "mate",
@@ -81,7 +87,10 @@ export class Engine {
         model.contextWindow - inputCap,
       );
       if (maxTokens < 64) {
-        fault = new Error("Model context exhausted");
+        fault = classified(
+          new Error("Model context exhausted"),
+          modelFault("transient_model", "model context exhausted"),
+        );
         output.push({ type: "error", reason: "error", error: this.errorMessage(String(fault)) });
         return output;
       }
@@ -192,7 +201,8 @@ export class Engine {
       await hooks.invalidateViews?.();
       if (hooks.refreshRecovery) {
         const fresh = await hooks.refreshRecovery();
-        if (fresh.length > 50000) throw new Error("Recovery payload exceeds limit");
+        if (fresh.length > 50000)
+          throw new Error(describeFault(persistenceFaultOf("recovery payload exceeds its limit")));
         recovery = fresh;
       }
       return [
@@ -287,7 +297,11 @@ export class Engine {
       await agent.continue();
       await agent.waitForIdle();
       if (fault) throw fault;
-      if (agent.state.errorMessage) throw new Error(agent.state.errorMessage);
+      if (agent.state.errorMessage)
+        throw classified(
+          new Error(agent.state.errorMessage),
+          modelFault("transient_model", agent.state.errorMessage),
+        );
       const lastAssistant = agent.state.messages.findLast((m) => m.role === "assistant");
       if (
         lastAssistant?.role === "assistant" &&
