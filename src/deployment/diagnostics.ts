@@ -12,6 +12,7 @@ import {
 } from "../operations/diagnostics.js";
 import { managedLayout } from "./systemd.js";
 import { linuxUpgradeJournalPath, readLinuxUpgradeJournal } from "./linux-installer.js";
+import { readSlackReadiness, type SlackReadiness } from "../slack/readiness.js";
 import { pathExists, type HostOperations } from "./host.js";
 
 /** One bounded service-manager query; a missing or slow systemctl reports "unknown", never a hang. */
@@ -55,6 +56,7 @@ export async function deploymentDiagnostics(host: HostOperations, command: "stat
     items: [],
     available: false,
     more: false,
+    slack: null,
   };
   try {
     const config = daemonConfigSchema.parse(JSON.parse(await host.readText(managedLayout.config)));
@@ -67,6 +69,8 @@ export async function deploymentDiagnostics(host: HostOperations, command: "stat
   return {
     unit: "mate.service",
     ...diagnosticStatus(status, service, recovery),
+    // The daemon running and Slack being ready are separate facts an operator checks separately.
+    slack: snapshot.slack,
     ...(command === "logs"
       ? { logs: { available, moreAvailable: more, ...diagnosticLogs(items) } }
       : {}),
@@ -78,7 +82,8 @@ export function readOperationsSnapshot(config: DaemonConfig, command: "status" |
   let status: OperationsStatus | null = null,
     items: ActivityItem[] = [],
     available = false,
-    more = false;
+    more = false,
+    slack: SlackReadiness | null = null;
   let db: Database.Database | undefined;
   try {
     db = new Database(join(config.runtime.dataDir, "state", "mate.sqlite"), {
@@ -104,11 +109,12 @@ export function readOperationsSnapshot(config: DaemonConfig, command: "status" |
         more = page.cursor !== null;
       }
     })();
+    slack = readSlackReadiness({ db });
     available = true;
   } catch {
     /* Opaque failure: exception strings can contain paths, configuration or SQL values. */
   } finally {
     db?.close();
   }
-  return { status, items, available, more };
+  return { status, items, available, more, slack };
 }

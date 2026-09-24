@@ -6,16 +6,51 @@ import type {
   DispatchFailure,
   MessageConfirmation,
 } from "../conversations/output.js";
+import { slackReady, slackWaitReason, type SlackReadiness } from "./readiness.js";
 import type { ConversationTarget } from "../domain/conversations.js";
 import type { Store } from "../storage/store.js";
 import type { SlackMapper } from "./mapper.js";
 
+/** Slack already cannot be reached for this installation, so crossing the boundary is pointless. */
+export class SlackNotReadyError extends Error {
+  constructor(readonly reason: string) {
+    super(`Slack is not ready: ${reason}`);
+    this.name = "SlackNotReadyError";
+  }
+}
+/**
+ * Readiness of each installation, published by the Slack runtime that owns the connection. Every
+ * caller that would otherwise cross this boundary for a not-ready installation reads it here, so
+ * the work waits with its durable record instead of failing or reporting an unknown outcome.
+ */
+export interface SlackReadinessPort {
+  readyFor(actor: string): boolean;
+  waitingFor(actor: string): SlackNotReadyError | undefined;
+  readyAgents(): readonly string[];
+}
 /** No automatic write retries. Immutable outbox identity crosses this boundary unchanged. */
-export class CanonicalSlackTransport implements ExternalMessageTransport {
+export class CanonicalSlackTransport implements ExternalMessageTransport, SlackReadinessPort {
   readonly clients = new Map<string, WebClient>();
   private readonly abort = new AbortController();
+  private readiness?: SlackReadiness;
   close(): void {
     this.abort.abort();
+  }
+  /** Called by the owning runtime on every readiness change; absent means "nothing known yet". */
+  setReadiness(readiness: SlackReadiness): void {
+    this.readiness = readiness;
+  }
+  readyFor(actor: string): boolean {
+    return slackReady(this.readiness, actor);
+  }
+  waitingFor(actor: string): SlackNotReadyError | undefined {
+    const reason = slackWaitReason(this.readiness, actor);
+    return reason ? new SlackNotReadyError(reason) : undefined;
+  }
+  readyAgents(): readonly string[] {
+    return this.mapper.config.agents
+      .map((agent) => agent.id)
+      .filter((agentId) => !!this.clients.get(agentId) && this.readyFor(agentId));
   }
   constructor(
     readonly store: Store,
@@ -24,12 +59,13 @@ export class CanonicalSlackTransport implements ExternalMessageTransport {
   ) {
     if (tokens) this.add(tokens);
   }
+  /**
+   * Install the bot clients of the Agents whose token is present. An Agent without a token keeps
+   * no client and is reported as an installation that needs an operator, instead of failing the
+   * whole daemon startup for one missing secret.
+   */
   configure(tokens: Record<string, string>): void {
     if (this.clients.size) throw new Error("Slack transport is already configured");
-    const expected = this.mapper.config.agents.map((agent) => agent.id).sort(),
-      actual = Object.keys(tokens).sort();
-    if (JSON.stringify(actual) !== JSON.stringify(expected))
-      throw new Error("Slack transport tokens must cover every bound Agent");
     this.add(tokens);
   }
   private add(tokens: Record<string, string>): void {
@@ -57,6 +93,8 @@ export class CanonicalSlackTransport implements ExternalMessageTransport {
       .get(external.channel);
   }
   async post(request: DispatchEnvelope): Promise<MessageConfirmation> {
+    const waiting = this.waitingFor(request.actor);
+    if (waiting) throw waiting;
     const client = this.clients.get(request.actor);
     if (!client) throw new Error("Missing Slack client");
     const target = this.mapper.target(request.target),
@@ -92,6 +130,9 @@ export class CanonicalSlackTransport implements ExternalMessageTransport {
     return slackTextMatches(expected, observed);
   }
   classify(error: unknown): DispatchFailure {
+    // A not-ready installation keeps the durable record pending: nothing crossed the boundary, so
+    // this is a wait, never an unknown external outcome.
+    if (error instanceof SlackNotReadyError) return { kind: "retry", afterMs: 5000 };
     const e = error as { code?: string; retryAfter?: number; data?: { error?: string } };
     if (e?.code === "slack_webapi_rate_limited_error" && Number.isFinite(e.retryAfter))
       return { kind: "retry", afterMs: Math.max(1, e.retryAfter!) * 1000 };

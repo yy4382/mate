@@ -425,7 +425,17 @@ export class CanonicalOutput {
             "artifact",
           );
       });
-    } catch {
+    } catch (error) {
+      const failure = this.transport.classify(error);
+      // Nothing crossed the sharing boundary, so a temporary condition returns the publication to
+      // its durable queue instead of recording it as a failed external effect.
+      if (!sharing && failure.kind === "retry" && Number.isFinite(failure.afterMs)) {
+        s.transitionOutput(row.id, "sending", "pending", {
+          retryAt: this.clock() + Math.max(1, failure.afterMs),
+          ...(fileId ? { fileId } : {}),
+        });
+        return;
+      }
       if (s.output(row.id)?.state === "sending")
         s.transitionOutput(row.id, "sending", sharing ? "unknown" : "failed", {
           reason: sharing ? "artifact_outcome_unknown" : "artifact_not_shared",

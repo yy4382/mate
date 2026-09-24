@@ -74,6 +74,8 @@ export class Directory implements ConversationDirectory {
     readonly messages: Messages,
     readonly clients: Map<string, WebClient>,
     readonly mapper: SlackMapper,
+    /** Connection readiness of each installation; absent means no wait is known. */
+    readonly readiness?: { waitingFor(actor: string): Error | undefined },
   ) {
     this.membershipFacts = new SlackMembership(messages, clients, mapper);
   }
@@ -83,6 +85,9 @@ export class Directory implements ConversationDirectory {
   }
   private client(actor: string): WebClient {
     this.messages.agent(actor);
+    // A platform read waits for its own installation instead of failing as a permission problem.
+    const waiting = this.readiness?.waitingFor(actor);
+    if (waiting) throw waiting;
     const client = this.clients.get(actor);
     if (!client) throw new Error("Slack client unavailable");
     return client;

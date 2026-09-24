@@ -48,6 +48,7 @@ afterEach(() => {
 it("commits before ack, retries dedupe, database failure does not ack", async () => {
   const { db } = setup();
   const socket = Object.assign(new EventEmitter(), {
+    onDisconnect: () => {},
     start: async () => {},
     disconnect: async () => {},
   });

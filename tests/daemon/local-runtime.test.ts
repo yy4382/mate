@@ -496,16 +496,22 @@ it("failed startup closes owned resources and releases the singleton lock automa
   const close = vi.fn(async () => {});
   Object.defineProperty(d, "adapter", {
     value: {
-      start: async () => {
-        throw new Error("partial start");
-      },
+      start: async () => {},
       recover() {},
       poll() {},
       flush: async () => {},
       close,
     },
   });
-  await expect(d.start()).rejects.toThrow("partial start");
+  // This process cannot run at all without its model credential, so that failure still stops
+  // startup. A Slack credential problem does not: it is reported as installation readiness.
+  const saved = process.env.MODEL_API_KEY;
+  delete process.env.MODEL_API_KEY;
+  try {
+    await expect(d.start()).rejects.toThrow("Missing secret environment variable");
+  } finally {
+    process.env.MODEL_API_KEY = saved;
+  }
   expect(close).toHaveBeenCalledOnce();
   acquireLock(join(c.runtime.dataDir, "state", "daemon.lock"))();
   await d.close();

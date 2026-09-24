@@ -19,6 +19,7 @@ import { systemOrigin } from "./normalize.js";
 import { mutableSystemInputsWarning, type SystemOperations } from "../policy/system-operations.js";
 
 import { encode } from "../storage/store.js";
+import type { AgentConfig as SlackInstallation } from "../config.js";
 export function formatControlReply(value: unknown, limit = 15000): string {
   const full = typeof value === "string" ? value : encode(value);
   if (Buffer.byteLength(full) <= limit) return full;
@@ -75,32 +76,39 @@ export class SlackService {
       return false;
     }
   }
-  async verify(): Promise<void> {
-    for (const agent of this.transport.mapper.config.agents) {
-      if (this.stopping()) return;
-      const client = this.transport.clients.get(agent.id)!;
-      const auth = await client.auth.test();
-      if (
-        auth.team_id !== this.transport.mapper.config.teamId ||
-        auth.user_id !== agent.slackUserId ||
-        auth.bot_id !== agent.slackBotId
-      )
-        throw new Error(`Slack installation mismatch: ${agent.id}`);
-      const bot = await client.bots.info({ bot: agent.slackBotId });
-      if (bot.bot?.app_id !== agent.slackAppId) throw new Error(`Slack app mismatch: ${agent.id}`);
-    }
+  /** Verify one installation's identity, so a broken teammate cannot fail a healthy candidate. */
+  async verifyAgent(agent: SlackInstallation): Promise<void> {
+    if (this.stopping()) return;
+    const client = this.transport.clients.get(agent.id);
+    if (!client) throw new Error(`Slack client unavailable: ${agent.id}`);
+    const auth = await client.auth.test();
+    if (
+      auth.team_id !== this.transport.mapper.config.teamId ||
+      auth.user_id !== agent.slackUserId ||
+      auth.bot_id !== agent.slackBotId
+    )
+      throw new Error(`Slack installation mismatch: ${agent.id}`);
+    const bot = await client.bots.info({ bot: agent.slackBotId });
+    if (bot.bot?.app_id !== agent.slackAppId) throw new Error(`Slack app mismatch: ${agent.id}`);
   }
   /**
    * Refresh the complete conversation set before history recovery. This is what
    * makes a DM first opened while Mate was offline discoverable: there may be
    * no local binding yet for membership() or catchUp() to inspect.
    */
-  async discoverMembership(required = true, progress?: () => void): Promise<boolean> {
-    const directory = new Directory(this.c.messages, this.transport.clients, this.transport.mapper);
+  async discoverMembership(
+    required = true,
+    progress?: () => void,
+    scope?: readonly SlackInstallation[],
+  ): Promise<boolean> {
+    // Deliberately without the readiness gate: this is the connection's own platform read, and
+    // it is what makes an installation ready. The gate protects caller-facing directory reads.
+    const directory = new Directory(this.c.messages, this.transport.clients, this.transport.mapper),
+      agents = scope ?? this.transport.mapper.config.agents;
     for (let attempt = 0; attempt < 3; attempt++) {
       let complete = true;
       try {
-        for (const agent of this.transport.mapper.config.agents) {
+        for (const agent of agents) {
           if (this.stopping()) return false;
           const result = await directory.spaces(agent.id, Number.POSITIVE_INFINITY, progress);
           if (result.coverage.some((entry) => !entry.complete)) {
@@ -171,11 +179,19 @@ export class SlackService {
       .run(historyPrefix.length, historyPrefix);
     this.c.store.audit("slack_offline_delete_gap_fenced", { agentId });
   }
-  async membership(required = true, progress?: () => void): Promise<boolean> {
+  async membership(
+    required = true,
+    progress?: () => void,
+    scope?: readonly SlackInstallation[],
+  ): Promise<boolean> {
     let complete = true;
-    for (const agent of this.transport.mapper.config.agents) {
+    for (const agent of scope ?? this.transport.mapper.config.agents) {
       if (this.stopping()) return false;
-      const client = this.transport.clients.get(agent.id)!;
+      const client = this.transport.clients.get(agent.id);
+      if (!client) {
+        complete = false;
+        continue;
+      }
       const stored = this.c.store.db
         .prepare(
           "SELECT a.channel FROM channel_access a JOIN conversation_bindings b ON b.conversation_id=a.channel WHERE b.provider='slack' AND b.mode='primary' AND b.workspace=? AND a.agent_id=? AND a.active=1",
@@ -215,14 +231,23 @@ export class SlackService {
     if (required && !complete) throw new Error("Slack membership verification did not complete");
     return complete;
   }
-  async catchUp(forceFullOldThreads = false, progress?: () => void): Promise<boolean> {
-    const recoveryStarted = `${Math.floor(Date.now() / 1000)}.000000`;
+  async catchUp(
+    forceFullOldThreads = false,
+    progress?: () => void,
+    scope?: readonly SlackInstallation[],
+  ): Promise<boolean> {
+    const recoveryStarted = `${Math.floor(Date.now() / 1000)}.000000`,
+      agents = scope ?? this.transport.mapper.config.agents;
     let complete = true;
-    for (const agent of this.transport.mapper.config.agents) {
+    for (const agent of agents) {
       if (this.stopping()) return false;
       const generation = this.transportGeneration.get(agent.id) ?? 0,
         current = () => this.currentTransport(agent.id, generation);
-      const client = this.transport.clients.get(agent.id)!;
+      const client = this.transport.clients.get(agent.id);
+      if (!client) {
+        complete = false;
+        continue;
+      }
       const changedDueKey = `slack_changed_thread_due_v1:${agent.id}`,
         scanOldThreads =
           forceFullOldThreads || slackScanDue(this.c.store, changedDueKey, Date.now());
@@ -307,9 +332,10 @@ export class SlackService {
       if (scanOldThreads && changedComplete && current())
         scheduleSlackScan(this.c.store, changedDueKey, Date.now() + 60 * 60_000);
     }
-    if (!(await this.catchUpThreads(progress))) complete = false;
+    if (!(await this.catchUpThreads(progress, new Set(agents.map((agent) => agent.id)))))
+      complete = false;
     if (complete)
-      for (const agent of this.transport.mapper.config.agents)
+      for (const agent of agents)
         this.c.store.db
           .prepare(
             "INSERT INTO slack_cursors VALUES(?,?,?) ON CONFLICT(agent_id,channel) DO UPDATE SET ts=excluded.ts",
@@ -442,18 +468,20 @@ export class SlackService {
       return false;
     }
   }
-  async catchUpThreads(progress?: () => void): Promise<boolean> {
+  async catchUpThreads(progress?: () => void, scope?: ReadonlySet<string>): Promise<boolean> {
     let complete = true;
     const s = this.c.store;
-    const watches = s.db
-      .prepare(
-        "SELECT t.* FROM thread_watches t JOIN channel_access a ON a.agent_id=t.agent_id AND a.channel=t.channel JOIN conversation_bindings b ON b.conversation_id=t.channel WHERE a.active=1 AND b.provider='slack' AND b.mode='primary' AND b.workspace=?",
-      )
-      .all(this.transport.mapper.config.teamId) as {
-      agent_id: string;
-      channel: string;
-      thread: string;
-    }[];
+    const watches = (
+      s.db
+        .prepare(
+          "SELECT t.* FROM thread_watches t JOIN channel_access a ON a.agent_id=t.agent_id AND a.channel=t.channel JOIN conversation_bindings b ON b.conversation_id=t.channel WHERE a.active=1 AND b.provider='slack' AND b.mode='primary' AND b.workspace=?",
+        )
+        .all(this.transport.mapper.config.teamId) as {
+        agent_id: string;
+        channel: string;
+        thread: string;
+      }[]
+    ).filter((watch) => !scope || scope.has(watch.agent_id));
     for (const internal of watches) {
       const target = this.transport.mapper.target({
           conversationId: internal.channel,
@@ -674,9 +702,13 @@ export class SlackService {
   }
   async flushAdmin(): Promise<void> {
     const s = this.c.store;
+    // Rows of a not-ready installation keep waiting; only ready installations may cross the
+    // boundary, and they are never starved by another installation's backlog.
     for (const row of s.db
-      .prepare("SELECT * FROM admin_replies WHERE state='pending' LIMIT 10")
-      .all() as {
+      .prepare(
+        "SELECT * FROM admin_replies WHERE state='pending' AND agent_id IN (SELECT value FROM json_each(?)) LIMIT 10",
+      )
+      .all(JSON.stringify(this.transport.readyAgents())) as {
       id: string;
       agent_id: string;
       channel: string;
@@ -702,7 +734,7 @@ export class SlackService {
       /^U[A-Z0-9]+$/.test(id),
     );
     if (!rawOwner) return;
-    for (const request of this.system.pendingNotices()) {
+    for (const request of this.system.pendingNotices(this.transport.readyAgents())) {
       if (this.stopping()) return;
       let claimed = false;
       try {
@@ -769,7 +801,7 @@ export class SlackService {
       /^U[A-Z0-9]+$/.test(id),
     );
     if (!rawOwner) return;
-    for (const request of this.system.pendingResults()) {
+    for (const request of this.system.pendingResults(this.transport.readyAgents())) {
       if (this.stopping()) return;
       let claimed = false;
       try {
@@ -794,9 +826,9 @@ export class SlackService {
     const query = () =>
       s.db
         .prepare(
-          "SELECT rowid seq,id,agent_id,request,created_at createdAt FROM outbox WHERE state='unknown' AND rowid>? ORDER BY rowid LIMIT 4",
+          "SELECT rowid seq,id,agent_id,request,created_at createdAt FROM outbox WHERE state='unknown' AND agent_id IN (SELECT value FROM json_each(?)) AND rowid>? ORDER BY rowid LIMIT 4",
         )
-        .all(this.reconcileAfter) as {
+        .all(JSON.stringify(this.transport.readyAgents()), this.reconcileAfter) as {
         seq: number;
         id: string;
         agent_id: string;
@@ -923,6 +955,9 @@ export class SlackService {
   ): Promise<{ fileId: string }> {
     const { actor: agentId, text } = request,
       target = this.transport.mapper.target(request.target);
+    // Refuse before allocating anything: the publication stays queued for recovery.
+    const waiting = this.transport.waitingFor(agentId);
+    if (waiting) throw waiting;
     const client = this.transport.clients.get(agentId)!;
     const filename = artifact.filename ?? `${artifact.title.replace(/[^a-zA-Z0-9._-]/g, "_")}.txt`,
       bytes = Buffer.from(artifact.content, artifact.encoding === "base64" ? "base64" : "utf8");

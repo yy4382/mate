@@ -197,7 +197,7 @@ export class Application {
     );
     const transport = this.transport,
       attachments = transport
-        ? new Attachments(this.collaboration, this.broker, transport.clients)
+        ? new Attachments(this.collaboration, this.broker, transport.clients, transport)
         : undefined,
       environment = new EnvironmentCapabilities(this.collaboration, {
         homes: this.memoryRoots,
@@ -209,7 +209,9 @@ export class Application {
       }),
       directory = new TeamDirectory(
         this.messages,
-        transport ? new Directory(this.messages, transport.clients, transport.mapper) : undefined,
+        transport
+          ? new Directory(this.messages, transport.clients, transport.mapper, transport)
+          : undefined,
       );
     this.directory = directory;
     this.router = new ToolRouter(
