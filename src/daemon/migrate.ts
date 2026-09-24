@@ -32,41 +32,24 @@ export function saveConfiguration(store:Store,config:DaemonConfig):void{
  store.db.prepare("INSERT INTO runtime_meta VALUES('configuration',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(encode(daemonConfigSchema.parse(config)));
  store.db.prepare("INSERT INTO runtime_meta VALUES('policy',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(hash(encode(config.runtime)));
 }
-function matchesRecordedRuntimePolicy(store:Store,previous:DaemonConfig,policy:string):boolean{
- if(policy===hash(encode(previous.runtime)))return true;
- const row=store.db.prepare("SELECT value FROM runtime_meta WHERE key='configuration'").get() as {value:string}|undefined;
- if(row){
-  const raw=JSON.parse(row.value) as {runtime?:unknown};
-  if(raw.runtime&&sameConfiguration(daemonConfigSchema.parse(raw),previous)&&policy===hash(encode(raw.runtime)))return true;
- }
- const defaults={maxActiveRuns:1,maxBackendOperations:1,workerIdleMs:300000};
- if(encode(previous.runtime.limits)===encode(defaults)){
-  const {limits:_,...preLimitsRuntime}=previous.runtime;
-  if(policy===hash(encode(preLimitsRuntime)))return true;
- }
- return false;
-}
-
 export interface OfflineMigrationOptions{
- projectRoot:string;
- legacyIdentityAttested:boolean;
  auditSource:string;
 }
-export interface OfflineMigrationResult{agents:string[];legacyIdentityAttested:boolean;replayed:boolean}
+export interface OfflineMigrationResult{agents:string[]}
 
-function assertMigrationIdentity(s:Store,previous:DaemonConfig,next:DaemonConfig,legacyIdentityAttested:boolean):DaemonConfig|undefined{
+function assertMigrationIdentity(s:Store,previous:DaemonConfig,next:DaemonConfig):void{
  const recorded=storedConfiguration(s);
- if(recorded&&!sameConfiguration(recorded,previous))throw new Error('Previous configuration does not match persisted configuration');
- if(!recorded&&!legacyIdentityAttested)throw new Error('Legacy identity snapshot unavailable; supply trusted OLD_CONFIG and --accept-legacy-identity explicitly');
+ if(!recorded)throw new Error('Migration requires a stored configuration');
+ if(!sameConfiguration(recorded,previous))throw new Error('Previous configuration does not match persisted configuration');
  const policy=s.db.prepare("SELECT value FROM runtime_meta WHERE key='policy'").get() as {value:string}|undefined;
- if(!policy||!matchesRecordedRuntimePolicy(s,previous,policy.value))throw new Error('Previous runtime policy does not match database');
+ if(!policy||policy.value!==hash(encode(previous.runtime)))throw new Error('Previous runtime policy does not match database');
  const oldIds=(s.db.prepare('SELECT id FROM agents ORDER BY id').all() as {id:string}[]).map(agent=>agent.id);
  if(encode(oldIds)!==encode(previous.mate.agents.map(agent=>agent.id).sort()))throw new Error('Previous Agent identities do not match database');
- assertConfigurationEvolution(previous,next);return recorded;
+ assertConfigurationEvolution(previous,next);
 }
 
 function prepareMigrationBoundary(s:Store,previous:DaemonConfig,next:DaemonConfig,options:OfflineMigrationOptions):void{
- assertMigrationIdentity(s,previous,next,options.legacyIdentityAttested);
+ assertMigrationIdentity(s,previous,next);
  if(resolve(previous.runtime.dataDir)!==resolve(next.runtime.dataDir))throw new Error('Migration requires the same data directory');
  for(const agent of next.mate.agents){const home=next.runtime.linuxUsers?.[agent.id]?.home;if(home&&(!existsSync(home)||lstatSync(home).isSymbolicLink()))throw new Error(`Provision the Linux Agent home before migration: ${agent.id}`);}
 }
@@ -89,21 +72,21 @@ export function applyOfflineConfigurationMigration(s:Store,previous:DaemonConfig
    s.rotateSession(agent.id,initial.configVersion,[...initial.messages,...history.filter(message=>message.role!=='system')],'configuration_migration');
   }
   configureLocalRooms(c,previous.adapters.local,next.adapters.local);saveConfiguration(s,next);
-  s.audit('configuration_migration',{source:options.auditSource,oldHash:oldConfigurationHash,newHash:newConfigurationHash,legacyIdentityAttested:options.legacyIdentityAttested,budgets:'unchanged'});
+  s.audit('configuration_migration',{source:options.auditSource,oldHash:oldConfigurationHash,newHash:newConfigurationHash,budgets:'unchanged'});
  });
- return{agents:next.mate.agents.map(agent=>agent.id),legacyIdentityAttested:options.legacyIdentityAttested,replayed:false};
+ return{agents:next.mate.agents.map(agent=>agent.id)};
 }
 /** Explicit local owner operation. No Slack or model credentials required. */
-export async function migrateConfiguration(previous:DaemonConfig,next:DaemonConfig,destination:string,acceptLegacyIdentity=false,projectRoot=resolve('.')):Promise<{backup:string;agents:string[];legacyIdentityAttested:boolean}>{
+export async function migrateConfiguration(previous:DaemonConfig,next:DaemonConfig,destination:string):Promise<{backup:string;agents:string[]}>{
  const data=previous.runtime.dataDir,state=join(data,'state');
  for(const path of [data,state,...(previous.runtime.linuxUsers?Object.values(previous.runtime.linuxUsers).map(user=>user.home):[join(data,'agents')])])if(lstatSync(path).isSymbolicLink())throw new Error('Migration paths must not be symlinks');
  if(resolve(data)!==resolve(next.runtime.dataDir)||lstatSync(data).isSymbolicLink()||lstatSync(state).isSymbolicLink())throw new Error('Migration requires the same non-symlink data directory');
  if(!existsSync(join(state,'mate.sqlite')))throw new Error('Migration requires an existing database');
  const release=acquireLock(join(state,'daemon.lock'));let store:Store|undefined;
  try{
-  store=new Store(join(state,'mate.sqlite'));const s=store,recorded=storedConfiguration(s),migrationOptions={projectRoot,legacyIdentityAttested:!recorded&&acceptLegacyIdentity,auditSource:resolve(destination)};prepareMigrationBoundary(s,previous,next,migrationOptions);s.recover();
+  store=new Store(join(state,'mate.sqlite'));const s=store,migrationOptions={auditSource:resolve(destination)};prepareMigrationBoundary(s,previous,next,migrationOptions);s.recover();
   await backup(s,data,resolve(destination),previous);
   const result=applyOfflineConfigurationMigration(s,previous,next,migrationOptions);
-  return{backup:resolve(destination),agents:result.agents,legacyIdentityAttested:result.legacyIdentityAttested};
+  return{backup:resolve(destination),agents:result.agents};
  }finally{store?.close();release();}
 }

@@ -43,10 +43,10 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     if(destination)throw new Error('Unknown offline-probe option');assertLinuxMaintenanceStopped(config);assertLinuxOperationAllowed('offline-probe',config);const report=await runOfflineProbe(config);process.stdout.write(`${JSON.stringify(report,null,2)}\n`);return;
   }
   if(command==='migrate'){
-    if(!destination||!args[3])throw new Error('Usage: mate migrate OLD_CONFIG NEW_CONFIG BACKUP [--accept-legacy-identity]');
-    if(args[4]&&args[4]!=='--accept-legacy-identity')throw new Error('Unknown migration option');
+    if(!destination||!args[3])throw new Error('Usage: mate migrate OLD_CONFIG NEW_CONFIG BACKUP');
+    if(args[4])throw new Error('Unknown migration option');
     assertLinuxMaintenanceStopped(config);assertLinuxOperationAllowed('migrate',config);const next=daemonConfigSchema.parse(JSON.parse(readFileSync(resolve(destination),'utf8')));
-    process.stdout.write(JSON.stringify(await migrateConfiguration(config,next,args[3],args[4]==='--accept-legacy-identity'),null,2)+'\n');return;
+    process.stdout.write(JSON.stringify(await migrateConfiguration(config,next,args[3]),null,2)+'\n');return;
   }
   if (command === 'check') {
     const models = builtinModels();

@@ -1,8 +1,7 @@
 import { z } from 'zod';
 import { isAbsolute } from 'node:path';
-import { configSchema } from '../config.js';
 const path = z.string().refine(isAbsolute, 'Absolute path required');
-import {agentDefinition,agentDefinitionSchema,budgetSettingsSchema,agentIdSchema,secretReferenceSchema} from '../domain/agents.js';
+import {agentDefinitionSchema,budgetSettingsSchema,agentIdSchema,secretReferenceSchema} from '../domain/agents.js';
 import type {MateConfig} from '../config.js';
 
 const human = z.string().min(1).max(1000);
@@ -66,21 +65,10 @@ const modernConfigSchema = z.object({
   }
 });
 
-/** Only the ingress compatibility parser knows the old flattened deployment shape. */
-export const daemonConfigSchema=z.preprocess(value=>{
-  if(!value||typeof value!=='object'||'version' in value)return value;
-  const input=value as Record<string,unknown>;
-  if('adapters' in input)return value;
-  if(!input.mate||typeof input.mate!=='object'||!('teamId' in input.mate))return value;
-  // Keep unknown top-level fields so strict validation rejects rather than silently discards them.
-  const legacy=configSchema.parse(input.mate);
-  const principals=Object.fromEntries(legacy.ownerUserIds.map(id=>[id,slackHumanId(legacy.teamId,id)]));
-  return {...input,version:2,mate:{agents:legacy.agents.map(agentDefinition),ownerUserIds:Object.values(principals),budgets:legacy.budgets},
-    adapters:{slack:{teamId:legacy.teamId,principals,bindings:legacy.agents.map(({id,slackAppId,slackUserId,slackBotId,botTokenEnv,appTokenEnv,channels})=>({agentId:id,slackAppId,slackUserId,slackBotId,botTokenEnv,appTokenEnv,channels}))}}};
-},modernConfigSchema);
+export const daemonConfigSchema=modernConfigSchema;
 export function slackHumanId(teamId:string,userId:string):string{return JSON.stringify(['slack',teamId,'user',userId]);}
 
-/** Adapter-only compatibility view. The runtime receives the complete pure team instead. */
+/** Present the configured Slack bindings to the Slack adapter. */
 export function slackRuntimeConfig(config:DaemonConfig):MateConfig|undefined{
   const adapter=config.adapters.slack;if(!adapter)return undefined;
   return {teamId:adapter.teamId,principalIds:adapter.principals,

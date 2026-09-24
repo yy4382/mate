@@ -3,23 +3,23 @@ import{afterEach,expect,it,vi}from 'vitest';
 import{mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,realpathSync,existsSync}from 'node:fs';
 import{tmpdir}from 'node:os';
 import{join}from 'node:path';
-import{Store,encode,hash}from '../../src/storage/store.js';
+import{Store}from '../../src/storage/store.js';
 import{daemonConfigSchema,slackRuntimeConfig}from '../../src/daemon/config.js';
-import{applyOfflineConfigurationMigration,migrateConfiguration,saveConfiguration,storedConfiguration}from '../../src/daemon/migrate.js';
+import{migrateConfiguration,saveConfiguration,storedConfiguration}from '../../src/daemon/migrate.js';
 import{acquireLock}from '../../src/daemon/lock.js';
-import{configFixture}from '../helpers/config.js';
+import{daemonFixture}from '../helpers/daemon-config.js';
 import{buildBaseline}from '../../src/runtime/prompt.js';
 import{operationDocumentation,ToolRouter}from '../../src/runtime/tools.js';
 import{Messages,Output,migrateCurrentRuntime}from '../helpers/canonical-slack.js';
 import{Collaboration}from '../../src/collaboration/service.js';
 import{Broker}from '../../src/policy/broker.js';
 const roots:string[]=[];afterEach(()=>{vi.restoreAllMocks();roots.splice(0).forEach(root=>rmSync(root,{recursive:true,force:true}));});
-function fixture(legacy=false){
+function fixture(){
  const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-migrate-')));roots.push(root);const data=join(root,'data'),path=join(data,'state','mate.sqlite'),own=join(data,'agents','research'),shared=join(root,'shared');
  for(const dir of [join(data,'state'),own,shared])mkdirSync(dir,{recursive:true});writeFileSync(join(own,'MEMORY.md'),'private synthetic knowledge');
- const previous=daemonConfigSchema.parse({mate:configFixture,runtime:{dataDir:data}});
+ const previous=daemonFixture(data);
  const store=new Store(path),base=buildBaseline(previous.mate.agents[0]!,operationDocumentation);store.register('research',base.configVersion,base.messages);
- if(!legacy)saveConfiguration(store,previous);else store.db.prepare("INSERT INTO runtime_meta VALUES('policy',?)").run(hash(encode(previous.runtime)));
+ saveConfiguration(store,previous);
  const messages=new Messages(store,slackRuntimeConfig(previous)!);migrateCurrentRuntime(store);const c=new Collaboration(store,messages,new Output(messages,{post:async()=>({ts:'100.000002'})}),previous.mate);messages.membership('research','CTEST',true);
  const broker=new Broker(store,c,{execute:async()=>({code:0,stdout:'',stderr:'',truncated:false})},{research:own}),router=new ToolRouter(c,broker),work=c.createWork('migration',{conversationId:'CTEST'});
  c.ledger.account('research');
@@ -32,7 +32,7 @@ it('offline migration backs up memory, updates the baseline, and preserves debt,
  c.enqueue('research',work,'unfinished',{});const run=store.beginRun('research')!;store.input(run,{role:'user',content:'PRESERVE_HISTORY',timestamp:0});c.reserve(run,work,500,0.1);
  store.prepareAction(run,'OLD_UNKNOWN',{workId:work,operation:{kind:'exec',command:'synthetic'}});store.startAction(run,'OLD_UNKNOWN');
  f.router.sessions.checkpoint('research','durable checkpoint');store.close();
- const result=await migrateConfiguration(f.previous,f.next,join(f.root,'backup'));expect(result.legacyIdentityAttested).toBe(false);
+ const result=await migrateConfiguration(f.previous,f.next,join(f.root,'backup'));expect(result.agents).toEqual(['research']);
  const reopened=new Store(f.path);try{
   const current=(reopened.db.prepare("SELECT session_id FROM agents WHERE id='research'").get() as any).session_id;
   expect(current).not.toBe(run.sessionId);expect(JSON.stringify(reopened.context(current))).toContain('PRESERVE_HISTORY');expect(JSON.stringify(reopened.context(current))).toContain('An evolving research role');
@@ -48,6 +48,12 @@ it('migration requires lock, exact previous configuration and stable workspace/A
  const release=acquireLock(join(f.data,'state','daemon.lock'));await expect(migrateConfiguration(f.previous,f.next,dest)).rejects.toThrow('Another Mate');release();
  const wrong=structuredClone(f.previous);wrong.mate.agents[0]!.role='wrong old role';await expect(migrateConfiguration(wrong,f.next,dest)).rejects.toThrow('Previous configuration');
  const rebound=structuredClone(f.next);rebound.adapters.slack!.bindings[0]!.slackUserId='UOTHER';await expect(migrateConfiguration(f.previous,rebound,dest)).rejects.toThrow('rebound');expect(existsSync(dest)).toBe(false);
+});
+it('migration refuses a database without its stored configuration',async()=>{
+ const f=fixture();f.store.db.prepare("DELETE FROM runtime_meta WHERE key='configuration'").run();f.store.close();
+ const dest=join(f.root,'backup');
+ await expect(migrateConfiguration(f.previous,f.next,dest)).rejects.toThrow('requires a stored configuration');
+ expect(existsSync(dest)).toBe(false);
 });
 it('a failed migration transaction leaves the old configuration and session usable and retains a complete backup',async()=>{
  const f=fixture();const before=(f.router.sessions.status('research') as any).session;
@@ -70,32 +76,6 @@ it('a migrated configuration starts locally and can add persistent peers beyond 
  finally{refs.forEach((ref,i)=>{if(saved[i]===undefined)delete process.env[ref];else process.env[ref]=saved[i];});}
 });
 
-it('migrates real legacy configuration key order without rewriting immutable effect evidence', async () => {
- const f=fixture();
- // R8 serialized model after Slack installation fields, before channels.
- const a=slackRuntimeConfig(f.previous)!.agents[0]!;
- const oldAgent={id:a.id,name:a.name,role:a.role,slackAppId:a.slackAppId,slackUserId:a.slackUserId,slackBotId:a.slackBotId,botTokenEnv:a.botTokenEnv,appTokenEnv:a.appTokenEnv,model:a.model,channels:a.channels};
- const legacy={runtime:f.previous.runtime,mate:{...configFixture,agents:[oldAgent]}};
- expect(encode(legacy)).not.toBe(encode(f.previous));
- f.store.db.prepare("UPDATE runtime_meta SET value=? WHERE key='configuration'").run(encode(legacy));
- const outbox='legacy-unknown';
- f.store.queueOutput('research',outbox,{target:{channel:'CTEST'},text:'unchanged legacy wire'},JSON.stringify({conversationId:'CTEST'}));
- f.store.transitionOutput(outbox,'pending','sending');f.store.transitionOutput(outbox,'sending','unknown');
- const before=f.store.output(outbox)!;
- const session=(f.router.sessions.status('research') as {session:string}).session;
- f.store.db.prepare('UPDATE sessions SET config_version=? WHERE id=?').run('legacy-baseline-hash',session);
- f.store.close();
- await migrateConfiguration(f.previous,f.previous,join(f.root,'backup'));
- const s=new Store(f.path);
- try{
-  expect(s.output(outbox)).toEqual(before);
-  expect(storedConfiguration(s)).toEqual(f.previous);
-  const current=s.db.prepare("SELECT session_id FROM agents WHERE id='research'").get() as {session_id:string};
-  expect(current.session_id).not.toBe(session);
-  expect(s.db.prepare('SELECT config_version FROM sessions WHERE id=?').get(current.session_id)).toEqual({config_version:buildBaseline(a,operationDocumentation).configVersion});
- }finally{s.close();}
-});
-
 it('adds the first Slack installation to a canonical local-origin store without fabricating legacy provenance',async()=>{
  const {localApplication}=await import('../../src/local/application.js');
  const {migrateProjections}=await import('../../src/storage/projection-schema.js');
@@ -103,7 +83,7 @@ it('adds the first Slack installation to a canonical local-origin store without 
  const {Daemon}=await import('../../src/daemon/app.js');
  const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-local-migration-')));roots.push(root);
  const data=join(root,'data');mkdirSync(join(data,'state'),{recursive:true});mkdirSync(join(data,'agents','research'),{recursive:true});
- const next=daemonConfigSchema.parse({mate:configFixture,runtime:{dataDir:data}}),previous=structuredClone(next);previous.adapters={};
+ const next=daemonFixture(data),previous=structuredClone(next);previous.adapters={};
  const s=new Store(join(data,'state','mate.sqlite'));localApplication(s,previous.mate);migrateProjections(s);migrateProjectionImports(s);
  const base=buildBaseline(previous.mate.agents[0]!,operationDocumentation);s.register('research',base.configVersion,base.messages);saveConfiguration(s,previous);s.close();
  await migrateConfiguration(previous,next,join(root,'backup'));

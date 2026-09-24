@@ -5,9 +5,9 @@ import {join} from 'node:path';
 import {backup,backupDeploymentSnapshot} from '../../src/daemon/backup.js';
 import {verifyCheckpoint} from '../../src/daemon/checkpoint-format.js';
 import {restoreCheckpointForTesting} from '../../src/daemon/restore.js';
-import {daemonConfigSchema} from '../../src/daemon/config.js';
 import {Store} from '../../src/storage/store.js';
 import {configFixture} from '../helpers/config.js';
+import {daemonFixture} from '../helpers/daemon-config.js';
 
 const cleanups:(()=>void)[]=[];
 afterEach(()=>{for(const cleanup of cleanups.splice(0).reverse())cleanup();});
@@ -16,7 +16,7 @@ function fixture(){
  const root=realpathSync(mkdtempSync(join(tmpdir(),'mate-linux-checkpoint-'))),data=join(root,'data'),state=join(data,'state'),control=join(data,'control'),home=join(root,'private-research'),sharedRoot=join(root,'shared');
  for(const path of [state,control,home,sharedRoot])mkdirSync(path,{recursive:true,mode:0o700});
  writeFileSync(join(home,'MEMORY.md'),'target',{mode:0o600});
- const config=daemonConfigSchema.parse({mate:configFixture,runtime:{dataDir:data,linuxUsers:{research:{uid:process.getuid!(),gid:process.getgid!(),home}},sharedRoot}});
+ const config=daemonFixture(data,configFixture,{linuxUsers:{research:{uid:process.getuid!(),gid:process.getgid!(),home}},sharedRoot});
  const store=new Store(join(state,'mate.sqlite'));store.register('research','v1',[{role:'user',content:'target'}]);
  cleanups.push(()=>rmSync(root,{recursive:true,force:true}));return{root,data,state,control,home,config,store};
 }

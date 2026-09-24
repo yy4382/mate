@@ -27,6 +27,7 @@ import { Artifacts } from '../../src/daemon/artifacts.js';
 import {ProcessNotRunningError,type LinuxProcessManager} from '../../src/execution/linux-processes.js';
 import {SystemOperations} from '../../src/policy/system-operations.js';
 import {daemonConfigSchema} from '../../src/daemon/config.js';
+import {daemonFixture} from '../helpers/daemon-config.js';
 const cleanups: (() => void)[] = [];
 afterEach(() => {vi.restoreAllMocks();cleanups.splice(0).forEach(fn => fn());});
 function setup() {
@@ -71,7 +72,7 @@ it('kernel lock excludes a second daemon; backup restores SQLite plus private me
   const root=mkdtempSync(join(tmpdir(),'mate-checkpoint-')), data=join(root,'data'); mkdirSync(join(data,'agents','research'),{recursive:true});mkdirSync(join(data,'state')); writeFileSync(join(data,'agents','research','MEMORY.md'),'synthetic lesson');
   const release=acquireLock(join(root,'lock')); expect(()=>acquireLock(join(root,'lock'))).toThrow('Another Mate'); release(); const again=acquireLock(join(root,'lock')); again();
   const store=new Store(join(data,'state','mate.sqlite')); store.register('research','v1',[{role:'user',content:'persisted'}]);
-  const checkpointConfig=daemonConfigSchema.parse({mate:configFixture,runtime:{dataDir:data,researchHosts:[]}});
+  const checkpointConfig=daemonFixture(data);
   try { await backup(store,data,join(root,'checkpoint'),checkpointConfig); const restored=new Store(join(root,'checkpoint','mate.sqlite')); expect(restored.db.prepare('SELECT count(*) n FROM entries').get()).toEqual({n:1}); restored.close(); expect(readFileSync(join(root,'checkpoint','agents','research','MEMORY.md'),'utf8')).toBe('synthetic lesson'); }
   finally {store.close();rmSync(root,{recursive:true,force:true});}
 });
@@ -87,7 +88,7 @@ it('starts the Linux-user route with a separate private home and peer-visible sh
   mkdirSync(home,{mode:0o700});for(const dir of ['notes','artifacts'])mkdirSync(join(home,dir),{mode:0o700});writeFileSync(join(home,'MEMORY.md'),'# Research\n\nPrivate memory entry. Keep durable lessons and links to notes here.\n',{mode:0o600});
   mkdirSync(sharedRoot,{mode:0o755});chmodSync(sharedRoot,0o755);mkdirSync(join(sharedRoot,'research'),{mode:0o755});chmodSync(join(sharedRoot,'research'),0o755);
   const user={uid:process.getuid!(),gid:process.getgid!(),home,username:'research'};
-  const input={mate:configSchema.parse(configFixture),runtime:{dataDir:data,linuxUsers:{research:user},sharedRoot,researchHosts:[]}};
+  const input=daemonFixture(data,configFixture,{linuxUsers:{research:user},sharedRoot,researchHosts:[]});
   mkdirSync(join(data,'state'),{recursive:true,mode:0o700});chmodSync(data,0o700);chmodSync(join(data,'state'),0o755);
   await expect(Daemon.create(input,{info:()=>{},error:()=>{}},process.cwd())).rejects.toThrow('Mate control directory');
   chmodSync(join(data,'state'),0o700);
@@ -100,8 +101,7 @@ it('starts the Linux-user route with a separate private home and peer-visible sh
 });
 it('requires distinct non-root Linux identities and one shared root for the team',()=>{
   const other={...configFixture.agents[0]!,id:'bob',name:'Bob',slackAppId:'ATWO',slackUserId:'UTWO',slackBotId:'BTWO',botTokenEnv:'BOB_BOT',appTokenEnv:'BOB_APP'};
-  const mate=configSchema.parse({...configFixture,agents:[configFixture.agents[0],other]});
-  const input={mate,runtime:{dataDir:'/var/lib/mate',sharedRoot:'/srv/mate/shared',linuxUsers:{research:{uid:1001,gid:1001,home:'/srv/mate/private/research'},bob:{uid:1002,gid:1002,home:'/srv/mate/private/bob'}}}};
+  const input=daemonFixture('/var/lib/mate',{...configFixture,agents:[configFixture.agents[0],other]},{sharedRoot:'/srv/mate/shared',linuxUsers:{research:{uid:1001,gid:1001,home:'/srv/mate/private/research'},bob:{uid:1002,gid:1002,home:'/srv/mate/private/bob'}}});
   expect(daemonConfigSchema.safeParse(input).success).toBe(true);
   expect(daemonConfigSchema.safeParse({...input,runtime:{...input.runtime,sharedRoot:undefined}}).success).toBe(false);
   expect(daemonConfigSchema.safeParse({...input,runtime:{...input.runtime,workspaceManifest:'/var/lib/mate/old-manifest.json'}}).success).toBe(false);
@@ -234,7 +234,7 @@ it('paused or delayed output cannot starve later active work', async () => {
 });
 it('stop during startup retains the singleton lock until startup settles and never opens sockets afterward', async () => {
   const {Daemon}=await import('../../src/daemon/app.js');const {deferred}=await import('../helpers/pi.js');const root=mkdtempSync(join(tmpdir(),'mate-start-stop-')), gate=deferred();
-  const config={mate:configSchema.parse({...configFixture,agents:[{...configFixture.agents[0],model:{provider:'anthropic',id:'claude-haiku-4-5',apiKeyEnv:'MODEL_API_KEY'}}]}),runtime:{dataDir:root,researchHosts:[]}};
+  const config=daemonFixture(root,{...configFixture,agents:[{...configFixture.agents[0],model:{provider:'anthropic',id:'claude-haiku-4-5',apiKeyEnv:'MODEL_API_KEY'}}]},{researchHosts:[]});
   const refs=['RESEARCH_BOT_TOKEN','RESEARCH_APP_TOKEN','MODEL_API_KEY'], saved=Object.fromEntries(refs.map(ref=>[ref,process.env[ref]]));for(const ref of refs)process.env[ref]='synthetic';
   const log={info:()=>{},error:()=>{}};const daemon=await Daemon.create(config,log);const verify=vi.spyOn(daemon.slack,'verify').mockImplementation(()=>gate.promise);const membership=vi.spyOn(daemon.slack,'membership');
   try {
