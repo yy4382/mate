@@ -162,6 +162,37 @@ requiring active+running). Re-verified at `9620beb`: 72 files / 582 tests green.
 Also removed: a 0-byte stray file named `typescript` that a ticket implementer had accidentally
 created at the repository root and left untracked; it was never part of any commit.
 
+## Follow-up after delivery (user review)
+
+The user reviewed the delivered result and reported three gaps, all confirmed against the tree:
+
+1. **Two live legacy compatibility paths remain**: `src/application.ts:239` routes every tool
+   argument value through `slackApp.argumentsCodec.args(value)`, backed by
+   `src/slack/legacy-arguments.ts` (self-described as "the only input compatibility boundary for
+   pre-v2 tool references"), and `src/storage/conversations.ts:34` decodes a stored message body
+   through `requireLegacy().message(bodyText)` when it lacks the `format: "mate.message.v2"`
+   marker, with `LegacyPayloadDecoder` also used at `:95`, `:108` and `:127`. Spec #33 required
+   these to leave. **User decision (option B): leave them for now**, because the Slack
+   integration may be dropped entirely, which would delete this surface wholesale.
+2. **`drizzle-orm` was an unused declared dependency** (`package.json:29`, zero references in
+   `src/` or `tests/`, and on the spec's removal list). Removed in `a4e7c70`, together with its
+   100 lockfile lines. That change exposed a real defect: with the pnpm store inside the
+   repository, the format check started scanning `.pnpm-store` metadata (272 files) and a plain
+   `pnpm check` failed for reasons unrelated to the source; `.prettierignore` now names
+   `.pnpm-store/` so the format scope cannot depend on `.gitignore`.
+3. **Documentation and tracker disagreed about native validation**: `docs/OPERATIONS.md:74`
+   states the procedure has never been run on any host, while #53 was closed. That is now
+   tracked honestly: #54 is open with the `ready-for-human` label and gates the "first release is
+   deployable" conclusion, and #53 carries a comment saying its closure covers only the delivered
+   half.
+
+Process correction accepted for future work: ticket implementers should read their own issue
+from the tracker (`gh issue view <n> --comments`), claim it as their first tracker write, and
+update its state themselves, instead of receiving the acceptance criteria transcribed by the
+orchestrator. Content fidelity was preserved here by re-stating the criteria verbatim, but the
+implementers were cut off from the issue comments and from owning their ticket state, which
+concentrated tracker authority in the orchestrator and made this kind of mismatch easier.
+
 ## Tracker synchronization
 
 Every ticket is closed on GitHub as it lands, with a comment recording its landing commit and
