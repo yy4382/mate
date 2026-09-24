@@ -72,9 +72,9 @@ only when every blocker is committed on the branch.
 | #48 | 使进程查询与停止可取消且不阻塞 daemon | **done** | `fab5692` (worktree `.worktrees/t48`) | `9e69c30`, merged as `3838cad` |
 | #49 | 让内部应用在 Slack 离线时启动和运行 | **done** | `d412adf` (worktree `.worktrees/t49`) | `367bb2a` merged as `b933b52`; review fix `3451ce5` cherry-picked as `1f4e6c1` |
 | #50 | 按安装和目标范围恢复 Slack 操作 | **done** | `fc977cf` (worktree `.worktrees/t50`) | `b7a5fdf` (re-applied into #49's readiness model), merged as `066e317` |
-| #51 | 给 owner 提供分范围、可操作的故障诊断 | in progress | `066e317` (worktree `.worktrees/t51`) | — |
+| #51 | 给 owner 提供分范围、可操作的故障诊断 | **done** | `066e317` (worktree `.worktrees/t51`) | `b34e6c4`, merged as `5ad7fab` |
 | #52 | 统一 Linux 维护所用的宿主操作与路径事实 | **done** | `6395c75` (worktree `.worktrees/t52`) | `aac16f1`, merged as `fab5692` |
-| #53 | 验证完整 Linux 安装、升级、备份与恢复 | pending | — | — |
+| #53 | 验证完整 Linux 安装、升级、备份与恢复 | in progress | `5ad7fab` (worktree `.worktrees/t53`) | — |
 
 ## Quota interruption and recovery
 
@@ -122,6 +122,15 @@ merge. This produced one false alarm: a format failure from ticket #45's untrack
 was in fact green, confirmed afterwards in an isolated `git archive` copy. Rule: verify a
 merge commit in an isolated copy whenever another ticket is editing the main tree, and only
 treat a shared-tree failure as merge damage after that.
+
+## Tracker synchronization
+
+Every ticket is closed on GitHub as it lands, with a comment recording its landing commit and
+the orchestrator's independent verification (pinned Node 24.21.0: `pnpm typecheck` exit 0 and
+`pnpm check` exit 0 on the merged tree), plus the acceptance evidence and any honest limitation
+(native-Linux-only checks in #48/#52/#53). #53 stays open while it is being implemented, with a
+comment stating that its native half cannot run on this macOS host and must be executed by a
+person on a resettable Linux host before the first release is called deployable.
 
 ## Findings escalated to the user
 
