@@ -311,6 +311,9 @@ it("labels the evidence native or fixture and never claims an external connectio
       maintenanceCommands: true,
       uname: "6.1.0-amd64",
       node: "v24.21.0",
+      releaseBefore: "/opt/mate/releases/1111111111111111",
+      releaseAfter: "/opt/mate/releases/2222222222222222",
+      phaseDigest: "b".repeat(64),
     })}\n`,
   );
   const document = join(f.root, "report.json"),
@@ -355,6 +358,23 @@ it("refuses to label a run native without host facts, an unknown mode, or an emp
   writeFileSync(
     attestation,
     `${JSON.stringify({ platform: "darwin", euid: 501, systemd: false, maintenanceCommands: false })}\n`,
+  );
+  expect(() =>
+    run(["report", "--mode", "native", "--phases", phases, "--attest", attestation]),
+  ).toThrow();
+  // A native document must also carry the release links and phase digest of its own run, so it
+  // cannot be relabelled or reused for a different one.
+  writeFileSync(
+    attestation,
+    `${JSON.stringify({
+      platform: "linux",
+      euid: 0,
+      systemd: true,
+      maintenanceCommands: true,
+      uname: "6.1.0-amd64",
+      node: "v24.21.0",
+      phaseDigest: "c".repeat(64),
+    })}\n`,
   );
   expect(() =>
     run(["report", "--mode", "native", "--phases", phases, "--attest", attestation]),

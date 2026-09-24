@@ -16,10 +16,11 @@
  * step. That is what makes the comparison meaningful: an upgrade, a configuration change or a
  * restore that dropped, re-encoded or re-keyed any of these rows fails the check.
  *
- * On macOS only `verify` runs, against a caller-supplied data directory. It proves the verification
- * itself works; it does not stand in for the native run. Real Agent UIDs, private and shared
- * directory permissions and systemd process control stay in the shell script, and `report` records
- * which checks a non-Linux host could not execute.
+ * The repository suite (`tests/deployment/native-maintenance.test.ts`) exercises `marker`, `verify`
+ * and `report` on macOS, but it cannot produce a native result: a `native` document is refused
+ * unless the run attested a root Linux host with systemd and the installed commands. Real Agent
+ * UIDs, private and shared directory permissions and systemd process control stay in the shell
+ * script.
  */
 import { createHash } from "node:crypto";
 import {
@@ -464,6 +465,11 @@ export function assertNativeAttestation(attestation) {
       `Native report needs host attestation (${missing.map(([key]) => key).join(", ")}); ` +
         "a run that did not attest these facts must be reported as a fixture",
     );
+  // The release links and the phase digest bind the document to one particular run, so a report
+  // cannot be relabelled or reused for a different one.
+  for (const key of ["releaseBefore", "phaseDigest"])
+    if (typeof attestation[key] !== "string" || !attestation[key])
+      throw new Error(`Native report needs the run's own ${key}`);
 }
 
 /**

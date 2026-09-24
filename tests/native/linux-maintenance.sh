@@ -150,10 +150,17 @@ await_service() { # await_service PHASE
   done
   fail "$1" "mate.service did not reach active/running: $(systemctl status mate.service --no-pager -l | tail -5)"
 }
-# The host facts a `native` report has to attest; a run without them is reported as a fixture.
+# The host and run facts a `native` report has to attest; a run without them is a fixture. The
+# release links and the phase digest bind the document to what actually ran, so a report cannot be
+# relabelled or reused for a different run.
 write_attestation() {
   "$NODE" -e '
-    const fs=require("fs");
+    const fs=require("fs"),crypto=require("crypto"),path=require("path");
+    const dir=process.argv[2];
+    const digest=crypto.createHash("sha256");
+    for (const name of fs.readdirSync(dir).filter((n)=>n.endsWith(".json")).sort()) {
+      digest.update(name).update(fs.readFileSync(path.join(dir,name)));
+    }
     fs.writeFileSync(process.argv[1],JSON.stringify({
       platform: process.platform,
       euid: process.geteuid ? process.geteuid() : -1,
@@ -161,7 +168,10 @@ write_attestation() {
       maintenanceCommands: fs.existsSync("/usr/local/sbin/matectl"),
       uname: require("node:os").release(),
       node: process.version,
-    },null,2)+"\n",{mode:0o600})' "$WORK/attestation.json"
+      releaseBefore: process.env.MATE_RELEASE_BEFORE ?? null,
+      releaseAfter: process.env.MATE_RELEASE_AFTER ?? null,
+      phaseDigest: digest.digest("hex"),
+    },null,2)+"\n",{mode:0o600})' "$WORK/attestation.json" "$PHASES"
 }
 
 log "Native maintenance validation on $(uname -srm)"
@@ -323,17 +333,21 @@ cp -a "$SHARED" "$WORK/shared-backup"
   fail shared-backup "the shared-directory file backup did not keep $AGENT_ONE's UID/GID"
 phase shared-backup passed "an ordinary file-level copy of the shared root kept each Agent's UID/GID and content"
 
-"$matectl" backup current-state >"$WORK/backup-current.log" 2>&1 ||
-  fail backup "the second matectl backup failed: $(cat "$WORK/backup-current.log")"
-# Change the monitored private file after the target checkpoint, so a no-op restore cannot pass.
-printf 'native validation change after the checkpoint\n' >>"$HOME_ONE/notes/validation.txt"
+# Change the monitored private file BEFORE the current-state checkpoint. `restore --replace CURRENT`
+# requires CURRENT to describe the live state, and that comparison covers the private home, so a
+# change made after CURRENT was taken would (correctly) make the restore refuse to run.
+printf 'native validation change after the target checkpoint\n' >>"$HOME_ONE/notes/validation.txt"
 chown "$UID_ONE:$GID_ONE" "$HOME_ONE/notes/validation.txt"
 [ "$(cat "$HOME_ONE/notes/validation.txt")" = "agent-one private note
-native validation change after the checkpoint" ] ||
-  fail restore "could not stage the post-checkpoint change"
+native validation change after the target checkpoint" ] ||
+  fail restore "could not stage the post-target-checkpoint change"
+"$matectl" backup current-state >"$WORK/backup-current.log" 2>&1 ||
+  fail backup "the second matectl backup failed: $(cat "$WORK/backup-current.log")"
 "$matectl" restore target-state --replace current-state >"$WORK/restore.log" 2>&1 ||
   fail restore "matectl restore failed: $(cat "$WORK/restore.log")"
-verify_marker "$MARKER_ONE" "$DATA/state/mate.sqlite" "$HOME_ONE" >"$WORK/verify-restore.json" ||
+# Verify the restored database against the target checkpoint and the restored private home against
+# the checkpoint's own inventory, so content, type, mode and layout are compared entry by entry.
+verify_marker "$MARKER_ONE" "$TARGET_CHECKPOINT" "$HOME_ONE" >"$WORK/verify-restore.json" ||
   fail restore "restored data differs from the marker: $(cat "$WORK/verify-restore.json")"
 [ "$(stat -c '%u %g %a' "$HOME_ONE")" = "$UID_ONE $GID_ONE 700" ] ||
   fail restore "the restored private home has the wrong owner or mode"
@@ -361,10 +375,11 @@ systemctl stop mate.service >/dev/null 2>&1 || true
 RELEASE_BEFORE=$(readlink -f /opt/mate/current)
 if [ -n "${NEXT_SPEC-}" ]; then
   [ -f "$NEXT_SPEC" ] || die "No candidate spec at $NEXT_SPEC"
-  # The candidate is a different built release: the project's own upgrade guard refuses a candidate
-  # that is already current, so this is what proves a program-version change rather than a rerun.
-  "$NODE" "$RELEASE/dist/src/deployment/cli.js" upgrade "$NEXT_SPEC" >"$WORK/upgrade.json" ||
-    fail program-upgrade "upgrade failed: $(cat "$WORK/upgrade.json")"
+  # The candidate is a different built release, and the upgrade goes through the installed wrapper
+  # the operating instructions name: `matectl upgrade SPEC`. The project's own guard refuses a
+  # candidate that is already current, so a successful switch proves a program-version change.
+  "$matectl" upgrade "$NEXT_SPEC" >"$WORK/upgrade.json" 2>&1 ||
+    fail program-upgrade "matectl upgrade failed: $(cat "$WORK/upgrade.json")"
   "$matectl" finalize >"$WORK/finalize.json" 2>&1 ||
     fail program-upgrade "matectl finalize failed: $(cat "$WORK/finalize.json")"
   RELEASE_AFTER=$(readlink -f /opt/mate/current)
@@ -385,6 +400,9 @@ await_service program-upgrade
 systemctl stop mate.service >/dev/null 2>&1 || true
 verify_marker "$MARKER_ONE" >"$WORK/verify-upgrade.json" ||
   fail program-upgrade "records changed across the program upgrade: $(cat "$WORK/verify-upgrade.json")"
+# The restart after a program-version change must leave the Agent's Linux identity and private
+# directory exactly as they were.
+expect_owner agent-private-home-after-upgrade "$HOME_ONE" "$UID_ONE" "$GID_ONE" 700
 if [ -n "${NEXT_SPEC-}" ]; then
   phase program-upgrade passed "release $RELEASE_BEFORE became $RELEASE_AFTER and every recorded session, delivery, task, reminder and identity survived"
 fi
@@ -406,10 +424,14 @@ systemctl stop mate.service >/dev/null 2>&1 || true
 verify_marker "$MARKER_ONE" "" "" applied /etc/mate/mate.json >"$WORK/verify-config.json" ||
   fail configuration-change "records changed across the configuration change: $(cat "$WORK/verify-config.json")"
 expect_owner mate-configuration-file-still-managed /etc/mate/mate.json 0 0 600
+expect_owner agent-private-home-after-config-change "$HOME_ONE" "$UID_ONE" "$GID_ONE" 700
 phase configuration-change passed "Mate applied and recorded the changed configuration while keeping the recorded work and identity"
 
 # ---------------------------------------------------------------- report
 log "== report =="
+MATE_RELEASE_BEFORE=$RELEASE_BEFORE
+MATE_RELEASE_AFTER=${RELEASE_AFTER-}
+export MATE_RELEASE_BEFORE MATE_RELEASE_AFTER
 write_attestation
 DOCUMENT="$WORK/mate-maintenance-validation.json"
 "$NODE" "$HARNESS" report --mode native --phases "$PHASES" --attest "$WORK/attestation.json" \
