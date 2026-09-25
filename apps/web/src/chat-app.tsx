@@ -33,6 +33,12 @@ interface MessagePage {
   nextBefore: string | null;
 }
 
+interface MessageWindow {
+  messages: Message[];
+  nextBefore: string | null;
+  hasNewer: boolean;
+}
+
 interface ChatEvent<T = unknown> {
   seq: number;
   kind: string;
@@ -42,6 +48,8 @@ interface ChatEvent<T = unknown> {
 
 type MobileView = "home" | "channels" | "chat";
 type DialogState = { kind: "create" } | { kind: "settings"; channel: Channel } | null;
+const maxLoadedMessages = 200;
+const emptyMessageWindow: MessageWindow = { messages: [], nextBefore: null, hasNewer: false };
 
 async function ownerJSON<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
@@ -72,6 +80,35 @@ function mergeMessage(messages: Message[], incoming: Message): Message[] {
   });
 }
 
+function mergeMessages(messages: Message[], incoming: Message[]): Message[] {
+  return incoming.reduce(mergeMessage, messages);
+}
+
+function cursorIncludingEvicted(messages: Message[]): string {
+  return String(BigInt(messages.at(-1)!.order) + 1n);
+}
+
+function appendToLatestWindow(window: MessageWindow, incoming: Message[]): MessageWindow {
+  const merged = mergeMessages(window.messages, incoming),
+    overflow = Math.max(0, merged.length - maxLoadedMessages),
+    evicted = merged.slice(0, overflow);
+  return {
+    ...window,
+    messages: overflow ? merged.slice(-maxLoadedMessages) : merged,
+    nextBefore: evicted.length ? cursorIncludingEvicted(evicted) : window.nextBefore,
+  };
+}
+
+function prependOlderWindow(window: MessageWindow, page: MessagePage): MessageWindow {
+  const merged = mergeMessages(window.messages, page.messages),
+    overflow = Math.max(0, merged.length - maxLoadedMessages);
+  return {
+    messages: overflow ? merged.slice(0, maxLoadedMessages) : merged,
+    nextBefore: page.nextBefore,
+    hasNewer: window.hasNewer || overflow > 0,
+  };
+}
+
 function timeLabel(value: number): string {
   return new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(value);
 }
@@ -81,12 +118,12 @@ export function ChatPage() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<Record<string, Message[]>>({});
-  const [nextBefore, setNextBefore] = useState<Record<string, string | null>>({});
+  const [messageWindows, setMessageWindows] = useState<Record<string, MessageWindow>>({});
   const [historyRefresh, setHistoryRefresh] = useState(0);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  const [loadingLatest, setLoadingLatest] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [live, setLive] = useState(false);
@@ -150,8 +187,7 @@ export function ChatPage() {
           setLive(false);
           setChannels([]);
           setSelectedId(null);
-          setMessages({});
-          setNextBefore({});
+          setMessageWindows({});
           setDrafts({});
           setError(null);
           redirectToLogin();
@@ -188,15 +224,19 @@ export function ChatPage() {
         stream.addEventListener("message.created", (event) => {
           const update = JSON.parse((event as MessageEvent<string>).data) as ChatEvent<Message>;
           if (selectedIdRef.current !== update.channelId) return;
-          setMessages((current) => ({
-            [update.channelId]: mergeMessage(current[update.channelId] ?? [], update.payload),
-          }));
+          setMessageWindows((current) => {
+            const window = current[update.channelId] ?? emptyMessageWindow;
+            return {
+              [update.channelId]: window.hasNewer
+                ? window
+                : appendToLatestWindow(window, [update.payload]),
+            };
+          });
         });
         stream.addEventListener("snapshot_required", () => {
           stream.close();
           setLive(false);
-          setMessages({});
-          setNextBefore({});
+          setMessageWindows({});
           setHistoryRefresh((revision) => revision + 1);
           if (active) void connectFromSnapshot();
         });
@@ -214,13 +254,8 @@ export function ChatPage() {
   }, [authenticated]);
 
   useEffect(() => {
-    setMessages((current) =>
+    setMessageWindows((current) =>
       selectedId && current[selectedId] ? { [selectedId]: current[selectedId] } : {},
-    );
-    setNextBefore((current) =>
-      selectedId && Object.hasOwn(current, selectedId)
-        ? { [selectedId]: current[selectedId]! }
-        : {},
     );
   }, [selectedId]);
 
@@ -232,22 +267,19 @@ export function ChatPage() {
     ownerJSON<MessagePage>(`/api/owner/channels/${encodeURIComponent(channelId)}/messages`)
       .then((page) => {
         if (!active) return;
-        setMessages((current) => {
-          const merged = [...(current[channelId] ?? [])];
-          for (const message of page.messages) {
-            if (!merged.some((existing) => existing.id === message.id)) merged.push(message);
-          }
+        setMessageWindows((current) => {
+          const existing = current[channelId] ?? emptyMessageWindow,
+            merged = mergeMessages(existing.messages, page.messages),
+            overflow = Math.max(0, merged.length - maxLoadedMessages),
+            evicted = merged.slice(0, overflow);
           return {
-            [channelId]: merged.sort((left, right) =>
-              BigInt(left.order) < BigInt(right.order)
-                ? -1
-                : BigInt(left.order) > BigInt(right.order)
-                  ? 1
-                  : 0,
-            ),
+            [channelId]: {
+              ...existing,
+              messages: overflow ? merged.slice(-maxLoadedMessages) : merged,
+              nextBefore: evicted.length ? cursorIncludingEvicted(evicted) : page.nextBefore,
+            },
           };
         });
-        setNextBefore((current) => ({ ...current, [channelId]: page.nextBefore }));
       })
       .catch((cause) => {
         if (active) setError(cause instanceof Error ? cause.message : "无法读取消息。");
@@ -261,7 +293,10 @@ export function ChatPage() {
   }, [authenticated, selectedId, historyRefresh]);
 
   const selected = channels.find((channel) => channel.id === selectedId) ?? null;
-  const currentMessages = selectedId ? (messages[selectedId] ?? []) : [];
+  const currentWindow = selectedId
+    ? (messageWindows[selectedId] ?? emptyMessageWindow)
+    : emptyMessageWindow;
+  const currentMessages = currentWindow.messages;
 
   async function logout() {
     setBusy(true);
@@ -279,7 +314,8 @@ export function ChatPage() {
   async function sendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selected || selected.archived || !draft.trim()) return;
-    const channelId = selected.id;
+    const channelId = selected.id,
+      submittedDraft = draft;
     setBusy(true);
     setError(null);
     try {
@@ -288,14 +324,19 @@ export function ChatPage() {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: draft }),
+          body: JSON.stringify({ text: submittedDraft }),
         },
       );
       if (selectedIdRef.current === channelId)
-        setMessages((current) => ({
-          [channelId]: mergeMessage(current[channelId] ?? [], message),
-        }));
-      setDrafts((current) => ({ ...current, [channelId]: "" }));
+        setMessageWindows((current) => {
+          const window = current[channelId] ?? emptyMessageWindow;
+          return {
+            [channelId]: appendToLatestWindow({ ...window, hasNewer: false }, [message]),
+          };
+        });
+      setDrafts((current) =>
+        current[channelId] === submittedDraft ? { ...current, [channelId]: "" } : current,
+      );
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "消息发送失败，请重试。");
     } finally {
@@ -304,9 +345,9 @@ export function ChatPage() {
   }
 
   async function loadOlder() {
-    if (!selectedId || !nextBefore[selectedId]) return;
+    if (!selectedId || !currentWindow.nextBefore) return;
     const channelId = selectedId,
-      cursor = nextBefore[selectedId];
+      cursor = currentWindow.nextBefore;
     setLoadingOlder(true);
     setError(null);
     try {
@@ -314,16 +355,58 @@ export function ChatPage() {
         `/api/owner/channels/${encodeURIComponent(channelId)}/messages?before=${cursor}&limit=50`,
       );
       if (selectedIdRef.current !== channelId) return;
-      setMessages((current) => {
-        let merged = current[channelId] ?? [];
-        for (const message of page.messages) merged = mergeMessage(merged, message);
-        return { [channelId]: merged };
-      });
-      setNextBefore((current) => ({ ...current, [channelId]: page.nextBefore }));
+      setMessageWindows((current) => ({
+        [channelId]: prependOlderWindow(current[channelId] ?? emptyMessageWindow, page),
+      }));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "无法读取更早的消息。");
     } finally {
       setLoadingOlder(false);
+    }
+  }
+
+  async function returnToLatest() {
+    if (!selectedId) return;
+    const channelId = selectedId;
+    setLoadingLatest(true);
+    setError(null);
+    setMessageWindows((current) => {
+      const window = current[channelId] ?? emptyMessageWindow;
+      return { [channelId]: { ...window, hasNewer: false } };
+    });
+    try {
+      const page = await ownerJSON<MessagePage>(
+        `/api/owner/channels/${encodeURIComponent(channelId)}/messages`,
+      );
+      if (selectedIdRef.current !== channelId) return;
+      setMessageWindows((current) => {
+        const window = current[channelId] ?? emptyMessageWindow,
+          newestLoadedOrder = page.messages.at(-1)?.order,
+          liveAfterPage =
+            newestLoadedOrder === undefined
+              ? []
+              : window.messages.filter(
+                  (message) => BigInt(message.order) > BigInt(newestLoadedOrder),
+                ),
+          merged = mergeMessages(page.messages, liveAfterPage),
+          overflow = Math.max(0, merged.length - maxLoadedMessages),
+          evicted = merged.slice(0, overflow);
+        return {
+          [channelId]: {
+            messages: overflow ? merged.slice(-maxLoadedMessages) : merged,
+            nextBefore: evicted.length ? cursorIncludingEvicted(evicted) : page.nextBefore,
+            hasNewer: false,
+          },
+        };
+      });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "无法读取最新消息。");
+      setMessageWindows((current) => {
+        const window = current[channelId] ?? emptyMessageWindow;
+        return { [channelId]: { ...window, hasNewer: true } };
+      });
+    } finally {
+      setLoadingLatest(false);
     }
   }
 
@@ -528,12 +611,22 @@ export function ChatPage() {
             </header>
 
             <div className="message-list" aria-live="polite" aria-label="消息历史">
-              {nextBefore[selected.id] && (
+              {(currentWindow.hasNewer || loadingLatest) && (
+                <button
+                  className="load-older-button"
+                  type="button"
+                  onClick={returnToLatest}
+                  disabled={loadingLatest || loadingOlder}
+                >
+                  {loadingLatest ? "正在读取最新消息…" : "返回最新消息"}
+                </button>
+              )}
+              {currentWindow.nextBefore && (
                 <button
                   className="load-older-button"
                   type="button"
                   onClick={loadOlder}
-                  disabled={loadingOlder}
+                  disabled={loadingOlder || loadingLatest}
                 >
                   {loadingOlder ? "正在读取…" : "加载更早消息"}
                 </button>

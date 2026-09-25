@@ -86,6 +86,20 @@ let history: Map<string, FixtureMessage[]>;
 let sessionStatus: number;
 let fetchMock: ReturnType<typeof vi.fn>;
 let posts: Array<{ channelId: string; text: string }>;
+let nextPostGate: {
+  started: Promise<void>;
+  signalStarted: () => void;
+  waiting: Promise<void>;
+  release: () => void;
+} | null;
+
+function delayNextPost(): { started: Promise<void>; release: () => void } {
+  let signalStarted!: () => void, release!: () => void;
+  const started = new Promise<void>((resolve) => (signalStarted = resolve));
+  const waiting = new Promise<void>((resolve) => (release = resolve));
+  nextPostGate = { started, signalStarted, waiting, release };
+  return { started, release };
+}
 
 function message(channelId: string, id: string, text: string, order: string): FixtureMessage {
   return {
@@ -119,12 +133,37 @@ function installFetch(): void {
       const channelId = decodeURIComponent(match[1]!);
       if (init?.method === "POST") {
         const body = JSON.parse(String(init.body)) as { text: string };
-        const created = message(channelId, `message-${posts.length + 1}`, body.text, "1");
+        const current = history.get(channelId) ?? [];
+        const lastOrder = current.at(-1)?.order ?? "0";
+        const created = message(
+          channelId,
+          `message-${posts.length + 1}`,
+          body.text,
+          String(BigInt(lastOrder) + 1n),
+        );
         posts.push({ channelId, text: body.text });
-        history.set(channelId, [...(history.get(channelId) ?? []), created]);
+        history.set(channelId, [...current, created]);
+        const gate = nextPostGate;
+        if (gate) {
+          nextPostGate = null;
+          gate.signalStarted();
+          await gate.waiting;
+        }
         return json(201, created);
       }
-      return json(200, { messages: history.get(channelId) ?? [], nextBefore: null });
+      const messages = history.get(channelId) ?? [],
+        urlValue = new URL(url, "http://mate.test"),
+        before = urlValue.searchParams.get("before"),
+        limit = Number(urlValue.searchParams.get("limit") ?? 50),
+        eligible =
+          before === null
+            ? messages
+            : messages.filter((entry) => BigInt(entry.order) < BigInt(before)),
+        page = eligible.slice(-limit);
+      return json(200, {
+        messages: page,
+        nextBefore: eligible.length > page.length ? (page[0]?.order ?? null) : null,
+      });
     }
     return json(404, { error: "missing fixture route" });
   });
@@ -148,6 +187,7 @@ beforeEach(() => {
   ]);
   sessionStatus = 200;
   posts = [];
+  nextPostGate = null;
   TestEventSource.instances = [];
   installFetch();
   vi.mocked(redirectToLogin).mockClear();
@@ -186,6 +226,24 @@ it("keeps channel drafts separate and clears only the successfully sent draft", 
   ).toBe("公开草稿");
 });
 
+it("preserves text typed during an in-flight send after the submitted message succeeds", async () => {
+  const user = await openChat();
+  const draft = screen.getByRole("textbox", { name: "发送到 公开频道" });
+  await user.type(draft, "提交 A");
+  const gate = delayNextPost();
+
+  await user.click(screen.getByRole("button", { name: "发送" }));
+  await gate.started;
+  await user.type(draft, "期间输入 B");
+  gate.release();
+
+  expect(await screen.findByText("提交 A")).not.toBeNull();
+  expect(posts).toEqual([{ channelId: publicChannel.id, text: "提交 A" }]);
+  expect(
+    (screen.getByRole("textbox", { name: "发送到 公开频道" }) as HTMLTextAreaElement).value,
+  ).toBe("提交 A期间输入 B");
+});
+
 it("loads history only for the selected channel and drops inactive live messages", async () => {
   const user = await openChat();
   const stream = TestEventSource.instances[0]!;
@@ -215,6 +273,54 @@ it("loads history only for the selected channel and drops inactive live messages
   await user.click(screen.getByRole("button", { name: /公开频道/ }));
   await screen.findByRole("heading", { name: "公开频道" });
   expect(screen.queryByText("当前频道实时消息")).toBeNull();
+});
+
+it("bounds the loaded window while preserving older-page and return-to-latest navigation", async () => {
+  history.set(
+    publicChannel.id,
+    Array.from({ length: 200 }, (_, index) =>
+      message(publicChannel.id, `history-${index + 1}`, `历史消息 ${index + 1}`, String(index + 1)),
+    ),
+  );
+  const user = await openChat();
+
+  for (const firstOrder of [101, 51, 1]) {
+    await user.click(await screen.findByRole("button", { name: "加载更早消息" }));
+    expect(await screen.findByText(`历史消息 ${firstOrder}`)).not.toBeNull();
+  }
+  expect(document.querySelectorAll(".message-row")).toHaveLength(200);
+  expect(screen.getByText("历史消息 1")).not.toBeNull();
+  expect(screen.getByText("历史消息 200")).not.toBeNull();
+
+  const liveMessages = Array.from({ length: 5 }, (_, index) => {
+    const order = index + 201;
+    return message(publicChannel.id, `live-${order}`, `实时消息 ${order}`, String(order));
+  });
+  history.set(publicChannel.id, [...(history.get(publicChannel.id) ?? []), ...liveMessages]);
+  act(() => {
+    liveMessages.forEach((payload, index) => {
+      TestEventSource.instances[0]!.emit("message.created", {
+        seq: index + 1,
+        kind: "message.created",
+        channelId: publicChannel.id,
+        payload,
+      });
+    });
+  });
+
+  await waitFor(() => expect(document.querySelectorAll(".message-row")).toHaveLength(200));
+  expect(screen.queryByText("历史消息 1")).toBeNull();
+  expect(screen.getByText("历史消息 6")).not.toBeNull();
+  expect(screen.getByText("实时消息 205")).not.toBeNull();
+
+  await user.click(await screen.findByRole("button", { name: "加载更早消息" }));
+  expect(await screen.findByText("历史消息 1")).not.toBeNull();
+  expect(screen.getByRole("button", { name: "返回最新消息" })).not.toBeNull();
+  await user.click(screen.getByRole("button", { name: "返回最新消息" }));
+  expect(await screen.findByText("历史消息 156")).not.toBeNull();
+  expect(screen.getByText("实时消息 205")).not.toBeNull();
+  expect(screen.queryByText("历史消息 1")).toBeNull();
+  expect(document.querySelectorAll(".message-row")).toHaveLength(50);
 });
 
 it("clears private chat and requests login when session revalidation gets 401", async () => {
