@@ -2,6 +2,9 @@ import Database from "better-sqlite3";
 import { existsSync, statSync } from "node:fs";
 import { FORMAT_APPLICATION_ID, FORMAT_REVISION, currentFormatSchema } from "./current-schema.js";
 
+const CONTROL_PLANE_APPLICATION_ID = 0x4d43504c;
+const CONTROL_PLANE_FORMAT_REVISION = 1;
+
 const moveAside =
   "Mate does not migrate or erase a database it does not recognise: if this file was not created by this release, move it aside and point runtime.dataDir at a new, empty directory.";
 const repair =
@@ -51,6 +54,98 @@ export function openCurrentDatabase(path: string): Database.Database {
   db.pragma("journal_mode = WAL");
   db.pragma("synchronous = FULL");
   return db;
+}
+
+/** Open the private control-plane database through the same writable SQLite boundary. */
+export function openControlPlaneDatabase(path: string, schema: string): Database.Database {
+  const empty = !existsSync(path) || statSync(path).size === 0,
+    db = openWritable(path);
+  try {
+    if (empty) createControlPlaneFormat(db, path, schema);
+    else acceptControlPlaneFormat(db, path, schema);
+  } catch (error) {
+    db.close();
+    throw error;
+  }
+  db.pragma("journal_mode = WAL");
+  db.pragma("synchronous = FULL");
+  return db;
+}
+
+function createControlPlaneFormat(db: Database.Database, path: string, schema: string): void {
+  try {
+    db.transaction(() => {
+      db.exec(schema);
+      db.pragma(`application_id = ${CONTROL_PLANE_APPLICATION_ID}`);
+      db.pragma(`user_version = ${CONTROL_PLANE_FORMAT_REVISION}`);
+    }).immediate();
+  } catch (error) {
+    // Another startup may have created this database between the empty check and write.
+    try {
+      if (controlPlaneVerdict(db, schema).kind === "current") return;
+    } catch {
+      // Keep the original creation error when the competing database is unreadable.
+    }
+    throw error instanceof Error
+      ? new Error(`Cannot initialize Mate control-plane database at ${path}: ${error.message}`)
+      : error;
+  }
+}
+
+function acceptControlPlaneFormat(db: Database.Database, path: string, schema: string): void {
+  let found: Verdict;
+  try {
+    found = controlPlaneVerdict(db, schema);
+  } catch (cause) {
+    throw unreadable(path, cause);
+  }
+  switch (found.kind) {
+    case "current":
+      return;
+    case "foreign":
+      throw new UnsupportedDatabaseError(
+        path,
+        `${path} is not a Mate control-plane database (application id ${found.applicationId}, schema revision ${found.revision}). ${moveAside}`,
+      );
+    case "revision":
+      throw new UnsupportedDatabaseError(
+        path,
+        `${path} uses control-plane schema revision ${found.revision}; this release uses revision ${CONTROL_PLANE_FORMAT_REVISION}. ${moveAside}`,
+      );
+    case "incomplete":
+      throw new UnsupportedDatabaseError(
+        path,
+        `${path} claims control-plane schema revision ${CONTROL_PLANE_FORMAT_REVISION} but is missing ${found.missing.join(", ")}. ${repair}`,
+      );
+  }
+}
+
+function controlPlaneVerdict(db: Database.Database, schema: string): Verdict {
+  const template = new Database(":memory:");
+  try {
+    template.exec(schema);
+    const expected = databaseObjects(template);
+    if (!expected.size) throw new Error("Control-plane schema declares no structures");
+    const applicationId = Number(db.pragma("application_id", { simple: true })),
+      revision = Number(db.pragma("user_version", { simple: true })),
+      objects = databaseObjects(db);
+    if (applicationId !== CONTROL_PLANE_APPLICATION_ID)
+      return { kind: "foreign", applicationId, revision };
+    if (revision !== CONTROL_PLANE_FORMAT_REVISION) return { kind: "revision", revision };
+    const missing = [...expected]
+      .filter((object) => !objects.has(object))
+      .map((object) => object.replace(":", " "));
+    return missing.length ? { kind: "incomplete", missing } : { kind: "current" };
+  } finally {
+    template.close();
+  }
+}
+
+function databaseObjects(db: Database.Database): Set<string> {
+  const objects = db
+    .prepare("SELECT type,name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'")
+    .all() as { type: string; name: string }[];
+  return new Set(objects.map((row) => `${row.type}:${row.name}`));
 }
 
 function openWritable(path: string): Database.Database {

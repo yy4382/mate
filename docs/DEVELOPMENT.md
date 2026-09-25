@@ -12,6 +12,17 @@ pnpm typecheck
 
 根工作区包含控制面 HTTP 服务，`apps/web` 是 Vite/React 网页。网页和控制面可以分别构建：`pnpm run build:web`、`pnpm run build:control-plane`。完整构建会将网页复制到控制面产物，由 Hono 服务同源提供页面和 API：
 
+控制面状态目录由绝对路径环境变量 `MATE_CONTROL_PLANE_DATA_DIR` 指定。服务在目录中创建自己的 `control-plane.sqlite`，目录权限设为 `0700`，数据库文件设为 `0600`。所有者首次登录前还需设置 `MATE_OWNER_PASSWORD_FILE`，让它指向一个普通文件；该文件必须只有服务账号可读，密码为 12 到 1024 个 UTF-8 字节。服务只在数据库尚无所有者密码哈希时读取该文件，将密码保存为 Argon2id 哈希；哈希存在后启动和登录都不再需要明文文件。控制面进程可通过 systemd credential 等受保护方式取得该文件路径。
+
+空数据库没有密码文件或文件权限不合要求时，登录返回配置错误，私有页面和 API 仍拒绝访问；公开状态页继续可用。网页不会提供未认证的密码初始化入口，也不会生成默认密码。开发时可先建立一个权限为 `0600` 的临时密码文件并设置这两个环境变量：
+
+```sh
+export MATE_CONTROL_PLANE_DATA_DIR=/ABSOLUTE/PATH/mate-control
+export MATE_OWNER_PASSWORD_FILE=/ABSOLUTE/PATH/owner-password
+```
+
+根路径仍显示公开服务状态；`/login` 是所有者登录页，`/app` 及 `/api/owner/*` 需要有效会话。登录 cookie 具有 `Secure`、`HttpOnly`、`SameSite=Lax` 和 `__Host-` 约束；本机浏览器验证请通过 HTTPS 或浏览器认可的 loopback origin。
+
 ```sh
 pnpm run build
 pnpm start:control-plane

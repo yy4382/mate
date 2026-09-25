@@ -33,6 +33,15 @@ body {
   box-shadow: 0 12px 40px rgb(47 49 39 / 7%);
 }
 
+.auth-card {
+  width: min(100%, 440px);
+  padding: 40px;
+  border: 1px solid #e3e0d8;
+  border-radius: 16px;
+  background: #fffefa;
+  box-shadow: 0 12px 40px rgb(47 49 39 / 7%);
+}
+
 .eyebrow {
   margin: 0 0 12px;
   color: #71796a;
@@ -81,8 +90,86 @@ h1 {
   font-size: 13px;
 }
 
+.auth-form {
+  display: grid;
+  gap: 12px;
+}
+
+.auth-form label {
+  color: #41453f;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.auth-form input {
+  width: 100%;
+  min-height: 48px;
+  padding: 0 13px;
+  border: 1px solid #d9d7ce;
+  border-radius: 9px;
+  background: #fff;
+  color: #222521;
+  font: inherit;
+}
+
+.auth-form input:focus-visible,
+button:focus-visible,
+.button-link:focus-visible,
+.subtle-link:focus-visible {
+  outline: 3px solid #849b70;
+  outline-offset: 2px;
+}
+
+button,
+.button-link {
+  display: inline-flex;
+  min-height: 46px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 9px;
+  background: #344d2d;
+  color: #fffefa;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 650;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.status-login {
+  width: 100%;
+  margin-top: 24px;
+}
+
+.auth-card > button {
+  width: 100%;
+  margin-top: 22px;
+}
+
+.subtle-link {
+  display: inline-block;
+  margin-top: 18px;
+  color: #52634b;
+  font-size: 13px;
+  text-underline-offset: 3px;
+}
+
+.form-error {
+  margin: 2px 0;
+  color: #9c3e2e;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 @media (max-width: 520px) {
-  .status-card {
+  .status-card,
+  .auth-card {
     padding: 30px 24px;
   }
 
