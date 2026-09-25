@@ -1,6 +1,6 @@
 # Mate 产品方向
 
-2026-09-25。本文定义首个可用版本的目标行为；当前代码是否已实现，以源码、测试和配置为准。设计决策见 [ADR-0001](adr/0001-linux-users-for-agent-execution.md)、[ADR-0002](adr/0002-first-release-compatibility-reset.md) 和 [ADR-0003](adr/0003-web-control-plane-and-linux-nodes.md)。开发流程与停止条件见 [AGENTS.md](../AGENTS.md)。
+2026-09-25。本文定义首个可用版本的目标行为；当前代码是否已实现，以源码、测试和配置为准。完整目标规格见[网页控制面与 Linux 节点 spec](https://github.com/yy4382/mate/issues/70)。设计决策见 [ADR-0001](adr/0001-linux-users-for-agent-execution.md)、[ADR-0002](adr/0002-first-release-compatibility-reset.md) 和 [ADR-0003](adr/0003-web-control-plane-and-linux-nodes.md)。开发流程与停止条件见 [AGENTS.md](../AGENTS.md)。
 
 首版必须能部署在低资源 Linux VPS，以 Mate 自己的中文网页操作，并用独立的非特权 Linux 用户隔离每个 Agent。控制面和节点作为两个服务运行；同机部署、Linux 权限与进程隔离的原生验证属于首版。远程 Linux 节点应能手动配对使用，但跨机部署不作为首版验收范围。
 

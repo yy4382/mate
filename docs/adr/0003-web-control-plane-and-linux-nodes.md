@@ -6,4 +6,4 @@ Mate 的所有者需要在一个地方交流、查看任务和运行状态、审
 
 首版验收同一台低资源 Linux VPS 上的两个 systemd 服务、Caddy HTTPS、Linux 用户隔离和协调备份恢复。远程 Linux 节点可以手动配对，但跨机部署不作为首版验收；macOS 不提供不隔离的节点。首版不支持 Slack 操作路径、旧数据迁移、Agent 跨节点迁移或模型用量统计。旧实现、配置、测试和当前运维说明在相应新路径交付时移除，不长期保留两套运行方式。
 
-完整目标行为与验收边界见 [产品方向](../PROJECT_DIRECTION.md)和本轮经设计审查的规格；Linux 隔离原因见 [ADR-0001](0001-linux-users-for-agent-execution.md)，首版兼容性取舍见 [ADR-0002](0002-first-release-compatibility-reset.md)。
+完整目标行为与验收边界见 [产品方向](../PROJECT_DIRECTION.md)和[经设计审查的规格](https://github.com/yy4382/mate/issues/70)；Linux 隔离原因见 [ADR-0001](0001-linux-users-for-agent-execution.md)，首版兼容性取舍见 [ADR-0002](0002-first-release-compatibility-reset.md)。
