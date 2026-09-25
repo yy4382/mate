@@ -5,6 +5,7 @@ import { modelCredentialSchema } from "./model-credentials.js";
 import {
   agentJournalReplaySchema,
   agentRunBatchSchemaV9,
+  agentRunContextHistorySchemaV10,
   agentRunSchemaV7,
 } from "./agent-runs-schema.js";
 
@@ -23,8 +24,9 @@ export const controlPlaneSchemaV7 = `${controlPlaneSchemaV6}\n${agentRunSchemaV7
 /** The private control-plane format after exact journal replay tracking. */
 export const controlPlaneSchemaV8 = `${controlPlaneSchemaV7}\n${agentJournalReplaySchema}`;
 
-/** The current private control-plane database format with fixed run input boundaries. */
-export const controlPlaneSchema = `${controlPlaneSchemaV8}\n${agentRunBatchSchemaV9}`;
+/** The private control-plane database format with separate run-history and input snapshots. */
+export const controlPlaneSchemaV9 = `${controlPlaneSchemaV8}\n${agentRunBatchSchemaV9}`;
+export const controlPlaneSchema = `${controlPlaneSchemaV9}\n${agentRunContextHistorySchemaV10}`;
 
 export const controlPlaneMigrations = [
   {
@@ -66,7 +68,14 @@ export const controlPlaneMigrations = [
     fromRevision: 8,
     toRevision: 9,
     previousSchema: controlPlaneSchemaV8,
-    nextSchema: controlPlaneSchema,
+    nextSchema: controlPlaneSchemaV9,
     migrationSchema: agentRunBatchSchemaV9,
+  },
+  {
+    fromRevision: 9,
+    toRevision: 10,
+    previousSchema: controlPlaneSchemaV9,
+    nextSchema: controlPlaneSchema,
+    migrationSchema: agentRunContextHistorySchemaV10,
   },
 ] as const;

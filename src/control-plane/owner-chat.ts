@@ -60,6 +60,12 @@ export interface AgentSessionJournalPage {
   nextAfter: number | null;
 }
 
+export interface AgentRunContextPage {
+  messages: AgentSessionJournalEntry[];
+  /** Projection-order cursor; each message sequence remains its original journal value. */
+  nextCursor: number | null;
+}
+
 export interface OwnerChatSnapshot {
   channels: OwnerChannel[];
   cursor: number;
@@ -504,6 +510,104 @@ export class OwnerChat {
     return {
       messages,
       nextAfter: hasMore ? (messages.at(-1)?.sequence ?? after) : null,
+    };
+  }
+
+  listAgentRunContext(
+    agentId: string,
+    cursor: number,
+    limit: number,
+    historyThroughSequence: number,
+    channelId: string,
+    inputFromSequence: number,
+    inputThroughSequence: number,
+  ): AgentRunContextPage {
+    if (
+      !Number.isSafeInteger(cursor) ||
+      cursor < 0 ||
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      limit > 100 ||
+      !Number.isSafeInteger(historyThroughSequence) ||
+      historyThroughSequence < 0 ||
+      !Number.isSafeInteger(inputFromSequence) ||
+      inputFromSequence < 1 ||
+      !Number.isSafeInteger(inputThroughSequence) ||
+      inputThroughSequence < inputFromSequence
+    )
+      throw new Error("Agent run context cursor is invalid");
+    const rows = this.db
+      .prepare(
+        `WITH run_context AS (
+           SELECT j.seq AS journal_sequence,j.role,j.text,j.channel_id,c.visibility,
+                  0 AS entry_group,0 AS current_run_input
+           FROM owner_agent_session_journal j
+           JOIN owner_agent_sessions s ON s.id=j.session_id AND s.agent_id=@agent_id
+           JOIN owner_channels c ON c.id=j.channel_id
+           WHERE j.agent_id=@agent_id AND j.seq<=@history_end_seq
+             AND (
+               (j.role='user' AND EXISTS (
+                 SELECT 1 FROM owner_message_deliveries d
+                 WHERE d.recipient_kind='agent' AND d.recipient_id=@agent_id
+                   AND d.message_id=j.message_id AND d.state='handled'
+               ))
+               OR (j.role='assistant' AND EXISTS (
+                 SELECT 1 FROM owner_agent_runs r
+                 WHERE r.id=j.run_id AND r.agent_id=@agent_id AND r.state='completed'
+               ))
+             )
+           UNION ALL
+           SELECT j.seq AS journal_sequence,j.role,j.text,j.channel_id,c.visibility,
+                  1 AS entry_group,1 AS current_run_input
+           FROM owner_agent_session_journal j
+           JOIN owner_agent_sessions s ON s.id=j.session_id AND s.agent_id=@agent_id
+           JOIN owner_channels c ON c.id=j.channel_id
+           JOIN owner_message_deliveries d
+             ON d.message_id=j.message_id AND d.channel_id=j.channel_id
+                AND d.recipient_kind='agent' AND d.recipient_id=@agent_id
+           WHERE j.agent_id=@agent_id AND j.role='user' AND d.state='pending'
+             AND j.channel_id=@channel_id
+             AND j.seq>=@input_start_seq AND j.seq<=@input_end_seq
+         ), ordered_context AS (
+           SELECT ROW_NUMBER() OVER (ORDER BY entry_group,journal_sequence) AS context_position,
+                  journal_sequence,role,text,channel_id,visibility,current_run_input
+           FROM run_context
+         )
+         SELECT context_position,journal_sequence,role,text,channel_id,visibility,current_run_input
+         FROM ordered_context
+         WHERE context_position>@cursor
+         ORDER BY context_position LIMIT @limit`,
+      )
+      .all({
+        agent_id: agentId,
+        history_end_seq: historyThroughSequence,
+        channel_id: channelId,
+        input_start_seq: inputFromSequence,
+        input_end_seq: inputThroughSequence,
+        cursor,
+        limit: limit + 1,
+      }) as Array<{
+      context_position: number;
+      journal_sequence: number;
+      role: "user" | "assistant";
+      text: string;
+      channel_id: string;
+      visibility: ChannelVisibility;
+      current_run_input: number;
+    }>;
+    const hasMore = rows.length > limit,
+      pageRows = rows.slice(0, limit),
+      messages = pageRows.map((row) => ({
+        sequence: row.journal_sequence,
+        role: row.role,
+        text: row.text,
+        sourceChannelId: row.channel_id,
+        sourceVisibility: row.visibility,
+        currentRunInput: row.current_run_input === 1,
+      }));
+    return {
+      messages,
+      nextCursor: hasMore ? (pageRows.at(-1)?.context_position ?? cursor) : null,
     };
   }
 

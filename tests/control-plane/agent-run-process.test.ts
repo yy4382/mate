@@ -19,6 +19,22 @@ import { WebSocket, WebSocketServer, type RawData } from "ws";
 
 const ownerPassword = "agent-run-process-owner-password";
 
+interface StartedAgentRun {
+  runId: string;
+  channelId: string;
+  sessionId: string;
+}
+
+interface InspectedPiMessage {
+  role: string;
+  content: string | Array<{ type: string; text?: string }>;
+}
+
+interface InspectedPiContext {
+  systemPrompt: string;
+  messages: InspectedPiMessage[];
+}
+
 class ProcessOutput {
   text = "";
   exitStatus: { code: number | null; signal: NodeJS.Signals | null } | undefined;
@@ -95,6 +111,26 @@ async function within<T>(promise: Promise<T>, label: string, timeoutMs = 8000): 
       throw new Error(`Timed out waiting for ${label}`);
     }),
   ]);
+}
+
+async function waitForStartedRun(
+  runs: StartedAgentRun[],
+  channelId: string,
+  fromIndex: number,
+): Promise<StartedAgentRun> {
+  const deadline = Date.now() + 8000;
+  while (Date.now() < deadline) {
+    const run = runs.slice(fromIndex).find((candidate) => candidate.channelId === channelId);
+    if (run) return run;
+    await delay(10);
+  }
+  throw new Error("Expected an Agent run for the selected source channel");
+}
+
+function inspectedContent(message: InspectedPiMessage): string {
+  return typeof message.content === "string"
+    ? message.content
+    : message.content.map((part) => (part.type === "text" ? (part.text ?? "") : "")).join("");
 }
 
 function rawText(data: RawData): string {
@@ -291,7 +327,10 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
     secondAcknowledgements = 0,
     nodeResults = 0,
     credentialCancelCount = 0,
+    recoveryChannelId = "",
+    droppedRecoveryContext = false,
     storedAck: string | undefined;
+  const runStarts: StartedAgentRun[] = [];
   const firstJournalDropped = deferred<void>(),
     secondRunStarted = deferred<void>(),
     duplicateJournalAcked = deferred<void>(),
@@ -305,6 +344,9 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
     thirdRunStarted = deferred<void>(),
     credentialCancelSent = deferred<void>(),
     fourthRunStarted = deferred<void>();
+  const recoveryContextDropped = deferred<void>(),
+    recoveryRunIds: string[] = [],
+    recoveryContextResponses: string[] = [];
   const fifthRunStarted = deferred<void>();
   const sixthRunStarted = deferred<void>();
   const seventhRunStarted = deferred<void>();
@@ -332,6 +374,7 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
           type?: string;
           runId?: string;
           agentId?: string;
+          channelId?: string;
           sessionId?: string;
           requestId?: string;
           [key: string]: unknown;
@@ -390,6 +433,7 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
         let message: {
           type?: string;
           runId?: string;
+          channelId?: string;
           sessionId?: string;
           requestId?: string;
           accepted?: boolean;
@@ -399,6 +443,19 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
           message = JSON.parse(text) as typeof message;
         } catch {
           return;
+        }
+        if (
+          message.type === "control.agent.run.context" &&
+          recoveryRunIds.includes(String(message.runId))
+        ) {
+          recoveryContextResponses.push(text);
+          if (!droppedRecoveryContext) {
+            droppedRecoveryContext = true;
+            recoveryContextDropped.resolve();
+            nodeSocket.terminate();
+            upstream.terminate();
+            return;
+          }
         }
         if (message.type === "control.authenticated" || message.type === "control.paired") {
           authenticatedConnections++;
@@ -414,6 +471,14 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
           }
         }
         if (message.type === "control.agent.run") {
+          if (message.runId && message.channelId && message.sessionId)
+            runStarts.push({
+              runId: message.runId,
+              channelId: message.channelId,
+              sessionId: message.sessionId,
+            });
+          if (recoveryChannelId && message.channelId === recoveryChannelId && message.runId)
+            recoveryRunIds.push(message.runId);
           if (message.sessionId) runSessionIds.push(message.sessionId);
           if (!firstRunId) firstRunId = String(message.runId);
           else if (!secondRunId) {
@@ -953,6 +1018,179 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
     });
     await waitForRunState(directory, tenthRunId, "completed");
     expect(databaseState(directory)).toMatchObject({ pending: 0, handled: 6 });
+
+    stage = "archive earlier and unrelated pending sources before a later handled turn";
+    expect(await deleteCredential(currentOrigin, cookie)).toBe(204);
+    const archivedSourceInput = await fetch(
+      new URL(`/api/owner/channels/${channelId}/messages`, currentOrigin),
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ text: "恢复私信来源 A 的待处理输入。" }),
+      },
+    );
+    expect(archivedSourceInput.status).toBe(201);
+    const archiveSource = await fetch(new URL(`/api/owner/channels/${channelId}`, currentOrigin), {
+      method: "PATCH",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ archived: true }),
+    });
+    expect(archiveSource.status).toBe(200);
+
+    const otherChannelResponse = await fetch(new URL("/api/owner/channels", currentOrigin), {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Another pending source",
+        description: "Synthetic run-context boundary fixture.",
+        visibility: "private",
+      }),
+    });
+    expect(otherChannelResponse.status).toBe(201);
+    const otherChannelId = ((await otherChannelResponse.json()) as { id: string }).id;
+    const membershipDb = new Database(
+      joinPath(directory, "control-plane-data", "control-plane.sqlite"),
+    );
+    try {
+      membershipDb
+        .prepare(
+          "INSERT INTO owner_channel_memberships(channel_id,principal_kind,principal_id,active,joined_at) VALUES(?,'agent',?,1,?)",
+        )
+        .run(otherChannelId, agentId, Date.now());
+    } finally {
+      membershipDb.close();
+    }
+    const otherInput = await fetch(
+      new URL(`/api/owner/channels/${otherChannelId}/messages`, currentOrigin),
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ text: "另一个未处理来源 C 不得混进恢复上下文。" }),
+      },
+    );
+    expect(otherInput.status).toBe(201);
+    const archiveOther = await fetch(
+      new URL(`/api/owner/channels/${otherChannelId}`, currentOrigin),
+      {
+        method: "PATCH",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ archived: true }),
+      },
+    );
+    expect(archiveOther.status).toBe(200);
+
+    const laterInputText = "较晚来源 B 已完成的用户输入。";
+    const sharedCountBeforeLaterInput = (await getMessages(currentOrigin, cookie, sharedChannelId))
+      .messages.length;
+    const laterInput = await fetch(
+      new URL(`/api/owner/channels/${sharedChannelId}/messages`, currentOrigin),
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ text: laterInputText }),
+      },
+    );
+    expect(laterInput.status).toBe(201);
+    const laterRunStart = runStarts.length;
+    expect(await putCredential(currentOrigin, cookie, "synthetic-key-inspect-context")).toBe(204);
+    const laterRun = await waitForStartedRun(runStarts, sharedChannelId, laterRunStart);
+    const laterMessages = await waitForMessageCount(
+      currentOrigin,
+      cookie,
+      sharedChannelId,
+      sharedCountBeforeLaterInput + 2,
+    );
+    await waitForRunState(directory, laterRun.runId, "completed");
+    const laterReply = laterMessages.at(-1)!;
+    expect(laterReply.author).toMatchObject({ kind: "agent", id: agentId });
+    const laterPiContext = JSON.parse(laterReply.text) as InspectedPiContext;
+    const laterPiTranscript = laterPiContext.messages.map(inspectedContent).join("\n");
+    expect(laterPiContext.messages.at(-1)).toMatchObject({ role: "user" });
+    expect(inspectedContent(laterPiContext.messages.at(-1)!)).toContain(laterInputText);
+    expect(laterPiTranscript).not.toContain("恢复私信来源 A 的待处理输入。");
+    expect(laterPiTranscript).not.toContain("另一个未处理来源 C 不得混进恢复上下文。");
+
+    stage = "unarchived source A resumes after handled source B in the same Pi session";
+    const directCountBeforeRecovery = (await getMessages(currentOrigin, cookie, channelId)).messages
+      .length;
+    recoveryChannelId = channelId;
+    const authenticatedBeforeRecovery = authenticatedConnections,
+      recoveryRunStart = runStarts.length;
+    const unarchiveSource = await fetch(
+      new URL(`/api/owner/channels/${channelId}`, currentOrigin),
+      {
+        method: "PATCH",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ archived: false }),
+      },
+    );
+    expect(unarchiveSource.status).toBe(200);
+    const interruptedRecoveryRun = await waitForStartedRun(runStarts, channelId, recoveryRunStart);
+    await within(recoveryContextDropped.promise, "forced disconnect during recovery context");
+    await waitForRunState(directory, interruptedRecoveryRun.runId, "failed");
+    expect(databaseState(directory)).toMatchObject({ pending: 2 });
+    await waitForAuthenticatedConnections(
+      authenticatedBeforeRecovery + 1,
+      () => authenticatedConnections,
+    );
+    const recoveryRun = await waitForStartedRun(runStarts, channelId, recoveryRunStart + 1);
+    expect(recoveryRun.runId).not.toBe(interruptedRecoveryRun.runId);
+    expect(recoveryRun.sessionId).toBe(laterRun.sessionId);
+    const archiveRecoveryMessages = await waitForMessageCount(
+      currentOrigin,
+      cookie,
+      channelId,
+      directCountBeforeRecovery + 1,
+    );
+    await waitForRunState(directory, recoveryRun.runId, "completed");
+    const recoveredReply = archiveRecoveryMessages.at(-1)!;
+    expect(recoveredReply.author).toMatchObject({ kind: "agent", id: agentId });
+    const recoveryPiContext = JSON.parse(recoveredReply.text) as InspectedPiContext;
+    const recoveryEntries = recoveryPiContext.messages.map((message) => ({
+      role: message.role,
+      content: inspectedContent(message),
+    }));
+    const recoveryTranscript = recoveryEntries.map((entry) => entry.content).join("\n"),
+      laterUserIndex = recoveryEntries.findIndex(
+        (entry) => entry.role === "user" && entry.content.includes(laterInputText),
+      ),
+      laterAssistantIndex = recoveryEntries.findIndex(
+        (entry) => entry.role === "assistant" && entry.content.includes(laterReply.text),
+      ),
+      laterUserEntry = recoveryEntries[laterUserIndex],
+      laterAssistantEntry = recoveryEntries[laterAssistantIndex],
+      currentInput = recoveryEntries.at(-1);
+    expect(laterUserIndex).toBeGreaterThanOrEqual(0);
+    expect(laterAssistantIndex).toBeGreaterThan(laterUserIndex);
+    expect(laterUserEntry?.content).toContain(
+      `[消息来源：频道 ${sharedChannelId}；可见范围：私密；历史记录]`,
+    );
+    expect(laterAssistantEntry?.content).toContain(
+      `[消息来源：频道 ${sharedChannelId}；可见范围：私密；历史记录]`,
+    );
+    expect(currentInput?.role).toBe("user");
+    expect(currentInput?.content).toContain(
+      `[消息来源：频道 ${channelId}；可见范围：私密；本次输入]`,
+    );
+    expect(currentInput?.content).toContain("恢复私信来源 A 的待处理输入。");
+    expect(recoveryTranscript).not.toContain("另一个未处理来源 C 不得混进恢复上下文。");
+    expect(recoveryContextResponses).toHaveLength(2);
+    expect((JSON.parse(recoveryContextResponses[1]!) as { messages: unknown[] }).messages).toEqual(
+      (JSON.parse(recoveryContextResponses[0]!) as { messages: unknown[] }).messages,
+    );
+    expect(databaseState(directory)).toMatchObject({ pending: 1 });
+    const journal = databaseJournalEntries(directory, agentId),
+      earlierUser = journal.find((entry) => entry.text === "恢复私信来源 A 的待处理输入。"),
+      laterUser = journal.find((entry) => entry.text === laterInputText),
+      laterAssistant = journal.find((entry) => entry.text === laterReply.text),
+      recoveredAssistant = journal.find((entry) => entry.text === recoveredReply.text);
+    expect(earlierUser?.channel_id).toBe(channelId);
+    expect(laterUser?.channel_id).toBe(sharedChannelId);
+    expect(laterAssistant?.channel_id).toBe(sharedChannelId);
+    expect(recoveredAssistant?.channel_id).toBe(channelId);
+    expect(earlierUser!.sequence).toBeLessThan(laterUser!.sequence);
+    expect(laterUser!.sequence).toBeLessThan(laterAssistant!.sequence);
+    expect(laterAssistant!.sequence).toBeLessThan(recoveredAssistant!.sequence);
   } catch (error) {
     const detail = error instanceof Error ? error.message : "unknown test failure";
     throw new Error(
@@ -992,6 +1230,25 @@ function databaseState(directory: string): {
       handled: delivery?.handled ?? 0,
       failedRuns: runs.count,
     };
+  } finally {
+    db.close();
+  }
+}
+
+function databaseJournalEntries(
+  directory: string,
+  agentId: string,
+): Array<{ sequence: number; role: string; text: string; channel_id: string }> {
+  const db = new Database(joinPath(directory, "control-plane-data", "control-plane.sqlite"), {
+    readonly: true,
+    fileMustExist: true,
+  });
+  try {
+    return db
+      .prepare(
+        "SELECT seq AS sequence,role,text,channel_id FROM owner_agent_session_journal WHERE agent_id=? ORDER BY seq",
+      )
+      .all(agentId) as Array<{ sequence: number; role: string; text: string; channel_id: string }>;
   } finally {
     db.close();
   }

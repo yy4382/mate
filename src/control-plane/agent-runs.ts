@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import type { ModelCredentialDirectory } from "./model-credentials.js";
-import type { AgentSessionJournalPage, OwnerChat } from "./owner-chat.js";
+import type { AgentRunContextPage, OwnerChat } from "./owner-chat.js";
 import { NodeDirectory, type NodeAgentRunStart } from "./nodes/directory.js";
 
 const schedulerIntervalMs = 250;
@@ -21,7 +21,7 @@ interface RunCandidate {
   delivery_id: string;
 }
 
-/** Durable owner-DM run admission and the single run path introduced for the first reply. */
+/** Durable owner-channel run admission and the single primary run path for each Agent. */
 export class AgentRunCoordinator {
   private readonly activeAgents = new Set<string>();
   private readonly timer: ReturnType<typeof setInterval>;
@@ -39,7 +39,8 @@ export class AgentRunCoordinator {
     this.now = now;
     this.recoverInterruptedRuns();
     nodes.setAgentRunHandlers({
-      context: (runId, agentId, after, limit) => this.readRunContext(runId, agentId, after, limit),
+      context: (runId, agentId, cursor, limit) =>
+        this.readRunContext(runId, agentId, cursor, limit),
       journal: (runId, nodeId, agentId, requestId, text, replayOnly) =>
         chat.commitAgentReply(runId, nodeId, agentId, requestId, text, replayOnly),
       result: (runId, agentId, ok, code) => this.finishRun(runId, agentId, ok, code),
@@ -210,8 +211,9 @@ export class AgentRunCoordinator {
           this.db
             .prepare(
               `INSERT INTO owner_agent_runs(
-                 id,agent_id,node_id,delivery_id,state,started_at,input_end_seq
-               ) VALUES(?,?,?,?,'running',?,?)`,
+                 id,agent_id,node_id,delivery_id,state,started_at,input_end_seq,
+                 context_history_end_seq
+               ) VALUES(?,?,?,?,'running',?,?,?)`,
             )
             .run(
               id,
@@ -220,6 +222,7 @@ export class AgentRunCoordinator {
               candidate.delivery_id,
               this.now(),
               Math.max(inputStart.seq, inputEndSequence),
+              maxSequence.seq,
             );
           return id;
         })
@@ -233,15 +236,23 @@ export class AgentRunCoordinator {
   private readRunContext(
     runId: string,
     agentId: string,
-    after: number,
+    cursor: number,
     limit: number,
-  ): AgentSessionJournalPage | undefined {
+  ): AgentRunContextPage | undefined {
     const run = this.db
       .prepare(
-        `SELECT r.input_end_seq,r.delivery_id
-         FROM owner_agent_runs r WHERE r.id=? AND r.agent_id=? AND r.state='running'`,
+        `SELECT r.input_end_seq,r.context_history_end_seq,r.delivery_id,d.channel_id
+         FROM owner_agent_runs r JOIN owner_message_deliveries d ON d.id=r.delivery_id
+         WHERE r.id=? AND r.agent_id=? AND r.state='running'`,
       )
-      .get(runId, agentId) as { input_end_seq: number; delivery_id: string } | undefined;
+      .get(runId, agentId) as
+      | {
+          input_end_seq: number;
+          context_history_end_seq: number;
+          delivery_id: string;
+          channel_id: string;
+        }
+      | undefined;
     if (!run) return undefined;
     const inputStart = this.db
       .prepare(
@@ -252,7 +263,15 @@ export class AgentRunCoordinator {
       )
       .get(run.delivery_id) as { seq: number } | undefined;
     return inputStart
-      ? this.chat.listAgentSessionJournal(agentId, after, limit, run.input_end_seq, inputStart.seq)
+      ? this.chat.listAgentRunContext(
+          agentId,
+          cursor,
+          limit,
+          run.context_history_end_seq,
+          run.channel_id,
+          inputStart.seq,
+          run.input_end_seq,
+        )
       : undefined;
   }
 
@@ -285,4 +304,4 @@ function safeFailureCode(code: string | undefined): string {
   return code && /^[a-z_]{1,40}$/.test(code) ? code : "run_failed";
 }
 
-export type AgentRunContext = AgentSessionJournalPage;
+export type AgentRunContext = AgentRunContextPage;

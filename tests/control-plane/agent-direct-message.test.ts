@@ -182,14 +182,14 @@ it("limits each run to its committed input batch and consumes silent batches", a
         requestId: randomUUID(),
         runId,
         agentId,
-        after: 0,
+        cursor: 0,
         limit: 100,
       }),
     );
     return JSON.parse(socket.sent.at(-1)!) as {
       type: string;
       messages: Array<{ sequence: number; role: string; text: string }>;
-      nextAfter: number | null;
+      nextCursor: number | null;
     };
   };
   expect((await requestContext(firstRun.runId)).messages.map((message) => message.text)).toEqual([
@@ -244,8 +244,8 @@ it("limits each run to its committed input batch and consumes silent batches", a
   expect(secondContext.messages.map((message) => message.text)).toEqual([
     "同一来源批次中的第一条频道输入。",
     "同一来源批次中的第二条频道输入。",
-    "运行开始后才到达的下一条频道输入。",
     "第一批次的可见回复。",
+    "运行开始后才到达的下一条频道输入。",
   ]);
   // A successful model turn may choose silence; the batch is still committed as processed.
   await app.nodes.receive(
@@ -316,7 +316,7 @@ it("keeps a later private input out of a public channel run", async () => {
         requestId: randomUUID(),
         runId,
         agentId,
-        after: 0,
+        cursor: 0,
         limit: 100,
       }),
     );
@@ -394,18 +394,18 @@ it("keeps a later private input out of a public channel run", async () => {
       currentRunInput: false,
     },
     {
-      role: "user",
-      text: "这条私信不能进入公开回复。",
-      sourceChannelId: direct.id,
-      sourceVisibility: "private",
-      currentRunInput: true,
-    },
-    {
       role: "assistant",
       text: "只回应公开频道输入。",
       sourceChannelId: publicRoom.id,
       sourceVisibility: "public",
       currentRunInput: false,
+    },
+    {
+      role: "user",
+      text: "这条私信不能进入公开回复。",
+      sourceChannelId: direct.id,
+      sourceVisibility: "private",
+      currentRunInput: true,
     },
   ]);
   await writeReply(privateRun.runId, "私信输入在私信里得到回复。");
@@ -657,7 +657,7 @@ it("does not let an archived earlier source block or join a later source run", a
         requestId: randomUUID(),
         runId,
         agentId,
-        after: 0,
+        cursor: 0,
         limit: 100,
       }),
     );
@@ -672,12 +672,6 @@ it("does not let an archived earlier source block or join a later source run", a
   };
   const laterContext = await readContext(laterRun.runId);
   expect(laterContext.messages).toMatchObject([
-    {
-      role: "user",
-      text: "较早来源 A 的待处理私信。",
-      sourceChannelId: earlierSource.id,
-      currentRunInput: false,
-    },
     {
       role: "user",
       text: "后续来源 B 的正常私信。",
@@ -729,6 +723,20 @@ it("does not let an archived earlier source block or join a later source run", a
   expect((await readContext(earlierRun.runId)).messages).toMatchObject([
     {
       role: "user",
+      text: "后续来源 B 的正常私信。",
+      sourceChannelId: direct.id,
+      sourceVisibility: "private",
+      currentRunInput: false,
+    },
+    {
+      role: "assistant",
+      text: "只在来源 B 回复。",
+      sourceChannelId: direct.id,
+      sourceVisibility: "private",
+      currentRunInput: false,
+    },
+    {
+      role: "user",
       text: "较早来源 A 的待处理私信。",
       sourceChannelId: earlierSource.id,
       currentRunInput: true,
@@ -753,4 +761,140 @@ it("does not let an archived earlier source block or join a later source run", a
     text: "来源 A 恢复后得到回复。",
   });
   expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toHaveLength(0);
+});
+
+it("pages handled session history before appending an older pending run input", async () => {
+  const { app, cookie, nodeId, socket } = await setup();
+  const agentId = randomUUID();
+  app.agents.prepare({
+    id: agentId,
+    nodeId,
+    name: "Long-session partner",
+    role: "Continues a shared session",
+    description: "Synthetic projection cursor fixture.",
+    model: { provider: "openai", id: "gpt-4.1" },
+  });
+  app.agents.complete(
+    agentId,
+    {
+      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      uid: 23001,
+      gid: 23001,
+      home: `/var/lib/mate/agents/${agentId}`,
+    },
+    app.chat,
+  );
+  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!,
+    earlierSource = app.chat.createChannel({
+      name: "Older source for projected input",
+      description: "Synthetic pagination fixture.",
+      visibility: "private",
+    });
+  expect(app.chat.inviteAgentToChannel(earlierSource.id, agentId)).toBe(true);
+  const earlierInput = app.chat.createMessage(earlierSource.id, "较早 journal 序号的当前输入。");
+  if (!earlierInput) throw new Error("Expected the archived source input to be created.");
+  const earlierDelivery = app.chat.listPendingDeliveries("agent", agentId).deliveries[0]!;
+  expect(earlierDelivery.messageId).toBe(earlierInput.id);
+  const archive = await app.request(`/api/owner/channels/${earlierSource.id}`, {
+    method: "PATCH",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ archived: true }),
+  });
+  expect(archive.status).toBe(200);
+
+  for (let index = 0; index < 101; index++) {
+    const message = app.chat.createMessage(direct.id, `已处理历史 ${index}.`),
+      delivery = app.chat
+        .listPendingDeliveries("agent", agentId)
+        .deliveries.find((candidate) => candidate.messageId === message?.id);
+    if (!message) throw new Error("Expected the handled history message to be created.");
+    expect(delivery).toBeDefined();
+    expect(app.chat.acknowledgeDelivery(delivery!.id, "agent", agentId)).toBe(true);
+  }
+  const credential = await app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-projection-cursor-key" }),
+  });
+  expect(credential.status).toBe(204);
+  const runStart = socket.sent.length;
+  const unarchive = await app.request(`/api/owner/channels/${earlierSource.id}`, {
+    method: "PATCH",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ archived: false }),
+  });
+  expect(unarchive.status).toBe(200);
+  const run = await waitForRun(socket, runStart);
+  expect(run.channelId).toBe(earlierSource.id);
+
+  const requestPage = async (cursor: number) => {
+    await app.nodes.receive(
+      socket,
+      JSON.stringify({
+        type: "node.agent.run.context",
+        requestId: randomUUID(),
+        runId: run.runId,
+        agentId,
+        cursor,
+        limit: 100,
+      }),
+    );
+    return JSON.parse(socket.sent.at(-1)!) as {
+      messages: Array<{
+        sequence: number;
+        role: string;
+        text: string;
+        sourceChannelId: string;
+        sourceVisibility: string;
+        currentRunInput: boolean;
+      }>;
+      nextCursor: number | null;
+    };
+  };
+  const firstPage = await requestPage(0);
+  expect(firstPage.messages).toHaveLength(100);
+  expect(firstPage.messages[0]).toMatchObject({
+    role: "user",
+    text: "已处理历史 0.",
+    sourceChannelId: direct.id,
+    sourceVisibility: "private",
+    currentRunInput: false,
+  });
+  expect(firstPage.messages.at(-1)?.text).toBe("已处理历史 99.");
+  expect(firstPage.nextCursor).toBe(100);
+  if (firstPage.nextCursor === null) throw new Error("Expected a next context page.");
+
+  const secondPage = await requestPage(firstPage.nextCursor);
+  expect(secondPage.nextCursor).toBeNull();
+  expect(secondPage.messages).toMatchObject([
+    {
+      role: "user",
+      text: "已处理历史 100.",
+      sourceChannelId: direct.id,
+      sourceVisibility: "private",
+      currentRunInput: false,
+    },
+    {
+      role: "user",
+      text: "较早 journal 序号的当前输入。",
+      sourceChannelId: earlierSource.id,
+      sourceVisibility: "private",
+      currentRunInput: true,
+    },
+  ]);
+  expect(secondPage.messages[0]!.sequence).toBeGreaterThan(secondPage.messages[1]!.sequence);
+  expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toMatchObject([
+    { channelId: earlierSource.id, message: { text: "较早 journal 序号的当前输入。" } },
+  ]);
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.agent.run.result",
+      requestId: run.runId,
+      runId: run.runId,
+      agentId,
+      ok: false,
+      code: "model_failed",
+    }),
+  );
 });

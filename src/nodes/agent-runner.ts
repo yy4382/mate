@@ -12,11 +12,12 @@ type AgentRunMessage = Extract<NodeControlMessage, { type: "control.agent.run" }
 
 export interface AgentRunPage {
   messages: ModelContextMessage[];
-  nextAfter: number | null;
+  nextCursor: number | null;
 }
 
 export interface AgentRunTransport {
-  context(after: number, signal: AbortSignal): Promise<AgentRunPage>;
+  /** Cursor addresses the run-context projection, not an individual journal sequence. */
+  context(cursor: number, signal: AbortSignal): Promise<AgentRunPage>;
   journal(text: string, signal: AbortSignal): Promise<boolean>;
   result(
     ok: boolean,
@@ -61,13 +62,13 @@ export async function runAgentModel(
     });
     apiKey = "";
     const messages: ModelContextMessage[] = [];
-    let after = 0;
+    let cursor = 0;
     while (true) {
-      const page = await transport.context(after, connectionSignal);
+      const page = await transport.context(cursor, connectionSignal);
       messages.push(...page.messages);
-      if (page.nextAfter === null) break;
-      if (page.nextAfter <= after) throw new Error("Invalid Agent session page");
-      after = page.nextAfter;
+      if (page.nextCursor === null) break;
+      if (page.nextCursor <= cursor) throw new Error("Invalid Agent session page");
+      cursor = page.nextCursor;
     }
     if (!messages.length) throw new Error("Agent session context is empty");
     await worker.run({ runId, sessionId, messages, outputChannel, prompt });

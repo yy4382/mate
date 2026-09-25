@@ -82,7 +82,7 @@ export const NodeRequestSchema = z.discriminatedUnion("type", [
       requestId: requestIdSchema,
       runId: requestIdSchema,
       agentId: agentIdSchema,
-      after: z.number().int().nonnegative(),
+      cursor: z.number().int().nonnegative(),
       limit: z.number().int().min(1).max(100),
     })
     .strict(),
@@ -192,7 +192,7 @@ export const NodeControlMessageSchema = z.discriminatedUnion("type", [
           })
           .strict(),
       ),
-      nextAfter: z.number().int().positive().nullable(),
+      nextCursor: z.number().int().positive().nullable(),
     })
     .strict(),
   z

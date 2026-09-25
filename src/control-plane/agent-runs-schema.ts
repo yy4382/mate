@@ -71,4 +71,9 @@ WHERE d.recipient_kind='agent' AND m.author_kind='human'
 ORDER BY d.seq;
 `;
 
+/** Snapshot the handled-session history separately from the current pending run batch. */
+export const agentRunContextHistorySchemaV10 = `
+ALTER TABLE owner_agent_runs ADD COLUMN context_history_end_seq INTEGER NOT NULL DEFAULT 0;
+`;
+
 export const agentRunSchema = `${agentRunSchemaV7}\n${agentJournalReplaySchema}\n${agentRunBatchSchemaV9}`;

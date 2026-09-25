@@ -326,7 +326,7 @@ function connectOnce(
         const pending = pendingRunContexts.get(message.requestId);
         if (!pending || pending.runId !== message.runId) return;
         pendingRunContexts.delete(message.requestId);
-        pending.resolve({ messages: message.messages, nextAfter: message.nextAfter });
+        pending.resolve({ messages: message.messages, nextCursor: message.nextCursor });
         return;
       }
       if (message.type === "control.agent.run.journal_ack") {
@@ -367,7 +367,7 @@ function connectOnce(
         void runAgentModel(
           message,
           {
-            context: (after, runSignal) => requestAgentContext(runId, agentId, after, runSignal),
+            context: (cursor, runSignal) => requestAgentContext(runId, agentId, cursor, runSignal),
             journal: (text, runSignal) => requestAgentJournal(runId, agentId, text, runSignal),
             result: (ok, code) => sendRunResult(runId, agentId, ok, code),
           },
@@ -406,11 +406,11 @@ function connectOnce(
     function requestAgentContext(
       runId: string,
       agentId: string,
-      after: number,
+      cursor: number,
       runSignal: AbortSignal,
     ): Promise<AgentRunPage> {
       const request = makeAgentRunRequest("node.agent.run.context", runId, agentId, {
-        after,
+        cursor,
         limit: 100,
       });
       const requestId = request.requestId;

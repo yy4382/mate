@@ -187,7 +187,7 @@ it("migrates paired-node control-plane data and enables Agent foreign keys", () 
 
   const auth = new OwnerAuth({ dataDir: directory });
   try {
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(9);
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(10);
     expect(auth.db.pragma("foreign_keys", { simple: true })).toBe(1);
     expect(auth.db.prepare("SELECT id FROM nodes").get()).toEqual({
       id: "c5342142-9cf5-4b22-86f3-bdc46bb471f2",
@@ -198,7 +198,7 @@ it("migrates paired-node control-plane data and enables Agent foreign keys", () 
       name: "owner_agents",
     });
     expect(controlPlaneMigrations.map((migration) => migration.fromRevision)).toEqual([
-      3, 4, 5, 6, 7, 8,
+      3, 4, 5, 6, 7, 8, 9,
     ]);
   } finally {
     auth.close();
@@ -243,7 +243,7 @@ it("backfills pending channel deliveries into the shared session journal when up
 
   const auth = new OwnerAuth({ dataDir: directory });
   try {
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(9);
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(10);
     expect(
       auth.db
         .prepare(
@@ -256,6 +256,11 @@ it("backfills pending channel deliveries into the shared session journal when up
     ]);
     expect(
       auth.db.prepare("SELECT input_end_seq FROM owner_agent_runs WHERE id='missing'").get(),
+    ).toBeUndefined();
+    expect(
+      auth.db
+        .prepare("SELECT context_history_end_seq FROM owner_agent_runs WHERE id='missing'")
+        .get(),
     ).toBeUndefined();
   } finally {
     auth.close();

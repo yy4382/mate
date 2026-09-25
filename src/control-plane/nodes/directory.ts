@@ -72,10 +72,11 @@ interface PendingAgentRun {
 }
 
 export interface AgentRunHandlers {
+  /** Cursor is the per-run context projection position, not a persistent journal sequence. */
   context(
     runId: string,
     agentId: string,
-    after: number,
+    cursor: number,
     limit: number,
   ):
     | {
@@ -87,7 +88,7 @@ export interface AgentRunHandlers {
           sourceVisibility: "public" | "private";
           currentRunInput: boolean;
         }>;
-        nextAfter: number | null;
+        nextCursor: number | null;
       }
     | undefined;
   journal(
@@ -551,7 +552,7 @@ export class NodeDirectory {
           ? this.agentRunHandlers?.context(
               request.runId,
               request.agentId,
-              request.after,
+              request.cursor,
               request.limit,
             )
           : undefined;
@@ -563,7 +564,7 @@ export class NodeDirectory {
         requestId: request.requestId,
         runId: request.runId,
         messages: page?.messages ?? [],
-        nextAfter: page?.nextAfter ?? null,
+        nextCursor: page?.nextCursor ?? null,
       });
       return;
     }
