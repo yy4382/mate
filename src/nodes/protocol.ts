@@ -1,6 +1,7 @@
 import { z } from "zod";
 
-const requestIdSchema = z.string().uuid();
+export const NodeRequestIdSchema = z.string().uuid();
+const requestIdSchema = NodeRequestIdSchema;
 const nodeIdSchema = z.string().uuid();
 const signatureSchema = z.string().min(1).max(256);
 

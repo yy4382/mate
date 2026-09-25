@@ -10,7 +10,8 @@ export function startControlPlane(
   appOptions: ControlPlaneAppOptions = {},
 ): ServerType {
   const app = createControlPlaneApp({ ...appOptions, webRoot });
-  const websocketServer = new WebSocketServer({ noServer: true });
+  // Node protocol messages are small (the largest field is a bounded public-key PEM).
+  const websocketServer = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 });
   // The Hono adapter documents ws directly, but its type differs on noServer and send options.
   const websocketServerAdapter = websocketServer as WebSocketServerLike;
   const server = serve({

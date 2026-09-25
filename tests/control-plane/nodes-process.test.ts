@@ -2,14 +2,23 @@ import { spawn, type ChildProcess } from "node:child_process";
 import Database from "better-sqlite3";
 import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { WebSocket as UpstreamWebSocket, WebSocketServer, type RawData } from "ws";
 import { expect, it } from "vitest";
 import { ownerAuthSchema } from "../../src/control-plane/owner-auth-schema.js";
 
 const ownerPassword = "node-process-owner-password-used-only-by-this-test";
+const observedCloses = new WeakMap<WebSocket, CloseEvent>();
+
+function observedWebSocket(url: string | URL): WebSocket {
+  const socket = new WebSocket(url);
+  socket.addEventListener("close", (event) => observedCloses.set(socket, event), { once: true });
+  return socket;
+}
 
 class ProcessOutput {
   text = "";
@@ -129,7 +138,7 @@ async function attemptPairWithExistingId(
 ): Promise<string> {
   const socketUrl = new URL("/api/nodes/connect", origin);
   socketUrl.protocol = "ws:";
-  const socket = new WebSocket(socketUrl);
+  const socket = observedWebSocket(socketUrl);
   return new Promise((resolveResponse, rejectResponse) => {
     let settled = false;
     const timeout = setTimeout(() => finish(new Error("Pairing response timed out")), 5000);
@@ -175,6 +184,363 @@ async function attemptPairWithExistingId(
     });
   });
 }
+
+function waitForSocketOpen(socket: WebSocket, timeoutMs = 5000): Promise<void> {
+  return new Promise((resolveOpen, rejectOpen) => {
+    const timeout = setTimeout(() => finish(new Error("WebSocket open timed out")), timeoutMs);
+    const finish = (error?: Error) => {
+      clearTimeout(timeout);
+      socket.removeEventListener("open", onOpen);
+      socket.removeEventListener("error", onError);
+      socket.removeEventListener("close", onClose);
+      if (error) rejectOpen(error);
+      else resolveOpen();
+    };
+    const onOpen = () => finish();
+    const onError = () => finish(new Error("WebSocket connection failed"));
+    const onClose = () => finish(new Error("WebSocket closed before opening"));
+    socket.addEventListener("open", onOpen, { once: true });
+    socket.addEventListener("error", onError, { once: true });
+    socket.addEventListener("close", onClose, { once: true });
+  });
+}
+
+function waitForSocketClose(socket: WebSocket, timeoutMs = 5000): Promise<CloseEvent> {
+  if (socket.readyState === WebSocket.CLOSED)
+    return Promise.resolve(observedCloses.get(socket) ?? new CloseEvent("close", { code: 1006 }));
+  return new Promise((resolveClose, rejectClose) => {
+    const timeout = setTimeout(() => finish(new Error("WebSocket close timed out")), timeoutMs);
+    const finish = (error?: Error, event?: CloseEvent) => {
+      clearTimeout(timeout);
+      socket.removeEventListener("close", onClose);
+      if (error) rejectClose(error);
+      else resolveClose(event!);
+    };
+    const onClose = (event: CloseEvent) => finish(undefined, event);
+    socket.addEventListener("close", onClose, { once: true });
+  });
+}
+
+async function waitForSocketMessage(
+  socket: WebSocket,
+  matches: (message: Record<string, unknown>) => boolean,
+  timeoutMs = 5000,
+): Promise<Record<string, unknown>> {
+  return new Promise((resolveMessage, rejectMessage) => {
+    const timeout = setTimeout(() => finish(new Error("WebSocket message timed out")), timeoutMs);
+    const finish = (error?: Error, message?: Record<string, unknown>) => {
+      clearTimeout(timeout);
+      socket.removeEventListener("message", onMessage);
+      socket.removeEventListener("close", onClose);
+      if (error) rejectMessage(error);
+      else resolveMessage(message!);
+    };
+    const onMessage = (event: MessageEvent) => {
+      try {
+        const message = JSON.parse(String(event.data)) as Record<string, unknown>;
+        if (matches(message)) finish(undefined, message);
+      } catch {
+        finish(new Error("WebSocket sent invalid JSON"));
+      }
+    };
+    const onClose = () => finish(new Error("WebSocket closed before the expected message"));
+    socket.addEventListener("message", onMessage);
+    socket.addEventListener("close", onClose, { once: true });
+  });
+}
+
+async function pairSocket(origin: string, pairingToken: string): Promise<WebSocket> {
+  const url = new URL("/api/nodes/connect", origin);
+  url.protocol = "ws:";
+  const socket = observedWebSocket(url);
+  await waitForSocketOpen(socket);
+  const challenge = await waitForSocketMessage(
+    socket,
+    (message) => message.type === "control.challenge",
+  );
+  const keyPair = generateKeyPairSync("ed25519", {
+    privateKeyEncoding: { type: "pkcs8", format: "pem" },
+    publicKeyEncoding: { type: "spki", format: "pem" },
+  });
+  socket.send(
+    JSON.stringify({
+      type: "node.pair",
+      requestId: randomUUID(),
+      nodeId: randomUUID(),
+      pairingToken,
+      publicKey: keyPair.publicKey,
+      signature: sign(null, Buffer.from(String(challenge.nonce)), keyPair.privateKey).toString(
+        "base64url",
+      ),
+    }),
+  );
+  await waitForSocketMessage(socket, (message) => message.type === "control.paired");
+  return socket;
+}
+
+async function attemptEd448Pair(origin: string, pairingToken: string): Promise<string> {
+  const url = new URL("/api/nodes/connect", origin);
+  url.protocol = "ws:";
+  const socket = observedWebSocket(url);
+  await waitForSocketOpen(socket);
+  const challenge = await waitForSocketMessage(
+    socket,
+    (message) => message.type === "control.challenge",
+  );
+  const keyPair = generateKeyPairSync("ed448", {
+    privateKeyEncoding: { type: "pkcs8", format: "pem" },
+    publicKeyEncoding: { type: "spki", format: "pem" },
+  });
+  const response = waitForSocketMessage(socket, (message) => message.type === "control.error");
+  socket.send(
+    JSON.stringify({
+      type: "node.pair",
+      requestId: randomUUID(),
+      nodeId: randomUUID(),
+      pairingToken,
+      publicKey: keyPair.publicKey,
+      signature: sign(null, Buffer.from(String(challenge.nonce)), keyPair.privateKey).toString(
+        "base64url",
+      ),
+    }),
+  );
+  const rejected = await response;
+  const closed = waitForSocketClose(socket);
+  await closed;
+  return String(rejected.code);
+}
+
+function rawDataText(data: RawData): string {
+  if (Array.isArray(data)) return Buffer.concat(data).toString("utf8");
+  if (data instanceof ArrayBuffer) return Buffer.from(data).toString("utf8");
+  return Buffer.from(data).toString("utf8");
+}
+
+it("bounds node WebSocket connections and rejects malformed or oversized anonymous traffic", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "mate-node-connection-limits-"));
+  chmodSync(directory, 0o700);
+  const passwordFile = join(directory, "owner-password");
+  writeFileSync(passwordFile, `${ownerPassword}\n`, { mode: 0o600 });
+  const moduleUrl = pathToFileURL(resolve("dist/src/control-plane/main.js")).href;
+  const runner = `const { startControlPlane } = await import(${JSON.stringify(moduleUrl)}); startControlPlane(0, undefined, { dataDir: process.env.MATE_CONTROL_PLANE_DATA_DIR, passwordFile: process.env.MATE_OWNER_PASSWORD_FILE, maxNodeConnections: 3, maxUnauthenticatedNodeConnections: 1, nodeHandshakeTimeoutMs: 1000 });`;
+  const serverChild = spawn(process.execPath, ["--input-type=module", "--eval", runner], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      MATE_CONTROL_PLANE_DATA_DIR: join(directory, "control-plane-data"),
+      MATE_OWNER_PASSWORD_FILE: passwordFile,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const server = new ProcessOutput(serverChild);
+  const pairedSockets: WebSocket[] = [];
+  let rawSocket: WebSocket | undefined;
+
+  try {
+    const listening = await server.waitFor(/MATE_CONTROL_PLANE_LISTENING (\d+)/);
+    const origin = `http://127.0.0.1:${listening[1]}`;
+    const login = await fetch(new URL("/api/auth/login", origin), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ password: ownerPassword }),
+    });
+    expect(login.status).toBe(204);
+    const cookie = login.headers.get("set-cookie")?.split(";", 1)[0];
+    expect(cookie).toBeTruthy();
+
+    const algorithmTokenResponse = await fetch(new URL("/api/owner/nodes/pairing-tokens", origin), {
+      method: "POST",
+      headers: { cookie: cookie! },
+    });
+    const algorithmToken = (await algorithmTokenResponse.json()) as { pairingToken: string };
+    await expect(attemptEd448Pair(origin, algorithmToken.pairingToken)).resolves.toBe(
+      "invalid_identity",
+    );
+    pairedSockets.push(await pairSocket(origin, algorithmToken.pairingToken));
+
+    for (let index = 0; index < 2; index++) {
+      const tokenResponse = await fetch(new URL("/api/owner/nodes/pairing-tokens", origin), {
+        method: "POST",
+        headers: { cookie: cookie! },
+      });
+      expect(tokenResponse.status).toBe(201);
+      const token = (await tokenResponse.json()) as { pairingToken: string };
+      pairedSockets.push(await pairSocket(origin, token.pairingToken));
+    }
+
+    const totalLimitSocket = observedWebSocket(
+      new URL("/api/nodes/connect", origin).toString().replace(/^http/, "ws"),
+    );
+    expect((await waitForSocketClose(totalLimitSocket)).code).toBe(1013);
+    const firstPairedSocketClose = waitForSocketClose(pairedSockets[0]!);
+    pairedSockets[0]!.close(1000, "free one connection slot");
+    await firstPairedSocketClose;
+    await delay(25);
+
+    const anonymousUrl = new URL("/api/nodes/connect", origin);
+    anonymousUrl.protocol = "ws:";
+    rawSocket = observedWebSocket(anonymousUrl);
+    await waitForSocketOpen(rawSocket);
+    await waitForSocketMessage(rawSocket, (message) => message.type === "control.challenge");
+    const unauthenticatedLimitSocket = observedWebSocket(anonymousUrl);
+    expect((await waitForSocketClose(unauthenticatedLimitSocket)).code).toBe(1013);
+
+    const anonymousList = await fetch(new URL("/api/owner/nodes", origin));
+    expect(anonymousList.status).toBe(401);
+
+    const malformedResponse = waitForSocketMessage(
+      rawSocket,
+      (message) => message.type === "control.error",
+    );
+    rawSocket.send(JSON.stringify({ type: "node.ping", requestId: "not-a-uuid", sentAt: 1 }));
+    const errorMessage = await malformedResponse;
+    expect(errorMessage).toMatchObject({
+      code: "malformed_request",
+      message: expect.any(String),
+    });
+    expect(errorMessage).not.toHaveProperty("requestId");
+    expect((await waitForSocketClose(rawSocket)).code).toBe(1008);
+    rawSocket = undefined;
+
+    const timeoutSocket = observedWebSocket(anonymousUrl);
+    await waitForSocketOpen(timeoutSocket);
+    expect((await waitForSocketClose(timeoutSocket, 3000)).code).toBe(1008);
+
+    const oversizedSocket = observedWebSocket(anonymousUrl);
+    await waitForSocketOpen(oversizedSocket);
+    oversizedSocket.send("x".repeat(17 * 1024));
+    expect((await waitForSocketClose(oversizedSocket)).code).toBe(1009);
+    expect((await fetch(new URL("/api/status", origin))).status).toBe(200);
+  } finally {
+    rawSocket?.close();
+    for (const socket of pairedSockets) socket.close();
+    await stopProcess(server);
+    rmSync(directory, { recursive: true, force: true });
+  }
+}, 20000);
+
+it("expires a blackholed node from owner status and reconnects after its pong deadline", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "mate-node-heartbeat-blackhole-"));
+  chmodSync(directory, 0o700);
+  const passwordFile = join(directory, "owner-password");
+  writeFileSync(passwordFile, `${ownerPassword}\n`, { mode: 0o600 });
+  const moduleUrl = pathToFileURL(resolve("dist/src/control-plane/main.js")).href;
+  const runner = `const { startControlPlane } = await import(${JSON.stringify(moduleUrl)}); startControlPlane(0, undefined, { dataDir: process.env.MATE_CONTROL_PLANE_DATA_DIR, passwordFile: process.env.MATE_OWNER_PASSWORD_FILE, nodeHeartbeatTimeoutMs: 200 });`;
+  const serverChild = spawn(process.execPath, ["--input-type=module", "--eval", runner], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      MATE_CONTROL_PLANE_DATA_DIR: join(directory, "control-plane-data"),
+      MATE_OWNER_PASSWORD_FILE: passwordFile,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const server = new ProcessOutput(serverChild);
+  const proxyHttp = createServer();
+  const proxyWebSockets = new WebSocketServer({ noServer: true });
+  let proxyConnections = 0;
+  let serverPort = "";
+  let blackholedSocket: WebSocket | undefined;
+  proxyHttp.on("upgrade", (request, networkSocket, head) => {
+    proxyWebSockets.handleUpgrade(request, networkSocket, head, (nodeSocket) => {
+      proxyConnections++;
+      blackholedSocket = nodeSocket as unknown as WebSocket;
+      const upstreamUrl = `ws://127.0.0.1:${serverPort}/api/nodes/connect`;
+      const controlSocket = new UpstreamWebSocket(upstreamUrl);
+      let blackhole = false;
+      nodeSocket.on("message", (data) => {
+        const text = rawDataText(data);
+        let message: { type?: string };
+        try {
+          message = JSON.parse(text) as { type?: string };
+        } catch {
+          return;
+        }
+        if (blackhole && message.type === "node.ping") return;
+        if (controlSocket.readyState === UpstreamWebSocket.OPEN) controlSocket.send(data);
+      });
+      controlSocket.on("message", (data) => {
+        const text = rawDataText(data);
+        let message: { type?: string };
+        try {
+          message = JSON.parse(text) as { type?: string };
+        } catch {
+          return;
+        }
+        if (message.type === "control.paired") blackhole = true;
+        if (blackhole && message.type === "control.pong") return;
+        if (nodeSocket.readyState === nodeSocket.OPEN) nodeSocket.send(data);
+      });
+      nodeSocket.on("close", () => controlSocket.close());
+      controlSocket.on("close", () => nodeSocket.close());
+      nodeSocket.on("error", () => controlSocket.close());
+      controlSocket.on("error", () => nodeSocket.close());
+    });
+  });
+  await new Promise<void>((resolveListen, rejectListen) => {
+    proxyHttp.once("error", rejectListen);
+    proxyHttp.listen(0, "127.0.0.1", () => {
+      proxyHttp.removeListener("error", rejectListen);
+      resolveListen();
+    });
+  });
+  const proxyAddress = proxyHttp.address();
+  if (!proxyAddress || typeof proxyAddress === "string") throw new Error("Proxy did not bind");
+  serverPort = await server.waitFor(/MATE_CONTROL_PLANE_LISTENING (\d+)/).then((m) => m[1]!);
+  const origin = `http://127.0.0.1:${serverPort}`;
+  const nodeProxyUrl = `http://127.0.0.1:${proxyAddress.port}`;
+  let node: ProcessOutput | undefined;
+
+  try {
+    const login = await fetch(new URL("/api/auth/login", origin), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ password: ownerPassword }),
+    });
+    expect(login.status).toBe(204);
+    const cookie = login.headers.get("set-cookie")?.split(";", 1)[0];
+    expect(cookie).toBeTruthy();
+    const tokenResponse = await fetch(new URL("/api/owner/nodes/pairing-tokens", origin), {
+      method: "POST",
+      headers: { cookie: cookie! },
+    });
+    expect(tokenResponse.status).toBe(201);
+    const { pairingToken } = (await tokenResponse.json()) as { pairingToken: string };
+    const nodeModuleUrl = pathToFileURL(resolve("dist/src/nodes/client.js")).href;
+    const nodeRunner = `const { runLinuxNode } = await import(${JSON.stringify(nodeModuleUrl)}); await runLinuxNode({ controlPlaneUrl: process.env.MATE_CONTROL_PLANE_URL, dataDirectory: process.env.MATE_NODE_DATA_DIR, pairingToken: process.env.MATE_NODE_PAIRING_TOKEN, heartbeatIntervalMs: 50, heartbeatTimeoutMs: 1200 }, new AbortController().signal);`;
+    node = new ProcessOutput(
+      spawn(process.execPath, ["--input-type=module", "--eval", nodeRunner], {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          MATE_CONTROL_PLANE_URL: nodeProxyUrl,
+          MATE_NODE_DATA_DIR: join(directory, "node-data"),
+          MATE_NODE_PAIRING_TOKEN: pairingToken,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      }),
+    );
+    const paired = await node.waitFor(/MATE_NODE_PAIRED ([0-9a-f-]+)/i);
+    const offline = await waitForNode(origin, cookie!, (candidate) => candidate?.online === false);
+    expect(offline.id).toBe(paired[1]);
+    expect(node.exitStatus).toBeUndefined();
+    expect(blackholedSocket?.readyState).toBe(WebSocket.OPEN);
+
+    const reconnect = await node.waitFor(/Node WebSocket disconnected; reconnecting\./, 5000);
+    expect(reconnect[0]).toContain("reconnecting");
+    const reconnectDeadline = Date.now() + 5000;
+    while (proxyConnections < 2 && Date.now() < reconnectDeadline) await delay(25);
+    expect(proxyConnections).toBeGreaterThanOrEqual(2);
+    expect(server.exitStatus).toBeUndefined();
+  } finally {
+    if (node) await stopProcess(node);
+    for (const client of proxyWebSockets.clients) client.close();
+    await new Promise<void>((resolveClose) => proxyWebSockets.close(() => resolveClose()));
+    await new Promise<void>((resolveClose) => proxyHttp.close(() => resolveClose()));
+    await stopProcess(server);
+    rmSync(directory, { recursive: true, force: true });
+  }
+}, 15000);
 
 interface NodeView {
   id: string;

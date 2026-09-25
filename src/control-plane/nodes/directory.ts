@@ -1,12 +1,17 @@
 import type Database from "better-sqlite3";
 import { createHash, createPublicKey, randomBytes, verify } from "node:crypto";
 import {
+  NodeRequestIdSchema,
   NodeRequestSchema,
   type NodeControlMessage,
   type NodeRequest,
 } from "../../nodes/protocol.js";
 
 export const DEFAULT_NODE_PAIRING_TOKEN_TTL_MS = 10 * 60 * 1000;
+export const DEFAULT_NODE_MAX_CONNECTIONS = 128;
+export const DEFAULT_NODE_MAX_UNAUTHENTICATED_CONNECTIONS = 32;
+export const DEFAULT_NODE_HANDSHAKE_TIMEOUT_MS = 10_000;
+export const DEFAULT_NODE_HEARTBEAT_TIMEOUT_MS = 35_000;
 
 export interface NodeSocket {
   send(data: string): void;
@@ -15,7 +20,9 @@ export interface NodeSocket {
 
 interface SocketSession {
   nonce: string;
+  lastHeartbeatAt: number;
   nodeId?: string;
+  handshakeTimeout?: ReturnType<typeof setTimeout>;
 }
 
 export interface NodeSummary {
@@ -27,15 +34,24 @@ export interface NodeSummary {
 export interface NodeDirectoryOptions {
   now?: () => number;
   pairingTokenTtlMs?: number;
+  maxConnections?: number;
+  maxUnauthenticatedConnections?: number;
+  handshakeTimeoutMs?: number;
+  heartbeatTimeoutMs?: number;
 }
 
 /** Pairing credentials and durable node identities for this control plane. */
 export class NodeDirectory {
   private readonly now: () => number;
   private readonly pairingTokenTtlMs: number;
+  private readonly maxConnections: number;
+  private readonly maxUnauthenticatedConnections: number;
+  private readonly handshakeTimeoutMs: number;
+  private readonly heartbeatTimeoutMs: number;
   private readonly sessions = new WeakMap<NodeSocket, SocketSession>();
   private readonly connected = new Map<string, NodeSocket>();
   private readonly sockets = new Set<NodeSocket>();
+  private readonly unauthenticated = new Set<NodeSocket>();
 
   constructor(
     private readonly database: Database.Database,
@@ -45,6 +61,21 @@ export class NodeDirectory {
     this.pairingTokenTtlMs = options.pairingTokenTtlMs ?? DEFAULT_NODE_PAIRING_TOKEN_TTL_MS;
     if (!Number.isSafeInteger(this.pairingTokenTtlMs) || this.pairingTokenTtlMs < 1)
       throw new Error("Node pairing token lifetime must be a positive integer");
+    this.maxConnections = positiveInteger(options.maxConnections, DEFAULT_NODE_MAX_CONNECTIONS);
+    this.maxUnauthenticatedConnections = positiveInteger(
+      options.maxUnauthenticatedConnections,
+      DEFAULT_NODE_MAX_UNAUTHENTICATED_CONNECTIONS,
+    );
+    this.handshakeTimeoutMs = positiveInteger(
+      options.handshakeTimeoutMs,
+      DEFAULT_NODE_HANDSHAKE_TIMEOUT_MS,
+    );
+    this.heartbeatTimeoutMs = positiveInteger(
+      options.heartbeatTimeoutMs,
+      DEFAULT_NODE_HEARTBEAT_TIMEOUT_MS,
+    );
+    if (this.maxUnauthenticatedConnections > this.maxConnections)
+      throw new Error("Unauthenticated node connection limit cannot exceed the total limit");
   }
 
   createPairingToken(): { pairingToken: string; expiresAt: string } {
@@ -61,18 +92,37 @@ export class NodeDirectory {
     const rows = this.database
       .prepare("SELECT id, last_connected_at FROM nodes ORDER BY paired_at, id")
       .all() as Array<{ id: string; last_connected_at: number | null }>;
-    return rows.map((row) => ({
-      id: row.id,
-      online: this.connected.has(row.id),
-      lastConnectedAt:
-        row.last_connected_at === null ? null : new Date(row.last_connected_at).toISOString(),
-    }));
+    const now = this.now();
+    return rows.map((row) => {
+      const socket = this.connected.get(row.id);
+      const session = socket ? this.sessions.get(socket) : undefined;
+      return {
+        id: row.id,
+        online:
+          session?.nodeId === row.id && now - session.lastHeartbeatAt < this.heartbeatTimeoutMs,
+        lastConnectedAt:
+          row.last_connected_at === null ? null : new Date(row.last_connected_at).toISOString(),
+      };
+    });
   }
 
   open(socket: NodeSocket): void {
+    if (
+      this.sockets.size >= this.maxConnections ||
+      this.unauthenticated.size >= this.maxUnauthenticatedConnections
+    ) {
+      socket.close(1013, "节点连接数已达上限");
+      return;
+    }
     const nonce = randomBytes(32).toString("base64url");
-    this.sessions.set(socket, { nonce });
+    const session: SocketSession = { nonce, lastHeartbeatAt: this.now() };
+    session.handshakeTimeout = setTimeout(() => {
+      if (this.sessions.get(socket) === session && !session.nodeId)
+        this.reject(socket, undefined, "malformed_request", "节点身份验证超时。");
+    }, this.handshakeTimeoutMs);
+    this.sessions.set(socket, session);
     this.sockets.add(socket);
+    this.unauthenticated.add(socket);
     this.send(socket, { type: "control.challenge", nonce });
   }
 
@@ -94,7 +144,9 @@ export class NodeDirectory {
           : undefined;
       return this.reject(
         socket,
-        typeof requestId === "string" ? requestId : undefined,
+        NodeRequestIdSchema.safeParse(requestId).success && typeof requestId === "string"
+          ? requestId
+          : undefined,
         "malformed_request",
         "请求格式无效。",
       );
@@ -108,14 +160,22 @@ export class NodeDirectory {
 
   close(socket: NodeSocket): void {
     this.sockets.delete(socket);
-    const nodeId = this.sessions.get(socket)?.nodeId;
+    this.unauthenticated.delete(socket);
+    const session = this.sessions.get(socket);
+    if (session?.handshakeTimeout) clearTimeout(session.handshakeTimeout);
+    const nodeId = session?.nodeId;
     if (nodeId && this.connected.get(nodeId) === socket) this.connected.delete(nodeId);
     this.sessions.delete(socket);
   }
 
   closeAll(): void {
-    for (const socket of this.sockets) socket.close(1001, "控制面正在关闭");
+    for (const socket of this.sockets) {
+      const session = this.sessions.get(socket);
+      if (session?.handshakeTimeout) clearTimeout(session.handshakeTimeout);
+      socket.close(1001, "控制面正在关闭");
+    }
     this.sockets.clear();
+    this.unauthenticated.clear();
     this.connected.clear();
   }
 
@@ -156,7 +216,10 @@ export class NodeDirectory {
   ): void {
     if (session.nodeId)
       return this.reject(socket, request.requestId, "pairing_rejected", "配对令牌无效或已使用。");
-    if (!verifySignature(request.publicKey, session.nonce, request.signature))
+    if (
+      !isEd25519PublicKey(request.publicKey) ||
+      !verifySignature(request.publicKey, session.nonce, request.signature)
+    )
       return this.reject(socket, request.requestId, "invalid_identity", "节点身份验证失败。");
 
     const now = this.now();
@@ -197,6 +260,7 @@ export class NodeDirectory {
   ): void {
     if (!session.nodeId || this.connected.get(session.nodeId) !== socket)
       return this.reject(socket, request.requestId, "not_authenticated", "节点尚未完成身份验证。");
+    session.lastHeartbeatAt = this.now();
     this.send(socket, {
       type: "control.pong",
       requestId: request.requestId,
@@ -205,6 +269,9 @@ export class NodeDirectory {
   }
 
   private markConnected(socket: NodeSocket, session: SocketSession, nodeId: string): void {
+    if (session.handshakeTimeout) clearTimeout(session.handshakeTimeout);
+    delete session.handshakeTimeout;
+    this.unauthenticated.delete(socket);
     const previous = this.connected.get(nodeId);
     if (previous && previous !== socket) {
       const previousSession = this.sessions.get(previous);
@@ -212,6 +279,7 @@ export class NodeDirectory {
       previous.close(4001, "节点在另一连接上完成身份验证");
     }
     session.nodeId = nodeId;
+    session.lastHeartbeatAt = this.now();
     this.connected.set(nodeId, socket);
     this.database
       .prepare("UPDATE nodes SET last_connected_at=? WHERE id=?")
@@ -242,14 +310,26 @@ function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
+function positiveInteger(value: number | undefined, fallback: number): number {
+  const result = value ?? fallback;
+  if (!Number.isSafeInteger(result) || result < 1)
+    throw new Error("Node connection limits and timeouts must be positive integers");
+  return result;
+}
+
+function isEd25519PublicKey(publicKeyPem: string): boolean {
+  try {
+    return createPublicKey(publicKeyPem).asymmetricKeyType === "ed25519";
+  } catch {
+    return false;
+  }
+}
+
 function verifySignature(publicKeyPem: string, nonce: string, signature: string): boolean {
   try {
-    return verify(
-      null,
-      Buffer.from(nonce, "utf8"),
-      createPublicKey(publicKeyPem),
-      Buffer.from(signature, "base64url"),
-    );
+    const publicKey = createPublicKey(publicKeyPem);
+    if (publicKey.asymmetricKeyType !== "ed25519") return false;
+    return verify(null, Buffer.from(nonce, "utf8"), publicKey, Buffer.from(signature, "base64url"));
   } catch {
     return false;
   }

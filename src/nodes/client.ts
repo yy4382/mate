@@ -6,11 +6,14 @@ const INITIAL_RETRY_MS = 250;
 const MAX_RETRY_MS = 10_000;
 const HANDSHAKE_TIMEOUT_MS = 10_000;
 const HEARTBEAT_INTERVAL_MS = 10_000;
+const HEARTBEAT_TIMEOUT_MS = 30_000;
 
 export interface LinuxNodeOptions {
   controlPlaneUrl: string;
   dataDirectory: string;
   pairingToken?: string;
+  heartbeatIntervalMs?: number;
+  heartbeatTimeoutMs?: number;
 }
 
 class NodeAuthenticationError extends Error {}
@@ -26,6 +29,16 @@ export async function runLinuxNode(options: LinuxNodeOptions, signal: AbortSigna
     throw new Error("A new Linux node requires MATE_NODE_PAIRING_TOKEN");
   if (pairingToken && (pairingToken.length < 32 || pairingToken.length > 256))
     throw new Error("MATE_NODE_PAIRING_TOKEN is not valid");
+  const heartbeatIntervalMs = positiveIntegerOption(
+    options.heartbeatIntervalMs,
+    HEARTBEAT_INTERVAL_MS,
+  );
+  const heartbeatTimeoutMs = positiveIntegerOption(
+    options.heartbeatTimeoutMs,
+    HEARTBEAT_TIMEOUT_MS,
+  );
+  if (heartbeatTimeoutMs <= heartbeatIntervalMs)
+    throw new Error("Node heartbeat timeout must be longer than its interval");
 
   let retryMs = INITIAL_RETRY_MS;
   while (!signal.aborted) {
@@ -37,6 +50,8 @@ export async function runLinuxNode(options: LinuxNodeOptions, signal: AbortSigna
         () => {
           pairingToken = undefined;
         },
+        heartbeatIntervalMs,
+        heartbeatTimeoutMs,
         signal,
       );
       if (signal.aborted) break;
@@ -75,6 +90,8 @@ function connectOnce(
   identity: NodeIdentity,
   getPairingToken: () => string | undefined,
   clearPairingToken: () => void,
+  heartbeatIntervalMs: number,
+  heartbeatTimeoutMs: number,
   signal: AbortSignal,
 ): Promise<boolean> {
   if (signal.aborted) return Promise.resolve(false);
@@ -87,11 +104,13 @@ function connectOnce(
       authenticateRequestId: string | undefined,
       pairRequestId: string | undefined,
       heartbeat: ReturnType<typeof setInterval> | undefined,
+      pingTimeout: ReturnType<typeof setTimeout> | undefined,
+      pendingPing: string | undefined,
       timeout: ReturnType<typeof setTimeout> | undefined;
-    const pendingPings = new Set<string>();
 
     const cleanup = () => {
       if (heartbeat) clearInterval(heartbeat);
+      if (pingTimeout) clearTimeout(pingTimeout);
       if (timeout) clearTimeout(timeout);
       signal.removeEventListener("abort", onAbort);
       socket.removeEventListener("message", onMessage);
@@ -113,10 +132,20 @@ function connectOnce(
       rejectConnection(error);
     };
     const sendPing = () => {
-      if (!authenticated || socket.readyState !== WebSocket.OPEN) return;
+      if (!authenticated || socket.readyState !== WebSocket.OPEN || pendingPing) return;
       const requestId = randomUUID();
-      pendingPings.add(requestId);
-      sendRequest(socket, { type: "node.ping", requestId, sentAt: Date.now() });
+      pendingPing = requestId;
+      pingTimeout = setTimeout(() => {
+        if (pendingPing !== requestId) return;
+        pendingPing = undefined;
+        if (socket.readyState === WebSocket.OPEN)
+          socket.close(4000, "heartbeat acknowledgement timed out");
+      }, heartbeatTimeoutMs);
+      try {
+        sendRequest(socket, { type: "node.ping", requestId, sentAt: Date.now() });
+      } catch {
+        socket.close(4000, "heartbeat send failed");
+      }
     };
     const authenticate = (nonce: string) => {
       authenticateRequestId = randomUUID();
@@ -194,7 +223,7 @@ function connectOnce(
         authenticated = true;
         process.stdout.write(`MATE_NODE_PAIRED ${identity.id}\n`);
         sendPing();
-        heartbeat = setInterval(sendPing, HEARTBEAT_INTERVAL_MS);
+        heartbeat = setInterval(sendPing, heartbeatIntervalMs);
         return;
       }
       if (message.type === "control.authenticated") {
@@ -205,11 +234,15 @@ function connectOnce(
         authenticated = true;
         process.stdout.write(`MATE_NODE_CONNECTED ${identity.id}\n`);
         sendPing();
-        heartbeat = setInterval(sendPing, HEARTBEAT_INTERVAL_MS);
+        heartbeat = setInterval(sendPing, heartbeatIntervalMs);
         return;
       }
-      if (message.type === "control.pong" && pendingPings.delete(message.requestId))
+      if (message.type === "control.pong" && pendingPing === message.requestId) {
+        pendingPing = undefined;
+        if (pingTimeout) clearTimeout(pingTimeout);
+        pingTimeout = undefined;
         process.stdout.write(`MATE_NODE_HEARTBEAT_ACK ${message.requestId}\n`);
+      }
     };
 
     signal.addEventListener("abort", onAbort, { once: true });
@@ -256,4 +289,11 @@ function waitOrAbort(ms: number, signal: AbortSignal): Promise<void> {
     };
     signal.addEventListener("abort", abort, { once: true });
   });
+}
+
+function positiveIntegerOption(value: number | undefined, fallback: number): number {
+  const result = value ?? fallback;
+  if (!Number.isSafeInteger(result) || result < 1)
+    throw new Error("Node heartbeat interval and timeout must be positive integers");
+  return result;
 }

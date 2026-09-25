@@ -33,6 +33,10 @@ export interface ControlPlaneAppOptions {
   now?: () => number;
   sessionTtlMs?: number;
   pairingTokenTtlMs?: number;
+  maxNodeConnections?: number;
+  maxUnauthenticatedNodeConnections?: number;
+  nodeHandshakeTimeoutMs?: number;
+  nodeHeartbeatTimeoutMs?: number;
 }
 
 export class ControlPlaneApp extends Hono {
@@ -66,6 +70,18 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
       ...(options.now ? { now: options.now } : {}),
       ...(options.pairingTokenTtlMs !== undefined
         ? { pairingTokenTtlMs: options.pairingTokenTtlMs }
+        : {}),
+      ...(options.maxNodeConnections !== undefined
+        ? { maxConnections: options.maxNodeConnections }
+        : {}),
+      ...(options.maxUnauthenticatedNodeConnections !== undefined
+        ? { maxUnauthenticatedConnections: options.maxUnauthenticatedNodeConnections }
+        : {}),
+      ...(options.nodeHandshakeTimeoutMs !== undefined
+        ? { handshakeTimeoutMs: options.nodeHandshakeTimeoutMs }
+        : {}),
+      ...(options.nodeHeartbeatTimeoutMs !== undefined
+        ? { heartbeatTimeoutMs: options.nodeHeartbeatTimeoutMs }
         : {}),
     },
     nodes = new NodeDirectory(ownerAuth.db, nodeOptions),
