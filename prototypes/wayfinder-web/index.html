@@ -41,12 +41,21 @@
       .timeline { min-width: 0; flex: 1; display: flex; flex-direction: column; }
       .messages { padding: 16px 30px; flex: 1; overflow: auto; }
       .message { display: flex; gap: 12px; padding: 13px 0; border-bottom: 1px solid #f3f3f3; }
+      .message > div:last-child { min-width: 0; flex: 1; }
       .avatar { width: 31px; height: 31px; flex: none; border-radius: 8px; display: grid; place-items: center; font-size: 12px; font-weight: 700; background: #e8edf7; color: #3a547f; }
       .avatar.you { background: #e8e8e8; color: #222; }
       .message strong { font-size: 12px; }
       .message time { color: #aaa; font-size: 10px; margin-left: 7px; }
       .message p { line-height: 1.55; font-size: 13px; margin: 5px 0 0; }
       .message .meta { margin-top: 7px; display: flex; gap: 8px; }
+      .reply-quote { margin: 7px 0 6px; padding: 6px 9px; border-left: 2px solid #a3a3a3; background: #f7f7f7; color: #666; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .reply-context { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; padding: 8px 10px; border-left: 2px solid #777; background: #f7f7f7; color: #555; font-size: 11px; }
+      .thread-preview { display: block; width: 100%; margin-top: 12px; border: 0; border-radius: 5px; padding: 9px 11px; background: #f7f7f7; color: #555; text-align: left; }
+      .thread-preview:hover { background: #ededed; }
+      .thread-preview .summary { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 5px; font-size: 11px; }
+      .thread-preview .summary strong { color: #333; }
+      .thread-preview .preview-line { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.7; font-size: 11px; }
+      .thread-preview .preview-line strong { margin-right: 7px; }
       .text-link { background: none; border: 0; color: #3866b1; padding: 0; font-size: 11px; }
       .compose { padding: 15px 24px 70px; border-top: 1px solid #eee; }
       .compose textarea { width: 100%; height: 80px; resize: vertical; border: 1px solid #ddd; border-radius: 9px; padding: 11px; outline: none; font-size: 13px; }
@@ -182,10 +191,22 @@
         { author: 'Aurora', time: '09:18', body: '我整理了两种导航方式。Agent 的长期工作状态最好能直接找到，不必翻聊天记录。', thread: 3 },
         { author: 'Birch', time: '09:26', body: '节点离线时，工作区文件无法读取；页面应明确显示这个状态。', thread: 1 },
       ];
-      const messages = Object.fromEntries(rooms.map(room => [room, [...seed]]));
+      const messages = Object.fromEntries(rooms.map(room => [room, seed.map(message => ({...message}))]));
+      const threadReplies = Object.fromEntries(rooms.flatMap(room => [
+        [`${room}:0`, [
+          { author: 'Aurora', time: '09:14', body: '我会先把信息架构列出来。' },
+          { author: '你', time: '09:16', body: '先把讨论串与频道的关系做清楚。' },
+        ]],
+        [`${room}:1`, [
+          { author: '你', time: '09:20', body: '把状态放在 Agent 页，同时在聊天顶部给出正在运行的提示。' },
+          { author: 'Birch', time: '09:22', body: '手机上可以先进入频道，再点开完整讨论串。' },
+          { author: 'Aurora', time: '09:24', body: '预览里只显示最近回复，完整记录在右侧打开。' },
+        ]],
+        [`${room}:2`, [{ author: 'Aurora', time: '09:28', body: '离线提示要标明这是上次已知状态。' }]],
+      ]));
       const state = {
         section: 'chat', room: '# 产品讨论', agent: 'Aurora', agentTab: '动态', node: 'vps-01',
-        thread: false, listVisible: matchMedia('(max-width: 700px)').matches, chatTab: '聊天', asTask: false, attachment: false, approval: '待审批',
+        thread: false, threadIndex: 1, replyToIndex: null, listVisible: matchMedia('(max-width: 700px)').matches, chatTab: '聊天', asTask: false, attachment: false, approval: '待审批',
         modal: false, signedIn: true, toast: '', taskDetail: '', file: 'MEMORY.md'
       };
       const variants = ['A', 'B', 'C'];
@@ -194,6 +215,7 @@
       if (!variants.includes(variant)) variant = 'A';
       const esc = value => String(value).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
       const button = (label, action, value = '', cls = 'light-button') => `<button class="${cls}" data-action="${action}" data-value="${esc(value)}">${label}</button>`;
+      const threadKey = (room, index) => `${room}:${index}`;
       const sectionName = { chat:'聊天', tasks:'任务', agents:'Agent', approvals:'审批', nodes:'节点', settings:'设置' };
       function nav() {
         const items = [['chat','◎'],['tasks','▦'],['agents','◇'],['approvals','⚑'],['nodes','▣']];
@@ -217,13 +239,29 @@
         if (state.section === 'agents') return `<div class="surface-tabs">${['资料','动态','提醒','工作区'].map(tab=>`<button class="${state.agentTab===tab?'active':''}" data-action="agent-tab" data-value="${tab}">${tab}</button>`).join('')}</div>`;
         return '';
       }
+      function threadPreview(message, index) {
+        if (variant !== 'A' || !message.thread) return '';
+        const replies = threadReplies[threadKey(state.room, index)] ?? [];
+        return `<button class="thread-preview" data-action="thread" data-value="${index}" aria-label="查看 ${message.thread} 条回复"><span class="summary"><strong>${message.thread} 条回复 ›</strong><span>最近回复</span></span>${replies.slice(-3).map(reply => `<span class="preview-line"><strong>${esc(reply.author)}</strong>${esc(reply.body)}</span>`).join('')}</button>`;
+      }
+      function messageActions(message, index) {
+        return `<div class="meta">${button('回复','reply',String(index),'text-link')}${button(message.thread?'在讨论串回复':'开启讨论串并回复','thread',String(index),'text-link')}${index===1?'<span class="muted">📎 导航草图.txt</span>':''}</div>${threadPreview(message,index)}`;
+      }
+      function replyContext() {
+        const parent = state.replyToIndex === null ? null : messages[state.room]?.[state.replyToIndex];
+        return parent ? `<div class="reply-context"><span>回复 ${esc(parent.author)}：${esc(parent.body.slice(0,70))}</span>${button('取消','cancel-reply','','text-link')}</div>` : '';
+      }
       function chat() {
         if (state.chatTab === '任务') return `<div class="page"><div class="eyebrow">${esc(state.room)}</div><h2>关联任务</h2><div class="cards"><div class="card"><h3>确认网页导航方式</h3><p class="muted">由 Aurora 负责 · 进行中</p>${button('查看任务看板','nav','tasks')}</div></div></div>`;
         if (state.chatTab === '文件') return `<div class="page"><div class="eyebrow">${esc(state.room)}</div><h2>会话文件</h2><div class="card" style="margin-top:20px"><h3>导航草图.txt</h3><p class="muted">Aurora 在此会话中分享 · 示例附件</p></div></div>`;
         if (state.thread && variant !== 'A') return `<div class="chat-wrap">${thread()}</div>`;
-        return `<div class="chat-wrap ${state.thread?'has-thread':''}"><div class="timeline"><div class="messages">${(messages[state.room]||[]).map((m,i) => `<div class="message"><div class="avatar ${m.author==='你'?'you':''}">${esc(m.author[0])}</div><div><strong>${esc(m.author)}</strong><time>${m.time}</time><p>${esc(m.body)}</p><div class="meta">${m.thread?button(`${m.thread} 条回复`,'thread',String(i),'text-link'):button('回复','thread',String(i),'text-link')}${i===1?'<span class="muted">📎 导航草图.txt</span>':''}</div></div></div>`).join('')}</div><div class="compose"><textarea id="composer" placeholder="发送到 ${esc(state.room)}…"></textarea><div class="row">${button('📎 附件','attach')}${state.attachment?'<span class="muted">草图.txt（示例附件）</span>':''}<label><input type="checkbox" id="as-task" ${state.asTask?'checked':''} /> 作为任务</label><span class="push"></span>${button('发送','send','','primary')}</div></div></div>${state.thread&&variant==='A'?thread():''}</div>`;
+        return `<div class="chat-wrap ${state.thread?'has-thread':''}"><div class="timeline"><div class="messages">${(messages[state.room]||[]).map((m,i) => `<div class="message"><div class="avatar ${m.author==='你'?'you':''}">${esc(m.author[0])}</div><div><strong>${esc(m.author)}</strong><time>${m.time}</time>${m.replyTo?`<div class="reply-quote">↪ 回复 ${esc(m.replyTo.author)}：${esc(m.replyTo.body)}</div>`:''}<p>${esc(m.body)}</p>${messageActions(m,i)}</div></div>`).join('')}</div><div class="compose">${replyContext()}<textarea id="composer" placeholder="发送到 ${esc(state.room)}…"></textarea><div class="row">${button('📎 附件','attach')}${state.attachment?'<span class="muted">草图.txt（示例附件）</span>':''}<label><input type="checkbox" id="as-task" ${state.asTask?'checked':''} /> 作为任务</label><span class="push"></span>${button('发送','send','','primary')}</div></div></div>${state.thread&&variant==='A'?thread():''}</div>`;
       }
-      function thread() { return `<aside class="thread"><div class="thread-head">讨论串 ${button('关闭','close-thread','','text-link')}</div><div class="thread-body"><p class="muted"># 产品讨论 · Aurora 发起</p><p>Agent 的长期工作状态最好能直接找到，不必翻聊天记录。</p><div class="message"><div class="avatar you">你</div><div><strong>你</strong><p>把状态放在 Agent 页，同时在聊天顶部给出正在运行的提示。</p></div></div><div class="message"><div class="avatar">B</div><div><strong>Birch</strong><p>离线时要区分「上次已知状态」和「当前不可用」。</p></div></div><textarea id="thread-composer" placeholder="回复讨论串…" style="width:100%;border:1px solid #ddd;border-radius:7px;padding:10px;height:75px"></textarea><p>${button('回复','reply-thread','','primary')}</p></div></aside>`; }
+      function thread() {
+        const parent = messages[state.room]?.[state.threadIndex] ?? messages[state.room]?.[0];
+        const replies = threadReplies[threadKey(state.room, state.threadIndex)] ?? [];
+        return `<aside class="thread"><div class="thread-head">讨论串 ${button('关闭','close-thread','','text-link')}</div><div class="thread-body"><p class="muted">${esc(state.room)} · ${esc(parent.author)} 发起 · ${replies.length} 条回复</p><p>${esc(parent.body)}</p>${replies.map(reply => `<div class="message"><div class="avatar ${reply.author==='你'?'you':''}">${esc(reply.author[0])}</div><div><strong>${esc(reply.author)}</strong><time>${reply.time}</time><p>${esc(reply.body)}</p></div></div>`).join('')}<textarea id="thread-composer" placeholder="回复讨论串…" style="width:100%;border:1px solid #ddd;border-radius:7px;padding:10px;height:75px"></textarea><p>${button('回复','reply-thread','','primary')}</p></div></aside>`;
+      }
       function tasks() { const columns = [['待处理',['检查网页版频道邀请规则','整理提醒页面信息']],['进行中',['制作网页信息架构原型']],['等待',['等待节点恢复并检查文件']],['完成',['确认控制面与节点职责']]]; return `<div class="page"><div class="eyebrow">协作</div><h2>任务看板</h2><p class="muted">任务从消息产生，所有权和状态在这里查看；也可以从聊天直接「作为任务」发送。</p><div class="board">${columns.map(([title,items])=>`<div class="column"><h3>${title}<span>${items.length}</span></h3>${items.map((item,i)=>`<button class="card" style="width:100%;text-align:left" data-action="task-detail" data-value="${esc(item)}"><h3>${esc(item)}</h3><span class="muted">${i%2?'Birch':'Aurora'} · # 产品讨论</span></button>`).join('')}</div>`).join('')}</div>${state.taskDetail&&!['全部任务','我发起的','待我查看'].includes(state.taskDetail)?`<div class="card" style="margin-top:15px"><h3>${esc(state.taskDetail)}</h3><p>源消息：# 产品讨论 · 当前负责人 Aurora</p>${button('关闭详情','task-detail','')}</div>`:''}</div>`; }
       function agents() { let body=''; if(state.agentTab==='资料') body=`<div class="cards"><div class="card"><h3>身份</h3><p>${state.agent} · 持续工作的 Agent 同伴</p><p class="muted">工作节点：vps-01</p></div><div class="card"><h3>模型</h3><p>由控制面管理凭据并下发节点</p><p class="muted">凭据不会进入 Agent 命令环境</p></div><div class="card"><h3>运行</h3><p><span class="status"><span class="dot"></span>正在处理消息</span></p><p class="muted">单一主执行通道</p></div></div>`;
         if(state.agentTab==='动态') body=`<div class="alert">运行状态：正在处理 # 产品讨论的消息。此处显示控制面已确认的活动；本机进程的实时细节由节点提供。</div><div class="card" style="margin-top:14px"><div class="list-row"><span class="dot"></span><div class="grow"><strong>正在运行</strong><br><span class="muted">最近一次记录提交已确认 · 09:28</span></div></div><div class="list-row"><span>▣</span><div class="grow"><strong>读取工作区文件</strong><br><span class="muted">已记录收据 · 09:24</span></div></div><div class="list-row"><span>◎</span><div class="grow"><strong>在讨论串回复</strong><br><span class="muted"># 产品讨论 · 09:18</span></div></div></div>`;
@@ -249,13 +287,15 @@
         const action=target.dataset.action, value=target.dataset.value;
         if(action==='prev-variant') return changeVariant(-1);
         if(action==='next-variant') return changeVariant(1);
-        if(action==='nav') { state.section=value; state.listVisible=false; state.thread=false; }
-        else if(action==='room') { state.room=value; state.section='chat'; state.chatTab='聊天'; state.listVisible=false; state.thread=false; }
+        if(action==='nav') { state.section=value; state.listVisible=false; state.thread=false; state.replyToIndex=null; }
+        else if(action==='room') { state.room=value; state.section='chat'; state.chatTab='聊天'; state.listVisible=false; state.thread=false; state.replyToIndex=null; }
         else if(action==='chat-tab') { state.chatTab=value; state.thread=false; }
         else if(action==='agent') { state.agent=value; state.listVisible=false; }
         else if(action==='agent-tab') state.agentTab=value;
         else if(action==='node') { state.node=value; state.listVisible=false; }
-        else if(action==='thread') state.thread=true;
+        else if(action==='reply') { state.replyToIndex=Number(value); state.thread=false; state.chatTab='聊天'; }
+        else if(action==='cancel-reply') state.replyToIndex=null;
+        else if(action==='thread') { state.thread=true; state.threadIndex=Number(value); }
         else if(action==='close-thread') state.thread=false;
         else if(action==='toggle-list') state.listVisible=!state.listVisible;
         else if(action==='attach') state.attachment=!state.attachment;
@@ -269,10 +309,29 @@
         else if(action==='logout') state.signedIn=false;
         else if(action==='login') state.signedIn=true;
         else if(action==='toast') state.toast=value;
-        else if(action==='send') { const text=document.querySelector('#composer')?.value.trim(); state.asTask=Boolean(document.querySelector('#as-task')?.checked); if(text){messages[state.room].push({author:'你',time:'现在',body:text,thread:0});state.toast=state.asTask?'消息已发送并创建任务（仅原型）':'消息已发送（仅原型）';} else state.toast='请先输入消息'; state.attachment=false; }
-        else if(action==='reply-thread') { const text=document.querySelector('#thread-composer')?.value.trim(); state.toast=text?'讨论串回复已发送（仅原型）':'请先输入回复'; }
+        else if(action==='send') {
+          const text=document.querySelector('#composer')?.value.trim();
+          state.asTask=Boolean(document.querySelector('#as-task')?.checked);
+          if(text) {
+            const parent=state.replyToIndex===null?null:messages[state.room][state.replyToIndex];
+            messages[state.room].push({author:'你',time:'现在',body:text,thread:0,...(parent?{replyTo:{author:parent.author,body:parent.body}}:{})});
+            state.replyToIndex=null;
+            state.toast=state.asTask?'消息已发送并创建任务（仅原型）':'消息已发送到当前会话（仅原型）';
+          } else state.toast='请先输入消息';
+          state.attachment=false;
+        }
+        else if(action==='reply-thread') {
+          const text=document.querySelector('#thread-composer')?.value.trim();
+          if(text) {
+            const key=threadKey(state.room,state.threadIndex);
+            (threadReplies[key] ??= []).push({author:'你',time:'现在',body:text});
+            messages[state.room][state.threadIndex].thread=threadReplies[key].length;
+          }
+          state.toast=text?'讨论串回复已发送（仅原型）':'请先输入回复';
+        }
         if(!['send','reply-thread','toast','submit-agent','create-agent'].includes(action)) state.toast='';
         render();
+        if(action==='reply') document.querySelector('#composer')?.focus();
         if(state.toast) setTimeout(()=>{state.toast='';render();},3000);
       });
       document.addEventListener('keydown', e=> { if(['INPUT','TEXTAREA'].includes(document.activeElement.tagName)||document.activeElement.isContentEditable)return; if(e.key==='ArrowLeft')changeVariant(-1); if(e.key==='ArrowRight')changeVariant(1); });
