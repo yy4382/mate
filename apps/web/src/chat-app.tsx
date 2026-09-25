@@ -123,7 +123,7 @@ export function ChatPage() {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
-  const [loadingLatest, setLoadingLatest] = useState(false);
+  const [loadingLatestChannelId, setLoadingLatestChannelId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [live, setLive] = useState(false);
@@ -297,6 +297,7 @@ export function ChatPage() {
     ? (messageWindows[selectedId] ?? emptyMessageWindow)
     : emptyMessageWindow;
   const currentMessages = currentWindow.messages;
+  const loadingLatest = selectedId !== null && loadingLatestChannelId === selectedId;
 
   async function logout() {
     setBusy(true);
@@ -368,7 +369,7 @@ export function ChatPage() {
   async function returnToLatest() {
     if (!selectedId) return;
     const channelId = selectedId;
-    setLoadingLatest(true);
+    setLoadingLatestChannelId(channelId);
     setError(null);
     setMessageWindows((current) => {
       const window = current[channelId] ?? emptyMessageWindow;
@@ -400,13 +401,15 @@ export function ChatPage() {
         };
       });
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "无法读取最新消息。");
-      setMessageWindows((current) => {
-        const window = current[channelId] ?? emptyMessageWindow;
-        return { [channelId]: { ...window, hasNewer: true } };
-      });
+      if (selectedIdRef.current === channelId) {
+        setError(cause instanceof Error ? cause.message : "无法读取最新消息。");
+        setMessageWindows((current) => {
+          const window = current[channelId] ?? emptyMessageWindow;
+          return { [channelId]: { ...window, hasNewer: true } };
+        });
+      }
     } finally {
-      setLoadingLatest(false);
+      setLoadingLatestChannelId((current) => (current === channelId ? null : current));
     }
   }
 

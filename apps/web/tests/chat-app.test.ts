@@ -92,6 +92,12 @@ let nextPostGate: {
   waiting: Promise<void>;
   release: () => void;
 } | null;
+let nextHistoryGate: {
+  channelId: string;
+  started: Promise<void>;
+  signalStarted: () => void;
+  response: Promise<Response>;
+} | null;
 
 function delayNextPost(): { started: Promise<void>; release: () => void } {
   let signalStarted!: () => void, release!: () => void;
@@ -99,6 +105,20 @@ function delayNextPost(): { started: Promise<void>; release: () => void } {
   const waiting = new Promise<void>((resolve) => (release = resolve));
   nextPostGate = { started, signalStarted, waiting, release };
   return { started, release };
+}
+
+function failNextLatestHistoryRequest(channelId: string): {
+  started: Promise<void>;
+  fail: () => void;
+} {
+  let signalStarted!: () => void, rejectResponse!: (response: Response) => void;
+  const started = new Promise<void>((resolve) => (signalStarted = resolve));
+  const response = new Promise<Response>((resolve) => (rejectResponse = resolve));
+  nextHistoryGate = { channelId, started, signalStarted, response };
+  return {
+    started,
+    fail: () => rejectResponse(json(503, { error: "读取频道 A 的最新消息失败" })),
+  };
 }
 
 function message(channelId: string, id: string, text: string, order: string): FixtureMessage {
@@ -153,8 +173,14 @@ function installFetch(): void {
       }
       const messages = history.get(channelId) ?? [],
         urlValue = new URL(url, "http://mate.test"),
-        before = urlValue.searchParams.get("before"),
-        limit = Number(urlValue.searchParams.get("limit") ?? 50),
+        before = urlValue.searchParams.get("before");
+      const gate = nextHistoryGate;
+      if (before === null && gate?.channelId === channelId) {
+        nextHistoryGate = null;
+        gate.signalStarted();
+        return gate.response;
+      }
+      const limit = Number(urlValue.searchParams.get("limit") ?? 50),
         eligible =
           before === null
             ? messages
@@ -188,6 +214,7 @@ beforeEach(() => {
   sessionStatus = 200;
   posts = [];
   nextPostGate = null;
+  nextHistoryGate = null;
   TestEventSource.instances = [];
   installFetch();
   vi.mocked(redirectToLogin).mockClear();
@@ -352,6 +379,37 @@ it("keeps a return-to-latest path after sending from an older message window", a
   expect(screen.getByText("新消息251")).not.toBeNull();
   expect(screen.queryByText("历史消息 1")).toBeNull();
   expect(document.querySelectorAll(".message-row")).toHaveLength(50);
+});
+
+it("ignores a failed latest-page request after switching to another channel", async () => {
+  history.set(
+    publicChannel.id,
+    Array.from({ length: 250 }, (_, index) =>
+      message(publicChannel.id, `history-${index + 1}`, `A 消息 ${index + 1}`, String(index + 1)),
+    ),
+  );
+  history.set(privateChannel.id, [message(privateChannel.id, "private-1", "B 的消息", "1")]);
+  const user = await openChat();
+
+  for (const firstOrder of [151, 101, 51, 1]) {
+    await user.click(await screen.findByRole("button", { name: "加载更早消息" }));
+    expect(await screen.findByText(`A 消息 ${firstOrder}`)).not.toBeNull();
+  }
+  const gate = failNextLatestHistoryRequest(publicChannel.id);
+  await user.click(screen.getByRole("button", { name: "返回最新消息" }));
+  await gate.started;
+  expect(screen.getByRole("button", { name: /正在读取最新消息/ })).not.toBeNull();
+
+  await user.click(screen.getByRole("button", { name: /私有频道/ }));
+  expect(await screen.findByText("B 的消息")).not.toBeNull();
+  expect(screen.queryByRole("button", { name: /正在读取最新消息/ })).toBeNull();
+  await act(async () => {
+    gate.fail();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  expect(screen.getByText("B 的消息")).not.toBeNull();
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(document.querySelectorAll(".message-row")).toHaveLength(1);
 });
 
 it("clears private chat and requests login when session revalidation gets 401", async () => {
