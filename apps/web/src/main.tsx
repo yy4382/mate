@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
+import { ChatPage } from "./chat-app.js";
 import { watchServiceStatus, type ServiceState } from "./status-monitor.js";
 import "./style.css";
 
@@ -98,69 +99,12 @@ function LoginPage() {
   );
 }
 
-function OwnerPage() {
-  const [ready, setReady] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    fetch("/api/owner/session", {
-      signal: controller.signal,
-      headers: { Accept: "application/json" },
-    })
-      .then((response) => {
-        if (response.status === 401) {
-          window.location.replace("/login");
-          return;
-        }
-        if (!response.ok) throw new Error("Session request failed");
-        setReady(true);
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) setError("暂时无法确认登录状态，请刷新页面重试。");
-      });
-    return () => controller.abort();
-  }, []);
-
-  async function logout() {
-    setSubmitting(true);
-    setError(null);
-    try {
-      const response = await fetch("/api/auth/logout", { method: "POST" });
-      if (!response.ok) throw new Error("Logout request failed");
-      window.location.replace("/login");
-    } catch {
-      setError("退出失败，请重试。");
-      setSubmitting(false);
-    }
-  }
-
-  return (
-    <main className="page-shell">
-      <section className="auth-card" aria-labelledby="page-title">
-        <p className="eyebrow">MATE 控制面</p>
-        <h1 id="page-title">Mate</h1>
-        {ready ? <p className="hint">你已登录。</p> : <p className="hint">正在确认登录状态…</p>}
-        {error && (
-          <p className="form-error" role="alert">
-            {error}
-          </p>
-        )}
-        <button type="button" onClick={logout} disabled={submitting || !ready}>
-          {submitting ? "正在退出…" : "退出登录"}
-        </button>
-      </section>
-    </main>
-  );
-}
-
 const path = window.location.pathname;
 const Page =
   path === "/login" || path.startsWith("/login/")
     ? LoginPage
     : path === "/app" || path.startsWith("/app/")
-      ? OwnerPage
+      ? ChatPage
       : StatusPage;
 
 createRoot(document.getElementById("root")!).render(<Page />);

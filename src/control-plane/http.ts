@@ -1,8 +1,28 @@
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { resolve } from "node:path";
+import { z } from "zod";
 import { OWNER_SESSION_COOKIE, OwnerAuth } from "./owner-auth.js";
+import { ArchivedChannelError, OwnerChat } from "./owner-chat.js";
 import { LoginGate } from "./login-gate.js";
+
+const newChannelSchema = z
+  .object({
+    name: z.string().trim().min(1).max(80),
+    description: z.string().trim().max(500),
+    visibility: z.enum(["public", "private"]),
+  })
+  .strict();
+const updateChannelSchema = z
+  .object({
+    name: z.string().trim().min(1).max(80).optional(),
+    description: z.string().trim().max(500).optional(),
+    visibility: z.enum(["public", "private"]).optional(),
+    archived: z.boolean().optional(),
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0);
+const newMessageSchema = z.object({ text: z.string().trim().min(1).max(20_000) }).strict();
 
 export interface ControlPlaneAppOptions {
   webRoot?: string;
@@ -36,6 +56,7 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
       ...(options.sessionTtlMs !== undefined ? { sessionTtlMs: options.sessionTtlMs } : {}),
     }),
     app = new ControlPlaneApp(ownerAuth),
+    ownerChat = new OwnerChat(ownerAuth.db, options.now),
     loginGate = new LoginGate();
 
   const requireOwnerApi: MiddlewareHandler = async (context, next) => {
@@ -104,6 +125,113 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
 
   app.use("/api/owner/*", requireOwnerApi);
   app.get("/api/owner/session", (context) => context.json({ authenticated: true }));
+  app.get("/api/owner/snapshot", (context) => context.json(ownerChat.snapshot()));
+  app.get("/api/owner/events", (context) => {
+    const suppliedCursor =
+      context.req.header("last-event-id") ?? context.req.query("cursor") ?? "0";
+    if (!/^(0|[1-9]\d*)$/.test(suppliedCursor)) return context.json({ error: "事件游标无效" }, 400);
+    const initialCursor = Number(suppliedCursor);
+    if (!Number.isSafeInteger(initialCursor)) return context.json({ error: "事件游标无效" }, 400);
+
+    let cursor = initialCursor,
+      closed = false;
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (closed) return;
+        const page = ownerChat.eventsAfter(cursor);
+        if (page.stale) {
+          controller.enqueue(
+            encoder.encode(
+              `event: snapshot_required\ndata: ${JSON.stringify({ reason: "cursor_too_old", snapshotUrl: "/api/owner/snapshot" })}\n\n`,
+            ),
+          );
+          closed = true;
+          controller.close();
+          return;
+        }
+        if (!page.events.length) {
+          await new Promise((resolveDelay) => setTimeout(resolveDelay, 250));
+          return;
+        }
+        for (const event of page.events) {
+          controller.enqueue(
+            encoder.encode(
+              `id: ${event.seq}\nevent: ${event.kind}\ndata: ${JSON.stringify(event)}\n\n`,
+            ),
+          );
+          cursor = event.seq;
+        }
+      },
+      cancel() {
+        closed = true;
+      },
+    });
+    return context.newResponse(stream, {
+      headers: {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        "X-Accel-Buffering": "no",
+      },
+    });
+  });
+  app.get("/api/owner/channels", (context) => context.json({ channels: ownerChat.listChannels() }));
+  app.post("/api/owner/channels", async (context) => {
+    let body: unknown;
+    try {
+      body = await context.req.json();
+    } catch {
+      return context.json({ error: "频道资料格式无效" }, 400);
+    }
+    const input = newChannelSchema.safeParse(body);
+    if (!input.success) return context.json({ error: "频道资料格式无效" }, 400);
+    return context.json(ownerChat.createChannel(input.data), 201);
+  });
+  app.patch("/api/owner/channels/:channelId", async (context) => {
+    let body: unknown;
+    try {
+      body = await context.req.json();
+    } catch {
+      return context.json({ error: "频道资料格式无效" }, 400);
+    }
+    const input = updateChannelSchema.safeParse(body);
+    if (!input.success) return context.json({ error: "频道资料格式无效" }, 400);
+    const channel = ownerChat.updateChannel(context.req.param("channelId"), input.data);
+    if (!channel) return context.json({ error: "频道不存在" }, 404);
+    return context.json(channel);
+  });
+  app.get("/api/owner/channels/:channelId/messages", (context) => {
+    const beforeText = context.req.query("before"),
+      before = beforeText === undefined ? undefined : Number(beforeText),
+      validBefore =
+        beforeText === undefined || (/^[1-9]\d*$/.test(beforeText) && Number.isSafeInteger(before)),
+      limitText = context.req.query("limit"),
+      limit = limitText === undefined ? 50 : Number(limitText);
+    if (!validBefore || !Number.isSafeInteger(limit) || limit < 1 || limit > 100)
+      return context.json({ error: "历史游标或条数无效" }, 400);
+    const page = ownerChat.listMessages(context.req.param("channelId"), before, limit);
+    if (!page) return context.json({ error: "频道不存在" }, 404);
+    return context.json(page);
+  });
+  app.post("/api/owner/channels/:channelId/messages", async (context) => {
+    let body: unknown;
+    try {
+      body = await context.req.json();
+    } catch {
+      return context.json({ error: "消息内容无效" }, 400);
+    }
+    const input = newMessageSchema.safeParse(body);
+    if (!input.success) return context.json({ error: "消息内容无效" }, 400);
+    try {
+      const message = ownerChat.createMessage(context.req.param("channelId"), input.data.text);
+      if (!message) return context.json({ error: "频道不存在" }, 404);
+      return context.json(message, 201);
+    } catch (error) {
+      if (error instanceof ArchivedChannelError)
+        return context.json({ error: "频道已归档，不能发送消息" }, 409);
+      throw error;
+    }
+  });
 
   app.use("/app", requireOwnerPage);
   app.use("/app/*", requireOwnerPage);

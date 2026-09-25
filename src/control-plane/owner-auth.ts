@@ -30,6 +30,34 @@ CREATE TABLE IF NOT EXISTS owner_sessions (
   CHECK(expires_at > created_at)
 );
 CREATE INDEX IF NOT EXISTS owner_sessions_expiry ON owner_sessions(expires_at);
+
+CREATE TABLE owner_channels (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL,
+  visibility TEXT NOT NULL CHECK(visibility IN ('public','private')),
+  archived INTEGER NOT NULL DEFAULT 0 CHECK(archived IN (0,1)),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX owner_channels_order ON owner_channels(archived,created_at,id);
+CREATE TABLE owner_messages (
+  id TEXT PRIMARY KEY,
+  channel_id TEXT NOT NULL REFERENCES owner_channels(id),
+  order_seq INTEGER NOT NULL,
+  revision INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0),
+  text TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  UNIQUE(channel_id,order_seq)
+);
+CREATE INDEX owner_messages_channel_order ON owner_messages(channel_id,order_seq);
+CREATE TABLE owner_chat_events (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,
+  channel_id TEXT NOT NULL REFERENCES owner_channels(id),
+  payload TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
 `;
 
 export interface OwnerAuthOptions {
