@@ -14,6 +14,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "pnpm run build && vitest run",
+    "test:linux-agent-provisioner": "node tests/linux/agent-provisioner.integration.mjs",
     "check": "pnpm run format:check && pnpm test",
     "start": "node dist/src/main.js start",
     "start:control-plane": "node dist/src/control-plane/main.js",

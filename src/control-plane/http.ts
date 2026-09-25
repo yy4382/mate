@@ -7,6 +7,9 @@ import { ArchivedChannelError, OwnerChat } from "./owner-chat.js";
 import { LoginGate } from "./login-gate.js";
 import { NodeDirectory, type NodeDirectoryOptions } from "./nodes/directory.js";
 import { registerNodeRoutes } from "./nodes/http.js";
+import { AgentDirectory, AgentRequestConflict } from "./agents/directory.js";
+import type { AgentSummary } from "./agents/contracts.js";
+import { newAgentRequestSchema } from "./agents/contracts.js";
 
 const newChannelSchema = z
   .object({
@@ -43,6 +46,8 @@ export class ControlPlaneApp extends Hono {
   constructor(
     private readonly ownerAuth: OwnerAuth,
     readonly nodes: NodeDirectory,
+    readonly agents: AgentDirectory,
+    readonly chat: OwnerChat,
   ) {
     super();
   }
@@ -85,9 +90,11 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
         : {}),
     },
     nodes = new NodeDirectory(ownerAuth.db, nodeOptions),
-    app = new ControlPlaneApp(ownerAuth, nodes),
+    agents = new AgentDirectory(ownerAuth.db, options.now),
     ownerChat = new OwnerChat(ownerAuth.db, options.now),
+    app = new ControlPlaneApp(ownerAuth, nodes, agents, ownerChat),
     loginGate = new LoginGate();
+  const activeAgentProvisions = new Map<string, Promise<AgentSummary>>();
 
   const requireOwnerApi: MiddlewareHandler = async (context, next) => {
     const token = sessionToken(context);
@@ -155,6 +162,68 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
 
   app.use("/api/owner/*", requireOwnerApi);
   app.get("/api/owner/session", (context) => context.json({ authenticated: true }));
+  app.get("/api/owner/agents", (context) => {
+    context.header("Cache-Control", "no-store");
+    return context.json({ agents: agents.list() });
+  });
+  app.post("/api/owner/agents", async (context) => {
+    let body: unknown;
+    try {
+      body = await context.req.json();
+    } catch {
+      return context.json({ error: "Agent 资料格式无效" }, 400);
+    }
+    if (!newAgentRequestSchema.safeParse(body).success)
+      return context.json({ error: "Agent 资料格式无效" }, 400);
+    const input = newAgentRequestSchema.parse(body);
+    try {
+      agents.assertSameRequest(input);
+    } catch (error) {
+      if (error instanceof AgentRequestConflict) return context.json({ error: error.message }, 409);
+      return context.json({ error: "无法读取已有 Agent 资料。" }, 500);
+    }
+    const active = activeAgentProvisions.get(input.id);
+    if (active) return context.json({ agent: await active });
+    const existing = agents.get(input.id);
+    if (existing?.status === "waiting_credentials") return context.json({ agent: existing });
+    if (!nodes.list().some((node) => node.id === input.nodeId && node.online))
+      return context.json({ error: "所选节点当前离线，Agent 资料尚未提交。" }, 409);
+    let prepared;
+    try {
+      prepared = agents.prepare(input);
+    } catch (error) {
+      if (error instanceof AgentRequestConflict) return context.json({ error: error.message }, 409);
+      return context.json({ error: "无法保存 Agent 创建请求，请稍后重试。" }, 503);
+    }
+    if (!prepared.shouldProvision) return context.json({ agent: prepared.agent });
+
+    const task = (async (): Promise<AgentSummary> => {
+      try {
+        const result = await nodes.provisionAgent(
+          input.nodeId,
+          prepared.requestId,
+          input.id,
+          (stage) => agents.updateStage(input.id, stage),
+        );
+        if (!result.ok) return agents.fail(input.id, result.message) ?? prepared.agent;
+        return agents.complete(input.id, result.identity, ownerChat);
+      } catch (error) {
+        const message =
+          error instanceof AgentRequestConflict
+            ? error.message
+            : "Linux 节点暂时无法确认 Agent 账号与私人 home，请检查节点后按原请求重试。";
+        return agents.fail(input.id, message) ?? prepared.agent;
+      }
+    })();
+    activeAgentProvisions.set(input.id, task);
+    try {
+      const agent = await task;
+      if (agent.status === "failed") return context.json({ error: agent.error, agent }, 502);
+      return context.json({ agent }, prepared.created ? 201 : 200);
+    } finally {
+      if (activeAgentProvisions.get(input.id) === task) activeAgentProvisions.delete(input.id);
+    }
+  });
   app.get("/api/owner/snapshot", (context) => context.json(ownerChat.snapshot()));
   app.get("/api/owner/events", (context) => {
     const streamToken = sessionToken(context);

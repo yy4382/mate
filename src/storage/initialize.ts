@@ -3,7 +3,7 @@ import { existsSync, statSync } from "node:fs";
 import { FORMAT_APPLICATION_ID, FORMAT_REVISION, currentFormatSchema } from "./current-schema.js";
 
 const CONTROL_PLANE_APPLICATION_ID = 0x4d43504c;
-const CONTROL_PLANE_FORMAT_REVISION = 4;
+const CONTROL_PLANE_FORMAT_REVISION = 5;
 
 const moveAside =
   "Mate does not migrate or erase a database it does not recognise: if this file was not created by this release, move it aside and point runtime.dataDir at a new, empty directory.";
@@ -59,24 +59,27 @@ export function openCurrentDatabase(path: string): Database.Database {
 /** Open the private control-plane database through the same writable SQLite boundary. */
 export interface ControlPlaneFormatMigration {
   fromRevision: number;
+  toRevision: number;
   previousSchema: string;
+  nextSchema: string;
   migrationSchema: string;
 }
 
 export function openControlPlaneDatabase(
   path: string,
   schema: string,
-  migration?: ControlPlaneFormatMigration,
+  migrations: readonly ControlPlaneFormatMigration[] = [],
 ): Database.Database {
   const empty = !existsSync(path) || statSync(path).size === 0,
     db = openWritable(path);
   try {
     if (empty) createControlPlaneFormat(db, path, schema);
-    else acceptControlPlaneFormat(db, path, schema, migration);
+    else acceptControlPlaneFormat(db, path, schema, migrations);
   } catch (error) {
     db.close();
     throw error;
   }
+  db.pragma("foreign_keys = ON");
   db.pragma("journal_mode = WAL");
   db.pragma("synchronous = FULL");
   return db;
@@ -106,7 +109,7 @@ function acceptControlPlaneFormat(
   db: Database.Database,
   path: string,
   schema: string,
-  migration?: ControlPlaneFormatMigration,
+  migrations: readonly ControlPlaneFormatMigration[],
 ): void {
   let found: Verdict;
   try {
@@ -114,8 +117,11 @@ function acceptControlPlaneFormat(
   } catch (cause) {
     throw unreadable(path, cause);
   }
-  if (found.kind === "revision" && migration?.fromRevision === found.revision) {
-    migrateControlPlaneFormat(db, path, schema, migration);
+  while (found.kind === "revision") {
+    const revision = found.revision,
+      migration = migrations.find((candidate) => candidate.fromRevision === revision);
+    if (!migration) break;
+    migrateControlPlaneFormat(db, path, migration);
     found = controlPlaneVerdict(db, schema);
   }
   switch (found.kind) {
@@ -142,10 +148,9 @@ function acceptControlPlaneFormat(
 function migrateControlPlaneFormat(
   db: Database.Database,
   path: string,
-  currentSchema: string,
   migration: ControlPlaneFormatMigration,
 ): void {
-  if (migration.fromRevision + 1 !== CONTROL_PLANE_FORMAT_REVISION)
+  if (migration.fromRevision + 1 !== migration.toRevision)
     throw new Error("Control-plane format migrations must advance exactly one revision");
 
   const previousTemplate = new Database(":memory:");
@@ -169,7 +174,7 @@ function migrateControlPlaneFormat(
   const currentTemplate = new Database(":memory:");
   let additions: string[];
   try {
-    currentTemplate.exec(currentSchema);
+    currentTemplate.exec(migration.nextSchema);
     additions = [...databaseObjects(currentTemplate)].filter(
       (object) => !previousObjects.has(object),
     );
@@ -186,7 +191,7 @@ function migrateControlPlaneFormat(
   try {
     db.transaction(() => {
       db.exec(migration.migrationSchema);
-      db.pragma(`user_version = ${CONTROL_PLANE_FORMAT_REVISION}`);
+      db.pragma(`user_version = ${migration.toRevision}`);
     }).immediate();
   } catch (cause) {
     throw new Error(

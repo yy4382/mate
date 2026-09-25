@@ -161,6 +161,50 @@ export class OwnerChat {
     return rows.map(toChannel);
   }
 
+  /** Add a provisioned Agent to an active channel before its messages can be delivered. */
+  inviteAgentToChannel(channelId: string, agentId: string): boolean {
+    return this.db
+      .transaction(() => {
+        const session = this.db
+          .prepare(
+            `SELECT s.verified_at,a.status,a.linux_username,a.uid,a.gid,a.home
+             FROM owner_agent_sessions s JOIN owner_agents a ON a.id=s.agent_id
+             WHERE s.agent_id=?`,
+          )
+          .get(agentId) as
+          | {
+              verified_at: number | null;
+              status: string;
+              linux_username: string | null;
+              uid: number | null;
+              gid: number | null;
+              home: string | null;
+            }
+          | undefined;
+        if (
+          !session ||
+          session.verified_at === null ||
+          session.status !== "waiting_credentials" ||
+          !session.linux_username ||
+          session.uid === null ||
+          session.gid === null ||
+          !session.home
+        )
+          return false;
+        const channel = this.db
+          .prepare("SELECT archived FROM owner_channels WHERE id=?")
+          .get(channelId) as { archived: number } | undefined;
+        if (!channel || channel.archived) return false;
+        this.db
+          .prepare(
+            "INSERT INTO owner_channel_memberships(channel_id,principal_kind,principal_id,active,joined_at) VALUES(?,'agent',?,1,?) ON CONFLICT(channel_id,principal_kind,principal_id) DO UPDATE SET active=1",
+          )
+          .run(channelId, agentId, this.now());
+        return true;
+      })
+      .immediate();
+  }
+
   snapshot(): OwnerChatSnapshot {
     return this.db
       .transaction(() => ({

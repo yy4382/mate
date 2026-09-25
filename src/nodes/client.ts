@@ -1,7 +1,9 @@
 import { createPrivateKey, randomUUID, sign } from "node:crypto";
+import { resolve as resolvePath } from "node:path";
 import { WebSocket } from "ws";
 import { loadOrCreateNodeIdentity, type NodeIdentity } from "./identity.js";
 import { NodeControlMessageSchema, NodeRequestSchema } from "./protocol.js";
+import { handleAgentProvisionRequest, provisionLinuxAgent } from "./agent-provisioner.js";
 
 const INITIAL_RETRY_MS = 250;
 const MAX_RETRY_MS = 10_000;
@@ -12,6 +14,7 @@ const HEARTBEAT_TIMEOUT_MS = 30_000;
 export interface LinuxNodeOptions {
   controlPlaneUrl: string;
   dataDirectory: string;
+  agentHomeRoot?: string;
   pairingToken?: string;
   heartbeatIntervalMs?: number;
   heartbeatTimeoutMs?: number;
@@ -50,6 +53,7 @@ export async function runLinuxNode(options: LinuxNodeOptions, signal: AbortSigna
         },
         heartbeatIntervalMs,
         heartbeatTimeoutMs,
+        options.agentHomeRoot ?? "/var/lib/mate/agents",
         signal,
       );
       if (signal.aborted) break;
@@ -90,6 +94,7 @@ function connectOnce(
   clearPairingToken: () => void,
   heartbeatIntervalMs: number,
   heartbeatTimeoutMs: number,
+  agentHomeRoot: string,
   signal: AbortSignal,
 ): Promise<boolean> {
   if (signal.aborted) return Promise.resolve(false);
@@ -257,6 +262,25 @@ function connectOnce(
         if (pingTimeout) clearTimeout(pingTimeout);
         pingTimeout = undefined;
         process.stdout.write(`MATE_NODE_HEARTBEAT_ACK ${message.requestId}\n`);
+        return;
+      }
+      if (message.type === "control.agent.provision") {
+        if (!authenticated)
+          throw new NodeAuthenticationError("控制面在节点身份验证前请求创建 Agent。");
+        void handleAgentProvisionRequest(
+          message,
+          (request) => {
+            if (socket.readyState === WebSocket.OPEN) sendRequest(socket, request);
+          },
+          (agentId, onProgress) =>
+            provisionLinuxAgent({
+              agentId,
+              homeRoot: resolvePath(agentHomeRoot),
+              onProgress,
+            }),
+        ).catch(() => {
+          // Provisioning failures are returned as bounded protocol results by its handler.
+        });
       }
     };
 

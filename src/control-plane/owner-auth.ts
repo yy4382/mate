@@ -3,9 +3,7 @@ import type Database from "better-sqlite3";
 import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, lstatSync, mkdirSync, readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
-import { controlPlaneSchema } from "./schema.js";
-import { nodeDirectorySchema } from "./nodes/schema.js";
-import { ownerAuthSchema } from "./owner-auth-schema.js";
+import { controlPlaneMigrations, controlPlaneSchema } from "./schema.js";
 import { openControlPlaneDatabase } from "../storage/initialize.js";
 
 export const OWNER_SESSION_COOKIE = "__Host-mate_session";
@@ -51,11 +49,11 @@ export class OwnerAuth {
     mkdirSync(options.dataDir, { recursive: true, mode: 0o700 });
     chmodSync(options.dataDir, 0o700);
     this.databasePath = join(resolve(options.dataDir), "control-plane.sqlite");
-    this.db = openControlPlaneDatabase(this.databasePath, controlPlaneSchema, {
-      fromRevision: 3,
-      previousSchema: ownerAuthSchema,
-      migrationSchema: nodeDirectorySchema,
-    });
+    this.db = openControlPlaneDatabase(
+      this.databasePath,
+      controlPlaneSchema,
+      controlPlaneMigrations,
+    );
     chmodSync(this.databasePath, 0o600);
   }
 

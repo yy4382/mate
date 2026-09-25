@@ -1,9 +1,12 @@
 import type Database from "better-sqlite3";
 import { createHash, createPublicKey, randomBytes, verify } from "node:crypto";
 import {
+  NodeControlMessageSchema,
   NodeRequestIdSchema,
   NodeRequestSchema,
   type NodeControlMessage,
+  type NodeAgentProvisionResult,
+  type AgentProvisionStage,
   type NodeRequest,
 } from "../../nodes/protocol.js";
 
@@ -12,6 +15,7 @@ export const DEFAULT_NODE_MAX_CONNECTIONS = 128;
 export const DEFAULT_NODE_MAX_UNAUTHENTICATED_CONNECTIONS = 32;
 export const DEFAULT_NODE_HANDSHAKE_TIMEOUT_MS = 10_000;
 export const DEFAULT_NODE_HEARTBEAT_TIMEOUT_MS = 35_000;
+export const DEFAULT_NODE_OPERATION_TIMEOUT_MS = 60_000;
 
 export interface NodeSocket {
   send(data: string): void;
@@ -39,6 +43,17 @@ export interface NodeDirectoryOptions {
   maxUnauthenticatedConnections?: number;
   handshakeTimeoutMs?: number;
   heartbeatTimeoutMs?: number;
+  operationTimeoutMs?: number;
+}
+
+interface PendingAgentProvision {
+  nodeId: string;
+  agentId: string;
+  onProgress: (stage: AgentProvisionStage) => void;
+  promise: Promise<NodeAgentProvisionResult>;
+  resolve: (result: NodeAgentProvisionResult) => void;
+  reject: (error: Error) => void;
+  timeout: ReturnType<typeof setTimeout>;
 }
 
 /** Pairing credentials and durable node identities for this control plane. */
@@ -49,11 +64,13 @@ export class NodeDirectory {
   private readonly maxUnauthenticatedConnections: number;
   private readonly handshakeTimeoutMs: number;
   private readonly heartbeatTimeoutMs: number;
+  private readonly operationTimeoutMs: number;
   private readonly heartbeatSweepTimer: ReturnType<typeof setInterval>;
   private readonly sessions = new WeakMap<NodeSocket, SocketSession>();
   private readonly connected = new Map<string, NodeSocket>();
   private readonly sockets = new Set<NodeSocket>();
   private readonly unauthenticated = new Set<NodeSocket>();
+  private readonly pendingAgentProvisions = new Map<string, PendingAgentProvision>();
 
   constructor(
     private readonly database: Database.Database,
@@ -75,6 +92,10 @@ export class NodeDirectory {
     this.heartbeatTimeoutMs = positiveInteger(
       options.heartbeatTimeoutMs,
       DEFAULT_NODE_HEARTBEAT_TIMEOUT_MS,
+    );
+    this.operationTimeoutMs = positiveInteger(
+      options.operationTimeoutMs,
+      DEFAULT_NODE_OPERATION_TIMEOUT_MS,
     );
     if (this.maxUnauthenticatedConnections > this.maxConnections)
       throw new Error("Unauthenticated node connection limit cannot exceed the total limit");
@@ -160,7 +181,8 @@ export class NodeDirectory {
     const request = parsed.data;
     if (request.type === "node.authenticate") return this.authenticate(socket, session, request);
     if (request.type === "node.pair") return this.pair(socket, session, request);
-    return this.ping(socket, session, request);
+    if (request.type === "node.ping") return this.ping(socket, session, request);
+    return this.receiveAgentProvisionMessage(socket, session, request);
   }
 
   close(socket: NodeSocket): void {
@@ -169,8 +191,72 @@ export class NodeDirectory {
     const session = this.sessions.get(socket);
     if (session?.handshakeTimeout) clearTimeout(session.handshakeTimeout);
     const nodeId = session?.nodeId;
-    if (nodeId && this.connected.get(nodeId) === socket) this.connected.delete(nodeId);
+    if (nodeId && this.connected.get(nodeId) === socket) {
+      this.connected.delete(nodeId);
+      this.rejectAgentProvisions(nodeId, new Error("节点连接已断开，Agent 创建结果尚未确认。"));
+    }
     this.sessions.delete(socket);
+  }
+
+  provisionAgent(
+    nodeId: string,
+    requestId: string,
+    agentId: string,
+    onProgress: (stage: AgentProvisionStage) => void,
+  ): Promise<NodeAgentProvisionResult> {
+    const controlMessage = NodeControlMessageSchema.parse({
+      type: "control.agent.provision",
+      requestId,
+      agentId,
+    });
+    const existing = this.pendingAgentProvisions.get(requestId);
+    if (existing) {
+      if (existing.nodeId !== nodeId || existing.agentId !== agentId)
+        return Promise.reject(new Error("Agent 创建请求标识已被另一请求使用。"));
+      return existing.promise;
+    }
+    const socket = this.connected.get(nodeId),
+      session = socket ? this.sessions.get(socket) : undefined;
+    if (
+      !socket ||
+      !session ||
+      session.nodeId !== nodeId ||
+      this.now() - session.lastHeartbeatAt >= this.heartbeatTimeoutMs
+    )
+      return Promise.reject(new Error("所选节点当前离线，Agent 创建尚未开始。"));
+
+    let resolveResult!: (result: NodeAgentProvisionResult) => void,
+      rejectResult!: (error: Error) => void;
+    const promise = new Promise<NodeAgentProvisionResult>((resolve, reject) => {
+      resolveResult = resolve;
+      rejectResult = reject;
+    });
+    const timeout = setTimeout(() => {
+      this.finishAgentProvision(
+        requestId,
+        undefined,
+        new Error("节点执行 Agent 创建超时，结果尚未确认。"),
+      );
+    }, this.operationTimeoutMs);
+    this.pendingAgentProvisions.set(requestId, {
+      nodeId,
+      agentId,
+      onProgress,
+      promise,
+      resolve: resolveResult,
+      reject: rejectResult,
+      timeout,
+    });
+    try {
+      this.send(socket, controlMessage);
+    } catch (error) {
+      this.finishAgentProvision(
+        requestId,
+        undefined,
+        error instanceof Error ? error : new Error("无法向节点发送 Agent 创建请求。"),
+      );
+    }
+    return promise;
   }
 
   closeAll(): void {
@@ -270,6 +356,52 @@ export class NodeDirectory {
       requestId: request.requestId,
       acceptedAt: this.now(),
     });
+  }
+
+  private receiveAgentProvisionMessage(
+    socket: NodeSocket,
+    session: SocketSession,
+    request: Extract<
+      NodeRequest,
+      { type: "node.agent.provision.progress" | "node.agent.provision.result" }
+    >,
+  ): void {
+    const nodeId = session.nodeId;
+    if (!nodeId || this.connected.get(nodeId) !== socket)
+      return this.reject(socket, request.requestId, "not_authenticated", "节点尚未完成身份验证。");
+    const pending = this.pendingAgentProvisions.get(request.requestId);
+    if (!pending) return;
+    if (pending.nodeId !== nodeId || pending.agentId !== request.agentId)
+      return this.reject(
+        socket,
+        request.requestId,
+        "invalid_identity",
+        "Agent 创建结果与请求不匹配。",
+      );
+    if (request.type === "node.agent.provision.progress") {
+      pending.onProgress(request.stage);
+      return;
+    }
+    this.finishAgentProvision(request.requestId, request);
+  }
+
+  private finishAgentProvision(
+    requestId: string,
+    result?: NodeAgentProvisionResult,
+    error?: Error,
+  ): void {
+    const pending = this.pendingAgentProvisions.get(requestId);
+    if (!pending) return;
+    this.pendingAgentProvisions.delete(requestId);
+    clearTimeout(pending.timeout);
+    if (error) pending.reject(error);
+    else if (result) pending.resolve(result);
+  }
+
+  private rejectAgentProvisions(nodeId: string, error: Error): void {
+    for (const [requestId, pending] of this.pendingAgentProvisions) {
+      if (pending.nodeId === nodeId) this.finishAgentProvision(requestId, undefined, error);
+    }
   }
 
   private markConnected(socket: NodeSocket, session: SocketSession, nodeId: string): void {

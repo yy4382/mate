@@ -1038,7 +1038,7 @@ it("pairs a node over WebSocket, confirms requests, and restores status after re
   }
 }, 15000);
 
-it("upgrades a #73 control-plane database to revision 4 without losing owner chat", async () => {
+it("upgrades a revision 3 database through node and Agent schemas without losing owner chat", async () => {
   const directory = mkdtempSync(join(tmpdir(), "mate-node-schema-upgrade-"));
   chmodSync(directory, 0o700);
   const dataDir = join(directory, "control-plane-data");
@@ -1111,10 +1111,13 @@ it("upgrades a #73 control-plane database to revision 4 without losing owner cha
     expect(await nodes.json()).toEqual({ nodes: [] });
 
     const upgraded = new Database(databasePath, { readonly: true });
-    expect(upgraded.pragma("user_version", { simple: true })).toBe(4);
+    expect(upgraded.pragma("user_version", { simple: true })).toBe(5);
     expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE name='nodes'").get()).toEqual({
       name: "nodes",
     });
+    expect(
+      upgraded.prepare("SELECT name FROM sqlite_master WHERE name='owner_agents'").get(),
+    ).toEqual({ name: "owner_agents" });
     upgraded.close();
   } finally {
     await stopProcess(server);

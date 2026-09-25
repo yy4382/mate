@@ -563,6 +563,9 @@ export function ChatPage() {
           <a className="text-button owner-nodes-link" href="/app/nodes">
             节点管理
           </a>
+          <a className="text-button owner-nodes-link" href="/app/agents">
+            Agent 同事
+          </a>
           <button className="text-button" type="button" onClick={logout} disabled={busy}>
             退出登录
           </button>

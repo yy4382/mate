@@ -32,6 +32,10 @@ sudo /usr/bin/node /ABSOLUTE/checkout/dist/src/deployment/cli.js install /ABSOLU
 
 `plan` 展示账号、目录、资源与磁盘计划；`preflight` 检查系统、账号及附加组、资源和现有服务；`install` 验证并复制完整发布物，配置 systemd 与 `matectl`，但保持服务停止。同一输入可重跑检查；不会静默覆盖不同身份的安装。将密钥放入 `/etc/mate/mate.env`，保持 `root:root 0600`，不放进 JSON、manifest、源码或命令行。
 
+## Linux 节点与 Agent 身份
+
+配对后的 Linux 节点需要以 root 运行，才能响应所有者在网页提交的 Agent 创建请求。节点只接受受限的账号与 home 创建/核验消息，不提供通用 root 命令入口。默认 Agent home 根目录是 `/var/lib/mate/agents`；可通过节点服务的 `MATE_NODE_AGENT_HOME_ROOT` 改成绝对路径。根目录及其父路径必须是真实目录且由 root 所有；最终根目录不得允许其他用户写入，父路径也不得允许其他用户写入，系统标准的 root 所有 sticky 目录（例如 `/tmp`）可作为父路径。Agent 自己的 home 为 `0700`，起始 `MEMORY.md` 为 `0600`。模型服务凭据在控制面配置，不发给节点 provisioning 请求。
+
 ## Slack App 接线
 
 每位 Agent 使用独立的 Slack App 和 bot。用生成器为每位成员生成 manifest，导入 Slack 并安装到同一个 workspace：

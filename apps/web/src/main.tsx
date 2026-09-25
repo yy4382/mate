@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 import { ChatPage } from "./chat-app.js";
 import { NodesPage } from "./nodes-page.js";
+import { AgentsPage } from "./agents-page.js";
 import { watchServiceStatus, type ServiceState } from "./status-monitor.js";
 import "./style.css";
 
@@ -104,10 +105,12 @@ const path = window.location.pathname;
 const Page =
   path === "/login" || path.startsWith("/login/")
     ? LoginPage
-    : path === "/app/nodes" || path.startsWith("/app/nodes/")
-      ? NodesPage
-      : path === "/app" || path.startsWith("/app/")
-        ? ChatPage
-        : StatusPage;
+    : path === "/app/agents" || path.startsWith("/app/agents/")
+      ? AgentsPage
+      : path === "/app/nodes" || path.startsWith("/app/nodes/")
+        ? NodesPage
+        : path === "/app" || path.startsWith("/app/")
+          ? ChatPage
+          : StatusPage;
 
 createRoot(document.getElementById("root")!).render(<Page />);
