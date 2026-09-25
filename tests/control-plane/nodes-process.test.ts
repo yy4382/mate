@@ -642,7 +642,11 @@ it("expires a blackholed node from owner status and reconnects after its pong de
     const offline = await waitForNode(origin, cookie!, (candidate) => candidate?.online === false);
     expect(offline.id).toBe(paired[1]);
     expect(node.exitStatus).toBeUndefined();
-    expect(blackholedSocket?.readyState).toBe(WebSocket.OPEN);
+    const expiredSocket = blackholedSocket;
+    const closeDeadline = Date.now() + 2000;
+    while (expiredSocket?.readyState !== WebSocket.CLOSED && Date.now() < closeDeadline)
+      await delay(10);
+    expect(expiredSocket?.readyState).toBe(WebSocket.CLOSED);
 
     const reconnect = await node.waitFor(/Node WebSocket disconnected; reconnecting\./, 5000);
     expect(reconnect[0]).toContain("reconnecting");
@@ -884,14 +888,11 @@ it("pairs a node over WebSocket, confirms requests, and restores status after re
     });
     expect(channelResponse.status).toBe(201);
     const channel = (await channelResponse.json()) as { id: string };
-    const offlinePost = await fetch(
-      new URL(`/api/owner/channels/${channel.id}/messages`, origin),
-      {
-        method: "POST",
-        headers: { cookie: cookie!, "content-type": "application/json" },
-        body: JSON.stringify({ text: "节点离线时仍已提交" }),
-      },
-    );
+    const offlinePost = await fetch(new URL(`/api/owner/channels/${channel.id}/messages`, origin), {
+      method: "POST",
+      headers: { cookie: cookie!, "content-type": "application/json" },
+      body: JSON.stringify({ text: "节点离线时仍已提交" }),
+    });
     expect(offlinePost.status).toBe(201);
     const offlineMessage = (await offlinePost.json()) as { id: string; text: string };
     const offlineHistory = await fetch(
@@ -992,10 +993,9 @@ it("upgrades a #73 control-plane database to revision 4 without losing owner cha
     expect(await channels.json()).toMatchObject({
       channels: [expect.objectContaining({ id: "saved-channel", name: "保存的频道" })],
     });
-    const messages = await fetch(
-      new URL("/api/owner/channels/saved-channel/messages", origin),
-      { headers: { cookie: cookie! } },
-    );
+    const messages = await fetch(new URL("/api/owner/channels/saved-channel/messages", origin), {
+      headers: { cookie: cookie! },
+    });
     expect(messages.status).toBe(200);
     expect(await messages.json()).toMatchObject({
       messages: [expect.objectContaining({ id: "saved-message", text: "升级前的持久消息" })],

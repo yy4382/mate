@@ -170,7 +170,9 @@ function migrateControlPlaneFormat(
   let additions: string[];
   try {
     currentTemplate.exec(currentSchema);
-    additions = [...databaseObjects(currentTemplate)].filter((object) => !previousObjects.has(object));
+    additions = [...databaseObjects(currentTemplate)].filter(
+      (object) => !previousObjects.has(object),
+    );
   } finally {
     currentTemplate.close();
   }
