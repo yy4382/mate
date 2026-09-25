@@ -90,6 +90,7 @@ export class OwnerAuth {
 
   createSession(): Session {
     const now = this.now();
+    this.deleteExpiredSessions(now);
     const token = randomBytes(32).toString("base64url");
     const expiresAt = now + this.sessionTtlMs;
     this.db
@@ -108,9 +109,8 @@ export class OwnerAuth {
   }
 
   revokeSession(token: string): void {
-    this.db
-      .prepare("UPDATE owner_sessions SET revoked_at=? WHERE token_hash=? AND revoked_at IS NULL")
-      .run(this.now(), hashToken(token));
+    // A missing token hash is denied by hasSession just like a revoked row.
+    this.db.prepare("DELETE FROM owner_sessions WHERE token_hash=?").run(hashToken(token));
   }
 
   close(): void {
@@ -120,6 +120,14 @@ export class OwnerAuth {
   private readPasswordHash(): { password_hash: string } | undefined {
     return this.db.prepare("SELECT password_hash FROM owner_credentials WHERE id=1").get() as
       { password_hash: string } | undefined;
+  }
+
+  private deleteExpiredSessions(now: number): void {
+    this.db
+      .prepare(
+        "DELETE FROM owner_sessions WHERE token_hash IN (SELECT token_hash FROM owner_sessions WHERE expires_at <= ? ORDER BY expires_at LIMIT 100)",
+      )
+      .run(now);
   }
 
   private async initializePassword(): Promise<string | null> {

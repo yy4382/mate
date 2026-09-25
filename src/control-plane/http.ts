@@ -2,6 +2,7 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { resolve } from "node:path";
 import { OWNER_SESSION_COOKIE, OwnerAuth } from "./owner-auth.js";
+import { LoginGate } from "./login-gate.js";
 
 export interface ControlPlaneAppOptions {
   webRoot?: string;
@@ -34,7 +35,8 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
       ...(options.now ? { now: options.now } : {}),
       ...(options.sessionTtlMs !== undefined ? { sessionTtlMs: options.sessionTtlMs } : {}),
     }),
-    app = new ControlPlaneApp(ownerAuth);
+    app = new ControlPlaneApp(ownerAuth),
+    loginGate = new LoginGate(options.now);
 
   const requireOwnerApi: MiddlewareHandler = async (context, next) => {
     const token = sessionToken(context);
@@ -66,7 +68,16 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
 
     let result: "unconfigured" | "valid" | "invalid";
     try {
-      result = await ownerAuth.verifyPassword(password);
+      const outcome = await loginGate.run(() => ownerAuth.verifyPassword(password));
+      if (outcome.kind === "limited") {
+        context.header("Retry-After", String(outcome.retryAfterSeconds));
+        const error =
+          outcome.reason === "busy"
+            ? `已有登录请求正在验证，请在 ${outcome.retryAfterSeconds} 秒后重试。`
+            : `登录尝试过多，请在 ${outcome.retryAfterSeconds} 秒后重试。`;
+        return context.json({ error, retryAfterSeconds: outcome.retryAfterSeconds }, 429);
+      }
+      result = outcome.result;
     } catch (error) {
       const detail = error instanceof Error ? error.message : "unknown failure";
       process.stderr.write(`Owner password initialization failed: ${detail}\n`);

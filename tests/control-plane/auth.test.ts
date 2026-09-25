@@ -105,6 +105,51 @@ it("validates the configured password and stores only password and session hashe
   expect(fileContents).toContain(password);
 });
 
+it("bounds concurrent password checks and returns a retry hint", async () => {
+  const { app } = setup();
+  expect((await login(app)).status).toBe(204);
+
+  const responses = await Promise.all([
+    login(app, "wrong-password-one"),
+    login(app, "wrong-password-two"),
+    login(app, "wrong-password-three"),
+  ]);
+  const limited = responses.filter((response) => response.status === 429);
+
+  expect(responses.filter((response) => response.status === 401)).toHaveLength(2);
+  expect(limited).toHaveLength(1);
+  expect(limited[0]!.headers.get("retry-after")).toBe("1");
+  expect(await limited[0]!.json()).toEqual({
+    error: "已有登录请求正在验证，请在 1 秒后重试。",
+    retryAfterSeconds: 1,
+  });
+});
+
+it("limits failed logins within a time window and retries after the oldest failure expires", async () => {
+  let now = 1_000;
+  const { app } = setup({ now: () => now });
+  expect((await login(app)).status).toBe(204);
+
+  for (let attempt = 0; attempt < 5; attempt++)
+    expect((await login(app, `wrong-password-${attempt}`)).status).toBe(401);
+
+  const limited = await login(app, "wrong-password-six");
+  expect(limited.status).toBe(429);
+  expect(limited.headers.get("retry-after")).toBe("60");
+  expect(await limited.json()).toEqual({
+    error: "登录尝试过多，请在 60 秒后重试。",
+    retryAfterSeconds: 60,
+  });
+
+  now += 59_000;
+  const almostReady = await login(app, password);
+  expect(almostReady.status).toBe(429);
+  expect(almostReady.headers.get("retry-after")).toBe("1");
+
+  now += 1_000;
+  expect((await login(app)).status).toBe(204);
+});
+
 it("keeps private pages and APIs available after refresh only with a valid session", async () => {
   const { app } = setup();
   const accepted = await login(app);
@@ -148,6 +193,57 @@ it("expires sessions, and logout revokes the session and clears the cookie", asy
   expect(logout.status).toBe(204);
   expect(logout.headers.get("set-cookie")).toMatch(/; Max-Age=0/i);
   expect((await app.request("/api/owner/session", { headers: nextHeaders })).status).toBe(401);
+});
+
+it("deletes logged-out sessions and cleans expired rows in batches of at most 100", async () => {
+  const now = 100_000;
+  const { app, dataDir } = setup({ now: () => now });
+  const firstLogin = await login(app);
+  const oldCookie = cookiePair(firstLogin);
+  const oldToken = oldCookie.slice(oldCookie.indexOf("=") + 1);
+  const oldTokenHash = createHash("sha256").update(oldToken).digest("hex");
+  const logout = await app.request("/api/auth/logout", {
+    method: "POST",
+    headers: { cookie: oldCookie },
+  });
+  expect(logout.status).toBe(204);
+
+  const db = new Database(join(dataDir, "control-plane.sqlite"));
+  const loggedOutRow = db
+    .prepare("SELECT token_hash FROM owner_sessions WHERE token_hash=?")
+    .get(oldTokenHash);
+  const insertExpired = db.prepare(
+    "INSERT INTO owner_sessions(token_hash,created_at,expires_at,revoked_at) VALUES(?,?,?,NULL)",
+  );
+  for (let row = 0; row < 250; row++) {
+    const tokenHash = createHash("sha256").update(`expired-session-${row}`).digest("hex");
+    insertExpired.run(tokenHash, now - 10_000, now - 1);
+  }
+  const cleanupPlan = db
+    .prepare(
+      "EXPLAIN QUERY PLAN SELECT token_hash FROM owner_sessions WHERE expires_at <= ? ORDER BY expires_at LIMIT 100",
+    )
+    .all(now) as { detail: string }[];
+  const beforeLogin = (
+    db.prepare("SELECT count(*) AS count FROM owner_sessions").get() as { count: number }
+  ).count;
+  db.close();
+
+  expect(loggedOutRow).toBeUndefined();
+  expect(cleanupPlan.some((step) => step.detail.includes("owner_sessions_expiry"))).toBe(true);
+  expect(beforeLogin).toBe(250);
+  expect((await app.request("/api/owner/session", { headers: { cookie: oldCookie } })).status).toBe(
+    401,
+  );
+
+  expect((await login(app)).status).toBe(204);
+
+  const afterDb = new Database(join(dataDir, "control-plane.sqlite"));
+  const afterLogin = (
+    afterDb.prepare("SELECT count(*) AS count FROM owner_sessions").get() as { count: number }
+  ).count;
+  afterDb.close();
+  expect(beforeLogin + 1 - afterLogin).toBe(100);
 });
 
 it("does not use a password file again after first-time setup", async () => {

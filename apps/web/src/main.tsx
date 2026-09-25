@@ -1,31 +1,13 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
+import { watchServiceStatus, type ServiceState } from "./status-monitor.js";
 import "./style.css";
-
-type ServiceState = "loading" | "running" | "unavailable";
-
-function isRunningStatus(value: unknown): value is { status: "running" } {
-  return (
-    typeof value === "object" && value !== null && "status" in value && value.status === "running"
-  );
-}
 
 function StatusPage() {
   const [state, setState] = useState<ServiceState>("loading");
 
   useEffect(() => {
-    const controller = new AbortController();
-    fetch("/api/status", { signal: controller.signal, headers: { Accept: "application/json" } })
-      .then(async (response) => {
-        if (!response.ok) throw new Error("Status request failed");
-        const body: unknown = await response.json();
-        if (!isRunningStatus(body)) throw new Error("Unexpected status response");
-        setState("running");
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) setState("unavailable");
-      });
-    return () => controller.abort();
+    return watchServiceStatus(setState);
   }, []);
 
   const statusText = {
