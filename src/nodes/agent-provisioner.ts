@@ -7,12 +7,14 @@ import {
   fchmodSync,
   fstatSync,
   fsyncSync,
+  ftruncateSync,
   lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
   readdirSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import {
@@ -351,19 +353,32 @@ function ensureMemoryEntry(home: string, uid: number, gid: number): void {
   }
   try {
     const stat = fstatSync(existingFd);
-    if (!stat.isFile())
+    if (!stat.isFile() || stat.nlink !== 1)
       throw new AgentProvisioningError("identity_mismatch", "MEMORY.md 必须是真实普通文件。");
-    let contents: string;
+    let contents: Buffer;
     try {
-      contents = readFileSync(existingFd, "utf8");
+      contents = readFileSync(existingFd);
     } catch {
       throw new AgentProvisioningError("filesystem_error", "节点无法读取 Agent 的 MEMORY.md。");
     }
+    const template = Buffer.from(initialMemory);
     const interruptedCreate =
-      stat.uid === 0 && stat.gid === 0 && (contents.length === 0 || contents === initialMemory);
+      stat.uid === 0 &&
+      stat.gid === 0 &&
+      contents.length <= template.length &&
+      template.subarray(0, contents.length).equals(contents);
     if (stat.uid !== uid || stat.gid !== gid) {
       if (!interruptedCreate)
         throw new AgentProvisioningError("identity_mismatch", "MEMORY.md 已属于不同 Linux 身份。");
+    }
+    if (interruptedCreate && contents.length < template.length) {
+      try {
+        rewriteInitialMemory(existingFd, template);
+      } catch {
+        throw new AgentProvisioningError("filesystem_error", "节点无法恢复 Agent 的 MEMORY.md。");
+      }
+    }
+    if (stat.uid !== uid || stat.gid !== gid) {
       try {
         fchownSync(existingFd, uid, gid);
       } catch {
@@ -371,16 +386,23 @@ function ensureMemoryEntry(home: string, uid: number, gid: number): void {
       }
     }
     fchmodSync(existingFd, 0o600);
-    if (contents.length === 0) {
-      writeFileSync(existingFd, initialMemory, "utf8");
-      fsyncSync(existingFd);
-    }
   } catch (error) {
     if (error instanceof AgentProvisioningError) throw error;
     throw new AgentProvisioningError("filesystem_error", "节点无法保护 Agent 的 MEMORY.md。");
   } finally {
     closeSync(existingFd);
   }
+}
+
+function rewriteInitialMemory(fd: number, contents: Buffer): void {
+  ftruncateSync(fd, 0);
+  let offset = 0;
+  while (offset < contents.length) {
+    const written = writeSync(fd, contents, offset, contents.length - offset, offset);
+    if (written <= 0) throw new Error("Could not finish MEMORY.md recovery");
+    offset += written;
+  }
+  fsyncSync(fd);
 }
 
 function verifyPrivateHome(path: string, uid: number, gid: number): void {

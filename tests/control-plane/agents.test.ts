@@ -337,6 +337,12 @@ it("retains one failed request and retries it with the same Agent and provisioni
   });
   await new Promise((resolve) => setTimeout(resolve, 0));
   const firstCommand = JSON.parse(socket.sent.at(-1)!) as { requestId: string };
+  const concurrentDuplicate = app.request("/api/owner/agents", {
+    method: "POST",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
   await app.nodes.receive(
     socket,
     JSON.stringify({
@@ -348,10 +354,15 @@ it("retains one failed request and retries it with the same Agent and provisioni
       message: "节点服务需要 root 权限才能建立 Agent Linux 账号。",
     }),
   );
-  const failed = await failedCreation;
+  const [failed, concurrentFailed] = await Promise.all([failedCreation, concurrentDuplicate]);
   expect(failed.status).toBe(502);
+  expect(concurrentFailed.status).toBe(502);
   const failedAgent = (await failed.json()) as { agent: { sessionId: string; status: string } };
+  const concurrentFailedAgent = (await concurrentFailed.json()) as {
+    agent: { sessionId: string; status: string };
+  };
   expect(failedAgent.agent.status).toBe("failed");
+  expect(concurrentFailedAgent.agent).toEqual(failedAgent.agent);
 
   const retry = app.request("/api/owner/agents", {
     method: "POST",

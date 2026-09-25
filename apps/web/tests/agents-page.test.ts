@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createElement } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -22,21 +22,29 @@ function json(status: number, body: unknown): Response {
 
 let agents: Array<Record<string, unknown>>;
 let posts: Array<Record<string, unknown>>;
+let nodeOnline: boolean;
+let postConflict: boolean;
 let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   agents = [];
   posts = [];
+  nodeOnline = true;
+  postConflict = false;
   fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url === "/api/owner/nodes")
-      return json(200, { nodes: [{ id: nodeId, online: true, lastConnectedAt: null }] });
+      return json(200, { nodes: [{ id: nodeId, online: nodeOnline, lastConnectedAt: null }] });
     if (url === "/api/owner/channels")
       return json(200, { channels: [{ id: channelId, name: "Research", archived: false }] });
     if (url === "/api/owner/agents") {
       if (init?.method === "POST") {
         const request = JSON.parse(String(init.body)) as Record<string, unknown>;
         posts.push(request);
+        if (postConflict) {
+          nodeOnline = false;
+          return json(409, { error: "节点已离线，Agent 资料尚未提交。" });
+        }
         const first = {
           id: request.id,
           nodeId,
@@ -79,10 +87,16 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 it("creates a stable request and retries the same Linux identity without exposing API key settings", async () => {
+  let poll: (() => void) | undefined;
+  vi.spyOn(window, "setInterval").mockImplementation(((callback: TimerHandler) => {
+    if (typeof callback === "function") poll = callback as () => void;
+    return 1;
+  }) as typeof window.setInterval);
   const user = userEvent.setup();
   render(createElement(AgentsPage));
   await screen.findByText(/节点会创建独立的 Linux 账号和私人 home/);
@@ -100,7 +114,17 @@ it("creates a stable request and retries the same Linux identity without exposin
   expect(screen.queryByLabelText(/API key|凭据 key/i)).toBeNull();
   await user.click(screen.getByRole("button", { name: "创建 Agent" }));
 
-  await screen.findByText("节点需要 root 权限才能创建 Linux 账号。");
+  await screen.findByRole("alert");
+  expect(screen.getByRole("alert").textContent).toContain(
+    "节点需要 root 权限才能创建 Linux 账号。",
+  );
+  await act(async () => {
+    poll?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  expect(screen.getByRole("alert").textContent).toContain(
+    "节点需要 root 权限才能创建 Linux 账号。",
+  );
   const retry = await screen.findByRole("button", { name: "按同一请求重试" });
   expect(posts).toHaveLength(1);
   expect(posts[0]).toMatchObject({
@@ -119,4 +143,42 @@ it("creates a stable request and retries the same Linux identity without exposin
   expect(posts[1]).toEqual(posts[0]);
   expect(screen.getByText("等待凭据")).toBeTruthy();
   expect(screen.getByText(/身份、home 与会话已验证/)).toBeTruthy();
+});
+
+it("keeps a no-record node conflict visible through refreshes until the owner starts a new request", async () => {
+  let poll: (() => void) | undefined;
+  vi.spyOn(window, "setInterval").mockImplementation(((callback: TimerHandler) => {
+    if (typeof callback === "function") poll = callback as () => void;
+    return 1;
+  }) as typeof window.setInterval);
+  const user = userEvent.setup();
+  render(createElement(AgentsPage));
+  await screen.findByText(/节点会创建独立的 Linux 账号和私人 home/);
+  await waitFor(() =>
+    expect((screen.getByRole("combobox", { name: "Linux 节点" }) as HTMLSelectElement).value).toBe(
+      nodeId,
+    ),
+  );
+
+  await user.type(screen.getByRole("textbox", { name: "名称" }), "Offline colleague");
+  await user.type(screen.getByRole("textbox", { name: "角色" }), "Waits for the node");
+  await user.type(screen.getByRole("textbox", { name: "模型 ID" }), "gpt-4.1");
+  postConflict = true;
+  await user.click(screen.getByRole("button", { name: "创建 Agent" }));
+
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toBe("节点已离线，Agent 资料尚未提交。");
+  expect(screen.queryByText("Agent 创建失败")).toBeNull();
+  expect(posts).toHaveLength(1);
+  await act(async () => {
+    poll?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  expect(screen.getByRole("alert").textContent).toBe("节点已离线，Agent 资料尚未提交。");
+  expect((screen.getByRole("button", { name: "创建 Agent" }) as HTMLButtonElement).disabled).toBe(
+    true,
+  );
+
+  await user.click(screen.getByRole("button", { name: "新建资料" }));
+  expect(screen.queryByRole("alert")).toBeNull();
 });

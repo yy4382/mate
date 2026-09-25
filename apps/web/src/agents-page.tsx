@@ -134,7 +134,8 @@ export function AgentsPage() {
   const [draft, setDraft] = useState<Draft>(newDraft);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [creationError, setCreationError] = useState<string | null>(null);
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -152,10 +153,10 @@ export function AgentsPage() {
           ? current
           : { ...current, nodeId: nodeResult.nodes.find((node) => node.online)?.id ?? "" },
       );
-      setError(null);
+      setRefreshError(null);
     } catch (reason) {
       if (!signal?.aborted)
-        setError(reason instanceof Error ? reason.message : "读取失败，请重试。");
+        setRefreshError(reason instanceof Error ? reason.message : "读取失败，请重试。");
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
@@ -173,7 +174,7 @@ export function AgentsPage() {
 
   async function submitRequest(request: AgentRequest): Promise<void> {
     setSubmitting(true);
-    setError(null);
+    setCreationError(null);
     try {
       const response = await fetch("/api/owner/agents", {
         method: "POST",
@@ -195,7 +196,9 @@ export function AgentsPage() {
       if (!response.ok) throw new Error(errorMessage(result, "Agent 创建失败，请按同一请求重试。"));
       await refresh();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Agent 创建失败，请按同一请求重试。");
+      setCreationError(
+        reason instanceof Error ? reason.message : "Agent 创建失败，请按同一请求重试。",
+      );
       await refresh();
     } finally {
       setSubmitting(false);
@@ -238,7 +241,7 @@ export function AgentsPage() {
               type="button"
               onClick={() => {
                 setDraft(newDraft());
-                setError(null);
+                setCreationError(null);
               }}
               disabled={submitting}
             >
@@ -344,9 +347,14 @@ export function AgentsPage() {
                 此请求已有稳定 Agent ID；继续操作会使用相同资料、Linux 身份与逻辑会话。
               </p>
             )}
-            {error && (
+            {refreshError && (
               <p className="form-error" role="alert">
-                {error}
+                {refreshError}
+              </p>
+            )}
+            {creationError && (
+              <p className="form-error" role="alert">
+                {creationError}
               </p>
             )}
             <button type="submit" disabled={!canSubmit}>

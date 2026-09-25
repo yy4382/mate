@@ -74,9 +74,9 @@ macOS 本地入口不模拟 Linux 用户权限。三类证据不能互相代替�
 
 `pnpm check` 在开发 checkout 运行；Linux 发布目标还需以目标 Node ABI 执行 `pnpm build`、`pnpm typecheck` 和 `MATE_NATIVE_UID_TEST=1 pnpm exec vitest run tests/execution/linux-user-tools.test.ts`。完整测试集包含使用非 Linux 本地开发夹具的用例，不能把这些夹具在生产 Linux 配置下的失败当作 Agent 隔离结果，也不能用它们代替原生验证。
 
-`tests/linux/agent-provisioner.integration.mjs` 直接调用节点实际 Linux provisioning 代码，并会在容器内创建临时 Linux 用户和组。只在 disposable Docker 容器中以 root 执行：先运行 `pnpm build:control-plane`，再设置 `MATE_AGENT_TEST_SANDBOX=temporary-container` 运行 `pnpm test:linux-agent-provisioner`。脚本断言 UID/GID、私人 home 与 MEMORY.md 权限、同 ID 重试、占用冲突和跨 Agent 拒读；它改变容器内 `/etc/passwd` 与 `/etc/group`，不得在开发机或运行中的 VPS 上执行。容器测试证明实际 Linux 内核权限，不等同于原生 VPS 部署验收。
+`tests/linux/agent-provisioner.integration.mjs` 直接调用节点实际 Linux provisioning 代码，并会在容器内创建临时 Linux 用户和组。只在 disposable Docker 容器中以 root 执行：先运行 `pnpm build:control-plane`，再设置 `MATE_AGENT_TEST_SANDBOX=temporary-container` 运行 `pnpm test:linux-agent-provisioner`。脚本断言 UID/GID、私人 home 与 MEMORY.md 权限、同 ID 重试（包含写入中断后的模板前缀恢复）、占用冲突和跨 Agent 拒读；不符合初始模板的 root-owned `MEMORY.md` 会被拒绝且原样保留。它改变容器内 `/etc/passwd` 与 `/etc/group`，不得在开发机或运行中的 VPS 上执行。容器测试证明实际 Linux 内核权限，不等同于原生 VPS 部署验收。
 
-2026-09-26 对最终 Agent provisioner 在官方 `node:24-trixie-slim` 镜像 `sha256:8ec5d7557396cfe32d21c3f9c13072355ceab22b584578ca4bb28af31120cffe` 中完成真实 Linux 验证。使用 `--rm --network=none --user=0:0` 临时容器，没有宿主挂载；Node 为 24.21.0。两个合成 Agent 分别获得 UID/GID `999/999`、`998/998`，目录模式为 home-root `0755`、home `0700`、`MEMORY.md` `0600`。Agent 自己读取私人文件成功（exit 0），另一个 Agent 读取该文件失败（exit 1），列出对方 home 失败（exit 2）；并发与重复的同 ID 请求保留 UID。用户名碰撞、已占用账号/home/group、重复 UID/GID、符号链接根目录和共享可写的 `/tmp` home-root 均被拒绝。容器退出后由 Docker 自动删除，验证镜像也已移除。该记录是隔离容器内的 Linux 内核权限证据；仍未验证原生 VPS 的 systemd、磁盘挂载和服务升级行为。
+2026-09-26 对最终 Agent provisioner 在官方 `node:24-trixie-slim` 镜像 `sha256:8ec5d7557396cfe32d21c3f9c13072355ceab22b584578ca4bb28af31120cffe` 中完成真实 Linux 验证。使用 `--rm --network=none --user=0:0` 临时容器，没有宿主挂载；Node 为 24.21.0。两个合成 Agent 分别获得 UID/GID `999/999`、`998/998`，目录模式为 home-root `0755`、home `0700`、`MEMORY.md` `0600`。Agent 自己读取私人文件成功（exit 0），另一个 Agent 读取该文件失败（exit 1），列出对方 home 失败（exit 2）；并发与重复的同 ID 请求保留 UID，中断后留下的 root-owned 模板前缀可恢复。用户名碰撞、已占用账号/home/group、重复 UID/GID、符号链接根目录、共享可写的 `/tmp` home-root 和不匹配的 root-owned `MEMORY.md` 均被拒绝；最后一种碰撞内容仍保持原样。容器退出后由 Docker 自动删除，验证镜像也已移除。该记录是隔离容器内的 Linux 内核权限证据；仍未验证原生 VPS 的 systemd、磁盘挂载和服务升级行为。
 
 ## 本地双成员入口
 

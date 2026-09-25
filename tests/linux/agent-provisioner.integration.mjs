@@ -108,6 +108,21 @@ try {
   assert.equal(accountCountAfter, accountCountBefore);
   assert.equal(readFileSync(join(agentA.home, "MEMORY.md"), "utf8"), memoryBefore);
 
+  // Simulate a process stopping after a template-prefix write and before chown.
+  const interruptedMemory = join(agentA.home, "MEMORY.md");
+  writeFileSync(interruptedMemory, memoryBefore.slice(0, Math.floor(memoryBefore.length / 2)), {
+    mode: 0o600,
+  });
+  chownSync(interruptedMemory, 0, 0);
+  chmodSync(interruptedMemory, 0o600);
+  const recoveredA = await provisionLinuxAgent({ agentId: agentAId, homeRoot });
+  assert.equal(recoveredA.uid, agentA.uid);
+  assert.equal(recoveredA.gid, agentA.gid);
+  assert.equal(readFileSync(interruptedMemory, "utf8"), memoryBefore);
+  assert.equal(statSync(interruptedMemory).uid, agentA.uid);
+  assert.equal(statSync(interruptedMemory).gid, agentA.gid);
+  assert.equal(mode(interruptedMemory), 0o600);
+
   assert.equal(linuxUsernameForAgentId(collisionAId), linuxUsernameForAgentId(collisionBId));
   const collisionOwner = await provisionLinuxAgent({ agentId: collisionAId, homeRoot });
   await assertProvisionError(collisionBId, "identity_mismatch");
@@ -189,6 +204,14 @@ try {
   ]);
   await assertProvisionError(agentBId, "identity_mismatch");
 
+  const memoryCollisionPath = join(agentA.home, "MEMORY.md");
+  const memoryCollision = "synthetic unrelated root-owned MEMORY.md\n";
+  writeFileSync(memoryCollisionPath, memoryCollision, { mode: 0o600 });
+  chownSync(memoryCollisionPath, 0, 0);
+  chmodSync(memoryCollisionPath, 0o600);
+  await assertProvisionError(agentAId, "identity_mismatch");
+  assert.equal(readFileSync(memoryCollisionPath, "utf8"), memoryCollision);
+
   process.stdout.write(
     `${JSON.stringify({
       mode: "real-linux-container",
@@ -210,6 +233,8 @@ try {
       sharedWritableHomeRootRejected: true,
       duplicateUidRejected: true,
       duplicateGidRejected: true,
+      interruptedMemoryWriteRecovered: true,
+      unrelatedMemoryCollisionPreserved: true,
     })}\n`,
   );
 } finally {

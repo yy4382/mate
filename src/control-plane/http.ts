@@ -95,6 +95,18 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
     app = new ControlPlaneApp(ownerAuth, nodes, agents, ownerChat),
     loginGate = new LoginGate();
   const activeAgentProvisions = new Map<string, Promise<AgentSummary>>();
+  const agentProvisionResponse = (
+    context: Context,
+    agent: AgentSummary,
+    successStatus: 200 | 201,
+  ) => {
+    if (agent.status === "failed")
+      return context.json(
+        { error: agent.error ?? "Agent 创建失败，请按同一请求重试。", agent },
+        502,
+      );
+    return context.json({ agent }, successStatus);
+  };
 
   const requireOwnerApi: MiddlewareHandler = async (context, next) => {
     const token = sessionToken(context);
@@ -183,7 +195,10 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
       return context.json({ error: "无法读取已有 Agent 资料。" }, 500);
     }
     const active = activeAgentProvisions.get(input.id);
-    if (active) return context.json({ agent: await active });
+    if (active) {
+      const agent = await active;
+      return agentProvisionResponse(context, agent, 200);
+    }
     const existing = agents.get(input.id);
     if (existing?.status === "waiting_credentials") return context.json({ agent: existing });
     if (!nodes.list().some((node) => node.id === input.nodeId && node.online))
@@ -218,8 +233,7 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
     activeAgentProvisions.set(input.id, task);
     try {
       const agent = await task;
-      if (agent.status === "failed") return context.json({ error: agent.error, agent }, 502);
-      return context.json({ agent }, prepared.created ? 201 : 200);
+      return agentProvisionResponse(context, agent, prepared.created ? 201 : 200);
     } finally {
       if (activeAgentProvisions.get(input.id) === task) activeAgentProvisions.delete(input.id);
     }
