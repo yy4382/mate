@@ -8,6 +8,30 @@ pnpm check
 pnpm typecheck
 ```
 
+## 网页状态页与 HTTP 服务
+
+根工作区包含控制面 HTTP 服务，`apps/web` 是 Vite/React 网页。网页和控制面可以分别构建：`pnpm run build:web`、`pnpm run build:control-plane`。完整构建会将网页复制到控制面产物，由 Hono 服务同源提供页面和 API：
+
+```sh
+pnpm run build
+pnpm start:control-plane
+```
+
+服务默认只监听 `127.0.0.1:8787`，也可以通过 `MATE_CONTROL_PLANE_PORT` 改端口。浏览器打开 `http://127.0.0.1:8787` 查看中文状态页；公开的 `GET /api/status` 只返回服务是否正在运行。
+
+本地开发时先在一个终端构建并启动控制面，再在另一个终端启动网页：
+
+```sh
+pnpm run build
+pnpm start:control-plane
+```
+
+```sh
+pnpm dev:web
+```
+
+浏览器打开 `http://127.0.0.1:5173`。Vite 将网页发出的 `/api/status` 请求代理到 `http://127.0.0.1:8787`；需要自定义目标时设置 `MATE_CONTROL_PLANE_ORIGIN`。
+
 普通测试使用合成 Slack/provider 输入。涉及 Linux 用户执行、后台进程和部署的改动还应运行相应的定向测试：
 
 ```sh
