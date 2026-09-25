@@ -3,7 +3,7 @@ import { existsSync, statSync } from "node:fs";
 import { FORMAT_APPLICATION_ID, FORMAT_REVISION, currentFormatSchema } from "./current-schema.js";
 
 const CONTROL_PLANE_APPLICATION_ID = 0x4d43504c;
-const CONTROL_PLANE_FORMAT_REVISION = 3;
+const CONTROL_PLANE_FORMAT_REVISION = 4;
 
 const moveAside =
   "Mate does not migrate or erase a database it does not recognise: if this file was not created by this release, move it aside and point runtime.dataDir at a new, empty directory.";
@@ -57,12 +57,22 @@ export function openCurrentDatabase(path: string): Database.Database {
 }
 
 /** Open the private control-plane database through the same writable SQLite boundary. */
-export function openControlPlaneDatabase(path: string, schema: string): Database.Database {
+export interface ControlPlaneFormatMigration {
+  fromRevision: number;
+  previousSchema: string;
+  migrationSchema: string;
+}
+
+export function openControlPlaneDatabase(
+  path: string,
+  schema: string,
+  migration?: ControlPlaneFormatMigration,
+): Database.Database {
   const empty = !existsSync(path) || statSync(path).size === 0,
     db = openWritable(path);
   try {
     if (empty) createControlPlaneFormat(db, path, schema);
-    else acceptControlPlaneFormat(db, path, schema);
+    else acceptControlPlaneFormat(db, path, schema, migration);
   } catch (error) {
     db.close();
     throw error;
@@ -92,12 +102,21 @@ function createControlPlaneFormat(db: Database.Database, path: string, schema: s
   }
 }
 
-function acceptControlPlaneFormat(db: Database.Database, path: string, schema: string): void {
+function acceptControlPlaneFormat(
+  db: Database.Database,
+  path: string,
+  schema: string,
+  migration?: ControlPlaneFormatMigration,
+): void {
   let found: Verdict;
   try {
     found = controlPlaneVerdict(db, schema);
   } catch (cause) {
     throw unreadable(path, cause);
+  }
+  if (found.kind === "revision" && migration?.fromRevision === found.revision) {
+    migrateControlPlaneFormat(db, path, schema, migration);
+    found = controlPlaneVerdict(db, schema);
   }
   switch (found.kind) {
     case "current":
@@ -117,6 +136,60 @@ function acceptControlPlaneFormat(db: Database.Database, path: string, schema: s
         path,
         `${path} claims control-plane schema revision ${CONTROL_PLANE_FORMAT_REVISION} but is missing ${found.missing.join(", ")}. ${repair}`,
       );
+  }
+}
+
+function migrateControlPlaneFormat(
+  db: Database.Database,
+  path: string,
+  currentSchema: string,
+  migration: ControlPlaneFormatMigration,
+): void {
+  if (migration.fromRevision + 1 !== CONTROL_PLANE_FORMAT_REVISION)
+    throw new Error("Control-plane format migrations must advance exactly one revision");
+
+  const previousTemplate = new Database(":memory:");
+  let previousObjects: Set<string>;
+  try {
+    previousTemplate.exec(migration.previousSchema);
+    previousObjects = databaseObjects(previousTemplate);
+  } finally {
+    previousTemplate.close();
+  }
+
+  const objects = databaseObjects(db),
+    missing = [...previousObjects].filter((object) => !objects.has(object));
+  if (missing.length) {
+    throw new UnsupportedDatabaseError(
+      path,
+      `${path} claims control-plane schema revision ${migration.fromRevision} but is missing ${missing.map((object) => object.replace(":", " ")).join(", ")}. ${repair}`,
+    );
+  }
+
+  const currentTemplate = new Database(":memory:");
+  let additions: string[];
+  try {
+    currentTemplate.exec(currentSchema);
+    additions = [...databaseObjects(currentTemplate)].filter((object) => !previousObjects.has(object));
+  } finally {
+    currentTemplate.close();
+  }
+  if (additions.some((object) => objects.has(object))) {
+    throw new UnsupportedDatabaseError(
+      path,
+      `${path} contains current-format structures with schema revision ${migration.fromRevision}. ${repair}`,
+    );
+  }
+
+  try {
+    db.transaction(() => {
+      db.exec(migration.migrationSchema);
+      db.pragma(`user_version = ${CONTROL_PLANE_FORMAT_REVISION}`);
+    }).immediate();
+  } catch (cause) {
+    throw new Error(
+      `Cannot upgrade Mate control-plane database at ${path}: ${cause instanceof Error ? cause.message : String(cause)}`,
+    );
   }
 }
 

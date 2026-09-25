@@ -1,0 +1,39 @@
+import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
+import { runLinuxNode, type LinuxNodeOptions } from "../nodes/client.js";
+
+export function nodeOptionsFromEnvironment(
+  environment: NodeJS.ProcessEnv = process.env,
+): LinuxNodeOptions {
+  const controlPlaneUrl = environment.MATE_CONTROL_PLANE_URL;
+  if (!controlPlaneUrl) throw new Error("MATE_CONTROL_PLANE_URL is required");
+  const dataDirectory = environment.MATE_NODE_DATA_DIR ?? resolve(process.cwd(), "data", "node");
+  return {
+    controlPlaneUrl,
+    dataDirectory,
+    ...(environment.MATE_NODE_PAIRING_TOKEN
+      ? { pairingToken: environment.MATE_NODE_PAIRING_TOKEN }
+      : {}),
+  };
+}
+
+export function startLinuxNode(): void {
+  const controller = new AbortController();
+  const shutdown = () => controller.abort();
+  process.once("SIGINT", shutdown);
+  process.once("SIGTERM", shutdown);
+  void runLinuxNode(nodeOptionsFromEnvironment(), controller.signal)
+    .catch((error: unknown) => {
+      process.stderr.write(
+        `Linux node stopped: ${error instanceof Error ? error.message : "unknown error"}\n`,
+      );
+      process.exitCode = 1;
+    })
+    .finally(() => {
+      process.removeListener("SIGINT", shutdown);
+      process.removeListener("SIGTERM", shutdown);
+    });
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url))
+  startLinuxNode();

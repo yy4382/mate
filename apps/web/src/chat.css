@@ -233,6 +233,16 @@
   font-weight: 500;
 }
 
+.owner-nodes-link {
+  color: #4e5d48;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.sidebar-footer .text-button + .text-button {
+  margin-left: 0;
+}
+
 .chat-error {
   margin: 0 14px 8px;
   padding: 9px 10px;

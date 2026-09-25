@@ -560,6 +560,9 @@ export function ChatPage() {
         <div className="sidebar-footer">
           <span className={`live-dot${live ? " is-live" : ""}`} aria-hidden="true" />
           <span>{live ? "实时连接正常" : "正在连接…"}</span>
+          <a className="text-button owner-nodes-link" href="/app/nodes">
+            节点管理
+          </a>
           <button className="text-button" type="button" onClick={logout} disabled={busy}>
             退出登录
           </button>

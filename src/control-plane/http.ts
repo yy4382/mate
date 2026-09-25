@@ -5,6 +5,8 @@ import { z } from "zod";
 import { OWNER_SESSION_COOKIE, OwnerAuth } from "./owner-auth.js";
 import { ArchivedChannelError, OwnerChat } from "./owner-chat.js";
 import { LoginGate } from "./login-gate.js";
+import { NodeDirectory, type NodeDirectoryOptions } from "./nodes/directory.js";
+import { registerNodeRoutes } from "./nodes/http.js";
 
 const newChannelSchema = z
   .object({
@@ -30,14 +32,19 @@ export interface ControlPlaneAppOptions {
   passwordFile?: string;
   now?: () => number;
   sessionTtlMs?: number;
+  pairingTokenTtlMs?: number;
 }
 
 export class ControlPlaneApp extends Hono {
-  constructor(private readonly ownerAuth: OwnerAuth) {
+  constructor(
+    private readonly ownerAuth: OwnerAuth,
+    readonly nodes: NodeDirectory,
+  ) {
     super();
   }
 
   close(): void {
+    this.nodes.closeAll();
     this.ownerAuth.close();
   }
 }
@@ -55,7 +62,14 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
       ...(options.now ? { now: options.now } : {}),
       ...(options.sessionTtlMs !== undefined ? { sessionTtlMs: options.sessionTtlMs } : {}),
     }),
-    app = new ControlPlaneApp(ownerAuth),
+    nodeOptions: NodeDirectoryOptions = {
+      ...(options.now ? { now: options.now } : {}),
+      ...(options.pairingTokenTtlMs !== undefined
+        ? { pairingTokenTtlMs: options.pairingTokenTtlMs }
+        : {}),
+    },
+    nodes = new NodeDirectory(ownerAuth.db, nodeOptions),
+    app = new ControlPlaneApp(ownerAuth, nodes),
     ownerChat = new OwnerChat(ownerAuth.db, options.now),
     loginGate = new LoginGate();
 
@@ -241,6 +255,7 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
       throw error;
     }
   });
+  registerNodeRoutes(app, nodes);
 
   app.use("/app", requireOwnerPage);
   app.use("/app/*", requireOwnerPage);
