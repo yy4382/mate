@@ -115,7 +115,15 @@ function connectOnce(
       signal.removeEventListener("abort", onAbort);
       socket.removeEventListener("message", onMessage);
       socket.removeEventListener("close", onClose);
-      socket.removeEventListener("error", onError);
+      if (socket.readyState === WebSocket.CLOSED) {
+        socket.removeEventListener("error", onError);
+      } else {
+        // ws.close() while CONNECTING emits an asynchronous error before close.
+        // Keep the listener through that terminal event after timeout or abort.
+        socket.addEventListener("close", () => socket.removeEventListener("error", onError), {
+          once: true,
+        });
+      }
     };
     const resolve = (connected: boolean) => {
       if (settled) return;
