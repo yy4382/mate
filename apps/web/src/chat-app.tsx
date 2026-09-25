@@ -16,7 +16,7 @@ interface Message {
   id: string;
   channelId: string;
   rootId: null;
-  author: { kind: "human"; id: "owner" };
+  author: { kind: "human"; id: "owner" } | { kind: "agent"; id: string };
   text: string;
   order: string;
   revision: string;
@@ -167,13 +167,17 @@ export function ChatPage() {
         const snapshot = await ownerJSON<Snapshot>("/api/owner/snapshot");
         if (!active) return;
         setChannels(snapshot.channels);
-        setSelectedId((current) =>
-          snapshot.channels.some((channel) => channel.id === current)
-            ? current
-            : (snapshot.channels.find((channel) => !channel.archived)?.id ??
-              snapshot.channels[0]?.id ??
-              null),
-        );
+        const current = selectedIdRef.current,
+          requestedChannelId = new URLSearchParams(window.location.search).get("channel"),
+          initialSelection =
+            snapshot.channels.find((channel) => channel.id === current)?.id ??
+            snapshot.channels.find((channel) => channel.id === requestedChannelId)?.id ??
+            snapshot.channels.find((channel) => !channel.archived)?.id ??
+            snapshot.channels[0]?.id ??
+            null;
+        // The stream can deliver a buffered first event before React commits this state update.
+        selectedIdRef.current = initialSelection;
+        setSelectedId(initialSelection);
         streamRef.current?.close();
         const stream = new EventSource(`/api/owner/events?cursor=${snapshot.cursor}`);
         streamRef.current = stream;
@@ -186,6 +190,7 @@ export function ChatPage() {
           setAuthenticated(false);
           setLive(false);
           setChannels([]);
+          selectedIdRef.current = null;
           setSelectedId(null);
           setMessageWindows({});
           setDrafts({});
@@ -654,11 +659,11 @@ export function ChatPage() {
                 currentMessages.map((message) => (
                   <article className="message-row" key={message.id}>
                     <div className="message-avatar" aria-hidden="true">
-                      你
+                      {message.author.kind === "agent" ? "A" : "你"}
                     </div>
                     <div className="message-content">
                       <div className="message-meta">
-                        <strong>你</strong>
+                        <strong>{message.author.kind === "agent" ? "Agent" : "你"}</strong>
                         <time dateTime={new Date(message.createdAt).toISOString()}>
                           {timeLabel(message.createdAt)}
                         </time>

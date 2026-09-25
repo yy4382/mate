@@ -1111,13 +1111,19 @@ it("upgrades a revision 3 database through node and Agent schemas without losing
     expect(await nodes.json()).toEqual({ nodes: [] });
 
     const upgraded = new Database(databasePath, { readonly: true });
-    expect(upgraded.pragma("user_version", { simple: true })).toBe(5);
+    expect(upgraded.pragma("user_version", { simple: true })).toBe(8);
     expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE name='nodes'").get()).toEqual({
       name: "nodes",
     });
     expect(
       upgraded.prepare("SELECT name FROM sqlite_master WHERE name='owner_agents'").get(),
     ).toEqual({ name: "owner_agents" });
+    expect(
+      upgraded.prepare("SELECT name FROM sqlite_master WHERE name='model_credentials'").get(),
+    ).toEqual({ name: "model_credentials" });
+    expect(
+      upgraded.prepare("SELECT name FROM sqlite_master WHERE name='owner_agent_runs'").get(),
+    ).toEqual({ name: "owner_agent_runs" });
     upgraded.close();
   } finally {
     await stopProcess(server);

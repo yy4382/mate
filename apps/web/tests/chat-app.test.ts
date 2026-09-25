@@ -23,7 +23,7 @@ interface FixtureMessage {
   id: string;
   channelId: string;
   rootId: null;
-  author: { kind: "human"; id: "owner" };
+  author: { kind: "human"; id: "owner" } | { kind: "agent"; id: string };
   text: string;
   order: string;
   revision: string;
@@ -32,6 +32,7 @@ interface FixtureMessage {
 
 class TestEventSource {
   static instances: TestEventSource[] = [];
+  static messageOnConnect: { channelId: string; payload: FixtureMessage; seq: number } | undefined;
   onopen: ((event: Event) => void) | null = null;
   onerror: ((event: Event) => void) | null = null;
   readonly listeners = new Map<string, Array<(event: Event) => void>>();
@@ -39,7 +40,19 @@ class TestEventSource {
 
   constructor(readonly url: string) {
     TestEventSource.instances.push(this);
-    queueMicrotask(() => this.onopen?.(new Event("open")));
+    queueMicrotask(() => {
+      this.onopen?.(new Event("open"));
+      const message = TestEventSource.messageOnConnect;
+      if (message) {
+        TestEventSource.messageOnConnect = undefined;
+        this.emit("message.created", {
+          seq: message.seq,
+          kind: "message.created",
+          channelId: message.channelId,
+          payload: message.payload,
+        });
+      }
+    });
   }
 
   addEventListener(type: string, listener: (event: Event) => void): void {
@@ -206,6 +219,7 @@ async function openChat(): Promise<ReturnType<typeof userEvent.setup>> {
 }
 
 beforeEach(() => {
+  window.history.replaceState({}, "", "/");
   channels = [publicChannel, privateChannel];
   history = new Map([
     [publicChannel.id, []],
@@ -216,6 +230,7 @@ beforeEach(() => {
   nextPostGate = null;
   nextHistoryGate = null;
   TestEventSource.instances = [];
+  TestEventSource.messageOnConnect = undefined;
   installFetch();
   vi.mocked(redirectToLogin).mockClear();
 });
@@ -223,6 +238,23 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+});
+
+it("keeps an Agent DM event that arrives as the initial selected channel is being restored", async () => {
+  window.history.replaceState({}, "", `/app?channel=${privateChannel.id}`);
+  TestEventSource.messageOnConnect = {
+    channelId: privateChannel.id,
+    seq: 1,
+    payload: {
+      ...message(privateChannel.id, "initial-agent-reply", "初始连接期间的 Agent 回复", "1"),
+      author: { kind: "agent", id: "agent-1" },
+    },
+  };
+
+  render(createElement(ChatPage));
+
+  expect(await screen.findByRole("heading", { name: privateChannel.name })).not.toBeNull();
+  expect(await screen.findByText("初始连接期间的 Agent 回复")).not.toBeNull();
 });
 
 it("keeps channel drafts separate and clears only the successfully sent draft", async () => {

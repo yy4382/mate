@@ -1,11 +1,12 @@
 import type Database from "better-sqlite3";
-import { createHash, createPublicKey, randomBytes, verify } from "node:crypto";
+import { createHash, createPublicKey, randomBytes, randomUUID, verify } from "node:crypto";
 import {
   NodeControlMessageSchema,
   NodeRequestIdSchema,
   NodeRequestSchema,
   type NodeControlMessage,
   type NodeAgentProvisionResult,
+  type NodeAgentRunResult,
   type AgentProvisionStage,
   type NodeRequest,
 } from "../../nodes/protocol.js";
@@ -16,6 +17,8 @@ export const DEFAULT_NODE_MAX_UNAUTHENTICATED_CONNECTIONS = 32;
 export const DEFAULT_NODE_HANDSHAKE_TIMEOUT_MS = 10_000;
 export const DEFAULT_NODE_HEARTBEAT_TIMEOUT_MS = 35_000;
 export const DEFAULT_NODE_OPERATION_TIMEOUT_MS = 60_000;
+export const DEFAULT_NODE_MAX_ACTIVE_RUNS = 2;
+export const DEFAULT_NODE_RUN_TIMEOUT_MS = 5 * 60_000;
 
 export interface NodeSocket {
   send(data: string): void;
@@ -44,6 +47,7 @@ export interface NodeDirectoryOptions {
   handshakeTimeoutMs?: number;
   heartbeatTimeoutMs?: number;
   operationTimeoutMs?: number;
+  runTimeoutMs?: number;
 }
 
 interface PendingAgentProvision {
@@ -56,6 +60,45 @@ interface PendingAgentProvision {
   timeout: ReturnType<typeof setTimeout>;
 }
 
+export type NodeAgentRunStart = Extract<NodeControlMessage, { type: "control.agent.run" }>;
+
+interface PendingAgentRun {
+  nodeId: string;
+  agentId: string;
+  promise: Promise<NodeAgentRunResult>;
+  resolve: (result: NodeAgentRunResult) => void;
+  reject: (error: Error) => void;
+  timeout: ReturnType<typeof setTimeout>;
+}
+
+export interface AgentRunHandlers {
+  context(
+    runId: string,
+    agentId: string,
+    after: number,
+    limit: number,
+  ):
+    | {
+        messages: Array<{ sequence: number; role: "user" | "assistant"; text: string }>;
+        nextAfter: number | null;
+      }
+    | undefined;
+  journal(
+    runId: string,
+    nodeId: string,
+    agentId: string,
+    requestId: string,
+    text: string,
+    replayOnly: boolean,
+  ): boolean;
+  result(runId: string, agentId: string, ok: boolean, code?: string): void;
+}
+
+type NodeAgentRunRequest = Extract<
+  NodeRequest,
+  { type: "node.agent.run.context" | "node.agent.run.journal" | "node.agent.run.result" }
+>;
+
 /** Pairing credentials and durable node identities for this control plane. */
 export class NodeDirectory {
   private readonly now: () => number;
@@ -65,12 +108,15 @@ export class NodeDirectory {
   private readonly handshakeTimeoutMs: number;
   private readonly heartbeatTimeoutMs: number;
   private readonly operationTimeoutMs: number;
+  private readonly runTimeoutMs: number;
   private readonly heartbeatSweepTimer: ReturnType<typeof setInterval>;
   private readonly sessions = new WeakMap<NodeSocket, SocketSession>();
   private readonly connected = new Map<string, NodeSocket>();
   private readonly sockets = new Set<NodeSocket>();
   private readonly unauthenticated = new Set<NodeSocket>();
   private readonly pendingAgentProvisions = new Map<string, PendingAgentProvision>();
+  private readonly pendingAgentRuns = new Map<string, PendingAgentRun>();
+  private agentRunHandlers?: AgentRunHandlers;
 
   constructor(
     private readonly database: Database.Database,
@@ -97,6 +143,7 @@ export class NodeDirectory {
       options.operationTimeoutMs,
       DEFAULT_NODE_OPERATION_TIMEOUT_MS,
     );
+    this.runTimeoutMs = positiveInteger(options.runTimeoutMs, DEFAULT_NODE_RUN_TIMEOUT_MS);
     if (this.maxUnauthenticatedConnections > this.maxConnections)
       throw new Error("Unauthenticated node connection limit cannot exceed the total limit");
     const sweepIntervalMs = Math.max(10, Math.min(1000, Math.floor(this.heartbeatTimeoutMs / 4)));
@@ -182,6 +229,12 @@ export class NodeDirectory {
     if (request.type === "node.authenticate") return this.authenticate(socket, session, request);
     if (request.type === "node.pair") return this.pair(socket, session, request);
     if (request.type === "node.ping") return this.ping(socket, session, request);
+    if (
+      request.type === "node.agent.run.context" ||
+      request.type === "node.agent.run.journal" ||
+      request.type === "node.agent.run.result"
+    )
+      return this.receiveAgentRunMessage(socket, session, request);
     return this.receiveAgentProvisionMessage(socket, session, request);
   }
 
@@ -194,6 +247,7 @@ export class NodeDirectory {
     if (nodeId && this.connected.get(nodeId) === socket) {
       this.connected.delete(nodeId);
       this.rejectAgentProvisions(nodeId, new Error("节点连接已断开，Agent 创建结果尚未确认。"));
+      this.rejectAgentRuns(nodeId, new Error("节点连接已断开，待处理私信仍保留在控制面。"));
     }
     this.sessions.delete(socket);
   }
@@ -257,6 +311,87 @@ export class NodeDirectory {
       );
     }
     return promise;
+  }
+
+  setAgentRunHandlers(handlers: AgentRunHandlers): void {
+    this.agentRunHandlers = handlers;
+  }
+
+  runAgent(nodeId: string, request: NodeAgentRunStart): Promise<NodeAgentRunResult> {
+    const controlMessage = NodeControlMessageSchema.parse(request) as NodeAgentRunStart;
+    const existing = this.pendingAgentRuns.get(request.runId);
+    if (existing) {
+      if (existing.nodeId !== nodeId || existing.agentId !== request.agentId)
+        return Promise.reject(new Error("Agent run identifier is already in use"));
+      return existing.promise;
+    }
+    const socket = this.connected.get(nodeId),
+      session = socket ? this.sessions.get(socket) : undefined;
+    if (
+      !socket ||
+      !session ||
+      session.nodeId !== nodeId ||
+      this.now() - session.lastHeartbeatAt >= this.heartbeatTimeoutMs
+    )
+      return Promise.reject(new Error("Selected node is offline"));
+    const nodeRuns = [...this.pendingAgentRuns.values()].filter(
+      (run) => run.nodeId === nodeId,
+    ).length;
+    if (nodeRuns >= DEFAULT_NODE_MAX_ACTIVE_RUNS)
+      return Promise.reject(new Error("Selected node has reached its fixed Agent run capacity"));
+
+    let resolveResult!: (result: NodeAgentRunResult) => void, rejectResult!: (error: Error) => void;
+    const promise = new Promise<NodeAgentRunResult>((resolve, reject) => {
+      resolveResult = resolve;
+      rejectResult = reject;
+    });
+    const timeout = setTimeout(() => {
+      this.cancelAgentRun(request.runId, request.agentId, "timeout");
+    }, this.runTimeoutMs);
+    this.pendingAgentRuns.set(request.runId, {
+      nodeId,
+      agentId: request.agentId,
+      promise,
+      resolve: resolveResult,
+      reject: rejectResult,
+      timeout,
+    });
+    try {
+      this.send(socket, controlMessage);
+    } catch {
+      this.finishAgentRun(request.runId, undefined, new Error("Could not send Agent run"));
+    }
+    return promise;
+  }
+
+  cancelAgentRun(
+    runId: string,
+    agentId: string,
+    reason: "timeout" | "credentials_changed",
+  ): boolean {
+    const pending = this.pendingAgentRuns.get(runId);
+    if (!pending || pending.agentId !== agentId) return false;
+    const socket = this.connected.get(pending.nodeId),
+      session = socket ? this.sessions.get(socket) : undefined;
+    if (socket && session?.nodeId === pending.nodeId) {
+      try {
+        this.send(socket, {
+          type: "control.agent.run.cancel",
+          requestId: randomUUID(),
+          runId,
+          agentId,
+          reason,
+        });
+      } catch {
+        // The durable run fails below; a disconnect also closes the node-side worker.
+      }
+    }
+    this.finishAgentRun(
+      runId,
+      undefined,
+      new Error(reason === "timeout" ? "Agent run timed out" : "Model credential changed"),
+    );
+    return true;
   }
 
   closeAll(): void {
@@ -385,6 +520,84 @@ export class NodeDirectory {
     this.finishAgentProvision(request.requestId, request);
   }
 
+  private receiveAgentRunMessage(
+    socket: NodeSocket,
+    session: SocketSession,
+    request: NodeAgentRunRequest,
+  ): void {
+    const nodeId = session.nodeId;
+    if (!nodeId || this.connected.get(nodeId) !== socket)
+      return this.reject(socket, request.requestId, "not_authenticated", "节点尚未完成身份验证。");
+    const pending = this.pendingAgentRuns.get(request.runId);
+    if (pending && (pending.nodeId !== nodeId || pending.agentId !== request.agentId))
+      return this.reject(
+        socket,
+        request.requestId,
+        "invalid_identity",
+        "Agent run 与节点请求不匹配。",
+      );
+
+    if (request.type === "node.agent.run.context") {
+      let page: ReturnType<AgentRunHandlers["context"]>;
+      try {
+        page = pending
+          ? this.agentRunHandlers?.context(
+              request.runId,
+              request.agentId,
+              request.after,
+              request.limit,
+            )
+          : undefined;
+      } catch {
+        page = undefined;
+      }
+      this.send(socket, {
+        type: "control.agent.run.context",
+        requestId: request.requestId,
+        runId: request.runId,
+        messages: page?.messages ?? [],
+        nextAfter: page?.nextAfter ?? null,
+      });
+      return;
+    }
+
+    if (request.type === "node.agent.run.journal") {
+      let accepted = false;
+      try {
+        accepted =
+          this.agentRunHandlers?.journal(
+            request.runId,
+            nodeId,
+            request.agentId,
+            request.requestId,
+            request.text,
+            !pending,
+          ) ?? false;
+      } catch {
+        accepted = false;
+      }
+      this.send(socket, {
+        type: "control.agent.run.journal_ack",
+        requestId: request.requestId,
+        runId: request.runId,
+        accepted,
+      });
+      return;
+    }
+
+    if (!pending) return; // Late result from a disconnected run is deliberately ignored.
+    try {
+      this.agentRunHandlers?.result(
+        request.runId,
+        request.agentId,
+        request.ok,
+        request.ok ? undefined : request.code,
+      );
+    } finally {
+      this.finishAgentRun(request.runId, request);
+    }
+  }
+
   private finishAgentProvision(
     requestId: string,
     result?: NodeAgentProvisionResult,
@@ -402,6 +615,21 @@ export class NodeDirectory {
     for (const [requestId, pending] of this.pendingAgentProvisions) {
       if (pending.nodeId === nodeId) this.finishAgentProvision(requestId, undefined, error);
     }
+  }
+
+  private rejectAgentRuns(nodeId: string, error: Error): void {
+    for (const [runId, pending] of this.pendingAgentRuns) {
+      if (pending.nodeId === nodeId) this.finishAgentRun(runId, undefined, error);
+    }
+  }
+
+  private finishAgentRun(runId: string, result?: NodeAgentRunResult, error?: Error): void {
+    const pending = this.pendingAgentRuns.get(runId);
+    if (!pending) return;
+    this.pendingAgentRuns.delete(runId);
+    clearTimeout(pending.timeout);
+    if (error) pending.reject(error);
+    else if (result) pending.resolve(result);
   }
 
   private markConnected(socket: NodeSocket, session: SocketSession, nodeId: string): void {

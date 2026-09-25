@@ -22,6 +22,9 @@ function json(status: number, body: unknown): Response {
 
 let agents: Array<Record<string, unknown>>;
 let posts: Array<Record<string, unknown>>;
+let providers: Array<{ id: string; name: string }>;
+let credentials: Array<{ provider: string; configured: true; updatedAt: number }>;
+let credentialWrites: Array<{ provider: string; apiKey: string }>;
 let nodeOnline: boolean;
 let postConflict: boolean;
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -29,6 +32,12 @@ let fetchMock: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   agents = [];
   posts = [];
+  providers = [
+    { id: "openai", name: "OpenAI" },
+    { id: "anthropic", name: "Anthropic" },
+  ];
+  credentials = [];
+  credentialWrites = [];
   nodeOnline = true;
   postConflict = false;
   fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -37,6 +46,30 @@ beforeEach(() => {
       return json(200, { nodes: [{ id: nodeId, online: nodeOnline, lastConnectedAt: null }] });
     if (url === "/api/owner/channels")
       return json(200, { channels: [{ id: channelId, name: "Research", archived: false }] });
+    if (url === "/api/owner/model-providers") return json(200, { providers });
+    if (url.startsWith("/api/owner/model-credentials")) {
+      if (init?.method === "PUT") {
+        const match = url.match(/\/api\/owner\/model-credentials\/([^/]+)$/);
+        const body = JSON.parse(String(init.body)) as { apiKey: string };
+        const provider = decodeURIComponent(match?.[1] ?? "");
+        credentialWrites.push({ provider, apiKey: body.apiKey });
+        credentials = [
+          ...credentials.filter((item) => item.provider !== provider),
+          {
+            provider,
+            configured: true,
+            updatedAt: 3,
+          },
+        ];
+        return {
+          status: 204,
+          ok: true,
+          json: async () => null,
+          text: async () => "",
+        } as Response;
+      }
+      return json(200, { credentials });
+    }
     if (url === "/api/owner/agents") {
       if (init?.method === "POST") {
         const request = JSON.parse(String(init.body)) as Record<string, unknown>;
@@ -91,7 +124,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("creates a stable request and retries the same Linux identity without exposing API key settings", async () => {
+it("creates a stable request and retries the same Linux identity without putting credentials in Agent data", async () => {
   let poll: (() => void) | undefined;
   vi.spyOn(window, "setInterval").mockImplementation(((callback: TimerHandler) => {
     if (typeof callback === "function") poll = callback as () => void;
@@ -111,7 +144,7 @@ it("creates a stable request and retries the same Linux identity without exposin
   await user.type(screen.getByRole("textbox", { name: "介绍" }), "A private colleague.");
   await user.type(screen.getByRole("textbox", { name: "模型 ID" }), "gpt-4.1");
   await user.selectOptions(screen.getByRole("combobox", { name: "初始频道（可选）" }), channelId);
-  expect(screen.queryByLabelText(/API key|凭据 key/i)).toBeNull();
+  expect(screen.getByLabelText("API key").getAttribute("type")).toBe("password");
   await user.click(screen.getByRole("button", { name: "创建 Agent" }));
 
   await screen.findByRole("alert");
@@ -143,6 +176,24 @@ it("creates a stable request and retries the same Linux identity without exposin
   expect(posts[1]).toEqual(posts[0]);
   expect(screen.getByText("等待凭据")).toBeTruthy();
   expect(screen.getByText(/身份、home 与会话已验证/)).toBeTruthy();
+});
+
+it("lets the owner save one provider key without displaying it again", async () => {
+  const user = userEvent.setup();
+  render(createElement(AgentsPage));
+  await screen.findByRole("heading", { name: "模型服务凭据" });
+  await user.selectOptions(screen.getByRole("combobox", { name: "模型服务" }), "anthropic");
+  const syntheticKey = "synthetic-key-used-only-in-this-test";
+  await user.type(screen.getByLabelText("API key"), syntheticKey);
+  await user.click(screen.getByRole("button", { name: "保存或替换 API key" }));
+
+  await waitFor(() =>
+    expect(credentialWrites).toEqual([{ provider: "anthropic", apiKey: syntheticKey }]),
+  );
+  await screen.findByText("已配置");
+  expect((screen.getByLabelText("API key") as HTMLInputElement).value).toBe("");
+  expect(document.body.textContent?.includes(syntheticKey)).toBe(false);
+  expect(screen.getByText("凭据已保存；服务列表不会显示 key。")).toBeTruthy();
 });
 
 it("keeps a no-record node conflict visible through refreshes until the owner starts a new request", async () => {

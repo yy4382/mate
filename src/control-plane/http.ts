@@ -10,6 +10,9 @@ import { registerNodeRoutes } from "./nodes/http.js";
 import { AgentDirectory, AgentRequestConflict } from "./agents/directory.js";
 import type { AgentSummary } from "./agents/contracts.js";
 import { newAgentRequestSchema } from "./agents/contracts.js";
+import { ModelCredentialDirectory } from "./model-credentials.js";
+import { isSupportedModelProvider, supportedModelProviders } from "./model-providers.js";
+import { AgentRunCoordinator } from "./agent-runs.js";
 
 const newChannelSchema = z
   .object({
@@ -28,6 +31,15 @@ const updateChannelSchema = z
   .strict()
   .refine((value) => Object.keys(value).length > 0);
 const newMessageSchema = z.object({ text: z.string().trim().min(1).max(20_000) }).strict();
+const modelCredentialInputSchema = z
+  .object({
+    apiKey: z
+      .string()
+      .min(1)
+      .max(8192)
+      .refine((value) => value.trim().length > 0),
+  })
+  .strict();
 
 export interface ControlPlaneAppOptions {
   webRoot?: string;
@@ -43,6 +55,7 @@ export interface ControlPlaneAppOptions {
 }
 
 export class ControlPlaneApp extends Hono {
+  runs?: AgentRunCoordinator;
   constructor(
     private readonly ownerAuth: OwnerAuth,
     readonly nodes: NodeDirectory,
@@ -53,6 +66,7 @@ export class ControlPlaneApp extends Hono {
   }
 
   close(): void {
+    this.runs?.close();
     this.nodes.closeAll();
     this.ownerAuth.close();
   }
@@ -91,9 +105,11 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
     },
     nodes = new NodeDirectory(ownerAuth.db, nodeOptions),
     agents = new AgentDirectory(ownerAuth.db, options.now),
+    modelCredentials = new ModelCredentialDirectory(ownerAuth.db, options.now),
     ownerChat = new OwnerChat(ownerAuth.db, options.now),
     app = new ControlPlaneApp(ownerAuth, nodes, agents, ownerChat),
     loginGate = new LoginGate();
+  app.runs = new AgentRunCoordinator(ownerAuth.db, nodes, modelCredentials, ownerChat, options.now);
   const activeAgentProvisions = new Map<string, Promise<AgentSummary>>();
   const agentProvisionResponse = (
     context: Context,
@@ -178,6 +194,52 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
     context.header("Cache-Control", "no-store");
     return context.json({ agents: agents.list() });
   });
+  app.get("/api/owner/model-providers", (context) => {
+    context.header("Cache-Control", "no-store");
+    return context.json({ providers: supportedModelProviders });
+  });
+  app.get("/api/owner/model-credentials", (context) => {
+    context.header("Cache-Control", "no-store");
+    return context.json({ credentials: modelCredentials.list() });
+  });
+  app.put("/api/owner/model-credentials/:provider", async (context) => {
+    const provider = context.req.param("provider");
+    if (!isSupportedModelProvider(provider))
+      return context.json({ error: "模型服务不受支持。" }, 400);
+    let body: unknown;
+    try {
+      body = await context.req.json();
+    } catch {
+      return context.json({ error: "模型凭据格式无效。" }, 400);
+    }
+    const input = modelCredentialInputSchema.safeParse(body);
+    if (!input.success) return context.json({ error: "模型凭据格式无效。" }, 400);
+    try {
+      const changed = modelCredentials.put(provider, input.data.apiKey);
+      if (changed) app.runs?.credentialsChanged(provider);
+      agents.setProviderReady(provider, true);
+      app.runs?.wake();
+    } catch {
+      return context.json({ error: "无法保存模型凭据，请检查控制面存储后重试。" }, 503);
+    }
+    context.header("Cache-Control", "no-store");
+    return context.body(null, 204);
+  });
+  app.delete("/api/owner/model-credentials/:provider", (context) => {
+    const provider = context.req.param("provider");
+    if (!isSupportedModelProvider(provider))
+      return context.json({ error: "模型服务不受支持。" }, 400);
+    try {
+      const removed = modelCredentials.delete(provider);
+      if (removed) app.runs?.credentialsChanged(provider);
+      agents.setProviderReady(provider, false);
+      app.runs?.wake();
+    } catch {
+      return context.json({ error: "无法删除模型凭据，请检查控制面存储后重试。" }, 503);
+    }
+    context.header("Cache-Control", "no-store");
+    return context.body(null, 204);
+  });
   app.post("/api/owner/agents", async (context) => {
     let body: unknown;
     try {
@@ -200,7 +262,8 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
       return agentProvisionResponse(context, agent, 200);
     }
     const existing = agents.get(input.id);
-    if (existing?.status === "waiting_credentials") return context.json({ agent: existing });
+    if (existing?.status === "waiting_credentials" || existing?.status === "ready")
+      return context.json({ agent: existing });
     if (!nodes.list().some((node) => node.id === input.nodeId && node.online))
       return context.json({ error: "所选节点当前离线，Agent 资料尚未提交。" }, 409);
     let prepared;
@@ -221,7 +284,12 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
           (stage) => agents.updateStage(input.id, stage),
         );
         if (!result.ok) return agents.fail(input.id, result.message) ?? prepared.agent;
-        return agents.complete(input.id, result.identity, ownerChat);
+        return agents.complete(
+          input.id,
+          result.identity,
+          ownerChat,
+          modelCredentials.has(input.model.provider),
+        );
       } catch (error) {
         const message =
           error instanceof AgentRequestConflict
@@ -237,6 +305,12 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
     } finally {
       if (activeAgentProvisions.get(input.id) === task) activeAgentProvisions.delete(input.id);
     }
+  });
+  app.post("/api/owner/agents/:agentId/direct-channel", (context) => {
+    const channel = ownerChat.getOrCreateAgentDirectChannel(context.req.param("agentId"));
+    if (!channel) return context.json({ error: "Agent 私信暂不可用。" }, 404);
+    context.header("Cache-Control", "no-store");
+    return context.json({ channel });
   });
   app.get("/api/owner/snapshot", (context) => context.json(ownerChat.snapshot()));
   app.get("/api/owner/events", (context) => {
@@ -347,6 +421,7 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
     try {
       const message = ownerChat.createMessage(context.req.param("channelId"), input.data.text);
       if (!message) return context.json({ error: "频道不存在" }, 404);
+      app.runs?.wake();
       return context.json(message, 201);
     } catch (error) {
       if (error instanceof ArchivedChannelError)

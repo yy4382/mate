@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isSupportedModelProvider } from "../model-providers.js";
 
 export const newAgentRequestSchema = z
   .object({
@@ -15,7 +16,8 @@ export const newAgentRequestSchema = z
         provider: z
           .string()
           .trim()
-          .regex(/^[a-z][a-z0-9._-]{0,63}$/),
+          .regex(/^[a-z][a-z0-9._-]{0,63}$/)
+          .refine(isSupportedModelProvider),
         id: z.string().trim().min(1).max(200),
       })
       .strict(),
@@ -25,7 +27,7 @@ export const newAgentRequestSchema = z
 
 export type NewAgentRequest = z.infer<typeof newAgentRequestSchema>;
 
-export type AgentProvisioningStatus = "provisioning" | "waiting_credentials" | "failed";
+export type AgentProvisioningStatus = "provisioning" | "waiting_credentials" | "ready" | "failed";
 export type AgentProvisioningStage =
   | "queued"
   | "checking_account"

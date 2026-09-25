@@ -23,7 +23,7 @@ interface AgentSummary {
   model: { provider: string; id: string };
   initialChannelId: string | null;
   sessionId: string;
-  status: "provisioning" | "waiting_credentials" | "failed";
+  status: "provisioning" | "waiting_credentials" | "ready" | "failed";
   stage:
     | "queued"
     | "checking_account"
@@ -57,6 +57,17 @@ interface Draft {
   provider: string;
   modelId: string;
   initialChannelId: string;
+}
+
+interface ModelProvider {
+  id: string;
+  name: string;
+}
+
+interface ModelCredential {
+  provider: string;
+  configured: true;
+  updatedAt: number;
 }
 
 const stageLabels: Record<AgentSummary["stage"], string> = {
@@ -131,6 +142,15 @@ export function AgentsPage() {
   const [nodes, setNodes] = useState<NodeSummary[]>([]);
   const [channels, setChannels] = useState<ChannelSummary[]>([]);
   const [agents, setAgents] = useState<AgentSummary[]>([]);
+  const [providers, setProviders] = useState<ModelProvider[]>([]);
+  const [credentials, setCredentials] = useState<ModelCredential[]>([]);
+  const [credentialProvider, setCredentialProvider] = useState("openai");
+  const [credentialKey, setCredentialKey] = useState("");
+  const [credentialBusy, setCredentialBusy] = useState(false);
+  const [credentialError, setCredentialError] = useState<string | null>(null);
+  const [credentialSaved, setCredentialSaved] = useState(false);
+  const [directChannels, setDirectChannels] = useState<Record<string, string>>({});
+  const [openingDirectMessage, setOpeningDirectMessage] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft>(newDraft);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -139,15 +159,25 @@ export function AgentsPage() {
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     try {
-      const [nodeResult, channelResult, agentResult] = await Promise.all([
-        readJSON<{ nodes: NodeSummary[] }>("/api/owner/nodes", signal),
-        readJSON<{ channels: ChannelSummary[] }>("/api/owner/channels", signal),
-        readJSON<{ agents: AgentSummary[] }>("/api/owner/agents", signal),
-      ]);
+      const [nodeResult, channelResult, agentResult, providerResult, credentialResult] =
+        await Promise.all([
+          readJSON<{ nodes: NodeSummary[] }>("/api/owner/nodes", signal),
+          readJSON<{ channels: ChannelSummary[] }>("/api/owner/channels", signal),
+          readJSON<{ agents: AgentSummary[] }>("/api/owner/agents", signal),
+          readJSON<{ providers: ModelProvider[] }>("/api/owner/model-providers", signal),
+          readJSON<{ credentials: ModelCredential[] }>("/api/owner/model-credentials", signal),
+        ]);
       if (signal?.aborted) return;
       setNodes(nodeResult.nodes);
       setChannels(channelResult.channels);
       setAgents(agentResult.agents);
+      setProviders(providerResult.providers);
+      setCredentials(credentialResult.credentials);
+      setCredentialProvider((current) =>
+        providerResult.providers.some((provider) => provider.id === current)
+          ? current
+          : (providerResult.providers[0]?.id ?? ""),
+      );
       setDraft((current) =>
         current.nodeId && nodeResult.nodes.some((node) => node.id === current.nodeId)
           ? current
@@ -210,6 +240,63 @@ export function AgentsPage() {
     void submitRequest(requestFromDraft(draft));
   }
 
+  async function submitCredential(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!credentialProvider || !credentialKey) return;
+    setCredentialBusy(true);
+    setCredentialError(null);
+    setCredentialSaved(false);
+    try {
+      const response = await fetch(
+        `/api/owner/model-credentials/${encodeURIComponent(credentialProvider)}`,
+        {
+          method: "PUT",
+          headers: { Accept: "application/json", "Content-Type": "application/json" },
+          body: JSON.stringify({ apiKey: credentialKey }),
+        },
+      );
+      if (response.status === 401) {
+        redirectToLogin();
+        return;
+      }
+      const result: unknown = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(errorMessage(result, "无法保存模型凭据，请重试。"));
+      setCredentialKey("");
+      setCredentialSaved(true);
+      await refresh();
+    } catch (reason) {
+      setCredentialError(reason instanceof Error ? reason.message : "无法保存模型凭据，请重试。");
+    } finally {
+      setCredentialBusy(false);
+    }
+  }
+
+  async function openDirectMessage(agentId: string) {
+    setOpeningDirectMessage(agentId);
+    setCreationError(null);
+    try {
+      const response = await fetch(
+        `/api/owner/agents/${encodeURIComponent(agentId)}/direct-channel`,
+        {
+          method: "POST",
+          headers: { Accept: "application/json" },
+        },
+      );
+      if (response.status === 401) {
+        redirectToLogin();
+        return;
+      }
+      const result: unknown = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(errorMessage(result, "暂时无法打开私信。"));
+      const channel = (result as { channel: ChannelSummary }).channel;
+      setDirectChannels((current) => ({ ...current, [agentId]: channel.id }));
+    } catch (reason) {
+      setCreationError(reason instanceof Error ? reason.message : "暂时无法打开私信。");
+    } finally {
+      setOpeningDirectMessage(null);
+    }
+  }
+
   const savedDraft = agents.find((agent) => agent.id === draft.id),
     selectedNode = nodes.find((node) => node.id === draft.nodeId),
     onlineNodes = nodes.filter((node) => node.online),
@@ -233,6 +320,68 @@ export function AgentsPage() {
           </a>
         </div>
 
+        <section className="agent-form-section" aria-labelledby="model-credentials-title">
+          <div className="agents-section-heading">
+            <h2 id="model-credentials-title">模型服务凭据</h2>
+          </div>
+          <p className="agents-intro">
+            每家服务保存一份 API key。页面只显示已配置状态；运行开始时控制面才会把 key 发送给节点。
+          </p>
+          <form className="agent-form" onSubmit={submitCredential}>
+            <label>
+              模型服务
+              <select
+                required
+                value={credentialProvider}
+                disabled={credentialBusy || providers.length === 0}
+                onChange={(event) => setCredentialProvider(event.target.value)}
+              >
+                {providers.map((provider) => (
+                  <option key={provider.id} value={provider.id}>
+                    {provider.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              API key
+              <input
+                type="password"
+                autoComplete="new-password"
+                required
+                value={credentialKey}
+                disabled={credentialBusy || providers.length === 0}
+                onChange={(event) => setCredentialKey(event.target.value)}
+              />
+            </label>
+            {credentialError && (
+              <p className="form-error" role="alert">
+                {credentialError}
+              </p>
+            )}
+            {credentialSaved && (
+              <p className="agent-field-hint" role="status">
+                凭据已保存；服务列表不会显示 key。
+              </p>
+            )}
+            <ul className="model-credential-list" aria-label="已配置模型服务">
+              {credentials.map((credential) => (
+                <li key={credential.provider}>
+                  {providers.find((provider) => provider.id === credential.provider)?.name ??
+                    credential.provider}
+                  <span>已配置</span>
+                </li>
+              ))}
+            </ul>
+            <button
+              type="submit"
+              disabled={credentialBusy || !credentialProvider || !credentialKey}
+            >
+              {credentialBusy ? "正在保存…" : "保存或替换 API key"}
+            </button>
+          </form>
+        </section>
+
         <section className="agent-form-section" aria-labelledby="create-agent-title">
           <div className="agents-section-heading">
             <h2 id="create-agent-title">创建 Agent</h2>
@@ -249,8 +398,7 @@ export function AgentsPage() {
             </button>
           </div>
           <p className="agents-intro">
-            只在选择在线节点后提交。模型凭据尚未在此配置；创建完成后 Agent
-            会等待凭据，频道消息可以排队。
+            只在选择在线节点后提交。尚未配置模型 key 时，Agent 会等待凭据；私信会先排队。
           </p>
           <form className="agent-form" onSubmit={submitForm}>
             <label>
@@ -305,14 +453,18 @@ export function AgentsPage() {
             <div className="agent-model-fields">
               <label>
                 模型提供方
-                <input
+                <select
                   required
-                  maxLength={64}
-                  pattern="[a-z][a-z0-9._-]*"
                   value={draft.provider}
-                  disabled={formLocked || submitting}
+                  disabled={formLocked || submitting || providers.length === 0}
                   onChange={(event) => setDraft({ ...draft, provider: event.target.value })}
-                />
+                >
+                  {providers.map((provider) => (
+                    <option key={provider.id} value={provider.id}>
+                      {provider.name}
+                    </option>
+                  ))}
+                </select>
               </label>
               <label>
                 模型 ID
@@ -394,7 +546,9 @@ export function AgentsPage() {
                         ? "等待凭据"
                         : agent.status === "provisioning"
                           ? "正在创建"
-                          : "创建失败"}
+                          : agent.status === "ready"
+                            ? "已就绪"
+                            : "创建失败"}
                     </span>
                   </div>
                   <p className="agent-stage" role="status">
@@ -405,7 +559,29 @@ export function AgentsPage() {
                       身份、home 与会话已验证。配置模型凭据前不会启动运行；邀请频道中的消息会排队。
                     </p>
                   )}
+                  {agent.status === "ready" && (
+                    <p className="agent-credential-note">
+                      模型服务凭据已配置；该 Agent 可以开始处理排队消息。
+                    </p>
+                  )}
                   {agent.error && <p className="form-error">{agent.error}</p>}
+                  {agent.linuxIdentity && (
+                    <div className="agent-direct-message">
+                      {directChannels[agent.id] ? (
+                        <a href={`/app?channel=${encodeURIComponent(directChannels[agent.id]!)}`}>
+                          打开私信
+                        </a>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={openingDirectMessage !== null}
+                          onClick={() => void openDirectMessage(agent.id)}
+                        >
+                          {openingDirectMessage === agent.id ? "正在打开…" : "私信"}
+                        </button>
+                      )}
+                    </div>
+                  )}
                   {agent.linuxIdentity && (
                     <dl className="agent-linux-identity">
                       <div>

@@ -34,7 +34,9 @@ sudo /usr/bin/node /ABSOLUTE/checkout/dist/src/deployment/cli.js install /ABSOLU
 
 ## Linux 节点与 Agent 身份
 
-配对后的 Linux 节点需要以 root 运行，才能响应所有者在网页提交的 Agent 创建请求。节点只接受受限的账号与 home 创建/核验消息，不提供通用 root 命令入口。默认 Agent home 根目录是 `/var/lib/mate/agents`；可通过节点服务的 `MATE_NODE_AGENT_HOME_ROOT` 改成绝对路径。根目录及其父路径必须是真实目录且由 root 所有；最终根目录不得允许其他用户写入，父路径也不得允许其他用户写入，系统标准的 root 所有 sticky 目录（例如 `/tmp`）可作为父路径。Agent 自己的 home 为 `0700`，起始 `MEMORY.md` 为 `0600`。模型服务凭据在控制面配置，不发给节点 provisioning 请求。
+配对后的 Linux 节点需要以 root 运行，才能响应所有者在网页提交的 Agent 创建请求。节点只接受受限的账号与 home 创建/核验消息，不提供通用 root 命令入口。默认 Agent home 根目录是 `/var/lib/mate/agents`；可通过节点服务的 `MATE_NODE_AGENT_HOME_ROOT` 改成绝对路径。根目录及其父路径必须是真实目录且由 root 所有；最终根目录不得允许其他用户写入，父路径也不得允许其他用户写入，系统标准的 root 所有 sticky 目录（例如 `/tmp`）可作为父路径。Agent 自己的 home 为 `0700`，起始 `MEMORY.md` 为 `0600`。节点启动时建立固定的 `mate-model` 系统账号：它没有 home、不能登录且没有附加组，与任何 Agent 账号不同。模型服务凭据在控制面网页配置，不发给节点 provisioning 请求。
+
+所有者在网页为受支持的模型服务配置 API key；页面和 API 只显示服务是否已配置，保存后输入框会清空，也不会再次回显 key。控制面把 key 明文保存在自己的 SQLite 数据库中；数据库目录权限为 `0700`，数据库文件为 `0600`，只能由运行控制面的服务账号读取。数据库及其备份都包含凭据，必须按同等敏感资料限制读取、复制、保留和清理；备份介质也应采用适合部署环境的访问控制或加密。Agent home、节点持久状态和日志不得保存 key。每次模型 run 开始时，控制面才把该服务当前的 key 发给节点；节点立即转交给短生命周期的 `mate-model` 子进程。Agent 账号不能读取该进程的 `/proc` 环境；run 结束后进程退出，后续 run 会重新读取当前配置，删除 key 后不再启动需要该服务的 run。
 
 ## Slack App 接线
 
@@ -64,6 +66,8 @@ sudo matectl logs
 在 Debian 13 上另用两个真实 Agent 账号做原生检查：分别读自己的与同伴的 `MEMORY.md`，读同伴共享文件、只写自己的共享目录，尝试读取 Mate 数据库/凭证和控制服务；再启动、列出、停止一个长任务。使用合成文件记录 UID、命令和退出码，不读取真实私人记忆。macOS 模拟测试不能代替这些检查。
 
 ## 原生 Linux 维护验证
+
+模型进程的 UID 与 `/proc` 隔离可在固定官方 Debian slim 容器中额外验证：`pnpm test:linux-model-worker`。该验证仅使用合成 provider stream 和随机测试 key，运行真实 Pi Agent 循环及 Mate 的短生命周期进程封装；它不连接模型服务，也不证明真实 provider 连通。脚本只允许在显式标记的临时容器内以 root 运行，并检查 `mate-model` 与 Agent UID 不同、Agent 读取 worker `/proc` 环境失败、key 不落入 Agent home，以及 worker 退出后进程消失。
 
 仓库测试里的宿主替换入口（`tests/deployment/host-operations.test.ts`、`tests/helpers/host.ts`）用**模拟宿主**证明维护流程只通过一个可替换入口，并注入故障来验证决定落盘后执行、完成项复验和中断恢复。它在任何平台都能跑，但**不**证明真实 UID、目录权限或进程控制。这些事实只能在一台可重置的 Debian 13 主机上验证：
 

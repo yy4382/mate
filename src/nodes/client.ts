@@ -3,7 +3,15 @@ import { resolve as resolvePath } from "node:path";
 import { WebSocket } from "ws";
 import { loadOrCreateNodeIdentity, type NodeIdentity } from "./identity.js";
 import { NodeControlMessageSchema, NodeRequestSchema } from "./protocol.js";
-import { handleAgentProvisionRequest, provisionLinuxAgent } from "./agent-provisioner.js";
+import {
+  handleAgentProvisionRequest,
+  provisionLinuxAgent,
+  type LinuxAgentIdentity,
+} from "./agent-provisioner.js";
+import { ensureModelWorkerIdentity } from "./model-identity.js";
+import { makeAgentRunRequest, runAgentModel, type AgentRunPage } from "./agent-runner.js";
+import type { ModelProcessIdentity } from "./model-process.js";
+import type { AgentProvisionStage } from "./protocol.js";
 
 const INITIAL_RETRY_MS = 250;
 const MAX_RETRY_MS = 10_000;
@@ -20,11 +28,38 @@ export interface LinuxNodeOptions {
   heartbeatTimeoutMs?: number;
 }
 
+interface NodeTestDependencies {
+  modelWorkerEntry?: string;
+  provisionAgent?: (
+    agentId: string,
+    onProgress: (stage: AgentProvisionStage) => void,
+  ) => Promise<LinuxAgentIdentity>;
+}
+
 class NodeAuthenticationError extends Error {}
 
 export async function runLinuxNode(options: LinuxNodeOptions, signal: AbortSignal): Promise<void> {
+  return runLinuxNodeInternal(options, signal, {});
+}
+
+/** Test-only entry seam; the production CLI does not read a worker path from configuration. */
+export async function runLinuxNodeWithTestDependencies(
+  options: LinuxNodeOptions,
+  signal: AbortSignal,
+  dependencies: NodeTestDependencies,
+): Promise<void> {
+  return runLinuxNodeInternal(options, signal, dependencies);
+}
+
+async function runLinuxNodeInternal(
+  options: LinuxNodeOptions,
+  signal: AbortSignal,
+  dependencies: NodeTestDependencies,
+): Promise<void> {
   const socketUrl = toWebSocketUrl(options.controlPlaneUrl);
   const { identity, created } = loadOrCreateNodeIdentity(options.dataDirectory);
+  const modelWorkerIdentity =
+    process.platform === "linux" ? ensureModelWorkerIdentity() : undefined;
   let pairingToken = options.pairingToken;
   if (created && !pairingToken)
     throw new Error("A new Linux node requires MATE_NODE_PAIRING_TOKEN");
@@ -54,6 +89,8 @@ export async function runLinuxNode(options: LinuxNodeOptions, signal: AbortSigna
         heartbeatIntervalMs,
         heartbeatTimeoutMs,
         options.agentHomeRoot ?? "/var/lib/mate/agents",
+        modelWorkerIdentity,
+        dependencies,
         signal,
       );
       if (signal.aborted) break;
@@ -95,6 +132,8 @@ function connectOnce(
   heartbeatIntervalMs: number,
   heartbeatTimeoutMs: number,
   agentHomeRoot: string,
+  modelWorkerIdentity: ModelProcessIdentity | undefined,
+  testDependencies: NodeTestDependencies,
   signal: AbortSignal,
 ): Promise<boolean> {
   if (signal.aborted) return Promise.resolve(false);
@@ -111,6 +150,24 @@ function connectOnce(
       forceTerminateTimeout: ReturnType<typeof setTimeout> | undefined,
       pendingPing: string | undefined,
       timeout: ReturnType<typeof setTimeout> | undefined;
+    const pendingRunContexts = new Map<
+        string,
+        { runId: string; resolve(page: AgentRunPage): void; reject(error: Error): void }
+      >(),
+      pendingRunJournals = new Map<
+        string,
+        { runId: string; resolve(accepted: boolean): void; reject(error: Error): void }
+      >(),
+      activeRuns = new Map<string, { agentId: string; controller: AbortController }>();
+
+    const abortActiveRuns = (message: string) => {
+      for (const { controller } of activeRuns.values()) controller.abort(message);
+      activeRuns.clear();
+      for (const pending of pendingRunContexts.values()) pending.reject(new Error(message));
+      pendingRunContexts.clear();
+      for (const pending of pendingRunJournals.values()) pending.reject(new Error(message));
+      pendingRunJournals.clear();
+    };
 
     const cleanup = () => {
       if (heartbeat) clearInterval(heartbeat);
@@ -118,6 +175,7 @@ function connectOnce(
       if (forceTerminateTimeout) clearTimeout(forceTerminateTimeout);
       if (timeout) clearTimeout(timeout);
       signal.removeEventListener("abort", onAbort);
+      abortActiveRuns("Node WebSocket connection ended");
       socket.removeEventListener("message", onMessage);
       socket.removeEventListener("close", onClose);
       if (socket.readyState === WebSocket.CLOSED) {
@@ -264,6 +322,65 @@ function connectOnce(
         process.stdout.write(`MATE_NODE_HEARTBEAT_ACK ${message.requestId}\n`);
         return;
       }
+      if (message.type === "control.agent.run.context") {
+        const pending = pendingRunContexts.get(message.requestId);
+        if (!pending || pending.runId !== message.runId) return;
+        pendingRunContexts.delete(message.requestId);
+        pending.resolve({ messages: message.messages, nextAfter: message.nextAfter });
+        return;
+      }
+      if (message.type === "control.agent.run.journal_ack") {
+        const pending = pendingRunJournals.get(message.requestId);
+        if (!pending || pending.runId !== message.runId) return;
+        pendingRunJournals.delete(message.requestId);
+        pending.resolve(message.accepted);
+        return;
+      }
+      if (message.type === "control.agent.run.cancel") {
+        if (!authenticated)
+          throw new NodeAuthenticationError("控制面在节点身份验证前取消 Agent 运行。");
+        const active = activeRuns.get(message.runId);
+        if (active?.agentId === message.agentId) active.controller.abort(message.reason);
+        return;
+      }
+      if (message.type === "control.agent.run") {
+        if (!authenticated)
+          throw new NodeAuthenticationError("控制面在节点身份验证前请求 Agent 运行。");
+        const runId = message.runId,
+          agentId = message.agentId;
+        if (!modelWorkerIdentity && !testDependencies.modelWorkerEntry) {
+          message.apiKey = "";
+          sendRunResult(runId, agentId, false, "model_unavailable");
+          return;
+        }
+        if (
+          activeRuns.has(runId) ||
+          [...activeRuns.values()].some((run) => run.agentId === agentId) ||
+          activeRuns.size >= 2
+        ) {
+          message.apiKey = "";
+          sendRunResult(runId, agentId, false, "worker_failed");
+          return;
+        }
+        const controller = new AbortController();
+        activeRuns.set(runId, { agentId, controller });
+        void runAgentModel(
+          message,
+          {
+            context: (after, runSignal) => requestAgentContext(runId, agentId, after, runSignal),
+            journal: (text, runSignal) => requestAgentJournal(runId, agentId, text, runSignal),
+            result: (ok, code) => sendRunResult(runId, agentId, ok, code),
+          },
+          controller.signal,
+          {
+            ...(modelWorkerIdentity ? { identity: modelWorkerIdentity } : {}),
+            ...(testDependencies.modelWorkerEntry
+              ? { modelWorkerEntry: testDependencies.modelWorkerEntry }
+              : {}),
+          },
+        ).finally(() => activeRuns.delete(runId));
+        return;
+      }
       if (message.type === "control.agent.provision") {
         if (!authenticated)
           throw new NodeAuthenticationError("控制面在节点身份验证前请求创建 Agent。");
@@ -273,16 +390,113 @@ function connectOnce(
             if (socket.readyState === WebSocket.OPEN) sendRequest(socket, request);
           },
           (agentId, onProgress) =>
-            provisionLinuxAgent({
-              agentId,
-              homeRoot: resolvePath(agentHomeRoot),
-              onProgress,
-            }),
+            testDependencies.provisionAgent
+              ? testDependencies.provisionAgent(agentId, onProgress)
+              : provisionLinuxAgent({
+                  agentId,
+                  homeRoot: resolvePath(agentHomeRoot),
+                  onProgress,
+                }),
         ).catch(() => {
           // Provisioning failures are returned as bounded protocol results by its handler.
         });
       }
     };
+
+    function requestAgentContext(
+      runId: string,
+      agentId: string,
+      after: number,
+      runSignal: AbortSignal,
+    ): Promise<AgentRunPage> {
+      const request = makeAgentRunRequest("node.agent.run.context", runId, agentId, {
+        after,
+        limit: 100,
+      });
+      const requestId = request.requestId;
+      return new Promise((resolvePage, rejectPage) => {
+        const onAbort = () => {
+          pendingRunContexts.delete(requestId);
+          rejectPage(new Error("Agent run was interrupted"));
+        };
+        pendingRunContexts.set(requestId, {
+          runId,
+          resolve: (page) => {
+            runSignal.removeEventListener("abort", onAbort);
+            resolvePage(page);
+          },
+          reject: (error) => {
+            runSignal.removeEventListener("abort", onAbort);
+            rejectPage(error);
+          },
+        });
+        runSignal.addEventListener("abort", onAbort, { once: true });
+        try {
+          sendRequest(socket, request);
+        } catch (error) {
+          pendingRunContexts.delete(requestId);
+          runSignal.removeEventListener("abort", onAbort);
+          rejectPage(error instanceof Error ? error : new Error("Could not request Agent context"));
+        }
+      });
+    }
+
+    function requestAgentJournal(
+      runId: string,
+      agentId: string,
+      text: string,
+      runSignal: AbortSignal,
+    ): Promise<boolean> {
+      const request = makeAgentRunRequest("node.agent.run.journal", runId, agentId, { text });
+      const requestId = request.requestId;
+      return new Promise((resolveAccepted, rejectAccepted) => {
+        const onAbort = () => {
+          pendingRunJournals.delete(requestId);
+          rejectAccepted(new Error("Agent run was interrupted"));
+        };
+        pendingRunJournals.set(requestId, {
+          runId,
+          resolve: (accepted) => {
+            runSignal.removeEventListener("abort", onAbort);
+            resolveAccepted(accepted);
+          },
+          reject: (error) => {
+            runSignal.removeEventListener("abort", onAbort);
+            rejectAccepted(error);
+          },
+        });
+        runSignal.addEventListener("abort", onAbort, { once: true });
+        try {
+          sendRequest(socket, request);
+        } catch (error) {
+          pendingRunJournals.delete(requestId);
+          runSignal.removeEventListener("abort", onAbort);
+          rejectAccepted(
+            error instanceof Error ? error : new Error("Could not journal Agent reply"),
+          );
+        }
+      });
+    }
+
+    function sendRunResult(
+      runId: string,
+      agentId: string,
+      ok: boolean,
+      code?: "model_unavailable" | "model_failed" | "worker_failed" | "aborted",
+    ): void {
+      if (socket.readyState !== WebSocket.OPEN || !authenticated) return;
+      try {
+        sendRequest(
+          socket,
+          makeAgentRunRequest("node.agent.run.result", runId, agentId, {
+            ok,
+            ...(ok || !code ? {} : { code }),
+          }),
+        );
+      } catch {
+        // The control plane will recover the durable run after this connection closes.
+      }
+    }
 
     signal.addEventListener("abort", onAbort, { once: true });
     socket.addEventListener("message", onMessage);

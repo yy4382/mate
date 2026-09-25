@@ -23,6 +23,7 @@ interface AgentRow {
   session_id: string;
   provision_request_id: string;
   request_hash: string;
+  model_ready: number;
   status: AgentProvisioningStatus;
   stage: AgentProvisioningStage;
   error: string | null;
@@ -60,7 +61,7 @@ export class AgentDirectory {
       .prepare(
         `SELECT a.id,a.node_id,a.name,a.role,a.description,a.provider,a.model_id,
                 a.initial_channel_id,s.id AS session_id,a.provision_request_id,a.request_hash,
-                a.status,a.stage,a.error,a.linux_username,a.uid,a.gid,a.home,a.created_at,a.updated_at
+                a.status,a.model_ready,a.stage,a.error,a.linux_username,a.uid,a.gid,a.home,a.created_at,a.updated_at
          FROM owner_agents a JOIN owner_agent_sessions s ON s.agent_id=a.id
          ORDER BY a.created_at,a.id`,
       )
@@ -171,7 +172,12 @@ export class AgentDirectory {
   }
 
   /** Commit node-verified Linux facts, session readiness, and optional channel membership atomically. */
-  complete(id: string, identity: LinuxAgentIdentity, ownerChat: OwnerChat): AgentSummary {
+  complete(
+    id: string,
+    identity: LinuxAgentIdentity,
+    ownerChat: OwnerChat,
+    modelReady = false,
+  ): AgentSummary {
     return this.db
       .transaction(() => {
         const current = this.read(id);
@@ -201,6 +207,9 @@ export class AgentDirectory {
         this.db
           .prepare("UPDATE owner_agent_sessions SET verified_at=? WHERE agent_id=?")
           .run(at, id);
+        this.db
+          .prepare("UPDATE owner_agents SET model_ready=? WHERE id=?")
+          .run(modelReady ? 1 : 0, id);
         if (
           current.initial_channel_id &&
           !ownerChat.inviteAgentToChannel(current.initial_channel_id, id)
@@ -215,12 +224,20 @@ export class AgentDirectory {
       .immediate();
   }
 
+  setProviderReady(provider: string, ready: boolean): void {
+    this.db
+      .prepare(
+        "UPDATE owner_agents SET model_ready=?,updated_at=? WHERE provider=? AND status='waiting_credentials'",
+      )
+      .run(ready ? 1 : 0, this.now(), provider);
+  }
+
   private read(id: string): AgentRow | undefined {
     return this.db
       .prepare(
         `SELECT a.id,a.node_id,a.name,a.role,a.description,a.provider,a.model_id,
                 a.initial_channel_id,s.id AS session_id,a.provision_request_id,a.request_hash,
-                a.status,a.stage,a.error,a.linux_username,a.uid,a.gid,a.home,a.created_at,a.updated_at
+                a.status,a.model_ready,a.stage,a.error,a.linux_username,a.uid,a.gid,a.home,a.created_at,a.updated_at
          FROM owner_agents a JOIN owner_agent_sessions s ON s.agent_id=a.id WHERE a.id=?`,
       )
       .get(id) as AgentRow | undefined;
@@ -241,7 +258,7 @@ function toAgent(row: AgentRow): AgentSummary {
     model: { provider: row.provider, id: row.model_id },
     initialChannelId: row.initial_channel_id,
     sessionId: row.session_id,
-    status: row.status,
+    status: row.status === "waiting_credentials" && row.model_ready === 1 ? "ready" : row.status,
     stage: row.stage,
     error: row.error,
     linuxIdentity: identity,

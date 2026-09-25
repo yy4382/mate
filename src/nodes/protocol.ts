@@ -76,6 +76,46 @@ export const NodeRequestSchema = z.discriminatedUnion("type", [
       })
       .strict(),
   ]),
+  z
+    .object({
+      type: z.literal("node.agent.run.context"),
+      requestId: requestIdSchema,
+      runId: requestIdSchema,
+      agentId: agentIdSchema,
+      after: z.number().int().nonnegative(),
+      limit: z.number().int().min(1).max(100),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("node.agent.run.journal"),
+      requestId: requestIdSchema,
+      runId: requestIdSchema,
+      agentId: agentIdSchema,
+      text: z.string().min(1).max(20_000),
+    })
+    .strict(),
+  z.discriminatedUnion("ok", [
+    z
+      .object({
+        type: z.literal("node.agent.run.result"),
+        requestId: requestIdSchema,
+        runId: requestIdSchema,
+        agentId: agentIdSchema,
+        ok: z.literal(true),
+      })
+      .strict(),
+    z
+      .object({
+        type: z.literal("node.agent.run.result"),
+        requestId: requestIdSchema,
+        runId: requestIdSchema,
+        agentId: agentIdSchema,
+        ok: z.literal(false),
+        code: z.enum(["model_unavailable", "model_failed", "worker_failed", "aborted"]),
+      })
+      .strict(),
+  ]),
 ]);
 
 export const NodeControlMessageSchema = z.discriminatedUnion("type", [
@@ -105,6 +145,60 @@ export const NodeControlMessageSchema = z.discriminatedUnion("type", [
       agentId: agentIdSchema,
     })
     .strict(),
+  z
+    .object({
+      type: z.literal("control.agent.run"),
+      requestId: requestIdSchema,
+      runId: requestIdSchema,
+      agentId: agentIdSchema,
+      sessionId: requestIdSchema,
+      provider: z.string().regex(/^[a-z][a-z0-9._-]{0,63}$/),
+      modelId: z.string().min(1).max(200),
+      apiKey: z.string().min(1).max(8192),
+      channelId: requestIdSchema,
+      prompt: z
+        .object({
+          name: z.string().min(1).max(80),
+          role: z.string().min(1).max(160),
+          description: z.string().max(1000),
+        })
+        .strict(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("control.agent.run.cancel"),
+      requestId: requestIdSchema,
+      runId: requestIdSchema,
+      agentId: agentIdSchema,
+      reason: z.enum(["timeout", "credentials_changed"]),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("control.agent.run.context"),
+      requestId: requestIdSchema,
+      runId: requestIdSchema,
+      messages: z.array(
+        z
+          .object({
+            sequence: z.number().int().positive(),
+            role: z.enum(["user", "assistant"]),
+            text: z.string().min(1).max(20_000),
+          })
+          .strict(),
+      ),
+      nextAfter: z.number().int().positive().nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("control.agent.run.journal_ack"),
+      requestId: requestIdSchema,
+      runId: requestIdSchema,
+      accepted: z.boolean(),
+    })
+    .strict(),
   z.object({
     type: z.literal("control.error"),
     requestId: requestIdSchema.optional(),
@@ -126,3 +220,4 @@ export type NodeAgentProvisionResult = Extract<
   NodeRequest,
   { type: "node.agent.provision.result" }
 >;
+export type NodeAgentRunResult = Extract<NodeRequest, { type: "node.agent.run.result" }>;
