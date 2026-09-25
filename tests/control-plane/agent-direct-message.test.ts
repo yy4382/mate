@@ -8,10 +8,15 @@ import { createControlPlaneApp } from "../../src/control-plane/http.js";
 import type { NodeSocket } from "../../src/control-plane/nodes/directory.js";
 
 const password = "agent-direct-message-owner-password";
-const fixtures: Array<{ app: ReturnType<typeof createControlPlaneApp>; directory: string }> = [];
+const fixtures: Array<{
+  app: ReturnType<typeof createControlPlaneApp>;
+  directory: string;
+  db: InstanceType<typeof Database>;
+}> = [];
 
 afterEach(() => {
-  for (const { app, directory } of fixtures.splice(0)) {
+  for (const { app, directory, db } of fixtures.splice(0)) {
+    db.close();
     app.close();
     rmSync(directory, { recursive: true, force: true });
   }
@@ -19,7 +24,16 @@ afterEach(() => {
 
 class FakeNodeSocket implements NodeSocket {
   sent: string[] = [];
+  dropToolCallId: string | undefined;
   send(data: string) {
+    const message = JSON.parse(data) as { type?: string; toolCallId?: string };
+    if (
+      message.type === "control.agent.run.tool_result" &&
+      message.toolCallId === this.dropToolCallId
+    ) {
+      this.dropToolCallId = undefined;
+      return;
+    }
     this.sent.push(data);
   }
   close() {}
@@ -32,7 +46,8 @@ async function setup() {
   const passwordFile = join(directory, "owner-password");
   writeFileSync(passwordFile, `${password}\n`, { mode: 0o600 });
   const app = createControlPlaneApp({ dataDir: join(directory, "control-plane"), passwordFile });
-  fixtures.push({ app, directory });
+  const db = new Database(join(directory, "control-plane", "control-plane.sqlite"));
+  fixtures.push({ app, directory, db });
   const login = await app.request("/api/auth/login", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -63,7 +78,38 @@ async function setup() {
       signature: sign(null, Buffer.from(challenge.nonce), keyPair.privateKey).toString("base64url"),
     }),
   );
-  return { app, cookie, directory, nodeId, socket };
+  return { app, cookie, db, directory, nodeId, socket };
+}
+
+async function pairAnotherNode(
+  app: ReturnType<typeof createControlPlaneApp>,
+  cookie: string,
+): Promise<{ nodeId: string; socket: FakeNodeSocket }> {
+  const token = await app.request("/api/owner/nodes/pairing-tokens", {
+    method: "POST",
+    headers: { cookie },
+  });
+  const pairingToken = ((await token.json()) as { pairingToken: string }).pairingToken,
+    socket = new FakeNodeSocket();
+  app.nodes.open(socket);
+  const challenge = JSON.parse(socket.sent[0]!) as { nonce: string },
+    keyPair = generateKeyPairSync("ed25519", {
+      privateKeyEncoding: { type: "pkcs8", format: "pem" },
+      publicKeyEncoding: { type: "spki", format: "pem" },
+    }),
+    nodeId = randomUUID();
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.pair",
+      requestId: randomUUID(),
+      nodeId,
+      pairingToken,
+      publicKey: keyPair.publicKey,
+      signature: sign(null, Buffer.from(challenge.nonce), keyPair.privateKey).toString("base64url"),
+    }),
+  );
+  return { nodeId, socket };
 }
 
 async function waitForRun(
@@ -85,6 +131,37 @@ async function waitForRun(
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error("The queued Agent input did not start a run");
+}
+
+async function callAgentTool(
+  app: ReturnType<typeof createControlPlaneApp>,
+  socket: FakeNodeSocket,
+  run: { runId: string; agentId: string },
+  toolCallId: string,
+  operation: string,
+  input: Record<string, unknown>,
+  identity: { agentId?: string } = {},
+) {
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.agent.run.tool",
+      requestId: randomUUID(),
+      runId: run.runId,
+      agentId: identity.agentId ?? run.agentId,
+      toolCallId,
+      operation,
+      input,
+    }),
+  );
+  return JSON.parse(socket.sent.at(-1)!) as {
+    type: string;
+    runId: string;
+    toolCallId: string;
+    ok: boolean;
+    error?: string;
+    result?: unknown;
+  };
 }
 
 it("creates one private owner DM and keeps its input queued while the Agent awaits credentials", async () => {
@@ -134,6 +211,665 @@ it("creates one private owner DM and keeps its input queued while the Agent awai
     { role: "user", text: "请给我一个简短研究计划。" },
   ]);
   expect(app.agents.get(agentId)?.status).toBe("waiting_credentials");
+});
+
+it("routes Agent conversation discovery through its current control-plane run", async () => {
+  const { app, cookie, nodeId, socket } = await setup();
+  const agentId = randomUUID();
+  app.agents.prepare({
+    id: agentId,
+    nodeId,
+    name: "Directory partner",
+    role: "Discovers visible conversations",
+    description: "Synthetic tool fixture.",
+    model: { provider: "openai", id: "gpt-4.1" },
+  });
+  app.agents.complete(
+    agentId,
+    {
+      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      uid: 23001,
+      gid: 23001,
+      home: `/var/lib/mate/agents/${agentId}`,
+    },
+    app.chat,
+  );
+  const ownChannel = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  const publicRoom = app.chat.createChannel({
+    name: "Discoverable room",
+    description: "Public metadata is visible to every Agent.",
+    visibility: "public",
+  });
+  const otherPrivateRoom = app.chat.createChannel({
+    name: "Hidden room",
+    description: "Private metadata is member-only.",
+    visibility: "private",
+  });
+  app.chat.createMessage(ownChannel.id, "列出可见对话。");
+  const runStart = socket.sent.length;
+  const credential = await app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
+  });
+  expect(credential.status).toBe(204);
+  const run = await waitForRun(socket, runStart);
+
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.agent.run.tool",
+      requestId: randomUUID(),
+      runId: run.runId,
+      agentId,
+      toolCallId: "discover-1",
+      operation: "tools.call",
+      input: { name: "conversations.list", input: {} },
+    }),
+  );
+  const result = JSON.parse(socket.sent.at(-1)!) as {
+    type: string;
+    toolCallId?: string;
+    ok?: boolean;
+    result?: { conversations: Array<{ id: string; name: string }> };
+  };
+  expect(result.type).toBe("control.agent.run.tool_result");
+  expect(result).toMatchObject({ toolCallId: "discover-1", ok: true });
+  expect(result.result?.conversations).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ id: publicRoom.id, name: "Discoverable room" }),
+      expect.objectContaining({ id: ownChannel.id }),
+    ]),
+  );
+  expect(result.result?.conversations).not.toEqual(
+    expect.arrayContaining([expect.objectContaining({ id: otherPrivateRoom.id })]),
+  );
+});
+
+it("limits read and send to joined conversations while exposing only public metadata", async () => {
+  const { app, cookie, nodeId, socket } = await setup();
+  const agentId = randomUUID();
+  app.agents.prepare({
+    id: agentId,
+    nodeId,
+    name: "Conversation member",
+    role: "Uses explicitly authorized conversations",
+    description: "Synthetic ACL fixture.",
+    model: { provider: "openai", id: "gpt-4.1" },
+  });
+  app.agents.complete(
+    agentId,
+    {
+      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      uid: 23001,
+      gid: 23001,
+      home: `/var/lib/mate/agents/${agentId}`,
+    },
+    app.chat,
+  );
+  const ownDirect = app.chat.getOrCreateAgentDirectChannel(agentId)!,
+    publicRoom = app.chat.createChannel({
+      name: "Visible name",
+      description: "Visible description only.",
+      visibility: "public",
+    }),
+    privateRoom = app.chat.createChannel({
+      name: "Secret project",
+      description: "Only members can know this exists.",
+      visibility: "private",
+    });
+  app.chat.createMessage(publicRoom.id, "Public message body.");
+  app.chat.createMessage(privateRoom.id, "Private message body.");
+  await app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
+  });
+  const runStart = socket.sent.length;
+  app.chat.createMessage(ownDirect.id, "Start a conversation tool run.");
+  const run = await waitForRun(socket, runStart);
+
+  const list = await callAgentTool(app, socket, run, "acl-list", "tools.call", {
+    name: "conversations.list",
+    input: {},
+  });
+  expect(list).toMatchObject({ type: "control.agent.run.tool_result", ok: true });
+  const conversations = (list.result as { conversations: Array<Record<string, unknown>> })
+    .conversations;
+  expect(conversations).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        id: publicRoom.id,
+        name: "Visible name",
+        description: "Visible description only.",
+        member: false,
+      }),
+      expect.objectContaining({ id: ownDirect.id, kind: "dm", member: true }),
+    ]),
+  );
+  expect(conversations).not.toEqual(
+    expect.arrayContaining([expect.objectContaining({ id: privateRoom.id })]),
+  );
+  expect(app.chat.listChannels().map((channel) => channel.id)).toContain(privateRoom.id);
+
+  for (const [actionId, conversationId] of [
+    ["read-public-nonmember", publicRoom.id],
+    ["read-private-nonmember", privateRoom.id],
+  ]) {
+    const denied = await callAgentTool(app, socket, run, actionId!, "tools.call", {
+      name: "conversations.read",
+      input: { conversationId },
+    });
+    expect(denied).toMatchObject({ ok: false, error: "Conversation is not available" });
+  }
+  const taskIdDoesNotGrantAccess = await callAgentTool(
+    app,
+    socket,
+    run,
+    "task-id-is-not-access",
+    "tools.call",
+    {
+      name: "conversations.read",
+      input: { taskId: privateRoom.id },
+    },
+  );
+  expect(taskIdDoesNotGrantAccess).toMatchObject({ ok: false, error: "Invalid tool input" });
+  const publicSendDenied = await callAgentTool(
+    app,
+    socket,
+    run,
+    "send-public-nonmember",
+    "tools.call",
+    {
+      name: "messages.send",
+      input: { conversationId: publicRoom.id, text: "Must not be sent." },
+    },
+  );
+  expect(publicSendDenied.ok).toBe(false);
+
+  const sendInput = {
+    name: "messages.send",
+    input: { conversationId: ownDirect.id, text: "One explicit private reply." },
+  };
+  const firstSend = await callAgentTool(
+      app,
+      socket,
+      run,
+      "same-send-action-id",
+      "tools.call",
+      sendInput,
+    ),
+    retrySend = await callAgentTool(
+      app,
+      socket,
+      run,
+      "same-send-action-id",
+      "tools.call",
+      sendInput,
+    );
+  expect(firstSend).toMatchObject({ ok: true });
+  expect(retrySend.result).toEqual(firstSend.result);
+  const directMessages = app.chat.listMessages(ownDirect.id, undefined, 100)!.messages;
+  expect(
+    directMessages.filter((message) => message.text === "One explicit private reply."),
+  ).toHaveLength(1);
+  expect(
+    app.chat
+      .listAgentSessionJournal(agentId, 0, 100)
+      .messages.filter(
+        (message) => message.role === "assistant" && message.text === "One explicit private reply.",
+      ),
+  ).toHaveLength(1);
+});
+
+it("replays a committed tool action after its reply is lost and the delivery retries", async () => {
+  const { app, cookie, db, nodeId, socket } = await setup();
+  const agentId = randomUUID();
+  app.agents.prepare({
+    id: agentId,
+    nodeId,
+    name: "Retry partner",
+    role: "Retries interrupted tool calls",
+    description: "Synthetic action replay fixture.",
+    model: { provider: "openai", id: "gpt-4.1" },
+  });
+  app.agents.complete(
+    agentId,
+    {
+      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      uid: 23001,
+      gid: 23001,
+      home: `/var/lib/mate/agents/${agentId}`,
+    },
+    app.chat,
+  );
+  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  await app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
+  });
+  const runStart = socket.sent.length;
+  app.chat.createMessage(direct.id, "Start retryable tool action.");
+  const firstRun = await waitForRun(socket, runStart),
+    actionId = "retry-after-lost-tool-result",
+    input = {
+      name: "messages.send",
+      input: { conversationId: direct.id, text: "提交一次，即使回执丢失也不重复。" },
+    };
+  socket.dropToolCallId = actionId;
+  const sentBeforeToolCall = socket.sent.length;
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.agent.run.tool",
+      requestId: randomUUID(),
+      runId: firstRun.runId,
+      agentId,
+      toolCallId: actionId,
+      operation: "tools.call",
+      input,
+    }),
+  );
+  expect(socket.sent).toHaveLength(sentBeforeToolCall);
+  const original = db
+    .prepare("SELECT result_json FROM owner_agent_tool_actions WHERE session_id=? AND action_id=?")
+    .get(firstRun.sessionId, actionId) as { result_json: string } | undefined;
+  expect(original).toBeDefined();
+  const originalResult = JSON.parse(original!.result_json) as unknown;
+  expect(
+    app.chat
+      .listMessages(direct.id, undefined, 100)!
+      .messages.filter((message) => message.text === input.input.text),
+  ).toHaveLength(1);
+
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.agent.run.result",
+      requestId: randomUUID(),
+      runId: firstRun.runId,
+      agentId,
+      ok: false,
+      code: "model_failed",
+    }),
+  );
+  db.prepare("UPDATE owner_agent_runs SET retry_at=0 WHERE id=?").run(firstRun.runId);
+  const retryStart = socket.sent.length;
+  app.runs?.wake();
+  const retryRun = await waitForRun(socket, retryStart);
+  expect(retryRun.runId).not.toBe(firstRun.runId);
+  expect(retryRun.sessionId).toBe(firstRun.sessionId);
+
+  const replay = await callAgentTool(app, socket, retryRun, actionId, "tools.call", input);
+  expect(replay).toMatchObject({ ok: true, result: originalResult });
+  expect(
+    app.chat
+      .listMessages(direct.id, undefined, 100)!
+      .messages.filter((message) => message.text === input.input.text),
+  ).toHaveLength(1);
+  expect(
+    db
+      .prepare("SELECT count(*) AS count FROM owner_agent_tool_actions WHERE session_id=?")
+      .get(firstRun.sessionId),
+  ).toEqual({ count: 1 });
+});
+
+it("commits an eligible peer invitation once and rejects invalid invitation targets", async () => {
+  const { app, cookie, db, nodeId, socket } = await setup();
+  const inviterId = randomUUID(),
+    inviteeId = randomUUID(),
+    unverifiedId = randomUUID();
+  for (const [agentId, name] of [
+    [inviterId, "Inviter"],
+    [inviteeId, "Invitee"],
+  ] as const) {
+    app.agents.prepare({
+      id: agentId,
+      nodeId,
+      name,
+      role: "Conversation colleague",
+      description: "Synthetic invitation fixture.",
+      model: { provider: "openai", id: "gpt-4.1" },
+    });
+    app.agents.complete(
+      agentId,
+      {
+        username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+        uid: 23001,
+        gid: 23001,
+        home: `/var/lib/mate/agents/${agentId}`,
+      },
+      app.chat,
+    );
+  }
+  app.agents.prepare({
+    id: unverifiedId,
+    nodeId,
+    name: "Unverified target",
+    role: "Unprovisioned",
+    description: "Must not be invited.",
+    model: { provider: "openai", id: "gpt-4.1" },
+  });
+  const room = app.chat.createChannel({
+    name: "Team room",
+    description: "A shared room.",
+    visibility: "private",
+  });
+  expect(app.chat.inviteAgentToChannel(room.id, inviterId)).toBe(true);
+  await app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
+  });
+  const runStart = socket.sent.length;
+  app.chat.createMessage(room.id, "Start invitation run.");
+  const run = await waitForRun(socket, runStart);
+  const inviteInput = {
+    name: "conversations.invite",
+    input: { conversationId: room.id, agentId: inviteeId },
+  };
+  const invite = await callAgentTool(
+      app,
+      socket,
+      run,
+      "same-invite-action-id",
+      "tools.call",
+      inviteInput,
+    ),
+    replay = await callAgentTool(
+      app,
+      socket,
+      run,
+      "same-invite-action-id",
+      "tools.call",
+      inviteInput,
+    );
+  expect(invite).toMatchObject({ ok: true });
+  expect(replay.result).toEqual(invite.result);
+  expect(
+    db
+      .prepare(
+        "SELECT active FROM owner_channel_memberships WHERE channel_id=? AND principal_kind='agent' AND principal_id=?",
+      )
+      .get(room.id, inviteeId),
+  ).toEqual({ active: 1 });
+  expect(
+    db
+      .prepare("SELECT count(*) AS count FROM owner_agent_tool_actions WHERE session_id=?")
+      .get(run.sessionId),
+  ).toEqual({ count: 1 });
+
+  for (const [actionId, targetId, conversationId] of [
+    ["invite-self", inviterId, room.id],
+    ["invite-unverified", unverifiedId, room.id],
+    ["invite-to-dm", inviteeId, app.chat.getOrCreateAgentDirectChannel(inviterId)!.id],
+  ]) {
+    const denied = await callAgentTool(app, socket, run, actionId!, "tools.call", {
+      name: "conversations.invite",
+      input: { conversationId, agentId: targetId },
+    });
+    expect(denied.ok).toBe(false);
+  }
+});
+
+it("lets one Agent discover and open an explicit peer DM that both Agents and the owner can read", async () => {
+  const { app, cookie, db, nodeId, socket } = await setup();
+  const firstAgentId = randomUUID(),
+    secondAgentId = randomUUID(),
+    unverifiedId = randomUUID(),
+    failedAgentId = randomUUID();
+  for (const [agentId, name] of [
+    [firstAgentId, "First colleague"],
+    [secondAgentId, "Second colleague"],
+  ] as const) {
+    app.agents.prepare({
+      id: agentId,
+      nodeId,
+      name,
+      role: "Collaborates through direct messages",
+      description: "Synthetic peer DM fixture.",
+      model: { provider: "openai", id: "gpt-4.1" },
+    });
+    app.agents.complete(
+      agentId,
+      {
+        username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+        uid: 23001,
+        gid: 23001,
+        home: `/var/lib/mate/agents/${agentId}`,
+      },
+      app.chat,
+    );
+  }
+  app.agents.prepare({
+    id: unverifiedId,
+    nodeId,
+    name: "Unverified colleague",
+    role: "Not available for contact",
+    description: "Unprovisioned test identity.",
+    model: { provider: "openai", id: "gpt-4.1" },
+  });
+  app.agents.prepare({
+    id: failedAgentId,
+    nodeId,
+    name: "Failed colleague",
+    role: "Unavailable for contact",
+    description: "Synthetic failed provisioning state.",
+    model: { provider: "openai", id: "gpt-4.1" },
+  });
+  app.agents.fail(failedAgentId, "Synthetic provisioning failure.");
+  const firstDirect = app.chat.getOrCreateAgentDirectChannel(firstAgentId)!;
+  await app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
+  });
+  const runStart = socket.sent.length;
+  app.chat.createMessage(firstDirect.id, "Start peer DM run.");
+  const firstRun = await waitForRun(socket, runStart);
+  const discover = await callAgentTool(app, socket, firstRun, "agents-list", "tools.call", {
+    name: "agents.list",
+    input: {},
+  });
+  expect(discover.result).toMatchObject({
+    agents: [expect.objectContaining({ id: secondAgentId, name: "Second colleague" })],
+  });
+  expect(JSON.stringify(discover.result)).not.toContain(unverifiedId);
+  expect(JSON.stringify(discover.result)).not.toContain(failedAgentId);
+  const selfDm = await callAgentTool(app, socket, firstRun, "self-dm", "tools.call", {
+    name: "conversations.open_dm",
+    input: { targetAgentId: firstAgentId },
+  });
+  expect(selfDm).toMatchObject({
+    ok: false,
+    error: "An Agent cannot open a direct message with itself",
+  });
+  const invalidDm = await callAgentTool(app, socket, firstRun, "unverified-dm", "tools.call", {
+    name: "conversations.open_dm",
+    input: { targetAgentId: unverifiedId },
+  });
+  expect(invalidDm).toMatchObject({ ok: false, error: "Direct-message target is not available" });
+  const failedDm = await callAgentTool(app, socket, firstRun, "failed-dm", "tools.call", {
+    name: "conversations.open_dm",
+    input: { targetAgentId: failedAgentId },
+  });
+  expect(failedDm).toMatchObject({ ok: false, error: "Direct-message target is not available" });
+
+  const openInput = { name: "conversations.open_dm", input: { targetAgentId: secondAgentId } },
+    secondRunStart = socket.sent.length,
+    opened = await callAgentTool(
+      app,
+      socket,
+      firstRun,
+      "same-open-dm-action",
+      "tools.call",
+      openInput,
+    ),
+    openedAgain = await callAgentTool(
+      app,
+      socket,
+      firstRun,
+      "same-open-dm-action",
+      "tools.call",
+      openInput,
+    );
+  expect(opened).toMatchObject({ ok: true });
+  expect(openedAgain.result).toEqual(opened.result);
+  const peerDm = opened.result as {
+    id: string;
+    name: string;
+    visibility: string;
+  };
+  expect(peerDm.visibility).toBe("private");
+  expect(peerDm.name).toContain("First colleague");
+  expect(peerDm.name).toContain("Second colleague");
+  expect(app.chat.listChannels().map((channel) => channel.id)).toContain(peerDm.id);
+  const ownerChannels = await app.request("/api/owner/channels", { headers: { cookie } });
+  expect(ownerChannels.status).toBe(200);
+  const listedOwnerChannels = (await ownerChannels.json()) as {
+    channels: Array<{ id: string; name: string; description: string }>;
+  };
+  const listedPeerDm = listedOwnerChannels.channels.find((channel) => channel.id === peerDm.id);
+  expect(listedPeerDm?.name).toBe(peerDm.name);
+  expect(listedPeerDm?.description).toContain("First colleague");
+  expect(listedPeerDm?.description).toContain("Second colleague");
+  const members = db
+    .prepare(
+      "SELECT principal_kind,principal_id,active FROM owner_channel_memberships WHERE channel_id=? ORDER BY principal_kind,principal_id",
+    )
+    .all(peerDm.id);
+  expect(members).toEqual(
+    expect.arrayContaining([
+      { principal_kind: "agent", principal_id: firstAgentId, active: 1 },
+      { principal_kind: "agent", principal_id: secondAgentId, active: 1 },
+      { principal_kind: "human", principal_id: "owner", active: 1 },
+    ]),
+  );
+  expect(
+    db.prepare("SELECT count(*) AS count FROM owner_agent_peer_direct_channels").get(),
+  ).toEqual({ count: 1 });
+
+  const sent = await callAgentTool(app, socket, firstRun, "peer-message", "tools.call", {
+    name: "messages.send",
+    input: { conversationId: peerDm.id, text: "来自第一位同伴的消息。" },
+  });
+  expect(sent.ok).toBe(true);
+  const secondRun = await waitForRun(socket, secondRunStart);
+  expect(secondRun.agentId).toBe(secondAgentId);
+  const reverseOpen = await callAgentTool(app, socket, secondRun, "reverse-open-dm", "tools.call", {
+    name: "conversations.open_dm",
+    input: { targetAgentId: firstAgentId },
+  });
+  expect(reverseOpen).toMatchObject({
+    ok: true,
+    result: expect.objectContaining({ id: peerDm.id }),
+  });
+  const received = await callAgentTool(app, socket, secondRun, "peer-read", "tools.call", {
+    name: "conversations.read",
+    input: { conversationId: peerDm.id },
+  });
+  expect(received).toMatchObject({
+    ok: true,
+    result: {
+      messages: [
+        expect.objectContaining({
+          text: "来自第一位同伴的消息。",
+          author: { kind: "agent", id: firstAgentId },
+        }),
+      ],
+    },
+  });
+  const ownerMessages = await app.request(`/api/owner/channels/${peerDm.id}/messages`, {
+    headers: { cookie },
+  });
+  expect(ownerMessages.status).toBe(200);
+  expect(await ownerMessages.json()).toMatchObject({
+    messages: [expect.objectContaining({ text: "来自第一位同伴的消息。" })],
+  });
+});
+
+it("uses the persisted independent-review seat and refuses stale or forged tool runs", async () => {
+  const { app, cookie, db, nodeId, socket } = await setup();
+  const agentId = randomUUID();
+  app.agents.prepare({
+    id: agentId,
+    nodeId,
+    name: "Independent reviewer",
+    role: "Checks a clean input path",
+    description: "Synthetic reviewer fixture.",
+    model: { provider: "openai", id: "gpt-4.1" },
+  });
+  app.agents.complete(
+    agentId,
+    {
+      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      uid: 23001,
+      gid: 23001,
+      home: `/var/lib/mate/agents/${agentId}`,
+    },
+    app.chat,
+  );
+  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  await app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
+  });
+  const runStart = socket.sent.length;
+  app.chat.createMessage(direct.id, "Start reviewer run.");
+  const run = await waitForRun(socket, runStart);
+  db.prepare("UPDATE owner_agent_runs SET independent_review=1 WHERE id=?").run(run.runId);
+
+  const listed = await callAgentTool(app, socket, run, "review-tools-list", "tools.list", {});
+  expect(listed).toMatchObject({ ok: true, result: { tools: [] } });
+  const directCall = await callAgentTool(app, socket, run, "review-direct-call", "tools.call", {
+    name: "conversations.list",
+    input: {},
+  });
+  expect(directCall).toMatchObject({
+    ok: false,
+    error: "Independent review seat isolates this input path",
+  });
+
+  const otherNode = await pairAnotherNode(app, cookie),
+    forgedNode = await callAgentTool(app, otherNode.socket, run, "forged-node-call", "tools.call", {
+      name: "messages.send",
+      input: { conversationId: direct.id, text: "Forged node must not send." },
+    });
+  expect(forgedNode).toMatchObject({ type: "control.error", code: "invalid_identity" });
+  const forgedAgent = await callAgentTool(
+    app,
+    socket,
+    run,
+    "forged-agent-call",
+    "tools.call",
+    {
+      name: "messages.send",
+      input: { conversationId: direct.id, text: "Forged agent must not send." },
+    },
+    { agentId: randomUUID() },
+  );
+  expect(forgedAgent).toMatchObject({ type: "control.error", code: "invalid_identity" });
+
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.agent.run.result",
+      requestId: randomUUID(),
+      runId: run.runId,
+      agentId,
+      ok: true,
+    }),
+  );
+  const stale = await callAgentTool(app, socket, run, "stale-call", "tools.call", {
+    name: "conversations.list",
+    input: {},
+  });
+  expect(stale).toMatchObject({ ok: false, error: "Agent run is no longer active" });
+  expect(
+    app.chat.listMessages(direct.id, undefined, 100)!.messages.map((message) => message.text),
+  ).not.toContain("Forged node must not send.");
 });
 
 it("limits each run to its committed input batch and consumes silent batches", async () => {

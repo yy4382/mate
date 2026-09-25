@@ -158,6 +158,15 @@ function connectOnce(
         string,
         { runId: string; resolve(accepted: boolean): void; reject(error: Error): void }
       >(),
+      pendingRunTools = new Map<
+        string,
+        {
+          runId: string;
+          toolCallId: string;
+          resolve(result: { ok: true; result: unknown } | { ok: false; error: string }): void;
+          reject(error: Error): void;
+        }
+      >(),
       activeRuns = new Map<string, { agentId: string; controller: AbortController }>();
 
     const abortActiveRuns = (message: string) => {
@@ -167,6 +176,8 @@ function connectOnce(
       pendingRunContexts.clear();
       for (const pending of pendingRunJournals.values()) pending.reject(new Error(message));
       pendingRunJournals.clear();
+      for (const pending of pendingRunTools.values()) pending.reject(new Error(message));
+      pendingRunTools.clear();
     };
 
     const cleanup = () => {
@@ -336,6 +347,20 @@ function connectOnce(
         pending.resolve(message.accepted);
         return;
       }
+      if (message.type === "control.agent.run.tool_result") {
+        const pending = pendingRunTools.get(message.requestId);
+        if (
+          !pending ||
+          pending.runId !== message.runId ||
+          pending.toolCallId !== message.toolCallId
+        )
+          return;
+        pendingRunTools.delete(message.requestId);
+        pending.resolve(
+          message.ok ? { ok: true, result: message.result } : { ok: false, error: message.error },
+        );
+        return;
+      }
       if (message.type === "control.agent.run.cancel") {
         if (!authenticated)
           throw new NodeAuthenticationError("控制面在节点身份验证前取消 Agent 运行。");
@@ -369,6 +394,8 @@ function connectOnce(
           {
             context: (cursor, runSignal) => requestAgentContext(runId, agentId, cursor, runSignal),
             journal: (text, runSignal) => requestAgentJournal(runId, agentId, text, runSignal),
+            tool: (toolCallId, operation, input, runSignal) =>
+              requestAgentTool(runId, agentId, toolCallId, operation, input, runSignal),
             result: (ok, code) => sendRunResult(runId, agentId, ok, code),
           },
           controller.signal,
@@ -474,6 +501,48 @@ function connectOnce(
           rejectAccepted(
             error instanceof Error ? error : new Error("Could not journal Agent reply"),
           );
+        }
+      });
+    }
+
+    function requestAgentTool(
+      runId: string,
+      agentId: string,
+      toolCallId: string,
+      operation: string,
+      input: Record<string, unknown>,
+      runSignal: AbortSignal,
+    ): Promise<{ ok: true; result: unknown } | { ok: false; error: string }> {
+      const request = makeAgentRunRequest("node.agent.run.tool", runId, agentId, {
+        toolCallId,
+        operation,
+        input,
+      });
+      const requestId = request.requestId;
+      return new Promise((resolveResult, rejectResult) => {
+        const onAbort = () => {
+          pendingRunTools.delete(requestId);
+          rejectResult(new Error("Agent run was interrupted"));
+        };
+        pendingRunTools.set(requestId, {
+          runId,
+          toolCallId,
+          resolve: (result) => {
+            runSignal.removeEventListener("abort", onAbort);
+            resolveResult(result);
+          },
+          reject: (error) => {
+            runSignal.removeEventListener("abort", onAbort);
+            rejectResult(error);
+          },
+        });
+        runSignal.addEventListener("abort", onAbort, { once: true });
+        try {
+          sendRequest(socket, request);
+        } catch (error) {
+          pendingRunTools.delete(requestId);
+          runSignal.removeEventListener("abort", onAbort);
+          rejectResult(error instanceof Error ? error : new Error("Could not call Agent tool"));
         }
       });
     }

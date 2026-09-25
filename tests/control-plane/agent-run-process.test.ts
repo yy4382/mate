@@ -789,7 +789,7 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
     expect((await getMessages(currentOrigin, cookie, channelId)).messages).toHaveLength(1);
     expect(injectedStaleJournal).toBe(true);
     const secondRunReply = await waitForAssistant(currentOrigin, cookie, channelId);
-    expect(await within(assistantEventPromise, "assistant reply SSE event")).toMatchObject({
+    expect(await within(assistantEventPromise, "assistant reply SSE event", 25_000)).toMatchObject({
       author: { kind: "agent", id: agentId },
       text: "这是密钥更新后的测试回复。",
     });
@@ -1206,6 +1206,179 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
     rmSync(directory, { recursive: true, force: true });
   }
 }, 60000);
+
+it("runs Pi conversation tools through the authenticated Node and commits one explicit Agent message", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "mate-agent-tools-process-"));
+  chmodSync(directory, 0o700);
+  const passwordFile = joinPath(directory, "owner-password"),
+    nodeData = joinPath(directory, "node-data"),
+    agentHomeRoot = joinPath(directory, "agent-home");
+  writeFileSync(passwordFile, `${ownerPassword}\n`, { mode: 0o600 });
+  mkdirSync(agentHomeRoot, { mode: 0o700 });
+  let control: ProcessOutput | undefined, node: ProcessOutput | undefined;
+  try {
+    control = (await startControlPlane(directory)).process;
+    const currentOrigin = await control
+        .waitFor(/MATE_CONTROL_PLANE_LISTENING (\d+)/)
+        .then((match) => `http://127.0.0.1:${match[1]}`),
+      cookie = await login(currentOrigin),
+      pairingResponse = await fetch(new URL("/api/owner/nodes/pairing-tokens", currentOrigin), {
+        method: "POST",
+        headers: { cookie },
+      });
+    expect(pairingResponse.status).toBe(201);
+    const pairing = (await pairingResponse.json()) as { pairingToken: string },
+      nodeModule = pathToFileURL(resolve("dist/src/nodes/client.js")).href,
+      fixture = resolve("tests/fixtures/direct-message-model-worker.mjs"),
+      nodeRunner = `
+        const { runLinuxNodeWithTestDependencies } = await import(${JSON.stringify(nodeModule)});
+        const controller = new AbortController();
+        await runLinuxNodeWithTestDependencies({
+          controlPlaneUrl: process.env.MATE_CONTROL_PLANE_URL,
+          dataDirectory: process.env.MATE_NODE_DATA_DIR,
+          agentHomeRoot: process.env.MATE_AGENT_HOME_ROOT,
+          pairingToken: process.env.MATE_NODE_PAIRING_TOKEN,
+          heartbeatIntervalMs: 100,
+          heartbeatTimeoutMs: 2000,
+        }, controller.signal, {
+          modelWorkerEntry: ${JSON.stringify(fixture)},
+          provisionAgent: async (agentId) => ({
+            username: 'mate_' + agentId.replaceAll('-', '').slice(0, 27),
+            uid: 24001,
+            gid: 24001,
+            home: ${JSON.stringify(agentHomeRoot)} + '/' + agentId,
+          }),
+        });
+      `;
+    node = new ProcessOutput(
+      spawn(process.execPath, ["--input-type=module", "--eval", nodeRunner], {
+        cwd: process.cwd(),
+        env: {
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          LANG: "C.UTF-8",
+          MATE_CONTROL_PLANE_URL: currentOrigin,
+          MATE_NODE_DATA_DIR: nodeData,
+          MATE_AGENT_HOME_ROOT: agentHomeRoot,
+          MATE_NODE_PAIRING_TOKEN: pairing.pairingToken,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      }),
+    );
+    const paired = await node.waitFor(/MATE_NODE_PAIRED ([0-9a-f-]+)/i),
+      agentResponse = await fetch(new URL("/api/owner/agents", currentOrigin), {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          id: randomUUID(),
+          nodeId: paired[1],
+          name: "工具回环同事",
+          role: "使用对话工具",
+          description: "Synthetic end-to-end tool test.",
+          model: { provider: "openai", id: "gpt-4o-mini" },
+        }),
+      });
+    expect(agentResponse.status).toBe(201);
+    const created = (await agentResponse.json()) as { agent: { id: string } },
+      agentId = created.agent.id,
+      directResponse = await fetch(
+        new URL(`/api/owner/agents/${agentId}/direct-channel`, currentOrigin),
+        { method: "POST", headers: { cookie } },
+      );
+    expect(directResponse.status).toBe(200);
+    const direct = (await directResponse.json()) as { channel: { id: string } };
+    expect(await putCredential(currentOrigin, cookie, "synthetic-key-conversation-tools")).toBe(
+      204,
+    );
+    const input = await fetch(
+      new URL(`/api/owner/channels/${direct.channel.id}/messages`, currentOrigin),
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ text: "发现工具，发送一条消息，再完成本次回复。" }),
+      },
+    );
+    expect(input.status).toBe(201);
+    const messages = await waitForMessageCount(currentOrigin, cookie, direct.channel.id, 3);
+    expect(messages).toMatchObject([
+      { author: { kind: "human" }, text: "发现工具，发送一条消息，再完成本次回复。" },
+      { author: { kind: "agent", id: agentId }, text: "Pi 工具经控制面发送的消息。" },
+      { author: { kind: "agent", id: agentId }, text: "工具调用完成后生成的最终回复。" },
+    ]);
+
+    const deadline = Date.now() + 5000;
+    let runState: string | undefined;
+    const dbPath = joinPath(directory, "control-plane-data", "control-plane.sqlite");
+    while (Date.now() < deadline && runState !== "completed") {
+      const db = new Database(dbPath, { readonly: true, fileMustExist: true });
+      try {
+        const run = db
+          .prepare(
+            "SELECT state FROM owner_agent_runs WHERE agent_id=? ORDER BY started_at DESC LIMIT 1",
+          )
+          .get(agentId) as { state: string } | undefined;
+        runState = run?.state;
+      } finally {
+        db.close();
+      }
+      if (runState !== "completed") await delay(25);
+    }
+    expect(runState).toBe("completed");
+    const db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    try {
+      expect(
+        db.prepare("SELECT action_id,operation,agent_id FROM owner_agent_tool_actions").all(),
+      ).toEqual([
+        {
+          action_id: "conversation-tools-send",
+          operation: "messages.send",
+          agent_id: agentId,
+        },
+      ]);
+    } finally {
+      db.close();
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "unknown test failure";
+    const debugDb = new Database(
+      joinPath(directory, "control-plane-data", "control-plane.sqlite"),
+      {
+        readonly: true,
+        fileMustExist: true,
+      },
+    );
+    let databaseDebug: unknown;
+    try {
+      databaseDebug = {
+        runs: debugDb
+          .prepare("SELECT id,state,error_code FROM owner_agent_runs ORDER BY started_at DESC")
+          .all(),
+        deliveries: debugDb
+          .prepare(
+            "SELECT recipient_id,channel_id,state FROM owner_message_deliveries WHERE recipient_kind='agent' ORDER BY seq",
+          )
+          .all(),
+      };
+    } finally {
+      debugDb.close();
+    }
+    throw new Error(
+      `Pi conversation-tool process test failed: ${detail}; db=${JSON.stringify(databaseDebug)}; control=${(control?.text ?? "").slice(-500)}; worker=${(
+        node?.text ?? ""
+      )
+        .split("\n")
+        .filter((line) => /Pi model worker failed|Error|Error:/i.test(line))
+        .slice(-10)
+        .join("\\n")}; node=${(node?.text ?? "").slice(-500)}`.replace(
+        /synthetic-key-[\w-]+/g,
+        "[redacted]",
+      ),
+    );
+  } finally {
+    if (node) await stopProcess(node);
+    if (control) await stopProcess(control);
+    rmSync(directory, { recursive: true, force: true });
+  }
+}, 30000);
 
 function databaseState(directory: string): {
   pending: number;

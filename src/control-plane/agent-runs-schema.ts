@@ -76,4 +76,31 @@ export const agentRunContextHistorySchemaV10 = `
 ALTER TABLE owner_agent_runs ADD COLUMN context_history_end_seq INTEGER NOT NULL DEFAULT 0;
 `;
 
+/** Conversation tool actions are durable per logical Agent session and carry an explicit run seat. */
+export const agentConversationToolsSchemaV11 = `
+ALTER TABLE owner_agent_runs
+  ADD COLUMN independent_review INTEGER NOT NULL DEFAULT 0 CHECK(independent_review IN (0,1));
+CREATE TABLE owner_agent_tool_actions (
+  session_id TEXT NOT NULL REFERENCES owner_agent_sessions(id),
+  action_id TEXT NOT NULL CHECK(length(action_id) BETWEEN 1 AND 500),
+  agent_id TEXT NOT NULL REFERENCES owner_agents(id),
+  operation TEXT NOT NULL,
+  request_hash TEXT NOT NULL CHECK(length(request_hash)=64),
+  result_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY(session_id,action_id)
+);
+CREATE INDEX owner_agent_tool_actions_agent ON owner_agent_tool_actions(agent_id,created_at);
+CREATE TABLE owner_agent_peer_direct_channels (
+  channel_id TEXT PRIMARY KEY REFERENCES owner_channels(id),
+  first_agent_id TEXT NOT NULL REFERENCES owner_agents(id),
+  second_agent_id TEXT NOT NULL REFERENCES owner_agents(id),
+  created_at INTEGER NOT NULL,
+  CHECK(first_agent_id < second_agent_id),
+  UNIQUE(first_agent_id,second_agent_id)
+);
+CREATE INDEX owner_agent_peer_direct_channels_second
+  ON owner_agent_peer_direct_channels(second_agent_id,first_agent_id);
+`;
+
 export const agentRunSchema = `${agentRunSchemaV7}\n${agentJournalReplaySchema}\n${agentRunBatchSchemaV9}`;

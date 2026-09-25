@@ -92,6 +92,7 @@ let run;
 try {
   run = worker.run({
     runId: randomUUID(),
+    agentId,
     sessionId: randomUUID(),
     outputChannel: { channelId, visibility: "private" },
     messages: [
@@ -158,6 +159,7 @@ try {
     });
   const canceledRun = canceledWorker.run({
     runId: randomUUID(),
+    agentId,
     sessionId: randomUUID(),
     outputChannel: { channelId, visibility: "private" },
     messages: [

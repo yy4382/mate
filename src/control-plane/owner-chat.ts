@@ -1,5 +1,11 @@
 import type Database from "better-sqlite3";
 import { createHash, randomUUID } from "node:crypto";
+import { z } from "zod";
+import {
+  agentConversationOperations,
+  agentToolSchemas,
+  type AgentConversationOperation,
+} from "./agent-tools.js";
 
 export type ChannelVisibility = "public" | "private";
 export type OwnerPrincipalKind = "human" | "agent";
@@ -92,6 +98,18 @@ export interface OwnerChannelUpdate {
   archived?: boolean | undefined;
 }
 
+export type AgentToolCallResult = { ok: true; result: unknown } | { ok: false; error: string };
+
+interface ActiveAgentToolRun {
+  agent_id: string;
+  node_id: string;
+  session_id: string;
+  state: string;
+  independent_review: number;
+}
+
+class AgentToolRefusal extends Error {}
+
 export class ArchivedChannelError extends Error {
   constructor() {
     super("Archived channels are read-only");
@@ -183,6 +201,58 @@ export class OwnerChat {
       )
       .all() as ChannelRow[];
     return rows.map(toChannel);
+  }
+
+  /** The only entry point through which a running Agent may call shared conversation tools. */
+  executeAgentTool(
+    runId: string,
+    nodeId: string,
+    agentId: string,
+    toolCallId: string,
+    operation: string,
+    input: Record<string, unknown>,
+  ): AgentToolCallResult {
+    try {
+      const result = this.db
+        .transaction(() => {
+          const run = this.activeAgentToolRun(runId, nodeId, agentId),
+            reviewSeat = run.independent_review === 1;
+          if (operation === "tools.list") {
+            agentToolSchemas["tools.list"].parse(input);
+            return {
+              tools: Object.entries(agentConversationOperations)
+                .filter(([, entry]) => !reviewSeat || entry.seatPolicy !== "deny")
+                .map(([name, entry]) => ({ name, description: entry.description })),
+            };
+          }
+          if (operation === "tools.describe") {
+            const request = agentToolSchemas["tools.describe"].parse(input),
+              entry = agentConversationOperations[request.name as AgentConversationOperation];
+            if (!entry || (reviewSeat && entry.seatPolicy === "deny"))
+              throw new AgentToolRefusal("Unknown operation");
+            return {
+              name: request.name,
+              description: entry.description,
+              inputSchema: z.toJSONSchema(entry.schema),
+            };
+          }
+          if (operation !== "tools.call") throw new AgentToolRefusal("Unknown operation");
+          const request = agentToolSchemas["tools.call"].parse(input);
+          return this.executeConversationOperation(
+            run,
+            reviewSeat,
+            toolCallId,
+            request.name,
+            request.input,
+          );
+        })
+        .immediate();
+      return { ok: true, result };
+    } catch (error) {
+      if (error instanceof AgentToolRefusal) return { ok: false, error: error.message };
+      if (error instanceof z.ZodError) return { ok: false, error: "Invalid tool input" };
+      return { ok: false, error: "Agent tool request was refused" };
+    }
   }
 
   /** Create or return the one private owner conversation bound to this verified Agent. */
@@ -841,6 +911,371 @@ export class OwnerChat {
       .get(id) as ChannelRow | undefined;
     if (!row) throw new Error("Created channel was not persisted");
     return toChannel(row);
+  }
+
+  private activeAgentToolRun(runId: string, nodeId: string, agentId: string): ActiveAgentToolRun {
+    const run = this.db
+      .prepare(
+        `SELECT r.agent_id,r.node_id,r.state,r.independent_review,s.id AS session_id,
+                a.node_id AS current_node_id
+         FROM owner_agent_runs r
+         JOIN owner_agents a ON a.id=r.agent_id
+         JOIN owner_agent_sessions s ON s.agent_id=a.id
+         WHERE r.id=? AND r.agent_id=?`,
+      )
+      .get(runId, agentId) as (ActiveAgentToolRun & { current_node_id: string }) | undefined;
+    if (!run || run.state !== "running" || run.node_id !== nodeId || run.current_node_id !== nodeId)
+      throw new AgentToolRefusal("Agent run is no longer active");
+    return run;
+  }
+
+  private executeConversationOperation(
+    run: ActiveAgentToolRun,
+    reviewSeat: boolean,
+    toolCallId: string,
+    name: string,
+    input: Record<string, unknown>,
+  ): unknown {
+    if (!Object.hasOwn(agentConversationOperations, name))
+      throw new AgentToolRefusal("Unknown operation");
+    const entry = agentConversationOperations[name as AgentConversationOperation];
+    if (reviewSeat && entry.seatPolicy === "deny")
+      throw new AgentToolRefusal("Independent review seat isolates this input path");
+
+    switch (name as AgentConversationOperation) {
+      case "agents.list":
+        agentConversationOperations["agents.list"].schema.parse(input);
+        return { agents: this.listContactableAgents(run.agent_id) };
+      case "conversations.list":
+        agentConversationOperations["conversations.list"].schema.parse(input);
+        return { conversations: this.listAgentConversations(run.agent_id) };
+      case "conversations.read": {
+        const args = agentConversationOperations["conversations.read"].schema.parse(input),
+          conversation = this.requireAgentConversation(run.agent_id, args.conversationId),
+          before = args.before === undefined ? undefined : Number(args.before);
+        if (before !== undefined && !Number.isSafeInteger(before)) throw new z.ZodError([]);
+        const page = this.listMessages(args.conversationId, before, args.limit);
+        if (!page) throw new AgentToolRefusal("Conversation is not available");
+        return { conversation, ...page };
+      }
+      case "conversations.open_dm": {
+        const args = agentConversationOperations["conversations.open_dm"].schema.parse(input);
+        if (args.targetAgentId === run.agent_id)
+          throw new AgentToolRefusal("An Agent cannot open a direct message with itself");
+        if (!this.isInviteableAgent(args.targetAgentId))
+          throw new AgentToolRefusal("Direct-message target is not available");
+        return this.recordAgentToolAction(run, toolCallId, "conversations.open_dm", args, () =>
+          this.getOrCreateAgentPeerDirectChannel(run.agent_id, args.targetAgentId),
+        );
+      }
+      case "messages.send": {
+        const args = agentConversationOperations["messages.send"].schema.parse(input);
+        this.requireAgentConversation(run.agent_id, args.conversationId);
+        return this.recordAgentToolAction(run, toolCallId, "messages.send", args, () =>
+          this.createAgentToolMessage(run, args.conversationId, args.text),
+        );
+      }
+      case "conversations.invite": {
+        const args = agentConversationOperations["conversations.invite"].schema.parse(input),
+          conversation = this.requireAgentConversation(run.agent_id, args.conversationId);
+        if (conversation.kind !== "channel")
+          throw new AgentToolRefusal("Only a channel can receive an invitation");
+        if (args.agentId === run.agent_id)
+          throw new AgentToolRefusal("An Agent cannot invite itself");
+        const currentMember = this.db
+          .prepare(
+            "SELECT active FROM owner_channel_memberships WHERE channel_id=? AND principal_kind='agent' AND principal_id=?",
+          )
+          .get(args.conversationId, args.agentId) as { active: number } | undefined;
+        // A valid Agent invitation is effective at this same control-plane commit.
+        if (!this.isInviteableAgent(args.agentId))
+          throw new AgentToolRefusal("Invitation target is not available");
+        return this.recordAgentToolAction(run, toolCallId, "conversations.invite", args, () => {
+          if (!this.inviteAgentToChannel(args.conversationId, args.agentId))
+            throw new AgentToolRefusal("Invitation target is not available");
+          return {
+            conversationId: args.conversationId,
+            agentId: args.agentId,
+            status: "succeeded",
+            alreadyMember: currentMember?.active === 1,
+          };
+        });
+      }
+    }
+  }
+
+  private listAgentConversations(agentId: string): Array<{
+    id: string;
+    name: string;
+    description: string;
+    visibility: ChannelVisibility;
+    kind: "channel" | "dm";
+    member: boolean;
+  }> {
+    const rows = this.db
+      .prepare(
+        `SELECT c.id,c.name,c.description,c.visibility,d.agent_id AS direct_agent_id,
+                CASE WHEN d.agent_id IS NOT NULL OR p.channel_id IS NOT NULL
+                     THEN 'dm' ELSE 'channel' END AS conversation_kind,
+                COALESCE(m.active,0) AS member
+         FROM owner_channels c
+         LEFT JOIN owner_channel_memberships m
+           ON m.channel_id=c.id AND m.principal_kind='agent' AND m.principal_id=?
+         LEFT JOIN owner_agent_direct_channels d ON d.channel_id=c.id
+         LEFT JOIN owner_agent_peer_direct_channels p ON p.channel_id=c.id
+         WHERE c.archived=0 AND (c.visibility='public' OR m.active=1)
+         ORDER BY c.created_at,c.id`,
+      )
+      .all(agentId) as Array<{
+      id: string;
+      name: string;
+      description: string;
+      visibility: ChannelVisibility;
+      direct_agent_id: string | null;
+      conversation_kind: "channel" | "dm";
+      member: number;
+    }>;
+    return rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      description: row.description,
+      visibility: row.visibility,
+      kind: row.conversation_kind,
+      member: row.member === 1,
+    }));
+  }
+
+  private listContactableAgents(agentId: string): Array<{
+    id: string;
+    name: string;
+    role: string;
+    description: string;
+  }> {
+    return this.db
+      .prepare(
+        `SELECT a.id,a.name,a.role,a.description
+         FROM owner_agents a JOIN owner_agent_sessions s ON s.agent_id=a.id
+         WHERE a.id<>? AND s.verified_at IS NOT NULL AND a.status='waiting_credentials'
+           AND a.linux_username IS NOT NULL AND a.uid IS NOT NULL AND a.gid IS NOT NULL
+           AND a.home IS NOT NULL
+         ORDER BY a.created_at,a.id`,
+      )
+      .all(agentId) as Array<{ id: string; name: string; role: string; description: string }>;
+  }
+
+  private getOrCreateAgentPeerDirectChannel(
+    firstAgentId: string,
+    secondAgentId: string,
+  ): OwnerChannel {
+    const ordered = [firstAgentId, secondAgentId].sort(),
+      first = ordered[0],
+      second = ordered[1];
+    if (first === undefined || second === undefined)
+      throw new AgentToolRefusal("Direct-message target is not available");
+    const existing = this.db
+      .prepare(
+        `SELECT channel_id FROM owner_agent_peer_direct_channels
+           WHERE first_agent_id=? AND second_agent_id=?`,
+      )
+      .get(first, second) as { channel_id: string } | undefined;
+    if (existing) {
+      const channel = this.readChannel(existing.channel_id);
+      if (channel.archived) throw new AgentToolRefusal("Direct message is archived");
+      return channel;
+    }
+    const participants = this.db
+      .prepare("SELECT id,name FROM owner_agents WHERE id IN (?,?) ORDER BY id")
+      .all(first, second) as Array<{ id: string; name: string }>;
+    if (participants.length !== 2)
+      throw new AgentToolRefusal("Direct-message target is not available");
+    const id = randomUUID(),
+      at = this.now(),
+      names = new Map<string, string>(participants.map((agent) => [agent.id, agent.name])),
+      firstName = names.get(first),
+      secondName = names.get(second);
+    if (firstName === undefined || secondName === undefined)
+      throw new AgentToolRefusal("Direct-message target is not available");
+    this.db
+      .prepare(
+        `INSERT INTO owner_channels(id,name,description,visibility,created_at,updated_at)
+         VALUES(?,?,?,'private',?,?)`,
+      )
+      .run(
+        id,
+        `${firstName} ↔ ${secondName} 私信`,
+        `${firstName} 与 ${secondName} 的私信。`,
+        at,
+        at,
+      );
+    this.db
+      .prepare(
+        `INSERT INTO owner_agent_peer_direct_channels(
+           channel_id,first_agent_id,second_agent_id,created_at
+         ) VALUES(?,?,?,?)`,
+      )
+      .run(id, first, second, at);
+    this.db
+      .prepare(
+        `INSERT INTO owner_channel_memberships(channel_id,principal_kind,principal_id,active,joined_at)
+         VALUES(?,'human','owner',1,?),(?, 'agent', ?,1,?),(?, 'agent', ?,1,?)`,
+      )
+      .run(id, at, id, first, at, id, second, at);
+    const channel = this.readChannel(id);
+    this.record("channel.created", id, channel);
+    return channel;
+  }
+
+  private requireAgentConversation(
+    agentId: string,
+    conversationId: string,
+  ): {
+    id: string;
+    name: string;
+    description: string;
+    visibility: ChannelVisibility;
+    kind: "channel" | "dm";
+  } {
+    const row = this.db
+      .prepare(
+        `SELECT c.id,c.name,c.description,c.visibility,
+                CASE WHEN d.agent_id IS NOT NULL OR p.channel_id IS NOT NULL
+                     THEN 'dm' ELSE 'channel' END AS conversation_kind
+         FROM owner_channels c
+         JOIN owner_channel_memberships m
+           ON m.channel_id=c.id AND m.principal_kind='agent' AND m.principal_id=? AND m.active=1
+         LEFT JOIN owner_agent_direct_channels d ON d.channel_id=c.id
+         LEFT JOIN owner_agent_peer_direct_channels p ON p.channel_id=c.id
+         WHERE c.id=? AND c.archived=0`,
+      )
+      .get(agentId, conversationId) as
+      | {
+          id: string;
+          name: string;
+          description: string;
+          visibility: ChannelVisibility;
+          conversation_kind: "channel" | "dm";
+        }
+      | undefined;
+    if (!row) throw new AgentToolRefusal("Conversation is not available");
+    return {
+      id: row.id,
+      name: row.name,
+      description: row.description,
+      visibility: row.visibility,
+      kind: row.conversation_kind,
+    };
+  }
+
+  private isInviteableAgent(agentId: string): boolean {
+    const row = this.db
+      .prepare(
+        `SELECT 1 FROM owner_agent_sessions s JOIN owner_agents a ON a.id=s.agent_id
+         WHERE s.agent_id=? AND s.verified_at IS NOT NULL AND a.status='waiting_credentials'
+           AND a.linux_username IS NOT NULL AND a.uid IS NOT NULL AND a.gid IS NOT NULL
+           AND a.home IS NOT NULL`,
+      )
+      .get(agentId);
+    return !!row;
+  }
+
+  private recordAgentToolAction(
+    run: ActiveAgentToolRun,
+    toolCallId: string,
+    operation: AgentConversationOperation,
+    input: unknown,
+    effect: () => unknown,
+  ): unknown {
+    const validId = z.string().min(1).max(500).safeParse(toolCallId);
+    if (!validId.success) throw new AgentToolRefusal("Invalid action ID");
+    const requestHash = createHash("sha256")
+        .update(JSON.stringify({ operation, input }))
+        .digest("hex"),
+      existing = this.db
+        .prepare(
+          "SELECT request_hash,result_json FROM owner_agent_tool_actions WHERE session_id=? AND action_id=?",
+        )
+        .get(run.session_id, toolCallId) as
+        { request_hash: string; result_json: string } | undefined;
+    if (existing) {
+      if (existing.request_hash !== requestHash)
+        throw new AgentToolRefusal("Action ID was already used for a different request");
+      return JSON.parse(existing.result_json) as unknown;
+    }
+    const result = effect();
+    this.db
+      .prepare(
+        `INSERT INTO owner_agent_tool_actions(
+           session_id,action_id,agent_id,operation,request_hash,result_json,created_at
+         ) VALUES(?,?,?,?,?,?,?)`,
+      )
+      .run(
+        run.session_id,
+        toolCallId,
+        run.agent_id,
+        operation,
+        requestHash,
+        JSON.stringify(result),
+        this.now(),
+      );
+    return result;
+  }
+
+  private createAgentToolMessage(
+    run: ActiveAgentToolRun,
+    channelId: string,
+    text: string,
+  ): OwnerMessage {
+    if (!this.db.inTransaction)
+      throw new Error("Agent tool message requires its action transaction");
+    const id = randomUUID(),
+      at = this.now(),
+      sequence = this.db
+        .prepare(
+          "SELECT COALESCE(MAX(order_seq),0)+1 AS next FROM owner_messages WHERE channel_id=?",
+        )
+        .get(channelId) as { next: number };
+    this.db
+      .prepare(
+        "INSERT INTO owner_messages(id,channel_id,order_seq,text,author_kind,author_id,created_at) VALUES(?,?,?,?, 'agent', ?,?)",
+      )
+      .run(id, channelId, sequence.next, text, run.agent_id, at);
+    const message = toMessage({
+      id,
+      channel_id: channelId,
+      order_seq: sequence.next,
+      revision: 1,
+      text,
+      author_kind: "agent",
+      author_id: run.agent_id,
+      created_at: at,
+    });
+    this.queueDeliveries(message, at);
+    const agentRecipients = this.db
+      .prepare(
+        `SELECT d.recipient_id AS agent_id,s.id AS session_id
+         FROM owner_message_deliveries d
+         JOIN owner_agent_sessions s ON s.agent_id=d.recipient_id
+         WHERE d.message_id=? AND d.recipient_kind='agent' ORDER BY d.seq`,
+      )
+      .all(id) as Array<{ agent_id: string; session_id: string }>;
+    for (const recipient of agentRecipients) {
+      this.db
+        .prepare(
+          `INSERT OR IGNORE INTO owner_agent_session_journal(
+             session_id,agent_id,channel_id,message_id,role,text,created_at
+           ) VALUES(?,?,?,?,'user',?,?)`,
+        )
+        .run(recipient.session_id, recipient.agent_id, channelId, id, text, at);
+    }
+    this.db
+      .prepare(
+        `INSERT INTO owner_agent_session_journal(
+           session_id,agent_id,channel_id,message_id,role,text,created_at
+         ) VALUES(?,?,?,?,'assistant',?,?)`,
+      )
+      .run(run.session_id, run.agent_id, channelId, id, text, at);
+    this.record("message.created", channelId, message);
+    return message;
   }
 
   private queueDeliveries(message: OwnerMessage, at: number): void {

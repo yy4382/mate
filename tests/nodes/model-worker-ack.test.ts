@@ -30,6 +30,7 @@ it("does not settle the Pi model process until the control-plane journal ACK arr
   const run = worker
     .run({
       runId: "f51fe293-d955-48ae-85aa-b53b7888fcaa",
+      agentId: "06d4fab7-5259-4faa-b51e-6017f3e08f0e",
       sessionId: "e1090cf4-f8f8-43b7-b124-e58a4dadbc1f",
       outputChannel: {
         channelId: "f584ce85-b892-4315-9a2b-00e191bd34dc",
@@ -70,6 +71,75 @@ it("does not settle the Pi model process until the control-plane journal ACK arr
   }
 }, 10000);
 
+it("waits for the control-plane tool result before asking Pi to generate its final reply", async () => {
+  let reachTool!: () => void,
+    releaseTool!: () => void,
+    journal = "";
+  const toolReached = new Promise<void>((resolveReached) => {
+    reachTool = resolveReached;
+  });
+  const toolGate = new Promise<{ ok: true; result: unknown }>((resolveTool) => {
+    releaseTool = () => resolveTool({ ok: true, result: [{ name: "public-room" }] });
+  });
+  const controller = new AbortController();
+  const worker = startModelProcess({
+    provider: "openai",
+    modelId: "gpt-4o-mini",
+    apiKey: "synthetic-key-tool-ack",
+    entry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
+    onJournal: async (text) => {
+      journal = text;
+      return true;
+    },
+    onTool: async (toolCallId, operation, input) => {
+      expect(toolCallId).toBe("tool-call-stable");
+      expect(operation).toBe("tools.list");
+      expect(input).toEqual({});
+      reachTool();
+      return toolGate;
+    },
+    signal: controller.signal,
+  });
+
+  try {
+    const run = worker.run({
+      runId: "f51fe293-d955-48ae-85aa-b53b7888fcaa",
+      agentId: "06d4fab7-5259-4faa-b51e-6017f3e08f0e",
+      sessionId: "e1090cf4-f8f8-43b7-b124-e58a4dadbc1f",
+      outputChannel: {
+        channelId: "f584ce85-b892-4315-9a2b-00e191bd34dc",
+        visibility: "private",
+      },
+      messages: [
+        {
+          sequence: 1,
+          role: "user",
+          text: "发现可用频道，再回复。",
+          sourceChannelId: "f584ce85-b892-4315-9a2b-00e191bd34dc",
+          sourceVisibility: "private",
+          currentRunInput: true,
+        },
+      ],
+      prompt: { name: "小林", role: "测试助手", description: "Synthetic test Agent" },
+    });
+    await Promise.race([
+      toolReached,
+      delay(5000).then(() => {
+        throw new Error("Pi model worker did not forward its tool call");
+      }),
+    ]);
+    await delay(50);
+    expect(journal).toBe("");
+    releaseTool();
+    await run;
+    expect(journal).toBe("已收到工具结果。");
+  } finally {
+    releaseTool();
+    controller.abort();
+    worker.close();
+  }
+}, 10000);
+
 it("gives Pi source visibility markers and an explicit output destination", async () => {
   const publicChannelId = "f584ce85-b892-4315-9a2b-00e191bd34dc",
     privateChannelId = "1fa0be92-e11f-4c5c-a4a6-59bc86ea0f8f";
@@ -90,6 +160,7 @@ it("gives Pi source visibility markers and an explicit output destination", asyn
   try {
     await worker.run({
       runId: "df37b8f0-bd23-4b87-a90b-b9537b842291",
+      agentId: "06d4fab7-5259-4faa-b51e-6017f3e08f0e",
       sessionId: "e1090cf4-f8f8-43b7-b124-e58a4dadbc1f",
       outputChannel: { channelId: publicChannelId, visibility: "public" },
       messages: [
@@ -147,6 +218,7 @@ it.each([
       await expect(
         worker.run({
           runId: "c0bb07df-b434-4bca-8d75-52e6f30163ce",
+          agentId: "06d4fab7-5259-4faa-b51e-6017f3e08f0e",
           sessionId: "e1090cf4-f8f8-43b7-b124-e58a4dadbc1f",
           outputChannel: {
             channelId: "f584ce85-b892-4315-9a2b-00e191bd34dc",
@@ -192,6 +264,7 @@ it("treats empty Pi content with a normal stop reason as a successful silent tur
   try {
     await worker.run({
       runId: "721a432d-c90a-4c9b-90d2-d5285866c225",
+      agentId: "06d4fab7-5259-4faa-b51e-6017f3e08f0e",
       sessionId: "e1090cf4-f8f8-43b7-b124-e58a4dadbc1f",
       outputChannel: {
         channelId: "f584ce85-b892-4315-9a2b-00e191bd34dc",

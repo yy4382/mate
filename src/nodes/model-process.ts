@@ -30,6 +30,40 @@ const journalAckSchema = z
     accepted: z.boolean(),
   })
   .strict();
+const toolMessageSchema = z
+  .object({
+    type: z.literal("tool"),
+    nonce: z.string().uuid(),
+    requestId: z.string().uuid(),
+    toolCallId: z.string().min(1).max(500),
+    operation: z.string().min(1).max(128),
+    input: z.record(z.string(), z.json()),
+  })
+  .strict();
+const toolResultSchema = z.discriminatedUnion("ok", [
+  z
+    .object({
+      type: z.literal("tool_result"),
+      nonce: z.string().uuid(),
+      requestId: z.string().uuid(),
+      toolCallId: z.string().min(1).max(500),
+      ok: z.literal(true),
+      result: z.json(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("tool_result"),
+      nonce: z.string().uuid(),
+      requestId: z.string().uuid(),
+      toolCallId: z.string().min(1).max(500),
+      ok: z.literal(false),
+      error: z.string().min(1).max(240),
+    })
+    .strict(),
+]);
+
+export type ModelToolResult = z.infer<typeof toolResultSchema>;
 
 export interface ModelProcessIdentity {
   uid: number;
@@ -43,6 +77,11 @@ export interface ModelProcessOptions {
   entry?: string;
   identity?: ModelProcessIdentity;
   onJournal(text: string): Promise<boolean>;
+  onTool?(
+    toolCallId: string,
+    operation: string,
+    input: Record<string, unknown>,
+  ): Promise<{ ok: true; result: unknown } | { ok: false; error: string }>;
   signal: AbortSignal;
 }
 
@@ -53,7 +92,7 @@ export interface ModelProcessSession {
 
 /** Start one credential-bearing Pi model loop in a short-lived child process. */
 export function startModelProcess(options: ModelProcessOptions): ModelProcessSession {
-  const { provider, modelId, entry, identity, onJournal, signal } = options;
+  const { provider, modelId, entry, identity, onJournal, onTool, signal } = options;
   let apiKey = options.apiKey;
   const nonce = randomUUID(),
     env: NodeJS.ProcessEnv = {
@@ -63,6 +102,7 @@ export function startModelProcess(options: ModelProcessOptions): ModelProcessSes
       MATE_MODEL_PROVIDER: provider,
       MATE_MODEL_ID: modelId,
       MATE_MODEL_KEY: apiKey,
+      ...(entry ? { MATE_MODEL_TEST_DIAGNOSTICS: "1" } : {}),
     },
     child = fork(entry ?? fileURLToPath(new URL("./model-worker.js", import.meta.url)), [], {
       ...(identity
@@ -80,7 +120,7 @@ export function startModelProcess(options: ModelProcessOptions): ModelProcessSes
           }
         : { execArgv: [] }),
       env,
-      stdio: ["ignore", "ignore", "ignore", "ipc"],
+      stdio: ["ignore", "ignore", entry ? "inherit" : "ignore", "ipc"],
       serialization: "json",
     });
   apiKey = "";
@@ -92,7 +132,11 @@ export function startModelProcess(options: ModelProcessOptions): ModelProcessSes
     run(spec) {
       if (active) return Promise.reject(new Error("Agent model process already ran"));
       active = true;
-      return waitForModelProcess(child, nonce, spec, { onJournal, signal }).finally(() => {
+      return waitForModelProcess(child, nonce, spec, {
+        onJournal,
+        ...(onTool ? { onTool } : {}),
+        signal,
+      }).finally(() => {
         signal.removeEventListener("abort", abortChild);
       });
     },
@@ -107,11 +151,11 @@ function waitForModelProcess(
   child: ChildProcess,
   nonce: string,
   spec: ModelRunSpec,
-  hooks: Pick<ModelProcessOptions, "onJournal" | "signal">,
+  hooks: Pick<ModelProcessOptions, "onJournal" | "onTool" | "signal">,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     let settled = false,
-      journalBusy = false;
+      requestBusy = false;
     const fail = (message: string) => finish(new Error(message));
     const finish = (error?: Error) => {
       if (settled) return;
@@ -128,8 +172,8 @@ function waitForModelProcess(
       if (settled) return;
       const journal = journalMessageSchema.safeParse(raw);
       if (journal.success && journal.data.nonce === nonce) {
-        if (journalBusy) return fail("Agent model worker sent overlapping journal requests");
-        journalBusy = true;
+        if (requestBusy) return fail("Agent model worker sent overlapping control requests");
+        requestBusy = true;
         let accepted = false;
         try {
           accepted = await hooks.onJournal(journal.data.text);
@@ -143,8 +187,35 @@ function waitForModelProcess(
             requestId: journal.data.requestId,
             accepted,
           });
-        journalBusy = false;
+        requestBusy = false;
         if (!accepted) fail("Control plane rejected the Agent session journal");
+        return;
+      }
+      const tool = toolMessageSchema.safeParse(raw);
+      if (tool.success && tool.data.nonce === nonce) {
+        if (requestBusy) return fail("Agent model worker sent overlapping control requests");
+        requestBusy = true;
+        let result: { ok: true; result: unknown } | { ok: false; error: string } = {
+          ok: false,
+          error: "Control plane rejected the Agent tool call",
+        };
+        try {
+          result = hooks.onTool
+            ? await hooks.onTool(tool.data.toolCallId, tool.data.operation, tool.data.input)
+            : { ok: false, error: "No Agent tool transport is available" };
+        } catch {
+          result = { ok: false, error: "Control plane could not complete the Agent tool call" };
+        }
+        const safeResult = toolResultSchema.safeParse({
+          type: "tool_result",
+          nonce,
+          requestId: tool.data.requestId,
+          toolCallId: tool.data.toolCallId,
+          ...result,
+        });
+        if (!safeResult.success) return fail("Control plane returned an invalid Agent tool result");
+        if (!settled && child.connected) child.send(safeResult.data);
+        requestBusy = false;
         return;
       }
       const result = workerResultSchema.safeParse(raw);

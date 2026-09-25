@@ -43,6 +43,8 @@ export class AgentRunCoordinator {
         this.readRunContext(runId, agentId, cursor, limit),
       journal: (runId, nodeId, agentId, requestId, text, replayOnly) =>
         chat.commitAgentReply(runId, nodeId, agentId, requestId, text, replayOnly),
+      tool: (runId, nodeId, agentId, toolCallId, operation, input) =>
+        chat.executeAgentTool(runId, nodeId, agentId, toolCallId, operation, input),
       result: (runId, agentId, ok, code) => this.finishRun(runId, agentId, ok, code),
     });
     this.timer = setInterval(() => this.wake(), schedulerIntervalMs);

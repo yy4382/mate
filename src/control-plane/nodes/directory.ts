@@ -99,12 +99,26 @@ export interface AgentRunHandlers {
     text: string,
     replayOnly: boolean,
   ): boolean;
+  tool(
+    runId: string,
+    nodeId: string,
+    agentId: string,
+    toolCallId: string,
+    operation: string,
+    input: Record<string, unknown>,
+  ): { ok: true; result: unknown } | { ok: false; error: string };
   result(runId: string, agentId: string, ok: boolean, code?: string): void;
 }
 
 type NodeAgentRunRequest = Extract<
   NodeRequest,
-  { type: "node.agent.run.context" | "node.agent.run.journal" | "node.agent.run.result" }
+  {
+    type:
+      | "node.agent.run.context"
+      | "node.agent.run.journal"
+      | "node.agent.run.tool"
+      | "node.agent.run.result";
+  }
 >;
 
 /** Pairing credentials and durable node identities for this control plane. */
@@ -240,6 +254,7 @@ export class NodeDirectory {
     if (
       request.type === "node.agent.run.context" ||
       request.type === "node.agent.run.journal" ||
+      request.type === "node.agent.run.tool" ||
       request.type === "node.agent.run.result"
     )
       return this.receiveAgentRunMessage(socket, session, request);
@@ -590,6 +605,33 @@ export class NodeDirectory {
         runId: request.runId,
         accepted,
       });
+      return;
+    }
+
+    if (request.type === "node.agent.run.tool") {
+      let outcome: { ok: true; result: unknown } | { ok: false; error: string };
+      try {
+        outcome = pending
+          ? (this.agentRunHandlers?.tool(
+              request.runId,
+              nodeId,
+              request.agentId,
+              request.toolCallId,
+              request.operation,
+              request.input,
+            ) ?? { ok: false, error: "Agent tool service is unavailable" })
+          : { ok: false, error: "Agent run is no longer active" };
+      } catch {
+        outcome = { ok: false, error: "Agent tool request was refused" };
+      }
+      const response = NodeControlMessageSchema.parse({
+        type: "control.agent.run.tool_result",
+        requestId: request.requestId,
+        runId: request.runId,
+        toolCallId: request.toolCallId,
+        ...outcome,
+      });
+      this.send(socket, response);
       return;
     }
 

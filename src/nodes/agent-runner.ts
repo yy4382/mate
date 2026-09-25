@@ -19,6 +19,12 @@ export interface AgentRunTransport {
   /** Cursor addresses the run-context projection, not an individual journal sequence. */
   context(cursor: number, signal: AbortSignal): Promise<AgentRunPage>;
   journal(text: string, signal: AbortSignal): Promise<boolean>;
+  tool(
+    toolCallId: string,
+    operation: string,
+    input: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<{ ok: true; result: unknown } | { ok: false; error: string }>;
   result(
     ok: boolean,
     code?: "model_unavailable" | "model_failed" | "worker_failed" | "aborted",
@@ -58,6 +64,8 @@ export async function runAgentModel(
       ...(dependencies.modelWorkerEntry ? { entry: dependencies.modelWorkerEntry } : {}),
       ...(dependencies.identity ? { identity: dependencies.identity } : {}),
       onJournal: (text) => transport.journal(text, connectionSignal),
+      onTool: (toolCallId, operation, input) =>
+        transport.tool(toolCallId, operation, input, connectionSignal),
       signal: connectionSignal,
     });
     apiKey = "";
@@ -71,7 +79,14 @@ export async function runAgentModel(
       cursor = page.nextCursor;
     }
     if (!messages.length) throw new Error("Agent session context is empty");
-    await worker.run({ runId, sessionId, messages, outputChannel, prompt });
+    await worker.run({
+      runId,
+      agentId: request.agentId,
+      sessionId,
+      messages,
+      outputChannel,
+      prompt,
+    });
     if (!connectionSignal.aborted) transport.result(true);
   } catch {
     if (!connectionSignal.aborted) transport.result(false, "model_failed");
@@ -83,7 +98,11 @@ export async function runAgentModel(
 
 /** Build bounded node requests shared by the WebSocket client and its process tests. */
 export function makeAgentRunRequest(
-  type: "node.agent.run.context" | "node.agent.run.journal" | "node.agent.run.result",
+  type:
+    | "node.agent.run.context"
+    | "node.agent.run.journal"
+    | "node.agent.run.tool"
+    | "node.agent.run.result",
   runId: string,
   agentId: string,
   fields: Record<string, unknown>,

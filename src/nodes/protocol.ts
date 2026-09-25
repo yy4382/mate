@@ -95,6 +95,17 @@ export const NodeRequestSchema = z.discriminatedUnion("type", [
       text: z.string().min(1).max(20_000),
     })
     .strict(),
+  z
+    .object({
+      type: z.literal("node.agent.run.tool"),
+      requestId: requestIdSchema,
+      runId: requestIdSchema,
+      agentId: agentIdSchema,
+      toolCallId: z.string().min(1).max(500),
+      operation: z.string().min(1).max(128),
+      input: z.record(z.string(), z.json()),
+    })
+    .strict(),
   z.discriminatedUnion("ok", [
     z
       .object({
@@ -203,6 +214,28 @@ export const NodeControlMessageSchema = z.discriminatedUnion("type", [
       accepted: z.boolean(),
     })
     .strict(),
+  z.discriminatedUnion("ok", [
+    z
+      .object({
+        type: z.literal("control.agent.run.tool_result"),
+        requestId: requestIdSchema,
+        runId: requestIdSchema,
+        toolCallId: z.string().min(1).max(500),
+        ok: z.literal(true),
+        result: z.json(),
+      })
+      .strict(),
+    z
+      .object({
+        type: z.literal("control.agent.run.tool_result"),
+        requestId: requestIdSchema,
+        runId: requestIdSchema,
+        toolCallId: z.string().min(1).max(500),
+        ok: z.literal(false),
+        error: z.string().min(1).max(240),
+      })
+      .strict(),
+  ]),
   z.object({
     type: z.literal("control.error"),
     requestId: requestIdSchema.optional(),
