@@ -19,6 +19,23 @@ pnpm start:control-plane
 
 服务默认只监听 `127.0.0.1:8787`，也可以通过 `MATE_CONTROL_PLANE_PORT` 改端口。浏览器打开 `http://127.0.0.1:8787` 查看中文状态页；公开的 `GET /api/status` 只返回服务是否正在运行。
 
+用真实 Chrome/Chromium 验证 React 页面、API 状态和断连恢复时：
+
+```sh
+pnpm run build
+pnpm start:control-plane
+```
+
+在浏览器打开 `http://127.0.0.1:8787`，页面状态应显示“服务正在运行”。另开终端查看 API：
+
+```sh
+curl -i http://127.0.0.1:8787/api/status
+```
+
+预期 HTTP 状态码为 `200`，`Content-Type` 为 `application/json`，响应体为 `{"status":"running"}`。保持浏览器页打开，在服务终端按 `Ctrl-C`；页面应在下一次状态检查时显示“暂时无法连接控制面”。重新运行 `pnpm start:control-plane` 后，页面应在下一次检查时回到“服务正在运行”。页面在每次请求结束后等待 10 秒再检查，单次请求最多等待 5 秒。
+
+2026-09-25 的真实 Chrome 验证观察值：页面初次显示“服务正在运行”；控制面停止后显示“暂时无法连接控制面”；同一页面在服务重启后重新显示“服务正在运行”。对应 `GET /api/status` 实际响应为 `HTTP 200`、`Content-Type: application/json`、`{"status":"running"}`。
+
 本地开发时先在一个终端构建并启动控制面，再在另一个终端启动网页：
 
 ```sh
