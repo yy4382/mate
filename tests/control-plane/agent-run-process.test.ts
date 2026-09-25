@@ -273,6 +273,10 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
     fourthRunId = "",
     fifthRunId = "",
     sixthRunId = "",
+    seventhRunId = "",
+    eighthRunId = "",
+    ninthRunId = "",
+    tenthRunId = "",
     agentId = "",
     sharedChannelId = "",
     runSessionIds: string[] = [],
@@ -303,6 +307,10 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
     fourthRunStarted = deferred<void>();
   const fifthRunStarted = deferred<void>();
   const sixthRunStarted = deferred<void>();
+  const seventhRunStarted = deferred<void>();
+  const eighthRunStarted = deferred<void>();
+  const ninthRunStarted = deferred<void>();
+  const tenthRunStarted = deferred<void>();
   let completedReplaySent = false,
     completedReplayAckCount = 0,
     completedReplayAccepted: boolean | undefined,
@@ -427,6 +435,18 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
           } else if (!sixthRunId) {
             sixthRunId = String(message.runId);
             sixthRunStarted.resolve();
+          } else if (!seventhRunId) {
+            seventhRunId = String(message.runId);
+            seventhRunStarted.resolve();
+          } else if (!eighthRunId) {
+            eighthRunId = String(message.runId);
+            eighthRunStarted.resolve();
+          } else if (!ninthRunId) {
+            ninthRunId = String(message.runId);
+            ninthRunStarted.resolve();
+          } else if (!tenthRunId) {
+            tenthRunId = String(message.runId);
+            tenthRunStarted.resolve();
           }
         }
         if (
@@ -859,6 +879,80 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
       filesContain(nodeData, ["synthetic-key-silent"]) ||
         filesContain(agentHomeRoot, ["synthetic-key-silent"]),
     ).toBe(false);
+
+    stage = "provider error preserves its input and retries after key replacement";
+    expect(await putCredential(currentOrigin, cookie, "synthetic-key-error-text")).toBe(204);
+    const erroredOwnerInput = await fetch(
+      new URL(`/api/owner/channels/${channelId}/messages`, currentOrigin),
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ text: "发生 provider 错误后仍需保留这条输入。" }),
+      },
+    );
+    expect(erroredOwnerInput.status).toBe(201);
+    await within(seventhRunStarted.promise, "provider-error model run start");
+    await waitForRunState(directory, seventhRunId, "failed");
+    expect(databaseRunErrorCode(directory, seventhRunId)).toBe("model_failed");
+    expect(databaseState(directory)).toMatchObject({ pending: 1, handled: 4 });
+    expect((await getMessages(currentOrigin, cookie, channelId)).messages).toHaveLength(6);
+
+    expect(await putCredential(currentOrigin, cookie, "synthetic-key-version-c")).toBe(204);
+    await within(eighthRunStarted.promise, "retry after the provider error");
+    const recoveredMessages = await waitForMessageCount(currentOrigin, cookie, channelId, 7);
+    expect(recoveredMessages.at(-1)).toMatchObject({
+      author: { kind: "agent", id: agentId },
+      text: "这是取消旧 run 后的新凭据回复。",
+    });
+    await waitForRunState(directory, eighthRunId, "completed");
+    expect(databaseState(directory)).toMatchObject({ pending: 0, handled: 5 });
+
+    stage = "an archived channel rejects an active reply and keeps its delivery recoverable";
+    expect(await putCredential(currentOrigin, cookie, "synthetic-key-delayed-reply")).toBe(204);
+    const archiveRaceInput = await fetch(
+      new URL(`/api/owner/channels/${channelId}/messages`, currentOrigin),
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ text: "回复生成期间归档的私信输入。" }),
+      },
+    );
+    expect(archiveRaceInput.status).toBe(201);
+    await within(ninthRunStarted.promise, "run before channel archival");
+    const archiveResponse = await fetch(
+      new URL(`/api/owner/channels/${channelId}`, currentOrigin),
+      {
+        method: "PATCH",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ archived: true }),
+      },
+    );
+    expect(archiveResponse.status).toBe(200);
+    await waitForRunState(directory, ninthRunId, "failed");
+    expect(databaseRunErrorCode(directory, ninthRunId)).toBe("channel_archived");
+    expect(databaseState(directory)).toMatchObject({ pending: 1, handled: 5 });
+    expect((await getMessages(currentOrigin, cookie, channelId)).messages).toHaveLength(8);
+    await delay(1800);
+    expect(databaseState(directory)).toMatchObject({ pending: 1, handled: 5 });
+
+    const unarchiveResponse = await fetch(
+      new URL(`/api/owner/channels/${channelId}`, currentOrigin),
+      {
+        method: "PATCH",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ archived: false }),
+      },
+    );
+    expect(unarchiveResponse.status).toBe(200);
+    await within(tenthRunStarted.promise, "recovered run after channel unarchive");
+    expect(tenthRunId).not.toBe(ninthRunId);
+    const afterUnarchive = await waitForMessageCount(currentOrigin, cookie, channelId, 9);
+    expect(afterUnarchive.at(-1)).toMatchObject({
+      author: { kind: "agent", id: agentId },
+      text: "频道解除归档后的回复。",
+    });
+    await waitForRunState(directory, tenthRunId, "completed");
+    expect(databaseState(directory)).toMatchObject({ pending: 0, handled: 6 });
   } catch (error) {
     const detail = error instanceof Error ? error.message : "unknown test failure";
     throw new Error(
@@ -913,6 +1007,21 @@ function databaseRunState(directory: string, runId: string): string | undefined 
       db.prepare("SELECT state FROM owner_agent_runs WHERE id=?").get(runId) as
         { state: string } | undefined
     )?.state;
+  } finally {
+    db.close();
+  }
+}
+
+function databaseRunErrorCode(directory: string, runId: string): string | null | undefined {
+  const db = new Database(joinPath(directory, "control-plane-data", "control-plane.sqlite"), {
+    readonly: true,
+    fileMustExist: true,
+  });
+  try {
+    return (
+      db.prepare("SELECT error_code FROM owner_agent_runs WHERE id=?").get(runId) as
+        { error_code: string | null } | undefined
+    )?.error_code;
   } finally {
     db.close();
   }

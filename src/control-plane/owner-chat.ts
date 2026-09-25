@@ -50,6 +50,9 @@ export interface AgentSessionJournalEntry {
   sequence: number;
   role: "user" | "assistant";
   text: string;
+  sourceChannelId: string;
+  sourceVisibility: ChannelVisibility;
+  currentRunInput: boolean;
 }
 
 export interface AgentSessionJournalPage {
@@ -453,6 +456,7 @@ export class OwnerChat {
     after: number,
     limit: number,
     throughSequence?: number,
+    currentInputFromSequence?: number,
   ): AgentSessionJournalPage {
     if (
       !Number.isSafeInteger(after) ||
@@ -461,13 +465,20 @@ export class OwnerChat {
       limit < 1 ||
       limit > 100 ||
       (throughSequence !== undefined &&
-        (!Number.isSafeInteger(throughSequence) || throughSequence < 0))
+        (!Number.isSafeInteger(throughSequence) || throughSequence < 0)) ||
+      (currentInputFromSequence !== undefined &&
+        (!Number.isSafeInteger(currentInputFromSequence) ||
+          currentInputFromSequence < 1 ||
+          throughSequence === undefined ||
+          currentInputFromSequence > throughSequence))
     )
       throw new Error("Agent session journal cursor is invalid");
     const rows = this.db
       .prepare(
-        `SELECT j.seq,j.role,j.text FROM owner_agent_session_journal j
+        `SELECT j.seq,j.role,j.text,j.channel_id,c.visibility
+         FROM owner_agent_session_journal j
          JOIN owner_agent_sessions s ON s.id=j.session_id
+         JOIN owner_channels c ON c.id=j.channel_id
          WHERE s.agent_id=? AND j.seq>? AND (? IS NULL OR j.seq<=?)
          ORDER BY j.seq LIMIT ?`,
       )
@@ -475,12 +486,20 @@ export class OwnerChat {
       seq: number;
       role: "user" | "assistant";
       text: string;
+      channel_id: string;
+      visibility: ChannelVisibility;
     }>;
     const hasMore = rows.length > limit,
       messages = rows.slice(0, limit).map((row) => ({
         sequence: row.seq,
         role: row.role,
         text: row.text,
+        sourceChannelId: row.channel_id,
+        sourceVisibility: row.visibility,
+        currentRunInput:
+          row.role === "user" &&
+          currentInputFromSequence !== undefined &&
+          row.seq >= currentInputFromSequence,
       }));
     return {
       messages,
@@ -503,10 +522,11 @@ export class OwnerChat {
         const run = this.db
           .prepare(
             `SELECT r.state,r.node_id,r.delivery_id,r.input_end_seq,
-                    d.channel_id,d.message_id,s.id AS session_id
+                    d.channel_id,d.message_id,s.id AS session_id,c.archived AS channel_archived
              FROM owner_agent_runs r
              JOIN owner_message_deliveries d ON d.id=r.delivery_id
              JOIN owner_agent_sessions s ON s.agent_id=r.agent_id
+             JOIN owner_channels c ON c.id=d.channel_id
             WHERE r.id=? AND r.node_id=? AND r.agent_id=?`,
           )
           .get(runId, nodeId, agentId) as
@@ -518,6 +538,7 @@ export class OwnerChat {
               channel_id: string;
               message_id: string;
               session_id: string;
+              channel_archived: number;
             }
           | undefined;
         if (!run) return false;
@@ -565,6 +586,15 @@ export class OwnerChat {
           );
         }
         if (replayOnly || run.state !== "running") return false;
+        if (run.channel_archived === 1) {
+          this.db
+            .prepare(
+              `UPDATE owner_agent_runs SET state='failed',error_code='channel_archived',
+                 retry_at=NULL,completed_at=? WHERE id=? AND agent_id=? AND state='running'`,
+            )
+            .run(this.now(), runId, agentId);
+          return false;
+        }
 
         const at = this.now(),
           messageId = randomUUID(),
@@ -609,14 +639,14 @@ export class OwnerChat {
         this.db
           .prepare(
             `UPDATE owner_message_deliveries SET state='handled',handled_at=?
-             WHERE recipient_kind='agent' AND recipient_id=? AND state='pending'
+             WHERE recipient_kind='agent' AND recipient_id=? AND channel_id=? AND state='pending'
                AND message_id IN (
                  SELECT j.message_id FROM owner_agent_session_journal j
                  WHERE j.agent_id=? AND j.session_id=? AND j.role='user'
                    AND j.seq<=? AND j.message_id IS NOT NULL
                )`,
           )
-          .run(at, agentId, agentId, run.session_id, run.input_end_seq);
+          .run(at, agentId, run.channel_id, agentId, run.session_id, run.input_end_seq);
         this.db
           .prepare(
             "UPDATE owner_agent_runs SET state='completed',completed_at=?,retry_at=NULL,error_code=NULL WHERE id=? AND state='running'",
@@ -633,25 +663,44 @@ export class OwnerChat {
       .transaction(() => {
         const run = this.db
           .prepare(
-            `SELECT r.state,r.input_end_seq,s.id AS session_id
+            `SELECT r.state,r.input_end_seq,s.id AS session_id,d.channel_id,
+                    c.archived AS channel_archived
              FROM owner_agent_runs r JOIN owner_agent_sessions s ON s.agent_id=r.agent_id
+             JOIN owner_message_deliveries d ON d.id=r.delivery_id
+             JOIN owner_channels c ON c.id=d.channel_id
              WHERE r.id=? AND r.agent_id=?`,
           )
           .get(runId, agentId) as
-          { state: string; input_end_seq: number; session_id: string } | undefined;
+          | {
+              state: string;
+              input_end_seq: number;
+              session_id: string;
+              channel_id: string;
+              channel_archived: number;
+            }
+          | undefined;
         if (!run || run.state !== "running") return false;
         const at = this.now();
+        if (run.channel_archived === 1) {
+          this.db
+            .prepare(
+              `UPDATE owner_agent_runs SET state='failed',error_code='channel_archived',
+                 retry_at=NULL,completed_at=? WHERE id=? AND agent_id=? AND state='running'`,
+            )
+            .run(at, runId, agentId);
+          return false;
+        }
         this.db
           .prepare(
             `UPDATE owner_message_deliveries SET state='handled',handled_at=?
-             WHERE recipient_kind='agent' AND recipient_id=? AND state='pending'
+             WHERE recipient_kind='agent' AND recipient_id=? AND channel_id=? AND state='pending'
                AND message_id IN (
                  SELECT j.message_id FROM owner_agent_session_journal j
                  WHERE j.agent_id=? AND j.session_id=? AND j.role='user'
                    AND j.seq<=? AND j.message_id IS NOT NULL
                )`,
           )
-          .run(at, agentId, agentId, run.session_id, run.input_end_seq);
+          .run(at, agentId, run.channel_id, agentId, run.session_id, run.input_end_seq);
         this.db
           .prepare(
             `UPDATE owner_agent_runs SET state='completed',completed_at=?,retry_at=NULL,error_code=NULL

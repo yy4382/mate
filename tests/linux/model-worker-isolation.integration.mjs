@@ -67,6 +67,7 @@ function filesContain(path, token) {
 
 const homeRoot = `/var/lib/mate-model-worker-validation-${randomUUID()}`,
   agentId = randomUUID(),
+  channelId = randomUUID(),
   secret = randomBytes(32).toString("base64url"),
   workerIdentity = ensureModelWorkerIdentity();
 mkdirSync(homeRoot, { mode: 0o700 });
@@ -92,7 +93,17 @@ try {
   run = worker.run({
     runId: randomUUID(),
     sessionId: randomUUID(),
-    messages: [{ sequence: 1, role: "user", text: "Synthetic owner DM process check." }],
+    outputChannel: { channelId, visibility: "private" },
+    messages: [
+      {
+        sequence: 1,
+        role: "user",
+        text: "Synthetic owner DM process check.",
+        sourceChannelId: channelId,
+        sourceVisibility: "private",
+        currentRunInput: true,
+      },
+    ],
     prompt: { name: "Synthetic Agent", role: "Validation", description: "No private data." },
   });
   await Promise.race([
@@ -148,7 +159,17 @@ try {
   const canceledRun = canceledWorker.run({
     runId: randomUUID(),
     sessionId: randomUUID(),
-    messages: [{ sequence: 1, role: "user", text: "Synthetic cancellation process check." }],
+    outputChannel: { channelId, visibility: "private" },
+    messages: [
+      {
+        sequence: 1,
+        role: "user",
+        text: "Synthetic cancellation process check.",
+        sourceChannelId: channelId,
+        sourceVisibility: "private",
+        currentRunInput: true,
+      },
+    ],
     prompt: { name: "Synthetic Agent", role: "Validation", description: "No private data." },
   });
   const canceledPid = await waitForWorkerPid();

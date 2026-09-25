@@ -79,7 +79,14 @@ export interface AgentRunHandlers {
     limit: number,
   ):
     | {
-        messages: Array<{ sequence: number; role: "user" | "assistant"; text: string }>;
+        messages: Array<{
+          sequence: number;
+          role: "user" | "assistant";
+          text: string;
+          sourceChannelId: string;
+          sourceVisibility: "public" | "private";
+          currentRunInput: boolean;
+        }>;
         nextAfter: number | null;
       }
     | undefined;

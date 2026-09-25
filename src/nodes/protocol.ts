@@ -156,6 +156,7 @@ export const NodeControlMessageSchema = z.discriminatedUnion("type", [
       modelId: z.string().min(1).max(200),
       apiKey: z.string().min(1).max(8192),
       channelId: requestIdSchema,
+      channelVisibility: z.enum(["public", "private"]),
       prompt: z
         .object({
           name: z.string().min(1).max(80),
@@ -185,6 +186,9 @@ export const NodeControlMessageSchema = z.discriminatedUnion("type", [
             sequence: z.number().int().positive(),
             role: z.enum(["user", "assistant"]),
             text: z.string().min(1).max(20_000),
+            sourceChannelId: requestIdSchema,
+            sourceVisibility: z.enum(["public", "private"]),
+            currentRunInput: z.boolean(),
           })
           .strict(),
       ),

@@ -43,6 +43,7 @@ export async function runAgentModel(
     modelId = request.modelId,
     runId = request.runId,
     sessionId = request.sessionId,
+    outputChannel = { channelId: request.channelId, visibility: request.channelVisibility },
     prompt = request.prompt;
   // Do not retain the protocol object, which otherwise keeps the credential alive during paging.
   request.apiKey = "";
@@ -69,7 +70,7 @@ export async function runAgentModel(
       after = page.nextAfter;
     }
     if (!messages.length) throw new Error("Agent session context is empty");
-    await worker.run({ runId, sessionId, messages, prompt });
+    await worker.run({ runId, sessionId, messages, outputChannel, prompt });
     if (!connectionSignal.aborted) transport.result(true);
   } catch {
     if (!connectionSignal.aborted) transport.result(false, "model_failed");

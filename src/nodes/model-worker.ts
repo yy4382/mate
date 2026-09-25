@@ -8,6 +8,9 @@ const contextMessageSchema = z
     sequence: z.number().int().positive(),
     role: z.enum(["user", "assistant"]),
     text: z.string().min(1).max(20_000),
+    sourceChannelId: z.string().uuid(),
+    sourceVisibility: z.enum(["public", "private"]),
+    currentRunInput: z.boolean(),
   })
   .strict();
 const runSchema = z
@@ -18,6 +21,12 @@ const runSchema = z
       .object({
         runId: z.string().uuid(),
         sessionId: z.string().uuid(),
+        outputChannel: z
+          .object({
+            channelId: z.string().uuid(),
+            visibility: z.enum(["public", "private"]),
+          })
+          .strict(),
         messages: z.array(contextMessageSchema).min(1),
         prompt: z
           .object({
@@ -86,14 +95,21 @@ export function serveModelWorker(stream: StreamFn): void {
           `你是 Mate 中的 Agent 同事「${run.data.spec.prompt.name}」。`,
           `你的角色：${run.data.spec.prompt.role}`,
           `介绍：${run.data.spec.prompt.description}`,
-          "只需在触发本次运行的对话中回复。此运行没有工具，也不能选择其他对话作为回复目标。",
+          `本次回复目的地：频道 ${run.data.spec.outputChannel.channelId}（${visibilityLabel(run.data.spec.outputChannel.visibility)}）。`,
+          "上下文中的每条消息都标出来源频道、可见范围和是否属于本次输入。只处理标为本次输入的消息；历史仅用于理解。公开频道回复不得泄露任何私密频道内容。",
+          "此运行没有工具，也不能选择其他对话作为回复目标。",
         ].join("\n"),
         tools: [],
         messages: transcript,
       },
     });
+    let unsuccessfulStopReason: "error" | "aborted" | undefined;
     const unsubscribe = agent.subscribe(async (event) => {
       if (event.type !== "message_end" || event.message.role !== "assistant") return;
+      if (event.message.stopReason === "error" || event.message.stopReason === "aborted") {
+        unsuccessfulStopReason = event.message.stopReason;
+        return;
+      }
       const text = event.message.content
         .filter((part) => part.type === "text")
         .map((part) => part.text)
@@ -110,6 +126,7 @@ export function serveModelWorker(stream: StreamFn): void {
 
     try {
       await agent.continue();
+      if (unsuccessfulStopReason) throw new Error("The model returned an unsuccessful result");
       process.send?.({ type: "done", nonce });
     } catch {
       process.send?.({ type: "failed", nonce, code: "model_failed" });
@@ -124,10 +141,14 @@ export function serveModelWorker(stream: StreamFn): void {
 
 function toAgentMessage(message: ModelContextMessage): AgentMessage {
   const timestamp = message.sequence;
-  if (message.role === "user") return { role: "user", content: message.text, timestamp };
+  const content = [
+    `[消息来源：频道 ${message.sourceChannelId}；可见范围：${visibilityLabel(message.sourceVisibility)}；${message.currentRunInput ? "本次输入" : "历史记录"}]`,
+    message.text,
+  ].join("\n");
+  if (message.role === "user") return { role: "user", content, timestamp };
   return {
     role: "assistant",
-    content: [{ type: "text", text: message.text }],
+    content: [{ type: "text", text: content }],
     api: "openai-completions",
     provider: "openai",
     model: "journal-replay",
@@ -142,6 +163,10 @@ function toAgentMessage(message: ModelContextMessage): AgentMessage {
     stopReason: "stop",
     timestamp,
   };
+}
+
+function visibilityLabel(visibility: "public" | "private"): string {
+  return visibility === "public" ? "公开" : "私密";
 }
 
 if (process.env.MATE_MODEL_WORKER === "1") {

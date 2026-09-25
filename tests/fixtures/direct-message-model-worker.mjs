@@ -7,35 +7,58 @@ delete process.env.MATE_MODEL_WORKER;
 const { serveModelWorker } = await import("../../dist/src/nodes/model-worker.js");
 process.env.MATE_MODEL_WORKER = workerMode;
 
-serveModelWorker((model, _context, options) => {
+serveModelWorker((model, context, options) => {
   const stream = createAssistantMessageEventStream();
   if (options.apiKey === "synthetic-key-hold") return stream;
+  const stopReason =
+    options.apiKey === "synthetic-key-error-text"
+      ? "error"
+      : options.apiKey === "synthetic-key-aborted-text"
+        ? "aborted"
+        : "stop";
   const text =
-    options.apiKey === "synthetic-key-version-c"
-      ? "这是取消旧 run 后的新凭据回复。"
-      : options.apiKey === "synthetic-key-version-b"
-        ? "这是密钥更新后的测试回复。"
-        : "这是首次测试回复。";
-  stream.push({
-    type: "done",
-    reason: "stop",
-    message: {
-      role: "assistant",
-      content: options.apiKey === "synthetic-key-silent" ? [] : [{ type: "text", text }],
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    options.apiKey === "synthetic-key-inspect-context"
+      ? JSON.stringify({
+          systemPrompt: context.systemPrompt,
+          messages: context.messages.map((message) => ({
+            role: message.role,
+            content: message.content,
+          })),
+        })
+      : options.apiKey === "synthetic-key-delayed-reply"
+        ? "频道解除归档后的回复。"
+        : options.apiKey === "synthetic-key-error-text" ||
+            options.apiKey === "synthetic-key-aborted-text"
+          ? "不应提交的错误文本。"
+          : options.apiKey === "synthetic-key-version-c"
+            ? "这是取消旧 run 后的新凭据回复。"
+            : options.apiKey === "synthetic-key-version-b"
+              ? "这是密钥更新后的测试回复。"
+              : "这是首次测试回复。";
+  const emit = () => {
+    stream.push({
+      type: "done",
+      reason: "stop",
+      message: {
+        role: "assistant",
+        content: options.apiKey === "synthetic-key-silent" ? [] : [{ type: "text", text }],
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason,
+        timestamp: Date.now(),
       },
-      stopReason: "stop",
-      timestamp: Date.now(),
-    },
-  });
+    });
+  };
+  if (options.apiKey === "synthetic-key-delayed-reply") setTimeout(emit, 600);
+  else emit();
   return stream;
 });

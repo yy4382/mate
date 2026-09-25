@@ -17,6 +17,7 @@ interface RunCandidate {
   provider: string;
   model_id: string;
   channel_id: string;
+  channel_visibility: "public" | "private";
   delivery_id: string;
 }
 
@@ -98,6 +99,7 @@ export class AgentRunCoordinator {
           modelId: candidate.model_id,
           apiKey,
           channelId: candidate.channel_id,
+          channelVisibility: candidate.channel_visibility,
           prompt: {
             name: candidate.name,
             role: candidate.role,
@@ -125,10 +127,12 @@ export class AgentRunCoordinator {
     return this.db
       .prepare(
         `SELECT a.id AS agent_id,a.node_id,s.id AS session_id,a.name,a.role,a.description,
-                a.provider,a.model_id,d.channel_id,d.id AS delivery_id
+                a.provider,a.model_id,d.channel_id,c.visibility AS channel_visibility,
+                d.id AS delivery_id
          FROM owner_message_deliveries d
          JOIN owner_agents a ON a.id=d.recipient_id
          JOIN owner_agent_sessions s ON s.agent_id=a.id
+         JOIN owner_channels c ON c.id=d.channel_id AND c.archived=0
          JOIN owner_agent_session_journal j
            ON j.agent_id=a.id AND j.message_id=d.message_id AND j.role='user'
          WHERE d.recipient_kind='agent' AND d.state='pending'
@@ -162,21 +166,45 @@ export class AgentRunCoordinator {
         .transaction(() => {
           const current = this.db
             .prepare(
-              `SELECT 1 FROM owner_agents a
+              `SELECT c.visibility FROM owner_agents a
                JOIN owner_message_deliveries d ON d.recipient_id=a.id AND d.recipient_kind='agent'
                JOIN owner_agent_session_journal j
                  ON j.agent_id=a.id AND j.message_id=d.message_id AND j.role='user'
+               JOIN owner_channels c ON c.id=d.channel_id
                WHERE a.id=? AND a.status='waiting_credentials' AND a.model_ready=1
+                 AND c.archived=0
                  AND d.id=? AND d.state='pending'`,
             )
-            .get(candidate.agent_id, candidate.delivery_id);
+            .get(candidate.agent_id, candidate.delivery_id) as
+            { visibility: "public" | "private" } | undefined;
           if (!current) return undefined;
-          const inputEnd = this.db
+          candidate.channel_visibility = current.visibility;
+          const inputStart = this.db
             .prepare(
-              `SELECT COALESCE(MAX(seq),0) AS input_end_seq
+              `SELECT j.seq FROM owner_message_deliveries d
+               JOIN owner_agent_session_journal j
+                 ON j.agent_id=d.recipient_id AND j.message_id=d.message_id AND j.role='user'
+               WHERE d.id=?`,
+            )
+            .get(candidate.delivery_id) as { seq: number } | undefined;
+          if (!inputStart) return undefined;
+          const firstDifferentSource = this.db
+            .prepare(
+              `SELECT MIN(seq) AS seq FROM owner_agent_session_journal
+               WHERE agent_id=? AND role='user' AND seq>? AND channel_id<>?`,
+            )
+            .get(candidate.agent_id, inputStart.seq, candidate.channel_id) as
+            { seq: number | null } | undefined;
+          const maxSequence = this.db
+            .prepare(
+              `SELECT COALESCE(MAX(seq),0) AS seq
                FROM owner_agent_session_journal WHERE agent_id=?`,
             )
-            .get(candidate.agent_id) as { input_end_seq: number };
+            .get(candidate.agent_id) as { seq: number };
+          const inputEndSequence =
+            firstDifferentSource?.seq === null || firstDifferentSource === undefined
+              ? maxSequence.seq
+              : firstDifferentSource.seq - 1;
           this.db
             .prepare(
               `INSERT INTO owner_agent_runs(
@@ -189,7 +217,7 @@ export class AgentRunCoordinator {
               candidate.node_id,
               candidate.delivery_id,
               this.now(),
-              inputEnd.input_end_seq,
+              Math.max(inputStart.seq, inputEndSequence),
             );
           return id;
         })
@@ -208,11 +236,21 @@ export class AgentRunCoordinator {
   ): AgentSessionJournalPage | undefined {
     const run = this.db
       .prepare(
-        "SELECT input_end_seq FROM owner_agent_runs WHERE id=? AND agent_id=? AND state='running'",
+        `SELECT r.input_end_seq,r.delivery_id
+         FROM owner_agent_runs r WHERE r.id=? AND r.agent_id=? AND r.state='running'`,
       )
-      .get(runId, agentId) as { input_end_seq: number } | undefined;
-    return run
-      ? this.chat.listAgentSessionJournal(agentId, after, limit, run.input_end_seq)
+      .get(runId, agentId) as { input_end_seq: number; delivery_id: string } | undefined;
+    if (!run) return undefined;
+    const inputStart = this.db
+      .prepare(
+        `SELECT j.seq FROM owner_message_deliveries d
+         JOIN owner_agent_session_journal j
+           ON j.agent_id=d.recipient_id AND j.message_id=d.message_id AND j.role='user'
+         WHERE d.id=?`,
+      )
+      .get(run.delivery_id) as { seq: number } | undefined;
+    return inputStart
+      ? this.chat.listAgentSessionJournal(agentId, after, limit, run.input_end_seq, inputStart.seq)
       : undefined;
   }
 

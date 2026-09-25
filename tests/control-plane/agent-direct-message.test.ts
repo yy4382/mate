@@ -1,4 +1,5 @@
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import Database from "better-sqlite3";
 import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -62,7 +63,7 @@ async function setup() {
       signature: sign(null, Buffer.from(challenge.nonce), keyPair.privateKey).toString("base64url"),
     }),
   );
-  return { app, cookie, nodeId, socket };
+  return { app, cookie, directory, nodeId, socket };
 }
 
 async function waitForRun(
@@ -156,15 +157,14 @@ it("limits each run to its committed input batch and consumes silent batches", a
     },
     app.chat,
   );
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
   const room = app.chat.createChannel({
     name: "Batch room",
     description: "Synthetic shared-channel fixture.",
     visibility: "private",
   });
   expect(app.chat.inviteAgentToChannel(room.id, agentId)).toBe(true);
-  app.chat.createMessage(direct.id, "批次中的第一条私信输入。");
-  app.chat.createMessage(room.id, "批次中的第二条频道输入。");
+  app.chat.createMessage(room.id, "同一来源批次中的第一条频道输入。");
+  app.chat.createMessage(room.id, "同一来源批次中的第二条频道输入。");
   const firstRunStart = socket.sent.length;
   const writes = await app.request("/api/owner/model-credentials/openai", {
     method: "PUT",
@@ -193,14 +193,14 @@ it("limits each run to its committed input batch and consumes silent batches", a
     };
   };
   expect((await requestContext(firstRun.runId)).messages.map((message) => message.text)).toEqual([
-    "批次中的第一条私信输入。",
-    "批次中的第二条频道输入。",
+    "同一来源批次中的第一条频道输入。",
+    "同一来源批次中的第二条频道输入。",
   ]);
 
   app.chat.createMessage(room.id, "运行开始后才到达的下一条频道输入。");
   expect((await requestContext(firstRun.runId)).messages.map((message) => message.text)).toEqual([
-    "批次中的第一条私信输入。",
-    "批次中的第二条频道输入。",
+    "同一来源批次中的第一条频道输入。",
+    "同一来源批次中的第二条频道输入。",
   ]);
   await app.nodes.receive(
     socket,
@@ -242,8 +242,8 @@ it("limits each run to its committed input batch and consumes silent batches", a
     messages: Array<{ sequence: number; role: string; text: string }>;
   };
   expect(secondContext.messages.map((message) => message.text)).toEqual([
-    "批次中的第一条私信输入。",
-    "批次中的第二条频道输入。",
+    "同一来源批次中的第一条频道输入。",
+    "同一来源批次中的第二条频道输入。",
     "运行开始后才到达的下一条频道输入。",
     "第一批次的可见回复。",
   ]);
@@ -259,12 +259,336 @@ it("limits each run to its committed input batch and consumes silent batches", a
     }),
   );
   expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toHaveLength(0);
-  expect(app.chat.listMessages(direct.id, undefined, 20)?.messages).toMatchObject([
-    { author: { kind: "human" }, text: "批次中的第一条私信输入。" },
+  expect(app.chat.listMessages(room.id, undefined, 20)?.messages).toMatchObject([
+    { author: { kind: "human" }, text: "同一来源批次中的第一条频道输入。" },
+    { author: { kind: "human" }, text: "同一来源批次中的第二条频道输入。" },
+    { author: { kind: "human" }, text: "运行开始后才到达的下一条频道输入。" },
     { author: { kind: "agent", id: agentId }, text: "第一批次的可见回复。" },
   ]);
-  expect(app.chat.listMessages(room.id, undefined, 20)?.messages).toMatchObject([
-    { author: { kind: "human" }, text: "批次中的第二条频道输入。" },
-    { author: { kind: "human" }, text: "运行开始后才到达的下一条频道输入。" },
+});
+
+it("keeps a later private input out of a public channel run", async () => {
+  const { app, cookie, nodeId, socket } = await setup();
+  const agentId = randomUUID();
+  app.agents.prepare({
+    id: agentId,
+    nodeId,
+    name: "Source-aware partner",
+    role: "Replies in the input channel",
+    description: "Synthetic source-boundary fixture.",
+    model: { provider: "openai", id: "gpt-4.1" },
+  });
+  app.agents.complete(
+    agentId,
+    {
+      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      uid: 23001,
+      gid: 23001,
+      home: `/var/lib/mate/agents/${agentId}`,
+    },
+    app.chat,
+  );
+  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  const publicRoom = app.chat.createChannel({
+    name: "Public source room",
+    description: "Synthetic public-channel fixture.",
+    visibility: "public",
+  });
+  expect(app.chat.inviteAgentToChannel(publicRoom.id, agentId)).toBe(true);
+  app.chat.createMessage(publicRoom.id, "公开输入必须触发公开频道 run。");
+  app.chat.createMessage(direct.id, "这条私信不能进入公开回复。");
+
+  const runStart = socket.sent.length;
+  const credential = await app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-source-batch-key" }),
+  });
+  expect(credential.status).toBe(204);
+  const firstRun = await waitForRun(socket, runStart);
+  expect(firstRun.channelId).toBe(publicRoom.id);
+
+  const readContext = async (runId: string) => {
+    await app.nodes.receive(
+      socket,
+      JSON.stringify({
+        type: "node.agent.run.context",
+        requestId: randomUUID(),
+        runId,
+        agentId,
+        after: 0,
+        limit: 100,
+      }),
+    );
+    return JSON.parse(socket.sent.at(-1)!) as {
+      messages: Array<{
+        role: string;
+        text: string;
+        sourceChannelId?: string;
+        sourceVisibility?: string;
+        currentRunInput?: boolean;
+      }>;
+    };
+  };
+  const context = await readContext(firstRun.runId);
+  expect(context.messages).toEqual([
+    expect.objectContaining({
+      role: "user",
+      text: "公开输入必须触发公开频道 run。",
+      sourceChannelId: publicRoom.id,
+      sourceVisibility: "public",
+      currentRunInput: true,
+    }),
   ]);
+  expect(firstRun).toMatchObject({ channelVisibility: "public" });
+
+  const writeReply = async (runId: string, text: string) => {
+    await app.nodes.receive(
+      socket,
+      JSON.stringify({
+        type: "node.agent.run.journal",
+        requestId: randomUUID(),
+        runId,
+        agentId,
+        text,
+      }),
+    );
+    expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
+      type: "control.agent.run.journal_ack",
+      accepted: true,
+    });
+  };
+  const finishRun = async (runId: string) => {
+    await app.nodes.receive(
+      socket,
+      JSON.stringify({
+        type: "node.agent.run.result",
+        requestId: runId,
+        runId,
+        agentId,
+        ok: true,
+      }),
+    );
+  };
+
+  await writeReply(firstRun.runId, "只回应公开频道输入。");
+  expect(app.chat.listMessages(publicRoom.id, undefined, 20)?.messages.at(-1)).toMatchObject({
+    author: { kind: "agent", id: agentId },
+    text: "只回应公开频道输入。",
+  });
+  expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toMatchObject([
+    { channelId: direct.id, message: { text: "这条私信不能进入公开回复。" } },
+  ]);
+
+  const privateRunStart = socket.sent.length;
+  await finishRun(firstRun.runId);
+  const privateRun = await waitForRun(socket, privateRunStart);
+  expect(privateRun.channelId).toBe(direct.id);
+  expect(privateRun).toMatchObject({ channelVisibility: "private" });
+  const privateContext = await readContext(privateRun.runId);
+  expect(privateContext.messages).toMatchObject([
+    {
+      role: "user",
+      sourceChannelId: publicRoom.id,
+      sourceVisibility: "public",
+      currentRunInput: false,
+    },
+    {
+      role: "user",
+      text: "这条私信不能进入公开回复。",
+      sourceChannelId: direct.id,
+      sourceVisibility: "private",
+      currentRunInput: true,
+    },
+    {
+      role: "assistant",
+      text: "只回应公开频道输入。",
+      sourceChannelId: publicRoom.id,
+      sourceVisibility: "public",
+      currentRunInput: false,
+    },
+  ]);
+  await writeReply(privateRun.runId, "私信输入在私信里得到回复。");
+  expect(app.chat.listMessages(direct.id, undefined, 20)?.messages.at(-1)).toMatchObject({
+    author: { kind: "agent", id: agentId },
+    text: "私信输入在私信里得到回复。",
+  });
+  await finishRun(privateRun.runId);
+
+  const sendMessage = async (channelId: string, text: string) => {
+    const response = await app.request(`/api/owner/channels/${channelId}/messages`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    expect(response.status).toBe(201);
+  };
+  const removed = await app.request("/api/owner/model-credentials/openai", {
+    method: "DELETE",
+    headers: { cookie },
+  });
+  expect(removed.status).toBe(204);
+  await sendMessage(direct.id, "反向顺序的私信输入先到达。");
+  await sendMessage(publicRoom.id, "后到的公开输入需要等待。");
+  const reversePrivateStart = socket.sent.length;
+  const restored = await app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-source-batch-key" }),
+  });
+  expect(restored.status).toBe(204);
+  const reversePrivateRun = await waitForRun(socket, reversePrivateStart);
+  expect(reversePrivateRun.channelId).toBe(direct.id);
+  const reversePrivateContext = await readContext(reversePrivateRun.runId);
+  expect(reversePrivateContext.messages.at(-1)).toMatchObject({
+    text: "反向顺序的私信输入先到达。",
+    sourceChannelId: direct.id,
+    sourceVisibility: "private",
+    currentRunInput: true,
+  });
+  expect(reversePrivateContext.messages.map((message) => message.text)).not.toContain(
+    "后到的公开输入需要等待。",
+  );
+  await writeReply(reversePrivateRun.runId, "反向顺序私信回复。");
+  const reversePublicStart = socket.sent.length;
+  await finishRun(reversePrivateRun.runId);
+
+  const reversePublicRun = await waitForRun(socket, reversePublicStart);
+  expect(reversePublicRun.channelId).toBe(publicRoom.id);
+  const reversePublicContext = await readContext(reversePublicRun.runId);
+  expect(
+    reversePublicContext.messages.find((message) => message.text === "后到的公开输入需要等待。"),
+  ).toMatchObject({
+    text: "后到的公开输入需要等待。",
+    sourceChannelId: publicRoom.id,
+    sourceVisibility: "public",
+    currentRunInput: true,
+  });
+  await writeReply(reversePublicRun.runId, "公开输入在公开频道里回复。");
+  expect(app.chat.listMessages(publicRoom.id, undefined, 20)?.messages.at(-1)).toMatchObject({
+    author: { kind: "agent", id: agentId },
+    text: "公开输入在公开频道里回复。",
+  });
+  await finishRun(reversePublicRun.runId);
+});
+
+it("keeps an archived run input pending and retries it after the owner unarchives the channel", async () => {
+  const { app, cookie, directory, nodeId, socket } = await setup();
+  const agentId = randomUUID();
+  app.agents.prepare({
+    id: agentId,
+    nodeId,
+    name: "Recoverable archive partner",
+    role: "Replies after its channel is restored",
+    description: "Synthetic archived-run fixture.",
+    model: { provider: "openai", id: "gpt-4.1" },
+  });
+  app.agents.complete(
+    agentId,
+    {
+      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      uid: 23001,
+      gid: 23001,
+      home: `/var/lib/mate/agents/${agentId}`,
+    },
+    app.chat,
+  );
+  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  app.chat.createMessage(direct.id, "归档期间不可写入回复的私信。");
+  const runStart = socket.sent.length;
+  const credential = await app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-archive-race-key" }),
+  });
+  expect(credential.status).toBe(204);
+  const run = await waitForRun(socket, runStart);
+
+  const archive = await app.request(`/api/owner/channels/${direct.id}`, {
+    method: "PATCH",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ archived: true }),
+  });
+  expect(archive.status).toBe(200);
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.agent.run.journal",
+      requestId: randomUUID(),
+      runId: run.runId,
+      agentId,
+      text: "归档后不得提交的回复。",
+    }),
+  );
+  expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
+    type: "control.agent.run.journal_ack",
+    accepted: false,
+  });
+  expect(app.chat.listMessages(direct.id, undefined, 20)?.messages).toMatchObject([
+    { author: { kind: "human" }, text: "归档期间不可写入回复的私信。" },
+  ]);
+
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.agent.run.result",
+      requestId: run.runId,
+      runId: run.runId,
+      agentId,
+      ok: false,
+      code: "model_failed",
+    }),
+  );
+  const db = new Database(join(directory, "control-plane", "control-plane.sqlite"), {
+    readonly: true,
+  });
+  try {
+    expect(
+      db
+        .prepare("SELECT state,error_code,retry_at FROM owner_agent_runs WHERE id=?")
+        .get(run.runId),
+    ).toEqual({ state: "failed", error_code: "channel_archived", retry_at: null });
+  } finally {
+    db.close();
+  }
+  expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toMatchObject([
+    { message: { text: "归档期间不可写入回复的私信。" } },
+  ]);
+
+  const archivedRunCount = socket.sent.filter(
+    (text) => JSON.parse(text).type === "control.agent.run",
+  ).length;
+  await new Promise((resolve) => setTimeout(resolve, 1700));
+  expect(socket.sent.filter((text) => JSON.parse(text).type === "control.agent.run")).toHaveLength(
+    archivedRunCount,
+  );
+
+  const retryStart = socket.sent.length;
+  const unarchive = await app.request(`/api/owner/channels/${direct.id}`, {
+    method: "PATCH",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ archived: false }),
+  });
+  expect(unarchive.status).toBe(200);
+  const retry = await waitForRun(socket, retryStart);
+  expect(retry.runId).not.toBe(run.runId);
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.agent.run.journal",
+      requestId: randomUUID(),
+      runId: retry.runId,
+      agentId,
+      text: "频道恢复后的私信回复。",
+    }),
+  );
+  expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
+    type: "control.agent.run.journal_ack",
+    accepted: true,
+  });
+  expect(app.chat.listMessages(direct.id, undefined, 20)?.messages.at(-1)).toMatchObject({
+    author: { kind: "agent", id: agentId },
+    text: "频道恢复后的私信回复。",
+  });
+  expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toHaveLength(0);
 });
