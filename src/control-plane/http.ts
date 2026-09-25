@@ -36,7 +36,7 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
       ...(options.sessionTtlMs !== undefined ? { sessionTtlMs: options.sessionTtlMs } : {}),
     }),
     app = new ControlPlaneApp(ownerAuth),
-    loginGate = new LoginGate(options.now);
+    loginGate = new LoginGate();
 
   const requireOwnerApi: MiddlewareHandler = async (context, next) => {
     const token = sessionToken(context);
@@ -71,10 +71,7 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
       const outcome = await loginGate.run(() => ownerAuth.verifyPassword(password));
       if (outcome.kind === "limited") {
         context.header("Retry-After", String(outcome.retryAfterSeconds));
-        const error =
-          outcome.reason === "busy"
-            ? `已有登录请求正在验证，请在 ${outcome.retryAfterSeconds} 秒后重试。`
-            : `登录尝试过多，请在 ${outcome.retryAfterSeconds} 秒后重试。`;
+        const error = `已有登录请求正在验证，请在 ${outcome.retryAfterSeconds} 秒后重试。`;
         return context.json({ error, retryAfterSeconds: outcome.retryAfterSeconds }, 429);
       }
       result = outcome.result;

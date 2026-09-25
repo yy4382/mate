@@ -125,28 +125,13 @@ it("bounds concurrent password checks and returns a retry hint", async () => {
   });
 });
 
-it("limits failed logins within a time window and retries after the oldest failure expires", async () => {
-  let now = 1_000;
-  const { app } = setup({ now: () => now });
+it("allows the owner to log in immediately after five sequential password failures", async () => {
+  const { app } = setup();
   expect((await login(app)).status).toBe(204);
 
   for (let attempt = 0; attempt < 5; attempt++)
     expect((await login(app, `wrong-password-${attempt}`)).status).toBe(401);
 
-  const limited = await login(app, "wrong-password-six");
-  expect(limited.status).toBe(429);
-  expect(limited.headers.get("retry-after")).toBe("60");
-  expect(await limited.json()).toEqual({
-    error: "登录尝试过多，请在 60 秒后重试。",
-    retryAfterSeconds: 60,
-  });
-
-  now += 59_000;
-  const almostReady = await login(app, password);
-  expect(almostReady.status).toBe(429);
-  expect(almostReady.headers.get("retry-after")).toBe("1");
-
-  now += 1_000;
   expect((await login(app)).status).toBe(204);
 });
 
