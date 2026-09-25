@@ -21,7 +21,7 @@ serveModelWorker((model, _context, options) => {
     reason: "stop",
     message: {
       role: "assistant",
-      content: [{ type: "text", text }],
+      content: options.apiKey === "synthetic-key-silent" ? [] : [{ type: "text", text }],
       api: model.api,
       provider: model.provider,
       model: model.id,

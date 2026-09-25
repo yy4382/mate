@@ -2,7 +2,11 @@ import { nodeDirectorySchema } from "./nodes/schema.js";
 import { ownerAuthSchema } from "./owner-auth-schema.js";
 import { agentDirectorySchema } from "./agents/schema.js";
 import { modelCredentialSchema } from "./model-credentials.js";
-import { agentJournalReplaySchema, agentRunSchemaV7 } from "./agent-runs-schema.js";
+import {
+  agentJournalReplaySchema,
+  agentRunBatchSchemaV9,
+  agentRunSchemaV7,
+} from "./agent-runs-schema.js";
 
 /** The format used by the paired-node release before Agent provisioning. */
 export const controlPlaneSchemaV4 = `${ownerAuthSchema}\n${nodeDirectorySchema}`;
@@ -16,8 +20,11 @@ export const controlPlaneSchemaV6 = `${controlPlaneSchemaV5}\n${modelCredentialS
 /** The paired-node database with the first owner-DM Agent run path. */
 export const controlPlaneSchemaV7 = `${controlPlaneSchemaV6}\n${agentRunSchemaV7}`;
 
-/** The current private control-plane database format. */
-export const controlPlaneSchema = `${controlPlaneSchemaV7}\n${agentJournalReplaySchema}`;
+/** The private control-plane format after exact journal replay tracking. */
+export const controlPlaneSchemaV8 = `${controlPlaneSchemaV7}\n${agentJournalReplaySchema}`;
+
+/** The current private control-plane database format with fixed run input boundaries. */
+export const controlPlaneSchema = `${controlPlaneSchemaV8}\n${agentRunBatchSchemaV9}`;
 
 export const controlPlaneMigrations = [
   {
@@ -52,7 +59,14 @@ export const controlPlaneMigrations = [
     fromRevision: 7,
     toRevision: 8,
     previousSchema: controlPlaneSchemaV7,
-    nextSchema: controlPlaneSchema,
+    nextSchema: controlPlaneSchemaV8,
     migrationSchema: agentJournalReplaySchema,
+  },
+  {
+    fromRevision: 8,
+    toRevision: 9,
+    previousSchema: controlPlaneSchemaV8,
+    nextSchema: controlPlaneSchema,
+    migrationSchema: agentRunBatchSchemaV9,
   },
 ] as const;

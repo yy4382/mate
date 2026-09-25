@@ -62,6 +62,7 @@ interface Draft {
 interface ModelProvider {
   id: string;
   name: string;
+  models: Array<{ id: string; name: string }>;
 }
 
 interface ModelCredential {
@@ -178,11 +179,23 @@ export function AgentsPage() {
           ? current
           : (providerResult.providers[0]?.id ?? ""),
       );
-      setDraft((current) =>
-        current.nodeId && nodeResult.nodes.some((node) => node.id === current.nodeId)
-          ? current
-          : { ...current, nodeId: nodeResult.nodes.find((node) => node.online)?.id ?? "" },
-      );
+      setDraft((current) => {
+        const provider =
+          providerResult.providers.find((candidate) => candidate.id === current.provider) ??
+          providerResult.providers[0];
+        const model =
+          provider?.models.find((candidate) => candidate.id === current.modelId) ??
+          provider?.models[0];
+        return {
+          ...current,
+          nodeId:
+            current.nodeId && nodeResult.nodes.some((node) => node.id === current.nodeId)
+              ? current.nodeId
+              : (nodeResult.nodes.find((node) => node.online)?.id ?? ""),
+          provider: provider?.id ?? "",
+          modelId: model?.id ?? "",
+        };
+      });
       setRefreshError(null);
     } catch (reason) {
       if (!signal?.aborted)
@@ -299,10 +312,14 @@ export function AgentsPage() {
 
   const savedDraft = agents.find((agent) => agent.id === draft.id),
     selectedNode = nodes.find((node) => node.id === draft.nodeId),
+    selectedProvider = providers.find((provider) => provider.id === draft.provider),
     onlineNodes = nodes.filter((node) => node.online),
     formLocked = savedDraft !== undefined,
     canSubmit =
-      Boolean(selectedNode?.online) && !submitting && savedDraft?.status !== "waiting_credentials";
+      Boolean(selectedNode?.online) &&
+      Boolean(selectedProvider?.models.some((model) => model.id === draft.modelId)) &&
+      !submitting &&
+      savedDraft?.status !== "waiting_credentials";
 
   return (
     <main className="page-shell agents-page-shell">
@@ -389,7 +406,12 @@ export function AgentsPage() {
               className="agent-new-button"
               type="button"
               onClick={() => {
-                setDraft(newDraft());
+                const provider = providers[0];
+                setDraft({
+                  ...newDraft(),
+                  provider: provider?.id ?? "",
+                  modelId: provider?.models[0]?.id ?? "",
+                });
                 setCreationError(null);
               }}
               disabled={submitting}
@@ -457,7 +479,14 @@ export function AgentsPage() {
                   required
                   value={draft.provider}
                   disabled={formLocked || submitting || providers.length === 0}
-                  onChange={(event) => setDraft({ ...draft, provider: event.target.value })}
+                  onChange={(event) => {
+                    const provider = providers.find((item) => item.id === event.target.value);
+                    setDraft({
+                      ...draft,
+                      provider: event.target.value,
+                      modelId: provider?.models[0]?.id ?? "",
+                    });
+                  }}
                 >
                   {providers.map((provider) => (
                     <option key={provider.id} value={provider.id}>
@@ -467,14 +496,19 @@ export function AgentsPage() {
                 </select>
               </label>
               <label>
-                模型 ID
-                <input
+                模型
+                <select
                   required
-                  maxLength={200}
                   value={draft.modelId}
-                  disabled={formLocked || submitting}
+                  disabled={formLocked || submitting || !selectedProvider}
                   onChange={(event) => setDraft({ ...draft, modelId: event.target.value })}
-                />
+                >
+                  {selectedProvider?.models.map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {model.name}
+                    </option>
+                  ))}
+                </select>
               </label>
             </div>
             <label>

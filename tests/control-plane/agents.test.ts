@@ -6,7 +6,11 @@ import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { createControlPlaneApp } from "../../src/control-plane/http.js";
 import { OwnerAuth } from "../../src/control-plane/owner-auth.js";
-import { controlPlaneMigrations, controlPlaneSchemaV4 } from "../../src/control-plane/schema.js";
+import {
+  controlPlaneMigrations,
+  controlPlaneSchemaV4,
+  controlPlaneSchemaV8,
+} from "../../src/control-plane/schema.js";
 import { newAgentRequestSchema } from "../../src/control-plane/agents/contracts.js";
 import type { NodeSocket } from "../../src/control-plane/nodes/directory.js";
 
@@ -116,6 +120,46 @@ it("keeps an offline-node Agent form unsubmitted", async () => {
   expect(await list.json()).toEqual({ agents: [] });
 });
 
+it("rejects a model outside the provider registry before persisting an Agent", async () => {
+  const app = setup();
+  const cookie = await login(app);
+  const { id: nodeId, socket } = await pairNode(app, cookie);
+  const input = {
+    id: randomUUID(),
+    name: "Invalid model partner",
+    role: "Uses an available model",
+    description: "A model registry validation fixture.",
+    nodeId,
+    model: { provider: "openai", id: "gpt-4.1-typo" },
+  };
+  const creation = app.request("/api/owner/agents", {
+    method: "POST",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const provision = socket.sent
+    .map((text) => JSON.parse(text) as Record<string, unknown>)
+    .find((message) => message.type === "control.agent.provision");
+  if (provision) {
+    await app.nodes.receive(
+      socket,
+      JSON.stringify({
+        type: "node.agent.provision.result",
+        requestId: provision.requestId,
+        agentId: input.id,
+        ok: false,
+        code: "unsupported_host",
+        message: "Synthetic provisioning failure.",
+      }),
+    );
+  }
+  const response = await creation;
+  expect(response.status).toBe(400);
+  expect(app.agents.list()).toHaveLength(0);
+  expect(provision).toBeUndefined();
+});
+
 it("rejects credential fields outside the Agent creation contract", () => {
   const parsed = newAgentRequestSchema.safeParse({
     id: "ed1e60c8-bdda-4f46-a857-bbd542f82640",
@@ -143,7 +187,7 @@ it("migrates paired-node control-plane data and enables Agent foreign keys", () 
 
   const auth = new OwnerAuth({ dataDir: directory });
   try {
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(8);
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(9);
     expect(auth.db.pragma("foreign_keys", { simple: true })).toBe(1);
     expect(auth.db.prepare("SELECT id FROM nodes").get()).toEqual({
       id: "c5342142-9cf5-4b22-86f3-bdc46bb471f2",
@@ -154,8 +198,65 @@ it("migrates paired-node control-plane data and enables Agent foreign keys", () 
       name: "owner_agents",
     });
     expect(controlPlaneMigrations.map((migration) => migration.fromRevision)).toEqual([
-      3, 4, 5, 6, 7,
+      3, 4, 5, 6, 7, 8,
     ]);
+  } finally {
+    auth.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+it("backfills pending channel deliveries into the shared session journal when upgrading revision 8", () => {
+  const directory = mkdtempSync(join(tmpdir(), "mate-agent-batch-migration-")),
+    databasePath = join(directory, "control-plane.sqlite");
+  const old = new Database(databasePath);
+  old.exec(controlPlaneSchemaV8);
+  old.exec(`
+    INSERT INTO nodes(id,public_key,paired_at) VALUES('node','synthetic-public-key',1);
+    INSERT INTO owner_channels(id,name,description,visibility,created_at,updated_at)
+      VALUES('room','Research','Synthetic migration fixture','private',1,1),
+            ('room-2','Research 2','Second migration fixture','private',1,1);
+    INSERT INTO owner_channel_memberships(channel_id,principal_kind,principal_id,active,joined_at)
+      VALUES('room','human','owner',1,1),('room','agent','agent',1,1),
+            ('room-2','human','owner',1,1),('room-2','agent','agent',1,1);
+    INSERT INTO owner_agents(
+      id,node_id,name,role,description,provider,model_id,request_json,request_hash,
+      provision_request_id,status,stage,linux_username,uid,gid,home,created_at,updated_at,model_ready
+    ) VALUES(
+      'agent','node','Partner','Replies','Migration fixture','openai','gpt-4.1','{}',
+      'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','provision',
+      'waiting_credentials','complete','mate_agent',23001,23001,'/var/lib/mate/agents/agent',1,1,0
+    );
+    INSERT INTO owner_agent_sessions(id,agent_id,created_at,verified_at)
+      VALUES('session','agent',1,1);
+    INSERT INTO owner_messages(id,channel_id,order_seq,text,author_kind,author_id,created_at)
+      VALUES('message','room',1,'旧版频道排队输入','human','owner',1),
+            ('message-2','room-2',1,'旧版第二频道排队输入','human','owner',2);
+    INSERT INTO owner_message_deliveries(id,message_id,channel_id,recipient_kind,recipient_id,state,created_at)
+      VALUES('delivery','message','room','agent','agent','pending',1);
+    INSERT INTO owner_message_deliveries(id,message_id,channel_id,recipient_kind,recipient_id,state,created_at)
+      VALUES('delivery-2','message-2','room-2','agent','agent','pending',2);
+  `);
+  old.pragma("application_id = 1296257100");
+  old.pragma("user_version = 8");
+  old.close();
+
+  const auth = new OwnerAuth({ dataDir: directory });
+  try {
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(9);
+    expect(
+      auth.db
+        .prepare(
+          "SELECT role,text FROM owner_agent_session_journal WHERE agent_id='agent' ORDER BY seq",
+        )
+        .all(),
+    ).toEqual([
+      { role: "user", text: "旧版频道排队输入" },
+      { role: "user", text: "旧版第二频道排队输入" },
+    ]);
+    expect(
+      auth.db.prepare("SELECT input_end_seq FROM owner_agent_runs WHERE id='missing'").get(),
+    ).toBeUndefined();
   } finally {
     auth.close();
     rmSync(directory, { recursive: true, force: true });
@@ -318,6 +419,86 @@ it("persists a stable Agent session, verifies provisioning, then queues its init
 
   app.chat.createMessage(channelId, "A queued first message");
   expect(app.chat.listPendingDeliveries("agent", input.id).deliveries).toHaveLength(1);
+  expect(app.chat.listAgentSessionJournal(input.id, 0, 10).messages).toMatchObject([
+    { role: "user", text: "A queued first message" },
+  ]);
+});
+
+it("finds an online Agent beyond more than one page of offline deliveries", async () => {
+  const app = setup();
+  const cookie = await login(app);
+  const offlineNode = await pairNode(app, cookie),
+    onlineNode = await pairNode(app, cookie);
+  app.nodes.close(offlineNode.socket);
+
+  for (let index = 0; index < 105; index++) {
+    const id = randomUUID();
+    app.agents.prepare({
+      id,
+      nodeId: offlineNode.id,
+      name: `Offline ${index}`,
+      role: "Waits for a model run",
+      description: "Synthetic scheduler fairness fixture.",
+      model: { provider: "openai", id: "gpt-4.1" },
+    });
+    app.agents.complete(
+      id,
+      {
+        username: "mate_" + id.replaceAll("-", "").slice(0, 27),
+        uid: 24000 + index,
+        gid: 24000 + index,
+        home: `/var/lib/mate/agents/${id}`,
+      },
+      app.chat,
+      true,
+    );
+    const direct = app.chat.getOrCreateAgentDirectChannel(id)!;
+    app.chat.createMessage(direct.id, `离线 Agent ${index} 的排队输入。`);
+  }
+
+  const onlineAgentId = randomUUID();
+  app.agents.prepare({
+    id: onlineAgentId,
+    nodeId: onlineNode.id,
+    name: "Online partner",
+    role: "Runs when ready",
+    description: "Must not be starved by offline entries.",
+    model: { provider: "openai", id: "gpt-4.1" },
+  });
+  app.agents.complete(
+    onlineAgentId,
+    {
+      username: "mate_" + onlineAgentId.replaceAll("-", "").slice(0, 27),
+      uid: 25001,
+      gid: 25001,
+      home: `/var/lib/mate/agents/${onlineAgentId}`,
+    },
+    app.chat,
+    true,
+  );
+  const onlineDirect = app.chat.getOrCreateAgentDirectChannel(onlineAgentId)!;
+  app.chat.createMessage(onlineDirect.id, "在线 Agent 的排队输入。");
+
+  const credential = await app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-scheduler-key" }),
+  });
+  expect(credential.status).toBe(204);
+  const deadline = Date.now() + 3000;
+  let run: Record<string, unknown> | undefined;
+  while (Date.now() < deadline && !run) {
+    run = onlineNode.socket.sent
+      .map((text) => JSON.parse(text) as Record<string, unknown>)
+      .find((message) => message.type === "control.agent.run" && message.agentId === onlineAgentId);
+    if (!run) await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  expect(run).toMatchObject({
+    type: "control.agent.run",
+    agentId: onlineAgentId,
+    channelId: onlineDirect.id,
+  });
+  expect(app.chat.listPendingDeliveries("agent", onlineAgentId).deliveries).toHaveLength(1);
 });
 
 it("retains one failed request and retries it with the same Agent and provisioning IDs", async () => {

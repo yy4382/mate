@@ -86,13 +86,12 @@ export function serveModelWorker(stream: StreamFn): void {
           `你是 Mate 中的 Agent 同事「${run.data.spec.prompt.name}」。`,
           `你的角色：${run.data.spec.prompt.role}`,
           `介绍：${run.data.spec.prompt.description}`,
-          "只需在当前所有者私信中回复。此运行没有工具，也不能选择其他对话作为回复目标。",
+          "只需在触发本次运行的对话中回复。此运行没有工具，也不能选择其他对话作为回复目标。",
         ].join("\n"),
         tools: [],
         messages: transcript,
       },
     });
-    let journalRequestId: string | undefined;
     const unsubscribe = agent.subscribe(async (event) => {
       if (event.type !== "message_end" || event.message.role !== "assistant") return;
       const text = event.message.content
@@ -100,10 +99,10 @@ export function serveModelWorker(stream: StreamFn): void {
         .map((part) => part.text)
         .join("")
         .trim();
-      if (!text) throw new Error("The model returned no text");
-      journalRequestId = randomUUID();
+      if (!text) return;
+      const journalRequestId = randomUUID();
       const accepted = await new Promise<boolean>((resolve) => {
-        pending.set(journalRequestId!, { resolve });
+        pending.set(journalRequestId, { resolve });
         process.send?.({ type: "journal", nonce, requestId: journalRequestId, text });
       });
       if (!accepted) throw new Error("The control plane rejected the journal entry");

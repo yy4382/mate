@@ -22,7 +22,7 @@ function json(status: number, body: unknown): Response {
 
 let agents: Array<Record<string, unknown>>;
 let posts: Array<Record<string, unknown>>;
-let providers: Array<{ id: string; name: string }>;
+let providers: Array<{ id: string; name: string; models: Array<{ id: string; name: string }> }>;
 let credentials: Array<{ provider: string; configured: true; updatedAt: number }>;
 let credentialWrites: Array<{ provider: string; apiKey: string }>;
 let nodeOnline: boolean;
@@ -33,8 +33,19 @@ beforeEach(() => {
   agents = [];
   posts = [];
   providers = [
-    { id: "openai", name: "OpenAI" },
-    { id: "anthropic", name: "Anthropic" },
+    {
+      id: "openai",
+      name: "OpenAI",
+      models: [
+        { id: "gpt-4.1", name: "GPT-4.1" },
+        { id: "gpt-4o-mini", name: "GPT-4o mini" },
+      ],
+    },
+    {
+      id: "anthropic",
+      name: "Anthropic",
+      models: [{ id: "claude-sonnet-4", name: "Claude Sonnet 4" }],
+    },
   ];
   credentials = [];
   credentialWrites = [];
@@ -139,10 +150,20 @@ it("creates a stable request and retries the same Linux identity without putting
     ),
   );
 
+  const providerSelect = screen.getByRole("combobox", { name: "模型提供方" });
+  await user.selectOptions(providerSelect, "anthropic");
+  expect(
+    Array.from((screen.getByRole("combobox", { name: "模型" }) as HTMLSelectElement).options).map(
+      (option) => option.value,
+    ),
+  ).toEqual(["claude-sonnet-4"]);
+  await user.selectOptions(providerSelect, "openai");
+  expect(screen.queryByRole("textbox", { name: "模型 ID" })).toBeNull();
+
   await user.type(screen.getByRole("textbox", { name: "名称" }), "Research partner");
   await user.type(screen.getByRole("textbox", { name: "角色" }), "Researches questions");
   await user.type(screen.getByRole("textbox", { name: "介绍" }), "A private colleague.");
-  await user.type(screen.getByRole("textbox", { name: "模型 ID" }), "gpt-4.1");
+  await user.selectOptions(screen.getByRole("combobox", { name: "模型" }), "gpt-4.1");
   await user.selectOptions(screen.getByRole("combobox", { name: "初始频道（可选）" }), channelId);
   expect(screen.getByLabelText("API key").getAttribute("type")).toBe("password");
   await user.click(screen.getByRole("button", { name: "创建 Agent" }));
@@ -213,7 +234,7 @@ it("keeps a no-record node conflict visible through refreshes until the owner st
 
   await user.type(screen.getByRole("textbox", { name: "名称" }), "Offline colleague");
   await user.type(screen.getByRole("textbox", { name: "角色" }), "Waits for the node");
-  await user.type(screen.getByRole("textbox", { name: "模型 ID" }), "gpt-4.1");
+  await user.selectOptions(screen.getByRole("combobox", { name: "模型" }), "gpt-4.1");
   postConflict = true;
   await user.click(screen.getByRole("button", { name: "创建 Agent" }));
 

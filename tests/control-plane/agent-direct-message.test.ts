@@ -65,6 +65,27 @@ async function setup() {
   return { app, cookie, nodeId, socket };
 }
 
+async function waitForRun(
+  socket: FakeNodeSocket,
+  fromIndex: number,
+): Promise<{ runId: string; agentId: string; sessionId: string; channelId: string }> {
+  const deadline = Date.now() + 4000;
+  while (Date.now() < deadline) {
+    for (const text of socket.sent.slice(fromIndex)) {
+      const message = JSON.parse(text) as Record<string, unknown>;
+      if (message.type === "control.agent.run")
+        return message as {
+          runId: string;
+          agentId: string;
+          sessionId: string;
+          channelId: string;
+        };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("The queued Agent input did not start a run");
+}
+
 it("creates one private owner DM and keeps its input queued while the Agent awaits credentials", async () => {
   const { app, cookie, nodeId } = await setup();
   const agentId = randomUUID();
@@ -112,4 +133,138 @@ it("creates one private owner DM and keeps its input queued while the Agent awai
     { role: "user", text: "请给我一个简短研究计划。" },
   ]);
   expect(app.agents.get(agentId)?.status).toBe("waiting_credentials");
+});
+
+it("limits each run to its committed input batch and consumes silent batches", async () => {
+  const { app, cookie, nodeId, socket } = await setup();
+  const agentId = randomUUID();
+  app.agents.prepare({
+    id: agentId,
+    nodeId,
+    name: "Batch partner",
+    role: "Processes queued messages",
+    description: "Synthetic run-boundary fixture.",
+    model: { provider: "openai", id: "gpt-4.1" },
+  });
+  app.agents.complete(
+    agentId,
+    {
+      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      uid: 23001,
+      gid: 23001,
+      home: `/var/lib/mate/agents/${agentId}`,
+    },
+    app.chat,
+  );
+  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  const room = app.chat.createChannel({
+    name: "Batch room",
+    description: "Synthetic shared-channel fixture.",
+    visibility: "private",
+  });
+  expect(app.chat.inviteAgentToChannel(room.id, agentId)).toBe(true);
+  app.chat.createMessage(direct.id, "批次中的第一条私信输入。");
+  app.chat.createMessage(room.id, "批次中的第二条频道输入。");
+  const firstRunStart = socket.sent.length;
+  const writes = await app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-batch-key" }),
+  });
+  expect(writes.status).toBe(204);
+
+  const firstRun = await waitForRun(socket, firstRunStart);
+  const requestContext = async (runId: string) => {
+    await app.nodes.receive(
+      socket,
+      JSON.stringify({
+        type: "node.agent.run.context",
+        requestId: randomUUID(),
+        runId,
+        agentId,
+        after: 0,
+        limit: 100,
+      }),
+    );
+    return JSON.parse(socket.sent.at(-1)!) as {
+      type: string;
+      messages: Array<{ sequence: number; role: string; text: string }>;
+      nextAfter: number | null;
+    };
+  };
+  expect((await requestContext(firstRun.runId)).messages.map((message) => message.text)).toEqual([
+    "批次中的第一条私信输入。",
+    "批次中的第二条频道输入。",
+  ]);
+
+  app.chat.createMessage(room.id, "运行开始后才到达的下一条频道输入。");
+  expect((await requestContext(firstRun.runId)).messages.map((message) => message.text)).toEqual([
+    "批次中的第一条私信输入。",
+    "批次中的第二条频道输入。",
+  ]);
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.agent.run.journal",
+      requestId: randomUUID(),
+      runId: firstRun.runId,
+      agentId,
+      text: "第一批次的可见回复。",
+    }),
+  );
+  expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
+    type: "control.agent.run.journal_ack",
+    accepted: true,
+  });
+  expect(
+    app.chat.listAgentSessionJournal(agentId, 0, 100).messages.map((message) => message.text),
+  ).toContain("第一批次的可见回复。");
+  expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toMatchObject([
+    { message: { text: "运行开始后才到达的下一条频道输入。" } },
+  ]);
+  expect(app.agents.get(agentId)?.sessionId).toBe(firstRun.sessionId);
+
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.agent.run.result",
+      requestId: firstRun.runId,
+      runId: firstRun.runId,
+      agentId,
+      ok: true,
+    }),
+  );
+  const secondRunStart = socket.sent.length,
+    secondRun = await waitForRun(socket, secondRunStart);
+  expect(secondRun.sessionId).toBe(firstRun.sessionId);
+  await requestContext(secondRun.runId);
+  const secondContext = JSON.parse(socket.sent.at(-1)!) as {
+    messages: Array<{ sequence: number; role: string; text: string }>;
+  };
+  expect(secondContext.messages.map((message) => message.text)).toEqual([
+    "批次中的第一条私信输入。",
+    "批次中的第二条频道输入。",
+    "运行开始后才到达的下一条频道输入。",
+    "第一批次的可见回复。",
+  ]);
+  // A successful model turn may choose silence; the batch is still committed as processed.
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.agent.run.result",
+      requestId: secondRun.runId,
+      runId: secondRun.runId,
+      agentId,
+      ok: true,
+    }),
+  );
+  expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toHaveLength(0);
+  expect(app.chat.listMessages(direct.id, undefined, 20)?.messages).toMatchObject([
+    { author: { kind: "human" }, text: "批次中的第一条私信输入。" },
+    { author: { kind: "agent", id: agentId }, text: "第一批次的可见回复。" },
+  ]);
+  expect(app.chat.listMessages(room.id, undefined, 20)?.messages).toMatchObject([
+    { author: { kind: "human" }, text: "批次中的第二条频道输入。" },
+    { author: { kind: "human" }, text: "运行开始后才到达的下一条频道输入。" },
+  ]);
 });

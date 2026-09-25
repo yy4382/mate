@@ -215,9 +215,14 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
     const input = modelCredentialInputSchema.safeParse(body);
     if (!input.success) return context.json({ error: "模型凭据格式无效。" }, 400);
     try {
-      const changed = modelCredentials.put(provider, input.data.apiKey);
+      const changed = ownerAuth.db
+        .transaction(() => {
+          const updated = modelCredentials.put(provider, input.data.apiKey);
+          agents.setProviderReady(provider, true);
+          return updated;
+        })
+        .immediate();
       if (changed) app.runs?.credentialsChanged(provider);
-      agents.setProviderReady(provider, true);
       app.runs?.wake();
     } catch {
       return context.json({ error: "无法保存模型凭据，请检查控制面存储后重试。" }, 503);
@@ -230,9 +235,14 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
     if (!isSupportedModelProvider(provider))
       return context.json({ error: "模型服务不受支持。" }, 400);
     try {
-      const removed = modelCredentials.delete(provider);
+      const removed = ownerAuth.db
+        .transaction(() => {
+          const deleted = modelCredentials.delete(provider);
+          agents.setProviderReady(provider, false);
+          return deleted;
+        })
+        .immediate();
       if (removed) app.runs?.credentialsChanged(provider);
-      agents.setProviderReady(provider, false);
       app.runs?.wake();
     } catch {
       return context.json({ error: "无法删除模型凭据，请检查控制面存储后重试。" }, 503);

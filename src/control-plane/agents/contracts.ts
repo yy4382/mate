@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { isSupportedModelProvider } from "../model-providers.js";
+import { isSupportedModel, isSupportedModelProvider } from "../model-providers.js";
 
 export const newAgentRequestSchema = z
   .object({
@@ -20,7 +20,8 @@ export const newAgentRequestSchema = z
           .refine(isSupportedModelProvider),
         id: z.string().trim().min(1).max(200),
       })
-      .strict(),
+      .strict()
+      .refine((model) => isSupportedModel(model.provider, model.id)),
     initialChannelId: z.string().uuid().optional(),
   })
   .strict();

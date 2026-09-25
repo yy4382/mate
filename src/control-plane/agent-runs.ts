@@ -38,10 +38,7 @@ export class AgentRunCoordinator {
     this.now = now;
     this.recoverInterruptedRuns();
     nodes.setAgentRunHandlers({
-      context: (runId, agentId, after, limit) =>
-        this.isRunning(runId, agentId)
-          ? chat.listAgentSessionJournal(agentId, after, limit)
-          : undefined,
+      context: (runId, agentId, after, limit) => this.readRunContext(runId, agentId, after, limit),
       journal: (runId, nodeId, agentId, requestId, text, replayOnly) =>
         chat.commitAgentReply(runId, nodeId, agentId, requestId, text, replayOnly),
       result: (runId, agentId, ok, code) => this.finishRun(runId, agentId, ok, code),
@@ -79,11 +76,13 @@ export class AgentRunCoordinator {
     if (this.draining || this.closed) return;
     this.draining = true;
     try {
-      for (const candidate of this.pendingCandidates()) {
+      const onlineNodeIds = this.nodes
+        .list()
+        .filter((node) => node.online)
+        .map((node) => node.id);
+      for (const candidate of this.pendingCandidates(onlineNodeIds)) {
         if (this.closed) return;
         if (this.activeAgents.has(candidate.agent_id)) continue;
-        if (!this.nodes.list().some((node) => node.id === candidate.node_id && node.online))
-          continue;
         const apiKey = this.credentials.readForRun(candidate.provider);
         if (!apiKey) continue;
         const runId = this.beginRun(candidate);
@@ -120,16 +119,20 @@ export class AgentRunCoordinator {
     }
   }
 
-  private pendingCandidates(): RunCandidate[] {
+  private pendingCandidates(onlineNodeIds: string[]): RunCandidate[] {
+    if (onlineNodeIds.length === 0) return [];
+    const onlineNodePlaceholders = onlineNodeIds.map(() => "?").join(",");
     return this.db
       .prepare(
         `SELECT a.id AS agent_id,a.node_id,s.id AS session_id,a.name,a.role,a.description,
-                a.provider,a.model_id,direct.channel_id,d.id AS delivery_id
+                a.provider,a.model_id,d.channel_id,d.id AS delivery_id
          FROM owner_message_deliveries d
-         JOIN owner_agent_direct_channels direct ON direct.channel_id=d.channel_id
-         JOIN owner_agents a ON a.id=direct.agent_id AND a.id=d.recipient_id
+         JOIN owner_agents a ON a.id=d.recipient_id
          JOIN owner_agent_sessions s ON s.agent_id=a.id
+         JOIN owner_agent_session_journal j
+           ON j.agent_id=a.id AND j.message_id=d.message_id AND j.role='user'
          WHERE d.recipient_kind='agent' AND d.state='pending'
+           AND a.node_id IN (${onlineNodePlaceholders})
            AND a.status='waiting_credentials' AND a.model_ready=1
            AND EXISTS (SELECT 1 FROM model_credentials c WHERE c.provider=a.provider)
            AND NOT EXISTS (SELECT 1 FROM owner_agent_runs r WHERE r.agent_id=a.id AND r.state='running')
@@ -137,7 +140,11 @@ export class AgentRunCoordinator {
              SELECT 1 FROM owner_message_deliveries earlier
              WHERE earlier.recipient_kind='agent' AND earlier.recipient_id=a.id
                AND earlier.state='pending' AND earlier.seq<d.seq
-               AND EXISTS (SELECT 1 FROM owner_agent_direct_channels prior WHERE prior.channel_id=earlier.channel_id AND prior.agent_id=a.id)
+               AND EXISTS (
+                 SELECT 1 FROM owner_agent_session_journal prior
+                 WHERE prior.agent_id=a.id AND prior.message_id=earlier.message_id
+                   AND prior.role='user'
+               )
            )
            AND NOT EXISTS (
              SELECT 1 FROM owner_agent_runs retry
@@ -145,7 +152,7 @@ export class AgentRunCoordinator {
            )
          ORDER BY d.seq LIMIT 100`,
       )
-      .all(this.now()) as RunCandidate[];
+      .all(...onlineNodeIds, this.now()) as RunCandidate[];
   }
 
   private beginRun(candidate: RunCandidate): string | undefined {
@@ -157,17 +164,33 @@ export class AgentRunCoordinator {
             .prepare(
               `SELECT 1 FROM owner_agents a
                JOIN owner_message_deliveries d ON d.recipient_id=a.id AND d.recipient_kind='agent'
-               JOIN owner_agent_direct_channels direct ON direct.agent_id=a.id AND direct.channel_id=d.channel_id
+               JOIN owner_agent_session_journal j
+                 ON j.agent_id=a.id AND j.message_id=d.message_id AND j.role='user'
                WHERE a.id=? AND a.status='waiting_credentials' AND a.model_ready=1
                  AND d.id=? AND d.state='pending'`,
             )
             .get(candidate.agent_id, candidate.delivery_id);
           if (!current) return undefined;
+          const inputEnd = this.db
+            .prepare(
+              `SELECT COALESCE(MAX(seq),0) AS input_end_seq
+               FROM owner_agent_session_journal WHERE agent_id=?`,
+            )
+            .get(candidate.agent_id) as { input_end_seq: number };
           this.db
             .prepare(
-              "INSERT INTO owner_agent_runs(id,agent_id,node_id,delivery_id,state,started_at) VALUES(?,?,?,?,'running',?)",
+              `INSERT INTO owner_agent_runs(
+                 id,agent_id,node_id,delivery_id,state,started_at,input_end_seq
+               ) VALUES(?,?,?,?,'running',?,?)`,
             )
-            .run(id, candidate.agent_id, candidate.node_id, candidate.delivery_id, this.now());
+            .run(
+              id,
+              candidate.agent_id,
+              candidate.node_id,
+              candidate.delivery_id,
+              this.now(),
+              inputEnd.input_end_seq,
+            );
           return id;
         })
         .immediate();
@@ -177,12 +200,20 @@ export class AgentRunCoordinator {
     }
   }
 
-  private isRunning(runId: string, agentId: string): boolean {
-    return Boolean(
-      this.db
-        .prepare("SELECT 1 FROM owner_agent_runs WHERE id=? AND agent_id=? AND state='running'")
-        .get(runId, agentId),
-    );
+  private readRunContext(
+    runId: string,
+    agentId: string,
+    after: number,
+    limit: number,
+  ): AgentSessionJournalPage | undefined {
+    const run = this.db
+      .prepare(
+        "SELECT input_end_seq FROM owner_agent_runs WHERE id=? AND agent_id=? AND state='running'",
+      )
+      .get(runId, agentId) as { input_end_seq: number } | undefined;
+    return run
+      ? this.chat.listAgentSessionJournal(agentId, after, limit, run.input_end_seq)
+      : undefined;
   }
 
   private finishRun(runId: string, agentId: string, ok: boolean, code?: string): void {
@@ -190,17 +221,15 @@ export class AgentRunCoordinator {
       .prepare("SELECT state FROM owner_agent_runs WHERE id=? AND agent_id=?")
       .get(runId, agentId) as { state: string } | undefined;
     if (!existing || existing.state !== "running") return;
+    if (ok) {
+      this.chat.completeAgentRunSilently(runId, agentId);
+      return;
+    }
     this.db
       .prepare(
         "UPDATE owner_agent_runs SET state='failed',error_code=?,retry_at=?,completed_at=? WHERE id=? AND agent_id=? AND state='running'",
       )
-      .run(
-        ok ? "missing_reply" : safeFailureCode(code),
-        this.now() + retryDelayMs,
-        this.now(),
-        runId,
-        agentId,
-      );
+      .run(safeFailureCode(code), this.now() + retryDelayMs, this.now(), runId, agentId);
   }
 
   private recoverInterruptedRuns(): void {

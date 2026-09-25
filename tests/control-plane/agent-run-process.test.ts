@@ -271,7 +271,11 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
     secondRunId = "",
     thirdRunId = "",
     fourthRunId = "",
+    fifthRunId = "",
+    sixthRunId = "",
     agentId = "",
+    sharedChannelId = "",
+    runSessionIds: string[] = [],
     oldJournal: string | undefined,
     secondJournal: string | undefined,
     secondJournalRequestId = "",
@@ -297,6 +301,8 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
     thirdRunStarted = deferred<void>(),
     credentialCancelSent = deferred<void>(),
     fourthRunStarted = deferred<void>();
+  const fifthRunStarted = deferred<void>();
+  const sixthRunStarted = deferred<void>();
   let completedReplaySent = false,
     completedReplayAckCount = 0,
     completedReplayAccepted: boolean | undefined,
@@ -318,6 +324,7 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
           type?: string;
           runId?: string;
           agentId?: string;
+          sessionId?: string;
           requestId?: string;
           [key: string]: unknown;
         };
@@ -375,6 +382,7 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
         let message: {
           type?: string;
           runId?: string;
+          sessionId?: string;
           requestId?: string;
           accepted?: boolean;
           reason?: string;
@@ -398,6 +406,7 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
           }
         }
         if (message.type === "control.agent.run") {
+          if (message.sessionId) runSessionIds.push(message.sessionId);
           if (!firstRunId) firstRunId = String(message.runId);
           else if (!secondRunId) {
             secondRunId = String(message.runId);
@@ -412,6 +421,12 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
           } else if (!fourthRunId) {
             fourthRunId = String(message.runId);
             fourthRunStarted.resolve();
+          } else if (!fifthRunId) {
+            fifthRunId = String(message.runId);
+            fifthRunStarted.resolve();
+          } else if (!sixthRunId) {
+            sixthRunId = String(message.runId);
+            sixthRunStarted.resolve();
           }
         }
         if (
@@ -548,6 +563,17 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
       .waitFor(/MATE_CONTROL_PLANE_LISTENING (\d+)/)
       .then((match) => `http://127.0.0.1:${match[1]}`);
     cookie = await login(currentOrigin);
+    const sharedChannelResponse = await fetch(new URL("/api/owner/channels", currentOrigin), {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Research room",
+        description: "Shared Agent context check",
+        visibility: "private",
+      }),
+    });
+    expect(sharedChannelResponse.status).toBe(201);
+    sharedChannelId = ((await sharedChannelResponse.json()) as { id: string }).id;
     const pairingResponse = await fetch(new URL("/api/owner/nodes/pairing-tokens", currentOrigin), {
       method: "POST",
       headers: { cookie },
@@ -603,6 +629,7 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
         role: "回复私信",
         description: "Synthetic process test Agent",
         model: { provider: "openai", id: "gpt-4o-mini" },
+        initialChannelId: sharedChannelId,
       }),
     });
     expect(createAgent.status).toBe(201);
@@ -791,6 +818,47 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
           "synthetic-key-version-c",
         ]),
     ).toBe(false);
+
+    stage = "channel input uses the existing Agent session and receives its reply there";
+    const sharedInput = await fetch(
+      new URL(`/api/owner/channels/${sharedChannelId}/messages`, currentOrigin),
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ text: "频道输入必须进入同一个 Agent 会话。" }),
+      },
+    );
+    expect(sharedInput.status).toBe(201);
+    await within(fifthRunStarted.promise, "channel-triggered model run");
+    const sharedReplies = await waitForAssistant(currentOrigin, cookie, sharedChannelId);
+    expect(sharedReplies.filter((message) => message.author.kind === "agent")).toHaveLength(1);
+    expect(sharedReplies.at(-1)).toMatchObject({
+      author: { kind: "agent", id: agentId },
+      text: "这是取消旧 run 后的新凭据回复。",
+    });
+    expect((await getMessages(currentOrigin, cookie, channelId)).messages).toHaveLength(4);
+    expect(new Set(runSessionIds).size).toBe(1);
+
+    stage = "a successful silent model turn handles its input without posting a reply";
+    expect(await putCredential(currentOrigin, cookie, "synthetic-key-silent")).toBe(204);
+    const silentInput = await fetch(
+      new URL(`/api/owner/channels/${channelId}/messages`, currentOrigin),
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ text: "这条输入允许模型选择保持沉默。" }),
+      },
+    );
+    expect(silentInput.status).toBe(201);
+    await within(sixthRunStarted.promise, "silent worker run start");
+    await waitForRunState(directory, sixthRunId, "completed");
+    expect((await getMessages(currentOrigin, cookie, channelId)).messages).toHaveLength(5);
+    expect(databaseState(directory)).toMatchObject({ pending: 0, handled: 4 });
+    expect(node?.text.includes("synthetic-key-silent")).toBe(false);
+    expect(
+      filesContain(nodeData, ["synthetic-key-silent"]) ||
+        filesContain(agentHomeRoot, ["synthetic-key-silent"]),
+    ).toBe(false);
   } catch (error) {
     const detail = error instanceof Error ? error.message : "unknown test failure";
     throw new Error(
@@ -833,6 +901,30 @@ function databaseState(directory: string): {
   } finally {
     db.close();
   }
+}
+
+function databaseRunState(directory: string, runId: string): string | undefined {
+  const db = new Database(joinPath(directory, "control-plane-data", "control-plane.sqlite"), {
+    readonly: true,
+    fileMustExist: true,
+  });
+  try {
+    return (
+      db.prepare("SELECT state FROM owner_agent_runs WHERE id=?").get(runId) as
+        { state: string } | undefined
+    )?.state;
+  } finally {
+    db.close();
+  }
+}
+
+async function waitForRunState(directory: string, runId: string, state: string): Promise<void> {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    if (databaseRunState(directory, runId) === state) return;
+    await delay(25);
+  }
+  throw new Error("The model run did not reach the expected durable state");
 }
 
 async function waitForDatabaseState(

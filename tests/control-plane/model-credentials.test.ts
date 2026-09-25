@@ -1,4 +1,6 @@
 import { chmodSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import Database from "better-sqlite3";
+import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -94,4 +96,88 @@ it("stores one API key per supported provider without returning it and keeps onl
     credentials: [{ provider: "openai", configured: true }],
   });
   expect(restartedBody.includes(syntheticKey)).toBe(false);
+});
+
+it("rolls back a credential write when provider readiness cannot commit", async () => {
+  const fixture = setup();
+  const nodeId = randomUUID(),
+    agentId = randomUUID(),
+    databasePath = join(fixture.dataDir, "control-plane.sqlite");
+  const db = new Database(databasePath);
+  db.prepare("INSERT INTO nodes(id,public_key,paired_at) VALUES(?,?,?)").run(
+    nodeId,
+    "synthetic-public-key",
+    Date.now(),
+  );
+  db.close();
+  fixture.app.agents.prepare({
+    id: agentId,
+    nodeId,
+    name: "Waiting partner",
+    role: "Waits for credentials",
+    description: "Synthetic transaction recovery fixture.",
+    model: { provider: "openai", id: "gpt-4.1" },
+  });
+  fixture.app.agents.complete(
+    agentId,
+    {
+      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      uid: 23001,
+      gid: 23001,
+      home: `/var/lib/mate/agents/${agentId}`,
+    },
+    fixture.app.chat,
+  );
+  const faultDb = new Database(databasePath);
+  faultDb.exec(`
+    CREATE TRIGGER reject_model_ready_update
+    BEFORE UPDATE OF model_ready ON owner_agents
+    BEGIN SELECT RAISE(ABORT, 'synthetic readiness failure'); END;
+  `);
+  faultDb.close();
+
+  const cookie = await login(fixture.app);
+  const failedWrite = await fixture.app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-transaction-key" }),
+  });
+  expect(failedWrite.status).toBe(503);
+  const afterFailure = await fixture.app.request("/api/owner/model-credentials", {
+    headers: { cookie },
+  });
+  expect(await afterFailure.json()).toEqual({ credentials: [] });
+
+  const inspectDb = new Database(databasePath, { readonly: true });
+  expect(inspectDb.prepare("SELECT model_ready FROM owner_agents WHERE id=?").get(agentId)).toEqual(
+    { model_ready: 0 },
+  );
+  inspectDb.close();
+
+  fixture.app.close();
+  const repairDb = new Database(databasePath);
+  repairDb.exec("DROP TRIGGER reject_model_ready_update");
+  repairDb.close();
+  const restarted = createControlPlaneApp({
+    dataDir: fixture.dataDir,
+    passwordFile: fixture.passwordFile,
+  });
+  fixtures.push({ app: restarted, directory: fixture.directory });
+  const restartCookie = await login(restarted);
+  const afterRestart = await restarted.request("/api/owner/model-credentials", {
+    headers: { cookie: restartCookie },
+  });
+  expect(await afterRestart.json()).toEqual({ credentials: [] });
+  const retried = await restarted.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie: restartCookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-transaction-key" }),
+  });
+  expect(retried.status).toBe(204);
+  expect(restarted.agents.get(agentId)?.status).toBe("ready");
+  const finalDb = new Database(databasePath, { readonly: true });
+  expect(finalDb.prepare("SELECT model_ready FROM owner_agents WHERE id=?").get(agentId)).toEqual({
+    model_ready: 1,
+  });
+  finalDb.close();
 });

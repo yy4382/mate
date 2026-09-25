@@ -55,4 +55,20 @@ CREATE UNIQUE INDEX owner_agent_session_journal_request_id
   ON owner_agent_session_journal(request_id) WHERE request_id IS NOT NULL;
 `;
 
-export const agentRunSchema = `${agentRunSchemaV7}\n${agentJournalReplaySchema}`;
+/** Snapshot boundary for each run, with a backfill for previously delivered channel inputs. */
+export const agentRunBatchSchemaV9 = `
+ALTER TABLE owner_agent_runs ADD COLUMN input_end_seq INTEGER NOT NULL DEFAULT 0;
+INSERT INTO owner_agent_session_journal(session_id,agent_id,channel_id,message_id,role,text,created_at)
+SELECT s.id,d.recipient_id,d.channel_id,m.id,'user',m.text,m.created_at
+FROM owner_message_deliveries d
+JOIN owner_messages m ON m.id=d.message_id
+JOIN owner_agent_sessions s ON s.agent_id=d.recipient_id
+WHERE d.recipient_kind='agent' AND m.author_kind='human'
+  AND NOT EXISTS (
+    SELECT 1 FROM owner_agent_session_journal j
+    WHERE j.session_id=s.id AND j.message_id=m.id AND j.role='user'
+  )
+ORDER BY d.seq;
+`;
+
+export const agentRunSchema = `${agentRunSchemaV7}\n${agentJournalReplaySchema}\n${agentRunBatchSchemaV9}`;
