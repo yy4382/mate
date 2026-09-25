@@ -323,6 +323,37 @@ it("bounds the loaded window while preserving older-page and return-to-latest na
   expect(document.querySelectorAll(".message-row")).toHaveLength(50);
 });
 
+it("keeps a return-to-latest path after sending from an older message window", async () => {
+  history.set(
+    publicChannel.id,
+    Array.from({ length: 250 }, (_, index) =>
+      message(publicChannel.id, `history-${index + 1}`, `历史消息 ${index + 1}`, String(index + 1)),
+    ),
+  );
+  const user = await openChat();
+
+  for (const firstOrder of [151, 101, 51, 1]) {
+    await user.click(await screen.findByRole("button", { name: "加载更早消息" }));
+    expect(await screen.findByText(`历史消息 ${firstOrder}`)).not.toBeNull();
+  }
+  expect(document.querySelectorAll(".message-row")).toHaveLength(200);
+  expect(screen.getByText("历史消息 1")).not.toBeNull();
+  expect(screen.getByText("历史消息 200")).not.toBeNull();
+  expect(screen.queryByText("历史消息 201")).toBeNull();
+
+  await user.type(screen.getByRole("textbox", { name: "发送到 公开频道" }), "新消息251");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  expect(await screen.findByText("新消息251")).not.toBeNull();
+  expect(posts).toEqual([{ channelId: publicChannel.id, text: "新消息251" }]);
+  expect(document.querySelectorAll(".message-row").length).toBeLessThanOrEqual(200);
+  await user.click(screen.getByRole("button", { name: "返回最新消息" }));
+  expect(await screen.findByText("历史消息 202")).not.toBeNull();
+  expect(screen.getByText("新消息251")).not.toBeNull();
+  expect(screen.queryByText("历史消息 1")).toBeNull();
+  expect(document.querySelectorAll(".message-row")).toHaveLength(50);
+});
+
 it("clears private chat and requests login when session revalidation gets 401", async () => {
   const user = await openChat();
   await user.click(screen.getByRole("button", { name: /私有频道/ }));

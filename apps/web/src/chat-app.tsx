@@ -331,7 +331,7 @@ export function ChatPage() {
         setMessageWindows((current) => {
           const window = current[channelId] ?? emptyMessageWindow;
           return {
-            [channelId]: appendToLatestWindow({ ...window, hasNewer: false }, [message]),
+            [channelId]: appendToLatestWindow(window, [message]),
           };
         });
       setDrafts((current) =>
