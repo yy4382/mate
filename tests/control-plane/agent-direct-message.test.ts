@@ -592,3 +592,165 @@ it("keeps an archived run input pending and retries it after the owner unarchive
   });
   expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toHaveLength(0);
 });
+
+it("does not let an archived earlier source block or join a later source run", async () => {
+  const { app, cookie, nodeId, socket } = await setup();
+  const agentId = randomUUID();
+  app.agents.prepare({
+    id: agentId,
+    nodeId,
+    name: "Fairly scheduled partner",
+    role: "Processes each source when it is available",
+    description: "Synthetic archived-source scheduling fixture.",
+    model: { provider: "openai", id: "gpt-4.1" },
+  });
+  app.agents.complete(
+    agentId,
+    {
+      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      uid: 23001,
+      gid: 23001,
+      home: `/var/lib/mate/agents/${agentId}`,
+    },
+    app.chat,
+  );
+  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  const earlierSource = app.chat.createChannel({
+    name: "Earlier private source",
+    description: "Synthetic archived source.",
+    visibility: "private",
+  });
+  expect(app.chat.inviteAgentToChannel(earlierSource.id, agentId)).toBe(true);
+  const post = async (channelId: string, text: string) => {
+    const response = await app.request(`/api/owner/channels/${channelId}/messages`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    expect(response.status).toBe(201);
+  };
+  await post(earlierSource.id, "较早来源 A 的待处理私信。");
+  expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toHaveLength(1);
+  const archive = await app.request(`/api/owner/channels/${earlierSource.id}`, {
+    method: "PATCH",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ archived: true }),
+  });
+  expect(archive.status).toBe(200);
+  await post(direct.id, "后续来源 B 的正常私信。");
+
+  const runStart = socket.sent.length;
+  const credential = await app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-archived-source-key" }),
+  });
+  expect(credential.status).toBe(204);
+  const laterRun = await waitForRun(socket, runStart);
+  expect(laterRun.channelId).toBe(direct.id);
+
+  const readContext = async (runId: string) => {
+    await app.nodes.receive(
+      socket,
+      JSON.stringify({
+        type: "node.agent.run.context",
+        requestId: randomUUID(),
+        runId,
+        agentId,
+        after: 0,
+        limit: 100,
+      }),
+    );
+    return JSON.parse(socket.sent.at(-1)!) as {
+      messages: Array<{
+        role: string;
+        text: string;
+        sourceChannelId: string;
+        currentRunInput: boolean;
+      }>;
+    };
+  };
+  const laterContext = await readContext(laterRun.runId);
+  expect(laterContext.messages).toMatchObject([
+    {
+      role: "user",
+      text: "较早来源 A 的待处理私信。",
+      sourceChannelId: earlierSource.id,
+      currentRunInput: false,
+    },
+    {
+      role: "user",
+      text: "后续来源 B 的正常私信。",
+      sourceChannelId: direct.id,
+      currentRunInput: true,
+    },
+  ]);
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.agent.run.journal",
+      requestId: randomUUID(),
+      runId: laterRun.runId,
+      agentId,
+      text: "只在来源 B 回复。",
+    }),
+  );
+  expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
+    type: "control.agent.run.journal_ack",
+    accepted: true,
+  });
+  expect(app.chat.listMessages(direct.id, undefined, 20)?.messages.at(-1)).toMatchObject({
+    author: { kind: "agent", id: agentId },
+    text: "只在来源 B 回复。",
+  });
+  expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toMatchObject([
+    { channelId: earlierSource.id, message: { text: "较早来源 A 的待处理私信。" } },
+  ]);
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.agent.run.result",
+      requestId: laterRun.runId,
+      runId: laterRun.runId,
+      agentId,
+      ok: true,
+    }),
+  );
+
+  const earlierRunStart = socket.sent.length;
+  const unarchive = await app.request(`/api/owner/channels/${earlierSource.id}`, {
+    method: "PATCH",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ archived: false }),
+  });
+  expect(unarchive.status).toBe(200);
+  const earlierRun = await waitForRun(socket, earlierRunStart);
+  expect(earlierRun.channelId).toBe(earlierSource.id);
+  expect((await readContext(earlierRun.runId)).messages).toMatchObject([
+    {
+      role: "user",
+      text: "较早来源 A 的待处理私信。",
+      sourceChannelId: earlierSource.id,
+      currentRunInput: true,
+    },
+  ]);
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.agent.run.journal",
+      requestId: randomUUID(),
+      runId: earlierRun.runId,
+      agentId,
+      text: "来源 A 恢复后得到回复。",
+    }),
+  );
+  expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
+    type: "control.agent.run.journal_ack",
+    accepted: true,
+  });
+  expect(app.chat.listMessages(earlierSource.id, undefined, 20)?.messages.at(-1)).toMatchObject({
+    author: { kind: "agent", id: agentId },
+    text: "来源 A 恢复后得到回复。",
+  });
+  expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toHaveLength(0);
+});

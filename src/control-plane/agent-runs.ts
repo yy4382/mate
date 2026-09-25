@@ -142,6 +142,8 @@ export class AgentRunCoordinator {
            AND NOT EXISTS (SELECT 1 FROM owner_agent_runs r WHERE r.agent_id=a.id AND r.state='running')
            AND NOT EXISTS (
              SELECT 1 FROM owner_message_deliveries earlier
+             JOIN owner_channels earlier_source
+               ON earlier_source.id=earlier.channel_id AND earlier_source.archived=0
              WHERE earlier.recipient_kind='agent' AND earlier.recipient_id=a.id
                AND earlier.state='pending' AND earlier.seq<d.seq
                AND EXISTS (
