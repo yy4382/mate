@@ -1,4 +1,5 @@
 import { createPrivateKey, randomUUID, sign } from "node:crypto";
+import { WebSocket } from "ws";
 import { loadOrCreateNodeIdentity, type NodeIdentity } from "./identity.js";
 import { NodeControlMessageSchema, NodeRequestSchema } from "./protocol.js";
 
@@ -19,9 +20,6 @@ export interface LinuxNodeOptions {
 class NodeAuthenticationError extends Error {}
 
 export async function runLinuxNode(options: LinuxNodeOptions, signal: AbortSignal): Promise<void> {
-  if (typeof WebSocket === "undefined")
-    throw new Error("Linux node requires a Node.js version with built-in WebSocket support");
-
   const socketUrl = toWebSocketUrl(options.controlPlaneUrl);
   const { identity, created } = loadOrCreateNodeIdentity(options.dataDirectory);
   let pairingToken = options.pairingToken;
@@ -95,7 +93,7 @@ function connectOnce(
   signal: AbortSignal,
 ): Promise<boolean> {
   if (signal.aborted) return Promise.resolve(false);
-  const socket = new WebSocket(url);
+  const socket = new WebSocket(url, { perMessageDeflate: false });
 
   return new Promise<boolean>((resolveConnection, rejectConnection) => {
     let settled = false,
@@ -105,12 +103,14 @@ function connectOnce(
       pairRequestId: string | undefined,
       heartbeat: ReturnType<typeof setInterval> | undefined,
       pingTimeout: ReturnType<typeof setTimeout> | undefined,
+      forceTerminateTimeout: ReturnType<typeof setTimeout> | undefined,
       pendingPing: string | undefined,
       timeout: ReturnType<typeof setTimeout> | undefined;
 
     const cleanup = () => {
       if (heartbeat) clearInterval(heartbeat);
       if (pingTimeout) clearTimeout(pingTimeout);
+      if (forceTerminateTimeout) clearTimeout(forceTerminateTimeout);
       if (timeout) clearTimeout(timeout);
       signal.removeEventListener("abort", onAbort);
       socket.removeEventListener("message", onMessage);
@@ -138,13 +138,20 @@ function connectOnce(
       pingTimeout = setTimeout(() => {
         if (pendingPing !== requestId) return;
         pendingPing = undefined;
+        if (socket.readyState === WebSocket.CLOSED) return resolve(true);
         if (socket.readyState === WebSocket.OPEN)
           socket.close(4000, "heartbeat acknowledgement timed out");
+        forceTerminateTimeout = setTimeout(() => {
+          if (settled) return;
+          socket.terminate();
+          resolve(true);
+        }, 25);
       }, heartbeatTimeoutMs);
       try {
         sendRequest(socket, { type: "node.ping", requestId, sentAt: Date.now() });
       } catch {
-        socket.close(4000, "heartbeat send failed");
+        socket.terminate();
+        resolve(true);
       }
     };
     const authenticate = (nonce: string) => {
@@ -182,7 +189,7 @@ function connectOnce(
       if (authenticated) resolve(true);
       else reject(new Error("Node WebSocket closed before identity was verified"));
     };
-    const onMessage = (event: MessageEvent) => {
+    const onMessage = (event: WebSocket.MessageEvent) => {
       void handleMessage(event.data).catch((error: unknown) => {
         reject(error instanceof Error ? error : new Error("Invalid control-plane response"));
       });

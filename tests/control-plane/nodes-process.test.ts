@@ -3,6 +3,11 @@ import Database from "better-sqlite3";
 import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
+import {
+  connect as connectTcp,
+  createServer as createTcpServer,
+  type Socket as TcpSocket,
+} from "node:net";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { join } from "node:path";
@@ -316,6 +321,119 @@ function rawDataText(data: RawData): string {
   return Buffer.from(data).toString("utf8");
 }
 
+interface TcpBlackholeProxy {
+  port: number;
+  connections: number;
+  applicationFramesDropped: number;
+  closeFramesDropped: number;
+  firstClientSocket: TcpSocket | undefined;
+  close(): Promise<void>;
+}
+
+async function startTcpBlackholeProxy(targetPort: number): Promise<TcpBlackholeProxy> {
+  const clientSockets = new Set<TcpSocket>();
+  const upstreamSockets = new Set<TcpSocket>();
+  const stats: TcpBlackholeProxy = {
+    port: 0,
+    connections: 0,
+    applicationFramesDropped: 0,
+    closeFramesDropped: 0,
+    firstClientSocket: undefined,
+    close: async () => {},
+  };
+  const server = createTcpServer((clientSocket) => {
+    stats.connections++;
+    stats.firstClientSocket ??= clientSocket;
+    clientSockets.add(clientSocket);
+    clientSocket.once("close", () => clientSockets.delete(clientSocket));
+    clientSocket.pause();
+    const upstream = connectTcp(targetPort, "127.0.0.1");
+    upstreamSockets.add(upstream);
+    upstream.once("close", () => upstreamSockets.delete(upstream));
+    let blackhole = false;
+    let serverText = Buffer.alloc(0);
+    const clientFrames = { data: Buffer.alloc(0) };
+    clientSocket.on("error", () => {});
+    upstream.on("error", () => {});
+    upstream.on("data", (data: Buffer) => {
+      if (blackhole) return;
+      clientSocket.write(data);
+      serverText = Buffer.concat([serverText, data]);
+      if (serverText.length > 2048) serverText = serverText.subarray(-2048);
+      if (
+        serverText.includes(Buffer.from('"type":"control.paired"')) ||
+        serverText.includes(Buffer.from('"type":"control.authenticated"'))
+      )
+        blackhole = true;
+    });
+    upstream.once("connect", () => {
+      clientSocket.on("data", (data: Buffer) => {
+        if (!blackhole) {
+          upstream.write(data);
+          return;
+        }
+        countClientFrames(clientFrames, data, (opcode) => {
+          if (opcode === 1) stats.applicationFramesDropped++;
+          if (opcode === 8) stats.closeFramesDropped++;
+        });
+      });
+      clientSocket.resume();
+    });
+    clientSocket.on("close", () => {
+      if (!blackhole) upstream.destroy();
+    });
+    upstream.on("close", () => {
+      if (!blackhole) clientSocket.destroy();
+    });
+  });
+  await new Promise<void>((resolveListen, rejectListen) => {
+    server.once("error", rejectListen);
+    server.listen(0, "127.0.0.1", () => {
+      server.removeListener("error", rejectListen);
+      resolveListen();
+    });
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("TCP blackhole proxy did not bind");
+  stats.port = address.port;
+  stats.close = async () => {
+    for (const socket of clientSockets) socket.destroy();
+    for (const socket of upstreamSockets) socket.destroy();
+    await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+  };
+  return stats;
+}
+
+function countClientFrames(
+  state: { data: Buffer },
+  data: Buffer,
+  onOpcode: (opcode: number) => void,
+): void {
+  state.data = Buffer.concat([state.data, data]);
+  while (state.data.length >= 2) {
+    const first = state.data[0]!;
+    const second = state.data[1]!;
+    let payloadLength = second! & 0x7f;
+    let headerLength = 2;
+    if (payloadLength === 126) {
+      if (state.data.length < 4) return;
+      payloadLength = state.data.readUInt16BE(2);
+      headerLength = 4;
+    } else if (payloadLength === 127) {
+      if (state.data.length < 10) return;
+      const length = state.data.readBigUInt64BE(2);
+      if (length > BigInt(Number.MAX_SAFE_INTEGER)) return;
+      payloadLength = Number(length);
+      headerLength = 10;
+    }
+    const masked = (second! & 0x80) !== 0;
+    const frameLength = headerLength + (masked ? 4 : 0) + payloadLength;
+    if (state.data.length < frameLength) return;
+    onOpcode(first! & 0x0f);
+    state.data = state.data.subarray(frameLength);
+  }
+}
+
 it("bounds node WebSocket connections and rejects malformed or oversized anonymous traffic", async () => {
   const directory = mkdtempSync(join(tmpdir(), "mate-node-connection-limits-"));
   chmodSync(directory, 0o700);
@@ -537,6 +655,96 @@ it("expires a blackholed node from owner status and reconnects after its pong de
     for (const client of proxyWebSockets.clients) client.close();
     await new Promise<void>((resolveClose) => proxyWebSockets.close(() => resolveClose()));
     await new Promise<void>((resolveClose) => proxyHttp.close(() => resolveClose()));
+    await stopProcess(server);
+    rmSync(directory, { recursive: true, force: true });
+  }
+}, 15000);
+
+it("reclaims a blackholed WebSocket slot and reconnects the same node identity", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "mate-node-blackhole-recovery-"));
+  chmodSync(directory, 0o700);
+  const passwordFile = join(directory, "owner-password");
+  writeFileSync(passwordFile, `${ownerPassword}\n`, { mode: 0o600 });
+  const moduleUrl = pathToFileURL(resolve("dist/src/control-plane/main.js")).href;
+  const runner = `const { startControlPlane } = await import(${JSON.stringify(moduleUrl)}); startControlPlane(0, undefined, { dataDir: process.env.MATE_CONTROL_PLANE_DATA_DIR, passwordFile: process.env.MATE_OWNER_PASSWORD_FILE, maxNodeConnections: 1, maxUnauthenticatedNodeConnections: 1, nodeHeartbeatTimeoutMs: 200 });`;
+  const serverChild = spawn(process.execPath, ["--input-type=module", "--eval", runner], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      MATE_CONTROL_PLANE_DATA_DIR: join(directory, "control-plane-data"),
+      MATE_OWNER_PASSWORD_FILE: passwordFile,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const server = new ProcessOutput(serverChild);
+  let proxy: TcpBlackholeProxy | undefined;
+  let node: ProcessOutput | undefined;
+
+  try {
+    const listening = await server.waitFor(/MATE_CONTROL_PLANE_LISTENING (\d+)/);
+    const controlPort = Number(listening[1]);
+    const origin = `http://127.0.0.1:${controlPort}`;
+    const login = await fetch(new URL("/api/auth/login", origin), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ password: ownerPassword }),
+    });
+    expect(login.status).toBe(204);
+    const cookie = login.headers.get("set-cookie")?.split(";", 1)[0];
+    expect(cookie).toBeTruthy();
+    const tokenResponse = await fetch(new URL("/api/owner/nodes/pairing-tokens", origin), {
+      method: "POST",
+      headers: { cookie: cookie! },
+    });
+    expect(tokenResponse.status).toBe(201);
+    const { pairingToken } = (await tokenResponse.json()) as { pairingToken: string };
+    proxy = await startTcpBlackholeProxy(controlPort);
+    const nodeModuleUrl = pathToFileURL(resolve("dist/src/nodes/client.js")).href;
+    const nodeRunner = `const { runLinuxNode } = await import(${JSON.stringify(nodeModuleUrl)}); await runLinuxNode({ controlPlaneUrl: process.env.MATE_CONTROL_PLANE_URL, dataDirectory: process.env.MATE_NODE_DATA_DIR, pairingToken: process.env.MATE_NODE_PAIRING_TOKEN, heartbeatIntervalMs: 40, heartbeatTimeoutMs: 600 }, new AbortController().signal);`;
+    node = new ProcessOutput(
+      spawn(process.execPath, ["--input-type=module", "--eval", nodeRunner], {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          MATE_CONTROL_PLANE_URL: `http://127.0.0.1:${proxy.port}`,
+          MATE_NODE_DATA_DIR: join(directory, "node-data"),
+          MATE_NODE_PAIRING_TOKEN: pairingToken,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      }),
+    );
+
+    const paired = await node.waitFor(/MATE_NODE_PAIRED ([0-9a-f-]+)/i);
+    await waitForNode(
+      origin,
+      cookie!,
+      (candidate) => candidate?.id === paired[1] && candidate?.online === true,
+    );
+    const offline = await waitForNode(
+      origin,
+      cookie!,
+      (candidate) => candidate?.id === paired[1] && candidate?.online === false,
+    );
+    expect(offline.lastConnectedAt).toBeTruthy();
+    expect(proxy.firstClientSocket?.destroyed).toBe(false);
+    expect(proxy.applicationFramesDropped).toBeGreaterThan(0);
+
+    const droppedCloseDeadline = Date.now() + 3000;
+    while (proxy.closeFramesDropped === 0 && Date.now() < droppedCloseDeadline) await delay(10);
+    expect(proxy.closeFramesDropped).toBeGreaterThan(0);
+    const reconnected = await node.waitFor(new RegExp(`MATE_NODE_CONNECTED ${paired[1]}`), 5000);
+    expect(reconnected[0]).toContain(paired[1]!);
+    const onlineAgain = await waitForNode(
+      origin,
+      cookie!,
+      (candidate) => candidate?.id === paired[1] && candidate?.online === true,
+    );
+    expect(onlineAgain.id).toBe(paired[1]);
+    expect(proxy.connections).toBeGreaterThanOrEqual(2);
+    expect(proxy.firstClientSocket?.destroyed).toBe(true);
+  } finally {
+    if (node) await stopProcess(node);
+    if (proxy) await proxy.close();
     await stopProcess(server);
     rmSync(directory, { recursive: true, force: true });
   }

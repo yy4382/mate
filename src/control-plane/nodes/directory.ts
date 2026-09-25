@@ -16,6 +16,7 @@ export const DEFAULT_NODE_HEARTBEAT_TIMEOUT_MS = 35_000;
 export interface NodeSocket {
   send(data: string): void;
   close(code?: number, reason?: string): void;
+  terminate(): void;
 }
 
 interface SocketSession {
@@ -48,6 +49,7 @@ export class NodeDirectory {
   private readonly maxUnauthenticatedConnections: number;
   private readonly handshakeTimeoutMs: number;
   private readonly heartbeatTimeoutMs: number;
+  private readonly heartbeatSweepTimer: ReturnType<typeof setInterval>;
   private readonly sessions = new WeakMap<NodeSocket, SocketSession>();
   private readonly connected = new Map<string, NodeSocket>();
   private readonly sockets = new Set<NodeSocket>();
@@ -76,6 +78,9 @@ export class NodeDirectory {
     );
     if (this.maxUnauthenticatedConnections > this.maxConnections)
       throw new Error("Unauthenticated node connection limit cannot exceed the total limit");
+    const sweepIntervalMs = Math.max(10, Math.min(1000, Math.floor(this.heartbeatTimeoutMs / 4)));
+    this.heartbeatSweepTimer = setInterval(() => this.expireInactiveConnections(), sweepIntervalMs);
+    this.heartbeatSweepTimer.unref?.();
   }
 
   createPairingToken(): { pairingToken: string; expiresAt: string } {
@@ -169,14 +174,13 @@ export class NodeDirectory {
   }
 
   closeAll(): void {
-    for (const socket of this.sockets) {
+    clearInterval(this.heartbeatSweepTimer);
+    for (const socket of [...this.sockets]) {
       const session = this.sessions.get(socket);
       if (session?.handshakeTimeout) clearTimeout(session.handshakeTimeout);
-      socket.close(1001, "控制面正在关闭");
+      this.close(socket);
+      socket.terminate();
     }
-    this.sockets.clear();
-    this.unauthenticated.clear();
-    this.connected.clear();
   }
 
   private authenticate(
@@ -274,9 +278,8 @@ export class NodeDirectory {
     this.unauthenticated.delete(socket);
     const previous = this.connected.get(nodeId);
     if (previous && previous !== socket) {
-      const previousSession = this.sessions.get(previous);
-      if (previousSession) delete previousSession.nodeId;
-      previous.close(4001, "节点在另一连接上完成身份验证");
+      this.close(previous);
+      previous.terminate();
     }
     session.nodeId = nodeId;
     session.lastHeartbeatAt = this.now();
@@ -303,6 +306,21 @@ export class NodeDirectory {
 
   private send(socket: NodeSocket, message: NodeControlMessage): void {
     socket.send(JSON.stringify(message));
+  }
+
+  private expireInactiveConnections(): void {
+    const now = this.now();
+    for (const [nodeId, socket] of this.connected) {
+      const session = this.sessions.get(socket);
+      if (
+        !session ||
+        session.nodeId !== nodeId ||
+        now - session.lastHeartbeatAt < this.heartbeatTimeoutMs
+      )
+        continue;
+      this.close(socket);
+      socket.terminate();
+    }
   }
 }
 
