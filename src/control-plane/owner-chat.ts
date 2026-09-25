@@ -2,6 +2,7 @@ import type Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 
 export type ChannelVisibility = "public" | "private";
+export type OwnerPrincipalKind = "human" | "agent";
 
 export interface OwnerChannel {
   id: string;
@@ -27,6 +28,22 @@ export interface OwnerMessage {
 export interface OwnerMessagePage {
   messages: OwnerMessage[];
   nextBefore: string | null;
+}
+
+export interface OwnerMessageDelivery {
+  sequence: number;
+  id: string;
+  messageId: string;
+  channelId: string;
+  recipient: { kind: OwnerPrincipalKind; id: string };
+  state: "pending";
+  createdAt: number;
+  message: OwnerMessage;
+}
+
+export interface OwnerMessageDeliveryPage {
+  deliveries: OwnerMessageDelivery[];
+  nextAfter: number | null;
 }
 
 export interface OwnerChatSnapshot {
@@ -89,6 +106,21 @@ interface EventRow {
   created_at: number;
 }
 
+interface PendingDeliveryRow {
+  delivery_sequence: number;
+  delivery_id: string;
+  message_id: string;
+  channel_id: string;
+  recipient_kind: OwnerPrincipalKind;
+  recipient_id: string;
+  state: "pending";
+  delivery_created_at: number;
+  order_seq: number;
+  revision: number;
+  text: string;
+  created_at: number;
+}
+
 const eventRetention = 1000;
 
 /** Owner-facing channel facts committed in the control-plane database. */
@@ -108,6 +140,11 @@ export class OwnerChat {
             "INSERT INTO owner_channels(id,name,description,visibility,created_at,updated_at) VALUES(?,?,?,?,?,?)",
           )
           .run(id, input.name, input.description, input.visibility, at, at);
+        this.db
+          .prepare(
+            "INSERT INTO owner_channel_memberships(channel_id,principal_kind,principal_id,active,joined_at) VALUES(?,'human','owner',1,?)",
+          )
+          .run(id, at);
         const channel = this.readChannel(id);
         this.record("channel.created", channel.id, channel);
         return channel;
@@ -216,10 +253,69 @@ export class OwnerChat {
           text,
           created_at: at,
         });
+        this.queueDeliveries(message, at);
         this.record("message.created", channelId, message);
         return message;
       })
       .immediate();
+  }
+
+  listPendingDeliveries(
+    recipientKind: OwnerPrincipalKind,
+    recipientId: string,
+    after = 0,
+    limit = 100,
+  ): OwnerMessageDeliveryPage {
+    if (!Number.isSafeInteger(after) || after < 0)
+      throw new Error("Delivery cursor must be a non-negative safe integer");
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500)
+      throw new Error("Delivery page size must be between 1 and 500");
+    const rows = this.db
+      .prepare(
+        `SELECT d.seq AS delivery_sequence,d.id AS delivery_id,d.message_id,d.channel_id,
+                d.recipient_kind,d.recipient_id,d.state,d.created_at AS delivery_created_at,
+                m.order_seq,m.revision,m.text,m.created_at
+         FROM owner_message_deliveries d JOIN owner_messages m ON m.id=d.message_id
+         WHERE d.recipient_kind=? AND d.recipient_id=? AND d.state='pending' AND d.seq>?
+         ORDER BY d.seq LIMIT ?`,
+      )
+      .all(recipientKind, recipientId, after, limit + 1) as PendingDeliveryRow[];
+    const hasMore = rows.length > limit,
+      deliveries = rows.slice(0, limit).map((row) => ({
+        sequence: row.delivery_sequence,
+        id: row.delivery_id,
+        messageId: row.message_id,
+        channelId: row.channel_id,
+        recipient: { kind: row.recipient_kind, id: row.recipient_id },
+        state: row.state,
+        createdAt: row.delivery_created_at,
+        message: toMessage({
+          id: row.message_id,
+          channel_id: row.channel_id,
+          order_seq: row.order_seq,
+          revision: row.revision,
+          text: row.text,
+          created_at: row.created_at,
+        }),
+      }));
+    return {
+      deliveries,
+      nextAfter: hasMore ? (deliveries.at(-1)?.sequence ?? after) : null,
+    };
+  }
+
+  acknowledgeDelivery(
+    deliveryId: string,
+    recipientKind: OwnerPrincipalKind,
+    recipientId: string,
+  ): boolean {
+    return (
+      this.db
+        .prepare(
+          "UPDATE owner_message_deliveries SET state='handled',handled_at=? WHERE id=? AND recipient_kind=? AND recipient_id=? AND state='pending'",
+        )
+        .run(this.now(), deliveryId, recipientKind, recipientId).changes === 1
+    );
   }
 
   listMessages(
@@ -247,6 +343,39 @@ export class OwnerChat {
       .get(id) as ChannelRow | undefined;
     if (!row) throw new Error("Created channel was not persisted");
     return toChannel(row);
+  }
+
+  private queueDeliveries(message: OwnerMessage, at: number): void {
+    if (!this.db.inTransaction)
+      throw new Error("Message deliveries require the message transaction");
+    // This is the recipient snapshot: later membership changes never backfill this message.
+    const members = this.db
+      .prepare(
+        "SELECT principal_kind,principal_id FROM owner_channel_memberships WHERE channel_id=? AND active=1 ORDER BY principal_kind,principal_id",
+      )
+      .all(message.channelId) as Array<{
+      principal_kind: OwnerPrincipalKind;
+      principal_id: string;
+    }>;
+    for (const member of members) {
+      if (
+        member.principal_kind === message.author.kind &&
+        member.principal_id === message.author.id
+      )
+        continue;
+      this.db
+        .prepare(
+          "INSERT OR IGNORE INTO owner_message_deliveries(id,message_id,channel_id,recipient_kind,recipient_id,state,created_at) VALUES(?,?,?,?,?,'pending',?)",
+        )
+        .run(
+          randomUUID(),
+          message.id,
+          message.channelId,
+          member.principal_kind,
+          member.principal_id,
+          at,
+        );
+    }
   }
 
   private record(kind: string, channelId: string, payload: OwnerChannel | OwnerMessage): void {

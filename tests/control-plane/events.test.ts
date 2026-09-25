@@ -14,12 +14,12 @@ afterEach(() => {
   }
 });
 
-function setup() {
+function setup(options: { now?: () => number; sessionTtlMs?: number } = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), "mate-owner-events-"));
   chmodSync(dataDir, 0o700);
   const passwordFile = join(dataDir, "owner-password");
   writeFileSync(passwordFile, `${password}\n`, { mode: 0o600 });
-  const app = createControlPlaneApp({ dataDir, passwordFile });
+  const app = createControlPlaneApp({ dataDir, passwordFile, ...options });
   cases.push({ app, dataDir });
   return { app, dataDir, passwordFile };
 }
@@ -129,4 +129,18 @@ it("tells a client with an expired event cursor to fetch a fresh snapshot", asyn
   expect(notice).toContain("event: snapshot_required");
   expect(notice).toContain('"reason":"cursor_too_old"');
   expect(notice).toContain('"snapshotUrl":"/api/owner/snapshot"');
+});
+
+it("closes a live event stream when the owner session expires", async () => {
+  let now = 10_000;
+  const { app } = setup({ now: () => now, sessionTtlMs: 1000 });
+  const cookie = await ownerCookie(app);
+  const stream = await app.request("/api/owner/events?cursor=0", { headers: { cookie } });
+
+  expect(stream.status).toBe(200);
+  now += 1001;
+  const frame = await readEvent(stream);
+
+  expect(frame).toContain("event: auth_required");
+  expect(frame).not.toContain("channel.created");
 });

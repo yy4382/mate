@@ -127,6 +127,7 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
   app.get("/api/owner/session", (context) => context.json({ authenticated: true }));
   app.get("/api/owner/snapshot", (context) => context.json(ownerChat.snapshot()));
   app.get("/api/owner/events", (context) => {
+    const streamToken = sessionToken(context);
     const suppliedCursor =
       context.req.header("last-event-id") ?? context.req.query("cursor") ?? "0";
     if (!/^(0|[1-9]\d*)$/.test(suppliedCursor)) return context.json({ error: "事件游标无效" }, 400);
@@ -139,6 +140,14 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
     const stream = new ReadableStream<Uint8Array>({
       async pull(controller) {
         if (closed) return;
+        if (!streamToken || !ownerAuth.hasSession(streamToken)) {
+          controller.enqueue(
+            encoder.encode('event: auth_required\ndata: {"loginUrl":"/login"}\n\n'),
+          );
+          closed = true;
+          controller.close();
+          return;
+        }
         const page = ownerChat.eventsAfter(cursor);
         if (page.stale) {
           controller.enqueue(

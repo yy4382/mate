@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { redirectToLogin } from "./navigation.js";
 import "./chat.css";
 
 interface Channel {
@@ -48,7 +49,7 @@ async function ownerJSON<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { Accept: "application/json", ...init?.headers },
   });
   if (response.status === 401) {
-    window.location.replace("/login");
+    redirectToLogin();
     throw new Error("登录状态已失效");
   }
   const result: unknown = await response.json().catch(() => null);
@@ -83,7 +84,7 @@ export function ChatPage() {
   const [messages, setMessages] = useState<Record<string, Message[]>>({});
   const [nextBefore, setNextBefore] = useState<Record<string, string | null>>({});
   const [historyRefresh, setHistoryRefresh] = useState(0);
-  const [draft, setDraft] = useState("");
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -92,6 +93,11 @@ export function ChatPage() {
   const [mobileView, setMobileView] = useState<MobileView>("home");
   const [dialog, setDialog] = useState<DialogState>(null);
   const streamRef = useRef<EventSource | null>(null);
+  const selectedIdRef = useRef<string | null>(null);
+  const draft = selectedId ? (drafts[selectedId] ?? "") : "";
+  selectedIdRef.current = selectedId;
+
+  const closeDialog = useCallback(() => setDialog(null), []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -101,7 +107,7 @@ export function ChatPage() {
     })
       .then((response) => {
         if (response.status === 401) {
-          window.location.replace("/login");
+          redirectToLogin();
           return;
         }
         if (!response.ok) throw new Error("Session request failed");
@@ -115,7 +121,9 @@ export function ChatPage() {
 
   useEffect(() => {
     if (!authenticated) return;
-    let active = true;
+    let active = true,
+      checkingSession = false,
+      expired = false;
 
     async function connectFromSnapshot() {
       try {
@@ -133,7 +141,36 @@ export function ChatPage() {
         const stream = new EventSource(`/api/owner/events?cursor=${snapshot.cursor}`);
         streamRef.current = stream;
         stream.onopen = () => setLive(true);
-        stream.onerror = () => setLive(false);
+        const expireSession = () => {
+          if (!active || expired) return;
+          expired = true;
+          stream.close();
+          if (streamRef.current === stream) streamRef.current = null;
+          setAuthenticated(false);
+          setLive(false);
+          setChannels([]);
+          setSelectedId(null);
+          setMessages({});
+          setNextBefore({});
+          setDrafts({});
+          setError(null);
+          redirectToLogin();
+        };
+        stream.addEventListener("auth_required", expireSession);
+        stream.onerror = () => {
+          if (!active || expired) return;
+          setLive(false);
+          if (checkingSession) return;
+          checkingSession = true;
+          void fetch("/api/owner/session", { headers: { Accept: "application/json" } })
+            .then((response) => {
+              if (response.status === 401) expireSession();
+            })
+            .catch(() => undefined)
+            .finally(() => {
+              checkingSession = false;
+            });
+        };
 
         const updateChannel = (event: Event) => {
           const update = JSON.parse((event as MessageEvent<string>).data) as ChatEvent<Channel>;
@@ -150,8 +187,8 @@ export function ChatPage() {
         stream.addEventListener("channel.updated", updateChannel);
         stream.addEventListener("message.created", (event) => {
           const update = JSON.parse((event as MessageEvent<string>).data) as ChatEvent<Message>;
+          if (selectedIdRef.current !== update.channelId) return;
           setMessages((current) => ({
-            ...current,
             [update.channelId]: mergeMessage(current[update.channelId] ?? [], update.payload),
           }));
         });
@@ -177,6 +214,17 @@ export function ChatPage() {
   }, [authenticated]);
 
   useEffect(() => {
+    setMessages((current) =>
+      selectedId && current[selectedId] ? { [selectedId]: current[selectedId] } : {},
+    );
+    setNextBefore((current) =>
+      selectedId && Object.hasOwn(current, selectedId)
+        ? { [selectedId]: current[selectedId]! }
+        : {},
+    );
+  }, [selectedId]);
+
+  useEffect(() => {
     if (!authenticated || !selectedId) return;
     const channelId = selectedId;
     let active = true;
@@ -190,7 +238,6 @@ export function ChatPage() {
             if (!merged.some((existing) => existing.id === message.id)) merged.push(message);
           }
           return {
-            ...current,
             [channelId]: merged.sort((left, right) =>
               BigInt(left.order) < BigInt(right.order)
                 ? -1
@@ -232,22 +279,23 @@ export function ChatPage() {
   async function sendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selected || selected.archived || !draft.trim()) return;
+    const channelId = selected.id;
     setBusy(true);
     setError(null);
     try {
       const message = await ownerJSON<Message>(
-        `/api/owner/channels/${encodeURIComponent(selected.id)}/messages`,
+        `/api/owner/channels/${encodeURIComponent(channelId)}/messages`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text: draft }),
         },
       );
-      setMessages((current) => ({
-        ...current,
-        [selected.id]: mergeMessage(current[selected.id] ?? [], message),
-      }));
-      setDraft("");
+      if (selectedIdRef.current === channelId)
+        setMessages((current) => ({
+          [channelId]: mergeMessage(current[channelId] ?? [], message),
+        }));
+      setDrafts((current) => ({ ...current, [channelId]: "" }));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "消息发送失败，请重试。");
     } finally {
@@ -265,10 +313,11 @@ export function ChatPage() {
       const page = await ownerJSON<MessagePage>(
         `/api/owner/channels/${encodeURIComponent(channelId)}/messages?before=${cursor}&limit=50`,
       );
+      if (selectedIdRef.current !== channelId) return;
       setMessages((current) => {
         let merged = current[channelId] ?? [];
         for (const message of page.messages) merged = mergeMessage(merged, message);
-        return { ...current, [channelId]: merged };
+        return { [channelId]: merged };
       });
       setNextBefore((current) => ({ ...current, [channelId]: page.nextBefore }));
     } catch (cause) {
@@ -294,7 +343,6 @@ export function ChatPage() {
       setChannels((current) =>
         current.some((entry) => entry.id === channel.id) ? current : [...current, channel],
       );
-      setMessages((current) => ({ ...current, [channel.id]: [] }));
       setSelectedId(channel.id);
       setMobileView("chat");
       setDialog(null);
@@ -401,25 +449,25 @@ export function ChatPage() {
             </div>
           ) : (
             channels.map((channel) => (
-              <button
-                className={`channel-row${selectedId === channel.id ? " is-selected" : ""}${channel.archived ? " is-archived" : ""}`}
-                type="button"
-                role="listitem"
-                key={channel.id}
-                onClick={() => {
-                  setSelectedId(channel.id);
-                  setMobileView("chat");
-                }}
-              >
-                <span className="channel-symbol" aria-hidden="true">
-                  {channel.visibility === "private" ? "◈" : "#"}
-                </span>
-                <span className="channel-labels">
-                  <span className="channel-name">{channel.name}</span>
-                  {channel.archived && <span className="archived-label">已归档</span>}
-                </span>
-                {channel.visibility === "private" && <span className="private-label">私有</span>}
-              </button>
+              <div className="channel-list-item" role="listitem" key={channel.id}>
+                <button
+                  className={`channel-row${selectedId === channel.id ? " is-selected" : ""}${channel.archived ? " is-archived" : ""}`}
+                  type="button"
+                  onClick={() => {
+                    setSelectedId(channel.id);
+                    setMobileView("chat");
+                  }}
+                >
+                  <span className="channel-symbol" aria-hidden="true">
+                    {channel.visibility === "private" ? "◈" : "#"}
+                  </span>
+                  <span className="channel-labels">
+                    <span className="channel-name">{channel.name}</span>
+                    {channel.archived && <span className="archived-label">已归档</span>}
+                  </span>
+                  {channel.visibility === "private" && <span className="private-label">私有</span>}
+                </button>
+              </div>
             ))
           )}
         </div>
@@ -533,7 +581,13 @@ export function ChatPage() {
                   maxLength={20_000}
                   placeholder={`发送消息到 ${selected.name}`}
                   value={draft}
-                  onChange={(event) => setDraft(event.currentTarget.value)}
+                  onChange={(event) => {
+                    const value = event.currentTarget.value;
+                    setDrafts((current) => ({
+                      ...current,
+                      [selected.id]: value,
+                    }));
+                  }}
                 />
                 <div className="composer-footer">
                   <span>顶层消息会显示在频道时间线中</span>
@@ -576,7 +630,7 @@ export function ChatPage() {
           kind={dialog.kind}
           channel={dialog.kind === "settings" ? dialog.channel : undefined}
           busy={busy}
-          onClose={() => setDialog(null)}
+          onClose={closeDialog}
           onCreate={createChannel}
           onUpdate={updateChannel}
         />
@@ -604,12 +658,64 @@ interface ChannelDialogProps {
 }
 
 function ChannelDialog({ kind, channel, busy, onClose, onCreate, onUpdate }: ChannelDialogProps) {
+  const dialogRef = useRef<HTMLElement | null>(null);
   const [name, setName] = useState(channel?.name ?? "");
   const [description, setDescription] = useState(channel?.description ?? "");
   const [visibility, setVisibility] = useState<Channel["visibility"]>(
     channel?.visibility ?? "public",
   );
   const [archived, setArchived] = useState(channel?.archived ?? false);
+
+  useEffect(() => {
+    const previouslyFocused =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null,
+      dialog = dialogRef.current;
+    if (!dialog) return;
+    const modal = dialog;
+    const focusable = () =>
+      Array.from(
+        modal.querySelectorAll<HTMLElement>(
+          'a[href],button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((element) => !element.hasAttribute("hidden"));
+    (
+      modal.querySelector<HTMLElement>("[data-initial-focus]") ??
+      modal.querySelector<HTMLElement>("[autofocus]") ??
+      focusable()[0] ??
+      modal
+    ).focus();
+
+    function trapFocus(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const items = focusable(),
+        first = items[0],
+        last = items.at(-1);
+      if (!first || !last) {
+        event.preventDefault();
+        modal.focus();
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      } else if (!modal.contains(document.activeElement)) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", trapFocus);
+    return () => {
+      document.removeEventListener("keydown", trapFocus);
+      if (previouslyFocused?.isConnected) previouslyFocused.focus();
+    };
+  }, [onClose]);
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -625,9 +731,11 @@ function ChannelDialog({ kind, channel, busy, onClose, onCreate, onUpdate }: Cha
     >
       <section
         className="channel-dialog"
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="channel-dialog-title"
+        tabIndex={-1}
       >
         <div className="dialog-heading">
           <div>
@@ -642,7 +750,7 @@ function ChannelDialog({ kind, channel, busy, onClose, onCreate, onUpdate }: Cha
           <label htmlFor="channel-name">频道名称</label>
           <input
             id="channel-name"
-            autoFocus
+            data-initial-focus
             required
             maxLength={80}
             value={name}

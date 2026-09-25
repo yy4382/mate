@@ -85,6 +85,22 @@ async function readEvent(response: Response): Promise<{ id: number; body: string
   return { id, body };
 }
 
+async function readFrame(response: Response): Promise<string> {
+  const reader = response.body!.getReader();
+  let timeout: ReturnType<typeof setTimeout>;
+  const chunk = await Promise.race([
+    reader.read(),
+    new Promise<never>((_, reject) => {
+      timeout = setTimeout(() => reject(new Error("SSE frame timed out")), 3000);
+    }),
+  ]);
+  clearTimeout(timeout!);
+  expect(chunk.done).toBe(false);
+  const body = new TextDecoder().decode(chunk.value);
+  await reader.cancel();
+  return body;
+}
+
 it("replays owner chat events through the real control-plane process after a disconnect", async () => {
   const fixtureDir = mkdtempSync(join(tmpdir(), "mate-chat-process-"));
   chmodSync(fixtureDir, 0o700);
@@ -144,6 +160,68 @@ it("replays owner chat events through the real control-plane process after a dis
     expect(resumedEvent.id).toBeGreaterThan(firstEvent.id);
     expect(resumedEvent.body).toContain("event: message.created");
     expect(resumedEvent.body).toContain("断线期间仍已提交");
+  } finally {
+    if (server) await stopControlPlane(server);
+    rmSync(fixtureDir, { recursive: true, force: true });
+  }
+});
+
+it("stops a live private event stream when its owner session is revoked", async () => {
+  const fixtureDir = mkdtempSync(join(tmpdir(), "mate-chat-revoked-stream-"));
+  chmodSync(fixtureDir, 0o700);
+  let server: ChildProcess | undefined;
+  try {
+    const controlPlane = await startControlPlane(fixtureDir);
+    server = controlPlane.server;
+    const login = await fetch(`${controlPlane.origin}/api/auth/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ password }),
+    });
+    const cookie = login.headers.get("set-cookie")!.split(";", 1)[0]!;
+    const created = await fetch(`${controlPlane.origin}/api/owner/channels`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ name: "私有频道", description: "", visibility: "private" }),
+    });
+    const channel = await created.json();
+    const snapshotResponse = await fetch(`${controlPlane.origin}/api/owner/snapshot`, {
+      headers: { cookie },
+    });
+    const snapshot = await snapshotResponse.json();
+    const stream = await fetch(
+      `${controlPlane.origin}/api/owner/events?cursor=${snapshot.cursor}`,
+      {
+        headers: { cookie },
+      },
+    );
+
+    const logout = await fetch(`${controlPlane.origin}/api/auth/logout`, {
+      method: "POST",
+      headers: { cookie },
+    });
+    expect(logout.status).toBe(204);
+    const freshLogin = await fetch(`${controlPlane.origin}/api/auth/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ password }),
+    });
+    const freshCookie = freshLogin.headers.get("set-cookie")!.split(";", 1)[0]!;
+    const privatePost = await fetch(
+      `${controlPlane.origin}/api/owner/channels/${channel.id}/messages`,
+      {
+        method: "POST",
+        headers: { cookie: freshCookie, "content-type": "application/json" },
+        body: JSON.stringify({ text: "已退出后不可收到" }),
+      },
+    );
+    expect(stream.status).toBe(200);
+    expect(privatePost.status).toBe(201);
+    const frame = await readFrame(stream);
+
+    expect(frame).toContain("event: auth_required");
+    expect(frame).not.toContain("message.created");
+    expect(frame).not.toContain("已退出后不可收到");
   } finally {
     if (server) await stopControlPlane(server);
     rmSync(fixtureDir, { recursive: true, force: true });
