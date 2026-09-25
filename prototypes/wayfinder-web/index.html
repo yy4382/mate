@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mate 网页信息架构 · 抛弃式原型</title>
+    <style>
+      :root { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #171717; background: #fafafa; }
+      * { box-sizing: border-box; }
+      body { margin: 0; }
+      button, input, textarea { font: inherit; }
+      button { cursor: pointer; }
+      .app { min-height: 100vh; display: flex; background: #fff; }
+      .rail { width: 68px; flex: none; background: #f8f8f8; border-right: 1px solid #e8e8e8; display: flex; flex-direction: column; align-items: center; gap: 9px; padding: 15px 8px; }
+      .brand { width: 40px; height: 40px; display: grid; place-items: center; color: white; background: #111; border-radius: 11px; font-weight: 750; margin-bottom: 20px; }
+      .rail button { width: 44px; min-height: 44px; padding: 5px; border: 0; border-radius: 10px; background: transparent; color: #666; display: flex; flex-direction: column; align-items: center; gap: 1px; }
+      .rail button.active { background: #e8e8e8; color: #111; }
+      .rail button .glyph { font-size: 20px; line-height: 23px; }
+      .rail button small { font-size: 9px; }
+      .rail .spacer { flex: 1; }
+      .rail .badge { position: absolute; margin: -7px 0 0 30px; min-width: 17px; height: 17px; border-radius: 9px; background: #e5484d; color: #fff; font-size: 10px; display: grid; place-items: center; }
+      .secondary { width: 252px; flex: none; border-right: 1px solid #eaeaea; display: flex; flex-direction: column; background: #fcfcfc; }
+      .side-head { min-height: 67px; padding: 22px 18px 12px; font-size: 14px; font-weight: 700; border-bottom: 1px solid #eee; }
+      .side-group { color: #8a8a8a; font-size: 11px; font-weight: 700; letter-spacing: .04em; padding: 20px 18px 7px; }
+      .side-item { width: calc(100% - 16px); margin: 2px 8px; border: 0; background: transparent; border-radius: 7px; padding: 10px; text-align: left; color: #424242; font-size: 13px; display: flex; align-items: center; gap: 9px; }
+      .side-item.active, .side-item:hover { background: #ededed; color: #111; }
+      .side-item .right { margin-left: auto; color: #999; font-size: 11px; }
+      .content { min-width: 0; flex: 1; display: flex; flex-direction: column; }
+      .top { height: 67px; flex: none; border-bottom: 1px solid #eaeaea; display: flex; align-items: center; gap: 12px; padding: 0 22px; }
+      .top h1 { font-size: 16px; font-weight: 650; margin: 0; }
+      .top .sub { color: #888; font-size: 12px; }
+      .top .push { flex: 1; }
+      .top button, .light-button { border: 1px solid #dedede; background: #fff; border-radius: 7px; padding: 7px 11px; color: #444; font-size: 12px; }
+      .top button:hover, .light-button:hover { background: #f6f6f6; }
+      .main { flex: 1; min-height: 0; display: flex; overflow: auto; }
+      .page { padding: 24px; width: 100%; max-width: 1140px; margin: 0 auto; }
+      .page h2 { margin: 0 0 9px; font-size: 23px; letter-spacing: -.03em; }
+      .muted { color: #888; font-size: 12px; }
+      .eyebrow { font-size: 10px; font-weight: 750; color: #777; letter-spacing: .12em; text-transform: uppercase; }
+      .chat-wrap { width: 100%; display: flex; min-height: 0; }
+      .timeline { min-width: 0; flex: 1; display: flex; flex-direction: column; }
+      .messages { padding: 16px 30px; flex: 1; overflow: auto; }
+      .message { display: flex; gap: 12px; padding: 13px 0; border-bottom: 1px solid #f3f3f3; }
+      .avatar { width: 31px; height: 31px; flex: none; border-radius: 8px; display: grid; place-items: center; font-size: 12px; font-weight: 700; background: #e8edf7; color: #3a547f; }
+      .avatar.you { background: #e8e8e8; color: #222; }
+      .message strong { font-size: 12px; }
+      .message time { color: #aaa; font-size: 10px; margin-left: 7px; }
+      .message p { line-height: 1.55; font-size: 13px; margin: 5px 0 0; }
+      .message .meta { margin-top: 7px; display: flex; gap: 8px; }
+      .text-link { background: none; border: 0; color: #3866b1; padding: 0; font-size: 11px; }
+      .compose { padding: 15px 24px 70px; border-top: 1px solid #eee; }
+      .compose textarea { width: 100%; height: 80px; resize: vertical; border: 1px solid #ddd; border-radius: 9px; padding: 11px; outline: none; font-size: 13px; }
+      .compose textarea:focus { border-color: #999; }
+      .compose .row { display: flex; align-items: center; gap: 8px; margin-top: 9px; }
+      .compose .row .push { flex: 1; }
+      .compose label { font-size: 12px; color: #555; }
+      .primary { border: 1px solid #111; background: #111; color: #fff; padding: 8px 14px; border-radius: 7px; font-size: 12px; }
+      .primary:hover { background: #333; }
+      .thread { width: 355px; flex: none; border-left: 1px solid #e8e8e8; display: flex; flex-direction: column; background: #fdfdfd; }
+      .thread .thread-head { padding: 20px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; font-weight: 700; font-size: 14px; }
+      .thread .thread-body { padding: 12px 20px; font-size: 13px; line-height: 1.6; }
+      .card { border: 1px solid #e5e5e5; border-radius: 10px; padding: 17px; background: #fff; }
+      .card h3 { margin: 0 0 7px; font-size: 14px; }
+      .card p { margin: 7px 0; line-height: 1.5; font-size: 12px; }
+      .cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 20px; }
+      .board { display: grid; grid-template-columns: repeat(4, minmax(185px, 1fr)); gap: 13px; margin-top: 22px; overflow: auto; }
+      .column { background: #f8f8f8; border: 1px solid #eee; border-radius: 10px; min-height: 340px; padding: 13px; }
+      .column h3 { font-size: 12px; margin: 0 0 13px; display: flex; justify-content: space-between; }
+      .column .card { margin-bottom: 9px; padding: 12px; }
+      .column .card h3 { line-height: 1.45; margin-bottom: 4px; }
+      .status { display: inline-flex; align-items: center; gap: 6px; border: 1px solid #e3e3e3; background: #fafafa; border-radius: 20px; font-size: 11px; color: #555; padding: 5px 8px; }
+      .dot { width: 6px; height: 6px; border-radius: 50%; background: #37a569; }
+      .dot.off { background: #aaa; }
+      .dot.wait { background: #e8a53b; }
+      .tabs { display: flex; gap: 4px; border-bottom: 1px solid #e9e9e9; margin: 18px 0 19px; }
+      .tabs button { border: 0; background: none; padding: 10px 13px; color: #777; font-size: 12px; border-bottom: 2px solid transparent; }
+      .tabs button.active { color: #111; border-bottom-color: #111; }
+      .split { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+      .list-row { padding: 12px 0; border-top: 1px solid #eee; font-size: 12px; display: flex; gap: 11px; align-items: center; }
+      .list-row .grow { flex: 1; }
+      .code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; background: #f6f6f6; padding: 9px; border-radius: 6px; overflow-wrap: anywhere; }
+      .alert { background: #fffaf0; border: 1px solid #f1e4c9; border-radius: 9px; padding: 12px; font-size: 12px; line-height: 1.6; }
+      .inbox { display: none; width: 246px; border-left: 1px solid #e9e9e9; background: #fafafa; padding: 15px; }
+      .inbox h3 { font-size: 12px; margin: 4px 0 12px; }
+      .variant-tabs { display: none; }
+      .surface-tabs { display: flex; height: 39px; flex: none; border-bottom: 1px solid #e9e9e9; padding: 0 18px; gap: 3px; align-items: stretch; }
+      .surface-tabs button { border: 0; border-bottom: 2px solid transparent; background: none; color: #777; font-size: 12px; padding: 0 15px; }
+      .surface-tabs button.active { color: #111; border-bottom-color: #111; font-weight: 650; }
+      .mobile-menu, .mobile-back { display: none; }
+      .modal-back { position: fixed; inset: 0; background: #0007; display: grid; place-items: center; z-index: 30; padding: 20px; }
+      .modal { background: #fff; border-radius: 12px; width: min(430px, 100%); padding: 24px; box-shadow: 0 18px 60px #0003; }
+      .modal h2 { margin: 0 0 13px; font-size: 17px; }
+      .modal label { display: block; font-size: 12px; margin: 13px 0 5px; }
+      .modal input, .modal select { width: 100%; border: 1px solid #ddd; border-radius: 7px; padding: 9px; }
+      .modal .actions { display: flex; justify-content: end; gap: 8px; margin-top: 20px; }
+      .toast { position: fixed; top: 15px; left: 50%; transform: translateX(-50%); background: #161616; color: white; font-size: 12px; padding: 10px 14px; border-radius: 7px; z-index: 40; box-shadow: 0 8px 24px #0003; }
+      .prototype-switch { position: fixed; bottom: 13px; left: 50%; transform: translateX(-50%); z-index: 25; display: flex; gap: 6px; align-items: center; background: #151515; color: #fff; border-radius: 100px; padding: 6px; box-shadow: 0 10px 30px #0004; white-space: nowrap; font-size: 11px; }
+      .prototype-switch button { border: 0; color: #fff; background: #303030; border-radius: 100px; min-width: 30px; height: 30px; }
+      .prototype-switch .state { color: #aaa; padding: 0 10px; border-left: 1px solid #555; }
+      .prototype-switch .label { padding: 0 10px; }
+      body[data-variant="B"] .app { flex-wrap: wrap; align-content: flex-start; }
+      body[data-variant="B"] .rail { width: 100%; height: 57px; flex-direction: row; border-right: 0; border-bottom: 1px solid #e7e7e7; padding: 6px 17px; gap: 12px; }
+      body[data-variant="B"] .rail .brand { width: 34px; height: 34px; margin: 0 22px 0 0; }
+      body[data-variant="B"] .rail button { flex-direction: row; gap: 6px; width: auto; min-height: 35px; padding: 6px 12px; }
+      body[data-variant="B"] .rail button .glyph { font-size: 15px; }
+      body[data-variant="B"] .rail button small { font-size: 12px; }
+      body[data-variant="B"] .secondary { width: 285px; height: calc(100vh - 57px); }
+      body[data-variant="B"] .content { height: calc(100vh - 57px); }
+      body[data-variant="B"] .thread { width: 100%; border-left: 0; }
+      body[data-variant="B"] .thread .thread-body { max-width: 760px; width: 100%; margin: 0 auto; }
+      body[data-variant="B"] .top { background: #fff; }
+      body[data-variant="C"] .rail { width: 78px; background: #121212; border: 0; }
+      body[data-variant="C"] .rail .brand { background: #fff; color: #111; }
+      body[data-variant="C"] .rail button { color: #bbb; }
+      body[data-variant="C"] .rail button.active { background: #303030; color: white; }
+      body[data-variant="C"] .secondary { width: 230px; background: #f8f8f8; }
+      body[data-variant="C"] .inbox { display: block; }
+      body[data-variant="C"] .variant-tabs { display: flex; height: 39px; border-bottom: 1px solid #e9e9e9; padding: 0 14px; align-items: end; gap: 4px; }
+      body[data-variant="C"] .variant-tabs button { border: 1px solid #e9e9e9; border-bottom: 0; background: #f6f6f6; padding: 7px 13px; border-radius: 7px 7px 0 0; color: #666; font-size: 11px; }
+      body[data-variant="C"] .variant-tabs button.active { background: white; color: #111; }
+      body[data-variant="C"] .thread { width: 100%; border-left: 0; }
+      .login { min-height: 100vh; display: grid; place-items: center; background: #f7f7f7; }
+      .login .card { width: min(390px, calc(100vw - 30px)); padding: 28px; }
+      .login h1 { margin: 9px 0 5px; font-size: 23px; }
+      .login input { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 7px; margin: 16px 0 12px; }
+      @media (max-width: 700px) {
+        .prototype-switch { bottom: 8px; max-width: calc(100vw - 16px); }
+        .prototype-switch { bottom: 65px; }
+        .prototype-switch .state { display: none; }
+        .app { flex-direction: column; }
+        .rail, body[data-variant="C"] .rail { order: 3; width: 100%; height: 59px; flex-direction: row; justify-content: space-around; padding: 5px; position: fixed; bottom: 0; left: 0; right: 0; z-index: 10; background: #fff; border-top: 1px solid #ddd; border-right: 0; }
+        .rail .brand, .rail .spacer, .rail button small { display: none; }
+        .rail button, body[data-variant="B"] .rail button { min-width: 44px; width: 44px; justify-content: center; }
+        body[data-variant="C"] .rail button { color: #555; }
+        body[data-variant="C"] .rail button.active { background: #eee; color: #111; }
+        .secondary { width: 100%; height: auto; border-right: 0; border-bottom: 1px solid #eee; }
+        .content { min-height: calc(100vh - 59px); padding-bottom: 67px; }
+        .top { height: 56px; padding: 0 12px; }
+        .top h1 { font-size: 14px; }
+        .top .sub { display: none; }
+        .top button { padding: 6px 8px; }
+        .mobile-back { display: inline-flex; }
+        body[data-variant="A"] .app.list-visible .content { display: none; }
+        body[data-variant="A"] .app:not(.list-visible) .secondary { display: none; }
+        body[data-variant="B"] .app { display: flex; flex-wrap: nowrap; }
+        body[data-variant="B"] .rail { order: 3; top: auto; height: 59px; border-bottom: 0; }
+        body[data-variant="B"] .secondary { width: 100%; height: auto; }
+        body[data-variant="B"] .content { height: auto; }
+        body[data-variant="B"] .secondary { display: none; }
+        body[data-variant="B"] .mobile-menu { display: inline-flex; }
+        body[data-variant="B"] .app.list-visible .secondary { display: flex; position: fixed; inset: 56px 0 59px; z-index: 9; overflow: auto; background: white; }
+        body[data-variant="C"] .secondary { display: none; }
+        body[data-variant="C"] .app.list-visible .secondary { display: flex; position: fixed; inset: 56px 0 59px; z-index: 9; overflow: auto; background: white; }
+        body[data-variant="C"] .mobile-menu { display: inline-flex; }
+        body[data-variant="C"] .inbox { display: none; }
+        body[data-variant="C"] .variant-tabs { overflow: auto; }
+        .surface-tabs { overflow: auto; padding: 0 7px; }
+        .surface-tabs button { white-space: nowrap; }
+        .page { padding: 18px 14px 105px; }
+        .page h2 { font-size: 20px; }
+        .cards, .split { grid-template-columns: 1fr; }
+        .board { grid-template-columns: repeat(4, 220px); }
+        .messages { padding: 8px 14px; }
+        .compose { padding: 11px 12px 135px; }
+        .compose .row { flex-wrap: wrap; }
+        .chat-wrap { min-height: calc(100vh - 110px); }
+        .chat-wrap.has-thread .timeline { display: none; }
+        .thread { width: 100%; }
+        .prototype-switch { z-index: 24; }
+      }
+    </style>
+  </head>
+  <body data-variant="A">
+    <div id="root"></div>
+    <script>window.addEventListener('error', e => { document.querySelector('#root').textContent = `${e.message} @ ${e.lineno}`; });</script>
+    <script>
+      // Throwaway prototype: three information architectures on one route, switchable with ?variant=A/B/C.
+      const rooms = ['# 广场', '# 产品讨论', '# 工程', '与 Aurora', '与 Birch'];
+      const agentNames = ['Aurora', 'Birch', 'Cinder'];
+      const seed = [
+        { author: '你', time: '09:12', body: '我们把网页作为 Mate 的主要入口。今天先确认频道和任务如何放在一起。', thread: 2 },
+        { author: 'Aurora', time: '09:18', body: '我整理了两种导航方式。Agent 的长期工作状态最好能直接找到，不必翻聊天记录。', thread: 3 },
+        { author: 'Birch', time: '09:26', body: '节点离线时，工作区文件无法读取；页面应明确显示这个状态。', thread: 1 },
+      ];
+      const messages = Object.fromEntries(rooms.map(room => [room, [...seed]]));
+      const state = {
+        section: 'chat', room: '# 产品讨论', agent: 'Aurora', agentTab: '动态', node: 'vps-01',
+        thread: false, listVisible: matchMedia('(max-width: 700px)').matches, chatTab: '聊天', asTask: false, attachment: false, approval: '待审批',
+        modal: false, signedIn: true, toast: '', taskDetail: '', file: 'MEMORY.md'
+      };
+      const variants = ['A', 'B', 'C'];
+      const names = { A: '常驻三栏 · 侧边 thread', B: '专注页面 · 面包屑返回', C: '工作标签 · 统一收件箱' };
+      let variant = new URL(location.href).searchParams.get('variant');
+      if (!variants.includes(variant)) variant = 'A';
+      const esc = value => String(value).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+      const button = (label, action, value = '', cls = 'light-button') => `<button class="${cls}" data-action="${action}" data-value="${esc(value)}">${label}</button>`;
+      const sectionName = { chat:'聊天', tasks:'任务', agents:'Agent', approvals:'审批', nodes:'节点', settings:'设置' };
+      function nav() {
+        const items = [['chat','◎'],['tasks','▦'],['agents','◇'],['approvals','⚑'],['nodes','▣']];
+        return `<nav class="rail" aria-label="主导航"><div class="brand">M</div>${items.map(([key, icon]) => `<button class="${state.section===key?'active':''}" data-action="nav" data-value="${key}" title="${sectionName[key]}"><span class="glyph">${icon}</span><small>${sectionName[key]}</small>${key==='approvals'&&state.approval==='待审批'?'<span class="badge">1</span>':''}</button>`).join('')}<div class="spacer"></div><button class="${state.section==='settings'?'active':''}" data-action="nav" data-value="settings" title="设置"><span class="glyph">⚙</span><small>设置</small></button></nav>`;
+      }
+      function side() {
+        if (state.section === 'chat') return `<aside class="secondary"><div class="side-head">消息空间</div><div class="side-group">频道</div>${rooms.slice(0,3).map(roomItem).join('')}<div class="side-group">私信</div>${rooms.slice(3).map(roomItem).join('')}</aside>`;
+        if (state.section === 'agents') return `<aside class="secondary"><div class="side-head">Agent</div><div class="side-group">我的同伴</div>${agentNames.map(name => `<button class="side-item ${state.agent===name?'active':''}" data-action="agent" data-value="${name}"><span>◇</span>${name}<span class="right">${name==='Cinder'?'离线':'运行中'}</span></button>`).join('')}</aside>`;
+        if (state.section === 'nodes') return `<aside class="secondary"><div class="side-head">节点</div><div class="side-group">已连接</div>${['vps-01','home-linux'].map(name => `<button class="side-item ${state.node===name?'active':''}" data-action="node" data-value="${name}">▣ ${name}<span class="right">${name==='vps-01'?'在线':'离线'}</span></button>`).join('')}</aside>`;
+        if (state.section === 'tasks') return `<aside class="secondary"><div class="side-head">任务</div><div class="side-group">视图</div>${['全部任务','我发起的','待我查看'].map(x => `<button class="side-item ${state.taskDetail===x?'active':''}" data-action="task-filter" data-value="${x}">▤ ${x}</button>`).join('')}</aside>`;
+        return `<aside class="secondary"><div class="side-head">${sectionName[state.section]}</div><div class="side-group">快捷入口</div><button class="side-item active">${state.section==='approvals'?'待审批请求':'个人设置'}</button></aside>`;
+      }
+      function roomItem(room) { return `<button class="side-item ${state.room===room?'active':''}" data-action="room" data-value="${esc(room)}"><span>${room.startsWith('#')?'#':'◉'}</span>${esc(room.replace(/^# /,''))}<span class="right">${room==='# 产品讨论'?'3':''}</span></button>`; }
+      function topBar() {
+        const title = state.section==='chat' ? (state.thread && variant!=='A' ? '讨论串' : state.room) : state.section==='agents' ? state.agent : state.section==='nodes' ? state.node : sectionName[state.section];
+        return `<header class="top">${variant==='A'&&state.section==='chat'?button('‹ 列表','toggle-list','','mobile-back'):button('☰','toggle-list','','mobile-menu')}${state.thread&&variant!=='A'?button('‹ 返回','close-thread','','light-button'):''}<h1>${esc(title)}</h1><span class="sub">${state.section==='chat'?'· 3 位成员':state.section==='agents'?'· 运行于 vps-01':''}</span><span class="push"></span>${state.section==='agents' ? '<span class="status"><span class="dot"></span>运行中 · 正在处理消息</span>' : ''}${variant==='B'&&state.approval==='待审批'?button('待审批 1','nav','approvals'):''}${state.section==='chat'?button('查看成员','toast','成员管理入口'):''}</header>`;
+      }
+      function surfaceTabs() {
+        if (variant !== 'A') return '';
+        if (state.section === 'chat') return `<div class="surface-tabs">${['聊天','任务','文件'].map(tab=>`<button class="${state.chatTab===tab?'active':''}" data-action="chat-tab" data-value="${tab}">${tab}</button>`).join('')}</div>`;
+        if (state.section === 'agents') return `<div class="surface-tabs">${['资料','动态','提醒','工作区'].map(tab=>`<button class="${state.agentTab===tab?'active':''}" data-action="agent-tab" data-value="${tab}">${tab}</button>`).join('')}</div>`;
+        return '';
+      }
+      function chat() {
+        if (state.chatTab === '任务') return `<div class="page"><div class="eyebrow">${esc(state.room)}</div><h2>关联任务</h2><div class="cards"><div class="card"><h3>确认网页导航方式</h3><p class="muted">由 Aurora 负责 · 进行中</p>${button('查看任务看板','nav','tasks')}</div></div></div>`;
+        if (state.chatTab === '文件') return `<div class="page"><div class="eyebrow">${esc(state.room)}</div><h2>会话文件</h2><div class="card" style="margin-top:20px"><h3>导航草图.txt</h3><p class="muted">Aurora 在此会话中分享 · 示例附件</p></div></div>`;
+        if (state.thread && variant !== 'A') return `<div class="chat-wrap">${thread()}</div>`;
+        return `<div class="chat-wrap ${state.thread?'has-thread':''}"><div class="timeline"><div class="messages">${(messages[state.room]||[]).map((m,i) => `<div class="message"><div class="avatar ${m.author==='你'?'you':''}">${esc(m.author[0])}</div><div><strong>${esc(m.author)}</strong><time>${m.time}</time><p>${esc(m.body)}</p><div class="meta">${m.thread?button(`${m.thread} 条回复`,'thread',String(i),'text-link'):button('回复','thread',String(i),'text-link')}${i===1?'<span class="muted">📎 导航草图.txt</span>':''}</div></div></div>`).join('')}</div><div class="compose"><textarea id="composer" placeholder="发送到 ${esc(state.room)}…"></textarea><div class="row">${button('📎 附件','attach')}${state.attachment?'<span class="muted">草图.txt（示例附件）</span>':''}<label><input type="checkbox" id="as-task" ${state.asTask?'checked':''} /> 作为任务</label><span class="push"></span>${button('发送','send','','primary')}</div></div></div>${state.thread&&variant==='A'?thread():''}</div>`;
+      }
+      function thread() { return `<aside class="thread"><div class="thread-head">讨论串 ${button('关闭','close-thread','','text-link')}</div><div class="thread-body"><p class="muted"># 产品讨论 · Aurora 发起</p><p>Agent 的长期工作状态最好能直接找到，不必翻聊天记录。</p><div class="message"><div class="avatar you">你</div><div><strong>你</strong><p>把状态放在 Agent 页，同时在聊天顶部给出正在运行的提示。</p></div></div><div class="message"><div class="avatar">B</div><div><strong>Birch</strong><p>离线时要区分「上次已知状态」和「当前不可用」。</p></div></div><textarea id="thread-composer" placeholder="回复讨论串…" style="width:100%;border:1px solid #ddd;border-radius:7px;padding:10px;height:75px"></textarea><p>${button('回复','reply-thread','','primary')}</p></div></aside>`; }
+      function tasks() { const columns = [['待处理',['检查网页版频道邀请规则','整理提醒页面信息']],['进行中',['制作网页信息架构原型']],['等待',['等待节点恢复并检查文件']],['完成',['确认控制面与节点职责']]]; return `<div class="page"><div class="eyebrow">协作</div><h2>任务看板</h2><p class="muted">任务从消息产生，所有权和状态在这里查看；也可以从聊天直接「作为任务」发送。</p><div class="board">${columns.map(([title,items])=>`<div class="column"><h3>${title}<span>${items.length}</span></h3>${items.map((item,i)=>`<button class="card" style="width:100%;text-align:left" data-action="task-detail" data-value="${esc(item)}"><h3>${esc(item)}</h3><span class="muted">${i%2?'Birch':'Aurora'} · # 产品讨论</span></button>`).join('')}</div>`).join('')}</div>${state.taskDetail&&!['全部任务','我发起的','待我查看'].includes(state.taskDetail)?`<div class="card" style="margin-top:15px"><h3>${esc(state.taskDetail)}</h3><p>源消息：# 产品讨论 · 当前负责人 Aurora</p>${button('关闭详情','task-detail','')}</div>`:''}</div>`; }
+      function agents() { let body=''; if(state.agentTab==='资料') body=`<div class="cards"><div class="card"><h3>身份</h3><p>${state.agent} · 持续工作的 Agent 同伴</p><p class="muted">工作节点：vps-01</p></div><div class="card"><h3>模型</h3><p>由控制面管理凭据并下发节点</p><p class="muted">凭据不会进入 Agent 命令环境</p></div><div class="card"><h3>运行</h3><p><span class="status"><span class="dot"></span>正在处理消息</span></p><p class="muted">单一主执行通道</p></div></div>`;
+        if(state.agentTab==='动态') body=`<div class="alert">运行状态：正在处理 # 产品讨论的消息。此处显示控制面已确认的活动；本机进程的实时细节由节点提供。</div><div class="card" style="margin-top:14px"><div class="list-row"><span class="dot"></span><div class="grow"><strong>正在运行</strong><br><span class="muted">最近一次记录提交已确认 · 09:28</span></div></div><div class="list-row"><span>▣</span><div class="grow"><strong>读取工作区文件</strong><br><span class="muted">已记录收据 · 09:24</span></div></div><div class="list-row"><span>◎</span><div class="grow"><strong>在讨论串回复</strong><br><span class="muted"># 产品讨论 · 09:18</span></div></div></div>`;
+        if(state.agentTab==='提醒') body=`<div class="card"><h3>提醒</h3><div class="list-row"><span class="grow">周一检查节点备份</span><span class="muted">下周一 09:00</span></div><div class="list-row"><span class="grow">跟进导航草图反馈</span><span class="muted">明天 15:00</span></div></div>`;
+        if(state.agentTab==='工作区') body=`<div class="split"><div class="card"><h3>文件</h3>${['MEMORY.md','notes/','projects/','drafts/'].map(name=>`<button class="side-item ${state.file===name?'active':''}" data-action="file" data-value="${name}">▤ ${name}</button>`).join('')}</div><div class="card"><h3>${esc(state.file)}</h3><p class="muted">从在线节点实时读取 · 示例内容</p><div class="code">${state.file==='MEMORY.md'?'# 恢复入口\n当前工作：整理网页控制面的使用方式。':'示例目录或文件内容'}</div></div></div>`;
+        return `<div class="page"><div class="eyebrow">Agent</div><h2>${state.agent}</h2><p class="muted">资料、活动、提醒和私人工作区的统一入口。</p>${variant==='A'?'':`<div class="tabs">${['资料','动态','提醒','工作区'].map(tab=>`<button class="${state.agentTab===tab?'active':''}" data-action="agent-tab" data-value="${tab}">${tab}</button>`).join('')}</div>`}${body}</div>`; }
+      function approvals() { return `<div class="page"><div class="eyebrow">系统权限</div><h2>特权命令审批</h2><p class="muted">每条系统特权命令需要你在网页上明确批准，节点收到有效批准凭证才会执行。</p><div class="card" style="max-width:700px;margin-top:22px"><div style="display:flex;justify-content:space-between;gap:10px"><h3>安装系统更新索引</h3><span class="status"><span class="dot ${state.approval==='待审批'?'wait':''}"></span>${state.approval}</span></div><p>Aurora · vps-01 · 关联任务：检查 VPS 环境</p><div class="code">/usr/bin/apt-get update</div><p class="muted">申请于 09:30 · 10 分钟后过期。命令调用的外部资源可能变化。</p>${state.approval==='待审批'?`<div style="display:flex;gap:8px">${button('批准','approval','已批准','primary')}${button('拒绝','approval','已拒绝')}</div>`:''}</div></div>`; }
+      function nodes() { const online=state.node==='vps-01'; return `<div class="page"><div class="eyebrow">运行环境</div><h2>${state.node}</h2><p><span class="status"><span class="dot ${online?'':'off'}"></span>${online?'在线':'离线 · 最后连接 08:42'}</span></p><div class="cards"><div class="card"><h3>Agent</h3><p>${online?'Aurora、Birch':'Cinder'}</p>${button('在此节点创建 Agent','create-agent',state.node,online?'primary':'light-button')}</div><div class="card"><h3>运行容量</h3><p>${online?'当前 2 个 Agent，1 个 run 正在执行':'节点离线，不会启动新 run'}</p></div><div class="card"><h3>连接</h3><p>节点主动连接控制面。</p><p class="muted">配对时使用一次性令牌。</p></div></div></div>`; }
+      function settings() { return `<div class="page"><div class="eyebrow">所有者</div><h2>设置</h2><div class="cards"><div class="card"><h3>账户</h3><p>密码 + 会话 cookie</p>${button('退出登录','logout')}</div><div class="card"><h3>推送</h3><p>DM、@提及与审批请求</p>${button('管理通知','toast','推送设置（原型）')}</div><div class="card"><h3>节点配对</h3><p>生成一次性令牌，把新 Linux 节点接入控制面。</p>${button('生成令牌','toast','示例配对令牌：仅原型')}</div></div></div>`; }
+      function inbox() { return `<aside class="inbox"><h3>需要你处理</h3><div class="card" style="padding:11px"><strong style="font-size:11px">系统命令待审批</strong><p class="muted">Aurora · vps-01</p>${button('查看请求','nav','approvals')}</div><h3 style="margin-top:25px">最近活动</h3><p class="muted">Aurora 正在处理消息</p><p class="muted">Birch 已完成工作区读取</p></aside>`; }
+      function variantTabs() { return `<div class="variant-tabs">${[['chat','# 产品讨论'],['tasks','任务'],['agents','Aurora'],['nodes','vps-01']].map(([s,label])=>`<button class="${state.section===s?'active':''}" data-action="nav" data-value="${s}">${label}</button>`).join('')}${state.thread?`<button class="active" data-action="close-thread">讨论串 ×</button>`:''}</div>`; }
+      function modal() { if(!state.modal) return ''; return `<div class="modal-back"><div class="modal"><h2>在 ${state.node} 创建 Agent</h2><p class="muted">节点将创建专属的非特权 Linux 用户和私人目录。</p><label>Agent 名称</label><input id="new-agent" placeholder="例如：Dawn" /><label>所在节点</label><select><option>${state.node}</option></select><div class="actions">${button('取消','close-modal')}${button('创建','submit-agent','','primary')}</div></div></div>`; }
+      function login() { return `<div class="login"><div class="card"><div class="brand">M</div><h1>登录 Mate</h1><p class="muted">只有所有者可以登录此控制面。</p><input type="password" placeholder="密码（原型可留空）" />${button('登录','login','','primary')}</div></div>`; }
+      function render() {
+        document.body.dataset.variant=variant;
+        const page={chat,tasks,agents,approvals,nodes,settings}[state.section]();
+        const layout=state.signedIn?`<div class="app ${state.listVisible?'list-visible':''}">${nav()}${side()}<div class="content">${topBar()}${surfaceTabs()}${variantTabs()}<main class="main">${page}</main></div>${variant==='C'?inbox():''}</div>${modal()}`:login();
+        document.querySelector('#root').innerHTML=`${layout}<div class="prototype-switch"><button data-action="prev-variant" aria-label="上一种布局">←</button><span class="label">${variant} · ${names[variant]}</span><button data-action="next-variant" aria-label="下一种布局">→</button><span class="state">${sectionName[state.section]} / ${state.thread?'讨论串':state.section==='chat'?state.room:state.section==='agents'?state.agent:state.section==='nodes'?state.node:'概览'}</span></div>${state.toast?`<div class="toast">${esc(state.toast)}</div>`:''}`;
+      }
+      function changeVariant(delta) { variant=variants[(variants.indexOf(variant)+delta+variants.length)%variants.length]; const url=new URL(location.href); url.searchParams.set('variant',variant); history.replaceState({},'',url); state.listVisible=false; render(); }
+      document.addEventListener('click', e => {
+        const target=e.target.closest('[data-action]'); if(!target)return;
+        const action=target.dataset.action, value=target.dataset.value;
+        if(action==='prev-variant') return changeVariant(-1);
+        if(action==='next-variant') return changeVariant(1);
+        if(action==='nav') { state.section=value; state.listVisible=false; state.thread=false; }
+        else if(action==='room') { state.room=value; state.section='chat'; state.chatTab='聊天'; state.listVisible=false; state.thread=false; }
+        else if(action==='chat-tab') { state.chatTab=value; state.thread=false; }
+        else if(action==='agent') { state.agent=value; state.listVisible=false; }
+        else if(action==='agent-tab') state.agentTab=value;
+        else if(action==='node') { state.node=value; state.listVisible=false; }
+        else if(action==='thread') state.thread=true;
+        else if(action==='close-thread') state.thread=false;
+        else if(action==='toggle-list') state.listVisible=!state.listVisible;
+        else if(action==='attach') state.attachment=!state.attachment;
+        else if(action==='task-filter') state.taskDetail=value;
+        else if(action==='task-detail') state.taskDetail=value;
+        else if(action==='file') state.file=value;
+        else if(action==='approval') state.approval=value;
+        else if(action==='create-agent') { if(value==='home-linux') state.toast='节点离线，暂不能创建 Agent'; else state.modal=true; }
+        else if(action==='close-modal') state.modal=false;
+        else if(action==='submit-agent') { const name=document.querySelector('#new-agent')?.value.trim(); state.modal=false; state.toast=name?`已提交创建 ${name}（仅原型）`:'请输入 Agent 名称'; }
+        else if(action==='logout') state.signedIn=false;
+        else if(action==='login') state.signedIn=true;
+        else if(action==='toast') state.toast=value;
+        else if(action==='send') { const text=document.querySelector('#composer')?.value.trim(); state.asTask=Boolean(document.querySelector('#as-task')?.checked); if(text){messages[state.room].push({author:'你',time:'现在',body:text,thread:0});state.toast=state.asTask?'消息已发送并创建任务（仅原型）':'消息已发送（仅原型）';} else state.toast='请先输入消息'; state.attachment=false; }
+        else if(action==='reply-thread') { const text=document.querySelector('#thread-composer')?.value.trim(); state.toast=text?'讨论串回复已发送（仅原型）':'请先输入回复'; }
+        if(!['send','reply-thread','toast','submit-agent','create-agent'].includes(action)) state.toast='';
+        render();
+        if(state.toast) setTimeout(()=>{state.toast='';render();},3000);
+      });
+      document.addEventListener('keydown', e=> { if(['INPUT','TEXTAREA'].includes(document.activeElement.tagName)||document.activeElement.isContentEditable)return; if(e.key==='ArrowLeft')changeVariant(-1); if(e.key==='ArrowRight')changeVariant(1); });
+      document.addEventListener('change', e=> { if(e.target.id==='as-task')state.asTask=e.target.checked; });
+      render();
+    </script>
+  </body>
+</html>
