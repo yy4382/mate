@@ -125,6 +125,7 @@ it("rolls back a credential write when provider readiness cannot commit", async 
       uid: 23001,
       gid: 23001,
       home: `/var/lib/mate/agents/${agentId}`,
+      homeMarker: "a".repeat(64),
     },
     fixture.app.chat,
   );

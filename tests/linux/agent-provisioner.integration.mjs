@@ -16,6 +16,7 @@ import {
   AgentProvisioningError,
   linuxUsernameForAgentId,
   provisionLinuxAgent,
+  readProvisionedLinuxAgentIdentity,
 } from "../../dist/src/nodes/agent-provisioner.js";
 
 if (process.platform !== "linux" || process.geteuid?.() !== 0)
@@ -30,6 +31,7 @@ if (process.env.MATE_AGENT_TEST_SANDBOX !== "temporary-container")
 const homeRoot = `/var/lib/mate-agent-validation-${randomUUID()}`;
 const agentAId = "ed1e60c8-bdda-4f46-a857-bbd542f82640";
 const agentBId = "a82eb7db-26f7-40f8-9bb8-8baf21dc5c0a";
+const agentCId = "38442c2c-4290-4e88-a098-0132af14761d";
 const collisionAId = "deadbeef-cafe-4bad-a11e-001122334455";
 const collisionBId = "deadbeef-cafe-4bad-a11e-001122334499";
 
@@ -82,6 +84,17 @@ try {
   assert.equal(statSync(join(agentA.home, "MEMORY.md")).gid, agentA.gid);
   assert.equal(statSync(agentB.home).uid, agentB.uid);
   assert.equal(statSync(agentB.home).gid, agentB.gid);
+  assert.equal(readProvisionedLinuxAgentIdentity(agentAId, homeRoot).homeMarker, agentA.homeMarker);
+  const agentC = await provisionLinuxAgent({ agentId: agentCId, homeRoot });
+  rmSync(agentC.home, { recursive: true });
+  mkdirSync(agentC.home, { mode: 0o700 });
+  chownSync(agentC.home, agentC.uid, agentC.gid);
+  writeFileSync(join(agentC.home, "MEMORY.md"), "# Agent memory\n", { mode: 0o600 });
+  chownSync(join(agentC.home, "MEMORY.md"), agentC.uid, agentC.gid);
+  assert.throws(
+    () => readProvisionedLinuxAgentIdentity(agentCId, homeRoot),
+    (error) => error instanceof AgentProvisioningError && error.code === "identity_mismatch",
+  );
 
   const marker = join(agentA.home, "peer-private-fixture.txt");
   writeFileSync(marker, "synthetic private fixture\n", { mode: 0o600 });
@@ -234,6 +247,7 @@ try {
       duplicateUidRejected: true,
       duplicateGidRejected: true,
       interruptedMemoryWriteRecovered: true,
+      reinstalledEmptyHomeRejected: true,
       unrelatedMemoryCollisionPreserved: true,
     })}\n`,
   );

@@ -152,3 +152,56 @@ it("marks an interrupted node operation unknown and never replays it after resta
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+it("fences new commands and repeats Agent stopping after an admitted command settles", async () => {
+  const database = new Database(":memory:");
+  const agentId = randomUUID(),
+    otherAgent = randomUUID();
+  const commandStarted = deferred<void>();
+  const finishCommand = deferred<{ state: "succeeded"; receipt: unknown }>();
+  let stops = 0;
+  const host = vi.fn(async ({ operation }: { operation: { kind: string } }) => {
+    if (operation.kind === "exec") {
+      commandStarted.resolve();
+      return finishCommand.promise;
+    }
+    stops++;
+    return { state: "succeeded" as const, receipt: { stopped: true, units: [] } };
+  });
+  const operations = new AgentProcessOperations(database, host);
+  try {
+    const command = operations.execute(agentId, randomUUID(), {
+      kind: "exec",
+      cwd: ".",
+      command: "start-late-scope",
+    });
+    await commandStarted.promise;
+    const stopping = operations.execute(agentId, randomUUID(), { kind: "process.stop_all" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(stops).toBe(1);
+    const late = await operations.execute(agentId, randomUUID(), {
+      kind: "exec",
+      cwd: ".",
+      command: "must-not-start",
+    });
+    expect(late).toMatchObject({ state: "failed", receipt: { reason: "agent_stopping" } });
+    expect(host).toHaveBeenCalledTimes(2);
+    expect(
+      await operations.execute(otherAgent, randomUUID(), { kind: "process.stop_all" }),
+    ).toMatchObject({ state: "succeeded" });
+    finishCommand.resolve({ state: "succeeded", receipt: { code: 0 } });
+    await command;
+    expect(await stopping).toMatchObject({ state: "succeeded" });
+    expect(stops).toBe(3);
+    operations.allowAgent(agentId);
+    expect(
+      await operations.execute(agentId, randomUUID(), {
+        kind: "exec",
+        cwd: ".",
+        command: "after-verified-resume",
+      }),
+    ).toMatchObject({ state: "succeeded" });
+  } finally {
+    database.close();
+  }
+});

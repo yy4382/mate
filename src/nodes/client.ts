@@ -402,6 +402,11 @@ function connectOnce(
         if (active?.agentId === message.agentId) active.controller.abort(message.reason);
         return;
       }
+      if (message.type === "control.agent.activate") {
+        if (!authenticated) throw new NodeAuthenticationError("控制面在节点身份验证前复启 Agent。");
+        processOperations.allowAgent(message.agentId);
+        return;
+      }
       if (message.type === "control.process.operation") {
         if (!authenticated)
           throw new NodeAuthenticationError("控制面在节点身份验证前请求普通操作。");

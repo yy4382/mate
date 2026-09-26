@@ -678,6 +678,22 @@ export class NodeDirectory {
     return true;
   }
 
+  activateAgent(nodeId: string, agentId: string): boolean {
+    const socket = this.connected.get(nodeId),
+      session = socket ? this.sessions.get(socket) : undefined;
+    if (!socket || !session?.ready || session.nodeId !== nodeId) return false;
+    try {
+      this.send(socket, {
+        type: "control.agent.activate",
+        requestId: randomUUID(),
+        agentId,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   closeAll(): void {
     clearInterval(this.heartbeatSweepTimer);
     for (const socket of [...this.sockets]) {

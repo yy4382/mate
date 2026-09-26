@@ -33,6 +33,7 @@ interface AgentRow {
   uid: number | null;
   gid: number | null;
   home: string | null;
+  home_marker: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -63,7 +64,7 @@ export class AgentDirectory {
       .prepare(
         `SELECT a.id,a.node_id,a.name,a.role,a.description,a.provider,a.model_id,
                 a.initial_channel_id,s.id AS session_id,a.provision_request_id,a.request_hash,
-                a.status,a.model_ready,a.stage,a.error,a.linux_username,a.uid,a.gid,a.home,a.created_at,a.updated_at
+                a.status,a.model_ready,a.stage,a.error,a.linux_username,a.uid,a.gid,a.home,a.home_marker,a.created_at,a.updated_at
          FROM owner_agents a JOIN owner_agent_sessions s ON s.agent_id=a.id
          ORDER BY a.created_at,a.id`,
       )
@@ -226,14 +227,24 @@ export class AgentDirectory {
           identity.gid <= 0
         )
           throw new AgentRequestConflict("Linux 节点返回了无效的 UID 或 GID。");
+        if (!/^[0-9a-f]{64}$/.test(identity.homeMarker))
+          throw new AgentRequestConflict("Linux 节点未返回有效的 Agent home 原身份标记。");
 
         const at = this.now();
         this.db
           .prepare(
             `UPDATE owner_agents SET status='waiting_credentials',stage='complete',error=NULL,
-              linux_username=?,uid=?,gid=?,home=?,updated_at=? WHERE id=?`,
+              linux_username=?,uid=?,gid=?,home=?,home_marker=?,updated_at=? WHERE id=?`,
           )
-          .run(identity.username, identity.uid, identity.gid, identity.home, at, id);
+          .run(
+            identity.username,
+            identity.uid,
+            identity.gid,
+            identity.home,
+            identity.homeMarker,
+            at,
+            id,
+          );
         this.db
           .prepare("UPDATE owner_agent_sessions SET verified_at=? WHERE agent_id=?")
           .run(at, id);
@@ -267,7 +278,7 @@ export class AgentDirectory {
       .prepare(
         `SELECT a.id,a.node_id,a.name,a.role,a.description,a.provider,a.model_id,
                 a.initial_channel_id,s.id AS session_id,a.provision_request_id,a.request_hash,
-                a.status,a.model_ready,a.stage,a.error,a.linux_username,a.uid,a.gid,a.home,a.created_at,a.updated_at
+                a.status,a.model_ready,a.stage,a.error,a.linux_username,a.uid,a.gid,a.home,a.home_marker,a.created_at,a.updated_at
          FROM owner_agents a JOIN owner_agent_sessions s ON s.agent_id=a.id WHERE a.id=?`,
       )
       .get(id) as AgentRow | undefined;

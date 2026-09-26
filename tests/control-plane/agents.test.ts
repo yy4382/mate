@@ -119,6 +119,7 @@ it("edits each profile field without changing an Agent's identity or session", a
       uid: 23001,
       gid: 23001,
       home: `/var/lib/mate/agents/${id}`,
+      homeMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -166,6 +167,7 @@ it("requires an existing provider key before changing the model and preserves th
       uid: 23001,
       gid: 23001,
       home: `/var/lib/mate/agents/${id}`,
+      homeMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -209,6 +211,7 @@ it("keeps a deactivated Agent stopped when node process stopping is unconfirmed"
     uid: 23001,
     gid: 23001,
     home: `/var/lib/mate/agents/${id}`,
+    homeMarker: "a".repeat(64),
   };
   app.agents.complete(id, identity, app.chat);
   const sessionId = app.agents.get(id)!.sessionId;
@@ -227,7 +230,15 @@ it("keeps a deactivated Agent stopped when node process stopping is unconfirmed"
   });
   expect(resume.status).toBe(409);
   expect(app.runs?.pauseReason(id)).toBe("manual");
-  expect(app.agents.get(id)).toMatchObject({ sessionId, linuxIdentity: identity });
+  expect(app.agents.get(id)).toMatchObject({
+    sessionId,
+    linuxIdentity: {
+      username: identity.username,
+      uid: identity.uid,
+      gid: identity.gid,
+      home: identity.home,
+    },
+  });
   const stopRequest = socket.sent
     .map((text) => JSON.parse(text) as Record<string, unknown>)
     .find(
@@ -263,11 +274,92 @@ it("keeps a deactivated Agent stopped when node process stopping is unconfirmed"
       requestId: verify.requestId,
       agentId: id,
       ok: true,
-      identity: { ...identity, uid: identity.uid + 1 },
+      identity: { ...identity, homeMarker: "b".repeat(64) },
     }),
   );
   expect((await resuming).status).toBe(409);
   expect(app.runs?.pauseReason(id)).toBe("manual");
+});
+
+it("uses a fresh stop operation ID after an unknown node receipt", async () => {
+  const app = setup();
+  const cookie = await login(app);
+  const { id: nodeId, socket } = await pairNode(app, cookie);
+  const id = randomUUID();
+  app.agents.prepare({
+    id,
+    nodeId,
+    name: "Partner",
+    role: "Writer",
+    description: "",
+    model: { provider: "openai", id: "gpt-4.1" },
+  });
+  app.agents.complete(
+    id,
+    {
+      username: `mate_${id.replaceAll("-", "").slice(0, 27)}`,
+      uid: 23001,
+      gid: 23001,
+      home: `/var/lib/mate/agents/${id}`,
+      homeMarker: "a".repeat(64),
+    },
+    app.chat,
+  );
+  const pause = () =>
+    app.request(`/api/owner/agents/${id}/pause`, { method: "POST", headers: { cookie } });
+  expect((await pause()).status).toBe(200);
+  const stopRequests = () =>
+    socket.sent
+      .map((text) => JSON.parse(text) as Record<string, unknown>)
+      .filter(
+        (message) =>
+          message.type === "control.process.operation" &&
+          (message.operation as { kind?: string })?.kind === "process.stop_all",
+      );
+  const first = stopRequests()[0]!;
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.process.operation.result",
+      requestId: first.requestId,
+      operationId: first.operationId,
+      agentId: id,
+      state: "unknown",
+      receipt: { reason: "synthetic_systemctl_timeout" },
+    }),
+  );
+  for (let attempt = 0; attempt < 30 && app.runs?.stopStatus(id).state === "executing"; attempt++)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  expect(app.runs?.stopStatus(id).state).toBe("unknown");
+  expect((await pause()).status).toBe(200);
+  const second = stopRequests()[1]!;
+  expect(second.operationId).not.toBe(first.operationId);
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.process.operation.result",
+      requestId: first.requestId,
+      operationId: first.operationId,
+      agentId: id,
+      state: "succeeded",
+      receipt: { stopped: true, units: [] },
+    }),
+  );
+  expect(app.runs?.stopStatus(id).state).toBe("executing");
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.process.operation.result",
+      requestId: second.requestId,
+      operationId: second.operationId,
+      agentId: id,
+      state: "succeeded",
+      receipt: { stopped: true, units: [] },
+    }),
+  );
+  for (let attempt = 0; attempt < 30 && app.runs?.stopStatus(id).state !== "succeeded"; attempt++)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  expect(app.runs?.stopStatus(id).state).toBe("succeeded");
 });
 
 it("keeps an offline-node Agent form unsubmitted", async () => {
@@ -625,6 +717,7 @@ it("sends only the bounded Agent provisioning operation to the selected online n
         uid: 23001,
         gid: 23001,
         home: "/var/lib/mate/agents/ed1e60c8-bdda-4f46-a857-bbd542f82640",
+        homeMarker: "a".repeat(64),
       },
     }),
   );
@@ -699,6 +792,7 @@ it("persists a stable Agent session, verifies provisioning, then queues its init
         uid: 23001,
         gid: 23001,
         home: `/var/lib/mate/agents/${input.id}`,
+        homeMarker: "a".repeat(64),
       },
     }),
   );
@@ -771,6 +865,7 @@ it("finds an online Agent beyond more than one page of offline deliveries", asyn
         uid: 24000 + index,
         gid: 24000 + index,
         home: `/var/lib/mate/agents/${id}`,
+        homeMarker: "a".repeat(64),
       },
       app.chat,
       true,
@@ -795,6 +890,7 @@ it("finds an online Agent beyond more than one page of offline deliveries", asyn
       uid: 25001,
       gid: 25001,
       home: `/var/lib/mate/agents/${onlineAgentId}`,
+      homeMarker: "a".repeat(64),
     },
     app.chat,
     true,
@@ -898,6 +994,7 @@ it("retains one failed request and retries it with the same Agent and provisioni
         uid: 23002,
         gid: 23002,
         home: `/var/lib/mate/agents/${input.id}`,
+        homeMarker: "a".repeat(64),
       },
     }),
   );

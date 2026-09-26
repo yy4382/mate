@@ -119,7 +119,8 @@ function startNode(
       modelWorkerEntry:${JSON.stringify(worker)},modelWorkerIdentity:null,processOperations:operations,
       workspaceExecutor,
       provisionAgent:async (agentId)=>({username:'mate_'+agentId.replaceAll('-','').slice(0,27),
-        uid:24001,gid:24001,home:process.env.MATE_AGENT_HOME_ROOT+'/'+agentId}),
+        uid:24001,gid:24001,home:process.env.MATE_AGENT_HOME_ROOT+'/'+agentId,
+        homeMarker:'a'.repeat(64)}),
     });
     db.close();
   `;

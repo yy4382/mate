@@ -64,6 +64,7 @@ export class AgentRunCoordinator {
         if (outcome.corrected) this.wake();
       },
       () => {
+        this.activateEnabledAgents();
         this.wake();
         void this.dispatchPendingStops(true);
       },
@@ -310,7 +311,14 @@ export class AgentRunCoordinator {
         const existing = this.db
           .prepare("SELECT paused_reason FROM owner_agent_run_control WHERE agent_id=?")
           .get(agentId) as { paused_reason: string | null } | undefined;
-        if (existing?.paused_reason !== "manual") {
+        const lastStop = this.stopStatus(agentId);
+        if (
+          existing?.paused_reason !== "manual" ||
+          (lastStop.state === "unknown" &&
+            (lastStop.receipt as { reason?: string } | null)?.reason !==
+              "pending_process_receipts") ||
+          lastStop.state === "failed"
+        ) {
           stopId = randomUUID();
           this.db
             .prepare(
@@ -361,6 +369,24 @@ export class AgentRunCoordinator {
 
   private readonly activeStops = new Set<string>();
 
+  private activateEnabledAgents(): void {
+    const online = new Set(
+      this.nodes
+        .list()
+        .filter((node) => node.online)
+        .map((node) => node.id),
+    );
+    const rows = this.db
+      .prepare(
+        `SELECT a.id,a.node_id FROM owner_agents a
+       LEFT JOIN owner_agent_run_control c ON c.agent_id=a.id
+       WHERE c.paused_reason IS NULL OR c.paused_reason<>'manual'`,
+      )
+      .all() as Array<{ id: string; node_id: string }>;
+    for (const row of rows)
+      if (online.has(row.node_id)) this.nodes.activateAgent(row.node_id, row.id);
+  }
+
   private unsettledProcessReceipt(agentId: string): boolean {
     return Boolean(
       this.db
@@ -395,6 +421,16 @@ export class AgentRunCoordinator {
         : undefined;
       if (reason === "pending_process_receipts") {
         if (this.unsettledProcessReceipt(row.agent_id)) continue;
+        const nextId = randomUUID();
+        this.db
+          .prepare(
+            "INSERT INTO owner_agent_stop_intents(operation_id,agent_id,node_id,state,created_at,updated_at) VALUES(?,?,?,'executing',?,?)",
+          )
+          .run(nextId, row.agent_id, row.node_id, this.now(), this.now());
+        void this.dispatchStop(nextId, row.agent_id, row.node_id);
+      } else if (all && row.state === "unknown") {
+        // A node may have durably returned unknown for the old ID. A fresh idempotent stop
+        // request rechecks all scopes after the node has finished receipt reconciliation.
         const nextId = randomUUID();
         this.db
           .prepare(
@@ -500,7 +536,7 @@ export class AgentRunCoordinator {
   async resumeAgent(agentId: string): Promise<{ ok: boolean; error?: string }> {
     const row = this.db
       .prepare(
-        `SELECT a.node_id,a.linux_username,a.uid,a.gid,a.home,c.paused_reason
+        `SELECT a.node_id,a.linux_username,a.uid,a.gid,a.home,a.home_marker,c.paused_reason
        FROM owner_agents a JOIN owner_agent_run_control c ON c.agent_id=a.id WHERE a.id=?`,
       )
       .get(agentId) as
@@ -510,6 +546,7 @@ export class AgentRunCoordinator {
           uid: number | null;
           gid: number | null;
           home: string | null;
+          home_marker: string | null;
           paused_reason: string | null;
         }
       | undefined;
@@ -538,6 +575,8 @@ export class AgentRunCoordinator {
     }
     if (
       !verified.ok ||
+      !row.home_marker ||
+      verified.identity.homeMarker !== row.home_marker ||
       verified.identity.username !== row.linux_username ||
       verified.identity.uid !== row.uid ||
       verified.identity.gid !== row.gid ||
@@ -557,6 +596,7 @@ export class AgentRunCoordinator {
       summary: "所有者已恢复 Agent 运行。",
       at: this.now(),
     });
+    this.nodes.activateAgent(row.node_id, agentId);
     this.wake();
     return { ok: true };
   }

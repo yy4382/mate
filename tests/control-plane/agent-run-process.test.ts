@@ -715,6 +715,7 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
           uid: 24001,
           gid: 24001,
           home: ${JSON.stringify(homeRoot)} + '/' + agentId,
+          homeMarker: 'a'.repeat(64),
         }),
       });
     `;
@@ -1301,6 +1302,7 @@ it("runs Pi conversation tools through the authenticated Node and commits one ex
             uid: 24001,
             gid: 24001,
             home: ${JSON.stringify(agentHomeRoot)} + '/' + agentId,
+            homeMarker: 'a'.repeat(64),
           }),
         });
       `;

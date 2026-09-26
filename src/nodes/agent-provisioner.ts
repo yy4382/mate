@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash, randomBytes } from "node:crypto";
 import {
   constants as fsConstants,
   closeSync,
@@ -36,6 +37,7 @@ export interface LinuxAgentIdentity {
   uid: number;
   gid: number;
   home: string;
+  homeMarker: string;
 }
 
 export class AgentProvisioningError extends Error {
@@ -108,7 +110,14 @@ export function readProvisionedLinuxAgentIdentity(
   if (!account) throw new AgentProvisioningError("identity_mismatch", "Agent Linux 账号不存在。");
   verifyAccount(account, group, username, id, home);
   verifyPrivateHome(home, account.uid, account.gid);
-  return { username, uid: account.uid, gid: account.gid, home };
+  verifyMemoryEntry(home, account.uid, account.gid);
+  return {
+    username,
+    uid: account.uid,
+    gid: account.gid,
+    home,
+    homeMarker: verifyHomeMarker(home, account.uid, account.gid),
+  };
 }
 
 async function provisionLinuxAgentOnce(
@@ -153,6 +162,7 @@ async function provisionLinuxAgentOnce(
   verifyAccount(account, group, username, agentId, home);
   ensurePrivateHome(home, account.uid, account.gid);
   ensureMemoryEntry(home, account.uid, account.gid);
+  ensureHomeMarker(home, account.uid, account.gid);
 
   progress("verifying_identity");
   const verifiedAccount = readPasswd(username),
@@ -161,7 +171,13 @@ async function provisionLinuxAgentOnce(
   verifyAccount(verifiedAccount, verifiedGroup, username, agentId, home);
   verifyPrivateHome(home, verifiedAccount.uid, verifiedAccount.gid);
   verifyMemoryEntry(home, verifiedAccount.uid, verifiedAccount.gid);
-  return { username, uid: verifiedAccount.uid, gid: verifiedAccount.gid, home };
+  return {
+    username,
+    uid: verifiedAccount.uid,
+    gid: verifiedAccount.gid,
+    home,
+    homeMarker: verifyHomeMarker(home, verifiedAccount.uid, verifiedAccount.gid),
+  };
 }
 
 /** Turn one authenticated node request into progress and one bounded result message. */
@@ -470,6 +486,57 @@ function verifyMemoryEntry(home: string, uid: number, gid: number): void {
     const stat = fstatSync(fd);
     if (!stat.isFile() || stat.uid !== uid || stat.gid !== gid || (stat.mode & 0o777) !== 0o600)
       throw new AgentProvisioningError("identity_mismatch", "MEMORY.md 的所有者或权限核验失败。");
+  } finally {
+    closeSync(fd);
+  }
+}
+
+const homeMarkerName = ".mate-home-id";
+
+function ensureHomeMarker(home: string, uid: number, gid: number): void {
+  const path = join(home, homeMarkerName);
+  let fd: number | undefined;
+  try {
+    fd = openSync(
+      path,
+      fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW,
+      0o600,
+    );
+    writeFileSync(fd, `${randomBytes(32).toString("hex")}\n`, "utf8");
+    fsyncSync(fd);
+    fchownSync(fd, uid, gid);
+    fchmodSync(fd, 0o600);
+    closeSync(fd);
+  } catch (error) {
+    if (typeof fd === "number") closeSync(fd);
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST")
+      throw new AgentProvisioningError("filesystem_error", "节点无法建立 Agent home 标记。");
+    verifyHomeMarker(home, uid, gid);
+  }
+}
+
+function verifyHomeMarker(home: string, uid: number, gid: number): string {
+  let fd: number;
+  try {
+    fd = openSync(join(home, homeMarkerName), fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  } catch {
+    throw new AgentProvisioningError("identity_mismatch", "Agent home 原身份标记缺失。");
+  }
+  try {
+    const stat = fstatSync(fd);
+    if (
+      !stat.isFile() ||
+      stat.nlink !== 1 ||
+      stat.uid !== uid ||
+      stat.gid !== gid ||
+      (stat.mode & 0o777) !== 0o600 ||
+      stat.size !== 65
+    )
+      throw new AgentProvisioningError("identity_mismatch", "Agent home 原身份标记无效。");
+    const marker = readFileSync(fd, "utf8");
+    if (!/^[0-9a-f]{64}\n$/.test(marker))
+      throw new AgentProvisioningError("identity_mismatch", "Agent home 原身份标记无效。");
+    return createHash("sha256").update(marker).digest("hex");
   } finally {
     closeSync(fd);
   }

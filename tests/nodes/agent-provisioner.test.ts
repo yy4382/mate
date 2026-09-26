@@ -40,6 +40,7 @@ it("handles only the constrained provision request and returns verified identity
         uid: 23001,
         gid: 23001,
         home: `/var/lib/mate/agents/${agentId}`,
+        homeMarker: "a".repeat(64),
       };
     },
   );
@@ -68,6 +69,7 @@ it("handles only the constrained provision request and returns verified identity
         uid: 23001,
         gid: 23001,
         home: `/var/lib/mate/agents/${agentId}`,
+        homeMarker: "a".repeat(64),
       },
     },
   ]);

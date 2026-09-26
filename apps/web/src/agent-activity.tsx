@@ -95,6 +95,12 @@ export function AgentActivity({ agentId }: { agentId: string }) {
             >
               {page?.pausedReason === "manual" ? "复启 Agent" : "停用 Agent"}
             </button>
+            {page?.pausedReason === "manual" &&
+              (page.stop?.state === "unknown" || page.stop?.state === "failed") && (
+                <button type="button" onClick={() => void changePause("pause")}>
+                  重新请求停止后台进程
+                </button>
+              )}
             <button type="button" aria-pressed={expanded} onClick={() => setExpanded(!expanded)}>
               {expanded ? "隐藏详情" : "展开详情"}
             </button>

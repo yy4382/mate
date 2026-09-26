@@ -243,11 +243,17 @@ try {
     timeoutDatabase.close();
   }
 
-  await recovered.execute(agentBId, randomUUID(), {
-    kind: "process.stop",
-    targetOperationId: peerOperationId,
-  });
+  const stopAll = await recovered.execute(agentBId, randomUUID(), { kind: "process.stop_all" });
+  assert.equal(stopAll.state, "succeeded");
+  assert.ok(stopAll.receipt.units.includes(agentProcessUnit(agentB.uid, peerOperationId)));
   await waitForPidExit(peerPid);
+  const fenced = await recovered.execute(agentBId, randomUUID(), {
+    kind: "exec",
+    cwd: ".",
+    command: "printf should-not-run",
+  });
+  assert.deepEqual(fenced.receipt, { reason: "agent_stopping" });
+  recovered.allowAgent(agentBId);
   process.stdout.write(
     `${JSON.stringify({
       mode: "real-linux-container",
@@ -256,6 +262,7 @@ try {
       credentialAndPeerHomeDenied: true,
       peerProcessSurvivedOtherAgentStop: true,
       scopePersistedAndStopped: true,
+      agentWideStopAndFenceConfirmed: true,
       duplicateOperationReplayedReceipt: true,
       outputLimitBytes: Buffer.byteLength(output.receipt.stdout, "utf8"),
       resultMessageBytes,

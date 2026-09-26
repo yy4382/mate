@@ -81,6 +81,7 @@ CREATE INDEX IF NOT EXISTS agent_process_operations_agent
  */
 export class AgentProcessOperations {
   private readonly inFlight = new Map<string, Promise<AgentProcessOperationReceipt>>();
+  private readonly stoppingAgents = new Set<string>();
   private readonly findOperation;
   private readonly insertOperation;
   private readonly settleOperation;
@@ -120,6 +121,12 @@ export class AgentProcessOperations {
     return toReceipt(row);
   }
 
+  /** Called only after the control plane has verified the original identity for reactivation. */
+  allowAgent(agentId: string): void {
+    agentIdSchema.parse(agentId);
+    this.stoppingAgents.delete(agentId);
+  }
+
   async execute(
     agentId: string,
     operationId: string,
@@ -154,8 +161,40 @@ export class AgentProcessOperations {
     const active = this.inFlight.get(operationId);
     if (active) return active;
 
+    if (operation.kind !== "process.stop_all" && this.stoppingAgents.has(agentId)) {
+      this.settleOperation.run(
+        "failed",
+        JSON.stringify({ reason: "agent_stopping" }),
+        this.now(),
+        operationId,
+      );
+      return toReceipt(this.findOperation.get(operationId) as OperationRow);
+    }
+
+    const admitted =
+      operation.kind === "process.stop_all"
+        ? [...this.inFlight.entries()]
+            .filter(([id]) => (this.findOperation.get(id) as OperationRow).agent_id === agentId)
+            .map(([, promise]) => promise)
+        : [];
+    if (operation.kind === "process.stop_all") this.stoppingAgents.add(agentId);
+
+    const executeWithFence = async () => {
+      const first = await this.executeHostOperation({ agentId, operationId, operation });
+      if (
+        operation.kind !== "process.stop_all" ||
+        first.state !== "succeeded" ||
+        admitted.length === 0
+      )
+        return first;
+      // An already admitted exec can create a scope after the first systemd listing. Its
+      // completion is durable before the final pass, which closes that race.
+      await Promise.allSettled(admitted);
+      return this.executeHostOperation({ agentId, operationId, operation });
+    };
+
     const execution = Promise.resolve()
-      .then(() => this.executeHostOperation({ agentId, operationId, operation }))
+      .then(executeWithFence)
       .then(
         (result) => {
           const receipt = JSON.stringify(result.receipt);

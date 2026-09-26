@@ -36,6 +36,7 @@ const provisionIdentitySchema = z
     uid: z.number().int().positive(),
     gid: z.number().int().positive(),
     home: z.string().regex(/^\//).max(4096),
+    homeMarker: z.string().regex(/^[0-9a-f]{64}$/),
   })
   .strict();
 
@@ -282,6 +283,13 @@ const NodeControlMessageShapeSchema = z.discriminatedUnion("type", [
       runId: requestIdSchema,
       agentId: agentIdSchema,
       reason: z.enum(["timeout", "credentials_changed", "manual_pause"]),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("control.agent.activate"),
+      requestId: requestIdSchema,
+      agentId: agentIdSchema,
     })
     .strict(),
   z

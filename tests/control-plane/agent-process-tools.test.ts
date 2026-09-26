@@ -309,6 +309,7 @@ it("dispatches ordinary commands from a durable intent without privileged approv
       uid: 23001,
       gid: 23001,
       home: `/var/lib/mate/agents/${agentId}`,
+      homeMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -430,6 +431,7 @@ it("reconciles a durable node receipt before resuming a disconnected Agent", asy
       uid: 23002,
       gid: 23002,
       home: `/var/lib/mate/agents/${agentId}`,
+      homeMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -666,6 +668,7 @@ it("commits a compaction snapshot and replacement session before ACK and recover
       uid: 23003,
       gid: 23003,
       home: `/var/lib/mate/agents/${agentId}`,
+      homeMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -824,6 +827,7 @@ it("pauses for credential failures and owner choice while transient model failur
       uid: 23004,
       gid: 23004,
       home: `/var/lib/mate/agents/${agentId}`,
+      homeMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -906,6 +910,7 @@ it("pauses for credential failures and owner choice while transient model failur
                 uid: 23004,
                 gid: 23004,
                 home: `/var/lib/mate/agents/${agentId}`,
+                homeMarker: "a".repeat(64),
               },
             }),
           ),
@@ -933,6 +938,12 @@ it("pauses for credential failures and owner choice while transient model failur
     headers: { cookie },
   });
   expect(resume.status, await resume.text()).toBe(200);
+  expect(
+    socket.sent.slice(resumedStart).some((text) => {
+      const message = JSON.parse(text) as { type: string; agentId?: string };
+      return message.type === "control.agent.activate" && message.agentId === agentId;
+    }),
+  ).toBe(true);
   const third = await waitForRun(socket, resumedStart);
   expect(third.runId).not.toBe(retry.runId);
   const before = Date.now();

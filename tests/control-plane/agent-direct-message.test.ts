@@ -287,6 +287,7 @@ it("creates one private owner DM and keeps its input queued while the Agent awai
       uid: 23001,
       gid: 23001,
       home: `/var/lib/mate/agents/${agentId}`,
+      homeMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -336,6 +337,7 @@ it("routes Agent conversation discovery through its current control-plane run", 
       uid: 23001,
       gid: 23001,
       home: `/var/lib/mate/agents/${agentId}`,
+      homeMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -409,6 +411,7 @@ it("limits read and send to joined conversations while exposing only public meta
       uid: 23001,
       gid: 23001,
       home: `/var/lib/mate/agents/${agentId}`,
+      homeMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -545,6 +548,7 @@ it("replays a committed tool action after its reply is lost and the delivery ret
       uid: 23001,
       gid: 23001,
       home: `/var/lib/mate/agents/${agentId}`,
+      homeMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -638,6 +642,7 @@ it("recovers the completed tool action and result in the Agent's next run contex
       uid: 23001,
       gid: 23001,
       home: `/var/lib/mate/agents/${agentId}`,
+      homeMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -708,6 +713,7 @@ it("restarts the real Pi worker after a lost result without replaying a committe
       uid: 23001,
       gid: 23001,
       home: `/var/lib/mate/agents/${agentId}`,
+      homeMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -911,6 +917,7 @@ it("commits an eligible peer invitation once and rejects invalid invitation targ
         uid: 23001,
         gid: 23001,
         home: `/var/lib/mate/agents/${agentId}`,
+        homeMarker: "a".repeat(64),
       },
       app.chat,
     );
@@ -1003,6 +1010,7 @@ it("lets the owner invite an existing Agent to a channel through the authenticat
       uid: 23001,
       gid: 23001,
       home: `/var/lib/mate/agents/${agentId}`,
+      homeMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -1118,6 +1126,7 @@ it("lets one Agent discover and open an explicit peer DM that both Agents and th
         uid: 23001,
         gid: 23001,
         home: `/var/lib/mate/agents/${agentId}`,
+        homeMarker: "a".repeat(64),
       },
       app.chat,
     );
@@ -1287,6 +1296,7 @@ it("uses the persisted independent-review seat and refuses stale or forged tool 
       uid: 23001,
       gid: 23001,
       home: `/var/lib/mate/agents/${agentId}`,
+      homeMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -1370,6 +1380,7 @@ it("limits each run to its committed input batch and consumes silent batches", a
       uid: 23001,
       gid: 23001,
       home: `/var/lib/mate/agents/${agentId}`,
+      homeMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -1501,6 +1512,7 @@ it("keeps a later private input out of a public channel run", async () => {
       uid: 23001,
       gid: 23001,
       home: `/var/lib/mate/agents/${agentId}`,
+      homeMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -1706,6 +1718,7 @@ it("keeps an archived run input pending and retries it after the owner unarchive
       uid: 23001,
       gid: 23001,
       home: `/var/lib/mate/agents/${agentId}`,
+      homeMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -1827,6 +1840,7 @@ it("does not let an archived earlier source block or join a later source run", a
       uid: 23001,
       gid: 23001,
       home: `/var/lib/mate/agents/${agentId}`,
+      homeMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -1997,6 +2011,7 @@ it("pages handled session history before appending an older pending run input", 
       uid: 23001,
       gid: 23001,
       home: `/var/lib/mate/agents/${agentId}`,
+      homeMarker: "a".repeat(64),
     },
     app.chat,
   );
