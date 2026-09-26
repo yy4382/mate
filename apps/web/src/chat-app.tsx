@@ -15,7 +15,10 @@ interface Channel {
 interface Message {
   id: string;
   channelId: string;
-  rootId: null;
+  rootId: string | null;
+  quoteId?: string | null;
+  replyCount?: number;
+  recentReplies?: Message[];
   author: { kind: "human"; id: "owner" } | { kind: "agent"; id: string };
   text: string;
   order: string;
@@ -57,7 +60,7 @@ interface ChatEvent<T = unknown> {
   payload: T;
 }
 
-type MobileView = "home" | "channels" | "chat";
+type MobileView = "home" | "channels" | "chat" | "thread";
 type DialogState = { kind: "create" } | { kind: "settings"; channel: Channel } | null;
 const maxLoadedMessages = 200;
 const emptyMessageWindow: MessageWindow = { messages: [], nextBefore: null, hasNewer: false };
@@ -147,12 +150,35 @@ export function ChatPage() {
   const [live, setLive] = useState(false);
   const [mobileView, setMobileView] = useState<MobileView>("home");
   const [dialog, setDialog] = useState<DialogState>(null);
+  const [threadRoot, setThreadRoot] = useState<Message | null>(null);
+  const [threadReplies, setThreadReplies] = useState<Message[]>([]);
+  const [replyTarget, setReplyTarget] = useState<{
+    kind: "quote" | "thread";
+    message: Message;
+  } | null>(null);
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const streamRef = useRef<EventSource | null>(null);
+  const threadRootIdRef = useRef<string | null>(null);
   const selectedIdRef = useRef<string | null>(null);
   const draft = selectedId ? (drafts[selectedId] ?? "") : "";
   selectedIdRef.current = selectedId;
+  threadRootIdRef.current = threadRoot?.id ?? null;
 
   const closeDialog = useCallback(() => setDialog(null), []);
+  const openThread = useCallback(async (message: Message) => {
+    setThreadRoot(message.rootId ? null : message);
+    setMobileView("thread");
+    setOpenMenuId(null);
+    try {
+      const thread = await ownerJSON<{ root: Message; replies: Message[] }>(
+        `/api/owner/channels/${encodeURIComponent(message.channelId)}/threads/${encodeURIComponent(message.id)}`,
+      );
+      setThreadRoot(thread.root);
+      setThreadReplies(thread.replies);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "无法读取讨论串。");
+    }
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -247,12 +273,35 @@ export function ChatPage() {
         stream.addEventListener("message.created", (event) => {
           const update = JSON.parse((event as MessageEvent<string>).data) as ChatEvent<Message>;
           if (selectedIdRef.current !== update.channelId) return;
+          if (update.payload.rootId) {
+            setThreadReplies((current) =>
+              threadRootIdRef.current === update.payload.rootId
+                ? mergeMessage(current, update.payload)
+                : current,
+            );
+          }
           setMessageWindows((current) => {
             const window = current[update.channelId] ?? emptyMessageWindow;
             return {
               [update.channelId]: window.hasNewer
                 ? window
-                : appendToLatestWindow(window, [update.payload]),
+                : update.payload.rootId
+                  ? {
+                      ...window,
+                      messages: window.messages.map((message) =>
+                        message.id === update.payload.rootId
+                          ? {
+                              ...message,
+                              replyCount: (message.replyCount ?? 0) + 1,
+                              recentReplies: [
+                                ...(message.recentReplies ?? []),
+                                update.payload,
+                              ].slice(-3),
+                            }
+                          : message,
+                      ),
+                    }
+                  : appendToLatestWindow(window, [update.payload]),
             };
           });
         });
@@ -277,6 +326,9 @@ export function ChatPage() {
   }, [authenticated]);
 
   useEffect(() => {
+    setThreadRoot(null);
+    setThreadReplies([]);
+    setReplyTarget(null);
     setMessageWindows((current) =>
       selectedId && current[selectedId] ? { [selectedId]: current[selectedId] } : {},
     );
@@ -376,10 +428,19 @@ export function ChatPage() {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: submittedDraft }),
+          body: JSON.stringify({
+            text: submittedDraft,
+            ...(replyTarget?.kind === "quote"
+              ? { quoteId: replyTarget.message.id }
+              : replyTarget?.kind === "thread"
+                ? { rootId: replyTarget.message.rootId ?? replyTarget.message.id }
+                : {}),
+          }),
         },
       );
-      if (selectedIdRef.current === channelId)
+      if (replyTarget?.kind === "thread")
+        setThreadReplies((current) => mergeMessage(current, message));
+      if (selectedIdRef.current === channelId && !message.rootId)
         setMessageWindows((current) => {
           const window = current[channelId] ?? emptyMessageWindow;
           return {
@@ -389,6 +450,7 @@ export function ChatPage() {
       setDrafts((current) =>
         current[channelId] === submittedDraft ? { ...current, [channelId]: "" } : current,
       );
+      setReplyTarget(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "消息发送失败，请重试。");
     } finally {
@@ -734,7 +796,7 @@ export function ChatPage() {
                 </div>
               ) : (
                 currentMessages.map((message) => (
-                  <article className="message-row" key={message.id}>
+                  <article className="message-row" key={message.id} tabIndex={0}>
                     <div className="message-avatar" aria-hidden="true">
                       {message.author.id === "mate-system"
                         ? "M"
@@ -755,7 +817,64 @@ export function ChatPage() {
                           {timeLabel(message.createdAt)}
                         </time>
                       </div>
+                      {message.quoteId && (
+                        <span className="quote-reference">
+                          引用：
+                          {currentMessages.find((entry) => entry.id === message.quoteId)?.text ??
+                            message.quoteId}
+                        </span>
+                      )}
                       <p>{message.text}</p>
+                      {!!message.replyCount && (
+                        <button
+                          type="button"
+                          className="thread-preview"
+                          onClick={() => void openThread(message)}
+                        >
+                          {message.replyCount} 条讨论串回复 ·{" "}
+                          {(message.recentReplies ?? []).map((reply) => reply.text).join(" / ")}
+                        </button>
+                      )}
+                    </div>
+                    <div className="message-actions">
+                      <button
+                        type="button"
+                        className="message-menu-trigger"
+                        aria-label={`消息 ${message.text} 的操作`}
+                        aria-expanded={openMenuId === message.id}
+                        onClick={() =>
+                          setOpenMenuId((current) => (current === message.id ? null : message.id))
+                        }
+                      >
+                        ⋯
+                      </button>
+                      {openMenuId === message.id && (
+                        <div className="message-menu" role="group" aria-label="消息操作">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setReplyTarget({ kind: "quote", message });
+                              setOpenMenuId(null);
+                              document.getElementById("message-draft")?.focus();
+                            }}
+                          >
+                            普通回复（引用）
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setReplyTarget({ kind: "thread", message });
+                              setOpenMenuId(null);
+                              void openThread(message);
+                            }}
+                          >
+                            讨论串回复
+                          </button>
+                          <button type="button" onClick={() => void openThread(message)}>
+                            查看讨论串
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </article>
                 ))
@@ -788,6 +907,19 @@ export function ChatPage() {
               <div className="archived-notice">此频道已归档，消息只能查看。</div>
             ) : (
               <form className="message-composer" onSubmit={sendMessage}>
+                {replyTarget && (
+                  <div className="reply-context">
+                    {replyTarget.kind === "quote" ? "普通回复，引用" : "讨论串回复"}：
+                    {replyTarget.message.text}
+                    <button
+                      type="button"
+                      onClick={() => setReplyTarget(null)}
+                      aria-label="取消回复"
+                    >
+                      ×
+                    </button>
+                  </div>
+                )}
                 <label className="visually-hidden" htmlFor="message-draft">
                   发送到 {selected.name}
                 </label>
@@ -806,7 +938,11 @@ export function ChatPage() {
                   }}
                 />
                 <div className="composer-footer">
-                  <span>顶层消息会显示在频道时间线中</span>
+                  <span>
+                    {replyTarget?.kind === "thread"
+                      ? "只显示在讨论串中"
+                      : "顶层消息会显示在频道时间线中"}
+                  </span>
                   <div className="composer-actions">
                     <label className="attachment-picker">
                       添加附件
@@ -851,6 +987,47 @@ export function ChatPage() {
           </div>
         )}
       </main>
+
+      {threadRoot && (
+        <aside className="thread-panel" aria-label="讨论串">
+          <header>
+            <button
+              type="button"
+              onClick={() => {
+                setThreadRoot(null);
+                setMobileView("chat");
+              }}
+              aria-label="关闭讨论串"
+            >
+              ‹
+            </button>
+            <h2>讨论串</h2>
+          </header>
+          <article className="thread-root">
+            <strong>{threadRoot.author.kind === "human" ? "你" : "Agent"}</strong>
+            <p>{threadRoot.text}</p>
+          </article>
+          <div className="thread-replies">
+            {threadReplies.map((reply) => (
+              <article key={reply.id}>
+                <strong>{reply.author.kind === "human" ? "你" : "Agent"}</strong>
+                <p>{reply.text}</p>
+              </article>
+            ))}
+          </div>
+          <button
+            type="button"
+            className="thread-reply-button"
+            onClick={() => {
+              setReplyTarget({ kind: "thread", message: threadRoot });
+              setMobileView("chat");
+              document.getElementById("message-draft")?.focus();
+            }}
+          >
+            回复讨论串
+          </button>
+        </aside>
+      )}
 
       <nav className="mobile-bottom-nav" aria-label="主导航">
         <button

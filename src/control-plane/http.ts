@@ -34,7 +34,14 @@ const updateChannelSchema = z
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0);
-const newMessageSchema = z.object({ text: z.string().trim().min(1).max(20_000) }).strict();
+const newMessageSchema = z
+  .object({
+    text: z.string().trim().min(1).max(20_000),
+    rootId: z.string().uuid().optional(),
+    quoteId: z.string().uuid().optional(),
+  })
+  .strict()
+  .refine((value) => !(value.rootId && value.quoteId));
 const ownerChannelInvitationSchema = z.object({ agentId: z.string().uuid() }).strict();
 const modelCredentialInputSchema = z
   .object({
@@ -681,6 +688,14 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
     if (!page) return context.json({ error: "频道不存在" }, 404);
     return context.json(page);
   });
+  app.get("/api/owner/channels/:channelId/threads/:rootId", (context) => {
+    const thread = ownerChat.listThread(
+      context.req.param("channelId"),
+      context.req.param("rootId"),
+    );
+    if (!thread) return context.json({ error: "讨论串不存在" }, 404);
+    return context.json(thread);
+  });
   app.post("/api/owner/channels/:channelId/messages", async (context) => {
     let body: unknown;
     try {
@@ -691,13 +706,19 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
     const input = newMessageSchema.safeParse(body);
     if (!input.success) return context.json({ error: "消息内容无效" }, 400);
     try {
-      const message = ownerChat.createMessage(context.req.param("channelId"), input.data.text);
+      const message = ownerChat.createMessage(
+        context.req.param("channelId"),
+        input.data.text,
+        input.data,
+      );
       if (!message) return context.json({ error: "频道不存在" }, 404);
       app.runs?.wake();
       return context.json(message, 201);
     } catch (error) {
       if (error instanceof ArchivedChannelError)
         return context.json({ error: "频道已归档，不能发送消息" }, 409);
+      if (error instanceof Error && error.message.startsWith("Reply target"))
+        return context.json({ error: "回复目标无效" }, 400);
       throw error;
     }
   });

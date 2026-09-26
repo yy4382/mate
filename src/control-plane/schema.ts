@@ -1,3 +1,4 @@
+import { conversationAttentionSchemaV17 } from "./conversation-attention-schema.js";
 import { nodeDirectorySchema } from "./nodes/schema.js";
 import { ownerAuthSchema } from "./owner-auth-schema.js";
 import { agentDirectorySchema } from "./agents/schema.js";
@@ -39,7 +40,7 @@ export const controlPlaneSchemaV13 = `${controlPlaneSchemaV12}\n${agentProcessOp
 export const controlPlaneSchemaV14 = `${controlPlaneSchemaV13}\n${workspaceSchemaV14}`;
 export const controlPlaneSchemaV15 = `${controlPlaneSchemaV14}\n${workspaceAccessAuditSchemaV15}`;
 export const controlPlaneSchemaV16 = `${controlPlaneSchemaV15}\n${recoverySchemaV16}`;
-export const controlPlaneSchema = controlPlaneSchemaV16;
+export const controlPlaneSchema = `${controlPlaneSchemaV16}\n${conversationAttentionSchemaV17}`;
 
 export const controlPlaneMigrations = [
   {
@@ -132,5 +133,12 @@ export const controlPlaneMigrations = [
     previousSchema: controlPlaneSchemaV15,
     nextSchema: controlPlaneSchemaV16,
     migrationSchema: recoverySchemaV16,
+  },
+  {
+    fromRevision: 16,
+    toRevision: 17,
+    previousSchema: controlPlaneSchemaV16,
+    nextSchema: controlPlaneSchema,
+    migrationSchema: conversationAttentionSchemaV17,
   },
 ] as const;

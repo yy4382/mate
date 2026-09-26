@@ -29,7 +29,10 @@ export interface OwnerChannel {
 export interface OwnerMessage {
   id: string;
   channelId: string;
-  rootId: null;
+  rootId: string | null;
+  quoteId: string | null;
+  replyCount: number;
+  recentReplies: OwnerMessage[];
   author: { kind: "human"; id: "owner" } | { kind: "agent"; id: string };
   text: string;
   order: string;
@@ -127,6 +130,7 @@ interface ActiveAgentToolRun {
   session_id: string;
   state: string;
   independent_review: number;
+  input_end_seq: number;
 }
 
 export interface AuthorizedAgentProcessOperation {
@@ -159,6 +163,8 @@ interface MessageRow {
   order_seq: number;
   revision: number;
   text: string;
+  root_id?: string | null;
+  quote_id?: string | null;
   author_kind: OwnerPrincipalKind;
   author_id: string;
   created_at: number;
@@ -184,6 +190,8 @@ interface PendingDeliveryRow {
   order_seq: number;
   revision: number;
   text: string;
+  root_id: string | null;
+  quote_id: string | null;
   author_kind: OwnerPrincipalKind;
   author_id: string;
   created_at: number;
@@ -536,7 +544,11 @@ export class OwnerChat {
       .immediate();
   }
 
-  createMessage(channelId: string, text: string): OwnerMessage | undefined {
+  createMessage(
+    channelId: string,
+    text: string,
+    position: { rootId?: string | undefined; quoteId?: string | undefined } = {},
+  ): OwnerMessage | undefined {
     const id = randomUUID(),
       at = this.now();
     return this.db
@@ -547,6 +559,16 @@ export class OwnerChat {
         if (!channel) return undefined;
         if (channel.archived) throw new ArchivedChannelError();
 
+        if (position.rootId && position.quoteId)
+          throw new Error("A message cannot be both a thread and quote reply");
+        const targetId = position.rootId ?? position.quoteId;
+        if (targetId) {
+          const target = this.db
+            .prepare("SELECT channel_id,root_id FROM owner_messages WHERE id=?")
+            .get(targetId) as { channel_id: string; root_id: string | null } | undefined;
+          if (!target || target.channel_id !== channelId || (position.rootId && target.root_id))
+            throw new Error("Reply target is not a root message in this conversation");
+        }
         const sequence = this.db
           .prepare(
             "SELECT COALESCE(MAX(order_seq),0)+1 AS next FROM owner_messages WHERE channel_id=?",
@@ -554,15 +576,25 @@ export class OwnerChat {
           .get(channelId) as { next: number };
         this.db
           .prepare(
-            "INSERT INTO owner_messages(id,channel_id,order_seq,text,created_at) VALUES(?,?,?,?,?)",
+            "INSERT INTO owner_messages(id,channel_id,order_seq,text,root_id,quote_id,created_at) VALUES(?,?,?,?,?,?,?)",
           )
-          .run(id, channelId, sequence.next, text, at);
+          .run(
+            id,
+            channelId,
+            sequence.next,
+            text,
+            position.rootId ?? null,
+            position.quoteId ?? null,
+            at,
+          );
         const message = toMessage({
           id,
           channel_id: channelId,
           order_seq: sequence.next,
           revision: 1,
           text,
+          root_id: position.rootId ?? null,
+          quote_id: position.quoteId ?? null,
           author_kind: "human",
           author_id: "owner",
           created_at: at,
@@ -653,7 +685,7 @@ export class OwnerChat {
       .prepare(
         `SELECT d.seq AS delivery_sequence,d.id AS delivery_id,d.message_id,d.channel_id,
                 d.recipient_kind,d.recipient_id,d.state,d.created_at AS delivery_created_at,
-                m.order_seq,m.revision,m.text,m.author_kind,m.author_id,m.created_at
+                m.order_seq,m.revision,m.text,m.root_id,m.quote_id,m.author_kind,m.author_id,m.created_at
          FROM owner_message_deliveries d JOIN owner_messages m ON m.id=d.message_id
          WHERE d.recipient_kind=? AND d.recipient_id=? AND d.state='pending' AND d.seq>?
          ORDER BY d.seq LIMIT ?`,
@@ -674,6 +706,8 @@ export class OwnerChat {
           order_seq: row.order_seq,
           revision: row.revision,
           text: row.text,
+          root_id: row.root_id,
+          quote_id: row.quote_id,
           author_kind: row.author_kind,
           author_id: row.author_id,
           created_at: row.created_at,
@@ -973,9 +1007,9 @@ export class OwnerChat {
             .get(run.channel_id) as { next: number };
         this.db
           .prepare(
-            "INSERT INTO owner_messages(id,channel_id,order_seq,text,author_kind,author_id,created_at) VALUES(?,?,?,?, 'agent', ?,?)",
+            "INSERT INTO owner_messages(id,channel_id,order_seq,text,root_id,quote_id,author_kind,author_id,created_at) VALUES(?,?,?,?,?,?, 'agent', ?,?)",
           )
-          .run(messageId, run.channel_id, sequence.next, text, agentId, at);
+          .run(messageId, run.channel_id, sequence.next, text, null, null, agentId, at);
         const message = toMessage({
           id: messageId,
           channel_id: run.channel_id,
@@ -1089,12 +1123,45 @@ export class OwnerChat {
       return undefined;
     const rows = this.db
       .prepare(
-        "SELECT id,channel_id,order_seq,revision,text,author_kind,author_id,created_at FROM owner_messages WHERE channel_id=? AND (? IS NULL OR order_seq < ?) ORDER BY order_seq DESC LIMIT ?",
+        "SELECT id,channel_id,order_seq,revision,text,root_id,quote_id,author_kind,author_id,created_at FROM owner_messages WHERE channel_id=? AND root_id IS NULL AND (? IS NULL OR order_seq < ?) ORDER BY order_seq DESC LIMIT ?",
       )
       .all(channelId, before ?? null, before ?? null, limit + 1) as MessageRow[];
     const hasMore = rows.length > limit,
-      messages = rows.slice(0, limit).reverse().map(toMessage);
+      messages = rows
+        .slice(0, limit)
+        .reverse()
+        .map((row) => this.withReplyPreview(toMessage(row)));
     return { messages, nextBefore: hasMore ? (messages[0]?.order ?? null) : null };
+  }
+
+  listThread(
+    channelId: string,
+    rootId: string,
+  ): { root: OwnerMessage; replies: OwnerMessage[] } | undefined {
+    const root = this.db
+      .prepare(
+        "SELECT id,channel_id,order_seq,revision,text,root_id,quote_id,author_kind,author_id,created_at FROM owner_messages WHERE id=? AND channel_id=? AND root_id IS NULL",
+      )
+      .get(rootId, channelId) as MessageRow | undefined;
+    if (!root) return undefined;
+    const replies = this.db
+      .prepare(
+        "SELECT id,channel_id,order_seq,revision,text,root_id,quote_id,author_kind,author_id,created_at FROM owner_messages WHERE channel_id=? AND root_id=? ORDER BY order_seq",
+      )
+      .all(channelId, rootId) as MessageRow[];
+    return { root: this.withReplyPreview(toMessage(root)), replies: replies.map(toMessage) };
+  }
+
+  private withReplyPreview(message: OwnerMessage): OwnerMessage {
+    const rows = this.db
+      .prepare(
+        "SELECT id,channel_id,order_seq,revision,text,root_id,quote_id,author_kind,author_id,created_at FROM owner_messages WHERE channel_id=? AND root_id=? ORDER BY order_seq DESC LIMIT 3",
+      )
+      .all(message.channelId, message.id) as MessageRow[];
+    const count = this.db
+      .prepare("SELECT COUNT(*) AS count FROM owner_messages WHERE channel_id=? AND root_id=?")
+      .get(message.channelId, message.id) as { count: number };
+    return { ...message, replyCount: count.count, recentReplies: rows.reverse().map(toMessage) };
   }
 
   private readChannel(id: string): OwnerChannel {
@@ -1111,7 +1178,7 @@ export class OwnerChat {
     const run = this.db
       .prepare(
         `SELECT r.id AS run_id,r.agent_id,r.node_id,r.delivery_id AS action_scope_id,
-                r.state,r.independent_review,s.id AS session_id,
+                r.state,r.independent_review,r.input_end_seq,s.id AS session_id,
                 a.node_id AS current_node_id
          FROM owner_agent_runs r
          JOIN owner_agents a ON a.id=r.agent_id
@@ -1151,7 +1218,26 @@ export class OwnerChat {
         if (before !== undefined && !Number.isSafeInteger(before)) throw new z.ZodError([]);
         const page = this.listMessages(args.conversationId, before, args.limit);
         if (!page) throw new AgentToolRefusal("Conversation is not available");
+        for (const message of page.messages)
+          this.db
+            .prepare(
+              "UPDATE owner_agent_message_attention SET presented=1,updated_at=? WHERE agent_id=? AND message_id=?",
+            )
+            .run(this.now(), run.agent_id, message.id);
         return { conversation, ...page };
+      }
+      case "conversations.read_thread": {
+        const args = agentConversationOperations["conversations.read_thread"].schema.parse(input);
+        this.requireAgentConversation(run.agent_id, args.conversationId);
+        const thread = this.listThread(args.conversationId, args.rootId);
+        if (!thread) throw new AgentToolRefusal("Thread is not available");
+        for (const message of [thread.root, ...thread.replies])
+          this.db
+            .prepare(
+              "UPDATE owner_agent_message_attention SET presented=1,updated_at=? WHERE agent_id=? AND message_id=?",
+            )
+            .run(this.now(), run.agent_id, message.id);
+        return thread;
       }
       case "conversations.open_dm": {
         const args = agentConversationOperations["conversations.open_dm"].schema.parse(input);
@@ -1163,12 +1249,181 @@ export class OwnerChat {
           this.getOrCreateAgentPeerDirectChannel(run.agent_id, args.targetAgentId),
         );
       }
+      case "attention.list": {
+        const args = agentConversationOperations["attention.list"].schema.parse(input);
+        this.requireAgentConversation(run.agent_id, args.conversationId);
+        return {
+          items: this.db
+            .prepare(
+              `SELECT a.message_id AS messageId,a.unread,a.seen,a.deferred,a.muted,a.presented,m.order_seq AS messageOrder,m.root_id AS rootId FROM owner_agent_message_attention a JOIN owner_messages m ON m.id=a.message_id WHERE a.agent_id=? AND m.channel_id=? ORDER BY m.order_seq`,
+            )
+            .all(run.agent_id, args.conversationId),
+        };
+      }
+      case "attention.update": {
+        const args = agentConversationOperations["attention.update"].schema.parse(input);
+        this.requireAgentConversation(run.agent_id, args.conversationId);
+        const message = this.db
+          .prepare("SELECT 1 FROM owner_messages WHERE id=? AND channel_id=?")
+          .get(args.messageId, args.conversationId);
+        if (!message) throw new AgentToolRefusal("Message is not available");
+        return this.recordAgentToolAction(run, toolCallId, "attention.update", args, () => {
+          const changes = ["unread", "seen", "deferred", "muted", "presented"] as const;
+          for (const key of changes)
+            if (args[key] !== undefined)
+              this.db
+                .prepare(
+                  `UPDATE owner_agent_message_attention SET ${key}=?,updated_at=? WHERE agent_id=? AND message_id=?`,
+                )
+                .run(args[key] ? 1 : 0, this.now(), run.agent_id, args.messageId);
+          return { conversationId: args.conversationId, messageId: args.messageId, updated: true };
+        });
+      }
+      case "drafts.save": {
+        const args = agentConversationOperations["drafts.save"].schema.parse(input);
+        this.requireAgentConversation(run.agent_id, args.conversationId);
+        this.validateMessagePosition(args.conversationId, args.rootId, args.quoteId);
+        return this.recordAgentToolAction(run, toolCallId, "drafts.save", args, () => {
+          const id = randomUUID(),
+            at = this.now(),
+            order = this.latestPositionOrder(args.conversationId, args.rootId);
+          this.db
+            .prepare(
+              "INSERT INTO owner_agent_drafts(id,agent_id,channel_id,root_id,quote_id,text,observed_order,presented_order,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,'editing',?,?)",
+            )
+            .run(
+              id,
+              run.agent_id,
+              args.conversationId,
+              args.rootId ?? null,
+              args.quoteId ?? null,
+              args.text,
+              order,
+              order,
+              at,
+              at,
+            );
+          return {
+            id,
+            channelId: args.conversationId,
+            state: "editing",
+            observedOrder: String(order),
+          };
+        });
+      }
+      case "drafts.review": {
+        const args = agentConversationOperations["drafts.review"].schema.parse(input);
+        const draft = this.readAgentDraft(run.agent_id, args.draftId);
+        this.requireAgentConversation(run.agent_id, draft.channel_id);
+        return this.recordAgentToolAction(run, toolCallId, "drafts.review", args, () => {
+          const changes = this.draftChanges(draft);
+          if (args.choice === "inspect") {
+            this.db
+              .prepare("UPDATE owner_agent_drafts SET presented_order=?,updated_at=? WHERE id=?")
+              .run(this.latestPositionOrder(draft.channel_id, draft.root_id), this.now(), draft.id);
+            return { channelId: draft.channel_id, draftId: draft.id, state: draft.state, changes };
+          }
+          if (
+            args.choice === "continue" &&
+            draft.presented_order < this.latestPositionOrder(draft.channel_id, draft.root_id)
+          )
+            throw new AgentToolRefusal("Conversation changed; inspect the draft before continuing");
+          if (draft.state === "sent" || draft.state === "abandoned")
+            throw new AgentToolRefusal("Draft is closed");
+          const state =
+            args.choice === "revise"
+              ? "editing"
+              : args.choice === "keep"
+                ? "kept"
+                : args.choice === "defer"
+                  ? "deferred"
+                  : args.choice === "abandon"
+                    ? "abandoned"
+                    : "ready";
+          if (args.choice === "revise" && !args.text)
+            throw new AgentToolRefusal("Revised text is required");
+          this.db
+            .prepare(
+              "UPDATE owner_agent_drafts SET text=COALESCE(?,text),observed_order=?,state=?,updated_at=? WHERE id=?",
+            )
+            .run(
+              args.choice === "revise" ? args.text : null,
+              this.latestPositionOrder(draft.channel_id, draft.root_id),
+              state,
+              this.now(),
+              draft.id,
+            );
+          return { channelId: draft.channel_id, draftId: draft.id, state, changes };
+        });
+      }
       case "messages.send": {
         const args = agentConversationOperations["messages.send"].schema.parse(input);
         this.requireAgentConversation(run.agent_id, args.conversationId);
-        return this.recordAgentToolAction(run, toolCallId, "messages.send", args, () =>
-          this.createAgentToolMessage(run, toolCallId, args.conversationId, args.text),
-        );
+        this.validateMessagePosition(args.conversationId, args.rootId, args.quoteId);
+        return this.recordAgentToolAction(run, toolCallId, "messages.send", args, () => {
+          if (!args.draftId) {
+            const {
+              observedOrder: observed,
+              latestOrder: latest,
+              changes,
+            } = this.inspectAgentPositionChanges(
+              run.agent_id,
+              run.input_end_seq,
+              args.conversationId,
+              args.rootId,
+            );
+            if (latest > observed) {
+              const id = randomUUID(),
+                at = this.now();
+              this.db
+                .prepare(
+                  "INSERT INTO owner_agent_drafts(id,agent_id,channel_id,root_id,quote_id,text,observed_order,presented_order,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,'editing',?,?)",
+                )
+                .run(
+                  id,
+                  run.agent_id,
+                  args.conversationId,
+                  args.rootId ?? null,
+                  args.quoteId ?? null,
+                  args.text,
+                  observed,
+                  latest,
+                  at,
+                  at,
+                );
+              return {
+                channelId: args.conversationId,
+                status: "needs_review",
+                draftId: id,
+                changes,
+              };
+            }
+          }
+          if (args.draftId) {
+            const draft = this.readAgentDraft(run.agent_id, args.draftId);
+            if (
+              draft.channel_id !== args.conversationId ||
+              draft.root_id !== (args.rootId ?? null) ||
+              draft.quote_id !== (args.quoteId ?? null) ||
+              draft.text !== args.text ||
+              draft.state !== "ready"
+            )
+              throw new AgentToolRefusal("Draft is not ready for this message");
+            if (this.latestPositionOrder(args.conversationId, args.rootId) !== draft.observed_order)
+              throw new AgentToolRefusal("Conversation changed; review the draft again");
+            this.db
+              .prepare("UPDATE owner_agent_drafts SET state='sent',updated_at=? WHERE id=?")
+              .run(this.now(), draft.id);
+          }
+          return this.createAgentToolMessage(
+            run,
+            toolCallId,
+            args.conversationId,
+            args.text,
+            args.rootId,
+            args.quoteId,
+          );
+        });
       }
       case "conversations.invite": {
         const args = agentConversationOperations["conversations.invite"].schema.parse(input),
@@ -1197,6 +1452,166 @@ export class OwnerChat {
         });
       }
     }
+  }
+
+  listAgentAttention(
+    agentId: string,
+    channelId: string,
+  ): Array<{
+    messageId: string;
+    unread: number;
+    seen: number;
+    deferred: number;
+    muted: number;
+    presented: number;
+  }> {
+    return this.db
+      .prepare(
+        `SELECT a.message_id AS messageId,a.unread,a.seen,a.deferred,a.muted,a.presented FROM owner_agent_message_attention a JOIN owner_messages m ON m.id=a.message_id WHERE a.agent_id=? AND m.channel_id=? ORDER BY m.order_seq`,
+      )
+      .all(agentId, channelId) as Array<{
+      messageId: string;
+      unread: number;
+      seen: number;
+      deferred: number;
+      muted: number;
+      presented: number;
+    }>;
+  }
+
+  readPersistedAgentDraft(
+    agentId: string,
+    id: string,
+  ): { state: string; text: string; channelId: string } | undefined {
+    const row = this.db
+      .prepare(
+        "SELECT state,text,channel_id AS channelId FROM owner_agent_drafts WHERE id=? AND agent_id=?",
+      )
+      .get(id, agentId) as { state: string; text: string; channelId: string } | undefined;
+    return row;
+  }
+
+  private validateMessagePosition(channelId: string, rootId?: string, quoteId?: string): void {
+    if (rootId && quoteId) throw new AgentToolRefusal("Choose one reply position");
+    const id = rootId ?? quoteId;
+    if (!id) return;
+    const row = this.db
+      .prepare("SELECT channel_id,root_id FROM owner_messages WHERE id=?")
+      .get(id) as { channel_id: string; root_id: string | null } | undefined;
+    if (!row || row.channel_id !== channelId || (rootId && row.root_id))
+      throw new AgentToolRefusal("Reply target is not available");
+  }
+
+  /** Shared freshness check for an authorized Agent send or future task change. */
+  inspectAgentPositionChanges(
+    agentId: string,
+    inputEndSequence: number,
+    channelId: string,
+    rootId?: string,
+  ): { observedOrder: number; latestOrder: number; changes: OwnerMessage[] } {
+    const observedOrder = this.observedPositionOrder(agentId, inputEndSequence, channelId, rootId);
+    const latestOrder = this.latestExternalPositionOrder(agentId, channelId, rootId);
+    return {
+      observedOrder,
+      latestOrder,
+      changes:
+        latestOrder > observedOrder
+          ? this.draftChanges({
+              channel_id: channelId,
+              root_id: rootId ?? null,
+              observed_order: observedOrder,
+            })
+          : [],
+    };
+  }
+
+  private observedPositionOrder(
+    agentId: string,
+    inputEndSequence: number,
+    channelId: string,
+    rootId?: string,
+  ): number {
+    const journal = this.db
+      .prepare(
+        `SELECT COALESCE(MAX(m.order_seq),0) AS latest FROM owner_agent_session_journal j JOIN owner_messages m ON m.id=j.message_id WHERE j.agent_id=? AND j.seq<=? AND j.channel_id=? AND (? IS NULL OR m.id=? OR m.root_id=?)`,
+      )
+      .get(
+        agentId,
+        inputEndSequence,
+        channelId,
+        rootId ?? null,
+        rootId ?? null,
+        rootId ?? null,
+      ) as { latest: number };
+    const presented = this.db
+      .prepare(
+        `SELECT COALESCE(MAX(m.order_seq),0) AS latest FROM owner_agent_message_attention a JOIN owner_messages m ON m.id=a.message_id WHERE a.agent_id=? AND a.presented=1 AND m.channel_id=? AND (? IS NULL OR m.id=? OR m.root_id=?)`,
+      )
+      .get(agentId, channelId, rootId ?? null, rootId ?? null, rootId ?? null) as {
+      latest: number;
+    };
+    return Math.max(journal.latest, presented.latest);
+  }
+
+  private latestExternalPositionOrder(agentId: string, channelId: string, rootId?: string): number {
+    const row = this.db
+      .prepare(
+        "SELECT COALESCE(MAX(order_seq),0) AS latest FROM owner_messages WHERE channel_id=? AND NOT (author_kind='agent' AND author_id=?) AND (? IS NULL OR id=? OR root_id=?)",
+      )
+      .get(channelId, agentId, rootId ?? null, rootId ?? null, rootId ?? null) as {
+      latest: number;
+    };
+    return row.latest;
+  }
+
+  private latestPositionOrder(channelId: string, rootId?: string | null): number {
+    const row = this.db
+      .prepare(
+        "SELECT COALESCE(MAX(order_seq),0) AS latest FROM owner_messages WHERE channel_id=? AND (? IS NULL OR id=? OR root_id=?)",
+      )
+      .get(channelId, rootId ?? null, rootId ?? null, rootId ?? null) as { latest: number };
+    return row.latest;
+  }
+
+  private readAgentDraft(
+    agentId: string,
+    id: string,
+  ): {
+    id: string;
+    channel_id: string;
+    root_id: string | null;
+    quote_id: string | null;
+    text: string;
+    observed_order: number;
+    presented_order: number;
+    state: string;
+  } {
+    const row = this.db
+      .prepare(
+        "SELECT id,channel_id,root_id,quote_id,text,observed_order,presented_order,state FROM owner_agent_drafts WHERE id=? AND agent_id=?",
+      )
+      .get(id, agentId) as ReturnType<OwnerChat["readAgentDraft"]> | undefined;
+    if (!row) throw new AgentToolRefusal("Draft is not available");
+    return row;
+  }
+
+  private draftChanges(draft: {
+    channel_id: string;
+    root_id: string | null;
+    observed_order: number;
+  }): OwnerMessage[] {
+    const rows = this.db
+      .prepare(
+        "SELECT id,channel_id,order_seq,revision,text,root_id,quote_id,author_kind,author_id,created_at FROM owner_messages WHERE channel_id=? AND order_seq>? AND (? IS NULL OR id=? OR root_id=?) ORDER BY order_seq",
+      )
+      .all(
+        draft.channel_id,
+        draft.observed_order,
+        draft.root_id,
+        draft.root_id,
+        draft.root_id,
+      ) as MessageRow[];
+    return rows.map(toMessage);
   }
 
   private listAgentConversations(agentId: string): Array<{
@@ -1447,6 +1862,8 @@ export class OwnerChat {
     toolActionId: string,
     channelId: string,
     text: string,
+    rootId?: string,
+    quoteId?: string,
   ): OwnerMessage {
     if (!this.db.inTransaction)
       throw new Error("Agent tool message requires its action transaction");
@@ -1459,15 +1876,17 @@ export class OwnerChat {
         .get(channelId) as { next: number };
     this.db
       .prepare(
-        "INSERT INTO owner_messages(id,channel_id,order_seq,text,author_kind,author_id,created_at) VALUES(?,?,?,?, 'agent', ?,?)",
+        "INSERT INTO owner_messages(id,channel_id,order_seq,text,root_id,quote_id,author_kind,author_id,created_at) VALUES(?,?,?,?,?,?, 'agent', ?,?)",
       )
-      .run(id, channelId, sequence.next, text, run.agent_id, at);
+      .run(id, channelId, sequence.next, text, rootId ?? null, quoteId ?? null, run.agent_id, at);
     const message = toMessage({
       id,
       channel_id: channelId,
       order_seq: sequence.next,
       revision: 1,
       text,
+      root_id: rootId ?? null,
+      quote_id: quoteId ?? null,
       author_kind: "agent",
       author_id: run.agent_id,
       created_at: at,
@@ -1531,6 +1950,12 @@ export class OwnerChat {
           member.principal_id,
           at,
         );
+      if (member.principal_kind === "agent")
+        this.db
+          .prepare(
+            "INSERT OR IGNORE INTO owner_agent_message_attention(agent_id,message_id,updated_at) SELECT id,?,? FROM owner_agents WHERE id=?",
+          )
+          .run(message.id, at, member.principal_id);
     }
   }
 
@@ -1564,7 +1989,10 @@ function toMessage(row: MessageRow): OwnerMessage {
   return {
     id: row.id,
     channelId: row.channel_id,
-    rootId: null,
+    rootId: row.root_id ?? null,
+    quoteId: row.quote_id ?? null,
+    replyCount: 0,
+    recentReplies: [],
     author:
       row.author_kind === "agent"
         ? { kind: "agent", id: row.author_id }

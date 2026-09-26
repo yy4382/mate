@@ -99,6 +99,7 @@ let history: Map<string, FixtureMessage[]>;
 let sessionStatus: number;
 let fetchMock: ReturnType<typeof vi.fn>;
 let posts: Array<{ channelId: string; text: string }>;
+let positionPosts: Array<{ rootId?: string; quoteId?: string }>;
 let nextPostGate: {
   started: Promise<void>;
   signalStarted: () => void;
@@ -207,6 +208,16 @@ function installFetch(): void {
       }
       return json(200, { attachments: attachments.filter((item) => item.channelId === channelId) });
     }
+    const threadMatch = url.match(/^\/api\/owner\/channels\/([^/]+)\/threads\/([^/]+)/);
+    if (threadMatch) {
+      const channelId = decodeURIComponent(threadMatch[1]!);
+      const rootId = decodeURIComponent(threadMatch[2]!);
+      const all = history.get(channelId) ?? [];
+      const root = all.find((entry) => entry.id === rootId);
+      return root
+        ? json(200, { root, replies: all.filter((entry) => entry.rootId === rootId) })
+        : json(404, { error: "Not found" });
+    }
     const match = url.match(/^\/api\/owner\/channels\/([^/]+)\/messages/);
     if (match) {
       const channelId = decodeURIComponent(match[1]!);
@@ -221,6 +232,19 @@ function installFetch(): void {
           String(BigInt(lastOrder) + 1n),
         );
         posts.push({ channelId, text: body.text });
+        positionPosts.push({
+          ...(typeof (body as { rootId?: string }).rootId === "string"
+            ? { rootId: (body as { rootId: string }).rootId }
+            : {}),
+          ...(typeof (body as { quoteId?: string }).quoteId === "string"
+            ? { quoteId: (body as { quoteId: string }).quoteId }
+            : {}),
+        });
+        (created as FixtureMessage & { quoteId?: string }).rootId =
+          (body as { rootId?: string }).rootId ?? null;
+        (created as FixtureMessage & { quoteId?: string }).quoteId = (
+          body as { quoteId?: string }
+        ).quoteId;
         history.set(channelId, [...current, created]);
         const gate = nextPostGate;
         if (gate) {
@@ -230,7 +254,7 @@ function installFetch(): void {
         }
         return json(201, created);
       }
-      const messages = history.get(channelId) ?? [],
+      const messages = (history.get(channelId) ?? []).filter((entry) => !entry.rootId),
         urlValue = new URL(url, "http://mate.test"),
         before = urlValue.searchParams.get("before");
       const gate = nextHistoryGate;
@@ -276,6 +300,7 @@ beforeEach(() => {
   attachments = [];
   attachmentUploads = [];
   failNextAttachmentUpload = false;
+  positionPosts = [];
   nextPostGate = null;
   nextHistoryGate = null;
   TestEventSource.instances = [];
@@ -576,4 +601,29 @@ it("traps modal focus, closes on Escape, and restores focus to its opener", asyn
   await user.keyboard("{Escape}");
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   expect(document.activeElement).toBe(opener);
+});
+
+it("offers keyboard and touch reply actions, with the thread in a separate pane", async () => {
+  const root = {
+    ...message(publicChannel.id, "root-1", "根消息", "1"),
+    replyCount: 1,
+    recentReplies: [{ ...message(publicChannel.id, "reply-1", "已有讨论", "2"), rootId: "root-1" }],
+  };
+  history.set(publicChannel.id, [root, ...root.recentReplies]);
+  const user = await openChat();
+  const menu = await screen.findByRole("button", { name: "消息 根消息 的操作" });
+  menu.focus();
+  await user.keyboard("{Enter}");
+  await user.click(screen.getByRole("button", { name: "普通回复（引用）" }));
+  await user.type(screen.getByRole("textbox", { name: "发送到 公开频道" }), "主时间线答复");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+  expect(positionPosts.at(-1)).toEqual({ quoteId: root.id });
+  await user.click(menu);
+  await user.click(screen.getByRole("button", { name: "讨论串回复" }));
+  expect(await screen.findByRole("complementary", { name: "讨论串" })).not.toBeNull();
+  expect(await screen.findByText("已有讨论")).not.toBeNull();
+  await user.type(screen.getByRole("textbox", { name: "发送到 公开频道" }), "新讨论回复");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+  expect(positionPosts.at(-1)).toEqual({ rootId: root.id });
+  expect(await screen.findByText("新讨论回复")).not.toBeNull();
 });

@@ -38,16 +38,72 @@ export const agentConversationOperations = Object.freeze({
     schema: z.object({ conversationId, before: cursor, limit: pageLimit }).strict(),
     seatPolicy: "deny" as const,
   },
+  "conversations.read_thread": {
+    description: "读取一条根消息的完整讨论串。必须指定已加入对话和根消息 ID。",
+    schema: z.object({ conversationId, rootId: z.string().uuid() }).strict(),
+    seatPolicy: "deny" as const,
+  },
   "conversations.open_dm": {
     description:
       "为你和一名明确指定的、已配置同伴创建或返回唯一私信；控制面会同时授予双方成员权限。",
     schema: z.object({ targetAgentId: z.string().uuid() }).strict(),
     seatPolicy: "deny" as const,
   },
+  "attention.list": {
+    description: "查看你的消息注意力状态。通知已见和正文已呈现分别记录。",
+    schema: z.object({ conversationId }).strict(),
+    seatPolicy: "deny" as const,
+  },
+  "attention.update": {
+    description: "分别设置一条消息的未读、已见、暂缓、静音或正文已呈现状态。",
+    schema: z
+      .object({
+        conversationId,
+        messageId: z.string().uuid(),
+        unread: z.boolean().optional(),
+        seen: z.boolean().optional(),
+        deferred: z.boolean().optional(),
+        muted: z.boolean().optional(),
+        presented: z.boolean().optional(),
+      })
+      .strict(),
+    seatPolicy: "deny" as const,
+  },
+  "drafts.save": {
+    description: "持久保存发送草稿和当前讨论位置。保存后可查看并发变化。",
+    schema: z
+      .object({
+        conversationId,
+        text: z.string().min(1).max(20_000),
+        rootId: z.string().uuid().optional(),
+        quoteId: z.string().uuid().optional(),
+      })
+      .strict(),
+    seatPolicy: "deny" as const,
+  },
+  "drafts.review": {
+    description: "查看草稿后的讨论变化，并选择修改、保留、放弃、暂缓或知情继续。",
+    schema: z
+      .object({
+        draftId: z.string().uuid(),
+        choice: z.enum(["inspect", "revise", "keep", "abandon", "defer", "continue"]),
+        text: z.string().min(1).max(20_000).optional(),
+      })
+      .strict(),
+    seatPolicy: "deny" as const,
+  },
   "messages.send": {
     description:
       "向一个明确指定且当前已加入的频道或私信发送普通消息。发送目标必须提供 conversationId。",
-    schema: z.object({ conversationId, text: z.string().min(1).max(20_000) }).strict(),
+    schema: z
+      .object({
+        conversationId,
+        text: z.string().min(1).max(20_000),
+        rootId: z.string().uuid().optional(),
+        quoteId: z.string().uuid().optional(),
+        draftId: z.string().uuid().optional(),
+      })
+      .strict(),
     seatPolicy: "deny" as const,
   },
   "conversations.invite": {

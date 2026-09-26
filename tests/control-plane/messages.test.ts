@@ -122,3 +122,54 @@ it("pages back to older top-level messages using the channel order cursor", asyn
     nextBefore: null,
   });
 });
+
+it("keeps quote replies on the timeline and thread replies under the root after restart", async () => {
+  const fixture = setup();
+  const cookie = await ownerCookie(fixture.app);
+  const created = await fixture.app.request("/api/owner/channels", {
+    method: "POST",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ name: "讨论", description: "", visibility: "public" }),
+  });
+  const { id: channelId } = await created.json();
+  async function send(text: string, extra: Record<string, string> = {}) {
+    const response = await fixture.app.request(`/api/owner/channels/${channelId}/messages`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ text, ...extra }),
+    });
+    expect(response.status).toBe(201);
+    return response.json();
+  }
+  const root = await send("主话题");
+  const quote = await send("引用答复", { quoteId: root.id });
+  for (let n = 1; n <= 4; n++) await send(`讨论 ${n}`, { rootId: root.id });
+  expect(quote).toMatchObject({ rootId: null, quoteId: root.id });
+  fixture.app.close();
+  const restarted = createControlPlaneApp({
+    dataDir: fixture.dataDir,
+    passwordFile: fixture.passwordFile,
+  });
+  cases.push({ app: restarted, dataDir: fixture.dataDir });
+  const timeline = await restarted.request(`/api/owner/channels/${channelId}/messages`, {
+    headers: { cookie },
+  });
+  const page = await timeline.json();
+  expect(page.messages).toHaveLength(2);
+  expect(page.messages[0]).toMatchObject({ id: root.id, replyCount: 4 });
+  expect(page.messages[0].recentReplies.map((reply: { text: string }) => reply.text)).toEqual([
+    "讨论 2",
+    "讨论 3",
+    "讨论 4",
+  ]);
+  expect(page.messages[1]).toMatchObject({ id: quote.id, rootId: null, replyCount: 0 });
+  const thread = await restarted.request(`/api/owner/channels/${channelId}/threads/${root.id}`, {
+    headers: { cookie },
+  });
+  expect((await thread.json()).replies.map((reply: { text: string }) => reply.text)).toEqual([
+    "讨论 1",
+    "讨论 2",
+    "讨论 3",
+    "讨论 4",
+  ]);
+});
