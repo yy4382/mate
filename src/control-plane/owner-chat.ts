@@ -1268,7 +1268,7 @@ export class OwnerChat {
           .get(args.messageId, args.conversationId);
         if (!message) throw new AgentToolRefusal("Message is not available");
         return this.recordAgentToolAction(run, toolCallId, "attention.update", args, () => {
-          const changes = ["unread", "seen", "deferred", "muted", "presented"] as const;
+          const changes = ["unread", "seen", "deferred", "muted"] as const;
           for (const key of changes)
             if (args[key] !== undefined)
               this.db
@@ -1286,10 +1286,15 @@ export class OwnerChat {
         return this.recordAgentToolAction(run, toolCallId, "drafts.save", args, () => {
           const id = randomUUID(),
             at = this.now(),
-            order = this.latestPositionOrder(args.conversationId, args.rootId);
+            freshness = this.inspectAgentPositionChanges(
+              run.agent_id,
+              run.input_end_seq,
+              args.conversationId,
+              args.rootId,
+            );
           this.db
             .prepare(
-              "INSERT INTO owner_agent_drafts(id,agent_id,channel_id,root_id,quote_id,text,observed_order,presented_order,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,'editing',?,?)",
+              "INSERT INTO owner_agent_drafts(id,agent_id,channel_id,root_id,quote_id,text,input_end_seq,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'editing',?,?)",
             )
             .run(
               id,
@@ -1298,16 +1303,16 @@ export class OwnerChat {
               args.rootId ?? null,
               args.quoteId ?? null,
               args.text,
-              order,
-              order,
+              run.input_end_seq,
               at,
               at,
             );
+          this.recordDraftReviews(id, freshness.changes);
           return {
             id,
             channelId: args.conversationId,
             state: "editing",
-            observedOrder: String(order),
+            changes: freshness.changes,
           };
         });
       }
@@ -1316,17 +1321,12 @@ export class OwnerChat {
         const draft = this.readAgentDraft(run.agent_id, args.draftId);
         this.requireAgentConversation(run.agent_id, draft.channel_id);
         return this.recordAgentToolAction(run, toolCallId, "drafts.review", args, () => {
-          const changes = this.draftChanges(draft);
+          const changes = this.unreviewedDraftChanges(draft);
           if (args.choice === "inspect") {
-            this.db
-              .prepare("UPDATE owner_agent_drafts SET presented_order=?,updated_at=? WHERE id=?")
-              .run(this.latestPositionOrder(draft.channel_id, draft.root_id), this.now(), draft.id);
+            this.recordDraftReviews(draft.id, changes);
             return { channelId: draft.channel_id, draftId: draft.id, state: draft.state, changes };
           }
-          if (
-            args.choice === "continue" &&
-            draft.presented_order < this.latestPositionOrder(draft.channel_id, draft.root_id)
-          )
+          if (args.choice === "continue" && changes.length)
             throw new AgentToolRefusal("Conversation changed; inspect the draft before continuing");
           if (draft.state === "sent" || draft.state === "abandoned")
             throw new AgentToolRefusal("Draft is closed");
@@ -1342,17 +1342,12 @@ export class OwnerChat {
                     : "ready";
           if (args.choice === "revise" && !args.text)
             throw new AgentToolRefusal("Revised text is required");
+          this.recordDraftReviews(draft.id, changes);
           this.db
             .prepare(
-              "UPDATE owner_agent_drafts SET text=COALESCE(?,text),observed_order=?,state=?,updated_at=? WHERE id=?",
+              "UPDATE owner_agent_drafts SET text=COALESCE(?,text),state=?,updated_at=? WHERE id=?",
             )
-            .run(
-              args.choice === "revise" ? args.text : null,
-              this.latestPositionOrder(draft.channel_id, draft.root_id),
-              state,
-              this.now(),
-              draft.id,
-            );
+            .run(args.choice === "revise" ? args.text : null, state, this.now(), draft.id);
           return { channelId: draft.channel_id, draftId: draft.id, state, changes };
         });
       }
@@ -1362,22 +1357,18 @@ export class OwnerChat {
         this.validateMessagePosition(args.conversationId, args.rootId, args.quoteId);
         return this.recordAgentToolAction(run, toolCallId, "messages.send", args, () => {
           if (!args.draftId) {
-            const {
-              observedOrder: observed,
-              latestOrder: latest,
-              changes,
-            } = this.inspectAgentPositionChanges(
+            const { changes } = this.inspectAgentPositionChanges(
               run.agent_id,
               run.input_end_seq,
               args.conversationId,
               args.rootId,
             );
-            if (latest > observed) {
+            if (changes.length) {
               const id = randomUUID(),
                 at = this.now();
               this.db
                 .prepare(
-                  "INSERT INTO owner_agent_drafts(id,agent_id,channel_id,root_id,quote_id,text,observed_order,presented_order,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,'editing',?,?)",
+                  "INSERT INTO owner_agent_drafts(id,agent_id,channel_id,root_id,quote_id,text,input_end_seq,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'editing',?,?)",
                 )
                 .run(
                   id,
@@ -1386,11 +1377,11 @@ export class OwnerChat {
                   args.rootId ?? null,
                   args.quoteId ?? null,
                   args.text,
-                  observed,
-                  latest,
+                  run.input_end_seq,
                   at,
                   at,
                 );
+              this.recordDraftReviews(id, changes);
               return {
                 channelId: args.conversationId,
                 status: "needs_review",
@@ -1409,7 +1400,7 @@ export class OwnerChat {
               draft.state !== "ready"
             )
               throw new AgentToolRefusal("Draft is not ready for this message");
-            if (this.latestPositionOrder(args.conversationId, args.rootId) !== draft.observed_order)
+            if (this.unreviewedDraftChanges(draft).length)
               throw new AgentToolRefusal("Conversation changed; review the draft again");
             this.db
               .prepare("UPDATE owner_agent_drafts SET state='sent',updated_at=? WHERE id=?")
@@ -1502,75 +1493,92 @@ export class OwnerChat {
       throw new AgentToolRefusal("Reply target is not available");
   }
 
-  /** Shared freshness check for an authorized Agent send or future task change. */
+  /** Shared per-message freshness check for an authorized Agent send or task change. */
   inspectAgentPositionChanges(
     agentId: string,
     inputEndSequence: number,
     channelId: string,
     rootId?: string,
-  ): { observedOrder: number; latestOrder: number; changes: OwnerMessage[] } {
-    const observedOrder = this.observedPositionOrder(agentId, inputEndSequence, channelId, rootId);
-    const latestOrder = this.latestExternalPositionOrder(agentId, channelId, rootId);
+  ): { changes: OwnerMessage[] } {
     return {
-      observedOrder,
-      latestOrder,
-      changes:
-        latestOrder > observedOrder
-          ? this.draftChanges({
-              channel_id: channelId,
-              root_id: rootId ?? null,
-              observed_order: observedOrder,
-            })
-          : [],
+      changes: this.unpresentedPositionMessages(agentId, inputEndSequence, channelId, rootId),
     };
   }
 
-  private observedPositionOrder(
+  private unpresentedPositionMessages(
     agentId: string,
     inputEndSequence: number,
     channelId: string,
     rootId?: string,
-  ): number {
-    const journal = this.db
+  ): OwnerMessage[] {
+    const rows = this.db
       .prepare(
-        `SELECT COALESCE(MAX(m.order_seq),0) AS latest FROM owner_agent_session_journal j JOIN owner_messages m ON m.id=j.message_id WHERE j.agent_id=? AND j.seq<=? AND j.channel_id=? AND (? IS NULL OR m.id=? OR m.root_id=?)`,
+        `SELECT m.id,m.channel_id,m.order_seq,m.revision,m.text,m.root_id,m.quote_id,m.author_kind,m.author_id,m.created_at
+      FROM owner_messages m WHERE m.channel_id=?
+      AND NOT (m.author_kind='agent' AND m.author_id=?)
+      AND (? IS NULL OR m.id=? OR m.root_id=?)
+      AND NOT EXISTS (SELECT 1 FROM owner_agent_message_attention a WHERE a.agent_id=? AND a.message_id=m.id AND a.presented=1)
+      AND NOT EXISTS (SELECT 1 FROM owner_agent_session_journal j WHERE j.agent_id=? AND j.message_id=m.id AND j.role='user' AND j.seq<=?)
+      ORDER BY m.order_seq`,
       )
-      .get(
+      .all(
+        channelId,
+        agentId,
+        rootId ?? null,
+        rootId ?? null,
+        rootId ?? null,
+        agentId,
         agentId,
         inputEndSequence,
-        channelId,
-        rootId ?? null,
-        rootId ?? null,
-        rootId ?? null,
-      ) as { latest: number };
-    const presented = this.db
-      .prepare(
-        `SELECT COALESCE(MAX(m.order_seq),0) AS latest FROM owner_agent_message_attention a JOIN owner_messages m ON m.id=a.message_id WHERE a.agent_id=? AND a.presented=1 AND m.channel_id=? AND (? IS NULL OR m.id=? OR m.root_id=?)`,
-      )
-      .get(agentId, channelId, rootId ?? null, rootId ?? null, rootId ?? null) as {
-      latest: number;
-    };
-    return Math.max(journal.latest, presented.latest);
+      ) as MessageRow[];
+    return rows.map(toMessage);
   }
 
-  private latestExternalPositionOrder(agentId: string, channelId: string, rootId?: string): number {
-    const row = this.db
+  private unreviewedDraftChanges(draft: ReturnType<OwnerChat["readAgentDraft"]>): OwnerMessage[] {
+    const rows = this.db
       .prepare(
-        "SELECT COALESCE(MAX(order_seq),0) AS latest FROM owner_messages WHERE channel_id=? AND NOT (author_kind='agent' AND author_id=?) AND (? IS NULL OR id=? OR root_id=?)",
+        `SELECT m.id,m.channel_id,m.order_seq,m.revision,m.text,m.root_id,m.quote_id,m.author_kind,m.author_id,m.created_at
+      FROM owner_messages m WHERE m.channel_id=?
+      AND NOT (m.author_kind='agent' AND m.author_id=?)
+      AND (? IS NULL OR m.id=? OR m.root_id=?)
+      AND NOT EXISTS (SELECT 1 FROM owner_agent_draft_reviews r WHERE r.draft_id=? AND r.message_id=m.id)
+      AND NOT EXISTS (SELECT 1 FROM owner_agent_message_attention a WHERE a.agent_id=? AND a.message_id=m.id AND a.presented=1)
+      AND NOT EXISTS (SELECT 1 FROM owner_agent_session_journal j WHERE j.agent_id=? AND j.message_id=m.id AND j.role='user' AND j.seq<=?)
+      ORDER BY m.order_seq`,
       )
-      .get(channelId, agentId, rootId ?? null, rootId ?? null, rootId ?? null) as {
-      latest: number;
-    };
-    return row.latest;
+      .all(
+        draft.channel_id,
+        draft.agent_id,
+        draft.root_id,
+        draft.root_id,
+        draft.root_id,
+        draft.id,
+        draft.agent_id,
+        draft.agent_id,
+        draft.input_end_seq,
+      ) as MessageRow[];
+    return rows.map(toMessage);
   }
 
-  private latestPositionOrder(channelId: string, rootId?: string | null): number {
-    const row = this.db
-      .prepare(
-        "SELECT COALESCE(MAX(order_seq),0) AS latest FROM owner_messages WHERE channel_id=? AND (? IS NULL OR id=? OR root_id=?)",
-      )
-      .get(channelId, rootId ?? null, rootId ?? null, rootId ?? null) as { latest: number };
-    return row.latest;
+  private recordDraftReviews(draftId: string, messages: OwnerMessage[]): void {
+    for (const message of messages) {
+      this.db
+        .prepare("INSERT OR IGNORE INTO owner_agent_draft_reviews(draft_id,message_id) VALUES(?,?)")
+        .run(draftId, message.id);
+      const draft = this.db
+        .prepare("SELECT agent_id FROM owner_agent_drafts WHERE id=?")
+        .get(draftId) as { agent_id: string };
+      this.db
+        .prepare(
+          "INSERT OR IGNORE INTO owner_agent_message_attention(agent_id,message_id,updated_at) VALUES(?,?,?)",
+        )
+        .run(draft.agent_id, message.id, this.now());
+      this.db
+        .prepare(
+          "UPDATE owner_agent_message_attention SET presented=1,updated_at=? WHERE agent_id=? AND message_id=?",
+        )
+        .run(this.now(), draft.agent_id, message.id);
+    }
   }
 
   private readAgentDraft(
@@ -1578,40 +1586,21 @@ export class OwnerChat {
     id: string,
   ): {
     id: string;
+    agent_id: string;
     channel_id: string;
     root_id: string | null;
     quote_id: string | null;
     text: string;
-    observed_order: number;
-    presented_order: number;
+    input_end_seq: number;
     state: string;
   } {
     const row = this.db
       .prepare(
-        "SELECT id,channel_id,root_id,quote_id,text,observed_order,presented_order,state FROM owner_agent_drafts WHERE id=? AND agent_id=?",
+        "SELECT id,agent_id,channel_id,root_id,quote_id,text,input_end_seq,state FROM owner_agent_drafts WHERE id=? AND agent_id=?",
       )
       .get(id, agentId) as ReturnType<OwnerChat["readAgentDraft"]> | undefined;
     if (!row) throw new AgentToolRefusal("Draft is not available");
     return row;
-  }
-
-  private draftChanges(draft: {
-    channel_id: string;
-    root_id: string | null;
-    observed_order: number;
-  }): OwnerMessage[] {
-    const rows = this.db
-      .prepare(
-        "SELECT id,channel_id,order_seq,revision,text,root_id,quote_id,author_kind,author_id,created_at FROM owner_messages WHERE channel_id=? AND order_seq>? AND (? IS NULL OR id=? OR root_id=?) ORDER BY order_seq",
-      )
-      .all(
-        draft.channel_id,
-        draft.observed_order,
-        draft.root_id,
-        draft.root_id,
-        draft.root_id,
-      ) as MessageRow[];
-    return rows.map(toMessage);
   }
 
   private listAgentConversations(agentId: string): Array<{

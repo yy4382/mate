@@ -994,6 +994,8 @@
 }
 .message-row:hover .message-menu-trigger,
 .message-row:focus-within .message-menu-trigger,
+.thread-replies article:hover .message-menu-trigger,
+.thread-replies article:focus-within .message-menu-trigger,
 .message-menu-trigger[aria-expanded="true"] {
   visibility: visible;
 }
@@ -1117,4 +1119,14 @@
   .message-menu-trigger {
     visibility: visible;
   }
+}
+
+.thread-replies article {
+  position: relative;
+  padding-right: 54px;
+}
+.thread-replies article .message-actions {
+  position: absolute;
+  top: 8px;
+  right: 10px;
 }

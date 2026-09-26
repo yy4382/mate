@@ -25,11 +25,15 @@ CREATE TABLE owner_agent_drafts (
   root_id TEXT REFERENCES owner_messages(id),
   quote_id TEXT REFERENCES owner_messages(id),
   text TEXT NOT NULL,
-  observed_order INTEGER NOT NULL,
-  presented_order INTEGER NOT NULL,
+  input_end_seq INTEGER NOT NULL,
   state TEXT NOT NULL CHECK(state IN ('editing','kept','deferred','abandoned','ready','sent')),
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
 CREATE INDEX owner_agent_drafts_agent ON owner_agent_drafts(agent_id,state,updated_at);
+CREATE TABLE owner_agent_draft_reviews (
+  draft_id TEXT NOT NULL REFERENCES owner_agent_drafts(id),
+  message_id TEXT NOT NULL REFERENCES owner_messages(id),
+  PRIMARY KEY(draft_id,message_id)
+);
 `;

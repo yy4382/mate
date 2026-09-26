@@ -55,7 +55,8 @@ export const agentConversationOperations = Object.freeze({
     seatPolicy: "deny" as const,
   },
   "attention.update": {
-    description: "分别设置一条消息的未读、已见、暂缓、静音或正文已呈现状态。",
+    description:
+      "分别设置一条消息的未读、已见、暂缓或静音状态；正文已呈现由控制面在交付正文时记录。",
     schema: z
       .object({
         conversationId,
@@ -64,7 +65,6 @@ export const agentConversationOperations = Object.freeze({
         seen: z.boolean().optional(),
         deferred: z.boolean().optional(),
         muted: z.boolean().optional(),
-        presented: z.boolean().optional(),
       })
       .strict(),
     seatPolicy: "deny" as const,

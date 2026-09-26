@@ -159,6 +159,7 @@ export function ChatPage() {
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const streamRef = useRef<EventSource | null>(null);
   const threadRootIdRef = useRef<string | null>(null);
+  const threadRequestRef = useRef(0);
   const selectedIdRef = useRef<string | null>(null);
   const draft = selectedId ? (drafts[selectedId] ?? "") : "";
   selectedIdRef.current = selectedId;
@@ -166,17 +167,23 @@ export function ChatPage() {
 
   const closeDialog = useCallback(() => setDialog(null), []);
   const openThread = useCallback(async (message: Message) => {
-    setThreadRoot(message.rootId ? null : message);
+    const request = ++threadRequestRef.current;
+    threadRootIdRef.current = message.id;
+    setThreadRoot(message);
+    setThreadReplies([]);
     setMobileView("thread");
     setOpenMenuId(null);
     try {
       const thread = await ownerJSON<{ root: Message; replies: Message[] }>(
         `/api/owner/channels/${encodeURIComponent(message.channelId)}/threads/${encodeURIComponent(message.id)}`,
       );
+      if (threadRequestRef.current !== request || selectedIdRef.current !== message.channelId)
+        return;
       setThreadRoot(thread.root);
-      setThreadReplies(thread.replies);
+      setThreadReplies((current) => mergeMessages(thread.replies, current));
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "无法读取讨论串。");
+      if (threadRequestRef.current === request)
+        setError(cause instanceof Error ? cause.message : "无法读取讨论串。");
     }
   }, []);
 
@@ -292,11 +299,24 @@ export function ChatPage() {
                         message.id === update.payload.rootId
                           ? {
                               ...message,
-                              replyCount: (message.replyCount ?? 0) + 1,
-                              recentReplies: [
-                                ...(message.recentReplies ?? []),
-                                update.payload,
-                              ].slice(-3),
+                              replyCount:
+                                message.recentReplies?.some(
+                                  (reply) => reply.id === update.payload.id,
+                                ) ||
+                                (message.recentReplies?.at(-1) &&
+                                  BigInt(update.payload.order) <=
+                                    BigInt(message.recentReplies.at(-1)!.order))
+                                  ? (message.replyCount ?? 0)
+                                  : (message.replyCount ?? 0) + 1,
+                              recentReplies:
+                                message.recentReplies?.some(
+                                  (reply) => reply.id === update.payload.id,
+                                ) ||
+                                (message.recentReplies?.at(-1) &&
+                                  BigInt(update.payload.order) <=
+                                    BigInt(message.recentReplies.at(-1)!.order))
+                                  ? (message.recentReplies ?? [])
+                                  : [...(message.recentReplies ?? []), update.payload].slice(-3),
                             }
                           : message,
                       ),
@@ -326,6 +346,8 @@ export function ChatPage() {
   }, [authenticated]);
 
   useEffect(() => {
+    ++threadRequestRef.current;
+    threadRootIdRef.current = null;
     setThreadRoot(null);
     setThreadReplies([]);
     setReplyTarget(null);
@@ -994,6 +1016,8 @@ export function ChatPage() {
             <button
               type="button"
               onClick={() => {
+                ++threadRequestRef.current;
+                threadRootIdRef.current = null;
                 setThreadRoot(null);
                 setMobileView("chat");
               }}
@@ -1009,9 +1033,48 @@ export function ChatPage() {
           </article>
           <div className="thread-replies">
             {threadReplies.map((reply) => (
-              <article key={reply.id}>
+              <article key={reply.id} tabIndex={0}>
                 <strong>{reply.author.kind === "human" ? "你" : "Agent"}</strong>
                 <p>{reply.text}</p>
+                <div className="message-actions">
+                  <button
+                    type="button"
+                    className="message-menu-trigger"
+                    aria-label={`消息 ${reply.text} 的操作`}
+                    aria-expanded={openMenuId === reply.id}
+                    onClick={() =>
+                      setOpenMenuId((current) => (current === reply.id ? null : reply.id))
+                    }
+                  >
+                    ⋯
+                  </button>
+                  {openMenuId === reply.id && (
+                    <div className="message-menu" role="group" aria-label="消息操作">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setReplyTarget({ kind: "quote", message: reply });
+                          setOpenMenuId(null);
+                          setMobileView("chat");
+                          document.getElementById("message-draft")?.focus();
+                        }}
+                      >
+                        普通回复（引用）
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setReplyTarget({ kind: "thread", message: threadRoot });
+                          setOpenMenuId(null);
+                          setMobileView("chat");
+                          document.getElementById("message-draft")?.focus();
+                        }}
+                      >
+                        讨论串回复
+                      </button>
+                    </div>
+                  )}
+                </div>
               </article>
             ))}
           </div>

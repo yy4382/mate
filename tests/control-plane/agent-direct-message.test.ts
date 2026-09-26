@@ -3363,4 +3363,75 @@ it("persists separate attention and draft choices while gating stale sends", asy
     state: "abandoned",
     text: "Abandon this",
     channelId: dm.id,
-  });});
+  });
+});
+
+it("does not let a saved draft or a later paginated read hide unseen conversation changes", async () => {
+  const { app, cookie, nodeId, socket } = await setup();
+  const agentId = randomUUID();
+  app.agents.prepare({
+    id: agentId,
+    nodeId,
+    name: "Freshness peer",
+    role: "Synthetic",
+    description: "Freshness fixture",
+    model: { provider: "openai", id: "gpt-4.1" },
+  });
+  app.agents.complete(
+    agentId,
+    {
+      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      uid: 23001,
+      gid: 23001,
+      home: `/var/lib/mate/agents/${agentId}`,
+    },
+    app.chat,
+  );
+  const dm = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  await app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-freshness-key" }),
+  });
+  const from = socket.sent.length;
+  app.chat.createMessage(dm.id, "Run input");
+  const run = await waitForRun(socket, from);
+  async function tool(id: string, name: string, input: Record<string, unknown>) {
+    return callAgentTool(app, socket, run, id, "tools.call", { name, input });
+  }
+  const firstChange = app.chat.createMessage(dm.id, "Earlier unseen change")!;
+  const secondChange = app.chat.createMessage(dm.id, "Later visible change")!;
+  const read = await tool("read-latest-only", "conversations.read", {
+    conversationId: dm.id,
+    limit: 1,
+  });
+  expect(read).toMatchObject({ ok: true, result: { messages: [{ id: secondChange.id }] } });
+  const forged = await tool("forge-presented", "attention.update", {
+    conversationId: dm.id,
+    messageId: firstChange.id,
+    presented: true,
+  });
+  expect(forged).toMatchObject({ ok: false, error: "Invalid tool input" });
+  const saved = await tool("save-after-changes", "drafts.save", {
+    conversationId: dm.id,
+    text: "Draft text",
+  });
+  expect(saved).toMatchObject({
+    ok: true,
+    result: {
+      changes: [expect.objectContaining({ id: firstChange.id, text: "Earlier unseen change" })],
+    },
+  });
+  const draftId = (saved.result as { id: string }).id;
+  const continued = await tool("continue-after-save", "drafts.review", {
+    draftId,
+    choice: "continue",
+  });
+  expect(continued.ok).toBe(true);
+  const sent = await tool("send-after-review", "messages.send", {
+    conversationId: dm.id,
+    text: "Draft text",
+    draftId,
+  });
+  expect(sent).toMatchObject({ ok: true, result: { text: "Draft text" } });
+});
