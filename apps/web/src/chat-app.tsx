@@ -165,6 +165,8 @@ export function ChatPage() {
   const [loadingLatestChannelId, setLoadingLatestChannelId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [deepLinkError, setDeepLinkError] = useState<string | null>(null);
+  const [fallbackRefresh, setFallbackRefresh] = useState(0);
   const [attachmentsByChannel, setAttachmentsByChannel] = useState<Record<string, Attachment[]>>(
     {},
   );
@@ -187,6 +189,7 @@ export function ChatPage() {
   const threadRequestRef = useRef(0);
   const selectedIdRef = useRef<string | null>(null);
   const handledDeepLinkRef = useRef<string | null>(null);
+  const failedDeepLinkRef = useRef<string | null>(null);
   const draft = selectedId ? (drafts[selectedId] ?? "") : "";
   selectedIdRef.current = selectedId;
   threadRootIdRef.current = threadRoot?.id ?? null;
@@ -439,6 +442,7 @@ export function ChatPage() {
     setThreadRoot(null);
     setThreadReplies([]);
     setReplyTarget(null);
+    setDeepLinkError(null);
     setMessageWindows((current) =>
       selectedId && current[selectedId] ? { [selectedId]: current[selectedId] } : {},
     );
@@ -451,7 +455,8 @@ export function ChatPage() {
     if (
       deepLink.get("channel") === selectedId &&
       linkedMessage &&
-      handledDeepLinkRef.current !== `message-${linkedMessage}`
+      handledDeepLinkRef.current !== `message-${linkedMessage}` &&
+      failedDeepLinkRef.current !== `message-${linkedMessage}`
     )
       return;
     const channelId = selectedId;
@@ -483,7 +488,7 @@ export function ChatPage() {
     return () => {
       active = false;
     };
-  }, [authenticated, selectedId, historyRefresh]);
+  }, [authenticated, selectedId, historyRefresh, fallbackRefresh]);
 
   useEffect(() => {
     if (!authenticated || !selectedId) return;
@@ -491,6 +496,8 @@ export function ChatPage() {
       channelId = query.get("channel"),
       messageId = query.get("message");
     if (!messageId || channelId !== selectedId) return;
+    const targetId = `message-${messageId}`;
+    if (handledDeepLinkRef.current === targetId || failedDeepLinkRef.current === targetId) return;
     let active = true;
     void ownerJSON<MessageContext>(
       `/api/owner/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}/context`,
@@ -518,7 +525,12 @@ export function ChatPage() {
         }
       })
       .catch((cause) => {
-        if (active) setError(cause instanceof Error ? cause.message : "无法定位消息。");
+        if (!active || selectedIdRef.current !== channelId) return;
+        if (cause instanceof Error && cause.message === "登录状态已失效") return;
+        failedDeepLinkRef.current = targetId;
+        setDeepLinkError("通知中的消息无法打开，已切换到频道最新消息。");
+        setMobileView("chat");
+        setFallbackRefresh((revision) => revision + 1);
       });
     return () => {
       active = false;
@@ -1030,6 +1042,11 @@ export function ChatPage() {
             </header>
 
             <div className="message-list" aria-live="polite" aria-label="消息历史">
+              {deepLinkError && (
+                <p className="chat-error" role="alert">
+                  {deepLinkError}
+                </p>
+              )}
               {approvalError && <p>{approvalError}</p>}
               {approvals.map((approval) => (
                 <ApprovalCard
