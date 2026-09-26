@@ -58,7 +58,11 @@ export function ApprovalCard({
   const stateLabel =
     state === "approved" && !approval.nodeOnline ? "已批准，等待节点" : labels[state];
   return (
-    <article className="approval-card" aria-label={`系统特权审批 ${approval.requestId}`}>
+    <article
+      id={`approval-${approval.requestId}`}
+      className="approval-card"
+      aria-label={`系统特权审批 ${approval.requestId}`}
+    >
       <div className="approval-heading">
         <strong>系统特权命令</strong>
         <span>{stateLabel}</span>

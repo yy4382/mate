@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { WebSocketServer } from "ws";
 import { createControlPlaneApp, type ControlPlaneAppOptions } from "./http.js";
 import { MAX_NODE_MESSAGE_BYTES } from "../nodes/protocol.js";
+import { notifyServiceReady } from "../deployment/readiness.js";
 
 export function startControlPlane(
   port = parsePort(process.env.MATE_CONTROL_PLANE_PORT ?? "8787"),
@@ -37,6 +38,17 @@ export function startControlPlane(
       return;
     }
     process.stdout.write(`MATE_CONTROL_PLANE_LISTENING ${address.port}\n`);
+    try {
+      notifyServiceReady();
+    } catch (error) {
+      process.stderr.write(
+        `${error instanceof Error ? error.message : "Control-plane readiness failed"}\n`,
+      );
+      process.exitCode = 1;
+      app.close();
+      websocketServer.close();
+      server.close();
+    }
   });
 
   const shutdown = () => {

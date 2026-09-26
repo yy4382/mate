@@ -32,8 +32,8 @@ it("ships matching two-Agent examples with platform bindings outside Agent ident
     { id: "team-room", agents: ["research", "writer"], humans: ["owner"] },
   ]);
   const operations = readFileSync(resolve("docs/OPERATIONS.md"), "utf8");
-  expect(operations).toContain("slack-manifest");
-  expect(operations).toContain("完整权限清单以生成文件为准");
+  expect(operations).toContain("mate-control-plane.service");
+  expect(operations).toContain("mate-node.service");
   expect(requiredSlackBotScopes).toContain("commands");
 });
 

@@ -1,6 +1,7 @@
 import { createPrivateKey, randomUUID, sign } from "node:crypto";
 import { resolve as resolvePath } from "node:path";
 import { WebSocket } from "ws";
+import { notifyServiceReady } from "../deployment/readiness.js";
 import { loadOrCreateNodeIdentity, type NodeIdentity } from "./identity.js";
 import { readProvisionedLinuxAgentIdentity } from "./agent-provisioner.js";
 import { NodeControlMessageSchema, NodeRequestSchema } from "./protocol.js";
@@ -383,6 +384,7 @@ function connectOnce(
           privilegedOperations.setPublicKey(message.privilegedPublicKey);
         sendPrivilegedReceipts();
         process.stdout.write(`MATE_NODE_PAIRED ${identity.id}\n`);
+        notifyServiceReady();
         sendPing();
         heartbeat = setInterval(sendPing, heartbeatIntervalMs);
         return;
@@ -397,6 +399,7 @@ function connectOnce(
           privilegedOperations.setPublicKey(message.privilegedPublicKey);
         sendPrivilegedReceipts();
         process.stdout.write(`MATE_NODE_CONNECTED ${identity.id}\n`);
+        notifyServiceReady();
         sendPing();
         heartbeat = setInterval(sendPing, heartbeatIntervalMs);
         return;

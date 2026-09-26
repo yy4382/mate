@@ -483,7 +483,7 @@ it("does not connect to Slack/provider when collecting diagnostics without crede
   expect(result.logs?.content).toBe("structured-operational-events-only");
   expect(fetch).not.toHaveBeenCalled();
   expect(connect).not.toHaveBeenCalled();
-  await expect(deploymentMain(["logs", "--unit=sshd"])).rejects.toThrow("take no arguments");
+  await expect(deploymentMain(["logs", "--unit=sshd"])).rejects.toThrow("Usage: mate-deploy");
 });
 it("derives manifest permissions from every SDK call and shares runtime events and commands", () => {
   const observed = new Set<string>();

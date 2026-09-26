@@ -1,10 +1,9 @@
 {
   "version": 1,
-  "release": {
-    "source": "/var/tmp/mate-release",
-    "gitCommit": "0000000000000000000000000000000000000000"
-  },
-  "configSource": "/var/tmp/mate.json",
-  "stateReserveMiB": 512,
-  "daemonMemoryMiB": 512
+  "publicOrigin": "https://mate.example.org",
+  "controlPlanePort": 8787,
+  "controlPlaneDataDir": "/var/lib/mate-control-plane",
+  "nodeDataDir": "/var/lib/mate-node",
+  "agentHomeRoot": "/var/lib/mate-agents",
+  "ownerPasswordFile": "/etc/mate/owner-password"
 }

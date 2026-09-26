@@ -22,6 +22,7 @@ import { WorkspaceError, WorkspaceService, type WorkspaceVersion } from "./works
 import { registerWorkspaceRoutes } from "./workspace-http.js";
 import { listAgentActivity, recordAgentActivity } from "./activity.js";
 import { PrivilegedApprovals, type ApprovalView } from "./privileged-approvals.js";
+import { OwnerPush } from "./owner-push.js";
 
 const newChannelSchema = z
   .object({
@@ -78,6 +79,7 @@ export class ControlPlaneApp extends Hono {
   runs?: AgentRunCoordinator;
   readonly approvals: PrivilegedApprovals;
   private readonly approvalRetryTimer: ReturnType<typeof setInterval>;
+  readonly push: OwnerPush;
   constructor(
     private readonly ownerAuth: OwnerAuth,
     readonly nodes: NodeDirectory,
@@ -86,11 +88,13 @@ export class ControlPlaneApp extends Hono {
     readonly workspace: WorkspaceService,
     readonly attachments: AttachmentService,
     approvals: PrivilegedApprovals,
+    push: OwnerPush,
   ) {
     super();
     this.approvals = approvals;
     this.approvalRetryTimer = setInterval(() => this.approvals.resume(), 1000);
     this.approvalRetryTimer.unref?.();
+    this.push = push;
   }
 
   close(): void {
@@ -98,6 +102,7 @@ export class ControlPlaneApp extends Hono {
     this.runs?.close();
     this.workspace.close();
     this.nodes.closeAll();
+    this.push.close();
     this.ownerAuth.close();
   }
 }
@@ -140,6 +145,7 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
     agents = new AgentDirectory(ownerAuth.db, options.now),
     modelCredentials = new ModelCredentialDirectory(ownerAuth.db, options.now),
     ownerChat = new OwnerChat(ownerAuth.db, options.now),
+    push = new OwnerPush(ownerAuth.db),
     workspace = new WorkspaceService(ownerAuth.db, nodes, ownerChat),
     attachments = new AttachmentService(
       ownerAuth.db,
@@ -154,7 +160,21 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
         execute: (nodeId, grant, onStarted) => nodes.executePrivileged(nodeId, grant, onStarted),
       },
       options.now,
-      (event) => recordAgentActivity(ownerAuth.db, event),
+      (event) => {
+        recordAgentActivity(ownerAuth.db, event);
+        if (event.kind === "approval.requested") {
+          const channelId = (event.detail as { channelId: string }).channelId;
+          try {
+            push.queue(
+              `approval:${event.referenceId}`,
+              "Agent 请求系统命令审批",
+              `/app?channel=${encodeURIComponent(channelId)}&approval=${encodeURIComponent(event.referenceId)}`,
+            );
+          } catch {
+            /* Push cannot undo an approval request. */
+          }
+        }
+      },
     ),
     app = new ControlPlaneApp(
       ownerAuth,
@@ -164,8 +184,21 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
       workspace,
       attachments,
       approvals,
+      push,
     ),
     loginGate = new LoginGate();
+  ownerChat.setPushHandler((message, directToOwner) => {
+    if (
+      !directToOwner &&
+      !/(?:^|\s)@(?:owner\b|所有者)(?=\s|$|[，。！？,.:;])/iu.test(message.text)
+    )
+      return;
+    push.queue(
+      `message:${message.id}`,
+      "Agent 发来消息",
+      `/app?channel=${encodeURIComponent(message.channelId)}&message=${encodeURIComponent(message.id)}`,
+    );
+  });
   nodes.setPrivilegedApprovalHandler(
     approvals.publicKey,
     (nodeId, requestId, outcome) => {
@@ -446,6 +479,27 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
       nodeLastConnectedAt: node?.lastConnectedAt ?? null,
     };
   };
+  app.get("/api/owner/push/public-key", (context) => context.json({ publicKey: push.publicKey }));
+  app.post("/api/owner/push/subscriptions", async (context) => {
+    const body: unknown = await context.req.json().catch(() => null);
+    const input = z
+      .object({ endpoint: z.string(), keys: z.object({ p256dh: z.string(), auth: z.string() }) })
+      .safeParse(body);
+    if (!input.success) return context.json({ error: "推送订阅无效" }, 400);
+    try {
+      push.subscribe(input.data);
+    } catch {
+      return context.json({ error: "推送订阅无效" }, 400);
+    }
+    return context.json({ subscribed: true }, 201);
+  });
+  app.delete("/api/owner/push/subscriptions", async (context) => {
+    const body: unknown = await context.req.json().catch(() => null);
+    const endpoint = z.object({ endpoint: z.string().max(4096) }).safeParse(body);
+    if (!endpoint.success) return context.json({ error: "推送订阅无效" }, 400);
+    push.unsubscribe(endpoint.data.endpoint);
+    return context.json({ subscribed: false });
+  });
   app.get("/api/owner/channels/:channelId/approvals", (context) => {
     const channelId = context.req.param("channelId");
     if (!z.string().uuid().safeParse(channelId).success)
@@ -895,6 +949,11 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
     app.get("/app", index);
     app.get("/app/*", index);
     app.get("/assets/*", serveStatic({ root: webRoot }));
+    app.get("/manifest.webmanifest", serveStatic({ root: webRoot }));
+    app.get("/sw.js", serveStatic({ root: webRoot }));
+    app.get("/icon.svg", serveStatic({ root: webRoot }));
+    app.get("/icon-192.png", serveStatic({ root: webRoot }));
+    app.get("/icon-512.png", serveStatic({ root: webRoot }));
   }
 
   return app;

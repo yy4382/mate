@@ -145,6 +145,11 @@ export function ChatPage() {
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [agentNames, setAgentNames] = useState<Record<string, string>>({});
   const [approvalError, setApprovalError] = useState<string | null>(null);
+  const [pushState, setPushState] = useState<string | null>(null);
+  const [pushReady, setPushReady] = useState<{
+    registration: ServiceWorkerRegistration;
+    key: Uint8Array<ArrayBuffer>;
+  } | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [messageWindows, setMessageWindows] = useState<Record<string, MessageWindow>>({});
   const [historyRefresh, setHistoryRefresh] = useState(0);
@@ -182,6 +187,48 @@ export function ChatPage() {
   threadRootIdRef.current = threadRoot?.id ?? null;
 
   const closeDialog = useCallback(() => setDialog(null), []);
+  async function enablePush() {
+    try {
+      if (!pushReady) throw new Error("通知尚未就绪，请稍后重试。");
+      if (Notification.permission === "denied")
+        throw new Error("通知已被浏览器拒绝，请在浏览器设置中重新允许。");
+      // Start subscription in this click handler so iOS preserves the user gesture.
+      const subscription = await pushReady.registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: pushReady.key,
+      });
+      await ownerJSON("/api/owner/push/subscriptions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(subscription),
+      });
+      setPushState("已开启通知");
+    } catch (cause) {
+      setPushState(cause instanceof Error ? cause.message : "无法开启通知");
+    }
+  }
+
+  useEffect(() => {
+    if (!authenticated || !("serviceWorker" in navigator) || !("PushManager" in window)) return;
+    let active = true;
+    void Promise.all([
+      navigator.serviceWorker.register("/sw.js"),
+      ownerJSON<{ publicKey: string }>("/api/owner/push/public-key"),
+    ])
+      .then(([registration, { publicKey }]) => {
+        if (!active) return;
+        const key = Uint8Array.from(atob(publicKey.replace(/-/g, "+").replace(/_/g, "/")), (char) =>
+          char.charCodeAt(0),
+        );
+        setPushReady({ registration, key });
+      })
+      .catch(() => {
+        if (active) setPushState("通知暂不可用，请刷新页面重试。");
+      });
+    return () => {
+      active = false;
+    };
+  }, [authenticated]);
   const openThread = useCallback(async (message: Message) => {
     const request = ++threadRequestRef.current;
     threadRootIdRef.current = message.id;
@@ -264,6 +311,7 @@ export function ChatPage() {
         // The stream can deliver a buffered first event before React commits this state update.
         selectedIdRef.current = initialSelection;
         setSelectedId(initialSelection);
+        if (requestedChannelId && initialSelection === requestedChannelId) setMobileView("chat");
         streamRef.current?.close();
         const stream = new EventSource(`/api/owner/events?cursor=${snapshot.cursor}`);
         streamRef.current = stream;
@@ -478,6 +526,12 @@ export function ChatPage() {
       window.clearInterval(interval);
     };
   }, [authenticated, selectedId]);
+
+  useEffect(() => {
+    const requestId = new URLSearchParams(window.location.search).get("approval");
+    if (!requestId || !approvals.some((approval) => approval.requestId === requestId)) return;
+    document.getElementById(`approval-${requestId}`)?.scrollIntoView({ block: "center" });
+  }, [approvals]);
 
   useEffect(() => {
     if (!authenticated) return;
@@ -797,6 +851,14 @@ export function ChatPage() {
             <span aria-hidden="true">＋</span>
           </button>
         </div>
+        <div className="mobile-owner-actions">
+          <button type="button" onClick={() => void enablePush()} disabled={!pushReady}>
+            开启通知
+          </button>
+          <a href="/app/nodes">节点</a>
+          <a href="/app/agents">Agent</a>
+          {pushState && <span role="status">{pushState}</span>}
+        </div>
         {error && (
           <p className="chat-error" role="alert">
             {error}
@@ -833,6 +895,15 @@ export function ChatPage() {
           )}
         </div>
         <div className="sidebar-footer">
+          <button
+            className="text-button"
+            type="button"
+            onClick={() => void enablePush()}
+            disabled={!pushReady}
+          >
+            开启通知
+          </button>
+          {pushState && <span role="status">{pushState}</span>}
           <span className={`live-dot${live ? " is-live" : ""}`} aria-hidden="true" />
           <span>{live ? "实时连接正常" : "正在连接…"}</span>
           <a className="text-button owner-nodes-link" href="/app/nodes">

@@ -1,6 +1,23 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { constants, realpathSync } from "node:fs";
+import {
+  constants,
+  realpathSync,
+  chmodSync,
+  chownSync,
+  cpSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  renameSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import {
   chmod,
   chown,
@@ -124,6 +141,37 @@ export interface HostOperations {
  */
 export const isEntryModule = (argument: string | undefined, moduleUrl: string): boolean =>
   !!argument && moduleUrl === pathToFileURL(realpathSync(resolve(argument))).href;
+
+/** Fixed-layout first-release installer host entry; kept here with other real host operations. */
+export const dualHost = {
+  chmodSync,
+  chownSync,
+  cpSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  renameSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+  command(binary: string, args: string[]): string {
+    const result = spawnSync(binary, args, {
+      encoding: "utf8",
+      timeout: 15_000,
+      maxBuffer: 4 * 1024 * 1024,
+      env: { PATH: "/usr/sbin:/usr/bin:/sbin:/bin", LANG: "C.UTF-8" },
+    });
+    if (result.status !== 0)
+      throw new Error(
+        `${binary} failed: ${(result.stderr || result.stdout || result.error?.message || "unknown").slice(0, 300)}`,
+      );
+    return result.stdout.trim();
+  },
+};
 
 /** Read a path an operator named on the command line, following a symlinked leaf as before. */
 export async function readOperatorText(host: HostOperations, path: string): Promise<string> {
