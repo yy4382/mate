@@ -9,7 +9,11 @@ import { NodeDirectory, type NodeDirectoryOptions } from "./nodes/directory.js";
 import { registerNodeRoutes } from "./nodes/http.js";
 import { AgentDirectory, AgentRequestConflict } from "./agents/directory.js";
 import type { AgentSummary } from "./agents/contracts.js";
-import { newAgentRequestSchema } from "./agents/contracts.js";
+import {
+  newAgentRequestSchema,
+  agentProfilePatchSchema,
+  agentModelPatchSchema,
+} from "./agents/contracts.js";
 import { ModelCredentialDirectory } from "./model-credentials.js";
 import { isSupportedModelProvider, supportedModelProviders } from "./model-providers.js";
 import { AgentRunCoordinator } from "./agent-runs.js";
@@ -398,7 +402,34 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
   app.get("/api/owner/session", (context) => context.json({ authenticated: true }));
   app.get("/api/owner/agents", (context) => {
     context.header("Cache-Control", "no-store");
-    return context.json({ agents: agents.list() });
+    return context.json({
+      agents: agents.list().map((agent) => ({
+        ...agent,
+        pausedReason: app.runs?.pauseReason(agent.id) ?? null,
+        stop: app.runs?.pauseReason(agent.id) === "manual" ? app.runs.stopStatus(agent.id) : null,
+      })),
+    });
+  });
+  app.patch("/api/owner/agents/:agentId/profile", async (context) => {
+    const input = agentProfilePatchSchema.safeParse(await context.req.json().catch(() => null));
+    if (!input.success) return context.json({ error: "Agent 资料格式无效。" }, 400);
+    const agent = agents.updateProfile(context.req.param("agentId"), input.data);
+    return agent ? context.json({ agent }) : context.json({ error: "Agent 不存在。" }, 404);
+  });
+  app.put("/api/owner/agents/:agentId/model", async (context) => {
+    const input = agentModelPatchSchema.safeParse(await context.req.json().catch(() => null));
+    if (!input.success) return context.json({ error: "模型配置无效。" }, 400);
+    const id = context.req.param("agentId");
+    const current = agents.get(id);
+    if (!current) return context.json({ error: "Agent 不存在。" }, 404);
+    if (!current.linuxIdentity)
+      return context.json({ error: "请等待 Agent 的 Linux 身份创建完成。" }, 409);
+    if (!modelCredentials.has(input.data.provider))
+      return context.json({ error: "请先配置目标模型服务的 API key。" }, 409);
+    const agent = agents.updateModel(id, input.data)!;
+    app.runs?.modelChanged(id);
+    context.header("Cache-Control", "no-store");
+    return context.json({ agent });
   });
   app.get("/api/owner/agents/:agentId/activity", (context) => {
     const beforeText = context.req.query("before"),
@@ -430,17 +461,21 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
       events,
       nodeOnline: online,
       pausedReason: app.runs?.pauseReason(agentId) ?? null,
+      stop: app.runs?.pauseReason(agentId) === "manual" ? app.runs.stopStatus(agentId) : null,
       nextBefore: events.length === limit ? events.at(-1)!.sequence : null,
     });
   });
   app.post("/api/owner/agents/:agentId/pause", (context) => {
     if (!app.runs?.pauseAgent(context.req.param("agentId")))
       return context.json({ error: "Agent 不存在。" }, 404);
-    return context.json({ pausedReason: "manual" });
+    return context.json({
+      pausedReason: "manual",
+      stop: app.runs.stopStatus(context.req.param("agentId")),
+    });
   });
-  app.post("/api/owner/agents/:agentId/resume", (context) => {
-    if (!app.runs?.resumeAgent(context.req.param("agentId")))
-      return context.json({ error: "Agent 尚未暂停。" }, 409);
+  app.post("/api/owner/agents/:agentId/resume", async (context) => {
+    const result = await app.runs?.resumeAgent(context.req.param("agentId"));
+    if (!result?.ok) return context.json({ error: result?.error ?? "Agent 暂不可复启。" }, 409);
     return context.json({ pausedReason: null });
   });
   app.get("/api/owner/model-providers", (context) => {
@@ -471,7 +506,7 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
           return updated;
         })
         .immediate();
-      if (changed) app.runs?.credentialsChanged(provider);
+      if (changed) app.runs?.credentialsChanged(provider, true);
       app.runs?.wake();
     } catch {
       return context.json({ error: "无法保存模型凭据，请检查控制面存储后重试。" }, 503);
@@ -491,7 +526,7 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
           return deleted;
         })
         .immediate();
-      if (removed) app.runs?.credentialsChanged(provider);
+      if (removed) app.runs?.credentialsChanged(provider, false);
       app.runs?.wake();
     } catch {
       return context.json({ error: "无法删除模型凭据，请检查控制面存储后重试。" }, 503);

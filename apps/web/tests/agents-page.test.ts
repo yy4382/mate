@@ -25,6 +25,7 @@ let posts: Array<Record<string, unknown>>;
 let providers: Array<{ id: string; name: string; models: Array<{ id: string; name: string }> }>;
 let credentials: Array<{ provider: string; configured: true; updatedAt: number }>;
 let credentialWrites: Array<{ provider: string; apiKey: string }>;
+let agentUpdates: Array<{ path: string; body: Record<string, unknown> }>;
 let invitationPosts: Array<{ url: string; body: Record<string, unknown> }>;
 let nodeOnline: boolean;
 let nodeLastConnectedAt: string | null;
@@ -64,6 +65,7 @@ beforeEach(() => {
   ];
   credentials = [];
   credentialWrites = [];
+  agentUpdates = [];
   invitationPosts = [];
   nodeOnline = true;
   nodeLastConnectedAt = null;
@@ -198,6 +200,16 @@ beforeEach(() => {
       );
       return json(200, { entries: page?.entries ?? [], nextOffset: page?.nextOffset ?? null });
     }
+    if (/^\/api\/owner\/agents\/[^/]+\/(profile|model)$/.test(url) && init?.body) {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      agentUpdates.push({ path: url, body });
+      agents = agents.map((agent) =>
+        url.includes(String(agent.id))
+          ? { ...agent, ...(url.endsWith("/profile") ? body : { model: body }) }
+          : agent,
+      );
+      return json(200, { agent: agents[0] });
+    }
     if (/^\/api\/owner\/channels\/[^/]+\/invitations$/.test(url) && init?.method === "POST") {
       invitationPosts.push({ url, body: JSON.parse(String(init.body)) as Record<string, unknown> });
       return json(201, {
@@ -209,6 +221,51 @@ beforeEach(() => {
     return json(404, { error: "missing fixture route" });
   });
   vi.stubGlobal("fetch", fetchMock);
+});
+
+it("saves profile fields separately and only offers configured model services", async () => {
+  agents = [
+    {
+      id: "8bfb67a1-66ed-4d56-9052-4cc7eed926ae",
+      nodeId,
+      name: "Partner",
+      role: "Researcher",
+      description: "Old",
+      model: { provider: "openai", id: "gpt-4.1" },
+      initialChannelId: null,
+      sessionId,
+      status: "ready",
+      stage: "complete",
+      error: null,
+      linuxIdentity: {
+        username: "mate_8bfb67a166ed4d5690524cc7",
+        uid: 23001,
+        gid: 23001,
+        home: "/var/lib/mate/agents/8bfb67a1-66ed-4d56-9052-4cc7eed926ae",
+      },
+      createdAt: 1,
+      updatedAt: 2,
+    },
+  ];
+  credentials = [{ provider: "openai", configured: true, updatedAt: 3 }];
+  render(createElement(AgentsPage));
+  const user = userEvent.setup();
+  const name = await screen.findByRole("textbox", { name: "Partner 名称" });
+  await user.clear(name);
+  await user.type(name, "Colleague");
+  await user.click(screen.getByRole("button", { name: "保存名称" }));
+  await waitFor(() =>
+    expect(agentUpdates).toEqual([
+      { path: expect.stringMatching(/\/profile$/), body: { name: "Colleague" } },
+    ]),
+  );
+  await user.selectOptions(
+    screen.getByRole("combobox", { name: "Colleague 模型服务" }),
+    "anthropic",
+  );
+  expect((screen.getByRole("button", { name: "切换模型" }) as HTMLButtonElement).disabled).toBe(
+    true,
+  );
 });
 
 afterEach(() => {

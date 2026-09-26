@@ -28,6 +28,17 @@ export const newAgentRequestSchema = z
 
 export type NewAgentRequest = z.infer<typeof newAgentRequestSchema>;
 
+export const agentProfilePatchSchema = z
+  .object({
+    name: z.string().trim().min(1).max(80).optional(),
+    role: z.string().trim().min(1).max(160).optional(),
+    description: z.string().trim().max(1000).optional(),
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0);
+
+export const agentModelPatchSchema = newAgentRequestSchema.shape.model;
+
 export type AgentProvisioningStatus = "provisioning" | "waiting_credentials" | "ready" | "failed";
 export type AgentProvisioningStage =
   | "queued"

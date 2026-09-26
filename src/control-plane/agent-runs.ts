@@ -54,6 +54,7 @@ export class AgentRunCoordinator {
     this.recoverInterruptedRuns();
     nodes.setProcessReceiptHandler(
       (nodeId, receipt) => {
+        if (this.reconcileStop(nodeId, receipt)) return;
         const outcome = this.processOperations.reconcile(
           nodeId,
           receipt,
@@ -62,7 +63,10 @@ export class AgentRunCoordinator {
         );
         if (outcome.corrected) this.wake();
       },
-      () => this.wake(),
+      () => {
+        this.wake();
+        void this.dispatchPendingStops(true);
+      },
     );
     nodes.setAgentRunHandlers({
       context: (runId, agentId, cursor, limit) =>
@@ -238,16 +242,20 @@ export class AgentRunCoordinator {
   }
 
   wake(): void {
-    if (!this.closed) void this.drain();
+    if (!this.closed) {
+      void this.drain();
+      void this.dispatchPendingStops(false);
+    }
   }
 
-  credentialsChanged(provider: string): number {
-    this.db
-      .prepare(
-        `UPDATE owner_agent_run_control SET paused_reason=NULL,temporary_failures=0,updated_at=?
+  credentialsChanged(provider: string, ready: boolean): number {
+    if (ready)
+      this.db
+        .prepare(
+          `UPDATE owner_agent_run_control SET paused_reason=NULL,temporary_failures=0,updated_at=?
        WHERE paused_reason='credentials' AND agent_id IN (SELECT id FROM owner_agents WHERE provider=?)`,
-      )
-      .run(this.now(), provider);
+        )
+        .run(this.now(), provider);
     const running = this.db
       .prepare(
         `SELECT r.id,a.id AS agent_id FROM owner_agent_runs r
@@ -255,18 +263,61 @@ export class AgentRunCoordinator {
          WHERE r.state='running' AND a.provider=?`,
       )
       .all(provider) as Array<{ id: string; agent_id: string }>;
-    let canceled = 0;
-    for (const run of running) {
-      if (this.nodes.cancelAgentRun(run.id, run.agent_id, "credentials_changed")) canceled++;
-    }
-    return canceled;
+    for (const run of running) this.invalidateRun(run.id, run.agent_id);
+    return running.length;
+  }
+
+  modelChanged(agentId: string): void {
+    this.db
+      .prepare(
+        "UPDATE owner_agent_run_control SET paused_reason=NULL,temporary_failures=0,updated_at=? WHERE agent_id=? AND paused_reason='credentials'",
+      )
+      .run(this.now(), agentId);
+    const running = this.db
+      .prepare("SELECT id FROM owner_agent_runs WHERE agent_id=? AND state='running'")
+      .all(agentId) as Array<{ id: string }>;
+    for (const run of running) this.invalidateRun(run.id, agentId);
+    this.wake();
+  }
+
+  private invalidateRun(runId: string, agentId: string): void {
+    this.db
+      .transaction(() => {
+        this.db
+          .prepare(
+            "UPDATE owner_agent_runs SET state='failed',error_code='configuration_changed',retry_at=?,completed_at=? WHERE id=? AND state='running'",
+          )
+          .run(this.now(), this.now(), runId);
+        recordAgentActivity(this.db, {
+          agentId,
+          kind: "run.interrupted",
+          referenceId: runId,
+          summary: "模型或凭据变更使旧运行失效；待处理消息将从已确认记录恢复。",
+          at: this.now(),
+        });
+      })
+      .immediate();
+    this.nodes.cancelAgentRun(runId, agentId, "credentials_changed");
   }
 
   pauseAgent(agentId: string): boolean {
-    const agent = this.db.prepare("SELECT id FROM owner_agents WHERE id=?").get(agentId);
+    const agent = this.db.prepare("SELECT id,node_id FROM owner_agents WHERE id=?").get(agentId) as
+      { id: string; node_id: string } | undefined;
     if (!agent) return false;
+    let stopId: string | undefined;
     this.db
       .transaction(() => {
+        const existing = this.db
+          .prepare("SELECT paused_reason FROM owner_agent_run_control WHERE agent_id=?")
+          .get(agentId) as { paused_reason: string | null } | undefined;
+        if (existing?.paused_reason !== "manual") {
+          stopId = randomUUID();
+          this.db
+            .prepare(
+              "INSERT INTO owner_agent_stop_intents(operation_id,agent_id,node_id,state,created_at,updated_at) VALUES(?,?,?,'executing',?,?)",
+            )
+            .run(stopId, agentId, agent.node_id, this.now(), this.now());
+        }
         this.db
           .prepare(
             `INSERT INTO owner_agent_run_control(agent_id,paused_reason,updated_at) VALUES(?,'manual',?)
@@ -293,14 +344,208 @@ export class AgentRunCoordinator {
       )
       .get(agentId) as { id: string } | undefined;
     if (pending) this.nodes.cancelAgentRun(pending.id, agentId, "manual_pause");
+    if (stopId) void this.dispatchStop(stopId, agentId, agent.node_id);
     return true;
   }
 
-  resumeAgent(agentId: string): boolean {
+  stopStatus(agentId: string): { state: string; receipt: unknown | null } {
     const row = this.db
-      .prepare("SELECT paused_reason FROM owner_agent_run_control WHERE agent_id=?")
-      .get(agentId) as { paused_reason: string | null } | undefined;
+      .prepare(
+        "SELECT state,receipt_json FROM owner_agent_stop_intents WHERE agent_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1",
+      )
+      .get(agentId) as { state: string; receipt_json: string | null } | undefined;
+    return row
+      ? { state: row.state, receipt: row.receipt_json ? JSON.parse(row.receipt_json) : null }
+      : { state: "unknown", receipt: { reason: "stop_not_confirmed" } };
+  }
+
+  private readonly activeStops = new Set<string>();
+
+  private unsettledProcessReceipt(agentId: string): boolean {
+    return Boolean(
+      this.db
+        .prepare(
+          "SELECT 1 FROM owner_agent_process_operations WHERE agent_id=? AND state IN ('executing','unknown') LIMIT 1",
+        )
+        .get(agentId),
+    );
+  }
+
+  private async dispatchPendingStops(all: boolean): Promise<void> {
+    if (this.closed) return;
+    const rows = this.db
+      .prepare(
+        `SELECT s.operation_id,s.agent_id,s.node_id,s.state,s.receipt_json
+         FROM owner_agent_stop_intents s
+         JOIN owner_agent_run_control c ON c.agent_id=s.agent_id AND c.paused_reason='manual'
+         WHERE s.state IN ('executing','unknown') AND NOT EXISTS (
+           SELECT 1 FROM owner_agent_stop_intents later
+           WHERE later.agent_id=s.agent_id AND later.rowid>s.rowid)`,
+      )
+      .all() as Array<{
+      operation_id: string;
+      agent_id: string;
+      node_id: string;
+      state: string;
+      receipt_json: string | null;
+    }>;
+    for (const row of rows) {
+      const reason = row.receipt_json
+        ? (JSON.parse(row.receipt_json) as { reason?: string }).reason
+        : undefined;
+      if (reason === "pending_process_receipts") {
+        if (this.unsettledProcessReceipt(row.agent_id)) continue;
+        const nextId = randomUUID();
+        this.db
+          .prepare(
+            "INSERT INTO owner_agent_stop_intents(operation_id,agent_id,node_id,state,created_at,updated_at) VALUES(?,?,?,'executing',?,?)",
+          )
+          .run(nextId, row.agent_id, row.node_id, this.now(), this.now());
+        void this.dispatchStop(nextId, row.agent_id, row.node_id);
+      } else if (all) void this.dispatchStop(row.operation_id, row.agent_id, row.node_id);
+    }
+  }
+
+  private async dispatchStop(operationId: string, agentId: string, nodeId: string): Promise<void> {
+    if (this.activeStops.has(operationId)) return;
+    this.activeStops.add(operationId);
+    try {
+      const result = await this.nodes.executeAgentProcessOperation(nodeId, {
+        operationId,
+        agentId,
+        operation: { kind: "process.stop_all" },
+      });
+      if (this.closed) return;
+      this.reconcileStop(nodeId, result);
+    } catch {
+      if (this.closed) return;
+      this.db
+        .transaction(() => {
+          const changed = this.db
+            .prepare(
+              "UPDATE owner_agent_stop_intents SET state='unknown',receipt_json=?,updated_at=? WHERE operation_id=? AND state='executing'",
+            )
+            .run(
+              JSON.stringify({ reason: "node_stop_result_unavailable" }),
+              this.now(),
+              operationId,
+            ).changes;
+          if (changed)
+            recordAgentActivity(this.db, {
+              agentId,
+              nodeId,
+              kind: "operation.finished",
+              referenceId: operationId,
+              summary: "后台进程停止结果未知；请检查节点连接与操作收据。",
+              detail: { state: "unknown", reason: "node_stop_result_unavailable" },
+              at: this.now(),
+            });
+        })
+        .immediate();
+    } finally {
+      this.activeStops.delete(operationId);
+    }
+  }
+
+  private reconcileStop(
+    nodeId: string,
+    result: {
+      operationId: string;
+      agentId: string;
+      state: string;
+      receipt: unknown | null;
+    },
+  ): boolean {
+    const row = this.db
+      .prepare("SELECT agent_id,node_id,state FROM owner_agent_stop_intents WHERE operation_id=?")
+      .get(result.operationId) as { agent_id: string; node_id: string; state: string } | undefined;
     if (!row) return false;
+    if (row.node_id !== nodeId || row.agent_id !== result.agentId) return true;
+    if (row.state !== "succeeded" && row.state !== "failed")
+      this.db
+        .transaction(() => {
+          const unsettled =
+            result.state === "succeeded" && this.unsettledProcessReceipt(result.agentId);
+          const state = unsettled ? "unknown" : result.state;
+          const receipt = unsettled ? { reason: "pending_process_receipts" } : result.receipt;
+          this.db
+            .prepare(
+              "UPDATE owner_agent_stop_intents SET state=?,receipt_json=?,updated_at=? WHERE operation_id=?",
+            )
+            .run(
+              state,
+              receipt === null ? null : JSON.stringify(receipt),
+              this.now(),
+              result.operationId,
+            );
+          recordAgentActivity(this.db, {
+            agentId: result.agentId,
+            nodeId,
+            kind: "operation.finished",
+            referenceId: result.operationId,
+            summary:
+              state === "succeeded"
+                ? "后台进程已确认停止。"
+                : state === "failed"
+                  ? "后台进程停止失败；保持停用，请检查节点诊断。"
+                  : "后台进程停止结果未知；请检查节点诊断。",
+            detail: { state, receipt },
+            at: this.now(),
+          });
+        })
+        .immediate();
+    return true;
+  }
+
+  async resumeAgent(agentId: string): Promise<{ ok: boolean; error?: string }> {
+    const row = this.db
+      .prepare(
+        `SELECT a.node_id,a.linux_username,a.uid,a.gid,a.home,c.paused_reason
+       FROM owner_agents a JOIN owner_agent_run_control c ON c.agent_id=a.id WHERE a.id=?`,
+      )
+      .get(agentId) as
+      | {
+          node_id: string;
+          linux_username: string | null;
+          uid: number | null;
+          gid: number | null;
+          home: string | null;
+          paused_reason: string | null;
+        }
+      | undefined;
+    if (row?.paused_reason !== "manual") return { ok: false, error: "Agent 尚未停用。" };
+    const stop = this.stopStatus(agentId);
+    if (stop.state !== "succeeded")
+      return { ok: false, error: "后台进程停止结果尚未确认，请检查节点诊断。" };
+    const unsettled = this.db
+      .prepare(
+        `SELECT 1 FROM owner_agent_process_operations
+       WHERE agent_id=? AND state IN ('executing','unknown') LIMIT 1`,
+      )
+      .get(agentId);
+    if (unsettled) return { ok: false, error: "仍有普通操作收据待对账，暂不能复启。" };
+    let verified;
+    try {
+      verified = await this.nodes.provisionAgent(
+        row.node_id,
+        randomUUID(),
+        agentId,
+        () => {},
+        true,
+      );
+    } catch {
+      return { ok: false, error: "原节点未能核验 Agent 身份与 home，请恢复原节点后重试。" };
+    }
+    if (
+      !verified.ok ||
+      verified.identity.username !== row.linux_username ||
+      verified.identity.uid !== row.uid ||
+      verified.identity.gid !== row.gid ||
+      verified.identity.home !== row.home
+    )
+      return { ok: false, error: "原 Linux 身份或 home 已缺失或改变；保持停用，请修复原数据。" };
+    if (this.stopStatus(agentId).state !== "succeeded" || this.pauseReason(agentId) !== "manual")
+      return { ok: false, error: "停用状态已变化，请重试。" };
     this.db
       .prepare(
         "UPDATE owner_agent_run_control SET paused_reason=NULL,temporary_failures=0,updated_at=? WHERE agent_id=?",
@@ -313,7 +558,7 @@ export class AgentRunCoordinator {
       at: this.now(),
     });
     this.wake();
-    return true;
+    return { ok: true };
   }
 
   pauseReason(agentId: string): string | null {

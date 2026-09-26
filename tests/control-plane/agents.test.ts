@@ -98,6 +98,178 @@ async function pairNode(
   return { id, socket };
 }
 
+it("edits each profile field without changing an Agent's identity or session", async () => {
+  const app = setup();
+  const cookie = await login(app);
+  const { id: nodeId } = await pairNode(app, cookie);
+  const id = randomUUID();
+  const input = {
+    id,
+    nodeId,
+    name: "Original",
+    role: "Researcher",
+    description: "First description",
+    model: { provider: "openai", id: "gpt-4.1" },
+  };
+  app.agents.prepare(input);
+  app.agents.complete(
+    id,
+    {
+      username: `mate_${id.replaceAll("-", "").slice(0, 27)}`,
+      uid: 23001,
+      gid: 23001,
+      home: `/var/lib/mate/agents/${id}`,
+    },
+    app.chat,
+  );
+  const before = app.agents.get(id)!;
+  for (const patch of [
+    { name: "Renamed" },
+    { role: "Writer" },
+    { description: "New description" },
+  ]) {
+    const response = await app.request(`/api/owner/agents/${id}/profile`, {
+      method: "PATCH",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    expect(response.status).toBe(200);
+  }
+  expect(app.agents.get(id)).toMatchObject({
+    id,
+    nodeId,
+    name: "Renamed",
+    role: "Writer",
+    description: "New description",
+    sessionId: before.sessionId,
+    linuxIdentity: before.linuxIdentity,
+  });
+});
+
+it("requires an existing provider key before changing the model and preserves the Agent session", async () => {
+  const app = setup();
+  const cookie = await login(app);
+  const { id: nodeId } = await pairNode(app, cookie);
+  const id = randomUUID();
+  app.agents.prepare({
+    id,
+    nodeId,
+    name: "Partner",
+    role: "Writer",
+    description: "",
+    model: { provider: "openai", id: "gpt-4.1" },
+  });
+  app.agents.complete(
+    id,
+    {
+      username: `mate_${id.replaceAll("-", "").slice(0, 27)}`,
+      uid: 23001,
+      gid: 23001,
+      home: `/var/lib/mate/agents/${id}`,
+    },
+    app.chat,
+  );
+  const sessionId = app.agents.get(id)!.sessionId;
+  const change = (model: object) =>
+    app.request(`/api/owner/agents/${id}/model`, {
+      method: "PUT",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify(model),
+    });
+  expect((await change({ provider: "openai", id: "gpt-4.1-mini" })).status).toBe(409);
+  expect(app.agents.get(id)!.model).toEqual({ provider: "openai", id: "gpt-4.1" });
+  const key = await app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-key" }),
+  });
+  expect(key.status).toBe(204);
+  expect((await change({ provider: "openai", id: "gpt-4.1-mini" })).status).toBe(200);
+  expect(app.agents.get(id)).toMatchObject({
+    model: { provider: "openai", id: "gpt-4.1-mini" },
+    sessionId,
+  });
+});
+
+it("keeps a deactivated Agent stopped when node process stopping is unconfirmed", async () => {
+  const app = setup();
+  const cookie = await login(app);
+  const { id: nodeId, socket } = await pairNode(app, cookie);
+  const id = randomUUID();
+  app.agents.prepare({
+    id,
+    nodeId,
+    name: "Partner",
+    role: "Writer",
+    description: "",
+    model: { provider: "openai", id: "gpt-4.1" },
+  });
+  const identity = {
+    username: `mate_${id.replaceAll("-", "").slice(0, 27)}`,
+    uid: 23001,
+    gid: 23001,
+    home: `/var/lib/mate/agents/${id}`,
+  };
+  app.agents.complete(id, identity, app.chat);
+  const sessionId = app.agents.get(id)!.sessionId;
+  const pause = await app.request(`/api/owner/agents/${id}/pause`, {
+    method: "POST",
+    headers: { cookie },
+  });
+  expect(pause.status).toBe(200);
+  expect(await pause.json()).toMatchObject({
+    pausedReason: "manual",
+    stop: { state: "executing" },
+  });
+  const resume = await app.request(`/api/owner/agents/${id}/resume`, {
+    method: "POST",
+    headers: { cookie },
+  });
+  expect(resume.status).toBe(409);
+  expect(app.runs?.pauseReason(id)).toBe("manual");
+  expect(app.agents.get(id)).toMatchObject({ sessionId, linuxIdentity: identity });
+  const stopRequest = socket.sent
+    .map((text) => JSON.parse(text) as Record<string, unknown>)
+    .find(
+      (message) =>
+        message.type === "control.process.operation" &&
+        (message.operation as { kind?: string })?.kind === "process.stop_all",
+    )!;
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.process.operation.result",
+      requestId: stopRequest.requestId,
+      operationId: stopRequest.operationId,
+      agentId: id,
+      state: "succeeded",
+      receipt: { stopped: true, units: [] },
+    }),
+  );
+  for (let attempt = 0; attempt < 30 && app.runs?.stopStatus(id).state !== "succeeded"; attempt++)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  const resuming = app.request(`/api/owner/agents/${id}/resume`, {
+    method: "POST",
+    headers: { cookie },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const verify = socket.sent
+    .map((text) => JSON.parse(text) as Record<string, unknown>)
+    .find((message) => message.type === "control.agent.provision" && message.verifyOnly)!;
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.agent.provision.result",
+      requestId: verify.requestId,
+      agentId: id,
+      ok: true,
+      identity: { ...identity, uid: identity.uid + 1 },
+    }),
+  );
+  expect((await resuming).status).toBe(409);
+  expect(app.runs?.pauseReason(id)).toBe("manual");
+});
+
 it("keeps an offline-node Agent form unsubmitted", async () => {
   const app = setup();
   const cookie = await login(app);
@@ -190,7 +362,7 @@ it("migrates paired-node control-plane data and enables Agent foreign keys", () 
 
   const auth = new OwnerAuth({ dataDir: directory });
   try {
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(18);
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(19);
     expect(auth.db.pragma("foreign_keys", { simple: true })).toBe(1);
     expect(auth.db.prepare("SELECT id FROM nodes").get()).toEqual({
       id: "c5342142-9cf5-4b22-86f3-bdc46bb471f2",
@@ -201,7 +373,7 @@ it("migrates paired-node control-plane data and enables Agent foreign keys", () 
       name: "owner_agents",
     });
     expect(controlPlaneMigrations.map((migration) => migration.fromRevision)).toEqual([
-      3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
+      3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
     ]);
   } finally {
     auth.close();
@@ -220,7 +392,7 @@ it("adds workspace access metadata on new and upgraded control-plane databases",
 
   const auth = new OwnerAuth({ dataDir: directory });
   try {
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(18);
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(19);
     expect(
       auth.db
         .prepare("SELECT name FROM sqlite_master WHERE name='owner_workspace_access_audit'")
@@ -237,7 +409,7 @@ it("adds workspace access metadata on new and upgraded control-plane databases",
     const newDirectory = mkdtempSync(join(tmpdir(), "mate-workspace-audit-new-")),
       newAuth = new OwnerAuth({ dataDir: newDirectory });
     try {
-      expect(newAuth.db.pragma("user_version", { simple: true })).toBe(18);
+      expect(newAuth.db.pragma("user_version", { simple: true })).toBe(19);
       expect(
         newAuth.db
           .prepare("SELECT name FROM sqlite_master WHERE name='owner_workspace_access_audit'")
@@ -264,7 +436,7 @@ it("adds Agent recovery state to a revision 15 database while preserving file ac
 
   const auth = new OwnerAuth({ dataDir: directory });
   try {
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(18);
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(19);
     for (const table of [
       "owner_workspace_access_audit",
       "owner_agent_activity",
@@ -328,7 +500,7 @@ it("backfills committed conversation tool actions into recoverable journal histo
 
   const auth = new OwnerAuth({ dataDir: directory });
   try {
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(18);
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(19);
     expect(
       auth.db
         .prepare(
@@ -389,7 +561,7 @@ it("backfills pending channel deliveries into the shared session journal when up
 
   const auth = new OwnerAuth({ dataDir: directory });
   try {
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(18);
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(19);
     expect(
       auth.db
         .prepare(

@@ -872,6 +872,45 @@ it("pauses for credential failures and owner choice while transient model failur
   });
   const retry = await waitForRun(socket, retryStart);
   expect(retry.runId).not.toBe(run.runId);
+  socket.onSend = (message) => {
+    if (
+      message.type === "control.process.operation" &&
+      (message.operation as { kind?: string })?.kind === "process.stop_all"
+    )
+      queueMicrotask(
+        () =>
+          void app.nodes.receive(
+            socket,
+            JSON.stringify({
+              type: "node.process.operation.result",
+              requestId: message.requestId,
+              operationId: message.operationId,
+              agentId,
+              state: "succeeded",
+              receipt: { stopped: true, units: [] },
+            }),
+          ),
+      );
+    if (message.type === "control.agent.provision" && message.verifyOnly)
+      queueMicrotask(
+        () =>
+          void app.nodes.receive(
+            socket,
+            JSON.stringify({
+              type: "node.agent.provision.result",
+              requestId: message.requestId,
+              agentId,
+              ok: true,
+              identity: {
+                username: `mate_${agentId.replaceAll("-", "").slice(0, 27)}`,
+                uid: 23004,
+                gid: 23004,
+                home: `/var/lib/mate/agents/${agentId}`,
+              },
+            }),
+          ),
+      );
+  };
   const pause = await app.request(`/api/owner/agents/${agentId}/pause`, {
     method: "POST",
     headers: { cookie },
@@ -881,12 +920,19 @@ it("pauses for credential failures and owner choice while transient model failur
   expect(db.prepare("SELECT error_code FROM owner_agent_runs WHERE id=?").get(retry.runId)).toEqual(
     { error_code: "manual_pause" },
   );
+  for (
+    let attempt = 0;
+    attempt < 30 && app.runs?.stopStatus(agentId).state !== "succeeded";
+    attempt++
+  )
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  expect(app.runs?.stopStatus(agentId).state).toBe("succeeded");
   const resumedStart = socket.sent.length;
   const resume = await app.request(`/api/owner/agents/${agentId}/resume`, {
     method: "POST",
     headers: { cookie },
   });
-  expect(resume.status).toBe(200);
+  expect(resume.status, await resume.text()).toBe(200);
   const third = await waitForRun(socket, resumedStart);
   expect(third.runId).not.toBe(retry.runId);
   const before = Date.now();

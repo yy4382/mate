@@ -75,6 +75,10 @@ export function createLinuxAgentProcessExecutor(
           throw error;
         }
       }
+      case "process.stop_all": {
+        const receipt = await processManager(agentId, identity).stopAll(agentId);
+        return { state: "succeeded", receipt };
+      }
     }
   };
 }

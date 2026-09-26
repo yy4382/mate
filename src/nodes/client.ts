@@ -2,6 +2,7 @@ import { createPrivateKey, randomUUID, sign } from "node:crypto";
 import { resolve as resolvePath } from "node:path";
 import { WebSocket } from "ws";
 import { loadOrCreateNodeIdentity, type NodeIdentity } from "./identity.js";
+import { readProvisionedLinuxAgentIdentity } from "./agent-provisioner.js";
 import { NodeControlMessageSchema, NodeRequestSchema } from "./protocol.js";
 import {
   handleAgentProvisionRequest,
@@ -563,13 +564,17 @@ function connectOnce(
             if (socket.readyState === WebSocket.OPEN) sendRequest(socket, request);
           },
           (agentId, onProgress) =>
-            testDependencies.provisionAgent
-              ? testDependencies.provisionAgent(agentId, onProgress)
-              : provisionLinuxAgent({
-                  agentId,
-                  homeRoot: resolvePath(agentHomeRoot),
-                  onProgress,
-                }),
+            message.verifyOnly
+              ? Promise.resolve(
+                  readProvisionedLinuxAgentIdentity(agentId, resolvePath(agentHomeRoot)),
+                )
+              : testDependencies.provisionAgent
+                ? testDependencies.provisionAgent(agentId, onProgress)
+                : provisionLinuxAgent({
+                    agentId,
+                    homeRoot: resolvePath(agentHomeRoot),
+                    onProgress,
+                  }),
         ).catch(() => {
           // Provisioning failures are returned as bounded protocol results by its handler.
         });

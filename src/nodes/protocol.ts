@@ -250,6 +250,7 @@ const NodeControlMessageShapeSchema = z.discriminatedUnion("type", [
       type: z.literal("control.agent.provision"),
       requestId: requestIdSchema,
       agentId: agentIdSchema,
+      verifyOnly: z.boolean().optional(),
     })
     .strict(),
   z

@@ -382,11 +382,13 @@ export class NodeDirectory {
     requestId: string,
     agentId: string,
     onProgress: (stage: AgentProvisionStage) => void,
+    verifyOnly = false,
   ): Promise<NodeAgentProvisionResult> {
     const controlMessage = NodeControlMessageSchema.parse({
       type: "control.agent.provision",
       requestId,
       agentId,
+      ...(verifyOnly ? { verifyOnly: true } : {}),
     });
     const existing = this.pendingAgentProvisions.get(requestId);
     if (existing) {
@@ -788,11 +790,18 @@ export class NodeDirectory {
     if (!session.nodeId || this.connected.get(session.nodeId) !== socket) return;
     const rows = this.database
       .prepare(
-        `SELECT operation_id,agent_id FROM owner_agent_process_operations
-       WHERE node_id=? AND state IN ('executing','unknown') AND operation_id>?
-       ORDER BY operation_id LIMIT 100`,
+        `SELECT operation_id,agent_id FROM (
+          SELECT operation_id,agent_id FROM owner_agent_process_operations
+          WHERE node_id=? AND state IN ('executing','unknown')
+          UNION ALL
+          SELECT operation_id,agent_id FROM owner_agent_stop_intents
+          WHERE node_id=? AND state IN ('executing','unknown')
+        ) WHERE operation_id>? ORDER BY operation_id LIMIT 100`,
       )
-      .all(session.nodeId, cursor) as Array<{ operation_id: string; agent_id: string }>;
+      .all(session.nodeId, session.nodeId, cursor) as Array<{
+      operation_id: string;
+      agent_id: string;
+    }>;
     if (rows.length === 0) {
       this.startWorkspaceReconciliation(socket, session, "", blocking);
       return;

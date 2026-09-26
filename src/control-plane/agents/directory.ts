@@ -10,6 +10,8 @@ import type {
   AgentProvisioningStatus,
   NewAgentRequest,
 } from "./contracts.js";
+import type { z } from "zod";
+import type { agentProfilePatchSchema } from "./contracts.js";
 
 interface AgentRow {
   id: string;
@@ -72,6 +74,34 @@ export class AgentDirectory {
   get(id: string): AgentSummary | undefined {
     const row = this.read(id);
     return row ? toAgent(row) : undefined;
+  }
+
+  updateProfile(
+    id: string,
+    patch: z.infer<typeof agentProfilePatchSchema>,
+  ): AgentSummary | undefined {
+    const current = this.read(id);
+    if (!current) return undefined;
+    this.db
+      .prepare("UPDATE owner_agents SET name=?,role=?,description=?,updated_at=? WHERE id=?")
+      .run(
+        patch.name ?? current.name,
+        patch.role ?? current.role,
+        patch.description ?? current.description,
+        this.now(),
+        id,
+      );
+    return this.get(id);
+  }
+
+  updateModel(id: string, model: NewAgentRequest["model"]): AgentSummary | undefined {
+    if (!this.read(id)) return undefined;
+    this.db
+      .prepare(
+        "UPDATE owner_agents SET provider=?,model_id=?,model_ready=1,updated_at=? WHERE id=?",
+      )
+      .run(model.provider, model.id, this.now(), id);
+    return this.get(id);
   }
 
   assertSameRequest(input: NewAgentRequest): void {

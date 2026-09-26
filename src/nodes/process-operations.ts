@@ -22,6 +22,7 @@ export const agentProcessOperationSchema = z.discriminatedUnion("kind", [
     })
     .strict(),
   z.object({ kind: z.literal("process.stop"), targetOperationId: z.string().uuid() }).strict(),
+  z.object({ kind: z.literal("process.stop_all") }).strict(),
 ]);
 
 export type AgentProcessOperation = z.infer<typeof agentProcessOperationSchema>;

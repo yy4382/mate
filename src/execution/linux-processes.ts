@@ -332,4 +332,18 @@ export class LinuxProcessManager {
       throw new Error("Agent scope stop left processes running");
     return { unit, stopped: true };
   }
+
+  /** Stop all Mate scopes for this UID, then read systemd again before confirming. */
+  async stopAll(agentId: string): Promise<{ stopped: true; units: string[] }> {
+    const scopes = await this.list(agentId);
+    for (const scope of scopes) {
+      try {
+        await this.stop(agentId, scope.unit);
+      } catch (error) {
+        if (!(error instanceof ProcessNotRunningError)) throw error;
+      }
+    }
+    if ((await this.list(agentId)).length > 0) throw new Error("Agent scopes remain after stop");
+    return { stopped: true, units: scopes.map((scope) => scope.unit) };
+  }
 }

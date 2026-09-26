@@ -13,6 +13,7 @@ interface ActivityPage {
   events: ActivityEvent[];
   nodeOnline: boolean;
   pausedReason: "manual" | "credentials" | null;
+  stop: { state: string; receipt: unknown | null } | null;
   nextBefore: number | null;
 }
 
@@ -26,13 +27,24 @@ export function AgentActivity({ agentId }: { agentId: string }) {
       const response = await fetch(`/api/owner/agents/${encodeURIComponent(agentId)}/${action}`, {
         method: "POST",
       });
-      if (!response.ok) throw new Error();
+      if (!response.ok) {
+        const result = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(result?.error ?? "无法改变 Agent 状态。");
+      }
+      const result = (await response.json()) as { stop?: ActivityPage["stop"] };
       setPage((current) =>
-        current ? { ...current, pausedReason: action === "pause" ? "manual" : null } : current,
+        current
+          ? {
+              ...current,
+              pausedReason: action === "pause" ? "manual" : null,
+              stop:
+                action === "pause" ? (result.stop ?? { state: "unknown", receipt: null }) : null,
+            }
+          : current,
       );
       setError(null);
-    } catch {
-      setError("无法改变 Agent 暂停状态，请稍后重试。");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "无法改变 Agent 状态，请稍后重试。");
     }
   }
   useEffect(() => {
@@ -68,13 +80,20 @@ export function AgentActivity({ agentId }: { agentId: string }) {
           <div className="agent-activity-toolbar">
             <span>{page?.nodeOnline ? "节点在线" : "节点离线 · 以下为最后已确认事实"}</span>
             {page?.pausedReason && (
-              <span>{page.pausedReason === "manual" ? "人工暂停" : "模型凭据或配置待处理"}</span>
+              <span>{page.pausedReason === "manual" ? "已停用" : "模型凭据或配置待处理"}</span>
+            )}
+            {page?.pausedReason === "manual" && (
+              <span role="status">
+                {page.stop?.state === "succeeded"
+                  ? "后台进程已确认停止"
+                  : "后台进程停止结果未知；请检查节点与动态记录"}
+              </span>
             )}
             <button
               type="button"
-              onClick={() => void changePause(page?.pausedReason ? "resume" : "pause")}
+              onClick={() => void changePause(page?.pausedReason === "manual" ? "resume" : "pause")}
             >
-              {page?.pausedReason ? "恢复运行" : "暂停运行"}
+              {page?.pausedReason === "manual" ? "复启 Agent" : "停用 Agent"}
             </button>
             <button type="button" aria-pressed={expanded} onClick={() => setExpanded(!expanded)}>
               {expanded ? "隐藏详情" : "展开详情"}

@@ -40,6 +40,42 @@ it("lists current systemd scopes after restart without a Mate job record", async
   expect(calls.map((call) => call[0])).toEqual(["list-units", "show"]);
 });
 
+it("stops every managed scope for one UID and confirms none remain", async () => {
+  let active = true;
+  const manager = new LinuxProcessManager(
+    { alice: 1001 },
+    async (args) => {
+      if (args[0] === "list-units")
+        return ok(active ? `${unit} loaded active running Agent\n` : "");
+      if (args[0] === "show") return ok(report(active));
+      if (args[0] === "stop") {
+        active = false;
+        return ok();
+      }
+      return ok();
+    },
+    () => (active ? [4101] : []),
+    () => 1001,
+  );
+  await expect(manager.stopAll("alice")).resolves.toEqual({ stopped: true, units: [unit] });
+  await expect(manager.list("alice")).resolves.toEqual([]);
+});
+
+it("does not confirm an Agent-wide stop when systemd still reports its scope", async () => {
+  const manager = new LinuxProcessManager(
+    { alice: 1001 },
+    async (args) =>
+      args[0] === "list-units"
+        ? ok(`${unit} loaded active running Agent\n`)
+        : args[0] === "show"
+          ? ok(report())
+          : ok(),
+    () => [4101],
+    () => 1001,
+  );
+  await expect(manager.stopAll("alice")).rejects.toThrow("left processes running");
+});
+
 it("skips a scope that disappears between list-units and show", async () => {
   const manager = new LinuxProcessManager({ alice: 1001 }, async (args) =>
     args[0] === "list-units"

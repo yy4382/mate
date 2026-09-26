@@ -37,6 +37,8 @@ interface AgentSummary {
   linuxIdentity: { username: string; uid: number; gid: number; home: string } | null;
   createdAt: number;
   updatedAt: number;
+  pausedReason?: "manual" | "credentials" | null;
+  stop?: { state: string; receipt: unknown | null } | null;
 }
 
 interface AgentRequest {
@@ -231,6 +233,160 @@ interface WorkspaceChunk {
   totalBytes: number;
   base64: string;
   version: WorkspaceVersion;
+}
+
+function AgentEditor({
+  agent,
+  providers,
+  credentials,
+  refresh,
+}: {
+  agent: AgentSummary;
+  providers: ModelProvider[];
+  credentials: ModelCredential[];
+  refresh: () => Promise<void>;
+}) {
+  const [name, setName] = useState(agent.name);
+  const [role, setRole] = useState(agent.role);
+  const [description, setDescription] = useState(agent.description);
+  const [provider, setProvider] = useState(agent.model.provider);
+  const [modelId, setModelId] = useState(agent.model.id);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    setName(agent.name);
+    setRole(agent.role);
+    setDescription(agent.description);
+    setProvider(agent.model.provider);
+    setModelId(agent.model.id);
+  }, [agent.name, agent.role, agent.description, agent.model.provider, agent.model.id]);
+  async function save(path: string, method: "PATCH" | "PUT", body: object) {
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/owner/agents/${encodeURIComponent(agent.id)}/${path}`, {
+        method,
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (response.status === 401) {
+        redirectToLogin();
+        return;
+      }
+      const result: unknown = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(errorMessage(result, "无法保存 Agent 设置。"));
+      await refresh();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "无法保存 Agent 设置。");
+    } finally {
+      setBusy(false);
+    }
+  }
+  const selected = providers.find((item) => item.id === provider);
+  return (
+    <div className="agent-editor">
+      <label>
+        名称
+        <input
+          aria-label={`${agent.name} 名称`}
+          maxLength={80}
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+        />
+      </label>
+      <button
+        type="button"
+        disabled={busy || !name.trim() || name.trim() === agent.name}
+        onClick={() => void save("profile", "PATCH", { name: name.trim() })}
+      >
+        保存名称
+      </button>
+      <label>
+        角色
+        <input
+          aria-label={`${agent.name} 角色`}
+          maxLength={160}
+          value={role}
+          onChange={(event) => setRole(event.target.value)}
+        />
+      </label>
+      <button
+        type="button"
+        disabled={busy || !role.trim() || role.trim() === agent.role}
+        onClick={() => void save("profile", "PATCH", { role: role.trim() })}
+      >
+        保存角色
+      </button>
+      <label>
+        描述
+        <textarea
+          aria-label={`${agent.name} 描述`}
+          maxLength={1000}
+          value={description}
+          onChange={(event) => setDescription(event.target.value)}
+        />
+      </label>
+      <button
+        type="button"
+        disabled={busy || description.trim() === agent.description}
+        onClick={() => void save("profile", "PATCH", { description: description.trim() })}
+      >
+        保存描述
+      </button>
+      <label>
+        模型服务
+        <select
+          aria-label={`${agent.name} 模型服务`}
+          value={provider}
+          onChange={(event) => {
+            const next = providers.find((item) => item.id === event.target.value);
+            setProvider(event.target.value);
+            setModelId(next?.models[0]?.id ?? "");
+          }}
+        >
+          {providers.map((item) => (
+            <option key={item.id} value={item.id}>
+              {item.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        模型
+        <select
+          aria-label={`${agent.name} 模型`}
+          value={modelId}
+          onChange={(event) => setModelId(event.target.value)}
+        >
+          {selected?.models.map((item) => (
+            <option key={item.id} value={item.id}>
+              {item.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      {!credentials.some((item) => item.provider === provider) && (
+        <p className="agent-field-hint">请先配置目标模型服务的 API key。</p>
+      )}
+      <button
+        type="button"
+        disabled={
+          busy ||
+          !modelId ||
+          !credentials.some((item) => item.provider === provider) ||
+          (provider === agent.model.provider && modelId === agent.model.id)
+        }
+        onClick={() => void save("model", "PUT", { provider, id: modelId })}
+      >
+        切换模型
+      </button>
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
+  );
 }
 
 const stageLabels: Record<AgentSummary["stage"], string> = {
@@ -969,6 +1125,27 @@ export function AgentsPage() {
     }
   }
 
+  async function revokeCredential(provider: string) {
+    setCredentialBusy(true);
+    setCredentialError(null);
+    try {
+      const response = await fetch(`/api/owner/model-credentials/${encodeURIComponent(provider)}`, {
+        method: "DELETE",
+        headers: { Accept: "application/json" },
+      });
+      if (response.status === 401) {
+        redirectToLogin();
+        return;
+      }
+      if (!response.ok) throw new Error("无法撤销模型服务凭据。");
+      await refresh();
+    } catch (reason) {
+      setCredentialError(reason instanceof Error ? reason.message : "无法撤销模型服务凭据。");
+    } finally {
+      setCredentialBusy(false);
+    }
+  }
+
   async function openDirectMessage(agentId: string) {
     setOpeningDirectMessage(agentId);
     setCreationError(null);
@@ -1105,6 +1282,13 @@ export function AgentsPage() {
                   {providers.find((provider) => provider.id === credential.provider)?.name ??
                     credential.provider}
                   <span>已配置</span>
+                  <button
+                    type="button"
+                    disabled={credentialBusy}
+                    onClick={() => void revokeCredential(credential.provider)}
+                  >
+                    撤销 API key
+                  </button>
                 </li>
               ))}
             </ul>
@@ -1294,15 +1478,26 @@ export function AgentsPage() {
                       <p>{agent.role}</p>
                     </div>
                     <span className={`agent-status agent-status-${agent.status}`}>
-                      {agent.status === "waiting_credentials"
-                        ? "等待凭据"
-                        : agent.status === "provisioning"
-                          ? "正在创建"
-                          : agent.status === "ready"
-                            ? "已就绪"
-                            : "创建失败"}
+                      {agent.pausedReason === "manual"
+                        ? "已停用"
+                        : agent.pausedReason === "credentials"
+                          ? "凭据或模型错误"
+                          : agent.status === "waiting_credentials"
+                            ? "等待凭据"
+                            : agent.status === "provisioning"
+                              ? "正在创建"
+                              : agent.status === "ready"
+                                ? "已就绪"
+                                : "创建失败"}
                     </span>
                   </div>
+                  {agent.pausedReason === "manual" && (
+                    <p className="agent-credential-note" role="status">
+                      {agent.stop?.state === "succeeded"
+                        ? "后台进程已确认停止；复启前会核对原 Linux 身份与 home。"
+                        : "后台进程停止结果未知；请查看动态与节点诊断。"}
+                    </p>
+                  )}
                   <p className="agent-stage" role="status">
                     {stageLabels[agent.stage]}
                   </p>
@@ -1320,6 +1515,14 @@ export function AgentsPage() {
                   <p>
                     <a href={`/app/agents/${encodeURIComponent(agent.id)}/reminders`}>查看提醒</a>
                   </p>
+                  {agent.linuxIdentity && (
+                    <AgentEditor
+                      agent={agent}
+                      providers={providers}
+                      credentials={credentials}
+                      refresh={() => refresh()}
+                    />
+                  )}
                   {agent.linuxIdentity && (
                     <div className="agent-direct-message">
                       {directChannels[agent.id] ? (
