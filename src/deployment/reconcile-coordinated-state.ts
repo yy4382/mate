@@ -139,7 +139,10 @@ export function reconcileCoordinatedState(
     const controlOperations: RecoveryOperation[] = [],
       nodeOperations: NodeRecoveryOperation[] = [],
       targets = new Map<string, OperationTarget>(),
-      invalidReceiptAgents = new Map<string, string>();
+      invalidReceiptAgents = new Map<string, string>(),
+      invalidWorkspaceOperationIds = new Set<string>(),
+      workspaceOperationAgents = new Map<string, string>();
+    let unassociatedWorkspaceReceipt = false;
 
     for (const row of readProcessReceiptsChecked(processDb, processPath)) {
       const parsed = parseNodeProcessRequest(row);
@@ -173,10 +176,21 @@ export function reconcileCoordinatedState(
         sequence: row.revision ?? 0,
       });
     }
-    for (const receipt of readWorkspaceReceipts(join(paths.nodeDataDir, "workspace-receipts"))) {
+    for (const entry of readWorkspaceReceipts(join(paths.nodeDataDir, "workspace-receipts"))) {
+      if (!entry.ok) {
+        if (entry.agentId) invalidReceiptAgents.set(entry.agentId, "node_receipt_identity_unproven");
+        if (entry.operationId) invalidWorkspaceOperationIds.add(entry.operationId);
+        if (!entry.agentId && !entry.operationId) unassociatedWorkspaceReceipt = true;
+        continue;
+      }
+      const receipt = entry.receipt;
       if (!uuidSchema.safeParse(receipt.operationId).success || !uuidSchema.safeParse(receipt.agentId).success) {
         if (typeof receipt.agentId === "string")
           invalidReceiptAgents.set(receipt.agentId, "node_receipt_identity_unproven");
+        if (typeof receipt.operationId === "string")
+          invalidWorkspaceOperationIds.add(receipt.operationId);
+        if (typeof receipt.agentId !== "string" && typeof receipt.operationId !== "string")
+          unassociatedWorkspaceReceipt = true;
         continue;
       }
       nodeOperations.push({
@@ -253,9 +267,22 @@ export function reconcileCoordinatedState(
         invalidReceiptAgents.set(row.agent_id, "control_receipt_identity_unproven");
         continue;
       }
+      if (typeof envelope.operationId === "string")
+        workspaceOperationAgents.set(envelope.operationId, row.agent_id);
       const state = normalizeWorkspaceState(envelope.state);
-      if (!state || typeof envelope.operationId !== "string") continue;
+      if (
+        !state ||
+        typeof envelope.operationId !== "string" ||
+        !uuidSchema.safeParse(envelope.operationId).success
+      ) {
+        invalidReceiptAgents.set(row.agent_id, "control_receipt_identity_unproven");
+        continue;
+      }
       const requestHash = typeof envelope.nodeRequestHash === "string" ? envelope.nodeRequestHash : "";
+      if (!validHash(requestHash)) {
+        invalidReceiptAgents.set(row.agent_id, "control_receipt_identity_unproven");
+        continue;
+      }
       addIntent(controlOperations, targets, {
         kind: "workspace",
         operationId: envelope.operationId,
@@ -268,6 +295,15 @@ export function reconcileCoordinatedState(
         receipt: workspaceControlReceipt(envelope),
       }, { kind: "workspace", agentId: row.agent_id, operationId: envelope.operationId, row: { ...row, envelope } });
     }
+
+    for (const operationId of invalidWorkspaceOperationIds) {
+      const owner = workspaceOperationAgents.get(operationId);
+      if (owner) invalidReceiptAgents.set(owner, "node_receipt_identity_unproven");
+      else unassociatedWorkspaceReceipt = true;
+    }
+    if (unassociatedWorkspaceReceipt)
+      for (const agentId of localAgentIds)
+        invalidReceiptAgents.set(agentId, "node_receipt_identity_unproven");
 
     const controlState = {
         nodeId: nodeIdentity.id,
@@ -311,13 +347,14 @@ export function reconcileCoordinatedState(
       return true;
     });
     checkedOperations = nodeOperations.length + controlOperations.length;
+    let applied = 0;
     controlPlane
       .transaction(() => {
         for (const receipt of confirmed) {
-          if (holds.has(receipt.agentId)) continue;
           const target = targets.get(key(receipt.kind, receipt.operationId));
           if (!target) continue;
           applyReceipt(controlPlane, target, receipt, now());
+          applied++;
         }
         const upsert = controlPlane.prepare(`
           INSERT INTO owner_agent_recovery_holds(agent_id,reason,updated_at) VALUES(?,?,?)
@@ -333,7 +370,7 @@ export function reconcileCoordinatedState(
     return {
       nodeId: nodeIdentity.id,
       checkedOperations,
-      confirmed: confirmed.filter((row) => !holds.has(row.agentId)).length,
+      confirmed: applied,
       holds: [...holds].map(([agentId, reason]) => ({ agentId, reason })),
       released: localAgentIds.filter((id) => !holds.has(id)),
     };
@@ -385,30 +422,54 @@ function readPrivilegedReceipts(database: Database.Database): PrivilegedReceiptR
     FROM node_privileged_operations ORDER BY request_id`).all() as PrivilegedReceiptRow[];
 }
 
-function readWorkspaceReceipts(directory: string): Array<{
+type WorkspaceReceipt = {
   operationId: string;
   agentId: string;
   requestHash: string;
   state: "executing" | "succeeded" | "failed" | "unknown";
   result?: unknown;
   revision: number;
-}> {
+};
+
+type WorkspaceReceiptRead =
+  | { ok: true; receipt: WorkspaceReceipt }
+  | { ok: false; operationId?: string; agentId?: string };
+
+function readWorkspaceReceipts(directory: string): WorkspaceReceiptRead[] {
   const root = lstatSync(directory);
   if (!root.isDirectory() || root.isSymbolicLink() || (root.mode & 0o077) !== 0)
     throw new Error("Workspace receipt directory must be private and real");
-  return readdirSync(directory).filter((name) => name.endsWith(".json")).map((name) => {
-    const path = join(directory, name), stat = lstatSync(path);
-    if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0)
-      throw new Error("Workspace receipt must be a private regular file");
-    const receipt = z.object({
+  return readdirSync(directory).filter((name) => name.endsWith(".json")).map((name): WorkspaceReceiptRead => {
+    const operationId = name.slice(0, -5),
+      namedOperationId = uuidSchema.safeParse(operationId).success ? operationId : undefined,
+      path = join(directory, name);
+    try {
+      const stat = lstatSync(path);
+      if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0)
+        return { ok: false, ...(namedOperationId ? { operationId: namedOperationId } : {}) };
+      const raw = JSON.parse(readFileSync(path, "utf8")) as unknown,
+        agentId = typeof raw === "object" && raw !== null && "agentId" in raw &&
+          typeof (raw as { agentId?: unknown }).agentId === "string"
+          ? (raw as { agentId: string }).agentId
+          : undefined,
+        result = z.object({
       operationId: z.string(),
       agentId: z.string(),
       requestHash: z.string(),
       state: z.enum(["executing", "succeeded", "failed", "unknown"]),
       result: z.unknown().optional(),
       revision: z.number().int().positive().optional(),
-    }).passthrough().parse(JSON.parse(readFileSync(path, "utf8")));
-    return { ...receipt, revision: receipt.revision ?? 0 };
+        }).passthrough().safeParse(raw);
+      if (!result.success)
+        return {
+          ok: false,
+          ...(namedOperationId ? { operationId: namedOperationId } : {}),
+          ...(agentId ? { agentId } : {}),
+        };
+      return { ok: true, receipt: { ...result.data, revision: result.data.revision ?? 0 } };
+    } catch {
+      return { ok: false, ...(namedOperationId ? { operationId: namedOperationId } : {}) };
+    }
   });
 }
 
@@ -536,16 +597,12 @@ function applyReceipt(
       .run(receipt.state, stringifyOrNull(receipt.receipt), receipt.sequence, now, target.operationId, (target.row as { node_id: string }).node_id);
   } else {
     const row = target.row as { envelope: Record<string, unknown> };
-    const workspace = receipt.receipt as { code?: number; stdout?: string; stderr?: string } | null;
+    const workspace = receipt.receipt as { code?: number; stderr?: string } | null;
     let state: "succeeded" | "failed" = receipt.state === "succeeded" ? "succeeded" : "failed",
       result: unknown,
       error: string | undefined;
     if (state === "succeeded") {
-      try {
-        result = JSON.parse(workspace?.stdout ?? "");
-      } catch {
-        throw new Error("Workspace operation result could not be decoded");
-      }
+      result = receipt.receipt;
     } else {
       result = { code: workspace?.code ?? 1, stderr: workspace?.stderr ?? "" };
       error = workspace?.stderr ?? "Workspace operation failed";

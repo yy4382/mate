@@ -273,21 +273,31 @@ export class PrivilegedApprovals {
     )
       return false;
     if (row.state === "unknown" && outcome.state === "unknown") return false;
-    this.database
+    const incomingRevision = validRevision(outcome.revision);
+    if (
+      row.node_receipt_revision !== null &&
+      (incomingRevision === undefined || incomingRevision <= row.node_receipt_revision)
+    )
+      return false;
+    return this.database
       .transaction(() => {
-        this.database
+        const update = this.database
           .prepare(
             `UPDATE owner_privileged_approvals
-             SET state=?,receipt_json=?,node_receipt_revision=COALESCE(?,node_receipt_revision),updated_at=?
-             WHERE request_id=? AND state IN ('approved','running','unknown','expired')`,
+             SET state=?,receipt_json=?,node_receipt_revision=?,updated_at=?
+             WHERE request_id=? AND state IN ('approved','running','unknown','expired')
+               AND (node_receipt_revision IS NULL OR (? IS NOT NULL AND ?>node_receipt_revision))`,
           )
           .run(
             outcome.state,
             outcome.receipt === null ? null : JSON.stringify(outcome.receipt),
-            validRevision(outcome.revision) ?? null,
+            incomingRevision ?? null,
             this.now(),
             requestId,
+            incomingRevision ?? null,
+            incomingRevision ?? null,
           );
+        if (update.changes === 0) return false;
         this.emit?.({
           agentId: row.agent_id,
           nodeId: row.node_id,
@@ -303,9 +313,9 @@ export class PrivilegedApprovals {
           detail: { state: outcome.state, startedAt: outcome.startedAt, receipt: outcome.receipt },
           at: this.now(),
         });
+        return true;
       })
       .immediate();
-    return true;
   }
 
   private async dispatch(requestId: string): Promise<void> {

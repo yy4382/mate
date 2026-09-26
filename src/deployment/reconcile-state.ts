@@ -61,8 +61,11 @@ export function reconcileRecoveryState(
   const holds = new Map<string, string>();
   const localAgents = new Map(node.agents.map((agent) => [agent.id, agent]));
   const localControlAgents = control.agents.filter((agent) => agent.nodeId === control.nodeId);
-  if (control.nodeId !== node.nodeId || control.nodePublicKey !== node.nodePublicKey)
+  const nodeIdentityTrusted =
+    control.nodeId === node.nodeId && control.nodePublicKey === node.nodePublicKey;
+  if (!nodeIdentityTrusted)
     for (const agent of localControlAgents) holds.set(agent.id, "node_identity_unproven");
+  const trustedAgentIds = new Set<string>();
   for (const agent of control.agents) {
     if (agent.nodeId !== node.nodeId) continue;
     const local = localAgents.get(agent.id);
@@ -74,8 +77,11 @@ export function reconcileRecoveryState(
       local.home !== agent.home ||
       local.homeMarker !== agent.homeMarker ||
       (agent.username !== undefined && local.username !== agent.username)
-    )
+    ) {
       holds.set(agent.id, "agent_identity_unproven");
+    } else {
+      trustedAgentIds.add(agent.id);
+    }
   }
   const intents = new Map(
     control.operations.map((operation) => [
@@ -145,13 +151,19 @@ export function reconcileRecoveryState(
     if (
       !receipts.has(key) &&
       (intent.state === "executing" || intent.state === "unknown" ||
-        (intent.state !== "expired" && (intent.receiptConfirmed || intent.nodeReceiptRevision !== null)))
+        (intent.state !== "expired" &&
+          (intent.receiptConfirmed || intent.nodeReceiptRevision !== null ||
+            intent.state === "succeeded" || intent.state === "failed")))
     )
       holds.set(intent.agentId, "node_receipt_unavailable");
   }
   return {
     holds: [...holds].map(([agentId, reason]) => ({ agentId, reason })),
-    confirmed: confirmed.filter((receipt) => !holds.has(receipt.agentId)),
+    // Operation uncertainty blocks new work for its Agent but does not invalidate a separate,
+    // independently matched terminal receipt. Only untrusted node or Agent identity does that.
+    confirmed: confirmed.filter(
+      (receipt) => nodeIdentityTrusted && trustedAgentIds.has(receipt.agentId),
+    ),
   };
 }
 

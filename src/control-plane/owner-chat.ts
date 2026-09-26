@@ -1555,7 +1555,7 @@ export class OwnerChat {
                ON first_input.message_id=d.message_id AND first_input.agent_id=r.agent_id
                   AND first_input.role='user'
              WHERE r.id=? AND r.agent_id=?
-           AND NOT EXISTS (SELECT 1 FROM owner_agent_recovery_holds hold WHERE hold.agent_id=a.id)`,
+           AND NOT EXISTS (SELECT 1 FROM owner_agent_recovery_holds hold WHERE hold.agent_id=r.agent_id)`,
           )
           .get(runId, agentId) as
           | {

@@ -88,6 +88,39 @@ it("corrects an expired card only when a late node receipt proves a pre-expiry d
   expect(events).toContain("receipt.corrected");
 });
 
+it("rejects a late privileged receipt whose node version is older than the stored receipt", () => {
+  const db = new Database(":memory:");
+  databases.push(db);
+  const approvals = new PrivilegedApprovals(
+    db,
+    { execute: async () => { throw new Error("not dispatched"); } },
+    () => 1000,
+  );
+  db.exec("ALTER TABLE owner_privileged_approvals ADD COLUMN node_receipt_revision INTEGER;");
+  const request = approvals.request({
+    requestId: randomUUID(),
+    agentId: randomUUID(),
+    nodeId: randomUUID(),
+    channelId: randomUUID(),
+    program: "/usr/bin/id",
+    args: [],
+    cwd: "/tmp",
+  });
+  db.prepare(`UPDATE owner_privileged_approvals
+    SET state='unknown',receipt_json=?,node_receipt_revision=3 WHERE request_id=?`)
+    .run(JSON.stringify({ code: 0 }), request.requestId);
+
+  expect(approvals.reconcile(request.nodeId, request.requestId, {
+    state: "failed",
+    startedAt: 1001,
+    receipt: { code: 1 },
+    revision: 2,
+  })).toBe(false);
+  expect(approvals.status(request.requestId)).toMatchObject({ state: "unknown" });
+  expect(db.prepare("SELECT node_receipt_revision,receipt_json FROM owner_privileged_approvals WHERE request_id=?")
+    .get(request.requestId)).toEqual({ node_receipt_revision: 3, receipt_json: JSON.stringify({ code: 0 }) });
+});
+
 it("keeps approval pending when the node is offline, then expires without executing", async () => {
   const db = new Database(":memory:");
   databases.push(db);

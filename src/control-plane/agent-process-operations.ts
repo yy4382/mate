@@ -103,6 +103,7 @@ export class AgentProcessOperationBroker {
           )
             throw new Error("Agent process operation identity conflict");
           if (existing.state === "succeeded" || existing.state === "failed") return existing;
+          if (existing.node_receipt_confirmed === 0)
             this.database
             .prepare(
               "UPDATE owner_agent_process_operations SET state='executing',node_receipt_confirmed=0,node_receipt_revision=NULL,updated_at=? WHERE operation_id=? AND state='unknown'",
@@ -185,20 +186,27 @@ export class AgentProcessOperationBroker {
     )
       return { corrected: false, result: toResult(row) };
     if (
+      row.node_receipt_confirmed === 1 &&
+      row.node_receipt_revision !== null &&
+      (incomingRevision === undefined || incomingRevision <= row.node_receipt_revision)
+    )
+      return { corrected: false, result: toResult(row) };
+    if (
       result.state === "unknown" &&
       row.state === "unknown" &&
       row.node_receipt_confirmed === 1 &&
-      (incomingRevision === undefined ||
-        row.node_receipt_revision === null ||
-        incomingRevision <= row.node_receipt_revision)
+      incomingRevision === undefined
     )
       return { corrected: false, result: toResult(row) };
+    let applied = false;
     this.database
       .transaction(() => {
-        this.database
+        const update = this.database
           .prepare(
             `UPDATE owner_agent_process_operations SET state=?,receipt_json=?,node_receipt_confirmed=1,node_receipt_revision=?,updated_at=?
-         WHERE operation_id=? AND state IN ('executing','unknown')`,
+         WHERE operation_id=? AND state IN ('executing','unknown','succeeded','failed')
+           AND (node_receipt_confirmed=0 OR
+             (node_receipt_revision IS NULL OR ?>node_receipt_revision))`,
           )
           .run(
             result.state,
@@ -206,13 +214,17 @@ export class AgentProcessOperationBroker {
             incomingRevision ?? null,
             this.now(),
             result.operationId,
+            incomingRevision ?? null,
           );
+        if (update.changes === 0) return;
+        applied = true;
         this.appendSessionResult(this.read(result.operationId)!);
         recordAgentActivity(this.database, {
           agentId: row.agent_id,
           nodeId: row.node_id,
           kind:
-            row.state === "unknown" && result.state !== "unknown"
+            (row.state === "unknown" || row.state === "succeeded" || row.state === "failed") &&
+            result.state !== row.state
               ? "receipt.corrected"
               : "operation.finished",
           referenceId: row.operation_id,
@@ -223,13 +235,17 @@ export class AgentProcessOperationBroker {
           detail: { state: result.state, receipt: result.receipt },
           at: this.now(),
         });
-        if (row.state === "unknown" && result.state !== "unknown")
+        if (
+          (row.state === "unknown" || row.state === "succeeded" || row.state === "failed") &&
+          result.state !== row.state && result.state !== "unknown"
+        )
           onCorrection?.(row.agent_id, row.operation_id, result.state);
       })
       .immediate();
+    const latest = this.read(result.operationId)!;
     return {
-      corrected: row.state === "unknown" && result.state !== "unknown",
-      result: toResult(this.read(result.operationId)!),
+      corrected: applied && result.state !== row.state && result.state !== "unknown",
+      result: toResult(latest),
     };
   }
 
@@ -259,23 +275,27 @@ export class AgentProcessOperationBroker {
         receipt: { reason: "node_receipt_identity_mismatch" },
       };
     }
+    const incomingRevision = confirmed ? validRevision(result.revision) : undefined;
     this.database
       .transaction(() => {
-        this.database
+        const update = this.database
           .prepare(
             `UPDATE owner_agent_process_operations SET state=?,receipt_json=?,node_receipt_confirmed=?,node_receipt_revision=?,updated_at=?
            WHERE operation_id=? AND state IN ('executing','unknown')
-             AND (node_receipt_confirmed=0 OR ?=1)`,
+             AND (node_receipt_confirmed=0 OR (?=1 AND
+               (node_receipt_revision IS NULL OR ?>node_receipt_revision)))`,
           )
           .run(
             result.state,
             result.receipt === null ? null : JSON.stringify(result.receipt),
             confirmed ? 1 : 0,
-            confirmed ? (validRevision(result.revision) ?? null) : null,
+            incomingRevision ?? null,
             this.now(),
             request.operationId,
             confirmed ? 1 : 0,
+            incomingRevision ?? null,
           );
+        if (update.changes === 0) return;
         this.appendSessionResult(this.read(request.operationId)!);
         recordAgentActivity(this.database, {
           agentId: request.agentId,
