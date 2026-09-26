@@ -854,6 +854,11 @@ export class OwnerChat {
           "INSERT OR IGNORE INTO owner_agent_message_attention(agent_id,message_id,updated_at) VALUES(?,?,?)",
         )
         .run(draft.agent_id, message.id, this.now());
+      this.db
+        .prepare(
+          "UPDATE owner_agent_message_attention SET presented=1,updated_at=? WHERE agent_id=? AND message_id=?",
+        )
+        .run(this.now(), draft.agent_id, message.id);
     }
   }
 
@@ -1012,13 +1017,21 @@ export class OwnerChat {
     this.db
       .prepare(
         `UPDATE owner_reminder_firings SET handled_at=(
-      SELECT r.completed_at FROM owner_agent_runs r
-      WHERE r.delivery_id=owner_reminder_firings.delivery_id AND r.agent_id=owner_reminder_firings.agent_id
-        AND r.state='completed' ORDER BY r.completed_at DESC LIMIT 1
+      SELECT d.handled_at FROM owner_message_deliveries d
+      WHERE d.id=owner_reminder_firings.delivery_id
     ) WHERE handled_at IS NULL AND EXISTS (
-      SELECT 1 FROM owner_agent_runs r
-      WHERE r.delivery_id=owner_reminder_firings.delivery_id AND r.agent_id=owner_reminder_firings.agent_id
-        AND r.state='completed'
+      SELECT 1 FROM owner_message_deliveries d
+      JOIN owner_agent_session_journal input
+        ON input.message_id=d.message_id AND input.agent_id=owner_reminder_firings.agent_id
+           AND input.role='user'
+      JOIN owner_agent_runs r
+        ON r.agent_id=owner_reminder_firings.agent_id AND r.state='completed'
+           AND r.input_end_seq>=input.seq AND r.completed_at=d.handled_at
+      JOIN owner_message_deliveries seed ON seed.id=r.delivery_id AND seed.channel_id=d.channel_id
+      JOIN owner_agent_session_journal first_input
+        ON first_input.message_id=seed.message_id AND first_input.agent_id=r.agent_id
+           AND first_input.role='user' AND first_input.seq<=input.seq
+      WHERE d.id=owner_reminder_firings.delivery_id AND d.state='handled'
     )`,
       )
       .run();
@@ -1225,8 +1238,16 @@ export class OwnerChat {
            JOIN owner_message_deliveries d
              ON d.message_id=j.message_id AND d.channel_id=j.channel_id
                 AND d.recipient_kind='agent' AND d.recipient_id=@agent_id
+           JOIN owner_messages m ON m.id=d.message_id
            WHERE j.agent_id=@agent_id AND j.role='user' AND d.state='pending'
              AND j.channel_id=@channel_id
+             AND (
+               NOT EXISTS (
+                 SELECT 1 FROM owner_agent_session_journal seed
+                 JOIN owner_messages seed_message ON seed_message.id=seed.message_id
+                 WHERE seed.seq=@input_start_seq AND seed_message.internal_kind='reminder'
+               ) OR m.internal_kind='reminder'
+             )
              AND j.seq>=@input_start_seq AND j.seq<=@input_end_seq
          ), ordered_context AS (
            SELECT ROW_NUMBER() OVER (ORDER BY entry_group,journal_sequence) AS context_position,
@@ -1286,11 +1307,16 @@ export class OwnerChat {
         const run = this.db
           .prepare(
             `SELECT r.state,r.node_id,r.delivery_id,r.input_end_seq,
-                    d.channel_id,d.message_id,s.id AS session_id,c.archived AS channel_archived
+                    d.channel_id,d.message_id,s.id AS session_id,c.archived AS channel_archived,
+                    first_input.seq AS input_start_seq,m.internal_kind AS delivery_kind
              FROM owner_agent_runs r
              JOIN owner_message_deliveries d ON d.id=r.delivery_id
              JOIN owner_agent_sessions s ON s.agent_id=r.agent_id
              JOIN owner_channels c ON c.id=d.channel_id
+             JOIN owner_messages m ON m.id=d.message_id
+             JOIN owner_agent_session_journal first_input
+               ON first_input.message_id=d.message_id AND first_input.agent_id=r.agent_id
+                  AND first_input.role='user'
             WHERE r.id=? AND r.node_id=? AND r.agent_id=?`,
           )
           .get(runId, nodeId, agentId) as
@@ -1303,6 +1329,8 @@ export class OwnerChat {
               message_id: string;
               session_id: string;
               channel_archived: number;
+              input_start_seq: number;
+              delivery_kind: string | null;
             }
           | undefined;
         if (!run) return false;
@@ -1409,11 +1437,22 @@ export class OwnerChat {
              WHERE recipient_kind='agent' AND recipient_id=? AND channel_id=? AND state='pending'
                AND message_id IN (
                  SELECT j.message_id FROM owner_agent_session_journal j
+                 JOIN owner_messages m ON m.id=j.message_id
                  WHERE j.agent_id=? AND j.session_id=? AND j.role='user'
-                   AND j.seq<=? AND j.message_id IS NOT NULL
+                   AND j.seq>=? AND j.seq<=? AND j.message_id IS NOT NULL
+                   AND (?=0 OR m.internal_kind='reminder')
                )`,
           )
-          .run(at, agentId, run.channel_id, agentId, run.session_id, run.input_end_seq);
+          .run(
+            at,
+            agentId,
+            run.channel_id,
+            agentId,
+            run.session_id,
+            run.input_start_seq,
+            run.input_end_seq,
+            run.delivery_kind === "reminder" ? 1 : 0,
+          );
         this.db
           .prepare(
             "UPDATE owner_agent_runs SET state='completed',completed_at=?,retry_at=NULL,error_code=NULL WHERE id=? AND state='running'",
@@ -1431,10 +1470,15 @@ export class OwnerChat {
         const run = this.db
           .prepare(
             `SELECT r.state,r.input_end_seq,s.id AS session_id,d.channel_id,
-                    c.archived AS channel_archived
+                    c.archived AS channel_archived,m.internal_kind AS delivery_kind,
+                    first_input.seq AS input_start_seq
              FROM owner_agent_runs r JOIN owner_agent_sessions s ON s.agent_id=r.agent_id
              JOIN owner_message_deliveries d ON d.id=r.delivery_id
              JOIN owner_channels c ON c.id=d.channel_id
+             JOIN owner_messages m ON m.id=d.message_id
+             JOIN owner_agent_session_journal first_input
+               ON first_input.message_id=d.message_id AND first_input.agent_id=r.agent_id
+                  AND first_input.role='user'
              WHERE r.id=? AND r.agent_id=?`,
           )
           .get(runId, agentId) as
@@ -1444,11 +1488,13 @@ export class OwnerChat {
               session_id: string;
               channel_id: string;
               channel_archived: number;
+              delivery_kind: string | null;
+              input_start_seq: number;
             }
           | undefined;
         if (!run || run.state !== "running") return false;
         const at = this.now();
-        if (run.channel_archived === 1) {
+        if (run.channel_archived === 1 && run.delivery_kind !== "reminder") {
           this.db
             .prepare(
               `UPDATE owner_agent_runs SET state='failed',error_code='channel_archived',
@@ -1460,14 +1506,25 @@ export class OwnerChat {
         this.db
           .prepare(
             `UPDATE owner_message_deliveries SET state='handled',handled_at=?
-             WHERE recipient_kind='agent' AND recipient_id=? AND channel_id=? AND state='pending'
+         WHERE recipient_kind='agent' AND recipient_id=? AND channel_id=? AND state='pending'
                AND message_id IN (
                  SELECT j.message_id FROM owner_agent_session_journal j
+                 JOIN owner_messages m ON m.id=j.message_id
                  WHERE j.agent_id=? AND j.session_id=? AND j.role='user'
-                   AND j.seq<=? AND j.message_id IS NOT NULL
+                   AND j.seq>=? AND j.seq<=? AND j.message_id IS NOT NULL
+                   AND (?=0 OR m.internal_kind='reminder')
                )`,
           )
-          .run(at, agentId, run.channel_id, agentId, run.session_id, run.input_end_seq);
+          .run(
+            at,
+            agentId,
+            run.channel_id,
+            agentId,
+            run.session_id,
+            run.input_start_seq,
+            run.input_end_seq,
+            run.delivery_kind === "reminder" ? 1 : 0,
+          );
         this.db
           .prepare(
             `UPDATE owner_agent_runs SET state='completed',completed_at=?,retry_at=NULL,error_code=NULL

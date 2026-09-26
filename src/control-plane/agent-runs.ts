@@ -382,12 +382,14 @@ export class AgentRunCoordinator {
                 a.provider,a.model_id,d.channel_id,c.visibility AS channel_visibility,
                 d.id AS delivery_id
          FROM owner_message_deliveries d
+         JOIN owner_messages m ON m.id=d.message_id
          JOIN owner_agents a ON a.id=d.recipient_id
          JOIN owner_agent_sessions s ON s.agent_id=a.id
-         JOIN owner_channels c ON c.id=d.channel_id AND c.archived=0
+         JOIN owner_channels c ON c.id=d.channel_id
          JOIN owner_agent_session_journal j
            ON j.agent_id=a.id AND j.message_id=d.message_id AND j.role='user'
          WHERE d.recipient_kind='agent' AND d.state='pending'
+           AND (c.archived=0 OR m.internal_kind='reminder')
            AND a.node_id IN (${onlineNodePlaceholders})
            AND a.status='waiting_credentials' AND a.model_ready=1
            AND NOT EXISTS (SELECT 1 FROM owner_agent_run_control ctl WHERE ctl.agent_id=a.id AND ctl.paused_reason IS NOT NULL)
@@ -395,10 +397,12 @@ export class AgentRunCoordinator {
            AND NOT EXISTS (SELECT 1 FROM owner_agent_runs r WHERE r.agent_id=a.id AND r.state='running')
            AND NOT EXISTS (
              SELECT 1 FROM owner_message_deliveries earlier
+             JOIN owner_messages earlier_message ON earlier_message.id=earlier.message_id
              JOIN owner_channels earlier_source
-               ON earlier_source.id=earlier.channel_id AND earlier_source.archived=0
+               ON earlier_source.id=earlier.channel_id
              WHERE earlier.recipient_kind='agent' AND earlier.recipient_id=a.id
                AND earlier.state='pending' AND earlier.seq<d.seq
+               AND (earlier_source.archived=0 OR earlier_message.internal_kind='reminder')
                AND EXISTS (
                  SELECT 1 FROM owner_agent_session_journal prior
                  WHERE prior.agent_id=a.id AND prior.message_id=earlier.message_id
@@ -423,11 +427,12 @@ export class AgentRunCoordinator {
             .prepare(
               `SELECT c.visibility FROM owner_agents a
                JOIN owner_message_deliveries d ON d.recipient_id=a.id AND d.recipient_kind='agent'
+               JOIN owner_messages m ON m.id=d.message_id
                JOIN owner_agent_session_journal j
                  ON j.agent_id=a.id AND j.message_id=d.message_id AND j.role='user'
                JOIN owner_channels c ON c.id=d.channel_id
                WHERE a.id=? AND a.status='waiting_credentials' AND a.model_ready=1
-                 AND c.archived=0
+                 AND (c.archived=0 OR m.internal_kind='reminder')
                  AND d.id=? AND d.state='pending'`,
             )
             .get(candidate.agent_id, candidate.delivery_id) as
