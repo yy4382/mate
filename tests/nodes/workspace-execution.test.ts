@@ -82,6 +82,28 @@ it("runs a state-changing operation once and returns its durable receipt after a
   expect(lstatSync(join(receiptDirectory, `${operationId}.json`)).mode & 0o777).toBe(0o600);
 });
 
+it("passes the verified provisioned identity to workspace execution without marker metadata", async () => {
+  const fixture = setup(() => success),
+    backendIdentities: unknown[] = [],
+    executor = new LinuxWorkspaceExecutor(fixture.homeRoot, fixture.root, {
+      ...fixture.dependencies,
+      createBackend: (_agentId, identity) => {
+        backendIdentities.push(identity);
+        return { execute: async () => success };
+      },
+    });
+
+  expect(await executor.execute(action())).toEqual(success);
+  expect(backendIdentities).toEqual([
+    {
+      username: "mate_test",
+      uid: 51001,
+      gid: 51001,
+      home: fixture.home,
+    },
+  ]);
+});
+
 it("rejects reusing an operation ID with different input", async () => {
   const fixture = setup(() => success),
     executor = new LinuxWorkspaceExecutor(fixture.homeRoot, fixture.root, fixture.dependencies);

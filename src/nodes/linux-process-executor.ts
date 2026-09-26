@@ -23,7 +23,14 @@ export function createLinuxAgentProcessExecutor(
       case "exec": {
         const processes = processManager(agentId, identity);
         await processes.verifyQuota(agentId);
-        const backend = new LinuxUserBackend({ [agentId]: identity });
+        const backend = new LinuxUserBackend({
+          [agentId]: {
+            username: identity.username,
+            uid: identity.uid,
+            gid: identity.gid,
+            home: identity.home,
+          },
+        });
         // The operation has crossed the node's durable start record. WebSocket loss must not cancel
         // this command; its UID-scoped systemd unit continues and can be reconciled.
         const result = await backend.execute({

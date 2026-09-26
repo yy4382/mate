@@ -169,7 +169,12 @@ export class LinuxWorkspaceExecutor {
 
     let result: ExecutionResult;
     try {
-      result = await this.createBackend(request.agentId, identity).execute(
+      result = await this.createBackend(request.agentId, {
+        username: identity.username,
+        uid: identity.uid,
+        gid: identity.gid,
+        home: identity.home,
+      }).execute(
         {
           root: identity.home,
           operation: request.operation,

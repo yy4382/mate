@@ -44,6 +44,11 @@ it("places each Linux call in its Agent slice with groups cleared before the com
   );
 });
 
+it("keeps provisioner-only identity metadata outside the strict execution backend schema", () => {
+  const provisionedIdentity = { ...identity, username: "alice", homeMarker: "a".repeat(64) };
+  expect(() => new LinuxUserBackend({ alice: provisionedIdentity })).toThrow();
+});
+
 it("runs file tools and shell under one stable host identity and path", async () => {
   const root = workspace(),
     backend = new LinuxUserBackend({ alice: identity });
