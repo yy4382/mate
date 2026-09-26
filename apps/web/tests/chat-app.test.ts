@@ -99,6 +99,15 @@ let history: Map<string, FixtureMessage[]>;
 let sessionStatus: number;
 let fetchMock: ReturnType<typeof vi.fn>;
 let posts: Array<{ channelId: string; text: string }>;
+let taskPosts: Array<{ messageId?: string; asTask?: boolean }>;
+let tasks: Array<{
+  id: string;
+  messageId: string;
+  channelId: string;
+  title: string;
+  status: "open";
+  ownerAgentId: null;
+}>;
 let positionPosts: Array<{ rootId?: string; quoteId?: string }>;
 let nextPostGate: {
   started: Promise<void>;
@@ -214,6 +223,24 @@ function installFetch(): void {
       }
       return json(200, { attachments: attachments.filter((item) => item.channelId === channelId) });
     }
+    if (url === "/api/owner/tasks") {
+      if (init?.method === "POST") {
+        const body = JSON.parse(String(init.body)) as { messageId: string };
+        const anchor = [...history.values()].flat().find((entry) => entry.id === body.messageId)!;
+        taskPosts.push({ messageId: body.messageId });
+        const task = {
+          id: `task-${tasks.length + 1}`,
+          messageId: anchor.id,
+          channelId: anchor.channelId,
+          title: anchor.text,
+          status: "open" as const,
+          ownerAgentId: null,
+        };
+        tasks.push(task);
+        return json(201, task);
+      }
+      return json(200, { tasks });
+    }
     const threadMatch = url.match(/^\/api\/owner\/channels\/([^/]+)\/threads\/([^/]+)/);
     if (threadMatch) {
       const gate = nextThreadGate;
@@ -244,6 +271,16 @@ function installFetch(): void {
           String(BigInt(lastOrder) + 1n),
         );
         posts.push({ channelId, text: body.text });
+        taskPosts.push({ asTask: (body as { asTask?: boolean }).asTask });
+        if ((body as { asTask?: boolean }).asTask)
+          tasks.push({
+            id: `task-${tasks.length + 1}`,
+            messageId: created.id,
+            channelId,
+            title: body.text,
+            status: "open",
+            ownerAgentId: null,
+          });
         positionPosts.push({
           ...(typeof (body as { rootId?: string }).rootId === "string"
             ? { rootId: (body as { rootId: string }).rootId }
@@ -313,6 +350,8 @@ beforeEach(() => {
   attachments = [];
   attachmentUploads = [];
   failNextAttachmentUpload = false;
+  taskPosts = [];
+  tasks = [];
   positionPosts = [];
   nextPostGate = null;
   nextHistoryGate = null;
@@ -713,4 +752,19 @@ it("keeps the newer thread when an earlier thread request completes last", async
   expect(screen.getByRole("complementary", { name: "讨论串" }).textContent).toContain(
     "第二条根消息",
   );
+});
+
+it("offers task sending and creating from an existing message with a visible task card", async () => {
+  const user = await openChat();
+  await user.type(screen.getByRole("textbox", { name: "发送到 公开频道" }), "Prepare the release");
+  await user.click(screen.getByRole("checkbox", { name: "作为任务发送" }));
+  await user.click(screen.getByRole("button", { name: "发送", exact: true }));
+  await waitFor(() => expect(taskPosts).toContainEqual({ asTask: true }));
+  expect(await screen.findByText(/任务 · 待认领/)).not.toBeNull();
+  await user.type(screen.getByRole("textbox", { name: "发送到 公开频道" }), "Follow up later");
+  await user.click(screen.getByRole("button", { name: "发送", exact: true }));
+  await user.click(screen.getByRole("button", { name: "消息 Follow up later 的操作" }));
+  await user.click(screen.getByRole("button", { name: "从消息建任务" }));
+  await waitFor(() => expect(taskPosts).toContainEqual({ messageId: "message-2" }));
+  expect(screen.getAllByText(/任务 · 待认领/)).toHaveLength(2);
 });

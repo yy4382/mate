@@ -26,6 +26,16 @@ interface Message {
   createdAt: number;
 }
 
+interface Task {
+  id: string;
+  messageId: string;
+  channelId: string;
+  title: string;
+  status: "open" | "in_progress" | "done";
+  ownerAgentId: string | null;
+  ownerAgentName?: string | null;
+}
+
 interface Snapshot {
   channels: Channel[];
   cursor: number;
@@ -135,6 +145,8 @@ export function ChatPage() {
   const [messageWindows, setMessageWindows] = useState<Record<string, MessageWindow>>({});
   const [historyRefresh, setHistoryRefresh] = useState(0);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [asTask, setAsTask] = useState(false);
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [loadingLatestChannelId, setLoadingLatestChannelId] = useState<string | null>(null);
@@ -206,6 +218,25 @@ export function ChatPage() {
       });
     return () => controller.abort();
   }, []);
+
+  useEffect(() => {
+    if (!authenticated) return;
+    let live = true;
+    async function refreshTasks() {
+      try {
+        const result = await ownerJSON<{ tasks: Task[] }>("/api/owner/tasks");
+        if (live) setTasks(result.tasks);
+      } catch {
+        /* Conversation remains usable while the task board reloads. */
+      }
+    }
+    void refreshTasks();
+    const timer = window.setInterval(() => void refreshTasks(), 3000);
+    return () => {
+      live = false;
+      window.clearInterval(timer);
+    };
+  }, [authenticated]);
 
   useEffect(() => {
     if (!authenticated) return;
@@ -452,6 +483,7 @@ export function ChatPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             text: submittedDraft,
+            ...(asTask ? { asTask: true } : {}),
             ...(replyTarget?.kind === "quote"
               ? { quoteId: replyTarget.message.id }
               : replyTarget?.kind === "thread"
@@ -473,6 +505,11 @@ export function ChatPage() {
         current[channelId] === submittedDraft ? { ...current, [channelId]: "" } : current,
       );
       setReplyTarget(null);
+      setAsTask(false);
+      if (asTask) {
+        const result = await ownerJSON<{ tasks: Task[] }>("/api/owner/tasks");
+        setTasks(result.tasks);
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "消息发送失败，请重试。");
     } finally {
@@ -508,6 +545,22 @@ export function ChatPage() {
       setAttachmentError(cause instanceof Error ? cause.message : "附件上传失败，请重试。");
     } finally {
       setAttachmentBusy(false);
+    }
+  }
+
+  async function createTaskFromMessage(message: Message) {
+    setError(null);
+    try {
+      await ownerJSON<Task>("/api/owner/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messageId: message.id }),
+      });
+      const result = await ownerJSON<{ tasks: Task[] }>("/api/owner/tasks");
+      setTasks(result.tasks);
+      setOpenMenuId(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "无法建立任务");
     }
   }
 
@@ -732,6 +785,9 @@ export function ChatPage() {
           <a className="text-button owner-nodes-link" href="/app/agents">
             Agent 同事
           </a>
+          <a className="text-button owner-nodes-link" href="/app/tasks">
+            任务看板
+          </a>
           <button className="text-button" type="button" onClick={logout} disabled={busy}>
             退出登录
           </button>
@@ -847,6 +903,20 @@ export function ChatPage() {
                         </span>
                       )}
                       <p>{message.text}</p>
+                      {tasks.find((task) => task.messageId === message.id) && (
+                        <a className="message-task-card" href="/app/tasks">
+                          任务 ·{" "}
+                          {tasks.find((task) => task.messageId === message.id)?.status === "done"
+                            ? "已完成"
+                            : tasks.find((task) => task.messageId === message.id)?.status ===
+                                "in_progress"
+                              ? "进行中"
+                              : "待认领"}
+                          {tasks.find((task) => task.messageId === message.id)?.ownerAgentId
+                            ? ` · ${tasks.find((task) => task.messageId === message.id)?.ownerAgentName ?? tasks.find((task) => task.messageId === message.id)?.ownerAgentId}`
+                            : ""}
+                        </a>
+                      )}
                       {!!message.replyCount && (
                         <button
                           type="button"
@@ -895,6 +965,14 @@ export function ChatPage() {
                           <button type="button" onClick={() => void openThread(message)}>
                             查看讨论串
                           </button>
+                          {!tasks.some((task) => task.messageId === message.id) && (
+                            <button
+                              type="button"
+                              onClick={() => void createTaskFromMessage(message)}
+                            >
+                              从消息建任务
+                            </button>
+                          )}
                         </div>
                       )}
                     </div>
@@ -960,6 +1038,14 @@ export function ChatPage() {
                   }}
                 />
                 <div className="composer-footer">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={asTask}
+                      onChange={(event) => setAsTask(event.currentTarget.checked)}
+                    />
+                    作为任务发送
+                  </label>
                   <span>
                     {replyTarget?.kind === "thread"
                       ? "只显示在讨论串中"

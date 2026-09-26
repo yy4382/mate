@@ -39,6 +39,7 @@ const newMessageSchema = z
     text: z.string().trim().min(1).max(20_000),
     rootId: z.string().uuid().optional(),
     quoteId: z.string().uuid().optional(),
+    asTask: z.boolean().optional(),
   })
   .strict()
   .refine((value) => !(value.rootId && value.quoteId));
@@ -695,6 +696,37 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
     );
     if (!thread) return context.json({ error: "讨论串不存在" }, 404);
     return context.json(thread);
+  });
+  app.get("/api/owner/tasks", (context) => context.json({ tasks: ownerChat.listTasks() }));
+  app.get("/api/owner/agents/:agentId/reminders", (context) => {
+    const agent = agents.list().find((item) => item.id === context.req.param("agentId"));
+    if (!agent) return context.json({ error: "Agent 不存在" }, 404);
+    ownerChat.syncHandledReminders();
+    return context.json({ reminders: ownerChat.listAgentReminders(agent.id) });
+  });
+  app.get("/api/owner/tasks/:taskId/activity", (context) => {
+    const task = ownerChat.readTask(context.req.param("taskId"));
+    if (!task) return context.json({ error: "任务不存在" }, 404);
+    return context.json({ task, events: ownerChat.taskActivity(task.id) });
+  });
+  app.post("/api/owner/tasks", async (context) => {
+    const parsed = z
+      .object({ messageId: z.string().uuid() })
+      .strict()
+      .safeParse(await context.req.json().catch(() => null));
+    if (!parsed.success) return context.json({ error: "消息 ID 无效" }, 400);
+    try {
+      return context.json(
+        ownerChat.createTaskForMessage(parsed.data.messageId, "human", "owner"),
+        201,
+      );
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("UNIQUE"))
+        return context.json({ error: "这条消息已有任务" }, 409);
+      if (error instanceof Error && error.message === "Message is not available")
+        return context.json({ error: "消息不存在" }, 404);
+      throw error;
+    }
   });
   app.post("/api/owner/channels/:channelId/messages", async (context) => {
     let body: unknown;

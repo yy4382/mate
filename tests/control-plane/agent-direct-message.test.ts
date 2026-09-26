@@ -3435,3 +3435,301 @@ it("does not let a saved draft or a later paginated read hide unseen conversatio
   });
   expect(sent).toMatchObject({ ok: true, result: { text: "Draft text" } });
 });
+
+it("holds Agent task changes for fresh discussion and queues an offline reminder without marking it handled", async () => {
+  const { app, cookie, nodeId, socket, db } = await setup();
+  const agentId = randomUUID();
+  app.agents.prepare({
+    id: agentId,
+    nodeId,
+    name: "Task partner",
+    role: "Coordinates work",
+    description: "Synthetic fixture",
+    model: { provider: "openai", id: "gpt-4.1" },
+  });
+  app.agents.complete(
+    agentId,
+    {
+      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      uid: 23001,
+      gid: 23001,
+      home: `/var/lib/mate/agents/${agentId}`,
+    },
+    app.chat,
+  );
+  const dm = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  await app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-task-key" }),
+  });
+  const from = socket.sent.length;
+  const anchor = app.chat.createMessage(dm.id, "Investigate the alert", { asTask: true })!;
+  const task = app.chat.taskForMessage(anchor.id)!;
+  const run = await waitForRun(socket, from);
+  const changedMessage = app.chat.createMessage(dm.id, "Please include the restart case")!;
+  async function tool(id: string, name: string, input: Record<string, unknown>) {
+    return callAgentTool(app, socket, run, id, "tools.call", { name, input });
+  }
+  const held = await tool("claim-held", "tasks.claim", { taskId: task.id, expectedVersion: 1 });
+  expect(held).toMatchObject({ ok: true, result: { status: "needs_review" } });
+  expect(app.chat.readTask(task.id)).toMatchObject({ ownerAgentId: null, version: 1 });
+  expect(app.chat.taskActivity(task.id)).toHaveLength(1);
+  const draftId = (held.result as { draftId: string }).draftId;
+  expect((await tool("claim-keep", "tasks.review", { draftId, choice: "keep" })).ok).toBe(true);
+  expect((await tool("claim-continue", "tasks.review", { draftId, choice: "continue" })).ok).toBe(
+    true,
+  );
+  app.chat.createMessage(dm.id, "A newer decision arrived");
+  expect(
+    await tool("claim-stale", "tasks.claim", { taskId: task.id, expectedVersion: 1, draftId }),
+  ).toMatchObject({ ok: false, error: "Conversation changed; review the task draft again" });
+  expect(app.chat.readTask(task.id)).toMatchObject({ ownerAgentId: null, version: 1 });
+  await tool("claim-inspect-late", "tasks.review", { draftId, choice: "inspect" });
+  await tool("claim-continue-late", "tasks.review", { draftId, choice: "continue" });
+  const claimed = await tool("claim-applied", "tasks.claim", {
+    taskId: task.id,
+    expectedVersion: 1,
+    draftId,
+  });
+  expect(claimed).toMatchObject({
+    ok: true,
+    result: { ownerAgentId: agentId, status: "in_progress" },
+  });
+  expect(
+    await tool("claim-applied", "tasks.claim", { taskId: task.id, expectedVersion: 1, draftId }),
+  ).toMatchObject({ ok: true, result: { ownerAgentId: agentId, version: 2 } });
+  expect(
+    await tool("claim-applied", "tasks.update", {
+      taskId: task.id,
+      expectedVersion: 2,
+      status: "done",
+    }),
+  ).toMatchObject({ ok: false, error: "Action ID was already used for a different request" });
+  expect(
+    await callAgentTool(
+      app,
+      socket,
+      { ...run, runId: randomUUID() },
+      "stale-run-task",
+      "tools.call",
+      {
+        name: "tasks.yield",
+        input: { taskId: task.id, expectedVersion: 2 },
+      },
+    ),
+  ).toMatchObject({ ok: false });
+  expect(app.chat.taskActivity(task.id)).toHaveLength(2);
+  expect(app.chat.listMessages(dm.id, undefined, 100)?.messages).toHaveLength(3);
+  const updateHeld = await tool("update-held", "tasks.update", {
+    taskId: task.id,
+    expectedVersion: 2,
+    status: "done",
+    note: "Verified after restart",
+  });
+  expect(updateHeld).toMatchObject({ ok: true, result: { status: "needs_review" } });
+  const updateDraft = (updateHeld.result as { draftId: string }).draftId;
+  await tool("update-inspect", "tasks.review", { draftId: updateDraft, choice: "inspect" });
+  await tool("update-continue", "tasks.review", { draftId: updateDraft, choice: "continue" });
+  expect(
+    await tool("update-applied", "tasks.update", {
+      taskId: task.id,
+      expectedVersion: 2,
+      status: "done",
+      note: "Verified after restart",
+      draftId: updateDraft,
+    }),
+  ).toMatchObject({ ok: true, result: { status: "done", version: 3 } });
+  const createHeld = await tool("create-held", "tasks.create", { messageId: changedMessage.id });
+  expect(createHeld.error).toBeUndefined();
+  expect(createHeld).toMatchObject({ ok: true, result: { status: "needs_review" } });
+  const createDraft = (createHeld.result as { draftId: string }).draftId;
+  await tool("create-keep", "tasks.review", { draftId: createDraft, choice: "keep" });
+  await tool("create-continue", "tasks.review", { draftId: createDraft, choice: "continue" });
+  expect(
+    await tool("create-applied", "tasks.create", {
+      messageId: changedMessage.id,
+      draftId: createDraft,
+    }),
+  ).toMatchObject({
+    ok: true,
+    result: { messageId: changedMessage.id, title: changedMessage.text },
+  });
+  const inaccessible = app.chat.createChannel({
+    name: "Private",
+    description: "",
+    visibility: "private",
+  });
+  const secret = app.chat.createMessage(inaccessible.id, "Secret task", { asTask: true })!;
+  expect(
+    await tool("secret-claim", "tasks.claim", {
+      taskId: app.chat.taskForMessage(secret.id)!.id,
+      expectedVersion: 1,
+    }),
+  ).toMatchObject({ ok: false, error: "Conversation is not available" });
+  const later = await tool("reminder-later", "reminders.create", {
+    conversationId: dm.id,
+    text: "Follow up tomorrow",
+    dueAt: Date.now() + 86_400_000,
+  });
+  expect(later.ok).toBe(true);
+  const laterId = (later.result as { id: string }).id;
+  expect(
+    await tool("reminder-reschedule", "reminders.reschedule", {
+      reminderId: laterId,
+      expectedVersion: 1,
+      dueAt: Date.now() + 172_800_000,
+    }),
+  ).toMatchObject({ ok: true, result: { version: 2 } });
+  expect(
+    await tool("reminder-stale-cancel", "reminders.cancel", {
+      reminderId: laterId,
+      expectedVersion: 1,
+    }),
+  ).toMatchObject({ ok: false, error: "Reminder version or state changed" });
+  expect(
+    await tool("reminder-cancel", "reminders.cancel", {
+      reminderId: laterId,
+      expectedVersion: 2,
+    }),
+  ).toMatchObject({ ok: true, result: { state: "cancelled", version: 3 } });
+  const reminder = await tool("reminder-create", "reminders.create", {
+    conversationId: dm.id,
+    taskId: task.id,
+    text: "Check the alert again",
+    dueAt: 1,
+  });
+  expect(reminder.ok).toBe(true);
+  const reminderId = (reminder.result as { id: string }).id;
+  app.nodes.closeAll();
+  app.chat.fireDueReminders();
+  const reminders = app.chat.listAgentReminders(agentId);
+  expect(reminders).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        id: reminderId,
+        state: "fired",
+        firing: {
+          firedAt: expect.any(Number),
+          handledAt: null,
+        },
+      }),
+    ]),
+  );
+  const delivery = db
+    .prepare(
+      "SELECT id,state FROM owner_message_deliveries WHERE id=(SELECT delivery_id FROM owner_reminder_firings WHERE reminder_id=?)",
+    )
+    .get(reminderId) as { id: string; state: string };
+  expect(app.chat.acknowledgeDelivery(delivery.id, "agent", agentId)).toBe(false);
+  expect(delivery.state).toBe("pending");
+  expect(app.chat.listMessages(dm.id, undefined, 100)?.messages).toHaveLength(3);
+  app.close();
+  const restarted = createControlPlaneApp({
+    dataDir: join(fixtures.at(-1)!.directory, "control-plane"),
+    passwordFile: join(fixtures.at(-1)!.directory, "owner-password"),
+  });
+  fixtures.push({
+    app: restarted,
+    directory: fixtures.at(-1)!.directory,
+    db: new Database(join(fixtures.at(-1)!.directory, "control-plane", "control-plane.sqlite")),
+  });
+  expect(restarted.chat.listAgentReminders(agentId)).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        id: reminderId,
+        state: "fired",
+        firing: { firedAt: expect.any(Number), handledAt: null },
+      }),
+    ]),
+  );
+});
+
+it("lets peers coordinate on one task without a tree and preserves a newer claim when the former owner yields", async () => {
+  const { app, cookie, nodeId, socket } = await setup();
+  const firstId = randomUUID(),
+    secondId = randomUUID();
+  for (const [id, uid] of [
+    [firstId, 23001],
+    [secondId, 23002],
+  ] as const) {
+    app.agents.prepare({
+      id,
+      nodeId,
+      name: `Peer ${uid}`,
+      role: "Collaborates directly",
+      description: "Synthetic fixture",
+      model: { provider: "openai", id: "gpt-4.1" },
+    });
+    app.agents.complete(
+      id,
+      {
+        username: "mate_" + id.replaceAll("-", "").slice(0, 27),
+        uid,
+        gid: uid,
+        home: `/var/lib/mate/agents/${id}`,
+      },
+      app.chat,
+    );
+  }
+  const room = app.chat.createChannel({
+    name: "Shared work",
+    description: "",
+    visibility: "public",
+  });
+  expect(app.chat.inviteAgentToChannel(room.id, firstId)).toBe(true);
+  expect(app.chat.inviteAgentToChannel(room.id, secondId)).toBe(true);
+  await app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-peer-key" }),
+  });
+  const from = socket.sent.length;
+  const anchor = app.chat.createMessage(room.id, "Review deployment", { asTask: true })!;
+  const task = app.chat.taskForMessage(anchor.id)!;
+  await waitForRun(socket, from);
+  let runs: Array<Extract<NodeControlMessage, { type: "control.agent.run" }>> = [];
+  const deadline = Date.now() + 4000;
+  while (Date.now() < deadline) {
+    runs = socket.sent
+      .slice(from)
+      .map((text) => JSON.parse(text) as Extract<NodeControlMessage, { type: "control.agent.run" }>)
+      .filter((value) => value.type === "control.agent.run");
+    if (runs.some((run) => run.agentId === firstId) && runs.some((run) => run.agentId === secondId))
+      break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  const first = runs.find((run) => run.agentId === firstId)!,
+    second = runs.find((run) => run.agentId === secondId)!;
+  expect(first).toBeDefined();
+  expect(second).toBeDefined();
+  async function action(
+    run: typeof first,
+    id: string,
+    name: string,
+    input: Record<string, unknown>,
+  ) {
+    return callAgentTool(app, socket, run, id, "tools.call", { name, input });
+  }
+  expect(
+    await action(first, "first-claim", "tasks.claim", { taskId: task.id, expectedVersion: 1 }),
+  ).toMatchObject({ ok: true, result: { ownerAgentId: firstId, version: 2 } });
+  expect(
+    await action(first, "first-yield", "tasks.yield", { taskId: task.id, expectedVersion: 2 }),
+  ).toMatchObject({ ok: true, result: { ownerAgentId: null, version: 3 } });
+  expect(
+    await action(second, "second-claim", "tasks.claim", { taskId: task.id, expectedVersion: 3 }),
+  ).toMatchObject({ ok: true, result: { ownerAgentId: secondId, version: 4 } });
+  expect(
+    await action(first, "late-yield", "tasks.yield", { taskId: task.id, expectedVersion: 2 }),
+  ).toMatchObject({ ok: true, result: { ownerAgentId: secondId, version: 5 } });
+  expect(
+    await action(second, "peer-transfer", "tasks.transfer", {
+      taskId: task.id,
+      expectedVersion: 5,
+      agentId: firstId,
+    }),
+  ).toMatchObject({ ok: true, result: { ownerAgentId: firstId, version: 6 } });
+  expect(app.chat.taskActivity(task.id)).toHaveLength(6);
+  expect(app.chat.listMessages(room.id, undefined, 10)?.messages).toHaveLength(1);
+});

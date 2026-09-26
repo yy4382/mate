@@ -102,8 +102,115 @@ export const agentConversationOperations = Object.freeze({
         rootId: z.string().uuid().optional(),
         quoteId: z.string().uuid().optional(),
         draftId: z.string().uuid().optional(),
+        asTask: z.boolean().optional(),
       })
       .strict(),
+    seatPolicy: "deny" as const,
+  },
+  "tasks.create": {
+    description: "从你可读取的已有消息创建任务；消息是唯一规范锚点。",
+    schema: z
+      .object({ messageId: z.string().uuid(), draftId: z.string().uuid().optional() })
+      .strict(),
+    seatPolicy: "deny" as const,
+  },
+  "tasks.claim": {
+    description: "认领一个可见任务；先检查相关讨论的新变化。",
+    schema: z
+      .object({
+        taskId: z.string().uuid(),
+        expectedVersion: z.number().int().positive(),
+        draftId: z.string().uuid().optional(),
+      })
+      .strict(),
+    seatPolicy: "deny" as const,
+  },
+  "tasks.yield": {
+    description: "让出任务；若同伴已认领，记录你已让位而不改写其负责人。",
+    schema: z
+      .object({
+        taskId: z.string().uuid(),
+        expectedVersion: z.number().int().positive(),
+        draftId: z.string().uuid().optional(),
+      })
+      .strict(),
+    seatPolicy: "deny" as const,
+  },
+  "tasks.transfer": {
+    description: "把任务移交给同一对话的另一名成员 Agent。",
+    schema: z
+      .object({
+        taskId: z.string().uuid(),
+        expectedVersion: z.number().int().positive(),
+        agentId: z.string().uuid(),
+        draftId: z.string().uuid().optional(),
+      })
+      .strict(),
+    seatPolicy: "deny" as const,
+  },
+  "tasks.update": {
+    description: "更新可见任务的标题、状态或说明。",
+    schema: z
+      .object({
+        taskId: z.string().uuid(),
+        expectedVersion: z.number().int().positive(),
+        title: z.string().trim().min(1).max(200).optional(),
+        status: z.enum(["open", "in_progress", "done"]).optional(),
+        note: z.string().max(2000).default(""),
+        draftId: z.string().uuid().optional(),
+      })
+      .strict(),
+    seatPolicy: "deny" as const,
+  },
+  "tasks.review": {
+    description: "检查任务操作期间出现的相关消息，选择修改、保留、放弃、暂缓或知情继续。",
+    schema: z
+      .object({
+        draftId: z.string().uuid(),
+        choice: z.enum(["inspect", "revise", "keep", "abandon", "defer", "continue"]),
+        revisedInput: z.record(z.string(), z.json()).optional(),
+      })
+      .strict(),
+    seatPolicy: "deny" as const,
+  },
+  "tasks.list": {
+    description: "列出你当前可读取对话中的任务。",
+    schema: z.object({}).strict(),
+    seatPolicy: "deny" as const,
+  },
+  "reminders.create": {
+    description: "为自己建立一次性提醒，可关联任务；任务完成后提醒仍然有效。",
+    schema: z
+      .object({
+        conversationId,
+        text: z.string().trim().min(1).max(2000),
+        dueAt: z.number().int().positive(),
+        taskId: z.string().uuid().optional(),
+      })
+      .strict(),
+    seatPolicy: "deny" as const,
+  },
+  "reminders.reschedule": {
+    description: "修改自己尚未触发的提醒时间。",
+    schema: z
+      .object({
+        reminderId: z.string().uuid(),
+        expectedVersion: z.number().int().positive(),
+        dueAt: z.number().int().positive(),
+      })
+      .strict(),
+    seatPolicy: "deny" as const,
+  },
+  "reminders.cancel": {
+    description: "取消自己尚未触发的提醒。",
+    schema: z
+      .object({ reminderId: z.string().uuid(), expectedVersion: z.number().int().positive() })
+      .strict(),
+    seatPolicy: "deny" as const,
+  },
+  "reminders.list": {
+    description: "查看自己的提醒和触发历史。",
+    schema: z.object({}).strict(),
     seatPolicy: "deny" as const,
   },
   "conversations.invite": {

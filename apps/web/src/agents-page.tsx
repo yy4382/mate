@@ -1317,6 +1317,9 @@ export function AgentsPage() {
                     </p>
                   )}
                   {agent.error && <p className="form-error">{agent.error}</p>}
+                  <p>
+                    <a href={`/app/agents/${encodeURIComponent(agent.id)}/reminders`}>查看提醒</a>
+                  </p>
                   {agent.linuxIdentity && (
                     <div className="agent-direct-message">
                       {directChannels[agent.id] ? (

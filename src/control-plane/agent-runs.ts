@@ -327,6 +327,7 @@ export class AgentRunCoordinator {
     if (this.draining || this.closed) return;
     this.draining = true;
     try {
+      this.chat.fireDueReminders();
       const onlineNodeIds = this.nodes
         .list()
         .filter((node) => node.online)

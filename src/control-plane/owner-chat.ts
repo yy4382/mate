@@ -40,6 +40,32 @@ export interface OwnerMessage {
   createdAt: number;
 }
 
+export interface OwnerTask {
+  id: string;
+  messageId: string;
+  channelId: string;
+  title: string;
+  status: "open" | "in_progress" | "done";
+  ownerAgentId: string | null;
+  ownerAgentName: string | null;
+  version: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface OwnerReminder {
+  id: string;
+  agentId: string;
+  channelId: string;
+  taskId: string | null;
+  text: string;
+  dueAt: number;
+  state: "active" | "fired" | "cancelled";
+  version: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface OwnerMessagePage {
   messages: OwnerMessage[];
   nextBefore: string | null;
@@ -168,6 +194,42 @@ interface MessageRow {
   author_kind: OwnerPrincipalKind;
   author_id: string;
   created_at: number;
+}
+
+interface TaskRow {
+  id: string;
+  message_id: string;
+  channel_id: string;
+  title: string;
+  status: OwnerTask["status"];
+  owner_agent_id: string | null;
+  owner_agent_name: string | null;
+  version: number;
+  created_at: number;
+  updated_at: number;
+}
+
+interface ReminderRow {
+  id: string;
+  agent_id: string;
+  channel_id: string;
+  task_id: string | null;
+  text: string;
+  due_at: number;
+  state: OwnerReminder["state"];
+  version: number;
+  created_at: number;
+  updated_at: number;
+}
+
+interface TaskDraftRow {
+  id: string;
+  agent_id: string;
+  task_id: string | null;
+  action: string;
+  input_json: string;
+  input_end_seq: number;
+  state: string;
 }
 
 interface EventRow {
@@ -547,7 +609,11 @@ export class OwnerChat {
   createMessage(
     channelId: string,
     text: string,
-    position: { rootId?: string | undefined; quoteId?: string | undefined } = {},
+    position: {
+      rootId?: string | undefined;
+      quoteId?: string | undefined;
+      asTask?: boolean | undefined;
+    } = {},
   ): OwnerMessage | undefined {
     const id = randomUUID(),
       at = this.now();
@@ -616,6 +682,7 @@ export class OwnerChat {
             .run(recipient.session_id, recipient.agent_id, channelId, id, text, at);
         }
         this.record("message.created", channelId, message);
+        if (position.asTask) this.createTaskForMessage(id, "human", "owner");
         return message;
       })
       .immediate();
@@ -671,6 +738,292 @@ export class OwnerChat {
       .immediate();
   }
 
+  createTaskForMessage(
+    messageId: string,
+    actorKind: OwnerPrincipalKind,
+    actorId: string,
+  ): OwnerTask {
+    return this.db
+      .transaction(() => {
+        const message = this.db
+          .prepare(
+            "SELECT id,channel_id,text FROM owner_messages WHERE id=? AND internal_kind IS NULL",
+          )
+          .get(messageId) as { id: string; channel_id: string; text: string } | undefined;
+        if (!message) throw new Error("Message is not available");
+        if (actorKind === "agent") this.requireAgentConversation(actorId, message.channel_id);
+        const id = randomUUID(),
+          at = this.now();
+        this.db
+          .prepare(
+            "INSERT INTO owner_tasks(id,message_id,channel_id,title,status,created_at,updated_at) VALUES(?,?,?,?,'open',?,?)",
+          )
+          .run(id, messageId, message.channel_id, message.text.slice(0, 200), at, at);
+        this.taskEvent(id, actorKind, actorId, "created", "");
+        const task = this.readTask(id)!;
+        this.record("task.created", message.channel_id, task);
+        return task;
+      })
+      .immediate();
+  }
+
+  readTask(id: string): OwnerTask | undefined {
+    const row = this.db
+      .prepare(
+        "SELECT t.*,a.name AS owner_agent_name FROM owner_tasks t LEFT JOIN owner_agents a ON a.id=t.owner_agent_id WHERE t.id=?",
+      )
+      .get(id) as TaskRow | undefined;
+    return row && toTask(row);
+  }
+
+  taskForMessage(messageId: string): OwnerTask | undefined {
+    const row = this.db
+      .prepare(
+        "SELECT t.*,a.name AS owner_agent_name FROM owner_tasks t LEFT JOIN owner_agents a ON a.id=t.owner_agent_id WHERE t.message_id=?",
+      )
+      .get(messageId) as TaskRow | undefined;
+    return row && toTask(row);
+  }
+
+  listTasks(): OwnerTask[] {
+    return (
+      this.db
+        .prepare(
+          "SELECT t.*,a.name AS owner_agent_name FROM owner_tasks t LEFT JOIN owner_agents a ON a.id=t.owner_agent_id ORDER BY t.updated_at DESC,t.id DESC",
+        )
+        .all() as TaskRow[]
+    ).map(toTask);
+  }
+
+  taskActivity(taskId: string): unknown[] {
+    return this.db
+      .prepare(
+        "SELECT seq,task_id AS taskId,actor_kind AS actorKind,actor_id AS actorId,kind,note,created_at AS createdAt FROM owner_task_events WHERE task_id=? ORDER BY seq",
+      )
+      .all(taskId);
+  }
+
+  private canAgentReadChannel(agentId: string, channelId: string): boolean {
+    try {
+      this.requireAgentConversation(agentId, channelId);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private taskDraftPosition(draft: TaskDraftRow): {
+    channelId: string;
+    rootId: string | undefined;
+  } {
+    const input = JSON.parse(draft.input_json) as { messageId?: string };
+    const task = draft.task_id ? this.readTask(draft.task_id) : undefined;
+    const messageId = task?.messageId ?? input.messageId;
+    const message = this.db
+      .prepare("SELECT channel_id,root_id FROM owner_messages WHERE id=?")
+      .get(messageId) as { channel_id: string; root_id: string | null } | undefined;
+    if (!message) throw new AgentToolRefusal("Task anchor is not available");
+    return { channelId: message.channel_id, rootId: message.root_id ?? undefined };
+  }
+
+  private unreviewedTaskChanges(draft: TaskDraftRow): OwnerMessage[] {
+    const position = this.taskDraftPosition(draft);
+    return this.inspectAgentPositionChanges(
+      draft.agent_id,
+      draft.input_end_seq,
+      position.channelId,
+      position.rootId,
+    ).changes.filter(
+      (message) =>
+        !this.db
+          .prepare("SELECT 1 FROM owner_task_draft_reviews WHERE draft_id=? AND message_id=?")
+          .get(draft.id, message.id),
+    );
+  }
+
+  private recordTaskDraftReviews(draftId: string, changes: OwnerMessage[]): void {
+    for (const message of changes) {
+      this.db
+        .prepare("INSERT OR IGNORE INTO owner_task_draft_reviews(draft_id,message_id) VALUES(?,?)")
+        .run(draftId, message.id);
+      const draft = this.db
+        .prepare("SELECT agent_id FROM owner_task_drafts WHERE id=?")
+        .get(draftId) as { agent_id: string };
+      this.db
+        .prepare(
+          "INSERT OR IGNORE INTO owner_agent_message_attention(agent_id,message_id,updated_at) VALUES(?,?,?)",
+        )
+        .run(draft.agent_id, message.id, this.now());
+    }
+  }
+
+  private mutateTask(
+    agentId: string,
+    task: OwnerTask,
+    action: string,
+    input: Record<string, unknown>,
+  ): OwnerTask {
+    const current = this.readTask(task.id);
+    if (
+      !current ||
+      (current.version !== input.expectedVersion &&
+        !(action === "tasks.yield" && current.ownerAgentId !== agentId))
+    )
+      throw new AgentToolRefusal("Task version changed; read the task again");
+    this.requireAgentConversation(agentId, current.channelId);
+    let owner = current.ownerAgentId,
+      status = current.status,
+      title = current.title;
+    if (action === "tasks.claim") {
+      if (owner && owner !== agentId) throw new AgentToolRefusal("Task is already claimed");
+      owner = agentId;
+      status = "in_progress";
+    } else if (action === "tasks.yield") {
+      if (owner === agentId) {
+        owner = null;
+        status = "open";
+      }
+      // A peer's newer claim remains authoritative; this Agent may still yield socially.
+    } else if (action === "tasks.transfer") {
+      const targetId = input.agentId as string;
+      if (!this.canAgentReadChannel(targetId, current.channelId))
+        throw new AgentToolRefusal("Transfer target is not a conversation member");
+      owner = targetId;
+      status = "in_progress";
+    } else if (action === "tasks.update") {
+      if (typeof input.title === "string") title = input.title;
+      if (typeof input.status === "string") status = input.status as OwnerTask["status"];
+    }
+    this.db
+      .prepare(
+        "UPDATE owner_tasks SET title=?,status=?,owner_agent_id=?,version=version+1,updated_at=? WHERE id=?",
+      )
+      .run(title, status, owner, this.now(), task.id);
+    this.taskEvent(
+      task.id,
+      "agent",
+      agentId,
+      action.slice(6),
+      typeof input.note === "string" ? input.note : "",
+    );
+    const updated = this.readTask(task.id)!;
+    this.record("task.updated", task.channelId, updated);
+    return updated;
+  }
+
+  private taskEvent(
+    taskId: string,
+    actorKind: OwnerPrincipalKind,
+    actorId: string,
+    kind: string,
+    note: string,
+  ): void {
+    this.db
+      .prepare(
+        "INSERT INTO owner_task_events(task_id,actor_kind,actor_id,kind,note,created_at) VALUES(?,?,?,?,?,?)",
+      )
+      .run(taskId, actorKind, actorId, kind, note, this.now());
+  }
+
+  listAgentReminders(
+    agentId: string,
+  ): Array<OwnerReminder & { firing: { firedAt: number; handledAt: number | null } | null }> {
+    const rows = this.db
+      .prepare(
+        "SELECT id,agent_id,channel_id,task_id,text,due_at,state,version,created_at,updated_at FROM owner_reminders WHERE agent_id=? ORDER BY due_at DESC,id",
+      )
+      .all(agentId) as ReminderRow[];
+    return rows.map((row) => {
+      const firing = this.db
+        .prepare(
+          "SELECT fired_at AS firedAt,handled_at AS handledAt FROM owner_reminder_firings WHERE reminder_id=?",
+        )
+        .get(row.id) as { firedAt: number; handledAt: number | null } | undefined;
+      return { ...toReminder(row), firing: firing ?? null };
+    });
+  }
+
+  private readReminder(id: string): OwnerReminder | undefined {
+    const row = this.db
+      .prepare(
+        "SELECT id,agent_id,channel_id,task_id,text,due_at,state,version,created_at,updated_at FROM owner_reminders WHERE id=?",
+      )
+      .get(id) as ReminderRow | undefined;
+    return row && toReminder(row);
+  }
+
+  /** Due time and delivery are committed together, independent of node connectivity. */
+  fireDueReminders(): number {
+    return this.db
+      .transaction(() => {
+        const due = this.db
+          .prepare(
+            "SELECT id,agent_id FROM owner_reminders WHERE state='active' AND due_at<=? ORDER BY due_at,id LIMIT 100",
+          )
+          .all(this.now()) as Array<{ id: string; agent_id: string }>;
+        for (const candidate of due) {
+          const reminder = this.readReminder(candidate.id)!;
+          const channel = this.getOrCreateAgentDirectChannel(reminder.agentId);
+          if (!channel) continue;
+          const session = this.db
+            .prepare("SELECT id FROM owner_agent_sessions WHERE agent_id=?")
+            .get(reminder.agentId) as { id: string };
+          const order = this.db
+            .prepare(
+              "SELECT COALESCE(MAX(order_seq),0)+1 AS next FROM owner_messages WHERE channel_id=?",
+            )
+            .get(channel.id) as { next: number };
+          const messageId = randomUUID(),
+            deliveryId = randomUUID(),
+            at = this.now();
+          this.db
+            .prepare(
+              "INSERT INTO owner_messages(id,channel_id,order_seq,text,author_kind,author_id,internal_kind,created_at) VALUES(?,?,?,?,'agent',?,'reminder',?)",
+            )
+            .run(messageId, channel.id, order.next, `提醒：${reminder.text}`, reminder.agentId, at);
+          this.db
+            .prepare(
+              "INSERT INTO owner_message_deliveries(id,message_id,channel_id,recipient_kind,recipient_id,state,created_at) VALUES(?,?,?,'agent',?,'pending',?)",
+            )
+            .run(deliveryId, messageId, channel.id, reminder.agentId, at);
+          this.db
+            .prepare(
+              "INSERT INTO owner_agent_session_journal(session_id,agent_id,channel_id,message_id,role,text,created_at) VALUES(?,?,?,?,'user',?,?)",
+            )
+            .run(session.id, reminder.agentId, channel.id, messageId, `提醒：${reminder.text}`, at);
+          this.db
+            .prepare(
+              "INSERT INTO owner_reminder_firings(id,reminder_id,agent_id,fired_at,delivery_id) VALUES(?,?,?,?,?)",
+            )
+            .run(randomUUID(), reminder.id, reminder.agentId, at, deliveryId);
+          this.db
+            .prepare(
+              "UPDATE owner_reminders SET state='fired',version=version+1,updated_at=? WHERE id=?",
+            )
+            .run(at, reminder.id);
+        }
+        this.syncHandledReminders();
+        return due.length;
+      })
+      .immediate();
+  }
+
+  syncHandledReminders(): void {
+    this.db
+      .prepare(
+        `UPDATE owner_reminder_firings SET handled_at=(
+      SELECT r.completed_at FROM owner_agent_runs r
+      WHERE r.delivery_id=owner_reminder_firings.delivery_id AND r.agent_id=owner_reminder_firings.agent_id
+        AND r.state='completed' ORDER BY r.completed_at DESC LIMIT 1
+    ) WHERE handled_at IS NULL AND EXISTS (
+      SELECT 1 FROM owner_agent_runs r
+      WHERE r.delivery_id=owner_reminder_firings.delivery_id AND r.agent_id=owner_reminder_firings.agent_id
+        AND r.state='completed'
+    )`,
+      )
+      .run();
+  }
+
   listPendingDeliveries(
     recipientKind: OwnerPrincipalKind,
     recipientId: string,
@@ -724,6 +1077,18 @@ export class OwnerChat {
     recipientKind: OwnerPrincipalKind,
     recipientId: string,
   ): boolean {
+    const reminder = this.db
+      .prepare("SELECT 1 FROM owner_reminder_firings WHERE delivery_id=?")
+      .get(deliveryId);
+    if (
+      reminder &&
+      !this.db
+        .prepare(
+          "SELECT 1 FROM owner_agent_runs WHERE delivery_id=? AND agent_id=? AND state='completed'",
+        )
+        .get(deliveryId, recipientId)
+    )
+      return false;
     return (
       this.db
         .prepare(
@@ -1123,7 +1488,7 @@ export class OwnerChat {
       return undefined;
     const rows = this.db
       .prepare(
-        "SELECT id,channel_id,order_seq,revision,text,root_id,quote_id,author_kind,author_id,created_at FROM owner_messages WHERE channel_id=? AND root_id IS NULL AND (? IS NULL OR order_seq < ?) ORDER BY order_seq DESC LIMIT ?",
+        "SELECT id,channel_id,order_seq,revision,text,root_id,quote_id,author_kind,author_id,created_at FROM owner_messages WHERE channel_id=? AND root_id IS NULL AND internal_kind IS NULL AND (? IS NULL OR order_seq < ?) ORDER BY order_seq DESC LIMIT ?",
       )
       .all(channelId, before ?? null, before ?? null, limit + 1) as MessageRow[];
     const hasMore = rows.length > limit,
@@ -1140,7 +1505,7 @@ export class OwnerChat {
   ): { root: OwnerMessage; replies: OwnerMessage[] } | undefined {
     const root = this.db
       .prepare(
-        "SELECT id,channel_id,order_seq,revision,text,root_id,quote_id,author_kind,author_id,created_at FROM owner_messages WHERE id=? AND channel_id=? AND root_id IS NULL",
+        "SELECT id,channel_id,order_seq,revision,text,root_id,quote_id,author_kind,author_id,created_at FROM owner_messages WHERE id=? AND channel_id=? AND root_id IS NULL AND internal_kind IS NULL",
       )
       .get(rootId, channelId) as MessageRow | undefined;
     if (!root) return undefined;
@@ -1413,7 +1778,213 @@ export class OwnerChat {
             args.text,
             args.rootId,
             args.quoteId,
+            args.asTask,
           );
+        });
+      }
+      case "tasks.list": {
+        agentConversationOperations["tasks.list"].schema.parse(input);
+        return {
+          tasks: this.listTasks().filter((task) =>
+            this.canAgentReadChannel(run.agent_id, task.channelId),
+          ),
+        };
+      }
+      case "reminders.list": {
+        agentConversationOperations["reminders.list"].schema.parse(input);
+        this.syncHandledReminders();
+        return { reminders: this.listAgentReminders(run.agent_id) };
+      }
+      case "reminders.create": {
+        const args = agentConversationOperations["reminders.create"].schema.parse(input);
+        this.requireAgentConversation(run.agent_id, args.conversationId);
+        return this.recordAgentToolAction(run, toolCallId, "reminders.create", args, () => {
+          if (args.taskId) {
+            const task = this.readTask(args.taskId);
+            if (!task || task.channelId !== args.conversationId)
+              throw new AgentToolRefusal("Task is not in this conversation");
+          }
+          const id = randomUUID(),
+            at = this.now();
+          this.db
+            .prepare(
+              "INSERT INTO owner_reminders(id,agent_id,channel_id,task_id,text,due_at,state,created_at,updated_at) VALUES(?,?,?,?,?,?,'active',?,?)",
+            )
+            .run(
+              id,
+              run.agent_id,
+              args.conversationId,
+              args.taskId ?? null,
+              args.text,
+              args.dueAt,
+              at,
+              at,
+            );
+          return this.readReminder(id)!;
+        });
+      }
+      case "reminders.reschedule":
+      case "reminders.cancel": {
+        const operation = name as "reminders.reschedule" | "reminders.cancel";
+        const args = agentConversationOperations[operation].schema.parse(input);
+        const reminder = this.readReminder(args.reminderId);
+        if (!reminder || reminder.agentId !== run.agent_id)
+          throw new AgentToolRefusal("Reminder is not available");
+        return this.recordAgentToolAction(run, toolCallId, operation, args, () => {
+          const current = this.readReminder(args.reminderId)!;
+          if (current.version !== args.expectedVersion || current.state !== "active")
+            throw new AgentToolRefusal("Reminder version or state changed");
+          if (operation === "reminders.reschedule") {
+            const dueAt = (args as unknown as { dueAt: number }).dueAt;
+            this.db
+              .prepare(
+                "UPDATE owner_reminders SET due_at=?,version=version+1,updated_at=? WHERE id=?",
+              )
+              .run(dueAt, this.now(), current.id);
+          } else {
+            this.db
+              .prepare(
+                "UPDATE owner_reminders SET state='cancelled',version=version+1,updated_at=? WHERE id=?",
+              )
+              .run(this.now(), current.id);
+          }
+          return this.readReminder(current.id)!;
+        });
+      }
+      case "tasks.review": {
+        const args = agentConversationOperations["tasks.review"].schema.parse(input);
+        return this.recordAgentToolAction(run, toolCallId, "tasks.review", args, () => {
+          const draft = this.db
+            .prepare("SELECT * FROM owner_task_drafts WHERE id=? AND agent_id=?")
+            .get(args.draftId, run.agent_id) as TaskDraftRow | undefined;
+          if (!draft) throw new AgentToolRefusal("Task draft is not available");
+          const position = this.taskDraftPosition(draft);
+          this.requireAgentConversation(run.agent_id, position.channelId);
+          const changes = this.unreviewedTaskChanges(draft);
+          const result = {
+            channelId: position.channelId,
+            draftId: draft.id,
+            state: draft.state,
+            changes,
+          };
+          if (args.choice === "inspect") {
+            this.recordTaskDraftReviews(draft.id, changes);
+            return result;
+          }
+          if (draft.state === "abandoned" || draft.state === "applied")
+            throw new AgentToolRefusal("Task draft is closed");
+          if (args.choice === "continue" && changes.length)
+            throw new AgentToolRefusal(
+              "Conversation changed; inspect the task draft before continuing",
+            );
+          if (args.choice === "revise" && !args.revisedInput)
+            throw new AgentToolRefusal("Revised task input is required");
+          const state =
+            args.choice === "revise"
+              ? "editing"
+              : args.choice === "keep"
+                ? "kept"
+                : args.choice === "abandon"
+                  ? "abandoned"
+                  : args.choice === "defer"
+                    ? "deferred"
+                    : "ready";
+          this.recordTaskDraftReviews(draft.id, changes);
+          this.db
+            .prepare(
+              "UPDATE owner_task_drafts SET input_json=COALESCE(?,input_json),state=?,updated_at=? WHERE id=?",
+            )
+            .run(
+              args.choice === "revise" ? JSON.stringify(args.revisedInput) : null,
+              state,
+              this.now(),
+              draft.id,
+            );
+          return { ...result, state };
+        });
+      }
+      case "tasks.create":
+      case "tasks.claim":
+      case "tasks.yield":
+      case "tasks.transfer":
+      case "tasks.update": {
+        const taskOperation = name as
+          "tasks.create" | "tasks.claim" | "tasks.yield" | "tasks.transfer" | "tasks.update";
+        const args = agentConversationOperations[taskOperation].schema.parse(input);
+        const messageId = "messageId" in args ? args.messageId : undefined;
+        const task = "taskId" in args ? this.readTask(args.taskId) : undefined;
+        const message = messageId
+          ? (this.db
+              .prepare(
+                "SELECT id,channel_id,root_id FROM owner_messages WHERE id=? AND internal_kind IS NULL",
+              )
+              .get(messageId) as
+              { id: string; channel_id: string; root_id: string | null } | undefined)
+          : undefined;
+        if (!task && !message) throw new AgentToolRefusal("Task or message is not available");
+        if (messageId && this.taskForMessage(messageId))
+          throw new AgentToolRefusal("Message already has a task");
+        const channelId = task?.channelId ?? message!.channel_id;
+        this.requireAgentConversation(run.agent_id, channelId);
+        return this.recordAgentToolAction(run, toolCallId, taskOperation, args, () => {
+          const anchor = task
+            ? (this.db
+                .prepare("SELECT root_id FROM owner_messages WHERE id=?")
+                .get(task.messageId) as { root_id: string | null })
+            : message!;
+          const rootId = anchor.root_id ?? undefined;
+          if (!args.draftId) {
+            const { changes } = this.inspectAgentPositionChanges(
+              run.agent_id,
+              run.input_end_seq,
+              channelId,
+              rootId,
+            );
+            if (changes.length) {
+              const draftId = randomUUID();
+              this.db
+                .prepare(
+                  "INSERT INTO owner_task_drafts(id,agent_id,task_id,action,input_json,input_end_seq,state,created_at,updated_at) VALUES(?,?,?,?,?,?,'editing',?,?)",
+                )
+                .run(
+                  draftId,
+                  run.agent_id,
+                  task?.id ?? null,
+                  name,
+                  JSON.stringify(args),
+                  run.input_end_seq,
+                  this.now(),
+                  this.now(),
+                );
+              this.recordTaskDraftReviews(draftId, changes);
+              return { channelId, status: "needs_review", draftId, changes };
+            }
+          } else {
+            const draft = this.db
+              .prepare("SELECT * FROM owner_task_drafts WHERE id=? AND agent_id=?")
+              .get(args.draftId, run.agent_id) as TaskDraftRow | undefined;
+            if (
+              !draft ||
+              draft.action !== name ||
+              draft.state !== "ready" ||
+              draft.task_id !== (task?.id ?? null)
+            )
+              throw new AgentToolRefusal("Task draft is not ready");
+            const original = JSON.parse(draft.input_json) as Record<string, unknown>;
+            const current = { ...args } as Record<string, unknown>;
+            delete current.draftId;
+            delete original.draftId;
+            if (JSON.stringify(original) !== JSON.stringify(current))
+              throw new AgentToolRefusal("Task draft changed; revise it first");
+            if (this.unreviewedTaskChanges(draft).length)
+              throw new AgentToolRefusal("Conversation changed; review the task draft again");
+            this.db
+              .prepare("UPDATE owner_task_drafts SET state='applied',updated_at=? WHERE id=?")
+              .run(this.now(), draft.id);
+          }
+          if (name === "tasks.create")
+            return this.createTaskForMessage(messageId!, "agent", run.agent_id);
+          return this.mutateTask(run.agent_id, task!, name, args as Record<string, unknown>);
         });
       }
       case "conversations.invite": {
@@ -1820,10 +2391,11 @@ export class OwnerChat {
         typeof input === "object" && input !== null ? (input as Record<string, unknown>) : {},
       resultRecord =
         typeof result === "object" && result !== null ? (result as Record<string, unknown>) : {},
-      channelId =
-        (typeof inputRecord.conversationId === "string" && inputRecord.conversationId) ||
-        (typeof resultRecord.channelId === "string" && resultRecord.channelId) ||
-        (typeof resultRecord.id === "string" && resultRecord.id);
+      channelId = operation.startsWith("reminders.")
+        ? this.getOrCreateAgentDirectChannel(run.agent_id)?.id
+        : (typeof inputRecord.conversationId === "string" && inputRecord.conversationId) ||
+          (typeof resultRecord.channelId === "string" && resultRecord.channelId) ||
+          (typeof resultRecord.id === "string" && resultRecord.id);
     if (!channelId || !this.db.prepare("SELECT 1 FROM owner_channels WHERE id=?").get(channelId))
       throw new Error("Conversation tool result has no durable source channel");
     const contextResult = { ...resultRecord };
@@ -1853,6 +2425,7 @@ export class OwnerChat {
     text: string,
     rootId?: string,
     quoteId?: string,
+    asTask?: boolean,
   ): OwnerMessage {
     if (!this.db.inTransaction)
       throw new Error("Agent tool message requires its action transaction");
@@ -1906,6 +2479,7 @@ export class OwnerChat {
       )
       .run(run.session_id, run.agent_id, channelId, id, run.run_id, toolActionId, text, at);
     this.record("message.created", channelId, message);
+    if (asTask) this.createTaskForMessage(id, "agent", run.agent_id);
     return message;
   }
 
@@ -1948,7 +2522,11 @@ export class OwnerChat {
     }
   }
 
-  private record(kind: string, channelId: string, payload: OwnerChannel | OwnerMessage): void {
+  private record(
+    kind: string,
+    channelId: string,
+    payload: OwnerChannel | OwnerMessage | OwnerTask,
+  ): void {
     if (!this.db.inTransaction)
       throw new Error("Conversation event requires the owning transaction");
     this.db
@@ -1990,5 +2568,35 @@ function toMessage(row: MessageRow): OwnerMessage {
     order: String(row.order_seq),
     revision: String(row.revision),
     createdAt: row.created_at,
+  };
+}
+
+function toTask(row: TaskRow): OwnerTask {
+  return {
+    id: row.id,
+    messageId: row.message_id,
+    channelId: row.channel_id,
+    title: row.title,
+    status: row.status,
+    ownerAgentId: row.owner_agent_id,
+    ownerAgentName: row.owner_agent_name,
+    version: row.version,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function toReminder(row: ReminderRow): OwnerReminder {
+  return {
+    id: row.id,
+    agentId: row.agent_id,
+    channelId: row.channel_id,
+    taskId: row.task_id,
+    text: row.text,
+    dueAt: row.due_at,
+    state: row.state,
+    version: row.version,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
