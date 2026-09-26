@@ -4,6 +4,12 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, expect, it } from "vitest";
 import { createControlPlaneApp } from "../../src/control-plane/http.js";
+import {
+  controlPlaneMigrations,
+  controlPlaneSchema,
+  controlPlaneSchemaV17,
+} from "../../src/control-plane/schema.js";
+import { openControlPlaneDatabase } from "../../src/storage/initialize.js";
 
 const fixtures: Array<{ app: ReturnType<typeof createControlPlaneApp>; dir: string }> = [];
 afterEach(() => {
@@ -96,4 +102,47 @@ it("rolls back a new message and its deliveries if task creation cannot commit",
   expect(db.prepare("SELECT count(*) AS n FROM owner_tasks").get()).toEqual({ n: 0 });
   expect(db.prepare("SELECT count(*) AS n FROM owner_message_deliveries").get()).toEqual({ n: 0 });
   db.close();
+});
+
+it("upgrades the final attention format to tasks without changing a quoted message anchor", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mate-task-revision-18-"));
+  const path = join(dir, "control-plane.sqlite");
+  try {
+    const old = new Database(path);
+    old.exec(controlPlaneSchemaV17);
+    old.exec(`
+      INSERT INTO owner_channels(id,name,description,visibility,created_at,updated_at)
+        VALUES('room','Work','','public',1,1);
+      INSERT INTO owner_messages(id,channel_id,order_seq,text,author_kind,author_id,created_at)
+        VALUES('root','room',1,'Original work','human','owner',1);
+      INSERT INTO owner_messages(id,channel_id,order_seq,text,root_id,quote_id,author_kind,author_id,created_at)
+        VALUES('reply','room',2,'Follow-up work','root',NULL,'human','owner',2);
+    `);
+    old.pragma("application_id = 1296257100");
+    old.pragma("user_version = 17");
+    old.close();
+
+    const upgraded = openControlPlaneDatabase(path, controlPlaneSchema, controlPlaneMigrations);
+    try {
+      expect(upgraded.pragma("user_version", { simple: true })).toBe(18);
+      expect(
+        upgraded.prepare("SELECT root_id,quote_id,text FROM owner_messages WHERE id='reply'").get(),
+      ).toEqual({ root_id: "root", quote_id: null, text: "Follow-up work" });
+      expect(upgraded.prepare("SELECT COUNT(*) AS count FROM owner_tasks").get()).toEqual({
+        count: 0,
+      });
+      upgraded
+        .prepare(
+          "INSERT INTO owner_tasks(id,message_id,channel_id,title,status,created_at,updated_at) VALUES('task','reply','room','Follow-up work','open',3,3)",
+        )
+        .run();
+      expect(upgraded.prepare("SELECT message_id FROM owner_tasks WHERE id='task'").get()).toEqual({
+        message_id: "reply",
+      });
+    } finally {
+      upgraded.close();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
