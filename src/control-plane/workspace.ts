@@ -60,6 +60,15 @@ interface WorkspaceAgent {
   home: string | null;
 }
 
+interface WorkspaceAccessAudit {
+  principalKind: "owner" | "agent";
+  principalId: string;
+  agentId: string;
+  runId?: string;
+  operation: string;
+  paths: string[];
+}
+
 /** Owner reads and Agent file actions cross the paired node protocol one request at a time. */
 export class WorkspaceService {
   private readonly actionOperations = new Map<
@@ -91,6 +100,18 @@ export class WorkspaceService {
     offset = 0,
     limit = 32,
   ): Promise<{ path: string; entries: WorkspaceEntry[]; nextOffset: number | null }> {
+    return this.withAccessAudit(
+      { principalKind: "owner", principalId: "owner", agentId, operation: "list", paths: [path] },
+      () => this.listUnchecked(agentId, path, offset, limit),
+    );
+  }
+
+  private async listUnchecked(
+    agentId: string,
+    path: string,
+    offset: number,
+    limit: number,
+  ): Promise<{ path: string; entries: WorkspaceEntry[]; nextOffset: number | null }> {
     const result = await this.readOperation(agentId, {
       kind: "workspace_list",
       path,
@@ -117,6 +138,13 @@ export class WorkspaceService {
   }
 
   async stat(agentId: string, path: string): Promise<WorkspaceStat> {
+    return this.withAccessAudit(
+      { principalKind: "owner", principalId: "owner", agentId, operation: "stat", paths: [path] },
+      () => this.statUnchecked(agentId, path),
+    );
+  }
+
+  private async statUnchecked(agentId: string, path: string): Promise<WorkspaceStat> {
     const result = await this.readOperation(agentId, { kind: "workspace_stat", path });
     if (
       typeof result !== "object" ||
@@ -149,6 +177,25 @@ export class WorkspaceService {
     offset: number,
     version?: WorkspaceVersion,
     length = 8192,
+  ): Promise<WorkspaceChunk> {
+    return this.withAccessAudit(
+      {
+        principalKind: "owner",
+        principalId: "owner",
+        agentId,
+        operation: "read_chunk",
+        paths: [path],
+      },
+      () => this.readChunkUnchecked(agentId, path, offset, version, length),
+    );
+  }
+
+  private async readChunkUnchecked(
+    agentId: string,
+    path: string,
+    offset: number,
+    version: WorkspaceVersion | undefined,
+    length: number,
   ): Promise<WorkspaceChunk> {
     const result = await this.readOperation(agentId, {
       kind: "workspace_read_chunk",
@@ -188,6 +235,24 @@ export class WorkspaceService {
     agentId: string,
     operation: Extract<Operation, { kind: "workspace_stat" | "workspace_read_chunk" }>,
   ): Promise<Record<string, unknown>> {
+    return this.withAccessAudit(
+      {
+        principalKind: "agent",
+        principalId: agentId,
+        agentId,
+        runId,
+        operation: operation.kind,
+        paths: [operation.path],
+      },
+      () => this.readForAgentPublishUnchecked(runId, agentId, operation),
+    );
+  }
+
+  private async readForAgentPublishUnchecked(
+    runId: string,
+    agentId: string,
+    operation: Extract<Operation, { kind: "workspace_stat" | "workspace_read_chunk" }>,
+  ): Promise<Record<string, unknown>> {
     const authorized = this.authorizeActiveRun(runId, agentId),
       result = await this.runNodeOperation(
         {
@@ -219,6 +284,27 @@ export class WorkspaceService {
       { kind: "read" | "workspace_list" | "workspace_stat" | "workspace_read_chunk" }
     >,
   ): Promise<Record<string, unknown>> {
+    return this.withAccessAudit(
+      {
+        principalKind: "agent",
+        principalId: agentId,
+        agentId,
+        runId,
+        operation: operation.kind,
+        paths: [operation.path],
+      },
+      () => this.readForAgentUnchecked(runId, agentId, operation),
+    );
+  }
+
+  private async readForAgentUnchecked(
+    runId: string,
+    agentId: string,
+    operation: Extract<
+      Operation,
+      { kind: "read" | "workspace_list" | "workspace_stat" | "workspace_read_chunk" }
+    >,
+  ): Promise<Record<string, unknown>> {
     const authorized = this.authorizeActiveRun(runId, agentId),
       result = await this.runNodeOperation(
         {
@@ -238,6 +324,22 @@ export class WorkspaceService {
 
   /** The body pulls only one bounded node chunk after the previous chunk is consumed. */
   async download(
+    agentId: string,
+    path: string,
+  ): Promise<{ size: number; stream: ReadableStream<Uint8Array> }> {
+    return this.withAccessAudit(
+      {
+        principalKind: "owner",
+        principalId: "owner",
+        agentId,
+        operation: "download",
+        paths: [path],
+      },
+      () => this.downloadUnchecked(agentId, path),
+    );
+  }
+
+  private async downloadUnchecked(
     agentId: string,
     path: string,
   ): Promise<{ size: number; stream: ReadableStream<Uint8Array> }> {
@@ -273,6 +375,27 @@ export class WorkspaceService {
 
   /** Persist authorization and the node receipt before returning an Agent file action. */
   async agentAction(input: {
+    runId: string;
+    agentId: string;
+    actionId: string;
+    operationName: string;
+    toolInput: Record<string, unknown>;
+    operation: Exclude<Operation, { kind: "exec" }>;
+  }): Promise<unknown> {
+    return this.withAccessAudit(
+      {
+        principalKind: "agent",
+        principalId: input.agentId,
+        agentId: input.agentId,
+        runId: input.runId,
+        operation: input.operationName,
+        paths: operationPaths(input.operation),
+      },
+      () => this.agentActionUnchecked(input),
+    );
+  }
+
+  private async agentActionUnchecked(input: {
     runId: string;
     agentId: string;
     actionId: string;
@@ -381,6 +504,45 @@ export class WorkspaceService {
     } catch {
       throw invalidNodeResponse();
     }
+  }
+
+  private async withAccessAudit<T>(
+    access: WorkspaceAccessAudit,
+    action: () => Promise<T>,
+  ): Promise<T> {
+    try {
+      const result = await action();
+      this.recordAccess(access, "succeeded");
+      return result;
+    } catch (error) {
+      this.recordAccess(access, "failed", workspaceAccessErrorCode(error));
+      throw error;
+    }
+  }
+
+  private recordAccess(
+    access: WorkspaceAccessAudit,
+    result: "succeeded" | "failed",
+    errorCode?: string,
+  ): void {
+    const paths = access.paths.map(safeAuditPath);
+    this.db
+      .prepare(
+        `INSERT INTO owner_workspace_access_audit(
+           at,actor_kind,actor_id,agent_id,run_id,operation,relative_paths,result,error_code
+         ) VALUES(?,?,?,?,?,?,?,?,?)`,
+      )
+      .run(
+        Date.now(),
+        access.principalKind,
+        access.principalId,
+        access.agentId,
+        access.runId ?? null,
+        access.operation,
+        JSON.stringify(paths),
+        result,
+        errorCode ?? null,
+      );
   }
 
   private async runNodeOperation(
@@ -787,7 +949,7 @@ function mapNodeError(message: string): WorkspaceError {
     return new WorkspaceError("permission_denied", "Agent Linux 用户没有读取此文件的权限。", 403);
   if (/enoent|not found|no such file or directory/i.test(message))
     return new WorkspaceError("not_found", "文件或目录不存在。", 404);
-  if (/not_regular_file|regular single-link|is a directory/i.test(message))
+  if (/not_file|not_regular_file|regular single-link|is a directory/i.test(message))
     return new WorkspaceError("not_file", "只能读取普通文件。", 400);
   return new WorkspaceError("workspace_unavailable", "节点无法完成文件请求。", 502);
 }
@@ -854,4 +1016,26 @@ function parseEnvelope(value: string): {
 
 function safeError(error: unknown): string {
   return (error instanceof WorkspaceError ? error.message : "文件操作结果尚未确认。").slice(0, 240);
+}
+
+function operationPaths(operation: Exclude<Operation, { kind: "exec" }>): string[] {
+  return operation.kind === "move" ? [operation.path, operation.destination] : [operation.path];
+}
+
+function safeAuditPath(path: string): string {
+  if (path.includes("\0")) return "[invalid path]";
+  const normalized = path.replaceAll("\\", "/");
+  if (normalized.startsWith("/")) return "[absolute path request]";
+  return normalized.slice(0, 4096);
+}
+
+function workspaceAccessErrorCode(error: unknown): string {
+  if (error instanceof WorkspaceError) return error.code;
+  const message = error instanceof Error ? error.message : "";
+  if (/file_changed|file changed|changed while/i.test(message)) return "file_changed";
+  if (/permission denied|eacces|eperm/i.test(message)) return "permission_denied";
+  if (/enoent|not found|no such file or directory/i.test(message)) return "not_found";
+  if (/unsafe_path|symbolic link|symlink|escapes the workspace/i.test(message))
+    return "unsafe_path";
+  return "workspace_unavailable";
 }

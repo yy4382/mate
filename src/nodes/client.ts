@@ -15,6 +15,7 @@ import type { AgentProvisionStage } from "./protocol.js";
 import { openNodeProcessOperations } from "./process-operation-runtime.js";
 import type { AgentProcessOperations } from "./process-operations.js";
 import { LinuxWorkspaceExecutor, type WorkspaceExecutionRequest } from "./workspace-execution.js";
+import { sendWorkspaceOperationResult } from "./workspace-result.js";
 
 const INITIAL_RETRY_MS = 250;
 const MAX_RETRY_MS = 10_000;
@@ -448,35 +449,30 @@ function connectOnce(
           });
           return;
         }
-        void workspaceExecutor.execute(request).then(
-          (result) => {
-            if (socket.readyState !== WebSocket.OPEN || !authenticated) return;
-            sendRequest(socket, {
-              type: "node.workspace.operation.result",
-              requestId,
-              operationId,
-              agentId,
-              ok: true,
-              result: {
-                code: result.code,
-                stdout: result.stdout,
-                stderr: result.stderr,
-                truncated: result.truncated,
-              },
-            });
-          },
-          () => {
-            if (socket.readyState !== WebSocket.OPEN || !authenticated) return;
-            sendRequest(socket, {
-              type: "node.workspace.operation.result",
-              requestId,
-              operationId,
-              agentId,
-              ok: false,
-              error: "Linux workspace operation could not be confirmed",
-            });
-          },
-        );
+        void workspaceExecutor
+          .execute(request)
+          .then(
+            (result) => {
+              if (socket.readyState !== WebSocket.OPEN || !authenticated) return;
+              sendWorkspaceOperationResult(
+                (response) => sendRequest(socket, response),
+                { requestId, operationId, agentId },
+                result,
+              );
+            },
+            () => {
+              if (socket.readyState !== WebSocket.OPEN || !authenticated) return;
+              sendRequest(socket, {
+                type: "node.workspace.operation.result",
+                requestId,
+                operationId,
+                agentId,
+                ok: false,
+                error: "Linux workspace operation could not be confirmed",
+              });
+            },
+          )
+          .catch(() => undefined);
         return;
       }
       if (message.type === "control.agent.run") {

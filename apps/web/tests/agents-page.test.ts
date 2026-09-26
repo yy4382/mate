@@ -30,6 +30,7 @@ let nodeOnline: boolean;
 let nodeLastConnectedAt: string | null;
 let postConflict: boolean;
 let workspaceFailure: { status: number; body: unknown } | null;
+let workspaceDownloadResponse: Response | null;
 let workspacePages: Array<{
   path: string;
   offset: number;
@@ -39,6 +40,7 @@ let workspacePages: Array<{
 let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
+  Reflect.deleteProperty(window, "showSaveFilePicker");
   agents = [];
   posts = [];
   providers = [
@@ -63,6 +65,7 @@ beforeEach(() => {
   nodeLastConnectedAt = null;
   postConflict = false;
   workspaceFailure = null;
+  workspaceDownloadResponse = null;
   workspacePages = [];
   fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -161,7 +164,21 @@ beforeEach(() => {
           base64: "aGVsbG8=",
           version: { device: "1", inode: "2", size: 5, modifiedNs: "3", changedNs: "4" },
         });
-      if (workspaceMatch[2] === "download") return json(200, {});
+      if (workspaceMatch[2] === "download")
+        return (
+          workspaceDownloadResponse ??
+          ({
+            status: 200,
+            ok: true,
+            body: new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(new TextEncoder().encode("hello"));
+                controller.close();
+              },
+            }),
+            json: async () => ({}),
+          } as Response)
+        );
       const offset = Number(urlObject.searchParams.get("offset") ?? 0);
       const page = workspacePages.find(
         (item) =>
@@ -293,7 +310,7 @@ it("lets the owner invite an existing Agent to a channel from the Chinese Agent 
   ]);
 });
 
-it("browses an Agent private home read-only, previews and downloads files, and loads every directory page", async () => {
+it("browses an Agent private home read-only, previews and streams downloads, and loads every directory page", async () => {
   const agentId = "8bfb67a1-66ed-4d56-9052-4cc7a41c60b9";
   agents = [
     {
@@ -352,9 +369,18 @@ it("browses an Agent private home read-only, previews and downloads files, and l
 
   await user.click(screen.getByRole("button", { name: /notes.txt/ }));
   expect(await screen.findByText("hello")).not.toBeNull();
-  const download = screen.getByRole("link", { name: "下载" });
-  expect(download.getAttribute("href")).toContain("/workspace/download?");
-  expect(download.getAttribute("href")).toContain("path=notes.txt");
+  const written: Uint8Array[] = [];
+  vi.stubGlobal("showSaveFilePicker", undefined);
+  Object.defineProperty(window, "showSaveFilePicker", {
+    configurable: true,
+    value: vi.fn(async () => ({
+      createWritable: async () =>
+        new WritableStream<Uint8Array>({ write: (chunk) => written.push(chunk) }),
+    })),
+  });
+  await user.click(screen.getByRole("button", { name: "下载" }));
+  expect(await screen.findByText("下载完成。")).not.toBeNull();
+  expect(Buffer.concat(written.map((chunk) => Buffer.from(chunk))).toString()).toBe("hello");
 
   await user.click(screen.getByRole("button", { name: "加载更多目录项" }));
   expect(await screen.findByRole("button", { name: /tail.txt/ })).not.toBeNull();
@@ -362,6 +388,102 @@ it("browses an Agent private home read-only, previews and downloads files, and l
 
   await user.click(screen.getByRole("button", { name: /projects\// }));
   expect(await screen.findByRole("button", { name: /plan.md/ })).not.toBeNull();
+});
+
+it("shows a Chinese error when a workspace file disappears before download", async () => {
+  const agentId = "8bfb67a1-66ed-4d56-9052-4cc7a41c60b9";
+  agents = [
+    {
+      id: agentId,
+      nodeId,
+      name: "Research partner",
+      role: "Researches questions",
+      description: "A colleague",
+      model: { provider: "openai", id: "gpt-4.1" },
+      initialChannelId: null,
+      sessionId,
+      status: "ready",
+      stage: "complete",
+      error: null,
+      linuxIdentity: {
+        username: "mate_research",
+        uid: 23001,
+        gid: 23001,
+        home: `/var/lib/mate/agents/${agentId}`,
+      },
+      createdAt: 1,
+      updatedAt: 2,
+    },
+  ];
+  workspacePages = [
+    {
+      path: "",
+      offset: 0,
+      entries: [{ name: "notes.txt", type: "file", size: 5 }],
+      nextOffset: null,
+    },
+  ];
+  workspaceDownloadResponse = json(404, { code: "not_found", error: "文件不存在。" });
+  Object.defineProperty(window, "showSaveFilePicker", {
+    configurable: true,
+    value: vi.fn(async () => ({ createWritable: async () => new WritableStream<Uint8Array>() })),
+  });
+  render(createElement(AgentsPage));
+  await userEvent.setup().click(await screen.findByRole("button", { name: "下载" }));
+  expect((await screen.findByRole("alert")).textContent).toContain("文件已不存在或当前无权读取");
+});
+
+it("shows a Chinese error when a workspace download stream fails after it starts", async () => {
+  const agentId = "8bfb67a1-66ed-4d56-9052-4cc7a41c60b9";
+  agents = [
+    {
+      id: agentId,
+      nodeId,
+      name: "Research partner",
+      role: "Researches questions",
+      description: "A colleague",
+      model: { provider: "openai", id: "gpt-4.1" },
+      initialChannelId: null,
+      sessionId,
+      status: "ready",
+      stage: "complete",
+      error: null,
+      linuxIdentity: {
+        username: "mate_research",
+        uid: 23001,
+        gid: 23001,
+        home: `/var/lib/mate/agents/${agentId}`,
+      },
+      createdAt: 1,
+      updatedAt: 2,
+    },
+  ];
+  workspacePages = [
+    {
+      path: "",
+      offset: 0,
+      entries: [{ name: "notes.txt", type: "file", size: 5 }],
+      nextOffset: null,
+    },
+  ];
+  workspaceDownloadResponse = {
+    status: 200,
+    ok: true,
+    body: new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("hel"));
+        controller.error(new Error("file_changed during stream"));
+      },
+    }),
+    json: async () => ({}),
+  } as Response;
+  Object.defineProperty(window, "showSaveFilePicker", {
+    configurable: true,
+    value: vi.fn(async () => ({ createWritable: async () => new WritableStream<Uint8Array>() })),
+  });
+  render(createElement(AgentsPage));
+  await userEvent.setup().click(await screen.findByRole("button", { name: "下载" }));
+  expect((await screen.findByRole("alert")).textContent).toContain("文件在下载期间发生变化");
 });
 
 it("shows the last connection time when a workspace request discovers that the node went offline", async () => {

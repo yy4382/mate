@@ -17,9 +17,16 @@ import {
   fstatSync,
 } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
+import { createRequire } from "node:module";
 import { createHash, randomUUID } from "node:crypto";
 import { within } from "./paths.js";
+import { commitFileIfHashMatches, moveFileNoReplace } from "./workspace-mutations.js";
 import type { Operation } from "./backend.js";
+type FlockSync = typeof import("fs-ext").flockSync;
+const flockSync: FlockSync | undefined =
+  process.platform === "linux"
+    ? (createRequire(import.meta.url)("fs-ext").flockSync as FlockSync)
+    : undefined;
 const root = resolve(process.argv[2]!);
 if (!lstatSync(root).isDirectory()) throw new Error("Workspace root must be a directory");
 const privateMode = process.argv[3] !== "022";
@@ -36,6 +43,23 @@ if (rootDescriptor !== undefined) {
     throw new Error("unsafe_path: Workspace root changed while it was opened");
 }
 const operation = JSON.parse(readFileSync(0, "utf8")) as Exclude<Operation, { kind: "exec" }>;
+const mutatingKinds = new Set<Operation["kind"]>([
+  "write_bytes",
+  "write",
+  "edit",
+  "mkdir",
+  "move",
+  "remove",
+]);
+// This lock serializes short Mate workspace mutations only; ordinary Agent shell commands do not
+// acquire it, so a long-lived command or background process cannot hold up this operation.
+if (
+  pinnedDirectoryPaths &&
+  rootDescriptor !== undefined &&
+  flockSync !== undefined &&
+  mutatingKinds.has(operation.kind)
+)
+  flockSync(rootDescriptor, "ex");
 function checked(path: string, allowMissing = false, createParents = false): string {
   let workspacePath = path;
   if (isAbsolute(workspacePath)) {
@@ -140,7 +164,7 @@ function directoryNames(path: string): string[] {
   }
 }
 function content(path: string): Buffer {
-  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const stat = fstatSync(fd);
     if (!stat.isFile() || stat.nlink !== 1) throw new Error("Regular single-link file required");
@@ -154,7 +178,12 @@ function content(path: string): Buffer {
 }
 const hash = (data: Buffer | string) => createHash("sha256").update(data).digest("hex");
 const json = (value: unknown) => process.stdout.write(JSON.stringify(value));
-function save(path: string, value: string | Buffer, workspacePath: string) {
+function save(
+  path: string,
+  value: string | Buffer,
+  workspacePath: string,
+  expectedCurrentHash?: string,
+) {
   if (Buffer.byteLength(value) > 1000000) throw new Error("File exceeds 1 MB limit");
   if (!pinnedDirectoryPaths) mkdirSync(dirname(path), { recursive: true });
   const temp = `${path}.${randomUUID()}.tmp`;
@@ -198,7 +227,13 @@ function save(path: string, value: string | Buffer, workspacePath: string) {
     } finally {
       closeSync(fd);
     }
-    renameSync(temp, path);
+    if (expectedCurrentHash) {
+      commitFileIfHashMatches(
+        expectedCurrentHash,
+        () => content(path),
+        () => renameSync(temp, path),
+      );
+    } else renameSync(temp, path);
     const dir = openSync(dirname(path), "r");
     try {
       fsyncSync(dir);
@@ -256,6 +291,7 @@ switch (operation.kind) {
       path,
       text.slice(0, first) + operation.newText + text.slice(first + operation.oldText.length),
       operation.path,
+      operation.expectedHash,
     );
     break;
   }
@@ -303,7 +339,7 @@ switch (operation.kind) {
     }
     if (!stat.isFile() || stat.nlink !== 1)
       throw new Error("not_regular_file: A regular single-link file is required");
-    const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
       const opened = fstatSync(fd, { bigint: true });
       if (!opened.isFile() || opened.nlink !== 1n || opened.ino !== BigInt(stat.ino))
@@ -320,7 +356,7 @@ switch (operation.kind) {
     break;
   }
   case "workspace_read_chunk": {
-    const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
       const before = fstatSync(fd, { bigint: true });
       if (!before.isFile() || before.nlink !== 1n)
@@ -451,13 +487,15 @@ switch (operation.kind) {
     break;
   case "move": {
     const destination = checked(operation.destination, true);
-    try {
-      lstatSync(destination);
-      throw new Error("Destination exists");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    moveFileNoReplace(path, destination);
+    for (const directory of new Set([dirname(path), dirname(destination)])) {
+      const fd = openSync(directory, "r");
+      try {
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
     }
-    renameSync(path, destination);
     json({ moved: operation.path, destination: operation.destination });
     break;
   }

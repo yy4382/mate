@@ -277,11 +277,13 @@ export class AttachmentService {
     actionId: string;
     operationName: string;
     toolInput: Record<string, unknown>;
+    channelId: string;
     path: string;
     filename?: string;
   }): Promise<AttachmentSummary> {
     const scope = this.authorizeAgentRun(input.runId, input.agentId),
       filename = normalizeFilename(input.filename ?? input.path.split("/").at(-1) ?? "");
+    this.authorizeAgentConversation(input.runId, input.agentId, input.channelId);
     if (!filename) throw new AttachmentError("invalid_filename", "文件名无效。", 400);
     if (!input.actionId.startsWith(`mate:${scope.delivery_id}:`))
       throw new AttachmentError("operation_conflict", "文件发布 ID 与当前消息授权不匹配。", 403);
@@ -291,7 +293,7 @@ export class AttachmentService {
           canonicalJson({
             operation: input.operationName,
             input: input.toolInput,
-            destination: { path: input.path, filename, channelId: scope.channel_id },
+            destination: { path: input.path, filename, channelId: input.channelId },
           }),
         )
         .digest("hex"),
@@ -338,7 +340,7 @@ export class AttachmentService {
         );
       insertUploading(this.db, {
         id,
-        channelId: scope.channel_id,
+        channelId: input.channelId,
         storageKey,
         filename,
         contentType,
@@ -495,16 +497,19 @@ export class AttachmentService {
          FROM owner_agent_runs r
          JOIN owner_agents a ON a.id=r.agent_id AND a.node_id=r.node_id
          JOIN owner_agent_sessions s ON s.agent_id=a.id AND s.verified_at IS NOT NULL
+         JOIN owner_channels c ON c.id=? AND c.archived=0
          JOIN owner_channel_memberships agent ON agent.channel_id=?
            AND agent.principal_kind='agent' AND agent.principal_id=a.id AND agent.active=1
-         JOIN owner_channel_memberships human ON human.channel_id=?
-           AND human.principal_kind='human' AND human.principal_id='owner' AND human.active=1
          WHERE r.id=? AND r.agent_id=? AND r.state='running'
            AND a.status IN ('waiting_credentials','ready')`,
       )
       .get(channelId, channelId, runId, agentId);
     if (!row)
-      throw new AttachmentError("conversation_unavailable", "Agent 当前无权读取此对话附件。", 403);
+      throw new AttachmentError(
+        "conversation_unavailable",
+        "Agent 当前不是此对话成员，无法读取或发布附件。",
+        403,
+      );
   }
 
   private requireOwnerMembership(channelId: string, forUpload: boolean): void {

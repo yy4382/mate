@@ -1111,7 +1111,7 @@ it("upgrades a revision 3 database through node and Agent schemas without losing
     expect(await nodes.json()).toEqual({ nodes: [] });
 
     const upgraded = new Database(databasePath, { readonly: true });
-    expect(upgraded.pragma("user_version", { simple: true })).toBe(14);
+    expect(upgraded.pragma("user_version", { simple: true })).toBe(15);
     expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE name='nodes'").get()).toEqual({
       name: "nodes",
     });

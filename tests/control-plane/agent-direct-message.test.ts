@@ -2201,6 +2201,24 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
     operationId: requests[0]!.operationId,
     result: { sha256: "receipt-1" },
   });
+  const writeAudit = db
+    .prepare(
+      `SELECT actor_kind,actor_id,agent_id,run_id,operation,relative_paths,result,error_code
+       FROM owner_workspace_access_audit WHERE agent_id=? AND operation='workspace.write'`,
+    )
+    .get(agentId) as Record<string, unknown>;
+  expect(writeAudit).toMatchObject({
+    actor_kind: "agent",
+    actor_id: agentId,
+    agent_id: agentId,
+    run_id: run.runId,
+    relative_paths: '["notes.txt"]',
+    result: "succeeded",
+    error_code: null,
+  });
+  expect(db.prepare("PRAGMA table_info(owner_workspace_access_audit)").all()).not.toContainEqual(
+    expect.objectContaining({ name: "content" }),
+  );
   expect(
     await callAgentTool(app, socket, run, firstActionId, "tools.call", firstInput),
   ).toMatchObject({ ok: true, result: first.result });
@@ -2284,6 +2302,16 @@ it("publishes Agent workspace files to a joined conversation in bounded chunks a
     app.chat,
   );
   const channel = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  const destination = app.chat.createChannel({
+    name: "Shared research",
+    description: "Agent has explicitly joined this conversation.",
+    visibility: "public",
+  });
+  expect(app.chat.inviteAgentToChannel(destination.id, agentId)).toBe(true);
+  db.prepare(
+    `UPDATE owner_channel_memberships SET active=0
+     WHERE channel_id=? AND principal_kind='human' AND principal_id='owner'`,
+  ).run(destination.id);
   await app.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
@@ -2329,17 +2357,34 @@ it("publishes Agent workspace files to a joined conversation in bounded chunks a
     );
   };
 
+  const unjoined = app.chat.createChannel({
+    name: "Not joined",
+    description: "The Agent must not publish here.",
+    visibility: "public",
+  });
   const input = {
       name: "attachments.publish",
-      input: { path: "notes.txt", filename: "共享笔记.txt" },
+      input: { conversationId: destination.id, path: "notes.txt", filename: "共享笔记.txt" },
     },
     actionId = stableToolActionId(run.actionScopeId, input),
-    attempts = await Promise.all([
+    deniedInput = {
+      name: "attachments.publish",
+      input: { conversationId: unjoined.id, path: "notes.txt", filename: "不应发布.txt" },
+    },
+    deniedActionId = stableToolActionId(run.actionScopeId, deniedInput),
+    denied = await callAgentTool(app, socket, run, deniedActionId, "tools.call", deniedInput);
+  expect(denied.ok).toBe(false);
+  expect(requests).toHaveLength(0);
+  const attempts = await Promise.all([
       callAgentTool(app, socket, run, actionId, "tools.call", input),
       callAgentTool(app, socket, run, actionId, "tools.call", input),
     ]),
     published = attempts.find((attempt) => attempt.ok)!;
   expect(attempts.filter((attempt) => attempt.ok)).toHaveLength(1);
+  db.prepare(
+    `UPDATE owner_channel_memberships SET active=1
+     WHERE channel_id=? AND principal_kind='human' AND principal_id='owner'`,
+  ).run(destination.id);
   expect(published).toMatchObject({
     ok: true,
     result: { filename: "共享笔记.txt", size: 5, uploader: { kind: "agent", id: agentId } },
@@ -2352,7 +2397,11 @@ it("publishes Agent workspace files to a joined conversation in bounded chunks a
   expect(requests.every((request) => request.mode === "agent_publish")).toBe(true);
   expect((requests[1]?.operation as { length: number }).length).toBeLessThanOrEqual(8192);
 
-  const ownerList = await app.request(`/api/owner/channels/${channel.id}/attachments`, {
+  const sourceList = await app.request(`/api/owner/channels/${channel.id}/attachments`, {
+    headers: { cookie },
+  });
+  expect(((await sourceList.json()) as { attachments: unknown[] }).attachments).toEqual([]);
+  const ownerList = await app.request(`/api/owner/channels/${destination.id}/attachments`, {
     headers: { cookie },
   });
   expect(ownerList.status).toBe(200);
@@ -2361,7 +2410,7 @@ it("publishes Agent workspace files to a joined conversation in bounded chunks a
   };
   expect(items.attachments).toMatchObject([{ filename: "共享笔记.txt" }]);
   const content = await app.request(
-    `/api/owner/channels/${channel.id}/attachments/${items.attachments[0]!.id}/content`,
+    `/api/owner/channels/${destination.id}/attachments/${items.attachments[0]!.id}/content`,
     { headers: { cookie } },
   );
   expect(content.status).toBe(200);
@@ -2372,7 +2421,7 @@ it("publishes Agent workspace files to a joined conversation in bounded chunks a
   expect(requests).toHaveLength(3);
   db.prepare(
     `UPDATE owner_channel_memberships SET active=0 WHERE channel_id=? AND principal_kind='agent' AND principal_id=?`,
-  ).run(channel.id, agentId);
+  ).run(destination.id, agentId);
   const revokedReplay = await callAgentTool(app, socket, run, actionId, "tools.call", input);
   expect(revokedReplay.ok).toBe(false);
   expect(requests).toHaveLength(3);
@@ -2492,4 +2541,126 @@ it("streams the owner workspace download one bounded node chunk at a time and st
   const interruptedChunks =
     requests.filter((request) => request.kind === "workspace_read_chunk").length - previousChunks;
   expect(interruptedChunks).toBeLessThanOrEqual(2);
+});
+
+it("records owner workspace reads and safe failure codes without file contents", async () => {
+  const { app, cookie, db, nodeId, socket } = await setup(),
+    agentId = randomUUID(),
+    version = { device: "1", inode: "2", size: 4, modifiedNs: "3", changedNs: "4" };
+  app.agents.prepare({
+    id: agentId,
+    nodeId,
+    name: "Audited workspace",
+    role: "Keeps private files",
+    description: "Synthetic audit fixture.",
+    model: { provider: "openai", id: "gpt-4.1" },
+  });
+  app.agents.complete(
+    agentId,
+    {
+      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      uid: 23001,
+      gid: 23001,
+      home: `/var/lib/mate/agents/${agentId}`,
+    },
+    app.chat,
+  );
+  socket.onWorkspaceOperation = async (message) => {
+    const operation = message.operation as { kind: string; path: string; offset?: number };
+    let code = 0,
+      stdout = "{}",
+      stderr = "";
+    if (operation.path === "missing.txt") {
+      code = 1;
+      stderr = `Error: ENOENT: no such file or directory, open '${"m".repeat(650)}'\n    at openSync (node:fs:...)`;
+    } else if (operation.path === "private.txt") {
+      code = 1;
+      stderr = "Error: EACCES: permission denied, open 'private.txt'";
+    } else if (operation.path === "changed.txt" && operation.kind === "workspace_read_chunk") {
+      code = 1;
+      stderr = "file_changed: File changed while it was being read";
+    } else if (operation.kind === "workspace_stat") {
+      stdout = JSON.stringify({ type: "file", size: 4, modifiedAt: 1, version });
+    } else if (operation.kind === "workspace_read_chunk") {
+      stdout = JSON.stringify({
+        offset: operation.offset,
+        totalBytes: 4,
+        base64: "c2FmZQ==",
+        version,
+      });
+    } else if (operation.kind === "workspace_list") {
+      stdout = JSON.stringify({ path: operation.path, entries: [], nextOffset: null });
+    }
+    await app.nodes.receive(
+      socket,
+      JSON.stringify({
+        type: "node.workspace.operation.result",
+        requestId: message.requestId,
+        operationId: message.operationId,
+        agentId,
+        ok: true,
+        result: { code, stdout, stderr, truncated: false },
+      }),
+    );
+  };
+
+  const listing = await app.request(`/api/owner/agents/${agentId}/workspace?path=`, {
+      headers: { cookie },
+    }),
+    missing = await app.request(`/api/owner/agents/${agentId}/workspace/stat?path=missing.txt`, {
+      headers: { cookie },
+    }),
+    denied = await app.request(`/api/owner/agents/${agentId}/workspace/stat?path=private.txt`, {
+      headers: { cookie },
+    });
+  expect(listing.status).toBe(200);
+  expect(missing.status).toBe(404);
+  expect(denied.status).toBe(403);
+  const changed = await app.request(
+    `/api/owner/agents/${agentId}/workspace/download?path=changed.txt`,
+    { headers: { cookie } },
+  );
+  expect(changed.status).toBe(200);
+  await expect(changed.arrayBuffer()).rejects.toThrow();
+
+  const audit = db
+    .prepare(
+      `SELECT actor_kind,actor_id,agent_id,operation,relative_paths,result,error_code
+       FROM owner_workspace_access_audit WHERE agent_id=? ORDER BY id`,
+    )
+    .all(agentId) as Array<Record<string, unknown>>;
+  expect(audit).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        actor_kind: "owner",
+        actor_id: "owner",
+        operation: "list",
+        relative_paths: '[""]',
+        result: "succeeded",
+        error_code: null,
+      }),
+      expect.objectContaining({
+        operation: "stat",
+        relative_paths: '["missing.txt"]',
+        result: "failed",
+        error_code: "not_found",
+      }),
+      expect.objectContaining({
+        operation: "stat",
+        relative_paths: '["private.txt"]',
+        result: "failed",
+        error_code: "permission_denied",
+      }),
+      expect.objectContaining({
+        operation: "read_chunk",
+        relative_paths: '["changed.txt"]',
+        result: "failed",
+        error_code: "file_changed",
+      }),
+    ]),
+  );
+  expect(JSON.stringify(audit)).not.toContain("safe");
+  expect(db.prepare("PRAGMA table_info(owner_workspace_access_audit)").all()).not.toContainEqual(
+    expect.objectContaining({ name: "content" }),
+  );
 });

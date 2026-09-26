@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { WebSocketServer } from "ws";
 import { createControlPlaneApp, type ControlPlaneAppOptions } from "./http.js";
+import { MAX_NODE_MESSAGE_BYTES } from "../nodes/protocol.js";
 
 export function startControlPlane(
   port = parsePort(process.env.MATE_CONTROL_PLANE_PORT ?? "8787"),
@@ -13,7 +14,7 @@ export function startControlPlane(
   // Ordinary command receipts carry bounded stdout and stderr with the protocol metadata.
   const websocketServer = new WebSocketServer({
     noServer: true,
-    maxPayload: 1024 * 1024,
+    maxPayload: MAX_NODE_MESSAGE_BYTES,
     perMessageDeflate: false,
   });
   // The Hono adapter documents ws directly, but its type differs on noServer and send options.

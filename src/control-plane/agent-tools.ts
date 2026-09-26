@@ -1,5 +1,10 @@
 import { z } from "zod";
 import type { AgentProcessOperation } from "../nodes/process-operations.js";
+import {
+  WORKSPACE_WRITE_BYTES_BASE64_MAX_CHARS,
+  WORKSPACE_WRITE_MAX_BYTES,
+} from "../execution/backend.js";
+import { MAX_NODE_MESSAGE_BYTES } from "../nodes/protocol.js";
 
 const conversationId = z.string().uuid(),
   workspacePath = z.string().max(4096),
@@ -96,25 +101,53 @@ export const agentWorkspaceOperations = Object.freeze({
     seatPolicy: "deny" as const,
   },
   "workspace.write": {
-    description: "在私人 home 中写入或替换 UTF-8 文本文件。每次修改会由控制面记录并使用持久收据。",
-    schema: z.object({ path: workspacePath, content: z.string().max(1_000_000) }).strict(),
+    description:
+      "在私人 home 中写入或替换不超过 700 KiB 的 UTF-8 文本文件，且完整请求必须适合 1 MiB 节点消息。每次修改会由控制面记录并使用持久收据。",
+    schema: z
+      .object({
+        path: workspacePath,
+        content: z
+          .string()
+          .max(WORKSPACE_WRITE_MAX_BYTES)
+          .refine((value) => Buffer.byteLength(value, "utf8") <= WORKSPACE_WRITE_MAX_BYTES),
+      })
+      .strict()
+      .superRefine((input, context) => {
+        const worstCaseRequest = {
+          type: "node.agent.run.tool",
+          requestId: "00000000-0000-4000-8000-000000000000",
+          runId: "00000000-0000-4000-8000-000000000000",
+          agentId: "00000000-0000-4000-8000-000000000000",
+          toolCallId: "t".repeat(500),
+          operation: "tools.call",
+          input: { name: "workspace.write", input },
+        };
+        if (Buffer.byteLength(JSON.stringify(worstCaseRequest), "utf8") > MAX_NODE_MESSAGE_BYTES)
+          context.addIssue({
+            code: "custom",
+            message: "完整 workspace.write 请求超过 1 MiB 节点消息上限，请缩小文本。",
+          });
+      }),
     seatPolicy: "deny" as const,
   },
   "workspace.write_bytes": {
-    description: "在私人 home 中写入或替换不超过 1 MB 的二进制文件，内容使用标准 base64。",
+    description:
+      "在私人 home 中写入或替换不超过 700 KiB 的二进制文件，内容使用标准 base64；更大的附件请使用流式附件发布。",
     schema: z
       .object({
         path: workspacePath,
         base64: z
           .string()
-          .max(1_333_336)
-          .refine((value) => Buffer.from(value, "base64").toString("base64") === value),
+          .max(WORKSPACE_WRITE_BYTES_BASE64_MAX_CHARS)
+          .refine((value) => Buffer.from(value, "base64").toString("base64") === value)
+          .refine((value) => Buffer.from(value, "base64").byteLength <= WORKSPACE_WRITE_MAX_BYTES),
       })
       .strict(),
     seatPolicy: "deny" as const,
   },
   "workspace.edit": {
-    description: "仅当文件内容与 expectedHash 相符、且 oldText 唯一出现时替换文本。",
+    description:
+      "expectedHash 必须在编辑检查时匹配、oldText 必须唯一出现；Mate 工作区写操作会串行并在提交前复核，但普通命令、后台进程或绕过 Mate 的同 UID 写入仍可能与最终替换竞争。",
     schema: z
       .object({
         path: workspacePath,
@@ -168,9 +201,14 @@ export const agentWorkspaceOperations = Object.freeze({
     seatPolicy: "deny" as const,
   },
   "attachments.publish": {
-    description: "把你私人 home 中的一份文件发布到触发当前运行的对话附件中。",
+    description:
+      "把你私人 home 中的一份文件发布到你已加入且明确指定的对话附件中；必须提供 conversationId。",
     schema: z
-      .object({ path: z.string().min(1).max(4096), filename: z.string().max(255).optional() })
+      .object({
+        conversationId,
+        path: z.string().min(1).max(4096),
+        filename: z.string().max(255).optional(),
+      })
       .strict(),
     seatPolicy: "deny" as const,
   },

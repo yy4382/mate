@@ -243,6 +243,11 @@ export function WorkspaceBrowser({
     version: WorkspaceVersion;
   } | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
+  const [downloadState, setDownloadState] = useState<{
+    path: string;
+    state: "downloading" | "done" | "error";
+    message: string;
+  } | null>(null);
   const currentAgent = available.find((agent) => agent.id === agentId) ?? available[0];
   const currentNode = currentAgent
     ? nodes.find((node) => node.id === currentAgent.nodeId)
@@ -371,6 +376,66 @@ export function WorkspaceBrowser({
     return `/api/owner/agents/${encodeURIComponent(currentAgent!.id)}/workspace/download?${query}`;
   };
 
+  async function downloadFile(filePath: string) {
+    if (!currentAgent) return;
+    const picker = (
+      window as Window & {
+        showSaveFilePicker?: (options: { suggestedName: string }) => Promise<{
+          createWritable: () => Promise<WritableStream<Uint8Array>>;
+        }>;
+      }
+    ).showSaveFilePicker;
+    if (!picker) {
+      setDownloadState({
+        path: filePath,
+        state: "error",
+        message: "当前浏览器不支持安全的流式文件保存，请使用支持文件保存的浏览器。",
+      });
+      return;
+    }
+    setDownloadState({ path: filePath, state: "downloading", message: "正在流式下载…" });
+    try {
+      const handle = await picker({ suggestedName: filePath.split("/").at(-1) || "file" }),
+        response = await fetch(downloadUrl(filePath), { cache: "no-store" });
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as {
+          code?: unknown;
+          error?: unknown;
+        } | null;
+        const code = typeof body?.code === "string" ? body.code : "";
+        throw new Error(
+          code === "not_found" || code === "permission_denied"
+            ? "文件已不存在或当前无权读取，请重新加载目录。"
+            : code === "file_changed"
+              ? "文件在下载期间发生变化，请重新加载后重试。"
+              : typeof body?.error === "string"
+                ? body.error
+                : "文件下载失败，请重试。",
+        );
+      }
+      if (!response.body) throw new Error("浏览器没有收到文件数据流，请重试。");
+      await response.body.pipeTo(await handle.createWritable());
+      setDownloadState({ path: filePath, state: "done", message: "下载完成。" });
+    } catch (reason) {
+      if (reason instanceof DOMException && reason.name === "AbortError") {
+        setDownloadState(null);
+        return;
+      }
+      const message = reason instanceof Error ? reason.message : "文件下载中断，请重试。";
+      setDownloadState({
+        path: filePath,
+        state: "error",
+        message: /file_changed|发生变化/i.test(message)
+          ? "文件在下载期间发生变化，请重新加载后重试。"
+          : /not_found|permission_denied|不存在|无权/i.test(message)
+            ? "文件已不存在或当前无权读取，请重新加载目录。"
+            : message === "Failed to fetch" || /stream|network|fetch/i.test(message)
+              ? "文件下载中断，请检查节点连接后重试。"
+              : message,
+      });
+    }
+  }
+
   return (
     <section
       className="agent-form-section workspace-browser"
@@ -474,7 +539,13 @@ export function WorkspaceBrowser({
                           <span>{entry.name}</span>
                           <small>{formatBytes(entry.size)}</small>
                         </button>
-                        <a href={downloadUrl(entryPath)}>下载</a>
+                        <button
+                          type="button"
+                          onClick={() => void downloadFile(entryPath)}
+                          disabled={downloadState?.state === "downloading"}
+                        >
+                          下载
+                        </button>
                       </div>
                     ) : (
                       <span
@@ -491,6 +562,15 @@ export function WorkspaceBrowser({
               {!entries.length && <li className="workspace-empty">此目录为空。</li>}
             </ul>
           ) : null}
+          {downloadState && (
+            <p
+              className={downloadState.state === "error" ? "workspace-error" : "workspace-state"}
+              role={downloadState.state === "error" ? "alert" : "status"}
+              aria-live="polite"
+            >
+              {downloadState.message}
+            </p>
+          )}
           {currentNode?.online && nextOffset !== null && (
             <button
               type="button"

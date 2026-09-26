@@ -287,6 +287,7 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
               actionId: request.actionId,
               operationName: request.name,
               toolInput: input,
+              channelId: input.conversationId as string,
               path: input.path as string,
               ...(input.filename === undefined ? {} : { filename: input.filename as string }),
             }),

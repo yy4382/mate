@@ -2,6 +2,8 @@ import { z } from "zod";
 import { agentProcessOperationSchema } from "./process-operations.js";
 import { operationSchema } from "../execution/backend.js";
 
+export const MAX_NODE_MESSAGE_BYTES = 1024 * 1024;
+
 export const NodeRequestIdSchema = z.string().uuid();
 const requestIdSchema = NodeRequestIdSchema;
 const nodeIdSchema = z.string().uuid();
@@ -24,7 +26,7 @@ const workspaceExecutionResultSchema = z
   .object({
     code: z.number().int(),
     stdout: z.string().max(12_000),
-    stderr: z.string().max(240),
+    stderr: z.string().max(12_000),
     truncated: z.boolean(),
   })
   .strict();
@@ -38,7 +40,7 @@ const provisionIdentitySchema = z
   .strict();
 
 /** The same validated request and response shapes are used by the control plane and node. */
-export const NodeRequestSchema = z.discriminatedUnion("type", [
+const NodeRequestShapeSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("node.authenticate"),
     requestId: requestIdSchema,
@@ -177,8 +179,12 @@ export const NodeRequestSchema = z.discriminatedUnion("type", [
     })
     .strict(),
 ]);
+export const NodeRequestSchema = NodeRequestShapeSchema.refine(
+  (request) => Buffer.byteLength(JSON.stringify(request), "utf8") <= MAX_NODE_MESSAGE_BYTES,
+  "Node WebSocket request exceeds the 1 MiB complete-frame limit",
+);
 
-export const NodeControlMessageSchema = z.discriminatedUnion("type", [
+const NodeControlMessageShapeSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("control.challenge"),
     nonce: z.string().min(32).max(64),
@@ -353,6 +359,10 @@ export const NodeControlMessageSchema = z.discriminatedUnion("type", [
     message: z.string().min(1).max(160),
   }),
 ]);
+export const NodeControlMessageSchema = NodeControlMessageShapeSchema.refine(
+  (message) => Buffer.byteLength(JSON.stringify(message), "utf8") <= MAX_NODE_MESSAGE_BYTES,
+  "Node WebSocket control message exceeds the 1 MiB complete-frame limit",
+);
 
 export type NodeRequest = z.infer<typeof NodeRequestSchema>;
 export type NodeControlMessage = z.infer<typeof NodeControlMessageSchema>;

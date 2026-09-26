@@ -31,14 +31,15 @@ const descriptions: Record<string, string> = {
   "file.read_bytes":
     "Read up to 32 KiB binary bytes at an offset, returning base64, file size and full SHA256. Files up to 1 MB.",
   "file.write_bytes":
-    "Atomically write canonical base64 bytes, decoded size up to 1 MB, using the Agent Linux user.",
+    "Atomically write canonical base64 bytes, decoded size up to 700 KiB, using the Agent Linux user.",
   "file.list": "List up to 200 directory entries (48 KB); truncated indicates remaining entries.",
   "file.search":
     "Recursively find literal text in UTF-8 files up to 1 MB; at most 1000 visited paths, 100 matches and 45 KB.",
   "file.stat": "Inspect file type, size and SHA256 for regular files up to 1 MB.",
   "file.read": "Read up to 64 KiB UTF-8 text. Use search or exec for larger files.",
-  "file.write": "Atomically write up to 1 MB UTF-8 text and preserve five previous versions.",
-  "file.edit": "Edit only if expectedHash matches and oldText occurs exactly once.",
+  "file.write": "Atomically write up to 700 KiB UTF-8 text and preserve five previous versions.",
+  "file.edit":
+    "Edit only if expectedHash matches at the initial check and oldText occurs exactly once. Mate workspace mutations serialize and recheck before commit, but ordinary shell, background, or other same-UID writes can still race the final replacement.",
   "file.move": "Move or rename a file; destination must not exist.",
   "file.remove": "Remove a regular file or empty directory, optionally checking expectedHash.",
   "file.mkdir": "Create a directory and missing parents using the Agent Linux user.",
