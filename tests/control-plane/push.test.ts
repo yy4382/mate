@@ -1,11 +1,17 @@
 import Database from "better-sqlite3";
 import { expect, it } from "vitest";
 import { OwnerPush } from "../../src/control-plane/owner-push.js";
-import { createControlPlaneApp } from "../../src/control-plane/http.js";
+import { createControlPlaneApp, mentionsOwner } from "../../src/control-plane/http.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+
+it("recognizes owner mentions beside punctuation without treating email or longer names as mentions", () => {
+  expect(mentionsOwner("请看(@所有者)和 @owner！")).toBe(true);
+  expect(mentionsOwner("提醒：@所有者，审批一下")).toBe(true);
+  expect(mentionsOwner("请联系 a@owner.example 和 @所有者们")).toBe(false);
+});
 
 it("retries a temporary Push failure after durable backoff without duplicating the approval event", async () => {
   const directory = mkdtempSync(join(tmpdir(), "mate-push-retry-"));

@@ -47,6 +47,10 @@ interface MessagePage {
   nextBefore: string | null;
 }
 
+type MessageContext =
+  | { kind: "timeline"; messageId: string; page: MessagePage; hasNewer: boolean }
+  | { kind: "thread"; messageId: string; thread: { root: Message; replies: Message[] } };
+
 interface MessageWindow {
   messages: Message[];
   nextBefore: string | null;
@@ -442,6 +446,14 @@ export function ChatPage() {
 
   useEffect(() => {
     if (!authenticated || !selectedId) return;
+    const deepLink = new URLSearchParams(window.location.search);
+    const linkedMessage = deepLink.get("message");
+    if (
+      deepLink.get("channel") === selectedId &&
+      linkedMessage &&
+      handledDeepLinkRef.current !== `message-${linkedMessage}`
+    )
+      return;
     const channelId = selectedId;
     let active = true;
     setLoadingMessages(true);
@@ -472,6 +484,46 @@ export function ChatPage() {
       active = false;
     };
   }, [authenticated, selectedId, historyRefresh]);
+
+  useEffect(() => {
+    if (!authenticated || !selectedId) return;
+    const query = new URLSearchParams(window.location.search),
+      channelId = query.get("channel"),
+      messageId = query.get("message");
+    if (!messageId || channelId !== selectedId) return;
+    let active = true;
+    void ownerJSON<MessageContext>(
+      `/api/owner/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}/context`,
+    )
+      .then((context) => {
+        if (!active || selectedIdRef.current !== channelId) return;
+        if (context.kind === "thread") {
+          threadRootIdRef.current = context.thread.root.id;
+          setThreadRoot(context.thread.root);
+          setThreadReplies(context.thread.replies);
+          setMobileView("thread");
+          void ownerJSON<MessagePage>(
+            `/api/owner/channels/${encodeURIComponent(channelId)}/messages`,
+          )
+            .then((page) => {
+              if (active && selectedIdRef.current === channelId)
+                setMessageWindows({ [channelId]: { ...page, hasNewer: false } });
+            })
+            .catch(() => {});
+        } else {
+          setMessageWindows({
+            [channelId]: { ...context.page, hasNewer: context.hasNewer },
+          });
+          setMobileView("chat");
+        }
+      })
+      .catch((cause) => {
+        if (active) setError(cause instanceof Error ? cause.message : "无法定位消息。");
+      });
+    return () => {
+      active = false;
+    };
+  }, [authenticated, selectedId]);
 
   useEffect(() => {
     if (!authenticated || !selectedId) return;
@@ -540,7 +592,7 @@ export function ChatPage() {
     if (!target) return;
     target.scrollIntoView({ block: "center" });
     handledDeepLinkRef.current = targetId;
-  }, [selectedId, approvals, messageWindows]);
+  }, [selectedId, approvals, messageWindows, threadReplies]);
 
   useEffect(() => {
     if (!authenticated) return;
@@ -1269,7 +1321,7 @@ export function ChatPage() {
           </article>
           <div className="thread-replies">
             {threadReplies.map((reply) => (
-              <article key={reply.id} tabIndex={0}>
+              <article id={`message-${reply.id}`} key={reply.id} tabIndex={0}>
                 <strong>{reply.author.kind === "human" ? "你" : "Agent"}</strong>
                 <p>{reply.text}</p>
                 <div className="message-actions">

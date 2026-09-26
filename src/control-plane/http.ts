@@ -24,6 +24,10 @@ import { listAgentActivity, recordAgentActivity } from "./activity.js";
 import { PrivilegedApprovals, type ApprovalView } from "./privileged-approvals.js";
 import { OwnerPush } from "./owner-push.js";
 
+export function mentionsOwner(text: string): boolean {
+  return /(?:^|[^\p{L}\p{N}_])@(?:owner|所有者)(?=$|[^\p{L}\p{N}_])/iu.test(text);
+}
+
 const newChannelSchema = z
   .object({
     name: z.string().trim().min(1).max(80),
@@ -188,11 +192,7 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
     ),
     loginGate = new LoginGate();
   ownerChat.setPushHandler((message, directToOwner) => {
-    if (
-      !directToOwner &&
-      !/(?:^|\s)@(?:owner\b|所有者)(?=\s|$|[，。！？,.:;])/iu.test(message.text)
-    )
-      return;
+    if (!directToOwner && !mentionsOwner(message.text)) return;
     push.queue(
       `message:${message.id}`,
       "Agent 发来消息",
@@ -413,7 +413,14 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
   };
   const requireOwnerPage: MiddlewareHandler = async (context, next) => {
     const token = sessionToken(context);
-    if (!token || !ownerAuth.hasSession(token)) return context.redirect("/login", 302);
+    if (!token || !ownerAuth.hasSession(token)) {
+      const requestUrl = new URL(context.req.url);
+      const nextPath = `${requestUrl.pathname}${requestUrl.search}`;
+      return context.redirect(
+        nextPath === "/app" ? "/login" : `/login?next=${encodeURIComponent(nextPath)}`,
+        302,
+      );
+    }
     await next();
   };
 
@@ -868,6 +875,14 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
     const page = ownerChat.listMessages(context.req.param("channelId"), before, limit);
     if (!page) return context.json({ error: "频道不存在" }, 404);
     return context.json(page);
+  });
+  app.get("/api/owner/channels/:channelId/messages/:messageId/context", (context) => {
+    const result = ownerChat.messageContext(
+      context.req.param("channelId"),
+      context.req.param("messageId"),
+    );
+    if (!result) return context.json({ error: "消息不存在" }, 404);
+    return context.json(result);
   });
   app.get("/api/owner/channels/:channelId/threads/:rootId", (context) => {
     const thread = ownerChat.listThread(

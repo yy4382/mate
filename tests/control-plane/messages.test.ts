@@ -123,6 +123,58 @@ it("pages back to older top-level messages using the channel order cursor", asyn
   });
 });
 
+it("locates an older message and a thread reply by ID for a notification landing", async () => {
+  const { app } = setup();
+  const cookie = await ownerCookie(app);
+  const created = await app.request("/api/owner/channels", {
+    method: "POST",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ name: "通知", description: "", visibility: "public" }),
+  });
+  const { id: channelId } = await created.json();
+  const send = async (text: string, extra: Record<string, string> = {}) => {
+    const response = await app.request(`/api/owner/channels/${channelId}/messages`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ text, ...extra }),
+    });
+    expect(response.status).toBe(201);
+    return response.json();
+  };
+  const root = await send("旧消息");
+  const reply = await send("讨论串中的提及", { rootId: root.id });
+  for (let index = 0; index < 51; index++) await send(`新消息 ${index}`);
+
+  const older = await app.request(`/api/owner/channels/${channelId}/messages/${root.id}/context`, {
+    headers: { cookie },
+  });
+  expect(older.status).toBe(200);
+  expect(await older.json()).toMatchObject({
+    kind: "timeline",
+    messageId: root.id,
+    page: { messages: [expect.objectContaining({ id: root.id })] },
+    hasNewer: true,
+  });
+
+  const thread = await app.request(
+    `/api/owner/channels/${channelId}/messages/${reply.id}/context`,
+    { headers: { cookie } },
+  );
+  expect(thread.status).toBe(200);
+  expect(await thread.json()).toMatchObject({
+    kind: "thread",
+    messageId: reply.id,
+    thread: { root: { id: root.id }, replies: [expect.objectContaining({ id: reply.id })] },
+  });
+  expect(
+    (
+      await app.request(`/api/owner/channels/wrong/messages/${reply.id}/context`, {
+        headers: { cookie },
+      })
+    ).status,
+  ).toBe(404);
+});
+
 it("keeps quote replies on the timeline and thread replies under the root after restart", async () => {
   const fixture = setup();
   const cookie = await ownerCookie(fixture.app);

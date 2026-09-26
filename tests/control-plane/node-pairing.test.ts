@@ -54,7 +54,7 @@ it("lets only the signed-in owner create a one-time node pairing token", async (
   expect(rejected.status).toBe(401);
   expect(anonymousList.status).toBe(401);
   expect(anonymousPage.status).toBe(302);
-  expect(anonymousPage.headers.get("location")).toBe("/login");
+  expect(anonymousPage.headers.get("location")).toBe("/login?next=%2Fapp%2Fnodes");
   expect(await publicStatus.json()).toEqual({ status: "running" });
   expect(created.status).toBe(201);
   const token = (await created.json()) as { pairingToken?: unknown; expiresAt?: unknown };

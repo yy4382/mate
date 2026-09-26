@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { join } from "node:path";
 import { expect, it } from "vitest";
+import { appReturnPath } from "../../apps/web/src/navigation.js";
 
 it("serves the status page and protects owner routes in an unprivileged process", async () => {
   const fixtureDir = mkdtempSync(join(tmpdir(), "mate-control-plane-process-"));
@@ -100,6 +101,16 @@ it("serves the status page and protects owner routes in an unprivileged process"
     expect(privatePage.headers.get("location")).toBe("/login");
     expect(privateApi.status).toBe(401);
 
+    const approvalTarget = "/app?channel=room-1&approval=request-1";
+    const pushLanding = await fetch(new URL(approvalTarget, origin), { redirect: "manual" });
+    expect(pushLanding.status).toBe(302);
+    const loginTarget = pushLanding.headers.get("location")!;
+    expect(new URL(loginTarget, origin).searchParams.get("next")).toBe(approvalTarget);
+    expect(appReturnPath(new URL(loginTarget, origin).search)).toBe(approvalTarget);
+    const loginPage = await fetch(new URL(loginTarget, origin));
+    expect(loginPage.status).toBe(200);
+    expect(await loginPage.text()).toContain('id="root"');
+
     const login = await fetch(new URL("/api/auth/login", origin), {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -121,6 +132,11 @@ it("serves the status page and protects owner routes in an unprivileged process"
       headers: { cookie },
     });
     expect(authenticatedPage.status).toBe(200);
+    const approvalPage = await fetch(new URL(approvalTarget, origin), {
+      headers: { cookie },
+      redirect: "manual",
+    });
+    expect(approvalPage.status).toBe(200);
     expect(authenticatedApi.status).toBe(200);
     expect(await authenticatedApi.json()).toEqual({ authenticated: true });
 

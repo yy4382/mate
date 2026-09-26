@@ -1631,6 +1631,23 @@ export class OwnerChat {
     return { messages, nextBefore: hasMore ? (messages[0]?.order ?? null) : null };
   }
 
+  messageContext(channelId: string, messageId: string) {
+    const row = this.db
+      .prepare(
+        "SELECT id,channel_id,order_seq,revision,text,root_id,quote_id,author_kind,author_id,created_at FROM owner_messages WHERE id=? AND channel_id=? AND internal_kind IS NULL",
+      )
+      .get(messageId, channelId) as MessageRow | undefined;
+    if (!row) return undefined;
+    if (row.root_id) {
+      const thread = this.listThread(channelId, row.root_id);
+      return thread ? { kind: "thread" as const, messageId, thread } : undefined;
+    }
+    const page = this.listMessages(channelId, row.order_seq + 1, 50);
+    if (!page) return undefined;
+    const latest = this.listMessages(channelId, undefined, 1)?.messages[0];
+    return { kind: "timeline" as const, messageId, page, hasNewer: latest?.id !== messageId };
+  }
+
   listThread(
     channelId: string,
     rootId: string,
