@@ -4,7 +4,11 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { UnsupportedDatabaseError, openCurrentDatabase } from "../../src/storage/initialize.js";
+import {
+  UnsupportedDatabaseError,
+  openCurrentDatabase,
+  openNodeProcessDatabase,
+} from "../../src/storage/initialize.js";
 import { FORMAT_REVISION } from "../../src/storage/current-schema.js";
 
 const roots: string[] = [];
@@ -35,6 +39,18 @@ function rejected(path: string): Error {
   }
   throw new Error(`Expected the open entry to reject ${path}`);
 }
+
+it("opens the node process ledger through the storage boundary with durable transactions", () => {
+  const db = openNodeProcessDatabase(join(temporary(), "node-process.sqlite"));
+  try {
+    expect(db.pragma("journal_mode", { simple: true })).toBe("delete");
+    expect(db.pragma("synchronous", { simple: true })).toBe(2);
+    expect(db.pragma("foreign_keys", { simple: true })).toBe(1);
+    expect(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all()).toEqual([]);
+  } finally {
+    db.close();
+  }
+});
 
 /**
  * The structures the first release persists, mapped to acceptance criterion 1:

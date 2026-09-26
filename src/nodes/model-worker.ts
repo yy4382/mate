@@ -256,7 +256,7 @@ export function serveModelWorker(stream: StreamFn): void {
           `介绍：${run.data.spec.prompt.description}`,
           `本次回复目的地：频道 ${run.data.spec.outputChannel.channelId}（${visibilityLabel(run.data.spec.outputChannel.visibility)}）。`,
           "上下文中的每条消息都标出来源频道、可见范围和是否属于本次输入。只处理标为本次输入的消息；历史仅用于理解。公开频道回复不得泄露任何私密频道内容。",
-          "使用 tools.list 发现可用对话操作，需要时使用 tools.describe 读取准确参数。先用 agents.list 查找同伴身份，再用 conversations.open_dm 建立或返回你与目标 Agent 的私信；每次读取和发送都必须明确指定你有权访问的对话。邀请同伴时必须指定你已加入的频道和目标 Agent。控制面会检查每次操作是否获授权，拒绝结果不可绕过。",
+          "使用 tools.list 发现可用 Mate 操作，需要时使用 tools.describe 读取准确参数。process.exec 会以你固定的非特权 Linux 用户运行普通命令；使用 process.list、process.inspect 和 process.stop 管理自己的命令进程。普通命令不需要逐条人工审批。先用 agents.list 查找同伴身份，再用 conversations.open_dm 建立或返回你与目标 Agent 的私信；每次读取和发送都必须明确指定你有权访问的对话。邀请同伴时必须指定你已加入的频道和目标 Agent。控制面会检查每次操作是否获授权，拒绝结果不可绕过。",
         ].join("\n"),
         tools,
         messages: transcript,

@@ -132,7 +132,10 @@ export interface AgentRunHandlers {
     toolCallId: string,
     operation: string,
     input: Record<string, unknown>,
-  ): { ok: true; result: unknown } | { ok: false; error: string };
+  ):
+    | { ok: true; result: unknown }
+    | { ok: false; error: string }
+    | Promise<{ ok: true; result: unknown } | { ok: false; error: string }>;
   result(runId: string, agentId: string, ok: boolean, code?: string): void;
 }
 
@@ -146,6 +149,8 @@ type NodeAgentRunRequest = Extract<
       | "node.agent.run.result";
   }
 >;
+type NodeAgentRunToolRequest = Extract<NodeAgentRunRequest, { type: "node.agent.run.tool" }>;
+type NodeAgentRunMessage = Exclude<NodeAgentRunRequest, NodeAgentRunToolRequest>;
 
 /** Pairing credentials and durable node identities for this control plane. */
 export class NodeDirectory {
@@ -283,10 +288,11 @@ export class NodeDirectory {
     if (request.type === "node.authenticate") return this.authenticate(socket, session, request);
     if (request.type === "node.pair") return this.pair(socket, session, request);
     if (request.type === "node.ping") return this.ping(socket, session, request);
+    if (request.type === "node.agent.run.tool")
+      return this.receiveAgentRunToolMessage(socket, session, request);
     if (
       request.type === "node.agent.run.context" ||
       request.type === "node.agent.run.journal" ||
-      request.type === "node.agent.run.tool" ||
       request.type === "node.agent.run.result"
     )
       return this.receiveAgentRunMessage(socket, session, request);
@@ -683,7 +689,7 @@ export class NodeDirectory {
   private receiveAgentRunMessage(
     socket: NodeSocket,
     session: SocketSession,
-    request: NodeAgentRunRequest,
+    request: NodeAgentRunMessage,
   ): void {
     const nodeId = session.nodeId;
     if (!nodeId || this.connected.get(nodeId) !== socket)
@@ -745,33 +751,6 @@ export class NodeDirectory {
       return;
     }
 
-    if (request.type === "node.agent.run.tool") {
-      let outcome: { ok: true; result: unknown } | { ok: false; error: string };
-      try {
-        outcome = pending
-          ? (this.agentRunHandlers?.tool(
-              request.runId,
-              nodeId,
-              request.agentId,
-              request.toolCallId,
-              request.operation,
-              request.input,
-            ) ?? { ok: false, error: "Agent tool service is unavailable" })
-          : { ok: false, error: "Agent run is no longer active" };
-      } catch {
-        outcome = { ok: false, error: "Agent tool request was refused" };
-      }
-      const response = NodeControlMessageSchema.parse({
-        type: "control.agent.run.tool_result",
-        requestId: request.requestId,
-        runId: request.runId,
-        toolCallId: request.toolCallId,
-        ...outcome,
-      });
-      this.send(socket, response);
-      return;
-    }
-
     if (!pending) return; // Late result from a disconnected run is deliberately ignored.
     try {
       this.agentRunHandlers?.result(
@@ -783,6 +762,53 @@ export class NodeDirectory {
     } finally {
       this.finishAgentRun(request.runId, request);
     }
+  }
+
+  private async receiveAgentRunToolMessage(
+    socket: NodeSocket,
+    session: SocketSession,
+    request: NodeAgentRunToolRequest,
+  ): Promise<void> {
+    const nodeId = session.nodeId;
+    if (!nodeId || this.connected.get(nodeId) !== socket)
+      return this.reject(socket, request.requestId, "not_authenticated", "节点尚未完成身份验证。");
+    const pending = this.pendingAgentRuns.get(request.runId);
+    if (pending && (pending.nodeId !== nodeId || pending.agentId !== request.agentId))
+      return this.reject(
+        socket,
+        request.requestId,
+        "invalid_identity",
+        "Agent run 与节点请求不匹配。",
+      );
+
+    let outcome: { ok: true; result: unknown } | { ok: false; error: string };
+    try {
+      outcome = pending
+        ? await (this.agentRunHandlers?.tool(
+            request.runId,
+            nodeId,
+            request.agentId,
+            request.toolCallId,
+            request.operation,
+            request.input,
+          ) ?? { ok: false, error: "Agent tool service is unavailable" })
+        : { ok: false, error: "Agent run is no longer active" };
+    } catch {
+      outcome = { ok: false, error: "Agent tool request was refused" };
+    }
+    if (
+      this.connected.get(nodeId) !== socket ||
+      (pending !== undefined && this.pendingAgentRuns.get(request.runId) !== pending)
+    )
+      return;
+    const response = NodeControlMessageSchema.parse({
+      type: "control.agent.run.tool_result",
+      requestId: request.requestId,
+      runId: request.runId,
+      toolCallId: request.toolCallId,
+      ...outcome,
+    });
+    this.send(socket, response);
   }
 
   private finishAgentProvision(

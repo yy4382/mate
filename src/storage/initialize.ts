@@ -3,7 +3,7 @@ import { existsSync, statSync } from "node:fs";
 import { FORMAT_APPLICATION_ID, FORMAT_REVISION, currentFormatSchema } from "./current-schema.js";
 
 const CONTROL_PLANE_APPLICATION_ID = 0x4d43504c;
-const CONTROL_PLANE_FORMAT_REVISION = 12;
+const CONTROL_PLANE_FORMAT_REVISION = 13;
 
 const moveAside =
   "Mate does not migrate or erase a database it does not recognise: if this file was not created by this release, move it aside and point runtime.dataDir at a new, empty directory.";
@@ -52,6 +52,15 @@ export function openCurrentDatabase(path: string): Database.Database {
   // Constraints only apply per connection, so the entry that opens the file owns them.
   db.pragma("foreign_keys = ON");
   db.pragma("journal_mode = WAL");
+  db.pragma("synchronous = FULL");
+  return db;
+}
+
+/** Open a separate private node-side operation ledger through the storage boundary. */
+export function openNodeProcessDatabase(path: string): Database.Database {
+  const db = openWritable(path);
+  db.pragma("foreign_keys = ON");
+  db.pragma("journal_mode = DELETE");
   db.pragma("synchronous = FULL");
   return db;
 }

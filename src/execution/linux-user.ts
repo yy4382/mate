@@ -38,11 +38,7 @@ export function linuxScopeCommand(
   const scopePattern = new RegExp(
     `^mate-agent-${identity.uid}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`,
   );
-  if (
-    !Number.isSafeInteger(identity.uid) ||
-    identity.uid < 1 ||
-    !scopePattern.test(name)
-  )
+  if (!Number.isSafeInteger(identity.uid) || identity.uid < 1 || !scopePattern.test(name))
     throw new Error("Invalid Agent scope name");
   const path = `${identity.home}/.local/bin:${identity.home}/bin:/usr/local/bin:/usr/bin:/bin`;
   return {
@@ -52,7 +48,6 @@ export function linuxScopeCommand(
       "--quiet",
       "--collect",
       "--scope",
-      "--expand-environment=no",
       `--unit=${name}`,
       `--slice=mate-agent-${identity.uid}.slice`,
       `--working-directory=${cwd}`,

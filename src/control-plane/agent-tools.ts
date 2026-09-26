@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { AgentProcessOperation } from "../nodes/process-operations.js";
 
 const conversationId = z.string().uuid(),
   pageLimit = z.number().int().min(1).max(100).default(50),
@@ -47,6 +48,62 @@ export const agentConversationOperations = Object.freeze({
 });
 
 export type AgentConversationOperation = keyof typeof agentConversationOperations;
+
+const operationId = z.string().uuid();
+
+/** Ordinary commands and self-process controls run as the Agent's provisioned Linux user. */
+export const agentProcessToolOperations = Object.freeze({
+  "process.exec": {
+    description:
+      "在自己的 Linux 用户和 home 目录下运行普通 shell 命令。命令有固定时间与输出上限；需要继续运行的任务可用 process.list、process.inspect 和 process.stop 查看或停止。",
+    schema: z
+      .object({ command: z.string().min(1).max(16_000), cwd: z.string().max(4096).optional() })
+      .strict(),
+    seatPolicy: "deny" as const,
+  },
+  "process.list": {
+    description: "列出自己当前由 Mate 管理的命令进程。",
+    schema: z.object({}).strict(),
+    seatPolicy: "deny" as const,
+  },
+  "process.inspect": {
+    description: "查询一个由 process.exec 返回的操作 ID 当前是否仍在运行。",
+    schema: z.object({ targetOperationId: operationId }).strict(),
+    seatPolicy: "deny" as const,
+  },
+  "process.stop": {
+    description: "停止一个由 process.exec 返回的操作 ID 对应的进程及其子进程。",
+    schema: z.object({ targetOperationId: operationId }).strict(),
+    seatPolicy: "deny" as const,
+  },
+});
+
+export type AgentProcessToolOperation = keyof typeof agentProcessToolOperations;
+
+/** Validate one public tool call and map it to the narrower node process protocol. */
+export function toAgentProcessOperation(
+  name: string,
+  input: unknown,
+): AgentProcessOperation | undefined {
+  if (!Object.hasOwn(agentProcessToolOperations, name)) return undefined;
+  switch (name as AgentProcessToolOperation) {
+    case "process.exec": {
+      const args = agentProcessToolOperations["process.exec"].schema.parse(input);
+      return { kind: "exec", command: args.command, cwd: args.cwd ?? "." };
+    }
+    case "process.list":
+      agentProcessToolOperations["process.list"].schema.parse(input);
+      return { kind: "process.list" };
+    case "process.inspect": {
+      const args = agentProcessToolOperations["process.inspect"].schema.parse(input);
+      return { kind: "process.inspect", targetOperationId: args.targetOperationId };
+    }
+    case "process.stop": {
+      const args = agentProcessToolOperations["process.stop"].schema.parse(input);
+      return { kind: "process.stop", targetOperationId: args.targetOperationId };
+    }
+  }
+}
 
 export const agentToolSchemas = {
   "tools.list": z.object({}).strict(),

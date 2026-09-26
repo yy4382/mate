@@ -567,7 +567,7 @@ it("bounds node WebSocket connections and rejects malformed or oversized anonymo
 
     const oversizedSocket = observedWebSocket(anonymousUrl);
     await waitForSocketOpen(oversizedSocket);
-    oversizedSocket.send("x".repeat(17 * 1024));
+    oversizedSocket.send("x".repeat(1024 * 1024 + 1));
     expect((await waitForSocketClose(oversizedSocket)).code).toBe(1009);
     expect((await fetch(new URL("/api/status", origin))).status).toBe(200);
   } finally {
@@ -1111,7 +1111,7 @@ it("upgrades a revision 3 database through node and Agent schemas without losing
     expect(await nodes.json()).toEqual({ nodes: [] });
 
     const upgraded = new Database(databasePath, { readonly: true });
-    expect(upgraded.pragma("user_version", { simple: true })).toBe(12);
+    expect(upgraded.pragma("user_version", { simple: true })).toBe(13);
     expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE name='nodes'").get()).toEqual({
       name: "nodes",
     });

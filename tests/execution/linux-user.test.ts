@@ -25,13 +25,13 @@ it("places each Linux call in its Agent slice with groups cleared before the com
   );
   expect(call.command).toBe("/usr/bin/systemd-run");
   expect(call.unit).toBe("mate-agent-1001-12345678-1234-4234-8234-123456789abc.scope");
+  expect(call.args).not.toContain("--expand-environment=no");
   expect(call.args).toEqual(
     expect.arrayContaining([
       "--scope",
       "--collect",
       "--slice=mate-agent-1001.slice",
       "--working-directory=/srv/agents/alice",
-      "--expand-environment=no",
       "/usr/bin/setpriv",
       "--reuid=1001",
       "--regid=1001",

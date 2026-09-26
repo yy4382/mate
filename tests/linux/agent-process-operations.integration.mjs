@@ -118,7 +118,7 @@ try {
       command: `printf '%s\\n' "$(id -u)" "$(id -g)" "$(id -G)"; if [ "$(id -u)" -eq 0 ]; then exit 70; fi; if cat '${agentB.home}/MEMORY.md' >/dev/null 2>&1; then exit 71; fi; if cat '${cpSecretPath}' >/dev/null 2>&1; then exit 72; fi; printf isolated`,
     },
     identityReceipt = await operations.execute(agentAId, randomUUID(), identityOperation);
-  assert.equal(identityReceipt.state, "succeeded");
+  assert.equal(identityReceipt.state, "succeeded", JSON.stringify(identityReceipt));
   const identityOutput = identityReceipt.receipt.stdout.trim().split("\n");
   assert.deepEqual(identityOutput.slice(0, 3), [
     String(agentA.uid),
@@ -199,11 +199,31 @@ try {
   const output = await recovered.execute(agentAId, randomUUID(), {
     kind: "exec",
     cwd: ".",
-    command: "head -c 100000 /dev/zero | tr '\\000' x",
+    command:
+      "head -c 100000 /dev/zero | tr '\\000' '\\001'; printf '\\177'; head -c 100000 /dev/zero | tr '\\000' '\\002' >&2; printf '\\176' >&2",
   });
   assert.equal(output.state, "succeeded");
-  assert.equal(output.receipt.stdout.length, 65_536);
+  assert.equal(Buffer.byteLength(output.receipt.stdout, "utf8"), 65_536);
+  assert.equal(Buffer.byteLength(output.receipt.stderr, "utf8"), 65_536);
   assert.equal(output.receipt.truncated, true);
+  assert.ok(!output.receipt.stdout.includes("\u007f"));
+  assert.ok(!output.receipt.stderr.includes("\u007e"));
+  assert.deepEqual(recovered.status(agentAId, output.operationId), output);
+  const resultMessageBytes = Buffer.byteLength(
+    JSON.stringify({
+      type: "node.process.operation.result",
+      requestId: randomUUID(),
+      operationId: output.operationId,
+      agentId: agentAId,
+      state: output.state,
+      receipt: output.receipt,
+    }),
+    "utf8",
+  );
+  assert.ok(
+    resultMessageBytes < 1024 * 1024,
+    `serialized Node receipt grew to ${resultMessageBytes} bytes`,
+  );
 
   const timeoutDatabase = new Database(":memory:"),
     timeoutOperations = new AgentProcessOperations(
@@ -237,7 +257,8 @@ try {
       peerProcessSurvivedOtherAgentStop: true,
       scopePersistedAndStopped: true,
       duplicateOperationReplayedReceipt: true,
-      outputLimitBytes: output.receipt.stdout.length,
+      outputLimitBytes: Buffer.byteLength(output.receipt.stdout, "utf8"),
+      resultMessageBytes,
       commandDeadlineState: timedOut.state,
       resourceQuotaVerified: true,
     })}\n`,

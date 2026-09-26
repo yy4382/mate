@@ -3,9 +3,12 @@ import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import {
   agentConversationOperations,
+  agentProcessToolOperations,
   agentToolSchemas,
   type AgentConversationOperation,
+  toAgentProcessOperation,
 } from "./agent-tools.js";
+import type { AgentProcessOperation } from "../nodes/process-operations.js";
 
 export type ChannelVisibility = "public" | "private";
 export type OwnerPrincipalKind = "human" | "agent";
@@ -104,9 +107,15 @@ interface ActiveAgentToolRun {
   run_id: string;
   agent_id: string;
   node_id: string;
+  action_scope_id: string;
   session_id: string;
   state: string;
   independent_review: number;
+}
+
+export interface AuthorizedAgentProcessOperation {
+  actionScopeId: string;
+  operation: AgentProcessOperation;
 }
 
 class AgentToolRefusal extends Error {}
@@ -235,14 +244,19 @@ export class OwnerChat {
           if (operation === "tools.list") {
             agentToolSchemas["tools.list"].parse(input);
             return {
-              tools: Object.entries(agentConversationOperations)
+              tools: [
+                ...Object.entries(agentConversationOperations),
+                ...Object.entries(agentProcessToolOperations),
+              ]
                 .filter(([, entry]) => !reviewSeat || entry.seatPolicy !== "deny")
                 .map(([name, entry]) => ({ name, description: entry.description })),
             };
           }
           if (operation === "tools.describe") {
             const request = agentToolSchemas["tools.describe"].parse(input),
-              entry = agentConversationOperations[request.name as AgentConversationOperation];
+              entry =
+                agentConversationOperations[request.name as AgentConversationOperation] ??
+                agentProcessToolOperations[request.name as keyof typeof agentProcessToolOperations];
             if (!entry || (reviewSeat && entry.seatPolicy === "deny"))
               throw new AgentToolRefusal("Unknown operation");
             return {
@@ -268,6 +282,26 @@ export class OwnerChat {
       if (error instanceof z.ZodError) return { ok: false, error: "Invalid tool input" };
       return { ok: false, error: "Agent tool request was refused" };
     }
+  }
+
+  /** Verify the active delivery, node and process tool input before the process broker records it. */
+  authorizeAgentProcessOperation(
+    runId: string,
+    nodeId: string,
+    agentId: string,
+    name: string,
+    input: unknown,
+  ): AuthorizedAgentProcessOperation {
+    const operation = toAgentProcessOperation(name, input);
+    if (!operation) throw new Error("Unknown process operation");
+    return this.db
+      .transaction(() => {
+        const run = this.activeAgentToolRun(runId, nodeId, agentId),
+          entry = agentProcessToolOperations[name as keyof typeof agentProcessToolOperations];
+        if (!entry) throw new Error("Agent process operation was refused");
+        return { actionScopeId: run.action_scope_id, operation };
+      })
+      .immediate();
   }
 
   /** Create or return the one private owner conversation bound to this verified Agent. */
@@ -948,7 +982,8 @@ export class OwnerChat {
   private activeAgentToolRun(runId: string, nodeId: string, agentId: string): ActiveAgentToolRun {
     const run = this.db
       .prepare(
-        `SELECT r.id AS run_id,r.agent_id,r.node_id,r.state,r.independent_review,s.id AS session_id,
+        `SELECT r.id AS run_id,r.agent_id,r.node_id,r.delivery_id AS action_scope_id,
+                r.state,r.independent_review,s.id AS session_id,
                 a.node_id AS current_node_id
          FROM owner_agent_runs r
          JOIN owner_agents a ON a.id=r.agent_id

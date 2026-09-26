@@ -188,7 +188,7 @@ it("migrates paired-node control-plane data and enables Agent foreign keys", () 
 
   const auth = new OwnerAuth({ dataDir: directory });
   try {
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(12);
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(13);
     expect(auth.db.pragma("foreign_keys", { simple: true })).toBe(1);
     expect(auth.db.prepare("SELECT id FROM nodes").get()).toEqual({
       id: "c5342142-9cf5-4b22-86f3-bdc46bb471f2",
@@ -199,7 +199,7 @@ it("migrates paired-node control-plane data and enables Agent foreign keys", () 
       name: "owner_agents",
     });
     expect(controlPlaneMigrations.map((migration) => migration.fromRevision)).toEqual([
-      3, 4, 5, 6, 7, 8, 9, 10, 11,
+      3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
     ]);
   } finally {
     auth.close();
@@ -255,7 +255,7 @@ it("backfills committed conversation tool actions into recoverable journal histo
 
   const auth = new OwnerAuth({ dataDir: directory });
   try {
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(12);
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(13);
     expect(
       auth.db
         .prepare(
@@ -316,7 +316,7 @@ it("backfills pending channel deliveries into the shared session journal when up
 
   const auth = new OwnerAuth({ dataDir: directory });
   try {
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(12);
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(13);
     expect(
       auth.db
         .prepare(

@@ -1,6 +1,6 @@
-import Database from "better-sqlite3";
 import { chmodSync, lstatSync, mkdirSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
+import { openNodeProcessDatabase } from "../storage/initialize.js";
 import { createLinuxAgentProcessExecutor } from "./linux-process-executor.js";
 import { AgentProcessOperations } from "./process-operations.js";
 
@@ -31,11 +31,9 @@ export function openNodeProcessOperations(
     existed = false;
   }
 
-  const database = new Database(databasePath);
+  const database = openNodeProcessDatabase(databasePath);
   try {
     if (!existed) chmodSync(databasePath, 0o600);
-    database.pragma("journal_mode = DELETE");
-    database.pragma("synchronous = FULL");
     const operations = new AgentProcessOperations(
       database,
       createLinuxAgentProcessExecutor(agentHomeRoot),

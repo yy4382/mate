@@ -3,6 +3,12 @@ import type Database from "better-sqlite3";
 import type { ModelCredentialDirectory } from "./model-credentials.js";
 import type { AgentRunContextPage, OwnerChat } from "./owner-chat.js";
 import { NodeDirectory, type NodeAgentRunStart } from "./nodes/directory.js";
+import {
+  AgentProcessOperationBroker,
+  deriveAgentProcessOperationId,
+} from "./agent-process-operations.js";
+import { agentProcessToolOperations, agentToolSchemas } from "./agent-tools.js";
+import { z } from "zod";
 
 const schedulerIntervalMs = 250;
 const retryDelayMs = 1500;
@@ -28,6 +34,7 @@ export class AgentRunCoordinator {
   private draining = false;
   private closed = false;
   private readonly now: () => number;
+  readonly processOperations: AgentProcessOperationBroker;
 
   constructor(
     private readonly db: Database.Database,
@@ -37,6 +44,7 @@ export class AgentRunCoordinator {
     now: () => number = Date.now,
   ) {
     this.now = now;
+    this.processOperations = new AgentProcessOperationBroker(db, nodes, now);
     this.recoverInterruptedRuns();
     nodes.setAgentRunHandlers({
       context: (runId, agentId, cursor, limit) =>
@@ -44,12 +52,57 @@ export class AgentRunCoordinator {
       journal: (runId, nodeId, agentId, requestId, text, replayOnly) =>
         chat.commitAgentReply(runId, nodeId, agentId, requestId, text, replayOnly),
       tool: (runId, nodeId, agentId, toolCallId, operation, input) =>
-        chat.executeAgentTool(runId, nodeId, agentId, toolCallId, operation, input),
+        this.executeAgentTool(runId, nodeId, agentId, toolCallId, operation, input),
       result: (runId, agentId, ok, code) => this.finishRun(runId, agentId, ok, code),
     });
     this.timer = setInterval(() => this.wake(), schedulerIntervalMs);
     this.timer.unref?.();
     this.wake();
+  }
+
+  private async executeAgentTool(
+    runId: string,
+    nodeId: string,
+    agentId: string,
+    toolCallId: string,
+    operation: string,
+    input: Record<string, unknown>,
+  ): Promise<{ ok: true; result: unknown } | { ok: false; error: string }> {
+    if (operation !== "tools.call")
+      return this.chat.executeAgentTool(runId, nodeId, agentId, toolCallId, operation, input);
+    const request = agentToolSchemas["tools.call"].safeParse(input);
+    if (!request.success || !Object.hasOwn(agentProcessToolOperations, request.data.name))
+      return this.chat.executeAgentTool(runId, nodeId, agentId, toolCallId, operation, input);
+
+    try {
+      const authorized = this.chat.authorizeAgentProcessOperation(
+          runId,
+          nodeId,
+          agentId,
+          request.data.name,
+          request.data.input,
+        ),
+        operationId = deriveAgentProcessOperationId(agentId, toolCallId),
+        result = await this.processOperations.execute({
+          runId,
+          nodeId,
+          agentId,
+          actionScopeId: authorized.actionScopeId,
+          stableActionId: toolCallId,
+          operationId,
+          operation: authorized.operation,
+        });
+      return {
+        ok: true,
+        result: { operationId: result.operationId, state: result.state, receipt: result.receipt },
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        error:
+          error instanceof z.ZodError ? "Invalid tool input" : "Agent tool request was refused",
+      };
+    }
   }
 
   close(): void {
