@@ -3,7 +3,7 @@ import Database from "better-sqlite3";
 import { createHash, generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createControlPlaneApp } from "../../src/control-plane/http.js";
 import { WorkspaceService } from "../../src/control-plane/workspace.js";
 import type { NodeSocket } from "../../src/control-plane/nodes/directory.js";
@@ -2255,7 +2255,83 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
     operationId: heldRequest!.operationId,
   });
 
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.agent.run.result",
+      requestId: randomUUID(),
+      runId: run.runId,
+      agentId,
+      ok: true,
+    }),
+  );
+  const compactStart = socket.sent.length;
+  app.chat.createMessage(channel.id, "Summarize the uncertain file operation.");
+  const compactRun = await waitForRun(socket, compactStart);
+  const compactActionId = `mate:${compactRun.actionScopeId}:${"c".repeat(64)}:1`;
+  expect(
+    await callAgentTool(app, socket, compactRun, compactActionId, "tools.call", {
+      name: "session.compact",
+      input: { summary: "A file action has an unknown result.", snapshot: {} },
+    }),
+  ).toMatchObject({ ok: true });
+  const unknownJournal = db
+    .prepare("SELECT seq FROM owner_agent_session_journal WHERE session_id=? AND tool_action_id=?")
+    .get(run.sessionId, delayedActionId) as { seq: number };
+  const snapshot = db
+    .prepare(
+      "SELECT through_seq FROM owner_agent_session_snapshots WHERE agent_id=? ORDER BY rowid DESC LIMIT 1",
+    )
+    .get(agentId) as { through_seq: number };
+  expect(snapshot.through_seq).toBeGreaterThanOrEqual(unknownJournal.seq);
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.agent.run.result",
+      requestId: randomUUID(),
+      runId: compactRun.runId,
+      agentId,
+      ok: true,
+    }),
+  );
+
   const lateReceipt = nodeReceipts.get(String(heldRequest!.operationId))!;
+  const correctedStart = socket.sent.length;
+  const unavailableNotification = vi
+    .spyOn(app.chat, "notifyAgentReceiptCorrection")
+    .mockImplementation(() => {
+      throw new Error("crash before notification commit");
+    });
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.workspace.operation.result",
+      requestId: heldRequest!.requestId,
+      operationId: heldRequest!.operationId,
+      agentId,
+      ok: true,
+      result: lateReceipt,
+    }),
+  );
+  expect(
+    JSON.parse(
+      (
+        db
+          .prepare(
+            "SELECT result_json FROM owner_agent_tool_actions WHERE session_id=? AND action_id=?",
+          )
+          .get(run.sessionId, delayedActionId) as { result_json: string }
+      ).result_json,
+    ).state,
+  ).toBe("unknown");
+  expect(
+    db
+      .prepare(
+        "SELECT COUNT(*) AS count FROM owner_agent_activity WHERE reference_id=? AND kind='receipt.corrected'",
+      )
+      .get(heldRequest!.operationId),
+  ).toEqual({ count: 0 });
+  unavailableNotification.mockRestore();
   await app.nodes.receive(
     socket,
     JSON.stringify({
@@ -2275,6 +2351,24 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
     operationId: heldRequest!.operationId,
     result: { sha256: "receipt-2" },
   });
+  const correctedRun = await waitForRun(socket, correctedStart);
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.agent.run.context",
+      requestId: randomUUID(),
+      runId: correctedRun.runId,
+      agentId,
+      cursor: 0,
+      limit: 100,
+    }),
+  );
+  const correctedContext = JSON.parse(socket.sent.at(-1)!) as { messages: Array<{ text: string }> };
+  expect(
+    correctedContext.messages.some(
+      (message) => message.text.includes("workspace.write") && message.text.includes("receipt-2"),
+    ),
+  ).toBe(true);
   const correctedActivity = db
     .prepare(
       "SELECT COUNT(*) AS count FROM owner_agent_activity WHERE reference_id=? AND kind='receipt.corrected'",
@@ -2299,10 +2393,53 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
       )
       .get(heldRequest!.operationId),
   ).toEqual({ count: 1 });
-  expect(
-    await callAgentTool(app, socket, run, delayedActionId, "tools.call", delayedInput),
-  ).toMatchObject({ ok: true, result: { sha256: "receipt-2" } });
   expect(requests).toHaveLength(2);
+
+  const failedInput = { name: "workspace.write", input: { path: "denied.txt", content: "try" } },
+    failedActionId = stableToolActionId(correctedRun.actionScopeId, failedInput);
+  expectedActionId = failedActionId;
+  holdNextResponse = true;
+  expect(
+    await callAgentTool(app, socket, correctedRun, failedActionId, "tools.call", failedInput),
+  ).toMatchObject({ ok: false, error: expect.stringContaining("尚未确认") });
+  const failedRequest = heldRequest!;
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.workspace.operation.result",
+      requestId: failedRequest.requestId,
+      operationId: failedRequest.operationId,
+      agentId,
+      ok: true,
+      result: {
+        code: 7,
+        stdout: "",
+        stderr: "permission_denied: file is protected",
+        truncated: false,
+      },
+    }),
+  );
+  const failedAction = db
+    .prepare("SELECT result_json FROM owner_agent_tool_actions WHERE session_id=? AND action_id=?")
+    .get(run.sessionId, failedActionId) as { result_json: string };
+  expect(JSON.parse(failedAction.result_json)).toMatchObject({
+    state: "failed",
+    result: { code: 7 },
+  });
+  expect(
+    db
+      .prepare(
+        "SELECT summary FROM owner_agent_activity WHERE kind='receipt.corrected' AND reference_id=?",
+      )
+      .get(failedRequest.operationId),
+  ).toMatchObject({ summary: expect.stringContaining("失败") });
+  expect(
+    db
+      .prepare(
+        "SELECT text FROM owner_agent_session_journal WHERE tool_action_id=? ORDER BY seq DESC LIMIT 1",
+      )
+      .get(failedActionId),
+  ).toMatchObject({ text: expect.stringContaining('"state":"failed"') });
 
   db.prepare(
     `UPDATE owner_channel_memberships SET active=0
@@ -2310,7 +2447,7 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
   ).run(channel.id, agentId);
   const denied = await callAgentTool(app, socket, run, firstActionId, "tools.call", firstInput);
   expect(denied).toMatchObject({ ok: false });
-  expect(requests).toHaveLength(2);
+  expect(requests).toHaveLength(3);
 });
 
 it("publishes Agent workspace files to a joined conversation in bounded chunks and rechecks ACL before replay", async () => {

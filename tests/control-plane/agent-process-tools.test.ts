@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { createControlPlaneApp } from "../../src/control-plane/http.js";
+import { deriveAgentProcessOperationId } from "../../src/control-plane/agent-process-operations.js";
 import type { NodeSocket } from "../../src/control-plane/nodes/directory.js";
 import type { NodeControlMessage } from "../../src/nodes/protocol.js";
 
@@ -113,6 +114,182 @@ async function sendTool(
     }),
   );
 }
+
+it("marks a committed process intent unknown before a recovered node can start another run", async () => {
+  const { app, cookie, db, nodeId, socket, keyPair } = await setup();
+  const agentId = randomUUID();
+  app.agents.prepare({
+    id: agentId,
+    nodeId,
+    name: "Missing receipt",
+    role: "Process recovery",
+    description: "Committed intent without dispatch",
+    model: { provider: "openai", id: "gpt-4.1" },
+  });
+  app.agents.complete(
+    agentId,
+    {
+      username: `mate_${agentId.replaceAll("-", "").slice(0, 27)}`,
+      uid: 23003,
+      gid: 23003,
+      home: `/var/lib/mate/agents/${agentId}`,
+    },
+    app.chat,
+  );
+  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  await app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-key" }),
+  });
+  const start = socket.sent.length;
+  app.chat.createMessage(direct.id, "Run a command once.");
+  const run = await waitForRun(socket, start);
+  const actionId = `mate:${run.actionScopeId}:${"f".repeat(64)}:1`,
+    operationId = deriveAgentProcessOperationId(agentId, actionId),
+    at = Date.now();
+  db.prepare(
+    `INSERT INTO owner_agent_process_operations(
+    operation_id,run_id,agent_id,node_id,action_scope_id,stable_action_id,
+    request_hash,request_json,state,created_at,updated_at
+  ) VALUES(?,?,?,?,?,?,?,?,'executing',?,?)`,
+  ).run(
+    operationId,
+    run.runId,
+    agentId,
+    nodeId,
+    run.actionScopeId,
+    actionId,
+    "f".repeat(64),
+    JSON.stringify({ operation: { kind: "exec", command: "true" } }),
+    at,
+    at,
+  );
+  app.runs?.close(); // The original control-plane process crashed before dispatch.
+  const directory = fixtures.at(-1)!.directory;
+  const restarted = createControlPlaneApp({
+    dataDir: join(directory, "control-plane"),
+    passwordFile: join(directory, "owner-password"),
+  });
+  try {
+    const recovered = new FakeNodeSocket();
+    restarted.nodes.open(recovered);
+    const challenge = JSON.parse(recovered.sent[0]!) as { nonce: string };
+    await restarted.nodes.receive(
+      recovered,
+      JSON.stringify({
+        type: "node.authenticate",
+        requestId: randomUUID(),
+        nodeId,
+        signature: sign(null, Buffer.from(challenge.nonce), keyPair.privateKey).toString(
+          "base64url",
+        ),
+      }),
+    );
+    const reconcile = recovered.sent
+      .map((text) => JSON.parse(text) as Record<string, unknown>)
+      .find((message) => message.type === "control.process.reconcile")!;
+    expect(reconcile).toMatchObject({ operations: [{ operationId, agentId }] });
+    expect(recovered.sent.some((text) => text.includes('"type":"control.agent.run"'))).toBe(false);
+    await restarted.nodes.receive(
+      recovered,
+      JSON.stringify({
+        type: "node.process.reconcile.result",
+        requestId: reconcile.requestId,
+        receipts: [],
+      }),
+    );
+    expect(
+      db
+        .prepare("SELECT state FROM owner_agent_process_operations WHERE operation_id=?")
+        .get(operationId),
+    ).toEqual({ state: "unknown" });
+    expect(
+      db
+        .prepare("SELECT text FROM owner_agent_session_journal WHERE process_operation_id=?")
+        .get(operationId),
+    ).toMatchObject({ text: expect.stringContaining("unknown") });
+    expect(db.prepare("SELECT error_code FROM owner_agent_runs WHERE id=?").get(run.runId)).toEqual(
+      { error_code: "interrupted" },
+    );
+    expect(
+      db
+        .prepare(
+          "SELECT COUNT(*) AS count FROM owner_agent_activity WHERE kind='run.interrupted' AND reference_id=?",
+        )
+        .get(run.runId),
+    ).toEqual({ count: 1 });
+    const next = await waitForRun(recovered, 0);
+    expect(next.runId).not.toBe(run.runId);
+  } finally {
+    restarted.close();
+  }
+});
+
+it("projects the last committed snapshot when two compactions share one clock tick", async () => {
+  const { app, cookie, db, nodeId, socket } = await setup();
+  const agentId = randomUUID();
+  app.agents.prepare({
+    id: agentId,
+    nodeId,
+    name: "Snapshot order",
+    role: "Context",
+    description: "Equal timestamp fixture",
+    model: { provider: "openai", id: "gpt-4.1" },
+  });
+  app.agents.complete(
+    agentId,
+    {
+      username: `mate_${agentId.replaceAll("-", "").slice(0, 27)}`,
+      uid: 23003,
+      gid: 23003,
+      home: `/var/lib/mate/agents/${agentId}`,
+    },
+    app.chat,
+  );
+  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  await app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-key" }),
+  });
+  const start = socket.sent.length;
+  app.chat.createMessage(direct.id, "Current input.");
+  const run = await waitForRun(socket, start);
+  const insert = db.prepare(`INSERT INTO owner_agent_session_snapshots(
+    id,agent_id,action_id,request_hash,through_seq,model_session_id,summary,snapshot_json,created_at
+  ) VALUES(?,?,?,?,0,?,?,'{}',1234)`);
+  insert.run(
+    "ffffffff-ffff-4fff-8fff-ffffffffffff",
+    agentId,
+    "old",
+    "a".repeat(64),
+    randomUUID(),
+    "Older summary",
+  );
+  insert.run(
+    "00000000-0000-4000-8000-000000000000",
+    agentId,
+    "new",
+    "b".repeat(64),
+    randomUUID(),
+    "Newer summary",
+  );
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.agent.run.context",
+      requestId: randomUUID(),
+      runId: run.runId,
+      agentId,
+      cursor: 0,
+      limit: 100,
+    }),
+  );
+  const context = JSON.parse(socket.sent.at(-1)!) as { messages: Array<{ text: string }> };
+  expect(context.messages.some((message) => message.text.includes("Newer summary"))).toBe(true);
+  expect(context.messages.some((message) => message.text.includes("Older summary"))).toBe(false);
+});
 
 it("dispatches ordinary commands from a durable intent without privileged approval", async () => {
   const { app, cookie, db, nodeId, socket } = await setup();
@@ -511,8 +688,17 @@ it("commits a compaction snapshot and replacement session before ACK and recover
       ok: true,
     }),
   );
+  app.runs?.pauseAgent(agentId);
+  const otherRoom = app.chat.createChannel({
+    name: "Later source",
+    description: "Delayed delivery",
+    visibility: "public",
+  });
+  expect(app.chat.inviteAgentToChannel(otherRoom.id, agentId)).toBe(true);
   start = socket.sent.length;
   app.chat.createMessage(direct.id, "Current pending input.");
+  app.chat.createMessage(otherRoom.id, "Later source must survive compaction.");
+  app.runs?.resumeAgent(agentId);
   const second = await waitForRun(socket, start);
   const actionId = `mate:${second.actionScopeId}:${"d".repeat(64)}:1`;
   const input = {
@@ -577,6 +763,47 @@ it("commits a compaction snapshot and replacement session before ACK and recover
   ).toBe(true);
   expect(page.messages.map((message) => message.text)).toContain("Current pending input.");
   expect(page.messages.map((message) => message.text)).not.toContain("Earlier handled context.");
+  const afterCurrentStart = reconnect.sent.length;
+  await app.nodes.receive(
+    reconnect,
+    JSON.stringify({
+      type: "node.agent.run.result",
+      requestId: randomUUID(),
+      runId: resumed.runId,
+      agentId,
+      ok: true,
+    }),
+  );
+  const later = await waitForRun(reconnect, afterCurrentStart);
+  expect(later.channelId).toBe(otherRoom.id);
+  const afterLaterStart = reconnect.sent.length;
+  await app.nodes.receive(
+    reconnect,
+    JSON.stringify({
+      type: "node.agent.run.result",
+      requestId: randomUUID(),
+      runId: later.runId,
+      agentId,
+      ok: true,
+    }),
+  );
+  app.chat.createMessage(direct.id, "Check later source history.");
+  const finalRun = await waitForRun(reconnect, afterLaterStart);
+  await app.nodes.receive(
+    reconnect,
+    JSON.stringify({
+      type: "node.agent.run.context",
+      requestId: randomUUID(),
+      runId: finalRun.runId,
+      agentId,
+      cursor: 0,
+      limit: 100,
+    }),
+  );
+  const finalContext = JSON.parse(reconnect.sent.at(-1)!) as { messages: Array<{ text: string }> };
+  expect(finalContext.messages.map((message) => message.text)).toContain(
+    "Later source must survive compaction.",
+  );
 });
 
 it("pauses for credential failures and owner choice while transient model failures back off", async () => {

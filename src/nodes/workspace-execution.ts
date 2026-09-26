@@ -34,7 +34,7 @@ interface StoredReceipt {
   operationId: string;
   agentId: string;
   requestHash: string;
-  state: "executing" | "succeeded" | "unknown";
+  state: "executing" | "succeeded" | "failed" | "unknown";
   result?: ExecutionResult;
   updatedAt: number;
 }
@@ -121,7 +121,11 @@ export class LinuxWorkspaceExecutor {
     if (existing) {
       if (existing.agentId !== request.agentId || existing.requestHash !== requestHash)
         return failed("operation_conflict: Operation ID was reused for another file request");
-      if (existing.state === "succeeded" || existing.state === "unknown")
+      if (
+        existing.state === "succeeded" ||
+        existing.state === "failed" ||
+        existing.state === "unknown"
+      )
         return (
           existing.result ?? failed("operation_unknown: The file operation result is unavailable")
         );
@@ -177,7 +181,12 @@ export class LinuxWorkspaceExecutor {
         operationId: request.operationId,
         agentId: request.agentId,
         requestHash,
-        state: result.code === 0 ? "succeeded" : "unknown",
+        state:
+          result.code === 0
+            ? "succeeded"
+            : result.stderr.startsWith("operation_unknown:")
+              ? "unknown"
+              : "failed",
         result,
         updatedAt: this.now(),
       });

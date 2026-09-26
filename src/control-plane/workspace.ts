@@ -788,7 +788,8 @@ export class WorkspaceService {
       if (existing.request_hash !== requestHash)
         throw new WorkspaceError("operation_conflict", "操作 ID 已用于不同的文件请求。", 409);
       const envelope = parseEnvelope(existing.result_json);
-      if (envelope.state === "succeeded") return { kind: "done", result: envelope.result };
+      if (envelope.state === "succeeded" || envelope.state === "failed")
+        return { kind: "done", result: envelope.result };
       if (envelope.operationId && envelope.operationId !== operationId)
         throw new WorkspaceError("operation_unknown", "文件操作结果尚未确认。", 409);
       if (envelope.state === "executing")
@@ -837,7 +838,7 @@ export class WorkspaceService {
     agentId: string,
     requestHash: string,
     envelope: {
-      state: "unknown" | "succeeded";
+      state: "unknown" | "succeeded" | "failed";
       operationId: string;
       runId: string;
       channelId: string;
@@ -855,7 +856,7 @@ export class WorkspaceService {
           .get(sessionId, actionId, agentId, requestHash) as { result_json: string } | undefined;
         if (!existing) return;
         const prior = parseEnvelope(existing.result_json);
-        if (prior.state === "succeeded" && envelope.state !== "succeeded") return;
+        if (prior.state === "succeeded" || prior.state === "failed") return;
         this.db
           .prepare(
             `UPDATE owner_agent_tool_actions SET result_json=?
@@ -868,19 +869,27 @@ export class WorkspaceService {
             agentId,
             requestHash,
           );
-        this.recordActionJournal(sessionId, agentId, actionId, envelope);
+        this.recordActionJournal(
+          sessionId,
+          agentId,
+          actionId,
+          envelope,
+          prior.state === "unknown" && envelope.state !== "unknown",
+        );
         if (prior.state !== envelope.state)
           recordAgentActivity(this.db, {
             agentId,
             kind:
-              prior.state === "unknown" && envelope.state === "succeeded"
+              prior.state === "unknown" && envelope.state !== "unknown"
                 ? "receipt.corrected"
                 : "operation.finished",
             referenceId: envelope.operationId,
             summary:
               envelope.state === "succeeded"
                 ? "文件操作收据已确认成功。"
-                : "文件操作结果尚未确认。",
+                : envelope.state === "failed"
+                  ? "文件操作收据已确认失败。"
+                  : "文件操作结果尚未确认。",
             detail: {
               operation: envelope.operation,
               result: envelope.result,
@@ -888,6 +897,8 @@ export class WorkspaceService {
             },
             at: Date.now(),
           });
+        if (prior.state === "unknown" && envelope.state !== "unknown")
+          this.chat.notifyAgentReceiptCorrection(agentId, envelope.operationId, envelope.state);
       })
       .immediate();
   }
@@ -981,7 +992,7 @@ export class WorkspaceService {
     }
     if (identity.nodeId !== nodeId || identity.agentId !== result.agentId) return;
     let envelope: {
-      state: "unknown" | "succeeded";
+      state: "unknown" | "succeeded" | "failed";
       operationId: string;
       runId: string;
       channelId: string;
@@ -1000,12 +1011,13 @@ export class WorkspaceService {
       };
     } else if (result.result.code !== 0) {
       envelope = {
-        state: "unknown",
+        state: result.result.stderr.startsWith("operation_unknown:") ? "unknown" : "failed",
         operationId: result.operationId,
         runId: identity.runId,
         channelId: identity.channelId,
         operation: identity.operation,
-        error: result.result.stderr || "File operation result is unknown",
+        result: { code: result.result.code, stderr: result.result.stderr },
+        error: result.result.stderr || "File operation failed",
       };
     } else {
       try {
@@ -1033,13 +1045,6 @@ export class WorkspaceService {
         "SELECT request_hash FROM owner_agent_tool_actions WHERE session_id=? AND action_id=?",
       )
       .get(identity.sessionId, identity.actionId) as { request_hash: string } | undefined;
-    const previous = row
-      ? (this.db
-          .prepare(
-            "SELECT result_json FROM owner_agent_tool_actions WHERE session_id=? AND action_id=?",
-          )
-          .get(identity.sessionId, identity.actionId) as { result_json: string } | undefined)
-      : undefined;
     if (row)
       this.completeToolAction(
         identity.sessionId,
@@ -1048,13 +1053,6 @@ export class WorkspaceService {
         row.request_hash,
         envelope,
       );
-    if (
-      row &&
-      previous &&
-      parseEnvelope(previous.result_json).state === "unknown" &&
-      envelope.state === "succeeded"
-    )
-      this.chat.notifyAgentReceiptCorrection(identity.agentId, result.operationId, "succeeded");
     this.clearActionOperation(result.operationId);
   }
 
@@ -1066,23 +1064,38 @@ export class WorkspaceService {
       runId: string;
       channelId: string;
       operation: string;
-      state: "unknown" | "succeeded";
+      state: "unknown" | "succeeded" | "failed";
       result?: unknown;
       error?: string;
     },
+    correction = false,
   ): void {
     const result =
         envelope.state === "unknown"
           ? { state: "unknown", error: envelope.error ?? "没有已确认的文件操作收据" }
-          : envelope.result,
+          : envelope.state === "failed"
+            ? { state: "failed", result: envelope.result, error: envelope.error }
+            : envelope.result,
       contextResult =
         typeof result === "object" && result !== null
           ? (result as Record<string, unknown>)
           : result;
-    const text = `Mate 工具结果：${envelope.operation} ${JSON.stringify(contextResult)}`.slice(
-      0,
-      20_000,
-    );
+    const text =
+      `${correction ? "Mate 收据更正" : "Mate 工具结果"}：${envelope.operation} ${JSON.stringify(contextResult)}`.slice(
+        0,
+        20_000,
+      );
+    if (correction) {
+      // A snapshot can already cover the original unknown row. Append a new fact after it.
+      this.db
+        .prepare(
+          `INSERT INTO owner_agent_session_journal(
+           session_id,agent_id,channel_id,run_id,tool_action_id,role,text,created_at
+         ) VALUES(?,?,?,?,?,'assistant',?,?)`,
+        )
+        .run(sessionId, agentId, envelope.channelId, envelope.runId, actionId, text, Date.now());
+      return;
+    }
     const updated = this.db
       .prepare(
         `UPDATE owner_agent_session_journal SET text=?

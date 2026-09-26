@@ -39,7 +39,12 @@ interface SocketSession {
   lastHeartbeatAt: number;
   nodeId?: string;
   ready?: boolean;
-  reconcile?: { requestId: string; operationIds: Set<string>; cursor: string; blocking: boolean };
+  reconcile?: {
+    requestId: string;
+    operations: Map<string, string>;
+    cursor: string;
+    blocking: boolean;
+  };
   workspaceReconcile?: {
     requestId: string;
     operations: Map<string, string>;
@@ -795,7 +800,7 @@ export class NodeDirectory {
     const requestId = randomUUID();
     session.reconcile = {
       requestId,
-      operationIds: new Set(rows.map((row) => row.operation_id)),
+      operations: new Map(rows.map((row) => [row.operation_id, row.agent_id])),
       cursor: rows.at(-1)!.operation_id,
       blocking,
     };
@@ -819,15 +824,31 @@ export class NodeDirectory {
       pending.requestId !== request.requestId
     )
       return this.reject(socket, request.requestId, "invalid_identity", "节点操作对账请求不匹配。");
+    const seen = new Set<string>();
     for (const receipt of request.receipts) {
-      if (!pending.operationIds.has(receipt.operationId))
+      if (
+        pending.operations.get(receipt.operationId) !== receipt.agentId ||
+        seen.has(receipt.operationId)
+      )
         return this.reject(
           socket,
           request.requestId,
           "invalid_identity",
           "节点操作收据不属于本次对账。",
         );
+      seen.add(receipt.operationId);
+    }
+    for (const receipt of request.receipts) {
       this.processReceiptHandler?.(session.nodeId, receipt);
+    }
+    for (const [operationId, agentId] of pending.operations) {
+      if (seen.has(operationId)) continue;
+      this.processReceiptHandler?.(session.nodeId, {
+        operationId,
+        agentId,
+        state: "unknown",
+        receipt: { reason: "no_durable_node_receipt" },
+      });
     }
     delete session.reconcile;
     this.startReconciliation(socket, session, pending.cursor, pending.blocking);

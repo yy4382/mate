@@ -54,20 +54,13 @@ export class AgentRunCoordinator {
     this.recoverInterruptedRuns();
     nodes.setProcessReceiptHandler(
       (nodeId, receipt) => {
-        const outcome = this.processOperations.reconcile(nodeId, receipt);
-        if (
-          outcome.corrected &&
-          outcome.result &&
-          outcome.result.state !== "unknown" &&
-          outcome.result.state !== "executing"
-        ) {
-          this.chat.notifyAgentReceiptCorrection(
-            receipt.agentId,
-            receipt.operationId,
-            outcome.result.state,
-          );
-          this.wake();
-        }
+        const outcome = this.processOperations.reconcile(
+          nodeId,
+          receipt,
+          (agentId, operationId, state) =>
+            this.chat.notifyAgentReceiptCorrection(agentId, operationId, state),
+        );
+        if (outcome.corrected) this.wake();
       },
       () => this.wake(),
     );
@@ -158,7 +151,7 @@ export class AgentRunCoordinator {
       .transaction(() => {
         const run = this.db
           .prepare(
-            `SELECT r.delivery_id,r.context_history_end_seq,r.independent_review,s.id AS logical_session_id
+            `SELECT r.delivery_id,r.context_history_end_seq,r.input_end_seq,r.independent_review,s.id AS logical_session_id
          FROM owner_agent_runs r JOIN owner_agent_sessions s ON s.agent_id=r.agent_id
          WHERE r.id=? AND r.node_id=? AND r.agent_id=? AND r.state='running'`,
           )
@@ -166,6 +159,7 @@ export class AgentRunCoordinator {
           | {
               delivery_id: string;
               context_history_end_seq: number;
+              input_end_seq: number;
               independent_review: number;
               logical_session_id: string;
             }
@@ -194,7 +188,10 @@ export class AgentRunCoordinator {
             throughSequence: old.through_seq,
           };
         }
-        const modelSessionId = randomUUID(),
+        // A later source can already be journaled but still be pending and unseen by this run.
+        // Keep it beyond the snapshot boundary so delivery can later become visible history.
+        const throughSequence = Math.min(run.context_history_end_seq, run.input_end_seq),
+          modelSessionId = randomUUID(),
           at = this.now();
         this.db
           .prepare(
@@ -207,7 +204,7 @@ export class AgentRunCoordinator {
             agentId,
             actionId,
             requestHash,
-            run.context_history_end_seq,
+            throughSequence,
             modelSessionId,
             summary,
             snapshotJson,
@@ -222,14 +219,14 @@ export class AgentRunCoordinator {
           kind: "session.compacted",
           referenceId: modelSessionId,
           summary: "会话摘要和快照已由控制面确认；下一次运行使用新模型会话。",
-          detail: { summary, snapshot, throughSequence: run.context_history_end_seq },
+          detail: { summary, snapshot, throughSequence },
           at,
         });
         return {
           committed: true,
           effective: "next_run",
           sessionId: modelSessionId,
-          throughSequence: run.context_history_end_seq,
+          throughSequence,
         };
       })
       .immediate();
@@ -608,10 +605,25 @@ export class AgentRunCoordinator {
 
   private recoverInterruptedRuns(): void {
     this.db
-      .prepare(
-        "UPDATE owner_agent_runs SET state='failed',error_code='interrupted',retry_at=?,completed_at=? WHERE state='running'",
-      )
-      .run(this.now(), this.now());
+      .transaction(() => {
+        const at = this.now();
+        const interrupted = this.db
+          .prepare(
+            `UPDATE owner_agent_runs SET state='failed',error_code='interrupted',retry_at=?,completed_at=?
+           WHERE state='running' RETURNING id,agent_id,node_id`,
+          )
+          .all(at, at) as Array<{ id: string; agent_id: string; node_id: string }>;
+        for (const run of interrupted)
+          recordAgentActivity(this.db, {
+            agentId: run.agent_id,
+            nodeId: run.node_id,
+            kind: "run.interrupted",
+            referenceId: run.id,
+            summary: "控制面重启中断了运行；待处理消息仍在队列中。",
+            at,
+          });
+      })
+      .immediate();
   }
 }
 

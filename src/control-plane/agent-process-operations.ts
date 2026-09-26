@@ -164,6 +164,7 @@ export class AgentProcessOperationBroker {
   reconcile(
     nodeId: string,
     result: AgentProcessNodeResult,
+    onCorrection?: (agentId: string, operationId: string, state: "succeeded" | "failed") => void,
   ): { corrected: boolean; result?: AgentProcessOperationResult } {
     const row = this.read(uuidSchema.parse(result.operationId));
     if (
@@ -205,6 +206,8 @@ export class AgentProcessOperationBroker {
           detail: { state: result.state, receipt: result.receipt },
           at: this.now(),
         });
+        if (row.state === "unknown" && result.state !== "unknown")
+          onCorrection?.(row.agent_id, row.operation_id, result.state);
       })
       .immediate();
     return {

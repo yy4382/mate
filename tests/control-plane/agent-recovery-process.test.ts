@@ -503,3 +503,138 @@ it("classifies Pi HTTP response failures as credential pause or temporary backof
     rmSync(directory, { recursive: true, force: true });
   }
 }, 30000);
+
+it("replays one committed journal after the control plane crashes before its ACK reaches the node", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "mate-journal-commit-crash-"));
+  chmodSync(directory, 0o700);
+  writeFileSync(join(directory, "password"), `${password}\n`, { mode: 0o600 });
+  let control: Child | undefined,
+    node: Child | undefined,
+    origin = "";
+  let heldJournal: string | undefined,
+    ackDropped = false,
+    replayAccepted = false;
+  const proxyHttp = createServer(),
+    proxyWs = new WebSocketServer({ noServer: true });
+  const sockets = new Set<WebSocket>();
+  proxyHttp.on("upgrade", (request, network, head) => {
+    proxyWs.handleUpgrade(request, network, head, (downstream) => {
+      const upstream = new WebSocket(origin.replace(/^http/, "ws") + "/api/nodes/connect");
+      sockets.add(downstream);
+      sockets.add(upstream);
+      downstream.on("message", (data, binary) => {
+        const message = JSON.parse(data.toString()) as { type?: string };
+        if (message.type === "node.agent.run.journal" && !heldJournal)
+          heldJournal = data.toString();
+        if (upstream.readyState === WebSocket.OPEN) upstream.send(data, { binary });
+      });
+      upstream.on("message", (data, binary) => {
+        const message = JSON.parse(data.toString()) as { type?: string; accepted?: boolean };
+        if (message.type === "control.agent.run.journal_ack" && message.accepted && !ackDropped) {
+          ackDropped = true;
+          control?.process.kill("SIGKILL");
+          downstream.terminate();
+          upstream.terminate();
+          return;
+        }
+        if (message.type === "control.authenticated" && ackDropped && heldJournal)
+          upstream.send(heldJournal);
+        if (message.type === "control.agent.run.journal_ack" && message.accepted && ackDropped)
+          replayAccepted = true;
+        if (downstream.readyState === WebSocket.OPEN) downstream.send(data, { binary });
+      });
+      downstream.on("close", () => {
+        sockets.delete(downstream);
+        upstream.terminate();
+      });
+      upstream.on("close", () => {
+        sockets.delete(upstream);
+        downstream.terminate();
+      });
+      upstream.on("error", () => upstream.terminate());
+    });
+  });
+  await new Promise<void>((done) => proxyHttp.listen(0, "127.0.0.1", () => done()));
+  const proxyPort = (proxyHttp.address() as { port: number }).port;
+  try {
+    control = startControl(directory);
+    origin = `http://127.0.0.1:${(await control.line(/MATE_CONTROL_PLANE_LISTENING (\d+)/))[1]}`;
+    let cookie = await owner(origin);
+    const token = (await json(origin, cookie, "/api/owner/nodes/pairing-tokens", "POST"))
+      .pairingToken as string;
+    node = startNode(
+      `http://127.0.0.1:${proxyPort}`,
+      join(directory, "node"),
+      token,
+      join(directory, "unused"),
+      "normal",
+    );
+    const nodeId = (await node.line(/MATE_NODE_PAIRED ([0-9a-f-]+)/))[1]!;
+    const agentId = randomUUID();
+    await json(origin, cookie, "/api/owner/agents", "POST", {
+      id: agentId,
+      nodeId,
+      name: "Journal Agent",
+      role: "Crash recovery",
+      description: "Committed journal ACK fixture",
+      model: { provider: "openai", id: "gpt-4o-mini" },
+    });
+    const channelId = (
+      await json(origin, cookie, `/api/owner/agents/${agentId}/direct-channel`, "POST")
+    ).channel.id as string;
+    await json(origin, cookie, "/api/owner/model-credentials/openai", "PUT", {
+      apiKey: "synthetic-key-version-b",
+    });
+    await json(origin, cookie, `/api/owner/channels/${channelId}/messages`, "POST", {
+      text: "Commit once before ACK",
+    });
+    await eventually(() => (ackDropped ? true : undefined), "journal committed and ACK dropped");
+    expect(heldJournal).toBeDefined();
+    expect(
+      cpRow(
+        directory,
+        "SELECT COUNT(*) AS count FROM owner_agent_session_journal WHERE agent_id=? AND role='assistant' AND tool_action_id IS NULL",
+        agentId,
+      ),
+    ).toEqual({ count: 1 });
+    expect(
+      cpRow(
+        directory,
+        "SELECT state FROM owner_message_deliveries WHERE recipient_id=? ORDER BY seq LIMIT 1",
+        agentId,
+      ),
+    ).toEqual({ state: "handled" });
+    control = startControl(directory);
+    origin = `http://127.0.0.1:${(await control.line(/MATE_CONTROL_PLANE_LISTENING (\d+)/))[1]}`;
+    cookie = await owner(origin);
+    await eventually(
+      () => (replayAccepted ? true : undefined),
+      "exact journal replay after CP restart",
+      15000,
+    );
+    expect(
+      cpRow(directory, "SELECT COUNT(*) AS count FROM owner_agent_runs WHERE agent_id=?", agentId),
+    ).toEqual({ count: 1 });
+    expect(
+      cpRow(
+        directory,
+        "SELECT COUNT(*) AS count FROM owner_messages WHERE author_kind='agent' AND author_id=?",
+        agentId,
+      ),
+    ).toEqual({ count: 1 });
+    expect(
+      cpRow(
+        directory,
+        "SELECT state FROM owner_message_deliveries WHERE recipient_id=? ORDER BY seq LIMIT 1",
+        agentId,
+      ),
+    ).toEqual({ state: "handled" });
+  } finally {
+    await node?.stop("SIGKILL");
+    await control?.stop();
+    for (const socket of sockets) socket.terminate();
+    await new Promise<void>((done) => proxyWs.close(() => done()));
+    await new Promise<void>((done) => proxyHttp.close(() => done()));
+    rmSync(directory, { recursive: true, force: true });
+  }
+}, 30000);

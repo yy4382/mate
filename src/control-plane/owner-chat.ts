@@ -783,7 +783,7 @@ export class OwnerChat {
         `WITH snapshot AS (
            SELECT through_seq,summary,snapshot_json FROM owner_agent_session_snapshots
            WHERE agent_id=@agent_id AND through_seq<=@history_end_seq
-           ORDER BY created_at DESC,id DESC LIMIT 1
+           ORDER BY created_at DESC,rowid DESC LIMIT 1
          ), run_context AS (
            SELECT through_seq AS journal_sequence,'assistant' AS role,
                   'Mate 会话摘要：'||summary||char(10)||'Mate 会话快照：'||snapshot_json AS text,@channel_id AS channel_id,

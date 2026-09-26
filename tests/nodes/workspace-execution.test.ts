@@ -97,6 +97,21 @@ it("keeps an interrupted state-changing operation unknown instead of replaying i
   expect(executor.status(agentId, operationId)?.stderr).toContain("operation_unknown");
 });
 
+it("retains a confirmed failed file receipt across node restart without execution replay", async () => {
+  const denied = { code: 7, stdout: "", stderr: "permission_denied: protected", truncated: false };
+  const fixture = setup(() => denied),
+    executor = new LinuxWorkspaceExecutor(fixture.homeRoot, fixture.root, fixture.dependencies);
+  expect(await executor.execute(action())).toEqual(denied);
+  const restarted = new LinuxWorkspaceExecutor(
+    fixture.homeRoot,
+    fixture.root,
+    fixture.dependencies,
+  );
+  expect(restarted.status(agentId, operationId)).toEqual(denied);
+  expect(await restarted.execute(action())).toEqual(denied);
+  expect(fixture.calls).toHaveLength(1);
+});
+
 it("does not wait for a running file operation when reading persisted status", async () => {
   const fixture = setup(() => new Promise<ExecutionResult>(() => {})),
     executor = new LinuxWorkspaceExecutor(fixture.homeRoot, fixture.root, fixture.dependencies);

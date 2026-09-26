@@ -122,6 +122,49 @@ it("keeps an unknown intent and reconciles it with the same node operation ID", 
   }
 });
 
+it("commits a corrected process receipt and Agent notification in one transaction", async () => {
+  const context = setup();
+  const broker = new AgentProcessOperationBroker(context.database, {
+    executeAgentProcessOperation: async () => {
+      throw new Error("node disconnected");
+    },
+  });
+  try {
+    expect(await broker.execute({ ...context, operation: { kind: "process.list" } })).toMatchObject(
+      { state: "unknown" },
+    );
+    const result = {
+      operationId: context.operationId,
+      agentId: context.agentId,
+      state: "succeeded" as const,
+      receipt: { code: 0 },
+    };
+    context.database.exec("CREATE TABLE notification(operation_id TEXT PRIMARY KEY)");
+    expect(() =>
+      broker.reconcile(context.nodeId, result, () => {
+        throw new Error("crash before notification commit");
+      }),
+    ).toThrow("crash before notification commit");
+    expect(broker.status(context.agentId, context.operationId)?.state).toBe("unknown");
+    expect(
+      context.database
+        .prepare(
+          "SELECT COUNT(*) AS count FROM owner_agent_activity WHERE kind='receipt.corrected'",
+        )
+        .get(),
+    ).toEqual({ count: 0 });
+    broker.reconcile(context.nodeId, result, (_, operationId) => {
+      context.database.prepare("INSERT INTO notification(operation_id) VALUES(?)").run(operationId);
+    });
+    expect(broker.status(context.agentId, context.operationId)?.state).toBe("succeeded");
+    expect(context.database.prepare("SELECT operation_id FROM notification").get()).toEqual({
+      operation_id: context.operationId,
+    });
+  } finally {
+    context.database.close();
+  }
+});
+
 it("rejects stale runs and operation IDs reused for changed requests", async () => {
   const context = setup(),
     dispatch = vi.fn(async () => ({
