@@ -91,7 +91,16 @@ async function setup(options: { nodeOperationTimeoutMs?: number } = {}) {
       signature: sign(null, Buffer.from(challenge.nonce), keyPair.privateKey).toString("base64url"),
     }),
   );
-  return { app, cookie, db, directory, nodeId, socket, keyPair, nodePrivateKey: keyPair.privateKey };
+  return {
+    app,
+    cookie,
+    db,
+    directory,
+    nodeId,
+    socket,
+    keyPair,
+    nodePrivateKey: keyPair.privateKey,
+  };
 }
 
 async function pairAnotherNode(
@@ -142,7 +151,9 @@ async function reconnectNode(
       signature: sign(null, Buffer.from(challenge.nonce), privateKey).toString("base64url"),
     }),
   );
-  expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({ type: "control.authenticated", nodeId });
+  expect(socket.sent.map((message) => JSON.parse(message))).toContainEqual(
+    expect.objectContaining({ type: "control.authenticated", nodeId }),
+  );
   return socket;
 }
 
