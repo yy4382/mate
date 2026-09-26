@@ -80,6 +80,8 @@ it("shows a complete pending card only to the signed-in owner and keeps duplicat
     args: ["-u"],
     cwd: "/tmp",
     state: "pending",
+    nodeOnline: false,
+    nodeLastConnectedAt: null,
   });
   const path = `/api/owner/approvals/${request.requestId}/decision`;
   expect(

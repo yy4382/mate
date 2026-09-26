@@ -22,6 +22,8 @@ export interface Approval {
     | "rejected"
     | "expired";
   receipt: unknown | null;
+  nodeOnline: boolean;
+  nodeLastConnectedAt: string | null;
 }
 
 const labels: Record<Approval["state"], string> = {
@@ -53,11 +55,13 @@ export function ApprovalCard({
   const remaining = Math.max(0, Math.ceil((approval.expiresAt - now) / 1000));
   const pending = approval.state === "pending" && remaining > 0;
   const state = approval.state === "pending" && !remaining ? "expired" : approval.state;
+  const stateLabel =
+    state === "approved" && !approval.nodeOnline ? "已批准，等待节点" : labels[state];
   return (
     <article className="approval-card" aria-label={`系统特权审批 ${approval.requestId}`}>
       <div className="approval-heading">
         <strong>系统特权命令</strong>
-        <span>{labels[state]}</span>
+        <span>{stateLabel}</span>
       </div>
       <dl>
         <div>
@@ -73,6 +77,16 @@ export function ApprovalCard({
         <div>
           <dt>节点</dt>
           <dd>{approval.nodeId}</dd>
+        </div>
+        <div>
+          <dt>节点连接</dt>
+          <dd>
+            {approval.nodeOnline
+              ? "节点在线"
+              : approval.nodeLastConnectedAt
+                ? `节点离线，上次连接：${new Date(approval.nodeLastConnectedAt).toLocaleString("zh-CN")}`
+                : "节点离线，尚无连接记录"}
+          </dd>
         </div>
         <div>
           <dt>程序摘要</dt>

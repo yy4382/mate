@@ -21,7 +21,7 @@ import { AttachmentError, AttachmentService } from "./attachments.js";
 import { WorkspaceError, WorkspaceService, type WorkspaceVersion } from "./workspace.js";
 import { registerWorkspaceRoutes } from "./workspace-http.js";
 import { listAgentActivity, recordAgentActivity } from "./activity.js";
-import { PrivilegedApprovals } from "./privileged-approvals.js";
+import { PrivilegedApprovals, type ApprovalView } from "./privileged-approvals.js";
 
 const newChannelSchema = z
   .object({
@@ -434,19 +434,27 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
 
   app.use("/api/owner/*", requireOwnerApi);
   app.get("/api/owner/session", (context) => context.json({ authenticated: true }));
+  const withNodeStatus = (approval: ApprovalView) => {
+    const node = nodes.list().find((entry) => entry.id === approval.nodeId);
+    return {
+      ...approval,
+      nodeOnline: node?.online ?? false,
+      nodeLastConnectedAt: node?.lastConnectedAt ?? null,
+    };
+  };
   app.get("/api/owner/channels/:channelId/approvals", (context) => {
     const channelId = context.req.param("channelId");
     if (!z.string().uuid().safeParse(channelId).success)
       return context.json({ error: "对话不存在。" }, 404);
     context.header("Cache-Control", "no-store");
-    return context.json({ approvals: approvals.list(channelId) });
+    return context.json({ approvals: approvals.list(channelId).map(withNodeStatus) });
   });
   app.get("/api/owner/approvals/:requestId", (context) => {
     const parsed = z.string().uuid().safeParse(context.req.param("requestId"));
     const approval = parsed.success ? approvals.status(parsed.data) : undefined;
     if (!approval) return context.json({ error: "审批请求不存在。" }, 404);
     context.header("Cache-Control", "no-store");
-    return context.json({ approval });
+    return context.json({ approval: withNodeStatus(approval) });
   });
   app.post("/api/owner/approvals/:requestId/decision", async (context) => {
     const origin = context.req.header("origin");
@@ -477,7 +485,7 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
     if (!approvals.status(parsed.data)) return context.json({ error: "审批请求不存在。" }, 404);
     const approval = approvals.decide(parsed.data, choice.data.decision);
     context.header("Cache-Control", "no-store");
-    return context.json({ approval });
+    return context.json({ approval: withNodeStatus(approval) });
   });
   app.get("/api/owner/agents", (context) => {
     context.header("Cache-Control", "no-store");
