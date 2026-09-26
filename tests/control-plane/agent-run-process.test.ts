@@ -243,6 +243,13 @@ async function waitForMessageCount(
 async function readAgentReplyEvent(
   response: Response,
   agentId: string,
+  diagnostics: {
+    startedAt: number;
+    checkpoints: string[];
+    frames: string[];
+    chunks: number;
+    lastChunkAt: number | null;
+  },
 ): Promise<{ author: { kind: string; id: string }; text: string }> {
   const reader = response.body!.getReader(),
     decoder = new TextDecoder();
@@ -253,6 +260,8 @@ async function readAgentReplyEvent(
         while (true) {
           const chunk = await reader.read();
           if (chunk.done) throw new Error("SSE stream closed before Agent reply event");
+          diagnostics.chunks++;
+          diagnostics.lastChunkAt = Date.now();
           buffer += decoder.decode(chunk.value, { stream: true });
           let boundary = buffer.indexOf("\n\n");
           while (boundary >= 0) {
@@ -260,6 +269,25 @@ async function readAgentReplyEvent(
             buffer = buffer.slice(boundary + 2);
             const eventName = frame.match(/^event: (.+)$/m)?.[1],
               payloadText = frame.match(/^data: (.+)$/m)?.[1];
+            if (eventName) {
+              let summary = eventName;
+              if (payloadText) {
+                try {
+                  const event = JSON.parse(payloadText) as {
+                    seq?: number;
+                    channelId?: string;
+                    payload?: { author?: { kind?: string; id?: string } };
+                  };
+                  summary += ` seq=${event.seq ?? "?"} channel=${event.channelId ?? "?"}`;
+                  if (event.payload?.author)
+                    summary += ` author=${event.payload.author.kind ?? "?"}/${event.payload.author.id ?? "?"}`;
+                } catch {
+                  summary += " invalid-json";
+                }
+              }
+              diagnostics.frames.push(summary);
+              if (diagnostics.frames.length > 20) diagnostics.frames.shift();
+            }
             if (eventName === "message.created" && payloadText) {
               const event = JSON.parse(payloadText) as {
                 payload?: {
@@ -283,7 +311,9 @@ async function readAgentReplyEvent(
         }
       })(),
       delay(20_000).then(() => {
-        throw new Error("SSE did not deliver Agent reply event");
+        throw new Error(
+          `SSE did not deliver Agent reply event (status=${response.status}, elapsed=${Date.now() - diagnostics.startedAt}ms, chunks=${diagnostics.chunks}, lastChunkAt=${diagnostics.lastChunkAt ?? "none"}, frames=[${diagnostics.frames.join("; ")}], checkpoints=[${diagnostics.checkpoints.join("; ")}])`,
+        );
       }),
     ]);
   } finally {
@@ -778,17 +808,38 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
       { headers: { cookie } },
     );
     expect(eventStream.headers.get("content-type")).toContain("text/event-stream");
-    const assistantEventPromise = readAgentReplyEvent(eventStream, agentId);
-    expect(await putCredential(currentOrigin, cookie, "synthetic-key-version-b")).toBe(204);
+    const sseDiagnostics = {
+      startedAt: Date.now(),
+      checkpoints: [] as string[],
+      frames: [] as string[],
+      chunks: 0,
+      lastChunkAt: null as number | null,
+    };
+    sseDiagnostics.checkpoints.push(
+      `stream-open cursor=${snapshot.cursor} status=${eventStream.status}`,
+    );
+    const assistantEventPromise = readAgentReplyEvent(eventStream, agentId, sseDiagnostics);
+    const credentialResponse = await putCredential(
+      currentOrigin,
+      cookie,
+      "synthetic-key-version-b",
+    );
+    sseDiagnostics.checkpoints.push(`credential-updated status=${credentialResponse}`);
+    expect(credentialResponse).toBe(204);
     stage = "recovered model run and stale journal rejection";
     await within(secondRunStarted.promise, "second model run");
+    sseDiagnostics.checkpoints.push(`second-run-started id=${secondRunId}`);
     await within(staleJournalRejected.promise, "old run journal rejection");
+    sseDiagnostics.checkpoints.push("stale-journal-rejected");
 
     // The first run's delayed journal is stale after disconnect/restart and must not commit.
     await delay(50);
     expect((await getMessages(currentOrigin, cookie, channelId)).messages).toHaveLength(1);
     expect(injectedStaleJournal).toBe(true);
     const secondRunReply = await waitForAssistant(currentOrigin, cookie, channelId);
+    sseDiagnostics.checkpoints.push(
+      `assistant-message-visible count=${secondRunReply.length} at=${Date.now()}`,
+    );
     expect(await within(assistantEventPromise, "assistant reply SSE event", 25_000)).toMatchObject({
       author: { kind: "agent", id: agentId },
       text: "这是密钥更新后的测试回复。",
@@ -1193,8 +1244,11 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
     expect(laterAssistant!.sequence).toBeLessThan(recoveredAssistant!.sequence);
   } catch (error) {
     const detail = error instanceof Error ? error.message : "unknown test failure";
+    const diagnosticLogs = detail.startsWith("SSE did not deliver Agent reply event")
+      ? `\nControl-plane log tail: ${(control?.text.slice(-1200) ?? "unavailable").replace(/synthetic-key-[\w-]+/g, "[redacted]")}\nNode log tail: ${(node?.text.slice(-1200) ?? "unavailable").replace(/synthetic-key-[\w-]+/g, "[redacted]")}`
+      : "";
     throw new Error(
-      `Control-plane/Node process test failed during: ${stage}: ${detail.replace(/synthetic-key-[\w-]+/g, "[redacted]")}`,
+      `Control-plane/Node process test failed during: ${stage}: ${detail.replace(/synthetic-key-[\w-]+/g, "[redacted]")}${diagnosticLogs}`,
     );
   } finally {
     if (node) await stopProcess(node);
@@ -1325,15 +1379,25 @@ it("runs Pi conversation tools through the authenticated Node and commits one ex
     expect(runState).toBe("completed");
     const db = new Database(dbPath, { readonly: true, fileMustExist: true });
     try {
-      expect(
-        db.prepare("SELECT action_id,operation,agent_id FROM owner_agent_tool_actions").all(),
-      ).toEqual([
-        {
-          action_id: "conversation-tools-send",
-          operation: "messages.send",
-          agent_id: agentId,
-        },
-      ]);
+      const actions = db
+        .prepare(
+          `SELECT tool.action_id,tool.operation,tool.agent_id,delivery.id AS delivery_id
+           FROM owner_agent_tool_actions tool
+           JOIN owner_agent_runs run ON run.agent_id=tool.agent_id AND run.state='completed'
+           JOIN owner_message_deliveries delivery ON delivery.id=run.delivery_id
+           WHERE tool.agent_id=?`,
+        )
+        .all(agentId) as Array<{
+        action_id: string;
+        operation: string;
+        agent_id: string;
+        delivery_id: string;
+      }>;
+      expect(actions).toHaveLength(1);
+      expect(actions[0]).toMatchObject({ operation: "messages.send", agent_id: agentId });
+      expect(actions[0]?.action_id).toMatch(
+        new RegExp(`^mate:${actions[0]?.delivery_id}:[0-9a-f]{64}:1$`),
+      );
     } finally {
       db.close();
     }

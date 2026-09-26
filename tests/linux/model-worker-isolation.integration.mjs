@@ -94,6 +94,7 @@ try {
     runId: randomUUID(),
     agentId,
     sessionId: randomUUID(),
+    actionScopeId: randomUUID(),
     outputChannel: { channelId, visibility: "private" },
     messages: [
       {
@@ -161,6 +162,7 @@ try {
     runId: randomUUID(),
     agentId,
     sessionId: randomUUID(),
+    actionScopeId: randomUUID(),
     outputChannel: { channelId, visibility: "private" },
     messages: [
       {

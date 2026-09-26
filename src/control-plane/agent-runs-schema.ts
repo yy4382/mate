@@ -103,4 +103,61 @@ CREATE INDEX owner_agent_peer_direct_channels_second
   ON owner_agent_peer_direct_channels(second_agent_id,first_agent_id);
 `;
 
+/** Link committed conversation actions to recoverable session history. */
+export const agentConversationActionRecoverySchemaV12 = `
+ALTER TABLE owner_agent_session_journal ADD COLUMN tool_action_id TEXT;
+DROP INDEX owner_agent_session_journal_reply_once;
+CREATE UNIQUE INDEX owner_agent_session_journal_reply_once
+  ON owner_agent_session_journal(run_id)
+  WHERE role='assistant' AND run_id IS NOT NULL AND tool_action_id IS NULL;
+
+UPDATE owner_agent_session_journal
+SET tool_action_id=(
+  SELECT a.action_id FROM owner_agent_tool_actions a
+  WHERE a.session_id=owner_agent_session_journal.session_id
+    AND a.agent_id=owner_agent_session_journal.agent_id
+    AND a.operation='messages.send'
+    AND json_extract(a.result_json,'$.id')=owner_agent_session_journal.message_id
+)
+WHERE role='assistant' AND message_id IS NOT NULL
+  AND EXISTS (
+    SELECT 1 FROM owner_agent_tool_actions a
+    WHERE a.session_id=owner_agent_session_journal.session_id
+      AND a.agent_id=owner_agent_session_journal.agent_id
+      AND a.operation='messages.send'
+      AND json_extract(a.result_json,'$.id')=owner_agent_session_journal.message_id
+  );
+
+INSERT INTO owner_agent_session_journal(
+  session_id,agent_id,channel_id,tool_action_id,role,text,created_at
+)
+SELECT a.session_id,a.agent_id,
+       CASE a.operation
+         WHEN 'messages.send' THEN json_extract(a.result_json,'$.channelId')
+         WHEN 'conversations.open_dm' THEN json_extract(a.result_json,'$.id')
+         WHEN 'conversations.invite' THEN json_extract(a.result_json,'$.conversationId')
+       END,
+       a.action_id,'assistant',
+       'Mate 工具结果：'||a.operation||' '||
+       CASE WHEN a.operation='messages.send'
+            THEN json_remove(a.result_json,'$.text')
+            ELSE a.result_json END,
+       a.created_at
+FROM owner_agent_tool_actions a
+WHERE a.operation IN ('messages.send','conversations.open_dm','conversations.invite')
+  AND NOT EXISTS (
+    SELECT 1 FROM owner_agent_session_journal j
+    WHERE j.session_id=a.session_id AND j.agent_id=a.agent_id
+      AND j.tool_action_id=a.action_id AND j.message_id IS NULL
+  )
+  AND EXISTS (
+    SELECT 1 FROM owner_channels c
+    WHERE c.id=CASE a.operation
+      WHEN 'messages.send' THEN json_extract(a.result_json,'$.channelId')
+      WHEN 'conversations.open_dm' THEN json_extract(a.result_json,'$.id')
+      WHEN 'conversations.invite' THEN json_extract(a.result_json,'$.conversationId')
+    END
+  );
+`;
+
 export const agentRunSchema = `${agentRunSchemaV7}\n${agentJournalReplaySchema}\n${agentRunBatchSchemaV9}`;

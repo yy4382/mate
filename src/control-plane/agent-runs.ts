@@ -98,6 +98,7 @@ export class AgentRunCoordinator {
           runId,
           agentId: candidate.agent_id,
           sessionId: candidate.session_id,
+          actionScopeId: candidate.delivery_id,
           provider: candidate.provider,
           modelId: candidate.model_id,
           apiKey,

@@ -163,6 +163,7 @@ export const NodeControlMessageSchema = z.discriminatedUnion("type", [
       runId: requestIdSchema,
       agentId: agentIdSchema,
       sessionId: requestIdSchema,
+      actionScopeId: requestIdSchema,
       provider: z.string().regex(/^[a-z][a-z0-9._-]{0,63}$/),
       modelId: z.string().min(1).max(200),
       apiKey: z.string().min(1).max(8192),

@@ -9,6 +9,7 @@ import { OwnerAuth } from "../../src/control-plane/owner-auth.js";
 import {
   controlPlaneMigrations,
   controlPlaneSchemaV4,
+  controlPlaneSchemaV11,
   controlPlaneSchemaV8,
 } from "../../src/control-plane/schema.js";
 import { newAgentRequestSchema } from "../../src/control-plane/agents/contracts.js";
@@ -187,7 +188,7 @@ it("migrates paired-node control-plane data and enables Agent foreign keys", () 
 
   const auth = new OwnerAuth({ dataDir: directory });
   try {
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(11);
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(12);
     expect(auth.db.pragma("foreign_keys", { simple: true })).toBe(1);
     expect(auth.db.prepare("SELECT id FROM nodes").get()).toEqual({
       id: "c5342142-9cf5-4b22-86f3-bdc46bb471f2",
@@ -198,8 +199,80 @@ it("migrates paired-node control-plane data and enables Agent foreign keys", () 
       name: "owner_agents",
     });
     expect(controlPlaneMigrations.map((migration) => migration.fromRevision)).toEqual([
-      3, 4, 5, 6, 7, 8, 9, 10,
+      3, 4, 5, 6, 7, 8, 9, 10, 11,
     ]);
+  } finally {
+    auth.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+it("backfills committed conversation tool actions into recoverable journal history", () => {
+  const directory = mkdtempSync(join(tmpdir(), "mate-agent-action-history-migration-")),
+    databasePath = join(directory, "control-plane.sqlite"),
+    old = new Database(databasePath);
+  old.exec(controlPlaneSchemaV11);
+  old.exec(`
+    INSERT INTO nodes(id,public_key,paired_at) VALUES('node','synthetic-public-key',1);
+    INSERT INTO owner_channels(id,name,description,visibility,created_at,updated_at)
+      VALUES('room','Research','Synthetic migration fixture','private',1,1);
+    INSERT INTO owner_channel_memberships(channel_id,principal_kind,principal_id,active,joined_at)
+      VALUES('room','human','owner',1,1),('room','agent','agent',1,1);
+    INSERT INTO owner_agents(
+      id,node_id,name,role,description,provider,model_id,request_json,request_hash,
+      provision_request_id,status,stage,linux_username,uid,gid,home,created_at,updated_at,model_ready
+    ) VALUES(
+      'agent','node','Partner','Replies','Migration fixture','openai','gpt-4.1','{}',
+      'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','provision',
+      'waiting_credentials','complete','mate_agent',23001,23001,'/var/lib/mate/agents/agent',1,1,0
+    );
+    INSERT INTO owner_agent_sessions(id,agent_id,created_at,verified_at)
+      VALUES('session','agent',1,1);
+    INSERT INTO owner_messages(id,channel_id,order_seq,text,author_kind,author_id,created_at)
+      VALUES('sent-message','room',1,'Persisted action text','agent','agent',2);
+    INSERT INTO owner_agent_session_journal(
+      session_id,agent_id,channel_id,message_id,role,text,created_at
+    ) VALUES('session','agent','room','sent-message','assistant','Persisted action text',2);
+  `);
+  old
+    .prepare(
+      `INSERT INTO owner_agent_tool_actions(
+         session_id,action_id,agent_id,operation,request_hash,result_json,created_at
+       ) VALUES(?,?,?,?,?,?,?)`,
+    )
+    .run(
+      "session",
+      "legacy-action",
+      "agent",
+      "messages.send",
+      "b".repeat(64),
+      JSON.stringify({ id: "sent-message", channelId: "room", text: "Persisted action text" }),
+      2,
+    );
+  old.pragma("application_id = 1296257100");
+  old.pragma("user_version = 11");
+  old.close();
+
+  const auth = new OwnerAuth({ dataDir: directory });
+  try {
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(12);
+    expect(
+      auth.db
+        .prepare(
+          `SELECT message_id,tool_action_id FROM owner_agent_session_journal
+           WHERE message_id='sent-message'`,
+        )
+        .get(),
+    ).toEqual({ message_id: "sent-message", tool_action_id: "legacy-action" });
+    const receipt = auth.db
+      .prepare(
+        `SELECT text,tool_action_id FROM owner_agent_session_journal
+         WHERE message_id IS NULL AND tool_action_id='legacy-action'`,
+      )
+      .get() as { text: string; tool_action_id: string } | undefined;
+    expect(receipt?.tool_action_id).toBe("legacy-action");
+    expect(receipt?.text).toContain('messages.send {"id":"sent-message","channelId":"room"}');
+    expect(receipt?.text).not.toContain("Persisted action text");
   } finally {
     auth.close();
     rmSync(directory, { recursive: true, force: true });
@@ -243,7 +316,7 @@ it("backfills pending channel deliveries into the shared session journal when up
 
   const auth = new OwnerAuth({ dataDir: directory });
   try {
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(11);
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(12);
     expect(
       auth.db
         .prepare(

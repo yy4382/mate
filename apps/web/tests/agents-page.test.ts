@@ -25,6 +25,7 @@ let posts: Array<Record<string, unknown>>;
 let providers: Array<{ id: string; name: string; models: Array<{ id: string; name: string }> }>;
 let credentials: Array<{ provider: string; configured: true; updatedAt: number }>;
 let credentialWrites: Array<{ provider: string; apiKey: string }>;
+let invitationPosts: Array<{ url: string; body: Record<string, unknown> }>;
 let nodeOnline: boolean;
 let postConflict: boolean;
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -49,6 +50,7 @@ beforeEach(() => {
   ];
   credentials = [];
   credentialWrites = [];
+  invitationPosts = [];
   nodeOnline = true;
   postConflict = false;
   fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -56,6 +58,8 @@ beforeEach(() => {
     if (url === "/api/owner/nodes")
       return json(200, { nodes: [{ id: nodeId, online: nodeOnline, lastConnectedAt: null }] });
     if (url === "/api/owner/channels")
+      return json(200, { channels: [{ id: channelId, name: "Research", archived: false }] });
+    if (url === "/api/owner/invitable-channels")
       return json(200, { channels: [{ id: channelId, name: "Research", archived: false }] });
     if (url === "/api/owner/model-providers") return json(200, { providers });
     if (url.startsWith("/api/owner/model-credentials")) {
@@ -123,6 +127,14 @@ beforeEach(() => {
           : json(200, { agent: complete });
       }
       return json(200, { agents });
+    }
+    if (/^\/api\/owner\/channels\/[^/]+\/invitations$/.test(url) && init?.method === "POST") {
+      invitationPosts.push({ url, body: JSON.parse(String(init.body)) as Record<string, unknown> });
+      return json(201, {
+        channelId,
+        agentId: String(invitationPosts[0]?.body.agentId),
+        status: "joined",
+      });
     }
     return json(404, { error: "missing fixture route" });
   });
@@ -197,6 +209,47 @@ it("creates a stable request and retries the same Linux identity without putting
   expect(posts[1]).toEqual(posts[0]);
   expect(screen.getByText("等待凭据")).toBeTruthy();
   expect(screen.getByText(/身份、home 与会话已验证/)).toBeTruthy();
+});
+
+it("lets the owner invite an existing Agent to a channel from the Chinese Agent page", async () => {
+  const agentId = "8bfb67a1-66ed-4d56-9052-4cc7a41c60b9";
+  agents = [
+    {
+      id: agentId,
+      nodeId,
+      name: "Research partner",
+      role: "Researches questions",
+      description: "A colleague",
+      model: { provider: "openai", id: "gpt-4.1" },
+      initialChannelId: null,
+      sessionId,
+      status: "waiting_credentials",
+      stage: "complete",
+      error: null,
+      linuxIdentity: {
+        username: "mate_8bfb67a166ed4d5690524cc7",
+        uid: 23001,
+        gid: 23001,
+        home: `/var/lib/mate/agents/${agentId}`,
+      },
+      createdAt: 1,
+      updatedAt: 2,
+    },
+  ];
+  render(createElement(AgentsPage));
+  await screen.findByRole("heading", { name: "Research partner" });
+  await userEvent
+    .setup()
+    .selectOptions(screen.getByRole("combobox", { name: "Research partner 邀请频道" }), channelId);
+  await userEvent.setup().click(screen.getByRole("button", { name: "邀请加入" }));
+
+  await screen.findByText("Research partner 已加入频道。");
+  expect(invitationPosts).toEqual([
+    {
+      url: `/api/owner/channels/${channelId}/invitations`,
+      body: { agentId },
+    },
+  ]);
 });
 
 it("lets the owner save one provider key without displaying it again", async () => {

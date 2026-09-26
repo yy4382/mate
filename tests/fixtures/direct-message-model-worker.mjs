@@ -1,5 +1,6 @@
 // This test-only entry substitutes the network stream while exercising the same Pi Agent loop.
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import { randomUUID } from "node:crypto";
 
 let syntheticToolTurn = 0;
 
@@ -78,6 +79,50 @@ serveModelWorker((model, context, options) => {
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
         },
         stopReason: toolCall ? "toolUse" : "stop",
+        timestamp: Date.now(),
+      },
+    });
+    return stream;
+  }
+  if (options.apiKey === "synthetic-key-durable-action-pair") {
+    const turn = syntheticToolTurn++,
+      channelId = systemPrompt(context).match(/本次回复目的地：频道 ([0-9a-f-]{36})/)?.[1],
+      text =
+        turn < 2 ? "同一交付中的重复动作。" : turn === 2 ? "参数不同，属于新的动作。" : undefined,
+      call =
+        text === undefined
+          ? undefined
+          : {
+              type: "toolCall",
+              id: `pi-${randomUUID()}`,
+              name: "tools.call",
+              arguments: {
+                name: "messages.send",
+                input:
+                  turn === 1
+                    ? { text, conversationId: channelId }
+                    : { conversationId: channelId, text },
+              },
+            },
+      content = call ? [call] : [{ type: "text", text: "重放后的最终回复。" }];
+    stream.push({
+      type: "done",
+      reason: call ? "toolUse" : "stop",
+      message: {
+        role: "assistant",
+        content,
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: call ? "toolUse" : "stop",
         timestamp: Date.now(),
       },
     });

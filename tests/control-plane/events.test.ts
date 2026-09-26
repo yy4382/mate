@@ -101,6 +101,61 @@ it("replays committed events after a restart and fills a disconnect gap by event
   expect(Number(secondEvent.match(/^id: (\d+)$/m)?.[1])).toBe(Number(firstEventId) + 1);
 });
 
+it("delivers an event committed after an already-idle stream is waiting", async () => {
+  const { app } = setup();
+  const cookie = await ownerCookie(app);
+  const channelResponse = await app.request("/api/owner/channels", {
+    method: "POST",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ name: "实时交接", description: "", visibility: "public" }),
+  });
+  const channel = await channelResponse.json();
+  const snapshotResponse = await app.request("/api/owner/snapshot", { headers: { cookie } });
+  const snapshot = await snapshotResponse.json();
+  const stream = await app.request(`/api/owner/events?cursor=${snapshot.cursor}`, {
+    headers: { cookie },
+  });
+  const reader = stream.body!.getReader();
+  const pendingEvent = reader.read();
+
+  expect(stream.status).toBe(200);
+  await new Promise((resolveDelay) => setTimeout(resolveDelay, 350));
+  const messageResponse = await app.request(`/api/owner/channels/${channel.id}/messages`, {
+    method: "POST",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ text: "订阅已空闲后提交" }),
+  });
+  const message = await messageResponse.json();
+  const event = await Promise.race([
+    pendingEvent,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("SSE event timed out after an idle poll")), 2000),
+    ),
+  ]);
+
+  expect(messageResponse.status).toBe(201);
+  expect(event.done).toBe(false);
+  const frame = new TextDecoder().decode(event.value);
+  expect(frame).toContain("event: message.created");
+  expect(frame).toContain(message.id);
+  await reader.cancel();
+});
+
+it("releases an idle event stream when its client cancels", async () => {
+  const { app } = setup();
+  const cookie = await ownerCookie(app);
+  const stream = await app.request("/api/owner/events?cursor=0", { headers: { cookie } });
+  const reader = stream.body!.getReader();
+  const pendingEvent = reader.read();
+
+  expect(stream.status).toBe(200);
+  await new Promise((resolveDelay) => setTimeout(resolveDelay, 350));
+  await reader.cancel();
+
+  await expect(pendingEvent).resolves.toMatchObject({ done: true });
+  await expect(reader.read()).resolves.toMatchObject({ done: true });
+});
+
 it("tells a client with an expired event cursor to fetch a fresh snapshot", async () => {
   const { app } = setup();
   const cookie = await ownerCookie(app);

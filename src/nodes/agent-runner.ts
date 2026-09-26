@@ -83,6 +83,7 @@ export async function runAgentModel(
       runId,
       agentId: request.agentId,
       sessionId,
+      actionScopeId: request.actionScopeId,
       messages,
       outputChannel,
       prompt,

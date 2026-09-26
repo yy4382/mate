@@ -142,6 +142,7 @@ function errorMessage(result: unknown, fallback: string): string {
 export function AgentsPage() {
   const [nodes, setNodes] = useState<NodeSummary[]>([]);
   const [channels, setChannels] = useState<ChannelSummary[]>([]);
+  const [invitableChannels, setInvitableChannels] = useState<ChannelSummary[]>([]);
   const [agents, setAgents] = useState<AgentSummary[]>([]);
   const [providers, setProviders] = useState<ModelProvider[]>([]);
   const [credentials, setCredentials] = useState<ModelCredential[]>([]);
@@ -152,6 +153,10 @@ export function AgentsPage() {
   const [credentialSaved, setCredentialSaved] = useState(false);
   const [directChannels, setDirectChannels] = useState<Record<string, string>>({});
   const [openingDirectMessage, setOpeningDirectMessage] = useState<string | null>(null);
+  const [inviteChannels, setInviteChannels] = useState<Record<string, string>>({});
+  const [invitingAgent, setInvitingAgent] = useState<string | null>(null);
+  const [invitationError, setInvitationError] = useState<string | null>(null);
+  const [invitationNotice, setInvitationNotice] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft>(newDraft);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -160,17 +165,25 @@ export function AgentsPage() {
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     try {
-      const [nodeResult, channelResult, agentResult, providerResult, credentialResult] =
-        await Promise.all([
-          readJSON<{ nodes: NodeSummary[] }>("/api/owner/nodes", signal),
-          readJSON<{ channels: ChannelSummary[] }>("/api/owner/channels", signal),
-          readJSON<{ agents: AgentSummary[] }>("/api/owner/agents", signal),
-          readJSON<{ providers: ModelProvider[] }>("/api/owner/model-providers", signal),
-          readJSON<{ credentials: ModelCredential[] }>("/api/owner/model-credentials", signal),
-        ]);
+      const [
+        nodeResult,
+        channelResult,
+        invitationChannelResult,
+        agentResult,
+        providerResult,
+        credentialResult,
+      ] = await Promise.all([
+        readJSON<{ nodes: NodeSummary[] }>("/api/owner/nodes", signal),
+        readJSON<{ channels: ChannelSummary[] }>("/api/owner/channels", signal),
+        readJSON<{ channels: ChannelSummary[] }>("/api/owner/invitable-channels", signal),
+        readJSON<{ agents: AgentSummary[] }>("/api/owner/agents", signal),
+        readJSON<{ providers: ModelProvider[] }>("/api/owner/model-providers", signal),
+        readJSON<{ credentials: ModelCredential[] }>("/api/owner/model-credentials", signal),
+      ]);
       if (signal?.aborted) return;
       setNodes(nodeResult.nodes);
       setChannels(channelResult.channels);
+      setInvitableChannels(invitationChannelResult.channels);
       setAgents(agentResult.agents);
       setProviders(providerResult.providers);
       setCredentials(credentialResult.credentials);
@@ -307,6 +320,39 @@ export function AgentsPage() {
       setCreationError(reason instanceof Error ? reason.message : "暂时无法打开私信。");
     } finally {
       setOpeningDirectMessage(null);
+    }
+  }
+
+  async function inviteAgent(agentId: string) {
+    const channelId = inviteChannels[agentId];
+    if (!channelId) return;
+    setInvitingAgent(agentId);
+    setInvitationError(null);
+    setInvitationNotice(null);
+    try {
+      const response = await fetch(
+        `/api/owner/channels/${encodeURIComponent(channelId)}/invitations`,
+        {
+          method: "POST",
+          headers: { Accept: "application/json", "Content-Type": "application/json" },
+          body: JSON.stringify({ agentId }),
+        },
+      );
+      if (response.status === 401) {
+        redirectToLogin();
+        return;
+      }
+      const result: unknown = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(errorMessage(result, "暂时无法邀请 Agent 加入频道。"));
+      setInvitationNotice(
+        `${agents.find((agent) => agent.id === agentId)?.name ?? "Agent"} 已加入频道。`,
+      );
+    } catch (reason) {
+      setInvitationError(
+        reason instanceof Error ? reason.message : "暂时无法邀请 Agent 加入频道。",
+      );
+    } finally {
+      setInvitingAgent(null);
     }
   }
 
@@ -613,6 +659,48 @@ export function AgentsPage() {
                         >
                           {openingDirectMessage === agent.id ? "正在打开…" : "私信"}
                         </button>
+                      )}
+                    </div>
+                  )}
+                  {agent.linuxIdentity && (
+                    <div className="agent-direct-message">
+                      <label>
+                        邀请加入频道
+                        <select
+                          aria-label={`${agent.name} 邀请频道`}
+                          value={inviteChannels[agent.id] ?? ""}
+                          disabled={invitingAgent !== null || invitableChannels.length === 0}
+                          onChange={(event) =>
+                            setInviteChannels((current) => ({
+                              ...current,
+                              [agent.id]: event.target.value,
+                            }))
+                          }
+                        >
+                          <option value="">选择频道</option>
+                          {invitableChannels.map((channel) => (
+                            <option key={channel.id} value={channel.id}>
+                              {channel.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <button
+                        type="button"
+                        disabled={invitingAgent !== null || !inviteChannels[agent.id]}
+                        onClick={() => void inviteAgent(agent.id)}
+                      >
+                        {invitingAgent === agent.id ? "正在邀请…" : "邀请加入"}
+                      </button>
+                      {invitationError && (
+                        <p className="form-error" role="alert">
+                          {invitationError}
+                        </p>
+                      )}
+                      {invitationNotice && (
+                        <p className="agent-field-hint" role="status">
+                          {invitationNotice}
+                        </p>
                       )}
                     </div>
                   )}

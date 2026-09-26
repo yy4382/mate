@@ -7,6 +7,7 @@ import {
   agentRunBatchSchemaV9,
   agentRunContextHistorySchemaV10,
   agentConversationToolsSchemaV11,
+  agentConversationActionRecoverySchemaV12,
   agentRunSchemaV7,
 } from "./agent-runs-schema.js";
 
@@ -28,7 +29,8 @@ export const controlPlaneSchemaV8 = `${controlPlaneSchemaV7}\n${agentJournalRepl
 /** The private control-plane database format with separate run-history and input snapshots. */
 export const controlPlaneSchemaV9 = `${controlPlaneSchemaV8}\n${agentRunBatchSchemaV9}`;
 export const controlPlaneSchemaV10 = `${controlPlaneSchemaV9}\n${agentRunContextHistorySchemaV10}`;
-export const controlPlaneSchema = `${controlPlaneSchemaV10}\n${agentConversationToolsSchemaV11}`;
+export const controlPlaneSchemaV11 = `${controlPlaneSchemaV10}\n${agentConversationToolsSchemaV11}`;
+export const controlPlaneSchema = `${controlPlaneSchemaV11}\n${agentConversationActionRecoverySchemaV12}`;
 
 export const controlPlaneMigrations = [
   {
@@ -84,7 +86,14 @@ export const controlPlaneMigrations = [
     fromRevision: 10,
     toRevision: 11,
     previousSchema: controlPlaneSchemaV10,
-    nextSchema: controlPlaneSchema,
+    nextSchema: controlPlaneSchemaV11,
     migrationSchema: agentConversationToolsSchemaV11,
+  },
+  {
+    fromRevision: 11,
+    toRevision: 12,
+    previousSchema: controlPlaneSchemaV11,
+    nextSchema: controlPlaneSchema,
+    migrationSchema: agentConversationActionRecoverySchemaV12,
   },
 ] as const;

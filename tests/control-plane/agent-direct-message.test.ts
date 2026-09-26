@@ -2,10 +2,13 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import Database from "better-sqlite3";
 import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { createControlPlaneApp } from "../../src/control-plane/http.js";
 import type { NodeSocket } from "../../src/control-plane/nodes/directory.js";
+import { runAgentModel, type AgentRunTransport } from "../../src/nodes/agent-runner.js";
+import type { NodeControlMessage } from "../../src/nodes/protocol.js";
+import type { ModelContextMessage } from "../../src/nodes/model-worker.js";
 
 const password = "agent-direct-message-owner-password";
 const fixtures: Array<{
@@ -115,18 +118,13 @@ async function pairAnotherNode(
 async function waitForRun(
   socket: FakeNodeSocket,
   fromIndex: number,
-): Promise<{ runId: string; agentId: string; sessionId: string; channelId: string }> {
+): Promise<Extract<NodeControlMessage, { type: "control.agent.run" }>> {
   const deadline = Date.now() + 4000;
   while (Date.now() < deadline) {
     for (const text of socket.sent.slice(fromIndex)) {
       const message = JSON.parse(text) as Record<string, unknown>;
       if (message.type === "control.agent.run")
-        return message as {
-          runId: string;
-          agentId: string;
-          sessionId: string;
-          channelId: string;
-        };
+        return message as unknown as Extract<NodeControlMessage, { type: "control.agent.run" }>;
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -161,6 +159,29 @@ async function callAgentTool(
     ok: boolean;
     error?: string;
     result?: unknown;
+  };
+}
+
+async function callAgentRunContext(
+  app: ReturnType<typeof createControlPlaneApp>,
+  socket: FakeNodeSocket,
+  run: { runId: string; agentId: string },
+) {
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.agent.run.context",
+      requestId: randomUUID(),
+      runId: run.runId,
+      agentId: run.agentId,
+      cursor: 0,
+      limit: 100,
+    }),
+  );
+  return JSON.parse(socket.sent.at(-1)!) as {
+    type: string;
+    messages: ModelContextMessage[];
+    nextCursor: number | null;
   };
 }
 
@@ -515,6 +536,273 @@ it("replays a committed tool action after its reply is lost and the delivery ret
   ).toEqual({ count: 1 });
 });
 
+it("recovers the completed tool action and result in the Agent's next run context", async () => {
+  const { app, cookie, db, nodeId, socket } = await setup();
+  const agentId = randomUUID();
+  app.agents.prepare({
+    id: agentId,
+    nodeId,
+    name: "Context recovery partner",
+    role: "Recovers committed conversation actions",
+    description: "Synthetic action-history fixture.",
+    model: { provider: "openai", id: "gpt-4.1" },
+  });
+  app.agents.complete(
+    agentId,
+    {
+      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      uid: 23001,
+      gid: 23001,
+      home: `/var/lib/mate/agents/${agentId}`,
+    },
+    app.chat,
+  );
+  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  await app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
+  });
+  const firstRunStart = socket.sent.length;
+  app.chat.createMessage(direct.id, "Start a tool action whose receipt must survive.");
+  const firstRun = await waitForRun(socket, firstRunStart),
+    toolMessage = "提交后断连的频道消息。",
+    action = await callAgentTool(app, socket, firstRun, "durable-context-action", "tools.call", {
+      name: "messages.send",
+      input: { conversationId: direct.id, text: toolMessage },
+    });
+  expect(action.ok).toBe(true);
+  expect(
+    app.chat.commitAgentReply(firstRun.runId, nodeId, agentId, randomUUID(), "已完成。", false),
+  ).toBe(true);
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.agent.run.result",
+      requestId: randomUUID(),
+      runId: firstRun.runId,
+      agentId,
+      ok: true,
+    }),
+  );
+
+  const secondRunStart = socket.sent.length;
+  app.chat.createMessage(direct.id, "Continue after the completed action.");
+  const secondRun = await waitForRun(socket, secondRunStart),
+    recovered = await callAgentRunContext(app, socket, secondRun);
+  expect(recovered.messages).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ role: "assistant", text: toolMessage }),
+      expect.objectContaining({
+        role: "assistant",
+        text: expect.stringContaining("messages.send"),
+      }),
+    ]),
+  );
+  expect(
+    db
+      .prepare("SELECT run_id,tool_action_id FROM owner_agent_session_journal WHERE text=?")
+      .get(toolMessage),
+  ).toMatchObject({ run_id: firstRun.runId, tool_action_id: "durable-context-action" });
+});
+
+it("restarts the real Pi worker after a lost result without replaying a committed send", async () => {
+  const { app, cookie, db, nodeId, socket } = await setup();
+  const agentId = randomUUID();
+  app.agents.prepare({
+    id: agentId,
+    nodeId,
+    name: "Durable action partner",
+    role: "Retries a delivery after a tool result is lost",
+    description: "Synthetic Pi restart fixture.",
+    model: { provider: "openai", id: "gpt-4o-mini" },
+  });
+  app.agents.complete(
+    agentId,
+    {
+      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      uid: 23001,
+      gid: 23001,
+      home: `/var/lib/mate/agents/${agentId}`,
+    },
+    app.chat,
+  );
+  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  await app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-key-durable-action-pair" }),
+  });
+
+  const piCallIds: string[][] = [],
+    observedContexts: ModelContextMessage[][] = [],
+    resultAcks: Promise<void>[] = [];
+  const transportFor = (
+    run: Extract<NodeControlMessage, { type: "control.agent.run" }>,
+    controller: AbortController,
+    dropFirstToolReply = false,
+  ): AgentRunTransport => {
+    let dropped = false;
+    return {
+      context: async () => {
+        const page = await callAgentRunContext(app, socket, run);
+        observedContexts.push(page.messages);
+        return { messages: page.messages, nextCursor: page.nextCursor };
+      },
+      journal: async (text) => {
+        const requestId = randomUUID();
+        await app.nodes.receive(
+          socket,
+          JSON.stringify({
+            type: "node.agent.run.journal",
+            requestId,
+            runId: run.runId,
+            agentId,
+            text,
+          }),
+        );
+        return (
+          (JSON.parse(socket.sent.at(-1)!) as { type: string; accepted?: boolean }).accepted ===
+          true
+        );
+      },
+      tool: async (toolCallId, operation, input) => {
+        const requestId = randomUUID(),
+          before = socket.sent.length;
+        piCallIds[piCallIds.length - 1]!.push(toolCallId);
+        await app.nodes.receive(
+          socket,
+          JSON.stringify({
+            type: "node.agent.run.tool",
+            requestId,
+            runId: run.runId,
+            agentId,
+            toolCallId,
+            operation,
+            input,
+          }),
+        );
+        const reply = JSON.parse(socket.sent.at(before)!) as
+          { ok: true; result: unknown } | { ok: false; error: string };
+        if (dropFirstToolReply && !dropped) {
+          dropped = true;
+          controller.abort("simulate a dropped control-plane result");
+          throw new Error("The committed tool result was lost during disconnect");
+        }
+        return reply.ok ? { ok: true, result: reply.result } : { ok: false, error: reply.error };
+      },
+      result: (ok, code) => {
+        resultAcks.push(
+          app.nodes.receive(
+            socket,
+            JSON.stringify({
+              type: "node.agent.run.result",
+              requestId: randomUUID(),
+              runId: run.runId,
+              agentId,
+              ok,
+              ...(ok ? {} : { code: code ?? "model_failed" }),
+            }),
+          ),
+        );
+      },
+    };
+  };
+  const startRun = async (
+    run: Extract<NodeControlMessage, { type: "control.agent.run" }>,
+    dropFirstToolReply: boolean,
+  ) => {
+    const controller = new AbortController();
+    piCallIds.push([]);
+    await runAgentModel(
+      run as Parameters<typeof runAgentModel>[0],
+      transportFor(run, controller, dropFirstToolReply),
+      controller.signal,
+      { modelWorkerEntry: resolve("tests/fixtures/direct-message-model-worker.mjs") },
+    );
+  };
+
+  const firstStart = socket.sent.length;
+  app.chat.createMessage(direct.id, "运行带有两次相同发送的脚本化 Agent。 ");
+  const firstRun = await waitForRun(socket, firstStart);
+  const firstActionScopeId = firstRun.actionScopeId;
+  await startRun(firstRun, true);
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.agent.run.result",
+      requestId: randomUUID(),
+      runId: firstRun.runId,
+      agentId,
+      ok: false,
+      code: "model_failed",
+    }),
+  );
+  db.prepare("UPDATE owner_agent_runs SET retry_at=0 WHERE id=?").run(firstRun.runId);
+
+  const retryStart = socket.sent.length;
+  app.runs?.wake();
+  const retryRun = await waitForRun(socket, retryStart);
+  expect(retryRun.runId).not.toBe(firstRun.runId);
+  expect(retryRun.actionScopeId).toBe(firstActionScopeId);
+  await startRun(retryRun, false);
+  await Promise.all(resultAcks);
+
+  const messagesAfterRetry = app.chat.listMessages(direct.id, undefined, 100)!.messages,
+    retryActionRows = db
+      .prepare(
+        "SELECT action_id,operation FROM owner_agent_tool_actions ORDER BY created_at,action_id",
+      )
+      .all() as Array<{ action_id: string; operation: string }>;
+  expect(
+    messagesAfterRetry.filter((message) => message.text === "同一交付中的重复动作。"),
+  ).toHaveLength(2);
+  expect(
+    messagesAfterRetry.filter((message) => message.text === "参数不同，属于新的动作。"),
+  ).toHaveLength(1);
+  expect(retryActionRows).toHaveLength(3);
+  expect(retryActionRows.every((action) => action.operation === "messages.send")).toBe(true);
+  expect(piCallIds[0]).toHaveLength(1);
+  expect(piCallIds[1]).toHaveLength(3);
+  expect(piCallIds[1]![0]).toBe(piCallIds[0]![0]);
+  expect(piCallIds[1]![1]!.split(":").slice(0, 3)).toEqual(
+    piCallIds[1]![0]!.split(":").slice(0, 3),
+  );
+  expect(piCallIds[1]![1]).not.toBe(piCallIds[1]![0]);
+  expect(piCallIds[1]![2]).not.toBe(piCallIds[1]![1]);
+  expect(observedContexts[1]).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ role: "assistant", text: "同一交付中的重复动作。" }),
+      expect.objectContaining({
+        role: "assistant",
+        text: expect.stringContaining("messages.send"),
+      }),
+    ]),
+  );
+
+  const nextDeliveryStart = socket.sent.length;
+  app.chat.createMessage(direct.id, "请在新的交付中再发送同样的两条消息。");
+  const nextRun = await waitForRun(socket, nextDeliveryStart);
+  expect(nextRun.actionScopeId).not.toBe(firstActionScopeId);
+  await startRun(nextRun, false);
+  await Promise.all(resultAcks);
+  expect(
+    app.chat
+      .listMessages(direct.id, undefined, 100)!
+      .messages.filter((message) => message.text === "同一交付中的重复动作。"),
+  ).toHaveLength(4);
+  expect(
+    app.chat
+      .listMessages(direct.id, undefined, 100)!
+      .messages.filter((message) => message.text === "参数不同，属于新的动作。"),
+  ).toHaveLength(2);
+  expect(
+    db
+      .prepare("SELECT count(*) AS count FROM owner_agent_tool_actions WHERE session_id=?")
+      .get(firstRun.sessionId),
+  ).toEqual({ count: 6 });
+});
+
 it("commits an eligible peer invitation once and rejects invalid invitation targets", async () => {
   const { app, cookie, db, nodeId, socket } = await setup();
   const inviterId = randomUUID(),
@@ -611,6 +899,114 @@ it("commits an eligible peer invitation once and rejects invalid invitation targ
     });
     expect(denied.ok).toBe(false);
   }
+});
+
+it("lets the owner invite an existing Agent to a channel through the authenticated web API", async () => {
+  const { app, cookie, db, nodeId, socket } = await setup();
+  const agentId = randomUUID();
+  app.agents.prepare({
+    id: agentId,
+    nodeId,
+    name: "Owner-invited colleague",
+    role: "Reads a channel after owner invitation",
+    description: "Synthetic owner invitation fixture.",
+    model: { provider: "openai", id: "gpt-4.1" },
+  });
+  app.agents.complete(
+    agentId,
+    {
+      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      uid: 23001,
+      gid: 23001,
+      home: `/var/lib/mate/agents/${agentId}`,
+    },
+    app.chat,
+  );
+  const unverifiedAgentId = randomUUID();
+  app.agents.prepare({
+    id: unverifiedAgentId,
+    nodeId,
+    name: "Unverified owner-invitation target",
+    role: "Has no verified identity yet",
+    description: "Must not be admitted by the owner route.",
+    model: { provider: "openai", id: "gpt-4.1" },
+  });
+  const channel = app.chat.createChannel({
+    name: "Owner-managed channel",
+    description: "Existing Agents can be invited by the owner.",
+    visibility: "private",
+  });
+  app.chat.createMessage(channel.id, "邀请之前的历史也应对新成员可读。");
+  const route = `/api/owner/channels/${channel.id}/invitations`,
+    ownerDm = app.chat.getOrCreateAgentDirectChannel(agentId)!,
+    invitableChannels = await app.request("/api/owner/invitable-channels", { headers: { cookie } }),
+    invitableBody = (await invitableChannels.json()) as { channels: Array<{ id: string }> };
+  expect(invitableChannels.status).toBe(200);
+  expect(invitableBody.channels.map((item) => item.id)).toContain(channel.id);
+  expect(invitableBody.channels.map((item) => item.id)).not.toContain(ownerDm.id);
+
+  const unverifiedInvite = await app.request(route, {
+    method: "POST",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ agentId: unverifiedAgentId }),
+  });
+  expect(unverifiedInvite.status).toBe(409);
+  expect(
+    db
+      .prepare(
+        "SELECT active FROM owner_channel_memberships WHERE channel_id=? AND principal_kind='agent' AND principal_id=?",
+      )
+      .get(channel.id, unverifiedAgentId),
+  ).toBeUndefined();
+  const unauthenticated = await app.request(route, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ agentId }),
+  });
+  expect(unauthenticated.status).toBe(401);
+
+  const invite = await app.request(route, {
+    method: "POST",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ agentId }),
+  });
+  expect(invite.status).toBe(201);
+  expect(await invite.json()).toMatchObject({
+    channelId: channel.id,
+    agentId,
+    status: "joined",
+  });
+  expect(
+    db
+      .prepare(
+        "SELECT active FROM owner_channel_memberships WHERE channel_id=? AND principal_kind='agent' AND principal_id=?",
+      )
+      .get(channel.id, agentId),
+  ).toEqual({ active: 1 });
+  expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toHaveLength(0);
+  const privateDmInvite = await app.request(`/api/owner/channels/${ownerDm.id}/invitations`, {
+    method: "POST",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ agentId }),
+  });
+  expect(privateDmInvite.status).toBe(409);
+
+  await app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
+  });
+  const runStart = socket.sent.length;
+  app.chat.createMessage(channel.id, "邀请提交后，新成员立即获得读取权限。");
+  const run = await waitForRun(socket, runStart),
+    read = await callAgentTool(app, socket, run, "owner-invite-read", "tools.call", {
+      name: "conversations.read",
+      input: { conversationId: channel.id },
+    });
+  expect(read).toMatchObject({ ok: true });
+  expect(
+    (read.result as { messages: Array<{ text: string }> }).messages.map((message) => message.text),
+  ).toEqual(["邀请之前的历史也应对新成员可读。", "邀请提交后，新成员立即获得读取权限。"]);
 });
 
 it("lets one Agent discover and open an explicit peer DM that both Agents and the owner can read", async () => {

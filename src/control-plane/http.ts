@@ -31,6 +31,7 @@ const updateChannelSchema = z
   .strict()
   .refine((value) => Object.keys(value).length > 0);
 const newMessageSchema = z.object({ text: z.string().trim().min(1).max(20_000) }).strict();
+const ownerChannelInvitationSchema = z.object({ agentId: z.string().uuid() }).strict();
 const modelCredentialInputSchema = z
   .object({
     apiKey: z
@@ -336,37 +337,40 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
     const encoder = new TextEncoder();
     const stream = new ReadableStream<Uint8Array>({
       async pull(controller) {
-        if (closed) return;
-        if (!streamToken || !ownerAuth.hasSession(streamToken)) {
-          controller.enqueue(
-            encoder.encode('event: auth_required\ndata: {"loginUrl":"/login"}\n\n'),
-          );
-          closed = true;
-          controller.close();
+        // Keep one cancellable, delayed poll per open stream; an empty pull must not strand it.
+        while (!closed) {
+          if (!streamToken || !ownerAuth.hasSession(streamToken)) {
+            controller.enqueue(
+              encoder.encode('event: auth_required\ndata: {"loginUrl":"/login"}\n\n'),
+            );
+            closed = true;
+            controller.close();
+            return;
+          }
+          const page = ownerChat.eventsAfter(cursor);
+          if (page.stale) {
+            controller.enqueue(
+              encoder.encode(
+                `event: snapshot_required\ndata: ${JSON.stringify({ reason: "cursor_too_old", snapshotUrl: "/api/owner/snapshot" })}\n\n`,
+              ),
+            );
+            closed = true;
+            controller.close();
+            return;
+          }
+          if (!page.events.length) {
+            await new Promise((resolveDelay) => setTimeout(resolveDelay, 250));
+            continue;
+          }
+          for (const event of page.events) {
+            controller.enqueue(
+              encoder.encode(
+                `id: ${event.seq}\nevent: ${event.kind}\ndata: ${JSON.stringify(event)}\n\n`,
+              ),
+            );
+            cursor = event.seq;
+          }
           return;
-        }
-        const page = ownerChat.eventsAfter(cursor);
-        if (page.stale) {
-          controller.enqueue(
-            encoder.encode(
-              `event: snapshot_required\ndata: ${JSON.stringify({ reason: "cursor_too_old", snapshotUrl: "/api/owner/snapshot" })}\n\n`,
-            ),
-          );
-          closed = true;
-          controller.close();
-          return;
-        }
-        if (!page.events.length) {
-          await new Promise((resolveDelay) => setTimeout(resolveDelay, 250));
-          return;
-        }
-        for (const event of page.events) {
-          controller.enqueue(
-            encoder.encode(
-              `id: ${event.seq}\nevent: ${event.kind}\ndata: ${JSON.stringify(event)}\n\n`,
-            ),
-          );
-          cursor = event.seq;
         }
       },
       cancel() {
@@ -382,6 +386,9 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
     });
   });
   app.get("/api/owner/channels", (context) => context.json({ channels: ownerChat.listChannels() }));
+  app.get("/api/owner/invitable-channels", (context) =>
+    context.json({ channels: ownerChat.listInvitableChannels() }),
+  );
   app.post("/api/owner/channels", async (context) => {
     let body: unknown;
     try {
@@ -405,6 +412,21 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
     const channel = ownerChat.updateChannel(context.req.param("channelId"), input.data);
     if (!channel) return context.json({ error: "频道不存在" }, 404);
     return context.json(channel);
+  });
+  app.post("/api/owner/channels/:channelId/invitations", async (context) => {
+    let body: unknown;
+    try {
+      body = await context.req.json();
+    } catch {
+      return context.json({ error: "邀请资料格式无效" }, 400);
+    }
+    const input = ownerChannelInvitationSchema.safeParse(body);
+    if (!input.success) return context.json({ error: "邀请资料格式无效" }, 400);
+    const channelId = context.req.param("channelId");
+    if (!ownerChat.inviteAgentToChannel(channelId, input.data.agentId))
+      return context.json({ error: "频道或 Agent 暂不可邀请" }, 409);
+    app.runs?.wake();
+    return context.json({ channelId, agentId: input.data.agentId, status: "joined" }, 201);
   });
   app.get("/api/owner/channels/:channelId/messages", (context) => {
     const beforeText = context.req.query("before"),

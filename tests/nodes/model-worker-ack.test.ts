@@ -32,6 +32,7 @@ it("does not settle the Pi model process until the control-plane journal ACK arr
       runId: "f51fe293-d955-48ae-85aa-b53b7888fcaa",
       agentId: "06d4fab7-5259-4faa-b51e-6017f3e08f0e",
       sessionId: "e1090cf4-f8f8-43b7-b124-e58a4dadbc1f",
+      actionScopeId: "561ad589-5e36-4c2a-98ab-35a9cfbc2e80",
       outputChannel: {
         channelId: "f584ce85-b892-4315-9a2b-00e191bd34dc",
         visibility: "private",
@@ -106,6 +107,7 @@ it("waits for the control-plane tool result before asking Pi to generate its fin
       runId: "f51fe293-d955-48ae-85aa-b53b7888fcaa",
       agentId: "06d4fab7-5259-4faa-b51e-6017f3e08f0e",
       sessionId: "e1090cf4-f8f8-43b7-b124-e58a4dadbc1f",
+      actionScopeId: "561ad589-5e36-4c2a-98ab-35a9cfbc2e80",
       outputChannel: {
         channelId: "f584ce85-b892-4315-9a2b-00e191bd34dc",
         visibility: "private",
@@ -162,6 +164,7 @@ it("gives Pi source visibility markers and an explicit output destination", asyn
       runId: "df37b8f0-bd23-4b87-a90b-b9537b842291",
       agentId: "06d4fab7-5259-4faa-b51e-6017f3e08f0e",
       sessionId: "e1090cf4-f8f8-43b7-b124-e58a4dadbc1f",
+      actionScopeId: "561ad589-5e36-4c2a-98ab-35a9cfbc2e80",
       outputChannel: { channelId: publicChannelId, visibility: "public" },
       messages: [
         {
@@ -220,6 +223,7 @@ it.each([
           runId: "c0bb07df-b434-4bca-8d75-52e6f30163ce",
           agentId: "06d4fab7-5259-4faa-b51e-6017f3e08f0e",
           sessionId: "e1090cf4-f8f8-43b7-b124-e58a4dadbc1f",
+          actionScopeId: "561ad589-5e36-4c2a-98ab-35a9cfbc2e80",
           outputChannel: {
             channelId: "f584ce85-b892-4315-9a2b-00e191bd34dc",
             visibility: "private",
@@ -266,6 +270,7 @@ it("treats empty Pi content with a normal stop reason as a successful silent tur
       runId: "721a432d-c90a-4c9b-90d2-d5285866c225",
       agentId: "06d4fab7-5259-4faa-b51e-6017f3e08f0e",
       sessionId: "e1090cf4-f8f8-43b7-b124-e58a4dadbc1f",
+      actionScopeId: "561ad589-5e36-4c2a-98ab-35a9cfbc2e80",
       outputChannel: {
         channelId: "f584ce85-b892-4315-9a2b-00e191bd34dc",
         visibility: "private",

@@ -101,6 +101,7 @@ export interface OwnerChannelUpdate {
 export type AgentToolCallResult = { ok: true; result: unknown } | { ok: false; error: string };
 
 interface ActiveAgentToolRun {
+  run_id: string;
   agent_id: string;
   node_id: string;
   session_id: string;
@@ -198,6 +199,20 @@ export class OwnerChat {
     const rows = this.db
       .prepare(
         "SELECT id,name,description,visibility,archived,created_at,updated_at FROM owner_channels ORDER BY created_at,id",
+      )
+      .all() as ChannelRow[];
+    return rows.map(toChannel);
+  }
+
+  listInvitableChannels(): OwnerChannel[] {
+    const rows = this.db
+      .prepare(
+        `SELECT c.id,c.name,c.description,c.visibility,c.archived,c.created_at,c.updated_at
+         FROM owner_channels c
+         WHERE c.archived=0
+           AND NOT EXISTS (SELECT 1 FROM owner_agent_direct_channels d WHERE d.channel_id=c.id)
+           AND NOT EXISTS (SELECT 1 FROM owner_agent_peer_direct_channels p WHERE p.channel_id=c.id)
+         ORDER BY c.created_at,c.id`,
       )
       .all() as ChannelRow[];
     return rows.map(toChannel);
@@ -338,7 +353,16 @@ export class OwnerChat {
         )
           return false;
         const channel = this.db
-          .prepare("SELECT archived FROM owner_channels WHERE id=?")
+          .prepare(
+            `SELECT c.archived FROM owner_channels c
+             WHERE c.id=?
+               AND NOT EXISTS (
+                 SELECT 1 FROM owner_agent_direct_channels d WHERE d.channel_id=c.id
+               )
+               AND NOT EXISTS (
+                 SELECT 1 FROM owner_agent_peer_direct_channels p WHERE p.channel_id=c.id
+               )`,
+          )
           .get(channelId) as { archived: number } | undefined;
         if (!channel || channel.archived) return false;
         this.db
@@ -625,6 +649,11 @@ export class OwnerChat {
                  SELECT 1 FROM owner_agent_runs r
                  WHERE r.id=j.run_id AND r.agent_id=@agent_id AND r.state='completed'
                ))
+               OR (j.role='assistant' AND j.tool_action_id IS NOT NULL AND EXISTS (
+                 SELECT 1 FROM owner_agent_tool_actions a
+                 WHERE a.session_id=j.session_id AND a.agent_id=j.agent_id
+                   AND a.action_id=j.tool_action_id
+               ))
              )
            UNION ALL
            SELECT j.seq AS journal_sequence,j.role,j.text,j.channel_id,c.visibility,
@@ -717,7 +746,9 @@ export class OwnerChat {
           | undefined;
         if (!run) return false;
         const committed = this.db
-          .prepare("SELECT 1 FROM owner_agent_session_journal WHERE run_id=? AND role='assistant'")
+          .prepare(
+            "SELECT 1 FROM owner_agent_session_journal WHERE run_id=? AND role='assistant' AND tool_action_id IS NULL",
+          )
           .get(runId);
         if (committed) {
           const existing = this.db
@@ -728,7 +759,8 @@ export class OwnerChat {
                       m.text AS visible_text
                FROM owner_agent_session_journal j
                JOIN owner_messages m ON m.id=j.message_id
-               WHERE j.run_id=? AND j.agent_id=? AND j.session_id=? AND j.channel_id=? AND j.role='assistant'`,
+               WHERE j.run_id=? AND j.agent_id=? AND j.session_id=? AND j.channel_id=?
+                 AND j.role='assistant' AND j.tool_action_id IS NULL`,
             )
             .get(runId, agentId, run.session_id, run.channel_id) as
             | {
@@ -916,7 +948,7 @@ export class OwnerChat {
   private activeAgentToolRun(runId: string, nodeId: string, agentId: string): ActiveAgentToolRun {
     const run = this.db
       .prepare(
-        `SELECT r.agent_id,r.node_id,r.state,r.independent_review,s.id AS session_id,
+        `SELECT r.id AS run_id,r.agent_id,r.node_id,r.state,r.independent_review,s.id AS session_id,
                 a.node_id AS current_node_id
          FROM owner_agent_runs r
          JOIN owner_agents a ON a.id=r.agent_id
@@ -972,7 +1004,7 @@ export class OwnerChat {
         const args = agentConversationOperations["messages.send"].schema.parse(input);
         this.requireAgentConversation(run.agent_id, args.conversationId);
         return this.recordAgentToolAction(run, toolCallId, "messages.send", args, () =>
-          this.createAgentToolMessage(run, args.conversationId, args.text),
+          this.createAgentToolMessage(run, toolCallId, args.conversationId, args.text),
         );
       }
       case "conversations.invite": {
@@ -1217,11 +1249,39 @@ export class OwnerChat {
         JSON.stringify(result),
         this.now(),
       );
+    const inputRecord =
+        typeof input === "object" && input !== null ? (input as Record<string, unknown>) : {},
+      resultRecord =
+        typeof result === "object" && result !== null ? (result as Record<string, unknown>) : {},
+      channelId =
+        (typeof inputRecord.conversationId === "string" && inputRecord.conversationId) ||
+        (typeof resultRecord.channelId === "string" && resultRecord.channelId) ||
+        (typeof resultRecord.id === "string" && resultRecord.id);
+    if (!channelId || !this.db.prepare("SELECT 1 FROM owner_channels WHERE id=?").get(channelId))
+      throw new Error("Conversation tool result has no durable source channel");
+    const contextResult = { ...resultRecord };
+    if (operation === "messages.send") delete contextResult.text;
+    this.db
+      .prepare(
+        `INSERT INTO owner_agent_session_journal(
+           session_id,agent_id,channel_id,run_id,tool_action_id,role,text,created_at
+         ) VALUES(?,?,?,?,?,'assistant',?,?)`,
+      )
+      .run(
+        run.session_id,
+        run.agent_id,
+        channelId,
+        run.run_id,
+        toolCallId,
+        `Mate 工具结果：${operation} ${JSON.stringify(contextResult)}`,
+        this.now(),
+      );
     return result;
   }
 
   private createAgentToolMessage(
     run: ActiveAgentToolRun,
+    toolActionId: string,
     channelId: string,
     text: string,
   ): OwnerMessage {
@@ -1270,10 +1330,10 @@ export class OwnerChat {
     this.db
       .prepare(
         `INSERT INTO owner_agent_session_journal(
-           session_id,agent_id,channel_id,message_id,role,text,created_at
-         ) VALUES(?,?,?,?,'assistant',?,?)`,
+           session_id,agent_id,channel_id,message_id,run_id,tool_action_id,role,text,created_at
+         ) VALUES(?,?,?,?,?,?,'assistant',?,?)`,
       )
-      .run(run.session_id, run.agent_id, channelId, id, text, at);
+      .run(run.session_id, run.agent_id, channelId, id, run.run_id, toolActionId, text, at);
     this.record("message.created", channelId, message);
     return message;
   }

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   Agent,
   type AgentMessage,
@@ -28,6 +28,7 @@ const runSchema = z
         runId: z.string().uuid(),
         agentId: z.string().uuid(),
         sessionId: z.string().uuid(),
+        actionScopeId: z.string().uuid(),
         outputChannel: z
           .object({
             channelId: z.string().uuid(),
@@ -127,7 +128,8 @@ export function serveModelWorker(stream: StreamFn): void {
     }
     active = true;
     const nonce = run.data.nonce,
-      transcript = run.data.spec.messages.map(toAgentMessage);
+      transcript = run.data.spec.messages.map(toAgentMessage),
+      actionOccurrences = new Map<string, number>();
     const forwardTool = async (
       toolCallId: string,
       operation: string,
@@ -136,6 +138,15 @@ export function serveModelWorker(stream: StreamFn): void {
     ): Promise<unknown> => {
       if (signal?.aborted) throw new Error("Tool call aborted");
       const requestId = randomUUID();
+      let durableToolCallId = toolCallId;
+      if (operation === "tools.call") {
+        const signatureHash = createHash("sha256")
+            .update(canonicalJson({ operation, input }))
+            .digest("hex"),
+          occurrence = (actionOccurrences.get(signatureHash) ?? 0) + 1;
+        actionOccurrences.set(signatureHash, occurrence);
+        durableToolCallId = `mate:${run.data.spec.actionScopeId}:${signatureHash}:${occurrence}`;
+      }
       const result = await new Promise<z.infer<typeof toolReplySchema>>((resolve, reject) => {
         const abort = () => {
           pendingTools.delete(requestId);
@@ -144,13 +155,20 @@ export function serveModelWorker(stream: StreamFn): void {
         signal?.addEventListener("abort", abort, { once: true });
         pendingTools.set(requestId, {
           nonce,
-          toolCallId,
+          toolCallId: durableToolCallId,
           resolve: (reply) => {
             signal?.removeEventListener("abort", abort);
             resolve(reply);
           },
         });
-        process.send?.({ type: "tool", nonce, requestId, toolCallId, operation, input });
+        process.send?.({
+          type: "tool",
+          nonce,
+          requestId,
+          toolCallId: durableToolCallId,
+          operation,
+          input,
+        });
       });
       if (!result.ok) throw new Error(result.error);
       return result.result;
@@ -318,6 +336,16 @@ function toAgentMessage(message: ModelContextMessage): AgentMessage {
 
 function visibilityLabel(visibility: "public" | "private"): string {
   return visibility === "public" ? "公开" : "私密";
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
+    .join(",")}}`;
 }
 
 if (process.env.MATE_MODEL_WORKER === "1") {
