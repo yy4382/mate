@@ -4,7 +4,9 @@ Mate 首版在一台 Debian 13 VPS 上运行两个服务：`mate-control-plane.s
 
 ## 安装
 
-目标机需有 systemd、Node.js 24 (`/usr/bin/node`)、Caddy (`/usr/bin/caddy`)、`curl`、`getent`、`useradd`、`setpriv`、`systemd-run`，以及对公网解析的域名与 80/443 端口。构建机运行 `pnpm install --frozen-lockfile && pnpm build`，将完整的 `dist`、`node_modules`、`package.json`、`pnpm-lock.yaml` 作为一个发布目录安全传到目标机。不要传源码、开发数据或私有研究资料。`mate.deploy.example.json` 是部署配置模板；修改域名、端口和路径后放到目标机的 root 私有目录。
+`/etc/mate` 允许 Caddy 穿行读取公开站点配置；所有者密码与节点令牌文件仍仅 root 可读。
+
+目标机需有 systemd、Node.js 24 (`/usr/bin/node`)、Caddy (`/usr/bin/caddy`)、`curl`、`getent`、`useradd`、`setpriv`、`systemd-run`，以及对公网解析的域名与 80/443 端口。在与目标机相同的 Debian 13 架构上运行 `pnpm install --frozen-lockfile && pnpm build`，使原生 Node 模块与目标机匹配；将完整的 `dist`、`node_modules`、`package.json`、`pnpm-lock.yaml` 作为一个发布目录安全传到目标机。不要传源码、开发数据或私有研究资料。`mate.deploy.example.json` 是部署配置模板；修改域名、端口和路径后放到目标机的 root 私有目录。
 
 在目标机建立初始所有者密码文件，至少 12 字节，只有 root 可读。安装器用 systemd `LoadCredential` 将文件提供给非特权控制面；控制面首次启动后保存 Argon2id 哈希，运行时不需要长期保留明文，但恢复空数据库时还需此文件。
 
@@ -34,7 +36,7 @@ sudo /usr/bin/node /opt/mate/current/dist/src/deployment/cli.js doctor /ABSOLUTE
 
 `doctor` 读取三个服务的 systemd 状态、本机控制面 `/api/status` 和公开 HTTPS `/api/status`，不输出密码或配对令牌。`ActiveState=active` 只证明进程存在；节点实际在线和 Agent 运行情况在网页查看。诊断日志分别用 `sudo journalctl -u mate-control-plane.service -n 100 --no-pager`、`sudo journalctl -u mate-node.service -n 100 --no-pager` 和 `sudo journalctl -u caddy.service -n 100 --no-pager` 查看，分享日志前检查是否包含敏感数据。
 
-升级控制面与节点必须作为一套版本进行，并在维护期先停两项服务和托管 Agent 进程，取得包含控制面数据库、节点身份与操作收据、Agent home 的协调检查点。`upgrade` 更换同一发布链接并重新启动服务，也会重新加载 Mate 托管的 Caddy 配置；它不创建备份。发布目录须包含同样的四项构建输出：
+升级控制面与节点必须作为一套版本进行，并在维护期先停两项服务和托管 Agent 进程，取得包含控制面数据库、节点身份与操作收据、Agent home 的协调检查点。`upgrade` 更换同一发布链接并重新启动服务；若现有 Caddyfile 导入 `/etc/mate/Caddyfile`，它也会校验并重新加载该站点。它不创建备份。发布目录须包含同样的四项构建输出：
 
 ```sh
 sudo /usr/bin/node /opt/mate/current/dist/src/deployment/cli.js upgrade /ABSOLUTE/mate.deploy.json /ABSOLUTE/new-release

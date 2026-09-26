@@ -1,5 +1,13 @@
 import { isAbsolute, resolve } from "node:path";
 import { z } from "zod";
+import type { CaddyMode } from "./service-lifecycle.js";
+
+export function caddyModeFor(caddyfile: string | null): CaddyMode {
+  if (caddyfile === null || caddyfile.startsWith("# Mate managed Caddy site\n")) return "managed";
+  return /^\s*import\s+["']?\/etc\/mate\/Caddyfile["']?(?:\s|$)/m.test(caddyfile)
+    ? "imported"
+    : "external";
+}
 
 const absolute = z.string().refine((value) => isAbsolute(value) && resolve(value) === value);
 const origin = z

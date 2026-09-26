@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
 import { dualHost } from "./host.js";
 import { dirname, join, resolve } from "node:path";
+import { transitionDualServices } from "./service-lifecycle.js";
 import {
   dualServiceConfigSchema,
+  caddyModeFor,
   renderCaddy,
   renderControlPlaneUnit,
   renderNodeUnit,
@@ -127,7 +129,11 @@ function stageRelease(source: string): string {
   mkdirSync(stage, { mode: 0o755 });
   try {
     for (const file of ["dist", "node_modules", "package.json", "pnpm-lock.yaml"])
-      cpSync(join(path, file), join(stage, file), { recursive: true, preserveTimestamps: true });
+      cpSync(join(path, file), join(stage, file), {
+        recursive: true,
+        preserveTimestamps: true,
+        verbatimSymlinks: true,
+      });
     if (releaseDigest(stage) !== release.split("/").at(-1))
       throw new Error("Release changed while it was being copied");
     command("/usr/bin/chmod", ["-R", "go-w", stage]);
@@ -139,7 +145,7 @@ function stageRelease(source: string): string {
   return release;
 }
 
-function releaseDigest(root: string): string {
+export function releaseDigest(root: string): string {
   const digest = createHash("sha256");
   for (const file of ["package.json", "pnpm-lock.yaml"]) {
     digest.update(file);
@@ -154,10 +160,17 @@ function releaseDigest(root: string): string {
       else if (entry.isFile()) {
         digest.update(name);
         digest.update(readFileSync(join(root, name)));
-      } else throw new Error(`Release dist contains a non-regular entry: ${name}`);
+      } else if (entry.isSymbolicLink()) {
+        const target = readlinkSync(join(root, name));
+        if (target.startsWith("/") || !resolve(root, dirname(name), target).startsWith(`${root}/`))
+          throw new Error(`Release contains a symlink outside its root: ${name}`);
+        digest.update(name);
+        digest.update(target);
+      } else throw new Error(`Release contains a non-regular entry: ${name}`);
     }
   };
   walk("dist");
+  walk("node_modules");
   return digest.digest("hex").slice(0, 24);
 }
 
@@ -184,15 +197,17 @@ export function installDualService(
   const identity = controlIdentity();
   directory("/opt/mate", 0o755);
   directory(layout.releases, 0o755);
-  directory(layout.config, 0o700);
+  // Caddy traverses this directory for the public site; credentials remain root-only files.
+  directory(layout.config, 0o711);
   directory(config.controlPlaneDataDir, 0o700, identity.uid, identity.gid);
   directory(config.nodeDataDir, 0o700);
   directory(config.agentHomeRoot, 0o755);
   const release = stageRelease(source);
   const previous = upgrade ? readlinkSync(layout.current) : null;
-  const caddyManaged =
-    !existsSync(layout.caddy) ||
-    readFileSync(layout.caddy, "utf8").startsWith("# Mate managed Caddy site\n");
+  const caddyMode = caddyModeFor(
+    existsSync(layout.caddy) ? readFileSync(layout.caddy, "utf8") : null,
+  );
+  const caddyManaged = caddyMode === "managed";
   const generatedCaddy = join(layout.config, "Caddyfile");
   const changedPaths = [
     layout.controlUnit,
@@ -203,56 +218,39 @@ export function installDualService(
   const before = new Map(
     changedPaths.map((path) => [path, existsSync(path) ? readFileSync(path, "utf8") : null]),
   );
-  let nodeWasActive = false;
-  if (upgrade) {
-    try {
-      nodeWasActive =
-        command("/usr/bin/systemctl", ["is-active", "mate-node.service"]) === "active";
-    } catch {
-      /* The node may be deliberately stopped while waiting for pairing. */
-    }
-  }
-  let stopped = false;
-  try {
-    sealedFile(generatedCaddy, renderCaddy(config), 0o644);
-    command("/usr/bin/caddy", ["validate", "--config", generatedCaddy]);
-    if (upgrade) {
-      stopped = true;
-      for (const unit of ["mate-node.service", "mate-control-plane.service"])
-        command("/usr/bin/systemctl", ["stop", unit]);
-    }
-    sealedFile(layout.controlUnit, renderControlPlaneUnit(config), 0o644);
-    sealedFile(layout.nodeUnit, renderNodeUnit(config), 0o644);
-    if (caddyManaged) sealedFile(layout.caddy, renderCaddy(config), 0o644);
-    if (!existsSync(layout.nodeEnv))
-      sealedFile(layout.nodeEnv, "# Set MATE_NODE_PAIRING_TOKEN from the owner web page.\n", 0o600);
-    publish(release);
-    command("/usr/bin/systemctl", ["daemon-reload"]);
-    command("/usr/bin/systemctl", ["enable", "--now", "mate-control-plane.service"]);
-    if (
-      existsSync(join(config.nodeDataDir, "node-identity.json")) ||
-      /^MATE_NODE_PAIRING_TOKEN=\S{32,256}$/m.test(readFileSync(layout.nodeEnv, "utf8"))
-    )
-      command("/usr/bin/systemctl", ["enable", "--now", "mate-node.service"]);
-    if (caddyManaged) {
-      command("/usr/bin/systemctl", ["enable", "--now", "caddy.service"]);
-      if (upgrade) command("/usr/bin/systemctl", ["reload-or-restart", "caddy.service"]);
-    }
-  } catch (error) {
-    for (const [path, old] of before)
-      if (old === null) rmSync(path, { force: true });
-      else sealedFile(path, old, 0o644);
-    if (previous) publish(previous);
-    else if (existsSync(layout.current)) rmSync(layout.current);
-    command("/usr/bin/systemctl", ["daemon-reload"]);
-    if (stopped) {
-      command("/usr/bin/systemctl", ["start", "mate-control-plane.service"]);
-      if (nodeWasActive) command("/usr/bin/systemctl", ["start", "mate-node.service"]);
-    }
-    if (upgrade && caddyManaged)
-      command("/usr/bin/systemctl", ["reload-or-restart", "caddy.service"]);
-    throw error;
-  }
+  const startNode =
+    existsSync(join(config.nodeDataDir, "node-identity.json")) ||
+    (existsSync(layout.nodeEnv) &&
+      /^MATE_NODE_PAIRING_TOKEN=\S{32,256}$/m.test(readFileSync(layout.nodeEnv, "utf8")));
+  transitionDualServices(
+    (...args) => command("/usr/bin/systemctl", args),
+    { upgrade, startNode, caddyMode },
+    () => {
+      sealedFile(generatedCaddy, renderCaddy(config), 0o644);
+      command("/usr/bin/caddy", ["validate", "--config", generatedCaddy]);
+      if (caddyMode === "imported")
+        command("/usr/bin/caddy", ["validate", "--config", layout.caddy]);
+    },
+    () => {
+      sealedFile(layout.controlUnit, renderControlPlaneUnit(config), 0o644);
+      sealedFile(layout.nodeUnit, renderNodeUnit(config), 0o644);
+      if (caddyManaged) sealedFile(layout.caddy, renderCaddy(config), 0o644);
+      if (!existsSync(layout.nodeEnv))
+        sealedFile(
+          layout.nodeEnv,
+          "# Set MATE_NODE_PAIRING_TOKEN from the owner web page.\n",
+          0o600,
+        );
+      publish(release);
+    },
+    () => {
+      for (const [path, old] of before)
+        if (old === null) rmSync(path, { force: true });
+        else sealedFile(path, old, 0o644);
+      if (previous) publish(previous);
+      else if (existsSync(layout.current)) rmSync(layout.current);
+    },
+  );
   return {
     release,
     controlPlane: "mate-control-plane.service",

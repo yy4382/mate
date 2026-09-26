@@ -182,6 +182,7 @@ export function ChatPage() {
   const threadRootIdRef = useRef<string | null>(null);
   const threadRequestRef = useRef(0);
   const selectedIdRef = useRef<string | null>(null);
+  const handledDeepLinkRef = useRef<string | null>(null);
   const draft = selectedId ? (drafts[selectedId] ?? "") : "";
   selectedIdRef.current = selectedId;
   threadRootIdRef.current = threadRoot?.id ?? null;
@@ -528,10 +529,18 @@ export function ChatPage() {
   }, [authenticated, selectedId]);
 
   useEffect(() => {
-    const requestId = new URLSearchParams(window.location.search).get("approval");
-    if (!requestId || !approvals.some((approval) => approval.requestId === requestId)) return;
-    document.getElementById(`approval-${requestId}`)?.scrollIntoView({ block: "center" });
-  }, [approvals]);
+    const query = new URLSearchParams(window.location.search);
+    const channelId = query.get("channel"),
+      approvalId = query.get("approval"),
+      messageId = query.get("message");
+    if (!selectedId || selectedId !== channelId || (!approvalId && !messageId)) return;
+    const targetId = approvalId ? `approval-${approvalId}` : `message-${messageId}`;
+    if (handledDeepLinkRef.current === targetId) return;
+    const target = document.getElementById(targetId);
+    if (!target) return;
+    target.scrollIntoView({ block: "center" });
+    handledDeepLinkRef.current = targetId;
+  }, [selectedId, approvals, messageWindows]);
 
   useEffect(() => {
     if (!authenticated) return;
@@ -1010,7 +1019,12 @@ export function ChatPage() {
                 </div>
               ) : (
                 currentMessages.map((message) => (
-                  <article className="message-row" key={message.id} tabIndex={0}>
+                  <article
+                    id={`message-${message.id}`}
+                    className="message-row"
+                    key={message.id}
+                    tabIndex={0}
+                  >
                     <div className="message-avatar" aria-hidden="true">
                       {message.author.id === "mate-system"
                         ? "M"

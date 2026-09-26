@@ -6,6 +6,7 @@ import { AgentsPage } from "./agents-page.js";
 import { TasksPage } from "./tasks-page.js";
 import { RemindersPage } from "./reminders-page.js";
 import { watchServiceStatus, type ServiceState } from "./status-monitor.js";
+import { appReturnPath } from "./navigation.js";
 import "./style.css";
 
 function StatusPage() {
@@ -55,7 +56,7 @@ function LoginPage() {
         body: JSON.stringify({ password: form.get("password") }),
       });
       if (response.ok) {
-        window.location.assign("/app");
+        window.location.assign(appReturnPath(window.location.search));
         return;
       }
       const result: unknown = await response.json();
