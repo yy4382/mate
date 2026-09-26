@@ -15,6 +15,7 @@ afterEach(() => {
 
 const agentId = "11111111-1111-4111-8111-111111111111";
 const otherAgentId = "22222222-2222-4222-8222-222222222222";
+const secondLocalAgentId = "66666666-6666-4666-8666-666666666666";
 const remoteNodeId = "33333333-3333-4333-8333-333333333333";
 const requestId = "44444444-4444-4444-8444-444444444444";
 
@@ -29,12 +30,14 @@ function setup() {
   const node = initializeCoordinatedRoots(paths);
   const localHome = join(paths.agentHomeRoot, agentId);
   mkdirSync(localHome, { recursive: true, mode: 0o700 });
+  mkdirSync(join(paths.agentHomeRoot, secondLocalAgentId), { recursive: true, mode: 0o700 });
   const owner = new OwnerAuth({ dataDir: paths.controlPlaneDataDir });
   owner.db
     .prepare("INSERT INTO nodes(id,public_key,paired_at) VALUES(?,?,?)")
     .run(remoteNodeId, "remote-paired-key", 1);
   for (const [id, assignedNodeId, marker] of [
     [agentId, node.nodeId, "a".repeat(64)],
+    [secondLocalAgentId, node.nodeId, "a".repeat(64)],
     [otherAgentId, remoteNodeId, "b".repeat(64)],
   ] as const)
     owner.db
@@ -56,9 +59,9 @@ function setup() {
         "c".repeat(64),
         id,
         `mate_${id.replaceAll("-", "").slice(0, 27)}`,
-        id === agentId ? 24_001 : 24_002,
-        id === agentId ? 24_001 : 24_002,
-        id === agentId ? localHome : `/remote/${id}`,
+        id === otherAgentId ? 24_002 : 24_001,
+        id === otherAgentId ? 24_002 : 24_001,
+        id === otherAgentId ? `/remote/${id}` : join(paths.agentHomeRoot, id),
         marker,
         1,
         1,
@@ -154,5 +157,15 @@ it("holds every Agent assigned to a node whose restored key no longer matches it
   owner.db.prepare("UPDATE nodes SET public_key='wrong-key' WHERE id=?").run(node.nodeId);
   owner.close();
   const result = reconcileCoordinatedState(paths, { lookupAgentIdentity: localIdentity, now: () => 300 });
-  expect(result.holds).toEqual([{ agentId, reason: "node_identity_unproven" }]);
+  expect(result.holds).toEqual([
+    { agentId, reason: "node_identity_unproven" },
+    { agentId: secondLocalAgentId, reason: "node_identity_unproven" },
+  ]);
+  const control = new OwnerAuth({ dataDir: paths.controlPlaneDataDir });
+  expect(control.db.prepare("SELECT agent_id FROM owner_agent_recovery_holds ORDER BY agent_id").all())
+    .toEqual([
+      { agent_id: agentId },
+      { agent_id: secondLocalAgentId },
+    ]);
+  control.close();
 });

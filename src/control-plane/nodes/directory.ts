@@ -228,6 +228,7 @@ export class NodeDirectory {
       state: "succeeded" | "failed" | "unknown";
       startedAt: number;
       receipt: unknown | null;
+      revision?: number;
     },
   ) => void;
   private privilegedReadyHandler?: () => void;
@@ -243,6 +244,7 @@ export class NodeDirectory {
       agentId: string;
       state: "succeeded" | "failed" | "unknown";
       receipt: unknown | null;
+      revision?: number;
     },
   ) => void;
   private onReady?: () => void;
@@ -404,7 +406,7 @@ export class NodeDirectory {
           state: request.state,
           startedAt: request.startedAt,
           receipt: request.receipt,
-          revision: request.revision,
+          ...(request.revision !== undefined ? { revision: request.revision } : {}),
         });
       }
       if (
@@ -419,7 +421,7 @@ export class NodeDirectory {
           state: request.state,
           startedAt: request.startedAt,
           receipt: request.receipt,
-          revision: request.revision,
+          ...(request.revision !== undefined ? { revision: request.revision } : {}),
         });
       return;
     }
@@ -438,7 +440,7 @@ export class NodeDirectory {
             state: receipt.state,
             startedAt: receipt.startedAt,
             receipt: receipt.receipt,
-            revision: receipt.revision,
+            ...(receipt.revision !== undefined ? { revision: receipt.revision } : {}),
           });
       return;
     }
@@ -1045,7 +1047,11 @@ export class NodeDirectory {
       seen.add(receipt.operationId);
     }
     for (const receipt of request.receipts) {
-      this.processReceiptHandler?.(session.nodeId, receipt);
+      const { revision, ...value } = receipt;
+      this.processReceiptHandler?.(session.nodeId, {
+        ...value,
+        ...(revision !== undefined ? { revision } : {}),
+      });
     }
     for (const [operationId, agentId] of pending.operations) {
       if (seen.has(operationId)) continue;
@@ -1202,7 +1208,14 @@ export class NodeDirectory {
       return this.reject(socket, request.requestId, "not_authenticated", "节点尚未完成身份验证。");
     const pending = this.pendingAgentProcessOperations.get(request.requestId);
     if (!pending) {
-      this.processReceiptHandler?.(nodeId, request);
+      const { revision, ...value } = request;
+      this.processReceiptHandler?.(nodeId, {
+        operationId: value.operationId,
+        agentId: value.agentId,
+        state: value.state,
+        receipt: value.receipt,
+        ...(revision !== undefined ? { revision } : {}),
+      });
       return;
     }
     if (
@@ -1430,7 +1443,7 @@ export class NodeDirectory {
         agentId: result.agentId,
         state: result.state,
         receipt: result.receipt,
-        revision: result.revision,
+        ...(result.revision !== undefined ? { revision: result.revision } : {}),
       });
   }
 

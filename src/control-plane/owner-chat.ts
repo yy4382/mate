@@ -1554,7 +1554,8 @@ export class OwnerChat {
              JOIN owner_agent_session_journal first_input
                ON first_input.message_id=d.message_id AND first_input.agent_id=r.agent_id
                   AND first_input.role='user'
-             WHERE r.id=? AND r.agent_id=?`,
+             WHERE r.id=? AND r.agent_id=?
+           AND NOT EXISTS (SELECT 1 FROM owner_agent_recovery_holds hold WHERE hold.agent_id=a.id)`,
           )
           .get(runId, agentId) as
           | {
@@ -1697,7 +1698,8 @@ export class OwnerChat {
          FROM owner_agent_runs r
          JOIN owner_agents a ON a.id=r.agent_id
          JOIN owner_agent_sessions s ON s.agent_id=a.id
-         WHERE r.id=? AND r.agent_id=?`,
+         WHERE r.id=? AND r.agent_id=?
+           AND NOT EXISTS (SELECT 1 FROM owner_agent_recovery_holds hold WHERE hold.agent_id=a.id)`,
       )
       .get(runId, agentId) as (ActiveAgentToolRun & { current_node_id: string }) | undefined;
     if (!run || run.state !== "running" || run.node_id !== nodeId || run.current_node_id !== nodeId)

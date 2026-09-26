@@ -544,13 +544,14 @@ function connectOnce(
           .then(
             (result) => {
               if (socket.readyState !== WebSocket.OPEN || !authenticated) return;
+              const revision = workspaceExecutor.receiptRevision?.(agentId, operationId);
               sendWorkspaceOperationResult(
                 (response) => sendRequest(socket, response),
                 {
                   requestId,
                   operationId,
                   agentId,
-                  revision: workspaceExecutor.receiptRevision?.(agentId, operationId),
+                  ...(revision !== undefined ? { revision } : {}),
                 },
                 result,
               );

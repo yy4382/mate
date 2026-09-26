@@ -424,7 +424,8 @@ export class AgentRunCoordinator {
       .prepare(
         `SELECT a.id,a.node_id FROM owner_agents a
        LEFT JOIN owner_agent_run_control c ON c.agent_id=a.id
-       WHERE c.paused_reason IS NULL OR c.paused_reason<>'manual'`,
+       WHERE (c.paused_reason IS NULL OR c.paused_reason<>'manual')
+         AND NOT EXISTS (SELECT 1 FROM owner_agent_recovery_holds hold WHERE hold.agent_id=a.id)`,
       )
       .all() as Array<{ id: string; node_id: string }>;
     for (const row of rows)
@@ -578,6 +579,8 @@ export class AgentRunCoordinator {
   }
 
   async resumeAgent(agentId: string): Promise<{ ok: boolean; error?: string }> {
+    if (this.isRecoveryHeld(agentId))
+      return { ok: false, error: "Agent 仍处于恢复保护状态，须经维护核验后释放。" };
     const row = this.db
       .prepare(
         `SELECT a.node_id,a.linux_username,a.uid,a.gid,a.home,a.home_marker,c.paused_reason
@@ -638,6 +641,14 @@ export class AgentRunCoordinator {
     this.nodes.activateAgent(row.node_id, agentId);
     this.wake();
     return { ok: true };
+  }
+
+  private isRecoveryHeld(agentId: string): boolean {
+    return Boolean(
+      this.db
+        .prepare("SELECT 1 FROM owner_agent_recovery_holds WHERE agent_id=?")
+        .get(agentId),
+    );
   }
 
   pauseReason(agentId: string): string | null {
@@ -758,7 +769,8 @@ export class AgentRunCoordinator {
                JOIN owner_channels c ON c.id=d.channel_id
                WHERE a.id=? AND a.status='waiting_credentials' AND a.model_ready=1
                  AND (c.archived=0 OR m.internal_kind='reminder')
-                 AND d.id=? AND d.state='pending'`,
+                 AND d.id=? AND d.state='pending'
+                 AND NOT EXISTS (SELECT 1 FROM owner_agent_recovery_holds hold WHERE hold.agent_id=a.id)`,
             )
             .get(candidate.agent_id, candidate.delivery_id) as
             { visibility: "public" | "private" } | undefined;

@@ -541,7 +541,7 @@ export class WorkspaceService {
           channelId: authorized.channel_id,
           operation: input.operationName,
           nodeRequestHash,
-          revision: result.revision,
+          ...(result.revision !== undefined ? { revision: result.revision } : {}),
           result: value,
         };
       this.completeToolAction(
@@ -700,7 +700,14 @@ export class WorkspaceService {
         throw confirmedFileFailure(response.result.code, response.result.stderr);
       }
       if (response.result.truncated) throw invalidNodeResponse();
-      return { ...response.result, ...(response.revision ? { revision: response.revision } : {}) };
+      const revision = response.revision ?? response.result.revision;
+      return {
+        code: response.result.code,
+        stdout: response.result.stdout,
+        stderr: response.result.stderr,
+        truncated: response.result.truncated,
+        ...(revision !== undefined ? { revision } : {}),
+      };
     } catch (error) {
       if (error instanceof WorkspaceError) throw error;
       const message = error instanceof Error ? error.message : "Node file request failed";
@@ -765,7 +772,8 @@ export class WorkspaceService {
          JOIN owner_channel_memberships m ON m.channel_id=d.channel_id
            AND m.principal_kind='agent' AND m.principal_id=a.id AND m.active=1
          WHERE r.id=? AND r.agent_id=? AND r.state='running'
-           AND s.verified_at IS NOT NULL AND a.status IN ('waiting_credentials','ready')`,
+           AND s.verified_at IS NOT NULL AND a.status IN ('waiting_credentials','ready')
+           AND NOT EXISTS (SELECT 1 FROM owner_agent_recovery_holds hold WHERE hold.agent_id=a.id)`,
       )
       .get(runId, agentId) as
       { session_id: string; node_id: string; delivery_id: string; channel_id: string } | undefined;
@@ -1037,6 +1045,7 @@ export class WorkspaceService {
       result?: unknown;
       error?: string;
     };
+    const revision = result.ok ? result.revision ?? result.result.revision : undefined;
     if (!result.ok) {
       envelope = {
         state: "unknown",
@@ -1044,7 +1053,6 @@ export class WorkspaceService {
         runId: identity.runId,
         channelId: identity.channelId,
         operation: identity.operation,
-        revision: result.revision,
         error: result.error,
       };
     } else if (result.result.code !== 0) {
@@ -1054,7 +1062,7 @@ export class WorkspaceService {
         runId: identity.runId,
         channelId: identity.channelId,
         operation: identity.operation,
-        revision: result.revision,
+        ...(revision !== undefined ? { revision } : {}),
         result: { code: result.result.code, stderr: result.result.stderr },
         error: result.result.stderr || "File operation failed",
       };
@@ -1066,7 +1074,7 @@ export class WorkspaceService {
           runId: identity.runId,
           channelId: identity.channelId,
           operation: identity.operation,
-          revision: result.revision,
+          ...(revision !== undefined ? { revision } : {}),
           result: JSON.parse(result.result.stdout) as unknown,
         };
       } catch {
@@ -1076,7 +1084,7 @@ export class WorkspaceService {
           runId: identity.runId,
           channelId: identity.channelId,
           operation: identity.operation,
-          revision: result.revision,
+          ...(revision !== undefined ? { revision } : {}),
           error: "Invalid node receipt",
         };
       }

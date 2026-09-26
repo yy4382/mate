@@ -129,6 +129,7 @@ export class PrivilegedApprovals {
   request(
     input: Omit<PrivilegedCommand, "operationId" | "expiresAt"> & { channelId: string },
   ): ApprovalView {
+    if (this.isRecoveryHeld(input.agentId)) throw new Error("Agent is held for recovery");
     const { channelId: rawChannelId, ...details } = input;
     const command = privilegedCommandSchema.parse({
       ...details,
@@ -240,7 +241,9 @@ export class PrivilegedApprovals {
       .all() as { request_id: string }[];
     for (const row of rows) {
       this.expire(row.request_id);
-      if (this.row(row.request_id)?.state === "approved") void this.dispatch(row.request_id);
+      const current = this.row(row.request_id);
+      if (current?.state === "approved" && !this.isRecoveryHeld(current.agent_id))
+        void this.dispatch(row.request_id);
     }
   }
 
@@ -251,6 +254,7 @@ export class PrivilegedApprovals {
       state: "succeeded" | "failed" | "unknown";
       startedAt: number;
       receipt: unknown | null;
+      revision?: number;
     },
   ): boolean {
     const row = this.row(z.string().uuid().parse(requestId));
@@ -273,12 +277,14 @@ export class PrivilegedApprovals {
       .transaction(() => {
         this.database
           .prepare(
-            `UPDATE owner_privileged_approvals SET state=?,receipt_json=?,updated_at=?
-        WHERE request_id=? AND state IN ('approved','running','unknown','expired')`,
+            `UPDATE owner_privileged_approvals
+             SET state=?,receipt_json=?,node_receipt_revision=COALESCE(?,node_receipt_revision),updated_at=?
+             WHERE request_id=? AND state IN ('approved','running','unknown','expired')`,
           )
           .run(
             outcome.state,
             outcome.receipt === null ? null : JSON.stringify(outcome.receipt),
+            validRevision(outcome.revision) ?? null,
             this.now(),
             requestId,
           );
@@ -313,7 +319,7 @@ export class PrivilegedApprovals {
   private async dispatchOnce(requestId: string): Promise<void> {
     this.expire(requestId);
     const row = this.row(requestId);
-    if (!row || row.state !== "approved") return;
+    if (!row || row.state !== "approved" || this.isRecoveryHeld(row.agent_id)) return;
     const command = privilegedCommandSchema.parse(JSON.parse(row.command_json));
     const grant = {
       command,
@@ -358,6 +364,18 @@ export class PrivilegedApprovals {
     }
   }
 
+  private isRecoveryHeld(agentId: string): boolean {
+    const table = this.database
+      .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='owner_agent_recovery_holds'")
+      .get();
+    if (!table) return false;
+    return Boolean(
+      this.database
+        .prepare("SELECT 1 FROM owner_agent_recovery_holds WHERE agent_id=?")
+        .get(agentId),
+    );
+  }
+
   private expire(requestId: string): void {
     const row = this.row(requestId);
     if (!row || !["pending", "approved"].includes(row.state)) return;
@@ -398,4 +416,8 @@ export class PrivilegedApprovals {
       createdAt: row.created_at,
     };
   }
+}
+
+function validRevision(value: unknown): number | undefined {
+  return Number.isSafeInteger(value) && Number(value) > 0 ? Number(value) : undefined;
 }
