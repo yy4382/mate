@@ -1,14 +1,16 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
+import { createAtomicNoReplaceRename } from "../../src/execution/atomic-rename.js";
 import {
   commitFileIfHashMatches,
   moveFileNoReplace,
 } from "../../src/execution/workspace-mutations.js";
 
 const roots: string[] = [];
+const renameNoReplace = createAtomicNoReplaceRename(resolve("dist/src/execution/rename-noreplace"));
 const temp = () => {
   const root = mkdtempSync(join(tmpdir(), "mate-workspace-mutations-"));
   roots.push(root);
@@ -16,17 +18,51 @@ const temp = () => {
 };
 afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })));
 
-it("does not overwrite a move target created after the request began", () => {
+it("does not overwrite a move target created in the final pre-syscall race window", () => {
   const root = temp(),
     source = join(root, "source.txt"),
     destination = join(root, "destination.txt");
   writeFileSync(source, "original source");
 
   expect(() =>
-    moveFileNoReplace(source, destination, () => writeFileSync(destination, "concurrent target")),
+    moveFileNoReplace(source, destination, renameNoReplace, () =>
+      writeFileSync(destination, "concurrent target"),
+    ),
   ).toThrow(/destination_exists/);
   expect(readFileSync(source, "utf8")).toBe("original source");
   expect(readFileSync(destination, "utf8")).toBe("concurrent target");
+});
+
+it("moves a source replacement instead of deleting it through a later by-path unlink", () => {
+  const root = temp(),
+    source = join(root, "source.txt"),
+    displaced = join(root, "displaced.txt"),
+    destination = join(root, "destination.txt");
+  writeFileSync(source, "selected source");
+
+  moveFileNoReplace(source, destination, renameNoReplace, () => {
+    renameSync(source, displaced);
+    writeFileSync(source, "concurrent replacement");
+  });
+
+  expect(readFileSync(displaced, "utf8")).toBe("selected source");
+  expect(readFileSync(destination, "utf8")).toBe("concurrent replacement");
+  expect(lstatSync(destination).nlink).toBe(1);
+  expect(() => readFileSync(source)).toThrow();
+});
+
+it("fails a move explicitly when the atomic no-replace helper is unavailable", () => {
+  const root = temp(),
+    source = join(root, "source.txt"),
+    destination = join(root, "destination.txt"),
+    unavailableRename = createAtomicNoReplaceRename(join(root, "missing-helper"));
+  writeFileSync(source, "source remains intact");
+
+  expect(() => moveFileNoReplace(source, destination, unavailableRename)).toThrow(
+    /atomic_move_unavailable/,
+  );
+  expect(readFileSync(source, "utf8")).toBe("source remains intact");
+  expect(() => readFileSync(destination)).toThrow();
 });
 
 it("rejects an edit if the file changes between its initial hash check and commit", () => {

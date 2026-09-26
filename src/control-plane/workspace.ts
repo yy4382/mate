@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
 import { createHash, randomUUID } from "node:crypto";
+import { posix as posixPath } from "node:path";
 import type { NodeDirectory } from "./nodes/directory.js";
 import type { Operation } from "../execution/backend.js";
 import type { ControlWorkspaceOperation, NodeWorkspaceOperationResult } from "../nodes/protocol.js";
@@ -42,6 +43,7 @@ export class WorkspaceError extends Error {
       | "invalid_response"
       | "operation_unknown"
       | "operation_conflict"
+      | "download_unknown"
       | "workspace_unavailable",
     message: string,
     readonly status: number,
@@ -69,8 +71,17 @@ interface WorkspaceAccessAudit {
   paths: string[];
 }
 
+export interface WorkspaceDownloadStatus {
+  state: "started" | "succeeded" | "failed" | "cancelled";
+  errorCode: string | null;
+  expiresInMs: number;
+}
+
+const DOWNLOAD_STATUS_TTL_MS = 24 * 60 * 60 * 1000;
+
 /** Owner reads and Agent file actions cross the paired node protocol one request at a time. */
 export class WorkspaceService {
+  private readonly downloadPruneTimer: ReturnType<typeof setInterval>;
   private readonly actionOperations = new Map<
     string,
     {
@@ -89,9 +100,26 @@ export class WorkspaceService {
     private readonly db: Database.Database,
     private readonly nodes: NodeDirectory,
   ) {
+    this.db
+      .prepare(
+        `UPDATE owner_workspace_access_audit
+         SET result='failed',error_code='download_interrupted',completed_at=?
+         WHERE operation='download' AND result='started'`,
+      )
+      .run(Date.now());
+    this.pruneExpiredDownloadBindings(Date.now());
+    this.downloadPruneTimer = setInterval(
+      () => this.pruneExpiredDownloadBindings(Date.now()),
+      60 * 60 * 1000,
+    );
+    this.downloadPruneTimer.unref();
     nodes.setWorkspaceOperationResultHandler((nodeId, result) =>
       this.receiveActionResult(nodeId, result),
     );
+  }
+
+  close(): void {
+    clearInterval(this.downloadPruneTimer);
   }
 
   async list(
@@ -326,31 +354,80 @@ export class WorkspaceService {
   async download(
     agentId: string,
     path: string,
-  ): Promise<{ size: number; stream: ReadableStream<Uint8Array> }> {
-    return this.withAccessAudit(
-      {
-        principalKind: "owner",
-        principalId: "owner",
-        agentId,
-        operation: "download",
-        paths: [path],
-      },
-      () => this.downloadUnchecked(agentId, path),
-    );
+    downloadId: string,
+    ownerSessionToken: string,
+  ): Promise<{ size: number; stream: ReadableStream<Uint8Array>; downloadId: string }> {
+    this.pruneExpiredDownloadBindings(Date.now());
+    const access = {
+      principalKind: "owner" as const,
+      principalId: "owner",
+      agentId,
+      operation: "download",
+      paths: [path],
+    };
+    const ownerSessionHash = createHash("sha256").update(ownerSessionToken).digest("hex");
+    this.recordAccess(access, "started", undefined, {
+      id: downloadId,
+      ownerSessionHash,
+      expiresAt: Date.now() + DOWNLOAD_STATUS_TTL_MS,
+      completedAt: null,
+    });
+    try {
+      return await this.downloadUnchecked(agentId, path, downloadId);
+    } catch (error) {
+      this.completeDownloadAudit(downloadId, "failed", workspaceAccessErrorCode(error));
+      throw error;
+    }
+  }
+
+  downloadStatus(
+    agentId: string,
+    downloadId: string,
+    ownerSessionToken: string,
+  ): WorkspaceDownloadStatus {
+    this.pruneExpiredDownloadBindings(Date.now());
+    const ownerSessionHash = createHash("sha256").update(ownerSessionToken).digest("hex");
+    const row = this.db
+      .prepare(
+        `SELECT result,error_code,download_expires_at FROM owner_workspace_access_audit
+         WHERE download_id=? AND agent_id=? AND actor_kind='owner' AND operation='download'
+           AND owner_session_hash=? AND download_expires_at>?`,
+      )
+      .get(downloadId, agentId, ownerSessionHash, Date.now()) as
+      | {
+          result: WorkspaceDownloadStatus["state"];
+          error_code: string | null;
+          download_expires_at: number;
+        }
+      | undefined;
+    if (!row) throw new WorkspaceError("download_unknown", "找不到这次文件下载记录。", 404);
+    return {
+      state: row.result,
+      errorCode: row.error_code,
+      expiresInMs: Math.max(0, row.download_expires_at - Date.now()),
+    };
   }
 
   private async downloadUnchecked(
     agentId: string,
     path: string,
-  ): Promise<{ size: number; stream: ReadableStream<Uint8Array> }> {
+    downloadId: string,
+  ): Promise<{ size: number; stream: ReadableStream<Uint8Array>; downloadId: string }> {
     const metadata = await this.stat(agentId, path);
     if (metadata.type !== "file") throw new WorkspaceError("not_file", "只能下载普通文件。", 400);
     let offset = 0,
-      cancelled = false;
+      finished = false;
+    const thisService = this,
+      finish = (result: "succeeded" | "failed" | "cancelled", errorCode?: string) => {
+        if (finished) return;
+        finished = true;
+        thisService.completeDownloadAudit(downloadId, result, errorCode);
+      };
     const stream = new ReadableStream<Uint8Array>({
       async pull(controller) {
-        if (cancelled) return;
+        if (finished) return;
         if (offset >= metadata.size) {
+          finish("succeeded");
           controller.close();
           return;
         }
@@ -359,18 +436,22 @@ export class WorkspaceService {
           if (!chunk.bytes.byteLength || chunk.bytes.byteLength > metadata.size - offset)
             throw new WorkspaceError("file_changed", "文件在下载期间发生变化。", 409);
           offset += chunk.bytes.byteLength;
+          thisService.renewDownloadBinding(downloadId);
           controller.enqueue(chunk.bytes);
-          if (offset === metadata.size) controller.close();
+          if (offset === metadata.size) {
+            finish("succeeded");
+            controller.close();
+          }
         } catch (error) {
+          finish("failed", workspaceAccessErrorCode(error));
           controller.error(error);
         }
       },
       cancel() {
-        cancelled = true;
+        finish("cancelled", "download_cancelled");
       },
     });
-    const thisService = this;
-    return { size: metadata.size, stream };
+    return { size: metadata.size, stream, downloadId };
   }
 
   /** Persist authorization and the node receipt before returning an Agent file action. */
@@ -522,15 +603,25 @@ export class WorkspaceService {
 
   private recordAccess(
     access: WorkspaceAccessAudit,
-    result: "succeeded" | "failed",
+    result: WorkspaceDownloadStatus["state"],
     errorCode?: string,
+    download?: {
+      id: string;
+      ownerSessionHash: string;
+      expiresAt: number;
+      completedAt: number | null;
+    },
   ): void {
-    const paths = access.paths.map(safeAuditPath);
+    const identity = this.db
+        .prepare("SELECT home FROM owner_agents WHERE id=?")
+        .get(access.agentId) as { home: string | null } | undefined,
+      paths = access.paths.map((path) => safeAuditPath(path, identity?.home ?? undefined));
     this.db
       .prepare(
         `INSERT INTO owner_workspace_access_audit(
-           at,actor_kind,actor_id,agent_id,run_id,operation,relative_paths,result,error_code
-         ) VALUES(?,?,?,?,?,?,?,?,?)`,
+           at,actor_kind,actor_id,agent_id,run_id,operation,relative_paths,result,
+           download_id,owner_session_hash,download_expires_at,completed_at,error_code
+         ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       )
       .run(
         Date.now(),
@@ -541,8 +632,50 @@ export class WorkspaceService {
         access.operation,
         JSON.stringify(paths),
         result,
+        download?.id ?? null,
+        download?.ownerSessionHash ?? null,
+        download?.expiresAt ?? null,
+        download ? download.completedAt : result === "started" ? null : Date.now(),
         errorCode ?? null,
       );
+  }
+
+  /** Retain download state for 24 hours, then erase its lookup ID and owner-session binding. */
+  private pruneExpiredDownloadBindings(now: number): void {
+    this.db
+      .prepare(
+        `UPDATE owner_workspace_access_audit
+         SET result=CASE WHEN result='started' THEN 'failed' ELSE result END,
+             error_code=CASE WHEN result='started' THEN 'download_status_expired' ELSE error_code END,
+             completed_at=CASE WHEN result='started' THEN ? ELSE completed_at END,
+             download_id=NULL,owner_session_hash=NULL,download_expires_at=NULL
+         WHERE operation='download' AND download_id IS NOT NULL AND download_expires_at<=?`,
+      )
+      .run(now, now);
+  }
+
+  /** Active streams refresh status retention as each bounded chunk makes progress. */
+  private renewDownloadBinding(downloadId: string): void {
+    this.db
+      .prepare(
+        `UPDATE owner_workspace_access_audit SET download_expires_at=?
+         WHERE download_id=? AND result='started'`,
+      )
+      .run(Date.now() + DOWNLOAD_STATUS_TTL_MS, downloadId);
+  }
+
+  private completeDownloadAudit(
+    downloadId: string,
+    result: "succeeded" | "failed" | "cancelled",
+    errorCode?: string,
+  ): void {
+    this.db
+      .prepare(
+        `UPDATE owner_workspace_access_audit
+         SET result=?,error_code=?,completed_at=?,download_expires_at=?
+         WHERE download_id=? AND result='started'`,
+      )
+      .run(result, errorCode ?? null, Date.now(), Date.now() + DOWNLOAD_STATUS_TTL_MS, downloadId);
   }
 
   private async runNodeOperation(
@@ -1022,11 +1155,16 @@ function operationPaths(operation: Exclude<Operation, { kind: "exec" }>): string
   return operation.kind === "move" ? [operation.path, operation.destination] : [operation.path];
 }
 
-function safeAuditPath(path: string): string {
+function safeAuditPath(path: string, home?: string): string {
   if (path.includes("\0")) return "[invalid path]";
-  const normalized = path.replaceAll("\\", "/");
-  if (normalized.startsWith("/")) return "[absolute path request]";
-  return normalized.slice(0, 4096);
+  if (path.startsWith("/") && home?.startsWith("/")) {
+    const relative = posixPath.relative(posixPath.normalize(home), posixPath.normalize(path));
+    if (relative === "" || (!relative.startsWith("../") && relative !== ".."))
+      return relative.slice(0, 4096);
+    return "[absolute path request]";
+  }
+  if (path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path)) return "[absolute path request]";
+  return path.slice(0, 4096);
 }
 
 function workspaceAccessErrorCode(error: unknown): string {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { redirectToLogin } from "./navigation.js";
 import "./agents-page.css";
 
@@ -46,6 +46,134 @@ interface AgentRequest {
   description: string;
   model: { provider: string; id: string };
   initialChannelId?: string;
+}
+
+interface WorkspaceDownloadStatus {
+  downloadId: string;
+  state: "started" | "succeeded" | "failed" | "cancelled";
+  errorCode: string | null;
+  expiresInMs?: number;
+}
+
+const DOWNLOAD_STATUS_TTL_MS = 24 * 60 * 60 * 1000;
+const DOWNLOAD_STATUS_REGISTRATION_GRACE_MS = 30 * 1000;
+
+class WorkspaceDownloadError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+class WorkspaceDownloadStatusUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WorkspaceDownloadStatusUnavailableError";
+  }
+}
+
+function downloadMessage(code: string | null | undefined, fallback?: string): string {
+  switch (code) {
+    case "not_found":
+      return "文件已不存在，请重新加载目录。";
+    case "permission_denied":
+      return "Agent 的 Linux 用户无权读取此文件。";
+    case "file_changed":
+      return "文件在下载期间发生变化，请重新加载后重试。";
+    case "download_interrupted":
+      return "控制面重启时下载尚未完成，请重新加载目录后重试。";
+    case "download_cancelled":
+      return "浏览器取消了文件下载。";
+    case "node_offline":
+      return "Agent 节点已离线，无法读取文件。";
+    default:
+      return fallback ?? "文件下载失败，请重试。";
+  }
+}
+
+function newDownloadId(): string {
+  return crypto.randomUUID();
+}
+
+function abortError(): DOMException {
+  return new DOMException("The download status check was aborted", "AbortError");
+}
+
+function abortableDelay(milliseconds: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolveDelay, reject) => {
+    if (signal?.aborted) {
+      reject(abortError());
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolveDelay();
+    }, milliseconds);
+    const abort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      reject(abortError());
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+export async function waitForDownloadStatus(
+  agentId: string,
+  downloadId: string,
+  options: {
+    signal?: AbortSignal;
+    now?: () => number;
+    fetchStatus?: typeof fetch;
+    delay?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
+    statusTtlMs?: number;
+    registrationGraceMs?: number;
+  } = {},
+): Promise<WorkspaceDownloadStatus> {
+  const url = `/api/owner/agents/${encodeURIComponent(agentId)}/workspace/downloads/${encodeURIComponent(downloadId)}`,
+    now = options.now ?? Date.now,
+    fetchStatus = options.fetchStatus ?? fetch,
+    delay = options.delay ?? abortableDelay,
+    startedAt = now(),
+    registrationDeadline =
+      startedAt + (options.registrationGraceMs ?? DOWNLOAD_STATUS_REGISTRATION_GRACE_MS);
+  let expiresAt = startedAt + (options.statusTtlMs ?? DOWNLOAD_STATUS_TTL_MS),
+    pollDelayMs = 250,
+    sawStatus = false;
+  for (;;) {
+    if (options.signal?.aborted) throw abortError();
+    if (now() >= expiresAt)
+      throw new WorkspaceDownloadStatusUnavailableError(
+        "下载状态已过期，无法再确认这次文件下载结果。",
+      );
+    const response = await fetchStatus(url, {
+      cache: "no-store",
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
+    if (response.status === 404) {
+      if (sawStatus || now() >= registrationDeadline)
+        throw new WorkspaceDownloadStatusUnavailableError(
+          "下载状态记录已失效，无法再确认这次文件下载结果。",
+        );
+    } else if (!response.ok) {
+      throw new Error("无法读取下载状态，请检查控制面连接。");
+    } else {
+      sawStatus = true;
+      const status = (await response.json()) as WorkspaceDownloadStatus;
+      if (typeof status.expiresInMs === "number" && Number.isFinite(status.expiresInMs))
+        expiresAt = now() + Math.max(0, status.expiresInMs);
+      if (status.state !== "started") return status;
+    }
+    const remainingMs = expiresAt - now();
+    if (remainingMs <= 0)
+      throw new WorkspaceDownloadStatusUnavailableError(
+        "下载状态已过期，无法再确认这次文件下载结果。",
+      );
+    await delay(Math.min(pollDelayMs, remainingMs), options.signal);
+    pollDelayMs = Math.min(pollDelayMs * 2, 5000);
+  }
 }
 
 interface Draft {
@@ -248,10 +376,18 @@ export function WorkspaceBrowser({
     state: "downloading" | "done" | "error";
     message: string;
   } | null>(null);
+  const downloadAbortRef = useRef<AbortController | null>(null);
   const currentAgent = available.find((agent) => agent.id === agentId) ?? available[0];
   const currentNode = currentAgent
     ? nodes.find((node) => node.id === currentAgent.nodeId)
     : undefined;
+
+  useEffect(
+    () => () => {
+      downloadAbortRef.current?.abort();
+    },
+    [currentAgent?.id],
+  );
 
   useEffect(() => {
     if (currentAgent && currentAgent.id !== agentId) setAgentId(currentAgent.id);
@@ -371,13 +507,17 @@ export function WorkspaceBrowser({
     setPath(nextPath);
   }
 
-  const downloadUrl = (filePath: string) => {
-    const query = new URLSearchParams({ path: filePath });
+  const downloadUrl = (filePath: string, downloadId: string, format?: "browser") => {
+    const query = new URLSearchParams({ path: filePath, downloadId });
+    if (format) query.set("format", format);
     return `/api/owner/agents/${encodeURIComponent(currentAgent!.id)}/workspace/download?${query}`;
   };
 
   async function downloadFile(filePath: string) {
     if (!currentAgent) return;
+    downloadAbortRef.current?.abort();
+    const controller = new AbortController();
+    downloadAbortRef.current = controller;
     const picker = (
       window as Window & {
         showSaveFilePicker?: (options: { suggestedName: string }) => Promise<{
@@ -385,54 +525,90 @@ export function WorkspaceBrowser({
         }>;
       }
     ).showSaveFilePicker;
-    if (!picker) {
-      setDownloadState({
-        path: filePath,
-        state: "error",
-        message: "当前浏览器不支持安全的流式文件保存，请使用支持文件保存的浏览器。",
-      });
-      return;
-    }
-    setDownloadState({ path: filePath, state: "downloading", message: "正在流式下载…" });
+    let downloadId: string | undefined;
     try {
-      const handle = await picker({ suggestedName: filePath.split("/").at(-1) || "file" }),
-        response = await fetch(downloadUrl(filePath), { cache: "no-store" });
+      if (!picker) {
+        downloadId = newDownloadId();
+        const link = document.createElement("a");
+        link.href = downloadUrl(filePath, downloadId, "browser");
+        link.target = "_blank";
+        link.rel = "noopener";
+        link.style.display = "none";
+        document.body.append(link);
+        link.click();
+        link.remove();
+        setDownloadState({
+          path: filePath,
+          state: "downloading",
+          message: "浏览器正在保存文件…",
+        });
+        const status = await waitForDownloadStatus(currentAgent.id, downloadId, {
+          signal: controller.signal,
+        });
+        setDownloadState(
+          status.state === "succeeded"
+            ? { path: filePath, state: "done", message: "下载完成。" }
+            : {
+                path: filePath,
+                state: "error",
+                message: downloadMessage(status.errorCode),
+              },
+        );
+        return;
+      }
+      const handle = await picker({ suggestedName: filePath.split("/").at(-1) || "file" });
+      if (controller.signal.aborted) return;
+      downloadId = newDownloadId();
+      setDownloadState({ path: filePath, state: "downloading", message: "正在流式下载…" });
+      const response = await fetch(downloadUrl(filePath, downloadId), {
+        cache: "no-store",
+        signal: controller.signal,
+      });
       if (!response.ok) {
         const body = (await response.json().catch(() => null)) as {
           code?: unknown;
           error?: unknown;
         } | null;
         const code = typeof body?.code === "string" ? body.code : "";
-        throw new Error(
-          code === "not_found" || code === "permission_denied"
-            ? "文件已不存在或当前无权读取，请重新加载目录。"
-            : code === "file_changed"
-              ? "文件在下载期间发生变化，请重新加载后重试。"
-              : typeof body?.error === "string"
-                ? body.error
-                : "文件下载失败，请重试。",
+        throw new WorkspaceDownloadError(
+          code,
+          downloadMessage(code, typeof body?.error === "string" ? body.error : undefined),
         );
       }
       if (!response.body) throw new Error("浏览器没有收到文件数据流，请重试。");
       await response.body.pipeTo(await handle.createWritable());
       setDownloadState({ path: filePath, state: "done", message: "下载完成。" });
     } catch (reason) {
+      if (controller.signal.aborted) return;
       if (reason instanceof DOMException && reason.name === "AbortError") {
         setDownloadState(null);
         return;
       }
-      const message = reason instanceof Error ? reason.message : "文件下载中断，请重试。";
+      let code = reason instanceof WorkspaceDownloadError ? reason.code : null,
+        statusError: unknown;
+      if (downloadId && !code) {
+        try {
+          const status = await waitForDownloadStatus(currentAgent.id, downloadId, {
+            signal: controller.signal,
+          });
+          if (status.state === "failed" || status.state === "cancelled") code = status.errorCode;
+        } catch (pollError) {
+          statusError = pollError;
+        }
+      }
+      if (controller.signal.aborted) return;
       setDownloadState({
         path: filePath,
         state: "error",
-        message: /file_changed|发生变化/i.test(message)
-          ? "文件在下载期间发生变化，请重新加载后重试。"
-          : /not_found|permission_denied|不存在|无权/i.test(message)
-            ? "文件已不存在或当前无权读取，请重新加载目录。"
-            : message === "Failed to fetch" || /stream|network|fetch/i.test(message)
-              ? "文件下载中断，请检查节点连接后重试。"
-              : message,
+        message:
+          code !== null
+            ? downloadMessage(code, reason instanceof Error ? reason.message : undefined)
+            : statusError instanceof WorkspaceDownloadStatusUnavailableError
+              ? statusError.message
+              : "文件下载中断，请检查节点连接后重试。",
       });
+    } finally {
+      if (downloadAbortRef.current === controller) downloadAbortRef.current = null;
     }
   }
 

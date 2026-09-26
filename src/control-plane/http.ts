@@ -75,6 +75,7 @@ export class ControlPlaneApp extends Hono {
 
   close(): void {
     this.runs?.close();
+    this.workspace.close();
     this.nodes.closeAll();
     this.ownerAuth.close();
   }
@@ -656,7 +657,7 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
       throw error;
     }
   });
-  registerWorkspaceRoutes(app, workspace, attachments);
+  registerWorkspaceRoutes(app, workspace, attachments, (context) => sessionToken(context) ?? "");
   registerNodeRoutes(app, nodes);
 
   app.use("/app", requireOwnerPage);

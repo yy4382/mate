@@ -105,6 +105,46 @@ try {
   assert.equal(statSync(join(agentA.home, "notes/deep/summary.txt")).gid, agentA.gid);
   assert.equal(statSync(join(agentA.home, "notes/deep/summary.txt")).mode & 0o777, 0o600);
 
+  for (const [path, content] of [
+    ["move-source.txt", "source remains intact"],
+    ["move-target.txt", "target must not be replaced"],
+  ])
+    successful(
+      await executorA.execute({
+        operationId: randomUUID(),
+        agentId: agentAId,
+        mode: "agent_action",
+        operation: { kind: "write", path, content },
+      }),
+    );
+  const rejectedMove = await executorA.execute({
+    operationId: randomUUID(),
+    agentId: agentAId,
+    mode: "agent_action",
+    operation: { kind: "move", path: "move-source.txt", destination: "move-target.txt" },
+  });
+  assert.notEqual(rejectedMove.code, 0);
+  assert.match(rejectedMove.stderr, /destination_exists/);
+  assert.equal(readFileSync(join(agentA.home, "move-source.txt"), "utf8"), "source remains intact");
+  assert.equal(
+    readFileSync(join(agentA.home, "move-target.txt"), "utf8"),
+    "target must not be replaced",
+  );
+  assert.equal(statSync(join(agentA.home, "move-source.txt")).nlink, 1);
+  assert.equal(statSync(join(agentA.home, "move-target.txt")).nlink, 1);
+
+  successful(
+    await executorA.execute({
+      operationId: randomUUID(),
+      agentId: agentAId,
+      mode: "agent_action",
+      operation: { kind: "move", path: "move-source.txt", destination: "moved.txt" },
+    }),
+  );
+  assert.equal(existsSync(join(agentA.home, "move-source.txt")), false);
+  assert.equal(readFileSync(join(agentA.home, "moved.txt"), "utf8"), "source remains intact");
+  assert.equal(statSync(join(agentA.home, "moved.txt")).nlink, 1);
+
   const stat = JSON.parse(
       successful(
         await executorA.execute({

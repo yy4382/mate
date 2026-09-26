@@ -18,8 +18,10 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
 import { within } from "./paths.js";
+import { createAtomicNoReplaceRename } from "./atomic-rename.js";
 import { commitFileIfHashMatches, moveFileNoReplace } from "./workspace-mutations.js";
 import type { Operation } from "./backend.js";
 type FlockSync = typeof import("fs-ext").flockSync;
@@ -27,6 +29,9 @@ const flockSync: FlockSync | undefined =
   process.platform === "linux"
     ? (createRequire(import.meta.url)("fs-ext").flockSync as FlockSync)
     : undefined;
+const renameNoReplace = createAtomicNoReplaceRename(
+  fileURLToPath(new URL("./rename-noreplace", import.meta.url)),
+);
 const root = resolve(process.argv[2]!);
 if (!lstatSync(root).isDirectory()) throw new Error("Workspace root must be a directory");
 const privateMode = process.argv[3] !== "022";
@@ -487,7 +492,7 @@ switch (operation.kind) {
     break;
   case "move": {
     const destination = checked(operation.destination, true);
-    moveFileNoReplace(path, destination);
+    moveFileNoReplace(path, destination, renameNoReplace);
     for (const directory of new Set([dirname(path), dirname(destination)])) {
       const fd = openSync(directory, "r");
       try {

@@ -18,6 +18,7 @@ export function registerWorkspaceRoutes(
   app: Hono,
   workspace: WorkspaceService,
   attachments: AttachmentService,
+  ownerSessionToken: (context: Context) => string,
 ): void {
   app.get("/api/owner/agents/:agentId/workspace", async (context) => {
     const path = context.req.query("path") ?? "",
@@ -76,14 +77,26 @@ export function registerWorkspaceRoutes(
   });
 
   app.get("/api/owner/agents/:agentId/workspace/download", async (context) => {
-    const path = context.req.query("path");
-    if (path === undefined)
-      return context.json({ error: "文件路径缺失。", code: "invalid_request" }, 400);
+    const path = context.req.query("path"),
+      downloadId = context.req.query("downloadId"),
+      browser = context.req.query("format") === "browser";
+    if (
+      path === undefined ||
+      downloadId === undefined ||
+      !z.string().uuid().safeParse(downloadId).success
+    )
+      return context.json({ error: "文件下载参数无效。", code: "invalid_request" }, 400);
     try {
-      const download = await workspace.download(context.req.param("agentId"), path);
+      const download = await workspace.download(
+        context.req.param("agentId"),
+        path,
+        downloadId,
+        ownerSessionToken(context),
+      );
       context.header("Cache-Control", "no-store");
       context.header("Content-Type", "application/octet-stream");
       context.header("Content-Length", String(download.size));
+      context.header("X-Mate-Download-Id", download.downloadId);
       context.header(
         "Content-Disposition",
         contentDisposition(path.split("/").filter(Boolean).at(-1) ?? "file"),
@@ -91,6 +104,26 @@ export function registerWorkspaceRoutes(
       context.header("X-Content-Type-Options", "nosniff");
       context.header("X-Accel-Buffering", "no");
       return context.newResponse(download.stream);
+    } catch (error) {
+      if (browser) return browserDownloadError(context, error);
+      return errorResponse(context, error);
+    }
+  });
+
+  app.get("/api/owner/agents/:agentId/workspace/downloads/:downloadId", (context) => {
+    const downloadId = context.req.param("downloadId");
+    if (!z.string().uuid().safeParse(downloadId).success)
+      return context.json({ error: "文件下载标识无效。", code: "invalid_request" }, 400);
+    try {
+      context.header("Cache-Control", "no-store");
+      return context.json({
+        downloadId,
+        ...workspace.downloadStatus(
+          context.req.param("agentId"),
+          downloadId,
+          ownerSessionToken(context),
+        ),
+      });
     } catch (error) {
       return errorResponse(context, error);
     }
@@ -180,6 +213,23 @@ function errorResponse(context: Context, error: unknown) {
       error.status as ContentfulStatusCode,
     );
   return context.json({ error: "文件请求暂时不可用。", code: "workspace_unavailable" }, 503);
+}
+
+function browserDownloadError(context: Context, error: unknown) {
+  const message = error instanceof WorkspaceError ? error.message : "文件下载失败，请重试。",
+    status = error instanceof WorkspaceError ? error.status : 500,
+    escaped = message
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#39;");
+  context.header("Cache-Control", "no-store");
+  context.header("X-Content-Type-Options", "nosniff");
+  return context.html(
+    `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>文件下载失败</title><body><main><h1>文件下载失败</h1><p>${escaped}</p><p>请返回 Mate 工作区重新加载目录后重试。</p></main></body></html>`,
+    status as ContentfulStatusCode,
+  );
 }
 
 function contentDisposition(filename: string): string {

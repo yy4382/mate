@@ -1,34 +1,25 @@
-import { linkSync, lstatSync, unlinkSync } from "node:fs";
+import { lstatSync } from "node:fs";
 import { createHash } from "node:crypto";
 
-/** Atomically claims a regular-file destination without replacing an entry created concurrently. */
+/** Moves a regular file through an OS atomic no-replace rename primitive. */
 export function moveFileNoReplace(
   source: string,
   destination: string,
-  beforeClaim?: () => void,
+  renameNoReplace: (source: string, destination: string) => void,
+  beforeRename?: () => void,
 ): void {
   const original = lstatSync(source);
   if (!original.isFile() || original.isSymbolicLink())
     throw new Error("not_file: Only regular files can be moved safely");
-  beforeClaim?.();
-  try {
-    linkSync(source, destination);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST")
-      throw new Error("destination_exists: The move destination already exists");
-    throw error;
-  }
-
-  const sourceAfterClaim = lstatSync(source),
-    destinationAfterClaim = lstatSync(destination);
+  const immediatelyBeforeRename = lstatSync(source);
   if (
-    sourceAfterClaim.dev !== original.dev ||
-    sourceAfterClaim.ino !== original.ino ||
-    destinationAfterClaim.dev !== original.dev ||
-    destinationAfterClaim.ino !== original.ino
+    !immediatelyBeforeRename.isFile() ||
+    immediatelyBeforeRename.dev !== original.dev ||
+    immediatelyBeforeRename.ino !== original.ino
   )
     throw new Error("file_changed: A file changed while it was being moved");
-  unlinkSync(source);
+  beforeRename?.();
+  renameNoReplace(source, destination);
 }
 
 /** Rechecks an edit's expected content immediately before its atomic rename.

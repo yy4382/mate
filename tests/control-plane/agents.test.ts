@@ -225,6 +225,14 @@ it("adds workspace access metadata on new and upgraded control-plane databases",
         .prepare("SELECT name FROM sqlite_master WHERE name='owner_workspace_access_audit'")
         .get(),
     ).toEqual({ name: "owner_workspace_access_audit" });
+    expect(auth.db.prepare("PRAGMA table_info(owner_workspace_access_audit)").all()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "download_id" }),
+        expect.objectContaining({ name: "owner_session_hash" }),
+        expect.objectContaining({ name: "download_expires_at" }),
+        expect.objectContaining({ name: "completed_at" }),
+      ]),
+    );
     const newDirectory = mkdtempSync(join(tmpdir(), "mate-workspace-audit-new-")),
       newAuth = new OwnerAuth({ dataDir: newDirectory });
     try {
