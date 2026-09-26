@@ -11,7 +11,12 @@ export function stopForCoordinatedMaintenance(host: MaintenanceHost): void {
     throw new Error("Coordinated maintenance requires Linux root");
   stop(host, services[0]);
   const listed = host.run(systemctl, [
-    "list-units", "--all", "--type=scope", "--plain", "--no-legend", "mate-agent-*.scope",
+    "list-units",
+    "--all",
+    "--type=scope",
+    "--plain",
+    "--no-legend",
+    "mate-agent-*.scope",
   ]);
   if (listed.code !== 0) throw new Error("Cannot enumerate Agent process scopes");
   const groups: string[] = [];
@@ -34,7 +39,12 @@ export function stopForCoordinatedMaintenance(host: MaintenanceHost): void {
     if (host.processes.pids(group).length > 0)
       throw new Error("Agent process is still running after the maintenance stop");
   const remaining = host.run(systemctl, [
-    "list-units", "--state=active", "--type=scope", "--plain", "--no-legend", "mate-agent-*.scope",
+    "list-units",
+    "--state=active",
+    "--type=scope",
+    "--plain",
+    "--no-legend",
+    "mate-agent-*.scope",
   ]);
   if (remaining.code !== 0 || remaining.stdout.trim())
     throw new Error("Agent process scopes are not confirmed stopped");

@@ -5,7 +5,7 @@ import {
   systemCommandSchema,
   type PrivilegedExecutor,
   type SystemCommand,
-} from "../policy/system-operations.js";
+} from "./system-command.js";
 
 /** A deliberately separate, clean-environment root entry. Only the approval broker calls it. */
 export class PrivilegedBackend implements PrivilegedExecutor {

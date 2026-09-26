@@ -692,7 +692,13 @@ export class WorkspaceService {
   private async runNodeOperation(
     request: ControlWorkspaceOperation,
     nodeId: string,
-  ): Promise<{ code: number; stdout: string; stderr: string; truncated: boolean; revision?: number }> {
+  ): Promise<{
+    code: number;
+    stdout: string;
+    stderr: string;
+    truncated: boolean;
+    revision?: number;
+  }> {
     try {
       const response = await this.nodes.workspaceOperation(nodeId, request);
       if (!response.ok) throw mapNodeError(response.error);
@@ -852,7 +858,14 @@ export class WorkspaceService {
         agentId,
         operation,
         requestHash,
-        JSON.stringify({ state: "executing", operationId, runId, channelId, operation, nodeRequestHash }),
+        JSON.stringify({
+          state: "executing",
+          operationId,
+          runId,
+          channelId,
+          operation,
+          nodeRequestHash,
+        }),
         Date.now(),
       );
     recordAgentActivity(this.db, {
@@ -901,7 +914,7 @@ export class WorkspaceService {
           .run(
             JSON.stringify({
               ...envelope,
-              ...(envelope.nodeRequestHash ?? prior.nodeRequestHash
+              ...((envelope.nodeRequestHash ?? prior.nodeRequestHash)
                 ? { nodeRequestHash: envelope.nodeRequestHash ?? prior.nodeRequestHash }
                 : {}),
             }).slice(0, 100_000),
@@ -1045,7 +1058,7 @@ export class WorkspaceService {
       result?: unknown;
       error?: string;
     };
-    const revision = result.ok ? result.revision ?? result.result.revision : undefined;
+    const revision = result.ok ? (result.revision ?? result.result.revision) : undefined;
     if (!result.ok) {
       envelope = {
         state: "unknown",

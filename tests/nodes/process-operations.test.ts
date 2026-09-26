@@ -63,6 +63,7 @@ it("records start before host work and replays a durable terminal receipt withou
       agentId,
       state: "succeeded",
       receipt: { code: 0, stdout: "durable" },
+      revision: 2,
     });
     expect(duplicateReceipt).toEqual(firstReceipt);
 

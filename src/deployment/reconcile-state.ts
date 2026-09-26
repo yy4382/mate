@@ -127,7 +127,8 @@ export function reconcileRecoveryState(
     }
     const controlRevision = intent.nodeReceiptRevision ?? null,
       sameResult =
-        intent.state === receipt.state && stableJson(intent.receipt ?? null) === stableJson(receipt.receipt);
+        intent.state === receipt.state &&
+        stableJson(intent.receipt ?? null) === stableJson(receipt.receipt);
     if (controlRevision === receipt.sequence && sameResult) continue;
     if (controlRevision === null && sameResult) {
       confirmed.push(receipt);
@@ -150,10 +151,13 @@ export function reconcileRecoveryState(
     const key = intent.kind + ":" + intent.operationId;
     if (
       !receipts.has(key) &&
-      (intent.state === "executing" || intent.state === "unknown" ||
+      (intent.state === "executing" ||
+        intent.state === "unknown" ||
         (intent.state !== "expired" &&
-          (intent.receiptConfirmed || intent.nodeReceiptRevision !== null ||
-            intent.state === "succeeded" || intent.state === "failed")))
+          (intent.receiptConfirmed ||
+            intent.nodeReceiptRevision !== null ||
+            intent.state === "succeeded" ||
+            intent.state === "failed")))
     )
       holds.set(intent.agentId, "node_receipt_unavailable");
   }

@@ -37,7 +37,7 @@ import {
 } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { acquireLock } from "../daemon/lock.js";
+import { acquireLock } from "../storage/lock.js";
 import { cgroupPids, pidUid } from "../execution/linux-processes.js";
 
 /** The host facts every maintenance step observes. */

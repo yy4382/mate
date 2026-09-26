@@ -117,6 +117,64 @@ it("keeps services stopped if the upgrade itself fails after a complete checkpoi
   expect(verifyCoordinatedCheckpoint(f.checkpoint).format).toBe(1);
 });
 
+it("restores the original service state when stopping part of an upgrade fails", async () => {
+  const f = fixture(),
+    calls: string[] = [];
+  let installed = false;
+  await expect(
+    upgradeWithCoordinatedCheckpoint(
+      f.paths,
+      f.checkpoint,
+      {
+        stop: () => {
+          calls.push("stop");
+          throw new Error("Agent scope enumeration failed after stopping the node");
+        },
+        resume: () => calls.push("resume"),
+      },
+      () => {
+        installed = true;
+      },
+    ),
+  ).rejects.toThrow("Agent scope enumeration failed after stopping the node");
+  expect(calls).toEqual(["stop", "resume"]);
+  expect(installed).toBe(false);
+  expect(existsSync(f.checkpoint)).toBe(false);
+});
+
+it("confirms both services stopped when a partial-stop recovery cannot restore service state", async () => {
+  const f = fixture(),
+    calls: string[] = [];
+  let stopAttempts = 0,
+    installed = false,
+    allStopped = false;
+  await expect(
+    upgradeWithCoordinatedCheckpoint(
+      f.paths,
+      f.checkpoint,
+      {
+        stop: () => {
+          calls.push("stop");
+          stopAttempts++;
+          if (stopAttempts === 1) throw new Error("Scope enumeration failed");
+          allStopped = true;
+        },
+        resume: () => {
+          calls.push("resume");
+          throw new Error("Could not restore the old service state");
+        },
+      },
+      () => {
+        installed = true;
+      },
+    ),
+  ).rejects.toThrow(/services are stopped for diagnosis/);
+  expect(calls).toEqual(["stop", "resume", "stop"]);
+  expect(allStopped).toBe(true);
+  expect(installed).toBe(false);
+  expect(existsSync(f.checkpoint)).toBe(false);
+});
+
 it("releases only after a fresh reconciliation proves the Agent's identity and receipts", () => {
   let checks = 0;
   const report = () => {

@@ -22,7 +22,7 @@ export async function createMaintenanceBackup(
   let manifest: CheckpointManifest;
   try {
     manifest = await createCoordinatedCheckpoint(paths, destination, async () => {
-      services.stop();
+      stopWithRecovery(services);
       stopped = true;
     });
   } catch (error) {
@@ -44,7 +44,7 @@ export async function restoreMaintenanceCheckpoint<T>(
   await restoreCoordinatedCheckpoint(
     checkpoint,
     paths,
-    async () => services.stop(),
+    async () => stopWithRecovery(services),
     async () => {
       report = await reconcile();
     },
@@ -58,7 +58,7 @@ export function reconcileDuringMaintenance<T>(
   services: CoordinatedMaintenanceServices,
   reconcile: () => T,
 ): T {
-  services.stop();
+  stopWithRecovery(services);
   const report = reconcile();
   resumeOrStop(services);
   return report;
@@ -81,7 +81,7 @@ export async function upgradeWithCoordinatedCheckpoint<T>(
   services: CoordinatedMaintenanceServices,
   upgrade: () => T,
 ): Promise<{ manifest: CheckpointManifest; result: T }> {
-  services.stop();
+  stopWithRecovery(services);
   let manifest: CheckpointManifest;
   try {
     manifest = await createCoordinatedCheckpoint(paths, destination, async () => {});
@@ -121,6 +121,31 @@ function resumeOrStop(services: CoordinatedMaintenanceServices): void {
       );
     }
     throw startError;
+  }
+}
+
+/** A failed stop may already have stopped one service; recover to a known state. */
+function stopWithRecovery(services: CoordinatedMaintenanceServices): void {
+  try {
+    services.stop();
+  } catch (stopError) {
+    try {
+      services.resume();
+    } catch (resumeError) {
+      try {
+        services.stop();
+      } catch (retryStopError) {
+        throw new AggregateError(
+          [stopError, resumeError, retryStopError],
+          "Maintenance stop failed and service state could not be confirmed",
+        );
+      }
+      throw new AggregateError(
+        [stopError, resumeError],
+        "Maintenance stop failed; services are stopped for diagnosis",
+      );
+    }
+    throw stopError;
   }
 }
 

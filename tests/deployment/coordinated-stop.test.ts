@@ -11,11 +11,20 @@ it("stops node, Agent scopes and control plane before allowing a checkpoint", ()
       if (args[0] === "list-units" && args.includes("--state=active"))
         return { code: 0, stdout: "", stderr: "" };
       if (args[0] === "list-units")
-        return { code: 0, stdout: "mate-agent-24001-11111111-1111-4111-8111-111111111111.scope loaded active running Agent\n", stderr: "" };
+        return {
+          code: 0,
+          stdout:
+            "mate-agent-24001-11111111-1111-4111-8111-111111111111.scope loaded active running Agent\n",
+          stderr: "",
+        };
       if (args[0] === "show" && args.includes("ActiveState"))
         return { code: 0, stdout: "inactive\n", stderr: "" };
       if (args[0] === "show" && args.includes("ControlGroup"))
-        return { code: 0, stdout: "/system.slice/mate-agent-24001-11111111-1111-4111-8111-111111111111.scope\n", stderr: "" };
+        return {
+          code: 0,
+          stdout: "/system.slice/mate-agent-24001-11111111-1111-4111-8111-111111111111.scope\n",
+          stderr: "",
+        };
       return { code: 0, stdout: "", stderr: "" };
     },
     processes: { pids: () => [], uid: () => undefined },
@@ -38,9 +47,18 @@ it("refuses to publish a checkpoint while an Agent process survives the stop", (
       if (args[0] === "list-units" && args.includes("--state=active"))
         return { code: 0, stdout: "", stderr: "" };
       if (args[0] === "list-units")
-        return { code: 0, stdout: "mate-agent-24001-11111111-1111-4111-8111-111111111111.scope loaded active running Agent\n", stderr: "" };
+        return {
+          code: 0,
+          stdout:
+            "mate-agent-24001-11111111-1111-4111-8111-111111111111.scope loaded active running Agent\n",
+          stderr: "",
+        };
       if (args[0] === "show" && args.includes("ControlGroup"))
-        return { code: 0, stdout: "/system.slice/mate-agent-24001-11111111-1111-4111-8111-111111111111.scope\n", stderr: "" };
+        return {
+          code: 0,
+          stdout: "/system.slice/mate-agent-24001-11111111-1111-4111-8111-111111111111.scope\n",
+          stderr: "",
+        };
       return { code: 0, stdout: "", stderr: "" };
     },
     processes: { pids: () => [4123], uid: () => 24001 },

@@ -376,7 +376,9 @@ export class PrivilegedApprovals {
 
   private isRecoveryHeld(agentId: string): boolean {
     const table = this.database
-      .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='owner_agent_recovery_holds'")
+      .prepare(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='owner_agent_recovery_holds'",
+      )
       .get();
     if (!table) return false;
     return Boolean(

@@ -26,6 +26,9 @@ if (process.argv[2] === "control") {
     },
     () => now,
   );
+  db.exec(
+    "ALTER TABLE owner_privileged_approvals ADD COLUMN node_receipt_revision INTEGER CHECK(node_receipt_revision IS NULL OR node_receipt_revision >= 1)",
+  );
   process.on("message", (message) => {
     if (message.action === "shutdown") process.exit(0);
     if (message.kind === "node-result" || message.kind === "node-error") {

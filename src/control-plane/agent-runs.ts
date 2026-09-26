@@ -645,9 +645,7 @@ export class AgentRunCoordinator {
 
   private isRecoveryHeld(agentId: string): boolean {
     return Boolean(
-      this.db
-        .prepare("SELECT 1 FROM owner_agent_recovery_holds WHERE agent_id=?")
-        .get(agentId),
+      this.db.prepare("SELECT 1 FROM owner_agent_recovery_holds WHERE agent_id=?").get(agentId),
     );
   }
 

@@ -133,9 +133,7 @@ it("does not activate or schedule an Agent while a recovery hold remains", async
   });
   app.chat.createMessage(direct.id, "Do not run while recovery is unresolved.");
   await new Promise((resolve) => setTimeout(resolve, 600));
-  expect(
-    socket.sent.some((text) => JSON.parse(text).type === "control.agent.run"),
-  ).toBe(false);
+  expect(socket.sent.some((text) => JSON.parse(text).type === "control.agent.run")).toBe(false);
 
   app.nodes.close(socket);
   const reconnect = new FakeNodeSocket();
@@ -150,12 +148,10 @@ it("does not activate or schedule an Agent while a recovery hold remains", async
       signature: sign(null, Buffer.from(challenge.nonce), keyPair.privateKey).toString("base64url"),
     }),
   );
-  expect(
-    reconnect.sent.some((text) => JSON.parse(text).type === "control.agent.activate"),
-  ).toBe(false);
-  expect(
-    reconnect.sent.some((text) => JSON.parse(text).type === "control.agent.run"),
-  ).toBe(false);
+  expect(reconnect.sent.some((text) => JSON.parse(text).type === "control.agent.activate")).toBe(
+    false,
+  );
+  expect(reconnect.sent.some((text) => JSON.parse(text).type === "control.agent.run")).toBe(false);
   expect(await app.runs?.resumeAgent(agentId)).toMatchObject({ ok: false });
 });
 
@@ -884,32 +880,49 @@ it("reconciles a durable node receipt before resuming a disconnected Agent", asy
       .prepare("SELECT state FROM owner_agent_process_operations WHERE operation_id=?")
       .get(secondOperation!.operationId),
   ).toEqual({ state: "succeeded" });
-  db.prepare(`UPDATE owner_agent_process_operations SET state='unknown',receipt_json=?,
-    node_receipt_confirmed=1,node_receipt_revision=3 WHERE operation_id=?`)
-    .run(JSON.stringify({ code: 0 }), secondOperation!.operationId);
-  expect(app.runs?.processOperations.reconcile(nodeId, {
-    operationId: secondOperation!.operationId as string,
-    agentId,
-    state: "failed",
-    receipt: { code: 1 },
-    revision: 2,
-  })).toMatchObject({ corrected: false });
-  expect(db.prepare(`SELECT state,node_receipt_revision,receipt_json FROM owner_agent_process_operations
-    WHERE operation_id=?`).get(secondOperation!.operationId))
-    .toEqual({ state: "unknown", node_receipt_revision: 3, receipt_json: JSON.stringify({ code: 0 }) });
+  db.prepare(
+    `UPDATE owner_agent_process_operations SET state='unknown',receipt_json=?,
+    node_receipt_confirmed=1,node_receipt_revision=3 WHERE operation_id=?`,
+  ).run(JSON.stringify({ code: 0 }), secondOperation!.operationId);
+  expect(
+    app.runs?.processOperations.reconcile(nodeId, {
+      operationId: secondOperation!.operationId as string,
+      agentId,
+      state: "failed",
+      receipt: { code: 1 },
+      revision: 2,
+    }),
+  ).toMatchObject({ corrected: false });
+  expect(
+    db
+      .prepare(
+        `SELECT state,node_receipt_revision,receipt_json FROM owner_agent_process_operations
+    WHERE operation_id=?`,
+      )
+      .get(secondOperation!.operationId),
+  ).toEqual({
+    state: "unknown",
+    node_receipt_revision: 3,
+    receipt_json: JSON.stringify({ code: 0 }),
+  });
 
-  const stored = db.prepare(`SELECT run_id,action_scope_id,stable_action_id,request_json
-    FROM owner_agent_process_operations WHERE operation_id=?`).get(secondOperation!.operationId) as {
-      run_id: string;
-      action_scope_id: string;
-      stable_action_id: string;
-      request_json: string;
-    };
+  const stored = db
+    .prepare(
+      `SELECT run_id,action_scope_id,stable_action_id,request_json
+    FROM owner_agent_process_operations WHERE operation_id=?`,
+    )
+    .get(secondOperation!.operationId) as {
+    run_id: string;
+    action_scope_id: string;
+    stable_action_id: string;
+    request_json: string;
+  };
   const originalRequest = JSON.parse(stored.request_json) as { operation: unknown };
   const replayStart = again.sent.length;
   // Keep the saved execution boundary active while exercising the broker's direct response path.
-  db.prepare("UPDATE owner_agent_runs SET state='completed' WHERE agent_id=? AND state='running' AND id<>?")
-    .run(agentId, stored.run_id);
+  db.prepare(
+    "UPDATE owner_agent_runs SET state='completed' WHERE agent_id=? AND state='running' AND id<>?",
+  ).run(agentId, stored.run_id);
   db.prepare("UPDATE owner_agent_runs SET state='running' WHERE id=?").run(stored.run_id);
   const replay = app.runs!.processOperations.execute({
     runId: stored.run_id,
@@ -930,19 +943,31 @@ it("reconciles a durable node receipt before resuming a disconnected Agent", asy
     if (!replayOperation) await new Promise((resolve) => setTimeout(resolve, 10));
   }
   expect(replayOperation).toBeDefined();
-  await app.nodes.receive(again, JSON.stringify({
-    type: "node.process.operation.result",
-    requestId: replayOperation!.requestId,
-    operationId: secondOperation!.operationId,
-    agentId,
-    state: "failed",
-    receipt: { code: 1 },
-    revision: 2,
-  }));
+  await app.nodes.receive(
+    again,
+    JSON.stringify({
+      type: "node.process.operation.result",
+      requestId: replayOperation!.requestId,
+      operationId: secondOperation!.operationId,
+      agentId,
+      state: "failed",
+      receipt: { code: 1 },
+      revision: 2,
+    }),
+  );
   expect(await replay).toMatchObject({ state: "unknown", receipt: { code: 0 } });
-  expect(db.prepare(`SELECT state,node_receipt_revision,receipt_json FROM owner_agent_process_operations
-    WHERE operation_id=?`).get(secondOperation!.operationId))
-    .toEqual({ state: "unknown", node_receipt_revision: 3, receipt_json: JSON.stringify({ code: 0 }) });
+  expect(
+    db
+      .prepare(
+        `SELECT state,node_receipt_revision,receipt_json FROM owner_agent_process_operations
+    WHERE operation_id=?`,
+      )
+      .get(secondOperation!.operationId),
+  ).toEqual({
+    state: "unknown",
+    node_receipt_revision: 3,
+    receipt_json: JSON.stringify({ code: 0 }),
+  });
 });
 
 it("commits a compaction snapshot and replacement session before ACK and recovers it after disconnect", async () => {

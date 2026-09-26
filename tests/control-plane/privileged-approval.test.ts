@@ -93,7 +93,11 @@ it("rejects a late privileged receipt whose node version is older than the store
   databases.push(db);
   const approvals = new PrivilegedApprovals(
     db,
-    { execute: async () => { throw new Error("not dispatched"); } },
+    {
+      execute: async () => {
+        throw new Error("not dispatched");
+      },
+    },
     () => 1000,
   );
   db.exec("ALTER TABLE owner_privileged_approvals ADD COLUMN node_receipt_revision INTEGER;");
@@ -106,19 +110,27 @@ it("rejects a late privileged receipt whose node version is older than the store
     args: [],
     cwd: "/tmp",
   });
-  db.prepare(`UPDATE owner_privileged_approvals
-    SET state='unknown',receipt_json=?,node_receipt_revision=3 WHERE request_id=?`)
-    .run(JSON.stringify({ code: 0 }), request.requestId);
+  db.prepare(
+    `UPDATE owner_privileged_approvals
+    SET state='unknown',receipt_json=?,node_receipt_revision=3 WHERE request_id=?`,
+  ).run(JSON.stringify({ code: 0 }), request.requestId);
 
-  expect(approvals.reconcile(request.nodeId, request.requestId, {
-    state: "failed",
-    startedAt: 1001,
-    receipt: { code: 1 },
-    revision: 2,
-  })).toBe(false);
+  expect(
+    approvals.reconcile(request.nodeId, request.requestId, {
+      state: "failed",
+      startedAt: 1001,
+      receipt: { code: 1 },
+      revision: 2,
+    }),
+  ).toBe(false);
   expect(approvals.status(request.requestId)).toMatchObject({ state: "unknown" });
-  expect(db.prepare("SELECT node_receipt_revision,receipt_json FROM owner_privileged_approvals WHERE request_id=?")
-    .get(request.requestId)).toEqual({ node_receipt_revision: 3, receipt_json: JSON.stringify({ code: 0 }) });
+  expect(
+    db
+      .prepare(
+        "SELECT node_receipt_revision,receipt_json FROM owner_privileged_approvals WHERE request_id=?",
+      )
+      .get(request.requestId),
+  ).toEqual({ node_receipt_revision: 3, receipt_json: JSON.stringify({ code: 0 }) });
 });
 
 it("keeps approval pending when the node is offline, then expires without executing", async () => {
@@ -154,7 +166,6 @@ it("keeps approval pending when the node is offline, then expires without execut
   expect(approvals.status(request.requestId)?.state).toBe("expired");
   expect(sends).toBe(1);
 });
-
 
 it("keeps an approved privileged command queued while the Agent has a recovery hold", async () => {
   const db = new Database(":memory:");
@@ -198,7 +209,6 @@ it("keeps an approved privileged command queued while the Agent has a recovery h
   expect(approvals.status(request.requestId)?.state).toBe("succeeded");
 });
 
-
 it("accepts a terminal node receipt for an old privileged operation while its Agent remains held", () => {
   const db = new Database(":memory:");
   databases.push(db);
@@ -208,9 +218,15 @@ it("accepts a terminal node receipt for an old privileged operation while its Ag
   );`);
   const agentId = randomUUID();
   db.prepare("INSERT INTO owner_agents(id) VALUES(?)").run(agentId);
-  const approvals = new PrivilegedApprovals(db, { execute: async () => {
-    throw new Error("held approval must not dispatch");
-  } }, () => 1000);
+  const approvals = new PrivilegedApprovals(
+    db,
+    {
+      execute: async () => {
+        throw new Error("held approval must not dispatch");
+      },
+    },
+    () => 1000,
+  );
   db.exec("ALTER TABLE owner_privileged_approvals ADD COLUMN node_receipt_revision INTEGER;");
   const request = approvals.request({
     requestId: randomUUID(),
@@ -231,11 +247,18 @@ it("accepts a terminal node receipt for an old privileged operation while its Ag
       revision: 5,
     }),
   ).toBe(true);
-  expect(db.prepare("SELECT state,node_receipt_revision,receipt_json FROM owner_privileged_approvals WHERE request_id=?")
-    .get(request.requestId)).toEqual({
-      state: "succeeded",
-      node_receipt_revision: 5,
-      receipt_json: JSON.stringify({ code: 0 }),
-    });
-  expect(db.prepare("SELECT agent_id FROM owner_agent_recovery_holds").all()).toEqual([{ agent_id: agentId }]);
+  expect(
+    db
+      .prepare(
+        "SELECT state,node_receipt_revision,receipt_json FROM owner_privileged_approvals WHERE request_id=?",
+      )
+      .get(request.requestId),
+  ).toEqual({
+    state: "succeeded",
+    node_receipt_revision: 5,
+    receipt_json: JSON.stringify({ code: 0 }),
+  });
+  expect(db.prepare("SELECT agent_id FROM owner_agent_recovery_holds").all()).toEqual([
+    { agent_id: agentId },
+  ]);
 });
