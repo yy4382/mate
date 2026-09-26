@@ -17,6 +17,7 @@ import type {
   AgentProcessOperationState,
 } from "../../nodes/process-operations.js";
 import { recordAgentActivity } from "../activity.js";
+import type { PrivilegedGrant } from "../privileged-approvals.js";
 
 export const DEFAULT_NODE_PAIRING_TOKEN_TTL_MS = 10 * 60 * 1000;
 export const DEFAULT_NODE_MAX_CONNECTIONS = 128;
@@ -200,6 +201,33 @@ export class NodeDirectory {
   private readonly pendingAgentRuns = new Map<string, PendingAgentRun>();
   private readonly pendingAgentProcessOperations = new Map<string, PendingAgentProcessOperation>();
   private readonly pendingWorkspaceOperations = new Map<string, PendingWorkspaceOperation>();
+  private readonly pendingPrivileged = new Map<
+    string,
+    {
+      nodeId: string;
+      operationId: string;
+      agentId: string;
+      onStarted?: (startedAt: number) => void;
+      resolve: (value: {
+        state: "succeeded" | "failed" | "unknown";
+        startedAt: number;
+        receipt: unknown | null;
+      }) => void;
+      reject: (reason: Error) => void;
+      timeout: ReturnType<typeof setTimeout>;
+    }
+  >();
+  private approvalPublicKey?: string;
+  private privilegedReceiptHandler?: (
+    nodeId: string,
+    requestId: string,
+    result: {
+      state: "succeeded" | "failed" | "unknown";
+      startedAt: number;
+      receipt: unknown | null;
+    },
+  ) => void;
+  private privilegedReadyHandler?: () => void;
   private agentRunHandlers?: AgentRunHandlers;
   private workspaceOperationResultHandler?: (
     nodeId: string,
@@ -347,6 +375,67 @@ export class NodeDirectory {
       return this.receiveAgentRunMessage(socket, session, request);
     if (request.type === "node.process.operation.result")
       return this.receiveAgentProcessOperationResult(socket, session, request);
+    if (request.type === "node.privileged.started") {
+      const pending = this.pendingPrivileged.get(request.requestId);
+      if (
+        session.nodeId &&
+        this.connected.get(session.nodeId) === socket &&
+        pending?.nodeId === session.nodeId &&
+        pending.operationId === request.operationId &&
+        pending.agentId === request.agentId
+      )
+        pending.onStarted?.(request.startedAt);
+      return;
+    }
+    if (request.type === "node.privileged.result") {
+      if (!session.nodeId || this.connected.get(session.nodeId) !== socket) return;
+      const pending = this.pendingPrivileged.get(request.requestId);
+      if (
+        pending?.nodeId === session.nodeId &&
+        pending.operationId === request.operationId &&
+        pending.agentId === request.agentId
+      ) {
+        clearTimeout(pending.timeout);
+        this.pendingPrivileged.delete(request.requestId);
+        pending.resolve({
+          state: request.state,
+          startedAt: request.startedAt,
+          receipt: request.receipt,
+        });
+      }
+      if (
+        this.matchesPrivilegedIntent(
+          session.nodeId,
+          request.requestId,
+          request.operationId,
+          request.agentId,
+        )
+      )
+        this.privilegedReceiptHandler?.(session.nodeId, request.requestId, {
+          state: request.state,
+          startedAt: request.startedAt,
+          receipt: request.receipt,
+        });
+      return;
+    }
+    if (request.type === "node.privileged.reconcile.result") {
+      if (!session.nodeId || this.connected.get(session.nodeId) !== socket) return;
+      for (const receipt of request.receipts)
+        if (
+          this.matchesPrivilegedIntent(
+            session.nodeId,
+            receipt.requestId,
+            receipt.operationId,
+            receipt.agentId,
+          )
+        )
+          this.privilegedReceiptHandler?.(session.nodeId, receipt.requestId, {
+            state: receipt.state,
+            startedAt: receipt.startedAt,
+            receipt: receipt.receipt,
+          });
+      return;
+    }
     if (request.type === "node.workspace.operation.result")
       return this.receiveWorkspaceOperationResult(socket, session, request);
     return this.receiveAgentProvisionMessage(socket, session, request);
@@ -373,6 +462,12 @@ export class NodeDirectory {
         new Error("节点连接已断开，普通操作结果尚未确认。"),
       );
       this.rejectWorkspaceOperations(nodeId, new Error("节点连接已断开，文件操作结果尚未确认。"));
+      for (const [requestId, pending] of this.pendingPrivileged) {
+        if (pending.nodeId !== nodeId) continue;
+        clearTimeout(pending.timeout);
+        this.pendingPrivileged.delete(requestId);
+        pending.reject(new Error("Privileged node receipt unavailable"));
+      }
     }
     this.sessions.delete(socket);
   }
@@ -516,6 +611,82 @@ export class NodeDirectory {
   ): void {
     this.processReceiptHandler = handler;
     this.onReady = onReady;
+  }
+
+  setPrivilegedApprovalHandler(
+    publicKey: string,
+    receipt: NonNullable<NodeDirectory["privilegedReceiptHandler"]>,
+    onReady: () => void,
+  ): void {
+    this.approvalPublicKey = publicKey;
+    this.privilegedReceiptHandler = receipt;
+    this.privilegedReadyHandler = onReady;
+  }
+
+  executePrivileged(
+    nodeId: string,
+    grant: PrivilegedGrant,
+    onStarted?: (startedAt: number) => void,
+  ): Promise<{
+    state: "succeeded" | "failed" | "unknown";
+    startedAt: number;
+    receipt: unknown | null;
+  }> {
+    const socket = this.connected.get(nodeId);
+    const session = socket ? this.sessions.get(socket) : undefined;
+    if (
+      !socket ||
+      !session?.ready ||
+      session.nodeId !== nodeId ||
+      this.now() - session.lastHeartbeatAt >= this.heartbeatTimeoutMs
+    )
+      return Promise.reject(new Error("Selected node is offline"));
+    const command = grant.command;
+    const requestId = command.requestId;
+    if (this.pendingPrivileged.has(requestId))
+      return Promise.reject(new Error("Privileged request already in flight"));
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pendingPrivileged.delete(requestId);
+        reject(new Error("Privileged receipt timed out"));
+      }, this.processOperationTimeoutMs);
+      this.pendingPrivileged.set(requestId, {
+        nodeId,
+        operationId: command.operationId,
+        agentId: command.agentId,
+        ...(onStarted ? { onStarted } : {}),
+        resolve,
+        reject,
+        timeout,
+      });
+      try {
+        this.send(socket, {
+          type: "control.privileged.operation",
+          requestId,
+          command,
+          signature: grant.signature,
+        });
+      } catch {
+        clearTimeout(timeout);
+        this.pendingPrivileged.delete(requestId);
+        reject(new Error("Could not send privileged command to node"));
+      }
+    });
+  }
+
+  private matchesPrivilegedIntent(
+    nodeId: string,
+    requestId: string,
+    operationId: string,
+    agentId: string,
+  ): boolean {
+    const row = this.database
+      .prepare(
+        `SELECT 1 FROM owner_privileged_approvals
+      WHERE request_id=? AND operation_id=? AND agent_id=? AND node_id=?`,
+      )
+      .get(requestId, operationId, agentId, nodeId);
+    return !!row;
   }
 
   runAgent(nodeId: string, request: NodeAgentRunStart): Promise<NodeAgentRunResult> {
@@ -731,6 +902,7 @@ export class NodeDirectory {
       type: "control.authenticated",
       requestId: request.requestId,
       nodeId: request.nodeId,
+      ...(this.approvalPublicKey ? { privilegedPublicKey: this.approvalPublicKey } : {}),
     });
     this.startReconciliation(socket, session, "", true);
   }
@@ -776,6 +948,7 @@ export class NodeDirectory {
       type: "control.paired",
       requestId: request.requestId,
       nodeId: request.nodeId,
+      ...(this.approvalPublicKey ? { privilegedPublicKey: this.approvalPublicKey } : {}),
     });
     this.startReconciliation(socket, session, "", true);
   }
@@ -896,6 +1069,7 @@ export class NodeDirectory {
       if (blocking) {
         session.ready = true;
         this.onReady?.();
+        this.privilegedReadyHandler?.();
       }
       return;
     }
@@ -915,6 +1089,7 @@ export class NodeDirectory {
       if (blocking) {
         session.ready = true;
         this.onReady?.();
+        this.privilegedReadyHandler?.();
       }
       return;
     }

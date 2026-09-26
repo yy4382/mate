@@ -1,0 +1,70 @@
+.approval-card {
+  border: 1px solid #b98235;
+  border-radius: 12px;
+  padding: 16px;
+  margin: 12px 0;
+  background: #fffaf1;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.approval-heading {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+}
+.approval-card dl {
+  display: grid;
+  gap: 5px;
+  margin: 12px 0;
+}
+.approval-card dl div {
+  display: grid;
+  grid-template-columns: 6em minmax(0, 1fr);
+  gap: 8px;
+}
+.approval-card dt {
+  color: #665943;
+}
+.approval-card dd {
+  margin: 0;
+  min-width: 0;
+}
+.approval-card code,
+.approval-card pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.approval-full-command {
+  margin-top: 12px;
+  border-top: 1px solid #d9c49f;
+  padding-top: 10px;
+}
+.approval-full-command ol {
+  padding-left: 25px;
+}
+.approval-full-command li {
+  margin: 8px 0;
+}
+.approval-full-command li span {
+  display: block;
+  color: #665943;
+}
+.approval-warning {
+  font-weight: 600;
+}
+.approval-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+@media (max-width: 600px) {
+  .approval-card {
+    padding: 12px;
+  }
+  .approval-card dl div {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+}

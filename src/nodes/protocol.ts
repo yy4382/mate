@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { agentProcessOperationSchema } from "./process-operations.js";
+import { privilegedCommandSchema } from "../control-plane/privileged-approvals.js";
 import { operationSchema } from "../execution/backend.js";
 
 export const MAX_NODE_MESSAGE_BYTES = 1024 * 1024;
@@ -187,6 +188,46 @@ const NodeRequestShapeSchema = z.discriminatedUnion("type", [
     .strict(),
   z
     .object({
+      type: z.literal("node.privileged.started"),
+      requestId: requestIdSchema,
+      operationId: requestIdSchema,
+      agentId: agentIdSchema,
+      startedAt: z.number().int().positive(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("node.privileged.result"),
+      requestId: requestIdSchema,
+      operationId: requestIdSchema,
+      agentId: agentIdSchema,
+      startedAt: z.number().int().positive(),
+      state: z.enum(["succeeded", "failed", "unknown"]),
+      receipt: z.json().nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("node.privileged.reconcile.result"),
+      requestId: requestIdSchema,
+      receipts: z
+        .array(
+          z
+            .object({
+              requestId: requestIdSchema,
+              operationId: requestIdSchema,
+              agentId: agentIdSchema,
+              startedAt: z.number().int().positive(),
+              state: z.enum(["succeeded", "failed", "unknown"]),
+              receipt: z.json().nullable(),
+            })
+            .strict(),
+        )
+        .max(100),
+    })
+    .strict(),
+  z
+    .object({
       type: z.literal("node.process.reconcile.result"),
       requestId: requestIdSchema,
       receipts: z
@@ -235,11 +276,13 @@ const NodeControlMessageShapeSchema = z.discriminatedUnion("type", [
     type: z.literal("control.paired"),
     requestId: requestIdSchema,
     nodeId: nodeIdSchema,
+    privilegedPublicKey: z.string().min(1).max(4096).optional(),
   }),
   z.object({
     type: z.literal("control.authenticated"),
     requestId: requestIdSchema,
     nodeId: nodeIdSchema,
+    privilegedPublicKey: z.string().min(1).max(4096).optional(),
   }),
   z.object({
     type: z.literal("control.pong"),
@@ -299,6 +342,23 @@ const NodeControlMessageShapeSchema = z.discriminatedUnion("type", [
       operationId: requestIdSchema,
       agentId: agentIdSchema,
       operation: agentProcessOperationSchema,
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("control.privileged.operation"),
+      requestId: requestIdSchema,
+      command: privilegedCommandSchema,
+      signature: z.string().min(1).max(256),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("control.privileged.reconcile"),
+      requestId: requestIdSchema,
+      operations: z
+        .array(z.object({ requestId: requestIdSchema, agentId: agentIdSchema }).strict())
+        .max(100),
     })
     .strict(),
   z.discriminatedUnion("mode", [

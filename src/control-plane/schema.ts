@@ -17,6 +17,7 @@ import { workspaceAccessAuditSchemaV15 } from "./workspace-access-schema.js";
 import { agentProcessOperationsSchemaV13 } from "./process-operations-schema.js";
 import { recoverySchemaV16 } from "./recovery-schema.js";
 import { agentLifecycleSchemaV19 } from "./agent-lifecycle-schema.js";
+import { privilegedApprovalSchemaV20 } from "./privileged-approvals.js";
 
 /** The format used by the paired-node release before Agent provisioning. */
 export const controlPlaneSchemaV4 = `${ownerAuthSchema}\n${nodeDirectorySchema}`;
@@ -44,7 +45,8 @@ export const controlPlaneSchemaV15 = `${controlPlaneSchemaV14}\n${workspaceAcces
 export const controlPlaneSchemaV16 = `${controlPlaneSchemaV15}\n${recoverySchemaV16}`;
 export const controlPlaneSchemaV17 = `${controlPlaneSchemaV16}\n${conversationAttentionSchemaV17}`;
 export const controlPlaneSchemaV18 = `${controlPlaneSchemaV17}\n${taskReminderSchemaV18}`;
-export const controlPlaneSchema = `${controlPlaneSchemaV18}\n${agentLifecycleSchemaV19}`;
+export const controlPlaneSchemaV19 = `${controlPlaneSchemaV18}\n${agentLifecycleSchemaV19}`;
+export const controlPlaneSchema = `${controlPlaneSchemaV19}\n${privilegedApprovalSchemaV20}`;
 
 export const controlPlaneMigrations = [
   {
@@ -156,7 +158,14 @@ export const controlPlaneMigrations = [
     fromRevision: 18,
     toRevision: 19,
     previousSchema: controlPlaneSchemaV18,
-    nextSchema: controlPlaneSchema,
+    nextSchema: controlPlaneSchemaV19,
     migrationSchema: agentLifecycleSchemaV19,
+  },
+  {
+    fromRevision: 19,
+    toRevision: 20,
+    previousSchema: controlPlaneSchemaV19,
+    nextSchema: controlPlaneSchema,
+    migrationSchema: privilegedApprovalSchemaV20,
   },
 ] as const;

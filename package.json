@@ -16,6 +16,7 @@
     "test": "pnpm run build && vitest run",
     "test:linux-agent-provisioner": "node tests/linux/agent-provisioner.integration.mjs",
     "test:linux-agent-process-operations": "node tests/linux/agent-process-operations.integration.mjs",
+    "test:linux-privileged-approval": "node tests/linux/privileged-approval.integration.mjs",
     "test:linux-agent-workspace": "node tests/linux/agent-workspace-isolation.integration.mjs",
     "test:linux-model-worker": "node tests/linux/model-worker-isolation.integration.mjs",
     "check": "pnpm run format:check && pnpm test",

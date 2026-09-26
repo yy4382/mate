@@ -20,7 +20,8 @@ import { AgentRunCoordinator } from "./agent-runs.js";
 import { AttachmentError, AttachmentService } from "./attachments.js";
 import { WorkspaceError, WorkspaceService, type WorkspaceVersion } from "./workspace.js";
 import { registerWorkspaceRoutes } from "./workspace-http.js";
-import { listAgentActivity } from "./activity.js";
+import { listAgentActivity, recordAgentActivity } from "./activity.js";
+import { PrivilegedApprovals } from "./privileged-approvals.js";
 
 const newChannelSchema = z
   .object({
@@ -75,6 +76,7 @@ export interface ControlPlaneAppOptions {
 
 export class ControlPlaneApp extends Hono {
   runs?: AgentRunCoordinator;
+  readonly approvals: PrivilegedApprovals;
   constructor(
     private readonly ownerAuth: OwnerAuth,
     readonly nodes: NodeDirectory,
@@ -82,8 +84,10 @@ export class ControlPlaneApp extends Hono {
     readonly chat: OwnerChat,
     readonly workspace: WorkspaceService,
     readonly attachments: AttachmentService,
+    approvals: PrivilegedApprovals,
   ) {
     super();
+    this.approvals = approvals;
   }
 
   close(): void {
@@ -140,8 +144,31 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
       options.maxAttachmentBytes,
       options.now,
     ),
-    app = new ControlPlaneApp(ownerAuth, nodes, agents, ownerChat, workspace, attachments),
+    approvals = new PrivilegedApprovals(
+      ownerAuth.db,
+      {
+        execute: (nodeId, grant, onStarted) => nodes.executePrivileged(nodeId, grant, onStarted),
+      },
+      options.now,
+      (event) => recordAgentActivity(ownerAuth.db, event),
+    ),
+    app = new ControlPlaneApp(
+      ownerAuth,
+      nodes,
+      agents,
+      ownerChat,
+      workspace,
+      attachments,
+      approvals,
+    ),
     loginGate = new LoginGate();
+  nodes.setPrivilegedApprovalHandler(
+    approvals.publicKey,
+    (nodeId, requestId, outcome) => {
+      approvals.reconcile(nodeId, requestId, outcome);
+    },
+    () => approvals.resume(),
+  );
   ownerChat.setExternalAgentToolHandler(async (request) => {
     const input = request.input;
     try {
@@ -319,7 +346,14 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
       };
     }
   });
-  app.runs = new AgentRunCoordinator(ownerAuth.db, nodes, modelCredentials, ownerChat, options.now);
+  app.runs = new AgentRunCoordinator(
+    ownerAuth.db,
+    nodes,
+    modelCredentials,
+    ownerChat,
+    approvals,
+    options.now,
+  );
   const activeAgentProvisions = new Map<string, Promise<AgentSummary>>();
   const agentProvisionResponse = (
     context: Context,
@@ -400,6 +434,51 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
 
   app.use("/api/owner/*", requireOwnerApi);
   app.get("/api/owner/session", (context) => context.json({ authenticated: true }));
+  app.get("/api/owner/channels/:channelId/approvals", (context) => {
+    const channelId = context.req.param("channelId");
+    if (!z.string().uuid().safeParse(channelId).success)
+      return context.json({ error: "对话不存在。" }, 404);
+    context.header("Cache-Control", "no-store");
+    return context.json({ approvals: approvals.list(channelId) });
+  });
+  app.get("/api/owner/approvals/:requestId", (context) => {
+    const parsed = z.string().uuid().safeParse(context.req.param("requestId"));
+    const approval = parsed.success ? approvals.status(parsed.data) : undefined;
+    if (!approval) return context.json({ error: "审批请求不存在。" }, 404);
+    context.header("Cache-Control", "no-store");
+    return context.json({ approval });
+  });
+  app.post("/api/owner/approvals/:requestId/decision", async (context) => {
+    const origin = context.req.header("origin");
+    let sameHost = false;
+    try {
+      const parsedOrigin = new URL(origin ?? "");
+      sameHost =
+        (parsedOrigin.protocol === "https:" || parsedOrigin.protocol === "http:") &&
+        parsedOrigin.origin === origin &&
+        parsedOrigin.host === context.req.header("host");
+    } catch {
+      /* A missing or malformed Origin cannot authorize a root decision. */
+    }
+    if (!sameHost) return context.json({ error: "审批只能从 Mate 当前网页提交。" }, 403);
+    const parsed = z.string().uuid().safeParse(context.req.param("requestId"));
+    if (!parsed.success) return context.json({ error: "审批请求不存在。" }, 404);
+    let body: unknown;
+    try {
+      body = await context.req.json();
+    } catch {
+      return context.json({ error: "审批决定无效。" }, 400);
+    }
+    const choice = z
+      .object({ decision: z.enum(["approve", "reject"]) })
+      .strict()
+      .safeParse(body);
+    if (!choice.success) return context.json({ error: "审批决定无效。" }, 400);
+    if (!approvals.status(parsed.data)) return context.json({ error: "审批请求不存在。" }, 404);
+    const approval = approvals.decide(parsed.data, choice.data.decision);
+    context.header("Cache-Control", "no-store");
+    return context.json({ approval });
+  });
   app.get("/api/owner/agents", (context) => {
     context.header("Cache-Control", "no-store");
     return context.json({

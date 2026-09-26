@@ -5,6 +5,7 @@ import {
   WORKSPACE_WRITE_MAX_BYTES,
 } from "../execution/backend.js";
 import { MAX_NODE_MESSAGE_BYTES } from "../nodes/protocol.js";
+import { systemCommandSchema } from "../policy/system-operations.js";
 
 const conversationId = z.string().uuid(),
   workspacePath = z.string().max(4096),

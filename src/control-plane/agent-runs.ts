@@ -14,6 +14,8 @@ import {
 } from "./agent-tools.js";
 import { z } from "zod";
 import { recordAgentActivity } from "./activity.js";
+import { PrivilegedApprovals } from "./privileged-approvals.js";
+import { agentSystemToolOperations } from "./agent-tools.js";
 
 const schedulerIntervalMs = 250;
 const retryDelayMs = 1500;
@@ -47,6 +49,7 @@ export class AgentRunCoordinator {
     private readonly nodes: NodeDirectory,
     private readonly credentials: ModelCredentialDirectory,
     private readonly chat: OwnerChat,
+    private readonly approvals: PrivilegedApprovals,
     now: () => number = Date.now,
   ) {
     this.now = now;
@@ -104,6 +107,45 @@ export class AgentRunCoordinator {
         };
       } catch {
         return { ok: false, error: "Session compaction was refused" };
+      }
+    }
+    if (request.success && request.data.name === "system.exec") {
+      try {
+        const command = agentSystemToolOperations["system.exec"].schema.parse(request.data.input);
+        const channelId = this.chat.authorizeAgentPrivilegedOperation(runId, nodeId, agentId);
+        const requestId = deriveAgentProcessOperationId(agentId, toolCallId);
+        const approval = this.approvals.request({
+          requestId,
+          agentId,
+          nodeId,
+          channelId,
+          program: command.program,
+          args: command.args,
+          cwd: command.cwd,
+        });
+        return {
+          ok: true,
+          result: { requestId, state: approval.state, expiresAt: approval.expiresAt },
+        };
+      } catch {
+        return { ok: false, error: "系统特权请求被拒绝。" };
+      }
+    }
+    if (request.success && request.data.name === "system.status") {
+      try {
+        this.chat.authorizeAgentPrivilegedOperation(runId, nodeId, agentId);
+        const { requestId } = agentSystemToolOperations["system.status"].schema.parse(
+          request.data.input,
+        );
+        const approval = this.approvals.status(requestId);
+        if (!approval || approval.agentId !== agentId)
+          throw new Error("Unknown privileged request");
+        return {
+          ok: true,
+          result: { requestId, state: approval.state, receipt: approval.receipt },
+        };
+      } catch {
+        return { ok: false, error: "系统特权请求不可访问。" };
       }
     }
     if (!request.success || !Object.hasOwn(agentProcessToolOperations, request.data.name))

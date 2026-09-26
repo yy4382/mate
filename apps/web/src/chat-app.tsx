@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { redirectToLogin } from "./navigation.js";
+import { ApprovalCard, type Approval } from "./approval-card.js";
 import "./chat.css";
 
 interface Channel {
@@ -141,6 +142,9 @@ export function ChatPage() {
   const [authenticated, setAuthenticated] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [channels, setChannels] = useState<Channel[]>([]);
+  const [approvals, setApprovals] = useState<Approval[]>([]);
+  const [agentNames, setAgentNames] = useState<Record<string, string>>({});
+  const [approvalError, setApprovalError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [messageWindows, setMessageWindows] = useState<Record<string, MessageWindow>>({});
   const [historyRefresh, setHistoryRefresh] = useState(0);
@@ -446,6 +450,58 @@ export function ChatPage() {
       window.clearInterval(interval);
     };
   }, [authenticated, selectedId]);
+
+  useEffect(() => {
+    if (!authenticated || !selectedId) {
+      setApprovals([]);
+      return;
+    }
+    const channelId = selectedId;
+    let active = true;
+    async function refreshApprovals() {
+      try {
+        const result = await ownerJSON<{ approvals: Approval[] }>(
+          `/api/owner/channels/${encodeURIComponent(channelId)}/approvals`,
+        );
+        if (active) {
+          setApprovals(result.approvals);
+          setApprovalError(null);
+        }
+      } catch {
+        if (active) setApprovalError("审批卡暂时无法更新，请检查连接后重试。");
+      }
+    }
+    void refreshApprovals();
+    const interval = window.setInterval(() => void refreshApprovals(), 1000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [authenticated, selectedId]);
+
+  useEffect(() => {
+    if (!authenticated) return;
+    void ownerJSON<{ agents: Array<{ id: string; name: string }> }>("/api/owner/agents")
+      .then(({ agents }) =>
+        setAgentNames(Object.fromEntries(agents.map(({ id, name }) => [id, name]))),
+      )
+      .catch(() => {});
+  }, [authenticated]);
+
+  async function decideApproval(requestId: string, decision: "approve" | "reject") {
+    try {
+      const result = await ownerJSON<{ approval: Approval }>(
+        `/api/owner/approvals/${encodeURIComponent(requestId)}/decision`,
+        { method: "POST", body: JSON.stringify({ decision }) },
+      );
+      setApprovals((current) =>
+        current.map((approval) => (approval.requestId === requestId ? result.approval : approval)),
+      );
+      setApprovalError(null);
+    } catch {
+      setApprovalError("审批决定尚未确认，请刷新卡片查看现态后重试。");
+    }
+  }
 
   const selected = channels.find((channel) => channel.id === selectedId) ?? null;
   const currentWindow = selectedId
@@ -842,6 +898,15 @@ export function ChatPage() {
             </header>
 
             <div className="message-list" aria-live="polite" aria-label="消息历史">
+              {approvalError && <p>{approvalError}</p>}
+              {approvals.map((approval) => (
+                <ApprovalCard
+                  key={approval.requestId}
+                  approval={approval}
+                  agentName={agentNames[approval.agentId] ?? "Agent"}
+                  onDecision={(requestId, decision) => void decideApproval(requestId, decision)}
+                />
+              ))}
               {(currentWindow.hasNewer || loadingLatest) && (
                 <button
                   className="load-older-button"
