@@ -12,6 +12,78 @@ process.env.MATE_MODEL_WORKER = workerMode;
 
 serveModelWorker((model, context, options) => {
   const stream = createAssistantMessageEventStream();
+  if (options.apiKey === "synthetic-key-process-recovery") {
+    const unrelated = systemPrompt(context).includes("Online Agent");
+    const toolTurn = !unrelated && syntheticToolTurn++ === 0;
+    stream.push({
+      type: "done",
+      reason: toolTurn ? "toolUse" : "stop",
+      message: {
+        role: "assistant",
+        content: toolTurn
+          ? [
+              {
+                type: "toolCall",
+                id: "durable-process-call",
+                name: "tools.call",
+                arguments: {
+                  name: "process.exec",
+                  input: { command: "printf side-effect" },
+                },
+              },
+            ]
+          : [
+              {
+                type: "text",
+                text: unrelated ? "Online Agent continued." : "Recovered process result.",
+              },
+            ],
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: toolTurn ? "toolUse" : "stop",
+        timestamp: Date.now(),
+      },
+    });
+    return stream;
+  }
+  if (options.apiKey === "synthetic-key-http-401" || options.apiKey === "synthetic-key-http-503") {
+    void options.onResponse?.(
+      { status: options.apiKey.endsWith("401") ? 401 : 503, headers: {} },
+      model,
+    );
+    stream.push({
+      type: "done",
+      reason: "stop",
+      message: {
+        role: "assistant",
+        content: [],
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "error",
+        errorMessage: "provider request failed",
+        timestamp: Date.now(),
+      },
+    });
+    return stream;
+  }
   if (options.apiKey === "synthetic-key-hold") return stream;
   if (options.apiKey === "synthetic-key-tool-ack") {
     const firstToolTurn = syntheticToolTurn++ === 0;
