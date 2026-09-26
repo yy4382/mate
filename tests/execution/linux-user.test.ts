@@ -21,10 +21,10 @@ it("places each Linux call in its Agent slice with groups cleared before the com
     "/srv/agents/alice",
     "/bin/sh",
     ["-c", "sleep 30 &"],
-    "mate-agent-1001-test",
+    "mate-agent-1001-12345678-1234-4234-8234-123456789abc",
   );
   expect(call.command).toBe("/usr/bin/systemd-run");
-  expect(call.unit).toBe("mate-agent-1001-test.scope");
+  expect(call.unit).toBe("mate-agent-1001-12345678-1234-4234-8234-123456789abc.scope");
   expect(call.args).toEqual(
     expect.arrayContaining([
       "--scope",

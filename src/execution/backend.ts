@@ -79,12 +79,16 @@ export interface ExecutionRequest {
   operation: Operation;
   timeoutMs: number;
   agentId?: string;
+  /** Stable Agent operation identity for the systemd scope that owns this command. */
+  operationId?: string;
 }
 export interface ExecutionResult {
   code: number;
   stdout: string;
   stderr: string;
   truncated: boolean;
+  /** Present when the host placed this command in an Agent-owned systemd scope. */
+  processUnit?: string;
 }
 export interface ExecutionBackend {
   execute(request: ExecutionRequest, signal?: AbortSignal): Promise<ExecutionResult>;

@@ -35,9 +35,13 @@ export function linuxScopeCommand(
   programArgs: string[],
   name = `mate-agent-${identity.uid}-${randomUUID()}`,
 ): { command: string; args: string[]; unit: string } {
+  const scopePattern = new RegExp(
+    `^mate-agent-${identity.uid}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`,
+  );
   if (
-    !/^mate-agent-[0-9]+-[a-z0-9-]+$/.test(name) ||
-    !name.startsWith(`mate-agent-${identity.uid}-`)
+    !Number.isSafeInteger(identity.uid) ||
+    identity.uid < 1 ||
+    !scopePattern.test(name)
   )
     throw new Error("Invalid Agent scope name");
   const path = `${identity.home}/.local/bin:${identity.home}/bin:/usr/local/bin:/usr/bin:/bin`;
@@ -106,8 +110,11 @@ export class LinuxUserBackend implements ExecutionBackend {
     const privileged = process.platform === "linux" && process.getuid?.() === 0;
     if (!privileged && (process.getuid?.() !== identity.uid || process.getgid?.() !== identity.gid))
       throw new Error("Mate cannot switch to the configured Linux user");
+    const scopeName = request.operationId
+      ? `mate-agent-${identity.uid}-${request.operationId.toLowerCase()}`
+      : undefined;
     const scope = privileged
-      ? linuxScopeCommand(identity, shell ? path : root, program, programArgs)
+      ? linuxScopeCommand(identity, shell ? path : root, program, programArgs, scopeName)
       : undefined;
     const command = scope?.command ?? program,
       args = scope?.args ?? programArgs;
@@ -188,6 +195,7 @@ export class LinuxUserBackend implements ExecutionBackend {
               stdout: Buffer.concat(stdout).toString("utf8"),
               stderr: Buffer.concat(stderr).toString("utf8"),
               truncated: truncated || openPipes,
+              ...(scope ? { processUnit: scope.unit } : {}),
             });
         };
         if (stopping) void stopping.then(settle, settle);

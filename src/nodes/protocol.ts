@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { agentProcessOperationSchema } from "./process-operations.js";
 
 export const NodeRequestIdSchema = z.string().uuid();
 const requestIdSchema = NodeRequestIdSchema;
@@ -127,6 +128,16 @@ export const NodeRequestSchema = z.discriminatedUnion("type", [
       })
       .strict(),
   ]),
+  z
+    .object({
+      type: z.literal("node.process.operation.result"),
+      requestId: requestIdSchema,
+      operationId: requestIdSchema,
+      agentId: agentIdSchema,
+      state: z.enum(["succeeded", "failed", "unknown"]),
+      receipt: z.json().nullable(),
+    })
+    .strict(),
 ]);
 
 export const NodeControlMessageSchema = z.discriminatedUnion("type", [
@@ -185,6 +196,15 @@ export const NodeControlMessageSchema = z.discriminatedUnion("type", [
       runId: requestIdSchema,
       agentId: agentIdSchema,
       reason: z.enum(["timeout", "credentials_changed"]),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("control.process.operation"),
+      requestId: requestIdSchema,
+      operationId: requestIdSchema,
+      agentId: agentIdSchema,
+      operation: agentProcessOperationSchema,
     })
     .strict(),
   z

@@ -86,6 +86,31 @@ export async function provisionLinuxAgent(
   return operation;
 }
 
+/** Read and verify an existing Agent account without creating or repairing anything. */
+export function readProvisionedLinuxAgentIdentity(
+  agentId: string,
+  homeRoot: string,
+): LinuxAgentIdentity {
+  if (process.platform !== "linux")
+    throw new AgentProvisioningError("unsupported_host", "Agent 身份只能在 Linux 节点上使用。");
+  if (!isAbsolute(homeRoot))
+    throw new AgentProvisioningError("filesystem_error", "Agent 私人目录根路径必须是绝对路径。");
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(agentId))
+    throw new AgentProvisioningError("identity_mismatch", "Agent ID 格式无效。");
+
+  const id = agentId.toLowerCase(),
+    username = linuxUsernameForAgentId(id),
+    root = resolve(homeRoot),
+    home = join(root, id);
+  verifyHomeRoot(root);
+  const account = readPasswd(username),
+    group = readGroup(username);
+  if (!account) throw new AgentProvisioningError("identity_mismatch", "Agent Linux 账号不存在。");
+  verifyAccount(account, group, username, id, home);
+  verifyPrivateHome(home, account.uid, account.gid);
+  return { username, uid: account.uid, gid: account.gid, home };
+}
+
 async function provisionLinuxAgentOnce(
   options: LinuxAgentProvisionOptions,
 ): Promise<LinuxAgentIdentity> {
@@ -241,6 +266,28 @@ function ensureHomeRoot(path: string): void {
     chmodSync(absolute, 0o755);
   } catch {
     throw new AgentProvisioningError("permission_denied", "节点无法保护 Agent 私人目录根路径。");
+  }
+}
+
+function verifyHomeRoot(path: string): void {
+  if (path === "/")
+    throw new AgentProvisioningError("filesystem_error", "Agent 私人目录根路径不能是系统根目录。");
+  let current = "/";
+  for (const part of path.split("/").filter(Boolean)) {
+    current = join(current, part);
+    const stat = lstatSafe(current);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== 0 || stat.gid !== 0)
+      throw new AgentProvisioningError(
+        "identity_mismatch",
+        "Agent 私人目录根路径必须由 root 管理。",
+      );
+    const writableByOthers = (stat.mode & 0o022) !== 0,
+      stickyRootDirectory = stat.uid === 0 && (stat.mode & 0o1000) !== 0;
+    if (writableByOthers && (!stickyRootDirectory || current === path))
+      throw new AgentProvisioningError(
+        "identity_mismatch",
+        "Agent 私人目录路径不能允许其他用户写入。",
+      );
   }
 }
 

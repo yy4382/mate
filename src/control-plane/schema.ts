@@ -10,6 +10,7 @@ import {
   agentConversationActionRecoverySchemaV12,
   agentRunSchemaV7,
 } from "./agent-runs-schema.js";
+import { agentProcessOperationsSchemaV13 } from "./process-operations-schema.js";
 
 /** The format used by the paired-node release before Agent provisioning. */
 export const controlPlaneSchemaV4 = `${ownerAuthSchema}\n${nodeDirectorySchema}`;
@@ -30,7 +31,9 @@ export const controlPlaneSchemaV8 = `${controlPlaneSchemaV7}\n${agentJournalRepl
 export const controlPlaneSchemaV9 = `${controlPlaneSchemaV8}\n${agentRunBatchSchemaV9}`;
 export const controlPlaneSchemaV10 = `${controlPlaneSchemaV9}\n${agentRunContextHistorySchemaV10}`;
 export const controlPlaneSchemaV11 = `${controlPlaneSchemaV10}\n${agentConversationToolsSchemaV11}`;
-export const controlPlaneSchema = `${controlPlaneSchemaV11}\n${agentConversationActionRecoverySchemaV12}`;
+export const controlPlaneSchemaV12 = `${controlPlaneSchemaV11}\n${agentConversationActionRecoverySchemaV12}`;
+export const controlPlaneSchemaV13 = `${controlPlaneSchemaV12}\n${agentProcessOperationsSchemaV13}`;
+export const controlPlaneSchema = controlPlaneSchemaV13;
 
 export const controlPlaneMigrations = [
   {
@@ -93,7 +96,14 @@ export const controlPlaneMigrations = [
     fromRevision: 11,
     toRevision: 12,
     previousSchema: controlPlaneSchemaV11,
-    nextSchema: controlPlaneSchema,
+    nextSchema: controlPlaneSchemaV12,
     migrationSchema: agentConversationActionRecoverySchemaV12,
+  },
+  {
+    fromRevision: 12,
+    toRevision: 13,
+    previousSchema: controlPlaneSchemaV12,
+    nextSchema: controlPlaneSchemaV13,
+    migrationSchema: agentProcessOperationsSchemaV13,
   },
 ] as const;

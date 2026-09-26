@@ -12,6 +12,8 @@ import { ensureModelWorkerIdentity } from "./model-identity.js";
 import { makeAgentRunRequest, runAgentModel, type AgentRunPage } from "./agent-runner.js";
 import type { ModelProcessIdentity } from "./model-process.js";
 import type { AgentProvisionStage } from "./protocol.js";
+import { openNodeProcessOperations } from "./process-operation-runtime.js";
+import type { AgentProcessOperations } from "./process-operations.js";
 
 const INITIAL_RETRY_MS = 250;
 const MAX_RETRY_MS = 10_000;
@@ -30,6 +32,8 @@ export interface LinuxNodeOptions {
 
 interface NodeTestDependencies {
   modelWorkerEntry?: string;
+  modelWorkerIdentity?: ModelProcessIdentity | null;
+  processOperations?: AgentProcessOperations;
   provisionAgent?: (
     agentId: string,
     onProgress: (stage: AgentProvisionStage) => void,
@@ -58,8 +62,11 @@ async function runLinuxNodeInternal(
 ): Promise<void> {
   const socketUrl = toWebSocketUrl(options.controlPlaneUrl);
   const { identity, created } = loadOrCreateNodeIdentity(options.dataDirectory);
-  const modelWorkerIdentity =
-    process.platform === "linux" ? ensureModelWorkerIdentity() : undefined;
+  const modelWorkerIdentity = Object.hasOwn(dependencies, "modelWorkerIdentity")
+    ? (dependencies.modelWorkerIdentity ?? undefined)
+    : process.platform === "linux"
+      ? ensureModelWorkerIdentity()
+      : undefined;
   let pairingToken = options.pairingToken;
   if (created && !pairingToken)
     throw new Error("A new Linux node requires MATE_NODE_PAIRING_TOKEN");
@@ -76,34 +83,46 @@ async function runLinuxNodeInternal(
   if (heartbeatTimeoutMs <= heartbeatIntervalMs)
     throw new Error("Node heartbeat timeout must be longer than its interval");
 
-  let retryMs = INITIAL_RETRY_MS;
-  while (!signal.aborted) {
-    try {
-      const connected = await connectOnce(
-        socketUrl,
-        identity,
-        () => pairingToken,
-        () => {
-          pairingToken = undefined;
-        },
-        heartbeatIntervalMs,
-        heartbeatTimeoutMs,
+  const processStore = dependencies.processOperations
+    ? undefined
+    : openNodeProcessOperations(
+        options.dataDirectory,
         options.agentHomeRoot ?? "/var/lib/mate/agents",
-        modelWorkerIdentity,
-        dependencies,
-        signal,
       );
-      if (signal.aborted) break;
-      retryMs = INITIAL_RETRY_MS;
-      if (connected) process.stderr.write("Node WebSocket disconnected; reconnecting.\n");
-    } catch (error) {
-      if (error instanceof NodeAuthenticationError) throw error;
-      if (signal.aborted) break;
-      process.stderr.write("Node WebSocket connection failed; retrying.\n");
-    }
+  const processOperations = dependencies.processOperations ?? processStore!.operations;
+  try {
+    let retryMs = INITIAL_RETRY_MS;
+    while (!signal.aborted) {
+      try {
+        const connected = await connectOnce(
+          socketUrl,
+          identity,
+          () => pairingToken,
+          () => {
+            pairingToken = undefined;
+          },
+          heartbeatIntervalMs,
+          heartbeatTimeoutMs,
+          options.agentHomeRoot ?? "/var/lib/mate/agents",
+          modelWorkerIdentity,
+          dependencies,
+          processOperations,
+          signal,
+        );
+        if (signal.aborted) break;
+        retryMs = INITIAL_RETRY_MS;
+        if (connected) process.stderr.write("Node WebSocket disconnected; reconnecting.\n");
+      } catch (error) {
+        if (error instanceof NodeAuthenticationError) throw error;
+        if (signal.aborted) break;
+        process.stderr.write("Node WebSocket connection failed; retrying.\n");
+      }
 
-    if (!signal.aborted) await waitOrAbort(retryMs, signal);
-    retryMs = Math.min(retryMs * 2, MAX_RETRY_MS);
+      if (!signal.aborted) await waitOrAbort(retryMs, signal);
+      retryMs = Math.min(retryMs * 2, MAX_RETRY_MS);
+    }
+  } finally {
+    processStore?.close();
   }
 }
 
@@ -134,6 +153,7 @@ function connectOnce(
   agentHomeRoot: string,
   modelWorkerIdentity: ModelProcessIdentity | undefined,
   testDependencies: NodeTestDependencies,
+  processOperations: AgentProcessOperations,
   signal: AbortSignal,
 ): Promise<boolean> {
   if (signal.aborted) return Promise.resolve(false);
@@ -366,6 +386,38 @@ function connectOnce(
           throw new NodeAuthenticationError("控制面在节点身份验证前取消 Agent 运行。");
         const active = activeRuns.get(message.runId);
         if (active?.agentId === message.agentId) active.controller.abort(message.reason);
+        return;
+      }
+      if (message.type === "control.process.operation") {
+        if (!authenticated)
+          throw new NodeAuthenticationError("控制面在节点身份验证前请求普通操作。");
+        const { requestId, operationId, agentId, operation } = message;
+        // Do not bind execution to this WebSocket's lifetime. Node receipts and the Linux scope
+        // let the control plane reconcile the same operation after a reconnect.
+        void processOperations
+          .execute(agentId, operationId, operation)
+          .then((result) => {
+            if (socket.readyState !== WebSocket.OPEN || !authenticated) return;
+            sendRequest(socket, {
+              type: "node.process.operation.result",
+              requestId,
+              operationId,
+              agentId,
+              state: result.state === "started" ? "unknown" : result.state,
+              receipt: result.receipt,
+            });
+          })
+          .catch(() => {
+            if (socket.readyState !== WebSocket.OPEN || !authenticated) return;
+            sendRequest(socket, {
+              type: "node.process.operation.result",
+              requestId,
+              operationId,
+              agentId,
+              state: "unknown",
+              receipt: { reason: "node_operation_result_unavailable" },
+            });
+          });
         return;
       }
       if (message.type === "control.agent.run") {

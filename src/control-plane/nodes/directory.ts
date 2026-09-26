@@ -10,6 +10,10 @@ import {
   type AgentProvisionStage,
   type NodeRequest,
 } from "../../nodes/protocol.js";
+import type {
+  AgentProcessOperation,
+  AgentProcessOperationState,
+} from "../../nodes/process-operations.js";
 
 export const DEFAULT_NODE_PAIRING_TOKEN_TTL_MS = 10 * 60 * 1000;
 export const DEFAULT_NODE_MAX_CONNECTIONS = 128;
@@ -19,6 +23,7 @@ export const DEFAULT_NODE_HEARTBEAT_TIMEOUT_MS = 35_000;
 export const DEFAULT_NODE_OPERATION_TIMEOUT_MS = 60_000;
 export const DEFAULT_NODE_MAX_ACTIVE_RUNS = 2;
 export const DEFAULT_NODE_RUN_TIMEOUT_MS = 5 * 60_000;
+export const DEFAULT_NODE_PROCESS_OPERATION_TIMEOUT_MS = 75_000;
 
 export interface NodeSocket {
   send(data: string): void;
@@ -47,6 +52,7 @@ export interface NodeDirectoryOptions {
   handshakeTimeoutMs?: number;
   heartbeatTimeoutMs?: number;
   operationTimeoutMs?: number;
+  processOperationTimeoutMs?: number;
   runTimeoutMs?: number;
 }
 
@@ -67,6 +73,26 @@ interface PendingAgentRun {
   agentId: string;
   promise: Promise<NodeAgentRunResult>;
   resolve: (result: NodeAgentRunResult) => void;
+  reject: (error: Error) => void;
+  timeout: ReturnType<typeof setTimeout>;
+}
+
+interface PendingAgentProcessOperation {
+  nodeId: string;
+  agentId: string;
+  operationId: string;
+  promise: Promise<{
+    operationId: string;
+    agentId: string;
+    state: Exclude<AgentProcessOperationState, "started">;
+    receipt: unknown | null;
+  }>;
+  resolve: (result: {
+    operationId: string;
+    agentId: string;
+    state: Exclude<AgentProcessOperationState, "started">;
+    receipt: unknown | null;
+  }) => void;
   reject: (error: Error) => void;
   timeout: ReturnType<typeof setTimeout>;
 }
@@ -130,6 +156,7 @@ export class NodeDirectory {
   private readonly handshakeTimeoutMs: number;
   private readonly heartbeatTimeoutMs: number;
   private readonly operationTimeoutMs: number;
+  private readonly processOperationTimeoutMs: number;
   private readonly runTimeoutMs: number;
   private readonly heartbeatSweepTimer: ReturnType<typeof setInterval>;
   private readonly sessions = new WeakMap<NodeSocket, SocketSession>();
@@ -138,6 +165,7 @@ export class NodeDirectory {
   private readonly unauthenticated = new Set<NodeSocket>();
   private readonly pendingAgentProvisions = new Map<string, PendingAgentProvision>();
   private readonly pendingAgentRuns = new Map<string, PendingAgentRun>();
+  private readonly pendingAgentProcessOperations = new Map<string, PendingAgentProcessOperation>();
   private agentRunHandlers?: AgentRunHandlers;
 
   constructor(
@@ -164,6 +192,10 @@ export class NodeDirectory {
     this.operationTimeoutMs = positiveInteger(
       options.operationTimeoutMs,
       DEFAULT_NODE_OPERATION_TIMEOUT_MS,
+    );
+    this.processOperationTimeoutMs = positiveInteger(
+      options.processOperationTimeoutMs,
+      DEFAULT_NODE_PROCESS_OPERATION_TIMEOUT_MS,
     );
     this.runTimeoutMs = positiveInteger(options.runTimeoutMs, DEFAULT_NODE_RUN_TIMEOUT_MS);
     if (this.maxUnauthenticatedConnections > this.maxConnections)
@@ -258,6 +290,8 @@ export class NodeDirectory {
       request.type === "node.agent.run.result"
     )
       return this.receiveAgentRunMessage(socket, session, request);
+    if (request.type === "node.process.operation.result")
+      return this.receiveAgentProcessOperationResult(socket, session, request);
     return this.receiveAgentProvisionMessage(socket, session, request);
   }
 
@@ -271,6 +305,10 @@ export class NodeDirectory {
       this.connected.delete(nodeId);
       this.rejectAgentProvisions(nodeId, new Error("节点连接已断开，Agent 创建结果尚未确认。"));
       this.rejectAgentRuns(nodeId, new Error("节点连接已断开，待处理私信仍保留在控制面。"));
+      this.rejectAgentProcessOperations(
+        nodeId,
+        new Error("节点连接已断开，普通操作结果尚未确认。"),
+      );
     }
     this.sessions.delete(socket);
   }
@@ -383,6 +421,81 @@ export class NodeDirectory {
       this.send(socket, controlMessage);
     } catch {
       this.finishAgentRun(request.runId, undefined, new Error("Could not send Agent run"));
+    }
+    return promise;
+  }
+
+  executeAgentProcessOperation(
+    nodeId: string,
+    request: { operationId: string; agentId: string; operation: AgentProcessOperation },
+  ): Promise<{
+    operationId: string;
+    agentId: string;
+    state: Exclude<AgentProcessOperationState, "started">;
+    receipt: unknown | null;
+  }> {
+    const operationId = NodeRequestIdSchema.parse(request.operationId),
+      agentId = NodeRequestIdSchema.parse(request.agentId),
+      requestId = randomUUID(),
+      controlMessage = NodeControlMessageSchema.parse({
+        type: "control.process.operation",
+        requestId,
+        operationId,
+        agentId,
+        operation: request.operation,
+      });
+    const existing = this.pendingAgentProcessOperations.get(requestId);
+    if (existing) {
+      if (
+        existing.nodeId !== nodeId ||
+        existing.agentId !== agentId ||
+        existing.operationId !== operationId
+      )
+        return Promise.reject(new Error("Agent process operation request identity conflict"));
+      return existing.promise;
+    }
+    const socket = this.connected.get(nodeId),
+      session = socket ? this.sessions.get(socket) : undefined;
+    if (
+      !socket ||
+      !session ||
+      session.nodeId !== nodeId ||
+      this.now() - session.lastHeartbeatAt >= this.heartbeatTimeoutMs
+    )
+      return Promise.reject(new Error("Selected node is offline"));
+
+    let resolveResult!: PendingAgentProcessOperation["resolve"],
+      rejectResult!: PendingAgentProcessOperation["reject"];
+    const promise = new Promise<Awaited<PendingAgentProcessOperation["promise"]>>(
+      (resolve, reject) => {
+        resolveResult = resolve;
+        rejectResult = reject;
+      },
+    );
+    const timeout = setTimeout(() => {
+      this.finishAgentProcessOperation(
+        requestId,
+        undefined,
+        new Error("Node operation timed out; its result is not confirmed"),
+      );
+    }, this.processOperationTimeoutMs);
+    this.pendingAgentProcessOperations.set(requestId, {
+      nodeId,
+      agentId,
+      operationId,
+      promise,
+      resolve: resolveResult,
+      reject: rejectResult,
+      timeout,
+    });
+    try {
+      this.send(socket, controlMessage);
+    } catch {
+      this.finishAgentProcessOperation(
+        requestId,
+        undefined,
+        new Error("Could not send Agent process operation"),
+      );
     }
     return promise;
   }
@@ -543,6 +656,30 @@ export class NodeDirectory {
     this.finishAgentProvision(request.requestId, request);
   }
 
+  private receiveAgentProcessOperationResult(
+    socket: NodeSocket,
+    session: SocketSession,
+    request: Extract<NodeRequest, { type: "node.process.operation.result" }>,
+  ): void {
+    const nodeId = session.nodeId;
+    if (!nodeId || this.connected.get(nodeId) !== socket)
+      return this.reject(socket, request.requestId, "not_authenticated", "节点尚未完成身份验证。");
+    const pending = this.pendingAgentProcessOperations.get(request.requestId);
+    if (!pending) return; // A durable intent can reconcile this receipt through a later retry.
+    if (
+      pending.nodeId !== nodeId ||
+      pending.agentId !== request.agentId ||
+      pending.operationId !== request.operationId
+    )
+      return this.reject(
+        socket,
+        request.requestId,
+        "invalid_identity",
+        "普通操作收据与节点请求不匹配。",
+      );
+    this.finishAgentProcessOperation(request.requestId, request);
+  }
+
   private receiveAgentRunMessage(
     socket: NodeSocket,
     session: SocketSession,
@@ -671,6 +808,31 @@ export class NodeDirectory {
     for (const [runId, pending] of this.pendingAgentRuns) {
       if (pending.nodeId === nodeId) this.finishAgentRun(runId, undefined, error);
     }
+  }
+
+  private rejectAgentProcessOperations(nodeId: string, error: Error): void {
+    for (const [requestId, pending] of this.pendingAgentProcessOperations) {
+      if (pending.nodeId === nodeId) this.finishAgentProcessOperation(requestId, undefined, error);
+    }
+  }
+
+  private finishAgentProcessOperation(
+    requestId: string,
+    result?: Extract<NodeRequest, { type: "node.process.operation.result" }>,
+    error?: Error,
+  ): void {
+    const pending = this.pendingAgentProcessOperations.get(requestId);
+    if (!pending) return;
+    this.pendingAgentProcessOperations.delete(requestId);
+    clearTimeout(pending.timeout);
+    if (error) pending.reject(error);
+    else if (result)
+      pending.resolve({
+        operationId: result.operationId,
+        agentId: result.agentId,
+        state: result.state,
+        receipt: result.receipt,
+      });
   }
 
   private finishAgentRun(runId: string, result?: NodeAgentRunResult, error?: Error): void {

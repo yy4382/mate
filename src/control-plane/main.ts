@@ -10,10 +10,10 @@ export function startControlPlane(
   appOptions: ControlPlaneAppOptions = {},
 ): ServerType {
   const app = createControlPlaneApp({ ...appOptions, webRoot });
-  // Node protocol messages are small (the largest field is a bounded public-key PEM).
+  // Ordinary command receipts carry bounded stdout and stderr with the protocol metadata.
   const websocketServer = new WebSocketServer({
     noServer: true,
-    maxPayload: 16 * 1024,
+    maxPayload: 1024 * 1024,
     perMessageDeflate: false,
   });
   // The Hono adapter documents ws directly, but its type differs on noServer and send options.
