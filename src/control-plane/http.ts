@@ -16,6 +16,7 @@ import { AgentRunCoordinator } from "./agent-runs.js";
 import { AttachmentError, AttachmentService } from "./attachments.js";
 import { WorkspaceError, WorkspaceService, type WorkspaceVersion } from "./workspace.js";
 import { registerWorkspaceRoutes } from "./workspace-http.js";
+import { listAgentActivity } from "./activity.js";
 
 const newChannelSchema = z
   .object({
@@ -390,6 +391,49 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
   app.get("/api/owner/agents", (context) => {
     context.header("Cache-Control", "no-store");
     return context.json({ agents: agents.list() });
+  });
+  app.get("/api/owner/agents/:agentId/activity", (context) => {
+    const beforeText = context.req.query("before"),
+      limitText = context.req.query("limit");
+    const before = beforeText === undefined ? null : Number(beforeText);
+    const limit = limitText === undefined ? 50 : Number(limitText);
+    if (
+      (beforeText !== undefined &&
+        (!/^[1-9]\d*$/.test(beforeText) || !Number.isSafeInteger(before))) ||
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      limit > 100 ||
+      (context.req.query("detail") !== undefined && context.req.query("detail") !== "1")
+    )
+      return context.json({ error: "动态查询参数无效。" }, 400);
+    const agentId = context.req.param("agentId");
+    const events = listAgentActivity(
+      ownerAuth.db,
+      agentId,
+      before,
+      limit,
+      context.req.query("detail") === "1",
+    );
+    if (!events) return context.json({ error: "Agent 不存在。" }, 404);
+    const agent = agents.get(agentId)!;
+    const online = nodes.list().some((node) => node.id === agent.nodeId && node.online);
+    context.header("Cache-Control", "no-store");
+    return context.json({
+      events,
+      nodeOnline: online,
+      pausedReason: app.runs?.pauseReason(agentId) ?? null,
+      nextBefore: events.length === limit ? events.at(-1)!.sequence : null,
+    });
+  });
+  app.post("/api/owner/agents/:agentId/pause", (context) => {
+    if (!app.runs?.pauseAgent(context.req.param("agentId")))
+      return context.json({ error: "Agent 不存在。" }, 404);
+    return context.json({ pausedReason: "manual" });
+  });
+  app.post("/api/owner/agents/:agentId/resume", (context) => {
+    if (!app.runs?.resumeAgent(context.req.param("agentId")))
+      return context.json({ error: "Agent 尚未暂停。" }, 409);
+    return context.json({ pausedReason: null });
   });
   app.get("/api/owner/model-providers", (context) => {
     context.header("Cache-Control", "no-store");

@@ -240,8 +240,12 @@ export function serveModelWorker(stream: StreamFn): void {
         }),
       },
     ];
+    let credentialResponse = false;
     const agent = new Agent({
       sessionId: run.data.spec.sessionId,
+      onResponse: (response) => {
+        if (response.status === 401 || response.status === 403) credentialResponse = true;
+      },
       streamFn: (selectedModel, context, options) =>
         stream(selectedModel, context, {
           ...options,
@@ -297,7 +301,11 @@ export function serveModelWorker(stream: StreamFn): void {
         process.stderr.write(
           `Pi model worker failed: ${(error instanceof Error ? (error.stack ?? error.message) : String(error)).slice(0, 1500)}\n`,
         );
-      process.send?.({ type: "failed", nonce, code: "model_failed" });
+      process.send?.({
+        type: "failed",
+        nonce,
+        code: credentialResponse ? "credentials_invalid" : "model_failed",
+      });
     } finally {
       unsubscribe();
       for (const waiter of pending.values()) waiter.resolve(false);

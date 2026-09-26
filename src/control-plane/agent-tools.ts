@@ -17,6 +17,11 @@ const conversationId = z.string().uuid(),
 
 /** Control-plane-owned operation catalog; the node forwards these names and inputs unchanged. */
 export const agentConversationOperations = Object.freeze({
+  "session.compact": {
+    description: "提交一份会话摘要和快照；控制面确认后，下一次运行从新模型会话及该摘要继续。",
+    schema: z.object({ summary: z.string().min(1).max(20_000), snapshot: z.json() }).strict(),
+    seatPolicy: "deny" as const,
+  },
   "agents.list": {
     description: "发现当前已配置、可通过 Mate 联系的其他 Agent 身份。",
     schema: z.object({}).strict(),

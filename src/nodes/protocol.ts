@@ -164,7 +164,13 @@ const NodeRequestShapeSchema = z.discriminatedUnion("type", [
         runId: requestIdSchema,
         agentId: agentIdSchema,
         ok: z.literal(false),
-        code: z.enum(["model_unavailable", "model_failed", "worker_failed", "aborted"]),
+        code: z.enum([
+          "model_unavailable",
+          "model_failed",
+          "worker_failed",
+          "credentials_invalid",
+          "aborted",
+        ]),
       })
       .strict(),
   ]),
@@ -176,6 +182,24 @@ const NodeRequestShapeSchema = z.discriminatedUnion("type", [
       agentId: agentIdSchema,
       state: z.enum(["succeeded", "failed", "unknown"]),
       receipt: z.json().nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("node.process.reconcile.result"),
+      requestId: requestIdSchema,
+      receipts: z
+        .array(
+          z
+            .object({
+              operationId: requestIdSchema,
+              agentId: agentIdSchema,
+              state: z.enum(["succeeded", "failed", "unknown"]),
+              receipt: z.json().nullable(),
+            })
+            .strict(),
+        )
+        .max(100),
     })
     .strict(),
 ]);
@@ -239,7 +263,7 @@ const NodeControlMessageShapeSchema = z.discriminatedUnion("type", [
       requestId: requestIdSchema,
       runId: requestIdSchema,
       agentId: agentIdSchema,
-      reason: z.enum(["timeout", "credentials_changed"]),
+      reason: z.enum(["timeout", "credentials_changed", "manual_pause"]),
     })
     .strict(),
   z
@@ -296,6 +320,15 @@ const NodeControlMessageShapeSchema = z.discriminatedUnion("type", [
       })
       .strict(),
   ]),
+  z
+    .object({
+      type: z.literal("control.process.reconcile"),
+      requestId: requestIdSchema,
+      operations: z
+        .array(z.object({ operationId: requestIdSchema, agentId: agentIdSchema }).strict())
+        .max(100),
+    })
+    .strict(),
   z
     .object({
       type: z.literal("control.agent.run.context"),

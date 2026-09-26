@@ -475,6 +475,28 @@ function connectOnce(
           .catch(() => undefined);
         return;
       }
+      if (message.type === "control.process.reconcile") {
+        if (!authenticated)
+          throw new NodeAuthenticationError("控制面在节点身份验证前请求操作对账。");
+        sendRequest(socket, {
+          type: "node.process.reconcile.result",
+          requestId: message.requestId,
+          receipts: message.operations.flatMap(({ agentId, operationId }) => {
+            const result = processOperations.status(agentId, operationId);
+            return result && result.state !== "started"
+              ? [
+                  {
+                    operationId,
+                    agentId,
+                    state: result.state,
+                    receipt: result.receipt,
+                  },
+                ]
+              : [];
+          }),
+        });
+        return;
+      }
       if (message.type === "control.agent.run") {
         if (!authenticated)
           throw new NodeAuthenticationError("控制面在节点身份验证前请求 Agent 运行。");
@@ -658,7 +680,8 @@ function connectOnce(
       runId: string,
       agentId: string,
       ok: boolean,
-      code?: "model_unavailable" | "model_failed" | "worker_failed" | "aborted",
+      code?:
+        "model_unavailable" | "model_failed" | "worker_failed" | "credentials_invalid" | "aborted",
     ): void {
       if (socket.readyState !== WebSocket.OPEN || !authenticated) return;
       try {

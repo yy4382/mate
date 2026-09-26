@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { redirectToLogin } from "./navigation.js";
+import { AgentActivity } from "./agent-activity.js";
 import "./agents-page.css";
 
 interface NodeSummary {
@@ -1399,6 +1400,7 @@ export function AgentsPage() {
                       </div>
                     </dl>
                   )}
+                  {agent.linuxIdentity && <AgentActivity agentId={agent.id} />}
                   {(agent.status === "failed" || agent.status === "provisioning") && (
                     <button
                       className="agent-retry-button"

@@ -455,6 +455,39 @@
 .workspace-preview-actions button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+.agent-activity {
+  margin-top: 14px;
+}
+.agent-activity-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 12px 0;
+  color: #626b5d;
+  font-size: 12px;
+}
+.agent-activity-list {
+  display: grid;
+  gap: 9px;
+  margin: 0;
+  padding-left: 20px;
+}
+.agent-activity-list li {
+  overflow-wrap: anywhere;
+}
+.agent-activity-list time {
+  display: block;
+  color: #777;
+  font-size: 11px;
+}
+.agent-activity-list pre {
+  max-height: 240px;
+  overflow: auto;
+  padding: 10px;
+  background: #f4f5f1;
+  border-radius: 6px;
+  white-space: pre-wrap;
 }
 
 @media (max-width: 580px) {

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { NodeControlMessage, NodeRequest } from "./protocol.js";
 import { NodeRequestSchema } from "./protocol.js";
 import {
+  ModelRunFailure,
   startModelProcess,
   type ModelProcessIdentity,
   type ModelProcessSession,
@@ -27,7 +28,8 @@ export interface AgentRunTransport {
   ): Promise<{ ok: true; result: unknown } | { ok: false; error: string }>;
   result(
     ok: boolean,
-    code?: "model_unavailable" | "model_failed" | "worker_failed" | "aborted",
+    code?:
+      "model_unavailable" | "model_failed" | "worker_failed" | "credentials_invalid" | "aborted",
   ): void;
 }
 
@@ -89,8 +91,9 @@ export async function runAgentModel(
       prompt,
     });
     if (!connectionSignal.aborted) transport.result(true);
-  } catch {
-    if (!connectionSignal.aborted) transport.result(false, "model_failed");
+  } catch (error) {
+    if (!connectionSignal.aborted)
+      transport.result(false, error instanceof ModelRunFailure ? error.code : "model_failed");
   } finally {
     apiKey = "";
     worker?.close();

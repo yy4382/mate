@@ -736,11 +736,21 @@ export function ChatPage() {
                 currentMessages.map((message) => (
                   <article className="message-row" key={message.id}>
                     <div className="message-avatar" aria-hidden="true">
-                      {message.author.kind === "agent" ? "A" : "你"}
+                      {message.author.id === "mate-system"
+                        ? "M"
+                        : message.author.kind === "agent"
+                          ? "A"
+                          : "你"}
                     </div>
                     <div className="message-content">
                       <div className="message-meta">
-                        <strong>{message.author.kind === "agent" ? "Agent" : "你"}</strong>
+                        <strong>
+                          {message.author.id === "mate-system"
+                            ? "Mate"
+                            : message.author.kind === "agent"
+                              ? "Agent"
+                              : "你"}
+                        </strong>
                         <time dateTime={new Date(message.createdAt).toISOString()}>
                           {timeLabel(message.createdAt)}
                         </time>

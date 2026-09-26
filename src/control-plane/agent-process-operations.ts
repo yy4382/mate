@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
 import { z } from "zod";
+import { recordAgentActivity } from "./activity.js";
 import {
   agentProcessOperationSchema,
   type AgentProcessOperation,
@@ -41,17 +42,19 @@ export interface AgentProcessOperationRequest {
 export interface AgentProcessOperationResult {
   operationId: string;
   agentId: string;
-  state: AgentProcessOperationState;
+  state: "executing" | Exclude<AgentProcessOperationState, "started">;
   receipt: unknown | null;
 }
 
 interface OperationRow {
   operation_id: string;
+  run_id: string;
   agent_id: string;
   node_id: string;
+  stable_action_id: string;
   request_hash: string;
   request_json: string;
-  state: AgentProcessOperationState;
+  state: "executing" | Exclude<AgentProcessOperationState, "started">;
   receipt_json: string | null;
 }
 
@@ -123,6 +126,15 @@ export class AgentProcessOperationBroker {
             this.now(),
             this.now(),
           );
+        recordAgentActivity(this.database, {
+          agentId,
+          nodeId,
+          kind: "operation.started",
+          referenceId: operationId,
+          summary: "普通操作已提交节点执行。",
+          detail: { operation },
+          at: this.now(),
+        });
         return this.read(operationId)!;
       })
       .immediate();
@@ -148,6 +160,59 @@ export class AgentProcessOperationBroker {
     return toResult(row);
   }
 
+  /** Accept only a receipt for a control-plane intent assigned to this node. */
+  reconcile(
+    nodeId: string,
+    result: AgentProcessNodeResult,
+  ): { corrected: boolean; result?: AgentProcessOperationResult } {
+    const row = this.read(uuidSchema.parse(result.operationId));
+    if (
+      !row ||
+      row.node_id !== uuidSchema.parse(nodeId) ||
+      row.agent_id !== uuidSchema.parse(result.agentId)
+    )
+      return { corrected: false };
+    if (row.state === "succeeded" || row.state === "failed")
+      return { corrected: false, result: toResult(row) };
+    if (result.state === "unknown" && row.state === "unknown")
+      return { corrected: false, result: toResult(row) };
+    this.database
+      .transaction(() => {
+        this.database
+          .prepare(
+            `UPDATE owner_agent_process_operations SET state=?,receipt_json=?,updated_at=?
+         WHERE operation_id=? AND state IN ('executing','unknown')`,
+          )
+          .run(
+            result.state,
+            result.receipt === null ? null : JSON.stringify(result.receipt),
+            this.now(),
+            result.operationId,
+          );
+        this.appendSessionResult(this.read(result.operationId)!);
+        recordAgentActivity(this.database, {
+          agentId: row.agent_id,
+          nodeId: row.node_id,
+          kind:
+            row.state === "unknown" && result.state !== "unknown"
+              ? "receipt.corrected"
+              : "operation.finished",
+          referenceId: row.operation_id,
+          summary:
+            result.state === "unknown"
+              ? "操作结果尚无可靠证据。"
+              : `操作收据已核对：${result.state === "succeeded" ? "成功" : "失败"}。`,
+          detail: { state: result.state, receipt: result.receipt },
+          at: this.now(),
+        });
+      })
+      .immediate();
+    return {
+      corrected: row.state === "unknown" && result.state !== "unknown",
+      result: toResult(this.read(result.operationId)!),
+    };
+  }
+
   private async dispatch(
     nodeId: string,
     request: { operationId: string; agentId: string; operation: AgentProcessOperation },
@@ -171,16 +236,33 @@ export class AgentProcessOperationBroker {
         receipt: { reason: "node_receipt_identity_mismatch" },
       };
     this.database
-      .prepare(
-        `UPDATE owner_agent_process_operations SET state=?,receipt_json=?,updated_at=?
-         WHERE operation_id=? AND state IN ('executing','unknown')`,
-      )
-      .run(
-        result.state,
-        result.receipt === null ? null : JSON.stringify(result.receipt),
-        this.now(),
-        request.operationId,
-      );
+      .transaction(() => {
+        this.database
+          .prepare(
+            `UPDATE owner_agent_process_operations SET state=?,receipt_json=?,updated_at=?
+           WHERE operation_id=? AND state IN ('executing','unknown')`,
+          )
+          .run(
+            result.state,
+            result.receipt === null ? null : JSON.stringify(result.receipt),
+            this.now(),
+            request.operationId,
+          );
+        this.appendSessionResult(this.read(request.operationId)!);
+        recordAgentActivity(this.database, {
+          agentId: request.agentId,
+          nodeId,
+          kind: "operation.finished",
+          referenceId: request.operationId,
+          summary:
+            result.state === "unknown"
+              ? "操作结果尚无可靠证据。"
+              : `操作收据已确认：${result.state === "succeeded" ? "成功" : "失败"}。`,
+          detail: { state: result.state, receipt: result.receipt },
+          at: this.now(),
+        });
+      })
+      .immediate();
     const stored = this.read(request.operationId);
     if (!stored) throw new Error("Agent process operation receipt was not persisted");
     return toResult(stored);
@@ -216,6 +298,43 @@ export class AgentProcessOperationBroker {
       run.status !== "waiting_credentials"
     )
       throw new Error("Agent process operation run is no longer active");
+  }
+
+  private appendSessionResult(row: OperationRow): void {
+    if (row.state === "executing") return;
+    const scope = this.database
+      .prepare(
+        `SELECT s.id AS session_id,d.channel_id FROM owner_agent_runs r
+       JOIN owner_agent_sessions s ON s.agent_id=r.agent_id
+       JOIN owner_message_deliveries d ON d.id=r.delivery_id
+       WHERE r.id=?`,
+      )
+      .get(row.run_id) as { session_id: string; channel_id: string } | undefined;
+    if (!scope) throw new Error("Process operation lost its session");
+    const result = JSON.stringify({
+      operationId: row.operation_id,
+      state: row.state,
+      receipt: row.receipt_json === null ? null : JSON.parse(row.receipt_json),
+    });
+    const text = `Mate 工具结果：${result}`;
+    this.database
+      .prepare(
+        `INSERT OR IGNORE INTO owner_agent_session_journal(
+        session_id,agent_id,channel_id,run_id,tool_action_id,process_operation_id,role,text,created_at
+       ) VALUES(?,?,?,?,?,?,'assistant',?,?)`,
+      )
+      .run(
+        scope.session_id,
+        row.agent_id,
+        scope.channel_id,
+        row.run_id,
+        `${row.operation_id}:${row.state}`,
+        row.operation_id,
+        text.length <= 20_000
+          ? text
+          : `Mate 工具结果：${row.operation_id} ${row.state}。收据过长，请在动态页查看详情。`,
+        this.now(),
+      );
   }
 
   private read(operationId: string): OperationRow | undefined {

@@ -589,6 +589,56 @@ export class OwnerChat {
       .immediate();
   }
 
+  /** Queue a private Mate fact so a corrected operation wakes its Agent once. */
+  notifyAgentReceiptCorrection(
+    agentId: string,
+    operationId: string,
+    state: "succeeded" | "failed",
+  ): void {
+    const channel = this.getOrCreateAgentDirectChannel(agentId);
+    if (!channel || channel.archived) return;
+    const at = this.now(),
+      id = randomUUID();
+    const text = `Mate 已核对操作 ${operationId} 的收据：${state === "succeeded" ? "成功" : "失败"}。请读取会话中的工具结果后决定是否继续。`;
+    this.db
+      .transaction(() => {
+        const sequence = this.db
+          .prepare(
+            "SELECT COALESCE(MAX(order_seq),0)+1 AS next FROM owner_messages WHERE channel_id=?",
+          )
+          .get(channel.id) as { next: number };
+        this.db
+          .prepare(
+            `INSERT INTO owner_messages(id,channel_id,order_seq,text,author_kind,author_id,created_at)
+         VALUES(?,?,?,?,'agent','mate-system',?)`,
+          )
+          .run(id, channel.id, sequence.next, text, at);
+        const message = toMessage({
+          id,
+          channel_id: channel.id,
+          order_seq: sequence.next,
+          revision: 1,
+          text,
+          author_kind: "agent",
+          author_id: "mate-system",
+          created_at: at,
+        });
+        this.queueDeliveries(message, at);
+        const session = this.db
+          .prepare("SELECT id FROM owner_agent_sessions WHERE agent_id=?")
+          .get(agentId) as { id: string } | undefined;
+        if (session)
+          this.db
+            .prepare(
+              `INSERT INTO owner_agent_session_journal(session_id,agent_id,channel_id,message_id,role,text,created_at)
+         VALUES(?,?,?,?,'user',?,?)`,
+            )
+            .run(session.id, agentId, channel.id, id, text, at);
+        this.record("message.created", channel.id, message);
+      })
+      .immediate();
+  }
+
   listPendingDeliveries(
     recipientKind: OwnerPrincipalKind,
     recipientId: string,
@@ -730,13 +780,23 @@ export class OwnerChat {
       throw new Error("Agent run context cursor is invalid");
     const rows = this.db
       .prepare(
-        `WITH run_context AS (
+        `WITH snapshot AS (
+           SELECT through_seq,summary,snapshot_json FROM owner_agent_session_snapshots
+           WHERE agent_id=@agent_id AND through_seq<=@history_end_seq
+           ORDER BY created_at DESC,id DESC LIMIT 1
+         ), run_context AS (
+           SELECT through_seq AS journal_sequence,'assistant' AS role,
+                  'Mate 会话摘要：'||summary||char(10)||'Mate 会话快照：'||snapshot_json AS text,@channel_id AS channel_id,
+                  'private' AS visibility,0 AS entry_group,0 AS current_run_input
+           FROM snapshot
+           UNION ALL
            SELECT j.seq AS journal_sequence,j.role,j.text,j.channel_id,c.visibility,
                   0 AS entry_group,0 AS current_run_input
            FROM owner_agent_session_journal j
            JOIN owner_agent_sessions s ON s.id=j.session_id AND s.agent_id=@agent_id
            JOIN owner_channels c ON c.id=j.channel_id
            WHERE j.agent_id=@agent_id AND j.seq<=@history_end_seq
+             AND j.seq>COALESCE((SELECT through_seq FROM snapshot),0)
              AND (
                (j.role='user' AND EXISTS (
                  SELECT 1 FROM owner_message_deliveries d
@@ -751,6 +811,10 @@ export class OwnerChat {
                  SELECT 1 FROM owner_agent_tool_actions a
                  WHERE a.session_id=j.session_id AND a.agent_id=j.agent_id
                    AND a.action_id=j.tool_action_id
+               ))
+               OR (j.role='assistant' AND j.process_operation_id IS NOT NULL AND EXISTS (
+                 SELECT 1 FROM owner_agent_process_operations p
+                 WHERE p.operation_id=j.process_operation_id AND p.agent_id=j.agent_id
                ))
              )
            UNION ALL

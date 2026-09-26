@@ -16,6 +16,7 @@ import type {
   AgentProcessOperation,
   AgentProcessOperationState,
 } from "../../nodes/process-operations.js";
+import { recordAgentActivity } from "../activity.js";
 
 export const DEFAULT_NODE_PAIRING_TOKEN_TTL_MS = 10 * 60 * 1000;
 export const DEFAULT_NODE_MAX_CONNECTIONS = 128;
@@ -37,6 +38,8 @@ interface SocketSession {
   nonce: string;
   lastHeartbeatAt: number;
   nodeId?: string;
+  ready?: boolean;
+  reconcile?: { requestId: string; operationIds: Set<string>; cursor: string; blocking: boolean };
   handshakeTimeout?: ReturnType<typeof setTimeout>;
 }
 
@@ -191,6 +194,16 @@ export class NodeDirectory {
     nodeId: string,
     result: NodeWorkspaceOperationResult,
   ) => void;
+  private processReceiptHandler?: (
+    nodeId: string,
+    receipt: {
+      operationId: string;
+      agentId: string;
+      state: "succeeded" | "failed" | "unknown";
+      receipt: unknown | null;
+    },
+  ) => void;
+  private onReady?: () => void;
 
   constructor(
     private readonly database: Database.Database,
@@ -250,7 +263,9 @@ export class NodeDirectory {
       return {
         id: row.id,
         online:
-          session?.nodeId === row.id && now - session.lastHeartbeatAt < this.heartbeatTimeoutMs,
+          session?.nodeId === row.id &&
+          session.ready === true &&
+          now - session.lastHeartbeatAt < this.heartbeatTimeoutMs,
         lastConnectedAt:
           row.last_connected_at === null ? null : new Date(row.last_connected_at).toISOString(),
       };
@@ -307,6 +322,8 @@ export class NodeDirectory {
     if (request.type === "node.authenticate") return this.authenticate(socket, session, request);
     if (request.type === "node.pair") return this.pair(socket, session, request);
     if (request.type === "node.ping") return this.ping(socket, session, request);
+    if (request.type === "node.process.reconcile.result")
+      return this.receiveReconciliation(socket, session, request);
     if (request.type === "node.agent.run.tool")
       return this.receiveAgentRunToolMessage(socket, session, request);
     if (
@@ -329,6 +346,12 @@ export class NodeDirectory {
     if (session?.handshakeTimeout) clearTimeout(session.handshakeTimeout);
     const nodeId = session?.nodeId;
     if (nodeId && this.connected.get(nodeId) === socket) {
+      recordAgentActivity(this.database, {
+        nodeId,
+        kind: "node.disconnected",
+        summary: "节点已断开；显示最后确认的运行事实。",
+        at: this.now(),
+      });
       this.connected.delete(nodeId);
       this.rejectAgentProvisions(nodeId, new Error("节点连接已断开，Agent 创建结果尚未确认。"));
       this.rejectAgentRuns(nodeId, new Error("节点连接已断开，待处理私信仍保留在控制面。"));
@@ -472,6 +495,14 @@ export class NodeDirectory {
     return promise;
   }
 
+  setProcessReceiptHandler(
+    handler: NonNullable<NodeDirectory["processReceiptHandler"]>,
+    onReady: () => void,
+  ): void {
+    this.processReceiptHandler = handler;
+    this.onReady = onReady;
+  }
+
   runAgent(nodeId: string, request: NodeAgentRunStart): Promise<NodeAgentRunResult> {
     const controlMessage = NodeControlMessageSchema.parse(request) as NodeAgentRunStart;
     const existing = this.pendingAgentRuns.get(request.runId);
@@ -486,6 +517,7 @@ export class NodeDirectory {
       !socket ||
       !session ||
       session.nodeId !== nodeId ||
+      !session.ready ||
       this.now() - session.lastHeartbeatAt >= this.heartbeatTimeoutMs
     )
       return Promise.reject(new Error("Selected node is offline"));
@@ -554,6 +586,7 @@ export class NodeDirectory {
       !socket ||
       !session ||
       session.nodeId !== nodeId ||
+      !session.ready ||
       this.now() - session.lastHeartbeatAt >= this.heartbeatTimeoutMs
     )
       return Promise.reject(new Error("Selected node is offline"));
@@ -597,7 +630,7 @@ export class NodeDirectory {
   cancelAgentRun(
     runId: string,
     agentId: string,
-    reason: "timeout" | "credentials_changed",
+    reason: "timeout" | "credentials_changed" | "manual_pause",
   ): boolean {
     const pending = this.pendingAgentRuns.get(runId);
     if (!pending || pending.agentId !== agentId) return false;
@@ -619,7 +652,13 @@ export class NodeDirectory {
     this.finishAgentRun(
       runId,
       undefined,
-      new Error(reason === "timeout" ? "Agent run timed out" : "Model credential changed"),
+      new Error(
+        reason === "timeout"
+          ? "Agent run timed out"
+          : reason === "manual_pause"
+            ? "Agent run paused"
+            : "Model credential changed",
+      ),
     );
     return true;
   }
@@ -662,6 +701,7 @@ export class NodeDirectory {
       requestId: request.requestId,
       nodeId: request.nodeId,
     });
+    this.startReconciliation(socket, session, "", true);
   }
 
   private pair(
@@ -706,6 +746,7 @@ export class NodeDirectory {
       requestId: request.requestId,
       nodeId: request.nodeId,
     });
+    this.startReconciliation(socket, session, "", true);
   }
 
   private ping(
@@ -721,6 +762,69 @@ export class NodeDirectory {
       requestId: request.requestId,
       acceptedAt: this.now(),
     });
+    if (session.ready && !session.reconcile) this.startReconciliation(socket, session, "", false);
+  }
+
+  private startReconciliation(
+    socket: NodeSocket,
+    session: SocketSession,
+    cursor: string,
+    blocking: boolean,
+  ): void {
+    if (!session.nodeId || this.connected.get(session.nodeId) !== socket) return;
+    const rows = this.database
+      .prepare(
+        `SELECT operation_id,agent_id FROM owner_agent_process_operations
+       WHERE node_id=? AND state IN ('executing','unknown') AND operation_id>?
+       ORDER BY operation_id LIMIT 100`,
+      )
+      .all(session.nodeId, cursor) as Array<{ operation_id: string; agent_id: string }>;
+    if (rows.length === 0) {
+      if (blocking) {
+        session.ready = true;
+        this.onReady?.();
+      }
+      return;
+    }
+    const requestId = randomUUID();
+    session.reconcile = {
+      requestId,
+      operationIds: new Set(rows.map((row) => row.operation_id)),
+      cursor: rows.at(-1)!.operation_id,
+      blocking,
+    };
+    this.send(socket, {
+      type: "control.process.reconcile",
+      requestId,
+      operations: rows.map((row) => ({ operationId: row.operation_id, agentId: row.agent_id })),
+    });
+  }
+
+  private receiveReconciliation(
+    socket: NodeSocket,
+    session: SocketSession,
+    request: Extract<NodeRequest, { type: "node.process.reconcile.result" }>,
+  ): void {
+    const pending = session.reconcile;
+    if (
+      !session.nodeId ||
+      this.connected.get(session.nodeId) !== socket ||
+      !pending ||
+      pending.requestId !== request.requestId
+    )
+      return this.reject(socket, request.requestId, "invalid_identity", "节点操作对账请求不匹配。");
+    for (const receipt of request.receipts) {
+      if (!pending.operationIds.has(receipt.operationId))
+        return this.reject(
+          socket,
+          request.requestId,
+          "invalid_identity",
+          "节点操作收据不属于本次对账。",
+        );
+      this.processReceiptHandler?.(session.nodeId, receipt);
+    }
+    delete session.reconcile;
+    this.startReconciliation(socket, session, pending.cursor, pending.blocking);
   }
 
   private receiveAgentProvisionMessage(
@@ -759,7 +863,10 @@ export class NodeDirectory {
     if (!nodeId || this.connected.get(nodeId) !== socket)
       return this.reject(socket, request.requestId, "not_authenticated", "节点尚未完成身份验证。");
     const pending = this.pendingAgentProcessOperations.get(request.requestId);
-    if (!pending) return; // A durable intent can reconcile this receipt through a later retry.
+    if (!pending) {
+      this.processReceiptHandler?.(nodeId, request);
+      return;
+    }
     if (
       pending.nodeId !== nodeId ||
       pending.agentId !== request.agentId ||
@@ -1026,11 +1133,18 @@ export class NodeDirectory {
       previous.terminate();
     }
     session.nodeId = nodeId;
+    session.ready = false;
     session.lastHeartbeatAt = this.now();
     this.connected.set(nodeId, socket);
     this.database
       .prepare("UPDATE nodes SET last_connected_at=? WHERE id=?")
       .run(this.now(), nodeId);
+    recordAgentActivity(this.database, {
+      nodeId,
+      kind: "node.connected",
+      summary: "节点已连接，正在核对操作收据。",
+      at: this.now(),
+    });
   }
 
   private reject(
