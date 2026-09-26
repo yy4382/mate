@@ -77,6 +77,7 @@ export interface ControlPlaneAppOptions {
 export class ControlPlaneApp extends Hono {
   runs?: AgentRunCoordinator;
   readonly approvals: PrivilegedApprovals;
+  private readonly approvalRetryTimer: ReturnType<typeof setInterval>;
   constructor(
     private readonly ownerAuth: OwnerAuth,
     readonly nodes: NodeDirectory,
@@ -88,9 +89,12 @@ export class ControlPlaneApp extends Hono {
   ) {
     super();
     this.approvals = approvals;
+    this.approvalRetryTimer = setInterval(() => this.approvals.resume(), 1000);
+    this.approvalRetryTimer.unref?.();
   }
 
   close(): void {
+    clearInterval(this.approvalRetryTimer);
     this.runs?.close();
     this.workspace.close();
     this.nodes.closeAll();

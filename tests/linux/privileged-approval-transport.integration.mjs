@@ -70,6 +70,13 @@ if (process.argv[2] === "control") {
         result = true;
       } else if (message.action === "request") result = app.approvals.request(message.request);
       else if (message.action === "status") result = app.approvals.status(message.requestId);
+      else if (message.action === "diagnose")
+        result = {
+          approval: app.approvals.status(message.requestId),
+          inFlight: [...app.approvals["inFlight"].keys()],
+          pendingPrivileged: [...app.nodes["pendingPrivileged"].keys()],
+          nodes: app.nodes.list(),
+        };
       else if (message.action === "clock") {
         now = message.now;
         result = now;
@@ -131,7 +138,7 @@ if (process.argv[2] === "control") {
           controller.signal,
           {
             modelWorkerIdentity: null,
-            processOperations: {},
+            processOperations: { allowAgent() {} },
             privilegedOperations: operations,
             workspaceExecutor: {},
             provisionAgent: async () => {
@@ -173,9 +180,13 @@ if (process.argv[2] === "control") {
     );
     children.push(processChild);
     let stderr = "",
+      stdout = "",
       next = 0;
     processChild.stderr.on("data", (chunk) => {
       stderr += chunk.toString();
+    });
+    processChild.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
     });
     const pending = new Map();
     const ready = new Promise((resolve, reject) => {
@@ -192,6 +203,7 @@ if (process.argv[2] === "control") {
     });
     return {
       processChild,
+      logs: () => ({ stderr, stdout }),
       ready,
       rpc: (action, extras = {}) =>
         new Promise((resolve, reject) => {
@@ -203,12 +215,14 @@ if (process.argv[2] === "control") {
   }
   const waitFor = async (read, predicate) => {
     const deadline = Date.now() + 5000;
+    let last;
     while (Date.now() < deadline) {
       const value = await read();
+      last = value;
       if (predicate(value)) return value;
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
-    throw new Error("Timed out waiting for production transport result");
+    throw new Error(`Timed out waiting for production transport result: ${JSON.stringify(last)}`);
   };
   try {
     const cp = child("control", join(controlDir, "data"), 65534);
@@ -302,10 +316,21 @@ if (process.argv[2] === "control") {
       () => cp.rpc("nodes"),
       (nodes) => nodes.some((n) => n.id === nodeId && n.online),
     );
-    await waitFor(
-      () => cp.rpc("status", { requestId: approved.requestId }),
-      (card) => card.state === "succeeded",
-    );
+    try {
+      await waitFor(
+        () => cp.rpc("status", { requestId: approved.requestId }),
+        (card) => card.state === "succeeded",
+      );
+    } catch (error) {
+      throw new Error(
+        `${error}; ${JSON.stringify({
+          control: await cp.rpc("diagnose", { requestId: approved.requestId }),
+          node: await node.rpc("status", { requestId: approved.requestId }),
+          controlLogs: cp.logs(),
+          nodeLogs: node.logs(),
+        })}`,
+      );
+    }
     assert.equal(existsSync(join(root, "approved")), true);
     assert.equal((await node.rpc("status", { requestId: approved.requestId })).receipt.uid, 0);
     assert.equal(existsSync(join(root, "pending")), false);

@@ -3,7 +3,7 @@ import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import Database from "better-sqlite3";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createControlPlaneApp } from "../../src/control-plane/http.js";
 import { PrivilegedNodeOperations } from "../../src/nodes/privileged-operations.js";
 import type { NodeSocket } from "../../src/control-plane/nodes/directory.js";
@@ -225,4 +225,61 @@ it("sends a signed grant only after approval and accepts the node's exact operat
   expect(app.approvals.status(request.requestId)?.state).toBe("succeeded");
   expect(starts).toBe(1);
   nodeDb.close();
+});
+
+it("retries a still valid approved request after a node becomes available without a ready callback", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mate-privileged-retry-"));
+  chmodSync(dir, 0o700);
+  const passwordFile = join(dir, "owner-password");
+  writeFileSync(passwordFile, "synthetic-owner-password\n", { mode: 0o600 });
+  const app = createControlPlaneApp({ dataDir: dir, passwordFile });
+  fixtures.push({ app, dir });
+  let online = false;
+  const execute = vi.spyOn(app.nodes, "executePrivileged").mockImplementation(async () => {
+    if (!online) throw new Error("node offline");
+    return { state: "succeeded", startedAt: Date.now(), receipt: { code: 0 } };
+  });
+  const nodeId = randomUUID(),
+    agentId = randomUUID();
+  app.nodes["database"]
+    .prepare("INSERT INTO nodes(id,public_key,paired_at) VALUES(?,?,?)")
+    .run(nodeId, "synthetic-node-public-key", Date.now());
+  app.nodes["database"]
+    .prepare(
+      `INSERT INTO owner_agents(
+    id,node_id,name,role,description,provider,model_id,request_json,request_hash,
+    provision_request_id,status,stage,created_at,updated_at
+  ) VALUES(?,?,?,?,?,?,?,?,?,?,'waiting_credentials','complete',?,?)`,
+    )
+    .run(
+      agentId,
+      nodeId,
+      "助手甲",
+      "测试",
+      "",
+      "provider",
+      "model",
+      "{}",
+      "a".repeat(64),
+      randomUUID(),
+      Date.now(),
+      Date.now(),
+    );
+  const request = app.approvals.request({
+    requestId: randomUUID(),
+    agentId,
+    nodeId,
+    channelId: randomUUID(),
+    program: "/usr/bin/id",
+    args: ["-u"],
+    cwd: "/tmp",
+  });
+  app.approvals.decide(request.requestId, "approve");
+  await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
+  expect(app.approvals.status(request.requestId)?.state).toBe("approved");
+  online = true;
+  await vi.waitFor(() => expect(app.approvals.status(request.requestId)?.state).toBe("succeeded"), {
+    timeout: 2500,
+  });
+  expect(execute).toHaveBeenCalledTimes(2);
 });
