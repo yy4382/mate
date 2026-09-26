@@ -3867,6 +3867,107 @@ it("delivers an offline reminder from an archived DM after reconnect without reo
   expect(app.chat.listMessages(dm.id, undefined, 10)?.messages).toHaveLength(2);
 });
 
+it("keeps a real Pi model reply private when its reminder runs in an archived DM", async () => {
+  const fixture = await setup();
+  const { app, cookie, db, nodeId, socket, nodePrivateKey } = fixture;
+  const { agentId, dm, reminderId } = await startReminderFixture(fixture);
+  app.nodes.close(socket);
+  await app.request(`/api/owner/channels/${dm.id}`, {
+    method: "PATCH",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ archived: true }),
+  });
+  await new Promise((resolve) => setTimeout(resolve, 280));
+  app.chat.fireDueReminders();
+  const reconnected = await reconnectNode(app, nodeId, nodePrivateKey);
+  const run = await waitForRun(reconnected, 0);
+  const alternate = app.chat.createChannel({
+    name: "Active reminder update",
+    description: "An authorized alternate route",
+    visibility: "private",
+  });
+  expect(app.chat.inviteAgentToChannel(alternate.id, agentId)).toBe(true);
+  expect(
+    await callAgentTool(app, reconnected, run, "alternate-reminder-send", "tools.call", {
+      name: "messages.send",
+      input: { conversationId: alternate.id, text: "A conscious update in an active conversation" },
+    }),
+  ).toMatchObject({ ok: true });
+  const responses: Array<{ ok: boolean; code?: string }> = [];
+  let journalRequestId = "";
+  const transport: AgentRunTransport = {
+    context: async () => callAgentRunContext(app, reconnected, run),
+    journal: async (text) => {
+      journalRequestId = randomUUID();
+      await app.nodes.receive(
+        reconnected,
+        JSON.stringify({
+          type: "node.agent.run.journal",
+          requestId: journalRequestId,
+          runId: run.runId,
+          agentId,
+          text,
+        }),
+      );
+      return (JSON.parse(reconnected.sent.at(-1)!) as { accepted: boolean }).accepted;
+    },
+    tool: async () => ({ ok: false, error: "Unexpected tool call" }),
+    result: (ok, code) => responses.push({ ok, ...(code ? { code } : {}) }),
+  };
+  await runAgentModel(run, transport, new AbortController().signal, {
+    modelWorkerEntry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
+  });
+  expect(responses).toEqual([{ ok: true }]);
+  await app.nodes.receive(
+    reconnected,
+    JSON.stringify({
+      type: "node.agent.run.result",
+      requestId: randomUUID(),
+      runId: run.runId,
+      agentId,
+      ok: true,
+    }),
+  );
+  app.chat.syncHandledReminders();
+  expect(app.chat.listAgentReminders(agentId)[0]).toMatchObject({
+    id: reminderId,
+    firing: { handledAt: expect.any(Number) },
+  });
+  expect(app.chat.listMessages(dm.id, undefined, 10)?.messages).toHaveLength(1);
+  expect(app.chat.listMessages(alternate.id, undefined, 10)?.messages).toMatchObject([
+    { text: "A conscious update in an active conversation" },
+  ]);
+  expect(
+    db.prepare("SELECT state,error_code FROM owner_agent_runs WHERE id=?").get(run.runId),
+  ).toMatchObject({
+    state: "completed",
+    error_code: null,
+  });
+  expect(
+    db
+      .prepare(
+        "SELECT message_id,text FROM owner_agent_session_journal WHERE run_id=? AND role='assistant' AND tool_action_id IS NULL",
+      )
+      .get(run.runId),
+  ).toMatchObject({
+    message_id: null,
+    text: expect.stringContaining("未送达"),
+  });
+  expect(
+    app.chat.commitAgentReply(
+      run.runId,
+      nodeId,
+      agentId,
+      journalRequestId,
+      "这是首次测试回复。",
+      true,
+    ),
+  ).toBe(true);
+  expect(
+    app.chat.commitAgentReply(run.runId, nodeId, agentId, randomUUID(), "这是首次测试回复。", true),
+  ).toBe(false);
+});
+
 it("marks a reminder handled when a preceding DM delivery starts the completed batch", async () => {
   const fixture = await setup();
   const { app, nodeId, socket, nodePrivateKey, db } = fixture;

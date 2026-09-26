@@ -16,6 +16,9 @@ import type { AgentProcessOperation } from "../nodes/process-operations.js";
 export type ChannelVisibility = "public" | "private";
 export type OwnerPrincipalKind = "human" | "agent";
 
+const archivedReminderReplyNotice = (text: string): string =>
+  `Mate 提示：回复未送达。此对话已归档；如需告知他人，请使用 messages.send 指向有权限的活跃对话。未送达内容：${text}`;
+
 export interface OwnerChannel {
   id: string;
   name: string;
@@ -1292,7 +1295,7 @@ export class OwnerChat {
     };
   }
 
-  /** Commit the run's one visible reply before acknowledging its journal to the node. */
+  /** Commit one reply, or retain an archived reminder reply privately with a delivery notice. */
   commitAgentReply(
     runId: string,
     nodeId: string,
@@ -1347,22 +1350,22 @@ export class OwnerChat {
                       m.author_kind AS visible_author_kind,m.author_id AS visible_author_id,
                       m.text AS visible_text
                FROM owner_agent_session_journal j
-               JOIN owner_messages m ON m.id=j.message_id
+               LEFT JOIN owner_messages m ON m.id=j.message_id
                WHERE j.run_id=? AND j.agent_id=? AND j.session_id=? AND j.channel_id=?
                  AND j.role='assistant' AND j.tool_action_id IS NULL`,
             )
             .get(runId, agentId, run.session_id, run.channel_id) as
             | {
                 seq: number;
-                message_id: string;
+                message_id: string | null;
                 request_id: string;
                 content_hash: string;
                 text: string;
-                visible_message_id: string;
-                visible_channel_id: string;
-                visible_author_kind: string;
-                visible_author_id: string;
-                visible_text: string;
+                visible_message_id: string | null;
+                visible_channel_id: string | null;
+                visible_author_kind: string | null;
+                visible_author_id: string | null;
+                visible_text: string | null;
               }
             | undefined;
           return Boolean(
@@ -1370,18 +1373,22 @@ export class OwnerChat {
             existing &&
             Number.isSafeInteger(existing.seq) &&
             existing.seq > 0 &&
-            existing.message_id === existing.visible_message_id &&
             existing.request_id === requestId &&
             existing.content_hash === contentHash &&
-            existing.text === text &&
-            existing.visible_channel_id === run.channel_id &&
-            existing.visible_author_kind === "agent" &&
-            existing.visible_author_id === agentId &&
-            existing.visible_text === text,
+            (existing.message_id === null
+              ? run.delivery_kind === "reminder" &&
+                existing.visible_message_id === null &&
+                existing.text === archivedReminderReplyNotice(text)
+              : existing.message_id === existing.visible_message_id &&
+                existing.text === text &&
+                existing.visible_channel_id === run.channel_id &&
+                existing.visible_author_kind === "agent" &&
+                existing.visible_author_id === agentId &&
+                existing.visible_text === text),
           );
         }
         if (replayOnly || run.state !== "running") return false;
-        if (run.channel_archived === 1) {
+        if (run.channel_archived === 1 && run.delivery_kind !== "reminder") {
           this.db
             .prepare(
               `UPDATE owner_agent_runs SET state='failed',error_code='channel_archived',
@@ -1391,8 +1398,52 @@ export class OwnerChat {
           return false;
         }
 
-        const at = this.now(),
-          messageId = randomUUID(),
+        const at = this.now();
+        if (run.channel_archived === 1) {
+          this.db
+            .prepare(
+              `INSERT INTO owner_agent_session_journal(
+                 session_id,agent_id,channel_id,run_id,request_id,content_hash,role,text,created_at
+               ) VALUES(?,?,?,?,?,?,'assistant',?,?)`,
+            )
+            .run(
+              run.session_id,
+              agentId,
+              run.channel_id,
+              runId,
+              requestId,
+              contentHash,
+              archivedReminderReplyNotice(text),
+              at,
+            );
+          this.db
+            .prepare(
+              `UPDATE owner_message_deliveries SET state='handled',handled_at=?
+               WHERE recipient_kind='agent' AND recipient_id=? AND channel_id=? AND state='pending'
+                 AND message_id IN (
+                   SELECT j.message_id FROM owner_agent_session_journal j
+                   JOIN owner_messages m ON m.id=j.message_id
+                   WHERE j.agent_id=? AND j.session_id=? AND j.role='user'
+                     AND j.seq>=? AND j.seq<=? AND m.internal_kind='reminder'
+                 )`,
+            )
+            .run(
+              at,
+              agentId,
+              run.channel_id,
+              agentId,
+              run.session_id,
+              run.input_start_seq,
+              run.input_end_seq,
+            );
+          this.db
+            .prepare(
+              "UPDATE owner_agent_runs SET state='completed',completed_at=?,retry_at=NULL,error_code=NULL WHERE id=? AND state='running'",
+            )
+            .run(at, runId);
+          return true;
+        }
+        const messageId = randomUUID(),
           sequence = this.db
             .prepare(
               "SELECT COALESCE(MAX(order_seq),0)+1 AS next FROM owner_messages WHERE channel_id=?",
