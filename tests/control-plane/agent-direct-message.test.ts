@@ -91,7 +91,7 @@ async function setup(options: { nodeOperationTimeoutMs?: number } = {}) {
       signature: sign(null, Buffer.from(challenge.nonce), keyPair.privateKey).toString("base64url"),
     }),
   );
-  return { app, cookie, db, directory, nodeId, socket };
+  return { app, cookie, db, directory, nodeId, socket, keyPair };
 }
 
 async function pairAnotherNode(
@@ -2120,6 +2120,7 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
     >();
   let heldRequest: Record<string, unknown> | undefined,
     holdNextResponse = false,
+    failNextResponse = false,
     expectedActionId: string | undefined,
     executingEnvelope: unknown;
   socket.onWorkspaceOperation = async (message) => {
@@ -2147,12 +2148,15 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
           .get(expectedActionId) as { result_json: string } | undefined)
       : undefined;
     if (action) executingEnvelope = JSON.parse(action.result_json);
-    const receipt = {
-      code: 0,
-      stdout: JSON.stringify({ sha256: `receipt-${requests.length}` }),
-      stderr: "",
-      truncated: false,
-    };
+    const receipt = failNextResponse
+      ? { code: 9, stdout: "", stderr: "permission_denied: file is protected", truncated: false }
+      : {
+          code: 0,
+          stdout: JSON.stringify({ sha256: `receipt-${requests.length}` }),
+          stderr: "",
+          truncated: false,
+        };
+    failNextResponse = false;
     nodeReceipts.set(operationId, receipt);
     if (holdNextResponse) {
       holdNextResponse = false;
@@ -2440,6 +2444,45 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
       )
       .get(failedActionId),
   ).toMatchObject({ text: expect.stringContaining('"state":"failed"') });
+  const beforeFailedReplay = requests.length;
+  const failedReplay = await callAgentTool(
+    app,
+    socket,
+    correctedRun,
+    failedActionId,
+    "tools.call",
+    failedInput,
+  );
+  expect(failedReplay).toMatchObject({ ok: false, error: expect.stringContaining("7") });
+  expect(requests).toHaveLength(beforeFailedReplay);
+
+  const immediateFailureInput = {
+      name: "workspace.write",
+      input: { path: "protected.txt", content: "no" },
+    },
+    immediateFailureId = stableToolActionId(correctedRun.actionScopeId, immediateFailureInput);
+  expectedActionId = immediateFailureId;
+  failNextResponse = true;
+  const originalFailure = await callAgentTool(
+    app,
+    socket,
+    correctedRun,
+    immediateFailureId,
+    "tools.call",
+    immediateFailureInput,
+  );
+  expect(originalFailure).toMatchObject({ ok: false, error: expect.stringContaining("9") });
+  const afterOriginalFailure = requests.length;
+  const replayedFailure = await callAgentTool(
+    app,
+    socket,
+    correctedRun,
+    immediateFailureId,
+    "tools.call",
+    immediateFailureInput,
+  );
+  expect(replayedFailure).toMatchObject({ ok: false, error: originalFailure.error });
+  expect(requests).toHaveLength(afterOriginalFailure);
 
   db.prepare(
     `UPDATE owner_channel_memberships SET active=0
@@ -2447,7 +2490,112 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
   ).run(channel.id, agentId);
   const denied = await callAgentTool(app, socket, run, firstActionId, "tools.call", firstInput);
   expect(denied).toMatchObject({ ok: false });
-  expect(requests).toHaveLength(3);
+  expect(requests).toHaveLength(4);
+});
+
+it("replays a confirmed failed file action as the same error after control-plane restart", async () => {
+  const { app, cookie, db, nodeId, socket, keyPair } = await setup();
+  const agentId = randomUUID();
+  app.agents.prepare({
+    id: agentId,
+    nodeId,
+    name: "Failure replay",
+    role: "File recovery",
+    description: "Durable failed receipt fixture",
+    model: { provider: "openai", id: "gpt-4.1" },
+  });
+  app.agents.complete(
+    agentId,
+    {
+      username: `mate_${agentId.replaceAll("-", "").slice(0, 27)}`,
+      uid: 23001,
+      gid: 23001,
+      home: `/var/lib/mate/agents/${agentId}`,
+    },
+    app.chat,
+  );
+  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  await app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-key" }),
+  });
+  const start = socket.sent.length;
+  app.chat.createMessage(direct.id, "Attempt one file action.");
+  const firstRun = await waitForRun(socket, start);
+  const input = { name: "workspace.write", input: { path: "protected.txt", content: "no" } },
+    actionId = stableToolActionId(firstRun.actionScopeId, input);
+  let executions = 0;
+  socket.onWorkspaceOperation = async (request) => {
+    executions++;
+    await app.nodes.receive(
+      socket,
+      JSON.stringify({
+        type: "node.workspace.operation.result",
+        requestId: request.requestId,
+        operationId: request.operationId,
+        agentId,
+        ok: true,
+        result: {
+          code: 9,
+          stdout: "",
+          stderr: "permission_denied: file is protected",
+          truncated: false,
+        },
+      }),
+    );
+  };
+  const original = await callAgentTool(app, socket, firstRun, actionId, "tools.call", input);
+  expect(original).toMatchObject({ ok: false, error: expect.stringContaining("9") });
+  expect(executions).toBe(1);
+  app.runs?.close();
+  app.nodes.close(socket);
+  const directory = fixtures.at(-1)!.directory;
+  const restarted = createControlPlaneApp({
+    dataDir: join(directory, "control-plane"),
+    passwordFile: join(directory, "owner-password"),
+  });
+  try {
+    const recovered = new FakeNodeSocket();
+    recovered.onWorkspaceOperation = () => {
+      executions++;
+    };
+    restarted.nodes.open(recovered);
+    const challenge = JSON.parse(recovered.sent[0]!) as { nonce: string };
+    await restarted.nodes.receive(
+      recovered,
+      JSON.stringify({
+        type: "node.authenticate",
+        requestId: randomUUID(),
+        nodeId,
+        signature: sign(null, Buffer.from(challenge.nonce), keyPair.privateKey).toString(
+          "base64url",
+        ),
+      }),
+    );
+    const retryRun = await waitForRun(recovered, 0);
+    expect(retryRun.runId).not.toBe(firstRun.runId);
+    expect(retryRun.actionScopeId).toBe(firstRun.actionScopeId);
+    const replay = await callAgentTool(
+      restarted,
+      recovered,
+      retryRun,
+      actionId,
+      "tools.call",
+      input,
+    );
+    expect(replay).toMatchObject({ ok: false, error: original.error });
+    expect(executions).toBe(1);
+    expect(
+      db
+        .prepare(
+          "SELECT json_extract(result_json,'$.state') AS state FROM owner_agent_tool_actions WHERE action_id=?",
+        )
+        .get(actionId),
+    ).toEqual({ state: "failed" });
+  } finally {
+    restarted.close();
+  }
 });
 
 it("publishes Agent workspace files to a joined conversation in bounded chunks and rechecks ACL before replay", async () => {

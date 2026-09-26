@@ -506,6 +506,7 @@ export class WorkspaceService {
         authorized.channel_id,
       );
     if (recorded.kind === "done") return recorded.result;
+    if (recorded.kind === "failed") throw confirmedFileFailure(recorded.code, recorded.stderr);
     this.trackActionOperation(operationId, {
       sessionId: authorized.session_id,
       actionId: input.actionId,
@@ -690,8 +691,7 @@ export class WorkspaceService {
       const response = await this.nodes.workspaceOperation(nodeId, request);
       if (!response.ok) throw mapNodeError(response.error);
       if (response.result.code !== 0) {
-        const error = mapNodeError(response.result.stderr || "File request failed");
-        throw error;
+        throw confirmedFileFailure(response.result.code, response.result.stderr);
       }
       if (response.result.truncated) throw invalidNodeResponse();
       return response.result;
@@ -778,7 +778,10 @@ export class WorkspaceService {
     operationId: string,
     runId: string,
     channelId: string,
-  ): { kind: "new" } | { kind: "done"; result: unknown } {
+  ):
+    | { kind: "new" }
+    | { kind: "done"; result: unknown }
+    | { kind: "failed"; code: number; stderr: string } {
     const existing = this.db
       .prepare(
         "SELECT request_hash,result_json FROM owner_agent_tool_actions WHERE session_id=? AND action_id=?",
@@ -788,8 +791,23 @@ export class WorkspaceService {
       if (existing.request_hash !== requestHash)
         throw new WorkspaceError("operation_conflict", "操作 ID 已用于不同的文件请求。", 409);
       const envelope = parseEnvelope(existing.result_json);
-      if (envelope.state === "succeeded" || envelope.state === "failed")
-        return { kind: "done", result: envelope.result };
+      if (envelope.state === "succeeded") return { kind: "done", result: envelope.result };
+      if (envelope.state === "failed") {
+        const result = envelope.result;
+        if (
+          typeof result !== "object" ||
+          result === null ||
+          !Number.isSafeInteger((result as { code?: unknown }).code) ||
+          (result as { code: number }).code === 0 ||
+          typeof (result as { stderr?: unknown }).stderr !== "string"
+        )
+          throw new WorkspaceError("operation_unknown", "文件操作失败收据无法读取。", 409);
+        return {
+          kind: "failed",
+          code: (result as { code: number }).code,
+          stderr: (result as { stderr: string }).stderr,
+        };
+      }
       if (envelope.operationId && envelope.operationId !== operationId)
         throw new WorkspaceError("operation_unknown", "文件操作结果尚未确认。", 409);
       if (envelope.state === "executing")
@@ -1164,13 +1182,18 @@ function mapNodeError(message: string): WorkspaceError {
     return new WorkspaceError("unsafe_path", "路径越过了 Agent 私人工作区边界。", 403);
   if (/file_changed|file changed|changed while/i.test(message))
     return new WorkspaceError("file_changed", "文件在读取期间发生变化，请重新加载。", 409);
-  if (/permission denied|eacces|eperm/i.test(message))
+  if (/permission[_ ]denied|eacces|eperm/i.test(message))
     return new WorkspaceError("permission_denied", "Agent Linux 用户没有读取此文件的权限。", 403);
   if (/enoent|not found|no such file or directory/i.test(message))
     return new WorkspaceError("not_found", "文件或目录不存在。", 404);
   if (/not_file|not_regular_file|regular single-link|is a directory/i.test(message))
     return new WorkspaceError("not_file", "只能读取普通文件。", 400);
   return new WorkspaceError("workspace_unavailable", "节点无法完成文件请求。", 502);
+}
+
+function confirmedFileFailure(code: number, stderr: string): WorkspaceError {
+  const mapped = mapNodeError(stderr || "File request failed");
+  return new WorkspaceError(mapped.code, `${mapped.message}（节点结果码 ${code}）`, mapped.status);
 }
 
 function isMutatingOperation(
