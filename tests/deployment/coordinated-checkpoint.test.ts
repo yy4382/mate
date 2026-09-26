@@ -1,23 +1,30 @@
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
+import { initializeCoordinatedRoots } from "../helpers/coordinated-state.js";
 import {
   createCoordinatedCheckpoint,
   verifyCoordinatedCheckpoint,
 } from "../../src/deployment/coordinated-checkpoint.js";
 
 it("stops both services and Agent processes before copying all private state and publishing completion", async () => {
-  const root = mkdtempSync(join(tmpdir(), "mate-coordinated-backup-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "mate-coordinated-backup-")));
   try {
-    const controlPlaneDataDir = join(root, "control"), nodeDataDir = join(root, "node");
-    const agentHomeRoot = join(root, "homes"), destination = join(root, "checkpoint");
-    for (const path of [controlPlaneDataDir, nodeDataDir, agentHomeRoot]) mkdirSync(path, { mode: 0o700 });
-    writeFileSync(join(controlPlaneDataDir, "control-plane.sqlite"), "database", { mode: 0o600 });
-    writeFileSync(join(nodeDataDir, "node-identity.json"), "private node key", { mode: 0o600 });
-    writeFileSync(join(nodeDataDir, "agent-process-operations.sqlite"), "process receipts", { mode: 0o600 });
-    writeFileSync(join(nodeDataDir, "privileged-operations.sqlite"), "privileged receipts", { mode: 0o600 });
-    mkdirSync(join(nodeDataDir, "workspace-receipts"), { mode: 0o700 });
+    const controlPlaneDataDir = join(root, "control"),
+      nodeDataDir = join(root, "node");
+    const agentHomeRoot = join(root, "homes"),
+      destination = join(root, "checkpoint");
+    initializeCoordinatedRoots({ controlPlaneDataDir, nodeDataDir, agentHomeRoot });
     const agent = join(agentHomeRoot, "11111111-1111-4111-8111-111111111111");
     mkdirSync(agent, { mode: 0o700 });
     writeFileSync(join(agent, "MEMORY.md"), "private memory", { mode: 0o600 });
@@ -29,7 +36,12 @@ it("stops both services and Agent processes before copying all private state and
     });
     expect(stopped).toBe(true);
     expect(readFileSync(join(destination, "control", "stopped"), "utf8")).toBe("yes");
-    expect(readFileSync(join(destination, "homes", "11111111-1111-4111-8111-111111111111", "MEMORY.md"), "utf8")).toBe("private memory");
+    expect(
+      readFileSync(
+        join(destination, "homes", "11111111-1111-4111-8111-111111111111", "MEMORY.md"),
+        "utf8",
+      ),
+    ).toBe("private memory");
     expect(statSync(destination).mode & 0o777).toBe(0o700);
     expect(verifyCoordinatedCheckpoint(destination).entries.length).toBeGreaterThan(5);
     writeFileSync(join(destination, "unexpected"), "not in manifest");
@@ -46,16 +58,21 @@ it("stops both services and Agent processes before copying all private state and
 });
 
 it("does not mark a backup complete if a node receipt store is missing", async () => {
-  const root = mkdtempSync(join(tmpdir(), "mate-coordinated-backup-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "mate-coordinated-backup-")));
   try {
-    const controlPlaneDataDir = join(root, "control"), nodeDataDir = join(root, "node");
-    const agentHomeRoot = join(root, "homes"), destination = join(root, "checkpoint");
-    for (const path of [controlPlaneDataDir, nodeDataDir, agentHomeRoot]) mkdirSync(path, { mode: 0o700 });
-    writeFileSync(join(controlPlaneDataDir, "control-plane.sqlite"), "database");
-    writeFileSync(join(nodeDataDir, "node-identity.json"), "key");
-    await expect(createCoordinatedCheckpoint(
-      { controlPlaneDataDir, nodeDataDir, agentHomeRoot }, destination, async () => {},
-    )).rejects.toThrow(/receipt/);
+    const controlPlaneDataDir = join(root, "control"),
+      nodeDataDir = join(root, "node");
+    const agentHomeRoot = join(root, "homes"),
+      destination = join(root, "checkpoint");
+    initializeCoordinatedRoots({ controlPlaneDataDir, nodeDataDir, agentHomeRoot });
+    rmSync(join(nodeDataDir, "privileged-operations.sqlite"));
+    await expect(
+      createCoordinatedCheckpoint(
+        { controlPlaneDataDir, nodeDataDir, agentHomeRoot },
+        destination,
+        async () => {},
+      ),
+    ).rejects.toThrow(/receipt/);
     expect(() => verifyCoordinatedCheckpoint(destination)).toThrow(/checkpoint.*incomplete/i);
   } finally {
     rmSync(root, { recursive: true, force: true });

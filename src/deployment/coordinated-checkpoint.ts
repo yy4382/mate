@@ -1,4 +1,5 @@
-import { createHash, randomUUID } from "node:crypto";
+import Database from "better-sqlite3";
+import { createHash, createPrivateKey, createPublicKey, randomUUID } from "node:crypto";
 import {
   chmodSync,
   chownSync,
@@ -21,6 +22,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { z } from "zod";
 
 export interface CoordinatedStatePaths {
   controlPlaneDataDir: string;
@@ -34,8 +36,8 @@ interface CheckpointEntry {
   mode: number;
   uid: number;
   gid: number;
-  sha256?: string;
-  target?: string;
+  sha256?: string | undefined;
+  target?: string | undefined;
 }
 
 export interface CheckpointManifest {
@@ -80,12 +82,17 @@ export async function createCoordinatedCheckpoint(
   const destination = resolve(destinationInput);
   if (paths.some((path) => within(path, destination) || within(destination, path)))
     throw new Error("Checkpoint destination must be separate from live state");
+  if (existsSync(destination)) throw new Error("Checkpoint destination already exists");
+  noSymlinkParents(dirname(destination));
   await quiesce();
   mkdirSync(destination, { mode: 0o700 });
   const entries: CheckpointEntry[] = [];
   for (const [index, name] of roots.entries())
     copyEntry(paths[index]!, join(destination, name), destination, entries);
   requireStateFiles(destination);
+  assertCheckpointState(destination);
+  entries.length = 0;
+  for (const name of roots) inventoryEntry(join(destination, name), destination, entries);
   const manifest: CheckpointManifest = { format: 1, id: randomUUID(), entries };
   const manifestText = JSON.stringify(manifest);
   writeDurableFile(join(destination, "manifest.json"), manifestText, 0o600);
@@ -95,7 +102,14 @@ export async function createCoordinatedCheckpoint(
   };
   writeDurableFile(join(destination, "complete.json"), JSON.stringify(completion), 0o600);
   syncDirectory(destination);
-  return manifest;
+  try {
+    verifyCoordinatedCheckpoint(destination);
+    return manifest;
+  } catch (error) {
+    unlinkSync(join(destination, "complete.json"));
+    syncDirectory(destination);
+    throw error;
+  }
 }
 
 /** Restore a validated checkpoint and keep services fenced until reconciliation succeeds. */
@@ -138,7 +152,9 @@ export async function restoreCoordinatedCheckpoint(
   for (const path of stages.slice(0, 2))
     if (existsSync(path)) ensureRecoveryMarker(join(path, RECOVERY_MARKER), id);
   for (let index = 0; index < paths.length; index++) {
-    const path = paths[index]!, stage = stages[index]!, old = previous[index]!;
+    const path = paths[index]!,
+      stage = stages[index]!,
+      old = previous[index]!;
     if (!existsSync(old)) {
       if (!existsSync(path) || !existsSync(stage))
         throw new Error("Restore state cannot be resumed: source or stage is missing");
@@ -183,7 +199,7 @@ function assertRestoredRoots(paths: string[], manifest: CheckpointManifest): voi
   if (actual.length !== expected.size)
     throw new Error("Restored state integrity failure: entry count differs");
   for (const entry of actual)
-    if (JSON.stringify(entry) !== JSON.stringify(expected.get(entry.path)))
+    if (!sameCheckpointEntry(entry, expected.get(entry.path)))
       throw new Error(`Restored state integrity failure: ${entry.path}`);
 }
 
@@ -191,12 +207,20 @@ function assertRestoredRoots(paths: string[], manifest: CheckpointManifest): voi
 export function verifyCoordinatedCheckpoint(directoryInput: string): CheckpointManifest {
   if (!isAbsolute(directoryInput)) throw new Error("Checkpoint path must be absolute");
   const directory = resolve(directoryInput);
-  if ((lstatSync(directory).mode & 0o077) !== 0)
+  const directoryStat = lstatSync(directory);
+  if (
+    !directoryStat.isDirectory() ||
+    directoryStat.isSymbolicLink() ||
+    (directoryStat.mode & 0o077) !== 0
+  )
     throw new Error("Checkpoint integrity failure: checkpoint directory is not private");
   const rootNames = readdirSync(directory).sort();
   if (!rootNames.includes("complete.json"))
     throw new Error("Checkpoint incomplete: completion marker is missing");
-  if (JSON.stringify(rootNames) !== JSON.stringify([...roots, "manifest.json", "complete.json"].sort()))
+  if (
+    JSON.stringify(rootNames) !==
+    JSON.stringify([...roots, "manifest.json", "complete.json"].sort())
+  )
     throw new Error("Checkpoint integrity failure: unexpected root entry");
   for (const name of ["manifest.json", "complete.json"]) {
     const stat = lstatSync(join(directory, name));
@@ -205,7 +229,10 @@ export function verifyCoordinatedCheckpoint(directoryInput: string): CheckpointM
   }
   let completion: Completion;
   try {
-    completion = JSON.parse(readFileSync(join(directory, "complete.json"), "utf8")) as Completion;
+    completion = z
+      .object({ format: z.literal(1), manifestSha256: z.string().regex(/^[a-f0-9]{64}$/) })
+      .strict()
+      .parse(JSON.parse(readFileSync(join(directory, "complete.json"), "utf8")));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT")
       throw new Error("Checkpoint incomplete: completion marker is missing");
@@ -219,33 +246,87 @@ export function verifyCoordinatedCheckpoint(directoryInput: string): CheckpointM
     throw new Error("Checkpoint integrity failure: manifest checksum differs");
   let manifest: CheckpointManifest;
   try {
-    manifest = JSON.parse(manifestText) as CheckpointManifest;
+    manifest = checkpointManifestSchema.parse(JSON.parse(manifestText));
   } catch {
     throw new Error("Checkpoint integrity failure: manifest is invalid");
   }
-  if (manifest.format !== 1 || !Array.isArray(manifest.entries))
-    throw new Error("Checkpoint integrity failure: unsupported format");
+  for (const entry of manifest.entries) {
+    const segments = entry.path.split("/");
+    if (
+      entry.path.startsWith("/") ||
+      segments.some((part) => part === "" || part === "." || part === "..") ||
+      !roots.includes(segments[0] as (typeof roots)[number])
+    )
+      throw new Error("Checkpoint integrity failure: manifest path is invalid");
+    if (
+      (entry.type === "file" && !entry.sha256) ||
+      (entry.type === "link" && entry.target === undefined)
+    )
+      throw new Error("Checkpoint integrity failure: manifest entry is incomplete");
+  }
   const expected = new Map(manifest.entries.map((entry) => [entry.path, entry]));
   if (expected.size !== manifest.entries.length)
     throw new Error("Checkpoint integrity failure: repeated path");
+  assertCheckpointState(directory);
   const actual: CheckpointEntry[] = [];
   for (const name of roots) inventoryEntry(join(directory, name), directory, actual);
   if (actual.length !== expected.size)
     throw new Error("Checkpoint integrity failure: entry count differs");
   for (const entry of actual) {
     const saved = expected.get(entry.path);
-    if (!saved || JSON.stringify(saved) !== JSON.stringify(entry))
+    if (!sameCheckpointEntry(saved, entry))
       throw new Error(`Checkpoint integrity failure: ${entry.path}`);
   }
   requireStateFiles(directory);
   return manifest;
 }
 
+function sameCheckpointEntry(
+  left: CheckpointEntry | undefined,
+  right: CheckpointEntry | undefined,
+): boolean {
+  return Boolean(
+    left &&
+    right &&
+    left.path === right.path &&
+    left.type === right.type &&
+    left.mode === right.mode &&
+    left.uid === right.uid &&
+    left.gid === right.gid &&
+    left.sha256 === right.sha256 &&
+    left.target === right.target,
+  );
+}
+
+const checkpointEntrySchema = z
+  .object({
+    path: z.string().min(1),
+    type: z.enum(["directory", "file", "link"]),
+    mode: z.number().int().min(0).max(0o7777),
+    uid: z.number().int().nonnegative(),
+    gid: z.number().int().nonnegative(),
+    sha256: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .optional(),
+    target: z.string().optional(),
+  })
+  .strict();
+
+const checkpointManifestSchema = z
+  .object({
+    format: z.literal(1),
+    id: z.string().uuid(),
+    entries: z.array(checkpointEntrySchema),
+  })
+  .strict();
+
 function copyEntry(from: string, to: string, root: string, entries: CheckpointEntry[]): void {
   const stat = lstatSync(from);
   if (stat.isDirectory()) {
     mkdirSync(to, { mode: 0o700 });
-    for (const name of readdirSync(from).sort()) copyEntry(join(from, name), join(to, name), root, entries);
+    for (const name of readdirSync(from).sort())
+      copyEntry(join(from, name), join(to, name), root, entries);
     chmodSync(to, stat.mode & 0o7777);
     setOwnership(to, stat.uid, stat.gid);
     syncDirectory(to);
@@ -275,7 +356,8 @@ function inventoryOne(path: string, root: string, entries: CheckpointEntry[]): v
   const base = { path: name, mode: stat.mode & 0o7777, uid: stat.uid, gid: stat.gid };
   if (stat.isDirectory()) entries.push({ ...base, type: "directory" });
   else if (stat.isFile()) entries.push({ ...base, type: "file", sha256: fileSha256(path) });
-  else if (stat.isSymbolicLink()) entries.push({ ...base, type: "link", target: readlinkSync(path) });
+  else if (stat.isSymbolicLink())
+    entries.push({ ...base, type: "link", target: readlinkSync(path) });
   else throw new Error("Checkpoint cannot contain sockets, devices or pipes");
 }
 
@@ -288,7 +370,7 @@ function requireStateFiles(directory: string): void {
   ]) {
     try {
       const stat = lstatSync(join(directory, path));
-      if (stat.isFile() && !stat.isSymbolicLink()) continue;
+      if (stat.isFile() && !stat.isSymbolicLink() && (stat.mode & 0o077) === 0) continue;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
@@ -299,6 +381,44 @@ function requireStateFiles(directory: string): void {
     throw new Error("Checkpoint missing required workspace receipt directory");
 }
 
+function assertCheckpointState(directory: string): void {
+  for (const path of [
+    "control/control-plane.sqlite",
+    "node/agent-process-operations.sqlite",
+    "node/privileged-operations.sqlite",
+  ]) {
+    const database = new Database(join(directory, path), { readonly: true, fileMustExist: true });
+    try {
+      const result = database.prepare("PRAGMA integrity_check").get() as
+        Record<string, string> | undefined;
+      if (!result || Object.values(result)[0] !== "ok")
+        throw new Error(`Checkpoint database integrity failure: ${path}`);
+    } finally {
+      database.close();
+    }
+  }
+  try {
+    const identity = z
+      .object({ id: z.string().uuid(), privateKey: z.string().min(1).max(8192) })
+      .strict()
+      .parse(JSON.parse(readFileSync(join(directory, "node/node-identity.json"), "utf8")));
+    const privateKey = createPrivateKey(identity.privateKey);
+    if (
+      privateKey.asymmetricKeyType !== "ed25519" ||
+      createPublicKey(privateKey).asymmetricKeyType !== "ed25519"
+    )
+      throw new Error("Node identity must use Ed25519");
+  } catch {
+    throw new Error("Checkpoint integrity failure: node identity is invalid");
+  }
+}
+
+function noSymlinkParents(path: string): void {
+  for (let parent = resolve(path); parent !== "/"; parent = dirname(parent))
+    if (existsSync(parent) && lstatSync(parent).isSymbolicLink())
+      throw new Error(`Checkpoint path contains symbolic link: ${parent}`);
+}
+
 function setOwnership(path: string, uid: number, gid: number, link = false): void {
   const current = lstatSync(path);
   if (current.uid === uid && current.gid === gid) return;
@@ -307,7 +427,8 @@ function setOwnership(path: string, uid: number, gid: number, link = false): voi
 }
 
 function fileSha256(path: string): string {
-  const hash = createHash("sha256"), descriptor = openSync(path, "r");
+  const hash = createHash("sha256"),
+    descriptor = openSync(path, "r");
   try {
     const buffer = Buffer.allocUnsafe(64 * 1024);
     let count: number;

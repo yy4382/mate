@@ -103,12 +103,15 @@ export class AgentProcessOperationBroker {
           )
             throw new Error("Agent process operation identity conflict");
           if (existing.state === "succeeded" || existing.state === "failed") return existing;
-          if (existing.node_receipt_confirmed === 0)
+          // Preserve a previously proven node version while asking the node for the same
+          // idempotent operation again. A late older response must not erase that version.
+          if (existing.node_receipt_confirmed === 0) {
             this.database
-            .prepare(
-              "UPDATE owner_agent_process_operations SET state='executing',node_receipt_confirmed=0,node_receipt_revision=NULL,updated_at=? WHERE operation_id=? AND state='unknown'",
-            )
-            .run(this.now(), operationId);
+              .prepare(
+                "UPDATE owner_agent_process_operations SET state='executing',node_receipt_confirmed=0,node_receipt_revision=NULL,updated_at=? WHERE operation_id=? AND state='unknown'",
+              )
+              .run(this.now(), operationId);
+          }
           return this.read(operationId)!;
         }
         this.database
@@ -237,7 +240,8 @@ export class AgentProcessOperationBroker {
         });
         if (
           (row.state === "unknown" || row.state === "succeeded" || row.state === "failed") &&
-          result.state !== row.state && result.state !== "unknown"
+          result.state !== row.state &&
+          result.state !== "unknown"
         )
           onCorrection?.(row.agent_id, row.operation_id, result.state);
       })
