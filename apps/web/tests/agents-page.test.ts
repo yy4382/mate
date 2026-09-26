@@ -28,6 +28,12 @@ let credentialWrites: Array<{ provider: string; apiKey: string }>;
 let invitationPosts: Array<{ url: string; body: Record<string, unknown> }>;
 let nodeOnline: boolean;
 let postConflict: boolean;
+let workspacePages: Array<{
+  path: string;
+  offset: number;
+  entries: Array<{ name: string; type: string; size: number }>;
+  nextOffset: string | null;
+}>;
 let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
@@ -53,6 +59,7 @@ beforeEach(() => {
   invitationPosts = [];
   nodeOnline = true;
   postConflict = false;
+  workspacePages = [];
   fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url === "/api/owner/nodes")
@@ -127,6 +134,33 @@ beforeEach(() => {
           : json(200, { agent: complete });
       }
       return json(200, { agents });
+    }
+    const workspaceMatch = url.match(
+      /^\/api\/owner\/agents\/([^/]+)\/workspace(?:\/(stat|chunk|download))?/,
+    );
+    if (workspaceMatch) {
+      const urlObject = new URL(url, "http://mate.test");
+      if (workspaceMatch[2] === "stat")
+        return json(200, {
+          type: "file",
+          size: 5,
+          modifiedAt: 1,
+          version: { device: "1", inode: "2", size: 5, modifiedNs: "3", changedNs: "4" },
+        });
+      if (workspaceMatch[2] === "chunk")
+        return json(200, {
+          offset: Number(urlObject.searchParams.get("offset") ?? 0),
+          totalBytes: 5,
+          base64: "aGVsbG8=",
+          version: { device: "1", inode: "2", size: 5, modifiedNs: "3", changedNs: "4" },
+        });
+      if (workspaceMatch[2] === "download") return json(200, {});
+      const offset = Number(urlObject.searchParams.get("offset") ?? 0);
+      const page = workspacePages.find(
+        (item) =>
+          item.path === (urlObject.searchParams.get("path") ?? "") && item.offset === offset,
+      );
+      return json(200, { entries: page?.entries ?? [], nextOffset: page?.nextOffset ?? null });
     }
     if (/^\/api\/owner\/channels\/[^/]+\/invitations$/.test(url) && init?.method === "POST") {
       invitationPosts.push({ url, body: JSON.parse(String(init.body)) as Record<string, unknown> });
@@ -250,6 +284,77 @@ it("lets the owner invite an existing Agent to a channel from the Chinese Agent 
       body: { agentId },
     },
   ]);
+});
+
+it("browses an Agent private home read-only, previews and downloads files, and loads every directory page", async () => {
+  const agentId = "8bfb67a1-66ed-4d56-9052-4cc7a41c60b9";
+  agents = [
+    {
+      id: agentId,
+      nodeId,
+      name: "Research partner",
+      role: "Researches questions",
+      description: "A colleague",
+      model: { provider: "openai", id: "gpt-4.1" },
+      initialChannelId: null,
+      sessionId,
+      status: "ready",
+      stage: "complete",
+      error: null,
+      linuxIdentity: {
+        username: "mate_8bfb67a166ed4d5690524cc7",
+        uid: 23001,
+        gid: 23001,
+        home: `/var/lib/mate/agents/${agentId}`,
+      },
+      createdAt: 1,
+      updatedAt: 2,
+    },
+  ];
+  workspacePages = [
+    {
+      path: "",
+      offset: 0,
+      entries: [
+        { name: "notes.txt", type: "file", size: 5 },
+        { name: "projects", type: "directory", size: 0 },
+        { name: "shortcut", type: "symlink", size: 0 },
+      ],
+      nextOffset: "3",
+    },
+    {
+      path: "",
+      offset: 3,
+      entries: [{ name: "tail.txt", type: "file", size: 1 }],
+      nextOffset: null,
+    },
+    {
+      path: "projects",
+      offset: 0,
+      entries: [{ name: "plan.md", type: "file", size: 5 }],
+      nextOffset: null,
+    },
+  ];
+
+  const user = userEvent.setup();
+  render(createElement(AgentsPage));
+  expect(await screen.findByRole("heading", { name: "私人工作区" })).not.toBeNull();
+  expect(await screen.findByRole("button", { name: /notes.txt/ })).not.toBeNull();
+  expect(screen.getByText(/符号链接，不跟随/)).not.toBeNull();
+  expect(screen.queryByRole("button", { name: /上传|删除|编辑/ })).toBeNull();
+
+  await user.click(screen.getByRole("button", { name: /notes.txt/ }));
+  expect(await screen.findByText("hello")).not.toBeNull();
+  const download = screen.getByRole("link", { name: "下载" });
+  expect(download.getAttribute("href")).toContain("/workspace/download?");
+  expect(download.getAttribute("href")).toContain("path=notes.txt");
+
+  await user.click(screen.getByRole("button", { name: "加载更多目录项" }));
+  expect(await screen.findByRole("button", { name: /tail.txt/ })).not.toBeNull();
+  expect(fetchMock.mock.calls.some(([input]) => String(input).includes("offset=3"))).toBe(true);
+
+  await user.click(screen.getByRole("button", { name: /projects\// }));
+  expect(await screen.findByRole("button", { name: /plan.md/ })).not.toBeNull();
 });
 
 it("lets the owner save one provider key without displaying it again", async () => {

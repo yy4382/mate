@@ -63,7 +63,10 @@ export class LinuxWorkspaceExecutor {
   private readonly lookupIdentity: (agentId: string, homeRoot: string) => LinuxAgentIdentity;
   private readonly createBackend: (agentId: string, identity: LinuxIdentity) => ExecutionBackend;
   private readonly now: () => number;
-  private readonly active = new Map<string, { requestHash: string; promise: Promise<ExecutionResult> }>();
+  private readonly active = new Map<
+    string,
+    { requestHash: string; promise: Promise<ExecutionResult> }
+  >();
 
   constructor(
     private readonly homeRoot: string,
@@ -93,7 +96,9 @@ export class LinuxWorkspaceExecutor {
     if (existingCall)
       return existingCall.requestHash === requestHash
         ? existingCall.promise
-        : Promise.resolve(failed("operation_conflict: Operation ID was reused for another file request"));
+        : Promise.resolve(
+            failed("operation_conflict: Operation ID was reused for another file request"),
+          );
     const operation = this.executeOnce(request, requestHash, signal).finally(() => {
       if (this.active.get(request.operationId)?.promise === operation)
         this.active.delete(request.operationId);
@@ -113,8 +118,12 @@ export class LinuxWorkspaceExecutor {
       if (existing.agentId !== request.agentId || existing.requestHash !== requestHash)
         return failed("operation_conflict: Operation ID was reused for another file request");
       if (existing.state === "succeeded" || existing.state === "unknown")
-        return existing.result ?? failed("operation_unknown: The file operation result is unavailable");
-      const result = failed("operation_unknown: A previous node process stopped during this operation");
+        return (
+          existing.result ?? failed("operation_unknown: The file operation result is unavailable")
+        );
+      const result = failed(
+        "operation_unknown: A previous node process stopped during this operation",
+      );
       this.writeReceipt({ ...existing, state: "unknown", result, updatedAt: this.now() });
       return result;
     }
@@ -125,13 +134,14 @@ export class LinuxWorkspaceExecutor {
     const expectedHome = join(resolve(this.homeRoot), request.agentId.toLowerCase());
     if (identity.home !== expectedHome)
       return failed("identity_mismatch: Agent home does not match its stable ID");
-    if (records) this.writeReceipt({
-      operationId: request.operationId,
-      agentId: request.agentId,
-      requestHash,
-      state: "executing",
-      updatedAt: this.now(),
-    });
+    if (records)
+      this.writeReceipt({
+        operationId: request.operationId,
+        agentId: request.agentId,
+        requestHash,
+        state: "executing",
+        updatedAt: this.now(),
+      });
 
     let result: ExecutionResult;
     try {
@@ -146,14 +156,15 @@ export class LinuxWorkspaceExecutor {
       );
     } catch {
       result = failed("operation_unknown: The node could not confirm the file operation result");
-      if (records) this.writeReceipt({
-        operationId: request.operationId,
-        agentId: request.agentId,
-        requestHash,
-        state: "unknown",
-        result,
-        updatedAt: this.now(),
-      });
+      if (records)
+        this.writeReceipt({
+          operationId: request.operationId,
+          agentId: request.agentId,
+          requestHash,
+          state: "unknown",
+          result,
+          updatedAt: this.now(),
+        });
       return result;
     }
 

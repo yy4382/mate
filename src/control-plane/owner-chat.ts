@@ -2,11 +2,14 @@ import type Database from "better-sqlite3";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import {
+  agentMateOperations,
   agentConversationOperations,
   agentProcessToolOperations,
+  agentWorkspaceOperations,
   agentToolSchemas,
   type AgentConversationOperation,
   toAgentProcessOperation,
+  type AgentWorkspaceOperation,
 } from "./agent-tools.js";
 import type { AgentProcessOperation } from "../nodes/process-operations.js";
 
@@ -103,6 +106,19 @@ export interface OwnerChannelUpdate {
 
 export type AgentToolCallResult = { ok: true; result: unknown } | { ok: false; error: string };
 
+export interface ExternalAgentToolRequest {
+  runId: string;
+  nodeId: string;
+  agentId: string;
+  actionId: string;
+  name: AgentWorkspaceOperation;
+  input: Record<string, unknown>;
+}
+
+export type ExternalAgentToolHandler = (
+  request: ExternalAgentToolRequest,
+) => Promise<AgentToolCallResult>;
+
 interface ActiveAgentToolRun {
   run_id: string;
   agent_id: string;
@@ -177,6 +193,8 @@ const eventRetention = 1000;
 
 /** Owner-facing channel facts committed in the control-plane database. */
 export class OwnerChat {
+  private externalAgentToolHandler?: ExternalAgentToolHandler;
+
   constructor(
     private readonly db: Database.Database,
     private readonly now: () => number = Date.now,
@@ -228,6 +246,10 @@ export class OwnerChat {
   }
 
   /** The only entry point through which a running Agent may call shared conversation tools. */
+  setExternalAgentToolHandler(handler: ExternalAgentToolHandler): void {
+    this.externalAgentToolHandler = handler;
+  }
+
   executeAgentTool(
     runId: string,
     nodeId: string,
@@ -235,7 +257,48 @@ export class OwnerChat {
     toolCallId: string,
     operation: string,
     input: Record<string, unknown>,
-  ): AgentToolCallResult {
+  ): AgentToolCallResult | Promise<AgentToolCallResult> {
+    if (operation === "tools.call") {
+      const request = agentToolSchemas["tools.call"].safeParse(input);
+      if (request.success && Object.hasOwn(agentWorkspaceOperations, request.data.name)) {
+        let external: ExternalAgentToolRequest;
+        try {
+          external = this.db
+            .transaction(() => {
+              const run = this.activeAgentToolRun(runId, nodeId, agentId),
+                entry = agentWorkspaceOperations[request.data.name as AgentWorkspaceOperation];
+              if (run.independent_review === 1 && entry.seatPolicy === "deny")
+                throw new AgentToolRefusal("Independent review seat isolates this input path");
+              const parsedInput = entry.schema.parse(request.data.input);
+              if (
+                typeof parsedInput !== "object" ||
+                parsedInput === null ||
+                Array.isArray(parsedInput)
+              )
+                throw new AgentToolRefusal("Invalid tool input");
+              return {
+                runId,
+                nodeId,
+                agentId,
+                actionId: toolCallId,
+                name: request.data.name as AgentWorkspaceOperation,
+                input: parsedInput as Record<string, unknown>,
+              };
+            })
+            .immediate();
+        } catch (error) {
+          if (error instanceof AgentToolRefusal) return { ok: false, error: error.message };
+          if (error instanceof z.ZodError) return { ok: false, error: "Invalid tool input" };
+          return { ok: false, error: "Agent tool request was refused" };
+        }
+        if (!this.externalAgentToolHandler)
+          return Promise.resolve({ ok: false, error: "File services are unavailable" });
+        return this.externalAgentToolHandler(external).catch(() => ({
+          ok: false as const,
+          error: "Agent 文件请求被拒绝。",
+        }));
+      }
+    }
     try {
       const result = this.db
         .transaction(() => {
@@ -245,7 +308,7 @@ export class OwnerChat {
             agentToolSchemas["tools.list"].parse(input);
             return {
               tools: [
-                ...Object.entries(agentConversationOperations),
+                ...Object.entries(agentMateOperations),
                 ...Object.entries(agentProcessToolOperations),
               ]
                 .filter(([, entry]) => !reviewSeat || entry.seatPolicy !== "deny")
@@ -256,6 +319,7 @@ export class OwnerChat {
             const request = agentToolSchemas["tools.describe"].parse(input),
               entry =
                 agentConversationOperations[request.name as AgentConversationOperation] ??
+                agentWorkspaceOperations[request.name as AgentWorkspaceOperation] ??
                 agentProcessToolOperations[request.name as keyof typeof agentProcessToolOperations];
             if (!entry || (reviewSeat && entry.seatPolicy === "deny"))
               throw new AgentToolRefusal("Unknown operation");

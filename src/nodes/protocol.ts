@@ -17,6 +17,9 @@ const workspaceOperationSchema = operationSchema.refine((operation) => operation
 const workspaceReadOperationSchema = workspaceOperationSchema.refine((operation) =>
   ["workspace_list", "workspace_stat", "workspace_read_chunk"].includes(operation.kind),
 );
+const agentWorkspaceReadOperationSchema = workspaceOperationSchema.refine((operation) =>
+  ["read", "workspace_list", "workspace_stat", "workspace_read_chunk"].includes(operation.kind),
+);
 const workspaceExecutionResultSchema = z
   .object({
     code: z.number().int(),
@@ -251,6 +254,17 @@ export const NodeControlMessageSchema = z.discriminatedUnion("type", [
         agentId: agentIdSchema,
         mode: z.literal("owner_read"),
         operation: workspaceReadOperationSchema,
+      })
+      .strict(),
+    z
+      .object({
+        type: z.literal("control.workspace.operation"),
+        requestId: requestIdSchema,
+        operationId: requestIdSchema,
+        agentId: agentIdSchema,
+        runId: requestIdSchema,
+        mode: z.literal("agent_read"),
+        operation: agentWorkspaceReadOperationSchema,
       })
       .strict(),
     z

@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { AgentProcessOperation } from "../nodes/process-operations.js";
 
 const conversationId = z.string().uuid(),
+  workspacePath = z.string().max(4096),
   pageLimit = z.number().int().min(1).max(100).default(50),
   cursor = z
     .string()
@@ -47,7 +48,141 @@ export const agentConversationOperations = Object.freeze({
   },
 });
 
+const workspaceVersion = z
+  .object({
+    device: z.string().regex(/^[0-9]+$/),
+    inode: z.string().regex(/^[0-9]+$/),
+    size: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    modifiedNs: z.string().regex(/^[0-9]+$/),
+    changedNs: z.string().regex(/^[0-9]+$/),
+  })
+  .strict();
+
+/** File tools cross the control plane and run under the Agent's provisioned Linux account. */
+export const agentWorkspaceOperations = Object.freeze({
+  "workspace.list": {
+    description: "列出你私人 home 中的目录。使用 path 指定相对路径；支持 offset 和 limit 分页。",
+    schema: z
+      .object({
+        path: workspacePath,
+        offset: z.number().int().min(0).max(1_000_000).default(0),
+        limit: z.number().int().min(1).max(32).default(32),
+      })
+      .strict(),
+    seatPolicy: "deny" as const,
+  },
+  "workspace.stat": {
+    description: "查看你私人 home 中文件或目录的类型和大小。",
+    schema: z.object({ path: workspacePath }).strict(),
+    seatPolicy: "deny" as const,
+  },
+  "workspace.read": {
+    description: "读取私人 home 中不超过 64 KiB 的 UTF-8 文本文件。",
+    schema: z.object({ path: workspacePath }).strict(),
+    seatPolicy: "deny" as const,
+  },
+  "workspace.read_chunk": {
+    description:
+      "分块读取私人 home 中的文件；每次最多 8 KiB，并用返回的 version 继续读取同一版本。",
+    schema: z
+      .object({
+        path: workspacePath,
+        offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+        length: z.number().int().min(1).max(8192).default(8192),
+        version: workspaceVersion.optional(),
+      })
+      .strict(),
+    seatPolicy: "deny" as const,
+  },
+  "workspace.write": {
+    description: "在私人 home 中写入或替换 UTF-8 文本文件。每次修改会由控制面记录并使用持久收据。",
+    schema: z.object({ path: workspacePath, content: z.string().max(1_000_000) }).strict(),
+    seatPolicy: "deny" as const,
+  },
+  "workspace.write_bytes": {
+    description: "在私人 home 中写入或替换不超过 1 MB 的二进制文件，内容使用标准 base64。",
+    schema: z
+      .object({
+        path: workspacePath,
+        base64: z
+          .string()
+          .max(1_333_336)
+          .refine((value) => Buffer.from(value, "base64").toString("base64") === value),
+      })
+      .strict(),
+    seatPolicy: "deny" as const,
+  },
+  "workspace.edit": {
+    description: "仅当文件内容与 expectedHash 相符、且 oldText 唯一出现时替换文本。",
+    schema: z
+      .object({
+        path: workspacePath,
+        expectedHash: z.string().regex(/^[a-f0-9]{64}$/),
+        oldText: z.string().min(1).max(1_000_000),
+        newText: z.string().max(1_000_000),
+      })
+      .strict(),
+    seatPolicy: "deny" as const,
+  },
+  "workspace.mkdir": {
+    description: "在私人 home 中创建目录。",
+    schema: z.object({ path: z.string().min(1).max(4096) }).strict(),
+    seatPolicy: "deny" as const,
+  },
+  "workspace.move": {
+    description: "在私人 home 内移动或重命名文件；源和目标都必须留在私人 home。",
+    schema: z
+      .object({ path: z.string().min(1).max(4096), destination: z.string().min(1).max(4096) })
+      .strict(),
+    seatPolicy: "deny" as const,
+  },
+  "workspace.remove": {
+    description: "删除私人 home 中的文件；如提供 expectedHash，文件必须仍与该摘要相符。",
+    schema: z
+      .object({
+        path: z.string().min(1).max(4096),
+        expectedHash: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/)
+          .optional(),
+      })
+      .strict(),
+    seatPolicy: "deny" as const,
+  },
+  "attachments.list": {
+    description: "查看你已加入对话中的附件。",
+    schema: z.object({ conversationId }).strict(),
+    seatPolicy: "deny" as const,
+  },
+  "attachments.read_chunk": {
+    description: "分块读取已加入对话中的附件；每次最多 8 KiB。",
+    schema: z
+      .object({
+        conversationId,
+        attachmentId: z.string().uuid(),
+        offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+        length: z.number().int().min(1).max(8192).default(8192),
+      })
+      .strict(),
+    seatPolicy: "deny" as const,
+  },
+  "attachments.publish": {
+    description: "把你私人 home 中的一份文件发布到触发当前运行的对话附件中。",
+    schema: z
+      .object({ path: z.string().min(1).max(4096), filename: z.string().max(255).optional() })
+      .strict(),
+    seatPolicy: "deny" as const,
+  },
+});
+
+export const agentMateOperations = Object.freeze({
+  ...agentConversationOperations,
+  ...agentWorkspaceOperations,
+});
+
 export type AgentConversationOperation = keyof typeof agentConversationOperations;
+export type AgentWorkspaceOperation = keyof typeof agentWorkspaceOperations;
+export type AgentMateOperation = keyof typeof agentMateOperations;
 
 const operationId = z.string().uuid();
 

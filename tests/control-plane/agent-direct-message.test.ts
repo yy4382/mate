@@ -1,6 +1,6 @@
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import Database from "better-sqlite3";
-import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
+import { createHash, generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -28,6 +28,7 @@ afterEach(() => {
 class FakeNodeSocket implements NodeSocket {
   sent: string[] = [];
   dropToolCallId: string | undefined;
+  onWorkspaceOperation?: (message: Record<string, unknown>) => void | Promise<void>;
   send(data: string) {
     const message = JSON.parse(data) as { type?: string; toolCallId?: string };
     if (
@@ -38,17 +39,25 @@ class FakeNodeSocket implements NodeSocket {
       return;
     }
     this.sent.push(data);
+    if (message.type === "control.workspace.operation")
+      void this.onWorkspaceOperation?.(message as Record<string, unknown>);
   }
   close() {}
   terminate() {}
 }
 
-async function setup() {
+async function setup(options: { nodeOperationTimeoutMs?: number } = {}) {
   const directory = mkdtempSync(join(tmpdir(), "mate-agent-direct-message-"));
   chmodSync(directory, 0o700);
   const passwordFile = join(directory, "owner-password");
   writeFileSync(passwordFile, `${password}\n`, { mode: 0o600 });
-  const app = createControlPlaneApp({ dataDir: join(directory, "control-plane"), passwordFile });
+  const app = createControlPlaneApp({
+    dataDir: join(directory, "control-plane"),
+    passwordFile,
+    ...(options.nodeOperationTimeoutMs !== undefined
+      ? { nodeOperationTimeoutMs: options.nodeOperationTimeoutMs }
+      : {}),
+  });
   const db = new Database(join(directory, "control-plane", "control-plane.sqlite"));
   fixtures.push({ app, directory, db });
   const login = await app.request("/api/auth/login", {
@@ -140,6 +149,7 @@ async function callAgentTool(
   input: Record<string, unknown>,
   identity: { agentId?: string } = {},
 ) {
+  const fromIndex = socket.sent.length;
   await app.nodes.receive(
     socket,
     JSON.stringify({
@@ -152,7 +162,28 @@ async function callAgentTool(
       input,
     }),
   );
-  return JSON.parse(socket.sent.at(-1)!) as {
+  const deadline = Date.now() + 4000;
+  let response: string | undefined;
+  while (Date.now() < deadline) {
+    response = socket.sent
+      .slice(fromIndex)
+      .map((text) => JSON.parse(text) as { type?: string; toolCallId?: string })
+      .findLast(
+        (message) =>
+          message.type === "control.agent.run.tool_result" && message.toolCallId === toolCallId,
+      )
+      ? socket.sent.slice(fromIndex).findLast((text) => {
+          const message = JSON.parse(text) as { type?: string; toolCallId?: string };
+          return (
+            message.type === "control.agent.run.tool_result" && message.toolCallId === toolCallId
+          );
+        })
+      : undefined;
+    if (response) break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  if (!response) throw new Error(`Agent tool ${toolCallId} did not return a result`);
+  return JSON.parse(response) as {
     type: string;
     runId: string;
     toolCallId: string;
@@ -160,6 +191,26 @@ async function callAgentTool(
     error?: string;
     result?: unknown;
   };
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (typeof value !== "object" || value === null) return JSON.stringify(value);
+  return `{${Object.entries(value as Record<string, unknown>)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`)
+    .join(",")}}`;
+}
+
+function stableToolActionId(
+  actionScopeId: string,
+  input: Record<string, unknown>,
+  occurrence = 1,
+): string {
+  const signature = createHash("sha256")
+    .update(canonicalJson({ operation: "tools.call", input }))
+    .digest("hex");
+  return `mate:${actionScopeId}:${signature}:${occurrence}`;
 }
 
 async function callAgentRunContext(
@@ -2029,4 +2080,295 @@ it("pages handled session history before appending an older pending run input", 
       code: "model_failed",
     }),
   );
+});
+
+it("authorizes workspace writes, reuses one action receipt, and reconciles a late node receipt", async () => {
+  const { app, cookie, db, nodeId, socket } = await setup({ nodeOperationTimeoutMs: 40 });
+  const agentId = randomUUID();
+  app.agents.prepare({
+    id: agentId,
+    nodeId,
+    name: "Workspace partner",
+    role: "Uses a private Linux workspace",
+    description: "Synthetic file-action fixture.",
+    model: { provider: "openai", id: "gpt-4.1" },
+  });
+  app.agents.complete(
+    agentId,
+    {
+      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      uid: 23001,
+      gid: 23001,
+      home: `/var/lib/mate/agents/${agentId}`,
+    },
+    app.chat,
+  );
+  const channel = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  await app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
+  });
+  const runStart = socket.sent.length;
+  app.chat.createMessage(channel.id, "Use workspace files and publish the result.");
+  const run = await waitForRun(socket, runStart);
+  const requests: Array<Record<string, unknown>> = [],
+    nodeReceipts = new Map<
+      string,
+      { code: number; stdout: string; stderr: string; truncated: boolean }
+    >();
+  let heldRequest: Record<string, unknown> | undefined,
+    holdNextResponse = false,
+    expectedActionId: string | undefined,
+    executingEnvelope: unknown;
+  socket.onWorkspaceOperation = async (message) => {
+    requests.push(message);
+    const operationId = String(message.operationId),
+      existingReceipt = nodeReceipts.get(operationId);
+    if (existingReceipt) {
+      if (!holdNextResponse)
+        await app.nodes.receive(
+          socket,
+          JSON.stringify({
+            type: "node.workspace.operation.result",
+            requestId: message.requestId,
+            operationId,
+            agentId,
+            ok: true,
+            result: existingReceipt,
+          }),
+        );
+      return;
+    }
+    const action = expectedActionId
+      ? (db
+          .prepare("SELECT result_json FROM owner_agent_tool_actions WHERE action_id=?")
+          .get(expectedActionId) as { result_json: string } | undefined)
+      : undefined;
+    if (action) executingEnvelope = JSON.parse(action.result_json);
+    const receipt = {
+      code: 0,
+      stdout: JSON.stringify({ sha256: `receipt-${requests.length}` }),
+      stderr: "",
+      truncated: false,
+    };
+    nodeReceipts.set(operationId, receipt);
+    if (holdNextResponse) {
+      holdNextResponse = false;
+      heldRequest = message;
+      return;
+    }
+    await app.nodes.receive(
+      socket,
+      JSON.stringify({
+        type: "node.workspace.operation.result",
+        requestId: message.requestId,
+        operationId,
+        agentId,
+        ok: true,
+        result: receipt,
+      }),
+    );
+  };
+
+  const discover = await callAgentTool(app, socket, run, "workspace-discovery", "tools.list", {});
+  expect(discover).toMatchObject({
+    ok: true,
+    result: {
+      tools: expect.arrayContaining([expect.objectContaining({ name: "workspace.write" })]),
+    },
+  });
+
+  const firstInput = { name: "workspace.write", input: { path: "notes.txt", content: "hello" } },
+    firstActionId = stableToolActionId(run.actionScopeId, firstInput);
+  expectedActionId = firstActionId;
+  const first = await callAgentTool(app, socket, run, firstActionId, "tools.call", firstInput);
+  expect(first).toMatchObject({ ok: true, result: { sha256: "receipt-1" } });
+  expect(executingEnvelope).toMatchObject({ state: "executing", operationId: expect.any(String) });
+  expect(requests).toHaveLength(1);
+  expect(requests[0]).toMatchObject({
+    type: "control.workspace.operation",
+    agentId,
+    runId: run.runId,
+    mode: "agent_action",
+    operation: { kind: "write", path: "notes.txt", content: "hello" },
+  });
+  const firstAction = db
+    .prepare("SELECT result_json FROM owner_agent_tool_actions WHERE session_id=? AND action_id=?")
+    .get(run.sessionId, firstActionId) as { result_json: string };
+  expect(JSON.parse(firstAction.result_json)).toMatchObject({
+    state: "succeeded",
+    operationId: requests[0]!.operationId,
+    result: { sha256: "receipt-1" },
+  });
+  expect(
+    await callAgentTool(app, socket, run, firstActionId, "tools.call", firstInput),
+  ).toMatchObject({ ok: true, result: first.result });
+  expect(requests).toHaveLength(1);
+
+  const delayedInput = { name: "workspace.write", input: { path: "late.txt", content: "saved" } },
+    delayedActionId = stableToolActionId(run.actionScopeId, delayedInput);
+  expectedActionId = delayedActionId;
+  holdNextResponse = true;
+  const unknown = await callAgentTool(
+    app,
+    socket,
+    run,
+    delayedActionId,
+    "tools.call",
+    delayedInput,
+  );
+  expect(unknown).toMatchObject({ ok: false, error: expect.stringContaining("尚未确认") });
+  expect(heldRequest).toBeDefined();
+  const unknownAction = db
+    .prepare("SELECT result_json FROM owner_agent_tool_actions WHERE session_id=? AND action_id=?")
+    .get(run.sessionId, delayedActionId) as { result_json: string };
+  expect(JSON.parse(unknownAction.result_json)).toMatchObject({
+    state: "unknown",
+    operationId: heldRequest!.operationId,
+  });
+
+  const lateReceipt = nodeReceipts.get(String(heldRequest!.operationId))!;
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.workspace.operation.result",
+      requestId: heldRequest!.requestId,
+      operationId: heldRequest!.operationId,
+      agentId,
+      ok: true,
+      result: lateReceipt,
+    }),
+  );
+  const reconciled = db
+    .prepare("SELECT result_json FROM owner_agent_tool_actions WHERE session_id=? AND action_id=?")
+    .get(run.sessionId, delayedActionId) as { result_json: string };
+  expect(JSON.parse(reconciled.result_json)).toMatchObject({
+    state: "succeeded",
+    operationId: heldRequest!.operationId,
+    result: { sha256: "receipt-2" },
+  });
+  expect(
+    await callAgentTool(app, socket, run, delayedActionId, "tools.call", delayedInput),
+  ).toMatchObject({ ok: true, result: { sha256: "receipt-2" } });
+  expect(requests).toHaveLength(2);
+
+  db.prepare(
+    `UPDATE owner_channel_memberships SET active=0
+     WHERE channel_id=? AND principal_kind='agent' AND principal_id=?`,
+  ).run(channel.id, agentId);
+  const denied = await callAgentTool(app, socket, run, firstActionId, "tools.call", firstInput);
+  expect(denied).toMatchObject({ ok: false });
+  expect(requests).toHaveLength(2);
+});
+
+it("publishes Agent workspace files to a joined conversation in bounded chunks and rechecks ACL before replay", async () => {
+  const { app, cookie, db, nodeId, socket } = await setup();
+  const agentId = randomUUID();
+  app.agents.prepare({
+    id: agentId,
+    nodeId,
+    name: "Attachment publisher",
+    role: "Shares a workspace file",
+    description: "Synthetic attachment fixture.",
+    model: { provider: "openai", id: "gpt-4.1" },
+  });
+  app.agents.complete(
+    agentId,
+    {
+      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      uid: 23001,
+      gid: 23001,
+      home: `/var/lib/mate/agents/${agentId}`,
+    },
+    app.chat,
+  );
+  const channel = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  await app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
+  });
+  const runStart = socket.sent.length;
+  app.chat.createMessage(channel.id, "Publish a note from the workspace.");
+  const run = await waitForRun(socket, runStart),
+    requests: Array<Record<string, unknown>> = [],
+    version = { device: "1", inode: "2", size: 5, modifiedNs: "3", changedNs: "4" };
+  socket.onWorkspaceOperation = async (message) => {
+    requests.push(message);
+    const operation = message.operation as { kind: string; offset?: number },
+      result =
+        operation.kind === "workspace_stat"
+          ? {
+              code: 0,
+              stdout: JSON.stringify({ type: "file", size: 5, version }),
+              stderr: "",
+              truncated: false,
+            }
+          : {
+              code: 0,
+              stdout: JSON.stringify({
+                offset: operation.offset,
+                totalBytes: 5,
+                base64: "aGVsbG8=",
+                version,
+              }),
+              stderr: "",
+              truncated: false,
+            };
+    await app.nodes.receive(
+      socket,
+      JSON.stringify({
+        type: "node.workspace.operation.result",
+        requestId: message.requestId,
+        operationId: message.operationId,
+        agentId,
+        ok: true,
+        result,
+      }),
+    );
+  };
+
+  const input = {
+      name: "attachments.publish",
+      input: { path: "notes.txt", filename: "共享笔记.txt" },
+    },
+    actionId = stableToolActionId(run.actionScopeId, input),
+    published = await callAgentTool(app, socket, run, actionId, "tools.call", input);
+  expect(published).toMatchObject({
+    ok: true,
+    result: { filename: "共享笔记.txt", size: 5, uploader: { kind: "agent", id: agentId } },
+  });
+  expect(requests.map((request) => (request.operation as { kind: string }).kind)).toEqual([
+    "workspace_stat",
+    "workspace_read_chunk",
+    "workspace_stat",
+  ]);
+  expect(requests.every((request) => request.mode === "agent_publish")).toBe(true);
+  expect((requests[1]?.operation as { length: number }).length).toBeLessThanOrEqual(8192);
+
+  const ownerList = await app.request(`/api/owner/channels/${channel.id}/attachments`, {
+    headers: { cookie },
+  });
+  expect(ownerList.status).toBe(200);
+  const items = (await ownerList.json()) as {
+    attachments: Array<{ id: string; filename: string }>;
+  };
+  expect(items.attachments).toMatchObject([{ filename: "共享笔记.txt" }]);
+  const content = await app.request(
+    `/api/owner/channels/${channel.id}/attachments/${items.attachments[0]!.id}/content`,
+    { headers: { cookie } },
+  );
+  expect(content.status).toBe(200);
+  expect(await content.text()).toBe("hello");
+
+  const replay = await callAgentTool(app, socket, run, actionId, "tools.call", input);
+  expect(replay.result).toEqual(published.result);
+  expect(requests).toHaveLength(3);
+  db.prepare(
+    `UPDATE owner_channel_memberships SET active=0 WHERE channel_id=? AND principal_kind='agent' AND principal_id=?`,
+  ).run(channel.id, agentId);
+  const revokedReplay = await callAgentTool(app, socket, run, actionId, "tools.call", input);
+  expect(revokedReplay.ok).toBe(false);
+  expect(requests).toHaveLength(3);
 });

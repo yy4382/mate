@@ -1,13 +1,16 @@
 import type Database from "better-sqlite3";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  constants,
   chmodSync,
   closeSync,
+  fstatSync,
   fsyncSync,
   lstatSync,
   mkdirSync,
   openSync,
   readdirSync,
+  readSync,
   renameSync,
   unlinkSync,
   writeSync,
@@ -102,6 +105,85 @@ export class AttachmentService {
     return rows.map(toSummary);
   }
 
+  listForAgent(runId: string, agentId: string, channelId: string): AttachmentSummary[] {
+    this.authorizeAgentConversation(runId, agentId, channelId);
+    const rows = this.db
+      .prepare(
+        `SELECT id,channel_id,storage_key,filename,content_type,size,sha256,
+                uploader_kind,uploader_id,created_at
+         FROM owner_conversation_attachments
+         WHERE channel_id=? AND state='ready' ORDER BY created_at,id`,
+      )
+      .all(channelId) as AttachmentRow[];
+    return rows.map(toSummary);
+  }
+
+  readChunkForAgent(input: {
+    runId: string;
+    agentId: string;
+    channelId: string;
+    attachmentId: string;
+    offset: number;
+    length: number;
+  }): { attachment: AttachmentSummary; offset: number; totalBytes: number; base64: string } {
+    this.authorizeAgentConversation(input.runId, input.agentId, input.channelId);
+    if (
+      !Number.isSafeInteger(input.offset) ||
+      input.offset < 0 ||
+      !Number.isSafeInteger(input.length) ||
+      input.length < 1 ||
+      input.length > 8192
+    )
+      throw new AttachmentError("attachment_not_found", "附件分块参数无效。", 400);
+    const row = this.db
+      .prepare(
+        `SELECT id,channel_id,storage_key,filename,content_type,size,sha256,
+                uploader_kind,uploader_id,created_at
+         FROM owner_conversation_attachments
+         WHERE id=? AND channel_id=? AND state='ready'`,
+      )
+      .get(input.attachmentId, input.channelId) as AttachmentRow | undefined;
+    if (!row) throw new AttachmentError("attachment_not_found", "附件不存在。", 404);
+    if (input.offset > row.size)
+      throw new AttachmentError("attachment_not_found", "附件分块位置超出文件大小。", 416);
+    const path = this.storagePath(`${row.storage_key}.blob`),
+      beforePath = lstatSync(path);
+    if (!beforePath.isFile() || beforePath.isSymbolicLink() || beforePath.size !== row.size)
+      throw new AttachmentError("attachment_not_found", "附件内容暂不可用。", 404);
+    const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const before = fstatSync(descriptor, { bigint: true });
+      if (
+        !before.isFile() ||
+        before.size !== BigInt(row.size) ||
+        before.ino !== BigInt(beforePath.ino)
+      )
+        throw new AttachmentError("attachment_not_found", "附件内容暂不可用。", 404);
+      const bytes = Buffer.alloc(Math.min(input.length, row.size - input.offset));
+      let count = 0;
+      while (count < bytes.length) {
+        const read = readSync(descriptor, bytes, count, bytes.length - count, input.offset + count);
+        if (!read) break;
+        count += read;
+      }
+      const after = fstatSync(descriptor, { bigint: true });
+      if (
+        before.size !== after.size ||
+        before.mtimeNs !== after.mtimeNs ||
+        before.ctimeNs !== after.ctimeNs
+      )
+        throw new AttachmentError("attachment_not_found", "附件内容读取期间发生变化。", 409);
+      return {
+        attachment: toSummary(row),
+        offset: input.offset,
+        totalBytes: row.size,
+        base64: bytes.subarray(0, count).toString("base64"),
+      };
+    } finally {
+      closeSync(descriptor);
+    }
+  }
+
   async uploadForOwner(input: {
     channelId: string;
     filename: string;
@@ -183,7 +265,9 @@ export class AttachmentService {
       throw new AttachmentError("attachment_not_found", "附件内容暂不可用。", 404);
     return {
       attachment: toSummary(row),
-      stream: Readable.toWeb(createReadStream(path, { highWaterMark: 64 * 1024 })) as ReadableStream<Uint8Array>,
+      stream: Readable.toWeb(
+        createReadStream(path, { highWaterMark: 64 * 1024 }),
+      ) as ReadableStream<Uint8Array>,
     };
   }
 
@@ -212,14 +296,15 @@ export class AttachmentService {
            WHERE session_id=? AND action_id=?`,
         )
         .get(scope.session_id, input.actionId) as
-        | { request_hash: string; result_json: string }
-        | undefined;
+        { request_hash: string; result_json: string } | undefined;
     if (existing) {
       if (existing.request_hash !== requestHash)
         throw new AttachmentError("operation_conflict", "操作 ID 已用于另一份文件。", 409);
       const result = parseActionResult(existing.result_json);
-      if (result.state === "succeeded") return parsePublishedAttachment(JSON.stringify(result.result));
-      if (result.state === "failed") throw new AttachmentError("upload_failed", "文件发布失败。", 409);
+      if (result.state === "succeeded")
+        return parsePublishedAttachment(JSON.stringify(result.result));
+      if (result.state === "failed")
+        throw new AttachmentError("upload_failed", "文件发布失败。", 409);
       if (result.operationId !== operationId)
         throw new AttachmentError("operation_unknown", "文件发布结果尚未确认。", 409);
     }
@@ -278,21 +363,31 @@ export class AttachmentService {
       if (statResult.type !== "file" || !isVersion(statResult.version))
         throw new AttachmentError("workspace_unavailable", "只能发布普通文件。", 400);
       const metadata = statResult as { size: number; version: WorkspaceVersion };
-      if (!Number.isSafeInteger(metadata.size) || metadata.size < 0 || metadata.size > this.maximumBytes)
+      if (
+        !Number.isSafeInteger(metadata.size) ||
+        metadata.size < 0 ||
+        metadata.size > this.maximumBytes
+      )
         throw new AttachmentError("too_large", "文件超过附件大小上限。", 413);
-      const descriptor = openSync(tempPath, "wx", 0o600), digest = createHash("sha256");
+      const descriptor = openSync(tempPath, "wx", 0o600),
+        digest = createHash("sha256");
       let offset = 0;
       try {
         while (offset < metadata.size) {
-          const chunkResult = await this.workspaces.readForAgentPublish(input.runId, input.agentId, {
-            kind: "workspace_read_chunk",
-            path: input.path,
-            offset,
-            length: Math.min(8192, metadata.size - offset),
-            version: metadata.version,
-          });
+          const chunkResult = await this.workspaces.readForAgentPublish(
+            input.runId,
+            input.agentId,
+            {
+              kind: "workspace_read_chunk",
+              path: input.path,
+              offset,
+              length: Math.min(8192, metadata.size - offset),
+              version: metadata.version,
+            },
+          );
           const bytes = decodeChunk(chunkResult, offset, metadata.size, metadata.version);
-          if (!bytes.length) throw new WorkspaceError("file_changed", "File ended during publish", 409);
+          if (!bytes.length)
+            throw new WorkspaceError("file_changed", "File ended during publish", 409);
           digest.update(bytes);
           writeAll(descriptor, bytes, offset);
           offset += bytes.length;
@@ -305,32 +400,38 @@ export class AttachmentService {
         kind: "workspace_stat",
         path: input.path,
       });
-      if (finalStat.type !== "file" || !isVersion(finalStat.version) || !sameVersion(metadata.version, finalStat.version))
+      if (
+        finalStat.type !== "file" ||
+        !isVersion(finalStat.version) ||
+        !sameVersion(metadata.version, finalStat.version)
+      )
         throw new WorkspaceError("file_changed", "File changed while it was being published", 409);
       renameSync(tempPath, finalPath);
       syncDirectory(this.directory);
-      const summary = this.db.transaction(() => {
-        this.db
-          .prepare(
-            `UPDATE owner_conversation_attachments
+      const summary = this.db
+        .transaction(() => {
+          this.db
+            .prepare(
+              `UPDATE owner_conversation_attachments
              SET size=?,sha256=?,state='ready' WHERE id=? AND state='uploading'`,
-          )
-          .run(metadata.size, digest.digest("hex"), id);
-        const result = this.readReady(id);
-        if (!result) throw new Error("Published attachment disappeared before commit");
-        this.db
-          .prepare(
-            `UPDATE owner_agent_tool_actions SET result_json=?
+            )
+            .run(metadata.size, digest.digest("hex"), id);
+          const result = this.readReady(id);
+          if (!result) throw new Error("Published attachment disappeared before commit");
+          this.db
+            .prepare(
+              `UPDATE owner_agent_tool_actions SET result_json=?
              WHERE session_id=? AND action_id=? AND request_hash=?`,
-          )
-          .run(
-            JSON.stringify({ state: "succeeded", operationId, result }),
-            scope.session_id,
-            input.actionId,
-            requestHash,
-          );
-        return result;
-      }).immediate();
+            )
+            .run(
+              JSON.stringify({ state: "succeeded", operationId, result }),
+              scope.session_id,
+              input.actionId,
+              requestHash,
+            );
+          return result;
+        })
+        .immediate();
       return summary;
     } catch (error) {
       removeIfPresent(tempPath);
@@ -338,11 +439,12 @@ export class AttachmentService {
       this.db
         .prepare("DELETE FROM owner_conversation_attachments WHERE id=? AND state='uploading'")
         .run(id);
-      const normalized = error instanceof AttachmentError
-        ? error
-        : error instanceof WorkspaceError
-          ? new AttachmentError("workspace_unavailable", error.message, error.status)
-          : new AttachmentError("upload_failed", "节点文件未能完整发布。", 409);
+      const normalized =
+        error instanceof AttachmentError
+          ? error
+          : error instanceof WorkspaceError
+            ? new AttachmentError("workspace_unavailable", error.message, error.status)
+            : new AttachmentError("upload_failed", "节点文件未能完整发布。", 409);
       this.db
         .prepare(
           `UPDATE owner_agent_tool_actions SET result_json=?
@@ -358,7 +460,10 @@ export class AttachmentService {
     }
   }
 
-  private authorizeAgentRun(runId: string, agentId: string): {
+  private authorizeAgentRun(
+    runId: string,
+    agentId: string,
+  ): {
     session_id: string;
     node_id: string;
     delivery_id: string;
@@ -378,11 +483,33 @@ export class AttachmentService {
            AND s.verified_at IS NOT NULL AND a.status IN ('waiting_credentials','ready')`,
       )
       .get(runId, agentId) as
-      | { session_id: string; node_id: string; delivery_id: string; channel_id: string }
-      | undefined;
+      { session_id: string; node_id: string; delivery_id: string; channel_id: string } | undefined;
     if (!row)
-      throw new AttachmentError("conversation_unavailable", "当前 Agent 运行无权发布到此对话。", 403);
+      throw new AttachmentError(
+        "conversation_unavailable",
+        "当前 Agent 运行无权发布到此对话。",
+        403,
+      );
     return row;
+  }
+
+  private authorizeAgentConversation(runId: string, agentId: string, channelId: string): void {
+    const row = this.db
+      .prepare(
+        `SELECT 1
+         FROM owner_agent_runs r
+         JOIN owner_agents a ON a.id=r.agent_id AND a.node_id=r.node_id
+         JOIN owner_agent_sessions s ON s.agent_id=a.id AND s.verified_at IS NOT NULL
+         JOIN owner_channel_memberships agent ON agent.channel_id=?
+           AND agent.principal_kind='agent' AND agent.principal_id=a.id AND agent.active=1
+         JOIN owner_channel_memberships human ON human.channel_id=?
+           AND human.principal_kind='human' AND human.principal_id='owner' AND human.active=1
+         WHERE r.id=? AND r.agent_id=? AND r.state='running'
+           AND a.status IN ('waiting_credentials','ready')`,
+      )
+      .get(channelId, channelId, runId, agentId);
+    if (!row)
+      throw new AttachmentError("conversation_unavailable", "Agent 当前无权读取此对话附件。", 403);
   }
 
   private requireOwnerMembership(channelId: string, forUpload: boolean): void {
@@ -395,7 +522,11 @@ export class AttachmentService {
       )
       .get(channelId) as { archived: number } | undefined;
     if (!row || (forUpload && row.archived))
-      throw new AttachmentError("conversation_unavailable", "对话不存在、已归档或当前不可写。", 404);
+      throw new AttachmentError(
+        "conversation_unavailable",
+        "对话不存在、已归档或当前不可写。",
+        404,
+      );
   }
 
   private readReady(id: string): AttachmentSummary | undefined {
@@ -417,9 +548,7 @@ export class AttachmentService {
 
   private recoverInterruptedUploads(): void {
     const interrupted = this.db
-      .prepare(
-        `SELECT id,storage_key FROM owner_conversation_attachments WHERE state='uploading'`,
-      )
+      .prepare(`SELECT id,storage_key FROM owner_conversation_attachments WHERE state='uploading'`)
       .all() as Array<{ id: string; storage_key: string }>;
     const recover = this.db.transaction(() => {
       for (const row of interrupted) {
@@ -430,15 +559,23 @@ export class AttachmentService {
           .run(row.id);
       }
       const actions = this.db
-        .prepare("SELECT session_id,action_id,result_json FROM owner_agent_tool_actions WHERE operation='attachments.publish'")
+        .prepare(
+          "SELECT session_id,action_id,result_json FROM owner_agent_tool_actions WHERE operation='attachments.publish'",
+        )
         .all() as Array<{ session_id: string; action_id: string; result_json: string }>;
       for (const action of actions) {
         const result = parseActionResult(action.result_json);
         if (result.state === "executing")
           this.db
-            .prepare("UPDATE owner_agent_tool_actions SET result_json=? WHERE session_id=? AND action_id=?")
+            .prepare(
+              "UPDATE owner_agent_tool_actions SET result_json=? WHERE session_id=? AND action_id=?",
+            )
             .run(
-              JSON.stringify({ state: "failed", operationId: result.operationId, error: "文件发布在控制面重启时中断。" }),
+              JSON.stringify({
+                state: "failed",
+                operationId: result.operationId,
+                error: "文件发布在控制面重启时中断。",
+              }),
               action.session_id,
               action.action_id,
             );
@@ -568,7 +705,13 @@ function removeIfPresent(path: string): void {
 function writeAll(descriptor: number, bytes: Uint8Array, offset: number): void {
   let written = 0;
   while (written < bytes.byteLength) {
-    const count = writeSync(descriptor, bytes, written, bytes.byteLength - written, offset + written);
+    const count = writeSync(
+      descriptor,
+      bytes,
+      written,
+      bytes.byteLength - written,
+      offset + written,
+    );
     if (count <= 0) throw new Error("Could not write streamed attachment bytes");
     written += count;
   }

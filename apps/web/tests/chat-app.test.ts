@@ -111,6 +111,18 @@ let nextHistoryGate: {
   signalStarted: () => void;
   response: Promise<Response>;
 } | null;
+let attachments: Array<{
+  id: string;
+  channelId: string;
+  filename: string;
+  contentType: string;
+  size: number;
+  sha256: string;
+  uploader: { kind: "human"; id: "owner" } | { kind: "agent"; id: string };
+  createdAt: number;
+}>;
+let attachmentUploads: Array<{ channelId: string; body: BodyInit | null; headers: Headers }>;
+let failNextAttachmentUpload: boolean;
 
 function delayNextPost(): { started: Promise<void>; release: () => void } {
   let signalStarted!: () => void, release!: () => void;
@@ -161,6 +173,40 @@ function installFetch(): void {
     if (url === "/api/owner/session")
       return json(sessionStatus, { authenticated: sessionStatus === 200 });
     if (url === "/api/owner/snapshot") return json(200, { channels, cursor: 0 });
+    const attachmentMatch = url.match(
+      /^\/api\/owner\/channels\/([^/]+)\/attachments(?:\/([^/]+)\/content)?$/,
+    );
+    if (attachmentMatch) {
+      const channelId = decodeURIComponent(attachmentMatch[1]!);
+      if (attachmentMatch[2]) return json(200, {});
+      if (init?.method === "POST") {
+        attachmentUploads.push({
+          channelId,
+          body: init.body ?? null,
+          headers: new Headers(init.headers),
+        });
+        if (failNextAttachmentUpload) {
+          failNextAttachmentUpload = false;
+          return json(413, { error: "附件超过文件大小上限。" });
+        }
+        const upload = attachmentUploads.at(-1)!;
+        const filename = decodeURIComponent(upload.headers.get("x-mate-filename") ?? "");
+        const body = upload.body as File;
+        const attachment = {
+          id: `attachment-${attachmentUploads.length}`,
+          channelId,
+          filename,
+          contentType: upload.headers.get("content-type") ?? "application/octet-stream",
+          size: body.size,
+          sha256: "sha256",
+          uploader: { kind: "human" as const, id: "owner" as const },
+          createdAt: Date.now(),
+        };
+        attachments.push(attachment);
+        return json(201, { attachment });
+      }
+      return json(200, { attachments: attachments.filter((item) => item.channelId === channelId) });
+    }
     const match = url.match(/^\/api\/owner\/channels\/([^/]+)\/messages/);
     if (match) {
       const channelId = decodeURIComponent(match[1]!);
@@ -227,6 +273,9 @@ beforeEach(() => {
   ]);
   sessionStatus = 200;
   posts = [];
+  attachments = [];
+  attachmentUploads = [];
+  failNextAttachmentUpload = false;
   nextPostGate = null;
   nextHistoryGate = null;
   TestEventSource.instances = [];
@@ -255,6 +304,57 @@ it("keeps an Agent DM event that arrives as the initial selected channel is bein
 
   expect(await screen.findByRole("heading", { name: privateChannel.name })).not.toBeNull();
   expect(await screen.findByText("初始连接期间的 Agent 回复")).not.toBeNull();
+});
+
+it("uploads attachments as the original File stream and lists owner and Agent files with downloads", async () => {
+  attachments = [
+    {
+      id: "agent-file",
+      channelId: publicChannel.id,
+      filename: "agent-report.txt",
+      contentType: "text/plain",
+      size: 12,
+      sha256: "digest",
+      uploader: { kind: "agent", id: "agent-1" },
+      createdAt: 1,
+    },
+  ];
+  const user = await openChat();
+  await screen.findByText("agent-report.txt");
+  const input = screen.getByLabelText("添加附件") as HTMLInputElement,
+    file = new File(["hello"], "研究笔记.txt", { type: "text/plain" });
+  await user.upload(input, file);
+  await user.click(screen.getByRole("button", { name: "上传附件" }));
+
+  await screen.findByText("研究笔记.txt");
+  expect(attachmentUploads).toHaveLength(1);
+  expect(attachmentUploads[0]?.body).toBe(file);
+  expect(attachmentUploads[0]?.headers.get("content-type")).toBe("text/plain");
+  expect(attachmentUploads[0]?.headers.get("x-mate-filename")).toBe(
+    encodeURIComponent("研究笔记.txt"),
+  );
+  expect(screen.getByRole("link", { name: /agent-report.txt/ }).getAttribute("href")).toBe(
+    `/api/owner/channels/${publicChannel.id}/attachments/agent-file/content`,
+  );
+  expect(screen.getByRole("link", { name: /研究笔记.txt/ }).getAttribute("href")).toBe(
+    `/api/owner/channels/${publicChannel.id}/attachments/attachment-1/content`,
+  );
+});
+
+it("shows a useful upload failure and lets the owner retry without losing the selected file", async () => {
+  const user = await openChat();
+  const file = new File(["hello"], "notes.txt", { type: "text/plain" });
+  await user.upload(screen.getByLabelText("添加附件"), file);
+  failNextAttachmentUpload = true;
+  await user.click(screen.getByRole("button", { name: "上传附件" }));
+
+  expect(await screen.findByRole("alert")).not.toBeNull();
+  expect(screen.getByRole("alert").textContent).toContain("附件超过文件大小上限");
+  expect((screen.getByLabelText("添加附件") as HTMLInputElement).files?.[0]).toBe(file);
+  await user.click(screen.getByRole("button", { name: "上传附件" }));
+  expect(await screen.findByText("notes.txt")).not.toBeNull();
+  expect(attachmentUploads).toHaveLength(2);
+  expect(attachmentUploads[1]?.body).toBe(file);
 });
 
 it("keeps channel drafts separate and clears only the successfully sent draft", async () => {

@@ -39,6 +39,17 @@ interface MessageWindow {
   hasNewer: boolean;
 }
 
+interface Attachment {
+  id: string;
+  channelId: string;
+  filename: string;
+  contentType: string;
+  size: number;
+  sha256: string;
+  uploader: { kind: "human"; id: "owner" } | { kind: "agent"; id: string };
+  createdAt: number;
+}
+
 interface ChatEvent<T = unknown> {
   seq: number;
   kind: string;
@@ -126,6 +137,13 @@ export function ChatPage() {
   const [loadingLatestChannelId, setLoadingLatestChannelId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [attachmentsByChannel, setAttachmentsByChannel] = useState<Record<string, Attachment[]>>(
+    {},
+  );
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [attachmentBusy, setAttachmentBusy] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const attachmentInputRef = useRef<HTMLInputElement | null>(null);
   const [live, setLive] = useState(false);
   const [mobileView, setMobileView] = useState<MobileView>("home");
   const [dialog, setDialog] = useState<DialogState>(null);
@@ -297,11 +315,39 @@ export function ChatPage() {
     };
   }, [authenticated, selectedId, historyRefresh]);
 
+  useEffect(() => {
+    if (!authenticated || !selectedId) return;
+    const channelId = selectedId;
+    let active = true;
+    setAttachmentError(null);
+    setSelectedFile(null);
+    if (attachmentInputRef.current) attachmentInputRef.current.value = "";
+    async function refreshAttachments() {
+      try {
+        const result = await ownerJSON<{ attachments: Attachment[] }>(
+          `/api/owner/channels/${encodeURIComponent(channelId)}/attachments`,
+        );
+        if (active)
+          setAttachmentsByChannel((current) => ({ ...current, [channelId]: result.attachments }));
+      } catch (cause) {
+        if (active)
+          setAttachmentError(cause instanceof Error ? cause.message : "暂时无法读取频道附件。");
+      }
+    }
+    void refreshAttachments();
+    const interval = window.setInterval(() => void refreshAttachments(), 5000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [authenticated, selectedId]);
+
   const selected = channels.find((channel) => channel.id === selectedId) ?? null;
   const currentWindow = selectedId
     ? (messageWindows[selectedId] ?? emptyMessageWindow)
     : emptyMessageWindow;
   const currentMessages = currentWindow.messages;
+  const currentAttachments = selectedId ? (attachmentsByChannel[selectedId] ?? []) : [];
   const loadingLatest = selectedId !== null && loadingLatestChannelId === selectedId;
 
   async function logout() {
@@ -347,6 +393,37 @@ export function ChatPage() {
       setError(cause instanceof Error ? cause.message : "消息发送失败，请重试。");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function uploadAttachment() {
+    if (!selected || selected.archived || !selectedFile || attachmentBusy) return;
+    const channelId = selected.id,
+      file = selectedFile;
+    setAttachmentBusy(true);
+    setAttachmentError(null);
+    try {
+      const result = await ownerJSON<{ attachment: Attachment }>(
+        `/api/owner/channels/${encodeURIComponent(channelId)}/attachments`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": file.type || "application/octet-stream",
+            "X-Mate-Filename": encodeURIComponent(file.name),
+          },
+          body: file,
+        },
+      );
+      setAttachmentsByChannel((current) => ({
+        ...current,
+        [channelId]: [...(current[channelId] ?? []), result.attachment],
+      }));
+      setSelectedFile(null);
+      if (attachmentInputRef.current) attachmentInputRef.current.value = "";
+    } catch (cause) {
+      setAttachmentError(cause instanceof Error ? cause.message : "附件上传失败，请重试。");
+    } finally {
+      setAttachmentBusy(false);
     }
   }
 
@@ -675,6 +752,28 @@ export function ChatPage() {
               )}
             </div>
 
+            {(currentAttachments.length > 0 || attachmentError) && (
+              <section className="conversation-attachments" aria-label="频道附件">
+                <h2>附件</h2>
+                {attachmentError && <p role="alert">{attachmentError}</p>}
+                <ul>
+                  {currentAttachments.map((attachment) => (
+                    <li key={attachment.id}>
+                      <a
+                        href={`/api/owner/channels/${encodeURIComponent(attachment.channelId)}/attachments/${encodeURIComponent(attachment.id)}/content`}
+                      >
+                        {attachment.filename}
+                      </a>
+                      <span>{attachment.size} B</span>
+                      <small>
+                        {attachment.uploader.kind === "agent" ? "Agent 发布" : "你上传"}
+                      </small>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+
             {selected.archived ? (
               <div className="archived-notice">此频道已归档，消息只能查看。</div>
             ) : (
@@ -698,9 +797,33 @@ export function ChatPage() {
                 />
                 <div className="composer-footer">
                   <span>顶层消息会显示在频道时间线中</span>
-                  <button type="submit" disabled={busy || !draft.trim()}>
-                    发送
-                  </button>
+                  <div className="composer-actions">
+                    <label className="attachment-picker">
+                      添加附件
+                      <input
+                        ref={attachmentInputRef}
+                        aria-label="添加附件"
+                        type="file"
+                        disabled={busy || attachmentBusy}
+                        onChange={(event) =>
+                          setSelectedFile(event.currentTarget.files?.[0] ?? null)
+                        }
+                      />
+                    </label>
+                    {selectedFile && (
+                      <span className="selected-attachment">{selectedFile.name}</span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => void uploadAttachment()}
+                      disabled={busy || attachmentBusy || !selectedFile}
+                    >
+                      {attachmentBusy ? "正在上传…" : "上传附件"}
+                    </button>
+                    <button type="submit" disabled={busy || !draft.trim()}>
+                      发送
+                    </button>
+                  </div>
                 </div>
               </form>
             )}
