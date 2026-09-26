@@ -62,6 +62,8 @@ export class AgentRunCoordinator {
             this.chat.notifyAgentReceiptCorrection(agentId, operationId, state),
         );
         if (outcome.corrected) this.wake();
+        if (this.nodes.list().some((node) => node.id === nodeId && node.online))
+          void this.dispatchPendingStops(false);
       },
       () => {
         this.activateEnabledAgents();
@@ -391,7 +393,7 @@ export class AgentRunCoordinator {
     return Boolean(
       this.db
         .prepare(
-          "SELECT 1 FROM owner_agent_process_operations WHERE agent_id=? AND state IN ('executing','unknown') LIMIT 1",
+          "SELECT 1 FROM owner_agent_process_operations WHERE agent_id=? AND (state='executing' OR (state='unknown' AND node_receipt_confirmed=0)) LIMIT 1",
         )
         .get(agentId),
     );
@@ -554,13 +556,8 @@ export class AgentRunCoordinator {
     const stop = this.stopStatus(agentId);
     if (stop.state !== "succeeded")
       return { ok: false, error: "后台进程停止结果尚未确认，请检查节点诊断。" };
-    const unsettled = this.db
-      .prepare(
-        `SELECT 1 FROM owner_agent_process_operations
-       WHERE agent_id=? AND state IN ('executing','unknown') LIMIT 1`,
-      )
-      .get(agentId);
-    if (unsettled) return { ok: false, error: "仍有普通操作收据待对账，暂不能复启。" };
+    if (this.unsettledProcessReceipt(agentId))
+      return { ok: false, error: "仍有普通操作收据待对账，暂不能复启。" };
     let verified;
     try {
       verified = await this.nodes.provisionAgent(

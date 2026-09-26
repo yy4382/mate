@@ -89,9 +89,11 @@ export function AgentActivity({ agentId }: { agentId: string }) {
               <span role="status">
                 {page.stop?.state === "succeeded"
                   ? "后台进程已确认停止"
-                  : awaitingProcessReceipts
-                    ? "普通操作收据待对账；完成后将再次请求停止"
-                    : "后台进程停止结果未知；请检查节点与动态记录"}
+                  : page.stop?.state === "failed"
+                    ? "后台进程停止失败；请查看动态中的失败收据与节点诊断后重试"
+                    : awaitingProcessReceipts
+                      ? "普通操作收据待对账；完成后将再次请求停止"
+                      : "后台进程停止结果未知；请检查节点与动态记录"}
               </span>
             )}
             <button

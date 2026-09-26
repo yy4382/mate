@@ -93,6 +93,14 @@ async function waitForRun(
   throw new Error("The Agent process tool test did not start a run");
 }
 
+async function waitFor(condition: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (condition()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("The Agent process recovery condition did not settle");
+}
+
 async function sendTool(
   app: ReturnType<typeof createControlPlaneApp>,
   socket: FakeNodeSocket,
@@ -225,6 +233,174 @@ it("marks a committed process intent unknown before a recovered node can start a
   } finally {
     restarted.close();
   }
+});
+
+it("rechecks stopped scopes after a restarted node confirms an ordinary operation remains unknown", async () => {
+  const { app, cookie, db, nodeId, socket, keyPair } = await setup();
+  const agentId = randomUUID();
+  app.agents.prepare({
+    id: agentId,
+    nodeId,
+    name: "Interrupted command",
+    role: "Process recovery",
+    description: "Unknown command effect after restart",
+    model: { provider: "openai", id: "gpt-4.1" },
+  });
+  const identity = {
+    username: `mate_${agentId.replaceAll("-", "").slice(0, 27)}`,
+    uid: 23003,
+    gid: 23003,
+    home: `/var/lib/mate/agents/${agentId}`,
+    homeMarker: "a".repeat(64),
+  };
+  app.agents.complete(agentId, identity, app.chat);
+  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  await app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-key" }),
+  });
+  const start = socket.sent.length;
+  app.chat.createMessage(direct.id, "Start a command.");
+  const run = await waitForRun(socket, start);
+  const operationId = randomUUID();
+  db.prepare(
+    `INSERT INTO owner_agent_process_operations(
+      operation_id,run_id,agent_id,node_id,action_scope_id,stable_action_id,
+      request_hash,request_json,state,receipt_json,created_at,updated_at
+    ) VALUES(?,?,?,?,?,?,?,?,'unknown',?,?,?)`,
+  ).run(
+    operationId,
+    run.runId,
+    agentId,
+    nodeId,
+    run.actionScopeId,
+    `mate:${run.actionScopeId}:${"c".repeat(64)}:1`,
+    "c".repeat(64),
+    JSON.stringify({ operation: { kind: "exec", command: "true" } }),
+    JSON.stringify({ reason: "node_response_unavailable" }),
+    Date.now(),
+    Date.now(),
+  );
+  app.runs?.pauseAgent(agentId);
+  const stopRequests = (target: FakeNodeSocket) =>
+    target.sent
+      .map((text) => JSON.parse(text) as Record<string, unknown>)
+      .filter(
+        (message) =>
+          message.type === "control.process.operation" &&
+          (message.operation as { kind?: string })?.kind === "process.stop_all",
+      );
+  const firstStop = stopRequests(socket)[0]!;
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.process.operation.result",
+      requestId: firstStop.requestId,
+      operationId: firstStop.operationId,
+      agentId,
+      state: "succeeded",
+      receipt: { stopped: true, units: [] },
+    }),
+  );
+  await waitFor(() => app.runs?.stopStatus(agentId).state === "unknown");
+  expect(app.runs?.stopStatus(agentId).receipt).toEqual({ reason: "pending_process_receipts" });
+  expect((await app.runs?.resumeAgent(agentId))?.ok).toBe(false);
+
+  app.nodes.close(socket);
+  const reconnect = new FakeNodeSocket();
+  app.nodes.open(reconnect);
+  const challenge = JSON.parse(reconnect.sent[0]!) as { nonce: string };
+  await app.nodes.receive(
+    reconnect,
+    JSON.stringify({
+      type: "node.authenticate",
+      requestId: randomUUID(),
+      nodeId,
+      signature: sign(null, Buffer.from(challenge.nonce), keyPair.privateKey).toString("base64url"),
+    }),
+  );
+  const reconcile = reconnect.sent
+    .map((text) => JSON.parse(text) as Record<string, unknown>)
+    .find((message) => message.type === "control.process.reconcile")!;
+  expect(reconcile.operations).toEqual(
+    expect.arrayContaining([
+      { operationId, agentId },
+      { operationId: firstStop.operationId, agentId },
+    ]),
+  );
+  await app.nodes.receive(
+    reconnect,
+    JSON.stringify({
+      type: "node.process.reconcile.result",
+      requestId: reconcile.requestId,
+      receipts: [
+        {
+          operationId: firstStop.operationId,
+          agentId,
+          state: "succeeded",
+          receipt: { stopped: true, units: [] },
+        },
+        {
+          operationId,
+          agentId,
+          state: "unknown",
+          receipt: { reason: "node_restarted_during_operation" },
+        },
+      ],
+    }),
+  );
+  expect(
+    db
+      .prepare(
+        "SELECT state,node_receipt_confirmed FROM owner_agent_process_operations WHERE operation_id=?",
+      )
+      .get(operationId),
+  ).toEqual({ state: "unknown", node_receipt_confirmed: 1 });
+  await waitFor(() => stopRequests(reconnect).length > 0);
+  const secondStop = stopRequests(reconnect)[0]!;
+  expect(secondStop.operationId).not.toBe(firstStop.operationId);
+  expect(
+    reconnect.sent.some(
+      (text) =>
+        text.includes(`\"operationId\":\"${operationId}\"`) &&
+        text.includes("control.process.operation"),
+    ),
+  ).toBe(false);
+  await app.nodes.receive(
+    reconnect,
+    JSON.stringify({
+      type: "node.process.operation.result",
+      requestId: secondStop.requestId,
+      operationId: secondStop.operationId,
+      agentId,
+      state: "succeeded",
+      receipt: { stopped: true, units: [] },
+    }),
+  );
+  await waitFor(() => app.runs?.stopStatus(agentId).state === "succeeded");
+  const resuming = app.runs!.resumeAgent(agentId);
+  await waitFor(() =>
+    reconnect.sent.some(
+      (text) =>
+        text.includes('"type":"control.agent.provision"') && text.includes('"verifyOnly":true'),
+    ),
+  );
+  const verify = reconnect.sent
+    .map((text) => JSON.parse(text) as Record<string, unknown>)
+    .find((message) => message.type === "control.agent.provision" && message.verifyOnly)!;
+  await app.nodes.receive(
+    reconnect,
+    JSON.stringify({
+      type: "node.agent.provision.result",
+      requestId: verify.requestId,
+      agentId,
+      ok: true,
+      identity,
+    }),
+  );
+  expect(await resuming).toEqual({ ok: true });
+  expect(app.runs?.pauseReason(agentId)).toBeNull();
 });
 
 it("projects the last committed snapshot when two compactions share one clock tick", async () => {

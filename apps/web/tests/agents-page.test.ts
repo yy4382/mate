@@ -268,6 +268,37 @@ it("saves profile fields separately and only offers configured model services", 
   );
 });
 
+it("shows a confirmed Agent stop failure with its diagnostic action", async () => {
+  agents = [
+    {
+      id: "8bfb67a1-66ed-4d56-9052-4cc7eed926ae",
+      nodeId,
+      name: "Partner",
+      role: "Researcher",
+      description: "Old",
+      model: { provider: "openai", id: "gpt-4.1" },
+      initialChannelId: null,
+      sessionId,
+      status: "ready",
+      stage: "complete",
+      pausedReason: "manual",
+      stop: { state: "failed", receipt: { reason: "systemd_stop_failed" } },
+      error: null,
+      linuxIdentity: {
+        username: "mate_8bfb67a166ed4d5690524cc7",
+        uid: 23001,
+        gid: 23001,
+        home: "/var/lib/mate/agents/8bfb67a1-66ed-4d56-9052-4cc7eed926ae",
+      },
+      createdAt: 1,
+      updatedAt: 2,
+    },
+  ];
+  render(createElement(AgentsPage));
+  expect(await screen.findByText(/后台进程停止失败；请查看动态中的失败收据/)).toBeTruthy();
+  expect(screen.queryByText(/后台进程停止结果未知/)).toBeNull();
+});
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();

@@ -1495,7 +1495,9 @@ export function AgentsPage() {
                     <p className="agent-credential-note" role="status">
                       {agent.stop?.state === "succeeded"
                         ? "后台进程已确认停止；复启前会核对原 Linux 身份与 home。"
-                        : "后台进程停止结果未知；请查看动态与节点诊断。"}
+                        : agent.stop?.state === "failed"
+                          ? "后台进程停止失败；请查看动态中的失败收据与节点诊断后重试。"
+                          : "后台进程停止结果未知；请查看动态与节点诊断。"}
                     </p>
                   )}
                   <p className="agent-stage" role="status">

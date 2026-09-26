@@ -56,6 +56,7 @@ interface OperationRow {
   request_json: string;
   state: "executing" | Exclude<AgentProcessOperationState, "started">;
   receipt_json: string | null;
+  node_receipt_confirmed: 0 | 1;
 }
 
 /**
@@ -102,7 +103,7 @@ export class AgentProcessOperationBroker {
           if (existing.state === "succeeded" || existing.state === "failed") return existing;
           this.database
             .prepare(
-              "UPDATE owner_agent_process_operations SET state='executing',updated_at=? WHERE operation_id=? AND state='unknown'",
+              "UPDATE owner_agent_process_operations SET state='executing',node_receipt_confirmed=0,updated_at=? WHERE operation_id=? AND state='unknown'",
             )
             .run(this.now(), operationId);
           return this.read(operationId)!;
@@ -175,13 +176,13 @@ export class AgentProcessOperationBroker {
       return { corrected: false };
     if (row.state === "succeeded" || row.state === "failed")
       return { corrected: false, result: toResult(row) };
-    if (result.state === "unknown" && row.state === "unknown")
+    if (result.state === "unknown" && row.state === "unknown" && row.node_receipt_confirmed === 1)
       return { corrected: false, result: toResult(row) };
     this.database
       .transaction(() => {
         this.database
           .prepare(
-            `UPDATE owner_agent_process_operations SET state=?,receipt_json=?,updated_at=?
+            `UPDATE owner_agent_process_operations SET state=?,receipt_json=?,node_receipt_confirmed=1,updated_at=?
          WHERE operation_id=? AND state IN ('executing','unknown')`,
           )
           .run(
@@ -221,9 +222,11 @@ export class AgentProcessOperationBroker {
     request: { operationId: string; agentId: string; operation: AgentProcessOperation },
   ): Promise<AgentProcessOperationResult> {
     let result: AgentProcessNodeResult;
+    let confirmed = true;
     try {
       result = await this.nodes.executeAgentProcessOperation(nodeId, request);
     } catch {
+      confirmed = false;
       result = {
         operationId: request.operationId,
         agentId: request.agentId,
@@ -231,25 +234,30 @@ export class AgentProcessOperationBroker {
         receipt: { reason: "node_response_unavailable" },
       };
     }
-    if (result.operationId !== request.operationId || result.agentId !== request.agentId)
+    if (result.operationId !== request.operationId || result.agentId !== request.agentId) {
+      confirmed = false;
       result = {
         operationId: request.operationId,
         agentId: request.agentId,
         state: "unknown",
         receipt: { reason: "node_receipt_identity_mismatch" },
       };
+    }
     this.database
       .transaction(() => {
         this.database
           .prepare(
-            `UPDATE owner_agent_process_operations SET state=?,receipt_json=?,updated_at=?
-           WHERE operation_id=? AND state IN ('executing','unknown')`,
+            `UPDATE owner_agent_process_operations SET state=?,receipt_json=?,node_receipt_confirmed=?,updated_at=?
+           WHERE operation_id=? AND state IN ('executing','unknown')
+             AND (node_receipt_confirmed=0 OR ?=1)`,
           )
           .run(
             result.state,
             result.receipt === null ? null : JSON.stringify(result.receipt),
+            confirmed ? 1 : 0,
             this.now(),
             request.operationId,
+            confirmed ? 1 : 0,
           );
         this.appendSessionResult(this.read(request.operationId)!);
         recordAgentActivity(this.database, {
