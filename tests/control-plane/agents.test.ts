@@ -12,6 +12,7 @@ import {
   controlPlaneSchemaV11,
   controlPlaneSchemaV8,
   controlPlaneSchemaV14,
+  controlPlaneSchemaV15,
 } from "../../src/control-plane/schema.js";
 import { newAgentRequestSchema } from "../../src/control-plane/agents/contracts.js";
 import type { NodeSocket } from "../../src/control-plane/nodes/directory.js";
@@ -189,7 +190,7 @@ it("migrates paired-node control-plane data and enables Agent foreign keys", () 
 
   const auth = new OwnerAuth({ dataDir: directory });
   try {
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(15);
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(16);
     expect(auth.db.pragma("foreign_keys", { simple: true })).toBe(1);
     expect(auth.db.prepare("SELECT id FROM nodes").get()).toEqual({
       id: "c5342142-9cf5-4b22-86f3-bdc46bb471f2",
@@ -200,7 +201,7 @@ it("migrates paired-node control-plane data and enables Agent foreign keys", () 
       name: "owner_agents",
     });
     expect(controlPlaneMigrations.map((migration) => migration.fromRevision)).toEqual([
-      3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
+      3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
     ]);
   } finally {
     auth.close();
@@ -219,7 +220,7 @@ it("adds workspace access metadata on new and upgraded control-plane databases",
 
   const auth = new OwnerAuth({ dataDir: directory });
   try {
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(15);
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(16);
     expect(
       auth.db
         .prepare("SELECT name FROM sqlite_master WHERE name='owner_workspace_access_audit'")
@@ -236,7 +237,7 @@ it("adds workspace access metadata on new and upgraded control-plane databases",
     const newDirectory = mkdtempSync(join(tmpdir(), "mate-workspace-audit-new-")),
       newAuth = new OwnerAuth({ dataDir: newDirectory });
     try {
-      expect(newAuth.db.pragma("user_version", { simple: true })).toBe(15);
+      expect(newAuth.db.pragma("user_version", { simple: true })).toBe(16);
       expect(
         newAuth.db
           .prepare("SELECT name FROM sqlite_master WHERE name='owner_workspace_access_audit'")
@@ -245,6 +246,33 @@ it("adds workspace access metadata on new and upgraded control-plane databases",
     } finally {
       newAuth.close();
       rmSync(newDirectory, { recursive: true, force: true });
+    }
+  } finally {
+    auth.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+it("adds Agent recovery state to a revision 15 database while preserving file access audit", () => {
+  const directory = mkdtempSync(join(tmpdir(), "mate-recovery-migration-")),
+    databasePath = join(directory, "control-plane.sqlite"),
+    old = new Database(databasePath);
+  old.exec(controlPlaneSchemaV15);
+  old.pragma("application_id = 1296257100");
+  old.pragma("user_version = 15");
+  old.close();
+
+  const auth = new OwnerAuth({ dataDir: directory });
+  try {
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(16);
+    for (const table of [
+      "owner_workspace_access_audit",
+      "owner_agent_activity",
+      "owner_agent_run_control",
+    ]) {
+      expect(auth.db.prepare("SELECT name FROM sqlite_master WHERE name=?").get(table)).toEqual({
+        name: table,
+      });
     }
   } finally {
     auth.close();
@@ -300,7 +328,7 @@ it("backfills committed conversation tool actions into recoverable journal histo
 
   const auth = new OwnerAuth({ dataDir: directory });
   try {
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(15);
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(16);
     expect(
       auth.db
         .prepare(
@@ -361,7 +389,7 @@ it("backfills pending channel deliveries into the shared session journal when up
 
   const auth = new OwnerAuth({ dataDir: directory });
   try {
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(15);
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(16);
     expect(
       auth.db
         .prepare(

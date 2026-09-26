@@ -3144,7 +3144,7 @@ it("marks an unfinished workspace download as interrupted after control-plane re
      ) VALUES(?,?,?,?,?,?,?,?)`,
   ).run(Date.now(), "owner", "owner", agentId, "download", '["notes.txt"]', "started", downloadId);
 
-  const restartedWorkspace = new WorkspaceService(db, app.nodes);
+  const restartedWorkspace = new WorkspaceService(db, app.nodes, app.chat);
 
   expect(
     db
