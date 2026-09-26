@@ -1156,15 +1156,20 @@ function operationPaths(operation: Exclude<Operation, { kind: "exec" }>): string
 }
 
 function safeAuditPath(path: string, home?: string): string {
-  if (path.includes("\0")) return "[invalid path]";
-  if (path.startsWith("/") && home?.startsWith("/")) {
-    const relative = posixPath.relative(posixPath.normalize(home), posixPath.normalize(path));
-    if (relative === "" || (!relative.startsWith("../") && relative !== ".."))
-      return relative.slice(0, 4096);
-    return "[absolute path request]";
+  const segments = path.split("/").filter((part) => part !== "" && part !== ".");
+  if (path.includes("\0") || segments.includes("..")) return "[invalid path]";
+  if (path.startsWith("/")) {
+    if (!home?.startsWith("/")) return "[absolute path request]";
+    const normalizedHome = posixPath.normalize(home),
+      normalizedPath = posixPath.normalize(path);
+    if (normalizedPath !== normalizedHome && !normalizedPath.startsWith(`${normalizedHome}/`))
+      return "[absolute path request]";
+    const relative = posixPath.relative(normalizedHome, normalizedPath);
+    return relative.slice(0, 4096);
   }
-  if (path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path)) return "[absolute path request]";
-  return path.slice(0, 4096);
+  if (/^[A-Za-z]:[\\/]/.test(path)) return "[absolute path request]";
+  const normalized = posixPath.normalize(path);
+  return (normalized === "." ? "" : normalized).slice(0, 4096);
 }
 
 function workspaceAccessErrorCode(error: unknown): string {

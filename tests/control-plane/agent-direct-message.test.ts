@@ -2625,7 +2625,10 @@ it("records owner workspace reads and safe failure codes without file contents",
     let code = 0,
       stdout = "{}",
       stderr = "";
-    if (operation.path === "missing.txt") {
+    if (operation.path.includes("..") || operation.path.includes("\0")) {
+      code = 1;
+      stderr = "unsafe_path: Path escapes the workspace";
+    } else if (operation.path === "missing.txt") {
       code = 1;
       stderr = `Error: ENOENT: no such file or directory, open '${"m".repeat(650)}'\n    at openSync (node:fs:...)`;
     } else if (operation.path === "private.txt") {
@@ -2666,6 +2669,18 @@ it("records owner workspace reads and safe failure codes without file contents",
       `/api/owner/agents/${agentId}/workspace?path=${encodeURIComponent(`/var/lib/mate/agents/${agentId}/notes`)}`,
       { headers: { cookie } },
     ),
+    relativeTraversal = await app.request(
+      `/api/owner/agents/${agentId}/workspace?path=${encodeURIComponent("../../etc/passwd")}`,
+      { headers: { cookie } },
+    ),
+    absoluteTraversal = await app.request(
+      `/api/owner/agents/${agentId}/workspace?path=${encodeURIComponent(`/var/lib/mate/agents/${agentId}/notes/../safe.txt`)}`,
+      { headers: { cookie } },
+    ),
+    nulPath = await app.request(
+      `/api/owner/agents/${agentId}/workspace?path=${encodeURIComponent("notes\0.txt")}`,
+      { headers: { cookie } },
+    ),
     outsideAbsoluteListing = await app.request(
       `/api/owner/agents/${agentId}/workspace?path=${encodeURIComponent("/etc/passwd")}`,
       { headers: { cookie } },
@@ -2678,6 +2693,9 @@ it("records owner workspace reads and safe failure codes without file contents",
     });
   expect(listing.status).toBe(200);
   expect(absoluteListing.status).toBe(200);
+  expect(relativeTraversal.status).toBe(403);
+  expect(absoluteTraversal.status).toBe(403);
+  expect(nulPath.status).toBe(403);
   expect(outsideAbsoluteListing.status).toBe(200);
   expect(missing.status).toBe(404);
   expect(denied.status).toBe(403);
@@ -2788,7 +2806,12 @@ it("records owner workspace reads and safe failure codes without file contents",
       }),
     ]),
   );
-  expect(JSON.stringify(audit)).not.toContain("safe");
+  expect(
+    audit
+      .filter((row) => row.operation === "list" && row.result === "failed")
+      .map((row) => row.relative_paths),
+  ).toEqual(['["[invalid path]"]', '["[invalid path]"]', '["[invalid path]"]']);
+  expect(JSON.stringify(audit)).not.toContain("safe.txt");
   expect(db.prepare("PRAGMA table_info(owner_workspace_access_audit)").all()).not.toContainEqual(
     expect.objectContaining({ name: "content" }),
   );
