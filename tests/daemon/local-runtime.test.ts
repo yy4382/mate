@@ -1,17 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  realpathSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, realpathSync } from "node:fs";
 import Database from "better-sqlite3";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { execFileSync } from "node:child_process";
+import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { Daemon } from "../../src/daemon/app.js";
 import { LocalConsole } from "../../src/local/console.js";
@@ -516,8 +507,8 @@ it("failed startup closes owned resources and releases the singleton lock automa
   acquireLock(join(c.runtime.dataDir, "state", "daemon.lock"))();
   await d.close();
 });
-it("JSONL console reports request errors and the real CLI starts, reads and controls the same local store", async () => {
-  const { c, root } = config(),
+it("JSONL console reports request errors", async () => {
+  const { c } = config(),
     d = await daemon(c),
     input = new PassThrough(),
     output = new PassThrough();
@@ -533,33 +524,6 @@ it("JSONL console reports request errors and the real CLI starts, reads and cont
   expect(JSON.parse(text.split("\n")[0]!)).toHaveProperty("error");
   expect(JSON.parse(text.split("\n")[1]!).result).toEqual([{ conversationId: "local-room" }]);
   await d.close();
-  const path = join(root, "config.json");
-  writeFileSync(path, JSON.stringify(c));
-  const lines = [
-    { id: "pause", op: "control", human: "owner", text: "agent-stop research" },
-    {
-      id: "send",
-      op: "send",
-      human: "owner",
-      eventId: "cli-message",
-      target: { conversationId: "local-room" },
-      text: "from real CLI",
-    },
-    { id: "read", op: "read", human: "owner", target: { conversationId: "local-room" } },
-  ];
-  const result = execFileSync(process.execPath, [resolve("dist/src/main.js"), "local", path], {
-    input: lines.map((x) => JSON.stringify(x)).join("\n") + "\n",
-    env: { ...process.env, MODEL_API_KEY: "synthetic" },
-    encoding: "utf8",
-    timeout: 10000,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-  const replies = result
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line));
-  expect(replies).toHaveLength(3);
-  expect(replies[2].result.messages[0].text).toBe("from real CLI");
 });
 it("removing and explicitly re-adding a local room preserves history and requires an explicit membership delta again", async () => {
   const { c, root } = config(),

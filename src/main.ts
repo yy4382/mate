@@ -1,9 +1,6 @@
-import { LocalConsole } from "./local/console.js";
 import { resolve, join, dirname } from "node:path";
-import pino from "pino";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { daemonConfigSchema } from "./daemon/config.js";
-import { Daemon } from "./daemon/app.js";
 import { Store } from "./storage/store.js";
 import { backup } from "./daemon/backup.js";
 import { restoreCheckpoint } from "./daemon/restore.js";
@@ -11,7 +8,6 @@ import { requiredSlackBotScopes } from "./slack/protocol.js";
 import { runDoctor } from "./deployment/doctor.js";
 import { runOfflineProbe } from "./deployment/probe.js";
 import { assertLinuxOperationAllowed } from "./deployment/linux-upgrade-guard.js";
-import { completeManagedStartup } from "./deployment/readiness.js";
 import { hostProcessManager, hostRules } from "./deployment/host-rules.js";
 import {
   isEntryModule,
@@ -48,6 +44,8 @@ async function assertLinuxMaintenanceStopped(
 export async function main(args = process.argv.slice(2)): Promise<void> {
   const [command, configPath, destination] = args,
     host = nodeHostOperations();
+  if (command === "start" || command === "local")
+    throw new Error("Legacy daemon entry is disabled; start the web control plane instead");
   if (command === "models") {
     process.stdout.write(
       JSON.stringify(
@@ -61,13 +59,11 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     return;
   }
   if (
-    !["check", "doctor", "offline-probe", "start", "local", "backup", "restore"].includes(
-      command ?? "",
-    ) ||
+    !["check", "doctor", "offline-probe", "backup", "restore"].includes(command ?? "") ||
     !configPath
   )
     throw new Error(
-      "Usage: mate check|doctor|offline-probe|start|local CONFIG; mate backup CONFIG DESTINATION; mate restore CONFIG BACKUP [--replace CURRENT_CHECKPOINT]; mate models [PROVIDER]",
+      "Usage: mate check|doctor|offline-probe CONFIG; mate backup CONFIG DESTINATION; mate restore CONFIG BACKUP [--replace CURRENT_CHECKPOINT]; mate models [PROVIDER]",
     );
   const config = daemonConfigSchema.parse(
     JSON.parse(await readOperatorText(host, resolve(configPath))),
@@ -174,44 +170,6 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     }
     process.stdout.write("Consistent database and memory checkpoint created.\n");
     return;
-  }
-  const log = pino(
-    {
-      level: "info",
-      redact: ["token", "apiKey", "authorization", "*.token", "*.apiKey", "*.authorization"],
-    },
-    pino.destination(2),
-  );
-  const daemon = await Daemon.create(config, log);
-  const consoleAbort = new AbortController();
-  let closing: Promise<void> | undefined;
-  const close = () => {
-    consoleAbort.abort();
-    closing ??= daemon.close();
-    return closing;
-  };
-  process.once("SIGINT", () => {
-    void close();
-  });
-  process.once("SIGTERM", () => {
-    void close();
-  });
-  try {
-    if (command === "local" && !daemon.local)
-      throw new Error("Configure adapters.local before using the local console");
-    if (command === "start") await completeManagedStartup((progress) => daemon.start(progress));
-    else await daemon.start();
-    if (command === "local") {
-      await new LocalConsole(daemon.local!, daemon.controls).serve(
-        process.stdin,
-        process.stdout,
-        consoleAbort.signal,
-      );
-      await close();
-    }
-  } catch {
-    await close();
-    throw new Error("Daemon startup failed; check installation identities and credentials");
   }
 }
 export function isMainModule(argument: string | undefined, moduleUrl = import.meta.url): boolean {
