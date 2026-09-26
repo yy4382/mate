@@ -84,7 +84,10 @@ export function registerWorkspaceRoutes(
       context.header("Cache-Control", "no-store");
       context.header("Content-Type", "application/octet-stream");
       context.header("Content-Length", String(download.size));
-      context.header("Content-Disposition", contentDisposition(path.split("/").filter(Boolean).at(-1) ?? "file"));
+      context.header(
+        "Content-Disposition",
+        contentDisposition(path.split("/").filter(Boolean).at(-1) ?? "file"),
+      );
       context.header("X-Content-Type-Options", "nosniff");
       context.header("X-Accel-Buffering", "no");
       return context.newResponse(download.stream);
@@ -96,7 +99,9 @@ export function registerWorkspaceRoutes(
   app.get("/api/owner/channels/:channelId/attachments", (context) => {
     try {
       context.header("Cache-Control", "no-store");
-      return context.json({ attachments: attachments.listForOwner(context.req.param("channelId")) });
+      return context.json({
+        attachments: attachments.listForOwner(context.req.param("channelId")),
+      });
     } catch (error) {
       return errorResponse(context, error);
     }
@@ -104,11 +109,17 @@ export function registerWorkspaceRoutes(
 
   app.post("/api/owner/channels/:channelId/attachments", async (context) => {
     const body = context.req.raw.body,
-      filename = context.req.header("x-mate-filename"),
+      encodedFilename = context.req.header("x-mate-filename"),
       contentType = context.req.header("content-type") ?? "application/octet-stream",
       contentLength = context.req.header("content-length"),
       expectedLength = contentLength === undefined ? undefined : queryInteger(contentLength);
-    if (!body || !filename || expectedLength === undefined && contentLength !== undefined)
+    let filename: string | undefined;
+    try {
+      filename = encodedFilename === undefined ? undefined : decodeURIComponent(encodedFilename);
+    } catch {
+      return context.json({ error: "附件文件名编码无效。", code: "invalid_filename" }, 400);
+    }
+    if (!body || !filename || (expectedLength === undefined && contentLength !== undefined))
       return context.json({ error: "附件上传请求无效。", code: "invalid_request" }, 400);
     try {
       const attachment = await attachments.uploadForOwner({
@@ -151,10 +162,7 @@ function queryInteger(value: string | undefined, fallback?: number): number | un
   return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
 
-function errorResponse(
-  context: Context,
-  error: unknown,
-) {
+function errorResponse(context: Context, error: unknown) {
   if (error instanceof WorkspaceError) {
     if (error.code === "node_offline")
       return context.json(

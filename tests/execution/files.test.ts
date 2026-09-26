@@ -88,6 +88,20 @@ it("stdin accepts large Unicode/control-character writes without argv expansion"
   expect(readFileSync(`${root}/large`, "utf8")).toBe(value);
   expect(invoke(root, { kind: "read", path: "large" }).code).not.toBe(0);
 });
+it("keeps direct Agent reads within the node receipt limit and directs larger reads to chunks", () => {
+  const root = temp(),
+    content = "x".repeat(10_000);
+  expect(invoke(root, { kind: "write", path: "large.txt", content }).code).toBe(0);
+  const fullRead = invoke(root, { kind: "read", path: "large.txt" });
+  expect(fullRead.code).not.toBe(0);
+  expect(fullRead.stderr).toContain("workspace.read_chunk");
+  const chunk = JSON.parse(
+    invoke(root, { kind: "workspace_read_chunk", path: "large.txt", offset: 0, length: 8192 })
+      .stdout,
+  );
+  expect(chunk.totalBytes).toBe(10_000);
+  expect(Buffer.from(chunk.base64, "base64")).toEqual(Buffer.from(content.slice(0, 8192)));
+});
 it("backend decodes split Unicode output as a stream", async () => {
   const root = temp(),
     helper = `${root}/synthetic.cjs`;

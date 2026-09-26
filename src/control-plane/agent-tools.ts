@@ -77,7 +77,8 @@ export const agentWorkspaceOperations = Object.freeze({
     seatPolicy: "deny" as const,
   },
   "workspace.read": {
-    description: "读取私人 home 中不超过 64 KiB 的 UTF-8 文本文件。",
+    description:
+      "读取私人 home 中不超过 8 KiB 的 UTF-8 文本文件；更大的文件使用 read_chunk 分页读取。",
     schema: z.object({ path: workspacePath }).strict(),
     seatPolicy: "deny" as const,
   },

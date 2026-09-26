@@ -199,7 +199,7 @@ it("migrates paired-node control-plane data and enables Agent foreign keys", () 
       name: "owner_agents",
     });
     expect(controlPlaneMigrations.map((migration) => migration.fromRevision)).toEqual([
-      3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+      3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
     ]);
   } finally {
     auth.close();

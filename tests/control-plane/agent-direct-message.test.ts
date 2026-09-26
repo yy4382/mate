@@ -149,12 +149,13 @@ async function callAgentTool(
   input: Record<string, unknown>,
   identity: { agentId?: string } = {},
 ) {
-  const fromIndex = socket.sent.length;
+  const fromIndex = socket.sent.length,
+    requestId = randomUUID();
   await app.nodes.receive(
     socket,
     JSON.stringify({
       type: "node.agent.run.tool",
-      requestId: randomUUID(),
+      requestId,
       runId: run.runId,
       agentId: identity.agentId ?? run.agentId,
       toolCallId,
@@ -165,31 +166,30 @@ async function callAgentTool(
   const deadline = Date.now() + 4000;
   let response: string | undefined;
   while (Date.now() < deadline) {
-    response = socket.sent
-      .slice(fromIndex)
-      .map((text) => JSON.parse(text) as { type?: string; toolCallId?: string })
-      .findLast(
-        (message) =>
-          message.type === "control.agent.run.tool_result" && message.toolCallId === toolCallId,
-      )
-      ? socket.sent.slice(fromIndex).findLast((text) => {
-          const message = JSON.parse(text) as { type?: string; toolCallId?: string };
-          return (
-            message.type === "control.agent.run.tool_result" && message.toolCallId === toolCallId
-          );
-        })
-      : undefined;
+    response = socket.sent.slice(fromIndex).findLast((text) => {
+      const message = JSON.parse(text) as {
+        type?: string;
+        requestId?: string;
+        toolCallId?: string;
+      };
+      return (
+        (message.type === "control.agent.run.tool_result" && message.toolCallId === toolCallId) ||
+        (message.type === "control.error" && message.requestId === requestId)
+      );
+    });
     if (response) break;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   if (!response) throw new Error(`Agent tool ${toolCallId} did not return a result`);
   return JSON.parse(response) as {
     type: string;
-    runId: string;
-    toolCallId: string;
-    ok: boolean;
+    runId?: string;
+    toolCallId?: string;
+    ok?: boolean;
     error?: string;
     result?: unknown;
+    code?: string;
+    message?: string;
   };
 }
 
@@ -2334,7 +2334,12 @@ it("publishes Agent workspace files to a joined conversation in bounded chunks a
       input: { path: "notes.txt", filename: "共享笔记.txt" },
     },
     actionId = stableToolActionId(run.actionScopeId, input),
-    published = await callAgentTool(app, socket, run, actionId, "tools.call", input);
+    attempts = await Promise.all([
+      callAgentTool(app, socket, run, actionId, "tools.call", input),
+      callAgentTool(app, socket, run, actionId, "tools.call", input),
+    ]),
+    published = attempts.find((attempt) => attempt.ok)!;
+  expect(attempts.filter((attempt) => attempt.ok)).toHaveLength(1);
   expect(published).toMatchObject({
     ok: true,
     result: { filename: "共享笔记.txt", size: 5, uploader: { kind: "agent", id: agentId } },
@@ -2371,4 +2376,120 @@ it("publishes Agent workspace files to a joined conversation in bounded chunks a
   const revokedReplay = await callAgentTool(app, socket, run, actionId, "tools.call", input);
   expect(revokedReplay.ok).toBe(false);
   expect(requests).toHaveLength(3);
+});
+
+it("streams the owner workspace download one bounded node chunk at a time and stops on cancellation", async () => {
+  const { app, cookie, nodeId, socket } = await setup(),
+    agentId = randomUUID(),
+    data = Buffer.from("agent workspace content ".repeat(1200)),
+    version = {
+      device: "1",
+      inode: "2",
+      size: data.byteLength,
+      modifiedNs: "3",
+      changedNs: "4",
+    },
+    requests: Array<{ kind: string; offset?: number; length?: number }> = [];
+  app.agents.prepare({
+    id: agentId,
+    nodeId,
+    name: "Workspace browser",
+    role: "Keeps research files",
+    description: "Synthetic workspace test.",
+    model: { provider: "openai", id: "gpt-4.1" },
+  });
+  app.agents.complete(
+    agentId,
+    {
+      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      uid: 23001,
+      gid: 23001,
+      home: `/var/lib/mate/agents/${agentId}`,
+    },
+    app.chat,
+  );
+  socket.onWorkspaceOperation = async (message) => {
+    const operation = message.operation as {
+      kind: string;
+      path: string;
+      offset?: number;
+      length?: number;
+    };
+    requests.push(operation);
+    const stdout =
+      operation.kind === "workspace_stat"
+        ? JSON.stringify({ type: "file", size: data.byteLength, modifiedAt: 1, version })
+        : operation.kind === "workspace_list"
+          ? JSON.stringify({
+              path: operation.path,
+              entries: [{ name: "large.bin", type: "file", size: data.byteLength }],
+              nextOffset: null,
+            })
+          : JSON.stringify({
+              base64: data
+                .subarray(operation.offset, operation.offset! + operation.length!)
+                .toString("base64"),
+              offset: operation.offset,
+              totalBytes: data.byteLength,
+              version,
+            });
+    await app.nodes.receive(
+      socket,
+      JSON.stringify({
+        type: "node.workspace.operation.result",
+        requestId: message.requestId,
+        operationId: message.operationId,
+        agentId,
+        ok: true,
+        result: { code: 0, stdout, stderr: "", truncated: false },
+      }),
+    );
+  };
+
+  const listing = await app.request(
+    `/api/owner/agents/${agentId}/workspace?path=&offset=0&limit=32`,
+    {
+      headers: { cookie },
+    },
+  );
+  expect(listing.status).toBe(200);
+  expect(await listing.json()).toMatchObject({
+    entries: [{ name: "large.bin", size: data.byteLength }],
+  });
+
+  const download = await app.request(
+    `/api/owner/agents/${agentId}/workspace/download?path=large.bin`,
+    { headers: { cookie } },
+  );
+  expect(download.status).toBe(200);
+  expect(download.headers.get("content-length")).toBe(String(data.byteLength));
+  const reader = download.body!.getReader(),
+    chunks: Uint8Array[] = [];
+  for (;;) {
+    const item = await reader.read();
+    if (item.done) break;
+    expect(item.value.byteLength).toBeLessThanOrEqual(8192);
+    chunks.push(item.value);
+  }
+  expect(Buffer.concat(chunks).equals(data)).toBe(true);
+  const downloadChunks = requests.filter((request) => request.kind === "workspace_read_chunk");
+  expect(downloadChunks).toHaveLength(Math.ceil(data.byteLength / 8192));
+  expect(downloadChunks.every((request) => request.length === 8192)).toBe(true);
+
+  const previousChunks = requests.filter(
+      (request) => request.kind === "workspace_read_chunk",
+    ).length,
+    interrupted = await app.request(
+      `/api/owner/agents/${agentId}/workspace/download?path=large.bin`,
+      { headers: { cookie } },
+    ),
+    interruptReader = interrupted.body!.getReader();
+  const first = await interruptReader.read();
+  expect(first.done).toBe(false);
+  expect(first.value!.byteLength).toBeLessThanOrEqual(8192);
+  await interruptReader.cancel();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const interruptedChunks =
+    requests.filter((request) => request.kind === "workspace_read_chunk").length - previousChunks;
+  expect(interruptedChunks).toBeLessThanOrEqual(2);
 });

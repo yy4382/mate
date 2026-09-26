@@ -286,63 +286,56 @@ export class AttachmentService {
     if (!input.actionId.startsWith(`mate:${scope.delivery_id}:`))
       throw new AttachmentError("operation_conflict", "文件发布 ID 与当前消息授权不匹配。", 403);
     const operationId = operationIdForAction(input.actionId),
-      request = { path: input.path, filename, channelId: scope.channel_id },
       requestHash = createHash("sha256")
-        .update(JSON.stringify({ operation: input.operationName, input: input.toolInput }))
+        .update(
+          canonicalJson({
+            operation: input.operationName,
+            input: input.toolInput,
+            destination: { path: input.path, filename, channelId: scope.channel_id },
+          }),
+        )
         .digest("hex"),
-      existing = this.db
+      id = randomUUID(),
+      storageKey = randomUUID(),
+      tempPath = this.storagePath(`${storageKey}.uploading`),
+      finalPath = this.storagePath(`${storageKey}.blob`),
+      createdAt = this.now(),
+      contentType = "application/octet-stream";
+    const reserve = this.db.transaction(() => {
+      const existing = this.db
         .prepare(
           `SELECT request_hash,result_json FROM owner_agent_tool_actions
            WHERE session_id=? AND action_id=?`,
         )
         .get(scope.session_id, input.actionId) as
         { request_hash: string; result_json: string } | undefined;
-    if (existing) {
-      if (existing.request_hash !== requestHash)
-        throw new AttachmentError("operation_conflict", "操作 ID 已用于另一份文件。", 409);
-      const result = parseActionResult(existing.result_json);
-      if (result.state === "succeeded")
-        return parsePublishedAttachment(JSON.stringify(result.result));
-      if (result.state === "failed")
-        throw new AttachmentError("upload_failed", "文件发布失败。", 409);
-      if (result.operationId !== operationId)
-        throw new AttachmentError("operation_unknown", "文件发布结果尚未确认。", 409);
-    }
-
-    const id = randomUUID(),
-      storageKey = randomUUID(),
-      tempPath = this.storagePath(`${storageKey}.uploading`),
-      finalPath = this.storagePath(`${storageKey}.blob`),
-      createdAt = this.now(),
-      contentType = "application/octet-stream";
-    const insert = this.db.transaction(() => {
-      if (!existing) {
-        this.db
-          .prepare(
-            `INSERT INTO owner_agent_tool_actions(
-               session_id,action_id,agent_id,operation,request_hash,result_json,created_at
-             ) VALUES(?,?,?,?,?,?,?)`,
-          )
-          .run(
-            scope.session_id,
-            input.actionId,
-            input.agentId,
-            input.operationName,
-            requestHash,
-            JSON.stringify({ state: "executing", operationId }),
-            createdAt,
-          );
-      } else {
-        this.db
-          .prepare(
-            `UPDATE owner_agent_tool_actions SET result_json=? WHERE session_id=? AND action_id=?`,
-          )
-          .run(
-            JSON.stringify({ state: "executing", operationId }),
-            scope.session_id,
-            input.actionId,
-          );
+      if (existing) {
+        if (existing.request_hash !== requestHash)
+          throw new AttachmentError("operation_conflict", "操作 ID 已用于另一份文件。", 409);
+        const result = parseActionResult(existing.result_json);
+        if (result.operationId !== operationId)
+          throw new AttachmentError("operation_conflict", "文件发布收据与操作 ID 不匹配。", 409);
+        if (result.state === "succeeded")
+          return { kind: "done" as const, result: parsePublishedAttachment(result.result) };
+        if (result.state === "failed")
+          throw new AttachmentError("upload_failed", "文件发布失败。", 409);
+        throw new AttachmentError("operation_unknown", "文件发布仍在执行或结果尚未确认。", 409);
       }
+      this.db
+        .prepare(
+          `INSERT INTO owner_agent_tool_actions(
+             session_id,action_id,agent_id,operation,request_hash,result_json,created_at
+           ) VALUES(?,?,?,?,?,?,?)`,
+        )
+        .run(
+          scope.session_id,
+          input.actionId,
+          input.agentId,
+          input.operationName,
+          requestHash,
+          JSON.stringify({ state: "executing", operationId }),
+          createdAt,
+        );
       insertUploading(this.db, {
         id,
         channelId: scope.channel_id,
@@ -353,8 +346,10 @@ export class AttachmentService {
         uploaderId: input.agentId,
         createdAt,
       });
+      return { kind: "started" as const };
     });
-    insert.immediate();
+    const reservation = reserve.immediate();
+    if (reservation.kind === "done") return reservation.result;
     try {
       const statResult = await this.workspaces.readForAgentPublish(input.runId, input.agentId, {
         kind: "workspace_stat",
@@ -791,13 +786,34 @@ function parseActionResult(value: string): {
   }
 }
 
-function parsePublishedAttachment(value: string | null): AttachmentSummary {
-  if (value === null) throw new AttachmentError("operation_unknown", "发布收据缺失。", 409);
+function parsePublishedAttachment(value: unknown): AttachmentSummary {
   try {
-    const parsed = JSON.parse(value) as AttachmentSummary;
-    if (!parsed.id || !parsed.filename || !Number.isSafeInteger(parsed.size)) throw new Error();
+    const parsed =
+      typeof value === "string"
+        ? (JSON.parse(value) as AttachmentSummary)
+        : (value as AttachmentSummary);
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      typeof parsed.id !== "string" ||
+      typeof parsed.channelId !== "string" ||
+      typeof parsed.filename !== "string" ||
+      !Number.isSafeInteger(parsed.size) ||
+      typeof parsed.sha256 !== "string" ||
+      !parsed.uploader
+    )
+      throw new Error();
     return parsed;
   } catch {
     throw new AttachmentError("operation_unknown", "发布收据无法读取。", 409);
   }
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (typeof value !== "object" || value === null) return JSON.stringify(value);
+  return `{${Object.entries(value as Record<string, unknown>)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`)
+    .join(",")}}`;
 }

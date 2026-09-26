@@ -13,10 +13,7 @@ import {
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { ExecutionBackend, ExecutionResult, Operation } from "../execution/backend.js";
 import { LinuxUserBackend, type LinuxIdentity } from "../execution/linux-user.js";
-import {
-  readProvisionedLinuxAgentIdentity,
-  type LinuxAgentIdentity,
-} from "./agent-provisioner.js";
+import { readProvisionedLinuxAgentIdentity, type LinuxAgentIdentity } from "./agent-provisioner.js";
 
 export type WorkspaceMode = "owner_read" | "agent_read" | "agent_action" | "agent_publish";
 
@@ -226,7 +223,7 @@ function validateRequest(request: WorkspaceExecutionRequest): void {
     (request.mode === "owner_read" || request.mode === "agent_publish") &&
     !readKinds.has(request.operation.kind)
   )
-    throw new Error("Owner browsing and file publishing allow bounded read operations only");
+    throw new Error("Owner browsing and file publishing allow read operations only");
 }
 
 function failed(stderr: string): ExecutionResult {

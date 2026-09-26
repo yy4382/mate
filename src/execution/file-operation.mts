@@ -5,6 +5,7 @@ import {
   readSync,
   readFileSync,
   closeSync,
+  existsSync,
   writeFileSync,
   renameSync,
   mkdirSync,
@@ -15,7 +16,7 @@ import {
   rmdirSync,
   fstatSync,
 } from "node:fs";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { within } from "./paths.js";
 import type { Operation } from "./backend.js";
@@ -23,11 +24,73 @@ const root = resolve(process.argv[2]!);
 if (!lstatSync(root).isDirectory()) throw new Error("Workspace root must be a directory");
 const privateMode = process.argv[3] !== "022";
 process.umask(privateMode ? 0o077 : 0o022);
+const pinnedDirectoryPaths = process.platform === "linux" && existsSync("/proc/self/fd"),
+  rootDescriptor = pinnedDirectoryPaths
+    ? openSync(root, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
+    : undefined,
+  pinnedDescriptors = new Set<number>();
+if (rootDescriptor !== undefined) {
+  const rootStat = fstatSync(rootDescriptor),
+    pathStat = lstatSync(root);
+  if (!rootStat.isDirectory() || rootStat.dev !== pathStat.dev || rootStat.ino !== pathStat.ino)
+    throw new Error("unsafe_path: Workspace root changed while it was opened");
+}
 const operation = JSON.parse(readFileSync(0, "utf8")) as Exclude<Operation, { kind: "exec" }>;
-function checked(path: string, allowMissing = false): string {
-  if (path.includes("\0") || isAbsolute(path)) throw new Error("unsafe_path: Invalid workspace path");
-  const parts = path.split("/").filter((part) => part !== "" && part !== ".");
-  if (parts.some((part) => part === "..")) throw new Error("unsafe_path: Path escapes the workspace");
+function checked(path: string, allowMissing = false, createParents = false): string {
+  let workspacePath = path;
+  if (isAbsolute(workspacePath)) {
+    if (workspacePath === root) workspacePath = ".";
+    else if (workspacePath.startsWith(`${root}/`))
+      workspacePath = workspacePath.slice(root.length + 1);
+    else throw new Error("unsafe_path: Path escapes the workspace");
+  }
+  if (workspacePath.includes("\0")) throw new Error("unsafe_path: Invalid workspace path");
+  const parts = workspacePath.split("/").filter((part) => part !== "" && part !== ".");
+  if (parts.some((part) => part === ".."))
+    throw new Error("unsafe_path: Path escapes the workspace");
+  if (pinnedDirectoryPaths && rootDescriptor !== undefined) {
+    if (parts.length === 0) return `${descriptorPath(rootDescriptor)}/.`;
+    let parent = rootDescriptor,
+      ownedParent = false;
+    try {
+      for (const part of parts.slice(0, -1)) {
+        const candidate = `${descriptorPath(parent)}/${part}`;
+        let child: number;
+        try {
+          child = openSync(
+            candidate,
+            constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+          );
+        } catch (error) {
+          if (!createParents || (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          try {
+            mkdirSync(candidate, { mode: privateMode ? 0o700 : 0o755 });
+          } catch (mkdirError) {
+            if ((mkdirError as NodeJS.ErrnoException).code !== "EEXIST") throw mkdirError;
+          }
+          child = openSync(
+            candidate,
+            constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+          );
+        }
+        if (ownedParent) closeSync(parent);
+        parent = child;
+        ownedParent = true;
+      }
+      const target = `${descriptorPath(parent)}/${parts.at(-1)!}`;
+      try {
+        if (lstatSync(target).isSymbolicLink())
+          throw new Error("unsafe_path: Symbolic links are not followed in the workspace");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT" || !allowMissing) throw error;
+      }
+      if (ownedParent) pinnedDescriptors.add(parent);
+      return target;
+    } catch (error) {
+      if (ownedParent) closeSync(parent);
+      throw error;
+    }
+  }
   let target = root,
     missing = false;
   for (const part of parts) {
@@ -44,6 +107,38 @@ function checked(path: string, allowMissing = false): string {
   }
   return target;
 }
+function descriptorPath(descriptor: number): string {
+  return `/proc/self/fd/${descriptor}`;
+}
+function releasePinned(path: string): void {
+  if (!pinnedDirectoryPaths || rootDescriptor === undefined) return;
+  const match = path.match(/^\/proc\/self\/fd\/(\d+)(?:\/|$)/),
+    descriptor = match ? Number(match[1]) : undefined;
+  if (
+    descriptor !== undefined &&
+    descriptor !== rootDescriptor &&
+    pinnedDescriptors.delete(descriptor)
+  )
+    closeSync(descriptor);
+}
+function directoryNames(path: string): string[] {
+  if (!pinnedDirectoryPaths) return readdirSync(path);
+  const before = lstatSync(path);
+  if (!before.isDirectory() || before.isSymbolicLink())
+    throw new Error("unsafe_path: A real workspace directory is required");
+  const descriptor = openSync(
+    path,
+    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+  );
+  try {
+    const opened = fstatSync(descriptor);
+    if (!opened.isDirectory() || opened.dev !== before.dev || opened.ino !== before.ino)
+      throw new Error("unsafe_path: Workspace directory changed while it was opened");
+    return readdirSync(descriptorPath(descriptor));
+  } finally {
+    closeSync(descriptor);
+  }
+}
 function content(path: string): Buffer {
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
@@ -59,9 +154,9 @@ function content(path: string): Buffer {
 }
 const hash = (data: Buffer | string) => createHash("sha256").update(data).digest("hex");
 const json = (value: unknown) => process.stdout.write(JSON.stringify(value));
-function save(path: string, value: string | Buffer) {
+function save(path: string, value: string | Buffer, workspacePath: string) {
   if (Buffer.byteLength(value) > 1000000) throw new Error("File exceeds 1 MB limit");
-  mkdirSync(dirname(path), { recursive: true });
+  if (!pinnedDirectoryPaths) mkdirSync(dirname(path), { recursive: true });
   const temp = `${path}.${randomUUID()}.tmp`;
   try {
     let existing = false;
@@ -74,11 +169,27 @@ function save(path: string, value: string | Buffer) {
     }
     if (existing) {
       const old = content(path),
-        history = checked(`${relative(root, path)}.history`, true);
-      mkdirSync(history, { recursive: true });
-      writeFileSync(`${history}/${Date.now()}-${randomUUID()}`, old, { flag: "wx", mode: 0o600 });
-      for (const oldName of readdirSync(history).sort().slice(0, -5))
-        unlinkSync(checked(`${relative(root, history)}/${oldName}`));
+        history = checked(`${workspacePath}.history`, true);
+      try {
+        mkdirSync(history, { mode: 0o700 });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
+      const historyFile = checked(`${workspacePath}.history/${Date.now()}-${randomUUID()}`, true);
+      try {
+        writeFileSync(historyFile, old, { flag: "wx", mode: 0o600 });
+      } finally {
+        releasePinned(historyFile);
+      }
+      for (const oldName of directoryNames(history).sort().slice(0, -5)) {
+        const oldPath = checked(`${workspacePath}.history/${oldName}`);
+        try {
+          unlinkSync(oldPath);
+        } finally {
+          releasePinned(oldPath);
+        }
+      }
+      releasePinned(history);
     }
     writeFileSync(temp, value, { flag: "wx", mode: privateMode ? 0o600 : 0o644 });
     const fd = openSync(temp, "r");
@@ -103,9 +214,8 @@ function save(path: string, value: string | Buffer) {
 }
 const path = checked(
   operation.path,
-  operation.kind === "write" ||
-    operation.kind === "write_bytes" ||
-    operation.kind === "mkdir",
+  operation.kind === "write" || operation.kind === "write_bytes" || operation.kind === "mkdir",
+  operation.kind === "write" || operation.kind === "write_bytes" || operation.kind === "mkdir",
 );
 switch (operation.kind) {
   case "read_bytes": {
@@ -123,17 +233,17 @@ switch (operation.kind) {
   case "write_bytes": {
     const value = Buffer.from(operation.base64, "base64");
     if (value.toString("base64") !== operation.base64) throw new Error("Invalid base64");
-    save(path, value);
+    save(path, value, operation.path);
     break;
   }
   case "read": {
     const value = content(path);
-    if (value.length > 65536) throw new Error("File exceeds read limit; use search or exec");
+    if (value.length > 8192) throw new Error("File exceeds read limit; use workspace.read_chunk");
     process.stdout.write(value);
     break;
   }
   case "write":
-    save(path, operation.content);
+    save(path, operation.content, operation.path);
     break;
   case "edit": {
     const value = content(path);
@@ -145,6 +255,7 @@ switch (operation.kind) {
     save(
       path,
       text.slice(0, first) + operation.newText + text.slice(first + operation.oldText.length),
+      operation.path,
     );
     break;
   }
@@ -158,7 +269,7 @@ switch (operation.kind) {
     break;
   }
   case "workspace_list": {
-    const names = readdirSync(path).sort(),
+    const names = directoryNames(path).sort(),
       page = names.slice(operation.offset, operation.offset + operation.limit),
       entries: Array<{ name: string; type: string; size: number }> = [];
     for (const name of page) {
@@ -178,7 +289,8 @@ switch (operation.kind) {
     json({
       path: operation.path,
       entries,
-      nextOffset: operation.offset + page.length < names.length ? operation.offset + page.length : null,
+      nextOffset:
+        operation.offset + page.length < names.length ? operation.offset + page.length : null,
     });
     break;
   }
@@ -228,7 +340,12 @@ switch (operation.kind) {
       const after = fstatSync(fd, { bigint: true });
       if (!sameVersion(version, versionOf(after)))
         throw new Error("file_changed: File changed while it was being read");
-      json({ base64: chunk.subarray(0, count).toString("base64"), offset: operation.offset, totalBytes: bytes, version });
+      json({
+        base64: chunk.subarray(0, count).toString("base64"),
+        offset: operation.offset,
+        totalBytes: bytes,
+        version,
+      });
     } finally {
       closeSync(fd);
     }
@@ -238,7 +355,7 @@ switch (operation.kind) {
     const entries: unknown[] = [];
     let truncated = false,
       bytes = 0;
-    for (const name of readdirSync(path).sort()) {
+    for (const name of directoryNames(path).sort()) {
       const stat = lstatSync(resolve(path, name));
       const entry = {
         name,
@@ -266,7 +383,7 @@ switch (operation.kind) {
     let visited = 0,
       bytes = 0,
       truncated = false;
-    function visit(file: string) {
+    function visit(relativePath: string, file: string) {
       if (++visited > 1000) {
         truncated = true;
         return;
@@ -274,12 +391,23 @@ switch (operation.kind) {
       const stat = lstatSync(file);
       if (stat.isSymbolicLink()) return;
       if (stat.isDirectory()) {
-        for (const name of readdirSync(file).sort()) {
+        for (const name of directoryNames(file).sort()) {
           if (visited >= 1000 || matches.length >= 100 || bytes >= 45000) {
             truncated = true;
             break;
           }
-          visit(resolve(file, name));
+          const childRelativePath =
+            !relativePath || relativePath === "." ? name : `${relativePath}/${name}`;
+          const childPath = checked(childRelativePath);
+          try {
+            visit(childRelativePath, childPath);
+          } catch (error) {
+            const code = (error as NodeJS.ErrnoException).code;
+            if (code !== "ENOENT" && code !== "ENOTDIR" && !String(error).includes("unsafe_path"))
+              throw error;
+          } finally {
+            releasePinned(childPath);
+          }
         }
         return;
       }
@@ -288,12 +416,19 @@ switch (operation.kind) {
         truncated = true;
         return;
       }
-      const data = content(file);
+      let data: Buffer;
+      try {
+        data = content(file);
+      } catch (error) {
+        if (["ELOOP", "ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? ""))
+          return;
+        throw error;
+      }
       if (data.includes(0)) return;
       for (const [index, line] of data.toString("utf8").split("\n").entries())
         if (line.includes(operation.kind === "search" ? operation.query : "")) {
           const item = {
-            path: file,
+            path: resolve(root, relativePath || "."),
             line: index + 1,
             text: line.slice(0, 1000),
             truncated: line.length > 1000,
@@ -306,12 +441,12 @@ switch (operation.kind) {
           matches.push(item);
         }
     }
-    visit(path);
+    visit(operation.path, path);
     json({ matches, visited, truncated });
     break;
   }
   case "mkdir":
-    mkdirSync(checked(operation.path, true), { recursive: true });
+    mkdirSync(path, { recursive: true, mode: privateMode ? 0o700 : 0o755 });
     json({ created: operation.path });
     break;
   case "move": {

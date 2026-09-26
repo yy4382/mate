@@ -179,8 +179,27 @@ async function workspaceJSON<T>(path: string): Promise<T> {
     throw new Error("登录状态已失效");
   }
   const result: unknown = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(errorMessage(result, "暂时无法读取 Agent 工作区。"));
+  if (!response.ok) {
+    const details =
+      typeof result === "object" && result !== null ? (result as Record<string, unknown>) : {};
+    throw new WorkspaceRequestError(
+      errorMessage(result, "暂时无法读取 Agent 工作区。"),
+      typeof details.code === "string" ? details.code : "workspace_unavailable",
+      typeof details.lastConnectedAt === "string" ? details.lastConnectedAt : null,
+    );
+  }
   return result as T;
+}
+
+class WorkspaceRequestError extends Error {
+  constructor(
+    message: string,
+    readonly code: string,
+    readonly lastConnectedAt: string | null,
+  ) {
+    super(message);
+    this.name = "WorkspaceRequestError";
+  }
 }
 
 function decodeBase64(value: string): string {
@@ -215,6 +234,7 @@ export function WorkspaceBrowser({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastConnectedAt, setLastConnectedAt] = useState<string | null>(null);
+  const [offlineReported, setOfflineReported] = useState(false);
   const [preview, setPreview] = useState<{
     path: string;
     size: number;
@@ -239,6 +259,7 @@ export function WorkspaceBrowser({
       setNextOffset(null);
       setError(null);
       setLastConnectedAt(null);
+      setOfflineReported(false);
       return;
     }
     if (!currentNode?.online) {
@@ -247,6 +268,7 @@ export function WorkspaceBrowser({
       setPreview(null);
       setError("节点离线，工作区暂不可用。");
       setLastConnectedAt(currentNode?.lastConnectedAt ?? null);
+      setOfflineReported(false);
       return;
     }
     let active = true;
@@ -256,6 +278,7 @@ export function WorkspaceBrowser({
     setNextOffset(null);
     setError(null);
     setLastConnectedAt(null);
+    setOfflineReported(false);
     void workspaceJSON<WorkspaceDirectoryPage>(
       `/api/owner/agents/${encodeURIComponent(currentAgent.id)}/workspace?${query}`,
     )
@@ -266,8 +289,15 @@ export function WorkspaceBrowser({
         }
       })
       .catch((reason: unknown) => {
-        if (active)
+        if (active) {
           setError(reason instanceof Error ? reason.message : "暂时无法读取 Agent 工作区。");
+          if (reason instanceof WorkspaceRequestError && reason.code === "node_offline") {
+            setOfflineReported(true);
+            setLastConnectedAt(reason.lastConnectedAt);
+            setEntries([]);
+            setPreview(null);
+          }
+        }
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -396,7 +426,7 @@ export function WorkspaceBrowser({
               </button>
             )}
           </div>
-          {!currentNode?.online && (
+          {(!currentNode?.online || offlineReported) && (
             <p className="workspace-state" role="status">
               节点离线，工作区暂不可用。
               {(lastConnectedAt ?? currentNode?.lastConnectedAt) && (
@@ -418,7 +448,7 @@ export function WorkspaceBrowser({
             <p className="workspace-empty" role="status">
               正在读取目录…
             </p>
-          ) : currentNode?.online ? (
+          ) : currentNode?.online && !offlineReported ? (
             <ul className="workspace-entry-list" aria-label="工作区目录">
               {entries.map((entry) => {
                 const entryPath = joinedPath(path, entry.name);

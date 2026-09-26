@@ -40,7 +40,7 @@ function setup(run: (operation: Operation) => Promise<ExecutionResult> | Executi
   return { root, homeRoot, home, calls, dependencies };
 }
 
-function action(content = "memo") : WorkspaceExecutionRequest {
+function action(content = "memo"): WorkspaceExecutionRequest {
   return {
     operationId,
     agentId,
@@ -110,7 +110,5 @@ it("does not receipt read-only owner browsing and refuses owner write operations
       ...read,
       operation: { kind: "write", path: "MEMORY.md", content: "no" },
     }),
-  ).toThrow(
-    "Owner browsing and file publishing allow read operations only",
-  );
+  ).toThrow("Owner browsing and file publishing allow read operations only");
 });

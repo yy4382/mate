@@ -27,7 +27,9 @@ let credentials: Array<{ provider: string; configured: true; updatedAt: number }
 let credentialWrites: Array<{ provider: string; apiKey: string }>;
 let invitationPosts: Array<{ url: string; body: Record<string, unknown> }>;
 let nodeOnline: boolean;
+let nodeLastConnectedAt: string | null;
 let postConflict: boolean;
+let workspaceFailure: { status: number; body: unknown } | null;
 let workspacePages: Array<{
   path: string;
   offset: number;
@@ -58,12 +60,16 @@ beforeEach(() => {
   credentialWrites = [];
   invitationPosts = [];
   nodeOnline = true;
+  nodeLastConnectedAt = null;
   postConflict = false;
+  workspaceFailure = null;
   workspacePages = [];
   fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url === "/api/owner/nodes")
-      return json(200, { nodes: [{ id: nodeId, online: nodeOnline, lastConnectedAt: null }] });
+      return json(200, {
+        nodes: [{ id: nodeId, online: nodeOnline, lastConnectedAt: nodeLastConnectedAt }],
+      });
     if (url === "/api/owner/channels")
       return json(200, { channels: [{ id: channelId, name: "Research", archived: false }] });
     if (url === "/api/owner/invitable-channels")
@@ -140,6 +146,7 @@ beforeEach(() => {
     );
     if (workspaceMatch) {
       const urlObject = new URL(url, "http://mate.test");
+      if (workspaceFailure) return json(workspaceFailure.status, workspaceFailure.body);
       if (workspaceMatch[2] === "stat")
         return json(200, {
           type: "file",
@@ -355,6 +362,48 @@ it("browses an Agent private home read-only, previews and downloads files, and l
 
   await user.click(screen.getByRole("button", { name: /projects\// }));
   expect(await screen.findByRole("button", { name: /plan.md/ })).not.toBeNull();
+});
+
+it("shows the last connection time when a workspace request discovers that the node went offline", async () => {
+  const agentId = "8bfb67a1-66ed-4d56-9052-4cc7a41c60b9",
+    lastConnectedAt = "2026-09-26T03:04:05.000Z";
+  agents = [
+    {
+      id: agentId,
+      nodeId,
+      name: "Research partner",
+      role: "Researches questions",
+      description: "A colleague",
+      model: { provider: "openai", id: "gpt-4.1" },
+      initialChannelId: null,
+      sessionId,
+      status: "ready",
+      stage: "complete",
+      error: null,
+      linuxIdentity: {
+        username: "mate_8bfb67a166ed4d5690524cc7",
+        uid: 23001,
+        gid: 23001,
+        home: `/var/lib/mate/agents/${agentId}`,
+      },
+      createdAt: 1,
+      updatedAt: 2,
+    },
+  ];
+  workspaceFailure = {
+    status: 503,
+    body: {
+      error: "节点当前离线，工作区暂不可用。",
+      code: "node_offline",
+      lastConnectedAt,
+    },
+  };
+  render(createElement(AgentsPage));
+
+  expect(await screen.findByRole("alert")).not.toBeNull();
+  expect(screen.getByText(/节点离线，工作区暂不可用/)).not.toBeNull();
+  expect(screen.getByText(/最后连接：/)).not.toBeNull();
+  expect(screen.queryByRole("list", { name: "工作区目录" })).toBeNull();
 });
 
 it("lets the owner save one provider key without displaying it again", async () => {

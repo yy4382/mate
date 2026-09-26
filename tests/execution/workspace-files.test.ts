@@ -1,11 +1,5 @@
 import { afterEach, expect, it } from "vitest";
-import {
-  mkdtempSync,
-  realpathSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -67,8 +61,13 @@ it("rejects traversal and symbolic-link reads outside the selected home", () => 
   writeFileSync(join(outside, "secret.txt"), "secret");
   symlinkSync(join(outside, "secret.txt"), join(root, "secret-link"));
 
-  expect(invoke(root, { kind: "workspace_read_chunk", path: "../secret.txt", offset: 0, length: 6 }).code).not.toBe(0);
-  expect(invoke(root, { kind: "workspace_read_chunk", path: "secret-link", offset: 0, length: 6 }).code).not.toBe(0);
+  expect(
+    invoke(root, { kind: "workspace_read_chunk", path: "../secret.txt", offset: 0, length: 6 })
+      .code,
+  ).not.toBe(0);
+  expect(
+    invoke(root, { kind: "workspace_read_chunk", path: "secret-link", offset: 0, length: 6 }).code,
+  ).not.toBe(0);
 });
 
 it("refuses to continue a streamed read after the file changes", () => {
@@ -92,9 +91,12 @@ it("refuses to continue a streamed read after the file changes", () => {
 });
 
 it("validates bounded workspace requests before they reach a node", () => {
-  expect(
-    operationSchema.parse({ kind: "workspace_list", path: "notes" }),
-  ).toEqual({ kind: "workspace_list", path: "notes", offset: 0, limit: 32 });
+  expect(operationSchema.parse({ kind: "workspace_list", path: "notes" })).toEqual({
+    kind: "workspace_list",
+    path: "notes",
+    offset: 0,
+    limit: 32,
+  });
   expect(() =>
     operationSchema.parse({
       kind: "workspace_read_chunk",
