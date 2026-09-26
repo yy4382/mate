@@ -133,6 +133,7 @@ it("marks a committed process intent unknown before a recovered node can start a
       uid: 23003,
       gid: 23003,
       home: `/var/lib/mate/agents/${agentId}`,
+      homeMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -244,6 +245,7 @@ it("projects the last committed snapshot when two compactions share one clock ti
       uid: 23003,
       gid: 23003,
       home: `/var/lib/mate/agents/${agentId}`,
+      homeMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -691,7 +693,54 @@ it("commits a compaction snapshot and replacement session before ACK and recover
       ok: true,
     }),
   );
+  socket.onSend = (message) => {
+    if (
+      message.type === "control.process.operation" &&
+      (message.operation as { kind?: string })?.kind === "process.stop_all"
+    )
+      queueMicrotask(
+        () =>
+          void app.nodes.receive(
+            socket,
+            JSON.stringify({
+              type: "node.process.operation.result",
+              requestId: message.requestId,
+              operationId: message.operationId,
+              agentId,
+              state: "succeeded",
+              receipt: { stopped: true, units: [] },
+            }),
+          ),
+      );
+    if (message.type === "control.agent.provision" && message.verifyOnly)
+      queueMicrotask(
+        () =>
+          void app.nodes.receive(
+            socket,
+            JSON.stringify({
+              type: "node.agent.provision.result",
+              requestId: message.requestId,
+              agentId,
+              ok: true,
+              identity: {
+                username: `mate_${agentId.replaceAll("-", "").slice(0, 27)}`,
+                uid: 23003,
+                gid: 23003,
+                home: `/var/lib/mate/agents/${agentId}`,
+                homeMarker: "a".repeat(64),
+              },
+            }),
+          ),
+      );
+  };
   app.runs?.pauseAgent(agentId);
+  for (
+    let attempt = 0;
+    attempt < 30 && app.runs?.stopStatus(agentId).state !== "succeeded";
+    attempt++
+  )
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  expect(app.runs?.stopStatus(agentId).state).toBe("succeeded");
   const otherRoom = app.chat.createChannel({
     name: "Later source",
     description: "Delayed delivery",
@@ -701,7 +750,7 @@ it("commits a compaction snapshot and replacement session before ACK and recover
   start = socket.sent.length;
   app.chat.createMessage(direct.id, "Current pending input.");
   app.chat.createMessage(otherRoom.id, "Later source must survive compaction.");
-  app.runs?.resumeAgent(agentId);
+  expect(await app.runs?.resumeAgent(agentId)).toEqual({ ok: true });
   const second = await waitForRun(socket, start);
   const actionId = `mate:${second.actionScopeId}:${"d".repeat(64)}:1`;
   const input = {

@@ -33,7 +33,13 @@ function setup(run: (operation: Operation) => Promise<ExecutionResult> | Executi
       },
     },
     dependencies = {
-      lookupIdentity: () => ({ username: "mate_test", uid: 51001, gid: 51001, home }),
+      lookupIdentity: () => ({
+        username: "mate_test",
+        uid: 51001,
+        gid: 51001,
+        home,
+        homeMarker: "a".repeat(64),
+      }),
       createBackend: () => backend,
       now: () => 10,
     };

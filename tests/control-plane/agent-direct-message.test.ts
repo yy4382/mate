@@ -2148,6 +2148,7 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
       uid: 23001,
       gid: 23001,
       home: `/var/lib/mate/agents/${agentId}`,
+      homeMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -2558,6 +2559,7 @@ it("replays a confirmed failed file action as the same error after control-plane
       uid: 23001,
       gid: 23001,
       home: `/var/lib/mate/agents/${agentId}`,
+      homeMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -2663,6 +2665,7 @@ it("publishes Agent workspace files to a joined conversation in bounded chunks a
       uid: 23001,
       gid: 23001,
       home: `/var/lib/mate/agents/${agentId}`,
+      homeMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -2819,6 +2822,7 @@ it("streams the owner workspace download one bounded node chunk at a time and st
       uid: 23001,
       gid: 23001,
       home: `/var/lib/mate/agents/${agentId}`,
+      homeMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -2981,6 +2985,7 @@ it("records owner workspace reads and safe failure codes without file contents",
       uid: 23001,
       gid: 23001,
       home: `/var/lib/mate/agents/${agentId}`,
+      homeMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -3266,6 +3271,7 @@ it("persists separate attention and draft choices while gating stale sends", asy
       uid: 23001,
       gid: 23001,
       home: `/var/lib/mate/agents/${agentId}`,
+      homeMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -3431,6 +3437,7 @@ it("does not let a saved draft or a later paginated read hide unseen conversatio
       uid: 23001,
       gid: 23001,
       home: `/var/lib/mate/agents/${agentId}`,
+      homeMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -3501,6 +3508,7 @@ it("holds Agent task changes for fresh discussion and queues an offline reminder
       uid: 23001,
       gid: 23001,
       home: `/var/lib/mate/agents/${agentId}`,
+      homeMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -3726,6 +3734,7 @@ it("lets peers coordinate on one task without a tree and preserves a newer claim
         uid,
         gid: uid,
         home: `/var/lib/mate/agents/${id}`,
+        homeMarker: "a".repeat(64),
       },
       app.chat,
     );
@@ -3810,6 +3819,7 @@ async function startReminderFixture(fixture: Awaited<ReturnType<typeof setup>>) 
       uid: 23001,
       gid: 23001,
       home: `/var/lib/mate/agents/${agentId}`,
+      homeMarker: "a".repeat(64),
     },
     app.chat,
   );
