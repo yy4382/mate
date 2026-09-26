@@ -717,6 +717,7 @@ export class AgentRunCoordinator {
            AND a.node_id IN (${onlineNodePlaceholders})
            AND a.status='waiting_credentials' AND a.model_ready=1
            AND NOT EXISTS (SELECT 1 FROM owner_agent_run_control ctl WHERE ctl.agent_id=a.id AND ctl.paused_reason IS NOT NULL)
+           AND NOT EXISTS (SELECT 1 FROM owner_agent_recovery_holds hold WHERE hold.agent_id=a.id)
            AND EXISTS (SELECT 1 FROM model_credentials c WHERE c.provider=a.provider)
            AND NOT EXISTS (SELECT 1 FROM owner_agent_runs r WHERE r.agent_id=a.id AND r.state='running')
            AND NOT EXISTS (
