@@ -10,6 +10,33 @@ export const operationSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
+      kind: z.literal("workspace_list"),
+      path: z.string().max(4096),
+      offset: z.number().int().min(0).max(1_000_000).default(0),
+      limit: z.number().int().min(1).max(32).default(32),
+    })
+    .strict(),
+  z.object({ kind: z.literal("workspace_stat"), path: z.string().max(4096) }).strict(),
+  z
+    .object({
+      kind: z.literal("workspace_read_chunk"),
+      path: z.string().max(4096),
+      offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+      length: z.number().int().min(1).max(8192),
+      version: z
+        .object({
+          device: z.string().regex(/^[0-9]+$/),
+          inode: z.string().regex(/^[0-9]+$/),
+          size: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+          modifiedNs: z.string().regex(/^[0-9]+$/),
+          changedNs: z.string().regex(/^[0-9]+$/),
+        })
+        .strict()
+        .optional(),
+    })
+    .strict(),
+  z
+    .object({
       kind: z.literal("write_bytes"),
       path: z.string().max(4096),
       base64: z

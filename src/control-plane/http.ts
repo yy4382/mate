@@ -13,6 +13,9 @@ import { newAgentRequestSchema } from "./agents/contracts.js";
 import { ModelCredentialDirectory } from "./model-credentials.js";
 import { isSupportedModelProvider, supportedModelProviders } from "./model-providers.js";
 import { AgentRunCoordinator } from "./agent-runs.js";
+import { AttachmentService } from "./attachments.js";
+import { WorkspaceService } from "./workspace.js";
+import { registerWorkspaceRoutes } from "./workspace-http.js";
 
 const newChannelSchema = z
   .object({
@@ -53,6 +56,7 @@ export interface ControlPlaneAppOptions {
   maxUnauthenticatedNodeConnections?: number;
   nodeHandshakeTimeoutMs?: number;
   nodeHeartbeatTimeoutMs?: number;
+  maxAttachmentBytes?: number;
 }
 
 export class ControlPlaneApp extends Hono {
@@ -62,6 +66,8 @@ export class ControlPlaneApp extends Hono {
     readonly nodes: NodeDirectory,
     readonly agents: AgentDirectory,
     readonly chat: OwnerChat,
+    readonly workspace: WorkspaceService,
+    readonly attachments: AttachmentService,
   ) {
     super();
   }
@@ -108,7 +114,15 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
     agents = new AgentDirectory(ownerAuth.db, options.now),
     modelCredentials = new ModelCredentialDirectory(ownerAuth.db, options.now),
     ownerChat = new OwnerChat(ownerAuth.db, options.now),
-    app = new ControlPlaneApp(ownerAuth, nodes, agents, ownerChat),
+    workspace = new WorkspaceService(ownerAuth.db, nodes),
+    attachments = new AttachmentService(
+      ownerAuth.db,
+      workspace,
+      resolve(dataDir, "attachments"),
+      options.maxAttachmentBytes,
+      options.now,
+    ),
+    app = new ControlPlaneApp(ownerAuth, nodes, agents, ownerChat, workspace, attachments),
     loginGate = new LoginGate();
   app.runs = new AgentRunCoordinator(ownerAuth.db, nodes, modelCredentials, ownerChat, options.now);
   const activeAgentProvisions = new Map<string, Promise<AgentSummary>>();
@@ -461,6 +475,7 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
       throw error;
     }
   });
+  registerWorkspaceRoutes(app, workspace, attachments);
   registerNodeRoutes(app, nodes);
 
   app.use("/app", requireOwnerPage);

@@ -7,6 +7,8 @@ import {
   type NodeControlMessage,
   type NodeAgentProvisionResult,
   type NodeAgentRunResult,
+  type NodeWorkspaceOperationResult,
+  type ControlWorkspaceOperation,
   type AgentProvisionStage,
   type NodeRequest,
 } from "../../nodes/protocol.js";
@@ -97,6 +99,18 @@ interface PendingAgentProcessOperation {
   timeout: ReturnType<typeof setTimeout>;
 }
 
+export type NodeWorkspaceOperationStart = ControlWorkspaceOperation;
+
+interface PendingWorkspaceOperation {
+  nodeId: string;
+  operationId: string;
+  agentId: string;
+  promise: Promise<NodeWorkspaceOperationResult>;
+  resolve: (result: NodeWorkspaceOperationResult) => void;
+  reject: (error: Error) => void;
+  timeout: ReturnType<typeof setTimeout>;
+}
+
 export interface AgentRunHandlers {
   /** Cursor is the per-run context projection position, not a persistent journal sequence. */
   context(
@@ -171,7 +185,12 @@ export class NodeDirectory {
   private readonly pendingAgentProvisions = new Map<string, PendingAgentProvision>();
   private readonly pendingAgentRuns = new Map<string, PendingAgentRun>();
   private readonly pendingAgentProcessOperations = new Map<string, PendingAgentProcessOperation>();
+  private readonly pendingWorkspaceOperations = new Map<string, PendingWorkspaceOperation>();
   private agentRunHandlers?: AgentRunHandlers;
+  private workspaceOperationResultHandler?: (
+    nodeId: string,
+    result: NodeWorkspaceOperationResult,
+  ) => void;
 
   constructor(
     private readonly database: Database.Database,
@@ -298,6 +317,8 @@ export class NodeDirectory {
       return this.receiveAgentRunMessage(socket, session, request);
     if (request.type === "node.process.operation.result")
       return this.receiveAgentProcessOperationResult(socket, session, request);
+    if (request.type === "node.workspace.operation.result")
+      return this.receiveWorkspaceOperationResult(socket, session, request);
     return this.receiveAgentProvisionMessage(socket, session, request);
   }
 
@@ -315,6 +336,7 @@ export class NodeDirectory {
         nodeId,
         new Error("节点连接已断开，普通操作结果尚未确认。"),
       );
+      this.rejectWorkspaceOperations(nodeId, new Error("节点连接已断开，文件操作结果尚未确认。"));
     }
     this.sessions.delete(socket);
   }
@@ -382,6 +404,72 @@ export class NodeDirectory {
 
   setAgentRunHandlers(handlers: AgentRunHandlers): void {
     this.agentRunHandlers = handlers;
+  }
+
+  setWorkspaceOperationResultHandler(
+    handler: (nodeId: string, result: NodeWorkspaceOperationResult) => void,
+  ): void {
+    this.workspaceOperationResultHandler = handler;
+  }
+
+  /** Send one owner read, Agent file action, or Agent publication read to its paired node. */
+  workspaceOperation(
+    nodeId: string,
+    request: NodeWorkspaceOperationStart,
+  ): Promise<NodeWorkspaceOperationResult> {
+    const controlMessage = NodeControlMessageSchema.parse(request) as NodeWorkspaceOperationStart,
+      existing = this.pendingWorkspaceOperations.get(request.requestId);
+    if (existing) {
+      if (
+        existing.nodeId !== nodeId ||
+        existing.operationId !== request.operationId ||
+        existing.agentId !== request.agentId
+      )
+        return Promise.reject(new Error("Workspace operation request identity conflict"));
+      return existing.promise;
+    }
+    const socket = this.connected.get(nodeId),
+      session = socket ? this.sessions.get(socket) : undefined;
+    if (
+      !socket ||
+      !session ||
+      session.nodeId !== nodeId ||
+      this.now() - session.lastHeartbeatAt >= this.heartbeatTimeoutMs
+    )
+      return Promise.reject(new Error("Selected node is offline"));
+
+    let resolveResult!: (result: NodeWorkspaceOperationResult) => void,
+      rejectResult!: (error: Error) => void;
+    const promise = new Promise<NodeWorkspaceOperationResult>((resolve, reject) => {
+      resolveResult = resolve;
+      rejectResult = reject;
+    });
+    const timeout = setTimeout(() => {
+      this.finishWorkspaceOperation(
+        request.requestId,
+        undefined,
+        new Error("Node file operation timed out; result is unknown"),
+      );
+    }, this.operationTimeoutMs);
+    this.pendingWorkspaceOperations.set(request.requestId, {
+      nodeId,
+      operationId: request.operationId,
+      agentId: request.agentId,
+      promise,
+      resolve: resolveResult,
+      reject: rejectResult,
+      timeout,
+    });
+    try {
+      this.send(socket, controlMessage);
+    } catch {
+      this.finishWorkspaceOperation(
+        request.requestId,
+        undefined,
+        new Error("Could not send workspace operation to node"),
+      );
+    }
+    return promise;
   }
 
   runAgent(nodeId: string, request: NodeAgentRunStart): Promise<NodeAgentRunResult> {
@@ -686,6 +774,45 @@ export class NodeDirectory {
     this.finishAgentProcessOperation(request.requestId, request);
   }
 
+  private receiveWorkspaceOperationResult(
+    socket: NodeSocket,
+    session: SocketSession,
+    request: Extract<NodeRequest, { type: "node.workspace.operation.result" }>,
+  ): void {
+    const nodeId = session.nodeId;
+    if (!nodeId || this.connected.get(nodeId) !== socket)
+      return this.reject(socket, request.requestId, "not_authenticated", "节点尚未完成身份验证。");
+    const pending = this.pendingWorkspaceOperations.get(request.requestId);
+    if (!pending) {
+      this.deliverWorkspaceOperationResult(nodeId, request);
+      return; // A late receipt may resolve a durable action that already timed out.
+    }
+    if (
+      pending.nodeId !== nodeId ||
+      pending.operationId !== request.operationId ||
+      pending.agentId !== request.agentId
+    )
+      return this.reject(
+        socket,
+        request.requestId,
+        "invalid_identity",
+        "文件操作结果与控制面请求不匹配。",
+      );
+    this.deliverWorkspaceOperationResult(nodeId, request);
+    this.finishWorkspaceOperation(request.requestId, request);
+  }
+
+  private deliverWorkspaceOperationResult(
+    nodeId: string,
+    result: NodeWorkspaceOperationResult,
+  ): void {
+    try {
+      this.workspaceOperationResultHandler?.(nodeId, result);
+    } catch {
+      // A receipt write failure does not make the node protocol unauthenticated; a replay can recover it.
+    }
+  }
+
   private receiveAgentRunMessage(
     socket: NodeSocket,
     session: SocketSession,
@@ -859,6 +986,25 @@ export class NodeDirectory {
         state: result.state,
         receipt: result.receipt,
       });
+  }
+
+  private rejectWorkspaceOperations(nodeId: string, error: Error): void {
+    for (const [requestId, pending] of this.pendingWorkspaceOperations) {
+      if (pending.nodeId === nodeId) this.finishWorkspaceOperation(requestId, undefined, error);
+    }
+  }
+
+  private finishWorkspaceOperation(
+    requestId: string,
+    result?: NodeWorkspaceOperationResult,
+    error?: Error,
+  ): void {
+    const pending = this.pendingWorkspaceOperations.get(requestId);
+    if (!pending) return;
+    this.pendingWorkspaceOperations.delete(requestId);
+    clearTimeout(pending.timeout);
+    if (error) pending.reject(error);
+    else if (result) pending.resolve(result);
   }
 
   private finishAgentRun(runId: string, result?: NodeAgentRunResult, error?: Error): void {

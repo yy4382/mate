@@ -1,0 +1,180 @@
+import { Hono, type Context } from "hono";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
+import { z } from "zod";
+import { AttachmentError, AttachmentService } from "./attachments.js";
+import { WorkspaceError, WorkspaceService, type WorkspaceVersion } from "./workspace.js";
+
+const versionSchema = z
+  .object({
+    device: z.string().regex(/^\d+$/),
+    inode: z.string().regex(/^\d+$/),
+    size: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    modifiedNs: z.string().regex(/^\d+$/),
+    changedNs: z.string().regex(/^\d+$/),
+  })
+  .strict();
+
+export function registerWorkspaceRoutes(
+  app: Hono,
+  workspace: WorkspaceService,
+  attachments: AttachmentService,
+): void {
+  app.get("/api/owner/agents/:agentId/workspace", async (context) => {
+    const path = context.req.query("path") ?? "",
+      offset = queryInteger(context.req.query("offset"), 0),
+      limit = queryInteger(context.req.query("limit"), 32);
+    if (offset === undefined || limit === undefined || limit < 1 || limit > 32)
+      return context.json({ error: "目录分页参数无效。", code: "invalid_request" }, 400);
+    try {
+      context.header("Cache-Control", "no-store");
+      return context.json(await workspace.list(context.req.param("agentId"), path, offset, limit));
+    } catch (error) {
+      return errorResponse(context, error);
+    }
+  });
+
+  app.get("/api/owner/agents/:agentId/workspace/stat", async (context) => {
+    const path = context.req.query("path");
+    if (path === undefined)
+      return context.json({ error: "文件路径缺失。", code: "invalid_request" }, 400);
+    try {
+      context.header("Cache-Control", "no-store");
+      return context.json(await workspace.stat(context.req.param("agentId"), path));
+    } catch (error) {
+      return errorResponse(context, error);
+    }
+  });
+
+  app.get("/api/owner/agents/:agentId/workspace/chunk", async (context) => {
+    const path = context.req.query("path"),
+      offset = queryInteger(context.req.query("offset"), 0),
+      versionText = context.req.query("version");
+    if (path === undefined || offset === undefined)
+      return context.json({ error: "文件预览参数无效。", code: "invalid_request" }, 400);
+    let version: WorkspaceVersion | undefined;
+    if (versionText !== undefined) {
+      try {
+        version = versionSchema.parse(
+          JSON.parse(Buffer.from(versionText, "base64url").toString("utf8")),
+        );
+      } catch {
+        return context.json({ error: "文件版本标识无效。", code: "invalid_request" }, 400);
+      }
+    }
+    try {
+      const chunk = await workspace.readChunk(context.req.param("agentId"), path, offset, version);
+      context.header("Cache-Control", "no-store");
+      return context.json({
+        offset: chunk.offset,
+        totalBytes: chunk.totalBytes,
+        base64: Buffer.from(chunk.bytes).toString("base64"),
+        version: chunk.version,
+      });
+    } catch (error) {
+      return errorResponse(context, error);
+    }
+  });
+
+  app.get("/api/owner/agents/:agentId/workspace/download", async (context) => {
+    const path = context.req.query("path");
+    if (path === undefined)
+      return context.json({ error: "文件路径缺失。", code: "invalid_request" }, 400);
+    try {
+      const download = await workspace.download(context.req.param("agentId"), path);
+      context.header("Cache-Control", "no-store");
+      context.header("Content-Type", "application/octet-stream");
+      context.header("Content-Length", String(download.size));
+      context.header("Content-Disposition", contentDisposition(path.split("/").filter(Boolean).at(-1) ?? "file"));
+      context.header("X-Content-Type-Options", "nosniff");
+      context.header("X-Accel-Buffering", "no");
+      return context.newResponse(download.stream);
+    } catch (error) {
+      return errorResponse(context, error);
+    }
+  });
+
+  app.get("/api/owner/channels/:channelId/attachments", (context) => {
+    try {
+      context.header("Cache-Control", "no-store");
+      return context.json({ attachments: attachments.listForOwner(context.req.param("channelId")) });
+    } catch (error) {
+      return errorResponse(context, error);
+    }
+  });
+
+  app.post("/api/owner/channels/:channelId/attachments", async (context) => {
+    const body = context.req.raw.body,
+      filename = context.req.header("x-mate-filename"),
+      contentType = context.req.header("content-type") ?? "application/octet-stream",
+      contentLength = context.req.header("content-length"),
+      expectedLength = contentLength === undefined ? undefined : queryInteger(contentLength);
+    if (!body || !filename || expectedLength === undefined && contentLength !== undefined)
+      return context.json({ error: "附件上传请求无效。", code: "invalid_request" }, 400);
+    try {
+      const attachment = await attachments.uploadForOwner({
+        channelId: context.req.param("channelId"),
+        filename,
+        contentType,
+        body,
+        ...(expectedLength === undefined ? {} : { expectedLength }),
+      });
+      context.header("Cache-Control", "no-store");
+      return context.json({ attachment }, 201);
+    } catch (error) {
+      return errorResponse(context, error);
+    }
+  });
+
+  app.get("/api/owner/channels/:channelId/attachments/:attachmentId/content", (context) => {
+    try {
+      const result = attachments.downloadForOwner(
+        context.req.param("channelId"),
+        context.req.param("attachmentId"),
+      );
+      context.header("Cache-Control", "no-store");
+      context.header("Content-Type", result.attachment.contentType);
+      context.header("Content-Length", String(result.attachment.size));
+      context.header("Content-Disposition", contentDisposition(result.attachment.filename));
+      context.header("X-Content-Type-Options", "nosniff");
+      context.header("X-Accel-Buffering", "no");
+      return context.newResponse(result.stream);
+    } catch (error) {
+      return errorResponse(context, error);
+    }
+  });
+}
+
+function queryInteger(value: string | undefined, fallback?: number): number | undefined {
+  if (value === undefined) return fallback;
+  if (!/^(0|[1-9]\d*)$/.test(value)) return undefined;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
+function errorResponse(
+  context: Context,
+  error: unknown,
+) {
+  if (error instanceof WorkspaceError) {
+    if (error.code === "node_offline")
+      return context.json(
+        { error: error.message, code: error.code, lastConnectedAt: error.lastConnectedAt ?? null },
+        error.status as ContentfulStatusCode,
+      );
+    return context.json(
+      { error: error.message, code: error.code },
+      error.status as ContentfulStatusCode,
+    );
+  }
+  if (error instanceof AttachmentError)
+    return context.json(
+      { error: error.message, code: error.code },
+      error.status as ContentfulStatusCode,
+    );
+  return context.json({ error: "文件请求暂时不可用。", code: "workspace_unavailable" }, 503);
+}
+
+function contentDisposition(filename: string): string {
+  const ascii = filename.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+}

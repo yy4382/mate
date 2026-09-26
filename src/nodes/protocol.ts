@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { agentProcessOperationSchema } from "./process-operations.js";
+import { operationSchema } from "../execution/backend.js";
 
 export const NodeRequestIdSchema = z.string().uuid();
 const requestIdSchema = NodeRequestIdSchema;
@@ -12,6 +13,18 @@ export const AgentProvisionStageSchema = z.enum([
   "verifying_identity",
 ]);
 const agentIdSchema = z.string().uuid();
+const workspaceOperationSchema = operationSchema.refine((operation) => operation.kind !== "exec");
+const workspaceReadOperationSchema = workspaceOperationSchema.refine((operation) =>
+  ["workspace_list", "workspace_stat", "workspace_read_chunk"].includes(operation.kind),
+);
+const workspaceExecutionResultSchema = z
+  .object({
+    code: z.number().int(),
+    stdout: z.string().max(12_000),
+    stderr: z.string().max(240),
+    truncated: z.boolean(),
+  })
+  .strict();
 const provisionIdentitySchema = z
   .object({
     username: z.string().regex(/^[a-z][a-z0-9_]{0,31}$/),
@@ -107,6 +120,28 @@ export const NodeRequestSchema = z.discriminatedUnion("type", [
       input: z.record(z.string(), z.json()),
     })
     .strict(),
+  z.discriminatedUnion("ok", [
+    z
+      .object({
+        type: z.literal("node.workspace.operation.result"),
+        requestId: requestIdSchema,
+        operationId: requestIdSchema,
+        agentId: agentIdSchema,
+        ok: z.literal(true),
+        result: workspaceExecutionResultSchema,
+      })
+      .strict(),
+    z
+      .object({
+        type: z.literal("node.workspace.operation.result"),
+        requestId: requestIdSchema,
+        operationId: requestIdSchema,
+        agentId: agentIdSchema,
+        ok: z.literal(false),
+        error: z.string().min(1).max(240),
+      })
+      .strict(),
+  ]),
   z.discriminatedUnion("ok", [
     z
       .object({
@@ -207,6 +242,40 @@ export const NodeControlMessageSchema = z.discriminatedUnion("type", [
       operation: agentProcessOperationSchema,
     })
     .strict(),
+  z.discriminatedUnion("mode", [
+    z
+      .object({
+        type: z.literal("control.workspace.operation"),
+        requestId: requestIdSchema,
+        operationId: requestIdSchema,
+        agentId: agentIdSchema,
+        mode: z.literal("owner_read"),
+        operation: workspaceReadOperationSchema,
+      })
+      .strict(),
+    z
+      .object({
+        type: z.literal("control.workspace.operation"),
+        requestId: requestIdSchema,
+        operationId: requestIdSchema,
+        agentId: agentIdSchema,
+        runId: requestIdSchema,
+        mode: z.literal("agent_action"),
+        operation: workspaceOperationSchema,
+      })
+      .strict(),
+    z
+      .object({
+        type: z.literal("control.workspace.operation"),
+        requestId: requestIdSchema,
+        operationId: requestIdSchema,
+        agentId: agentIdSchema,
+        runId: requestIdSchema,
+        mode: z.literal("agent_publish"),
+        operation: workspaceReadOperationSchema,
+      })
+      .strict(),
+  ]),
   z
     .object({
       type: z.literal("control.agent.run.context"),
@@ -279,3 +348,11 @@ export type NodeAgentProvisionResult = Extract<
   { type: "node.agent.provision.result" }
 >;
 export type NodeAgentRunResult = Extract<NodeRequest, { type: "node.agent.run.result" }>;
+export type NodeWorkspaceOperationResult = Extract<
+  NodeRequest,
+  { type: "node.workspace.operation.result" }
+>;
+export type ControlWorkspaceOperation = Extract<
+  NodeControlMessage,
+  { type: "control.workspace.operation" }
+>;

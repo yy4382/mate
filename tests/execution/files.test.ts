@@ -66,16 +66,16 @@ it("organizes files with hash-checked edits, non-overwriting moves and guarded r
   expect(invoke(root, { kind: "remove", path: "notes" }).code).not.toBe(0); // revision history remains
   expect(invoke(root, { kind: "remove", path: "." }).code).not.toBe(0);
 });
-it("uses ordinary paths and symlinks while keeping file operations bounded", () => {
+it("rejects paths and symbolic links that escape the Agent workspace", () => {
   const root = temp(),
     outside = temp();
   writeFileSync(`${outside}/secret`, "outside");
   symlinkSync(outside, `${root}/link`);
-  expect(invoke(root, { kind: "read", path: "link/secret" }).stdout).toBe("outside");
-  expect(invoke(root, { kind: "read", path: `${outside}/secret` }).stdout).toBe("outside");
+  expect(invoke(root, { kind: "read", path: "link/secret" }).code).not.toBe(0);
+  expect(invoke(root, { kind: "read", path: `${outside}/secret` }).code).not.toBe(0);
   writeFileSync(`${root}/file`, "old");
-  expect(invoke(root, { kind: "move", path: "file", destination: "link/stolen" }).code).toBe(0);
-  expect(existsSync(`${outside}/stolen`)).toBe(true);
+  expect(invoke(root, { kind: "move", path: "file", destination: "link/stolen" }).code).not.toBe(0);
+  expect(existsSync(`${outside}/stolen`)).toBe(false);
   writeFileSync(`${root}/many`, "match\n".repeat(200));
   const result = JSON.parse(invoke(root, { kind: "search", path: "many", query: "match" }).stdout);
   expect(result.matches).toHaveLength(100);

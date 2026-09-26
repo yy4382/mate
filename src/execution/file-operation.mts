@@ -10,27 +10,45 @@ import {
   mkdirSync,
   lstatSync,
   unlinkSync,
-  existsSync,
   readdirSync,
   fsyncSync,
   rmdirSync,
   fstatSync,
 } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
+import { within } from "./paths.js";
 import type { Operation } from "./backend.js";
-const root = process.argv[2]!;
+const root = resolve(process.argv[2]!);
+if (!lstatSync(root).isDirectory()) throw new Error("Workspace root must be a directory");
 const privateMode = process.argv[3] !== "022";
 process.umask(privateMode ? 0o077 : 0o022);
 const operation = JSON.parse(readFileSync(0, "utf8")) as Exclude<Operation, { kind: "exec" }>;
-function checked(path: string): string {
-  if (path.includes("\0")) throw new Error("Invalid path");
-  return resolve(root, path);
+function checked(path: string, allowMissing = false): string {
+  if (path.includes("\0") || isAbsolute(path)) throw new Error("unsafe_path: Invalid workspace path");
+  const parts = path.split("/").filter((part) => part !== "" && part !== ".");
+  if (parts.some((part) => part === "..")) throw new Error("unsafe_path: Path escapes the workspace");
+  let target = root,
+    missing = false;
+  for (const part of parts) {
+    target = resolve(target, part);
+    if (!within(root, target)) throw new Error("unsafe_path: Path escapes the workspace");
+    if (missing) continue;
+    try {
+      if (lstatSync(target).isSymbolicLink())
+        throw new Error("unsafe_path: Symbolic links are not followed in the workspace");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT" && allowMissing) missing = true;
+      else throw error;
+    }
+  }
+  return target;
 }
 function content(path: string): Buffer {
-  const fd = openSync(path, constants.O_RDONLY);
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
-    if (!fstatSync(fd).isFile()) throw new Error("Regular file required");
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.nlink !== 1) throw new Error("Regular single-link file required");
     const buf = Buffer.alloc(1000001),
       n = readSync(fd, buf, 0, buf.length, 0);
     if (n > 1000000) throw new Error("File exceeds 1 MB limit");
@@ -46,13 +64,21 @@ function save(path: string, value: string | Buffer) {
   mkdirSync(dirname(path), { recursive: true });
   const temp = `${path}.${randomUUID()}.tmp`;
   try {
-    if (existsSync(path)) {
+    let existing = false;
+    try {
+      const stat = lstatSync(path);
+      if (stat.isSymbolicLink()) throw new Error("unsafe_path: Symbolic links are not followed");
+      existing = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (existing) {
       const old = content(path),
-        history = checked(`${path}.history`);
+        history = checked(`${relative(root, path)}.history`, true);
       mkdirSync(history, { recursive: true });
       writeFileSync(`${history}/${Date.now()}-${randomUUID()}`, old, { flag: "wx", mode: 0o600 });
       for (const oldName of readdirSync(history).sort().slice(0, -5))
-        unlinkSync(checked(`${history}/${oldName}`));
+        unlinkSync(checked(`${relative(root, history)}/${oldName}`));
     }
     writeFileSync(temp, value, { flag: "wx", mode: privateMode ? 0o600 : 0o644 });
     const fd = openSync(temp, "r");
@@ -75,7 +101,12 @@ function save(path: string, value: string | Buffer) {
     } catch {}
   }
 }
-const path = checked(operation.path);
+const path = checked(
+  operation.path,
+  operation.kind === "write" ||
+    operation.kind === "write_bytes" ||
+    operation.kind === "mkdir",
+);
 switch (operation.kind) {
   case "read_bytes": {
     const value = content(path);
@@ -124,6 +155,83 @@ switch (operation.kind) {
       size: stat.size,
       sha256: stat.isFile() && stat.size <= 1000000 ? hash(content(path)) : null,
     });
+    break;
+  }
+  case "workspace_list": {
+    const names = readdirSync(path).sort(),
+      page = names.slice(operation.offset, operation.offset + operation.limit),
+      entries: Array<{ name: string; type: string; size: number }> = [];
+    for (const name of page) {
+      const stat = lstatSync(resolve(path, name));
+      entries.push({
+        name,
+        type: stat.isSymbolicLink()
+          ? "symlink"
+          : stat.isDirectory()
+            ? "directory"
+            : stat.isFile()
+              ? "file"
+              : "other",
+        size: stat.size,
+      });
+    }
+    json({
+      path: operation.path,
+      entries,
+      nextOffset: operation.offset + page.length < names.length ? operation.offset + page.length : null,
+    });
+    break;
+  }
+  case "workspace_stat": {
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink()) throw new Error("unsafe_path: Symbolic links are not followed");
+    if (stat.isDirectory()) {
+      json({ type: "directory", size: stat.size, modifiedAt: stat.mtimeMs });
+      break;
+    }
+    if (!stat.isFile() || stat.nlink !== 1)
+      throw new Error("not_regular_file: A regular single-link file is required");
+    const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const opened = fstatSync(fd, { bigint: true });
+      if (!opened.isFile() || opened.nlink !== 1n || opened.ino !== BigInt(stat.ino))
+        throw new Error("file_changed: File changed while it was being inspected");
+      json({
+        type: "file",
+        size: Number(opened.size),
+        modifiedAt: Number(opened.mtimeNs) / 1_000_000,
+        version: versionOf(opened),
+      });
+    } finally {
+      closeSync(fd);
+    }
+    break;
+  }
+  case "workspace_read_chunk": {
+    const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const before = fstatSync(fd, { bigint: true });
+      if (!before.isFile() || before.nlink !== 1n)
+        throw new Error("not_regular_file: A regular single-link file is required");
+      const version = versionOf(before);
+      if (operation.version && !sameVersion(version, operation.version))
+        throw new Error("file_changed: File changed while it was being read");
+      const bytes = Number(before.size);
+      if (!Number.isSafeInteger(bytes)) throw new Error("file_too_large: File size is unsupported");
+      const chunk = Buffer.alloc(Math.min(operation.length, Math.max(0, bytes - operation.offset)));
+      let count = 0;
+      while (count < chunk.length) {
+        const read = readSync(fd, chunk, count, chunk.length - count, operation.offset + count);
+        if (!read) break;
+        count += read;
+      }
+      const after = fstatSync(fd, { bigint: true });
+      if (!sameVersion(version, versionOf(after)))
+        throw new Error("file_changed: File changed while it was being read");
+      json({ base64: chunk.subarray(0, count).toString("base64"), offset: operation.offset, totalBytes: bytes, version });
+    } finally {
+      closeSync(fd);
+    }
     break;
   }
   case "list": {
@@ -203,12 +311,17 @@ switch (operation.kind) {
     break;
   }
   case "mkdir":
-    mkdirSync(path, { recursive: true });
+    mkdirSync(checked(operation.path, true), { recursive: true });
     json({ created: operation.path });
     break;
   case "move": {
-    const destination = checked(operation.destination);
-    if (existsSync(destination)) throw new Error("Destination exists");
+    const destination = checked(operation.destination, true);
+    try {
+      lstatSync(destination);
+      throw new Error("Destination exists");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
     renameSync(path, destination);
     json({ moved: operation.path, destination: operation.destination });
     break;
@@ -227,4 +340,35 @@ switch (operation.kind) {
     json({ removed: operation.path });
     break;
   }
+}
+
+function versionOf(stat: {
+  dev: bigint;
+  ino: bigint;
+  size: bigint;
+  mtimeNs: bigint;
+  ctimeNs: bigint;
+}) {
+  const size = Number(stat.size);
+  if (!Number.isSafeInteger(size)) throw new Error("file_too_large: File size is unsupported");
+  return {
+    device: stat.dev.toString(),
+    inode: stat.ino.toString(),
+    size,
+    modifiedNs: stat.mtimeNs.toString(),
+    changedNs: stat.ctimeNs.toString(),
+  };
+}
+
+function sameVersion(
+  left: ReturnType<typeof versionOf>,
+  right: ReturnType<typeof versionOf>,
+): boolean {
+  return (
+    left.device === right.device &&
+    left.inode === right.inode &&
+    left.size === right.size &&
+    left.modifiedNs === right.modifiedNs &&
+    left.changedNs === right.changedNs
+  );
 }

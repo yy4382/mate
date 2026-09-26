@@ -14,6 +14,7 @@ import type { ModelProcessIdentity } from "./model-process.js";
 import type { AgentProvisionStage } from "./protocol.js";
 import { openNodeProcessOperations } from "./process-operation-runtime.js";
 import type { AgentProcessOperations } from "./process-operations.js";
+import { LinuxWorkspaceExecutor, type WorkspaceExecutionRequest } from "./workspace-execution.js";
 
 const INITIAL_RETRY_MS = 250;
 const MAX_RETRY_MS = 10_000;
@@ -34,6 +35,7 @@ interface NodeTestDependencies {
   modelWorkerEntry?: string;
   modelWorkerIdentity?: ModelProcessIdentity | null;
   processOperations?: AgentProcessOperations;
+  workspaceExecutor?: Pick<LinuxWorkspaceExecutor, "execute">;
   provisionAgent?: (
     agentId: string,
     onProgress: (stage: AgentProvisionStage) => void,
@@ -91,6 +93,14 @@ async function runLinuxNodeInternal(
       );
   const processOperations = dependencies.processOperations ?? processStore!.operations;
   try {
+    const workspaceExecutor =
+      dependencies.workspaceExecutor ??
+      (process.platform === "linux"
+        ? new LinuxWorkspaceExecutor(
+            options.agentHomeRoot ?? "/var/lib/mate/agents",
+            options.dataDirectory,
+          )
+        : undefined);
     let retryMs = INITIAL_RETRY_MS;
     while (!signal.aborted) {
       try {
@@ -107,6 +117,7 @@ async function runLinuxNodeInternal(
           modelWorkerIdentity,
           dependencies,
           processOperations,
+          workspaceExecutor,
           signal,
         );
         if (signal.aborted) break;
@@ -154,6 +165,7 @@ function connectOnce(
   modelWorkerIdentity: ModelProcessIdentity | undefined,
   testDependencies: NodeTestDependencies,
   processOperations: AgentProcessOperations,
+  workspaceExecutor: Pick<LinuxWorkspaceExecutor, "execute"> | undefined,
   signal: AbortSignal,
 ): Promise<boolean> {
   if (signal.aborted) return Promise.resolve(false);
@@ -418,6 +430,53 @@ function connectOnce(
               receipt: { reason: "node_operation_result_unavailable" },
             });
           });
+        return;
+      }
+      if (message.type === "control.workspace.operation") {
+        if (!authenticated)
+          throw new NodeAuthenticationError("控制面在节点身份验证前请求工作区操作。");
+        const { requestId, operationId, agentId, mode, operation } = message,
+          request: WorkspaceExecutionRequest = { operationId, agentId, mode, operation };
+        if (!workspaceExecutor) {
+          sendRequest(socket, {
+            type: "node.workspace.operation.result",
+            requestId,
+            operationId,
+            agentId,
+            ok: false,
+            error: "Linux workspace executor is unavailable",
+          });
+          return;
+        }
+        void workspaceExecutor.execute(request).then(
+          (result) => {
+            if (socket.readyState !== WebSocket.OPEN || !authenticated) return;
+            sendRequest(socket, {
+              type: "node.workspace.operation.result",
+              requestId,
+              operationId,
+              agentId,
+              ok: true,
+              result: {
+                code: result.code,
+                stdout: result.stdout,
+                stderr: result.stderr,
+                truncated: result.truncated,
+              },
+            });
+          },
+          () => {
+            if (socket.readyState !== WebSocket.OPEN || !authenticated) return;
+            sendRequest(socket, {
+              type: "node.workspace.operation.result",
+              requestId,
+              operationId,
+              agentId,
+              ok: false,
+              error: "Linux workspace operation could not be confirmed",
+            });
+          },
+        );
         return;
       }
       if (message.type === "control.agent.run") {
