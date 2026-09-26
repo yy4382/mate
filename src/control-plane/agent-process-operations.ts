@@ -20,6 +20,7 @@ export interface AgentProcessNodeResult {
   agentId: string;
   state: Exclude<AgentProcessOperationState, "started">;
   receipt: unknown | null;
+  revision?: number;
 }
 
 export interface AgentProcessNodePort {
@@ -57,6 +58,7 @@ interface OperationRow {
   state: "executing" | Exclude<AgentProcessOperationState, "started">;
   receipt_json: string | null;
   node_receipt_confirmed: 0 | 1;
+  node_receipt_revision: number | null;
 }
 
 /**
@@ -101,9 +103,9 @@ export class AgentProcessOperationBroker {
           )
             throw new Error("Agent process operation identity conflict");
           if (existing.state === "succeeded" || existing.state === "failed") return existing;
-          this.database
+            this.database
             .prepare(
-              "UPDATE owner_agent_process_operations SET state='executing',node_receipt_confirmed=0,updated_at=? WHERE operation_id=? AND state='unknown'",
+              "UPDATE owner_agent_process_operations SET state='executing',node_receipt_confirmed=0,node_receipt_revision=NULL,updated_at=? WHERE operation_id=? AND state='unknown'",
             )
             .run(this.now(), operationId);
           return this.read(operationId)!;
@@ -174,20 +176,34 @@ export class AgentProcessOperationBroker {
       row.agent_id !== uuidSchema.parse(result.agentId)
     )
       return { corrected: false };
-    if (row.state === "succeeded" || row.state === "failed")
+    const incomingRevision = validRevision(result.revision);
+    if (
+      (row.state === "succeeded" || row.state === "failed") &&
+      (incomingRevision === undefined ||
+        row.node_receipt_revision === null ||
+        incomingRevision <= row.node_receipt_revision)
+    )
       return { corrected: false, result: toResult(row) };
-    if (result.state === "unknown" && row.state === "unknown" && row.node_receipt_confirmed === 1)
+    if (
+      result.state === "unknown" &&
+      row.state === "unknown" &&
+      row.node_receipt_confirmed === 1 &&
+      (incomingRevision === undefined ||
+        row.node_receipt_revision === null ||
+        incomingRevision <= row.node_receipt_revision)
+    )
       return { corrected: false, result: toResult(row) };
     this.database
       .transaction(() => {
         this.database
           .prepare(
-            `UPDATE owner_agent_process_operations SET state=?,receipt_json=?,node_receipt_confirmed=1,updated_at=?
+            `UPDATE owner_agent_process_operations SET state=?,receipt_json=?,node_receipt_confirmed=1,node_receipt_revision=?,updated_at=?
          WHERE operation_id=? AND state IN ('executing','unknown')`,
           )
           .run(
             result.state,
             result.receipt === null ? null : JSON.stringify(result.receipt),
+            incomingRevision ?? null,
             this.now(),
             result.operationId,
           );
@@ -247,7 +263,7 @@ export class AgentProcessOperationBroker {
       .transaction(() => {
         this.database
           .prepare(
-            `UPDATE owner_agent_process_operations SET state=?,receipt_json=?,node_receipt_confirmed=?,updated_at=?
+            `UPDATE owner_agent_process_operations SET state=?,receipt_json=?,node_receipt_confirmed=?,node_receipt_revision=?,updated_at=?
            WHERE operation_id=? AND state IN ('executing','unknown')
              AND (node_receipt_confirmed=0 OR ?=1)`,
           )
@@ -255,6 +271,7 @@ export class AgentProcessOperationBroker {
             result.state,
             result.receipt === null ? null : JSON.stringify(result.receipt),
             confirmed ? 1 : 0,
+            confirmed ? (validRevision(result.revision) ?? null) : null,
             this.now(),
             request.operationId,
             confirmed ? 1 : 0,
@@ -362,6 +379,10 @@ function toResult(row: OperationRow): AgentProcessOperationResult {
     state: row.state,
     receipt: row.receipt_json === null ? null : JSON.parse(row.receipt_json),
   };
+}
+
+function validRevision(value: unknown): number | undefined {
+  return Number.isSafeInteger(value) && (value as number) >= 1 ? (value as number) : undefined;
 }
 
 function stableActionScopeId(stableActionId: string): string {

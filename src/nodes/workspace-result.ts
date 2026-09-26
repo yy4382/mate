@@ -5,7 +5,12 @@ const RESULT_TEXT_LIMIT = 12_000;
 /** Keep workspace helper output inside its wire limits and never leak send failures as rejections. */
 export function sendWorkspaceOperationResult(
   send: (request: unknown) => void,
-  metadata: { requestId: string; operationId: string; agentId: string },
+  metadata: {
+    requestId: string;
+    operationId: string;
+    agentId: string;
+    revision?: number;
+  },
   result: { code: number; stdout: string; stderr: string; truncated: boolean },
 ): void {
   const stdout = result.stdout.slice(0, RESULT_TEXT_LIMIT),
@@ -20,7 +25,13 @@ export function sendWorkspaceOperationResult(
         type: "node.workspace.operation.result",
         ...metadata,
         ok: true,
-        result: { code: result.code, stdout, stderr, truncated },
+        result: {
+          code: result.code,
+          stdout,
+          stderr,
+          truncated,
+          ...(metadata.revision === undefined ? {} : { revision: metadata.revision }),
+        },
       }),
     );
   } catch {

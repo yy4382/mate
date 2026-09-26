@@ -46,6 +46,7 @@ interface ApprovalRow {
   request_hash: string;
   state: ApprovalState;
   receipt_json: string | null;
+  node_receipt_revision: number | null;
   created_at: number;
   started_at: number | null;
 }
@@ -59,6 +60,7 @@ export interface PrivilegedNodePort {
     state: "succeeded" | "failed" | "unknown";
     startedAt: number;
     receipt: unknown | null;
+    revision?: number;
   }>;
 }
 

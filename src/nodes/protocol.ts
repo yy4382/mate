@@ -29,6 +29,7 @@ const workspaceExecutionResultSchema = z
     stdout: z.string().max(12_000),
     stderr: z.string().max(12_000),
     truncated: z.boolean(),
+    revision: z.number().int().positive().optional(),
   })
   .strict();
 const provisionIdentitySchema = z
@@ -184,6 +185,7 @@ const NodeRequestShapeSchema = z.discriminatedUnion("type", [
       agentId: agentIdSchema,
       state: z.enum(["succeeded", "failed", "unknown"]),
       receipt: z.json().nullable(),
+      revision: z.number().int().positive().optional(),
     })
     .strict(),
   z
@@ -204,6 +206,7 @@ const NodeRequestShapeSchema = z.discriminatedUnion("type", [
       startedAt: z.number().int().positive(),
       state: z.enum(["succeeded", "failed", "unknown"]),
       receipt: z.json().nullable(),
+      revision: z.number().int().positive().optional(),
     })
     .strict(),
   z
@@ -220,6 +223,7 @@ const NodeRequestShapeSchema = z.discriminatedUnion("type", [
               startedAt: z.number().int().positive(),
               state: z.enum(["succeeded", "failed", "unknown"]),
               receipt: z.json().nullable(),
+              revision: z.number().int().positive().optional(),
             })
             .strict(),
         )
@@ -238,6 +242,7 @@ const NodeRequestShapeSchema = z.discriminatedUnion("type", [
               agentId: agentIdSchema,
               state: z.enum(["succeeded", "failed", "unknown"]),
               receipt: z.json().nullable(),
+              revision: z.number().int().positive().optional(),
             })
             .strict(),
         )

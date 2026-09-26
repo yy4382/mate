@@ -8,6 +8,7 @@ import {
 import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { z } from "zod";
+import { assertNoRecoveryMarker } from "../deployment/coordinated-checkpoint.js";
 
 const savedIdentitySchema = z
   .object({
@@ -29,6 +30,7 @@ export interface LoadedNodeIdentity {
 
 export function loadOrCreateNodeIdentity(dataDirectory: string): LoadedNodeIdentity {
   if (!isAbsolute(dataDirectory)) throw new Error("MATE_NODE_DATA_DIR must be an absolute path");
+  assertNoRecoveryMarker(dataDirectory);
   mkdirSync(dataDirectory, { recursive: true, mode: 0o700 });
   const directory = resolve(dataDirectory);
   const directoryStat = lstatSync(directory);

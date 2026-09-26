@@ -33,6 +33,8 @@ export interface AgentProcessOperationReceipt {
   agentId: string;
   state: AgentProcessOperationState;
   receipt: unknown | null;
+  /** Monotonic version of this operation's durable node-local result. */
+  revision: number;
 }
 
 export interface AgentProcessExecution {
@@ -57,6 +59,7 @@ interface OperationRow {
   request: string;
   state: AgentProcessOperationState;
   receipt: string | null;
+  revision: number;
 }
 
 const schema = `
@@ -67,6 +70,7 @@ CREATE TABLE IF NOT EXISTS agent_process_operations (
   request TEXT NOT NULL,
   state TEXT NOT NULL CHECK(state IN ('started','succeeded','failed','unknown')),
   receipt TEXT,
+  revision INTEGER NOT NULL DEFAULT 1 CHECK(revision >= 1),
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -93,14 +97,23 @@ export class AgentProcessOperations {
   ) {
     database.pragma("synchronous = FULL");
     database.exec(schema);
+    if (
+      !database
+        .prepare("PRAGMA table_info(agent_process_operations)")
+        .all()
+        .some((column) => (column as { name: string }).name === "revision")
+    )
+      database.exec(
+        "ALTER TABLE agent_process_operations ADD COLUMN revision INTEGER NOT NULL DEFAULT 1 CHECK(revision >= 1)",
+      );
     database
       .prepare(
         `UPDATE agent_process_operations
-         SET state='unknown',receipt=?,updated_at=? WHERE state='started'`,
+         SET state='unknown',receipt=?,revision=revision+1,updated_at=? WHERE state='started'`,
       )
       .run(JSON.stringify({ reason: "node_restarted_during_operation" }), now());
     this.findOperation = database.prepare(
-      "SELECT operation_id,agent_id,request_hash,request,state,receipt FROM agent_process_operations WHERE operation_id=?",
+      "SELECT operation_id,agent_id,request_hash,request,state,receipt,revision FROM agent_process_operations WHERE operation_id=?",
     );
     this.insertOperation = database.prepare(
       `INSERT INTO agent_process_operations(
@@ -108,7 +121,7 @@ export class AgentProcessOperations {
        ) VALUES(?,?,?,?, 'started',?,?)`,
     );
     this.settleOperation = database.prepare(
-      `UPDATE agent_process_operations SET state=?,receipt=?,updated_at=?
+      `UPDATE agent_process_operations SET state=?,receipt=?,revision=revision+1,updated_at=?
        WHERE operation_id=? AND state='started'`,
     );
   }
@@ -228,6 +241,7 @@ function toReceipt(row: OperationRow): AgentProcessOperationReceipt {
     agentId: row.agent_id,
     state: row.state,
     receipt: row.receipt === null ? null : JSON.parse(row.receipt),
+    revision: row.revision,
   };
 }
 

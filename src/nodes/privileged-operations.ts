@@ -13,6 +13,8 @@ export interface PrivilegedReceipt {
   state: "started" | "succeeded" | "failed" | "unknown";
   startedAt: number;
   receipt: unknown | null;
+  /** Monotonic version of this operation's durable node-local result. */
+  revision: number;
 }
 
 interface Row {
@@ -23,6 +25,7 @@ interface Row {
   state: PrivilegedReceipt["state"];
   receipt_json: string | null;
   started_at: number;
+  revision: number;
 }
 
 /** Node-local root boundary: verify the grant, persist start, then call the sole root executor. */
@@ -40,11 +43,21 @@ export class PrivilegedNodeOperations {
     database.exec(`CREATE TABLE IF NOT EXISTS node_privileged_operations (
       request_id TEXT PRIMARY KEY, operation_id TEXT NOT NULL UNIQUE, agent_id TEXT NOT NULL,
       request_hash TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('started','succeeded','failed','unknown')),
-      receipt_json TEXT, started_at INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      receipt_json TEXT, started_at INTEGER NOT NULL, revision INTEGER NOT NULL DEFAULT 1 CHECK(revision >= 1),
+      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
     );`);
+    if (
+      !database
+        .prepare("PRAGMA table_info(node_privileged_operations)")
+        .all()
+        .some((column) => (column as { name: string }).name === "revision")
+    )
+      database.exec(
+        "ALTER TABLE node_privileged_operations ADD COLUMN revision INTEGER NOT NULL DEFAULT 1 CHECK(revision >= 1)",
+      );
     database
       .prepare(
-        "UPDATE node_privileged_operations SET state='unknown',receipt_json=?,updated_at=? WHERE state='started'",
+        "UPDATE node_privileged_operations SET state='unknown',receipt_json=?,revision=revision+1,updated_at=? WHERE state='started'",
       )
       .run(JSON.stringify({ reason: "node_restarted_during_privileged_command" }), now());
   }
@@ -145,7 +158,7 @@ export class PrivilegedNodeOperations {
   ): PrivilegedReceipt {
     this.database
       .prepare(
-        "UPDATE node_privileged_operations SET state=?,receipt_json=?,updated_at=? WHERE request_id=? AND state='started'",
+        "UPDATE node_privileged_operations SET state=?,receipt_json=?,revision=revision+1,updated_at=? WHERE request_id=? AND state='started'",
       )
       .run(state, JSON.stringify(receipt), this.now(), command.requestId);
     return toReceipt(this.row(command.requestId)!);
@@ -166,5 +179,6 @@ function toReceipt(row: Row): PrivilegedReceipt {
     state: row.state,
     startedAt: row.started_at,
     receipt: row.receipt_json === null ? null : JSON.parse(row.receipt_json),
+    revision: row.revision,
   };
 }

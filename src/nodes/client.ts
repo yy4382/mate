@@ -41,7 +41,8 @@ interface NodeTestDependencies {
   modelWorkerIdentity?: ModelProcessIdentity | null;
   processOperations?: AgentProcessOperations;
   privilegedOperations?: PrivilegedNodeOperations;
-  workspaceExecutor?: Pick<LinuxWorkspaceExecutor, "execute" | "status">;
+  workspaceExecutor?: Pick<LinuxWorkspaceExecutor, "execute" | "status"> &
+    Partial<Pick<LinuxWorkspaceExecutor, "receiptRevision">>;
   provisionAgent?: (
     agentId: string,
     onProgress: (stage: AgentProvisionStage) => void,
@@ -178,7 +179,10 @@ function connectOnce(
   testDependencies: NodeTestDependencies,
   processOperations: AgentProcessOperations,
   privilegedOperations: PrivilegedNodeOperations,
-  workspaceExecutor: Pick<LinuxWorkspaceExecutor, "execute" | "status"> | undefined,
+  workspaceExecutor:
+    | (Pick<LinuxWorkspaceExecutor, "execute" | "status"> &
+        Partial<Pick<LinuxWorkspaceExecutor, "receiptRevision">>)
+    | undefined,
   signal: AbortSignal,
 ): Promise<boolean> {
   if (signal.aborted) return Promise.resolve(false);
@@ -318,13 +322,14 @@ function connectOnce(
         type: "node.privileged.reconcile.result",
         requestId: randomUUID(),
         receipts: receipts.map(
-          ({ requestId, operationId, agentId, state, startedAt, receipt }) => ({
+          ({ requestId, operationId, agentId, state, startedAt, receipt, revision }) => ({
             requestId,
             operationId,
             agentId,
             startedAt,
             state: state === "started" ? "unknown" : state,
             receipt,
+            revision,
           }),
         ),
       });
@@ -437,6 +442,7 @@ function connectOnce(
                 startedAt: result.startedAt,
                 state: result.state === "started" ? "unknown" : result.state,
                 receipt: result.receipt,
+                revision: result.revision,
               });
           })
           .catch(() => {
@@ -501,6 +507,7 @@ function connectOnce(
               agentId,
               state: result.state === "started" ? "unknown" : result.state,
               receipt: result.receipt,
+              revision: result.revision,
             });
           })
           .catch(() => {
@@ -539,7 +546,12 @@ function connectOnce(
               if (socket.readyState !== WebSocket.OPEN || !authenticated) return;
               sendWorkspaceOperationResult(
                 (response) => sendRequest(socket, response),
-                { requestId, operationId, agentId },
+                {
+                  requestId,
+                  operationId,
+                  agentId,
+                  revision: workspaceExecutor.receiptRevision?.(agentId, operationId),
+                },
                 result,
               );
             },
@@ -573,6 +585,7 @@ function connectOnce(
                     agentId,
                     state: result.state,
                     receipt: result.receipt,
+                    revision: result.revision,
                   },
                 ]
               : [];
@@ -589,7 +602,8 @@ function connectOnce(
           receipts: message.operations.flatMap(({ agentId, operationId }) => {
             try {
               const result = workspaceExecutor?.status(agentId, operationId);
-              return result ? [{ operationId, agentId, result }] : [];
+              const revision = workspaceExecutor?.receiptRevision?.(agentId, operationId);
+              return result ? [{ operationId, agentId, result: { ...result, revision } }] : [];
             } catch {
               return [];
             }

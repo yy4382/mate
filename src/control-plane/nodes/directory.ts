@@ -103,12 +103,14 @@ interface PendingAgentProcessOperation {
     agentId: string;
     state: Exclude<AgentProcessOperationState, "started">;
     receipt: unknown | null;
+    revision?: number;
   }>;
   resolve: (result: {
     operationId: string;
     agentId: string;
     state: Exclude<AgentProcessOperationState, "started">;
     receipt: unknown | null;
+    revision?: number;
   }) => void;
   reject: (error: Error) => void;
   timeout: ReturnType<typeof setTimeout>;
@@ -212,6 +214,7 @@ export class NodeDirectory {
         state: "succeeded" | "failed" | "unknown";
         startedAt: number;
         receipt: unknown | null;
+        revision?: number;
       }) => void;
       reject: (reason: Error) => void;
       timeout: ReturnType<typeof setTimeout>;
@@ -401,6 +404,7 @@ export class NodeDirectory {
           state: request.state,
           startedAt: request.startedAt,
           receipt: request.receipt,
+          revision: request.revision,
         });
       }
       if (
@@ -415,6 +419,7 @@ export class NodeDirectory {
           state: request.state,
           startedAt: request.startedAt,
           receipt: request.receipt,
+          revision: request.revision,
         });
       return;
     }
@@ -433,6 +438,7 @@ export class NodeDirectory {
             state: receipt.state,
             startedAt: receipt.startedAt,
             receipt: receipt.receipt,
+            revision: receipt.revision,
           });
       return;
     }
@@ -631,6 +637,7 @@ export class NodeDirectory {
     state: "succeeded" | "failed" | "unknown";
     startedAt: number;
     receipt: unknown | null;
+    revision?: number;
   }> {
     const socket = this.connected.get(nodeId);
     const session = socket ? this.sessions.get(socket) : undefined;
@@ -745,6 +752,7 @@ export class NodeDirectory {
     agentId: string;
     state: Exclude<AgentProcessOperationState, "started">;
     receipt: unknown | null;
+    revision?: number;
   }> {
     const operationId = NodeRequestIdSchema.parse(request.operationId),
       agentId = NodeRequestIdSchema.parse(request.agentId),
@@ -1422,6 +1430,7 @@ export class NodeDirectory {
         agentId: result.agentId,
         state: result.state,
         receipt: result.receipt,
+        revision: result.revision,
       });
   }
 

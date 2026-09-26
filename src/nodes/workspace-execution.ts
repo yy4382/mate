@@ -36,6 +36,7 @@ interface StoredReceipt {
   requestHash: string;
   state: "executing" | "succeeded" | "failed" | "unknown";
   result?: ExecutionResult;
+  revision: number;
   updatedAt: number;
 }
 
@@ -111,6 +112,14 @@ export class LinuxWorkspaceExecutor {
     return receipt.result;
   }
 
+  /** Read the durable local version for a workspace operation without changing its result. */
+  receiptRevision(agentId: string, operationId: string): number | undefined {
+    const receipt = this.readReceipt(operationId);
+    if (!receipt || receipt.agentId !== agentId || !Number.isSafeInteger(receipt.revision))
+      return undefined;
+    return receipt.revision;
+  }
+
   private async executeOnce(
     request: WorkspaceExecutionRequest,
     requestHash: string,
@@ -132,7 +141,13 @@ export class LinuxWorkspaceExecutor {
       const result = failed(
         "operation_unknown: A previous node process stopped during this operation",
       );
-      this.writeReceipt({ ...existing, state: "unknown", result, updatedAt: this.now() });
+      this.writeReceipt({
+        ...existing,
+        state: "unknown",
+        result,
+        revision: (existing.revision ?? 1) + 1,
+        updatedAt: this.now(),
+      });
       return result;
     }
 
@@ -148,6 +163,7 @@ export class LinuxWorkspaceExecutor {
         agentId: request.agentId,
         requestHash,
         state: "executing",
+        revision: 1,
         updatedAt: this.now(),
       });
 
@@ -171,6 +187,7 @@ export class LinuxWorkspaceExecutor {
           requestHash,
           state: "unknown",
           result,
+          revision: 2,
           updatedAt: this.now(),
         });
       return result;
@@ -188,6 +205,7 @@ export class LinuxWorkspaceExecutor {
               ? "unknown"
               : "failed",
         result,
+        revision: 2,
         updatedAt: this.now(),
       });
     return result;

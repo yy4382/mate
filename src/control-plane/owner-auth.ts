@@ -5,6 +5,7 @@ import { chmodSync, lstatSync, mkdirSync, readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { controlPlaneMigrations, controlPlaneSchema } from "./schema.js";
 import { openControlPlaneDatabase } from "../storage/initialize.js";
+import { assertNoRecoveryMarker } from "../deployment/coordinated-checkpoint.js";
 
 export const OWNER_SESSION_COOKIE = "__Host-mate_session";
 export const DEFAULT_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -41,6 +42,7 @@ export class OwnerAuth {
   constructor(private readonly options: OwnerAuthOptions) {
     if (!isAbsolute(options.dataDir))
       throw new Error("MATE_CONTROL_PLANE_DATA_DIR must be an absolute path");
+    assertNoRecoveryMarker(options.dataDir);
     this.now = options.now ?? Date.now;
     this.sessionTtlMs = options.sessionTtlMs ?? DEFAULT_SESSION_TTL_MS;
     if (!Number.isSafeInteger(this.sessionTtlMs) || this.sessionTtlMs < 1)
