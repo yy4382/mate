@@ -136,6 +136,7 @@ const NodeRequestShapeSchema = z.discriminatedUnion("type", [
         operationId: requestIdSchema,
         agentId: agentIdSchema,
         ok: z.literal(true),
+        revision: z.number().int().positive().optional(),
         result: workspaceExecutionResultSchema,
       })
       .strict(),

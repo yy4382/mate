@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import {
   closeSync,
   existsSync,
@@ -14,6 +13,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { ExecutionBackend, ExecutionResult, Operation } from "../execution/backend.js";
 import { LinuxUserBackend, type LinuxIdentity } from "../execution/linux-user.js";
 import { readProvisionedLinuxAgentIdentity, type LinuxAgentIdentity } from "./agent-provisioner.js";
+import { workspaceReceiptRequestHash } from "./workspace-receipt.js";
 
 export type WorkspaceMode = "owner_read" | "agent_read" | "agent_action" | "agent_publish";
 
@@ -89,7 +89,7 @@ export class LinuxWorkspaceExecutor {
 
   execute(request: WorkspaceExecutionRequest, signal?: AbortSignal): Promise<ExecutionResult> {
     validateRequest(request);
-    const requestHash = hashRequest(request),
+    const requestHash = workspaceReceiptRequestHash(request.agentId, request.operation),
       existingCall = this.active.get(request.operationId);
     if (existingCall)
       return existingCall.requestHash === requestHash
@@ -262,20 +262,4 @@ function validateRequest(request: WorkspaceExecutionRequest): void {
 
 function failed(stderr: string): ExecutionResult {
   return { code: 1, stdout: "", stderr: stderr.slice(0, 240), truncated: false };
-}
-
-function hashRequest(request: WorkspaceExecutionRequest): string {
-  return createHash("sha256")
-    .update(JSON.stringify({ agentId: request.agentId, operation: canonical(request.operation) }))
-    .digest("hex");
-}
-
-function canonical(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonical);
-  if (typeof value !== "object" || value === null) return value;
-  return Object.fromEntries(
-    Object.entries(value)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, item]) => [key, canonical(item)]),
-  );
 }

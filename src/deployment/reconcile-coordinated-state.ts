@@ -1,0 +1,675 @@
+import Database from "better-sqlite3";
+import { createHash, createPrivateKey, createPublicKey } from "node:crypto";
+import {
+  lstatSync,
+  readFileSync,
+  readdirSync,
+} from "node:fs";
+import { join } from "node:path";
+import { z } from "zod";
+import { controlPlaneMigrations, controlPlaneSchema } from "../control-plane/schema.js";
+import { readProvisionedLinuxAgentIdentity } from "../nodes/agent-provisioner.js";
+import { agentProcessOperationSchema } from "../nodes/process-operations.js";
+import { openControlPlaneDatabase } from "../storage/initialize.js";
+import { type CoordinatedStatePaths } from "./coordinated-checkpoint.js";
+import {
+  reconcileRecoveryState,
+  type NodeRecoveryOperation,
+  type RecoveryAgent,
+  type RecoveryOperation,
+  type RecoveryOperationKind,
+} from "./reconcile-state.js";
+
+const identitySchema = z.object({ id: z.string().uuid(), privateKey: z.string().min(1).max(8192) }).strict();
+const uuidSchema = z.string().uuid();
+
+interface AgentRow {
+  id: string;
+  node_id: string;
+  linux_username: string | null;
+  uid: number | null;
+  gid: number | null;
+  home: string | null;
+  home_marker: string | null;
+}
+
+interface ProcessReceiptRow {
+  operation_id: string;
+  agent_id: string;
+  request_hash: string;
+  request: string;
+  state: "started" | "succeeded" | "failed" | "unknown";
+  receipt: string | null;
+  revision: number | null;
+}
+
+interface PrivilegedReceiptRow {
+  request_id: string;
+  operation_id: string;
+  agent_id: string;
+  request_hash: string;
+  state: "started" | "succeeded" | "failed" | "unknown";
+  receipt_json: string | null;
+  started_at: number;
+  revision: number | null;
+}
+
+interface OperationTarget {
+  kind: RecoveryOperationKind;
+  agentId: string;
+  operationId: string;
+  row: Record<string, unknown>;
+}
+
+export interface CoordinatedReconciliationReport {
+  nodeId: string;
+  checkedOperations: number;
+  confirmed: number;
+  holds: Array<{ agentId: string; reason: string }>;
+  released: string[];
+}
+
+export interface CoordinatedReconciliationDependencies {
+  lookupAgentIdentity?: (agentId: string, homeRoot: string) => {
+    username: string;
+    uid: number;
+    gid: number;
+    home: string;
+    homeMarker: string;
+  };
+  now?: () => number;
+}
+
+/** Compare the restored control-plane SQLite state with this machine's real node receipts. */
+export function reconcileCoordinatedState(
+  paths: CoordinatedStatePaths,
+  dependencies: CoordinatedReconciliationDependencies = {},
+): CoordinatedReconciliationReport {
+  const now = dependencies.now ?? Date.now,
+    lookupIdentity = dependencies.lookupAgentIdentity ?? readProvisionedLinuxAgentIdentity,
+    controlPlanePath = join(paths.controlPlaneDataDir, "control-plane.sqlite"),
+    nodeIdentity = readNodeIdentity(join(paths.nodeDataDir, "node-identity.json")),
+    processPath = join(paths.nodeDataDir, "agent-process-operations.sqlite"),
+    privilegedPath = join(paths.nodeDataDir, "privileged-operations.sqlite"),
+    { controlPlane, processDb, privilegedDb } = openRecoveryStores(
+      controlPlanePath,
+      processPath,
+      privilegedPath,
+    );
+  let checkedOperations = 0;
+  try {
+    const pairedNode = controlPlane
+      .prepare("SELECT id,public_key FROM nodes WHERE id=?")
+      .get(nodeIdentity.id) as { id: string; public_key: string } | undefined;
+    const rows = controlPlane
+      .prepare("SELECT id,node_id,linux_username,uid,gid,home,home_marker FROM owner_agents")
+      .all() as AgentRow[];
+    const localHomes = new Set(
+      readdirSync(paths.agentHomeRoot).filter((name) => uuidSchema.safeParse(name).success),
+    );
+    const localHomeAgents = rows.filter((row) =>
+      localHomes.has(row.id) && row.home === join(paths.agentHomeRoot, row.id),
+    );
+    const controlAgents = rows.map(toRecoveryAgent),
+      localAgentIds = [...new Set([
+        ...rows.filter((row) => row.node_id === nodeIdentity.id).map((row) => row.id),
+        ...localHomeAgents.map((row) => row.id),
+      ])],
+      localById = new Map(rows.map((row) => [row.id, row])),
+      verifiedAgents: RecoveryAgent[] = [];
+    for (const row of rows) {
+      if (row.node_id !== nodeIdentity.id) continue;
+      try {
+        const identity = lookupIdentity(row.id, paths.agentHomeRoot);
+        if (
+          identity.home !== row.home ||
+          identity.username !== row.linux_username ||
+          identity.uid !== row.uid ||
+          identity.gid !== row.gid ||
+          identity.homeMarker !== row.home_marker
+        )
+          continue;
+        if (row.node_id === nodeIdentity.id)
+          verifiedAgents.push({ ...toRecoveryAgent(row), username: identity.username });
+      } catch {
+        // An unreadable account or home holds just this Agent; other node identities still reconcile.
+      }
+    }
+
+    const controlOperations: RecoveryOperation[] = [],
+      nodeOperations: NodeRecoveryOperation[] = [],
+      targets = new Map<string, OperationTarget>(),
+      invalidReceiptAgents = new Map<string, string>();
+
+    for (const row of readProcessReceiptsChecked(processDb, processPath)) {
+      const parsed = parseNodeProcessRequest(row);
+      if (!parsed) {
+        invalidReceiptAgents.set(row.agent_id, "node_receipt_identity_unproven");
+        continue;
+      }
+      nodeOperations.push({
+        operationId: row.operation_id,
+        agentId: row.agent_id,
+        kind: parsed.kind,
+        requestHash: row.request_hash,
+        state: row.state,
+        receipt: parseJsonOrNull(row.receipt),
+        sequence: row.revision ?? 0,
+      });
+    }
+    for (const row of readPrivilegedReceiptsChecked(privilegedDb, privilegedPath)) {
+      if (!validHash(row.request_hash) || !uuidSchema.safeParse(row.agent_id).success) {
+        invalidReceiptAgents.set(row.agent_id, "node_receipt_identity_unproven");
+        continue;
+      }
+      nodeOperations.push({
+        operationId: row.request_id,
+        agentId: row.agent_id,
+        kind: "privileged",
+        requestHash: row.request_hash,
+        state: row.state,
+        receipt: parseJsonOrNull(row.receipt_json),
+        startedAt: row.started_at,
+        sequence: row.revision ?? 0,
+      });
+    }
+    for (const receipt of readWorkspaceReceipts(join(paths.nodeDataDir, "workspace-receipts"))) {
+      if (!uuidSchema.safeParse(receipt.operationId).success || !uuidSchema.safeParse(receipt.agentId).success) {
+        if (typeof receipt.agentId === "string")
+          invalidReceiptAgents.set(receipt.agentId, "node_receipt_identity_unproven");
+        continue;
+      }
+      nodeOperations.push({
+        operationId: receipt.operationId,
+        agentId: receipt.agentId,
+        kind: "workspace",
+        requestHash: receipt.requestHash,
+        state: receipt.state === "executing" ? "started" : receipt.state,
+        receipt: normalizeWorkspaceReceipt(receipt.state, receipt.result),
+        sequence: receipt.revision,
+      });
+    }
+
+    for (const row of readProcessIntents(controlPlane, nodeIdentity.id)) {
+      const kind = processIntentKind(row.request_json);
+      if (!kind) {
+        invalidReceiptAgents.set(row.agent_id, "control_receipt_identity_unproven");
+        continue;
+      }
+      const requestHash = expectedProcessHash(row.agent_id, row.request_json);
+      addIntent(controlOperations, targets, {
+        kind,
+        operationId: row.operation_id,
+        agentId: row.agent_id,
+        nodeId: row.node_id,
+        requestHash,
+        state: row.state,
+        receiptConfirmed: row.node_receipt_confirmed === 1,
+        nodeReceiptRevision: row.node_receipt_revision,
+        receipt: parseJsonOrNull(row.receipt_json),
+      }, { kind, agentId: row.agent_id, operationId: row.operation_id, row });
+    }
+    for (const row of readStopIntents(controlPlane, nodeIdentity.id)) {
+      const requestHash = hashJson({ agentId: row.agent_id, operation: { kind: "process.stop_all" } });
+      addIntent(controlOperations, targets, {
+        kind: "stop",
+        operationId: row.operation_id,
+        agentId: row.agent_id,
+        nodeId: row.node_id,
+        requestHash,
+        state: row.state,
+        receiptConfirmed: row.node_receipt_revision !== null,
+        nodeReceiptRevision: row.node_receipt_revision,
+        receipt: parseJsonOrNull(row.receipt_json),
+      }, { kind: "stop", agentId: row.agent_id, operationId: row.operation_id, row });
+    }
+    for (const row of readPrivilegedIntents(controlPlane, nodeIdentity.id)) {
+      let command: Record<string, unknown>;
+      try {
+        command = JSON.parse(row.command_json) as Record<string, unknown>;
+      } catch {
+        invalidReceiptAgents.set(row.agent_id, "control_receipt_identity_unproven");
+        continue;
+      }
+      const state = normalizeApprovalState(row.state);
+      if (!state) continue;
+      addIntent(controlOperations, targets, {
+        kind: "privileged",
+        operationId: row.request_id,
+        agentId: row.agent_id,
+        nodeId: row.node_id,
+        requestHash: hashJson(command),
+        state,
+        receiptConfirmed: row.node_receipt_revision !== null,
+        nodeReceiptRevision: row.node_receipt_revision,
+        receipt: parseJsonOrNull(row.receipt_json),
+      }, { kind: "privileged", agentId: row.agent_id, operationId: row.request_id, row });
+    }
+    for (const row of readWorkspaceIntents(controlPlane, nodeIdentity.id)) {
+      let envelope: Record<string, unknown>;
+      try {
+        envelope = JSON.parse(row.result_json) as Record<string, unknown>;
+      } catch {
+        invalidReceiptAgents.set(row.agent_id, "control_receipt_identity_unproven");
+        continue;
+      }
+      const state = normalizeWorkspaceState(envelope.state);
+      if (!state || typeof envelope.operationId !== "string") continue;
+      const requestHash = typeof envelope.nodeRequestHash === "string" ? envelope.nodeRequestHash : "";
+      addIntent(controlOperations, targets, {
+        kind: "workspace",
+        operationId: envelope.operationId,
+        agentId: row.agent_id,
+        nodeId: nodeIdentity.id,
+        requestHash,
+        state,
+        receiptConfirmed: Number.isSafeInteger(envelope.revision),
+        nodeReceiptRevision: validRevision(envelope.revision) ?? null,
+        receipt: workspaceControlReceipt(envelope),
+      }, { kind: "workspace", agentId: row.agent_id, operationId: envelope.operationId, row: { ...row, envelope } });
+    }
+
+    const controlState = {
+        nodeId: nodeIdentity.id,
+        nodePublicKey: pairedNode?.public_key ?? "",
+        agents: controlAgents,
+        operations: controlOperations,
+      },
+      nodeState = {
+        nodeId: nodeIdentity.id,
+        nodePublicKey: nodeIdentity.publicKey,
+        agents: verifiedAgents,
+        operations: nodeOperations,
+      },
+      decision = reconcileRecoveryState(controlState, nodeState),
+      holds = new Map(decision.holds.map((entry) => [entry.agentId, entry.reason]));
+    for (const row of localHomeAgents)
+      if (row.node_id !== nodeIdentity.id) holds.set(row.id, "node_identity_unproven");
+    for (const agent of localAgentIds)
+      if (!pairedNode || pairedNode.public_key !== nodeIdentity.publicKey)
+        holds.set(agent, "node_identity_unproven");
+    for (const [agent, reason] of invalidReceiptAgents)
+      if (localAgentIds.includes(agent)) holds.set(agent, reason);
+
+    for (const receipt of nodeOperations) {
+      const owner = localById.get(receipt.agentId);
+      if (owner && owner.node_id !== nodeIdentity.id)
+        holds.set(receipt.agentId, "operation_node_identity_conflict");
+    }
+
+    const confirmed = decision.confirmed.filter((receipt) => {
+      if (receipt.kind !== "privileged") return true;
+      const target = targets.get(key(receipt.kind, receipt.operationId));
+      if (!target) return false;
+      const row = target.row as { command_json: string; created_at: number };
+      const startedAt = receipt.startedAt,
+        command = JSON.parse(row.command_json) as { expiresAt: number };
+      if (!Number.isSafeInteger(startedAt) || (startedAt as number) < row.created_at || (startedAt as number) >= command.expiresAt) {
+        holds.set(receipt.agentId, "privileged_start_unproven");
+        return false;
+      }
+      return true;
+    });
+    checkedOperations = nodeOperations.length + controlOperations.length;
+    controlPlane
+      .transaction(() => {
+        for (const receipt of confirmed) {
+          if (holds.has(receipt.agentId)) continue;
+          const target = targets.get(key(receipt.kind, receipt.operationId));
+          if (!target) continue;
+          applyReceipt(controlPlane, target, receipt, now());
+        }
+        const upsert = controlPlane.prepare(`
+          INSERT INTO owner_agent_recovery_holds(agent_id,reason,updated_at) VALUES(?,?,?)
+          ON CONFLICT(agent_id) DO UPDATE SET reason=excluded.reason,updated_at=excluded.updated_at
+        `);
+        for (const [id, reason] of holds) if (localById.has(id)) upsert.run(id, reason, now());
+        const release = controlPlane.prepare(
+          "DELETE FROM owner_agent_recovery_holds WHERE agent_id=?",
+        );
+        const held = new Set(holds.keys());
+        for (const id of localAgentIds) if (!held.has(id)) release.run(id);
+      }).immediate();
+    return {
+      nodeId: nodeIdentity.id,
+      checkedOperations,
+      confirmed: confirmed.filter((row) => !holds.has(row.agentId)).length,
+      holds: [...holds].map(([agentId, reason]) => ({ agentId, reason })),
+      released: localAgentIds.filter((id) => !holds.has(id)),
+    };
+  } finally {
+    controlPlane.close();
+    processDb.close();
+    privilegedDb.close();
+  }
+}
+
+function readNodeIdentity(path: string): { id: string; publicKey: string } {
+  const stat = lstatSync(path);
+  if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0)
+    throw new Error("Node identity must be a protected regular file");
+  const saved = identitySchema.parse(JSON.parse(readFileSync(path, "utf8"))),
+    privateKey = createPrivateKey(saved.privateKey);
+  if (privateKey.asymmetricKeyType !== "ed25519") throw new Error("Node identity key must use Ed25519");
+  return {
+    id: saved.id,
+    publicKey: createPublicKey(privateKey).export({ type: "spki", format: "pem" }).toString(),
+  };
+}
+
+function toRecoveryAgent(row: AgentRow): RecoveryAgent {
+  return {
+    id: row.id,
+    nodeId: row.node_id,
+    uid: row.uid ?? 0,
+    gid: row.gid ?? 0,
+    home: row.home ?? "",
+    homeMarker: row.home_marker ?? "",
+    ...(row.linux_username ? { username: row.linux_username } : {}),
+  };
+}
+
+function readProcessReceipts(database: Database.Database): ProcessReceiptRow[] {
+  assertSqliteTable(database, "agent_process_operations");
+  const hasRevision = hasColumn(database, "agent_process_operations", "revision"),
+    revision = hasRevision ? "revision" : "NULL AS revision";
+  return database.prepare(`SELECT operation_id,agent_id,request_hash,request,state,receipt,${revision}
+    FROM agent_process_operations ORDER BY operation_id`).all() as ProcessReceiptRow[];
+}
+
+function readPrivilegedReceipts(database: Database.Database): PrivilegedReceiptRow[] {
+  assertSqliteTable(database, "node_privileged_operations");
+  const hasRevision = hasColumn(database, "node_privileged_operations", "revision"),
+    revision = hasRevision ? "revision" : "NULL AS revision";
+  return database.prepare(`SELECT request_id,operation_id,agent_id,request_hash,state,receipt_json,started_at,${revision}
+    FROM node_privileged_operations ORDER BY request_id`).all() as PrivilegedReceiptRow[];
+}
+
+function readWorkspaceReceipts(directory: string): Array<{
+  operationId: string;
+  agentId: string;
+  requestHash: string;
+  state: "executing" | "succeeded" | "failed" | "unknown";
+  result?: unknown;
+  revision: number;
+}> {
+  const root = lstatSync(directory);
+  if (!root.isDirectory() || root.isSymbolicLink() || (root.mode & 0o077) !== 0)
+    throw new Error("Workspace receipt directory must be private and real");
+  return readdirSync(directory).filter((name) => name.endsWith(".json")).map((name) => {
+    const path = join(directory, name), stat = lstatSync(path);
+    if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0)
+      throw new Error("Workspace receipt must be a private regular file");
+    const receipt = z.object({
+      operationId: z.string(),
+      agentId: z.string(),
+      requestHash: z.string(),
+      state: z.enum(["executing", "succeeded", "failed", "unknown"]),
+      result: z.unknown().optional(),
+      revision: z.number().int().positive().optional(),
+    }).passthrough().parse(JSON.parse(readFileSync(path, "utf8")));
+    return { ...receipt, revision: receipt.revision ?? 0 };
+  });
+}
+
+function readProcessIntents(database: Database.Database, nodeId: string): Array<Record<string, any>> {
+  return database.prepare(`SELECT operation_id,agent_id,node_id,request_json,state,receipt_json,
+      node_receipt_confirmed,node_receipt_revision FROM owner_agent_process_operations WHERE node_id=?`)
+    .all(nodeId) as Array<Record<string, any>>;
+}
+
+function readStopIntents(database: Database.Database, nodeId: string): Array<Record<string, any>> {
+  return database.prepare(`SELECT operation_id,agent_id,node_id,state,receipt_json,node_receipt_revision
+    FROM owner_agent_stop_intents WHERE node_id=?`).all(nodeId) as Array<Record<string, any>>;
+}
+
+function readPrivilegedIntents(database: Database.Database, nodeId: string): Array<Record<string, any>> {
+  return database.prepare(`SELECT request_id,node_id,agent_id,command_json,state,receipt_json,
+      node_receipt_revision,created_at FROM owner_privileged_approvals WHERE node_id=?`)
+    .all(nodeId) as Array<Record<string, any>>;
+}
+
+function readWorkspaceIntents(database: Database.Database, nodeId: string): Array<Record<string, any>> {
+  return database.prepare(`SELECT action.agent_id,action.result_json,action.session_id,action.action_id,agent.node_id
+    FROM owner_agent_tool_actions action JOIN owner_agents agent ON agent.id=action.agent_id
+    WHERE agent.node_id=? AND action.operation LIKE 'workspace.%'`)
+    .all(nodeId) as Array<Record<string, any>>;
+}
+
+function addIntent(
+  operations: RecoveryOperation[],
+  targets: Map<string, OperationTarget>,
+  operation: RecoveryOperation,
+  target: OperationTarget,
+): void {
+  operations.push(operation);
+  targets.set(key(operation.kind, operation.operationId), target);
+}
+
+function processIntentKind(requestJson: string): RecoveryOperationKind | undefined {
+  try {
+    const request = JSON.parse(requestJson) as { operation?: unknown };
+    const operation = agentProcessOperationSchema.parse(request.operation);
+    return operation.kind === "process.stop_all" ? "stop" : "process";
+  } catch {
+    return undefined;
+  }
+}
+
+function expectedProcessHash(agentId: string, requestJson: string): string {
+  try {
+    const request = JSON.parse(requestJson) as { operation?: unknown },
+      operation = agentProcessOperationSchema.parse(request.operation);
+    return hashJson({ agentId, operation });
+  } catch {
+    return "";
+  }
+}
+
+function parseNodeProcessRequest(row: ProcessReceiptRow): { kind: RecoveryOperationKind } | undefined {
+  if (!validHash(row.request_hash)) return undefined;
+  try {
+    const request = JSON.parse(row.request) as { agentId?: unknown; operation?: unknown },
+      operation = agentProcessOperationSchema.parse(request.operation);
+    if (
+      request.agentId !== row.agent_id ||
+      createHash("sha256").update(row.request).digest("hex") !== row.request_hash
+    )
+      return undefined;
+    return { kind: operation.kind === "process.stop_all" ? "stop" : "process" };
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeApprovalState(state: string): RecoveryOperation["state"] | undefined {
+  if (state === "running" || state === "approved") return "executing";
+  if (state === "pending") return undefined;
+  if (state === "succeeded" || state === "failed" || state === "unknown") return state;
+  if (state === "expired") return "expired";
+  return undefined;
+}
+
+function normalizeWorkspaceState(state: unknown): RecoveryOperation["state"] | undefined {
+  return state === "executing" || state === "unknown" || state === "succeeded" || state === "failed"
+    ? state
+    : undefined;
+}
+
+function workspaceControlReceipt(envelope: Record<string, unknown>): unknown | null {
+  return envelope.result ?? null;
+}
+
+function normalizeWorkspaceReceipt(state: string, result: unknown): unknown | null {
+  if (state === "succeeded") {
+    if (!result || typeof result !== "object") return null;
+    try {
+      return JSON.parse((result as { stdout: string }).stdout);
+    } catch {
+      return null;
+    }
+  }
+  if (state === "failed" && result && typeof result === "object") {
+    const value = result as { code?: number; stderr?: string };
+    return { code: value.code ?? 1, stderr: value.stderr ?? "" };
+  }
+  return result ?? null;
+}
+
+function applyReceipt(
+  database: Database.Database,
+  target: OperationTarget,
+  receipt: NodeRecoveryOperation,
+  now: number,
+): void {
+  if (target.kind === "process")
+    database.prepare(`UPDATE owner_agent_process_operations SET state=?,receipt_json=?,
+        node_receipt_confirmed=1,node_receipt_revision=?,updated_at=? WHERE operation_id=? AND node_id=?`)
+      .run(receipt.state, stringifyOrNull(receipt.receipt), receipt.sequence, now, target.operationId, (target.row as { node_id: string }).node_id);
+  else if (target.kind === "stop")
+    database.prepare(`UPDATE owner_agent_stop_intents SET state=?,receipt_json=?,node_receipt_revision=?,updated_at=?
+        WHERE operation_id=? AND node_id=?`)
+      .run(receipt.state, stringifyOrNull(receipt.receipt), receipt.sequence, now, target.operationId, (target.row as { node_id: string }).node_id);
+  else if (target.kind === "privileged") {
+    database.prepare(`UPDATE owner_privileged_approvals SET state=?,receipt_json=?,node_receipt_revision=?,updated_at=?
+        WHERE request_id=? AND node_id=?`)
+      .run(receipt.state, stringifyOrNull(receipt.receipt), receipt.sequence, now, target.operationId, (target.row as { node_id: string }).node_id);
+  } else {
+    const row = target.row as { envelope: Record<string, unknown> };
+    const workspace = receipt.receipt as { code?: number; stdout?: string; stderr?: string } | null;
+    let state: "succeeded" | "failed" = receipt.state === "succeeded" ? "succeeded" : "failed",
+      result: unknown,
+      error: string | undefined;
+    if (state === "succeeded") {
+      try {
+        result = JSON.parse(workspace?.stdout ?? "");
+      } catch {
+        throw new Error("Workspace operation result could not be decoded");
+      }
+    } else {
+      result = { code: workspace?.code ?? 1, stderr: workspace?.stderr ?? "" };
+      error = workspace?.stderr ?? "Workspace operation failed";
+    }
+    const envelope = JSON.stringify({
+      ...row.envelope,
+      state,
+      result,
+      ...(error ? { error } : {}),
+      revision: receipt.sequence,
+    }).slice(0, 100_000);
+    database.prepare(`UPDATE owner_agent_tool_actions SET result_json=? WHERE session_id=? AND action_id=? AND agent_id=?`)
+      .run(envelope, (target.row as { session_id: string }).session_id, (target.row as { action_id: string }).action_id, target.agentId);
+    const context = row.envelope,
+      journalResult = state === "failed" ? { state, result, error } : result,
+      journalText = `Mate 收据更正：${String(context.operation ?? "workspace operation")} ${JSON.stringify(journalResult)}`.slice(0, 20_000);
+    database.prepare(`INSERT INTO owner_agent_session_journal(
+        session_id,agent_id,channel_id,run_id,tool_action_id,role,text,created_at
+      ) VALUES(?,?,?,?,?,'assistant',?,?)`)
+      .run(
+        (target.row as { session_id: string }).session_id,
+        target.agentId,
+        String(context.channelId),
+        String(context.runId),
+        (target.row as { action_id: string }).action_id,
+        journalText,
+        now,
+      );
+  }
+}
+
+function readNodeProcessState(database: Database.Database, path: string): void {
+  const result = database.prepare("PRAGMA integrity_check").get() as Record<string, string> | undefined;
+  if (!result || Object.values(result)[0] !== "ok") throw new Error(`SQLite integrity check failed: ${path}`);
+}
+
+function openRecoveryStores(
+  controlPlanePath: string,
+  processPath: string,
+  privilegedPath: string,
+): {
+  controlPlane: Database.Database;
+  processDb: Database.Database;
+  privilegedDb: Database.Database;
+} {
+  let controlPlane: Database.Database | undefined,
+    processDb: Database.Database | undefined,
+    privilegedDb: Database.Database | undefined;
+  try {
+    assertSqliteIntegrity(controlPlanePath);
+    processDb = openProtectedDatabase(processPath);
+    readNodeProcessState(processDb, processPath);
+    privilegedDb = openProtectedDatabase(privilegedPath);
+    readNodeProcessState(privilegedDb, privilegedPath);
+    controlPlane = openControlPlaneDatabase(controlPlanePath, controlPlaneSchema, controlPlaneMigrations);
+    return { controlPlane, processDb, privilegedDb };
+  } catch (error) {
+    if (controlPlane?.open) controlPlane.close();
+    if (processDb?.open) processDb.close();
+    if (privilegedDb?.open) privilegedDb.close();
+    throw error;
+  }
+}
+
+function assertSqliteIntegrity(path: string): void {
+  const database = openProtectedDatabase(path);
+  try {
+    readNodeProcessState(database, path);
+  } finally {
+    database.close();
+  }
+}
+
+function openProtectedDatabase(path: string): Database.Database {
+  const stat = lstatSync(path);
+  if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0)
+    throw new Error(`SQLite state must be a private regular file: ${path}`);
+  return new Database(path, { readonly: true, fileMustExist: true });
+}
+
+function assertSqliteTable(database: Database.Database, name: string): void {
+  if (!database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name))
+    throw new Error(`Required node receipt table is missing: ${name}`);
+}
+
+function hasColumn(database: Database.Database, table: string, name: string): boolean {
+  return (database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some((row) => row.name === name);
+}
+
+function parseJsonOrNull(value: string | null): unknown | null {
+  if (value === null) return null;
+  try { return JSON.parse(value) as unknown; } catch { return null; }
+}
+
+function stringifyOrNull(value: unknown): string | null {
+  return value === null ? null : JSON.stringify(value);
+}
+
+function hashJson(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function validHash(value: string): boolean {
+  return /^[a-f0-9]{64}$/i.test(value);
+}
+
+function validRevision(value: unknown): number | undefined {
+  return Number.isSafeInteger(value) && Number(value) > 0 ? Number(value) : undefined;
+}
+
+function key(kind: RecoveryOperationKind, operationId: string): string {
+  return `${kind}:${operationId}`;
+}
+
+function parseNodeProcessState(database: Database.Database, path: string): void {
+  readNodeProcessState(database, path);
+}
+
+function readProcessReceiptsChecked(database: Database.Database, path: string): ProcessReceiptRow[] {
+  parseNodeProcessState(database, path);
+  return readProcessReceipts(database);
+}
+
+function readPrivilegedReceiptsChecked(database: Database.Database, path: string): PrivilegedReceiptRow[] {
+  parseNodeProcessState(database, path);
+  return readPrivilegedReceipts(database);
+}

@@ -52,6 +52,8 @@ it("accepts a higher durable node result for the matching operation and leaves t
     requestHash: "b".repeat(64),
     state: "unknown",
     receiptConfirmed: false,
+    nodeReceiptRevision: 7,
+    receipt: { reason: "response_unavailable" },
   });
   const receipt = {
     operationId,
@@ -64,6 +66,52 @@ it("accepts a higher durable node result for the matching operation and leaves t
   };
   node.operations.push(receipt);
   expect(reconcileRecoveryState(control, node)).toEqual({ holds: [], confirmed: [receipt] });
+});
+
+it("holds the affected Agent when the node checkpoint is stale or conflicts at the same revision", () => {
+  const { control, node } = states();
+  const operationId = "77777777-7777-4777-8777-777777777777";
+  control.operations.push({
+    operationId,
+    agentId: first,
+    nodeId,
+    kind: "process",
+    requestHash: "d".repeat(64),
+    state: "succeeded",
+    receiptConfirmed: true,
+    nodeReceiptRevision: 4,
+    receipt: { code: 0 },
+  });
+  node.operations.push({
+    operationId,
+    agentId: first,
+    kind: "process",
+    requestHash: "d".repeat(64),
+    state: "failed",
+    receipt: { code: 1 },
+    sequence: 4,
+  });
+  expect(reconcileRecoveryState(control, node)).toEqual({
+    holds: [{ agentId: first, reason: "operation_result_conflict" }],
+    confirmed: [],
+  });
+  node.operations[0]!.sequence = 3;
+  expect(reconcileRecoveryState(control, node)).toEqual({
+    holds: [{ agentId: first, reason: "node_receipt_stale" }],
+    confirmed: [],
+  });
+});
+
+it("holds only Agents assigned to a node when its restored pairing key cannot be proven", () => {
+  const { control, node } = states();
+  node.nodePublicKey = "different-key";
+  expect(reconcileRecoveryState(control, node)).toEqual({
+    holds: [
+      { agentId: first, reason: "node_identity_unproven" },
+      { agentId: second, reason: "node_identity_unproven" },
+    ],
+    confirmed: [],
+  });
 });
 
 it("keeps a mismatched operation unknown and holds both identities in an identity conflict", () => {

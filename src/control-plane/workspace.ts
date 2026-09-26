@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
 import { recordAgentActivity } from "./activity.js";
+import { workspaceReceiptRequestHash } from "../nodes/workspace-receipt.js";
 import type { OwnerChat } from "./owner-chat.js";
 import { createHash, randomUUID } from "node:crypto";
 import { posix as posixPath } from "node:path";
@@ -494,6 +495,7 @@ export class WorkspaceService {
       throw new WorkspaceError("operation_conflict", "文件操作 ID 与当前消息授权不匹配。", 403);
     const operationId = deterministicOperationId(input.actionId),
       requestHash = hashToolRequest(input.operationName, input.toolInput),
+      nodeRequestHash = workspaceReceiptRequestHash(input.agentId, input.operation),
       recorded = this.prepareToolAction(
         authorized.session_id,
         input.actionId,
@@ -501,6 +503,7 @@ export class WorkspaceService {
         input.operationName,
         input.toolInput,
         requestHash,
+        nodeRequestHash,
         operationId,
         input.runId,
         authorized.channel_id,
@@ -537,6 +540,8 @@ export class WorkspaceService {
           runId: input.runId,
           channelId: authorized.channel_id,
           operation: input.operationName,
+          nodeRequestHash,
+          revision: result.revision,
           result: value,
         };
       this.completeToolAction(
@@ -559,6 +564,7 @@ export class WorkspaceService {
         authorized.channel_id,
         input.operationName,
         safeError(error),
+        nodeRequestHash,
       );
       throw error;
     }
@@ -686,7 +692,7 @@ export class WorkspaceService {
   private async runNodeOperation(
     request: ControlWorkspaceOperation,
     nodeId: string,
-  ): Promise<{ code: number; stdout: string; stderr: string; truncated: boolean }> {
+  ): Promise<{ code: number; stdout: string; stderr: string; truncated: boolean; revision?: number }> {
     try {
       const response = await this.nodes.workspaceOperation(nodeId, request);
       if (!response.ok) throw mapNodeError(response.error);
@@ -694,7 +700,7 @@ export class WorkspaceService {
         throw confirmedFileFailure(response.result.code, response.result.stderr);
       }
       if (response.result.truncated) throw invalidNodeResponse();
-      return response.result;
+      return { ...response.result, ...(response.revision ? { revision: response.revision } : {}) };
     } catch (error) {
       if (error instanceof WorkspaceError) throw error;
       const message = error instanceof Error ? error.message : "Node file request failed";
@@ -775,6 +781,7 @@ export class WorkspaceService {
     operation: string,
     toolInput: Record<string, unknown>,
     requestHash: string,
+    nodeRequestHash: string,
     operationId: string,
     runId: string,
     channelId: string,
@@ -821,6 +828,7 @@ export class WorkspaceService {
           envelope.channelId ?? channelId,
           operation,
           "没有已确认的节点文件收据；不会重新执行此操作",
+          envelope.nodeRequestHash,
         );
       throw new WorkspaceError("operation_unknown", "文件操作结果尚未确认。", 409);
     }
@@ -836,7 +844,7 @@ export class WorkspaceService {
         agentId,
         operation,
         requestHash,
-        JSON.stringify({ state: "executing", operationId, runId, channelId, operation }),
+        JSON.stringify({ state: "executing", operationId, runId, channelId, operation, nodeRequestHash }),
         Date.now(),
       );
     recordAgentActivity(this.db, {
@@ -861,6 +869,8 @@ export class WorkspaceService {
       runId: string;
       channelId: string;
       operation: string;
+      nodeRequestHash?: string;
+      revision?: number;
       result?: unknown;
       error?: string;
     },
@@ -881,7 +891,12 @@ export class WorkspaceService {
              WHERE session_id=? AND action_id=? AND agent_id=? AND request_hash=?`,
           )
           .run(
-            JSON.stringify(envelope).slice(0, 100_000),
+            JSON.stringify({
+              ...envelope,
+              ...(envelope.nodeRequestHash ?? prior.nodeRequestHash
+                ? { nodeRequestHash: envelope.nodeRequestHash ?? prior.nodeRequestHash }
+                : {}),
+            }).slice(0, 100_000),
             sessionId,
             actionId,
             agentId,
@@ -931,6 +946,7 @@ export class WorkspaceService {
     channelId: string,
     operation: string,
     message: string,
+    nodeRequestHash?: string,
   ): void {
     this.completeToolAction(sessionId, actionId, agentId, requestHash, {
       state: "unknown",
@@ -938,6 +954,7 @@ export class WorkspaceService {
       runId,
       channelId,
       operation,
+      ...(nodeRequestHash ? { nodeRequestHash } : {}),
       error: message,
     });
   }
@@ -1015,6 +1032,8 @@ export class WorkspaceService {
       runId: string;
       channelId: string;
       operation: string;
+      nodeRequestHash?: string;
+      revision?: number;
       result?: unknown;
       error?: string;
     };
@@ -1025,6 +1044,7 @@ export class WorkspaceService {
         runId: identity.runId,
         channelId: identity.channelId,
         operation: identity.operation,
+        revision: result.revision,
         error: result.error,
       };
     } else if (result.result.code !== 0) {
@@ -1034,6 +1054,7 @@ export class WorkspaceService {
         runId: identity.runId,
         channelId: identity.channelId,
         operation: identity.operation,
+        revision: result.revision,
         result: { code: result.result.code, stderr: result.result.stderr },
         error: result.result.stderr || "File operation failed",
       };
@@ -1045,6 +1066,7 @@ export class WorkspaceService {
           runId: identity.runId,
           channelId: identity.channelId,
           operation: identity.operation,
+          revision: result.revision,
           result: JSON.parse(result.result.stdout) as unknown,
         };
       } catch {
@@ -1054,6 +1076,7 @@ export class WorkspaceService {
           runId: identity.runId,
           channelId: identity.channelId,
           operation: identity.operation,
+          revision: result.revision,
           error: "Invalid node receipt",
         };
       }
@@ -1231,6 +1254,8 @@ function parseEnvelope(value: string): {
   runId?: string;
   channelId?: string;
   operation?: string;
+  nodeRequestHash?: string;
+  revision?: number;
   result?: unknown;
 } {
   try {
@@ -1240,6 +1265,8 @@ function parseEnvelope(value: string): {
       runId?: unknown;
       channelId?: unknown;
       operation?: unknown;
+      nodeRequestHash?: unknown;
+      revision?: unknown;
       result?: unknown;
     };
     if (typeof envelope.state !== "string") throw new Error("Invalid action result");
@@ -1249,6 +1276,12 @@ function parseEnvelope(value: string): {
       ...(typeof envelope.runId === "string" ? { runId: envelope.runId } : {}),
       ...(typeof envelope.channelId === "string" ? { channelId: envelope.channelId } : {}),
       ...(typeof envelope.operation === "string" ? { operation: envelope.operation } : {}),
+      ...(typeof envelope.nodeRequestHash === "string"
+        ? { nodeRequestHash: envelope.nodeRequestHash }
+        : {}),
+      ...(Number.isSafeInteger(envelope.revision) && (envelope.revision as number) > 0
+        ? { revision: envelope.revision as number }
+        : {}),
       ...(envelope.result === undefined ? {} : { result: envelope.result }),
     };
   } catch {

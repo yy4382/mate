@@ -30,7 +30,6 @@ export function sendWorkspaceOperationResult(
           stdout,
           stderr,
           truncated,
-          ...(metadata.revision === undefined ? {} : { revision: metadata.revision }),
         },
       }),
     );
