@@ -70,6 +70,9 @@ export function AgentActivity({ agentId }: { agentId: string }) {
       clearInterval(timer);
     };
   }, [agentId, open, expanded]);
+  const awaitingProcessReceipts =
+    page?.stop?.state === "unknown" &&
+    (page.stop.receipt as { reason?: string } | null)?.reason === "pending_process_receipts";
   return (
     <section className="agent-activity" aria-label="Agent 动态">
       <button type="button" onClick={() => setOpen(!open)}>
@@ -86,7 +89,9 @@ export function AgentActivity({ agentId }: { agentId: string }) {
               <span role="status">
                 {page.stop?.state === "succeeded"
                   ? "后台进程已确认停止"
-                  : "后台进程停止结果未知；请检查节点与动态记录"}
+                  : awaitingProcessReceipts
+                    ? "普通操作收据待对账；完成后将再次请求停止"
+                    : "后台进程停止结果未知；请检查节点与动态记录"}
               </span>
             )}
             <button
@@ -97,8 +102,12 @@ export function AgentActivity({ agentId }: { agentId: string }) {
             </button>
             {page?.pausedReason === "manual" &&
               (page.stop?.state === "unknown" || page.stop?.state === "failed") && (
-                <button type="button" onClick={() => void changePause("pause")}>
-                  重新请求停止后台进程
+                <button
+                  type="button"
+                  disabled={awaitingProcessReceipts}
+                  onClick={() => void changePause("pause")}
+                >
+                  {awaitingProcessReceipts ? "等待操作收据对账" : "重新请求停止后台进程"}
                 </button>
               )}
             <button type="button" aria-pressed={expanded} onClick={() => setExpanded(!expanded)}>

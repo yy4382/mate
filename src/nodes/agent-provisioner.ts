@@ -9,11 +9,13 @@ import {
   fstatSync,
   fsyncSync,
   ftruncateSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
   readdirSync,
+  unlinkSync,
   writeFileSync,
   writeSync,
 } from "node:fs";
@@ -495,27 +497,68 @@ const homeMarkerName = ".mate-home-id";
 
 function ensureHomeMarker(home: string, uid: number, gid: number): void {
   const path = join(home, homeMarkerName);
+  try {
+    const final = lstatSync(path);
+    if (final.nlink === 2) {
+      // A crash may have happened after publishing the hard link but before removing
+      // its staging name. Only remove the second link when it is the exact staged inode.
+      verifyHomeMarker(home, uid, gid, true);
+      const stagedLinks = readdirSync(home)
+        .filter((name) => /^\.mate-home-id\.tmp-[0-9a-f]{32}$/.test(name))
+        .map((name) => join(home, name))
+        .filter((candidate) => {
+          const stat = lstatSync(candidate);
+          return stat.dev === final.dev && stat.ino === final.ino;
+        });
+      if (stagedLinks.length !== 1)
+        throw new AgentProvisioningError("identity_mismatch", "Agent home 原身份标记链接无效。");
+      unlinkSync(stagedLinks[0]!);
+    }
+    verifyHomeMarker(home, uid, gid);
+    syncHomeDirectory(home);
+    return;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+
+  // Stage the complete, owned marker first. Only the hard link publishes the final name,
+  // so an interrupted create can leave a disposable temporary file but never a partial ID.
+  const staged = join(home, `${homeMarkerName}.tmp-${randomBytes(16).toString("hex")}`);
   let fd: number | undefined;
   try {
     fd = openSync(
-      path,
+      staged,
       fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW,
       0o600,
     );
     writeFileSync(fd, `${randomBytes(32).toString("hex")}\n`, "utf8");
-    fsyncSync(fd);
     fchownSync(fd, uid, gid);
     fchmodSync(fd, 0o600);
+    fsyncSync(fd);
     closeSync(fd);
+    fd = undefined;
+    try {
+      linkSync(staged, path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      verifyHomeMarker(home, uid, gid);
+    }
+    unlinkSync(staged);
+    syncHomeDirectory(home);
   } catch (error) {
+    if (error instanceof AgentProvisioningError) throw error;
+    throw new AgentProvisioningError("filesystem_error", "节点无法建立 Agent home 标记。");
+  } finally {
     if (typeof fd === "number") closeSync(fd);
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST")
-      throw new AgentProvisioningError("filesystem_error", "节点无法建立 Agent home 标记。");
-    verifyHomeMarker(home, uid, gid);
+    try {
+      unlinkSync(staged);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
   }
 }
 
-function verifyHomeMarker(home: string, uid: number, gid: number): string {
+function verifyHomeMarker(home: string, uid: number, gid: number, allowStagedLink = false): string {
   let fd: number;
   try {
     fd = openSync(join(home, homeMarkerName), fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
@@ -526,7 +569,7 @@ function verifyHomeMarker(home: string, uid: number, gid: number): string {
     const stat = fstatSync(fd);
     if (
       !stat.isFile() ||
-      stat.nlink !== 1 ||
+      (stat.nlink !== 1 && !(allowStagedLink && stat.nlink === 2)) ||
       stat.uid !== uid ||
       stat.gid !== gid ||
       (stat.mode & 0o777) !== 0o600 ||
@@ -539,6 +582,15 @@ function verifyHomeMarker(home: string, uid: number, gid: number): string {
     return createHash("sha256").update(marker).digest("hex");
   } finally {
     closeSync(fd);
+  }
+}
+
+function syncHomeDirectory(home: string): void {
+  const directory = openDirectory(home);
+  try {
+    fsyncSync(directory);
+  } finally {
+    closeSync(directory);
   }
 }
 

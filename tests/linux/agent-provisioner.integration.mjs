@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import {
   existsSync,
+  linkSync,
   mkdirSync,
   readFileSync,
   rmSync,
@@ -136,6 +137,37 @@ try {
   assert.equal(statSync(interruptedMemory).gid, agentA.gid);
   assert.equal(mode(interruptedMemory), 0o600);
 
+  // Reproduce both crash boundaries around publishing the first home marker.
+  // A pre-publish staging file must not count as an identity; retry may create one.
+  const finalMarker = join(agentA.home, ".mate-home-id");
+  const unfinishedStage = join(agentA.home, `.mate-home-id.tmp-${"1".repeat(32)}`);
+  rmSync(finalMarker);
+  writeFileSync(unfinishedStage, "interrupted write", { mode: 0o600 });
+  assert.throws(
+    () => readProvisionedLinuxAgentIdentity(agentAId, homeRoot),
+    (error) => error instanceof AgentProvisioningError && error.code === "identity_mismatch",
+  );
+  const recoveredBeforePublish = await provisionLinuxAgent({ agentId: agentAId, homeRoot });
+  assert.equal(
+    readProvisionedLinuxAgentIdentity(agentAId, homeRoot).homeMarker,
+    recoveredBeforePublish.homeMarker,
+  );
+  assert.equal(statSync(finalMarker).nlink, 1);
+  rmSync(unfinishedStage);
+
+  // A crash after linking but before removing the staging name leaves two links to
+  // a complete inode. Retrying the original create removes only that exact link.
+  const publishedStage = join(agentA.home, `.mate-home-id.tmp-${"2".repeat(32)}`);
+  linkSync(finalMarker, publishedStage);
+  assert.throws(
+    () => readProvisionedLinuxAgentIdentity(agentAId, homeRoot),
+    (error) => error instanceof AgentProvisioningError && error.code === "identity_mismatch",
+  );
+  const recoveredAfterPublish = await provisionLinuxAgent({ agentId: agentAId, homeRoot });
+  assert.equal(recoveredAfterPublish.homeMarker, recoveredBeforePublish.homeMarker);
+  assert.equal(existsSync(publishedStage), false);
+  assert.equal(statSync(finalMarker).nlink, 1);
+
   assert.equal(linuxUsernameForAgentId(collisionAId), linuxUsernameForAgentId(collisionBId));
   const collisionOwner = await provisionLinuxAgent({ agentId: collisionAId, homeRoot });
   await assertProvisionError(collisionBId, "identity_mismatch");
@@ -247,6 +279,8 @@ try {
       duplicateUidRejected: true,
       duplicateGidRejected: true,
       interruptedMemoryWriteRecovered: true,
+      interruptedMarkerBeforePublishRecovered: true,
+      interruptedMarkerAfterPublishRecovered: true,
       reinstalledEmptyHomeRejected: true,
       unrelatedMemoryCollisionPreserved: true,
     })}\n`,
