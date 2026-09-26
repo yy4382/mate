@@ -455,6 +455,8 @@
 .workspace-preview-actions button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+
 .agent-activity {
   margin-top: 14px;
 }

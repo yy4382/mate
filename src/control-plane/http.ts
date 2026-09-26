@@ -120,7 +120,7 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
     agents = new AgentDirectory(ownerAuth.db, options.now),
     modelCredentials = new ModelCredentialDirectory(ownerAuth.db, options.now),
     ownerChat = new OwnerChat(ownerAuth.db, options.now),
-    workspace = new WorkspaceService(ownerAuth.db, nodes),
+    workspace = new WorkspaceService(ownerAuth.db, nodes, ownerChat),
     attachments = new AttachmentService(
       ownerAuth.db,
       workspace,

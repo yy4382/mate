@@ -104,6 +104,13 @@ export class LinuxWorkspaceExecutor {
     return operation;
   }
 
+  /** Read only durable terminal evidence. A running operation is never waited on here. */
+  status(agentId: string, operationId: string): ExecutionResult | undefined {
+    const receipt = this.readReceipt(operationId);
+    if (!receipt || receipt.agentId !== agentId || receipt.state === "executing") return undefined;
+    return receipt.result;
+  }
+
   private async executeOnce(
     request: WorkspaceExecutionRequest,
     requestHash: string,

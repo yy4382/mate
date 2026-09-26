@@ -1,4 +1,6 @@
 import type Database from "better-sqlite3";
+import { recordAgentActivity } from "./activity.js";
+import type { OwnerChat } from "./owner-chat.js";
 import { createHash, randomUUID } from "node:crypto";
 import { posix as posixPath } from "node:path";
 import type { NodeDirectory } from "./nodes/directory.js";
@@ -99,6 +101,7 @@ export class WorkspaceService {
   constructor(
     private readonly db: Database.Database,
     private readonly nodes: NodeDirectory,
+    private readonly chat: OwnerChat,
   ) {
     this.db
       .prepare(
@@ -496,6 +499,7 @@ export class WorkspaceService {
         input.actionId,
         input.agentId,
         input.operationName,
+        input.toolInput,
         requestHash,
         operationId,
         input.runId,
@@ -769,11 +773,12 @@ export class WorkspaceService {
     actionId: string,
     agentId: string,
     operation: string,
+    toolInput: Record<string, unknown>,
     requestHash: string,
     operationId: string,
     runId: string,
     channelId: string,
-  ): { kind: "new" | "replay" } | { kind: "done"; result: unknown } {
+  ): { kind: "new" } | { kind: "done"; result: unknown } {
     const existing = this.db
       .prepare(
         "SELECT request_hash,result_json FROM owner_agent_tool_actions WHERE session_id=? AND action_id=?",
@@ -786,7 +791,19 @@ export class WorkspaceService {
       if (envelope.state === "succeeded") return { kind: "done", result: envelope.result };
       if (envelope.operationId && envelope.operationId !== operationId)
         throw new WorkspaceError("operation_unknown", "文件操作结果尚未确认。", 409);
-      return { kind: "replay" };
+      if (envelope.state === "executing")
+        this.markToolActionUnknown(
+          sessionId,
+          actionId,
+          agentId,
+          requestHash,
+          operationId,
+          envelope.runId ?? runId,
+          envelope.channelId ?? channelId,
+          operation,
+          "没有已确认的节点文件收据；不会重新执行此操作",
+        );
+      throw new WorkspaceError("operation_unknown", "文件操作结果尚未确认。", 409);
     }
     this.db
       .prepare(
@@ -803,6 +820,14 @@ export class WorkspaceService {
         JSON.stringify({ state: "executing", operationId, runId, channelId, operation }),
         Date.now(),
       );
+    recordAgentActivity(this.db, {
+      agentId,
+      kind: "operation.started",
+      referenceId: operationId,
+      summary: "文件操作已提交节点执行。",
+      detail: { operation, input: toolInput },
+      at: Date.now(),
+    });
     return { kind: "new" };
   }
 
@@ -843,8 +868,26 @@ export class WorkspaceService {
             agentId,
             requestHash,
           );
-        if (envelope.state === "succeeded")
-          this.recordActionJournal(sessionId, agentId, actionId, envelope);
+        this.recordActionJournal(sessionId, agentId, actionId, envelope);
+        if (prior.state !== envelope.state)
+          recordAgentActivity(this.db, {
+            agentId,
+            kind:
+              prior.state === "unknown" && envelope.state === "succeeded"
+                ? "receipt.corrected"
+                : "operation.finished",
+            referenceId: envelope.operationId,
+            summary:
+              envelope.state === "succeeded"
+                ? "文件操作收据已确认成功。"
+                : "文件操作结果尚未确认。",
+            detail: {
+              operation: envelope.operation,
+              result: envelope.result,
+              error: envelope.error,
+            },
+            at: Date.now(),
+          });
       })
       .immediate();
   }
@@ -990,6 +1033,13 @@ export class WorkspaceService {
         "SELECT request_hash FROM owner_agent_tool_actions WHERE session_id=? AND action_id=?",
       )
       .get(identity.sessionId, identity.actionId) as { request_hash: string } | undefined;
+    const previous = row
+      ? (this.db
+          .prepare(
+            "SELECT result_json FROM owner_agent_tool_actions WHERE session_id=? AND action_id=?",
+          )
+          .get(identity.sessionId, identity.actionId) as { result_json: string } | undefined)
+      : undefined;
     if (row)
       this.completeToolAction(
         identity.sessionId,
@@ -998,6 +1048,13 @@ export class WorkspaceService {
         row.request_hash,
         envelope,
       );
+    if (
+      row &&
+      previous &&
+      parseEnvelope(previous.result_json).state === "unknown" &&
+      envelope.state === "succeeded"
+    )
+      this.chat.notifyAgentReceiptCorrection(identity.agentId, result.operationId, "succeeded");
     this.clearActionOperation(result.operationId);
   }
 
@@ -1009,14 +1066,30 @@ export class WorkspaceService {
       runId: string;
       channelId: string;
       operation: string;
+      state: "unknown" | "succeeded";
       result?: unknown;
+      error?: string;
     },
   ): void {
-    const result = envelope.result,
+    const result =
+        envelope.state === "unknown"
+          ? { state: "unknown", error: envelope.error ?? "没有已确认的文件操作收据" }
+          : envelope.result,
       contextResult =
         typeof result === "object" && result !== null
           ? (result as Record<string, unknown>)
           : result;
+    const text = `Mate 工具结果：${envelope.operation} ${JSON.stringify(contextResult)}`.slice(
+      0,
+      20_000,
+    );
+    const updated = this.db
+      .prepare(
+        `UPDATE owner_agent_session_journal SET text=?
+       WHERE session_id=? AND agent_id=? AND tool_action_id=? AND message_id IS NULL`,
+      )
+      .run(text, sessionId, agentId, actionId);
+    if (updated.changes > 0) return;
     this.db
       .prepare(
         `INSERT INTO owner_agent_session_journal(
@@ -1034,7 +1107,7 @@ export class WorkspaceService {
         envelope.channelId,
         envelope.runId,
         actionId,
-        `Mate 工具结果：${envelope.operation} ${JSON.stringify(contextResult)}`.slice(0, 20_000),
+        text,
         Date.now(),
         sessionId,
         agentId,

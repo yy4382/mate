@@ -2220,6 +2220,14 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
   expect(db.prepare("PRAGMA table_info(owner_workspace_access_audit)").all()).not.toContainEqual(
     expect.objectContaining({ name: "content" }),
   );
+  const safeActivity = await app.request(`/api/owner/agents/${agentId}/activity`, {
+    headers: { cookie },
+  });
+  expect(await safeActivity.text()).not.toContain("hello");
+  const detailedActivity = await app.request(`/api/owner/agents/${agentId}/activity?detail=1`, {
+    headers: { cookie },
+  });
+  expect(await detailedActivity.text()).toContain("notes.txt");
   expect(
     await callAgentTool(app, socket, run, firstActionId, "tools.call", firstInput),
   ).toMatchObject({ ok: true, result: first.result });
@@ -2267,6 +2275,30 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
     operationId: heldRequest!.operationId,
     result: { sha256: "receipt-2" },
   });
+  const correctedActivity = db
+    .prepare(
+      "SELECT COUNT(*) AS count FROM owner_agent_activity WHERE reference_id=? AND kind='receipt.corrected'",
+    )
+    .get(heldRequest!.operationId) as { count: number };
+  expect(correctedActivity.count).toBe(1);
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.workspace.operation.result",
+      requestId: heldRequest!.requestId,
+      operationId: heldRequest!.operationId,
+      agentId,
+      ok: true,
+      result: lateReceipt,
+    }),
+  );
+  expect(
+    db
+      .prepare(
+        "SELECT COUNT(*) AS count FROM owner_agent_activity WHERE reference_id=? AND kind='receipt.corrected'",
+      )
+      .get(heldRequest!.operationId),
+  ).toEqual({ count: 1 });
   expect(
     await callAgentTool(app, socket, run, delayedActionId, "tools.call", delayedInput),
   ).toMatchObject({ ok: true, result: { sha256: "receipt-2" } });

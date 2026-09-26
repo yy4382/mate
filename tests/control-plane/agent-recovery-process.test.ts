@@ -79,15 +79,18 @@ function startNode(
   token: string | undefined,
   countFile: string,
   fault: "before_receipt" | "normal",
+  workspaceFault: "before_receipt" | "normal" | "disabled" = "disabled",
 ): Child {
   const client = pathToFileURL(resolve("dist/src/nodes/client.js")).href;
   const ledger = pathToFileURL(resolve("dist/src/nodes/process-operations.js")).href;
   const storage = pathToFileURL(resolve("dist/src/storage/initialize.js")).href;
+  const workspace = pathToFileURL(resolve("dist/src/nodes/workspace-execution.js")).href;
   const worker = resolve("tests/fixtures/direct-message-model-worker.mjs");
   const runner = `
     const {runLinuxNodeWithTestDependencies}=await import(${JSON.stringify(client)});
     const {AgentProcessOperations}=await import(${JSON.stringify(ledger)});
     const {openNodeProcessDatabase}=await import(${JSON.stringify(storage)});
+    const {LinuxWorkspaceExecutor}=await import(${JSON.stringify(workspace)});
     const {appendFileSync,mkdirSync}=await import('node:fs');
     const {join}=await import('node:path');
     mkdirSync(process.env.MATE_NODE_DATA_DIR,{recursive:true,mode:0o700});
@@ -97,6 +100,16 @@ function startNode(
       if(process.env.MATE_FAULT==='before_receipt') await new Promise(() => {});
       return {state:'succeeded',receipt:{code:0,stdout:'executed',stderr:'',truncated:false}};
     });
+    const workspaceExecutor=process.env.MATE_WORKSPACE_FAULT==='disabled' ? undefined :
+      new LinuxWorkspaceExecutor(process.env.MATE_AGENT_HOME_ROOT,process.env.MATE_NODE_DATA_DIR,{
+        lookupIdentity:(agentId)=>({username:'mate_test',uid:24001,gid:24001,
+          home:join(process.env.MATE_AGENT_HOME_ROOT,agentId)}),
+        createBackend:()=>({execute:async()=>{
+          appendFileSync(process.env.MATE_COUNT_FILE,'executed\\n');
+          if(process.env.MATE_WORKSPACE_FAULT==='before_receipt') await new Promise(()=>{});
+          return {code:0,stdout:JSON.stringify({sha256:'durable-file'}),stderr:'',truncated:false};
+        }}),
+      });
     const controller=new AbortController();
     process.on('SIGTERM',()=>controller.abort());
     await runLinuxNodeWithTestDependencies({controlPlaneUrl:process.env.MATE_CONTROL_PLANE_URL,
@@ -104,6 +117,7 @@ function startNode(
       pairingToken:process.env.MATE_NODE_PAIRING_TOKEN,heartbeatIntervalMs:100,
       heartbeatTimeoutMs:2000},controller.signal,{
       modelWorkerEntry:${JSON.stringify(worker)},modelWorkerIdentity:null,processOperations:operations,
+      workspaceExecutor,
       provisionAgent:async (agentId)=>({username:'mate_'+agentId.replaceAll('-','').slice(0,27),
         uid:24001,gid:24001,home:process.env.MATE_AGENT_HOME_ROOT+'/'+agentId}),
     });
@@ -120,6 +134,7 @@ function startNode(
         MATE_AGENT_HOME_ROOT: join(directory, "homes"),
         MATE_COUNT_FILE: countFile,
         MATE_FAULT: fault,
+        MATE_WORKSPACE_FAULT: workspaceFault,
       },
       stdio: ["ignore", "pipe", "pipe"],
     }),
@@ -165,9 +180,14 @@ function cpRow(
   }
 }
 
-it.each(["before_receipt", "after_receipt"] as const)(
-  "recovers a real node %s fault without replaying its side effect while another Agent continues",
-  async (fault) => {
+it.each([
+  ["process", "before_receipt"],
+  ["process", "after_receipt"],
+  ["workspace", "before_receipt"],
+  ["workspace", "after_receipt"],
+] as const)(
+  "recovers a real %s operation %s fault without replaying its side effect while another Agent continues",
+  async (mode, fault) => {
     const directory = mkdtempSync(join(tmpdir(), "mate-recovery-process-"));
     chmodSync(directory, 0o700);
     writeFileSync(join(directory, "password"), `${password}\n`, { mode: 0o600 });
@@ -176,7 +196,9 @@ it.each(["before_receipt", "after_receipt"] as const)(
     let control: Child | undefined, node: Child | undefined, onlineNode: Child | undefined;
     let origin = "",
       allowReconnect = true,
-      dropped = false;
+      dropped = false,
+      recordReconnect = false;
+    const reconnectMessages: string[] = [];
     const proxyHttp = createServer(),
       proxyWs = new WebSocketServer({ noServer: true });
     const sockets = new Set<WebSocket>();
@@ -193,7 +215,10 @@ it.each(["before_receipt", "after_receipt"] as const)(
           const message = JSON.parse(data.toString()) as { type?: string };
           if (
             fault === "after_receipt" &&
-            message.type === "node.process.operation.result" &&
+            message.type ===
+              (mode === "process"
+                ? "node.process.operation.result"
+                : "node.workspace.operation.result") &&
             !dropped
           ) {
             dropped = true;
@@ -205,6 +230,10 @@ it.each(["before_receipt", "after_receipt"] as const)(
           if (upstream.readyState === WebSocket.OPEN) upstream.send(data, { binary });
         });
         upstream.on("message", (data, binary) => {
+          if (recordReconnect) {
+            const message = JSON.parse(data.toString()) as { type?: string };
+            if (message.type) reconnectMessages.push(message.type);
+          }
           if (downstream.readyState === WebSocket.OPEN) downstream.send(data, { binary });
         });
         downstream.on("close", () => {
@@ -231,7 +260,12 @@ it.each(["before_receipt", "after_receipt"] as const)(
         join(directory, "fault-node"),
         token,
         countFile,
-        fault === "before_receipt" ? "before_receipt" : "normal",
+        mode === "process" && fault === "before_receipt" ? "before_receipt" : "normal",
+        mode === "workspace"
+          ? fault === "before_receipt"
+            ? "before_receipt"
+            : "normal"
+          : "disabled",
       );
       const faultNodeId = (await node.line(/MATE_NODE_PAIRED ([0-9a-f-]+)/))[1]!;
       const onlineToken = (await json(origin, cookie, "/api/owner/nodes/pairing-tokens", "POST"))
@@ -266,7 +300,10 @@ it.each(["before_receipt", "after_receipt"] as const)(
         await json(origin, cookie, `/api/owner/agents/${onlineAgentId}/direct-channel`, "POST")
       ).channel.id as string;
       await json(origin, cookie, "/api/owner/model-credentials/openai", "PUT", {
-        apiKey: "synthetic-key-process-recovery",
+        apiKey:
+          mode === "process"
+            ? "synthetic-key-process-recovery"
+            : "synthetic-key-workspace-recovery",
       });
       await json(origin, cookie, `/api/owner/channels/${faultChannel}/messages`, "POST", {
         text: "Execute once.",
@@ -277,15 +314,20 @@ it.each(["before_receipt", "after_receipt"] as const)(
       );
       if (fault === "before_receipt") await node.stop("SIGKILL");
       else await eventually(() => (dropped ? true : undefined), "lost receipt ACK");
+      const operationState = () =>
+        mode === "process"
+          ? cpRow(
+              directory,
+              "SELECT state FROM owner_agent_process_operations WHERE agent_id=?",
+              faultAgentId,
+            )?.state
+          : cpRow(
+              directory,
+              "SELECT json_extract(result_json,'$.state') AS state FROM owner_agent_tool_actions WHERE agent_id=? AND operation='workspace.write'",
+              faultAgentId,
+            )?.state;
       await eventually(
-        () =>
-          cpRow(
-            directory,
-            "SELECT state FROM owner_agent_process_operations WHERE agent_id=?",
-            faultAgentId,
-          )?.state === "unknown"
-            ? true
-            : undefined,
+        () => (operationState() === "unknown" ? true : undefined),
         "unknown control-plane result",
       );
       expect(
@@ -295,13 +337,17 @@ it.each(["before_receipt", "after_receipt"] as const)(
           faultAgentId,
         ),
       ).toMatchObject({ state: "pending" });
-      expect(
-        cpRow(
-          directory,
-          "SELECT error_code FROM owner_agent_runs WHERE agent_id=? ORDER BY started_at LIMIT 1",
-          faultAgentId,
-        ),
-      ).toMatchObject({ error_code: "interrupted" });
+      await eventually(
+        () =>
+          cpRow(
+            directory,
+            "SELECT error_code FROM owner_agent_runs WHERE agent_id=? ORDER BY started_at LIMIT 1",
+            faultAgentId,
+          )?.error_code === "interrupted"
+            ? true
+            : undefined,
+        "interrupted old run",
+      );
       await json(origin, cookie, `/api/owner/channels/${onlineChannel}/messages`, "POST", {
         text: "Continue independently.",
       });
@@ -320,6 +366,7 @@ it.each(["before_receipt", "after_receipt"] as const)(
       control = startControl(directory);
       origin = `http://127.0.0.1:${(await control.line(/MATE_CONTROL_PLANE_LISTENING (\d+)/))[1]}`;
       cookie = await owner(origin);
+      recordReconnect = true;
       allowReconnect = true;
       if (fault === "before_receipt")
         node = startNode(
@@ -328,18 +375,26 @@ it.each(["before_receipt", "after_receipt"] as const)(
           undefined,
           countFile,
           "normal",
+          mode === "workspace" ? "normal" : "disabled",
         );
       await eventually(
         () =>
-          cpRow(
-            directory,
-            "SELECT state FROM owner_agent_process_operations WHERE agent_id=?",
-            faultAgentId,
-          )?.state === (fault === "after_receipt" ? "succeeded" : "unknown")
+          operationState() === (fault === "after_receipt" ? "succeeded" : "unknown")
             ? true
             : undefined,
         "reconciled result",
         15000,
+      );
+      const reconcileType =
+        mode === "process" ? "control.process.reconcile" : "control.workspace.reconcile";
+      await eventually(
+        () => (reconnectMessages.includes("control.agent.run") ? true : undefined),
+        "new run after receipt reconciliation",
+        15000,
+      );
+      expect(reconnectMessages.indexOf(reconcileType)).toBeGreaterThanOrEqual(0);
+      expect(reconnectMessages.indexOf(reconcileType)).toBeLessThan(
+        reconnectMessages.indexOf("control.agent.run"),
       );
       await eventually(
         () =>

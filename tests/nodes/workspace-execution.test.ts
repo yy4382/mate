@@ -60,6 +60,7 @@ it("runs a state-changing operation once and returns its durable receipt after a
   const fixture = setup(() => success),
     firstNode = new LinuxWorkspaceExecutor(fixture.homeRoot, fixture.root, fixture.dependencies);
   expect(await firstNode.execute(action())).toEqual(success);
+  expect(firstNode.status(agentId, operationId)).toEqual(success);
   expect(await firstNode.execute(action())).toEqual(success);
   const restartedNode = new LinuxWorkspaceExecutor(
     fixture.homeRoot,
@@ -67,6 +68,8 @@ it("runs a state-changing operation once and returns its durable receipt after a
     fixture.dependencies,
   );
   expect(await restartedNode.execute(action())).toEqual(success);
+  expect(restartedNode.status(agentId, operationId)).toEqual(success);
+  expect(restartedNode.status("d4086c50-4b83-4118-a4bc-cc5b6aaecb99", operationId)).toBeUndefined();
   expect(fixture.calls).toHaveLength(1);
   const receiptDirectory = join(fixture.root, "workspace-receipts");
   expect(lstatSync(receiptDirectory).mode & 0o777).toBe(0o700);
@@ -91,6 +94,15 @@ it("keeps an interrupted state-changing operation unknown instead of replaying i
   expect(first.stderr).toContain("operation_unknown");
   expect(replay.stderr).toContain("operation_unknown");
   expect(fixture.calls).toHaveLength(1);
+  expect(executor.status(agentId, operationId)?.stderr).toContain("operation_unknown");
+});
+
+it("does not wait for a running file operation when reading persisted status", async () => {
+  const fixture = setup(() => new Promise<ExecutionResult>(() => {})),
+    executor = new LinuxWorkspaceExecutor(fixture.homeRoot, fixture.root, fixture.dependencies);
+  const running = executor.execute(action());
+  expect(executor.status(agentId, operationId)).toBeUndefined();
+  void running;
 });
 
 it("does not receipt read-only owner browsing and refuses owner write operations", async () => {

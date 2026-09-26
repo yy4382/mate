@@ -36,7 +36,7 @@ interface NodeTestDependencies {
   modelWorkerEntry?: string;
   modelWorkerIdentity?: ModelProcessIdentity | null;
   processOperations?: AgentProcessOperations;
-  workspaceExecutor?: Pick<LinuxWorkspaceExecutor, "execute">;
+  workspaceExecutor?: Pick<LinuxWorkspaceExecutor, "execute" | "status">;
   provisionAgent?: (
     agentId: string,
     onProgress: (stage: AgentProvisionStage) => void,
@@ -166,7 +166,7 @@ function connectOnce(
   modelWorkerIdentity: ModelProcessIdentity | undefined,
   testDependencies: NodeTestDependencies,
   processOperations: AgentProcessOperations,
-  workspaceExecutor: Pick<LinuxWorkspaceExecutor, "execute"> | undefined,
+  workspaceExecutor: Pick<LinuxWorkspaceExecutor, "execute" | "status"> | undefined,
   signal: AbortSignal,
 ): Promise<boolean> {
   if (signal.aborted) return Promise.resolve(false);
@@ -493,6 +493,23 @@ function connectOnce(
                   },
                 ]
               : [];
+          }),
+        });
+        return;
+      }
+      if (message.type === "control.workspace.reconcile") {
+        if (!authenticated)
+          throw new NodeAuthenticationError("控制面在节点身份验证前请求文件操作对账。");
+        sendRequest(socket, {
+          type: "node.workspace.reconcile.result",
+          requestId: message.requestId,
+          receipts: message.operations.flatMap(({ agentId, operationId }) => {
+            try {
+              const result = workspaceExecutor?.status(agentId, operationId);
+              return result ? [{ operationId, agentId, result }] : [];
+            } catch {
+              return [];
+            }
           }),
         });
         return;

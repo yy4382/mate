@@ -202,6 +202,23 @@ const NodeRequestShapeSchema = z.discriminatedUnion("type", [
         .max(100),
     })
     .strict(),
+  z
+    .object({
+      type: z.literal("node.workspace.reconcile.result"),
+      requestId: requestIdSchema,
+      receipts: z
+        .array(
+          z
+            .object({
+              operationId: requestIdSchema,
+              agentId: agentIdSchema,
+              result: workspaceExecutionResultSchema,
+            })
+            .strict(),
+        )
+        .max(100),
+    })
+    .strict(),
 ]);
 export const NodeRequestSchema = NodeRequestShapeSchema.refine(
   (request) => Buffer.byteLength(JSON.stringify(request), "utf8") <= MAX_NODE_MESSAGE_BYTES,
@@ -323,6 +340,15 @@ const NodeControlMessageShapeSchema = z.discriminatedUnion("type", [
   z
     .object({
       type: z.literal("control.process.reconcile"),
+      requestId: requestIdSchema,
+      operations: z
+        .array(z.object({ operationId: requestIdSchema, agentId: agentIdSchema }).strict())
+        .max(100),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("control.workspace.reconcile"),
       requestId: requestIdSchema,
       operations: z
         .array(z.object({ operationId: requestIdSchema, agentId: agentIdSchema }).strict())

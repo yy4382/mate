@@ -40,6 +40,12 @@ interface SocketSession {
   nodeId?: string;
   ready?: boolean;
   reconcile?: { requestId: string; operationIds: Set<string>; cursor: string; blocking: boolean };
+  workspaceReconcile?: {
+    requestId: string;
+    operations: Map<string, string>;
+    cursor: string;
+    blocking: boolean;
+  };
   handshakeTimeout?: ReturnType<typeof setTimeout>;
 }
 
@@ -324,6 +330,8 @@ export class NodeDirectory {
     if (request.type === "node.ping") return this.ping(socket, session, request);
     if (request.type === "node.process.reconcile.result")
       return this.receiveReconciliation(socket, session, request);
+    if (request.type === "node.workspace.reconcile.result")
+      return this.receiveWorkspaceReconciliation(socket, session, request);
     if (request.type === "node.agent.run.tool")
       return this.receiveAgentRunToolMessage(socket, session, request);
     if (
@@ -762,7 +770,8 @@ export class NodeDirectory {
       requestId: request.requestId,
       acceptedAt: this.now(),
     });
-    if (session.ready && !session.reconcile) this.startReconciliation(socket, session, "", false);
+    if (session.ready && !session.reconcile && !session.workspaceReconcile)
+      this.startReconciliation(socket, session, "", false);
   }
 
   private startReconciliation(
@@ -780,10 +789,7 @@ export class NodeDirectory {
       )
       .all(session.nodeId, cursor) as Array<{ operation_id: string; agent_id: string }>;
     if (rows.length === 0) {
-      if (blocking) {
-        session.ready = true;
-        this.onReady?.();
-      }
+      this.startWorkspaceReconciliation(socket, session, "", blocking);
       return;
     }
     const requestId = randomUUID();
@@ -825,6 +831,109 @@ export class NodeDirectory {
     }
     delete session.reconcile;
     this.startReconciliation(socket, session, pending.cursor, pending.blocking);
+  }
+
+  private startWorkspaceReconciliation(
+    socket: NodeSocket,
+    session: SocketSession,
+    cursor: string,
+    blocking: boolean,
+  ): void {
+    if (!session.nodeId || this.connected.get(session.nodeId) !== socket) return;
+    if (
+      !this.database
+        .prepare(
+          "SELECT 1 FROM sqlite_master WHERE type='table' AND name='owner_agent_tool_actions'",
+        )
+        .get()
+    ) {
+      if (blocking) {
+        session.ready = true;
+        this.onReady?.();
+      }
+      return;
+    }
+    const rows = this.database
+      .prepare(
+        `SELECT json_extract(action.result_json,'$.operationId') AS operation_id,
+              action.agent_id
+       FROM owner_agent_tool_actions action
+       JOIN owner_agents agent ON agent.id=action.agent_id
+       WHERE agent.node_id=? AND action.operation LIKE 'workspace.%'
+         AND json_extract(action.result_json,'$.state') IN ('executing','unknown')
+         AND json_extract(action.result_json,'$.operationId')>?
+       ORDER BY operation_id LIMIT 100`,
+      )
+      .all(session.nodeId, cursor) as Array<{ operation_id: string; agent_id: string }>;
+    if (rows.length === 0) {
+      if (blocking) {
+        session.ready = true;
+        this.onReady?.();
+      }
+      return;
+    }
+    const requestId = randomUUID();
+    session.workspaceReconcile = {
+      requestId,
+      operations: new Map(rows.map((row) => [row.operation_id, row.agent_id])),
+      cursor: rows.at(-1)!.operation_id,
+      blocking,
+    };
+    this.send(socket, {
+      type: "control.workspace.reconcile",
+      requestId,
+      operations: rows.map((row) => ({ operationId: row.operation_id, agentId: row.agent_id })),
+    });
+  }
+
+  private receiveWorkspaceReconciliation(
+    socket: NodeSocket,
+    session: SocketSession,
+    request: Extract<NodeRequest, { type: "node.workspace.reconcile.result" }>,
+  ): void {
+    const pending = session.workspaceReconcile;
+    if (
+      !session.nodeId ||
+      this.connected.get(session.nodeId) !== socket ||
+      !pending ||
+      pending.requestId !== request.requestId
+    )
+      return this.reject(socket, request.requestId, "invalid_identity", "节点文件对账请求不匹配。");
+    const seen = new Set<string>();
+    for (const receipt of request.receipts) {
+      if (
+        pending.operations.get(receipt.operationId) !== receipt.agentId ||
+        seen.has(receipt.operationId)
+      )
+        return this.reject(
+          socket,
+          request.requestId,
+          "invalid_identity",
+          "节点文件收据不属于本次对账。",
+        );
+      seen.add(receipt.operationId);
+      this.deliverWorkspaceOperationResult(session.nodeId, {
+        type: "node.workspace.operation.result",
+        requestId: request.requestId,
+        operationId: receipt.operationId,
+        agentId: receipt.agentId,
+        ok: true,
+        result: receipt.result,
+      });
+    }
+    for (const [operationId, agentId] of pending.operations) {
+      if (seen.has(operationId)) continue;
+      this.deliverWorkspaceOperationResult(session.nodeId, {
+        type: "node.workspace.operation.result",
+        requestId: request.requestId,
+        operationId,
+        agentId,
+        ok: false,
+        error: "No durable node receipt; file operation result is unknown",
+      });
+    }
+    delete session.workspaceReconcile;
+    this.startWorkspaceReconciliation(socket, session, pending.cursor, pending.blocking);
   }
 
   private receiveAgentProvisionMessage(

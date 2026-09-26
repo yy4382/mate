@@ -12,8 +12,12 @@ process.env.MATE_MODEL_WORKER = workerMode;
 
 serveModelWorker((model, context, options) => {
   const stream = createAssistantMessageEventStream();
-  if (options.apiKey === "synthetic-key-process-recovery") {
+  if (
+    options.apiKey === "synthetic-key-process-recovery" ||
+    options.apiKey === "synthetic-key-workspace-recovery"
+  ) {
     const unrelated = systemPrompt(context).includes("Online Agent");
+    const workspace = options.apiKey === "synthetic-key-workspace-recovery";
     const toolTurn = !unrelated && syntheticToolTurn++ === 0;
     stream.push({
       type: "done",
@@ -24,11 +28,13 @@ serveModelWorker((model, context, options) => {
           ? [
               {
                 type: "toolCall",
-                id: "durable-process-call",
+                id: workspace ? "durable-workspace-call" : "durable-process-call",
                 name: "tools.call",
                 arguments: {
-                  name: "process.exec",
-                  input: { command: "printf side-effect" },
+                  name: workspace ? "workspace.write" : "process.exec",
+                  input: workspace
+                    ? { path: "memo.txt", content: "once" }
+                    : { command: "printf side-effect" },
                 },
               },
             ]
