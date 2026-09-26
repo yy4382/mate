@@ -248,6 +248,36 @@ it("reads real SQLite and node identity files, accepts a newer matching receipt,
   owner.close();
 });
 
+it("accepts the first durable node receipt when a lost response left the control-plane revision unknown", () => {
+  const { paths, node } = setup();
+  addNewerPrivilegedReceipt(paths, node.nodeId);
+  const control = new OwnerAuth({ dataDir: paths.controlPlaneDataDir });
+  control.db
+    .prepare("UPDATE owner_privileged_approvals SET node_receipt_revision=NULL WHERE request_id=?")
+    .run(requestId);
+  control.close();
+
+  const result = reconcileCoordinatedState(paths, {
+    lookupAgentIdentity: localIdentity,
+    now: () => 300,
+  });
+  expect(result).toMatchObject({ confirmed: 1, holds: [] });
+  const owner = new OwnerAuth({ dataDir: paths.controlPlaneDataDir });
+  expect(
+    owner.db
+      .prepare(
+        "SELECT state,node_receipt_revision,receipt_json FROM owner_privileged_approvals WHERE request_id=?",
+      )
+      .get(requestId),
+  ).toEqual({
+    state: "succeeded",
+    node_receipt_revision: 2,
+    receipt_json: JSON.stringify({ code: 0 }),
+  });
+  expect(owner.db.prepare("SELECT agent_id FROM owner_agent_recovery_holds").all()).toEqual([]);
+  owner.close();
+});
+
 it("holds only the local Agent when a same-version receipt conflicts, without rewriting shared facts", () => {
   const { paths, node } = setup();
   addNewerPrivilegedReceipt(paths, node.nodeId);

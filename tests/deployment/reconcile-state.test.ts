@@ -68,6 +68,64 @@ it("accepts a higher durable node result for the matching operation and leaves t
   expect(reconcileRecoveryState(control, node)).toEqual({ holds: [], confirmed: [receipt] });
 });
 
+it("accepts a first durable receipt for an unconfirmed unknown intent without a control-plane revision", () => {
+  const { control, node } = states();
+  const intent = {
+    operationId: "abababab-abab-4bab-8bab-abababababab",
+    agentId: first,
+    nodeId,
+    kind: "process" as const,
+    requestHash: "b".repeat(64),
+    state: "unknown" as const,
+    receiptConfirmed: false,
+    nodeReceiptRevision: null,
+    receipt: { reason: "node_response_unavailable" },
+  };
+  const receipt = {
+    operationId: intent.operationId,
+    agentId: first,
+    kind: "process" as const,
+    requestHash: intent.requestHash,
+    state: "succeeded" as const,
+    receipt: { code: 0 },
+    sequence: 2,
+  };
+  control.operations.push(intent);
+  node.operations.push(receipt);
+
+  expect(reconcileRecoveryState(control, node)).toEqual({ holds: [], confirmed: [receipt] });
+});
+
+it("does not overwrite an unversioned but confirmed terminal control-plane receipt with a conflict", () => {
+  const { control, node } = states();
+  const intent = {
+    operationId: "cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd",
+    agentId: first,
+    nodeId,
+    kind: "process" as const,
+    requestHash: "e".repeat(64),
+    state: "succeeded" as const,
+    receiptConfirmed: true,
+    nodeReceiptRevision: null,
+    receipt: { code: 0 },
+  };
+  control.operations.push(intent);
+  node.operations.push({
+    operationId: intent.operationId,
+    agentId: first,
+    kind: intent.kind,
+    requestHash: intent.requestHash,
+    state: "failed",
+    receipt: { code: 1 },
+    sequence: 2,
+  });
+
+  expect(reconcileRecoveryState(control, node)).toEqual({
+    holds: [{ agentId: first, reason: "node_receipt_version_unproven" }],
+    confirmed: [],
+  });
+});
+
 it("holds the affected Agent when the node checkpoint is stale or conflicts at the same revision", () => {
   const { control, node } = states();
   const operationId = "77777777-7777-4777-8777-777777777777";

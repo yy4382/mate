@@ -130,7 +130,14 @@ export function reconcileRecoveryState(
         intent.state === receipt.state &&
         stableJson(intent.receipt ?? null) === stableJson(receipt.receipt);
     if (controlRevision === receipt.sequence && sameResult) continue;
-    if (controlRevision === null && sameResult) {
+    if (
+      controlRevision === null &&
+      (sameResult ||
+        (!intent.receiptConfirmed &&
+          (intent.state === "executing" ||
+            intent.state === "unknown" ||
+            intent.state === "expired")))
+    ) {
       confirmed.push(receipt);
       continue;
     }

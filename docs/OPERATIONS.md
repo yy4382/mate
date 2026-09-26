@@ -148,7 +148,31 @@ sudo bash -euo pipefail -c '
 
 归档含节点私钥、执行收据和 Agent 私人文件，备份目录及副本都必须保密；传出主机前先加密。该脚本使用 `set -e`；停止、scope 检查、归档或校验和任一步骤失败时不会运行最后的服务启动命令。保持服务停止，检查没有 Agent scope 运行且原数据仍完整后，再由操作者启动节点；不要把部分归档当成有效备份。
 
-恢复仅按原节点身份恢复到原主机。先运行 `sha256sum -c` 和 `tar -tf` 检查归档，再停止节点及全部 Agent scope；把当前两个数据目录另存到 root-only 目录，避免与旧数据合并；最后以 root 使用 `tar --numeric-owner --same-owner --same-permissions` 解包到 `/var/lib`。启动 `mate-node.service` 后检查服务日志及网页节点状态。节点重连时会向控制面回报待核对的节点收据；无法证明的操作仍保持未知并暂停受影响 Agent。控制面本机的 `reconcile` / `release-agent` 只读取部署配置中的本机节点数据目录，不能代替远程主机的磁盘恢复或清除远程未知结果。不要在新主机上直接恢复旧归档，除非先逐一核对并恢复相同的 Agent 用户名、UID、GID 和 home 身份。
+恢复仅按原节点身份恢复到原主机。先运行 `sha256sum -c` 和 `tar -tf` 检查归档，再停止节点及全部 Agent scope；把当前两个数据目录另存到 root-only 目录，避免与旧数据合并；最后以 root 使用 `tar --numeric-owner --same-owner --same-permissions` 解包到 `/var/lib`。
+
+远程节点重连的自动对账范围有限：控制面只会向节点查询控制面已知且状态为 `executing` 或 `unknown` 的 `process` / `workspace` 操作 ID；它不会枚举节点收据来发现只存在于较新节点检查点中的额外操作。因此，不同时间点的控制面与远程节点备份恢复后，不能把重连视为两侧完整一致的证明。
+
+节点服务保持停止时，先在控制面网页的 Agent 页面停用受影响的 Agent；无法确定额外收据属于哪个 Agent 时，先停用该节点上的全部 Agent。随后在两侧用只读 SQLite 查看节点身份，以及每项操作的 operation ID、Agent ID、请求身份哈希、状态和收据版本：节点侧查看 `agent_process_operations`、`node_privileged_operations` 和 `workspace-receipts/*.json`；控制面侧查看 `owner_agent_process_operations`、`owner_privileged_approvals` 和 `owner_agent_tool_actions`。逐项核对节点公钥、Agent 的用户名/UID/GID/home 标记以及操作身份。发现节点多出操作、任一身份不匹配或结果无法证明时，保持对应 Agent 停用，不要在网页点击“复启 Agent”，也不要运行控制面主机的 `release-agent`；后者只核验部署配置中的本机 `nodeDataDir`，不检查远程磁盘。身份冲突无法定位到单个 Agent，或无法确认节点上所有后台进程已停止时，继续保持该节点服务停止。
+
+停机并确认没有 Agent scope 活动后，再检查远程节点日志和收据目录：
+
+```sh
+sudo bash -euo pipefail -c '
+  systemctl stop mate-node.service
+  systemctl list-units --all --type=scope --plain --no-legend "mate-agent-*.scope" | while read -r unit rest; do
+    [ -z "$unit" ] || systemctl stop "$unit"
+  done
+  if systemctl list-units --state=active --type=scope --plain --no-legend "mate-agent-*.scope" | grep -q .; then
+    echo "Agent scopes are still active; keep the node stopped" >&2
+    exit 1
+  fi
+  systemctl status mate-node.service --no-pager || true
+  journalctl -u mate-node.service -n 100 --no-pager
+  find /var/lib/mate-node/workspace-receipts -maxdepth 1 -type f -name "*.json" -print
+'
+```
+
+只有在人工核对确认节点身份和该 Agent 的全部操作收据后，才启动 `mate-node.service`；确认网页显示节点在线、Agent 进程停止结果已确认后，才可在网页复启该 Agent。若仍有未知或多出的操作，维持停用并保留诊断信息，不得自动放行。不要在新主机上直接恢复旧归档，除非先逐一核对并恢复相同的 Agent 用户名、UID、GID 和 home 身份。
 
 备份失败时命令会尝试恢复维护前的服务状态；如果恢复失败，会再次确认全部服务停止后报告诊断错误。若无法证明服务已恢复或已全部停止，不要启动新版本，先检查两个 Mate 单元及 Agent scope，再运行 `doctor`。
 
