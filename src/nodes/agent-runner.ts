@@ -37,11 +37,13 @@ export interface AgentRunTransport {
   ): void;
 }
 
-export interface AgentRunTestDependencies {
+export interface AgentRunOptions {
   /** Test-only seam; production node configuration never accepts a worker entry path. */
   modelWorkerEntry?: string;
   /** Test-only identity override for process-boundary checks. */
   identity?: ModelProcessIdentity;
+  /** Receives this run's model process so the node can hand it mid-run notices. */
+  onWorker?(worker: ModelProcessSession): void;
 }
 
 /** Keep one Pi session per Agent and record each plain assistant turn in its session record. */
@@ -49,7 +51,7 @@ export async function runAgentModel(
   request: AgentRunMessage,
   transport: AgentRunTransport,
   connectionSignal: AbortSignal,
-  dependencies: AgentRunTestDependencies = {},
+  dependencies: AgentRunOptions = {},
 ): Promise<void> {
   let apiKey = request.apiKey;
   const provider = request.provider,
@@ -75,6 +77,7 @@ export async function runAgentModel(
       signal: connectionSignal,
     });
     apiKey = "";
+    dependencies.onWorker?.(worker);
     const messages: ModelContextMessage[] = [];
     let cursor = 0;
     while (true) {

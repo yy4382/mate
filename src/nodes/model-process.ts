@@ -88,6 +88,11 @@ export interface ModelProcessOptions {
 
 export interface ModelProcessSession {
   run(spec: ModelRunSpec): Promise<void>;
+  /**
+   * Hand the running loop one content-free "another message arrived" notice. Returns false when
+   * this session has no run in progress, so a caller cannot revive a settled or aborted run.
+   */
+  notice(conversationId: string): boolean;
   close(): void;
 }
 
@@ -126,22 +131,54 @@ export function startModelProcess(options: ModelProcessOptions): ModelProcessSes
     });
   apiKey = "";
   delete env.MATE_MODEL_KEY;
-  let active = false;
+  // `active` is the one-run-per-process latch; `settled` separates "not started yet" (where a
+  // notice is still worth keeping) from "already over" (where a late notice must change nothing).
+  let active = false,
+    running = false,
+    settled = false;
+  /** Notices that arrived while this run was still starting, delivered with the run itself. */
+  const pendingNotices: string[] = [];
+  const sendNotice = (conversationId: string): boolean => {
+    if (!running || !child.connected || child.exitCode !== null || child.signalCode !== null)
+      return false;
+    try {
+      child.send({ type: "notice", nonce, conversationId });
+      return true;
+    } catch {
+      return false;
+    }
+  };
   const abortChild = () => child.kill("SIGKILL");
   signal.addEventListener("abort", abortChild, { once: true });
   return {
     run(spec) {
       if (active) return Promise.reject(new Error("Agent model process already ran"));
       active = true;
-      return waitForModelProcess(child, nonce, spec, {
+      running = true;
+      // The run spec reaches the child synchronously, so the loop always sees the run first.
+      const completion = waitForModelProcess(child, nonce, spec, {
         onTranscript,
         ...(onTool ? { onTool } : {}),
         signal,
       }).finally(() => {
+        running = false;
+        settled = true;
+        pendingNotices.length = 0;
         signal.removeEventListener("abort", abortChild);
       });
+      for (const conversationId of pendingNotices.splice(0)) sendNotice(conversationId);
+      return completion;
+    },
+    notice(conversationId) {
+      if (running) return sendNotice(conversationId);
+      if (settled || !child.connected) return false;
+      pendingNotices.push(conversationId);
+      return true;
     },
     close() {
+      running = false;
+      settled = true;
+      pendingNotices.length = 0;
       signal.removeEventListener("abort", abortChild);
       if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     },

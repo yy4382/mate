@@ -330,6 +330,22 @@ const NodeControlMessageShapeSchema = z.discriminatedUnion("type", [
         .strict(),
     })
     .strict(),
+  /**
+   * Content-free notice that another message is waiting while this run is still in progress.
+   *
+   * It carries no message text and no delivery identity, so a run that receives it decides for
+   * itself whether to read the conversation, defer the message, or keep working; the delivery
+   * stays pending either way and the notice never completes the run.
+   */
+  z
+    .object({
+      type: z.literal("control.agent.run.notice"),
+      requestId: requestIdSchema,
+      runId: requestIdSchema,
+      agentId: agentIdSchema,
+      conversationId: requestIdSchema,
+    })
+    .strict(),
   z
     .object({
       type: z.literal("control.agent.run.cancel"),

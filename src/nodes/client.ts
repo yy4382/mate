@@ -51,6 +51,13 @@ interface NodeTestDependencies {
 
 class NodeAuthenticationError extends Error {}
 
+/** One authorized run this connection owns: its Agent, its abort handle and its notice sink. */
+interface ActiveAgentRun {
+  agentId: string;
+  controller: AbortController;
+  notice(conversationId: string): boolean;
+}
+
 export async function runLinuxNode(options: LinuxNodeOptions, signal: AbortSignal): Promise<void> {
   return runLinuxNodeInternal(options, signal, {});
 }
@@ -216,7 +223,7 @@ function connectOnce(
           reject(error: Error): void;
         }
       >(),
-      activeRuns = new Map<string, { agentId: string; controller: AbortController }>();
+      activeRuns = new Map<string, ActiveAgentRun>();
 
     const abortActiveRuns = (message: string) => {
       for (const { controller } of activeRuns.values()) controller.abort(message);
@@ -478,6 +485,14 @@ function connectOnce(
         );
         return;
       }
+      if (message.type === "control.agent.run.notice") {
+        if (!authenticated)
+          throw new NodeAuthenticationError("控制面在节点身份验证前提示 Agent 运行。");
+        // A notice only reaches the run it names, and only while this node still owns that run.
+        const active = activeRuns.get(message.runId);
+        if (active?.agentId === message.agentId) active.notice(message.conversationId);
+        return;
+      }
       if (message.type === "control.agent.run.cancel") {
         if (!authenticated)
           throw new NodeAuthenticationError("控制面在节点身份验证前取消 Agent 运行。");
@@ -632,7 +647,10 @@ function connectOnce(
           return;
         }
         const controller = new AbortController();
-        activeRuns.set(runId, { agentId, controller });
+        // `onWorker` replaces this placeholder in the same synchronous step that registers the run,
+        // before any later control message can be handled, so no notice is ever lost to it.
+        const activeRun: ActiveAgentRun = { agentId, controller, notice: () => false };
+        activeRuns.set(runId, activeRun);
         void runAgentModel(
           message,
           {
@@ -649,6 +667,9 @@ function connectOnce(
             ...(testDependencies.modelWorkerEntry
               ? { modelWorkerEntry: testDependencies.modelWorkerEntry }
               : {}),
+            onWorker: (worker) => {
+              activeRun.notice = (conversationId) => worker.notice(conversationId);
+            },
           },
         ).finally(() => activeRuns.delete(runId));
         return;

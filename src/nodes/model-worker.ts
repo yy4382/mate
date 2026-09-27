@@ -55,6 +55,17 @@ const transcriptAckSchema = z
     accepted: z.boolean(),
   })
   .strict();
+/**
+ * A message arrived while this run is still in progress. The node composes the model-visible
+ * wording, so no message text and no delivery state can travel on this channel.
+ */
+const noticeSchema = z
+  .object({
+    type: z.literal("notice"),
+    nonce: z.string().uuid(),
+    conversationId: z.string().uuid(),
+  })
+  .strict();
 const toolReplySchema = z.discriminatedUnion("ok", [
   z
     .object({
@@ -99,6 +110,8 @@ export function serveModelWorker(stream: StreamFn): void {
       { nonce: string; toolCallId: string; resolve(reply: z.infer<typeof toolReplySchema>): void }
     >();
   let active = false;
+  /** The Pi loop currently producing this run, so a notice can reach it while it works. */
+  let running: { nonce: string; agent: Agent } | undefined;
   process.on("message", async (raw: unknown) => {
     const acknowledgement = transcriptAckSchema.safeParse(raw);
     if (acknowledgement.success) {
@@ -119,6 +132,12 @@ export function serveModelWorker(stream: StreamFn): void {
         pendingTools.delete(toolReply.data.requestId);
         waiter.resolve(toolReply.data);
       }
+      return;
+    }
+    const notice = noticeSchema.safeParse(raw);
+    if (notice.success) {
+      if (running?.nonce === notice.data.nonce)
+        running.agent.steer(runNoticeMessage(notice.data.conversationId));
       return;
     }
     const run = runSchema.safeParse(raw);
@@ -260,6 +279,7 @@ export function serveModelWorker(stream: StreamFn): void {
           `介绍：${run.data.spec.prompt.description}`,
           `本次输入来自：频道 ${run.data.spec.sourceChannel.channelId}（${visibilityLabel(run.data.spec.sourceChannel.visibility)}）。`,
           "上下文中的每条消息都标出来源频道、可见范围和是否属于本次输入。只处理标为本次输入的消息；历史仅用于理解。",
+          "运行期间可能有新消息到达：你会收到以 [运行提示] 开头的用户消息，它只给出有新消息的对话 ID，不含正文，也不代表正文已读；它不是历史记录，也不是本次输入的正文，而是当前运行中的实时提示。看到提示不会打断你正在执行的工具，你可以自行决定现在读取、暂缓或继续手上的工作。未处理的消息会留到下一轮同一会话。",
           "你的普通正文只写入你自己的 Agent 会话记录，不会发送给任何频道、讨论串或私信；只输出正文而不发言，也是一次成功的处理。要在某个频道、讨论串或私信中发言，必须调用 messages.send，并在 input 中显式给出 conversationId 和 text（讨论串用 rootId，引用用 quoteId）。公开对话中的发言不得泄露任何私密对话的内容。",
           "使用 tools.list 发现可用 Mate 操作，需要时使用 tools.describe 读取准确参数。process.exec 会以你固定的非特权 Linux 用户运行普通命令；使用 process.list、process.inspect 和 process.stop 管理自己的命令进程。普通命令不需要逐条人工审批。先用 agents.list 查找同伴身份，再用 conversations.open_dm 建立或返回你与目标 Agent 的私信；每次读取和发送都必须明确指定你有权访问的对话。邀请同伴时必须指定你已加入的频道和目标 Agent。控制面会检查每次操作是否获授权，拒绝结果不可绕过。",
         ].join("\n"),
@@ -268,6 +288,7 @@ export function serveModelWorker(stream: StreamFn): void {
       },
       toolExecution: "sequential",
     });
+    running = { nonce, agent };
     let unsuccessfulStopReason: "error" | "aborted" | undefined;
     const unsubscribe = agent.subscribe(async (event) => {
       if (event.type !== "message_end" || event.message.role !== "assistant") return;
@@ -308,6 +329,7 @@ export function serveModelWorker(stream: StreamFn): void {
         code: credentialResponse ? "credentials_invalid" : "model_failed",
       });
     } finally {
+      running = undefined;
       unsubscribe();
       for (const waiter of pending.values()) waiter.resolve(false);
       pending.clear();
@@ -345,6 +367,22 @@ function toAgentMessage(message: ModelContextMessage): AgentMessage {
 
 function visibilityLabel(visibility: "public" | "private"): string {
   return visibility === "public" ? "公开" : "私密";
+}
+
+/**
+ * The model-visible wording of a mid-run notice. It names the conversation that received a
+ * message and nothing else: no body, no author, no delivery identity, and no read receipt.
+ *
+ * The notice is deliberately kept out of the session journal. It is not a message and not a
+ * delivery: the journal stays the record of what was said, and the pending delivery stays the
+ * record of what still needs attention, so nothing has to be un-read or replayed later.
+ */
+function runNoticeMessage(conversationId: string): AgentMessage {
+  return {
+    role: "user",
+    content: `[运行提示] 对话 ${conversationId} 有新消息到达。这条提示只说明有新消息，不含正文，也没有把任何消息标为已读；你可以用 conversations.read 或 attention.list 现在查看，也可以继续手上的工作，把它留给下一轮同一会话。`,
+    timestamp: Date.now(),
+  };
 }
 
 function canonicalJson(value: unknown): string {

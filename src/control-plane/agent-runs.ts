@@ -38,6 +38,8 @@ interface RunCandidate {
 /** Durable owner-channel run admission and the single primary run path for each Agent. */
 export class AgentRunCoordinator {
   private readonly activeAgents = new Set<string>();
+  /** Deliveries already announced to their run: delivery id to the run that was told. */
+  private readonly noticedDeliveries = new Map<string, string>();
   private readonly timer: ReturnType<typeof setInterval>;
   private draining = false;
   private closed = false;
@@ -661,6 +663,7 @@ export class AgentRunCoordinator {
     this.draining = true;
     try {
       this.chat.fireDueReminders();
+      this.notifyBusyRuns();
       const onlineNodeIds = this.nodes
         .list()
         .filter((node) => node.online)
@@ -704,6 +707,69 @@ export class AgentRunCoordinator {
     } finally {
       this.draining = false;
     }
+  }
+
+  /**
+   * Tell each run that is still in progress that a message arrived after its context boundary.
+   *
+   * The notice is content-free and changes no state: the delivery stays pending, and only an
+   * explicit tool call by the run reads, defers or ignores it. Notices are remembered per running
+   * run so one arrival is announced once; the memory dies with the run, and a run that ends before
+   * its notice is sent leaves the delivery for the next run of the same session.
+   *
+   * The eligibility rule mirrors `pendingCandidates`: a conversation the scheduler would refuse to
+   * run — an archived channel, unless the message is a reminder — is never worth announcing.
+   */
+  private notifyBusyRuns(): void {
+    const running = new Set(
+      (
+        this.db.prepare("SELECT id FROM owner_agent_runs WHERE state='running'").all() as Array<{
+          id: string;
+        }>
+      ).map((row) => row.id),
+    );
+    for (const [deliveryId, runId] of this.noticedDeliveries)
+      if (!running.has(runId)) this.noticedDeliveries.delete(deliveryId);
+    if (running.size === 0) return;
+    // A delivery already announced stays pending until its run covers it, so it has to be excluded
+    // in SQL: a pass limit applied before the skip would let a burst wider than the limit starve
+    // the arrivals behind it.
+    const announced = [...this.noticedDeliveries.keys()],
+      announcedPlaceholders = announced.map(() => "?").join(",");
+    const arrivals = this.db
+      .prepare(
+        `SELECT r.id AS run_id,r.node_id,r.agent_id,d.id AS delivery_id,d.channel_id
+         FROM owner_agent_runs r
+         JOIN owner_agent_session_journal j
+           ON j.agent_id=r.agent_id AND j.channel_id=d.channel_id
+              AND j.message_id=d.message_id AND j.role='user'
+         JOIN owner_message_deliveries d
+           ON d.message_id=j.message_id AND d.channel_id=j.channel_id
+              AND d.recipient_kind='agent' AND d.recipient_id=r.agent_id
+         JOIN owner_messages m ON m.id=d.message_id
+         JOIN owner_channels c ON c.id=d.channel_id
+         WHERE r.state='running' AND d.state='pending' AND j.seq>r.context_history_end_seq
+           AND (c.archived=0 OR m.internal_kind='reminder')
+           ${announced.length ? `AND d.id NOT IN (${announcedPlaceholders})` : ""}
+         ORDER BY d.seq LIMIT 100`,
+      )
+      .all(...announced) as Array<{
+      run_id: string;
+      node_id: string;
+      agent_id: string;
+      delivery_id: string;
+      channel_id: string;
+    }>;
+    for (const arrival of arrivals)
+      if (
+        this.nodes.notifyAgentRun(
+          arrival.node_id,
+          arrival.run_id,
+          arrival.agent_id,
+          arrival.channel_id,
+        )
+      )
+        this.noticedDeliveries.set(arrival.delivery_id, arrival.run_id);
   }
 
   private pendingCandidates(onlineNodeIds: string[]): RunCandidate[] {
