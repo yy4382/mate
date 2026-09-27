@@ -121,14 +121,56 @@ node "$CLI" restore "$HOME/mate/deploy.json" "$HOME/backups/mate-1"
 
 备份中断、某个路径读不了、或任何一步失败时，Mate 都不写 `complete.json`，并明确说明剩下的东西“不是备份”；对这样的目录运行 `verify` 会报“不完整”。已经复制出来的部分会留在原处供你查看，但不会被当成可恢复的备份——确认无用后删掉它再重试。
 
-`restore` 恢复数据后重新核对每个 Agent 的身份与操作收据，未获证实的 Agent 保持暂停；核对函数在 `restore` 里失败时恢复标记会保留，服务保持停止，修复后用 `reconcile` 重新核对，再用 `release-agent` 单独放行某个已证实的 Agent：
+### 恢复
+
+恢复一共三步，全部用运行账号自己的权限：先停两个服务，再对同一份检查点做一次 `verify`，确认无误后 `restore`，最后按需要 `start`：
+
+```sh
+node "$CLI" stop    "$HOME/mate/deploy.json"
+node "$CLI" verify  "$HOME/mate/deploy.json" "$HOME/mate/backups/mate-1"
+node "$CLI" restore "$HOME/mate/deploy.json" "$HOME/mate/backups/mate-1"
+node "$CLI" start   "$HOME/mate/deploy.json"
+```
+
+`restore` 不假设服务已经停：它在改动任何东西之前先停掉当时在运行的服务、并要求停稳得到确认，而且只有在检查点先通过 `verify` 之后才会替换 `control/`、`node/`、`homes/` 这三份状态。由此得到的三条行为：
+
+- 检查点缺少 `complete.json`、内容在写入之后被改过、或那个路径根本不是检查点时，`restore` 以非 0 退出码失败，不打印任何恢复报告，不停任何服务，也不改动任何现有状态。**损坏或不完整的备份不会产生“恢复成功”的结果**，被拒绝的检查点本身也不会被改动或“修复”，换一份或重新备份后仍可使用。
+- 替换状态之前会先写 `control/` 与 `node/` 旁边的 `recovery-in-progress` 标记，并在恢复完成后重新核对每个 Agent 的身份与操作收据；核对成功之前这些标记一直在，存在时任何服务启动与任何新的检查点都会拒绝。核对失败时标记保留、服务保持停止。
+- 恢复前确实在运行的服务会由 `restore` 重新启动；本来就停着的服务不会被它启动，恢复完由所有者自己运行 `start`。三个数据目录必须已经存在且是真实目录（`controlPlaneDataDir` 由控制面启动时创建，`nodeDataDir` 由节点启动时创建，`agentHomeRoot` 在节点为第一个 Agent 准备工作区时创建）；任何一个缺失或不是真实目录时，`restore` 以 `Restore destination must be a real directory: <路径>` 失败，而不是替你在别处新建目录——这一条和检查点自身的拒绝一样，在任何服务被停掉之前就报错。因此在恢复到一台从没有过这份部署的主机之前，要先让两个服务按部署配置把这三个目录建出来。
+
+恢复的输出写明它用的是哪份检查点（`checkpoint` 路径与 `id`）、核对了多少条收据（`checkedOperations`）、哪些收据被这次核对改写（`confirmed`）、哪些 Agent 仍被暂停及原因（`holds`）、哪些已经放行（`released`）、被替换掉的旧状态放在哪里（`previous`），以及两个服务现在的状态（`services`）。
+
+`previous` 里的目录形如 `<数据目录>.mate-before-<检查点 id>`，是被 `restore` 整体移到一边的恢复前状态。因此**恢复是回到检查点那一刻**：检查点之后产生的会话、消息、任务和命令收据不会回到线上，但也不会被删掉——包括只存在于恢复前状态里的操作收据（`agent-process-operations.sqlite` 与 `workspace-receipts/`）都还能用只读 SQLite 查看，核对完确认无用后由你自己删除。
+
+### 恢复后核对未完成的命令
+
+恢复后每个本机 Agent 都会被重新核对，未获证实的 Agent 保持暂停。控制面与节点两侧的记录不一致时，`holds` 给出暂停原因，可以对照下表处理（这里是代码会给出的全部原因）：
+
+| `holds` 原因 | 含义 | 处理 |
+| --- | --- | --- |
+| `operation_result_unproven` | 节点对某个已提交的命令只留下了 `unknown`（例如节点在命令运行期间重启），或者控制面从未收到结果 | 用只读 SQLite 核对两侧收据；结果无法证实时保持暂停，不要手工把 `unknown` 改成成功或失败 |
+| `node_receipt_unavailable` | 控制面记录了一个已经有结论的操作，但恢复后的节点收据里没有它 | 核对是不是恢复了两份不同时间的检查点，见下面的“跨机或分开时间的恢复” |
+| `node_receipt_stale` | 节点收据比控制面已经确认的版本更旧 | 保持暂停，逐项核对 operation ID、Agent ID、请求哈希与版本 |
+| `node_receipt_version_unproven` | 控制面从未记下任何节点收据版本，而这次核对也证明不了结果 | 同上；确认节点是否在命令运行期间重启过 |
+| `node_receipt_version_conflict` | 同一操作出现两份同样版本的节点收据 | 保持暂停，逐项核对是哪一份来自本机节点 |
+| `node_receipt_version_invalid` | 节点收据缺少可用的版本号，无法判断新旧 | 同上 |
+| `operation_result_conflict` | 同一操作在两份记录里的结论不同 | 同上 |
+| `operation_identity_conflict` | 控制面意图与节点收据的 Agent、节点或请求身份对不上 | 同上 |
+| `operation_node_identity_conflict` | 节点收据声称的操作属于另一个节点 | 同上 |
+| `node_operation_without_intent` | 节点手上有一项控制面检查点里没有的操作 | 见下面的“跨机或分开时间的恢复” |
+| `node_receipt_identity_unproven` | 节点侧有一条收据无法证明属于哪次请求 | 同上 |
+| `control_receipt_identity_unproven` | 控制面侧有一条动作记录无法证明属于哪次请求 | 同上 |
+| `node_identity_unproven` | 恢复后的节点身份与控制面配对时保存的公钥不一致 | 不要删除 `node-identity.json`；用原节点身份恢复，或按跨机流程处理 |
+| `agent_identity_unproven` | 某个 Agent 的工作区、运行账号或工作区标记与恢复出来的记录不一致 | 确认工作区根路径与运行账号没变，再重新核对 |
+
+`unknown` 结果只按收据保留，**不会**被当成“没执行过”而自动重跑：节点对同一个操作 ID 只会返回它已经记录的结果，不会再次执行那条命令；控制面也不会为被暂停的 Agent 启动新一轮运行。核对函数在 `restore` 里失败时恢复标记会保留，服务保持停止，修复后用 `reconcile` 重新核对，再用 `release-agent` 单独放行某个已证实的 Agent：
 
 ```sh
 node "$CLI" reconcile     "$HOME/mate/deploy.json"
 node "$CLI" release-agent "$HOME/mate/deploy.json" AGENT_UUID
 ```
 
-`release-agent` 只做一次重新核对，不会跳过未知结果。恢复只按原身份恢复到原主机；把备份复制到其他主机、或恢复成不同的工作区路径，都不能直接放行。
+`reconcile` 与 `release-agent` 都只做一次重新核对，不会跳过未知结果，也不会把无法证实的收据改成已确认；`release-agent` 对仍然被暂停的 Agent 会以非 0 退出码失败并说明原因。恢复只按原身份恢复到原主机；把备份复制到其他主机、或恢复成不同的工作区路径，都不能直接放行。
 
 多主机（远端节点）不承诺跨机原子检查点：控制面主机上的 `backup` 只覆盖该配置里的本机目录。远端节点主机需要自行在节点停机后备份自己的 `nodeDataDir` 与 `agentHomeRoot`。
 

@@ -561,8 +561,9 @@ export function defaultMaintenance(
     config: DeploymentConfig,
     /** A step that copies this state needs more than a stop; a repair pass only rechecks it. */
     copiesState = false,
+    /** The one service instance this step acts on and reports on; a caller may already own it. */
+    services = servicesFor(config),
   ): CoordinatedMaintenanceServices => {
-    const services = servicesFor(config);
     // Which services were up before maintenance is what gets resumed: a host that runs only the
     // control plane must not be given a node (and a tokenless node start would fail anyway).
     let previouslyRunning: readonly AccountServiceName[] | undefined;
@@ -609,10 +610,26 @@ export function defaultMaintenance(
       return verifyCoordinatedCheckpoint(checkpoint);
     },
     async restore(config, checkpoint) {
-      const paths = statePaths(config);
-      return restoreMaintenanceCheckpoint(checkpoint, paths, maintenanceServices(config), () =>
-        reconcileCoordinatedState(paths),
+      const paths = statePaths(config),
+        // One instance stops and resumes the services and the same one reports their state, so the
+        // report cannot come from a second view of the deployment that did none of the work.
+        services = servicesFor(config);
+      // The owner's report names the checkpoint that was applied, the state it replaced (which is
+      // kept on disk under the names it gives), what the reconciliation proved, and whether the
+      // services came back — the four facts that separate a restore from a refusal.
+      const restored = await restoreMaintenanceCheckpoint(
+        checkpoint,
+        paths,
+        maintenanceServices(config, false, services),
+        () => reconcileCoordinatedState(paths),
       );
+      return {
+        checkpoint: resolve(checkpoint),
+        id: restored.manifest.id,
+        previous: restored.previous,
+        ...restored.reconciliation,
+        services: services.reports(),
+      };
     },
     reconcile(config) {
       const paths = statePaths(config);

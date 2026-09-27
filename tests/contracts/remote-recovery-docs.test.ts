@@ -51,6 +51,42 @@ it("documents what a completed backup holds and what verify proves for an ordina
     expect(operations).toContain(table);
 });
 
+it("documents the ordinary-account restore drill, its refusals and what it leaves behind", () => {
+  // The owner has to be able to run the drill from the document alone, and to know what a refusal
+  // and a success each look like. Each sentence is one half of that contract.
+  expect(operations).toContain("先停两个服务，再对同一份检查点做一次 `verify`");
+  expect(operations).toContain("**损坏或不完整的备份不会产生“恢复成功”的结果**");
+  expect(operations).toContain("而不是替你在别处新建目录");
+  expect(operations).toContain("Restore destination must be a real directory: <路径>");
+  // A refused restore must not take a running deployment down for a destination it cannot use
+  // either, which is what makes the ordering of that check part of the contract.
+  expect(operations).toContain("在任何服务被停掉之前就报错");
+  expect(operations).toContain("`previous` 里的目录形如 `<数据目录>.mate-before-<检查点 id>`");
+  expect(operations).toContain("`unknown` 结果只按收据保留，**不会**被当成“没执行过”而自动重跑");
+  expect(operations).toContain(
+    "`release-agent` 对仍然被暂停的 Agent 会以非 0 退出码失败并说明原因",
+  );
+});
+
+it("catalogues every reason a restore can still be holding an Agent", () => {
+  // The catalogue is what the owner uses to decide what to do with a held Agent, so a reason the
+  // reconciliation code can name but the document omits leaves them with no answer. The reasons are
+  // read out of the code rather than listed here, so a new one fails this check until it is
+  // documented too.
+  const reasonPattern =
+    /"(?:node|agent|operation|control)_[a-z_]*_(?:unproven|conflict|unavailable|invalid|without_intent|stale)"/g;
+  const reasons = new Set(
+    ["src/deployment/reconcile-state.ts", "src/deployment/reconcile-coordinated-state.ts"].flatMap(
+      (file) =>
+        [...readFileSync(resolve(file), "utf8").matchAll(reasonPattern)].map((match) =>
+          match[0].slice(1, -1),
+        ),
+    ),
+  );
+  expect(reasons.size).toBeGreaterThan(10);
+  for (const reason of reasons) expect(operations, reason).toContain(`\`${reason}\``);
+});
+
 it("advertises no installation or upgrade step that needs root, a Mate account or a systemd unit", () => {
   for (const text of [operations, configuration]) {
     for (const forbidden of [

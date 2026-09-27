@@ -37,24 +37,28 @@ export async function createMaintenanceBackup(
   return manifest;
 }
 
-/** A restore stays stopped and fenced on failure; service startup follows reconciliation. */
+/**
+ * A restore stays stopped and fenced on failure; service startup follows reconciliation. The result
+ * carries the manifest that was applied, the state it replaced, and what the reconciliation found,
+ * so the owner's own command can say all three.
+ */
 export async function restoreMaintenanceCheckpoint<T>(
   checkpoint: string,
   paths: CoordinatedStatePaths,
   services: CoordinatedMaintenanceServices,
   reconcile: () => Promise<T> | T,
-): Promise<T> {
-  let report!: T;
-  await restoreCoordinatedCheckpoint(
+): Promise<{ manifest: CheckpointManifest; previous: string[]; reconciliation: T }> {
+  let reconciliation!: T;
+  const { manifest, previous } = await restoreCoordinatedCheckpoint(
     checkpoint,
     paths,
     async () => stopWithRecovery(services),
     async () => {
-      report = await reconcile();
+      reconciliation = await reconcile();
     },
   );
   await resumeOrStop(services);
-  return report;
+  return { manifest, previous, reconciliation };
 }
 
 /** Recheck all local Agent identities and receipts before resuming after manual repair. */

@@ -20,6 +20,7 @@ import {
   symlinkSync,
   unlinkSync,
   writeFileSync,
+  type Stats,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { z } from "zod";
@@ -44,6 +45,17 @@ export interface CheckpointManifest {
   format: 1;
   id: string;
   entries: CheckpointEntry[];
+}
+
+/** What restoring one checkpoint did: the manifest it applied, and where the replaced state went. */
+export interface CoordinatedRestore {
+  manifest: CheckpointManifest;
+  /**
+   * The live roots moved aside as `<root>.mate-before-<manifest id>`, kept so that whatever the
+   * restore replaced — including operation receipts the checkpoint did not contain — stays readable
+   * by the owner instead of being deleted.
+   */
+  previous: string[];
 }
 
 export const RECOVERY_MARKER = "recovery-in-progress";
@@ -174,7 +186,7 @@ export async function restoreCoordinatedCheckpoint(
   destination: CoordinatedStatePaths,
   quiesce: () => Promise<void>,
   reconcile: () => Promise<void>,
-): Promise<void> {
+): Promise<CoordinatedRestore> {
   const manifest = verifyCoordinatedCheckpoint(checkpoint);
   const paths = Object.values(destination).map((path) => {
     if (!isAbsolute(path)) throw new Error("Restore destinations must be absolute paths");
@@ -183,19 +195,25 @@ export async function restoreCoordinatedCheckpoint(
   const checkpointPath = resolve(checkpoint);
   if (paths.some((path) => within(path, checkpointPath) || within(checkpointPath, path)))
     throw new Error("Checkpoint must be separate from live state");
-  await quiesce();
   const id = manifest.id;
   const stages = paths.map((path) => `${path}.mate-stage-${id}`);
   const previous = paths.map((path) => `${path}.mate-before-${id}`);
   const resuming = paths.slice(0, 2).some((path) => existsSync(`${path}.${RECOVERY_MARKER}`));
+  // Everything this restore is about to write into is checked while the deployment is still
+  // running: a destination this account cannot use, or leftovers from an earlier restore, are
+  // refused without stopping a service. Staging is the first step that has to wait for the quiesce.
   if (!resuming) {
     for (const path of paths) {
-      if (!lstatSync(path).isDirectory() || lstatSync(path).isSymbolicLink())
-        throw new Error("Restore destination must be a real directory");
+      const stat = lstatOrUndefined(path);
+      if (!stat || !stat.isDirectory() || stat.isSymbolicLink())
+        throw new Error(`Restore destination must be a real directory: ${path}`);
     }
     for (const path of paths.slice(0, 2)) assertNoRecoveryMarker(path);
     for (const path of previous)
       if (existsSync(path)) throw new Error(`Prior restore state already exists: ${path}`);
+  }
+  await quiesce();
+  if (!resuming) {
     // Staging from a pre-fence crash is disposable: no live state was moved yet.
     for (const path of stages) if (existsSync(path)) rmSync(path, { recursive: true });
     for (const [index, name] of roots.entries())
@@ -228,6 +246,7 @@ export async function restoreCoordinatedCheckpoint(
     unlinkSync(`${path}.${RECOVERY_MARKER}`);
     syncDirectory(dirname(path));
   }
+  return { manifest, previous };
 }
 
 function ensureRecoveryMarker(path: string, id: string): void {
@@ -263,7 +282,17 @@ function assertRestoredRoots(paths: string[], manifest: CheckpointManifest): voi
 export function verifyCoordinatedCheckpoint(directoryInput: string): CheckpointManifest {
   if (!isAbsolute(directoryInput)) throw new Error("Checkpoint path must be absolute");
   const directory = resolve(directoryInput);
-  const directoryStat = lstatSync(directory);
+  // A path that is not there, or that this account may not look at, is refused as itself rather
+  // than as an internal error: the owner asked to restore from a place that holds no checkpoint,
+  // and the reason it cannot be read is part of that answer.
+  let directoryStat: Stats | undefined;
+  try {
+    directoryStat = lstatSync(directory);
+  } catch (error) {
+    throw new Error(
+      `Checkpoint integrity failure: checkpoint is not a readable directory (${describeError(error)})`,
+    );
+  }
   if (
     !directoryStat.isDirectory() ||
     directoryStat.isSymbolicLink() ||
@@ -545,7 +574,7 @@ function noSymlinkParents(path: string): void {
       throw new Error(`Checkpoint path contains symbolic link: ${parent}`);
 }
 
-function lstatOrUndefined(path: string): ReturnType<typeof lstatSync> | undefined {
+function lstatOrUndefined(path: string): Stats | undefined {
   try {
     return lstatSync(path);
   } catch {

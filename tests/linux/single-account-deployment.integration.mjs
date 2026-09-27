@@ -2,8 +2,12 @@
 // prove the whole owner path works: start both services, restart them, read the status and doctor
 // diagnostics, log in, pair a node, create an Agent from the web API, and run one ordinary command
 // in that Agent's workspace. Then back the whole deployment up and verify it, refuse a checkpoint
-// whose bytes changed under it, and refuse to publish one it cannot read completely. Finally stop
-// both services and check that the status command and the web page report the truth.
+// whose bytes changed under it, and refuse to publish one it cannot read completely. On the same
+// checkpoint, run the documented restore drill — stop both services, verify, restore, start — and
+// prove a damaged or incomplete checkpoint cannot be restored while the verified one brings the
+// Agent's identity, session, message, unfinished task and workspace back, reconnects the node, and
+// still runs an ordinary command. Finally stop both services and check that the status command and
+// the web page report the truth.
 //
 // No root, no container, no service manager and no Linux account database are involved. A macOS run
 // is cross-platform evidence only; record real Linux results separately. NOTIFY_SOCKET is advertised
@@ -307,12 +311,7 @@ async function nodeOnline(origin, cookie, nodeId, expected) {
 
 /** Ask the Agent, from the owner's own direct channel, to run one scripted ordinary command. */
 async function askAgentToRunOneCommand(origin, cookie, agent) {
-  const credential = await request(new URL("/api/owner/model-credentials/openai", origin), {
-    method: "PUT",
-    headers: { cookie, "content-type": "application/json" },
-    body: JSON.stringify({ apiKey: "synthetic-key-ordinary-commands" }),
-  });
-  assert.equal(credential.status, 204);
+  await putModelKey(origin, cookie, "synthetic-key-ordinary-commands");
   const channel = await (
     await request(new URL(`/api/owner/agents/${agent.id}/direct-channel`, origin), {
       method: "POST",
@@ -328,7 +327,47 @@ async function askAgentToRunOneCommand(origin, cookie, agent) {
     },
   );
   assert.equal(sent.ok, true, "the owner message was not accepted");
-  return channel.channel.id;
+  return { channelId: channel.channel.id, messageId: (await sent.json()).id };
+}
+
+/** The owner authorises one provider key for the deployment (or the restored one). */
+async function putModelKey(origin, cookie, apiKey) {
+  const credential = await request(new URL("/api/owner/model-credentials/openai", origin), {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey }),
+  });
+  assert.equal(credential.status, 204);
+}
+
+/** How many logical sessions the control plane holds for one Agent. */
+function sessionCount(controlPlaneDataDir, agentId) {
+  return countRows(
+    controlPlaneDataDir,
+    "SELECT count(*) AS rows FROM owner_agent_sessions WHERE agent_id=?",
+    agentId,
+  );
+}
+
+/** How many model runs for one Agent have reached a terminal state. */
+function completedRunCount(controlPlaneDataDir, agentId) {
+  return countRows(
+    controlPlaneDataDir,
+    "SELECT count(*) AS rows FROM owner_agent_runs WHERE agent_id=? AND state='completed'",
+    agentId,
+  );
+}
+
+function countRows(controlPlaneDataDir, statement, parameter) {
+  const database = new Database(join(controlPlaneDataDir, "control-plane.sqlite"), {
+    readonly: true,
+    fileMustExist: true,
+  });
+  try {
+    return database.prepare(statement).get(parameter).rows;
+  } finally {
+    database.close();
+  }
 }
 
 const controlPlanePort = await freePort(),
@@ -436,7 +475,8 @@ try {
   assert.equal(agent.linuxIdentity.uid, launchingUid);
   assert.equal(agent.linuxIdentity.username, userInfo().username);
 
-  const channelId = await askAgentToRunOneCommand(origin, cookie, agent);
+  const agentRequest = await askAgentToRunOneCommand(origin, cookie, agent),
+    channelId = agentRequest.channelId;
   const ledger = await eventually(
     () =>
       existsSync(join(workspace, "ledger.txt"))
@@ -458,6 +498,62 @@ try {
   const controlPlaneLog = readFileSync(join(deployConfig.stateDir, "control-plane.log"), "utf8");
   assert.match(controlPlaneLog, /MATE_CONTROL_PLANE_LISTENING \d+/);
 
+  // One unfinished task anchored on the message the Agent already handled. It is created from the
+  // existing message rather than a new one, so the task does not need a model run of its own.
+  step("open one unfinished task on the owner's message");
+  const taskResponse = await request(new URL("/api/owner/tasks", origin), {
+    method: "POST",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ messageId: agentRequest.messageId }),
+  });
+  assert.equal(taskResponse.status, 201, "the owner's task was not created");
+  const taskId = (await taskResponse.json()).id;
+
+  // One reminder the Agent schedules for itself through its own reminder tool, before the
+  // checkpoint, so the restore drill can show a reminder surviving a real stop/restore/start cycle
+  // rather than one an operator inserted by hand.
+  step("let the Agent schedule one reminder");
+  await putModelKey(origin, cookie, "synthetic-key-plan-reminder");
+  const runsBeforeReminder = completedRunCount(deployConfig.controlPlaneDataDir, agent.id);
+  const reminderRequest = await request(
+    new URL(`/api/owner/channels/${channelId}/messages`, origin),
+    {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ text: "安排一条自己的提醒。" }),
+    },
+  );
+  assert.equal(reminderRequest.ok, true, "the owner message was not accepted");
+  await eventually(
+    () =>
+      completedRunCount(deployConfig.controlPlaneDataDir, agent.id) > runsBeforeReminder
+        ? true
+        : undefined,
+    "the Agent to finish the run that schedules its reminder",
+  );
+  const reminder = (() => {
+    const database = new Database(join(deployConfig.controlPlaneDataDir, "control-plane.sqlite"), {
+      readonly: true,
+      fileMustExist: true,
+    });
+    try {
+      return database
+        .prepare(
+          `SELECT reminder.id,reminder.text,reminder.due_at,reminder.state,
+                  (SELECT count(*) FROM owner_agent_tool_actions action
+                   WHERE action.agent_id=reminder.agent_id AND action.operation='reminders.create'
+                     AND action.result_json LIKE '%' || reminder.id || '%') AS createdByTool
+           FROM owner_reminders reminder WHERE reminder.agent_id=?`,
+        )
+        .get(agent.id);
+    } finally {
+      database.close();
+    }
+  })();
+  assert.ok(reminder, "the Agent's own reminder tool call created no reminder");
+  assert.equal(reminder.createdByTool, 1, "the reminder did not come from the Agent's tool call");
+  assert.equal(reminder.state, "active");
+
   // The owner's backup path, exactly as documented and as the same ordinary account: both services
   // stop and are confirmed stopped, the state is copied, the services come back, and the result is
   // verified. Nothing here is root, a service manager or an approval step.
@@ -466,7 +562,21 @@ try {
   // workspace operations keeps that directory at all. This section therefore runs where the state
   // it checks really exists and says plainly where it does not, rather than treating a host without
   // receipts as a host whose backup worked.
-  const backupEvidence = { ran: false, checkpointOwnerUid: null, checkpointMode: null };
+  const backupEvidence = { ran: false, checkpointOwnerUid: null, checkpointMode: null },
+    // Recorded separately from the backup section, because a host that cannot take a checkpoint
+    // cannot exercise a restore either and must say so rather than claim one.
+    restoreEvidence = {
+      ran: false,
+      refusedAlteredCheckpoint: false,
+      refusedIncompleteCheckpoint: false,
+      agentIdentityAndWorkspace: false,
+      oneLogicalSession: false,
+      unfinishedTask: false,
+      reminder: false,
+      nodeReauthenticated: false,
+      deliveryContinued: false,
+      ordinaryCommandAfterRestore: false,
+    };
   if (!existsSync(join(deployConfig.nodeDataDir, "workspace-receipts"))) {
     step("skip the backup check: this host keeps no node workspace receipts to copy");
   } else {
@@ -540,6 +650,178 @@ try {
     backupEvidence.ran = true;
     backupEvidence.checkpointOwnerUid = statSync(backupDir).uid;
     backupEvidence.checkpointMode = (statSync(backupDir).mode & 0o777).toString(8);
+
+    // The restore drill, in the order the operations document gives it: stop both services, verify
+    // the same checkpoint, restore it, then start again. Everything below is the ordinary account's
+    // own permissions on a real kernel, with no root and no service manager.
+    step("stop both services, verify the checkpoint, and refuse two bad ones");
+    const liveOnlyWorkspace = join(workspace, "live-only.txt"),
+      liveOnlyData = join(deployConfig.controlPlaneDataDir, "live-only.txt"),
+      memoryEntry = join(workspace, "MEMORY.md"),
+      memoryBefore = readFileSync(memoryEntry, "utf8");
+    deploy(["stop", configPath], environment);
+    assert.equal(
+      deploy(["verify", configPath, backupDir], environment).id,
+      backedUp.id,
+      "the checkpoint no longer verifies after a restore drill has not even started",
+    );
+    // State that exists only after the checkpoint, which a restore must replace and a refusal must
+    // leave alone.
+    writeFileSync(liveOnlyWorkspace, "written after the backup\n", { mode: 0o600 });
+    writeFileSync(liveOnlyData, "written after the backup\n", { mode: 0o600 });
+    rmSync(memoryEntry);
+
+    // A checkpoint whose bytes changed after it was written, and leftovers from a backup that never
+    // completed: both are refused, neither prints a report, and the stopped deployment is untouched.
+    for (const [label, bad, expected] of [
+      ["an altered checkpoint", tampered, /integrity/i],
+      ["an incomplete checkpoint", unreadableBackup, /incomplete/i],
+    ]) {
+      assert.match(deployFailing(["restore", configPath, bad], environment), expected, label);
+      assert.ok(existsSync(liveOnlyWorkspace), `${label} was accepted and replaced live state`);
+      assert.ok(existsSync(liveOnlyData), `${label} was accepted and replaced live state`);
+    }
+    const stillStopped = deploy(["status", configPath], environment);
+    assert.equal(stillStopped.services["control-plane"].state, "not_running");
+    assert.equal(stillStopped.services.node.state, "not_running");
+    restoreEvidence.refusedAlteredCheckpoint = true;
+    restoreEvidence.refusedIncompleteCheckpoint = true;
+
+    step("restore the verified checkpoint and start both services again");
+    const restored = deploy(["restore", configPath, backupDir], environment);
+    assert.equal(restored.checkpoint, backupDir);
+    assert.equal(restored.id, backedUp.id);
+    assert.deepEqual(restored.holds, [], "the restored Agent was not proven and stays held");
+    assert.deepEqual(restored.released, [agent.id]);
+    assert.equal(restored.previous.length, 3, "the replaced state was not kept for review");
+    // Each kept directory really exists, belongs to this account, and still holds the receipts of
+    // the state the restore replaced — that is what makes an unknown or late command reviewable.
+    for (const replaced of restored.previous) {
+      assert.ok(statSync(replaced).isDirectory(), `${replaced} is not a kept state directory`);
+      assert.equal(statSync(replaced).uid, launchingUid);
+    }
+    const keptNodeState = `${deployConfig.nodeDataDir}.mate-before-${restored.id}`;
+    assert.ok(
+      restored.previous.includes(keptNodeState),
+      "the report does not name where the replaced node state went",
+    );
+    const keptReceipts = new Database(join(keptNodeState, "agent-process-operations.sqlite"), {
+      readonly: true,
+      fileMustExist: true,
+    });
+    try {
+      assert.ok(
+        keptReceipts.prepare("SELECT count(*) AS rows FROM agent_process_operations").get().rows >
+          0,
+        "the receipts of the replaced node state are not readable where the report says",
+      );
+    } finally {
+      keptReceipts.close();
+    }
+    // The services the owner had already stopped are not started by the restore: that is the
+    // documented `start` step below, and the report says so.
+    assert.equal(restored.services["control-plane"].state, "not_running");
+    assert.equal(restored.services.node.state, "not_running");
+    // A restore returns to the checkpoint: state written after it is gone from the live paths, and
+    // the restored workspace is the one the Agent was created with.
+    assert.ok(
+      !existsSync(liveOnlyWorkspace),
+      "a post-checkpoint workspace file survived the restore",
+    );
+    assert.ok(!existsSync(liveOnlyData), "a post-checkpoint data file survived the restore");
+    assert.equal(readFileSync(join(workspace, "ledger.txt"), "utf8"), "once\n");
+    assert.equal(readFileSync(memoryEntry, "utf8"), memoryBefore);
+
+    const afterRestoreStart = deploy(["start", configPath], environment);
+    assert.equal(afterRestoreStart.services["control-plane"].state, "running");
+    assert.equal(afterRestoreStart.services.node.state, "running");
+    // The node re-authenticates with the restored key, and the page the owner reads reports it.
+    await nodeOnline(origin, cookie, nodeIdentity.id, true);
+    // The owner's own login survived the restore, so the same cookie still reads the page.
+    const agentsAfterRestore = await request(new URL("/api/owner/agents", origin), {
+      headers: { cookie },
+    });
+    assert.equal(agentsAfterRestore.status, 200);
+    const restoredAgent = (await agentsAfterRestore.json()).agents.find(
+      (candidate) => candidate.id === agent.id,
+    );
+    assert.ok(restoredAgent, "the Agent's ID did not survive the restore");
+    assert.equal(restoredAgent.linuxIdentity.workspace, workspace);
+    assert.equal(restoredAgent.linuxIdentity.uid, launchingUid);
+    assert.equal(sessionCount(deployConfig.controlPlaneDataDir, agent.id), 1);
+    // The conversation the checkpoint was taken for is live again.
+    const restoredHistory = await (
+      await request(new URL(`/api/owner/channels/${channelId}/messages`, origin), {
+        headers: { cookie },
+      })
+    ).json();
+    assert.ok(
+      restoredHistory.messages.some((message) => message.id === agentRequest.messageId),
+      "the pre-checkpoint message is missing after the restore",
+    );
+    // The unfinished task the owner opened before the checkpoint is still open.
+    const restoredTasks = await (
+      await request(new URL("/api/owner/tasks", origin), { headers: { cookie } })
+    ).json();
+    assert.ok(
+      restoredTasks.tasks.some((task) => task.id === taskId && task.status === "open"),
+      "the owner's unfinished task did not survive the restore",
+    );
+    // The reminder the Agent scheduled for itself is still the same one, still waiting to come due.
+    const restoredReminder = (() => {
+      const database = new Database(
+        join(deployConfig.controlPlaneDataDir, "control-plane.sqlite"),
+        { readonly: true, fileMustExist: true },
+      );
+      try {
+        return database
+          .prepare("SELECT id,text,due_at,state FROM owner_reminders WHERE id=?")
+          .get(reminder.id);
+      } finally {
+        database.close();
+      }
+    })();
+    assert.deepEqual(restoredReminder, {
+      id: reminder.id,
+      text: reminder.text,
+      due_at: reminder.due_at,
+      state: "active",
+    });
+    restoreEvidence.ran = true;
+    restoreEvidence.agentIdentityAndWorkspace = true;
+    restoreEvidence.oneLogicalSession = true;
+    restoreEvidence.unfinishedTask = true;
+    restoreEvidence.reminder = true;
+    restoreEvidence.nodeReauthenticated = true;
+
+    // Message delivery continues: one more owner message reaches the restored Agent, runs, and its
+    // ordinary command writes in the restored workspace.
+    step("ask the restored Agent for one more ordinary command");
+    const runsBefore = completedRunCount(deployConfig.controlPlaneDataDir, agent.id);
+    await putModelKey(origin, cookie, "synthetic-key-after-restore");
+    const continued = await request(new URL(`/api/owner/channels/${channelId}/messages`, origin), {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ text: "恢复后再执行一条普通命令。" }),
+    });
+    assert.equal(continued.ok, true, "the restored deployment refused the owner's message");
+    // A completed run is a durable fact the control plane writes only at the end of one, so a run
+    // that failed or never started cannot pass this the way a stale transcript could.
+    await eventually(
+      () =>
+        completedRunCount(deployConfig.controlPlaneDataDir, agent.id) > runsBefore
+          ? true
+          : undefined,
+      "the restored Agent to complete a run from a new owner message",
+    );
+    assert.equal(readFileSync(join(workspace, "ledger.txt"), "utf8"), "once\nafter-restore\n");
+    // And the Agent kept its own record of that run, naming the reminder it scheduled before the
+    // checkpoint: the restored deployment still shows the Agent its own unfinished work.
+    const finalTurn = sessionTurnText(deployConfig.controlPlaneDataDir, agent.id);
+    assert.match(finalTurn, /恢复后仍可执行普通命令。/);
+    assert.match(finalTurn, new RegExp(reminder.text));
+    restoreEvidence.deliveryContinued = true;
+    restoreEvidence.ordinaryCommandAfterRestore = true;
   }
 
   // Stopping only the node must reach both places the owner looks: the still-running control plane
@@ -581,6 +863,9 @@ try {
         "stop CONFIG node",
         "status",
         ...(backupEvidence.ran ? ["backup CONFIG", "verify CONFIG CHECKPOINT"] : []),
+        ...(restoreEvidence.ran
+          ? ["stop CONFIG", "restore CONFIG CHECKPOINT", "start CONFIG"]
+          : []),
       ],
       controlPlanePort,
       releaseRootAccountOwned: statSync(deployConfig.releaseRoot).uid === launchingUid,
@@ -607,6 +892,20 @@ try {
       backupRefusedTamperedCheckpoint: backupEvidence.ran,
       backupRefusedUnreadablePath: backupEvidence.ran,
       backupRanAsRoot: false,
+      // The restore drill on this kernel: a refused checkpoint changes nothing, the verified one is
+      // applied, the Agent's identity, one session, message, task and workspace continue, the node
+      // authenticates again and the page reports it, and an ordinary command still runs afterwards.
+      restoreVerifiedAsOrdinaryAccount: restoreEvidence.ran,
+      restoreRefusedAlteredCheckpoint: restoreEvidence.refusedAlteredCheckpoint,
+      restoreRefusedIncompleteCheckpoint: restoreEvidence.refusedIncompleteCheckpoint,
+      restoreKeptAgentIdentityAndWorkspace: restoreEvidence.agentIdentityAndWorkspace,
+      restoreKeptOneLogicalSession: restoreEvidence.oneLogicalSession,
+      restoreKeptUnfinishedTask: restoreEvidence.unfinishedTask,
+      restoreKeptAgentReminder: restoreEvidence.reminder,
+      restoreKeptPendingWorkAndRanAgain: restoreEvidence.deliveryContinued,
+      restoreOrdinaryCommandRanAfterRestore: restoreEvidence.ordinaryCommandAfterRestore,
+      restoredNodeReauthenticatedAndPageShowsOnline: restoreEvidence.nodeReauthenticated,
+      restoreRanAsRoot: false,
       nodeStoppedStateReported: stopped.services.node.state,
       // The host this ran on, so a low-resource VPS claim can be checked against real numbers
       // instead of being assumed from the ticket.

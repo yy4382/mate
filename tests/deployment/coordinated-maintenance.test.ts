@@ -83,7 +83,13 @@ it("restarts services only after receipt reconciliation completes", async () => 
     return { released: ["agent-1"], holds: [] };
   });
   expect(calls).toEqual(["stop", "reconcile", "resume"]);
-  expect(report).toEqual({ released: ["agent-1"], holds: [] });
+  // The restore reports the checkpoint it applied, the reconciliation it ran, and where the state
+  // it replaced was kept, so the owner's own command can say all three.
+  expect(report.reconciliation).toEqual({ released: ["agent-1"], holds: [] });
+  expect(report.manifest.id).toBe(verifyCoordinatedCheckpoint(f.checkpoint).id);
+  expect(report.previous).toEqual(
+    Object.values(f.paths).map((path) => `${path}.mate-before-${report.manifest.id}`),
+  );
   expect(existsSync(join(f.paths.controlPlaneDataDir, "recovery-in-progress"))).toBe(false);
 });
 
