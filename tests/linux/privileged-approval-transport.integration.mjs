@@ -137,7 +137,6 @@ if (process.argv[2] === "control") {
           },
           controller.signal,
           {
-            modelWorkerIdentity: null,
             processOperations: { allowAgent() {} },
             privilegedOperations: operations,
             workspaceExecutor: {},

@@ -9,6 +9,7 @@ const manifest = JSON.parse(readFileSync(resolve("package.json"), "utf8")) as {
 
 it("exposes the Linux-user web control plane without superseded deployment paths", () => {
   expect(manifest.scripts["start:control-plane"]).toBe("node dist/src/control-plane/main.js");
+  expect(manifest.scripts["start:node"]).toBe("node dist/src/node/main.js");
   expect(manifest.scripts.deploy).toBe("node dist/src/deployment/cli.js");
   expect(manifest.scripts).not.toHaveProperty("config:check");
   expect(Object.keys(manifest.dependencies).filter((name) => name.startsWith("@slack/"))).toEqual(
@@ -23,4 +24,12 @@ it("exposes the Linux-user web control plane without superseded deployment paths
     "mate.local.example.json",
   ])
     expect(existsSync(resolve(path)), path).toBe(false);
+});
+
+it("runs the node and its short-lived model worker as the launching account", () => {
+  expect(existsSync(resolve("src/nodes/model-identity.ts"))).toBe(false);
+  expect(readFileSync(resolve("src/nodes/client.ts"), "utf8")).not.toContain(
+    "ensureModelWorkerIdentity",
+  );
+  expect(readFileSync(resolve("src/nodes/model-process.ts"), "utf8")).not.toContain("setpriv");
 });

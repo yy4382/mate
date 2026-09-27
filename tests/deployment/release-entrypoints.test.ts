@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { nodeOptionsFromEnvironment } from "../../src/node/main.js";
 
 const roots: string[] = [];
 
@@ -92,6 +93,8 @@ it("serves status when the control plane starts through the current release syml
       MATE_CONTROL_PLANE_PORT: "0",
       MATE_CONTROL_PLANE_DATA_DIR: dataDir,
       MATE_OWNER_PASSWORD_FILE: passwordFile,
+      // An ordinary start must not depend on a service manager, even when one advertises a socket.
+      NOTIFY_SOCKET: join(root, "missing-systemd-notify.sock"),
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -122,4 +125,30 @@ it("validates node startup configuration when launched through the current relea
 
   expect(result.status).toBe(1);
   expect(`${result.stdout}\n${result.stderr}`).toContain("MATE_CONTROL_PLANE_URL is required");
+});
+
+it("keeps the node's Agent homes inside the launching account's own data directory", () => {
+  const root = mkdtempSync(join(tmpdir(), "mate-node-options-"));
+  roots.push(root);
+  const dataDirectory = join(root, "node");
+
+  expect(
+    nodeOptionsFromEnvironment({
+      MATE_CONTROL_PLANE_URL: "http://127.0.0.1:8787",
+      MATE_NODE_DATA_DIR: dataDirectory,
+    }).agentHomeRoot,
+  ).toBe(join(dataDirectory, "agents"));
+  expect(
+    nodeOptionsFromEnvironment({
+      MATE_CONTROL_PLANE_URL: "http://127.0.0.1:8787",
+      MATE_NODE_DATA_DIR: dataDirectory,
+      MATE_NODE_AGENT_HOME_ROOT: join(root, "agent-homes"),
+    }).agentHomeRoot,
+  ).toBe(join(root, "agent-homes"));
+  expect(() =>
+    nodeOptionsFromEnvironment({
+      MATE_CONTROL_PLANE_URL: "http://127.0.0.1:8787",
+      MATE_NODE_AGENT_HOME_ROOT: "relative/agent-homes",
+    }),
+  ).toThrow("must be an absolute path");
 });

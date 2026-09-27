@@ -203,8 +203,7 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=notify
-NotifyAccess=all
+Type=simple
 User=root
 Group=root
 WorkingDirectory=/opt/mate/current

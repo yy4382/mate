@@ -19,11 +19,14 @@ const config = dualServiceConfigSchema.parse({
 
 it("renders two separate service identities and one TLS reverse proxy", () => {
   expect(renderControlPlaneUnit(config)).toContain("User=mate-control");
-  expect(renderControlPlaneUnit(config)).toContain("Type=notify\nNotifyAccess=all");
+  // Mate no longer notifies a service manager, so units must not wait for a readiness message.
+  expect(renderControlPlaneUnit(config)).toContain("Type=simple\n");
+  expect(renderControlPlaneUnit(config)).not.toContain("Type=notify");
   expect(renderControlPlaneUnit(config)).toContain("MATE_CONTROL_PLANE_PORT=8787");
   expect(renderControlPlaneUnit(config)).not.toContain("User=root");
   expect(renderNodeUnit(config)).toContain("User=root");
-  expect(renderNodeUnit(config)).toContain("Type=notify\nNotifyAccess=all");
+  expect(renderNodeUnit(config)).toContain("Type=simple\n");
+  expect(renderNodeUnit(config)).not.toContain("Type=notify");
   expect(renderNodeUnit(config)).toContain("MATE_CONTROL_PLANE_URL=ws://127.0.0.1:8787");
   expect(renderCaddy(config)).toContain("mate.example.org {\n  reverse_proxy 127.0.0.1:8787");
 });

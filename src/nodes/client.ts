@@ -1,7 +1,6 @@
 import { createPrivateKey, randomUUID, sign } from "node:crypto";
-import { resolve as resolvePath } from "node:path";
+import { join, resolve as resolvePath } from "node:path";
 import { WebSocket } from "ws";
-import { notifyServiceReady } from "../deployment/readiness.js";
 import { loadOrCreateNodeIdentity, type NodeIdentity } from "./identity.js";
 import { readProvisionedLinuxAgentIdentity } from "./agent-provisioner.js";
 import { NodeControlMessageSchema, NodeRequestSchema } from "./protocol.js";
@@ -10,9 +9,7 @@ import {
   provisionLinuxAgent,
   type LinuxAgentIdentity,
 } from "./agent-provisioner.js";
-import { ensureModelWorkerIdentity } from "./model-identity.js";
 import { makeAgentRunRequest, runAgentModel, type AgentRunPage } from "./agent-runner.js";
-import type { ModelProcessIdentity } from "./model-process.js";
 import type { AgentProvisionStage } from "./protocol.js";
 import { openNodeProcessOperations } from "./process-operation-runtime.js";
 import type { AgentProcessOperations } from "./process-operations.js";
@@ -36,9 +33,13 @@ export interface LinuxNodeOptions {
   heartbeatTimeoutMs?: number;
 }
 
+/** Agent homes belong to the launching account, so they default inside its own node data directory. */
+export function defaultAgentHomeRoot(dataDirectory: string): string {
+  return join(resolvePath(dataDirectory), "agents");
+}
+
 interface NodeTestDependencies {
   modelWorkerEntry?: string;
-  modelWorkerIdentity?: ModelProcessIdentity | null;
   processOperations?: AgentProcessOperations;
   privilegedOperations?: PrivilegedNodeOperations;
   workspaceExecutor?: Pick<LinuxWorkspaceExecutor, "execute" | "status"> &
@@ -71,11 +72,7 @@ async function runLinuxNodeInternal(
 ): Promise<void> {
   const socketUrl = toWebSocketUrl(options.controlPlaneUrl);
   const { identity, created } = loadOrCreateNodeIdentity(options.dataDirectory);
-  const modelWorkerIdentity = Object.hasOwn(dependencies, "modelWorkerIdentity")
-    ? (dependencies.modelWorkerIdentity ?? undefined)
-    : process.platform === "linux"
-      ? ensureModelWorkerIdentity()
-      : undefined;
+  const agentHomeRoot = options.agentHomeRoot ?? defaultAgentHomeRoot(options.dataDirectory);
   let pairingToken = options.pairingToken;
   if (created && !pairingToken)
     throw new Error("A new Linux node requires MATE_NODE_PAIRING_TOKEN");
@@ -94,10 +91,7 @@ async function runLinuxNodeInternal(
 
   const processStore = dependencies.processOperations
     ? undefined
-    : openNodeProcessOperations(
-        options.dataDirectory,
-        options.agentHomeRoot ?? "/var/lib/mate/agents",
-      );
+    : openNodeProcessOperations(options.dataDirectory, agentHomeRoot);
   const processOperations = dependencies.processOperations ?? processStore!.operations;
   const privilegedStore = dependencies.privilegedOperations
     ? undefined
@@ -107,10 +101,7 @@ async function runLinuxNodeInternal(
     const workspaceExecutor =
       dependencies.workspaceExecutor ??
       (process.platform === "linux"
-        ? new LinuxWorkspaceExecutor(
-            options.agentHomeRoot ?? "/var/lib/mate/agents",
-            options.dataDirectory,
-          )
+        ? new LinuxWorkspaceExecutor(agentHomeRoot, options.dataDirectory)
         : undefined);
     let retryMs = INITIAL_RETRY_MS;
     while (!signal.aborted) {
@@ -124,8 +115,7 @@ async function runLinuxNodeInternal(
           },
           heartbeatIntervalMs,
           heartbeatTimeoutMs,
-          options.agentHomeRoot ?? "/var/lib/mate/agents",
-          modelWorkerIdentity,
+          agentHomeRoot,
           dependencies,
           processOperations,
           privilegedOperations,
@@ -175,7 +165,6 @@ function connectOnce(
   heartbeatIntervalMs: number,
   heartbeatTimeoutMs: number,
   agentHomeRoot: string,
-  modelWorkerIdentity: ModelProcessIdentity | undefined,
   testDependencies: NodeTestDependencies,
   processOperations: AgentProcessOperations,
   privilegedOperations: PrivilegedNodeOperations,
@@ -389,7 +378,6 @@ function connectOnce(
           privilegedOperations.setPublicKey(message.privilegedPublicKey);
         sendPrivilegedReceipts();
         process.stdout.write(`MATE_NODE_PAIRED ${identity.id}\n`);
-        notifyServiceReady();
         sendPing();
         heartbeat = setInterval(sendPing, heartbeatIntervalMs);
         return;
@@ -404,7 +392,6 @@ function connectOnce(
           privilegedOperations.setPublicKey(message.privilegedPublicKey);
         sendPrivilegedReceipts();
         process.stdout.write(`MATE_NODE_CONNECTED ${identity.id}\n`);
-        notifyServiceReady();
         sendPing();
         heartbeat = setInterval(sendPing, heartbeatIntervalMs);
         return;
@@ -617,11 +604,6 @@ function connectOnce(
           throw new NodeAuthenticationError("控制面在节点身份验证前请求 Agent 运行。");
         const runId = message.runId,
           agentId = message.agentId;
-        if (!modelWorkerIdentity && !testDependencies.modelWorkerEntry) {
-          message.apiKey = "";
-          sendRunResult(runId, agentId, false, "model_unavailable");
-          return;
-        }
         if (
           activeRuns.has(runId) ||
           [...activeRuns.values()].some((run) => run.agentId === agentId) ||
@@ -644,7 +626,6 @@ function connectOnce(
           },
           controller.signal,
           {
-            ...(modelWorkerIdentity ? { identity: modelWorkerIdentity } : {}),
             ...(testDependencies.modelWorkerEntry
               ? { modelWorkerEntry: testDependencies.modelWorkerEntry }
               : {}),
