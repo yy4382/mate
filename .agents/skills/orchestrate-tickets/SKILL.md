@@ -84,6 +84,52 @@ Everything else belongs on the frontier, in parallel, in worktrees.
 
 **Do not serialise out of fear of conflicts.** Conflicts are a normal cost of a parallel frontier and are handled by triage, not by avoiding parallelism: a mechanical conflict you resolve yourself, a semantic one is re-applied by its original implementer onto the new base (section 5). Running the frontier serially to dodge that cost trades a small, bounded fix for a large, certain delay.
 
+## 3a. Wait in-turn; do not end the turn to wait
+
+A ticket takes minutes to hours; a goal's continuation rounds arrive on a much shorter interval. If you end your turn whenever a ticket is still running, you get woken every few seconds, find nothing changed, and burn the session doing nothing — the single most expensive mistake in the first run of this skill. **Never end a turn whose only remaining action is waiting for a ticket.**
+
+Wait inside the turn instead, and let the wait return the moment something settles. Start the sub-agents in the background (keep their durable ids), then block on a background job that polls and exits as soon as any watched ticket is done, and collect that job with a long wait. This shell is bash 3.2 compatible on purpose — no associative arrays:
+
+```sh
+#!/usr/bin/env bash
+# exit as soon as any watched worktree ticket settles
+MAIN=/Users/chris/Developer/demo/mate
+TARGETS="41 46 50"
+for t in $TARGETS; do
+  eval "BASE_$t=$(git -C "$MAIN/.worktrees/t$t" rev-parse HEAD)"
+  eval "S_$t=0"
+done
+for i in $(seq 1 40); do
+  sleep 15
+  SETTLED=""
+  for t in $TARGETS; do
+    eval "base=\$BASE_$t"; eval "stable=\$S_$t"
+    h=$(git -C "$MAIN/.worktrees/t$t" rev-parse HEAD)
+    # ignore untracked artefacts (build output, dependency store): what matters is
+    # that no TRACKED change is still uncommitted
+    d=$(git -C "$MAIN/.worktrees/t$t" status --porcelain \
+          | grep -vE '^(\?\?|!!)' | wc -l | tr -d ' ')
+    # settled = a new commit AND a clean tree, held for consecutive polls, so a
+    # mid-edit tree is never mistaken for a finished ticket
+    if [ "$h" != "$base" ] && [ "$d" = "0" ]; then stable=$((stable+1)); else stable=0; fi
+    eval "S_$t=$stable"
+    [ "$stable" -ge 4 ] && SETTLED="$SETTLED $t"
+  done
+  if [ -n "$SETTLED" ]; then
+    echo "SETTLED:$SETTLED"
+    for t in $SETTLED; do echo "--- #$t ---"; git -C "$MAIN/.worktrees/t$t" log --oneline -2; done
+    exit 0
+  fi
+done
+echo "STILL_RUNNING"
+```
+
+Run it as a background job, then block on that job with its wait call and the longest timeout it accepts (ten minutes here); if the wait expires, call it again in the same turn. When it reports `SETTLED`, read that ticket's report, verify it (section 4), merge it, start whatever its landing unblocks, and go back to waiting — all without yielding the turn.
+
+**What the goal is actually for.** Create one goal for the effort, because a long run must survive a lost turn or a crash, but treat it as a **safety net, not the driver**: it is what resumes you if a settlement notice is never delivered. If a round does arrive while you are waiting, do the one useful thing — re-check the tickets and keep waiting — rather than reporting that you are still waiting. A round that only says "nothing has changed yet" is a wasted round; a round that verifies a landing and dispatches the next ticket is the work happening. Keep the round budget for the things it is for: resuming after an interruption, and re-checking state you cannot otherwise observe.
+
+A corollary worth knowing before you design the run: the round interval is not yours to set, so do not plan a rhythm that depends on it. Plan around in-turn waits and event-driven resumption.
+
 ## 4. Verify, do not collect reports
 
 An implementer's `STATUS: done` is a claim. Before you mark a ticket done:
