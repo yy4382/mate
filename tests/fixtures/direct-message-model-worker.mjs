@@ -248,6 +248,104 @@ serveModelWorker((model, context, options) => {
     });
     return stream;
   }
+  if (options.apiKey === "synthetic-key-reminders-silent") {
+    // The scripted Agent reads its reminders first and then chooses to say nothing this run.
+    const turn = syntheticToolTurn++;
+    stream.push({
+      type: "done",
+      reason: turn === 0 ? "toolUse" : "stop",
+      message: {
+        role: "assistant",
+        content:
+          turn === 0
+            ? [
+                {
+                  type: "toolCall",
+                  id: "reminders-silent",
+                  name: "tools.call",
+                  arguments: { name: "reminders.list", input: {} },
+                },
+              ]
+            : [],
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: turn === 0 ? "toolUse" : "stop",
+        timestamp: Date.now(),
+      },
+    });
+    return stream;
+  }
+  if (options.apiKey === "synthetic-key-continuity-plan") {
+    // A scripted Agent that schedules its own work instead of only explaining its input: consult
+    // reminders, consult tasks, read its own workspace memory, answer the current message, then
+    // continue the unfinished task it already owns and finish silently.
+    const turn = syntheticToolTurn++,
+      channelId = systemPrompt(context).match(/本次输入来自：频道 ([0-9a-f-]{36})/)?.[1],
+      reminder = nestedToolResult(context, "reminders.list")?.reminders?.[0],
+      openTask = nestedToolResult(context, "tasks.list")?.tasks?.find(
+        (task) => task.status !== "done",
+      ),
+      memory = nestedToolResult(context, "workspace.read")?.content,
+      call =
+        turn === 0
+          ? { name: "reminders.list", input: {} }
+          : turn === 1
+            ? { name: "tasks.list", input: {} }
+            : turn === 2
+              ? { name: "workspace.read", input: { path: "plan.md" } }
+              : turn === 3 && reminder && memory
+                ? {
+                    name: "messages.send",
+                    input: {
+                      conversationId: channelId,
+                      text: `先看提醒：${reminder.text} 记忆：${memory}`,
+                    },
+                  }
+                : turn === 4 && openTask
+                  ? {
+                      name: "tasks.update",
+                      input: {
+                        taskId: openTask.id,
+                        expectedVersion: openTask.version,
+                        status: "done",
+                        note: "继续完成原任务。",
+                      },
+                    }
+                  : undefined;
+    stream.push({
+      type: "done",
+      reason: call ? "toolUse" : "stop",
+      message: {
+        role: "assistant",
+        content: call
+          ? [{ type: "toolCall", id: `continuity-${turn}`, name: "tools.call", arguments: call }]
+          : [],
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: call ? "toolUse" : "stop",
+        timestamp: Date.now(),
+      },
+    });
+    return stream;
+  }
   const stopReason =
     options.apiKey === "synthetic-key-error-text"
       ? "error"
@@ -306,4 +404,35 @@ function systemPrompt(context) {
   if (!message || typeof message.content !== "string")
     throw new Error("Pi system prompt is missing");
   return message.content;
+}
+
+/**
+ * Read back the newest result of one nested Mate tool this turn's loop called by name.
+ *
+ * This relies on Pi keeping the live turn's assistant `toolCall` parts (with `arguments.name`) in the
+ * context it hands to the stream, and on the journal replay the worker builds from stored text never
+ * producing such a part. Each scripted plan calls every tool it looks up exactly once, so the
+ * newest-match scan cannot pick up a stale result from an earlier call of the same name.
+ */
+function nestedToolResult(context, name) {
+  const matching = new Set();
+  for (const message of context.messages) {
+    if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+    for (const part of message.content)
+      if (part.type === "toolCall" && part.arguments?.name === name) matching.add(part.id);
+  }
+  for (let index = context.messages.length - 1; index >= 0; index--) {
+    const message = context.messages[index];
+    if (message.role !== "toolResult" || !matching.has(message.toolCallId)) continue;
+    const text = (Array.isArray(message.content) ? message.content : [])
+      .filter((part) => part.type === "text")
+      .map((part) => part.text ?? "")
+      .join("");
+    try {
+      return JSON.parse(text);
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
 }

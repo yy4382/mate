@@ -1,4 +1,12 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import Database from "better-sqlite3";
 import { createHash, generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -4801,4 +4809,339 @@ it("does not consume an older archived ordinary message if a reminder run is una
   expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toMatchObject([
     { messageId: ordinary.id },
   ]);
+});
+
+it("keeps one logical session across a DM, a channel and a thread and reaches its task, reminder and memory after restart and compaction", async () => {
+  const fixture = await setup();
+  const { app, cookie, nodeId, socket, nodePrivateKey } = fixture;
+  const directory = fixtures.at(-1)!.directory;
+  const agentId = randomUUID();
+  app.agents.prepare({
+    id: agentId,
+    nodeId,
+    name: "持续工作伙伴",
+    role: "Continues its own unfinished work",
+    description: "Synthetic continuity fixture.",
+    model: { provider: "openai", id: "gpt-4o-mini" },
+  });
+  app.agents.complete(
+    agentId,
+    {
+      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      uid: 23001,
+      gid: 23001,
+      home: `/var/lib/mate/agents/${agentId}`,
+      homeMarker: "a".repeat(64),
+    },
+    app.chat,
+  );
+  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  await app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-key-continuity-setup" }),
+  });
+
+  // The Agent's own home is ordinary storage, so its memory outlives the control-plane process.
+  const agentHome = join(directory, "agent-home", agentId);
+  mkdirSync(agentHome, { recursive: true });
+  const serveWorkspace = (
+    target: ReturnType<typeof createControlPlaneApp>,
+    targetSocket: FakeNodeSocket,
+  ) => {
+    targetSocket.onWorkspaceOperation = async (request) => {
+      const operation = request.operation as { kind: string; path: string; content?: string },
+        file = join(agentHome, operation.path),
+        content = operation.content ?? "";
+      if (operation.kind === "write") writeFileSync(file, content);
+      await target.nodes.receive(
+        targetSocket,
+        JSON.stringify({
+          type: "node.workspace.operation.result",
+          requestId: request.requestId,
+          operationId: request.operationId,
+          agentId,
+          ok: true,
+          result:
+            operation.kind === "write"
+              ? {
+                  code: 0,
+                  stdout: JSON.stringify({
+                    sha256: createHash("sha256").update(content).digest("hex"),
+                  }),
+                  stderr: "",
+                  truncated: false,
+                }
+              : existsSync(file)
+                ? { code: 0, stdout: readFileSync(file, "utf8"), stderr: "", truncated: false }
+                : { code: 2, stdout: "", stderr: "not_found", truncated: false },
+        }),
+      );
+    };
+  };
+  serveWorkspace(app, socket);
+
+  // While handling its first input the Agent claims the work, leaves itself a reminder and writes
+  // the memory it will need later. It publishes nothing, which is still a successful run.
+  const anchor = app.chat.createMessage(direct.id, "请接手这项工作。")!;
+  const firstRun = await waitForRun(socket, 0);
+  const claim = await callAgentTool(app, socket, firstRun, "continuity-claim", "tools.call", {
+    name: "tasks.claim_message",
+    input: { messageId: anchor.id },
+  });
+  expect(claim.ok).toBe(true);
+  const claimedTask = (claim.result as { outcome: string; task: { id: string } }).task;
+  expect((claim.result as { outcome: string }).outcome).toBe("claimed");
+  const createdReminder = await callAgentTool(
+    app,
+    socket,
+    firstRun,
+    "continuity-reminder",
+    "tools.call",
+    {
+      name: "reminders.create",
+      input: { conversationId: direct.id, text: "检查部署日志。", dueAt: Date.now() + 3_600_000 },
+    },
+  );
+  expect(createdReminder).toMatchObject({ ok: true });
+  const memory = { name: "workspace.write", input: { path: "plan.md", content: "部署检查清单" } };
+  const written = await callAgentTool(
+    app,
+    socket,
+    firstRun,
+    stableToolActionId(firstRun.actionScopeId, memory),
+    "tools.call",
+    memory,
+  );
+  expect(written).toMatchObject({ ok: true });
+  expect(readFileSync(join(agentHome, "plan.md"), "utf8")).toBe("部署检查清单");
+  await finishRun(app, socket, firstRun);
+  expect(
+    app.chat
+      .listMessages(direct.id, undefined, 100)!
+      .messages.filter((message) => message.author.kind === "agent"),
+  ).toHaveLength(0);
+
+  // There is no owner-facing view of the logical session, so read it with a brand-new connection:
+  // this is the durable fact that compaction must replace the model session without duplicating.
+  const readLogicalSession = () => {
+    const reader = new Database(join(directory, "control-plane", "control-plane.sqlite"), {
+      readonly: true,
+      fileMustExist: true,
+    });
+    try {
+      return reader
+        .prepare("SELECT id,model_session_id FROM owner_agent_sessions WHERE agent_id=?")
+        .all(agentId) as Array<{ id: string; model_session_id: string | null }>;
+    } finally {
+      reader.close();
+    }
+  };
+  const sessionBeforeRestart = readLogicalSession();
+  expect(sessionBeforeRestart).toHaveLength(1);
+  const logicalSessionId = sessionBeforeRestart[0]!.id;
+
+  // The whole service stops: every timer and database handle of the old process goes away.
+  app.close();
+  const restarted = createControlPlaneApp({
+    dataDir: join(directory, "control-plane"),
+    passwordFile: join(directory, "owner-password"),
+  });
+  try {
+    const recovered = await reconnectNode(restarted, nodeId, nodePrivateKey);
+    serveWorkspace(restarted, recovered);
+    await restarted.request("/api/owner/model-credentials/openai", {
+      method: "PUT",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ apiKey: "synthetic-key-continuity-plan" }),
+    });
+
+    // A different conversation after the restart continues the same logical session, and the task
+    // and reminder entry points still answer.
+    const channel = restarted.chat.createChannel({
+      name: "持续工作频道",
+      description: "Synthetic continuity fixture.",
+      visibility: "private",
+    });
+    expect(restarted.chat.inviteAgentToChannel(channel.id, agentId)).toBe(true);
+    const restartStart = recovered.sent.length;
+    const channelRoot = restarted.chat.createMessage(channel.id, "重启后的本次输入。")!;
+    const secondRun = await waitForRun(recovered, restartStart);
+    expect(secondRun.sessionId).toBe(logicalSessionId);
+    const listedReminders = await callAgentTool(
+      restarted,
+      recovered,
+      secondRun,
+      "restart-reminders",
+      "tools.call",
+      { name: "reminders.list", input: {} },
+    );
+    expect(
+      (listedReminders.result as { reminders: Array<{ text: string }> }).reminders.map(
+        (reminder) => reminder.text,
+      ),
+    ).toContain("检查部署日志。");
+    const listedTasks = await callAgentTool(
+      restarted,
+      recovered,
+      secondRun,
+      "restart-tasks",
+      "tools.call",
+      { name: "tasks.list", input: {} },
+    );
+    expect((listedTasks.result as { tasks: unknown[] }).tasks).toMatchObject([
+      { id: claimedTask.id, status: "in_progress", ownerAgentId: agentId },
+    ]);
+    const discovered = await callAgentTool(
+      restarted,
+      recovered,
+      secondRun,
+      "restart-tools",
+      "tools.list",
+      {},
+    );
+    expect(discovered).toMatchObject({
+      ok: true,
+      result: {
+        tools: expect.arrayContaining([
+          expect.objectContaining({ name: "tasks.list" }),
+          expect.objectContaining({ name: "reminders.list" }),
+          expect.objectContaining({ name: "workspace.list" }),
+          expect.objectContaining({ name: "workspace.read" }),
+        ]),
+      },
+    });
+
+    // Compaction replaces the model session for later runs without creating a second one.
+    const compaction = {
+      name: "session.compact",
+      input: { summary: "重启前的上下文已摘要。", snapshot: { work: "继续未完成任务" } },
+    };
+    const compacted = await callAgentTool(
+      restarted,
+      recovered,
+      secondRun,
+      stableToolActionId(secondRun.actionScopeId, compaction),
+      "tools.call",
+      compaction,
+    );
+    expect(compacted).toMatchObject({ ok: true, result: { effective: "next_run" } });
+    const replacementSessionId = (compacted.result as { sessionId: string }).sessionId;
+    expect(replacementSessionId).not.toBe(logicalSessionId);
+    // A thread reply on that channel message is the next queued input.
+    const reply = restarted.chat.createMessage(channel.id, "讨论串中的本次输入。", {
+      rootId: channelRoot.id,
+    })!;
+    const replyStart = recovered.sent.length;
+    await finishRun(restarted, recovered, secondRun);
+    expect(readLogicalSession()).toEqual([
+      { id: logicalSessionId, model_session_id: replacementSessionId },
+    ]);
+
+    // The thread reply starts the next run in the replacement model session, and the scripted Agent
+    // chooses reminders first, then its own memory, then the current input, then the task it still
+    // owns, and finishes without a private plain turn.
+    const thirdRun = await waitForRun(recovered, replyStart);
+    expect(thirdRun.sessionId).toBe(replacementSessionId);
+    expect(
+      restarted.chat
+        .listMessages(channel.id, undefined, 100)!
+        .messages.find((message) => message.id === channelRoot.id),
+    ).toMatchObject({ replyCount: 1, recentReplies: [{ id: reply.id, rootId: channelRoot.id }] });
+    // The thread reply, not the channel's root message, is this run's current input.
+    expect(
+      (await callAgentRunContext(restarted, recovered, thirdRun)).messages
+        .filter((message) => message.currentRunInput)
+        .map((message) => message.text),
+    ).toEqual(["讨论串中的本次输入。"]);
+    const scripted = async (
+      run: Extract<NodeControlMessage, { type: "control.agent.run" }>,
+    ): Promise<{ results: Array<{ ok: boolean; code?: string }>; transcripts: string[] }> => {
+      const resultAcks: Promise<void>[] = [],
+        results: Array<{ ok: boolean; code?: string }> = [],
+        transcripts: string[] = [],
+        controller = new AbortController();
+      await runAgentModel(
+        run,
+        {
+          context: async () => {
+            const page = await callAgentRunContext(restarted, recovered, run);
+            return { messages: page.messages, nextCursor: page.nextCursor };
+          },
+          transcript: async (text) => {
+            transcripts.push(text);
+            await restarted.nodes.receive(
+              recovered,
+              JSON.stringify({
+                type: "node.agent.run.transcript",
+                requestId: randomUUID(),
+                runId: run.runId,
+                agentId,
+                text,
+              }),
+            );
+            return (JSON.parse(recovered.sent.at(-1)!) as { accepted?: boolean }).accepted === true;
+          },
+          tool: async (toolCallId, operation, input) => {
+            const reply = await callAgentTool(
+              restarted,
+              recovered,
+              run,
+              toolCallId,
+              operation,
+              input,
+            );
+            return reply.ok
+              ? { ok: true as const, result: reply.result }
+              : { ok: false as const, error: reply.error ?? "Agent tool request was refused" };
+          },
+          result: (ok, code) => {
+            results.push({ ok, ...(code ? { code } : {}) });
+            resultAcks.push(
+              restarted.nodes.receive(
+                recovered,
+                JSON.stringify({
+                  type: "node.agent.run.result",
+                  requestId: randomUUID(),
+                  runId: run.runId,
+                  agentId,
+                  ok,
+                  ...(ok ? {} : { code: code ?? "model_failed" }),
+                }),
+              ),
+            );
+          },
+        },
+        controller.signal,
+        { modelWorkerEntry: resolve("tests/fixtures/direct-message-model-worker.mjs") },
+      );
+      await Promise.all(resultAcks);
+      return { results, transcripts };
+    };
+    const { results, transcripts } = await scripted(thirdRun);
+    expect(results).toEqual([{ ok: true }]);
+    expect(transcripts).toEqual([]);
+    expect(
+      restarted.chat
+        .listMessages(channel.id, undefined, 100)!
+        .messages.filter((message) => message.author.kind === "agent")
+        .map((message) => message.text),
+    ).toEqual(["先看提醒：检查部署日志。 记忆：部署检查清单"]);
+    const ownerTasks = await restarted.request("/api/owner/tasks", { headers: { cookie } });
+    expect(ownerTasks.status).toBe(200);
+    expect(
+      (
+        (await ownerTasks.json()) as {
+          tasks: Array<{ id: string; status: string; ownerAgentId: string | null }>;
+        }
+      ).tasks
+        .filter((task) => task.id === claimedTask.id)
+        .map(({ id, status, ownerAgentId }) => ({ id, status, ownerAgentId })),
+    ).toEqual([{ id: claimedTask.id, status: "done", ownerAgentId: agentId }]);
+    expect(readLogicalSession()).toEqual([
+      { id: logicalSessionId, model_session_id: replacementSessionId },
+    ]);
+  } finally {
+    restarted.close();
+  }
 });

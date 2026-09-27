@@ -202,6 +202,137 @@ it("marks each message source and tells Pi how to speak in a chosen conversation
   }
 }, 10000);
 
+it("lets the Agent schedule its own work from its record, claimed tasks, reminders and memory", async () => {
+  const publicChannelId = "f584ce85-b892-4315-9a2b-00e191bd34dc",
+    privateChannelId = "1fa0be92-e11f-4c5c-a4a6-59bc86ea0f8f";
+  let transcript = "";
+  const controller = new AbortController();
+  const worker = startModelProcess({
+    provider: "openai",
+    modelId: "gpt-4o-mini",
+    apiKey: "synthetic-key-inspect-context",
+    entry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
+    onTranscript: async (text) => {
+      transcript = text;
+      return true;
+    },
+    signal: controller.signal,
+  });
+
+  try {
+    await worker.run({
+      runId: "ce74e1c2-0da5-4d70-9dd2-2f8e5d7a4cbb",
+      agentId: "06d4fab7-5259-4faa-b51e-6017f3e08f0e",
+      sessionId: "e1090cf4-f8f8-43b7-b124-e58a4dadbc1f",
+      actionScopeId: "561ad589-5e36-4c2a-98ab-35a9cfbc2e80",
+      sourceChannel: { channelId: publicChannelId, visibility: "public" },
+      messages: [
+        {
+          sequence: 1,
+          role: "user",
+          text: "这是此前的私信历史。",
+          sourceChannelId: privateChannelId,
+          sourceVisibility: "private",
+          currentRunInput: false,
+        },
+        {
+          sequence: 2,
+          role: "user",
+          text: "这是本次公开频道输入。",
+          sourceChannelId: publicChannelId,
+          sourceVisibility: "public",
+          currentRunInput: true,
+        },
+      ],
+      prompt: { name: "小林", role: "测试助手", description: "Synthetic test Agent" },
+    });
+
+    // One logical session spans every location, and history is the Agent's own continuing record
+    // rather than an explanation of the current input alone.
+    expect(transcript).toContain("你跨频道、讨论串和私信共用同一条逻辑会话");
+    expect(transcript).toContain("历史是你自己持续工作的记录，不只是对本次输入的解释");
+    expect(transcript).toContain("仍由你负责的未完成任务");
+    expect(transcript).toContain("提醒");
+    expect(transcript).toContain("你自己组织的工作区记忆");
+    expect(transcript).not.toContain("只处理标为本次输入的消息；历史仅用于理解");
+
+    // Doing real work for a message starts with one claim on that message; discussion and
+    // non-conflicting help do not need one, and the discipline is not a pass for other tools.
+    expect(transcript).toContain("tasks.claim_message");
+    expect(transcript).toContain("纯讨论、回答和不冲突的协助无需认领");
+    expect(transcript).toContain("不构成其他工具的后端通行证");
+
+    // Task, reminder and memory entry points outlive a restart, a new model process and
+    // compaction, and compaction does not create a second logical session.
+    expect(transcript).toContain("tasks.list");
+    expect(transcript).toContain("reminders.list");
+    expect(transcript).toContain("workspace.list");
+    expect(transcript).toContain("不产生第二条逻辑会话");
+
+    // No new task tree, owner hierarchy or default human review stage is introduced.
+    expect(transcript).not.toContain("任务树");
+    expect(transcript).not.toContain("人工审核");
+  } finally {
+    controller.abort();
+    worker.close();
+  }
+}, 10000);
+
+it("lets a scripted Agent read its reminders first and then stay silent", async () => {
+  const requested: Array<{ operation: string; input: Record<string, unknown> }> = [];
+  let transcriptCount = 0;
+  const controller = new AbortController();
+  const worker = startModelProcess({
+    provider: "openai",
+    modelId: "gpt-4o-mini",
+    apiKey: "synthetic-key-reminders-silent",
+    entry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
+    onTranscript: async () => {
+      transcriptCount++;
+      return true;
+    },
+    onTool: async (_toolCallId, operation, input) => {
+      requested.push({ operation, input });
+      return { ok: true, result: { reminders: [{ id: "reminder-1", text: "检查部署日志。" }] } };
+    },
+    signal: controller.signal,
+  });
+
+  try {
+    await expect(
+      worker.run({
+        runId: "4d0b0b1e-6f2a-4a4e-9c0f-51d7f2c9a0aa",
+        agentId: "06d4fab7-5259-4faa-b51e-6017f3e08f0e",
+        sessionId: "e1090cf4-f8f8-43b7-b124-e58a4dadbc1f",
+        actionScopeId: "561ad589-5e36-4c2a-98ab-35a9cfbc2e80",
+        sourceChannel: {
+          channelId: "f584ce85-b892-4315-9a2b-00e191bd34dc",
+          visibility: "private",
+        },
+        messages: [
+          {
+            sequence: 1,
+            role: "user",
+            text: "有提醒就处理，没有就算了。",
+            sourceChannelId: "f584ce85-b892-4315-9a2b-00e191bd34dc",
+            sourceVisibility: "private",
+            currentRunInput: true,
+          },
+        ],
+        prompt: { name: "小林", role: "测试助手", description: "Synthetic test Agent" },
+      }),
+    ).resolves.toBeUndefined();
+    // Looking at reminders is a real choice, and saying nothing afterwards is a successful run.
+    expect(requested).toEqual([
+      { operation: "tools.call", input: { name: "reminders.list", input: {} } },
+    ]);
+    expect(transcriptCount).toBe(0);
+  } finally {
+    controller.abort();
+    worker.close();
+  }
+}, 10000);
+
 it.each([
   ["synthetic-key-error-text", "error"],
   ["synthetic-key-aborted-text", "aborted"],
