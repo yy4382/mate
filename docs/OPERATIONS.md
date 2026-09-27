@@ -6,7 +6,9 @@ Mate 首版在一台 Debian 13 VPS 上运行两个服务：`mate-control-plane.s
 
 `/etc/mate` 允许 Caddy 穿行读取公开站点配置；所有者密码与节点令牌文件仍仅 root 可读。
 
-目标机需有 systemd、Node.js 24 (`/usr/bin/node`)、Caddy (`/usr/bin/caddy`)、`curl`、`getent`、`useradd`、`setpriv`、`systemd-run`，以及对公网解析的域名与 80/443 端口。在与目标机相同的 Debian 13 架构上运行 `pnpm install --frozen-lockfile && pnpm build`，使原生 Node 模块与目标机匹配；将完整的 `dist`、`node_modules`、`package.json`、`pnpm-lock.yaml` 作为一个发布目录安全传到目标机。不要传源码、开发数据或私有研究资料。`mate.deploy.example.json` 是部署配置模板；修改域名、端口和路径后放到目标机的 root 私有目录。
+目标机需有 systemd、Node.js 24 (`/usr/bin/node`)、Caddy (`/usr/bin/caddy`)、`curl`、`getent`、`useradd`、`setpriv`、`systemd-run`，以及对公网解析的域名与 80/443 端口。正常流程是在与目标机相同的 Debian 13 版本和 CPU 架构上运行 `pnpm install --frozen-lockfile && pnpm build`，使原生 Node 模块与目标机匹配；只将完整的 `dist`、`node_modules`、`package.json`、`pnpm-lock.yaml` 作为一个发布目录安全传到目标机，不传源码、开发数据或私有研究资料。`mate.deploy.example.json` 是部署配置模板；修改域名、端口和路径后放到目标机的 root 私有目录。
+
+如果没有可用的匹配构建机，可以在专用目标机上做一次性构建：只从已审查的提交导出构建所需的 Git 跟踪文件，先检查归档清单并记录 SHA-256；排除 `docs/reference`、`docs/archive`、`.agents`、`.claude`、`.git`、所有 `.env*` 文件以及任何凭据、开发数据和运行数据。将归档放在 `root:root`、权限 `0700` 的临时目录，使用一次性非特权构建用户和仅该用户可访问的 `0700` 工作目录运行 `pnpm install --frozen-lockfile && pnpm build`。将仅含上述四项发布产物的目录移出临时工作区后，删除归档、源码、pnpm、Corepack 和 node-gyp 缓存及构建用户，保留发布目录中的 `node_modules`；确认临时路径和账号均已清除后再安装。所有者密码、节点令牌和模型凭据不得放入构建目录。
 
 在目标机建立初始所有者密码文件，至少 12 字节，只有 root 可读。安装器用 systemd `LoadCredential` 将文件提供给非特权控制面；控制面首次启动后保存 Argon2id 哈希，运行时不需要长期保留明文，但恢复空数据库时还需此文件。
 
