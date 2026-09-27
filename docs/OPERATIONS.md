@@ -6,9 +6,138 @@ Mate 首版在一台 Debian 13 VPS 上运行两个服务：`mate-control-plane.s
 
 `/etc/mate` 允许 Caddy 穿行读取公开站点配置；所有者密码与节点令牌文件仍仅 root 可读。
 
-目标机需有 systemd、Node.js 24 (`/usr/bin/node`)、Caddy (`/usr/bin/caddy`)、`curl`、`getent`、`useradd`、`setpriv`、`systemd-run`，以及对公网解析的域名与 80/443 端口。正常流程是在与目标机相同的 Debian 13 版本和 CPU 架构上运行 `pnpm install --frozen-lockfile && pnpm build`，使原生 Node 模块与目标机匹配；只将完整的 `dist`、`node_modules`、`package.json`、`pnpm-lock.yaml` 作为一个发布目录安全传到目标机，不传源码、开发数据或私有研究资料。`mate.deploy.example.json` 是部署配置模板；修改域名、端口和路径后放到目标机的 root 私有目录。
+目标机的运行时依赖是 systemd、Node.js 24 (`/usr/bin/node`)、Caddy (`/usr/bin/caddy`)、`curl`、`getent`、`useradd`、`setpriv`、`systemd-run`，以及对公网解析的域名与 80/443 端口。Mate 服务运行不需要编译器或包管理器。
 
-如果没有可用的匹配构建机，可以在专用目标机上做一次性构建：只从已审查的提交导出构建所需的 Git 跟踪文件，先检查归档清单并记录 SHA-256；排除 `docs/reference`、`docs/archive`、`.agents`、`.claude`、`.git`、所有 `.env*` 文件以及任何凭据、开发数据和运行数据。将归档放在 `root:root`、权限 `0700` 的临时目录，使用一次性非特权构建用户和仅该用户可访问的 `0700` 工作目录运行 `pnpm install --frozen-lockfile && pnpm build`。将仅含上述四项发布产物的目录移出临时工作区后，删除归档、源码、pnpm、Corepack 和 node-gyp 缓存及构建用户，保留发布目录中的 `node_modules`；确认临时路径和账号均已清除后再安装。所有者密码、节点令牌和模型凭据不得放入构建目录。
+构建只在制作发布目录时需要。构建机必须与目标机使用相同的 Debian 13 版本和 CPU 架构，并安装 Node.js `24.21.0`、pnpm `10.33.0`（仓库 `package.json` 的 `packageManager` 版本）。Debian 构建机还需 `build-essential` 提供的 C 编译器和 make；原生依赖的构建脚本可能需要 `python3` 与 `pkg-config`。构建机需要访问 pnpm 包仓库。它们不属于 Mate 服务的运行时依赖。清理步骤还用到 Debian `procps` 包提供的 `pgrep`；若目标机没有该命令，先安装 `procps` 再运行清理块。正常流程运行 `pnpm install --frozen-lockfile && pnpm build`，然后只把完整的 `dist`、`node_modules`、`package.json`、`pnpm-lock.yaml` 作为一个发布目录安全传到目标机，不传源码、开发数据或私有研究资料。`mate.deploy.example.json` 是部署配置模板；修改域名、端口和路径后放到目标机的 root 私有目录。
+
+#### 专用目标机上的一次性构建
+
+没有匹配构建机时，可以在专用目标机上构建。以下步骤把一个已审查的干净提交中的 Git 跟踪源文件打包；源码归档不包含秘密，但目标机上的副本仍放在 root 私有目录中。所有者密码、节点令牌、模型凭据、运行数据和本机研究资料都不能进入归档或构建目录。
+
+在本地仓库的同一个 shell 会话依次运行下面两个代码块。把 `REV` 设为已审查的提交，工作区必须干净。只导出 `src`、`apps/web`、`scripts`、`tests` 和构建配置；显式排除私有资料目录、Git 元数据、环境文件和生成的 Web `dist`。先检查清单，再记下 SHA-256：
+
+```sh
+set -eu
+REV=$(git rev-parse HEAD)
+test -z "$(git status --porcelain)" || { echo "工作区必须干净" >&2; exit 1; }
+git show -s --format='%H %s' "$REV"
+RUN_ID="$(date -u +%y%m%d%H%M%S)-$$"
+printf 'RUN_ID=%s\n' "$RUN_ID"
+ARCHIVE="${TMPDIR:-/tmp}/mate-build-${RUN_ID}.tar"
+LIST="${TMPDIR:-/tmp}/mate-build-${RUN_ID}.list"
+git archive --format=tar --output="$ARCHIVE" "$REV" \
+  src apps/web scripts tests package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json vitest.config.ts \
+  ':(exclude,glob)**/.env*' ':(exclude,glob)**/.git/**' \
+  ':(exclude,glob)**/.claude/**' ':(exclude,glob)**/.agents/**' \
+  ':(exclude,glob)**/dist/**' \
+  ':(exclude,top)docs/reference/**' ':(exclude,top)docs/archive/**'
+tar -tf "$ARCHIVE" > "$LIST"
+if grep -Eq '(^|/)(\.env[^/]*|\.git|\.claude|\.agents)(/|$)|(^|/)docs/(reference|archive)(/|$)|(^|/)apps/web/dist(/|$)' "$LIST"; then
+  echo "归档含禁止路径；不要上传" >&2
+  exit 1
+fi
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+sha256_file "$ARCHIVE"
+```
+
+清单只应包含上面选择的 Git 跟踪源文件、合成测试夹具和构建配置。若清单审查失败就停止，不上传。下面的 `HOST` 是目标机上的 SSH 账号；`REMOTE_DROP` 是该账号私有 home 下的临时文件名，`REMOTE_STAGE` 是本次唯一的 root 暂存目录。用本地 SHA-256 校验 root 私有副本后，目标机再检查归档清单：
+
+```sh
+HOST=operator@mate.example.com # 替换为本次专用目标机的 SSH 账号和主机名
+REMOTE_HOME=$(ssh "$HOST" 'printf %s "$HOME"')
+REMOTE_DROP="$REMOTE_HOME/mate-build-${RUN_ID}.tar"
+REMOTE_STAGE=/root/mate-build-${RUN_ID}
+SHA256=$(sha256_file "$ARCHIVE")
+ssh "$HOST" "test ! -e '$REMOTE_DROP' && sudo test ! -e '$REMOTE_STAGE'"
+scp "$ARCHIVE" "$HOST:$REMOTE_DROP"
+ssh "$HOST" "chmod 0600 '$REMOTE_DROP' && sudo install -d -o root -g root -m 0700 '$REMOTE_STAGE' && sudo install -o root -g root -m 0600 '$REMOTE_DROP' '$REMOTE_STAGE/source.tar' && rm -f -- '$REMOTE_DROP'"
+printf '%s  %s\n' "$SHA256" "$REMOTE_STAGE/source.tar" | ssh "$HOST" 'sudo sha256sum -c -'
+ssh "$HOST" sudo bash -s -- "$REMOTE_STAGE" <<'REMOTE'
+set -euo pipefail
+stage=$1
+tar -tf "$stage/source.tar" > "$stage/source.list"
+if grep -Eq '(^|/)(\.env[^/]*|\.git|\.claude|\.agents)(/|$)|(^|/)docs/(reference|archive)(/|$)|(^|/)apps/web/dist(/|$)' "$stage/source.list"; then
+  echo "远端归档含禁止路径；不要解包" >&2
+  exit 1
+fi
+REMOTE
+```
+
+在目标机的同一个 root shell 会话依次运行下面两个代码块；先确认归档 SHA 校验成功且清单没有禁止路径。`BUILD_ID` 必须与上面的 `RUN_ID` 相同。示例中的一次性账号、源目录和缓存目录只用于本次构建：
+
+```sh
+set -eu
+BUILD_ID=260927123456-12345 # 替换为刚打印的 RUN_ID
+case "$BUILD_ID" in (''|*[!0-9-]*) echo "BUILD_ID 格式无效" >&2; exit 1 ;; esac
+BUILDER="matebuild${BUILD_ID}"
+REMOTE_STAGE="/root/mate-build-${BUILD_ID}"
+WORK="/var/tmp/mate-build-${BUILD_ID}"
+BUILD_HOME="$WORK/home"
+SOURCE="$WORK/source"
+RELEASE="$REMOTE_STAGE/release"
+test "${#BUILDER}" -le 32 || { echo "构建账号超过 Linux 名称长度限制；重新生成 RUN_ID" >&2; exit 1; }
+getent passwd "$BUILDER" >/dev/null && { echo "构建账号已存在；换用新的 BUILD_ID" >&2; exit 1; }
+test -d "$REMOTE_STAGE" && test -f "$REMOTE_STAGE/source.tar" || { echo "缺少本次 root 暂存归档；停止构建" >&2; exit 1; }
+test ! -e "$WORK" && test ! -e "$RELEASE" || { echo "构建路径已存在；换用新的 BUILD_ID" >&2; exit 1; }
+useradd --system --user-group --home-dir "$BUILD_HOME" --create-home --shell /usr/sbin/nologin "$BUILDER"
+install -d -o "$BUILDER" -g "$BUILDER" -m 0700 "$SOURCE" "$BUILD_HOME/.cache" "$BUILD_HOME/.local/share/pnpm"
+tar -xf "$REMOTE_STAGE/source.tar" -C "$SOURCE"
+chown -R "$BUILDER:$BUILDER" "$WORK"
+runuser -u "$BUILDER" -- env -i \
+  HOME="$BUILD_HOME" USER="$BUILDER" LOGNAME="$BUILDER" \
+  PATH=/usr/local/bin:/usr/bin:/bin \
+  COREPACK_ENV_FILE=/dev/null COREPACK_HOME="$BUILD_HOME/.cache/corepack" \
+  PNPM_HOME="$BUILD_HOME/.local/share/pnpm" \
+  XDG_CACHE_HOME="$BUILD_HOME/.cache" npm_config_cache="$BUILD_HOME/.cache/npm" \
+  /bin/bash -eu -c 'cd "$1"; test "$(node --version)" = v24.21.0; test "$(pnpm --version)" = 10.33.0; pnpm install --frozen-lockfile; pnpm build' _ "$SOURCE"
+install -d -o root -g root -m 0755 "$RELEASE"
+cp -a "$SOURCE/dist" "$SOURCE/node_modules" "$SOURCE/package.json" "$SOURCE/pnpm-lock.yaml" "$RELEASE/"
+chown -R root:root "$RELEASE"
+# 仅当这个 workspace 链接是悬空链接时删除；其它依赖链接必须保留。
+WEB_LINK="$RELEASE/node_modules/.pnpm/node_modules/@mate/web"
+if [ -L "$WEB_LINK" ] && [ ! -e "$WEB_LINK" ]; then rm -- "$WEB_LINK"; fi
+test "$(find "$RELEASE" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" = 4
+test -z "$(find "$RELEASE" -mindepth 1 -maxdepth 1 ! -name dist ! -name node_modules ! -name package.json ! -name pnpm-lock.yaml -print -quit)"
+test -z "$(find -L "$RELEASE" -type l -print -quit)"
+find "$RELEASE" -type l -exec sh -eu -c 'root=$(realpath -e "$1"); shift; for link do target=$(realpath -e "$link"); case "$target" in "$root"/*) ;; *) echo "发布链接指向目录之外" >&2; exit 1 ;; esac; done' sh "$RELEASE" {} +
+node --check "$RELEASE/dist/src/deployment/cli.js"
+node --check "$RELEASE/dist/src/control-plane/main.js"
+node --check "$RELEASE/dist/src/node/main.js"
+```
+
+检查通过后，确认构建账号没有残留进程，再移除一次性账号、源码和缓存；发布目录留在 root 暂存区，作为安装器输入。Corepack、pnpm、npm 与 node-gyp 缓存都在 `$WORK` 内，不使用或清理系统级缓存。若安装尚未开始，下面的清理块会删掉本次账号、工作区和源码归档/清单，但保留 `$RELEASE`；先核对 `BUILD_ID` 是本次生成值。若 `userdel` 后同名私有组仍存在，只在确认没有账号以该组为主组且组成员列表为空时运行 `groupdel "$BUILDER"`：
+
+```sh
+case "$BUILD_ID" in (''|*[!0-9-]*) echo "BUILD_ID 格式无效" >&2; exit 1 ;; esac
+test "$REMOTE_STAGE" = "/root/mate-build-${BUILD_ID}"
+test "$WORK" = "/var/tmp/mate-build-${BUILD_ID}"
+command -v pgrep >/dev/null 2>&1 || { echo "缺少 pgrep；停止清理并安装 procps" >&2; exit 1; }
+getent passwd >/dev/null || { echo "无法读取本机账号数据库；停止清理" >&2; exit 1; }
+if getent passwd "$BUILDER" >/dev/null; then
+  command -v pgrep >/dev/null 2>&1 || { echo "缺少 pgrep；停止清理并安装 procps" >&2; exit 1; }
+  if pgrep -u "$BUILDER" >/dev/null; then
+    echo "构建账号仍有进程；先核对并停止本次构建，再清理" >&2
+    exit 1
+  else
+    pgrep_status=$?
+    test "$pgrep_status" -eq 1 || { echo "无法确认构建账号进程状态；停止清理" >&2; exit 1; }
+  fi
+  userdel --remove "$BUILDER"
+fi
+rm -rf -- "$WORK"
+rm -f -- "$REMOTE_STAGE/source.tar" "$REMOTE_STAGE/source.list"
+if getent group "$BUILDER" >/dev/null; then
+  echo "检查同名私有组的成员与主组；确认无人使用后再运行 groupdel $BUILDER" >&2
+fi
+```
+
+安装成功且 `doctor` 验收完成后，删除 `$RELEASE` 和 `$REMOTE_STAGE`，并在本地删除 `$ARCHIVE` 与 `$LIST`。若构建失败且安装器尚未开始，先用本节清理块移除账号、工作区和归档/清单；核对 `REMOTE_STAGE` 仅含本次临时文件后，再执行 `rm -rf -- "$REMOTE_STAGE"`。若安装器已经开始运行，不要按构建失败步骤递归删除 `/opt/mate`；先检查 systemd 单元、发布目录和 `doctor` 结果。始终核对传入安装器的发布目录顶层恰好只有 `dist`、`node_modules`、`package.json`、`pnpm-lock.yaml`。不要把发布 `node_modules` 当缓存清理。
 
 在目标机建立初始所有者密码文件，至少 12 字节，只有 root 可读。安装器用 systemd `LoadCredential` 将文件提供给非特权控制面；控制面首次启动后保存 Argon2id 哈希，运行时不需要长期保留明文，但恢复空数据库时还需此文件。
 
