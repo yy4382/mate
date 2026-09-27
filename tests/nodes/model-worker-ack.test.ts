@@ -196,6 +196,9 @@ it("marks each message source and tells Pi how to speak in a chosen conversation
     expect(transcript).toContain("必须调用 messages.send");
     expect(transcript).toContain("显式给出 conversationId");
     expect(transcript).toContain("公开对话中的发言不得泄露任何私密对话的内容");
+    // A mid-run notice is announced before it can arrive, so the model knows what it is.
+    expect(transcript).toContain("你会收到以 [运行提示] 开头的用户消息");
+    expect(transcript).toContain("看到提示不会打断你正在执行的工具");
   } finally {
     controller.abort();
     worker.close();

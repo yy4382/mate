@@ -204,6 +204,37 @@ serveModelWorker((model, context, options) => {
     });
     return stream;
   }
+  if (options.apiKey === "synthetic-key-busy-notice") {
+    const turn = syntheticToolTurn++,
+      notice = findRunNotice(context);
+    // The first turn blocks on a tool the control plane answers later, so the test can prove a
+    // mid-run notice waits for that tool instead of preempting it.
+    stream.push({
+      type: "done",
+      reason: turn === 0 ? "toolUse" : "stop",
+      message: {
+        role: "assistant",
+        content:
+          turn === 0
+            ? [{ type: "toolCall", id: "busy-notice-tool-call", name: "tools.list", arguments: {} }]
+            : [{ type: "text", text: notice ?? "没有收到运行提示。" }],
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: turn === 0 ? "toolUse" : "stop",
+        timestamp: Date.now(),
+      },
+    });
+    return stream;
+  }
   if (options.apiKey === "synthetic-key-durable-action-pair") {
     const turn = syntheticToolTurn++,
       channelId = systemPrompt(context).match(/本次输入来自：频道 ([0-9a-f-]{36})/)?.[1],
@@ -434,5 +465,17 @@ function nestedToolResult(context, name) {
       return undefined;
     }
   }
+  return undefined;
+}
+
+/** The mid-run notice Pi injected through its steering queue, if this turn can see one. */
+function findRunNotice(context) {
+  for (const message of [...context.messages].reverse())
+    if (
+      message.role === "user" &&
+      typeof message.content === "string" &&
+      message.content.includes("运行提示")
+    )
+      return message.content;
   return undefined;
 }

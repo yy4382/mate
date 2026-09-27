@@ -55,6 +55,17 @@ const transcriptAckSchema = z
     accepted: z.boolean(),
   })
   .strict();
+/**
+ * A message arrived while this run is still in progress. The node composes the model-visible
+ * wording, so no message text and no delivery state can travel on this channel.
+ */
+const noticeSchema = z
+  .object({
+    type: z.literal("notice"),
+    nonce: z.string().uuid(),
+    conversationId: z.string().uuid(),
+  })
+  .strict();
 const toolReplySchema = z.discriminatedUnion("ok", [
   z
     .object({
@@ -99,6 +110,8 @@ export function serveModelWorker(stream: StreamFn): void {
       { nonce: string; toolCallId: string; resolve(reply: z.infer<typeof toolReplySchema>): void }
     >();
   let active = false;
+  /** The Pi loop currently producing this run, so a notice can reach it while it works. */
+  let running: { nonce: string; agent: Agent } | undefined;
   process.on("message", async (raw: unknown) => {
     const acknowledgement = transcriptAckSchema.safeParse(raw);
     if (acknowledgement.success) {
@@ -119,6 +132,12 @@ export function serveModelWorker(stream: StreamFn): void {
         pendingTools.delete(toolReply.data.requestId);
         waiter.resolve(toolReply.data);
       }
+      return;
+    }
+    const notice = noticeSchema.safeParse(raw);
+    if (notice.success) {
+      if (running?.nonce === notice.data.nonce)
+        running.agent.steer(runNoticeMessage(notice.data.conversationId));
       return;
     }
     const run = runSchema.safeParse(raw);
@@ -265,6 +284,7 @@ export function serveModelWorker(stream: StreamFn): void {
           "上下文中的每条消息都标出来源频道、可见范围和是否属于本次输入。你跨频道、讨论串和私信共用同一条逻辑会话；历史是你自己持续工作的记录，不只是对本次输入的解释。你可以根据本次输入、仍由你负责的未完成任务、提醒和你自己组织的工作区记忆，自行决定先做什么、继续什么、暂缓什么或保持静默。",
           "为某条消息展开实际工作（而不只是回答或讨论）时，默认先对那条消息调用一次 tasks.claim_message：它认领那条消息已有的任务，没有时创建并认领该讨论原顶层消息对应的任务；已被同伴认领时返回冲突，供你先协调而不抢占。纯讨论、回答和不冲突的协助无需认领；这只是默认工作约定，不构成其他工具的后端通行证，你仍按对话权限阅读和协作。",
           "任务、提醒和你自己组织的工作区记忆都是持久事实，服务重启、更换模型进程或会话压缩后仍可用 tasks.list、reminders.list、workspace.list 和 workspace.read 找回；压缩只更换后续模型调用使用的会话，不产生第二条逻辑会话。任务状态只由任务工具更新，不会因为你发言、保持静默或运行结束而自动完成。",
+          "运行期间可能有新消息到达：你会收到以 [运行提示] 开头的用户消息，它只给出有新消息的对话 ID，不含正文，也不代表正文已读；它不是历史记录，也不是本次输入的正文，而是当前运行中的实时提示。看到提示不会打断你正在执行的工具，你可以自行决定现在读取、暂缓或继续手上的工作。未处理的消息会留到下一轮同一会话。",
           "你的普通正文只写入你自己的 Agent 会话记录，不会发送给任何频道、讨论串或私信；只输出正文而不发言，也是一次成功的处理。要在某个频道、讨论串或私信中发言，必须调用 messages.send，并在 input 中显式给出 conversationId 和 text（讨论串用 rootId，引用用 quoteId）。公开对话中的发言不得泄露任何私密对话的内容。",
           "使用 tools.list 发现可用 Mate 操作，需要时使用 tools.describe 读取准确参数。process.exec 会以你固定的非特权 Linux 用户运行普通命令；使用 process.list、process.inspect 和 process.stop 管理自己的命令进程。普通命令不需要逐条人工审批。先用 agents.list 查找同伴身份，再用 conversations.open_dm 建立或返回你与目标 Agent 的私信；每次读取和发送都必须明确指定你有权访问的对话。邀请同伴时必须指定你已加入的频道和目标 Agent。控制面会检查每次操作是否获授权，拒绝结果不可绕过。",
         ].join("\n"),
@@ -273,6 +293,7 @@ export function serveModelWorker(stream: StreamFn): void {
       },
       toolExecution: "sequential",
     });
+    running = { nonce, agent };
     let unsuccessfulStopReason: "error" | "aborted" | undefined;
     const unsubscribe = agent.subscribe(async (event) => {
       if (event.type !== "message_end" || event.message.role !== "assistant") return;
@@ -313,6 +334,7 @@ export function serveModelWorker(stream: StreamFn): void {
         code: credentialResponse ? "credentials_invalid" : "model_failed",
       });
     } finally {
+      running = undefined;
       unsubscribe();
       for (const waiter of pending.values()) waiter.resolve(false);
       pending.clear();
@@ -350,6 +372,22 @@ function toAgentMessage(message: ModelContextMessage): AgentMessage {
 
 function visibilityLabel(visibility: "public" | "private"): string {
   return visibility === "public" ? "公开" : "私密";
+}
+
+/**
+ * The model-visible wording of a mid-run notice. It names the conversation that received a
+ * message and nothing else: no body, no author, no delivery identity, and no read receipt.
+ *
+ * The notice is deliberately kept out of the session journal. It is not a message and not a
+ * delivery: the journal stays the record of what was said, and the pending delivery stays the
+ * record of what still needs attention, so nothing has to be un-read or replayed later.
+ */
+function runNoticeMessage(conversationId: string): AgentMessage {
+  return {
+    role: "user",
+    content: `[运行提示] 对话 ${conversationId} 有新消息到达。这条提示只说明有新消息，不含正文，也没有把任何消息标为已读；你可以用 conversations.read 或 attention.list 现在查看，也可以继续手上的工作，把它留给下一轮同一会话。`,
+    timestamp: Date.now(),
+  };
 }
 
 function canonicalJson(value: unknown): string {

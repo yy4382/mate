@@ -746,6 +746,42 @@ export class NodeDirectory {
     return promise;
   }
 
+  /**
+   * Tell one run that is still in progress on its node that another message is waiting.
+   *
+   * This is a best-effort hint, not a delivery, and the single boolean means only one thing: the
+   * notice was written to the live connection of a run this control plane still owns. It is false
+   * when there is no such run or the node is offline, and the caller then retries on its next pass.
+   * Whether the run's model loop is still live is the node's decision, and the waiting delivery
+   * stays queued for the next run of the same session either way.
+   */
+  notifyAgentRun(nodeId: string, runId: string, agentId: string, conversationId: string): boolean {
+    const pending = this.pendingAgentRuns.get(runId);
+    if (!pending || pending.nodeId !== nodeId || pending.agentId !== agentId) return false;
+    const socket = this.connected.get(nodeId),
+      session = socket ? this.sessions.get(socket) : undefined;
+    if (
+      !socket ||
+      !session ||
+      session.nodeId !== nodeId ||
+      !session.ready ||
+      this.now() - session.lastHeartbeatAt >= this.heartbeatTimeoutMs
+    )
+      return false;
+    try {
+      this.send(socket, {
+        type: "control.agent.run.notice",
+        requestId: randomUUID(),
+        runId,
+        agentId,
+        conversationId,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   executeAgentProcessOperation(
     nodeId: string,
     request: { operationId: string; agentId: string; operation: AgentProcessOperation },
