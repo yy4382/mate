@@ -12,6 +12,7 @@ import {
   startAccountServices,
   stopAccountServices,
 } from "../../src/deployment/account-services.js";
+import { nodeCommandStopReport, nodeCommandStopReportUnavailable } from "../../src/nodes/client.js";
 
 /**
  * One small real child process stands in for a Mate service here: it prints the readiness line the
@@ -196,4 +197,87 @@ it("does not leave a service running when its start failed", async () => {
   expect(childPid).toBeGreaterThan(0);
   expect(() => process.kill(childPid, 0)).toThrow();
   expect(readServiceState("control-plane", f.config)).toMatchObject({ state: "exited" });
+});
+
+/**
+ * A node stands in for the real one here: it announces a paired session, and on the way out it
+ * writes the same shutdown line `client.ts` writes. What the stop then reports is what the owner
+ * gets to act on, so it has to be the service's own account of its commands and nothing else.
+ */
+async function nodeWithShutdownReportConfig(
+  f: Awaited<ReturnType<typeof fixture>>,
+  shutdown: string,
+) {
+  const entryFile = join(f.root, "fake-node.mjs");
+  writeFileSync(
+    entryFile,
+    `process.on("SIGTERM", () => {
+       process.stderr.write(${JSON.stringify(shutdown)});
+       process.exit(0);
+     });
+     process.stdout.write("MATE_NODE_CONNECTED 11111111-1111-4111-8111-111111111111\\n");
+     setInterval(() => {}, 1000);
+    `,
+    "utf8",
+  );
+  return { ...f.config, entries: { ...f.config.entries, node: entryFile } };
+}
+
+async function nodeWithShutdownReport(f: Awaited<ReturnType<typeof fixture>>, shutdown: string) {
+  const config = await nodeWithShutdownReportConfig(f, shutdown);
+  await startAccountServices(config, ["node"]);
+  return stopAccountServices(config, ["node"]);
+}
+
+it("reports the commands a stopped node said it could not confirm ended", async () => {
+  const f = await fixture();
+  const stopped = await nodeWithShutdownReport(f, nodeCommandStopReport(1, 2));
+  expect(stopped.reports.node).toMatchObject({ state: "stopped", unconfirmedCommands: 2 });
+});
+
+it("reports an unknown command count when the stopping node could not stop its commands", async () => {
+  const f = await fixture();
+  const stopped = await nodeWithShutdownReport(f, nodeCommandStopReportUnavailable);
+  expect(stopped.reports.node).toMatchObject({ state: "stopped", unconfirmedCommands: "unknown" });
+});
+
+it("carries the warning through a restart instead of reporting a clean start", async () => {
+  const f = await fixture();
+  // A restart is the repair action for a node that could not confirm ending a command — its receipts
+  // get reconciled on the way back up — but its report must still say the stop was not clean.
+  const config = await nodeWithShutdownReportConfig(f, nodeCommandStopReport(1, 2));
+  await startAccountServices(config, ["node"]);
+  const restarted = await restartAccountServices(config, ["node"]);
+  expect(restarted.reports.node).toMatchObject({
+    state: "running",
+    unconfirmedCommands: 2,
+  });
+});
+
+it("claims nothing about commands when the stopped node reported none", async () => {
+  const f = await fixture();
+  // The node ended what it was running and said so: the stop is a clean quiesce, and the report
+  // must not carry a command warning that no evidence supports.
+  const stopped = await nodeWithShutdownReport(f, nodeCommandStopReport(1, 0));
+  expect(stopped.reports.node).toMatchObject({ state: "stopped" });
+  expect(stopped.reports.node).not.toHaveProperty("unconfirmedCommands");
+});
+
+it("never claims a killed node ended the commands it had no chance to report on", async () => {
+  const f = await fixture();
+  // A node that ignores SIGTERM is killed, so the shutdown that would have reported on its
+  // commands never runs. Silence there is not a report that they ended.
+  const entryFile = join(f.root, "stubborn-node.mjs");
+  writeFileSync(
+    entryFile,
+    `process.on("SIGTERM", () => {});
+     process.stdout.write("MATE_NODE_CONNECTED 11111111-1111-4111-8111-111111111111\\n");
+     setInterval(() => {}, 1000);
+    `,
+    "utf8",
+  );
+  const config = { ...f.config, entries: { ...f.config.entries, node: entryFile } };
+  await startAccountServices(config, ["node"]);
+  const stopped = await stopAccountServices(config, ["node"], { stopTimeoutMs: 200 });
+  expect(stopped.reports.node).toMatchObject({ state: "stopped", unconfirmedCommands: "unknown" });
 });

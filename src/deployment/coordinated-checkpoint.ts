@@ -64,6 +64,36 @@ interface Completion {
 
 const roots = ["control", "node", "homes"] as const;
 
+/**
+ * Where the three state roots are, under a checkpoint or on the live host, plus how a failure about
+ * them names the copy it is talking about. The same rules describe what a backup must contain and
+ * what the deployment it is about to copy must already hold, so both are checked from one place.
+ */
+interface StateLayout {
+  label: string;
+  control: string;
+  node: string;
+  homes: string;
+}
+
+function checkpointLayout(directory: string): StateLayout {
+  return {
+    label: "Checkpoint",
+    control: join(directory, "control"),
+    node: join(directory, "node"),
+    homes: join(directory, "homes"),
+  };
+}
+
+function deploymentLayout(paths: CoordinatedStatePaths): StateLayout {
+  return {
+    label: "Deployment state",
+    control: paths.controlPlaneDataDir,
+    node: paths.nodeDataDir,
+    homes: paths.agentHomeRoot,
+  };
+}
+
 /** The caller's quiesce step must stop both services and verify every Agent process is gone. */
 export async function createCoordinatedCheckpoint(
   source: CoordinatedStatePaths,
@@ -72,9 +102,12 @@ export async function createCoordinatedCheckpoint(
 ): Promise<CheckpointManifest> {
   const paths = Object.values(source).map((path) => {
     if (!isAbsolute(path)) throw new Error("Checkpoint sources must be absolute paths");
-    const resolved = resolve(path);
-    if (!lstatSync(resolved).isDirectory() || lstatSync(resolved).isSymbolicLink())
-      throw new Error("Checkpoint sources must be real directories");
+    const resolved = resolve(path),
+      stat = lstatOrUndefined(resolved);
+    // A source that does not exist, or that this account may not look at, is a source that cannot
+    // be copied. It is reported as such here, before anything is created for it.
+    if (!stat || !stat.isDirectory() || stat.isSymbolicLink())
+      throw new Error(`Checkpoint source is not a readable directory: ${resolved}`);
     return resolved;
   });
   for (const path of paths.slice(0, 2)) assertNoRecoveryMarker(path);
@@ -84,31 +117,54 @@ export async function createCoordinatedCheckpoint(
     throw new Error("Checkpoint destination must be separate from live state");
   if (existsSync(destination)) throw new Error("Checkpoint destination already exists");
   noSymlinkParents(dirname(destination));
+  // What a complete checkpoint needs is checked on the source first, while the services are still
+  // running: a deployment that cannot be backed up — a control-plane-only host with no node state,
+  // say — is told so without having its services stopped and copied for nothing.
+  requireStateFiles(deploymentLayout(source));
+  assertCheckpointState(deploymentLayout(source));
   await quiesce();
   mkdirSync(destination, { mode: 0o700 });
-  const entries: CheckpointEntry[] = [];
-  for (const [index, name] of roots.entries())
-    copyEntry(paths[index]!, join(destination, name), destination, entries);
-  requireStateFiles(destination);
-  assertCheckpointState(destination);
-  entries.length = 0;
-  for (const name of roots) inventoryEntry(join(destination, name), destination, entries);
-  const manifest: CheckpointManifest = { format: 1, id: randomUUID(), entries };
-  const manifestText = JSON.stringify(manifest);
-  writeDurableFile(join(destination, "manifest.json"), manifestText, 0o600);
-  const completion: Completion = {
-    format: 1,
-    manifestSha256: createHash("sha256").update(manifestText).digest("hex"),
-  };
-  writeDurableFile(join(destination, "complete.json"), JSON.stringify(completion), 0o600);
-  syncDirectory(destination);
   try {
-    verifyCoordinatedCheckpoint(destination);
-    return manifest;
-  } catch (error) {
-    unlinkSync(join(destination, "complete.json"));
+    const entries: CheckpointEntry[] = [];
+    for (const [index, name] of roots.entries()) {
+      try {
+        copyEntry(paths[index]!, join(destination, name), destination, entries);
+      } catch (error) {
+        throw new Error(`Backup stopped before copying ${paths[index]}: ${describeError(error)}`, {
+          cause: error,
+        });
+      }
+    }
+    requireStateFiles(checkpointLayout(destination));
+    assertCheckpointState(checkpointLayout(destination));
+    entries.length = 0;
+    for (const name of roots) inventoryEntry(join(destination, name), destination, entries);
+    const manifest: CheckpointManifest = { format: 1, id: randomUUID(), entries };
+    const manifestText = JSON.stringify(manifest);
+    writeDurableFile(join(destination, "manifest.json"), manifestText, 0o600);
+    const completion: Completion = {
+      format: 1,
+      manifestSha256: createHash("sha256").update(manifestText).digest("hex"),
+    };
+    writeDurableFile(join(destination, "complete.json"), JSON.stringify(completion), 0o600);
     syncDirectory(destination);
-    throw error;
+    try {
+      verifyCoordinatedCheckpoint(destination);
+      return manifest;
+    } catch (error) {
+      unlinkSync(join(destination, "complete.json"));
+      syncDirectory(destination);
+      throw error;
+    }
+  } catch (error) {
+    // However the copy stopped — an unreadable path, a socket, a full disk, a killed process, or a
+    // final self-check that failed — the destination stays behind as evidence of what was attempted,
+    // and says in its own failure what it is. Without the completion marker it is not a backup, and
+    // `verify` refuses it; saying so here is what keeps the owner from reading the leftovers as one.
+    throw new Error(
+      `${describeError(error)} ${destination} has no completion marker and is not a backup.`,
+      { cause: error },
+    );
   }
 }
 
@@ -267,7 +323,7 @@ export function verifyCoordinatedCheckpoint(directoryInput: string): CheckpointM
   const expected = new Map(manifest.entries.map((entry) => [entry.path, entry]));
   if (expected.size !== manifest.entries.length)
     throw new Error("Checkpoint integrity failure: repeated path");
-  assertCheckpointState(directory);
+  assertCheckpointState(checkpointLayout(directory));
   const actual: CheckpointEntry[] = [];
   for (const name of roots) inventoryEntry(join(directory, name), directory, actual);
   if (actual.length !== expected.size)
@@ -277,7 +333,7 @@ export function verifyCoordinatedCheckpoint(directoryInput: string): CheckpointM
     if (!sameCheckpointEntry(saved, entry))
       throw new Error(`Checkpoint integrity failure: ${entry.path}`);
   }
-  requireStateFiles(directory);
+  requireStateFiles(checkpointLayout(directory));
   return manifest;
 }
 
@@ -361,33 +417,86 @@ function inventoryOne(path: string, root: string, entries: CheckpointEntry[]): v
   else throw new Error("Checkpoint cannot contain sockets, devices or pipes");
 }
 
-function requireStateFiles(directory: string): void {
+function requireStateFiles(layout: StateLayout): void {
   for (const path of [
-    "control/control-plane.sqlite",
-    "node/node-identity.json",
-    "node/agent-process-operations.sqlite",
+    join(layout.control, "control-plane.sqlite"),
+    join(layout.node, "node-identity.json"),
+    join(layout.node, "agent-process-operations.sqlite"),
   ]) {
     try {
-      const stat = lstatSync(join(directory, path));
+      const stat = lstatSync(path);
       if (stat.isFile() && !stat.isSymbolicLink() && (stat.mode & 0o077) === 0) continue;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
-    throw new Error(`Checkpoint missing required database, identity or receipt state: ${path}`);
+    throw new Error(
+      `${layout.label} is missing required database, identity or receipt state: ${path}`,
+    );
   }
-  const workspace = lstatSync(join(directory, "node", "workspace-receipts"));
+  const workspace = lstatSync(join(layout.node, "workspace-receipts"));
   if (!workspace.isDirectory() || workspace.isSymbolicLink())
-    throw new Error("Checkpoint missing required workspace receipt directory");
+    throw new Error(`${layout.label} is missing its required workspace receipt directory`);
 }
 
-function assertCheckpointState(directory: string): void {
-  for (const path of ["control/control-plane.sqlite", "node/agent-process-operations.sqlite"]) {
-    const database = new Database(join(directory, path), { readonly: true, fileMustExist: true });
+/**
+ * The state each database in a checkpoint has to really hold, by the name the owner would use for
+ * it. `PRAGMA integrity_check` only says that the bytes are a sound SQLite file; it says nothing
+ * about whose database they are, and an empty or foreign database answers it with "ok". The tables
+ * that own the checkpoint's promised state are therefore looked up as well.
+ *
+ * These names are the storage this release owns, not a compatibility promise: a release that
+ * renames one changes this list with it.
+ */
+const requiredControlPlaneState: Record<string, readonly string[]> = {
+  session: ["owner_agent_sessions", "owner_agent_session_journal", "owner_sessions"],
+  message: ["owner_messages", "owner_message_deliveries"],
+  task: ["owner_tasks", "owner_task_events"],
+  reminder: ["owner_reminders", "owner_reminder_firings"],
+  "node operation receipt": ["owner_agent_process_operations"],
+};
+
+const requiredNodeState: Record<string, readonly string[]> = {
+  "node operation receipt": ["agent_process_operations"],
+};
+
+/**
+ * Commands the node recorded as started and never settled, so their effect is unaccounted for. The
+ * node settles a command when it sees it end, so a row left in `started` means the node stopped
+ * while the command was still running — or was killed before it could end it — and its process
+ * group outlives the node. Whatever the owner decides about such a command, a checkpoint must not
+ * be taken as if it had ended.
+ *
+ * A `succeeded`/`failed`/`unknown` row is settled evidence and never blocks a checkpoint: the
+ * unknown results are the ones the owner reviews, and refusing to back up until every past unknown
+ * is resolved would make recovery impossible.
+ */
+export function unsettledNodeCommands(nodeDataDir: string): number {
+  const path = join(nodeDataDir, "agent-process-operations.sqlite");
+  if (!existsSync(path)) return 0;
+  const database = new Database(path, { readonly: true, fileMustExist: true });
+  try {
+    const row = database
+      .prepare("SELECT count(*) AS rows FROM agent_process_operations WHERE state='started'")
+      .get() as { rows: number };
+    return row.rows;
+  } finally {
+    database.close();
+  }
+}
+
+function assertCheckpointState(layout: StateLayout): void {
+  for (const [path, required] of [
+    [join(layout.control, "control-plane.sqlite"), requiredControlPlaneState],
+    [join(layout.node, "agent-process-operations.sqlite"), requiredNodeState],
+  ] as const) {
+    const database = new Database(path, { readonly: true, fileMustExist: true });
     try {
       const result = database.prepare("PRAGMA integrity_check").get() as
         Record<string, string> | undefined;
       if (!result || Object.values(result)[0] !== "ok")
-        throw new Error(`Checkpoint database integrity failure: ${path}`);
+        throw new Error(`${layout.label} database integrity failure: ${path}`);
+      for (const [category, tables] of Object.entries(required))
+        for (const table of tables) assertTableReadable(database, layout, path, category, table);
     } finally {
       database.close();
     }
@@ -396,7 +505,7 @@ function assertCheckpointState(directory: string): void {
     const identity = z
       .object({ id: z.string().uuid(), privateKey: z.string().min(1).max(8192) })
       .strict()
-      .parse(JSON.parse(readFileSync(join(directory, "node/node-identity.json"), "utf8")));
+      .parse(JSON.parse(readFileSync(join(layout.node, "node-identity.json"), "utf8")));
     const privateKey = createPrivateKey(identity.privateKey);
     if (
       privateKey.asymmetricKeyType !== "ed25519" ||
@@ -404,7 +513,29 @@ function assertCheckpointState(directory: string): void {
     )
       throw new Error("Node identity must use Ed25519");
   } catch {
-    throw new Error("Checkpoint integrity failure: node identity is invalid");
+    throw new Error(`${layout.label} integrity failure: node identity is invalid`);
+  }
+}
+
+/**
+ * Reading one row proves the table exists and that SQLite can walk it, which is what a restored
+ * deployment needs; a missing table is reported as the state it should have held. The table name is
+ * a literal from the lists above, never anything a caller supplied.
+ */
+function assertTableReadable(
+  database: Database.Database,
+  layout: StateLayout,
+  path: string,
+  category: string,
+  table: string,
+): void {
+  try {
+    database.prepare(`SELECT count(*) FROM ${table}`).get();
+  } catch (error) {
+    throw new Error(
+      `${layout.label} is missing required ${category} state in ${path}: ${table} ` +
+        `(${error instanceof Error ? error.message : "unreadable"})`,
+    );
   }
 }
 
@@ -412,6 +543,18 @@ function noSymlinkParents(path: string): void {
   for (let parent = resolve(path); parent !== "/"; parent = dirname(parent))
     if (existsSync(parent) && lstatSync(parent).isSymbolicLink())
       throw new Error(`Checkpoint path contains symbolic link: ${parent}`);
+}
+
+function lstatOrUndefined(path: string): ReturnType<typeof lstatSync> | undefined {
+  try {
+    return lstatSync(path);
+  } catch {
+    return undefined;
+  }
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function setOwnership(path: string, uid: number, gid: number, link = false): void {

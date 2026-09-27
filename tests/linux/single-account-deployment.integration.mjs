@@ -1,8 +1,9 @@
 // Deploy a fresh release package as one ordinary account, using only the documented commands, and
 // prove the whole owner path works: start both services, restart them, read the status and doctor
 // diagnostics, log in, pair a node, create an Agent from the web API, and run one ordinary command
-// in that Agent's workspace. Then stop both services and check the same status command and the web
-// page report the truth.
+// in that Agent's workspace. Then back the whole deployment up and verify it, refuse a checkpoint
+// whose bytes changed under it, and refuse to publish one it cannot read completely. Finally stop
+// both services and check that the status command and the web page report the truth.
 //
 // No root, no container, no service manager and no Linux account database are involved. A macOS run
 // is cross-platform evidence only; record real Linux results separately. NOTIFY_SOCKET is advertised
@@ -12,6 +13,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
+  appendFileSync,
   chmodSync,
   existsSync,
   mkdirSync,
@@ -38,7 +40,10 @@ if (launchingUid === undefined)
 const ownerPassword = "synthetic-owner-password-used-only-by-this-check",
   cli = resolve("dist/src/deployment/cli.js"),
   modelWorkerEntry = resolve("tests/fixtures/direct-message-model-worker.mjs"),
-  root = mkdtempSync(join(tmpdir(), "mate-deployment-")),
+  // `realpath` so every path below is a path the kernel reaches without a symbolic link of its own:
+  // a checkpoint refuses to be written through one, and a temp root like macOS's `/var` is itself a
+  // link. The check is about the deployment, not about the temp directory's spelling.
+  root = realpathSync(mkdtempSync(join(tmpdir(), "mate-deployment-"))),
   // A released package is exactly these four build outputs, copied out of the checkout. The first
   // `pnpm build` runs in the checkout root, so a worktree may have reached that store through a
   // symlink; copying the real bytes is what an owner does and what makes the package movable.
@@ -120,6 +125,101 @@ function deploy(args, extraEnvironment = {}) {
     return JSON.parse(result.stdout);
   } catch {
     throw new Error(`mate-deploy ${args.join(" ")} did not print a JSON report: ${text}`);
+  }
+}
+
+/**
+ * Run one documented CLI command that has to fail, and return everything it said. A tool that
+ * cannot do what it was asked has to say so and exit non-zero; a report on stdout would be read as
+ * success by anything watching this command.
+ */
+function deployFailing(args, extraEnvironment = {}) {
+  const result = spawnSync(process.execPath, [cli, ...args], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: {
+      PATH: process.env.PATH ?? "/usr/bin:/bin",
+      LANG: "C.UTF-8",
+      NOTIFY_SOCKET: notifySocketPath,
+      ...extraEnvironment,
+    },
+  });
+  const text = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+  assert.notEqual(
+    result.status,
+    0,
+    `mate-deploy ${args.join(" ")} unexpectedly succeeded: ${text}`,
+  );
+  assert.equal(
+    result.stdout.trim(),
+    "",
+    `mate-deploy ${args.join(" ")} reported both failure and a result: ${text}`,
+  );
+  return text;
+}
+
+/**
+ * Read a checkpoint back the way a restore would. Everything here is read with the ordinary
+ * account's own permissions, and every store named is one the owner's state lives in: without it
+ * the copy is not a backup of this deployment.
+ */
+function assertCheckpointHoldsDeployment(backupDir, agentId) {
+  assert.ok(
+    existsSync(join(backupDir, "control", "control-plane.sqlite")),
+    "the checkpoint has no control-plane database",
+  );
+  assert.ok(
+    existsSync(join(backupDir, "node", "node-identity.json")),
+    "the checkpoint has no node identity",
+  );
+  // The Agent's own workspace, with the file its ordinary command wrote.
+  assert.equal(
+    readFileSync(join(backupDir, "homes", agentId, "ledger.txt"), "utf8"),
+    "once\n",
+    "the Agent's workspace is not in the checkpoint",
+  );
+  const control = new Database(join(backupDir, "control", "control-plane.sqlite"), {
+    readonly: true,
+    fileMustExist: true,
+  });
+  try {
+    for (const table of [
+      "owner_agent_sessions",
+      "owner_agent_session_journal",
+      "owner_sessions",
+      "owner_messages",
+      "owner_message_deliveries",
+      "owner_tasks",
+      "owner_task_events",
+      "owner_reminders",
+      "owner_reminder_firings",
+      "owner_agent_process_operations",
+    ]) {
+      const counted = control.prepare(`SELECT count(*) AS rows FROM ${table}`).get();
+      assert.ok(Number.isSafeInteger(counted.rows), `${table} is not readable in the checkpoint`);
+    }
+    assert.ok(
+      control.prepare("SELECT id FROM owner_agent_sessions WHERE agent_id=?").get(agentId),
+      "the Agent's own session is not in the checkpoint",
+    );
+    assert.ok(
+      control.prepare("SELECT count(*) AS rows FROM owner_messages").get().rows > 0,
+      "the owner's messages are not in the checkpoint",
+    );
+  } finally {
+    control.close();
+  }
+  const receipts = new Database(join(backupDir, "node", "agent-process-operations.sqlite"), {
+    readonly: true,
+    fileMustExist: true,
+  });
+  try {
+    assert.ok(
+      receipts.prepare("SELECT count(*) AS rows FROM agent_process_operations").get().rows > 0,
+      "the node's operation receipts are not in the checkpoint",
+    );
+  } finally {
+    receipts.close();
   }
 }
 
@@ -358,6 +458,90 @@ try {
   const controlPlaneLog = readFileSync(join(deployConfig.stateDir, "control-plane.log"), "utf8");
   assert.match(controlPlaneLog, /MATE_CONTROL_PLANE_LISTENING \d+/);
 
+  // The owner's backup path, exactly as documented and as the same ordinary account: both services
+  // stop and are confirmed stopped, the state is copied, the services come back, and the result is
+  // verified. Nothing here is root, a service manager or an approval step.
+  //
+  // A complete checkpoint has to hold the node's workspace receipts, and only a host that runs
+  // workspace operations keeps that directory at all. This section therefore runs where the state
+  // it checks really exists and says plainly where it does not, rather than treating a host without
+  // receipts as a host whose backup worked.
+  const backupEvidence = { ran: false, checkpointOwnerUid: null, checkpointMode: null };
+  if (!existsSync(join(deployConfig.nodeDataDir, "workspace-receipts"))) {
+    step("skip the backup check: this host keeps no node workspace receipts to copy");
+  } else {
+    step("back up both stopped services and verify the checkpoint");
+    // The first form in the operations document: no destination, so the checkpoint lands in Mate's
+    // own state directory.
+    const backedUp = deploy(["backup", configPath], environment),
+      backupDir = String(backedUp.checkpoint);
+    assert.ok(
+      backupDir.startsWith(`${deployConfig.stateDir}/checkpoints/`),
+      `the default checkpoint went to ${backupDir}`,
+    );
+    assert.equal(typeof backedUp.id, "string");
+    assert.ok(backedUp.entries > 5, `the checkpoint holds only ${backedUp.entries} entries`);
+    // What the ordinary account produced belongs to it and is private to it.
+    assert.equal(statSync(backupDir).uid, launchingUid);
+    assert.equal(statSync(backupDir).mode & 0o777, 0o700);
+    assert.equal(statSync(join(deployConfig.stateDir, "checkpoints")).mode & 0o777, 0o700);
+    assertCheckpointHoldsDeployment(backupDir, agent.id);
+    const verifiedBackup = deploy(["verify", configPath, backupDir], environment);
+    assert.equal(verifiedBackup.id, backedUp.id);
+    // A backup stops the services, so it has to bring back the ones that were running: the owner's
+    // deployment keeps serving, and the node is really reconnected rather than merely restarted.
+    const afterBackup = deploy(["status", configPath], environment);
+    assert.equal(afterBackup.services["control-plane"].state, "running");
+    assert.equal(afterBackup.services.node.state, "running");
+    await nodeOnline(origin, cookie, nodeIdentity.id, true);
+
+    // A verification that fails is a failure: the owner is told, and the checkpoint is left exactly
+    // as it was found rather than being repaired into something that would pass next time.
+    step("refuse a checkpoint whose copied bytes changed");
+    mkdirSync(join(root, "backups"), { mode: 0o700 });
+    const tampered = join(root, "backups", "tampered");
+    assert.equal(spawnSync("/bin/cp", ["-a", backupDir, tampered]).status, 0);
+    appendFileSync(join(tampered, "homes", agent.id, "ledger.txt"), "tampered\n");
+    assert.match(deployFailing(["verify", configPath, tampered], environment), /integrity/i);
+    assert.equal(
+      readFileSync(join(tampered, "homes", agent.id, "ledger.txt"), "utf8"),
+      "once\ntampered\n",
+    );
+
+    // A path the account cannot read stops the backup instead of publishing what it managed to
+    // copy: no completion marker is written, the failure says what is left is not a backup, and a
+    // verification of it refuses it rather than reading the leftovers as one.
+    step("refuse to publish a backup it cannot read completely");
+    const unreadable = join(workspace, "unreadable"),
+      unreadableBackup = join(root, "backups", "unreadable");
+    mkdirSync(unreadable, { mode: 0o700 });
+    writeFileSync(join(unreadable, "note.txt"), "private note\n", { mode: 0o600 });
+    chmodSync(unreadable, 0o000);
+    let unreadableReport;
+    try {
+      unreadableReport = deployFailing(["backup", configPath, unreadableBackup], environment);
+    } finally {
+      chmodSync(unreadable, 0o700);
+    }
+    assert.match(unreadableReport, /not a backup/i);
+    assert.ok(
+      !existsSync(join(unreadableBackup, "complete.json")),
+      "a failed backup left a completion marker behind",
+    );
+    assert.match(
+      deployFailing(["verify", configPath, unreadableBackup], environment),
+      /incomplete/i,
+    );
+    // The services the failed backup stopped are running again, so the owner is not left with a
+    // deployment that a failed maintenance step silently took down.
+    const afterFailedBackup = deploy(["status", configPath], environment);
+    assert.equal(afterFailedBackup.services["control-plane"].state, "running");
+    assert.equal(afterFailedBackup.services.node.state, "running");
+    backupEvidence.ran = true;
+    backupEvidence.checkpointOwnerUid = statSync(backupDir).uid;
+    backupEvidence.checkpointMode = (statSync(backupDir).mode & 0o777).toString(8);
+  }
+
   // Stopping only the node must reach both places the owner looks: the still-running control plane
   // reports that node offline in the web page, and the CLI reports the process is gone.
   step("stop the node and check both diagnostics agree");
@@ -389,7 +573,15 @@ try {
       launchingUid,
       launchedAsRoot: false,
       cli: "dist/src/deployment/cli.js",
-      commandsExercised: ["install", "doctor", "start", "restart", "stop CONFIG node", "status"],
+      commandsExercised: [
+        "install",
+        "doctor",
+        "start",
+        "restart",
+        "stop CONFIG node",
+        "status",
+        ...(backupEvidence.ran ? ["backup CONFIG", "verify CONFIG CHECKPOINT"] : []),
+      ],
       controlPlanePort,
       releaseRootAccountOwned: statSync(deployConfig.releaseRoot).uid === launchingUid,
       dataDirsAccountOwned:
@@ -404,6 +596,17 @@ try {
       agentWorkspace: workspace,
       ordinaryCommandRanInAgentWorkspace: ledger === "once\n",
       agentReportedCommandResult: reported.results[0].state,
+      // The backup the ordinary account made, read back and verified on this kernel. A host that
+      // keeps no node workspace receipts reports `false` here rather than an unproven claim.
+      backupVerifiedAsOrdinaryAccount: backupEvidence.ran,
+      backupCheckpointOwnerUid: backupEvidence.checkpointOwnerUid,
+      backupCheckpointMode: backupEvidence.checkpointMode,
+      backupHoldsAgentWorkspace: backupEvidence.ran,
+      backupHoldsSessionsMessagesTasksRemindersAndReceipts: backupEvidence.ran,
+      backupResumedBothServices: backupEvidence.ran,
+      backupRefusedTamperedCheckpoint: backupEvidence.ran,
+      backupRefusedUnreadablePath: backupEvidence.ran,
+      backupRanAsRoot: false,
       nodeStoppedStateReported: stopped.services.node.state,
       // The host this ran on, so a low-resource VPS claim can be checked against real numbers
       // instead of being assumed from the ticket.

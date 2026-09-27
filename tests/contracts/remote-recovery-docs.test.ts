@@ -16,6 +16,41 @@ it("documents the limited remote receipt query and a manual hold path for separa
   expect(operations).toContain("第 25 版起 Mate 没有特权命令审批");
 });
 
+it("documents what a completed backup holds and what verify proves for an ordinary account", () => {
+  // The owner has to be able to tell a complete backup from leftovers, and to know what a passing
+  // verification did and did not establish. Each of these sentences is one half of that contract.
+  expect(operations).toContain(
+    "`backup` 只用运行账号自己的权限——不需要 root、systemctl 或任何特权审批",
+  );
+  expect(operations).toContain("一份**完成**的备份是这样一个目录");
+  expect(operations).toContain("`complete.json`——清单的校验和。它最后写入");
+  expect(operations).toContain("`verify` 证明的是这份备份现在仍然等于它被写下时的样子");
+  expect(operations).toContain("控制面数据库里上面那些表都在且能读");
+  expect(operations).toContain("校验只读：它不修改备份，也不“修复”失败的结果");
+  expect(operations).toContain(
+    "备份中断、某个路径读不了、或任何一步失败时，Mate 都不写 `complete.json`",
+  );
+  // What stops a checkpoint from being taken at all, and what a second maintenance step finds.
+  expect(operations).toContain("节点操作收据里还留着已开始但未结算的命令");
+  expect(operations).toContain("stateDir/maintenance.lock");
+  expect(operations).toContain("会在停服务之前就报错");
+  // The repair path must stay reachable, and the recorded-unknown boundary must be stated.
+  expect(operations).toContain(
+    "`reconcile`、`release-agent` 和 `restore` 正是用来处理无法确认的结果的",
+  );
+  expect(operations).toContain("不会永久阻止备份");
+  // The state a completed backup promises, named the way the owner's own tools name it.
+  for (const table of [
+    "owner_sessions",
+    "owner_agent_session_journal",
+    "owner_messages",
+    "owner_tasks",
+    "owner_reminders",
+    "owner_agent_process_operations",
+  ])
+    expect(operations).toContain(table);
+});
+
 it("advertises no installation or upgrade step that needs root, a Mate account or a systemd unit", () => {
   for (const text of [operations, configuration]) {
     for (const forbidden of [

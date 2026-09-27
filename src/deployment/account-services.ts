@@ -90,12 +90,24 @@ export interface AccountServiceStopReport {
   pid: number | null;
   /** The process that was still there when the stop could not be confirmed. */
   remaining?: number;
+  /**
+   * Commands the service itself said it could not confirm ended as it stopped, or `"unknown"` when
+   * it said it could not stop its commands at all. Absent means it reported none. A service that is
+   * gone can still have left work running, and nothing here reads its silence as success.
+   */
+  unconfirmedCommands?: number | "unknown";
 }
 
 export interface AccountServiceStartReport {
   state: "running";
   pid: number;
   startedAt: number;
+  /**
+   * Carried from the stop a `restart` performed first, when that stop left commands the service
+   * could not confirm ended. A restart is still the right answer — it is how those receipts get
+   * reconciled — but its report must not read as if the stop had been clean.
+   */
+  unconfirmedCommands?: number | "unknown";
 }
 
 export interface AccountServiceRunResult {
@@ -117,6 +129,21 @@ const readiness: Record<AccountServiceName, RegExp> = {
 /** A node that cannot authenticate will never become ready, so its start fails immediately. */
 const fatalAtStartup =
   /配对令牌无效|控制面拒绝了此节点身份|requires MATE_NODE_PAIRING_TOKEN|没有可用的配对令牌/;
+
+/**
+ * What a stopping service says about the work it was still running. Only the node starts ordinary
+ * Agent commands, and its shutdown reports the ones it could not confirm ended (`client.ts`); a
+ * service that was killed before it could report says nothing, which is not the same as reporting
+ * success, so a command count is only ever read from what the service itself printed.
+ */
+const commandStopReports: Partial<
+  Record<AccountServiceName, { unconfirmed: RegExp; unattempted: RegExp }>
+> = {
+  node: {
+    unconfirmed: /(\d+) could not be confirmed stopped/,
+    unattempted: /Node could not stop its tracked commands while shutting down/,
+  },
+};
 
 export function serviceLogPath(name: AccountServiceName, config: AccountServiceConfig): string {
   return join(resolve(config.stateDir), `${name}.log`);
@@ -330,7 +357,16 @@ export async function restartAccountServices(
       throw new Error(
         `${name} 仍在运行（进程 ${(report as AccountServiceStopReport).remaining}），未重新启动；请先停掉它。`,
       );
-  return startAccountServices(config, names, options);
+  const started = await startAccountServices(config, names, options);
+  // What the stop could not confirm about commands is carried into the restart's own report: the
+  // service is running again, and the owner still needs to know that the stop was not clean.
+  for (const [name, report] of Object.entries(started.reports)) {
+    const warning = (
+      stopped.reports[name as AccountServiceName] as AccountServiceStopReport | undefined
+    )?.unconfirmedCommands;
+    if (report?.state === "running" && warning !== undefined) report.unconfirmedCommands = warning;
+  }
+  return started;
 }
 
 async function startOne(
@@ -390,7 +426,7 @@ async function startOne(
   const failure = async (reason: string): Promise<never> => {
     const stopped = !processIsRunning(pid, record.startToken)
       ? true
-      : await killProcess(pid, record.startToken, startupStopTimeoutMs);
+      : (await killProcess(pid, record.startToken, startupStopTimeoutMs)) !== "unconfirmed";
     // The exit observer may have recorded the child's own exit status in the meantime; keep that,
     // and add this reason, so `status` explains the same failure the start raised.
     const current = readServiceRecord(name, config);
@@ -440,40 +476,76 @@ async function stopOne(
     rmSync(serviceRecordPath(name, config), { force: true });
     return { state: "not_running", pid: record.pid };
   }
-  const stopConfirmed = await killProcess(record.pid, record.startToken, stopTimeoutMs);
-  if (stopConfirmed) {
+  const stop = await killProcess(record.pid, record.startToken, stopTimeoutMs);
+  if (stop !== "unconfirmed") {
     rmSync(serviceRecordPath(name, config), { force: true });
-    return { state: "stopped", pid: record.pid };
+    const unconfirmedCommands = readUnconfirmedCommandStops(name, config, stop);
+    return {
+      state: "stopped",
+      pid: record.pid,
+      ...(unconfirmedCommands === undefined ? {} : { unconfirmedCommands }),
+    };
   }
   return { state: "unconfirmed", pid: record.pid, remaining: record.pid };
 }
 
 /**
+ * What a service that has just gone said about the commands it was running. Its own shutdown line
+ * is the only account of them Mate has: the node ends its command process groups as it exits, and
+ * reports any it could not confirm. A service that was killed without getting to run that shutdown
+ * never reported at all, and its commands are then exactly what nobody can account for.
+ */
+function readUnconfirmedCommandStops(
+  name: AccountServiceName,
+  config: AccountServiceConfig,
+  stop: "confirmed" | "forced",
+): number | "unknown" | undefined {
+  const patterns = commandStopReports[name];
+  if (!patterns) return undefined;
+  // SIGKILL ends the process without its shutdown, so the run that would have reported on the
+  // commands never happened; silence there is not a report that they ended.
+  if (stop === "forced") return "unknown";
+  let output: string;
+  try {
+    output = readServiceLog(name, config);
+  } catch {
+    // The service's own account of the shutdown is unreadable, so there is no evidence to read it
+    // as a clean stop. Reporting an unknown here keeps a stop honest instead of failing it after
+    // the process is already gone.
+    return "unknown";
+  }
+  const count = patterns.unconfirmed.exec(output);
+  if (count) return Number(count[1]);
+  return patterns.unattempted.test(output) ? "unknown" : undefined;
+}
+
+/**
  * Signal one recorded process and wait for it to really disappear. SIGTERM first, then SIGKILL for
- * a process that ignored it. A process this account may not signal at all stays alive, and that is
- * exactly the outcome this returns false for: nothing here reports a stop it did not observe.
+ * a process that ignored it. `confirmed` means the process left after being asked; `forced` means
+ * it had to be killed, so it never ran the shutdown it would have reported with; `unconfirmed`
+ * means it is still there. Nothing here reports a stop it did not observe.
  */
 async function killProcess(
   pid: number,
   startToken: string | undefined,
   timeoutMs: number,
-): Promise<boolean> {
+): Promise<"confirmed" | "forced" | "unconfirmed"> {
   // A recorded PID can be recycled, and signalling a recycled PID kills a stranger. Liveness is
   // checked with the recorded incarnation *before* the first signal, not only after it.
-  if (!processIsRunning(pid, startToken)) return true;
+  if (!processIsRunning(pid, startToken)) return "confirmed";
   signalProcess(pid, "SIGTERM");
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (!processIsRunning(pid, startToken)) return true;
+    if (!processIsRunning(pid, startToken)) return "confirmed";
     await delay(stopPollIntervalMs);
   }
   signalProcess(pid, "SIGKILL");
   const killDeadline = Date.now() + 2000;
   while (Date.now() < killDeadline) {
-    if (!processIsRunning(pid, startToken)) return true;
+    if (!processIsRunning(pid, startToken)) return "forced";
     await delay(stopPollIntervalMs);
   }
-  return false;
+  return "unconfirmed";
 }
 
 /**

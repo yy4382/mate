@@ -1,5 +1,6 @@
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -66,6 +67,8 @@ it("does not mark a backup complete if a node receipt store is missing", async (
       destination = join(root, "checkpoint");
     initializeCoordinatedRoots({ controlPlaneDataDir, nodeDataDir, agentHomeRoot });
     rmSync(join(nodeDataDir, "agent-process-operations.sqlite"));
+    // The missing receipt state is found in the deployment's own state, before anything is created
+    // for the copy: the owner is told, and no directory is left that could be read as a backup.
     await expect(
       createCoordinatedCheckpoint(
         { controlPlaneDataDir, nodeDataDir, agentHomeRoot },
@@ -73,7 +76,7 @@ it("does not mark a backup complete if a node receipt store is missing", async (
         async () => {},
       ),
     ).rejects.toThrow(/receipt/);
-    expect(() => verifyCoordinatedCheckpoint(destination)).toThrow(/checkpoint.*incomplete/i);
+    expect(existsSync(destination)).toBe(false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

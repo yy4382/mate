@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -34,10 +35,11 @@ import {
   restoreMaintenanceCheckpoint,
   type CoordinatedMaintenanceServices,
 } from "./coordinated-maintenance.js";
-import { verifyCoordinatedCheckpoint } from "./coordinated-checkpoint.js";
+import { verifyCoordinatedCheckpoint, unsettledNodeCommands } from "./coordinated-checkpoint.js";
 import { reconcileCoordinatedState } from "./reconcile-coordinated-state.js";
 import type { CoordinatedStatePaths } from "./coordinated-checkpoint.js";
 import { isEntryModule } from "./host.js";
+import { acquireLock } from "../storage/lock.js";
 
 const agentIdPattern = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 
@@ -155,25 +157,32 @@ export async function deploymentMain(
   const maintenance = () => dependencies.maintenance ?? defaultMaintenance(forConfig);
   if (action === "install" && args.length === 3 && configPath && value) {
     const config = readConfig(configPath);
-    const release = (dependencies.installRelease ?? installRelease)(config, value);
-    const services = forConfig(config);
-    // A node without a saved identity needs the one-time pairing token the owner creates in the web
-    // page, so installation starts only the control plane and reports what to do next.
-    const controlPlane = await services.start(["control-plane"], { onAlreadyRunning: "skip" });
-    writeJson(write, {
-      release,
-      services: { ...services.reports(), ...controlPlane.reports },
-      next: nodeCanPair(config)
-        ? "运行 `start` 启动节点。"
-        : "在网页生成一次性配对令牌，用 MATE_NODE_PAIRING_TOKEN 环境变量运行 `start` 启动节点。",
-    });
+    writeJson(
+      write,
+      await withMaintenanceLock(config, async () => {
+        const release = (dependencies.installRelease ?? installRelease)(config, value);
+        const services = forConfig(config);
+        // A node without a saved identity needs the one-time pairing token the owner creates in the
+        // web page, so installation starts only the control plane and reports what to do next.
+        const controlPlane = await services.start(["control-plane"], { onAlreadyRunning: "skip" });
+        return {
+          release,
+          services: { ...services.reports(), ...controlPlane.reports },
+          next: nodeCanPair(config)
+            ? "运行 `start` 启动节点。"
+            : "在网页生成一次性配对令牌，用 MATE_NODE_PAIRING_TOKEN 环境变量运行 `start` 启动节点。",
+        };
+      }),
+    );
     return;
   }
   if (action === "upgrade" && args.length === 3 && configPath && value) {
     const config = readConfig(configPath);
     writeJson(
       write,
-      await upgradeDeployment(config, value, forConfig(config), dependencies.installRelease),
+      await withMaintenanceLock(config, () =>
+        upgradeDeployment(config, value, forConfig(config), dependencies.installRelease),
+      ),
     );
     return;
   }
@@ -188,9 +197,14 @@ export async function deploymentMain(
     // because a new node needs the owner's one-time pairing token.
     const config = readConfig(configPath),
       names = serviceSelection(value, action, accountServiceNames),
-      services = forConfig(config),
-      started = await services.start(names, { onAlreadyRunning: "skip" });
-    writeJson(write, { services: { ...services.reports(), ...started.reports } });
+      services = forConfig(config);
+    writeJson(
+      write,
+      await withMaintenanceLock(config, async () => {
+        const started = await services.start(names, { onAlreadyRunning: "skip" });
+        return { services: { ...services.reports(), ...started.reports } };
+      }),
+    );
     return;
   }
   if (
@@ -200,9 +214,15 @@ export async function deploymentMain(
   ) {
     const config = readConfig(configPath),
       names = serviceSelection(value, action, accountServiceNames),
-      services = forConfig(config),
-      result = action === "stop" ? await services.stop(names) : await services.restart(names);
-    writeJson(write, { services: { ...services.reports(), ...result.reports } });
+      services = forConfig(config);
+    writeJson(
+      write,
+      await withMaintenanceLock(config, async () => {
+        const result =
+          action === "stop" ? await services.stop(names) : await services.restart(names);
+        return { services: { ...services.reports(), ...result.reports } };
+      }),
+    );
     return;
   }
   if (action === "logs" && args.length === 2 && configPath) {
@@ -224,8 +244,11 @@ export async function deploymentMain(
   ) {
     const config = readConfig(configPath);
     const actions = maintenance();
+    // Every maintenance action that stops services, copies state or moves it takes the one
+    // deployment lock, so nothing else on this host can write into what it is holding still.
+    // `verify` reads a checkpoint and takes nothing.
     if (action === "backup" && (args.length === 2 || args.length === 3)) {
-      writeJson(write, await actions.backup(config, value));
+      writeJson(write, await withMaintenanceLock(config, () => actions.backup(config, value)));
       return;
     }
     if (action === "verify" && args.length === 3 && value) {
@@ -233,15 +256,18 @@ export async function deploymentMain(
       return;
     }
     if (action === "restore" && args.length === 3 && value) {
-      writeJson(write, await actions.restore(config, value));
+      writeJson(write, await withMaintenanceLock(config, () => actions.restore(config, value)));
       return;
     }
     if (action === "reconcile" && args.length === 2) {
-      writeJson(write, actions.reconcile(config));
+      writeJson(write, await withMaintenanceLock(config, async () => actions.reconcile(config)));
       return;
     }
     if (action === "release-agent" && args.length === 3 && value && agentIdPattern.test(value)) {
-      writeJson(write, actions.releaseAgent(config, value));
+      writeJson(
+        write,
+        await withMaintenanceLock(config, async () => actions.releaseAgent(config, value)),
+      );
       return;
     }
   }
@@ -283,7 +309,64 @@ export function accountServiceConfig(config: DeploymentConfig): AccountServiceCo
   };
 }
 
-/** Start the control plane first, so a node that reconnects finds it listening. */
+/**
+ * The services whose stop is not accounted for, with what was left unconfirmed. A service that
+ * could not be confirmed stopped is still there; a service that stopped but said a command it had
+ * started may still be running leaves work that can still write to the state a checkpoint copies.
+ * Either way the answer is the same: do not copy it and do not call the stop clean.
+ */
+function unaccountedStops(result: AccountServiceRunResult): string[] {
+  const found: string[] = [];
+  for (const [name, report] of Object.entries(result.reports)) {
+    if (!report) continue;
+    if (report.state === "unconfirmed")
+      found.push(`${name} 未能确认停止（进程 ${report.remaining ?? report.pid ?? "未知"}）`);
+    else if (report.state === "stopped" && report.unconfirmedCommands !== undefined)
+      found.push(
+        `${name} 未能确认结束它启动的命令（${
+          report.unconfirmedCommands === "unknown" ? "数量未知" : `${report.unconfirmedCommands} 个`
+        }）`,
+      );
+  }
+  return found;
+}
+
+/**
+ * The one reason a checkpoint may not be taken, beyond what the service stop reported: commands the
+ * node recorded as started and never settled. Those are commands whose process groups outlive the
+ * node, so neither the node's own shutdown report nor the service's stop can speak for them; the
+ * durable receipts can, and a checkpoint taken over them would copy state that is still changing.
+ */
+function unsettledCommandsReason(config: DeploymentConfig): string | undefined {
+  const unsettled = unsettledNodeCommands(config.nodeDataDir);
+  return unsettled > 0
+    ? `节点操作收据里还有 ${unsettled} 个已开始但未结束的命令；不在可能有命令仍在写入时创建检查点。`
+    : undefined;
+}
+
+/**
+ * Everything a maintenance step does — stop, copy, restore — assumes nothing else is doing the
+ * same. Two of them interleaved would have the second copy state the first had already resumed the
+ * services on, and certify it; one kernel lock per deployment state directory makes the second one
+ * fail instead. The lock is released when the process exits, so a killed maintenance does not leave
+ * it held.
+ */
+function withMaintenanceLock<T>(config: DeploymentConfig, work: () => Promise<T>): Promise<T> {
+  ensureStateDirectory(config);
+  const release = acquireLock(join(config.stateDir, "maintenance.lock"));
+  return Promise.resolve().then(work).finally(release);
+}
+
+/** The deployment's own state directory, private to the running account, as Mate always keeps it. */
+function ensureStateDirectory(config: DeploymentConfig): string {
+  mkdirSync(config.stateDir, { recursive: true, mode: 0o700 });
+  chmodSync(config.stateDir, 0o700);
+  return config.stateDir;
+}
+
+/**
+ * Start the control plane first, so a node that reconnects finds it listening.
+ */
 export function accountDeploymentServices(config: DeploymentConfig): DeploymentServices {
   const services = accountServiceConfig(config);
   return {
@@ -427,9 +510,17 @@ async function upgradeDeployment(
     (name) => (services.reports()[name] as { state?: string } | undefined)?.state === "running",
   );
   const stopped = await services.stop(stoppingNames);
-  for (const [name, report] of Object.entries(stopped.reports))
-    if (report?.state === "unconfirmed") throw new Error(`${name} 未能确认停止；不切换发布版本。`);
-  const checkpoint = join(config.stateDir, "checkpoints", newCheckpointName());
+  // An upgrade takes a recovery point from this state before it switches versions, so it carries the
+  // same "nothing unsettled may be copied" rule a backup does.
+  const unsettled = unsettledCommandsReason(config);
+  const unaccounted = [...unaccountedStops(stopped), ...(unsettled ? [unsettled] : [])];
+  if (unaccounted.length > 0) {
+    // The services this upgrade stopped are put back before the refusal: an upgrade that cannot
+    // take its recovery point has changed nothing yet, so the deployment it found keeps running.
+    await services.start(stoppingNames, { onAlreadyRunning: "skip" }).catch(() => undefined);
+    throw new Error(`${unaccounted.join("、")}；不在工作可能仍在写入时切换发布版本。`);
+  }
+  const checkpoint = ownCheckpointDestination(config);
   // The services are already stopped and confirmed above, so the checkpoint's own quiesce step has
   // nothing left to do. The callbacks are real no-ops rather than a claim that stopping happened
   // twice; `services.start(previouslyRunning)` below is what brings the services back.
@@ -466,7 +557,11 @@ async function upgradeDeployment(
 export function defaultMaintenance(
   servicesFor: (config: DeploymentConfig) => DeploymentServices,
 ): DeploymentMaintenanceActions {
-  const maintenanceServices = (config: DeploymentConfig): CoordinatedMaintenanceServices => {
+  const maintenanceServices = (
+    config: DeploymentConfig,
+    /** A step that copies this state needs more than a stop; a repair pass only rechecks it. */
+    copiesState = false,
+  ): CoordinatedMaintenanceServices => {
     const services = servicesFor(config);
     // Which services were up before maintenance is what gets resumed: a host that runs only the
     // control plane must not be given a node (and a tokenless node start would fail anyway).
@@ -479,14 +574,18 @@ export function defaultMaintenance(
       async stop() {
         previouslyRunning ??= runningNames();
         const stopped = await services.stop(previouslyRunning);
-        const unconfirmed = previouslyRunning.filter(
-          (name) => stopped.reports[name]?.state === "unconfirmed",
-        );
+        const unaccounted = unaccountedStops(stopped);
         // The contract this callback carries is "both services and their Agent processes are not
-        // running". A service that could not be confirmed stopped leaves operations live, so the
-        // checkpoint must not be taken; `coordinated-maintenance` recovers the service state.
-        if (unconfirmed.length > 0)
-          throw new Error(`${unconfirmed.join("、")} 未能确认停止；不在其运行期间创建检查点。`);
+        // running". A service that could not be confirmed stopped, or one that reported commands it
+        // could not confirm ended, leaves operations live, so the checkpoint must not be taken;
+        // `coordinated-maintenance` recovers the service state.
+        if (unaccounted.length > 0)
+          throw new Error(`${unaccounted.join("、")}；不在工作可能仍在写入时创建检查点。`);
+        // Only a step that copies this state needs the durable receipts to be settled too. A repair
+        // pass — `reconcile`, `release-agent`, a restore — exists precisely to deal with results
+        // nobody could confirm, so gating it here would leave the owner no way to repair them.
+        const unsettled = copiesState ? unsettledCommandsReason(config) : undefined;
+        if (unsettled) throw new Error(unsettled);
         return stopped;
       },
       resume() {
@@ -497,11 +596,11 @@ export function defaultMaintenance(
   };
   return {
     async backup(config, destination) {
-      const checkpoint = destination ?? join(config.stateDir, "checkpoints", newCheckpointName());
+      const checkpoint = destination ?? ownCheckpointDestination(config);
       const manifest = await createMaintenanceBackup(
         statePaths(config),
         checkpoint,
-        maintenanceServices(config),
+        maintenanceServices(config, true),
       );
       return { checkpoint, id: manifest.id, entries: manifest.entries.length };
     },
@@ -542,6 +641,19 @@ function statePaths(config: DeploymentConfig) {
 
 function newCheckpointName(): string {
   return new Date().toISOString().replace(/[:.]/g, "-");
+}
+
+/**
+ * Where Mate keeps its own checkpoints: one private directory under the state the running account
+ * already owns. Mate makes this place, because it is Mate's own state directory and the documented
+ * `backup CONFIG` form has nowhere else to write. An owner-supplied destination is left alone: a
+ * mistyped path fails loudly instead of having a directory tree appear where nobody asked for one.
+ */
+function ownCheckpointDestination(config: DeploymentConfig): string {
+  const directory = join(ensureStateDirectory(config), "checkpoints");
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  chmodSync(directory, 0o700);
+  return join(directory, newCheckpointName());
 }
 
 /** A content digest of one release, so two builds of the same tree share one directory. */

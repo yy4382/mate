@@ -1,4 +1,7 @@
-import { expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   defaultMaintenance,
   deploymentMain,
@@ -6,6 +9,9 @@ import {
   type DeploymentMaintenanceActions,
   type DeploymentServices,
 } from "../../src/deployment/cli.js";
+
+const roots: string[] = [];
+afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })));
 
 const config: DeploymentConfig = {
   version: 1,
@@ -19,8 +25,20 @@ const config: DeploymentConfig = {
   ownerPasswordFile: "/home/owner/mate/owner-password",
 };
 
+/**
+ * Maintenance steps now take one lock per deployment, which is a real file in the state directory:
+ * a check that drives them needs a state directory it can really own, while the rest of the paths
+ * stay the same somewhere-named fixtures the assertions read.
+ */
+function maintenanceFixture(): { config: DeploymentConfig } {
+  const root = mkdtempSync(join(tmpdir(), "mate-coordinated-cli-"));
+  roots.push(root);
+  return { config: { ...config, stateDir: join(root, "state") } };
+}
+
 function harness() {
-  const output: string[] = [];
+  const { config: fixtureConfig } = maintenanceFixture(),
+    output: string[] = [];
   const calls: Array<[string, ...unknown[]]> = [];
   const services: DeploymentServices = {
     start: async () => {
@@ -66,7 +84,9 @@ function harness() {
     output,
     calls,
     dependencies: {
-      readConfig: vi.fn(() => config),
+      // Every command that changes deployment state takes the deployment lock, which is a real file
+      // in the state directory; the fixture gives it one it can own.
+      readConfig: vi.fn(() => fixtureConfig),
       services: vi.fn(() => services),
       installRelease: vi.fn(() => "/home/owner/mate/app/releases/abcdef"),
       maintenance,
@@ -122,7 +142,9 @@ it("routes coordinated maintenance commands and prints reviewable results", asyn
 });
 
 it("stops only the services that were running before maintenance", async () => {
-  const stopped: Array<readonly string[] | undefined> = [],
+  const f = maintenanceFixture(),
+    { config } = f,
+    stopped: Array<readonly string[] | undefined> = [],
     services = {
       start: async () => ({ reports: {} }),
       stop: async (names?: readonly string[]) => {
@@ -152,7 +174,9 @@ it("refuses to work on state while a service could not be confirmed stopped", as
     reports: () => ({ "control-plane": { state: "running", pid: 7 } }),
   };
   const actions = defaultMaintenance(() => services);
-  await expect(Promise.resolve(actions.reconcile(config))).rejects.toThrow(/未能确认停止/);
+  await expect(Promise.resolve(actions.reconcile(maintenanceFixture().config))).rejects.toThrow(
+    /未能确认停止/,
+  );
 });
 
 it("rejects a non-UUID release target and incomplete commands", async () => {

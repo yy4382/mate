@@ -152,18 +152,30 @@ async function runLinuxNodeInternal(
     try {
       const { stopped, unconfirmed } = await processOperations.stopAllAgents();
       if (stopped.length > 0 || unconfirmed.length > 0)
-        process.stderr.write(
-          `Node stopped ${stopped.length} running command(s)` +
-            (unconfirmed.length > 0
-              ? `; ${unconfirmed.length} could not be confirmed stopped.\n`
-              : ".\n"),
-        );
+        process.stderr.write(nodeCommandStopReport(stopped.length, unconfirmed.length));
     } catch {
-      process.stderr.write("Node could not stop its tracked commands while shutting down.\n");
+      process.stderr.write(nodeCommandStopReportUnavailable);
     }
     processStore?.close();
   }
 }
+
+/**
+ * What the node tells its own log about the commands it was running when it stopped: how many it
+ * ended, and how many it could not confirm ended. The deployment CLI reads these lines back before
+ * it copies state, because a node that could not confirm ending a command is not a node whose
+ * workspace is safe to copy, so this text is a contract between the two — not decoration.
+ */
+export function nodeCommandStopReport(stopped: number, unconfirmed: number): string {
+  return (
+    `Node stopped ${stopped} running command(s)` +
+    (unconfirmed > 0 ? `; ${unconfirmed} could not be confirmed stopped.\n` : ".\n")
+  );
+}
+
+/** The node could not even attempt to end its commands, so none of them is accounted for. */
+export const nodeCommandStopReportUnavailable =
+  "Node could not stop its tracked commands while shutting down.\n";
 
 export function toWebSocketUrl(controlPlaneUrl: string): string {
   let url: URL;

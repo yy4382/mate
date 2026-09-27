@@ -74,7 +74,7 @@ node "$CLI" doctor  "$HOME/mate/deploy.json"                     # 状态 + 本�
 node "$CLI" logs    "$HOME/mate/deploy.json"                     # 两个服务的最新日志
 ```
 
-`stop` 与 `restart` 的停止未获确认时不会假称已停：报告会给出仍在运行的进程号，`restart` 也不会在这种情况下重新启动。停止节点时，节点会先结束它启动过的普通命令进程组，因此命令不会在节点退出后无人跟踪地继续跑；无法确认结束的命令会写进节点输出与操作收据，供后续核对。备份与升级在同一账号下运行，它们的停止步骤会对无法确认停止的服务直接报错，而不是在服务仍在运行时创建检查点。**Mate 不负责开机自启或崩溃重启**：需要这些就由宿主自行配置（见下）。
+`stop` 与 `restart` 的停止未获确认时不会假称已停：报告会给出仍在运行的进程号，`restart` 也不会在这种情况下重新启动。停止节点时，节点会先结束它启动过的普通命令进程组，因此命令不会在节点退出后无人跟踪地继续跑；无法确认结束的命令会写进节点输出与操作收据，供后续核对。被 `SIGKILL` 强杀、没来得及做这一步的节点也不会因此显得干净：那项服务的停止报告会带上 `unconfirmedCommands`（写明未能确认结束的命令数，数量未知时为 `"unknown"`）。备份与升级在同一账号下运行，它们的停止步骤会对无法确认停止的服务、以及无法确认结束的命令直接报错，而不是在服务仍在运行时创建检查点。**Mate 不负责开机自启或崩溃重启**：需要这些就由宿主自行配置（见下）。
 
 ## 首次使用
 
@@ -96,7 +96,9 @@ node "$CLI" logs    "$HOME/mate/deploy.json"                     # 两个服务�
 
 ## 备份与恢复
 
-`backup` 会先停两个服务、确认停稳，再把控制面数据库、节点身份、操作收据和 Agent 工作区复制成一份检查点，然后恢复原来的服务状态：
+`backup` 只用运行账号自己的权限——不需要 root、systemctl 或任何特权审批。它先检查这份状态本身是否具备生成完整备份的条件，再停两个服务并要求停稳得到确认，然后复制控制面数据库、节点身份与操作收据、以及 Agent 工作区，最后恢复原来的服务状态。服务停不下来、停下来却报告有命令无法确认结束，或者节点操作收据里还留着已开始但未结算的命令（这些命令的进程组可能在节点退出后继续写工作区），都会让 `backup` 直接失败，而不是在可能有东西仍在写入时生成检查点。同一份部署同一时刻只允许一个会改动它的命令（备份、恢复、对账、升级、启停共用 `stateDir/maintenance.lock`），第二个会直接报锁被占用，而不是复制另一个步骤已经恢复服务后的状态。**只有会复制状态的步骤（`backup`、`upgrade`）受“未结算命令”这一条约束**：`reconcile`、`release-agent` 和 `restore` 正是用来处理无法确认的结果的，它们不会被这条规则挡住。
+
+节点重启会把没收尾的操作记成 `unknown`（而非继续算作运行中），这是给所有者复核的已记录未知，不会永久阻止备份；真正会阻止备份的是仍然记作 `started` 的命令。控制面侧仍标为 `executing` 的意图属于对账范围（见下面的跨机恢复），不作为“命令仍在运行”的证据。
 
 ```sh
 node "$CLI" backup  "$HOME/mate/deploy.json"                     # 默认写入 stateDir/checkpoints/<时间戳>
@@ -105,7 +107,21 @@ node "$CLI" verify  "$HOME/mate/deploy.json" "$HOME/backups/mate-1"
 node "$CLI" restore "$HOME/mate/deploy.json" "$HOME/backups/mate-1"
 ```
 
-`verify` 检查清单、SQLite 完整性和节点身份。`restore` 恢复数据后重新核对每个 Agent 的身份与操作收据，未获证实的 Agent 保持暂停；核对函数在 `restore` 里失败时恢复标记会保留，服务保持停止，修复后用 `reconcile` 重新核对，再用 `release-agent` 单独放行某个已证实的 Agent：
+用默认目标时 Mate 自己创建 `stateDir/checkpoints`（`0700`）；自己给目标路径时，父目录必须已经存在，否则命令报错，而不是替你在别处造出一串目录。目标路径不存在时 Mate 才会开始复制；状态本身不满足条件（例如还没有节点身份或操作收据）会在停服务之前就报错，不会先停掉一个本来在正常运行的部署。
+
+一份**完成**的备份是这样一个目录：
+
+- `control/`——控制面数据库所在目录，里面有所有者会话（`owner_sessions`）、Agent 逻辑会话与对话记录（`owner_agent_sessions`、`owner_agent_session_journal`）、消息与投递（`owner_messages`、`owner_message_deliveries`）、任务（`owner_tasks`、`owner_task_events`）、提醒（`owner_reminders`、`owner_reminder_firings`）和控制面侧的操作记录（`owner_agent_process_operations`）。
+- `node/`——节点身份 `node-identity.json`、节点操作收据数据库 `agent-process-operations.sqlite` 与工作区收据目录 `workspace-receipts/`。
+- `homes/`——每个 Agent 的默认工作区，按 Agent UUID 分目录。
+- `manifest.json`——上述每个条目的路径、类型、权限、属主和内容哈希。
+- `complete.json`——清单的校验和。它最后写入，只有它存在才说明这份备份复制完整并通过了自检。
+
+`verify` 证明的是这份备份现在仍然等于它被写下时的样子：目录只有运行账号可读，根条目只能有上面这五个，`complete.json` 里的校验和与 `manifest.json` 一致，清单里每个条目的类型、权限、属主和内容哈希都与磁盘相符，两个 SQLite 文件能打开且 `PRAGMA integrity_check` 通过，控制面数据库里上面那些表都在且能读，节点身份仍是可用的 Ed25519 私钥。校验只读：它不修改备份，也不“修复”失败的结果；不通过就以非 0 退出码结束并说明原因。
+
+备份中断、某个路径读不了、或任何一步失败时，Mate 都不写 `complete.json`，并明确说明剩下的东西“不是备份”；对这样的目录运行 `verify` 会报“不完整”。已经复制出来的部分会留在原处供你查看，但不会被当成可恢复的备份——确认无用后删掉它再重试。
+
+`restore` 恢复数据后重新核对每个 Agent 的身份与操作收据，未获证实的 Agent 保持暂停；核对函数在 `restore` 里失败时恢复标记会保留，服务保持停止，修复后用 `reconcile` 重新核对，再用 `release-agent` 单独放行某个已证实的 Agent：
 
 ```sh
 node "$CLI" reconcile     "$HOME/mate/deploy.json"
