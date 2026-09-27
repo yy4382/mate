@@ -219,6 +219,37 @@ it("passes the Agent's own sudo through to the host without wrapping or approvin
   }
 });
 
+it("reports an explicit sudo the host allowed as that command's own success", async () => {
+  const fixture = await setup();
+  try {
+    const shim = join(fixture.identity.workspace, "bin"),
+      recorded = join(fixture.identity.workspace, "sudo-argv");
+    mkdirSync(shim);
+    writeFileSync(
+      join(shim, "sudo"),
+      `#!/bin/sh\nprintf '%s\\n' "$@" > ${recorded}\nprintf 'root\\n'\nexit 0\n`,
+    );
+    chmodSync(join(shim, "sudo"), 0o700);
+    const receipt = await fixture.operations.execute(fixture.agentId, randomUUID(), {
+      kind: "exec",
+      command: `PATH="${shim}:$PATH" sudo id -un`,
+      cwd: ".",
+    });
+    // The host allowed it, so the receipt is an ordinary successful command result: no Mate
+    // approval state exists anywhere on this path.
+    expect(receipt.state).toBe("succeeded");
+    expect(receipt.receipt).toMatchObject({
+      code: 0,
+      stdout: "root\n",
+      stderr: "",
+      timedOut: false,
+    });
+    expect(readFileSync(recorded, "utf8")).toBe("id\n-un\n");
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 it("never inserts sudo the Agent did not write", async () => {
   const fixture = await setup();
   try {

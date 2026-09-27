@@ -20,8 +20,7 @@ import { AgentRunCoordinator } from "./agent-runs.js";
 import { AttachmentError, AttachmentService } from "./attachments.js";
 import { WorkspaceError, WorkspaceService, type WorkspaceVersion } from "./workspace.js";
 import { registerWorkspaceRoutes } from "./workspace-http.js";
-import { listAgentActivity, recordAgentActivity } from "./activity.js";
-import { PrivilegedApprovals, type ApprovalView } from "./privileged-approvals.js";
+import { listAgentActivity } from "./activity.js";
 import { OwnerPush } from "./owner-push.js";
 
 export function mentionsOwner(text: string): boolean {
@@ -81,8 +80,6 @@ export interface ControlPlaneAppOptions {
 
 export class ControlPlaneApp extends Hono {
   runs?: AgentRunCoordinator;
-  readonly approvals: PrivilegedApprovals;
-  private readonly approvalRetryTimer: ReturnType<typeof setInterval>;
   readonly push: OwnerPush;
   constructor(
     private readonly ownerAuth: OwnerAuth,
@@ -91,18 +88,13 @@ export class ControlPlaneApp extends Hono {
     readonly chat: OwnerChat,
     readonly workspace: WorkspaceService,
     readonly attachments: AttachmentService,
-    approvals: PrivilegedApprovals,
     push: OwnerPush,
   ) {
     super();
-    this.approvals = approvals;
-    this.approvalRetryTimer = setInterval(() => this.approvals.resume(), 1000);
-    this.approvalRetryTimer.unref?.();
     this.push = push;
   }
 
   close(): void {
-    clearInterval(this.approvalRetryTimer);
     this.runs?.close();
     this.workspace.close();
     this.nodes.closeAll();
@@ -158,38 +150,7 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
       options.maxAttachmentBytes,
       options.now,
     ),
-    approvals = new PrivilegedApprovals(
-      ownerAuth.db,
-      {
-        execute: (nodeId, grant, onStarted) => nodes.executePrivileged(nodeId, grant, onStarted),
-      },
-      options.now,
-      (event) => {
-        recordAgentActivity(ownerAuth.db, event);
-        if (event.kind === "approval.requested") {
-          const channelId = (event.detail as { channelId: string }).channelId;
-          try {
-            push.queue(
-              `approval:${event.referenceId}`,
-              "Agent 请求系统命令审批",
-              `/app?channel=${encodeURIComponent(channelId)}&approval=${encodeURIComponent(event.referenceId)}`,
-            );
-          } catch {
-            /* Push cannot undo an approval request. */
-          }
-        }
-      },
-    ),
-    app = new ControlPlaneApp(
-      ownerAuth,
-      nodes,
-      agents,
-      ownerChat,
-      workspace,
-      attachments,
-      approvals,
-      push,
-    ),
+    app = new ControlPlaneApp(ownerAuth, nodes, agents, ownerChat, workspace, attachments, push),
     loginGate = new LoginGate();
   ownerChat.setPushHandler((message, directToOwner) => {
     if (!directToOwner && !mentionsOwner(message.text)) return;
@@ -199,13 +160,6 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
       `/app?channel=${encodeURIComponent(message.channelId)}&message=${encodeURIComponent(message.id)}`,
     );
   });
-  nodes.setPrivilegedApprovalHandler(
-    approvals.publicKey,
-    (nodeId, requestId, outcome) => {
-      approvals.reconcile(nodeId, requestId, outcome);
-    },
-    () => approvals.resume(),
-  );
   ownerChat.setExternalAgentToolHandler(async (request) => {
     const input = request.input;
     try {
@@ -383,14 +337,7 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
       };
     }
   });
-  app.runs = new AgentRunCoordinator(
-    ownerAuth.db,
-    nodes,
-    modelCredentials,
-    ownerChat,
-    approvals,
-    options.now,
-  );
+  app.runs = new AgentRunCoordinator(ownerAuth.db, nodes, modelCredentials, ownerChat, options.now);
   const activeAgentProvisions = new Map<string, Promise<AgentSummary>>();
   const agentProvisionResponse = (
     context: Context,
@@ -478,14 +425,6 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
 
   app.use("/api/owner/*", requireOwnerApi);
   app.get("/api/owner/session", (context) => context.json({ authenticated: true }));
-  const withNodeStatus = (approval: ApprovalView) => {
-    const node = nodes.list().find((entry) => entry.id === approval.nodeId);
-    return {
-      ...approval,
-      nodeOnline: node?.online ?? false,
-      nodeLastConnectedAt: node?.lastConnectedAt ?? null,
-    };
-  };
   app.get("/api/owner/push/public-key", (context) => context.json({ publicKey: push.publicKey }));
   app.post("/api/owner/push/subscriptions", async (context) => {
     const body: unknown = await context.req.json().catch(() => null);
@@ -506,51 +445,6 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
     if (!endpoint.success) return context.json({ error: "推送订阅无效" }, 400);
     push.unsubscribe(endpoint.data.endpoint);
     return context.json({ subscribed: false });
-  });
-  app.get("/api/owner/channels/:channelId/approvals", (context) => {
-    const channelId = context.req.param("channelId");
-    if (!z.string().uuid().safeParse(channelId).success)
-      return context.json({ error: "对话不存在。" }, 404);
-    context.header("Cache-Control", "no-store");
-    return context.json({ approvals: approvals.list(channelId).map(withNodeStatus) });
-  });
-  app.get("/api/owner/approvals/:requestId", (context) => {
-    const parsed = z.string().uuid().safeParse(context.req.param("requestId"));
-    const approval = parsed.success ? approvals.status(parsed.data) : undefined;
-    if (!approval) return context.json({ error: "审批请求不存在。" }, 404);
-    context.header("Cache-Control", "no-store");
-    return context.json({ approval: withNodeStatus(approval) });
-  });
-  app.post("/api/owner/approvals/:requestId/decision", async (context) => {
-    const origin = context.req.header("origin");
-    let sameHost = false;
-    try {
-      const parsedOrigin = new URL(origin ?? "");
-      sameHost =
-        (parsedOrigin.protocol === "https:" || parsedOrigin.protocol === "http:") &&
-        parsedOrigin.origin === origin &&
-        parsedOrigin.host === context.req.header("host");
-    } catch {
-      /* A missing or malformed Origin cannot authorize a root decision. */
-    }
-    if (!sameHost) return context.json({ error: "审批只能从 Mate 当前网页提交。" }, 403);
-    const parsed = z.string().uuid().safeParse(context.req.param("requestId"));
-    if (!parsed.success) return context.json({ error: "审批请求不存在。" }, 404);
-    let body: unknown;
-    try {
-      body = await context.req.json();
-    } catch {
-      return context.json({ error: "审批决定无效。" }, 400);
-    }
-    const choice = z
-      .object({ decision: z.enum(["approve", "reject"]) })
-      .strict()
-      .safeParse(body);
-    if (!choice.success) return context.json({ error: "审批决定无效。" }, 400);
-    if (!approvals.status(parsed.data)) return context.json({ error: "审批请求不存在。" }, 404);
-    const approval = approvals.decide(parsed.data, choice.data.decision);
-    context.header("Cache-Control", "no-store");
-    return context.json({ approval: withNodeStatus(approval) });
   });
   app.get("/api/owner/agents", (context) => {
     context.header("Cache-Control", "no-store");

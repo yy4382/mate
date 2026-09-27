@@ -367,32 +367,6 @@
       .thread-preview .preview-line strong {
         margin-right: 7px;
       }
-      .approval-card {
-        margin-top: 12px;
-        border: 1px solid #ddd;
-        border-left: 3px solid #d99a2b;
-        border-radius: 7px;
-        padding: 12px;
-        background: #fffdf8;
-        font-size: 12px;
-      }
-      .approval-card h3 {
-        margin: 0 0 7px;
-        font-size: 13px;
-      }
-      .approval-card p {
-        margin: 7px 0;
-        color: #666;
-        font-size: 12px;
-      }
-      .approval-card .code {
-        margin: 9px 0;
-      }
-      .approval-card .actions {
-        display: flex;
-        gap: 7px;
-        margin-top: 12px;
-      }
       .text-link {
         background: transparent;
         border: 0;
@@ -1114,9 +1088,8 @@
       messages["# 产品讨论"].push({
         author: "Aurora",
         time: "09:30",
-        body: "节点维护需要执行一条系统命令，请在这里确认。",
+        body: "节点维护的普通命令已经跑完，结果记在这条消息里。",
         thread: 0,
-        approval: true,
       });
       const threadReplies = Object.fromEntries(
         rooms.flatMap((room) => [
@@ -1163,7 +1136,6 @@
         chatTab: "聊天",
         asTask: false,
         attachment: false,
-        approval: "待审批",
         modal: false,
         signedIn: true,
         toast: "",
@@ -1253,9 +1225,6 @@
         const actions = `<button class="action-button" data-action="reply" data-value="${index}">↪ 回复</button><button class="action-button" data-action="thread" data-value="${index}">▤ ${threadLabel}</button>`;
         return `<div class="message-actions" role="group" aria-label="消息操作">${actions}</div><button class="touch-trigger" data-action="message-menu" data-value="${index}" aria-label="更多消息操作" aria-expanded="${state.actionMenuIndex === index}">⋯</button>${state.actionMenuIndex === index ? `<div class="touch-actions">${actions}</div>` : ""}${index === 1 ? '<span class="message-attachment">📎 导航草图.txt</span>' : ""}${threadPreview(message, index)}`;
       }
-      function approvalCard() {
-        return `<div class="approval-card"><h3>系统命令审批 · ${state.approval}</h3><p>Aurora 请求在 vps-01 上执行</p><div class="code">/usr/bin/apt-get update</div><p>申请于 09:30 · 10 分钟后过期；过期或拒绝后不会执行。</p>${state.approval === "待审批" ? `<div class="actions">${button("批准", "approval", "已批准 · 待执行", "primary")}${button("拒绝", "approval", "已拒绝")}</div>` : ""}</div>`;
-      }
       function replyContext() {
         const parent =
           state.replyToIndex === null ? null : messages[state.room]?.[state.replyToIndex];
@@ -1269,7 +1238,7 @@
         if (state.chatTab === "文件")
           return `<div class="page"><div class="eyebrow">${esc(state.room)}</div><h2>会话文件</h2><div class="card" style="margin-top:20px"><h3>导航草图.txt</h3><p class="muted">Aurora 在此会话中分享 · 示例附件</p></div></div>`;
         if (state.thread && variant !== "A") return `<div class="chat-wrap">${thread()}</div>`;
-        return `<div class="chat-wrap ${state.thread ? "has-thread" : ""}"><div class="timeline"><div class="messages">${(messages[state.room] || []).map((m, i) => `<div class="message"><div class="avatar ${m.author === "你" ? "you" : ""}">${esc(m.author[0])}</div><div><strong>${esc(m.author)}</strong><time>${m.time}</time>${m.replyTo ? `<div class="reply-quote">↪ 回复 ${esc(m.replyTo.author)}：${esc(m.replyTo.body)}</div>` : ""}<p>${esc(m.body)}</p>${m.approval ? approvalCard() : ""}${messageActions(m, i)}</div></div>`).join("")}</div><div class="compose">${replyContext()}<textarea id="composer" placeholder="发送到 ${esc(state.room)}…"></textarea><div class="row">${button("📎 附件", "attach")}${state.attachment ? '<span class="muted">草图.txt（示例附件）</span>' : ""}<label><input type="checkbox" id="as-task" ${state.asTask ? "checked" : ""} /> 作为任务</label><span class="push"></span>${button("发送", "send", "", "primary")}</div></div></div>${state.thread && variant === "A" ? thread() : ""}</div>`;
+        return `<div class="chat-wrap ${state.thread ? "has-thread" : ""}"><div class="timeline"><div class="messages">${(messages[state.room] || []).map((m, i) => `<div class="message"><div class="avatar ${m.author === "你" ? "you" : ""}">${esc(m.author[0])}</div><div><strong>${esc(m.author)}</strong><time>${m.time}</time>${m.replyTo ? `<div class="reply-quote">↪ 回复 ${esc(m.replyTo.author)}：${esc(m.replyTo.body)}</div>` : ""}<p>${esc(m.body)}</p>${messageActions(m, i)}</div></div>`).join("")}</div><div class="compose">${replyContext()}<textarea id="composer" placeholder="发送到 ${esc(state.room)}…"></textarea><div class="row">${button("📎 附件", "attach")}${state.attachment ? '<span class="muted">草图.txt（示例附件）</span>' : ""}<label><input type="checkbox" id="as-task" ${state.asTask ? "checked" : ""} /> 作为任务</label><span class="push"></span>${button("发送", "send", "", "primary")}</div></div></div>${state.thread && variant === "A" ? thread() : ""}</div>`;
       }
       function thread() {
         const parent = messages[state.room]?.[state.threadIndex] ?? messages[state.room]?.[0];
@@ -1302,7 +1271,7 @@
         return `<div class="page"><div class="eyebrow">运行环境</div><h2>${state.node}</h2><p><span class="status"><span class="dot ${online ? "" : "off"}"></span>${online ? "在线" : "离线 · 最后连接 08:42"}</span></p><div class="cards"><div class="card"><h3>Agent</h3><p>${online ? "Aurora、Birch" : "Cinder"}</p>${button("在此节点创建 Agent", "create-agent", state.node, online ? "primary" : "light-button")}</div><div class="card"><h3>运行容量</h3><p>${online ? "当前 2 个 Agent，1 个 run 正在执行" : "节点离线，不会启动新 run"}</p></div><div class="card"><h3>连接</h3><p>节点主动连接控制面。</p><p class="muted">配对时使用一次性令牌。</p></div></div></div>`;
       }
       function settings() {
-        return `<div class="page"><div class="eyebrow">所有者</div><h2>设置</h2><div class="cards"><div class="card"><h3>账户</h3><p>密码 + 会话 cookie</p>${button("退出登录", "logout")}</div><div class="card"><h3>推送</h3><p>DM、@提及与审批请求</p>${button("管理通知", "toast", "推送设置（原型）")}</div><div class="card"><h3>节点配对</h3><p>生成一次性令牌，把新 Linux 节点接入控制面。</p>${button("生成令牌", "toast", "示例配对令牌：仅原型")}</div></div></div>`;
+        return `<div class="page"><div class="eyebrow">所有者</div><h2>设置</h2><div class="cards"><div class="card"><h3>账户</h3><p>密码 + 会话 cookie</p>${button("退出登录", "logout")}</div><div class="card"><h3>推送</h3><p>私信与 @提及</p>${button("管理通知", "toast", "推送设置（原型）")}</div><div class="card"><h3>节点配对</h3><p>生成一次性令牌，把新 Linux 节点接入控制面。</p>${button("生成令牌", "toast", "示例配对令牌：仅原型")}</div></div></div>`;
       }
       function inbox() {
         return `<aside class="inbox"><h3>最近活动</h3><p class="muted">Aurora 正在处理消息</p><p class="muted">Birch 已完成工作区读取</p></aside>`;
@@ -1395,7 +1364,6 @@
         else if (action === "task-filter") state.taskDetail = value;
         else if (action === "task-detail") state.taskDetail = value;
         else if (action === "file") state.file = value;
-        else if (action === "approval") state.approval = value;
         else if (action === "create-agent") {
           if (value === "home-linux") state.toast = "节点离线，暂不能创建 Agent";
           else state.modal = true;

@@ -35,7 +35,7 @@ pnpm build
 pnpm test:single-account-agent-workspace
 ```
 
-从网页创建 Agent 到首次私信产生模型运行并写入该 Agent 自己的会话记录，由 `tests/control-plane/agent-creation-process.test.ts` 用真实控制面、WebSocket、节点与脚本化模型覆盖；它在 macOS 与 Linux 上都会运行。控制面数据库从旧格式升级到单账号格式（第 24 版）时，节点上已有的每 Agent 账号记录会被清空并回到「等待准备」，旧失败原因一并清除；该 Agent 需要按同一请求在节点上重新准备一次工作区。若节点上还留着旧版按 Agent 建立的 home（`<工作区根>/<Agent ID>`，内含旧标记 `.mate-home-id`），重新准备会报告该目录已被其他内容占用；把旧 home 移开或改用新的工作区根目录后再重试，而不是期待旧账号或旧 home 继续可用。
+从网页创建 Agent 到首次私信产生模型运行并写入该 Agent 自己的会话记录，由 `tests/control-plane/agent-creation-process.test.ts` 用真实控制面、WebSocket、节点与脚本化模型覆盖；它在 macOS 与 Linux 上都会运行。控制面数据库从旧格式升级到当前格式时（第 24 版重建单账号 Agent 表，第 25 版删除已废弃的特权审批表），节点上已有的每 Agent 账号记录会被清空并回到「等待准备」，旧失败原因一并清除；该 Agent 需要按同一请求在节点上重新准备一次工作区。若节点上还留着旧版按 Agent 建立的 home（`<工作区根>/<Agent ID>`，内含旧标记 `.mate-home-id`），重新准备会报告该目录已被其他内容占用；把旧 home 移开或改用新的工作区根目录后再重试，而不是期待旧账号或旧 home 继续可用。
 
 > **本节剩余检查只覆盖重构中的旧实现，不是新首版验收要求。** 新目标是在同一个现有普通账号下启动 Mate 和 Agent 命令，不创建用户、不切换身份、不操作 systemd；见[产品方向](PROJECT_DIRECTION.md)。
 
@@ -46,11 +46,10 @@ pnpm build
 pnpm vitest run tests/control-plane/agent-command-process.test.ts
 ```
 
-尚未迁移的特权审批路径仍要求 root 与 systemd。macOS 单元测试和本地网页检查只验证应用逻辑，不构成真实 Linux 权限与进程隔离证据。Debian 13 隔离容器可运行下面的节点收据 fence 与旧特权审批检查；测试前先在目标 Linux 架构内运行 `pnpm build`，以生成原生模块和 no-replace helper：
+尚未迁移的 root 与 systemd 部署路径仍要求特权环境。macOS 单元测试和本地网页检查只验证应用逻辑，不构成真实 Linux 权限与进程隔离证据。Debian 13 隔离容器可运行下面的节点收据 fence；测试前先在目标 Linux 架构内运行 `pnpm build`，以生成原生模块和 no-replace helper：
 
 ```sh
 node tests/linux/agent-stop-fence.integration.mjs
-node tests/linux/privileged-approval.integration.mjs
 ```
 
 这些脚本只允许在私有 PID、无宿主目录挂载、无网络且非特权的临时容器中运行。`systemd-analyze verify` 只检查生成单元的语法与路径，不代表服务启动、cgroup 管理、Caddy、升级或恢复已通过。把容器结果与原生 Debian 13 验收分别记录，不要把模拟宿主或静态检查标为原生通过。

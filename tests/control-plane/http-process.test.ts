@@ -101,12 +101,12 @@ it("serves the status page and protects owner routes in an unprivileged process"
     expect(privatePage.headers.get("location")).toBe("/login");
     expect(privateApi.status).toBe(401);
 
-    const approvalTarget = "/app?channel=room-1&approval=request-1";
-    const pushLanding = await fetch(new URL(approvalTarget, origin), { redirect: "manual" });
+    const pushTarget = "/app?channel=room-1&message=message-1";
+    const pushLanding = await fetch(new URL(pushTarget, origin), { redirect: "manual" });
     expect(pushLanding.status).toBe(302);
     const loginTarget = pushLanding.headers.get("location")!;
-    expect(new URL(loginTarget, origin).searchParams.get("next")).toBe(approvalTarget);
-    expect(appReturnPath(new URL(loginTarget, origin).search)).toBe(approvalTarget);
+    expect(new URL(loginTarget, origin).searchParams.get("next")).toBe(pushTarget);
+    expect(appReturnPath(new URL(loginTarget, origin).search)).toBe(pushTarget);
     const loginPage = await fetch(new URL(loginTarget, origin));
     expect(loginPage.status).toBe(200);
     expect(await loginPage.text()).toContain('id="root"');
@@ -132,11 +132,11 @@ it("serves the status page and protects owner routes in an unprivileged process"
       headers: { cookie },
     });
     expect(authenticatedPage.status).toBe(200);
-    const approvalPage = await fetch(new URL(approvalTarget, origin), {
+    const pushPage = await fetch(new URL(pushTarget, origin), {
       headers: { cookie },
       redirect: "manual",
     });
-    expect(approvalPage.status).toBe(200);
+    expect(pushPage.status).toBe(200);
     expect(authenticatedApi.status).toBe(200);
     expect(await authenticatedApi.json()).toEqual({ authenticated: true });
 

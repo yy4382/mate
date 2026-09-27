@@ -94,13 +94,13 @@ it("reconciles before resuming and cannot manually clear an unresolved Agent hol
 it("does not switch versions and resumes the prior services when checkpoint creation fails", async () => {
   const f = fixture(),
     calls: string[] = [];
-  rmSync(join(f.paths.nodeDataDir, "privileged-operations.sqlite"));
+  rmSync(join(f.paths.nodeDataDir, "agent-process-operations.sqlite"));
   let installed = false;
   await expect(
     upgradeWithCoordinatedCheckpoint(f.paths, f.checkpoint, services(calls), () => {
       installed = true;
     }),
-  ).rejects.toThrow(/privileged-operations/);
+  ).rejects.toThrow(/agent-process-operations/);
   expect(installed).toBe(false);
   expect(calls).toEqual(["stop", "resume"]);
 });

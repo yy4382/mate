@@ -18,8 +18,6 @@ const agentId = "11111111-1111-4111-8111-111111111111";
 const otherAgentId = "22222222-2222-4222-8222-222222222222";
 const secondLocalAgentId = "66666666-6666-4666-8666-666666666666";
 const remoteNodeId = "33333333-3333-4333-8333-333333333333";
-const requestId = "44444444-4444-4444-8444-444444444444";
-const startedRequestId = "77777777-7777-4777-8777-777777777777";
 
 function setup() {
   const root = mkdtempSync(join(tmpdir(), "mate-coordinated-reconcile-"));
@@ -82,90 +80,104 @@ function localIdentity(agentId: string, homeRoot: string) {
   };
 }
 
-function addNewerPrivilegedReceipt(paths: ReturnType<typeof setup>["paths"], nodeId: string) {
-  const command = {
-    requestId,
-    operationId: requestId,
-    agentId,
-    nodeId,
-    program: "/usr/bin/touch",
-    args: ["/tmp/fixture"],
-    cwd: "/tmp",
-    expiresAt: 10_000,
-  };
-  const commandJson = JSON.stringify(command),
-    requestHash = createHash("sha256").update(commandJson).digest("hex"),
-    control = new OwnerAuth({ dataDir: paths.controlPlaneDataDir });
-  control.db
+/**
+ * Seed one ordinary command on both sides: the control plane's intent for it and the node's own
+ * durable receipt. `control` describes what the restored control-plane checkpoint still knew.
+ */
+function addCommandOperation(
+  paths: ReturnType<typeof setup>["paths"],
+  nodeId: string,
+  operationId: string,
+  control: {
+    state: "executing" | "unknown";
+    receiptConfirmed: boolean;
+    nodeReceiptRevision: number | null;
+  },
+  nodeReceipt: {
+    state: "started" | "succeeded" | "failed" | "unknown";
+    receipt: unknown;
+    revision: number;
+  },
+): void {
+  const request = JSON.stringify({
+      agentId,
+      operation: { kind: "exec", command: "printf done", cwd: "." },
+    }),
+    requestHash = createHash("sha256").update(request).digest("hex"),
+    channelId = randomUUID(),
+    messageId = randomUUID(),
+    deliveryId = randomUUID(),
+    runId = randomUUID(),
+    owner = new OwnerAuth({ dataDir: paths.controlPlaneDataDir });
+  owner.db
     .prepare(
-      `INSERT INTO owner_privileged_approvals(
-        request_id,operation_id,agent_id,node_id,channel_id,command_json,request_hash,state,
-        receipt_json,node_receipt_revision,started_at,created_at,updated_at
-      ) VALUES(?,?,?,?,?,?,?,'unknown',?,1,100,1,2)`,
+      `INSERT INTO owner_channels(id,name,description,visibility,created_at,updated_at)
+       VALUES(?,?,'','private',1,1)`,
+    )
+    .run(channelId, "Command channel");
+  owner.db
+    .prepare(
+      `INSERT INTO owner_channel_memberships(channel_id,principal_kind,principal_id,active,joined_at)
+       VALUES(?,'agent',?,1,1)`,
+    )
+    .run(channelId, agentId);
+  owner.db
+    .prepare(
+      "INSERT INTO owner_messages(id,channel_id,order_seq,text,created_at) VALUES(?,?,1,?,1)",
+    )
+    .run(messageId, channelId, "run a command");
+  owner.db
+    .prepare(
+      `INSERT INTO owner_message_deliveries(
+        id,message_id,channel_id,recipient_kind,recipient_id,state,created_at
+      ) VALUES(?,?,?,'agent',?,'pending',1)`,
+    )
+    .run(deliveryId, messageId, channelId, agentId);
+  owner.db
+    .prepare(
+      `INSERT INTO owner_agent_runs(id,agent_id,node_id,delivery_id,state,started_at)
+       VALUES(?,?,?,?,'completed',1)`,
+    )
+    .run(runId, agentId, nodeId, deliveryId);
+  owner.db
+    .prepare(
+      `INSERT INTO owner_agent_process_operations(
+        operation_id,run_id,agent_id,node_id,action_scope_id,stable_action_id,
+        request_hash,request_json,state,receipt_json,node_receipt_confirmed,node_receipt_revision,
+        created_at,updated_at
+      ) VALUES(?,?,?,?,?,?,?,?,?,NULL,?,?,1,1)`,
     )
     .run(
-      requestId,
-      requestId,
+      operationId,
+      runId,
       agentId,
       nodeId,
-      "55555555-5555-4555-8555-555555555555",
-      commandJson,
-      "d".repeat(64),
-      JSON.stringify({ reason: "response unavailable" }),
-    );
-  control.close();
-
-  const node = new Database(join(paths.nodeDataDir, "privileged-operations.sqlite"));
-  node
-    .prepare(
-      `INSERT INTO node_privileged_operations(
-      request_id,operation_id,agent_id,request_hash,state,receipt_json,started_at,revision,created_at,updated_at
-    ) VALUES(?,?,?,?,'succeeded',?,100,2,100,200)`,
-    )
-    .run(requestId, requestId, agentId, requestHash, JSON.stringify({ code: 0 }));
-  node.close();
-}
-
-function addStartedPrivilegedReceipt(paths: ReturnType<typeof setup>["paths"], nodeId: string) {
-  const command = {
-    requestId: startedRequestId,
-    operationId: startedRequestId,
-    agentId,
-    nodeId,
-    program: "/usr/bin/sleep",
-    args: ["1"],
-    cwd: "/tmp",
-    expiresAt: 10_000,
-  };
-  const commandJson = JSON.stringify(command),
-    requestHash = createHash("sha256").update(commandJson).digest("hex"),
-    control = new OwnerAuth({ dataDir: paths.controlPlaneDataDir });
-  control.db
-    .prepare(
-      `INSERT INTO owner_privileged_approvals(
-    request_id,operation_id,agent_id,node_id,channel_id,command_json,request_hash,state,
-    receipt_json,node_receipt_revision,started_at,created_at,updated_at
-  ) VALUES(?,?,?,?,?,?,?,'unknown',?,1,100,1,2)`,
-    )
-    .run(
-      startedRequestId,
-      startedRequestId,
-      agentId,
-      nodeId,
-      "55555555-5555-4555-8555-555555555555",
-      commandJson,
+      deliveryId,
+      `mate:${deliveryId}:${"a".repeat(64)}:1`,
       requestHash,
-      JSON.stringify({ reason: "response unavailable" }),
+      request,
+      control.state,
+      control.receiptConfirmed ? 1 : 0,
+      control.nodeReceiptRevision,
     );
-  control.close();
-  const node = new Database(join(paths.nodeDataDir, "privileged-operations.sqlite"));
+  owner.close();
+
+  const node = new Database(join(paths.nodeDataDir, "agent-process-operations.sqlite"));
   node
     .prepare(
-      `INSERT INTO node_privileged_operations(
-    request_id,operation_id,agent_id,request_hash,state,receipt_json,started_at,revision,created_at,updated_at
-  ) VALUES(?,?,?,?,'started',NULL,100,1,100,100)`,
+      `INSERT INTO agent_process_operations(
+        operation_id,agent_id,request_hash,request,state,receipt,revision,created_at,updated_at
+      ) VALUES(?,?,?,?,?,?,?,1,1)`,
     )
-    .run(startedRequestId, startedRequestId, agentId, requestHash);
+    .run(
+      operationId,
+      agentId,
+      requestHash,
+      request,
+      nodeReceipt.state,
+      nodeReceipt.receipt === null ? null : JSON.stringify(nodeReceipt.receipt),
+      nodeReceipt.revision,
+    );
   node.close();
 }
 
@@ -224,9 +236,69 @@ function addWorkspaceReceipt(paths: ReturnType<typeof setup>["paths"], nodeId: s
   return operationId;
 }
 
-it("reads real SQLite and node identity files, accepts a newer matching receipt, and leaves remote Agents untouched", () => {
+it("confirms newer ordinary command receipts on both sides and leaves remote Agents untouched", () => {
   const { paths, node } = setup();
-  addNewerPrivilegedReceipt(paths, node.nodeId);
+  const succeeded = randomUUID(),
+    failed = randomUUID();
+  addCommandOperation(
+    paths,
+    node.nodeId,
+    succeeded,
+    { state: "executing", receiptConfirmed: true, nodeReceiptRevision: 1 },
+    { state: "succeeded", receipt: { code: 0, stdout: "done" }, revision: 2 },
+  );
+  addCommandOperation(
+    paths,
+    node.nodeId,
+    failed,
+    { state: "executing", receiptConfirmed: true, nodeReceiptRevision: 1 },
+    { state: "failed", receipt: { code: 9, stderr: "boom" }, revision: 3 },
+  );
+  const result = reconcileCoordinatedState(paths, {
+    lookupAgentIdentity: localIdentity,
+    now: () => 300,
+  });
+  expect(result).toMatchObject({ confirmed: 2, holds: [] });
+  const owner = new OwnerAuth({ dataDir: paths.controlPlaneDataDir });
+  expect(
+    owner.db
+      .prepare(
+        `SELECT state,receipt_json,node_receipt_confirmed,node_receipt_revision
+         FROM owner_agent_process_operations WHERE operation_id=?`,
+      )
+      .get(succeeded),
+  ).toEqual({
+    state: "succeeded",
+    receipt_json: JSON.stringify({ code: 0, stdout: "done" }),
+    node_receipt_confirmed: 1,
+    node_receipt_revision: 2,
+  });
+  expect(
+    owner.db
+      .prepare(
+        `SELECT state,receipt_json,node_receipt_revision
+         FROM owner_agent_process_operations WHERE operation_id=?`,
+      )
+      .get(failed),
+  ).toEqual({
+    state: "failed",
+    receipt_json: JSON.stringify({ code: 9, stderr: "boom" }),
+    node_receipt_revision: 3,
+  });
+  expect(owner.db.prepare("SELECT agent_id FROM owner_agent_recovery_holds").all()).toEqual([]);
+  owner.close();
+});
+
+it("accepts the first durable command receipt when a lost response left the revision unknown", () => {
+  const { paths, node } = setup();
+  const operationId = randomUUID();
+  addCommandOperation(
+    paths,
+    node.nodeId,
+    operationId,
+    { state: "executing", receiptConfirmed: false, nodeReceiptRevision: null },
+    { state: "succeeded", receipt: { code: 0, stdout: "done" }, revision: 2 },
+  );
   const result = reconcileCoordinatedState(paths, {
     lookupAgentIdentity: localIdentity,
     now: () => 300,
@@ -236,82 +308,12 @@ it("reads real SQLite and node identity files, accepts a newer matching receipt,
   expect(
     owner.db
       .prepare(
-        "SELECT state,node_receipt_revision,receipt_json FROM owner_privileged_approvals WHERE request_id=?",
+        `SELECT state,node_receipt_confirmed,node_receipt_revision
+         FROM owner_agent_process_operations WHERE operation_id=?`,
       )
-      .get(requestId),
-  ).toEqual({
-    state: "succeeded",
-    node_receipt_revision: 2,
-    receipt_json: JSON.stringify({ code: 0 }),
-  });
+      .get(operationId),
+  ).toEqual({ state: "succeeded", node_receipt_confirmed: 1, node_receipt_revision: 2 });
   expect(owner.db.prepare("SELECT agent_id FROM owner_agent_recovery_holds").all()).toEqual([]);
-  owner.close();
-});
-
-it("accepts the first durable node receipt when a lost response left the control-plane revision unknown", () => {
-  const { paths, node } = setup();
-  addNewerPrivilegedReceipt(paths, node.nodeId);
-  const control = new OwnerAuth({ dataDir: paths.controlPlaneDataDir });
-  control.db
-    .prepare("UPDATE owner_privileged_approvals SET node_receipt_revision=NULL WHERE request_id=?")
-    .run(requestId);
-  control.close();
-
-  const result = reconcileCoordinatedState(paths, {
-    lookupAgentIdentity: localIdentity,
-    now: () => 300,
-  });
-  expect(result).toMatchObject({ confirmed: 1, holds: [] });
-  const owner = new OwnerAuth({ dataDir: paths.controlPlaneDataDir });
-  expect(
-    owner.db
-      .prepare(
-        "SELECT state,node_receipt_revision,receipt_json FROM owner_privileged_approvals WHERE request_id=?",
-      )
-      .get(requestId),
-  ).toEqual({
-    state: "succeeded",
-    node_receipt_revision: 2,
-    receipt_json: JSON.stringify({ code: 0 }),
-  });
-  expect(owner.db.prepare("SELECT agent_id FROM owner_agent_recovery_holds").all()).toEqual([]);
-  owner.close();
-});
-
-it("holds only the local Agent when a same-version receipt conflicts, without rewriting shared facts", () => {
-  const { paths, node } = setup();
-  addNewerPrivilegedReceipt(paths, node.nodeId);
-  const control = new OwnerAuth({ dataDir: paths.controlPlaneDataDir });
-  control.db
-    .prepare("UPDATE owner_privileged_approvals SET node_receipt_revision=2 WHERE request_id=?")
-    .run(requestId);
-  control.close();
-  const local = new Database(join(paths.nodeDataDir, "privileged-operations.sqlite"));
-  local
-    .prepare("UPDATE node_privileged_operations SET receipt_json=? WHERE request_id=?")
-    .run(JSON.stringify({ code: 1 }), requestId);
-  local.close();
-
-  const result = reconcileCoordinatedState(paths, {
-    lookupAgentIdentity: localIdentity,
-    now: () => 300,
-  });
-  expect(result).toMatchObject({
-    confirmed: 0,
-    holds: [{ agentId, reason: "operation_result_conflict" }],
-  });
-  const owner = new OwnerAuth({ dataDir: paths.controlPlaneDataDir });
-  expect(
-    owner.db
-      .prepare("SELECT state FROM owner_privileged_approvals WHERE request_id=?")
-      .get(requestId),
-  ).toEqual({ state: "unknown" });
-  expect(owner.db.prepare("SELECT agent_id FROM owner_agent_recovery_holds").all()).toEqual([
-    { agent_id: agentId },
-  ]);
-  expect(owner.db.prepare("SELECT status FROM owner_agents WHERE id=?").get(otherAgentId)).toEqual({
-    status: "waiting_credentials",
-  });
   owner.close();
 });
 
@@ -335,10 +337,24 @@ it("holds every Agent assigned to a node whose restored key no longer matches it
   control.close();
 });
 
-it("applies one proven terminal receipt while holding the same Agent for a separate started operation", () => {
+it("holds the Agent for a command whose node receipt never proved a result", () => {
   const { paths, node } = setup();
-  addNewerPrivilegedReceipt(paths, node.nodeId);
-  addStartedPrivilegedReceipt(paths, node.nodeId);
+  const finished = randomUUID(),
+    started = randomUUID();
+  addCommandOperation(
+    paths,
+    node.nodeId,
+    finished,
+    { state: "executing", receiptConfirmed: true, nodeReceiptRevision: 1 },
+    { state: "succeeded", receipt: { code: 0, stdout: "done" }, revision: 2 },
+  );
+  addCommandOperation(
+    paths,
+    node.nodeId,
+    started,
+    { state: "executing", receiptConfirmed: true, nodeReceiptRevision: 1 },
+    { state: "started", receipt: null, revision: 1 },
+  );
   const result = reconcileCoordinatedState(paths, {
     lookupAgentIdentity: localIdentity,
     now: () => 300,
@@ -351,17 +367,15 @@ it("applies one proven terminal receipt while holding the same Agent for a separ
   expect(
     owner.db
       .prepare(
-        "SELECT state,node_receipt_revision FROM owner_privileged_approvals WHERE request_id=?",
+        "SELECT state,node_receipt_revision FROM owner_agent_process_operations WHERE operation_id=?",
       )
-      .get(requestId),
+      .get(finished),
   ).toEqual({ state: "succeeded", node_receipt_revision: 2 });
   expect(
     owner.db
-      .prepare(
-        "SELECT state,node_receipt_revision FROM owner_privileged_approvals WHERE request_id=?",
-      )
-      .get(startedRequestId),
-  ).toEqual({ state: "unknown", node_receipt_revision: 1 });
+      .prepare("SELECT state FROM owner_agent_process_operations WHERE operation_id=?")
+      .get(started),
+  ).toEqual({ state: "executing" });
   expect(owner.db.prepare("SELECT agent_id FROM owner_agent_recovery_holds").all()).toEqual([
     { agent_id: agentId },
   ]);
@@ -434,19 +448,18 @@ it("holds only the operation owner when its named workspace receipt is malformed
   expect(result.released).toContain(secondLocalAgentId);
 });
 
-it("holds a terminal privileged result when the node checkpoint has no versioned receipt", () => {
+it("holds a terminal command result when the node checkpoint has no receipt for it", () => {
   const { paths, node } = setup();
-  addNewerPrivilegedReceipt(paths, node.nodeId);
-  const owner = new OwnerAuth({ dataDir: paths.controlPlaneDataDir });
-  owner.db
-    .prepare(
-      `UPDATE owner_privileged_approvals
-    SET state='succeeded',receipt_json=?,node_receipt_revision=NULL WHERE request_id=?`,
-    )
-    .run(JSON.stringify({ code: 0 }), requestId);
-  owner.close();
-  const nodeDb = new Database(join(paths.nodeDataDir, "privileged-operations.sqlite"));
-  nodeDb.prepare("DELETE FROM node_privileged_operations WHERE request_id=?").run(requestId);
+  const operationId = randomUUID();
+  addCommandOperation(
+    paths,
+    node.nodeId,
+    operationId,
+    { state: "unknown", receiptConfirmed: true, nodeReceiptRevision: 1 },
+    { state: "succeeded", receipt: { code: 0, stdout: "done" }, revision: 2 },
+  );
+  const nodeDb = new Database(join(paths.nodeDataDir, "agent-process-operations.sqlite"));
+  nodeDb.prepare("DELETE FROM agent_process_operations WHERE operation_id=?").run(operationId);
   nodeDb.close();
 
   const result = reconcileCoordinatedState(paths, {

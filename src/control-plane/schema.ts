@@ -18,9 +18,8 @@ import { workspaceAccessAuditSchemaV15 } from "./workspace-access-schema.js";
 import { agentProcessOperationsSchemaV13 } from "./process-operations-schema.js";
 import { recoverySchemaV16 } from "./recovery-schema.js";
 import { agentLifecycleSchemaV19 } from "./agent-lifecycle-schema.js";
-import { privilegedApprovalSchemaV20 } from "./privileged-approvals.js";
 import { recoveryHoldSchemaV21 } from "./recovery-holds.js";
-import { recoveryVersionsSchemaV22 } from "./recovery-versions-schema.js";
+import { recoveryVersionsSchema, recoveryVersionsSchemaV22 } from "./recovery-versions-schema.js";
 
 /** The format used by the paired-node release before Agent provisioning. */
 export const controlPlaneSchemaV4 = `${ownerAuthSchema}\n${nodeDirectorySchema}`;
@@ -49,6 +48,28 @@ export const controlPlaneSchemaV16 = `${controlPlaneSchemaV15}\n${recoverySchema
 export const controlPlaneSchemaV17 = `${controlPlaneSchemaV16}\n${conversationAttentionSchemaV17}`;
 export const controlPlaneSchemaV18 = `${controlPlaneSchemaV17}\n${taskReminderSchemaV18}`;
 export const controlPlaneSchemaV19 = `${controlPlaneSchemaV18}\n${agentLifecycleSchemaV19}`;
+
+/**
+ * Revision 20 of the old release: the control plane kept an owner-approved privileged command
+ * request and its signed node grant in these two tables. Revision 25 removes that path, so this
+ * template is frozen only because the migration machinery compares a real, older database against
+ * it before upgrading: revision 24's format must be recognised for what it is.
+ */
+const privilegedApprovalSchemaV20 = `
+CREATE TABLE IF NOT EXISTS owner_privileged_approval_keys (
+  id INTEGER PRIMARY KEY CHECK(id=1), private_key TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS owner_privileged_approvals (
+  request_id TEXT PRIMARY KEY, operation_id TEXT NOT NULL UNIQUE,
+  agent_id TEXT NOT NULL, node_id TEXT NOT NULL, channel_id TEXT NOT NULL,
+  command_json TEXT NOT NULL, request_hash TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('pending','approved','running','succeeded','failed','unknown','rejected','expired')),
+  receipt_json TEXT, started_at INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS owner_privileged_approvals_channel
+  ON owner_privileged_approvals(channel_id,created_at);
+`;
+
 export const controlPlaneSchemaV20 = `${controlPlaneSchemaV19}\n${privilegedApprovalSchemaV20}`;
 export const controlPlaneSchemaV21 = `${controlPlaneSchemaV20}\n${recoveryHoldSchemaV21}`;
 export const controlPlaneSchemaV22 = `${controlPlaneSchemaV21}\n${recoveryVersionsSchemaV22}`;
@@ -56,12 +77,32 @@ export const controlPlaneSchemaV22 = `${controlPlaneSchemaV21}\n${recoveryVersio
 /** The private control-plane format that records every plain assistant turn of a run. */
 export const controlPlaneSchemaV23 = `${controlPlaneSchemaV22}\n${agentRunTranscriptSchemaV23}`;
 
+/** Revision 24 rebuilt the Agent table for the single-account release. */
+export const controlPlaneSchemaV24 = `${controlPlaneSchemaV23}\n${singleAccountAgentSchemaV24}`;
+
 /**
- * The single-account format: Agents share the node's running account and own a workspace, so the
- * `creating_account`, `preparing_home` and `verifying_identity` stages no longer exist. The Agent
- * table is rebuilt rather than appended to, because SQLite cannot relax a CHECK constraint in place.
+ * Revision 25 removes Mate's privileged-command approval state: a command the Agent writes is an
+ * ordinary child process of the node's own account, and whether a `sudo` inside it succeeds is
+ * decided by the host's existing sudo rules alone (ADR-0004).
+ *
+ * This is a reset, not a reconciliation (ADR-0002): an upgrade drops every row with the tables,
+ * including a request the old release had already approved or started. Nothing in revision 25 can
+ * confirm such a command's outcome, so it is deliberately not carried into any new state, hold or
+ * receipt — an owner who needs one of those old records must read the pre-upgrade database with a
+ * read-only SQLite client before the first revision-25 start. The same applies to the node's old
+ * `privileged-operations.sqlite`, which revision 25 neither opens nor reconciles.
  */
-export const controlPlaneSchema = `${controlPlaneSchemaV22}\n${agentRunTranscriptSchemaV23}\n${singleAccountAgentSchemaV24}`;
+export const privilegedApprovalRemovalSchemaV25 = `
+DROP TABLE owner_privileged_approvals;
+DROP TABLE owner_privileged_approval_keys;
+`;
+
+/**
+ * The current format (revision 25) is revision 24 with the two approval tables never created;
+ * everything else is unchanged. It is spelled out rather than built from the revision-24 template
+ * because SQLite cannot subtract a table from a schema string.
+ */
+export const controlPlaneSchema = `${controlPlaneSchemaV19}\n${recoveryHoldSchemaV21}\n${recoveryVersionsSchema}\n${agentRunTranscriptSchemaV23}\n${singleAccountAgentSchemaV24}`;
 
 export const controlPlaneMigrations = [
   {
@@ -208,7 +249,14 @@ export const controlPlaneMigrations = [
     fromRevision: 23,
     toRevision: 24,
     previousSchema: controlPlaneSchemaV23,
-    nextSchema: controlPlaneSchema,
+    nextSchema: controlPlaneSchemaV24,
     migrationSchema: singleAccountAgentSchemaV24,
+  },
+  {
+    fromRevision: 24,
+    toRevision: 25,
+    previousSchema: controlPlaneSchemaV24,
+    nextSchema: controlPlaneSchema,
+    migrationSchema: privilegedApprovalRemovalSchemaV25,
   },
 ] as const;

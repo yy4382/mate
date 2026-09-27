@@ -13,8 +13,6 @@ import { makeAgentRunRequest, runAgentModel, type AgentRunPage } from "./agent-r
 import type { AgentProvisionStage } from "./protocol.js";
 import { openNodeProcessOperations } from "./process-operation-runtime.js";
 import type { AgentProcessOperations } from "./process-operations.js";
-import { openNodePrivilegedOperations } from "./privileged-runtime.js";
-import type { PrivilegedNodeOperations } from "./privileged-operations.js";
 import { LinuxWorkspaceExecutor, type WorkspaceExecutionRequest } from "./workspace-execution.js";
 import { sendWorkspaceOperationResult } from "./workspace-result.js";
 
@@ -41,7 +39,6 @@ export function defaultAgentWorkspaceRoot(dataDirectory: string): string {
 interface NodeTestDependencies {
   modelWorkerEntry?: string;
   processOperations?: AgentProcessOperations;
-  privilegedOperations?: PrivilegedNodeOperations;
   workspaceExecutor?: Pick<LinuxWorkspaceExecutor, "execute" | "status"> &
     Partial<Pick<LinuxWorkspaceExecutor, "receiptRevision">>;
   prepareAgentWorkspace?: (
@@ -101,10 +98,6 @@ async function runLinuxNodeInternal(
     ? undefined
     : openNodeProcessOperations(options.dataDirectory, agentWorkspaceRoot);
   const processOperations = dependencies.processOperations ?? processStore!.operations;
-  const privilegedStore = dependencies.privilegedOperations
-    ? undefined
-    : openNodePrivilegedOperations(options.dataDirectory, identity.id);
-  const privilegedOperations = dependencies.privilegedOperations ?? privilegedStore!.operations;
   try {
     const workspaceExecutor =
       dependencies.workspaceExecutor ??
@@ -126,7 +119,6 @@ async function runLinuxNodeInternal(
           agentWorkspaceRoot,
           dependencies,
           processOperations,
-          privilegedOperations,
           workspaceExecutor,
           signal,
         );
@@ -144,7 +136,6 @@ async function runLinuxNodeInternal(
     }
   } finally {
     processStore?.close();
-    privilegedStore?.close();
   }
 }
 
@@ -175,7 +166,6 @@ function connectOnce(
   agentWorkspaceRoot: string,
   testDependencies: NodeTestDependencies,
   processOperations: AgentProcessOperations,
-  privilegedOperations: PrivilegedNodeOperations,
   workspaceExecutor:
     | (Pick<LinuxWorkspaceExecutor, "execute" | "status"> &
         Partial<Pick<LinuxWorkspaceExecutor, "receiptRevision">>)
@@ -305,32 +295,6 @@ function connectOnce(
         signature: signChallenge(identity, nonce),
       });
     };
-    let privilegedReceiptCursor = "";
-    const sendPrivilegedReceipts = () => {
-      if (!authenticated || socket.readyState !== WebSocket.OPEN) return;
-      let receipts = privilegedOperations.receipts(privilegedReceiptCursor);
-      if (receipts.length === 0) {
-        privilegedReceiptCursor = "";
-        receipts = privilegedOperations.receipts();
-      }
-      if (receipts.length === 0) return;
-      privilegedReceiptCursor = receipts.at(-1)!.requestId;
-      sendRequest(socket, {
-        type: "node.privileged.reconcile.result",
-        requestId: randomUUID(),
-        receipts: receipts.map(
-          ({ requestId, operationId, agentId, state, startedAt, receipt, revision }) => ({
-            requestId,
-            operationId,
-            agentId,
-            startedAt,
-            state: state === "started" ? "unknown" : state,
-            receipt,
-            revision,
-          }),
-        ),
-      });
-    };
     const onAbort = () => {
       if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)
         socket.close(1000, "node shutting down");
@@ -382,9 +346,6 @@ function connectOnce(
         timeout = undefined;
         clearPairingToken();
         authenticated = true;
-        if (message.privilegedPublicKey)
-          privilegedOperations.setPublicKey(message.privilegedPublicKey);
-        sendPrivilegedReceipts();
         process.stdout.write(`MATE_NODE_PAIRED ${identity.id}\n`);
         sendPing();
         heartbeat = setInterval(sendPing, heartbeatIntervalMs);
@@ -396,9 +357,6 @@ function connectOnce(
         if (timeout) clearTimeout(timeout);
         timeout = undefined;
         authenticated = true;
-        if (message.privilegedPublicKey)
-          privilegedOperations.setPublicKey(message.privilegedPublicKey);
-        sendPrivilegedReceipts();
         process.stdout.write(`MATE_NODE_CONNECTED ${identity.id}\n`);
         sendPing();
         heartbeat = setInterval(sendPing, heartbeatIntervalMs);
@@ -409,40 +367,6 @@ function connectOnce(
         if (pingTimeout) clearTimeout(pingTimeout);
         pingTimeout = undefined;
         process.stdout.write(`MATE_NODE_HEARTBEAT_ACK ${message.requestId}\n`);
-        sendPrivilegedReceipts();
-        return;
-      }
-      if (message.type === "control.privileged.operation") {
-        if (!authenticated)
-          throw new NodeAuthenticationError("控制面在节点身份验证前请求特权操作。");
-        const { requestId, command, signature } = message;
-        void privilegedOperations
-          .execute({ command, signature }, (startedAt) => {
-            if (socket.readyState === WebSocket.OPEN && authenticated)
-              sendRequest(socket, {
-                type: "node.privileged.started",
-                requestId,
-                operationId: command.operationId,
-                agentId: command.agentId,
-                startedAt,
-              });
-          })
-          .then((result) => {
-            if (socket.readyState === WebSocket.OPEN && authenticated)
-              sendRequest(socket, {
-                type: "node.privileged.result",
-                requestId,
-                operationId: result.operationId,
-                agentId: result.agentId,
-                startedAt: result.startedAt,
-                state: result.state === "started" ? "unknown" : result.state,
-                receipt: result.receipt,
-                revision: result.revision,
-              });
-          })
-          .catch(() => {
-            // Invalid or expired grants never cross the root boundary. The control plane times out.
-          });
         return;
       }
       if (message.type === "control.agent.run.context") {

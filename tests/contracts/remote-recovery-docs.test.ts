@@ -12,6 +12,5 @@ it("documents the limited remote receipt query and a manual hold path for separa
     "不要在网页点击“复启 Agent”，也不要运行控制面主机的 `release-agent`",
   );
   expect(operations).toContain("systemctl stop mate-node.service");
-  expect(operations).toContain("node_privileged_operations");
   expect(operations).toContain("身份冲突无法定位到单个 Agent");
 });

@@ -29,16 +29,14 @@ afterEach(() => {
   window.history.replaceState({}, "", "/");
 });
 
-async function land(target: { messageId?: string; approvalId?: string }, context?: unknown) {
-  const targetId = target.messageId
-    ? `message-${target.messageId}`
-    : `approval-${target.approvalId}`;
-  window.history.replaceState(
-    {},
-    "",
-    `/app?channel=room&${target.messageId ? `message=${target.messageId}` : `approval=${target.approvalId}`}`,
-  );
+async function land(
+  target: { messageId: string },
+  context?: unknown,
+): Promise<{ scrolled: string[]; requested: string[] }> {
+  const targetId = `message-${target.messageId}`;
+  window.history.replaceState({}, "", `/app?channel=room&message=${target.messageId}`);
   const scrolled: string[] = [];
+  const requested: string[] = [];
   Element.prototype.scrollIntoView = function () {
     scrolled.push(this.id);
   };
@@ -47,11 +45,8 @@ async function land(target: { messageId?: string; approvalId?: string }, context
     "fetch",
     vi.fn(async (input: string | URL) => {
       const path = String(input);
-      if (
-        target.messageId &&
-        path.endsWith(`/messages/${target.messageId}/context`) &&
-        context instanceof Error
-      )
+      requested.push(path);
+      if (path.endsWith(`/messages/${target.messageId}/context`) && context instanceof Error)
         throw context;
       const body =
         path === "/api/owner/session"
@@ -80,7 +75,7 @@ async function land(target: { messageId?: string; approvalId?: string }, context
                 ],
                 cursor: 0,
               }
-            : target.messageId && path.endsWith(`/messages/${target.messageId}/context`)
+            : path.endsWith(`/messages/${target.messageId}/context`)
               ? context === null
                 ? { error: "消息不存在" }
                 : context
@@ -90,37 +85,10 @@ async function land(target: { messageId?: string; approvalId?: string }, context
                   ? { agents: [] }
                   : path.endsWith("/attachments")
                     ? { attachments: [] }
-                    : path.endsWith("/approvals")
-                      ? {
-                          approvals: target.approvalId
-                            ? [
-                                {
-                                  requestId: target.approvalId,
-                                  operationId: "operation",
-                                  agentId: "agent",
-                                  nodeId: "node",
-                                  channelId: "room",
-                                  program: "/usr/bin/id",
-                                  args: [],
-                                  cwd: "/tmp",
-                                  expiresAt: Date.now() + 60_000,
-                                  createdAt: Date.now(),
-                                  state: "pending",
-                                  receipt: null,
-                                  nodeOnline: false,
-                                  nodeLastConnectedAt: null,
-                                },
-                              ]
-                            : [],
-                        }
-                      : { messages: [root], nextBefore: null };
+                    : { messages: [root], nextBefore: null };
       return Response.json(body, {
         status:
-          target.messageId &&
-          path.endsWith(`/messages/${target.messageId}/context`) &&
-          context === null
-            ? 404
-            : 200,
+          path.endsWith(`/messages/${target.messageId}/context`) && context === null ? 404 : 200,
       });
     }),
   );
@@ -128,11 +96,11 @@ async function land(target: { messageId?: string; approvalId?: string }, context
   if (context === null || context instanceof Error)
     await waitFor(() => expect(document.getElementById(`message-${root.id}`)).not.toBeNull());
   else await waitFor(() => expect(scrolled).toContain(targetId));
-  return scrolled;
+  return { scrolled, requested };
 }
 
 it("opens an older timeline page and scrolls to the notified message", async () => {
-  const scrolled = await land(
+  const { scrolled } = await land(
     { messageId: root.id },
     {
       kind: "timeline",
@@ -146,7 +114,7 @@ it("opens an older timeline page and scrolls to the notified message", async () 
 });
 
 it("opens a thread and scrolls to the notified reply", async () => {
-  const scrolled = await land(
+  const { scrolled } = await land(
     { messageId: reply.id },
     {
       kind: "thread",
@@ -168,10 +136,16 @@ it("opens a thread and scrolls to the notified reply", async () => {
   ).toHaveLength(1);
 });
 
-it("lands on the original approval card after the login return URL is restored", async () => {
-  const scrolled = await land({ approvalId: "request-1" });
-  expect(document.getElementById("approval-request-1")?.textContent).toContain("等待你的审批");
-  expect(scrolled).toEqual(["approval-request-1"]);
+it("shows no approval card and asks no approval endpoint while a channel is open", async () => {
+  const { requested } = await land({ messageId: root.id }, null);
+  // The page really is up with the channel's messages, so the absences below are about a page
+  // that rendered, not one that never got anywhere.
+  expect(document.getElementById(`message-${root.id}`)?.textContent).toContain("旧消息");
+  expect(requested).toContain("/api/owner/snapshot");
+  expect(document.querySelector(".approval-card")).toBeNull();
+  for (const approvalText of ["系统特权命令", "批准执行", "等待你的审批"])
+    expect(document.body.textContent).not.toContain(approvalText);
+  expect(requested.filter((path) => path.includes("/approvals"))).toEqual([]);
 });
 
 for (const failure of [null, new Error("network down")]) {

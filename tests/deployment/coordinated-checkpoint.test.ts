@@ -65,7 +65,7 @@ it("does not mark a backup complete if a node receipt store is missing", async (
     const agentHomeRoot = join(root, "homes"),
       destination = join(root, "checkpoint");
     initializeCoordinatedRoots({ controlPlaneDataDir, nodeDataDir, agentHomeRoot });
-    rmSync(join(nodeDataDir, "privileged-operations.sqlite"));
+    rmSync(join(nodeDataDir, "agent-process-operations.sqlite"));
     await expect(
       createCoordinatedCheckpoint(
         { controlPlaneDataDir, nodeDataDir, agentHomeRoot },

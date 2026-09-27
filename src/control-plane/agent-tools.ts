@@ -5,7 +5,6 @@ import {
   WORKSPACE_WRITE_MAX_BYTES,
 } from "../execution/backend.js";
 import { MAX_NODE_MESSAGE_BYTES } from "../nodes/protocol.js";
-import { systemCommandSchema } from "../execution/system-command.js";
 
 const conversationId = z.string().uuid(),
   workspacePath = z.string().max(4096),
@@ -443,20 +442,6 @@ export const agentProcessToolOperations = Object.freeze({
 });
 
 export type AgentProcessToolOperation = keyof typeof agentProcessToolOperations;
-
-export const agentSystemToolOperations = Object.freeze({
-  "system.exec": {
-    description:
-      "申请一条系统特权命令。必须提供程序绝对路径、各个参数和绝对工作目录；所有者在 Mate 对话卡完整审阅并批准后，节点才可能以 root 执行。十分钟内未开始即失效。",
-    schema: systemCommandSchema,
-    seatPolicy: "deny" as const,
-  },
-  "system.status": {
-    description: "查询自己一条系统特权请求的审批与执行结果。",
-    schema: z.object({ requestId: z.string().uuid() }).strict(),
-    seatPolicy: "deny" as const,
-  },
-});
 
 /** Validate one public tool call and map it to the narrower node process protocol. */
 export function toAgentProcessOperation(
