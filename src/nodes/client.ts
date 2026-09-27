@@ -203,7 +203,7 @@ function connectOnce(
         string,
         { runId: string; resolve(page: AgentRunPage): void; reject(error: Error): void }
       >(),
-      pendingRunJournals = new Map<
+      pendingRunTranscripts = new Map<
         string,
         { runId: string; resolve(accepted: boolean): void; reject(error: Error): void }
       >(),
@@ -223,8 +223,8 @@ function connectOnce(
       activeRuns.clear();
       for (const pending of pendingRunContexts.values()) pending.reject(new Error(message));
       pendingRunContexts.clear();
-      for (const pending of pendingRunJournals.values()) pending.reject(new Error(message));
-      pendingRunJournals.clear();
+      for (const pending of pendingRunTranscripts.values()) pending.reject(new Error(message));
+      pendingRunTranscripts.clear();
       for (const pending of pendingRunTools.values()) pending.reject(new Error(message));
       pendingRunTools.clear();
     };
@@ -457,10 +457,10 @@ function connectOnce(
         pending.resolve({ messages: message.messages, nextCursor: message.nextCursor });
         return;
       }
-      if (message.type === "control.agent.run.journal_ack") {
-        const pending = pendingRunJournals.get(message.requestId);
+      if (message.type === "control.agent.run.transcript_ack") {
+        const pending = pendingRunTranscripts.get(message.requestId);
         if (!pending || pending.runId !== message.runId) return;
-        pendingRunJournals.delete(message.requestId);
+        pendingRunTranscripts.delete(message.requestId);
         pending.resolve(message.accepted);
         return;
       }
@@ -637,7 +637,8 @@ function connectOnce(
           message,
           {
             context: (cursor, runSignal) => requestAgentContext(runId, agentId, cursor, runSignal),
-            journal: (text, runSignal) => requestAgentJournal(runId, agentId, text, runSignal),
+            transcript: (text, runSignal) =>
+              requestAgentTranscript(runId, agentId, text, runSignal),
             tool: (toolCallId, operation, input, runSignal) =>
               requestAgentTool(runId, agentId, toolCallId, operation, input, runSignal),
             result: (ok, code) => sendRunResult(runId, agentId, ok, code),
@@ -716,20 +717,20 @@ function connectOnce(
       });
     }
 
-    function requestAgentJournal(
+    function requestAgentTranscript(
       runId: string,
       agentId: string,
       text: string,
       runSignal: AbortSignal,
     ): Promise<boolean> {
-      const request = makeAgentRunRequest("node.agent.run.journal", runId, agentId, { text });
+      const request = makeAgentRunRequest("node.agent.run.transcript", runId, agentId, { text });
       const requestId = request.requestId;
       return new Promise((resolveAccepted, rejectAccepted) => {
         const onAbort = () => {
-          pendingRunJournals.delete(requestId);
+          pendingRunTranscripts.delete(requestId);
           rejectAccepted(new Error("Agent run was interrupted"));
         };
-        pendingRunJournals.set(requestId, {
+        pendingRunTranscripts.set(requestId, {
           runId,
           resolve: (accepted) => {
             runSignal.removeEventListener("abort", onAbort);
@@ -744,10 +745,10 @@ function connectOnce(
         try {
           sendRequest(socket, request);
         } catch (error) {
-          pendingRunJournals.delete(requestId);
+          pendingRunTranscripts.delete(requestId);
           runSignal.removeEventListener("abort", onAbort);
           rejectAccepted(
-            error instanceof Error ? error : new Error("Could not journal Agent reply"),
+            error instanceof Error ? error : new Error("Could not record the Agent run transcript"),
           );
         }
       });

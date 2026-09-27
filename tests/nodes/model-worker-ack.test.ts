@@ -6,13 +6,13 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 }
 
-it("does not settle the Pi model process until the control-plane journal ACK arrives", async () => {
-  let releaseJournal!: (accepted: boolean) => void, reportJournal!: (text: string) => void;
-  const journalGate = new Promise<boolean>((resolveGate) => {
-    releaseJournal = resolveGate;
+it("does not settle the Pi model process until the control-plane transcript ACK arrives", async () => {
+  let releaseTranscript!: (accepted: boolean) => void, reportTranscript!: (text: string) => void;
+  const transcriptGate = new Promise<boolean>((resolveGate) => {
+    releaseTranscript = resolveGate;
   });
-  const journalSeen = new Promise<string>((resolveText) => {
-    reportJournal = resolveText;
+  const transcriptSeen = new Promise<string>((resolveText) => {
+    reportTranscript = resolveText;
   });
   const controller = new AbortController();
   const worker = startModelProcess({
@@ -20,9 +20,9 @@ it("does not settle the Pi model process until the control-plane journal ACK arr
     modelId: "gpt-4o-mini",
     apiKey: "synthetic-process-test-key",
     entry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
-    onJournal: async (text) => {
-      reportJournal(text);
-      return journalGate;
+    onTranscript: async (text) => {
+      reportTranscript(text);
+      return transcriptGate;
     },
     signal: controller.signal,
   });
@@ -33,7 +33,7 @@ it("does not settle the Pi model process until the control-plane journal ACK arr
       agentId: "06d4fab7-5259-4faa-b51e-6017f3e08f0e",
       sessionId: "e1090cf4-f8f8-43b7-b124-e58a4dadbc1f",
       actionScopeId: "561ad589-5e36-4c2a-98ab-35a9cfbc2e80",
-      outputChannel: {
+      sourceChannel: {
         channelId: "f584ce85-b892-4315-9a2b-00e191bd34dc",
         visibility: "private",
       },
@@ -55,18 +55,18 @@ it("does not settle the Pi model process until the control-plane journal ACK arr
 
   try {
     await Promise.race([
-      journalSeen,
+      transcriptSeen,
       delay(5000).then(() => {
-        throw new Error("Pi model worker did not request a journal commit");
+        throw new Error("Pi model worker did not request a transcript commit");
       }),
     ]);
     await delay(50);
     expect(settled).toBe(false);
-    releaseJournal(true);
+    releaseTranscript(true);
     await run;
     expect(settled).toBe(true);
   } finally {
-    releaseJournal(false);
+    releaseTranscript(false);
     controller.abort();
     worker.close();
   }
@@ -75,7 +75,7 @@ it("does not settle the Pi model process until the control-plane journal ACK arr
 it("waits for the control-plane tool result before asking Pi to generate its final reply", async () => {
   let reachTool!: () => void,
     releaseTool!: () => void,
-    journal = "";
+    transcript = "";
   const toolReached = new Promise<void>((resolveReached) => {
     reachTool = resolveReached;
   });
@@ -88,8 +88,8 @@ it("waits for the control-plane tool result before asking Pi to generate its fin
     modelId: "gpt-4o-mini",
     apiKey: "synthetic-key-tool-ack",
     entry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
-    onJournal: async (text) => {
-      journal = text;
+    onTranscript: async (text) => {
+      transcript = text;
       return true;
     },
     onTool: async (toolCallId, operation, input) => {
@@ -108,7 +108,7 @@ it("waits for the control-plane tool result before asking Pi to generate its fin
       agentId: "06d4fab7-5259-4faa-b51e-6017f3e08f0e",
       sessionId: "e1090cf4-f8f8-43b7-b124-e58a4dadbc1f",
       actionScopeId: "561ad589-5e36-4c2a-98ab-35a9cfbc2e80",
-      outputChannel: {
+      sourceChannel: {
         channelId: "f584ce85-b892-4315-9a2b-00e191bd34dc",
         visibility: "private",
       },
@@ -131,10 +131,10 @@ it("waits for the control-plane tool result before asking Pi to generate its fin
       }),
     ]);
     await delay(50);
-    expect(journal).toBe("");
+    expect(transcript).toBe("");
     releaseTool();
     await run;
-    expect(journal).toBe("已收到工具结果。");
+    expect(transcript).toBe("已收到工具结果。");
   } finally {
     releaseTool();
     controller.abort();
@@ -142,18 +142,18 @@ it("waits for the control-plane tool result before asking Pi to generate its fin
   }
 }, 10000);
 
-it("gives Pi source visibility markers and an explicit output destination", async () => {
+it("marks each message source and tells Pi how to speak in a chosen conversation", async () => {
   const publicChannelId = "f584ce85-b892-4315-9a2b-00e191bd34dc",
     privateChannelId = "1fa0be92-e11f-4c5c-a4a6-59bc86ea0f8f";
-  let journal = "";
+  let transcript = "";
   const controller = new AbortController();
   const worker = startModelProcess({
     provider: "openai",
     modelId: "gpt-4o-mini",
     apiKey: "synthetic-key-inspect-context",
     entry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
-    onJournal: async (text) => {
-      journal = text;
+    onTranscript: async (text) => {
+      transcript = text;
       return true;
     },
     signal: controller.signal,
@@ -165,7 +165,7 @@ it("gives Pi source visibility markers and an explicit output destination", asyn
       agentId: "06d4fab7-5259-4faa-b51e-6017f3e08f0e",
       sessionId: "e1090cf4-f8f8-43b7-b124-e58a4dadbc1f",
       actionScopeId: "561ad589-5e36-4c2a-98ab-35a9cfbc2e80",
-      outputChannel: { channelId: publicChannelId, visibility: "public" },
+      sourceChannel: { channelId: publicChannelId, visibility: "public" },
       messages: [
         {
           sequence: 1,
@@ -187,10 +187,15 @@ it("gives Pi source visibility markers and an explicit output destination", asyn
       prompt: { name: "小林", role: "测试助手", description: "Synthetic test Agent" },
     });
 
-    expect(journal).toContain(`频道 ${publicChannelId}（公开）`);
-    expect(journal).toContain(`频道 ${privateChannelId}；可见范围：私密；历史记录`);
-    expect(journal).toContain(`频道 ${publicChannelId}；可见范围：公开；本次输入`);
-    expect(journal).toContain("公开频道回复不得泄露任何私密频道内容");
+    expect(transcript).toContain(`本次输入来自：频道 ${publicChannelId}（公开）`);
+    expect(transcript).toContain(`频道 ${privateChannelId}；可见范围：私密；历史记录`);
+    expect(transcript).toContain(`频道 ${publicChannelId}；可见范围：公开；本次输入`);
+    // Plain text is private; speaking requires the explicit send tool with a chosen destination.
+    expect(transcript).toContain("你的普通正文只写入你自己的 Agent 会话记录");
+    expect(transcript).toContain("不会发送给任何频道、讨论串或私信");
+    expect(transcript).toContain("必须调用 messages.send");
+    expect(transcript).toContain("显式给出 conversationId");
+    expect(transcript).toContain("公开对话中的发言不得泄露任何私密对话的内容");
   } finally {
     controller.abort();
     worker.close();
@@ -201,17 +206,17 @@ it.each([
   ["synthetic-key-error-text", "error"],
   ["synthetic-key-aborted-text", "aborted"],
 ])(
-  "fails a Pi turn with a %s stop reason without journaling its text",
+  "fails a Pi turn with a %s stop reason without recording its text",
   async (apiKey) => {
-    let journalCount = 0;
+    let transcriptCount = 0;
     const controller = new AbortController();
     const worker = startModelProcess({
       provider: "openai",
       modelId: "gpt-4o-mini",
       apiKey,
       entry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
-      onJournal: async () => {
-        journalCount++;
+      onTranscript: async () => {
+        transcriptCount++;
         return true;
       },
       signal: controller.signal,
@@ -224,7 +229,7 @@ it.each([
           agentId: "06d4fab7-5259-4faa-b51e-6017f3e08f0e",
           sessionId: "e1090cf4-f8f8-43b7-b124-e58a4dadbc1f",
           actionScopeId: "561ad589-5e36-4c2a-98ab-35a9cfbc2e80",
-          outputChannel: {
+          sourceChannel: {
             channelId: "f584ce85-b892-4315-9a2b-00e191bd34dc",
             visibility: "private",
           },
@@ -241,7 +246,7 @@ it.each([
           prompt: { name: "小林", role: "测试助手", description: "Synthetic test Agent" },
         }),
       ).rejects.toThrow("Agent model run failed");
-      expect(journalCount).toBe(0);
+      expect(transcriptCount).toBe(0);
     } finally {
       controller.abort();
       worker.close();
@@ -251,15 +256,15 @@ it.each([
 );
 
 it("treats empty Pi content with a normal stop reason as a successful silent turn", async () => {
-  let journalCount = 0;
+  let transcriptCount = 0;
   const controller = new AbortController();
   const worker = startModelProcess({
     provider: "openai",
     modelId: "gpt-4o-mini",
     apiKey: "synthetic-key-silent",
     entry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
-    onJournal: async () => {
-      journalCount++;
+    onTranscript: async () => {
+      transcriptCount++;
       return true;
     },
     signal: controller.signal,
@@ -271,7 +276,7 @@ it("treats empty Pi content with a normal stop reason as a successful silent tur
       agentId: "06d4fab7-5259-4faa-b51e-6017f3e08f0e",
       sessionId: "e1090cf4-f8f8-43b7-b124-e58a4dadbc1f",
       actionScopeId: "561ad589-5e36-4c2a-98ab-35a9cfbc2e80",
-      outputChannel: {
+      sourceChannel: {
         channelId: "f584ce85-b892-4315-9a2b-00e191bd34dc",
         visibility: "private",
       },
@@ -287,7 +292,7 @@ it("treats empty Pi content with a normal stop reason as a successful silent tur
       ],
       prompt: { name: "小林", role: "测试助手", description: "Synthetic test Agent" },
     });
-    expect(journalCount).toBe(0);
+    expect(transcriptCount).toBe(0);
   } finally {
     controller.abort();
     worker.close();

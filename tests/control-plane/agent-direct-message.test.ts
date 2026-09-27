@@ -1249,7 +1249,7 @@ it("recovers the completed tool action and result in the Agent's next run contex
     });
   expect(action.ok).toBe(true);
   expect(
-    app.chat.commitAgentReply(firstRun.runId, nodeId, agentId, randomUUID(), "已完成。", false),
+    app.chat.recordAgentRunTranscript(firstRun.runId, nodeId, agentId, randomUUID(), "已完成。"),
   ).toBe(true);
   await app.nodes.receive(
     socket,
@@ -1326,12 +1326,12 @@ it("restarts the real Pi worker after a lost result without replaying a committe
         observedContexts.push(page.messages);
         return { messages: page.messages, nextCursor: page.nextCursor };
       },
-      journal: async (text) => {
+      transcript: async (text) => {
         const requestId = randomUUID();
         await app.nodes.receive(
           socket,
           JSON.stringify({
-            type: "node.agent.run.journal",
+            type: "node.agent.run.transcript",
             requestId,
             runId: run.runId,
             agentId,
@@ -1478,6 +1478,104 @@ it("restarts the real Pi worker after a lost result without replaying a committe
       .prepare("SELECT count(*) AS count FROM owner_agent_tool_actions WHERE session_id=?")
       .get(firstRun.sessionId),
   ).toEqual({ count: 6 });
+});
+
+it("records every plain turn of one run, including narration beside a tool call", async () => {
+  const { app, cookie, db, nodeId, socket } = await setup();
+  const agentId = randomUUID();
+  app.agents.prepare({
+    id: agentId,
+    nodeId,
+    name: "Narrating partner",
+    role: "Explains itself before calling a tool",
+    description: "Synthetic multi-turn transcript fixture.",
+    model: { provider: "openai", id: "gpt-4o-mini" },
+  });
+  app.agents.complete(
+    agentId,
+    {
+      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      uid: 23001,
+      gid: 23001,
+      home: `/var/lib/mate/agents/${agentId}`,
+      homeMarker: "a".repeat(64),
+    },
+    app.chat,
+  );
+  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  await app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-key-narrated-tool-turn" }),
+  });
+  const runStart = socket.sent.length;
+  app.chat.createMessage(direct.id, "先说明再发送这条消息。");
+  const run = await waitForRun(socket, runStart);
+
+  const resultAcks: Promise<void>[] = [];
+  const transport: AgentRunTransport = {
+    context: async () => callAgentRunContext(app, socket, run),
+    transcript: async (text) => {
+      const fromIndex = socket.sent.length;
+      await app.nodes.receive(
+        socket,
+        JSON.stringify({
+          type: "node.agent.run.transcript",
+          requestId: randomUUID(),
+          runId: run.runId,
+          agentId,
+          text,
+        }),
+      );
+      return (JSON.parse(socket.sent.at(fromIndex)!) as { accepted?: boolean }).accepted === true;
+    },
+    tool: async (toolCallId, operation, input) => {
+      const result = await callAgentTool(app, socket, run, toolCallId, operation, input);
+      return result.ok
+        ? { ok: true, result: result.result }
+        : { ok: false, error: result.error ?? "Agent tool request was refused" };
+    },
+    result: (ok, code) => {
+      resultAcks.push(
+        app.nodes.receive(
+          socket,
+          JSON.stringify({
+            type: "node.agent.run.result",
+            requestId: randomUUID(),
+            runId: run.runId,
+            agentId,
+            ok,
+            ...(ok ? {} : { code: code ?? "model_failed" }),
+          }),
+        ),
+      );
+    },
+  };
+  await runAgentModel(run, transport, new AbortController().signal, {
+    modelWorkerEntry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
+  });
+  await Promise.all(resultAcks);
+
+  // Both plain turns of the run survive in its own session record instead of failing the run.
+  expect(
+    db
+      .prepare(
+        "SELECT text FROM owner_agent_session_journal WHERE run_id=? AND role='assistant' AND tool_action_id IS NULL ORDER BY seq",
+      )
+      .all(run.runId),
+  ).toEqual([
+    { text: "我先说明一下，然后发送这条消息。" },
+    { text: "工具已发送，这是我的最终正文。" },
+  ]);
+  expect(db.prepare("SELECT state FROM owner_agent_runs WHERE id=?").get(run.runId)).toEqual({
+    state: "completed",
+  });
+  // Only the explicit send became public; the narration and the final answer did not.
+  expect(app.chat.listMessages(direct.id, undefined, 20)!.messages).toMatchObject([
+    { author: { kind: "human" }, text: "先说明再发送这条消息。" },
+    { author: { kind: "agent", id: agentId }, text: "带说明的工具发送消息。" },
+  ]);
+  expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toHaveLength(0);
 });
 
 it("commits an eligible peer invitation once and rejects invalid invitation targets", async () => {
@@ -2019,21 +2117,24 @@ it("limits each run to its committed input batch and consumes silent batches", a
   await app.nodes.receive(
     socket,
     JSON.stringify({
-      type: "node.agent.run.journal",
+      type: "node.agent.run.transcript",
       requestId: randomUUID(),
       runId: firstRun.runId,
       agentId,
-      text: "第一批次的可见回复。",
+      text: "第一批次的私有正文。",
     }),
   );
   expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
-    type: "control.agent.run.journal_ack",
+    type: "control.agent.run.transcript_ack",
     accepted: true,
   });
   expect(
     app.chat.listAgentSessionJournal(agentId, 0, 100).messages.map((message) => message.text),
-  ).toContain("第一批次的可见回复。");
+  ).toContain("第一批次的私有正文。");
+  // Recording a turn consumes nothing: the batch is covered only when the run succeeds.
   expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toMatchObject([
+    { message: { text: "同一来源批次中的第一条频道输入。" } },
+    { message: { text: "同一来源批次中的第二条频道输入。" } },
     { message: { text: "运行开始后才到达的下一条频道输入。" } },
   ]);
   expect(app.agents.get(agentId)?.sessionId).toBe(firstRun.sessionId);
@@ -2048,6 +2149,9 @@ it("limits each run to its committed input batch and consumes silent batches", a
       ok: true,
     }),
   );
+  expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toMatchObject([
+    { message: { text: "运行开始后才到达的下一条频道输入。" } },
+  ]);
   const secondRunStart = socket.sent.length,
     secondRun = await waitForRun(socket, secondRunStart);
   expect(secondRun.sessionId).toBe(firstRun.sessionId);
@@ -2058,7 +2162,7 @@ it("limits each run to its committed input batch and consumes silent batches", a
   expect(secondContext.messages.map((message) => message.text)).toEqual([
     "同一来源批次中的第一条频道输入。",
     "同一来源批次中的第二条频道输入。",
-    "第一批次的可见回复。",
+    "第一批次的私有正文。",
     "运行开始后才到达的下一条频道输入。",
   ]);
   // A successful model turn may choose silence; the batch is still committed as processed.
@@ -2073,11 +2177,11 @@ it("limits each run to its committed input batch and consumes silent batches", a
     }),
   );
   expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toHaveLength(0);
+  // Neither turn published anything: the conversation only holds the owner's inputs.
   expect(app.chat.listMessages(room.id, undefined, 20)?.messages).toMatchObject([
     { author: { kind: "human" }, text: "同一来源批次中的第一条频道输入。" },
     { author: { kind: "human" }, text: "同一来源批次中的第二条频道输入。" },
     { author: { kind: "human" }, text: "运行开始后才到达的下一条频道输入。" },
-    { author: { kind: "agent", id: agentId }, text: "第一批次的可见回复。" },
   ]);
 });
 
@@ -2157,11 +2261,11 @@ it("keeps a later private input out of a public channel run", async () => {
   ]);
   expect(firstRun).toMatchObject({ channelVisibility: "public" });
 
-  const writeReply = async (runId: string, text: string) => {
+  const writeTranscript = async (runId: string, text: string) => {
     await app.nodes.receive(
       socket,
       JSON.stringify({
-        type: "node.agent.run.journal",
+        type: "node.agent.run.transcript",
         requestId: randomUUID(),
         runId,
         agentId,
@@ -2169,7 +2273,7 @@ it("keeps a later private input out of a public channel run", async () => {
       }),
     );
     expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
-      type: "control.agent.run.journal_ack",
+      type: "control.agent.run.transcript_ack",
       accepted: true,
     });
   };
@@ -2186,17 +2290,22 @@ it("keeps a later private input out of a public channel run", async () => {
     );
   };
 
-  await writeReply(firstRun.runId, "只回应公开频道输入。");
-  expect(app.chat.listMessages(publicRoom.id, undefined, 20)?.messages.at(-1)).toMatchObject({
-    author: { kind: "agent", id: agentId },
-    text: "只回应公开频道输入。",
-  });
+  await writeTranscript(firstRun.runId, "只写进自己会话记录的公开频道回合。");
+  // A recorded turn publishes nothing and consumes nothing by itself.
+  expect(app.chat.listMessages(publicRoom.id, undefined, 20)?.messages).toMatchObject([
+    { author: { kind: "human" }, text: "公开输入必须触发公开频道 run。" },
+  ]);
   expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toMatchObject([
+    { channelId: publicRoom.id, message: { text: "公开输入必须触发公开频道 run。" } },
     { channelId: direct.id, message: { text: "这条私信不能进入公开回复。" } },
   ]);
 
   const privateRunStart = socket.sent.length;
   await finishRun(firstRun.runId);
+  // Completing the run covers only the batch its boundary captured.
+  expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toMatchObject([
+    { channelId: direct.id, message: { text: "这条私信不能进入公开回复。" } },
+  ]);
   const privateRun = await waitForRun(socket, privateRunStart);
   expect(privateRun.channelId).toBe(direct.id);
   expect(privateRun).toMatchObject({ channelVisibility: "private" });
@@ -2210,7 +2319,7 @@ it("keeps a later private input out of a public channel run", async () => {
     },
     {
       role: "assistant",
-      text: "只回应公开频道输入。",
+      text: "只写进自己会话记录的公开频道回合。",
       sourceChannelId: publicRoom.id,
       sourceVisibility: "public",
       currentRunInput: false,
@@ -2223,11 +2332,10 @@ it("keeps a later private input out of a public channel run", async () => {
       currentRunInput: true,
     },
   ]);
-  await writeReply(privateRun.runId, "私信输入在私信里得到回复。");
-  expect(app.chat.listMessages(direct.id, undefined, 20)?.messages.at(-1)).toMatchObject({
-    author: { kind: "agent", id: agentId },
-    text: "私信输入在私信里得到回复。",
-  });
+  await writeTranscript(privateRun.runId, "私信输入对应的私有回合。");
+  expect(app.chat.listMessages(direct.id, undefined, 20)?.messages).toMatchObject([
+    { author: { kind: "human" }, text: "这条私信不能进入公开回复。" },
+  ]);
   await finishRun(privateRun.runId);
 
   const sendMessage = async (channelId: string, text: string) => {
@@ -2264,7 +2372,7 @@ it("keeps a later private input out of a public channel run", async () => {
   expect(reversePrivateContext.messages.map((message) => message.text)).not.toContain(
     "后到的公开输入需要等待。",
   );
-  await writeReply(reversePrivateRun.runId, "反向顺序私信回复。");
+  await writeTranscript(reversePrivateRun.runId, "反向顺序私信回合。");
   const reversePublicStart = socket.sent.length;
   await finishRun(reversePrivateRun.runId);
 
@@ -2279,11 +2387,12 @@ it("keeps a later private input out of a public channel run", async () => {
     sourceVisibility: "public",
     currentRunInput: true,
   });
-  await writeReply(reversePublicRun.runId, "公开输入在公开频道里回复。");
-  expect(app.chat.listMessages(publicRoom.id, undefined, 20)?.messages.at(-1)).toMatchObject({
-    author: { kind: "agent", id: agentId },
-    text: "公开输入在公开频道里回复。",
-  });
+  await writeTranscript(reversePublicRun.runId, "公开输入对应的私有回合。");
+  expect(
+    app.chat
+      .listMessages(publicRoom.id, undefined, 20)!
+      .messages.filter((message) => message.author.kind === "agent"),
+  ).toHaveLength(0);
   await finishRun(reversePublicRun.runId);
 });
 
@@ -2329,21 +2438,23 @@ it("keeps an archived run input pending and retries it after the owner unarchive
   await app.nodes.receive(
     socket,
     JSON.stringify({
-      type: "node.agent.run.journal",
+      type: "node.agent.run.transcript",
       requestId: randomUUID(),
       runId: run.runId,
       agentId,
-      text: "归档后不得提交的回复。",
+      text: "归档期间仍然只写进自己会话记录的正文。",
     }),
   );
+  // The private record is accepted, but it still publishes nothing.
   expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
-    type: "control.agent.run.journal_ack",
-    accepted: false,
+    type: "control.agent.run.transcript_ack",
+    accepted: true,
   });
   expect(app.chat.listMessages(direct.id, undefined, 20)?.messages).toMatchObject([
     { author: { kind: "human" }, text: "归档期间不可写入回复的私信。" },
   ]);
 
+  // A successful turn still cannot consume an input from an archived conversation.
   await app.nodes.receive(
     socket,
     JSON.stringify({
@@ -2351,8 +2462,7 @@ it("keeps an archived run input pending and retries it after the owner unarchive
       requestId: run.runId,
       runId: run.runId,
       agentId,
-      ok: false,
-      code: "model_failed",
+      ok: true,
     }),
   );
   const db = new Database(join(directory, "control-plane", "control-plane.sqlite"), {
@@ -2391,21 +2501,30 @@ it("keeps an archived run input pending and retries it after the owner unarchive
   await app.nodes.receive(
     socket,
     JSON.stringify({
-      type: "node.agent.run.journal",
+      type: "node.agent.run.transcript",
       requestId: randomUUID(),
       runId: retry.runId,
       agentId,
-      text: "频道恢复后的私信回复。",
+      text: "频道恢复后记录的私有正文。",
     }),
   );
   expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
-    type: "control.agent.run.journal_ack",
+    type: "control.agent.run.transcript_ack",
     accepted: true,
   });
-  expect(app.chat.listMessages(direct.id, undefined, 20)?.messages.at(-1)).toMatchObject({
-    author: { kind: "agent", id: agentId },
-    text: "频道恢复后的私信回复。",
-  });
+  expect(app.chat.listMessages(direct.id, undefined, 20)?.messages).toMatchObject([
+    { author: { kind: "human" }, text: "归档期间不可写入回复的私信。" },
+  ]);
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.agent.run.result",
+      requestId: retry.runId,
+      runId: retry.runId,
+      agentId,
+      ok: true,
+    }),
+  );
   expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toHaveLength(0);
 });
 
@@ -2499,24 +2618,22 @@ it("does not let an archived earlier source block or join a later source run", a
   await app.nodes.receive(
     socket,
     JSON.stringify({
-      type: "node.agent.run.journal",
+      type: "node.agent.run.transcript",
       requestId: randomUUID(),
       runId: laterRun.runId,
       agentId,
-      text: "只在来源 B 回复。",
+      text: "只在来源 B 记录的私有正文。",
     }),
   );
   expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
-    type: "control.agent.run.journal_ack",
+    type: "control.agent.run.transcript_ack",
     accepted: true,
   });
-  expect(app.chat.listMessages(direct.id, undefined, 20)?.messages.at(-1)).toMatchObject({
-    author: { kind: "agent", id: agentId },
-    text: "只在来源 B 回复。",
-  });
-  expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toMatchObject([
-    { channelId: earlierSource.id, message: { text: "较早来源 A 的待处理私信。" } },
-  ]);
+  expect(
+    app.chat
+      .listMessages(direct.id, undefined, 20)
+      ?.messages.filter((message) => message.author.kind === "agent"),
+  ).toHaveLength(0);
   await app.nodes.receive(
     socket,
     JSON.stringify({
@@ -2527,6 +2644,10 @@ it("does not let an archived earlier source block or join a later source run", a
       ok: true,
     }),
   );
+  // Completing the later run leaves the archived source's input untouched.
+  expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toMatchObject([
+    { channelId: earlierSource.id, message: { text: "较早来源 A 的待处理私信。" } },
+  ]);
 
   const earlierRunStart = socket.sent.length;
   const unarchive = await app.request(`/api/owner/channels/${earlierSource.id}`, {
@@ -2547,7 +2668,7 @@ it("does not let an archived earlier source block or join a later source run", a
     },
     {
       role: "assistant",
-      text: "只在来源 B 回复。",
+      text: "只在来源 B 记录的私有正文。",
       sourceChannelId: direct.id,
       sourceVisibility: "private",
       currentRunInput: false,
@@ -2562,21 +2683,32 @@ it("does not let an archived earlier source block or join a later source run", a
   await app.nodes.receive(
     socket,
     JSON.stringify({
-      type: "node.agent.run.journal",
+      type: "node.agent.run.transcript",
       requestId: randomUUID(),
       runId: earlierRun.runId,
       agentId,
-      text: "来源 A 恢复后得到回复。",
+      text: "来源 A 恢复后记录的私有正文。",
     }),
   );
   expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
-    type: "control.agent.run.journal_ack",
+    type: "control.agent.run.transcript_ack",
     accepted: true,
   });
-  expect(app.chat.listMessages(earlierSource.id, undefined, 20)?.messages.at(-1)).toMatchObject({
-    author: { kind: "agent", id: agentId },
-    text: "来源 A 恢复后得到回复。",
-  });
+  expect(
+    app.chat
+      .listMessages(earlierSource.id, undefined, 20)
+      ?.messages.filter((message) => message.author.kind === "agent"),
+  ).toHaveLength(0);
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.agent.run.result",
+      requestId: earlierRun.runId,
+      runId: earlierRun.runId,
+      agentId,
+      ok: true,
+    }),
+  );
   expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toHaveLength(0);
 });
 
@@ -4517,16 +4649,16 @@ it("keeps a real Pi model reply private when its reminder runs in an archived DM
     }),
   ).toMatchObject({ ok: true });
   const responses: Array<{ ok: boolean; code?: string }> = [];
-  let journalRequestId = "";
+  let transcriptRequestId = "";
   const transport: AgentRunTransport = {
     context: async () => callAgentRunContext(app, reconnected, run),
-    journal: async (text) => {
-      journalRequestId = randomUUID();
+    transcript: async (text) => {
+      transcriptRequestId = randomUUID();
       await app.nodes.receive(
         reconnected,
         JSON.stringify({
-          type: "node.agent.run.journal",
-          requestId: journalRequestId,
+          type: "node.agent.run.transcript",
+          requestId: transcriptRequestId,
           runId: run.runId,
           agentId,
           text,
@@ -4566,6 +4698,7 @@ it("keeps a real Pi model reply private when its reminder runs in an archived DM
     state: "completed",
     error_code: null,
   });
+  // The archived reminder run still records its own turn privately and keeps it verbatim.
   expect(
     db
       .prepare(
@@ -4574,20 +4707,25 @@ it("keeps a real Pi model reply private when its reminder runs in an archived DM
       .get(run.runId),
   ).toMatchObject({
     message_id: null,
-    text: expect.stringContaining("未送达"),
+    text: "这是首次测试回复。",
   });
   expect(
-    app.chat.commitAgentReply(
+    app.chat.recordAgentRunTranscript(
       run.runId,
       nodeId,
       agentId,
-      journalRequestId,
+      transcriptRequestId,
       "这是首次测试回复。",
-      true,
     ),
   ).toBe(true);
   expect(
-    app.chat.commitAgentReply(run.runId, nodeId, agentId, randomUUID(), "这是首次测试回复。", true),
+    app.chat.recordAgentRunTranscript(
+      run.runId,
+      nodeId,
+      agentId,
+      randomUUID(),
+      "这是首次测试回复。",
+    ),
   ).toBe(false);
 });
 

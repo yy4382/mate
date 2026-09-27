@@ -454,7 +454,7 @@ it("migrates paired-node control-plane data and enables Agent foreign keys", () 
 
   const auth = new OwnerAuth({ dataDir: directory });
   try {
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(22);
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(23);
     expect(auth.db.pragma("foreign_keys", { simple: true })).toBe(1);
     expect(auth.db.prepare("SELECT id FROM nodes").get()).toEqual({
       id: "c5342142-9cf5-4b22-86f3-bdc46bb471f2",
@@ -465,7 +465,7 @@ it("migrates paired-node control-plane data and enables Agent foreign keys", () 
       name: "owner_agents",
     });
     expect(controlPlaneMigrations.map((migration) => migration.fromRevision)).toEqual([
-      3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
+      3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
     ]);
     for (const [table, column] of [
       ["owner_agent_process_operations", "node_receipt_revision"],
@@ -494,7 +494,7 @@ it("adds workspace access metadata on new and upgraded control-plane databases",
 
   const auth = new OwnerAuth({ dataDir: directory });
   try {
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(22);
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(23);
     expect(
       auth.db
         .prepare("SELECT name FROM sqlite_master WHERE name='owner_workspace_access_audit'")
@@ -511,7 +511,7 @@ it("adds workspace access metadata on new and upgraded control-plane databases",
     const newDirectory = mkdtempSync(join(tmpdir(), "mate-workspace-audit-new-")),
       newAuth = new OwnerAuth({ dataDir: newDirectory });
     try {
-      expect(newAuth.db.pragma("user_version", { simple: true })).toBe(22);
+      expect(newAuth.db.pragma("user_version", { simple: true })).toBe(23);
       expect(
         newAuth.db
           .prepare("SELECT name FROM sqlite_master WHERE name='owner_workspace_access_audit'")
@@ -538,7 +538,7 @@ it("adds Agent recovery state to a revision 15 database while preserving file ac
 
   const auth = new OwnerAuth({ dataDir: directory });
   try {
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(22);
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(23);
     for (const table of [
       "owner_workspace_access_audit",
       "owner_agent_activity",
@@ -602,7 +602,7 @@ it("backfills committed conversation tool actions into recoverable journal histo
 
   const auth = new OwnerAuth({ dataDir: directory });
   try {
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(22);
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(23);
     expect(
       auth.db
         .prepare(
@@ -663,7 +663,7 @@ it("backfills pending channel deliveries into the shared session journal when up
 
   const auth = new OwnerAuth({ dataDir: directory });
   try {
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(22);
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(23);
     expect(
       auth.db
         .prepare(

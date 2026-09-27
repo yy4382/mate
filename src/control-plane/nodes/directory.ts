@@ -129,7 +129,7 @@ interface PendingWorkspaceOperation {
 }
 
 export interface AgentRunHandlers {
-  /** Cursor is the per-run context projection position, not a persistent journal sequence. */
+  /** Cursor is the per-run context projection position, not a persistent record sequence. */
   context(
     runId: string,
     agentId: string,
@@ -148,13 +148,13 @@ export interface AgentRunHandlers {
         nextCursor: number | null;
       }
     | undefined;
-  journal(
+  /** Record one plain assistant turn in the Agent's own session record; never publishes. */
+  transcript(
     runId: string,
     nodeId: string,
     agentId: string,
     requestId: string,
     text: string,
-    replayOnly: boolean,
   ): boolean;
   tool(
     runId: string,
@@ -175,7 +175,7 @@ type NodeAgentRunRequest = Extract<
   {
     type:
       | "node.agent.run.context"
-      | "node.agent.run.journal"
+      | "node.agent.run.transcript"
       | "node.agent.run.tool"
       | "node.agent.run.result";
   }
@@ -374,7 +374,7 @@ export class NodeDirectory {
       return this.receiveAgentRunToolMessage(socket, session, request);
     if (
       request.type === "node.agent.run.context" ||
-      request.type === "node.agent.run.journal" ||
+      request.type === "node.agent.run.transcript" ||
       request.type === "node.agent.run.result"
     )
       return this.receiveAgentRunMessage(socket, session, request);
@@ -1312,23 +1312,22 @@ export class NodeDirectory {
       return;
     }
 
-    if (request.type === "node.agent.run.journal") {
+    if (request.type === "node.agent.run.transcript") {
       let accepted = false;
       try {
         accepted =
-          this.agentRunHandlers?.journal(
+          this.agentRunHandlers?.transcript(
             request.runId,
             nodeId,
             request.agentId,
             request.requestId,
             request.text,
-            !pending,
           ) ?? false;
       } catch {
         accepted = false;
       }
       this.send(socket, {
-        type: "control.agent.run.journal_ack",
+        type: "control.agent.run.transcript_ack",
         requestId: request.requestId,
         runId: request.runId,
         accepted,

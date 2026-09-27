@@ -4,9 +4,9 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import type { ModelRunSpec } from "./model-worker.js";
 
-const journalMessageSchema = z
+const transcriptMessageSchema = z
   .object({
-    type: z.literal("journal"),
+    type: z.literal("transcript"),
     nonce: z.string().uuid(),
     requestId: z.string().uuid(),
     text: z.string().min(1).max(20_000),
@@ -22,9 +22,9 @@ const workerResultSchema = z.discriminatedUnion("type", [
     })
     .strict(),
 ]);
-const journalAckSchema = z
+const transcriptAckSchema = z
   .object({
-    type: z.literal("journal_ack"),
+    type: z.literal("transcript_ack"),
     nonce: z.string().uuid(),
     requestId: z.string().uuid(),
     accepted: z.boolean(),
@@ -76,7 +76,8 @@ export interface ModelProcessOptions {
   apiKey: string;
   entry?: string;
   identity?: ModelProcessIdentity;
-  onJournal(text: string): Promise<boolean>;
+  /** Records one plain assistant turn in the Agent session record; never publishes. */
+  onTranscript(text: string): Promise<boolean>;
   onTool?(
     toolCallId: string,
     operation: string,
@@ -92,7 +93,7 @@ export interface ModelProcessSession {
 
 /** Start one credential-bearing Pi model loop in a short-lived child process. */
 export function startModelProcess(options: ModelProcessOptions): ModelProcessSession {
-  const { provider, modelId, entry, identity, onJournal, onTool, signal } = options;
+  const { provider, modelId, entry, identity, onTranscript, onTool, signal } = options;
   let apiKey = options.apiKey;
   const nonce = randomUUID(),
     env: NodeJS.ProcessEnv = {
@@ -133,7 +134,7 @@ export function startModelProcess(options: ModelProcessOptions): ModelProcessSes
       if (active) return Promise.reject(new Error("Agent model process already ran"));
       active = true;
       return waitForModelProcess(child, nonce, spec, {
-        onJournal,
+        onTranscript,
         ...(onTool ? { onTool } : {}),
         signal,
       }).finally(() => {
@@ -159,7 +160,7 @@ function waitForModelProcess(
   child: ChildProcess,
   nonce: string,
   spec: ModelRunSpec,
-  hooks: Pick<ModelProcessOptions, "onJournal" | "onTool" | "signal">,
+  hooks: Pick<ModelProcessOptions, "onTranscript" | "onTool" | "signal">,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     let settled = false,
@@ -178,25 +179,25 @@ function waitForModelProcess(
     const onAbort = () => fail("Agent model run aborted");
     const onMessage = async (raw: unknown) => {
       if (settled) return;
-      const journal = journalMessageSchema.safeParse(raw);
-      if (journal.success && journal.data.nonce === nonce) {
+      const transcript = transcriptMessageSchema.safeParse(raw);
+      if (transcript.success && transcript.data.nonce === nonce) {
         if (requestBusy) return fail("Agent model worker sent overlapping control requests");
         requestBusy = true;
         let accepted = false;
         try {
-          accepted = await hooks.onJournal(journal.data.text);
+          accepted = await hooks.onTranscript(transcript.data.text);
         } catch {
           accepted = false;
         }
         if (!settled && child.connected)
           child.send({
-            type: "journal_ack",
+            type: "transcript_ack",
             nonce,
-            requestId: journal.data.requestId,
+            requestId: transcript.data.requestId,
             accepted,
           });
         requestBusy = false;
-        if (!accepted) fail("Control plane rejected the Agent session journal");
+        if (!accepted) fail("Control plane rejected the Agent run transcript");
         return;
       }
       const tool = toolMessageSchema.safeParse(raw);
@@ -245,5 +246,3 @@ function waitForModelProcess(
     child.send({ type: "run", nonce, spec });
   });
 }
-
-export const modelWorkerJournalAckSchema = journalAckSchema;

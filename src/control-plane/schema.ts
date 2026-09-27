@@ -5,6 +5,7 @@ import { ownerAuthSchema } from "./owner-auth-schema.js";
 import { agentDirectorySchema } from "./agents/schema.js";
 import { modelCredentialSchema } from "./model-credentials.js";
 import {
+  agentRunTranscriptSchemaV23,
   agentJournalReplaySchema,
   agentRunBatchSchemaV9,
   agentRunContextHistorySchemaV10,
@@ -50,7 +51,10 @@ export const controlPlaneSchemaV18 = `${controlPlaneSchemaV17}\n${taskReminderSc
 export const controlPlaneSchemaV19 = `${controlPlaneSchemaV18}\n${agentLifecycleSchemaV19}`;
 export const controlPlaneSchemaV20 = `${controlPlaneSchemaV19}\n${privilegedApprovalSchemaV20}`;
 export const controlPlaneSchemaV21 = `${controlPlaneSchemaV20}\n${recoveryHoldSchemaV21}`;
-export const controlPlaneSchema = `${controlPlaneSchemaV21}\n${recoveryVersionsSchemaV22}`;
+export const controlPlaneSchemaV22 = `${controlPlaneSchemaV21}\n${recoveryVersionsSchemaV22}`;
+
+/** The private control-plane format that records every plain assistant turn of a run. */
+export const controlPlaneSchema = `${controlPlaneSchemaV22}\n${agentRunTranscriptSchemaV23}`;
 
 export const controlPlaneMigrations = [
   {
@@ -183,7 +187,14 @@ export const controlPlaneMigrations = [
     fromRevision: 21,
     toRevision: 22,
     previousSchema: controlPlaneSchemaV21,
-    nextSchema: controlPlaneSchema,
+    nextSchema: controlPlaneSchemaV22,
     migrationSchema: recoveryVersionsSchemaV22,
+  },
+  {
+    fromRevision: 22,
+    toRevision: 23,
+    previousSchema: controlPlaneSchemaV22,
+    nextSchema: controlPlaneSchema,
+    migrationSchema: agentRunTranscriptSchemaV23,
   },
 ] as const;

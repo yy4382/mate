@@ -77,8 +77,8 @@ export class AgentRunCoordinator {
     nodes.setAgentRunHandlers({
       context: (runId, agentId, cursor, limit) =>
         this.readRunContext(runId, agentId, cursor, limit),
-      journal: (runId, nodeId, agentId, requestId, text, replayOnly) =>
-        chat.commitAgentReply(runId, nodeId, agentId, requestId, text, replayOnly),
+      transcript: (runId, nodeId, agentId, requestId, text) =>
+        chat.recordAgentRunTranscript(runId, nodeId, agentId, requestId, text),
       tool: (runId, nodeId, agentId, toolCallId, operation, input) =>
         this.executeAgentTool(runId, nodeId, agentId, toolCallId, operation, input),
       result: (runId, agentId, ok, code) => this.finishRun(runId, agentId, ok, code),
@@ -881,7 +881,7 @@ export class AgentRunCoordinator {
       .get(runId, agentId) as { state: string } | undefined;
     if (!existing || existing.state !== "running") return;
     if (ok) {
-      if (this.chat.completeAgentRunSilently(runId, agentId))
+      if (this.chat.completeAgentRun(runId, agentId))
         recordAgentActivity(this.db, {
           agentId,
           kind: "run.completed",

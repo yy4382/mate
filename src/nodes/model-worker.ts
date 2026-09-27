@@ -29,7 +29,7 @@ const runSchema = z
         agentId: z.string().uuid(),
         sessionId: z.string().uuid(),
         actionScopeId: z.string().uuid(),
-        outputChannel: z
+        sourceChannel: z
           .object({
             channelId: z.string().uuid(),
             visibility: z.enum(["public", "private"]),
@@ -47,9 +47,9 @@ const runSchema = z
       .strict(),
   })
   .strict();
-const replySchema = z
+const transcriptAckSchema = z
   .object({
-    type: z.literal("journal_ack"),
+    type: z.literal("transcript_ack"),
     nonce: z.string().uuid(),
     requestId: z.string().uuid(),
     accepted: z.boolean(),
@@ -100,7 +100,7 @@ export function serveModelWorker(stream: StreamFn): void {
     >();
   let active = false;
   process.on("message", async (raw: unknown) => {
-    const acknowledgement = replySchema.safeParse(raw);
+    const acknowledgement = transcriptAckSchema.safeParse(raw);
     if (acknowledgement.success) {
       const waiter = pending.get(acknowledgement.data.requestId);
       if (waiter?.nonce === acknowledgement.data.nonce) {
@@ -258,8 +258,9 @@ export function serveModelWorker(stream: StreamFn): void {
           `你是 Mate 中的 Agent 同事「${run.data.spec.prompt.name}」。`,
           `你的角色：${run.data.spec.prompt.role}`,
           `介绍：${run.data.spec.prompt.description}`,
-          `本次回复目的地：频道 ${run.data.spec.outputChannel.channelId}（${visibilityLabel(run.data.spec.outputChannel.visibility)}）。`,
-          "上下文中的每条消息都标出来源频道、可见范围和是否属于本次输入。只处理标为本次输入的消息；历史仅用于理解。公开频道回复不得泄露任何私密频道内容。",
+          `本次输入来自：频道 ${run.data.spec.sourceChannel.channelId}（${visibilityLabel(run.data.spec.sourceChannel.visibility)}）。`,
+          "上下文中的每条消息都标出来源频道、可见范围和是否属于本次输入。只处理标为本次输入的消息；历史仅用于理解。",
+          "你的普通正文只写入你自己的 Agent 会话记录，不会发送给任何频道、讨论串或私信；只输出正文而不发言，也是一次成功的处理。要在某个频道、讨论串或私信中发言，必须调用 messages.send，并在 input 中显式给出 conversationId 和 text（讨论串用 rootId，引用用 quoteId）。公开对话中的发言不得泄露任何私密对话的内容。",
           "使用 tools.list 发现可用 Mate 操作，需要时使用 tools.describe 读取准确参数。process.exec 会以你固定的非特权 Linux 用户运行普通命令；使用 process.list、process.inspect 和 process.stop 管理自己的命令进程。普通命令不需要逐条人工审批。先用 agents.list 查找同伴身份，再用 conversations.open_dm 建立或返回你与目标 Agent 的私信；每次读取和发送都必须明确指定你有权访问的对话。邀请同伴时必须指定你已加入的频道和目标 Agent。控制面会检查每次操作是否获授权，拒绝结果不可绕过。",
         ].join("\n"),
         tools,
@@ -284,12 +285,12 @@ export function serveModelWorker(stream: StreamFn): void {
         .join("")
         .trim();
       if (!text) return;
-      const journalRequestId = randomUUID();
+      const transcriptRequestId = randomUUID();
       const accepted = await new Promise<boolean>((resolve) => {
-        pending.set(journalRequestId, { nonce, resolve });
-        process.send?.({ type: "journal", nonce, requestId: journalRequestId, text });
+        pending.set(transcriptRequestId, { nonce, resolve });
+        process.send?.({ type: "transcript", nonce, requestId: transcriptRequestId, text });
       });
-      if (!accepted) throw new Error("The control plane rejected the journal entry");
+      if (!accepted) throw new Error("The control plane rejected the transcript entry");
     });
 
     try {

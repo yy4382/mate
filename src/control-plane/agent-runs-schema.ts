@@ -161,3 +161,15 @@ WHERE a.operation IN ('messages.send','conversations.open_dm','conversations.inv
 `;
 
 export const agentRunSchema = `${agentRunSchemaV7}\n${agentJournalReplaySchema}\n${agentRunBatchSchemaV9}`;
+
+/**
+ * Every plain assistant turn a run produced is recorded, not only the first one.
+ *
+ * The superseded rule limited a run to one non-tool assistant row because that row used to be the
+ * published reply. Publication is now an explicit `messages.send` tool action, so a model that
+ * writes a preamble beside a tool call and then a final answer must be able to record both turns.
+ * Idempotency comes from the unique `request_id` transcript identity instead.
+ */
+export const agentRunTranscriptSchemaV23 = `
+DROP INDEX owner_agent_session_journal_reply_once;
+`;

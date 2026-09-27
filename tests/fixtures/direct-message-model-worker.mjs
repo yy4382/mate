@@ -121,7 +121,7 @@ serveModelWorker((model, context, options) => {
   if (options.apiKey === "synthetic-key-conversation-tools") {
     const turn = syntheticToolTurn++,
       prompt = systemPrompt(context),
-      channelId = prompt.match(/本次回复目的地：频道 ([0-9a-f-]{36})/)?.[1];
+      channelId = prompt.match(/本次输入来自：频道 ([0-9a-f-]{36})/)?.[1];
     const toolCall =
       turn === 0
         ? { type: "toolCall", id: "conversation-tools-list", name: "tools.list", arguments: {} }
@@ -162,9 +162,51 @@ serveModelWorker((model, context, options) => {
     });
     return stream;
   }
+  if (options.apiKey === "synthetic-key-narrated-tool-turn") {
+    const turn = syntheticToolTurn++,
+      channelId = systemPrompt(context).match(/本次输入来自：频道 ([0-9a-f-]{36})/)?.[1],
+      first = turn === 0;
+    // A common model shape: narration and a tool call in the same assistant message. The narration
+    // is one plain turn and the following answer is another, so one run records two of them.
+    stream.push({
+      type: "done",
+      reason: first ? "toolUse" : "stop",
+      message: {
+        role: "assistant",
+        content: first
+          ? [
+              { type: "text", text: "我先说明一下，然后发送这条消息。" },
+              {
+                type: "toolCall",
+                id: "narrated-send",
+                name: "tools.call",
+                arguments: {
+                  name: "messages.send",
+                  input: { conversationId: channelId, text: "带说明的工具发送消息。" },
+                },
+              },
+            ]
+          : [{ type: "text", text: "工具已发送，这是我的最终正文。" }],
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: first ? "toolUse" : "stop",
+        timestamp: Date.now(),
+      },
+    });
+    return stream;
+  }
   if (options.apiKey === "synthetic-key-durable-action-pair") {
     const turn = syntheticToolTurn++,
-      channelId = systemPrompt(context).match(/本次回复目的地：频道 ([0-9a-f-]{36})/)?.[1],
+      channelId = systemPrompt(context).match(/本次输入来自：频道 ([0-9a-f-]{36})/)?.[1],
       text =
         turn < 2 ? "同一交付中的重复动作。" : turn === 2 ? "参数不同，属于新的动作。" : undefined,
       call =
