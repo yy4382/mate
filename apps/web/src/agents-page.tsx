@@ -81,7 +81,7 @@ function downloadMessage(code: string | null | undefined, fallback?: string): st
     case "not_found":
       return "文件已不存在，请重新加载目录。";
     case "permission_denied":
-      return "Agent 的 Linux 用户无权读取此文件。";
+      return "运行 Mate 的账号没有读取此文件的权限。";
     case "file_changed":
       return "文件在下载期间发生变化，请重新加载后重试。";
     case "download_interrupted":

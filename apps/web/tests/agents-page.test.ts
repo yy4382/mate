@@ -759,7 +759,7 @@ it("shows a distinct permission error before starting a workspace download", asy
   ];
   workspaceDownloadResponse = json(403, {
     code: "permission_denied",
-    error: "Agent Linux 用户没有读取此文件的权限。",
+    error: "当前运行账号没有读取此文件的权限。",
   });
   Object.defineProperty(window, "showSaveFilePicker", {
     configurable: true,
@@ -767,7 +767,10 @@ it("shows a distinct permission error before starting a workspace download", asy
   });
   render(createElement(AgentsPage));
   await userEvent.setup().click(await screen.findByRole("button", { name: "下载" }));
-  expect((await screen.findByRole("alert")).textContent).toContain("Linux 用户无权读取");
+  // The owner reads what actually happened: the account running Mate could not read the file.
+  expect((await screen.findByRole("alert")).textContent).toContain(
+    "运行 Mate 的账号没有读取此文件的权限",
+  );
 });
 
 it("shows a Chinese error when a workspace download stream fails after it starts", async () => {
