@@ -43,9 +43,8 @@ export type AgentProvisioningStatus = "provisioning" | "waiting_credentials" | "
 export type AgentProvisioningStage =
   | "queued"
   | "checking_account"
-  | "creating_account"
-  | "preparing_home"
-  | "verifying_identity"
+  | "preparing_workspace"
+  | "verifying_workspace"
   | "complete"
   | "failed";
 
@@ -61,7 +60,11 @@ export interface AgentSummary {
   status: AgentProvisioningStatus;
   stage: AgentProvisioningStage;
   error: string | null;
-  linuxIdentity: { username: string; uid: number; gid: number; home: string } | null;
+  /**
+   * The single account this Agent's node runs under, plus this Agent's own workspace path. Every
+   * Agent on one node reports the same username, UID and GID with a different workspace.
+   */
+  linuxIdentity: { username: string; uid: number; gid: number; workspace: string } | null;
   createdAt: number;
   updatedAt: number;
 }

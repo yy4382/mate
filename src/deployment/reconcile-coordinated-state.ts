@@ -4,7 +4,7 @@ import { lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { controlPlaneMigrations, controlPlaneSchema } from "../control-plane/schema.js";
-import { readProvisionedLinuxAgentIdentity } from "../nodes/agent-provisioner.js";
+import { readAgentWorkspaceIdentity } from "../nodes/agent-provisioner.js";
 import { agentProcessOperationSchema } from "../nodes/process-operations.js";
 import { openControlPlaneDatabase } from "../storage/initialize.js";
 import { type CoordinatedStatePaths } from "./coordinated-checkpoint.js";
@@ -70,13 +70,13 @@ export interface CoordinatedReconciliationReport {
 export interface CoordinatedReconciliationDependencies {
   lookupAgentIdentity?: (
     agentId: string,
-    homeRoot: string,
+    workspaceRoot: string,
   ) => {
     username: string;
     uid: number;
     gid: number;
-    home: string;
-    homeMarker: string;
+    workspace: string;
+    workspaceMarker: string;
   };
   now?: () => number;
 }
@@ -87,7 +87,7 @@ export function reconcileCoordinatedState(
   dependencies: CoordinatedReconciliationDependencies = {},
 ): CoordinatedReconciliationReport {
   const now = dependencies.now ?? Date.now,
-    lookupIdentity = dependencies.lookupAgentIdentity ?? readProvisionedLinuxAgentIdentity,
+    lookupIdentity = dependencies.lookupAgentIdentity ?? readAgentWorkspaceIdentity,
     controlPlanePath = join(paths.controlPlaneDataDir, "control-plane.sqlite"),
     nodeIdentity = readNodeIdentity(join(paths.nodeDataDir, "node-identity.json")),
     processPath = join(paths.nodeDataDir, "agent-process-operations.sqlite"),
@@ -125,11 +125,11 @@ export function reconcileCoordinatedState(
       try {
         const identity = lookupIdentity(row.id, paths.agentHomeRoot);
         if (
-          identity.home !== row.home ||
+          identity.workspace !== row.home ||
           identity.username !== row.linux_username ||
           identity.uid !== row.uid ||
           identity.gid !== row.gid ||
-          identity.homeMarker !== row.home_marker
+          identity.workspaceMarker !== row.home_marker
         )
           continue;
         if (row.node_id === nodeIdentity.id)

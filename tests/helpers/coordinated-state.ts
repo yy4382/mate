@@ -39,8 +39,8 @@ export function initializeCoordinatedRoots(paths: TestCoordinatedPaths): {
       username: `mate_${agentId.replaceAll("-", "").slice(0, 27)}`,
       uid: 24_001,
       gid: 24_001,
-      home: join(homeRoot, agentId),
-      homeMarker: "a".repeat(64),
+      workspace: join(homeRoot, agentId),
+      workspaceMarker: "a".repeat(64),
     }),
   });
   return { nodeId: node.id, publicKey: node.publicKey };

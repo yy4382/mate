@@ -575,7 +575,7 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
     const current = agents.get(id);
     if (!current) return context.json({ error: "Agent 不存在。" }, 404);
     if (!current.linuxIdentity)
-      return context.json({ error: "请等待 Agent 的 Linux 身份创建完成。" }, 409);
+      return context.json({ error: "请等待 Agent 的默认工作区准备完成。" }, 409);
     if (!modelCredentials.has(input.data.provider))
       return context.json({ error: "请先配置目标模型服务的 API key。" }, 409);
     const agent = agents.updateModel(id, input.data)!;
@@ -740,7 +740,7 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
         const message =
           error instanceof AgentRequestConflict
             ? error.message
-            : "Linux 节点暂时无法确认 Agent 账号与私人 home，请检查节点后按原请求重试。";
+            : "节点暂时无法确认 Agent 的运行账号与默认工作区，请检查节点后按原请求重试。";
         return agents.fail(input.id, message) ?? prepared.agent;
       }
     })();

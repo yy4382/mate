@@ -1,7 +1,7 @@
 import type Database from "better-sqlite3";
 import { createHash, randomUUID } from "node:crypto";
 import { basename, resolve } from "node:path";
-import { linuxUsernameForAgentId, type LinuxAgentIdentity } from "../../nodes/agent-provisioner.js";
+import type { AgentWorkspaceIdentity } from "../../nodes/agent-provisioner.js";
 import type { AgentProvisionStage } from "../../nodes/protocol.js";
 import type { OwnerChat } from "../owner-chat.js";
 import type {
@@ -202,10 +202,13 @@ export class AgentDirectory {
     return this.get(id);
   }
 
-  /** Commit node-verified Linux facts, session readiness, and optional channel membership atomically. */
+  /**
+   * Commit node-verified account and workspace facts, session readiness, and optional channel
+   * membership atomically. Every Agent on one node reports the same account with its own workspace.
+   */
   complete(
     id: string,
-    identity: LinuxAgentIdentity,
+    identity: AgentWorkspaceIdentity,
     ownerChat: OwnerChat,
     modelReady = false,
   ): AgentSummary {
@@ -213,22 +216,42 @@ export class AgentDirectory {
       .transaction(() => {
         const current = this.read(id);
         if (!current) throw new Error("Agent record disappeared during provisioning");
-        if (identity.username !== linuxUsernameForAgentId(id))
-          throw new AgentRequestConflict("Linux 节点返回的用户名与 Agent ID 不匹配。");
         if (
-          basename(identity.home) !== id.toLowerCase() ||
-          resolve(identity.home) !== identity.home
+          basename(identity.workspace) !== id.toLowerCase() ||
+          resolve(identity.workspace) !== identity.workspace
         )
-          throw new AgentRequestConflict("Linux 节点返回的私人 home 路径与 Agent ID 不匹配。");
+          throw new AgentRequestConflict("节点返回的 Agent 工作区路径与 Agent ID 不匹配。");
+        if (!identity.username || identity.username.length > 255)
+          throw new AgentRequestConflict("节点未返回运行账号的名称。");
         if (
           !Number.isSafeInteger(identity.uid) ||
-          identity.uid <= 0 ||
+          identity.uid < 0 ||
           !Number.isSafeInteger(identity.gid) ||
-          identity.gid <= 0
+          identity.gid < 0
         )
-          throw new AgentRequestConflict("Linux 节点返回了无效的 UID 或 GID。");
-        if (!/^[0-9a-f]{64}$/.test(identity.homeMarker))
-          throw new AgentRequestConflict("Linux 节点未返回有效的 Agent home 原身份标记。");
+          throw new AgentRequestConflict("节点返回了无效的 UID 或 GID。");
+        if (!/^[0-9a-f]{64}$/.test(identity.workspaceMarker))
+          throw new AgentRequestConflict("节点未返回有效的 Agent 工作区原身份标记。");
+        // Every Agent on one node runs under that node's single ordinary account. A node that
+        // reports a different username, UID or GID for a second Agent is not the account this
+        // release requires, and storing both would silently break the Agent-to-account binding.
+        const neighbour = this.db
+          .prepare(
+            `SELECT linux_username,uid,gid FROM owner_agents
+             WHERE node_id=? AND id<>? AND linux_username IS NOT NULL AND uid IS NOT NULL
+               AND gid IS NOT NULL LIMIT 1`,
+          )
+          .get(current.node_id, id) as
+          { linux_username: string; uid: number; gid: number } | undefined;
+        if (
+          neighbour &&
+          (neighbour.linux_username !== identity.username ||
+            neighbour.uid !== identity.uid ||
+            neighbour.gid !== identity.gid)
+        )
+          throw new AgentRequestConflict(
+            "同一节点上的 Agent 必须共用该节点运行账号；节点返回了不同账号，请检查节点部署。",
+          );
 
         const at = this.now();
         this.db
@@ -240,8 +263,8 @@ export class AgentDirectory {
             identity.username,
             identity.uid,
             identity.gid,
-            identity.home,
-            identity.homeMarker,
+            identity.workspace,
+            identity.workspaceMarker,
             at,
             id,
           );
@@ -288,7 +311,7 @@ export class AgentDirectory {
 function toAgent(row: AgentRow): AgentSummary {
   const identity =
     row.linux_username !== null && row.uid !== null && row.gid !== null && row.home !== null
-      ? { username: row.linux_username, uid: row.uid, gid: row.gid, home: row.home }
+      ? { username: row.linux_username, uid: row.uid, gid: row.gid, workspace: row.home }
       : null;
   return {
     id: row.id,

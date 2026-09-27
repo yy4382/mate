@@ -208,7 +208,7 @@ User=root
 Group=root
 WorkingDirectory=/opt/mate/current
 Environment=MATE_NODE_DATA_DIR=/var/lib/mate-node
-Environment=MATE_NODE_AGENT_HOME_ROOT=/var/lib/mate-agents
+Environment=MATE_NODE_AGENT_WORKSPACE_ROOT=/var/lib/mate-agents
 EnvironmentFile=/etc/mate/node.env
 ExecStart=/usr/bin/node /opt/mate/current/dist/src/node/main.js
 Restart=on-failure

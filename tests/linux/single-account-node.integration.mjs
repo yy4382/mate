@@ -1,5 +1,6 @@
-// Start both services as one ordinary account, pair over the real WebSocket, restart each service,
-// and check that the short-lived model worker keeps the same Linux account.
+// Start both services as one ordinary account, pair over the real WebSocket, create Agents from the
+// owner web API, restart each service, and check that the short-lived model worker keeps the same
+// Linux account. No root, no user creation, no UID/GID switch and no service manager is involved.
 //
 // This check needs no root, no container and no service manager: run it as the ordinary account
 // that owns the Mate data directories. NOTIFY_SOCKET is advertised at a path that does not exist,
@@ -8,19 +9,21 @@
 // removed privilege-dropping worker start. A macOS run is cross-platform evidence only; record
 // real Linux results separately.
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { generateKeyPairSync, randomUUID } from "node:crypto";
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:net";
-import { tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { startModelProcess } from "../../dist/src/nodes/model-process.js";
 
@@ -34,7 +37,7 @@ const ownerPassword = "synthetic-owner-password-used-only-by-this-check",
   root = mkdtempSync(join(tmpdir(), "mate-single-account-")),
   controlData = join(root, "control-plane-data"),
   nodeData = join(root, "node-data"),
-  agentHomeRoot = join(root, "agents"),
+  agentWorkspaceRoot = join(root, "agents"),
   passwordFile = join(root, "owner-password"),
   notifySocketPath = join(root, "notify.sock"),
   processes = [];
@@ -153,6 +156,46 @@ async function login(origin) {
   return response.headers.get("set-cookie").split(";", 1)[0];
 }
 
+/** Create one Agent from the owner web API and report what the web would show for it. */
+async function createAgent(origin, cookie, nodeId, name) {
+  const response = await fetch(new URL("/api/owner/agents", origin), {
+    method: "POST",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({
+      id: randomUUID(),
+      nodeId,
+      name,
+      role: "按私信工作",
+      description: "Synthetic single-account creation check.",
+      model: { provider: "openai", id: "gpt-4o-mini" },
+    }),
+  });
+  const body = await response.json();
+  assert.ok(
+    response.status === 200 || response.status === 201,
+    `Agent creation failed: ${response.status} ${JSON.stringify(body)}`,
+  );
+  return body.agent;
+}
+
+/**
+ * Ask the host's own account database whether the per-Agent Linux accounts this release removed
+ * exist. "No account was created" is then an observed fact, not an assertion about our own code.
+ * Returns undefined on a host without a local passwd database, so the answer stays honest.
+ */
+function perAgentAccountsExist(agentIds) {
+  const listing = spawnSync("/usr/bin/getent", ["passwd"], { encoding: "utf8" });
+  if (listing.error || listing.status !== 0) return undefined;
+  const names = new Set(
+    listing.stdout
+      .split("\n")
+      .map((line) => line.split(":", 1)[0])
+      .filter(Boolean),
+  );
+  // The superseded scheme named each Agent's account `mate_` plus 27 hex characters of its UUID.
+  return agentIds.some((agentId) => names.has(`mate_${agentId.replaceAll("-", "").slice(0, 27)}`));
+}
+
 async function waitForNodeStatus(origin, cookie, predicate, timeoutMs = 10000) {
   const deadline = Date.now() + timeoutMs;
   let last;
@@ -234,7 +277,7 @@ try {
       {
         MATE_CONTROL_PLANE_URL: controlPlaneUrl,
         MATE_NODE_DATA_DIR: dataDirectory,
-        MATE_NODE_AGENT_HOME_ROOT: agentHomeRoot,
+        MATE_NODE_AGENT_WORKSPACE_ROOT: agentWorkspaceRoot,
         ...(token ? { MATE_NODE_PAIRING_TOKEN: token } : {}),
       },
       "node",
@@ -316,6 +359,52 @@ try {
     (candidate) => candidate.id === paired[1] && candidate.online,
   );
 
+  // Create two Agents from the owner web API on the ordinary account this check already runs as.
+  const firstAgent = await createAgent(origin, cookie, paired[1], "第一名同事"),
+    secondAgent = await createAgent(origin, cookie, paired[1], "第二名同事"),
+    agentEvidence = [firstAgent, secondAgent].map((agent) => {
+      assert.ok(
+        agent.linuxIdentity && ["waiting_credentials", "ready"].includes(agent.status),
+        `Agent ${agent.id} did not reach a runnable state: ${JSON.stringify(agent)}`,
+      );
+      const workspace = agent.linuxIdentity.workspace,
+        memory = join(workspace, "MEMORY.md");
+      assert.equal(lstatSync(workspace).isDirectory(), true, "Agent workspace is not a directory");
+      assert.equal(lstatSync(memory).isFile(), true, "Agent memory entry point is missing");
+      assert.match(readFileSync(memory, "utf8"), /memory/, "The memory entry point is empty");
+      return {
+        agentId: agent.id,
+        status: agent.status,
+        accountUsername: agent.linuxIdentity.username,
+        accountUid: agent.linuxIdentity.uid,
+        accountGid: agent.linuxIdentity.gid,
+        workspace,
+        memoryEntryAvailable: true,
+        sessionId: agent.sessionId,
+      };
+    });
+  assert.notEqual(agentEvidence[0].workspace, agentEvidence[1].workspace);
+  assert.notEqual(agentEvidence[0].sessionId, agentEvidence[1].sessionId);
+  assert.equal(agentEvidence[0].accountUid, launchingUid);
+  assert.equal(agentEvidence[0].accountUsername, agentEvidence[1].accountUsername);
+  assert.equal(agentEvidence[0].accountUid, agentEvidence[1].accountUid);
+
+  // Configuring a provider key is what the owner does next; the Agent then shows as runnable.
+  const credential = await fetch(new URL("/api/owner/model-credentials/openai", origin), {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-key-single-account-check" }),
+  });
+  assert.equal(credential.status, 204);
+  const afterCredential = await (
+    await fetch(new URL("/api/owner/agents", origin), { headers: { cookie } })
+  ).json();
+  const ready = afterCredential.agents.find((agent) => agent.id === firstAgent.id);
+  assert.equal(ready?.status, "ready");
+
+  // Creating those Agents must not have created a Linux account for either of them.
+  const perAgentAccountExists = perAgentAccountsExist(agentEvidence.map((agent) => agent.agentId));
+  assert.notEqual(perAgentAccountExists, true, "Agent creation created a per-Agent Linux account");
   const worker = await probeModelWorkerAccount();
   await stop(node);
 
@@ -341,6 +430,31 @@ try {
       nodeRestartReauthenticated: true,
       controlPlaneRestartReauthenticated: true,
       offlineStatusReported: true,
+      agentsCreatedFromWeb: agentEvidence.length,
+      ranAsRoot: false,
+      // Read from the host's own account database, not from Mate's code.
+      localAccountDatabaseRead: perAgentAccountExists !== undefined,
+      perAgentLinuxAccountExists: perAgentAccountExists ?? null,
+      agentAccountsAreLaunchingAccount: agentEvidence.every(
+        (agent) =>
+          agent.accountUid === launchingUid && agent.accountUsername === userInfo().username,
+      ),
+      agentRunnableStateReached: ready?.status === "ready",
+      agentsShareLaunchingAccount:
+        agentEvidence[0].accountUid === agentEvidence[1].accountUid &&
+        agentEvidence[0].accountUsername === agentEvidence[1].accountUsername,
+      agentWorkspacesDistinct: agentEvidence[0].workspace !== agentEvidence[1].workspace,
+      agentSessionsDistinct: agentEvidence[0].sessionId !== agentEvidence[1].sessionId,
+      agentMemoryEntryAvailable: true,
+      agentWorkspaceMode: agentEvidence.map((agent) =>
+        (lstatSync(agent.workspace).mode & 0o777).toString(8),
+      ),
+      agentWorkspaceList: agentEvidence.map((agent) => agent.workspace),
+      agentAccountProbe: agentEvidence.map((agent) => ({
+        username: agent.accountUsername,
+        uid: agent.accountUid,
+        gid: agent.accountGid,
+      })),
     })}\n`,
   );
 } finally {

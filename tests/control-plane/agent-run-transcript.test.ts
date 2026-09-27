@@ -95,8 +95,8 @@ async function prepareAgent(
       username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
       uid: 23001,
       gid: 23001,
-      home: `/var/lib/mate/agents/${agentId}`,
-      homeMarker: "a".repeat(64),
+      workspace: `/var/lib/mate/agents/${agentId}`,
+      workspaceMarker: "a".repeat(64),
     },
     app.chat,
   );

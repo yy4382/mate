@@ -166,11 +166,14 @@ async function reconnectNode(
   return socket;
 }
 
+/**
+ * One ordinary account runs every Agent on a node, so these fixtures deliberately share one
+ * username, UID and GID and differ only in Agent ID, workspace and session.
+ */
 async function prepareVerifiedAgent(
   app: ReturnType<typeof createControlPlaneApp>,
   nodeId: string,
   name: string,
-  uid: number,
 ) {
   const agentId = randomUUID();
   app.agents.prepare({
@@ -184,11 +187,11 @@ async function prepareVerifiedAgent(
   app.agents.complete(
     agentId,
     {
-      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
-      uid,
-      gid: uid,
-      home: `/var/lib/mate/agents/${agentId}`,
-      homeMarker: "a".repeat(64),
+      username: "mate-node-account",
+      uid: 23001,
+      gid: 23001,
+      workspace: `/var/lib/mate/agents/${agentId}`,
+      workspaceMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -338,11 +341,11 @@ it("creates one private owner DM and keeps its input queued while the Agent awai
   app.agents.complete(
     agentId,
     {
-      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      username: "mate-node-account",
       uid: 23001,
       gid: 23001,
-      home: `/var/lib/mate/agents/${agentId}`,
-      homeMarker: "a".repeat(64),
+      workspace: `/var/lib/mate/agents/${agentId}`,
+      workspaceMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -388,11 +391,11 @@ it("routes Agent conversation discovery through its current control-plane run", 
   app.agents.complete(
     agentId,
     {
-      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      username: "mate-node-account",
       uid: 23001,
       gid: 23001,
-      home: `/var/lib/mate/agents/${agentId}`,
-      homeMarker: "a".repeat(64),
+      workspace: `/var/lib/mate/agents/${agentId}`,
+      workspaceMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -462,11 +465,11 @@ it("limits read and send to joined conversations while exposing only public meta
   app.agents.complete(
     agentId,
     {
-      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      username: "mate-node-account",
       uid: 23001,
       gid: 23001,
-      home: `/var/lib/mate/agents/${agentId}`,
-      homeMarker: "a".repeat(64),
+      workspace: `/var/lib/mate/agents/${agentId}`,
+      workspaceMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -604,7 +607,7 @@ it("limits read and send to joined conversations while exposing only public meta
 
 it("lets a non-member Agent read a public channel's timeline and thread but not speak", async () => {
   const { app, cookie, nodeId, socket } = await setup();
-  const agentId = await prepareVerifiedAgent(app, nodeId, "Curious colleague", 23001);
+  const agentId = await prepareVerifiedAgent(app, nodeId, "Curious colleague");
   const ownDirect = app.chat.getOrCreateAgentDirectChannel(agentId)!,
     publicRoom = app.chat.createChannel({
       name: "Open research",
@@ -661,7 +664,7 @@ it("lets a non-member Agent read a public channel's timeline and thread but not 
 
 it("keeps a non-member Agent out of a private channel that holds a task", async () => {
   const { app, cookie, nodeId, socket } = await setup();
-  const agentId = await prepareVerifiedAgent(app, nodeId, "Private outsider", 23002);
+  const agentId = await prepareVerifiedAgent(app, nodeId, "Private outsider");
   const ownDirect = app.chat.getOrCreateAgentDirectChannel(agentId)!,
     privateRoom = app.chat.createChannel({
       name: "Secret project",
@@ -712,7 +715,7 @@ it("keeps a non-member Agent out of a private channel that holds a task", async 
 
 it("lets a non-member Agent join a public channel, then speak and receive later activity", async () => {
   const { app, cookie, nodeId, socket } = await setup();
-  const agentId = await prepareVerifiedAgent(app, nodeId, "Joining colleague", 23003);
+  const agentId = await prepareVerifiedAgent(app, nodeId, "Joining colleague");
   const ownDirect = app.chat.getOrCreateAgentDirectChannel(agentId)!,
     publicRoom = app.chat.createChannel({
       name: "Open standup",
@@ -773,7 +776,7 @@ it("lets a non-member Agent join a public channel, then speak and receive later 
 
 it("does not backfill a just-joined channel as unread nor forget what was already read", async () => {
   const { app, cookie, db, nodeId, socket } = await setup();
-  const agentId = await prepareVerifiedAgent(app, nodeId, "Late joiner", 23004);
+  const agentId = await prepareVerifiedAgent(app, nodeId, "Late joiner");
   const ownDirect = app.chat.getOrCreateAgentDirectChannel(agentId)!,
     publicRoom = app.chat.createChannel({
       name: "Open history",
@@ -883,7 +886,7 @@ it("does not backfill a just-joined channel as unread nor forget what was alread
 
 it("lets a non-member Agent read a public channel's attachments but keeps publish member-only", async () => {
   const { app, cookie, nodeId, socket } = await setup();
-  const agentId = await prepareVerifiedAgent(app, nodeId, "Attachment reader", 23005);
+  const agentId = await prepareVerifiedAgent(app, nodeId, "Attachment reader");
   const ownDirect = app.chat.getOrCreateAgentDirectChannel(agentId)!,
     publicRoom = app.chat.createChannel({
       name: "Open files",
@@ -953,9 +956,9 @@ it("lets a non-member Agent read a public channel's attachments but keeps publis
 
 it("does not let an outsider read or join a peer direct message through the public read path", async () => {
   const { app, cookie, db, nodeId, socket } = await setup();
-  const firstAgentId = await prepareVerifiedAgent(app, nodeId, "Chatty colleague", 23006),
-    secondAgentId = await prepareVerifiedAgent(app, nodeId, "Quiet colleague", 23007),
-    outsiderId = await prepareVerifiedAgent(app, nodeId, "Outsider colleague", 23008);
+  const firstAgentId = await prepareVerifiedAgent(app, nodeId, "Chatty colleague"),
+    secondAgentId = await prepareVerifiedAgent(app, nodeId, "Quiet colleague"),
+    outsiderId = await prepareVerifiedAgent(app, nodeId, "Outsider colleague");
   // Seed the peer DM through its own tables: the factory path requires the tool transaction.
   const outsiderDirect = app.chat.getOrCreateAgentDirectChannel(outsiderId)!;
   await app.request("/api/owner/model-credentials/openai", {
@@ -1053,8 +1056,8 @@ it("does not let an outsider read or join a peer direct message through the publ
 
 it("does not let a member transfer a task to a public-channel non-member", async () => {
   const { app, cookie, nodeId, socket } = await setup();
-  const memberId = await prepareVerifiedAgent(app, nodeId, "Task owner", 23009),
-    outsiderId = await prepareVerifiedAgent(app, nodeId, "Interested onlooker", 23010);
+  const memberId = await prepareVerifiedAgent(app, nodeId, "Task owner"),
+    outsiderId = await prepareVerifiedAgent(app, nodeId, "Interested onlooker");
   const room = app.chat.createChannel({
     name: "Shared work",
     description: "A public room with a task.",
@@ -1139,11 +1142,11 @@ it("replays a committed tool action after its reply is lost and the delivery ret
   app.agents.complete(
     agentId,
     {
-      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      username: "mate-node-account",
       uid: 23001,
       gid: 23001,
-      home: `/var/lib/mate/agents/${agentId}`,
-      homeMarker: "a".repeat(64),
+      workspace: `/var/lib/mate/agents/${agentId}`,
+      workspaceMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -1233,11 +1236,11 @@ it("recovers the completed tool action and result in the Agent's next run contex
   app.agents.complete(
     agentId,
     {
-      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      username: "mate-node-account",
       uid: 23001,
       gid: 23001,
-      home: `/var/lib/mate/agents/${agentId}`,
-      homeMarker: "a".repeat(64),
+      workspace: `/var/lib/mate/agents/${agentId}`,
+      workspaceMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -1304,11 +1307,11 @@ it("restarts the real Pi worker after a lost result without replaying a committe
   app.agents.complete(
     agentId,
     {
-      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      username: "mate-node-account",
       uid: 23001,
       gid: 23001,
-      home: `/var/lib/mate/agents/${agentId}`,
-      homeMarker: "a".repeat(64),
+      workspace: `/var/lib/mate/agents/${agentId}`,
+      workspaceMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -1502,11 +1505,11 @@ it("records every plain turn of one run, including narration beside a tool call"
   app.agents.complete(
     agentId,
     {
-      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      username: "mate-node-account",
       uid: 23001,
       gid: 23001,
-      home: `/var/lib/mate/agents/${agentId}`,
-      homeMarker: "a".repeat(64),
+      workspace: `/var/lib/mate/agents/${agentId}`,
+      workspaceMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -1606,11 +1609,11 @@ it("commits an eligible peer invitation once and rejects invalid invitation targ
     app.agents.complete(
       agentId,
       {
-        username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+        username: "mate-node-account",
         uid: 23001,
         gid: 23001,
-        home: `/var/lib/mate/agents/${agentId}`,
-        homeMarker: "a".repeat(64),
+        workspace: `/var/lib/mate/agents/${agentId}`,
+        workspaceMarker: "a".repeat(64),
       },
       app.chat,
     );
@@ -1699,11 +1702,11 @@ it("lets the owner invite an existing Agent to a channel through the authenticat
   app.agents.complete(
     agentId,
     {
-      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      username: "mate-node-account",
       uid: 23001,
       gid: 23001,
-      home: `/var/lib/mate/agents/${agentId}`,
-      homeMarker: "a".repeat(64),
+      workspace: `/var/lib/mate/agents/${agentId}`,
+      workspaceMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -1815,11 +1818,11 @@ it("lets one Agent discover and open an explicit peer DM that both Agents and th
     app.agents.complete(
       agentId,
       {
-        username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+        username: "mate-node-account",
         uid: 23001,
         gid: 23001,
-        home: `/var/lib/mate/agents/${agentId}`,
-        homeMarker: "a".repeat(64),
+        workspace: `/var/lib/mate/agents/${agentId}`,
+        workspaceMarker: "a".repeat(64),
       },
       app.chat,
     );
@@ -1985,11 +1988,11 @@ it("uses the persisted independent-review seat and refuses stale or forged tool 
   app.agents.complete(
     agentId,
     {
-      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      username: "mate-node-account",
       uid: 23001,
       gid: 23001,
-      home: `/var/lib/mate/agents/${agentId}`,
-      homeMarker: "a".repeat(64),
+      workspace: `/var/lib/mate/agents/${agentId}`,
+      workspaceMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -2069,11 +2072,11 @@ it("limits each run to its committed input batch and consumes silent batches", a
   app.agents.complete(
     agentId,
     {
-      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      username: "mate-node-account",
       uid: 23001,
       gid: 23001,
-      home: `/var/lib/mate/agents/${agentId}`,
-      homeMarker: "a".repeat(64),
+      workspace: `/var/lib/mate/agents/${agentId}`,
+      workspaceMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -2207,11 +2210,11 @@ it("keeps a later private input out of a public channel run", async () => {
   app.agents.complete(
     agentId,
     {
-      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      username: "mate-node-account",
       uid: 23001,
       gid: 23001,
-      home: `/var/lib/mate/agents/${agentId}`,
-      homeMarker: "a".repeat(64),
+      workspace: `/var/lib/mate/agents/${agentId}`,
+      workspaceMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -2418,11 +2421,11 @@ it("keeps an archived run input pending and retries it after the owner unarchive
   app.agents.complete(
     agentId,
     {
-      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      username: "mate-node-account",
       uid: 23001,
       gid: 23001,
-      home: `/var/lib/mate/agents/${agentId}`,
-      homeMarker: "a".repeat(64),
+      workspace: `/var/lib/mate/agents/${agentId}`,
+      workspaceMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -2550,11 +2553,11 @@ it("does not let an archived earlier source block or join a later source run", a
   app.agents.complete(
     agentId,
     {
-      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      username: "mate-node-account",
       uid: 23001,
       gid: 23001,
-      home: `/var/lib/mate/agents/${agentId}`,
-      homeMarker: "a".repeat(64),
+      workspace: `/var/lib/mate/agents/${agentId}`,
+      workspaceMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -2734,11 +2737,11 @@ it("pages handled session history before appending an older pending run input", 
   app.agents.complete(
     agentId,
     {
-      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      username: "mate-node-account",
       uid: 23001,
       gid: 23001,
-      home: `/var/lib/mate/agents/${agentId}`,
-      homeMarker: "a".repeat(64),
+      workspace: `/var/lib/mate/agents/${agentId}`,
+      workspaceMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -2871,11 +2874,11 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
   app.agents.complete(
     agentId,
     {
-      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      username: "mate-node-account",
       uid: 23001,
       gid: 23001,
-      home: `/var/lib/mate/agents/${agentId}`,
-      homeMarker: "a".repeat(64),
+      workspace: `/var/lib/mate/agents/${agentId}`,
+      workspaceMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -3282,11 +3285,11 @@ it("replays a confirmed failed file action as the same error after control-plane
   app.agents.complete(
     agentId,
     {
-      username: `mate_${agentId.replaceAll("-", "").slice(0, 27)}`,
+      username: "mate-node-account",
       uid: 23001,
       gid: 23001,
-      home: `/var/lib/mate/agents/${agentId}`,
-      homeMarker: "a".repeat(64),
+      workspace: `/var/lib/mate/agents/${agentId}`,
+      workspaceMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -3388,11 +3391,11 @@ it("publishes Agent workspace files to a joined conversation in bounded chunks a
   app.agents.complete(
     agentId,
     {
-      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      username: "mate-node-account",
       uid: 23001,
       gid: 23001,
-      home: `/var/lib/mate/agents/${agentId}`,
-      homeMarker: "a".repeat(64),
+      workspace: `/var/lib/mate/agents/${agentId}`,
+      workspaceMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -3545,11 +3548,11 @@ it("streams the owner workspace download one bounded node chunk at a time and st
   app.agents.complete(
     agentId,
     {
-      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      username: "mate-node-account",
       uid: 23001,
       gid: 23001,
-      home: `/var/lib/mate/agents/${agentId}`,
-      homeMarker: "a".repeat(64),
+      workspace: `/var/lib/mate/agents/${agentId}`,
+      workspaceMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -3708,11 +3711,11 @@ it("records owner workspace reads and safe failure codes without file contents",
   app.agents.complete(
     agentId,
     {
-      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      username: "mate-node-account",
       uid: 23001,
       gid: 23001,
-      home: `/var/lib/mate/agents/${agentId}`,
-      homeMarker: "a".repeat(64),
+      workspace: `/var/lib/mate/agents/${agentId}`,
+      workspaceMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -3994,11 +3997,11 @@ it("persists separate attention and draft choices while gating stale sends", asy
   app.agents.complete(
     agentId,
     {
-      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      username: "mate-node-account",
       uid: 23001,
       gid: 23001,
-      home: `/var/lib/mate/agents/${agentId}`,
-      homeMarker: "a".repeat(64),
+      workspace: `/var/lib/mate/agents/${agentId}`,
+      workspaceMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -4160,11 +4163,11 @@ it("does not let a saved draft or a later paginated read hide unseen conversatio
   app.agents.complete(
     agentId,
     {
-      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      username: "mate-node-account",
       uid: 23001,
       gid: 23001,
-      home: `/var/lib/mate/agents/${agentId}`,
-      homeMarker: "a".repeat(64),
+      workspace: `/var/lib/mate/agents/${agentId}`,
+      workspaceMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -4231,11 +4234,11 @@ it("holds Agent task changes for fresh discussion and queues an offline reminder
   app.agents.complete(
     agentId,
     {
-      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      username: "mate-node-account",
       uid: 23001,
       gid: 23001,
-      home: `/var/lib/mate/agents/${agentId}`,
-      homeMarker: "a".repeat(64),
+      workspace: `/var/lib/mate/agents/${agentId}`,
+      workspaceMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -4442,14 +4445,15 @@ it("lets peers coordinate on one task without a tree and preserves a newer claim
   const { app, cookie, nodeId, socket } = await setup();
   const firstId = randomUUID(),
     secondId = randomUUID();
-  for (const [id, uid] of [
-    [firstId, 23001],
-    [secondId, 23002],
+  // Both peers run under the node's single ordinary account; only their workspaces differ.
+  for (const [id, name] of [
+    [firstId, "Peer one"],
+    [secondId, "Peer two"],
   ] as const) {
     app.agents.prepare({
       id,
       nodeId,
-      name: `Peer ${uid}`,
+      name,
       role: "Collaborates directly",
       description: "Synthetic fixture",
       model: { provider: "openai", id: "gpt-4.1" },
@@ -4457,11 +4461,11 @@ it("lets peers coordinate on one task without a tree and preserves a newer claim
     app.agents.complete(
       id,
       {
-        username: "mate_" + id.replaceAll("-", "").slice(0, 27),
-        uid,
-        gid: uid,
-        home: `/var/lib/mate/agents/${id}`,
-        homeMarker: "a".repeat(64),
+        username: "mate-node-account",
+        uid: 23001,
+        gid: 23001,
+        workspace: `/var/lib/mate/agents/${id}`,
+        workspaceMarker: "a".repeat(64),
       },
       app.chat,
     );
@@ -4542,11 +4546,11 @@ async function startReminderFixture(fixture: Awaited<ReturnType<typeof setup>>) 
   app.agents.complete(
     agentId,
     {
-      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      username: "mate-node-account",
       uid: 23001,
       gid: 23001,
-      home: `/var/lib/mate/agents/${agentId}`,
-      homeMarker: "a".repeat(64),
+      workspace: `/var/lib/mate/agents/${agentId}`,
+      workspaceMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -4830,8 +4834,8 @@ it("keeps one logical session across a DM, a channel and a thread and reaches it
       username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
       uid: 23001,
       gid: 23001,
-      home: `/var/lib/mate/agents/${agentId}`,
-      homeMarker: "a".repeat(64),
+      workspace: `/var/lib/mate/agents/${agentId}`,
+      workspaceMarker: "a".repeat(64),
     },
     app.chat,
   );

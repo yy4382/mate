@@ -13,8 +13,10 @@ import {
   controlPlaneSchemaV8,
   controlPlaneSchemaV14,
   controlPlaneSchemaV15,
+  controlPlaneSchemaV23,
 } from "../../src/control-plane/schema.js";
 import { newAgentRequestSchema } from "../../src/control-plane/agents/contracts.js";
+import { AgentDirectory, AgentRequestConflict } from "../../src/control-plane/agents/directory.js";
 import type { NodeSocket } from "../../src/control-plane/nodes/directory.js";
 
 const ownerPassword = "agent-creation-owner-password";
@@ -118,8 +120,8 @@ it("edits each profile field without changing an Agent's identity or session", a
       username: `mate_${id.replaceAll("-", "").slice(0, 27)}`,
       uid: 23001,
       gid: 23001,
-      home: `/var/lib/mate/agents/${id}`,
-      homeMarker: "a".repeat(64),
+      workspace: `/var/lib/mate/agents/${id}`,
+      workspaceMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -166,8 +168,8 @@ it("requires an existing provider key before changing the model and preserves th
       username: `mate_${id.replaceAll("-", "").slice(0, 27)}`,
       uid: 23001,
       gid: 23001,
-      home: `/var/lib/mate/agents/${id}`,
-      homeMarker: "a".repeat(64),
+      workspace: `/var/lib/mate/agents/${id}`,
+      workspaceMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -210,8 +212,8 @@ it("keeps a deactivated Agent stopped when node process stopping is unconfirmed"
     username: `mate_${id.replaceAll("-", "").slice(0, 27)}`,
     uid: 23001,
     gid: 23001,
-    home: `/var/lib/mate/agents/${id}`,
-    homeMarker: "a".repeat(64),
+    workspace: `/var/lib/mate/agents/${id}`,
+    workspaceMarker: "a".repeat(64),
   };
   app.agents.complete(id, identity, app.chat);
   const sessionId = app.agents.get(id)!.sessionId;
@@ -236,7 +238,7 @@ it("keeps a deactivated Agent stopped when node process stopping is unconfirmed"
       username: identity.username,
       uid: identity.uid,
       gid: identity.gid,
-      home: identity.home,
+      workspace: identity.workspace,
     },
   });
   const stopRequest = socket.sent
@@ -274,7 +276,7 @@ it("keeps a deactivated Agent stopped when node process stopping is unconfirmed"
       requestId: verify.requestId,
       agentId: id,
       ok: true,
-      identity: { ...identity, homeMarker: "b".repeat(64) },
+      identity: { ...identity, workspaceMarker: "b".repeat(64) },
     }),
   );
   expect((await resuming).status).toBe(409);
@@ -300,8 +302,8 @@ it("uses a fresh stop operation ID after an unknown node receipt", async () => {
       username: `mate_${id.replaceAll("-", "").slice(0, 27)}`,
       uid: 23001,
       gid: 23001,
-      home: `/var/lib/mate/agents/${id}`,
-      homeMarker: "a".repeat(64),
+      workspace: `/var/lib/mate/agents/${id}`,
+      workspaceMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -454,7 +456,7 @@ it("migrates paired-node control-plane data and enables Agent foreign keys", () 
 
   const auth = new OwnerAuth({ dataDir: directory });
   try {
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(23);
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(24);
     expect(auth.db.pragma("foreign_keys", { simple: true })).toBe(1);
     expect(auth.db.prepare("SELECT id FROM nodes").get()).toEqual({
       id: "c5342142-9cf5-4b22-86f3-bdc46bb471f2",
@@ -465,7 +467,7 @@ it("migrates paired-node control-plane data and enables Agent foreign keys", () 
       name: "owner_agents",
     });
     expect(controlPlaneMigrations.map((migration) => migration.fromRevision)).toEqual([
-      3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
+      3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
     ]);
     for (const [table, column] of [
       ["owner_agent_process_operations", "node_receipt_revision"],
@@ -494,7 +496,7 @@ it("adds workspace access metadata on new and upgraded control-plane databases",
 
   const auth = new OwnerAuth({ dataDir: directory });
   try {
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(23);
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(24);
     expect(
       auth.db
         .prepare("SELECT name FROM sqlite_master WHERE name='owner_workspace_access_audit'")
@@ -511,7 +513,7 @@ it("adds workspace access metadata on new and upgraded control-plane databases",
     const newDirectory = mkdtempSync(join(tmpdir(), "mate-workspace-audit-new-")),
       newAuth = new OwnerAuth({ dataDir: newDirectory });
     try {
-      expect(newAuth.db.pragma("user_version", { simple: true })).toBe(23);
+      expect(newAuth.db.pragma("user_version", { simple: true })).toBe(24);
       expect(
         newAuth.db
           .prepare("SELECT name FROM sqlite_master WHERE name='owner_workspace_access_audit'")
@@ -538,7 +540,7 @@ it("adds Agent recovery state to a revision 15 database while preserving file ac
 
   const auth = new OwnerAuth({ dataDir: directory });
   try {
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(23);
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(24);
     for (const table of [
       "owner_workspace_access_audit",
       "owner_agent_activity",
@@ -602,7 +604,7 @@ it("backfills committed conversation tool actions into recoverable journal histo
 
   const auth = new OwnerAuth({ dataDir: directory });
   try {
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(23);
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(24);
     expect(
       auth.db
         .prepare(
@@ -663,7 +665,7 @@ it("backfills pending channel deliveries into the shared session journal when up
 
   const auth = new OwnerAuth({ dataDir: directory });
   try {
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(23);
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(24);
     expect(
       auth.db
         .prepare(
@@ -712,7 +714,7 @@ it("sends only the bounded Agent provisioning operation to the selected online n
       type: "node.agent.provision.progress",
       requestId,
       agentId,
-      stage: "preparing_home",
+      stage: "preparing_workspace",
     }),
   );
   await app.nodes.receive(
@@ -726,8 +728,8 @@ it("sends only the bounded Agent provisioning operation to the selected online n
         username: "mate_123456789012345678901234567",
         uid: 23001,
         gid: 23001,
-        home: "/var/lib/mate/agents/ed1e60c8-bdda-4f46-a857-bbd542f82640",
-        homeMarker: "a".repeat(64),
+        workspace: "/var/lib/mate/agents/ed1e60c8-bdda-4f46-a857-bbd542f82640",
+        workspaceMarker: "a".repeat(64),
       },
     }),
   );
@@ -736,7 +738,7 @@ it("sends only the bounded Agent provisioning operation to the selected online n
     ok: true,
     identity: { uid: 23001, gid: 23001 },
   });
-  expect(stages).toEqual(["preparing_home"]);
+  expect(stages).toEqual(["preparing_workspace"]);
   expect(socket.sent.join("\n")).not.toContain("useradd");
 });
 
@@ -784,12 +786,12 @@ it("persists a stable Agent session, verifies provisioning, then queues its init
       type: "node.agent.provision.progress",
       requestId: command.requestId,
       agentId: input.id,
-      stage: "preparing_home",
+      stage: "preparing_workspace",
     }),
   );
   const progressResponse = await app.request("/api/owner/agents", { headers: { cookie } });
   const progress = (await progressResponse.json()) as { agents: Array<{ stage: string }> };
-  expect(progress.agents[0]?.stage).toBe("preparing_home");
+  expect(progress.agents[0]?.stage).toBe("preparing_workspace");
   await app.nodes.receive(
     socket,
     JSON.stringify({
@@ -801,8 +803,8 @@ it("persists a stable Agent session, verifies provisioning, then queues its init
         username: "mate_ed1e60c8bdda4f46a857bbd542f",
         uid: 23001,
         gid: 23001,
-        home: `/var/lib/mate/agents/${input.id}`,
-        homeMarker: "a".repeat(64),
+        workspace: `/var/lib/mate/agents/${input.id}`,
+        workspaceMarker: "a".repeat(64),
       },
     }),
   );
@@ -816,7 +818,7 @@ it("persists a stable Agent session, verifies provisioning, then queues its init
       status: string;
       stage: string;
       model: { provider: string; id: string };
-      linuxIdentity: { username: string; uid: number; gid: number; home: string };
+      linuxIdentity: { username: string; uid: number; gid: number; workspace: string };
     };
   };
   expect(agent).toMatchObject({
@@ -828,7 +830,7 @@ it("persists a stable Agent session, verifies provisioning, then queues its init
       username: "mate_ed1e60c8bdda4f46a857bbd542f",
       uid: 23001,
       gid: 23001,
-      home: `/var/lib/mate/agents/${input.id}`,
+      workspace: `/var/lib/mate/agents/${input.id}`,
     },
   });
   expect(app.chat.inviteAgentToChannel(channelId, input.id)).toBe(true);
@@ -871,11 +873,12 @@ it("finds an online Agent beyond more than one page of offline deliveries", asyn
     app.agents.complete(
       id,
       {
-        username: "mate_" + id.replaceAll("-", "").slice(0, 27),
-        uid: 24000 + index,
-        gid: 24000 + index,
-        home: `/var/lib/mate/agents/${id}`,
-        homeMarker: "a".repeat(64),
+        // One ordinary account carries every Agent on a node; only the workspace differs.
+        username: "mate-offline-node",
+        uid: 24000,
+        gid: 24000,
+        workspace: `/var/lib/mate/agents/${id}`,
+        workspaceMarker: "a".repeat(64),
       },
       app.chat,
       true,
@@ -896,11 +899,11 @@ it("finds an online Agent beyond more than one page of offline deliveries", asyn
   app.agents.complete(
     onlineAgentId,
     {
-      username: "mate_" + onlineAgentId.replaceAll("-", "").slice(0, 27),
+      username: "mate-online-node",
       uid: 25001,
       gid: 25001,
-      home: `/var/lib/mate/agents/${onlineAgentId}`,
-      homeMarker: "a".repeat(64),
+      workspace: `/var/lib/mate/agents/${onlineAgentId}`,
+      workspaceMarker: "a".repeat(64),
     },
     app.chat,
     true,
@@ -963,7 +966,7 @@ it("retains one failed request and retries it with the same Agent and provisioni
       agentId: input.id,
       ok: false,
       code: "permission_denied",
-      message: "节点服务需要 root 权限才能建立 Agent Linux 账号。",
+      message: "节点无法创建 Agent 工作区根路径，请检查运行账号的写入权限。",
     }),
   );
   const [failed, concurrentFailed] = await Promise.all([failedCreation, concurrentDuplicate]);
@@ -1003,8 +1006,8 @@ it("retains one failed request and retries it with the same Agent and provisioni
         username: "mate_a82eb7db26f740f89bb88baf21d",
         uid: 23002,
         gid: 23002,
-        home: `/var/lib/mate/agents/${input.id}`,
-        homeMarker: "a".repeat(64),
+        workspace: `/var/lib/mate/agents/${input.id}`,
+        workspaceMarker: "a".repeat(64),
       },
     }),
   );
@@ -1017,5 +1020,268 @@ it("retains one failed request and retries it with the same Agent and provisioni
     id: input.id,
     sessionId: failedAgent.agent.sessionId,
     status: "waiting_credentials",
+  });
+});
+
+it("upgrades a version 23 Agent row to the single-account stage names and foreign keys", () => {
+  const directory = mkdtempSync(join(tmpdir(), "mate-agent-single-account-migration-")),
+    databasePath = join(directory, "control-plane.sqlite");
+  const old = new Database(databasePath);
+  old.exec(controlPlaneSchemaV23);
+  old.exec(`
+    INSERT INTO nodes(id,public_key,paired_at) VALUES('node','synthetic-public-key',1);
+    INSERT INTO owner_channels(id,name,description,visibility,created_at,updated_at)
+      VALUES('room','Research','Migration fixture','private',1,1);
+  `);
+  const insertAgent = old.prepare(`
+    INSERT INTO owner_agents(
+      id,node_id,name,role,description,provider,model_id,request_json,request_hash,
+      provision_request_id,status,stage,error,linux_username,uid,gid,home,home_marker,
+      created_at,updated_at,model_ready
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `);
+  insertAgent.run(
+    "agent-a",
+    "node",
+    "A",
+    "Replies",
+    "Old account fixture",
+    "openai",
+    "gpt-4.1",
+    "{}",
+    "a".repeat(64),
+    "provision-a",
+    "waiting_credentials",
+    "preparing_home",
+    "旧版建账号失败：需要 root 权限。",
+    "mate_agent",
+    23001,
+    23001,
+    "/var/lib/mate/agents/agent-a",
+    "a1".repeat(32),
+    1,
+    1,
+    1,
+  );
+  insertAgent.run(
+    "agent-b",
+    "node",
+    "B",
+    "Replies",
+    "Interrupted old account fixture",
+    "openai",
+    "gpt-4.1",
+    "{}",
+    "b".repeat(64),
+    "provision-b",
+    "provisioning",
+    "creating_account",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    2,
+    2,
+    0,
+  );
+  old.exec(`
+    INSERT INTO owner_agent_sessions(id,agent_id,created_at,verified_at)
+      VALUES('session-a','agent-a',1,1),('session-b','agent-b',2,NULL);
+  `);
+  old.pragma("application_id = 1296257100");
+  old.pragma("user_version = 23");
+  old.close();
+
+  const auth = new OwnerAuth({ dataDir: directory });
+  try {
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(24);
+    expect(auth.db.pragma("foreign_keys", { simple: true })).toBe(1);
+    expect(auth.db.pragma("foreign_key_check")).toEqual([]);
+    // Every row that carried a per-Agent identity is queued for one workspace re-verification, so
+    // the obsolete stage names never survive, no row keeps claiming a removed account, and the
+    // failure text that named that account goes with it.
+    expect(
+      auth.db.prepare("SELECT id,stage,status,error FROM owner_agents ORDER BY id").all(),
+    ).toEqual([
+      { id: "agent-a", stage: "queued", status: "provisioning", error: null },
+      { id: "agent-b", stage: "queued", status: "provisioning", error: null },
+    ]);
+    expect(
+      auth.db.prepare("SELECT id,agent_id FROM owner_agent_sessions ORDER BY id").all(),
+    ).toEqual([
+      { id: "session-a", agent_id: "agent-a" },
+      { id: "session-b", agent_id: "agent-b" },
+    ]);
+    expect(
+      auth.db.prepare("SELECT id,home_marker,model_ready FROM owner_agents ORDER BY id").all(),
+    ).toEqual([
+      { id: "agent-a", home_marker: "a1".repeat(32), model_ready: 1 },
+      { id: "agent-b", home_marker: null, model_ready: 0 },
+    ]);
+    // A row that never had an account keeps its own stage vocabulary mapping instead of being
+    // reset, so an upgrade does not lose the progress of an Agent that was still being prepared.
+    const freshRowId = "agent-b";
+    // The single account replaces the per-Agent account, so the recorded per-Agent identity no
+    // longer describes anything this release can use. It is cleared rather than left behind to
+    // disagree with the account the node will report on the next verification.
+    expect(
+      auth.db
+        .prepare("SELECT id,status,stage,linux_username,uid,gid,home FROM owner_agents ORDER BY id")
+        .all(),
+    ).toEqual([
+      {
+        id: "agent-a",
+        status: "provisioning",
+        stage: "queued",
+        linux_username: null,
+        uid: null,
+        gid: null,
+        home: null,
+      },
+      {
+        id: "agent-b",
+        status: "provisioning",
+        stage: "queued",
+        linux_username: null,
+        uid: null,
+        gid: null,
+        home: null,
+      },
+    ]);
+    // The rebuilt table still enforces the stage vocabulary it declares.
+    expect(() =>
+      auth.db.prepare("UPDATE owner_agents SET stage='creating_account' WHERE id='agent-a'").run(),
+    ).toThrow();
+  } finally {
+    auth.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+it("creates a new Agent on a node that carries an upgraded single-account row", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "mate-agent-mixed-account-")),
+    databasePath = join(directory, "control-plane.sqlite");
+  const old = new Database(databasePath);
+  old.exec(controlPlaneSchemaV23);
+  old.exec(`
+    INSERT INTO nodes(id,public_key,paired_at) VALUES('node','synthetic-public-key',1);
+  `);
+  old
+    .prepare(
+      "INSERT INTO owner_agents(id,node_id,name,role,description,provider,model_id,request_json,request_hash,provision_request_id,status,stage,error,linux_username,uid,gid,home,home_marker,created_at,updated_at,model_ready) VALUES('legacy','node','Legacy','Partner','Old account fixture','openai','gpt-4.1','{}',?,'provision-legacy','failed','failed','旧版建账号失败：需要 root 权限。','mate_legacy',23001,23001,'/var/lib/mate/agents/legacy',?,1,1,0)",
+    )
+    .run("c".repeat(64), "b2".repeat(32));
+  old.exec(
+    "INSERT INTO owner_agent_sessions(id,agent_id,created_at,verified_at) VALUES('session','legacy',1,1)",
+  );
+  old.pragma("application_id = 1296257100");
+  old.pragma("user_version = 23");
+  old.close();
+
+  const auth = new OwnerAuth({ dataDir: directory });
+  try {
+    // The upgraded row no longer claims a per-Agent account, so it cannot block a later Agent, and
+    // the failure text that named that removed account is cleared with it.
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(24);
+    expect(
+      auth.db
+        .prepare(
+          "SELECT status,stage,error,linux_username,uid,gid,home FROM owner_agents WHERE id='legacy'",
+        )
+        .get(),
+    ).toEqual({
+      status: "provisioning",
+      stage: "queued",
+      error: null,
+      linux_username: null,
+      uid: null,
+      gid: null,
+      home: null,
+    });
+    const agents = new AgentDirectory(auth.db);
+    const freshId = randomUUID();
+    agents.prepare({
+      id: freshId,
+      nodeId: "node",
+      name: "Fresh partner",
+      role: "Runs under one account",
+      description: "Synthetic post-upgrade fixture.",
+      model: { provider: "openai", id: "gpt-4.1" },
+    });
+    expect(() =>
+      agents.complete(
+        freshId,
+        {
+          username: "mate-node-account",
+          uid: 23001,
+          gid: 23001,
+          workspace: `/var/lib/mate/agents/${freshId}`,
+          workspaceMarker: "a".repeat(64),
+        },
+        {} as never,
+      ),
+    ).not.toThrow();
+  } finally {
+    auth.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+it("refuses an Agent whose node reports a different account than the one it already runs", async () => {
+  const app = setup();
+  const cookie = await login(app);
+  const { id: nodeId } = await pairNode(app, cookie);
+  const request = (id: string, name: string) => ({
+    id,
+    name,
+    role: "Runs under one account",
+    description: "Synthetic single-account identity fixture.",
+    nodeId,
+    model: { provider: "openai", id: "gpt-4.1" },
+  });
+  const identity = (agentId: string, account: { username: string; uid: number; gid: number }) => ({
+    ...account,
+    workspace: `/var/lib/mate/agents/${agentId}`,
+    workspaceMarker: "a".repeat(64),
+  });
+  const firstId = "a82eb7db-26f7-40f8-9bb8-8baf21dc5c0a";
+  app.agents.prepare(request(firstId, "First partner"));
+  expect(() =>
+    app.agents.complete(
+      firstId,
+      identity(firstId, { username: "mate-node-account", uid: 23001, gid: 23001 }),
+      app.chat,
+    ),
+  ).not.toThrow();
+
+  // The second Agent on the same node must report the identical account; a different username,
+  // UID or GID means the node is not the single ordinary account this release requires.
+  for (const account of [
+    { username: "mate-other-account", uid: 23001, gid: 23001 },
+    { username: "mate-node-account", uid: 23002, gid: 23001 },
+    { username: "mate-node-account", uid: 23001, gid: 23002 },
+  ]) {
+    const secondId = randomUUID();
+    app.agents.prepare(request(secondId, "Second partner"));
+    expect(() => app.agents.complete(secondId, identity(secondId, account), app.chat)).toThrow(
+      AgentRequestConflict,
+    );
+    expect(app.agents.get(secondId)?.status).toBe("provisioning");
+  }
+
+  const thirdId = randomUUID();
+  app.agents.prepare(request(thirdId, "Third partner"));
+  const completed = app.agents.complete(
+    thirdId,
+    identity(thirdId, { username: "mate-node-account", uid: 23001, gid: 23001 }),
+    app.chat,
+  );
+  expect(completed.linuxIdentity).toEqual({
+    username: "mate-node-account",
+    uid: 23001,
+    gid: 23001,
+    workspace: `/var/lib/mate/agents/${thirdId}`,
   });
 });

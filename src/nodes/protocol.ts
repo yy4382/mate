@@ -11,9 +11,8 @@ const nodeIdSchema = z.string().uuid();
 const signatureSchema = z.string().min(1).max(256);
 export const AgentProvisionStageSchema = z.enum([
   "checking_account",
-  "creating_account",
-  "preparing_home",
-  "verifying_identity",
+  "preparing_workspace",
+  "verifying_workspace",
 ]);
 const agentIdSchema = z.string().uuid();
 const workspaceOperationSchema = operationSchema.refine((operation) => operation.kind !== "exec");
@@ -32,13 +31,17 @@ const workspaceExecutionResultSchema = z
     revision: z.number().int().positive().optional(),
   })
   .strict();
+/**
+ * The single host account every Agent on a node runs under, plus this Agent's own workspace. Mate
+ * reads these facts from the running account; it never creates an account or switches UID/GID.
+ */
 const provisionIdentitySchema = z
   .object({
-    username: z.string().regex(/^[a-z][a-z0-9_]{0,31}$/),
-    uid: z.number().int().positive(),
-    gid: z.number().int().positive(),
-    home: z.string().regex(/^\//).max(4096),
-    homeMarker: z.string().regex(/^[0-9a-f]{64}$/),
+    username: z.string().min(1).max(255),
+    uid: z.number().int().nonnegative(),
+    gid: z.number().int().nonnegative(),
+    workspace: z.string().regex(/^\//).max(4096),
+    workspaceMarker: z.string().regex(/^[0-9a-f]{64}$/),
   })
   .strict();
 

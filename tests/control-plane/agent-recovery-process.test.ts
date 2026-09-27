@@ -103,7 +103,8 @@ function startNode(
     const workspaceExecutor=process.env.MATE_WORKSPACE_FAULT==='disabled' ? undefined :
       new LinuxWorkspaceExecutor(process.env.MATE_AGENT_HOME_ROOT,process.env.MATE_NODE_DATA_DIR,{
         lookupIdentity:(agentId)=>({username:'mate_test',uid:24001,gid:24001,
-          home:join(process.env.MATE_AGENT_HOME_ROOT,agentId)}),
+          workspace:join(process.env.MATE_AGENT_HOME_ROOT,agentId),
+          workspaceMarker:'a'.repeat(64)}),
         createBackend:()=>({execute:async()=>{
           appendFileSync(process.env.MATE_COUNT_FILE,'executed\\n');
           if(process.env.MATE_WORKSPACE_FAULT==='before_receipt') await new Promise(()=>{});
@@ -113,14 +114,14 @@ function startNode(
     const controller=new AbortController();
     process.on('SIGTERM',()=>controller.abort());
     await runLinuxNodeWithTestDependencies({controlPlaneUrl:process.env.MATE_CONTROL_PLANE_URL,
-      dataDirectory:process.env.MATE_NODE_DATA_DIR,agentHomeRoot:process.env.MATE_AGENT_HOME_ROOT,
+      dataDirectory:process.env.MATE_NODE_DATA_DIR,agentWorkspaceRoot:process.env.MATE_AGENT_HOME_ROOT,
       pairingToken:process.env.MATE_NODE_PAIRING_TOKEN,heartbeatIntervalMs:100,
       heartbeatTimeoutMs:2000},controller.signal,{
       modelWorkerEntry:${JSON.stringify(worker)},processOperations:operations,
       workspaceExecutor,
-      provisionAgent:async (agentId)=>({username:'mate_'+agentId.replaceAll('-','').slice(0,27),
-        uid:24001,gid:24001,home:process.env.MATE_AGENT_HOME_ROOT+'/'+agentId,
-        homeMarker:'a'.repeat(64)}),
+      prepareAgentWorkspace:async (agentId)=>({username:'mate-node-account',
+        uid:24001,gid:24001,workspace:process.env.MATE_AGENT_HOME_ROOT+'/'+agentId,
+        workspaceMarker:'a'.repeat(64)}),
     });
     db.close();
   `;

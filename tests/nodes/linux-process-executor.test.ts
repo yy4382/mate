@@ -5,8 +5,8 @@ const state = vi.hoisted(() => ({
     username: "mate_6a69f5cbd52c44d297e965cecc461f1",
     uid: 51001,
     gid: 51001,
-    home: "/var/lib/mate/agents/6a69f5cb-d52c-44d2-97e9-65cecc461f13",
-    homeMarker: "a".repeat(64),
+    workspace: "/var/lib/mate/agents/6a69f5cb-d52c-44d2-97e9-65cecc461f13",
+    workspaceMarker: "a".repeat(64),
   },
   backendIdentities: [] as unknown[],
   execute: vi.fn(),
@@ -14,7 +14,7 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("../../src/nodes/agent-provisioner.js", () => ({
-  readProvisionedLinuxAgentIdentity: vi.fn(() => state.identity),
+  readAgentWorkspaceIdentity: vi.fn(() => state.identity),
 }));
 
 vi.mock("../../src/execution/linux-processes.js", () => ({
@@ -64,14 +64,14 @@ it("passes a verified provisioned identity to ordinary process execution without
         username: state.identity.username,
         uid: state.identity.uid,
         gid: state.identity.gid,
-        home: state.identity.home,
+        home: state.identity.workspace,
       },
     },
   ]);
   expect(state.verifyQuota).toHaveBeenCalledWith(agentId);
   expect(state.execute).toHaveBeenCalledWith({
     agentId,
-    root: state.identity.home,
+    root: state.identity.workspace,
     timeoutMs: 60_000,
     operation,
     operationId,

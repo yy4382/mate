@@ -615,18 +615,18 @@ export class AgentRunCoordinator {
         true,
       );
     } catch {
-      return { ok: false, error: "原节点未能核验 Agent 身份与 home，请恢复原节点后重试。" };
+      return { ok: false, error: "原节点未能核验运行账号与 Agent 工作区，请恢复原节点后重试。" };
     }
     if (
       !verified.ok ||
       !row.home_marker ||
-      verified.identity.homeMarker !== row.home_marker ||
+      verified.identity.workspaceMarker !== row.home_marker ||
       verified.identity.username !== row.linux_username ||
       verified.identity.uid !== row.uid ||
       verified.identity.gid !== row.gid ||
-      verified.identity.home !== row.home
+      verified.identity.workspace !== row.home
     )
-      return { ok: false, error: "原 Linux 身份或 home 已缺失或改变；保持停用，请修复原数据。" };
+      return { ok: false, error: "运行账号或 Agent 工作区已缺失或改变；保持停用，请修复原数据。" };
     if (this.stopStatus(agentId).state !== "succeeded" || this.pauseReason(agentId) !== "manual")
       return { ok: false, error: "停用状态已变化，请重试。" };
     this.db
