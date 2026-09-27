@@ -1,17 +1,31 @@
 import Database from "better-sqlite3";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createControlPlaneApp } from "../../src/control-plane/http.js";
 
 const password = "owner-password-used-only-by-this-test";
 const cases: Array<{ app: ReturnType<typeof createControlPlaneApp>; dataDir: string }> = [];
 
 afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
   for (const { app, dataDir } of cases.splice(0)) {
     app.close();
+    const credentialDirectory = join(dataDir, "mate-control-plane.service");
+    if (existsSync(credentialDirectory)) chmodSync(credentialDirectory, 0o700);
     rmSync(dataDir, { recursive: true, force: true });
   }
 });
@@ -247,11 +261,76 @@ it("does not use a password file again after first-time setup", async () => {
 });
 
 it("rejects a first-time password file that other accounts can read", async () => {
-  const { app, passwordFile } = setup();
-  chmodSync(passwordFile, 0o644);
+  for (const mode of [0o640, 0o644]) {
+    const { app, passwordFile } = setup();
+    chmodSync(passwordFile, mode);
+
+    const response = await login(app);
+
+    expect(response.status).toBe(503);
+    expect(await response.text()).not.toContain(password);
+  }
+});
+
+it("does not mistake a temporary 0440 file for the systemd control-plane credential", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mate-owner-credential-"));
+  chmodSync(dataDir, 0o700);
+  const credentialDirectory = join(dataDir, "mate-control-plane.service");
+  mkdirSync(credentialDirectory, { mode: 0o700 });
+  const canonicalCredentialDirectory = realpathSync(credentialDirectory);
+  const passwordFile = join(canonicalCredentialDirectory, "owner-password");
+  writeFileSync(passwordFile, `${password}\n`, { mode: 0o440 });
+  chmodSync(passwordFile, 0o440);
+  chmodSync(credentialDirectory, 0o550);
+  vi.stubEnv("CREDENTIALS_DIRECTORY", canonicalCredentialDirectory);
+
+  const app = createControlPlaneApp({
+    dataDir,
+    passwordFile,
+    webRoot: dataDir,
+  });
+  cases.push({ app, dataDir });
+  const response = await login(app);
+
+  expect(response.status).toBe(503);
+});
+
+it("rejects a group-readable password file outside the systemd credentials directory", async () => {
+  const { app, passwordFile, dataDir } = setup();
+  const credentialDirectory = join(dataDir, "credentials");
+  mkdirSync(credentialDirectory, { mode: 0o700 });
+  const canonicalCredentialDirectory = realpathSync(credentialDirectory);
+  chmodSync(passwordFile, 0o440);
+  chmodSync(canonicalCredentialDirectory, 0o550);
+  vi.stubEnv("CREDENTIALS_DIRECTORY", canonicalCredentialDirectory);
 
   const response = await login(app);
 
   expect(response.status).toBe(503);
   expect(await response.text()).not.toContain(password);
+});
+
+it("rejects a symlink as the initial owner password file", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mate-owner-auth-"));
+  chmodSync(dataDir, 0o700);
+  const passwordFile = join(dataDir, "owner-password");
+  const linkedPasswordFile = join(dataDir, "linked-owner-password");
+  writeFileSync(passwordFile, `${password}\n`, { mode: 0o600 });
+  chmodSync(passwordFile, 0o600);
+  symlinkSync(passwordFile, linkedPasswordFile);
+  const linkedDataDir = join(dataDir, "linked-state");
+  const linkedApp = createControlPlaneApp({
+    dataDir: linkedDataDir,
+    passwordFile: linkedPasswordFile,
+    webRoot: dataDir,
+  });
+  cases.push({ app: linkedApp, dataDir });
+  const linkedResponse = await linkedApp.request("/api/auth/login", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ password }),
+  });
+
+  expect(linkedResponse.status).toBe(503);
+  expect(await linkedResponse.text()).not.toContain(password);
 });
