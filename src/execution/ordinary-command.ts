@@ -1,0 +1,376 @@
+import { spawn, type ChildProcess } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { killProcessGroup } from "./linux-processes.js";
+
+/** Captured bytes per stream for one ordinary command; anything beyond it is reported as cut. */
+export const ordinaryCommandOutputLimitBytes = 65_536;
+
+/** Grace after the shell exits, so output a fast command already wrote still arrives. */
+const outputGraceMs = 25;
+
+/** How long a stop waits for a killed process group to disappear before calling it unconfirmed. */
+const stopConfirmationTimeoutMs = 500;
+const stopConfirmationIntervalMs = 10;
+
+export interface OrdinaryCommandRequest {
+  operationId: string;
+  agentId: string;
+  /** The command exactly as the Agent wrote it. Mate adds nothing to it. */
+  command: string;
+  /** Absolute directory the command runs in. */
+  cwd: string;
+  /** HOME for the command: the Agent's own default workspace. */
+  home: string;
+  /** The running account's name, reported to the command as USER and LOGNAME. */
+  username: string;
+  timeoutMs: number;
+}
+
+/**
+ * What one ordinary command really did. Every field is evidence, not an interpretation: `code` and
+ * `signal` come from the shell process, `truncated` says the captured output is not the command's
+ * complete output, `timedOut` says Mate ended the command at its own time bound, and
+ * `processGroupRunning` says something still lives in the command's process group — which is
+ * exactly the part Mate can see and, for the same account, still signal. A timed-out command whose
+ * process group is still running is one Mate could not fully stop, not one it stopped. A descendant
+ * that leaves that process group, or that this account may not signal, is outside everything these
+ * fields describe: Mate reports no fate for it at all.
+ */
+export interface OrdinaryCommandReceipt {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  stdout: string;
+  stderr: string;
+  truncated: boolean;
+  timedOut: boolean;
+  processGroupRunning: boolean;
+  cwd: string;
+  startedAt: number;
+  durationMs: number;
+}
+
+export interface TrackedOrdinaryCommand {
+  operationId: string;
+  agentId: string;
+  pid: number;
+  startedAt: number;
+  /** The command's own shell already exited; only its process group is still there. */
+  exited: boolean;
+}
+
+interface TrackedProcess extends TrackedOrdinaryCommand {
+  /** Identifies this process incarnation where the host can tell them apart (Linux). */
+  startToken: string | undefined;
+}
+export type OrdinaryCommandPresence =
+  | { state: "running" | "descendants_running"; pid: number }
+  | { state: "not_tracked"; pid?: undefined };
+export type OrdinaryCommandStop =
+  | { state: "stopped"; operationId: string }
+  | { state: "not_tracked" }
+  | { state: "unconfirmed"; operationId: string; pid: number };
+
+/** The command's shell never started, so nothing ran and the failure is definite. */
+export class OrdinaryCommandNotStartedError extends Error {
+  constructor(cause: unknown) {
+    super(
+      `The ordinary command could not be started: ${cause instanceof Error ? cause.message : "unknown error"}`,
+    );
+    this.name = "OrdinaryCommandNotStartedError";
+  }
+}
+
+/**
+ * Runs one Agent command as an ordinary child process of the account Mate already runs as: same
+ * account, same host environment, the Agent's own working directory and `$HOME`, and a shell that
+ * receives the command text verbatim. Mate adds no privileges, no approval and no wrapper.
+ *
+ * The runner also remembers the commands it started while their process group still exists. That
+ * memory is what `process.list`, `process.inspect`, `process.stop` and the Agent-stop path report
+ * on: Mate can only ever speak for process groups it started and can still signal, and it forgets
+ * them when the node process restarts.
+ */
+export class OrdinaryCommandRunner {
+  private readonly tracked = new Map<string, TrackedProcess>();
+  private readonly outputLimitBytes: number;
+  private readonly environment: NodeJS.ProcessEnv;
+  private readonly now: () => number;
+  private readonly processGroupAlive: (pid: number) => boolean;
+  private readonly processStartToken: (pid: number) => string | undefined;
+
+  constructor(
+    options: {
+      outputLimitBytes?: number;
+      environment?: NodeJS.ProcessEnv;
+      now?: () => number;
+      /** How Mate decides a group is still there; substituted only to test the unconfirmed case. */
+      processGroupAlive?: (pid: number) => boolean;
+      /** How Mate tells one process incarnation from another; substituted only by tests. */
+      processStartToken?: (pid: number) => string | undefined;
+    } = {},
+  ) {
+    this.outputLimitBytes = options.outputLimitBytes ?? ordinaryCommandOutputLimitBytes;
+    if (!Number.isSafeInteger(this.outputLimitBytes) || this.outputLimitBytes < 1)
+      throw new Error("Ordinary command output limit must be a positive integer");
+    this.environment = options.environment ?? process.env;
+    this.now = options.now ?? Date.now;
+    this.processGroupAlive = options.processGroupAlive ?? processGroupExists;
+    this.processStartToken = options.processStartToken ?? processStartToken;
+  }
+
+  async run(request: OrdinaryCommandRequest): Promise<OrdinaryCommandReceipt> {
+    const startedAt = this.now(),
+      key = trackedKey(request.agentId, request.operationId);
+    let process_: ChildProcess;
+    try {
+      process_ = spawn("/bin/sh", ["-c", request.command], {
+        cwd: request.cwd,
+        env: commandEnvironment(request, this.environment),
+        // Its own session and process group, so Mate can end the command and its descendants
+        // without touching the node's own process group.
+        detached: true,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (error) {
+      throw new OrdinaryCommandNotStartedError(error);
+    }
+    const pid = process_.pid;
+    let timedOut = false,
+      exited = false,
+      opened = false,
+      hardStop: ReturnType<typeof setTimeout> | undefined,
+      releaseHardStop: (() => void) | undefined;
+    // The listeners exist before any await, so a failed start is always this call's definite
+    // result instead of an unhandled child-process error.
+    const outcome = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+      (resolveOutcome) => {
+        // A shell that cannot start emits only 'error'; that is a definite not-started result.
+        process_.once("error", () => resolveOutcome({ code: null, signal: null }));
+        process_.once("exit", (code, signal) => {
+          exited = true;
+          resolveOutcome({ code, signal });
+        });
+        process_.once("spawn", () => {
+          opened = true;
+        });
+      },
+    );
+    if (pid === undefined) {
+      await outcome;
+      throw new OrdinaryCommandNotStartedError(
+        new Error(`the shell process could not start in ${request.cwd}`),
+      );
+    }
+    const tracked: TrackedProcess = {
+      operationId: request.operationId,
+      agentId: request.agentId,
+      pid,
+      startedAt,
+      exited: false,
+      startToken: this.processStartToken(pid),
+    };
+    this.tracked.set(key, tracked);
+    // A process-group ID can only be reused once its group is gone. If this ID was still tracked
+    // for another operation, that entry is stale, and keeping it would let a later stop signal
+    // this brand-new command by mistake.
+    for (const [otherKey, other] of this.tracked)
+      if (other.pid === pid && otherKey !== key) this.tracked.delete(otherKey);
+    const stdout = new BoundedOutput(this.outputLimitBytes),
+      stderr = new BoundedOutput(this.outputLimitBytes);
+    process_.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
+    process_.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
+
+    const timer = setTimeout(() => {
+      // A command that already exited ended on its own; the deadline is then just a late timer,
+      // and reporting a timeout would turn its own result into a command Mate never ended.
+      if (exited) return;
+      timedOut = true;
+      killProcessGroup(pid);
+      // A signal that could not be delivered must still end the tool call; the process group
+      // report below says whether anything survived it.
+      hardStop = setTimeout(() => releaseHardStop?.(), stopConfirmationTimeoutMs);
+    }, request.timeoutMs);
+    const { code, signal } = await Promise.race([
+      outcome,
+      new Promise<{ code: null; signal: null }>((resolveHardStop) => {
+        releaseHardStop = () => resolveHardStop({ code: null, signal: null });
+      }),
+    ]);
+    clearTimeout(timer);
+    if (hardStop) clearTimeout(hardStop);
+    if (!opened) {
+      this.tracked.delete(key);
+      throw new OrdinaryCommandNotStartedError(
+        new Error(`the shell process could not start in ${request.cwd}`),
+      );
+    }
+    // Give output a command already wrote a moment to arrive, then stop waiting for pipes a
+    // background descendant may hold open: the command's own shell has exited.
+    await new Promise((resolveGrace) => setTimeout(resolveGrace, outputGraceMs));
+    const pipesOpen = !process_.stdout?.readableEnded || !process_.stderr?.readableEnded;
+    if (pipesOpen) {
+      process_.stdout?.destroy();
+      process_.stderr?.destroy();
+    }
+    tracked.exited = true;
+    const processGroupRunning = this.processGroupAlive(pid);
+    if (!processGroupRunning) this.tracked.delete(key);
+    return {
+      code,
+      signal,
+      stdout: stdout.text(),
+      stderr: stderr.text(),
+      // A descendant that still holds the output pipes may add output Mate never captured, so a
+      // result with open pipes is not a complete one either.
+      truncated: stdout.truncated || stderr.truncated || pipesOpen,
+      timedOut,
+      processGroupRunning,
+      cwd: request.cwd,
+      startedAt,
+      durationMs: this.now() - startedAt,
+    };
+  }
+
+  list(agentId: string): TrackedOrdinaryCommand[] {
+    const entries: TrackedOrdinaryCommand[] = [];
+    for (const command of [...this.tracked.values()])
+      if (command.agentId === agentId && this.live(command)) entries.push({ ...command });
+    return entries.sort((left, right) => left.startedAt - right.startedAt);
+  }
+
+  /** The tracked entry for one operation, so callers can report its presence and process ID. */
+  presence(agentId: string, operationId: string): OrdinaryCommandPresence {
+    const command = this.live(this.tracked.get(trackedKey(agentId, operationId)));
+    if (!command) return { state: "not_tracked" };
+    return { state: command.exited ? "descendants_running" : "running", pid: command.pid };
+  }
+
+  /** Best-effort termination of one tracked process group; never claims more than it confirmed. */
+  async stop(agentId: string, operationId: string): Promise<OrdinaryCommandStop> {
+    const command = this.live(this.tracked.get(trackedKey(agentId, operationId)));
+    if (!command) return { state: "not_tracked" };
+    killProcessGroup(command.pid);
+    return (await this.confirmGone(command.pid))
+      ? { state: "stopped", operationId }
+      : { state: "unconfirmed", operationId, pid: command.pid };
+  }
+
+  async stopAll(agentId: string): Promise<{ stopped: string[]; unconfirmed: string[] }> {
+    const stopped: string[] = [],
+      unconfirmed: string[] = [];
+    for (const entry of this.list(agentId)) {
+      const result = await this.stop(agentId, entry.operationId);
+      if (result.state === "stopped") stopped.push(entry.operationId);
+      else if (result.state === "unconfirmed") unconfirmed.push(entry.operationId);
+    }
+    return { stopped, unconfirmed };
+  }
+
+  /**
+   * The one place that decides whether Mate still owns a tracked process group, and it is the only
+   * way anything here reaches a process ID. An entry is forgotten when its group is gone, and also
+   * when the host says that ID now belongs to a different process incarnation: a group ID can only
+   * be reused after its group ended, and signalling the new owner would kill a stranger.
+   */
+  private live(command: TrackedProcess | undefined): TrackedProcess | undefined {
+    if (!command) return undefined;
+    const forget = () => {
+      this.tracked.delete(trackedKey(command.agentId, command.operationId));
+      return undefined;
+    };
+    if (command.startToken !== undefined) {
+      const current = this.processStartToken(command.pid);
+      if (current !== undefined && current !== command.startToken) return forget();
+    }
+    if (!this.processGroupAlive(command.pid)) return forget();
+    return command;
+  }
+
+  private async confirmGone(pid: number): Promise<boolean> {
+    const deadline = this.now() + stopConfirmationTimeoutMs;
+    while (this.processGroupAlive(pid)) {
+      if (this.now() >= deadline) return false;
+      await new Promise((resolve) => setTimeout(resolve, stopConfirmationIntervalMs));
+    }
+    return true;
+  }
+}
+
+/**
+ * One process incarnation, as Linux reports it: field 22 of `/proc/<pid>/stat` is the start time in
+ * clock ticks, so a recycled process ID can never look like the process it replaced. Hosts without
+ * `/proc` return nothing and fall back to the process group check alone.
+ */
+function processStartToken(pid: number): string | undefined {
+  let stat: string;
+  try {
+    stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+  } catch {
+    return undefined;
+  }
+  // `/proc/<pid>/stat` is `pid (comm) state ppid pgrp session ... itrealvalue starttime ...`; the
+  // command name is parenthesised and may contain spaces, so fields are counted from its close.
+  const closing = stat.lastIndexOf(")"),
+    token = closing < 0 ? undefined : stat.slice(closing + 2).split(" ")[19];
+  return token !== undefined && /^\d+$/.test(token) ? token : undefined;
+}
+
+/** Whether any process remains in this process group. EPERM means one exists that we cannot signal. */
+function processGroupExists(pid: number): boolean {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+function trackedKey(agentId: string, operationId: string): string {
+  return `${agentId}\0${operationId}`;
+}
+
+/**
+ * The command's environment is the node's own, because it is the very same account's environment:
+ * the spec asks the command to use the host's existing programs and environment. That deliberately
+ * includes Mate's own MATE_* service variables — the same account can already read the node's
+ * environment and its data directories, so Mate claims no confidentiality boundary here (ADR-0004)
+ * and hides nothing behind an allow-list that would only look like one. HOME, USER, LOGNAME and PWD
+ * do point at the Agent's own workspace instead of the node service's directories.
+ */
+function commandEnvironment(
+  request: OrdinaryCommandRequest,
+  environment: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  return {
+    ...environment,
+    HOME: request.home,
+    USER: request.username,
+    LOGNAME: request.username,
+    PWD: request.cwd,
+  };
+}
+
+/** Keeps a captured stream inside its byte limit and remembers that it cut something. */
+class BoundedOutput {
+  private readonly parts: Buffer[] = [];
+  private size = 0;
+  truncated = false;
+
+  constructor(private readonly limit: number) {}
+
+  push(chunk: Buffer): void {
+    const room = this.limit - this.size;
+    if (room <= 0) {
+      this.truncated = true;
+      return;
+    }
+    const part = chunk.subarray(0, room);
+    this.parts.push(part);
+    this.size += part.length;
+    if (part.length < chunk.length) this.truncated = true;
+  }
+
+  text(): string {
+    return Buffer.concat(this.parts).toString("utf8");
+  }
+}

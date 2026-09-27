@@ -12,6 +12,98 @@ process.env.MATE_MODEL_WORKER = workerMode;
 
 serveModelWorker((model, context, options) => {
   const stream = createAssistantMessageEventStream();
+  if (options.apiKey === "synthetic-key-ordinary-commands") {
+    // One scripted Agent runs four ordinary commands in its own workspace — a state-changing
+    // success, a failure with an exit code, output past Mate's capture limit, and a timeout — and
+    // then reports exactly what each tool result told it.
+    const turn = syntheticToolTurn++,
+      commands = [
+        "printf 'once\\n' >> ledger.txt; printf hello; id -u",
+        "printf boom >&2; exit 9",
+        "head -c 200000 /dev/zero | tr '\\000' x",
+        "sleep 30",
+      ],
+      command = commands[turn];
+    stream.push({
+      type: "done",
+      reason: command === undefined ? "stop" : "toolUse",
+      message: {
+        role: "assistant",
+        content:
+          command === undefined
+            ? [
+                {
+                  type: "text",
+                  text: JSON.stringify({
+                    results: nestedToolResults(context, "process.exec").map(summarizeResult),
+                  }),
+                },
+              ]
+            : [
+                {
+                  type: "toolCall",
+                  id: `ordinary-command-${turn}`,
+                  name: "tools.call",
+                  arguments: { name: "process.exec", input: { command } },
+                },
+              ],
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: command === undefined ? "stop" : "toolUse",
+        timestamp: Date.now(),
+      },
+    });
+    return stream;
+  }
+  if (options.apiKey === "synthetic-key-ordinary-command-recovery") {
+    // One state-changing ordinary command, then a plain turn: a retried delivery must reuse the
+    // command's receipt instead of appending to the ledger a second time.
+    const turn = syntheticToolTurn++;
+    stream.push({
+      type: "done",
+      reason: turn === 0 ? "toolUse" : "stop",
+      message: {
+        role: "assistant",
+        content:
+          turn === 0
+            ? [
+                {
+                  type: "toolCall",
+                  id: "ordinary-command-recovery",
+                  name: "tools.call",
+                  arguments: {
+                    name: "process.exec",
+                    input: { command: "printf 'executed\\n' >> ledger.txt" },
+                  },
+                },
+              ]
+            : [{ type: "text", text: "普通命令只应执行一次。" }],
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: turn === 0 ? "toolUse" : "stop",
+        timestamp: Date.now(),
+      },
+    });
+    return stream;
+  }
   if (
     options.apiKey === "synthetic-key-process-recovery" ||
     options.apiKey === "synthetic-key-workspace-recovery"
@@ -429,6 +521,49 @@ serveModelWorker((model, context, options) => {
   else emit();
   return stream;
 });
+
+/**
+ * What one nested Mate tool result told the model, bounded to what a transcript may carry. A real
+ * Agent reports what it understood; it does not paste a 64 KiB capture back into its own record.
+ */
+function summarizeResult(result) {
+  const receipt = result?.receipt;
+  return {
+    state: result?.state,
+    code: receipt?.code ?? null,
+    signal: receipt?.signal ?? null,
+    timedOut: receipt?.timedOut ?? null,
+    truncated: receipt?.truncated ?? null,
+    cwd: receipt?.cwd,
+    stdoutLength: typeof receipt?.stdout === "string" ? receipt.stdout.length : null,
+    stdoutHead: typeof receipt?.stdout === "string" ? receipt.stdout.slice(0, 40) : null,
+    stderr: typeof receipt?.stderr === "string" ? receipt.stderr.slice(0, 200) : null,
+  };
+}
+
+/** Every result of one nested Mate tool this turn's loop called by name, in call order. */
+function nestedToolResults(context, name) {
+  const matching = new Set();
+  for (const message of context.messages) {
+    if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+    for (const part of message.content)
+      if (part.type === "toolCall" && part.arguments?.name === name) matching.add(part.id);
+  }
+  const results = [];
+  for (const message of context.messages) {
+    if (message.role !== "toolResult" || !matching.has(message.toolCallId)) continue;
+    const text = (Array.isArray(message.content) ? message.content : [])
+      .filter((part) => part.type === "text")
+      .map((part) => part.text ?? "")
+      .join("");
+    try {
+      results.push(JSON.parse(text));
+    } catch {
+      results.push(undefined);
+    }
+  }
+  return results;
+}
 
 function systemPrompt(context) {
   const message = context.messages.find((candidate) => candidate.role === "system");
