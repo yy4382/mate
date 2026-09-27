@@ -115,6 +115,14 @@ export const agentConversationOperations = Object.freeze({
       .strict(),
     seatPolicy: "deny" as const,
   },
+  "tasks.claim_message": {
+    description:
+      "对一条你可读取的消息直接发起认领：该消息已有任务时认领那个任务（讨论串回复也可能带有自己的任务），否则创建并认领该讨论原顶层消息对应的任务；结果中的 messageId 是本次认领的任务锚点。已被同伴认领时返回 outcome=conflict 而不抢占，你仍可阅读、讨论或提供不冲突的协助。",
+    schema: z
+      .object({ messageId: z.string().uuid(), draftId: z.string().uuid().optional() })
+      .strict(),
+    seatPolicy: "deny" as const,
+  },
   "tasks.claim": {
     description: "认领一个可见任务；先检查相关讨论的新变化。",
     schema: z
@@ -138,7 +146,7 @@ export const agentConversationOperations = Object.freeze({
     seatPolicy: "deny" as const,
   },
   "tasks.transfer": {
-    description: "把任务移交给同一对话的另一名成员 Agent。",
+    description: "把你当前负责的任务移交给同一对话的另一名成员 Agent。",
     schema: z
       .object({
         taskId: z.string().uuid(),
