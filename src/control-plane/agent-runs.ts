@@ -402,15 +402,67 @@ export class AgentRunCoordinator {
     return true;
   }
 
-  stopStatus(agentId: string): { state: string; receipt: unknown | null } {
+  stopStatus(agentId: string): {
+    state: string;
+    receipt: unknown | null;
+    /** The stop's own scope, when the node reported one. */
+    scope?: string;
+    /** Started commands whose termination neither the node nor its restart could confirm. */
+    unconfirmedOperationIds?: string[];
+  } {
     const row = this.db
       .prepare(
         "SELECT state,receipt_json FROM owner_agent_stop_intents WHERE agent_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1",
       )
       .get(agentId) as { state: string; receipt_json: string | null } | undefined;
-    return row
-      ? { state: row.state, receipt: row.receipt_json ? JSON.parse(row.receipt_json) : null }
-      : { state: "unknown", receipt: { reason: "stop_not_confirmed" } };
+    if (!row) return { state: "unknown", receipt: { reason: "stop_not_confirmed" } };
+    const receipt = row.receipt_json === null ? null : (JSON.parse(row.receipt_json) as unknown),
+      scope = receiptScope(receipt),
+      unconfirmedOperationIds = unconfirmedCommandIds(receipt, this.unconfirmedCommands(agentId));
+    return {
+      state: row.state,
+      receipt,
+      ...(scope === undefined ? {} : { scope }),
+      ...(unconfirmedOperationIds.length === 0 ? {} : { unconfirmedOperationIds }),
+    };
+  }
+
+  /**
+   * Started commands whose termination nothing has proven.
+   *
+   * The node's tracker is per-node-process memory, so a command that outlived the node process it
+   * started under is out of Mate's reach: the durable row keeps whatever the node could still say,
+   * and a node that restarted says only that it does not know. Neither is a stopped command, and the
+   * owner must be told so instead of reading the stop's success as "everything is gone".
+   */
+  private unconfirmedCommands(agentId: string): string[] {
+    const rows = this.db
+      .prepare(
+        `SELECT operation_id,request_json,state,receipt_json FROM owner_agent_process_operations
+         WHERE agent_id=?
+         ORDER BY created_at`,
+      )
+      .all(agentId) as Array<{
+      operation_id: string;
+      request_json: string;
+      state: string;
+      receipt_json: string | null;
+    }>;
+    return rows
+      .filter((row) => {
+        if (!startedACommand(row.request_json)) return false;
+        const node = parseReceipt(row.receipt_json) as
+          { reason?: unknown; processGroupRunning?: unknown } | undefined;
+        // A command that never launched a shell has a definite result, whatever else it reported.
+        if (node?.reason === "command_not_started") return false;
+        // `executing` and `unknown` say the node gave no verdict at all. A verdict is still not a
+        // termination while the receipt sees the command's process group alive — that covers a
+        // timed-out shell that could not be killed and a successful shell that left a descendant.
+        return (
+          node?.processGroupRunning === true || row.state === "executing" || row.state === "unknown"
+        );
+      })
+      .map((row) => row.operation_id);
   }
 
   private readonly activeStops = new Set<string>();
@@ -519,7 +571,7 @@ export class AgentRunCoordinator {
               nodeId,
               kind: "operation.finished",
               referenceId: operationId,
-              summary: "后台进程停止结果未知；请检查节点连接与操作收据。",
+              summary: "普通命令停止结果未知；请检查节点连接与操作收据。",
               detail: { state: "unknown", reason: "node_stop_result_unavailable" },
               at: this.now(),
             });
@@ -551,6 +603,11 @@ export class AgentRunCoordinator {
             result.state === "succeeded" && this.unsettledProcessReceipt(result.agentId);
           const state = unsettled ? "unknown" : result.state;
           const receipt = unsettled ? { reason: "pending_process_receipts" } : result.receipt;
+          // The durable record names the same gap the owner page shows, so the activity log and the
+          // page cannot drift into saying different things about one stop.
+          const unconfirmed = unsettled
+            ? []
+            : unconfirmedCommandIds(receipt, this.unconfirmedCommands(result.agentId));
           this.db
             .prepare(
               "UPDATE owner_agent_stop_intents SET state=?,receipt_json=?,updated_at=? WHERE operation_id=?",
@@ -568,11 +625,19 @@ export class AgentRunCoordinator {
             referenceId: result.operationId,
             summary:
               state === "succeeded"
-                ? "后台进程已确认停止。"
+                ? unconfirmed.length === 0
+                  ? "本次节点运行启动的普通命令已确认停止。"
+                  : `本次节点运行中可确认的普通命令已停止；另有 ${unconfirmed.length} 条命令的终止无法确认。`
                 : state === "failed"
-                  ? "后台进程停止失败；保持停用，请检查节点诊断。"
-                  : "后台进程停止结果未知；请检查节点诊断。",
-            detail: { state, receipt },
+                  ? unconfirmed.length === 0
+                    ? "部分普通命令的终止无法确认；保持停用，请检查节点诊断。"
+                    : `本次节点运行中仍有 ${unconfirmed.length} 条命令的终止无法确认。保持停用，请检查节点诊断。`
+                  : "普通命令停止结果未知；请检查节点诊断。",
+            detail: {
+              state,
+              receipt,
+              ...(unconfirmed.length === 0 ? {} : { unconfirmedOperationIds: unconfirmed }),
+            },
             at: this.now(),
           });
         })
@@ -602,7 +667,7 @@ export class AgentRunCoordinator {
     if (row?.paused_reason !== "manual") return { ok: false, error: "Agent 尚未停用。" };
     const stop = this.stopStatus(agentId);
     if (stop.state !== "succeeded")
-      return { ok: false, error: "后台进程停止结果尚未确认，请检查节点诊断。" };
+      return { ok: false, error: "普通命令停止结果尚未确认，请检查节点诊断。" };
     if (this.unsettledProcessReceipt(agentId))
       return { ok: false, error: "仍有普通操作收据待对账，暂不能复启。" };
     let verified;
@@ -1036,6 +1101,45 @@ export class AgentRunCoordinator {
 
 function safeFailureCode(code: string | undefined): string {
   return code && /^[a-z_]{1,40}$/.test(code) ? code : "run_failed";
+}
+
+/** The scope a node's stop receipt named, when it named one. */
+function receiptScope(receipt: unknown): string | undefined {
+  const scope = (receipt as { scope?: unknown } | null)?.scope;
+  return typeof scope === "string" ? scope : undefined;
+}
+
+/**
+ * Every command whose termination is still unproven: the durable rows nothing has settled, plus the
+ * operation IDs the node's own stop receipt named as process groups it could not end. The two sets
+ * come from different questions — "what did the control plane never see finished" and "what did this
+ * stop fail to kill" — and the owner needs both.
+ */
+function unconfirmedCommandIds(receipt: unknown, durable: string[]): string[] {
+  const reported = (receipt as { unconfirmedOperationIds?: unknown } | null)
+    ?.unconfirmedOperationIds;
+  const ids = new Set(durable);
+  if (Array.isArray(reported)) for (const id of reported) if (typeof id === "string") ids.add(id);
+  return [...ids];
+}
+
+function parseReceipt(receiptJson: string | null): unknown {
+  try {
+    return receiptJson === null ? undefined : JSON.parse(receiptJson);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whether a durable operation row describes a command that really launched a shell. */
+function startedACommand(requestJson: string): boolean {
+  try {
+    return (
+      (JSON.parse(requestJson) as { operation?: { kind?: unknown } }).operation?.kind === "exec"
+    );
+  } catch {
+    return false;
+  }
 }
 
 export type AgentRunContext = AgentRunContextPage;

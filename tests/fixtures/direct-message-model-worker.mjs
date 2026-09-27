@@ -104,6 +104,46 @@ serveModelWorker((model, context, options) => {
     });
     return stream;
   }
+  if (options.apiKey === "synthetic-key-ordinary-command-restart") {
+    // One state-changing ordinary command that outlives the node process, then a plain turn: after
+    // the node restarts, the same durable action may only be replayed from its stored receipt.
+    const turn = syntheticToolTurn++;
+    stream.push({
+      type: "done",
+      reason: turn === 0 ? "toolUse" : "stop",
+      message: {
+        role: "assistant",
+        content:
+          turn === 0
+            ? [
+                {
+                  type: "toolCall",
+                  id: "ordinary-command-restart",
+                  name: "tools.call",
+                  arguments: {
+                    name: "process.exec",
+                    input: { command: "printf 'executed\\n' >> ledger.txt; sleep 5; printf done" },
+                  },
+                },
+              ]
+            : [{ type: "text", text: "节点重启后只应看到已保存的收据。" }],
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: turn === 0 ? "toolUse" : "stop",
+        timestamp: Date.now(),
+      },
+    });
+    return stream;
+  }
   if (
     options.apiKey === "synthetic-key-process-recovery" ||
     options.apiKey === "synthetic-key-workspace-recovery"

@@ -131,6 +131,8 @@ function startNode(options: {
   workspaceRoot: string;
   pairingToken?: string;
   modelWorkerEntry: string;
+  /** The node's ordinary-command time bound; tests that need a command to outlive the node raise it. */
+  commandTimeoutMs?: number;
 }): ProcessOutput {
   const clientModule = pathToFileURL(resolve("dist/src/nodes/client.js")).href,
     runtimeModule = pathToFileURL(resolve("dist/src/nodes/process-operation-runtime.js")).href,
@@ -171,7 +173,7 @@ function startNode(options: {
         MATE_CONTROL_PLANE_URL: options.origin,
         MATE_NODE_DATA_DIR: options.nodeData,
         MATE_NODE_AGENT_WORKSPACE_ROOT: options.workspaceRoot,
-        MATE_COMMAND_TIMEOUT_MS: String(commandTimeoutMs),
+        MATE_COMMAND_TIMEOUT_MS: String(options.commandTimeoutMs ?? commandTimeoutMs),
         ...(options.pairingToken ? { MATE_NODE_PAIRING_TOKEN: options.pairingToken } : {}),
       },
       stdio: ["ignore", "pipe", "pipe"],
@@ -208,7 +210,7 @@ function processOperation(directory: string, agentId: string): Record<string, un
   try {
     return db
       .prepare(
-        `SELECT operation_id,state,receipt_json FROM owner_agent_process_operations
+        `SELECT operation_id,state,receipt_json,node_receipt_confirmed FROM owner_agent_process_operations
          WHERE agent_id=? ORDER BY created_at LIMIT 1`,
       )
       .get(agentId) as Record<string, unknown> | undefined;
@@ -555,6 +557,95 @@ it("does not run a state-changing command twice when its lost receipt is retried
     for (const socket of sockets) socket.terminate();
     await new Promise<void>((done) => proxyWs.close(() => done()));
     await new Promise<void>((done) => proxyHttp.close(() => done()));
+    rmSync(directory, { recursive: true, force: true });
+  }
+}, 90_000);
+
+it("keeps an already-started command from running again after the node restarts", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "mate-agent-command-node-restart-")),
+    nodeData = join(directory, "node-data"),
+    workspaceRoot = join(directory, "agent-workspaces");
+  chmodSync(directory, 0o700);
+  writeFileSync(join(directory, "owner-password"), `${ownerPassword}\n`, { mode: 0o600 });
+  let control: ProcessOutput | undefined,
+    node: ProcessOutput | undefined,
+    restarted: ProcessOutput | undefined;
+  try {
+    control = startControlPlane(directory);
+    const origin = `http://127.0.0.1:${(await control.waitFor(/MATE_CONTROL_PLANE_LISTENING (\d+)/))[1]}`,
+      cookie = await login(origin);
+    const pairing = (await (
+      await fetch(new URL("/api/owner/nodes/pairing-tokens", origin), {
+        method: "POST",
+        headers: { cookie },
+      })
+    ).json()) as { pairingToken: string };
+    node = startNode({
+      origin,
+      nodeData,
+      workspaceRoot,
+      pairingToken: pairing.pairingToken,
+      modelWorkerEntry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
+      commandTimeoutMs: 20_000,
+    });
+    const nodeId = (await node.waitFor(/MATE_NODE_PAIRED ([0-9a-f-]+)/i))[1]!;
+    const agent = await createAgent(origin, cookie, nodeId),
+      ledger = join(agent.linuxIdentity.workspace, "ledger.txt");
+    await startAgentRun(origin, cookie, agent.id, "synthetic-key-ordinary-command-restart");
+
+    // The command really started in its own process group before the node went away.
+    await eventually(() => {
+      try {
+        return readFileSync(ledger, "utf8").includes("executed") ? true : undefined;
+      } catch {
+        return undefined;
+      }
+    }, "the started command's side effect");
+
+    // SIGTERM the node while that command is still running, then start the node again on the same
+    // data directory: the pre-restart command is now beyond the tracker's memory.
+    await stopProcess(node);
+    node = undefined;
+    restarted = startNode({
+      origin,
+      nodeData,
+      workspaceRoot,
+      modelWorkerEntry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
+      commandTimeoutMs: 20_000,
+    });
+    await restarted.waitFor(/MATE_NODE_CONNECTED ([0-9a-f-]+)/i);
+    await eventually(
+      () => (firstRunId(directory, agent.id, "completed") ? true : undefined),
+      "the resumed Agent run",
+    );
+    // The side effect happened exactly once. The restarted node answered from its durable start
+    // record instead of re-running a command whose termination it could not confirm, so nothing was
+    // appended and no second operation row was ever created for the same durable action.
+    await delay(2500);
+    expect(readFileSync(ledger, "utf8").trimEnd().split("\n")).toEqual(["executed"]);
+    const operation = processOperation(directory, agent.id)!;
+    expect(typeof operation.operation_id).toBe("string");
+    // The record is exactly as honest as the node can make it: this incarnation never held the
+    // command's receipt, so its fate stays unknown rather than being restated as a result.
+    expect(operation).toMatchObject({
+      state: "unknown",
+      node_receipt_confirmed: 1,
+      receipt_json: JSON.stringify({ reason: "node_restarted_during_operation" }),
+    });
+    const db = controlPlaneDatabase(directory);
+    let operationRows: Array<{ operation_id: string }>;
+    try {
+      operationRows = db
+        .prepare("SELECT operation_id FROM owner_agent_process_operations WHERE agent_id=?")
+        .all(agent.id) as Array<{ operation_id: string }>;
+    } finally {
+      db.close();
+    }
+    expect(operationRows).toEqual([{ operation_id: operation.operation_id }]);
+  } finally {
+    await stopProcess(restarted);
+    await stopProcess(node);
+    await stopProcess(control);
     rmSync(directory, { recursive: true, force: true });
   }
 }, 90_000);

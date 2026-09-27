@@ -447,6 +447,51 @@ it("does not notice a run it does not own", async () => {
   await finishRun(app, socket, run);
 });
 
+it("refuses a deactivated run's message and tool actions while the Agent stays deactivated", async () => {
+  const fixture = await setup();
+  const { app, cookie, socket } = fixture;
+  const { agentId, dm } = await prepareAgent(fixture, "Deactivated partner");
+
+  const firstStart = socket.sent.length;
+  app.chat.createMessage(dm, "先做当前工作。");
+  const run = await waitForRun(socket, firstStart);
+
+  // The owner deactivates the Agent: the running model process is cancelled and the run loses its
+  // authorization, so anything it still sends is refused instead of being accepted late.
+  const pause = await app.request(`/api/owner/agents/${agentId}/pause`, {
+    method: "POST",
+    headers: { cookie },
+  });
+  expect(pause.status).toBe(200);
+  expect(app.runs?.pauseReason(agentId)).toBe("manual");
+  expect(
+    fixture.db.prepare("SELECT state,error_code FROM owner_agent_runs WHERE id=?").get(run.runId),
+  ).toEqual({ state: "failed", error_code: "manual_pause" });
+
+  const refused = await callAgentTool(app, socket, run, "deactivated-send", {
+    name: "messages.send",
+    input: { conversationId: dm, text: "停用后不应发出的消息。" },
+  });
+  expect(refused).toMatchObject({ ok: false });
+  expect(
+    fixture.db
+      .prepare("SELECT COUNT(*) AS count FROM owner_messages WHERE text=?")
+      .get("停用后不应发出的消息。"),
+  ).toEqual({ count: 0 });
+
+  const listStart = socket.sent.length;
+  await callAgentTool(app, socket, run, "deactivated-list", { name: "tools.list", input: {} });
+  expect(JSON.parse(socket.sent[listStart]!)).toMatchObject({ ok: false });
+
+  // The Agent stays deactivated: no new run is authorized for this Agent while it is paused.
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  expect(
+    sentMessages(socket, firstStart).filter(
+      (message) => message.type === "control.agent.run" && message.runId !== run.runId,
+    ),
+  ).toHaveLength(0);
+});
+
 it("does not notice a run that already finished, and the next run still sees the message", async () => {
   const fixture = await setup();
   const { app, socket } = fixture;

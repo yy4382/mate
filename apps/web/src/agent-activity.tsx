@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { agentStopStatus, type AgentStop } from "./agent-stop-status.js";
 
 interface ActivityEvent {
   sequence: number;
@@ -13,7 +14,7 @@ interface ActivityPage {
   events: ActivityEvent[];
   nodeOnline: boolean;
   pausedReason: "manual" | "credentials" | null;
-  stop: { state: string; receipt: unknown | null } | null;
+  stop: AgentStop | null;
   nextBefore: number | null;
 }
 
@@ -31,7 +32,7 @@ export function AgentActivity({ agentId }: { agentId: string }) {
         const result = (await response.json().catch(() => null)) as { error?: string } | null;
         throw new Error(result?.error ?? "无法改变 Agent 状态。");
       }
-      const result = (await response.json()) as { stop?: ActivityPage["stop"] };
+      const result = (await response.json()) as { stop?: AgentStop };
       setPage((current) =>
         current
           ? {
@@ -70,9 +71,7 @@ export function AgentActivity({ agentId }: { agentId: string }) {
       clearInterval(timer);
     };
   }, [agentId, open, expanded]);
-  const awaitingProcessReceipts =
-    page?.stop?.state === "unknown" &&
-    (page.stop.receipt as { reason?: string } | null)?.reason === "pending_process_receipts";
+  const stopStatus = agentStopStatus(page?.stop);
   return (
     <section className="agent-activity" aria-label="Agent 动态">
       <button type="button" onClick={() => setOpen(!open)}>
@@ -85,17 +84,7 @@ export function AgentActivity({ agentId }: { agentId: string }) {
             {page?.pausedReason && (
               <span>{page.pausedReason === "manual" ? "已停用" : "模型凭据或配置待处理"}</span>
             )}
-            {page?.pausedReason === "manual" && (
-              <span role="status">
-                {page.stop?.state === "succeeded"
-                  ? "后台进程已确认停止"
-                  : page.stop?.state === "failed"
-                    ? "后台进程停止失败；请查看动态中的失败收据与节点诊断后重试"
-                    : awaitingProcessReceipts
-                      ? "普通操作收据待对账；完成后将再次请求停止"
-                      : "后台进程停止结果未知；请检查节点与动态记录"}
-              </span>
-            )}
+            {page?.pausedReason === "manual" && <span role="status">{stopStatus.summary}</span>}
             <button
               type="button"
               onClick={() => void changePause(page?.pausedReason === "manual" ? "resume" : "pause")}
@@ -106,10 +95,10 @@ export function AgentActivity({ agentId }: { agentId: string }) {
               (page.stop?.state === "unknown" || page.stop?.state === "failed") && (
                 <button
                   type="button"
-                  disabled={awaitingProcessReceipts}
+                  disabled={stopStatus.awaitingProcessReceipts}
                   onClick={() => void changePause("pause")}
                 >
-                  {awaitingProcessReceipts ? "等待操作收据对账" : "重新请求停止后台进程"}
+                  {stopStatus.awaitingProcessReceipts ? "等待操作收据对账" : stopStatus.retryLabel}
                 </button>
               )}
             <button type="button" aria-pressed={expanded} onClick={() => setExpanded(!expanded)}>

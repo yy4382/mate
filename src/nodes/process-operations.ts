@@ -28,6 +28,13 @@ export const agentProcessOperationSchema = z.discriminatedUnion("kind", [
 export type AgentProcessOperation = z.infer<typeof agentProcessOperationSchema>;
 export type AgentProcessOperationState = "started" | "succeeded" | "failed" | "unknown";
 
+/**
+ * What one Agent-wide stop can speak for: only the commands the node process that answered still
+ * tracks. A stop receipt carries this scope so the control plane and the owner page never read its
+ * success as "nothing from an earlier node run can still be running".
+ */
+export const ordinaryCommandStopScope = "this_node_run";
+
 export interface AgentProcessOperationReceipt {
   operationId: string;
   agentId: string;

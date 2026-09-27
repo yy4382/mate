@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { redirectToLogin } from "./navigation.js";
 import { AgentActivity } from "./agent-activity.js";
+import { agentStopStatus, type AgentStop } from "./agent-stop-status.js";
 import "./agents-page.css";
 
 interface NodeSummary {
@@ -37,7 +38,7 @@ interface AgentSummary {
   createdAt: number;
   updatedAt: number;
   pausedReason?: "manual" | "credentials" | null;
-  stop?: { state: string; receipt: unknown | null } | null;
+  stop?: AgentStop | null;
 }
 
 interface AgentRequest {
@@ -1491,11 +1492,10 @@ export function AgentsPage() {
                   </div>
                   {agent.pausedReason === "manual" && (
                     <p className="agent-credential-note" role="status">
+                      {agentStopStatus(agent.stop).summary}
                       {agent.stop?.state === "succeeded"
-                        ? "后台进程已确认停止；复启前会核对运行账号与 Agent 工作区。"
-                        : agent.stop?.state === "failed"
-                          ? "后台进程停止失败；请查看动态中的失败收据与节点诊断后重试。"
-                          : "后台进程停止结果未知；请查看动态与节点诊断。"}
+                        ? "复启前会核对运行账号与 Agent 工作区。"
+                        : ""}
                     </p>
                   )}
                   <p className="agent-stage" role="status">
