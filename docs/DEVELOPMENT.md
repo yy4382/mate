@@ -13,7 +13,9 @@ pnpm dev:web
 
 浏览器打开 `http://127.0.0.1:5173`，Vite 将 `/api` 转给本机控制面。PWA 注册和授权入口可在安全的 localhost 上检查；真实公网 Push 送达、域名证书和 Caddy WSS 须在 HTTPS 部署上验证。Web Push 的仓库测试只注入本地伪发送器，验证通知选择、去重、失败不回滚和落点；它不向第三方服务发送通知。
 
-Linux 节点要求 root、`setpriv`、systemd 和 Agent 用户切换。macOS 单元测试和本地网页检查只验证应用逻辑，不构成真实 Linux 权限与进程隔离证据。Debian 13 隔离容器可运行下面的身份、文件权限、进程密钥与特权审批检查；测试前先在目标 Linux 架构内运行 `pnpm build`，以生成原生模块和 no-replace helper：
+> **下列 Linux 身份与 systemd 检查只覆盖重构中的旧实现，不是新首版验收要求。** 新目标是在同一个现有普通账号下启动 Mate 和 Agent 命令，不创建用户、不切换身份、不操作 systemd；见[产品方向](PROJECT_DIRECTION.md)。
+
+当前旧 Linux 节点要求 root、`setpriv`、systemd 和 Agent 用户切换。macOS 单元测试和本地网页检查只验证应用逻辑，不构成真实 Linux 权限与进程隔离证据。Debian 13 隔离容器可运行下面的旧身份、文件权限、进程密钥与特权审批检查；测试前先在目标 Linux 架构内运行 `pnpm build`，以生成原生模块和 no-replace helper：
 
 ```sh
 MATE_AGENT_TEST_SANDBOX=temporary-container node tests/linux/agent-provisioner.integration.mjs

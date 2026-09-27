@@ -1,6 +1,8 @@
 # Debian 13 部署与运维
 
-Mate 首版在一台 Debian 13 VPS 上运行两个服务：`mate-control-plane.service` 用专用非特权账号 `mate-control` 保存共享事实和提供网页；`mate-node.service` 以 root 运行，按控制面批准的请求建立 Agent Linux 用户并切换普通命令的 UID。Caddy 终止 HTTPS，代理到仅监听 `127.0.0.1` 的控制面。Agent、频道、成员和模型凭据在网页管理，不写入部署 JSON。
+> **重构中的旧实现说明，不是首版目标部署步骤。** 下文对应当前尚未移除的 root、按 Agent 建账号和 systemd 安装代码。新目标见[产品方向](PROJECT_DIRECTION.md)和[单账号执行决定](adr/0004-single-account-command-execution.md)；完成新安装路径前不要用下文部署目标版本。
+
+当前旧实现会在一台 Debian 13 VPS 上运行两个服务：`mate-control-plane.service` 用专用非特权账号 `mate-control` 保存共享事实和提供网页；`mate-node.service` 以 root 运行，按控制面批准的请求建立 Agent Linux 用户并切换普通命令的 UID。Caddy 终止 HTTPS，代理到仅监听 `127.0.0.1` 的控制面。Agent、频道、成员和模型凭据在网页管理，不写入部署 JSON。
 
 ## 安装
 

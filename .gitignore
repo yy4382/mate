@@ -10,3 +10,6 @@ data/
 docs/reference/raft-*.md
 mate.local.json
 .worktrees/
+
+# pnpm content-addressable store (dependency cache, never source).
+.pnpm-store/
