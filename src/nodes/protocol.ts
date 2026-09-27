@@ -108,9 +108,14 @@ const NodeRequestShapeSchema = z.discriminatedUnion("type", [
       limit: z.number().int().min(1).max(100),
     })
     .strict(),
+  /**
+   * Run transcript: the model's plain assistant text for one run. It is recorded in the Agent's
+   * own session record and never published to a conversation; speaking requires an explicit
+   * `messages.send` tool call through `node.agent.run.tool`.
+   */
   z
     .object({
-      type: z.literal("node.agent.run.journal"),
+      type: z.literal("node.agent.run.transcript"),
       requestId: requestIdSchema,
       runId: requestIdSchema,
       agentId: agentIdSchema,
@@ -450,9 +455,10 @@ const NodeControlMessageShapeSchema = z.discriminatedUnion("type", [
       nextCursor: z.number().int().positive().nullable(),
     })
     .strict(),
+  /** Durable, idempotent acknowledgement of one run transcript entry. */
   z
     .object({
-      type: z.literal("control.agent.run.journal_ack"),
+      type: z.literal("control.agent.run.transcript_ack"),
       requestId: requestIdSchema,
       runId: requestIdSchema,
       accepted: z.boolean(),

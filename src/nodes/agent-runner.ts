@@ -19,7 +19,11 @@ export interface AgentRunPage {
 export interface AgentRunTransport {
   /** Cursor addresses the run-context projection, not an individual journal sequence. */
   context(cursor: number, signal: AbortSignal): Promise<AgentRunPage>;
-  journal(text: string, signal: AbortSignal): Promise<boolean>;
+  /**
+   * Record one plain assistant turn in the Agent's own session record. Resolves false when the
+   * control plane refuses the entry; this transport never publishes to a conversation.
+   */
+  transcript(text: string, signal: AbortSignal): Promise<boolean>;
   tool(
     toolCallId: string,
     operation: string,
@@ -40,7 +44,7 @@ export interface AgentRunTestDependencies {
   identity?: ModelProcessIdentity;
 }
 
-/** Keep one Pi session per Agent and bind each completed assistant turn to its owner DM. */
+/** Keep one Pi session per Agent and record each plain assistant turn in its session record. */
 export async function runAgentModel(
   request: AgentRunMessage,
   transport: AgentRunTransport,
@@ -52,7 +56,7 @@ export async function runAgentModel(
     modelId = request.modelId,
     runId = request.runId,
     sessionId = request.sessionId,
-    outputChannel = { channelId: request.channelId, visibility: request.channelVisibility },
+    sourceChannel = { channelId: request.channelId, visibility: request.channelVisibility },
     prompt = request.prompt;
   // Do not retain the protocol object, which otherwise keeps the credential alive during paging.
   request.apiKey = "";
@@ -65,7 +69,7 @@ export async function runAgentModel(
       apiKey,
       ...(dependencies.modelWorkerEntry ? { entry: dependencies.modelWorkerEntry } : {}),
       ...(dependencies.identity ? { identity: dependencies.identity } : {}),
-      onJournal: (text) => transport.journal(text, connectionSignal),
+      onTranscript: (text) => transport.transcript(text, connectionSignal),
       onTool: (toolCallId, operation, input) =>
         transport.tool(toolCallId, operation, input, connectionSignal),
       signal: connectionSignal,
@@ -87,7 +91,7 @@ export async function runAgentModel(
       sessionId,
       actionScopeId: request.actionScopeId,
       messages,
-      outputChannel,
+      sourceChannel,
       prompt,
     });
     if (!connectionSignal.aborted) transport.result(true);
@@ -104,7 +108,7 @@ export async function runAgentModel(
 export function makeAgentRunRequest(
   type:
     | "node.agent.run.context"
-    | "node.agent.run.journal"
+    | "node.agent.run.transcript"
     | "node.agent.run.tool"
     | "node.agent.run.result",
   runId: string,

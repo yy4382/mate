@@ -17,9 +17,6 @@ import type { AgentProcessOperation } from "../nodes/process-operations.js";
 export type ChannelVisibility = "public" | "private";
 export type OwnerPrincipalKind = "human" | "agent";
 
-const archivedReminderReplyNotice = (text: string): string =>
-  `Mate 提示：回复未送达。此对话已归档；如需告知他人，请使用 messages.send 指向有权限的活跃对话。未送达内容：${text}`;
-
 export interface OwnerChannel {
   id: string;
   name: string;
@@ -1319,227 +1316,74 @@ export class OwnerChat {
     };
   }
 
-  /** Commit one reply, or retain an archived reminder reply privately with a delivery notice. */
-  commitAgentReply(
+  /**
+   * Record one plain assistant turn of a run in that Agent's own session record.
+   *
+   * This is the only way run output enters Agent history: it appends a private journal row with no
+   * published message, no delivery handling and no run completion. Speaking to a conversation is a
+   * separate, explicit `messages.send` tool action. A run may record several turns (a preamble
+   * beside a tool call, then a final answer), so identity is the request id, not the run: a
+   * duplicate delivery of one request is acknowledged idempotently, the same request carrying
+   * different text is refused, and a run that is no longer running accepts only exact replays of
+   * what it already recorded.
+   */
+  recordAgentRunTranscript(
     runId: string,
     nodeId: string,
     agentId: string,
     requestId: string,
     text: string,
-    replayOnly = false,
   ): boolean {
     const contentHash = createHash("sha256").update(text, "utf8").digest("hex");
     return this.db
       .transaction(() => {
         const run = this.db
           .prepare(
-            `SELECT r.state,r.node_id,r.delivery_id,r.input_end_seq,
-                    d.channel_id,d.message_id,s.id AS session_id,c.archived AS channel_archived,
-                    first_input.seq AS input_start_seq,m.internal_kind AS delivery_kind
+            `SELECT r.state,s.id AS session_id,d.channel_id
              FROM owner_agent_runs r
-             JOIN owner_message_deliveries d ON d.id=r.delivery_id
              JOIN owner_agent_sessions s ON s.agent_id=r.agent_id
-             JOIN owner_channels c ON c.id=d.channel_id
-             JOIN owner_messages m ON m.id=d.message_id
-             JOIN owner_agent_session_journal first_input
-               ON first_input.message_id=d.message_id AND first_input.agent_id=r.agent_id
-                  AND first_input.role='user'
-            WHERE r.id=? AND r.node_id=? AND r.agent_id=?`,
+             JOIN owner_message_deliveries d ON d.id=r.delivery_id
+             WHERE r.id=? AND r.node_id=? AND r.agent_id=?`,
           )
           .get(runId, nodeId, agentId) as
-          | {
-              state: "running" | "completed" | "failed";
-              node_id: string;
-              delivery_id: string;
-              input_end_seq: number;
-              channel_id: string;
-              message_id: string;
-              session_id: string;
-              channel_archived: number;
-              input_start_seq: number;
-              delivery_kind: string | null;
-            }
+          | { state: "running" | "completed" | "failed"; session_id: string; channel_id: string }
           | undefined;
         if (!run) return false;
-        const committed = this.db
+        const recorded = this.db
           .prepare(
-            "SELECT 1 FROM owner_agent_session_journal WHERE run_id=? AND role='assistant' AND tool_action_id IS NULL",
+            `SELECT content_hash FROM owner_agent_session_journal
+             WHERE run_id=? AND agent_id=? AND request_id=? AND role='assistant'
+               AND tool_action_id IS NULL`,
           )
-          .get(runId);
-        if (committed) {
-          const existing = this.db
-            .prepare(
-              `SELECT j.seq,j.message_id,j.request_id,j.content_hash,j.text,
-                      m.id AS visible_message_id,m.channel_id AS visible_channel_id,
-                      m.author_kind AS visible_author_kind,m.author_id AS visible_author_id,
-                      m.text AS visible_text
-               FROM owner_agent_session_journal j
-               LEFT JOIN owner_messages m ON m.id=j.message_id
-               WHERE j.run_id=? AND j.agent_id=? AND j.session_id=? AND j.channel_id=?
-                 AND j.role='assistant' AND j.tool_action_id IS NULL`,
-            )
-            .get(runId, agentId, run.session_id, run.channel_id) as
-            | {
-                seq: number;
-                message_id: string | null;
-                request_id: string;
-                content_hash: string;
-                text: string;
-                visible_message_id: string | null;
-                visible_channel_id: string | null;
-                visible_author_kind: string | null;
-                visible_author_id: string | null;
-                visible_text: string | null;
-              }
-            | undefined;
-          return Boolean(
-            run.state === "completed" &&
-            existing &&
-            Number.isSafeInteger(existing.seq) &&
-            existing.seq > 0 &&
-            existing.request_id === requestId &&
-            existing.content_hash === contentHash &&
-            (existing.message_id === null
-              ? run.delivery_kind === "reminder" &&
-                existing.visible_message_id === null &&
-                existing.text === archivedReminderReplyNotice(text)
-              : existing.message_id === existing.visible_message_id &&
-                existing.text === text &&
-                existing.visible_channel_id === run.channel_id &&
-                existing.visible_author_kind === "agent" &&
-                existing.visible_author_id === agentId &&
-                existing.visible_text === text),
-          );
-        }
-        if (replayOnly || run.state !== "running") return false;
-        if (run.channel_archived === 1 && run.delivery_kind !== "reminder") {
-          this.db
-            .prepare(
-              `UPDATE owner_agent_runs SET state='failed',error_code='channel_archived',
-                 retry_at=NULL,completed_at=? WHERE id=? AND agent_id=? AND state='running'`,
-            )
-            .run(this.now(), runId, agentId);
-          return false;
-        }
-
-        const at = this.now();
-        if (run.channel_archived === 1) {
-          this.db
-            .prepare(
-              `INSERT INTO owner_agent_session_journal(
-                 session_id,agent_id,channel_id,run_id,request_id,content_hash,role,text,created_at
-               ) VALUES(?,?,?,?,?,?,'assistant',?,?)`,
-            )
-            .run(
-              run.session_id,
-              agentId,
-              run.channel_id,
-              runId,
-              requestId,
-              contentHash,
-              archivedReminderReplyNotice(text),
-              at,
-            );
-          this.db
-            .prepare(
-              `UPDATE owner_message_deliveries SET state='handled',handled_at=?
-               WHERE recipient_kind='agent' AND recipient_id=? AND channel_id=? AND state='pending'
-                 AND message_id IN (
-                   SELECT j.message_id FROM owner_agent_session_journal j
-                   JOIN owner_messages m ON m.id=j.message_id
-                   WHERE j.agent_id=? AND j.session_id=? AND j.role='user'
-                     AND j.seq>=? AND j.seq<=? AND m.internal_kind='reminder'
-                 )`,
-            )
-            .run(
-              at,
-              agentId,
-              run.channel_id,
-              agentId,
-              run.session_id,
-              run.input_start_seq,
-              run.input_end_seq,
-            );
-          this.db
-            .prepare(
-              "UPDATE owner_agent_runs SET state='completed',completed_at=?,retry_at=NULL,error_code=NULL WHERE id=? AND state='running'",
-            )
-            .run(at, runId);
-          return true;
-        }
-        const messageId = randomUUID(),
-          sequence = this.db
-            .prepare(
-              "SELECT COALESCE(MAX(order_seq),0)+1 AS next FROM owner_messages WHERE channel_id=?",
-            )
-            .get(run.channel_id) as { next: number };
+          .get(runId, agentId, requestId) as { content_hash: string | null } | undefined;
+        if (recorded) return recorded.content_hash === contentHash;
+        if (run.state !== "running") return false;
         this.db
           .prepare(
-            "INSERT INTO owner_messages(id,channel_id,order_seq,text,root_id,quote_id,author_kind,author_id,created_at) VALUES(?,?,?,?,?,?, 'agent', ?,?)",
-          )
-          .run(messageId, run.channel_id, sequence.next, text, null, null, agentId, at);
-        const message = toMessage({
-          id: messageId,
-          channel_id: run.channel_id,
-          order_seq: sequence.next,
-          revision: 1,
-          text,
-          author_kind: "agent",
-          author_id: agentId,
-          created_at: at,
-        });
-        this.db
-          .prepare(
-            "INSERT INTO owner_agent_session_journal(session_id,agent_id,channel_id,message_id,run_id,request_id,content_hash,role,text,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            `INSERT INTO owner_agent_session_journal(
+               session_id,agent_id,channel_id,run_id,request_id,content_hash,role,text,created_at
+             ) VALUES(?,?,?,?,?,?,'assistant',?,?)`,
           )
           .run(
             run.session_id,
             agentId,
             run.channel_id,
-            messageId,
             runId,
             requestId,
             contentHash,
-            "assistant",
             text,
-            at,
+            this.now(),
           );
-        this.queueDeliveries(message, at);
-        this.record("message.created", run.channel_id, message);
-        this.db
-          .prepare(
-            `UPDATE owner_message_deliveries SET state='handled',handled_at=?
-             WHERE recipient_kind='agent' AND recipient_id=? AND channel_id=? AND state='pending'
-               AND message_id IN (
-                 SELECT j.message_id FROM owner_agent_session_journal j
-                 JOIN owner_messages m ON m.id=j.message_id
-                 WHERE j.agent_id=? AND j.session_id=? AND j.role='user'
-                   AND j.seq>=? AND j.seq<=? AND j.message_id IS NOT NULL
-                   AND (?=0 OR m.internal_kind='reminder')
-               )`,
-          )
-          .run(
-            at,
-            agentId,
-            run.channel_id,
-            agentId,
-            run.session_id,
-            run.input_start_seq,
-            run.input_end_seq,
-            run.delivery_kind === "reminder" ? 1 : 0,
-          );
-        this.db
-          .prepare(
-            "UPDATE owner_agent_runs SET state='completed',completed_at=?,retry_at=NULL,error_code=NULL WHERE id=? AND state='running'",
-          )
-          .run(at, runId);
         return true;
       })
       .immediate();
   }
 
-  /** A successful silent turn consumes only the owner inputs captured by its run boundary. */
-  completeAgentRunSilently(runId: string, agentId: string): boolean {
+  /**
+   * Complete a successful run and mark only the deliveries its boundary captured as handled.
+   * Speaking, staying silent and completing a run are separate facts: this never changes a task.
+   */
+  completeAgentRun(runId: string, agentId: string): boolean {
     return this.db
       .transaction(() => {
         const run = this.db

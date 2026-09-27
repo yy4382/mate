@@ -760,15 +760,15 @@ it("reconciles a durable node receipt before resuming a disconnected Agent", asy
   await app.nodes.receive(
     reconnect,
     JSON.stringify({
-      type: "node.agent.run.journal",
+      type: "node.agent.run.transcript",
       requestId: randomUUID(),
       runId: oldRun.runId,
       agentId,
-      text: "stale reply",
+      text: "stale transcript",
     }),
   );
   expect(JSON.parse(reconnect.sent.at(-1)!)).toMatchObject({
-    type: "control.agent.run.journal_ack",
+    type: "control.agent.run.transcript_ack",
     accepted: false,
   });
   await app.nodes.receive(

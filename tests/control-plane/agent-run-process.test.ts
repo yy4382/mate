@@ -211,18 +211,34 @@ async function getMessages(origin: string, cookie: string, channelId: string) {
   };
 }
 
-async function waitForAssistant(
-  origin: string,
-  cookie: string,
-  channelId: string,
-): Promise<Array<{ author: { kind: string; id: string }; text: string }>> {
-  const deadline = Date.now() + 8000;
+/**
+ * Read the private turn a run recorded in its own Agent session record. A run's plain model output
+ * never becomes an owner-visible message, so this is the only place its text can be observed.
+ */
+async function waitForTranscript(directory: string, runId: string): Promise<string> {
+  const deadline = Date.now() + 8000,
+    dbPath = joinPath(directory, "control-plane-data", "control-plane.sqlite");
   while (Date.now() < deadline) {
-    const messages = (await getMessages(origin, cookie, channelId)).messages;
-    if (messages.some((message) => message.author.kind === "agent")) return messages;
+    const db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    try {
+      const row = db
+        .prepare(
+          "SELECT text FROM owner_agent_session_journal WHERE run_id=? AND role='assistant' AND tool_action_id IS NULL",
+        )
+        .get(runId) as { text: string } | undefined;
+      if (row) return row.text;
+    } finally {
+      db.close();
+    }
     await delay(25);
   }
-  throw new Error("Agent did not publish a private DM reply");
+  throw new Error("The model run did not record a private transcript");
+}
+
+function agentMessages(
+  messages: Array<{ author: { kind: string; id: string }; text: string }>,
+): Array<{ author: { kind: string; id: string }; text: string }> {
+  return messages.filter((message) => message.author.kind === "agent");
 }
 
 async function waitForMessageCount(
@@ -240,88 +256,7 @@ async function waitForMessageCount(
   throw new Error("Expected owner DM and Agent reply count was not reached");
 }
 
-async function readAgentReplyEvent(
-  response: Response,
-  agentId: string,
-  diagnostics: {
-    startedAt: number;
-    checkpoints: string[];
-    frames: string[];
-    chunks: number;
-    lastChunkAt: number | null;
-  },
-): Promise<{ author: { kind: string; id: string }; text: string }> {
-  const reader = response.body!.getReader(),
-    decoder = new TextDecoder();
-  let buffer = "";
-  try {
-    return await Promise.race([
-      (async () => {
-        while (true) {
-          const chunk = await reader.read();
-          if (chunk.done) throw new Error("SSE stream closed before Agent reply event");
-          diagnostics.chunks++;
-          diagnostics.lastChunkAt = Date.now();
-          buffer += decoder.decode(chunk.value, { stream: true });
-          let boundary = buffer.indexOf("\n\n");
-          while (boundary >= 0) {
-            const frame = buffer.slice(0, boundary);
-            buffer = buffer.slice(boundary + 2);
-            const eventName = frame.match(/^event: (.+)$/m)?.[1],
-              payloadText = frame.match(/^data: (.+)$/m)?.[1];
-            if (eventName) {
-              let summary = eventName;
-              if (payloadText) {
-                try {
-                  const event = JSON.parse(payloadText) as {
-                    seq?: number;
-                    channelId?: string;
-                    payload?: { author?: { kind?: string; id?: string } };
-                  };
-                  summary += ` seq=${event.seq ?? "?"} channel=${event.channelId ?? "?"}`;
-                  if (event.payload?.author)
-                    summary += ` author=${event.payload.author.kind ?? "?"}/${event.payload.author.id ?? "?"}`;
-                } catch {
-                  summary += " invalid-json";
-                }
-              }
-              diagnostics.frames.push(summary);
-              if (diagnostics.frames.length > 20) diagnostics.frames.shift();
-            }
-            if (eventName === "message.created" && payloadText) {
-              const event = JSON.parse(payloadText) as {
-                payload?: {
-                  author?: { kind?: string; id?: string };
-                  text?: string;
-                };
-              };
-              const payload = event.payload;
-              if (
-                payload?.author?.kind === "agent" &&
-                payload.author.id === agentId &&
-                typeof payload.text === "string"
-              )
-                return {
-                  author: { kind: payload.author.kind, id: payload.author.id },
-                  text: payload.text,
-                };
-            }
-            boundary = buffer.indexOf("\n\n");
-          }
-        }
-      })(),
-      delay(20_000).then(() => {
-        throw new Error(
-          `SSE did not deliver Agent reply event (status=${response.status}, elapsed=${Date.now() - diagnostics.startedAt}ms, chunks=${diagnostics.chunks}, lastChunkAt=${diagnostics.lastChunkAt ?? "none"}, frames=[${diagnostics.frames.join("; ")}], checkpoints=[${diagnostics.checkpoints.join("; ")}])`,
-        );
-      }),
-    ]);
-  } finally {
-    await reader.cancel();
-  }
-}
-
-it("queues an owner DM, recovers it after node and control-plane restart, and waits for journal ACK", async () => {
+it("queues an owner DM, recovers it after node and control-plane restart, and waits for transcript ACK", async () => {
   const directory = mkdtempSync(join(tmpdir(), "mate-agent-run-process-"));
   chmodSync(directory, 0o700);
   const passwordFile = joinPath(directory, "owner-password");
@@ -346,12 +281,12 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
     agentId = "",
     sharedChannelId = "",
     runSessionIds: string[] = [],
-    oldJournal: string | undefined,
-    secondJournal: string | undefined,
-    secondJournalRequestId = "",
+    oldTranscript: string | undefined,
+    secondTranscript: string | undefined,
+    secondTranscriptRequestId = "",
     variantRequestId = "",
-    injectedStaleJournal = false,
-    duplicatedJournal = false,
+    injectedStaleTranscript = false,
+    duplicatedTranscript = false,
     heldSecondAck = false,
     releaseAck = false,
     secondAcknowledgements = 0,
@@ -361,11 +296,11 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
     droppedRecoveryContext = false,
     storedAck: string | undefined;
   const runStarts: StartedAgentRun[] = [];
-  const firstJournalDropped = deferred<void>(),
+  const firstTranscriptDropped = deferred<void>(),
     secondRunStarted = deferred<void>(),
-    duplicateJournalAcked = deferred<void>(),
-    staleJournalRejected = deferred<void>(),
-    variantJournalRejected = deferred<void>(),
+    duplicateTranscriptAcked = deferred<void>(),
+    staleTranscriptRejected = deferred<void>(),
+    variantTranscriptRejected = deferred<void>(),
     reconnectAuthenticated = deferred<void>(),
     secondNodeResult = deferred<void>(),
     completedReplayAcked = deferred<void>(),
@@ -415,30 +350,30 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
           return;
         }
         if (
-          message.type === "node.agent.run.journal" &&
+          message.type === "node.agent.run.transcript" &&
           message.runId === firstRunId &&
-          !oldJournal
+          !oldTranscript
         ) {
-          oldJournal = text;
-          firstJournalDropped.resolve();
+          oldTranscript = text;
+          firstTranscriptDropped.resolve();
           nodeSocket.terminate();
           upstream.terminate();
           return;
         }
-        if (message.type === "node.agent.run.journal" && message.runId === secondRunId) {
-          secondJournal = text;
-          secondJournalRequestId = String(message.requestId);
+        if (message.type === "node.agent.run.transcript" && message.runId === secondRunId) {
+          secondTranscript = text;
+          secondTranscriptRequestId = String(message.requestId);
         }
         if (message.type === "node.agent.run.result" && message.runId === secondRunId) {
           nodeResults++;
           if (nodeResults === 1) secondNodeResult.resolve();
           if (upstream.readyState === WebSocket.OPEN) {
             upstream.send(data, { binary });
-            if (nodeResults === 1 && secondJournal) {
-              // The completed run's exact journal is replayed after its result removed the
+            if (nodeResults === 1 && secondTranscript) {
+              // The completed run's exact transcript is replayed after its result removed the
               // in-memory pending entry. This must be checked against the durable row.
               completedReplaySent = true;
-              upstream.send(secondJournal);
+              upstream.send(secondTranscript);
             }
             if (!staleResultSent && firstRunId && agentId) {
               staleResultSent = true;
@@ -494,9 +429,9 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
             const latestNode = [...nodeSockets].find(
               (candidate) => candidate.readyState === WebSocket.OPEN,
             );
-            if (secondJournal && latestNode && upstream.readyState === WebSocket.OPEN) {
+            if (secondTranscript && latestNode && upstream.readyState === WebSocket.OPEN) {
               completedReplaySent = true;
-              upstream.send(secondJournal);
+              upstream.send(secondTranscript);
             }
           }
         }
@@ -514,9 +449,13 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
           else if (!secondRunId) {
             secondRunId = String(message.runId);
             secondRunStarted.resolve();
-            if (oldJournal && !injectedStaleJournal && upstream.readyState === WebSocket.OPEN) {
-              injectedStaleJournal = true;
-              upstream.send(oldJournal);
+            if (
+              oldTranscript &&
+              !injectedStaleTranscript &&
+              upstream.readyState === WebSocket.OPEN
+            ) {
+              injectedStaleTranscript = true;
+              upstream.send(oldTranscript);
             }
           } else if (!thirdRunId) {
             thirdRunId = String(message.runId);
@@ -553,22 +492,26 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
           credentialCancelSent.resolve();
         }
         if (
-          message.type === "control.agent.run.journal_ack" &&
+          message.type === "control.agent.run.transcript_ack" &&
           message.runId === firstRunId &&
           message.accepted === false
         )
-          staleJournalRejected.resolve();
+          staleTranscriptRejected.resolve();
         if (
-          message.type === "control.agent.run.journal_ack" &&
+          message.type === "control.agent.run.transcript_ack" &&
           message.runId === secondRunId &&
           message.requestId === variantRequestId &&
           message.accepted === false
-        )
-          variantJournalRejected.resolve();
+        ) {
+          variantTranscriptRejected.resolve();
+          // Do not forward a refusal for the live request identity: the node's turn must stay
+          // pending so this test can still exercise the completed-run replay barrier below.
+          return;
+        }
         if (
-          message.type === "control.agent.run.journal_ack" &&
+          message.type === "control.agent.run.transcript_ack" &&
           message.runId === secondRunId &&
-          message.requestId === secondJournalRequestId &&
+          message.requestId === secondTranscriptRequestId &&
           message.accepted
         ) {
           if (completedReplaySent && nodeResults > 0) {
@@ -579,21 +522,22 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
             return;
           }
           secondAcknowledgements++;
-          if (!duplicatedJournal && secondJournal && upstream.readyState === WebSocket.OPEN) {
-            duplicatedJournal = true;
-            upstream.send(secondJournal);
+          if (!duplicatedTranscript && secondTranscript && upstream.readyState === WebSocket.OPEN) {
+            duplicatedTranscript = true;
+            upstream.send(secondTranscript);
             return;
           }
           if (secondAcknowledgements >= 2) {
-            duplicateJournalAcked.resolve();
-            if (!variantRequestId && secondJournal && upstream.readyState === WebSocket.OPEN) {
-              const variant = JSON.parse(secondJournal) as Record<string, unknown>;
-              variantRequestId = randomUUID();
+            duplicateTranscriptAcked.resolve();
+            if (!variantRequestId && secondTranscript && upstream.readyState === WebSocket.OPEN) {
+              const variant = JSON.parse(secondTranscript) as Record<string, unknown>;
+              // The same transcript identity may not carry different text, running or not.
+              variantRequestId = secondTranscriptRequestId;
               upstream.send(
                 JSON.stringify({
                   ...variant,
                   requestId: variantRequestId,
-                  text: "变体内容不应获得已完成 run 的重放 ACK。",
+                  text: "同一请求身份的变体正文必须被拒绝。",
                 }),
               );
             }
@@ -609,14 +553,14 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
           }
         }
         if (
-          message.type === "control.agent.run.journal_ack" &&
+          message.type === "control.agent.run.transcript_ack" &&
           message.runId === secondRunId &&
           message.requestId === completedReplayVariantRequestId &&
           message.accepted === false
         )
           completedReplayVariantRejected.resolve();
         if (heldSecondAck && !releaseAck && message.runId === secondRunId) {
-          if (message.type === "control.agent.run.journal_ack" && message.accepted) {
+          if (message.type === "control.agent.run.transcript_ack" && message.accepted) {
             storedAck ??= text;
             return;
           }
@@ -772,9 +716,9 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
     expect((await getMessages(currentOrigin, cookie, channelId)).messages).toHaveLength(1);
 
     expect(await putCredential(currentOrigin, cookie, "synthetic-key-version-a")).toBe(204);
-    stage = "first worker journal and forced disconnect";
-    await within(firstJournalDropped.promise, "first journal request");
-    expect(oldJournal).toContain("这是首次测试回复。");
+    stage = "first worker transcript and forced disconnect";
+    await within(firstTranscriptDropped.promise, "first transcript request");
+    expect(oldTranscript).toContain("这是首次测试回复。");
     expect((await getMessages(currentOrigin, cookie, channelId)).messages).toHaveLength(1);
     await waitForDatabaseState(directory, (state) => state.pending === 1 && state.failedRuns === 1);
     expect(await deleteCredential(currentOrigin, cookie)).toBe(204);
@@ -800,61 +744,32 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
     });
     const agents = (await afterRestart.json()) as { agents: Array<{ id: string; status: string }> };
     expect(agents.agents.find((agent) => agent.id === agentId)?.status).toBe("waiting_credentials");
-    const snapshotResponse = await fetch(new URL("/api/owner/snapshot", currentOrigin), {
-      headers: { cookie },
-    });
-    const snapshot = (await snapshotResponse.json()) as { cursor: number };
-    const eventStream = await fetch(
-      new URL(`/api/owner/events?cursor=${snapshot.cursor}`, currentOrigin),
-      { headers: { cookie } },
-    );
-    expect(eventStream.headers.get("content-type")).toContain("text/event-stream");
-    const sseDiagnostics = {
-      startedAt: Date.now(),
-      checkpoints: [] as string[],
-      frames: [] as string[],
-      chunks: 0,
-      lastChunkAt: null as number | null,
-    };
-    sseDiagnostics.checkpoints.push(
-      `stream-open cursor=${snapshot.cursor} status=${eventStream.status}`,
-    );
-    const assistantEventPromise = readAgentReplyEvent(eventStream, agentId, sseDiagnostics);
     const credentialResponse = await putCredential(
       currentOrigin,
       cookie,
       "synthetic-key-version-b",
     );
-    sseDiagnostics.checkpoints.push(`credential-updated status=${credentialResponse}`);
     expect(credentialResponse).toBe(204);
-    stage = "recovered model run and stale journal rejection";
+    stage = "recovered model run and stale transcript rejection";
     await within(secondRunStarted.promise, "second model run");
-    sseDiagnostics.checkpoints.push(`second-run-started id=${secondRunId}`);
-    await within(staleJournalRejected.promise, "old run journal rejection");
-    sseDiagnostics.checkpoints.push("stale-journal-rejected");
+    await within(staleTranscriptRejected.promise, "old run transcript rejection");
 
-    // The first run's delayed journal is stale after disconnect/restart and must not commit.
+    // The first run's delayed transcript is stale after disconnect/restart and must not commit.
     await delay(50);
-    expect((await getMessages(currentOrigin, cookie, channelId)).messages).toHaveLength(1);
-    expect(injectedStaleJournal).toBe(true);
-    const secondRunReply = await waitForAssistant(currentOrigin, cookie, channelId);
-    sseDiagnostics.checkpoints.push(
-      `assistant-message-visible count=${secondRunReply.length} at=${Date.now()}`,
-    );
-    expect(await within(assistantEventPromise, "assistant reply SSE event", 25_000)).toMatchObject({
-      author: { kind: "agent", id: agentId },
-      text: "这是密钥更新后的测试回复。",
-    });
-    expect(secondRunReply.filter((message) => message.author.kind === "agent")).toMatchObject([
-      { text: "这是密钥更新后的测试回复。" },
-    ]);
-    stage = "duplicate journal ACK barrier";
-    await within(duplicateJournalAcked.promise, "duplicate journal ACK");
-    await within(variantJournalRejected.promise, "changed journal rejection");
+    const rejectedMessages = (await getMessages(currentOrigin, cookie, channelId)).messages;
+    expect(rejectedMessages).toHaveLength(1);
+    expect(agentMessages(rejectedMessages)).toHaveLength(0);
+    expect(injectedStaleTranscript).toBe(true);
+    // The recovered run records its turn privately; the web-visible conversation is untouched.
+    expect(await waitForTranscript(directory, secondRunId)).toBe("这是密钥更新后的测试回复。");
+    stage = "duplicate transcript ACK barrier";
+    await within(duplicateTranscriptAcked.promise, "duplicate transcript ACK");
+    await within(variantTranscriptRejected.promise, "same-identity transcript rejection");
     expect(nodeResults).toBe(0);
-    expect(secondRunReply).toHaveLength(2);
-    expect(databaseState(directory).pending).toBe(0);
-    expect(databaseState(directory).handled).toBe(1);
+    // Nothing is published and nothing is consumed until the run reports its result.
+    expect((await getMessages(currentOrigin, cookie, channelId)).messages).toHaveLength(1);
+    expect(databaseState(directory).pending).toBe(1);
+    expect(databaseState(directory).handled).toBe(0);
 
     releaseAck = true;
     if (storedAck && nodeSockets.size) {
@@ -869,13 +784,13 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
     await Promise.race([
       secondNodeResult.promise,
       delay(5000).then(() => {
-        throw new Error("Node did not report its run result after journal ACK");
+        throw new Error("Node did not report its run result after transcript ACK");
       }),
     ]);
-    stage = "completed run exact journal replay after result";
-    await within(completedReplayAcked.promise, "completed run exact journal replay ACK");
+    stage = "completed run exact transcript replay after result";
+    await within(completedReplayAcked.promise, "completed run exact transcript replay ACK");
     expect(completedReplayAccepted).toBe(true);
-    // Force a real node WebSocket reconnect, then replay the durable completed journal again.
+    // Force a real node WebSocket reconnect, then replay the durable completed transcript again.
     for (const socket of [...nodeSockets]) socket.terminate();
     for (const socket of [...controlSockets]) socket.terminate();
     await waitForAuthenticatedConnections(4, () => authenticatedConnections);
@@ -885,8 +800,8 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
     );
     await delay(50);
     const latest = [...controlSockets].find((socket) => socket.readyState === WebSocket.OPEN);
-    if (latest && secondJournal) {
-      const variant = JSON.parse(secondJournal) as Record<string, unknown>;
+    if (latest && secondTranscript) {
+      const variant = JSON.parse(secondTranscript) as Record<string, unknown>;
       completedReplayVariantRequestId = randomUUID();
       latest.send(
         JSON.stringify({
@@ -913,7 +828,7 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
     await within(thirdRunStarted.promise, "held model run start");
     await delay(100);
     stage = "held run preserves unacknowledged delivery";
-    expect((await getMessages(currentOrigin, cookie, channelId)).messages).toHaveLength(3);
+    expect((await getMessages(currentOrigin, cookie, channelId)).messages).toHaveLength(2);
     expect(databaseState(directory)).toMatchObject({ pending: 1, handled: 1 });
     stage = "same credential value leaves run active";
     expect(await putCredential(currentOrigin, cookie, "synthetic-key-hold")).toBe(204);
@@ -925,18 +840,16 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
     expect(credentialCancelCount).toBe(1);
     stage = "new key starts replacement run";
     await within(fourthRunStarted.promise, "retry after canceled model run", 12000);
-    stage = "replacement run sends visible reply";
-    const allReplies = await waitForMessageCount(currentOrigin, cookie, channelId, 4);
-    expect(allReplies.filter((message) => message.author.kind === "agent")).toMatchObject([
-      { text: "这是密钥更新后的测试回复。" },
-      { text: "这是取消旧 run 后的新凭据回复。" },
-    ]);
+    stage = "replacement run records its turn privately";
+    await waitForRunState(directory, fourthRunId, "completed");
+    expect(await waitForTranscript(directory, fourthRunId)).toBe("这是取消旧 run 后的新凭据回复。");
     expect(fourthRunId).not.toBe(thirdRunId);
     expect(databaseState(directory)).toMatchObject({ pending: 0, handled: 2 });
     await delay(100);
     const finalMessages = (await getMessages(currentOrigin, cookie, channelId)).messages;
-    expect(finalMessages).toHaveLength(4);
-    expect(finalMessages.filter((message) => message.author.kind === "agent")).toHaveLength(2);
+    // Only the owner's two inputs are web-visible; no model turn was published.
+    expect(finalMessages).toHaveLength(2);
+    expect(agentMessages(finalMessages)).toHaveLength(0);
     expect(node?.text.includes("synthetic-key-version-a")).toBe(false);
     expect(node?.text.includes("synthetic-key-version-b")).toBe(false);
     expect(node?.text.includes("synthetic-key-hold")).toBe(false);
@@ -956,7 +869,7 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
         ]),
     ).toBe(false);
 
-    stage = "channel input uses the existing Agent session and receives its reply there";
+    stage = "a channel input uses the existing Agent session and publishes nothing there";
     const sharedInput = await fetch(
       new URL(`/api/owner/channels/${sharedChannelId}/messages`, currentOrigin),
       {
@@ -967,16 +880,16 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
     );
     expect(sharedInput.status).toBe(201);
     await within(fifthRunStarted.promise, "channel-triggered model run");
-    const sharedReplies = await waitForAssistant(currentOrigin, cookie, sharedChannelId);
-    expect(sharedReplies.filter((message) => message.author.kind === "agent")).toHaveLength(1);
-    expect(sharedReplies.at(-1)).toMatchObject({
-      author: { kind: "agent", id: agentId },
-      text: "这是取消旧 run 后的新凭据回复。",
-    });
-    expect((await getMessages(currentOrigin, cookie, channelId)).messages).toHaveLength(4);
+    await waitForRunState(directory, fifthRunId, "completed");
+    expect(await waitForTranscript(directory, fifthRunId)).toBe("这是取消旧 run 后的新凭据回复。");
+    expect(
+      agentMessages((await getMessages(currentOrigin, cookie, sharedChannelId)).messages),
+    ).toHaveLength(0);
+    expect((await getMessages(currentOrigin, cookie, channelId)).messages).toHaveLength(2);
+    // Every channel and DM run still belongs to one logical Agent session.
     expect(new Set(runSessionIds).size).toBe(1);
 
-    stage = "a successful silent model turn handles its input without posting a reply";
+    stage = "a successful silent model turn handles its input without publishing anything";
     expect(await putCredential(currentOrigin, cookie, "synthetic-key-silent")).toBe(204);
     const silentInput = await fetch(
       new URL(`/api/owner/channels/${channelId}/messages`, currentOrigin),
@@ -989,7 +902,7 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
     expect(silentInput.status).toBe(201);
     await within(sixthRunStarted.promise, "silent worker run start");
     await waitForRunState(directory, sixthRunId, "completed");
-    expect((await getMessages(currentOrigin, cookie, channelId)).messages).toHaveLength(5);
+    expect((await getMessages(currentOrigin, cookie, channelId)).messages).toHaveLength(3);
     expect(databaseState(directory)).toMatchObject({ pending: 0, handled: 4 });
     expect(node?.text.includes("synthetic-key-silent")).toBe(false);
     expect(
@@ -1012,19 +925,18 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
     await waitForRunState(directory, seventhRunId, "failed");
     expect(databaseRunErrorCode(directory, seventhRunId)).toBe("model_failed");
     expect(databaseState(directory)).toMatchObject({ pending: 1, handled: 4 });
-    expect((await getMessages(currentOrigin, cookie, channelId)).messages).toHaveLength(6);
+    expect((await getMessages(currentOrigin, cookie, channelId)).messages).toHaveLength(4);
 
     expect(await putCredential(currentOrigin, cookie, "synthetic-key-version-c")).toBe(204);
     await within(eighthRunStarted.promise, "retry after the provider error");
-    const recoveredMessages = await waitForMessageCount(currentOrigin, cookie, channelId, 7);
-    expect(recoveredMessages.at(-1)).toMatchObject({
-      author: { kind: "agent", id: agentId },
-      text: "这是取消旧 run 后的新凭据回复。",
-    });
     await waitForRunState(directory, eighthRunId, "completed");
+    expect(await waitForTranscript(directory, eighthRunId)).toBe("这是取消旧 run 后的新凭据回复。");
+    expect(
+      agentMessages((await getMessages(currentOrigin, cookie, channelId)).messages),
+    ).toHaveLength(0);
     expect(databaseState(directory)).toMatchObject({ pending: 0, handled: 5 });
 
-    stage = "an archived channel rejects an active reply and keeps its delivery recoverable";
+    stage = "an archived channel refuses to consume its input and keeps it recoverable";
     expect(await putCredential(currentOrigin, cookie, "synthetic-key-delayed-reply")).toBe(204);
     const archiveRaceInput = await fetch(
       new URL(`/api/owner/channels/${channelId}/messages`, currentOrigin),
@@ -1048,7 +960,9 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
     await waitForRunState(directory, ninthRunId, "failed");
     expect(databaseRunErrorCode(directory, ninthRunId)).toBe("channel_archived");
     expect(databaseState(directory)).toMatchObject({ pending: 1, handled: 5 });
-    expect((await getMessages(currentOrigin, cookie, channelId)).messages).toHaveLength(8);
+    // The delayed turn was still recorded privately, yet nothing reached the archived channel.
+    expect(await waitForTranscript(directory, ninthRunId)).toBe("频道解除归档后的回复。");
+    expect((await getMessages(currentOrigin, cookie, channelId)).messages).toHaveLength(5);
     await delay(1800);
     expect(databaseState(directory)).toMatchObject({ pending: 1, handled: 5 });
 
@@ -1063,12 +977,11 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
     expect(unarchiveResponse.status).toBe(200);
     await within(tenthRunStarted.promise, "recovered run after channel unarchive");
     expect(tenthRunId).not.toBe(ninthRunId);
-    const afterUnarchive = await waitForMessageCount(currentOrigin, cookie, channelId, 9);
-    expect(afterUnarchive.at(-1)).toMatchObject({
-      author: { kind: "agent", id: agentId },
-      text: "频道解除归档后的回复。",
-    });
     await waitForRunState(directory, tenthRunId, "completed");
+    expect(await waitForTranscript(directory, tenthRunId)).toBe("频道解除归档后的回复。");
+    expect(
+      agentMessages((await getMessages(currentOrigin, cookie, channelId)).messages),
+    ).toHaveLength(0);
     expect(databaseState(directory)).toMatchObject({ pending: 0, handled: 6 });
 
     stage = "archive earlier and unrelated pending sources before a later handled turn";
@@ -1132,8 +1045,6 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
     expect(archiveOther.status).toBe(200);
 
     const laterInputText = "较晚来源 B 已完成的用户输入。";
-    const sharedCountBeforeLaterInput = (await getMessages(currentOrigin, cookie, sharedChannelId))
-      .messages.length;
     const laterInput = await fetch(
       new URL(`/api/owner/channels/${sharedChannelId}/messages`, currentOrigin),
       {
@@ -1146,16 +1057,12 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
     const laterRunStart = runStarts.length;
     expect(await putCredential(currentOrigin, cookie, "synthetic-key-inspect-context")).toBe(204);
     const laterRun = await waitForStartedRun(runStarts, sharedChannelId, laterRunStart);
-    const laterMessages = await waitForMessageCount(
-      currentOrigin,
-      cookie,
-      sharedChannelId,
-      sharedCountBeforeLaterInput + 2,
-    );
     await waitForRunState(directory, laterRun.runId, "completed");
-    const laterReply = laterMessages.at(-1)!;
-    expect(laterReply.author).toMatchObject({ kind: "agent", id: agentId });
-    const laterPiContext = JSON.parse(laterReply.text) as InspectedPiContext;
+    const laterTranscript = await waitForTranscript(directory, laterRun.runId);
+    expect(
+      agentMessages((await getMessages(currentOrigin, cookie, sharedChannelId)).messages),
+    ).toHaveLength(0);
+    const laterPiContext = JSON.parse(laterTranscript) as InspectedPiContext;
     const laterPiTranscript = laterPiContext.messages.map(inspectedContent).join("\n");
     expect(laterPiContext.messages.at(-1)).toMatchObject({ role: "user" });
     expect(inspectedContent(laterPiContext.messages.at(-1)!)).toContain(laterInputText);
@@ -1163,8 +1070,6 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
     expect(laterPiTranscript).not.toContain("另一个未处理来源 C 不得混进恢复上下文。");
 
     stage = "unarchived source A resumes after handled source B in the same Pi session";
-    const directCountBeforeRecovery = (await getMessages(currentOrigin, cookie, channelId)).messages
-      .length;
     recoveryChannelId = channelId;
     const authenticatedBeforeRecovery = authenticatedConnections,
       recoveryRunStart = runStarts.length;
@@ -1188,16 +1093,12 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
     const recoveryRun = await waitForStartedRun(runStarts, channelId, recoveryRunStart + 1);
     expect(recoveryRun.runId).not.toBe(interruptedRecoveryRun.runId);
     expect(recoveryRun.sessionId).toBe(laterRun.sessionId);
-    const archiveRecoveryMessages = await waitForMessageCount(
-      currentOrigin,
-      cookie,
-      channelId,
-      directCountBeforeRecovery + 1,
-    );
     await waitForRunState(directory, recoveryRun.runId, "completed");
-    const recoveredReply = archiveRecoveryMessages.at(-1)!;
-    expect(recoveredReply.author).toMatchObject({ kind: "agent", id: agentId });
-    const recoveryPiContext = JSON.parse(recoveredReply.text) as InspectedPiContext;
+    const recoveredTranscript = await waitForTranscript(directory, recoveryRun.runId);
+    expect(
+      agentMessages((await getMessages(currentOrigin, cookie, channelId)).messages),
+    ).toHaveLength(0);
+    const recoveryPiContext = JSON.parse(recoveredTranscript) as InspectedPiContext;
     const recoveryEntries = recoveryPiContext.messages.map((message) => ({
       role: message.role,
       content: inspectedContent(message),
@@ -1207,7 +1108,7 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
         (entry) => entry.role === "user" && entry.content.includes(laterInputText),
       ),
       laterAssistantIndex = recoveryEntries.findIndex(
-        (entry) => entry.role === "assistant" && entry.content.includes(laterReply.text),
+        (entry) => entry.role === "assistant" && entry.content.includes(laterTranscript),
       ),
       laterUserEntry = recoveryEntries[laterUserIndex],
       laterAssistantEntry = recoveryEntries[laterAssistantIndex],
@@ -1231,11 +1132,11 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
       (JSON.parse(recoveryContextResponses[0]!) as { messages: unknown[] }).messages,
     );
     expect(databaseState(directory)).toMatchObject({ pending: 1 });
-    const journal = databaseJournalEntries(directory, agentId),
-      earlierUser = journal.find((entry) => entry.text === "恢复私信来源 A 的待处理输入。"),
-      laterUser = journal.find((entry) => entry.text === laterInputText),
-      laterAssistant = journal.find((entry) => entry.text === laterReply.text),
-      recoveredAssistant = journal.find((entry) => entry.text === recoveredReply.text);
+    const transcript = databaseTranscriptEntries(directory, agentId),
+      earlierUser = transcript.find((entry) => entry.text === "恢复私信来源 A 的待处理输入。"),
+      laterUser = transcript.find((entry) => entry.text === laterInputText),
+      laterAssistant = transcript.find((entry) => entry.text === laterTranscript),
+      recoveredAssistant = transcript.find((entry) => entry.text === recoveredTranscript);
     expect(earlierUser?.channel_id).toBe(channelId);
     expect(laterUser?.channel_id).toBe(sharedChannelId);
     expect(laterAssistant?.channel_id).toBe(sharedChannelId);
@@ -1354,11 +1255,11 @@ it("runs Pi conversation tools through the authenticated Node and commits one ex
       },
     );
     expect(input.status).toBe(201);
-    const messages = await waitForMessageCount(currentOrigin, cookie, direct.channel.id, 3);
+    const messages = await waitForMessageCount(currentOrigin, cookie, direct.channel.id, 2);
+    // Only the explicit messages.send call publishes; the final plain turn stays private.
     expect(messages).toMatchObject([
       { author: { kind: "human" }, text: "发现工具，发送一条消息，再完成本次回复。" },
       { author: { kind: "agent", id: agentId }, text: "Pi 工具经控制面发送的消息。" },
-      { author: { kind: "agent", id: agentId }, text: "工具调用完成后生成的最终回复。" },
     ]);
 
     const deadline = Date.now() + 5000;
@@ -1379,6 +1280,10 @@ it("runs Pi conversation tools through the authenticated Node and commits one ex
       if (runState !== "completed") await delay(25);
     }
     expect(runState).toBe("completed");
+    const finalTurn = databaseTranscriptEntries(directory, agentId).find(
+      (entry) => entry.role === "assistant" && entry.text === "工具调用完成后生成的最终回复。",
+    );
+    expect(finalTurn?.channel_id).toBe(direct.channel.id);
     const db = new Database(dbPath, { readonly: true, fileMustExist: true });
     try {
       const actions = db
@@ -1474,7 +1379,7 @@ function databaseState(directory: string): {
   }
 }
 
-function databaseJournalEntries(
+function databaseTranscriptEntries(
   directory: string,
   agentId: string,
 ): Array<{ sequence: number; role: string; text: string; channel_id: string }> {

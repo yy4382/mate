@@ -81,7 +81,7 @@ const worker = startModelProcess({
   apiKey: secret,
   entry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
   identity: workerIdentity,
-  onJournal: async () => {
+  onTranscript: async () => {
     ackSeen.resolve();
     return ackGate.promise;
   },
@@ -95,7 +95,7 @@ try {
     agentId,
     sessionId: randomUUID(),
     actionScopeId: randomUUID(),
-    outputChannel: { channelId, visibility: "private" },
+    sourceChannel: { channelId, visibility: "private" },
     messages: [
       {
         sequence: 1,
@@ -111,7 +111,7 @@ try {
   await Promise.race([
     ackSeen.promise,
     delay(5000).then(() => {
-      throw new Error("Model worker did not reach its journal gate");
+      throw new Error("Model worker did not reach its transcript gate");
     }),
   ]);
   const pid = await waitForWorkerPid(),
@@ -155,7 +155,7 @@ try {
       apiKey: "synthetic-key-held-only-until-cancel",
       entry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
       identity: workerIdentity,
-      onJournal: async () => false,
+      onTranscript: async () => false,
       signal: canceledController.signal,
     });
   const canceledRun = canceledWorker.run({
@@ -163,7 +163,7 @@ try {
     agentId,
     sessionId: randomUUID(),
     actionScopeId: randomUUID(),
-    outputChannel: { channelId, visibility: "private" },
+    sourceChannel: { channelId, visibility: "private" },
     messages: [
       {
         sequence: 1,

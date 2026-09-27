@@ -505,14 +505,14 @@ it("classifies Pi HTTP response failures as credential pause or temporary backof
   }
 }, 30000);
 
-it("replays one committed journal after the control plane crashes before its ACK reaches the node", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "mate-journal-commit-crash-"));
+it("replays one committed transcript after the control plane crashes before its ACK reaches the node", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "mate-transcript-commit-crash-"));
   chmodSync(directory, 0o700);
   writeFileSync(join(directory, "password"), `${password}\n`, { mode: 0o600 });
   let control: Child | undefined,
     node: Child | undefined,
     origin = "";
-  let heldJournal: string | undefined,
+  let heldTranscript: string | undefined,
     ackDropped = false,
     replayAccepted = false;
   const proxyHttp = createServer(),
@@ -525,22 +525,26 @@ it("replays one committed journal after the control plane crashes before its ACK
       sockets.add(upstream);
       downstream.on("message", (data, binary) => {
         const message = JSON.parse(data.toString()) as { type?: string };
-        if (message.type === "node.agent.run.journal" && !heldJournal)
-          heldJournal = data.toString();
+        if (message.type === "node.agent.run.transcript" && !heldTranscript)
+          heldTranscript = data.toString();
         if (upstream.readyState === WebSocket.OPEN) upstream.send(data, { binary });
       });
       upstream.on("message", (data, binary) => {
         const message = JSON.parse(data.toString()) as { type?: string; accepted?: boolean };
-        if (message.type === "control.agent.run.journal_ack" && message.accepted && !ackDropped) {
+        if (
+          message.type === "control.agent.run.transcript_ack" &&
+          message.accepted &&
+          !ackDropped
+        ) {
           ackDropped = true;
           control?.process.kill("SIGKILL");
           downstream.terminate();
           upstream.terminate();
           return;
         }
-        if (message.type === "control.authenticated" && ackDropped && heldJournal)
-          upstream.send(heldJournal);
-        if (message.type === "control.agent.run.journal_ack" && message.accepted && ackDropped)
+        if (message.type === "control.authenticated" && ackDropped && heldTranscript)
+          upstream.send(heldTranscript);
+        if (message.type === "control.agent.run.transcript_ack" && message.accepted && ackDropped)
           replayAccepted = true;
         if (downstream.readyState === WebSocket.OPEN) downstream.send(data, { binary });
       });
@@ -575,9 +579,9 @@ it("replays one committed journal after the control plane crashes before its ACK
     await json(origin, cookie, "/api/owner/agents", "POST", {
       id: agentId,
       nodeId,
-      name: "Journal Agent",
+      name: "Transcript Agent",
       role: "Crash recovery",
-      description: "Committed journal ACK fixture",
+      description: "Committed transcript ACK fixture",
       model: { provider: "openai", id: "gpt-4o-mini" },
     });
     const channelId = (
@@ -589,8 +593,47 @@ it("replays one committed journal after the control plane crashes before its ACK
     await json(origin, cookie, `/api/owner/channels/${channelId}/messages`, "POST", {
       text: "Commit once before ACK",
     });
-    await eventually(() => (ackDropped ? true : undefined), "journal committed and ACK dropped");
-    expect(heldJournal).toBeDefined();
+    await eventually(() => (ackDropped ? true : undefined), "transcript committed and ACK dropped");
+    expect(heldTranscript).toBeDefined();
+    expect(
+      cpRow(
+        directory,
+        "SELECT COUNT(*) AS count FROM owner_agent_session_journal WHERE agent_id=? AND role='assistant' AND tool_action_id IS NULL",
+        agentId,
+      ),
+    ).toEqual({ count: 1 });
+    // The committed transcript is private: it neither publishes nor consumes its input.
+    expect(
+      cpRow(
+        directory,
+        "SELECT COUNT(*) AS count FROM owner_messages WHERE author_kind='agent' AND author_id=?",
+        agentId,
+      ),
+    ).toEqual({ count: 0 });
+    expect(
+      cpRow(
+        directory,
+        "SELECT state FROM owner_message_deliveries WHERE recipient_id=? ORDER BY seq LIMIT 1",
+        agentId,
+      ),
+    ).toEqual({ state: "pending" });
+    control = startControl(directory);
+    origin = `http://127.0.0.1:${(await control.line(/MATE_CONTROL_PLANE_LISTENING (\d+)/))[1]}`;
+    cookie = await owner(origin);
+    await eventually(
+      () => (replayAccepted ? true : undefined),
+      "exact transcript replay after CP restart",
+      15000,
+    );
+    // The replayed transcript belongs to the interrupted run; the unhandled input is retried as
+    // exactly one recovered run and still has no published reply of its own at this point.
+    expect(
+      cpRow(
+        directory,
+        "SELECT COUNT(*) AS count FROM owner_agent_runs WHERE agent_id=? AND state='failed' AND error_code='interrupted'",
+        agentId,
+      ),
+    ).toEqual({ count: 1 });
     expect(
       cpRow(
         directory,
@@ -601,35 +644,17 @@ it("replays one committed journal after the control plane crashes before its ACK
     expect(
       cpRow(
         directory,
-        "SELECT state FROM owner_message_deliveries WHERE recipient_id=? ORDER BY seq LIMIT 1",
-        agentId,
-      ),
-    ).toEqual({ state: "handled" });
-    control = startControl(directory);
-    origin = `http://127.0.0.1:${(await control.line(/MATE_CONTROL_PLANE_LISTENING (\d+)/))[1]}`;
-    cookie = await owner(origin);
-    await eventually(
-      () => (replayAccepted ? true : undefined),
-      "exact journal replay after CP restart",
-      15000,
-    );
-    expect(
-      cpRow(directory, "SELECT COUNT(*) AS count FROM owner_agent_runs WHERE agent_id=?", agentId),
-    ).toEqual({ count: 1 });
-    expect(
-      cpRow(
-        directory,
         "SELECT COUNT(*) AS count FROM owner_messages WHERE author_kind='agent' AND author_id=?",
         agentId,
       ),
-    ).toEqual({ count: 1 });
+    ).toEqual({ count: 0 });
     expect(
       cpRow(
         directory,
         "SELECT state FROM owner_message_deliveries WHERE recipient_id=? ORDER BY seq LIMIT 1",
         agentId,
       ),
-    ).toEqual({ state: "handled" });
+    ).toEqual({ state: "pending" });
   } finally {
     await node?.stop("SIGKILL");
     await control?.stop();

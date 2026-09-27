@@ -124,7 +124,7 @@ it("upgrades the final attention format to tasks without changing a quoted messa
 
     const upgraded = openControlPlaneDatabase(path, controlPlaneSchema, controlPlaneMigrations);
     try {
-      expect(upgraded.pragma("user_version", { simple: true })).toBe(22);
+      expect(upgraded.pragma("user_version", { simple: true })).toBe(23);
       expect(
         upgraded.prepare("SELECT root_id,quote_id,text FROM owner_messages WHERE id='reply'").get(),
       ).toEqual({ root_id: "root", quote_id: null, text: "Follow-up work" });
