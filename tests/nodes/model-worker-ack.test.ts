@@ -281,6 +281,58 @@ it("lets the Agent schedule its own work from its record, claimed tasks, reminde
   }
 }, 10000);
 
+it("asks the Agent not to browse a peer's workspace instead of gating that read", async () => {
+  const channelId = "f584ce85-b892-4315-9a2b-00e191bd34dc";
+  let transcript = "";
+  const controller = new AbortController();
+  const worker = startModelProcess({
+    provider: "openai",
+    modelId: "gpt-4o-mini",
+    apiKey: "synthetic-key-inspect-context",
+    entry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
+    onTranscript: async (text) => {
+      transcript = text;
+      return true;
+    },
+    signal: controller.signal,
+  });
+
+  try {
+    await worker.run({
+      runId: "3f2c9a44-5b1e-4d78-9c0a-6e5b7d1f2a30",
+      agentId: "06d4fab7-5259-4faa-b51e-6017f3e08f0e",
+      sessionId: "e1090cf4-f8f8-43b7-b124-e58a4dadbc1f",
+      actionScopeId: "561ad589-5e36-4c2a-98ab-35a9cfbc2e80",
+      sourceChannel: { channelId, visibility: "public" },
+      messages: [
+        {
+          sequence: 1,
+          role: "user",
+          text: "继续手上的工作。",
+          sourceChannelId: channelId,
+          sourceVisibility: "public",
+          currentRunInput: true,
+        },
+      ],
+      prompt: { name: "小林", role: "测试助手", description: "Synthetic test Agent" },
+    });
+
+    // The workspace is an organisation location, not a confidentiality boundary between Agents:
+    // the prompt carries a short courtesy reminder and leaves the judgement to the Agent.
+    expect(transcript).toContain("不要随意读取");
+    expect(transcript).toContain("不是对其他 Agent 保密的隔离边界");
+    expect(transcript).toContain("不需要申请许可");
+    expect(transcript).toContain("不必说明理由");
+    // No permission request, violation finding or mandatory justification is attached to it.
+    expect(transcript).not.toContain("违规");
+    expect(transcript).not.toContain("禁止读取");
+    expect(transcript).not.toContain("必须说明理由");
+  } finally {
+    controller.abort();
+    worker.close();
+  }
+}, 10000);
+
 it("lets a scripted Agent read its reminders first and then stay silent", async () => {
   const requested: Array<{ operation: string; input: Record<string, unknown> }> = [];
   let transcriptCount = 0;

@@ -9,9 +9,10 @@ import {
   renameSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ExecutionBackend, ExecutionResult, Operation } from "../execution/backend.js";
 import { LinuxUserBackend, type LinuxIdentity } from "../execution/linux-user.js";
+import { within } from "../execution/paths.js";
 import { readAgentWorkspaceIdentity, type AgentWorkspaceIdentity } from "./agent-provisioner.js";
 import { workspaceReceiptRequestHash } from "./workspace-receipt.js";
 
@@ -93,7 +94,11 @@ export class LinuxWorkspaceExecutor {
   execute(request: WorkspaceExecutionRequest, signal?: AbortSignal): Promise<ExecutionResult> {
     validateRequest(request);
     const requestHash = workspaceReceiptRequestHash(request.agentId, request.operation),
-      existingCall = this.active.get(request.operationId);
+      // The mode decides which workspace a read runs in, so the same operation ID under another
+      // mode is another request and may not share this in-flight result. The durable receipt hash
+      // stays mode-free, so receipts written before this change still replay.
+      key = `${request.mode}\0${request.operationId}`,
+      existingCall = this.active.get(key);
     if (existingCall)
       return existingCall.requestHash === requestHash
         ? existingCall.promise
@@ -101,10 +106,9 @@ export class LinuxWorkspaceExecutor {
             failed("operation_conflict: Operation ID was reused for another file request"),
           );
     const operation = this.executeOnce(request, requestHash, signal).finally(() => {
-      if (this.active.get(request.operationId)?.promise === operation)
-        this.active.delete(request.operationId);
+      if (this.active.get(key)?.promise === operation) this.active.delete(key);
     });
-    this.active.set(request.operationId, { requestHash, promise: operation });
+    this.active.set(key, { requestHash, promise: operation });
     return operation;
   }
 
@@ -172,6 +176,12 @@ export class LinuxWorkspaceExecutor {
 
     let result: ExecutionResult;
     try {
+      const sharedRead = agentReadRoot(
+        request.mode,
+        request.operation,
+        identity.workspace,
+        resolve(this.homeRoot),
+      );
       result = await this.createBackend(request.agentId, {
         username: identity.username,
         uid: identity.uid,
@@ -179,8 +189,8 @@ export class LinuxWorkspaceExecutor {
         home: identity.workspace,
       }).execute(
         {
-          root: identity.workspace,
-          operation: request.operation,
+          root: sharedRead?.root ?? identity.workspace,
+          operation: sharedRead?.operation ?? request.operation,
           timeoutMs: 60_000,
           agentId: request.agentId,
         },
@@ -249,6 +259,62 @@ export class LinuxWorkspaceExecutor {
 
   private receiptPath(operationId: string): string {
     return join(this.receiptsDirectory, `${operationId}.json`);
+  }
+}
+
+/**
+ * Where one Agent read operation really runs, and the path it runs with. An Agent's file tools are
+ * not confined to its own directory: Mate asks the Agent in its prompt not to browse a peer's
+ * workspace casually, and then leaves that judgement to it, so a read of another Agent's workspace
+ * runs with the shared workspace root instead of being refused.
+ *
+ * Reachable directories are exactly the ones the node provisions under that root: the Agent's own
+ * workspace, and a peer workspace named by its stable Agent ID (`agentWorkspacePath`). The root
+ * itself and anything else under it are not a workspace, so they stay refused even if an operator
+ * points the root at a directory that also holds the node's own files. Paths are handed on relative
+ * to the root they run under, so a path that resolves inside the Agent's own workspace is not
+ * refused for the spelling it arrived in.
+ *
+ * Only reads move. Writing, publishing and the owner's preview keep their own root: the owner's
+ * preview of a selected Agent must not leave that Agent's directory, and a file change must stay
+ * inside the workspace whose operation receipt records it. Mate's confinement stays the file
+ * helper's job; this only chooses which workspace a permitted read runs in.
+ */
+function agentReadRoot(
+  mode: WorkspaceMode,
+  operation: Exclude<Operation, { kind: "exec" }>,
+  workspace: string,
+  workspaceRoot: string,
+): { root: string; operation: Exclude<Operation, { kind: "exec" }> } | undefined {
+  if (mode !== "agent_read" || !agentReadKinds.has(operation.kind)) return undefined;
+  const target = resolve(workspace, operation.path),
+    own = within(workspace, target);
+  if (own) {
+    const ownPath = relative(workspace, target);
+    return { root: workspace, operation: { ...operation, path: ownPath === "" ? "." : ownPath } };
+  }
+  if (!within(workspaceRoot, target)) return undefined;
+  const peerPath = relative(workspaceRoot, target),
+    peerName = peerPath.split(sep)[0] ?? "";
+  if (!agentDirectoryName.test(peerName) || !isWorkspaceDirectory(join(workspaceRoot, peerName)))
+    return undefined;
+  return { root: workspaceRoot, operation: { ...operation, path: peerPath } };
+}
+
+/**
+ * One Agent's workspace directory under the shared root, named by its stable Agent ID exactly as
+ * `agentWorkspacePath` spells it. Mate never creates an Agent directory under another name, so a
+ * differently spelled or differently cased neighbour is not a peer workspace.
+ */
+const agentDirectoryName = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** A peer's workspace must be the real directory the node provisions, never a file or a link. */
+function isWorkspaceDirectory(path: string): boolean {
+  try {
+    // `lstatSync`: a symbolic link to a directory is not a workspace directory.
+    return lstatSync(path).isDirectory();
+  } catch {
+    return false;
   }
 }
 

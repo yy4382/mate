@@ -67,7 +67,7 @@ export type AgentWorkspaceRunner = (
 ) => Promise<AgentWorkspaceIdentity>;
 
 const initialMemory =
-  "# Agent memory\n\nThis file is the entry point to your private memory and workspace notes.\n";
+  "# Agent memory\n\nThis file is the entry point to your own memory and workspace notes.\n";
 const workspaceMarkerName = ".mate-workspace-id";
 const workspaceMarkerStagingPattern = /^\.mate-workspace-id\.tmp-[0-9a-f]{32}$/;
 const activePreparations = new Map<string, Promise<AgentWorkspaceIdentity>>();

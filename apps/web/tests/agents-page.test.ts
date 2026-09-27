@@ -410,7 +410,7 @@ it("lets the owner invite an existing Agent to a channel from the Chinese Agent 
   ]);
 });
 
-it("browses an Agent private home read-only, previews and streams downloads, and loads every directory page", async () => {
+it("browses an Agent default workspace read-only, previews and streams downloads, and loads every directory page", async () => {
   const agentId = "8bfb67a1-66ed-4d56-9052-4cc7a41c60b9";
   agents = [
     {
@@ -462,7 +462,7 @@ it("browses an Agent private home read-only, previews and streams downloads, and
 
   const user = userEvent.setup();
   render(createElement(AgentsPage));
-  expect(await screen.findByRole("heading", { name: "私人工作区" })).not.toBeNull();
+  expect(await screen.findByRole("heading", { name: "默认工作区" })).not.toBeNull();
   expect(await screen.findByRole("button", { name: /notes.txt/ })).not.toBeNull();
   expect(screen.getByText(/符号链接，不跟随/)).not.toBeNull();
   expect(screen.queryByRole("button", { name: /上传|删除|编辑/ })).toBeNull();
