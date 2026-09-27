@@ -10,6 +10,8 @@ You are the **orchestrator**. You do not implement tickets. You keep the queue m
 
 This skill assumes the tickets already exist on a tracker (see `docs/agents/issue-tracker.md`). Splitting a spec into tickets is `/to-tickets`; implementing one ticket is `/implement`.
 
+The tracker is a **spec/ticket surface**, and traceability to it applies to the work those tickets describe — the implementation, its tests, and the docs a ticket names. It does not govern the orchestrator's own tooling: this skill, the orchestration ledger, and dispatch notes are agent working material, so commit them directly and do not open an issue to authorise or record them. Putting agent tooling into the human-facing spec queue pollutes the tracker and makes the queue lie about what product work remains.
+
 ## The one rule that matters most
 
 **A ticket's sub-agent reads its own work.** Its brief must send it to the tracker (`gh issue view <n> --comments`) and to the `/implement` skill. Never paste a ticket's acceptance criteria into the brief as the source of truth, and never summarise them "so the agent doesn't have to look".
@@ -44,15 +46,11 @@ Give each ticket a sub-agent that did not work on any other ticket. The brief is
 
 Do not add: a restatement of the acceptance criteria, your own test plan, or an implementation sketch. Those either duplicate the ticket or do the agent's thinking for it.
 
-## 3. Decide what may run, and where
+## 3. Run the frontier in parallel
 
-**Dependency order is not negotiable; parallelism is a judgement call.** A ticket may start only when every blocker has landed on the branch.
+**Everything on the frontier runs at the same time — that is the normal mode, not an optimisation.** The frontier is every ticket whose blockers are done: once a blocker has landed (or been handed off by its implementer), its dependents are free to start, and you should start them, not queue them behind the next ticket in the list.
 
-Run the critical-path chain **serially in the main checkout**. Every ticket that rewrites a foundational surface — schema, app assembly, tool routing — invalidates work built on the older base. In this repository, two tickets built in parallel from an old base produced genuine semantic conflicts (a modify/delete on a deleted module, and two rewrites of the same `Store.finish` failure policy); both had to be re-applied onto the new base afterwards, which cost more than running them serially would have.
-
-Use a worktree for a ticket only when its files are demonstrably disjoint from everything still in flight. The value of parallelism is real; the cost of a semantic conflict is larger.
-
-If you use worktrees, prepare them so they cannot corrupt each other:
+Give each parallel ticket its own **worktree** so two implementers never share a working tree:
 
 ```sh
 git worktree add -q --detach .worktrees/t<N> <base-sha>
@@ -70,7 +68,21 @@ git -C .worktrees/t<N> config core.indexFile "$gi/index.worktree"
 
 Add `.worktrees/` to `.gitignore`, and give the worktree its own index in the same breath.
 
-**Write barriers for the orchestrator.** While an implementer works in the main checkout, never run `git stash`, `git reset --hard`, `git checkout -- .` or `git clean` there. Those commands discard uncommitted work that is not yours. In this repository exactly that destroyed an implementer's tracked edits mid-ticket. If you need protection before a risky step, take a copy — `git archive` into a temp directory — never a stash.
+**Parallel implementers coordinate with each other, not only through you.** Sub-agents can message one another, so when two tickets share a surface, tell each implementer which sibling is touching it: they can agree on the boundary directly, or one can tell the other "I am changing this interface, wait for my message before you finalise". You are the scheduler, not the only channel — routing every interface question through you adds a hop and loses detail. Use that channel to keep the frontier moving: a ticket that would otherwise block on another ticket's interface can start, do everything else, and settle the shared part when the sibling reports.
+
+**Merge the frontier as each ticket reports**, not in one batch at the end. A worktree ticket lands by merging its commit into the branch once its work is verified; merging early keeps the base close to what the next dependents build on.
+
+**Serialise only for a real reason**, and name it when you do:
+
+- The ticket rewrites a foundational surface that every other in-flight ticket builds on (schema, app assembly, tool routing). Let it land before starting its dependents.
+- Two tickets provably own the same file region and their changes are semantically entangled, so one must be designed against the other's result rather than against a guess.
+- The project's own validation cannot run twice concurrently without contention (one `node_modules`, one store, one build output).
+
+Everything else belongs on the frontier, in parallel, in worktrees.
+
+**Write barriers for the orchestrator.** While an implementer works in a checkout, never run `git stash`, `git reset --hard`, `git checkout -- .` or `git clean` there. Those commands discard uncommitted work that is not yours. In this repository exactly that destroyed an implementer's tracked edits mid-ticket. If you need protection before a risky step, take a copy — `git archive` into a temp directory — never a stash.
+
+**Do not serialise out of fear of conflicts.** Conflicts are a normal cost of a parallel frontier and are handled by triage, not by avoiding parallelism: a mechanical conflict you resolve yourself, a semantic one is re-applied by its original implementer onto the new base (section 5). Running the frontier serially to dodge that cost trades a small, bounded fix for a large, certain delay.
 
 ## 4. Verify, do not collect reports
 
@@ -123,9 +135,11 @@ Do not ask a person to perform manual environment validation unless they have as
 
 ## 8. Keep one durable ledger
 
-Keep a single orchestrator-owned file (here `docs/orchestration/<effort>.md`) holding: the dependency levels, per-ticket starting and landing commits, your own verification results, incidents and how they were resolved, and any accepted deviation. Implementers must not edit it — that keeps parallel tickets from conflicting on it and keeps state in one place you can resume from.
+Keep a single orchestrator-owned file holding: the dependency levels, per-ticket starting and landing commits, your own verification results, incidents and how they were resolved, and any accepted deviation. Implementers must not edit it — that keeps parallel tickets from conflicting on it and keeps state in one place you can resume from.
 
 Update it as tickets land, not at the end. When a session is interrupted (quota exhaustion, a crash), the ledger is what makes recovery a matter of inventory rather than memory: check what is committed, resume the implementer sessions that still hold context, and re-apply only what never landed.
+
+**Keep it working material, not a product deliverable.** The ledger is scaffolding for one effort: it describes a transient plan, so it does not belong in the shipped tree and must never become a ticket-governed artifact. A ledger committed into `docs/` will eventually be deleted as "an abandoned plan we agreed not to retain" — in this repository exactly that happened. Prefer a scratch path outside the product docs, and let the durable record be the landed commits, the tests, and the tracker.
 
 ## 9. Report to the user
 
