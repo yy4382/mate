@@ -14,8 +14,6 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "pnpm run build && vitest run",
-    "test:linux-privileged-approval": "node tests/linux/privileged-approval.integration.mjs",
-    "test:linux-privileged-approval-transport": "node tests/linux/privileged-approval-transport.integration.mjs",
     "test:single-account-agent-workspace": "node tests/linux/agent-workspace-preparation.integration.mjs",
     "test:linux-single-account-node": "node tests/linux/single-account-node.integration.mjs",
     "check": "pnpm run format:check && pnpm test",

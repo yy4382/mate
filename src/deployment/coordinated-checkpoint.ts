@@ -366,7 +366,6 @@ function requireStateFiles(directory: string): void {
     "control/control-plane.sqlite",
     "node/node-identity.json",
     "node/agent-process-operations.sqlite",
-    "node/privileged-operations.sqlite",
   ]) {
     try {
       const stat = lstatSync(join(directory, path));
@@ -382,11 +381,7 @@ function requireStateFiles(directory: string): void {
 }
 
 function assertCheckpointState(directory: string): void {
-  for (const path of [
-    "control/control-plane.sqlite",
-    "node/agent-process-operations.sqlite",
-    "node/privileged-operations.sqlite",
-  ]) {
+  for (const path of ["control/control-plane.sqlite", "node/agent-process-operations.sqlite"]) {
     const database = new Database(join(directory, path), { readonly: true, fileMustExist: true });
     try {
       const result = database.prepare("PRAGMA integrity_check").get() as

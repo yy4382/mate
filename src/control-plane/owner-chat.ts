@@ -5,7 +5,6 @@ import {
   agentMateOperations,
   agentConversationOperations,
   agentProcessToolOperations,
-  agentSystemToolOperations,
   agentWorkspaceOperations,
   agentToolSchemas,
   type AgentConversationOperation,
@@ -404,7 +403,6 @@ export class OwnerChat {
               tools: [
                 ...Object.entries(agentMateOperations),
                 ...Object.entries(agentProcessToolOperations),
-                ...Object.entries(agentSystemToolOperations),
               ]
                 .filter(([, entry]) => !reviewSeat || entry.seatPolicy !== "deny")
                 .map(([name, entry]) => ({ name, description: entry.description })),
@@ -415,10 +413,7 @@ export class OwnerChat {
               entry =
                 agentConversationOperations[request.name as AgentConversationOperation] ??
                 agentWorkspaceOperations[request.name as AgentWorkspaceOperation] ??
-                agentProcessToolOperations[
-                  request.name as keyof typeof agentProcessToolOperations
-                ] ??
-                agentSystemToolOperations[request.name as keyof typeof agentSystemToolOperations];
+                agentProcessToolOperations[request.name as keyof typeof agentProcessToolOperations];
             if (!entry || (reviewSeat && entry.seatPolicy === "deny"))
               throw new AgentToolRefusal("Unknown operation");
             return {
@@ -462,20 +457,6 @@ export class OwnerChat {
           entry = agentProcessToolOperations[name as keyof typeof agentProcessToolOperations];
         if (!entry) throw new Error("Agent process operation was refused");
         return { actionScopeId: run.action_scope_id, operation };
-      })
-      .immediate();
-  }
-
-  authorizeAgentPrivilegedOperation(runId: string, nodeId: string, agentId: string): string {
-    return this.db
-      .transaction(() => {
-        const run = this.activeAgentToolRun(runId, nodeId, agentId);
-        if (run.independent_review) throw new Error("Independent review seat cannot request root");
-        const delivery = this.db
-          .prepare("SELECT channel_id FROM owner_message_deliveries WHERE id=?")
-          .get(run.action_scope_id) as { channel_id: string } | undefined;
-        if (!delivery) throw new Error("Privileged request lost its conversation");
-        return delivery.channel_id;
       })
       .immediate();
   }

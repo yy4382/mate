@@ -9,7 +9,7 @@ export interface RecoveryAgent {
   username?: string;
 }
 
-export type RecoveryOperationKind = "process" | "workspace" | "privileged" | "stop";
+export type RecoveryOperationKind = "process" | "workspace" | "stop";
 export interface RecoveryOperation {
   operationId: string;
   agentId: string;

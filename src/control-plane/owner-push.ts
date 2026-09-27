@@ -68,6 +68,11 @@ export class OwnerPush {
         "ALTER TABLE owner_push_deliveries ADD COLUMN next_attempt_at INTEGER NOT NULL DEFAULT 0",
       );
     db.prepare("UPDATE owner_push_deliveries SET state='pending' WHERE state='failed'").run();
+    // Mate has no privileged command approval any more (schema revision 25), so a notification the
+    // old release queued for an approval card has nothing to open. It is dropped with its
+    // deliveries instead of being retried into a link the web page no longer understands.
+    db.prepare("DELETE FROM owner_push_deliveries WHERE event_key LIKE 'approval:%'").run();
+    db.prepare("DELETE FROM owner_push_events WHERE event_key LIKE 'approval:%'").run();
     let keys = db.prepare("SELECT public_key,private_key FROM owner_push_keys WHERE id=1").get() as
       { public_key: string; private_key: string } | undefined;
     if (!keys) {
@@ -117,7 +122,7 @@ export class OwnerPush {
       .run(endpoint);
   }
 
-  /** Must be called inside the transaction that creates the message or approval. */
+  /** Must be called inside the transaction that creates the message it points at. */
   queue(key: string, title: string, url: string): void {
     if (!this.db.inTransaction) throw new Error("Push enqueue requires the fact transaction");
     if (!url.startsWith("/app?") || url.length > 2048) throw new Error("Invalid push target");

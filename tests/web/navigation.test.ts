@@ -1,10 +1,7 @@
 import { expect, it } from "vitest";
 import { appReturnPath } from "../../apps/web/src/navigation.js";
 
-it("returns to the original approval or message after login without accepting external redirects", () => {
-  expect(appReturnPath("?next=%2Fapp%3Fchannel%3Dc%26approval%3Da")).toBe(
-    "/app?channel=c&approval=a",
-  );
+it("returns to the notified message after login without accepting external redirects", () => {
   expect(appReturnPath("?next=%2Fapp%3Fchannel%3Dc%26message%3Dm")).toBe(
     "/app?channel=c&message=m",
   );

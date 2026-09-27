@@ -2,7 +2,7 @@
 
 > **重构中的旧实现说明，不是首版目标部署步骤。** 下文对应当前尚未移除的 root、按 Agent 建账号和 systemd 安装代码。新目标见[产品方向](PROJECT_DIRECTION.md)和[单账号执行决定](adr/0004-single-account-command-execution.md)；完成新安装路径前不要用下文部署目标版本。
 
-当前旧实现会在一台 Debian 13 VPS 上运行两个服务：`mate-control-plane.service` 用专用非特权账号 `mate-control` 保存共享事实和提供网页；`mate-node.service` 以 root 运行，按控制面批准的请求建立 Agent Linux 用户并切换普通命令的 UID。Caddy 终止 HTTPS，代理到仅监听 `127.0.0.1` 的控制面。Agent、频道、成员和模型凭据在网页管理，不写入部署 JSON。
+当前旧实现会在一台 Debian 13 VPS 上运行两个服务：`mate-control-plane.service` 用专用非特权账号 `mate-control` 保存共享事实和提供网页；`mate-node.service` 以 root 运行，建立 Agent Linux 用户并切换普通命令的 UID。Caddy 终止 HTTPS，代理到仅监听 `127.0.0.1` 的控制面。Agent、频道、成员和模型凭据在网页管理，不写入部署 JSON。
 
 ## 安装
 
@@ -284,7 +284,9 @@ sudo bash -euo pipefail -c '
 
 远程节点重连的自动对账范围有限：控制面只会向节点查询控制面已知且状态为 `executing` 或 `unknown` 的 `process` / `workspace` 操作 ID；它不会枚举节点收据来发现只存在于较新节点检查点中的额外操作。因此，不同时间点的控制面与远程节点备份恢复后，不能把重连视为两侧完整一致的证明。
 
-节点服务保持停止时，先在控制面网页的 Agent 页面停用受影响的 Agent；无法确定额外收据属于哪个 Agent 时，先停用该节点上的全部 Agent。随后在两侧用只读 SQLite 查看节点身份，以及每项操作的 operation ID、Agent ID、请求身份哈希、状态和收据版本：节点侧查看 `agent_process_operations`、`node_privileged_operations` 和 `workspace-receipts/*.json`；控制面侧查看 `owner_agent_process_operations`、`owner_privileged_approvals` 和 `owner_agent_tool_actions`。逐项核对节点公钥、Agent 的用户名/UID/GID/home 标记以及操作身份。发现节点多出操作、任一身份不匹配或结果无法证明时，保持对应 Agent 停用，不要在网页点击“复启 Agent”，也不要运行控制面主机的 `release-agent`；后者只核验部署配置中的本机 `nodeDataDir`，不检查远程磁盘。身份冲突无法定位到单个 Agent，或无法确认节点上所有后台进程已停止时，继续保持该节点服务停止。
+第 25 版起 Mate 没有特权命令审批：升级会连同 `owner_privileged_approvals` 一起删除其中的未完成请求，节点上的 `privileged-operations.sqlite` 也不再被读取或对账，两者都不会变成新的持有、收据或重试。升级前若存在未完成的特权命令且需要这些历史证据，请在首次启动第 25 版前用只读 SQLite 自行留存；升级后不要把旧的审批行或节点收据当成仍受支持的状态。
+
+节点服务保持停止时，先在控制面网页的 Agent 页面停用受影响的 Agent；无法确定额外收据属于哪个 Agent 时，先停用该节点上的全部 Agent。随后在两侧用只读 SQLite 查看节点身份，以及每项操作的 operation ID、Agent ID、请求身份哈希、状态和收据版本：节点侧查看 `agent_process_operations` 和 `workspace-receipts/*.json`；控制面侧查看 `owner_agent_process_operations` 和 `owner_agent_tool_actions`。逐项核对节点公钥、Agent 的用户名/UID/GID/home 标记以及操作身份。发现节点多出操作、任一身份不匹配或结果无法证明时，保持对应 Agent 停用，不要在网页点击“复启 Agent”，也不要运行控制面主机的 `release-agent`；后者只核验部署配置中的本机 `nodeDataDir`，不检查远程磁盘。身份冲突无法定位到单个 Agent，或无法确认节点上所有后台进程已停止时，继续保持该节点服务停止。
 
 停机并确认没有 Agent scope 活动后，再检查远程节点日志和收据目录：
 
@@ -312,4 +314,4 @@ sudo bash -euo pipefail -c '
 
 ## 网页安装与通知
 
-在 HTTPS 页面用浏览器“安装应用”或手机“添加到主屏幕”。登录后由所有者点击“开启通知”，浏览器才申请权限并登记 Web Push 订阅。控制面只对 Agent 发给所有者的私信、包含 `@owner` 或 `@所有者` 的 Agent 消息和新建系统特权审批请求入队；Agent 间私信不自动推送。审批只在首次创建时入队，点击通知打开原频道中的审批卡。Push 发送失败或浏览器 SSE 断线不会撤销已提交的消息或审批。浏览器、操作系统和推送服务对权限及送达有各自限制；`doctor` 不将第三方送达报告为成功。
+在 HTTPS 页面用浏览器“安装应用”或手机“添加到主屏幕”。登录后由所有者点击“开启通知”，浏览器才申请权限并登记 Web Push 订阅。控制面只对 Agent 发给所有者的私信和包含 `@owner` 或 `@所有者` 的 Agent 消息入队；Agent 间私信不自动推送。每种事件只在首次创建时入队，点击通知打开原频道中的消息。Push 发送失败或浏览器 SSE 断线不会撤销已提交的消息。浏览器、操作系统和推送服务对权限及送达有各自限制；`doctor` 不将第三方送达报告为成功。
