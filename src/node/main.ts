@@ -1,7 +1,7 @@
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
-import { runLinuxNode, type LinuxNodeOptions } from "../nodes/client.js";
+import { defaultAgentHomeRoot, runLinuxNode, type LinuxNodeOptions } from "../nodes/client.js";
 
 export function nodeOptionsFromEnvironment(
   environment: NodeJS.ProcessEnv = process.env,
@@ -9,7 +9,8 @@ export function nodeOptionsFromEnvironment(
   const controlPlaneUrl = environment.MATE_CONTROL_PLANE_URL;
   if (!controlPlaneUrl) throw new Error("MATE_CONTROL_PLANE_URL is required");
   const dataDirectory = environment.MATE_NODE_DATA_DIR ?? resolve(process.cwd(), "data", "node");
-  const agentHomeRoot = environment.MATE_NODE_AGENT_HOME_ROOT ?? "/var/lib/mate/agents";
+  const agentHomeRoot =
+    environment.MATE_NODE_AGENT_HOME_ROOT ?? defaultAgentHomeRoot(dataDirectory);
   if (!agentHomeRoot.startsWith("/"))
     throw new Error("MATE_NODE_AGENT_HOME_ROOT must be an absolute path");
   return {

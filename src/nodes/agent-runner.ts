@@ -1,12 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { NodeControlMessage, NodeRequest } from "./protocol.js";
 import { NodeRequestSchema } from "./protocol.js";
-import {
-  ModelRunFailure,
-  startModelProcess,
-  type ModelProcessIdentity,
-  type ModelProcessSession,
-} from "./model-process.js";
+import { ModelRunFailure, startModelProcess, type ModelProcessSession } from "./model-process.js";
 import type { ModelContextMessage } from "./model-worker.js";
 
 type AgentRunMessage = Extract<NodeControlMessage, { type: "control.agent.run" }>;
@@ -40,8 +35,6 @@ export interface AgentRunTransport {
 export interface AgentRunTestDependencies {
   /** Test-only seam; production node configuration never accepts a worker entry path. */
   modelWorkerEntry?: string;
-  /** Test-only identity override for process-boundary checks. */
-  identity?: ModelProcessIdentity;
 }
 
 /** Keep one Pi session per Agent and record each plain assistant turn in its session record. */
@@ -68,7 +61,6 @@ export async function runAgentModel(
       modelId,
       apiKey,
       ...(dependencies.modelWorkerEntry ? { entry: dependencies.modelWorkerEntry } : {}),
-      ...(dependencies.identity ? { identity: dependencies.identity } : {}),
       onTranscript: (text) => transport.transcript(text, connectionSignal),
       onTool: (toolCallId, operation, input) =>
         transport.tool(toolCallId, operation, input, connectionSignal),

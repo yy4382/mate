@@ -65,17 +65,11 @@ const toolResultSchema = z.discriminatedUnion("ok", [
 
 export type ModelToolResult = z.infer<typeof toolResultSchema>;
 
-export interface ModelProcessIdentity {
-  uid: number;
-  gid: number;
-}
-
 export interface ModelProcessOptions {
   provider: string;
   modelId: string;
   apiKey: string;
   entry?: string;
-  identity?: ModelProcessIdentity;
   /** Records one plain assistant turn in the Agent session record; never publishes. */
   onTranscript(text: string): Promise<boolean>;
   onTool?(
@@ -93,7 +87,7 @@ export interface ModelProcessSession {
 
 /** Start one credential-bearing Pi model loop in a short-lived child process. */
 export function startModelProcess(options: ModelProcessOptions): ModelProcessSession {
-  const { provider, modelId, entry, identity, onTranscript, onTool, signal } = options;
+  const { provider, modelId, entry, onTranscript, onTool, signal } = options;
   let apiKey = options.apiKey;
   const nonce = randomUUID(),
     env: NodeJS.ProcessEnv = {
@@ -105,21 +99,9 @@ export function startModelProcess(options: ModelProcessOptions): ModelProcessSes
       MATE_MODEL_KEY: apiKey,
       ...(entry ? { MATE_MODEL_TEST_DIAGNOSTICS: "1" } : {}),
     },
+    // The worker inherits the launching account so credentials never need a separate Linux identity.
     child = fork(entry ?? fileURLToPath(new URL("./model-worker.js", import.meta.url)), [], {
-      ...(identity
-        ? {
-            execPath: "/usr/bin/setpriv",
-            execArgv: [
-              "--reuid",
-              String(identity.uid),
-              "--regid",
-              String(identity.gid),
-              "--clear-groups",
-              "--",
-              process.execPath,
-            ],
-          }
-        : { execArgv: [] }),
+      execArgv: [],
       env,
       stdio: ["ignore", "ignore", entry ? "inherit" : "ignore", "ipc"],
       serialization: "json",

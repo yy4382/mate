@@ -159,7 +159,7 @@ it("reconciles a running operation after its WebSocket disconnects without start
         heartbeatTimeoutMs: 3000,
       },
       controller.signal,
-      { modelWorkerIdentity: null, processOperations: operations },
+      { processOperations: operations },
     );
 
   try {

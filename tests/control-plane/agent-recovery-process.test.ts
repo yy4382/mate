@@ -116,7 +116,7 @@ function startNode(
       dataDirectory:process.env.MATE_NODE_DATA_DIR,agentHomeRoot:process.env.MATE_AGENT_HOME_ROOT,
       pairingToken:process.env.MATE_NODE_PAIRING_TOKEN,heartbeatIntervalMs:100,
       heartbeatTimeoutMs:2000},controller.signal,{
-      modelWorkerEntry:${JSON.stringify(worker)},modelWorkerIdentity:null,processOperations:operations,
+      modelWorkerEntry:${JSON.stringify(worker)},processOperations:operations,
       workspaceExecutor,
       provisionAgent:async (agentId)=>({username:'mate_'+agentId.replaceAll('-','').slice(0,27),
         uid:24001,gid:24001,home:process.env.MATE_AGENT_HOME_ROOT+'/'+agentId,

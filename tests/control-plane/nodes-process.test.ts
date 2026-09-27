@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import Database from "better-sqlite3";
 import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import {
   connect as connectTcp,
@@ -114,6 +114,11 @@ async function waitForExit(output: ProcessOutput, timeoutMs = 5000): Promise<voi
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
+}
+
+/** Durable node state is written by the node process itself, so its owner is the node's account. */
+function fileOwnerUid(path: string): number {
+  return statSync(path).uid;
 }
 
 async function startUnresponsiveWebSocketEndpoint(): Promise<{
@@ -871,6 +876,8 @@ it("pairs a node over WebSocket, confirms requests, and restores status after re
   writeFileSync(passwordFile, `${ownerPassword}\n`, { mode: 0o600 });
   chmodSync(passwordFile, 0o600);
   const controlData = join(directory, "control-plane-data");
+  // A plain ordinary-account start must not need a service manager, even when one advertises a socket.
+  const notifySocket = join(directory, "missing-systemd-notify.sock");
   const serverChild = spawn(process.execPath, [resolve("dist/src/control-plane/main.js")], {
     cwd: process.cwd(),
     env: {
@@ -878,6 +885,7 @@ it("pairs a node over WebSocket, confirms requests, and restores status after re
       MATE_CONTROL_PLANE_PORT: "0",
       MATE_CONTROL_PLANE_DATA_DIR: controlData,
       MATE_OWNER_PASSWORD_FILE: passwordFile,
+      NOTIFY_SOCKET: notifySocket,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -908,6 +916,7 @@ it("pairs a node over WebSocket, confirms requests, and restores status after re
         ...process.env,
         MATE_CONTROL_PLANE_URL: origin,
         MATE_NODE_DATA_DIR: dataDirectory,
+        NOTIFY_SOCKET: notifySocket,
       };
       if (token) env.MATE_NODE_PAIRING_TOKEN = token;
       else delete env.MATE_NODE_PAIRING_TOKEN;
@@ -923,6 +932,11 @@ it("pairs a node over WebSocket, confirms requests, and restores status after re
     node = startNode(pairing.pairingToken);
     const paired = await node.waitFor(/MATE_NODE_PAIRED ([0-9a-f-]+)/i);
     await node.waitFor(/MATE_NODE_HEARTBEAT_ACK ([0-9a-f-]+)/i);
+    // The node keeps the launching account: no user creation, no identity switch, no service manager.
+    if (typeof process.getuid === "function")
+      expect(fileOwnerUid(join(nodeData, "node-identity.json"))).toBe(process.getuid());
+    expect(node.text).not.toContain("must run as root");
+    expect(node.text).not.toContain("systemd");
     const connected = await waitForNode(
       origin,
       cookie!,

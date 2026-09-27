@@ -19,10 +19,11 @@
     "test:linux-privileged-approval": "node tests/linux/privileged-approval.integration.mjs",
     "test:linux-privileged-approval-transport": "node tests/linux/privileged-approval-transport.integration.mjs",
     "test:linux-agent-workspace": "node tests/linux/agent-workspace-isolation.integration.mjs",
-    "test:linux-model-worker": "node tests/linux/model-worker-isolation.integration.mjs",
+    "test:linux-single-account-node": "node tests/linux/single-account-node.integration.mjs",
     "check": "pnpm run format:check && pnpm test",
     "start": "node dist/src/control-plane/main.js",
     "start:control-plane": "node dist/src/control-plane/main.js",
+    "start:node": "node dist/src/node/main.js",
     "dev:web": "pnpm --filter @mate/web run dev",
     "deploy": "node dist/src/deployment/cli.js"
   },
