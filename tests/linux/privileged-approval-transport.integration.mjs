@@ -140,8 +140,8 @@ if (process.argv[2] === "control") {
             processOperations: { allowAgent() {} },
             privilegedOperations: operations,
             workspaceExecutor: {},
-            provisionAgent: async () => {
-              throw new Error("unexpected provision");
+            prepareAgentWorkspace: async () => {
+              throw new Error("unexpected workspace preparation");
             },
           },
         ).catch((error) => process.send({ kind: "node-error", error: String(error) }));

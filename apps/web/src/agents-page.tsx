@@ -28,13 +28,12 @@ interface AgentSummary {
   stage:
     | "queued"
     | "checking_account"
-    | "creating_account"
-    | "preparing_home"
-    | "verifying_identity"
+    | "preparing_workspace"
+    | "verifying_workspace"
     | "complete"
     | "failed";
   error: string | null;
-  linuxIdentity: { username: string; uid: number; gid: number; home: string } | null;
+  linuxIdentity: { username: string; uid: number; gid: number; workspace: string } | null;
   createdAt: number;
   updatedAt: number;
   pausedReason?: "manual" | "credentials" | null;
@@ -391,11 +390,10 @@ function AgentEditor({
 
 const stageLabels: Record<AgentSummary["stage"], string> = {
   queued: "等待节点处理",
-  checking_account: "检查 Linux 账号",
-  creating_account: "创建 Linux 账号",
-  preparing_home: "准备私人 home",
-  verifying_identity: "核验账号与权限",
-  complete: "账号和 home 已核验",
+  checking_account: "检查运行账号",
+  preparing_workspace: "准备默认工作区",
+  verifying_workspace: "核验工作区与记忆入口",
+  complete: "工作区与会话已核验",
   failed: "创建未完成",
 };
 
@@ -778,7 +776,7 @@ export function WorkspaceBrowser({
         <div>
           <h2 id="workspace-browser-title">私人工作区</h2>
           <p className="agents-intro">
-            在线时可只读浏览 Agent 的整个私人 home；文件内容由所属节点按 Agent Linux 身份读取。
+            在线时可只读浏览 Agent 的整个默认工作区；文件内容由所属节点以它自己的运行账号读取。
           </p>
         </div>
         {currentAgent && (
@@ -793,7 +791,7 @@ export function WorkspaceBrowser({
         )}
       </div>
       {available.length === 0 ? (
-        <p className="workspace-empty">还没有准备好私人 home 的 Agent。</p>
+        <p className="workspace-empty">还没有准备好默认工作区的 Agent。</p>
       ) : (
         <>
           <label className="workspace-agent-select">
@@ -1224,7 +1222,7 @@ export function AgentsPage() {
           <div>
             <h1 id="agents-title">Agent 同事</h1>
             <p className="agents-intro">
-              为每个 Agent 选择节点与模型；节点会创建独立的 Linux 账号和私人 home。
+              为每个 Agent 选择节点与模型；节点在运行账号下创建它的默认工作区和记忆入口。
             </p>
           </div>
           <a className="subtle-link" href="/app">
@@ -1432,7 +1430,7 @@ export function AgentsPage() {
             </label>
             {formLocked && (
               <p className="agent-field-hint">
-                此请求已有稳定 Agent ID；继续操作会使用相同资料、Linux 身份与逻辑会话。
+                此请求已有稳定 Agent ID；继续操作会复用同一工作区、记忆入口与逻辑会话。
               </p>
             )}
             {refreshError && (
@@ -1466,7 +1464,7 @@ export function AgentsPage() {
             </p>
           ) : agents.length === 0 ? (
             <p className="agents-empty">
-              还没有 Agent。提交资料后，在线节点会创建它的 Linux 身份和私人 home。
+              还没有 Agent。提交资料后，在线节点会在运行账号下创建它的默认工作区和记忆入口。
             </p>
           ) : (
             <ul className="agent-list">
@@ -1494,7 +1492,7 @@ export function AgentsPage() {
                   {agent.pausedReason === "manual" && (
                     <p className="agent-credential-note" role="status">
                       {agent.stop?.state === "succeeded"
-                        ? "后台进程已确认停止；复启前会核对原 Linux 身份与 home。"
+                        ? "后台进程已确认停止；复启前会核对运行账号与 Agent 工作区。"
                         : agent.stop?.state === "failed"
                           ? "后台进程停止失败；请查看动态中的失败收据与节点诊断后重试。"
                           : "后台进程停止结果未知；请查看动态与节点诊断。"}
@@ -1505,7 +1503,7 @@ export function AgentsPage() {
                   </p>
                   {agent.status === "waiting_credentials" && (
                     <p className="agent-credential-note">
-                      身份、home 与会话已验证。配置模型凭据前不会启动运行；邀请频道中的消息会排队。
+                      默认工作区、记忆入口与会话已验证，运行账号为节点账号。配置模型凭据前不会启动运行；邀请频道中的消息会排队。
                     </p>
                   )}
                   {agent.status === "ready" && (
@@ -1587,13 +1585,13 @@ export function AgentsPage() {
                   {agent.linuxIdentity && (
                     <dl className="agent-linux-identity">
                       <div>
-                        <dt>Linux 用户</dt>
+                        <dt>运行账号</dt>
                         <dd>
                           <code>{agent.linuxIdentity.username}</code>
                         </dd>
                       </div>
                       <div>
-                        <dt>UID / GID</dt>
+                        <dt>账号 UID / GID</dt>
                         <dd>
                           <code>
                             {agent.linuxIdentity.uid} / {agent.linuxIdentity.gid}
@@ -1601,9 +1599,9 @@ export function AgentsPage() {
                         </dd>
                       </div>
                       <div>
-                        <dt>私人 home</dt>
+                        <dt>默认工作区</dt>
                         <dd>
-                          <code>{agent.linuxIdentity.home}</code>
+                          <code>{agent.linuxIdentity.workspace}</code>
                         </dd>
                       </div>
                     </dl>

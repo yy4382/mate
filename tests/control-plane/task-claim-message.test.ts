@@ -85,11 +85,11 @@ async function authorizeModel(
   expect(response.status).toBe(204);
 }
 
+/** Every Agent on one node runs under that node's single ordinary account. */
 function addAgent(
   app: ReturnType<typeof createControlPlaneApp>,
   nodeId: string,
   name: string,
-  uid: number,
 ): string {
   const id = randomUUID();
   app.agents.prepare({
@@ -103,11 +103,11 @@ function addAgent(
   app.agents.complete(
     id,
     {
-      username: "mate_" + id.replaceAll("-", "").slice(0, 27),
-      uid,
-      gid: uid,
-      home: `/var/lib/mate/agents/${id}`,
-      homeMarker: "a".repeat(64),
+      username: "mate-node-account",
+      uid: 23001,
+      gid: 23001,
+      workspace: `/var/lib/mate/agents/${id}`,
+      workspaceMarker: "a".repeat(64),
     },
     app.chat,
   );
@@ -194,8 +194,8 @@ function taskIdOf(outcome: unknown): string {
 
 it("creates and claims the one task for a readable top-level message and refuses to preempt its owner", async () => {
   const { app, cookie, db, nodeId, socket } = await setup();
-  const first = addAgent(app, nodeId, "Peer 23001", 23001),
-    second = addAgent(app, nodeId, "Peer 23002", 23002);
+  const first = addAgent(app, nodeId, "Peer 23001"),
+    second = addAgent(app, nodeId, "Peer 23002");
   const room = app.chat.createChannel({
     name: "Shared work",
     description: "",
@@ -367,8 +367,8 @@ it("creates and claims the one task for a readable top-level message and refuses
 
 it("anchors a claim made from a thread reply on the original top-level message", async () => {
   const { app, cookie, db, nodeId, socket } = await setup();
-  const first = addAgent(app, nodeId, "Peer 23001", 23001),
-    second = addAgent(app, nodeId, "Peer 23002", 23002);
+  const first = addAgent(app, nodeId, "Peer 23001"),
+    second = addAgent(app, nodeId, "Peer 23002");
   const room = app.chat.createChannel({
     name: "Threaded work",
     description: "",
@@ -423,7 +423,7 @@ it("anchors a claim made from a thread reply on the original top-level message",
 
 it("claims the task already anchored on the named reply instead of a second task", async () => {
   const { app, cookie, db, nodeId, socket } = await setup();
-  const agentId = addAgent(app, nodeId, "Thread partner", 23001);
+  const agentId = addAgent(app, nodeId, "Thread partner");
   const room = app.chat.createChannel({
     name: "Threaded work",
     description: "",
@@ -466,8 +466,8 @@ it("claims the task already anchored on the named reply instead of a second task
 
 it("refuses to take a claim that a peer committed while the Agent was reviewing", async () => {
   const { app, cookie, db, nodeId, socket } = await setup();
-  const agentId = addAgent(app, nodeId, "Reviewing peer", 23001),
-    peerId = addAgent(app, nodeId, "Fast peer", 23002);
+  const agentId = addAgent(app, nodeId, "Reviewing peer"),
+    peerId = addAgent(app, nodeId, "Fast peer");
   const room = app.chat.createChannel({
     name: "Shared work",
     description: "",
@@ -514,7 +514,7 @@ it("refuses to take a claim that a peer committed while the Agent was reviewing"
 
 it("scopes a claim made from a reply like the top-level task it claims", async () => {
   const { app, cookie, nodeId, socket } = await setup();
-  const agentId = addAgent(app, nodeId, "Thread partner", 23001);
+  const agentId = addAgent(app, nodeId, "Thread partner");
   const room = app.chat.createChannel({
     name: "Threaded work",
     description: "",
@@ -591,7 +591,7 @@ it("scopes a claim made from a reply like the top-level task it claims", async (
 
 it("holds a direct claim for fresh discussion and keeps the existing draft choices", async () => {
   const { app, cookie, nodeId, socket } = await setup();
-  const agentId = addAgent(app, nodeId, "Task partner", 23001);
+  const agentId = addAgent(app, nodeId, "Task partner");
   const room = app.chat.createChannel({ name: "Work", description: "", visibility: "public" });
   expect(app.chat.inviteAgentToChannel(room.id, agentId)).toBe(true);
   await authorizeModel(app, cookie);
@@ -692,7 +692,7 @@ it("holds a direct claim for fresh discussion and keeps the existing draft choic
 
 it("does not turn task ownership into conversation access or make talk require a claim", async () => {
   const { app, cookie, db, nodeId, socket } = await setup();
-  const agentId = addAgent(app, nodeId, "Outsider", 23001);
+  const agentId = addAgent(app, nodeId, "Outsider");
   const room = app.chat.createChannel({ name: "Open work", description: "", visibility: "public" }),
     secretRoom = app.chat.createChannel({
       name: "Private",
@@ -760,7 +760,7 @@ it("does not turn task ownership into conversation access or make talk require a
 
 it("leaves no partial task behind when a direct claim cannot commit", async () => {
   const { app, cookie, db, nodeId, socket } = await setup();
-  const agentId = addAgent(app, nodeId, "Unlucky peer", 23001);
+  const agentId = addAgent(app, nodeId, "Unlucky peer");
   const room = app.chat.createChannel({ name: "Work", description: "", visibility: "public" });
   expect(app.chat.inviteAgentToChannel(room.id, agentId)).toBe(true);
   await authorizeModel(app, cookie);

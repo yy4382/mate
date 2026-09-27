@@ -648,18 +648,18 @@ it("queues an owner DM, recovers it after node and control-plane restart, and wa
       await runLinuxNodeWithTestDependencies({
         controlPlaneUrl: process.env.MATE_CONTROL_PLANE_URL,
         dataDirectory: process.env.MATE_NODE_DATA_DIR,
-        agentHomeRoot: process.env.MATE_AGENT_HOME_ROOT,
+        agentWorkspaceRoot: process.env.MATE_AGENT_HOME_ROOT,
         pairingToken: process.env.MATE_NODE_PAIRING_TOKEN,
         heartbeatIntervalMs: 100,
         heartbeatTimeoutMs: 2000,
       }, controller.signal, {
         modelWorkerEntry: ${JSON.stringify(fixture)},
-        provisionAgent: async (agentId) => ({
-          username: 'mate_' + agentId.replaceAll('-', '').slice(0, 27),
+        prepareAgentWorkspace: async (agentId) => ({
+          username: 'mate-node-account',
           uid: 24001,
           gid: 24001,
-          home: ${JSON.stringify(homeRoot)} + '/' + agentId,
-          homeMarker: 'a'.repeat(64),
+          workspace: ${JSON.stringify(homeRoot)} + '/' + agentId,
+          workspaceMarker: 'a'.repeat(64),
         }),
       });
     `;
@@ -1192,18 +1192,18 @@ it("runs Pi conversation tools through the authenticated Node and commits one ex
         await runLinuxNodeWithTestDependencies({
           controlPlaneUrl: process.env.MATE_CONTROL_PLANE_URL,
           dataDirectory: process.env.MATE_NODE_DATA_DIR,
-          agentHomeRoot: process.env.MATE_AGENT_HOME_ROOT,
+          agentWorkspaceRoot: process.env.MATE_AGENT_HOME_ROOT,
           pairingToken: process.env.MATE_NODE_PAIRING_TOKEN,
           heartbeatIntervalMs: 100,
           heartbeatTimeoutMs: 2000,
         }, controller.signal, {
           modelWorkerEntry: ${JSON.stringify(fixture)},
-          provisionAgent: async (agentId) => ({
-            username: 'mate_' + agentId.replaceAll('-', '').slice(0, 27),
+          prepareAgentWorkspace: async (agentId) => ({
+            username: 'mate-node-account',
             uid: 24001,
             gid: 24001,
-            home: ${JSON.stringify(agentHomeRoot)} + '/' + agentId,
-            homeMarker: 'a'.repeat(64),
+            workspace: ${JSON.stringify(agentHomeRoot)} + '/' + agentId,
+            workspaceMarker: 'a'.repeat(64),
           }),
         });
       `;

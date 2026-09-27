@@ -12,7 +12,7 @@ import {
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { ExecutionBackend, ExecutionResult, Operation } from "../execution/backend.js";
 import { LinuxUserBackend, type LinuxIdentity } from "../execution/linux-user.js";
-import { readProvisionedLinuxAgentIdentity, type LinuxAgentIdentity } from "./agent-provisioner.js";
+import { readAgentWorkspaceIdentity, type AgentWorkspaceIdentity } from "./agent-provisioner.js";
 import { workspaceReceiptRequestHash } from "./workspace-receipt.js";
 
 export type WorkspaceMode = "owner_read" | "agent_read" | "agent_action" | "agent_publish";
@@ -25,7 +25,7 @@ export interface WorkspaceExecutionRequest {
 }
 
 export interface WorkspaceExecutionDependencies {
-  lookupIdentity?: (agentId: string, homeRoot: string) => LinuxAgentIdentity;
+  lookupIdentity?: (agentId: string, workspaceRoot: string) => AgentWorkspaceIdentity;
   createBackend?: (agentId: string, identity: LinuxIdentity) => ExecutionBackend;
   now?: () => number;
 }
@@ -58,7 +58,10 @@ const agentReadKinds = new Set<Operation["kind"]>([...readKinds, "read"]);
 /** Executes file requests under the fixed Linux account assigned to the Agent. */
 export class LinuxWorkspaceExecutor {
   private readonly receiptsDirectory: string;
-  private readonly lookupIdentity: (agentId: string, homeRoot: string) => LinuxAgentIdentity;
+  private readonly lookupIdentity: (
+    agentId: string,
+    workspaceRoot: string,
+  ) => AgentWorkspaceIdentity;
   private readonly createBackend: (agentId: string, identity: LinuxIdentity) => ExecutionBackend;
   private readonly now: () => number;
   private readonly active = new Map<
@@ -80,7 +83,7 @@ export class LinuxWorkspaceExecutor {
       throw new Error("Node operation receipts require a real directory");
     if ((receiptDirectory.mode & 0o077) !== 0)
       throw new Error("Node operation receipt directory is accessible by other users");
-    this.lookupIdentity = dependencies.lookupIdentity ?? readProvisionedLinuxAgentIdentity;
+    this.lookupIdentity = dependencies.lookupIdentity ?? readAgentWorkspaceIdentity;
     this.createBackend =
       dependencies.createBackend ??
       ((agentId, identity) => new LinuxUserBackend({ [agentId]: identity }));
@@ -152,11 +155,11 @@ export class LinuxWorkspaceExecutor {
     }
 
     const identity = this.lookupIdentity(request.agentId, this.homeRoot);
-    if (resolve(identity.home) !== identity.home)
-      return failed("identity_mismatch: Agent home is not canonical");
-    const expectedHome = join(resolve(this.homeRoot), request.agentId.toLowerCase());
-    if (identity.home !== expectedHome)
-      return failed("identity_mismatch: Agent home does not match its stable ID");
+    if (resolve(identity.workspace) !== identity.workspace)
+      return failed("identity_mismatch: Agent workspace is not canonical");
+    const expectedWorkspace = join(resolve(this.homeRoot), request.agentId.toLowerCase());
+    if (identity.workspace !== expectedWorkspace)
+      return failed("identity_mismatch: Agent workspace does not match its stable ID");
     if (records)
       this.writeReceipt({
         operationId: request.operationId,
@@ -173,10 +176,10 @@ export class LinuxWorkspaceExecutor {
         username: identity.username,
         uid: identity.uid,
         gid: identity.gid,
-        home: identity.home,
+        home: identity.workspace,
       }).execute(
         {
-          root: identity.home,
+          root: identity.workspace,
           operation: request.operation,
           timeoutMs: 60_000,
           agentId: request.agentId,

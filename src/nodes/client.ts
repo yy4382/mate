@@ -2,12 +2,12 @@ import { createPrivateKey, randomUUID, sign } from "node:crypto";
 import { join, resolve as resolvePath } from "node:path";
 import { WebSocket } from "ws";
 import { loadOrCreateNodeIdentity, type NodeIdentity } from "./identity.js";
-import { readProvisionedLinuxAgentIdentity } from "./agent-provisioner.js";
+import { readAgentWorkspaceIdentity } from "./agent-provisioner.js";
 import { NodeControlMessageSchema, NodeRequestSchema } from "./protocol.js";
 import {
   handleAgentProvisionRequest,
-  provisionLinuxAgent,
-  type LinuxAgentIdentity,
+  prepareAgentWorkspace,
+  type AgentWorkspaceIdentity,
 } from "./agent-provisioner.js";
 import { makeAgentRunRequest, runAgentModel, type AgentRunPage } from "./agent-runner.js";
 import type { AgentProvisionStage } from "./protocol.js";
@@ -27,14 +27,14 @@ const HEARTBEAT_TIMEOUT_MS = 30_000;
 export interface LinuxNodeOptions {
   controlPlaneUrl: string;
   dataDirectory: string;
-  agentHomeRoot?: string;
+  agentWorkspaceRoot?: string;
   pairingToken?: string;
   heartbeatIntervalMs?: number;
   heartbeatTimeoutMs?: number;
 }
 
-/** Agent homes belong to the launching account, so they default inside its own node data directory. */
-export function defaultAgentHomeRoot(dataDirectory: string): string {
+/** Agent workspaces belong to the launching account, so they default inside its own node data directory. */
+export function defaultAgentWorkspaceRoot(dataDirectory: string): string {
   return join(resolvePath(dataDirectory), "agents");
 }
 
@@ -44,10 +44,10 @@ interface NodeTestDependencies {
   privilegedOperations?: PrivilegedNodeOperations;
   workspaceExecutor?: Pick<LinuxWorkspaceExecutor, "execute" | "status"> &
     Partial<Pick<LinuxWorkspaceExecutor, "receiptRevision">>;
-  provisionAgent?: (
+  prepareAgentWorkspace?: (
     agentId: string,
     onProgress: (stage: AgentProvisionStage) => void,
-  ) => Promise<LinuxAgentIdentity>;
+  ) => Promise<AgentWorkspaceIdentity>;
 }
 
 class NodeAuthenticationError extends Error {}
@@ -72,7 +72,8 @@ async function runLinuxNodeInternal(
 ): Promise<void> {
   const socketUrl = toWebSocketUrl(options.controlPlaneUrl);
   const { identity, created } = loadOrCreateNodeIdentity(options.dataDirectory);
-  const agentHomeRoot = options.agentHomeRoot ?? defaultAgentHomeRoot(options.dataDirectory);
+  const agentWorkspaceRoot =
+    options.agentWorkspaceRoot ?? defaultAgentWorkspaceRoot(options.dataDirectory);
   let pairingToken = options.pairingToken;
   if (created && !pairingToken)
     throw new Error("A new Linux node requires MATE_NODE_PAIRING_TOKEN");
@@ -91,7 +92,7 @@ async function runLinuxNodeInternal(
 
   const processStore = dependencies.processOperations
     ? undefined
-    : openNodeProcessOperations(options.dataDirectory, agentHomeRoot);
+    : openNodeProcessOperations(options.dataDirectory, agentWorkspaceRoot);
   const processOperations = dependencies.processOperations ?? processStore!.operations;
   const privilegedStore = dependencies.privilegedOperations
     ? undefined
@@ -101,7 +102,7 @@ async function runLinuxNodeInternal(
     const workspaceExecutor =
       dependencies.workspaceExecutor ??
       (process.platform === "linux"
-        ? new LinuxWorkspaceExecutor(agentHomeRoot, options.dataDirectory)
+        ? new LinuxWorkspaceExecutor(agentWorkspaceRoot, options.dataDirectory)
         : undefined);
     let retryMs = INITIAL_RETRY_MS;
     while (!signal.aborted) {
@@ -115,7 +116,7 @@ async function runLinuxNodeInternal(
           },
           heartbeatIntervalMs,
           heartbeatTimeoutMs,
-          agentHomeRoot,
+          agentWorkspaceRoot,
           dependencies,
           processOperations,
           privilegedOperations,
@@ -164,7 +165,7 @@ function connectOnce(
   clearPairingToken: () => void,
   heartbeatIntervalMs: number,
   heartbeatTimeoutMs: number,
-  agentHomeRoot: string,
+  agentWorkspaceRoot: string,
   testDependencies: NodeTestDependencies,
   processOperations: AgentProcessOperations,
   privilegedOperations: PrivilegedNodeOperations,
@@ -645,13 +646,13 @@ function connectOnce(
           (agentId, onProgress) =>
             message.verifyOnly
               ? Promise.resolve(
-                  readProvisionedLinuxAgentIdentity(agentId, resolvePath(agentHomeRoot)),
+                  readAgentWorkspaceIdentity(agentId, resolvePath(agentWorkspaceRoot)),
                 )
-              : testDependencies.provisionAgent
-                ? testDependencies.provisionAgent(agentId, onProgress)
-                : provisionLinuxAgent({
+              : testDependencies.prepareAgentWorkspace
+                ? testDependencies.prepareAgentWorkspace(agentId, onProgress)
+                : prepareAgentWorkspace({
                     agentId,
-                    homeRoot: resolvePath(agentHomeRoot),
+                    workspaceRoot: resolvePath(agentWorkspaceRoot),
                     onProgress,
                   }),
         ).catch(() => {

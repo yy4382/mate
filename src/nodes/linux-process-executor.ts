@@ -1,6 +1,6 @@
 import { LinuxProcessManager, ProcessStopRejectedError } from "../execution/linux-processes.js";
 import { LinuxUserBackend } from "../execution/linux-user.js";
-import { readProvisionedLinuxAgentIdentity, type LinuxAgentIdentity } from "./agent-provisioner.js";
+import { readAgentWorkspaceIdentity, type AgentWorkspaceIdentity } from "./agent-provisioner.js";
 import type { AgentProcessExecutor } from "./process-operations.js";
 
 const defaultCommandTimeoutMs = 60_000;
@@ -18,7 +18,7 @@ export function createLinuxAgentProcessExecutor(
   if (!Number.isSafeInteger(commandTimeoutMs) || commandTimeoutMs < 1 || commandTimeoutMs > 300_000)
     throw new Error("Agent command timeout must be between 1 and 300000 milliseconds");
   return async ({ agentId, operationId, operation }) => {
-    const identity = readProvisionedLinuxAgentIdentity(agentId, agentHomeRoot);
+    const identity = readAgentWorkspaceIdentity(agentId, agentHomeRoot);
     switch (operation.kind) {
       case "exec": {
         const processes = processManager(agentId, identity);
@@ -28,14 +28,14 @@ export function createLinuxAgentProcessExecutor(
             username: identity.username,
             uid: identity.uid,
             gid: identity.gid,
-            home: identity.home,
+            home: identity.workspace,
           },
         });
         // The operation has crossed the node's durable start record. WebSocket loss must not cancel
         // this command; its UID-scoped systemd unit continues and can be reconciled.
         const result = await backend.execute({
           agentId,
-          root: identity.home,
+          root: identity.workspace,
           timeoutMs: commandTimeoutMs,
           operation,
           operationId,
@@ -110,6 +110,6 @@ function processOperationId(uid: number, unit: string): string | null {
     : null;
 }
 
-function processManager(agentId: string, identity: LinuxAgentIdentity): LinuxProcessManager {
+function processManager(agentId: string, identity: AgentWorkspaceIdentity): LinuxProcessManager {
   return new LinuxProcessManager({ [agentId]: identity.uid });
 }

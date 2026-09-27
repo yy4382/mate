@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { existsSync, statSync } from "node:fs";
 
 const CONTROL_PLANE_APPLICATION_ID = 0x4d43504c;
-const CONTROL_PLANE_FORMAT_REVISION = 23;
+const CONTROL_PLANE_FORMAT_REVISION = 24;
 
 const moveAside =
   "Mate does not migrate or erase a database it does not recognise: if this file was not created by this release, move it aside and point controlPlaneDataDir at a new, empty directory.";
@@ -162,10 +162,23 @@ function migrateControlPlaneFormat(
   }
 
   try {
-    db.transaction(() => {
-      db.exec(migration.migrationSchema);
-      db.pragma(`user_version = ${migration.toRevision}`);
-    }).immediate();
+    // Rebuilding a parent table means dropping it while its child rows still exist, which SQLite
+    // refuses under foreign-key enforcement. Disable enforcement for the rebuild only, then verify
+    // the result inside the same transaction so a broken migration rolls back whole.
+    db.pragma("foreign_keys = OFF");
+    try {
+      db.transaction(() => {
+        db.exec(migration.migrationSchema);
+        const violations = db.pragma("foreign_key_check") as unknown[];
+        if (violations.length)
+          throw new Error(
+            `the upgrade left ${violations.length} row(s) referencing missing records`,
+          );
+        db.pragma(`user_version = ${migration.toRevision}`);
+      }).immediate();
+    } finally {
+      db.pragma("foreign_keys = ON");
+    }
   } catch (cause) {
     throw new Error(
       `Cannot upgrade Mate control-plane database at ${path}: ${cause instanceof Error ? cause.message : String(cause)}`,

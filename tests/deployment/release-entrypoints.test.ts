@@ -118,7 +118,7 @@ it("validates node startup configuration when launched through the current relea
         LANG: "C.UTF-8",
         MATE_CONTROL_PLANE_URL: "",
         MATE_NODE_DATA_DIR: join(root, "node-data"),
-        MATE_NODE_AGENT_HOME_ROOT: join(root, "agent-homes"),
+        MATE_NODE_AGENT_WORKSPACE_ROOT: join(root, "agent-homes"),
       },
       encoding: "utf8",
     });
@@ -136,19 +136,19 @@ it("keeps the node's Agent homes inside the launching account's own data directo
     nodeOptionsFromEnvironment({
       MATE_CONTROL_PLANE_URL: "http://127.0.0.1:8787",
       MATE_NODE_DATA_DIR: dataDirectory,
-    }).agentHomeRoot,
+    }).agentWorkspaceRoot,
   ).toBe(join(dataDirectory, "agents"));
   expect(
     nodeOptionsFromEnvironment({
       MATE_CONTROL_PLANE_URL: "http://127.0.0.1:8787",
       MATE_NODE_DATA_DIR: dataDirectory,
-      MATE_NODE_AGENT_HOME_ROOT: join(root, "agent-homes"),
-    }).agentHomeRoot,
+      MATE_NODE_AGENT_WORKSPACE_ROOT: join(root, "agent-homes"),
+    }).agentWorkspaceRoot,
   ).toBe(join(root, "agent-homes"));
   expect(() =>
     nodeOptionsFromEnvironment({
       MATE_CONTROL_PLANE_URL: "http://127.0.0.1:8787",
-      MATE_NODE_AGENT_HOME_ROOT: "relative/agent-homes",
+      MATE_NODE_AGENT_WORKSPACE_ROOT: "relative/agent-homes",
     }),
   ).toThrow("must be an absolute path");
 });

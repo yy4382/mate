@@ -2,7 +2,7 @@ import { conversationAttentionSchemaV17 } from "./conversation-attention-schema.
 import { taskReminderSchemaV18 } from "./task-reminder-schema.js";
 import { nodeDirectorySchema } from "./nodes/schema.js";
 import { ownerAuthSchema } from "./owner-auth-schema.js";
-import { agentDirectorySchema } from "./agents/schema.js";
+import { agentDirectorySchema, singleAccountAgentSchemaV24 } from "./agents/schema.js";
 import { modelCredentialSchema } from "./model-credentials.js";
 import {
   agentRunTranscriptSchemaV23,
@@ -54,7 +54,14 @@ export const controlPlaneSchemaV21 = `${controlPlaneSchemaV20}\n${recoveryHoldSc
 export const controlPlaneSchemaV22 = `${controlPlaneSchemaV21}\n${recoveryVersionsSchemaV22}`;
 
 /** The private control-plane format that records every plain assistant turn of a run. */
-export const controlPlaneSchema = `${controlPlaneSchemaV22}\n${agentRunTranscriptSchemaV23}`;
+export const controlPlaneSchemaV23 = `${controlPlaneSchemaV22}\n${agentRunTranscriptSchemaV23}`;
+
+/**
+ * The single-account format: Agents share the node's running account and own a workspace, so the
+ * `creating_account`, `preparing_home` and `verifying_identity` stages no longer exist. The Agent
+ * table is rebuilt rather than appended to, because SQLite cannot relax a CHECK constraint in place.
+ */
+export const controlPlaneSchema = `${controlPlaneSchemaV22}\n${agentRunTranscriptSchemaV23}\n${singleAccountAgentSchemaV24}`;
 
 export const controlPlaneMigrations = [
   {
@@ -194,7 +201,14 @@ export const controlPlaneMigrations = [
     fromRevision: 22,
     toRevision: 23,
     previousSchema: controlPlaneSchemaV22,
-    nextSchema: controlPlaneSchema,
+    nextSchema: controlPlaneSchemaV23,
     migrationSchema: agentRunTranscriptSchemaV23,
+  },
+  {
+    fromRevision: 23,
+    toRevision: 24,
+    previousSchema: controlPlaneSchemaV23,
+    nextSchema: controlPlaneSchema,
+    migrationSchema: singleAccountAgentSchemaV24,
   },
 ] as const;

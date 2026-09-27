@@ -127,7 +127,7 @@ beforeEach(() => {
           sessionId,
           status: "failed",
           stage: "failed",
-          error: "节点需要 root 权限才能创建 Linux 账号。",
+          error: "节点无法创建 Agent 工作区根路径，请检查运行账号的写入权限。",
           linuxIdentity: null,
           createdAt: 1,
           updatedAt: 2,
@@ -138,10 +138,10 @@ beforeEach(() => {
           stage: "complete",
           error: null,
           linuxIdentity: {
-            username: "mate_2ec7538cbd6c437a37a29405",
+            username: "mate-node-account",
             uid: 23001,
             gid: 23001,
-            home: `/var/lib/mate/agents/${String(request.id)}`,
+            workspace: `/var/lib/mate/agents/${String(request.id)}`,
           },
         };
         agents = [posts.length === 1 ? first : complete];
@@ -238,10 +238,10 @@ it("saves profile fields separately and only offers configured model services", 
       stage: "complete",
       error: null,
       linuxIdentity: {
-        username: "mate_8bfb67a166ed4d5690524cc7",
+        username: "mate-node-account",
         uid: 23001,
         gid: 23001,
-        home: "/var/lib/mate/agents/8bfb67a1-66ed-4d56-9052-4cc7eed926ae",
+        workspace: "/var/lib/mate/agents/8bfb67a1-66ed-4d56-9052-4cc7eed926ae",
       },
       createdAt: 1,
       updatedAt: 2,
@@ -285,10 +285,10 @@ it("shows a confirmed Agent stop failure with its diagnostic action", async () =
       stop: { state: "failed", receipt: { reason: "systemd_stop_failed" } },
       error: null,
       linuxIdentity: {
-        username: "mate_8bfb67a166ed4d5690524cc7",
+        username: "mate-node-account",
         uid: 23001,
         gid: 23001,
-        home: "/var/lib/mate/agents/8bfb67a1-66ed-4d56-9052-4cc7eed926ae",
+        workspace: "/var/lib/mate/agents/8bfb67a1-66ed-4d56-9052-4cc7eed926ae",
       },
       createdAt: 1,
       updatedAt: 2,
@@ -305,7 +305,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("creates a stable request and retries the same Linux identity without putting credentials in Agent data", async () => {
+it("creates a stable request and retries the same workspace request without putting credentials in Agent data", async () => {
   let poll: (() => void) | undefined;
   vi.spyOn(window, "setInterval").mockImplementation(((callback: TimerHandler) => {
     if (typeof callback === "function") poll = callback as () => void;
@@ -313,7 +313,7 @@ it("creates a stable request and retries the same Linux identity without putting
   }) as typeof window.setInterval);
   const user = userEvent.setup();
   render(createElement(AgentsPage));
-  await screen.findByText(/节点会创建独立的 Linux 账号和私人 home/);
+  await screen.findByText(/在线节点会在运行账号下创建它的默认工作区和记忆入口/);
   await waitFor(() =>
     expect((screen.getByRole("combobox", { name: "Linux 节点" }) as HTMLSelectElement).value).toBe(
       nodeId,
@@ -340,14 +340,14 @@ it("creates a stable request and retries the same Linux identity without putting
 
   await screen.findByRole("alert");
   expect(screen.getByRole("alert").textContent).toContain(
-    "节点需要 root 权限才能创建 Linux 账号。",
+    "节点无法创建 Agent 工作区根路径，请检查运行账号的写入权限。",
   );
   await act(async () => {
     poll?.();
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
   expect(screen.getByRole("alert").textContent).toContain(
-    "节点需要 root 权限才能创建 Linux 账号。",
+    "节点无法创建 Agent 工作区根路径，请检查运行账号的写入权限。",
   );
   const retry = await screen.findByRole("button", { name: "按同一请求重试" });
   expect(posts).toHaveLength(1);
@@ -366,7 +366,7 @@ it("creates a stable request and retries the same Linux identity without putting
   expect(posts).toHaveLength(2);
   expect(posts[1]).toEqual(posts[0]);
   expect(screen.getByText("等待凭据")).toBeTruthy();
-  expect(screen.getByText(/身份、home 与会话已验证/)).toBeTruthy();
+  expect(screen.getByText(/默认工作区、记忆入口与会话已验证/)).toBeTruthy();
 });
 
 it("lets the owner invite an existing Agent to a channel from the Chinese Agent page", async () => {
@@ -385,10 +385,10 @@ it("lets the owner invite an existing Agent to a channel from the Chinese Agent 
       stage: "complete",
       error: null,
       linuxIdentity: {
-        username: "mate_8bfb67a166ed4d5690524cc7",
+        username: "mate-node-account",
         uid: 23001,
         gid: 23001,
-        home: `/var/lib/mate/agents/${agentId}`,
+        workspace: `/var/lib/mate/agents/${agentId}`,
       },
       createdAt: 1,
       updatedAt: 2,
@@ -426,10 +426,10 @@ it("browses an Agent private home read-only, previews and streams downloads, and
       stage: "complete",
       error: null,
       linuxIdentity: {
-        username: "mate_8bfb67a166ed4d5690524cc7",
+        username: "mate-node-account",
         uid: 23001,
         gid: 23001,
-        home: `/var/lib/mate/agents/${agentId}`,
+        workspace: `/var/lib/mate/agents/${agentId}`,
       },
       createdAt: 1,
       updatedAt: 2,
@@ -509,7 +509,7 @@ it("streams a download through a standard browser fallback and reports its termi
         username: "mate_research",
         uid: 23001,
         gid: 23001,
-        home: `/var/lib/mate/agents/${agentId}`,
+        workspace: `/var/lib/mate/agents/${agentId}`,
       },
       createdAt: 1,
       updatedAt: 2,
@@ -606,7 +606,7 @@ it("stops status polling when the owner leaves the workspace page", async () => 
         username: "mate_research",
         uid: 23001,
         gid: 23001,
-        home: `/var/lib/mate/agents/${agentId}`,
+        workspace: `/var/lib/mate/agents/${agentId}`,
       },
       createdAt: 1,
       updatedAt: 2,
@@ -658,7 +658,7 @@ it("shows classified stream failures after a standard browser download starts", 
         username: "mate_research",
         uid: 23001,
         gid: 23001,
-        home: `/var/lib/mate/agents/${agentId}`,
+        workspace: `/var/lib/mate/agents/${agentId}`,
       },
       createdAt: 1,
       updatedAt: 2,
@@ -700,7 +700,7 @@ it("shows a Chinese error when a workspace file disappears before download", asy
         username: "mate_research",
         uid: 23001,
         gid: 23001,
-        home: `/var/lib/mate/agents/${agentId}`,
+        workspace: `/var/lib/mate/agents/${agentId}`,
       },
       createdAt: 1,
       updatedAt: 2,
@@ -743,7 +743,7 @@ it("shows a distinct permission error before starting a workspace download", asy
         username: "mate_research",
         uid: 23001,
         gid: 23001,
-        home: `/var/lib/mate/agents/${agentId}`,
+        workspace: `/var/lib/mate/agents/${agentId}`,
       },
       createdAt: 1,
       updatedAt: 2,
@@ -789,7 +789,7 @@ it("shows a Chinese error when a workspace download stream fails after it starts
         username: "mate_research",
         uid: 23001,
         gid: 23001,
-        home: `/var/lib/mate/agents/${agentId}`,
+        workspace: `/var/lib/mate/agents/${agentId}`,
       },
       createdAt: 1,
       updatedAt: 2,
@@ -841,10 +841,10 @@ it("shows the last connection time when a workspace request discovers that the n
       stage: "complete",
       error: null,
       linuxIdentity: {
-        username: "mate_8bfb67a166ed4d5690524cc7",
+        username: "mate-node-account",
         uid: 23001,
         gid: 23001,
-        home: `/var/lib/mate/agents/${agentId}`,
+        workspace: `/var/lib/mate/agents/${agentId}`,
       },
       createdAt: 1,
       updatedAt: 2,
@@ -892,7 +892,7 @@ it("keeps a no-record node conflict visible through refreshes until the owner st
   }) as typeof window.setInterval);
   const user = userEvent.setup();
   render(createElement(AgentsPage));
-  await screen.findByText(/节点会创建独立的 Linux 账号和私人 home/);
+  await screen.findByText(/在线节点会在运行账号下创建它的默认工作区和记忆入口/);
   await waitFor(() =>
     expect((screen.getByRole("combobox", { name: "Linux 节点" }) as HTMLSelectElement).value).toBe(
       nodeId,

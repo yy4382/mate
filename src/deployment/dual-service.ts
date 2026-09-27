@@ -53,7 +53,7 @@ export function renderControlPlaneUnit(config: DualServiceConfig): string {
 }
 
 export function renderNodeUnit(config: DualServiceConfig): string {
-  return `[Unit]\nDescription=Mate Linux node\nAfter=network-online.target mate-control-plane.service\nWants=network-online.target\nRequires=mate-control-plane.service\n\n[Service]\nType=simple\nUser=root\nGroup=root\nWorkingDirectory=/opt/mate/current\nEnvironment=MATE_CONTROL_PLANE_URL=ws://127.0.0.1:${config.controlPlanePort}\nEnvironment=MATE_NODE_DATA_DIR=${config.nodeDataDir}\nEnvironment=MATE_NODE_AGENT_HOME_ROOT=${config.agentHomeRoot}\nEnvironmentFile=-/etc/mate/node.env\nExecStart=/usr/bin/node /opt/mate/current/dist/src/node/main.js\nRestart=on-failure\nRestartSec=5\nUMask=0077\nMemoryMax=768M\n\n[Install]\nWantedBy=multi-user.target\n`;
+  return `[Unit]\nDescription=Mate Linux node\nAfter=network-online.target mate-control-plane.service\nWants=network-online.target\nRequires=mate-control-plane.service\n\n[Service]\nType=simple\nUser=root\nGroup=root\nWorkingDirectory=/opt/mate/current\nEnvironment=MATE_CONTROL_PLANE_URL=ws://127.0.0.1:${config.controlPlanePort}\nEnvironment=MATE_NODE_DATA_DIR=${config.nodeDataDir}\nEnvironment=MATE_NODE_AGENT_WORKSPACE_ROOT=${config.agentHomeRoot}\nEnvironmentFile=-/etc/mate/node.env\nExecStart=/usr/bin/node /opt/mate/current/dist/src/node/main.js\nRestart=on-failure\nRestartSec=5\nUMask=0077\nMemoryMax=768M\n\n[Install]\nWantedBy=multi-user.target\n`;
 }
 
 export function renderCaddy(config: DualServiceConfig): string {
