@@ -162,9 +162,31 @@ function readInitialPassword(path: string): string {
   return contents.replace(/\r?\n$/, "");
 }
 
-function isProtectedSystemdCredential(path: string, file: Stats): boolean {
-  const credentialDirectory = process.env.CREDENTIALS_DIRECTORY;
+interface SystemdCredentialFileSystem {
+  lstatSync(path: string): Stats;
+  realpathSync(path: string): string;
+  accessSync(path: string, mode: number): void;
+}
+
+interface SystemdCredentialCheckOptions {
+  credentialDirectory?: string;
+  fileSystem?: SystemdCredentialFileSystem;
+}
+
+const systemdCredentialFileSystem: SystemdCredentialFileSystem = {
+  lstatSync: (path) => lstatSync(path),
+  realpathSync: (path) => realpathSync(path),
+  accessSync: (path, mode) => accessSync(path, mode),
+};
+
+export function isProtectedSystemdCredential(
+  path: string,
+  file: Stats,
+  options: SystemdCredentialCheckOptions = {},
+): boolean {
+  const credentialDirectory = options.credentialDirectory ?? process.env.CREDENTIALS_DIRECTORY;
   if (!credentialDirectory || !isAbsolute(credentialDirectory)) return false;
+  const fileSystem = options.fileSystem ?? systemdCredentialFileSystem;
   const directoryPath = resolve(credentialDirectory);
   const runtimeDirectory = "/run";
   const systemdCredentialRoot = join(runtimeDirectory, "credentials");
@@ -176,9 +198,9 @@ function isProtectedSystemdCredential(path: string, file: Stats): boolean {
     return false;
 
   try {
-    const runtime = lstatSync(runtimeDirectory);
-    const credentialRoot = lstatSync(systemdCredentialRoot);
-    const directory = lstatSync(directoryPath);
+    const runtime = fileSystem.lstatSync(runtimeDirectory);
+    const credentialRoot = fileSystem.lstatSync(systemdCredentialRoot);
+    const directory = fileSystem.lstatSync(directoryPath);
     if (
       !runtime.isDirectory() ||
       runtime.uid !== 0 ||
@@ -197,40 +219,40 @@ function isProtectedSystemdCredential(path: string, file: Stats): boolean {
       (directory.mode & 0o222) !== 0 ||
       (directory.mode & 0o007) !== 0 ||
       (file.mode & 0o7777) !== 0o440 ||
-      realpathSync(runtimeDirectory) !== runtimeDirectory ||
-      realpathSync(systemdCredentialRoot) !== systemdCredentialRoot ||
-      realpathSync(directoryPath) !== directoryPath ||
-      realpathSync(path) !== resolve(path)
+      fileSystem.realpathSync(runtimeDirectory) !== runtimeDirectory ||
+      fileSystem.realpathSync(systemdCredentialRoot) !== systemdCredentialRoot ||
+      fileSystem.realpathSync(directoryPath) !== directoryPath ||
+      fileSystem.realpathSync(path) !== resolve(path)
     )
       return false;
 
     // systemd sets this directory for the unit's LoadCredential and keeps the
     // credential immutable for the service lifetime. Check the process ACL too:
     // the non-root service account must be able to read, but not replace, it.
-    accessSync(runtimeDirectory, constants.R_OK | constants.X_OK);
-    accessSync(systemdCredentialRoot, constants.R_OK | constants.X_OK);
-    accessSync(directoryPath, constants.R_OK | constants.X_OK);
-    accessSync(path, constants.R_OK);
+    fileSystem.accessSync(runtimeDirectory, constants.R_OK | constants.X_OK);
+    fileSystem.accessSync(systemdCredentialRoot, constants.R_OK | constants.X_OK);
+    fileSystem.accessSync(directoryPath, constants.R_OK | constants.X_OK);
+    fileSystem.accessSync(path, constants.R_OK);
     try {
-      accessSync(runtimeDirectory, constants.W_OK);
+      fileSystem.accessSync(runtimeDirectory, constants.W_OK);
       return false;
     } catch (error) {
       if (!isAccessDenied(error)) return false;
     }
     try {
-      accessSync(systemdCredentialRoot, constants.W_OK);
+      fileSystem.accessSync(systemdCredentialRoot, constants.W_OK);
       return false;
     } catch (error) {
       if (!isAccessDenied(error)) return false;
     }
     try {
-      accessSync(directoryPath, constants.W_OK);
+      fileSystem.accessSync(directoryPath, constants.W_OK);
       return false;
     } catch (error) {
       if (!isAccessDenied(error)) return false;
     }
     try {
-      accessSync(path, constants.W_OK);
+      fileSystem.accessSync(path, constants.W_OK);
       return false;
     } catch (error) {
       if (!isAccessDenied(error)) return false;
@@ -246,8 +268,7 @@ function isAccessDenied(error: unknown): boolean {
     typeof error === "object" &&
     error !== null &&
     "code" in error &&
-    ((error as NodeJS.ErrnoException).code === "EACCES" ||
-      (error as NodeJS.ErrnoException).code === "EPERM")
+    ["EACCES", "EPERM", "EROFS"].includes((error as NodeJS.ErrnoException).code ?? "")
   );
 }
 
