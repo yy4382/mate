@@ -499,7 +499,7 @@ function joinedPath(parent: string, name: string): string {
   return parent ? `${parent}/${name}` : name;
 }
 
-/** Owner-only, read-only browsing of an online Agent's private home. */
+/** Owner-only, read-only browsing of an online Agent's default workspace. */
 export function WorkspaceBrowser({
   agents,
   nodes,
@@ -774,7 +774,7 @@ export function WorkspaceBrowser({
     >
       <div className="agents-section-heading">
         <div>
-          <h2 id="workspace-browser-title">私人工作区</h2>
+          <h2 id="workspace-browser-title">默认工作区</h2>
           <p className="agents-intro">
             在线时可只读浏览 Agent 的整个默认工作区；文件内容由所属节点以它自己的运行账号读取。
           </p>

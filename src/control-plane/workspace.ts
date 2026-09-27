@@ -1223,11 +1223,11 @@ function mapNodeError(message: string): WorkspaceError {
   if (/operation_unknown|outcome may be unknown/i.test(message))
     return new WorkspaceError("operation_unknown", "文件操作结果尚未确认，不会自动重试。", 409);
   if (/unsafe_path|symbolic link|symlink|escapes the workspace/i.test(message))
-    return new WorkspaceError("unsafe_path", "路径越过了 Agent 私人工作区边界。", 403);
+    return new WorkspaceError("unsafe_path", "路径不在可读取的工作区范围内。", 403);
   if (/file_changed|file changed|changed while/i.test(message))
     return new WorkspaceError("file_changed", "文件在读取期间发生变化，请重新加载。", 409);
   if (/permission[_ ]denied|eacces|eperm/i.test(message))
-    return new WorkspaceError("permission_denied", "Agent Linux 用户没有读取此文件的权限。", 403);
+    return new WorkspaceError("permission_denied", "当前运行账号没有读取此文件的权限。", 403);
   if (/enoent|not found|no such file or directory/i.test(message))
     return new WorkspaceError("not_found", "文件或目录不存在。", 404);
   if (/not_file|not_regular_file|regular single-link|is a directory/i.test(message))
