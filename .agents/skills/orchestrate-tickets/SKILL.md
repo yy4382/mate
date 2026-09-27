@@ -133,13 +133,17 @@ Keep working through the backlog until all locally feasible development and vali
 
 Do not ask a person to perform manual environment validation unless they have asked for it. If a ticket's acceptance depends on hardware or an OS this machine is not, say so in the tracker as a stated limitation of the delivered half, and do not leave a "human task" ticket assigned to the user as if it were part of the queue.
 
-## 8. Keep one durable ledger
+## 8. Keep orchestration state out of the repository
 
-Keep a single orchestrator-owned file holding: the dependency levels, per-ticket starting and landing commits, your own verification results, incidents and how they were resolved, and any accepted deviation. Implementers must not edit it — that keeps parallel tickets from conflicting on it and keeps state in one place you can resume from.
+You need a running record: the dependency levels, per-ticket starting and landing commits, your own verification results, incidents and how they resolved, and any accepted deviation. Keep it in the **session — a goal, the conversation, job output** — not in the repository.
 
-Update it as tickets land, not at the end. When a session is interrupted (quota exhaustion, a crash), the ledger is what makes recovery a matter of inventory rather than memory: check what is committed, resume the implementer sessions that still hold context, and re-apply only what never landed.
+**The repository holds what stays true; it must not hold what is only true now.** A dispatch order, a level table, a per-ticket status list, a live incident log and an acceptance checklist all describe the current moment of one effort. The moment that effort ends they are stale by construction, and the project's own rule then applies: a superseded plan, status file or acceptance checklist is deleted rather than kept beside the current requirements. A committed ledger therefore always ends as a deletion — this repository deleted the orchestration ledger and the ticket acceptance checklist exactly that way — so write them where they will not have to be cleaned out of the shipped tree, and let the durable record be the landed commits, the tests, the tickets and the ADRs.
 
-**Keep it working material, not a product deliverable.** The ledger is scaffolding for one effort: it describes a transient plan, so it does not belong in the shipped tree and must never become a ticket-governed artifact. A ledger committed into `docs/` will eventually be deleted as "an abandoned plan we agreed not to retain" — in this repository exactly that happened. Prefer a scratch path outside the product docs, and let the durable record be the landed commits, the tests, and the tracker.
+Consequences worth stating plainly:
+
+- Do not create `docs/<effort>/` for orchestration context, however tidy it looks. It is the same mistake as committing a scratch plan.
+- Session state is durable enough for one effort: it survives the turns of that effort and the continuations between them, which is all the ledger is for. If a session is truly lost, reconstruct from the repository — `git log`, the tickets, the tests — because everything that actually landed is there by definition. A ledger was never the source of truth for what shipped; the commits are.
+- If you notice state-only material already committed, say so and remove it as part of the work rather than leaving it to rot.
 
 ## 9. Report to the user
 
