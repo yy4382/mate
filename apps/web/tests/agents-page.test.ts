@@ -282,7 +282,7 @@ it("shows a confirmed Agent stop failure with its diagnostic action", async () =
       status: "ready",
       stage: "complete",
       pausedReason: "manual",
-      stop: { state: "failed", receipt: { reason: "systemd_stop_failed" } },
+      stop: { state: "failed", receipt: { reason: "process_stop_unconfirmed" } },
       error: null,
       linuxIdentity: {
         username: "mate-node-account",
@@ -295,8 +295,50 @@ it("shows a confirmed Agent stop failure with its diagnostic action", async () =
     },
   ];
   render(createElement(AgentsPage));
-  expect(await screen.findByText(/后台进程停止失败；请查看动态中的失败收据/)).toBeTruthy();
-  expect(screen.queryByText(/后台进程停止结果未知/)).toBeNull();
+  expect(await screen.findByText(/有普通命令的终止无法确认/)).toBeTruthy();
+  // A failed stop that proved nothing else must not invent an unproven-command count.
+  expect(screen.queryByText(/条命令的终止无法确认；/)).toBeNull();
+  expect(screen.queryByText(/停止结果未知/)).toBeNull();
+});
+
+it("shows a confirmed one-node-run stop while an earlier command stays unknown", async () => {
+  agents = [
+    {
+      id: "8bfb67a1-66ed-4d56-9052-4cc7eed926ae",
+      nodeId,
+      name: "Partner",
+      role: "Researcher",
+      description: "Old",
+      model: { provider: "openai", id: "gpt-4.1" },
+      initialChannelId: null,
+      sessionId,
+      status: "ready",
+      stage: "complete",
+      pausedReason: "manual",
+      stop: {
+        state: "succeeded",
+        receipt: { stopped: true, operationIds: [], scope: "this_node_run" },
+        scope: "this_node_run",
+        unconfirmedOperationIds: ["11111111-1111-4111-8111-111111111111"],
+      },
+      error: null,
+      linuxIdentity: {
+        username: "mate-node-account",
+        uid: 23001,
+        gid: 23001,
+        workspace: "/var/lib/mate/agents/8bfb67a1-66ed-4d56-9052-4cc7eed926ae",
+      },
+      createdAt: 1,
+      updatedAt: 2,
+    },
+  ];
+  render(createElement(AgentsPage));
+  expect(
+    await screen.findByText(
+      /本次节点运行中可确认的普通命令已停止；另有 1 条命令的终止无法确认。复启前会核对运行账号与 Agent 工作区。/,
+    ),
+  ).toBeTruthy();
+  expect(screen.queryByText(/后台进程/)).toBeNull();
 });
 
 afterEach(() => {

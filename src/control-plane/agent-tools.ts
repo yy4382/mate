@@ -423,19 +423,19 @@ export const agentProcessToolOperations = Object.freeze({
   },
   "process.list": {
     description:
-      "列出本次节点运行期间由 process.exec 启动、进程组仍然存在的自己命令进程；节点重启后 Mate 不再追踪此前的普通命令。",
+      "列出本次节点运行期间由 process.exec 启动、进程组仍然存在的自己命令进程。Mate 的进程记录只属于当前这次节点进程：节点重启后它不再追踪此前的命令，也无法确认那些命令是否仍在运行。",
     schema: z.object({}).strict(),
     seatPolicy: "deny" as const,
   },
   "process.inspect": {
     description:
-      "查询一个由实时 process.exec 返回的操作 ID 当前的进程状态；Mate 只报告本次节点运行期间自己启动并仍能看到的进程组。",
+      "查询一个由实时 process.exec 返回的操作 ID 当前的进程状态。Mate 只报告本次节点运行期间自己启动并仍能看到的进程组；本次节点运行之前启动的普通命令不在报告范围内，Mate 不会声称它们正在运行或已经结束。",
     schema: z.object({ targetOperationId: operationId }).strict(),
     seatPolicy: "deny" as const,
   },
   "process.stop": {
     description:
-      "尽力终止一个由本次节点运行期间的 process.exec 返回的操作 ID 对应的进程组。Mate 只能观察和终止它自己启动的进程组：以新会话离开该进程组或本账号无权信号的后代不在报告范围内，Mate 不会声称它们已停止。",
+      "尽力终止一个由本次节点运行期间的 process.exec 返回的操作 ID 对应的进程组。Mate 只能观察和终止它自己启动的进程组：以新会话离开该进程组或本账号无权信号的后代（例如 sudo 派生的 root 进程）不在报告范围内，Mate 不会声称它们已停止，只会如实报告无法确认。",
     schema: z.object({ targetOperationId: operationId }).strict(),
     seatPolicy: "deny" as const,
   },

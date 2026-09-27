@@ -39,12 +39,21 @@ pnpm test:single-account-agent-workspace
 
 > **本节剩余检查只覆盖重构中的旧实现，不是新首版验收要求。** 新目标是在同一个现有普通账号下启动 Mate 和 Agent 命令，不创建用户、不切换身份、不操作 systemd；见[产品方向](PROJECT_DIRECTION.md)。
 
-普通命令执行已经在同一个现有普通账号下完成迁移：Agent 的命令进入当前账号的 shell 子进程，默认使用该 Agent 的工作区，返回有界输出、退出码、截断与超时标记，命令里的 `sudo` 原样交给宿主。`tests/control-plane/agent-command-process.test.ts` 用真实控制面、WebSocket、节点和脚本化模型在 macOS 与 Linux 上核对这条路径与同一操作 ID 的收据复用：
+普通命令执行已经在同一个现有普通账号下完成迁移：Agent 的命令进入当前账号的 shell 子进程，默认使用该 Agent 的工作区，返回有界输出、退出码、截断与超时标记，命令里的 `sudo` 原样交给宿主。`tests/control-plane/agent-command-process.test.ts` 用真实控制面、WebSocket、节点和脚本化模型在 macOS 与 Linux 上核对这条路径、同一操作 ID 的收据复用，以及节点在命令运行中被重启后不再执行同一动作：
 
 ```sh
 pnpm build
 pnpm vitest run tests/control-plane/agent-command-process.test.ts
 ```
+
+命令的失败与恢复语义另有一个只做真实进程工作的检查：它用真实 shell 子进程跑一条超时命令，模拟节点进程在命令运行中消失，再用同一份收据数据库把节点"重启"，确认同一操作 ID 重放记录而不是重跑命令：
+
+```sh
+pnpm build
+pnpm test:linux-ordinary-command-failure
+```
+
+该检查以启动账号运行，不需要 root、容器或服务管理器，macOS 与 Linux 都可运行，并打印一行 JSON 证据；它记录 `kernel`、`linuxKernel` 与 `containerized`，因此 macOS 结果只作跨平台证据，原生 Linux 结果须单独记录。它不覆盖宿主的 `sudo` 策略：普通账号无法终止 `sudo` 派生的 root 后代，Mate 对此不作任何声明。
 
 尚未迁移的 root 与 systemd 部署路径仍要求特权环境。macOS 单元测试和本地网页检查只验证应用逻辑，不构成真实 Linux 权限与进程隔离证据。Debian 13 隔离容器可运行下面的节点收据 fence；测试前先在目标 Linux 架构内运行 `pnpm build`，以生成原生模块和 no-replace helper：
 

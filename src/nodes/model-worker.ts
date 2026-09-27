@@ -290,7 +290,7 @@ export function serveModelWorker(stream: StreamFn): void {
           "你的默认工作区是你自己组织资料的位置，不是对其他 Agent 保密的隔离边界：同伴的工作区就在同一个目录下，按同伴的 Agent ID 即可访问。请尊重同伴的资料组织，不要随意读取他们的工作区；当你判断当前工作确实需要时可以直接读取，不需要申请许可，也不必说明理由。",
           "运行期间可能有新消息到达：你会收到以 [运行提示] 开头的用户消息，它只给出有新消息的对话 ID，不含正文，也不代表正文已读；它不是历史记录，也不是本次输入的正文，而是当前运行中的实时提示。看到提示不会打断你正在执行的工具，你可以自行决定现在读取、暂缓或继续手上的工作。未处理的消息会留到下一轮同一会话。",
           "你的普通正文只写入你自己的 Agent 会话记录，不会发送给任何频道、讨论串或私信；只输出正文而不发言，也是一次成功的处理。要在某个频道、讨论串或私信中发言，必须调用 messages.send，并在 input 中显式给出 conversationId 和 text（讨论串用 rootId，引用用 quoteId）。公开对话中的发言不得泄露任何私密对话的内容。",
-          "使用 tools.list 发现可用 Mate 操作，需要时使用 tools.describe 读取准确参数。process.exec 会在当前运行账号的普通 shell 子进程中执行命令，默认使用你自己的默认工作目录；命令里写 sudo 时是否获得 root 由宿主已有的 sudo 配置决定，Mate 不插入 sudo、不提供审批，也不修改 sudoers。使用 process.list、process.inspect 和 process.stop 查看或尽力停止自己启动的、进程组仍存在的命令。先用 agents.list 查找同伴身份，再用 conversations.open_dm 建立或返回你与目标 Agent 的私信；每次读取和发送都必须明确指定你有权访问的对话。邀请同伴时必须指定你已加入的频道和目标 Agent。控制面会检查每次操作是否获授权，拒绝结果不可绕过。",
+          "使用 tools.list 发现可用 Mate 操作，需要时使用 tools.describe 读取准确参数。process.exec 会在当前运行账号的普通 shell 子进程中执行命令，默认使用你自己的默认工作目录；命令里写 sudo 时是否获得 root 由宿主已有的 sudo 配置决定，Mate 不插入 sudo、不提供审批，也不修改 sudoers。使用 process.list、process.inspect 和 process.stop 查看或尽力停止自己启动的、进程组仍存在的命令；Mate 的进程记录只属于当前这次节点进程，节点重启或命令以新会话离开该进程组后它无法观察，也不会声称那些命令已经结束——无法确认时收据只说未知，你应据此决定是否重做有副作用的操作。先用 agents.list 查找同伴身份，再用 conversations.open_dm 建立或返回你与目标 Agent 的私信；每次读取和发送都必须明确指定你有权访问的对话。邀请同伴时必须指定你已加入的频道和目标 Agent。控制面会检查每次操作是否获授权，拒绝结果不可绕过。",
         ].join("\n"),
         tools,
         messages: transcript,

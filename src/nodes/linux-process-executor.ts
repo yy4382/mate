@@ -5,7 +5,7 @@ import {
   OrdinaryCommandRunner,
 } from "../execution/ordinary-command.js";
 import { readAgentWorkspaceIdentity } from "./agent-provisioner.js";
-import type { AgentProcessExecutor } from "./process-operations.js";
+import { ordinaryCommandStopScope, type AgentProcessExecutor } from "./process-operations.js";
 
 const defaultCommandTimeoutMs = 60_000;
 
@@ -116,12 +116,13 @@ export function createLinuxAgentProcessExecutor(
       case "process.stop_all": {
         // The tracker only knows commands this node process started, so the receipt says exactly
         // that: "everything I was tracking is stopped" is not "nothing from an earlier node run
-        // can still be running". Ticket #93 owns how the stop intent and the web present that gap.
+        // can still be running". The control plane reads the same scope and tells the owner which
+        // of its durable command records the node could not confirm.
         const { stopped, unconfirmed } = await runner.stopAll(agentId);
         return unconfirmed.length === 0
           ? {
               state: "succeeded",
-              receipt: { stopped: true, operationIds: stopped, scope: "this_node_run" },
+              receipt: { stopped: true, operationIds: stopped, scope: ordinaryCommandStopScope },
             }
           : {
               state: "failed",
@@ -130,7 +131,7 @@ export function createLinuxAgentProcessExecutor(
                 stopped: false,
                 operationIds: stopped,
                 unconfirmedOperationIds: unconfirmed,
-                scope: "this_node_run",
+                scope: ordinaryCommandStopScope,
               },
             };
       }

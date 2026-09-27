@@ -16,6 +16,7 @@
     "test": "pnpm run build && vitest run",
     "test:single-account-agent-workspace": "node tests/linux/agent-workspace-preparation.integration.mjs",
     "test:linux-single-account-node": "node tests/linux/single-account-node.integration.mjs",
+    "test:linux-ordinary-command-failure": "node tests/linux/ordinary-command-failure.integration.mjs",
     "check": "pnpm run format:check && pnpm test",
     "start": "node dist/src/control-plane/main.js",
     "start:control-plane": "node dist/src/control-plane/main.js",
