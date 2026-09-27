@@ -1,92 +1,12 @@
-import { spawn } from "node:child_process";
-import { readFileSync, readdirSync } from "node:fs";
-import { resolve } from "node:path";
-import { within } from "./paths.js";
-
-/** A systemctl wait was cancelled or timed out; an effect that already started may be unknown. */
-export class ProcessWaitInterruptedError extends Error {}
-export interface SystemctlResult {
-  code: number;
-  stdout: string;
-  stderr: string;
-  /** Output was longer than the capture limit; the caller must not parse it as complete. */
-  truncated?: boolean;
-}
-export interface SystemctlWait {
-  signal?: AbortSignal | undefined;
-  timeoutMs?: number | undefined;
-}
-export type SystemctlRunner = (args: string[], wait?: SystemctlWait) => Promise<SystemctlResult>;
-
-const systemctlTimeoutMs = 10000;
-const outputLimit = 65536;
+import { readFileSync } from "node:fs";
 
 /**
- * Awaits systemctl instead of blocking on it, so one slow host operation cannot stall other
- * Agents. Cancelling the wait kills the systemctl client; whether its request reached systemd
- * is then the caller's unknown result, not a silent timeout.
+ * Kill a command's process group; never throws, because the caller is already unwinding.
+ *
+ * A process group is the only handle an ordinary account has on work it started. A descendant that
+ * leaves the group, or that this account may not signal — most often a `sudo`-derived root
+ * descendant — is outside what Mate can end, and no caller may report it as stopped.
  */
-export function createSystemctlRunner(program = "/usr/bin/systemctl"): SystemctlRunner {
-  return (args, wait = {}) => {
-    const { signal, timeoutMs = systemctlTimeoutMs } = wait;
-    if (signal?.aborted)
-      return Promise.reject(new ProcessWaitInterruptedError(`systemctl ${args[0]} cancelled`));
-    return new Promise((resolvePromise, reject) => {
-      const child = spawn(program, args, {
-        env: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8" },
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      let stdout = "",
-        stderr = "",
-        truncated = false,
-        interrupted: string | undefined,
-        settled = false;
-      const collect = (text: string, chunk: Buffer) => {
-        const room = outputLimit - text.length;
-        if (room <= 0) {
-          truncated = true;
-          return text;
-        }
-        if (room < chunk.length) truncated = true;
-        return text + chunk.subarray(0, room).toString("utf8");
-      };
-      child.stdout!.on("data", (chunk: Buffer) => {
-        stdout = collect(stdout, chunk);
-      });
-      child.stderr!.on("data", (chunk: Buffer) => {
-        stderr = collect(stderr, chunk);
-      });
-      const interrupt = (reason: string) => {
-        if (interrupted || settled) return;
-        interrupted = reason;
-        child.kill("SIGKILL");
-      };
-      const timer = setTimeout(() => interrupt(`systemctl ${args[0]} timed out`), timeoutMs);
-      const cancel = () => interrupt(`systemctl ${args[0]} cancelled`);
-      signal?.addEventListener("abort", cancel, { once: true });
-      const finish = () => {
-        clearTimeout(timer);
-        signal?.removeEventListener("abort", cancel);
-      };
-      child.once("error", (error) => {
-        if (settled) return;
-        settled = true;
-        finish();
-        reject(error);
-      });
-      child.once("close", (code) => {
-        if (settled) return;
-        settled = true;
-        finish();
-        if (interrupted) reject(new ProcessWaitInterruptedError(interrupted));
-        else resolvePromise({ code: code ?? 1, stdout, stderr, truncated });
-      });
-    });
-  };
-}
-const systemctl: SystemctlRunner = createSystemctlRunner();
-
-/** Kill a command's process group; never throws, because the caller is already unwinding. */
 export function killProcessGroup(pid: number | undefined): void {
   if (!pid) return;
   try {
@@ -96,54 +16,59 @@ export function killProcessGroup(pid: number | undefined): void {
   }
 }
 
-/** Stop one Mate systemd unit as cleanup after a cancelled or timed-out command; bounded. */
-export async function stopUnit(unit: string | undefined): Promise<void> {
-  if (!unit) return;
+/**
+ * What `/proc/<pid>/stat` says about one process: its state letter and its start time in clock
+ * ticks. `/proc/<pid>/stat` is `pid (comm) state ppid pgrp session ... itrealvalue starttime ...`;
+ * the command name is parenthesised and may contain spaces, so fields are counted from its close.
+ * A host without `/proc` returns nothing, and callers then rely on liveness alone.
+ */
+function procStat(pid: number): { state: string; startToken: string | undefined } | undefined {
+  let text: string;
   try {
-    await systemctl(["stop", "--", unit], { timeoutMs: systemctlTimeoutMs });
+    text = readFileSync(`/proc/${pid}/stat`, "utf8");
   } catch {
-    /* The unit may already be gone; the command's own result stays unknown either way. */
+    return undefined;
   }
+  const closing = text.lastIndexOf(")");
+  if (closing < 0) return undefined;
+  const fields = text.slice(closing + 2).split(" ");
+  const startToken = fields[19];
+  return {
+    state: fields[0] ?? "",
+    startToken: startToken !== undefined && /^\d+$/.test(startToken) ? startToken : undefined,
+  };
 }
 
-export function cgroupPids(group: string): number[] {
-  if (!group.startsWith("/") || group.split("/").includes(".."))
-    throw new Error("Invalid systemd control group");
-  const base = "/sys/fs/cgroup",
-    root = resolve(base, `.${group}`);
-  if (!within(base, root)) throw new Error("Invalid systemd control group");
-  const pids: number[] = [];
-  const visit = (path: string, depth: number) => {
-    if (depth > 8) throw new Error("Systemd control group nesting exceeds limit");
-    let content: string;
-    try {
-      content = readFileSync(resolve(path, "cgroup.procs"), "utf8");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-      throw error;
-    }
-    for (const text of content.split("\n").filter(Boolean)) {
-      const pid = Number(text);
-      if (!Number.isSafeInteger(pid) || pid < 1) throw new Error("Invalid cgroup PID");
-      pids.push(pid);
-    }
-    for (const entry of readdirSync(path, { withFileTypes: true }))
-      if (entry.isDirectory()) visit(resolve(path, entry.name), depth + 1);
-  };
-  visit(root, 0);
-  return [...new Set(pids)].sort((a, b) => a - b);
+/**
+ * One process incarnation, as Linux reports it. A recycled process ID always has a different start
+ * time, so it can never look like the process it replaced.
+ */
+export function processStartToken(pid: number): string | undefined {
+  return procStat(pid)?.startToken;
 }
-export function pidUid(pid: number): number | undefined {
-  let status: string;
-  try {
-    status = readFileSync(`/proc/${pid}/status`, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw error;
+
+/**
+ * Whether this PID is a live process of the incarnation the caller started.
+ *
+ * On Linux a zombie is not running: the process has exited and only its unreaped exit status keeps
+ * the PID allocated. Without this check a service started by a wrapper that outlives it — a shell,
+ * `su`, or any other long-lived parent — would look alive forever after it stopped, and Mate would
+ * report a dead service as running and refuse to restart it.
+ */
+export function processIsRunning(pid: number, startToken: string | undefined): boolean {
+  if (!Number.isSafeInteger(pid) || pid < 1) return false;
+  const stat = procStat(pid);
+  if (stat) {
+    if (stat.state === "Z" || stat.state === "X" || stat.state === "x") return false;
+    // A recorded token that no longer matches means the PID was recycled and is not ours; a missing
+    // recorded token means the caller could not read one, so liveness is all the evidence there is.
+    if (startToken !== undefined && stat.startToken !== undefined && stat.startToken !== startToken)
+      return false;
   }
-  const line = status.match(/^Uid:\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)$/m);
-  if (!line) throw new Error("Cannot verify process UID");
-  const uids = line.slice(1).map(Number);
-  if (new Set(uids).size !== 1) throw new Error("Process has mixed UIDs");
-  return uids[0];
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
 }

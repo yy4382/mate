@@ -38,7 +38,6 @@ import {
 import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { acquireLock } from "../storage/lock.js";
-import { cgroupPids, pidUid } from "../execution/linux-processes.js";
 
 /** The host facts every maintenance step observes. */
 export interface HostStat {
@@ -77,12 +76,6 @@ export interface HostFilesystem {
   availableBlocks: number;
   freeInodes: number;
 }
-export interface HostProcessFacts {
-  /** Processes in one systemd control group, as the kernel sees them. */
-  pids(group: string): number[];
-  /** Owning UID of a live process, or undefined once it is gone. */
-  uid(pid: number): number | undefined;
-}
 
 /**
  * The one replaceable entry for every file, command and process operation the maintenance
@@ -111,7 +104,6 @@ export interface HostOperations {
   assertRootExecutable(path: string): Promise<void>;
   /** One bounded command; a missing binary is a non-zero result, not an exception. */
   run(binary: string, args: readonly string[], options?: { timeoutMs?: number }): HostCommandResult;
-  readonly processes: HostProcessFacts;
   lstat(path: string): Promise<HostStat>;
   readdir(path: string): Promise<string[]>;
   readText(path: string): Promise<string>;
@@ -141,37 +133,6 @@ export interface HostOperations {
  */
 export const isEntryModule = (argument: string | undefined, moduleUrl: string): boolean =>
   !!argument && moduleUrl === pathToFileURL(realpathSync(resolve(argument))).href;
-
-/** Fixed-layout first-release installer host entry; kept here with other real host operations. */
-export const dualHost = {
-  chmodSync,
-  chownSync,
-  cpSync,
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  readlinkSync,
-  renameSync,
-  rmSync,
-  statSync,
-  symlinkSync,
-  writeFileSync,
-  command(binary: string, args: string[]): string {
-    const result = spawnSync(binary, args, {
-      encoding: "utf8",
-      timeout: 15_000,
-      maxBuffer: 4 * 1024 * 1024,
-      env: { PATH: "/usr/sbin:/usr/bin:/sbin:/bin", LANG: "C.UTF-8" },
-    });
-    if (result.status !== 0)
-      throw new Error(
-        `${binary} failed: ${(result.stderr || result.stdout || result.error?.message || "unknown").slice(0, 300)}`,
-      );
-    return result.stdout.trim();
-  },
-};
 
 /** Read a path an operator named on the command line, following a symlinked leaf as before. */
 export async function readOperatorText(host: HostOperations, path: string): Promise<string> {
@@ -302,7 +263,6 @@ export const nodeHostOperations = (): HostOperations => ({
       throw new Error(`Host executable is not protected: ${path}`);
   },
   run: command,
-  processes: { pids: cgroupPids, uid: pidUid },
   lstat: (path) => lstat(path),
   readdir: (path) => readdir(path),
   readText,

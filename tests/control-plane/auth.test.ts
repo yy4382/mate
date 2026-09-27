@@ -2,12 +2,10 @@ import Database from "better-sqlite3";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
-  constants,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -15,9 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import type { Stats } from "node:fs";
 import { createControlPlaneApp } from "../../src/control-plane/http.js";
-import { isProtectedSystemdCredential } from "../../src/control-plane/owner-auth.js";
 
 const password = "owner-password-used-only-by-this-test";
 const cases: Array<{ app: ReturnType<typeof createControlPlaneApp>; dataDir: string }> = [];
@@ -70,48 +66,6 @@ function cookiePair(response: Response): string {
   const header = response.headers.get("set-cookie");
   expect(header).toBeTruthy();
   return header!.split(";", 1)[0]!;
-}
-
-const systemdCredentialDirectory = "/run/credentials/mate-control-plane.service";
-const systemdCredentialPath = join(systemdCredentialDirectory, "owner-password");
-
-function fakeStat(kind: "directory" | "file", mode: number, uid = 0, gid = 0): Stats {
-  return {
-    uid,
-    gid,
-    mode,
-    isDirectory: () => kind === "directory",
-    isFile: () => kind === "file",
-  } as Stats;
-}
-
-function credentialFileSystem(
-  options: {
-    directory?: Stats;
-    realPaths?: Map<string, string>;
-    writeError?: string;
-  } = {},
-) {
-  const stats = new Map<string, Stats>([
-    ["/run", fakeStat("directory", 0o40755)],
-    ["/run/credentials", fakeStat("directory", 0o40755)],
-    [systemdCredentialDirectory, options.directory ?? fakeStat("directory", 0o40550)],
-    [systemdCredentialPath, fakeStat("file", 0o100440)],
-  ]);
-  return {
-    lstatSync(path: string) {
-      const stat = stats.get(path);
-      if (!stat) throw Object.assign(new Error("not found"), { code: "ENOENT" });
-      return stat;
-    },
-    realpathSync(path: string) {
-      return options.realPaths?.get(path) ?? path;
-    },
-    accessSync(_path: string, mode: number) {
-      if ((mode & constants.W_OK) !== 0)
-        throw Object.assign(new Error("not writable"), { code: options.writeError ?? "EROFS" });
-    },
-  };
 }
 
 it("keeps the status entry public while an unconfigured owner fails closed", async () => {
@@ -317,44 +271,6 @@ it("rejects a first-time password file that other accounts can read", async () =
   }
 });
 
-it("does not mistake a temporary 0440 file for the systemd control-plane credential", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mate-owner-credential-"));
-  chmodSync(dataDir, 0o700);
-  const credentialDirectory = join(dataDir, "mate-control-plane.service");
-  mkdirSync(credentialDirectory, { mode: 0o700 });
-  const canonicalCredentialDirectory = realpathSync(credentialDirectory);
-  const passwordFile = join(canonicalCredentialDirectory, "owner-password");
-  writeFileSync(passwordFile, `${password}\n`, { mode: 0o440 });
-  chmodSync(passwordFile, 0o440);
-  chmodSync(credentialDirectory, 0o550);
-  vi.stubEnv("CREDENTIALS_DIRECTORY", canonicalCredentialDirectory);
-
-  const app = createControlPlaneApp({
-    dataDir,
-    passwordFile,
-    webRoot: dataDir,
-  });
-  cases.push({ app, dataDir });
-  const response = await login(app);
-
-  expect(response.status).toBe(503);
-});
-
-it("rejects a group-readable password file outside the systemd credentials directory", async () => {
-  const { app, passwordFile, dataDir } = setup();
-  const credentialDirectory = join(dataDir, "credentials");
-  mkdirSync(credentialDirectory, { mode: 0o700 });
-  const canonicalCredentialDirectory = realpathSync(credentialDirectory);
-  chmodSync(passwordFile, 0o440);
-  chmodSync(canonicalCredentialDirectory, 0o550);
-  vi.stubEnv("CREDENTIALS_DIRECTORY", canonicalCredentialDirectory);
-
-  const response = await login(app);
-
-  expect(response.status).toBe(503);
-  expect(await response.text()).not.toContain(password);
-});
-
 it("rejects a symlink as the initial owner password file", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mate-owner-auth-"));
   chmodSync(dataDir, 0o700);
@@ -378,77 +294,4 @@ it("rejects a symlink as the initial owner password file", async () => {
 
   expect(linkedResponse.status).toBe(503);
   expect(await linkedResponse.text()).not.toContain(password);
-});
-
-it.each(["EACCES", "EPERM", "EROFS"])(
-  "accepts the root-owned systemd credential when W_OK reports %s",
-  (writeError) => {
-    const file = fakeStat("file", 0o100440);
-    const fileSystem = credentialFileSystem({ writeError });
-
-    expect(
-      isProtectedSystemdCredential(systemdCredentialPath, file, {
-        credentialDirectory: systemdCredentialDirectory,
-        fileSystem,
-      }),
-    ).toBe(true);
-  },
-);
-
-it("rejects a forged systemd path, changed ownership, widened permissions, and symlinked parents", () => {
-  const cases: Array<{
-    credentialDirectory: string;
-    file?: Stats;
-    fileSystem: ReturnType<typeof credentialFileSystem>;
-  }> = [
-    {
-      credentialDirectory: "/tmp/forged.service",
-      fileSystem: credentialFileSystem(),
-    },
-    {
-      credentialDirectory: systemdCredentialDirectory,
-      file: fakeStat("file", 0o100440, 1001),
-      fileSystem: credentialFileSystem(),
-    },
-    {
-      credentialDirectory: systemdCredentialDirectory,
-      file: fakeStat("file", 0o100640),
-      fileSystem: credentialFileSystem(),
-    },
-    {
-      credentialDirectory: systemdCredentialDirectory,
-      file: fakeStat("file", 0o100444),
-      fileSystem: credentialFileSystem(),
-    },
-    {
-      credentialDirectory: systemdCredentialDirectory,
-      file: fakeStat("file", 0o100440, 0, 1001),
-      fileSystem: credentialFileSystem(),
-    },
-    {
-      credentialDirectory: systemdCredentialDirectory,
-      fileSystem: credentialFileSystem({ directory: fakeStat("directory", 0o40770) }),
-    },
-    {
-      credentialDirectory: systemdCredentialDirectory,
-      fileSystem: credentialFileSystem({
-        realPaths: new Map([["/run/credentials", "/tmp/credentials"]]),
-      }),
-    },
-    {
-      credentialDirectory: systemdCredentialDirectory,
-      fileSystem: credentialFileSystem({ writeError: "EIO" }),
-    },
-  ];
-
-  for (const [index, testCase] of cases.entries()) {
-    expect(
-      isProtectedSystemdCredential(
-        systemdCredentialPath,
-        testCase.file ?? fakeStat("file", 0o100440),
-        testCase,
-      ),
-      `unsafe credential case ${index}`,
-    ).toBe(false);
-  }
 });

@@ -1,16 +1,7 @@
 import argon2 from "argon2";
 import type Database from "better-sqlite3";
 import { createHash, randomBytes } from "node:crypto";
-import {
-  accessSync,
-  chmodSync,
-  constants,
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  realpathSync,
-} from "node:fs";
-import type { Stats } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { controlPlaneMigrations, controlPlaneSchema } from "./schema.js";
 import { openControlPlaneDatabase } from "../storage/initialize.js";
@@ -153,123 +144,18 @@ export class OwnerAuth {
   }
 }
 
+/**
+ * The initial owner password is a private file of the account Mate runs as. Every deployment path
+ * this release supports starts the control plane as that same ordinary account, so the file only
+ * has to be a real file that no other user can read; Mate adds no credential broker of its own.
+ */
 function readInitialPassword(path: string): string {
   if (!isAbsolute(path)) throw new Error("MATE_OWNER_PASSWORD_FILE must be an absolute path");
   const file = lstatSync(path);
-  if (!file.isFile() || ((file.mode & 0o077) !== 0 && !isProtectedSystemdCredential(path, file)))
+  if (!file.isFile() || file.isSymbolicLink() || (file.mode & 0o077) !== 0)
     throw new Error("Owner password file must be a regular file readable only by its owner");
   const contents = readFileSync(path, "utf8");
   return contents.replace(/\r?\n$/, "");
-}
-
-interface SystemdCredentialFileSystem {
-  lstatSync(path: string): Stats;
-  realpathSync(path: string): string;
-  accessSync(path: string, mode: number): void;
-}
-
-interface SystemdCredentialCheckOptions {
-  credentialDirectory?: string;
-  fileSystem?: SystemdCredentialFileSystem;
-}
-
-const systemdCredentialFileSystem: SystemdCredentialFileSystem = {
-  lstatSync: (path) => lstatSync(path),
-  realpathSync: (path) => realpathSync(path),
-  accessSync: (path, mode) => accessSync(path, mode),
-};
-
-export function isProtectedSystemdCredential(
-  path: string,
-  file: Stats,
-  options: SystemdCredentialCheckOptions = {},
-): boolean {
-  const credentialDirectory = options.credentialDirectory ?? process.env.CREDENTIALS_DIRECTORY;
-  if (!credentialDirectory || !isAbsolute(credentialDirectory)) return false;
-  const fileSystem = options.fileSystem ?? systemdCredentialFileSystem;
-  const directoryPath = resolve(credentialDirectory);
-  const runtimeDirectory = "/run";
-  const systemdCredentialRoot = join(runtimeDirectory, "credentials");
-  const expectedDirectory = join(systemdCredentialRoot, "mate-control-plane.service");
-  if (
-    directoryPath !== expectedDirectory ||
-    resolve(path) !== join(expectedDirectory, "owner-password")
-  )
-    return false;
-
-  try {
-    const runtime = fileSystem.lstatSync(runtimeDirectory);
-    const credentialRoot = fileSystem.lstatSync(systemdCredentialRoot);
-    const directory = fileSystem.lstatSync(directoryPath);
-    if (
-      !runtime.isDirectory() ||
-      runtime.uid !== 0 ||
-      runtime.gid !== 0 ||
-      (runtime.mode & 0o022) !== 0 ||
-      !credentialRoot.isDirectory() ||
-      credentialRoot.uid !== 0 ||
-      credentialRoot.gid !== 0 ||
-      (credentialRoot.mode & 0o022) !== 0 ||
-      !directory.isDirectory() ||
-      !file.isFile() ||
-      directory.uid !== 0 ||
-      directory.gid !== 0 ||
-      file.uid !== 0 ||
-      file.gid !== 0 ||
-      (directory.mode & 0o222) !== 0 ||
-      (directory.mode & 0o007) !== 0 ||
-      (file.mode & 0o7777) !== 0o440 ||
-      fileSystem.realpathSync(runtimeDirectory) !== runtimeDirectory ||
-      fileSystem.realpathSync(systemdCredentialRoot) !== systemdCredentialRoot ||
-      fileSystem.realpathSync(directoryPath) !== directoryPath ||
-      fileSystem.realpathSync(path) !== resolve(path)
-    )
-      return false;
-
-    // systemd sets this directory for the unit's LoadCredential and keeps the
-    // credential immutable for the service lifetime. Check the process ACL too:
-    // the non-root service account must be able to read, but not replace, it.
-    fileSystem.accessSync(runtimeDirectory, constants.R_OK | constants.X_OK);
-    fileSystem.accessSync(systemdCredentialRoot, constants.R_OK | constants.X_OK);
-    fileSystem.accessSync(directoryPath, constants.R_OK | constants.X_OK);
-    fileSystem.accessSync(path, constants.R_OK);
-    try {
-      fileSystem.accessSync(runtimeDirectory, constants.W_OK);
-      return false;
-    } catch (error) {
-      if (!isAccessDenied(error)) return false;
-    }
-    try {
-      fileSystem.accessSync(systemdCredentialRoot, constants.W_OK);
-      return false;
-    } catch (error) {
-      if (!isAccessDenied(error)) return false;
-    }
-    try {
-      fileSystem.accessSync(directoryPath, constants.W_OK);
-      return false;
-    } catch (error) {
-      if (!isAccessDenied(error)) return false;
-    }
-    try {
-      fileSystem.accessSync(path, constants.W_OK);
-      return false;
-    } catch (error) {
-      if (!isAccessDenied(error)) return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function isAccessDenied(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    ["EACCES", "EPERM", "EROFS"].includes((error as NodeJS.ErrnoException).code ?? "")
-  );
 }
 
 function hashToken(token: string): string {

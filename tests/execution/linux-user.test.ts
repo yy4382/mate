@@ -2,7 +2,7 @@ import { afterEach, expect, it } from "vitest";
 import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { LinuxUserBackend, linuxScopeCommand } from "../../src/execution/linux-user.js";
+import { LinuxUserBackend } from "../../src/execution/linux-user.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -14,35 +14,6 @@ function workspace() {
   return root;
 }
 const identity = { uid: process.getuid!(), gid: process.getgid!(), home: homedir() };
-
-it("places each Linux call in its Agent slice with groups cleared before the command", () => {
-  const call = linuxScopeCommand(
-    { uid: 1001, gid: 1001, home: "/srv/agents/alice" },
-    "/srv/agents/alice",
-    "/bin/sh",
-    ["-c", "sleep 30 &"],
-    "mate-agent-1001-12345678-1234-4234-8234-123456789abc",
-  );
-  expect(call.command).toBe("/usr/bin/systemd-run");
-  expect(call.unit).toBe("mate-agent-1001-12345678-1234-4234-8234-123456789abc.scope");
-  expect(call.args).not.toContain("--expand-environment=no");
-  expect(call.args).toEqual(
-    expect.arrayContaining([
-      "--scope",
-      "--collect",
-      "--slice=mate-agent-1001.slice",
-      "--working-directory=/srv/agents/alice",
-      "/usr/bin/setpriv",
-      "--reuid=1001",
-      "--regid=1001",
-      "--clear-groups",
-      "--no-new-privs",
-      "/bin/sh",
-      "-c",
-      "sleep 30 &",
-    ]),
-  );
-});
 
 it("keeps provisioner-only identity metadata outside the strict execution backend schema", () => {
   const provisionedIdentity = { ...identity, username: "alice", homeMarker: "a".repeat(64) };
@@ -95,7 +66,7 @@ it("accepts a symlink to a working directory like a normal shell", async () => {
 });
 
 it("returns after a normal background shell command without waiting for inherited output pipes", async () => {
-  if (process.platform === "linux" && process.getuid?.() === 0) return; // The privileged branch is covered by the Debian scope test.
+  if (process.getuid?.() === 0) return; // Root is never a supported Mate account; see the node account check.
   const root = workspace(),
     backend = new LinuxUserBackend({ alice: identity });
   const result = await backend.execute({
@@ -108,7 +79,7 @@ it("returns after a normal background shell command without waiting for inherite
 });
 
 it("keeps complete foreground output when its pipes close normally", async () => {
-  if (process.platform === "linux" && process.getuid?.() === 0) return;
+  if (process.getuid?.() === 0) return;
   const root = workspace(),
     backend = new LinuxUserBackend({ alice: identity });
   const result = await backend.execute({

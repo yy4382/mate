@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { killProcessGroup } from "./linux-processes.js";
 
 /** Captured bytes per stream for one ordinary command; anything beyond it is reported as cut. */
@@ -315,14 +315,53 @@ function processStartToken(pid: number): string | undefined {
   return token !== undefined && /^\d+$/.test(token) ? token : undefined;
 }
 
-/** Whether any process remains in this process group. EPERM means one exists that we cannot signal. */
+/**
+ * Whether any process in this command's group can still run.
+ *
+ * `kill(-pid, 0)` succeeds whenever the group exists at all, and a group exists while its leader's
+ * exit status is unreaped — the normal state on a Linux host whose init does not reap orphans. So
+ * the signal probe is only the first half of the answer, and on Linux `/proc` supplies the rest: a
+ * group whose every member is a zombie has finished, and nothing in it is running any more. EPERM
+ * from the probe means a member exists that this account may not signal, which counts as running.
+ */
 function processGroupExists(pid: number): boolean {
   try {
     process.kill(-pid, 0);
-    return true;
   } catch (error) {
     return (error as NodeJS.ErrnoException).code !== "ESRCH";
   }
+  let entries: string[];
+  try {
+    entries = readdirSync("/proc");
+  } catch {
+    // No `/proc`, so this host cannot tell a finished process from a running one. The conservative
+    // answer is "still there": a caller may only ever claim a stop it observed.
+    return true;
+  }
+  for (const name of entries) {
+    if (!/^\d+$/.test(name)) continue;
+    const member = procGroupMember(Number(name));
+    // Only this group's members count: a live process elsewhere on the host says nothing about
+    // whether the command Mate started has finished.
+    if (member === undefined || member.group !== pid) continue;
+    if (member.state !== "Z" && member.state !== "X" && member.state !== "x") return true;
+  }
+  return false;
+}
+
+/** The group and state of one `/proc` entry, counting fields from the parenthesised command name. */
+function procGroupMember(pid: number): { group: number; state: string } | undefined {
+  let stat: string;
+  try {
+    stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+  } catch {
+    return undefined;
+  }
+  const closing = stat.lastIndexOf(")");
+  if (closing < 0) return undefined;
+  const fields = stat.slice(closing + 2).split(" "),
+    group = Number(fields[2]);
+  return fields[0] && Number.isSafeInteger(group) ? { group, state: fields[0] } : undefined;
 }
 
 function trackedKey(agentId: string, operationId: string): string {

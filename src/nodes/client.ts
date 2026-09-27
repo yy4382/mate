@@ -1,5 +1,5 @@
 import { createPrivateKey, randomUUID, sign } from "node:crypto";
-import { join, resolve as resolvePath } from "node:path";
+import { isAbsolute, join, resolve as resolvePath } from "node:path";
 import { WebSocket } from "ws";
 import { loadOrCreateNodeIdentity, type NodeIdentity } from "./identity.js";
 import { readAgentWorkspaceIdentity } from "./agent-provisioner.js";
@@ -29,6 +29,13 @@ export interface LinuxNodeOptions {
   pairingToken?: string;
   heartbeatIntervalMs?: number;
   heartbeatTimeoutMs?: number;
+  /**
+   * Test-only seam, used by the cross-process deployment checks: the scripted model worker this node
+   * starts instead of the real provider stream. It is read from `MATE_NODE_MODEL_WORKER_ENTRY` and
+   * must be an absolute path; a real deployment that leaves the variable unset runs the production
+   * worker, and a path that does not exist fails that Agent run rather than silently doing nothing.
+   */
+  modelWorkerEntry?: string;
 }
 
 /** Agent workspaces belong to the launching account, so they default inside its own node data directory. */
@@ -83,6 +90,8 @@ async function runLinuxNodeInternal(
     throw new Error("A new Linux node requires MATE_NODE_PAIRING_TOKEN");
   if (pairingToken && (pairingToken.length < 32 || pairingToken.length > 256))
     throw new Error("MATE_NODE_PAIRING_TOKEN is not valid");
+  if (options.modelWorkerEntry !== undefined && !isAbsolute(options.modelWorkerEntry))
+    throw new Error("MATE_NODE_MODEL_WORKER_ENTRY must be an absolute path");
   const heartbeatIntervalMs = positiveIntegerOption(
     options.heartbeatIntervalMs,
     HEARTBEAT_INTERVAL_MS,
@@ -117,6 +126,7 @@ async function runLinuxNodeInternal(
           heartbeatIntervalMs,
           heartbeatTimeoutMs,
           agentWorkspaceRoot,
+          options.modelWorkerEntry,
           dependencies,
           processOperations,
           workspaceExecutor,
@@ -135,6 +145,22 @@ async function runLinuxNodeInternal(
       retryMs = Math.min(retryMs * 2, MAX_RETRY_MS);
     }
   } finally {
+    // A node that is going away must not leave work behind that nothing tracks any more: each
+    // ordinary command is its own process group, so it survives the node that started it. The stop
+    // is best effort and its report is written to the node's own output, because shutdown still has
+    // to finish; the durable operation records keep the result reviewable afterwards.
+    try {
+      const { stopped, unconfirmed } = await processOperations.stopAllAgents();
+      if (stopped.length > 0 || unconfirmed.length > 0)
+        process.stderr.write(
+          `Node stopped ${stopped.length} running command(s)` +
+            (unconfirmed.length > 0
+              ? `; ${unconfirmed.length} could not be confirmed stopped.\n`
+              : ".\n"),
+        );
+    } catch {
+      process.stderr.write("Node could not stop its tracked commands while shutting down.\n");
+    }
     processStore?.close();
   }
 }
@@ -164,6 +190,7 @@ function connectOnce(
   heartbeatIntervalMs: number,
   heartbeatTimeoutMs: number,
   agentWorkspaceRoot: string,
+  modelWorkerEntry: string | undefined,
   testDependencies: NodeTestDependencies,
   processOperations: AgentProcessOperations,
   workspaceExecutor:
@@ -421,8 +448,9 @@ function connectOnce(
         if (!authenticated)
           throw new NodeAuthenticationError("控制面在节点身份验证前请求普通操作。");
         const { requestId, operationId, agentId, operation } = message;
-        // Do not bind execution to this WebSocket's lifetime. Node receipts and the Linux scope
-        // let the control plane reconcile the same operation after a reconnect.
+        // Do not bind execution to this WebSocket's lifetime. Node receipts let the control plane
+        // reconcile the same operation after a reconnect; the command's own result is recorded
+        // from what the ordinary child process did.
         void processOperations
           .execute(agentId, operationId, operation)
           .then((result) => {
@@ -570,9 +598,11 @@ function connectOnce(
           },
           controller.signal,
           {
-            ...(testDependencies.modelWorkerEntry
-              ? { modelWorkerEntry: testDependencies.modelWorkerEntry }
-              : {}),
+            ...(modelWorkerEntry
+              ? { modelWorkerEntry }
+              : testDependencies.modelWorkerEntry
+                ? { modelWorkerEntry: testDependencies.modelWorkerEntry }
+                : {}),
             onWorker: (worker) => {
               activeRun.notice = (conversationId) => worker.notice(conversationId);
             },

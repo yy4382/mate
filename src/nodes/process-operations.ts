@@ -147,6 +147,38 @@ export class AgentProcessOperations {
     this.stoppingAgents.delete(agentId);
   }
 
+  /**
+   * Stop every command this node process is still running, for every Agent it started one for.
+   *
+   * The node calls this while it is shutting down: a command is its own process group, so it
+   * outlives the node that started it. A node that exited without this would leave work running
+   * that nothing tracks any more, and a backup or version switch would copy state being written.
+   * Failures are reported back rather than thrown, because shutdown must finish either way.
+   */
+  async stopAllAgents(): Promise<{ stopped: string[]; unconfirmed: string[] }> {
+    const agents = new Set<string>();
+    for (const [operationId] of this.inFlight) {
+      const row = this.findOperation.get(operationId) as OperationRow | undefined;
+      if (row?.agent_id) agents.add(row.agent_id);
+    }
+    const stopped: string[] = [],
+      unconfirmed: string[] = [];
+    for (const agentId of agents) {
+      try {
+        const receipt = await this.execute(agentId, randomUUID(), { kind: "process.stop_all" });
+        const result = receipt.receipt as {
+          operationIds?: string[];
+          unconfirmedOperationIds?: string[];
+        } | null;
+        if (receipt.state === "succeeded") stopped.push(...(result?.operationIds ?? []));
+        else unconfirmed.push(...(result?.unconfirmedOperationIds ?? ["unknown"]));
+      } catch {
+        unconfirmed.push(agentId);
+      }
+    }
+    return { stopped, unconfirmed };
+  }
+
   async execute(
     agentId: string,
     operationId: string,

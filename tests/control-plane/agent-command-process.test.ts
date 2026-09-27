@@ -603,7 +603,9 @@ it("keeps an already-started command from running again after the node restarts"
     }, "the started command's side effect");
 
     // SIGTERM the node while that command is still running, then start the node again on the same
-    // data directory: the pre-restart command is now beyond the tracker's memory.
+    // data directory. The node stops the command groups it started before it exits, so this
+    // restart has a confirmed result to report instead of an unknown one; the tracker's memory is
+    // gone, but the durable record is not.
     await stopProcess(node);
     node = undefined;
     restarted = startNode({
@@ -625,12 +627,14 @@ it("keeps an already-started command from running again after the node restarts"
     expect(readFileSync(ledger, "utf8").trimEnd().split("\n")).toEqual(["executed"]);
     const operation = processOperation(directory, agent.id)!;
     expect(typeof operation.operation_id).toBe("string");
-    // The record is exactly as honest as the node can make it: this incarnation never held the
-    // command's receipt, so its fate stays unknown rather than being restated as a result.
-    expect(operation).toMatchObject({
-      state: "unknown",
-      node_receipt_confirmed: 1,
-      receipt_json: JSON.stringify({ reason: "node_restarted_during_operation" }),
+    // The record is exactly as honest as the node can make it: the node stopped the command group
+    // while shutting down, so its receipt says the command was ended by SIGKILL rather than
+    // restating it as a result it never produced.
+    expect(operation).toMatchObject({ state: "failed", node_receipt_confirmed: 1 });
+    expect(JSON.parse(operation.receipt_json as string)).toMatchObject({
+      code: null,
+      signal: "SIGKILL",
+      timedOut: false,
     });
     const db = controlPlaneDatabase(directory);
     let operationRows: Array<{ operation_id: string }>;

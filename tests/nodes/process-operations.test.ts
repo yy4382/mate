@@ -24,6 +24,53 @@ it("refuses an Agent command timeout outside its supported range", () => {
   ).toThrow("Agent command timeout");
 });
 
+it("stops every Agent's running commands when the node is shutting down", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "mate-process-operations-")),
+    database = new Database(join(directory, "operations.sqlite")),
+    firstAgent = randomUUID(),
+    secondAgent = randomUUID(),
+    first = deferred<{ state: "succeeded"; receipt: unknown }>(),
+    second = deferred<{ state: "succeeded"; receipt: unknown }>(),
+    stoppedFor: string[] = [];
+  const execute = vi.fn(async ({ agentId, operation }: { agentId: string; operation: unknown }) => {
+    const kind = (operation as { kind: string }).kind;
+    if (kind === "process.stop_all") {
+      stoppedFor.push(agentId);
+      return {
+        state: "succeeded" as const,
+        receipt: { stopped: true, operationIds: [], scope: "this_node_run" },
+      };
+    }
+    return agentId === firstAgent ? first.promise : second.promise;
+  });
+  const operations = new AgentProcessOperations(database, execute);
+  try {
+    // Two Agents each have one command in flight when the node is asked to stop.
+    void operations.execute(firstAgent, randomUUID(), {
+      kind: "exec",
+      command: "sleep 5",
+      cwd: ".",
+    });
+    void operations.execute(secondAgent, randomUUID(), {
+      kind: "exec",
+      command: "sleep 5",
+      cwd: ".",
+    });
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(2));
+    const shutdown = operations.stopAllAgents();
+    // The first stop pass cannot finish while a command it must wait for is still in flight.
+    await vi.waitFor(() => expect(stoppedFor.length).toBeGreaterThanOrEqual(1));
+    first.resolve({ state: "succeeded", receipt: { code: 0 } });
+    second.resolve({ state: "succeeded", receipt: { code: 0 } });
+    await expect(shutdown).resolves.toEqual({ stopped: [], unconfirmed: [] });
+    // Both Agents' commands were stopped, not just the first one's.
+    expect(new Set(stoppedFor)).toEqual(new Set([firstAgent, secondAgent]));
+  } finally {
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 it("records start before host work and replays a durable terminal receipt without rerunning", async () => {
   const directory = mkdtempSync(join(tmpdir(), "mate-process-operations-")),
     path = join(directory, "operations.sqlite"),

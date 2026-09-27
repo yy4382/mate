@@ -225,11 +225,13 @@ export class AgentDirectory {
           throw new AgentRequestConflict("节点未返回运行账号的名称。");
         if (
           !Number.isSafeInteger(identity.uid) ||
-          identity.uid < 0 ||
+          identity.uid < 1 ||
           !Number.isSafeInteger(identity.gid) ||
-          identity.gid < 0
+          identity.gid < 1
         )
-          throw new AgentRequestConflict("节点返回了无效的 UID 或 GID。");
+          throw new AgentRequestConflict(
+            "节点报告的运行账号是 root，或 UID/GID 无效；这个版本要求节点以现有普通账号运行。",
+          );
         if (!/^[0-9a-f]{64}$/.test(identity.workspaceMarker))
           throw new AgentRequestConflict("节点未返回有效的 Agent 工作区原身份标记。");
         // Every Agent on one node runs under that node's single ordinary account. A node that

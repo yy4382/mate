@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { existsSync, statSync, realpathSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,7 +9,7 @@ import {
   type ExecutionRequest,
   type ExecutionResult,
 } from "./backend.js";
-import { killProcessGroup, stopUnit } from "./linux-processes.js";
+import { killProcessGroup } from "./linux-processes.js";
 import { within } from "./paths.js";
 
 export interface LinuxIdentity {
@@ -28,48 +27,12 @@ const identitySchema = z
   })
   .strict();
 
-export function linuxScopeCommand(
-  identity: LinuxIdentity,
-  cwd: string,
-  program: string,
-  programArgs: string[],
-  name = `mate-agent-${identity.uid}-${randomUUID()}`,
-): { command: string; args: string[]; unit: string } {
-  const scopePattern = new RegExp(
-    `^mate-agent-${identity.uid}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`,
-  );
-  if (!Number.isSafeInteger(identity.uid) || identity.uid < 1 || !scopePattern.test(name))
-    throw new Error("Invalid Agent scope name");
-  const path = `${identity.home}/.local/bin:${identity.home}/bin:/usr/local/bin:/usr/bin:/bin`;
-  return {
-    command: "/usr/bin/systemd-run",
-    unit: `${name}.scope`,
-    args: [
-      "--quiet",
-      "--collect",
-      "--scope",
-      `--unit=${name}`,
-      `--slice=mate-agent-${identity.uid}.slice`,
-      `--working-directory=${cwd}`,
-      `--setenv=HOME=${identity.home}`,
-      `--setenv=PATH=${path}`,
-      `--setenv=USER=${identity.username ?? identity.uid}`,
-      `--setenv=LOGNAME=${identity.username ?? identity.uid}`,
-      "--setenv=LANG=C.UTF-8",
-      "--",
-      "/usr/bin/setpriv",
-      `--reuid=${identity.uid}`,
-      `--regid=${identity.gid}`,
-      "--clear-groups",
-      "--no-new-privs",
-      "--",
-      program,
-      ...programArgs,
-    ],
-  };
-}
-
-/** Ordinary host execution under the Agent's Unix identity. The caller must have setuid privilege. */
+/**
+ * Ordinary host execution as the account Mate already runs as. The caller must already run as the
+ * identity it names: Mate never becomes another UID, spawns no service manager and starts no
+ * systemd scope. An Agent's file tools therefore run as this one account, and a command that needs
+ * more writes `sudo` itself, which the host's own policy decides.
+ */
 export class LinuxUserBackend implements ExecutionBackend {
   private readonly identities: Readonly<Record<string, LinuxIdentity>>;
   private readonly helper: string;
@@ -101,18 +64,8 @@ export class LinuxUserBackend implements ExecutionBackend {
     const programArgs = shell
       ? ["-c", `umask ${umask}; ${op.command}`]
       : [this.helper, root, umask];
-    // The systemd scope survives a shell that leaves background children behind. setpriv clears root's inherited groups.
-    const privileged = process.platform === "linux" && process.getuid?.() === 0;
-    if (!privileged && (process.getuid?.() !== identity.uid || process.getgid?.() !== identity.gid))
+    if (process.getuid?.() !== identity.uid || process.getgid?.() !== identity.gid)
       throw new Error("Mate cannot switch to the configured Linux user");
-    const scopeName = request.operationId
-      ? `mate-agent-${identity.uid}-${request.operationId.toLowerCase()}`
-      : undefined;
-    const scope = privileged
-      ? linuxScopeCommand(identity, shell ? path : root, program, programArgs, scopeName)
-      : undefined;
-    const command = scope?.command ?? program,
-      args = scope?.args ?? programArgs;
     const env = {
       PATH: `${identity.home}/.local/bin:${identity.home}/bin:/usr/local/bin:/usr/bin:/bin`,
       HOME: identity.home,
@@ -121,7 +74,7 @@ export class LinuxUserBackend implements ExecutionBackend {
       LANG: "C.UTF-8",
     };
     return new Promise((resolvePromise, reject) => {
-      const child = spawn(command, args, {
+      const child = spawn(program, programArgs, {
         cwd: shell ? path : root,
         env,
         detached: true,
@@ -133,8 +86,7 @@ export class LinuxUserBackend implements ExecutionBackend {
         errBytes = 0,
         truncated = false,
         interrupted = false,
-        settled = false,
-        stopping: Promise<void> | undefined;
+        settled = false;
       const collect = (parts: Buffer[], size: number, chunk: Buffer): number => {
         const available = 65536 - size;
         if (available <= 0) {
@@ -152,14 +104,12 @@ export class LinuxUserBackend implements ExecutionBackend {
       child.stderr!.on("data", (chunk: Buffer) => {
         errBytes = collect(stderr, errBytes, chunk);
       });
+      // The process group is the only handle Mate has: a descendant that leaves it, or that this
+      // account may not signal, is outside everything the result below describes.
       const stop = () => {
-        if (interrupted) return stopping;
+        if (interrupted) return;
         interrupted = true;
         killProcessGroup(child.pid);
-        // Killing the group is immediate; the scope stop is awaited, never blocked on, so other
-        // Agents keep working while systemd cleans up descendants that left the group.
-        stopping = stopUnit(scope?.unit);
-        return stopping;
       };
       const timer = setTimeout(stop, request.timeoutMs);
       signal?.addEventListener("abort", stop, { once: true });
@@ -181,20 +131,15 @@ export class LinuxUserBackend implements ExecutionBackend {
           child.stdout!.destroy();
           child.stderr!.destroy();
         }
-        const settle = () => {
-          if (interrupted)
-            reject(new Error("Linux user execution aborted or timed out; outcome may be unknown"));
-          else
-            resolvePromise({
-              code: code ?? 1,
-              stdout: Buffer.concat(stdout).toString("utf8"),
-              stderr: Buffer.concat(stderr).toString("utf8"),
-              truncated: truncated || openPipes,
-              ...(scope ? { processUnit: scope.unit } : {}),
-            });
-        };
-        if (stopping) void stopping.then(settle, settle);
-        else settle();
+        if (interrupted)
+          reject(new Error("Linux user execution aborted or timed out; outcome may be unknown"));
+        else
+          resolvePromise({
+            code: code ?? 1,
+            stdout: Buffer.concat(stdout).toString("utf8"),
+            stderr: Buffer.concat(stderr).toString("utf8"),
+            truncated: truncated || openPipes,
+          });
       };
       // A background child may inherit these pipes. Return after the shell exits, then close transient output capture.
       child.once("exit", (code) => {

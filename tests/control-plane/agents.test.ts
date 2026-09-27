@@ -1529,3 +1529,38 @@ it("refuses an Agent whose node reports a different account than the one it alre
     workspace: `/var/lib/mate/agents/${thirdId}`,
   });
 });
+
+it("refuses to complete an Agent whose node reports it is running as root", async () => {
+  const app = setup();
+  const cookie = await login(app);
+  const { id: nodeId } = await pairNode(app, cookie);
+  const identity = (agentId: string, account: { uid: number; gid: number }) => ({
+    username: "root",
+    ...account,
+    workspace: `/home/mate/agents/${agentId}`,
+    workspaceMarker: "a".repeat(64),
+  });
+
+  // A first Agent must not be accepted either: this release never runs the node as root, so a
+  // root-account report is a deployment fact the owner has to fix, not a usable Agent identity.
+  for (const account of [
+    { uid: 0, gid: 0 },
+    { uid: 0, gid: 1000 },
+    { uid: 1000, gid: 0 },
+  ]) {
+    const agentId = randomUUID();
+    app.agents.prepare({
+      id: agentId,
+      nodeId,
+      name: "Root partner",
+      role: "Runs under one account",
+      description: "Synthetic root-account rejection fixture.",
+      model: { provider: "openai", id: "gpt-4.1" },
+    });
+    expect(() => app.agents.complete(agentId, identity(agentId, account), app.chat)).toThrow(
+      AgentRequestConflict,
+    );
+    expect(app.agents.get(agentId)?.status).toBe("provisioning");
+    expect(app.agents.get(agentId)?.linuxIdentity).toBeNull();
+  }
+});

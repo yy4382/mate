@@ -37,6 +37,18 @@ function temporaryRoot(): string {
   return root;
 }
 
+it("refuses to report a node account when the node runs as root", async () => {
+  // The launching account is the Agent's account in this release, and root is not that account.
+  // `getuid` is substituted because a test suite might itself be running as root in a container.
+  const original = process.getuid;
+  Object.defineProperty(process, "getuid", { value: () => 0, configurable: true });
+  try {
+    expect(() => nodeAccountIdentity()).toThrow(AgentProvisioningError);
+  } finally {
+    Object.defineProperty(process, "getuid", { value: original, configurable: true });
+  }
+});
+
 it("creates an Agent workspace under the running account without touching Linux accounts", async () => {
   const workspaceRoot = temporaryRoot(),
     agentId = randomUUID(),

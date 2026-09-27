@@ -6,10 +6,14 @@ import {
 } from "./coordinated-checkpoint.js";
 
 export interface CoordinatedMaintenanceServices {
-  /** Stop both services and prove every managed Agent process has exited. */
-  stop(): void;
-  /** Restore the active service state captured before stop(). */
-  resume(): void;
+  /**
+   * Stop the services the maintenance must not run against and prove they are gone. A stop that
+   * cannot be confirmed must throw: a checkpoint taken while operations are still live is not a
+   * recovery point. Returning a report is allowed, and is ignored.
+   */
+  stop(): void | Promise<unknown>;
+  /** Restore the service state captured before stop(). */
+  resume(): void | Promise<unknown>;
 }
 
 /** Make a checkpoint only while quiesced, then restore the prior service state. */
@@ -22,14 +26,14 @@ export async function createMaintenanceBackup(
   let manifest: CheckpointManifest;
   try {
     manifest = await createCoordinatedCheckpoint(paths, destination, async () => {
-      stopWithRecovery(services);
+      await stopWithRecovery(services);
       stopped = true;
     });
   } catch (error) {
-    if (stopped) resumeAfterBackupFailure(services, error);
+    if (stopped) await resumeAfterBackupFailure(services, error);
     throw error;
   }
-  if (stopped) resumeOrStop(services);
+  if (stopped) await resumeOrStop(services);
   return manifest;
 }
 
@@ -49,18 +53,18 @@ export async function restoreMaintenanceCheckpoint<T>(
       report = await reconcile();
     },
   );
-  resumeOrStop(services);
+  await resumeOrStop(services);
   return report;
 }
 
 /** Recheck all local Agent identities and receipts before resuming after manual repair. */
-export function reconcileDuringMaintenance<T>(
+export async function reconcileDuringMaintenance<T>(
   services: CoordinatedMaintenanceServices,
   reconcile: () => T,
-): T {
-  stopWithRecovery(services);
+): Promise<T> {
+  await stopWithRecovery(services);
   const report = reconcile();
-  resumeOrStop(services);
+  await resumeOrStop(services);
   return report;
 }
 
@@ -81,24 +85,26 @@ export async function upgradeWithCoordinatedCheckpoint<T>(
   services: CoordinatedMaintenanceServices,
   upgrade: () => T,
 ): Promise<{ manifest: CheckpointManifest; result: T }> {
-  stopWithRecovery(services);
+  await stopWithRecovery(services);
   let manifest: CheckpointManifest;
   try {
     manifest = await createCoordinatedCheckpoint(paths, destination, async () => {});
   } catch (error) {
-    resumeAfterBackupFailure(services, error);
+    // Never returns; the old service state is restored first.
+    await resumeAfterBackupFailure(services, error);
+    throw error;
   }
   return { manifest, result: upgrade() };
 }
 
 /** A release command is a fresh verification request, not an override for a recovery hold. */
-export function releaseAgentAfterReconciliation<
+export async function releaseAgentAfterReconciliation<
   T extends {
     released: string[];
     holds: Array<{ agentId: string; reason: string }>;
   },
->(agentId: string, reconcile: () => T): T {
-  const report = reconcile();
+>(agentId: string, reconcile: () => Promise<T> | T): Promise<T> {
+  const report = await reconcile();
   if (!report.released.includes(agentId)) {
     const reason =
       report.holds.find((hold) => hold.agentId === agentId)?.reason ??
@@ -108,12 +114,12 @@ export function releaseAgentAfterReconciliation<
   return report;
 }
 
-function resumeOrStop(services: CoordinatedMaintenanceServices): void {
+async function resumeOrStop(services: CoordinatedMaintenanceServices): Promise<void> {
   try {
-    services.resume();
+    await services.resume();
   } catch (startError) {
     try {
-      services.stop();
+      await services.stop();
     } catch (stopError) {
       throw new AggregateError(
         [startError, stopError],
@@ -125,15 +131,15 @@ function resumeOrStop(services: CoordinatedMaintenanceServices): void {
 }
 
 /** A failed stop may already have stopped one service; recover to a known state. */
-function stopWithRecovery(services: CoordinatedMaintenanceServices): void {
+async function stopWithRecovery(services: CoordinatedMaintenanceServices): Promise<void> {
   try {
-    services.stop();
+    await services.stop();
   } catch (stopError) {
     try {
-      services.resume();
+      await services.resume();
     } catch (resumeError) {
       try {
-        services.stop();
+        await services.stop();
       } catch (retryStopError) {
         throw new AggregateError(
           [stopError, resumeError, retryStopError],
@@ -149,15 +155,15 @@ function stopWithRecovery(services: CoordinatedMaintenanceServices): void {
   }
 }
 
-function resumeAfterBackupFailure(
+async function resumeAfterBackupFailure(
   services: CoordinatedMaintenanceServices,
   originalError: unknown,
-): never {
+): Promise<never> {
   try {
-    services.resume();
+    await services.resume();
   } catch (resumeError) {
     try {
-      services.stop();
+      await services.stop();
     } catch (stopError) {
       throw new AggregateError(
         [originalError, resumeError, stopError],

@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
-import { releaseDigest } from "../../src/deployment/dual-installer.js";
+import { releaseDigest } from "../../src/deployment/cli.js";
 
 it("changes release identity when installed dependency bytes change under the same lockfile", () => {
   const root = mkdtempSync(join(tmpdir(), "mate-release-identity-"));

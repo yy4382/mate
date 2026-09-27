@@ -121,7 +121,7 @@ export interface ExecutionRequest {
   operation: Operation;
   timeoutMs: number;
   agentId?: string;
-  /** Stable Agent operation identity for the systemd scope that owns this command. */
+  /** Stable Agent operation identity, so one request is recognised across node restarts. */
   operationId?: string;
 }
 export interface ExecutionResult {
@@ -129,8 +129,6 @@ export interface ExecutionResult {
   stdout: string;
   stderr: string;
   truncated: boolean;
-  /** Present when the host placed this command in an Agent-owned systemd scope. */
-  processUnit?: string;
 }
 export interface ExecutionBackend {
   execute(request: ExecutionRequest, signal?: AbortSignal): Promise<ExecutionResult>;

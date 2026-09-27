@@ -75,11 +75,18 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
 
 /**
  * Read the running account's real identity. Mate never switches identity, so the node and every
- * model process it starts report the same username, UID and GID.
+ * model process it starts report the same username, UID and GID. Root is refused here rather than
+ * reported: this release never runs the node as root, and every Agent on the node would otherwise
+ * be created with root as its account.
  */
 export function nodeAccountIdentity(): { username: string; uid: number; gid: number } {
   const uid = typeof process.getuid === "function" ? process.getuid() : -1,
     gid = typeof process.getgid === "function" ? process.getgid() : -1;
+  if (uid === 0 || gid === 0)
+    throw new AgentProvisioningError(
+      "unsupported_host",
+      "节点正以 root 运行。这个版本要求控制面与节点以现有普通账号运行；请改用该账号启动节点后重试。",
+    );
   let username: string;
   try {
     username = userInfo().username;
