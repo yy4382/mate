@@ -844,9 +844,15 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
     }
     const input = updateChannelSchema.safeParse(body);
     if (!input.success) return context.json({ error: "频道资料格式无效" }, 400);
-    const channel = ownerChat.updateChannel(context.req.param("channelId"), input.data);
-    if (!channel) return context.json({ error: "频道不存在" }, 404);
-    return context.json(channel);
+    try {
+      const channel = ownerChat.updateChannel(context.req.param("channelId"), input.data);
+      if (!channel) return context.json({ error: "频道不存在" }, 404);
+      return context.json(channel);
+    } catch (error) {
+      if (error instanceof Error && error.message === "A direct message cannot be made public")
+        return context.json({ error: "私信不能改为公开" }, 400);
+      throw error;
+    }
   });
   app.post("/api/owner/channels/:channelId/invitations", async (context) => {
     let body: unknown;

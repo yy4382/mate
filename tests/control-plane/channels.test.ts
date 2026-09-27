@@ -1,4 +1,6 @@
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import Database from "better-sqlite3";
+import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -22,6 +24,13 @@ function setup() {
   const app = createControlPlaneApp({ dataDir, passwordFile });
   cases.push({ app, dataDir });
   return app;
+}
+
+/** The control-plane database file for a fixture created by {@link setup}. */
+function databaseFor(app: ReturnType<typeof createControlPlaneApp>) {
+  const fixture = cases.find((entry) => entry.app === app);
+  if (!fixture) throw new Error("The fixture was already cleaned up");
+  return new Database(join(fixture.dataDir, "control-plane.sqlite"));
 }
 
 async function ownerCookie(app: ReturnType<typeof createControlPlaneApp>): Promise<string> {
@@ -108,4 +117,56 @@ it("lets the owner update and archive a private channel through the control-plan
       },
     ],
   });
+});
+
+it("refuses to publish a direct message as a public channel", async () => {
+  const app = setup();
+  const cookie = await ownerCookie(app);
+  const agentId = randomUUID(),
+    db = databaseFor(app);
+  try {
+    const nodeId = randomUUID();
+    db.prepare("INSERT INTO nodes(id,public_key,paired_at) VALUES(?,?,?)").run(
+      nodeId,
+      `synthetic-${nodeId}`,
+      Date.now(),
+    );
+    app.agents.prepare({
+      id: agentId,
+      nodeId,
+      name: "私信同伴",
+      role: "只通过私信交流",
+      description: "Synthetic direct-message fixture.",
+      model: { provider: "openai", id: "gpt-4.1" },
+    });
+    // The owner DM channel exists once the Agent identity is verified.
+    db.prepare("UPDATE owner_agent_sessions SET verified_at=? WHERE agent_id=?").run(
+      Date.now(),
+      agentId,
+    );
+    const direct = app.chat.getOrCreateAgentDirectChannel(agentId);
+    if (!direct) throw new Error("The direct message fixture did not create a channel");
+
+    const publish = await app.request(`/api/owner/channels/${direct.id}`, {
+      method: "PATCH",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ visibility: "public" }),
+    });
+    expect(publish.status).toBe(400);
+    expect(await publish.json()).toEqual({ error: "私信不能改为公开" });
+    expect(app.chat.listChannels().find((channel) => channel.id === direct.id)?.visibility).toBe(
+      "private",
+    );
+
+    // Renaming the same direct message still works.
+    const rename = await app.request(`/api/owner/channels/${direct.id}`, {
+      method: "PATCH",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ name: "改名的私信" }),
+    });
+    expect(rename.status).toBe(200);
+    expect(await rename.json()).toMatchObject({ id: direct.id, name: "改名的私信" });
+  } finally {
+    db.close();
+  }
 });

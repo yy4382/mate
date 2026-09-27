@@ -12,6 +12,7 @@ import type { NodeControlMessage } from "../../src/nodes/protocol.js";
 import type { ModelContextMessage } from "../../src/nodes/model-worker.js";
 
 const password = "agent-direct-message-owner-password";
+type OwnerMessageLike = { id: string; text: string };
 const fixtures: Array<{
   app: ReturnType<typeof createControlPlaneApp>;
   directory: string;
@@ -155,6 +156,52 @@ async function reconnectNode(
     expect.objectContaining({ type: "control.authenticated", nodeId }),
   );
   return socket;
+}
+
+async function prepareVerifiedAgent(
+  app: ReturnType<typeof createControlPlaneApp>,
+  nodeId: string,
+  name: string,
+  uid: number,
+) {
+  const agentId = randomUUID();
+  app.agents.prepare({
+    id: agentId,
+    nodeId,
+    name,
+    role: "Uses explicitly authorized conversations",
+    description: "Synthetic ACL fixture.",
+    model: { provider: "openai", id: "gpt-4.1" },
+  });
+  app.agents.complete(
+    agentId,
+    {
+      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
+      uid,
+      gid: uid,
+      home: `/var/lib/mate/agents/${agentId}`,
+      homeMarker: "a".repeat(64),
+    },
+    app.chat,
+  );
+  return agentId;
+}
+
+async function finishRun(
+  app: ReturnType<typeof createControlPlaneApp>,
+  socket: FakeNodeSocket,
+  run: { runId: string; agentId: string },
+) {
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.agent.run.result",
+      requestId: randomUUID(),
+      runId: run.runId,
+      agentId: run.agentId,
+      ok: true,
+    }),
+  );
 }
 
 async function waitForRun(
@@ -460,16 +507,33 @@ it("limits read and send to joined conversations while exposing only public meta
   );
   expect(app.chat.listChannels().map((channel) => channel.id)).toContain(privateRoom.id);
 
-  for (const [actionId, conversationId] of [
-    ["read-public-nonmember", publicRoom.id],
-    ["read-private-nonmember", privateRoom.id],
-  ]) {
-    const denied = await callAgentTool(app, socket, run, actionId!, "tools.call", {
+  // Public metadata is readable, so a public channel's body is readable too; a private
+  // conversation stays closed, and neither case lets a non-member speak.
+  const publicRead = await callAgentTool(app, socket, run, "read-public-nonmember", "tools.call", {
+    name: "conversations.read",
+    input: { conversationId: publicRoom.id },
+  });
+  expect(publicRead).toMatchObject({ ok: true });
+  expect(
+    (publicRead.result as { messages: Array<{ text: string }> }).messages.map(
+      (message) => message.text,
+    ),
+  ).toEqual(["Public message body."]);
+  const privateReadDenied = await callAgentTool(
+    app,
+    socket,
+    run,
+    "read-private-nonmember",
+    "tools.call",
+    {
       name: "conversations.read",
-      input: { conversationId },
-    });
-    expect(denied).toMatchObject({ ok: false, error: "Conversation is not available" });
-  }
+      input: { conversationId: privateRoom.id },
+    },
+  );
+  expect(privateReadDenied).toMatchObject({
+    ok: false,
+    error: "Conversation is not available",
+  });
   const taskIdDoesNotGrantAccess = await callAgentTool(
     app,
     socket,
@@ -528,6 +592,529 @@ it("limits read and send to joined conversations while exposing only public meta
         (message) => message.role === "assistant" && message.text === "One explicit private reply.",
       ),
   ).toHaveLength(1);
+});
+
+it("lets a non-member Agent read a public channel's timeline and thread but not speak", async () => {
+  const { app, cookie, nodeId, socket } = await setup();
+  const agentId = await prepareVerifiedAgent(app, nodeId, "Curious colleague", 23001);
+  const ownDirect = app.chat.getOrCreateAgentDirectChannel(agentId)!,
+    publicRoom = app.chat.createChannel({
+      name: "Open research",
+      description: "Anyone configured may read this.",
+      visibility: "public",
+    }),
+    root = app.chat.createMessage(publicRoom.id, "Public planning message.")!;
+  app.chat.createMessage(publicRoom.id, "First public reply.", { rootId: root.id });
+  await app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
+  });
+  const runStart = socket.sent.length;
+  app.chat.createMessage(ownDirect.id, "Start a conversation tool run.");
+  const run = await waitForRun(socket, runStart);
+
+  const read = await callAgentTool(app, socket, run, "read-public-nonmember", "tools.call", {
+    name: "conversations.read",
+    input: { conversationId: publicRoom.id },
+  });
+  expect(read).toMatchObject({ ok: true });
+  const page = read.result as { conversation: { id: string }; messages: OwnerMessageLike[] };
+  expect(page.conversation.id).toBe(publicRoom.id);
+  expect(page.messages.map((message) => message.text)).toEqual(["Public planning message."]);
+
+  const thread = await callAgentTool(
+    app,
+    socket,
+    run,
+    "read-public-thread-nonmember",
+    "tools.call",
+    {
+      name: "conversations.read_thread",
+      input: { conversationId: publicRoom.id, rootId: root.id },
+    },
+  );
+  expect(thread).toMatchObject({ ok: true });
+  const threadResult = thread.result as { root: OwnerMessageLike; replies: OwnerMessageLike[] };
+  expect(threadResult.root.text).toBe("Public planning message.");
+  expect(threadResult.replies.map((message) => message.text)).toEqual(["First public reply."]);
+
+  const sendDenied = await callAgentTool(app, socket, run, "send-public-nonmember", "tools.call", {
+    name: "messages.send",
+    input: { conversationId: publicRoom.id, text: "Must not be sent before joining." },
+  });
+  expect(sendDenied).toMatchObject({ ok: false, error: "Conversation is not available" });
+  expect(
+    app.chat
+      .listMessages(publicRoom.id, undefined, 100)!
+      .messages.some((message) => message.text === "Must not be sent before joining."),
+  ).toBe(false);
+});
+
+it("keeps a non-member Agent out of a private channel that holds a task", async () => {
+  const { app, cookie, nodeId, socket } = await setup();
+  const agentId = await prepareVerifiedAgent(app, nodeId, "Private outsider", 23002);
+  const ownDirect = app.chat.getOrCreateAgentDirectChannel(agentId)!,
+    privateRoom = app.chat.createChannel({
+      name: "Secret project",
+      description: "Only members may read this.",
+      visibility: "private",
+    }),
+    secret = app.chat.createMessage(privateRoom.id, "Private planning message.")!;
+  app.chat.createTaskForMessage(secret.id, "human", "owner");
+  await app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
+  });
+  const runStart = socket.sent.length;
+  app.chat.createMessage(ownDirect.id, "Start a conversation tool run.");
+  const run = await waitForRun(socket, runStart);
+
+  const read = await callAgentTool(app, socket, run, "read-private-nonmember", "tools.call", {
+    name: "conversations.read",
+    input: { conversationId: privateRoom.id },
+  });
+  expect(read).toMatchObject({ ok: false, error: "Conversation is not available" });
+  const thread = await callAgentTool(app, socket, run, "thread-private-nonmember", "tools.call", {
+    name: "conversations.read_thread",
+    input: { conversationId: privateRoom.id, rootId: secret.id },
+  });
+  expect(thread).toMatchObject({ ok: false, error: "Conversation is not available" });
+  const join = await callAgentTool(app, socket, run, "join-private-nonmember", "tools.call", {
+    name: "conversations.join",
+    input: { conversationId: privateRoom.id },
+  });
+  expect(join.ok).toBe(false);
+  expect(
+    app.chat
+      .listMessages(privateRoom.id, undefined, 100)!
+      .messages.some((message) => message.text === "Private planning message."),
+  ).toBe(true);
+
+  // Holding a task in the private channel grants no read access to it, and task
+  // visibility stays member-only rather than following the widened conversation read.
+  const listed = await callAgentTool(app, socket, run, "tasks-list-private", "tools.call", {
+    name: "tasks.list",
+    input: {},
+  });
+  expect(listed).toMatchObject({ ok: true });
+  expect((listed.result as { tasks: Array<{ id: string }> }).tasks).toEqual([]);
+});
+
+it("lets a non-member Agent join a public channel, then speak and receive later activity", async () => {
+  const { app, cookie, nodeId, socket } = await setup();
+  const agentId = await prepareVerifiedAgent(app, nodeId, "Joining colleague", 23003);
+  const ownDirect = app.chat.getOrCreateAgentDirectChannel(agentId)!,
+    publicRoom = app.chat.createChannel({
+      name: "Open standup",
+      description: "Agents may join on their own.",
+      visibility: "public",
+    });
+  app.chat.createMessage(publicRoom.id, "Old standup note.");
+  await app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
+  });
+  const runStart = socket.sent.length;
+  app.chat.createMessage(ownDirect.id, "Start a conversation tool run.");
+  const run = await waitForRun(socket, runStart);
+
+  const joined = await callAgentTool(app, socket, run, "join-public", "tools.call", {
+    name: "conversations.join",
+    input: { conversationId: publicRoom.id },
+  });
+  expect(joined).toMatchObject({
+    ok: true,
+    result: { conversationId: publicRoom.id, member: true, alreadyMember: false },
+  });
+
+  const sendInput = {
+    name: "messages.send",
+    input: { conversationId: publicRoom.id, text: "I have joined and can speak." },
+  };
+  const sent = await callAgentTool(app, socket, run, "send-after-join", "tools.call", sendInput);
+  expect(sent).toMatchObject({ ok: true });
+  const held = sent.result as { status?: string; draftId?: string };
+  expect(held.status).toBe("needs_review");
+  expect(held.draftId).toBeTruthy();
+  const reviewed = await callAgentTool(app, socket, run, "review-after-join", "tools.call", {
+    name: "drafts.review",
+    input: { draftId: held.draftId, choice: "continue" },
+  });
+  expect(reviewed).toMatchObject({ ok: true });
+  const resent = await callAgentTool(app, socket, run, "send-after-join-2", "tools.call", {
+    name: "messages.send",
+    input: { ...sendInput.input, draftId: held.draftId },
+  });
+  expect(resent).toMatchObject({ ok: true });
+  expect(
+    app.chat
+      .listMessages(publicRoom.id, undefined, 100)!
+      .messages.some((message) => message.text === "I have joined and can speak."),
+  ).toBe(true);
+
+  // Later ordinary owner activity now reaches the new member as a fresh run.
+  await finishRun(app, socket, run);
+  const beforeActivity = socket.sent.length;
+  app.chat.createMessage(publicRoom.id, "Welcome to the standup.");
+  const laterRun = await waitForRun(socket, beforeActivity);
+  expect(laterRun.agentId).toBe(agentId);
+});
+
+it("does not backfill a just-joined channel as unread nor forget what was already read", async () => {
+  const { app, cookie, db, nodeId, socket } = await setup();
+  const agentId = await prepareVerifiedAgent(app, nodeId, "Late joiner", 23004);
+  const ownDirect = app.chat.getOrCreateAgentDirectChannel(agentId)!,
+    publicRoom = app.chat.createChannel({
+      name: "Open history",
+      description: "History stays quiet when an Agent joins.",
+      visibility: "public",
+    }),
+    oldRoot = app.chat.createMessage(publicRoom.id, "History before joining.")!;
+  app.chat.createMessage(publicRoom.id, "Another old note.", { rootId: oldRoot.id });
+  await app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
+  });
+  const runStart = socket.sent.length;
+  app.chat.createMessage(ownDirect.id, "Start a conversation tool run.");
+  const run = await waitForRun(socket, runStart);
+
+  // Reading the public history before joining creates nothing to be unread later.
+  const preRead = await callAgentTool(app, socket, run, "pre-join-read", "tools.call", {
+    name: "conversations.read",
+    input: { conversationId: publicRoom.id },
+  });
+  expect(preRead).toMatchObject({ ok: true });
+  expect(
+    db
+      .prepare(
+        `SELECT count(*) AS count FROM owner_agent_message_attention a
+         JOIN owner_messages m ON m.id=a.message_id WHERE a.agent_id=? AND m.channel_id=?`,
+      )
+      .get(agentId, publicRoom.id),
+  ).toEqual({ count: 0 });
+
+  const joined = await callAgentTool(app, socket, run, "join-open-history", "tools.call", {
+    name: "conversations.join",
+    input: { conversationId: publicRoom.id },
+  });
+  expect(joined).toMatchObject({ ok: true, result: { member: true, alreadyMember: false } });
+
+  const attention = await callAgentTool(app, socket, run, "attention-after-join", "tools.call", {
+    name: "attention.list",
+    input: { conversationId: publicRoom.id },
+  });
+  expect(attention).toMatchObject({ ok: true });
+  expect((attention.result as { items: unknown[] }).items).toEqual([]);
+  expect(
+    db
+      .prepare(
+        "SELECT joined_at AS joinedAt FROM owner_channel_memberships WHERE channel_id=? AND principal_kind='agent' AND principal_id=?",
+      )
+      .get(publicRoom.id, agentId),
+  ).toMatchObject({ joinedAt: expect.any(Number) });
+  const joinedAtBefore = (
+    db
+      .prepare(
+        "SELECT joined_at AS joinedAt FROM owner_channel_memberships WHERE channel_id=? AND principal_kind='agent' AND principal_id=?",
+      )
+      .get(publicRoom.id, agentId) as { joinedAt: number }
+  ).joinedAt;
+
+  // A later delivery becomes unread, is read, and stays read across a second join.
+  await finishRun(app, socket, run);
+  const beforeFresh = socket.sent.length;
+  const fresh = app.chat.createMessage(publicRoom.id, "Fresh activity after joining.")!;
+  const freshRun = await waitForRun(socket, beforeFresh);
+  const freshRead = await callAgentTool(app, socket, freshRun, "read-fresh", "tools.call", {
+    name: "conversations.read",
+    input: { conversationId: publicRoom.id },
+  });
+  expect(freshRead).toMatchObject({ ok: true });
+  await callAgentTool(app, socket, freshRun, "mark-read", "tools.call", {
+    name: "attention.update",
+    input: { conversationId: publicRoom.id, messageId: fresh.id, unread: false, seen: true },
+  });
+  const rejoin = await callAgentTool(app, socket, freshRun, "rejoin-open-history", "tools.call", {
+    name: "conversations.join",
+    input: { conversationId: publicRoom.id },
+  });
+  expect(rejoin).toMatchObject({ ok: true, result: { member: true, alreadyMember: true } });
+  expect(
+    db
+      .prepare("SELECT unread FROM owner_agent_message_attention WHERE agent_id=? AND message_id=?")
+      .get(agentId, fresh.id),
+  ).toEqual({ unread: 0 });
+
+  // Force the other path: an inactive membership row that only the upsert can revive.
+  db.prepare(
+    "UPDATE owner_channel_memberships SET active=0 WHERE channel_id=? AND principal_kind='agent' AND principal_id=?",
+  ).run(publicRoom.id, agentId);
+  const revived = await callAgentTool(app, socket, freshRun, "revive-open-history", "tools.call", {
+    name: "conversations.join",
+    input: { conversationId: publicRoom.id },
+  });
+  expect(revived).toMatchObject({ ok: true, result: { member: true, alreadyMember: false } });
+  expect(
+    db
+      .prepare(
+        "SELECT active,joined_at AS joinedAt FROM owner_channel_memberships WHERE channel_id=? AND principal_kind='agent' AND principal_id=?",
+      )
+      .get(publicRoom.id, agentId),
+  ).toEqual({ active: 1, joinedAt: joinedAtBefore });
+  expect(
+    db
+      .prepare("SELECT unread FROM owner_agent_message_attention WHERE agent_id=? AND message_id=?")
+      .get(agentId, fresh.id),
+  ).toEqual({ unread: 0 });
+});
+
+it("lets a non-member Agent read a public channel's attachments but keeps publish member-only", async () => {
+  const { app, cookie, nodeId, socket } = await setup();
+  const agentId = await prepareVerifiedAgent(app, nodeId, "Attachment reader", 23005);
+  const ownDirect = app.chat.getOrCreateAgentDirectChannel(agentId)!,
+    publicRoom = app.chat.createChannel({
+      name: "Open files",
+      description: "Public attachments are readable.",
+      visibility: "public",
+    }),
+    privateRoom = app.chat.createChannel({
+      name: "Closed files",
+      description: "Private attachments stay closed.",
+      visibility: "private",
+    });
+  const upload = async (channelId: string, filename: string, body: string) =>
+    app.request(`/api/owner/channels/${channelId}/attachments`, {
+      method: "POST",
+      headers: {
+        cookie,
+        "content-type": "text/plain; charset=utf-8",
+        "x-mate-filename": encodeURIComponent(filename),
+      },
+      body: new TextEncoder().encode(body),
+    });
+  const publicUpload = await upload(publicRoom.id, "公开.txt", "public attachment body");
+  expect(publicUpload.status).toBe(201);
+  const publicAttachment = (await publicUpload.json()) as { attachment: { id: string } };
+  expect((await upload(privateRoom.id, "机密.txt", "private attachment body")).status).toBe(201);
+  await app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
+  });
+  const runStart = socket.sent.length;
+  app.chat.createMessage(ownDirect.id, "Start a conversation tool run.");
+  const run = await waitForRun(socket, runStart);
+
+  const publicList = await callAgentTool(app, socket, run, "list-public-files", "tools.call", {
+    name: "attachments.list",
+    input: { conversationId: publicRoom.id },
+  });
+  expect(publicList).toMatchObject({ ok: true });
+  expect((publicList.result as { attachments: Array<{ id: string }> }).attachments).toEqual([
+    expect.objectContaining({ id: publicAttachment.attachment.id }),
+  ]);
+  const publicChunk = await callAgentTool(app, socket, run, "read-public-file", "tools.call", {
+    name: "attachments.read_chunk",
+    input: {
+      conversationId: publicRoom.id,
+      attachmentId: publicAttachment.attachment.id,
+      offset: 0,
+    },
+  });
+  expect(publicChunk).toMatchObject({ ok: true });
+  expect(Buffer.from((publicChunk.result as { base64: string }).base64, "base64").toString()).toBe(
+    "public attachment body",
+  );
+
+  const privateList = await callAgentTool(app, socket, run, "list-private-files", "tools.call", {
+    name: "attachments.list",
+    input: { conversationId: privateRoom.id },
+  });
+  expect(privateList.ok).toBe(false);
+  const publish = await callAgentTool(app, socket, run, "publish-public-file", "tools.call", {
+    name: "attachments.publish",
+    input: { conversationId: publicRoom.id, path: "notes.txt" },
+  });
+  expect(publish.ok).toBe(false);
+});
+
+it("does not let an outsider read or join a peer direct message through the public read path", async () => {
+  const { app, cookie, db, nodeId, socket } = await setup();
+  const firstAgentId = await prepareVerifiedAgent(app, nodeId, "Chatty colleague", 23006),
+    secondAgentId = await prepareVerifiedAgent(app, nodeId, "Quiet colleague", 23007),
+    outsiderId = await prepareVerifiedAgent(app, nodeId, "Outsider colleague", 23008);
+  // Seed the peer DM through its own tables: the factory path requires the tool transaction.
+  const outsiderDirect = app.chat.getOrCreateAgentDirectChannel(outsiderId)!;
+  await app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
+  });
+  const runStart = socket.sent.length;
+  app.chat.createMessage(outsiderDirect.id, "Start a conversation tool run.");
+  const run = await waitForRun(socket, runStart);
+
+  const peerDm = app.chat.createChannel({
+      name: "Peer DM",
+      description: "A private exchange between two colleagues.",
+      visibility: "private",
+    }),
+    ordered = [firstAgentId, secondAgentId].sort(),
+    seed = db.transaction(() => {
+      db.prepare(
+        "INSERT INTO owner_agent_peer_direct_channels(channel_id,first_agent_id,second_agent_id,created_at) VALUES(?,?,?,?)",
+      ).run(peerDm.id, ordered[0], ordered[1], Date.now());
+      db.prepare(
+        "INSERT INTO owner_channel_memberships(channel_id,principal_kind,principal_id,active,joined_at) VALUES(?,?,?,1,?)",
+      ).run(peerDm.id, "agent", firstAgentId, Date.now());
+      db.prepare(
+        "INSERT INTO owner_channel_memberships(channel_id,principal_kind,principal_id,active,joined_at) VALUES(?,?,?,1,?)",
+      ).run(peerDm.id, "agent", secondAgentId, Date.now());
+    });
+  seed.immediate();
+  const secret = app.chat.createMessage(peerDm.id, "A private peer exchange.")!;
+
+  const read = await callAgentTool(app, socket, run, "read-peer-dm", "tools.call", {
+    name: "conversations.read",
+    input: { conversationId: peerDm.id },
+  });
+  expect(read).toMatchObject({ ok: false, error: "Conversation is not available" });
+  const thread = await callAgentTool(app, socket, run, "thread-peer-dm", "tools.call", {
+    name: "conversations.read_thread",
+    input: { conversationId: peerDm.id, rootId: secret.id },
+  });
+  expect(thread).toMatchObject({ ok: false, error: "Conversation is not available" });
+  const join = await callAgentTool(app, socket, run, "join-peer-dm", "tools.call", {
+    name: "conversations.join",
+    input: { conversationId: peerDm.id },
+  });
+  expect(join.ok).toBe(false);
+  const listed = await callAgentTool(app, socket, run, "list-after-dm-probe", "tools.call", {
+    name: "conversations.list",
+    input: {},
+  });
+  expect(listed).toMatchObject({ ok: true });
+  expect(
+    (listed.result as { conversations: Array<{ id: string }> }).conversations.some(
+      (conversation) => conversation.id === peerDm.id,
+    ),
+  ).toBe(false);
+
+  // Even if a direct message's visibility were ever flipped, direct conversations stay
+  // member-only: the public branch must exclude them on its own.
+  db.prepare("UPDATE owner_channels SET visibility='public' WHERE id=?").run(peerDm.id);
+  expect(
+    await callAgentTool(app, socket, run, "read-published-peer-dm", "tools.call", {
+      name: "conversations.read",
+      input: { conversationId: peerDm.id },
+    }),
+  ).toMatchObject({ ok: false, error: "Conversation is not available" });
+  expect(
+    await callAgentTool(app, socket, run, "join-published-peer-dm", "tools.call", {
+      name: "conversations.join",
+      input: { conversationId: peerDm.id },
+    }),
+  ).toMatchObject({ ok: false, error: "Conversation is not available" });
+  // Listing must not reveal it either, and the owner API refuses to publish any DM.
+  const afterPublish = await callAgentTool(
+    app,
+    socket,
+    run,
+    "list-published-peer-dm",
+    "tools.call",
+    {
+      name: "conversations.list",
+      input: {},
+    },
+  );
+  expect(afterPublish).toMatchObject({ ok: true });
+  expect(
+    (afterPublish.result as { conversations: Array<{ id: string }> }).conversations.some(
+      (conversation) => conversation.id === peerDm.id,
+    ),
+  ).toBe(false);
+  expect(() => app.chat.updateChannel(peerDm.id, { visibility: "public" })).toThrow(
+    "A direct message cannot be made public",
+  );
+});
+
+it("does not let a member transfer a task to a public-channel non-member", async () => {
+  const { app, cookie, nodeId, socket } = await setup();
+  const memberId = await prepareVerifiedAgent(app, nodeId, "Task owner", 23009),
+    outsiderId = await prepareVerifiedAgent(app, nodeId, "Interested onlooker", 23010);
+  const room = app.chat.createChannel({
+    name: "Shared work",
+    description: "A public room with a task.",
+    visibility: "public",
+  });
+  app.chat.inviteAgentToChannel(room.id, memberId);
+  await app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-transfer-key" }),
+  });
+  // Start the non-member's own run first, from its private DM.
+  const outsiderDirect = app.chat.getOrCreateAgentDirectChannel(outsiderId)!,
+    outsiderStart = socket.sent.length;
+  app.chat.createMessage(outsiderDirect.id, "Start an onlooker run.");
+  const outsiderRun = await waitForRun(socket, outsiderStart);
+
+  const memberStart = socket.sent.length;
+  const anchor = app.chat.createMessage(room.id, "Review deployment", { asTask: true })!;
+  const task = app.chat.taskForMessage(anchor.id)!;
+  const memberRun = await waitForRun(socket, memberStart);
+
+  // The onlooker can read the room, but tasks stay member-only: it neither sees this one
+  // nor can it be handed the task, because task visibility did not follow the read widening.
+  const claimed = await callAgentTool(app, socket, memberRun, "member-claim", "tools.call", {
+    name: "tasks.claim",
+    input: { taskId: task.id, expectedVersion: 1 },
+  });
+  expect(claimed).toMatchObject({ ok: true, result: { ownerAgentId: memberId, version: 2 } });
+  const onlookerTasks = await callAgentTool(
+    app,
+    socket,
+    outsiderRun,
+    "onlooker-list",
+    "tools.call",
+    {
+      name: "tasks.list",
+      input: {},
+    },
+  );
+  expect(onlookerTasks).toMatchObject({ ok: true });
+  expect((onlookerTasks.result as { tasks: Array<{ id: string }> }).tasks).toEqual([]);
+
+  const transfer = await callAgentTool(
+    app,
+    socket,
+    memberRun,
+    "transfer-to-outsider",
+    "tools.call",
+    {
+      name: "tasks.transfer",
+      input: { taskId: task.id, expectedVersion: 2, agentId: outsiderId },
+    },
+  );
+  expect(transfer).toMatchObject({
+    ok: false,
+    error: "Transfer target is not a conversation member",
+  });
+  const after = app.chat.readTask(task.id)!;
+  expect(after.ownerAgentId).toBe(memberId);
+  expect(after.version).toBe(2);
+  // The non-member still cannot act on a task it can merely read.
+  expect(
+    await callAgentTool(app, socket, outsiderRun, "outsider-claim", "tools.call", {
+      name: "tasks.claim",
+      input: { taskId: task.id, expectedVersion: 2 },
+    }),
+  ).toMatchObject({ ok: false, error: "Conversation is not available" });
 });
 
 it("replays a committed tool action after its reply is lost and the delivery retries", async () => {

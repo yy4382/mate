@@ -106,7 +106,7 @@ export class AttachmentService {
   }
 
   listForAgent(runId: string, agentId: string, channelId: string): AttachmentSummary[] {
-    this.authorizeAgentConversation(runId, agentId, channelId);
+    this.authorizeAgentConversationRead(runId, agentId, channelId);
     const rows = this.db
       .prepare(
         `SELECT id,channel_id,storage_key,filename,content_type,size,sha256,
@@ -126,7 +126,7 @@ export class AttachmentService {
     offset: number;
     length: number;
   }): { attachment: AttachmentSummary; offset: number; totalBytes: number; base64: string } {
-    this.authorizeAgentConversation(input.runId, input.agentId, input.channelId);
+    this.authorizeAgentConversationRead(input.runId, input.agentId, input.channelId);
     if (
       !Number.isSafeInteger(input.offset) ||
       input.offset < 0 ||
@@ -490,6 +490,43 @@ export class AttachmentService {
     return row;
   }
 
+  /**
+   * Attachment reads follow conversation visibility: a public channel's attachments are
+   * readable by any Agent with an active run, while a private conversation stays member-only.
+   * A direct message is never opened by visibility, even if one were ever stored public.
+   */
+  private authorizeAgentConversationRead(runId: string, agentId: string, channelId: string): void {
+    const row = this.db
+      .prepare(
+        `SELECT 1
+         FROM owner_agent_runs r
+         JOIN owner_agents a ON a.id=r.agent_id AND a.node_id=r.node_id
+         JOIN owner_agent_sessions s ON s.agent_id=a.id AND s.verified_at IS NOT NULL
+         JOIN owner_channels c ON c.id=? AND c.archived=0
+         LEFT JOIN owner_channel_memberships member ON member.channel_id=?
+           AND member.principal_kind='agent' AND member.principal_id=a.id AND member.active=1
+         WHERE r.id=? AND r.agent_id=? AND r.state='running'
+           AND a.status IN ('waiting_credentials','ready')
+           AND (member.active=1 OR (
+             c.visibility='public'
+             AND NOT EXISTS (
+               SELECT 1 FROM owner_agent_direct_channels d WHERE d.channel_id=c.id
+             )
+             AND NOT EXISTS (
+               SELECT 1 FROM owner_agent_peer_direct_channels p WHERE p.channel_id=c.id
+             )
+           ))`,
+      )
+      .get(channelId, channelId, runId, agentId);
+    if (!row)
+      throw new AttachmentError(
+        "conversation_unavailable",
+        "Agent 当前无权读取此对话的附件。",
+        403,
+      );
+  }
+
+  /** Publishing still requires membership, even where reading does not. */
   private authorizeAgentConversation(runId: string, agentId: string, channelId: string): void {
     const row = this.db
       .prepare(
@@ -507,7 +544,7 @@ export class AttachmentService {
     if (!row)
       throw new AttachmentError(
         "conversation_unavailable",
-        "Agent 当前不是此对话成员，无法读取或发布附件。",
+        "Agent 当前不是此对话成员，无法发布附件。",
         403,
       );
   }

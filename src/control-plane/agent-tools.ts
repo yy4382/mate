@@ -29,18 +29,20 @@ export const agentConversationOperations = Object.freeze({
     seatPolicy: "deny" as const,
   },
   "conversations.list": {
-    description: "列出当前可发现的对话。公开频道只显示名称和简介；私有对话只在你已加入时显示。",
+    description:
+      "列出当前可发现的对话。公开频道显示名称和简介，并标记你是否已是成员；私有对话只在你已加入时显示。",
     schema: z.object({}).strict(),
     seatPolicy: "deny" as const,
   },
   "conversations.read": {
     description:
-      "读取一个已加入对话中的消息。必须指定 conversationId；使用 before 和 limit 向更早消息分页。",
+      "读取一个对话中的消息；公开频道无需加入即可读取，私有对话和私信仅限成员。必须指定 conversationId；使用 before 和 limit 向更早消息分页。",
     schema: z.object({ conversationId, before: cursor, limit: pageLimit }).strict(),
     seatPolicy: "deny" as const,
   },
   "conversations.read_thread": {
-    description: "读取一条根消息的完整讨论串。必须指定已加入对话和根消息 ID。",
+    description:
+      "读取一条根消息的完整讨论串；公开频道无需加入即可读取，私有对话和私信仅限成员。必须指定 conversationId 和根消息 ID。",
     schema: z.object({ conversationId, rootId: z.string().uuid() }).strict(),
     seatPolicy: "deny" as const,
   },
@@ -214,6 +216,12 @@ export const agentConversationOperations = Object.freeze({
     schema: z.object({}).strict(),
     seatPolicy: "deny" as const,
   },
+  "conversations.join": {
+    description:
+      "自行加入一个公开频道，成为成员后即可发送消息并按成员关系接收后续活动。加入不会回补历史消息为未读。私有对话不能通过此操作加入。",
+    schema: z.object({ conversationId }).strict(),
+    seatPolicy: "deny" as const,
+  },
   "conversations.invite": {
     description:
       "邀请一名已配置的同伴 Agent 加入你当前所在的频道。不能邀请自己，也不能邀请他人加入私信。",
@@ -353,12 +361,13 @@ export const agentWorkspaceOperations = Object.freeze({
     seatPolicy: "deny" as const,
   },
   "attachments.list": {
-    description: "查看你已加入对话中的附件。",
+    description: "查看一个对话中的附件；公开频道无需加入即可查看，私有对话和私信仅限成员。",
     schema: z.object({ conversationId }).strict(),
     seatPolicy: "deny" as const,
   },
   "attachments.read_chunk": {
-    description: "分块读取已加入对话中的附件；每次最多 8 KiB。",
+    description:
+      "分块读取一个对话中的附件；公开频道无需加入即可读取，私有对话和私信仅限成员。每次最多 8 KiB。",
     schema: z
       .object({
         conversationId,

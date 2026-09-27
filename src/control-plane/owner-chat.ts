@@ -17,6 +17,15 @@ import type { AgentProcessOperation } from "../nodes/process-operations.js";
 export type ChannelVisibility = "public" | "private";
 export type OwnerPrincipalKind = "human" | "agent";
 
+/** Readable conversation facts returned to a running Agent. */
+interface AgentConversationFacts {
+  id: string;
+  name: string;
+  description: string;
+  visibility: ChannelVisibility;
+  kind: "channel" | "dm";
+}
+
 const archivedReminderReplyNotice = (text: string): string =>
   `Mate 提示：回复未送达。此对话已归档；如需告知他人，请使用 messages.send 指向有权限的活跃对话。未送达内容：${text}`;
 
@@ -570,6 +579,37 @@ export class OwnerChat {
       .immediate();
   }
 
+  /**
+   * Let an Agent join a public channel it chose to take part in, under the same commit
+   * that records the decision. Joining grants no read of the past: unread state is still
+   * created only by the delivery snapshot of a later message, so old history is never
+   * backfilled as unread, and an earlier re-join keeps the original joined_at.
+   */
+  joinAgentToPublicChannel(agentId: string, channelId: string): OwnerChannel | undefined {
+    return this.db
+      .transaction(() => {
+        const channel = this.db
+          .prepare(
+            `SELECT c.id,c.name,c.description,c.visibility,c.archived,c.created_at,c.updated_at
+             FROM owner_channels c
+             WHERE c.id=? AND c.archived=0 AND c.visibility='public'
+               AND NOT EXISTS (SELECT 1 FROM owner_agent_direct_channels d WHERE d.channel_id=c.id)
+               AND NOT EXISTS (
+                 SELECT 1 FROM owner_agent_peer_direct_channels p WHERE p.channel_id=c.id
+               )`,
+          )
+          .get(channelId) as ChannelRow | undefined;
+        if (!channel) return undefined;
+        this.db
+          .prepare(
+            "INSERT INTO owner_channel_memberships(channel_id,principal_kind,principal_id,active,joined_at) VALUES(?,'agent',?,1,?) ON CONFLICT(channel_id,principal_kind,principal_id) DO UPDATE SET active=1",
+          )
+          .run(channelId, agentId, this.now());
+        return toChannel(channel);
+      })
+      .immediate();
+  }
+
   snapshot(): OwnerChatSnapshot {
     return this.db
       .transaction(() => ({
@@ -613,6 +653,10 @@ export class OwnerChat {
       .transaction(() => {
         const current = this.db.prepare("SELECT id FROM owner_channels WHERE id=?").get(id);
         if (!current) return undefined;
+        // A direct message is a private conversation between fixed participants, so it can
+        // never be published: otherwise every Agent could read it through the public path.
+        if (input.visibility === "public" && this.isDirectChannel(id))
+          throw new Error("A direct message cannot be made public");
 
         this.db
           .prepare(
@@ -830,13 +874,32 @@ export class OwnerChat {
       .all(taskId);
   }
 
-  private canAgentReadChannel(agentId: string, channelId: string): boolean {
-    try {
-      this.requireAgentConversation(agentId, channelId);
-      return true;
-    } catch {
-      return false;
-    }
+  /** True for the one-to-one conversations that must never follow channel visibility. */
+  private isDirectChannel(channelId: string): boolean {
+    const row = this.db
+      .prepare(
+        `SELECT 1 WHERE EXISTS (
+           SELECT 1 FROM owner_agent_direct_channels d WHERE d.channel_id=?
+         ) OR EXISTS (
+           SELECT 1 FROM owner_agent_peer_direct_channels p WHERE p.channel_id=?
+         )`,
+      )
+      .get(channelId, channelId);
+    return row !== undefined;
+  }
+
+  /** True only while this Agent holds an active membership in a live channel. */
+  private isAgentChannelMember(agentId: string, channelId: string): boolean {
+    const row = this.db
+      .prepare(
+        `SELECT 1
+         FROM owner_channels c
+         JOIN owner_channel_memberships m
+           ON m.channel_id=c.id AND m.principal_kind='agent' AND m.principal_id=? AND m.active=1
+         WHERE c.id=? AND c.archived=0`,
+      )
+      .get(agentId, channelId);
+    return row !== undefined;
   }
 
   private taskDraftPosition(draft: TaskDraftRow): {
@@ -918,7 +981,7 @@ export class OwnerChat {
       // A peer's newer claim remains authoritative; this Agent may still yield socially.
     } else if (action === "tasks.transfer") {
       const targetId = input.agentId as string;
-      if (!this.canAgentReadChannel(targetId, current.channelId))
+      if (!this.isAgentChannelMember(targetId, current.channelId))
         throw new AgentToolRefusal("Transfer target is not a conversation member");
       owner = targetId;
       status = "in_progress";
@@ -1729,7 +1792,7 @@ export class OwnerChat {
         return { conversations: this.listAgentConversations(run.agent_id) };
       case "conversations.read": {
         const args = agentConversationOperations["conversations.read"].schema.parse(input),
-          conversation = this.requireAgentConversation(run.agent_id, args.conversationId),
+          conversation = this.requireReadableConversation(run.agent_id, args.conversationId),
           before = args.before === undefined ? undefined : Number(args.before);
         if (before !== undefined && !Number.isSafeInteger(before)) throw new z.ZodError([]);
         const page = this.listMessages(args.conversationId, before, args.limit);
@@ -1744,7 +1807,7 @@ export class OwnerChat {
       }
       case "conversations.read_thread": {
         const args = agentConversationOperations["conversations.read_thread"].schema.parse(input);
-        this.requireAgentConversation(run.agent_id, args.conversationId);
+        this.requireReadableConversation(run.agent_id, args.conversationId);
         const thread = this.listThread(args.conversationId, args.rootId);
         if (!thread) throw new AgentToolRefusal("Thread is not available");
         for (const message of [thread.root, ...thread.replies])
@@ -1935,9 +1998,11 @@ export class OwnerChat {
       }
       case "tasks.list": {
         agentConversationOperations["tasks.list"].schema.parse(input);
+        // Task visibility stays member-only: this ticket widened conversation READS, and
+        // task ownership must not move with them.
         return {
           tasks: this.listTasks().filter((task) =>
-            this.canAgentReadChannel(run.agent_id, task.channelId),
+            this.isAgentChannelMember(run.agent_id, task.channelId),
           ),
         };
       }
@@ -2136,6 +2201,36 @@ export class OwnerChat {
           if (name === "tasks.create")
             return this.createTaskForMessage(messageId!, "agent", run.agent_id);
           return this.mutateTask(run.agent_id, task!, name, args as Record<string, unknown>);
+        });
+      }
+      case "conversations.join": {
+        const args = agentConversationOperations["conversations.join"].schema.parse(input);
+        const alreadyMember = this.isAgentChannelMember(run.agent_id, args.conversationId);
+        if (alreadyMember) {
+          const conversation = this.requireAgentConversation(run.agent_id, args.conversationId);
+          if (conversation.kind !== "channel")
+            throw new AgentToolRefusal("Only a public channel can be joined");
+          return this.recordAgentToolAction(run, toolCallId, "conversations.join", args, () => ({
+            conversationId: conversation.id,
+            name: conversation.name,
+            visibility: conversation.visibility,
+            member: true,
+            alreadyMember: true,
+          }));
+        }
+        const conversation = this.requireReadableConversation(run.agent_id, args.conversationId);
+        if (conversation.kind !== "channel" || conversation.visibility !== "public")
+          throw new AgentToolRefusal("Only a public channel can be joined");
+        return this.recordAgentToolAction(run, toolCallId, "conversations.join", args, () => {
+          const channel = this.joinAgentToPublicChannel(run.agent_id, args.conversationId);
+          if (!channel) throw new AgentToolRefusal("Only a public channel can be joined");
+          return {
+            conversationId: channel.id,
+            name: channel.name,
+            visibility: channel.visibility,
+            member: true,
+            alreadyMember: false,
+          };
         });
       }
       case "conversations.invite": {
@@ -2344,7 +2439,9 @@ export class OwnerChat {
            ON m.channel_id=c.id AND m.principal_kind='agent' AND m.principal_id=?
          LEFT JOIN owner_agent_direct_channels d ON d.channel_id=c.id
          LEFT JOIN owner_agent_peer_direct_channels p ON p.channel_id=c.id
-         WHERE c.archived=0 AND (c.visibility='public' OR m.active=1)
+         WHERE c.archived=0 AND (m.active=1 OR (
+           c.visibility='public' AND d.agent_id IS NULL AND p.channel_id IS NULL
+         ))
          ORDER BY c.created_at,c.id`,
       )
       .all(agentId) as Array<{
@@ -2446,38 +2543,35 @@ export class OwnerChat {
     return channel;
   }
 
-  private requireAgentConversation(
-    agentId: string,
-    conversationId: string,
-  ): {
-    id: string;
-    name: string;
-    description: string;
-    visibility: ChannelVisibility;
-    kind: "channel" | "dm";
-  } {
-    const row = this.db
+  /**
+   * The one conversation-metadata SELECT. Membership is always probed, so a reader can get
+   * the active-member flag without a second round trip.
+   */
+  private readConversationRow(agentId: string, conversationId: string) {
+    return this.db
       .prepare(
         `SELECT c.id,c.name,c.description,c.visibility,
                 CASE WHEN d.agent_id IS NOT NULL OR p.channel_id IS NOT NULL
-                     THEN 'dm' ELSE 'channel' END AS conversation_kind
+                     THEN 'dm' ELSE 'channel' END AS conversation_kind,
+                m.active AS active_member
          FROM owner_channels c
-         JOIN owner_channel_memberships m
+         LEFT JOIN owner_channel_memberships m
            ON m.channel_id=c.id AND m.principal_kind='agent' AND m.principal_id=? AND m.active=1
          LEFT JOIN owner_agent_direct_channels d ON d.channel_id=c.id
          LEFT JOIN owner_agent_peer_direct_channels p ON p.channel_id=c.id
          WHERE c.id=? AND c.archived=0`,
       )
       .get(agentId, conversationId) as
-      | {
-          id: string;
-          name: string;
-          description: string;
-          visibility: ChannelVisibility;
+      | (AgentConversationFacts & {
           conversation_kind: "channel" | "dm";
-        }
+          active_member: number | null;
+        })
       | undefined;
-    if (!row) throw new AgentToolRefusal("Conversation is not available");
+  }
+
+  private toConversationFacts(
+    row: AgentConversationFacts & { conversation_kind: "channel" | "dm" },
+  ): AgentConversationFacts {
     return {
       id: row.id,
       name: row.name,
@@ -2485,6 +2579,45 @@ export class OwnerChat {
       visibility: row.visibility,
       kind: row.conversation_kind,
     };
+  }
+
+  /**
+   * Conversation metadata for a read. A public channel stays readable without membership;
+   * a private conversation, or any direct message, is readable only to an active member.
+   */
+  private readAgentConversation(
+    agentId: string,
+    conversationId: string,
+  ): AgentConversationFacts | undefined {
+    const row = this.readConversationRow(agentId, conversationId);
+    if (!row) return undefined;
+    const readable =
+      row.active_member === 1 ||
+      (row.conversation_kind === "channel" &&
+        row.visibility === "public" &&
+        !this.isDirectChannel(conversationId));
+    return readable ? this.toConversationFacts(row) : undefined;
+  }
+
+  /** Readable conversation metadata, or a refusal when this Agent may not read it. */
+  private requireReadableConversation(
+    agentId: string,
+    conversationId: string,
+  ): AgentConversationFacts {
+    const conversation = this.readAgentConversation(agentId, conversationId);
+    if (!conversation) throw new AgentToolRefusal("Conversation is not available");
+    return conversation;
+  }
+
+  /** Member-only conversation metadata; every write and every membership change uses this gate. */
+  private requireAgentConversation(
+    agentId: string,
+    conversationId: string,
+  ): AgentConversationFacts {
+    const row = this.readConversationRow(agentId, conversationId);
+    if (!row || row.active_member !== 1)
+      throw new AgentToolRefusal("Conversation is not available");
+    return this.toConversationFacts(row);
   }
 
   private isInviteableAgent(agentId: string): boolean {
