@@ -1,15 +1,31 @@
-import { LinuxProcessManager, ProcessStopRejectedError } from "../execution/linux-processes.js";
-import { LinuxUserBackend } from "../execution/linux-user.js";
-import { readAgentWorkspaceIdentity, type AgentWorkspaceIdentity } from "./agent-provisioner.js";
+import { statSync } from "node:fs";
+import { resolve } from "node:path";
+import {
+  OrdinaryCommandNotStartedError,
+  OrdinaryCommandRunner,
+} from "../execution/ordinary-command.js";
+import { readAgentWorkspaceIdentity } from "./agent-provisioner.js";
 import type { AgentProcessExecutor } from "./process-operations.js";
 
 const defaultCommandTimeoutMs = 60_000;
 
+/** The ordinary-command capabilities this executor uses; substitutable for failure-path tests. */
+export type AgentCommandRunner = Pick<
+  OrdinaryCommandRunner,
+  "run" | "list" | "presence" | "stop" | "stopAll"
+>;
+
 export interface LinuxAgentProcessExecutorOptions {
   commandTimeoutMs?: number;
+  runner?: AgentCommandRunner;
 }
 
-/** Execute one ordinary operation only after rechecking the Agent's provisioned Linux identity. */
+/**
+ * Execute the Agent's ordinary operations on the host. A command is a shell child process of the
+ * account the node already runs as, in the Agent's own default workspace: Mate adds no privilege,
+ * no wrapper and no approval, and a `sudo` the Agent wrote reaches the host unchanged. Only what
+ * this node started and can still signal is ever reported as a running process.
+ */
 export function createLinuxAgentProcessExecutor(
   agentHomeRoot: string,
   options: LinuxAgentProcessExecutorOptions = {},
@@ -17,99 +33,115 @@ export function createLinuxAgentProcessExecutor(
   const commandTimeoutMs = options.commandTimeoutMs ?? defaultCommandTimeoutMs;
   if (!Number.isSafeInteger(commandTimeoutMs) || commandTimeoutMs < 1 || commandTimeoutMs > 300_000)
     throw new Error("Agent command timeout must be between 1 and 300000 milliseconds");
+  const runner: AgentCommandRunner = options.runner ?? new OrdinaryCommandRunner();
   return async ({ agentId, operationId, operation }) => {
-    const identity = readAgentWorkspaceIdentity(agentId, agentHomeRoot);
     switch (operation.kind) {
       case "exec": {
-        const processes = processManager(agentId, identity);
-        await processes.verifyQuota(agentId);
-        const backend = new LinuxUserBackend({
-          [agentId]: {
-            username: identity.username,
-            uid: identity.uid,
-            gid: identity.gid,
+        let identity;
+        try {
+          identity = readAgentWorkspaceIdentity(agentId, agentHomeRoot);
+        } catch {
+          return { state: "failed", receipt: { reason: "agent_workspace_unavailable" } };
+        }
+        // `cwd` defaults to the Agent's own workspace. It is deliberately not confined to it:
+        // ADR-0004 makes a workspace an organisational location, not a Unix boundary, and the same
+        // account's commands are not gated on which directory they name.
+        const cwd = resolve(identity.workspace, operation.cwd);
+        if (!isDirectory(cwd))
+          return { state: "failed", receipt: { reason: "command_cwd_unavailable" } };
+        let receipt;
+        try {
+          receipt = await runner.run({
+            operationId,
+            agentId,
+            command: operation.command,
+            cwd,
             home: identity.workspace,
-          },
-        });
-        // The operation has crossed the node's durable start record. WebSocket loss must not cancel
-        // this command; its UID-scoped systemd unit continues and can be reconciled.
-        const result = await backend.execute({
-          agentId,
-          root: identity.workspace,
-          timeoutMs: commandTimeoutMs,
-          operation,
-          operationId,
-        });
-        return {
-          state: result.code === 0 ? "succeeded" : "failed",
-          receipt: result,
-        };
+            username: identity.username,
+            timeoutMs: commandTimeoutMs,
+          });
+        } catch (error) {
+          if (error instanceof OrdinaryCommandNotStartedError)
+            return { state: "failed", receipt: { reason: "command_not_started" } };
+          throw error;
+        }
+        // A command Mate had to end, or one that died from a signal, never counts as success even
+        // if its own exit status happened to be zero.
+        const succeeded = receipt.code === 0 && !receipt.timedOut && receipt.signal === null;
+        return { state: succeeded ? "succeeded" : "failed", receipt };
       }
-      case "process.list": {
-        const processes = await processManager(agentId, identity).list(agentId);
+      case "process.list":
         return {
           state: "succeeded",
           receipt: {
-            processes: processes.map((process) => ({
-              operationId: processOperationId(identity.uid, process.unit),
-              unit: process.unit,
-              pids: process.pids,
+            processes: runner.list(agentId).map(({ operationId: id, pid, startedAt, exited }) => ({
+              operationId: id,
+              pid,
+              startedAt,
+              state: exited ? "descendants_running" : "running",
             })),
           },
         };
-      }
       case "process.inspect": {
-        const processes = await processManager(agentId, identity).list(agentId),
-          unit = agentProcessUnit(identity.uid, operation.targetOperationId),
-          process = processes.find((entry) => entry.unit === unit);
+        const presence = runner.presence(agentId, operation.targetOperationId);
         return {
           state: "succeeded",
           receipt: {
             operationId: operation.targetOperationId,
-            state: process ? "running" : "not_running",
-            ...(process ? { pids: process.pids } : {}),
+            state: presence.state,
+            ...(presence.pid === undefined ? {} : { pid: presence.pid }),
           },
         };
       }
       case "process.stop": {
-        try {
-          const unit = agentProcessUnit(identity.uid, operation.targetOperationId),
-            result = await processManager(agentId, identity).stop(agentId, unit);
-          return { state: "succeeded", receipt: result };
-        } catch (error) {
-          if (error instanceof ProcessStopRejectedError)
-            return { state: "failed", receipt: { reason: "process_stop_rejected" } };
-          throw error;
-        }
+        const result = await runner.stop(agentId, operation.targetOperationId);
+        return result.state === "unconfirmed"
+          ? {
+              state: "failed",
+              receipt: {
+                reason: "process_stop_unconfirmed",
+                operationId: operation.targetOperationId,
+                state: "unconfirmed",
+                pid: result.pid,
+              },
+            }
+          : {
+              state: "succeeded",
+              receipt: {
+                operationId: operation.targetOperationId,
+                state: result.state,
+              },
+            };
       }
       case "process.stop_all": {
-        const receipt = await processManager(agentId, identity).stopAll(agentId);
-        return { state: "succeeded", receipt };
+        // The tracker only knows commands this node process started, so the receipt says exactly
+        // that: "everything I was tracking is stopped" is not "nothing from an earlier node run
+        // can still be running". Ticket #93 owns how the stop intent and the web present that gap.
+        const { stopped, unconfirmed } = await runner.stopAll(agentId);
+        return unconfirmed.length === 0
+          ? {
+              state: "succeeded",
+              receipt: { stopped: true, operationIds: stopped, scope: "this_node_run" },
+            }
+          : {
+              state: "failed",
+              receipt: {
+                reason: "process_stop_unconfirmed",
+                stopped: false,
+                operationIds: stopped,
+                unconfirmedOperationIds: unconfirmed,
+                scope: "this_node_run",
+              },
+            };
       }
     }
   };
 }
 
-export function agentProcessUnit(uid: number, operationId: string): string {
-  if (
-    !Number.isSafeInteger(uid) ||
-    uid < 1 ||
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(operationId)
-  )
-    throw new Error("Invalid Agent process identity");
-  return `mate-agent-${uid}-${operationId.toLowerCase()}.scope`;
-}
-
-function processOperationId(uid: number, unit: string): string | null {
-  const prefix = `mate-agent-${uid}-`,
-    suffix = ".scope";
-  if (!unit.startsWith(prefix) || !unit.endsWith(suffix)) return null;
-  const operationId = unit.slice(prefix.length, -suffix.length);
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(operationId)
-    ? operationId
-    : null;
-}
-
-function processManager(agentId: string, identity: AgentWorkspaceIdentity): LinuxProcessManager {
-  return new LinuxProcessManager({ [agentId]: identity.uid });
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
 }

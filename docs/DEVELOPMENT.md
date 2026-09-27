@@ -39,7 +39,14 @@ pnpm test:single-account-agent-workspace
 
 > **本节剩余检查只覆盖重构中的旧实现，不是新首版验收要求。** 新目标是在同一个现有普通账号下启动 Mate 和 Agent 命令，不创建用户、不切换身份、不操作 systemd；见[产品方向](PROJECT_DIRECTION.md)。
 
-尚未迁移的命令执行与特权审批路径仍要求 root、`setpriv` 与 systemd。macOS 单元测试和本地网页检查只验证应用逻辑，不构成真实 Linux 权限与进程隔离证据。Debian 13 隔离容器可运行下面的旧身份与特权审批检查；测试前先在目标 Linux 架构内运行 `pnpm build`，以生成原生模块和 no-replace helper：
+普通命令执行已经在同一个现有普通账号下完成迁移：Agent 的命令进入当前账号的 shell 子进程，默认使用该 Agent 的工作区，返回有界输出、退出码、截断与超时标记，命令里的 `sudo` 原样交给宿主。`tests/control-plane/agent-command-process.test.ts` 用真实控制面、WebSocket、节点和脚本化模型在 macOS 与 Linux 上核对这条路径与同一操作 ID 的收据复用：
+
+```sh
+pnpm build
+pnpm vitest run tests/control-plane/agent-command-process.test.ts
+```
+
+尚未迁移的特权审批路径仍要求 root 与 systemd。macOS 单元测试和本地网页检查只验证应用逻辑，不构成真实 Linux 权限与进程隔离证据。Debian 13 隔离容器可运行下面的节点收据 fence 与旧特权审批检查；测试前先在目标 Linux 架构内运行 `pnpm build`，以生成原生模块和 no-replace helper：
 
 ```sh
 node tests/linux/agent-stop-fence.integration.mjs

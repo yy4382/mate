@@ -411,28 +411,31 @@ export type AgentMateOperation = keyof typeof agentMateOperations;
 
 const operationId = z.string().uuid();
 
-/** Ordinary commands and self-process controls run as the Agent's provisioned Linux user. */
+/** Ordinary commands and self-process controls run as the account the node already runs as. */
 export const agentProcessToolOperations = Object.freeze({
   "process.exec": {
     description:
-      "在自己的 Linux 用户和 home 目录下运行普通 shell 命令。命令有固定时间与输出上限；需要继续运行的任务可用 process.list、process.inspect 和 process.stop 查看或停止。",
+      "在当前运行账号的普通 shell 子进程中运行命令，默认在 Agent 默认工作目录执行。Mate 返回有界输出、退出码，并在收据中标明输出是否完整以及命令是否因超时被结束；命令里的 sudo 原样交给宿主，成败只由宿主已有的 sudo 配置决定，Mate 不插入 sudo、不要求网页审批、也不配置 sudoers。",
     schema: z
       .object({ command: z.string().min(1).max(16_000), cwd: z.string().max(4096).optional() })
       .strict(),
     seatPolicy: "deny" as const,
   },
   "process.list": {
-    description: "列出自己当前由 Mate 管理的命令进程。",
+    description:
+      "列出本次节点运行期间由 process.exec 启动、进程组仍然存在的自己命令进程；节点重启后 Mate 不再追踪此前的普通命令。",
     schema: z.object({}).strict(),
     seatPolicy: "deny" as const,
   },
   "process.inspect": {
-    description: "查询一个由 process.exec 返回的操作 ID 当前是否仍在运行。",
+    description:
+      "查询一个由实时 process.exec 返回的操作 ID 当前的进程状态；Mate 只报告本次节点运行期间自己启动并仍能看到的进程组。",
     schema: z.object({ targetOperationId: operationId }).strict(),
     seatPolicy: "deny" as const,
   },
   "process.stop": {
-    description: "停止一个由 process.exec 返回的操作 ID 对应的进程及其子进程。",
+    description:
+      "尽力终止一个由本次节点运行期间的 process.exec 返回的操作 ID 对应的进程组。Mate 只能观察和终止它自己启动的进程组：以新会话离开该进程组或本账号无权信号的后代不在报告范围内，Mate 不会声称它们已停止。",
     schema: z.object({ targetOperationId: operationId }).strict(),
     seatPolicy: "deny" as const,
   },

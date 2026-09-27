@@ -5,10 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { AgentProcessOperations } from "../../src/nodes/process-operations.js";
-import {
-  agentProcessUnit,
-  createLinuxAgentProcessExecutor,
-} from "../../src/nodes/linux-process-executor.js";
+import { createLinuxAgentProcessExecutor } from "../../src/nodes/linux-process-executor.js";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -18,14 +15,12 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-it("maps only a validated operation ID to an Agent UID scope", () => {
-  const operationId = randomUUID();
-  expect(agentProcessUnit(1234, operationId)).toBe(`mate-agent-1234-${operationId}.scope`);
-  expect(() => agentProcessUnit(1234, `${operationId};systemctl stop other.scope`)).toThrow(
-    "Invalid Agent process identity",
-  );
+it("refuses an Agent command timeout outside its supported range", () => {
   expect(() =>
     createLinuxAgentProcessExecutor("/var/lib/mate/agents", { commandTimeoutMs: 0 }),
+  ).toThrow("Agent command timeout");
+  expect(() =>
+    createLinuxAgentProcessExecutor("/var/lib/mate/agents", { commandTimeoutMs: 300_001 }),
   ).toThrow("Agent command timeout");
 });
 
@@ -167,14 +162,14 @@ it("fences new commands and repeats Agent stopping after an admitted command set
       return finishCommand.promise;
     }
     stops++;
-    return { state: "succeeded" as const, receipt: { stopped: true, units: [] } };
+    return { state: "succeeded" as const, receipt: { stopped: true, operationIds: [] } };
   });
   const operations = new AgentProcessOperations(database, host);
   try {
     const command = operations.execute(agentId, randomUUID(), {
       kind: "exec",
       cwd: ".",
-      command: "start-late-scope",
+      command: "late-command",
     });
     await commandStarted.promise;
     const stopping = operations.execute(agentId, randomUUID(), { kind: "process.stop_all" });

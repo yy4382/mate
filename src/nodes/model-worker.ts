@@ -286,7 +286,7 @@ export function serveModelWorker(stream: StreamFn): void {
           "任务、提醒和你自己组织的工作区记忆都是持久事实，服务重启、更换模型进程或会话压缩后仍可用 tasks.list、reminders.list、workspace.list 和 workspace.read 找回；压缩只更换后续模型调用使用的会话，不产生第二条逻辑会话。任务状态只由任务工具更新，不会因为你发言、保持静默或运行结束而自动完成。",
           "运行期间可能有新消息到达：你会收到以 [运行提示] 开头的用户消息，它只给出有新消息的对话 ID，不含正文，也不代表正文已读；它不是历史记录，也不是本次输入的正文，而是当前运行中的实时提示。看到提示不会打断你正在执行的工具，你可以自行决定现在读取、暂缓或继续手上的工作。未处理的消息会留到下一轮同一会话。",
           "你的普通正文只写入你自己的 Agent 会话记录，不会发送给任何频道、讨论串或私信；只输出正文而不发言，也是一次成功的处理。要在某个频道、讨论串或私信中发言，必须调用 messages.send，并在 input 中显式给出 conversationId 和 text（讨论串用 rootId，引用用 quoteId）。公开对话中的发言不得泄露任何私密对话的内容。",
-          "使用 tools.list 发现可用 Mate 操作，需要时使用 tools.describe 读取准确参数。process.exec 会以你固定的非特权 Linux 用户运行普通命令；使用 process.list、process.inspect 和 process.stop 管理自己的命令进程。普通命令不需要逐条人工审批。先用 agents.list 查找同伴身份，再用 conversations.open_dm 建立或返回你与目标 Agent 的私信；每次读取和发送都必须明确指定你有权访问的对话。邀请同伴时必须指定你已加入的频道和目标 Agent。控制面会检查每次操作是否获授权，拒绝结果不可绕过。",
+          "使用 tools.list 发现可用 Mate 操作，需要时使用 tools.describe 读取准确参数。process.exec 会在当前运行账号的普通 shell 子进程中执行命令，默认使用你自己的默认工作目录；命令里写 sudo 时是否获得 root 由宿主已有的 sudo 配置决定，Mate 不插入 sudo、不提供审批，也不修改 sudoers。使用 process.list、process.inspect 和 process.stop 查看或尽力停止自己启动的、进程组仍存在的命令。先用 agents.list 查找同伴身份，再用 conversations.open_dm 建立或返回你与目标 Agent 的私信；每次读取和发送都必须明确指定你有权访问的对话。邀请同伴时必须指定你已加入的频道和目标 Agent。控制面会检查每次操作是否获授权，拒绝结果不可绕过。",
         ].join("\n"),
         tools,
         messages: transcript,

@@ -1,83 +1,380 @@
-import { expect, it, vi } from "vitest";
+import Database from "better-sqlite3";
+import { randomUUID } from "node:crypto";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir, userInfo } from "node:os";
+import { join } from "node:path";
+import { expect, it } from "vitest";
+import {
+  OrdinaryCommandRunner,
+  type OrdinaryCommandReceipt,
+} from "../../src/execution/ordinary-command.js";
+import { prepareAgentWorkspace } from "../../src/nodes/agent-provisioner.js";
+import {
+  createLinuxAgentProcessExecutor,
+  type AgentCommandRunner,
+} from "../../src/nodes/linux-process-executor.js";
+import { AgentProcessOperations } from "../../src/nodes/process-operations.js";
 
-const state = vi.hoisted(() => ({
-  identity: {
-    username: "mate_6a69f5cbd52c44d297e965cecc461f1",
-    uid: 51001,
-    gid: 51001,
-    workspace: "/var/lib/mate/agents/6a69f5cb-d52c-44d2-97e9-65cecc461f13",
-    workspaceMarker: "a".repeat(64),
-  },
-  backendIdentities: [] as unknown[],
-  execute: vi.fn(),
-  verifyQuota: vi.fn(),
-}));
+const accountUid = typeof process.getuid === "function" ? process.getuid() : 0;
 
-vi.mock("../../src/nodes/agent-provisioner.js", () => ({
-  readAgentWorkspaceIdentity: vi.fn(() => state.identity),
-}));
+async function setup(options: { commandTimeoutMs?: number; runner?: AgentCommandRunner } = {}) {
+  const root = mkdtempSync(join(tmpdir(), "mate-agent-command-")),
+    workspaceRoot = join(root, "agents"),
+    agentId = randomUUID(),
+    identity = await prepareAgentWorkspace({ agentId, workspaceRoot }),
+    runner = options.runner ?? new OrdinaryCommandRunner(),
+    database = new Database(join(root, "operations.sqlite")),
+    operations = new AgentProcessOperations(
+      database,
+      createLinuxAgentProcessExecutor(workspaceRoot, { ...options, runner }),
+    );
+  return {
+    root,
+    agentId,
+    identity,
+    database,
+    operations,
+    async cleanup() {
+      await runner.stopAll(agentId);
+      database.close();
+      rmSync(root, { recursive: true, force: true });
+    },
+  };
+}
 
-vi.mock("../../src/execution/linux-processes.js", () => ({
-  LinuxProcessManager: class {
-    verifyQuota(agentId: string) {
-      return state.verifyQuota(agentId);
-    }
-  },
-  ProcessStopRejectedError: class extends Error {},
-}));
+it("runs an ordinary command in the Agent's own workspace as the launching account", async () => {
+  const fixture = await setup();
+  try {
+    const receipt = await fixture.operations.execute(fixture.agentId, randomUUID(), {
+      kind: "exec",
+      command: `printf '%s|' "$(id -u)"; printf '%s|' "$HOME"; pwd; : > wrote-here.txt`,
+      cwd: ".",
+    });
+    expect(receipt.state).toBe("succeeded");
+    expect(receipt.receipt).toMatchObject({
+      code: 0,
+      signal: null,
+      truncated: false,
+      timedOut: false,
+      cwd: fixture.identity.workspace,
+    });
+    const [uid, home, cwd] = (receipt.receipt as { stdout: string }).stdout.trimEnd().split("|");
+    expect(uid).toBe(String(accountUid));
+    expect(home).toBe(fixture.identity.workspace);
+    expect(cwd).toBe(fixture.identity.workspace);
+    expect(readFileSync(join(fixture.identity.workspace, "wrote-here.txt"), "utf8")).toBe("");
+    expect(userInfo().username).toBe(fixture.identity.username);
+  } finally {
+    await fixture.cleanup();
+  }
+});
 
-vi.mock("../../src/execution/linux-user.js", () => ({
-  LinuxUserBackend: class {
-    constructor(identities: unknown) {
-      state.backendIdentities.push(identities);
-    }
-    execute(...args: unknown[]) {
-      return state.execute(...args);
-    }
-  },
-}));
+it("runs in a workspace subdirectory the Agent names and refuses one that does not exist", async () => {
+  const fixture = await setup();
+  try {
+    mkdirSync(join(fixture.identity.workspace, "sub"));
+    const receipt = await fixture.operations.execute(fixture.agentId, randomUUID(), {
+      kind: "exec",
+      command: "pwd",
+      cwd: "sub",
+    });
+    expect(receipt.state).toBe("succeeded");
+    expect(receipt.receipt).toMatchObject({
+      cwd: join(fixture.identity.workspace, "sub"),
+    });
+    const missing = await fixture.operations.execute(fixture.agentId, randomUUID(), {
+      kind: "exec",
+      command: "pwd",
+      cwd: "not-there",
+    });
+    expect(missing).toMatchObject({
+      state: "failed",
+      receipt: { reason: "command_cwd_unavailable" },
+    });
+  } finally {
+    await fixture.cleanup();
+  }
+});
 
-import { createLinuxAgentProcessExecutor } from "../../src/nodes/linux-process-executor.js";
+it("reports a failed command with its real exit code and stderr", async () => {
+  const fixture = await setup();
+  try {
+    const receipt = await fixture.operations.execute(fixture.agentId, randomUUID(), {
+      kind: "exec",
+      command: "printf 'boom' >&2; exit 9",
+      cwd: ".",
+    });
+    expect(receipt.state).toBe("failed");
+    expect(receipt.receipt).toMatchObject({
+      code: 9,
+      stderr: "boom",
+      timedOut: false,
+      processGroupRunning: false,
+    });
+  } finally {
+    await fixture.cleanup();
+  }
+});
 
-it("passes a verified provisioned identity to ordinary process execution without marker metadata", async () => {
-  state.backendIdentities.length = 0;
-  state.execute.mockResolvedValue({
+it("reports truncated output instead of passing it off as the whole result", async () => {
+  const fixture = await setup();
+  try {
+    const receipt = await fixture.operations.execute(fixture.agentId, randomUUID(), {
+      kind: "exec",
+      command: "head -c 200000 /dev/zero | tr '\\000' x",
+      cwd: ".",
+    });
+    const captured = receipt.receipt as { stdout: string; truncated: boolean };
+    expect(receipt.state).toBe("succeeded");
+    expect(captured.truncated).toBe(true);
+    expect(captured.stdout).toHaveLength(65_536);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it("reports a timed-out command as failed and stops the work that had not run yet", async () => {
+  const fixture = await setup({ commandTimeoutMs: 300 });
+  try {
+    const marker = join(fixture.identity.workspace, "late.txt"),
+      receipt = await fixture.operations.execute(fixture.agentId, randomUUID(), {
+        kind: "exec",
+        command: `sleep 5; : > ${marker}`,
+        cwd: ".",
+      });
+    expect(receipt.state).toBe("failed");
+    expect(receipt.receipt).toMatchObject({
+      code: null,
+      signal: "SIGKILL",
+      timedOut: true,
+      processGroupRunning: false,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(() => readFileSync(marker, "utf8")).toThrow();
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it("replays one operation ID from its durable receipt without running the command twice", async () => {
+  const fixture = await setup();
+  try {
+    const operationId = randomUUID(),
+      operation = { kind: "exec" as const, command: "printf 'once\\n' >> ledger.txt", cwd: "." },
+      ledger = join(fixture.identity.workspace, "ledger.txt"),
+      first = await fixture.operations.execute(fixture.agentId, operationId, operation),
+      second = await fixture.operations.execute(fixture.agentId, operationId, operation);
+    expect(first.state).toBe("succeeded");
+    expect(second).toEqual(first);
+    expect(readFileSync(ledger, "utf8")).toBe("once\n");
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it("refuses to reuse an operation ID for other input without running the second command", async () => {
+  const fixture = await setup();
+  try {
+    const operationId = randomUUID(),
+      ledger = join(fixture.identity.workspace, "ledger.txt");
+    await fixture.operations.execute(fixture.agentId, operationId, {
+      kind: "exec",
+      command: "printf 'once\\n' >> ledger.txt",
+      cwd: ".",
+    });
+    await expect(
+      fixture.operations.execute(fixture.agentId, operationId, {
+        kind: "exec",
+        command: "printf 'twice\\n' >> ledger.txt",
+        cwd: ".",
+      }),
+    ).rejects.toThrow("identity conflict");
+    expect(readFileSync(ledger, "utf8")).toBe("once\n");
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it("passes the Agent's own sudo through to the host without wrapping or approving it", async () => {
+  const fixture = await setup();
+  try {
+    const shim = join(fixture.identity.workspace, "bin"),
+      recorded = join(fixture.identity.workspace, "sudo-argv");
+    mkdirSync(shim);
+    writeFileSync(
+      join(shim, "sudo"),
+      `#!/bin/sh\nprintf '%s\\n' "$@" > ${recorded}\nprintf 'sudo refused\\n' >&2\nexit 7\n`,
+    );
+    chmodSync(join(shim, "sudo"), 0o700);
+    const receipt = await fixture.operations.execute(fixture.agentId, randomUUID(), {
+      kind: "exec",
+      command: `PATH="${shim}:$PATH" sudo id -u`,
+      cwd: ".",
+    });
+    expect(receipt.state).toBe("failed");
+    expect(receipt.receipt).toMatchObject({ code: 7, stderr: "sudo refused\n" });
+    expect(readFileSync(recorded, "utf8")).toBe("id\n-u\n");
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it("never inserts sudo the Agent did not write", async () => {
+  const fixture = await setup();
+  try {
+    const shim = join(fixture.identity.workspace, "bin"),
+      recorded = join(fixture.identity.workspace, "sudo-was-called");
+    mkdirSync(shim);
+    writeFileSync(join(shim, "sudo"), `#!/bin/sh\n: > ${recorded}\nexit 0\n`);
+    chmodSync(join(shim, "sudo"), 0o700);
+    const receipt = await fixture.operations.execute(fixture.agentId, randomUUID(), {
+      kind: "exec",
+      command: `PATH="${shim}:$PATH" id -u`,
+      cwd: ".",
+    });
+    expect(receipt.state).toBe("succeeded");
+    expect(() => readFileSync(recorded, "utf8")).toThrow();
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it("keeps tracking a command whose group outlives its shell and reports it to the Agent", async () => {
+  const fixture = await setup();
+  try {
+    const started = await fixture.operations.execute(fixture.agentId, randomUUID(), {
+      kind: "exec",
+      command: "sleep 30 & printf started",
+      cwd: ".",
+    });
+    const operationId = started.operationId;
+    expect(started.state).toBe("succeeded");
+    expect(started.receipt).toMatchObject({ stdout: "started", processGroupRunning: true });
+    const listed = await fixture.operations.execute(fixture.agentId, randomUUID(), {
+      kind: "process.list",
+    });
+    expect(listed.receipt).toEqual({
+      processes: [
+        expect.objectContaining({
+          operationId,
+          state: "descendants_running",
+          pid: expect.any(Number),
+        }),
+      ],
+    });
+    const inspected = await fixture.operations.execute(fixture.agentId, randomUUID(), {
+      kind: "process.inspect",
+      targetOperationId: operationId,
+    });
+    expect(inspected.receipt).toMatchObject({ operationId, state: "descendants_running" });
+    const stopped = await fixture.operations.execute(fixture.agentId, randomUUID(), {
+      kind: "process.stop",
+      targetOperationId: operationId,
+    });
+    expect(stopped).toMatchObject({
+      state: "succeeded",
+      receipt: { operationId, state: "stopped" },
+    });
+    const after = await fixture.operations.execute(fixture.agentId, randomUUID(), {
+      kind: "process.list",
+    });
+    expect(after.receipt).toEqual({ processes: [] });
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it("reports an unconfirmable stop instead of claiming the command was stopped", async () => {
+  // A descendant Mate may not signal (for example a root process sudo created) keeps the process
+  // group alive. This substitutes only the liveness probe, because creating such a descendant
+  // needs root; the kill itself is still real.
+  const fixture = await setup({
+    runner: new OrdinaryCommandRunner({ processGroupAlive: () => true }),
+  });
+  try {
+    const started = await fixture.operations.execute(fixture.agentId, randomUUID(), {
+      kind: "exec",
+      command: "sleep 30 & printf started",
+      cwd: ".",
+    });
+    const operationId = started.operationId;
+    expect(started.receipt).toMatchObject({ processGroupRunning: true });
+    const stopped = await fixture.operations.execute(fixture.agentId, randomUUID(), {
+      kind: "process.stop",
+      targetOperationId: operationId,
+    });
+    expect(stopped).toMatchObject({
+      state: "failed",
+      receipt: { reason: "process_stop_unconfirmed", state: "unconfirmed", operationId },
+    });
+    expect(
+      await fixture.operations.execute(fixture.agentId, randomUUID(), { kind: "process.stop_all" }),
+    ).toMatchObject({
+      state: "failed",
+      receipt: { reason: "process_stop_unconfirmed", stopped: false },
+    });
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it("never reports a command Mate had to end as a success", async () => {
+  // The shell can exit with code 0 in the same instant the deadline fires. Whatever its exit
+  // status was, a command Mate ended (or one that died from a signal) is not a success.
+  let receipt: OrdinaryCommandReceipt = {
     code: 0,
-    stdout: "ordinary command",
+    signal: null,
+    stdout: "finished",
     stderr: "",
     truncated: false,
-  });
-  state.verifyQuota.mockResolvedValue(undefined);
-
-  const agentId = "6a69f5cb-d52c-44d2-97e9-65cecc461f13",
-    operationId = "f045a330-2902-4a92-b9bd-115ee60ec91c",
-    operation = { kind: "exec" as const, cwd: ".", command: "printf ordinary" },
-    result = await createLinuxAgentProcessExecutor("/var/lib/mate/agents")({
-      agentId,
-      operationId,
-      operation,
-    });
-
-  expect(state.backendIdentities).toEqual([
-    {
-      [agentId]: {
-        username: state.identity.username,
-        uid: state.identity.uid,
-        gid: state.identity.gid,
-        home: state.identity.workspace,
-      },
+    timedOut: true,
+    processGroupRunning: false,
+    cwd: "/tmp/agent-workspace",
+    startedAt: 1,
+    durationMs: 2,
+  };
+  const fixture = await setup({
+    runner: {
+      run: async () => receipt,
+      list: () => [],
+      presence: () => ({ state: "not_tracked" }),
+      stop: async () => ({ state: "not_tracked" }),
+      stopAll: async () => ({ stopped: [], unconfirmed: [] }),
     },
-  ]);
-  expect(state.verifyQuota).toHaveBeenCalledWith(agentId);
-  expect(state.execute).toHaveBeenCalledWith({
-    agentId,
-    root: state.identity.workspace,
-    timeoutMs: 60_000,
-    operation,
-    operationId,
   });
-  expect(result).toEqual({
-    state: "succeeded",
-    receipt: { code: 0, stdout: "ordinary command", stderr: "", truncated: false },
-  });
+  try {
+    const execute = () =>
+      fixture.operations.execute(fixture.agentId, randomUUID(), {
+        kind: "exec",
+        command: "true",
+        cwd: ".",
+      });
+    expect(await execute()).toMatchObject({
+      state: "failed",
+      receipt: { code: 0, timedOut: true },
+    });
+    receipt = { ...receipt, timedOut: false, signal: "SIGKILL" };
+    expect(await execute()).toMatchObject({
+      state: "failed",
+      receipt: { code: 0, signal: "SIGKILL", timedOut: false },
+    });
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it("says which commands its Agent-wide stop covers", async () => {
+  // The tracker only knows this node process's commands, and the receipt must say so instead of
+  // letting an empty list read as "nothing from an earlier node run can still be running".
+  const fixture = await setup();
+  try {
+    expect(
+      await fixture.operations.execute(fixture.agentId, randomUUID(), { kind: "process.stop_all" }),
+    ).toMatchObject({
+      state: "succeeded",
+      receipt: { stopped: true, operationIds: [], scope: "this_node_run" },
+    });
+  } finally {
+    await fixture.cleanup();
+  }
 });

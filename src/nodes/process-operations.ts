@@ -200,7 +200,7 @@ export class AgentProcessOperations {
         admitted.length === 0
       )
         return first;
-      // An already admitted exec can create a scope after the first systemd listing. Its
+      // An already admitted command can start a process after the first stop pass. Its
       // completion is durable before the final pass, which closes that race.
       await Promise.allSettled(admitted);
       return this.executeHostOperation({ agentId, operationId, operation });

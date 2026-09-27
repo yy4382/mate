@@ -1,13 +1,17 @@
 import { chmodSync, lstatSync, mkdirSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { openNodeProcessDatabase } from "../storage/initialize.js";
-import { createLinuxAgentProcessExecutor } from "./linux-process-executor.js";
+import {
+  createLinuxAgentProcessExecutor,
+  type LinuxAgentProcessExecutorOptions,
+} from "./linux-process-executor.js";
 import { AgentProcessOperations } from "./process-operations.js";
 
 /** Open private, durable node-side operation receipts under the node service data directory. */
 export function openNodeProcessOperations(
   dataDirectory: string,
   agentHomeRoot: string,
+  executorOptions: LinuxAgentProcessExecutorOptions = {},
 ): { operations: AgentProcessOperations; close(): void } {
   if (!isAbsolute(dataDirectory)) throw new Error("Node data directory must be absolute");
   const directory = resolve(dataDirectory);
@@ -36,7 +40,7 @@ export function openNodeProcessOperations(
     if (!existed) chmodSync(databasePath, 0o600);
     const operations = new AgentProcessOperations(
       database,
-      createLinuxAgentProcessExecutor(agentHomeRoot),
+      createLinuxAgentProcessExecutor(agentHomeRoot, executorOptions),
     );
     return { operations, close: () => database.close() };
   } catch (error) {
