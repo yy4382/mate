@@ -14,7 +14,7 @@ Pi 0.86.0 的 `session_before_compact` 提供准备结果、历史 entries、触
 | --- | --- |
 | 默认摘要是否保留原请求？ | 0.86.0 的 `generateSummaryWithUsage` 将选中消息转换成文本，放进单条用户消息；`buildSummarizationContext` 换用专门的摘要 system，未携带原工具定义。已有摘要作为文本合并。main 的对应函数仍采用这一路径。[0.86.0][compact-v]、[main][compact-main] |
 | 摘要缓存选项是什么？ | 两版 `completeSummarization` 都明确设 `cacheRetention: "none"`；调用方未给 session ID 时生成新 UUID。0.86.0 `_runDefaultCompaction` 明确不传主 session ID。这是摘要请求的路由 ID，不是给 Agent 新建逻辑会话。[压缩函数][compact-v]、[会话调用方][session-v] |
-| 序列化是否无损？ | main 的 `serializeConversation` 提取文字、思考文本和工具调用，工具结果文本超过 2000 字符时截断；专用 system 要求只输出结构化摘要。它不是原生消息重放格式。0.86.0 的 utils 文件本次未成功获取，不将 main 的常数认作该版本事实。[main utils][utils-main] |
+| 序列化是否无损？ | 0.86.0 官方文档明确工具结果文本截断至 2000 字符；main 的 `serializeConversation` 也采用此限制，提取文字、思考文本和工具调用。专用 system 要求只输出结构化摘要。它不是原生消息重放格式。[0.86.0 文档][compaction-doc-v]、[main utils][utils-main] |
 | 压缩如何改变历史？ | 0.86.0 追加 compaction entry，保存摘要、保留起点及当时 system/tool 状态；原始记录仍在。下一请求由该检查点、保留消息和新增消息组成。[session-manager][manager-v] |
 | 压缩后会换主 session ID 吗？ | 默认成功路径追加检查点、重建 Agent messages，没有轮换主 session ID。相同 ID 不等于相同请求前缀。[agent-session][session-v] |
 
@@ -34,7 +34,17 @@ Pi 的 cache warmer 重发已经发出的请求，将输出上限设为一个 to
 
 **推论：** 压缩后的第一次主请求无法复用被替换的旧历史前缀，需要建立新的缓存；未改变的 system/tool 前缀仍可能命中，所以不应承诺“第一次一定完全 miss”。原会话前缀摘要只改善生成摘要这一步，不消除压缩后新前缀的建立成本。[检查点重建][manager-v]、[前缀匹配规则][openai-doc]
 
-## Mate 需要验证的最小改动
+## 专用摘要提示的动机与证据边界
+
+**官方明确说明的动机：** `compaction.ts` 的序列化注释明确说要防止模型继续原对话；专用 system 要求模型只总结，不回答历史中的问题。0.86.0 文档说明工具结果截断是为了控制摘要输入大小；摘要采用新路由 ID，并在供应商支持时关闭缓存写入，是因为一次性摘要请求不太可能再次复用。后者解释的是不为摘要写新缓存的意图，不能单独证明读取主会话缓存没有价值。[序列化与缓存写入注释][compact-v]、[摘要 system][utils-main]、[0.86.0 官方文档][compaction-doc-v]
+
+**官方默认优于候选的质量结论未得到证明：** 维护者 badlogic 在 #128 的 split-turn 设计讨论中提出，两份较小摘要“potentially higher quality”，这是对拆分摘要的预期，不是专用 system 与原生前缀摘要的 A/B 结果。#1748 已有人直接质疑序列化造成缓存损失。[维护者讨论 #128](https://github.com/earendil-works/pi/issues/128)、[质疑 #1748](https://github.com/earendil-works/pi/issues/1748)
+
+#9411 所链接的 fork PR 提供了反方向的实验线索：作者自报在单一 `muse-spark` 模型及 max thinking 下调提示，并进行 42 个留出片段和 40 对 LLM 盲评；另报三个预热片段的前缀匹配约 99.9–100%，以及 126 次以上摘要没有工具调用。这是分支摘要改动，包含提示调整，不能隔离请求结构的因果效果；其 compaction 调用方仍保留 `none`。本次只核对了作者发布的 PR 正文，没有复现实验，不能据此断言 Mate 的候选优于默认。[问题 #9411](https://github.com/earendil-works/pi/issues/9411)、[fork PR #3](https://github.com/cad0p/pi/pull/3)
+
+**推论：** Pi 的结构把历史变成待总结的材料，给摘要任务独立的行为约束，并缩小工具输出；这些是可解释的工程取舍，不足以证明默认摘要一定更好，也不足以证明破坏原前缀是必要条件。保留前缀候选需要另行验证原 system、仍在上下文中的任务与工具是否干扰摘要指令，不能从 payload 可构造直接推导行为等效。
+
+## 保留前缀候选需要验证的最小改动
 
 1. 复用 Pi 的切点和保留近期片段逻辑；用原生历史消息及原 system/tool 定义形成摘要请求，只尾部追加摘要要求。保留原缓存路由与设置，不调用会强制 `none` 的默认摘要包装函数。
 2. 保留原工具定义及工具选择设置；不为摘要单独切换工具选择，避免引入未经验证的缓存变化。摘要调用不运行工具执行循环，任何工具调用或不完整输出都拒绝作为摘要。对供应商最终 payload 检查前缀，而不只比较 Pi 消息对象。
@@ -55,8 +65,13 @@ pnpm exec node docs/research/pi-compaction-prefix-probe.mjs
 
 脚本中的 Pi 风格摘要请求仅为依据上述源码做的本地形状复现，没有执行上游压缩函数。实验说明两种适配器可以序列化这类请求，**没有验证供应商接受合成签名、真实缓存命中率或摘要质量**，也未验证所有模型及自定义供应商。结论限于保留原始前缀的摘要方案具备本地协议可行性。
 
+进一步验证应分层：先用真实供应商接受的历史确认传输与缓存读数；再固定同一模型、历史和推理设置，对比 Pi 默认摘要与前缀候选，检查是否只输出摘要、是否出现工具调用、事实遗漏与错误、长度和 overflow 行为。缓存检查与摘要质量检查是不同证据，后者不能由一次成功请求代替。本次没有执行这些供应商实验，也不将模型质量评估新增为发布阻塞条件。
+
+**待用户选择的研究建议：** 仅凭本地序列化实验就把前缀摘要指定为必选实现，承诺过早。建议默认适配 Pi 现成专用摘要方法，把保留前缀留作待对照验证的候选；这项建议尚未成为项目决策，本文不修改既定 ADR 或规格。
+
 [compact-v]: https://github.com/earendil-works/pi/blob/v0.86.0/packages/coding-agent/src/core/compaction/compaction.ts
 [compact-main]: https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/core/compaction/compaction.ts
+[compaction-doc-v]: https://github.com/earendil-works/pi/blob/v0.86.0/packages/coding-agent/docs/compaction.md
 [utils-main]: https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/core/compaction/utils.ts
 [session-v]: https://github.com/earendil-works/pi/blob/v0.86.0/packages/coding-agent/src/core/agent-session.ts
 [manager-v]: https://github.com/earendil-works/pi/blob/v0.86.0/packages/coding-agent/src/core/session-manager.ts
