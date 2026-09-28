@@ -64,6 +64,14 @@ export class ModelCredentialDirectory {
   }
 }
 
+/**
+ * SQL for "the Agent in scope has a credential row for its current provider", where the Agent table
+ * is aliased `a`. Readiness is asked here rather than stored, so it stays one predicate instead of a
+ * hand-written copy in every query that gates on it.
+ */
+export const providerCredentialExistsSql =
+  "EXISTS (SELECT 1 FROM model_credentials c WHERE c.provider=a.provider)";
+
 export const modelCredentialSchema = `
 CREATE TABLE model_credentials (
   provider TEXT PRIMARY KEY,

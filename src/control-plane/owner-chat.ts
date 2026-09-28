@@ -13,6 +13,7 @@ import {
   type AgentWorkspaceOperation,
 } from "./agent-tools.js";
 import type { AgentProcessOperation } from "../nodes/process-operations.js";
+import { nodeAccountOf } from "./nodes/directory.js";
 
 export type ChannelVisibility = "public" | "private";
 export type OwnerPrincipalKind = "human" | "agent";
@@ -517,14 +518,7 @@ export class OwnerChat {
               home: string | null;
             }
           | undefined;
-        if (
-          !session ||
-          session.stage !== "complete" ||
-          !session.linux_username ||
-          session.uid === null ||
-          session.gid === null ||
-          !session.home
-        )
+        if (!session || session.stage !== "complete" || !nodeAccountOf(session) || !session.home)
           return false;
         const channel = this.db
           .prepare(

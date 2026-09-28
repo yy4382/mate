@@ -82,6 +82,20 @@ export class NodeAccountConflict extends Error {
   }
 }
 
+/**
+ * A complete account read from node columns, or undefined while the node has not completed a
+ * preparation yet. Rows read through a LEFT JOIN carry all three columns as nullable, so this is
+ * the one place that decides whether a partial row counts as an account at all.
+ */
+export function nodeAccountOf(row: {
+  linux_username: string | null;
+  uid: number | null;
+  gid: number | null;
+}): NodeAccount | undefined {
+  if (row.linux_username === null || row.uid === null || row.gid === null) return undefined;
+  return { username: row.linux_username, uid: row.uid, gid: row.gid };
+}
+
 export interface NodeDirectoryOptions {
   now?: () => number;
   pairingTokenTtlMs?: number;

@@ -3,6 +3,7 @@ import { AgentSession } from "./agent-session.js";
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import type { ModelCredentialDirectory } from "./model-credentials.js";
+import { providerCredentialExistsSql } from "./model-credentials.js";
 import type { AgentRunContextPage, OwnerChat } from "./owner-chat.js";
 import { NodeDirectory, type NodeAgentRunStart } from "./nodes/directory.js";
 import {
@@ -704,7 +705,7 @@ export class AgentRunCoordinator {
            AND a.stage='complete'
            AND NOT EXISTS (SELECT 1 FROM owner_agent_run_control ctl WHERE ctl.agent_id=a.id AND ctl.paused_reason IS NOT NULL)
            AND NOT EXISTS (SELECT 1 FROM owner_agent_recovery_holds hold WHERE hold.agent_id=a.id)
-           AND EXISTS (SELECT 1 FROM model_credentials c WHERE c.provider=a.provider)
+           AND ${providerCredentialExistsSql}
            AND NOT EXISTS (SELECT 1 FROM owner_agent_runs r WHERE r.agent_id=a.id AND r.state='running')
            AND NOT EXISTS (
              SELECT 1 FROM owner_message_deliveries earlier
@@ -736,7 +737,7 @@ export class AgentRunCoordinator {
                JOIN owner_messages m ON m.id=d.message_id
                JOIN owner_channels c ON c.id=d.channel_id
                WHERE a.id=? AND a.stage='complete'
-                 AND EXISTS (SELECT 1 FROM model_credentials c WHERE c.provider=a.provider)
+                 AND ${providerCredentialExistsSql}
                  AND (c.archived=0 OR m.internal_kind='reminder')
                  AND d.id=? AND d.state='pending'
                  AND NOT EXISTS (SELECT 1 FROM owner_agent_recovery_holds hold WHERE hold.agent_id=a.id)`,

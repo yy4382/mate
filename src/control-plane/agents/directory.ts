@@ -3,8 +3,10 @@ import { createHash, randomUUID } from "node:crypto";
 import { basename, resolve } from "node:path";
 import type { AgentWorkspaceIdentity } from "../../nodes/agent-provisioner.js";
 import type { AgentProvisionStage } from "../../nodes/protocol.js";
+import { nodeAccountOf } from "../nodes/directory.js";
 import { NodeAccountConflict } from "../nodes/directory.js";
 import type { NodeAccount, NodeDirectory } from "../nodes/directory.js";
+import { providerCredentialExistsSql } from "../model-credentials.js";
 import type { OwnerChat } from "../owner-chat.js";
 import type {
   AgentSummary,
@@ -78,8 +80,7 @@ const agentRowQuery = `
          a.initial_channel_id,s.id AS session_id,a.provision_request_id,a.request_hash,
          a.stage,a.error,n.linux_username,n.uid,n.gid,a.home,a.home_marker,
          a.created_at,a.updated_at,
-         EXISTS (SELECT 1 FROM model_credentials c WHERE c.provider=a.provider)
-           AS provider_credential
+         ${providerCredentialExistsSql} AS provider_credential
   FROM owner_agents a JOIN owner_agent_sessions s ON s.agent_id=a.id
   JOIN nodes n ON n.id=a.node_id
 `;
@@ -307,10 +308,10 @@ export class AgentDirectory {
 }
 
 function toAgent(row: AgentRow): AgentSummary {
-  const identity =
-    row.linux_username !== null && row.uid !== null && row.gid !== null && row.home !== null
-      ? { username: row.linux_username, uid: row.uid, gid: row.gid, workspace: row.home }
-      : null;
+  const account = nodeAccountOf(row),
+    // Without an accepted workspace of its own an Agent has no run identity, even on a node whose
+    // shared account is already recorded for the Agents that did finish.
+    identity = account && row.home !== null ? { ...account, workspace: row.home } : null;
   return {
     id: row.id,
     nodeId: row.node_id,
