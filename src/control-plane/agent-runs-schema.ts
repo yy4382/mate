@@ -12,7 +12,6 @@ CREATE TABLE owner_agent_runs (
   delivery_id TEXT NOT NULL REFERENCES owner_message_deliveries(id),
   input_end_seq INTEGER NOT NULL DEFAULT 0,
   context_history_end_seq INTEGER NOT NULL DEFAULT 0,
-  independent_review INTEGER NOT NULL DEFAULT 0 CHECK(independent_review IN (0,1)),
   state TEXT NOT NULL CHECK(state IN ('running','completed','failed')),
   error_code TEXT,
   retry_at INTEGER,

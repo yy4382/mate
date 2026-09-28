@@ -20,36 +20,30 @@ export const agentConversationOperations = Object.freeze({
   "agents.list": {
     description: "发现当前已配置、可通过 Mate 联系的其他 Agent 身份。",
     schema: z.object({}).strict(),
-    seatPolicy: "deny" as const,
   },
   "conversations.list": {
     description:
       "列出当前可发现的对话。公开频道显示名称和简介，并标记你是否已是成员；私有对话只在你已加入时显示。",
     schema: z.object({}).strict(),
-    seatPolicy: "deny" as const,
   },
   "conversations.read": {
     description:
       "读取一个对话中的消息；公开频道无需加入即可读取，私有对话和私信仅限成员。必须指定 conversationId；使用 before 和 limit 向更早消息分页。",
     schema: z.object({ conversationId, before: cursor, limit: pageLimit }).strict(),
-    seatPolicy: "deny" as const,
   },
   "conversations.read_thread": {
     description:
       "读取一条根消息的完整讨论串；公开频道无需加入即可读取，私有对话和私信仅限成员。必须指定 conversationId 和根消息 ID。",
     schema: z.object({ conversationId, rootId: z.string().uuid() }).strict(),
-    seatPolicy: "deny" as const,
   },
   "conversations.open_dm": {
     description:
       "为你和一名明确指定的、已配置同伴创建或返回唯一私信；控制面会同时授予双方成员权限。",
     schema: z.object({ targetAgentId: z.string().uuid() }).strict(),
-    seatPolicy: "deny" as const,
   },
   "attention.list": {
     description: "查看你的消息注意力状态。通知已见和正文已呈现分别记录。",
     schema: z.object({ conversationId }).strict(),
-    seatPolicy: "deny" as const,
   },
   "attention.update": {
     description:
@@ -64,7 +58,6 @@ export const agentConversationOperations = Object.freeze({
         muted: z.boolean().optional(),
       })
       .strict(),
-    seatPolicy: "deny" as const,
   },
   "drafts.save": {
     description: "持久保存发送草稿和当前讨论位置。保存后可查看并发变化。",
@@ -76,7 +69,6 @@ export const agentConversationOperations = Object.freeze({
         quoteId: z.string().uuid().optional(),
       })
       .strict(),
-    seatPolicy: "deny" as const,
   },
   "drafts.review": {
     description: "查看草稿后的讨论变化，并选择修改、保留、放弃、暂缓或知情继续。",
@@ -87,7 +79,6 @@ export const agentConversationOperations = Object.freeze({
         text: z.string().min(1).max(20_000).optional(),
       })
       .strict(),
-    seatPolicy: "deny" as const,
   },
   "messages.send": {
     description:
@@ -102,14 +93,12 @@ export const agentConversationOperations = Object.freeze({
         asTask: z.boolean().optional(),
       })
       .strict(),
-    seatPolicy: "deny" as const,
   },
   "tasks.create": {
     description: "从你可读取的已有消息创建任务；消息是唯一规范锚点。",
     schema: z
       .object({ messageId: z.string().uuid(), draftId: z.string().uuid().optional() })
       .strict(),
-    seatPolicy: "deny" as const,
   },
   "tasks.claim_message": {
     description:
@@ -117,7 +106,6 @@ export const agentConversationOperations = Object.freeze({
     schema: z
       .object({ messageId: z.string().uuid(), draftId: z.string().uuid().optional() })
       .strict(),
-    seatPolicy: "deny" as const,
   },
   "tasks.claim": {
     description: "认领一个可见任务；先检查相关讨论的新变化。",
@@ -128,7 +116,6 @@ export const agentConversationOperations = Object.freeze({
         draftId: z.string().uuid().optional(),
       })
       .strict(),
-    seatPolicy: "deny" as const,
   },
   "tasks.yield": {
     description: "让出任务；若同伴已认领，记录你已让位而不改写其负责人。",
@@ -139,7 +126,6 @@ export const agentConversationOperations = Object.freeze({
         draftId: z.string().uuid().optional(),
       })
       .strict(),
-    seatPolicy: "deny" as const,
   },
   "tasks.transfer": {
     description: "把你当前负责的任务移交给同一对话的另一名成员 Agent。",
@@ -151,7 +137,6 @@ export const agentConversationOperations = Object.freeze({
         draftId: z.string().uuid().optional(),
       })
       .strict(),
-    seatPolicy: "deny" as const,
   },
   "tasks.update": {
     description: "更新可见任务的标题、状态或说明。",
@@ -165,7 +150,6 @@ export const agentConversationOperations = Object.freeze({
         draftId: z.string().uuid().optional(),
       })
       .strict(),
-    seatPolicy: "deny" as const,
   },
   "tasks.review": {
     description: "检查任务操作期间出现的相关消息，选择修改、保留、放弃、暂缓或知情继续。",
@@ -176,12 +160,10 @@ export const agentConversationOperations = Object.freeze({
         revisedInput: z.record(z.string(), z.json()).optional(),
       })
       .strict(),
-    seatPolicy: "deny" as const,
   },
   "tasks.list": {
     description: "列出你当前可读取对话中的任务。",
     schema: z.object({}).strict(),
-    seatPolicy: "deny" as const,
   },
   "reminders.create": {
     description: "为自己建立一次性提醒，可关联任务；任务完成后提醒仍然有效。",
@@ -193,7 +175,6 @@ export const agentConversationOperations = Object.freeze({
         taskId: z.string().uuid().optional(),
       })
       .strict(),
-    seatPolicy: "deny" as const,
   },
   "reminders.reschedule": {
     description: "修改自己尚未触发的提醒时间。",
@@ -204,31 +185,26 @@ export const agentConversationOperations = Object.freeze({
         dueAt: z.number().int().positive(),
       })
       .strict(),
-    seatPolicy: "deny" as const,
   },
   "reminders.cancel": {
     description: "取消自己尚未触发的提醒。",
     schema: z
       .object({ reminderId: z.string().uuid(), expectedVersion: z.number().int().positive() })
       .strict(),
-    seatPolicy: "deny" as const,
   },
   "reminders.list": {
     description: "查看自己的提醒和触发历史。",
     schema: z.object({}).strict(),
-    seatPolicy: "deny" as const,
   },
   "conversations.join": {
     description:
       "自行加入一个公开频道，成为成员后即可发送消息并按成员关系接收后续活动。加入不会回补历史消息为未读。私有对话不能通过此操作加入。",
     schema: z.object({ conversationId }).strict(),
-    seatPolicy: "deny" as const,
   },
   "conversations.invite": {
     description:
       "邀请一名已配置的同伴 Agent 加入你当前所在的频道。不能邀请自己，也不能邀请他人加入私信。",
     schema: z.object({ conversationId, agentId: z.string().uuid() }).strict(),
-    seatPolicy: "deny" as const,
   },
 });
 
@@ -254,18 +230,15 @@ export const agentWorkspaceOperations = Object.freeze({
         limit: z.number().int().min(1).max(32).default(32),
       })
       .strict(),
-    seatPolicy: "deny" as const,
   },
   "workspace.stat": {
     description: "查看工作区中文件或目录的类型和大小；路径规则与 workspace.read 相同。",
     schema: z.object({ path: workspacePath }).strict(),
-    seatPolicy: "deny" as const,
   },
   "workspace.read": {
     description:
       "读取工作区中不超过 8 KiB 的 UTF-8 文本文件；相对路径从你的工作区开始，也可以用同伴的 Agent ID（见 agents.list）按路径读取同伴工作区中的文件。更大的文件使用 read_chunk 分页读取。",
     schema: z.object({ path: workspacePath }).strict(),
-    seatPolicy: "deny" as const,
   },
   "workspace.read_chunk": {
     description:
@@ -278,7 +251,6 @@ export const agentWorkspaceOperations = Object.freeze({
         version: workspaceVersion.optional(),
       })
       .strict(),
-    seatPolicy: "deny" as const,
   },
   "workspace.write": {
     description:
@@ -308,7 +280,6 @@ export const agentWorkspaceOperations = Object.freeze({
             message: "完整 workspace.write 请求超过 1 MiB 节点消息上限，请缩小文本。",
           });
       }),
-    seatPolicy: "deny" as const,
   },
   "workspace.write_bytes": {
     description:
@@ -323,7 +294,6 @@ export const agentWorkspaceOperations = Object.freeze({
           .refine((value) => Buffer.from(value, "base64").byteLength <= WORKSPACE_WRITE_MAX_BYTES),
       })
       .strict(),
-    seatPolicy: "deny" as const,
   },
   "workspace.edit": {
     description:
@@ -336,19 +306,16 @@ export const agentWorkspaceOperations = Object.freeze({
         newText: z.string().max(1_000_000),
       })
       .strict(),
-    seatPolicy: "deny" as const,
   },
   "workspace.mkdir": {
     description: "在你的工作区中创建目录。",
     schema: z.object({ path: z.string().min(1).max(4096) }).strict(),
-    seatPolicy: "deny" as const,
   },
   "workspace.move": {
     description: "在你的工作区内移动或重命名文件；源和目标都必须留在你的工作区。",
     schema: z
       .object({ path: z.string().min(1).max(4096), destination: z.string().min(1).max(4096) })
       .strict(),
-    seatPolicy: "deny" as const,
   },
   "workspace.remove": {
     description: "删除你工作区中的文件；如提供 expectedHash，文件必须仍与该摘要相符。",
@@ -361,12 +328,10 @@ export const agentWorkspaceOperations = Object.freeze({
           .optional(),
       })
       .strict(),
-    seatPolicy: "deny" as const,
   },
   "attachments.list": {
     description: "查看一个对话中的附件；公开频道无需加入即可查看，私有对话和私信仅限成员。",
     schema: z.object({ conversationId }).strict(),
-    seatPolicy: "deny" as const,
   },
   "attachments.read_chunk": {
     description:
@@ -379,7 +344,6 @@ export const agentWorkspaceOperations = Object.freeze({
         length: z.number().int().min(1).max(8192).default(8192),
       })
       .strict(),
-    seatPolicy: "deny" as const,
   },
   "attachments.publish": {
     description:
@@ -391,7 +355,6 @@ export const agentWorkspaceOperations = Object.freeze({
         filename: z.string().max(255).optional(),
       })
       .strict(),
-    seatPolicy: "deny" as const,
   },
 });
 
@@ -414,25 +377,21 @@ export const agentProcessToolOperations = Object.freeze({
     schema: z
       .object({ command: z.string().min(1).max(16_000), cwd: z.string().max(4096).optional() })
       .strict(),
-    seatPolicy: "deny" as const,
   },
   "process.list": {
     description:
       "列出本次节点运行期间由 process.exec 启动、进程组仍然存在的自己命令进程。Mate 的进程记录只属于当前这次节点进程：节点重启后它不再追踪此前的命令，也无法确认那些命令是否仍在运行。",
     schema: z.object({}).strict(),
-    seatPolicy: "deny" as const,
   },
   "process.inspect": {
     description:
       "查询一个由实时 process.exec 返回的操作 ID 当前的进程状态。Mate 只报告本次节点运行期间自己启动并仍能看到的进程组；本次节点运行之前启动的普通命令不在报告范围内，Mate 不会声称它们正在运行或已经结束。",
     schema: z.object({ targetOperationId: operationId }).strict(),
-    seatPolicy: "deny" as const,
   },
   "process.stop": {
     description:
       "尽力终止一个由本次节点运行期间的 process.exec 返回的操作 ID 对应的进程组。Mate 只能观察和终止它自己启动的进程组：以新会话离开该进程组或本账号无权信号的后代（例如 sudo 派生的 root 进程）不在报告范围内，Mate 不会声称它们已停止，只会如实报告无法确认。",
     schema: z.object({ targetOperationId: operationId }).strict(),
-    seatPolicy: "deny" as const,
   },
 });
 

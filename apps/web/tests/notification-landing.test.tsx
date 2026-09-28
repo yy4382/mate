@@ -10,7 +10,6 @@ const root = {
   author: { kind: "agent", id: "agent" },
   text: "旧消息",
   order: "1",
-  revision: "1",
   createdAt: 1,
 };
 const reply = { ...root, id: "thread-reply", rootId: root.id, text: "讨论串提及", order: "2" };

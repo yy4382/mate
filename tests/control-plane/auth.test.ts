@@ -211,7 +211,7 @@ it("deletes logged-out sessions and cleans expired rows in batches of at most 10
     .prepare("SELECT token_hash FROM owner_sessions WHERE token_hash=?")
     .get(oldTokenHash);
   const insertExpired = db.prepare(
-    "INSERT INTO owner_sessions(token_hash,created_at,expires_at,revoked_at) VALUES(?,?,?,NULL)",
+    "INSERT INTO owner_sessions(token_hash,created_at,expires_at) VALUES(?,?,?)",
   );
   for (let row = 0; row < 250; row++) {
     const tokenHash = createHash("sha256").update(`expired-session-${row}`).digest("hex");

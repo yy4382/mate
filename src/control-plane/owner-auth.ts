@@ -88,15 +88,13 @@ export class OwnerAuth {
 
   hasSession(token: string): boolean {
     const row = this.db
-      .prepare(
-        "SELECT 1 AS valid FROM owner_sessions WHERE token_hash=? AND revoked_at IS NULL AND expires_at>?",
-      )
+      .prepare("SELECT 1 AS valid FROM owner_sessions WHERE token_hash=? AND expires_at>?")
       .get(hashToken(token), this.now());
     return row !== undefined;
   }
 
   revokeSession(token: string): void {
-    // A missing token hash is denied by hasSession just like a revoked row.
+    // Logout drops the row; a token whose row is gone is denied by hasSession.
     this.db.prepare("DELETE FROM owner_sessions WHERE token_hash=?").run(hashToken(token));
   }
 

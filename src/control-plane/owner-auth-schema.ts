@@ -8,7 +8,6 @@ CREATE TABLE owner_sessions (
   token_hash TEXT PRIMARY KEY CHECK(length(token_hash) = 64),
   created_at INTEGER NOT NULL,
   expires_at INTEGER NOT NULL,
-  revoked_at INTEGER,
   CHECK(expires_at > created_at)
 );
 CREATE INDEX owner_sessions_expiry ON owner_sessions(expires_at);
@@ -37,7 +36,6 @@ CREATE TABLE owner_messages (
   id TEXT PRIMARY KEY,
   channel_id TEXT NOT NULL REFERENCES owner_channels(id),
   order_seq INTEGER NOT NULL,
-  revision INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0),
   text TEXT NOT NULL,
   created_at INTEGER NOT NULL,
   author_kind TEXT NOT NULL DEFAULT 'human' CHECK(author_kind IN ('human','agent')),
@@ -47,7 +45,6 @@ CREATE TABLE owner_messages (
   internal_kind TEXT,
   UNIQUE(channel_id,order_seq)
 );
-CREATE INDEX owner_messages_channel_order ON owner_messages(channel_id,order_seq);
 CREATE TABLE owner_message_deliveries (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
   id TEXT NOT NULL UNIQUE,

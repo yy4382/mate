@@ -1889,15 +1889,15 @@ it("lets one Agent discover and open an explicit peer DM that both Agents and th
   });
 });
 
-it("uses the persisted independent-review seat and refuses stale or forged tool runs", async () => {
-  const { app, cookie, db, nodeId, socket } = await setup();
+it("keeps a running Agent's tool catalogue and refuses stale or forged tool runs", async () => {
+  const { app, cookie, nodeId, socket } = await setup();
   const agentId = randomUUID();
   app.agents.prepare({
     id: agentId,
     nodeId,
-    name: "Independent reviewer",
-    role: "Checks a clean input path",
-    description: "Synthetic reviewer fixture.",
+    name: "Tool caller",
+    role: "Calls shared conversation tools",
+    description: "Synthetic tool fixture.",
     model: { provider: "openai", id: "gpt-4.1" },
   });
   app.agents.complete(
@@ -1918,20 +1918,29 @@ it("uses the persisted independent-review seat and refuses stale or forged tool 
     body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
   });
   const runStart = socket.sent.length;
-  app.chat.createMessage(direct.id, "Start reviewer run.");
+  app.chat.createMessage(direct.id, "Start a tool-call run.");
   const run = await waitForRun(socket, runStart);
-  db.prepare("UPDATE owner_agent_runs SET independent_review=1 WHERE id=?").run(run.runId);
 
-  const listed = await callAgentTool(app, socket, run, "review-tools-list", "tools.list", {});
-  expect(listed).toMatchObject({ ok: true, result: { tools: [] } });
-  const directCall = await callAgentTool(app, socket, run, "review-direct-call", "tools.call", {
+  const listed = await callAgentTool(app, socket, run, "normal-tools-list", "tools.list", {});
+  expect(listed).toMatchObject({
+    ok: true,
+    result: {
+      tools: expect.arrayContaining([
+        expect.objectContaining({ name: "conversations.list" }),
+        expect.objectContaining({ name: "process.exec" }),
+      ]),
+    },
+  });
+  const directCall = await callAgentTool(app, socket, run, "normal-direct-call", "tools.call", {
     name: "conversations.list",
     input: {},
   });
-  expect(directCall).toMatchObject({
-    ok: false,
-    error: "Independent review seat isolates this input path",
-  });
+  expect(directCall).toMatchObject({ ok: true });
+  expect(
+    (directCall.result as { conversations: Array<{ id: string }> }).conversations.some(
+      (conversation) => conversation.id === direct.id,
+    ),
+  ).toBe(true);
 
   const otherNode = await pairAnotherNode(app, cookie),
     forgedNode = await callAgentTool(app, otherNode.socket, run, "forged-node-call", "tools.call", {

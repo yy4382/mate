@@ -22,7 +22,6 @@ interface Message {
   author: { kind: "human"; id: "owner" } | { kind: "agent"; id: string };
   text: string;
   order: string;
-  revision: string;
   createdAt: number;
 }
 

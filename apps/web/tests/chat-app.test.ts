@@ -26,7 +26,6 @@ interface FixtureMessage {
   author: { kind: "human"; id: "owner" } | { kind: "agent"; id: string };
   text: string;
   order: string;
-  revision: string;
   createdAt: number;
 }
 
@@ -170,7 +169,6 @@ function message(channelId: string, id: string, text: string, order: string): Fi
     author: { kind: "human", id: "owner" },
     text,
     order,
-    revision: "1",
     createdAt: Date.now(),
   };
 }

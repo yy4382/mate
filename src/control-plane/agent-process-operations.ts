@@ -53,7 +53,6 @@ interface OperationRow {
   run_id: string;
   agent_id: string;
   node_id: string;
-  stable_action_id: string;
   request_hash: string;
   request_json: string;
   state: "executing" | Exclude<AgentProcessOperationState, "started">;
@@ -118,17 +117,15 @@ export class AgentProcessOperationBroker {
         this.database
           .prepare(
             `INSERT INTO owner_agent_process_operations(
-              operation_id,run_id,agent_id,node_id,action_scope_id,stable_action_id,
+              operation_id,run_id,agent_id,node_id,
               request_hash,request_json,state,created_at,updated_at
-            ) VALUES(?,?,?,?,?,?,?,?,'executing',?,?)`,
+            ) VALUES(?,?,?,?,?,?,'executing',?,?)`,
           )
           .run(
             operationId,
             runId,
             agentId,
             nodeId,
-            actionScopeId,
-            stableActionId,
             requestHash,
             requestJson,
             this.now(),

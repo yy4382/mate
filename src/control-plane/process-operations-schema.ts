@@ -5,8 +5,6 @@ CREATE TABLE owner_agent_process_operations (
   run_id TEXT NOT NULL REFERENCES owner_agent_runs(id),
   agent_id TEXT NOT NULL REFERENCES owner_agents(id),
   node_id TEXT NOT NULL REFERENCES nodes(id),
-  action_scope_id TEXT NOT NULL,
-  stable_action_id TEXT NOT NULL,
   request_hash TEXT NOT NULL CHECK(length(request_hash)=64),
   request_json TEXT NOT NULL,
   state TEXT NOT NULL CHECK(state IN ('executing','succeeded','failed','unknown')),

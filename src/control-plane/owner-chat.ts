@@ -47,7 +47,6 @@ export interface OwnerMessage {
   author: { kind: "human"; id: "owner" } | { kind: "agent"; id: string };
   text: string;
   order: string;
-  revision: string;
   createdAt: number;
 }
 
@@ -161,7 +160,6 @@ interface ActiveAgentToolRun {
   action_scope_id: string;
   session_id: string;
   state: string;
-  independent_review: number;
   input_end_seq: number;
 }
 
@@ -193,7 +191,6 @@ interface MessageRow {
   id: string;
   channel_id: string;
   order_seq: number;
-  revision: number;
   text: string;
   root_id?: string | null;
   quote_id?: string | null;
@@ -205,6 +202,7 @@ interface MessageRow {
 interface TaskRow {
   id: string;
   message_id: string;
+  /** The anchor message's channel; a task row keeps no copy of its own. */
   channel_id: string;
   title: string;
   status: OwnerTask["status"];
@@ -256,7 +254,6 @@ interface PendingDeliveryRow {
   state: "pending";
   delivery_created_at: number;
   order_seq: number;
-  revision: number;
   text: string;
   root_id: string | null;
   quote_id: string | null;
@@ -266,6 +263,15 @@ interface PendingDeliveryRow {
 }
 
 const eventRetention = 1000;
+
+/**
+ * One projection for every task read. A task keeps no channel of its own: the channel always comes
+ * from its anchor message, so task detail, per-message lookup and the task list cannot disagree.
+ */
+const taskSelection = `SELECT t.*,a.name AS owner_agent_name,m.channel_id
+         FROM owner_tasks t
+         JOIN owner_messages m ON m.id=t.message_id
+         LEFT JOIN owner_agents a ON a.id=t.owner_agent_id`;
 
 /** Owner-facing channel facts committed in the control-plane database. */
 export class OwnerChat {
@@ -346,11 +352,9 @@ export class OwnerChat {
         try {
           external = this.db
             .transaction(() => {
-              const run = this.activeAgentToolRun(runId, nodeId, agentId),
-                entry = agentWorkspaceOperations[request.data.name as AgentWorkspaceOperation];
-              if (run.independent_review === 1 && entry.seatPolicy === "deny")
-                throw new AgentToolRefusal("Independent review seat isolates this input path");
-              const parsedInput = entry.schema.parse(request.data.input);
+              this.requireActiveAgentToolRun(runId, nodeId, agentId);
+              const entry = agentWorkspaceOperations[request.data.name as AgentWorkspaceOperation],
+                parsedInput = entry.schema.parse(request.data.input);
               if (
                 typeof parsedInput !== "object" ||
                 parsedInput === null ||
@@ -383,17 +387,14 @@ export class OwnerChat {
     try {
       const result = this.db
         .transaction(() => {
-          const run = this.activeAgentToolRun(runId, nodeId, agentId),
-            reviewSeat = run.independent_review === 1;
+          const run = this.requireActiveAgentToolRun(runId, nodeId, agentId);
           if (operation === "tools.list") {
             agentToolSchemas["tools.list"].parse(input);
             return {
               tools: [
                 ...Object.entries(agentMateOperations),
                 ...Object.entries(agentProcessToolOperations),
-              ]
-                .filter(([, entry]) => !reviewSeat || entry.seatPolicy !== "deny")
-                .map(([name, entry]) => ({ name, description: entry.description })),
+              ].map(([name, entry]) => ({ name, description: entry.description })),
             };
           }
           if (operation === "tools.describe") {
@@ -402,8 +403,7 @@ export class OwnerChat {
                 agentConversationOperations[request.name as AgentConversationOperation] ??
                 agentWorkspaceOperations[request.name as AgentWorkspaceOperation] ??
                 agentProcessToolOperations[request.name as keyof typeof agentProcessToolOperations];
-            if (!entry || (reviewSeat && entry.seatPolicy === "deny"))
-              throw new AgentToolRefusal("Unknown operation");
+            if (!entry) throw new AgentToolRefusal("Unknown operation");
             return {
               name: request.name,
               description: entry.description,
@@ -412,13 +412,7 @@ export class OwnerChat {
           }
           if (operation !== "tools.call") throw new AgentToolRefusal("Unknown operation");
           const request = agentToolSchemas["tools.call"].parse(input);
-          return this.executeConversationOperation(
-            run,
-            reviewSeat,
-            toolCallId,
-            request.name,
-            request.input,
-          );
+          return this.executeConversationOperation(run, toolCallId, request.name, request.input);
         })
         .immediate();
       return { ok: true, result };
@@ -441,7 +435,7 @@ export class OwnerChat {
     if (!operation) throw new Error("Unknown process operation");
     return this.db
       .transaction(() => {
-        const run = this.activeAgentToolRun(runId, nodeId, agentId),
+        const run = this.requireActiveAgentToolRun(runId, nodeId, agentId),
           entry = agentProcessToolOperations[name as keyof typeof agentProcessToolOperations];
         if (!entry) throw new Error("Agent process operation was refused");
         return { actionScopeId: run.action_scope_id, operation };
@@ -692,7 +686,6 @@ export class OwnerChat {
           id,
           channel_id: channelId,
           order_seq: sequence.next,
-          revision: 1,
           text,
           root_id: position.rootId ?? null,
           quote_id: position.quoteId ?? null,
@@ -759,7 +752,6 @@ export class OwnerChat {
           id,
           channel_id: channel.id,
           order_seq: sequence.next,
-          revision: 1,
           text,
           author_kind: "agent",
           author_id: "mate-system",
@@ -796,7 +788,7 @@ export class OwnerChat {
 
   /** Insert the one task row for a message; callers own its status, owner and recorded events. */
   private insertTask(
-    message: { id: string; channel_id: string; text: string },
+    message: { id: string; text: string },
     status: OwnerTask["status"],
     ownerAgentId: string | null,
     at: number,
@@ -804,18 +796,9 @@ export class OwnerChat {
     const id = randomUUID();
     this.db
       .prepare(
-        "INSERT INTO owner_tasks(id,message_id,channel_id,title,status,owner_agent_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+        "INSERT INTO owner_tasks(id,message_id,title,status,owner_agent_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
       )
-      .run(
-        id,
-        message.id,
-        message.channel_id,
-        message.text.slice(0, 200),
-        status,
-        ownerAgentId,
-        at,
-        at,
-      );
+      .run(id, message.id, message.text.slice(0, 200), status, ownerAgentId, at, at);
     return id;
   }
 
@@ -918,30 +901,19 @@ export class OwnerChat {
   }
 
   readTask(id: string): OwnerTask | undefined {
-    const row = this.db
-      .prepare(
-        "SELECT t.*,a.name AS owner_agent_name FROM owner_tasks t LEFT JOIN owner_agents a ON a.id=t.owner_agent_id WHERE t.id=?",
-      )
-      .get(id) as TaskRow | undefined;
+    const row = this.db.prepare(`${taskSelection} WHERE t.id=?`).get(id) as TaskRow | undefined;
     return row && toTask(row);
   }
 
   taskForMessage(messageId: string): OwnerTask | undefined {
-    const row = this.db
-      .prepare(
-        "SELECT t.*,a.name AS owner_agent_name FROM owner_tasks t LEFT JOIN owner_agents a ON a.id=t.owner_agent_id WHERE t.message_id=?",
-      )
-      .get(messageId) as TaskRow | undefined;
+    const row = this.db.prepare(`${taskSelection} WHERE t.message_id=?`).get(messageId) as
+      TaskRow | undefined;
     return row && toTask(row);
   }
 
   listTasks(): OwnerTask[] {
     return (
-      this.db
-        .prepare(
-          "SELECT t.*,a.name AS owner_agent_name FROM owner_tasks t LEFT JOIN owner_agents a ON a.id=t.owner_agent_id ORDER BY t.updated_at DESC,t.id DESC",
-        )
-        .all() as TaskRow[]
+      this.db.prepare(`${taskSelection} ORDER BY t.updated_at DESC,t.id DESC`).all() as TaskRow[]
     ).map(toTask);
   }
 
@@ -1216,7 +1188,7 @@ export class OwnerChat {
       .prepare(
         `SELECT d.seq AS delivery_sequence,d.id AS delivery_id,d.message_id,d.channel_id,
                 d.recipient_kind,d.recipient_id,d.state,d.created_at AS delivery_created_at,
-                m.order_seq,m.revision,m.text,m.root_id,m.quote_id,m.author_kind,m.author_id,m.created_at
+                m.order_seq,m.text,m.root_id,m.quote_id,m.author_kind,m.author_id,m.created_at
          FROM owner_message_deliveries d JOIN owner_messages m ON m.id=d.message_id
          WHERE d.recipient_kind=? AND d.recipient_id=? AND d.state='pending' AND d.seq>?
          ORDER BY d.seq LIMIT ?`,
@@ -1235,7 +1207,6 @@ export class OwnerChat {
           id: row.message_id,
           channel_id: row.channel_id,
           order_seq: row.order_seq,
-          revision: row.revision,
           text: row.text,
           root_id: row.root_id,
           quote_id: row.quote_id,
@@ -1358,7 +1329,7 @@ export class OwnerChat {
       return undefined;
     const rows = this.db
       .prepare(
-        "SELECT id,channel_id,order_seq,revision,text,root_id,quote_id,author_kind,author_id,created_at FROM owner_messages WHERE channel_id=? AND root_id IS NULL AND internal_kind IS NULL AND (? IS NULL OR order_seq < ?) ORDER BY order_seq DESC LIMIT ?",
+        "SELECT id,channel_id,order_seq,text,root_id,quote_id,author_kind,author_id,created_at FROM owner_messages WHERE channel_id=? AND root_id IS NULL AND internal_kind IS NULL AND (? IS NULL OR order_seq < ?) ORDER BY order_seq DESC LIMIT ?",
       )
       .all(channelId, before ?? null, before ?? null, limit + 1) as MessageRow[];
     const hasMore = rows.length > limit,
@@ -1372,7 +1343,7 @@ export class OwnerChat {
   messageContext(channelId: string, messageId: string) {
     const row = this.db
       .prepare(
-        "SELECT id,channel_id,order_seq,revision,text,root_id,quote_id,author_kind,author_id,created_at FROM owner_messages WHERE id=? AND channel_id=? AND internal_kind IS NULL",
+        "SELECT id,channel_id,order_seq,text,root_id,quote_id,author_kind,author_id,created_at FROM owner_messages WHERE id=? AND channel_id=? AND internal_kind IS NULL",
       )
       .get(messageId, channelId) as MessageRow | undefined;
     if (!row) return undefined;
@@ -1392,13 +1363,13 @@ export class OwnerChat {
   ): { root: OwnerMessage; replies: OwnerMessage[] } | undefined {
     const root = this.db
       .prepare(
-        "SELECT id,channel_id,order_seq,revision,text,root_id,quote_id,author_kind,author_id,created_at FROM owner_messages WHERE id=? AND channel_id=? AND root_id IS NULL AND internal_kind IS NULL",
+        "SELECT id,channel_id,order_seq,text,root_id,quote_id,author_kind,author_id,created_at FROM owner_messages WHERE id=? AND channel_id=? AND root_id IS NULL AND internal_kind IS NULL",
       )
       .get(rootId, channelId) as MessageRow | undefined;
     if (!root) return undefined;
     const replies = this.db
       .prepare(
-        "SELECT id,channel_id,order_seq,revision,text,root_id,quote_id,author_kind,author_id,created_at FROM owner_messages WHERE channel_id=? AND root_id=? ORDER BY order_seq",
+        "SELECT id,channel_id,order_seq,text,root_id,quote_id,author_kind,author_id,created_at FROM owner_messages WHERE channel_id=? AND root_id=? ORDER BY order_seq",
       )
       .all(channelId, rootId) as MessageRow[];
     return { root: this.withReplyPreview(toMessage(root)), replies: replies.map(toMessage) };
@@ -1407,7 +1378,7 @@ export class OwnerChat {
   private withReplyPreview(message: OwnerMessage): OwnerMessage {
     const rows = this.db
       .prepare(
-        "SELECT id,channel_id,order_seq,revision,text,root_id,quote_id,author_kind,author_id,created_at FROM owner_messages WHERE channel_id=? AND root_id=? ORDER BY order_seq DESC LIMIT 3",
+        "SELECT id,channel_id,order_seq,text,root_id,quote_id,author_kind,author_id,created_at FROM owner_messages WHERE channel_id=? AND root_id=? ORDER BY order_seq DESC LIMIT 3",
       )
       .all(message.channelId, message.id) as MessageRow[];
     const count = this.db
@@ -1426,11 +1397,15 @@ export class OwnerChat {
     return toChannel(row);
   }
 
-  private activeAgentToolRun(runId: string, nodeId: string, agentId: string): ActiveAgentToolRun {
+  private requireActiveAgentToolRun(
+    runId: string,
+    nodeId: string,
+    agentId: string,
+  ): ActiveAgentToolRun {
     const run = this.db
       .prepare(
         `SELECT r.id AS run_id,r.agent_id,r.node_id,r.delivery_id AS action_scope_id,
-                r.state,r.independent_review,r.input_end_seq,s.id AS session_id,
+                r.state,r.input_end_seq,s.id AS session_id,
                 a.node_id AS current_node_id
          FROM owner_agent_runs r
          JOIN owner_agents a ON a.id=r.agent_id
@@ -1446,16 +1421,12 @@ export class OwnerChat {
 
   private executeConversationOperation(
     run: ActiveAgentToolRun,
-    reviewSeat: boolean,
     toolCallId: string,
     name: string,
     input: Record<string, unknown>,
   ): unknown {
     if (!Object.hasOwn(agentConversationOperations, name))
       throw new AgentToolRefusal("Unknown operation");
-    const entry = agentConversationOperations[name as AgentConversationOperation];
-    if (reviewSeat && entry.seatPolicy === "deny")
-      throw new AgentToolRefusal("Independent review seat isolates this input path");
 
     switch (name as AgentConversationOperation) {
       case "agents.list":
@@ -2018,7 +1989,7 @@ export class OwnerChat {
   ): OwnerMessage[] {
     const rows = this.db
       .prepare(
-        `SELECT m.id,m.channel_id,m.order_seq,m.revision,m.text,m.root_id,m.quote_id,m.author_kind,m.author_id,m.created_at
+        `SELECT m.id,m.channel_id,m.order_seq,m.text,m.root_id,m.quote_id,m.author_kind,m.author_id,m.created_at
       FROM owner_messages m WHERE m.channel_id=?
       AND NOT (m.author_kind='agent' AND m.author_id=?)
       AND (? IS NULL OR m.id=? OR m.root_id=?)
@@ -2042,7 +2013,7 @@ export class OwnerChat {
   private unreviewedDraftChanges(draft: ReturnType<OwnerChat["readAgentDraft"]>): OwnerMessage[] {
     const rows = this.db
       .prepare(
-        `SELECT m.id,m.channel_id,m.order_seq,m.revision,m.text,m.root_id,m.quote_id,m.author_kind,m.author_id,m.created_at
+        `SELECT m.id,m.channel_id,m.order_seq,m.text,m.root_id,m.quote_id,m.author_kind,m.author_id,m.created_at
       FROM owner_messages m WHERE m.channel_id=?
       AND NOT (m.author_kind='agent' AND m.author_id=?)
       AND (? IS NULL OR m.id=? OR m.root_id=?)
@@ -2389,7 +2360,6 @@ export class OwnerChat {
       id,
       channel_id: channelId,
       order_seq: sequence.next,
-      revision: 1,
       text,
       root_id: rootId ?? null,
       quote_id: quoteId ?? null,
@@ -2508,7 +2478,6 @@ function toMessage(row: MessageRow): OwnerMessage {
         : { kind: "human", id: "owner" },
     text: row.text,
     order: String(row.order_seq),
-    revision: String(row.revision),
     createdAt: row.created_at,
   };
 }

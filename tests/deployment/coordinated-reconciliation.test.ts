@@ -153,18 +153,16 @@ function addCommandOperation(
   owner.db
     .prepare(
       `INSERT INTO owner_agent_process_operations(
-        operation_id,run_id,agent_id,node_id,action_scope_id,stable_action_id,
+        operation_id,run_id,agent_id,node_id,
         request_hash,request_json,state,receipt_json,node_receipt_confirmed,node_receipt_revision,
         created_at,updated_at
-      ) VALUES(?,?,?,?,?,?,?,?,?,NULL,?,?,1,1)`,
+      ) VALUES(?,?,?,?,?,?,?,NULL,?,?,1,1)`,
     )
     .run(
       operationId,
       runId,
       agentId,
       nodeId,
-      deliveryId,
-      `mate:${deliveryId}:${"a".repeat(64)}:1`,
       requestHash,
       request,
       control.state,
