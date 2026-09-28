@@ -263,6 +263,15 @@ interface PendingDeliveryRow {
 
 const eventRetention = 1000;
 
+/**
+ * One projection for every task read. A task keeps no channel of its own: the channel always comes
+ * from its anchor message, so task detail, per-message lookup and the task list cannot disagree.
+ */
+const taskSelection = `SELECT t.*,a.name AS owner_agent_name,m.channel_id
+         FROM owner_tasks t
+         JOIN owner_messages m ON m.id=t.message_id
+         LEFT JOIN owner_agents a ON a.id=t.owner_agent_id`;
+
 /** Owner-facing channel facts committed in the control-plane database. */
 export class OwnerChat {
   private externalAgentToolHandler?: ExternalAgentToolHandler;
@@ -902,42 +911,19 @@ export class OwnerChat {
   }
 
   readTask(id: string): OwnerTask | undefined {
-    const row = this.db
-      .prepare(
-        `SELECT t.*,a.name AS owner_agent_name,m.channel_id
-         FROM owner_tasks t
-         JOIN owner_messages m ON m.id=t.message_id
-         LEFT JOIN owner_agents a ON a.id=t.owner_agent_id
-         WHERE t.id=?`,
-      )
-      .get(id) as TaskRow | undefined;
+    const row = this.db.prepare(`${taskSelection} WHERE t.id=?`).get(id) as TaskRow | undefined;
     return row && toTask(row);
   }
 
   taskForMessage(messageId: string): OwnerTask | undefined {
-    const row = this.db
-      .prepare(
-        `SELECT t.*,a.name AS owner_agent_name,m.channel_id
-         FROM owner_tasks t
-         JOIN owner_messages m ON m.id=t.message_id
-         LEFT JOIN owner_agents a ON a.id=t.owner_agent_id
-         WHERE t.message_id=?`,
-      )
-      .get(messageId) as TaskRow | undefined;
+    const row = this.db.prepare(`${taskSelection} WHERE t.message_id=?`).get(messageId) as
+      TaskRow | undefined;
     return row && toTask(row);
   }
 
   listTasks(): OwnerTask[] {
     return (
-      this.db
-        .prepare(
-          `SELECT t.*,a.name AS owner_agent_name,m.channel_id
-           FROM owner_tasks t
-           JOIN owner_messages m ON m.id=t.message_id
-           LEFT JOIN owner_agents a ON a.id=t.owner_agent_id
-           ORDER BY t.updated_at DESC,t.id DESC`,
-        )
-        .all() as TaskRow[]
+      this.db.prepare(`${taskSelection} ORDER BY t.updated_at DESC,t.id DESC`).all() as TaskRow[]
     ).map(toTask);
   }
 
