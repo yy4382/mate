@@ -139,7 +139,7 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
         : {}),
     },
     nodes = new NodeDirectory(ownerAuth.db, nodeOptions),
-    agents = new AgentDirectory(ownerAuth.db, options.now, nodes),
+    agents = new AgentDirectory(ownerAuth.db, options.now ?? Date.now, nodes),
     modelCredentials = new ModelCredentialDirectory(ownerAuth.db, options.now),
     ownerChat = new OwnerChat(ownerAuth.db, options.now),
     push = new OwnerPush(ownerAuth.db),

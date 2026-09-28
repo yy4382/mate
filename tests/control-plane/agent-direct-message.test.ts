@@ -17,6 +17,7 @@ import { createControlPlaneApp } from "../../src/control-plane/http.js";
 import { WorkspaceService } from "../../src/control-plane/workspace.js";
 import type { NodeSocket } from "../../src/control-plane/nodes/directory.js";
 import { runAgentModel, type AgentRunTransport } from "../../src/nodes/agent-runner.js";
+import { AgentProvisionStageSchema } from "../../src/nodes/protocol.js";
 import type { NodeControlMessage } from "../../src/nodes/protocol.js";
 import type { ModelContextMessage } from "../../src/nodes/model-worker.js";
 
@@ -3078,6 +3079,131 @@ it("sends an Agent's own workspace read of a peer workspace to the node as an ag
     headers: { cookie },
   });
   expect(await activity.text()).not.toContain("peer memory");
+});
+
+it("keeps file actions and publications away from an Agent that is still preparing", async () => {
+  const { app, cookie, db, nodeId, socket } = await setup(),
+    agentId = randomUUID();
+  app.agents.prepare({
+    id: agentId,
+    nodeId,
+    name: "Preparing partner",
+    role: "Has no accepted workspace yet",
+    description: "Synthetic preparation-gate fixture.",
+    model: { provider: "openai", id: "gpt-4.1" },
+  });
+  app.agents.complete(
+    agentId,
+    {
+      username: "mate-node-account",
+      uid: 23001,
+      gid: 23001,
+      workspace: `/var/lib/mate/agents/${agentId}`,
+      workspaceMarker: "a".repeat(64),
+    },
+    app.chat,
+  );
+  const channel = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  await app.request("/api/owner/model-credentials/openai", {
+    method: "PUT",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ apiKey: "synthetic-preparation-gate-key" }),
+  });
+  const runStart = socket.sent.length;
+  app.chat.createMessage(channel.id, "Touch the files.");
+  const run = await waitForRun(socket, runStart);
+
+  // The workspace path is already known, so only the preparation stage can refuse these actions.
+  db.prepare("UPDATE owner_agents SET stage='preparing_workspace' WHERE id=?").run(agentId);
+  const workspaceRequests: Array<Record<string, unknown>> = [];
+  socket.onWorkspaceOperation = (message) => {
+    workspaceRequests.push(message);
+  };
+
+  const read = await callAgentTool(app, socket, run, "preparing-read", "tools.call", {
+    name: "workspace.read",
+    input: { path: "MEMORY.md" },
+  });
+  // The run authorization in front of the workspace refuses the unfinished Agent, and nothing is
+  // sent to the node on its behalf.
+  expect(read).toMatchObject({ ok: false, error: "当前 Agent 运行无权访问此文件。" });
+  const publish = await callAgentTool(app, socket, run, "preparing-publish", "tools.call", {
+    name: "attachments.publish",
+    input: { channelId: channel.id, path: "note.txt" },
+  });
+  expect(publish).toMatchObject({ ok: false });
+  expect(workspaceRequests).toEqual([]);
+
+  // Finishing the same preparation lets the identical read reach the node.
+  db.prepare("UPDATE owner_agents SET stage='complete' WHERE id=?").run(agentId);
+  socket.onWorkspaceOperation = async (message) => {
+    workspaceRequests.push(message);
+    await app.nodes.receive(
+      socket,
+      JSON.stringify({
+        type: "node.workspace.operation.result",
+        requestId: message.requestId,
+        operationId: message.operationId,
+        agentId,
+        ok: true,
+        result: { code: 0, stdout: "memory\n", stderr: "", truncated: false },
+      }),
+    );
+  };
+  const accepted = await callAgentTool(app, socket, run, "prepared-read", "tools.call", {
+    name: "workspace.read",
+    input: { path: "MEMORY.md" },
+  });
+  expect(accepted).toMatchObject({ ok: true, result: { content: "memory\n" } });
+  expect(workspaceRequests).toHaveLength(1);
+});
+
+it("lets no progress or failure report move an Agent whose preparation already finished", async () => {
+  const { app, nodeId } = await setup(),
+    agentId = randomUUID();
+  app.agents.prepare({
+    id: agentId,
+    nodeId,
+    name: "Finished partner",
+    role: "Keeps the workspace it was given",
+    description: "Synthetic late-report fixture.",
+    model: { provider: "openai", id: "gpt-4.1" },
+  });
+  app.agents.complete(
+    agentId,
+    {
+      username: "mate-node-account",
+      uid: 23001,
+      gid: 23001,
+      workspace: `/var/lib/mate/agents/${agentId}`,
+      workspaceMarker: "a".repeat(64),
+    },
+    app.chat,
+  );
+  const completed = app.agents.get(agentId)!;
+
+  // A node that reports progress again, or reports a late failure, must not undo a workspace the
+  // completion transaction already accepted. `complete` is not even a stage the node protocol can
+  // report, so progress can never write it.
+  expect(AgentProvisionStageSchema.options).not.toContain("complete");
+  app.agents.updateStage(agentId, "checking_account");
+  app.agents.fail(agentId, "late node report");
+  expect(app.agents.get(agentId)).toMatchObject({
+    stage: "complete",
+    status: completed.status,
+    error: null,
+    linuxIdentity: completed.linuxIdentity,
+  });
+  expect(
+    app.agents.prepare({
+      id: agentId,
+      nodeId,
+      name: "Finished partner",
+      role: "Keeps the workspace it was given",
+      description: "Synthetic late-report fixture.",
+      model: { provider: "openai", id: "gpt-4.1" },
+    }),
+  ).toMatchObject({ created: false, shouldProvision: false });
 });
 
 it("replays a confirmed failed file action as the same error after control-plane restart", async () => {

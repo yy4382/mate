@@ -4,7 +4,7 @@ import { basename, resolve } from "node:path";
 import type { AgentWorkspaceIdentity } from "../../nodes/agent-provisioner.js";
 import type { AgentProvisionStage } from "../../nodes/protocol.js";
 import { NodeAccountConflict } from "../nodes/directory.js";
-import type { NodeDirectory } from "../nodes/directory.js";
+import type { NodeAccount, NodeDirectory } from "../nodes/directory.js";
 import type { OwnerChat } from "../owner-chat.js";
 import type {
   AgentSummary,
@@ -38,6 +38,21 @@ interface AgentRow {
   updated_at: number;
   provider_credential: number;
 }
+
+/**
+ * The stages a node's progress and failure reports may still move. A finished or failed Agent is
+ * never moved by a later report; `tests/storage/control-plane-database.test.ts` fails if the table
+ * ever declares a stage this list does not carry, so a new stage cannot leave the guarded updates
+ * silently ignoring it.
+ */
+export const preparingStages = [
+  "queued",
+  "checking_account",
+  "preparing_workspace",
+  "verifying_workspace",
+] as const;
+
+const preparingStageList = preparingStages.map((stage) => `'${stage}'`).join(",");
 
 export class AgentRequestConflict extends Error {
   constructor(message: string) {
@@ -73,8 +88,9 @@ const agentRowQuery = `
 export class AgentDirectory {
   constructor(
     private readonly db: Database.Database,
-    private readonly now: () => number = Date.now,
-    private readonly nodes?: NodeDirectory,
+    private readonly now: () => number,
+    /** Records and verifies the one ordinary account the Agent's node runs under. */
+    private readonly nodes: NodeDirectory,
   ) {}
 
   list(): AgentSummary[] {
@@ -199,7 +215,7 @@ export class AgentDirectory {
     this.db
       .prepare(
         `UPDATE owner_agents SET stage=?,updated_at=?
-         WHERE id=? AND stage IN ('queued','checking_account','preparing_workspace','verifying_workspace')`,
+         WHERE id=? AND stage IN (${preparingStageList})`,
       )
       .run(stage, this.now(), id);
   }
@@ -208,7 +224,7 @@ export class AgentDirectory {
     this.db
       .prepare(
         `UPDATE owner_agents SET stage='failed',error=?,updated_at=?
-         WHERE id=? AND stage IN ('queued','checking_account','preparing_workspace','verifying_workspace')`,
+         WHERE id=? AND stage IN (${preparingStageList})`,
       )
       .run(message.slice(0, 240), this.now(), id);
     return this.get(id);
@@ -224,8 +240,6 @@ export class AgentDirectory {
       .transaction(() => {
         const current = this.read(id);
         if (!current) throw new Error("Agent record disappeared during provisioning");
-        if (!this.nodes)
-          throw new Error("Agent completion needs the node directory to record the node account");
         if (
           basename(identity.workspace) !== id.toLowerCase() ||
           resolve(identity.workspace) !== identity.workspace
@@ -249,7 +263,22 @@ export class AgentDirectory {
           // Every Agent on one node runs under that node's single ordinary account. This
           // transaction records it on the node the first time and requires every later Agent on
           // that node to report the same one; a mismatch throws before anything is written.
-          account = { username: identity.username, uid: identity.uid, gid: identity.gid };
+          account: NodeAccount = {
+            username: identity.username,
+            uid: identity.uid,
+            gid: identity.gid,
+          };
+        // The Agent must still be preparing. A concurrent failure or an already finished Agent
+        // must not have its stage overwritten, and the node account must not be recorded for a
+        // workspace that was never accepted.
+        const finished = this.db
+          .prepare(
+            `UPDATE owner_agents SET stage='complete',error=NULL,home=?,home_marker=?,updated_at=?
+             WHERE id=? AND stage IN (${preparingStageList})`,
+          )
+          .run(identity.workspace, identity.workspaceMarker, at, id);
+        if (finished.changes !== 1)
+          throw new AgentRequestConflict("Agent 的准备状态已变化，未完成的工作区不会被记录。");
         try {
           this.nodes.recordAccount(current.node_id, account);
         } catch (error) {
@@ -258,12 +287,6 @@ export class AgentDirectory {
           if (error instanceof NodeAccountConflict) throw new AgentRequestConflict(error.message);
           throw error;
         }
-        this.db
-          .prepare(
-            `UPDATE owner_agents SET stage='complete',error=NULL,home=?,home_marker=?,updated_at=?
-             WHERE id=? AND stage IN ('queued','checking_account','preparing_workspace','verifying_workspace')`,
-          )
-          .run(identity.workspace, identity.workspaceMarker, at, id);
         if (
           current.initial_channel_id &&
           !ownerChat.inviteAgentToChannel(current.initial_channel_id, id)

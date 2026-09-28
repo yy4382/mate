@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { OwnerAuth } from "../../src/control-plane/owner-auth.js";
+import { preparingStages } from "../../src/control-plane/agents/directory.js";
 import { controlPlaneSchema } from "../../src/control-plane/schema.js";
 
 const dataDirectories: string[] = [];
@@ -171,6 +172,29 @@ it("a new data directory gets the complete format without the Push service", () 
     ]);
   } finally {
     auth.close();
+  }
+});
+
+it("declares a preparation stage the owner_agents CHECK constraint and the guarded updates agree on", () => {
+  const database = new Database(":memory:");
+  database.exec(controlPlaneSchema);
+  try {
+    const declaration = (
+      database
+        .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='owner_agents'")
+        .get() as { sql: string }
+    ).sql;
+    const declared = declaration
+      .match(/stage TEXT NOT NULL CHECK\(stage IN \(([^)]*)\)\)/)![1]!
+      .split(",")
+      .map((stage) => stage.trim().replaceAll("'", ""));
+    // A stage the table accepts but the guarded updates do not name would leave a node report
+    // silently moving nothing.
+    expect(declared.filter((stage) => stage !== "complete" && stage !== "failed")).toEqual([
+      ...preparingStages,
+    ]);
+  } finally {
+    database.close();
   }
 });
 

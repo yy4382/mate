@@ -745,10 +745,7 @@ export class WorkspaceService {
 
   private requireAgent(agentId: string): WorkspaceAgent {
     const row = this.db
-      .prepare(
-        `SELECT a.id,a.node_id,a.stage,a.home
-         FROM owner_agents a JOIN owner_agent_sessions s ON s.agent_id=a.id WHERE a.id=?`,
-      )
+      .prepare(`SELECT a.id,a.node_id,a.stage,a.home FROM owner_agents a WHERE a.id=?`)
       .get(agentId) as WorkspaceAgent | undefined;
     if (!row || row.home === null || row.stage !== "complete")
       throw new WorkspaceError("agent_unavailable", "Agent 工作区尚未准备好。", 404);

@@ -501,7 +501,6 @@ export class AttachmentService {
         `SELECT 1
          FROM owner_agent_runs r
          JOIN owner_agents a ON a.id=r.agent_id AND a.node_id=r.node_id
-         JOIN owner_agent_sessions s ON s.agent_id=a.id
          JOIN owner_channels c ON c.id=? AND c.archived=0
          LEFT JOIN owner_channel_memberships member ON member.channel_id=?
            AND member.principal_kind='agent' AND member.principal_id=a.id AND member.active=1
@@ -533,7 +532,6 @@ export class AttachmentService {
         `SELECT 1
          FROM owner_agent_runs r
          JOIN owner_agents a ON a.id=r.agent_id AND a.node_id=r.node_id
-         JOIN owner_agent_sessions s ON s.agent_id=a.id
          JOIN owner_channels c ON c.id=? AND c.archived=0
          JOIN owner_channel_memberships agent ON agent.channel_id=?
            AND agent.principal_kind='agent' AND agent.principal_id=a.id AND agent.active=1
