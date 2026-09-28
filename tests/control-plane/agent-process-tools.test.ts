@@ -214,18 +214,22 @@ it("marks a committed process intent unknown before a recovered node can start a
     at = Date.now();
   db.prepare(
     `INSERT INTO owner_agent_process_operations(
-    operation_id,run_id,agent_id,node_id,action_scope_id,stable_action_id,
+    operation_id,run_id,agent_id,node_id,
     request_hash,request_json,state,created_at,updated_at
-  ) VALUES(?,?,?,?,?,?,?,?,'executing',?,?)`,
+  ) VALUES(?,?,?,?,?,?,'executing',?,?)`,
   ).run(
     operationId,
     run.runId,
     agentId,
     nodeId,
-    run.actionScopeId,
-    actionId,
     "f".repeat(64),
-    JSON.stringify({ operation: { kind: "exec", command: "true" } }),
+    JSON.stringify({
+      actionScopeId: run.actionScopeId,
+      stableActionId: actionId,
+      nodeId,
+      agentId,
+      operation: { kind: "exec", command: "true" },
+    }),
     at,
     at,
   );
@@ -314,21 +318,26 @@ it("rechecks stopped scopes after a restarted node confirms an ordinary operatio
   const start = socket.sent.length;
   app.chat.createMessage(direct.id, "Start a command.");
   const run = await waitForRun(socket, start);
-  const operationId = randomUUID();
+  const operationId = randomUUID(),
+    stableActionId = `mate:${run.actionScopeId}:${"c".repeat(64)}:1`;
   db.prepare(
     `INSERT INTO owner_agent_process_operations(
-      operation_id,run_id,agent_id,node_id,action_scope_id,stable_action_id,
+      operation_id,run_id,agent_id,node_id,
       request_hash,request_json,state,receipt_json,created_at,updated_at
-    ) VALUES(?,?,?,?,?,?,?,?,'unknown',?,?,?)`,
+    ) VALUES(?,?,?,?,?,?,'unknown',?,?,?)`,
   ).run(
     operationId,
     run.runId,
     agentId,
     nodeId,
-    run.actionScopeId,
-    `mate:${run.actionScopeId}:${"c".repeat(64)}:1`,
     "c".repeat(64),
-    JSON.stringify({ operation: { kind: "exec", command: "true" } }),
+    JSON.stringify({
+      actionScopeId: run.actionScopeId,
+      stableActionId,
+      nodeId,
+      agentId,
+      operation: { kind: "exec", command: "true" },
+    }),
     JSON.stringify({ reason: "node_response_unavailable" }),
     Date.now(),
     Date.now(),
@@ -1002,17 +1011,17 @@ it("reconciles a durable node receipt before resuming a disconnected Agent", asy
   });
 
   const stored = db
-    .prepare(
-      `SELECT run_id,action_scope_id,stable_action_id,request_json
-    FROM owner_agent_process_operations WHERE operation_id=?`,
-    )
+    .prepare(`SELECT run_id,request_json FROM owner_agent_process_operations WHERE operation_id=?`)
     .get(secondOperation!.operationId) as {
     run_id: string;
-    action_scope_id: string;
-    stable_action_id: string;
     request_json: string;
   };
-  const originalRequest = JSON.parse(stored.request_json) as { operation: unknown };
+  // The committed request is the only record of the operation's identity; a replay reads it there.
+  const originalRequest = JSON.parse(stored.request_json) as {
+    actionScopeId: string;
+    stableActionId: string;
+    operation: unknown;
+  };
   const replayStart = again.sent.length;
   // Keep the saved execution boundary active while exercising the broker's direct response path.
   db.prepare(
@@ -1023,8 +1032,8 @@ it("reconciles a durable node receipt before resuming a disconnected Agent", asy
     runId: stored.run_id,
     nodeId,
     agentId,
-    actionScopeId: stored.action_scope_id,
-    stableActionId: stored.stable_action_id,
+    actionScopeId: originalRequest.actionScopeId,
+    stableActionId: originalRequest.stableActionId,
     operationId: secondOperation!.operationId as string,
     operation: originalRequest.operation,
   });

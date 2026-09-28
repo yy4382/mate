@@ -322,16 +322,14 @@ it("reports an earlier command whose termination the node cannot confirm as unkn
     ).run(runId, id, nodeId, delivery.id, at);
     db.prepare(
       `INSERT INTO owner_agent_process_operations(
-        operation_id,run_id,agent_id,node_id,action_scope_id,stable_action_id,
+        operation_id,run_id,agent_id,node_id,
         request_hash,request_json,state,receipt_json,node_receipt_confirmed,created_at,updated_at
-      ) VALUES(?,?,?,?,?,?,?,?,'unknown',?,1,?,?)`,
+      ) VALUES(?,?,?,?,?,?,'unknown',?,1,?,?)`,
     ).run(
       earlierOperationId,
       runId,
       id,
       nodeId,
-      delivery.id,
-      `mate:${delivery.id}:${"d".repeat(64)}:1`,
       "d".repeat(64),
       JSON.stringify({ operation: { kind: "exec", command: "sleep 300" } }),
       JSON.stringify({ reason: "node_restarted_during_operation" }),
@@ -426,17 +424,15 @@ it("counts every command whose termination nothing proved, however the node answ
       db
         .prepare(
           `INSERT INTO owner_agent_process_operations(
-             operation_id,run_id,agent_id,node_id,action_scope_id,stable_action_id,
+             operation_id,run_id,agent_id,node_id,
              request_hash,request_json,state,receipt_json,node_receipt_confirmed,created_at,updated_at
-           ) VALUES(?,?,?,?,?,?,?,?,?,?,1,?,?)`,
+           ) VALUES(?,?,?,?,?,?,?,?,1,?,?)`,
         )
         .run(
           operationId,
           runId,
           id,
           nodeId,
-          delivery.id,
-          `mate:${delivery.id}:${randomUUID().replaceAll("-", "").padEnd(64, "0").slice(0, 64)}:1`,
           "e".repeat(64),
           JSON.stringify({ operation: { kind: "exec", command } }),
           state,

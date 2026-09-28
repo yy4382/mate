@@ -268,9 +268,9 @@ it("creates and claims the one task for a readable top-level message and refuses
   expect(() =>
     db
       .prepare(
-        "INSERT INTO owner_tasks(id,message_id,channel_id,title,status,created_at,updated_at) VALUES(?,?,?,?,'open',1,1)",
+        "INSERT INTO owner_tasks(id,message_id,title,status,created_at,updated_at) VALUES(?,?,?,'open',1,1)",
       )
-      .run(randomUUID(), anchor.id, room.id, "Duplicate"),
+      .run(randomUUID(), anchor.id, "Duplicate"),
   ).toThrow(/UNIQUE/);
 
   // Repeating the call for a task you already own neither duplicates nor churns it.
@@ -402,7 +402,11 @@ it("anchors a claim made from a thread reply on the original top-level message",
   });
   expect(app.chat.taskForMessage(reply.id)).toBeUndefined();
   expect(
-    db.prepare("SELECT COUNT(*) AS tasks FROM owner_tasks WHERE channel_id=?").get(room.id),
+    db
+      .prepare(
+        "SELECT COUNT(*) AS tasks FROM owner_tasks t JOIN owner_messages m ON m.id=t.message_id WHERE m.channel_id=?",
+      )
+      .get(room.id),
   ).toEqual({ tasks: 1 });
 
   expect(
@@ -460,7 +464,11 @@ it("claims the task already anchored on the named reply instead of a second task
   });
   expect(app.chat.taskForMessage(top.id)).toBeUndefined();
   expect(
-    db.prepare("SELECT COUNT(*) AS tasks FROM owner_tasks WHERE channel_id=?").get(room.id),
+    db
+      .prepare(
+        "SELECT COUNT(*) AS tasks FROM owner_tasks t JOIN owner_messages m ON m.id=t.message_id WHERE m.channel_id=?",
+      )
+      .get(room.id),
   ).toEqual({ tasks: 1 });
 });
 
@@ -754,7 +762,11 @@ it("does not turn task ownership into conversation access or make talk require a
     }),
   ).toMatchObject({ ok: true });
   expect(
-    db.prepare("SELECT COUNT(*) AS tasks FROM owner_tasks WHERE channel_id=?").get(room.id),
+    db
+      .prepare(
+        "SELECT COUNT(*) AS tasks FROM owner_tasks t JOIN owner_messages m ON m.id=t.message_id WHERE m.channel_id=?",
+      )
+      .get(room.id),
   ).toEqual({ tasks: 0 });
 });
 

@@ -79,11 +79,17 @@ it("commits the control-plane intent before dispatch and reuses its terminal rec
     });
     expect(
       context.database
-        .prepare(
-          "SELECT action_scope_id,stable_action_id FROM owner_agent_process_operations WHERE operation_id=?",
-        )
+        .prepare("SELECT request_json FROM owner_agent_process_operations WHERE operation_id=?")
         .get(context.operationId),
-    ).toEqual({ action_scope_id: context.actionScopeId, stable_action_id: context.stableActionId });
+    ).toEqual({
+      request_json: JSON.stringify({
+        actionScopeId: context.actionScopeId,
+        stableActionId: context.stableActionId,
+        nodeId: context.nodeId,
+        agentId: context.agentId,
+        operation,
+      }),
+    });
   } finally {
     context.database.close();
   }

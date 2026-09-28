@@ -65,8 +65,8 @@ it("a new data directory gets the complete format without the Push service", () 
   const auth = new OwnerAuth({ dataDir: f.dataDir });
   try {
     expect(tableNames(auth.db)).toHaveLength(38);
-    expect(columnCount(auth.db)).toBe(260);
-    expect(indexCount(auth.db)).toBe(26);
+    expect(columnCount(auth.db)).toBe(254);
+    expect(indexCount(auth.db)).toBe(25);
     expect(columnNames(auth.db, "owner_push_deliveries")).toEqual([
       "event_key",
       "endpoint",
@@ -75,11 +75,15 @@ it("a new data directory gets the complete format without the Push service", () 
       "attempts",
       "next_attempt_at",
     ]);
+    expect(columnNames(auth.db, "owner_sessions")).toEqual([
+      "token_hash",
+      "created_at",
+      "expires_at",
+    ]);
     expect(columnNames(auth.db, "owner_messages")).toEqual([
       "id",
       "channel_id",
       "order_seq",
-      "revision",
       "text",
       "created_at",
       "author_kind",
@@ -112,13 +116,24 @@ it("a new data directory gets the complete format without the Push service", () 
       "updated_at",
       "model_ready",
     ]);
+    expect(columnNames(auth.db, "owner_agent_runs")).toEqual([
+      "id",
+      "agent_id",
+      "node_id",
+      "delivery_id",
+      "input_end_seq",
+      "context_history_end_seq",
+      "state",
+      "error_code",
+      "retry_at",
+      "started_at",
+      "completed_at",
+    ]);
     expect(columnNames(auth.db, "owner_agent_process_operations")).toEqual([
       "operation_id",
       "run_id",
       "agent_id",
       "node_id",
-      "action_scope_id",
-      "stable_action_id",
       "request_hash",
       "request_json",
       "state",
@@ -127,6 +142,16 @@ it("a new data directory gets the complete format without the Push service", () 
       "updated_at",
       "node_receipt_confirmed",
       "node_receipt_revision",
+    ]);
+    expect(columnNames(auth.db, "owner_tasks")).toEqual([
+      "id",
+      "message_id",
+      "title",
+      "status",
+      "owner_agent_id",
+      "version",
+      "created_at",
+      "updated_at",
     ]);
     expect(columnNames(auth.db, "owner_agent_stop_intents")).toEqual([
       "operation_id",
@@ -152,7 +177,7 @@ it("reopens the format it just created with the same tables and revision", () =>
   const reopened = new OwnerAuth({ dataDir: f.dataDir });
   try {
     expect(tableNames(reopened.db)).toEqual(before);
-    expect(reopened.db.pragma("user_version", { simple: true })).toBe(28);
+    expect(reopened.db.pragma("user_version", { simple: true })).toBe(29);
   } finally {
     reopened.close();
   }
@@ -198,6 +223,21 @@ it("keeps the constraints of the columns it declares directly", () => {
         )
         .run(),
     ).toThrow(/CHECK constraint failed/);
+    // UNIQUE(channel_id,order_seq) alone keeps channel order unique; no duplicate explicit index.
+    expect(
+      database
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type='index' AND name='owner_messages_channel_order'",
+        )
+        .all(),
+    ).toEqual([]);
+    expect(() =>
+      database
+        .prepare(
+          "INSERT INTO owner_messages(id,channel_id,order_seq,text,created_at) VALUES('message-3','channel',1,'重复顺序',1)",
+        )
+        .run(),
+    ).toThrow(/UNIQUE constraint failed/);
 
     database
       .prepare("INSERT INTO nodes(id,public_key,paired_at) VALUES('node','public-key',1)")
@@ -249,9 +289,9 @@ it("keeps the constraints of the columns it declares directly", () => {
       database
         .prepare(
           `INSERT INTO owner_agent_process_operations(
-             operation_id,run_id,agent_id,node_id,action_scope_id,stable_action_id,request_hash,
+             operation_id,run_id,agent_id,node_id,request_hash,
              request_json,state,created_at,updated_at,node_receipt_confirmed
-           ) VALUES('operation','run','agent','node','scope','stable',?,'{}','executing',1,1,2)`,
+           ) VALUES('operation','run','agent','node',?,'{}','executing',1,1,2)`,
         )
         .run(requestHash),
     ).toThrow(/CHECK constraint failed/);
@@ -303,7 +343,7 @@ it("a new control-plane database carries no privileged approval state", () => {
         )
         .all(),
     ).toEqual([]);
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(28);
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(29);
   } finally {
     auth.close();
   }
@@ -349,23 +389,23 @@ it("rejects the previous experimental control-plane revision", () => {
   database.close();
 
   expect(() => new OwnerAuth({ dataDir: f.dataDir })).toThrow(
-    /uses control-plane schema revision 27; this release uses revision 28/,
+    /uses control-plane schema revision 27; this release uses revision 29/,
   );
 });
 
 it("rejects a current revision that is missing declared schema structures", () => {
   const f = fixture(),
-    database = makeDatabase(f.path, applicationId, 28);
+    database = makeDatabase(f.path, applicationId, 29);
   database.exec("CREATE TABLE unrelated(value TEXT)");
   database.close();
 
   expect(() => new OwnerAuth({ dataDir: f.dataDir })).toThrow(
-    /claims control-plane schema revision 28 but is missing/,
+    /claims control-plane schema revision 29 but is missing/,
   );
 });
 
 it.each(["absent", "ordinary"])(
-  "rejects revision 28 when the usage projection column is %s",
+  "rejects revision 29 when the usage projection column is %s",
   (column) => {
     const f = fixture();
     const auth = new OwnerAuth({ dataDir: f.dataDir });
@@ -383,7 +423,7 @@ it.each(["absent", "ordinary"])(
     database.close();
 
     expect(() => new OwnerAuth({ dataDir: f.dataDir })).toThrow(
-      /claims control-plane schema revision 28 but is missing .*usage_json/,
+      /claims control-plane schema revision 29 but is missing .*usage_json/,
     );
   },
 );

@@ -45,7 +45,14 @@ it("commits a task with its new message and keeps the message as its unique anch
   const message = await response.json();
   const first = await f.app.request("/api/owner/tasks", { headers: { cookie: f.cookie } });
   expect(await first.json()).toMatchObject({
-    tasks: [expect.objectContaining({ messageId: message.id, title: "整理方案", status: "open" })],
+    tasks: [
+      expect.objectContaining({
+        messageId: message.id,
+        channelId: f.channel.id,
+        title: "整理方案",
+        status: "open",
+      }),
+    ],
   });
   f.app.close();
   const restarted = createControlPlaneApp({
@@ -56,7 +63,7 @@ it("commits a task with its new message and keeps the message as its unique anch
   fixtures.push({ app: restarted, dir: f.dir });
   const after = await restarted.request("/api/owner/tasks", { headers: { cookie: f.cookie } });
   expect(await after.json()).toMatchObject({
-    tasks: [expect.objectContaining({ messageId: message.id })],
+    tasks: [expect.objectContaining({ messageId: message.id, channelId: f.channel.id })],
   });
 });
 

@@ -34,7 +34,7 @@ async function ownerCookie(app: ReturnType<typeof createControlPlaneApp>): Promi
   return login.headers.get("set-cookie")!.split(";", 1)[0]!;
 }
 
-it("persists top-level messages with Mate identity, revision and channel order", async () => {
+it("persists top-level messages with Mate identity and channel order", async () => {
   const fixture = setup();
   const cookie = await ownerCookie(fixture.app);
   const channelResponse = await fixture.app.request("/api/owner/channels", {
@@ -65,10 +65,11 @@ it("persists top-level messages with Mate identity, revision and channel order",
     author: { kind: "human", id: "owner" },
     text: "先确认安排",
     order: "1",
-    revision: "1",
   });
+  expect(first).not.toHaveProperty("revision");
   expect(first.id).toMatch(/^[0-9a-f-]{36}$/i);
-  expect(second).toMatchObject({ text: "下午三点再同步", order: "2", revision: "1" });
+  expect(second).toMatchObject({ text: "下午三点再同步", order: "2" });
+  expect(second).not.toHaveProperty("revision");
   expect(second.id).not.toBe(first.id);
 
   fixture.app.close();
