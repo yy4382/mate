@@ -40,6 +40,11 @@ CREATE TABLE owner_messages (
   revision INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0),
   text TEXT NOT NULL,
   created_at INTEGER NOT NULL,
+  author_kind TEXT NOT NULL DEFAULT 'human' CHECK(author_kind IN ('human','agent')),
+  author_id TEXT NOT NULL DEFAULT 'owner',
+  root_id TEXT REFERENCES owner_messages(id),
+  quote_id TEXT REFERENCES owner_messages(id),
+  internal_kind TEXT,
   UNIQUE(channel_id,order_seq)
 );
 CREATE INDEX owner_messages_channel_order ON owner_messages(channel_id,order_seq);

@@ -1,12 +1,5 @@
 /** Run authorization, input bounds and durable business action receipts. */
 export const agentRunSchema = `
-ALTER TABLE owner_agents
-  ADD COLUMN model_ready INTEGER NOT NULL DEFAULT 0 CHECK(model_ready IN (0,1));
-ALTER TABLE owner_messages
-  ADD COLUMN author_kind TEXT NOT NULL DEFAULT 'human' CHECK(author_kind IN ('human','agent'));
-ALTER TABLE owner_messages
-  ADD COLUMN author_id TEXT NOT NULL DEFAULT 'owner';
-
 CREATE TABLE owner_agent_direct_channels (
   agent_id TEXT PRIMARY KEY REFERENCES owner_agents(id),
   channel_id TEXT NOT NULL UNIQUE REFERENCES owner_channels(id),

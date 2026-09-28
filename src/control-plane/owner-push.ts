@@ -17,7 +17,11 @@ interface DeliveryRow {
   url: string;
 }
 
-/** A durable, best-effort notification outbox. Domain transactions enqueue; HTTP delivery never runs in them. */
+/**
+ * A durable, best-effort notification outbox. Domain transactions enqueue; HTTP delivery never runs in
+ * them. The four `owner_push_*` tables are part of the control-plane format (see `push-schema.ts`), so
+ * this service never creates or extends them: it only writes to the structure startup already built.
+ */
 export class OwnerPush {
   private readonly keys: { publicKey: string; privateKey: string };
   private readonly timer: NodeJS.Timeout;
@@ -40,39 +44,10 @@ export class OwnerPush {
     },
     private readonly now: () => number = Date.now,
   ) {
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS owner_push_keys (
-        id INTEGER PRIMARY KEY CHECK(id=1), public_key TEXT NOT NULL, private_key TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS owner_push_subscriptions (
-        endpoint TEXT PRIMARY KEY, subscription_json TEXT NOT NULL, created_at INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS owner_push_events (
-        event_key TEXT PRIMARY KEY, title TEXT NOT NULL, url TEXT NOT NULL, created_at INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS owner_push_deliveries (
-        event_key TEXT NOT NULL REFERENCES owner_push_events(event_key),
-        endpoint TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('pending','sent','failed')),
-        updated_at INTEGER NOT NULL, PRIMARY KEY(event_key,endpoint)
-      );
-    `);
-    const deliveryColumns = new Set(
-      (db.pragma("table_info(owner_push_deliveries)") as Array<{ name: string }>).map(
-        (column) => column.name,
-      ),
-    );
-    if (!deliveryColumns.has("attempts"))
-      db.exec("ALTER TABLE owner_push_deliveries ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0");
-    if (!deliveryColumns.has("next_attempt_at"))
-      db.exec(
-        "ALTER TABLE owner_push_deliveries ADD COLUMN next_attempt_at INTEGER NOT NULL DEFAULT 0",
-      );
+    // Requeue deliveries an earlier release left failed so they are retried instead of stranded.
+    // This release writes only 'pending' and 'sent'; the tables and retry columns come from the
+    // control-plane format, which this service does not create or extend.
     db.prepare("UPDATE owner_push_deliveries SET state='pending' WHERE state='failed'").run();
-    // Mate has no privileged command approval any more (schema revision 25), so a notification the
-    // old release queued for an approval card has nothing to open. It is dropped with its
-    // deliveries instead of being retried into a link the web page no longer understands.
-    db.prepare("DELETE FROM owner_push_deliveries WHERE event_key LIKE 'approval:%'").run();
-    db.prepare("DELETE FROM owner_push_events WHERE event_key LIKE 'approval:%'").run();
     let keys = db.prepare("SELECT public_key,private_key FROM owner_push_keys WHERE id=1").get() as
       { public_key: string; private_key: string } | undefined;
     if (!keys) {

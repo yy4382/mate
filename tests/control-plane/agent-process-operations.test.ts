@@ -19,12 +19,6 @@ function setup() {
     CREATE TABLE owner_agent_activity(seq INTEGER PRIMARY KEY,agent_id TEXT,node_id TEXT,kind TEXT,reference_id TEXT,summary TEXT,detail_json TEXT,created_at INTEGER);
   `);
   database.exec(agentProcessOperationsSchemaV13);
-  database.exec(
-    "ALTER TABLE owner_agent_process_operations ADD COLUMN node_receipt_confirmed INTEGER NOT NULL DEFAULT 0 CHECK(node_receipt_confirmed IN (0,1))",
-  );
-  database.exec(
-    "ALTER TABLE owner_agent_process_operations ADD COLUMN node_receipt_revision INTEGER CHECK(node_receipt_revision IS NULL OR node_receipt_revision >= 1)",
-  );
   const nodeId = randomUUID(),
     agentId = randomUUID(),
     runId = randomUUID(),

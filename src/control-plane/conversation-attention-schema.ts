@@ -1,7 +1,5 @@
 /** Conversation positions and Agent attention are control-plane facts. */
 export const conversationAttentionSchemaV17 = `
-ALTER TABLE owner_messages ADD COLUMN root_id TEXT REFERENCES owner_messages(id);
-ALTER TABLE owner_messages ADD COLUMN quote_id TEXT REFERENCES owner_messages(id);
 CREATE INDEX owner_messages_thread ON owner_messages(channel_id,root_id,order_seq);
 CREATE TABLE owner_agent_message_attention (
   agent_id TEXT NOT NULL REFERENCES owner_agents(id),

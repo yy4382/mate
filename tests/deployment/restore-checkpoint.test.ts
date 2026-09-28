@@ -619,6 +619,26 @@ it("restores the Agent, its one session, pending deliveries, open task and remin
       )
       .get(agentId),
   ).toEqual({ text: "  preserved response\n" });
+  // A restored database is the whole current format, Push outbox included: reconciliation opened it
+  // under the current schema, and the queue and its retry columns came back with it.
+  expect(
+    control
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'owner_push_%' ORDER BY name",
+      )
+      .pluck()
+      .all(),
+  ).toEqual([
+    "owner_push_deliveries",
+    "owner_push_events",
+    "owner_push_keys",
+    "owner_push_subscriptions",
+  ]);
+  expect(
+    (control.pragma("table_xinfo(owner_push_deliveries)") as Array<{ name: string }>).map(
+      (column) => column.name,
+    ),
+  ).toEqual(["event_key", "endpoint", "state", "updated_at", "attempts", "next_attempt_at"]);
   control.close();
 
   const chatDb = new Database(controlPlanePath(d)),

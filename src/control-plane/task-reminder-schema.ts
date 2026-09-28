@@ -1,6 +1,5 @@
 /** Message anchored work and Agent owned wakeups. No task row grants conversation membership. */
 export const taskReminderSchemaV18 = `
-ALTER TABLE owner_messages ADD COLUMN internal_kind TEXT;
 CREATE TABLE owner_tasks (
   id TEXT PRIMARY KEY,
   message_id TEXT NOT NULL UNIQUE REFERENCES owner_messages(id),

@@ -12,7 +12,9 @@ CREATE TABLE owner_agent_process_operations (
   state TEXT NOT NULL CHECK(state IN ('executing','succeeded','failed','unknown')),
   receipt_json TEXT,
   created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  node_receipt_confirmed INTEGER NOT NULL DEFAULT 0 CHECK(node_receipt_confirmed IN (0,1)),
+  node_receipt_revision INTEGER CHECK(node_receipt_revision IS NULL OR node_receipt_revision >= 1)
 );
 CREATE INDEX owner_agent_process_operations_agent
   ON owner_agent_process_operations(agent_id,created_at);

@@ -2,9 +2,24 @@ import Database from "better-sqlite3";
 import { expect, it } from "vitest";
 import { OwnerPush } from "../../src/control-plane/owner-push.js";
 import { createControlPlaneApp, mentionsOwner } from "../../src/control-plane/http.js";
+import { controlPlaneSchema } from "../../src/control-plane/schema.js";
+import { openControlPlaneDatabase } from "../../src/storage/initialize.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+function tempDatabasePath(): { directory: string; path: string } {
+  const directory = mkdtempSync(join(tmpdir(), "mate-push-"));
+  return { directory, path: join(directory, "control-plane.sqlite") };
+}
+
+function schemaObjects(database: Database.Database): unknown[] {
+  return database
+    .prepare(
+      "SELECT type,name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name",
+    )
+    .all();
+}
 
 it("recognizes owner mentions beside punctuation without treating email or longer names as mentions", () => {
   expect(mentionsOwner("请看(@所有者)和 @owner！")).toBe(true);
@@ -13,9 +28,8 @@ it("recognizes owner mentions beside punctuation without treating email or longe
 });
 
 it("retries a temporary Push failure after durable backoff without duplicating the event", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "mate-push-retry-"));
-  const path = join(directory, "push.sqlite");
-  let db = new Database(path);
+  const { directory, path } = tempDatabasePath();
+  let db = openControlPlaneDatabase(path, controlPlaneSchema);
   let now = 1_000;
   const sent: string[] = [];
   const sender = async (_subscription: { endpoint: string }, payload: { url: string }) => {
@@ -37,7 +51,7 @@ it("retries a temporary Push failure after durable backoff without duplicating t
     expect(sent).toEqual(["/app?channel=room-1&message=message-1"]);
     push.close();
     db.close();
-    db = new Database(path);
+    db = openControlPlaneDatabase(path, controlPlaneSchema);
     push = new OwnerPush(db, sender, () => now);
     now += 5_000;
     await push.deliver();
@@ -56,7 +70,8 @@ it("retries a temporary Push failure after durable backoff without duplicating t
 });
 
 it("drops a permanently gone Push endpoint without retrying it", async () => {
-  const db = new Database(":memory:");
+  const { directory, path } = tempDatabasePath();
+  const db = openControlPlaneDatabase(path, controlPlaneSchema);
   let now = 1_000;
   const sent: string[] = [];
   const push = new OwnerPush(
@@ -83,44 +98,40 @@ it("drops a permanently gone Push endpoint without retrying it", async () => {
   } finally {
     push.close();
     db.close();
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 
-it("drops a notification the previous release queued for a removed approval card", async () => {
-  const db = new Database(":memory:");
-  const sent: string[] = [];
-  const old = new OwnerPush(
-    db,
-    async () => undefined,
-    () => 1_000,
-  );
-  old.subscribe({
-    endpoint: "https://push.example.test/send/1",
-    keys: { p256dh: "key", auth: "auth" },
-  });
-  db.transaction(() =>
-    old.queue("approval:request-1", "审批请求", "/app?channel=room-1&approval=request-1"),
-  )();
-  old.close();
-
-  const push = new OwnerPush(
-    db,
-    async (_subscription, payload) => {
-      sent.push(payload.url);
-    },
-    () => 2_000,
-  );
+it("writes to the unified schema without creating or altering the tables it uses", () => {
+  const { directory, path } = tempDatabasePath();
+  const db = openControlPlaneDatabase(path, controlPlaneSchema);
   try {
-    expect(db.prepare("SELECT COUNT(*) AS count FROM owner_push_events").get()).toEqual({
-      count: 0,
-    });
-    expect(db.prepare("SELECT COUNT(*) AS count FROM owner_push_deliveries").get()).toEqual({
-      count: 0,
-    });
-    await push.deliver();
-    expect(sent).toEqual([]);
-  } finally {
+    const before = schemaObjects(db);
+    const push = new OwnerPush(
+      db,
+      async () => undefined,
+      () => 1_000,
+    );
     push.close();
+    expect(schemaObjects(db)).toEqual(before);
+  } finally {
+    db.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+it("refuses a database the unified schema did not initialize", () => {
+  const db = new Database(":memory:");
+  try {
+    expect(
+      () =>
+        new OwnerPush(
+          db,
+          async () => undefined,
+          () => 1_000,
+        ),
+    ).toThrow(/no such table/);
+  } finally {
     db.close();
   }
 });
