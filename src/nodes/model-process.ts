@@ -2,6 +2,7 @@ import { fork, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import { sessionCommitSchema, type SessionCommit } from "./session-record.js";
 import type { ModelRunSpec } from "./model-worker.js";
 
 const transcriptMessageSchema = z
@@ -9,7 +10,7 @@ const transcriptMessageSchema = z
     type: z.literal("transcript"),
     nonce: z.string().uuid(),
     requestId: z.string().uuid(),
-    text: z.string().min(1).max(20_000),
+    entry: sessionCommitSchema,
   })
   .strict();
 const workerResultSchema = z.discriminatedUnion("type", [
@@ -70,8 +71,8 @@ export interface ModelProcessOptions {
   modelId: string;
   apiKey: string;
   entry?: string;
-  /** Records one plain assistant turn in the Agent session record; never publishes. */
-  onTranscript(text: string): Promise<boolean>;
+  /** Records one complete Pi message or run configuration in the Agent session record; never publishes. */
+  onTranscript(entry: SessionCommit): Promise<boolean>;
   onTool?(
     toolCallId: string,
     operation: string,
@@ -204,7 +205,7 @@ function waitForModelProcess(
         requestBusy = true;
         let accepted = false;
         try {
-          accepted = await hooks.onTranscript(transcript.data.text);
+          accepted = await hooks.onTranscript(transcript.data.entry);
         } catch {
           accepted = false;
         }

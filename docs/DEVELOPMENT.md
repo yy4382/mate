@@ -35,7 +35,7 @@ pnpm build
 pnpm test:single-account-agent-workspace
 ```
 
-从网页创建 Agent 到首次私信产生模型运行并写入该 Agent 自己的会话记录，由 `tests/control-plane/agent-creation-process.test.ts` 用真实控制面、WebSocket、节点与脚本化模型覆盖；它在 macOS 与 Linux 上都会运行。控制面数据库从旧格式升级到当前格式时（第 24 版重建单账号 Agent 表，第 25 版删除已废弃的特权审批表），节点上已有的每 Agent 账号记录会被清空并回到「等待准备」，旧失败原因一并清除；该 Agent 需要按同一请求在节点上重新准备一次工作区。若节点上还留着旧版按 Agent 建立的 home（`<工作区根>/<Agent ID>`，内含旧标记 `.mate-home-id`），重新准备会报告该目录已被其他内容占用；把旧 home 移开或改用新的工作区根目录后再重试，而不是期待旧账号或旧 home 继续可用。
+从网页创建 Agent 到首次私信产生模型运行并写入该 Agent 自己的会话记录，由 `tests/control-plane/agent-creation-process.test.ts` 用真实控制面、WebSocket、节点与脚本化模型覆盖；它在 macOS 与 Linux 上都会运行。数据目录与发布版本的兼容边界见 [运行手册的升级与回退](OPERATIONS.md#升级与回退)。
 
 普通命令执行在同一个现有普通账号下运行：Agent 的命令进入当前账号的 shell 子进程，默认使用该 Agent 的工作区，返回有界输出、退出码、截断与超时标记，命令里的 `sudo` 原样交给宿主。`tests/control-plane/agent-command-process.test.ts` 用真实控制面、WebSocket、节点和脚本化模型在 macOS 与 Linux 上核对这条路径、同一操作 ID 的收据复用，以及节点在命令运行中被重启后不再执行同一动作：
 

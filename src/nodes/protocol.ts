@@ -1,3 +1,5 @@
+import { sessionFragmentSchema } from "./session-transport.js";
+import { contextMessageSchema, sessionCommitSchema } from "./session-record.js";
 import { z } from "zod";
 import { agentProcessOperationSchema } from "./process-operations.js";
 import { operationSchema } from "../execution/backend.js";
@@ -107,11 +109,12 @@ const NodeRequestShapeSchema = z.discriminatedUnion("type", [
       runId: requestIdSchema,
       agentId: agentIdSchema,
       cursor: z.number().int().nonnegative(),
+      offset: z.number().int().nonnegative().optional(),
       limit: z.number().int().min(1).max(100),
     })
     .strict(),
   /**
-   * Run transcript: the model's plain assistant text for one run. It is recorded in the Agent's
+   * Run transcript: a complete Pi message or the effective run configuration. It is recorded in the Agent's
    * own session record and never published to a conversation; speaking requires an explicit
    * `messages.send` tool call through `node.agent.run.tool`.
    */
@@ -121,7 +124,7 @@ const NodeRequestShapeSchema = z.discriminatedUnion("type", [
       requestId: requestIdSchema,
       runId: requestIdSchema,
       agentId: agentIdSchema,
-      text: z.string().min(1).max(20_000),
+      entry: z.union([sessionCommitSchema, sessionFragmentSchema]),
     })
     .strict(),
   z
@@ -397,18 +400,8 @@ const NodeControlMessageShapeSchema = z.discriminatedUnion("type", [
       type: z.literal("control.agent.run.context"),
       requestId: requestIdSchema,
       runId: requestIdSchema,
-      messages: z.array(
-        z
-          .object({
-            sequence: z.number().int().positive(),
-            role: z.enum(["user", "assistant"]),
-            text: z.string().min(1).max(20_000),
-            sourceChannelId: requestIdSchema,
-            sourceVisibility: z.enum(["public", "private"]),
-            currentRunInput: z.boolean(),
-          })
-          .strict(),
-      ),
+      messages: z.array(contextMessageSchema),
+      fragment: sessionFragmentSchema.optional(),
       nextCursor: z.number().int().positive().nullable(),
     })
     .strict(),

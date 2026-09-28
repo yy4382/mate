@@ -67,7 +67,7 @@ serveModelWorker((model, context, options) => {
   if (options.apiKey === "synthetic-key-ordinary-command-recovery") {
     // One state-changing ordinary command, then a plain turn: a retried delivery must reuse the
     // command's receipt instead of appending to the ledger a second time.
-    const turn = syntheticToolTurn++;
+    const turn = context.messages.filter((message) => message.role === "toolResult").length;
     stream.push({
       type: "done",
       reason: turn === 0 ? "toolUse" : "stop",
@@ -107,7 +107,7 @@ serveModelWorker((model, context, options) => {
   if (options.apiKey === "synthetic-key-ordinary-command-restart") {
     // One state-changing ordinary command that outlives the node process, then a plain turn: after
     // the node restarts, the same durable action may only be replayed from its stored receipt.
-    const turn = syntheticToolTurn++;
+    const turn = context.messages.filter((message) => message.role === "toolResult").length;
     stream.push({
       type: "done",
       reason: turn === 0 ? "toolUse" : "stop",
@@ -150,7 +150,8 @@ serveModelWorker((model, context, options) => {
   ) {
     const unrelated = systemPrompt(context).includes("Online Agent");
     const workspace = options.apiKey === "synthetic-key-workspace-recovery";
-    const toolTurn = !unrelated && syntheticToolTurn++ === 0;
+    const toolTurn =
+      !unrelated && !context.messages.some((message) => message.role === "toolResult");
     stream.push({
       type: "done",
       reason: toolTurn ? "toolUse" : "stop",
@@ -162,12 +163,9 @@ serveModelWorker((model, context, options) => {
                 type: "toolCall",
                 id: workspace ? "durable-workspace-call" : "durable-process-call",
                 name: "tools.call",
-                arguments: {
-                  name: workspace ? "workspace.write" : "process.exec",
-                  input: workspace
-                    ? { path: "memo.txt", content: "once" }
-                    : { command: "printf side-effect" },
-                },
+                arguments: workspace
+                  ? { input: { content: "once", path: "memo.txt" }, name: "workspace.write" }
+                  : { name: "process.exec", input: { command: "printf side-effect" } },
               },
             ]
           : [
@@ -197,7 +195,7 @@ serveModelWorker((model, context, options) => {
     // A scripted Agent that schedules its own future work through the real reminder tool, so a
     // restore has a reminder the owner never inserted by hand.
     const turn = syntheticToolTurn++,
-      channelId = systemPrompt(context).match(/本次输入来自：频道 ([0-9a-f-]{36})/)?.[1];
+      channelId = currentChannel(context);
     stream.push({
       type: "done",
       reason: turn === 0 ? "toolUse" : "stop",
@@ -345,7 +343,7 @@ serveModelWorker((model, context, options) => {
   if (options.apiKey === "synthetic-key-conversation-tools") {
     const turn = syntheticToolTurn++,
       prompt = systemPrompt(context),
-      channelId = prompt.match(/本次输入来自：频道 ([0-9a-f-]{36})/)?.[1];
+      channelId = currentChannel(context);
     const toolCall =
       turn === 0
         ? { type: "toolCall", id: "conversation-tools-list", name: "tools.list", arguments: {} }
@@ -388,7 +386,7 @@ serveModelWorker((model, context, options) => {
   }
   if (options.apiKey === "synthetic-key-narrated-tool-turn") {
     const turn = syntheticToolTurn++,
-      channelId = systemPrompt(context).match(/本次输入来自：频道 ([0-9a-f-]{36})/)?.[1],
+      channelId = currentChannel(context),
       first = turn === 0;
     // A common model shape: narration and a tool call in the same assistant message. The narration
     // is one plain turn and the following answer is another, so one run records two of them.
@@ -460,8 +458,8 @@ serveModelWorker((model, context, options) => {
     return stream;
   }
   if (options.apiKey === "synthetic-key-durable-action-pair") {
-    const turn = syntheticToolTurn++,
-      channelId = systemPrompt(context).match(/本次输入来自：频道 ([0-9a-f-]{36})/)?.[1],
+    const turn = currentToolResultCount(context),
+      channelId = currentChannel(context),
       text =
         turn < 2 ? "同一交付中的重复动作。" : turn === 2 ? "参数不同，属于新的动作。" : undefined,
       call =
@@ -544,7 +542,7 @@ serveModelWorker((model, context, options) => {
     // reminders, consult tasks, read its own workspace memory, answer the current message, then
     // continue the unfinished task it already owns and finish silently.
     const turn = syntheticToolTurn++,
-      channelId = systemPrompt(context).match(/本次输入来自：频道 ([0-9a-f-]{36})/)?.[1],
+      channelId = currentChannel(context),
       reminder = nestedToolResult(context, "reminders.list")?.reminders?.[0],
       openTask = nestedToolResult(context, "tasks.list")?.tasks?.find(
         (task) => task.status !== "done",
@@ -745,4 +743,24 @@ function findRunNotice(context) {
     )
       return message.content;
   return undefined;
+}
+
+function currentChannel(context) {
+  const message = context.messages.findLast(
+    (message) =>
+      message.role === "user" &&
+      typeof message.content === "string" &&
+      message.content.includes("[消息来源"),
+  );
+  return message?.content.match(/频道 ([0-9a-f-]{36})/)?.[1];
+}
+function currentToolResultCount(context) {
+  const index = context.messages.findLastIndex(
+    (message) =>
+      message.role === "user" &&
+      typeof message.content === "string" &&
+      message.content.includes("[消息来源"),
+  );
+  return context.messages.slice(index + 1).filter((message) => message.role === "toolResult")
+    .length;
 }

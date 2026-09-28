@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { OwnerAuth } from "../../src/control-plane/owner-auth.js";
-import { controlPlaneSchemaV24 } from "../../src/control-plane/schema.js";
 
 const dataDirectories: string[] = [];
 const applicationId = 0x4d43504c;
@@ -39,34 +38,7 @@ it("a new control-plane database carries no privileged approval state", () => {
         )
         .all(),
     ).toEqual([]);
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(25);
-  } finally {
-    auth.close();
-  }
-});
-
-it("upgrades a revision-24 database by dropping the privileged approval it still carried", () => {
-  const f = fixture(),
-    old = makeDatabase(f.path, applicationId, 24);
-  old.exec(controlPlaneSchemaV24);
-  old
-    .prepare(
-      `INSERT INTO owner_privileged_approvals(
-        request_id,operation_id,agent_id,node_id,channel_id,command_json,request_hash,state,
-        created_at,updated_at
-      ) VALUES('11111111-1111-4111-8111-111111111111','11111111-1111-4111-8111-111111111111',
-        '22222222-2222-4222-8222-222222222222','33333333-3333-4333-8333-333333333333',
-        '44444444-4444-4444-8444-444444444444','{}',?,'pending',1,1)`,
-    )
-    .run("a".repeat(64));
-  old.close();
-
-  const auth = new OwnerAuth({ dataDir: f.dataDir });
-  try {
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(25);
-    expect(
-      auth.db.prepare("SELECT name FROM sqlite_master WHERE name LIKE '%privileged%'").all(),
-    ).toEqual([]);
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(26);
   } finally {
     auth.close();
   }
@@ -107,11 +79,11 @@ it("rejects an unknown control-plane revision instead of opening it as current",
 
 it("rejects a current revision that is missing declared schema structures", () => {
   const f = fixture(),
-    database = makeDatabase(f.path, applicationId, 22);
+    database = makeDatabase(f.path, applicationId, 26);
   database.exec("CREATE TABLE unrelated(value TEXT)");
   database.close();
 
   expect(() => new OwnerAuth({ dataDir: f.dataDir })).toThrow(
-    /claims control-plane schema revision 22 but is missing/,
+    /claims control-plane schema revision 26 but is missing/,
   );
 });

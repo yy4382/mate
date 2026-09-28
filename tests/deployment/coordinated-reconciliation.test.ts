@@ -401,8 +401,10 @@ it("persists a matching newer workspace receipt without decoding the business re
   });
   expect(
     owner.db
-      .prepare("SELECT text FROM owner_agent_session_journal WHERE run_id=?")
-      .get("99999999-9999-4999-8999-999999999999"),
+      .prepare(
+        "SELECT json_extract(message_json,'$.content') AS text FROM owner_agent_session_updates WHERE agent_id=?",
+      )
+      .get(agentId),
   ).toMatchObject({ text: expect.stringContaining('"written":true') });
   owner.close();
 });

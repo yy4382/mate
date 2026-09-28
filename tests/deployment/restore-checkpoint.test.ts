@@ -1,3 +1,4 @@
+import { assistantEntry } from "../helpers/session.js";
 /**
  * The owner's restore path, at the seam the owner actually uses: the `restore` command of the
  * ordinary-account deployment CLI, over real control-plane, node and workspace stores, with only
@@ -222,6 +223,12 @@ function addCommand(
        VALUES(?,?,?,?,'completed',1)`,
     )
     .run(runId, agentId, d.nodeId, delivery.id);
+  const entry = assistantEntry("  preserved response\n");
+  control
+    .prepare(
+      "INSERT INTO owner_agent_session_records(id,agent_id,run_id,action_scope_id,kind,payload_json,created_at) VALUES(?,?,?,?,?,?,1)",
+    )
+    .run(entry.id, agentId, runId, delivery.id, entry.kind, JSON.stringify(entry));
   control
     .prepare(
       `INSERT INTO owner_agent_process_operations(
@@ -607,9 +614,11 @@ it("restores the Agent, its one session, pending deliveries, open task and remin
   });
   expect(
     control
-      .prepare("SELECT COUNT(*) AS rows FROM owner_agent_session_journal WHERE session_id=?")
-      .get(sessions[0]!.id),
-  ).toMatchObject({ rows: expect.any(Number) });
+      .prepare(
+        "SELECT json_extract(payload_json,'$.message.content[0].text') AS text FROM owner_agent_session_records WHERE agent_id=?",
+      )
+      .get(agentId),
+  ).toEqual({ text: "  preserved response\n" });
   control.close();
 
   const chatDb = new Database(controlPlanePath(d)),

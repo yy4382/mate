@@ -1,3 +1,4 @@
+import { inputMessage, assistantText } from "../helpers/session.js";
 import Database from "better-sqlite3";
 import { randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -45,6 +46,19 @@ vi.mock("ws", () => {
     send(data: string) {
       const request = JSON.parse(data) as Record<string, unknown>;
       this.sent.push(request);
+      if (request.type === "node.agent.run.transcript") {
+        const entry = (request as any).entry;
+        const text = assistantText(entry);
+        if (!text)
+          queueMicrotask(() =>
+            this.serverSend({
+              type: "control.agent.run.transcript_ack",
+              requestId: request.requestId,
+              runId: request.runId,
+              accepted: true,
+            }),
+          );
+      }
       if (request.type === "node.authenticate")
         this.serverSend({
           type: "control.authenticated",
@@ -114,7 +128,7 @@ async function waitForMessage(
 ): Promise<Record<string, any>> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const message = socket.sent.slice(fromIndex).find((entry: any) => entry.type === type);
+    const message = messagesOfType(socket, type, fromIndex)[0];
     if (message) return message;
     await delay(5);
   }
@@ -122,7 +136,15 @@ async function waitForMessage(
 }
 
 function messagesOfType(socket: Record<string, any>, type: string, fromIndex = 0): any[] {
-  return socket.sent.slice(fromIndex).filter((entry: any) => entry.type === type);
+  return socket.sent
+    .slice(fromIndex)
+    .filter(
+      (entry: any) =>
+        entry.type === type && (type !== "node.agent.run.transcript" || assistantText(entry.entry)),
+    )
+    .map((entry: any) =>
+      type === "node.agent.run.transcript" ? { ...entry, text: assistantText(entry.entry) } : entry,
+    );
 }
 
 async function waitForMessages(
@@ -215,16 +237,7 @@ async function startRun(
     type: "control.agent.run.context",
     requestId: contextRequest.requestId,
     runId,
-    messages: [
-      {
-        sequence: 1,
-        role: "user",
-        text: "第一条：先做当前工作。",
-        sourceChannelId: channelId,
-        sourceVisibility: "private",
-        currentRunInput: true,
-      },
-    ],
+    messages: [inputMessage("第一条：先做当前工作。", channelId)],
     nextCursor: null,
   });
   return { runId, agentId, sessionId, channelId, from };
@@ -440,16 +453,7 @@ it("keeps a notice that arrives in the same tick as the run request", async () =
       type: "control.agent.run.context",
       requestId: contextRequest.requestId,
       runId,
-      messages: [
-        {
-          sequence: 1,
-          role: "user",
-          text: "第一条：先做当前工作。",
-          sourceChannelId: channelId,
-          sourceVisibility: "private",
-          currentRunInput: true,
-        },
-      ],
+      messages: [inputMessage("第一条：先做当前工作。", channelId)],
       nextCursor: null,
     });
     const toolRequest = await waitForMessage(socket, "node.agent.run.tool", from);

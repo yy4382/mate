@@ -16,7 +16,6 @@ function setup() {
     CREATE TABLE owner_agent_runs(id TEXT PRIMARY KEY,agent_id TEXT NOT NULL,node_id TEXT NOT NULL,state TEXT NOT NULL,delivery_id TEXT NOT NULL);
     CREATE TABLE owner_agent_sessions(id TEXT PRIMARY KEY,agent_id TEXT NOT NULL);
     CREATE TABLE owner_message_deliveries(id TEXT PRIMARY KEY,channel_id TEXT NOT NULL);
-    CREATE TABLE owner_agent_session_journal(session_id TEXT,agent_id TEXT,channel_id TEXT,run_id TEXT,tool_action_id TEXT,process_operation_id TEXT,role TEXT,text TEXT,created_at INTEGER);
     CREATE TABLE owner_agent_activity(seq INTEGER PRIMARY KEY,agent_id TEXT,node_id TEXT,kind TEXT,reference_id TEXT,summary TEXT,detail_json TEXT,created_at INTEGER);
   `);
   database.exec(agentProcessOperationsSchemaV13);

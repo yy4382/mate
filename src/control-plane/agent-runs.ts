@@ -1,4 +1,6 @@
-import { createHash, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import { AgentSession } from "./agent-session.js";
+import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import type { ModelCredentialDirectory } from "./model-credentials.js";
 import type { AgentRunContextPage, OwnerChat } from "./owner-chat.js";
@@ -7,11 +9,7 @@ import {
   AgentProcessOperationBroker,
   deriveAgentProcessOperationId,
 } from "./agent-process-operations.js";
-import {
-  agentConversationOperations,
-  agentProcessToolOperations,
-  agentToolSchemas,
-} from "./agent-tools.js";
+import { agentProcessToolOperations, agentToolSchemas } from "./agent-tools.js";
 import { z } from "zod";
 import { recordAgentActivity } from "./activity.js";
 
@@ -77,7 +75,7 @@ export class AgentRunCoordinator {
       context: (runId, agentId, cursor, limit) =>
         this.readRunContext(runId, agentId, cursor, limit),
       transcript: (runId, nodeId, agentId, requestId, text) =>
-        chat.recordAgentRunTranscript(runId, nodeId, agentId, requestId, text),
+        new AgentSession(db).append(runId, nodeId, agentId, text),
       tool: (runId, nodeId, agentId, toolCallId, operation, input) =>
         this.executeAgentTool(runId, nodeId, agentId, toolCallId, operation, input),
       result: (runId, agentId, ok, code) => this.finishRun(runId, agentId, ok, code),
@@ -98,20 +96,13 @@ export class AgentRunCoordinator {
     if (operation !== "tools.call")
       return this.chat.executeAgentTool(runId, nodeId, agentId, toolCallId, operation, input);
     const request = agentToolSchemas["tools.call"].safeParse(input);
-    if (request.success && request.data.name === "session.compact") {
-      try {
-        return {
-          ok: true,
-          result: this.commitCompaction(runId, nodeId, agentId, toolCallId, request.data.input),
-        };
-      } catch {
-        return { ok: false, error: "Session compaction was refused" };
-      }
-    }
     if (!request.success || !Object.hasOwn(agentProcessToolOperations, request.data.name))
       return this.chat.executeAgentTool(runId, nodeId, agentId, toolCallId, operation, input);
 
     try {
+      const original = new AgentSession(this.db).toolAction(agentId, toolCallId);
+      if (original && (original.name !== operation || !isDeepStrictEqual(original.input, input)))
+        throw new Error("Recovered tool arguments differ from the committed call");
       const authorized = this.chat.authorizeAgentProcessOperation(
           runId,
           nodeId,
@@ -124,7 +115,7 @@ export class AgentRunCoordinator {
           runId,
           nodeId,
           agentId,
-          actionScopeId: authorized.actionScopeId,
+          actionScopeId: original?.actionScopeId ?? authorized.actionScopeId,
           stableActionId: toolCallId,
           operationId,
           operation: authorized.operation,
@@ -140,105 +131,6 @@ export class AgentRunCoordinator {
           error instanceof z.ZodError ? "Invalid tool input" : "Agent tool request was refused",
       };
     }
-  }
-
-  private commitCompaction(
-    runId: string,
-    nodeId: string,
-    agentId: string,
-    actionId: string,
-    input: unknown,
-  ): unknown {
-    const { summary, snapshot } =
-      agentConversationOperations["session.compact"].schema.parse(input);
-    const snapshotJson = JSON.stringify(snapshot);
-    if (summary.length + snapshotJson.length > 19_000) throw new Error("Snapshot is too large");
-    const requestHash = createHash("sha256")
-      .update(JSON.stringify({ summary, snapshot }))
-      .digest("hex");
-    return this.db
-      .transaction(() => {
-        const run = this.db
-          .prepare(
-            `SELECT r.delivery_id,r.context_history_end_seq,r.input_end_seq,r.independent_review,s.id AS logical_session_id
-         FROM owner_agent_runs r JOIN owner_agent_sessions s ON s.agent_id=r.agent_id
-         WHERE r.id=? AND r.node_id=? AND r.agent_id=? AND r.state='running'`,
-          )
-          .get(runId, nodeId, agentId) as
-          | {
-              delivery_id: string;
-              context_history_end_seq: number;
-              input_end_seq: number;
-              independent_review: number;
-              logical_session_id: string;
-            }
-          | undefined;
-        if (
-          !run ||
-          run.independent_review ||
-          run.context_history_end_seq < 1 ||
-          !actionId.startsWith(`mate:${run.delivery_id}:`)
-        )
-          throw new Error("Run cannot compact session");
-        const old = this.db
-          .prepare(
-            `SELECT request_hash,model_session_id,through_seq FROM owner_agent_session_snapshots
-         WHERE agent_id=? AND action_id=?`,
-          )
-          .get(agentId, actionId) as
-          { request_hash: string; model_session_id: string; through_seq: number } | undefined;
-        if (old) {
-          if (old.request_hash !== requestHash)
-            throw new Error("Compaction action identity conflict");
-          return {
-            committed: true,
-            effective: "next_run",
-            sessionId: old.model_session_id,
-            throughSequence: old.through_seq,
-          };
-        }
-        // A later source can already be journaled but still be pending and unseen by this run.
-        // Keep it beyond the snapshot boundary so delivery can later become visible history.
-        const throughSequence = Math.min(run.context_history_end_seq, run.input_end_seq),
-          modelSessionId = randomUUID(),
-          at = this.now();
-        this.db
-          .prepare(
-            `INSERT INTO owner_agent_session_snapshots(
-          id,agent_id,action_id,request_hash,through_seq,model_session_id,summary,snapshot_json,created_at
-         ) VALUES(?,?,?,?,?,?,?,?,?)`,
-          )
-          .run(
-            randomUUID(),
-            agentId,
-            actionId,
-            requestHash,
-            throughSequence,
-            modelSessionId,
-            summary,
-            snapshotJson,
-            at,
-          );
-        this.db
-          .prepare("UPDATE owner_agent_sessions SET model_session_id=? WHERE id=?")
-          .run(modelSessionId, run.logical_session_id);
-        recordAgentActivity(this.db, {
-          agentId,
-          nodeId,
-          kind: "session.compacted",
-          referenceId: modelSessionId,
-          summary: "会话摘要和快照已由控制面确认；下一次运行使用新模型会话。",
-          detail: { summary, snapshot, throughSequence },
-          at,
-        });
-        return {
-          committed: true,
-          effective: "next_run",
-          sessionId: modelSessionId,
-          throughSequence,
-        };
-      })
-      .immediate();
   }
 
   close(): void {
@@ -278,10 +170,7 @@ export class AgentRunCoordinator {
         "UPDATE owner_agent_run_control SET paused_reason=NULL,temporary_failures=0,updated_at=? WHERE agent_id=? AND paused_reason='credentials'",
       )
       .run(this.now(), agentId);
-    const running = this.db
-      .prepare("SELECT id FROM owner_agent_runs WHERE agent_id=? AND state='running'")
-      .all(agentId) as Array<{ id: string }>;
-    for (const run of running) this.invalidateRun(run.id, agentId);
+    // The active worker owns its admitted configuration; edits apply to the next run.
     this.wake();
   }
 
@@ -763,15 +652,11 @@ export class AgentRunCoordinator {
       .prepare(
         `SELECT r.id AS run_id,r.node_id,r.agent_id,d.id AS delivery_id,d.channel_id
          FROM owner_agent_runs r
-         JOIN owner_agent_session_journal j
-           ON j.agent_id=r.agent_id AND j.channel_id=d.channel_id
-              AND j.message_id=d.message_id AND j.role='user'
          JOIN owner_message_deliveries d
-           ON d.message_id=j.message_id AND d.channel_id=j.channel_id
-              AND d.recipient_kind='agent' AND d.recipient_id=r.agent_id
+           ON d.recipient_kind='agent' AND d.recipient_id=r.agent_id
          JOIN owner_messages m ON m.id=d.message_id
          JOIN owner_channels c ON c.id=d.channel_id
-         WHERE r.state='running' AND d.state='pending' AND j.seq>r.context_history_end_seq
+         WHERE r.state='running' AND d.state='pending' AND d.seq>r.context_history_end_seq
            AND (c.archived=0 OR m.internal_kind='reminder')
            ${announced.length ? `AND d.id NOT IN (${announcedPlaceholders})` : ""}
          ORDER BY d.seq LIMIT 100`,
@@ -800,7 +685,7 @@ export class AgentRunCoordinator {
     const onlineNodePlaceholders = onlineNodeIds.map(() => "?").join(",");
     return this.db
       .prepare(
-        `SELECT a.id AS agent_id,a.node_id,COALESCE(s.model_session_id,s.id) AS session_id,a.name,a.role,a.description,
+        `SELECT a.id AS agent_id,a.node_id,s.id AS session_id,a.name,a.role,a.description,
                 a.provider,a.model_id,d.channel_id,c.visibility AS channel_visibility,
                 d.id AS delivery_id
          FROM owner_message_deliveries d
@@ -808,8 +693,6 @@ export class AgentRunCoordinator {
          JOIN owner_agents a ON a.id=d.recipient_id
          JOIN owner_agent_sessions s ON s.agent_id=a.id
          JOIN owner_channels c ON c.id=d.channel_id
-         JOIN owner_agent_session_journal j
-           ON j.agent_id=a.id AND j.message_id=d.message_id AND j.role='user'
          WHERE d.recipient_kind='agent' AND d.state='pending'
            AND (c.archived=0 OR m.internal_kind='reminder')
            AND a.node_id IN (${onlineNodePlaceholders})
@@ -826,11 +709,6 @@ export class AgentRunCoordinator {
              WHERE earlier.recipient_kind='agent' AND earlier.recipient_id=a.id
                AND earlier.state='pending' AND earlier.seq<d.seq
                AND (earlier_source.archived=0 OR earlier_message.internal_kind='reminder')
-               AND EXISTS (
-                 SELECT 1 FROM owner_agent_session_journal prior
-                 WHERE prior.agent_id=a.id AND prior.message_id=earlier.message_id
-                   AND prior.role='user'
-               )
            )
            AND NOT EXISTS (
              SELECT 1 FROM owner_agent_runs retry
@@ -851,8 +729,6 @@ export class AgentRunCoordinator {
               `SELECT c.visibility FROM owner_agents a
                JOIN owner_message_deliveries d ON d.recipient_id=a.id AND d.recipient_kind='agent'
                JOIN owner_messages m ON m.id=d.message_id
-               JOIN owner_agent_session_journal j
-                 ON j.agent_id=a.id AND j.message_id=d.message_id AND j.role='user'
                JOIN owner_channels c ON c.id=d.channel_id
                WHERE a.id=? AND a.status='waiting_credentials' AND a.model_ready=1
                  AND (c.archived=0 OR m.internal_kind='reminder')
@@ -864,25 +740,20 @@ export class AgentRunCoordinator {
           if (!current) return undefined;
           candidate.channel_visibility = current.visibility;
           const inputStart = this.db
-            .prepare(
-              `SELECT j.seq FROM owner_message_deliveries d
-               JOIN owner_agent_session_journal j
-                 ON j.agent_id=d.recipient_id AND j.message_id=d.message_id AND j.role='user'
-               WHERE d.id=?`,
-            )
+            .prepare(`SELECT seq FROM owner_message_deliveries WHERE id=?`)
             .get(candidate.delivery_id) as { seq: number } | undefined;
           if (!inputStart) return undefined;
           const firstDifferentSource = this.db
             .prepare(
-              `SELECT MIN(seq) AS seq FROM owner_agent_session_journal
-               WHERE agent_id=? AND role='user' AND seq>? AND channel_id<>?`,
+              `SELECT MIN(seq) AS seq FROM owner_message_deliveries
+               WHERE recipient_id=? AND recipient_kind='agent' AND seq>? AND channel_id<>?`,
             )
             .get(candidate.agent_id, inputStart.seq, candidate.channel_id) as
             { seq: number | null } | undefined;
           const maxSequence = this.db
             .prepare(
               `SELECT COALESCE(MAX(seq),0) AS seq
-               FROM owner_agent_session_journal WHERE agent_id=?`,
+               FROM owner_message_deliveries WHERE recipient_id=? AND recipient_kind='agent'`,
             )
             .get(candidate.agent_id) as { seq: number };
           const inputEndSequence =
@@ -944,24 +815,58 @@ export class AgentRunCoordinator {
       | undefined;
     if (!run) return undefined;
     const inputStart = this.db
-      .prepare(
-        `SELECT j.seq FROM owner_message_deliveries d
-         JOIN owner_agent_session_journal j
-           ON j.agent_id=d.recipient_id AND j.message_id=d.message_id AND j.role='user'
-         WHERE d.id=?`,
-      )
+      .prepare(`SELECT seq FROM owner_message_deliveries WHERE id=?`)
       .get(run.delivery_id) as { seq: number } | undefined;
-    return inputStart
-      ? this.chat.listAgentRunContext(
-          agentId,
-          cursor,
-          limit,
-          run.context_history_end_seq,
-          run.channel_id,
-          inputStart.seq,
-          run.input_end_seq,
-        )
-      : undefined;
+    if (!inputStart) return undefined;
+    const history = new AgentSession(this.db).read(agentId);
+    const input = this.db
+      .prepare(
+        `SELECT d.id,m.text,m.created_at,m.root_id,m.quote_id,c.visibility
+      FROM owner_message_deliveries d JOIN owner_messages m ON m.id=d.message_id
+      JOIN owner_channels c ON c.id=d.channel_id
+      WHERE d.recipient_kind='agent' AND d.recipient_id=? AND d.channel_id=? AND d.state='pending'
+        AND d.seq>=? AND d.seq<=?
+        AND (NOT EXISTS (SELECT 1 FROM owner_message_deliveries seed JOIN owner_messages sm ON sm.id=seed.message_id WHERE seed.id=? AND sm.internal_kind='reminder') OR m.internal_kind='reminder')
+      ORDER BY d.seq`,
+      )
+      .all(agentId, run.channel_id, inputStart.seq, run.input_end_seq, run.delivery_id) as Array<{
+      id: string;
+      text: string;
+      created_at: number;
+      root_id: string | null;
+      quote_id: string | null;
+      visibility: string;
+    }>;
+    const messages = [
+      ...history,
+      ...input
+        .filter((row) => !history.some((entry) => entry.id === row.id))
+        .map((row) => ({
+          id: row.id,
+          actionScopeId: run.delivery_id,
+          pending: true,
+          message: {
+            role: "user" as const,
+            timestamp: row.created_at,
+            content: `[消息来源：频道 ${run.channel_id}；可见范围：${row.visibility === "public" ? "公开" : "私密"}；讨论串：${row.root_id ?? "无"}；引用：${row.quote_id ?? "无"}]\n${row.text}`,
+          },
+        })),
+      // Late receipts may arrive while the worker pages: append them after the admitted input batch.
+      ...new AgentSession(this.db).pendingCorrections(agentId, run.delivery_id),
+    ];
+    // Bound ordinary pages by serialized bytes; the transport fragments a single larger message.
+    let end = cursor,
+      bytes = 0;
+    while (end < messages.length && end < cursor + limit) {
+      const size = Buffer.byteLength(JSON.stringify(messages[end]), "utf8");
+      if (end > cursor && bytes + size > 256 * 1024) break;
+      bytes += size;
+      end++;
+    }
+    return {
+      messages: messages.slice(cursor, end),
+      nextCursor: end < messages.length ? end : null,
+    };
   }
 
   private finishRun(runId: string, agentId: string, ok: boolean, code?: string): void {

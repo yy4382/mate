@@ -189,7 +189,7 @@ function assertCheckpointHoldsDeployment(backupDir, agentId) {
   try {
     for (const table of [
       "owner_agent_sessions",
-      "owner_agent_session_journal",
+      "owner_agent_session_records",
       "owner_sessions",
       "owner_messages",
       "owner_message_deliveries",
@@ -267,13 +267,13 @@ function sessionTurnText(controlPlaneDataDir, agentId) {
   try {
     const row = database
       .prepare(
-        `SELECT text FROM owner_agent_session_journal
-         WHERE role='assistant' AND tool_action_id IS NULL AND run_id IN
+        `SELECT json_extract(payload_json,'$.message.content[0].text') AS text FROM owner_agent_session_records
+         WHERE json_extract(payload_json,'$.message.role')='assistant' AND run_id IN
            (SELECT id FROM owner_agent_runs WHERE agent_id=?)
          ORDER BY created_at DESC, rowid DESC LIMIT 1`,
       )
       .get(agentId);
-    return row?.text;
+    return row?.text ?? undefined;
   } finally {
     database.close();
   }

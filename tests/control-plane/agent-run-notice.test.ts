@@ -1,3 +1,4 @@
+import { consumeContextPage } from "../helpers/session.js";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import Database from "better-sqlite3";
 import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
@@ -141,6 +142,7 @@ async function finishRun(
   run: { runId: string; agentId: string },
   ok = true,
 ): Promise<void> {
+  await readRunContext(app, socket, run);
   await app.nodes.receive(
     socket,
     JSON.stringify({
@@ -182,7 +184,7 @@ async function readRunContext(
   app: ReturnType<typeof createControlPlaneApp>,
   socket: FakeNodeSocket,
   run: { runId: string; agentId: string },
-): Promise<ModelContextMessage[]> {
+) {
   const fromIndex = socket.sent.length;
   await app.nodes.receive(
     socket,
@@ -196,7 +198,7 @@ async function readRunContext(
     }),
   );
   const response = await waitForMessage(socket, fromIndex, "control.agent.run.context");
-  return (response as unknown as { messages: ModelContextMessage[] }).messages;
+  return (await consumeContextPage(app, socket, run.runId, run.agentId)).messages;
 }
 
 function attention(

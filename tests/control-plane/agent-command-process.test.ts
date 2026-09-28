@@ -194,8 +194,8 @@ function sessionTurnText(directory: string, runId: string): string | undefined {
   try {
     const row = db
       .prepare(
-        `SELECT text FROM owner_agent_session_journal
-         WHERE run_id=? AND role='assistant' AND tool_action_id IS NULL
+        `SELECT json_extract(payload_json,'$.message.content[0].text') AS text FROM owner_agent_session_records
+         WHERE run_id=? AND json_extract(payload_json,'$.message.role')='assistant'
          ORDER BY created_at DESC, rowid DESC LIMIT 1`,
       )
       .get(runId) as { text: string } | undefined;
@@ -525,25 +525,27 @@ it("does not run a state-changing command twice when its lost receipt is retried
     // one line ever reached the ledger, and the Agent received that receipt rather than a re-run.
     expect(readFileSync(ledger, "utf8").trimEnd().split("\n")).toEqual(["executed"]);
     const db = controlPlaneDatabase(directory);
-    let operationRows: Array<{ operation_id: string }>,
-      agentReceipts: Array<{ tool_action_id: string }>;
+    let operationRows: Array<{ operation_id: string }>, agentReceipts: Array<{ content: string }>;
     try {
       operationRows = db
         .prepare("SELECT operation_id FROM owner_agent_process_operations WHERE agent_id=?")
         .all(agent.id) as Array<{ operation_id: string }>;
       agentReceipts = db
         .prepare(
-          `SELECT tool_action_id FROM owner_agent_session_journal
-           WHERE agent_id=? AND process_operation_id=? ORDER BY rowid`,
+          "SELECT json_extract(payload_json,'$.message.content[0].text') AS content FROM owner_agent_session_records WHERE agent_id=? AND json_extract(payload_json,'$.message.role')='toolResult'",
         )
-        .all(agent.id, operation.operation_id) as Array<{ tool_action_id: string }>;
+        .all(agent.id) as Array<{ content: string }>;
     } finally {
       db.close();
     }
     expect(operationRows).toEqual([{ operation_id: operation.operation_id }]);
-    expect(agentReceipts.map((row) => row.tool_action_id)).toContain(
-      `${String(operation.operation_id)}:succeeded`,
-    );
+    expect(
+      agentReceipts.some(
+        (row) =>
+          row.content.includes(String(operation.operation_id)) &&
+          row.content.includes('"state":"succeeded"'),
+      ),
+    ).toBe(true);
     const activity = (await (
       await fetch(new URL(`/api/owner/agents/${agent.id}/activity?detail=1`, origin), {
         headers: { cookie },
@@ -561,95 +563,134 @@ it("does not run a state-changing command twice when its lost receipt is retried
   }
 }, 90_000);
 
-it("keeps an already-started command from running again after the node restarts", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "mate-agent-command-node-restart-")),
-    nodeData = join(directory, "node-data"),
-    workspaceRoot = join(directory, "agent-workspaces");
-  chmodSync(directory, 0o700);
-  writeFileSync(join(directory, "owner-password"), `${ownerPassword}\n`, { mode: 0o600 });
-  let control: ProcessOutput | undefined,
-    node: ProcessOutput | undefined,
-    restarted: ProcessOutput | undefined;
-  try {
-    control = startControlPlane(directory);
-    const origin = `http://127.0.0.1:${(await control.waitFor(/MATE_CONTROL_PLANE_LISTENING (\d+)/))[1]}`,
-      cookie = await login(origin);
-    const pairing = (await (
-      await fetch(new URL("/api/owner/nodes/pairing-tokens", origin), {
-        method: "POST",
-        headers: { cookie },
-      })
-    ).json()) as { pairingToken: string };
-    node = startNode({
-      origin,
-      nodeData,
-      workspaceRoot,
-      pairingToken: pairing.pairingToken,
-      modelWorkerEntry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
-      commandTimeoutMs: 20_000,
-    });
-    const nodeId = (await node.waitFor(/MATE_NODE_PAIRED ([0-9a-f-]+)/i))[1]!;
-    const agent = await createAgent(origin, cookie, nodeId),
-      ledger = join(agent.linuxIdentity.workspace, "ledger.txt");
-    await startAgentRun(origin, cookie, agent.id, "synthetic-key-ordinary-command-restart");
-
-    // The command really started in its own process group before the node went away.
-    await eventually(() => {
-      try {
-        return readFileSync(ledger, "utf8").includes("executed") ? true : undefined;
-      } catch {
-        return undefined;
-      }
-    }, "the started command's side effect");
-
-    // SIGTERM the node while that command is still running, then start the node again on the same
-    // data directory. The node stops the command groups it started before it exits, so this
-    // restart has a confirmed result to report instead of an unknown one; the tracker's memory is
-    // gone, but the durable record is not.
-    await stopProcess(node);
-    node = undefined;
-    restarted = startNode({
-      origin,
-      nodeData,
-      workspaceRoot,
-      modelWorkerEntry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
-      commandTimeoutMs: 20_000,
-    });
-    await restarted.waitFor(/MATE_NODE_CONNECTED ([0-9a-f-]+)/i);
-    await eventually(
-      () => (firstRunId(directory, agent.id, "completed") ? true : undefined),
-      "the resumed Agent run",
-    );
-    // The side effect happened exactly once. The restarted node answered from its durable start
-    // record instead of re-running a command whose termination it could not confirm, so nothing was
-    // appended and no second operation row was ever created for the same durable action.
-    await delay(2500);
-    expect(readFileSync(ledger, "utf8").trimEnd().split("\n")).toEqual(["executed"]);
-    const operation = processOperation(directory, agent.id)!;
-    expect(typeof operation.operation_id).toBe("string");
-    // The record is exactly as honest as the node can make it: the node stopped the command group
-    // while shutting down, so its receipt says the command was ended by SIGKILL rather than
-    // restating it as a result it never produced.
-    expect(operation).toMatchObject({ state: "failed", node_receipt_confirmed: 1 });
-    expect(JSON.parse(operation.receipt_json as string)).toMatchObject({
-      code: null,
-      signal: "SIGKILL",
-      timedOut: false,
-    });
-    const db = controlPlaneDatabase(directory);
-    let operationRows: Array<{ operation_id: string }>;
+it.each([false, true])(
+  "keeps an already-started command from running again after node restart (archived source=%s)",
+  async (archived) => {
+    const directory = mkdtempSync(join(tmpdir(), "mate-agent-command-node-restart-")),
+      nodeData = join(directory, "node-data"),
+      workspaceRoot = join(directory, "agent-workspaces");
+    chmodSync(directory, 0o700);
+    writeFileSync(join(directory, "owner-password"), `${ownerPassword}\n`, { mode: 0o600 });
+    let control: ProcessOutput | undefined,
+      node: ProcessOutput | undefined,
+      restarted: ProcessOutput | undefined;
     try {
-      operationRows = db
-        .prepare("SELECT operation_id FROM owner_agent_process_operations WHERE agent_id=?")
-        .all(agent.id) as Array<{ operation_id: string }>;
+      control = startControlPlane(directory);
+      const origin = `http://127.0.0.1:${(await control.waitFor(/MATE_CONTROL_PLANE_LISTENING (\d+)/))[1]}`,
+        cookie = await login(origin);
+      const pairing = (await (
+        await fetch(new URL("/api/owner/nodes/pairing-tokens", origin), {
+          method: "POST",
+          headers: { cookie },
+        })
+      ).json()) as { pairingToken: string };
+      node = startNode({
+        origin,
+        nodeData,
+        workspaceRoot,
+        pairingToken: pairing.pairingToken,
+        modelWorkerEntry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
+        commandTimeoutMs: 20_000,
+      });
+      const nodeId = (await node.waitFor(/MATE_NODE_PAIRED ([0-9a-f-]+)/i))[1]!;
+      const agent = await createAgent(origin, cookie, nodeId),
+        ledger = join(agent.linuxIdentity.workspace, "ledger.txt");
+      await startAgentRun(origin, cookie, agent.id, "synthetic-key-ordinary-command-restart");
+
+      // The command really started in its own process group before the node went away.
+      await eventually(() => {
+        try {
+          return readFileSync(ledger, "utf8").includes("executed") ? true : undefined;
+        } catch {
+          return undefined;
+        }
+      }, "the started command's side effect");
+
+      // SIGTERM the node while that command is still running, then start the node again on the same
+      // data directory. The node stops the command groups it started before it exits, so this
+      // restart has a confirmed result to report instead of an unknown one; the tracker's memory is
+      // gone, but the durable record is not.
+      await stopProcess(node);
+      node = undefined;
+      if (archived) {
+        const api = async (path: string, body?: unknown, method = "POST") => {
+          const response = await fetch(new URL(path, origin), {
+            method,
+            headers: { cookie, "content-type": "application/json" },
+            ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+          });
+          expect(response.ok).toBe(true);
+          return response.status === 204 ? undefined : response.json();
+        };
+        const dm = (await api(`/api/owner/agents/${agent.id}/direct-channel`)).channel.id;
+        await api(`/api/owner/channels/${dm}`, { archived: true }, "PATCH");
+        const room = await api("/api/owner/channels", {
+          name: "Recovery",
+          description: "Synthetic",
+          visibility: "public",
+        });
+        await api(`/api/owner/channels/${room.id}/invitations`, { agentId: agent.id });
+        await api(`/api/owner/channels/${room.id}/messages`, {
+          text: "Continue in another conversation",
+        });
+      }
+      restarted = startNode({
+        origin,
+        nodeData,
+        workspaceRoot,
+        modelWorkerEntry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
+        commandTimeoutMs: 20_000,
+      });
+      await restarted.waitFor(/MATE_NODE_CONNECTED ([0-9a-f-]+)/i);
+      await eventually(
+        () => (firstRunId(directory, agent.id, "completed") ? true : undefined),
+        "the resumed Agent run",
+      );
+      // The side effect happened exactly once. The restarted node answered from its durable start
+      // record instead of re-running a command whose termination it could not confirm, so nothing was
+      // appended and no second operation row was ever created for the same durable action.
+      await delay(2500);
+      expect(readFileSync(ledger, "utf8").trimEnd().split("\n")).toEqual(["executed"]);
+      const operation = processOperation(directory, agent.id)!;
+      expect(typeof operation.operation_id).toBe("string");
+      // The record is exactly as honest as the node can make it: the node stopped the command group
+      // while shutting down, so its receipt says the command was ended by SIGKILL rather than
+      // restating it as a result it never produced.
+      expect(operation).toMatchObject({ state: "failed", node_receipt_confirmed: 1 });
+      expect(JSON.parse(operation.receipt_json as string)).toMatchObject({
+        code: null,
+        signal: "SIGKILL",
+        timedOut: false,
+      });
+      const db = controlPlaneDatabase(directory);
+      let operationRows: Array<{ operation_id: string }>;
+      try {
+        const results = db
+          .prepare(
+            "SELECT payload_json FROM owner_agent_session_records WHERE agent_id=? AND json_extract(payload_json,'$.message.role')='toolResult'",
+          )
+          .all(agent.id) as Array<{ payload_json: string }>;
+        expect(
+          results.some(
+            (row) =>
+              row.payload_json.includes(String(operation.operation_id)) &&
+              row.payload_json.includes("SIGKILL"),
+          ),
+        ).toBe(true);
+        expect(results.some((row) => row.payload_json.includes("request was refused"))).toBe(false);
+        operationRows = db
+          .prepare("SELECT operation_id FROM owner_agent_process_operations WHERE agent_id=?")
+          .all(agent.id) as Array<{ operation_id: string }>;
+      } finally {
+        db.close();
+      }
+      expect(operationRows).toEqual([{ operation_id: operation.operation_id }]);
     } finally {
-      db.close();
+      await stopProcess(restarted);
+      await stopProcess(node);
+      await stopProcess(control);
+      rmSync(directory, { recursive: true, force: true });
     }
-    expect(operationRows).toEqual([{ operation_id: operation.operation_id }]);
-  } finally {
-    await stopProcess(restarted);
-    await stopProcess(node);
-    await stopProcess(control);
-    rmSync(directory, { recursive: true, force: true });
-  }
-}, 90_000);
+  },
+  90_000,
+);

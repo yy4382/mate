@@ -1,3 +1,4 @@
+import { AgentSession } from "./agent-session.js";
 import type Database from "better-sqlite3";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -105,23 +106,9 @@ export interface OwnerMessageDeliveryPage {
   nextAfter: number | null;
 }
 
-export interface AgentSessionJournalEntry {
-  sequence: number;
-  role: "user" | "assistant";
-  text: string;
-  sourceChannelId: string;
-  sourceVisibility: ChannelVisibility;
-  currentRunInput: boolean;
-}
-
-export interface AgentSessionJournalPage {
-  messages: AgentSessionJournalEntry[];
-  nextAfter: number | null;
-}
-
 export interface AgentRunContextPage {
-  messages: AgentSessionJournalEntry[];
-  /** Projection-order cursor; each message sequence remains its original journal value. */
+  messages: import("../nodes/session-record.js").ModelContextMessage[];
+  /** Next message position in the ordered run context; null marks the final page. */
   nextCursor: number | null;
 }
 
@@ -724,21 +711,6 @@ export class OwnerChat {
           created_at: at,
         });
         this.queueDeliveries(message, at);
-        const agentRecipients = this.db
-          .prepare(
-            `SELECT d.recipient_id AS agent_id,s.id AS session_id
-             FROM owner_message_deliveries d
-             JOIN owner_agent_sessions s ON s.agent_id=d.recipient_id
-             WHERE d.message_id=? AND d.recipient_kind='agent' ORDER BY d.seq`,
-          )
-          .all(id) as Array<{ agent_id: string; session_id: string }>;
-        for (const recipient of agentRecipients) {
-          this.db
-            .prepare(
-              "INSERT INTO owner_agent_session_journal(session_id,agent_id,channel_id,message_id,role,text,created_at) VALUES(?,?,?,?,'user',?,?)",
-            )
-            .run(recipient.session_id, recipient.agent_id, channelId, id, text, at);
-        }
         this.record("message.created", channelId, message);
         if (position.asTask) this.createTaskForMessage(id, "human", "owner");
         return message;
@@ -753,10 +725,33 @@ export class OwnerChat {
     state: "succeeded" | "failed",
   ): void {
     const channel = this.getOrCreateAgentDirectChannel(agentId);
-    if (!channel || channel.archived) return;
     const at = this.now(),
       id = randomUUID();
-    const text = `Mate 已核对操作 ${operationId} 的收据：${state === "succeeded" ? "成功" : "失败"}。请读取会话中的工具结果后决定是否继续。`;
+    const processReceipt = this.db
+      .prepare(
+        "SELECT receipt_json FROM owner_agent_process_operations WHERE operation_id=? AND agent_id=?",
+      )
+      .get(operationId, agentId) as { receipt_json: string | null } | undefined;
+    const workspaceReceipt = this.db
+      .prepare(
+        "SELECT result_json FROM owner_agent_tool_actions WHERE agent_id=? AND json_extract(result_json,'$.operationId')=?",
+      )
+      .get(agentId, operationId) as { result_json: string } | undefined;
+    new AgentSession(this.db).queueCorrection(
+      agentId,
+      {
+        operationId,
+        state,
+        receipt: processReceipt?.receipt_json
+          ? JSON.parse(processReceipt.receipt_json)
+          : workspaceReceipt?.result_json
+            ? JSON.parse(workspaceReceipt.result_json)
+            : null,
+      },
+      at,
+    );
+    if (!channel || channel.archived) return;
+    const text = `Mate 已核对操作 ${operationId} 的收据：${state === "succeeded" ? "成功" : "失败"}。完整更正将在后续模型上下文中呈现。`;
     this.db
       .transaction(() => {
         const sequence = this.db
@@ -781,16 +776,6 @@ export class OwnerChat {
           created_at: at,
         });
         this.queueDeliveries(message, at);
-        const session = this.db
-          .prepare("SELECT id FROM owner_agent_sessions WHERE agent_id=?")
-          .get(agentId) as { id: string } | undefined;
-        if (session)
-          this.db
-            .prepare(
-              `INSERT INTO owner_agent_session_journal(session_id,agent_id,channel_id,message_id,role,text,created_at)
-         VALUES(?,?,?,?,'user',?,?)`,
-            )
-            .run(session.id, agentId, channel.id, id, text, at);
         this.record("message.created", channel.id, message);
       })
       .immediate();
@@ -1174,9 +1159,6 @@ export class OwnerChat {
           const reminder = this.readReminder(candidate.id)!;
           const channel = this.getOrCreateAgentDirectChannel(reminder.agentId);
           if (!channel) continue;
-          const session = this.db
-            .prepare("SELECT id FROM owner_agent_sessions WHERE agent_id=?")
-            .get(reminder.agentId) as { id: string };
           const order = this.db
             .prepare(
               "SELECT COALESCE(MAX(order_seq),0)+1 AS next FROM owner_messages WHERE channel_id=?",
@@ -1195,11 +1177,6 @@ export class OwnerChat {
               "INSERT INTO owner_message_deliveries(id,message_id,channel_id,recipient_kind,recipient_id,state,created_at) VALUES(?,?,?,'agent',?,'pending',?)",
             )
             .run(deliveryId, messageId, channel.id, reminder.agentId, at);
-          this.db
-            .prepare(
-              "INSERT INTO owner_agent_session_journal(session_id,agent_id,channel_id,message_id,role,text,created_at) VALUES(?,?,?,?,'user',?,?)",
-            )
-            .run(session.id, reminder.agentId, channel.id, messageId, `提醒：${reminder.text}`, at);
           this.db
             .prepare(
               "INSERT INTO owner_reminder_firings(id,reminder_id,agent_id,fired_at,delivery_id) VALUES(?,?,?,?,?)",
@@ -1225,17 +1202,11 @@ export class OwnerChat {
       WHERE d.id=owner_reminder_firings.delivery_id
     ) WHERE handled_at IS NULL AND EXISTS (
       SELECT 1 FROM owner_message_deliveries d
-      JOIN owner_agent_session_journal input
-        ON input.message_id=d.message_id AND input.agent_id=owner_reminder_firings.agent_id
-           AND input.role='user'
       JOIN owner_agent_runs r
         ON r.agent_id=owner_reminder_firings.agent_id AND r.state='completed'
-           AND r.input_end_seq>=input.seq AND r.completed_at=d.handled_at
+           AND r.input_end_seq>=d.seq AND r.completed_at=d.handled_at
       JOIN owner_message_deliveries seed ON seed.id=r.delivery_id AND seed.channel_id=d.channel_id
-      JOIN owner_agent_session_journal first_input
-        ON first_input.message_id=seed.message_id AND first_input.agent_id=r.agent_id
-           AND first_input.role='user' AND first_input.seq<=input.seq
-      WHERE d.id=owner_reminder_firings.delivery_id AND d.state='handled'
+      WHERE d.id=owner_reminder_firings.delivery_id AND d.state='handled' AND seed.seq<=d.seq
     )`,
       )
       .run();
@@ -1315,250 +1286,6 @@ export class OwnerChat {
     );
   }
 
-  listAgentSessionJournal(
-    agentId: string,
-    after: number,
-    limit: number,
-    throughSequence?: number,
-    currentInputFromSequence?: number,
-  ): AgentSessionJournalPage {
-    if (
-      !Number.isSafeInteger(after) ||
-      after < 0 ||
-      !Number.isSafeInteger(limit) ||
-      limit < 1 ||
-      limit > 100 ||
-      (throughSequence !== undefined &&
-        (!Number.isSafeInteger(throughSequence) || throughSequence < 0)) ||
-      (currentInputFromSequence !== undefined &&
-        (!Number.isSafeInteger(currentInputFromSequence) ||
-          currentInputFromSequence < 1 ||
-          throughSequence === undefined ||
-          currentInputFromSequence > throughSequence))
-    )
-      throw new Error("Agent session journal cursor is invalid");
-    const rows = this.db
-      .prepare(
-        `SELECT j.seq,j.role,j.text,j.channel_id,c.visibility
-         FROM owner_agent_session_journal j
-         JOIN owner_agent_sessions s ON s.id=j.session_id
-         JOIN owner_channels c ON c.id=j.channel_id
-         WHERE s.agent_id=? AND j.seq>? AND (? IS NULL OR j.seq<=?)
-         ORDER BY j.seq LIMIT ?`,
-      )
-      .all(agentId, after, throughSequence ?? null, throughSequence ?? null, limit + 1) as Array<{
-      seq: number;
-      role: "user" | "assistant";
-      text: string;
-      channel_id: string;
-      visibility: ChannelVisibility;
-    }>;
-    const hasMore = rows.length > limit,
-      messages = rows.slice(0, limit).map((row) => ({
-        sequence: row.seq,
-        role: row.role,
-        text: row.text,
-        sourceChannelId: row.channel_id,
-        sourceVisibility: row.visibility,
-        currentRunInput:
-          row.role === "user" &&
-          currentInputFromSequence !== undefined &&
-          row.seq >= currentInputFromSequence,
-      }));
-    return {
-      messages,
-      nextAfter: hasMore ? (messages.at(-1)?.sequence ?? after) : null,
-    };
-  }
-
-  listAgentRunContext(
-    agentId: string,
-    cursor: number,
-    limit: number,
-    historyThroughSequence: number,
-    channelId: string,
-    inputFromSequence: number,
-    inputThroughSequence: number,
-  ): AgentRunContextPage {
-    if (
-      !Number.isSafeInteger(cursor) ||
-      cursor < 0 ||
-      !Number.isSafeInteger(limit) ||
-      limit < 1 ||
-      limit > 100 ||
-      !Number.isSafeInteger(historyThroughSequence) ||
-      historyThroughSequence < 0 ||
-      !Number.isSafeInteger(inputFromSequence) ||
-      inputFromSequence < 1 ||
-      !Number.isSafeInteger(inputThroughSequence) ||
-      inputThroughSequence < inputFromSequence
-    )
-      throw new Error("Agent run context cursor is invalid");
-    const rows = this.db
-      .prepare(
-        `WITH snapshot AS (
-           SELECT through_seq,summary,snapshot_json FROM owner_agent_session_snapshots
-           WHERE agent_id=@agent_id AND through_seq<=@history_end_seq
-           ORDER BY created_at DESC,rowid DESC LIMIT 1
-         ), run_context AS (
-           SELECT through_seq AS journal_sequence,'assistant' AS role,
-                  'Mate 会话摘要：'||summary||char(10)||'Mate 会话快照：'||snapshot_json AS text,@channel_id AS channel_id,
-                  'private' AS visibility,0 AS entry_group,0 AS current_run_input
-           FROM snapshot
-           UNION ALL
-           SELECT j.seq AS journal_sequence,j.role,j.text,j.channel_id,c.visibility,
-                  0 AS entry_group,0 AS current_run_input
-           FROM owner_agent_session_journal j
-           JOIN owner_agent_sessions s ON s.id=j.session_id AND s.agent_id=@agent_id
-           JOIN owner_channels c ON c.id=j.channel_id
-           WHERE j.agent_id=@agent_id AND j.seq<=@history_end_seq
-             AND j.seq>COALESCE((SELECT through_seq FROM snapshot),0)
-             AND (
-               (j.role='user' AND EXISTS (
-                 SELECT 1 FROM owner_message_deliveries d
-                 WHERE d.recipient_kind='agent' AND d.recipient_id=@agent_id
-                   AND d.message_id=j.message_id AND d.state='handled'
-               ))
-               OR (j.role='assistant' AND EXISTS (
-                 SELECT 1 FROM owner_agent_runs r
-                 WHERE r.id=j.run_id AND r.agent_id=@agent_id AND r.state='completed'
-               ))
-               OR (j.role='assistant' AND j.tool_action_id IS NOT NULL AND EXISTS (
-                 SELECT 1 FROM owner_agent_tool_actions a
-                 WHERE a.session_id=j.session_id AND a.agent_id=j.agent_id
-                   AND a.action_id=j.tool_action_id
-               ))
-               OR (j.role='assistant' AND j.process_operation_id IS NOT NULL AND EXISTS (
-                 SELECT 1 FROM owner_agent_process_operations p
-                 WHERE p.operation_id=j.process_operation_id AND p.agent_id=j.agent_id
-               ))
-             )
-           UNION ALL
-           SELECT j.seq AS journal_sequence,j.role,j.text,j.channel_id,c.visibility,
-                  1 AS entry_group,1 AS current_run_input
-           FROM owner_agent_session_journal j
-           JOIN owner_agent_sessions s ON s.id=j.session_id AND s.agent_id=@agent_id
-           JOIN owner_channels c ON c.id=j.channel_id
-           JOIN owner_message_deliveries d
-             ON d.message_id=j.message_id AND d.channel_id=j.channel_id
-                AND d.recipient_kind='agent' AND d.recipient_id=@agent_id
-           JOIN owner_messages m ON m.id=d.message_id
-           WHERE j.agent_id=@agent_id AND j.role='user' AND d.state='pending'
-             AND j.channel_id=@channel_id
-             AND (
-               NOT EXISTS (
-                 SELECT 1 FROM owner_agent_session_journal seed
-                 JOIN owner_messages seed_message ON seed_message.id=seed.message_id
-                 WHERE seed.seq=@input_start_seq AND seed_message.internal_kind='reminder'
-               ) OR m.internal_kind='reminder'
-             )
-             AND j.seq>=@input_start_seq AND j.seq<=@input_end_seq
-         ), ordered_context AS (
-           SELECT ROW_NUMBER() OVER (ORDER BY entry_group,journal_sequence) AS context_position,
-                  journal_sequence,role,text,channel_id,visibility,current_run_input
-           FROM run_context
-         )
-         SELECT context_position,journal_sequence,role,text,channel_id,visibility,current_run_input
-         FROM ordered_context
-         WHERE context_position>@cursor
-         ORDER BY context_position LIMIT @limit`,
-      )
-      .all({
-        agent_id: agentId,
-        history_end_seq: historyThroughSequence,
-        channel_id: channelId,
-        input_start_seq: inputFromSequence,
-        input_end_seq: inputThroughSequence,
-        cursor,
-        limit: limit + 1,
-      }) as Array<{
-      context_position: number;
-      journal_sequence: number;
-      role: "user" | "assistant";
-      text: string;
-      channel_id: string;
-      visibility: ChannelVisibility;
-      current_run_input: number;
-    }>;
-    const hasMore = rows.length > limit,
-      pageRows = rows.slice(0, limit),
-      messages = pageRows.map((row) => ({
-        sequence: row.journal_sequence,
-        role: row.role,
-        text: row.text,
-        sourceChannelId: row.channel_id,
-        sourceVisibility: row.visibility,
-        currentRunInput: row.current_run_input === 1,
-      }));
-    return {
-      messages,
-      nextCursor: hasMore ? (pageRows.at(-1)?.context_position ?? cursor) : null,
-    };
-  }
-
-  /**
-   * Record one plain assistant turn of a run in that Agent's own session record.
-   *
-   * This is the only way run output enters Agent history: it appends a private journal row with no
-   * published message, no delivery handling and no run completion. Speaking to a conversation is a
-   * separate, explicit `messages.send` tool action. A run may record several turns (a preamble
-   * beside a tool call, then a final answer), so identity is the request id, not the run: a
-   * duplicate delivery of one request is acknowledged idempotently, the same request carrying
-   * different text is refused, and a run that is no longer running accepts only exact replays of
-   * what it already recorded.
-   */
-  recordAgentRunTranscript(
-    runId: string,
-    nodeId: string,
-    agentId: string,
-    requestId: string,
-    text: string,
-  ): boolean {
-    const contentHash = createHash("sha256").update(text, "utf8").digest("hex");
-    return this.db
-      .transaction(() => {
-        const run = this.db
-          .prepare(
-            `SELECT r.state,s.id AS session_id,d.channel_id
-             FROM owner_agent_runs r
-             JOIN owner_agent_sessions s ON s.agent_id=r.agent_id
-             JOIN owner_message_deliveries d ON d.id=r.delivery_id
-             WHERE r.id=? AND r.node_id=? AND r.agent_id=?`,
-          )
-          .get(runId, nodeId, agentId) as
-          | { state: "running" | "completed" | "failed"; session_id: string; channel_id: string }
-          | undefined;
-        if (!run) return false;
-        const recorded = this.db
-          .prepare(
-            `SELECT content_hash FROM owner_agent_session_journal
-             WHERE run_id=? AND agent_id=? AND request_id=? AND role='assistant'
-               AND tool_action_id IS NULL`,
-          )
-          .get(runId, agentId, requestId) as { content_hash: string | null } | undefined;
-        if (recorded) return recorded.content_hash === contentHash;
-        if (run.state !== "running") return false;
-        this.db
-          .prepare(
-            `INSERT INTO owner_agent_session_journal(
-               session_id,agent_id,channel_id,run_id,request_id,content_hash,role,text,created_at
-             ) VALUES(?,?,?,?,?,?,'assistant',?,?)`,
-          )
-          .run(
-            run.session_id,
-            agentId,
-            run.channel_id,
-            runId,
-            requestId,
-            contentHash,
-            text,
-            this.now(),
-          );
-        return true;
-      })
-      .immediate();
-  }
-
   /**
    * Complete a successful run and mark only the deliveries its boundary captured as handled.
    * Speaking, staying silent and completing a run are separate facts: this never changes a task.
@@ -1570,14 +1297,11 @@ export class OwnerChat {
           .prepare(
             `SELECT r.state,r.input_end_seq,s.id AS session_id,d.channel_id,
                     c.archived AS channel_archived,m.internal_kind AS delivery_kind,
-                    first_input.seq AS input_start_seq
+                    d.seq AS input_start_seq
              FROM owner_agent_runs r JOIN owner_agent_sessions s ON s.agent_id=r.agent_id
              JOIN owner_message_deliveries d ON d.id=r.delivery_id
              JOIN owner_channels c ON c.id=d.channel_id
              JOIN owner_messages m ON m.id=d.message_id
-             JOIN owner_agent_session_journal first_input
-               ON first_input.message_id=d.message_id AND first_input.agent_id=r.agent_id
-                  AND first_input.role='user'
              WHERE r.id=? AND r.agent_id=?
            AND NOT EXISTS (SELECT 1 FROM owner_agent_recovery_holds hold WHERE hold.agent_id=r.agent_id)`,
           )
@@ -1608,10 +1332,10 @@ export class OwnerChat {
             `UPDATE owner_message_deliveries SET state='handled',handled_at=?
          WHERE recipient_kind='agent' AND recipient_id=? AND channel_id=? AND state='pending'
                AND message_id IN (
-                 SELECT j.message_id FROM owner_agent_session_journal j
-                 JOIN owner_messages m ON m.id=j.message_id
-                 WHERE j.agent_id=? AND j.session_id=? AND j.role='user'
-                   AND j.seq>=? AND j.seq<=? AND j.message_id IS NOT NULL
+                 SELECT d.message_id FROM owner_message_deliveries d
+                 JOIN owner_messages m ON m.id=d.message_id
+                 WHERE d.recipient_id=? AND d.recipient_kind='agent'
+                   AND d.seq>=? AND d.seq<=?
                    AND (?=0 OR m.internal_kind='reminder')
                )`,
           )
@@ -1620,7 +1344,6 @@ export class OwnerChat {
             agentId,
             run.channel_id,
             agentId,
-            run.session_id,
             run.input_start_seq,
             run.input_end_seq,
             run.delivery_kind === "reminder" ? 1 : 0,
@@ -2310,7 +2033,7 @@ export class OwnerChat {
       AND NOT (m.author_kind='agent' AND m.author_id=?)
       AND (? IS NULL OR m.id=? OR m.root_id=?)
       AND NOT EXISTS (SELECT 1 FROM owner_agent_message_attention a WHERE a.agent_id=? AND a.message_id=m.id AND a.presented=1)
-      AND NOT EXISTS (SELECT 1 FROM owner_agent_session_journal j WHERE j.agent_id=? AND j.message_id=m.id AND j.role='user' AND j.seq<=?)
+      AND NOT EXISTS (SELECT 1 FROM owner_message_deliveries d WHERE d.recipient_id=? AND d.recipient_kind='agent' AND d.message_id=m.id AND d.seq<=?)
       ORDER BY m.order_seq`,
       )
       .all(
@@ -2335,7 +2058,7 @@ export class OwnerChat {
       AND (? IS NULL OR m.id=? OR m.root_id=?)
       AND NOT EXISTS (SELECT 1 FROM owner_agent_draft_reviews r WHERE r.draft_id=? AND r.message_id=m.id)
       AND NOT EXISTS (SELECT 1 FROM owner_agent_message_attention a WHERE a.agent_id=? AND a.message_id=m.id AND a.presented=1)
-      AND NOT EXISTS (SELECT 1 FROM owner_agent_session_journal j WHERE j.agent_id=? AND j.message_id=m.id AND j.role='user' AND j.seq<=?)
+      AND NOT EXISTS (SELECT 1 FROM owner_message_deliveries d WHERE d.recipient_id=? AND d.recipient_kind='agent' AND d.message_id=m.id AND d.seq<=?)
       ORDER BY m.order_seq`,
       )
       .all(
@@ -2646,34 +2369,6 @@ export class OwnerChat {
         JSON.stringify(result),
         this.now(),
       );
-    const inputRecord =
-        typeof input === "object" && input !== null ? (input as Record<string, unknown>) : {},
-      resultRecord =
-        typeof result === "object" && result !== null ? (result as Record<string, unknown>) : {},
-      channelId = operation.startsWith("reminders.")
-        ? this.getOrCreateAgentDirectChannel(run.agent_id)?.id
-        : (typeof inputRecord.conversationId === "string" && inputRecord.conversationId) ||
-          (typeof resultRecord.channelId === "string" && resultRecord.channelId) ||
-          (typeof resultRecord.id === "string" && resultRecord.id);
-    if (!channelId || !this.db.prepare("SELECT 1 FROM owner_channels WHERE id=?").get(channelId))
-      throw new Error("Conversation tool result has no durable source channel");
-    const contextResult = { ...resultRecord };
-    if (operation === "messages.send") delete contextResult.text;
-    this.db
-      .prepare(
-        `INSERT INTO owner_agent_session_journal(
-           session_id,agent_id,channel_id,run_id,tool_action_id,role,text,created_at
-         ) VALUES(?,?,?,?,?,'assistant',?,?)`,
-      )
-      .run(
-        run.session_id,
-        run.agent_id,
-        channelId,
-        run.run_id,
-        toolCallId,
-        `Mate 工具结果：${operation} ${JSON.stringify(contextResult)}`,
-        this.now(),
-      );
     return result;
   }
 
@@ -2713,30 +2408,6 @@ export class OwnerChat {
       created_at: at,
     });
     this.queueDeliveries(message, at);
-    const agentRecipients = this.db
-      .prepare(
-        `SELECT d.recipient_id AS agent_id,s.id AS session_id
-         FROM owner_message_deliveries d
-         JOIN owner_agent_sessions s ON s.agent_id=d.recipient_id
-         WHERE d.message_id=? AND d.recipient_kind='agent' ORDER BY d.seq`,
-      )
-      .all(id) as Array<{ agent_id: string; session_id: string }>;
-    for (const recipient of agentRecipients) {
-      this.db
-        .prepare(
-          `INSERT OR IGNORE INTO owner_agent_session_journal(
-             session_id,agent_id,channel_id,message_id,role,text,created_at
-           ) VALUES(?,?,?,?,'user',?,?)`,
-        )
-        .run(recipient.session_id, recipient.agent_id, channelId, id, text, at);
-    }
-    this.db
-      .prepare(
-        `INSERT INTO owner_agent_session_journal(
-           session_id,agent_id,channel_id,message_id,run_id,tool_action_id,role,text,created_at
-         ) VALUES(?,?,?,?,?,?,'assistant',?,?)`,
-      )
-      .run(run.session_id, run.agent_id, channelId, id, run.run_id, toolActionId, text, at);
     this.record("message.created", channelId, message);
     if (asTask) this.createTaskForMessage(id, "agent", run.agent_id);
     return message;

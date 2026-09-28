@@ -1,3 +1,10 @@
+import {
+  SessionAssembly,
+  sessionFragment,
+  sessionFragmentCharacters,
+} from "../../nodes/session-transport.js";
+import { sessionCommitSchema } from "../../nodes/session-record.js";
+import type { SessionCommit, ModelContextMessage } from "../../nodes/session-record.js";
 import type Database from "better-sqlite3";
 import { createHash, createPublicKey, randomBytes, randomUUID, verify } from "node:crypto";
 import {
@@ -85,6 +92,8 @@ interface PendingAgentProvision {
 export type NodeAgentRunStart = Extract<NodeControlMessage, { type: "control.agent.run" }>;
 
 interface PendingAgentRun {
+  sessionAssembly?: SessionAssembly;
+  contextPayload?: { cursor: number; serialized: string; nextCursor: number | null };
   nodeId: string;
   agentId: string;
   promise: Promise<NodeAgentRunResult>;
@@ -136,24 +145,17 @@ export interface AgentRunHandlers {
     limit: number,
   ):
     | {
-        messages: Array<{
-          sequence: number;
-          role: "user" | "assistant";
-          text: string;
-          sourceChannelId: string;
-          sourceVisibility: "public" | "private";
-          currentRunInput: boolean;
-        }>;
+        messages: ModelContextMessage[];
         nextCursor: number | null;
       }
     | undefined;
-  /** Record one plain assistant turn in the Agent's own session record; never publishes. */
+  /** Record one complete Pi message or run configuration in the Agent's own session record; never publishes. */
   transcript(
     runId: string,
     nodeId: string,
     agentId: string,
     requestId: string,
-    text: string,
+    entry: SessionCommit,
   ): boolean;
   tool(
     runId: string,
@@ -1146,14 +1148,38 @@ export class NodeDirectory {
     if (request.type === "node.agent.run.context") {
       let page: ReturnType<AgentRunHandlers["context"]>;
       try {
-        page = pending
-          ? this.agentRunHandlers?.context(
-              request.runId,
-              request.agentId,
-              request.cursor,
-              request.limit,
-            )
-          : undefined;
+        if (pending && !request.offset) {
+          page = this.agentRunHandlers?.context(
+            request.runId,
+            request.agentId,
+            request.cursor,
+            request.limit,
+          );
+          delete pending.contextPayload;
+          if (page && JSON.stringify(page.messages).length > sessionFragmentCharacters) {
+            pending.contextPayload = {
+              cursor: request.cursor,
+              serialized: JSON.stringify(page.messages),
+              nextCursor: page.nextCursor,
+            };
+          }
+        }
+        const payload = pending?.contextPayload;
+        if (
+          payload &&
+          payload.cursor === request.cursor &&
+          (request.offset ?? 0) < payload.serialized.length
+        ) {
+          this.send(socket, {
+            type: "control.agent.run.context",
+            requestId: request.requestId,
+            runId: request.runId,
+            messages: [],
+            nextCursor: payload.nextCursor,
+            fragment: sessionFragment(payload.serialized, request.offset ?? 0),
+          });
+          return;
+        }
       } catch {
         page = undefined;
       }
@@ -1170,15 +1196,31 @@ export class NodeDirectory {
     if (request.type === "node.agent.run.transcript") {
       let accepted = false;
       try {
-        accepted =
-          this.agentRunHandlers?.transcript(
-            request.runId,
-            nodeId,
-            request.agentId,
-            request.requestId,
-            request.text,
-          ) ?? false;
+        let entry: SessionCommit | undefined;
+        if (request.entry.kind === "fragment") {
+          if (!pending) throw new Error("Run no longer authorized");
+          if (request.entry.offset === 0)
+            pending.sessionAssembly = new SessionAssembly(request.requestId, request.entry.total);
+          if (!pending.sessionAssembly) throw new Error("Missing session fragment start");
+          const serialized = pending.sessionAssembly.accept(request.requestId, request.entry);
+          if (serialized === undefined) accepted = true;
+          else {
+            delete pending.sessionAssembly;
+            entry = sessionCommitSchema.parse(JSON.parse(serialized));
+            if (entry.id !== request.requestId) throw new Error("Session entry identity mismatch");
+          }
+        } else entry = request.entry;
+        if (entry)
+          accepted =
+            this.agentRunHandlers?.transcript(
+              request.runId,
+              nodeId,
+              request.agentId,
+              request.requestId,
+              entry,
+            ) ?? false;
       } catch {
+        if (pending) delete pending.sessionAssembly;
         accepted = false;
       }
       this.send(socket, {

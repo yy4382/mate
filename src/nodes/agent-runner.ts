@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { NodeControlMessage, NodeRequest } from "./protocol.js";
 import { NodeRequestSchema } from "./protocol.js";
 import { ModelRunFailure, startModelProcess, type ModelProcessSession } from "./model-process.js";
+import type { SessionCommit } from "./session-record.js";
 import type { ModelContextMessage } from "./model-worker.js";
 
 type AgentRunMessage = Extract<NodeControlMessage, { type: "control.agent.run" }>;
@@ -12,13 +13,13 @@ export interface AgentRunPage {
 }
 
 export interface AgentRunTransport {
-  /** Cursor addresses the run-context projection, not an individual journal sequence. */
+  /** Cursor addresses a message position in the ordered context supplied to this run. */
   context(cursor: number, signal: AbortSignal): Promise<AgentRunPage>;
   /**
-   * Record one plain assistant turn in the Agent's own session record. Resolves false when the
+   * Record one complete Pi message or run configuration in the Agent's own session record. Resolves false when the
    * control plane refuses the entry; this transport never publishes to a conversation.
    */
-  transcript(text: string, signal: AbortSignal): Promise<boolean>;
+  transcript(entry: SessionCommit, signal: AbortSignal): Promise<boolean>;
   tool(
     toolCallId: string,
     operation: string,
@@ -39,7 +40,7 @@ export interface AgentRunOptions {
   onWorker?(worker: ModelProcessSession): void;
 }
 
-/** Keep one Pi session per Agent and record each plain assistant turn in its session record. */
+/** Keep one Pi session per Agent and record each complete Pi message in its session record. */
 export async function runAgentModel(
   request: AgentRunMessage,
   transport: AgentRunTransport,

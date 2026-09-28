@@ -1,5 +1,5 @@
-/** Durable message journal and the one active model run allowed for each Agent. */
-export const agentRunSchemaV7 = `
+/** Run authorization, input bounds and durable business action receipts. */
+export const agentRunSchema = `
 ALTER TABLE owner_agents
   ADD COLUMN model_ready INTEGER NOT NULL DEFAULT 0 CHECK(model_ready IN (0,1));
 ALTER TABLE owner_messages
@@ -12,27 +12,14 @@ CREATE TABLE owner_agent_direct_channels (
   channel_id TEXT NOT NULL UNIQUE REFERENCES owner_channels(id),
   created_at INTEGER NOT NULL
 );
-CREATE TABLE owner_agent_session_journal (
-  seq INTEGER PRIMARY KEY AUTOINCREMENT,
-  session_id TEXT NOT NULL REFERENCES owner_agent_sessions(id),
-  agent_id TEXT NOT NULL REFERENCES owner_agents(id),
-  channel_id TEXT NOT NULL REFERENCES owner_channels(id),
-  message_id TEXT REFERENCES owner_messages(id),
-  run_id TEXT,
-  role TEXT NOT NULL CHECK(role IN ('user','assistant')),
-  text TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  UNIQUE(session_id,message_id,role)
-);
-CREATE INDEX owner_agent_session_journal_context
-  ON owner_agent_session_journal(session_id,seq);
-CREATE UNIQUE INDEX owner_agent_session_journal_reply_once
-  ON owner_agent_session_journal(run_id) WHERE role='assistant' AND run_id IS NOT NULL;
 CREATE TABLE owner_agent_runs (
   id TEXT PRIMARY KEY,
   agent_id TEXT NOT NULL REFERENCES owner_agents(id),
   node_id TEXT NOT NULL REFERENCES nodes(id),
   delivery_id TEXT NOT NULL REFERENCES owner_message_deliveries(id),
+  input_end_seq INTEGER NOT NULL DEFAULT 0,
+  context_history_end_seq INTEGER NOT NULL DEFAULT 0,
+  independent_review INTEGER NOT NULL DEFAULT 0 CHECK(independent_review IN (0,1)),
   state TEXT NOT NULL CHECK(state IN ('running','completed','failed')),
   error_code TEXT,
   retry_at INTEGER,
@@ -45,41 +32,6 @@ CREATE INDEX owner_agent_runs_retry
   ON owner_agent_runs(state,retry_at,started_at);
 CREATE INDEX owner_agent_runs_delivery
   ON owner_agent_runs(delivery_id,started_at);
-`;
-
-/** Persist the exact journal request identity so completed run replays can be verified. */
-export const agentJournalReplaySchema = `
-ALTER TABLE owner_agent_session_journal ADD COLUMN request_id TEXT;
-ALTER TABLE owner_agent_session_journal ADD COLUMN content_hash TEXT;
-CREATE UNIQUE INDEX owner_agent_session_journal_request_id
-  ON owner_agent_session_journal(request_id) WHERE request_id IS NOT NULL;
-`;
-
-/** Snapshot boundary for each run, with a backfill for previously delivered channel inputs. */
-export const agentRunBatchSchemaV9 = `
-ALTER TABLE owner_agent_runs ADD COLUMN input_end_seq INTEGER NOT NULL DEFAULT 0;
-INSERT INTO owner_agent_session_journal(session_id,agent_id,channel_id,message_id,role,text,created_at)
-SELECT s.id,d.recipient_id,d.channel_id,m.id,'user',m.text,m.created_at
-FROM owner_message_deliveries d
-JOIN owner_messages m ON m.id=d.message_id
-JOIN owner_agent_sessions s ON s.agent_id=d.recipient_id
-WHERE d.recipient_kind='agent' AND m.author_kind='human'
-  AND NOT EXISTS (
-    SELECT 1 FROM owner_agent_session_journal j
-    WHERE j.session_id=s.id AND j.message_id=m.id AND j.role='user'
-  )
-ORDER BY d.seq;
-`;
-
-/** Snapshot the handled-session history separately from the current pending run batch. */
-export const agentRunContextHistorySchemaV10 = `
-ALTER TABLE owner_agent_runs ADD COLUMN context_history_end_seq INTEGER NOT NULL DEFAULT 0;
-`;
-
-/** Conversation tool actions are durable per logical Agent session and carry an explicit run seat. */
-export const agentConversationToolsSchemaV11 = `
-ALTER TABLE owner_agent_runs
-  ADD COLUMN independent_review INTEGER NOT NULL DEFAULT 0 CHECK(independent_review IN (0,1));
 CREATE TABLE owner_agent_tool_actions (
   session_id TEXT NOT NULL REFERENCES owner_agent_sessions(id),
   action_id TEXT NOT NULL CHECK(length(action_id) BETWEEN 1 AND 500),
@@ -101,75 +53,4 @@ CREATE TABLE owner_agent_peer_direct_channels (
 );
 CREATE INDEX owner_agent_peer_direct_channels_second
   ON owner_agent_peer_direct_channels(second_agent_id,first_agent_id);
-`;
-
-/** Link committed conversation actions to recoverable session history. */
-export const agentConversationActionRecoverySchemaV12 = `
-ALTER TABLE owner_agent_session_journal ADD COLUMN tool_action_id TEXT;
-DROP INDEX owner_agent_session_journal_reply_once;
-CREATE UNIQUE INDEX owner_agent_session_journal_reply_once
-  ON owner_agent_session_journal(run_id)
-  WHERE role='assistant' AND run_id IS NOT NULL AND tool_action_id IS NULL;
-
-UPDATE owner_agent_session_journal
-SET tool_action_id=(
-  SELECT a.action_id FROM owner_agent_tool_actions a
-  WHERE a.session_id=owner_agent_session_journal.session_id
-    AND a.agent_id=owner_agent_session_journal.agent_id
-    AND a.operation='messages.send'
-    AND json_extract(a.result_json,'$.id')=owner_agent_session_journal.message_id
-)
-WHERE role='assistant' AND message_id IS NOT NULL
-  AND EXISTS (
-    SELECT 1 FROM owner_agent_tool_actions a
-    WHERE a.session_id=owner_agent_session_journal.session_id
-      AND a.agent_id=owner_agent_session_journal.agent_id
-      AND a.operation='messages.send'
-      AND json_extract(a.result_json,'$.id')=owner_agent_session_journal.message_id
-  );
-
-INSERT INTO owner_agent_session_journal(
-  session_id,agent_id,channel_id,tool_action_id,role,text,created_at
-)
-SELECT a.session_id,a.agent_id,
-       CASE a.operation
-         WHEN 'messages.send' THEN json_extract(a.result_json,'$.channelId')
-         WHEN 'conversations.open_dm' THEN json_extract(a.result_json,'$.id')
-         WHEN 'conversations.invite' THEN json_extract(a.result_json,'$.conversationId')
-       END,
-       a.action_id,'assistant',
-       'Mate 工具结果：'||a.operation||' '||
-       CASE WHEN a.operation='messages.send'
-            THEN json_remove(a.result_json,'$.text')
-            ELSE a.result_json END,
-       a.created_at
-FROM owner_agent_tool_actions a
-WHERE a.operation IN ('messages.send','conversations.open_dm','conversations.invite')
-  AND NOT EXISTS (
-    SELECT 1 FROM owner_agent_session_journal j
-    WHERE j.session_id=a.session_id AND j.agent_id=a.agent_id
-      AND j.tool_action_id=a.action_id AND j.message_id IS NULL
-  )
-  AND EXISTS (
-    SELECT 1 FROM owner_channels c
-    WHERE c.id=CASE a.operation
-      WHEN 'messages.send' THEN json_extract(a.result_json,'$.channelId')
-      WHEN 'conversations.open_dm' THEN json_extract(a.result_json,'$.id')
-      WHEN 'conversations.invite' THEN json_extract(a.result_json,'$.conversationId')
-    END
-  );
-`;
-
-export const agentRunSchema = `${agentRunSchemaV7}\n${agentJournalReplaySchema}\n${agentRunBatchSchemaV9}`;
-
-/**
- * Every plain assistant turn a run produced is recorded, not only the first one.
- *
- * The superseded rule limited a run to one non-tool assistant row because that row used to be the
- * published reply. Publication is now an explicit `messages.send` tool action, so a model that
- * writes a preamble beside a tool call and then a final answer must be able to record both turns.
- * Idempotency comes from the unique `request_id` transcript identity instead.
- */
-export const agentRunTranscriptSchemaV23 = `
-DROP INDEX owner_agent_session_journal_reply_once;
 `;

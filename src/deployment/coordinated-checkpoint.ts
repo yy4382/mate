@@ -477,7 +477,12 @@ function requireStateFiles(layout: StateLayout): void {
  * renames one changes this list with it.
  */
 const requiredControlPlaneState: Record<string, readonly string[]> = {
-  session: ["owner_agent_sessions", "owner_agent_session_journal", "owner_sessions"],
+  session: [
+    "owner_agent_sessions",
+    "owner_agent_session_records",
+    "owner_agent_session_updates",
+    "owner_sessions",
+  ],
   message: ["owner_messages", "owner_message_deliveries"],
   task: ["owner_tasks", "owner_task_events"],
   reminder: ["owner_reminders", "owner_reminder_firings"],

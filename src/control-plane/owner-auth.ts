@@ -3,7 +3,7 @@ import type Database from "better-sqlite3";
 import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, lstatSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
-import { controlPlaneMigrations, controlPlaneSchema } from "./schema.js";
+import { controlPlaneSchema } from "./schema.js";
 import { openControlPlaneDatabase } from "../storage/initialize.js";
 import { assertNoRecoveryMarker } from "../deployment/coordinated-checkpoint.js";
 
@@ -51,11 +51,7 @@ export class OwnerAuth {
     mkdirSync(options.dataDir, { recursive: true, mode: 0o700 });
     chmodSync(options.dataDir, 0o700);
     this.databasePath = join(resolve(options.dataDir), "control-plane.sqlite");
-    this.db = openControlPlaneDatabase(
-      this.databasePath,
-      controlPlaneSchema,
-      controlPlaneMigrations,
-    );
+    this.db = openControlPlaneDatabase(this.databasePath, controlPlaneSchema);
     chmodSync(this.databasePath, 0o600);
   }
 

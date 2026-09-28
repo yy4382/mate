@@ -111,7 +111,7 @@ node "$CLI" restore "$HOME/mate/deploy.json" "$HOME/backups/mate-1"
 
 一份**完成**的备份是这样一个目录：
 
-- `control/`——控制面数据库所在目录，里面有所有者会话（`owner_sessions`）、Agent 逻辑会话与对话记录（`owner_agent_sessions`、`owner_agent_session_journal`）、消息与投递（`owner_messages`、`owner_message_deliveries`）、任务（`owner_tasks`、`owner_task_events`）、提醒（`owner_reminders`、`owner_reminder_firings`）和控制面侧的操作记录（`owner_agent_process_operations`）。
+- `control/`——控制面数据库所在目录，里面有所有者会话（`owner_sessions`）、Agent 逻辑会话与对话记录（`owner_agent_sessions`、`owner_agent_session_records`）、消息与投递（`owner_messages`、`owner_message_deliveries`）、任务（`owner_tasks`、`owner_task_events`）、提醒（`owner_reminders`、`owner_reminder_firings`）和控制面侧的操作记录（`owner_agent_process_operations`）。
 - `node/`——节点身份 `node-identity.json`、节点操作收据数据库 `agent-process-operations.sqlite` 与工作区收据目录 `workspace-receipts/`。
 - `homes/`——每个 Agent 的默认工作区，按 Agent UUID 分目录。
 - `manifest.json`——上述每个条目的路径、类型、权限、属主和内容哈希。
@@ -180,9 +180,9 @@ node "$CLI" release-agent "$HOME/mate/deploy.json" AGENT_UUID
 
 节点服务保持停止时，先在控制面网页的 Agent 页面停用受影响的 Agent；无法确定额外收据属于哪个 Agent 时，先停用该节点上的全部 Agent。随后在两侧用只读 SQLite 查看节点身份，以及每项操作的 operation ID、Agent ID、请求身份哈希、状态和收据版本：节点侧查看 `agent_process_operations` 和 `workspace-receipts/*.json`；控制面侧查看 `owner_agent_process_operations` 和 `owner_agent_tool_actions`。逐项核对节点公钥、Agent 的运行账号与工作区标记以及操作身份。发现节点多出操作、任一身份不匹配或结果无法证明时，保持对应 Agent 停用，不要在网页点击“复启 Agent”，也不要运行控制面主机的 `release-agent`；后者只核验部署配置中的本机 `nodeDataDir`，不检查远程磁盘。身份冲突无法定位到单个 Agent，或无法确认节点上所有后台进程已停止时，继续保持该节点服务停止。
 
-第 25 版起 Mate 没有特权命令审批：升级会连同 `owner_privileged_approvals` 一起删除其中的未完成请求，节点上的 `privileged-operations.sqlite` 也不再被读取或对账，两者都不会变成新的持有、收据或重试。升级前若存在未完成的特权命令且需要这些历史证据，请在首次启动第 25 版前用只读 SQLite 自行留存；升级后不要把旧的审批行或节点收据当成仍受支持的状态。
-
 ## 升级与回退
+
+以下发布升级流程适用于使用同一数据格式的版本。本格式不升级旧实验数据库；启动遇到旧格式时会拒绝修改，请保留旧目录并改用新的空数据目录。
 
 升级作为一套版本进行。`upgrade` 会先停掉正在运行的服务并确认停稳，再创建协调检查点，只有在检查点成功后才会登记并启用新发布目录：
 
@@ -203,7 +203,7 @@ node "$CLI_OLD" start "$HOME/mate/deploy.json"
 
 `install` 对已在运行的服务按现状报告而不是拒绝，因此重复执行这条回退路径是安全的；`restore` 会在恢复后重新核对身份并启动当时正在运行的服务。数据没有被新版本改写过时，可以跳过 `restore` 直接启动旧版本。
 
-数据目录格式升级由一个方向进行（例如第 24 版重建单账号 Agent 表，第 25 版删除已废弃的特权审批表）：旧版本读到新格式的数据库不保证可用，回退前先确认检查点与旧发布版本匹配。
+回退前确认检查点与旧发布版本的数据格式匹配；不要用旧版本打开不兼容的数据目录。
 
 ## 由宿主管理进程（可选）
 
@@ -217,3 +217,11 @@ exec /usr/bin/env node "$CLI" start "$HOME/mate/deploy.json"
 ```
 
 Mate 侧不支持也不检测这类宿主条目：它的 `status` 只报告自己启动并记录的进程。因此不要让 `start` 与服务管理器同时启动同一份服务——`start` 在检测到已记录的服务仍在运行时会拒绝，两个互不知情的启动路径则可能各自拉起一个进程。
+
+### Agent 上下文持久化
+
+控制面 SQLite 的 `owner_agent_session_records` 是每名 Agent 模型历史的唯一持久来源。完整 Pi 消息按实际呈现顺序追加，包含工具调用与结果、思考签名和供应商用量；频道、讨论串、私信和重启共用该记录。运行中新消息提示也进入历史，但不代表正文已读。每轮运行记录固定的模型、系统提示、工具定义和 Pi 版本；配置修改从下一轮采用。
+
+工具调用和结果分别获得 SQLite 提交确认后，才执行工具和继续模型请求。操作收据独立确定副作用是否发生；后来核对得到的结果作为新信息追加，不覆盖模型当时看到的未知结果。协调恢复检查点包含完整历史和待呈现的收据更正。
+
+旧文本历史、快照和主动 `session.compact` 工具已经移除；自动容量压缩由后续 #107 实现。当前上下文超限按模型真实错误处理，不静默截断历史，也不增加累计用量额度。

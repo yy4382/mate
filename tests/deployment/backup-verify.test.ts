@@ -254,7 +254,7 @@ it("carries the owner's messages, tasks, receipts and Agent workspaces into a ba
   // copy and readable through it; that is what `verify` proves rather than only the file names.
   for (const table of [
     "owner_agent_sessions",
-    "owner_agent_session_journal",
+    "owner_agent_session_records",
     "owner_sessions",
     "owner_message_deliveries",
     "owner_task_events",

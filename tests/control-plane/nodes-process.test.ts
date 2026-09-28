@@ -1052,7 +1052,7 @@ it("pairs a node over WebSocket, confirms requests, and restores status after re
   }
 }, 15000);
 
-it("upgrades a revision 3 database through node and Agent schemas without losing owner chat", async () => {
+it("refuses an old experimental database without modifying its saved owner chat", async () => {
   const directory = mkdtempSync(join(tmpdir(), "mate-node-schema-upgrade-"));
   chmodSync(directory, 0o700);
   const dataDir = join(directory, "control-plane-data");
@@ -1093,52 +1093,18 @@ it("upgrades a revision 3 database through node and Agent schemas without losing
   });
   const server = new ProcessOutput(serverChild);
   try {
-    const listening = await server.waitFor(/MATE_CONTROL_PLANE_LISTENING (\d+)/);
-    const origin = `http://127.0.0.1:${listening[1]}`;
-    const login = await fetch(new URL("/api/auth/login", origin), {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ password: ownerPassword }),
-    });
-    expect(login.status).toBe(204);
-    const cookie = login.headers.get("set-cookie")?.split(";", 1)[0];
-    expect(cookie).toBeTruthy();
-
-    const channels = await fetch(new URL("/api/owner/channels", origin), {
-      headers: { cookie: cookie! },
-    });
-    expect(channels.status).toBe(200);
-    expect(await channels.json()).toMatchObject({
-      channels: [expect.objectContaining({ id: "saved-channel", name: "保存的频道" })],
-    });
-    const messages = await fetch(new URL("/api/owner/channels/saved-channel/messages", origin), {
-      headers: { cookie: cookie! },
-    });
-    expect(messages.status).toBe(200);
-    expect(await messages.json()).toMatchObject({
-      messages: [expect.objectContaining({ id: "saved-message", text: "升级前的持久消息" })],
-    });
-    const nodes = await fetch(new URL("/api/owner/nodes", origin), {
-      headers: { cookie: cookie! },
-    });
-    expect(nodes.status).toBe(200);
-    expect(await nodes.json()).toEqual({ nodes: [] });
-
-    const upgraded = new Database(databasePath, { readonly: true });
-    expect(upgraded.pragma("user_version", { simple: true })).toBe(25);
-    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE name='nodes'").get()).toEqual({
-      name: "nodes",
-    });
+    await expect(server.waitFor(/MATE_CONTROL_PLANE_LISTENING (\d+)/)).rejects.toThrow(
+      "schema revision 3",
+    );
+    const saved = new Database(databasePath, { readonly: true });
+    expect(saved.pragma("user_version", { simple: true })).toBe(3);
+    expect(saved.prepare("SELECT text FROM owner_messages WHERE id='saved-message'").get()).toEqual(
+      { text: "升级前的持久消息" },
+    );
     expect(
-      upgraded.prepare("SELECT name FROM sqlite_master WHERE name='owner_agents'").get(),
-    ).toEqual({ name: "owner_agents" });
-    expect(
-      upgraded.prepare("SELECT name FROM sqlite_master WHERE name='model_credentials'").get(),
-    ).toEqual({ name: "model_credentials" });
-    expect(
-      upgraded.prepare("SELECT name FROM sqlite_master WHERE name='owner_agent_runs'").get(),
-    ).toEqual({ name: "owner_agent_runs" });
-    upgraded.close();
+      saved.prepare("SELECT name FROM sqlite_master WHERE name='nodes'").get(),
+    ).toBeUndefined();
+    saved.close();
   } finally {
     await stopProcess(server);
     rmSync(directory, { recursive: true, force: true });

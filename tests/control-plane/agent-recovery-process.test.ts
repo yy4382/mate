@@ -183,13 +183,14 @@ function cpRow(
 }
 
 it.each([
-  ["process", "before_receipt"],
-  ["process", "after_receipt"],
-  ["workspace", "before_receipt"],
-  ["workspace", "after_receipt"],
+  ["process", "before_receipt", false],
+  ["process", "after_receipt", false],
+  ["workspace", "before_receipt", false],
+  ["workspace", "after_receipt", false],
+  ["workspace", "after_receipt", true],
 ] as const)(
-  "recovers a real %s operation %s fault without replaying its side effect while another Agent continues",
-  async (mode, fault) => {
+  "recovers a real %s operation %s fault without replaying its side effect while another Agent continues (archived source=%s)",
+  async (mode, fault, archived) => {
     const directory = mkdtempSync(join(tmpdir(), "mate-recovery-process-"));
     chmodSync(directory, 0o700);
     writeFileSync(join(directory, "password"), `${password}\n`, { mode: 0o600 });
@@ -364,6 +365,22 @@ it.each([
             : undefined,
         "unrelated online Agent completion",
       );
+      if (archived) {
+        await json(origin, cookie, `/api/owner/channels/${faultChannel}`, "PATCH", {
+          archived: true,
+        });
+        const room = await json(origin, cookie, "/api/owner/channels", "POST", {
+          name: "Recovery",
+          description: "Synthetic",
+          visibility: "public",
+        });
+        await json(origin, cookie, `/api/owner/channels/${room.id}/invitations`, "POST", {
+          agentId: faultAgentId,
+        });
+        await json(origin, cookie, `/api/owner/channels/${room.id}/messages`, "POST", {
+          text: "Continue in a new source",
+        });
+      }
       await control.stop();
       control = startControl(directory);
       origin = `http://127.0.0.1:${(await control.line(/MATE_CONTROL_PLANE_LISTENING (\d+)/))[1]}`;
@@ -410,6 +427,15 @@ it.each([
         "recovered Agent completion",
         15000,
       );
+      if (archived) {
+        const result = cpRow(
+          directory,
+          "SELECT payload_json FROM owner_agent_session_records WHERE agent_id=? AND json_extract(payload_json,'$.message.role')='toolResult' ORDER BY seq LIMIT 1",
+          faultAgentId,
+        );
+        expect(result?.payload_json).toContain("sha256");
+        expect(result?.payload_json).not.toContain("不匹配");
+      }
       expect(readFileSync(countFile, "utf8").trim().split("\n")).toHaveLength(1);
       const activity = await json(origin, cookie, `/api/owner/agents/${faultAgentId}/activity`);
       expect(
@@ -506,7 +532,7 @@ it("classifies Pi HTTP response failures as credential pause or temporary backof
   }
 }, 30000);
 
-it("replays one committed transcript after the control plane crashes before its ACK reaches the node", async () => {
+it("preserves a committed response and rejects the old run after the control plane crashes before its ACK reaches the node", async () => {
   const directory = mkdtempSync(join(tmpdir(), "mate-transcript-commit-crash-"));
   chmodSync(directory, 0o700);
   writeFileSync(join(directory, "password"), `${password}\n`, { mode: 0o600 });
@@ -515,7 +541,7 @@ it("replays one committed transcript after the control plane crashes before its 
     origin = "";
   let heldTranscript: string | undefined,
     ackDropped = false,
-    replayAccepted = false;
+    replayRefused = false;
   const proxyHttp = createServer(),
     proxyWs = new WebSocketServer({ noServer: true });
   const sockets = new Set<WebSocket>();
@@ -525,16 +551,30 @@ it("replays one committed transcript after the control plane crashes before its 
       sockets.add(downstream);
       sockets.add(upstream);
       downstream.on("message", (data, binary) => {
-        const message = JSON.parse(data.toString()) as { type?: string };
-        if (message.type === "node.agent.run.transcript" && !heldTranscript)
+        const message = JSON.parse(data.toString()) as {
+          type?: string;
+          entry?: { kind: string; message?: { role: string } };
+        };
+        if (
+          message.type === "node.agent.run.transcript" &&
+          message.entry?.kind === "message" &&
+          message.entry.message?.role === "assistant" &&
+          !heldTranscript
+        )
           heldTranscript = data.toString();
         if (upstream.readyState === WebSocket.OPEN) upstream.send(data, { binary });
       });
       upstream.on("message", (data, binary) => {
-        const message = JSON.parse(data.toString()) as { type?: string; accepted?: boolean };
+        const message = JSON.parse(data.toString()) as {
+          type?: string;
+          accepted?: boolean;
+          requestId?: string;
+        };
         if (
           message.type === "control.agent.run.transcript_ack" &&
           message.accepted &&
+          heldTranscript &&
+          message.requestId === JSON.parse(heldTranscript).requestId &&
           !ackDropped
         ) {
           ackDropped = true;
@@ -545,8 +585,14 @@ it("replays one committed transcript after the control plane crashes before its 
         }
         if (message.type === "control.authenticated" && ackDropped && heldTranscript)
           upstream.send(heldTranscript);
-        if (message.type === "control.agent.run.transcript_ack" && message.accepted && ackDropped)
-          replayAccepted = true;
+        if (
+          message.type === "control.agent.run.transcript_ack" &&
+          message.accepted === false &&
+          heldTranscript &&
+          message.requestId === JSON.parse(heldTranscript).requestId &&
+          ackDropped
+        )
+          replayRefused = true;
         if (downstream.readyState === WebSocket.OPEN) downstream.send(data, { binary });
       });
       downstream.on("close", () => {
@@ -599,7 +645,7 @@ it("replays one committed transcript after the control plane crashes before its 
     expect(
       cpRow(
         directory,
-        "SELECT COUNT(*) AS count FROM owner_agent_session_journal WHERE agent_id=? AND role='assistant' AND tool_action_id IS NULL",
+        "SELECT COUNT(*) AS count FROM owner_agent_session_records WHERE agent_id=? AND json_extract(payload_json,'$.message.role')='assistant'",
         agentId,
       ),
     ).toEqual({ count: 1 });
@@ -622,8 +668,8 @@ it("replays one committed transcript after the control plane crashes before its 
     origin = `http://127.0.0.1:${(await control.line(/MATE_CONTROL_PLANE_LISTENING (\d+)/))[1]}`;
     cookie = await owner(origin);
     await eventually(
-      () => (replayAccepted ? true : undefined),
-      "exact transcript replay after CP restart",
+      () => (replayRefused ? true : undefined),
+      "old authorization rejected after CP restart",
       15000,
     );
     // The replayed transcript belongs to the interrupted run; the unhandled input is retried as
@@ -638,7 +684,7 @@ it("replays one committed transcript after the control plane crashes before its 
     expect(
       cpRow(
         directory,
-        "SELECT COUNT(*) AS count FROM owner_agent_session_journal WHERE agent_id=? AND role='assistant' AND tool_action_id IS NULL",
+        "SELECT COUNT(*) AS count FROM owner_agent_session_records WHERE agent_id=? AND json_extract(payload_json,'$.message.role')='assistant'",
         agentId,
       ),
     ).toEqual({ count: 1 });

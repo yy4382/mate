@@ -1,3 +1,4 @@
+import { inputMessage, assistantText } from "../helpers/session.js";
 import { resolve } from "node:path";
 import { expect, it } from "vitest";
 import { startModelProcess } from "../../src/nodes/model-process.js";
@@ -20,7 +21,9 @@ it("does not settle the Pi model process until the control-plane transcript ACK 
     modelId: "gpt-4o-mini",
     apiKey: "synthetic-process-test-key",
     entry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
-    onTranscript: async (text) => {
+    onTranscript: async (entry) => {
+      const text = assistantText(entry);
+      if (text === undefined) return true;
       reportTranscript(text);
       return transcriptGate;
     },
@@ -38,14 +41,7 @@ it("does not settle the Pi model process until the control-plane transcript ACK 
         visibility: "private",
       },
       messages: [
-        {
-          sequence: 1,
-          role: "user",
-          text: "请回复这条测试私信。",
-          sourceChannelId: "f584ce85-b892-4315-9a2b-00e191bd34dc",
-          sourceVisibility: "private",
-          currentRunInput: true,
-        },
+        inputMessage("请回复这条测试私信。", "f584ce85-b892-4315-9a2b-00e191bd34dc", "private"),
       ],
       prompt: { name: "小林", role: "测试助手", description: "Synthetic test Agent" },
     })
@@ -88,12 +84,14 @@ it("waits for the control-plane tool result before asking Pi to generate its fin
     modelId: "gpt-4o-mini",
     apiKey: "synthetic-key-tool-ack",
     entry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
-    onTranscript: async (text) => {
+    onTranscript: async (entry) => {
+      const text = assistantText(entry);
+      if (text === undefined) return true;
       transcript = text;
       return true;
     },
     onTool: async (toolCallId, operation, input) => {
-      expect(toolCallId).toBe("tool-call-stable");
+      expect(toolCallId).toMatch(/^mate:/);
       expect(operation).toBe("tools.list");
       expect(input).toEqual({});
       reachTool();
@@ -113,14 +111,7 @@ it("waits for the control-plane tool result before asking Pi to generate its fin
         visibility: "private",
       },
       messages: [
-        {
-          sequence: 1,
-          role: "user",
-          text: "发现可用频道，再回复。",
-          sourceChannelId: "f584ce85-b892-4315-9a2b-00e191bd34dc",
-          sourceVisibility: "private",
-          currentRunInput: true,
-        },
+        inputMessage("发现可用频道，再回复。", "f584ce85-b892-4315-9a2b-00e191bd34dc", "private"),
       ],
       prompt: { name: "小林", role: "测试助手", description: "Synthetic test Agent" },
     });
@@ -152,7 +143,9 @@ it("marks each message source and tells Pi how to speak in a chosen conversation
     modelId: "gpt-4o-mini",
     apiKey: "synthetic-key-inspect-context",
     entry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
-    onTranscript: async (text) => {
+    onTranscript: async (entry) => {
+      const text = assistantText(entry);
+      if (text === undefined) return true;
       transcript = text;
       return true;
     },
@@ -167,29 +160,15 @@ it("marks each message source and tells Pi how to speak in a chosen conversation
       actionScopeId: "561ad589-5e36-4c2a-98ab-35a9cfbc2e80",
       sourceChannel: { channelId: publicChannelId, visibility: "public" },
       messages: [
-        {
-          sequence: 1,
-          role: "user",
-          text: "这是此前的私信历史。",
-          sourceChannelId: privateChannelId,
-          sourceVisibility: "private",
-          currentRunInput: false,
-        },
-        {
-          sequence: 2,
-          role: "user",
-          text: "这是本次公开频道输入。",
-          sourceChannelId: publicChannelId,
-          sourceVisibility: "public",
-          currentRunInput: true,
-        },
+        inputMessage("这是此前的私信历史。", privateChannelId, "private"),
+        inputMessage("这是本次公开频道输入。", publicChannelId, "public"),
       ],
       prompt: { name: "小林", role: "测试助手", description: "Synthetic test Agent" },
     });
 
-    expect(transcript).toContain(`本次输入来自：频道 ${publicChannelId}（公开）`);
-    expect(transcript).toContain(`频道 ${privateChannelId}；可见范围：私密；历史记录`);
-    expect(transcript).toContain(`频道 ${publicChannelId}；可见范围：公开；本次输入`);
+    expect(transcript).not.toContain("本次输入来自：频道");
+    expect(transcript).toContain(`频道 ${privateChannelId}；可见范围：私密`);
+    expect(transcript).toContain(`频道 ${publicChannelId}；可见范围：公开`);
     // Plain text is private; speaking requires the explicit send tool with a chosen destination.
     expect(transcript).toContain("你的普通正文只写入你自己的 Agent 会话记录");
     expect(transcript).toContain("不会发送给任何频道、讨论串或私信");
@@ -215,7 +194,9 @@ it("lets the Agent schedule its own work from its record, claimed tasks, reminde
     modelId: "gpt-4o-mini",
     apiKey: "synthetic-key-inspect-context",
     entry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
-    onTranscript: async (text) => {
+    onTranscript: async (entry) => {
+      const text = assistantText(entry);
+      if (text === undefined) return true;
       transcript = text;
       return true;
     },
@@ -230,22 +211,8 @@ it("lets the Agent schedule its own work from its record, claimed tasks, reminde
       actionScopeId: "561ad589-5e36-4c2a-98ab-35a9cfbc2e80",
       sourceChannel: { channelId: publicChannelId, visibility: "public" },
       messages: [
-        {
-          sequence: 1,
-          role: "user",
-          text: "这是此前的私信历史。",
-          sourceChannelId: privateChannelId,
-          sourceVisibility: "private",
-          currentRunInput: false,
-        },
-        {
-          sequence: 2,
-          role: "user",
-          text: "这是本次公开频道输入。",
-          sourceChannelId: publicChannelId,
-          sourceVisibility: "public",
-          currentRunInput: true,
-        },
+        inputMessage("这是此前的私信历史。", privateChannelId, "private"),
+        inputMessage("这是本次公开频道输入。", publicChannelId, "public"),
       ],
       prompt: { name: "小林", role: "测试助手", description: "Synthetic test Agent" },
     });
@@ -290,7 +257,9 @@ it("asks the Agent not to browse a peer's workspace instead of gating that read"
     modelId: "gpt-4o-mini",
     apiKey: "synthetic-key-inspect-context",
     entry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
-    onTranscript: async (text) => {
+    onTranscript: async (entry) => {
+      const text = assistantText(entry);
+      if (text === undefined) return true;
       transcript = text;
       return true;
     },
@@ -304,16 +273,7 @@ it("asks the Agent not to browse a peer's workspace instead of gating that read"
       sessionId: "e1090cf4-f8f8-43b7-b124-e58a4dadbc1f",
       actionScopeId: "561ad589-5e36-4c2a-98ab-35a9cfbc2e80",
       sourceChannel: { channelId, visibility: "public" },
-      messages: [
-        {
-          sequence: 1,
-          role: "user",
-          text: "继续手上的工作。",
-          sourceChannelId: channelId,
-          sourceVisibility: "public",
-          currentRunInput: true,
-        },
-      ],
+      messages: [inputMessage("继续手上的工作。", channelId, "public")],
       prompt: { name: "小林", role: "测试助手", description: "Synthetic test Agent" },
     });
 
@@ -342,8 +302,8 @@ it("lets a scripted Agent read its reminders first and then stay silent", async 
     modelId: "gpt-4o-mini",
     apiKey: "synthetic-key-reminders-silent",
     entry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
-    onTranscript: async () => {
-      transcriptCount++;
+    onTranscript: async (entry) => {
+      if (entry.kind === "message" && entry.message.role === "assistant") transcriptCount++;
       return true;
     },
     onTool: async (_toolCallId, operation, input) => {
@@ -365,14 +325,11 @@ it("lets a scripted Agent read its reminders first and then stay silent", async 
           visibility: "private",
         },
         messages: [
-          {
-            sequence: 1,
-            role: "user",
-            text: "有提醒就处理，没有就算了。",
-            sourceChannelId: "f584ce85-b892-4315-9a2b-00e191bd34dc",
-            sourceVisibility: "private",
-            currentRunInput: true,
-          },
+          inputMessage(
+            "有提醒就处理，没有就算了。",
+            "f584ce85-b892-4315-9a2b-00e191bd34dc",
+            "private",
+          ),
         ],
         prompt: { name: "小林", role: "测试助手", description: "Synthetic test Agent" },
       }),
@@ -381,7 +338,7 @@ it("lets a scripted Agent read its reminders first and then stay silent", async 
     expect(requested).toEqual([
       { operation: "tools.call", input: { name: "reminders.list", input: {} } },
     ]);
-    expect(transcriptCount).toBe(0);
+    expect(transcriptCount).toBe(2);
   } finally {
     controller.abort();
     worker.close();
@@ -392,7 +349,7 @@ it.each([
   ["synthetic-key-error-text", "error"],
   ["synthetic-key-aborted-text", "aborted"],
 ])(
-  "fails a Pi turn with a %s stop reason without recording its text",
+  "fails a Pi turn with a %s stop reason and preserves its unsuccessful response",
   async (apiKey) => {
     let transcriptCount = 0;
     const controller = new AbortController();
@@ -401,8 +358,8 @@ it.each([
       modelId: "gpt-4o-mini",
       apiKey,
       entry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
-      onTranscript: async () => {
-        transcriptCount++;
+      onTranscript: async (entry) => {
+        if (entry.kind === "message" && entry.message.role === "assistant") transcriptCount++;
         return true;
       },
       signal: controller.signal,
@@ -419,20 +376,11 @@ it.each([
             channelId: "f584ce85-b892-4315-9a2b-00e191bd34dc",
             visibility: "private",
           },
-          messages: [
-            {
-              sequence: 1,
-              role: "user",
-              text: "输入",
-              sourceChannelId: "f584ce85-b892-4315-9a2b-00e191bd34dc",
-              sourceVisibility: "private",
-              currentRunInput: true,
-            },
-          ],
+          messages: [inputMessage("输入", "f584ce85-b892-4315-9a2b-00e191bd34dc", "private")],
           prompt: { name: "小林", role: "测试助手", description: "Synthetic test Agent" },
         }),
       ).rejects.toThrow("Agent model run failed");
-      expect(transcriptCount).toBe(0);
+      expect(transcriptCount).toBe(1);
     } finally {
       controller.abort();
       worker.close();
@@ -449,8 +397,8 @@ it("treats empty Pi content with a normal stop reason as a successful silent tur
     modelId: "gpt-4o-mini",
     apiKey: "synthetic-key-silent",
     entry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
-    onTranscript: async () => {
-      transcriptCount++;
+    onTranscript: async (entry) => {
+      if (entry.kind === "message" && entry.message.role === "assistant") transcriptCount++;
       return true;
     },
     signal: controller.signal,
@@ -467,18 +415,11 @@ it("treats empty Pi content with a normal stop reason as a successful silent tur
         visibility: "private",
       },
       messages: [
-        {
-          sequence: 1,
-          role: "user",
-          text: "这次可以不回复。",
-          sourceChannelId: "f584ce85-b892-4315-9a2b-00e191bd34dc",
-          sourceVisibility: "private",
-          currentRunInput: true,
-        },
+        inputMessage("这次可以不回复。", "f584ce85-b892-4315-9a2b-00e191bd34dc", "private"),
       ],
       prompt: { name: "小林", role: "测试助手", description: "Synthetic test Agent" },
     });
-    expect(transcriptCount).toBe(0);
+    expect(transcriptCount).toBe(1);
   } finally {
     controller.abort();
     worker.close();

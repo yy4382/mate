@@ -6,15 +6,7 @@ import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { createControlPlaneApp } from "../../src/control-plane/http.js";
 import { OwnerAuth } from "../../src/control-plane/owner-auth.js";
-import {
-  controlPlaneMigrations,
-  controlPlaneSchemaV4,
-  controlPlaneSchemaV11,
-  controlPlaneSchemaV8,
-  controlPlaneSchemaV14,
-  controlPlaneSchemaV15,
-  controlPlaneSchemaV23,
-} from "../../src/control-plane/schema.js";
+import { nodeDirectorySchema } from "../../src/control-plane/nodes/schema.js";
 import { newAgentRequestSchema } from "../../src/control-plane/agents/contracts.js";
 import { AgentDirectory, AgentRequestConflict } from "../../src/control-plane/agents/directory.js";
 import type { NodeSocket } from "../../src/control-plane/nodes/directory.js";
@@ -678,262 +670,6 @@ it("rejects credential fields outside the Agent creation contract", () => {
   expect(parsed.success).toBe(false);
 });
 
-it("migrates paired-node control-plane data and enables Agent foreign keys", () => {
-  const directory = mkdtempSync(join(tmpdir(), "mate-agent-migration-"));
-  const databasePath = join(directory, "control-plane.sqlite");
-  const old = new Database(databasePath);
-  old.exec(controlPlaneSchemaV4);
-  old
-    .prepare("INSERT INTO nodes(id,public_key,paired_at) VALUES(?,?,?)")
-    .run("c5342142-9cf5-4b22-86f3-bdc46bb471f2", "fixture-key", 10);
-  old.pragma("application_id = 1296257100");
-  old.pragma("user_version = 4");
-  old.close();
-
-  const auth = new OwnerAuth({ dataDir: directory });
-  try {
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(25);
-    expect(auth.db.pragma("foreign_keys", { simple: true })).toBe(1);
-    expect(auth.db.prepare("SELECT id FROM nodes").get()).toEqual({
-      id: "c5342142-9cf5-4b22-86f3-bdc46bb471f2",
-    });
-    expect(
-      auth.db.prepare("SELECT name FROM sqlite_master WHERE name='owner_agents'").get(),
-    ).toEqual({
-      name: "owner_agents",
-    });
-    expect(controlPlaneMigrations.map((migration) => migration.fromRevision)).toEqual([
-      3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-    ]);
-    for (const [table, column] of [
-      ["owner_agent_process_operations", "node_receipt_revision"],
-      ["owner_agent_stop_intents", "node_receipt_revision"],
-    ])
-      expect(
-        (auth.db.pragma(`table_info(${table})`) as Array<{ name: string }>).some(
-          (item) => item.name === column,
-        ),
-      ).toBe(true);
-    // Revision 25 carries no privileged command approval state, not even as a leftover.
-    expect(
-      auth.db
-        .prepare(
-          `SELECT name FROM sqlite_master
-           WHERE name IN ('owner_privileged_approvals','owner_privileged_approval_keys')`,
-        )
-        .all(),
-    ).toEqual([]);
-  } finally {
-    auth.close();
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-it("adds workspace access metadata on new and upgraded control-plane databases", () => {
-  const directory = mkdtempSync(join(tmpdir(), "mate-workspace-audit-migration-")),
-    databasePath = join(directory, "control-plane.sqlite"),
-    old = new Database(databasePath);
-  old.exec(controlPlaneSchemaV14);
-  old.pragma("application_id = 1296257100");
-  old.pragma("user_version = 14");
-  old.close();
-
-  const auth = new OwnerAuth({ dataDir: directory });
-  try {
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(25);
-    expect(
-      auth.db
-        .prepare("SELECT name FROM sqlite_master WHERE name='owner_workspace_access_audit'")
-        .get(),
-    ).toEqual({ name: "owner_workspace_access_audit" });
-    expect(auth.db.prepare("PRAGMA table_info(owner_workspace_access_audit)").all()).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ name: "download_id" }),
-        expect.objectContaining({ name: "owner_session_hash" }),
-        expect.objectContaining({ name: "download_expires_at" }),
-        expect.objectContaining({ name: "completed_at" }),
-      ]),
-    );
-    const newDirectory = mkdtempSync(join(tmpdir(), "mate-workspace-audit-new-")),
-      newAuth = new OwnerAuth({ dataDir: newDirectory });
-    try {
-      expect(newAuth.db.pragma("user_version", { simple: true })).toBe(25);
-      expect(
-        newAuth.db
-          .prepare("SELECT name FROM sqlite_master WHERE name='owner_workspace_access_audit'")
-          .get(),
-      ).toEqual({ name: "owner_workspace_access_audit" });
-    } finally {
-      newAuth.close();
-      rmSync(newDirectory, { recursive: true, force: true });
-    }
-  } finally {
-    auth.close();
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-it("adds Agent recovery state to a revision 15 database while preserving file access audit", () => {
-  const directory = mkdtempSync(join(tmpdir(), "mate-recovery-migration-")),
-    databasePath = join(directory, "control-plane.sqlite"),
-    old = new Database(databasePath);
-  old.exec(controlPlaneSchemaV15);
-  old.pragma("application_id = 1296257100");
-  old.pragma("user_version = 15");
-  old.close();
-
-  const auth = new OwnerAuth({ dataDir: directory });
-  try {
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(25);
-    for (const table of [
-      "owner_workspace_access_audit",
-      "owner_agent_activity",
-      "owner_agent_run_control",
-    ]) {
-      expect(auth.db.prepare("SELECT name FROM sqlite_master WHERE name=?").get(table)).toEqual({
-        name: table,
-      });
-    }
-  } finally {
-    auth.close();
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-it("backfills committed conversation tool actions into recoverable journal history", () => {
-  const directory = mkdtempSync(join(tmpdir(), "mate-agent-action-history-migration-")),
-    databasePath = join(directory, "control-plane.sqlite"),
-    old = new Database(databasePath);
-  old.exec(controlPlaneSchemaV11);
-  old.exec(`
-    INSERT INTO nodes(id,public_key,paired_at) VALUES('node','synthetic-public-key',1);
-    INSERT INTO owner_channels(id,name,description,visibility,created_at,updated_at)
-      VALUES('room','Research','Synthetic migration fixture','private',1,1);
-    INSERT INTO owner_channel_memberships(channel_id,principal_kind,principal_id,active,joined_at)
-      VALUES('room','human','owner',1,1),('room','agent','agent',1,1);
-    INSERT INTO owner_agents(
-      id,node_id,name,role,description,provider,model_id,request_json,request_hash,
-      provision_request_id,status,stage,linux_username,uid,gid,home,created_at,updated_at,model_ready
-    ) VALUES(
-      'agent','node','Partner','Replies','Migration fixture','openai','gpt-4.1','{}',
-      'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','provision',
-      'waiting_credentials','complete','mate_agent',23001,23001,'/var/lib/mate/agents/agent',1,1,0
-    );
-    INSERT INTO owner_agent_sessions(id,agent_id,created_at,verified_at)
-      VALUES('session','agent',1,1);
-    INSERT INTO owner_messages(id,channel_id,order_seq,text,author_kind,author_id,created_at)
-      VALUES('sent-message','room',1,'Persisted action text','agent','agent',2);
-    INSERT INTO owner_agent_session_journal(
-      session_id,agent_id,channel_id,message_id,role,text,created_at
-    ) VALUES('session','agent','room','sent-message','assistant','Persisted action text',2);
-  `);
-  old
-    .prepare(
-      `INSERT INTO owner_agent_tool_actions(
-         session_id,action_id,agent_id,operation,request_hash,result_json,created_at
-       ) VALUES(?,?,?,?,?,?,?)`,
-    )
-    .run(
-      "session",
-      "legacy-action",
-      "agent",
-      "messages.send",
-      "b".repeat(64),
-      JSON.stringify({ id: "sent-message", channelId: "room", text: "Persisted action text" }),
-      2,
-    );
-  old.pragma("application_id = 1296257100");
-  old.pragma("user_version = 11");
-  old.close();
-
-  const auth = new OwnerAuth({ dataDir: directory });
-  try {
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(25);
-    expect(
-      auth.db
-        .prepare(
-          `SELECT message_id,tool_action_id FROM owner_agent_session_journal
-           WHERE message_id='sent-message'`,
-        )
-        .get(),
-    ).toEqual({ message_id: "sent-message", tool_action_id: "legacy-action" });
-    const receipt = auth.db
-      .prepare(
-        `SELECT text,tool_action_id FROM owner_agent_session_journal
-         WHERE message_id IS NULL AND tool_action_id='legacy-action'`,
-      )
-      .get() as { text: string; tool_action_id: string } | undefined;
-    expect(receipt?.tool_action_id).toBe("legacy-action");
-    expect(receipt?.text).toContain('messages.send {"id":"sent-message","channelId":"room"}');
-    expect(receipt?.text).not.toContain("Persisted action text");
-  } finally {
-    auth.close();
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-it("backfills pending channel deliveries into the shared session journal when upgrading revision 8", () => {
-  const directory = mkdtempSync(join(tmpdir(), "mate-agent-batch-migration-")),
-    databasePath = join(directory, "control-plane.sqlite");
-  const old = new Database(databasePath);
-  old.exec(controlPlaneSchemaV8);
-  old.exec(`
-    INSERT INTO nodes(id,public_key,paired_at) VALUES('node','synthetic-public-key',1);
-    INSERT INTO owner_channels(id,name,description,visibility,created_at,updated_at)
-      VALUES('room','Research','Synthetic migration fixture','private',1,1),
-            ('room-2','Research 2','Second migration fixture','private',1,1);
-    INSERT INTO owner_channel_memberships(channel_id,principal_kind,principal_id,active,joined_at)
-      VALUES('room','human','owner',1,1),('room','agent','agent',1,1),
-            ('room-2','human','owner',1,1),('room-2','agent','agent',1,1);
-    INSERT INTO owner_agents(
-      id,node_id,name,role,description,provider,model_id,request_json,request_hash,
-      provision_request_id,status,stage,linux_username,uid,gid,home,created_at,updated_at,model_ready
-    ) VALUES(
-      'agent','node','Partner','Replies','Migration fixture','openai','gpt-4.1','{}',
-      'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','provision',
-      'waiting_credentials','complete','mate_agent',23001,23001,'/var/lib/mate/agents/agent',1,1,0
-    );
-    INSERT INTO owner_agent_sessions(id,agent_id,created_at,verified_at)
-      VALUES('session','agent',1,1);
-    INSERT INTO owner_messages(id,channel_id,order_seq,text,author_kind,author_id,created_at)
-      VALUES('message','room',1,'旧版频道排队输入','human','owner',1),
-            ('message-2','room-2',1,'旧版第二频道排队输入','human','owner',2);
-    INSERT INTO owner_message_deliveries(id,message_id,channel_id,recipient_kind,recipient_id,state,created_at)
-      VALUES('delivery','message','room','agent','agent','pending',1);
-    INSERT INTO owner_message_deliveries(id,message_id,channel_id,recipient_kind,recipient_id,state,created_at)
-      VALUES('delivery-2','message-2','room-2','agent','agent','pending',2);
-  `);
-  old.pragma("application_id = 1296257100");
-  old.pragma("user_version = 8");
-  old.close();
-
-  const auth = new OwnerAuth({ dataDir: directory });
-  try {
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(25);
-    expect(
-      auth.db
-        .prepare(
-          "SELECT role,text FROM owner_agent_session_journal WHERE agent_id='agent' ORDER BY seq",
-        )
-        .all(),
-    ).toEqual([
-      { role: "user", text: "旧版频道排队输入" },
-      { role: "user", text: "旧版第二频道排队输入" },
-    ]);
-    expect(
-      auth.db.prepare("SELECT input_end_seq FROM owner_agent_runs WHERE id='missing'").get(),
-    ).toBeUndefined();
-    expect(
-      auth.db
-        .prepare("SELECT context_history_end_seq FROM owner_agent_runs WHERE id='missing'")
-        .get(),
-    ).toBeUndefined();
-  } finally {
-    auth.close();
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
-
 it("sends only the bounded Agent provisioning operation to the selected online node", async () => {
   const app = setup();
   const cookie = await login(app);
@@ -1092,9 +828,6 @@ it("persists a stable Agent session, verifies provisioning, then queues its init
 
   app.chat.createMessage(channelId, "A queued first message");
   expect(app.chat.listPendingDeliveries("agent", input.id).deliveries).toHaveLength(1);
-  expect(app.chat.listAgentSessionJournal(input.id, 0, 10).messages).toMatchObject([
-    { role: "user", text: "A queued first message" },
-  ]);
 });
 
 it("finds an online Agent beyond more than one page of offline deliveries", async () => {
@@ -1267,212 +1000,6 @@ it("retains one failed request and retries it with the same Agent and provisioni
   });
 });
 
-it("upgrades a version 23 Agent row to the single-account stage names and foreign keys", () => {
-  const directory = mkdtempSync(join(tmpdir(), "mate-agent-single-account-migration-")),
-    databasePath = join(directory, "control-plane.sqlite");
-  const old = new Database(databasePath);
-  old.exec(controlPlaneSchemaV23);
-  old.exec(`
-    INSERT INTO nodes(id,public_key,paired_at) VALUES('node','synthetic-public-key',1);
-    INSERT INTO owner_channels(id,name,description,visibility,created_at,updated_at)
-      VALUES('room','Research','Migration fixture','private',1,1);
-  `);
-  const insertAgent = old.prepare(`
-    INSERT INTO owner_agents(
-      id,node_id,name,role,description,provider,model_id,request_json,request_hash,
-      provision_request_id,status,stage,error,linux_username,uid,gid,home,home_marker,
-      created_at,updated_at,model_ready
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-  `);
-  insertAgent.run(
-    "agent-a",
-    "node",
-    "A",
-    "Replies",
-    "Old account fixture",
-    "openai",
-    "gpt-4.1",
-    "{}",
-    "a".repeat(64),
-    "provision-a",
-    "waiting_credentials",
-    "preparing_home",
-    "旧版建账号失败：需要 root 权限。",
-    "mate_agent",
-    23001,
-    23001,
-    "/var/lib/mate/agents/agent-a",
-    "a1".repeat(32),
-    1,
-    1,
-    1,
-  );
-  insertAgent.run(
-    "agent-b",
-    "node",
-    "B",
-    "Replies",
-    "Interrupted old account fixture",
-    "openai",
-    "gpt-4.1",
-    "{}",
-    "b".repeat(64),
-    "provision-b",
-    "provisioning",
-    "creating_account",
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    2,
-    2,
-    0,
-  );
-  old.exec(`
-    INSERT INTO owner_agent_sessions(id,agent_id,created_at,verified_at)
-      VALUES('session-a','agent-a',1,1),('session-b','agent-b',2,NULL);
-  `);
-  old.pragma("application_id = 1296257100");
-  old.pragma("user_version = 23");
-  old.close();
-
-  const auth = new OwnerAuth({ dataDir: directory });
-  try {
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(25);
-    expect(auth.db.pragma("foreign_keys", { simple: true })).toBe(1);
-    expect(auth.db.pragma("foreign_key_check")).toEqual([]);
-    // Every row that carried a per-Agent identity is queued for one workspace re-verification, so
-    // the obsolete stage names never survive, no row keeps claiming a removed account, and the
-    // failure text that named that account goes with it.
-    expect(
-      auth.db.prepare("SELECT id,stage,status,error FROM owner_agents ORDER BY id").all(),
-    ).toEqual([
-      { id: "agent-a", stage: "queued", status: "provisioning", error: null },
-      { id: "agent-b", stage: "queued", status: "provisioning", error: null },
-    ]);
-    expect(
-      auth.db.prepare("SELECT id,agent_id FROM owner_agent_sessions ORDER BY id").all(),
-    ).toEqual([
-      { id: "session-a", agent_id: "agent-a" },
-      { id: "session-b", agent_id: "agent-b" },
-    ]);
-    expect(
-      auth.db.prepare("SELECT id,home_marker,model_ready FROM owner_agents ORDER BY id").all(),
-    ).toEqual([
-      { id: "agent-a", home_marker: "a1".repeat(32), model_ready: 1 },
-      { id: "agent-b", home_marker: null, model_ready: 0 },
-    ]);
-    // A row that never had an account keeps its own stage vocabulary mapping instead of being
-    // reset, so an upgrade does not lose the progress of an Agent that was still being prepared.
-    const freshRowId = "agent-b";
-    // The single account replaces the per-Agent account, so the recorded per-Agent identity no
-    // longer describes anything this release can use. It is cleared rather than left behind to
-    // disagree with the account the node will report on the next verification.
-    expect(
-      auth.db
-        .prepare("SELECT id,status,stage,linux_username,uid,gid,home FROM owner_agents ORDER BY id")
-        .all(),
-    ).toEqual([
-      {
-        id: "agent-a",
-        status: "provisioning",
-        stage: "queued",
-        linux_username: null,
-        uid: null,
-        gid: null,
-        home: null,
-      },
-      {
-        id: "agent-b",
-        status: "provisioning",
-        stage: "queued",
-        linux_username: null,
-        uid: null,
-        gid: null,
-        home: null,
-      },
-    ]);
-    // The rebuilt table still enforces the stage vocabulary it declares.
-    expect(() =>
-      auth.db.prepare("UPDATE owner_agents SET stage='creating_account' WHERE id='agent-a'").run(),
-    ).toThrow();
-  } finally {
-    auth.close();
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-it("creates a new Agent on a node that carries an upgraded single-account row", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "mate-agent-mixed-account-")),
-    databasePath = join(directory, "control-plane.sqlite");
-  const old = new Database(databasePath);
-  old.exec(controlPlaneSchemaV23);
-  old.exec(`
-    INSERT INTO nodes(id,public_key,paired_at) VALUES('node','synthetic-public-key',1);
-  `);
-  old
-    .prepare(
-      "INSERT INTO owner_agents(id,node_id,name,role,description,provider,model_id,request_json,request_hash,provision_request_id,status,stage,error,linux_username,uid,gid,home,home_marker,created_at,updated_at,model_ready) VALUES('legacy','node','Legacy','Partner','Old account fixture','openai','gpt-4.1','{}',?,'provision-legacy','failed','failed','旧版建账号失败：需要 root 权限。','mate_legacy',23001,23001,'/var/lib/mate/agents/legacy',?,1,1,0)",
-    )
-    .run("c".repeat(64), "b2".repeat(32));
-  old.exec(
-    "INSERT INTO owner_agent_sessions(id,agent_id,created_at,verified_at) VALUES('session','legacy',1,1)",
-  );
-  old.pragma("application_id = 1296257100");
-  old.pragma("user_version = 23");
-  old.close();
-
-  const auth = new OwnerAuth({ dataDir: directory });
-  try {
-    // The upgraded row no longer claims a per-Agent account, so it cannot block a later Agent, and
-    // the failure text that named that removed account is cleared with it.
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(25);
-    expect(
-      auth.db
-        .prepare(
-          "SELECT status,stage,error,linux_username,uid,gid,home FROM owner_agents WHERE id='legacy'",
-        )
-        .get(),
-    ).toEqual({
-      status: "provisioning",
-      stage: "queued",
-      error: null,
-      linux_username: null,
-      uid: null,
-      gid: null,
-      home: null,
-    });
-    const agents = new AgentDirectory(auth.db);
-    const freshId = randomUUID();
-    agents.prepare({
-      id: freshId,
-      nodeId: "node",
-      name: "Fresh partner",
-      role: "Runs under one account",
-      description: "Synthetic post-upgrade fixture.",
-      model: { provider: "openai", id: "gpt-4.1" },
-    });
-    expect(() =>
-      agents.complete(
-        freshId,
-        {
-          username: "mate-node-account",
-          uid: 23001,
-          gid: 23001,
-          workspace: `/var/lib/mate/agents/${freshId}`,
-          workspaceMarker: "a".repeat(64),
-        },
-        {} as never,
-      ),
-    ).not.toThrow();
-  } finally {
-    auth.close();
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
-
 it("refuses an Agent whose node reports a different account than the one it already runs", async () => {
   const app = setup();
   const cookie = await login(app);
@@ -1562,5 +1089,25 @@ it("refuses to complete an Agent whose node reports it is running as root", asyn
     );
     expect(app.agents.get(agentId)?.status).toBe("provisioning");
     expect(app.agents.get(agentId)?.linuxIdentity).toBeNull();
+  }
+});
+
+it("refuses an older experimental database without modifying its schema or node facts", () => {
+  const directory = mkdtempSync(join(tmpdir(), "mate-session-reset-"));
+  const databasePath = join(directory, "control-plane.sqlite");
+  const old = new Database(databasePath);
+  old.exec(nodeDirectorySchema);
+  old.prepare("INSERT INTO nodes(id,public_key,paired_at) VALUES('node','synthetic',10)").run();
+  old.pragma("application_id = 1296257100");
+  old.pragma("user_version = 4");
+  old.close();
+  try {
+    expect(() => new OwnerAuth({ dataDir: directory })).toThrow("schema revision 4");
+    const check = new Database(databasePath);
+    expect(check.pragma("user_version", { simple: true })).toBe(4);
+    expect(check.prepare("SELECT id FROM nodes").get()).toEqual({ id: "node" });
+    check.close();
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
   }
 });

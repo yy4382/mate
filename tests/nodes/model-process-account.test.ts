@@ -1,3 +1,4 @@
+import { inputMessage, assistantText } from "../helpers/session.js";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -51,19 +52,12 @@ function runProbe(request: ReturnType<typeof agentRunRequest>) {
     structuredClone(request),
     {
       context: async () => ({
-        messages: [
-          {
-            sequence: 1,
-            role: "user" as const,
-            text: "报告启动本次运行的 Linux 账号。",
-            sourceChannelId: request.channelId,
-            sourceVisibility: "private" as const,
-            currentRunInput: true,
-          },
-        ],
+        messages: [inputMessage("报告启动本次运行的 Linux 账号。", request.channelId, "private")],
         nextCursor: null,
       }),
-      transcript: async (text) => {
+      transcript: async (entry) => {
+        const text = assistantText(entry);
+        if (text === undefined) return true;
         probe = JSON.parse(text) as WorkerAccountProbe;
         return true;
       },

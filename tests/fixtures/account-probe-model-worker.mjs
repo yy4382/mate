@@ -11,14 +11,39 @@ process.on("message", (message) => {
     type: "transcript",
     nonce: message.nonce,
     requestId,
-    text: JSON.stringify({
-      pid: process.pid,
-      uid: typeof process.getuid === "function" ? process.getuid() : null,
-      gid: typeof process.getgid === "function" ? process.getgid() : null,
-      execPath: process.execPath,
-      argv: process.argv,
-      groups: typeof process.getgroups === "function" ? process.getgroups() : null,
-    }),
+    entry: {
+      kind: "message",
+      id: requestId,
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              pid: process.pid,
+              uid: typeof process.getuid === "function" ? process.getuid() : null,
+              gid: typeof process.getgid === "function" ? process.getgid() : null,
+              execPath: process.execPath,
+              argv: process.argv,
+              groups: typeof process.getgroups === "function" ? process.getgroups() : null,
+            }),
+          },
+        ],
+        api: "openai-completions",
+        provider: "openai",
+        model: "synthetic",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: 1,
+      },
+    },
   });
   process.on("message", (reply) => {
     if (reply?.type !== "transcript_ack" || reply.requestId !== requestId) return;

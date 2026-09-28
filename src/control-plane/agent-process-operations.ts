@@ -1,3 +1,4 @@
+import { AgentSession } from "./agent-session.js";
 import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
 import { z } from "zod";
@@ -93,7 +94,7 @@ export class AgentProcessOperationBroker {
 
     const row = this.database
       .transaction(() => {
-        this.assertActiveRun(runId, nodeId, agentId, actionScopeId);
+        this.assertActiveRun(runId, nodeId, agentId, actionScopeId, stableActionId);
         const existing = this.read(operationId);
         if (existing) {
           if (
@@ -221,7 +222,6 @@ export class AgentProcessOperationBroker {
           );
         if (update.changes === 0) return;
         applied = true;
-        this.appendSessionResult(this.read(result.operationId)!);
         recordAgentActivity(this.database, {
           agentId: row.agent_id,
           nodeId: row.node_id,
@@ -300,7 +300,6 @@ export class AgentProcessOperationBroker {
             incomingRevision ?? null,
           );
         if (update.changes === 0) return;
-        this.appendSessionResult(this.read(request.operationId)!);
         recordAgentActivity(this.database, {
           agentId: request.agentId,
           nodeId,
@@ -325,6 +324,7 @@ export class AgentProcessOperationBroker {
     nodeId: string,
     agentId: string,
     actionScopeId: string,
+    stableActionId: string,
   ): void {
     const run = this.database
       .prepare(
@@ -345,48 +345,13 @@ export class AgentProcessOperationBroker {
       !run ||
       run.state !== "running" ||
       run.node_id !== nodeId ||
-      run.delivery_id !== actionScopeId ||
+      (run.delivery_id !== actionScopeId &&
+        new AgentSession(this.database).toolAction(agentId, stableActionId)?.actionScopeId !==
+          actionScopeId) ||
       run.current_node_id !== nodeId ||
       run.status !== "waiting_credentials"
     )
       throw new Error("Agent process operation run is no longer active");
-  }
-
-  private appendSessionResult(row: OperationRow): void {
-    if (row.state === "executing") return;
-    const scope = this.database
-      .prepare(
-        `SELECT s.id AS session_id,d.channel_id FROM owner_agent_runs r
-       JOIN owner_agent_sessions s ON s.agent_id=r.agent_id
-       JOIN owner_message_deliveries d ON d.id=r.delivery_id
-       WHERE r.id=?`,
-      )
-      .get(row.run_id) as { session_id: string; channel_id: string } | undefined;
-    if (!scope) throw new Error("Process operation lost its session");
-    const result = JSON.stringify({
-      operationId: row.operation_id,
-      state: row.state,
-      receipt: row.receipt_json === null ? null : JSON.parse(row.receipt_json),
-    });
-    const text = `Mate 工具结果：${result}`;
-    this.database
-      .prepare(
-        `INSERT OR IGNORE INTO owner_agent_session_journal(
-        session_id,agent_id,channel_id,run_id,tool_action_id,process_operation_id,role,text,created_at
-       ) VALUES(?,?,?,?,?,?,'assistant',?,?)`,
-      )
-      .run(
-        scope.session_id,
-        row.agent_id,
-        scope.channel_id,
-        row.run_id,
-        `${row.operation_id}:${row.state}`,
-        row.operation_id,
-        text.length <= 20_000
-          ? text
-          : `Mate 工具结果：${row.operation_id} ${row.state}。收据过长，请在动态页查看详情。`,
-        this.now(),
-      );
   }
 
   private read(operationId: string): OperationRow | undefined {

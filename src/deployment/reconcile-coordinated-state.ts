@@ -1,9 +1,10 @@
+import { AgentSession } from "../control-plane/agent-session.js";
 import Database from "better-sqlite3";
 import { createHash, createPrivateKey, createPublicKey } from "node:crypto";
 import { lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { controlPlaneMigrations, controlPlaneSchema } from "../control-plane/schema.js";
+import { controlPlaneSchema } from "../control-plane/schema.js";
 import { readAgentWorkspaceIdentity } from "../nodes/agent-provisioner.js";
 import { agentProcessOperationSchema } from "../nodes/process-operations.js";
 import { openControlPlaneDatabase } from "../storage/initialize.js";
@@ -556,7 +557,7 @@ function applyReceipt(
   receipt: NodeRecoveryOperation,
   now: number,
 ): void {
-  if (target.kind === "process")
+  if (target.kind === "process") {
     database
       .prepare(
         `UPDATE owner_agent_process_operations SET state=?,receipt_json=?,
@@ -570,7 +571,12 @@ function applyReceipt(
         target.operationId,
         (target.row as { node_id: string }).node_id,
       );
-  else if (target.kind === "stop")
+    new AgentSession(database).queueCorrection(
+      target.agentId,
+      { operationId: receipt.operationId, state: receipt.state, receipt: receipt.receipt },
+      now,
+    );
+  } else if (target.kind === "stop")
     database
       .prepare(
         `UPDATE owner_agent_stop_intents SET state=?,receipt_json=?,node_receipt_revision=?,updated_at=?
@@ -613,28 +619,12 @@ function applyReceipt(
         (target.row as { action_id: string }).action_id,
         target.agentId,
       );
-    const context = row.envelope,
-      journalResult = state === "failed" ? { state, result, error } : result,
-      journalText =
-        `Mate 收据更正：${String(context.operation ?? "workspace operation")} ${JSON.stringify(journalResult)}`.slice(
-          0,
-          20_000,
-        );
-    database
-      .prepare(
-        `INSERT INTO owner_agent_session_journal(
-        session_id,agent_id,channel_id,run_id,tool_action_id,role,text,created_at
-      ) VALUES(?,?,?,?,?,'assistant',?,?)`,
-      )
-      .run(
-        (target.row as { session_id: string }).session_id,
-        target.agentId,
-        String(context.channelId),
-        String(context.runId),
-        (target.row as { action_id: string }).action_id,
-        journalText,
-        now,
-      );
+
+    new AgentSession(database).queueCorrection(
+      target.agentId,
+      { operationId: receipt.operationId, operation: row.envelope.operation, state, result, error },
+      now,
+    );
   }
 }
 
@@ -657,11 +647,7 @@ function openRecoveryStores(
     assertSqliteIntegrity(controlPlanePath);
     processDb = openProtectedDatabase(processPath);
     readNodeProcessState(processDb, processPath);
-    controlPlane = openControlPlaneDatabase(
-      controlPlanePath,
-      controlPlaneSchema,
-      controlPlaneMigrations,
-    );
+    controlPlane = openControlPlaneDatabase(controlPlanePath, controlPlaneSchema);
     return { controlPlane, processDb };
   } catch (error) {
     if (controlPlane?.open) controlPlane.close();

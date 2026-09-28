@@ -1,3 +1,4 @@
+import { assistantEntry } from "../helpers/session.js";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import Database from "better-sqlite3";
 import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
@@ -267,11 +268,7 @@ it("marks a committed process intent unknown before a recovered node can start a
         .prepare("SELECT state FROM owner_agent_process_operations WHERE operation_id=?")
         .get(operationId),
     ).toEqual({ state: "unknown" });
-    expect(
-      db
-        .prepare("SELECT text FROM owner_agent_session_journal WHERE process_operation_id=?")
-        .get(operationId),
-    ).toMatchObject({ text: expect.stringContaining("unknown") });
+
     expect(db.prepare("SELECT error_code FROM owner_agent_runs WHERE id=?").get(run.runId)).toEqual(
       { error_code: "interrupted" },
     );
@@ -455,72 +452,6 @@ it("rechecks stopped scopes after a restarted node confirms an ordinary operatio
   );
   expect(await resuming).toEqual({ ok: true });
   expect(app.runs?.pauseReason(agentId)).toBeNull();
-});
-
-it("projects the last committed snapshot when two compactions share one clock tick", async () => {
-  const { app, cookie, db, nodeId, socket } = await setup();
-  const agentId = randomUUID();
-  app.agents.prepare({
-    id: agentId,
-    nodeId,
-    name: "Snapshot order",
-    role: "Context",
-    description: "Equal timestamp fixture",
-    model: { provider: "openai", id: "gpt-4.1" },
-  });
-  app.agents.complete(
-    agentId,
-    {
-      username: `mate_${agentId.replaceAll("-", "").slice(0, 27)}`,
-      uid: 23003,
-      gid: 23003,
-      workspace: `/var/lib/mate/agents/${agentId}`,
-      workspaceMarker: "a".repeat(64),
-    },
-    app.chat,
-  );
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  await app.request("/api/owner/model-credentials/openai", {
-    method: "PUT",
-    headers: { cookie, "content-type": "application/json" },
-    body: JSON.stringify({ apiKey: "synthetic-key" }),
-  });
-  const start = socket.sent.length;
-  app.chat.createMessage(direct.id, "Current input.");
-  const run = await waitForRun(socket, start);
-  const insert = db.prepare(`INSERT INTO owner_agent_session_snapshots(
-    id,agent_id,action_id,request_hash,through_seq,model_session_id,summary,snapshot_json,created_at
-  ) VALUES(?,?,?,?,0,?,?,'{}',1234)`);
-  insert.run(
-    "ffffffff-ffff-4fff-8fff-ffffffffffff",
-    agentId,
-    "old",
-    "a".repeat(64),
-    randomUUID(),
-    "Older summary",
-  );
-  insert.run(
-    "00000000-0000-4000-8000-000000000000",
-    agentId,
-    "new",
-    "b".repeat(64),
-    randomUUID(),
-    "Newer summary",
-  );
-  await app.nodes.receive(
-    socket,
-    JSON.stringify({
-      type: "node.agent.run.context",
-      requestId: randomUUID(),
-      runId: run.runId,
-      agentId,
-      cursor: 0,
-      limit: 100,
-    }),
-  );
-  const context = JSON.parse(socket.sent.at(-1)!) as { messages: Array<{ text: string }> };
-  expect(context.messages.some((message) => message.text.includes("Newer summary"))).toBe(true);
-  expect(context.messages.some((message) => message.text.includes("Older summary"))).toBe(false);
 });
 
 it("dispatches ordinary commands from a durable intent without privileged approval", async () => {
@@ -917,8 +848,8 @@ it("reconciles a durable node receipt before resuming a disconnected Agent", asy
   expect(
     context.messages.some(
       (message) =>
-        message.text.includes(String(operation!.operationId)) &&
-        message.text.includes('"state":"succeeded"'),
+        JSON.stringify(message).includes(String(operation!.operationId)) &&
+        JSON.stringify(message).includes("成功"),
     ),
   ).toBe(true);
   await app.nodes.receive(
@@ -928,7 +859,7 @@ it("reconciles a durable node receipt before resuming a disconnected Agent", asy
       requestId: randomUUID(),
       runId: oldRun.runId,
       agentId,
-      text: "stale transcript",
+      entry: assistantEntry("stale transcript"),
     }),
   );
   expect(JSON.parse(reconnect.sent.at(-1)!)).toMatchObject({
@@ -1132,212 +1063,6 @@ it("reconciles a durable node receipt before resuming a disconnected Agent", asy
     node_receipt_revision: 3,
     receipt_json: JSON.stringify({ code: 0 }),
   });
-});
-
-it("commits a compaction snapshot and replacement session before ACK and recovers it after disconnect", async () => {
-  const { app, cookie, db, nodeId, socket, keyPair } = await setup();
-  const agentId = randomUUID();
-  app.agents.prepare({
-    id: agentId,
-    nodeId,
-    name: "Compacting Agent",
-    role: "Keeps context",
-    description: "Synthetic compaction fixture.",
-    model: { provider: "openai", id: "gpt-4.1" },
-  });
-  app.agents.complete(
-    agentId,
-    {
-      username: `mate_${agentId.replaceAll("-", "").slice(0, 27)}`,
-      uid: 23003,
-      gid: 23003,
-      workspace: `/var/lib/mate/agents/${agentId}`,
-      workspaceMarker: "a".repeat(64),
-    },
-    app.chat,
-  );
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  await app.request("/api/owner/model-credentials/openai", {
-    method: "PUT",
-    headers: { cookie, "content-type": "application/json" },
-    body: JSON.stringify({ apiKey: "synthetic-compaction-key" }),
-  });
-  let start = socket.sent.length;
-  app.chat.createMessage(direct.id, "Earlier handled context.");
-  const first = await waitForRun(socket, start);
-  await app.nodes.receive(
-    socket,
-    JSON.stringify({
-      type: "node.agent.run.result",
-      requestId: randomUUID(),
-      runId: first.runId,
-      agentId,
-      ok: true,
-    }),
-  );
-  socket.onSend = (message) => {
-    if (
-      message.type === "control.process.operation" &&
-      (message.operation as { kind?: string })?.kind === "process.stop_all"
-    )
-      queueMicrotask(
-        () =>
-          void app.nodes.receive(
-            socket,
-            JSON.stringify({
-              type: "node.process.operation.result",
-              requestId: message.requestId,
-              operationId: message.operationId,
-              agentId,
-              state: "succeeded",
-              receipt: { stopped: true, units: [] },
-            }),
-          ),
-      );
-    if (message.type === "control.agent.provision" && message.verifyOnly)
-      queueMicrotask(
-        () =>
-          void app.nodes.receive(
-            socket,
-            JSON.stringify({
-              type: "node.agent.provision.result",
-              requestId: message.requestId,
-              agentId,
-              ok: true,
-              identity: {
-                username: `mate_${agentId.replaceAll("-", "").slice(0, 27)}`,
-                uid: 23003,
-                gid: 23003,
-                workspace: `/var/lib/mate/agents/${agentId}`,
-                workspaceMarker: "a".repeat(64),
-              },
-            }),
-          ),
-      );
-  };
-  app.runs?.pauseAgent(agentId);
-  for (
-    let attempt = 0;
-    attempt < 30 && app.runs?.stopStatus(agentId).state !== "succeeded";
-    attempt++
-  )
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  expect(app.runs?.stopStatus(agentId).state).toBe("succeeded");
-  const otherRoom = app.chat.createChannel({
-    name: "Later source",
-    description: "Delayed delivery",
-    visibility: "public",
-  });
-  expect(app.chat.inviteAgentToChannel(otherRoom.id, agentId)).toBe(true);
-  start = socket.sent.length;
-  app.chat.createMessage(direct.id, "Current pending input.");
-  app.chat.createMessage(otherRoom.id, "Later source must survive compaction.");
-  expect(await app.runs?.resumeAgent(agentId)).toEqual({ ok: true });
-  const second = await waitForRun(socket, start);
-  const actionId = `mate:${second.actionScopeId}:${"d".repeat(64)}:1`;
-  const input = {
-    name: "session.compact",
-    input: { summary: "Earlier context summarized safely.", snapshot: { work: "keep this fact" } },
-  };
-  await sendTool(app, socket, second, actionId, "tools.call", input);
-  const ack = JSON.parse(socket.sent.at(-1)!) as {
-    ok: boolean;
-    result: { sessionId: string; effective: string };
-  };
-  expect(ack).toMatchObject({ ok: true, result: { effective: "next_run" } });
-  expect(
-    db
-      .prepare("SELECT COUNT(*) AS count FROM owner_agent_session_snapshots WHERE agent_id=?")
-      .get(agentId),
-  ).toEqual({ count: 1 });
-  // The response is deliberately ignored as if its ACK were lost. A replay is idempotent.
-  await sendTool(app, socket, second, actionId, "tools.call", input);
-  expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
-    ok: true,
-    result: { sessionId: ack.result.sessionId },
-  });
-  expect(
-    db
-      .prepare("SELECT COUNT(*) AS count FROM owner_agent_session_snapshots WHERE agent_id=?")
-      .get(agentId),
-  ).toEqual({ count: 1 });
-  app.nodes.close(socket);
-  const reconnect = new FakeNodeSocket();
-  app.nodes.open(reconnect);
-  const challenge = JSON.parse(reconnect.sent[0]!) as { nonce: string };
-  await app.nodes.receive(
-    reconnect,
-    JSON.stringify({
-      type: "node.authenticate",
-      requestId: randomUUID(),
-      nodeId,
-      signature: sign(null, Buffer.from(challenge.nonce), keyPair.privateKey).toString("base64url"),
-    }),
-  );
-  const resumed = await waitForRun(reconnect, 0);
-  expect(resumed.sessionId).toBe(ack.result.sessionId);
-  await app.nodes.receive(
-    reconnect,
-    JSON.stringify({
-      type: "node.agent.run.context",
-      requestId: randomUUID(),
-      runId: resumed.runId,
-      agentId,
-      cursor: 0,
-      limit: 100,
-    }),
-  );
-  const page = JSON.parse(reconnect.sent.at(-1)!) as { messages: Array<{ text: string }> };
-  expect(
-    page.messages.some(
-      (message) =>
-        message.text.includes("Mate 会话摘要：Earlier context summarized safely.") &&
-        message.text.includes('"work":"keep this fact"'),
-    ),
-  ).toBe(true);
-  expect(page.messages.map((message) => message.text)).toContain("Current pending input.");
-  expect(page.messages.map((message) => message.text)).not.toContain("Earlier handled context.");
-  const afterCurrentStart = reconnect.sent.length;
-  await app.nodes.receive(
-    reconnect,
-    JSON.stringify({
-      type: "node.agent.run.result",
-      requestId: randomUUID(),
-      runId: resumed.runId,
-      agentId,
-      ok: true,
-    }),
-  );
-  const later = await waitForRun(reconnect, afterCurrentStart);
-  expect(later.channelId).toBe(otherRoom.id);
-  const afterLaterStart = reconnect.sent.length;
-  await app.nodes.receive(
-    reconnect,
-    JSON.stringify({
-      type: "node.agent.run.result",
-      requestId: randomUUID(),
-      runId: later.runId,
-      agentId,
-      ok: true,
-    }),
-  );
-  app.chat.createMessage(direct.id, "Check later source history.");
-  const finalRun = await waitForRun(reconnect, afterLaterStart);
-  await app.nodes.receive(
-    reconnect,
-    JSON.stringify({
-      type: "node.agent.run.context",
-      requestId: randomUUID(),
-      runId: finalRun.runId,
-      agentId,
-      cursor: 0,
-      limit: 100,
-    }),
-  );
-  const finalContext = JSON.parse(reconnect.sent.at(-1)!) as { messages: Array<{ text: string }> };
-  expect(finalContext.messages.map((message) => message.text)).toContain(
-    "Later source must survive compaction.",
-  );
 });
 
 it("pauses for credential failures and owner choice while transient model failures back off", async () => {

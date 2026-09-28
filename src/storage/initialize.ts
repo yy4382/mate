@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { existsSync, statSync } from "node:fs";
 
 const CONTROL_PLANE_APPLICATION_ID = 0x4d43504c;
-const CONTROL_PLANE_FORMAT_REVISION = 25;
+const CONTROL_PLANE_FORMAT_REVISION = 26;
 
 const moveAside =
   "Mate does not migrate or erase a database it does not recognise: if this file was not created by this release, move it aside and point controlPlaneDataDir at a new, empty directory.";
@@ -30,24 +30,12 @@ export function openNodeProcessDatabase(path: string): Database.Database {
 }
 
 /** Open the private control-plane database through the same writable SQLite boundary. */
-export interface ControlPlaneFormatMigration {
-  fromRevision: number;
-  toRevision: number;
-  previousSchema: string;
-  nextSchema: string;
-  migrationSchema: string;
-}
-
-export function openControlPlaneDatabase(
-  path: string,
-  schema: string,
-  migrations: readonly ControlPlaneFormatMigration[] = [],
-): Database.Database {
+export function openControlPlaneDatabase(path: string, schema: string): Database.Database {
   const empty = !existsSync(path) || statSync(path).size === 0,
     db = openWritable(path);
   try {
     if (empty) createControlPlaneFormat(db, path, schema);
-    else acceptControlPlaneFormat(db, path, schema, migrations);
+    else acceptControlPlaneFormat(db, path, schema);
   } catch (error) {
     db.close();
     throw error;
@@ -78,24 +66,12 @@ function createControlPlaneFormat(db: Database.Database, path: string, schema: s
   }
 }
 
-function acceptControlPlaneFormat(
-  db: Database.Database,
-  path: string,
-  schema: string,
-  migrations: readonly ControlPlaneFormatMigration[],
-): void {
+function acceptControlPlaneFormat(db: Database.Database, path: string, schema: string): void {
   let found: Verdict;
   try {
     found = controlPlaneVerdict(db, schema);
   } catch (cause) {
     throw unreadable(path, cause);
-  }
-  while (found.kind === "revision") {
-    const revision = found.revision,
-      migration = migrations.find((candidate) => candidate.fromRevision === revision);
-    if (!migration) break;
-    migrateControlPlaneFormat(db, path, migration);
-    found = controlPlaneVerdict(db, schema);
   }
   switch (found.kind) {
     case "current":
@@ -115,74 +91,6 @@ function acceptControlPlaneFormat(
         path,
         `${path} claims control-plane schema revision ${CONTROL_PLANE_FORMAT_REVISION} but is missing ${found.missing.join(", ")}. ${repair}`,
       );
-  }
-}
-
-function migrateControlPlaneFormat(
-  db: Database.Database,
-  path: string,
-  migration: ControlPlaneFormatMigration,
-): void {
-  if (migration.fromRevision + 1 !== migration.toRevision)
-    throw new Error("Control-plane format migrations must advance exactly one revision");
-
-  const previousTemplate = new Database(":memory:");
-  let previousObjects: Set<string>;
-  try {
-    previousTemplate.exec(migration.previousSchema);
-    previousObjects = databaseObjects(previousTemplate);
-  } finally {
-    previousTemplate.close();
-  }
-
-  const objects = databaseObjects(db),
-    missing = [...previousObjects].filter((object) => !objects.has(object));
-  if (missing.length) {
-    throw new UnsupportedDatabaseError(
-      path,
-      `${path} claims control-plane schema revision ${migration.fromRevision} but is missing ${missing.map((object) => object.replace(":", " ")).join(", ")}. ${repair}`,
-    );
-  }
-
-  const currentTemplate = new Database(":memory:");
-  let additions: string[];
-  try {
-    currentTemplate.exec(migration.nextSchema);
-    additions = [...databaseObjects(currentTemplate)].filter(
-      (object) => !previousObjects.has(object),
-    );
-  } finally {
-    currentTemplate.close();
-  }
-  if (additions.some((object) => objects.has(object))) {
-    throw new UnsupportedDatabaseError(
-      path,
-      `${path} contains current-format structures with schema revision ${migration.fromRevision}. ${repair}`,
-    );
-  }
-
-  try {
-    // Rebuilding a parent table means dropping it while its child rows still exist, which SQLite
-    // refuses under foreign-key enforcement. Disable enforcement for the rebuild only, then verify
-    // the result inside the same transaction so a broken migration rolls back whole.
-    db.pragma("foreign_keys = OFF");
-    try {
-      db.transaction(() => {
-        db.exec(migration.migrationSchema);
-        const violations = db.pragma("foreign_key_check") as unknown[];
-        if (violations.length)
-          throw new Error(
-            `the upgrade left ${violations.length} row(s) referencing missing records`,
-          );
-        db.pragma(`user_version = ${migration.toRevision}`);
-      }).immediate();
-    } finally {
-      db.pragma("foreign_keys = ON");
-    }
-  } catch (cause) {
-    throw new Error(
-      `Cannot upgrade Mate control-plane database at ${path}: ${cause instanceof Error ? cause.message : String(cause)}`,
-    );
   }
 }
 

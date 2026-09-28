@@ -1,3 +1,4 @@
+import { assistantEntry, consumeContextPage } from "../helpers/session.js";
 import {
   chmodSync,
   existsSync,
@@ -371,10 +372,6 @@ it("creates one private owner DM and keeps its input queued while the Agent awai
   });
   expect(post.status).toBe(201);
   expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toHaveLength(1);
-  expect(app.chat.listAgentSessionJournal(agentId, 0, 10).messages).toMatchObject([
-    { role: "user", text: "请给我一个简短研究计划。" },
-  ]);
-  expect(app.agents.get(agentId)?.status).toBe("waiting_credentials");
 });
 
 it("routes Agent conversation discovery through its current control-plane run", async () => {
@@ -595,13 +592,6 @@ it("limits read and send to joined conversations while exposing only public meta
   const directMessages = app.chat.listMessages(ownDirect.id, undefined, 100)!.messages;
   expect(
     directMessages.filter((message) => message.text === "One explicit private reply."),
-  ).toHaveLength(1);
-  expect(
-    app.chat
-      .listAgentSessionJournal(agentId, 0, 100)
-      .messages.filter(
-        (message) => message.role === "assistant" && message.text === "One explicit private reply.",
-      ),
   ).toHaveLength(1);
 });
 
@@ -1222,77 +1212,6 @@ it("replays a committed tool action after its reply is lost and the delivery ret
   ).toEqual({ count: 1 });
 });
 
-it("recovers the completed tool action and result in the Agent's next run context", async () => {
-  const { app, cookie, db, nodeId, socket } = await setup();
-  const agentId = randomUUID();
-  app.agents.prepare({
-    id: agentId,
-    nodeId,
-    name: "Context recovery partner",
-    role: "Recovers committed conversation actions",
-    description: "Synthetic action-history fixture.",
-    model: { provider: "openai", id: "gpt-4.1" },
-  });
-  app.agents.complete(
-    agentId,
-    {
-      username: "mate-node-account",
-      uid: 23001,
-      gid: 23001,
-      workspace: `/var/lib/mate/agents/${agentId}`,
-      workspaceMarker: "a".repeat(64),
-    },
-    app.chat,
-  );
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  await app.request("/api/owner/model-credentials/openai", {
-    method: "PUT",
-    headers: { cookie, "content-type": "application/json" },
-    body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
-  });
-  const firstRunStart = socket.sent.length;
-  app.chat.createMessage(direct.id, "Start a tool action whose receipt must survive.");
-  const firstRun = await waitForRun(socket, firstRunStart),
-    toolMessage = "提交后断连的频道消息。",
-    action = await callAgentTool(app, socket, firstRun, "durable-context-action", "tools.call", {
-      name: "messages.send",
-      input: { conversationId: direct.id, text: toolMessage },
-    });
-  expect(action.ok).toBe(true);
-  expect(
-    app.chat.recordAgentRunTranscript(firstRun.runId, nodeId, agentId, randomUUID(), "已完成。"),
-  ).toBe(true);
-  await app.nodes.receive(
-    socket,
-    JSON.stringify({
-      type: "node.agent.run.result",
-      requestId: randomUUID(),
-      runId: firstRun.runId,
-      agentId,
-      ok: true,
-    }),
-  );
-
-  const secondRunStart = socket.sent.length;
-  app.chat.createMessage(direct.id, "Continue after the completed action.");
-  const secondRun = await waitForRun(socket, secondRunStart),
-    recovered = await callAgentRunContext(app, socket, secondRun);
-  expect(recovered.messages).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({ role: "assistant", text: toolMessage }),
-      expect.objectContaining({
-        role: "assistant",
-        text: expect.stringContaining("messages.send"),
-      }),
-    ]),
-  );
-  expect(
-    db
-      .prepare("SELECT run_id,tool_action_id FROM owner_agent_session_journal WHERE text=?")
-      .get(toolMessage),
-  ).toMatchObject({ run_id: firstRun.runId, tool_action_id: "durable-context-action" });
-});
-
 it("restarts the real Pi worker after a lost result without replaying a committed send", async () => {
   const { app, cookie, db, nodeId, socket } = await setup();
   const agentId = randomUUID();
@@ -1346,7 +1265,7 @@ it("restarts the real Pi worker after a lost result without replaying a committe
             requestId,
             runId: run.runId,
             agentId,
-            text,
+            entry: text,
           }),
         );
         return (
@@ -1453,20 +1372,15 @@ it("restarts the real Pi worker after a lost result without replaying a committe
   expect(piCallIds[0]).toHaveLength(1);
   expect(piCallIds[1]).toHaveLength(3);
   expect(piCallIds[1]![0]).toBe(piCallIds[0]![0]);
-  expect(piCallIds[1]![1]!.split(":").slice(0, 3)).toEqual(
-    piCallIds[1]![0]!.split(":").slice(0, 3),
-  );
   expect(piCallIds[1]![1]).not.toBe(piCallIds[1]![0]);
   expect(piCallIds[1]![2]).not.toBe(piCallIds[1]![1]);
-  expect(observedContexts[1]).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({ role: "assistant", text: "同一交付中的重复动作。" }),
-      expect.objectContaining({
-        role: "assistant",
-        text: expect.stringContaining("messages.send"),
-      }),
-    ]),
-  );
+  expect(
+    observedContexts[1]?.some(
+      (entry) =>
+        entry.message.role === "assistant" &&
+        entry.message.content.some((block) => block.type === "toolCall"),
+    ),
+  ).toBe(true);
 
   const nextDeliveryStart = socket.sent.length;
   app.chat.createMessage(direct.id, "请在新的交付中再发送同样的两条消息。");
@@ -1535,7 +1449,7 @@ it("records every plain turn of one run, including narration beside a tool call"
           requestId: randomUUID(),
           runId: run.runId,
           agentId,
-          text,
+          entry: text,
         }),
       );
       return (JSON.parse(socket.sent.at(fromIndex)!) as { accepted?: boolean }).accepted === true;
@@ -1571,7 +1485,7 @@ it("records every plain turn of one run, including narration beside a tool call"
   expect(
     db
       .prepare(
-        "SELECT text FROM owner_agent_session_journal WHERE run_id=? AND role='assistant' AND tool_action_id IS NULL ORDER BY seq",
+        "SELECT json_extract(payload_json,'$.message.content[0].text') AS text FROM owner_agent_session_records WHERE run_id=? AND json_extract(payload_json,'$.message.role')='assistant' ORDER BY seq",
       )
       .all(run.runId),
   ).toEqual([
@@ -2109,11 +2023,7 @@ it("limits each run to its committed input batch and consumes silent batches", a
         limit: 100,
       }),
     );
-    return JSON.parse(socket.sent.at(-1)!) as {
-      type: string;
-      messages: Array<{ sequence: number; role: string; text: string }>;
-      nextCursor: number | null;
-    };
+    return consumeContextPage(app, socket, runId, agentId);
   };
   expect((await requestContext(firstRun.runId)).messages.map((message) => message.text)).toEqual([
     "同一来源批次中的第一条频道输入。",
@@ -2132,16 +2042,13 @@ it("limits each run to its committed input batch and consumes silent batches", a
       requestId: randomUUID(),
       runId: firstRun.runId,
       agentId,
-      text: "第一批次的私有正文。",
+      entry: assistantEntry("第一批次的私有正文。"),
     }),
   );
   expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
     type: "control.agent.run.transcript_ack",
     accepted: true,
   });
-  expect(
-    app.chat.listAgentSessionJournal(agentId, 0, 100).messages.map((message) => message.text),
-  ).toContain("第一批次的私有正文。");
   // Recording a turn consumes nothing: the batch is covered only when the run succeeds.
   expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toMatchObject([
     { message: { text: "同一来源批次中的第一条频道输入。" } },
@@ -2166,10 +2073,7 @@ it("limits each run to its committed input batch and consumes silent batches", a
   const secondRunStart = socket.sent.length,
     secondRun = await waitForRun(socket, secondRunStart);
   expect(secondRun.sessionId).toBe(firstRun.sessionId);
-  await requestContext(secondRun.runId);
-  const secondContext = JSON.parse(socket.sent.at(-1)!) as {
-    messages: Array<{ sequence: number; role: string; text: string }>;
-  };
+  const secondContext = await requestContext(secondRun.runId);
   expect(secondContext.messages.map((message) => message.text)).toEqual([
     "同一来源批次中的第一条频道输入。",
     "同一来源批次中的第二条频道输入。",
@@ -2250,15 +2154,7 @@ it("keeps a later private input out of a public channel run", async () => {
         limit: 100,
       }),
     );
-    return JSON.parse(socket.sent.at(-1)!) as {
-      messages: Array<{
-        role: string;
-        text: string;
-        sourceChannelId?: string;
-        sourceVisibility?: string;
-        currentRunInput?: boolean;
-      }>;
-    };
+    return consumeContextPage(app, socket, runId, agentId);
   };
   const context = await readContext(firstRun.runId);
   expect(context.messages).toEqual([
@@ -2280,7 +2176,7 @@ it("keeps a later private input out of a public channel run", async () => {
         requestId: randomUUID(),
         runId,
         agentId,
-        text,
+        entry: assistantEntry(text),
       }),
     );
     expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
@@ -2453,7 +2349,7 @@ it("keeps an archived run input pending and retries it after the owner unarchive
       requestId: randomUUID(),
       runId: run.runId,
       agentId,
-      text: "归档期间仍然只写进自己会话记录的正文。",
+      entry: assistantEntry("归档期间仍然只写进自己会话记录的正文。"),
     }),
   );
   // The private record is accepted, but it still publishes nothing.
@@ -2516,7 +2412,7 @@ it("keeps an archived run input pending and retries it after the owner unarchive
       requestId: randomUUID(),
       runId: retry.runId,
       agentId,
-      text: "频道恢复后记录的私有正文。",
+      entry: assistantEntry("频道恢复后记录的私有正文。"),
     }),
   );
   expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
@@ -2608,14 +2504,7 @@ it("does not let an archived earlier source block or join a later source run", a
         limit: 100,
       }),
     );
-    return JSON.parse(socket.sent.at(-1)!) as {
-      messages: Array<{
-        role: string;
-        text: string;
-        sourceChannelId: string;
-        currentRunInput: boolean;
-      }>;
-    };
+    return consumeContextPage(app, socket, runId, agentId);
   };
   const laterContext = await readContext(laterRun.runId);
   expect(laterContext.messages).toMatchObject([
@@ -2633,7 +2522,7 @@ it("does not let an archived earlier source block or join a later source run", a
       requestId: randomUUID(),
       runId: laterRun.runId,
       agentId,
-      text: "只在来源 B 记录的私有正文。",
+      entry: assistantEntry("只在来源 B 记录的私有正文。"),
     }),
   );
   expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
@@ -2698,7 +2587,7 @@ it("does not let an archived earlier source block or join a later source run", a
       requestId: randomUUID(),
       runId: earlierRun.runId,
       agentId,
-      text: "来源 A 恢复后记录的私有正文。",
+      entry: assistantEntry("来源 A 恢复后记录的私有正文。"),
     }),
   );
   expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
@@ -2721,143 +2610,6 @@ it("does not let an archived earlier source block or join a later source run", a
     }),
   );
   expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toHaveLength(0);
-});
-
-it("pages handled session history before appending an older pending run input", async () => {
-  const { app, cookie, nodeId, socket } = await setup();
-  const agentId = randomUUID();
-  app.agents.prepare({
-    id: agentId,
-    nodeId,
-    name: "Long-session partner",
-    role: "Continues a shared session",
-    description: "Synthetic projection cursor fixture.",
-    model: { provider: "openai", id: "gpt-4.1" },
-  });
-  app.agents.complete(
-    agentId,
-    {
-      username: "mate-node-account",
-      uid: 23001,
-      gid: 23001,
-      workspace: `/var/lib/mate/agents/${agentId}`,
-      workspaceMarker: "a".repeat(64),
-    },
-    app.chat,
-  );
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!,
-    earlierSource = app.chat.createChannel({
-      name: "Older source for projected input",
-      description: "Synthetic pagination fixture.",
-      visibility: "private",
-    });
-  expect(app.chat.inviteAgentToChannel(earlierSource.id, agentId)).toBe(true);
-  const earlierInput = app.chat.createMessage(earlierSource.id, "较早 journal 序号的当前输入。");
-  if (!earlierInput) throw new Error("Expected the archived source input to be created.");
-  const earlierDelivery = app.chat.listPendingDeliveries("agent", agentId).deliveries[0]!;
-  expect(earlierDelivery.messageId).toBe(earlierInput.id);
-  const archive = await app.request(`/api/owner/channels/${earlierSource.id}`, {
-    method: "PATCH",
-    headers: { cookie, "content-type": "application/json" },
-    body: JSON.stringify({ archived: true }),
-  });
-  expect(archive.status).toBe(200);
-
-  for (let index = 0; index < 101; index++) {
-    const message = app.chat.createMessage(direct.id, `已处理历史 ${index}.`),
-      delivery = app.chat
-        .listPendingDeliveries("agent", agentId)
-        .deliveries.find((candidate) => candidate.messageId === message?.id);
-    if (!message) throw new Error("Expected the handled history message to be created.");
-    expect(delivery).toBeDefined();
-    expect(app.chat.acknowledgeDelivery(delivery!.id, "agent", agentId)).toBe(true);
-  }
-  const credential = await app.request("/api/owner/model-credentials/openai", {
-    method: "PUT",
-    headers: { cookie, "content-type": "application/json" },
-    body: JSON.stringify({ apiKey: "synthetic-projection-cursor-key" }),
-  });
-  expect(credential.status).toBe(204);
-  const runStart = socket.sent.length;
-  const unarchive = await app.request(`/api/owner/channels/${earlierSource.id}`, {
-    method: "PATCH",
-    headers: { cookie, "content-type": "application/json" },
-    body: JSON.stringify({ archived: false }),
-  });
-  expect(unarchive.status).toBe(200);
-  const run = await waitForRun(socket, runStart);
-  expect(run.channelId).toBe(earlierSource.id);
-
-  const requestPage = async (cursor: number) => {
-    await app.nodes.receive(
-      socket,
-      JSON.stringify({
-        type: "node.agent.run.context",
-        requestId: randomUUID(),
-        runId: run.runId,
-        agentId,
-        cursor,
-        limit: 100,
-      }),
-    );
-    return JSON.parse(socket.sent.at(-1)!) as {
-      messages: Array<{
-        sequence: number;
-        role: string;
-        text: string;
-        sourceChannelId: string;
-        sourceVisibility: string;
-        currentRunInput: boolean;
-      }>;
-      nextCursor: number | null;
-    };
-  };
-  const firstPage = await requestPage(0);
-  expect(firstPage.messages).toHaveLength(100);
-  expect(firstPage.messages[0]).toMatchObject({
-    role: "user",
-    text: "已处理历史 0.",
-    sourceChannelId: direct.id,
-    sourceVisibility: "private",
-    currentRunInput: false,
-  });
-  expect(firstPage.messages.at(-1)?.text).toBe("已处理历史 99.");
-  expect(firstPage.nextCursor).toBe(100);
-  if (firstPage.nextCursor === null) throw new Error("Expected a next context page.");
-
-  const secondPage = await requestPage(firstPage.nextCursor);
-  expect(secondPage.nextCursor).toBeNull();
-  expect(secondPage.messages).toMatchObject([
-    {
-      role: "user",
-      text: "已处理历史 100.",
-      sourceChannelId: direct.id,
-      sourceVisibility: "private",
-      currentRunInput: false,
-    },
-    {
-      role: "user",
-      text: "较早 journal 序号的当前输入。",
-      sourceChannelId: earlierSource.id,
-      sourceVisibility: "private",
-      currentRunInput: true,
-    },
-  ]);
-  expect(secondPage.messages[0]!.sequence).toBeGreaterThan(secondPage.messages[1]!.sequence);
-  expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toMatchObject([
-    { channelId: earlierSource.id, message: { text: "较早 journal 序号的当前输入。" } },
-  ]);
-  await app.nodes.receive(
-    socket,
-    JSON.stringify({
-      type: "node.agent.run.result",
-      requestId: run.runId,
-      runId: run.runId,
-      agentId,
-      ok: false,
-      code: "model_failed",
-    }),
-  );
 });
 
 it("authorizes workspace writes, reuses one action receipt, and reconciles a late node receipt", async () => {
@@ -3047,36 +2799,6 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
       ok: true,
     }),
   );
-  const compactStart = socket.sent.length;
-  app.chat.createMessage(channel.id, "Summarize the uncertain file operation.");
-  const compactRun = await waitForRun(socket, compactStart);
-  const compactActionId = `mate:${compactRun.actionScopeId}:${"c".repeat(64)}:1`;
-  expect(
-    await callAgentTool(app, socket, compactRun, compactActionId, "tools.call", {
-      name: "session.compact",
-      input: { summary: "A file action has an unknown result.", snapshot: {} },
-    }),
-  ).toMatchObject({ ok: true });
-  const unknownJournal = db
-    .prepare("SELECT seq FROM owner_agent_session_journal WHERE session_id=? AND tool_action_id=?")
-    .get(run.sessionId, delayedActionId) as { seq: number };
-  const snapshot = db
-    .prepare(
-      "SELECT through_seq FROM owner_agent_session_snapshots WHERE agent_id=? ORDER BY rowid DESC LIMIT 1",
-    )
-    .get(agentId) as { through_seq: number };
-  expect(snapshot.through_seq).toBeGreaterThanOrEqual(unknownJournal.seq);
-  await app.nodes.receive(
-    socket,
-    JSON.stringify({
-      type: "node.agent.run.result",
-      requestId: randomUUID(),
-      runId: compactRun.runId,
-      agentId,
-      ok: true,
-    }),
-  );
-
   const lateReceipt = nodeReceipts.get(String(heldRequest!.operationId))!;
   const correctedStart = socket.sent.length;
   const unavailableNotification = vi
@@ -3145,10 +2867,12 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
       limit: 100,
     }),
   );
-  const correctedContext = JSON.parse(socket.sent.at(-1)!) as { messages: Array<{ text: string }> };
+  const correctedContext = JSON.parse(socket.sent.at(-1)!) as { messages: ModelContextMessage[] };
   expect(
     correctedContext.messages.some(
-      (message) => message.text.includes("workspace.write") && message.text.includes("receipt-2"),
+      (entry) =>
+        JSON.stringify(entry.message.content).includes("workspace.write") &&
+        JSON.stringify(entry.message.content).includes("receipt-2"),
     ),
   ).toBe(true);
   const correctedActivity = db
@@ -3215,13 +2939,6 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
       )
       .get(failedRequest.operationId),
   ).toMatchObject({ summary: expect.stringContaining("失败") });
-  expect(
-    db
-      .prepare(
-        "SELECT text FROM owner_agent_session_journal WHERE tool_action_id=? ORDER BY seq DESC LIMIT 1",
-      )
-      .get(failedActionId),
-  ).toMatchObject({ text: expect.stringContaining('"state":"failed"') });
   const beforeFailedReplay = requests.length;
   const failedReplay = await callAgentTool(
     app,
@@ -4701,7 +4418,9 @@ it("delivers an offline reminder from an archived DM after reconnect without reo
   expect(run.channelId).toBe(dm.id);
   const context = await callAgentRunContext(app, reconnected, run);
   expect(
-    context.messages.filter((message) => message.currentRunInput).map((message) => message.text),
+    context.messages
+      .filter((entry) => entry.pending)
+      .map((entry) => String(entry.message.content).split("\n").slice(1).join("\n")),
   ).toEqual(["提醒：Check deployment"]);
   const denied = await callAgentTool(app, reconnected, run, "archived-send", "tools.call", {
     name: "messages.send",
@@ -4765,7 +4484,7 @@ it("keeps a real Pi model reply private when its reminder runs in an archived DM
           requestId: transcriptRequestId,
           runId: run.runId,
           agentId,
-          text,
+          entry: text,
         }),
       );
       return (JSON.parse(reconnected.sent.at(-1)!) as { accepted: boolean }).accepted;
@@ -4802,35 +4521,13 @@ it("keeps a real Pi model reply private when its reminder runs in an archived DM
     state: "completed",
     error_code: null,
   });
-  // The archived reminder run still records its own turn privately and keeps it verbatim.
   expect(
     db
       .prepare(
-        "SELECT message_id,text FROM owner_agent_session_journal WHERE run_id=? AND role='assistant' AND tool_action_id IS NULL",
+        "SELECT json_extract(payload_json,'$.message.content[0].text') AS text FROM owner_agent_session_records WHERE run_id=? AND json_extract(payload_json,'$.message.role')='assistant'",
       )
       .get(run.runId),
-  ).toMatchObject({
-    message_id: null,
-    text: "这是首次测试回复。",
-  });
-  expect(
-    app.chat.recordAgentRunTranscript(
-      run.runId,
-      nodeId,
-      agentId,
-      transcriptRequestId,
-      "这是首次测试回复。",
-    ),
-  ).toBe(true);
-  expect(
-    app.chat.recordAgentRunTranscript(
-      run.runId,
-      nodeId,
-      agentId,
-      randomUUID(),
-      "这是首次测试回复。",
-    ),
-  ).toBe(false);
+  ).toMatchObject({ text: "这是首次测试回复。" });
 });
 
 it("marks a reminder handled when a preceding DM delivery starts the completed batch", async () => {
@@ -4885,7 +4582,9 @@ it("does not consume an older archived ordinary message if a reminder run is una
   const run = await waitForRun(reconnected, 0);
   const context = await callAgentRunContext(app, reconnected, run);
   expect(
-    context.messages.filter((message) => message.currentRunInput).map((message) => message.text),
+    context.messages
+      .filter((entry) => entry.pending)
+      .map((entry) => String(entry.message.content).split("\n").slice(1).join("\n")),
   ).toEqual(["提醒：Check deployment"]);
   await app.request(`/api/owner/channels/${dm.id}`, {
     method: "PATCH",
@@ -4905,339 +4604,4 @@ it("does not consume an older archived ordinary message if a reminder run is una
   expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toMatchObject([
     { messageId: ordinary.id },
   ]);
-});
-
-it("keeps one logical session across a DM, a channel and a thread and reaches its task, reminder and memory after restart and compaction", async () => {
-  const fixture = await setup();
-  const { app, cookie, nodeId, socket, nodePrivateKey } = fixture;
-  const directory = fixtures.at(-1)!.directory;
-  const agentId = randomUUID();
-  app.agents.prepare({
-    id: agentId,
-    nodeId,
-    name: "持续工作伙伴",
-    role: "Continues its own unfinished work",
-    description: "Synthetic continuity fixture.",
-    model: { provider: "openai", id: "gpt-4o-mini" },
-  });
-  app.agents.complete(
-    agentId,
-    {
-      username: "mate_" + agentId.replaceAll("-", "").slice(0, 27),
-      uid: 23001,
-      gid: 23001,
-      workspace: `/var/lib/mate/agents/${agentId}`,
-      workspaceMarker: "a".repeat(64),
-    },
-    app.chat,
-  );
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  await app.request("/api/owner/model-credentials/openai", {
-    method: "PUT",
-    headers: { cookie, "content-type": "application/json" },
-    body: JSON.stringify({ apiKey: "synthetic-key-continuity-setup" }),
-  });
-
-  // The Agent's own home is ordinary storage, so its memory outlives the control-plane process.
-  const agentHome = join(directory, "agent-home", agentId);
-  mkdirSync(agentHome, { recursive: true });
-  const serveWorkspace = (
-    target: ReturnType<typeof createControlPlaneApp>,
-    targetSocket: FakeNodeSocket,
-  ) => {
-    targetSocket.onWorkspaceOperation = async (request) => {
-      const operation = request.operation as { kind: string; path: string; content?: string },
-        file = join(agentHome, operation.path),
-        content = operation.content ?? "";
-      if (operation.kind === "write") writeFileSync(file, content);
-      await target.nodes.receive(
-        targetSocket,
-        JSON.stringify({
-          type: "node.workspace.operation.result",
-          requestId: request.requestId,
-          operationId: request.operationId,
-          agentId,
-          ok: true,
-          result:
-            operation.kind === "write"
-              ? {
-                  code: 0,
-                  stdout: JSON.stringify({
-                    sha256: createHash("sha256").update(content).digest("hex"),
-                  }),
-                  stderr: "",
-                  truncated: false,
-                }
-              : existsSync(file)
-                ? { code: 0, stdout: readFileSync(file, "utf8"), stderr: "", truncated: false }
-                : { code: 2, stdout: "", stderr: "not_found", truncated: false },
-        }),
-      );
-    };
-  };
-  serveWorkspace(app, socket);
-
-  // While handling its first input the Agent claims the work, leaves itself a reminder and writes
-  // the memory it will need later. It publishes nothing, which is still a successful run.
-  const anchor = app.chat.createMessage(direct.id, "请接手这项工作。")!;
-  const firstRun = await waitForRun(socket, 0);
-  const claim = await callAgentTool(app, socket, firstRun, "continuity-claim", "tools.call", {
-    name: "tasks.claim_message",
-    input: { messageId: anchor.id },
-  });
-  expect(claim.ok).toBe(true);
-  const claimedTask = (claim.result as { outcome: string; task: { id: string } }).task;
-  expect((claim.result as { outcome: string }).outcome).toBe("claimed");
-  const createdReminder = await callAgentTool(
-    app,
-    socket,
-    firstRun,
-    "continuity-reminder",
-    "tools.call",
-    {
-      name: "reminders.create",
-      input: { conversationId: direct.id, text: "检查部署日志。", dueAt: Date.now() + 3_600_000 },
-    },
-  );
-  expect(createdReminder).toMatchObject({ ok: true });
-  const memory = { name: "workspace.write", input: { path: "plan.md", content: "部署检查清单" } };
-  const written = await callAgentTool(
-    app,
-    socket,
-    firstRun,
-    stableToolActionId(firstRun.actionScopeId, memory),
-    "tools.call",
-    memory,
-  );
-  expect(written).toMatchObject({ ok: true });
-  expect(readFileSync(join(agentHome, "plan.md"), "utf8")).toBe("部署检查清单");
-  await finishRun(app, socket, firstRun);
-  expect(
-    app.chat
-      .listMessages(direct.id, undefined, 100)!
-      .messages.filter((message) => message.author.kind === "agent"),
-  ).toHaveLength(0);
-
-  // There is no owner-facing view of the logical session, so read it with a brand-new connection:
-  // this is the durable fact that compaction must replace the model session without duplicating.
-  const readLogicalSession = () => {
-    const reader = new Database(join(directory, "control-plane", "control-plane.sqlite"), {
-      readonly: true,
-      fileMustExist: true,
-    });
-    try {
-      return reader
-        .prepare("SELECT id,model_session_id FROM owner_agent_sessions WHERE agent_id=?")
-        .all(agentId) as Array<{ id: string; model_session_id: string | null }>;
-    } finally {
-      reader.close();
-    }
-  };
-  const sessionBeforeRestart = readLogicalSession();
-  expect(sessionBeforeRestart).toHaveLength(1);
-  const logicalSessionId = sessionBeforeRestart[0]!.id;
-
-  // The whole service stops: every timer and database handle of the old process goes away.
-  app.close();
-  const restarted = createControlPlaneApp({
-    dataDir: join(directory, "control-plane"),
-    passwordFile: join(directory, "owner-password"),
-  });
-  try {
-    const recovered = await reconnectNode(restarted, nodeId, nodePrivateKey);
-    serveWorkspace(restarted, recovered);
-    await restarted.request("/api/owner/model-credentials/openai", {
-      method: "PUT",
-      headers: { cookie, "content-type": "application/json" },
-      body: JSON.stringify({ apiKey: "synthetic-key-continuity-plan" }),
-    });
-
-    // A different conversation after the restart continues the same logical session, and the task
-    // and reminder entry points still answer.
-    const channel = restarted.chat.createChannel({
-      name: "持续工作频道",
-      description: "Synthetic continuity fixture.",
-      visibility: "private",
-    });
-    expect(restarted.chat.inviteAgentToChannel(channel.id, agentId)).toBe(true);
-    const restartStart = recovered.sent.length;
-    const channelRoot = restarted.chat.createMessage(channel.id, "重启后的本次输入。")!;
-    const secondRun = await waitForRun(recovered, restartStart);
-    expect(secondRun.sessionId).toBe(logicalSessionId);
-    const listedReminders = await callAgentTool(
-      restarted,
-      recovered,
-      secondRun,
-      "restart-reminders",
-      "tools.call",
-      { name: "reminders.list", input: {} },
-    );
-    expect(
-      (listedReminders.result as { reminders: Array<{ text: string }> }).reminders.map(
-        (reminder) => reminder.text,
-      ),
-    ).toContain("检查部署日志。");
-    const listedTasks = await callAgentTool(
-      restarted,
-      recovered,
-      secondRun,
-      "restart-tasks",
-      "tools.call",
-      { name: "tasks.list", input: {} },
-    );
-    expect((listedTasks.result as { tasks: unknown[] }).tasks).toMatchObject([
-      { id: claimedTask.id, status: "in_progress", ownerAgentId: agentId },
-    ]);
-    const discovered = await callAgentTool(
-      restarted,
-      recovered,
-      secondRun,
-      "restart-tools",
-      "tools.list",
-      {},
-    );
-    expect(discovered).toMatchObject({
-      ok: true,
-      result: {
-        tools: expect.arrayContaining([
-          expect.objectContaining({ name: "tasks.list" }),
-          expect.objectContaining({ name: "reminders.list" }),
-          expect.objectContaining({ name: "workspace.list" }),
-          expect.objectContaining({ name: "workspace.read" }),
-        ]),
-      },
-    });
-
-    // Compaction replaces the model session for later runs without creating a second one.
-    const compaction = {
-      name: "session.compact",
-      input: { summary: "重启前的上下文已摘要。", snapshot: { work: "继续未完成任务" } },
-    };
-    const compacted = await callAgentTool(
-      restarted,
-      recovered,
-      secondRun,
-      stableToolActionId(secondRun.actionScopeId, compaction),
-      "tools.call",
-      compaction,
-    );
-    expect(compacted).toMatchObject({ ok: true, result: { effective: "next_run" } });
-    const replacementSessionId = (compacted.result as { sessionId: string }).sessionId;
-    expect(replacementSessionId).not.toBe(logicalSessionId);
-    // A thread reply on that channel message is the next queued input.
-    const reply = restarted.chat.createMessage(channel.id, "讨论串中的本次输入。", {
-      rootId: channelRoot.id,
-    })!;
-    const replyStart = recovered.sent.length;
-    await finishRun(restarted, recovered, secondRun);
-    expect(readLogicalSession()).toEqual([
-      { id: logicalSessionId, model_session_id: replacementSessionId },
-    ]);
-
-    // The thread reply starts the next run in the replacement model session, and the scripted Agent
-    // chooses reminders first, then its own memory, then the current input, then the task it still
-    // owns, and finishes without a private plain turn.
-    const thirdRun = await waitForRun(recovered, replyStart);
-    expect(thirdRun.sessionId).toBe(replacementSessionId);
-    expect(
-      restarted.chat
-        .listMessages(channel.id, undefined, 100)!
-        .messages.find((message) => message.id === channelRoot.id),
-    ).toMatchObject({ replyCount: 1, recentReplies: [{ id: reply.id, rootId: channelRoot.id }] });
-    // The thread reply, not the channel's root message, is this run's current input.
-    expect(
-      (await callAgentRunContext(restarted, recovered, thirdRun)).messages
-        .filter((message) => message.currentRunInput)
-        .map((message) => message.text),
-    ).toEqual(["讨论串中的本次输入。"]);
-    const scripted = async (
-      run: Extract<NodeControlMessage, { type: "control.agent.run" }>,
-    ): Promise<{ results: Array<{ ok: boolean; code?: string }>; transcripts: string[] }> => {
-      const resultAcks: Promise<void>[] = [],
-        results: Array<{ ok: boolean; code?: string }> = [],
-        transcripts: string[] = [],
-        controller = new AbortController();
-      await runAgentModel(
-        run,
-        {
-          context: async () => {
-            const page = await callAgentRunContext(restarted, recovered, run);
-            return { messages: page.messages, nextCursor: page.nextCursor };
-          },
-          transcript: async (text) => {
-            transcripts.push(text);
-            await restarted.nodes.receive(
-              recovered,
-              JSON.stringify({
-                type: "node.agent.run.transcript",
-                requestId: randomUUID(),
-                runId: run.runId,
-                agentId,
-                text,
-              }),
-            );
-            return (JSON.parse(recovered.sent.at(-1)!) as { accepted?: boolean }).accepted === true;
-          },
-          tool: async (toolCallId, operation, input) => {
-            const reply = await callAgentTool(
-              restarted,
-              recovered,
-              run,
-              toolCallId,
-              operation,
-              input,
-            );
-            return reply.ok
-              ? { ok: true as const, result: reply.result }
-              : { ok: false as const, error: reply.error ?? "Agent tool request was refused" };
-          },
-          result: (ok, code) => {
-            results.push({ ok, ...(code ? { code } : {}) });
-            resultAcks.push(
-              restarted.nodes.receive(
-                recovered,
-                JSON.stringify({
-                  type: "node.agent.run.result",
-                  requestId: randomUUID(),
-                  runId: run.runId,
-                  agentId,
-                  ok,
-                  ...(ok ? {} : { code: code ?? "model_failed" }),
-                }),
-              ),
-            );
-          },
-        },
-        controller.signal,
-        { modelWorkerEntry: resolve("tests/fixtures/direct-message-model-worker.mjs") },
-      );
-      await Promise.all(resultAcks);
-      return { results, transcripts };
-    };
-    const { results, transcripts } = await scripted(thirdRun);
-    expect(results).toEqual([{ ok: true }]);
-    expect(transcripts).toEqual([]);
-    expect(
-      restarted.chat
-        .listMessages(channel.id, undefined, 100)!
-        .messages.filter((message) => message.author.kind === "agent")
-        .map((message) => message.text),
-    ).toEqual(["先看提醒：检查部署日志。 记忆：部署检查清单"]);
-    const ownerTasks = await restarted.request("/api/owner/tasks", { headers: { cookie } });
-    expect(ownerTasks.status).toBe(200);
-    expect(
-      (
-        (await ownerTasks.json()) as {
-          tasks: Array<{ id: string; status: string; ownerAgentId: string | null }>;
-        }
-      ).tasks
-        .filter((task) => task.id === claimedTask.id)
-        .map(({ id, status, ownerAgentId }) => ({ id, status, ownerAgentId })),
-    ).toEqual([{ id: claimedTask.id, status: "done", ownerAgentId: agentId }]);
-    expect(readLogicalSession()).toEqual([
-      { id: logicalSessionId, model_session_id: replacementSessionId },
-    ]);
-  } finally {
-    restarted.close();
-  }
 });

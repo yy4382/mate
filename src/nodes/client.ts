@@ -1,3 +1,11 @@
+import {
+  SessionAssembly,
+  sessionFragment,
+  sessionFragmentCharacters,
+  type SessionFragment,
+} from "./session-transport.js";
+import { contextMessageSchema } from "./session-record.js";
+import type { SessionCommit } from "./session-record.js";
 import { createPrivateKey, randomUUID, sign } from "node:crypto";
 import { isAbsolute, join, resolve as resolvePath } from "node:path";
 import { WebSocket } from "ws";
@@ -227,7 +235,11 @@ function connectOnce(
       timeout: ReturnType<typeof setTimeout> | undefined;
     const pendingRunContexts = new Map<
         string,
-        { runId: string; resolve(page: AgentRunPage): void; reject(error: Error): void }
+        {
+          runId: string;
+          resolve(page: AgentRunPage & { fragment?: SessionFragment | undefined }): void;
+          reject(error: Error): void;
+        }
       >(),
       pendingRunTranscripts = new Map<
         string,
@@ -412,7 +424,11 @@ function connectOnce(
         const pending = pendingRunContexts.get(message.requestId);
         if (!pending || pending.runId !== message.runId) return;
         pendingRunContexts.delete(message.requestId);
-        pending.resolve({ messages: message.messages, nextCursor: message.nextCursor });
+        pending.resolve({
+          messages: message.messages,
+          nextCursor: message.nextCursor,
+          fragment: message.fragment,
+        });
         return;
       }
       if (message.type === "control.agent.run.transcript_ack") {
@@ -648,14 +664,41 @@ function connectOnce(
       }
     };
 
-    function requestAgentContext(
+    async function requestAgentContext(
       runId: string,
       agentId: string,
       cursor: number,
       runSignal: AbortSignal,
     ): Promise<AgentRunPage> {
+      let offset = 0,
+        assembly: SessionAssembly | undefined;
+      while (true) {
+        const page = await requestAgentContextPart(runId, agentId, cursor, runSignal, offset);
+        if (!page.fragment) {
+          if (assembly) throw new Error("Incomplete Agent context");
+          return page;
+        }
+        assembly ??= new SessionAssembly(runId, page.fragment.total);
+        const serialized = assembly.accept(runId, page.fragment);
+        if (serialized !== undefined)
+          return {
+            messages: contextMessageSchema.array().parse(JSON.parse(serialized)),
+            nextCursor: page.nextCursor,
+          };
+        offset += page.fragment.data.length;
+      }
+    }
+
+    function requestAgentContextPart(
+      runId: string,
+      agentId: string,
+      cursor: number,
+      runSignal: AbortSignal,
+      offset: number,
+    ): Promise<AgentRunPage & { fragment?: SessionFragment | undefined }> {
       const request = makeAgentRunRequest("node.agent.run.context", runId, agentId, {
         cursor,
+        ...(offset ? { offset } : {}),
         limit: 100,
       });
       const requestId = request.requestId;
@@ -686,13 +729,41 @@ function connectOnce(
       });
     }
 
-    function requestAgentTranscript(
+    async function requestAgentTranscript(
       runId: string,
       agentId: string,
-      text: string,
+      entry: SessionCommit,
       runSignal: AbortSignal,
     ): Promise<boolean> {
-      const request = makeAgentRunRequest("node.agent.run.transcript", runId, agentId, { text });
+      const serialized = JSON.stringify(entry);
+      if (serialized.length <= sessionFragmentCharacters)
+        return requestAgentTranscriptPart(runId, agentId, entry, entry.id, runSignal);
+      for (let offset = 0; offset < serialized.length; offset += sessionFragmentCharacters) {
+        if (
+          !(await requestAgentTranscriptPart(
+            runId,
+            agentId,
+            sessionFragment(serialized, offset),
+            entry.id,
+            runSignal,
+          ))
+        )
+          return false;
+      }
+      return true;
+    }
+
+    function requestAgentTranscriptPart(
+      runId: string,
+      agentId: string,
+      entry: SessionCommit | SessionFragment,
+      entryId: string,
+      runSignal: AbortSignal,
+    ): Promise<boolean> {
+      const request = makeAgentRunRequest("node.agent.run.transcript", runId, agentId, {
+        entry,
+        requestId: entryId,
+      });
       const requestId = request.requestId;
       return new Promise((resolveAccepted, rejectAccepted) => {
         const onAbort = () => {

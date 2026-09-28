@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+import { AgentSession } from "./agent-session.js";
 import type Database from "better-sqlite3";
 import { recordAgentActivity } from "./activity.js";
 import { workspaceReceiptRequestHash } from "../nodes/workspace-receipt.js";
@@ -491,8 +493,15 @@ export class WorkspaceService {
     const authorized = this.authorizeActiveRun(input.runId, input.agentId);
     if (!isMutatingOperation(input.operation))
       throw new WorkspaceError("workspace_unavailable", "此文件操作不允许修改工作区。", 403);
-    if (!input.actionId.startsWith(`mate:${authorized.delivery_id}:`))
-      throw new WorkspaceError("operation_conflict", "文件操作 ID 与当前消息授权不匹配。", 403);
+    if (!input.actionId.startsWith(`mate:${authorized.delivery_id}:`)) {
+      const original = new AgentSession(this.db).toolAction(input.agentId, input.actionId);
+      if (
+        !original ||
+        original.name !== "tools.call" ||
+        !isDeepStrictEqual(original.input, { name: input.operationName, input: input.toolInput })
+      )
+        throw new WorkspaceError("operation_conflict", "文件操作 ID 与已保存调用不匹配。", 403);
+    }
     const operationId = deterministicOperationId(input.actionId),
       requestHash = hashToolRequest(input.operationName, input.toolInput),
       nodeRequestHash = workspaceReceiptRequestHash(input.agentId, input.operation),
@@ -923,13 +932,6 @@ export class WorkspaceService {
             agentId,
             requestHash,
           );
-        this.recordActionJournal(
-          sessionId,
-          agentId,
-          actionId,
-          envelope,
-          prior.state === "unknown" && envelope.state !== "unknown",
-        );
         if (prior.state !== envelope.state)
           recordAgentActivity(this.db, {
             agentId,
@@ -1116,78 +1118,6 @@ export class WorkspaceService {
         envelope,
       );
     this.clearActionOperation(result.operationId);
-  }
-
-  private recordActionJournal(
-    sessionId: string,
-    agentId: string,
-    actionId: string,
-    envelope: {
-      runId: string;
-      channelId: string;
-      operation: string;
-      state: "unknown" | "succeeded" | "failed";
-      result?: unknown;
-      error?: string;
-    },
-    correction = false,
-  ): void {
-    const result =
-        envelope.state === "unknown"
-          ? { state: "unknown", error: envelope.error ?? "没有已确认的文件操作收据" }
-          : envelope.state === "failed"
-            ? { state: "failed", result: envelope.result, error: envelope.error }
-            : envelope.result,
-      contextResult =
-        typeof result === "object" && result !== null
-          ? (result as Record<string, unknown>)
-          : result;
-    const text =
-      `${correction ? "Mate 收据更正" : "Mate 工具结果"}：${envelope.operation} ${JSON.stringify(contextResult)}`.slice(
-        0,
-        20_000,
-      );
-    if (correction) {
-      // A snapshot can already cover the original unknown row. Append a new fact after it.
-      this.db
-        .prepare(
-          `INSERT INTO owner_agent_session_journal(
-           session_id,agent_id,channel_id,run_id,tool_action_id,role,text,created_at
-         ) VALUES(?,?,?,?,?,'assistant',?,?)`,
-        )
-        .run(sessionId, agentId, envelope.channelId, envelope.runId, actionId, text, Date.now());
-      return;
-    }
-    const updated = this.db
-      .prepare(
-        `UPDATE owner_agent_session_journal SET text=?
-       WHERE session_id=? AND agent_id=? AND tool_action_id=? AND message_id IS NULL`,
-      )
-      .run(text, sessionId, agentId, actionId);
-    if (updated.changes > 0) return;
-    this.db
-      .prepare(
-        `INSERT INTO owner_agent_session_journal(
-           session_id,agent_id,channel_id,run_id,tool_action_id,role,text,created_at
-         )
-         SELECT ?,?,?,?,?,'assistant',?,?
-         WHERE NOT EXISTS (
-           SELECT 1 FROM owner_agent_session_journal
-           WHERE session_id=? AND agent_id=? AND tool_action_id=? AND message_id IS NULL
-         )`,
-      )
-      .run(
-        sessionId,
-        agentId,
-        envelope.channelId,
-        envelope.runId,
-        actionId,
-        text,
-        Date.now(),
-        sessionId,
-        agentId,
-        actionId,
-      );
   }
 }
 

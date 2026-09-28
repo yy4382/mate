@@ -219,8 +219,9 @@ async function probeModelWorkerAccount() {
       modelId: "gpt-4o-mini",
       apiKey: "synthetic-key-single-account-probe",
       entry: join(process.cwd(), "tests/fixtures/account-probe-model-worker.mjs"),
-      onTranscript: async (text) => {
-        probe = JSON.parse(text);
+      onTranscript: async (entry) => {
+        if (entry.kind !== "message" || entry.message.role !== "assistant") return true;
+        probe = JSON.parse(entry.message.content[0].text);
         return true;
       },
       signal: controller.signal,
@@ -234,12 +235,9 @@ async function probeModelWorkerAccount() {
       sourceChannel: { channelId: randomUUID(), visibility: "private" },
       messages: [
         {
-          sequence: 1,
-          role: "user",
-          text: "报告启动本次运行的 Linux 账号。",
-          sourceChannelId: randomUUID(),
-          sourceVisibility: "private",
-          currentRunInput: true,
+          id: randomUUID(),
+          actionScopeId: randomUUID(),
+          message: { role: "user", content: "报告启动本次运行的 Linux 账号。", timestamp: 1 },
         },
       ],
       prompt: { name: "Synthetic Agent", role: "Validation", description: "No private data." },

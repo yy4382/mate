@@ -317,10 +317,8 @@ function sessionTurnText(directory: string, runId: string): string | undefined {
   try {
     const row = db
       .prepare(
-        `SELECT text FROM owner_agent_session_journal j
-         JOIN owner_agent_sessions s ON s.id=j.session_id
-         WHERE j.run_id=? AND j.role='assistant' AND j.tool_action_id IS NULL
-           AND j.session_id=s.id AND j.agent_id=s.agent_id`,
+        `SELECT json_extract(payload_json,'$.message.content[0].text') AS text FROM owner_agent_session_records
+         WHERE run_id=? AND json_extract(payload_json,'$.message.role')='assistant' ORDER BY seq DESC LIMIT 1`,
       )
       .get(runId) as { text: string } | undefined;
     return row?.text;

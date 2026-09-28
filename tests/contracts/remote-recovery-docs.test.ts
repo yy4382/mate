@@ -13,7 +13,9 @@ it("documents the limited remote receipt query and a manual hold path for separa
     "不要在网页点击“复启 Agent”，也不要运行控制面主机的 `release-agent`",
   );
   expect(operations).toContain("身份冲突无法定位到单个 Agent");
-  expect(operations).toContain("第 25 版起 Mate 没有特权命令审批");
+  expect(operations).toContain("使用同一数据格式的版本");
+  expect(operations).toContain("本格式不升级旧实验数据库");
+  expect(operations).toContain("启动遇到旧格式时会拒绝修改");
 });
 
 it("documents what a completed backup holds and what verify proves for an ordinary account", () => {
@@ -42,7 +44,7 @@ it("documents what a completed backup holds and what verify proves for an ordina
   // The state a completed backup promises, named the way the owner's own tools name it.
   for (const table of [
     "owner_sessions",
-    "owner_agent_session_journal",
+    "owner_agent_session_records",
     "owner_messages",
     "owner_tasks",
     "owner_reminders",
