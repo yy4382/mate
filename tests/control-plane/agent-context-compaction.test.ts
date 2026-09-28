@@ -44,7 +44,11 @@ async function exerciseCompaction(
     requests.push(body);
     const isSummary = JSON.stringify(body.input?.[0]).includes("context summarization assistant");
     if (isSummary && summaryMode === "network") {
-      response.destroy();
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write(
+        `data: ${JSON.stringify({ type: "response.created", response: { id: "partial-summary" } })}\n\n`,
+      );
+      setTimeout(() => response.destroy(), 10);
       return;
     }
     const turn = isSummary ? -1 : normal++;
@@ -485,7 +489,7 @@ it(
   30_000,
 );
 it(
-  "does not count an unconfirmed summary transport failure",
+  "does not count an incomplete summary stream after HTTP headers",
   () => exerciseCompaction("network"),
   30_000,
 );

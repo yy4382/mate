@@ -132,13 +132,21 @@ export function reportedGoogleUsage(message: AssistantMessage): ReportedUsage {
   };
 }
 
-/** A local transport failure can make Pi emit an assistant error without any provider response. */
+/** A header-only or truncated stream is not a confirmed response. For errors, accept only
+ * usage fields actually observed from a complete provider body (or Google output evidence). */
 export function confirmedModelResponse(
   message: AssistantMessage,
-  httpResponseSeen: boolean,
+  reported: ReportedUsage | null,
 ): boolean {
   return (
-    httpResponseSeen ||
+    (reported !== null &&
+      [
+        reported.input,
+        reported.output,
+        reported.cacheRead,
+        reported.cacheWrite,
+        reported.reasoning,
+      ].some((value) => value !== undefined)) ||
     message.stopReason === "stop" ||
     message.stopReason === "toolUse" ||
     message.stopReason === "length" ||
@@ -383,7 +391,6 @@ export class SessionCompaction {
     });
     const requestId = randomUUID();
     let inspectedUsage: Promise<ReportedUsage | null> | undefined;
-    let httpResponseSeen = false;
     const response = (await (
       await this.stream(this.model, context, {
         apiKey: this.apiKey,
@@ -397,7 +404,6 @@ export class SessionCompaction {
           : {
               fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
                 const response = await fetch(input, init);
-                httpResponseSeen = true;
                 inspectedUsage = response
                   .clone()
                   .text()
@@ -409,7 +415,7 @@ export class SessionCompaction {
       })
     ).result()) as AssistantMessage;
     const rawUsage = await inspectedUsage;
-    if (confirmedModelResponse(response, httpResponseSeen))
+    if (confirmedModelResponse(response, rawUsage ?? null))
       await this.commit({
         kind: "summary_usage",
         id: requestId,

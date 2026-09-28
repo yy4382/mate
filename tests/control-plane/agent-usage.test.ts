@@ -34,7 +34,11 @@ it("reports weighted Agent usage through owner HTTP across model and service res
     }
     const usage = usages[requests++] ?? usages.at(-1)!;
     if (requests >= 7) {
-      response.destroy();
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write(
+        `data: ${JSON.stringify({ type: "response.created", response: { id: "partial" } })}\n\n`,
+      );
+      setTimeout(() => response.destroy(), 10);
       return;
     }
     if (requests === 6) {

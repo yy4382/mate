@@ -272,7 +272,6 @@ export function serveModelWorker(stream: StreamFn): void {
     let compactionError: string | undefined;
     let inspectedNormalUsage: Promise<ReportedUsage | null> | undefined;
     let normalRequestPending = false;
-    let normalHttpResponseSeen = false;
     const agent = new Agent({
       sessionId: run.data.spec.sessionId,
       onResponse: (response) => {
@@ -280,7 +279,6 @@ export function serveModelWorker(stream: StreamFn): void {
       },
       streamFn: (selectedModel, context, options) => {
         normalRequestPending = true;
-        normalHttpResponseSeen = false;
         inspectedNormalUsage = undefined;
         return stream(selectedModel, context, {
           ...options,
@@ -291,7 +289,6 @@ export function serveModelWorker(stream: StreamFn): void {
             : {
                 fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
                   const response = await fetch(input, init);
-                  normalHttpResponseSeen = true;
                   inspectedNormalUsage = response
                     .clone()
                     .text()
@@ -351,16 +348,15 @@ export function serveModelWorker(stream: StreamFn): void {
       const assistant = event.message.role === "assistant" ? event.message : null;
       const isGoogle =
         assistant?.api === "google-generative-ai" || assistant?.api === "google-vertex";
+      const inspected =
+        assistant && normalRequestPending ? ((await inspectedNormalUsage) ?? null) : null;
       const modelRequest =
-        !!assistant &&
-        normalRequestPending &&
-        confirmedModelResponse(assistant, normalHttpResponseSeen);
+        !!assistant && normalRequestPending && confirmedModelResponse(assistant, inspected);
       const usage = modelRequest
-        ? ((await inspectedNormalUsage) ?? (isGoogle ? reportedGoogleUsage(assistant) : null))
+        ? (inspected ?? (isGoogle ? reportedGoogleUsage(assistant) : null))
         : null;
       if (assistant && normalRequestPending) {
         normalRequestPending = false;
-        normalHttpResponseSeen = false;
         inspectedNormalUsage = undefined;
       }
       await commit({
