@@ -78,7 +78,8 @@ export class AgentRunCoordinator {
         new AgentSession(db).append(runId, nodeId, agentId, text),
       tool: (runId, nodeId, agentId, toolCallId, operation, input) =>
         this.executeAgentTool(runId, nodeId, agentId, toolCallId, operation, input),
-      result: (runId, agentId, ok, code) => this.finishRun(runId, agentId, ok, code),
+      result: (runId, agentId, ok, code, reason) =>
+        this.finishRun(runId, agentId, ok, code, reason),
     });
     this.timer = setInterval(() => this.wake(), schedulerIntervalMs);
     this.timer.unref?.();
@@ -873,7 +874,13 @@ export class AgentRunCoordinator {
     };
   }
 
-  private finishRun(runId: string, agentId: string, ok: boolean, code?: string): void {
+  private finishRun(
+    runId: string,
+    agentId: string,
+    ok: boolean,
+    code?: string,
+    reason?: string,
+  ): void {
     const existing = this.db
       .prepare("SELECT state FROM owner_agent_runs WHERE id=? AND agent_id=?")
       .get(runId, agentId) as { state: string } | undefined;
@@ -918,7 +925,16 @@ export class AgentRunCoordinator {
         maxRetryDelayMs,
         retryDelayMs * 2 ** Math.min(row.temporary_failures - 1, 16),
       );
-      if (contextFailure && row.temporary_failures >= 2) {
+      const priorFailure = this.db
+        .prepare(
+          "SELECT error_code FROM owner_agent_runs WHERE agent_id=? AND state='failed' ORDER BY rowid DESC LIMIT 1",
+        )
+        .get(agentId) as { error_code: string } | undefined;
+      if (
+        contextFailure &&
+        row.temporary_failures >= 2 &&
+        priorFailure?.error_code === "context_failed"
+      ) {
         this.db
           .prepare(
             "UPDATE owner_agent_run_control SET paused_reason='context',updated_at=? WHERE agent_id=?",
@@ -949,7 +965,7 @@ export class AgentRunCoordinator {
           : contextPaused
             ? "上下文压缩连续失败，运行已暂停；请检查模型容量或摘要响应。"
             : "模型服务暂时失败，稍后退避重试。",
-      detail: { code: safeFailureCode(code) },
+      detail: { code: safeFailureCode(code), ...(contextFailure && reason ? { reason } : {}) },
       at: this.now(),
     });
   }

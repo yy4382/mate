@@ -26,6 +26,7 @@ const workerResultSchema = z.discriminatedUnion("type", [
         "credentials_invalid",
         "context_failed",
       ]),
+      reason: z.string().max(240).optional(),
     })
     .strict(),
 ]);
@@ -182,8 +183,9 @@ export class ModelRunFailure extends Error {
       | "worker_failed"
       | "credentials_invalid"
       | "context_failed",
+    readonly reason?: string,
   ) {
-    super("Agent model run failed");
+    super(reason ?? "Agent model run failed");
   }
 }
 
@@ -262,7 +264,7 @@ function waitForModelProcess(
       if (!result.success || ("nonce" in result.data && result.data.nonce !== nonce))
         return fail("Agent model worker sent an invalid response");
       if (result.data.type === "done") finish();
-      else finish(new ModelRunFailure(result.data.code));
+      else finish(new ModelRunFailure(result.data.code, result.data.reason));
     };
     hooks.signal.addEventListener("abort", onAbort, { once: true });
     child.on("message", onMessage);

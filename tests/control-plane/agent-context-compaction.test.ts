@@ -1,10 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import Database from "better-sqlite3";
 import { expect, it } from "vitest";
+import {
+  createCoordinatedCheckpoint,
+  restoreCoordinatedCheckpoint,
+  verifyCoordinatedCheckpoint,
+} from "../../src/deployment/coordinated-checkpoint.js";
 import {
   eventually,
   login,
@@ -16,9 +21,17 @@ import {
 } from "../helpers/run-services.js";
 
 async function exerciseCompaction(
-  summaryMode: "success" | "repeat" | "toolCall" | "length" | "uncuttable" | "overflow",
+  summaryMode:
+    | "success"
+    | "repeat"
+    | "toolCall"
+    | "length"
+    | "uncuttable"
+    | "overflow"
+    | "interrupt"
+    | "recoveryOrder",
 ) {
-  const directory = mkdtempSync(join(tmpdir(), "mate-compaction-"));
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), "mate-compaction-")));
   chmodSync(directory, 0o700);
   writeFileSync(join(directory, "owner-password"), ownerPassword, { mode: 0o600 });
   const requests: any[] = [];
@@ -77,7 +90,10 @@ async function exerciseCompaction(
                   content: [
                     {
                       type: "output_text",
-                      text: summaryMode === "uncuttable" ? "short" : "x".repeat(100_000),
+                      text:
+                        summaryMode === "uncuttable" || summaryMode === "recoveryOrder"
+                          ? "short"
+                          : "x".repeat(100_000),
                       annotations: [],
                     },
                   ],
@@ -111,7 +127,7 @@ async function exerciseCompaction(
       ),
     );
     response.end(
-      `data: ${JSON.stringify({ type: "response.completed", response: { id: `response-${requests.length}`, status: isSummary && summaryMode === "length" ? "incomplete" : "completed", ...(isSummary && summaryMode === "length" ? { incomplete_details: { reason: "max_output_tokens" } } : {}), output, usage: { input_tokens: (turn === 0 && summaryMode !== "overflow") || (summaryMode === "repeat" && turn === 1) ? 115_000 : 100, output_tokens: 10, total_tokens: (turn === 0 && summaryMode !== "overflow") || (summaryMode === "repeat" && turn === 1) ? 115_010 : 110, input_tokens_details: { cached_tokens: 0 } } } })}\n\n`,
+      `data: ${JSON.stringify({ type: "response.completed", response: { id: `response-${requests.length}`, status: isSummary && summaryMode === "length" ? "incomplete" : "completed", ...(isSummary && summaryMode === "length" ? { incomplete_details: { reason: "max_output_tokens" } } : {}), output, usage: { input_tokens: (turn === 0 && summaryMode !== "overflow" && summaryMode !== "recoveryOrder") || (summaryMode === "repeat" && turn === 1) ? 115_000 : 100, output_tokens: 10, total_tokens: (turn === 0 && summaryMode !== "overflow" && summaryMode !== "recoveryOrder") || (summaryMode === "repeat" && turn === 1) ? 115_010 : 110, ...(isSummary && summaryMode === "length" ? {} : { input_tokens_details: { cached_tokens: 0 } }) } } })}\n\n`,
     );
   });
   await new Promise<void>((done) => provider.listen(0, "127.0.0.1", done));
@@ -137,7 +153,13 @@ async function exerciseCompaction(
     const nodeOptions = {
       nodeData: join(directory, "node-data"),
       workspaceRoot: join(directory, "workspaces"),
-      modelWorkerEntry: resolve("tests/fixtures/protocol-model-worker.mjs"),
+      modelWorkerEntry: resolve(
+        summaryMode === "interrupt"
+          ? "tests/fixtures/interrupted-compaction-model-worker.mjs"
+          : summaryMode === "recoveryOrder"
+            ? "tests/fixtures/interrupted-tool-result-model-worker.mjs"
+            : "tests/fixtures/protocol-model-worker.mjs",
+      ),
     };
     node = startNode({ ...nodeOptions, origin, pairingToken: pairing.pairingToken });
     const nodeId = (await node.waitFor(/MATE_NODE_PAIRED ([0-9a-f-]+)/i))[1]!;
@@ -171,6 +193,77 @@ async function exerciseCompaction(
     await api(`/api/owner/channels/${dm}/messages`, {
       text: "Continue the assigned task after listing tools",
     });
+    if (summaryMode === "interrupt") {
+      await eventually(() => {
+        const failed = db!
+          .prepare("SELECT COUNT(*) AS n FROM owner_agent_runs WHERE agent_id=? AND state='failed'")
+          .get(agentId) as { n: number };
+        return failed.n === 1 ? true : undefined;
+      }, "interrupted checkpoint submission");
+      await stopProcess(node);
+      node = undefined;
+      expect(
+        db
+          .prepare(
+            "SELECT COUNT(*) AS n FROM owner_agent_session_records WHERE agent_id=? AND kind='compaction'",
+          )
+          .get(agentId),
+      ).toEqual({ n: 0 });
+      node = startNode({
+        ...nodeOptions,
+        modelWorkerEntry: resolve("tests/fixtures/protocol-model-worker.mjs"),
+        origin,
+      });
+      await node.waitFor(/MATE_NODE_CONNECTED/);
+      await completed(1);
+      expect(
+        requests.filter((request) =>
+          JSON.stringify(request.input?.[0]).includes("context summarization assistant"),
+        ),
+      ).toHaveLength(2);
+      expect(
+        requests.filter(
+          (request) =>
+            !JSON.stringify(request.input?.[0]).includes("context summarization assistant"),
+        ),
+      ).toHaveLength(2);
+      expect(JSON.stringify(requests.at(-1).input)).toContain("[会话压缩摘要]");
+      expect(
+        db
+          .prepare(
+            "SELECT COUNT(*) AS n FROM owner_agent_session_records WHERE agent_id=? AND kind='compaction'",
+          )
+          .get(agentId),
+      ).toEqual({ n: 1 });
+      return;
+    }
+    if (summaryMode === "recoveryOrder") {
+      await eventually(() => {
+        const failed = db!
+          .prepare("SELECT COUNT(*) AS n FROM owner_agent_runs WHERE agent_id=? AND state='failed'")
+          .get(agentId) as { n: number };
+        return failed.n === 1 ? true : undefined;
+      }, "missing tool result after worker exit");
+      await stopProcess(node);
+      node = undefined;
+      await api(`/api/owner/channels/${dm}/messages`, { text: "New input after the tool call" });
+      node = startNode({
+        ...nodeOptions,
+        modelWorkerEntry: resolve("tests/fixtures/protocol-model-worker.mjs"),
+        origin,
+      });
+      await node.waitFor(/MATE_NODE_CONNECTED/);
+      await completed(1);
+      expect(requests).toHaveLength(2);
+      const input = requests[1].input;
+      const result = input.findIndex((part: any) => part.type === "function_call_output");
+      const newInput = input.findIndex((part: any) =>
+        JSON.stringify(part).includes("New input after the tool call"),
+      );
+      expect(result).toBeGreaterThan(-1);
+      expect(newInput).toBeGreaterThan(result);
+      return;
+    }
     if (summaryMode === "overflow") {
       await completed(1);
       await api(`/api/owner/channels/${dm}/messages`, {
@@ -207,6 +300,16 @@ async function exerciseCompaction(
       expect(rows.filter((row) => row.kind === "summary_usage")).toHaveLength(
         summaryMode === "uncuttable" ? 0 : 2,
       );
+      if (summaryMode === "length") {
+        const usage = JSON.parse(rows.find((row) => row.kind === "summary_usage")!.payload_json);
+        expect(usage.usage.cacheRead).toBe(0);
+        expect(usage.reportedUsage).toEqual({
+          sourceApi: "openai-responses",
+          inputBasis: "includes_cache",
+          input: 100,
+          output: 10,
+        });
+      }
       expect(
         rows.some(
           (row) =>
@@ -214,10 +317,23 @@ async function exerciseCompaction(
             row.payload_json.includes("Continue the assigned task after listing tools"),
         ),
       ).toBe(true);
+      const activity = db
+        .prepare(
+          "SELECT detail_json FROM owner_agent_activity WHERE agent_id=? AND kind='run.failed' ORDER BY seq DESC LIMIT 1",
+        )
+        .get(agentId) as { detail_json: string };
+      const detail = JSON.parse(activity.detail_json);
+      expect(detail.code).toBe("context_failed");
+      expect(detail.reason).toMatch(
+        summaryMode === "uncuttable" ? /No legal compaction range/ : /Summarization failed/,
+      );
       return;
     }
     await completed(1);
     expect(requests).toHaveLength(summaryMode === "repeat" ? 5 : 3);
+    expect(JSON.stringify(requests[0].input)).toContain(
+      "Continue the assigned task after listing tools",
+    );
     expect(JSON.stringify(requests[1].input[0])).toContain("context summarization assistant");
     expect(requests[1].tools).toBeUndefined();
     expect(JSON.stringify(requests[1].input)).toContain("PREFIX of a turn");
@@ -238,6 +354,21 @@ async function exerciseCompaction(
     expect(rows.filter((row) => row.kind === "summary_usage")).toHaveLength(
       summaryMode === "repeat" ? 2 : 1,
     );
+    const usageRows = rows
+      .filter((row) => row.kind === "summary_usage")
+      .map((row) => JSON.parse(row.payload_json));
+    expect(usageRows[0].reportedUsage).toEqual({
+      sourceApi: "openai-responses",
+      inputBasis: "includes_cache",
+      input: 100,
+      output: 10,
+      cacheRead: 0,
+    });
+    expect(usageRows[0].reportedUsage).not.toHaveProperty("cacheWrite");
+    const checkpoints = rows
+      .filter((row) => row.kind === "compaction")
+      .map((row) => JSON.parse(row.payload_json));
+    expect(checkpoints[0].summaryRequestIds).toEqual([usageRows[0].id]);
     expect(rows.find((row) => row.kind === "compaction")?.payload_json).toContain(
       "Preserve the prior request",
     );
@@ -245,6 +376,34 @@ async function exerciseCompaction(
     node = undefined;
     await stopProcess(control);
     control = undefined;
+    if (summaryMode === "success") {
+      db.close();
+      db = undefined;
+      const state = {
+        controlPlaneDataDir: join(directory, "control-plane-data"),
+        nodeDataDir: nodeOptions.nodeData,
+        agentHomeRoot: nodeOptions.workspaceRoot,
+      };
+      const backup = join(directory, "coordinated-backup");
+      await createCoordinatedCheckpoint(state, backup, async () => {});
+      expect(verifyCoordinatedCheckpoint(backup).entries.length).toBeGreaterThan(0);
+      await restoreCoordinatedCheckpoint(
+        backup,
+        state,
+        async () => {},
+        async () => {},
+      );
+      db = new Database(join(state.controlPlaneDataDir, "control-plane.sqlite"), {
+        readonly: true,
+      });
+      expect(
+        db
+          .prepare(
+            "SELECT COUNT(*) AS n FROM owner_agent_session_records WHERE agent_id=? AND kind='compaction'",
+          )
+          .get(agentId),
+      ).toEqual({ n: 1 });
+    }
     control = startControlPlane(directory);
     origin = `http://127.0.0.1:${(await control.waitFor(/MATE_CONTROL_PLANE_LISTENING (\d+)/))[1]}`;
     cookie = await login(origin);
@@ -298,5 +457,15 @@ it(
 it(
   "recovers once from a provider context overflow using a confirmed checkpoint",
   () => exerciseCompaction("overflow"),
+  30_000,
+);
+it(
+  "keeps original context when the model process exits before checkpoint submission, then retries",
+  () => exerciseCompaction("interrupt"),
+  30_000,
+);
+it(
+  "replays a missing tool result before pending new input after a model-process restart",
+  () => exerciseCompaction("recoveryOrder"),
   30_000,
 );

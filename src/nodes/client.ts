@@ -622,7 +622,7 @@ function connectOnce(
               requestAgentTranscript(runId, agentId, text, runSignal),
             tool: (toolCallId, operation, input, runSignal) =>
               requestAgentTool(runId, agentId, toolCallId, operation, input, runSignal),
-            result: (ok, code) => sendRunResult(runId, agentId, ok, code),
+            result: (ok, code, reason) => sendRunResult(runId, agentId, ok, code, reason),
           },
           controller.signal,
           {
@@ -847,6 +847,7 @@ function connectOnce(
         | "credentials_invalid"
         | "context_failed"
         | "aborted",
+      reason?: string,
     ): void {
       if (socket.readyState !== WebSocket.OPEN || !authenticated) return;
       try {
@@ -855,6 +856,7 @@ function connectOnce(
           makeAgentRunRequest("node.agent.run.result", runId, agentId, {
             ok,
             ...(ok || !code ? {} : { code }),
+            ...(ok || !reason ? {} : { reason }),
           }),
         );
       } catch {

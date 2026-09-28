@@ -168,7 +168,7 @@ export interface AgentRunHandlers {
     | { ok: true; result: unknown }
     | { ok: false; error: string }
     | Promise<{ ok: true; result: unknown } | { ok: false; error: string }>;
-  result(runId: string, agentId: string, ok: boolean, code?: string): void;
+  result(runId: string, agentId: string, ok: boolean, code?: string, reason?: string): void;
 }
 
 type NodeAgentRunRequest = Extract<
@@ -1239,6 +1239,7 @@ export class NodeDirectory {
         request.agentId,
         request.ok,
         request.ok ? undefined : request.code,
+        request.ok ? undefined : request.reason,
       );
     } finally {
       this.finishAgentRun(request.runId, request);

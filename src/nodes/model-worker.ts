@@ -152,7 +152,13 @@ export function serveModelWorker(stream: StreamFn): void {
       });
       if (!accepted) throw new Error("The control plane rejected the session entry");
     };
-    const compaction = new SessionCompaction(run.data.spec.messages, model, apiKey, stream, commit);
+    const compaction = new SessionCompaction(
+      run.data.spec.messages.filter((entry) => !entry.pending),
+      model,
+      apiKey,
+      stream,
+      commit,
+    );
     const forwardTool = async (
       toolCallId: string,
       operation: string,
@@ -257,6 +263,7 @@ export function serveModelWorker(stream: StreamFn): void {
     ];
     let credentialResponse = false;
     let compactionFailed = false;
+    let compactionError: string | undefined;
     const agent = new Agent({
       sessionId: run.data.spec.sessionId,
       onResponse: (response) => {
@@ -273,6 +280,7 @@ export function serveModelWorker(stream: StreamFn): void {
           return await compaction.transform(messages, signal);
         } catch (error) {
           compactionFailed = true;
+          compactionError = error instanceof Error ? error.message : String(error);
           throw error;
         }
       },
@@ -395,6 +403,7 @@ export function serveModelWorker(stream: StreamFn): void {
       }
       for (const entry of run.data.spec.messages.filter((entry) => entry.pending)) {
         await commit({ kind: "message", id: entry.id, message: entry.message });
+        compaction.record(entry.id, entry.message);
         agent.state.messages = [...agent.state.messages, entry.message];
       }
       const last = agent.state.messages.at(-1);
@@ -449,6 +458,13 @@ export function serveModelWorker(stream: StreamFn): void {
           : compactionFailed
             ? "context_failed"
             : "model_failed",
+        ...(compactionFailed
+          ? {
+              reason: (
+                compactionError ?? (error instanceof Error ? error.message : String(error))
+              ).slice(0, 240),
+            }
+          : {}),
       });
     } finally {
       running = undefined;

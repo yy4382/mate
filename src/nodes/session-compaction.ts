@@ -60,6 +60,61 @@ Summarize the prefix to provide context for the retained suffix:
 
 Be concise. Focus on what's needed to understand the kept suffix.`;
 
+type ReportedUsage = {
+  sourceApi: string;
+  inputBasis: "includes_cache" | "excludes_cache" | "unknown";
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+};
+
+/** Pi's normalized Usage fills absent provider fields with zero. Inspect only the provider's
+ * usage fields at the HTTP boundary; never retain its response body or assume an absent field is 0. */
+function reportedUsage(body: string, api: string): ReportedUsage {
+  const reported: ReportedUsage = {
+    sourceApi: api,
+    inputBasis:
+      api === "anthropic-messages"
+        ? "excludes_cache"
+        : api === "openai-responses" ||
+            api === "azure-openai-responses" ||
+            api === "openai-codex-responses" ||
+            api === "openai-completions"
+          ? "includes_cache"
+          : "unknown",
+  };
+  for (const line of body.split("\n")) {
+    const data = line.trim().replace(/^data:\s*/, "");
+    if (!data.startsWith("{")) continue;
+    let event: any;
+    try {
+      event = JSON.parse(data);
+    } catch {
+      continue;
+    }
+    const usage =
+      event.response?.usage ?? event.message?.usage ?? event.usage ?? event.usageMetadata;
+    if (!usage || typeof usage !== "object") continue;
+    const fields = {
+      input: usage.input_tokens ?? usage.prompt_tokens ?? usage.promptTokenCount,
+      output: usage.output_tokens ?? usage.completion_tokens ?? usage.candidatesTokenCount,
+      cacheRead:
+        usage.input_tokens_details?.cached_tokens ??
+        usage.prompt_tokens_details?.cached_tokens ??
+        usage.cache_read_input_tokens ??
+        usage.cachedContentTokenCount,
+      cacheWrite:
+        usage.input_tokens_details?.cache_write_tokens ?? usage.cache_creation_input_tokens,
+    };
+    for (const key of ["input", "output", "cacheRead", "cacheWrite"] as const) {
+      const value = fields[key];
+      if (typeof value === "number" && Number.isFinite(value) && value >= 0) reported[key] = value;
+    }
+  }
+  return reported;
+}
+
 function textTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
@@ -234,11 +289,22 @@ export class SessionCompaction {
     if (!history.length && !prefix.length)
       throw new Error("No messages can be summarized at this boundary");
     let nextSummary = this.checkpoint?.summary ?? "No prior history.";
-    if (history.length)
-      nextSummary = await this.summarize(history, this.checkpoint?.summary, false, reserve, signal);
+    const summaryRequestIds: string[] = [];
+    if (history.length) {
+      const result = await this.summarize(
+        history,
+        this.checkpoint?.summary,
+        false,
+        reserve,
+        signal,
+      );
+      nextSummary = result.text;
+      summaryRequestIds.push(result.requestId);
+    }
     if (prefix.length) {
-      const prefixSummary = await this.summarize(prefix, undefined, true, reserve, signal);
-      nextSummary += `\n\n---\n\n**Turn Context (split turn):**\n\n${prefixSummary}`;
+      const result = await this.summarize(prefix, undefined, true, reserve, signal);
+      nextSummary += `\n\n---\n\n**Turn Context (split turn):**\n\n${result.text}`;
+      summaryRequestIds.push(result.requestId);
     }
     const retained = active.slice(cut);
     const resulting = [
@@ -258,6 +324,7 @@ export class SessionCompaction {
       throughEntryId: latestId,
       summary: nextSummary,
       tokensBefore: estimateBefore,
+      summaryRequestIds,
     };
     await this.commit(checkpoint);
     this.checkpoint = checkpoint;
@@ -270,7 +337,7 @@ export class SessionCompaction {
     prefix: boolean,
     reserve: number,
     signal?: AbortSignal,
-  ): Promise<string> {
+  ): Promise<{ text: string; requestId: string }> {
     const conversation = serialize(messages);
     const prompt = `<conversation>\n${conversation}\n</conversation>\n\n${previous ? `<previous-summary>\n${previous}\n</previous-summary>\n\n` : ""}${prefix ? PREFIX_PROMPT : previous ? UPDATE_PROMPT : INITIAL_PROMPT}`;
     const maxTokens = Math.min(Math.floor((prefix ? 0.5 : 0.8) * reserve), this.model.maxTokens);
@@ -282,6 +349,8 @@ export class SessionCompaction {
         { role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() },
       ],
     });
+    const requestId = randomUUID();
+    let inspectedUsage: Promise<ReportedUsage | null> | undefined;
     const response = (await (
       await this.stream(this.model, context, {
         apiKey: this.apiKey,
@@ -289,15 +358,29 @@ export class SessionCompaction {
         ...(signal ? { signal } : {}),
         maxTokens,
         cacheRetention: "none",
-        sessionId: randomUUID(),
+        sessionId: requestId,
+        ...(this.model.api === "google-generative-ai" || this.model.api === "google-vertex"
+          ? {}
+          : {
+              fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+                const response = await fetch(input, init);
+                inspectedUsage = response
+                  .clone()
+                  .text()
+                  .then((body) => reportedUsage(body, this.model.api))
+                  .catch(() => null);
+                return response;
+              },
+            }),
       })
     ).result()) as AssistantMessage;
+    const rawUsage = await inspectedUsage;
     await this.commit({
       kind: "summary_usage",
-      id: randomUUID(),
+      id: requestId,
       stopReason: response.stopReason,
       usage: JSON.parse(JSON.stringify(response.usage)),
-      availability: "pi_normalized",
+      reportedUsage: rawUsage ?? null,
     });
     if (
       response.stopReason !== "stop" ||
@@ -306,6 +389,6 @@ export class SessionCompaction {
       throw new Error(`Summarization failed with ${response.stopReason}`);
     const text = contentText(response.content).trim();
     if (!text) throw new Error("Summarization returned an empty summary");
-    return text;
+    return { text, requestId };
   }
 }

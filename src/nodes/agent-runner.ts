@@ -35,6 +35,7 @@ export interface AgentRunTransport {
       | "credentials_invalid"
       | "context_failed"
       | "aborted",
+    reason?: string,
   ): void;
 }
 
@@ -98,7 +99,11 @@ export async function runAgentModel(
     if (!connectionSignal.aborted) transport.result(true);
   } catch (error) {
     if (!connectionSignal.aborted)
-      transport.result(false, error instanceof ModelRunFailure ? error.code : "model_failed");
+      transport.result(
+        false,
+        error instanceof ModelRunFailure ? error.code : "model_failed",
+        error instanceof ModelRunFailure ? error.reason : undefined,
+      );
   } finally {
     apiKey = "";
     worker?.close();

@@ -186,6 +186,7 @@ const NodeRequestShapeSchema = z.discriminatedUnion("type", [
           "context_failed",
           "aborted",
         ]),
+        reason: z.string().max(240).optional(),
       })
       .strict(),
   ]),

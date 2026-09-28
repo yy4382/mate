@@ -376,7 +376,12 @@ it("confirms one compaction checkpoint before exposing it to a resumed run", asy
     id: randomUUID(),
     stopReason: "stop" as const,
     usage: { input: 123, output: 45, cacheRead: 0, cacheWrite: 0, totalTokens: 168 },
-    availability: "pi_normalized" as const,
+    reportedUsage: {
+      sourceApi: "openai-responses",
+      inputBasis: "includes_cache" as const,
+      input: 123,
+      output: 45,
+    },
   };
   expect(await commit(f, run, summaryUsage)).toBe(true);
   expect(await commit(f, run, summaryUsage)).toBe(true);
@@ -387,6 +392,7 @@ it("confirms one compaction checkpoint before exposing it to a resumed run", asy
     throughEntryId: retained.id,
     summary: "Must not become visible",
     tokensBefore: 321,
+    summaryRequestIds: [summaryUsage.id],
   };
   expect(await commit(f, run, unconfirmed)).toBe(false);
   expect((await context(f, run)).every((entry) => entry.checkpoint === undefined)).toBe(true);
@@ -397,6 +403,7 @@ it("confirms one compaction checkpoint before exposing it to a resumed run", asy
     throughEntryId: retained.id,
     summary: "Earlier task state",
     tokensBefore: 321,
+    summaryRequestIds: [summaryUsage.id],
   };
   expect(await commit(f, run, checkpoint)).toBe(true);
   expect(await commit(f, run, checkpoint)).toBe(true);
