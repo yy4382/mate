@@ -139,7 +139,7 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
         : {}),
     },
     nodes = new NodeDirectory(ownerAuth.db, nodeOptions),
-    agents = new AgentDirectory(ownerAuth.db, options.now),
+    agents = new AgentDirectory(ownerAuth.db, options.now, nodes),
     modelCredentials = new ModelCredentialDirectory(ownerAuth.db, options.now),
     ownerChat = new OwnerChat(ownerAuth.db, options.now),
     push = new OwnerPush(ownerAuth.db),
@@ -553,11 +553,7 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
     if (!input.success) return context.json({ error: "模型凭据格式无效。" }, 400);
     try {
       const changed = ownerAuth.db
-        .transaction(() => {
-          const updated = modelCredentials.put(provider, input.data.apiKey);
-          agents.setProviderReady(provider, true);
-          return updated;
-        })
+        .transaction(() => modelCredentials.put(provider, input.data.apiKey))
         .immediate();
       if (changed) app.runs?.credentialsChanged(provider, true);
       app.runs?.wake();
@@ -572,13 +568,7 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
     if (!isSupportedModelProvider(provider))
       return context.json({ error: "模型服务不受支持。" }, 400);
     try {
-      const removed = ownerAuth.db
-        .transaction(() => {
-          const deleted = modelCredentials.delete(provider);
-          agents.setProviderReady(provider, false);
-          return deleted;
-        })
-        .immediate();
+      const removed = ownerAuth.db.transaction(() => modelCredentials.delete(provider)).immediate();
       if (removed) app.runs?.credentialsChanged(provider, false);
       app.runs?.wake();
     } catch {
@@ -631,12 +621,7 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
           (stage) => agents.updateStage(input.id, stage),
         );
         if (!result.ok) return agents.fail(input.id, result.message) ?? prepared.agent;
-        return agents.complete(
-          input.id,
-          result.identity,
-          ownerChat,
-          modelCredentials.has(input.model.provider),
-        );
+        return agents.complete(input.id, result.identity, ownerChat);
       } catch (error) {
         const message =
           error instanceof AgentRequestConflict

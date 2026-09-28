@@ -32,6 +32,7 @@ import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { AgentDirectory } from "../../src/control-plane/agents/directory.js";
 import { createControlPlaneApp } from "../../src/control-plane/http.js";
+import { NodeDirectory } from "../../src/control-plane/nodes/directory.js";
 import type { NodeSocket } from "../../src/control-plane/nodes/directory.js";
 import { OwnerAuth } from "../../src/control-plane/owner-auth.js";
 import { OwnerChat } from "../../src/control-plane/owner-chat.js";
@@ -135,7 +136,10 @@ async function populate(d: Deployment): Promise<{
 
   const control = new Database(controlPlanePath(d)),
     chat = new OwnerChat(control, () => 1_000),
-    directory = new AgentDirectory(control, () => 1_000);
+    // Completion records the node's one ordinary account on the node itself, so it needs the
+    // node directory just as the running control plane gives it.
+    nodes = new NodeDirectory(control, { now: () => 1_000 }),
+    directory = new AgentDirectory(control, () => 1_000, nodes);
   directory.prepare({
     id: agentId,
     nodeId: d.nodeId,

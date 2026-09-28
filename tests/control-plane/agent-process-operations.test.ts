@@ -12,7 +12,7 @@ function setup() {
   database.exec(`
     PRAGMA foreign_keys=ON;
     CREATE TABLE nodes(id TEXT PRIMARY KEY);
-    CREATE TABLE owner_agents(id TEXT PRIMARY KEY,node_id TEXT NOT NULL,status TEXT NOT NULL);
+    CREATE TABLE owner_agents(id TEXT PRIMARY KEY,node_id TEXT NOT NULL,stage TEXT NOT NULL);
     CREATE TABLE owner_agent_runs(id TEXT PRIMARY KEY,agent_id TEXT NOT NULL,node_id TEXT NOT NULL,state TEXT NOT NULL,delivery_id TEXT NOT NULL);
     CREATE TABLE owner_agent_sessions(id TEXT PRIMARY KEY,agent_id TEXT NOT NULL);
     CREATE TABLE owner_message_deliveries(id TEXT PRIMARY KEY,channel_id TEXT NOT NULL);
@@ -26,9 +26,7 @@ function setup() {
     stableActionId = `mate:${actionScopeId}:${"a".repeat(64)}:1`,
     operationId = deriveAgentProcessOperationId(agentId, stableActionId);
   database.prepare("INSERT INTO nodes VALUES(?)").run(nodeId);
-  database
-    .prepare("INSERT INTO owner_agents VALUES(?,?,'waiting_credentials')")
-    .run(agentId, nodeId);
+  database.prepare("INSERT INTO owner_agents VALUES(?,?,'complete')").run(agentId, nodeId);
   database
     .prepare("INSERT INTO owner_agent_runs VALUES(?,?,?,'running',?)")
     .run(runId, agentId, nodeId, actionScopeId);

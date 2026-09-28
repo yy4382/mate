@@ -50,6 +50,22 @@ function columnCount(database: Database.Database): number {
   );
 }
 
+function indexNames(database: Database.Database): string[] {
+  return (
+    database
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+      )
+      .all() as Array<{ name: string }>
+  ).map((row) => row.name);
+}
+
+function columnNamesForIndex(database: Database.Database, index: string): string[] {
+  return (database.pragma(`index_info(${index})`) as Array<{ seqno: number; name: string | null }>)
+    .sort((left, right) => left.seqno - right.seqno)
+    .map((column) => column.name ?? "");
+}
+
 function indexCount(database: Database.Database): number {
   return (
     database
@@ -65,7 +81,7 @@ it("a new data directory gets the complete format without the Push service", () 
   const auth = new OwnerAuth({ dataDir: f.dataDir });
   try {
     expect(tableNames(auth.db)).toHaveLength(38);
-    expect(columnCount(auth.db)).toBe(260);
+    expect(columnCount(auth.db)).toBe(256);
     expect(indexCount(auth.db)).toBe(26);
     expect(columnNames(auth.db, "owner_push_deliveries")).toEqual([
       "event_key",
@@ -97,21 +113,36 @@ it("a new data directory gets the complete format without the Push service", () 
       "provider",
       "model_id",
       "initial_channel_id",
-      "request_json",
       "request_hash",
       "provision_request_id",
-      "status",
       "stage",
       "error",
-      "linux_username",
-      "uid",
-      "gid",
       "home",
       "home_marker",
       "created_at",
       "updated_at",
-      "model_ready",
     ]);
+    // Readiness is derived from the preparation stage plus the provider's current credential row,
+    // and the Linux account belongs to the node, so this table stores neither a second state copy.
+    expect(columnNames(auth.db, "owner_agents")).not.toContain("status");
+    expect(columnNames(auth.db, "owner_agents")).not.toContain("model_ready");
+    expect(columnNames(auth.db, "owner_agents")).not.toContain("request_json");
+    expect(columnNames(auth.db, "owner_agent_sessions")).toEqual(["id", "agent_id", "created_at"]);
+    expect(columnNames(auth.db, "nodes")).toEqual([
+      "id",
+      "public_key",
+      "paired_at",
+      "last_connected_at",
+      "linux_username",
+      "uid",
+      "gid",
+    ]);
+    expect(columnNamesForIndex(auth.db, "owner_agents_stage")).toEqual([
+      "stage",
+      "updated_at",
+      "id",
+    ]);
+    expect(indexNames(auth.db)).not.toContain("owner_agents_status");
     expect(columnNames(auth.db, "owner_agent_process_operations")).toEqual([
       "operation_id",
       "run_id",
@@ -152,7 +183,7 @@ it("reopens the format it just created with the same tables and revision", () =>
   const reopened = new OwnerAuth({ dataDir: f.dataDir });
   try {
     expect(tableNames(reopened.db)).toEqual(before);
-    expect(reopened.db.pragma("user_version", { simple: true })).toBe(28);
+    expect(reopened.db.pragma("user_version", { simple: true })).toBe(29);
   } finally {
     reopened.close();
   }
@@ -204,9 +235,9 @@ it("keeps the constraints of the columns it declares directly", () => {
       .run();
     const insertAgent = database.prepare(
       `INSERT INTO owner_agents(
-         id,node_id,name,role,description,provider,model_id,request_json,request_hash,
-         provision_request_id,status,stage,created_at,updated_at
-       ) VALUES(?,?,?,?,?,?,?,'{}',?,?,?,?,1,1)`,
+         id,node_id,name,role,description,provider,model_id,request_hash,
+         provision_request_id,stage,created_at,updated_at
+       ) VALUES(?,?,?,?,?,?,?,?,?,?,1,1)`,
     );
     insertAgent.run(
       "agent",
@@ -218,7 +249,6 @@ it("keeps the constraints of the columns it declares directly", () => {
       "gpt-4.1",
       requestHash,
       "request",
-      "provisioning",
       "queued",
     );
     expect(() =>
@@ -232,13 +262,17 @@ it("keeps the constraints of the columns it declares directly", () => {
         "gpt-4.1",
         requestHash,
         "request-2",
-        "provisioning",
         "creating_account",
       ),
     ).toThrow(/CHECK constraint failed/);
-    expect(database.prepare("SELECT model_ready FROM owner_agents WHERE id='agent'").get()).toEqual(
-      { model_ready: 0 },
-    );
+    expect(
+      database.prepare("SELECT stage,home,home_marker FROM owner_agents WHERE id='agent'").get(),
+    ).toEqual({ stage: "queued", home: null, home_marker: null });
+    // The node account columns stay empty until the first successful preparation records them.
+    expect(database.prepare("SELECT uid,gid FROM nodes WHERE id='node'").get()).toEqual({
+      uid: null,
+      gid: null,
+    });
 
     database
       .prepare(
@@ -303,7 +337,7 @@ it("a new control-plane database carries no privileged approval state", () => {
         )
         .all(),
     ).toEqual([]);
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(28);
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(29);
   } finally {
     auth.close();
   }
@@ -344,28 +378,28 @@ it("rejects an unknown control-plane revision instead of opening it as current",
 
 it("rejects the previous experimental control-plane revision", () => {
   const f = fixture(),
-    database = makeDatabase(f.path, applicationId, 27);
-  database.exec("CREATE TABLE unrelated(value TEXT)");
-  database.close();
-
-  expect(() => new OwnerAuth({ dataDir: f.dataDir })).toThrow(
-    /uses control-plane schema revision 27; this release uses revision 28/,
-  );
-});
-
-it("rejects a current revision that is missing declared schema structures", () => {
-  const f = fixture(),
     database = makeDatabase(f.path, applicationId, 28);
   database.exec("CREATE TABLE unrelated(value TEXT)");
   database.close();
 
   expect(() => new OwnerAuth({ dataDir: f.dataDir })).toThrow(
-    /claims control-plane schema revision 28 but is missing/,
+    /uses control-plane schema revision 28; this release uses revision 29/,
+  );
+});
+
+it("rejects a current revision that is missing declared schema structures", () => {
+  const f = fixture(),
+    database = makeDatabase(f.path, applicationId, 29);
+  database.exec("CREATE TABLE unrelated(value TEXT)");
+  database.close();
+
+  expect(() => new OwnerAuth({ dataDir: f.dataDir })).toThrow(
+    /claims control-plane schema revision 29 but is missing/,
   );
 });
 
 it.each(["absent", "ordinary"])(
-  "rejects revision 28 when the usage projection column is %s",
+  "rejects revision 29 when the usage projection column is %s",
   (column) => {
     const f = fixture();
     const auth = new OwnerAuth({ dataDir: f.dataDir });
@@ -383,7 +417,7 @@ it.each(["absent", "ordinary"])(
     database.close();
 
     expect(() => new OwnerAuth({ dataDir: f.dataDir })).toThrow(
-      /claims control-plane schema revision 28 but is missing .*usage_json/,
+      /claims control-plane schema revision 29 but is missing .*usage_json/,
     );
   },
 );

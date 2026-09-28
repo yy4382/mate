@@ -32,9 +32,23 @@ function setup() {
   mkdirSync(localHome, { recursive: true, mode: 0o700 });
   mkdirSync(join(paths.agentHomeRoot, secondLocalAgentId), { recursive: true, mode: 0o700 });
   const owner = new OwnerAuth({ dataDir: paths.controlPlaneDataDir });
+  // Two paired nodes, each recording the one account its Agents run under: the local node whose
+  // account this host really has, and a remote node whose account belongs to another machine.
   owner.db
-    .prepare("INSERT INTO nodes(id,public_key,paired_at) VALUES(?,?,?)")
-    .run(remoteNodeId, "remote-paired-key", 1);
+    .prepare(
+      `INSERT INTO nodes(id,public_key,paired_at,linux_username,uid,gid) VALUES(?,?,?,?,?,?)`,
+    )
+    .run(
+      remoteNodeId,
+      "remote-paired-key",
+      1,
+      `mate_${otherAgentId.replaceAll("-", "").slice(0, 27)}`,
+      24_002,
+      24_002,
+    );
+  owner.db
+    .prepare("UPDATE nodes SET linux_username=?,uid=?,gid=? WHERE id=?")
+    .run(localAccountUsername, 24_001, 24_001, node.nodeId);
   for (const [id, assignedNodeId, marker] of [
     [agentId, node.nodeId, "a".repeat(64)],
     [secondLocalAgentId, node.nodeId, "a".repeat(64)],
@@ -43,9 +57,9 @@ function setup() {
     owner.db
       .prepare(
         `INSERT INTO owner_agents(
-          id,node_id,name,role,description,provider,model_id,request_json,request_hash,
-          provision_request_id,status,stage,linux_username,uid,gid,home,home_marker,created_at,updated_at
-        ) VALUES(?,?,?,?,?,?,?,?,?,?,'waiting_credentials','complete',?,?,?,?,?,?,?)`,
+          id,node_id,name,role,description,provider,model_id,request_hash,
+          provision_request_id,stage,home,home_marker,created_at,updated_at
+        ) VALUES(?,?,?,?,?,?,?,?,?,'complete',?,?,1,1)`,
       )
       .run(
         id,
@@ -55,24 +69,21 @@ function setup() {
         "",
         "openai",
         "model",
-        "{}",
         "c".repeat(64),
         id,
-        `mate_${id.replaceAll("-", "").slice(0, 27)}`,
-        id === otherAgentId ? 24_002 : 24_001,
-        id === otherAgentId ? 24_002 : 24_001,
         id === otherAgentId ? `/remote/${id}` : join(paths.agentHomeRoot, id),
         marker,
-        1,
-        1,
       );
   owner.close();
   return { paths, node };
 }
 
+/** Every Agent on the one local node runs under this single ordinary account. */
+const localAccountUsername = `mate_${agentId.replaceAll("-", "").slice(0, 27)}`;
+
 function localIdentity(agentId: string, homeRoot: string) {
   return {
-    username: `mate_${agentId.replaceAll("-", "").slice(0, 27)}`,
+    username: localAccountUsername,
     uid: 24_001,
     gid: 24_001,
     workspace: join(homeRoot, agentId),

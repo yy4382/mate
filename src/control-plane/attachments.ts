@@ -477,7 +477,7 @@ export class AttachmentService {
          JOIN owner_channel_memberships human ON human.channel_id=d.channel_id
            AND human.principal_kind='human' AND human.principal_id='owner' AND human.active=1
          WHERE r.id=? AND r.agent_id=? AND r.state='running'
-           AND s.verified_at IS NOT NULL AND a.status IN ('waiting_credentials','ready')`,
+           AND a.stage='complete'`,
       )
       .get(runId, agentId) as
       { session_id: string; node_id: string; delivery_id: string; channel_id: string } | undefined;
@@ -501,12 +501,12 @@ export class AttachmentService {
         `SELECT 1
          FROM owner_agent_runs r
          JOIN owner_agents a ON a.id=r.agent_id AND a.node_id=r.node_id
-         JOIN owner_agent_sessions s ON s.agent_id=a.id AND s.verified_at IS NOT NULL
+         JOIN owner_agent_sessions s ON s.agent_id=a.id
          JOIN owner_channels c ON c.id=? AND c.archived=0
          LEFT JOIN owner_channel_memberships member ON member.channel_id=?
            AND member.principal_kind='agent' AND member.principal_id=a.id AND member.active=1
          WHERE r.id=? AND r.agent_id=? AND r.state='running'
-           AND a.status IN ('waiting_credentials','ready')
+           AND a.stage='complete'
            AND (member.active=1 OR (
              c.visibility='public'
              AND NOT EXISTS (
@@ -533,12 +533,12 @@ export class AttachmentService {
         `SELECT 1
          FROM owner_agent_runs r
          JOIN owner_agents a ON a.id=r.agent_id AND a.node_id=r.node_id
-         JOIN owner_agent_sessions s ON s.agent_id=a.id AND s.verified_at IS NOT NULL
+         JOIN owner_agent_sessions s ON s.agent_id=a.id
          JOIN owner_channels c ON c.id=? AND c.archived=0
          JOIN owner_channel_memberships agent ON agent.channel_id=?
            AND agent.principal_kind='agent' AND agent.principal_id=a.id AND agent.active=1
          WHERE r.id=? AND r.agent_id=? AND r.state='running'
-           AND a.status IN ('waiting_credentials','ready')`,
+           AND a.stage='complete'`,
       )
       .get(channelId, channelId, runId, agentId);
     if (!row)

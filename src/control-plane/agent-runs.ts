@@ -498,15 +498,12 @@ export class AgentRunCoordinator {
       return { ok: false, error: "Agent 仍处于恢复保护状态，须经维护核验后释放。" };
     const row = this.db
       .prepare(
-        `SELECT a.node_id,a.linux_username,a.uid,a.gid,a.home,a.home_marker,c.paused_reason
+        `SELECT a.node_id,a.home,a.home_marker,c.paused_reason
        FROM owner_agents a JOIN owner_agent_run_control c ON c.agent_id=a.id WHERE a.id=?`,
       )
       .get(agentId) as
       | {
           node_id: string;
-          linux_username: string | null;
-          uid: number | null;
-          gid: number | null;
           home: string | null;
           home_marker: string | null;
           paused_reason: string | null;
@@ -531,13 +528,16 @@ export class AgentRunCoordinator {
     } catch {
       return { ok: false, error: "原节点未能核验运行账号与 Agent 工作区，请恢复原节点后重试。" };
     }
+    // Re-verify against the node's recorded account plus this Agent's own workspace and marker.
+    const nodeAccount = this.nodes.account(row.node_id);
     if (
       !verified.ok ||
       !row.home_marker ||
+      !nodeAccount ||
       verified.identity.workspaceMarker !== row.home_marker ||
-      verified.identity.username !== row.linux_username ||
-      verified.identity.uid !== row.uid ||
-      verified.identity.gid !== row.gid ||
+      verified.identity.username !== nodeAccount.username ||
+      verified.identity.uid !== nodeAccount.uid ||
+      verified.identity.gid !== nodeAccount.gid ||
       verified.identity.workspace !== row.home
     )
       return { ok: false, error: "运行账号或 Agent 工作区已缺失或改变；保持停用，请修复原数据。" };
@@ -701,7 +701,7 @@ export class AgentRunCoordinator {
          WHERE d.recipient_kind='agent' AND d.state='pending'
            AND (c.archived=0 OR m.internal_kind='reminder')
            AND a.node_id IN (${onlineNodePlaceholders})
-           AND a.status='waiting_credentials' AND a.model_ready=1
+           AND a.stage='complete'
            AND NOT EXISTS (SELECT 1 FROM owner_agent_run_control ctl WHERE ctl.agent_id=a.id AND ctl.paused_reason IS NOT NULL)
            AND NOT EXISTS (SELECT 1 FROM owner_agent_recovery_holds hold WHERE hold.agent_id=a.id)
            AND EXISTS (SELECT 1 FROM model_credentials c WHERE c.provider=a.provider)
@@ -735,7 +735,8 @@ export class AgentRunCoordinator {
                JOIN owner_message_deliveries d ON d.recipient_id=a.id AND d.recipient_kind='agent'
                JOIN owner_messages m ON m.id=d.message_id
                JOIN owner_channels c ON c.id=d.channel_id
-               WHERE a.id=? AND a.status='waiting_credentials' AND a.model_ready=1
+               WHERE a.id=? AND a.stage='complete'
+                 AND EXISTS (SELECT 1 FROM model_credentials c WHERE c.provider=a.provider)
                  AND (c.archived=0 OR m.internal_kind='reminder')
                  AND d.id=? AND d.state='pending'
                  AND NOT EXISTS (SELECT 1 FROM owner_agent_recovery_holds hold WHERE hold.agent_id=a.id)`,

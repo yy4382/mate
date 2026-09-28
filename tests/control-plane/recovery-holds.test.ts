@@ -20,10 +20,10 @@ it("persists per-Agent recovery holds across control-plane reopen and releases o
       auth.db
         .prepare(
           `INSERT INTO owner_agents(id,node_id,name,role,description,provider,model_id,
-        request_json,request_hash,provision_request_id,status,stage,created_at,updated_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?,'waiting_credentials','complete',1,1)`,
+        request_hash,provision_request_id,stage,created_at,updated_at)
+        VALUES(?,?,?,?,?,?,?,?,?,'complete',1,1)`,
         )
-        .run(id, node, id, "", "", "openai", "model", "{}", "a".repeat(64), id);
+        .run(id, node, id, "", "", "openai", "model", "a".repeat(64), id);
     holdAgentsForRecovery(auth.db, [first, second], "checkpoint_reconciliation_pending");
     auth.close();
     auth = new OwnerAuth({ dataDir: directory });

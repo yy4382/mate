@@ -3,6 +3,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { basename, resolve } from "node:path";
 import type { AgentWorkspaceIdentity } from "../../nodes/agent-provisioner.js";
 import type { AgentProvisionStage } from "../../nodes/protocol.js";
+import { NodeAccountConflict } from "../nodes/directory.js";
+import type { NodeDirectory } from "../nodes/directory.js";
 import type { OwnerChat } from "../owner-chat.js";
 import type {
   AgentSummary,
@@ -25,8 +27,6 @@ interface AgentRow {
   session_id: string;
   provision_request_id: string;
   request_hash: string;
-  model_ready: number;
-  status: AgentProvisioningStatus;
   stage: AgentProvisioningStage;
   error: string | null;
   linux_username: string | null;
@@ -36,6 +36,7 @@ interface AgentRow {
   home_marker: string | null;
   created_at: number;
   updated_at: number;
+  provider_credential: number;
 }
 
 export class AgentRequestConflict extends Error {
@@ -52,23 +53,32 @@ export interface PreparedAgentProvision {
   shouldProvision: boolean;
 }
 
+/**
+ * One Agent's own columns, its logical session, the account of the node it runs on, and whether a
+ * credential row for its current provider exists. Readiness is answered here and never stored, so
+ * a credential the owner adds or removes is visible on the very next read.
+ */
+const agentRowQuery = `
+  SELECT a.id,a.node_id,a.name,a.role,a.description,a.provider,a.model_id,
+         a.initial_channel_id,s.id AS session_id,a.provision_request_id,a.request_hash,
+         a.stage,a.error,n.linux_username,n.uid,n.gid,a.home,a.home_marker,
+         a.created_at,a.updated_at,
+         EXISTS (SELECT 1 FROM model_credentials c WHERE c.provider=a.provider)
+           AS provider_credential
+  FROM owner_agents a JOIN owner_agent_sessions s ON s.agent_id=a.id
+  JOIN nodes n ON n.id=a.node_id
+`;
+
 /** Durable owner-facing Agent identity and provisioning state. */
 export class AgentDirectory {
   constructor(
     private readonly db: Database.Database,
     private readonly now: () => number = Date.now,
+    private readonly nodes?: NodeDirectory,
   ) {}
 
   list(): AgentSummary[] {
-    const rows = this.db
-      .prepare(
-        `SELECT a.id,a.node_id,a.name,a.role,a.description,a.provider,a.model_id,
-                a.initial_channel_id,s.id AS session_id,a.provision_request_id,a.request_hash,
-                a.status,a.model_ready,a.stage,a.error,a.linux_username,a.uid,a.gid,a.home,a.home_marker,a.created_at,a.updated_at
-         FROM owner_agents a JOIN owner_agent_sessions s ON s.agent_id=a.id
-         ORDER BY a.created_at,a.id`,
-      )
-      .all() as AgentRow[];
+    const rows = this.db.prepare(`${agentRowQuery} ORDER BY a.created_at,a.id`).all() as AgentRow[];
     return rows.map(toAgent);
   }
 
@@ -98,9 +108,7 @@ export class AgentDirectory {
   updateModel(id: string, model: NewAgentRequest["model"]): AgentSummary | undefined {
     if (!this.read(id)) return undefined;
     this.db
-      .prepare(
-        "UPDATE owner_agents SET provider=?,model_id=?,model_ready=1,updated_at=? WHERE id=?",
-      )
+      .prepare("UPDATE owner_agents SET provider=?,model_id=?,updated_at=? WHERE id=?")
       .run(model.provider, model.id, this.now(), id);
     return this.get(id);
   }
@@ -123,7 +131,9 @@ export class AgentDirectory {
             throw new AgentRequestConflict(
               "这个 Agent ID 已用于不同资料，不能复用。请重新创建 Agent。",
             );
-          if (existing.status === "waiting_credentials")
+          // A finished workspace is what makes this request already satisfied; whether the Agent
+          // could run right now is a separate question about its provider's credential.
+          if (existing.stage === "complete")
             return {
               agent: toAgent(existing),
               requestId: existing.provision_request_id,
@@ -131,9 +141,7 @@ export class AgentDirectory {
               shouldProvision: false,
             };
           this.db
-            .prepare(
-              "UPDATE owner_agents SET status='provisioning',stage='queued',error=NULL,updated_at=? WHERE id=?",
-            )
+            .prepare("UPDATE owner_agents SET stage='queued',error=NULL,updated_at=? WHERE id=?")
             .run(at, input.id);
           const retried = this.read(input.id);
           if (!retried) throw new Error("Prepared Agent disappeared");
@@ -159,8 +167,8 @@ export class AgentDirectory {
           .prepare(
             `INSERT INTO owner_agents(
               id,node_id,name,role,description,provider,model_id,initial_channel_id,
-              request_json,request_hash,provision_request_id,status,stage,created_at,updated_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,'provisioning','queued',?,?)`,
+              request_hash,provision_request_id,stage,created_at,updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,'queued',?,?)`,
           )
           .run(
             input.id,
@@ -171,7 +179,6 @@ export class AgentDirectory {
             input.model.provider,
             input.model.id,
             input.initialChannelId ?? null,
-            JSON.stringify(input),
             requestHash,
             requestId,
             at,
@@ -187,35 +194,38 @@ export class AgentDirectory {
       .immediate();
   }
 
+  /** Node progress moves an Agent that is still preparing; it can never finish one. */
   updateStage(id: string, stage: AgentProvisionStage): void {
     this.db
-      .prepare("UPDATE owner_agents SET stage=?,updated_at=? WHERE id=? AND status='provisioning'")
+      .prepare(
+        `UPDATE owner_agents SET stage=?,updated_at=?
+         WHERE id=? AND stage IN ('queued','checking_account','preparing_workspace','verifying_workspace')`,
+      )
       .run(stage, this.now(), id);
   }
 
   fail(id: string, message: string): AgentSummary | undefined {
     this.db
       .prepare(
-        "UPDATE owner_agents SET status='failed',stage='failed',error=?,updated_at=? WHERE id=? AND status='provisioning'",
+        `UPDATE owner_agents SET stage='failed',error=?,updated_at=?
+         WHERE id=? AND stage IN ('queued','checking_account','preparing_workspace','verifying_workspace')`,
       )
       .run(message.slice(0, 240), this.now(), id);
     return this.get(id);
   }
 
   /**
-   * Commit node-verified account and workspace facts, session readiness, and optional channel
-   * membership atomically. Every Agent on one node reports the same account with its own workspace.
+   * Commit the node's account, this Agent's workspace and its finished stage atomically, plus the
+   * optional channel membership the original request asked for. Every Agent on one node reports the
+   * same account with its own workspace; the account is recorded on the node itself.
    */
-  complete(
-    id: string,
-    identity: AgentWorkspaceIdentity,
-    ownerChat: OwnerChat,
-    modelReady = false,
-  ): AgentSummary {
+  complete(id: string, identity: AgentWorkspaceIdentity, ownerChat: OwnerChat): AgentSummary {
     return this.db
       .transaction(() => {
         const current = this.read(id);
         if (!current) throw new Error("Agent record disappeared during provisioning");
+        if (!this.nodes)
+          throw new Error("Agent completion needs the node directory to record the node account");
         if (
           basename(identity.workspace) !== id.toLowerCase() ||
           resolve(identity.workspace) !== identity.workspace
@@ -234,48 +244,26 @@ export class AgentDirectory {
           );
         if (!/^[0-9a-f]{64}$/.test(identity.workspaceMarker))
           throw new AgentRequestConflict("节点未返回有效的 Agent 工作区原身份标记。");
-        // Every Agent on one node runs under that node's single ordinary account. A node that
-        // reports a different username, UID or GID for a second Agent is not the account this
-        // release requires, and storing both would silently break the Agent-to-account binding.
-        const neighbour = this.db
-          .prepare(
-            `SELECT linux_username,uid,gid FROM owner_agents
-             WHERE node_id=? AND id<>? AND linux_username IS NOT NULL AND uid IS NOT NULL
-               AND gid IS NOT NULL LIMIT 1`,
-          )
-          .get(current.node_id, id) as
-          { linux_username: string; uid: number; gid: number } | undefined;
-        if (
-          neighbour &&
-          (neighbour.linux_username !== identity.username ||
-            neighbour.uid !== identity.uid ||
-            neighbour.gid !== identity.gid)
-        )
-          throw new AgentRequestConflict(
-            "同一节点上的 Agent 必须共用该节点运行账号；节点返回了不同账号，请检查节点部署。",
-          );
 
-        const at = this.now();
+        const at = this.now(),
+          // Every Agent on one node runs under that node's single ordinary account. This
+          // transaction records it on the node the first time and requires every later Agent on
+          // that node to report the same one; a mismatch throws before anything is written.
+          account = { username: identity.username, uid: identity.uid, gid: identity.gid };
+        try {
+          this.nodes.recordAccount(current.node_id, account);
+        } catch (error) {
+          // A node whose account moved is the owner's provisioning conflict, the same kind of
+          // refusal as any other request this Agent cannot satisfy.
+          if (error instanceof NodeAccountConflict) throw new AgentRequestConflict(error.message);
+          throw error;
+        }
         this.db
           .prepare(
-            `UPDATE owner_agents SET status='waiting_credentials',stage='complete',error=NULL,
-              linux_username=?,uid=?,gid=?,home=?,home_marker=?,updated_at=? WHERE id=?`,
+            `UPDATE owner_agents SET stage='complete',error=NULL,home=?,home_marker=?,updated_at=?
+             WHERE id=? AND stage IN ('queued','checking_account','preparing_workspace','verifying_workspace')`,
           )
-          .run(
-            identity.username,
-            identity.uid,
-            identity.gid,
-            identity.workspace,
-            identity.workspaceMarker,
-            at,
-            id,
-          );
-        this.db
-          .prepare("UPDATE owner_agent_sessions SET verified_at=? WHERE agent_id=?")
-          .run(at, id);
-        this.db
-          .prepare("UPDATE owner_agents SET model_ready=? WHERE id=?")
-          .run(modelReady ? 1 : 0, id);
+          .run(identity.workspace, identity.workspaceMarker, at, id);
         if (
           current.initial_channel_id &&
           !ownerChat.inviteAgentToChannel(current.initial_channel_id, id)
@@ -290,23 +278,8 @@ export class AgentDirectory {
       .immediate();
   }
 
-  setProviderReady(provider: string, ready: boolean): void {
-    this.db
-      .prepare(
-        "UPDATE owner_agents SET model_ready=?,updated_at=? WHERE provider=? AND status='waiting_credentials'",
-      )
-      .run(ready ? 1 : 0, this.now(), provider);
-  }
-
   private read(id: string): AgentRow | undefined {
-    return this.db
-      .prepare(
-        `SELECT a.id,a.node_id,a.name,a.role,a.description,a.provider,a.model_id,
-                a.initial_channel_id,s.id AS session_id,a.provision_request_id,a.request_hash,
-                a.status,a.model_ready,a.stage,a.error,a.linux_username,a.uid,a.gid,a.home,a.home_marker,a.created_at,a.updated_at
-         FROM owner_agents a JOIN owner_agent_sessions s ON s.agent_id=a.id WHERE a.id=?`,
-      )
-      .get(id) as AgentRow | undefined;
+    return this.db.prepare(`${agentRowQuery} WHERE a.id=?`).get(id) as AgentRow | undefined;
   }
 }
 
@@ -324,13 +297,27 @@ function toAgent(row: AgentRow): AgentSummary {
     model: { provider: row.provider, id: row.model_id },
     initialChannelId: row.initial_channel_id,
     sessionId: row.session_id,
-    status: row.status === "waiting_credentials" && row.model_ready === 1 ? "ready" : row.status,
+    status: deriveStatus(row.stage, row.provider_credential === 1),
     stage: row.stage,
     error: row.error,
     linuxIdentity: identity,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+/**
+ * The one owner-facing status rule. Workspace preparation stages are still provisioning, a failed
+ * preparation is failed, and a finished workspace is ready exactly when the Agent's current
+ * provider has a credential. The stored preparation stage alone never invents a fourth state.
+ */
+function deriveStatus(
+  stage: AgentProvisioningStage,
+  hasProviderCredential: boolean,
+): AgentProvisioningStatus {
+  if (stage === "failed") return "failed";
+  if (stage !== "complete") return "provisioning";
+  return hasProviderCredential ? "ready" : "waiting_credentials";
 }
 
 function hashRequest(input: NewAgentRequest): string {

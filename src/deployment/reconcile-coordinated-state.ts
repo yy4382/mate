@@ -87,8 +87,13 @@ export function reconcileCoordinatedState(
     const pairedNode = controlPlane
       .prepare("SELECT id,public_key FROM nodes WHERE id=?")
       .get(nodeIdentity.id) as { id: string; public_key: string } | undefined;
+    // An Agent is proven against its node's recorded account plus its own workspace; a node that
+    // never completed a preparation has no account recorded, so nothing is verified for it.
     const rows = controlPlane
-      .prepare("SELECT id,node_id,linux_username,uid,gid,home,home_marker FROM owner_agents")
+      .prepare(
+        `SELECT a.id,a.node_id,n.linux_username,n.uid,n.gid,a.home,a.home_marker
+         FROM owner_agents a JOIN nodes n ON n.id=a.node_id`,
+      )
       .all() as AgentRow[];
     const localHomes = new Set(
       readdirSync(paths.agentHomeRoot).filter((name) => uuidSchema.safeParse(name).success),

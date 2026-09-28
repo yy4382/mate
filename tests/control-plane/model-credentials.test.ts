@@ -98,7 +98,7 @@ it("stores one API key per supported provider without returning it and keeps onl
   expect(restartedBody.includes(syntheticKey)).toBe(false);
 });
 
-it("rolls back a credential write when provider readiness cannot commit", async () => {
+it("answers Agent readiness from the credential row instead of writing Agent state", async () => {
   const fixture = setup();
   const nodeId = randomUUID(),
     agentId = randomUUID(),
@@ -115,7 +115,7 @@ it("rolls back a credential write when provider readiness cannot commit", async 
     nodeId,
     name: "Waiting partner",
     role: "Waits for credentials",
-    description: "Synthetic transaction recovery fixture.",
+    description: "Synthetic credential readiness fixture.",
     model: { provider: "openai", id: "gpt-4.1" },
   });
   fixture.app.agents.complete(
@@ -129,35 +129,42 @@ it("rolls back a credential write when provider readiness cannot commit", async 
     },
     fixture.app.chat,
   );
+  const before = fixture.app.agents.get(agentId)!;
+  expect(before.status).toBe("waiting_credentials");
+
+  // Configuring a key is only a credential fact. If it also patched the Agent, this trigger would
+  // abort the write, so the request succeeding is the evidence that readiness is derived.
   const faultDb = new Database(databasePath);
   faultDb.exec(`
-    CREATE TRIGGER reject_model_ready_update
-    BEFORE UPDATE OF model_ready ON owner_agents
-    BEGIN SELECT RAISE(ABORT, 'synthetic readiness failure'); END;
+    CREATE TRIGGER reject_agent_update
+    BEFORE UPDATE ON owner_agents
+    BEGIN SELECT RAISE(ABORT, 'synthetic Agent write'); END;
   `);
   faultDb.close();
 
   const cookie = await login(fixture.app);
-  const failedWrite = await fixture.app.request("/api/owner/model-credentials/openai", {
+  const configured = await fixture.app.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
-    body: JSON.stringify({ apiKey: "synthetic-transaction-key" }),
+    body: JSON.stringify({ apiKey: "synthetic-derived-readiness-key" }),
   });
-  expect(failedWrite.status).toBe(503);
-  const afterFailure = await fixture.app.request("/api/owner/model-credentials", {
+  expect(configured.status).toBe(204);
+  const withKey = fixture.app.agents.get(agentId)!;
+  expect(withKey.status).toBe("ready");
+  expect(withKey.updatedAt).toBe(before.updatedAt);
+
+  // Removing it moves the same derived answer back, again without touching the Agent row.
+  const removed = await fixture.app.request("/api/owner/model-credentials/openai", {
+    method: "DELETE",
     headers: { cookie },
   });
-  expect(await afterFailure.json()).toEqual({ credentials: [] });
+  expect(removed.status).toBe(204);
+  expect(fixture.app.agents.get(agentId)?.status).toBe("waiting_credentials");
 
-  const inspectDb = new Database(databasePath, { readonly: true });
-  expect(inspectDb.prepare("SELECT model_ready FROM owner_agents WHERE id=?").get(agentId)).toEqual(
-    { model_ready: 0 },
-  );
-  inspectDb.close();
-
+  // The list endpoint answers from the same rule after a restart, with no readiness row to read.
   fixture.app.close();
   const repairDb = new Database(databasePath);
-  repairDb.exec("DROP TRIGGER reject_model_ready_update");
+  repairDb.exec("DROP TRIGGER reject_agent_update");
   repairDb.close();
   const restarted = createControlPlaneApp({
     dataDir: fixture.dataDir,
@@ -165,10 +172,7 @@ it("rolls back a credential write when provider readiness cannot commit", async 
   });
   fixtures.push({ app: restarted, directory: fixture.directory });
   const restartCookie = await login(restarted);
-  const afterRestart = await restarted.request("/api/owner/model-credentials", {
-    headers: { cookie: restartCookie },
-  });
-  expect(await afterRestart.json()).toEqual({ credentials: [] });
+  expect(restarted.agents.get(agentId)?.status).toBe("waiting_credentials");
   const retried = await restarted.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie: restartCookie, "content-type": "application/json" },
@@ -176,9 +180,4 @@ it("rolls back a credential write when provider readiness cannot commit", async 
   });
   expect(retried.status).toBe(204);
   expect(restarted.agents.get(agentId)?.status).toBe("ready");
-  const finalDb = new Database(databasePath, { readonly: true });
-  expect(finalDb.prepare("SELECT model_ready FROM owner_agents WHERE id=?").get(agentId)).toEqual({
-    model_ready: 1,
-  });
-  finalDb.close();
 });

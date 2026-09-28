@@ -62,8 +62,7 @@ export class WorkspaceError extends Error {
 interface WorkspaceAgent {
   id: string;
   node_id: string;
-  status: string;
-  verified_at: number | null;
+  stage: string;
   home: string | null;
 }
 
@@ -747,16 +746,11 @@ export class WorkspaceService {
   private requireAgent(agentId: string): WorkspaceAgent {
     const row = this.db
       .prepare(
-        `SELECT a.id,a.node_id,a.status,a.home,s.verified_at
+        `SELECT a.id,a.node_id,a.stage,a.home
          FROM owner_agents a JOIN owner_agent_sessions s ON s.agent_id=a.id WHERE a.id=?`,
       )
       .get(agentId) as WorkspaceAgent | undefined;
-    if (
-      !row ||
-      row.verified_at === null ||
-      row.home === null ||
-      !["waiting_credentials", "ready"].includes(row.status)
-    )
+    if (!row || row.home === null || row.stage !== "complete")
       throw new WorkspaceError("agent_unavailable", "Agent 工作区尚未准备好。", 404);
     const node = this.nodes.list().find((item) => item.id === row.node_id);
     if (!node?.online)
@@ -787,7 +781,7 @@ export class WorkspaceService {
          JOIN owner_channel_memberships m ON m.channel_id=d.channel_id
            AND m.principal_kind='agent' AND m.principal_id=a.id AND m.active=1
          WHERE r.id=? AND r.agent_id=? AND r.state='running'
-           AND s.verified_at IS NOT NULL AND a.status IN ('waiting_credentials','ready')
+           AND a.stage='complete'
            AND NOT EXISTS (SELECT 1 FROM owner_agent_recovery_holds hold WHERE hold.agent_id=a.id)`,
       )
       .get(runId, agentId) as

@@ -34,6 +34,13 @@ function setup() {
   return app;
 }
 
+/** A second connection to the fixture's own database, for asserting stored rows directly. */
+function databaseFor(app: ReturnType<typeof createControlPlaneApp>): Database.Database {
+  const fixture = fixtures.find((entry) => entry.app === app);
+  if (!fixture) throw new Error("The fixture was already cleaned up");
+  return new Database(join(fixture.directory, "control-plane", "control-plane.sqlite"));
+}
+
 async function login(app: ReturnType<typeof createControlPlaneApp>): Promise<string> {
   const response = await app.request("/api/auth/login", {
     method: "POST",
@@ -858,7 +865,6 @@ it("finds an online Agent beyond more than one page of offline deliveries", asyn
         workspaceMarker: "a".repeat(64),
       },
       app.chat,
-      true,
     );
     const direct = app.chat.getOrCreateAgentDirectChannel(id)!;
     app.chat.createMessage(direct.id, `离线 Agent ${index} 的排队输入。`);
@@ -883,7 +889,6 @@ it("finds an online Agent beyond more than one page of offline deliveries", asyn
       workspaceMarker: "a".repeat(64),
     },
     app.chat,
-    true,
   );
   const onlineDirect = app.chat.getOrCreateAgentDirectChannel(onlineAgentId)!;
   app.chat.createMessage(onlineDirect.id, "在线 Agent 的排队输入。");
@@ -1039,7 +1044,29 @@ it("refuses an Agent whose node reports a different account than the one it alre
     expect(() => app.agents.complete(secondId, identity(secondId, account), app.chat)).toThrow(
       AgentRequestConflict,
     );
-    expect(app.agents.get(secondId)?.status).toBe("provisioning");
+    // A refused account leaves no partial completion behind: the node keeps the account it
+    // already runs under, and the Agent keeps neither a workspace nor a finished stage.
+    expect(app.agents.get(secondId)).toMatchObject({
+      status: "provisioning",
+      stage: "queued",
+      linuxIdentity: null,
+    });
+    const inspect = databaseFor(app);
+    try {
+      expect(
+        inspect.prepare("SELECT home,home_marker FROM owner_agents WHERE id=?").get(secondId),
+      ).toEqual({ home: null, home_marker: null });
+    } finally {
+      inspect.close();
+    }
+  }
+  const inspect = databaseFor(app);
+  try {
+    expect(
+      inspect.prepare("SELECT linux_username,uid,gid FROM nodes WHERE id=?").get(nodeId),
+    ).toEqual({ linux_username: "mate-node-account", uid: 23001, gid: 23001 });
+  } finally {
+    inspect.close();
   }
 
   const thirdId = randomUUID();

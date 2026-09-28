@@ -453,12 +453,9 @@ export class OwnerChat {
     return this.db
       .transaction(() => {
         const agent = this.db
-          .prepare(
-            `SELECT a.id,a.name,s.verified_at FROM owner_agents a
-             JOIN owner_agent_sessions s ON s.agent_id=a.id WHERE a.id=?`,
-          )
-          .get(agentId) as { id: string; name: string; verified_at: number | null } | undefined;
-        if (!agent || agent.verified_at === null) return undefined;
+          .prepare("SELECT a.id,a.name,a.stage FROM owner_agents a WHERE a.id=?")
+          .get(agentId) as { id: string; name: string; stage: string } | undefined;
+        if (!agent || agent.stage !== "complete") return undefined;
         const existing = this.db
           .prepare(
             `SELECT c.id,c.name,c.description,c.visibility,c.archived,c.created_at,c.updated_at
@@ -506,14 +503,14 @@ export class OwnerChat {
       .transaction(() => {
         const session = this.db
           .prepare(
-            `SELECT s.verified_at,a.status,a.linux_username,a.uid,a.gid,a.home
+            `SELECT a.stage,a.home,n.linux_username,n.uid,n.gid
              FROM owner_agent_sessions s JOIN owner_agents a ON a.id=s.agent_id
+             JOIN nodes n ON n.id=a.node_id
              WHERE s.agent_id=?`,
           )
           .get(agentId) as
           | {
-              verified_at: number | null;
-              status: string;
+              stage: string;
               linux_username: string | null;
               uid: number | null;
               gid: number | null;
@@ -522,8 +519,7 @@ export class OwnerChat {
           | undefined;
         if (
           !session ||
-          session.verified_at === null ||
-          session.status !== "waiting_credentials" ||
+          session.stage !== "complete" ||
           !session.linux_username ||
           session.uid === null ||
           session.gid === null ||
@@ -2170,9 +2166,9 @@ export class OwnerChat {
     return this.db
       .prepare(
         `SELECT a.id,a.name,a.role,a.description
-         FROM owner_agents a JOIN owner_agent_sessions s ON s.agent_id=a.id
-         WHERE a.id<>? AND s.verified_at IS NOT NULL AND a.status='waiting_credentials'
-           AND a.linux_username IS NOT NULL AND a.uid IS NOT NULL AND a.gid IS NOT NULL
+         FROM owner_agents a JOIN nodes n ON n.id=a.node_id
+         WHERE a.id<>? AND a.stage='complete'
+           AND n.linux_username IS NOT NULL AND n.uid IS NOT NULL AND n.gid IS NOT NULL
            AND a.home IS NOT NULL
          ORDER BY a.created_at,a.id`,
       )
@@ -2321,9 +2317,9 @@ export class OwnerChat {
   private isInviteableAgent(agentId: string): boolean {
     const row = this.db
       .prepare(
-        `SELECT 1 FROM owner_agent_sessions s JOIN owner_agents a ON a.id=s.agent_id
-         WHERE s.agent_id=? AND s.verified_at IS NOT NULL AND a.status='waiting_credentials'
-           AND a.linux_username IS NOT NULL AND a.uid IS NOT NULL AND a.gid IS NOT NULL
+        `SELECT 1 FROM owner_agents a JOIN nodes n ON n.id=a.node_id
+         WHERE a.id=? AND a.stage='complete'
+           AND n.linux_username IS NOT NULL AND n.uid IS NOT NULL AND n.gid IS NOT NULL
            AND a.home IS NOT NULL`,
       )
       .get(agentId);

@@ -67,6 +67,21 @@ export interface NodeSummary {
   lastConnectedAt: string | null;
 }
 
+/** The one ordinary Linux account a paired node runs every one of its Agents under. */
+export interface NodeAccount {
+  username: string;
+  uid: number;
+  gid: number;
+}
+
+/** A node reported an account that is not the one its Agents already run under. */
+export class NodeAccountConflict extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NodeAccountConflict";
+  }
+}
+
 export interface NodeDirectoryOptions {
   now?: () => number;
   pairingTokenTtlMs?: number;
@@ -266,6 +281,48 @@ export class NodeDirectory {
       .prepare("INSERT INTO node_pairing_tokens(token_hash, created_at, expires_at) VALUES(?,?,?)")
       .run(hashToken(pairingToken), createdAt, expiresAt);
     return { pairingToken, expiresAt: new Date(expiresAt).toISOString() };
+  }
+
+  /**
+   * The one ordinary Linux account every Agent on this node runs under, or undefined before the
+   * node's first successful workspace preparation recorded it.
+   */
+  account(nodeId: string): NodeAccount | undefined {
+    const row = this.database
+      .prepare(
+        "SELECT linux_username,uid,gid FROM nodes WHERE id=? AND linux_username IS NOT NULL AND uid IS NOT NULL AND gid IS NOT NULL",
+      )
+      .get(nodeId) as { linux_username: string; uid: number; gid: number } | undefined;
+    return row ? { username: row.linux_username, uid: row.uid, gid: row.gid } : undefined;
+  }
+
+  /**
+   * Record this node's account on its first successful workspace preparation, and require every
+   * later Agent on the same node to report the same account. Meant to run inside the caller's
+   * transaction: a mismatch throws so the Agent's workspace, stage and channel invitation roll back
+   * together instead of leaving a partially prepared Agent behind.
+   */
+  recordAccount(nodeId: string, account: NodeAccount): void {
+    const recorded = this.database
+      .prepare(
+        `UPDATE nodes SET linux_username=?,uid=?,gid=?
+         WHERE id=? AND (linux_username IS NULL OR (linux_username=? AND uid=? AND gid=?))`,
+      )
+      .run(
+        account.username,
+        account.uid,
+        account.gid,
+        nodeId,
+        account.username,
+        account.uid,
+        account.gid,
+      );
+    if (recorded.changes === 1) return;
+    if (!this.database.prepare("SELECT 1 FROM nodes WHERE id=?").get(nodeId))
+      throw new NodeAccountConflict("节点尚未配对，无法记录它运行 Agent 的账号。");
+    throw new NodeAccountConflict(
+      "同一节点上的 Agent 必须共用该节点运行账号；节点返回了不同账号，请检查节点部署。",
+    );
   }
 
   list(): NodeSummary[] {

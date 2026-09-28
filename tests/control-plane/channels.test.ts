@@ -139,11 +139,8 @@ it("refuses to publish a direct message as a public channel", async () => {
       description: "Synthetic direct-message fixture.",
       model: { provider: "openai", id: "gpt-4.1" },
     });
-    // The owner DM channel exists once the Agent identity is verified.
-    db.prepare("UPDATE owner_agent_sessions SET verified_at=? WHERE agent_id=?").run(
-      Date.now(),
-      agentId,
-    );
+    // The owner DM channel exists once the Agent's workspace preparation reached `complete`.
+    db.prepare("UPDATE owner_agents SET stage='complete' WHERE id=?").run(agentId);
     const direct = app.chat.getOrCreateAgentDirectChannel(agentId);
     if (!direct) throw new Error("The direct message fixture did not create a channel");
 

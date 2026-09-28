@@ -328,7 +328,7 @@ export class AgentProcessOperationBroker {
   ): void {
     const run = this.database
       .prepare(
-        `SELECT r.state,r.node_id,r.delivery_id,a.status,a.node_id AS current_node_id
+        `SELECT r.state,r.node_id,r.delivery_id,a.stage,a.node_id AS current_node_id
          FROM owner_agent_runs r JOIN owner_agents a ON a.id=r.agent_id
          WHERE r.id=? AND r.agent_id=?`,
       )
@@ -337,7 +337,7 @@ export class AgentProcessOperationBroker {
           state: string;
           node_id: string;
           delivery_id: string;
-          status: string;
+          stage: string;
           current_node_id: string;
         }
       | undefined;
@@ -349,7 +349,7 @@ export class AgentProcessOperationBroker {
         new AgentSession(this.database).toolAction(agentId, stableActionId)?.actionScopeId !==
           actionScopeId) ||
       run.current_node_id !== nodeId ||
-      run.status !== "waiting_credentials"
+      run.stage !== "complete"
     )
       throw new Error("Agent process operation run is no longer active");
   }
