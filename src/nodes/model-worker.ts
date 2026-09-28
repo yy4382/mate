@@ -13,6 +13,7 @@ import { contextMessageSchema, durableToolIdentity, type SessionCommit } from ".
 import {
   SessionCompaction,
   confirmedModelResponse,
+  providerResponseComplete,
   reportedGoogleUsage,
   reportedUsage,
   type ReportedUsage,
@@ -270,7 +271,8 @@ export function serveModelWorker(stream: StreamFn): void {
     let credentialResponse = false;
     let compactionFailed = false;
     let compactionError: string | undefined;
-    let inspectedNormalUsage: Promise<ReportedUsage | null> | undefined;
+    let inspectedNormalUsage:
+      Promise<{ usage: ReportedUsage; complete: boolean } | null> | undefined;
     let normalRequestPending = false;
     const agent = new Agent({
       sessionId: run.data.spec.sessionId,
@@ -292,7 +294,10 @@ export function serveModelWorker(stream: StreamFn): void {
                   inspectedNormalUsage = response
                     .clone()
                     .text()
-                    .then((body) => reportedUsage(body, selectedModel.api))
+                    .then((body) => ({
+                      usage: reportedUsage(body, selectedModel.api),
+                      complete: providerResponseComplete(body, response.status),
+                    }))
                     .catch(() => null);
                   return response;
                 },
@@ -351,9 +356,11 @@ export function serveModelWorker(stream: StreamFn): void {
       const inspected =
         assistant && normalRequestPending ? ((await inspectedNormalUsage) ?? null) : null;
       const modelRequest =
-        !!assistant && normalRequestPending && confirmedModelResponse(assistant, inspected);
+        !!assistant &&
+        normalRequestPending &&
+        confirmedModelResponse(assistant, inspected?.usage ?? null, inspected?.complete ?? false);
       const usage = modelRequest
-        ? (inspected ?? (isGoogle ? reportedGoogleUsage(assistant) : null))
+        ? (inspected?.usage ?? (isGoogle ? reportedGoogleUsage(assistant) : null))
         : null;
       if (assistant && normalRequestPending) {
         normalRequestPending = false;

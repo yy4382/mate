@@ -33,12 +33,27 @@ it("reports weighted Agent usage through owner HTTP across model and service res
       /* drain request */
     }
     const usage = usages[requests++] ?? usages.at(-1)!;
-    if (requests >= 7) {
+    if (requests >= 8) {
       response.writeHead(200, { "content-type": "text/event-stream" });
       response.write(
         `data: ${JSON.stringify({ type: "response.created", response: { id: "partial" } })}\n\n`,
       );
       setTimeout(() => response.destroy(), 10);
+      return;
+    }
+    if (requests === 7) {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(
+        `data: ${JSON.stringify({
+          type: "response.failed",
+          response: {
+            id: "failed-without-usage",
+            status: "failed",
+            error: { code: "server_error", message: "no usage supplied" },
+            output: [],
+          },
+        })}\n\n`,
+      );
       return;
     }
     if (requests === 6) {
@@ -221,6 +236,19 @@ it("reports weighted Agent usage through owner HTTP across model and service res
     expect(failed.latestNormal.tokens.allInput.value).toBe(70);
     expect(failed.latestNormal.tokens.cacheRead.value).toBe(7);
     expect(failed.latestNormal.tokens.output.value).toBe(3);
+    await api(`/api/owner/channels/${dm}/messages`, { text: "complete failure without usage" });
+    await eventually(() => {
+      const row = db!
+        .prepare(
+          "SELECT COUNT(*) AS n FROM owner_agent_session_records WHERE agent_id=? AND usage_json IS NOT NULL AND kind='message'",
+        )
+        .get(agentId) as { n: number };
+      return row.n >= 7 ? true : undefined;
+    }, "complete failure without usage commit");
+    const noUsage = await api(usagePath, undefined, "GET");
+    expect(noUsage.normal.requestCount).toBe(7);
+    expect(noUsage.latestNormal.tokens.allInput.value).toBeNull();
+    expect(noUsage.latestNormal.tokens.output.value).toBeNull();
     await api(`/api/owner/channels/${dm}/messages`, { text: "network failure before a response" });
     await eventually(() => {
       const row = db!
@@ -228,11 +256,11 @@ it("reports weighted Agent usage through owner HTTP across model and service res
           "SELECT COUNT(*) AS n FROM owner_agent_session_records WHERE agent_id=? AND kind='message' AND json_extract(payload_json,'$.message.stopReason')='error'",
         )
         .get(agentId) as { n: number };
-      return requests >= 7 && row.n >= 2 ? true : undefined;
+      return requests >= 8 && row.n >= 3 ? true : undefined;
     }, "unconfirmed transport failure");
     const unconfirmed = await api(usagePath, undefined, "GET");
-    expect(unconfirmed.normal.requestCount).toBe(6);
-    expect(unconfirmed.latestNormal.id).toBe(failed.latestNormal.id);
+    expect(unconfirmed.normal.requestCount).toBe(7);
+    expect(unconfirmed.latestNormal.id).toBe(noUsage.latestNormal.id);
   } finally {
     db?.close();
     await stopProcess(node);

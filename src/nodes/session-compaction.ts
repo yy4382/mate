@@ -117,6 +117,33 @@ export function reportedUsage(body: string, api: string): ReportedUsage {
   return reported;
 }
 
+/** A complete provider error can omit usage. Require a terminal protocol event for SSE;
+ * cleanly read HTTP error bodies are also confirmed failures. */
+export function providerResponseComplete(body: string, status: number): boolean {
+  if (status >= 400 && !body.includes("data:")) return true;
+  for (const line of body.split("\n")) {
+    const data = line.trim().replace(/^data:\s*/, "");
+    if (data === "[DONE]") return true;
+    if (!data.startsWith("{")) continue;
+    try {
+      const event = JSON.parse(data) as { type?: string };
+      if (
+        [
+          "response.completed",
+          "response.failed",
+          "response.incomplete",
+          "message_stop",
+          "error",
+        ].includes(event.type ?? "")
+      )
+        return true;
+    } catch {
+      // Incomplete event is not a terminal response.
+    }
+  }
+  return false;
+}
+
 /** Google's Pi adapters do not accept a custom fetch. A positive Pi value proves the SDK
  * reported it; zero still means either a real zero or Pi's fallback for an absent field. */
 export function reportedGoogleUsage(message: AssistantMessage): ReportedUsage {
@@ -137,8 +164,10 @@ export function reportedGoogleUsage(message: AssistantMessage): ReportedUsage {
 export function confirmedModelResponse(
   message: AssistantMessage,
   reported: ReportedUsage | null,
+  providerComplete = false,
 ): boolean {
   return (
+    providerComplete ||
     (reported !== null &&
       [
         reported.input,
@@ -390,7 +419,7 @@ export class SessionCompaction {
       ],
     });
     const requestId = randomUUID();
-    let inspectedUsage: Promise<ReportedUsage | null> | undefined;
+    let inspectedUsage: Promise<{ usage: ReportedUsage; complete: boolean } | null> | undefined;
     const response = (await (
       await this.stream(this.model, context, {
         apiKey: this.apiKey,
@@ -407,7 +436,10 @@ export class SessionCompaction {
                 inspectedUsage = response
                   .clone()
                   .text()
-                  .then((body) => reportedUsage(body, this.model.api))
+                  .then((body) => ({
+                    usage: reportedUsage(body, this.model.api),
+                    complete: providerResponseComplete(body, response.status),
+                  }))
                   .catch(() => null);
                 return response;
               },
@@ -415,14 +447,14 @@ export class SessionCompaction {
       })
     ).result()) as AssistantMessage;
     const rawUsage = await inspectedUsage;
-    if (confirmedModelResponse(response, rawUsage ?? null))
+    if (confirmedModelResponse(response, rawUsage?.usage ?? null, rawUsage?.complete ?? false))
       await this.commit({
         kind: "summary_usage",
         id: requestId,
         stopReason: response.stopReason,
         usage: JSON.parse(JSON.stringify(response.usage)),
         reportedUsage:
-          rawUsage ??
+          rawUsage?.usage ??
           (this.model.api === "google-generative-ai" || this.model.api === "google-vertex"
             ? reportedGoogleUsage(response)
             : null),

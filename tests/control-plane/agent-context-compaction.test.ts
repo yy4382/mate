@@ -27,6 +27,7 @@ async function exerciseCompaction(
     | "toolCall"
     | "length"
     | "network"
+    | "failureWithoutUsage"
     | "uncuttable"
     | "overflow"
     | "interrupt"
@@ -43,6 +44,21 @@ async function exerciseCompaction(
     const body = JSON.parse(Buffer.concat(chunks).toString());
     requests.push(body);
     const isSummary = JSON.stringify(body.input?.[0]).includes("context summarization assistant");
+    if (isSummary && summaryMode === "failureWithoutUsage") {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(
+        `data: ${JSON.stringify({
+          type: "response.failed",
+          response: {
+            id: `failed-summary-${requests.length}`,
+            status: "failed",
+            error: { code: "server_error", message: "no usage supplied" },
+            output: [],
+          },
+        })}\n\n`,
+      );
+      return;
+    }
     if (isSummary && summaryMode === "network") {
       response.writeHead(200, { "content-type": "text/event-stream" });
       response.write(
@@ -295,7 +311,8 @@ async function exerciseCompaction(
       summaryMode === "toolCall" ||
       summaryMode === "length" ||
       summaryMode === "uncuttable" ||
-      summaryMode === "network"
+      summaryMode === "network" ||
+      summaryMode === "failureWithoutUsage"
     ) {
       await eventually(() => {
         const control = db!
@@ -317,7 +334,9 @@ async function exerciseCompaction(
       if (summaryMode !== "uncuttable" && summaryMode !== "network") {
         const usage = await api(`/api/owner/agents/${agentId}/usage`, undefined, "GET");
         expect(usage.summary.requestCount).toBe(2);
-        expect(usage.summary.tokens.allInput.value).toBe(200);
+        expect(usage.summary.tokens.allInput.value).toBe(
+          summaryMode === "failureWithoutUsage" ? null : 200,
+        );
         expect(usage.total.requestCount).toBe(3);
         expect(usage.latestNormal.tokens.allInput.value).toBe(115_000);
       }
@@ -491,6 +510,11 @@ it(
 it(
   "does not count an incomplete summary stream after HTTP headers",
   () => exerciseCompaction("network"),
+  30_000,
+);
+it(
+  "counts complete failed summaries without usage as missing data",
+  () => exerciseCompaction("failureWithoutUsage"),
   30_000,
 );
 it(
