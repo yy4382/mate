@@ -2,7 +2,8 @@ import Database from "better-sqlite3";
 import { existsSync, statSync } from "node:fs";
 
 const CONTROL_PLANE_APPLICATION_ID = 0x4d43504c;
-// Revision 29 drops the duplicated session, message, run, operation and task columns.
+// Revision 29 drops the duplicated session, message, run, operation and task columns, the
+// duplicate message-order index and the cancelled independent-review marker.
 const CONTROL_PLANE_FORMAT_REVISION = 29;
 
 const moveAside =

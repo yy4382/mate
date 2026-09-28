@@ -342,7 +342,7 @@ export class OwnerChat {
         try {
           external = this.db
             .transaction(() => {
-              this.activeAgentToolRun(runId, nodeId, agentId);
+              this.requireActiveAgentToolRun(runId, nodeId, agentId);
               const entry = agentWorkspaceOperations[request.data.name as AgentWorkspaceOperation],
                 parsedInput = entry.schema.parse(request.data.input);
               if (
@@ -377,7 +377,7 @@ export class OwnerChat {
     try {
       const result = this.db
         .transaction(() => {
-          const run = this.activeAgentToolRun(runId, nodeId, agentId);
+          const run = this.requireActiveAgentToolRun(runId, nodeId, agentId);
           if (operation === "tools.list") {
             agentToolSchemas["tools.list"].parse(input);
             return {
@@ -425,7 +425,7 @@ export class OwnerChat {
     if (!operation) throw new Error("Unknown process operation");
     return this.db
       .transaction(() => {
-        const run = this.activeAgentToolRun(runId, nodeId, agentId),
+        const run = this.requireActiveAgentToolRun(runId, nodeId, agentId),
           entry = agentProcessToolOperations[name as keyof typeof agentProcessToolOperations];
         if (!entry) throw new Error("Agent process operation was refused");
         return { actionScopeId: run.action_scope_id, operation };
@@ -1421,7 +1421,11 @@ export class OwnerChat {
     return toChannel(row);
   }
 
-  private activeAgentToolRun(runId: string, nodeId: string, agentId: string): ActiveAgentToolRun {
+  private requireActiveAgentToolRun(
+    runId: string,
+    nodeId: string,
+    agentId: string,
+  ): ActiveAgentToolRun {
     const run = this.db
       .prepare(
         `SELECT r.id AS run_id,r.agent_id,r.node_id,r.delivery_id AS action_scope_id,

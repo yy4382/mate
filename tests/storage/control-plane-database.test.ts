@@ -382,14 +382,14 @@ it("rejects an unknown control-plane revision instead of opening it as current",
   expect(() => new OwnerAuth({ dataDir: f.dataDir })).toThrow(/control-plane schema revision 999/);
 });
 
-it("rejects the previous experimental control-plane revision", () => {
+it.each([27, 28])("rejects the superseded control-plane revision %i", (revision) => {
   const f = fixture(),
-    database = makeDatabase(f.path, applicationId, 27);
+    database = makeDatabase(f.path, applicationId, revision);
   database.exec("CREATE TABLE unrelated(value TEXT)");
   database.close();
 
   expect(() => new OwnerAuth({ dataDir: f.dataDir })).toThrow(
-    /uses control-plane schema revision 27; this release uses revision 29/,
+    new RegExp(`uses control-plane schema revision ${revision}; this release uses revision 29`),
   );
 });
 
