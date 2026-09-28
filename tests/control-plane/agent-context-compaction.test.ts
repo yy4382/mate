@@ -300,6 +300,13 @@ async function exerciseCompaction(
       expect(rows.filter((row) => row.kind === "summary_usage")).toHaveLength(
         summaryMode === "uncuttable" ? 0 : 2,
       );
+      if (summaryMode !== "uncuttable") {
+        const usage = await api(`/api/owner/agents/${agentId}/usage`, undefined, "GET");
+        expect(usage.summary.requestCount).toBe(2);
+        expect(usage.summary.tokens.allInput.value).toBe(200);
+        expect(usage.total.requestCount).toBe(3);
+        expect(usage.latestNormal.tokens.allInput.value).toBe(115_000);
+      }
       if (summaryMode === "length") {
         const usage = JSON.parse(rows.find((row) => row.kind === "summary_usage")!.payload_json);
         expect(usage.usage.cacheRead).toBe(0);
@@ -365,6 +372,15 @@ async function exerciseCompaction(
       cacheRead: 0,
     });
     expect(usageRows[0].reportedUsage).not.toHaveProperty("cacheWrite");
+    const usageBeforeRestart = await api(`/api/owner/agents/${agentId}/usage`, undefined, "GET");
+    expect(usageBeforeRestart.summary.requestCount).toBe(summaryMode === "repeat" ? 2 : 1);
+    expect(usageBeforeRestart.normal.requestCount).toBe(summaryMode === "repeat" ? 3 : 2);
+    expect(usageBeforeRestart.total.requestCount).toBe(requests.length);
+    expect(usageBeforeRestart.summary.tokens.allInput.value).toBe(
+      summaryMode === "repeat" ? 200 : 100,
+    );
+    expect(usageBeforeRestart.summary.cacheHitRate.value).toBe(0);
+    expect(usageBeforeRestart.latestNormal.tokens.allInput.value).toBe(100);
     const checkpoints = rows
       .filter((row) => row.kind === "compaction")
       .map((row) => JSON.parse(row.payload_json));
@@ -407,10 +423,15 @@ async function exerciseCompaction(
     control = startControlPlane(directory);
     origin = `http://127.0.0.1:${(await control.waitFor(/MATE_CONTROL_PLANE_LISTENING (\d+)/))[1]}`;
     cookie = await login(origin);
+    expect((await api(`/api/owner/agents/${agentId}/usage`, undefined, "GET")).total).toEqual(
+      usageBeforeRestart.total,
+    );
     node = startNode({ ...nodeOptions, origin });
     await node.waitFor(/MATE_NODE_CONNECTED/);
     await api(`/api/owner/channels/${dm}/messages`, { text: "Follow-up after restart" });
     await completed(2);
+    const usageAfterRestart = await api(`/api/owner/agents/${agentId}/usage`, undefined, "GET");
+    expect(usageAfterRestart.total.requestCount).toBe(usageBeforeRestart.total.requestCount + 1);
     expect(JSON.stringify(requests.at(-1).input)).toContain("[会话压缩摘要]");
     expect(JSON.stringify(requests.at(-1).input)).not.toContain(
       "Continue the assigned task after listing tools",

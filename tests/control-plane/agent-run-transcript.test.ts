@@ -436,3 +436,58 @@ it("confirms one compaction checkpoint before exposing it to a resumed run", asy
       .get(agentId),
   ).toEqual({ n: 1 });
 });
+
+it("counts each confirmed model response once despite repeated transcript acknowledgements", async () => {
+  const f = await setup();
+  const { agentId, dm } = await prepareAgent(f, "Usage acknowledgements");
+  f.app.chat.createMessage(dm, "Record usage");
+  const run = await waitForRun(f.socket, 0);
+  const response: SessionCommit = {
+    kind: "message",
+    id: randomUUID(),
+    message: assistantMessage("Response"),
+    modelRequest: true,
+    reportedUsage: {
+      sourceApi: "anthropic-messages",
+      inputBasis: "excludes_cache",
+      input: 10,
+      cacheRead: 20,
+      cacheWrite: 30,
+      output: 7,
+      reasoning: 3,
+    },
+  };
+  expect(await commit(f, run, response)).toBe(true);
+  expect(await commit(f, run, response)).toBe(true);
+  expect(await commit(f, run, { ...response, reportedUsage: null })).toBe(false);
+  const summary: SessionCommit = {
+    kind: "summary_usage",
+    id: randomUUID(),
+    stopReason: "length",
+    usage: { input: 80, cacheRead: 20, output: 4, cacheWrite: 0, totalTokens: 104 },
+    reportedUsage: {
+      sourceApi: "openai-responses",
+      inputBasis: "includes_cache",
+      input: 100,
+      cacheRead: 20,
+      output: 4,
+    },
+  };
+  expect(await commit(f, run, summary)).toBe(true);
+  expect(await commit(f, run, summary)).toBe(true);
+  const result = await f.app.request(`/api/owner/agents/${agentId}/usage`, {
+    headers: { cookie: f.cookie },
+  });
+  expect(result.status).toBe(200);
+  const usage = await result.json();
+  expect(usage.total.requestCount).toBe(2);
+  expect(usage.normal.requestCount).toBe(1);
+  expect(usage.summary.requestCount).toBe(1);
+  expect(usage.normal.tokens.uncachedInput.value).toBe(10);
+  expect(usage.normal.tokens.allInput.value).toBe(60);
+  expect(usage.normal.tokens.total.value).toBe(67);
+  expect(usage.normal.tokens.reasoningOutput.value).toBe(3);
+  expect(usage.total.cacheHitRate.value).toBe(0.25);
+  expect(usage.latestNormal.id).toBe(response.id);
+  expect(usage.latestNormal.recordedAt).toEqual(expect.any(Number));
+});

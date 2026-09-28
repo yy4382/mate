@@ -22,6 +22,7 @@ import { WorkspaceError, WorkspaceService, type WorkspaceVersion } from "./works
 import { registerWorkspaceRoutes } from "./workspace-http.js";
 import { listAgentActivity } from "./activity.js";
 import { OwnerPush } from "./owner-push.js";
+import { agentUsage } from "./agent-usage.js";
 
 export function mentionsOwner(text: string): boolean {
   return /(?:^|[^\p{L}\p{N}_])@(?:owner|所有者)(?=$|[^\p{L}\p{N}_])/iu.test(text);
@@ -455,6 +456,12 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
         stop: app.runs?.pauseReason(agent.id) === "manual" ? app.runs.stopStatus(agent.id) : null,
       })),
     });
+  });
+  app.get("/api/owner/agents/:agentId/usage", (context) => {
+    const agentId = context.req.param("agentId");
+    if (!agents.get(agentId)) return context.json({ error: "Agent 不存在。" }, 404);
+    context.header("Cache-Control", "no-store");
+    return context.json(agentUsage(ownerAuth.db, agentId));
   });
   app.patch("/api/owner/agents/:agentId/profile", async (context) => {
     const input = agentProfilePatchSchema.safeParse(await context.req.json().catch(() => null));

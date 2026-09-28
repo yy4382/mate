@@ -55,7 +55,26 @@ export const sessionCheckpointSchema = z
   .strict();
 export const sessionCommitSchema = z.discriminatedUnion("kind", [
   z
-    .object({ kind: z.literal("message"), id: z.string().uuid(), message: piMessageSchema })
+    .object({
+      kind: z.literal("message"),
+      id: z.string().uuid(),
+      message: piMessageSchema,
+      modelRequest: z.literal(true).optional(),
+      // Only assistant responses carry this. Absence on older/scripted records means unknown.
+      reportedUsage: z
+        .object({
+          sourceApi: z.string(),
+          inputBasis: z.enum(["includes_cache", "excludes_cache", "unknown"]),
+          input: z.number().nonnegative().optional(),
+          output: z.number().nonnegative().optional(),
+          cacheRead: z.number().nonnegative().optional(),
+          cacheWrite: z.number().nonnegative().optional(),
+          reasoning: z.number().nonnegative().optional(),
+        })
+        .strict()
+        .nullable()
+        .optional(),
+    })
     .strict(),
   z
     .object({
@@ -81,6 +100,7 @@ export const sessionCommitSchema = z.discriminatedUnion("kind", [
           output: z.number().nonnegative().optional(),
           cacheRead: z.number().nonnegative().optional(),
           cacheWrite: z.number().nonnegative().optional(),
+          reasoning: z.number().nonnegative().optional(),
         })
         .strict()
         .nullable(),

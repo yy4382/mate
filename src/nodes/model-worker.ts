@@ -10,7 +10,7 @@ import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { z } from "zod";
 
 import { contextMessageSchema, durableToolIdentity, type SessionCommit } from "./session-record.js";
-import { SessionCompaction } from "./session-compaction.js";
+import { SessionCompaction, reportedUsage, type ReportedUsage } from "./session-compaction.js";
 export type { ModelContextMessage } from "./session-record.js";
 
 const runSchema = z
@@ -264,17 +264,35 @@ export function serveModelWorker(stream: StreamFn): void {
     let credentialResponse = false;
     let compactionFailed = false;
     let compactionError: string | undefined;
+    let inspectedNormalUsage: Promise<ReportedUsage | null> | undefined;
+    let normalRequestPending = false;
     const agent = new Agent({
       sessionId: run.data.spec.sessionId,
       onResponse: (response) => {
         if (response.status === 401 || response.status === 403) credentialResponse = true;
       },
-      streamFn: (selectedModel, context, options) =>
-        stream(selectedModel, context, {
+      streamFn: (selectedModel, context, options) => {
+        normalRequestPending = true;
+        inspectedNormalUsage = undefined;
+        return stream(selectedModel, context, {
           ...options,
           apiKey,
           env: {},
-        }),
+          ...(selectedModel.api === "google-generative-ai" || selectedModel.api === "google-vertex"
+            ? {}
+            : {
+                fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+                  const response = await fetch(input, init);
+                  inspectedNormalUsage = response
+                    .clone()
+                    .text()
+                    .then((body) => reportedUsage(body, selectedModel.api))
+                    .catch(() => null);
+                  return response;
+                },
+              }),
+        });
+      },
       transformContext: async (messages, signal) => {
         try {
           return await compaction.transform(messages, signal);
@@ -321,7 +339,18 @@ export function serveModelWorker(stream: StreamFn): void {
       )
         return;
       const id = randomUUID();
-      await commit({ kind: "message", id, message: event.message });
+      const modelRequest = event.message.role === "assistant" && normalRequestPending;
+      const usage = modelRequest ? ((await inspectedNormalUsage) ?? null) : null;
+      if (modelRequest) {
+        normalRequestPending = false;
+        inspectedNormalUsage = undefined;
+      }
+      await commit({
+        kind: "message",
+        id,
+        message: event.message,
+        ...(modelRequest ? { modelRequest: true, reportedUsage: usage } : {}),
+      });
       compaction.record(id, event.message);
       if (event.message.role === "assistant") {
         assistantIdentity = id;

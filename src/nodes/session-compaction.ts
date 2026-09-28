@@ -60,18 +60,19 @@ Summarize the prefix to provide context for the retained suffix:
 
 Be concise. Focus on what's needed to understand the kept suffix.`;
 
-type ReportedUsage = {
+export type ReportedUsage = {
   sourceApi: string;
   inputBasis: "includes_cache" | "excludes_cache" | "unknown";
   input?: number;
   output?: number;
   cacheRead?: number;
   cacheWrite?: number;
+  reasoning?: number;
 };
 
 /** Pi's normalized Usage fills absent provider fields with zero. Inspect only the provider's
  * usage fields at the HTTP boundary; never retain its response body or assume an absent field is 0. */
-function reportedUsage(body: string, api: string): ReportedUsage {
+export function reportedUsage(body: string, api: string): ReportedUsage {
   const reported: ReportedUsage = {
     sourceApi: api,
     inputBasis:
@@ -106,8 +107,9 @@ function reportedUsage(body: string, api: string): ReportedUsage {
         usage.cachedContentTokenCount,
       cacheWrite:
         usage.input_tokens_details?.cache_write_tokens ?? usage.cache_creation_input_tokens,
+      reasoning: usage.output_tokens_details?.reasoning_tokens ?? usage.thoughtsTokenCount,
     };
-    for (const key of ["input", "output", "cacheRead", "cacheWrite"] as const) {
+    for (const key of ["input", "output", "cacheRead", "cacheWrite", "reasoning"] as const) {
       const value = fields[key];
       if (typeof value === "number" && Number.isFinite(value) && value >= 0) reported[key] = value;
     }
