@@ -38,7 +38,7 @@ it("a new control-plane database carries no privileged approval state", () => {
         )
         .all(),
     ).toEqual([]);
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(26);
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(27);
   } finally {
     auth.close();
   }
@@ -77,13 +77,24 @@ it("rejects an unknown control-plane revision instead of opening it as current",
   expect(() => new OwnerAuth({ dataDir: f.dataDir })).toThrow(/control-plane schema revision 999/);
 });
 
-it("rejects a current revision that is missing declared schema structures", () => {
+it("rejects the previous experimental control-plane revision", () => {
   const f = fixture(),
     database = makeDatabase(f.path, applicationId, 26);
   database.exec("CREATE TABLE unrelated(value TEXT)");
   database.close();
 
   expect(() => new OwnerAuth({ dataDir: f.dataDir })).toThrow(
-    /claims control-plane schema revision 26 but is missing/,
+    /uses control-plane schema revision 26; this release uses revision 27/,
+  );
+});
+
+it("rejects a current revision that is missing declared schema structures", () => {
+  const f = fixture(),
+    database = makeDatabase(f.path, applicationId, 27);
+  database.exec("CREATE TABLE unrelated(value TEXT)");
+  database.close();
+
+  expect(() => new OwnerAuth({ dataDir: f.dataDir })).toThrow(
+    /claims control-plane schema revision 27 but is missing/,
   );
 });

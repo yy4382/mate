@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { existsSync, statSync } from "node:fs";
 
 const CONTROL_PLANE_APPLICATION_ID = 0x4d43504c;
-const CONTROL_PLANE_FORMAT_REVISION = 26;
+const CONTROL_PLANE_FORMAT_REVISION = 27;
 
 const moveAside =
   "Mate does not migrate or erase a database it does not recognise: if this file was not created by this release, move it aside and point controlPlaneDataDir at a new, empty directory.";
