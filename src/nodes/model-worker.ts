@@ -10,7 +10,13 @@ import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { z } from "zod";
 
 import { contextMessageSchema, durableToolIdentity, type SessionCommit } from "./session-record.js";
-import { SessionCompaction, reportedUsage, type ReportedUsage } from "./session-compaction.js";
+import {
+  SessionCompaction,
+  confirmedModelResponse,
+  reportedGoogleUsage,
+  reportedUsage,
+  type ReportedUsage,
+} from "./session-compaction.js";
 export type { ModelContextMessage } from "./session-record.js";
 
 const runSchema = z
@@ -266,6 +272,7 @@ export function serveModelWorker(stream: StreamFn): void {
     let compactionError: string | undefined;
     let inspectedNormalUsage: Promise<ReportedUsage | null> | undefined;
     let normalRequestPending = false;
+    let normalHttpResponseSeen = false;
     const agent = new Agent({
       sessionId: run.data.spec.sessionId,
       onResponse: (response) => {
@@ -273,6 +280,7 @@ export function serveModelWorker(stream: StreamFn): void {
       },
       streamFn: (selectedModel, context, options) => {
         normalRequestPending = true;
+        normalHttpResponseSeen = false;
         inspectedNormalUsage = undefined;
         return stream(selectedModel, context, {
           ...options,
@@ -283,6 +291,7 @@ export function serveModelWorker(stream: StreamFn): void {
             : {
                 fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
                   const response = await fetch(input, init);
+                  normalHttpResponseSeen = true;
                   inspectedNormalUsage = response
                     .clone()
                     .text()
@@ -339,10 +348,19 @@ export function serveModelWorker(stream: StreamFn): void {
       )
         return;
       const id = randomUUID();
-      const modelRequest = event.message.role === "assistant" && normalRequestPending;
-      const usage = modelRequest ? ((await inspectedNormalUsage) ?? null) : null;
-      if (modelRequest) {
+      const assistant = event.message.role === "assistant" ? event.message : null;
+      const isGoogle =
+        assistant?.api === "google-generative-ai" || assistant?.api === "google-vertex";
+      const modelRequest =
+        !!assistant &&
+        normalRequestPending &&
+        confirmedModelResponse(assistant, normalHttpResponseSeen);
+      const usage = modelRequest
+        ? ((await inspectedNormalUsage) ?? (isGoogle ? reportedGoogleUsage(assistant) : null))
+        : null;
+      if (assistant && normalRequestPending) {
         normalRequestPending = false;
+        normalHttpResponseSeen = false;
         inspectedNormalUsage = undefined;
       }
       await commit({

@@ -26,6 +26,7 @@ async function exerciseCompaction(
     | "repeat"
     | "toolCall"
     | "length"
+    | "network"
     | "uncuttable"
     | "overflow"
     | "interrupt"
@@ -42,6 +43,10 @@ async function exerciseCompaction(
     const body = JSON.parse(Buffer.concat(chunks).toString());
     requests.push(body);
     const isSummary = JSON.stringify(body.input?.[0]).includes("context summarization assistant");
+    if (isSummary && summaryMode === "network") {
+      response.destroy();
+      return;
+    }
     const turn = isSummary ? -1 : normal++;
     if (summaryMode === "overflow" && turn === 1) {
       response.writeHead(400, { "content-type": "application/json" });
@@ -282,7 +287,12 @@ async function exerciseCompaction(
       ).toEqual({ n: 1 });
       return;
     }
-    if (summaryMode === "toolCall" || summaryMode === "length" || summaryMode === "uncuttable") {
+    if (
+      summaryMode === "toolCall" ||
+      summaryMode === "length" ||
+      summaryMode === "uncuttable" ||
+      summaryMode === "network"
+    ) {
       await eventually(() => {
         const control = db!
           .prepare(
@@ -298,9 +308,9 @@ async function exerciseCompaction(
         .all(agentId) as Array<{ kind: string; payload_json: string }>;
       expect(rows.filter((row) => row.kind === "compaction")).toHaveLength(0);
       expect(rows.filter((row) => row.kind === "summary_usage")).toHaveLength(
-        summaryMode === "uncuttable" ? 0 : 2,
+        summaryMode === "uncuttable" || summaryMode === "network" ? 0 : 2,
       );
-      if (summaryMode !== "uncuttable") {
+      if (summaryMode !== "uncuttable" && summaryMode !== "network") {
         const usage = await api(`/api/owner/agents/${agentId}/usage`, undefined, "GET");
         expect(usage.summary.requestCount).toBe(2);
         expect(usage.summary.tokens.allInput.value).toBe(200);
@@ -332,7 +342,11 @@ async function exerciseCompaction(
       const detail = JSON.parse(activity.detail_json);
       expect(detail.code).toBe("context_failed");
       expect(detail.reason).toMatch(
-        summaryMode === "uncuttable" ? /No legal compaction range/ : /Summarization failed/,
+        summaryMode === "uncuttable"
+          ? /No legal compaction range/
+          : summaryMode === "network"
+            ? /failed|fetch|network/i
+            : /Summarization failed/,
       );
       return;
     }
@@ -468,6 +482,11 @@ it(
 it(
   "rejects a truncated summary without installing a checkpoint",
   () => exerciseCompaction("length"),
+  30_000,
+);
+it(
+  "does not count an unconfirmed summary transport failure",
+  () => exerciseCompaction("network"),
   30_000,
 );
 it(

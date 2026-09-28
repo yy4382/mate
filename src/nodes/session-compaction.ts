@@ -117,6 +117,36 @@ export function reportedUsage(body: string, api: string): ReportedUsage {
   return reported;
 }
 
+/** Google's Pi adapters do not accept a custom fetch. A positive Pi value proves the SDK
+ * reported it; zero still means either a real zero or Pi's fallback for an absent field. */
+export function reportedGoogleUsage(message: AssistantMessage): ReportedUsage {
+  const usage = message.usage;
+  const input = usage.input + usage.cacheRead;
+  return {
+    sourceApi: message.api,
+    inputBasis: "includes_cache",
+    ...(Number.isFinite(input) && input > 0 ? { input } : {}),
+    ...(usage.output > 0 ? { output: usage.output } : {}),
+    ...(usage.cacheRead > 0 ? { cacheRead: usage.cacheRead } : {}),
+    ...(usage.reasoning && usage.reasoning > 0 ? { reasoning: usage.reasoning } : {}),
+  };
+}
+
+/** A local transport failure can make Pi emit an assistant error without any provider response. */
+export function confirmedModelResponse(
+  message: AssistantMessage,
+  httpResponseSeen: boolean,
+): boolean {
+  return (
+    httpResponseSeen ||
+    message.stopReason === "stop" ||
+    message.stopReason === "toolUse" ||
+    message.stopReason === "length" ||
+    ((message.api === "google-generative-ai" || message.api === "google-vertex") &&
+      (message.responseId !== undefined || message.usage.totalTokens > 0))
+  );
+}
+
 function textTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
@@ -353,6 +383,7 @@ export class SessionCompaction {
     });
     const requestId = randomUUID();
     let inspectedUsage: Promise<ReportedUsage | null> | undefined;
+    let httpResponseSeen = false;
     const response = (await (
       await this.stream(this.model, context, {
         apiKey: this.apiKey,
@@ -366,6 +397,7 @@ export class SessionCompaction {
           : {
               fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
                 const response = await fetch(input, init);
+                httpResponseSeen = true;
                 inspectedUsage = response
                   .clone()
                   .text()
@@ -377,13 +409,18 @@ export class SessionCompaction {
       })
     ).result()) as AssistantMessage;
     const rawUsage = await inspectedUsage;
-    await this.commit({
-      kind: "summary_usage",
-      id: requestId,
-      stopReason: response.stopReason,
-      usage: JSON.parse(JSON.stringify(response.usage)),
-      reportedUsage: rawUsage ?? null,
-    });
+    if (confirmedModelResponse(response, httpResponseSeen))
+      await this.commit({
+        kind: "summary_usage",
+        id: requestId,
+        stopReason: response.stopReason,
+        usage: JSON.parse(JSON.stringify(response.usage)),
+        reportedUsage:
+          rawUsage ??
+          (this.model.api === "google-generative-ai" || this.model.api === "google-vertex"
+            ? reportedGoogleUsage(response)
+            : null),
+      });
     if (
       response.stopReason !== "stop" ||
       response.content.some((block) => block.type === "toolCall")

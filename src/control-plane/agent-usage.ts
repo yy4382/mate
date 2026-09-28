@@ -10,12 +10,15 @@ type TokenName =
   | "output"
   | "total"
   | "reasoningOutput";
-type Sample = {
-  id: string;
-  recordedAt: number;
-  kind: "normal" | "summary";
-  reported: ReportedUsage | null;
-};
+const tokenNames: TokenName[] = [
+  "uncachedInput",
+  "cacheRead",
+  "cacheWrite",
+  "allInput",
+  "output",
+  "total",
+  "reasoningOutput",
+];
 
 function tokensOf(reported: ReportedUsage | null): Record<TokenName, number | null> {
   const absent = {
@@ -39,8 +42,14 @@ function tokensOf(reported: ReportedUsage | null): Record<TokenName, number | nu
       if (cacheRead !== null && cacheWrite !== null)
         allInput = reported.input + cacheRead + cacheWrite;
     } else if (reported.inputBasis === "includes_cache") {
-      allInput = reported.input;
-      if (cacheRead !== null && cacheWrite !== null && cacheRead + cacheWrite <= reported.input)
+      // A contradictory provider breakdown is not a valid source for derived totals or rates.
+      if (
+        (cacheRead === null || cacheRead <= reported.input) &&
+        (cacheWrite === null || cacheWrite <= reported.input) &&
+        (cacheRead === null || cacheWrite === null || cacheRead + cacheWrite <= reported.input)
+      )
+        allInput = reported.input;
+      if (allInput !== null && cacheRead !== null && cacheWrite !== null)
         uncachedInput = reported.input - cacheRead - cacheWrite;
     }
   }
@@ -55,77 +64,101 @@ function tokensOf(reported: ReportedUsage | null): Record<TokenName, number | nu
   };
 }
 
-function metric(values: Array<number | null>): Metric {
-  const known = values.filter((value): value is number => value !== null);
-  return {
-    value: known.length ? known.reduce((sum, value) => sum + value, 0) : null,
-    knownRequests: known.length,
-    missingRequests: values.length - known.length,
-  };
-}
+class UsageAccumulator {
+  private requestCount = 0;
+  private readonly totals = Object.fromEntries(tokenNames.map((name) => [name, 0])) as Record<
+    TokenName,
+    number
+  >;
+  private readonly known = Object.fromEntries(tokenNames.map((name) => [name, 0])) as Record<
+    TokenName,
+    number
+  >;
+  private hitInput = 0;
+  private hitRead = 0;
+  private hitKnown = 0;
 
-function summarize(samples: Sample[]) {
-  const measured = samples.map((sample) => tokensOf(sample.reported));
-  const names: TokenName[] = [
-    "uncachedInput",
-    "cacheRead",
-    "cacheWrite",
-    "allInput",
-    "output",
-    "total",
-    "reasoningOutput",
-  ];
-  const tokens = Object.fromEntries(
-    names.map((name) => [name, metric(measured.map((row) => row[name]))]),
-  ) as Record<TokenName, Metric>;
-  const complete = measured.filter(
-    (row) =>
-      row.allInput !== null &&
-      row.allInput > 0 &&
-      row.cacheRead !== null &&
-      row.cacheRead <= row.allInput,
-  );
-  const denominator = complete.reduce((sum, row) => sum + row.allInput!, 0);
-  const cacheHitRate: Metric = {
-    value:
-      complete.length && denominator > 0
-        ? complete.reduce((sum, row) => sum + row.cacheRead!, 0) / denominator
-        : null,
-    knownRequests: complete.length,
-    missingRequests: samples.length - complete.length,
-  };
-  return { requestCount: samples.length, tokens, cacheHitRate };
+  add(reported: ReportedUsage | null): void {
+    this.requestCount++;
+    const measured = tokensOf(reported);
+    for (const name of tokenNames) {
+      const value = measured[name];
+      if (value === null) continue;
+      this.totals[name] += value;
+      this.known[name]++;
+    }
+    if (
+      measured.allInput !== null &&
+      measured.allInput > 0 &&
+      measured.cacheRead !== null &&
+      measured.cacheRead <= measured.allInput
+    ) {
+      this.hitInput += measured.allInput;
+      this.hitRead += measured.cacheRead;
+      this.hitKnown++;
+    }
+  }
+
+  snapshot() {
+    const tokens = Object.fromEntries(
+      tokenNames.map((name) => [
+        name,
+        {
+          value: this.known[name] ? this.totals[name] : null,
+          knownRequests: this.known[name],
+          missingRequests: this.requestCount - this.known[name],
+        },
+      ]),
+    ) as Record<TokenName, Metric>;
+    return {
+      requestCount: this.requestCount,
+      tokens,
+      cacheHitRate: {
+        value: this.hitKnown ? this.hitRead / this.hitInput : null,
+        knownRequests: this.hitKnown,
+        missingRequests: this.requestCount - this.hitKnown,
+      } satisfies Metric,
+    };
+  }
 }
 
 /** Each confirmed request appears once in the immutable per-Agent session log. */
 export function agentUsage(db: Database.Database, agentId: string) {
+  const total = new UsageAccumulator();
+  const normal = new UsageAccumulator();
+  const summary = new UsageAccumulator();
+  let latestNormal: { id: string; recordedAt: number; reported: ReportedUsage | null } | null =
+    null;
   const rows = db
     .prepare(
-      `SELECT id,kind,payload_json,created_at FROM owner_agent_session_records
-     WHERE agent_id=? AND kind IN ('message','summary_usage') ORDER BY seq`,
+      `SELECT id,kind,usage_json,created_at FROM owner_agent_session_records
+     WHERE agent_id=? AND usage_json IS NOT NULL ORDER BY seq`,
     )
-    .all(agentId) as Array<{ id: string; kind: string; payload_json: string; created_at: number }>;
-  const samples: Sample[] = [];
+    .iterate(agentId) as IterableIterator<{
+    id: string;
+    kind: string;
+    usage_json: string;
+    created_at: number;
+  }>;
   for (const row of rows) {
-    const payload = JSON.parse(row.payload_json);
-    if (row.kind === "message" && payload.modelRequest !== true) continue;
-    samples.push({
-      id: row.id,
-      recordedAt: row.created_at,
-      kind: row.kind === "summary_usage" ? "summary" : "normal",
-      reported: payload.reportedUsage ?? null,
-    });
+    const reported = (JSON.parse(row.usage_json) as { reportedUsage: ReportedUsage | null })
+      .reportedUsage;
+    total.add(reported);
+    if (row.kind === "summary_usage") summary.add(reported);
+    else {
+      normal.add(reported);
+      latestNormal = { id: row.id, recordedAt: row.created_at, reported };
+    }
   }
-  const normal = samples.filter((sample) => sample.kind === "normal");
-  const summary = samples.filter((sample) => sample.kind === "summary");
-  const latest = normal.at(-1);
+  const latest = new UsageAccumulator();
+  if (latestNormal) latest.add(latestNormal.reported);
   return {
     agentId,
-    total: summarize(samples),
-    normal: summarize(normal),
-    summary: summarize(summary),
-    latestNormal: latest
-      ? { id: latest.id, recordedAt: latest.recordedAt, ...summarize([latest]) }
+    total: total.snapshot(),
+    normal: normal.snapshot(),
+    summary: summary.snapshot(),
+    latestNormal: latestNormal
+      ? { id: latestNormal.id, recordedAt: latestNormal.recordedAt, ...latest.snapshot() }
       : null,
   };
 }
