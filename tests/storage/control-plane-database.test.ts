@@ -98,3 +98,27 @@ it("rejects a current revision that is missing declared schema structures", () =
     /claims control-plane schema revision 27 but is missing/,
   );
 });
+
+it.each(["absent", "ordinary"])(
+  "rejects revision 27 when the usage projection column is %s",
+  (column) => {
+    const f = fixture();
+    const auth = new OwnerAuth({ dataDir: f.dataDir });
+    auth.close();
+    const database = new Database(f.path);
+    database.exec(`
+    DROP INDEX owner_agent_session_records_usage;
+    ALTER TABLE owner_agent_session_records DROP COLUMN usage_json;
+  `);
+    if (column === "ordinary")
+      database.exec("ALTER TABLE owner_agent_session_records ADD COLUMN usage_json TEXT");
+    database.exec(
+      "CREATE INDEX owner_agent_session_records_usage ON owner_agent_session_records(agent_id,seq)",
+    );
+    database.close();
+
+    expect(() => new OwnerAuth({ dataDir: f.dataDir })).toThrow(
+      /claims control-plane schema revision 27 but is missing .*usage_json/,
+    );
+  },
+);

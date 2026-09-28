@@ -109,6 +109,14 @@ function controlPlaneVerdict(db: Database.Database, schema: string): Verdict {
     const missing = [...expected]
       .filter((object) => !objects.has(object))
       .map((object) => object.replace(":", " "));
+    const usageColumn = db
+      .prepare(
+        "SELECT hidden FROM pragma_table_xinfo('owner_agent_session_records') WHERE name='usage_json'",
+      )
+      .get() as { hidden: number } | undefined;
+    // SQLite table_xinfo marks a STORED generated column with hidden=3.
+    if (usageColumn?.hidden !== 3)
+      missing.push("generated column owner_agent_session_records.usage_json");
     return missing.length ? { kind: "incomplete", missing } : { kind: "current" };
   } finally {
     template.close();
