@@ -37,7 +37,7 @@ interface AgentSummary {
   linuxIdentity: { username: string; uid: number; gid: number; workspace: string } | null;
   createdAt: number;
   updatedAt: number;
-  pausedReason?: "manual" | "credentials" | null;
+  pausedReason?: "manual" | "credentials" | "context" | null;
   stop?: AgentStop | null;
 }
 
@@ -1481,13 +1481,15 @@ export function AgentsPage() {
                         ? "已停用"
                         : agent.pausedReason === "credentials"
                           ? "凭据或模型错误"
-                          : agent.status === "waiting_credentials"
-                            ? "等待凭据"
-                            : agent.status === "provisioning"
-                              ? "正在创建"
-                              : agent.status === "ready"
-                                ? "已就绪"
-                                : "创建失败"}
+                          : agent.pausedReason === "context"
+                            ? "上下文压缩待处理"
+                            : agent.status === "waiting_credentials"
+                              ? "等待凭据"
+                              : agent.status === "provisioning"
+                                ? "正在创建"
+                                : agent.status === "ready"
+                                  ? "已就绪"
+                                  : "创建失败"}
                     </span>
                   </div>
                   {agent.pausedReason === "manual" && (

@@ -167,7 +167,7 @@ export class AgentRunCoordinator {
   modelChanged(agentId: string): void {
     this.db
       .prepare(
-        "UPDATE owner_agent_run_control SET paused_reason=NULL,temporary_failures=0,updated_at=? WHERE agent_id=? AND paused_reason='credentials'",
+        "UPDATE owner_agent_run_control SET paused_reason=NULL,temporary_failures=0,updated_at=? WHERE agent_id=? AND paused_reason IN ('credentials','context')",
       )
       .run(this.now(), agentId);
     // The active worker owns its admitted configuration; edits apply to the next run.
@@ -511,9 +511,10 @@ export class AgentRunCoordinator {
           paused_reason: string | null;
         }
       | undefined;
-    if (row?.paused_reason !== "manual") return { ok: false, error: "Agent 尚未停用。" };
+    if (row?.paused_reason !== "manual" && row?.paused_reason !== "context")
+      return { ok: false, error: "Agent 尚未停用。" };
     const stop = this.stopStatus(agentId);
-    if (stop.state !== "succeeded")
+    if (row.paused_reason === "manual" && stop.state !== "succeeded")
       return { ok: false, error: "普通命令停止结果尚未确认，请检查节点诊断。" };
     if (this.unsettledProcessReceipt(agentId))
       return { ok: false, error: "仍有普通操作收据待对账，暂不能复启。" };
@@ -539,7 +540,10 @@ export class AgentRunCoordinator {
       verified.identity.workspace !== row.home
     )
       return { ok: false, error: "运行账号或 Agent 工作区已缺失或改变；保持停用，请修复原数据。" };
-    if (this.stopStatus(agentId).state !== "succeeded" || this.pauseReason(agentId) !== "manual")
+    if (
+      (row.paused_reason === "manual" && this.stopStatus(agentId).state !== "succeeded") ||
+      this.pauseReason(agentId) !== row.paused_reason
+    )
       return { ok: false, error: "停用状态已变化，请重试。" };
     this.db
       .prepare(
@@ -892,6 +896,8 @@ export class AgentRunCoordinator {
     }
     const interrupted = code === "node_disconnected" || code === "aborted";
     const credentialFailure = code === "credentials_invalid" || code === "model_unavailable";
+    const contextFailure = code === "context_failed";
+    let contextPaused = false;
     let delay = 0;
     if (credentialFailure)
       this.db
@@ -912,6 +918,14 @@ export class AgentRunCoordinator {
         maxRetryDelayMs,
         retryDelayMs * 2 ** Math.min(row.temporary_failures - 1, 16),
       );
+      if (contextFailure && row.temporary_failures >= 2) {
+        this.db
+          .prepare(
+            "UPDATE owner_agent_run_control SET paused_reason='context',updated_at=? WHERE agent_id=?",
+          )
+          .run(this.now(), agentId);
+        contextPaused = true;
+      }
     }
     this.db
       .prepare(
@@ -919,7 +933,7 @@ export class AgentRunCoordinator {
       )
       .run(
         interrupted ? "interrupted" : safeFailureCode(code),
-        credentialFailure ? null : this.now() + delay,
+        credentialFailure || contextPaused ? null : this.now() + delay,
         this.now(),
         runId,
         agentId,
@@ -932,7 +946,9 @@ export class AgentRunCoordinator {
         ? "运行因连接中断而停止；待处理消息仍在队列中。"
         : credentialFailure
           ? "模型凭据或模型配置需要所有者处理，运行已暂停。"
-          : "模型服务暂时失败，稍后退避重试。",
+          : contextPaused
+            ? "上下文压缩连续失败，运行已暂停；请检查模型容量或摘要响应。"
+            : "模型服务暂时失败，稍后退避重试。",
       detail: { code: safeFailureCode(code) },
       at: this.now(),
     });

@@ -42,6 +42,16 @@ export const sessionConfigurationSchema = z
     formatVersion: z.literal(1),
   })
   .strict();
+export const sessionCheckpointSchema = z
+  .object({
+    kind: z.literal("compaction"),
+    id: z.string().uuid(),
+    firstKeptEntryId: z.string().uuid(),
+    throughEntryId: z.string().uuid(),
+    summary: z.string().min(1),
+    tokensBefore: z.number().int().nonnegative(),
+  })
+  .strict();
 export const sessionCommitSchema = z.discriminatedUnion("kind", [
   z
     .object({ kind: z.literal("message"), id: z.string().uuid(), message: piMessageSchema })
@@ -53,14 +63,28 @@ export const sessionCommitSchema = z.discriminatedUnion("kind", [
       configuration: sessionConfigurationSchema,
     })
     .strict(),
+  sessionCheckpointSchema,
+  z
+    .object({
+      kind: z.literal("summary_usage"),
+      id: z.string().uuid(),
+      stopReason: z.enum(["stop", "length", "toolUse", "error", "aborted", "deferred", "pending"]),
+      usage: z.json(),
+      // Pi normalizes absent provider fields to zero. Keep the provenance so a future
+      // statistics reader does not misreport an absent cache field as a measured zero.
+      availability: z.literal("pi_normalized"),
+    })
+    .strict(),
 ]);
 export type SessionCommit = z.infer<typeof sessionCommitSchema>;
+export type SessionCheckpoint = Extract<SessionCommit, { kind: "compaction" }>;
 export const contextMessageSchema = z
   .object({
     id: z.string(),
     message: piMessageSchema,
     actionScopeId: z.string(),
     pending: z.boolean().optional(),
+    checkpoint: sessionCheckpointSchema.optional(),
   })
   .strict();
 export type ModelContextMessage = z.infer<typeof contextMessageSchema>;

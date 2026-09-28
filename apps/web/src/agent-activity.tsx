@@ -13,7 +13,7 @@ interface ActivityEvent {
 interface ActivityPage {
   events: ActivityEvent[];
   nodeOnline: boolean;
-  pausedReason: "manual" | "credentials" | null;
+  pausedReason: "manual" | "credentials" | "context" | null;
   stop: AgentStop | null;
   nextBefore: number | null;
 }
@@ -82,14 +82,30 @@ export function AgentActivity({ agentId }: { agentId: string }) {
           <div className="agent-activity-toolbar">
             <span>{page?.nodeOnline ? "节点在线" : "节点离线 · 以下为最后已确认事实"}</span>
             {page?.pausedReason && (
-              <span>{page.pausedReason === "manual" ? "已停用" : "模型凭据或配置待处理"}</span>
+              <span>
+                {page.pausedReason === "manual"
+                  ? "已停用"
+                  : page.pausedReason === "context"
+                    ? "上下文压缩待处理"
+                    : "模型凭据或配置待处理"}
+              </span>
             )}
             {page?.pausedReason === "manual" && <span role="status">{stopStatus.summary}</span>}
             <button
               type="button"
-              onClick={() => void changePause(page?.pausedReason === "manual" ? "resume" : "pause")}
+              onClick={() =>
+                void changePause(
+                  page?.pausedReason === "manual" || page?.pausedReason === "context"
+                    ? "resume"
+                    : "pause",
+                )
+              }
             >
-              {page?.pausedReason === "manual" ? "复启 Agent" : "停用 Agent"}
+              {page?.pausedReason === "manual"
+                ? "复启 Agent"
+                : page?.pausedReason === "context"
+                  ? "重试 Agent"
+                  : "停用 Agent"}
             </button>
             {page?.pausedReason === "manual" &&
               (page.stop?.state === "unknown" || page.stop?.state === "failed") && (

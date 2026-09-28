@@ -14,7 +14,7 @@ CREATE INDEX owner_agent_activity_agent ON owner_agent_activity(agent_id,seq);
 CREATE INDEX owner_agent_activity_node ON owner_agent_activity(node_id,seq);
 CREATE TABLE owner_agent_run_control (
   agent_id TEXT PRIMARY KEY REFERENCES owner_agents(id),
-  paused_reason TEXT CHECK(paused_reason IN ('manual','credentials')),
+  paused_reason TEXT CHECK(paused_reason IN ('manual','credentials','context')),
   temporary_failures INTEGER NOT NULL DEFAULT 0 CHECK(temporary_failures>=0),
   updated_at INTEGER NOT NULL
 );

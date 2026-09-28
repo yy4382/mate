@@ -355,3 +355,77 @@ it("does not move already paged inputs when a late receipt arrives during contex
     expect.stringContaining("Mate 收据更正"),
   ]);
 });
+
+it("confirms one compaction checkpoint before exposing it to a resumed run", async () => {
+  const f = await setup(),
+    { agentId, dm } = await prepareAgent(f, "Compaction checkpoint");
+  f.app.chat.createMessage(dm, "Old observation");
+  const run = await waitForRun(f.socket, 0);
+  const original = (await context(f, run))[0]!;
+  expect(
+    await commit(f, run, { kind: "message", id: original.id, message: original.message }),
+  ).toBe(true);
+  const retained = {
+    kind: "message" as const,
+    id: randomUUID(),
+    message: assistantMessage("Recent"),
+  };
+  expect(await commit(f, run, retained)).toBe(true);
+  const summaryUsage = {
+    kind: "summary_usage" as const,
+    id: randomUUID(),
+    stopReason: "stop" as const,
+    usage: { input: 123, output: 45, cacheRead: 0, cacheWrite: 0, totalTokens: 168 },
+    availability: "pi_normalized" as const,
+  };
+  expect(await commit(f, run, summaryUsage)).toBe(true);
+  expect(await commit(f, run, summaryUsage)).toBe(true);
+  const unconfirmed = {
+    kind: "compaction" as const,
+    id: randomUUID(),
+    firstKeptEntryId: randomUUID(),
+    throughEntryId: retained.id,
+    summary: "Must not become visible",
+    tokensBefore: 321,
+  };
+  expect(await commit(f, run, unconfirmed)).toBe(false);
+  expect((await context(f, run)).every((entry) => entry.checkpoint === undefined)).toBe(true);
+  const checkpoint = {
+    kind: "compaction" as const,
+    id: randomUUID(),
+    firstKeptEntryId: retained.id,
+    throughEntryId: retained.id,
+    summary: "Earlier task state",
+    tokensBefore: 321,
+  };
+  expect(await commit(f, run, checkpoint)).toBe(true);
+  expect(await commit(f, run, checkpoint)).toBe(true);
+  expect(await commit(f, run, { ...checkpoint, summary: "Changed" })).toBe(false);
+  expect(
+    (await context(f, run)).find((entry) => entry.id === retained.id)?.checkpoint,
+  ).toMatchObject({
+    id: checkpoint.id,
+    summary: "Earlier task state",
+  });
+  await finish(f, run);
+  const offset = f.socket.sent.length;
+  f.app.chat.createMessage(dm, "Continue after restart");
+  const next = await waitForRun(f.socket, offset);
+  expect((await context(f, next)).find((entry) => entry.id === retained.id)?.checkpoint?.id).toBe(
+    checkpoint.id,
+  );
+  expect(
+    f.db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM owner_agent_session_records WHERE agent_id=? AND kind='message'",
+      )
+      .get(agentId),
+  ).toEqual({ n: 2 });
+  expect(
+    f.db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM owner_agent_session_records WHERE agent_id=? AND kind='summary_usage'",
+      )
+      .get(agentId),
+  ).toEqual({ n: 1 });
+});

@@ -841,7 +841,12 @@ function connectOnce(
       agentId: string,
       ok: boolean,
       code?:
-        "model_unavailable" | "model_failed" | "worker_failed" | "credentials_invalid" | "aborted",
+        | "model_unavailable"
+        | "model_failed"
+        | "worker_failed"
+        | "credentials_invalid"
+        | "context_failed"
+        | "aborted",
     ): void {
       if (socket.readyState !== WebSocket.OPEN || !authenticated) return;
       try {

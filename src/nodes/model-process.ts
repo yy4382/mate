@@ -19,7 +19,13 @@ const workerResultSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("failed"),
       nonce: z.string().uuid().optional(),
-      code: z.enum(["model_unavailable", "model_failed", "worker_failed", "credentials_invalid"]),
+      code: z.enum([
+        "model_unavailable",
+        "model_failed",
+        "worker_failed",
+        "credentials_invalid",
+        "context_failed",
+      ]),
     })
     .strict(),
 ]);
@@ -170,7 +176,12 @@ export function startModelProcess(options: ModelProcessOptions): ModelProcessSes
 
 export class ModelRunFailure extends Error {
   constructor(
-    readonly code: "model_unavailable" | "model_failed" | "worker_failed" | "credentials_invalid",
+    readonly code:
+      | "model_unavailable"
+      | "model_failed"
+      | "worker_failed"
+      | "credentials_invalid"
+      | "context_failed",
   ) {
     super("Agent model run failed");
   }

@@ -183,6 +183,7 @@ const NodeRequestShapeSchema = z.discriminatedUnion("type", [
           "model_failed",
           "worker_failed",
           "credentials_invalid",
+          "context_failed",
           "aborted",
         ]),
       })

@@ -10,6 +10,7 @@ import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { z } from "zod";
 
 import { contextMessageSchema, durableToolIdentity, type SessionCommit } from "./session-record.js";
+import { SessionCompaction } from "./session-compaction.js";
 export type { ModelContextMessage } from "./session-record.js";
 
 const runSchema = z
@@ -151,6 +152,7 @@ export function serveModelWorker(stream: StreamFn): void {
       });
       if (!accepted) throw new Error("The control plane rejected the session entry");
     };
+    const compaction = new SessionCompaction(run.data.spec.messages, model, apiKey, stream, commit);
     const forwardTool = async (
       toolCallId: string,
       operation: string,
@@ -254,6 +256,7 @@ export function serveModelWorker(stream: StreamFn): void {
       },
     ];
     let credentialResponse = false;
+    let compactionFailed = false;
     const agent = new Agent({
       sessionId: run.data.spec.sessionId,
       onResponse: (response) => {
@@ -265,6 +268,14 @@ export function serveModelWorker(stream: StreamFn): void {
           apiKey,
           env: {},
         }),
+      transformContext: async (messages, signal) => {
+        try {
+          return await compaction.transform(messages, signal);
+        } catch (error) {
+          compactionFailed = true;
+          throw error;
+        }
+      },
       initialState: {
         model,
         systemPrompt: [
@@ -292,6 +303,7 @@ export function serveModelWorker(stream: StreamFn): void {
     });
     running = { nonce, agent };
     let unsuccessfulStopReason: "error" | "aborted" | undefined;
+    let contextOverflow = false;
     const unsubscribe = agent.subscribe(async (event) => {
       if (event.type !== "message_end") return;
       if (
@@ -302,11 +314,14 @@ export function serveModelWorker(stream: StreamFn): void {
         return;
       const id = randomUUID();
       await commit({ kind: "message", id, message: event.message });
+      compaction.record(id, event.message);
       if (event.message.role === "assistant") {
         assistantIdentity = id;
         actionScopeId = run.data.spec.actionScopeId;
         if (event.message.stopReason === "error" || event.message.stopReason === "aborted")
           unsuccessfulStopReason = event.message.stopReason;
+        if (event.message.stopReason === "error" && isContextOverflow(event.message.errorMessage))
+          contextOverflow = true;
       }
     });
 
@@ -372,7 +387,9 @@ export function serveModelWorker(stream: StreamFn): void {
             isError,
             timestamp: Date.now(),
           };
-          await commit({ kind: "message", id: randomUUID(), message });
+          const id = randomUUID();
+          await commit({ kind: "message", id, message });
+          compaction.record(id, message);
           agent.state.messages = [...agent.state.messages, message];
         }
       }
@@ -391,11 +408,32 @@ export function serveModelWorker(stream: StreamFn): void {
             "[运行恢复] 上次模型响应未成功完成。请从已保存的工具结果和操作事实继续，不要重做结果未知的副作用。",
           timestamp: Date.now(),
         };
-        await commit({ kind: "message", id: randomUUID(), message });
+        const id = randomUUID();
+        await commit({ kind: "message", id, message });
+        compaction.record(id, message);
         agent.state.messages = [...agent.state.messages, message];
       }
       // A completed silent/final response followed by a lost run ACK needs no new generation.
-      if (agent.state.messages.at(-1)?.role !== "assistant") await agent.continue();
+      if (agent.state.messages.at(-1)?.role !== "assistant") {
+        await agent.continue();
+        if (contextOverflow) {
+          const message = {
+            role: "user" as const,
+            content:
+              "[上下文恢复] 上次普通模型请求超出上下文容量。已保存的工具结果和操作事实仍有效；从压缩后的同一会话继续，不要重做结果未知的副作用。",
+            timestamp: Date.now(),
+          };
+          const id = randomUUID();
+          await commit({ kind: "message", id, message });
+          compaction.record(id, message);
+          agent.state.messages = [...agent.state.messages, message];
+          compaction.forceAfterOverflow();
+          unsuccessfulStopReason = undefined;
+          contextOverflow = false;
+          await agent.continue();
+          if (contextOverflow) compactionFailed = true;
+        }
+      }
       if (unsuccessfulStopReason) throw new Error("The model returned an unsuccessful result");
       process.send?.({ type: "done", nonce });
     } catch (error) {
@@ -406,7 +444,11 @@ export function serveModelWorker(stream: StreamFn): void {
       process.send?.({
         type: "failed",
         nonce,
-        code: credentialResponse ? "credentials_invalid" : "model_failed",
+        code: credentialResponse
+          ? "credentials_invalid"
+          : compactionFailed
+            ? "context_failed"
+            : "model_failed",
       });
     } finally {
       running = undefined;
@@ -425,6 +467,15 @@ export function serveModelWorker(stream: StreamFn): void {
  *
  * The same message-end commit path preserves a notice only when Pi consumes it.
  */
+function isContextOverflow(message: string | undefined): boolean {
+  return Boolean(
+    message &&
+    /context[_ -]length[_ -]exceeded|context window|maximum context length|prompt is too long|too many (input )?tokens/i.test(
+      message,
+    ),
+  );
+}
+
 function runNoticeMessage(conversationId: string): AgentMessage {
   return {
     role: "user",

@@ -1,7 +1,11 @@
 import { durableToolIdentity } from "../nodes/session-record.js";
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
-import type { ModelContextMessage, SessionCommit } from "../nodes/session-record.js";
+import type {
+  ModelContextMessage,
+  SessionCheckpoint,
+  SessionCommit,
+} from "../nodes/session-record.js";
 
 export const agentSessionSchema = `
 CREATE TABLE owner_agent_session_records (
@@ -10,7 +14,7 @@ CREATE TABLE owner_agent_session_records (
   agent_id TEXT NOT NULL REFERENCES owner_agents(id),
   run_id TEXT NOT NULL REFERENCES owner_agent_runs(id),
   action_scope_id TEXT NOT NULL,
-  kind TEXT NOT NULL CHECK(kind IN ('message','configuration')),
+  kind TEXT NOT NULL CHECK(kind IN ('message','configuration','compaction','summary_usage')),
   payload_json TEXT NOT NULL,
   created_at INTEGER NOT NULL
 );
@@ -41,6 +45,39 @@ export class AgentSession {
           .prepare("SELECT agent_id,payload_json FROM owner_agent_session_records WHERE id=?")
           .get(entry.id) as { agent_id: string; payload_json: string } | undefined;
         if (old) return old.agent_id === agentId && old.payload_json === payload;
+        if (entry.kind === "compaction") {
+          const bounds = this.db
+            .prepare(
+              `SELECT id,seq FROM owner_agent_session_records WHERE agent_id=? AND kind='message'
+             AND id IN (?,?)`,
+            )
+            .all(agentId, entry.firstKeptEntryId, entry.throughEntryId) as Array<{
+            id: string;
+            seq: number;
+          }>;
+          const first = bounds.find((row) => row.id === entry.firstKeptEntryId);
+          const through = bounds.find((row) => row.id === entry.throughEntryId);
+          const latest = this.db
+            .prepare(
+              "SELECT seq FROM owner_agent_session_records WHERE agent_id=? AND kind='message' ORDER BY seq DESC LIMIT 1",
+            )
+            .get(agentId) as { seq: number } | undefined;
+          const prior = this.latestCheckpoint(agentId);
+          const priorFirst =
+            prior &&
+            (this.db
+              .prepare("SELECT seq FROM owner_agent_session_records WHERE agent_id=? AND id=?")
+              .get(agentId, prior.firstKeptEntryId) as { seq: number } | undefined);
+          if (
+            !first ||
+            !through ||
+            !latest ||
+            first.seq > through.seq ||
+            through.seq !== latest.seq ||
+            (priorFirst && first.seq <= priorFirst.seq)
+          )
+            return false;
+        }
         this.db
           .prepare(
             `INSERT INTO owner_agent_session_records(id,agent_id,run_id,action_scope_id,kind,payload_json,created_at)
@@ -103,6 +140,7 @@ export class AgentSession {
   }
 
   read(agentId: string): ModelContextMessage[] {
+    const checkpoint = this.latestCheckpoint(agentId);
     const rows = this.db
       .prepare(
         `SELECT id,payload_json,action_scope_id FROM owner_agent_session_records
@@ -113,6 +151,16 @@ export class AgentSession {
       id: row.id,
       message: JSON.parse(row.payload_json).message,
       actionScopeId: row.action_scope_id,
+      ...(row.id === checkpoint?.firstKeptEntryId ? { checkpoint } : {}),
     }));
+  }
+
+  private latestCheckpoint(agentId: string): SessionCheckpoint | undefined {
+    const row = this.db
+      .prepare(
+        "SELECT payload_json FROM owner_agent_session_records WHERE agent_id=? AND kind='compaction' ORDER BY seq DESC LIMIT 1",
+      )
+      .get(agentId) as { payload_json: string } | undefined;
+    return row ? (JSON.parse(row.payload_json) as SessionCheckpoint) : undefined;
   }
 }
