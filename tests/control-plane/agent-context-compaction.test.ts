@@ -418,6 +418,8 @@ async function exerciseCompaction(
     );
     expect(usageBeforeRestart.summary.cacheHitRate.value).toBe(0);
     expect(usageBeforeRestart.latestNormal.tokens.allInput.value).toBe(100);
+    if (summaryMode === "success")
+      expect(usageBeforeRestart.total.tokens.allInput.value).toBe(115_200);
     const checkpoints = rows
       .filter((row) => row.kind === "compaction")
       .map((row) => JSON.parse(row.payload_json));
@@ -469,6 +471,10 @@ async function exerciseCompaction(
     await completed(2);
     const usageAfterRestart = await api(`/api/owner/agents/${agentId}/usage`, undefined, "GET");
     expect(usageAfterRestart.total.requestCount).toBe(usageBeforeRestart.total.requestCount + 1);
+    if (summaryMode === "success") {
+      expect(usageAfterRestart.total.tokens.allInput.value).toBe(115_300);
+      expect(usageAfterRestart.latestNormal.tokens.allInput.value).toBe(100);
+    }
     expect(JSON.stringify(requests.at(-1).input)).toContain("[会话压缩摘要]");
     expect(JSON.stringify(requests.at(-1).input)).not.toContain(
       "Continue the assigned task after listing tools",
