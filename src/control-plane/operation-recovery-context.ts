@@ -39,6 +39,28 @@ export function queueUncertainOperationFacts(
       now,
     );
   }
+  const stops = db
+    .prepare(
+      `SELECT operation_id,state,receipt_json FROM owner_agent_stop_intents
+    WHERE agent_id=?`,
+    )
+    .all(agentId) as Array<{ operation_id: string; state: string; receipt_json: string | null }>;
+  for (const row of stops) {
+    const receipt = parseHistory(row.receipt_json);
+    if (row.state === "succeeded" && receipt.ok) continue;
+    session.queueCorrection(
+      agentId,
+      {
+        operationId: row.operation_id,
+        state: "unknown",
+        request: { kind: "process.stop_all" },
+        reason: "command_termination_unproven",
+        evidence: receipt.value,
+        note: "历史停止请求的效果无法确认；旧命令仍可能运行。由你决定检查、补救或继续。",
+      },
+      now,
+    );
+  }
   const files = db
     .prepare(
       `SELECT action_id,operation,result_json FROM owner_agent_tool_actions
@@ -58,12 +80,6 @@ export function queueUncertainOperationFacts(
     if (["succeeded", "failed"].includes(String(envelope.state))) continue;
     const operationId =
       typeof envelope.operationId === "string" ? envelope.operationId : row.action_id;
-    const activity = db
-      .prepare(
-        `SELECT detail_json FROM owner_agent_activity
-      WHERE agent_id=? AND reference_id=? AND kind='operation.started' ORDER BY seq LIMIT 1`,
-      )
-      .get(agentId, operationId) as { detail_json: string | null } | undefined;
     session.queueCorrection(
       agentId,
       {
@@ -71,7 +87,7 @@ export function queueUncertainOperationFacts(
         actionId: row.action_id,
         operation: row.operation,
         state: "unknown",
-        request: activity ? parseHistory(activity.detail_json).value : { operation: row.operation },
+        request: workspaceOperationSummary(db, agentId, operationId, row.operation),
         reason:
           parsed.ok && ["executing", "unknown"].includes(String(envelope.state))
             ? "operation_result_unproven"
@@ -91,4 +107,20 @@ export function parseHistory(value: string | null): { ok: boolean; value: unknow
   } catch {
     return { ok: false, value };
   }
+}
+
+/** Recover the original affected paths/inputs without altering the operation or transcript. */
+export function workspaceOperationSummary(
+  db: Database.Database,
+  agentId: string,
+  operationId: string,
+  operation: string,
+): unknown {
+  const activity = db
+    .prepare(
+      `SELECT detail_json FROM owner_agent_activity
+    WHERE agent_id=? AND reference_id=? AND kind='operation.started' ORDER BY seq LIMIT 1`,
+    )
+    .get(agentId, operationId) as { detail_json: string | null } | undefined;
+  return activity ? parseHistory(activity.detail_json).value : { operation };
 }

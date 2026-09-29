@@ -228,6 +228,20 @@ function addWorkspaceReceipt(paths: ReturnType<typeof setup>["paths"], nodeId: s
   ) VALUES(?,?,?,?,?,?,1)`,
     )
     .run(sessionId, actionId, agentId, "workspace.write", "e".repeat(64), JSON.stringify(envelope));
+  owner.db
+    .prepare(
+      `INSERT INTO owner_agent_activity(agent_id,node_id,kind,reference_id,summary,detail_json,created_at)
+    VALUES(?,?,'operation.started',?,'File operation',?,1)`,
+    )
+    .run(
+      agentId,
+      nodeId,
+      operationId,
+      JSON.stringify({
+        operation: "workspace.write",
+        input: { path: "note.txt", content: "written" },
+      }),
+    );
   owner.close();
 
   const path = join(paths.nodeDataDir, "workspace-receipts", `${operationId}.json`);
@@ -572,4 +586,39 @@ it("reports an unavailable original session and releases only after that same se
   expect(reconcileCoordinatedState(paths, { lookupAgentIdentity: localIdentity }).holds).toEqual(
     [],
   );
+});
+
+it("presents the recoverable request summary when a terminal file receipt conflicts during maintenance", () => {
+  const { paths, node } = setup();
+  const operationId = addWorkspaceReceipt(paths, node.nodeId);
+  writeFileSync(
+    join(paths.nodeDataDir, "workspace-receipts", `${operationId}.json`),
+    JSON.stringify({
+      operationId,
+      agentId,
+      requestHash: "f".repeat(64),
+      state: "succeeded",
+      result: { code: 0, stdout: '{"written":false}', stderr: "", truncated: false },
+      revision: 2,
+    }),
+    { mode: 0o600 },
+  );
+  expect(reconcileCoordinatedState(paths, { lookupAgentIdentity: localIdentity })).toMatchObject({
+    holds: [],
+    confirmed: 0,
+  });
+  const owner = new OwnerAuth({ dataDir: paths.controlPlaneDataDir });
+  const facts = new AgentSession(owner.db)
+    .pendingCorrections(agentId, randomUUID())
+    .map((entry) => JSON.parse(String(entry.message.content).slice("Mate 收据更正：".length)));
+  expect(facts).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        operationId,
+        reason: "operation_identity_conflict",
+        request: { operation: "workspace.write", input: { path: "note.txt", content: "written" } },
+      }),
+    ]),
+  );
+  owner.close();
 });

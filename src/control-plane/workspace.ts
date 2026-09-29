@@ -1,3 +1,4 @@
+import { workspaceOperationSummary } from "./operation-recovery-context.js";
 import { z } from "zod";
 import { defineAgentTool, type AgentToolContext } from "./agent-tool-entry.js";
 import {
@@ -1125,18 +1126,26 @@ export class WorkspaceService {
         const prior = parseEnvelope(existing.result_json);
         const changed =
           prior.state !== envelope.state || !isDeepStrictEqual(prior.result, envelope.result);
-        if (
+        const versionBlocked =
+          prior.revision !== undefined &&
+          (envelope.revision === undefined || envelope.revision <= prior.revision);
+        const unversionedConflict =
           (prior.state === "succeeded" || prior.state === "failed") &&
-          (prior.revision === undefined ||
-            envelope.revision === undefined ||
-            envelope.revision <= prior.revision)
-        ) {
+          prior.revision === undefined &&
+          changed;
+        if (versionBlocked || unversionedConflict) {
           if (changed)
             new AgentSession(this.db).queueCorrection(
               agentId,
               {
                 operationId: envelope.operationId,
                 operation: envelope.operation,
+                request: workspaceOperationSummary(
+                  this.db,
+                  agentId,
+                  envelope.operationId,
+                  envelope.operation,
+                ),
                 state: "unknown",
                 reason: "operation_result_conflict",
                 evidence: envelope,

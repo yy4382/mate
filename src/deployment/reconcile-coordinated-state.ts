@@ -1,6 +1,7 @@
 import {
   queueUncertainOperationFacts,
   parseHistory,
+  workspaceOperationSummary,
 } from "../control-plane/operation-recovery-context.js";
 import { AgentSession } from "../control-plane/agent-session.js";
 import Database from "better-sqlite3";
@@ -287,7 +288,12 @@ export function reconcileCoordinatedState(
         targets,
         {
           kind: "workspace",
-          request: { operation: row.operation },
+          request: workspaceOperationSummary(
+            controlPlane,
+            row.agent_id,
+            envelope.operationId,
+            row.operation,
+          ),
           operationId: envelope.operationId,
           agentId: row.agent_id,
           nodeId: nodeIdentity.id,

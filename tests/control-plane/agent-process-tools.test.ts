@@ -532,6 +532,18 @@ it("rechecks stopped scopes after a restarted node confirms an ordinary operatio
     }),
   );
   await waitFor(() => app.runs?.stopStatus(agentId).state === "unknown");
+  await app.nodes.receive(
+    reconnect,
+    JSON.stringify({
+      type: "node.process.operation.result",
+      requestId: randomUUID(),
+      operationId,
+      agentId,
+      state: "succeeded",
+      receipt: { code: 0, processGroupRunning: true },
+      revision: 2,
+    }),
+  );
   const resuming = app.runs!.resumeAgent(agentId);
   await waitFor(() =>
     reconnect.sent.some(
@@ -554,6 +566,21 @@ it("rechecks stopped scopes after a restarted node confirms an ordinary operatio
   );
   expect(await resuming).toEqual({ ok: true });
   expect(app.runs?.pauseReason(agentId)).toBeNull();
+  const resumed = await waitForRun(reconnect, 0);
+  await app.nodes.receive(
+    reconnect,
+    JSON.stringify({
+      type: "node.agent.run.context",
+      requestId: randomUUID(),
+      runId: resumed.runId,
+      agentId,
+      cursor: 0,
+      limit: 100,
+    }),
+  );
+  const context = JSON.parse(reconnect.sent.at(-1)!);
+  expect(JSON.stringify(context.messages)).toContain(secondStop.operationId);
+  expect(JSON.stringify(context.messages)).toContain("old_command_may_still_run");
 });
 
 it("dispatches ordinary commands from a durable intent without privileged approval", async () => {

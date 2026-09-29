@@ -3247,6 +3247,7 @@ it("replays a confirmed failed file action as the same error after control-plane
           stdout: "",
           stderr: "permission_denied: file is protected",
           truncated: false,
+          revision: 1,
         },
       }),
     );
@@ -3310,6 +3311,71 @@ it("replays a confirmed failed file action as the same error after control-plane
         )
         .get(actionId),
     ).toEqual({ state: "failed" });
+
+    const operationId = reconciliation.operations[0].operationId;
+    const late = async (
+      revision: number | undefined,
+      code: number,
+      stdout: string,
+      stderr: string,
+    ) =>
+      restarted.nodes.receive(
+        recovered,
+        JSON.stringify({
+          type: "node.workspace.operation.result",
+          requestId: randomUUID(),
+          operationId,
+          agentId,
+          ok: true,
+          result: { code, stdout, stderr, truncated: false, revision },
+        }),
+      );
+    await late(4, 1, "", "operation_unknown: result unavailable");
+    await late(undefined, 1, "", "operation_unknown: no durable receipt");
+    await late(4, 0, '{"written":true}', "");
+    await late(2, 0, '{"written":true}', "");
+    const stale = await callAgentTool(
+      restarted,
+      recovered,
+      retryRun,
+      actionId,
+      "tools.call",
+      input,
+    );
+    expect(stale).toMatchObject({ ok: false, error: expect.stringContaining("尚未确认") });
+    await late(5, 0, '{"written":true}', "");
+    expect(
+      await callAgentTool(restarted, recovered, retryRun, actionId, "tools.call", input),
+    ).toMatchObject({ ok: true, result: { written: true } });
+    await late(5, 0, '{"written":false}', "");
+    await restarted.nodes.receive(
+      recovered,
+      JSON.stringify({
+        type: "node.agent.run.context",
+        requestId: randomUUID(),
+        runId: retryRun.runId,
+        agentId,
+        cursor: 0,
+        limit: 100,
+      }),
+    );
+    const facts = JSON.parse(recovered.sent.at(-1)!)
+      .messages.filter(
+        (entry: { message: { content?: unknown } }) =>
+          typeof entry.message.content === "string" &&
+          entry.message.content.startsWith("Mate 收据更正："),
+      )
+      .map((entry: { message: { content: string } }) =>
+        JSON.parse(entry.message.content.slice("Mate 收据更正：".length)),
+      );
+    expect(
+      facts.some(
+        (fact: { reason?: string; request?: unknown }) =>
+          fact.reason === "operation_result_conflict" &&
+          JSON.stringify(fact.request).includes("protected.txt"),
+      ),
+    ).toBe(true);
+    expect(executions).toBe(1);
   } finally {
     restarted.close();
   }
