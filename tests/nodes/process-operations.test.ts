@@ -248,3 +248,32 @@ it("fences new commands and repeats Agent stopping after an admitted command set
     database.close();
   }
 });
+
+it("reports malformed or mismatched stored request evidence as unknown without executing again", async () => {
+  const database = new Database(":memory:"),
+    agentId = randomUUID(),
+    operationId = randomUUID();
+  const execute = vi.fn(async () => ({ state: "succeeded" as const, receipt: { stdout: "once" } }));
+  const operations = new AgentProcessOperations(database, execute);
+  try {
+    await operations.execute(agentId, operationId, {
+      kind: "exec",
+      command: "echo once",
+      cwd: ".",
+    });
+    expect(operations.status(agentId, operationId, "different request")).toMatchObject({
+      state: "unknown",
+    });
+    database
+      .prepare("UPDATE agent_process_operations SET receipt='{' WHERE operation_id=?")
+      .run(operationId);
+    expect(operations.status(agentId, operationId)).toMatchObject({ state: "unknown" });
+    database
+      .prepare("UPDATE agent_process_operations SET request='null' WHERE operation_id=?")
+      .run(operationId);
+    expect(operations.status(agentId, operationId)).toMatchObject({ state: "unknown" });
+    expect(execute).toHaveBeenCalledOnce();
+  } finally {
+    database.close();
+  }
+});

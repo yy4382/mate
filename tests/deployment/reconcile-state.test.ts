@@ -24,7 +24,7 @@ function states(): { control: RecoveryState; node: NodeRecoveryState } {
   };
 }
 
-it("holds only the Agent whose later node checkpoint contains an operation absent from the control-plane checkpoint", () => {
+it("reports an operation absent from the control-plane checkpoint without holding its Agent", () => {
   const { control, node } = states();
   node.operations.push({
     operationId: "44444444-4444-4444-8444-444444444444",
@@ -35,8 +35,9 @@ it("holds only the Agent whose later node checkpoint contains an operation absen
     receipt: { code: 0 },
     sequence: 7,
   });
-  expect(reconcileRecoveryState(control, node)).toEqual({
-    holds: [{ agentId: first, reason: "node_operation_without_intent" }],
+  expect(reconcileRecoveryState(control, node)).toMatchObject({
+    holds: [],
+    uncertainties: [{ agentId: first, reason: "node_operation_without_intent" }],
     confirmed: [],
   });
 });
@@ -65,7 +66,7 @@ it("accepts a higher durable node result for the matching operation and leaves t
     sequence: 8,
   };
   node.operations.push(receipt);
-  expect(reconcileRecoveryState(control, node)).toEqual({ holds: [], confirmed: [receipt] });
+  expect(reconcileRecoveryState(control, node)).toMatchObject({ holds: [], confirmed: [receipt] });
 });
 
 it("accepts a first durable receipt for an unconfirmed unknown intent without a control-plane revision", () => {
@@ -93,7 +94,7 @@ it("accepts a first durable receipt for an unconfirmed unknown intent without a 
   control.operations.push(intent);
   node.operations.push(receipt);
 
-  expect(reconcileRecoveryState(control, node)).toEqual({ holds: [], confirmed: [receipt] });
+  expect(reconcileRecoveryState(control, node)).toMatchObject({ holds: [], confirmed: [receipt] });
 });
 
 it("does not overwrite an unversioned but confirmed terminal control-plane receipt with a conflict", () => {
@@ -120,13 +121,14 @@ it("does not overwrite an unversioned but confirmed terminal control-plane recei
     sequence: 2,
   });
 
-  expect(reconcileRecoveryState(control, node)).toEqual({
-    holds: [{ agentId: first, reason: "node_receipt_version_unproven" }],
+  expect(reconcileRecoveryState(control, node)).toMatchObject({
+    holds: [],
+    uncertainties: [{ agentId: first, reason: "node_receipt_version_unproven" }],
     confirmed: [],
   });
 });
 
-it("holds the affected Agent when the node checkpoint is stale or conflicts at the same revision", () => {
+it("reports stale and conflicting historical receipts without holding the Agent", () => {
   const { control, node } = states();
   const operationId = "77777777-7777-4777-8777-777777777777";
   control.operations.push({
@@ -149,13 +151,15 @@ it("holds the affected Agent when the node checkpoint is stale or conflicts at t
     receipt: { code: 1 },
     sequence: 4,
   });
-  expect(reconcileRecoveryState(control, node)).toEqual({
-    holds: [{ agentId: first, reason: "operation_result_conflict" }],
+  expect(reconcileRecoveryState(control, node)).toMatchObject({
+    holds: [],
+    uncertainties: [{ agentId: first, reason: "operation_result_conflict" }],
     confirmed: [],
   });
   node.operations[0]!.sequence = 3;
-  expect(reconcileRecoveryState(control, node)).toEqual({
-    holds: [{ agentId: first, reason: "node_receipt_stale" }],
+  expect(reconcileRecoveryState(control, node)).toMatchObject({
+    holds: [],
+    uncertainties: [{ agentId: first, reason: "node_receipt_stale" }],
     confirmed: [],
   });
 });
@@ -163,7 +167,7 @@ it("holds the affected Agent when the node checkpoint is stale or conflicts at t
 it("holds only Agents assigned to a node when its restored pairing key cannot be proven", () => {
   const { control, node } = states();
   node.nodePublicKey = "different-key";
-  expect(reconcileRecoveryState(control, node)).toEqual({
+  expect(reconcileRecoveryState(control, node)).toMatchObject({
     holds: [
       { agentId: first, reason: "node_identity_unproven" },
       { agentId: second, reason: "node_identity_unproven" },
@@ -172,7 +176,7 @@ it("holds only Agents assigned to a node when its restored pairing key cannot be
   });
 });
 
-it("keeps a mismatched operation unknown and holds both identities in an identity conflict", () => {
+it("keeps mismatched operation evidence unknown without holding either Agent", () => {
   const { control, node } = states();
   const operationId = "66666666-6666-4666-8666-666666666666";
   control.operations.push({
@@ -193,8 +197,9 @@ it("keeps a mismatched operation unknown and holds both identities in an identit
     receipt: { code: 0 },
     sequence: 9,
   });
-  expect(reconcileRecoveryState(control, node)).toEqual({
-    holds: [
+  expect(reconcileRecoveryState(control, node)).toMatchObject({
+    holds: [],
+    uncertainties: [
       { agentId: first, reason: "operation_identity_conflict" },
       { agentId: second, reason: "operation_identity_conflict" },
     ],

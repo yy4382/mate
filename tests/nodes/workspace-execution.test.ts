@@ -352,3 +352,13 @@ it("does not receipt read-only owner browsing and refuses owner write operations
     }),
   ).toThrow("Owner browsing and file publishing allow read operations only");
 });
+
+it("keeps a receipt for a different historical file request unproven during reconciliation", async () => {
+  const fixture = setup(() => success);
+  const executor = new LinuxWorkspaceExecutor(fixture.homeRoot, fixture.root, fixture.dependencies);
+  await executor.execute(action());
+  expect(executor.status(agentId, operationId, "different request")?.stderr).toContain(
+    "operation_unknown",
+  );
+  expect(fixture.calls).toHaveLength(1);
+});

@@ -17,7 +17,7 @@ async function authenticatedNode() {
   database.exec(`
     CREATE TABLE nodes(id TEXT PRIMARY KEY,public_key TEXT NOT NULL,paired_at INTEGER NOT NULL,last_connected_at INTEGER);
     CREATE TABLE node_pairing_tokens(token_hash TEXT PRIMARY KEY,created_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,used_at INTEGER);
-    CREATE TABLE owner_agent_process_operations(operation_id TEXT PRIMARY KEY,agent_id TEXT,node_id TEXT,state TEXT);
+    CREATE TABLE owner_agent_process_operations(operation_id TEXT PRIMARY KEY,agent_id TEXT,node_id TEXT,state TEXT,request_json TEXT);
     CREATE TABLE owner_agent_stop_intents(operation_id TEXT PRIMARY KEY,agent_id TEXT,node_id TEXT,state TEXT);
     CREATE TABLE owner_agent_activity(seq INTEGER PRIMARY KEY,agent_id TEXT,node_id TEXT,kind TEXT,reference_id TEXT,summary TEXT,detail_json TEXT,created_at INTEGER);
   `);

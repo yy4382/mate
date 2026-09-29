@@ -381,6 +381,7 @@ interface RestoredPage {
   app: ReturnType<typeof createControlPlaneApp>;
   cookie: string;
   messages: string[];
+  socket: FakeNodeSocket;
   nodeOnline: boolean;
   agentWorkspace: string | null;
 }
@@ -424,6 +425,42 @@ async function openRestoredControlPlane(d: Deployment): Promise<RestoredPage> {
       ).toString("base64url"),
     }),
   );
+  const nodeDb = new Database(join(d.paths.nodeDataDir, "agent-process-operations.sqlite"));
+  const operations = new AgentProcessOperations(nodeDb, async () => {
+    throw new Error("Reconciliation must not execute");
+  });
+  try {
+    const answered = new Set<string>();
+    while (true) {
+      const request = socket.sent
+        .map((text) => JSON.parse(text))
+        .find(
+          (message) =>
+            message.type === "control.process.reconcile" && !answered.has(message.requestId),
+        );
+      if (!request) break;
+      answered.add(request.requestId);
+      await app.nodes.receive(
+        socket,
+        JSON.stringify({
+          type: "node.process.reconcile.result",
+          requestId: request.requestId,
+          receipts: request.operations.flatMap(
+            (operation: { agentId: string; operationId: string; requestHash: string }) => {
+              const receipt = operations.status(
+                operation.agentId,
+                operation.operationId,
+                operation.requestHash,
+              );
+              return receipt && receipt.state !== "started" ? [receipt] : [];
+            },
+          ),
+        }),
+      );
+    }
+  } finally {
+    nodeDb.close();
+  }
   const nodes = (await (await app.request("/api/owner/nodes", { headers: { cookie } })).json()) as {
       nodes: Array<{ id: string; online: boolean }>;
     },
@@ -434,6 +471,7 @@ async function openRestoredControlPlane(d: Deployment): Promise<RestoredPage> {
     app,
     cookie,
     messages: socket.sent,
+    socket,
     nodeOnline: nodes.nodes.find((node) => node.id === d.nodeId)?.online ?? false,
     agentWorkspace:
       agents.agents.find((agent) => agent.id === agentId)?.linuxIdentity?.workspace ?? null,
@@ -691,7 +729,7 @@ it("restores the Agent, its one session, pending deliveries, open task and remin
   expect(page.agentWorkspace).toBe(d.workspace);
 });
 
-it("keeps an unknown command result and holds its Agent instead of replaying the command", async () => {
+it("keeps an unknown command result and automatically continues the original session without replay", async () => {
   const d = deployment();
   await populate(d);
   // The command the node began and could not finish: its own receipt settled at `unknown` when the
@@ -724,9 +762,9 @@ it("keeps an unknown command result and holds its Agent instead of replaying the
     // Both commands the checkpoint was taken for, on both sides, were read and accounted for.
     checkedOperations: 4,
     confirmed: 0,
-    holds: [{ agentId, reason: "operation_result_unproven" }],
+    holds: [],
   });
-  expect(report.released).not.toContain(agentId);
+  expect(report.released).toContain(agentId);
 
   // The node's own record is untouched: the same unknown, the same receipt, the same durable
   // version. Nothing reset it to `started` and nothing deleted it.
@@ -743,13 +781,13 @@ it("keeps an unknown command result and holds its Agent instead of replaying the
     node_receipt_confirmed: 0,
     node_receipt_revision: null,
   });
-  // The Agent is durably held, which is what keeps a new run from starting for it.
+  // Historical uncertainty does not leave a durable global hold.
   const holds = new Database(controlPlanePath(d), { readonly: true, fileMustExist: true });
   expect(
     holds
       .prepare("SELECT agent_id,reason FROM owner_agent_recovery_holds WHERE agent_id=?")
       .get(agentId),
-  ).toEqual({ agent_id: agentId, reason: "operation_result_unproven" });
+  ).toBeUndefined();
   holds.close();
 
   // Asking the node for that same operation again — which is what re-issuing the command would do —
@@ -781,8 +819,7 @@ it("keeps an unknown command result and holds its Agent instead of replaying the
   });
   expect(readNodeReceipt(d.paths.nodeDataDir, lateOperationId)).toBeUndefined();
 
-  // The restored control plane re-checks the unknown against the node's own record and starts no
-  // new run for the held Agent, even with a model credential in place.
+  // The restored control plane presents unknown facts before continuing the pending original input.
   const page = await openRestoredControlPlane(d);
   expect(await authorizeModel(page)).toBe(204);
   await delay(600);
@@ -792,5 +829,26 @@ it("keeps an unknown command result and holds its Agent instead of replaying the
         text.includes('"type":"control.process.reconcile"') && text.includes(unknownOperationId),
     ),
   ).toBe(true);
-  expect(page.messages.some((text) => text.includes('"type":"control.agent.run"'))).toBe(false);
+  const run = page.messages
+    .map((text) => JSON.parse(text))
+    .find((message) => message.type === "control.agent.run");
+  expect(run).toMatchObject({ agentId });
+  expect(page.agentWorkspace).toBe(d.workspace);
+  await page.app.nodes.receive(
+    page.socket,
+    JSON.stringify({
+      type: "node.agent.run.context",
+      requestId: randomUUID(),
+      runId: run.runId,
+      agentId,
+      cursor: 0,
+      limit: 100,
+    }),
+  );
+  const messages = JSON.parse(page.messages.at(-1)!).messages;
+  expect(JSON.stringify(messages)).toContain(unknownOperationId);
+  expect(JSON.stringify(messages)).toContain("仍可能运行");
+  expect(page.messages.some((text) => JSON.parse(text).type === "control.process.operation")).toBe(
+    false,
+  );
 });

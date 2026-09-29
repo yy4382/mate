@@ -1,3 +1,7 @@
+import {
+  queueUncertainOperationFacts,
+  parseHistory,
+} from "../control-plane/operation-recovery-context.js";
 import { AgentSession } from "../control-plane/agent-session.js";
 import Database from "better-sqlite3";
 import { createHash, createPrivateKey, createPublicKey } from "node:crypto";
@@ -133,13 +137,25 @@ export function reconcileCoordinatedState(
       nodeOperations: NodeRecoveryOperation[] = [],
       targets = new Map<string, OperationTarget>(),
       invalidReceiptAgents = new Map<string, string>(),
+      invalidNodeFacts: Array<{
+        agentId: string;
+        operationId: string;
+        request: unknown;
+        reason: string;
+      }> = [],
       invalidWorkspaceOperationIds = new Set<string>(),
       workspaceOperationAgents = new Map<string, string>();
     let unassociatedWorkspaceReceipt = false;
 
     for (const row of readProcessReceiptsChecked(processDb, processPath)) {
       const parsed = parseNodeProcessRequest(row);
-      if (!parsed) {
+      if (!parsed || !parseHistory(row.receipt).ok) {
+        invalidNodeFacts.push({
+          agentId: row.agent_id,
+          operationId: row.operation_id,
+          request: parseHistory(row.request).value,
+          reason: "node_receipt_identity_unproven",
+        });
         invalidReceiptAgents.set(row.agent_id, "node_receipt_identity_unproven");
         continue;
       }
@@ -148,6 +164,7 @@ export function reconcileCoordinatedState(
         agentId: row.agent_id,
         kind: parsed.kind,
         requestHash: row.request_hash,
+        request: parseJsonOrNull(row.request) ?? row.request,
         state: row.state,
         receipt: parseJsonOrNull(row.receipt),
         sequence: row.revision ?? 0,
@@ -174,13 +191,19 @@ export function reconcileCoordinatedState(
           unassociatedWorkspaceReceipt = true;
         continue;
       }
+      const normalized = normalizeWorkspaceReceipt(receipt.state, receipt.result);
+      if (receipt.state === "succeeded" && normalized === null) {
+        invalidReceiptAgents.set(receipt.agentId, "node_receipt_identity_unproven");
+        invalidWorkspaceOperationIds.add(receipt.operationId);
+        continue;
+      }
       nodeOperations.push({
         operationId: receipt.operationId,
         agentId: receipt.agentId,
         kind: "workspace",
         requestHash: receipt.requestHash,
         state: receipt.state === "executing" ? "started" : receipt.state,
-        receipt: normalizeWorkspaceReceipt(receipt.state, receipt.result),
+        receipt: normalized,
         sequence: receipt.revision,
       });
     }
@@ -201,6 +224,7 @@ export function reconcileCoordinatedState(
           agentId: row.agent_id,
           nodeId: row.node_id,
           requestHash,
+          request: parseJsonOrNull(row.request_json) ?? row.request_json,
           state: row.state,
           receiptConfirmed: row.node_receipt_confirmed === 1,
           nodeReceiptRevision: row.node_receipt_revision,
@@ -235,6 +259,8 @@ export function reconcileCoordinatedState(
       let envelope: Record<string, unknown>;
       try {
         envelope = JSON.parse(row.result_json) as Record<string, unknown>;
+        if (!envelope || typeof envelope !== "object" || Array.isArray(envelope))
+          throw new Error("Invalid envelope");
       } catch {
         invalidReceiptAgents.set(row.agent_id, "control_receipt_identity_unproven");
         continue;
@@ -261,6 +287,7 @@ export function reconcileCoordinatedState(
         targets,
         {
           kind: "workspace",
+          request: { operation: row.operation },
           operationId: envelope.operationId,
           agentId: row.agent_id,
           nodeId: nodeIdentity.id,
@@ -307,26 +334,61 @@ export function reconcileCoordinatedState(
     for (const agent of localAgentIds)
       if (!pairedNode || pairedNode.public_key !== nodeIdentity.publicKey)
         holds.set(agent, "node_identity_unproven");
-    for (const [agent, reason] of invalidReceiptAgents)
-      if (localAgentIds.includes(agent)) holds.set(agent, reason);
 
-    for (const receipt of nodeOperations) {
-      const owner = localById.get(receipt.agentId);
-      if (owner && owner.node_id !== nodeIdentity.id)
-        holds.set(receipt.agentId, "operation_node_identity_conflict");
-    }
+    for (const agentId of localAgentIds)
+      if (!controlPlane.prepare("SELECT 1 FROM owner_agent_sessions WHERE agent_id=?").get(agentId))
+        holds.set(agentId, "agent_session_unavailable");
 
     const confirmed = decision.confirmed;
     checkedOperations = nodeOperations.length + controlOperations.length;
     let applied = 0;
     controlPlane
       .transaction(() => {
+        const session = new AgentSession(controlPlane);
+        for (const fact of invalidNodeFacts)
+          if (localById.has(fact.agentId))
+            session.queueCorrection(
+              fact.agentId,
+              {
+                ...fact,
+                state: "unknown",
+                note: "历史证据无法核实；旧命令仍可能运行。不会自动重放。",
+              },
+              now(),
+            );
+        for (const fact of decision.uncertainties)
+          if (localById.has(fact.agentId))
+            session.queueCorrection(
+              fact.agentId,
+              {
+                ...fact,
+                state: "unknown",
+                note:
+                  fact.kind === "workspace"
+                    ? "历史文件效果无法确认；不会自动重放。由你决定检查、补救或继续。"
+                    : "旧命令仍可能运行；不会自动重放。由你决定检查、补救或继续。",
+              },
+              now(),
+            );
+        for (const [agent, reason] of invalidReceiptAgents)
+          if (localById.has(agent))
+            session.queueCorrection(
+              agent,
+              {
+                state: "unknown",
+                reason,
+                note: "部分历史操作信息无法解析；旧命令仍可能运行。不会自动重放；由你决定检查、补救或继续。",
+              },
+              now(),
+            );
         for (const receipt of confirmed) {
           const target = targets.get(key(receipt.kind, receipt.operationId));
           if (!target) continue;
           applyReceipt(controlPlane, target, receipt, now());
           applied++;
         }
+        for (const agentId of localAgentIds)
+          queueUncertainOperationFacts(controlPlane, agentId, now());
         const upsert = controlPlane.prepare(`
           INSERT INTO owner_agent_recovery_holds(agent_id,reason,updated_at) VALUES(?,?,?)
           ON CONFLICT(agent_id) DO UPDATE SET reason=excluded.reason,updated_at=excluded.updated_at
@@ -475,7 +537,7 @@ function readWorkspaceIntents(
 ): Array<Record<string, any>> {
   return database
     .prepare(
-      `SELECT action.agent_id,action.result_json,action.session_id,action.action_id,agent.node_id
+      `SELECT action.agent_id,action.operation,action.result_json,action.session_id,action.action_id,agent.node_id
     FROM owner_agent_tool_actions action JOIN owner_agents agent ON agent.id=action.agent_id
     WHERE agent.node_id=? AND action.operation LIKE 'workspace.%'`,
     )

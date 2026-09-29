@@ -115,9 +115,16 @@ export class LinuxWorkspaceExecutor {
   }
 
   /** Read only durable terminal evidence. A running operation is never waited on here. */
-  status(agentId: string, operationId: string): ExecutionResult | undefined {
+  status(agentId: string, operationId: string, requestHash?: string): ExecutionResult | undefined {
     const receipt = this.readReceipt(operationId);
     if (!receipt || receipt.agentId !== agentId || receipt.state === "executing") return undefined;
+    if (
+      receipt.operationId !== operationId ||
+      !["succeeded", "failed", "unknown"].includes(receipt.state)
+    )
+      throw new Error("Historical file receipt identity or state is invalid");
+    if (requestHash !== undefined && requestHash !== receipt.requestHash)
+      return failed("operation_unknown: Historical file request does not match the receipt");
     return receipt.result;
   }
 

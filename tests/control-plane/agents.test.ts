@@ -194,7 +194,7 @@ it("requires an existing provider key before changing the model and preserves th
   });
 });
 
-it("keeps a deactivated Agent stopped when node process stopping is unconfirmed", async () => {
+it("keeps manual pause until explicit resume, requires the original workspace, and allows unknown command results", async () => {
   const app = setup();
   const cookie = await login(app);
   const { id: nodeId, socket } = await pairNode(app, cookie);
@@ -225,11 +225,6 @@ it("keeps a deactivated Agent stopped when node process stopping is unconfirmed"
     pausedReason: "manual",
     stop: { state: "executing" },
   });
-  const resume = await app.request(`/api/owner/agents/${id}/resume`, {
-    method: "POST",
-    headers: { cookie },
-  });
-  expect(resume.status).toBe(409);
   expect(app.runs?.pauseReason(id)).toBe("manual");
   expect(app.agents.get(id)).toMatchObject({
     sessionId,
@@ -254,11 +249,11 @@ it("keeps a deactivated Agent stopped when node process stopping is unconfirmed"
       requestId: stopRequest.requestId,
       operationId: stopRequest.operationId,
       agentId: id,
-      state: "succeeded",
-      receipt: { stopped: true, units: [] },
+      state: "unknown",
+      receipt: { reason: "old_command_may_still_run" },
     }),
   );
-  for (let attempt = 0; attempt < 30 && app.runs?.stopStatus(id).state !== "succeeded"; attempt++)
+  for (let attempt = 0; attempt < 30 && app.runs?.stopStatus(id).state !== "unknown"; attempt++)
     await new Promise((resolve) => setTimeout(resolve, 10));
   const resuming = app.request(`/api/owner/agents/${id}/resume`, {
     method: "POST",
@@ -280,6 +275,29 @@ it("keeps a deactivated Agent stopped when node process stopping is unconfirmed"
   );
   expect((await resuming).status).toBe(409);
   expect(app.runs?.pauseReason(id)).toBe("manual");
+  const repaired = app.request(`/api/owner/agents/${id}/resume`, {
+    method: "POST",
+    headers: { cookie },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const retry = socket.sent
+    .map((text) => JSON.parse(text))
+    .filter((message) => message.type === "control.agent.provision")
+    .at(-1)!;
+  await app.nodes.receive(
+    socket,
+    JSON.stringify({
+      type: "node.agent.provision.result",
+      requestId: retry.requestId,
+      agentId: id,
+      ok: true,
+      identity,
+    }),
+  );
+  expect((await repaired).status).toBe(200);
+  expect(app.runs?.pauseReason(id)).toBeNull();
+  expect(app.runs?.stopStatus(id).state).toBe("unknown");
+  expect(app.agents.get(id)!.sessionId).toBe(sessionId);
 });
 
 it("reports an earlier command whose termination the node cannot confirm as unknown, not stopped", async () => {

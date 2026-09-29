@@ -1,3 +1,4 @@
+import { AgentSession } from "../../src/control-plane/agent-session.js";
 import Database from "better-sqlite3";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -74,6 +75,10 @@ function setup() {
         id === otherAgentId ? `/remote/${id}` : join(paths.agentHomeRoot, id),
         marker,
       );
+  for (const id of [agentId, secondLocalAgentId, otherAgentId])
+    owner.db
+      .prepare("INSERT INTO owner_agent_sessions(id,agent_id,created_at) VALUES(?,?,1)")
+      .run(id === agentId ? "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" : randomUUID(), id);
   owner.close();
   return { paths, node };
 }
@@ -217,9 +222,6 @@ function addWorkspaceReceipt(paths: ReturnType<typeof setup>["paths"], nodeId: s
     )
     .run(channelId, "Receipt channel");
   owner.db
-    .prepare("INSERT INTO owner_agent_sessions(id,agent_id,created_at) VALUES(?,?,1)")
-    .run(sessionId, agentId);
-  owner.db
     .prepare(
       `INSERT INTO owner_agent_tool_actions(
     session_id,action_id,agent_id,operation,request_hash,result_json,created_at
@@ -346,7 +348,7 @@ it("holds every Agent assigned to a node whose restored key no longer matches it
   control.close();
 });
 
-it("holds the Agent for a command whose node receipt never proved a result", () => {
+it("releases the Agent with durable uncertainty before continuing and deduplicates repeated maintenance", () => {
   const { paths, node } = setup();
   const finished = randomUUID(),
     started = randomUUID();
@@ -370,7 +372,7 @@ it("holds the Agent for a command whose node receipt never proved a result", () 
   });
   expect(result).toMatchObject({
     confirmed: 1,
-    holds: [{ agentId, reason: "operation_result_unproven" }],
+    holds: [],
   });
   const owner = new OwnerAuth({ dataDir: paths.controlPlaneDataDir });
   expect(
@@ -385,10 +387,33 @@ it("holds the Agent for a command whose node receipt never proved a result", () 
       .prepare("SELECT state FROM owner_agent_process_operations WHERE operation_id=?")
       .get(started),
   ).toEqual({ state: "executing" });
-  expect(owner.db.prepare("SELECT agent_id FROM owner_agent_recovery_holds").all()).toEqual([
-    { agent_id: agentId },
-  ]);
+  expect(owner.db.prepare("SELECT agent_id FROM owner_agent_recovery_holds").all()).toEqual([]);
+  const before = new AgentSession(owner.db).pendingCorrections(agentId, randomUUID());
+  expect(JSON.stringify(before)).toContain(started);
+  expect(JSON.stringify(before)).toContain("printf done");
+  expect(JSON.stringify(before)).toContain("仍可能运行");
+  reconcileCoordinatedState(paths, { lookupAgentIdentity: localIdentity, now: () => 400 });
+  expect(
+    new AgentSession(owner.db).pendingCorrections(agentId, randomUUID()).map((x) => x.id),
+  ).toEqual(before.map((x) => x.id));
+  const run = owner.db
+    .prepare("SELECT id,node_id FROM owner_agent_runs WHERE agent_id=? LIMIT 1")
+    .get(agentId) as { id: string; node_id: string };
+  owner.db.prepare("UPDATE owner_agent_runs SET state='running' WHERE id=?").run(run.id);
+  for (const entry of before)
+    expect(
+      new AgentSession(owner.db).append(run.id, run.node_id, agentId, {
+        kind: "message",
+        id: entry.id,
+        message: entry.message,
+      }),
+    ).toBe(true);
   owner.close();
+  reconcileCoordinatedState(paths, { lookupAgentIdentity: localIdentity, now: () => 500 });
+  const reopened = new OwnerAuth({ dataDir: paths.controlPlaneDataDir });
+  expect(new AgentSession(reopened.db).pendingCorrections(agentId, randomUUID())).toEqual([]);
+  expect(new AgentSession(reopened.db).read(agentId)).toHaveLength(before.length);
+  reopened.close();
 });
 
 it("persists a matching newer workspace receipt without decoding the business result as raw stdout", () => {
@@ -418,7 +443,7 @@ it("persists a matching newer workspace receipt without decoding the business re
   owner.close();
 });
 
-it("holds only the owning Agent when a stored workspace envelope has an invalid state", () => {
+it("preserves an unreadable workspace envelope without holding its Agent", () => {
   const { paths, node } = setup();
   addWorkspaceReceipt(paths, node.nodeId);
   const owner = new OwnerAuth({ dataDir: paths.controlPlaneDataDir });
@@ -440,11 +465,11 @@ it("holds only the owning Agent when a stored workspace envelope has an invalid 
     lookupAgentIdentity: localIdentity,
     now: () => 300,
   });
-  expect(result.holds).toEqual([{ agentId, reason: "control_receipt_identity_unproven" }]);
+  expect(result.holds).toEqual([]);
   expect(result.released).toContain(secondLocalAgentId);
 });
 
-it("holds only the operation owner when its named workspace receipt is malformed JSON", () => {
+it("preserves uncertainty when a named workspace receipt is malformed JSON", () => {
   const { paths, node } = setup();
   const operationId = addWorkspaceReceipt(paths, node.nodeId);
   writeFileSync(join(paths.nodeDataDir, "workspace-receipts", `${operationId}.json`), "{", {
@@ -455,11 +480,11 @@ it("holds only the operation owner when its named workspace receipt is malformed
     lookupAgentIdentity: localIdentity,
     now: () => 300,
   });
-  expect(result.holds).toEqual([{ agentId, reason: "node_receipt_identity_unproven" }]);
+  expect(result.holds).toEqual([]);
   expect(result.released).toContain(secondLocalAgentId);
 });
 
-it("holds a terminal command result when the node checkpoint has no receipt for it", () => {
+it("keeps a missing node receipt unknown without holding its Agent", () => {
   const { paths, node } = setup();
   const operationId = randomUUID();
   addCommandOperation(
@@ -477,6 +502,74 @@ it("holds a terminal command result when the node checkpoint has no receipt for 
     lookupAgentIdentity: localIdentity,
     now: () => 300,
   });
-  expect(result.holds).toEqual([{ agentId, reason: "node_receipt_unavailable" }]);
-  expect(result.released).not.toContain(agentId);
+  expect(result.holds).toEqual([]);
+  expect(result.released).toContain(agentId);
+});
+
+it("keeps real workspace damage blocked, then releases after repair without clearing manual pause", () => {
+  const { paths } = setup();
+  const owner = new OwnerAuth({ dataDir: paths.controlPlaneDataDir });
+  owner.db
+    .prepare(
+      "INSERT INTO owner_agent_run_control(agent_id,paused_reason,updated_at) VALUES(?,'manual',1)",
+    )
+    .run(agentId);
+  owner.close();
+  const damaged = reconcileCoordinatedState(paths, {
+    lookupAgentIdentity: (id, root) => ({
+      ...localIdentity(id, root),
+      workspaceMarker: id === agentId ? "bad" : "a".repeat(64),
+    }),
+  });
+  expect(damaged.holds).toEqual([{ agentId, reason: "agent_identity_unproven" }]);
+  const repaired = reconcileCoordinatedState(paths, { lookupAgentIdentity: localIdentity });
+  expect(repaired.holds).toEqual([]);
+  expect(repaired.released).toContain(agentId);
+  const reopened = new OwnerAuth({ dataDir: paths.controlPlaneDataDir });
+  expect(
+    reopened.db
+      .prepare("SELECT paused_reason FROM owner_agent_run_control WHERE agent_id=?")
+      .get(agentId),
+  ).toEqual({ paused_reason: "manual" });
+  reopened.close();
+});
+
+it("retains malformed control history including null envelopes as facts without blocking maintenance", () => {
+  const { paths, node } = setup();
+  const operationId = addWorkspaceReceipt(paths, node.nodeId);
+  const owner = new OwnerAuth({ dataDir: paths.controlPlaneDataDir });
+  owner.db
+    .prepare("UPDATE owner_agent_tool_actions SET result_json='null' WHERE agent_id=?")
+    .run(agentId);
+  owner.close();
+  const report = reconcileCoordinatedState(paths, { lookupAgentIdentity: localIdentity });
+  expect(report.holds).toEqual([]);
+  const reopened = new OwnerAuth({ dataDir: paths.controlPlaneDataDir });
+  const pending = new AgentSession(reopened.db).pendingCorrections(agentId, randomUUID());
+  expect(JSON.stringify(pending)).toContain(operationId);
+  expect(JSON.stringify(pending)).toContain("historical_information_unreadable");
+  reopened.close();
+});
+
+it("reports an unavailable original session and releases only after that same session is restored", () => {
+  const { paths } = setup();
+  const owner = new OwnerAuth({ dataDir: paths.controlPlaneDataDir });
+  const session = owner.db
+    .prepare("SELECT * FROM owner_agent_sessions WHERE agent_id=?")
+    .get(agentId) as { id: string };
+  owner.db.prepare("DELETE FROM owner_agent_sessions WHERE agent_id=?").run(agentId);
+  owner.close();
+  const missing = reconcileCoordinatedState(paths, { lookupAgentIdentity: localIdentity });
+  expect(missing.holds).toEqual([{ agentId, reason: "agent_session_unavailable" }]);
+  const repair = new OwnerAuth({ dataDir: paths.controlPlaneDataDir });
+  expect(
+    repair.db.prepare("SELECT id FROM owner_agent_sessions WHERE agent_id=?").get(agentId),
+  ).toBeUndefined();
+  repair.db
+    .prepare("INSERT INTO owner_agent_sessions(id,agent_id,created_at) VALUES(?,?,1)")
+    .run(session.id, agentId);
+  repair.close();
+  expect(reconcileCoordinatedState(paths, { lookupAgentIdentity: localIdentity }).holds).toEqual(
+    [],
+  );
 });

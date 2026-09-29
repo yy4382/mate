@@ -501,7 +501,7 @@ const requiredNodeState: Record<string, readonly string[]> = {
  * be taken as if it had ended.
  *
  * A `succeeded`/`failed`/`unknown` row is settled evidence and never blocks a checkpoint: the
- * unknown results are the ones the owner reviews, and refusing to back up until every past unknown
+ * unknown results remain available to the Agent, and refusing to back up until every past unknown
  * is resolved would make recovery impossible.
  */
 export function unsettledNodeCommands(nodeDataDir: string): number {

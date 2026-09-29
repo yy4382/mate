@@ -97,10 +97,10 @@ it("reconciles before resuming and cannot manually clear an unresolved Agent hol
   const calls: string[] = [];
   const report = await reconcileDuringMaintenance(services(calls), () => {
     calls.push("reconcile");
-    return { released: [], holds: [{ agentId: "agent-1", reason: "operation_result_unproven" }] };
+    return { released: [], holds: [{ agentId: "agent-1", reason: "agent_identity_unproven" }] };
   });
   expect(calls).toEqual(["stop", "reconcile", "resume"]);
-  expect(report.holds).toEqual([{ agentId: "agent-1", reason: "operation_result_unproven" }]);
+  expect(report.holds).toEqual([{ agentId: "agent-1", reason: "agent_identity_unproven" }]);
 });
 
 it("does not switch versions and resumes the prior services when checkpoint creation fails", async () => {
@@ -189,21 +189,21 @@ it("confirms both services stopped when a partial-stop recovery cannot restore s
   expect(existsSync(f.checkpoint)).toBe(false);
 });
 
-it("releases only after a fresh reconciliation proves the Agent's identity and receipts", async () => {
+it("releases only after a fresh reconciliation proves the Agent identity", async () => {
   let checks = 0;
   const report = () => {
     checks++;
     return {
       released: ["22222222-2222-4222-8222-222222222222"],
       holds: [
-        { agentId: "11111111-1111-4111-8111-111111111111", reason: "operation_result_unproven" },
+        { agentId: "11111111-1111-4111-8111-111111111111", reason: "agent_identity_unproven" },
       ],
     };
   };
   await expect(
     releaseAgentAfterReconciliation("11111111-1111-4111-8111-111111111111", report),
   ).rejects.toThrow(
-    "Agent 11111111-1111-4111-8111-111111111111 remains held: operation_result_unproven",
+    "Agent 11111111-1111-4111-8111-111111111111 remains held: agent_identity_unproven",
   );
   expect(checks).toBe(1);
 });

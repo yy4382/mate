@@ -1,5 +1,5 @@
 import { durableToolIdentity } from "../nodes/session-record.js";
-import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
 import type {
   ModelContextMessage,
@@ -101,18 +101,36 @@ export class AgentSession {
   }
 
   /** A restored receipt is pending information until a model actually consumes it. */
-  queueCorrection(agentId: string, result: unknown, timestamp: number): void {
-    this.db
-      .prepare("INSERT INTO owner_agent_session_updates(id,agent_id,message_json) VALUES(?,?,?)")
-      .run(
-        randomUUID(),
-        agentId,
-        JSON.stringify({
-          role: "user",
-          content: `Mate 收据更正：${JSON.stringify(result)}`,
-          timestamp,
-        }),
+  queueCorrection(agentId: string, result: unknown, timestamp: number): boolean {
+    // The immutable transcript retains this identity even after the pending update is consumed
+    // or compacted. Time is presentation metadata, never part of a recovery fact's identity.
+    const canonical = (value: unknown): unknown => {
+      if (Array.isArray(value)) return value.map(canonical);
+      if (value === null || typeof value !== "object") return value;
+      return Object.fromEntries(
+        Object.entries(value)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([key, child]) => [key, canonical(child)]),
       );
+    };
+    const fact = JSON.stringify(canonical(result));
+    const hex = createHash("sha256")
+      .update(agentId + "\0" + fact)
+      .digest("hex");
+    const id = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+    return (
+      this.db
+        .prepare(
+          `INSERT OR IGNORE INTO owner_agent_session_updates(id,agent_id,message_json)
+      SELECT ?,?,? WHERE NOT EXISTS (SELECT 1 FROM owner_agent_session_records WHERE id=?)`,
+        )
+        .run(
+          id,
+          agentId,
+          JSON.stringify({ role: "user", content: `Mate 收据更正：${fact}`, timestamp }),
+          id,
+        ).changes > 0
+    );
   }
 
   pendingCorrections(agentId: string, actionScopeId: string): ModelContextMessage[] {

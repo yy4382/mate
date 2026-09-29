@@ -1,3 +1,4 @@
+import { parseHistory } from "./operation-recovery-context.js";
 import { isDeepStrictEqual } from "node:util";
 import { defineAgentTool, type AgentToolContext } from "./agent-tool-entry.js";
 import { AgentSession } from "./agent-session.js";
@@ -167,6 +168,7 @@ export class AgentProcessOperationBroker {
     if (operationId !== deriveAgentProcessOperationId(agentId, stableActionId))
       throw new Error("Agent process operation ID does not match its stable action identity");
 
+    let created = false;
     const row = this.database
       .transaction(() => {
         const existing = this.read(operationId);
@@ -177,18 +179,11 @@ export class AgentProcessOperationBroker {
             existing.request_hash !== requestHash
           )
             throw new Error("Agent process operation identity conflict");
-          if (existing.state === "succeeded" || existing.state === "failed") return existing;
-          // Preserve a previously proven node version while asking the node for the same
-          // idempotent operation again. A late older response must not erase that version.
-          if (existing.node_receipt_confirmed === 0) {
-            this.database
-              .prepare(
-                "UPDATE owner_agent_process_operations SET state='executing',node_receipt_confirmed=0,node_receipt_revision=NULL,updated_at=? WHERE operation_id=? AND state='unknown'",
-              )
-              .run(this.now(), operationId);
-          }
-          return this.read(operationId)!;
+          // A persisted intent may already have taken effect, even if the node lost its receipt.
+          // Only the invocation that created it may dispatch; recovery only reads facts.
+          return existing;
         }
+        created = true;
         this.database
           .prepare(
             `INSERT INTO owner_agent_process_operations(
@@ -222,6 +217,7 @@ export class AgentProcessOperationBroker {
     if (row.state === "succeeded" || row.state === "failed") return toResult(row);
     const active = this.inFlight.get(operationId);
     if (active) return active;
+    if (!created) return toResult(row);
     const dispatch = committed.then(() =>
       this.dispatch(nodeId, { operationId, agentId, operation }),
     );
@@ -256,26 +252,35 @@ export class AgentProcessOperationBroker {
     )
       return { corrected: false };
     const incomingRevision = validRevision(result.revision);
-    if (
-      (row.state === "succeeded" || row.state === "failed") &&
-      (incomingRevision === undefined ||
-        row.node_receipt_revision === null ||
-        incomingRevision <= row.node_receipt_revision)
-    )
-      return { corrected: false, result: toResult(row) };
-    if (
+    const changed =
+      row.state !== result.state ||
+      !isDeepStrictEqual(parseHistory(row.receipt_json).value, result.receipt);
+    const stale =
+      row.node_receipt_revision !== null &&
+      incomingRevision !== undefined &&
+      incomingRevision < row.node_receipt_revision;
+    const notNewer =
       row.node_receipt_confirmed === 1 &&
       row.node_receipt_revision !== null &&
-      (incomingRevision === undefined || incomingRevision <= row.node_receipt_revision)
-    )
+      (incomingRevision === undefined || incomingRevision <= row.node_receipt_revision);
+    const unversionedTerminal =
+      ["succeeded", "failed"].includes(row.state) && row.node_receipt_revision === null;
+    if (notNewer || unversionedTerminal) {
+      if (changed)
+        new AgentSession(this.database).queueCorrection(
+          row.agent_id,
+          {
+            operationId: row.operation_id,
+            state: "unknown",
+            request: parseHistory(row.request_json).value,
+            reason: stale ? "node_receipt_stale" : "operation_result_conflict",
+            evidence: result.receipt,
+            note: "历史收据冲突，不能据此改写已见结果；旧命令仍可能运行。不会自动重放。",
+          },
+          this.now(),
+        );
       return { corrected: false, result: toResult(row) };
-    if (
-      result.state === "unknown" &&
-      row.state === "unknown" &&
-      row.node_receipt_confirmed === 1 &&
-      incomingRevision === undefined
-    )
-      return { corrected: false, result: toResult(row) };
+    }
     let applied = false;
     this.database
       .transaction(() => {
@@ -312,17 +317,13 @@ export class AgentProcessOperationBroker {
           detail: { state: result.state, receipt: result.receipt },
           at: this.now(),
         });
-        if (
-          (row.state === "unknown" || row.state === "succeeded" || row.state === "failed") &&
-          result.state !== row.state &&
-          result.state !== "unknown"
-        )
+        if (changed && result.state !== "unknown")
           onCorrection?.(row.agent_id, row.operation_id, result.state);
       })
       .immediate();
     const latest = this.read(result.operationId)!;
     return {
-      corrected: applied && result.state !== row.state && result.state !== "unknown",
+      corrected: applied && changed && result.state !== "unknown",
       result: toResult(latest),
     };
   }
@@ -401,11 +402,20 @@ export class AgentProcessOperationBroker {
 }
 
 function toResult(row: OperationRow): AgentProcessOperationResult {
+  const receipt = parseHistory(row.receipt_json),
+    request = parseHistory(row.request_json);
+  const operation =
+    request.value && typeof request.value === "object" && "operation" in request.value
+      ? request.value.operation
+      : undefined;
+  const readable = receipt.ok && agentProcessOperationSchema.safeParse(operation).success;
   return {
     operationId: row.operation_id,
     agentId: row.agent_id,
-    state: row.state,
-    receipt: row.receipt_json === null ? null : JSON.parse(row.receipt_json),
+    state: readable ? row.state : "unknown",
+    receipt: readable
+      ? receipt.value
+      : { reason: "historical_information_unreadable", evidence: receipt.value },
   };
 }
 

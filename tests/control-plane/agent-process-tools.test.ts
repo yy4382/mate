@@ -178,117 +178,210 @@ async function sendTool(
   );
 }
 
-it("marks a committed process intent unknown before a recovered node can start another run", async () => {
-  const { app, cookie, db, nodeId, socket, keyPair } = await setup();
-  const agentId = randomUUID();
-  app.agents.prepare({
-    id: agentId,
-    nodeId,
-    name: "Missing receipt",
-    role: "Process recovery",
-    description: "Committed intent without dispatch",
-    model: { provider: "openai", id: "gpt-4.1" },
-  });
-  app.agents.complete(
-    agentId,
-    {
-      username: `mate_${agentId.replaceAll("-", "").slice(0, 27)}`,
-      uid: 23003,
-      gid: 23003,
-      workspace: `/var/lib/mate/agents/${agentId}`,
-      workspaceMarker: "a".repeat(64),
-    },
-    app.chat,
-  );
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  await app.request("/api/owner/model-credentials/openai", {
-    method: "PUT",
-    headers: { cookie, "content-type": "application/json" },
-    body: JSON.stringify({ apiKey: "synthetic-key" }),
-  });
-  const start = socket.sent.length;
-  app.chat.createMessage(direct.id, "Run a command once.");
-  const run = await waitForRun(socket, start);
-  const actionId = `mate:${run.actionScopeId}:${"f".repeat(64)}:1`,
-    operationId = deriveAgentProcessOperationId(agentId, actionId),
-    at = Date.now();
-  db.prepare(
-    `INSERT INTO owner_agent_process_operations(
+it.each(["restart", "reconnect", "conflicting receipt", "malformed workspace"])(
+  "continues the same session without new input after %s and presents uncertainty first",
+  async (mode) => {
+    const { app, cookie, db, nodeId, socket, keyPair } = await setup();
+    const agentId = randomUUID();
+    app.agents.prepare({
+      id: agentId,
+      nodeId,
+      name: "Missing receipt",
+      role: "Process recovery",
+      description: "Committed intent without dispatch",
+      model: { provider: "openai", id: "gpt-4.1" },
+    });
+    app.agents.complete(
+      agentId,
+      {
+        username: `mate_${agentId.replaceAll("-", "").slice(0, 27)}`,
+        uid: 23003,
+        gid: 23003,
+        workspace: `/var/lib/mate/agents/${agentId}`,
+        workspaceMarker: "a".repeat(64),
+      },
+      app.chat,
+    );
+    const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+    await app.request("/api/owner/model-credentials/openai", {
+      method: "PUT",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ apiKey: "synthetic-key" }),
+    });
+    const start = socket.sent.length;
+    app.chat.createMessage(direct.id, "Run a command once.");
+    const run = await waitForRun(socket, start);
+    const actionId = `mate:${run.actionScopeId}:${"f".repeat(64)}:1`,
+      operationId = deriveAgentProcessOperationId(agentId, actionId),
+      at = Date.now();
+    db.prepare(
+      `INSERT INTO owner_agent_process_operations(
     operation_id,run_id,agent_id,node_id,
     request_hash,request_json,state,created_at,updated_at
   ) VALUES(?,?,?,?,?,?,'executing',?,?)`,
-  ).run(
-    operationId,
-    run.runId,
-    agentId,
-    nodeId,
-    "f".repeat(64),
-    JSON.stringify({
-      actionScopeId: run.actionScopeId,
-      stableActionId: actionId,
-      nodeId,
+    ).run(
+      operationId,
+      run.runId,
       agentId,
-      operation: { kind: "exec", command: "true" },
-    }),
-    at,
-    at,
-  );
-  app.runs?.close(); // The original control-plane process crashed before dispatch.
-  const directory = fixtures.at(-1)!.directory;
-  const restarted = createControlPlaneApp({
-    dataDir: join(directory, "control-plane"),
-    passwordFile: join(directory, "owner-password"),
-  });
-  try {
-    const recovered = new FakeNodeSocket();
-    restarted.nodes.open(recovered);
-    const challenge = JSON.parse(recovered.sent[0]!) as { nonce: string };
-    await restarted.nodes.receive(
-      recovered,
+      nodeId,
+      "f".repeat(64),
       JSON.stringify({
-        type: "node.authenticate",
-        requestId: randomUUID(),
+        actionScopeId: run.actionScopeId,
+        stableActionId: actionId,
         nodeId,
-        signature: sign(null, Buffer.from(challenge.nonce), keyPair.privateKey).toString(
-          "base64url",
-        ),
+        agentId,
+        operation: { kind: "exec", command: "true" },
       }),
+      at,
+      at,
     );
-    const reconcile = recovered.sent
-      .map((text) => JSON.parse(text) as Record<string, unknown>)
-      .find((message) => message.type === "control.process.reconcile")!;
-    expect(reconcile).toMatchObject({ operations: [{ operationId, agentId }] });
-    expect(recovered.sent.some((text) => text.includes('"type":"control.agent.run"'))).toBe(false);
-    await restarted.nodes.receive(
-      recovered,
-      JSON.stringify({
-        type: "node.process.reconcile.result",
-        requestId: reconcile.requestId,
-        receipts: [],
-      }),
-    );
-    expect(
-      db
-        .prepare("SELECT state FROM owner_agent_process_operations WHERE operation_id=?")
-        .get(operationId),
-    ).toEqual({ state: "unknown" });
+    if (mode === "malformed workspace")
+      db.prepare(
+        `INSERT INTO owner_agent_tool_actions
+    (session_id,action_id,agent_id,operation,request_hash,result_json,created_at)
+    VALUES(?,?,?,'workspace.write_file',?,'{',?)`,
+      ).run(run.sessionId, "broken-file-action", agentId, "b".repeat(64), at);
+    if (mode === "reconnect") app.nodes.close(socket);
+    else app.runs?.close(); // The original control-plane process crashed before dispatch.
+    const directory = fixtures.at(-1)!.directory;
+    const restarted =
+      mode === "reconnect"
+        ? app
+        : createControlPlaneApp({
+            dataDir: join(directory, "control-plane"),
+            passwordFile: join(directory, "owner-password"),
+          });
+    try {
+      const recovered = new FakeNodeSocket();
+      restarted.nodes.open(recovered);
+      const challenge = JSON.parse(recovered.sent[0]!) as { nonce: string };
+      await restarted.nodes.receive(
+        recovered,
+        JSON.stringify({
+          type: "node.authenticate",
+          requestId: randomUUID(),
+          nodeId,
+          signature: sign(null, Buffer.from(challenge.nonce), keyPair.privateKey).toString(
+            "base64url",
+          ),
+        }),
+      );
+      const reconcile = recovered.sent
+        .map((text) => JSON.parse(text) as Record<string, unknown>)
+        .find((message) => message.type === "control.process.reconcile")!;
+      expect(reconcile).toMatchObject({ operations: [{ operationId, agentId }] });
+      expect(recovered.sent.some((text) => text.includes('"type":"control.agent.run"'))).toBe(
+        false,
+      );
+      await restarted.nodes.receive(
+        recovered,
+        JSON.stringify({
+          type: "node.process.reconcile.result",
+          requestId: reconcile.requestId,
+          receipts:
+            mode === "conflicting receipt"
+              ? [
+                  {
+                    operationId,
+                    agentId: randomUUID(),
+                    state: "succeeded",
+                    receipt: { code: 0 },
+                    revision: 2,
+                  },
+                ]
+              : [],
+        }),
+      );
+      expect(
+        db
+          .prepare("SELECT state FROM owner_agent_process_operations WHERE operation_id=?")
+          .get(operationId),
+      ).toEqual({ state: "unknown" });
 
-    expect(db.prepare("SELECT error_code FROM owner_agent_runs WHERE id=?").get(run.runId)).toEqual(
-      { error_code: "interrupted" },
-    );
-    expect(
-      db
-        .prepare(
-          "SELECT COUNT(*) AS count FROM owner_agent_activity WHERE kind='run.interrupted' AND reference_id=?",
-        )
-        .get(run.runId),
-    ).toEqual({ count: 1 });
-    const next = await waitForRun(recovered, 0);
-    expect(next.runId).not.toBe(run.runId);
-  } finally {
-    restarted.close();
-  }
-});
+      expect(
+        db.prepare("SELECT error_code FROM owner_agent_runs WHERE id=?").get(run.runId),
+      ).toEqual({ error_code: "interrupted" });
+      expect(
+        db
+          .prepare(
+            "SELECT COUNT(*) AS count FROM owner_agent_activity WHERE kind='run.interrupted' AND reference_id=?",
+          )
+          .get(run.runId),
+      ).toEqual({ count: 1 });
+      const next = await waitForRun(recovered, 0);
+      expect(next.runId).not.toBe(run.runId);
+      expect(next.sessionId).toBe(run.sessionId);
+      await restarted.nodes.receive(
+        recovered,
+        JSON.stringify({
+          type: "node.agent.run.context",
+          requestId: randomUUID(),
+          runId: next.runId,
+          agentId,
+          cursor: 0,
+          limit: 100,
+        }),
+      );
+      const context = JSON.parse(recovered.sent.at(-1)!);
+      expect(JSON.stringify(context.messages)).toContain(operationId);
+      expect(JSON.stringify(context.messages)).toContain(
+        mode === "conflicting receipt"
+          ? "node_receipt_identity_conflict"
+          : "no_durable_node_receipt",
+      );
+      expect(JSON.stringify(context.messages)).toContain("仍可能运行");
+      expect(JSON.stringify(context.messages)).toContain("true");
+      expect(
+        recovered.sent.some((text) => JSON.parse(text).type === "control.process.operation"),
+      ).toBe(false);
+      if (mode === "malformed workspace") {
+        expect(JSON.stringify(context.messages)).toContain("broken-file-action");
+        expect(JSON.stringify(context.messages)).toContain("historical_information_unreadable");
+      }
+      const corrections = context.messages.filter(
+        (entry: { message: { content: unknown } }) =>
+          typeof entry.message.content === "string" &&
+          entry.message.content.startsWith("Mate 收据更正："),
+      );
+      for (const entry of corrections)
+        await restarted.nodes.receive(
+          recovered,
+          JSON.stringify({
+            type: "node.agent.run.transcript",
+            requestId: entry.id,
+            runId: next.runId,
+            agentId,
+            entry: { kind: "message", id: entry.id, message: entry.message },
+          }),
+        );
+      await restarted.nodes.receive(
+        recovered,
+        JSON.stringify({
+          type: "node.agent.run.context",
+          requestId: randomUUID(),
+          runId: next.runId,
+          agentId,
+          cursor: 0,
+          limit: 100,
+        }),
+      );
+      const consumed = JSON.parse(recovered.sent.at(-1)!);
+      expect(
+        consumed.messages.filter((entry: { id: string }) =>
+          corrections.some((fact: { id: string }) => fact.id === entry.id),
+        ),
+      ).toHaveLength(corrections.length);
+      expect(
+        consumed.messages.filter(
+          (entry: { id: string; pending?: boolean }) =>
+            entry.pending && corrections.some((fact: { id: string }) => fact.id === entry.id),
+        ),
+      ).toHaveLength(0);
+    } finally {
+      restarted.close();
+    }
+  },
+);
 
 it("rechecks stopped scopes after a restarted node confirms an ordinary operation remains unknown", async () => {
   const { app, cookie, db, nodeId, socket, keyPair } = await setup();
@@ -365,7 +458,7 @@ it("rechecks stopped scopes after a restarted node confirms an ordinary operatio
   );
   await waitFor(() => app.runs?.stopStatus(agentId).state === "unknown");
   expect(app.runs?.stopStatus(agentId).receipt).toEqual({ reason: "pending_process_receipts" });
-  expect((await app.runs?.resumeAgent(agentId))?.ok).toBe(false);
+  expect(app.runs?.pauseReason(agentId)).toBe("manual");
 
   app.nodes.close(socket);
   const reconnect = new FakeNodeSocket();
@@ -385,8 +478,8 @@ it("rechecks stopped scopes after a restarted node confirms an ordinary operatio
     .find((message) => message.type === "control.process.reconcile")!;
   expect(reconcile.operations).toEqual(
     expect.arrayContaining([
-      { operationId, agentId },
-      { operationId: firstStop.operationId, agentId },
+      expect.objectContaining({ operationId, agentId }),
+      expect.objectContaining({ operationId: firstStop.operationId, agentId }),
     ]),
   );
   await app.nodes.receive(
@@ -434,11 +527,11 @@ it("rechecks stopped scopes after a restarted node confirms an ordinary operatio
       requestId: secondStop.requestId,
       operationId: secondStop.operationId,
       agentId,
-      state: "succeeded",
-      receipt: { stopped: true, units: [] },
+      state: "unknown",
+      receipt: { reason: "old_command_may_still_run" },
     }),
   );
-  await waitFor(() => app.runs?.stopStatus(agentId).state === "succeeded");
+  await waitFor(() => app.runs?.stopStatus(agentId).state === "unknown");
   const resuming = app.runs!.resumeAgent(agentId);
   await waitFor(() =>
     reconnect.sent.some(
@@ -823,7 +916,7 @@ it("reconciles a durable node receipt before resuming a disconnected Agent", asy
   const reconcile = reconnect.sent
     .map((text) => JSON.parse(text) as Record<string, unknown>)
     .find((message) => message.type === "control.process.reconcile")!;
-  expect(reconcile.operations).toEqual([{ operationId: operation!.operationId, agentId }]);
+  expect(reconcile.operations).toMatchObject([{ operationId: operation!.operationId, agentId }]);
   expect(reconnect.sent.some((text) => text.includes('control.agent.run"'))).toBe(false);
   await app.nodes.receive(
     reconnect,
@@ -953,7 +1046,11 @@ it("reconciles a durable node receipt before resuming a disconnected Agent", asy
   const secondSync = again.sent
     .map((text) => JSON.parse(text) as Record<string, unknown>)
     .find((message) => message.type === "control.process.reconcile")!;
-  expect(secondSync.operations).toEqual([{ operationId: secondOperation!.operationId, agentId }]);
+  expect(secondSync.operations).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ operationId: secondOperation!.operationId, agentId }),
+    ]),
+  );
   await app.nodes.receive(
     again,
     JSON.stringify({
@@ -1023,11 +1120,6 @@ it("reconciles a durable node receipt before resuming a disconnected Agent", asy
     operation: unknown;
   };
   const replayStart = again.sent.length;
-  // Keep the saved execution boundary active while exercising the broker's direct response path.
-  db.prepare(
-    "UPDATE owner_agent_runs SET state='completed' WHERE agent_id=? AND state='running' AND id<>?",
-  ).run(agentId, stored.run_id);
-  db.prepare("UPDATE owner_agent_runs SET state='running' WHERE id=?").run(stored.run_id);
   const replay = app.runs!.processOperations.execute({
     runId: stored.run_id,
     nodeId,
@@ -1037,28 +1129,11 @@ it("reconciles a durable node receipt before resuming a disconnected Agent", asy
     operationId: secondOperation!.operationId as string,
     operation: originalRequest.operation,
   });
-  let replayOperation: Record<string, unknown> | undefined;
-  const replayDeadline = Date.now() + 3000;
-  while (!replayOperation && Date.now() < replayDeadline) {
-    replayOperation = again.sent
+  expect(
+    again.sent
       .slice(replayStart)
-      .map((text) => JSON.parse(text) as Record<string, unknown>)
-      .find((message) => message.type === "control.process.operation");
-    if (!replayOperation) await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  expect(replayOperation).toBeDefined();
-  await app.nodes.receive(
-    again,
-    JSON.stringify({
-      type: "node.process.operation.result",
-      requestId: replayOperation!.requestId,
-      operationId: secondOperation!.operationId,
-      agentId,
-      state: "failed",
-      receipt: { code: 1 },
-      revision: 2,
-    }),
-  );
+      .some((text) => JSON.parse(text).type === "control.process.operation"),
+  ).toBe(false);
   expect(await replay).toMatchObject({ state: "unknown", receipt: { code: 0 } });
   expect(
     db

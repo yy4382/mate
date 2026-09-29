@@ -1,3 +1,4 @@
+import { AgentSession, agentSessionSchema } from "../../src/control-plane/agent-session.js";
 import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import { expect, it, vi } from "vitest";
@@ -19,6 +20,7 @@ function setup() {
     CREATE TABLE owner_agent_activity(seq INTEGER PRIMARY KEY,agent_id TEXT,node_id TEXT,kind TEXT,reference_id TEXT,summary TEXT,detail_json TEXT,created_at INTEGER);
   `);
   database.exec(agentProcessOperationsSchema);
+  database.exec(agentSessionSchema);
   const nodeId = randomUUID(),
     agentId = randomUUID(),
     runId = randomUUID(),
@@ -93,7 +95,7 @@ it("commits the control-plane intent before dispatch and reuses its terminal rec
   }
 });
 
-it("keeps an unknown intent and reconciles it with the same node operation ID", async () => {
+it("keeps an unknown intent without dispatching it again and accepts a late receipt", async () => {
   const context = setup(),
     operation = { kind: "exec" as const, command: "touch once", cwd: "." },
     dispatch = vi
@@ -110,11 +112,15 @@ it("keeps an unknown intent and reconciles it with the same node operation ID", 
     });
   try {
     expect(await broker.execute({ ...context, operation })).toMatchObject({ state: "unknown" });
-    expect(await broker.execute({ ...context, operation })).toMatchObject({ state: "succeeded" });
-    expect(dispatch.mock.calls.map((call) => call[1].operationId)).toEqual([
-      context.operationId,
-      context.operationId,
-    ]);
+    expect(await broker.execute({ ...context, operation })).toMatchObject({ state: "unknown" });
+    expect(dispatch).toHaveBeenCalledOnce();
+    broker.reconcile(context.nodeId, {
+      operationId: context.operationId,
+      agentId: context.agentId,
+      state: "succeeded",
+      receipt: { code: 0 },
+      revision: 2,
+    });
     expect(
       context.database
         .prepare("SELECT state FROM owner_agent_process_operations WHERE operation_id=?")
@@ -215,4 +221,58 @@ it("derives safe scope IDs only from delivery-scoped normalized tool identities"
     deriveAgentProcessOperationId(randomUUID(), stableActionId),
   );
   expect(() => deriveAgentProcessOperationId(agentId, "model chose this id")).toThrow();
+});
+
+it("appends changed late receipt facts even with the same terminal state and preserves conflicts as uncertainty", async () => {
+  const context = setup();
+  const broker = new AgentProcessOperationBroker(context.database, {
+    executeAgentProcessOperation: async () => ({
+      operationId: context.operationId,
+      agentId: context.agentId,
+      state: "succeeded",
+      receipt: { stdout: "partial" },
+      revision: 1,
+    }),
+  });
+  try {
+    await broker.execute({
+      ...context,
+      operation: { kind: "exec", command: "echo once", cwd: "." },
+    });
+    const notify = vi.fn();
+    const late = {
+      operationId: context.operationId,
+      agentId: context.agentId,
+      state: "succeeded" as const,
+      receipt: { stdout: "complete" },
+      revision: 2,
+    };
+    expect(broker.reconcile(context.nodeId, late, notify).corrected).toBe(true);
+    expect(notify).toHaveBeenCalledOnce();
+    broker.reconcile(context.nodeId, late, notify);
+    expect(notify).toHaveBeenCalledOnce();
+    broker.reconcile(context.nodeId, { ...late, receipt: { stdout: "conflict" } }, notify);
+    expect(broker.status(context.agentId, context.operationId)?.receipt).toEqual({
+      stdout: "complete",
+    });
+    expect(
+      JSON.stringify(
+        new AgentSession(context.database).pendingCorrections(
+          context.agentId,
+          context.actionScopeId,
+        ),
+      ),
+    ).toContain("operation_result_conflict");
+    context.database
+      .prepare("UPDATE owner_agent_process_operations SET receipt_json='{' WHERE operation_id=?")
+      .run(context.operationId);
+    expect(
+      await broker.execute({
+        ...context,
+        operation: { kind: "exec", command: "echo once", cwd: "." },
+      }),
+    ).toMatchObject({ state: "unknown" });
+  } finally {
+    context.database.close();
+  }
 });

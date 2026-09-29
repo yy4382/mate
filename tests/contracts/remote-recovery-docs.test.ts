@@ -5,14 +5,12 @@ import { expect, it } from "vitest";
 const operations = readFileSync(resolve("docs/OPERATIONS.md"), "utf8"),
   configuration = readFileSync(resolve("docs/CONFIGURATION.md"), "utf8");
 
-it("documents the limited remote receipt query and a manual hold path for separate-time restores", () => {
+it("documents limited remote receipt queries and automatic continuation after identity verification", () => {
   expect(operations).toContain("控制面只会向节点查询控制面已知");
   expect(operations).toContain("不会枚举节点收据来发现只存在于较新节点检查点中的额外操作");
-  expect(operations).toContain("先在控制面网页的 Agent 页面停用受影响的 Agent");
-  expect(operations).toContain(
-    "不要在网页点击“复启 Agent”，也不要运行控制面主机的 `release-agent`",
-  );
-  expect(operations).toContain("身份冲突无法定位到单个 Agent");
+  expect(operations).toContain("无需所有者复核或确认");
+  expect(operations).toContain("原待处理输入没有新消息也会自动续接");
+  expect(operations).toContain("实际身份或环境冲突无法定位到单个 Agent");
   expect(operations).toContain("使用同一数据格式的版本");
   expect(operations).toContain("本格式不升级旧实验数据库");
   expect(operations).toContain("启动遇到旧格式时会拒绝修改");
@@ -66,11 +64,11 @@ it("documents the ordinary-account restore drill, its refusals and what it leave
   expect(operations).toContain("`previous` 里的目录形如 `<数据目录>.mate-before-<检查点 id>`");
   expect(operations).toContain("`unknown` 结果只按收据保留，**不会**被当成“没执行过”而自动重跑");
   expect(operations).toContain(
-    "`release-agent` 对仍然被暂停的 Agent 会以非 0 退出码失败并说明原因",
+    "`release-agent` 对身份或环境仍不可用的 Agent 会以非 0 退出码失败并说明原因",
   );
 });
 
-it("catalogues every reason a restore can still be holding an Agent", () => {
+it("catalogues historical uncertainty separately from unavailable identities", () => {
   // The catalogue is what the owner uses to decide what to do with a held Agent, so a reason the
   // reconciliation code can name but the document omits leaves them with no answer. The reasons are
   // read out of the code rather than listed here, so a new one fails this check until it is

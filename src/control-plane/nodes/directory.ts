@@ -1,3 +1,4 @@
+import { agentProcessOperationSchema } from "../../nodes/process-operations.js";
 import {
   SessionAssembly,
   sessionFragment,
@@ -919,33 +920,52 @@ export class NodeDirectory {
     if (!session.nodeId || this.connected.get(session.nodeId) !== socket) return;
     const rows = this.database
       .prepare(
-        `SELECT operation_id,agent_id FROM (
-          SELECT operation_id,agent_id FROM owner_agent_process_operations
-          WHERE node_id=? AND state IN ('executing','unknown')
+        `SELECT operation_id,agent_id,request_json FROM (
+          SELECT operation_id,agent_id,request_json FROM owner_agent_process_operations
+          WHERE node_id=? AND (? OR state IN ('executing','unknown'))
           UNION ALL
-          SELECT operation_id,agent_id FROM owner_agent_stop_intents
+          SELECT operation_id,agent_id,'{"operation":{"kind":"process.stop_all"}}' AS request_json FROM owner_agent_stop_intents
           WHERE node_id=? AND state IN ('executing','unknown')
         ) WHERE operation_id>? ORDER BY operation_id LIMIT 100`,
       )
-      .all(session.nodeId, session.nodeId, cursor) as Array<{
+      .all(session.nodeId, blocking ? 1 : 0, session.nodeId, cursor) as Array<{
       operation_id: string;
       agent_id: string;
+      request_json: string;
     }>;
     if (rows.length === 0) {
       this.startWorkspaceReconciliation(socket, session, "", blocking);
       return;
     }
+    const validRows = rows.filter((row) => NodeRequestIdSchema.safeParse(row.operation_id).success);
+    if (validRows.length === 0) {
+      this.startReconciliation(socket, session, rows.at(-1)!.operation_id, blocking);
+      return;
+    }
     const requestId = randomUUID();
     session.reconcile = {
       requestId,
-      operations: new Map(rows.map((row) => [row.operation_id, row.agent_id])),
+      operations: new Map(validRows.map((row) => [row.operation_id, row.agent_id])),
       cursor: rows.at(-1)!.operation_id,
       blocking,
     };
     this.send(socket, {
       type: "control.process.reconcile",
       requestId,
-      operations: rows.map((row) => ({ operationId: row.operation_id, agentId: row.agent_id })),
+      operations: validRows.map((row) => {
+        let requestHash = "unreadable";
+        try {
+          const operation = agentProcessOperationSchema.parse(
+            JSON.parse(row.request_json).operation,
+          );
+          requestHash = createHash("sha256")
+            .update(JSON.stringify({ agentId: row.agent_id, operation }))
+            .digest("hex");
+        } catch {
+          /* Keep an unreadable intent unknown, even if a node has some result. */
+        }
+        return { operationId: row.operation_id, agentId: row.agent_id, requestHash };
+      }),
     });
   }
 
@@ -962,21 +982,18 @@ export class NodeDirectory {
       pending.requestId !== request.requestId
     )
       return this.reject(socket, request.requestId, "invalid_identity", "节点操作对账请求不匹配。");
+    const conflicts = new Set<string>();
     const seen = new Set<string>();
     for (const receipt of request.receipts) {
       if (
         pending.operations.get(receipt.operationId) !== receipt.agentId ||
         seen.has(receipt.operationId)
       )
-        return this.reject(
-          socket,
-          request.requestId,
-          "invalid_identity",
-          "节点操作收据不属于本次对账。",
-        );
+        conflicts.add(receipt.operationId);
       seen.add(receipt.operationId);
     }
     for (const receipt of request.receipts) {
+      if (conflicts.has(receipt.operationId)) continue;
       const { revision, ...value } = receipt;
       this.processReceiptHandler?.(session.nodeId, {
         ...value,
@@ -984,12 +1001,16 @@ export class NodeDirectory {
       });
     }
     for (const [operationId, agentId] of pending.operations) {
-      if (seen.has(operationId)) continue;
+      if (seen.has(operationId) && !conflicts.has(operationId)) continue;
       this.processReceiptHandler?.(session.nodeId, {
         operationId,
         agentId,
         state: "unknown",
-        receipt: { reason: "no_durable_node_receipt" },
+        receipt: {
+          reason: conflicts.has(operationId)
+            ? "node_receipt_identity_conflict"
+            : "no_durable_node_receipt",
+        },
       });
     }
     delete session.reconcile;
@@ -1018,16 +1039,20 @@ export class NodeDirectory {
     }
     const rows = this.database
       .prepare(
-        `SELECT json_extract(action.result_json,'$.operationId') AS operation_id,
-              action.agent_id
+        `SELECT json_extract(CASE WHEN json_valid(action.result_json) THEN action.result_json ELSE '{}' END,'$.operationId') AS operation_id,
+              action.agent_id, json_extract(CASE WHEN json_valid(action.result_json) THEN action.result_json ELSE '{}' END,'$.nodeRequestHash') AS request_hash
        FROM owner_agent_tool_actions action
        JOIN owner_agents agent ON agent.id=action.agent_id
        WHERE agent.node_id=? AND action.operation LIKE 'workspace.%'
-         AND json_extract(action.result_json,'$.state') IN ('executing','unknown')
-         AND json_extract(action.result_json,'$.operationId')>?
+         AND (? OR json_extract(CASE WHEN json_valid(action.result_json) THEN action.result_json ELSE '{}' END,'$.state') IN ('executing','unknown'))
+         AND json_extract(CASE WHEN json_valid(action.result_json) THEN action.result_json ELSE '{}' END,'$.operationId')>?
        ORDER BY operation_id LIMIT 100`,
       )
-      .all(session.nodeId, cursor) as Array<{ operation_id: string; agent_id: string }>;
+      .all(session.nodeId, blocking ? 1 : 0, cursor) as Array<{
+      operation_id: string;
+      agent_id: string;
+      request_hash: string | null;
+    }>;
     if (rows.length === 0) {
       if (blocking) {
         session.ready = true;
@@ -1035,17 +1060,26 @@ export class NodeDirectory {
       }
       return;
     }
+    const validRows = rows.filter((row) => NodeRequestIdSchema.safeParse(row.operation_id).success);
+    if (validRows.length === 0) {
+      this.startWorkspaceReconciliation(socket, session, rows.at(-1)!.operation_id, blocking);
+      return;
+    }
     const requestId = randomUUID();
     session.workspaceReconcile = {
       requestId,
-      operations: new Map(rows.map((row) => [row.operation_id, row.agent_id])),
+      operations: new Map(validRows.map((row) => [row.operation_id, row.agent_id])),
       cursor: rows.at(-1)!.operation_id,
       blocking,
     };
     this.send(socket, {
       type: "control.workspace.reconcile",
       requestId,
-      operations: rows.map((row) => ({ operationId: row.operation_id, agentId: row.agent_id })),
+      operations: validRows.map((row) => ({
+        operationId: row.operation_id,
+        agentId: row.agent_id,
+        requestHash: row.request_hash ?? "unreadable",
+      })),
     });
   }
 
@@ -1062,19 +1096,18 @@ export class NodeDirectory {
       pending.requestId !== request.requestId
     )
       return this.reject(socket, request.requestId, "invalid_identity", "节点文件对账请求不匹配。");
+    const conflicts = new Set<string>();
     const seen = new Set<string>();
     for (const receipt of request.receipts) {
       if (
         pending.operations.get(receipt.operationId) !== receipt.agentId ||
         seen.has(receipt.operationId)
       )
-        return this.reject(
-          socket,
-          request.requestId,
-          "invalid_identity",
-          "节点文件收据不属于本次对账。",
-        );
+        conflicts.add(receipt.operationId);
       seen.add(receipt.operationId);
+    }
+    for (const receipt of request.receipts) {
+      if (conflicts.has(receipt.operationId)) continue;
       this.deliverWorkspaceOperationResult(session.nodeId, {
         type: "node.workspace.operation.result",
         requestId: request.requestId,
@@ -1085,14 +1118,16 @@ export class NodeDirectory {
       });
     }
     for (const [operationId, agentId] of pending.operations) {
-      if (seen.has(operationId)) continue;
+      if (seen.has(operationId) && !conflicts.has(operationId)) continue;
       this.deliverWorkspaceOperationResult(session.nodeId, {
         type: "node.workspace.operation.result",
         requestId: request.requestId,
         operationId,
         agentId,
         ok: false,
-        error: "No durable node receipt; file operation result is unknown",
+        error: conflicts.has(operationId)
+          ? "Node receipt identity conflict; file operation result is unknown"
+          : "No durable node receipt; file operation result is unknown",
       });
     }
     delete session.workspaceReconcile;

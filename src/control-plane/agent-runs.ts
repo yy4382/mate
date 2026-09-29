@@ -1,3 +1,4 @@
+import { queueUncertainOperationFacts } from "./operation-recovery-context.js";
 import { AgentSession } from "./agent-session.js";
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
@@ -215,7 +216,7 @@ export class AgentRunCoordinator {
       )
       .get(agentId) as { state: string; receipt_json: string | null } | undefined;
     if (!row) return { state: "unknown", receipt: { reason: "stop_not_confirmed" } };
-    const receipt = row.receipt_json === null ? null : (JSON.parse(row.receipt_json) as unknown),
+    const receipt = parseReceipt(row.receipt_json) ?? { reason: "stop_receipt_unreadable" },
       scope = receiptScope(receipt),
       unconfirmedOperationIds = unconfirmedCommandIds(receipt, this.unconfirmedCommands(agentId));
     return {
@@ -314,9 +315,7 @@ export class AgentRunCoordinator {
       receipt_json: string | null;
     }>;
     for (const row of rows) {
-      const reason = row.receipt_json
-        ? (JSON.parse(row.receipt_json) as { reason?: string }).reason
-        : undefined;
+      const reason = (parseReceipt(row.receipt_json) as { reason?: string } | undefined)?.reason;
       if (reason === "pending_process_receipts") {
         if (this.unsettledProcessReceipt(row.agent_id)) continue;
         const nextId = randomUUID();
@@ -462,11 +461,6 @@ export class AgentRunCoordinator {
       | undefined;
     if (row?.paused_reason !== "manual" && row?.paused_reason !== "context")
       return { ok: false, error: "Agent 尚未停用。" };
-    const stop = this.stopStatus(agentId);
-    if (row.paused_reason === "manual" && stop.state !== "succeeded")
-      return { ok: false, error: "普通命令停止结果尚未确认，请检查节点诊断。" };
-    if (this.unsettledProcessReceipt(agentId))
-      return { ok: false, error: "仍有普通操作收据待对账，暂不能复启。" };
     let verified;
     try {
       verified = await this.nodes.provisionAgent(
@@ -492,10 +486,7 @@ export class AgentRunCoordinator {
       verified.identity.workspace !== row.home
     )
       return { ok: false, error: "运行账号或 Agent 工作区已缺失或改变；保持停用，请修复原数据。" };
-    if (
-      (row.paused_reason === "manual" && this.stopStatus(agentId).state !== "succeeded") ||
-      this.pauseReason(agentId) !== row.paused_reason
-    )
+    if (this.pauseReason(agentId) !== row.paused_reason)
       return { ok: false, error: "停用状态已变化，请重试。" };
     this.db
       .prepare(
@@ -775,6 +766,7 @@ export class AgentRunCoordinator {
       .prepare(`SELECT seq FROM owner_message_deliveries WHERE id=?`)
       .get(run.delivery_id) as { seq: number } | undefined;
     if (!inputStart) return undefined;
+    queueUncertainOperationFacts(this.db, agentId, this.now());
     const history = new AgentSession(this.db).read(agentId);
     const input = this.db
       .prepare(

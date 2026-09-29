@@ -617,10 +617,10 @@ export class OwnerChat {
       .get(operationId, agentId) as { receipt_json: string | null } | undefined;
     const workspaceReceipt = this.db
       .prepare(
-        "SELECT result_json FROM owner_agent_tool_actions WHERE agent_id=? AND json_extract(result_json,'$.operationId')=?",
+        "SELECT result_json FROM owner_agent_tool_actions WHERE agent_id=? AND json_extract(CASE WHEN json_valid(result_json) THEN result_json ELSE '{}' END,'$.operationId')=?",
       )
       .get(agentId, operationId) as { result_json: string } | undefined;
-    new AgentSession(this.db).queueCorrection(
+    const queued = new AgentSession(this.db).queueCorrection(
       agentId,
       {
         operationId,
@@ -633,7 +633,7 @@ export class OwnerChat {
       },
       at,
     );
-    if (!channel || channel.archived) return;
+    if (!queued || !channel || channel.archived) return;
     const text = `Mate 已核对操作 ${operationId} 的收据：${state === "succeeded" ? "成功" : "失败"}。完整更正将在后续模型上下文中呈现。`;
     this.db
       .transaction(() => {

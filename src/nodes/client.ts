@@ -560,19 +560,27 @@ function connectOnce(
         sendRequest(socket, {
           type: "node.process.reconcile.result",
           requestId: message.requestId,
-          receipts: message.operations.flatMap(({ agentId, operationId }) => {
-            const result = processOperations.status(agentId, operationId);
-            return result && result.state !== "started"
-              ? [
-                  {
-                    operationId,
-                    agentId,
-                    state: result.state,
-                    receipt: result.receipt,
-                    revision: result.revision,
-                  },
-                ]
-              : [];
+          receipts: message.operations.flatMap(({ agentId, operationId, requestHash }) => {
+            try {
+              const result = processOperations.status(agentId, operationId, requestHash);
+              if (!result || result.state === "started") return [];
+              const receipt = {
+                operationId,
+                agentId,
+                state: result.state,
+                receipt: result.receipt,
+                revision: result.revision,
+              };
+              return NodeRequestSchema.safeParse({
+                type: "node.process.reconcile.result",
+                requestId: message.requestId,
+                receipts: [receipt],
+              }).success
+                ? [receipt]
+                : [];
+            } catch {
+              return [];
+            }
           }),
         });
         return;
@@ -583,11 +591,19 @@ function connectOnce(
         sendRequest(socket, {
           type: "node.workspace.reconcile.result",
           requestId: message.requestId,
-          receipts: message.operations.flatMap(({ agentId, operationId }) => {
+          receipts: message.operations.flatMap(({ agentId, operationId, requestHash }) => {
             try {
-              const result = workspaceExecutor?.status(agentId, operationId);
+              const result = workspaceExecutor?.status(agentId, operationId, requestHash);
               const revision = workspaceExecutor?.receiptRevision?.(agentId, operationId);
-              return result ? [{ operationId, agentId, result: { ...result, revision } }] : [];
+              if (!result) return [];
+              const receipt = { operationId, agentId, result: { ...result, revision } };
+              return NodeRequestSchema.safeParse({
+                type: "node.workspace.reconcile.result",
+                requestId: message.requestId,
+                receipts: [receipt],
+              }).success
+                ? [receipt]
+                : [];
             } catch {
               return [];
             }

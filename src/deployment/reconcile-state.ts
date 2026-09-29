@@ -16,6 +16,7 @@ export interface RecoveryOperation {
   nodeId: string;
   kind: RecoveryOperationKind;
   requestHash: string;
+  request?: unknown;
   state: "executing" | "unknown" | "succeeded" | "failed" | "expired";
   receiptConfirmed: boolean;
   nodeReceiptRevision?: number | null;
@@ -27,6 +28,7 @@ export interface NodeRecoveryOperation {
   agentId: string;
   kind: RecoveryOperationKind;
   requestHash: string;
+  request?: unknown;
   state: "started" | "unknown" | "succeeded" | "failed";
   receipt: unknown | null;
   startedAt?: number;
@@ -51,6 +53,14 @@ export interface NodeRecoveryState {
 export interface RecoveryDecision {
   holds: Array<{ agentId: string; reason: string }>;
   confirmed: NodeRecoveryOperation[];
+  uncertainties: Array<{
+    agentId: string;
+    operationId: string;
+    kind: RecoveryOperationKind;
+    reason: string;
+    request?: unknown;
+    evidence?: unknown;
+  }>;
 }
 
 /** A node result is accepted only for the same object and immutable operation request. */
@@ -89,26 +99,41 @@ export function reconcileRecoveryState(
       operation,
     ]),
   );
-  const receipts = new Map<string, NodeRecoveryOperation>();
+  const receipts = new Map<string, NodeRecoveryOperation[]>();
   const confirmed: NodeRecoveryOperation[] = [];
+  const uncertainties: RecoveryDecision["uncertainties"] = [];
+  const uncertain = (
+    operation: RecoveryOperation | NodeRecoveryOperation,
+    reason: string,
+    evidence?: unknown,
+  ) => {
+    uncertainties.push({
+      agentId: operation.agentId,
+      operationId: operation.operationId,
+      kind: operation.kind,
+      request: operation.request,
+      reason,
+      evidence,
+    });
+  };
   for (const receipt of node.operations) {
-    if (!Number.isSafeInteger(receipt.sequence) || receipt.sequence < 1) {
-      if (localAgents.has(receipt.agentId))
-        holds.set(receipt.agentId, "node_receipt_version_invalid");
+    const key = receipt.kind + ":" + receipt.operationId;
+    receipts.set(key, [...(receipts.get(key) ?? []), receipt]);
+  }
+  for (const [key, entries] of receipts) {
+    const receipt = entries[0]!;
+    const intent = intents.get(key);
+    if (entries.length > 1) {
+      for (const entry of entries) uncertain(entry, "node_receipt_version_conflict");
+      if (intent) uncertain(intent, "node_receipt_version_conflict");
       continue;
     }
-    const key = receipt.kind + ":" + receipt.operationId;
-    const old = receipts.get(key);
-    if (old) {
-      for (const agentId of new Set([old.agentId, receipt.agentId]))
-        if (localAgents.has(agentId)) holds.set(agentId, "node_receipt_version_conflict");
-      if (old.sequence >= receipt.sequence) continue;
+    if (!Number.isSafeInteger(receipt.sequence) || receipt.sequence < 1) {
+      uncertain(intent ?? receipt, "node_receipt_version_invalid");
+      continue;
     }
-    receipts.set(key, receipt);
-    const intent = intents.get(key);
     if (!intent) {
-      if (localAgents.has(receipt.agentId))
-        holds.set(receipt.agentId, "node_operation_without_intent");
+      uncertain(receipt, "node_operation_without_intent");
       continue;
     }
     if (
@@ -116,13 +141,12 @@ export function reconcileRecoveryState(
       intent.nodeId !== node.nodeId ||
       intent.requestHash !== receipt.requestHash
     ) {
-      holds.set(intent.agentId, "operation_identity_conflict");
-      if (localAgents.has(receipt.agentId))
-        holds.set(receipt.agentId, "operation_identity_conflict");
+      uncertain(intent, "operation_identity_conflict");
+      if (receipt.agentId !== intent.agentId) uncertain(receipt, "operation_identity_conflict");
       continue;
     }
     if (receipt.state === "started" || receipt.state === "unknown") {
-      holds.set(intent.agentId, "operation_result_unproven");
+      uncertain(intent, "operation_result_unproven", receipt.receipt);
       continue;
     }
     const controlRevision = intent.nodeReceiptRevision ?? null,
@@ -131,22 +155,17 @@ export function reconcileRecoveryState(
         stableJson(intent.receipt ?? null) === stableJson(receipt.receipt);
     if (controlRevision === receipt.sequence && sameResult) continue;
     if (
-      controlRevision === null &&
-      (sameResult ||
-        (!intent.receiptConfirmed &&
-          (intent.state === "executing" ||
-            intent.state === "unknown" ||
-            intent.state === "expired")))
+      (controlRevision === null &&
+        (sameResult ||
+          (!intent.receiptConfirmed &&
+            ["executing", "unknown", "expired"].includes(intent.state)))) ||
+      (controlRevision !== null && receipt.sequence > controlRevision)
     ) {
       confirmed.push(receipt);
       continue;
     }
-    if (controlRevision !== null && receipt.sequence > controlRevision) {
-      confirmed.push(receipt);
-      continue;
-    }
-    holds.set(
-      intent.agentId,
+    uncertain(
+      intent,
       controlRevision !== null && receipt.sequence < controlRevision
         ? "node_receipt_stale"
         : controlRevision === null
@@ -154,24 +173,12 @@ export function reconcileRecoveryState(
           : "operation_result_conflict",
     );
   }
-  for (const intent of control.operations) {
-    const key = intent.kind + ":" + intent.operationId;
-    if (
-      !receipts.has(key) &&
-      (intent.state === "executing" ||
-        intent.state === "unknown" ||
-        (intent.state !== "expired" &&
-          (intent.receiptConfirmed ||
-            intent.nodeReceiptRevision !== null ||
-            intent.state === "succeeded" ||
-            intent.state === "failed")))
-    )
-      holds.set(intent.agentId, "node_receipt_unavailable");
-  }
+  for (const intent of control.operations)
+    if (!receipts.has(intent.kind + ":" + intent.operationId) && intent.state !== "expired")
+      uncertain(intent, "node_receipt_unavailable");
   return {
     holds: [...holds].map(([agentId, reason]) => ({ agentId, reason })),
-    // Operation uncertainty blocks new work for its Agent but does not invalidate a separate,
-    // independently matched terminal receipt. Only untrusted node or Agent identity does that.
+    uncertainties,
     confirmed: confirmed.filter(
       (receipt) => nodeIdentityTrusted && trustedAgentIds.has(receipt.agentId),
     ),

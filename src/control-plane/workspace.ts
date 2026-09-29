@@ -1123,7 +1123,29 @@ export class WorkspaceService {
           .get(sessionId, actionId, agentId, requestHash) as { result_json: string } | undefined;
         if (!existing) return;
         const prior = parseEnvelope(existing.result_json);
-        if (prior.state === "succeeded" || prior.state === "failed") return;
+        const changed =
+          prior.state !== envelope.state || !isDeepStrictEqual(prior.result, envelope.result);
+        if (
+          (prior.state === "succeeded" || prior.state === "failed") &&
+          (prior.revision === undefined ||
+            envelope.revision === undefined ||
+            envelope.revision <= prior.revision)
+        ) {
+          if (changed)
+            new AgentSession(this.db).queueCorrection(
+              agentId,
+              {
+                operationId: envelope.operationId,
+                operation: envelope.operation,
+                state: "unknown",
+                reason: "operation_result_conflict",
+                evidence: envelope,
+                note: "历史文件收据无法核实；不会改写已见历史或自动重放。由你决定检查、补救或继续。",
+              },
+              Date.now(),
+            );
+          return;
+        }
         this.db
           .prepare(
             `UPDATE owner_agent_tool_actions SET result_json=?
@@ -1141,7 +1163,7 @@ export class WorkspaceService {
             agentId,
             requestHash,
           );
-        if (prior.state !== envelope.state)
+        if (changed)
           recordAgentActivity(this.db, {
             agentId,
             kind:
@@ -1162,7 +1184,7 @@ export class WorkspaceService {
             },
             at: Date.now(),
           });
-        if (prior.state === "unknown" && envelope.state !== "unknown")
+        if (changed && prior.state !== "executing" && envelope.state !== "unknown")
           this.chat.notifyAgentReceiptCorrection(agentId, envelope.operationId, envelope.state);
       })
       .immediate();
@@ -1225,7 +1247,7 @@ export class WorkspaceService {
                   action.request_hash,action.result_json,agent.node_id
            FROM owner_agent_tool_actions action
            JOIN owner_agents agent ON agent.id=action.agent_id
-           WHERE json_extract(action.result_json,'$.operationId')=?
+           WHERE json_extract(CASE WHEN json_valid(action.result_json) THEN action.result_json ELSE '{}' END,'$.operationId')=?
              AND action.agent_id=? AND action.operation LIKE 'workspace.%'`,
         )
         .get(result.operationId, result.agentId) as
@@ -1240,7 +1262,12 @@ export class WorkspaceService {
           }
         | undefined;
       if (!row || row.node_id !== nodeId) return;
-      const prior = parseEnvelope(row.result_json);
+      let prior;
+      try {
+        prior = parseEnvelope(row.result_json);
+      } catch {
+        return;
+      }
       if (
         prior.operationId !== result.operationId ||
         typeof prior.runId !== "string" ||

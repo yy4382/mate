@@ -133,12 +133,34 @@ export class AgentProcessOperations {
     );
   }
 
-  status(agentId: string, operationId: string): AgentProcessOperationReceipt | undefined {
+  status(
+    agentId: string,
+    operationId: string,
+    requestHash?: string,
+  ): AgentProcessOperationReceipt | undefined {
     agentIdSchema.parse(agentId);
     operationIdSchema.parse(operationId);
     const row = this.findOperation.get(operationId) as OperationRow | undefined;
     if (!row || row.agent_id !== agentId) return undefined;
-    return toReceipt(row);
+    try {
+      const request = JSON.parse(row.request) as { agentId?: unknown; operation?: unknown };
+      agentProcessOperationSchema.parse(request.operation);
+      if (
+        request.agentId !== agentId ||
+        createHash("sha256").update(row.request).digest("hex") !== row.request_hash ||
+        (requestHash !== undefined && requestHash !== row.request_hash)
+      )
+        throw new Error("Historical request conflict");
+      return toReceipt(row);
+    } catch {
+      return {
+        operationId,
+        agentId,
+        state: "unknown",
+        receipt: { reason: "node_receipt_request_or_content_unproven" },
+        revision: row.revision,
+      };
+    }
   }
 
   /** Called only after the control plane has verified the original identity for reactivation. */

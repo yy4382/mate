@@ -3279,6 +3279,17 @@ it("replays a confirmed failed file action as the same error after control-plane
         ),
       }),
     );
+    const reconciliation = recovered.sent
+      .map((text) => JSON.parse(text))
+      .find((message) => message.type === "control.workspace.reconcile");
+    await restarted.nodes.receive(
+      recovered,
+      JSON.stringify({
+        type: "node.workspace.reconcile.result",
+        requestId: reconciliation.requestId,
+        receipts: [],
+      }),
+    );
     const retryRun = await waitForRun(recovered, 0);
     expect(retryRun.runId).not.toBe(firstRun.runId);
     expect(retryRun.actionScopeId).toBe(firstRun.actionScopeId);

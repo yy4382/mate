@@ -383,7 +383,15 @@ const NodeControlMessageShapeSchema = z.discriminatedUnion("type", [
       type: z.literal("control.process.reconcile"),
       requestId: requestIdSchema,
       operations: z
-        .array(z.object({ operationId: requestIdSchema, agentId: agentIdSchema }).strict())
+        .array(
+          z
+            .object({
+              operationId: requestIdSchema,
+              agentId: agentIdSchema,
+              requestHash: z.string().optional(),
+            })
+            .strict(),
+        )
         .max(100),
     })
     .strict(),
@@ -392,7 +400,15 @@ const NodeControlMessageShapeSchema = z.discriminatedUnion("type", [
       type: z.literal("control.workspace.reconcile"),
       requestId: requestIdSchema,
       operations: z
-        .array(z.object({ operationId: requestIdSchema, agentId: agentIdSchema }).strict())
+        .array(
+          z
+            .object({
+              operationId: requestIdSchema,
+              agentId: agentIdSchema,
+              requestHash: z.string().optional(),
+            })
+            .strict(),
+        )
         .max(100),
     })
     .strict(),
