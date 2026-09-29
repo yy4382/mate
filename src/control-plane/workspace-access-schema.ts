@@ -1,5 +1,5 @@
 /** File access audit records contain identity and relative paths only, never file bytes. */
-export const workspaceAccessAuditSchemaV15 = `
+export const workspaceAccessAuditSchema = `
 CREATE TABLE owner_workspace_access_audit (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   at INTEGER NOT NULL,

@@ -109,17 +109,21 @@ it("backend decodes split Unicode output as a stream", async () => {
     helper,
     "process.stdout.write(Buffer.from([0xe4]));setTimeout(()=>process.stdout.end(Buffer.from([0xbd,0xa0])),100);",
   );
-  const { LinuxUserBackend } = await import("../../src/execution/linux-user.js");
-  const backend = new LinuxUserBackend({
-    test: { uid: process.getuid!(), gid: process.getgid!(), home: homedir() },
-  });
+  const { SameAccountFileBackend } = await import("../../src/execution/same-account-files.js");
+  const backend = new SameAccountFileBackend(
+    {
+      uid: process.getuid!(),
+      gid: process.getgid!(),
+      home: homedir(),
+    },
+    helper,
+  );
   const result = await backend.execute({
     agentId: "test",
     root,
     operation: {
-      kind: "exec",
-      cwd: ".",
-      command: `${JSON.stringify(process.execPath)} ${JSON.stringify(helper)}`,
+      kind: "read",
+      path: ".",
     },
     timeoutMs: 2000,
   });

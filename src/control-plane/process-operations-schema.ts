@@ -1,5 +1,5 @@
 /** Control-plane intent records for ordinary Agent commands and process controls. */
-export const agentProcessOperationsSchemaV13 = `
+export const agentProcessOperationsSchema = `
 CREATE TABLE owner_agent_process_operations (
   operation_id TEXT PRIMARY KEY,
   run_id TEXT NOT NULL REFERENCES owner_agent_runs(id),

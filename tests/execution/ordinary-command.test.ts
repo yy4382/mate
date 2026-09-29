@@ -287,3 +287,50 @@ it("forgets a tracked process group whose ID now belongs to another process", as
     files.cleanup();
   }
 });
+
+it("accepts parent and symlink working directories and preserves complete foreground output", async () => {
+  const files = fixture(),
+    runner = new OrdinaryCommandRunner();
+  try {
+    const { symlinkSync, realpathSync } = await import("node:fs");
+    symlinkSync(files.root, join(files.root, "linked"));
+    const linked = await runner.run(
+      files.request({ cwd: join(files.root, "linked"), command: "pwd -P" }),
+    );
+    expect(linked.stdout.trim()).toBe(realpathSync(files.root));
+    const parent = await runner.run(
+      files.request({ cwd: `${files.root}/..`, command: "pwd -P" }),
+    );
+    expect(parent.code).toBe(0);
+    expect(parent.stdout.trim()).toBe(realpathSync(join(files.root, "..")));
+    const output = await runner.run(
+      files.request({ command: "head -c 60000 /dev/zero | tr '\\000' x" }),
+    );
+    expect(output.stdout).toBe("x".repeat(60000));
+    expect(output.truncated).toBe(false);
+  } finally {
+    files.cleanup();
+  }
+});
+
+it("uses an installed CLI on a subsequent call through the existing host PATH", async () => {
+  const files = fixture();
+  const runner = new OrdinaryCommandRunner({
+    environment: { ...process.env, PATH: `${files.root}/.local/bin:${process.env.PATH}` },
+  });
+  try {
+    const install = await runner.run(
+      files.request({
+        command:
+          'mkdir -p "$HOME/.local/bin"; printf "#!/bin/sh\\nprintf cli-ready\\n" > "$HOME/.local/bin/mate-test-cli"; chmod 700 "$HOME/.local/bin/mate-test-cli"',
+      }),
+    );
+    expect(install.code).toBe(0);
+    expect(await runner.run(files.request({ command: "mate-test-cli" }))).toMatchObject({
+      code: 0,
+      stdout: "cli-ready",
+    });
+  } finally {
+    files.cleanup();
+  }
+});

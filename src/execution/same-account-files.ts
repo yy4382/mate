@@ -12,13 +12,13 @@ import {
 import { killProcessGroup } from "./linux-processes.js";
 import { within } from "./paths.js";
 
-export interface LinuxIdentity {
+export interface FileExecutionAccount {
   uid: number;
   gid: number;
   home: string;
   username?: string | undefined;
 }
-const identitySchema = z
+const accountSchema = z
   .object({
     uid: z.number().int().nonnegative(),
     gid: z.number().int().nonnegative(),
@@ -27,19 +27,12 @@ const identitySchema = z
   })
   .strict();
 
-/**
- * Ordinary host execution as the account Mate already runs as. The caller must already run as the
- * identity it names: Mate never becomes another UID, spawns no service manager and starts no
- * systemd scope. An Agent's file tools therefore run as this one account, and a command that needs
- * more writes `sudo` itself, which the host's own policy decides.
- */
-export class LinuxUserBackend implements ExecutionBackend {
-  private readonly identities: Readonly<Record<string, LinuxIdentity>>;
+/** Executes file helpers as Mate's existing account, with the Agent workspace as HOME. */
+export class SameAccountFileBackend implements ExecutionBackend {
+  private readonly account: FileExecutionAccount;
   private readonly helper: string;
-  constructor(identities: Readonly<Record<string, LinuxIdentity>>, helperPath?: string) {
-    this.identities = Object.fromEntries(
-      Object.entries(identities).map(([id, identity]) => [id, identitySchema.parse(identity)]),
-    );
+  constructor(account: FileExecutionAccount, helperPath?: string) {
+    this.account = accountSchema.parse(account);
     const adjacent = fileURLToPath(new URL("./file-operation.mjs", import.meta.url));
     this.helper =
       helperPath ??
@@ -50,35 +43,28 @@ export class LinuxUserBackend implements ExecutionBackend {
   async execute(request: ExecutionRequest, signal?: AbortSignal): Promise<ExecutionResult> {
     const op = operationSchema.parse(request.operation);
     z.number().int().min(1).max(300000).parse(request.timeoutMs);
-    const identity = request.agentId ? this.identities[request.agentId] : undefined;
-    if (!identity) throw new Error("Linux user identity is not configured for Agent");
+    const account = this.account;
     if (signal?.aborted) throw new Error("Execution aborted");
     const root = realpathSync(request.root);
     if (!statSync(root).isDirectory()) throw new Error("Workspace root is not a directory");
-    const path = resolve(root, op.kind === "exec" ? op.cwd : op.path);
-    if (op.kind === "exec" && !statSync(path).isDirectory()) throw new Error("Invalid command cwd");
-    const shell = op.kind === "exec",
-      privateHome = within(realpathSync(identity.home), path),
+    const path = resolve(root, op.path);
+    const privateHome = within(realpathSync(account.home), path),
       umask = privateHome ? "077" : "022";
-    const program = shell ? "/bin/sh" : process.execPath;
-    const programArgs = shell
-      ? ["-c", `umask ${umask}; ${op.command}`]
-      : [this.helper, root, umask];
-    if (process.getuid?.() !== identity.uid || process.getgid?.() !== identity.gid)
-      throw new Error("Mate cannot switch to the configured Linux user");
+    if (process.getuid?.() !== account.uid || process.getgid?.() !== account.gid)
+      throw new Error("File execution account does not match the running Mate account");
     const env = {
-      PATH: `${identity.home}/.local/bin:${identity.home}/bin:/usr/local/bin:/usr/bin:/bin`,
-      HOME: identity.home,
-      USER: identity.username ?? String(identity.uid),
-      LOGNAME: identity.username ?? String(identity.uid),
+      PATH: `${account.home}/.local/bin:${account.home}/bin:/usr/local/bin:/usr/bin:/bin`,
+      HOME: account.home,
+      USER: account.username ?? String(account.uid),
+      LOGNAME: account.username ?? String(account.uid),
       LANG: "C.UTF-8",
     };
     return new Promise((resolvePromise, reject) => {
-      const child = spawn(program, programArgs, {
-        cwd: shell ? path : root,
+      const child = spawn(process.execPath, [this.helper, root, umask], {
+        cwd: root,
         env,
         detached: true,
-        stdio: [shell ? "ignore" : "pipe", "pipe", "pipe"],
+        stdio: ["pipe", "pipe", "pipe"],
       });
       const stdout: Buffer[] = [],
         stderr: Buffer[] = [];
@@ -132,7 +118,7 @@ export class LinuxUserBackend implements ExecutionBackend {
           child.stderr!.destroy();
         }
         if (interrupted)
-          reject(new Error("Linux user execution aborted or timed out; outcome may be unknown"));
+          reject(new Error("File execution aborted or timed out; outcome may be unknown"));
         else
           resolvePromise({
             code: code ?? 1,
@@ -141,7 +127,7 @@ export class LinuxUserBackend implements ExecutionBackend {
             truncated: truncated || openPipes,
           });
       };
-      // A background child may inherit these pipes. Return after the shell exits, then close transient output capture.
+      // A background child may inherit these pipes. Return after the helper exits, then close transient output capture.
       child.once("exit", (code) => {
         setTimeout(
           () => complete(code, !child.stdout!.readableEnded || !child.stderr!.readableEnded),
@@ -149,10 +135,8 @@ export class LinuxUserBackend implements ExecutionBackend {
         );
       });
       child.once("close", (code) => complete(code, false));
-      if (!shell) {
-        child.stdin!.on("error", () => {});
-        child.stdin!.end(JSON.stringify(op));
-      }
+      child.stdin!.on("error", () => {});
+      child.stdin!.end(JSON.stringify(op));
     });
   }
 }

@@ -47,7 +47,7 @@ if (rootDescriptor !== undefined) {
   if (!rootStat.isDirectory() || rootStat.dev !== pathStat.dev || rootStat.ino !== pathStat.ino)
     throw new Error("unsafe_path: Workspace root changed while it was opened");
 }
-const operation = JSON.parse(readFileSync(0, "utf8")) as Exclude<Operation, { kind: "exec" }>;
+const operation = JSON.parse(readFileSync(0, "utf8")) as Operation;
 const mutatingKinds = new Set<Operation["kind"]>([
   "write_bytes",
   "write",

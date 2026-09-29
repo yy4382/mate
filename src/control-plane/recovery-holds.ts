@@ -1,7 +1,7 @@
 import type Database from "better-sqlite3";
 
 /** A restored Agent cannot run until its node identity and local effects are reconciled. */
-export const recoveryHoldSchemaV21 = `
+export const recoveryHoldSchema = `
 CREATE TABLE owner_agent_recovery_holds (
   agent_id TEXT PRIMARY KEY REFERENCES owner_agents(id),
   reason TEXT NOT NULL,

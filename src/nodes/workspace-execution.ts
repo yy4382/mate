@@ -11,7 +11,10 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ExecutionBackend, ExecutionResult, Operation } from "../execution/backend.js";
-import { LinuxUserBackend, type LinuxIdentity } from "../execution/linux-user.js";
+import {
+  SameAccountFileBackend,
+  type FileExecutionAccount,
+} from "../execution/same-account-files.js";
 import { within } from "../execution/paths.js";
 import { readAgentWorkspaceIdentity, type AgentWorkspaceIdentity } from "./agent-provisioner.js";
 import { workspaceReceiptRequestHash } from "./workspace-receipt.js";
@@ -22,12 +25,12 @@ export interface WorkspaceExecutionRequest {
   operationId: string;
   agentId: string;
   mode: WorkspaceMode;
-  operation: Exclude<Operation, { kind: "exec" }>;
+  operation: Operation;
 }
 
 export interface WorkspaceExecutionDependencies {
   lookupIdentity?: (agentId: string, workspaceRoot: string) => AgentWorkspaceIdentity;
-  createBackend?: (agentId: string, identity: LinuxIdentity) => ExecutionBackend;
+  createBackend?: (identity: FileExecutionAccount) => ExecutionBackend;
   now?: () => number;
 }
 
@@ -56,14 +59,14 @@ const readKinds = new Set<Operation["kind"]>([
 ]);
 const agentReadKinds = new Set<Operation["kind"]>([...readKinds, "read"]);
 
-/** Executes file requests under the fixed Linux account assigned to the Agent. */
+/** Executes file requests as the node account after verifying the Agent workspace identity. */
 export class LinuxWorkspaceExecutor {
   private readonly receiptsDirectory: string;
   private readonly lookupIdentity: (
     agentId: string,
     workspaceRoot: string,
   ) => AgentWorkspaceIdentity;
-  private readonly createBackend: (agentId: string, identity: LinuxIdentity) => ExecutionBackend;
+  private readonly createBackend: (identity: FileExecutionAccount) => ExecutionBackend;
   private readonly now: () => number;
   private readonly active = new Map<
     string,
@@ -86,8 +89,7 @@ export class LinuxWorkspaceExecutor {
       throw new Error("Node operation receipt directory is accessible by other users");
     this.lookupIdentity = dependencies.lookupIdentity ?? readAgentWorkspaceIdentity;
     this.createBackend =
-      dependencies.createBackend ??
-      ((agentId, identity) => new LinuxUserBackend({ [agentId]: identity }));
+      dependencies.createBackend ?? ((identity) => new SameAccountFileBackend(identity));
     this.now = dependencies.now ?? Date.now;
   }
 
@@ -95,8 +97,8 @@ export class LinuxWorkspaceExecutor {
     validateRequest(request);
     const requestHash = workspaceReceiptRequestHash(request.agentId, request.operation),
       // The mode decides which workspace a read runs in, so the same operation ID under another
-      // mode is another request and may not share this in-flight result. The durable receipt hash
-      // stays mode-free, so receipts written before this change still replay.
+      // mode is another request and may not share this in-flight result. Durable receipts identify
+      // filesystem mutations by Agent and operation; read modes do not produce receipts.
       key = `${request.mode}\0${request.operationId}`,
       existingCall = this.active.get(key);
     if (existingCall)
@@ -182,7 +184,7 @@ export class LinuxWorkspaceExecutor {
         identity.workspace,
         resolve(this.homeRoot),
       );
-      result = await this.createBackend(request.agentId, {
+      result = await this.createBackend({
         username: identity.username,
         uid: identity.uid,
         gid: identity.gid,
@@ -282,10 +284,10 @@ export class LinuxWorkspaceExecutor {
  */
 function agentReadRoot(
   mode: WorkspaceMode,
-  operation: Exclude<Operation, { kind: "exec" }>,
+  operation: Operation,
   workspace: string,
   workspaceRoot: string,
-): { root: string; operation: Exclude<Operation, { kind: "exec" }> } | undefined {
+): { root: string; operation: Operation } | undefined {
   if (mode !== "agent_read" || !agentReadKinds.has(operation.kind)) return undefined;
   const target = resolve(workspace, operation.path),
     own = within(workspace, target);

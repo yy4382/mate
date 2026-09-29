@@ -2,7 +2,7 @@
  * Message anchored work and Agent owned wakeups. A task's channel is its message's channel, and
  * no task row grants conversation membership.
  */
-export const taskReminderSchemaV18 = `
+export const taskReminderSchema = `
 CREATE TABLE owner_tasks (
   id TEXT PRIMARY KEY,
   message_id TEXT NOT NULL UNIQUE REFERENCES owner_messages(id),

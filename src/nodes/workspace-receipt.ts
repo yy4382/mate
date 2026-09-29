@@ -2,10 +2,7 @@ import { createHash } from "node:crypto";
 import type { Operation } from "../execution/backend.js";
 
 /** Hash the stable Agent and requested filesystem mutation recorded by both services. */
-export function workspaceReceiptRequestHash(
-  agentId: string,
-  operation: Exclude<Operation, { kind: "exec" }>,
-): string {
+export function workspaceReceiptRequestHash(agentId: string, operation: Operation): string {
   return createHash("sha256")
     .update(JSON.stringify({ agentId, operation: canonical(operation) }))
     .digest("hex");

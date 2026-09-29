@@ -5,7 +5,7 @@ import {
   AgentProcessOperationBroker,
   deriveAgentProcessOperationId,
 } from "../../src/control-plane/agent-process-operations.js";
-import { agentProcessOperationsSchemaV13 } from "../../src/control-plane/process-operations-schema.js";
+import { agentProcessOperationsSchema } from "../../src/control-plane/process-operations-schema.js";
 
 function setup() {
   const database = new Database(":memory:");
@@ -18,7 +18,7 @@ function setup() {
     CREATE TABLE owner_message_deliveries(id TEXT PRIMARY KEY,channel_id TEXT NOT NULL);
     CREATE TABLE owner_agent_activity(seq INTEGER PRIMARY KEY,agent_id TEXT,node_id TEXT,kind TEXT,reference_id TEXT,summary TEXT,detail_json TEXT,created_at INTEGER);
   `);
-  database.exec(agentProcessOperationsSchemaV13);
+  database.exec(agentProcessOperationsSchema);
   const nodeId = randomUUID(),
     agentId = randomUUID(),
     runId = randomUUID(),

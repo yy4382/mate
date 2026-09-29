@@ -466,7 +466,7 @@ export class WorkspaceService {
     actionId: string;
     operationName: string;
     toolInput: Record<string, unknown>;
-    operation: Exclude<Operation, { kind: "exec" }>;
+    operation: Operation;
   }): Promise<unknown> {
     return this.withAccessAudit(
       {
@@ -487,7 +487,7 @@ export class WorkspaceService {
     actionId: string;
     operationName: string;
     toolInput: Record<string, unknown>;
-    operation: Exclude<Operation, { kind: "exec" }>;
+    operation: Operation;
   }): Promise<unknown> {
     const authorized = this.authorizeActiveRun(input.runId, input.agentId);
     if (!isMutatingOperation(input.operation))
@@ -1235,7 +1235,7 @@ function safeError(error: unknown): string {
   return (error instanceof WorkspaceError ? error.message : "文件操作结果尚未确认。").slice(0, 240);
 }
 
-function operationPaths(operation: Exclude<Operation, { kind: "exec" }>): string[] {
+function operationPaths(operation: Operation): string[] {
   return operation.kind === "move" ? [operation.path, operation.destination] : [operation.path];
 }
 

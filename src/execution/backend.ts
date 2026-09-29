@@ -107,13 +107,6 @@ export const operationSchema = z.discriminatedUnion("kind", [
       newText: z.string().max(1000000),
     })
     .strict(),
-  z
-    .object({
-      kind: z.literal("exec"),
-      command: z.string().min(1).max(16000),
-      cwd: z.string().max(4096),
-    })
-    .strict(),
 ]);
 export type Operation = z.infer<typeof operationSchema>;
 export interface ExecutionRequest {

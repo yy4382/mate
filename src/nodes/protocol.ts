@@ -16,11 +16,10 @@ export const AgentProvisionStageSchema = z.enum([
   "verifying_workspace",
 ]);
 const agentIdSchema = z.string().uuid();
-const workspaceOperationSchema = operationSchema.refine((operation) => operation.kind !== "exec");
-const workspaceReadOperationSchema = workspaceOperationSchema.refine((operation) =>
+const workspaceReadOperationSchema = operationSchema.refine((operation) =>
   ["workspace_list", "workspace_stat", "workspace_read_chunk"].includes(operation.kind),
 );
-const agentWorkspaceReadOperationSchema = workspaceOperationSchema.refine((operation) =>
+const agentWorkspaceReadOperationSchema = operationSchema.refine((operation) =>
   ["read", "workspace_list", "workspace_stat", "workspace_read_chunk"].includes(operation.kind),
 );
 const workspaceExecutionResultSchema = z
@@ -364,7 +363,7 @@ const NodeControlMessageShapeSchema = z.discriminatedUnion("type", [
         agentId: agentIdSchema,
         runId: requestIdSchema,
         mode: z.literal("agent_action"),
-        operation: workspaceOperationSchema,
+        operation: operationSchema,
       })
       .strict(),
     z

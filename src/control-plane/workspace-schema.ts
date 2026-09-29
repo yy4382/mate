@@ -1,5 +1,5 @@
 /** Conversation attachment metadata for the Linux-node release. */
-export const workspaceSchemaV14 = `
+export const workspaceSchema = `
 CREATE TABLE owner_conversation_attachments (
   id TEXT PRIMARY KEY,
   channel_id TEXT NOT NULL REFERENCES owner_channels(id),

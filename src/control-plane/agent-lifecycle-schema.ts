@@ -1,5 +1,5 @@
 /** One durable stop request per owner deactivation; node receipts use the same operation ID. */
-export const agentLifecycleSchemaV19 = `
+export const agentLifecycleSchema = `
 CREATE TABLE owner_agent_stop_intents (
   operation_id TEXT PRIMARY KEY,
   agent_id TEXT NOT NULL REFERENCES owner_agents(id),

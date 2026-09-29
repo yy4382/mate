@@ -99,7 +99,7 @@ it("passes the verified provisioned identity to workspace execution without mark
     backendIdentities: unknown[] = [],
     executor = new LinuxWorkspaceExecutor(fixture.homeRoot, fixture.root, {
       ...fixture.dependencies,
-      createBackend: (_agentId, identity) => {
+      createBackend: (identity) => {
         backendIdentities.push(identity);
         return { execute: async () => success };
       },
@@ -175,7 +175,7 @@ async function twoRealAgents() {
     reader = await prepareAgentWorkspace({ agentId: readerId, workspaceRoot: homeRoot }),
     peer = await prepareAgentWorkspace({ agentId: peerId, workspaceRoot: homeRoot }),
     executor = new LinuxWorkspaceExecutor(homeRoot, dataDirectory),
-    run = (mode: WorkspaceMode, operation: Exclude<Operation, { kind: "exec" }>) =>
+    run = (mode: WorkspaceMode, operation: Operation) =>
       executor.execute({ operationId: randomUUID(), agentId: readerId, mode, operation });
   writeFileSync(join(peer.workspace, "peer-notes.md"), "peer notes\n", { mode: 0o600 });
   // A link inside the reader's own workspace, pointing at the peer's file, is the cheapest way to
@@ -287,7 +287,7 @@ it("keeps owner workspace preview inside the selected Agent workspace for paths 
     "..",
     "peer-link",
   ]) {
-    const attempts: Array<Exclude<Operation, { kind: "exec" }>> = [
+    const attempts: Array<Operation> = [
       { kind: "workspace_list", path, offset: 0, limit: 32 },
       { kind: "workspace_stat", path },
       { kind: "workspace_read_chunk", path, offset: 0, length: 8192 },
