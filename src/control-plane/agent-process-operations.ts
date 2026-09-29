@@ -1,6 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 import { defineAgentTool, type AgentToolContext } from "./agent-tool-entry.js";
-import type { OwnerChat } from "./owner-chat.js";
 import { AgentSession } from "./agent-session.js";
 import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
@@ -69,7 +68,7 @@ interface OperationRow {
  * sending the stable operation ID to a node, then stores the receipt or an explicit unknown.
  */
 export class AgentProcessOperationBroker {
-  agentTools(chat: OwnerChat) {
+  agentTools() {
     return {
       "process.exec": defineAgentTool(
         {
@@ -83,7 +82,7 @@ export class AgentProcessOperationBroker {
             .strict(),
         },
         (identity, input) =>
-          this.executeTool(chat, identity, {
+          this.executeTool(identity, {
             kind: "exec",
             command: input.command,
             cwd: input.cwd ?? ".",
@@ -95,7 +94,7 @@ export class AgentProcessOperationBroker {
             "列出本次节点运行期间由 process.exec 启动、进程组仍然存在的自己命令进程。Mate 的进程记录只属于当前这次节点进程：节点重启后它不再追踪此前的命令，也无法确认那些命令是否仍在运行。",
           schema: z.object({}).strict(),
         },
-        (identity, input) => this.executeTool(chat, identity, { kind: "process.list" }),
+        (identity, input) => this.executeTool(identity, { kind: "process.list" }),
       ),
       "process.inspect": defineAgentTool(
         {
@@ -103,8 +102,7 @@ export class AgentProcessOperationBroker {
             "查询一个由实时 process.exec 返回的操作 ID 当前的进程状态。Mate 只报告本次节点运行期间自己启动并仍能看到的进程组；本次节点运行之前启动的普通命令不在报告范围内，Mate 不会声称它们正在运行或已经结束。",
           schema: z.object({ targetOperationId: uuidSchema }).strict(),
         },
-        (identity, input) =>
-          this.executeTool(chat, identity, { kind: "process.inspect", ...input }),
+        (identity, input) => this.executeTool(identity, { kind: "process.inspect", ...input }),
       ),
       "process.stop": defineAgentTool(
         {
@@ -112,16 +110,12 @@ export class AgentProcessOperationBroker {
             "尽力终止一个由本次节点运行期间的 process.exec 返回的操作 ID 对应的进程组。Mate 只能观察和终止它自己启动的进程组：以新会话离开该进程组或本账号无权信号的后代（例如 sudo 派生的 root 进程）不在报告范围内，Mate 不会声称它们已停止，只会如实报告无法确认。",
           schema: z.object({ targetOperationId: uuidSchema }).strict(),
         },
-        (identity, input) => this.executeTool(chat, identity, { kind: "process.stop", ...input }),
+        (identity, input) => this.executeTool(identity, { kind: "process.stop", ...input }),
       ),
     };
   }
 
-  private async executeTool(
-    chat: OwnerChat,
-    identity: AgentToolContext,
-    operation: AgentProcessOperation,
-  ) {
+  private async executeTool(identity: AgentToolContext, operation: AgentProcessOperation) {
     const { runId, nodeId, agentId, toolCallId } = identity;
     const original = new AgentSession(this.database).toolAction(agentId, toolCallId);
     if (
@@ -130,18 +124,18 @@ export class AgentProcessOperationBroker {
         !isDeepStrictEqual(original.input, identity.request.input))
     )
       throw new Error("Recovered tool arguments differ from the committed call");
-    const run = this.database
-      .transaction(() => chat.requireActiveAgentToolRun(runId, nodeId, agentId))
-      .immediate();
-    const result = await this.execute({
-      runId,
-      nodeId,
-      agentId,
-      actionScopeId: original?.actionScopeId ?? run.action_scope_id,
-      stableActionId: toolCallId,
-      operationId: deriveAgentProcessOperationId(agentId, toolCallId),
-      operation,
-    });
+    const result = await this.execute(
+      {
+        runId,
+        nodeId,
+        agentId,
+        actionScopeId: original?.actionScopeId ?? identity.run.action_scope_id,
+        stableActionId: toolCallId,
+        operationId: deriveAgentProcessOperationId(agentId, toolCallId),
+        operation,
+      },
+      identity.committed,
+    );
     return { operationId: result.operationId, state: result.state, receipt: result.receipt };
   }
 
@@ -155,7 +149,10 @@ export class AgentProcessOperationBroker {
     database.pragma("synchronous = FULL");
   }
 
-  async execute(request: AgentProcessOperationRequest): Promise<AgentProcessOperationResult> {
+  async execute(
+    request: AgentProcessOperationRequest,
+    committed: Promise<void> = Promise.resolve(),
+  ): Promise<AgentProcessOperationResult> {
     const runId = uuidSchema.parse(request.runId),
       nodeId = uuidSchema.parse(request.nodeId),
       agentId = uuidSchema.parse(request.agentId),
@@ -172,7 +169,6 @@ export class AgentProcessOperationBroker {
 
     const row = this.database
       .transaction(() => {
-        this.assertActiveRun(runId, nodeId, agentId, actionScopeId, stableActionId);
         const existing = this.read(operationId);
         if (existing) {
           if (
@@ -226,7 +222,9 @@ export class AgentProcessOperationBroker {
     if (row.state === "succeeded" || row.state === "failed") return toResult(row);
     const active = this.inFlight.get(operationId);
     if (active) return active;
-    const dispatch = this.dispatch(nodeId, { operationId, agentId, operation });
+    const dispatch = committed.then(() =>
+      this.dispatch(nodeId, { operationId, agentId, operation }),
+    );
     this.inFlight.set(operationId, dispatch);
     const clear = () => {
       if (this.inFlight.get(operationId) === dispatch) this.inFlight.delete(operationId);
@@ -393,41 +391,6 @@ export class AgentProcessOperationBroker {
     const stored = this.read(request.operationId);
     if (!stored) throw new Error("Agent process operation receipt was not persisted");
     return toResult(stored);
-  }
-
-  private assertActiveRun(
-    runId: string,
-    nodeId: string,
-    agentId: string,
-    actionScopeId: string,
-    stableActionId: string,
-  ): void {
-    const run = this.database
-      .prepare(
-        `SELECT r.state,r.node_id,r.delivery_id,a.stage,a.node_id AS current_node_id
-         FROM owner_agent_runs r JOIN owner_agents a ON a.id=r.agent_id
-         WHERE r.id=? AND r.agent_id=?`,
-      )
-      .get(runId, agentId) as
-      | {
-          state: string;
-          node_id: string;
-          delivery_id: string;
-          stage: string;
-          current_node_id: string;
-        }
-      | undefined;
-    if (
-      !run ||
-      run.state !== "running" ||
-      run.node_id !== nodeId ||
-      (run.delivery_id !== actionScopeId &&
-        new AgentSession(this.database).toolAction(agentId, stableActionId)?.actionScopeId !==
-          actionScopeId) ||
-      run.current_node_id !== nodeId ||
-      run.stage !== "complete"
-    )
-      throw new Error("Agent process operation run is no longer active");
   }
 
   private read(operationId: string): OperationRow | undefined {

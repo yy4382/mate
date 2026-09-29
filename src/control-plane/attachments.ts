@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineAgentTool } from "./agent-tool-entry.js";
+import { defineAgentTool, type AgentToolContext } from "./agent-tool-entry.js";
 import type Database from "better-sqlite3";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -82,7 +82,7 @@ export class AttachmentService {
         },
         (identity, input) => {
           return {
-            attachments: this.listForAgent(identity.runId, identity.agentId, input.conversationId),
+            attachments: this.listForAgent(identity.agentId, input.conversationId),
           };
         },
         "Agent 文件请求被拒绝。",
@@ -169,8 +169,8 @@ export class AttachmentService {
     return rows.map(toSummary);
   }
 
-  listForAgent(runId: string, agentId: string, channelId: string): AttachmentSummary[] {
-    this.authorizeAgentConversationRead(runId, agentId, channelId);
+  listForAgent(agentId: string, channelId: string): AttachmentSummary[] {
+    this.authorizeAgentConversationRead(agentId, channelId);
     const rows = this.db
       .prepare(
         `SELECT id,channel_id,storage_key,filename,content_type,size,sha256,
@@ -190,7 +190,7 @@ export class AttachmentService {
     offset: number;
     length: number;
   }): { attachment: AttachmentSummary; offset: number; totalBytes: number; base64: string } {
-    this.authorizeAgentConversationRead(input.runId, input.agentId, input.channelId);
+    this.authorizeAgentConversationRead(input.agentId, input.channelId);
     if (
       !Number.isSafeInteger(input.offset) ||
       input.offset < 0 ||
@@ -335,21 +335,21 @@ export class AttachmentService {
     };
   }
 
-  async publishNodeFile(input: {
-    runId: string;
-    agentId: string;
-    actionId: string;
-    operationName: string;
-    toolInput: Record<string, unknown>;
-    channelId: string;
-    path: string;
-    filename?: string;
-  }): Promise<AttachmentSummary> {
-    const scope = this.authorizeAgentRun(input.runId, input.agentId),
+  async publishNodeFile(
+    input: AgentToolContext & {
+      actionId: string;
+      operationName: string;
+      toolInput: Record<string, unknown>;
+      channelId: string;
+      path: string;
+      filename?: string;
+    },
+  ): Promise<AttachmentSummary> {
+    const scope = input.run,
       filename = normalizeFilename(input.filename ?? input.path.split("/").at(-1) ?? "");
-    this.authorizeAgentConversation(input.runId, input.agentId, input.channelId);
+    this.authorizeAgentConversation(input.agentId, input.channelId);
     if (!filename) throw new AttachmentError("invalid_filename", "文件名无效。", 400);
-    if (!input.actionId.startsWith(`mate:${scope.delivery_id}:`))
+    if (!input.actionId.startsWith(`mate:${scope.action_scope_id}:`))
       throw new AttachmentError("operation_conflict", "文件发布 ID 与当前消息授权不匹配。", 403);
     const operationId = operationIdForAction(input.actionId),
       requestHash = createHash("sha256")
@@ -416,8 +416,9 @@ export class AttachmentService {
     });
     const reservation = reserve.immediate();
     if (reservation.kind === "done") return reservation.result;
+    await input.committed;
     try {
-      const statResult = await this.workspaces.readForAgentPublish(input.runId, input.agentId, {
+      const statResult = await this.workspaces.readForAgentPublish(input, {
         kind: "workspace_stat",
         path: input.path,
       });
@@ -435,17 +436,13 @@ export class AttachmentService {
       let offset = 0;
       try {
         while (offset < metadata.size) {
-          const chunkResult = await this.workspaces.readForAgentPublish(
-            input.runId,
-            input.agentId,
-            {
-              kind: "workspace_read_chunk",
-              path: input.path,
-              offset,
-              length: Math.min(8192, metadata.size - offset),
-              version: metadata.version,
-            },
-          );
+          const chunkResult = await this.workspaces.readForAgentPublish(input, {
+            kind: "workspace_read_chunk",
+            path: input.path,
+            offset,
+            length: Math.min(8192, metadata.size - offset),
+            version: metadata.version,
+          });
           const bytes = decodeChunk(chunkResult, offset, metadata.size, metadata.version);
           if (!bytes.length)
             throw new WorkspaceError("file_changed", "File ended during publish", 409);
@@ -457,7 +454,7 @@ export class AttachmentService {
       } finally {
         closeSync(descriptor);
       }
-      const finalStat = await this.workspaces.readForAgentPublish(input.runId, input.agentId, {
+      const finalStat = await this.workspaces.readForAgentPublish(input, {
         kind: "workspace_stat",
         path: input.path,
       });
@@ -521,55 +518,19 @@ export class AttachmentService {
     }
   }
 
-  private authorizeAgentRun(
-    runId: string,
-    agentId: string,
-  ): {
-    session_id: string;
-    node_id: string;
-    delivery_id: string;
-    channel_id: string;
-  } {
-    const row = this.db
-      .prepare(
-        `SELECT s.id AS session_id,r.node_id,r.delivery_id,d.channel_id
-         FROM owner_agent_runs r JOIN owner_message_deliveries d ON d.id=r.delivery_id
-         JOIN owner_agents a ON a.id=r.agent_id
-         JOIN owner_agent_sessions s ON s.agent_id=a.id
-         JOIN owner_channel_memberships m ON m.channel_id=d.channel_id
-           AND m.principal_kind='agent' AND m.principal_id=a.id AND m.active=1
-         JOIN owner_channel_memberships human ON human.channel_id=d.channel_id
-           AND human.principal_kind='human' AND human.principal_id='owner' AND human.active=1
-         WHERE r.id=? AND r.agent_id=? AND r.state='running'
-           AND a.stage='complete'`,
-      )
-      .get(runId, agentId) as
-      { session_id: string; node_id: string; delivery_id: string; channel_id: string } | undefined;
-    if (!row)
-      throw new AttachmentError(
-        "conversation_unavailable",
-        "当前 Agent 运行无权发布到此对话。",
-        403,
-      );
-    return row;
-  }
-
   /**
    * Attachment reads follow conversation visibility: a public channel's attachments are
    * readable by any Agent with an active run, while a private conversation stays member-only.
    * A direct message is never opened by visibility, even if one were ever stored public.
    */
-  private authorizeAgentConversationRead(runId: string, agentId: string, channelId: string): void {
+  private authorizeAgentConversationRead(agentId: string, channelId: string): void {
     const row = this.db
       .prepare(
         `SELECT 1
-         FROM owner_agent_runs r
-         JOIN owner_agents a ON a.id=r.agent_id AND a.node_id=r.node_id
-         JOIN owner_channels c ON c.id=? AND c.archived=0
+         FROM owner_channels c
          LEFT JOIN owner_channel_memberships member ON member.channel_id=?
-           AND member.principal_kind='agent' AND member.principal_id=a.id AND member.active=1
-         WHERE r.id=? AND r.agent_id=? AND r.state='running'
-           AND a.stage='complete'
+           AND member.principal_kind='agent' AND member.principal_id=? AND member.active=1
+         WHERE c.id=? AND c.archived=0
            AND (member.active=1 OR (
              c.visibility='public'
              AND NOT EXISTS (
@@ -580,7 +541,7 @@ export class AttachmentService {
              )
            ))`,
       )
-      .get(channelId, channelId, runId, agentId);
+      .get(channelId, agentId, channelId);
     if (!row)
       throw new AttachmentError(
         "conversation_unavailable",
@@ -590,19 +551,16 @@ export class AttachmentService {
   }
 
   /** Publishing still requires membership, even where reading does not. */
-  private authorizeAgentConversation(runId: string, agentId: string, channelId: string): void {
+  private authorizeAgentConversation(agentId: string, channelId: string): void {
     const row = this.db
       .prepare(
         `SELECT 1
-         FROM owner_agent_runs r
-         JOIN owner_agents a ON a.id=r.agent_id AND a.node_id=r.node_id
-         JOIN owner_channels c ON c.id=? AND c.archived=0
+         FROM owner_channels c
          JOIN owner_channel_memberships agent ON agent.channel_id=?
-           AND agent.principal_kind='agent' AND agent.principal_id=a.id AND agent.active=1
-         WHERE r.id=? AND r.agent_id=? AND r.state='running'
-           AND a.stage='complete'`,
+           AND agent.principal_kind='agent' AND agent.principal_id=? AND agent.active=1
+         WHERE c.id=? AND c.archived=0`,
       )
-      .get(channelId, channelId, runId, agentId);
+      .get(channelId, agentId, channelId);
     if (!row)
       throw new AttachmentError(
         "conversation_unavailable",

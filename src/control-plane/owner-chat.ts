@@ -2,7 +2,7 @@ import { AgentSession } from "./agent-session.js";
 import type Database from "better-sqlite3";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
-import { defineAgentTool } from "./agent-tool-entry.js";
+import { defineAgentTool, type CurrentAgentToolRun } from "./agent-tool-entry.js";
 import { nodeAccountOf } from "./nodes/directory.js";
 
 export type ChannelVisibility = "public" | "private";
@@ -126,16 +126,6 @@ export interface OwnerChannelUpdate {
   description?: string | undefined;
   visibility?: ChannelVisibility | undefined;
   archived?: boolean | undefined;
-}
-
-interface ActiveAgentToolRun {
-  run_id: string;
-  agent_id: string;
-  node_id: string;
-  action_scope_id: string;
-  session_id: string;
-  state: string;
-  input_end_seq: number;
 }
 
 export class AgentToolRefusal extends Error {}
@@ -1297,40 +1287,13 @@ export class OwnerChat {
     return toChannel(row);
   }
 
-  requireActiveAgentToolRun(runId: string, nodeId: string, agentId: string): ActiveAgentToolRun {
-    const run = this.db
-      .prepare(
-        `SELECT r.id AS run_id,r.agent_id,r.node_id,r.delivery_id AS action_scope_id,
-                r.state,r.input_end_seq,s.id AS session_id,
-                a.node_id AS current_node_id
-         FROM owner_agent_runs r
-         JOIN owner_agents a ON a.id=r.agent_id
-         JOIN owner_agent_sessions s ON s.agent_id=a.id
-         WHERE r.id=? AND r.agent_id=?
-           AND NOT EXISTS (SELECT 1 FROM owner_agent_recovery_holds hold WHERE hold.agent_id=a.id)`,
-      )
-      .get(runId, agentId) as (ActiveAgentToolRun & { current_node_id: string }) | undefined;
-    if (!run || run.state !== "running" || run.node_id !== nodeId || run.current_node_id !== nodeId)
-      throw new AgentToolRefusal("Agent run is no longer active");
-    return run;
-  }
-
   agentTools() {
     const tool = <S extends z.ZodType>(
       definition: { description: string; schema: S },
-      handler: (run: ActiveAgentToolRun, toolCallId: string, input: z.output<S>) => unknown,
+      handler: (run: CurrentAgentToolRun, toolCallId: string, input: z.output<S>) => unknown,
     ) =>
       defineAgentTool(definition, (identity, input) =>
-        this.db
-          .transaction(() => {
-            const run = this.requireActiveAgentToolRun(
-              identity.runId,
-              identity.nodeId,
-              identity.agentId,
-            );
-            return handler(run, identity.toolCallId, input);
-          })
-          .immediate(),
+        handler(identity.run, identity.toolCallId, input),
       );
     return {
       "agents.list": tool(
@@ -1955,7 +1918,7 @@ export class OwnerChat {
   }
 
   private executeTaskChange(
-    run: ActiveAgentToolRun,
+    run: CurrentAgentToolRun,
     toolCallId: string,
     request: TaskToolRequest,
   ): unknown {
@@ -2413,7 +2376,7 @@ export class OwnerChat {
   }
 
   private recordAgentToolAction(
-    run: ActiveAgentToolRun,
+    run: CurrentAgentToolRun,
     toolCallId: string,
     operation: string,
     input: unknown,
@@ -2455,7 +2418,7 @@ export class OwnerChat {
   }
 
   private createAgentToolMessage(
-    run: ActiveAgentToolRun,
+    run: CurrentAgentToolRun,
     toolActionId: string,
     channelId: string,
     text: string,

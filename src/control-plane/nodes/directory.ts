@@ -1326,7 +1326,7 @@ export class NodeDirectory {
     if (!nodeId || this.connected.get(nodeId) !== socket)
       return this.reject(socket, request.requestId, "not_authenticated", "节点尚未完成身份验证。");
     const pending = this.pendingAgentRuns.get(request.runId);
-    if (pending && (pending.nodeId !== nodeId || pending.agentId !== request.agentId))
+    if (pending && pending.nodeId !== nodeId)
       return this.reject(
         socket,
         request.requestId,

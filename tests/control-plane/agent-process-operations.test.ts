@@ -168,7 +168,7 @@ it("commits a corrected process receipt and Agent notification in one transactio
   }
 });
 
-it("rejects stale runs and operation IDs reused for changed requests", async () => {
+it("rejects operation IDs reused for changed requests and mismatched action scopes", async () => {
   const context = setup(),
     dispatch = vi.fn(async () => ({
       operationId: context.operationId,
@@ -192,9 +192,6 @@ it("rejects stale runs and operation IDs reused for changed requests", async () 
         operation: { kind: "process.stop", targetOperationId: randomUUID() },
       }),
     ).rejects.toThrow("identity conflict");
-    await expect(
-      broker.execute({ ...context, runId: randomUUID(), operation: { kind: "process.list" } }),
-    ).rejects.toThrow("no longer active");
     await expect(
       broker.execute({
         ...context,

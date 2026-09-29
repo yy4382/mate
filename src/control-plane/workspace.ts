@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineAgentTool } from "./agent-tool-entry.js";
+import { defineAgentTool, type AgentToolContext } from "./agent-tool-entry.js";
 import {
   WORKSPACE_WRITE_BYTES_BASE64_MAX_CHARS,
   WORKSPACE_WRITE_MAX_BYTES,
@@ -118,7 +118,7 @@ export class WorkspaceService {
             .strict(),
         },
         (identity, input) => {
-          return this.readForAgent(identity.runId, identity.agentId, {
+          return this.readForAgent(identity, {
             kind: "workspace_list",
             ...input,
           });
@@ -131,7 +131,7 @@ export class WorkspaceService {
           schema: z.object({ path: workspacePath }).strict(),
         },
         (identity, input) => {
-          return this.readForAgent(identity.runId, identity.agentId, {
+          return this.readForAgent(identity, {
             kind: "workspace_stat",
             ...input,
           });
@@ -145,7 +145,7 @@ export class WorkspaceService {
           schema: z.object({ path: workspacePath }).strict(),
         },
         (identity, input) => {
-          return this.readForAgent(identity.runId, identity.agentId, { kind: "read", ...input });
+          return this.readForAgent(identity, { kind: "read", ...input });
         },
         "Agent 文件请求被拒绝。",
       ),
@@ -163,7 +163,7 @@ export class WorkspaceService {
             .strict(),
         },
         (identity, input) => {
-          return this.readForAgent(identity.runId, identity.agentId, {
+          return this.readForAgent(identity, {
             kind: "workspace_read_chunk",
             ...input,
           });
@@ -505,10 +505,10 @@ export class WorkspaceService {
   }
 
   async readForAgentPublish(
-    runId: string,
-    agentId: string,
+    identity: AgentToolContext,
     operation: Extract<Operation, { kind: "workspace_stat" | "workspace_read_chunk" }>,
   ): Promise<Record<string, unknown>> {
+    const { runId, agentId } = identity;
     return this.withAccessAudit(
       {
         principalKind: "agent",
@@ -518,28 +518,28 @@ export class WorkspaceService {
         operation: operation.kind,
         paths: [operation.path],
       },
-      () => this.readForAgentPublishUnchecked(runId, agentId, operation),
+      () => this.readForAgentPublishUnchecked(identity, operation),
     );
   }
 
   private async readForAgentPublishUnchecked(
-    runId: string,
-    agentId: string,
+    identity: AgentToolContext,
     operation: Extract<Operation, { kind: "workspace_stat" | "workspace_read_chunk" }>,
   ): Promise<Record<string, unknown>> {
-    const authorized = this.authorizeActiveRun(runId, agentId),
-      result = await this.runNodeOperation(
-        {
-          type: "control.workspace.operation",
-          requestId: randomUUID(),
-          operationId: randomUUID(),
-          runId,
-          agentId,
-          mode: "agent_publish",
-          operation,
-        },
-        authorized.node_id,
-      );
+    const { runId, agentId } = identity;
+    await identity.committed;
+    const result = await this.runNodeOperation(
+      {
+        type: "control.workspace.operation",
+        requestId: randomUUID(),
+        operationId: randomUUID(),
+        runId,
+        agentId,
+        mode: "agent_publish",
+        operation,
+      },
+      identity.run.node_id,
+    );
     try {
       const value = JSON.parse(result.stdout) as unknown;
       if (typeof value !== "object" || value === null) throw new Error("Invalid result");
@@ -549,15 +549,15 @@ export class WorkspaceService {
     }
   }
 
-  /** Agent reads require an active run and the membership that supplied its current delivery. */
+  /** The shared tool entry accepts Agent reads independently of the triggering conversation. */
   async readForAgent(
-    runId: string,
-    agentId: string,
+    identity: AgentToolContext,
     operation: Extract<
       Operation,
       { kind: "read" | "workspace_list" | "workspace_stat" | "workspace_read_chunk" }
     >,
   ): Promise<Record<string, unknown>> {
+    const { runId, agentId } = identity;
     return this.withAccessAudit(
       {
         principalKind: "agent",
@@ -567,31 +567,31 @@ export class WorkspaceService {
         operation: operation.kind,
         paths: [operation.path],
       },
-      () => this.readForAgentUnchecked(runId, agentId, operation),
+      () => this.readForAgentUnchecked(identity, operation),
     );
   }
 
   private async readForAgentUnchecked(
-    runId: string,
-    agentId: string,
+    identity: AgentToolContext,
     operation: Extract<
       Operation,
       { kind: "read" | "workspace_list" | "workspace_stat" | "workspace_read_chunk" }
     >,
   ): Promise<Record<string, unknown>> {
-    const authorized = this.authorizeActiveRun(runId, agentId),
-      result = await this.runNodeOperation(
-        {
-          type: "control.workspace.operation",
-          requestId: randomUUID(),
-          operationId: randomUUID(),
-          runId,
-          agentId,
-          mode: "agent_read",
-          operation,
-        },
-        authorized.node_id,
-      );
+    const { runId, agentId } = identity;
+    await identity.committed;
+    const result = await this.runNodeOperation(
+      {
+        type: "control.workspace.operation",
+        requestId: randomUUID(),
+        operationId: randomUUID(),
+        runId,
+        agentId,
+        mode: "agent_read",
+        operation,
+      },
+      identity.run.node_id,
+    );
     if (operation.kind === "read") return { content: result.stdout };
     return parseOperationReceipt(result.stdout) as Record<string, unknown>;
   }
@@ -701,14 +701,14 @@ export class WorkspaceService {
   }
 
   /** Persist authorization and the node receipt before returning an Agent file action. */
-  async agentAction(input: {
-    runId: string;
-    agentId: string;
-    actionId: string;
-    operationName: string;
-    toolInput: Record<string, unknown>;
-    operation: Operation;
-  }): Promise<unknown> {
+  async agentAction(
+    input: AgentToolContext & {
+      actionId: string;
+      operationName: string;
+      toolInput: Record<string, unknown>;
+      operation: Operation;
+    },
+  ): Promise<unknown> {
     return this.withAccessAudit(
       {
         principalKind: "agent",
@@ -722,18 +722,18 @@ export class WorkspaceService {
     );
   }
 
-  private async agentActionUnchecked(input: {
-    runId: string;
-    agentId: string;
-    actionId: string;
-    operationName: string;
-    toolInput: Record<string, unknown>;
-    operation: Operation;
-  }): Promise<unknown> {
-    const authorized = this.authorizeActiveRun(input.runId, input.agentId);
+  private async agentActionUnchecked(
+    input: AgentToolContext & {
+      actionId: string;
+      operationName: string;
+      toolInput: Record<string, unknown>;
+      operation: Operation;
+    },
+  ): Promise<unknown> {
+    const authorized = input.run;
     if (!isMutatingOperation(input.operation))
       throw new WorkspaceError("workspace_unavailable", "此文件操作不允许修改工作区。", 403);
-    if (!input.actionId.startsWith(`mate:${authorized.delivery_id}:`)) {
+    if (!input.actionId.startsWith(`mate:${authorized.action_scope_id}:`)) {
       const original = new AgentSession(this.db).toolAction(input.agentId, input.actionId);
       if (
         !original ||
@@ -759,6 +759,7 @@ export class WorkspaceService {
       );
     if (recorded.kind === "done") return recorded.result;
     if (recorded.kind === "failed") throw confirmedFileFailure(recorded.code, recorded.stderr);
+    await input.committed;
     this.trackActionOperation(operationId, {
       sessionId: authorized.session_id,
       actionId: input.actionId,
@@ -1001,34 +1002,6 @@ export class WorkspaceService {
     return row;
   }
 
-  private authorizeActiveRun(
-    runId: string,
-    agentId: string,
-  ): {
-    session_id: string;
-    node_id: string;
-    delivery_id: string;
-    channel_id: string;
-  } {
-    const run = this.db
-      .prepare(
-        `SELECT s.id AS session_id,r.node_id,r.delivery_id,d.channel_id
-         FROM owner_agent_runs r JOIN owner_message_deliveries d ON d.id=r.delivery_id
-         JOIN owner_agents a ON a.id=r.agent_id
-         JOIN owner_agent_sessions s ON s.agent_id=a.id
-         JOIN owner_channel_memberships m ON m.channel_id=d.channel_id
-           AND m.principal_kind='agent' AND m.principal_id=a.id AND m.active=1
-         WHERE r.id=? AND r.agent_id=? AND r.state='running'
-           AND a.stage='complete'
-           AND NOT EXISTS (SELECT 1 FROM owner_agent_recovery_holds hold WHERE hold.agent_id=a.id)`,
-      )
-      .get(runId, agentId) as
-      { session_id: string; node_id: string; delivery_id: string; channel_id: string } | undefined;
-    if (!run)
-      throw new WorkspaceError("workspace_unavailable", "当前 Agent 运行无权访问此文件。", 403);
-    return run;
-  }
-
   private prepareToolAction(
     sessionId: string,
     actionId: string,
@@ -1087,37 +1060,41 @@ export class WorkspaceService {
         );
       throw new WorkspaceError("operation_unknown", "文件操作结果尚未确认。", 409);
     }
-    this.db
-      .prepare(
-        `INSERT INTO owner_agent_tool_actions(
+    return this.db
+      .transaction(() => {
+        this.db
+          .prepare(
+            `INSERT INTO owner_agent_tool_actions(
            session_id,action_id,agent_id,operation,request_hash,result_json,created_at
          ) VALUES(?,?,?,?,?,?,?)`,
-      )
-      .run(
-        sessionId,
-        actionId,
-        agentId,
-        operation,
-        requestHash,
-        JSON.stringify({
-          state: "executing",
-          operationId,
-          runId,
-          channelId,
-          operation,
-          nodeRequestHash,
-        }),
-        Date.now(),
-      );
-    recordAgentActivity(this.db, {
-      agentId,
-      kind: "operation.started",
-      referenceId: operationId,
-      summary: "文件操作已提交节点执行。",
-      detail: { operation, input: toolInput },
-      at: Date.now(),
-    });
-    return { kind: "new" };
+          )
+          .run(
+            sessionId,
+            actionId,
+            agentId,
+            operation,
+            requestHash,
+            JSON.stringify({
+              state: "executing",
+              operationId,
+              runId,
+              channelId,
+              operation,
+              nodeRequestHash,
+            }),
+            Date.now(),
+          );
+        recordAgentActivity(this.db, {
+          agentId,
+          kind: "operation.started",
+          referenceId: operationId,
+          summary: "文件操作已提交节点执行。",
+          detail: { operation, input: toolInput },
+          at: Date.now(),
+        });
+        return { kind: "new" as const };
+      })
+      .immediate();
   }
 
   private completeToolAction(

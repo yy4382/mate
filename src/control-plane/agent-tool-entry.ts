@@ -7,7 +7,20 @@ export interface AgentToolIdentity {
   toolCallId: string;
 }
 
+export interface CurrentAgentToolRun {
+  run_id: string;
+  agent_id: string;
+  node_id: string;
+  action_scope_id: string;
+  channel_id: string;
+  session_id: string;
+  input_end_seq: number;
+}
+
 export interface AgentToolContext extends AgentToolIdentity {
+  run: CurrentAgentToolRun;
+  /** Node I/O must wait until the current-run check and intent have committed. */
+  committed: Promise<void>;
   request: { operation: string; input: unknown };
 }
 

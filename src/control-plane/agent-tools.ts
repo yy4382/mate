@@ -8,6 +8,7 @@ import {
   defineAgentTool,
   type AgentToolEntry,
   type AgentToolIdentity,
+  type CurrentAgentToolRun,
 } from "./agent-tool-entry.js";
 
 export type AgentToolCallResult = { ok: true; result: unknown } | { ok: false; error: string };
@@ -18,7 +19,7 @@ export class AgentTools {
   private readonly meta: Map<string, AgentToolEntry>;
 
   constructor(
-    database: Database.Database,
+    private readonly database: Database.Database,
     chat: OwnerChat,
     workspace: WorkspaceService,
     attachments: AttachmentService,
@@ -29,21 +30,14 @@ export class AgentTools {
         ...chat.agentTools(),
         ...workspace.agentTools(),
         ...attachments.agentTools(),
-        ...processes.agentTools(chat),
+        ...processes.agentTools(),
       }),
     );
-    const checked = (identity: AgentToolIdentity) =>
-      database
-        .transaction(() =>
-          chat.requireActiveAgentToolRun(identity.runId, identity.nodeId, identity.agentId),
-        )
-        .immediate();
     this.meta = new Map(
       Object.entries({
         "tools.list": defineAgentTool(
           { description: "", schema: z.object({}).strict() },
           (identity) => {
-            checked(identity);
             return {
               tools: [...this.operations].map(([name, entry]) => ({
                 name,
@@ -55,7 +49,6 @@ export class AgentTools {
         "tools.describe": defineAgentTool(
           { description: "", schema: z.object({ name: z.string().min(1).max(128) }).strict() },
           (identity, input) => {
-            checked(identity);
             const entry = this.operation(input.name);
             return {
               name: input.name,
@@ -72,7 +65,6 @@ export class AgentTools {
               .strict(),
           },
           (identity, input) => {
-            checked(identity);
             return this.operation(input.name).invoke(identity, input.input);
           },
         ),
@@ -85,6 +77,15 @@ export class AgentTools {
     operation: string,
     input: unknown,
   ): Promise<AgentToolCallResult> {
+    let accept!: () => void;
+    let refuse!: (error: unknown) => void;
+    const committed = new Promise<void>((resolve, reject) => {
+      accept = resolve;
+      refuse = reject;
+    });
+    // A synchronous refusal may have no node continuation waiting on this promise.
+    void committed.catch(() => {});
+    let execution: unknown;
     let unexpectedError = "Agent tool request was refused";
     try {
       const entry = this.meta.get(operation);
@@ -99,11 +100,40 @@ export class AgentTools {
         typeof input.name === "string"
       )
         unexpectedError = this.operations.get(input.name)?.unexpectedError ?? unexpectedError;
-      return {
-        ok: true,
-        result: await entry.invoke({ ...identity, request: { operation, input } }, input),
-      };
+      const { result } = this.database
+        .transaction(() => {
+          const run = this.database
+            .prepare(
+              `SELECT r.id AS run_id,r.agent_id,r.node_id,r.delivery_id AS action_scope_id,
+                  r.input_end_seq,s.id AS session_id,d.channel_id
+           FROM owner_agent_runs r
+           JOIN owner_agent_sessions s ON s.agent_id=r.agent_id
+           JOIN owner_message_deliveries d ON d.id=r.delivery_id
+           WHERE r.id=? AND r.agent_id=? AND r.state='running'`,
+            )
+            .get(identity.runId, identity.agentId) as CurrentAgentToolRun | undefined;
+          if (!run) throw new AgentToolRefusal("Agent run is no longer active");
+          // Synchronous effects and the synchronous preparation of node intents are
+          // accepted under this lock. Network continuations await committed below.
+          execution = entry.invoke(
+            {
+              ...identity,
+              run,
+              committed,
+              request: { operation, input },
+            },
+            input,
+          );
+          return { result: execution };
+        })
+        .immediate();
+      accept();
+      return { ok: true, result: await result };
     } catch (error) {
+      refuse(error);
+      // COMMIT can fail after an asynchronous handler has prepared its intent. Drain
+      // its rejected continuation too, so neither it nor its bookkeeping is orphaned.
+      if (execution instanceof Promise) await execution.catch(() => {});
       if (error instanceof z.ZodError) return { ok: false, error: "Invalid tool input" };
       if (
         error instanceof AgentToolRefusal ||

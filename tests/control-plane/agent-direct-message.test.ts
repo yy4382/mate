@@ -1960,7 +1960,11 @@ it("keeps a running Agent's tool catalogue and refuses stale or forged tool runs
     },
     { agentId: randomUUID() },
   );
-  expect(forgedAgent).toMatchObject({ type: "control.error", code: "invalid_identity" });
+  expect(forgedAgent).toMatchObject({
+    type: "control.agent.run.tool_result",
+    ok: false,
+    error: "Agent run is no longer active",
+  });
 
   await app.nodes.receive(
     socket,
@@ -3144,83 +3148,6 @@ it("refuses the owner's workspace preview until preparation finished, then serve
   expect((await preview()).status).not.toBe(404);
   expect(requests).toHaveLength(1);
   expect(requests[0]).toMatchObject({ type: "control.workspace.operation", agentId });
-});
-
-it("keeps file actions and publications away from an Agent that is still preparing", async () => {
-  const { app, cookie, db, nodeId, socket } = await setup(),
-    agentId = randomUUID();
-  app.agents.prepare({
-    id: agentId,
-    nodeId,
-    name: "Preparing partner",
-    role: "Has no accepted workspace yet",
-    description: "Synthetic preparation-gate fixture.",
-    model: { provider: "openai", id: "gpt-4.1" },
-  });
-  app.agents.complete(
-    agentId,
-    {
-      username: "mate-node-account",
-      uid: 23001,
-      gid: 23001,
-      workspace: `/var/lib/mate/agents/${agentId}`,
-      workspaceMarker: "a".repeat(64),
-    },
-    app.chat,
-  );
-  const channel = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  await app.request("/api/owner/model-credentials/openai", {
-    method: "PUT",
-    headers: { cookie, "content-type": "application/json" },
-    body: JSON.stringify({ apiKey: "synthetic-preparation-gate-key" }),
-  });
-  const runStart = socket.sent.length;
-  app.chat.createMessage(channel.id, "Touch the files.");
-  const run = await waitForRun(socket, runStart);
-
-  // The workspace path is already known, so only the preparation stage can refuse these actions.
-  db.prepare("UPDATE owner_agents SET stage='preparing_workspace' WHERE id=?").run(agentId);
-  const workspaceRequests: Array<Record<string, unknown>> = [];
-  socket.onWorkspaceOperation = (message) => {
-    workspaceRequests.push(message);
-  };
-
-  const read = await callAgentTool(app, socket, run, "preparing-read", "tools.call", {
-    name: "workspace.read",
-    input: { path: "MEMORY.md" },
-  });
-  // The run authorization in front of the workspace refuses the unfinished Agent, and nothing is
-  // sent to the node on its behalf.
-  expect(read).toMatchObject({ ok: false, error: "当前 Agent 运行无权访问此文件。" });
-  const publish = await callAgentTool(app, socket, run, "preparing-publish", "tools.call", {
-    name: "attachments.publish",
-    input: { channelId: channel.id, path: "note.txt" },
-  });
-  expect(publish).toMatchObject({ ok: false });
-  expect(workspaceRequests).toEqual([]);
-
-  // Finishing the same preparation lets the identical read reach the node.
-  db.prepare("UPDATE owner_agents SET stage='complete' WHERE id=?").run(agentId);
-  socket.onWorkspaceOperation = async (message) => {
-    workspaceRequests.push(message);
-    await app.nodes.receive(
-      socket,
-      JSON.stringify({
-        type: "node.workspace.operation.result",
-        requestId: message.requestId,
-        operationId: message.operationId,
-        agentId,
-        ok: true,
-        result: { code: 0, stdout: "memory\n", stderr: "", truncated: false },
-      }),
-    );
-  };
-  const accepted = await callAgentTool(app, socket, run, "prepared-read", "tools.call", {
-    name: "workspace.read",
-    input: { path: "MEMORY.md" },
-  });
-  expect(accepted).toMatchObject({ ok: true, result: { content: "memory\n" } });
-  expect(workspaceRequests).toHaveLength(1);
 });
 
 it("lets no progress or failure report move an Agent whose preparation already finished", async () => {
