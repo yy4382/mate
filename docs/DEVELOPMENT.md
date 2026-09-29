@@ -21,7 +21,7 @@ export MATE_NODE_DATA_DIR=/ABSOLUTE/private/node
 pnpm start:node
 ```
 
-单账号启动检查以启动账号运行，不需要 root、容器或服务管理器，也不需要预建 Mate 专用用户；它在同一个脚本里启动控制面与节点，通过真实 WebSocket 完成一次性配对，从网页接口创建两名 Agent，分别在重启节点与重启控制面（节点保持在线）之后确认已配对节点重新认证，从网页读取的同一接口核对在线/离线与错误凭据被拒绝，并确认短期模型子进程与启动账号相同。它记录的证据包括：脚本本身以非 root 的启动账号运行、两名 Agent 的账号就是启动账号（用户名与 UID 由脚本实测得出）、两名 Agent 工作区与会话各自独立、记忆入口可用、工作区权限为 `700`、写入模型凭据后网页显示 `ready`；在能读取本机 passwd 数据库的主机上，它还会直接查证旧版按 Agent 建立的 `mate_<27 位 Agent ID>` 账号并未出现（`localAccountDatabaseRead` 为 false 时该项记为 `null`，不作断言）。macOS 与 Linux 均可运行；脚本会记录 `hostEnvironment` 与 `linuxKernel`，macOS 和容器内的结果只作跨平台证据，原生主机结果须单独记录。同一脚本还可在节点启动模型进程的接缝处核对模型子进程账号；工作区根路径不可写时网页显示失败原因，由 `tests/control-plane/agent-creation-process.test.ts` 中的独立用例覆盖，不在此脚本内：
+单账号启动检查以启动账号运行，不需要 root、容器或服务管理器，也不需要预建 Mate 专用用户；它在同一个脚本里启动控制面与节点，通过真实 WebSocket 完成一次性配对，从网页接口创建两名 Agent，分别在重启节点与重启控制面（节点保持在线）之后确认已配对节点重新认证，从网页读取的同一接口核对在线/离线与错误凭据被拒绝，并确认短期模型子进程与启动账号相同。它记录的证据包括：脚本本身以非 root 的启动账号运行、两名 Agent 的账号就是启动账号（用户名与 UID 由脚本实测得出）、两名 Agent 工作区与会话各自独立、记忆入口可用、工作区权限为 `700`、写入模型凭据后网页显示 `ready`；在能读取本机 passwd 数据库的主机上，它还会直接查证旧版按 Agent 建立的 `mate_<27 位 Agent ID>` 账号并未出现（`localAccountDatabaseRead` 为 false 时该项记为 `null`，不作断言）。macOS 与 Linux 均可运行；脚本会记录 `hostEnvironment` 与 `linuxKernel`。同一脚本还可在节点启动模型进程的接缝处核对模型子进程账号；工作区根路径不可写时网页显示失败原因，由 `tests/control-plane/agent-creation-process.test.ts` 中的独立用例覆盖，不在此脚本内：
 
 ```sh
 pnpm build
@@ -51,7 +51,7 @@ pnpm build
 pnpm test:linux-ordinary-command-failure
 ```
 
-该检查以启动账号运行，不需要 root、容器或服务管理器，macOS 与 Linux 都可运行，并打印一行 JSON 证据；它记录 `kernel`、`linuxKernel` 与 `containerized`，因此 macOS 结果只作跨平台证据，原生 Linux 结果须单独记录。它不覆盖宿主的 `sudo` 策略：普通账号无法终止 `sudo` 派生的 root 后代，Mate 对此不作任何声明。
+该检查以启动账号运行，不需要 root、容器或服务管理器，macOS 与 Linux 都可运行，并打印一行 JSON 证据；它记录 `kernel`、`linuxKernel` 与 `containerized`。它不覆盖宿主的 `sudo` 策略：普通账号无法终止 `sudo` 派生的 root 后代，Mate 对此不作任何声明。
 
 部署路径（登记发布目录、启动/停止/重启两个服务、状态与诊断、备份恢复、升级）由 `tests/deployment/account-services.test.ts` 与 `tests/deployment/coordinated-cli.test.ts` 覆盖：前者真的启动、重启和停止子进程并核对进程号与日志，后者核对命令路由。整条路径（一条命令启动两个服务、重启、状态、登录、配对、创建 Agent、执行一条普通命令）在下面这个只做真实进程工作的检查里以启动账号跑完：
 
@@ -60,7 +60,7 @@ pnpm build
 pnpm test:linux-single-account-deployment
 ```
 
-它以启动账号运行，不需要 root、容器或服务管理器，并打印一行 JSON 证据，记录 `kernel`、`linuxKernel`、`hostEnvironment` 与 `hostEnvironmentMarker`；证据里还包含 `commandsExercised`、`restartReplacedBothProcesses`、`controlPlaneHttpProbe`、`ordinaryCommandRanInAgentWorkspace` 等字段，便于逐项核对。macOS 与本机容器内的结果只作跨平台证据，原生 Linux 结果须单独记录，并把容器结果与原生主机结果分开标注。该检查用 `MATE_NODE_MODEL_WORKER_ENTRY` 指向脚本化模型进程，从而在没有模型凭据的情况下观察一条真实普通命令；这个环境变量是节点启动模型进程的测试接缝，真实部署不设置它。
+它以启动账号运行，不需要 root、容器或服务管理器，并打印一行 JSON 证据，记录 `kernel`、`linuxKernel`、`hostEnvironment` 与 `hostEnvironmentMarker`；证据里还包含 `commandsExercised`、`restartReplacedBothProcesses`、`controlPlaneHttpProbe`、`ordinaryCommandRanInAgentWorkspace` 等字段，便于逐项核对。该检查用 `MATE_NODE_MODEL_WORKER_ENTRY` 指向脚本化模型进程，从而在没有模型凭据的情况下观察一条真实普通命令；这个环境变量是节点启动模型进程的测试接缝，真实部署不设置它。
 
 `tests/execution/linux-user.test.ts` 与 `tests/nodes/agent-provisioner.test.ts` 覆盖文件工具在普通账号下的执行、工作区准备，以及节点以 root 运行时拒绝报告运行账号。`tests/control-plane/agents.test.ts` 覆盖控制面拒绝以 root 账号完成的 Agent 创建。**不要再引入以 root 运行节点、按 Agent 创建 Linux 账号或 Mate 管理 systemd 单元的检查**：这条路径已从实现、配置和说明中移除。
 
