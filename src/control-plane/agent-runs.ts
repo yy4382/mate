@@ -416,6 +416,12 @@ export class AgentRunCoordinator {
               this.now(),
               result.operationId,
             );
+          if (state === "succeeded" || state === "failed")
+            new AgentSession(this.db).queueCorrection(
+              result.agentId,
+              { operationId: result.operationId, state, receipt },
+              this.now(),
+            );
           recordAgentActivity(this.db, {
             agentId: result.agentId,
             nodeId,

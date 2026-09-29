@@ -622,3 +622,71 @@ it("presents the recoverable request summary when a terminal file receipt confli
   );
   owner.close();
 });
+
+it("appends a late confirmed stop after consumed uncertainty without repeating it on maintenance", () => {
+  const { paths, node } = setup();
+  const operationId = randomUUID();
+  addCommandOperation(
+    paths,
+    node.nodeId,
+    operationId,
+    { state: "unknown", receiptConfirmed: true, nodeReceiptRevision: 1 },
+    { state: "unknown", receipt: { reason: "old_command_may_still_run" }, revision: 1 },
+  );
+  const owner = new OwnerAuth({ dataDir: paths.controlPlaneDataDir });
+  owner.db
+    .prepare("DELETE FROM owner_agent_process_operations WHERE operation_id=?")
+    .run(operationId);
+  owner.db
+    .prepare(
+      `INSERT INTO owner_agent_stop_intents(
+    operation_id,agent_id,node_id,state,receipt_json,node_receipt_revision,created_at,updated_at
+  ) VALUES(?,?,?,'unknown',?,1,1,1)`,
+    )
+    .run(
+      operationId,
+      agentId,
+      node.nodeId,
+      JSON.stringify({ reason: "old_command_may_still_run" }),
+    );
+  const nodeDb = new Database(join(paths.nodeDataDir, "agent-process-operations.sqlite"));
+  const request = JSON.stringify({ agentId, operation: { kind: "process.stop_all" } });
+  nodeDb
+    .prepare("UPDATE agent_process_operations SET request=?,request_hash=? WHERE operation_id=?")
+    .run(request, createHash("sha256").update(request).digest("hex"), operationId);
+  reconcileCoordinatedState(paths, { lookupAgentIdentity: localIdentity });
+  const session = new AgentSession(owner.db);
+  const unknown = session.pendingCorrections(agentId, randomUUID());
+  expect(JSON.stringify(unknown)).toContain("old_command_may_still_run");
+  const run = owner.db
+    .prepare("SELECT id,node_id FROM owner_agent_runs WHERE agent_id=? LIMIT 1")
+    .get(agentId) as { id: string; node_id: string };
+  const consume = () => {
+    owner.db.prepare("UPDATE owner_agent_runs SET state='running' WHERE id=?").run(run.id);
+    for (const entry of session.pendingCorrections(agentId, run.id))
+      expect(
+        session.append(run.id, run.node_id, agentId, {
+          kind: "message",
+          id: entry.id,
+          message: entry.message,
+        }),
+      ).toBe(true);
+  };
+  consume();
+  nodeDb
+    .prepare(
+      "UPDATE agent_process_operations SET state='succeeded',receipt=?,revision=2 WHERE operation_id=?",
+    )
+    .run(JSON.stringify({ stopped: true, units: [] }), operationId);
+  reconcileCoordinatedState(paths, { lookupAgentIdentity: localIdentity });
+  const corrected = session.pendingCorrections(agentId, randomUUID());
+  expect(corrected).toHaveLength(1);
+  expect(JSON.stringify(corrected)).toContain(operationId);
+  expect(JSON.stringify(corrected)).toContain("succeeded");
+  consume();
+  reconcileCoordinatedState(paths, { lookupAgentIdentity: localIdentity });
+  expect(session.pendingCorrections(agentId, randomUUID())).toEqual([]);
+  expect(JSON.stringify(session.read(agentId))).toContain("old_command_may_still_run");
+  nodeDb.close();
+  owner.close();
+});

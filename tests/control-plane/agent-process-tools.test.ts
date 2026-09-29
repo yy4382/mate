@@ -1,3 +1,4 @@
+import { AgentSession } from "../../src/control-plane/agent-session.js";
 import { assistantEntry } from "../helpers/session.js";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import Database from "better-sqlite3";
@@ -581,6 +582,52 @@ it("rechecks stopped scopes after a restarted node confirms an ordinary operatio
   const context = JSON.parse(reconnect.sent.at(-1)!);
   expect(JSON.stringify(context.messages)).toContain(secondStop.operationId);
   expect(JSON.stringify(context.messages)).toContain("old_command_may_still_run");
+  const session = new AgentSession(db);
+  for (const entry of session.pendingCorrections(agentId, resumed.runId))
+    expect(
+      session.append(resumed.runId, nodeId, agentId, {
+        kind: "message",
+        id: entry.id,
+        message: entry.message,
+      }),
+    ).toBe(true);
+  const lateStop = {
+    type: "node.process.operation.result",
+    requestId: randomUUID(),
+    operationId: secondStop.operationId,
+    agentId,
+    state: "succeeded",
+    receipt: { stopped: true, units: [] },
+    revision: 3,
+  };
+  await app.nodes.receive(reconnect, JSON.stringify(lateStop));
+  await app.nodes.receive(
+    reconnect,
+    JSON.stringify({
+      type: "node.agent.run.context",
+      requestId: randomUUID(),
+      runId: resumed.runId,
+      agentId,
+      cursor: 0,
+      limit: 100,
+    }),
+  );
+  const corrected = JSON.parse(reconnect.sent.at(-1)!);
+  const additions = session.pendingCorrections(agentId, resumed.runId);
+  expect(additions).toHaveLength(1);
+  expect(JSON.stringify(additions)).toContain(secondStop.operationId);
+  expect(JSON.stringify(additions)).toContain("succeeded");
+  expect(JSON.stringify(corrected.messages)).toContain(JSON.stringify(additions[0]!.message));
+  expect(
+    session.append(resumed.runId, nodeId, agentId, {
+      kind: "message",
+      id: additions[0]!.id,
+      message: additions[0]!.message,
+    }),
+  ).toBe(true);
+  await app.nodes.receive(reconnect, JSON.stringify(lateStop));
+  expect(session.pendingCorrections(agentId, resumed.runId)).toEqual([]);
+  expect(JSON.stringify(session.read(agentId))).toContain("old_command_may_still_run");
 });
 
 it("dispatches ordinary commands from a durable intent without privileged approval", async () => {

@@ -649,7 +649,7 @@ function applyReceipt(
       { operationId: receipt.operationId, state: receipt.state, receipt: receipt.receipt },
       now,
     );
-  } else if (target.kind === "stop")
+  } else if (target.kind === "stop") {
     database
       .prepare(
         `UPDATE owner_agent_stop_intents SET state=?,receipt_json=?,node_receipt_revision=?,updated_at=?
@@ -663,7 +663,12 @@ function applyReceipt(
         target.operationId,
         (target.row as { node_id: string }).node_id,
       );
-  else {
+    new AgentSession(database).queueCorrection(
+      target.agentId,
+      { operationId: receipt.operationId, state: receipt.state, receipt: receipt.receipt },
+      now,
+    );
+  } else {
     const row = target.row as { envelope: Record<string, unknown> };
     const workspace = receipt.receipt as { code?: number; stderr?: string } | null;
     let state: "succeeded" | "failed" = receipt.state === "succeeded" ? "succeeded" : "failed",
