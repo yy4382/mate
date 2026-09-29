@@ -4,7 +4,6 @@ import {
   WORKSPACE_WRITE_MAX_BYTES,
   operationSchema,
 } from "../../src/execution/backend.js";
-import { agentWorkspaceOperations } from "../../src/control-plane/agent-tools.js";
 import {
   MAX_NODE_MESSAGE_BYTES,
   NodeControlMessageSchema,
@@ -41,9 +40,6 @@ it("keeps the largest documented binary workspace write inside the complete WebS
 
   expect(base64).toHaveLength(WORKSPACE_WRITE_BYTES_BASE64_MAX_CHARS);
   expect(operationSchema.parse(workspaceRequest.operation)).toEqual(workspaceRequest.operation);
-  expect(
-    agentWorkspaceOperations["workspace.write_bytes"].schema.safeParse({ path, base64 }).success,
-  ).toBe(true);
   expect(NodeRequestSchema.parse(toolRequest)).toEqual(toolRequest);
   expect(NodeControlMessageSchema.parse(workspaceRequest)).toEqual(workspaceRequest);
   expect(Buffer.byteLength(JSON.stringify(toolRequest))).toBeLessThan(MAX_NODE_MESSAGE_BYTES);
@@ -72,10 +68,6 @@ it("rejects text whose UTF-8 size fits but JSON escaping would exceed a node fra
     };
   expect(Buffer.byteLength(content)).toBeLessThan(WORKSPACE_WRITE_MAX_BYTES);
   expect(Buffer.byteLength(JSON.stringify(toolRequest))).toBeGreaterThan(MAX_NODE_MESSAGE_BYTES);
-  expect(
-    agentWorkspaceOperations["workspace.write"].schema.safeParse({ path: "notes.txt", content })
-      .success,
-  ).toBe(false);
   expect(NodeRequestSchema.safeParse(toolRequest).success).toBe(false);
   expect(NodeControlMessageSchema.safeParse(workspaceRequest).success).toBe(false);
 });
@@ -85,12 +77,6 @@ it("rejects a decoded binary write one byte above the advertised limit", () => {
   expect(() =>
     operationSchema.parse({ kind: "write_bytes", path: "file.bin", base64: overLimit }),
   ).toThrow();
-  expect(
-    agentWorkspaceOperations["workspace.write_bytes"].schema.safeParse({
-      path: "file.bin",
-      base64: overLimit,
-    }).success,
-  ).toBe(false);
 });
 
 it("accepts a typical long file-system error as a bounded workspace result", () => {

@@ -1,3 +1,6 @@
+import { isDeepStrictEqual } from "node:util";
+import { defineAgentTool, type AgentToolContext } from "./agent-tool-entry.js";
+import type { OwnerChat } from "./owner-chat.js";
 import { AgentSession } from "./agent-session.js";
 import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
@@ -66,6 +69,82 @@ interface OperationRow {
  * sending the stable operation ID to a node, then stores the receipt or an explicit unknown.
  */
 export class AgentProcessOperationBroker {
+  agentTools(chat: OwnerChat) {
+    return {
+      "process.exec": defineAgentTool(
+        {
+          description:
+            "在当前运行账号的普通 shell 子进程中运行命令，默认在 Agent 默认工作目录执行。Mate 返回有界输出、退出码，并在收据中标明输出是否完整以及命令是否因超时被结束；命令里的 sudo 原样交给宿主，成败只由宿主已有的 sudo 配置决定，Mate 不插入 sudo、不要求网页审批、也不配置 sudoers。",
+          schema: z
+            .object({
+              command: z.string().min(1).max(16_000),
+              cwd: z.string().max(4096).optional(),
+            })
+            .strict(),
+        },
+        (identity, input) =>
+          this.executeTool(chat, identity, {
+            kind: "exec",
+            command: input.command,
+            cwd: input.cwd ?? ".",
+          }),
+      ),
+      "process.list": defineAgentTool(
+        {
+          description:
+            "列出本次节点运行期间由 process.exec 启动、进程组仍然存在的自己命令进程。Mate 的进程记录只属于当前这次节点进程：节点重启后它不再追踪此前的命令，也无法确认那些命令是否仍在运行。",
+          schema: z.object({}).strict(),
+        },
+        (identity, input) => this.executeTool(chat, identity, { kind: "process.list" }),
+      ),
+      "process.inspect": defineAgentTool(
+        {
+          description:
+            "查询一个由实时 process.exec 返回的操作 ID 当前的进程状态。Mate 只报告本次节点运行期间自己启动并仍能看到的进程组；本次节点运行之前启动的普通命令不在报告范围内，Mate 不会声称它们正在运行或已经结束。",
+          schema: z.object({ targetOperationId: uuidSchema }).strict(),
+        },
+        (identity, input) =>
+          this.executeTool(chat, identity, { kind: "process.inspect", ...input }),
+      ),
+      "process.stop": defineAgentTool(
+        {
+          description:
+            "尽力终止一个由本次节点运行期间的 process.exec 返回的操作 ID 对应的进程组。Mate 只能观察和终止它自己启动的进程组：以新会话离开该进程组或本账号无权信号的后代（例如 sudo 派生的 root 进程）不在报告范围内，Mate 不会声称它们已停止，只会如实报告无法确认。",
+          schema: z.object({ targetOperationId: uuidSchema }).strict(),
+        },
+        (identity, input) => this.executeTool(chat, identity, { kind: "process.stop", ...input }),
+      ),
+    };
+  }
+
+  private async executeTool(
+    chat: OwnerChat,
+    identity: AgentToolContext,
+    operation: AgentProcessOperation,
+  ) {
+    const { runId, nodeId, agentId, toolCallId } = identity;
+    const original = new AgentSession(this.database).toolAction(agentId, toolCallId);
+    if (
+      original &&
+      (original.name !== identity.request.operation ||
+        !isDeepStrictEqual(original.input, identity.request.input))
+    )
+      throw new Error("Recovered tool arguments differ from the committed call");
+    const run = this.database
+      .transaction(() => chat.requireActiveAgentToolRun(runId, nodeId, agentId))
+      .immediate();
+    const result = await this.execute({
+      runId,
+      nodeId,
+      agentId,
+      actionScopeId: original?.actionScopeId ?? run.action_scope_id,
+      stableActionId: toolCallId,
+      operationId: deriveAgentProcessOperationId(agentId, toolCallId),
+      operation,
+    });
+    return { operationId: result.operationId, state: result.state, receipt: result.receipt };
+  }
+
   private readonly inFlight = new Map<string, Promise<AgentProcessOperationResult>>();
 
   constructor(

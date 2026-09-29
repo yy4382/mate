@@ -2,17 +2,7 @@ import { AgentSession } from "./agent-session.js";
 import type Database from "better-sqlite3";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
-import {
-  agentMateOperations,
-  agentConversationOperations,
-  agentProcessToolOperations,
-  agentWorkspaceOperations,
-  agentToolSchemas,
-  type AgentConversationOperation,
-  toAgentProcessOperation,
-  type AgentWorkspaceOperation,
-} from "./agent-tools.js";
-import type { AgentProcessOperation } from "../nodes/process-operations.js";
+import { defineAgentTool } from "./agent-tool-entry.js";
 import { nodeAccountOf } from "./nodes/directory.js";
 
 export type ChannelVisibility = "public" | "private";
@@ -138,21 +128,6 @@ export interface OwnerChannelUpdate {
   archived?: boolean | undefined;
 }
 
-export type AgentToolCallResult = { ok: true; result: unknown } | { ok: false; error: string };
-
-export interface ExternalAgentToolRequest {
-  runId: string;
-  nodeId: string;
-  agentId: string;
-  actionId: string;
-  name: AgentWorkspaceOperation;
-  input: Record<string, unknown>;
-}
-
-export type ExternalAgentToolHandler = (
-  request: ExternalAgentToolRequest,
-) => Promise<AgentToolCallResult>;
-
 interface ActiveAgentToolRun {
   run_id: string;
   agent_id: string;
@@ -163,12 +138,7 @@ interface ActiveAgentToolRun {
   input_end_seq: number;
 }
 
-export interface AuthorizedAgentProcessOperation {
-  actionScopeId: string;
-  operation: AgentProcessOperation;
-}
-
-class AgentToolRefusal extends Error {}
+export class AgentToolRefusal extends Error {}
 
 export class ArchivedChannelError extends Error {
   constructor() {
@@ -262,6 +232,58 @@ interface PendingDeliveryRow {
   created_at: number;
 }
 
+const conversationId = z.string().uuid(),
+  pageLimit = z.number().int().min(1).max(100).default(50),
+  cursor = z
+    .string()
+    .regex(/^[1-9][0-9]*$/)
+    .max(16)
+    .optional();
+
+const taskToolSchemas = {
+  "tasks.create": z
+    .object({ messageId: z.string().uuid(), draftId: z.string().uuid().optional() })
+    .strict(),
+  "tasks.claim_message": z
+    .object({ messageId: z.string().uuid(), draftId: z.string().uuid().optional() })
+    .strict(),
+  "tasks.claim": z
+    .object({
+      taskId: z.string().uuid(),
+      expectedVersion: z.number().int().positive(),
+      draftId: z.string().uuid().optional(),
+    })
+    .strict(),
+  "tasks.yield": z
+    .object({
+      taskId: z.string().uuid(),
+      expectedVersion: z.number().int().positive(),
+      draftId: z.string().uuid().optional(),
+    })
+    .strict(),
+  "tasks.transfer": z
+    .object({
+      taskId: z.string().uuid(),
+      expectedVersion: z.number().int().positive(),
+      agentId: z.string().uuid(),
+      draftId: z.string().uuid().optional(),
+    })
+    .strict(),
+  "tasks.update": z
+    .object({
+      taskId: z.string().uuid(),
+      expectedVersion: z.number().int().positive(),
+      title: z.string().trim().min(1).max(200).optional(),
+      status: z.enum(["open", "in_progress", "done"]).optional(),
+      note: z.string().max(2000).default(""),
+      draftId: z.string().uuid().optional(),
+    })
+    .strict(),
+};
+type TaskToolRequest = {
+  [N in keyof typeof taskToolSchemas]: { name: N; input: z.output<(typeof taskToolSchemas)[N]> };
+}[keyof typeof taskToolSchemas];
+
 const eventRetention = 1000;
 
 /**
@@ -275,7 +297,6 @@ const taskSelection = `SELECT t.*,a.name AS owner_agent_name,m.channel_id
 
 /** Owner-facing channel facts committed in the control-plane database. */
 export class OwnerChat {
-  private externalAgentToolHandler?: ExternalAgentToolHandler;
   private pushMessage?: (message: OwnerMessage, directToOwner: boolean) => void;
 
   constructor(
@@ -330,117 +351,6 @@ export class OwnerChat {
       )
       .all() as ChannelRow[];
     return rows.map(toChannel);
-  }
-
-  /** The only entry point through which a running Agent may call shared conversation tools. */
-  setExternalAgentToolHandler(handler: ExternalAgentToolHandler): void {
-    this.externalAgentToolHandler = handler;
-  }
-
-  executeAgentTool(
-    runId: string,
-    nodeId: string,
-    agentId: string,
-    toolCallId: string,
-    operation: string,
-    input: Record<string, unknown>,
-  ): AgentToolCallResult | Promise<AgentToolCallResult> {
-    if (operation === "tools.call") {
-      const request = agentToolSchemas["tools.call"].safeParse(input);
-      if (request.success && Object.hasOwn(agentWorkspaceOperations, request.data.name)) {
-        let external: ExternalAgentToolRequest;
-        try {
-          external = this.db
-            .transaction(() => {
-              this.requireActiveAgentToolRun(runId, nodeId, agentId);
-              const entry = agentWorkspaceOperations[request.data.name as AgentWorkspaceOperation],
-                parsedInput = entry.schema.parse(request.data.input);
-              if (
-                typeof parsedInput !== "object" ||
-                parsedInput === null ||
-                Array.isArray(parsedInput)
-              )
-                throw new AgentToolRefusal("Invalid tool input");
-              return {
-                runId,
-                nodeId,
-                agentId,
-                actionId: toolCallId,
-                name: request.data.name as AgentWorkspaceOperation,
-                input: parsedInput as Record<string, unknown>,
-              };
-            })
-            .immediate();
-        } catch (error) {
-          if (error instanceof AgentToolRefusal) return { ok: false, error: error.message };
-          if (error instanceof z.ZodError) return { ok: false, error: "Invalid tool input" };
-          return { ok: false, error: "Agent tool request was refused" };
-        }
-        if (!this.externalAgentToolHandler)
-          return Promise.resolve({ ok: false, error: "File services are unavailable" });
-        return this.externalAgentToolHandler(external).catch(() => ({
-          ok: false as const,
-          error: "Agent 文件请求被拒绝。",
-        }));
-      }
-    }
-    try {
-      const result = this.db
-        .transaction(() => {
-          const run = this.requireActiveAgentToolRun(runId, nodeId, agentId);
-          if (operation === "tools.list") {
-            agentToolSchemas["tools.list"].parse(input);
-            return {
-              tools: [
-                ...Object.entries(agentMateOperations),
-                ...Object.entries(agentProcessToolOperations),
-              ].map(([name, entry]) => ({ name, description: entry.description })),
-            };
-          }
-          if (operation === "tools.describe") {
-            const request = agentToolSchemas["tools.describe"].parse(input),
-              entry =
-                agentConversationOperations[request.name as AgentConversationOperation] ??
-                agentWorkspaceOperations[request.name as AgentWorkspaceOperation] ??
-                agentProcessToolOperations[request.name as keyof typeof agentProcessToolOperations];
-            if (!entry) throw new AgentToolRefusal("Unknown operation");
-            return {
-              name: request.name,
-              description: entry.description,
-              inputSchema: z.toJSONSchema(entry.schema),
-            };
-          }
-          if (operation !== "tools.call") throw new AgentToolRefusal("Unknown operation");
-          const request = agentToolSchemas["tools.call"].parse(input);
-          return this.executeConversationOperation(run, toolCallId, request.name, request.input);
-        })
-        .immediate();
-      return { ok: true, result };
-    } catch (error) {
-      if (error instanceof AgentToolRefusal) return { ok: false, error: error.message };
-      if (error instanceof z.ZodError) return { ok: false, error: "Invalid tool input" };
-      return { ok: false, error: "Agent tool request was refused" };
-    }
-  }
-
-  /** Verify the active delivery, node and process tool input before the process broker records it. */
-  authorizeAgentProcessOperation(
-    runId: string,
-    nodeId: string,
-    agentId: string,
-    name: string,
-    input: unknown,
-  ): AuthorizedAgentProcessOperation {
-    const operation = toAgentProcessOperation(name, input);
-    if (!operation) throw new Error("Unknown process operation");
-    return this.db
-      .transaction(() => {
-        const run = this.requireActiveAgentToolRun(runId, nodeId, agentId),
-          entry = agentProcessToolOperations[name as keyof typeof agentProcessToolOperations];
-        if (!entry) throw new Error("Agent process operation was refused");
-        return { actionScopeId: run.action_scope_id, operation };
-      })
-      .immediate();
   }
 
   /** Create or return the one private owner conversation bound to this verified Agent. */
@@ -1009,16 +919,12 @@ export class OwnerChat {
     }
   }
 
-  private mutateTask(
-    agentId: string,
-    task: OwnerTask,
-    action: string,
-    input: Record<string, unknown>,
-  ): OwnerTask {
+  private mutateTask(agentId: string, task: OwnerTask, request: TaskToolRequest): OwnerTask {
+    const { name: action, input } = request;
     const current = this.readTask(task.id);
     if (
       !current ||
-      (current.version !== input.expectedVersion &&
+      (current.version !== ("expectedVersion" in input ? input.expectedVersion : undefined) &&
         !(action === "tasks.yield" && current.ownerAgentId !== agentId))
     )
       throw new AgentToolRefusal("Task version changed; read the task again");
@@ -1037,7 +943,7 @@ export class OwnerChat {
       }
       // A peer's newer claim remains authoritative; this Agent may still yield socially.
     } else if (action === "tasks.transfer") {
-      const targetId = input.agentId as string;
+      const targetId = input.agentId;
       // Only the current owner hands the task on: a peer cannot take over by transferring it.
       if (owner !== agentId)
         throw new AgentToolRefusal("Only the current owner can transfer this task");
@@ -1048,20 +954,14 @@ export class OwnerChat {
       status = "in_progress";
     } else if (action === "tasks.update") {
       if (typeof input.title === "string") title = input.title;
-      if (typeof input.status === "string") status = input.status as OwnerTask["status"];
+      if (typeof input.status === "string") status = input.status;
     }
     this.db
       .prepare(
         "UPDATE owner_tasks SET title=?,status=?,owner_agent_id=?,version=version+1,updated_at=? WHERE id=?",
       )
       .run(title, status, owner, this.now(), task.id);
-    this.taskEvent(
-      task.id,
-      "agent",
-      agentId,
-      action.slice(6),
-      typeof input.note === "string" ? input.note : "",
-    );
+    this.taskEvent(task.id, "agent", agentId, action.slice(6), "note" in input ? input.note : "");
     const updated = this.readTask(task.id)!;
     this.record("task.updated", task.channelId, updated);
     return updated;
@@ -1397,11 +1297,7 @@ export class OwnerChat {
     return toChannel(row);
   }
 
-  private requireActiveAgentToolRun(
-    runId: string,
-    nodeId: string,
-    agentId: string,
-  ): ActiveAgentToolRun {
+  requireActiveAgentToolRun(runId: string, nodeId: string, agentId: string): ActiveAgentToolRun {
     const run = this.db
       .prepare(
         `SELECT r.id AS run_id,r.agent_id,r.node_id,r.delivery_id AS action_scope_id,
@@ -1419,506 +1315,731 @@ export class OwnerChat {
     return run;
   }
 
-  private executeConversationOperation(
-    run: ActiveAgentToolRun,
-    toolCallId: string,
-    name: string,
-    input: Record<string, unknown>,
-  ): unknown {
-    if (!Object.hasOwn(agentConversationOperations, name))
-      throw new AgentToolRefusal("Unknown operation");
-
-    switch (name as AgentConversationOperation) {
-      case "agents.list":
-        agentConversationOperations["agents.list"].schema.parse(input);
-        return { agents: this.listContactableAgents(run.agent_id) };
-      case "conversations.list":
-        agentConversationOperations["conversations.list"].schema.parse(input);
-        return { conversations: this.listAgentConversations(run.agent_id) };
-      case "conversations.read": {
-        const args = agentConversationOperations["conversations.read"].schema.parse(input),
-          conversation = this.requireReadableConversation(run.agent_id, args.conversationId),
-          before = args.before === undefined ? undefined : Number(args.before);
-        if (before !== undefined && !Number.isSafeInteger(before)) throw new z.ZodError([]);
-        const page = this.listMessages(args.conversationId, before, args.limit);
-        if (!page) throw new AgentToolRefusal("Conversation is not available");
-        for (const message of page.messages)
-          this.db
-            .prepare(
-              "UPDATE owner_agent_message_attention SET presented=1,updated_at=? WHERE agent_id=? AND message_id=?",
-            )
-            .run(this.now(), run.agent_id, message.id);
-        return { conversation, ...page };
-      }
-      case "conversations.read_thread": {
-        const args = agentConversationOperations["conversations.read_thread"].schema.parse(input);
-        this.requireReadableConversation(run.agent_id, args.conversationId);
-        const thread = this.listThread(args.conversationId, args.rootId);
-        if (!thread) throw new AgentToolRefusal("Thread is not available");
-        for (const message of [thread.root, ...thread.replies])
-          this.db
-            .prepare(
-              "UPDATE owner_agent_message_attention SET presented=1,updated_at=? WHERE agent_id=? AND message_id=?",
-            )
-            .run(this.now(), run.agent_id, message.id);
-        return thread;
-      }
-      case "conversations.open_dm": {
-        const args = agentConversationOperations["conversations.open_dm"].schema.parse(input);
-        if (args.targetAgentId === run.agent_id)
-          throw new AgentToolRefusal("An Agent cannot open a direct message with itself");
-        if (!this.isInviteableAgent(args.targetAgentId))
-          throw new AgentToolRefusal("Direct-message target is not available");
-        return this.recordAgentToolAction(run, toolCallId, "conversations.open_dm", args, () =>
-          this.getOrCreateAgentPeerDirectChannel(run.agent_id, args.targetAgentId),
-        );
-      }
-      case "attention.list": {
-        const args = agentConversationOperations["attention.list"].schema.parse(input);
-        this.requireAgentConversation(run.agent_id, args.conversationId);
-        return {
-          items: this.db
-            .prepare(
-              `SELECT a.message_id AS messageId,a.unread,a.seen,a.deferred,a.muted,a.presented,m.order_seq AS messageOrder,m.root_id AS rootId FROM owner_agent_message_attention a JOIN owner_messages m ON m.id=a.message_id WHERE a.agent_id=? AND m.channel_id=? ORDER BY m.order_seq`,
-            )
-            .all(run.agent_id, args.conversationId),
-        };
-      }
-      case "attention.update": {
-        const args = agentConversationOperations["attention.update"].schema.parse(input);
-        this.requireAgentConversation(run.agent_id, args.conversationId);
-        const message = this.db
-          .prepare("SELECT 1 FROM owner_messages WHERE id=? AND channel_id=?")
-          .get(args.messageId, args.conversationId);
-        if (!message) throw new AgentToolRefusal("Message is not available");
-        return this.recordAgentToolAction(run, toolCallId, "attention.update", args, () => {
-          const changes = ["unread", "seen", "deferred", "muted"] as const;
-          for (const key of changes)
-            if (args[key] !== undefined)
-              this.db
-                .prepare(
-                  `UPDATE owner_agent_message_attention SET ${key}=?,updated_at=? WHERE agent_id=? AND message_id=?`,
-                )
-                .run(args[key] ? 1 : 0, this.now(), run.agent_id, args.messageId);
-          return { conversationId: args.conversationId, messageId: args.messageId, updated: true };
-        });
-      }
-      case "drafts.save": {
-        const args = agentConversationOperations["drafts.save"].schema.parse(input);
-        this.requireAgentConversation(run.agent_id, args.conversationId);
-        this.validateMessagePosition(args.conversationId, args.rootId, args.quoteId);
-        return this.recordAgentToolAction(run, toolCallId, "drafts.save", args, () => {
-          const id = randomUUID(),
-            at = this.now(),
-            freshness = this.inspectAgentPositionChanges(
-              run.agent_id,
-              run.input_end_seq,
-              args.conversationId,
-              args.rootId,
+  agentTools() {
+    const tool = <S extends z.ZodType>(
+      definition: { description: string; schema: S },
+      handler: (run: ActiveAgentToolRun, toolCallId: string, input: z.output<S>) => unknown,
+    ) =>
+      defineAgentTool(definition, (identity, input) =>
+        this.db
+          .transaction(() => {
+            const run = this.requireActiveAgentToolRun(
+              identity.runId,
+              identity.nodeId,
+              identity.agentId,
             );
-          this.db
-            .prepare(
-              "INSERT INTO owner_agent_drafts(id,agent_id,channel_id,root_id,quote_id,text,input_end_seq,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'editing',?,?)",
-            )
-            .run(
-              id,
-              run.agent_id,
-              args.conversationId,
-              args.rootId ?? null,
-              args.quoteId ?? null,
-              args.text,
-              run.input_end_seq,
-              at,
-              at,
-            );
-          this.recordDraftReviews(id, freshness.changes);
+            return handler(run, identity.toolCallId, input);
+          })
+          .immediate(),
+      );
+    return {
+      "agents.list": tool(
+        {
+          description: "发现当前已配置、可通过 Mate 联系的其他 Agent 身份。",
+          schema: z.object({}).strict(),
+        },
+        (run, toolCallId, args) => {
+          return { agents: this.listContactableAgents(run.agent_id) };
+        },
+      ),
+      "conversations.list": tool(
+        {
+          description:
+            "列出当前可发现的对话。公开频道显示名称和简介，并标记你是否已是成员；私有对话只在你已加入时显示。",
+          schema: z.object({}).strict(),
+        },
+        (run, toolCallId, args) => {
+          return { conversations: this.listAgentConversations(run.agent_id) };
+        },
+      ),
+      "conversations.read": tool(
+        {
+          description:
+            "读取一个对话中的消息；公开频道无需加入即可读取，私有对话和私信仅限成员。必须指定 conversationId；使用 before 和 limit 向更早消息分页。",
+          schema: z.object({ conversationId, before: cursor, limit: pageLimit }).strict(),
+        },
+        (run, toolCallId, args) => {
+          const conversation = this.requireReadableConversation(run.agent_id, args.conversationId),
+            before = args.before === undefined ? undefined : Number(args.before);
+          if (before !== undefined && !Number.isSafeInteger(before)) throw new z.ZodError([]);
+          const page = this.listMessages(args.conversationId, before, args.limit);
+          if (!page) throw new AgentToolRefusal("Conversation is not available");
+          for (const message of page.messages)
+            this.db
+              .prepare(
+                "UPDATE owner_agent_message_attention SET presented=1,updated_at=? WHERE agent_id=? AND message_id=?",
+              )
+              .run(this.now(), run.agent_id, message.id);
+          return { conversation, ...page };
+        },
+      ),
+      "conversations.read_thread": tool(
+        {
+          description:
+            "读取一条根消息的完整讨论串；公开频道无需加入即可读取，私有对话和私信仅限成员。必须指定 conversationId 和根消息 ID。",
+          schema: z.object({ conversationId, rootId: z.string().uuid() }).strict(),
+        },
+        (run, toolCallId, args) => {
+          this.requireReadableConversation(run.agent_id, args.conversationId);
+          const thread = this.listThread(args.conversationId, args.rootId);
+          if (!thread) throw new AgentToolRefusal("Thread is not available");
+          for (const message of [thread.root, ...thread.replies])
+            this.db
+              .prepare(
+                "UPDATE owner_agent_message_attention SET presented=1,updated_at=? WHERE agent_id=? AND message_id=?",
+              )
+              .run(this.now(), run.agent_id, message.id);
+          return thread;
+        },
+      ),
+      "conversations.open_dm": tool(
+        {
+          description:
+            "为你和一名明确指定的、已配置同伴创建或返回唯一私信；控制面会同时授予双方成员权限。",
+          schema: z.object({ targetAgentId: z.string().uuid() }).strict(),
+        },
+        (run, toolCallId, args) => {
+          if (args.targetAgentId === run.agent_id)
+            throw new AgentToolRefusal("An Agent cannot open a direct message with itself");
+          if (!this.isInviteableAgent(args.targetAgentId))
+            throw new AgentToolRefusal("Direct-message target is not available");
+          return this.recordAgentToolAction(run, toolCallId, "conversations.open_dm", args, () =>
+            this.getOrCreateAgentPeerDirectChannel(run.agent_id, args.targetAgentId),
+          );
+        },
+      ),
+      "attention.list": tool(
+        {
+          description: "查看你的消息注意力状态。通知已见和正文已呈现分别记录。",
+          schema: z.object({ conversationId }).strict(),
+        },
+        (run, toolCallId, args) => {
+          this.requireAgentConversation(run.agent_id, args.conversationId);
           return {
-            id,
-            channelId: args.conversationId,
-            state: "editing",
-            changes: freshness.changes,
+            items: this.db
+              .prepare(
+                `SELECT a.message_id AS messageId,a.unread,a.seen,a.deferred,a.muted,a.presented,m.order_seq AS messageOrder,m.root_id AS rootId FROM owner_agent_message_attention a JOIN owner_messages m ON m.id=a.message_id WHERE a.agent_id=? AND m.channel_id=? ORDER BY m.order_seq`,
+              )
+              .all(run.agent_id, args.conversationId),
           };
-        });
-      }
-      case "drafts.review": {
-        const args = agentConversationOperations["drafts.review"].schema.parse(input);
-        const draft = this.readAgentDraft(run.agent_id, args.draftId);
-        this.requireAgentConversation(run.agent_id, draft.channel_id);
-        return this.recordAgentToolAction(run, toolCallId, "drafts.review", args, () => {
-          const changes = this.unreviewedDraftChanges(draft);
-          if (args.choice === "inspect") {
-            this.recordDraftReviews(draft.id, changes);
-            return { channelId: draft.channel_id, draftId: draft.id, state: draft.state, changes };
-          }
-          if (args.choice === "continue" && changes.length)
-            throw new AgentToolRefusal("Conversation changed; inspect the draft before continuing");
-          if (draft.state === "sent" || draft.state === "abandoned")
-            throw new AgentToolRefusal("Draft is closed");
-          const state =
-            args.choice === "revise"
-              ? "editing"
-              : args.choice === "keep"
-                ? "kept"
-                : args.choice === "defer"
-                  ? "deferred"
-                  : args.choice === "abandon"
-                    ? "abandoned"
-                    : "ready";
-          if (args.choice === "revise" && !args.text)
-            throw new AgentToolRefusal("Revised text is required");
-          this.recordDraftReviews(draft.id, changes);
-          this.db
-            .prepare(
-              "UPDATE owner_agent_drafts SET text=COALESCE(?,text),state=?,updated_at=? WHERE id=?",
-            )
-            .run(args.choice === "revise" ? args.text : null, state, this.now(), draft.id);
-          return { channelId: draft.channel_id, draftId: draft.id, state, changes };
-        });
-      }
-      case "messages.send": {
-        const args = agentConversationOperations["messages.send"].schema.parse(input);
-        this.requireAgentConversation(run.agent_id, args.conversationId);
-        this.validateMessagePosition(args.conversationId, args.rootId, args.quoteId);
-        return this.recordAgentToolAction(run, toolCallId, "messages.send", args, () => {
-          if (!args.draftId) {
-            const { changes } = this.inspectAgentPositionChanges(
-              run.agent_id,
-              run.input_end_seq,
-              args.conversationId,
-              args.rootId,
-            );
-            if (changes.length) {
-              const id = randomUUID(),
-                at = this.now();
-              this.db
-                .prepare(
-                  "INSERT INTO owner_agent_drafts(id,agent_id,channel_id,root_id,quote_id,text,input_end_seq,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'editing',?,?)",
-                )
-                .run(
-                  id,
-                  run.agent_id,
-                  args.conversationId,
-                  args.rootId ?? null,
-                  args.quoteId ?? null,
-                  args.text,
-                  run.input_end_seq,
-                  at,
-                  at,
-                );
-              this.recordDraftReviews(id, changes);
+        },
+      ),
+      "attention.update": tool(
+        {
+          description:
+            "分别设置一条消息的未读、已见、暂缓或静音状态；正文已呈现由控制面在交付正文时记录。",
+          schema: z
+            .object({
+              conversationId,
+              messageId: z.string().uuid(),
+              unread: z.boolean().optional(),
+              seen: z.boolean().optional(),
+              deferred: z.boolean().optional(),
+              muted: z.boolean().optional(),
+            })
+            .strict(),
+        },
+        (run, toolCallId, args) => {
+          this.requireAgentConversation(run.agent_id, args.conversationId);
+          const message = this.db
+            .prepare("SELECT 1 FROM owner_messages WHERE id=? AND channel_id=?")
+            .get(args.messageId, args.conversationId);
+          if (!message) throw new AgentToolRefusal("Message is not available");
+          return this.recordAgentToolAction(run, toolCallId, "attention.update", args, () => {
+            const changes = ["unread", "seen", "deferred", "muted"] as const;
+            for (const key of changes)
+              if (args[key] !== undefined)
+                this.db
+                  .prepare(
+                    `UPDATE owner_agent_message_attention SET ${key}=?,updated_at=? WHERE agent_id=? AND message_id=?`,
+                  )
+                  .run(args[key] ? 1 : 0, this.now(), run.agent_id, args.messageId);
+            return {
+              conversationId: args.conversationId,
+              messageId: args.messageId,
+              updated: true,
+            };
+          });
+        },
+      ),
+      "drafts.save": tool(
+        {
+          description: "持久保存发送草稿和当前讨论位置。保存后可查看并发变化。",
+          schema: z
+            .object({
+              conversationId,
+              text: z.string().min(1).max(20_000),
+              rootId: z.string().uuid().optional(),
+              quoteId: z.string().uuid().optional(),
+            })
+            .strict(),
+        },
+        (run, toolCallId, args) => {
+          this.requireAgentConversation(run.agent_id, args.conversationId);
+          this.validateMessagePosition(args.conversationId, args.rootId, args.quoteId);
+          return this.recordAgentToolAction(run, toolCallId, "drafts.save", args, () => {
+            const id = randomUUID(),
+              at = this.now(),
+              freshness = this.inspectAgentPositionChanges(
+                run.agent_id,
+                run.input_end_seq,
+                args.conversationId,
+                args.rootId,
+              );
+            this.db
+              .prepare(
+                "INSERT INTO owner_agent_drafts(id,agent_id,channel_id,root_id,quote_id,text,input_end_seq,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'editing',?,?)",
+              )
+              .run(
+                id,
+                run.agent_id,
+                args.conversationId,
+                args.rootId ?? null,
+                args.quoteId ?? null,
+                args.text,
+                run.input_end_seq,
+                at,
+                at,
+              );
+            this.recordDraftReviews(id, freshness.changes);
+            return {
+              id,
+              channelId: args.conversationId,
+              state: "editing",
+              changes: freshness.changes,
+            };
+          });
+        },
+      ),
+      "drafts.review": tool(
+        {
+          description: "查看草稿后的讨论变化，并选择修改、保留、放弃、暂缓或知情继续。",
+          schema: z
+            .object({
+              draftId: z.string().uuid(),
+              choice: z.enum(["inspect", "revise", "keep", "abandon", "defer", "continue"]),
+              text: z.string().min(1).max(20_000).optional(),
+            })
+            .strict(),
+        },
+        (run, toolCallId, args) => {
+          const draft = this.readAgentDraft(run.agent_id, args.draftId);
+          this.requireAgentConversation(run.agent_id, draft.channel_id);
+          return this.recordAgentToolAction(run, toolCallId, "drafts.review", args, () => {
+            const changes = this.unreviewedDraftChanges(draft);
+            if (args.choice === "inspect") {
+              this.recordDraftReviews(draft.id, changes);
               return {
-                channelId: args.conversationId,
-                status: "needs_review",
-                draftId: id,
+                channelId: draft.channel_id,
+                draftId: draft.id,
+                state: draft.state,
                 changes,
               };
             }
-          }
-          if (args.draftId) {
-            const draft = this.readAgentDraft(run.agent_id, args.draftId);
-            if (
-              draft.channel_id !== args.conversationId ||
-              draft.root_id !== (args.rootId ?? null) ||
-              draft.quote_id !== (args.quoteId ?? null) ||
-              draft.text !== args.text ||
-              draft.state !== "ready"
-            )
-              throw new AgentToolRefusal("Draft is not ready for this message");
-            if (this.unreviewedDraftChanges(draft).length)
-              throw new AgentToolRefusal("Conversation changed; review the draft again");
+            if (args.choice === "continue" && changes.length)
+              throw new AgentToolRefusal(
+                "Conversation changed; inspect the draft before continuing",
+              );
+            if (draft.state === "sent" || draft.state === "abandoned")
+              throw new AgentToolRefusal("Draft is closed");
+            const state =
+              args.choice === "revise"
+                ? "editing"
+                : args.choice === "keep"
+                  ? "kept"
+                  : args.choice === "defer"
+                    ? "deferred"
+                    : args.choice === "abandon"
+                      ? "abandoned"
+                      : "ready";
+            if (args.choice === "revise" && !args.text)
+              throw new AgentToolRefusal("Revised text is required");
+            this.recordDraftReviews(draft.id, changes);
             this.db
-              .prepare("UPDATE owner_agent_drafts SET state='sent',updated_at=? WHERE id=?")
-              .run(this.now(), draft.id);
-          }
-          return this.createAgentToolMessage(
-            run,
-            toolCallId,
-            args.conversationId,
-            args.text,
-            args.rootId,
-            args.quoteId,
-            args.asTask,
-          );
-        });
-      }
-      case "tasks.list": {
-        agentConversationOperations["tasks.list"].schema.parse(input);
-        // Task visibility stays member-only: this ticket widened conversation READS, and
-        // task ownership must not move with them.
-        return {
-          tasks: this.listTasks().filter((task) =>
-            this.isAgentChannelMember(run.agent_id, task.channelId),
-          ),
-        };
-      }
-      case "reminders.list": {
-        agentConversationOperations["reminders.list"].schema.parse(input);
-        this.syncHandledReminders();
-        return { reminders: this.listAgentReminders(run.agent_id) };
-      }
-      case "reminders.create": {
-        const args = agentConversationOperations["reminders.create"].schema.parse(input);
-        this.requireAgentConversation(run.agent_id, args.conversationId);
-        return this.recordAgentToolAction(run, toolCallId, "reminders.create", args, () => {
-          if (args.taskId) {
-            const task = this.readTask(args.taskId);
-            if (!task || task.channelId !== args.conversationId)
-              throw new AgentToolRefusal("Task is not in this conversation");
-          }
-          const id = randomUUID(),
-            at = this.now();
-          this.db
-            .prepare(
-              "INSERT INTO owner_reminders(id,agent_id,channel_id,task_id,text,due_at,state,created_at,updated_at) VALUES(?,?,?,?,?,?,'active',?,?)",
-            )
-            .run(
-              id,
-              run.agent_id,
+              .prepare(
+                "UPDATE owner_agent_drafts SET text=COALESCE(?,text),state=?,updated_at=? WHERE id=?",
+              )
+              .run(args.choice === "revise" ? args.text : null, state, this.now(), draft.id);
+            return { channelId: draft.channel_id, draftId: draft.id, state, changes };
+          });
+        },
+      ),
+      "messages.send": tool(
+        {
+          description:
+            "向一个明确指定且当前已加入的频道或私信发送普通消息。发送目标必须提供 conversationId。",
+          schema: z
+            .object({
+              conversationId,
+              text: z.string().min(1).max(20_000),
+              rootId: z.string().uuid().optional(),
+              quoteId: z.string().uuid().optional(),
+              draftId: z.string().uuid().optional(),
+              asTask: z.boolean().optional(),
+            })
+            .strict(),
+        },
+        (run, toolCallId, args) => {
+          this.requireAgentConversation(run.agent_id, args.conversationId);
+          this.validateMessagePosition(args.conversationId, args.rootId, args.quoteId);
+          return this.recordAgentToolAction(run, toolCallId, "messages.send", args, () => {
+            if (!args.draftId) {
+              const { changes } = this.inspectAgentPositionChanges(
+                run.agent_id,
+                run.input_end_seq,
+                args.conversationId,
+                args.rootId,
+              );
+              if (changes.length) {
+                const id = randomUUID(),
+                  at = this.now();
+                this.db
+                  .prepare(
+                    "INSERT INTO owner_agent_drafts(id,agent_id,channel_id,root_id,quote_id,text,input_end_seq,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'editing',?,?)",
+                  )
+                  .run(
+                    id,
+                    run.agent_id,
+                    args.conversationId,
+                    args.rootId ?? null,
+                    args.quoteId ?? null,
+                    args.text,
+                    run.input_end_seq,
+                    at,
+                    at,
+                  );
+                this.recordDraftReviews(id, changes);
+                return {
+                  channelId: args.conversationId,
+                  status: "needs_review",
+                  draftId: id,
+                  changes,
+                };
+              }
+            }
+            if (args.draftId) {
+              const draft = this.readAgentDraft(run.agent_id, args.draftId);
+              if (
+                draft.channel_id !== args.conversationId ||
+                draft.root_id !== (args.rootId ?? null) ||
+                draft.quote_id !== (args.quoteId ?? null) ||
+                draft.text !== args.text ||
+                draft.state !== "ready"
+              )
+                throw new AgentToolRefusal("Draft is not ready for this message");
+              if (this.unreviewedDraftChanges(draft).length)
+                throw new AgentToolRefusal("Conversation changed; review the draft again");
+              this.db
+                .prepare("UPDATE owner_agent_drafts SET state='sent',updated_at=? WHERE id=?")
+                .run(this.now(), draft.id);
+            }
+            return this.createAgentToolMessage(
+              run,
+              toolCallId,
               args.conversationId,
-              args.taskId ?? null,
               args.text,
-              args.dueAt,
-              at,
-              at,
+              args.rootId,
+              args.quoteId,
+              args.asTask,
             );
-          return this.readReminder(id)!;
-        });
-      }
-      case "reminders.reschedule":
-      case "reminders.cancel": {
-        const operation = name as "reminders.reschedule" | "reminders.cancel";
-        const args = agentConversationOperations[operation].schema.parse(input);
-        const reminder = this.readReminder(args.reminderId);
-        if (!reminder || reminder.agentId !== run.agent_id)
-          throw new AgentToolRefusal("Reminder is not available");
-        return this.recordAgentToolAction(run, toolCallId, operation, args, () => {
-          const current = this.readReminder(args.reminderId)!;
-          if (current.version !== args.expectedVersion || current.state !== "active")
-            throw new AgentToolRefusal("Reminder version or state changed");
-          if (operation === "reminders.reschedule") {
-            const dueAt = (args as unknown as { dueAt: number }).dueAt;
+          });
+        },
+      ),
+      "tasks.create": tool(
+        {
+          description: "从你可读取的已有消息创建任务；消息是唯一规范锚点。",
+          schema: taskToolSchemas["tasks.create"],
+        },
+        (run, toolCallId, args) => {
+          return this.executeTaskChange(run, toolCallId, { name: "tasks.create", input: args });
+        },
+      ),
+      "tasks.claim_message": tool(
+        {
+          description:
+            "对一条你可读取的消息直接发起认领：该消息已有任务时认领那个任务（讨论串回复也可能带有自己的任务），否则创建并认领该讨论原顶层消息对应的任务；结果中的 messageId 是本次认领的任务锚点。已被同伴认领时返回 outcome=conflict 而不抢占，你仍可阅读、讨论或提供不冲突的协助。",
+          schema: taskToolSchemas["tasks.claim_message"],
+        },
+        (run, toolCallId, args) => {
+          return this.executeTaskChange(run, toolCallId, {
+            name: "tasks.claim_message",
+            input: args,
+          });
+        },
+      ),
+      "tasks.claim": tool(
+        {
+          description: "认领一个可见任务；先检查相关讨论的新变化。",
+          schema: taskToolSchemas["tasks.claim"],
+        },
+        (run, toolCallId, args) => {
+          return this.executeTaskChange(run, toolCallId, { name: "tasks.claim", input: args });
+        },
+      ),
+      "tasks.yield": tool(
+        {
+          description: "让出任务；若同伴已认领，记录你已让位而不改写其负责人。",
+          schema: taskToolSchemas["tasks.yield"],
+        },
+        (run, toolCallId, args) => {
+          return this.executeTaskChange(run, toolCallId, { name: "tasks.yield", input: args });
+        },
+      ),
+      "tasks.transfer": tool(
+        {
+          description: "把你当前负责的任务移交给同一对话的另一名成员 Agent。",
+          schema: taskToolSchemas["tasks.transfer"],
+        },
+        (run, toolCallId, args) => {
+          return this.executeTaskChange(run, toolCallId, { name: "tasks.transfer", input: args });
+        },
+      ),
+      "tasks.update": tool(
+        {
+          description: "更新可见任务的标题、状态或说明。",
+          schema: taskToolSchemas["tasks.update"],
+        },
+        (run, toolCallId, args) => {
+          return this.executeTaskChange(run, toolCallId, { name: "tasks.update", input: args });
+        },
+      ),
+      "tasks.review": tool(
+        {
+          description: "检查任务操作期间出现的相关消息，选择修改、保留、放弃、暂缓或知情继续。",
+          schema: z
+            .object({
+              draftId: z.string().uuid(),
+              choice: z.enum(["inspect", "revise", "keep", "abandon", "defer", "continue"]),
+              revisedInput: z.record(z.string(), z.json()).optional(),
+            })
+            .strict(),
+        },
+        (run, toolCallId, args) => {
+          return this.recordAgentToolAction(run, toolCallId, "tasks.review", args, () => {
+            const draft = this.db
+              .prepare("SELECT * FROM owner_task_drafts WHERE id=? AND agent_id=?")
+              .get(args.draftId, run.agent_id) as TaskDraftRow | undefined;
+            if (!draft) throw new AgentToolRefusal("Task draft is not available");
+            const position = this.taskDraftPosition(draft);
+            this.requireAgentConversation(run.agent_id, position.channelId);
+            const changes = this.unreviewedTaskChanges(draft);
+            const result = {
+              channelId: position.channelId,
+              draftId: draft.id,
+              state: draft.state,
+              changes,
+            };
+            if (args.choice === "inspect") {
+              this.recordTaskDraftReviews(draft.id, changes);
+              return result;
+            }
+            if (draft.state === "abandoned" || draft.state === "applied")
+              throw new AgentToolRefusal("Task draft is closed");
+            if (args.choice === "continue" && changes.length)
+              throw new AgentToolRefusal(
+                "Conversation changed; inspect the task draft before continuing",
+              );
+            if (args.choice === "revise" && !args.revisedInput)
+              throw new AgentToolRefusal("Revised task input is required");
+            const state =
+              args.choice === "revise"
+                ? "editing"
+                : args.choice === "keep"
+                  ? "kept"
+                  : args.choice === "abandon"
+                    ? "abandoned"
+                    : args.choice === "defer"
+                      ? "deferred"
+                      : "ready";
+            this.recordTaskDraftReviews(draft.id, changes);
+            this.db
+              .prepare(
+                "UPDATE owner_task_drafts SET input_json=COALESCE(?,input_json),state=?,updated_at=? WHERE id=?",
+              )
+              .run(
+                args.choice === "revise" ? JSON.stringify(args.revisedInput) : null,
+                state,
+                this.now(),
+                draft.id,
+              );
+            return { ...result, state };
+          });
+        },
+      ),
+      "tasks.list": tool(
+        {
+          description: "列出你当前可读取对话中的任务。",
+          schema: z.object({}).strict(),
+        },
+        (run, toolCallId, args) => {
+          // Task visibility stays member-only: this ticket widened conversation READS, and
+          // task ownership must not move with them.
+          return {
+            tasks: this.listTasks().filter((task) =>
+              this.isAgentChannelMember(run.agent_id, task.channelId),
+            ),
+          };
+        },
+      ),
+      "reminders.create": tool(
+        {
+          description: "为自己建立一次性提醒，可关联任务；任务完成后提醒仍然有效。",
+          schema: z
+            .object({
+              conversationId,
+              text: z.string().trim().min(1).max(2000),
+              dueAt: z.number().int().positive(),
+              taskId: z.string().uuid().optional(),
+            })
+            .strict(),
+        },
+        (run, toolCallId, args) => {
+          this.requireAgentConversation(run.agent_id, args.conversationId);
+          return this.recordAgentToolAction(run, toolCallId, "reminders.create", args, () => {
+            if (args.taskId) {
+              const task = this.readTask(args.taskId);
+              if (!task || task.channelId !== args.conversationId)
+                throw new AgentToolRefusal("Task is not in this conversation");
+            }
+            const id = randomUUID(),
+              at = this.now();
+            this.db
+              .prepare(
+                "INSERT INTO owner_reminders(id,agent_id,channel_id,task_id,text,due_at,state,created_at,updated_at) VALUES(?,?,?,?,?,?,'active',?,?)",
+              )
+              .run(
+                id,
+                run.agent_id,
+                args.conversationId,
+                args.taskId ?? null,
+                args.text,
+                args.dueAt,
+                at,
+                at,
+              );
+            return this.readReminder(id)!;
+          });
+        },
+      ),
+      "reminders.reschedule": tool(
+        {
+          description: "修改自己尚未触发的提醒时间。",
+          schema: z
+            .object({
+              reminderId: z.string().uuid(),
+              expectedVersion: z.number().int().positive(),
+              dueAt: z.number().int().positive(),
+            })
+            .strict(),
+        },
+        (run, toolCallId, args) => {
+          const reminder = this.readReminder(args.reminderId);
+          if (!reminder || reminder.agentId !== run.agent_id)
+            throw new AgentToolRefusal("Reminder is not available");
+          return this.recordAgentToolAction(run, toolCallId, "reminders.reschedule", args, () => {
+            const current = this.readReminder(args.reminderId)!;
+            if (current.version !== args.expectedVersion || current.state !== "active")
+              throw new AgentToolRefusal("Reminder version or state changed");
             this.db
               .prepare(
                 "UPDATE owner_reminders SET due_at=?,version=version+1,updated_at=? WHERE id=?",
               )
-              .run(dueAt, this.now(), current.id);
-          } else {
+              .run(args.dueAt, this.now(), current.id);
+            return this.readReminder(current.id)!;
+          });
+        },
+      ),
+      "reminders.cancel": tool(
+        {
+          description: "取消自己尚未触发的提醒。",
+          schema: z
+            .object({ reminderId: z.string().uuid(), expectedVersion: z.number().int().positive() })
+            .strict(),
+        },
+        (run, toolCallId, args) => {
+          const reminder = this.readReminder(args.reminderId);
+          if (!reminder || reminder.agentId !== run.agent_id)
+            throw new AgentToolRefusal("Reminder is not available");
+          return this.recordAgentToolAction(run, toolCallId, "reminders.cancel", args, () => {
+            const current = this.readReminder(args.reminderId)!;
+            if (current.version !== args.expectedVersion || current.state !== "active")
+              throw new AgentToolRefusal("Reminder version or state changed");
             this.db
               .prepare(
                 "UPDATE owner_reminders SET state='cancelled',version=version+1,updated_at=? WHERE id=?",
               )
               .run(this.now(), current.id);
+            return this.readReminder(current.id)!;
+          });
+        },
+      ),
+      "reminders.list": tool(
+        {
+          description: "查看自己的提醒和触发历史。",
+          schema: z.object({}).strict(),
+        },
+        (run, toolCallId, args) => {
+          this.syncHandledReminders();
+          return { reminders: this.listAgentReminders(run.agent_id) };
+        },
+      ),
+      "conversations.join": tool(
+        {
+          description:
+            "自行加入一个公开频道，成为成员后即可发送消息并按成员关系接收后续活动。加入不会回补历史消息为未读。私有对话不能通过此操作加入。",
+          schema: z.object({ conversationId }).strict(),
+        },
+        (run, toolCallId, args) => {
+          const alreadyMember = this.isAgentChannelMember(run.agent_id, args.conversationId);
+          if (alreadyMember) {
+            const conversation = this.requireAgentConversation(run.agent_id, args.conversationId);
+            if (conversation.kind !== "channel")
+              throw new AgentToolRefusal("Only a public channel can be joined");
+            return this.recordAgentToolAction(run, toolCallId, "conversations.join", args, () => ({
+              conversationId: conversation.id,
+              name: conversation.name,
+              visibility: conversation.visibility,
+              member: true,
+              alreadyMember: true,
+            }));
           }
-          return this.readReminder(current.id)!;
-        });
-      }
-      case "tasks.review": {
-        const args = agentConversationOperations["tasks.review"].schema.parse(input);
-        return this.recordAgentToolAction(run, toolCallId, "tasks.review", args, () => {
-          const draft = this.db
-            .prepare("SELECT * FROM owner_task_drafts WHERE id=? AND agent_id=?")
-            .get(args.draftId, run.agent_id) as TaskDraftRow | undefined;
-          if (!draft) throw new AgentToolRefusal("Task draft is not available");
-          const position = this.taskDraftPosition(draft);
-          this.requireAgentConversation(run.agent_id, position.channelId);
-          const changes = this.unreviewedTaskChanges(draft);
-          const result = {
-            channelId: position.channelId,
-            draftId: draft.id,
-            state: draft.state,
-            changes,
-          };
-          if (args.choice === "inspect") {
-            this.recordTaskDraftReviews(draft.id, changes);
-            return result;
-          }
-          if (draft.state === "abandoned" || draft.state === "applied")
-            throw new AgentToolRefusal("Task draft is closed");
-          if (args.choice === "continue" && changes.length)
-            throw new AgentToolRefusal(
-              "Conversation changed; inspect the task draft before continuing",
-            );
-          if (args.choice === "revise" && !args.revisedInput)
-            throw new AgentToolRefusal("Revised task input is required");
-          const state =
-            args.choice === "revise"
-              ? "editing"
-              : args.choice === "keep"
-                ? "kept"
-                : args.choice === "abandon"
-                  ? "abandoned"
-                  : args.choice === "defer"
-                    ? "deferred"
-                    : "ready";
-          this.recordTaskDraftReviews(draft.id, changes);
-          this.db
-            .prepare(
-              "UPDATE owner_task_drafts SET input_json=COALESCE(?,input_json),state=?,updated_at=? WHERE id=?",
-            )
-            .run(
-              args.choice === "revise" ? JSON.stringify(args.revisedInput) : null,
-              state,
-              this.now(),
-              draft.id,
-            );
-          return { ...result, state };
-        });
-      }
-      case "tasks.create":
-      case "tasks.claim":
-      case "tasks.claim_message":
-      case "tasks.yield":
-      case "tasks.transfer":
-      case "tasks.update": {
-        const taskOperation = name as
-          | "tasks.create"
-          | "tasks.claim"
-          | "tasks.claim_message"
-          | "tasks.yield"
-          | "tasks.transfer"
-          | "tasks.update";
-        const args = agentConversationOperations[taskOperation].schema.parse(input);
-        const messageId = "messageId" in args ? args.messageId : undefined;
-        const task = "taskId" in args ? this.readTask(args.taskId) : undefined;
-        const message = messageId
-          ? (this.db
-              .prepare(
-                "SELECT id,channel_id,root_id FROM owner_messages WHERE id=? AND internal_kind IS NULL",
-              )
-              .get(messageId) as
-              { id: string; channel_id: string; root_id: string | null } | undefined)
-          : undefined;
-        if (!task && !message) throw new AgentToolRefusal("Task or message is not available");
-        if (taskOperation === "tasks.create" && messageId && this.taskForMessage(messageId))
-          throw new AgentToolRefusal(
-            "Message already has a task; use tasks.claim_message to claim it",
-          );
-        const channelId = task?.channelId ?? message!.channel_id;
-        this.requireAgentConversation(run.agent_id, channelId);
-        return this.recordAgentToolAction(run, toolCallId, taskOperation, args, () => {
-          // Freshness follows the message the operation actually changes: a direct claim is scoped
-          // to its target's anchor, not to whichever message id the Agent happened to pass.
-          const anchorMessageId =
-            taskOperation === "tasks.claim_message"
-              ? (this.directClaimTarget(messageId!)?.anchorMessageId ?? messageId!)
-              : (task?.messageId ?? messageId!);
-          const anchor = this.db
-            .prepare("SELECT root_id FROM owner_messages WHERE id=?")
-            .get(anchorMessageId) as { root_id: string | null } | undefined;
-          const rootId = anchor?.root_id ?? undefined;
-          if (!args.draftId) {
-            const { changes } = this.inspectAgentPositionChanges(
-              run.agent_id,
-              run.input_end_seq,
-              channelId,
-              rootId,
-            );
-            if (changes.length) {
-              const draftId = randomUUID();
-              this.db
-                .prepare(
-                  "INSERT INTO owner_task_drafts(id,agent_id,task_id,action,input_json,input_end_seq,state,created_at,updated_at) VALUES(?,?,?,?,?,?,'editing',?,?)",
-                )
-                .run(
-                  draftId,
-                  run.agent_id,
-                  task?.id ?? null,
-                  name,
-                  JSON.stringify(args),
-                  run.input_end_seq,
-                  this.now(),
-                  this.now(),
-                );
-              this.recordTaskDraftReviews(draftId, changes);
-              return { channelId, status: "needs_review", draftId, changes };
-            }
-          } else {
-            const draft = this.db
-              .prepare("SELECT * FROM owner_task_drafts WHERE id=? AND agent_id=?")
-              .get(args.draftId, run.agent_id) as TaskDraftRow | undefined;
-            if (
-              !draft ||
-              draft.action !== name ||
-              draft.state !== "ready" ||
-              draft.task_id !== (task?.id ?? null)
-            )
-              throw new AgentToolRefusal("Task draft is not ready");
-            const original = JSON.parse(draft.input_json) as Record<string, unknown>;
-            const current = { ...args } as Record<string, unknown>;
-            delete current.draftId;
-            delete original.draftId;
-            if (JSON.stringify(original) !== JSON.stringify(current))
-              throw new AgentToolRefusal("Task draft changed; revise it first");
-            if (this.unreviewedTaskChanges(draft).length)
-              throw new AgentToolRefusal("Conversation changed; review the task draft again");
-            this.db
-              .prepare("UPDATE owner_task_drafts SET state='applied',updated_at=? WHERE id=?")
-              .run(this.now(), draft.id);
-          }
-          if (name === "tasks.create")
-            return this.createTaskForMessage(messageId!, "agent", run.agent_id);
-          if (name === "tasks.claim_message")
-            return this.claimTaskForMessage(run.agent_id, messageId!);
-          return this.mutateTask(run.agent_id, task!, name, args as Record<string, unknown>);
-        });
-      }
-      case "conversations.join": {
-        const args = agentConversationOperations["conversations.join"].schema.parse(input);
-        const alreadyMember = this.isAgentChannelMember(run.agent_id, args.conversationId);
-        if (alreadyMember) {
+          const conversation = this.requireReadableConversation(run.agent_id, args.conversationId);
+          if (conversation.kind !== "channel" || conversation.visibility !== "public")
+            throw new AgentToolRefusal("Only a public channel can be joined");
+          return this.recordAgentToolAction(run, toolCallId, "conversations.join", args, () => {
+            const channel = this.joinAgentToPublicChannel(run.agent_id, args.conversationId);
+            if (!channel) throw new AgentToolRefusal("Only a public channel can be joined");
+            return {
+              conversationId: channel.id,
+              name: channel.name,
+              visibility: channel.visibility,
+              member: true,
+              alreadyMember: false,
+            };
+          });
+        },
+      ),
+      "conversations.invite": tool(
+        {
+          description:
+            "邀请一名已配置的同伴 Agent 加入你当前所在的频道。不能邀请自己，也不能邀请他人加入私信。",
+          schema: z.object({ conversationId, agentId: z.string().uuid() }).strict(),
+        },
+        (run, toolCallId, args) => {
           const conversation = this.requireAgentConversation(run.agent_id, args.conversationId);
           if (conversation.kind !== "channel")
-            throw new AgentToolRefusal("Only a public channel can be joined");
-          return this.recordAgentToolAction(run, toolCallId, "conversations.join", args, () => ({
-            conversationId: conversation.id,
-            name: conversation.name,
-            visibility: conversation.visibility,
-            member: true,
-            alreadyMember: true,
-          }));
-        }
-        const conversation = this.requireReadableConversation(run.agent_id, args.conversationId);
-        if (conversation.kind !== "channel" || conversation.visibility !== "public")
-          throw new AgentToolRefusal("Only a public channel can be joined");
-        return this.recordAgentToolAction(run, toolCallId, "conversations.join", args, () => {
-          const channel = this.joinAgentToPublicChannel(run.agent_id, args.conversationId);
-          if (!channel) throw new AgentToolRefusal("Only a public channel can be joined");
-          return {
-            conversationId: channel.id,
-            name: channel.name,
-            visibility: channel.visibility,
-            member: true,
-            alreadyMember: false,
-          };
-        });
-      }
-      case "conversations.invite": {
-        const args = agentConversationOperations["conversations.invite"].schema.parse(input),
-          conversation = this.requireAgentConversation(run.agent_id, args.conversationId);
-        if (conversation.kind !== "channel")
-          throw new AgentToolRefusal("Only a channel can receive an invitation");
-        if (args.agentId === run.agent_id)
-          throw new AgentToolRefusal("An Agent cannot invite itself");
-        const currentMember = this.db
-          .prepare(
-            "SELECT active FROM owner_channel_memberships WHERE channel_id=? AND principal_kind='agent' AND principal_id=?",
-          )
-          .get(args.conversationId, args.agentId) as { active: number } | undefined;
-        // A valid Agent invitation is effective at this same control-plane commit.
-        if (!this.isInviteableAgent(args.agentId))
-          throw new AgentToolRefusal("Invitation target is not available");
-        return this.recordAgentToolAction(run, toolCallId, "conversations.invite", args, () => {
-          if (!this.inviteAgentToChannel(args.conversationId, args.agentId))
+            throw new AgentToolRefusal("Only a channel can receive an invitation");
+          if (args.agentId === run.agent_id)
+            throw new AgentToolRefusal("An Agent cannot invite itself");
+          const currentMember = this.db
+            .prepare(
+              "SELECT active FROM owner_channel_memberships WHERE channel_id=? AND principal_kind='agent' AND principal_id=?",
+            )
+            .get(args.conversationId, args.agentId) as { active: number } | undefined;
+          // A valid Agent invitation is effective at this same control-plane commit.
+          if (!this.isInviteableAgent(args.agentId))
             throw new AgentToolRefusal("Invitation target is not available");
-          return {
-            conversationId: args.conversationId,
-            agentId: args.agentId,
-            status: "succeeded",
-            alreadyMember: currentMember?.active === 1,
-          };
-        });
+          return this.recordAgentToolAction(run, toolCallId, "conversations.invite", args, () => {
+            if (!this.inviteAgentToChannel(args.conversationId, args.agentId))
+              throw new AgentToolRefusal("Invitation target is not available");
+            return {
+              conversationId: args.conversationId,
+              agentId: args.agentId,
+              status: "succeeded",
+              alreadyMember: currentMember?.active === 1,
+            };
+          });
+        },
+      ),
+    };
+  }
+
+  private executeTaskChange(
+    run: ActiveAgentToolRun,
+    toolCallId: string,
+    request: TaskToolRequest,
+  ): unknown {
+    const { name: taskOperation, input: args } = request;
+    const messageId = "messageId" in args ? args.messageId : undefined;
+    const task = "taskId" in args ? this.readTask(args.taskId) : undefined;
+    const message = messageId
+      ? (this.db
+          .prepare(
+            "SELECT id,channel_id,root_id FROM owner_messages WHERE id=? AND internal_kind IS NULL",
+          )
+          .get(messageId) as { id: string; channel_id: string; root_id: string | null } | undefined)
+      : undefined;
+    if (!task && !message) throw new AgentToolRefusal("Task or message is not available");
+    if (taskOperation === "tasks.create" && messageId && this.taskForMessage(messageId))
+      throw new AgentToolRefusal("Message already has a task; use tasks.claim_message to claim it");
+    const channelId = task?.channelId ?? message!.channel_id;
+    this.requireAgentConversation(run.agent_id, channelId);
+    return this.recordAgentToolAction(run, toolCallId, taskOperation, args, () => {
+      // Freshness follows the message the operation actually changes: a direct claim is scoped
+      // to its target's anchor, not to whichever message id the Agent happened to pass.
+      const anchorMessageId =
+        taskOperation === "tasks.claim_message"
+          ? (this.directClaimTarget(messageId!)?.anchorMessageId ?? messageId!)
+          : (task?.messageId ?? messageId!);
+      const anchor = this.db
+        .prepare("SELECT root_id FROM owner_messages WHERE id=?")
+        .get(anchorMessageId) as { root_id: string | null } | undefined;
+      const rootId = anchor?.root_id ?? undefined;
+      if (!args.draftId) {
+        const { changes } = this.inspectAgentPositionChanges(
+          run.agent_id,
+          run.input_end_seq,
+          channelId,
+          rootId,
+        );
+        if (changes.length) {
+          const draftId = randomUUID();
+          this.db
+            .prepare(
+              "INSERT INTO owner_task_drafts(id,agent_id,task_id,action,input_json,input_end_seq,state,created_at,updated_at) VALUES(?,?,?,?,?,?,'editing',?,?)",
+            )
+            .run(
+              draftId,
+              run.agent_id,
+              task?.id ?? null,
+              taskOperation,
+              JSON.stringify(args),
+              run.input_end_seq,
+              this.now(),
+              this.now(),
+            );
+          this.recordTaskDraftReviews(draftId, changes);
+          return { channelId, status: "needs_review", draftId, changes };
+        }
+      } else {
+        const draft = this.db
+          .prepare("SELECT * FROM owner_task_drafts WHERE id=? AND agent_id=?")
+          .get(args.draftId, run.agent_id) as TaskDraftRow | undefined;
+        if (
+          !draft ||
+          draft.action !== taskOperation ||
+          draft.state !== "ready" ||
+          draft.task_id !== (task?.id ?? null)
+        )
+          throw new AgentToolRefusal("Task draft is not ready");
+        const original = JSON.parse(draft.input_json) as Record<string, unknown>;
+        const current = { ...args };
+        delete current.draftId;
+        delete original.draftId;
+        if (JSON.stringify(original) !== JSON.stringify(current))
+          throw new AgentToolRefusal("Task draft changed; revise it first");
+        if (this.unreviewedTaskChanges(draft).length)
+          throw new AgentToolRefusal("Conversation changed; review the task draft again");
+        this.db
+          .prepare("UPDATE owner_task_drafts SET state='applied',updated_at=? WHERE id=?")
+          .run(this.now(), draft.id);
       }
-    }
+      if (taskOperation === "tasks.create")
+        return this.createTaskForMessage(messageId!, "agent", run.agent_id);
+      if (taskOperation === "tasks.claim_message")
+        return this.claimTaskForMessage(run.agent_id, messageId!);
+      return this.mutateTask(run.agent_id, task!, request);
+    });
   }
 
   listAgentAttention(
@@ -2294,7 +2415,7 @@ export class OwnerChat {
   private recordAgentToolAction(
     run: ActiveAgentToolRun,
     toolCallId: string,
-    operation: AgentConversationOperation,
+    operation: string,
     input: unknown,
     effect: () => unknown,
   ): unknown {

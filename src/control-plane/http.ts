@@ -1,3 +1,5 @@
+import { AgentTools } from "./agent-tools.js";
+import { AgentProcessOperationBroker } from "./agent-process-operations.js";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { resolve } from "node:path";
@@ -18,7 +20,7 @@ import { ModelCredentialDirectory } from "./model-credentials.js";
 import { isSupportedModelProvider, supportedModelProviders } from "./model-providers.js";
 import { AgentRunCoordinator } from "./agent-runs.js";
 import { AttachmentError, AttachmentService } from "./attachments.js";
-import { WorkspaceError, WorkspaceService, type WorkspaceVersion } from "./workspace.js";
+import { WorkspaceError, WorkspaceService } from "./workspace.js";
 import { registerWorkspaceRoutes } from "./workspace-http.js";
 import { listAgentActivity } from "./activity.js";
 import { OwnerPush } from "./owner-push.js";
@@ -89,6 +91,7 @@ export class ControlPlaneApp extends Hono {
     readonly chat: OwnerChat,
     readonly workspace: WorkspaceService,
     readonly attachments: AttachmentService,
+    readonly tools: AgentTools,
     push: OwnerPush,
   ) {
     super();
@@ -151,7 +154,18 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
       options.maxAttachmentBytes,
       options.now,
     ),
-    app = new ControlPlaneApp(ownerAuth, nodes, agents, ownerChat, workspace, attachments, push),
+    processes = new AgentProcessOperationBroker(ownerAuth.db, nodes, options.now),
+    tools = new AgentTools(ownerAuth.db, ownerChat, workspace, attachments, processes),
+    app = new ControlPlaneApp(
+      ownerAuth,
+      nodes,
+      agents,
+      ownerChat,
+      workspace,
+      attachments,
+      tools,
+      push,
+    ),
     loginGate = new LoginGate();
   ownerChat.setPushHandler((message, directToOwner) => {
     if (!directToOwner && !mentionsOwner(message.text)) return;
@@ -161,184 +175,15 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
       `/app?channel=${encodeURIComponent(message.channelId)}&message=${encodeURIComponent(message.id)}`,
     );
   });
-  ownerChat.setExternalAgentToolHandler(async (request) => {
-    const input = request.input;
-    try {
-      switch (request.name) {
-        case "workspace.list": {
-          const args = input as { path: string; offset: number; limit: number };
-          return {
-            ok: true,
-            result: await workspace.readForAgent(request.runId, request.agentId, {
-              kind: "workspace_list",
-              ...args,
-            }),
-          };
-        }
-        case "workspace.stat":
-          return {
-            ok: true,
-            result: await workspace.readForAgent(request.runId, request.agentId, {
-              kind: "workspace_stat",
-              path: input.path as string,
-            }),
-          };
-        case "workspace.read":
-          return {
-            ok: true,
-            result: await workspace.readForAgent(request.runId, request.agentId, {
-              kind: "read",
-              path: input.path as string,
-            }),
-          };
-        case "workspace.read_chunk":
-          return {
-            ok: true,
-            result: await workspace.readForAgent(request.runId, request.agentId, {
-              kind: "workspace_read_chunk",
-              path: input.path as string,
-              offset: input.offset as number,
-              length: input.length as number,
-              ...(input.version === undefined
-                ? {}
-                : { version: input.version as WorkspaceVersion }),
-            }),
-          };
-        case "workspace.write":
-          return {
-            ok: true,
-            result: await workspace.agentAction({
-              ...request,
-              operationName: request.name,
-              toolInput: input,
-              operation: {
-                kind: "write",
-                path: input.path as string,
-                content: input.content as string,
-              },
-            }),
-          };
-        case "workspace.write_bytes":
-          return {
-            ok: true,
-            result: await workspace.agentAction({
-              ...request,
-              operationName: request.name,
-              toolInput: input,
-              operation: {
-                kind: "write_bytes",
-                path: input.path as string,
-                base64: input.base64 as string,
-              },
-            }),
-          };
-        case "workspace.edit":
-          return {
-            ok: true,
-            result: await workspace.agentAction({
-              ...request,
-              operationName: request.name,
-              toolInput: input,
-              operation: {
-                kind: "edit",
-                path: input.path as string,
-                expectedHash: input.expectedHash as string,
-                oldText: input.oldText as string,
-                newText: input.newText as string,
-              },
-            }),
-          };
-        case "workspace.mkdir":
-          return {
-            ok: true,
-            result: await workspace.agentAction({
-              ...request,
-              operationName: request.name,
-              toolInput: input,
-              operation: { kind: "mkdir", path: input.path as string },
-            }),
-          };
-        case "workspace.move":
-          return {
-            ok: true,
-            result: await workspace.agentAction({
-              ...request,
-              operationName: request.name,
-              toolInput: input,
-              operation: {
-                kind: "move",
-                path: input.path as string,
-                destination: input.destination as string,
-              },
-            }),
-          };
-        case "workspace.remove":
-          return {
-            ok: true,
-            result: await workspace.agentAction({
-              ...request,
-              operationName: request.name,
-              toolInput: input,
-              operation: {
-                kind: "remove",
-                path: input.path as string,
-                ...(input.expectedHash === undefined
-                  ? {}
-                  : { expectedHash: input.expectedHash as string }),
-              },
-            }),
-          };
-        case "attachments.list":
-          return {
-            ok: true,
-            result: {
-              attachments: attachments.listForAgent(
-                request.runId,
-                request.agentId,
-                input.conversationId as string,
-              ),
-            },
-          };
-        case "attachments.read_chunk":
-          return {
-            ok: true,
-            result: attachments.readChunkForAgent({
-              runId: request.runId,
-              agentId: request.agentId,
-              channelId: input.conversationId as string,
-              attachmentId: input.attachmentId as string,
-              offset: input.offset as number,
-              length: input.length as number,
-            }),
-          };
-        case "attachments.publish":
-          return {
-            ok: true,
-            result: await attachments.publishNodeFile({
-              runId: request.runId,
-              agentId: request.agentId,
-              actionId: request.actionId,
-              operationName: request.name,
-              toolInput: input,
-              channelId: input.conversationId as string,
-              path: input.path as string,
-              ...(input.filename === undefined ? {} : { filename: input.filename as string }),
-            }),
-          };
-        default:
-          return { ok: false, error: "Unknown file operation" };
-      }
-    } catch (error) {
-      return {
-        ok: false,
-        error:
-          error instanceof WorkspaceError || error instanceof AttachmentError
-            ? error.message
-            : "Agent 文件请求被拒绝。",
-      };
-    }
-  });
-  app.runs = new AgentRunCoordinator(ownerAuth.db, nodes, modelCredentials, ownerChat, options.now);
+  app.runs = new AgentRunCoordinator(
+    ownerAuth.db,
+    nodes,
+    modelCredentials,
+    ownerChat,
+    tools,
+    processes,
+    options.now,
+  );
   const activeAgentProvisions = new Map<string, Promise<AgentSummary>>();
   const agentProvisionResponse = (
     context: Context,

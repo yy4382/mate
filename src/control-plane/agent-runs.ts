@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { AgentSession } from "./agent-session.js";
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
@@ -10,8 +9,7 @@ import {
   AgentProcessOperationBroker,
   deriveAgentProcessOperationId,
 } from "./agent-process-operations.js";
-import { agentProcessToolOperations, agentToolSchemas } from "./agent-tools.js";
-import { z } from "zod";
+import type { AgentTools } from "./agent-tools.js";
 import { recordAgentActivity } from "./activity.js";
 
 const schedulerIntervalMs = 250;
@@ -41,17 +39,17 @@ export class AgentRunCoordinator {
   private draining = false;
   private closed = false;
   private readonly now: () => number;
-  readonly processOperations: AgentProcessOperationBroker;
 
   constructor(
     private readonly db: Database.Database,
     private readonly nodes: NodeDirectory,
     private readonly credentials: ModelCredentialDirectory,
     private readonly chat: OwnerChat,
+    tools: AgentTools,
+    readonly processOperations: AgentProcessOperationBroker,
     now: () => number = Date.now,
   ) {
     this.now = now;
-    this.processOperations = new AgentProcessOperationBroker(db, nodes, now);
     this.recoverInterruptedRuns();
     nodes.setProcessReceiptHandler(
       (nodeId, receipt) => {
@@ -78,61 +76,13 @@ export class AgentRunCoordinator {
       transcript: (runId, nodeId, agentId, requestId, text) =>
         new AgentSession(db).append(runId, nodeId, agentId, text),
       tool: (runId, nodeId, agentId, toolCallId, operation, input) =>
-        this.executeAgentTool(runId, nodeId, agentId, toolCallId, operation, input),
+        tools.execute({ runId, nodeId, agentId, toolCallId }, operation, input),
       result: (runId, agentId, ok, code, reason) =>
         this.finishRun(runId, agentId, ok, code, reason),
     });
     this.timer = setInterval(() => this.wake(), schedulerIntervalMs);
     this.timer.unref?.();
     this.wake();
-  }
-
-  private async executeAgentTool(
-    runId: string,
-    nodeId: string,
-    agentId: string,
-    toolCallId: string,
-    operation: string,
-    input: Record<string, unknown>,
-  ): Promise<{ ok: true; result: unknown } | { ok: false; error: string }> {
-    if (operation !== "tools.call")
-      return this.chat.executeAgentTool(runId, nodeId, agentId, toolCallId, operation, input);
-    const request = agentToolSchemas["tools.call"].safeParse(input);
-    if (!request.success || !Object.hasOwn(agentProcessToolOperations, request.data.name))
-      return this.chat.executeAgentTool(runId, nodeId, agentId, toolCallId, operation, input);
-
-    try {
-      const original = new AgentSession(this.db).toolAction(agentId, toolCallId);
-      if (original && (original.name !== operation || !isDeepStrictEqual(original.input, input)))
-        throw new Error("Recovered tool arguments differ from the committed call");
-      const authorized = this.chat.authorizeAgentProcessOperation(
-          runId,
-          nodeId,
-          agentId,
-          request.data.name,
-          request.data.input,
-        ),
-        operationId = deriveAgentProcessOperationId(agentId, toolCallId),
-        result = await this.processOperations.execute({
-          runId,
-          nodeId,
-          agentId,
-          actionScopeId: original?.actionScopeId ?? authorized.actionScopeId,
-          stableActionId: toolCallId,
-          operationId,
-          operation: authorized.operation,
-        });
-      return {
-        ok: true,
-        result: { operationId: result.operationId, state: result.state, receipt: result.receipt },
-      };
-    } catch (error) {
-      return {
-        ok: false,
-        error:
-          error instanceof z.ZodError ? "Invalid tool input" : "Agent tool request was refused",
-      };
-    }
   }
 
   close(): void {

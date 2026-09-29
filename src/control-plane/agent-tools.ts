@@ -1,436 +1,123 @@
+import type Database from "better-sqlite3";
 import { z } from "zod";
-import type { AgentProcessOperation } from "../nodes/process-operations.js";
+import { OwnerChat, AgentToolRefusal } from "./owner-chat.js";
+import { WorkspaceService, WorkspaceError } from "./workspace.js";
+import { AttachmentService, AttachmentError } from "./attachments.js";
+import type { AgentProcessOperationBroker } from "./agent-process-operations.js";
 import {
-  WORKSPACE_WRITE_BYTES_BASE64_MAX_CHARS,
-  WORKSPACE_WRITE_MAX_BYTES,
-} from "../execution/backend.js";
-import { MAX_NODE_MESSAGE_BYTES } from "../nodes/protocol.js";
+  defineAgentTool,
+  type AgentToolEntry,
+  type AgentToolIdentity,
+} from "./agent-tool-entry.js";
 
-const conversationId = z.string().uuid(),
-  workspacePath = z.string().max(4096),
-  pageLimit = z.number().int().min(1).max(100).default(50),
-  cursor = z
-    .string()
-    .regex(/^[1-9][0-9]*$/)
-    .max(16)
-    .optional();
+export type AgentToolCallResult = { ok: true; result: unknown } | { ok: false; error: string };
 
-/** Control-plane-owned operation catalog; the node forwards these names and inputs unchanged. */
-export const agentConversationOperations = Object.freeze({
-  "agents.list": {
-    description: "发现当前已配置、可通过 Mate 联系的其他 Agent 身份。",
-    schema: z.object({}).strict(),
-  },
-  "conversations.list": {
-    description:
-      "列出当前可发现的对话。公开频道显示名称和简介，并标记你是否已是成员；私有对话只在你已加入时显示。",
-    schema: z.object({}).strict(),
-  },
-  "conversations.read": {
-    description:
-      "读取一个对话中的消息；公开频道无需加入即可读取，私有对话和私信仅限成员。必须指定 conversationId；使用 before 和 limit 向更早消息分页。",
-    schema: z.object({ conversationId, before: cursor, limit: pageLimit }).strict(),
-  },
-  "conversations.read_thread": {
-    description:
-      "读取一条根消息的完整讨论串；公开频道无需加入即可读取，私有对话和私信仅限成员。必须指定 conversationId 和根消息 ID。",
-    schema: z.object({ conversationId, rootId: z.string().uuid() }).strict(),
-  },
-  "conversations.open_dm": {
-    description:
-      "为你和一名明确指定的、已配置同伴创建或返回唯一私信；控制面会同时授予双方成员权限。",
-    schema: z.object({ targetAgentId: z.string().uuid() }).strict(),
-  },
-  "attention.list": {
-    description: "查看你的消息注意力状态。通知已见和正文已呈现分别记录。",
-    schema: z.object({ conversationId }).strict(),
-  },
-  "attention.update": {
-    description:
-      "分别设置一条消息的未读、已见、暂缓或静音状态；正文已呈现由控制面在交付正文时记录。",
-    schema: z
-      .object({
-        conversationId,
-        messageId: z.string().uuid(),
-        unread: z.boolean().optional(),
-        seen: z.boolean().optional(),
-        deferred: z.boolean().optional(),
-        muted: z.boolean().optional(),
-      })
-      .strict(),
-  },
-  "drafts.save": {
-    description: "持久保存发送草稿和当前讨论位置。保存后可查看并发变化。",
-    schema: z
-      .object({
-        conversationId,
-        text: z.string().min(1).max(20_000),
-        rootId: z.string().uuid().optional(),
-        quoteId: z.string().uuid().optional(),
-      })
-      .strict(),
-  },
-  "drafts.review": {
-    description: "查看草稿后的讨论变化，并选择修改、保留、放弃、暂缓或知情继续。",
-    schema: z
-      .object({
-        draftId: z.string().uuid(),
-        choice: z.enum(["inspect", "revise", "keep", "abandon", "defer", "continue"]),
-        text: z.string().min(1).max(20_000).optional(),
-      })
-      .strict(),
-  },
-  "messages.send": {
-    description:
-      "向一个明确指定且当前已加入的频道或私信发送普通消息。发送目标必须提供 conversationId。",
-    schema: z
-      .object({
-        conversationId,
-        text: z.string().min(1).max(20_000),
-        rootId: z.string().uuid().optional(),
-        quoteId: z.string().uuid().optional(),
-        draftId: z.string().uuid().optional(),
-        asTask: z.boolean().optional(),
-      })
-      .strict(),
-  },
-  "tasks.create": {
-    description: "从你可读取的已有消息创建任务；消息是唯一规范锚点。",
-    schema: z
-      .object({ messageId: z.string().uuid(), draftId: z.string().uuid().optional() })
-      .strict(),
-  },
-  "tasks.claim_message": {
-    description:
-      "对一条你可读取的消息直接发起认领：该消息已有任务时认领那个任务（讨论串回复也可能带有自己的任务），否则创建并认领该讨论原顶层消息对应的任务；结果中的 messageId 是本次认领的任务锚点。已被同伴认领时返回 outcome=conflict 而不抢占，你仍可阅读、讨论或提供不冲突的协助。",
-    schema: z
-      .object({ messageId: z.string().uuid(), draftId: z.string().uuid().optional() })
-      .strict(),
-  },
-  "tasks.claim": {
-    description: "认领一个可见任务；先检查相关讨论的新变化。",
-    schema: z
-      .object({
-        taskId: z.string().uuid(),
-        expectedVersion: z.number().int().positive(),
-        draftId: z.string().uuid().optional(),
-      })
-      .strict(),
-  },
-  "tasks.yield": {
-    description: "让出任务；若同伴已认领，记录你已让位而不改写其负责人。",
-    schema: z
-      .object({
-        taskId: z.string().uuid(),
-        expectedVersion: z.number().int().positive(),
-        draftId: z.string().uuid().optional(),
-      })
-      .strict(),
-  },
-  "tasks.transfer": {
-    description: "把你当前负责的任务移交给同一对话的另一名成员 Agent。",
-    schema: z
-      .object({
-        taskId: z.string().uuid(),
-        expectedVersion: z.number().int().positive(),
-        agentId: z.string().uuid(),
-        draftId: z.string().uuid().optional(),
-      })
-      .strict(),
-  },
-  "tasks.update": {
-    description: "更新可见任务的标题、状态或说明。",
-    schema: z
-      .object({
-        taskId: z.string().uuid(),
-        expectedVersion: z.number().int().positive(),
-        title: z.string().trim().min(1).max(200).optional(),
-        status: z.enum(["open", "in_progress", "done"]).optional(),
-        note: z.string().max(2000).default(""),
-        draftId: z.string().uuid().optional(),
-      })
-      .strict(),
-  },
-  "tasks.review": {
-    description: "检查任务操作期间出现的相关消息，选择修改、保留、放弃、暂缓或知情继续。",
-    schema: z
-      .object({
-        draftId: z.string().uuid(),
-        choice: z.enum(["inspect", "revise", "keep", "abandon", "defer", "continue"]),
-        revisedInput: z.record(z.string(), z.json()).optional(),
-      })
-      .strict(),
-  },
-  "tasks.list": {
-    description: "列出你当前可读取对话中的任务。",
-    schema: z.object({}).strict(),
-  },
-  "reminders.create": {
-    description: "为自己建立一次性提醒，可关联任务；任务完成后提醒仍然有效。",
-    schema: z
-      .object({
-        conversationId,
-        text: z.string().trim().min(1).max(2000),
-        dueAt: z.number().int().positive(),
-        taskId: z.string().uuid().optional(),
-      })
-      .strict(),
-  },
-  "reminders.reschedule": {
-    description: "修改自己尚未触发的提醒时间。",
-    schema: z
-      .object({
-        reminderId: z.string().uuid(),
-        expectedVersion: z.number().int().positive(),
-        dueAt: z.number().int().positive(),
-      })
-      .strict(),
-  },
-  "reminders.cancel": {
-    description: "取消自己尚未触发的提醒。",
-    schema: z
-      .object({ reminderId: z.string().uuid(), expectedVersion: z.number().int().positive() })
-      .strict(),
-  },
-  "reminders.list": {
-    description: "查看自己的提醒和触发历史。",
-    schema: z.object({}).strict(),
-  },
-  "conversations.join": {
-    description:
-      "自行加入一个公开频道，成为成员后即可发送消息并按成员关系接收后续活动。加入不会回补历史消息为未读。私有对话不能通过此操作加入。",
-    schema: z.object({ conversationId }).strict(),
-  },
-  "conversations.invite": {
-    description:
-      "邀请一名已配置的同伴 Agent 加入你当前所在的频道。不能邀请自己，也不能邀请他人加入私信。",
-    schema: z.object({ conversationId, agentId: z.string().uuid() }).strict(),
-  },
-});
+/** The only Agent tool boundary: discovery, parsing, dispatch and public error mapping. */
+export class AgentTools {
+  private readonly operations: Map<string, AgentToolEntry>;
+  private readonly meta: Map<string, AgentToolEntry>;
 
-const workspaceVersion = z
-  .object({
-    device: z.string().regex(/^[0-9]+$/),
-    inode: z.string().regex(/^[0-9]+$/),
-    size: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-    modifiedNs: z.string().regex(/^[0-9]+$/),
-    changedNs: z.string().regex(/^[0-9]+$/),
-  })
-  .strict();
-
-/** File tools cross the control plane and run as the node's own ordinary account. */
-export const agentWorkspaceOperations = Object.freeze({
-  "workspace.list": {
-    description:
-      "列出工作区中的目录。使用 path 指定路径，相对路径从你的工作区开始；也用同伴的 Agent ID（见 agents.list）列出同伴工作区中的目录。支持 offset 和 limit 分页。",
-    schema: z
-      .object({
-        path: workspacePath,
-        offset: z.number().int().min(0).max(1_000_000).default(0),
-        limit: z.number().int().min(1).max(32).default(32),
-      })
-      .strict(),
-  },
-  "workspace.stat": {
-    description: "查看工作区中文件或目录的类型和大小；路径规则与 workspace.read 相同。",
-    schema: z.object({ path: workspacePath }).strict(),
-  },
-  "workspace.read": {
-    description:
-      "读取工作区中不超过 8 KiB 的 UTF-8 文本文件；相对路径从你的工作区开始，也可以用同伴的 Agent ID（见 agents.list）按路径读取同伴工作区中的文件。更大的文件使用 read_chunk 分页读取。",
-    schema: z.object({ path: workspacePath }).strict(),
-  },
-  "workspace.read_chunk": {
-    description:
-      "分块读取工作区中的文件，路径规则与 workspace.read 相同；每次最多 8 KiB，并用返回的 version 继续读取同一版本。",
-    schema: z
-      .object({
-        path: workspacePath,
-        offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
-        length: z.number().int().min(1).max(8192).default(8192),
-        version: workspaceVersion.optional(),
-      })
-      .strict(),
-  },
-  "workspace.write": {
-    description:
-      "在你的工作区中写入或替换不超过 700 KiB 的 UTF-8 文本文件，且完整请求必须适合 1 MiB 节点消息。每次修改会由控制面记录并使用持久收据。",
-    schema: z
-      .object({
-        path: workspacePath,
-        content: z
-          .string()
-          .max(WORKSPACE_WRITE_MAX_BYTES)
-          .refine((value) => Buffer.byteLength(value, "utf8") <= WORKSPACE_WRITE_MAX_BYTES),
-      })
-      .strict()
-      .superRefine((input, context) => {
-        const worstCaseRequest = {
-          type: "node.agent.run.tool",
-          requestId: "00000000-0000-4000-8000-000000000000",
-          runId: "00000000-0000-4000-8000-000000000000",
-          agentId: "00000000-0000-4000-8000-000000000000",
-          toolCallId: "t".repeat(500),
-          operation: "tools.call",
-          input: { name: "workspace.write", input },
-        };
-        if (Buffer.byteLength(JSON.stringify(worstCaseRequest), "utf8") > MAX_NODE_MESSAGE_BYTES)
-          context.addIssue({
-            code: "custom",
-            message: "完整 workspace.write 请求超过 1 MiB 节点消息上限，请缩小文本。",
-          });
+  constructor(
+    database: Database.Database,
+    chat: OwnerChat,
+    workspace: WorkspaceService,
+    attachments: AttachmentService,
+    processes: AgentProcessOperationBroker,
+  ) {
+    this.operations = new Map(
+      Object.entries({
+        ...chat.agentTools(),
+        ...workspace.agentTools(),
+        ...attachments.agentTools(),
+        ...processes.agentTools(chat),
       }),
-  },
-  "workspace.write_bytes": {
-    description:
-      "在你的工作区中写入或替换不超过 700 KiB 的二进制文件，内容使用标准 base64；更大的附件请使用流式附件发布。",
-    schema: z
-      .object({
-        path: workspacePath,
-        base64: z
-          .string()
-          .max(WORKSPACE_WRITE_BYTES_BASE64_MAX_CHARS)
-          .refine((value) => Buffer.from(value, "base64").toString("base64") === value)
-          .refine((value) => Buffer.from(value, "base64").byteLength <= WORKSPACE_WRITE_MAX_BYTES),
-      })
-      .strict(),
-  },
-  "workspace.edit": {
-    description:
-      "expectedHash 必须在编辑检查时匹配、oldText 必须唯一出现；Mate 工作区写操作会串行并在提交前复核，但普通命令、后台进程或绕过 Mate 的同 UID 写入仍可能与最终替换竞争。",
-    schema: z
-      .object({
-        path: workspacePath,
-        expectedHash: z.string().regex(/^[a-f0-9]{64}$/),
-        oldText: z.string().min(1).max(1_000_000),
-        newText: z.string().max(1_000_000),
-      })
-      .strict(),
-  },
-  "workspace.mkdir": {
-    description: "在你的工作区中创建目录。",
-    schema: z.object({ path: z.string().min(1).max(4096) }).strict(),
-  },
-  "workspace.move": {
-    description: "在你的工作区内移动或重命名文件；源和目标都必须留在你的工作区。",
-    schema: z
-      .object({ path: z.string().min(1).max(4096), destination: z.string().min(1).max(4096) })
-      .strict(),
-  },
-  "workspace.remove": {
-    description: "删除你工作区中的文件；如提供 expectedHash，文件必须仍与该摘要相符。",
-    schema: z
-      .object({
-        path: z.string().min(1).max(4096),
-        expectedHash: z
-          .string()
-          .regex(/^[a-f0-9]{64}$/)
-          .optional(),
-      })
-      .strict(),
-  },
-  "attachments.list": {
-    description: "查看一个对话中的附件；公开频道无需加入即可查看，私有对话和私信仅限成员。",
-    schema: z.object({ conversationId }).strict(),
-  },
-  "attachments.read_chunk": {
-    description:
-      "分块读取一个对话中的附件；公开频道无需加入即可读取，私有对话和私信仅限成员。每次最多 8 KiB。",
-    schema: z
-      .object({
-        conversationId,
-        attachmentId: z.string().uuid(),
-        offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
-        length: z.number().int().min(1).max(8192).default(8192),
-      })
-      .strict(),
-  },
-  "attachments.publish": {
-    description:
-      "把你工作区中的一份文件发布到你已加入且明确指定的对话附件中；必须提供 conversationId。",
-    schema: z
-      .object({
-        conversationId,
-        path: z.string().min(1).max(4096),
-        filename: z.string().max(255).optional(),
-      })
-      .strict(),
-  },
-});
+    );
+    const checked = (identity: AgentToolIdentity) =>
+      database
+        .transaction(() =>
+          chat.requireActiveAgentToolRun(identity.runId, identity.nodeId, identity.agentId),
+        )
+        .immediate();
+    this.meta = new Map(
+      Object.entries({
+        "tools.list": defineAgentTool(
+          { description: "", schema: z.object({}).strict() },
+          (identity) => {
+            checked(identity);
+            return {
+              tools: [...this.operations].map(([name, entry]) => ({
+                name,
+                description: entry.description,
+              })),
+            };
+          },
+        ),
+        "tools.describe": defineAgentTool(
+          { description: "", schema: z.object({ name: z.string().min(1).max(128) }).strict() },
+          (identity, input) => {
+            checked(identity);
+            const entry = this.operation(input.name);
+            return {
+              name: input.name,
+              description: entry.description,
+              inputSchema: z.toJSONSchema(entry.schema),
+            };
+          },
+        ),
+        "tools.call": defineAgentTool(
+          {
+            description: "",
+            schema: z
+              .object({ name: z.string().min(1).max(128), input: z.record(z.string(), z.json()) })
+              .strict(),
+          },
+          (identity, input) => {
+            checked(identity);
+            return this.operation(input.name).invoke(identity, input.input);
+          },
+        ),
+      }),
+    );
+  }
 
-export const agentMateOperations = Object.freeze({
-  ...agentConversationOperations,
-  ...agentWorkspaceOperations,
-});
-
-export type AgentConversationOperation = keyof typeof agentConversationOperations;
-export type AgentWorkspaceOperation = keyof typeof agentWorkspaceOperations;
-export type AgentMateOperation = keyof typeof agentMateOperations;
-
-const operationId = z.string().uuid();
-
-/** Ordinary commands and self-process controls run as the account the node already runs as. */
-export const agentProcessToolOperations = Object.freeze({
-  "process.exec": {
-    description:
-      "在当前运行账号的普通 shell 子进程中运行命令，默认在 Agent 默认工作目录执行。Mate 返回有界输出、退出码，并在收据中标明输出是否完整以及命令是否因超时被结束；命令里的 sudo 原样交给宿主，成败只由宿主已有的 sudo 配置决定，Mate 不插入 sudo、不要求网页审批、也不配置 sudoers。",
-    schema: z
-      .object({ command: z.string().min(1).max(16_000), cwd: z.string().max(4096).optional() })
-      .strict(),
-  },
-  "process.list": {
-    description:
-      "列出本次节点运行期间由 process.exec 启动、进程组仍然存在的自己命令进程。Mate 的进程记录只属于当前这次节点进程：节点重启后它不再追踪此前的命令，也无法确认那些命令是否仍在运行。",
-    schema: z.object({}).strict(),
-  },
-  "process.inspect": {
-    description:
-      "查询一个由实时 process.exec 返回的操作 ID 当前的进程状态。Mate 只报告本次节点运行期间自己启动并仍能看到的进程组；本次节点运行之前启动的普通命令不在报告范围内，Mate 不会声称它们正在运行或已经结束。",
-    schema: z.object({ targetOperationId: operationId }).strict(),
-  },
-  "process.stop": {
-    description:
-      "尽力终止一个由本次节点运行期间的 process.exec 返回的操作 ID 对应的进程组。Mate 只能观察和终止它自己启动的进程组：以新会话离开该进程组或本账号无权信号的后代（例如 sudo 派生的 root 进程）不在报告范围内，Mate 不会声称它们已停止，只会如实报告无法确认。",
-    schema: z.object({ targetOperationId: operationId }).strict(),
-  },
-});
-
-export type AgentProcessToolOperation = keyof typeof agentProcessToolOperations;
-
-/** Validate one public tool call and map it to the narrower node process protocol. */
-export function toAgentProcessOperation(
-  name: string,
-  input: unknown,
-): AgentProcessOperation | undefined {
-  if (!Object.hasOwn(agentProcessToolOperations, name)) return undefined;
-  switch (name as AgentProcessToolOperation) {
-    case "process.exec": {
-      const args = agentProcessToolOperations["process.exec"].schema.parse(input);
-      return { kind: "exec", command: args.command, cwd: args.cwd ?? "." };
-    }
-    case "process.list":
-      agentProcessToolOperations["process.list"].schema.parse(input);
-      return { kind: "process.list" };
-    case "process.inspect": {
-      const args = agentProcessToolOperations["process.inspect"].schema.parse(input);
-      return { kind: "process.inspect", targetOperationId: args.targetOperationId };
-    }
-    case "process.stop": {
-      const args = agentProcessToolOperations["process.stop"].schema.parse(input);
-      return { kind: "process.stop", targetOperationId: args.targetOperationId };
+  async execute(
+    identity: AgentToolIdentity,
+    operation: string,
+    input: unknown,
+  ): Promise<AgentToolCallResult> {
+    let unexpectedError = "Agent tool request was refused";
+    try {
+      const entry = this.meta.get(operation);
+      if (!entry) throw new AgentToolRefusal("Unknown operation");
+      // The selected operation owns its existing unexpected-failure message; parsing and
+      // domain refusals still have one mapping here for synchronous and asynchronous tools.
+      if (
+        operation === "tools.call" &&
+        typeof input === "object" &&
+        input !== null &&
+        "name" in input &&
+        typeof input.name === "string"
+      )
+        unexpectedError = this.operations.get(input.name)?.unexpectedError ?? unexpectedError;
+      return {
+        ok: true,
+        result: await entry.invoke({ ...identity, request: { operation, input } }, input),
+      };
+    } catch (error) {
+      if (error instanceof z.ZodError) return { ok: false, error: "Invalid tool input" };
+      if (
+        error instanceof AgentToolRefusal ||
+        error instanceof WorkspaceError ||
+        error instanceof AttachmentError
+      )
+        return { ok: false, error: error.message };
+      return { ok: false, error: unexpectedError };
     }
   }
+
+  private operation(name: string): AgentToolEntry {
+    const entry = this.operations.get(name);
+    if (!entry) throw new AgentToolRefusal("Unknown operation");
+    return entry;
+  }
 }
-
-export const agentToolSchemas = {
-  "tools.list": z.object({}).strict(),
-  "tools.describe": z.object({ name: z.string().min(1).max(128) }).strict(),
-  "tools.call": z
-    .object({
-      name: z.string().min(1).max(128),
-      input: z.record(z.string(), z.json()),
-    })
-    .strict(),
-};
-
-export type AgentToolOperation = keyof typeof agentToolSchemas;

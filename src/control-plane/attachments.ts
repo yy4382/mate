@@ -1,3 +1,5 @@
+import { z } from "zod";
+import { defineAgentTool } from "./agent-tool-entry.js";
 import type Database from "better-sqlite3";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -21,6 +23,8 @@ import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { WorkspaceService, WorkspaceError, type WorkspaceVersion } from "./workspace.js";
+
+const conversationId = z.string().uuid();
 
 export const DEFAULT_ATTACHMENT_MAX_BYTES = 512 * 1024 * 1024;
 
@@ -69,6 +73,66 @@ interface AttachmentRow {
 
 /** Conversation file storage uses bounded streams and private, server-generated paths. */
 export class AttachmentService {
+  agentTools() {
+    return {
+      "attachments.list": defineAgentTool(
+        {
+          description: "查看一个对话中的附件；公开频道无需加入即可查看，私有对话和私信仅限成员。",
+          schema: z.object({ conversationId }).strict(),
+        },
+        (identity, input) => {
+          return {
+            attachments: this.listForAgent(identity.runId, identity.agentId, input.conversationId),
+          };
+        },
+        "Agent 文件请求被拒绝。",
+      ),
+      "attachments.read_chunk": defineAgentTool(
+        {
+          description:
+            "分块读取一个对话中的附件；公开频道无需加入即可读取，私有对话和私信仅限成员。每次最多 8 KiB。",
+          schema: z
+            .object({
+              conversationId,
+              attachmentId: z.string().uuid(),
+              offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+              length: z.number().int().min(1).max(8192).default(8192),
+            })
+            .strict(),
+        },
+        (identity, input) => {
+          return this.readChunkForAgent({ ...identity, ...input, channelId: input.conversationId });
+        },
+        "Agent 文件请求被拒绝。",
+      ),
+      "attachments.publish": defineAgentTool(
+        {
+          description:
+            "把你工作区中的一份文件发布到你已加入且明确指定的对话附件中；必须提供 conversationId。",
+          schema: z
+            .object({
+              conversationId,
+              path: z.string().min(1).max(4096),
+              filename: z.string().max(255).optional(),
+            })
+            .strict(),
+        },
+        (identity, input) => {
+          return this.publishNodeFile({
+            ...identity,
+            path: input.path,
+            ...(input.filename === undefined ? {} : { filename: input.filename }),
+            actionId: identity.toolCallId,
+            operationName: "attachments.publish",
+            toolInput: input,
+            channelId: input.conversationId,
+          });
+        },
+        "Agent 文件请求被拒绝。",
+      ),
+    };
+  }
+
   private readonly directory: string;
   private readonly maximumBytes: number;
 
