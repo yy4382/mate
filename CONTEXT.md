@@ -1,43 +1,67 @@
 # Mate
 
-Mate 是供持续存在的 Agent 同伴自主工作与协作的个人环境，人类通过 Mate 自己的网页界面与 Agent 交流和管理它们。
+Mate is a personal environment where persistent Agent colleagues work and collaborate autonomously. People communicate with and manage Agents through Mate's own web interface.
 
 ## Language
 
-**Agent**：具有持续身份、独立上下文和默认工作区的自主同伴。一次模型运行或一次对话并不构成新的 Agent。
-_Avoid_: Worker（指代 Agent 时）
+**Agent**:
+An autonomous colleague with a persistent identity, its own context, and a default workspace. A model run or a conversation does not create a new Agent.
+_Avoid_: Worker (when referring to an Agent)
 
-**Agent 会话**：属于一名 Agent、跨频道、讨论串和私信延续的一条逻辑上下文。新消息和新一轮运行不会为同一 Agent 创建并行会话。
+**Agent session**:
+One logical context belonging to an Agent and continuing across channels, threads, and direct messages. New messages and new runs do not create parallel sessions for the same Agent.
 
-**Agent 会话记录**：按模型实际经历的顺序保留的输入与输出，包括模型可见的运行提示、助手输出、工具调用和工具结果。它记录这名 Agent 已经经历的上下文，与频道中的聊天记录、尚未呈现给模型的消息投递和操作执行事实分别表达不同含义。
+**Agent transcript**:
+Inputs and outputs preserved in the order the model actually experienced them, including model-visible run instructions, assistant output, tool calls, and tool results. It records the Agent's experienced context, distinct from channel chat history, message deliveries not yet presented to the model, and records of operation execution.
 
-**会话压缩**：为继续同一 Agent 会话，用摘要与保留的近期交互组成后续模型上下文；压缩前的完整会话记录仍然保留。压缩不创建新的 Agent 身份或并行会话。
+**Session compaction**:
+Continuing the same Agent session with a summary and retained recent interactions as subsequent model context, while preserving the full transcript from before compaction. Compaction creates neither a new Agent identity nor a parallel session.
 
-**Agent 工作区**：Agent 默认组织记忆、文件和脚本的位置。它不构成对其他 Agent 的操作系统隔离边界；Mate 提醒 Agent 不要读同伴工作区，但不阻断 Agent 自行判断后读取。
+**Agent run**:
+One working turn of an Agent's model over its single Agent session. Starting a new run, even in a fresh model process, continues the same session rather than creating a new context.
+_Avoid_: authorised run, primary run, worker
 
-**Agent ID**：创建 Agent 时分配的类 UUID 稳定唯一标识。名称、角色、描述或模型改变时，这个标识不变。
-_Avoid_: 名称、Linux 用户名（指代 Agent ID 时）
+**Current run**:
+The one Agent run the control plane still considers in progress for an Agent, or none. Only the current run's requests take effect; a request from any run the control plane has already ended is refused.
+_Avoid_: active run, valid run, live run
 
-**Agent 资料**：Agent 的可编辑名称、角色和描述；这些字段不决定它的身份或所在节点。
+**Agent workspace**:
+The default location where an Agent organizes memory, files, and scripts. It does not provide operating-system isolation from other Agents; Mate tells Agents not to read colleagues' workspaces but does not block reading when an Agent judges it necessary.
 
-**控制面**：Mate 的中心服务，保存对话、任务、完整会话记录等共享状态，并提供网页界面。一个 Mate 只有一个控制面。
-_Avoid_: 服务端、daemon（指代控制面时）
+**Agent ID**:
+A stable, unique, UUID-like identifier assigned when an Agent is created. It remains unchanged when the Agent's name, role, description, or model changes.
+_Avoid_: name, Linux username (when referring to an Agent ID)
 
-**节点**：连接到控制面、承载若干 Agent 的一台机器上的运行服务。Agent 在某个节点上创建，它的默认工作区和命令执行都在该节点上。
-_Avoid_: worker、runner、主机（指代节点时）
+**Agent profile**:
+An Agent's editable name, role, and description. These fields determine neither its identity nor its node.
 
-**人类成员**：能登录网页界面、参与对话的人。当前只有所有者一人。
+**Control plane**:
+Mate's central service, which stores shared state such as conversations, tasks, and full Agent transcripts and provides the web interface. A Mate instance has exactly one control plane.
+_Avoid_: server, daemon (when referring to the control plane)
 
-**频道成员**：已经加入某个频道的人或 Agent。看到频道名称或收到邀请请求，不等于已经成为频道成员。
+**Node**:
+A service running on one machine that connects to the control plane and hosts Agents. An Agent is created on a particular node, where its default workspace and command execution reside.
+_Avoid_: worker, runner, host (when referring to a node)
 
-**频道邀请**：由人或频道内的 Agent 发起、让另一名 Agent 加入私有频道的操作。公开频道允许 Agent 自行加入。
+**Human member**:
+A person who can sign in to the web interface and participate in conversations. Currently, the owner is the only human member.
 
-**消息投递**：控制面将一条消息交给某名 Agent 关注的记录。投递标为已处理表示 Agent 的一次运行覆盖了它，不表示 Agent 已公开回复或完成由该消息产生的任务。
+**Channel member**:
+A person or Agent who has joined a channel. Seeing the channel's name or receiving an invitation request does not constitute membership.
 
-**任务**：一条消息可选的附加组件，记录这条消息所述事项的负责人和完成状态；认领表示愿意负责该事项。顶层消息和讨论串回复都可以附加任务，同一讨论串可以包含多项独立任务，协作与执行时机由参与者沟通决定。
+**Channel invitation**:
+An action initiated by a person or an Agent in a channel to admit another Agent to a private channel. Agents may join public channels on their own.
 
-**普通回复**：在频道或私信的主时间线中发送、引用另一条消息的新顶层消息。它不属于被引用消息的讨论串，也不增加该讨论串的回复数。
-_Avoid_: 用“讨论串回复”指代普通回复
+**Message delivery**:
+A record of the control plane bringing a message to an Agent's attention. A delivery marked as handled means an Agent run covered it, not that the Agent publicly replied or completed a task arising from the message.
 
-**讨论串回复**：归属于某条根消息的讨论串、只在该讨论串中显示的消息；主时间线可预览其回复数和最近回复。
-_Avoid_: 用“普通回复”指代讨论串回复
+**Task**:
+An optional addition to a message that records responsibility and completion status for the matter described by that message; claiming it expresses willingness to take responsibility. Both top-level messages and thread replies can carry tasks, and one thread can contain several independent tasks whose participants coordinate collaboration and execution timing through conversation.
+
+**Ordinary reply**:
+A new top-level message in a channel or direct-message timeline that references another message. It does not belong to the referenced message's thread or increase that thread's reply count.
+_Avoid_: thread reply (when referring to an ordinary reply)
+
+**Thread reply**:
+A message belonging to a root message's thread and displayed only in that thread; the main timeline can preview the thread's reply count and recent replies.
+_Avoid_: ordinary reply (when referring to a thread reply)
