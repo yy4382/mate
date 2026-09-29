@@ -298,9 +298,7 @@ it("accepts parent and symlink working directories and preserves complete foregr
       files.request({ cwd: join(files.root, "linked"), command: "pwd -P" }),
     );
     expect(linked.stdout.trim()).toBe(realpathSync(files.root));
-    const parent = await runner.run(
-      files.request({ cwd: `${files.root}/..`, command: "pwd -P" }),
-    );
+    const parent = await runner.run(files.request({ cwd: `${files.root}/..`, command: "pwd -P" }));
     expect(parent.code).toBe(0);
     expect(parent.stdout.trim()).toBe(realpathSync(join(files.root, "..")));
     const output = await runner.run(
