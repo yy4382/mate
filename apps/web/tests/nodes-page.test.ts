@@ -46,5 +46,5 @@ it("offers a one-time pairing token with a hidden-input start command", async ()
   await userEvent.setup().click(await screen.findByRole("button", { name: "创建一次性令牌" }));
   expect(await screen.findByText("one-time-pairing-token")).not.toBeNull();
   expect(screen.getByText(/read -r -s -p '配对令牌: ' MATE_NODE_PAIRING_TOKEN/)).not.toBeNull();
-  expect(screen.getByText(/node dist\/src\/node\/main\.js/)).not.toBeNull();
+  expect(screen.getByText(/node apps\/node\/dist\/main\.js/)).not.toBeNull();
 });

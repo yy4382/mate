@@ -81,7 +81,7 @@ export function NodesPage() {
         `export MATE_CONTROL_PLANE_URL='${window.location.origin}'`,
         "read -r -s -p '配对令牌: ' MATE_NODE_PAIRING_TOKEN; echo",
         "export MATE_NODE_PAIRING_TOKEN",
-        "node dist/src/node/main.js",
+        "node apps/node/dist/main.js",
       ].join("\n")
     : "";
 

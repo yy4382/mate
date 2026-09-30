@@ -47,7 +47,7 @@ it("keeps no implementation of a Mate-managed account, systemd unit or root serv
     "tests/execution/linux-processes.test.ts",
     "tests/linux/agent-stop-fence.integration.mjs",
   ])
-    expect(existsSync(resolve(path)), path).toBe(false);
+    expect(existsSync(resolve("../..", path)), path).toBe(false);
 
   // The removed path must not creep back as a string in shipped code either: a systemd scope, a
   // Mate-created account name, or an identity switch are all things this release never does. Test
