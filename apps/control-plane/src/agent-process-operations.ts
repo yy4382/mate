@@ -136,6 +136,7 @@ export class AgentProcessOperationBroker {
         operation,
       },
       identity.committed,
+      identity.requireCurrentRun,
     );
     return { operationId: result.operationId, state: result.state, receipt: result.receipt };
   }
@@ -153,6 +154,7 @@ export class AgentProcessOperationBroker {
   async execute(
     request: AgentProcessOperationRequest,
     committed: Promise<void> = Promise.resolve(),
+    requireCurrentRun: () => void = () => {},
   ): Promise<AgentProcessOperationResult> {
     const runId = uuidSchema.parse(request.runId),
       nodeId = uuidSchema.parse(request.nodeId),
@@ -218,9 +220,10 @@ export class AgentProcessOperationBroker {
     const active = this.inFlight.get(operationId);
     if (active) return active;
     if (!created) return toResult(row);
-    const dispatch = committed.then(() =>
-      this.dispatch(nodeId, { operationId, agentId, operation }),
-    );
+    const dispatch = committed.then(() => {
+      requireCurrentRun();
+      return this.dispatch(nodeId, { operationId, agentId, operation });
+    });
     this.inFlight.set(operationId, dispatch);
     const clear = () => {
       if (this.inFlight.get(operationId) === dispatch) this.inFlight.delete(operationId);

@@ -34,6 +34,8 @@ export interface WorkspaceExecutionDependencies {
   lookupIdentity?: (agentId: string, workspaceRoot: string) => AgentWorkspaceIdentity;
   createBackend?: (identity: FileExecutionAccount) => ExecutionBackend;
   now?: () => number;
+  /** Fault pause after real execution, before durable terminal evidence, for integration tests. */
+  beforeReceipt?: () => Promise<void>;
 }
 
 interface StoredReceipt {
@@ -70,6 +72,7 @@ export class LinuxWorkspaceExecutor {
   ) => AgentWorkspaceIdentity;
   private readonly createBackend: (identity: FileExecutionAccount) => ExecutionBackend;
   private readonly now: () => number;
+  private readonly beforeReceipt: (() => Promise<void>) | undefined;
   private readonly active = new Map<
     string,
     { requestHash: string; promise: Promise<ExecutionResult> }
@@ -93,6 +96,7 @@ export class LinuxWorkspaceExecutor {
     this.createBackend =
       dependencies.createBackend ?? ((identity) => new SameAccountFileBackend(identity));
     this.now = dependencies.now ?? Date.now;
+    this.beforeReceipt = dependencies.beforeReceipt;
   }
 
   execute(request: WorkspaceExecutionRequest, signal?: AbortSignal): Promise<ExecutionResult> {
@@ -222,6 +226,7 @@ export class LinuxWorkspaceExecutor {
       return result;
     }
 
+    if (records && this.beforeReceipt) await this.beforeReceipt();
     if (records)
       this.writeReceipt({
         operationId: request.operationId,

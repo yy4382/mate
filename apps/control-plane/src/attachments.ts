@@ -142,6 +142,7 @@ export class AttachmentService {
     directory: string,
     maximumBytes = DEFAULT_ATTACHMENT_MAX_BYTES,
     private readonly now: () => number = Date.now,
+    private readonly beforeAgentCommit?: () => Promise<void>,
   ) {
     if (!isAbsolute(directory)) throw new Error("Attachment storage path must be absolute");
     if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1)
@@ -464,10 +465,12 @@ export class AttachmentService {
         !sameVersion(metadata.version, finalStat.version)
       )
         throw new WorkspaceError("file_changed", "File changed while it was being published", 409);
-      renameSync(tempPath, finalPath);
-      syncDirectory(this.directory);
+      if (this.beforeAgentCommit) await this.beforeAgentCommit();
       const summary = this.db
         .transaction(() => {
+          input.requireCurrentRun();
+          renameSync(tempPath, finalPath);
+          syncDirectory(this.directory);
           this.db
             .prepare(
               `UPDATE owner_conversation_attachments

@@ -473,7 +473,7 @@ it("refuses every registered operation and meta tool for ended, absent and anoth
 });
 
 it.each(["process.exec", "workspace.write", "attachments.publish"])(
-  "%s commits its intent before network waiting and keeps a late receipt without granting the old run new actions",
+  "%s commits its intent before network waiting, preserves dispatched effects, and refuses old-run continuation",
   async (name) => {
     const { app, cookie, db, nodeId, socket } = await setup();
     const agentId = addAgent(app, nodeId, "Late receipt");
@@ -579,17 +579,18 @@ it.each(["process.exec", "workspace.write", "attachments.publish"])(
       error: "Agent run is no longer active",
     });
     await release();
-    expect(await pending).toMatchObject({
-      ok: true,
-      result:
-        name === "attachments.publish"
-          ? { size: 0 }
-          : name === "process.exec"
+    if (name === "attachments.publish") {
+      expect(await pending).toMatchObject({ ok: false });
+      expect(app.attachments.listForOwner(direct.id)).toEqual([]);
+    } else {
+      expect(await pending).toMatchObject({
+        ok: true,
+        result:
+          name === "process.exec"
             ? { state: "succeeded", receipt: { stdout: "late" } }
             : { written: true },
-    });
-    if (name === "attachments.publish")
-      expect(app.attachments.listForOwner(direct.id)).toHaveLength(1);
+      });
+    }
     const sentAfterReceipt = socket.sent.length;
     expect(await app.tools.execute(identity, "tools.call", { name, input })).toEqual({
       ok: false,

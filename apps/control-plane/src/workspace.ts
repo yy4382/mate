@@ -531,6 +531,7 @@ export class WorkspaceService {
   ): Promise<Record<string, unknown>> {
     const { runId, agentId } = identity;
     await identity.committed;
+    identity.requireCurrentRun();
     const result = await this.runNodeOperation(
       {
         type: "control.workspace.operation",
@@ -583,6 +584,7 @@ export class WorkspaceService {
   ): Promise<Record<string, unknown>> {
     const { runId, agentId } = identity;
     await identity.committed;
+    identity.requireCurrentRun();
     const result = await this.runNodeOperation(
       {
         type: "control.workspace.operation",
@@ -774,6 +776,7 @@ export class WorkspaceService {
     });
 
     try {
+      input.requireCurrentRun();
       const result = await this.runNodeOperation(
           {
             type: "control.workspace.operation",

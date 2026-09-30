@@ -102,17 +102,7 @@ export class AgentTools {
         unexpectedError = this.operations.get(input.name)?.unexpectedError ?? unexpectedError;
       const { result } = this.database
         .transaction(() => {
-          const run = this.database
-            .prepare(
-              `SELECT r.id AS run_id,r.agent_id,r.node_id,r.delivery_id AS action_scope_id,
-                  r.input_end_seq,s.id AS session_id,d.channel_id
-           FROM owner_agent_runs r
-           JOIN owner_agent_sessions s ON s.agent_id=r.agent_id
-           JOIN owner_message_deliveries d ON d.id=r.delivery_id
-           WHERE r.id=? AND r.agent_id=? AND r.state='running'`,
-            )
-            .get(identity.runId, identity.agentId) as CurrentAgentToolRun | undefined;
-          if (!run) throw new AgentToolRefusal("Agent run is no longer active");
+          const run = this.currentRun(identity);
           // Synchronous effects and the synchronous preparation of node intents are
           // accepted under this lock. Network continuations await committed below.
           execution = entry.invoke(
@@ -120,6 +110,9 @@ export class AgentTools {
               ...identity,
               run,
               committed,
+              requireCurrentRun: () => {
+                this.currentRun(identity);
+              },
               request: { operation, input },
             },
             input,
@@ -149,5 +142,20 @@ export class AgentTools {
     const entry = this.operations.get(name);
     if (!entry) throw new AgentToolRefusal("Unknown operation");
     return entry;
+  }
+
+  private currentRun(identity: AgentToolIdentity): CurrentAgentToolRun {
+    const run = this.database
+      .prepare(
+        `SELECT r.id AS run_id,r.agent_id,r.node_id,r.delivery_id AS action_scope_id,
+              r.input_end_seq,s.id AS session_id,d.channel_id
+       FROM owner_agent_runs r
+       JOIN owner_agent_sessions s ON s.agent_id=r.agent_id
+       JOIN owner_message_deliveries d ON d.id=r.delivery_id
+       WHERE r.id=? AND r.agent_id=? AND r.state='running'`,
+      )
+      .get(identity.runId, identity.agentId) as CurrentAgentToolRun | undefined;
+    if (!run) throw new AgentToolRefusal("Agent run is no longer active");
+    return run;
   }
 }

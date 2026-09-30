@@ -81,6 +81,11 @@ export interface ControlPlaneAppOptions {
   maxAttachmentBytes?: number;
 }
 
+/** Fault pauses used by real-service integration tests, never deployment configuration. */
+export interface ControlPlaneTestDependencies {
+  beforeAgentAttachmentCommit?: () => Promise<void>;
+}
+
 export class ControlPlaneApp extends Hono {
   runs?: AgentRunCoordinator;
   readonly push: OwnerPush;
@@ -108,7 +113,10 @@ export class ControlPlaneApp extends Hono {
 }
 
 /** The public status contract deliberately contains no deployment or Agent details. */
-export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): ControlPlaneApp {
+export function createControlPlaneApp(
+  options: ControlPlaneAppOptions = {},
+  testDependencies: ControlPlaneTestDependencies = {},
+): ControlPlaneApp {
   const dataDir =
       options.dataDir ??
       process.env.MATE_CONTROL_PLANE_DATA_DIR ??
@@ -153,6 +161,7 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions = {}): Con
       resolve(dataDir, "attachments"),
       options.maxAttachmentBytes,
       options.now,
+      testDependencies.beforeAgentAttachmentCommit,
     ),
     processes = new AgentProcessOperationBroker(ownerAuth.db, nodes, options.now),
     tools = new AgentTools(ownerAuth.db, ownerChat, workspace, attachments, processes),

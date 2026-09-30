@@ -21,6 +21,8 @@ export interface AgentToolContext extends AgentToolIdentity {
   run: CurrentAgentToolRun;
   /** Node I/O must wait until the current-run check and intent have committed. */
   committed: Promise<void>;
+  /** Check again immediately before dispatch or inside a synchronous side-effect commit. */
+  requireCurrentRun(): void;
   request: { operation: string; input: unknown };
 }
 

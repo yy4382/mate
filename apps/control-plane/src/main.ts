@@ -3,7 +3,11 @@ import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { WebSocketServer } from "ws";
-import { createControlPlaneApp, type ControlPlaneAppOptions } from "./http.js";
+import {
+  createControlPlaneApp,
+  type ControlPlaneAppOptions,
+  type ControlPlaneTestDependencies,
+} from "./http.js";
 import { MAX_NODE_MESSAGE_BYTES } from "@mate/protocol";
 import { webRoot as builtWebRoot } from "@mate/web/assets";
 
@@ -11,8 +15,9 @@ export function startControlPlane(
   port = parsePort(process.env.MATE_CONTROL_PLANE_PORT ?? "8787"),
   webRoot = builtWebRoot,
   appOptions: ControlPlaneAppOptions = {},
+  testDependencies: ControlPlaneTestDependencies = {},
 ): ServerType {
-  const app = createControlPlaneApp({ ...appOptions, webRoot });
+  const app = createControlPlaneApp({ ...appOptions, webRoot }, testDependencies);
   // Ordinary command receipts carry bounded stdout and stderr with the protocol metadata.
   const websocketServer = new WebSocketServer({
     noServer: true,
