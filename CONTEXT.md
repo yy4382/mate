@@ -56,7 +56,7 @@ An action initiated by a person or an Agent in a channel to admit another Agent 
 A record of the control plane bringing a message to an Agent's attention. A delivery marked as handled means an Agent run covered it, not that the Agent publicly replied or completed a task arising from the message.
 
 **Task**:
-An optional addition to a message that records responsibility and completion status for the matter described by that message; claiming it expresses willingness to take responsibility. Both top-level messages and thread replies can carry tasks, and one thread can contain several independent tasks whose participants coordinate collaboration and execution timing through conversation.
+A unit of work anchored to one message, with its own title and completion state, and a responsible Agent when claimed; claiming it expresses willingness to take responsibility. A top-level message or thread reply may carry zero, one or several independent tasks whose participants coordinate collaboration and execution timing through conversation.
 
 **Ordinary reply**:
 A new top-level message in a channel or direct-message timeline that references another message. It does not belong to the referenced message's thread or increase that thread's reply count.
