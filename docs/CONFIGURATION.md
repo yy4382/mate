@@ -1,16 +1,18 @@
-# 部署配置
+# 运行配置
 
-Mate 的部署配置是一个 JSON 文件，只描述**启动位置**：所有者网页里管理的 Agent、频道、成员与模型服务凭据不写在这里。模板见仓库根目录的 `mate.deploy.example.json`，完整安装步骤见[Debian 部署与运维](OPERATIONS.md)。
+构建后直接启动控制面和节点，配置通过各进程的环境变量传入。所有者在网页管理 Agent、频道、成员和模型服务凭据。两个进程以同一个现有普通账号运行；Mate 不创建账号、不管理进程服务，也不读取部署 JSON 模板。完整步骤见[运行与运维](OPERATIONS.md)。
 
-配置里的每个路径都属于运行 Mate 的那个现有普通账号，全部是绝对路径：
+| 进程 | 环境变量 | 含义与默认值 |
+| --- | --- | --- |
+| 控制面 | `MATE_CONTROL_PLANE_DATA_DIR` | 控制面数据库目录，必须为绝对路径；默认是启动工作目录下的 `data/control-plane`。 |
+| 控制面 | `MATE_OWNER_PASSWORD_FILE` | 初始所有者密码文件，必须是绝对路径、仅属主可读的普通文件，内容为 12–1024 UTF-8 字节。首次登录保存密码哈希后不再需要此文件。 |
+| 控制面 | `MATE_CONTROL_PLANE_PORT` | 监听 `127.0.0.1` 的端口，默认 `8787`；`0` 表示由系统分配端口，启动输出报告实际值。 |
+| 控制面 | `MATE_PUBLIC_ORIGIN` | Web Push 的 VAPID 联系原点；公开使用时设置为所有者访问的 HTTPS 原点。Mate 不配置证书或反向代理。 |
+| 节点 | `MATE_CONTROL_PLANE_URL` | 必填，控制面的 HTTP、HTTPS、WS 或 WSS 地址；节点连接其 `/api/nodes/connect`。地址不能含凭据、查询或片段。 |
+| 节点 | `MATE_NODE_DATA_DIR` | 节点身份与操作收据目录，必须为绝对路径；默认是启动工作目录下的 `data/node`。 |
+| 节点 | `MATE_NODE_AGENT_WORKSPACE_ROOT` | Agent 默认工作区根目录，必须为绝对路径；默认是节点数据目录下的 `agents`。 |
+| 节点 | `MATE_NODE_PAIRING_TOKEN` | 新节点首次连接所需的网页一次性配对令牌；已保存节点身份后不再需要。 |
 
-- `publicOrigin`：所有者访问的 HTTPS 原点。Mate 只把它用于网页链接与通知落点，不配置证书；HTTPS 由宿主的反向代理负责。
-- `controlPlanePort`：控制面监听端口，绑定 `127.0.0.1`，1024–65535。外部访问经宿主反向代理。
-- `releaseRoot`：发布目录根。Mate 在其中建立 `releases/<内容摘要>` 与 `current` 符号链接。
-- `stateDir`：进程记录、日志与检查点目录。必须只有运行账号可读（Mate 会检查权限）。
-- `controlPlaneDataDir` / `nodeDataDir` / `agentHomeRoot`：控制面数据库、节点身份与收据、Agent 默认工作区根目录。
-- `ownerPasswordFile`：初始所有者密码文件，`0600` 普通文件，至少 12 字节。控制面首次启动保存 Argon2id 哈希，此后不再需要它。
+数据目录和工作区由运行账号持有，控制面数据库和节点身份按私有权限保存。保持启动工作目录与绝对数据路径明确，重启时使用原数据、原节点身份和原工作区。
 
-路径必须互不相同，数据目录不能位于 `releaseRoot` 内。配置里没有需要 root 的目录，也没有需要 Mate 创建的系统账号或 systemd 单元；节点配对令牌由所有者在网页生成，建议放在自己管理的私有环境文件里，配对成功后可以删除。
-
-服务是普通子进程：每个服务在 `stateDir` 下有一条进程记录和一个日志文件，Mate 用它们判断真实状态，并在停止未获确认时报出仍在运行的进程号。Mate 不做开机自启与崩溃重启；需要这些由宿主自行安排，且必须与 Mate 自己的 `start` 路径互斥（见运维说明）。
+`MATE_NODE_MODEL_WORKER_ENTRY` 是现有真实进程测试的模型替换接缝，只在脚本化检查中设置；普通运行不设置它，节点使用生产模型进程。

@@ -1,0 +1,78 @@
+{
+  "name": "@mate/node",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/nodes/client.d.ts",
+      "import": "./dist/nodes/client.js"
+    },
+    "./main": {
+      "types": "./dist/main.d.ts",
+      "import": "./dist/main.js"
+    },
+    "./agent-runner": {
+      "types": "./dist/nodes/agent-runner.d.ts",
+      "import": "./dist/nodes/agent-runner.js"
+    },
+    "./agent-provisioner": {
+      "types": "./dist/nodes/agent-provisioner.d.ts",
+      "import": "./dist/nodes/agent-provisioner.js"
+    },
+    "./process-operations": {
+      "types": "./dist/nodes/process-operations.d.ts",
+      "import": "./dist/nodes/process-operations.js"
+    },
+    "./process-operation-runtime": {
+      "types": "./dist/nodes/process-operation-runtime.d.ts",
+      "import": "./dist/nodes/process-operation-runtime.js"
+    },
+    "./workspace-execution": {
+      "types": "./dist/nodes/workspace-execution.d.ts",
+      "import": "./dist/nodes/workspace-execution.js"
+    },
+    "./model-process": {
+      "types": "./dist/nodes/model-process.d.ts",
+      "import": "./dist/nodes/model-process.js"
+    },
+    "./model-worker": {
+      "types": "./dist/nodes/model-worker.d.ts",
+      "import": "./dist/nodes/model-worker.js"
+    },
+    "./database": {
+      "types": "./dist/nodes/database.d.ts",
+      "import": "./dist/nodes/database.js"
+    },
+    "./linux-process-executor": {
+      "types": "./dist/nodes/linux-process-executor.d.ts",
+      "import": "./dist/nodes/linux-process-executor.js"
+    }
+  },
+  "scripts": {
+    "build": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\" && tsc -p tsconfig.json && node scripts/build-rename-noreplace.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.tests.json",
+    "test": "pnpm --filter @mate/node... run build && vitest run",
+    "start": "node dist/main.js",
+    "test:single-account-agent-workspace": "node tests/linux/agent-workspace-preparation.integration.mjs",
+    "test:linux-ordinary-command-failure": "node tests/linux/ordinary-command-failure.integration.mjs",
+    "test:unit": "vitest run"
+  },
+  "dependencies": {
+    "@mate/protocol": "workspace:*",
+    "@earendil-works/pi-agent-core": "0.86.0",
+    "@earendil-works/pi-ai": "0.86.0",
+    "better-sqlite3": "13.0.3",
+    "fs-ext": "2.1.1",
+    "ws": "8.21.3",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "9.6.0",
+    "@types/fs-ext": "2.0.3",
+    "@types/node": "24.13.6",
+    "@types/ws": "8.18.1",
+    "typescript": "7.0.2",
+    "vitest": "5.0.1"
+  }
+}
