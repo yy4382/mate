@@ -11,27 +11,16 @@ import {
 import { sendWorkspaceOperationResult } from "../../src/nodes/workspace-result.js";
 
 const requestId = "2ee1d608-4dc4-458a-b143-3c6a7919e84a",
-  agentId = "7cd3ed23-c885-4f27-8278-a5467a69fb96",
-  runId = "60c24078-1543-4a99-a46f-1d7a7d03df91";
+  agentId = "7cd3ed23-c885-4f27-8278-a5467a69fb96";
 
 it("keeps the largest documented binary workspace write inside the complete WebSocket frame", () => {
   const bytes = Buffer.alloc(WORKSPACE_WRITE_MAX_BYTES, 0x61),
     base64 = bytes.toString("base64"),
     path = "🧪".repeat(1365),
-    toolRequest = {
-      type: "node.agent.run.tool",
-      requestId,
-      runId,
-      agentId,
-      toolCallId: "mate:00000000-0000-4000-8000-000000000000:0123456789abcdef:1",
-      operation: "tools.call",
-      input: { name: "workspace.write_bytes", input: { path, base64 } },
-    },
     workspaceRequest = {
       type: "control.workspace.operation",
       requestId,
       operationId: "5fe049b7-0cd2-4f37-aea1-4636e151f3bf",
-      runId,
       agentId,
       mode: "agent_action",
       operation: { kind: "write_bytes", path, base64 },
@@ -39,35 +28,24 @@ it("keeps the largest documented binary workspace write inside the complete WebS
 
   expect(base64).toHaveLength(WORKSPACE_WRITE_BYTES_BASE64_MAX_CHARS);
   expect(operationSchema.parse(workspaceRequest.operation)).toEqual(workspaceRequest.operation);
-  expect(NodeRequestSchema.parse(toolRequest)).toEqual(toolRequest);
   expect(NodeControlMessageSchema.parse(workspaceRequest)).toEqual(workspaceRequest);
-  expect(Buffer.byteLength(JSON.stringify(toolRequest))).toBeLessThan(MAX_NODE_MESSAGE_BYTES);
   expect(Buffer.byteLength(JSON.stringify(workspaceRequest))).toBeLessThan(MAX_NODE_MESSAGE_BYTES);
 });
 
 it("rejects text whose UTF-8 size fits but JSON escaping would exceed a node frame", () => {
   const content = "\u0001".repeat(Math.floor(WORKSPACE_WRITE_MAX_BYTES / 2)),
-    toolRequest = {
-      type: "node.agent.run.tool",
-      requestId,
-      runId,
-      agentId,
-      toolCallId: "mate:00000000-0000-4000-8000-000000000000:0123456789abcdef:1",
-      operation: "tools.call",
-      input: { name: "workspace.write", input: { path: "notes.txt", content } },
-    },
     workspaceRequest = {
       type: "control.workspace.operation",
       requestId,
       operationId: "5fe049b7-0cd2-4f37-aea1-4636e151f3bf",
-      runId,
       agentId,
       mode: "agent_action",
       operation: { kind: "write", path: "notes.txt", content },
     };
   expect(Buffer.byteLength(content)).toBeLessThan(WORKSPACE_WRITE_MAX_BYTES);
-  expect(Buffer.byteLength(JSON.stringify(toolRequest))).toBeGreaterThan(MAX_NODE_MESSAGE_BYTES);
-  expect(NodeRequestSchema.safeParse(toolRequest).success).toBe(false);
+  expect(Buffer.byteLength(JSON.stringify(workspaceRequest))).toBeGreaterThan(
+    MAX_NODE_MESSAGE_BYTES,
+  );
   expect(NodeControlMessageSchema.safeParse(workspaceRequest).success).toBe(false);
 });
 

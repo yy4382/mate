@@ -21,8 +21,7 @@ export MATE_NODE_DATA_DIR=/ABSOLUTE/private/node
 pnpm start:node
 ```
 
-单账号启动检查以启动账号运行，不需要 root、容器或服务管理器，也不需要预建 Mate 专用用户；它在同一个脚本里启动控制面与节点，通过真实 WebSocket 完成一次性配对，从网页接口创建两名 Agent，分别在重启节点与重启控制面（节点保持在线）之后确认已配对节点重新认证，从网页读取的同一接口核对在线/离线与错误凭据被拒绝，并确认短期模型子进程与启动账号相同。它记录的证据包括：脚本本身以非 root 的启动账号运行、两名 Agent 的账号就是启动账号（用户名与 UID 由脚本实测得出）、两名 Agent 工作区与会话各自独立、记忆入口可用、工作区权限为 `700`、写入模型凭据后网页显示 `ready`；在能读取本机 passwd 数据库的主机上，它还会直接查证旧版按 Agent 建立的 `mate_<27 位 Agent ID>` 账号并未出现（`localAccountDatabaseRead` 为 false 时该项记为 `null`，不作断言）。macOS 与 Linux 均可运行；脚本会记录 `hostEnvironment` 与 `linuxKernel`。同一脚本还可在节点启动模型进程的接缝处核对模型子进程账号；工作区根路径不可写时网页显示失败原因，由 `apps/control-plane/tests/control-plane/agent-creation-process.test.ts` 中的独立用例覆盖，不在此脚本内：
-
+单账号启动检查以现有普通账号启动控制面与节点，通过真实 WebSocket 配对、创建两名 Agent，分别重启节点和控制面并核对重新认证、在线状态与错误身份拒绝。控制面真实 Pi 循环请求本地脚本化 HTTP/SSE 模型服务，调用节点普通命令并持久保存 transcript；命令实测 UID/GID 和工作目录。脚本核对两名 Agent 独立工作区与 session、`MEMORY.md`、目录权限 `700`，以及没有按 Agent 创建账号。macOS 与 Linux 均可运行，并记录 `kernel`、`hostEnvironment` 与 `linuxKernel`；macOS 结果仅是跨平台证据。工作区不可写的网页失败由 `agent-creation-process.test.ts` 单独覆盖：
 ```sh
 pnpm build
 pnpm test:linux-single-account-node
@@ -35,13 +34,13 @@ pnpm build
 pnpm test:single-account-agent-workspace
 ```
 
-从网页创建 Agent 到首次私信产生模型运行并写入该 Agent 自己的会话记录，由 `apps/control-plane/tests/control-plane/agent-creation-process.test.ts` 用真实控制面、WebSocket、节点与脚本化模型覆盖；它在 macOS 与 Linux 上都会运行。数据目录的格式拒绝与日常接续见[运行手册](OPERATIONS.md#数据与日常接续)。
+从网页创建 Agent 到首次私信产生模型运行并写入该 Agent 自己的会话记录，由 `apps/control-plane/tests/control-plane/agent-loop.test.ts` 用真实控制面内 Pi 循环、本地 HTTP/SSE provider、WebSocket、节点与持久库覆盖；它在 macOS 与 Linux 上都会运行。数据目录的格式拒绝与日常接续见[运行手册](OPERATIONS.md#数据与日常接续)。
 
-普通命令执行在同一个现有普通账号下运行：Agent 的命令进入当前账号的 shell 子进程，默认使用该 Agent 的工作区，返回有界输出、退出码、截断与超时标记，命令里的 `sudo` 原样交给宿主。`apps/control-plane/tests/control-plane/agent-command-process.test.ts` 用真实控制面、WebSocket、节点和脚本化模型在 macOS 与 Linux 上核对这条路径、同一操作 ID 的收据复用，以及节点在命令运行中被重启后不再执行同一动作：
+普通命令执行在同一个现有普通账号下运行：Agent 的命令进入当前账号的 shell 子进程，默认使用该 Agent 的工作区，返回有界输出、退出码、截断与超时标记，命令里的 `sudo` 原样交给宿主。`agent-loop.test.ts`、`agent-loop-recovery.test.ts` 和 `agent-tool-invalidation.test.ts` 在真实控制面内 Pi 循环、WebSocket 和节点中核对命令/文件工具、控制面提交边界、节点重启收据复用与未知结果。`agent-loop-lifecycle.test.ts` 核对模型/摘要停滞时取消、凭据暂停、离线和同节点多 Agent 并发；`agent-loop-attention.test.ts` 核对忙时主动读取、暂缓、继续、下一轮同 session 与发言新鲜度选择：
 
 ```sh
 pnpm build
-pnpm --filter @mate/control-plane exec vitest run tests/control-plane/agent-command-process.test.ts
+pnpm --filter @mate/control-plane exec vitest run tests/control-plane/agent-loop.test.ts tests/control-plane/agent-loop-recovery.test.ts tests/control-plane/agent-tool-invalidation.test.ts
 ```
 
 命令的失败与恢复语义另有一个只做真实进程工作的检查：它用真实 shell 子进程跑一条超时命令，模拟节点进程在命令运行中消失，再用同一份收据数据库把节点"重启"，确认同一操作 ID 重放记录而不是重跑命令：

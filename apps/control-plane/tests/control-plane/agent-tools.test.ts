@@ -1,3 +1,4 @@
+import { toolTestInput } from "../helpers/tool-run.js";
 import { WORKSPACE_WRITE_MAX_BYTES } from "@mate/protocol";
 import { expect, it } from "vitest";
 import { z } from "zod";
@@ -440,10 +441,11 @@ it("refuses every registered operation and meta tool for ended, absent and anoth
     identity,
   ]) {
     if (candidate === identity) {
-      await app.nodes.receive(
+      await toolTestInput(
+        app,
         socket,
         JSON.stringify({
-          type: "node.agent.run.result",
+          type: "run.complete",
           requestId: crypto.randomUUID(),
           runId: run.runId,
           agentId,
@@ -507,7 +509,8 @@ it.each(["process.exec", "workspace.write", "attachments.publish"])(
       )
         return;
       const reply = async () => {
-        await app.nodes.receive(
+        await toolTestInput(
+          app,
           socket,
           JSON.stringify(
             message.type === "control.process.operation"
@@ -564,10 +567,11 @@ it.each(["process.exec", "workspace.write", "attachments.publish"])(
     const pending = app.tools.execute(identity, "tools.call", { name, input });
     await sent;
     // Ending the run while I/O waits also proves that no database lock is held over the network.
-    await app.nodes.receive(
+    await toolTestInput(
+      app,
       socket,
       JSON.stringify({
-        type: "node.agent.run.result",
+        type: "run.complete",
         requestId: crypto.randomUUID(),
         runId: run.runId,
         agentId,
@@ -735,10 +739,11 @@ it("rolls back all body-presentation changes when a synchronous read fails, and 
       ]),
     },
   });
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
-      type: "node.agent.run.result",
+      type: "run.complete",
       requestId: crypto.randomUUID(),
       runId: run.runId,
       agentId,
@@ -770,7 +775,7 @@ it("admits only prepared Agents and lifecycle requests cannot change their node 
   expect(
     socket.sent
       .map((text) => JSON.parse(text))
-      .filter((message) => message.type === "control.agent.run"),
+      .filter((message) => message.type === "test.run.started"),
   ).toEqual([]);
   expect(
     await app.tools.execute(

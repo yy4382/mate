@@ -96,12 +96,6 @@ export interface OwnerMessageDeliveryPage {
   nextAfter: number | null;
 }
 
-export interface AgentRunContextPage {
-  messages: import("@mate/protocol").ModelContextMessage[];
-  /** Next message position in the ordered run context; null marks the final page. */
-  nextCursor: number | null;
-}
-
 export interface OwnerChatSnapshot {
   channels: OwnerChannel[];
   cursor: number;

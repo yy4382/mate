@@ -25,13 +25,32 @@ it("exposes the Linux-user web control plane without superseded deployment paths
     expect(existsSync(resolve("../..", path)), path).toBe(false);
 });
 
-it("runs the node and its short-lived model worker as the launching account", () => {
-  expect(existsSync(resolve("../node/src/nodes/model-identity.ts"))).toBe(false);
-  expect(readFileSync(resolve("../node/src/nodes/client.ts"), "utf8")).not.toContain(
-    "ensureModelWorkerIdentity",
-  );
-  expect(readFileSync(resolve("../node/src/nodes/model-process.ts"), "utf8")).not.toContain(
-    "setpriv",
+it("owns the Pi loop in the control plane and ships no node model runtime or protocol", () => {
+  for (const name of [
+    "model-identity",
+    "model-process",
+    "model-worker",
+    "agent-runner",
+    "session-compaction",
+  ])
+    for (const path of [`../node/src/nodes/${name}.ts`, `../node/dist/nodes/${name}.js`])
+      expect(existsSync(resolve(path)), path).toBe(false);
+  for (const name of ["session-record", "session-transport"])
+    for (const path of [
+      `../../packages/protocol/src/${name}.ts`,
+      `../../packages/protocol/dist/${name}.js`,
+    ])
+      expect(existsSync(resolve(path)), path).toBe(false);
+  for (const path of ["../node/package.json", "../../packages/protocol/package.json"]) {
+    const packageManifest = JSON.parse(readFileSync(resolve(path), "utf8"));
+    expect(packageManifest.dependencies).not.toHaveProperty("@earendil-works/pi-agent-core");
+    expect(packageManifest.dependencies).not.toHaveProperty("@earendil-works/pi-ai");
+  }
+  const control = JSON.parse(readFileSync(resolve("package.json"), "utf8"));
+  expect(control.dependencies).toHaveProperty("@earendil-works/pi-agent-core");
+  expect(control.dependencies).toHaveProperty("@earendil-works/pi-ai");
+  expect(readFileSync(resolve("../../packages/protocol/src/messages.ts"), "utf8")).not.toContain(
+    "agent.run",
   );
 });
 

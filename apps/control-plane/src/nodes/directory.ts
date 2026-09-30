@@ -1,18 +1,11 @@
 import { processOperationRequestHash } from "@mate/protocol/node";
 import {
   agentProcessOperationSchema,
-  SessionAssembly,
-  sessionFragment,
-  sessionFragmentCharacters,
-  sessionCommitSchema,
-  type SessionCommit,
-  type ModelContextMessage,
   NodeControlMessageSchema,
   NodeRequestIdSchema,
   NodeRequestSchema,
   type NodeControlMessage,
   type NodeAgentProvisionResult,
-  type NodeAgentRunResult,
   type NodeWorkspaceOperationResult,
   type ControlWorkspaceOperation,
   type AgentProvisionStage,
@@ -32,8 +25,6 @@ export const DEFAULT_NODE_MAX_UNAUTHENTICATED_CONNECTIONS = 32;
 export const DEFAULT_NODE_HANDSHAKE_TIMEOUT_MS = 10_000;
 export const DEFAULT_NODE_HEARTBEAT_TIMEOUT_MS = 35_000;
 export const DEFAULT_NODE_OPERATION_TIMEOUT_MS = 60_000;
-export const DEFAULT_NODE_MAX_ACTIVE_RUNS = 2;
-export const DEFAULT_NODE_RUN_TIMEOUT_MS = 5 * 60_000;
 export const DEFAULT_NODE_PROCESS_OPERATION_TIMEOUT_MS = 75_000;
 
 export interface NodeSocket {
@@ -106,7 +97,6 @@ export interface NodeDirectoryOptions {
   heartbeatTimeoutMs?: number;
   operationTimeoutMs?: number;
   processOperationTimeoutMs?: number;
-  runTimeoutMs?: number;
 }
 
 interface PendingAgentProvision {
@@ -115,19 +105,6 @@ interface PendingAgentProvision {
   onProgress: (stage: AgentProvisionStage) => void;
   promise: Promise<NodeAgentProvisionResult>;
   resolve: (result: NodeAgentProvisionResult) => void;
-  reject: (error: Error) => void;
-  timeout: ReturnType<typeof setTimeout>;
-}
-
-export type NodeAgentRunStart = Extract<NodeControlMessage, { type: "control.agent.run" }>;
-
-interface PendingAgentRun {
-  sessionAssembly?: SessionAssembly;
-  contextPayload?: { cursor: number; serialized: string; nextCursor: number | null };
-  nodeId: string;
-  agentId: string;
-  promise: Promise<NodeAgentRunResult>;
-  resolve: (result: NodeAgentRunResult) => void;
   reject: (error: Error) => void;
   timeout: ReturnType<typeof setTimeout>;
 }
@@ -166,54 +143,6 @@ interface PendingWorkspaceOperation {
   timeout: ReturnType<typeof setTimeout>;
 }
 
-export interface AgentRunHandlers {
-  /** Cursor is the per-run context projection position, not a persistent record sequence. */
-  context(
-    runId: string,
-    agentId: string,
-    cursor: number,
-    limit: number,
-  ):
-    | {
-        messages: ModelContextMessage[];
-        nextCursor: number | null;
-      }
-    | undefined;
-  /** Record one complete Pi message or run configuration in the Agent's own session record; never publishes. */
-  transcript(
-    runId: string,
-    nodeId: string,
-    agentId: string,
-    requestId: string,
-    entry: SessionCommit,
-  ): boolean;
-  tool(
-    runId: string,
-    nodeId: string,
-    agentId: string,
-    toolCallId: string,
-    operation: string,
-    input: Record<string, unknown>,
-  ):
-    | { ok: true; result: unknown }
-    | { ok: false; error: string }
-    | Promise<{ ok: true; result: unknown } | { ok: false; error: string }>;
-  result(runId: string, agentId: string, ok: boolean, code?: string, reason?: string): void;
-}
-
-type NodeAgentRunRequest = Extract<
-  NodeRequest,
-  {
-    type:
-      | "node.agent.run.context"
-      | "node.agent.run.transcript"
-      | "node.agent.run.tool"
-      | "node.agent.run.result";
-  }
->;
-type NodeAgentRunToolRequest = Extract<NodeAgentRunRequest, { type: "node.agent.run.tool" }>;
-type NodeAgentRunMessage = Exclude<NodeAgentRunRequest, NodeAgentRunToolRequest>;
-
 /** Pairing credentials and durable node identities for this control plane. */
 export class NodeDirectory {
   private readonly now: () => number;
@@ -224,17 +153,14 @@ export class NodeDirectory {
   private readonly heartbeatTimeoutMs: number;
   private readonly operationTimeoutMs: number;
   private readonly processOperationTimeoutMs: number;
-  private readonly runTimeoutMs: number;
   private readonly heartbeatSweepTimer: ReturnType<typeof setInterval>;
   private readonly sessions = new WeakMap<NodeSocket, SocketSession>();
   private readonly connected = new Map<string, NodeSocket>();
   private readonly sockets = new Set<NodeSocket>();
   private readonly unauthenticated = new Set<NodeSocket>();
   private readonly pendingAgentProvisions = new Map<string, PendingAgentProvision>();
-  private readonly pendingAgentRuns = new Map<string, PendingAgentRun>();
   private readonly pendingAgentProcessOperations = new Map<string, PendingAgentProcessOperation>();
   private readonly pendingWorkspaceOperations = new Map<string, PendingWorkspaceOperation>();
-  private agentRunHandlers?: AgentRunHandlers;
   private workspaceOperationResultHandler?: (
     nodeId: string,
     result: NodeWorkspaceOperationResult,
@@ -250,6 +176,7 @@ export class NodeDirectory {
     },
   ) => void;
   private onReady?: () => void;
+  private onOffline?: (nodeId: string) => void;
 
   constructor(
     private readonly database: Database.Database,
@@ -280,7 +207,6 @@ export class NodeDirectory {
       options.processOperationTimeoutMs,
       DEFAULT_NODE_PROCESS_OPERATION_TIMEOUT_MS,
     );
-    this.runTimeoutMs = positiveInteger(options.runTimeoutMs, DEFAULT_NODE_RUN_TIMEOUT_MS);
     if (this.maxUnauthenticatedConnections > this.maxConnections)
       throw new Error("Unauthenticated node connection limit cannot exceed the total limit");
     const sweepIntervalMs = Math.max(10, Math.min(1000, Math.floor(this.heartbeatTimeoutMs / 4)));
@@ -414,14 +340,6 @@ export class NodeDirectory {
       return this.receiveReconciliation(socket, session, request);
     if (request.type === "node.workspace.reconcile.result")
       return this.receiveWorkspaceReconciliation(socket, session, request);
-    if (request.type === "node.agent.run.tool")
-      return this.receiveAgentRunToolMessage(socket, session, request);
-    if (
-      request.type === "node.agent.run.context" ||
-      request.type === "node.agent.run.transcript" ||
-      request.type === "node.agent.run.result"
-    )
-      return this.receiveAgentRunMessage(socket, session, request);
     if (request.type === "node.process.operation.result")
       return this.receiveAgentProcessOperationResult(socket, session, request);
     if (request.type === "node.workspace.operation.result")
@@ -443,8 +361,8 @@ export class NodeDirectory {
         at: this.now(),
       });
       this.connected.delete(nodeId);
+      this.onOffline?.(nodeId);
       this.rejectAgentProvisions(nodeId, new Error("节点连接已断开，Agent 创建结果尚未确认。"));
-      this.rejectAgentRuns(nodeId, new Error("节点连接已断开，待处理私信仍保留在控制面。"));
       this.rejectAgentProcessOperations(
         nodeId,
         new Error("节点连接已断开，普通操作结果尚未确认。"),
@@ -517,8 +435,8 @@ export class NodeDirectory {
     return promise;
   }
 
-  setAgentRunHandlers(handlers: AgentRunHandlers): void {
-    this.agentRunHandlers = handlers;
+  setOfflineHandler(handler: (nodeId: string) => void): void {
+    this.onOffline = handler;
   }
 
   setWorkspaceOperationResultHandler(
@@ -593,90 +511,6 @@ export class NodeDirectory {
   ): void {
     this.processReceiptHandler = handler;
     this.onReady = onReady;
-  }
-
-  runAgent(nodeId: string, request: NodeAgentRunStart): Promise<NodeAgentRunResult> {
-    const controlMessage = NodeControlMessageSchema.parse(request) as NodeAgentRunStart;
-    const existing = this.pendingAgentRuns.get(request.runId);
-    if (existing) {
-      if (existing.nodeId !== nodeId || existing.agentId !== request.agentId)
-        return Promise.reject(new Error("Agent run identifier is already in use"));
-      return existing.promise;
-    }
-    const socket = this.connected.get(nodeId),
-      session = socket ? this.sessions.get(socket) : undefined;
-    if (
-      !socket ||
-      !session ||
-      session.nodeId !== nodeId ||
-      !session.ready ||
-      this.now() - session.lastHeartbeatAt >= this.heartbeatTimeoutMs
-    )
-      return Promise.reject(new Error("Selected node is offline"));
-    const nodeRuns = [...this.pendingAgentRuns.values()].filter(
-      (run) => run.nodeId === nodeId,
-    ).length;
-    if (nodeRuns >= DEFAULT_NODE_MAX_ACTIVE_RUNS)
-      return Promise.reject(new Error("Selected node has reached its fixed Agent run capacity"));
-
-    let resolveResult!: (result: NodeAgentRunResult) => void, rejectResult!: (error: Error) => void;
-    const promise = new Promise<NodeAgentRunResult>((resolve, reject) => {
-      resolveResult = resolve;
-      rejectResult = reject;
-    });
-    const timeout = setTimeout(() => {
-      this.cancelAgentRun(request.runId, request.agentId, "timeout");
-    }, this.runTimeoutMs);
-    this.pendingAgentRuns.set(request.runId, {
-      nodeId,
-      agentId: request.agentId,
-      promise,
-      resolve: resolveResult,
-      reject: rejectResult,
-      timeout,
-    });
-    try {
-      this.send(socket, controlMessage);
-    } catch {
-      this.finishAgentRun(request.runId, undefined, new Error("Could not send Agent run"));
-    }
-    return promise;
-  }
-
-  /**
-   * Tell one run that is still in progress on its node that another message is waiting.
-   *
-   * This is a best-effort hint, not a delivery, and the single boolean means only one thing: the
-   * notice was written to the live connection of a run this control plane still owns. It is false
-   * when there is no such run or the node is offline, and the caller then retries on its next pass.
-   * Whether the run's model loop is still live is the node's decision, and the waiting delivery
-   * stays queued for the next run of the same session either way.
-   */
-  notifyAgentRun(nodeId: string, runId: string, agentId: string, conversationId: string): boolean {
-    const pending = this.pendingAgentRuns.get(runId);
-    if (!pending || pending.nodeId !== nodeId || pending.agentId !== agentId) return false;
-    const socket = this.connected.get(nodeId),
-      session = socket ? this.sessions.get(socket) : undefined;
-    if (
-      !socket ||
-      !session ||
-      session.nodeId !== nodeId ||
-      !session.ready ||
-      this.now() - session.lastHeartbeatAt >= this.heartbeatTimeoutMs
-    )
-      return false;
-    try {
-      this.send(socket, {
-        type: "control.agent.run.notice",
-        requestId: randomUUID(),
-        runId,
-        agentId,
-        conversationId,
-      });
-      return true;
-    } catch {
-      return false;
-    }
   }
 
   executeAgentProcessOperation(
@@ -754,42 +588,6 @@ export class NodeDirectory {
       );
     }
     return promise;
-  }
-
-  cancelAgentRun(
-    runId: string,
-    agentId: string,
-    reason: "timeout" | "credentials_changed" | "manual_pause",
-  ): boolean {
-    const pending = this.pendingAgentRuns.get(runId);
-    if (!pending || pending.agentId !== agentId) return false;
-    const socket = this.connected.get(pending.nodeId),
-      session = socket ? this.sessions.get(socket) : undefined;
-    if (socket && session?.nodeId === pending.nodeId) {
-      try {
-        this.send(socket, {
-          type: "control.agent.run.cancel",
-          requestId: randomUUID(),
-          runId,
-          agentId,
-          reason,
-        });
-      } catch {
-        // The durable run fails below; a disconnect also closes the node-side worker.
-      }
-    }
-    this.finishAgentRun(
-      runId,
-      undefined,
-      new Error(
-        reason === "timeout"
-          ? "Agent run timed out"
-          : reason === "manual_pause"
-            ? "Agent run paused"
-            : "Model credential changed",
-      ),
-    );
-    return true;
   }
 
   activateAgent(nodeId: string, agentId: string): boolean {
@@ -1232,171 +1030,6 @@ export class NodeDirectory {
     }
   }
 
-  private receiveAgentRunMessage(
-    socket: NodeSocket,
-    session: SocketSession,
-    request: NodeAgentRunMessage,
-  ): void {
-    const nodeId = session.nodeId;
-    if (!nodeId || this.connected.get(nodeId) !== socket)
-      return this.reject(socket, request.requestId, "not_authenticated", "节点尚未完成身份验证。");
-    const pending = this.pendingAgentRuns.get(request.runId);
-    if (pending && (pending.nodeId !== nodeId || pending.agentId !== request.agentId))
-      return this.reject(
-        socket,
-        request.requestId,
-        "invalid_identity",
-        "Agent run 与节点请求不匹配。",
-      );
-
-    if (request.type === "node.agent.run.context") {
-      let page: ReturnType<AgentRunHandlers["context"]>;
-      try {
-        if (pending && !request.offset) {
-          page = this.agentRunHandlers?.context(
-            request.runId,
-            request.agentId,
-            request.cursor,
-            request.limit,
-          );
-          delete pending.contextPayload;
-          if (page && JSON.stringify(page.messages).length > sessionFragmentCharacters) {
-            pending.contextPayload = {
-              cursor: request.cursor,
-              serialized: JSON.stringify(page.messages),
-              nextCursor: page.nextCursor,
-            };
-          }
-        }
-        const payload = pending?.contextPayload;
-        if (
-          payload &&
-          payload.cursor === request.cursor &&
-          (request.offset ?? 0) < payload.serialized.length
-        ) {
-          this.send(socket, {
-            type: "control.agent.run.context",
-            requestId: request.requestId,
-            runId: request.runId,
-            messages: [],
-            nextCursor: payload.nextCursor,
-            fragment: sessionFragment(payload.serialized, request.offset ?? 0),
-          });
-          return;
-        }
-      } catch {
-        page = undefined;
-      }
-      this.send(socket, {
-        type: "control.agent.run.context",
-        requestId: request.requestId,
-        runId: request.runId,
-        messages: page?.messages ?? [],
-        nextCursor: page?.nextCursor ?? null,
-      });
-      return;
-    }
-
-    if (request.type === "node.agent.run.transcript") {
-      let accepted = false;
-      try {
-        let entry: SessionCommit | undefined;
-        if (request.entry.kind === "fragment") {
-          if (!pending) throw new Error("Run no longer authorized");
-          if (request.entry.offset === 0)
-            pending.sessionAssembly = new SessionAssembly(request.requestId, request.entry.total);
-          if (!pending.sessionAssembly) throw new Error("Missing session fragment start");
-          const serialized = pending.sessionAssembly.accept(request.requestId, request.entry);
-          if (serialized === undefined) accepted = true;
-          else {
-            delete pending.sessionAssembly;
-            entry = sessionCommitSchema.parse(JSON.parse(serialized));
-            if (entry.id !== request.requestId) throw new Error("Session entry identity mismatch");
-          }
-        } else entry = request.entry;
-        if (entry)
-          accepted =
-            this.agentRunHandlers?.transcript(
-              request.runId,
-              nodeId,
-              request.agentId,
-              request.requestId,
-              entry,
-            ) ?? false;
-      } catch {
-        if (pending) delete pending.sessionAssembly;
-        accepted = false;
-      }
-      this.send(socket, {
-        type: "control.agent.run.transcript_ack",
-        requestId: request.requestId,
-        runId: request.runId,
-        accepted,
-      });
-      return;
-    }
-
-    if (!pending) return; // Late result from a disconnected run is deliberately ignored.
-    try {
-      this.agentRunHandlers?.result(
-        request.runId,
-        request.agentId,
-        request.ok,
-        request.ok ? undefined : request.code,
-        request.ok ? undefined : request.reason,
-      );
-    } finally {
-      this.finishAgentRun(request.runId, request);
-    }
-  }
-
-  private async receiveAgentRunToolMessage(
-    socket: NodeSocket,
-    session: SocketSession,
-    request: NodeAgentRunToolRequest,
-  ): Promise<void> {
-    const nodeId = session.nodeId;
-    if (!nodeId || this.connected.get(nodeId) !== socket)
-      return this.reject(socket, request.requestId, "not_authenticated", "节点尚未完成身份验证。");
-    const pending = this.pendingAgentRuns.get(request.runId);
-    if (pending && pending.nodeId !== nodeId)
-      return this.reject(
-        socket,
-        request.requestId,
-        "invalid_identity",
-        "Agent run 与节点请求不匹配。",
-      );
-
-    let outcome: { ok: true; result: unknown } | { ok: false; error: string };
-    try {
-      outcome = pending
-        ? await (this.agentRunHandlers?.tool(
-            request.runId,
-            nodeId,
-            request.agentId,
-            request.toolCallId,
-            request.operation,
-            request.input,
-          ) ?? { ok: false, error: "Agent tool service is unavailable" })
-        : { ok: false, error: "Agent run is no longer active" };
-    } catch {
-      outcome = { ok: false, error: "Agent tool request was refused" };
-    }
-    if (
-      this.connected.get(nodeId) !== socket ||
-      (pending !== undefined && this.pendingAgentRuns.get(request.runId) !== pending)
-    )
-      return;
-    const response = NodeControlMessageSchema.parse({
-      type: "control.agent.run.tool_result",
-      requestId: request.requestId,
-      runId: request.runId,
-      toolCallId: request.toolCallId,
-      ...outcome,
-    });
-    this.send(socket, response);
-  }
-
   private finishAgentProvision(
     requestId: string,
     result?: NodeAgentProvisionResult,
@@ -1413,12 +1046,6 @@ export class NodeDirectory {
   private rejectAgentProvisions(nodeId: string, error: Error): void {
     for (const [requestId, pending] of this.pendingAgentProvisions) {
       if (pending.nodeId === nodeId) this.finishAgentProvision(requestId, undefined, error);
-    }
-  }
-
-  private rejectAgentRuns(nodeId: string, error: Error): void {
-    for (const [runId, pending] of this.pendingAgentRuns) {
-      if (pending.nodeId === nodeId) this.finishAgentRun(runId, undefined, error);
     }
   }
 
@@ -1462,15 +1089,6 @@ export class NodeDirectory {
     const pending = this.pendingWorkspaceOperations.get(requestId);
     if (!pending) return;
     this.pendingWorkspaceOperations.delete(requestId);
-    clearTimeout(pending.timeout);
-    if (error) pending.reject(error);
-    else if (result) pending.resolve(result);
-  }
-
-  private finishAgentRun(runId: string, result?: NodeAgentRunResult, error?: Error): void {
-    const pending = this.pendingAgentRuns.get(runId);
-    if (!pending) return;
-    this.pendingAgentRuns.delete(runId);
     clearTimeout(pending.timeout);
     if (error) pending.reject(error);
     else if (result) pending.resolve(result);

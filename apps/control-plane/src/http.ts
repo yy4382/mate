@@ -1,3 +1,4 @@
+import type { AgentLoopTestDependencies } from "./agent-loop.js";
 import { AgentTools } from "./agent-tools.js";
 import { AgentProcessOperationBroker } from "./agent-process-operations.js";
 import { serveStatic } from "@hono/node-server/serve-static";
@@ -82,7 +83,7 @@ export interface ControlPlaneAppOptions {
 }
 
 /** Fault pauses used by real-service integration tests, never deployment configuration. */
-export interface ControlPlaneTestDependencies {
+export interface ControlPlaneTestDependencies extends AgentLoopTestDependencies {
   beforeAgentAttachmentCommit?: () => Promise<void>;
 }
 
@@ -192,6 +193,7 @@ export function createControlPlaneApp(
     tools,
     processes,
     options.now,
+    testDependencies,
   );
   const activeAgentProvisions = new Map<string, Promise<AgentSummary>>();
   const agentProvisionResponse = (

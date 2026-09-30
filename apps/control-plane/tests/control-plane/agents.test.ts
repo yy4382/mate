@@ -1,3 +1,4 @@
+import { toolTestApp, toolTestInput } from "../helpers/tool-run.js";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import Database from "better-sqlite3";
 import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
@@ -26,7 +27,7 @@ function setup() {
   chmodSync(directory, 0o700);
   const passwordFile = join(directory, "owner-password");
   writeFileSync(passwordFile, `${ownerPassword}\n`, { mode: 0o600 });
-  const app = createControlPlaneApp({
+  const app = toolTestApp({
     dataDir: join(directory, "control-plane"),
     passwordFile,
   });
@@ -85,7 +86,8 @@ async function pairNode(
     privateKeyEncoding: { type: "pkcs8", format: "pem" },
     publicKeyEncoding: { type: "spki", format: "pem" },
   });
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
       type: "node.pair",
@@ -242,7 +244,8 @@ it("keeps manual pause until explicit resume, requires the original workspace, a
         message.type === "control.process.operation" &&
         (message.operation as { kind?: string })?.kind === "process.stop_all",
     )!;
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
       type: "node.process.operation.result",
@@ -263,7 +266,8 @@ it("keeps manual pause until explicit resume, requires the original workspace, a
   const verify = socket.sent
     .map((text) => JSON.parse(text) as Record<string, unknown>)
     .find((message) => message.type === "control.agent.provision" && message.verifyOnly)!;
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
       type: "node.agent.provision.result",
@@ -284,7 +288,8 @@ it("keeps manual pause until explicit resume, requires the original workspace, a
     .map((text) => JSON.parse(text))
     .filter((message) => message.type === "control.agent.provision")
     .at(-1)!;
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
       type: "node.agent.provision.result",
@@ -378,7 +383,8 @@ it("reports an earlier command whose termination the node cannot confirm as unkn
           message.type === "control.process.operation" &&
           (message.operation as { kind?: string })?.kind === "process.stop_all",
       )!;
-    await app.nodes.receive(
+    await toolTestInput(
+      app,
       socket,
       JSON.stringify({
         type: "node.process.operation.result",
@@ -502,7 +508,8 @@ it("counts every command whose termination nothing proved, however the node answ
           (message.operation as { kind?: string })?.kind === "process.stop_all",
       )!;
     // The restarted node's stop ran, and it says which group it could not end.
-    await app.nodes.receive(
+    await toolTestInput(
+      app,
       socket,
       JSON.stringify({
         type: "node.process.operation.result",
@@ -580,7 +587,8 @@ it("uses a fresh stop operation ID after an unknown node receipt", async () => {
           (message.operation as { kind?: string })?.kind === "process.stop_all",
       );
   const first = stopRequests()[0]!;
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
       type: "node.process.operation.result",
@@ -597,7 +605,8 @@ it("uses a fresh stop operation ID after an unknown node receipt", async () => {
   expect((await pause()).status).toBe(200);
   const second = stopRequests()[1]!;
   expect(second.operationId).not.toBe(first.operationId);
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
       type: "node.process.operation.result",
@@ -609,7 +618,8 @@ it("uses a fresh stop operation ID after an unknown node receipt", async () => {
     }),
   );
   expect(app.runs?.stopStatus(id).state).toBe("executing");
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
       type: "node.process.operation.result",
@@ -672,7 +682,8 @@ it("rejects a model outside the provider registry before persisting an Agent", a
     .map((text) => JSON.parse(text) as Record<string, unknown>)
     .find((message) => message.type === "control.agent.provision");
   if (provision) {
-    await app.nodes.receive(
+    await toolTestInput(
+      app,
       socket,
       JSON.stringify({
         type: "node.agent.provision.result",
@@ -721,7 +732,8 @@ it("sends only the bounded Agent provisioning operation to the selected online n
     agentId,
   });
 
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
       type: "node.agent.provision.progress",
@@ -730,7 +742,8 @@ it("sends only the bounded Agent provisioning operation to the selected online n
       stage: "preparing_workspace",
     }),
   );
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
       type: "node.agent.provision.result",
@@ -793,7 +806,8 @@ it("persists a stable Agent session, verifies provisioning, then queues its init
     agentId: input.id,
   });
   expect(app.chat.inviteAgentToChannel(channelId, input.id)).toBe(false);
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
       type: "node.agent.provision.progress",
@@ -805,7 +819,8 @@ it("persists a stable Agent session, verifies provisioning, then queues its init
   const progressResponse = await app.request("/api/owner/agents", { headers: { cookie } });
   const progress = (await progressResponse.json()) as { agents: Array<{ stage: string }> };
   expect(progress.agents[0]?.stage).toBe("preparing_workspace");
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
       type: "node.agent.provision.result",
@@ -930,11 +945,11 @@ it("finds an online Agent beyond more than one page of offline deliveries", asyn
   while (Date.now() < deadline && !run) {
     run = onlineNode.socket.sent
       .map((text) => JSON.parse(text) as Record<string, unknown>)
-      .find((message) => message.type === "control.agent.run" && message.agentId === onlineAgentId);
+      .find((message) => message.type === "test.run.started" && message.agentId === onlineAgentId);
     if (!run) await new Promise((resolve) => setTimeout(resolve, 10));
   }
   expect(run).toMatchObject({
-    type: "control.agent.run",
+    type: "test.run.started",
     agentId: onlineAgentId,
     channelId: onlineDirect.id,
   });
@@ -966,7 +981,8 @@ it("retains one failed request and retries it with the same Agent and provisioni
     body: JSON.stringify(input),
   });
   await new Promise((resolve) => setTimeout(resolve, 0));
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
       type: "node.agent.provision.result",
@@ -1003,7 +1019,8 @@ it("retains one failed request and retries it with the same Agent and provisioni
     type: "control.agent.provision",
     agentId: input.id,
   });
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
       type: "node.agent.provision.result",

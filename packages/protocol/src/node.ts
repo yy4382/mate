@@ -2,16 +2,6 @@ import { createHash } from "node:crypto";
 import type { AgentProcessOperation } from "./process-operations.js";
 import type { Operation } from "./workspace-operations.js";
 
-export function durableToolIdentity(
-  actionScopeId: string,
-  assistantId: string,
-  toolCallId: string,
-): string {
-  return `mate:${actionScopeId}:${createHash("sha256")
-    .update(JSON.stringify([assistantId, toolCallId]))
-    .digest("hex")}:1`;
-}
-
 /** Hash the stable Agent and requested filesystem mutation recorded by both services. */
 export function workspaceReceiptRequestHash(agentId: string, operation: Operation): string {
   return createHash("sha256")

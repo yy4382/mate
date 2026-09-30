@@ -1,7 +1,11 @@
-import { durableToolIdentity } from "@mate/protocol/node";
+import {
+  type ModelContextMessage,
+  type SessionCheckpoint,
+  type SessionCommit,
+} from "./session-record.js";
+import { durableToolIdentity } from "./agent-tool-identity.js";
 import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
-import type { ModelContextMessage, SessionCheckpoint, SessionCommit } from "@mate/protocol";
 
 export const agentSessionSchema = `
 CREATE TABLE owner_agent_session_records (
@@ -174,6 +178,28 @@ export class AgentSession {
       message: JSON.parse(row.payload_json).message,
       actionScopeId: row.action_scope_id,
       ...(row.id === checkpoint?.firstKeptEntryId ? { checkpoint } : {}),
+    }));
+  }
+
+  /** Read only the retained projection; original transcript remains immutable and available. */
+  context(agentId: string): ModelContextMessage[] {
+    const checkpoint = this.latestCheckpoint(agentId);
+    if (!checkpoint) return this.read(agentId);
+    const rows = this.db
+      .prepare(
+        `SELECT id,payload_json,action_scope_id FROM owner_agent_session_records
+      WHERE agent_id=? AND kind='message' AND seq >= (SELECT seq FROM owner_agent_session_records WHERE id=?) ORDER BY seq`,
+      )
+      .all(agentId, checkpoint.firstKeptEntryId) as Array<{
+      id: string;
+      payload_json: string;
+      action_scope_id: string;
+    }>;
+    return rows.map((row) => ({
+      id: row.id,
+      message: JSON.parse(row.payload_json).message,
+      actionScopeId: row.action_scope_id,
+      ...(row.id === checkpoint.firstKeptEntryId ? { checkpoint } : {}),
     }));
   }
 

@@ -1,11 +1,12 @@
 import { queueUncertainOperationFacts } from "./operation-recovery-context.js";
 import { AgentSession } from "./agent-session.js";
+import { AgentLoop, type AgentLoopTestDependencies } from "./agent-loop.js";
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import type { ModelCredentialDirectory } from "./model-credentials.js";
 import { providerCredentialExistsSql } from "./model-credentials.js";
-import type { AgentRunContextPage, OwnerChat } from "./owner-chat.js";
-import { NodeDirectory, type NodeAgentRunStart } from "./nodes/directory.js";
+import type { OwnerChat } from "./owner-chat.js";
+import { NodeDirectory } from "./nodes/directory.js";
 import {
   AgentProcessOperationBroker,
   deriveAgentProcessOperationId,
@@ -33,7 +34,10 @@ interface RunCandidate {
 
 /** Durable owner-channel run admission and the single primary run path for each Agent. */
 export class AgentRunCoordinator {
-  private readonly activeAgents = new Set<string>();
+  private readonly activeAgents = new Map<
+    string,
+    { runId: string; nodeId: string; loop: AgentLoop }
+  >();
   /** Deliveries already announced to their run: delivery id to the run that was told. */
   private readonly noticedDeliveries = new Map<string, string>();
   private readonly timer: ReturnType<typeof setInterval>;
@@ -46,9 +50,10 @@ export class AgentRunCoordinator {
     private readonly nodes: NodeDirectory,
     private readonly credentials: ModelCredentialDirectory,
     private readonly chat: OwnerChat,
-    tools: AgentTools,
+    private readonly tools: AgentTools,
     readonly processOperations: AgentProcessOperationBroker,
     now: () => number = Date.now,
+    private readonly testDependencies: AgentLoopTestDependencies = {},
   ) {
     this.now = now;
     this.recoverInterruptedRuns();
@@ -71,15 +76,12 @@ export class AgentRunCoordinator {
         void this.dispatchPendingStops(true);
       },
     );
-    nodes.setAgentRunHandlers({
-      context: (runId, agentId, cursor, limit) =>
-        this.readRunContext(runId, agentId, cursor, limit),
-      transcript: (runId, nodeId, agentId, requestId, text) =>
-        new AgentSession(db).append(runId, nodeId, agentId, text),
-      tool: (runId, nodeId, agentId, toolCallId, operation, input) =>
-        tools.execute({ runId, nodeId, agentId, toolCallId }, operation, input),
-      result: (runId, agentId, ok, code, reason) =>
-        this.finishRun(runId, agentId, ok, code, reason),
+    nodes.setOfflineHandler((nodeId) => {
+      for (const [agentId, active] of this.activeAgents) {
+        if (active.nodeId !== nodeId) continue;
+        this.finishRun(active.runId, agentId, false, "node_disconnected");
+        this.cancelRun(active.runId, agentId);
+      }
     });
     this.timer = setInterval(() => this.wake(), schedulerIntervalMs);
     this.timer.unref?.();
@@ -89,6 +91,10 @@ export class AgentRunCoordinator {
   close(): void {
     this.closed = true;
     clearInterval(this.timer);
+    for (const [agentId, active] of this.activeAgents) {
+      this.finishRun(active.runId, agentId, false, "aborted");
+      this.cancelRun(active.runId, agentId);
+    }
   }
 
   wake(): void {
@@ -123,7 +129,7 @@ export class AgentRunCoordinator {
         "UPDATE owner_agent_run_control SET paused_reason=NULL,temporary_failures=0,updated_at=? WHERE agent_id=? AND paused_reason IN ('credentials','context')",
       )
       .run(this.now(), agentId);
-    // The active worker owns its admitted configuration; edits apply to the next run.
+    // The current loop owns its admitted configuration; edits apply to the next run.
     this.wake();
   }
 
@@ -144,7 +150,7 @@ export class AgentRunCoordinator {
         });
       })
       .immediate();
-    this.nodes.cancelAgentRun(runId, agentId, "credentials_changed");
+    this.cancelRun(runId, agentId);
   }
 
   pauseAgent(agentId: string): boolean {
@@ -197,7 +203,7 @@ export class AgentRunCoordinator {
         `SELECT id FROM owner_agent_runs WHERE agent_id=? AND error_code='manual_pause' ORDER BY started_at DESC LIMIT 1`,
       )
       .get(agentId) as { id: string } | undefined;
-    if (pending) this.nodes.cancelAgentRun(pending.id, agentId, "manual_pause");
+    if (pending) this.cancelRun(pending.id, agentId);
     if (stopId) void this.dispatchStop(stopId, agentId, agent.node_id);
     return true;
   }
@@ -531,34 +537,14 @@ export class AgentRunCoordinator {
         if (!apiKey) continue;
         const runId = this.beginRun(candidate);
         if (!runId) continue;
-        this.activeAgents.add(candidate.agent_id);
-        const request: NodeAgentRunStart = {
-          type: "control.agent.run",
-          requestId: runId,
-          runId,
-          agentId: candidate.agent_id,
-          sessionId: candidate.session_id,
-          actionScopeId: candidate.delivery_id,
-          provider: candidate.provider,
-          modelId: candidate.model_id,
-          apiKey,
-          channelId: candidate.channel_id,
-          channelVisibility: candidate.channel_visibility,
-          prompt: {
-            name: candidate.name,
-            role: candidate.role,
-            description: candidate.description,
-          },
-        };
-        void this.nodes
-          .runAgent(candidate.node_id, request)
-          .catch(() => {
-            if (!this.closed) this.finishRun(runId, candidate.agent_id, false, "node_disconnected");
-          })
-          .finally(() => {
+        const loop = new AgentLoop(),
+          active = { runId, nodeId: candidate.node_id, loop };
+        this.activeAgents.set(candidate.agent_id, active);
+        void this.advance(candidate, active, apiKey).finally(() => {
+          if (this.activeAgents.get(candidate.agent_id) === active)
             this.activeAgents.delete(candidate.agent_id);
-            if (!this.closed) this.wake();
-          });
+          if (!this.closed) this.wake();
+        });
       }
     } finally {
       this.draining = false;
@@ -613,14 +599,7 @@ export class AgentRunCoordinator {
       channel_id: string;
     }>;
     for (const arrival of arrivals)
-      if (
-        this.nodes.notifyAgentRun(
-          arrival.node_id,
-          arrival.run_id,
-          arrival.agent_id,
-          arrival.channel_id,
-        )
-      )
+      if (this.noticeRun(arrival.run_id, arrival.agent_id, arrival.channel_id))
         this.noticedDeliveries.set(arrival.delivery_id, arrival.run_id);
   }
 
@@ -739,9 +718,7 @@ export class AgentRunCoordinator {
   private readRunContext(
     runId: string,
     agentId: string,
-    cursor: number,
-    limit: number,
-  ): AgentRunContextPage | undefined {
+  ): import("./session-record.js").ModelContextMessage[] | undefined {
     const run = this.db
       .prepare(
         `SELECT r.input_end_seq,r.context_history_end_seq,r.delivery_id,d.channel_id
@@ -762,7 +739,7 @@ export class AgentRunCoordinator {
       .get(run.delivery_id) as { seq: number } | undefined;
     if (!inputStart) return undefined;
     queueUncertainOperationFacts(this.db, agentId, this.now());
-    const history = new AgentSession(this.db).read(agentId);
+    const history = new AgentSession(this.db).context(agentId);
     const input = this.db
       .prepare(
         `SELECT d.id,m.text,m.created_at,m.root_id,m.quote_id,c.visibility
@@ -795,22 +772,97 @@ export class AgentRunCoordinator {
             content: `[消息来源：频道 ${run.channel_id}；可见范围：${row.visibility === "public" ? "公开" : "私密"}；讨论串：${row.root_id ?? "无"}；引用：${row.quote_id ?? "无"}]\n${row.text}`,
           },
         })),
-      // Late receipts may arrive while the worker pages: append them after the admitted input batch.
+      // Append pending late-receipt corrections after the admitted input batch.
       ...new AgentSession(this.db).pendingCorrections(agentId, run.delivery_id),
     ];
-    // Bound ordinary pages by serialized bytes; the transport fragments a single larger message.
-    let end = cursor,
-      bytes = 0;
-    while (end < messages.length && end < cursor + limit) {
-      const size = Buffer.byteLength(JSON.stringify(messages[end]), "utf8");
-      if (end > cursor && bytes + size > 256 * 1024) break;
-      bytes += size;
-      end++;
+    return messages;
+  }
+
+  private cancelRun(runId: string, agentId: string): void {
+    const active = this.activeAgents.get(agentId);
+    if (active?.runId !== runId) return;
+    this.activeAgents.delete(agentId);
+    active.loop.cancel();
+  }
+
+  private noticeRun(runId: string, agentId: string, conversationId: string): boolean {
+    const active = this.activeAgents.get(agentId);
+    if (active?.runId !== runId) return false;
+    active.loop.notice(conversationId);
+    return true;
+  }
+
+  private current(runId: string, candidate: RunCandidate): boolean {
+    return (
+      !this.closed &&
+      this.activeAgents.get(candidate.agent_id)?.runId === runId &&
+      this.nodes.list().some((node) => node.id === candidate.node_id && node.online) &&
+      !!this.db
+        .prepare("SELECT 1 FROM owner_agent_runs WHERE id=? AND agent_id=? AND state='running'")
+        .get(runId, candidate.agent_id)
+    );
+  }
+
+  private async advance(
+    candidate: RunCandidate,
+    active: { runId: string; loop: AgentLoop },
+    apiKey: string,
+  ): Promise<void> {
+    try {
+      await this.testDependencies.beforeRunStart?.(active.runId);
+      if (!this.current(active.runId, candidate)) return;
+      const messages = this.readRunContext(active.runId, candidate.agent_id);
+      if (!messages) throw new Error("Run context is unavailable");
+      const result = await active.loop.run(
+        {
+          sessionId: candidate.session_id,
+          actionScopeId: candidate.delivery_id,
+          messages,
+          prompt: {
+            name: candidate.name,
+            role: candidate.role,
+            description: candidate.description,
+          },
+          provider: candidate.provider,
+          modelId: candidate.model_id,
+          apiKey,
+        },
+        () => this.current(active.runId, candidate),
+        (entry) =>
+          new AgentSession(this.db).append(
+            active.runId,
+            candidate.node_id,
+            candidate.agent_id,
+            entry,
+          ),
+        (toolCallId, operation, input) =>
+          Promise.resolve(
+            this.tools.execute(
+              {
+                runId: active.runId,
+                nodeId: candidate.node_id,
+                agentId: candidate.agent_id,
+                toolCallId,
+              },
+              operation,
+              input,
+            ),
+          ),
+        this.testDependencies,
+      );
+      await this.testDependencies.beforeRunFinish?.();
+      if (this.current(active.runId, candidate))
+        this.finishRun(
+          active.runId,
+          candidate.agent_id,
+          result.ok,
+          result.ok ? undefined : result.code,
+          result.ok ? undefined : result.reason,
+        );
+    } catch {
+      if (this.current(active.runId, candidate))
+        this.finishRun(active.runId, candidate.agent_id, false, "model_failed");
     }
-    return {
-      messages: messages.slice(cursor, end),
-      nextCursor: end < messages.length ? end : null,
-    };
   }
 
   private finishRun(
@@ -975,5 +1027,3 @@ function startedACommand(requestJson: string): boolean {
     return false;
   }
 }
-
-export type AgentRunContext = AgentRunContextPage;

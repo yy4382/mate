@@ -17,6 +17,9 @@ importers:
 
   apps/control-plane:
     dependencies:
+      '@earendil-works/pi-agent-core':
+        specifier: 0.86.0
+        version: 0.86.0(ws@8.21.3)(zod@4.6.5)
       '@earendil-works/pi-ai':
         specifier: 0.86.0
         version: 0.86.0(ws@8.21.3)(zod@4.6.5)
@@ -72,12 +75,6 @@ importers:
 
   apps/node:
     dependencies:
-      '@earendil-works/pi-agent-core':
-        specifier: 0.86.0
-        version: 0.86.0(ws@8.21.3)(zod@4.6.5)
-      '@earendil-works/pi-ai':
-        specifier: 0.86.0
-        version: 0.86.0(ws@8.21.3)(zod@4.6.5)
       '@mate/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
@@ -155,9 +152,6 @@ importers:
 
   packages/protocol:
     dependencies:
-      '@earendil-works/pi-ai':
-        specifier: 0.86.0
-        version: 0.86.0(ws@8.21.3)(zod@4.6.5)
       zod:
         specifier: 4.6.5
         version: 4.6.5

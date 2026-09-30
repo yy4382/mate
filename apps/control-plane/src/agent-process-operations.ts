@@ -430,7 +430,7 @@ function stableActionScopeId(stableActionId: string): string {
   return stableActionIdSchema.parse(stableActionId).split(":")[1]!;
 }
 
-/** Derive a UUID scope suffix from a worker-issued, normalized and delivery-scoped action ID. */
+/** Derive an operation UUID from the session's committed assistant/tool-call action identity. */
 export function deriveAgentProcessOperationId(agentId: string, stableActionId: string): string {
   const parsedAgentId = uuidSchema.parse(agentId),
     parsedStableActionId = stableActionIdSchema.parse(stableActionId),

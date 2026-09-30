@@ -12,7 +12,7 @@ Mate 是让 Agent 同事持续工作与协作的个人环境。所有者通过 M
 - [运行配置](docs/CONFIGURATION.md)
 - [架构决定](docs/adr/0003-web-control-plane-and-linux-nodes.md)
 
-控制面和节点共用的通信校验、会话记录、操作数据与身份计算位于 `packages/protocol`（`@mate/protocol`）；摘要与工具调用身份通过 `@mate/protocol/node` 导出。Linux 节点、模型与命令、文件执行和节点操作账本位于 `apps/node`（`@mate/node`），节点构建会同时生成模型进程、文件操作辅助进程和原生重命名程序。控制面源码、数据库格式校验与联调测试位于 `apps/control-plane`（`@mate/control-plane`）；网页源码、静态资源与网页测试位于 `apps/web`（`@mate/web`）。控制面声明 web 依赖，通过 `@mate/web/assets` 定位网页构建结果；控制面与节点联调测试通过节点的明确导出使用节点。根只管理工作区、开发配置、聚合命令和文档，`pnpm build` 按 package 依赖顺序构建。
+控制面和节点共用的通信校验、操作数据与身份计算位于 `packages/protocol`（`@mate/protocol`）；操作请求摘要通过 `@mate/protocol/node` 导出。控制面 `apps/control-plane`（`@mate/control-plane`）在自身进程内异步推进 Pi 模型与工具循环，保存完整会话、压缩记录、运行状态和模型凭据，直接执行对话与任务工具。Linux 节点 `apps/node`（`@mate/node`）只负责工作区、普通命令、文件操作、进程控制和本地收据；节点构建生成文件操作辅助进程和原生重命名程序。节点不安装模型库、不接收模型凭据或会话上下文。网页源码、静态资源与网页测试位于 `apps/web`（`@mate/web`）。控制面通过 `@mate/web/assets` 定位网页构建结果；联调测试通过节点的明确导出使用真实节点。根管理工作区、开发配置、聚合命令和文档，`pnpm build` 按 package 依赖顺序构建。
 
 ## 本地检查
 
@@ -25,4 +25,3 @@ pnpm typecheck
 ```
 
 `pnpm build` 生成控制面、节点和网页发布内容。本地调试可用 `MATE_CONTROL_PLANE_DATA_DIR`、`MATE_OWNER_PASSWORD_FILE` 配置控制面，运行 `pnpm start:control-plane`，再用 `pnpm dev:web` 从浏览器访问 `http://127.0.0.1:5173`。本地 `localhost` 可验证 PWA 基本流程；公开 Web Push 与 HTTPS 需要真实 HTTPS 环境。以普通账号直接启动控制面与节点、停止重启和故障诊断的步骤见[运维说明](docs/OPERATIONS.md)。
-

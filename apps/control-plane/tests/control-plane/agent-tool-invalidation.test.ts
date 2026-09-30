@@ -73,7 +73,7 @@ function pausedCommitControlPlane(directory: string): ProcessOutput {
     startControlPlane(0, undefined, {
       dataDir: ${JSON.stringify(join(directory, "control-plane-data"))},
       passwordFile: ${JSON.stringify(join(directory, "owner-password"))},
-    }, { beforeAgentAttachmentCommit: async () => {
+    }, { modelForRun: (model, apiKey) => ({ ...model, baseUrl: apiKey }), beforeAgentAttachmentCommit: async () => {
       if (paused) return;
       paused = true;
       console.log('MATE_ATTACHMENT_BEFORE_COMMIT');
@@ -113,7 +113,7 @@ function pausedReceiptNode(directory: string, origin: string, pairingToken: stri
     await runLinuxNodeWithTestDependencies({ controlPlaneUrl: ${JSON.stringify(origin)},
       dataDirectory: data, agentWorkspaceRoot: root, pairingToken: ${JSON.stringify(pairingToken)},
       heartbeatIntervalMs: 30000, heartbeatTimeoutMs: 60000 }, controller.signal, {
-      modelWorkerEntry: ${JSON.stringify(resolve("../node/tests/fixtures/protocol-model-worker.mjs"))},
+
       processOperations: operations,
       workspaceExecutor: new LinuxWorkspaceExecutor(root, data, { beforeReceipt: pause }),
     });`;
@@ -138,6 +138,8 @@ it.each([
   ["credentials", "receipt", "file"],
   ["disconnect", "receipt", "command"],
   ["disconnect", "receipt", "file"],
+  ["restart", "receipt", "command"],
+  ["restart", "receipt", "file"],
   ["disconnect", "unconfirmed", "command"],
   ["disconnect", "unconfirmed", "file"],
 ] as const)(
@@ -281,7 +283,6 @@ it.each([
         origin: `http://127.0.0.1:${proxyAddress.port}`,
         nodeData: join(directory, "node-data"),
         workspaceRoot: join(directory, "workspaces"),
-        modelWorkerEntry: resolve("../node/tests/fixtures/protocol-model-worker.mjs"),
       };
       node =
         boundary === "unconfirmed"
@@ -318,7 +319,11 @@ it.each([
             : "real operation receipt persisted and returned by node",
         );
       else await control.waitFor(/MATE_ATTACHMENT_BEFORE_COMMIT/);
-      const oldRun = wire.find((message) => message.type === "control.agent.run");
+      const oldRun = db
+        .prepare(
+          "SELECT r.id AS runId,r.delivery_id AS actionScopeId,s.id AS sessionId FROM owner_agent_runs r JOIN owner_agent_sessions s ON s.agent_id=r.agent_id WHERE r.agent_id=? ORDER BY r.rowid LIMIT 1",
+        )
+        .get(agentId) as any;
       const oldReceipt =
         boundary === "receipt"
           ? JSON.parse(held!.data.toString())
@@ -401,7 +406,7 @@ it.each([
         );
       else {
         const reconnectStart = wire.length;
-        if (boundary === "unconfirmed") {
+        if (boundary === "unconfirmed" || cause === "restart") {
           node.child.kill("SIGKILL");
           await node.exited;
         } else currentUpstream!.terminate();
@@ -411,14 +416,14 @@ it.each([
             .get(oldRun.runId) as { state: string };
           return row.state === "failed" ? true : undefined;
         }, "node disconnect to invalidate its old run");
-        if (boundary === "unconfirmed") node = startNode(nodeOptions);
+        if (boundary === "unconfirmed" || cause === "restart") node = startNode(nodeOptions);
         await eventually(
           () =>
             wire.slice(reconnectStart).find((message) => message.type === "control.authenticated"),
           "rapid node reconnection",
         );
       }
-      if (boundary !== "commit" && cause !== "disconnect")
+      if (boundary !== "commit" && cause !== "disconnect" && cause !== "restart")
         held!.socket.send(held!.data, { binary: held!.binary });
       else writeFileSync(join(directory, "release-commit"), "release");
       if (firstTool === "attachment") {
@@ -519,51 +524,6 @@ it.each([
       expect(
         db.prepare("SELECT state,error_code FROM owner_agent_runs WHERE id=?").get(oldRun.runId),
       ).toEqual(interrupted);
-      // The original node identity is still authenticated. Old-run requests cannot publish, mutate
-      // the workspace, or reuse the new run's qualification, even after the node reconnects.
-      const staleStart = wire.length;
-      for (const [operation, input] of [
-        ["tools.list", {}],
-        ["tools.describe", { name: "messages.send" }],
-        [
-          "tools.call",
-          { name: "messages.send", input: { conversationId: dm, text: "stale message" } },
-        ],
-        ["tools.call", { name: "workspace.write", input: { path: "stale.txt", content: "stale" } }],
-        [
-          "tools.call",
-          { name: "process.exec", input: { command: "printf stale >> resumed-count.txt" } },
-        ],
-      ]) {
-        const requestId = randomUUID();
-        currentUpstream!.send(
-          JSON.stringify({
-            type: "node.agent.run.tool",
-            requestId,
-            runId: oldRun.runId,
-            agentId,
-            toolCallId: `mate:${oldRun.actionScopeId}:${"b".repeat(64)}:1`,
-            operation,
-            input,
-          }),
-        );
-        const reply = await eventually(
-          () =>
-            wire.find(
-              (message) =>
-                message.requestId === requestId && message.type === "control.agent.run.tool_result",
-            ),
-          "stale tool refusal",
-        );
-        expect(reply).toMatchObject({ ok: false, error: "Agent run is no longer active" });
-      }
-      expect(
-        wire
-          .slice(staleStart)
-          .some((message) =>
-            ["control.workspace.operation", "control.process.operation"].includes(message.type),
-          ),
-      ).toBe(false);
       expect(
         db
           .prepare(
@@ -571,36 +531,6 @@ it.each([
           )
           .get(oldRun.runId),
       ).toEqual({ n: 0 });
-      const originalTranscript = wire.find(
-        (message) =>
-          message.type === "node.agent.run.transcript" &&
-          message.runId === oldRun.runId &&
-          message.entry.kind !== "fragment",
-      );
-      const transcriptRequestId = randomUUID();
-      currentUpstream!.send(
-        JSON.stringify({ ...originalTranscript, requestId: transcriptRequestId }),
-      );
-      expect(
-        await eventually(
-          () =>
-            wire.find(
-              (message) =>
-                message.type === "control.agent.run.transcript_ack" &&
-                message.requestId === transcriptRequestId,
-            ),
-          "late transcript rejected",
-        ),
-      ).toMatchObject({ accepted: false });
-      currentUpstream!.send(
-        JSON.stringify({
-          type: "node.agent.run.result",
-          requestId: randomUUID(),
-          runId: oldRun.runId,
-          agentId,
-          ok: true,
-        }),
-      );
       if (cause === "pause") {
         const reconnectStart = wire.length;
         currentUpstream!.terminate();
@@ -621,7 +551,9 @@ it.each([
             "SELECT COUNT(*) AS n FROM owner_agent_runs WHERE agent_id=? AND state='completed'",
           )
           .get(agentId) as { n: number };
-        return row.n === 1 ? true : undefined;
+        // A late receipt can independently queue a correction delivery after recovery admission.
+        // Its subsequent run is valid; the recovered work must complete rather than total exactly one.
+        return row.n >= 1 ? true : undefined;
       }, "new run to complete");
       const attachments = (await api(`/api/owner/channels/${dm}/attachments`, undefined, "GET"))
         .attachments;
@@ -637,10 +569,14 @@ it.each([
       ).toBe("once\n");
       expect(JSON.stringify(requests.at(-1).input)).toContain("normal contents");
       expect(
-        wire
-          .filter((message) => message.type === "control.agent.run")
-          .map((message) => message.sessionId),
-      ).toEqual([oldRun.sessionId, oldRun.sessionId]);
+        db.prepare("SELECT id FROM owner_agent_sessions WHERE agent_id=?").all(agentId),
+      ).toEqual([{ id: oldRun.sessionId }]);
+      expect(
+        wire.some(
+          (message) =>
+            /agent\.run/.test(message.type) || "apiKey" in message || "sessionId" in message,
+        ),
+      ).toBe(false);
       expect(
         db.prepare("SELECT state,error_code FROM owner_agent_runs WHERE id=?").get(oldRun.runId),
       ).toEqual(interrupted);

@@ -188,13 +188,12 @@ export class WorkspaceService {
             .strict()
             .superRefine((input, context) => {
               const worstCaseRequest = {
-                type: "node.agent.run.tool",
+                type: "control.workspace.operation",
                 requestId: "00000000-0000-4000-8000-000000000000",
-                runId: "00000000-0000-4000-8000-000000000000",
                 agentId: "00000000-0000-4000-8000-000000000000",
-                toolCallId: "t".repeat(500),
-                operation: "tools.call",
-                input: { name: "workspace.write", input },
+                operationId: "00000000-0000-4000-8000-000000000000",
+                mode: "agent_action",
+                operation: { kind: "write", ...input },
               };
               if (
                 Buffer.byteLength(JSON.stringify(worstCaseRequest), "utf8") > MAX_NODE_MESSAGE_BYTES
@@ -537,7 +536,6 @@ export class WorkspaceService {
         type: "control.workspace.operation",
         requestId: randomUUID(),
         operationId: randomUUID(),
-        runId,
         agentId,
         mode: "agent_publish",
         operation,
@@ -590,7 +588,6 @@ export class WorkspaceService {
         type: "control.workspace.operation",
         requestId: randomUUID(),
         operationId: randomUUID(),
-        runId,
         agentId,
         mode: "agent_read",
         operation,
@@ -782,7 +779,6 @@ export class WorkspaceService {
             type: "control.workspace.operation",
             requestId: randomUUID(),
             operationId,
-            runId: input.runId,
             agentId: input.agentId,
             mode: "agent_action",
             operation: input.operation,

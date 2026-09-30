@@ -15,7 +15,7 @@ import {
   type ProcessOutput,
 } from "../helpers/run-services.js";
 
-it("keeps the actual OpenAI request prefix across tool loops, DM, channel, thread, and service restarts", async () => {
+it("keeps the actual OpenAI request prefix across tools, DM, public/private channels, threads and restarts", async () => {
   const directory = mkdtempSync(join(tmpdir(), "mate-full-session-"));
   chmodSync(directory, 0o700);
   writeFileSync(join(directory, "owner-password"), ownerPassword, { mode: 0o600 });
@@ -23,14 +23,15 @@ it("keeps the actual OpenAI request prefix across tool loops, DM, channel, threa
   let control: ProcessOutput | undefined, node: ProcessOutput | undefined;
   let turn = 0;
   let updateConfiguration: (() => Promise<void>) | undefined;
+  let configurationTurn = -1;
   const provider = createServer(async (request, response) => {
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(Buffer.from(chunk));
     requests.push(JSON.parse(Buffer.concat(chunks).toString()));
     const step = turn++;
-    if (step === 7) await updateConfiguration?.();
+    if (step === configurationTurn) await updateConfiguration?.();
     const calls =
-      step === 0 || step === 7
+      step === 0 || step === configurationTurn
         ? [
             { id: "discover", name: "tools.list", arguments: {} },
             { id: "describe", name: "tools.describe", arguments: { name: "process.exec" } },
@@ -111,7 +112,6 @@ it("keeps the actual OpenAI request prefix across tool loops, DM, channel, threa
     const nodeOptions = {
       nodeData: join(directory, "node-data"),
       workspaceRoot: join(directory, "workspaces"),
-      modelWorkerEntry: resolve("../node/tests/fixtures/protocol-model-worker.mjs"),
     };
     node = startNode({ ...nodeOptions, origin, pairingToken: pairing.pairingToken });
     const nodeId = (await node.waitFor(/MATE_NODE_PAIRED ([0-9a-f-]+)/i))[1]!;
@@ -178,6 +178,15 @@ it("keeps the actual OpenAI request prefix across tool loops, DM, channel, threa
     await api(`/api/owner/channels/${dm}/messages`, { text: "回到私信" });
     await complete(4);
     expect(requests).toHaveLength(7);
+    const privateChannel = await api("/api/owner/channels", {
+      name: "Private",
+      description: "Synthetic",
+      visibility: "private",
+    });
+    await api(`/api/owner/channels/${privateChannel.id}/invitations`, { agentId });
+    await api(`/api/owner/channels/${privateChannel.id}/messages`, { text: "私有频道工作" });
+    await complete(5);
+    expect(requests).toHaveLength(8);
     for (let index = 1; index < requests.length; index++) {
       expect(requests[index].input.slice(0, requests[index - 1].input.length)).toEqual(
         requests[index - 1].input,
@@ -198,6 +207,7 @@ it("keeps the actual OpenAI request prefix across tool loops, DM, channel, threa
     const savedHistory = db
       .prepare("SELECT payload_json FROM owner_agent_session_records WHERE agent_id=? ORDER BY seq")
       .all(agentId);
+    configurationTurn = requests.length;
     updateConfiguration = async () => {
       await api(`/api/owner/agents/${agentId}/profile`, { role: "Changed next run" }, "PATCH");
       await api(
@@ -207,15 +217,15 @@ it("keeps the actual OpenAI request prefix across tool loops, DM, channel, threa
       );
     };
     await api(`/api/owner/channels/${dm}/messages`, { text: "运行中修改配置" });
-    await complete(5);
-    expect(requests).toHaveLength(9);
-    expect(requests[7].model).toBe("gpt-4o-mini");
-    expect(requests[8].model).toBe("gpt-4o-mini");
-    expect(requests[8].input[0]).toEqual(requests[0].input[0]);
-    await api(`/api/owner/channels/${dm}/messages`, { text: "采用新配置" });
     await complete(6);
-    expect(requests[9].model).toBe("gpt-4.1-mini");
-    expect(JSON.stringify(requests[9].input[0])).toContain("Changed next run");
+    expect(requests).toHaveLength(10);
+    expect(requests[8].model).toBe("gpt-4o-mini");
+    expect(requests[9].model).toBe("gpt-4o-mini");
+    expect(requests[9].input[0]).toEqual(requests[0].input[0]);
+    await api(`/api/owner/channels/${dm}/messages`, { text: "采用新配置" });
+    await complete(7);
+    expect(requests[10].model).toBe("gpt-4.1-mini");
+    expect(JSON.stringify(requests[10].input[0])).toContain("Changed next run");
     expect(
       db
         .prepare(

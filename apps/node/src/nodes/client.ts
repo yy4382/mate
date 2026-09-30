@@ -1,24 +1,17 @@
 import {
   type AgentWorkspaceIdentity,
-  SessionAssembly,
-  sessionFragment,
-  sessionFragmentCharacters,
-  type SessionFragment,
-  contextMessageSchema,
-  type SessionCommit,
   NodeControlMessageSchema,
   NodeRequestSchema,
   type AgentProvisionStage,
 } from "@mate/protocol";
 
 import { createPrivateKey, randomUUID, sign } from "node:crypto";
-import { isAbsolute, join, resolve as resolvePath } from "node:path";
+import { join, resolve as resolvePath } from "node:path";
 import { WebSocket } from "ws";
 import { loadOrCreateNodeIdentity, type NodeIdentity } from "./identity.js";
 import { readAgentWorkspaceIdentity } from "./agent-provisioner.js";
 
 import { handleAgentProvisionRequest, prepareAgentWorkspace } from "./agent-provisioner.js";
-import { makeAgentRunRequest, runAgentModel, type AgentRunPage } from "./agent-runner.js";
 
 import { openNodeProcessOperations } from "./process-operation-runtime.js";
 import type { AgentProcessOperations } from "./process-operations.js";
@@ -38,13 +31,6 @@ export interface LinuxNodeOptions {
   pairingToken?: string;
   heartbeatIntervalMs?: number;
   heartbeatTimeoutMs?: number;
-  /**
-   * Test-only seam, used by the cross-process runtime checks: the scripted model worker this node
-   * starts instead of the real provider stream. It is read from `MATE_NODE_MODEL_WORKER_ENTRY` and
-   * must be an absolute path; a real deployment that leaves the variable unset runs the production
-   * worker, and a path that does not exist fails that Agent run rather than silently doing nothing.
-   */
-  modelWorkerEntry?: string;
 }
 
 /** Agent workspaces belong to the launching account, so they default inside its own node data directory. */
@@ -53,7 +39,6 @@ export function defaultAgentWorkspaceRoot(dataDirectory: string): string {
 }
 
 interface NodeTestDependencies {
-  modelWorkerEntry?: string;
   processOperations?: AgentProcessOperations;
   workspaceExecutor?: Pick<LinuxWorkspaceExecutor, "execute" | "status"> &
     Partial<Pick<LinuxWorkspaceExecutor, "receiptRevision">>;
@@ -65,18 +50,11 @@ interface NodeTestDependencies {
 
 class NodeAuthenticationError extends Error {}
 
-/** One authorized run this connection owns: its Agent, its abort handle and its notice sink. */
-interface ActiveAgentRun {
-  agentId: string;
-  controller: AbortController;
-  notice(conversationId: string): boolean;
-}
-
 export async function runLinuxNode(options: LinuxNodeOptions, signal: AbortSignal): Promise<void> {
   return runLinuxNodeInternal(options, signal, {});
 }
 
-/** Test-only entry seam; the production CLI does not read a worker path from configuration. */
+/** Test-only entry seam; substitutes only local execution or provisioning, never the model loop. */
 export async function runLinuxNodeWithTestDependencies(
   options: LinuxNodeOptions,
   signal: AbortSignal,
@@ -99,8 +77,6 @@ async function runLinuxNodeInternal(
     throw new Error("A new Linux node requires MATE_NODE_PAIRING_TOKEN");
   if (pairingToken && (pairingToken.length < 32 || pairingToken.length > 256))
     throw new Error("MATE_NODE_PAIRING_TOKEN is not valid");
-  if (options.modelWorkerEntry !== undefined && !isAbsolute(options.modelWorkerEntry))
-    throw new Error("MATE_NODE_MODEL_WORKER_ENTRY must be an absolute path");
   const heartbeatIntervalMs = positiveIntegerOption(
     options.heartbeatIntervalMs,
     HEARTBEAT_INTERVAL_MS,
@@ -135,7 +111,6 @@ async function runLinuxNodeInternal(
           heartbeatIntervalMs,
           heartbeatTimeoutMs,
           agentWorkspaceRoot,
-          options.modelWorkerEntry,
           dependencies,
           processOperations,
           workspaceExecutor,
@@ -210,7 +185,6 @@ function connectOnce(
   heartbeatIntervalMs: number,
   heartbeatTimeoutMs: number,
   agentWorkspaceRoot: string,
-  modelWorkerEntry: string | undefined,
   testDependencies: NodeTestDependencies,
   processOperations: AgentProcessOperations,
   workspaceExecutor:
@@ -233,47 +207,12 @@ function connectOnce(
       forceTerminateTimeout: ReturnType<typeof setTimeout> | undefined,
       pendingPing: string | undefined,
       timeout: ReturnType<typeof setTimeout> | undefined;
-    const pendingRunContexts = new Map<
-        string,
-        {
-          runId: string;
-          resolve(page: AgentRunPage & { fragment?: SessionFragment | undefined }): void;
-          reject(error: Error): void;
-        }
-      >(),
-      pendingRunTranscripts = new Map<
-        string,
-        { runId: string; resolve(accepted: boolean): void; reject(error: Error): void }
-      >(),
-      pendingRunTools = new Map<
-        string,
-        {
-          runId: string;
-          toolCallId: string;
-          resolve(result: { ok: true; result: unknown } | { ok: false; error: string }): void;
-          reject(error: Error): void;
-        }
-      >(),
-      activeRuns = new Map<string, ActiveAgentRun>();
-
-    const abortActiveRuns = (message: string) => {
-      for (const { controller } of activeRuns.values()) controller.abort(message);
-      activeRuns.clear();
-      for (const pending of pendingRunContexts.values()) pending.reject(new Error(message));
-      pendingRunContexts.clear();
-      for (const pending of pendingRunTranscripts.values()) pending.reject(new Error(message));
-      pendingRunTranscripts.clear();
-      for (const pending of pendingRunTools.values()) pending.reject(new Error(message));
-      pendingRunTools.clear();
-    };
-
     const cleanup = () => {
       if (heartbeat) clearInterval(heartbeat);
       if (pingTimeout) clearTimeout(pingTimeout);
       if (forceTerminateTimeout) clearTimeout(forceTerminateTimeout);
       if (timeout) clearTimeout(timeout);
       signal.removeEventListener("abort", onAbort);
-      abortActiveRuns("Node WebSocket connection ended");
       socket.removeEventListener("message", onMessage);
       socket.removeEventListener("close", onClose);
       if (socket.readyState === WebSocket.CLOSED) {
@@ -420,53 +359,6 @@ function connectOnce(
         process.stdout.write(`MATE_NODE_HEARTBEAT_ACK ${message.requestId}\n`);
         return;
       }
-      if (message.type === "control.agent.run.context") {
-        const pending = pendingRunContexts.get(message.requestId);
-        if (!pending || pending.runId !== message.runId) return;
-        pendingRunContexts.delete(message.requestId);
-        pending.resolve({
-          messages: message.messages,
-          nextCursor: message.nextCursor,
-          fragment: message.fragment,
-        });
-        return;
-      }
-      if (message.type === "control.agent.run.transcript_ack") {
-        const pending = pendingRunTranscripts.get(message.requestId);
-        if (!pending || pending.runId !== message.runId) return;
-        pendingRunTranscripts.delete(message.requestId);
-        pending.resolve(message.accepted);
-        return;
-      }
-      if (message.type === "control.agent.run.tool_result") {
-        const pending = pendingRunTools.get(message.requestId);
-        if (
-          !pending ||
-          pending.runId !== message.runId ||
-          pending.toolCallId !== message.toolCallId
-        )
-          return;
-        pendingRunTools.delete(message.requestId);
-        pending.resolve(
-          message.ok ? { ok: true, result: message.result } : { ok: false, error: message.error },
-        );
-        return;
-      }
-      if (message.type === "control.agent.run.notice") {
-        if (!authenticated)
-          throw new NodeAuthenticationError("控制面在节点身份验证前提示 Agent 运行。");
-        // A notice only reaches the run it names, and only while this node still owns that run.
-        const active = activeRuns.get(message.runId);
-        if (active?.agentId === message.agentId) active.notice(message.conversationId);
-        return;
-      }
-      if (message.type === "control.agent.run.cancel") {
-        if (!authenticated)
-          throw new NodeAuthenticationError("控制面在节点身份验证前取消 Agent 运行。");
-        const active = activeRuns.get(message.runId);
-        if (active?.agentId === message.agentId) active.controller.abort(message.reason);
-        return;
-      }
       if (message.type === "control.agent.activate") {
         if (!authenticated) throw new NodeAuthenticationError("控制面在节点身份验证前复启 Agent。");
         processOperations.allowAgent(message.agentId);
@@ -611,49 +503,6 @@ function connectOnce(
         });
         return;
       }
-      if (message.type === "control.agent.run") {
-        if (!authenticated)
-          throw new NodeAuthenticationError("控制面在节点身份验证前请求 Agent 运行。");
-        const runId = message.runId,
-          agentId = message.agentId;
-        if (
-          activeRuns.has(runId) ||
-          [...activeRuns.values()].some((run) => run.agentId === agentId) ||
-          activeRuns.size >= 2
-        ) {
-          message.apiKey = "";
-          sendRunResult(runId, agentId, false, "worker_failed");
-          return;
-        }
-        const controller = new AbortController();
-        // `onWorker` replaces this placeholder in the same synchronous step that registers the run,
-        // before any later control message can be handled, so no notice is ever lost to it.
-        const activeRun: ActiveAgentRun = { agentId, controller, notice: () => false };
-        activeRuns.set(runId, activeRun);
-        void runAgentModel(
-          message,
-          {
-            context: (cursor, runSignal) => requestAgentContext(runId, agentId, cursor, runSignal),
-            transcript: (text, runSignal) =>
-              requestAgentTranscript(runId, agentId, text, runSignal),
-            tool: (toolCallId, operation, input, runSignal) =>
-              requestAgentTool(runId, agentId, toolCallId, operation, input, runSignal),
-            result: (ok, code, reason) => sendRunResult(runId, agentId, ok, code, reason),
-          },
-          controller.signal,
-          {
-            ...(modelWorkerEntry
-              ? { modelWorkerEntry }
-              : testDependencies.modelWorkerEntry
-                ? { modelWorkerEntry: testDependencies.modelWorkerEntry }
-                : {}),
-            onWorker: (worker) => {
-              activeRun.notice = (conversationId) => worker.notice(conversationId);
-            },
-          },
-        ).finally(() => activeRuns.delete(runId));
-        return;
-      }
       if (message.type === "control.agent.provision") {
         if (!authenticated)
           throw new NodeAuthenticationError("控制面在节点身份验证前请求创建 Agent。");
@@ -679,206 +528,6 @@ function connectOnce(
         });
       }
     };
-
-    async function requestAgentContext(
-      runId: string,
-      agentId: string,
-      cursor: number,
-      runSignal: AbortSignal,
-    ): Promise<AgentRunPage> {
-      let offset = 0,
-        assembly: SessionAssembly | undefined;
-      while (true) {
-        const page = await requestAgentContextPart(runId, agentId, cursor, runSignal, offset);
-        if (!page.fragment) {
-          if (assembly) throw new Error("Incomplete Agent context");
-          return page;
-        }
-        assembly ??= new SessionAssembly(runId, page.fragment.total);
-        const serialized = assembly.accept(runId, page.fragment);
-        if (serialized !== undefined)
-          return {
-            messages: contextMessageSchema.array().parse(JSON.parse(serialized)),
-            nextCursor: page.nextCursor,
-          };
-        offset += page.fragment.data.length;
-      }
-    }
-
-    function requestAgentContextPart(
-      runId: string,
-      agentId: string,
-      cursor: number,
-      runSignal: AbortSignal,
-      offset: number,
-    ): Promise<AgentRunPage & { fragment?: SessionFragment | undefined }> {
-      const request = makeAgentRunRequest("node.agent.run.context", runId, agentId, {
-        cursor,
-        ...(offset ? { offset } : {}),
-        limit: 100,
-      });
-      const requestId = request.requestId;
-      return new Promise((resolvePage, rejectPage) => {
-        const onAbort = () => {
-          pendingRunContexts.delete(requestId);
-          rejectPage(new Error("Agent run was interrupted"));
-        };
-        pendingRunContexts.set(requestId, {
-          runId,
-          resolve: (page) => {
-            runSignal.removeEventListener("abort", onAbort);
-            resolvePage(page);
-          },
-          reject: (error) => {
-            runSignal.removeEventListener("abort", onAbort);
-            rejectPage(error);
-          },
-        });
-        runSignal.addEventListener("abort", onAbort, { once: true });
-        try {
-          sendRequest(socket, request);
-        } catch (error) {
-          pendingRunContexts.delete(requestId);
-          runSignal.removeEventListener("abort", onAbort);
-          rejectPage(error instanceof Error ? error : new Error("Could not request Agent context"));
-        }
-      });
-    }
-
-    async function requestAgentTranscript(
-      runId: string,
-      agentId: string,
-      entry: SessionCommit,
-      runSignal: AbortSignal,
-    ): Promise<boolean> {
-      const serialized = JSON.stringify(entry);
-      if (serialized.length <= sessionFragmentCharacters)
-        return requestAgentTranscriptPart(runId, agentId, entry, entry.id, runSignal);
-      for (let offset = 0; offset < serialized.length; offset += sessionFragmentCharacters) {
-        if (
-          !(await requestAgentTranscriptPart(
-            runId,
-            agentId,
-            sessionFragment(serialized, offset),
-            entry.id,
-            runSignal,
-          ))
-        )
-          return false;
-      }
-      return true;
-    }
-
-    function requestAgentTranscriptPart(
-      runId: string,
-      agentId: string,
-      entry: SessionCommit | SessionFragment,
-      entryId: string,
-      runSignal: AbortSignal,
-    ): Promise<boolean> {
-      const request = makeAgentRunRequest("node.agent.run.transcript", runId, agentId, {
-        entry,
-        requestId: entryId,
-      });
-      const requestId = request.requestId;
-      return new Promise((resolveAccepted, rejectAccepted) => {
-        const onAbort = () => {
-          pendingRunTranscripts.delete(requestId);
-          rejectAccepted(new Error("Agent run was interrupted"));
-        };
-        pendingRunTranscripts.set(requestId, {
-          runId,
-          resolve: (accepted) => {
-            runSignal.removeEventListener("abort", onAbort);
-            resolveAccepted(accepted);
-          },
-          reject: (error) => {
-            runSignal.removeEventListener("abort", onAbort);
-            rejectAccepted(error);
-          },
-        });
-        runSignal.addEventListener("abort", onAbort, { once: true });
-        try {
-          sendRequest(socket, request);
-        } catch (error) {
-          pendingRunTranscripts.delete(requestId);
-          runSignal.removeEventListener("abort", onAbort);
-          rejectAccepted(
-            error instanceof Error ? error : new Error("Could not record the Agent run transcript"),
-          );
-        }
-      });
-    }
-
-    function requestAgentTool(
-      runId: string,
-      agentId: string,
-      toolCallId: string,
-      operation: string,
-      input: Record<string, unknown>,
-      runSignal: AbortSignal,
-    ): Promise<{ ok: true; result: unknown } | { ok: false; error: string }> {
-      const request = makeAgentRunRequest("node.agent.run.tool", runId, agentId, {
-        toolCallId,
-        operation,
-        input,
-      });
-      const requestId = request.requestId;
-      return new Promise((resolveResult, rejectResult) => {
-        const onAbort = () => {
-          pendingRunTools.delete(requestId);
-          rejectResult(new Error("Agent run was interrupted"));
-        };
-        pendingRunTools.set(requestId, {
-          runId,
-          toolCallId,
-          resolve: (result) => {
-            runSignal.removeEventListener("abort", onAbort);
-            resolveResult(result);
-          },
-          reject: (error) => {
-            runSignal.removeEventListener("abort", onAbort);
-            rejectResult(error);
-          },
-        });
-        runSignal.addEventListener("abort", onAbort, { once: true });
-        try {
-          sendRequest(socket, request);
-        } catch (error) {
-          pendingRunTools.delete(requestId);
-          runSignal.removeEventListener("abort", onAbort);
-          rejectResult(error instanceof Error ? error : new Error("Could not call Agent tool"));
-        }
-      });
-    }
-
-    function sendRunResult(
-      runId: string,
-      agentId: string,
-      ok: boolean,
-      code?:
-        | "model_unavailable"
-        | "model_failed"
-        | "worker_failed"
-        | "credentials_invalid"
-        | "context_failed"
-        | "aborted",
-      reason?: string,
-    ): void {
-      if (socket.readyState !== WebSocket.OPEN || !authenticated) return;
-      try {
-        sendRequest(
-          socket,
-          makeAgentRunRequest("node.agent.run.result", runId, agentId, {
-            ok,
-            ...(ok || !code ? {} : { code }),
-            ...(ok || !reason ? {} : { reason }),
-          }),
-        );
-      } catch {
-        // The control plane will recover the durable run after this connection closes.
-      }
-    }
 
     signal.addEventListener("abort", onAbort, { once: true });
     socket.addEventListener("message", onMessage);

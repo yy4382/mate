@@ -1,4 +1,9 @@
-import { durableToolIdentity } from "@mate/protocol/node";
+import {
+  type SessionCommit,
+  type ModelContextMessage,
+  type ReportedUsage,
+} from "./session-record.js";
+import { durableToolIdentity } from "./agent-tool-identity.js";
 import { randomUUID } from "node:crypto";
 import {
   Agent,
@@ -6,165 +11,108 @@ import {
   type AgentTool,
   type StreamFn,
 } from "@earendil-works/pi-agent-core";
-import { Type, validateToolCall } from "@earendil-works/pi-ai";
+import { Type, validateToolCall, type Model } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import { z } from "zod";
 
 import {
-  contextMessageSchema,
-  type SessionCommit,
-  type ModelContextMessage,
-  type ReportedUsage,
-} from "@mate/protocol";
-import {
   SessionCompaction,
+  SummaryResponseError,
   confirmedModelResponse,
   providerResponseComplete,
   reportedGoogleUsage,
   reportedUsage,
 } from "./session-compaction.js";
 
-const runSchema = z
-  .object({
-    type: z.literal("run"),
-    nonce: z.string().uuid(),
-    spec: z
-      .object({
-        runId: z.string().uuid(),
-        agentId: z.string().uuid(),
-        sessionId: z.string().uuid(),
-        actionScopeId: z.string().uuid(),
-        sourceChannel: z
-          .object({
-            channelId: z.string().uuid(),
-            visibility: z.enum(["public", "private"]),
-          })
-          .strict(),
-        messages: z.array(contextMessageSchema).min(1),
-        prompt: z
-          .object({
-            name: z.string().min(1).max(80),
-            role: z.string().min(1).max(160),
-            description: z.string().max(1000),
-          })
-          .strict(),
-      })
-      .strict(),
-  })
-  .strict();
-const transcriptAckSchema = z
-  .object({
-    type: z.literal("transcript_ack"),
-    nonce: z.string().uuid(),
-    requestId: z.string().uuid(),
-    accepted: z.boolean(),
-  })
-  .strict();
-/**
- * A message arrived while this run is still in progress. The node composes the model-visible
- * wording, so no message text and no delivery state can travel on this channel.
- */
-const noticeSchema = z
-  .object({
-    type: z.literal("notice"),
-    nonce: z.string().uuid(),
-    conversationId: z.string().uuid(),
-  })
-  .strict();
-const toolReplySchema = z.discriminatedUnion("ok", [
-  z
-    .object({
-      type: z.literal("tool_result"),
-      nonce: z.string().uuid(),
-      requestId: z.string().uuid(),
-      toolCallId: z.string().min(1).max(500),
-      ok: z.literal(true),
-      result: z.json(),
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal("tool_result"),
-      nonce: z.string().uuid(),
-      requestId: z.string().uuid(),
-      toolCallId: z.string().min(1).max(500),
-      ok: z.literal(false),
-      error: z.string().min(1).max(240),
-    })
-    .strict(),
-]);
+export interface AgentLoopSpec {
+  sessionId: string;
+  actionScopeId: string;
+  messages: ModelContextMessage[];
+  prompt: { name: string; role: string; description: string };
+  provider: string;
+  modelId: string;
+  apiKey: string;
+}
+/** Fault injection at persistence boundaries, and a local HTTP provider in integration tests. */
+export interface AgentLoopTestDependencies {
+  modelForRun?: (model: Model<any>, apiKey: string) => Model<any>;
+  beforeSessionCommit?: (entry: SessionCommit) => Promise<void>;
+  afterSessionCommit?: (entry: SessionCommit) => Promise<void>;
+  beforeRunFinish?: () => Promise<void>;
+  beforeRunStart?: (runId: string) => Promise<void>;
+}
+export type AgentLoopResult = { ok: true } | { ok: false; code: string; reason?: string };
 
-export type ModelRunSpec = z.infer<typeof runSchema>["spec"];
-
-/** Run a single Pi Agent turn in this short-lived, credential-bearing process. */
-export function serveModelWorker(stream: StreamFn): void {
-  const models = builtinModels(),
-    provider = process.env.MATE_MODEL_PROVIDER,
-    modelId = process.env.MATE_MODEL_ID,
-    apiKey = process.env.MATE_MODEL_KEY,
-    model = provider && modelId ? models.getModel(provider, modelId) : undefined;
-  if (!model || !apiKey) {
-    process.send?.({ type: "failed", code: "model_unavailable" });
-    return;
+/** The transient Pi handle only advances the durable session owned by the control plane. */
+export class AgentLoop {
+  private agent: Agent | undefined;
+  private readonly controller = new AbortController();
+  private readonly notices: string[] = [];
+  cancel(): void {
+    this.controller.abort();
+    this.agent?.abort();
   }
-
-  const pending = new Map<string, { nonce: string; resolve(accepted: boolean): void }>(),
-    pendingTools = new Map<
-      string,
-      { nonce: string; toolCallId: string; resolve(reply: z.infer<typeof toolReplySchema>): void }
-    >();
-  let active = false;
-  /** The Pi loop currently producing this run, so a notice can reach it while it works. */
-  let running: { nonce: string; agent: Agent } | undefined;
-  process.on("message", async (raw: unknown) => {
-    const acknowledgement = transcriptAckSchema.safeParse(raw);
-    if (acknowledgement.success) {
-      const waiter = pending.get(acknowledgement.data.requestId);
-      if (waiter?.nonce === acknowledgement.data.nonce) {
-        pending.delete(acknowledgement.data.requestId);
-        waiter.resolve(acknowledgement.data.accepted);
-      }
-      return;
-    }
-    const toolReply = toolReplySchema.safeParse(raw);
-    if (toolReply.success) {
-      const waiter = pendingTools.get(toolReply.data.requestId);
-      if (
-        waiter?.nonce === toolReply.data.nonce &&
-        waiter.toolCallId === toolReply.data.toolCallId
-      ) {
-        pendingTools.delete(toolReply.data.requestId);
-        waiter.resolve(toolReply.data);
-      }
-      return;
-    }
-    const notice = noticeSchema.safeParse(raw);
-    if (notice.success) {
-      if (running?.nonce === notice.data.nonce)
-        running.agent.steer(runNoticeMessage(notice.data.conversationId));
-      return;
-    }
-    const run = runSchema.safeParse(raw);
-    if (!run.success || active) {
-      process.send?.({ type: "failed", code: "worker_failed" });
-      return;
-    }
-    active = true;
-    const nonce = run.data.nonce,
-      transcript = run.data.spec.messages
-        .filter((entry) => !entry.pending)
-        .map((entry) => entry.message);
-    let assistantIdentity = "",
-      actionScopeId = run.data.spec.actionScopeId;
-    const commit = async (entry: SessionCommit) => {
-      const accepted = await new Promise<boolean>((resolve) => {
-        pending.set(entry.id, { nonce, resolve });
-        process.send?.({ type: "transcript", nonce, requestId: entry.id, entry });
+  notice(conversationId: string): void {
+    if (this.controller.signal.aborted) return;
+    if (this.agent) this.agent.steer(runNoticeMessage(conversationId));
+    else this.notices.push(conversationId);
+  }
+  async run(
+    spec: AgentLoopSpec,
+    current: () => boolean,
+    append: (entry: SessionCommit) => boolean,
+    execute: (
+      toolCallId: string,
+      operation: string,
+      input: Record<string, unknown>,
+    ) => Promise<{ ok: true; result: unknown } | { ok: false; error: string }>,
+    test: AgentLoopTestDependencies = {},
+  ): Promise<AgentLoopResult> {
+    const assertCurrent = () => {
+      if (this.controller.signal.aborted || !current())
+        throw new Error("Agent run is no longer current");
+    };
+    const registry = builtinModels();
+    const selected = registry.getModel(spec.provider, spec.modelId);
+    if (!selected) return { ok: false, code: "model_unavailable" };
+    const model = test.modelForRun?.(selected, spec.apiKey) ?? selected,
+      apiKey = spec.apiKey;
+    let credentialResponse = false;
+    const stream: StreamFn = (model, context, options) => {
+      assertCurrent();
+      const fetchRequest = options?.fetch ?? fetch;
+      return registry.streamSimple(model, context, {
+        ...options,
+        ...(model.api === "google-generative-ai" || model.api === "google-vertex"
+          ? {}
+          : {
+              fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+                const response = await fetchRequest(input, init);
+                // SDKs may reject HTTP errors before invoking Pi's onResponse callback.
+                if (response.status === 401 || response.status === 403) credentialResponse = true;
+                return response;
+              },
+            }),
+        onResponse: async (response, selectedModel) => {
+          if (response.status === 401 || response.status === 403) credentialResponse = true;
+          await options?.onResponse?.(response, selectedModel);
+        },
       });
-      if (!accepted) throw new Error("The control plane rejected the session entry");
+    };
+    const transcript = spec.messages
+      .filter((entry) => !entry.pending)
+      .map((entry) => entry.message);
+    let assistantIdentity = "",
+      actionScopeId = spec.actionScopeId;
+    const commit = async (entry: SessionCommit) => {
+      assertCurrent();
+      await test.beforeSessionCommit?.(entry);
+      assertCurrent();
+      if (!append(entry)) throw new Error("Session persistence rejected the entry");
+      await test.afterSessionCommit?.(entry);
+      assertCurrent();
     };
     const compaction = new SessionCompaction(
-      run.data.spec.messages.filter((entry) => !entry.pending),
+      spec.messages.filter((entry) => !entry.pending),
       model,
       apiKey,
       stream,
@@ -176,32 +124,14 @@ export function serveModelWorker(stream: StreamFn): void {
       input: Record<string, unknown>,
       signal?: AbortSignal,
     ): Promise<unknown> => {
+      assertCurrent();
       if (signal?.aborted) throw new Error("Tool call aborted");
-      const requestId = randomUUID();
-      const durableToolCallId = durableToolIdentity(actionScopeId, assistantIdentity, toolCallId);
-      const result = await new Promise<z.infer<typeof toolReplySchema>>((resolve, reject) => {
-        const abort = () => {
-          pendingTools.delete(requestId);
-          reject(new Error("Tool call aborted"));
-        };
-        signal?.addEventListener("abort", abort, { once: true });
-        pendingTools.set(requestId, {
-          nonce,
-          toolCallId: durableToolCallId,
-          resolve: (reply) => {
-            signal?.removeEventListener("abort", abort);
-            resolve(reply);
-          },
-        });
-        process.send?.({
-          type: "tool",
-          nonce,
-          requestId,
-          toolCallId: durableToolCallId,
-          operation,
-          input,
-        });
-      });
+      const result = await execute(
+        durableToolIdentity(actionScopeId, assistantIdentity, toolCallId),
+        operation,
+        input,
+      );
+      assertCurrent();
       if (!result.ok) throw new Error(result.error);
       return result.result;
     };
@@ -272,18 +202,18 @@ export function serveModelWorker(stream: StreamFn): void {
         }),
       },
     ];
-    let credentialResponse = false;
     let compactionFailed = false;
     let compactionError: string | undefined;
     let inspectedNormalUsage:
       Promise<{ usage: ReportedUsage; complete: boolean } | null> | undefined;
     let normalRequestPending = false;
     const agent = new Agent({
-      sessionId: run.data.spec.sessionId,
+      sessionId: spec.sessionId,
       onResponse: (response) => {
         if (response.status === 401 || response.status === 403) credentialResponse = true;
       },
       streamFn: (selectedModel, context, options) => {
+        assertCurrent();
         normalRequestPending = true;
         inspectedNormalUsage = undefined;
         return stream(selectedModel, context, {
@@ -312,6 +242,12 @@ export function serveModelWorker(stream: StreamFn): void {
         try {
           return await compaction.transform(messages, signal);
         } catch (error) {
+          if (
+            error instanceof SummaryResponseError &&
+            error.response.errorMessage &&
+            providerCredentialError(error.response.errorMessage)
+          )
+            credentialResponse = true;
           compactionFailed = true;
           compactionError = error instanceof Error ? error.message : String(error);
           throw error;
@@ -320,15 +256,15 @@ export function serveModelWorker(stream: StreamFn): void {
       initialState: {
         model,
         systemPrompt: [
-          `你是 Mate 中的 Agent 同事「${run.data.spec.prompt.name}」。`,
-          `你的角色：${run.data.spec.prompt.role}`,
-          `介绍：${run.data.spec.prompt.description}`,
+          `你是 Mate 中的 Agent 同事「${spec.prompt.name}」。`,
+          `你的角色：${spec.prompt.role}`,
+          `介绍：${spec.prompt.description}`,
           // The run prompt schedules work from the Agent's whole continuing record; it does not
           // restrict history to explaining the current input. A mid-run notice is a separate
           // mechanism with its own text and is not described here.
           "输入消息首次呈现时标出来源频道与可见范围。你跨频道、讨论串和私信共用同一条逻辑会话；历史是你自己持续工作的记录，不只是对本次输入的解释。你可以根据本次输入、仍由你负责的未完成任务、提醒和你自己组织的工作区记忆，自行决定先做什么、继续什么、暂缓什么或保持静默。",
           "为某条消息展开实际工作（而不只是回答或讨论）时，默认先对那条消息调用一次 tasks.claim_message：它认领那条消息已有的任务，没有时创建并认领该讨论原顶层消息对应的任务；已被同伴认领时返回冲突，供你先协调而不抢占。纯讨论、回答和不冲突的协助无需认领；这只是默认工作约定，不构成其他工具的后端通行证，你仍按对话权限阅读和协作。",
-          "任务、提醒和你自己组织的工作区记忆都是持久事实，服务重启、更换模型进程或会话压缩后仍可用 tasks.list、reminders.list、workspace.list 和 workspace.read 找回；压缩只更换后续模型调用使用的上下文，不产生第二条逻辑会话。任务状态只由任务工具更新，不会因为你发言、保持静默或运行结束而自动完成。",
+          "任务、提醒和你自己组织的工作区记忆都是持久事实，服务重启、开始新的 run或会话压缩后仍可用 tasks.list、reminders.list、workspace.list 和 workspace.read 找回；压缩只更换后续模型调用使用的上下文，不产生第二条逻辑会话。任务状态只由任务工具更新，不会因为你发言、保持静默或运行结束而自动完成。",
           // The workspace is an organisation location, not a confidentiality boundary between
           // Agents: this is a courtesy reminder, and the Agent keeps the judgement. Mate does not
           // attach a permission request, a violation finding or a required explanation to it.
@@ -342,7 +278,11 @@ export function serveModelWorker(stream: StreamFn): void {
       },
       toolExecution: "sequential",
     });
-    running = { nonce, agent };
+    this.agent = agent;
+    for (const conversationId of this.notices.splice(0))
+      agent.steer(runNoticeMessage(conversationId));
+    const abort = () => agent.abort();
+    this.controller.signal.addEventListener("abort", abort, { once: true });
     let unsuccessfulStopReason: "error" | "aborted" | undefined;
     let contextOverflow = false;
     const unsubscribe = agent.subscribe(async (event) => {
@@ -353,6 +293,7 @@ export function serveModelWorker(stream: StreamFn): void {
         event.message.role !== "toolResult"
       )
         return;
+      assertCurrent();
       const id = randomUUID();
       const assistant = event.message.role === "assistant" ? event.message : null;
       const isGoogle =
@@ -370,6 +311,14 @@ export function serveModelWorker(stream: StreamFn): void {
         normalRequestPending = false;
         inspectedNormalUsage = undefined;
       }
+      assertCurrent();
+      if (assistant && (assistant.stopReason === "error" || assistant.stopReason === "aborted")) {
+        if (assistant.errorMessage && providerCredentialError(assistant.errorMessage))
+          credentialResponse = true;
+        unsuccessfulStopReason = assistant.stopReason;
+        contextOverflow = isContextOverflow(assistant.errorMessage);
+        if (!modelRequest) return;
+      }
       await commit({
         kind: "message",
         id,
@@ -379,7 +328,7 @@ export function serveModelWorker(stream: StreamFn): void {
       compaction.record(id, event.message);
       if (event.message.role === "assistant") {
         assistantIdentity = id;
-        actionScopeId = run.data.spec.actionScopeId;
+        actionScopeId = spec.actionScopeId;
         if (event.message.stopReason === "error" || event.message.stopReason === "aborted")
           unsuccessfulStopReason = event.message.stopReason;
         if (event.message.stopReason === "error" && isContextOverflow(event.message.errorMessage))
@@ -388,6 +337,7 @@ export function serveModelWorker(stream: StreamFn): void {
     });
 
     try {
+      assertCurrent();
       await commit({
         kind: "configuration",
         id: randomUUID(),
@@ -404,14 +354,14 @@ export function serveModelWorker(stream: StreamFn): void {
         },
       });
       // Resume only calls whose assistant message was durably accepted. Their operation identity
-      // survives model-process and node restarts; brokers return existing receipts instead of rerunning effects.
-      for (const [entryIndex, entry] of run.data.spec.messages.entries()) {
+      // survives control-plane and node restarts; brokers return existing receipts instead of rerunning effects.
+      for (const [entryIndex, entry] of spec.messages.entries()) {
         if (
           entry.message.role !== "assistant" ||
           (entry.message.stopReason !== "toolUse" && entry.message.stopReason !== "length")
         )
           continue;
-        const following = run.data.spec.messages.slice(entryIndex + 1);
+        const following = spec.messages.slice(entryIndex + 1);
         const nextAssistant = following.findIndex((item) => item.message.role === "assistant");
         const results = following.slice(0, nextAssistant < 0 ? undefined : nextAssistant);
         for (const call of entry.message.content) {
@@ -455,7 +405,7 @@ export function serveModelWorker(stream: StreamFn): void {
           agent.state.messages = [...agent.state.messages, message];
         }
       }
-      for (const entry of run.data.spec.messages.filter((entry) => entry.pending)) {
+      for (const entry of spec.messages.filter((entry) => entry.pending)) {
         await commit({ kind: "message", id: entry.id, message: entry.message });
         compaction.record(entry.id, entry.message);
         agent.state.messages = [...agent.state.messages, entry.message];
@@ -476,7 +426,7 @@ export function serveModelWorker(stream: StreamFn): void {
         compaction.record(id, message);
         agent.state.messages = [...agent.state.messages, message];
       }
-      // A completed silent/final response followed by a lost run ACK needs no new generation.
+      // A completed silent/final response followed by a lost run completion commit needs no new generation.
       if (agent.state.messages.at(-1)?.role !== "assistant") {
         await agent.continue();
         if (contextOverflow) {
@@ -498,20 +448,17 @@ export function serveModelWorker(stream: StreamFn): void {
         }
       }
       if (unsuccessfulStopReason) throw new Error("The model returned an unsuccessful result");
-      process.send?.({ type: "done", nonce });
+      return { ok: true };
     } catch (error) {
-      if (process.env.MATE_MODEL_TEST_DIAGNOSTICS === "1")
-        process.stderr.write(
-          `Pi model worker failed: ${(error instanceof Error ? (error.stack ?? error.message) : String(error)).slice(0, 1500)}\n`,
-        );
-      process.send?.({
-        type: "failed",
-        nonce,
-        code: credentialResponse
-          ? "credentials_invalid"
-          : compactionFailed
-            ? "context_failed"
-            : "model_failed",
+      return {
+        ok: false,
+        code: this.controller.signal.aborted
+          ? "aborted"
+          : credentialResponse
+            ? "credentials_invalid"
+            : compactionFailed
+              ? "context_failed"
+              : "model_failed",
         ...(compactionFailed
           ? {
               reason: (
@@ -519,24 +466,14 @@ export function serveModelWorker(stream: StreamFn): void {
               ).slice(0, 240),
             }
           : {}),
-      });
+      };
     } finally {
-      running = undefined;
+      this.controller.signal.removeEventListener("abort", abort);
+      this.agent = undefined;
       unsubscribe();
-      for (const waiter of pending.values()) waiter.resolve(false);
-      pending.clear();
-      pendingTools.clear();
     }
-  });
-  process.on("disconnect", () => process.exit(0));
+  }
 }
-
-/**
- * The model-visible wording of a mid-run notice. It names the conversation that received a
- * message and nothing else: no body, no author, no delivery identity, and no read receipt.
- *
- * The same message-end commit path preserves a notice only when Pi consumes it.
- */
 function isContextOverflow(message: string | undefined): boolean {
   return Boolean(
     message &&
@@ -545,22 +482,22 @@ function isContextOverflow(message: string | undefined): boolean {
     ),
   );
 }
-
+function providerCredentialError(message: string): boolean {
+  // Google SDK keeps its JSON error body; Pi also formats normalized HTTP failures
+  // as "<status>: <body>". Neither case depends on the provider's message prose.
+  if (/^(401|403):\s/.test(message)) return true;
+  try {
+    const error = JSON.parse(message);
+    const status = error.error?.code ?? error.status;
+    return status === 401 || status === 403;
+  } catch {
+    return false;
+  }
+}
 function runNoticeMessage(conversationId: string): AgentMessage {
   return {
     role: "user",
     content: `[运行提示] 对话 ${conversationId} 有新消息到达。这条提示只说明有新消息，不含正文，也没有把任何消息标为已读；你可以用 conversations.read 或 attention.list 现在查看，也可以继续手上的工作，把它留给下一轮同一会话。`,
     timestamp: Date.now(),
   };
-}
-
-if (process.env.MATE_MODEL_WORKER === "1") {
-  const models = builtinModels();
-  serveModelWorker((model, context, options) =>
-    models.streamSimple(model, context, {
-      ...options,
-      apiKey: process.env.MATE_MODEL_KEY!,
-      env: {},
-    }),
-  );
 }

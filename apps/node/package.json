@@ -12,10 +12,6 @@
       "types": "./dist/main.d.ts",
       "import": "./dist/main.js"
     },
-    "./agent-runner": {
-      "types": "./dist/nodes/agent-runner.d.ts",
-      "import": "./dist/nodes/agent-runner.js"
-    },
     "./agent-provisioner": {
       "types": "./dist/nodes/agent-provisioner.d.ts",
       "import": "./dist/nodes/agent-provisioner.js"
@@ -31,14 +27,6 @@
     "./workspace-execution": {
       "types": "./dist/nodes/workspace-execution.d.ts",
       "import": "./dist/nodes/workspace-execution.js"
-    },
-    "./model-process": {
-      "types": "./dist/nodes/model-process.d.ts",
-      "import": "./dist/nodes/model-process.js"
-    },
-    "./model-worker": {
-      "types": "./dist/nodes/model-worker.d.ts",
-      "import": "./dist/nodes/model-worker.js"
     },
     "./database": {
       "types": "./dist/nodes/database.d.ts",
@@ -60,8 +48,6 @@
   },
   "dependencies": {
     "@mate/protocol": "workspace:*",
-    "@earendil-works/pi-agent-core": "0.86.0",
-    "@earendil-works/pi-ai": "0.86.0",
     "better-sqlite3": "13.0.3",
     "fs-ext": "2.1.1",
     "ws": "8.21.3",

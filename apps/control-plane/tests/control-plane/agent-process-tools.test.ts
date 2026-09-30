@@ -1,3 +1,4 @@
+import { toolTestApp, toolTestInput, type TestRun } from "../helpers/tool-run.js";
 import { AgentSession } from "../../src/agent-session.js";
 import { assistantEntry } from "../helpers/session.js";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -42,7 +43,7 @@ async function setup() {
   chmodSync(directory, 0o700);
   const passwordFile = join(directory, "owner-password");
   writeFileSync(passwordFile, `${password}\n`, { mode: 0o600 });
-  const app = createControlPlaneApp({ dataDir: join(directory, "control-plane"), passwordFile });
+  const app = toolTestApp({ dataDir: join(directory, "control-plane"), passwordFile });
   const db = new Database(join(directory, "control-plane", "control-plane.sqlite"));
   fixtures.push({ app, directory, db });
   const login = await app.request("/api/auth/login", {
@@ -64,7 +65,8 @@ async function setup() {
     publicKeyEncoding: { type: "spki", format: "pem" },
   });
   const nodeId = randomUUID();
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
       type: "node.pair",
@@ -78,18 +80,14 @@ async function setup() {
   return { app, cookie, db, nodeId, socket, keyPair };
 }
 
-async function waitForRun(
-  socket: FakeNodeSocket,
-  startAt: number,
-): Promise<Extract<NodeControlMessage, { type: "control.agent.run" }>> {
+async function waitForRun(socket: FakeNodeSocket, startAt: number): Promise<TestRun> {
   const deadline = Date.now() + 4000;
   while (Date.now() < deadline) {
     const message = socket.sent
       .slice(startAt)
       .map((text) => JSON.parse(text) as Record<string, unknown>)
-      .find((candidate) => candidate.type === "control.agent.run");
-    if (message)
-      return message as unknown as Extract<NodeControlMessage, { type: "control.agent.run" }>;
+      .find((candidate) => candidate.type === "test.run.started");
+    if (message) return message as unknown as TestRun;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error("The Agent process tool test did not start a run");
@@ -111,10 +109,11 @@ async function sendTool(
   operation: string,
   input: Record<string, unknown>,
 ): Promise<void> {
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
-      type: "node.agent.run.tool",
+      type: "tools.execute",
       requestId: randomUUID(),
       runId: run.runId,
       agentId: run.agentId,
@@ -194,7 +193,7 @@ it.each(["restart", "reconnect", "conflicting receipt", "malformed workspace"])(
     const restarted =
       mode === "reconnect"
         ? app
-        : createControlPlaneApp({
+        : toolTestApp({
             dataDir: join(directory, "control-plane"),
             passwordFile: join(directory, "owner-password"),
           });
@@ -202,7 +201,8 @@ it.each(["restart", "reconnect", "conflicting receipt", "malformed workspace"])(
       const recovered = new FakeNodeSocket();
       restarted.nodes.open(recovered);
       const challenge = JSON.parse(recovered.sent[0]!) as { nonce: string };
-      await restarted.nodes.receive(
+      await toolTestInput(
+        restarted,
         recovered,
         JSON.stringify({
           type: "node.authenticate",
@@ -217,10 +217,9 @@ it.each(["restart", "reconnect", "conflicting receipt", "malformed workspace"])(
         .map((text) => JSON.parse(text) as Record<string, unknown>)
         .find((message) => message.type === "control.process.reconcile")!;
       expect(reconcile).toMatchObject({ operations: [{ operationId, agentId }] });
-      expect(recovered.sent.some((text) => text.includes('"type":"control.agent.run"'))).toBe(
-        false,
-      );
-      await restarted.nodes.receive(
+      expect(recovered.sent.some((text) => text.includes('"type":"test.run.started"'))).toBe(false);
+      await toolTestInput(
+        restarted,
         recovered,
         JSON.stringify({
           type: "node.process.reconcile.result",
@@ -258,10 +257,11 @@ it.each(["restart", "reconnect", "conflicting receipt", "malformed workspace"])(
       const next = await waitForRun(recovered, 0);
       expect(next.runId).not.toBe(run.runId);
       expect(next.sessionId).toBe(run.sessionId);
-      await restarted.nodes.receive(
+      await toolTestInput(
+        restarted,
         recovered,
         JSON.stringify({
-          type: "node.agent.run.context",
+          type: "session.read",
           requestId: randomUUID(),
           runId: next.runId,
           agentId,
@@ -291,20 +291,22 @@ it.each(["restart", "reconnect", "conflicting receipt", "malformed workspace"])(
           entry.message.content.startsWith("Mate 收据更正："),
       );
       for (const entry of corrections)
-        await restarted.nodes.receive(
+        await toolTestInput(
+          restarted,
           recovered,
           JSON.stringify({
-            type: "node.agent.run.transcript",
+            type: "session.append",
             requestId: entry.id,
             runId: next.runId,
             agentId,
             entry: { kind: "message", id: entry.id, message: entry.message },
           }),
         );
-      await restarted.nodes.receive(
+      await toolTestInput(
+        restarted,
         recovered,
         JSON.stringify({
-          type: "node.agent.run.context",
+          type: "session.read",
           requestId: randomUUID(),
           runId: next.runId,
           agentId,
@@ -392,7 +394,8 @@ it("rechecks stopped scopes after a restarted node confirms an ordinary operatio
           (message.operation as { kind?: string })?.kind === "process.stop_all",
       );
   const firstStop = stopRequests(socket)[0]!;
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
       type: "node.process.operation.result",
@@ -411,7 +414,8 @@ it("rechecks stopped scopes after a restarted node confirms an ordinary operatio
   const reconnect = new FakeNodeSocket();
   app.nodes.open(reconnect);
   const challenge = JSON.parse(reconnect.sent[0]!) as { nonce: string };
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     reconnect,
     JSON.stringify({
       type: "node.authenticate",
@@ -429,7 +433,8 @@ it("rechecks stopped scopes after a restarted node confirms an ordinary operatio
       expect.objectContaining({ operationId: firstStop.operationId, agentId }),
     ]),
   );
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     reconnect,
     JSON.stringify({
       type: "node.process.reconcile.result",
@@ -467,7 +472,8 @@ it("rechecks stopped scopes after a restarted node confirms an ordinary operatio
         text.includes("control.process.operation"),
     ),
   ).toBe(false);
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     reconnect,
     JSON.stringify({
       type: "node.process.operation.result",
@@ -479,7 +485,8 @@ it("rechecks stopped scopes after a restarted node confirms an ordinary operatio
     }),
   );
   await waitFor(() => app.runs?.stopStatus(agentId).state === "unknown");
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     reconnect,
     JSON.stringify({
       type: "node.process.operation.result",
@@ -501,7 +508,8 @@ it("rechecks stopped scopes after a restarted node confirms an ordinary operatio
   const verify = reconnect.sent
     .map((text) => JSON.parse(text) as Record<string, unknown>)
     .find((message) => message.type === "control.agent.provision" && message.verifyOnly)!;
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     reconnect,
     JSON.stringify({
       type: "node.agent.provision.result",
@@ -514,10 +522,11 @@ it("rechecks stopped scopes after a restarted node confirms an ordinary operatio
   expect(await resuming).toEqual({ ok: true });
   expect(app.runs?.pauseReason(agentId)).toBeNull();
   const resumed = await waitForRun(reconnect, 0);
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     reconnect,
     JSON.stringify({
-      type: "node.agent.run.context",
+      type: "session.read",
       requestId: randomUUID(),
       runId: resumed.runId,
       agentId,
@@ -546,11 +555,12 @@ it("rechecks stopped scopes after a restarted node confirms an ordinary operatio
     receipt: { stopped: true, units: [] },
     revision: 3,
   };
-  await app.nodes.receive(reconnect, JSON.stringify(lateStop));
-  await app.nodes.receive(
+  await toolTestInput(app, reconnect, JSON.stringify(lateStop));
+  await toolTestInput(
+    app,
     reconnect,
     JSON.stringify({
-      type: "node.agent.run.context",
+      type: "session.read",
       requestId: randomUUID(),
       runId: resumed.runId,
       agentId,
@@ -571,7 +581,7 @@ it("rechecks stopped scopes after a restarted node confirms an ordinary operatio
       message: additions[0]!.message,
     }),
   ).toBe(true);
-  await app.nodes.receive(reconnect, JSON.stringify(lateStop));
+  await toolTestInput(app, reconnect, JSON.stringify(lateStop));
   expect(session.pendingCorrections(agentId, resumed.runId)).toEqual([]);
   expect(JSON.stringify(session.read(agentId))).toContain("old_command_may_still_run");
 });
@@ -664,7 +674,8 @@ it("dispatches ordinary commands from a durable intent without privileged approv
       .get(processRequest!.operationId),
   ).toEqual({ state: "executing" });
 
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
       type: "node.process.operation.result",
@@ -682,7 +693,7 @@ it("dispatches ordinary commands from a durable intent without privileged approv
     result?: { operationId: string; state: string; receipt: { stdout: string } };
   };
   expect(reply).toMatchObject({
-    type: "control.agent.run.tool_result",
+    type: "tools.result",
     ok: true,
     result: {
       operationId: processRequest!.operationId,
@@ -830,7 +841,8 @@ it("runs an explicit sudo the Agent wrote as one ordinary command with its own r
   });
 
   // The host decided the command failed; the Agent gets that ordinary receipt and nothing else.
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
       type: "node.process.operation.result",
@@ -924,7 +936,8 @@ it("reconciles a durable node receipt before resuming a disconnected Agent", asy
   const reconnect = new FakeNodeSocket();
   app.nodes.open(reconnect);
   const challenge = JSON.parse(reconnect.sent[0]!) as { nonce: string };
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     reconnect,
     JSON.stringify({
       type: "node.authenticate",
@@ -937,8 +950,9 @@ it("reconciles a durable node receipt before resuming a disconnected Agent", asy
     .map((text) => JSON.parse(text) as Record<string, unknown>)
     .find((message) => message.type === "control.process.reconcile")!;
   expect(reconcile.operations).toMatchObject([{ operationId: operation!.operationId, agentId }]);
-  expect(reconnect.sent.some((text) => text.includes('control.agent.run"'))).toBe(false);
-  await app.nodes.receive(
+  expect(reconnect.sent.some((text) => text.includes('test.run.started"'))).toBe(false);
+  await toolTestInput(
+    app,
     reconnect,
     JSON.stringify({
       type: "node.process.reconcile.result",
@@ -955,10 +969,11 @@ it("reconciles a durable node receipt before resuming a disconnected Agent", asy
   ).toEqual({ state: "succeeded" });
   const next = await waitForRun(reconnect, 0);
   expect(next.runId).not.toBe(oldRun.runId);
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     reconnect,
     JSON.stringify({
-      type: "node.agent.run.context",
+      type: "session.read",
       requestId: randomUUID(),
       runId: next.runId,
       agentId,
@@ -971,13 +986,14 @@ it("reconciles a durable node receipt before resuming a disconnected Agent", asy
     context.messages.some(
       (message) =>
         JSON.stringify(message).includes(String(operation!.operationId)) &&
-        JSON.stringify(message).includes("成功"),
+        JSON.stringify(message).includes("succeeded"),
     ),
   ).toBe(true);
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     reconnect,
     JSON.stringify({
-      type: "node.agent.run.transcript",
+      type: "session.append",
       requestId: randomUUID(),
       runId: oldRun.runId,
       agentId,
@@ -985,13 +1001,14 @@ it("reconciles a durable node receipt before resuming a disconnected Agent", asy
     }),
   );
   expect(JSON.parse(reconnect.sent.at(-1)!)).toMatchObject({
-    type: "control.agent.run.transcript_ack",
+    type: "session.commit",
     accepted: false,
   });
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     reconnect,
     JSON.stringify({
-      type: "node.agent.run.tool",
+      type: "tools.execute",
       requestId: randomUUID(),
       runId: oldRun.runId,
       agentId,
@@ -1001,7 +1018,7 @@ it("reconciles a durable node receipt before resuming a disconnected Agent", asy
     }),
   );
   expect(JSON.parse(reconnect.sent.at(-1)!)).toMatchObject({
-    type: "control.agent.run.tool_result",
+    type: "tools.result",
     ok: false,
   });
   const safeResponse = await app.request(`/api/owner/agents/${agentId}/activity`, {
@@ -1052,7 +1069,8 @@ it("reconciles a durable node receipt before resuming a disconnected Agent", asy
   const again = new FakeNodeSocket();
   app.nodes.open(again);
   const secondChallenge = JSON.parse(again.sent[0]!) as { nonce: string };
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     again,
     JSON.stringify({
       type: "node.authenticate",
@@ -1071,7 +1089,8 @@ it("reconciles a durable node receipt before resuming a disconnected Agent", asy
       expect.objectContaining({ operationId: secondOperation!.operationId, agentId }),
     ]),
   );
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     again,
     JSON.stringify({
       type: "node.process.reconcile.result",
@@ -1085,7 +1104,8 @@ it("reconciles a durable node receipt before resuming a disconnected Agent", asy
       .get(secondOperation!.operationId),
   ).toEqual({ state: "unknown" });
   await waitForRun(again, 0); // No proof delays neither this Agent nor other online Agents.
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     again,
     JSON.stringify({
       type: "node.process.operation.result",
@@ -1167,161 +1187,4 @@ it("reconciles a durable node receipt before resuming a disconnected Agent", asy
     node_receipt_revision: 3,
     receipt_json: JSON.stringify({ code: 0 }),
   });
-});
-
-it("pauses for credential failures and owner choice while transient model failures back off", async () => {
-  const { app, cookie, db, nodeId, socket } = await setup();
-  const agentId = randomUUID();
-  app.agents.prepare({
-    id: agentId,
-    nodeId,
-    name: "Pause Agent",
-    role: "Tests retry state",
-    description: "Synthetic model failure fixture.",
-    model: { provider: "openai", id: "gpt-4.1" },
-  });
-  app.agents.complete(
-    agentId,
-    {
-      username: `mate_${agentId.replaceAll("-", "").slice(0, 27)}`,
-      uid: 23004,
-      gid: 23004,
-      workspace: `/var/lib/mate/agents/${agentId}`,
-      workspaceMarker: "a".repeat(64),
-    },
-    app.chat,
-  );
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  await app.request("/api/owner/model-credentials/openai", {
-    method: "PUT",
-    headers: { cookie, "content-type": "application/json" },
-    body: JSON.stringify({ apiKey: "synthetic-key-a" }),
-  });
-  const start = socket.sent.length;
-  app.chat.createMessage(direct.id, "Pending while credentials fail.");
-  const run = await waitForRun(socket, start);
-  await app.nodes.receive(
-    socket,
-    JSON.stringify({
-      type: "node.agent.run.result",
-      requestId: randomUUID(),
-      runId: run.runId,
-      agentId,
-      ok: false,
-      code: "credentials_invalid",
-    }),
-  );
-  expect(app.runs?.pauseReason(agentId)).toBe("credentials");
-  expect(
-    db.prepare("SELECT state FROM owner_message_deliveries WHERE id=?").get(run.actionScopeId),
-  ).toEqual({ state: "pending" });
-  const credentialActivity = await app.request(`/api/owner/agents/${agentId}/activity`, {
-    headers: { cookie },
-  });
-  expect(((await credentialActivity.json()) as { pausedReason: string }).pausedReason).toBe(
-    "credentials",
-  );
-  const pausedCount = socket.sent.filter((text) =>
-    text.includes('"type":"control.agent.run"'),
-  ).length;
-  await new Promise((resolve) => setTimeout(resolve, 300));
-  expect(socket.sent.filter((text) => text.includes('"type":"control.agent.run"'))).toHaveLength(
-    pausedCount,
-  );
-  const retryStart = socket.sent.length;
-  await app.request("/api/owner/model-credentials/openai", {
-    method: "PUT",
-    headers: { cookie, "content-type": "application/json" },
-    body: JSON.stringify({ apiKey: "synthetic-key-b" }),
-  });
-  const retry = await waitForRun(socket, retryStart);
-  expect(retry.runId).not.toBe(run.runId);
-  socket.onSend = (message) => {
-    if (
-      message.type === "control.process.operation" &&
-      (message.operation as { kind?: string })?.kind === "process.stop_all"
-    )
-      queueMicrotask(
-        () =>
-          void app.nodes.receive(
-            socket,
-            JSON.stringify({
-              type: "node.process.operation.result",
-              requestId: message.requestId,
-              operationId: message.operationId,
-              agentId,
-              state: "succeeded",
-              receipt: { stopped: true, units: [] },
-            }),
-          ),
-      );
-    if (message.type === "control.agent.provision" && message.verifyOnly)
-      queueMicrotask(
-        () =>
-          void app.nodes.receive(
-            socket,
-            JSON.stringify({
-              type: "node.agent.provision.result",
-              requestId: message.requestId,
-              agentId,
-              ok: true,
-              identity: {
-                username: `mate_${agentId.replaceAll("-", "").slice(0, 27)}`,
-                uid: 23004,
-                gid: 23004,
-                workspace: `/var/lib/mate/agents/${agentId}`,
-                workspaceMarker: "a".repeat(64),
-              },
-            }),
-          ),
-      );
-  };
-  const pause = await app.request(`/api/owner/agents/${agentId}/pause`, {
-    method: "POST",
-    headers: { cookie },
-  });
-  expect(pause.status).toBe(200);
-  expect(app.runs?.pauseReason(agentId)).toBe("manual");
-  expect(db.prepare("SELECT error_code FROM owner_agent_runs WHERE id=?").get(retry.runId)).toEqual(
-    { error_code: "manual_pause" },
-  );
-  for (
-    let attempt = 0;
-    attempt < 30 && app.runs?.stopStatus(agentId).state !== "succeeded";
-    attempt++
-  )
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  expect(app.runs?.stopStatus(agentId).state).toBe("succeeded");
-  const resumedStart = socket.sent.length;
-  const resume = await app.request(`/api/owner/agents/${agentId}/resume`, {
-    method: "POST",
-    headers: { cookie },
-  });
-  expect(resume.status, await resume.text()).toBe(200);
-  expect(
-    socket.sent.slice(resumedStart).some((text) => {
-      const message = JSON.parse(text) as { type: string; agentId?: string };
-      return message.type === "control.agent.activate" && message.agentId === agentId;
-    }),
-  ).toBe(true);
-  const third = await waitForRun(socket, resumedStart);
-  expect(third.runId).not.toBe(retry.runId);
-  const before = Date.now();
-  await app.nodes.receive(
-    socket,
-    JSON.stringify({
-      type: "node.agent.run.result",
-      requestId: randomUUID(),
-      runId: third.runId,
-      agentId,
-      ok: false,
-      code: "model_failed",
-    }),
-  );
-  const failed = db
-    .prepare("SELECT error_code,retry_at FROM owner_agent_runs WHERE id=?")
-    .get(third.runId) as { error_code: string; retry_at: number };
-  expect(failed.error_code).toBe("model_failed");
-  expect(failed.retry_at).toBeGreaterThanOrEqual(before + 1000);
-  expect(app.runs?.pauseReason(agentId)).toBeNull();
 });

@@ -3,7 +3,8 @@ import {
   type ModelContextMessage,
   type SessionCheckpoint,
   type SessionCommit,
-} from "@mate/protocol";
+} from "./session-record.js";
+
 import { randomUUID } from "node:crypto";
 import type { AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
 import {
@@ -64,6 +65,12 @@ Summarize the prefix to provide context for the retained suffix:
 - [Information needed to understand the retained recent work, including uncertain effects]
 
 Be concise. Focus on what's needed to understand the kept suffix.`;
+
+export class SummaryResponseError extends Error {
+  constructor(readonly response: AssistantMessage) {
+    super(`Summarization failed with ${response.stopReason}`);
+  }
+}
 
 /** Pi's normalized Usage fills absent provider fields with zero. Inspect only the provider's
  * usage fields at the HTTP boundary; never retain its response body or assume an absent field is 0. */
@@ -458,7 +465,7 @@ export class SessionCompaction {
       response.stopReason !== "stop" ||
       response.content.some((block) => block.type === "toolCall")
     )
-      throw new Error(`Summarization failed with ${response.stopReason}`);
+      throw new SummaryResponseError(response);
     const text = contentText(response.content).trim();
     if (!text) throw new Error("Summarization returned an empty summary");
     return { text, requestId };

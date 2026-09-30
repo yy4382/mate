@@ -63,7 +63,7 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
 
 /**
  * Read the running account's real identity. Mate never switches identity, so the node and every
- * model process it starts report the same username, UID and GID. Root is refused here rather than
+ * ordinary command it starts report the same username, UID and GID. Root is refused here rather than
  * reported: this release never runs the node as root, and every Agent on the node would otherwise
  * be created with root as its account.
  */

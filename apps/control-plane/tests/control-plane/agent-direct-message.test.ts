@@ -1,4 +1,6 @@
-import { assistantEntry, consumeContextPage } from "../helpers/session.js";
+import { toolTestApp, bindToolSocket, toolTestInput, type TestRun } from "../helpers/tool-run.js";
+import { type ModelContextMessage } from "../../src/session-record.js";
+import { assistantEntry } from "../helpers/session.js";
 import {
   chmodSync,
   existsSync,
@@ -16,12 +18,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createControlPlaneApp } from "../../src/http.js";
 import { WorkspaceService } from "../../src/workspace.js";
 import type { NodeSocket } from "../../src/nodes/directory.js";
-import { runAgentModel, type AgentRunTransport } from "@mate/node/agent-runner";
-import {
-  AgentProvisionStageSchema,
-  type NodeControlMessage,
-  type ModelContextMessage,
-} from "@mate/protocol";
+import { AgentProvisionStageSchema, type NodeControlMessage } from "@mate/protocol";
 
 const password = "agent-direct-message-owner-password";
 type OwnerMessageLike = { id: string; text: string };
@@ -45,10 +42,7 @@ class FakeNodeSocket implements NodeSocket {
   onWorkspaceOperation?: (message: Record<string, unknown>) => void | Promise<void>;
   send(data: string) {
     const message = JSON.parse(data) as { type?: string; toolCallId?: string };
-    if (
-      message.type === "control.agent.run.tool_result" &&
-      message.toolCallId === this.dropToolCallId
-    ) {
+    if (message.type === "tools.result" && message.toolCallId === this.dropToolCallId) {
       this.dropToolCallId = undefined;
       return;
     }
@@ -65,7 +59,7 @@ async function setup(options: { nodeOperationTimeoutMs?: number } = {}) {
   chmodSync(directory, 0o700);
   const passwordFile = join(directory, "owner-password");
   writeFileSync(passwordFile, `${password}\n`, { mode: 0o600 });
-  const app = createControlPlaneApp({
+  const app = toolTestApp({
     dataDir: join(directory, "control-plane"),
     passwordFile,
     ...(options.nodeOperationTimeoutMs !== undefined
@@ -93,7 +87,9 @@ async function setup(options: { nodeOperationTimeoutMs?: number } = {}) {
     publicKeyEncoding: { type: "spki", format: "pem" },
   });
   const nodeId = randomUUID();
-  await app.nodes.receive(
+  bindToolSocket(app, nodeId, socket);
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
       type: "node.pair",
@@ -133,7 +129,9 @@ async function pairAnotherNode(
       publicKeyEncoding: { type: "spki", format: "pem" },
     }),
     nodeId = randomUUID();
-  await app.nodes.receive(
+  bindToolSocket(app, nodeId, socket);
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
       type: "node.pair",
@@ -153,9 +151,11 @@ async function reconnectNode(
   privateKey: string,
 ): Promise<FakeNodeSocket> {
   const socket = new FakeNodeSocket();
+  bindToolSocket(app, nodeId, socket);
   app.nodes.open(socket);
   const challenge = JSON.parse(socket.sent[0]!) as { nonce: string };
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
       type: "node.authenticate",
@@ -207,10 +207,11 @@ async function finishRun(
   socket: FakeNodeSocket,
   run: { runId: string; agentId: string },
 ) {
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
-      type: "node.agent.run.result",
+      type: "run.complete",
       requestId: randomUUID(),
       runId: run.runId,
       agentId: run.agentId,
@@ -219,16 +220,12 @@ async function finishRun(
   );
 }
 
-async function waitForRun(
-  socket: FakeNodeSocket,
-  fromIndex: number,
-): Promise<Extract<NodeControlMessage, { type: "control.agent.run" }>> {
+async function waitForRun(socket: FakeNodeSocket, fromIndex: number): Promise<TestRun> {
   const deadline = Date.now() + 4000;
   while (Date.now() < deadline) {
     for (const text of socket.sent.slice(fromIndex)) {
       const message = JSON.parse(text) as Record<string, unknown>;
-      if (message.type === "control.agent.run")
-        return message as unknown as Extract<NodeControlMessage, { type: "control.agent.run" }>;
+      if (message.type === "test.run.started") return message as unknown as TestRun;
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -246,10 +243,11 @@ async function callAgentTool(
 ) {
   const fromIndex = socket.sent.length,
     requestId = randomUUID();
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
-      type: "node.agent.run.tool",
+      type: "tools.execute",
       requestId,
       runId: run.runId,
       agentId: identity.agentId ?? run.agentId,
@@ -268,7 +266,7 @@ async function callAgentTool(
         toolCallId?: string;
       };
       return (
-        (message.type === "control.agent.run.tool_result" && message.toolCallId === toolCallId) ||
+        (message.type === "tools.result" && message.toolCallId === toolCallId) ||
         (message.type === "control.error" && message.requestId === requestId)
       );
     });
@@ -306,29 +304,6 @@ function stableToolActionId(
     .update(canonicalJson({ operation: "tools.call", input }))
     .digest("hex");
   return `mate:${actionScopeId}:${signature}:${occurrence}`;
-}
-
-async function callAgentRunContext(
-  app: ReturnType<typeof createControlPlaneApp>,
-  socket: FakeNodeSocket,
-  run: { runId: string; agentId: string },
-) {
-  await app.nodes.receive(
-    socket,
-    JSON.stringify({
-      type: "node.agent.run.context",
-      requestId: randomUUID(),
-      runId: run.runId,
-      agentId: run.agentId,
-      cursor: 0,
-      limit: 100,
-    }),
-  );
-  return JSON.parse(socket.sent.at(-1)!) as {
-    type: string;
-    messages: ModelContextMessage[];
-    nextCursor: number | null;
-  };
 }
 
 it("creates one private owner DM and keeps its input queued while the Agent awaits credentials", async () => {
@@ -420,10 +395,11 @@ it("routes Agent conversation discovery through its current control-plane run", 
   expect(credential.status).toBe(204);
   const run = await waitForRun(socket, runStart);
 
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
-      type: "node.agent.run.tool",
+      type: "tools.execute",
       requestId: randomUUID(),
       runId: run.runId,
       agentId,
@@ -438,7 +414,7 @@ it("routes Agent conversation discovery through its current control-plane run", 
     ok?: boolean;
     result?: { conversations: Array<{ id: string; name: string }> };
   };
-  expect(result.type).toBe("control.agent.run.tool_result");
+  expect(result.type).toBe("tools.result");
   expect(result).toMatchObject({ toolCallId: "discover-1", ok: true });
   expect(result.result?.conversations).toEqual(
     expect.arrayContaining([
@@ -499,7 +475,7 @@ it("limits read and send to joined conversations while exposing only public meta
     name: "conversations.list",
     input: {},
   });
-  expect(list).toMatchObject({ type: "control.agent.run.tool_result", ok: true });
+  expect(list).toMatchObject({ type: "tools.result", ok: true });
   const conversations = (list.result as { conversations: Array<Record<string, unknown>> })
     .conversations;
   expect(conversations).toEqual(
@@ -1159,10 +1135,11 @@ it("replays a committed tool action after its reply is lost and the delivery ret
     };
   socket.dropToolCallId = actionId;
   const sentBeforeToolCall = socket.sent.length;
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
-      type: "node.agent.run.tool",
+      type: "tools.execute",
       requestId: randomUUID(),
       runId: firstRun.runId,
       agentId,
@@ -1183,10 +1160,11 @@ it("replays a committed tool action after its reply is lost and the delivery ret
       .messages.filter((message) => message.text === input.input.text),
   ).toHaveLength(1);
 
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
-      type: "node.agent.run.result",
+      type: "run.complete",
       requestId: randomUUID(),
       runId: firstRun.runId,
       agentId,
@@ -1213,297 +1191,6 @@ it("replays a committed tool action after its reply is lost and the delivery ret
       .prepare("SELECT count(*) AS count FROM owner_agent_tool_actions WHERE session_id=?")
       .get(firstRun.sessionId),
   ).toEqual({ count: 1 });
-});
-
-it("restarts the real Pi worker after a lost result without replaying a committed send", async () => {
-  const { app, cookie, db, nodeId, socket } = await setup();
-  const agentId = randomUUID();
-  app.agents.prepare({
-    id: agentId,
-    nodeId,
-    name: "Durable action partner",
-    role: "Retries a delivery after a tool result is lost",
-    description: "Synthetic Pi restart fixture.",
-    model: { provider: "openai", id: "gpt-4o-mini" },
-  });
-  app.agents.complete(
-    agentId,
-    {
-      username: "mate-node-account",
-      uid: 23001,
-      gid: 23001,
-      workspace: `/var/lib/mate/agents/${agentId}`,
-      workspaceMarker: "a".repeat(64),
-    },
-    app.chat,
-  );
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  await app.request("/api/owner/model-credentials/openai", {
-    method: "PUT",
-    headers: { cookie, "content-type": "application/json" },
-    body: JSON.stringify({ apiKey: "synthetic-key-durable-action-pair" }),
-  });
-
-  const piCallIds: string[][] = [],
-    observedContexts: ModelContextMessage[][] = [],
-    resultAcks: Promise<void>[] = [];
-  const transportFor = (
-    run: Extract<NodeControlMessage, { type: "control.agent.run" }>,
-    controller: AbortController,
-    dropFirstToolReply = false,
-  ): AgentRunTransport => {
-    let dropped = false;
-    return {
-      context: async () => {
-        const page = await callAgentRunContext(app, socket, run);
-        observedContexts.push(page.messages);
-        return { messages: page.messages, nextCursor: page.nextCursor };
-      },
-      transcript: async (text) => {
-        const requestId = randomUUID();
-        await app.nodes.receive(
-          socket,
-          JSON.stringify({
-            type: "node.agent.run.transcript",
-            requestId,
-            runId: run.runId,
-            agentId,
-            entry: text,
-          }),
-        );
-        return (
-          (JSON.parse(socket.sent.at(-1)!) as { type: string; accepted?: boolean }).accepted ===
-          true
-        );
-      },
-      tool: async (toolCallId, operation, input) => {
-        const requestId = randomUUID(),
-          before = socket.sent.length;
-        piCallIds[piCallIds.length - 1]!.push(toolCallId);
-        await app.nodes.receive(
-          socket,
-          JSON.stringify({
-            type: "node.agent.run.tool",
-            requestId,
-            runId: run.runId,
-            agentId,
-            toolCallId,
-            operation,
-            input,
-          }),
-        );
-        const reply = JSON.parse(socket.sent.at(before)!) as
-          { ok: true; result: unknown } | { ok: false; error: string };
-        if (dropFirstToolReply && !dropped) {
-          dropped = true;
-          controller.abort("simulate a dropped control-plane result");
-          throw new Error("The committed tool result was lost during disconnect");
-        }
-        return reply.ok ? { ok: true, result: reply.result } : { ok: false, error: reply.error };
-      },
-      result: (ok, code) => {
-        resultAcks.push(
-          app.nodes.receive(
-            socket,
-            JSON.stringify({
-              type: "node.agent.run.result",
-              requestId: randomUUID(),
-              runId: run.runId,
-              agentId,
-              ok,
-              ...(ok ? {} : { code: code ?? "model_failed" }),
-            }),
-          ),
-        );
-      },
-    };
-  };
-  const startRun = async (
-    run: Extract<NodeControlMessage, { type: "control.agent.run" }>,
-    dropFirstToolReply: boolean,
-  ) => {
-    const controller = new AbortController();
-    piCallIds.push([]);
-    await runAgentModel(
-      run as Parameters<typeof runAgentModel>[0],
-      transportFor(run, controller, dropFirstToolReply),
-      controller.signal,
-      { modelWorkerEntry: resolve("../node/tests/fixtures/direct-message-model-worker.mjs") },
-    );
-  };
-
-  const firstStart = socket.sent.length;
-  app.chat.createMessage(direct.id, "运行带有两次相同发送的脚本化 Agent。 ");
-  const firstRun = await waitForRun(socket, firstStart);
-  const firstActionScopeId = firstRun.actionScopeId;
-  await startRun(firstRun, true);
-  await app.nodes.receive(
-    socket,
-    JSON.stringify({
-      type: "node.agent.run.result",
-      requestId: randomUUID(),
-      runId: firstRun.runId,
-      agentId,
-      ok: false,
-      code: "model_failed",
-    }),
-  );
-  db.prepare("UPDATE owner_agent_runs SET retry_at=0 WHERE id=?").run(firstRun.runId);
-
-  const retryStart = socket.sent.length;
-  app.runs?.wake();
-  const retryRun = await waitForRun(socket, retryStart);
-  expect(retryRun.runId).not.toBe(firstRun.runId);
-  expect(retryRun.actionScopeId).toBe(firstActionScopeId);
-  await startRun(retryRun, false);
-  await Promise.all(resultAcks);
-
-  const messagesAfterRetry = app.chat.listMessages(direct.id, undefined, 100)!.messages,
-    retryActionRows = db
-      .prepare(
-        "SELECT action_id,operation FROM owner_agent_tool_actions ORDER BY created_at,action_id",
-      )
-      .all() as Array<{ action_id: string; operation: string }>;
-  expect(
-    messagesAfterRetry.filter((message) => message.text === "同一交付中的重复动作。"),
-  ).toHaveLength(2);
-  expect(
-    messagesAfterRetry.filter((message) => message.text === "参数不同，属于新的动作。"),
-  ).toHaveLength(1);
-  expect(retryActionRows).toHaveLength(3);
-  expect(retryActionRows.every((action) => action.operation === "messages.send")).toBe(true);
-  expect(piCallIds[0]).toHaveLength(1);
-  expect(piCallIds[1]).toHaveLength(3);
-  expect(piCallIds[1]![0]).toBe(piCallIds[0]![0]);
-  expect(piCallIds[1]![1]).not.toBe(piCallIds[1]![0]);
-  expect(piCallIds[1]![2]).not.toBe(piCallIds[1]![1]);
-  expect(
-    observedContexts[1]?.some(
-      (entry) =>
-        entry.message.role === "assistant" &&
-        entry.message.content.some((block) => block.type === "toolCall"),
-    ),
-  ).toBe(true);
-
-  const nextDeliveryStart = socket.sent.length;
-  app.chat.createMessage(direct.id, "请在新的交付中再发送同样的两条消息。");
-  const nextRun = await waitForRun(socket, nextDeliveryStart);
-  expect(nextRun.actionScopeId).not.toBe(firstActionScopeId);
-  await startRun(nextRun, false);
-  await Promise.all(resultAcks);
-  expect(
-    app.chat
-      .listMessages(direct.id, undefined, 100)!
-      .messages.filter((message) => message.text === "同一交付中的重复动作。"),
-  ).toHaveLength(4);
-  expect(
-    app.chat
-      .listMessages(direct.id, undefined, 100)!
-      .messages.filter((message) => message.text === "参数不同，属于新的动作。"),
-  ).toHaveLength(2);
-  expect(
-    db
-      .prepare("SELECT count(*) AS count FROM owner_agent_tool_actions WHERE session_id=?")
-      .get(firstRun.sessionId),
-  ).toEqual({ count: 6 });
-});
-
-it("records every plain turn of one run, including narration beside a tool call", async () => {
-  const { app, cookie, db, nodeId, socket } = await setup();
-  const agentId = randomUUID();
-  app.agents.prepare({
-    id: agentId,
-    nodeId,
-    name: "Narrating partner",
-    role: "Explains itself before calling a tool",
-    description: "Synthetic multi-turn transcript fixture.",
-    model: { provider: "openai", id: "gpt-4o-mini" },
-  });
-  app.agents.complete(
-    agentId,
-    {
-      username: "mate-node-account",
-      uid: 23001,
-      gid: 23001,
-      workspace: `/var/lib/mate/agents/${agentId}`,
-      workspaceMarker: "a".repeat(64),
-    },
-    app.chat,
-  );
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  await app.request("/api/owner/model-credentials/openai", {
-    method: "PUT",
-    headers: { cookie, "content-type": "application/json" },
-    body: JSON.stringify({ apiKey: "synthetic-key-narrated-tool-turn" }),
-  });
-  const runStart = socket.sent.length;
-  app.chat.createMessage(direct.id, "先说明再发送这条消息。");
-  const run = await waitForRun(socket, runStart);
-
-  const resultAcks: Promise<void>[] = [];
-  const transport: AgentRunTransport = {
-    context: async () => callAgentRunContext(app, socket, run),
-    transcript: async (text) => {
-      const fromIndex = socket.sent.length;
-      await app.nodes.receive(
-        socket,
-        JSON.stringify({
-          type: "node.agent.run.transcript",
-          requestId: randomUUID(),
-          runId: run.runId,
-          agentId,
-          entry: text,
-        }),
-      );
-      return (JSON.parse(socket.sent.at(fromIndex)!) as { accepted?: boolean }).accepted === true;
-    },
-    tool: async (toolCallId, operation, input) => {
-      const result = await callAgentTool(app, socket, run, toolCallId, operation, input);
-      return result.ok
-        ? { ok: true, result: result.result }
-        : { ok: false, error: result.error ?? "Agent tool request was refused" };
-    },
-    result: (ok, code) => {
-      resultAcks.push(
-        app.nodes.receive(
-          socket,
-          JSON.stringify({
-            type: "node.agent.run.result",
-            requestId: randomUUID(),
-            runId: run.runId,
-            agentId,
-            ok,
-            ...(ok ? {} : { code: code ?? "model_failed" }),
-          }),
-        ),
-      );
-    },
-  };
-  await runAgentModel(run, transport, new AbortController().signal, {
-    modelWorkerEntry: resolve("../node/tests/fixtures/direct-message-model-worker.mjs"),
-  });
-  await Promise.all(resultAcks);
-
-  // Both plain turns of the run survive in its own session record instead of failing the run.
-  expect(
-    db
-      .prepare(
-        "SELECT json_extract(payload_json,'$.message.content[0].text') AS text FROM owner_agent_session_records WHERE run_id=? AND json_extract(payload_json,'$.message.role')='assistant' ORDER BY seq",
-      )
-      .all(run.runId),
-  ).toEqual([
-    { text: "我先说明一下，然后发送这条消息。" },
-    { text: "工具已发送，这是我的最终正文。" },
-  ]);
-  expect(db.prepare("SELECT state FROM owner_agent_runs WHERE id=?").get(run.runId)).toEqual({
-    state: "completed",
-  });
-  // Only the explicit send became public; the narration and the final answer did not.
-  expect(app.chat.listMessages(direct.id, undefined, 20)!.messages).toMatchObject([
-    { author: { kind: "human" }, text: "先说明再发送这条消息。" },
-    { author: { kind: "agent", id: agentId }, text: "带说明的工具发送消息。" },
-  ]);
-  expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toHaveLength(0);
 });
 
 it("commits an eligible peer invitation once and rejects invalid invitation targets", async () => {
@@ -1949,7 +1636,7 @@ it("keeps a running Agent's tool catalogue and refuses stale or forged tool runs
       name: "messages.send",
       input: { conversationId: direct.id, text: "Forged node must not send." },
     });
-  expect(forgedNode).toMatchObject({ type: "control.error", code: "invalid_identity" });
+  expect(forgedNode).toMatchObject({ type: "tools.result", ok: false });
   const forgedAgent = await callAgentTool(
     app,
     socket,
@@ -1963,15 +1650,16 @@ it("keeps a running Agent's tool catalogue and refuses stale or forged tool runs
     { agentId: randomUUID() },
   );
   expect(forgedAgent).toMatchObject({
-    type: "control.agent.run.tool_result",
+    type: "tools.result",
     ok: false,
     error: "Agent run is no longer active",
   });
 
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
-      type: "node.agent.run.result",
+      type: "run.complete",
       requestId: randomUUID(),
       runId: run.runId,
       agentId,
@@ -1986,337 +1674,6 @@ it("keeps a running Agent's tool catalogue and refuses stale or forged tool runs
   expect(
     app.chat.listMessages(direct.id, undefined, 100)!.messages.map((message) => message.text),
   ).not.toContain("Forged node must not send.");
-});
-
-it("limits each run to its committed input batch and consumes silent batches", async () => {
-  const { app, cookie, nodeId, socket } = await setup();
-  const agentId = randomUUID();
-  app.agents.prepare({
-    id: agentId,
-    nodeId,
-    name: "Batch partner",
-    role: "Processes queued messages",
-    description: "Synthetic run-boundary fixture.",
-    model: { provider: "openai", id: "gpt-4.1" },
-  });
-  app.agents.complete(
-    agentId,
-    {
-      username: "mate-node-account",
-      uid: 23001,
-      gid: 23001,
-      workspace: `/var/lib/mate/agents/${agentId}`,
-      workspaceMarker: "a".repeat(64),
-    },
-    app.chat,
-  );
-  const room = app.chat.createChannel({
-    name: "Batch room",
-    description: "Synthetic shared-channel fixture.",
-    visibility: "private",
-  });
-  expect(app.chat.inviteAgentToChannel(room.id, agentId)).toBe(true);
-  app.chat.createMessage(room.id, "同一来源批次中的第一条频道输入。");
-  app.chat.createMessage(room.id, "同一来源批次中的第二条频道输入。");
-  const firstRunStart = socket.sent.length;
-  const writes = await app.request("/api/owner/model-credentials/openai", {
-    method: "PUT",
-    headers: { cookie, "content-type": "application/json" },
-    body: JSON.stringify({ apiKey: "synthetic-batch-key" }),
-  });
-  expect(writes.status).toBe(204);
-
-  const firstRun = await waitForRun(socket, firstRunStart);
-  const requestContext = async (runId: string) => {
-    await app.nodes.receive(
-      socket,
-      JSON.stringify({
-        type: "node.agent.run.context",
-        requestId: randomUUID(),
-        runId,
-        agentId,
-        cursor: 0,
-        limit: 100,
-      }),
-    );
-    return consumeContextPage(app, socket, runId, agentId);
-  };
-  expect((await requestContext(firstRun.runId)).messages.map((message) => message.text)).toEqual([
-    "同一来源批次中的第一条频道输入。",
-    "同一来源批次中的第二条频道输入。",
-  ]);
-
-  app.chat.createMessage(room.id, "运行开始后才到达的下一条频道输入。");
-  expect((await requestContext(firstRun.runId)).messages.map((message) => message.text)).toEqual([
-    "同一来源批次中的第一条频道输入。",
-    "同一来源批次中的第二条频道输入。",
-  ]);
-  await app.nodes.receive(
-    socket,
-    JSON.stringify({
-      type: "node.agent.run.transcript",
-      requestId: randomUUID(),
-      runId: firstRun.runId,
-      agentId,
-      entry: assistantEntry("第一批次的私有正文。"),
-    }),
-  );
-  expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
-    type: "control.agent.run.transcript_ack",
-    accepted: true,
-  });
-  // Recording a turn consumes nothing: the batch is covered only when the run succeeds.
-  expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toMatchObject([
-    { message: { text: "同一来源批次中的第一条频道输入。" } },
-    { message: { text: "同一来源批次中的第二条频道输入。" } },
-    { message: { text: "运行开始后才到达的下一条频道输入。" } },
-  ]);
-  expect(app.agents.get(agentId)?.sessionId).toBe(firstRun.sessionId);
-
-  await app.nodes.receive(
-    socket,
-    JSON.stringify({
-      type: "node.agent.run.result",
-      requestId: firstRun.runId,
-      runId: firstRun.runId,
-      agentId,
-      ok: true,
-    }),
-  );
-  expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toMatchObject([
-    { message: { text: "运行开始后才到达的下一条频道输入。" } },
-  ]);
-  const secondRunStart = socket.sent.length,
-    secondRun = await waitForRun(socket, secondRunStart);
-  expect(secondRun.sessionId).toBe(firstRun.sessionId);
-  const secondContext = await requestContext(secondRun.runId);
-  expect(secondContext.messages.map((message) => message.text)).toEqual([
-    "同一来源批次中的第一条频道输入。",
-    "同一来源批次中的第二条频道输入。",
-    "第一批次的私有正文。",
-    "运行开始后才到达的下一条频道输入。",
-  ]);
-  // A successful model turn may choose silence; the batch is still committed as processed.
-  await app.nodes.receive(
-    socket,
-    JSON.stringify({
-      type: "node.agent.run.result",
-      requestId: secondRun.runId,
-      runId: secondRun.runId,
-      agentId,
-      ok: true,
-    }),
-  );
-  expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toHaveLength(0);
-  // Neither turn published anything: the conversation only holds the owner's inputs.
-  expect(app.chat.listMessages(room.id, undefined, 20)?.messages).toMatchObject([
-    { author: { kind: "human" }, text: "同一来源批次中的第一条频道输入。" },
-    { author: { kind: "human" }, text: "同一来源批次中的第二条频道输入。" },
-    { author: { kind: "human" }, text: "运行开始后才到达的下一条频道输入。" },
-  ]);
-});
-
-it("keeps a later private input out of a public channel run", async () => {
-  const { app, cookie, nodeId, socket } = await setup();
-  const agentId = randomUUID();
-  app.agents.prepare({
-    id: agentId,
-    nodeId,
-    name: "Source-aware partner",
-    role: "Replies in the input channel",
-    description: "Synthetic source-boundary fixture.",
-    model: { provider: "openai", id: "gpt-4.1" },
-  });
-  app.agents.complete(
-    agentId,
-    {
-      username: "mate-node-account",
-      uid: 23001,
-      gid: 23001,
-      workspace: `/var/lib/mate/agents/${agentId}`,
-      workspaceMarker: "a".repeat(64),
-    },
-    app.chat,
-  );
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  const publicRoom = app.chat.createChannel({
-    name: "Public source room",
-    description: "Synthetic public-channel fixture.",
-    visibility: "public",
-  });
-  expect(app.chat.inviteAgentToChannel(publicRoom.id, agentId)).toBe(true);
-  app.chat.createMessage(publicRoom.id, "公开输入必须触发公开频道 run。");
-  app.chat.createMessage(direct.id, "这条私信不能进入公开回复。");
-
-  const runStart = socket.sent.length;
-  const credential = await app.request("/api/owner/model-credentials/openai", {
-    method: "PUT",
-    headers: { cookie, "content-type": "application/json" },
-    body: JSON.stringify({ apiKey: "synthetic-source-batch-key" }),
-  });
-  expect(credential.status).toBe(204);
-  const firstRun = await waitForRun(socket, runStart);
-  expect(firstRun.channelId).toBe(publicRoom.id);
-
-  const readContext = async (runId: string) => {
-    await app.nodes.receive(
-      socket,
-      JSON.stringify({
-        type: "node.agent.run.context",
-        requestId: randomUUID(),
-        runId,
-        agentId,
-        cursor: 0,
-        limit: 100,
-      }),
-    );
-    return consumeContextPage(app, socket, runId, agentId);
-  };
-  const context = await readContext(firstRun.runId);
-  expect(context.messages).toEqual([
-    expect.objectContaining({
-      role: "user",
-      text: "公开输入必须触发公开频道 run。",
-      sourceChannelId: publicRoom.id,
-      sourceVisibility: "public",
-      currentRunInput: true,
-    }),
-  ]);
-  expect(firstRun).toMatchObject({ channelVisibility: "public" });
-
-  const writeTranscript = async (runId: string, text: string) => {
-    await app.nodes.receive(
-      socket,
-      JSON.stringify({
-        type: "node.agent.run.transcript",
-        requestId: randomUUID(),
-        runId,
-        agentId,
-        entry: assistantEntry(text),
-      }),
-    );
-    expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
-      type: "control.agent.run.transcript_ack",
-      accepted: true,
-    });
-  };
-  const finishRun = async (runId: string) => {
-    await app.nodes.receive(
-      socket,
-      JSON.stringify({
-        type: "node.agent.run.result",
-        requestId: runId,
-        runId,
-        agentId,
-        ok: true,
-      }),
-    );
-  };
-
-  await writeTranscript(firstRun.runId, "只写进自己会话记录的公开频道回合。");
-  // A recorded turn publishes nothing and consumes nothing by itself.
-  expect(app.chat.listMessages(publicRoom.id, undefined, 20)?.messages).toMatchObject([
-    { author: { kind: "human" }, text: "公开输入必须触发公开频道 run。" },
-  ]);
-  expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toMatchObject([
-    { channelId: publicRoom.id, message: { text: "公开输入必须触发公开频道 run。" } },
-    { channelId: direct.id, message: { text: "这条私信不能进入公开回复。" } },
-  ]);
-
-  const privateRunStart = socket.sent.length;
-  await finishRun(firstRun.runId);
-  // Completing the run covers only the batch its boundary captured.
-  expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toMatchObject([
-    { channelId: direct.id, message: { text: "这条私信不能进入公开回复。" } },
-  ]);
-  const privateRun = await waitForRun(socket, privateRunStart);
-  expect(privateRun.channelId).toBe(direct.id);
-  expect(privateRun).toMatchObject({ channelVisibility: "private" });
-  const privateContext = await readContext(privateRun.runId);
-  expect(privateContext.messages).toMatchObject([
-    {
-      role: "user",
-      sourceChannelId: publicRoom.id,
-      sourceVisibility: "public",
-      currentRunInput: false,
-    },
-    {
-      role: "assistant",
-      text: "只写进自己会话记录的公开频道回合。",
-      sourceChannelId: publicRoom.id,
-      sourceVisibility: "public",
-      currentRunInput: false,
-    },
-    {
-      role: "user",
-      text: "这条私信不能进入公开回复。",
-      sourceChannelId: direct.id,
-      sourceVisibility: "private",
-      currentRunInput: true,
-    },
-  ]);
-  await writeTranscript(privateRun.runId, "私信输入对应的私有回合。");
-  expect(app.chat.listMessages(direct.id, undefined, 20)?.messages).toMatchObject([
-    { author: { kind: "human" }, text: "这条私信不能进入公开回复。" },
-  ]);
-  await finishRun(privateRun.runId);
-
-  const sendMessage = async (channelId: string, text: string) => {
-    const response = await app.request(`/api/owner/channels/${channelId}/messages`, {
-      method: "POST",
-      headers: { cookie, "content-type": "application/json" },
-      body: JSON.stringify({ text }),
-    });
-    expect(response.status).toBe(201);
-  };
-  const removed = await app.request("/api/owner/model-credentials/openai", {
-    method: "DELETE",
-    headers: { cookie },
-  });
-  expect(removed.status).toBe(204);
-  await sendMessage(direct.id, "反向顺序的私信输入先到达。");
-  await sendMessage(publicRoom.id, "后到的公开输入需要等待。");
-  const reversePrivateStart = socket.sent.length;
-  const restored = await app.request("/api/owner/model-credentials/openai", {
-    method: "PUT",
-    headers: { cookie, "content-type": "application/json" },
-    body: JSON.stringify({ apiKey: "synthetic-source-batch-key" }),
-  });
-  expect(restored.status).toBe(204);
-  const reversePrivateRun = await waitForRun(socket, reversePrivateStart);
-  expect(reversePrivateRun.channelId).toBe(direct.id);
-  const reversePrivateContext = await readContext(reversePrivateRun.runId);
-  expect(reversePrivateContext.messages.at(-1)).toMatchObject({
-    text: "反向顺序的私信输入先到达。",
-    sourceChannelId: direct.id,
-    sourceVisibility: "private",
-    currentRunInput: true,
-  });
-  expect(reversePrivateContext.messages.map((message) => message.text)).not.toContain(
-    "后到的公开输入需要等待。",
-  );
-  await writeTranscript(reversePrivateRun.runId, "反向顺序私信回合。");
-  const reversePublicStart = socket.sent.length;
-  await finishRun(reversePrivateRun.runId);
-
-  const reversePublicRun = await waitForRun(socket, reversePublicStart);
-  expect(reversePublicRun.channelId).toBe(publicRoom.id);
-  const reversePublicContext = await readContext(reversePublicRun.runId);
-  expect(
-    reversePublicContext.messages.find((message) => message.text === "后到的公开输入需要等待。"),
-  ).toMatchObject({
-    text: "后到的公开输入需要等待。",
-    sourceChannelId: publicRoom.id,
-    sourceVisibility: "public",
-    currentRunInput: true,
-  });
-  await writeTranscript(reversePublicRun.runId, "公开输入对应的私有回合。");
-  expect(
-    app.chat
-      .listMessages(publicRoom.id, undefined, 20)!
-      .messages.filter((message) => message.author.kind === "agent"),
-  ).toHaveLength(0);
-  await finishRun(reversePublicRun.runId);
 });
 
 it("keeps an archived run input pending and retries it after the owner unarchives the channel", async () => {
@@ -2358,10 +1715,11 @@ it("keeps an archived run input pending and retries it after the owner unarchive
     body: JSON.stringify({ archived: true }),
   });
   expect(archive.status).toBe(200);
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
-      type: "node.agent.run.transcript",
+      type: "session.append",
       requestId: randomUUID(),
       runId: run.runId,
       agentId,
@@ -2370,7 +1728,7 @@ it("keeps an archived run input pending and retries it after the owner unarchive
   );
   // The private record is accepted, but it still publishes nothing.
   expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
-    type: "control.agent.run.transcript_ack",
+    type: "session.commit",
     accepted: true,
   });
   expect(app.chat.listMessages(direct.id, undefined, 20)?.messages).toMatchObject([
@@ -2378,10 +1736,11 @@ it("keeps an archived run input pending and retries it after the owner unarchive
   ]);
 
   // A successful turn still cannot consume an input from an archived conversation.
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
-      type: "node.agent.run.result",
+      type: "run.complete",
       requestId: run.runId,
       runId: run.runId,
       agentId,
@@ -2405,10 +1764,10 @@ it("keeps an archived run input pending and retries it after the owner unarchive
   ]);
 
   const archivedRunCount = socket.sent.filter(
-    (text) => JSON.parse(text).type === "control.agent.run",
+    (text) => JSON.parse(text).type === "test.run.started",
   ).length;
   await new Promise((resolve) => setTimeout(resolve, 1700));
-  expect(socket.sent.filter((text) => JSON.parse(text).type === "control.agent.run")).toHaveLength(
+  expect(socket.sent.filter((text) => JSON.parse(text).type === "test.run.started")).toHaveLength(
     archivedRunCount,
   );
 
@@ -2421,10 +1780,11 @@ it("keeps an archived run input pending and retries it after the owner unarchive
   expect(unarchive.status).toBe(200);
   const retry = await waitForRun(socket, retryStart);
   expect(retry.runId).not.toBe(run.runId);
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
-      type: "node.agent.run.transcript",
+      type: "session.append",
       requestId: randomUUID(),
       runId: retry.runId,
       agentId,
@@ -2432,195 +1792,19 @@ it("keeps an archived run input pending and retries it after the owner unarchive
     }),
   );
   expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
-    type: "control.agent.run.transcript_ack",
+    type: "session.commit",
     accepted: true,
   });
   expect(app.chat.listMessages(direct.id, undefined, 20)?.messages).toMatchObject([
     { author: { kind: "human" }, text: "归档期间不可写入回复的私信。" },
   ]);
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
-      type: "node.agent.run.result",
+      type: "run.complete",
       requestId: retry.runId,
       runId: retry.runId,
-      agentId,
-      ok: true,
-    }),
-  );
-  expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toHaveLength(0);
-});
-
-it("does not let an archived earlier source block or join a later source run", async () => {
-  const { app, cookie, nodeId, socket } = await setup();
-  const agentId = randomUUID();
-  app.agents.prepare({
-    id: agentId,
-    nodeId,
-    name: "Fairly scheduled partner",
-    role: "Processes each source when it is available",
-    description: "Synthetic archived-source scheduling fixture.",
-    model: { provider: "openai", id: "gpt-4.1" },
-  });
-  app.agents.complete(
-    agentId,
-    {
-      username: "mate-node-account",
-      uid: 23001,
-      gid: 23001,
-      workspace: `/var/lib/mate/agents/${agentId}`,
-      workspaceMarker: "a".repeat(64),
-    },
-    app.chat,
-  );
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  const earlierSource = app.chat.createChannel({
-    name: "Earlier private source",
-    description: "Synthetic archived source.",
-    visibility: "private",
-  });
-  expect(app.chat.inviteAgentToChannel(earlierSource.id, agentId)).toBe(true);
-  const post = async (channelId: string, text: string) => {
-    const response = await app.request(`/api/owner/channels/${channelId}/messages`, {
-      method: "POST",
-      headers: { cookie, "content-type": "application/json" },
-      body: JSON.stringify({ text }),
-    });
-    expect(response.status).toBe(201);
-  };
-  await post(earlierSource.id, "较早来源 A 的待处理私信。");
-  expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toHaveLength(1);
-  const archive = await app.request(`/api/owner/channels/${earlierSource.id}`, {
-    method: "PATCH",
-    headers: { cookie, "content-type": "application/json" },
-    body: JSON.stringify({ archived: true }),
-  });
-  expect(archive.status).toBe(200);
-  await post(direct.id, "后续来源 B 的正常私信。");
-
-  const runStart = socket.sent.length;
-  const credential = await app.request("/api/owner/model-credentials/openai", {
-    method: "PUT",
-    headers: { cookie, "content-type": "application/json" },
-    body: JSON.stringify({ apiKey: "synthetic-archived-source-key" }),
-  });
-  expect(credential.status).toBe(204);
-  const laterRun = await waitForRun(socket, runStart);
-  expect(laterRun.channelId).toBe(direct.id);
-
-  const readContext = async (runId: string) => {
-    await app.nodes.receive(
-      socket,
-      JSON.stringify({
-        type: "node.agent.run.context",
-        requestId: randomUUID(),
-        runId,
-        agentId,
-        cursor: 0,
-        limit: 100,
-      }),
-    );
-    return consumeContextPage(app, socket, runId, agentId);
-  };
-  const laterContext = await readContext(laterRun.runId);
-  expect(laterContext.messages).toMatchObject([
-    {
-      role: "user",
-      text: "后续来源 B 的正常私信。",
-      sourceChannelId: direct.id,
-      currentRunInput: true,
-    },
-  ]);
-  await app.nodes.receive(
-    socket,
-    JSON.stringify({
-      type: "node.agent.run.transcript",
-      requestId: randomUUID(),
-      runId: laterRun.runId,
-      agentId,
-      entry: assistantEntry("只在来源 B 记录的私有正文。"),
-    }),
-  );
-  expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
-    type: "control.agent.run.transcript_ack",
-    accepted: true,
-  });
-  expect(
-    app.chat
-      .listMessages(direct.id, undefined, 20)
-      ?.messages.filter((message) => message.author.kind === "agent"),
-  ).toHaveLength(0);
-  await app.nodes.receive(
-    socket,
-    JSON.stringify({
-      type: "node.agent.run.result",
-      requestId: laterRun.runId,
-      runId: laterRun.runId,
-      agentId,
-      ok: true,
-    }),
-  );
-  // Completing the later run leaves the archived source's input untouched.
-  expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toMatchObject([
-    { channelId: earlierSource.id, message: { text: "较早来源 A 的待处理私信。" } },
-  ]);
-
-  const earlierRunStart = socket.sent.length;
-  const unarchive = await app.request(`/api/owner/channels/${earlierSource.id}`, {
-    method: "PATCH",
-    headers: { cookie, "content-type": "application/json" },
-    body: JSON.stringify({ archived: false }),
-  });
-  expect(unarchive.status).toBe(200);
-  const earlierRun = await waitForRun(socket, earlierRunStart);
-  expect(earlierRun.channelId).toBe(earlierSource.id);
-  expect((await readContext(earlierRun.runId)).messages).toMatchObject([
-    {
-      role: "user",
-      text: "后续来源 B 的正常私信。",
-      sourceChannelId: direct.id,
-      sourceVisibility: "private",
-      currentRunInput: false,
-    },
-    {
-      role: "assistant",
-      text: "只在来源 B 记录的私有正文。",
-      sourceChannelId: direct.id,
-      sourceVisibility: "private",
-      currentRunInput: false,
-    },
-    {
-      role: "user",
-      text: "较早来源 A 的待处理私信。",
-      sourceChannelId: earlierSource.id,
-      currentRunInput: true,
-    },
-  ]);
-  await app.nodes.receive(
-    socket,
-    JSON.stringify({
-      type: "node.agent.run.transcript",
-      requestId: randomUUID(),
-      runId: earlierRun.runId,
-      agentId,
-      entry: assistantEntry("来源 A 恢复后记录的私有正文。"),
-    }),
-  );
-  expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
-    type: "control.agent.run.transcript_ack",
-    accepted: true,
-  });
-  expect(
-    app.chat
-      .listMessages(earlierSource.id, undefined, 20)
-      ?.messages.filter((message) => message.author.kind === "agent"),
-  ).toHaveLength(0);
-  await app.nodes.receive(
-    socket,
-    JSON.stringify({
-      type: "node.agent.run.result",
-      requestId: earlierRun.runId,
-      runId: earlierRun.runId,
       agentId,
       ok: true,
     }),
@@ -2675,7 +1859,8 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
       existingReceipt = nodeReceipts.get(operationId);
     if (existingReceipt) {
       if (!holdNextResponse)
-        await app.nodes.receive(
+        await toolTestInput(
+          app,
           socket,
           JSON.stringify({
             type: "node.workspace.operation.result",
@@ -2709,7 +1894,8 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
       heldRequest = message;
       return;
     }
-    await app.nodes.receive(
+    await toolTestInput(
+      app,
       socket,
       JSON.stringify({
         type: "node.workspace.operation.result",
@@ -2740,7 +1926,6 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
   expect(requests[0]).toMatchObject({
     type: "control.workspace.operation",
     agentId,
-    runId: run.runId,
     mode: "agent_action",
     operation: { kind: "write", path: "notes.txt", content: "hello" },
   });
@@ -2805,10 +1990,11 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
     operationId: heldRequest!.operationId,
   });
 
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
-      type: "node.agent.run.result",
+      type: "run.complete",
       requestId: randomUUID(),
       runId: run.runId,
       agentId,
@@ -2822,7 +2008,8 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
     .mockImplementation(() => {
       throw new Error("crash before notification commit");
     });
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
       type: "node.workspace.operation.result",
@@ -2852,7 +2039,8 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
       .get(heldRequest!.operationId),
   ).toEqual({ count: 0 });
   unavailableNotification.mockRestore();
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
       type: "node.workspace.operation.result",
@@ -2872,10 +2060,11 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
     result: { sha256: "receipt-2" },
   });
   const correctedRun = await waitForRun(socket, correctedStart);
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
-      type: "node.agent.run.context",
+      type: "session.read",
       requestId: randomUUID(),
       runId: correctedRun.runId,
       agentId,
@@ -2897,7 +2086,8 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
     )
     .get(heldRequest!.operationId) as { count: number };
   expect(correctedActivity.count).toBe(1);
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
       type: "node.workspace.operation.result",
@@ -2925,7 +2115,8 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
     await callAgentTool(app, socket, correctedRun, failedActionId, "tools.call", failedInput),
   ).toMatchObject({ ok: false, error: expect.stringContaining("尚未确认") });
   const failedRequest = heldRequest!;
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
       type: "node.workspace.operation.result",
@@ -3041,7 +2232,8 @@ it("sends an Agent's own workspace read of a peer workspace to the node as an ag
   socket.onWorkspaceOperation = async (message) => {
     requests.push(message);
     const kind = (message.operation as { kind: string }).kind;
-    await app.nodes.receive(
+    await toolTestInput(
+      app,
       socket,
       JSON.stringify({
         type: "node.workspace.operation.result",
@@ -3072,7 +2264,6 @@ it("sends an Agent's own workspace read of a peer workspace to the node as an ag
   expect(requests[0]).toMatchObject({
     type: "control.workspace.operation",
     agentId,
-    runId: run.runId,
     mode: "agent_read",
     operation: { kind: "read", path: peerPath },
   });
@@ -3118,7 +2309,8 @@ it("refuses the owner's workspace preview until preparation finished, then serve
   const requests: Array<Record<string, unknown>> = [];
   socket.onWorkspaceOperation = async (message) => {
     requests.push(message);
-    await app.nodes.receive(
+    await toolTestInput(
+      app,
       socket,
       JSON.stringify({
         type: "node.workspace.operation.result",
@@ -3236,7 +2428,8 @@ it("replays a confirmed failed file action as the same error after control-plane
   let executions = 0;
   socket.onWorkspaceOperation = async (request) => {
     executions++;
-    await app.nodes.receive(
+    await toolTestInput(
+      app,
       socket,
       JSON.stringify({
         type: "node.workspace.operation.result",
@@ -3260,7 +2453,7 @@ it("replays a confirmed failed file action as the same error after control-plane
   app.runs?.close();
   app.nodes.close(socket);
   const directory = fixtures.at(-1)!.directory;
-  const restarted = createControlPlaneApp({
+  const restarted = toolTestApp({
     dataDir: join(directory, "control-plane"),
     passwordFile: join(directory, "owner-password"),
   });
@@ -3271,7 +2464,8 @@ it("replays a confirmed failed file action as the same error after control-plane
     };
     restarted.nodes.open(recovered);
     const challenge = JSON.parse(recovered.sent[0]!) as { nonce: string };
-    await restarted.nodes.receive(
+    await toolTestInput(
+      restarted,
       recovered,
       JSON.stringify({
         type: "node.authenticate",
@@ -3285,7 +2479,8 @@ it("replays a confirmed failed file action as the same error after control-plane
     const reconciliation = recovered.sent
       .map((text) => JSON.parse(text))
       .find((message) => message.type === "control.workspace.reconcile");
-    await restarted.nodes.receive(
+    await toolTestInput(
+      restarted,
       recovered,
       JSON.stringify({
         type: "node.workspace.reconcile.result",
@@ -3350,10 +2545,11 @@ it("replays a confirmed failed file action as the same error after control-plane
       await callAgentTool(restarted, recovered, retryRun, actionId, "tools.call", input),
     ).toMatchObject({ ok: true, result: { written: true } });
     await late(5, 0, '{"written":false}', "");
-    await restarted.nodes.receive(
+    await toolTestInput(
+      restarted,
       recovered,
       JSON.stringify({
-        type: "node.agent.run.context",
+        type: "session.read",
         requestId: randomUUID(),
         runId: retryRun.runId,
         agentId,
@@ -3448,7 +2644,8 @@ it("publishes Agent workspace files to a joined conversation in bounded chunks a
               stderr: "",
               truncated: false,
             };
-    await app.nodes.receive(
+    await toolTestInput(
+      app,
       socket,
       JSON.stringify({
         type: "node.workspace.operation.result",
@@ -3587,7 +2784,8 @@ it("streams the owner workspace download one bounded node chunk at a time and st
               totalBytes: data.byteLength,
               version,
             });
-    await app.nodes.receive(
+    await toolTestInput(
+      app,
       socket,
       JSON.stringify({
         type: "node.workspace.operation.result",
@@ -3754,7 +2952,8 @@ it("records owner workspace reads and safe failure codes without file contents",
     } else if (operation.kind === "workspace_list") {
       stdout = JSON.stringify({ path: operation.path, entries: [], nextOffset: null });
     }
-    await app.nodes.receive(
+    await toolTestInput(
+      app,
       socket,
       JSON.stringify({
         type: "node.workspace.operation.result",
@@ -4127,7 +3326,7 @@ it("persists separate attention and draft choices while gating stale sends", asy
     state: "abandoned",
   });
   app.close();
-  const restarted = createControlPlaneApp({
+  const restarted = toolTestApp({
     dataDir: join(directory, "control-plane"),
     passwordFile: join(directory, "owner-password"),
   });
@@ -4427,7 +3626,7 @@ it("holds Agent task changes for fresh discussion and queues an offline reminder
   expect(delivery.state).toBe("pending");
   expect(app.chat.listMessages(dm.id, undefined, 100)?.messages).toHaveLength(4);
   app.close();
-  const restarted = createControlPlaneApp({
+  const restarted = toolTestApp({
     dataDir: join(fixtures.at(-1)!.directory, "control-plane"),
     passwordFile: join(fixtures.at(-1)!.directory, "owner-password"),
   });
@@ -4492,13 +3691,13 @@ it("lets peers coordinate on one task without a tree and preserves a newer claim
   const anchor = app.chat.createMessage(room.id, "Review deployment", { asTask: true })!;
   const task = app.chat.taskForMessage(anchor.id)!;
   await waitForRun(socket, from);
-  let runs: Array<Extract<NodeControlMessage, { type: "control.agent.run" }>> = [];
+  let runs: Array<TestRun> = [];
   const deadline = Date.now() + 4000;
   while (Date.now() < deadline) {
     runs = socket.sent
       .slice(from)
-      .map((text) => JSON.parse(text) as Extract<NodeControlMessage, { type: "control.agent.run" }>)
-      .filter((value) => value.type === "control.agent.run");
+      .map((text) => JSON.parse(text) as TestRun)
+      .filter((value) => value.type === "test.run.started");
     if (runs.some((run) => run.agentId === firstId) && runs.some((run) => run.agentId === secondId))
       break;
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -4575,10 +3774,11 @@ async function startReminderFixture(fixture: Awaited<ReturnType<typeof setup>>) 
   });
   expect(create).toMatchObject({ ok: true });
   const reminderId = (create.result as { id: string }).id;
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
-      type: "node.agent.run.result",
+      type: "run.complete",
       requestId: initialRun.runId,
       runId: initialRun.runId,
       agentId,
@@ -4587,145 +3787,6 @@ async function startReminderFixture(fixture: Awaited<ReturnType<typeof setup>>) 
   );
   return { agentId, dm, reminderId };
 }
-
-it("delivers an offline reminder from an archived DM after reconnect without reopening ordinary chat writes", async () => {
-  const fixture = await setup();
-  const { app, cookie, nodeId, socket, nodePrivateKey } = fixture;
-  const { agentId, dm, reminderId } = await startReminderFixture(fixture);
-  app.nodes.close(socket);
-  const archivedOrdinary = app.chat.createMessage(dm.id, "Keep this ordinary input pending")!;
-  const archive = await app.request(`/api/owner/channels/${dm.id}`, {
-    method: "PATCH",
-    headers: { cookie, "content-type": "application/json" },
-    body: JSON.stringify({ archived: true }),
-  });
-  expect(archive.status).toBe(200);
-  await new Promise((resolve) => setTimeout(resolve, 280));
-  app.chat.fireDueReminders();
-  expect(app.chat.listAgentReminders(agentId)).toEqual([
-    expect.objectContaining({
-      id: reminderId,
-      state: "fired",
-      firing: { firedAt: expect.any(Number), handledAt: null },
-    }),
-  ]);
-  expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toHaveLength(2);
-  const reconnected = await reconnectNode(app, nodeId, nodePrivateKey);
-  const run = await waitForRun(reconnected, 0);
-  expect(run.channelId).toBe(dm.id);
-  const context = await callAgentRunContext(app, reconnected, run);
-  expect(
-    context.messages
-      .filter((entry) => entry.pending)
-      .map((entry) => String(entry.message.content).split("\n").slice(1).join("\n")),
-  ).toEqual(["提醒：Check deployment"]);
-  const denied = await callAgentTool(app, reconnected, run, "archived-send", "tools.call", {
-    name: "messages.send",
-    input: { conversationId: dm.id, text: "Must stay archived" },
-  });
-  expect(denied).toMatchObject({ ok: false });
-  await app.nodes.receive(
-    reconnected,
-    JSON.stringify({
-      type: "node.agent.run.result",
-      requestId: run.runId,
-      runId: run.runId,
-      agentId,
-      ok: true,
-    }),
-  );
-  app.chat.syncHandledReminders();
-  expect(app.chat.listAgentReminders(agentId)[0]?.firing?.handledAt).not.toBeNull();
-  expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toMatchObject([
-    { messageId: archivedOrdinary.id },
-  ]);
-  expect(app.chat.listMessages(dm.id, undefined, 10)?.messages).toHaveLength(2);
-});
-
-it("keeps a real Pi model reply private when its reminder runs in an archived DM", async () => {
-  const fixture = await setup();
-  const { app, cookie, db, nodeId, socket, nodePrivateKey } = fixture;
-  const { agentId, dm, reminderId } = await startReminderFixture(fixture);
-  app.nodes.close(socket);
-  await app.request(`/api/owner/channels/${dm.id}`, {
-    method: "PATCH",
-    headers: { cookie, "content-type": "application/json" },
-    body: JSON.stringify({ archived: true }),
-  });
-  await new Promise((resolve) => setTimeout(resolve, 280));
-  app.chat.fireDueReminders();
-  const reconnected = await reconnectNode(app, nodeId, nodePrivateKey);
-  const run = await waitForRun(reconnected, 0);
-  const alternate = app.chat.createChannel({
-    name: "Active reminder update",
-    description: "An authorized alternate route",
-    visibility: "private",
-  });
-  expect(app.chat.inviteAgentToChannel(alternate.id, agentId)).toBe(true);
-  expect(
-    await callAgentTool(app, reconnected, run, "alternate-reminder-send", "tools.call", {
-      name: "messages.send",
-      input: { conversationId: alternate.id, text: "A conscious update in an active conversation" },
-    }),
-  ).toMatchObject({ ok: true });
-  const responses: Array<{ ok: boolean; code?: string }> = [];
-  let transcriptRequestId = "";
-  const transport: AgentRunTransport = {
-    context: async () => callAgentRunContext(app, reconnected, run),
-    transcript: async (text) => {
-      transcriptRequestId = randomUUID();
-      await app.nodes.receive(
-        reconnected,
-        JSON.stringify({
-          type: "node.agent.run.transcript",
-          requestId: transcriptRequestId,
-          runId: run.runId,
-          agentId,
-          entry: text,
-        }),
-      );
-      return (JSON.parse(reconnected.sent.at(-1)!) as { accepted: boolean }).accepted;
-    },
-    tool: async () => ({ ok: false, error: "Unexpected tool call" }),
-    result: (ok, code) => responses.push({ ok, ...(code ? { code } : {}) }),
-  };
-  await runAgentModel(run, transport, new AbortController().signal, {
-    modelWorkerEntry: resolve("../node/tests/fixtures/direct-message-model-worker.mjs"),
-  });
-  expect(responses).toEqual([{ ok: true }]);
-  await app.nodes.receive(
-    reconnected,
-    JSON.stringify({
-      type: "node.agent.run.result",
-      requestId: randomUUID(),
-      runId: run.runId,
-      agentId,
-      ok: true,
-    }),
-  );
-  app.chat.syncHandledReminders();
-  expect(app.chat.listAgentReminders(agentId)[0]).toMatchObject({
-    id: reminderId,
-    firing: { handledAt: expect.any(Number) },
-  });
-  expect(app.chat.listMessages(dm.id, undefined, 10)?.messages).toHaveLength(1);
-  expect(app.chat.listMessages(alternate.id, undefined, 10)?.messages).toMatchObject([
-    { text: "A conscious update in an active conversation" },
-  ]);
-  expect(
-    db.prepare("SELECT state,error_code FROM owner_agent_runs WHERE id=?").get(run.runId),
-  ).toMatchObject({
-    state: "completed",
-    error_code: null,
-  });
-  expect(
-    db
-      .prepare(
-        "SELECT json_extract(payload_json,'$.message.content[0].text') AS text FROM owner_agent_session_records WHERE run_id=? AND json_extract(payload_json,'$.message.role')='assistant'",
-      )
-      .get(run.runId),
-  ).toMatchObject({ text: "这是首次测试回复。" });
-});
 
 it("marks a reminder handled when a preceding DM delivery starts the completed batch", async () => {
   const fixture = await setup();
@@ -4744,10 +3805,11 @@ it("marks a reminder handled when a preceding DM delivery starts the completed b
     delivery_id: string;
   };
   expect(seed.delivery_id).toBe(pending[0]?.id);
-  await app.nodes.receive(
+  await toolTestInput(
+    app,
     reconnected,
     JSON.stringify({
-      type: "node.agent.run.result",
+      type: "run.complete",
       requestId: run.runId,
       runId: run.runId,
       agentId,
@@ -4760,45 +3822,4 @@ it("marks a reminder handled when a preceding DM delivery starts the completed b
     id: reminderId,
     firing: { handledAt: expect.any(Number) },
   });
-});
-
-it("does not consume an older archived ordinary message if a reminder run is unarchived before completion", async () => {
-  const fixture = await setup();
-  const { app, cookie, nodeId, socket, nodePrivateKey } = fixture;
-  const { agentId, dm } = await startReminderFixture(fixture);
-  app.nodes.close(socket);
-  const ordinary = app.chat.createMessage(dm.id, "Still unread after reminder")!;
-  await app.request(`/api/owner/channels/${dm.id}`, {
-    method: "PATCH",
-    headers: { cookie, "content-type": "application/json" },
-    body: JSON.stringify({ archived: true }),
-  });
-  await new Promise((resolve) => setTimeout(resolve, 280));
-  app.chat.fireDueReminders();
-  const reconnected = await reconnectNode(app, nodeId, nodePrivateKey);
-  const run = await waitForRun(reconnected, 0);
-  const context = await callAgentRunContext(app, reconnected, run);
-  expect(
-    context.messages
-      .filter((entry) => entry.pending)
-      .map((entry) => String(entry.message.content).split("\n").slice(1).join("\n")),
-  ).toEqual(["提醒：Check deployment"]);
-  await app.request(`/api/owner/channels/${dm.id}`, {
-    method: "PATCH",
-    headers: { cookie, "content-type": "application/json" },
-    body: JSON.stringify({ archived: false }),
-  });
-  await app.nodes.receive(
-    reconnected,
-    JSON.stringify({
-      type: "node.agent.run.result",
-      requestId: run.runId,
-      runId: run.runId,
-      agentId,
-      ok: true,
-    }),
-  );
-  expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toMatchObject([
-    { messageId: ordinary.id },
-  ]);
 });

@@ -111,7 +111,6 @@ it("reports weighted Agent usage through owner HTTP across model and service res
     const nodeOptions = {
       nodeData: join(directory, "node-data"),
       workspaceRoot: join(directory, "workspaces"),
-      modelWorkerEntry: resolve("../node/tests/fixtures/protocol-model-worker.mjs"),
     };
     node = startNode({ ...nodeOptions, origin, pairingToken: pairing.pairingToken });
     const nodeId = (await node.waitFor(/MATE_NODE_PAIRED ([0-9a-f-]+)/i))[1]!;
@@ -252,9 +251,7 @@ it("reports weighted Agent usage through owner HTTP across model and service res
     await api(`/api/owner/channels/${dm}/messages`, { text: "network failure before a response" });
     await eventually(() => {
       const row = db!
-        .prepare(
-          "SELECT COUNT(*) AS n FROM owner_agent_session_records WHERE agent_id=? AND kind='message' AND json_extract(payload_json,'$.message.stopReason')='error'",
-        )
+        .prepare("SELECT COUNT(*) AS n FROM owner_agent_runs WHERE agent_id=? AND state='failed'")
         .get(agentId) as { n: number };
       return requests >= 8 && row.n >= 3 ? true : undefined;
     }, "unconfirmed transport failure");
@@ -269,81 +266,3 @@ it("reports weighted Agent usage through owner HTTP across model and service res
     rmSync(directory, { recursive: true, force: true });
   }
 }, 30_000);
-
-it("reports positive Google SDK usage and keeps Pi-normalized zeros unavailable", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "mate-google-usage-"));
-  chmodSync(directory, 0o700);
-  writeFileSync(join(directory, "owner-password"), ownerPassword, { mode: 0o600 });
-  let control: ProcessOutput | undefined, node: ProcessOutput | undefined;
-  let db: Database.Database | undefined;
-  try {
-    control = startControlPlane(directory);
-    const origin = `http://127.0.0.1:${(await control.waitFor(/MATE_CONTROL_PLANE_LISTENING (\d+)/))[1]}`;
-    const cookie = await login(origin);
-    const api = async (path: string, body?: unknown, method = "POST") => {
-      const response = await fetch(origin + path, {
-        method,
-        headers: { cookie, "content-type": "application/json" },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      });
-      expect(response.ok, await response.clone().text()).toBe(true);
-      return response.status === 204 ? undefined : response.json();
-    };
-    const pairing = await api("/api/owner/nodes/pairing-tokens");
-    node = startNode({
-      origin,
-      pairingToken: pairing.pairingToken,
-      nodeData: join(directory, "node-data"),
-      workspaceRoot: join(directory, "workspaces"),
-      modelWorkerEntry: resolve("../node/tests/fixtures/google-usage-model-worker.mjs"),
-    });
-    const nodeId = (await node.waitFor(/MATE_NODE_PAIRED ([0-9a-f-]+)/i))[1]!;
-    const agentId = randomUUID();
-    await api("/api/owner/agents", {
-      id: agentId,
-      nodeId,
-      name: "Google usage",
-      role: "Synthetic",
-      description: "Synthetic",
-      model: { provider: "google", id: "gemini-2.5-flash" },
-    });
-    const dm = (await api(`/api/owner/agents/${agentId}/direct-channel`)).channel.id;
-    await api("/api/owner/model-credentials/google", { apiKey: "synthetic-google-key" }, "PUT");
-    db = new Database(join(directory, "control-plane-data", "control-plane.sqlite"), {
-      readonly: true,
-    });
-    const completed = async (count: number) =>
-      eventually(() => {
-        const row = db!
-          .prepare(
-            "SELECT COUNT(*) AS n FROM owner_agent_runs WHERE agent_id=? AND state='completed'",
-          )
-          .get(agentId) as { n: number };
-        return row.n === count ? true : undefined;
-      }, `Google completed run ${count}`);
-    await api(`/api/owner/channels/${dm}/messages`, { text: "first" });
-    await completed(1);
-    const first = await api(`/api/owner/agents/${agentId}/usage`, undefined, "GET");
-    expect(first.normal.tokens.allInput.value).toBe(100);
-    expect(first.normal.tokens.cacheRead.value).toBe(60);
-    expect(first.normal.tokens.output.value).toBe(20);
-    expect(first.normal.tokens.reasoningOutput.value).toBe(5);
-    expect(first.normal.cacheHitRate.value).toBe(0.6);
-    await api(`/api/owner/channels/${dm}/messages`, { text: "second" });
-    await completed(2);
-    const second = await api(`/api/owner/agents/${agentId}/usage`, undefined, "GET");
-    expect(second.normal.requestCount).toBe(2);
-    expect(second.normal.tokens.allInput).toEqual({
-      value: 100,
-      knownRequests: 1,
-      missingRequests: 1,
-    });
-    expect(second.latestNormal.tokens.allInput.value).toBeNull();
-    expect(second.latestNormal.tokens.cacheRead.value).toBeNull();
-  } finally {
-    db?.close();
-    await stopProcess(node);
-    await stopProcess(control);
-    rmSync(directory, { recursive: true, force: true });
-  }
-});

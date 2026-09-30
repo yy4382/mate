@@ -1,12 +1,12 @@
 // Start both services as one ordinary account, pair over the real WebSocket, create Agents from the
-// owner web API, restart each service, and check that the short-lived model worker keeps the same
-// Linux account. No root, no user creation, no UID/GID switch and no service manager is involved.
+// owner web API, restart each service, and run the real control-plane Pi loop through a local
+// scripted provider and an ordinary node command. No root or identity switch is involved.
 //
 // This check needs no root, no container and no service manager: run it as the ordinary account
 // that owns the Mate data directories. NOTIFY_SOCKET is advertised at a path that does not exist,
 // so any surviving service-manager notification call fails loudly instead of passing unnoticed;
 // tests/contracts/first-release-path.test.ts additionally pins the removed notifier and the
-// removed privilege-dropping worker start. A macOS run is cross-platform evidence only; record
+// removed identity-switching paths. A macOS run is cross-platform evidence only; record
 // real Linux results separately.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
@@ -23,9 +23,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:net";
+import { createServer as createHttpServer } from "node:http";
+import { pathToFileURL } from "node:url";
+import Database from "better-sqlite3";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
-import { startModelProcess } from "@mate/node/model-process";
 
 const launchingUid = typeof process.getuid === "function" ? process.getuid() : undefined;
 if (launchingUid === 0)
@@ -62,7 +64,7 @@ function delay(ms) {
 }
 
 function start(entry, environment, label) {
-  const child = spawn(process.execPath, [entry], {
+  const child = spawn(process.execPath, Array.isArray(entry) ? entry : [entry], {
     cwd: process.cwd(),
     env: {
       PATH: process.env.PATH ?? "/usr/bin:/bin",
@@ -92,7 +94,11 @@ async function freePort() {
 
 function startControlPlane(label, port) {
   return start(
-    "dist/main.js",
+    [
+      "--input-type=module",
+      "--eval",
+      `const { startControlPlane } = await import(${JSON.stringify(pathToFileURL(join(process.cwd(), "dist/main.js")).href)}); startControlPlane(Number(process.env.MATE_CONTROL_PLANE_PORT), undefined, {}, { modelForRun: model => ({ ...model, baseUrl: ${JSON.stringify(providerUrl)} }) });`,
+    ],
     {
       MATE_CONTROL_PLANE_PORT: String(port),
       MATE_CONTROL_PLANE_DATA_DIR: controlData,
@@ -211,46 +217,92 @@ async function waitForNodeStatus(origin, cookie, predicate, timeoutMs = 10000) {
   throw new Error(`Owner node status never matched: ${JSON.stringify(last)}`);
 }
 
-async function probeModelWorkerAccount() {
-  let probe;
-  const controller = new AbortController(),
-    worker = startModelProcess({
-      provider: "openai",
-      modelId: "gpt-4o-mini",
-      apiKey: "synthetic-key-single-account-probe",
-      entry: join(process.cwd(), "../node/tests/fixtures/account-probe-model-worker.mjs"),
-      onTranscript: async (entry) => {
-        if (entry.kind !== "message" || entry.message.role !== "assistant") return true;
-        probe = JSON.parse(entry.message.content[0].text);
-        return true;
-      },
-      signal: controller.signal,
-    });
-  try {
-    await worker.run({
-      runId: randomUUID(),
-      agentId: randomUUID(),
-      sessionId: randomUUID(),
-      actionScopeId: randomUUID(),
-      sourceChannel: { channelId: randomUUID(), visibility: "private" },
-      messages: [
-        {
-          id: randomUUID(),
-          actionScopeId: randomUUID(),
-          message: { role: "user", content: "报告启动本次运行的 Linux 账号。", timestamp: 1 },
-        },
-      ],
-      prompt: { name: "Synthetic Agent", role: "Validation", description: "No private data." },
-    });
-  } finally {
-    controller.abort();
-    worker.close();
+let providerTurn = 0;
+const provider = createHttpServer(async (request, response) => {
+  for await (const _chunk of request) {
+    /* consume the real Pi request */
   }
-  assert.ok(probe, "Model worker did not report its account");
-  assert.equal(probe.uid, launchingUid);
-  if (typeof process.getgid === "function") assert.equal(probe.gid, process.getgid());
-  assert.equal(probe.execPath, process.execPath);
-  return probe;
+  const output =
+    providerTurn++ === 0
+      ? [
+          {
+            type: "function_call",
+            id: "ordinary-command",
+            call_id: "ordinary-command",
+            name: "tools.call",
+            arguments: JSON.stringify({
+              name: "process.exec",
+              input: { command: "id -u; id -g; pwd; printf 'once\\n' >> effect-count.txt" },
+            }),
+            status: "completed",
+          },
+        ]
+      : [
+          {
+            type: "message",
+            id: "silent-completion",
+            role: "assistant",
+            status: "completed",
+            content: [{ type: "output_text", text: "本地检查完成。", annotations: [] }],
+          },
+        ];
+  response.writeHead(200, { "content-type": "text/event-stream" });
+  output.forEach((item, output_index) =>
+    response.write(
+      `data: ${JSON.stringify({ type: "response.output_item.done", output_index, item })}\n\n`,
+    ),
+  );
+  response.end(
+    `data: ${JSON.stringify({ type: "response.completed", response: { id: `scripted-${providerTurn}`, status: "completed", output, usage: { input_tokens: 50, output_tokens: 10, total_tokens: 60 } } })}\n\n`,
+  );
+});
+await new Promise((done) => provider.listen(0, "127.0.0.1", done));
+const providerUrl = `http://127.0.0.1:${provider.address().port}/v1`;
+
+async function checkControlPlaneLoop(origin, cookie, agent) {
+  const directResponse = await fetch(
+    new URL(`/api/owner/agents/${agent.id}/direct-channel`, origin),
+    { method: "POST", headers: { cookie } },
+  );
+  assert.equal(directResponse.status, 200);
+  const { channel } = await directResponse.json();
+  const message = await fetch(new URL(`/api/owner/channels/${channel.id}/messages`, origin), {
+    method: "POST",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ text: "使用普通命令核对当前账号。" }),
+  });
+  assert.equal(message.status, 201);
+  const database = new Database(join(controlData, "control-plane.sqlite"), { readonly: true });
+  try {
+    const deadline = Date.now() + 15000;
+    while (
+      Date.now() < deadline &&
+      !database
+        .prepare("SELECT 1 FROM owner_agent_runs WHERE agent_id=? AND state='completed'")
+        .get(agent.id)
+    )
+      await delay(25);
+    assert.ok(
+      database
+        .prepare("SELECT 1 FROM owner_agent_runs WHERE agent_id=? AND state='completed'")
+        .get(agent.id),
+      "Real Pi run did not complete",
+    );
+    const operation = database
+      .prepare("SELECT state,receipt_json FROM owner_agent_process_operations WHERE agent_id=?")
+      .get(agent.id);
+    assert.equal(operation.state, "succeeded");
+    const receipt = JSON.parse(operation.receipt_json),
+      [uid, gid, cwd] = receipt.stdout.trim().split("\n");
+    assert.equal(Number(uid), launchingUid);
+    assert.equal(Number(gid), process.getgid());
+    assert.equal(cwd, agent.linuxIdentity.workspace);
+    assert.equal(readFileSync(join(cwd, "effect-count.txt"), "utf8"), "once\n");
+    assert.equal(providerTurn, 2);
+    return { uid: Number(uid), gid: Number(gid), cwd };
+  } finally {
+    database.close();
+  }
 }
 
 let control, node;
@@ -403,7 +455,7 @@ try {
   // Creating those Agents must not have created a Linux account for either of them.
   const perAgentAccountExists = perAgentAccountsExist(agentEvidence.map((agent) => agent.agentId));
   assert.notEqual(perAgentAccountExists, true, "Agent creation created a per-Agent Linux account");
-  const worker = await probeModelWorkerAccount();
+  const command = await checkControlPlaneLoop(origin, cookie, firstAgent);
   await stop(node);
 
   process.stdout.write(
@@ -417,10 +469,12 @@ try {
       launchedAsRoot: false,
       controlPlaneUid: statSync(controlData).uid,
       nodeIdentityUid: statSync(join(nodeData, "node-identity.json")).uid,
-      // Checked at the node's model-process seam with a scripted worker, not through a full Agent run.
-      modelWorkerAccountProbe: "startModelProcess-seam",
-      modelWorkerProcessUid: worker.uid,
-      modelWorkerProcessGid: worker.gid,
+      modelLoopLocation: "control-plane",
+      providerTransport: "local-scripted-http-sse",
+      ordinaryCommandUid: command.uid,
+      ordinaryCommandGid: command.gid,
+      ordinaryCommandWorkspace: command.cwd,
+      completePiRunConfirmed: true,
       serviceManagerSocketAdvertised: notifySocketPath,
       serviceManagerNotifierBinaryPresent: notifierAvailable,
       tokenReuseRejected: true,
@@ -457,5 +511,7 @@ try {
   );
 } finally {
   for (const entry of processes) await stop(entry).catch(() => undefined);
+  provider.closeAllConnections();
+  await new Promise((done) => provider.close(done));
   rmSync(root, { recursive: true, force: true });
 }

@@ -102,14 +102,11 @@ export function startControlPlane(
   nodeOperationTimeoutMs?: number,
 ): ProcessOutput {
   const entry = pathToFileURL(resolve("dist/main.js")).href;
-  const args =
-    nodeOperationTimeoutMs === undefined
-      ? [resolve("dist/main.js")]
-      : [
-          "--input-type=module",
-          "--eval",
-          `const { startControlPlane } = await import(${JSON.stringify(entry)}); startControlPlane(0, undefined, { dataDir: process.env.MATE_CONTROL_PLANE_DATA_DIR, passwordFile: process.env.MATE_OWNER_PASSWORD_FILE, nodeOperationTimeoutMs: ${nodeOperationTimeoutMs} });`,
-        ];
+  const args = [
+    "--input-type=module",
+    "--eval",
+    `const { startControlPlane } = await import(${JSON.stringify(entry)}); startControlPlane(0, undefined, { dataDir: process.env.MATE_CONTROL_PLANE_DATA_DIR, passwordFile: process.env.MATE_OWNER_PASSWORD_FILE${nodeOperationTimeoutMs === undefined ? "" : `, nodeOperationTimeoutMs: ${nodeOperationTimeoutMs}`} }, { modelForRun: (model, apiKey) => ({ ...model, baseUrl: apiKey }) });`,
+  ];
   const child = spawn(process.execPath, args, {
     cwd: process.cwd(),
     env: {
@@ -126,7 +123,7 @@ export function startControlPlane(
 
 /**
  * The directly started node entry, with the real workspace provisioning and the real ordinary-command
- * ledger, and one scripted model worker instead of a provider stream. Only the command time bound
+ * ledger, while the control plane owns the real Pi provider stream. Only the command time bound
  * is shortened so a timeout can be observed inside one test.
  */
 export function startNode(options: {
@@ -134,7 +131,6 @@ export function startNode(options: {
   nodeData: string;
   workspaceRoot: string;
   pairingToken?: string;
-  modelWorkerEntry: string;
   /** The node's ordinary-command time bound; tests that need a command to outlive the node raise it. */
   commandTimeoutMs?: number;
 }): ProcessOutput {
@@ -162,7 +158,6 @@ export function startNode(options: {
           heartbeatIntervalMs: 30_000,
           heartbeatTimeoutMs: 60_000,
         }, controller.signal, {
-          modelWorkerEntry: ${JSON.stringify(options.modelWorkerEntry)},
           processOperations: store.operations,
           workspaceExecutor: new LinuxWorkspaceExecutor(process.env.MATE_NODE_AGENT_WORKSPACE_ROOT, process.env.MATE_NODE_DATA_DIR),
         });

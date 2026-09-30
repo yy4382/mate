@@ -1,3 +1,4 @@
+import { toolTestApp, bindToolSocket, toolTestInput, type TestRun } from "./tool-run.js";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -39,7 +40,7 @@ export async function setup() {
   chmodSync(directory, 0o700);
   const passwordFile = join(directory, "owner-password");
   writeFileSync(passwordFile, `${password}\n`, { mode: 0o600 });
-  const app = createControlPlaneApp({ dataDir: join(directory, "control-plane"), passwordFile });
+  const app = toolTestApp({ dataDir: join(directory, "control-plane"), passwordFile });
   const db = new Database(join(directory, "control-plane", "control-plane.sqlite"));
   fixtures.push({ app, directory, db });
   const login = await app.request("/api/auth/login", {
@@ -61,7 +62,9 @@ export async function setup() {
     publicKeyEncoding: { type: "spki", format: "pem" },
   });
   const nodeId = randomUUID();
-  await app.nodes.receive(
+  bindToolSocket(app, nodeId, socket);
+  await toolTestInput(
+    app,
     socket,
     JSON.stringify({
       type: "node.pair",
@@ -120,14 +123,14 @@ export async function waitForRuns(
   socket: FakeNodeSocket,
   fromIndex: number,
   agentIds: string[],
-): Promise<Map<string, Extract<NodeControlMessage, { type: "control.agent.run" }>>> {
+): Promise<Map<string, TestRun>> {
   const deadline = Date.now() + 5000;
-  let runs: Array<Extract<NodeControlMessage, { type: "control.agent.run" }>> = [];
+  let runs: Array<TestRun> = [];
   while (Date.now() < deadline) {
     runs = socket.sent
       .slice(fromIndex)
-      .map((text) => JSON.parse(text) as Extract<NodeControlMessage, { type: "control.agent.run" }>)
-      .filter((message) => message.type === "control.agent.run");
+      .map((text) => JSON.parse(text) as TestRun)
+      .filter((message) => message.type === "test.run.started");
     if (agentIds.every((id) => runs.some((run) => run.agentId === id))) break;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }

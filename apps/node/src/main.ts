@@ -20,9 +20,6 @@ export function nodeOptionsFromEnvironment(
     ...(environment.MATE_NODE_PAIRING_TOKEN
       ? { pairingToken: environment.MATE_NODE_PAIRING_TOKEN }
       : {}),
-    ...(environment.MATE_NODE_MODEL_WORKER_ENTRY
-      ? { modelWorkerEntry: environment.MATE_NODE_MODEL_WORKER_ENTRY }
-      : {}),
   };
 }
 

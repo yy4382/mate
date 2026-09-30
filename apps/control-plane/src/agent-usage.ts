@@ -1,5 +1,5 @@
+import { type ReportedUsage } from "./session-record.js";
 import type Database from "better-sqlite3";
-import type { ReportedUsage } from "@mate/protocol";
 
 type Metric = { value: number | null; knownRequests: number; missingRequests: number };
 type TokenName =

@@ -1,6 +1,6 @@
 # Linux 运行与运维（普通账号）
 
-Mate 在低资源 Linux VPS 上以一个现有普通账号运行。控制面与节点是两个普通进程，Agent 模型和命令也是该账号的子进程。Mate 不创建用户、不切换 UID/GID、不操作 systemd，也不修改 sudoers。HTTPS 和进程的开机启动、退出后重启由宿主自行安排。
+Mate 在低资源 Linux VPS 上以一个现有普通账号运行。控制面与节点是两个普通进程，控制面在自身进程内异步推进 Agent 模型循环，节点在该账号下启动普通命令子进程。Mate 不创建用户、不切换 UID/GID、不操作 systemd，也不修改 sudoers。HTTPS 和进程的开机启动、退出后重启由宿主自行安排。
 
 ## 构建与准备
 
@@ -48,7 +48,7 @@ MATE_NODE_PAIRING_TOKEN='网页生成的令牌' \
 node apps/node/dist/main.js
 ```
 
-节点输出 `MATE_NODE_PAIRED` 和 `MATE_NODE_CONNECTED` 后，网页显示在线，可创建 Agent、设置模型服务 API key 并开始交流。配对身份保存在节点数据目录的 `node-identity.json`；以后用原路径启动，省略 `MATE_NODE_PAIRING_TOKEN`。模型凭据在网页管理，不放在启动配置里。所有环境变量见[运行配置](CONFIGURATION.md)。
+节点输出 `MATE_NODE_PAIRED` 和 `MATE_NODE_CONNECTED` 后，网页显示在线，可创建 Agent、设置模型服务 API key 并开始交流。配对身份保存在节点数据目录的 `node-identity.json`；以后用原路径启动，省略 `MATE_NODE_PAIRING_TOKEN`。模型凭据在网页管理，仅控制面保存并用于模型请求，不下发节点，不放在启动配置里。所有环境变量见[运行配置](CONFIGURATION.md)。
 
 远程 Linux 节点使用同样的构建入口和本机数据路径，将 `MATE_CONTROL_PLANE_URL` 设置为控制面的 HTTPS 原点，使用网页配对令牌。跨机部署不是首版验收范围。
 

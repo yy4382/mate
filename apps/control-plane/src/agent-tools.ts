@@ -152,9 +152,9 @@ export class AgentTools {
        FROM owner_agent_runs r
        JOIN owner_agent_sessions s ON s.agent_id=r.agent_id
        JOIN owner_message_deliveries d ON d.id=r.delivery_id
-       WHERE r.id=? AND r.agent_id=? AND r.state='running'`,
+       WHERE r.id=? AND r.agent_id=? AND r.node_id=? AND r.state='running'`,
       )
-      .get(identity.runId, identity.agentId) as CurrentAgentToolRun | undefined;
+      .get(identity.runId, identity.agentId, identity.nodeId) as CurrentAgentToolRun | undefined;
     if (!run) throw new AgentToolRefusal("Agent run is no longer active");
     return run;
   }

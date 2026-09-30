@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { chmodSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -12,7 +13,7 @@ import {
   startControlPlane,
   startNode,
   stopProcess,
-  type ProcessOutput,
+  ProcessOutput,
 } from "../helpers/run-services.js";
 
 async function exerciseCompaction(
@@ -157,7 +158,20 @@ async function exerciseCompaction(
     node: ProcessOutput | undefined,
     db: Database.Database | undefined;
   try {
-    control = startControlPlane(directory);
+    control =
+      summaryMode === "interrupt" || summaryMode === "recoveryOrder"
+        ? new ProcessOutput(
+            spawn(
+              process.execPath,
+              [
+                "--input-type=module",
+                "--eval",
+                `const { startControlPlane } = await import(${JSON.stringify(new URL("../../dist/main.js", import.meta.url).href)}); startControlPlane(0, undefined, { dataDir: ${JSON.stringify(join(directory, "control-plane-data"))}, passwordFile: ${JSON.stringify(join(directory, "owner-password"))} }, { modelForRun: (model, apiKey) => ({ ...model, baseUrl: apiKey }), beforeSessionCommit: async entry => { if (${JSON.stringify(summaryMode)} === "interrupt" ? entry.kind === "compaction" : entry.kind === "message" && entry.message.role === "toolResult") { console.log("MATE_TEST_COMMIT_INTERRUPTED"); process.exit(92); } } });`,
+              ],
+              { env: { PATH: process.env.PATH }, stdio: ["ignore", "pipe", "pipe"] },
+            ),
+          )
+        : startControlPlane(directory);
     let origin = `http://127.0.0.1:${(await control.waitFor(/MATE_CONTROL_PLANE_LISTENING (\d+)/))[1]}`;
     let cookie = await login(origin);
     const api = async (path: string, body?: unknown, method = "POST") => {
@@ -173,13 +187,6 @@ async function exerciseCompaction(
     const nodeOptions = {
       nodeData: join(directory, "node-data"),
       workspaceRoot: join(directory, "workspaces"),
-      modelWorkerEntry: resolve(
-        summaryMode === "interrupt"
-          ? "../node/tests/fixtures/interrupted-compaction-model-worker.mjs"
-          : summaryMode === "recoveryOrder"
-            ? "../node/tests/fixtures/interrupted-tool-result-model-worker.mjs"
-            : "../node/tests/fixtures/protocol-model-worker.mjs",
-      ),
     };
     node = startNode({ ...nodeOptions, origin, pairingToken: pairing.pairingToken });
     const nodeId = (await node.waitFor(/MATE_NODE_PAIRED ([0-9a-f-]+)/i))[1]!;
@@ -214,12 +221,11 @@ async function exerciseCompaction(
       text: "Continue the assigned task after listing tools",
     });
     if (summaryMode === "interrupt") {
-      await eventually(() => {
-        const failed = db!
-          .prepare("SELECT COUNT(*) AS n FROM owner_agent_runs WHERE agent_id=? AND state='failed'")
-          .get(agentId) as { n: number };
-        return failed.n === 1 ? true : undefined;
-      }, "interrupted checkpoint submission");
+      await control.waitFor(/MATE_TEST_COMMIT_INTERRUPTED/);
+      await control.exited;
+      control = startControlPlane(directory);
+      origin = `http://127.0.0.1:${(await control.waitFor(/MATE_CONTROL_PLANE_LISTENING (\d+)/))[1]}`;
+      cookie = await login(origin);
       await stopProcess(node);
       node = undefined;
       expect(
@@ -231,7 +237,7 @@ async function exerciseCompaction(
       ).toEqual({ n: 0 });
       node = startNode({
         ...nodeOptions,
-        modelWorkerEntry: resolve("../node/tests/fixtures/protocol-model-worker.mjs"),
+
         origin,
       });
       await node.waitFor(/MATE_NODE_CONNECTED/);
@@ -258,18 +264,17 @@ async function exerciseCompaction(
       return;
     }
     if (summaryMode === "recoveryOrder") {
-      await eventually(() => {
-        const failed = db!
-          .prepare("SELECT COUNT(*) AS n FROM owner_agent_runs WHERE agent_id=? AND state='failed'")
-          .get(agentId) as { n: number };
-        return failed.n === 1 ? true : undefined;
-      }, "missing tool result after worker exit");
+      await control.waitFor(/MATE_TEST_COMMIT_INTERRUPTED/);
+      await control.exited;
+      control = startControlPlane(directory);
+      origin = `http://127.0.0.1:${(await control.waitFor(/MATE_CONTROL_PLANE_LISTENING (\d+)/))[1]}`;
+      cookie = await login(origin);
       await stopProcess(node);
       node = undefined;
       await api(`/api/owner/channels/${dm}/messages`, { text: "New input after the tool call" });
       node = startNode({
         ...nodeOptions,
-        modelWorkerEntry: resolve("../node/tests/fixtures/protocol-model-worker.mjs"),
+
         origin,
       });
       await node.waitFor(/MATE_NODE_CONNECTED/);
@@ -501,12 +506,12 @@ it(
   30_000,
 );
 it(
-  "keeps original context when the model process exits before checkpoint submission, then retries",
+  "keeps original context when the control plane exits before checkpoint submission, then retries",
   () => exerciseCompaction("interrupt"),
   30_000,
 );
 it(
-  "replays a missing tool result before pending new input after a model-process restart",
+  "replays a missing tool result before pending new input after a control-plane restart",
   () => exerciseCompaction("recoveryOrder"),
   30_000,
 );
