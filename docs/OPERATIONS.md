@@ -11,7 +11,9 @@ pnpm install --frozen-lockfile
 pnpm build
 ```
 
-构建生成 `dist/src/control-plane/main.js`、`apps/node/dist/main.js` 和 `dist/web`。运行时保留构建结果、`package.json` 与安装好的依赖，包括 workspace 链接指向的 `packages/protocol/package.json` 和 `packages/protocol/dist`，以及 `apps/node/package.json`、`apps/node/dist` 与节点包依赖；数据目录放在构建输出之外。
+构建生成 `apps/control-plane/dist/main.js`、`apps/node/dist/main.js` 和 `apps/web/dist`。运行时保留四个 package 的 `package.json`、构建结果和安装好的依赖：`apps/control-plane`、`apps/node`、`apps/web`、`packages/protocol`。web 还须保留导出文件 `assets.mjs`，控制面通过它定位该 package 的 `dist`；workspace 链接须指向交付目录内的 package。数据目录放在构建输出之外。
+
+若要把构建结果移到源码之外，先在新目录按相同相对位置准备上述 package 文件，并保留根 `package.json`、`pnpm-workspace.yaml` 和 `pnpm-lock.yaml`，再运行 `pnpm install --prod --frozen-lockfile`，不要复制指向原 checkout 的 `node_modules` 符号链接。入口、网页和节点辅助程序均按 package 自己的位置解析，可从任意工作目录运行绝对入口路径。这个目录是普通构建交付内容，Mate 不提供发布或进程管理器。
 
 准备仅自己可读的初始密码文件，内容为 12–1024 UTF-8 字节。以下路径是同一账号的示例，可替换为自己的绝对路径：
 
@@ -31,7 +33,7 @@ MATE_CONTROL_PLANE_DATA_DIR="$HOME/mate/data/control-plane" \
 MATE_OWNER_PASSWORD_FILE="$HOME/mate/owner-password" \
 MATE_CONTROL_PLANE_PORT=8787 \
 MATE_PUBLIC_ORIGIN=https://mate.example.org \
-node dist/src/control-plane/main.js
+node apps/control-plane/dist/main.js
 ```
 
 出现 `MATE_CONTROL_PLANE_LISTENING 8787` 后，可用 `curl http://127.0.0.1:8787/api/status` 检查控制面是否回答。它只监听本机；宿主的 HTTPS 反向代理把公开原点转到 `127.0.0.1:8787`。域名、证书与公开端口由宿主配置。浏览器打开公开原点，用初始密码登录，在“节点管理”生成一次性配对令牌。

@@ -12,7 +12,7 @@ Mate 是让 Agent 同事持续工作与协作的个人环境。所有者通过 M
 - [运行配置](docs/CONFIGURATION.md)
 - [架构决定](docs/adr/0003-web-control-plane-and-linux-nodes.md)
 
-控制面和节点共用的通信校验、会话记录、操作数据与身份计算位于 `packages/protocol`（`@mate/protocol`）；摘要与工具调用身份通过 `@mate/protocol/node` 导出。Linux 节点、模型与命令、文件执行和节点操作账本位于 `apps/node`（`@mate/node`），节点构建会同时生成模型进程、文件操作辅助进程和原生重命名程序。控制面只使用协议 package 的共享定义；控制面与节点联调测试通过节点的明确导出使用节点。根构建会先构建协议 package。
+控制面和节点共用的通信校验、会话记录、操作数据与身份计算位于 `packages/protocol`（`@mate/protocol`）；摘要与工具调用身份通过 `@mate/protocol/node` 导出。Linux 节点、模型与命令、文件执行和节点操作账本位于 `apps/node`（`@mate/node`），节点构建会同时生成模型进程、文件操作辅助进程和原生重命名程序。控制面源码、数据库格式校验与联调测试位于 `apps/control-plane`（`@mate/control-plane`）；网页源码、静态资源与网页测试位于 `apps/web`（`@mate/web`）。控制面声明 web 依赖，通过 `@mate/web/assets` 定位网页构建结果；控制面与节点联调测试通过节点的明确导出使用节点。根只管理工作区、开发配置、聚合命令和文档，`pnpm build` 按 package 依赖顺序构建。
 
 ## 本地检查
 

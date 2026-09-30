@@ -55,7 +55,8 @@
     "test": "pnpm --filter @mate/node... run build && vitest run",
     "start": "node dist/main.js",
     "test:single-account-agent-workspace": "node tests/linux/agent-workspace-preparation.integration.mjs",
-    "test:linux-ordinary-command-failure": "node tests/linux/ordinary-command-failure.integration.mjs"
+    "test:linux-ordinary-command-failure": "node tests/linux/ordinary-command-failure.integration.mjs",
+    "test:unit": "vitest run"
   },
   "dependencies": {
     "@mate/protocol": "workspace:*",
