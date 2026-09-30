@@ -1153,8 +1153,7 @@ export class OwnerChat {
              JOIN owner_message_deliveries d ON d.id=r.delivery_id
              JOIN owner_channels c ON c.id=d.channel_id
              JOIN owner_messages m ON m.id=d.message_id
-             WHERE r.id=? AND r.agent_id=?
-           AND NOT EXISTS (SELECT 1 FROM owner_agent_recovery_holds hold WHERE hold.agent_id=r.agent_id)`,
+             WHERE r.id=? AND r.agent_id=?`,
           )
           .get(runId, agentId) as
           | {

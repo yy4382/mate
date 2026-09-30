@@ -38,7 +38,7 @@ export interface LinuxNodeOptions {
   heartbeatIntervalMs?: number;
   heartbeatTimeoutMs?: number;
   /**
-   * Test-only seam, used by the cross-process deployment checks: the scripted model worker this node
+   * Test-only seam, used by the cross-process runtime checks: the scripted model worker this node
    * starts instead of the real provider stream. It is read from `MATE_NODE_MODEL_WORKER_ENTRY` and
    * must be an absolute path; a real deployment that leaves the variable unset runs the production
    * worker, and a path that does not exist fails that Agent run rather than silently doing nothing.
@@ -170,9 +170,8 @@ async function runLinuxNodeInternal(
 
 /**
  * What the node tells its own log about the commands it was running when it stopped: how many it
- * ended, and how many it could not confirm ended. The deployment CLI reads these lines back before
- * it copies state, because a node that could not confirm ending a command is not a node whose
- * workspace is safe to copy, so this text is a contract between the two — not decoration.
+ * ended, and how many it could not confirm ended. Operation receipts retain the outcome for
+ * reconnection and restart; this output also makes an uncertain shutdown visible to the owner.
  */
 export function nodeCommandStopReport(stopped: number, unconfirmed: number): string {
   return (

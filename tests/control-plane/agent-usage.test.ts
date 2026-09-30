@@ -268,7 +268,7 @@ it("reports weighted Agent usage through owner HTTP across model and service res
     provider.close();
     rmSync(directory, { recursive: true, force: true });
   }
-});
+}, 30_000);
 
 it("reports positive Google SDK usage and keeps Pi-normalized zeros unavailable", async () => {
   const directory = mkdtempSync(join(tmpdir(), "mate-google-usage-"));

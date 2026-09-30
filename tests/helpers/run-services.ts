@@ -125,7 +125,7 @@ export function startControlPlane(
 }
 
 /**
- * The deployment node entry, with the real workspace provisioning and the real ordinary-command
+ * The directly started node entry, with the real workspace provisioning and the real ordinary-command
  * ledger, and one scripted model worker instead of a provider stream. Only the command time bound
  * is shortened so a timeout can be observed inside one test.
  */

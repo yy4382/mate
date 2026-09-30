@@ -278,8 +278,7 @@ export class AgentRunCoordinator {
       .prepare(
         `SELECT a.id,a.node_id FROM owner_agents a
        LEFT JOIN owner_agent_run_control c ON c.agent_id=a.id
-       WHERE (c.paused_reason IS NULL OR c.paused_reason<>'manual')
-         AND NOT EXISTS (SELECT 1 FROM owner_agent_recovery_holds hold WHERE hold.agent_id=a.id)`,
+       WHERE (c.paused_reason IS NULL OR c.paused_reason<>'manual')`,
       )
       .all() as Array<{ id: string; node_id: string }>;
     for (const row of rows)
@@ -450,8 +449,6 @@ export class AgentRunCoordinator {
   }
 
   async resumeAgent(agentId: string): Promise<{ ok: boolean; error?: string }> {
-    if (this.isRecoveryHeld(agentId))
-      return { ok: false, error: "Agent 仍处于恢复保护状态，须经维护核验后释放。" };
     const row = this.db
       .prepare(
         `SELECT a.node_id,a.home,a.home_marker,c.paused_reason
@@ -508,12 +505,6 @@ export class AgentRunCoordinator {
     this.nodes.activateAgent(row.node_id, agentId);
     this.wake();
     return { ok: true };
-  }
-
-  private isRecoveryHeld(agentId: string): boolean {
-    return Boolean(
-      this.db.prepare("SELECT 1 FROM owner_agent_recovery_holds WHERE agent_id=?").get(agentId),
-    );
   }
 
   pauseReason(agentId: string): string | null {
@@ -651,7 +642,6 @@ export class AgentRunCoordinator {
            AND a.node_id IN (${onlineNodePlaceholders})
            AND a.stage='complete'
            AND NOT EXISTS (SELECT 1 FROM owner_agent_run_control ctl WHERE ctl.agent_id=a.id AND ctl.paused_reason IS NOT NULL)
-           AND NOT EXISTS (SELECT 1 FROM owner_agent_recovery_holds hold WHERE hold.agent_id=a.id)
            AND ${providerCredentialExistsSql}
            AND NOT EXISTS (SELECT 1 FROM owner_agent_runs r WHERE r.agent_id=a.id AND r.state='running')
            AND NOT EXISTS (
@@ -686,8 +676,7 @@ export class AgentRunCoordinator {
                WHERE a.id=? AND a.stage='complete'
                  AND ${providerCredentialExistsSql}
                  AND (c.archived=0 OR m.internal_kind='reminder')
-                 AND d.id=? AND d.state='pending'
-                 AND NOT EXISTS (SELECT 1 FROM owner_agent_recovery_holds hold WHERE hold.agent_id=a.id)`,
+                 AND d.id=? AND d.state='pending'`,
             )
             .get(candidate.agent_id, candidate.delivery_id) as
             { visibility: "public" | "private" } | undefined;

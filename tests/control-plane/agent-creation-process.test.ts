@@ -236,7 +236,7 @@ function startRunObserver() {
   };
 }
 
-/** The node entry the deployment path uses, plus one scripted model worker substitution. */
+/** The directly started node entry, plus one scripted model worker substitution. */
 function startNode(options: {
   origin: string;
   nodeData: string;

@@ -2,17 +2,13 @@ import Database from "better-sqlite3";
 import { existsSync, statSync } from "node:fs";
 
 const CONTROL_PLANE_APPLICATION_ID = 0x4d43504c;
-// Revision 30 is the structure this release declares: the node's Linux account moved onto the
-// node, the stored Agent readiness went away, and the duplicated session, message, run, operation
-// and task columns plus the duplicate message-order index and the cancelled independent-review
-// marker were dropped. Revision 29 named two different structures while both halves were built
-// side by side, so the combined format needs its own number to stay distinguishable.
-const CONTROL_PLANE_FORMAT_REVISION = 30;
+// Revision 31 removes the maintenance-only Agent recovery-hold table.
+const CONTROL_PLANE_FORMAT_REVISION = 31;
 
 const moveAside =
-  "Mate does not migrate or erase a database it does not recognise: if this file was not created by this release, move it aside and point controlPlaneDataDir at a new, empty directory.";
+  "Mate does not migrate or erase a database it does not recognise: if this file was not created by this release, move it aside and point MATE_CONTROL_PLANE_DATA_DIR at a new, empty directory.";
 const repair =
-  "Refusing to modify it: restore the database from a checkpoint, or start with a new data directory.";
+  "Refusing to modify it: check the database file and its permissions, or start with a new data directory.";
 
 /** A file that is not this release's database format. The file is reported, never deleted. */
 export class UnsupportedDatabaseError extends Error {
@@ -169,7 +165,7 @@ function unreadable(path: string, cause: unknown): UnsupportedDatabaseError {
   return code === "SQLITE_NOTADB"
     ? new UnsupportedDatabaseError(
         path,
-        `${path} is not a SQLite database (${detail}). Mate does not modify or delete it: if it was not created by this release, move it aside or point runtime.dataDir at a new, empty directory.`,
+        `${path} is not a SQLite database (${detail}). Mate does not modify or delete it: if it was not created by this release, move it aside or point MATE_CONTROL_PLANE_DATA_DIR at a new, empty directory.`,
       )
     : new UnsupportedDatabaseError(
         path,

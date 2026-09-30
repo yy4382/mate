@@ -17,13 +17,11 @@
     "test:single-account-agent-workspace": "node tests/linux/agent-workspace-preparation.integration.mjs",
     "test:linux-single-account-node": "node tests/linux/single-account-node.integration.mjs",
     "test:linux-ordinary-command-failure": "node tests/linux/ordinary-command-failure.integration.mjs",
-    "test:linux-single-account-deployment": "node tests/linux/single-account-deployment.integration.mjs",
     "check": "pnpm run format:check && pnpm test",
     "start": "node dist/src/control-plane/main.js",
     "start:control-plane": "node dist/src/control-plane/main.js",
     "start:node": "node dist/src/node/main.js",
-    "dev:web": "pnpm --filter @mate/web run dev",
-    "deploy": "node dist/src/deployment/cli.js"
+    "dev:web": "pnpm --filter @mate/web run dev"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.86.0",

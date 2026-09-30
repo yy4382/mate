@@ -300,6 +300,42 @@ async function waitForSocketMessage(
   });
 }
 
+/** Client close can precede server slot cleanup; wait for a new protocol challenge, not a sleep. */
+async function waitForAnonymousSlot(url: URL): Promise<WebSocket> {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const socket = observedWebSocket(url);
+    const accepted = await new Promise<boolean>((resolveAccepted, rejectAccepted) => {
+      const timer = setTimeout(() => finish(new Error("Anonymous slot did not settle")), 3000);
+      const finish = (error?: Error, accepted = false) => {
+        clearTimeout(timer);
+        socket.removeEventListener("message", onMessage);
+        socket.removeEventListener("close", onClose);
+        socket.removeEventListener("error", onError);
+        if (error) {
+          socket.close();
+          rejectAccepted(error);
+        } else resolveAccepted(accepted);
+      };
+      const onMessage = (event: MessageEvent) => {
+        const message = JSON.parse(String(event.data));
+        if (message.type === "control.challenge") finish(undefined, true);
+      };
+      const onClose = (event: CloseEvent) =>
+        event.code === 1013
+          ? finish()
+          : finish(new Error(`Anonymous slot closed unexpectedly: ${event.code}`));
+      const onError = () => finish(new Error("Anonymous connection failed"));
+      socket.addEventListener("message", onMessage);
+      socket.addEventListener("close", onClose, { once: true });
+      socket.addEventListener("error", onError, { once: true });
+    });
+    if (accepted) return socket;
+    await delay(10);
+  }
+  throw new Error("The server never released the previous anonymous connection slot");
+}
+
 async function pairSocket(origin: string, pairingToken: string): Promise<WebSocket> {
   const url = new URL("/api/nodes/connect", origin);
   url.protocol = "ws:";
@@ -539,13 +575,9 @@ it("bounds node WebSocket connections and rejects malformed or oversized anonymo
     const firstPairedSocketClose = waitForSocketClose(pairedSockets[0]!);
     pairedSockets[0]!.close(1000, "free one connection slot");
     await firstPairedSocketClose;
-    await delay(25);
-
     const anonymousUrl = new URL("/api/nodes/connect", origin);
     anonymousUrl.protocol = "ws:";
-    rawSocket = observedWebSocket(anonymousUrl);
-    await waitForSocketOpen(rawSocket);
-    await waitForSocketMessage(rawSocket, (message) => message.type === "control.challenge");
+    rawSocket = await waitForAnonymousSlot(anonymousUrl);
     const unauthenticatedLimitSocket = observedWebSocket(anonymousUrl);
     expect((await waitForSocketClose(unauthenticatedLimitSocket)).code).toBe(1013);
 
@@ -566,12 +598,10 @@ it("bounds node WebSocket connections and rejects malformed or oversized anonymo
     expect((await waitForSocketClose(rawSocket)).code).toBe(1008);
     rawSocket = undefined;
 
-    const timeoutSocket = observedWebSocket(anonymousUrl);
-    await waitForSocketOpen(timeoutSocket);
+    const timeoutSocket = await waitForAnonymousSlot(anonymousUrl);
     expect((await waitForSocketClose(timeoutSocket, 3000)).code).toBe(1008);
 
-    const oversizedSocket = observedWebSocket(anonymousUrl);
-    await waitForSocketOpen(oversizedSocket);
+    const oversizedSocket = await waitForAnonymousSlot(anonymousUrl);
     oversizedSocket.send("x".repeat(1024 * 1024 + 1));
     expect((await waitForSocketClose(oversizedSocket)).code).toBe(1009);
     expect((await fetch(new URL("/api/status", origin))).status).toBe(200);

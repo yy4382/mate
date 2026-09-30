@@ -6,11 +6,6 @@ import { join, resolve } from "node:path";
 import Database from "better-sqlite3";
 import { expect, it } from "vitest";
 import {
-  createCoordinatedCheckpoint,
-  restoreCoordinatedCheckpoint,
-  verifyCoordinatedCheckpoint,
-} from "../../src/deployment/coordinated-checkpoint.js";
-import {
   eventually,
   login,
   ownerPassword,
@@ -431,34 +426,6 @@ async function exerciseCompaction(
     node = undefined;
     await stopProcess(control);
     control = undefined;
-    if (summaryMode === "success") {
-      db.close();
-      db = undefined;
-      const state = {
-        controlPlaneDataDir: join(directory, "control-plane-data"),
-        nodeDataDir: nodeOptions.nodeData,
-        agentHomeRoot: nodeOptions.workspaceRoot,
-      };
-      const backup = join(directory, "coordinated-backup");
-      await createCoordinatedCheckpoint(state, backup, async () => {});
-      expect(verifyCoordinatedCheckpoint(backup).entries.length).toBeGreaterThan(0);
-      await restoreCoordinatedCheckpoint(
-        backup,
-        state,
-        async () => {},
-        async () => {},
-      );
-      db = new Database(join(state.controlPlaneDataDir, "control-plane.sqlite"), {
-        readonly: true,
-      });
-      expect(
-        db
-          .prepare(
-            "SELECT COUNT(*) AS n FROM owner_agent_session_records WHERE agent_id=? AND kind='compaction'",
-          )
-          .get(agentId),
-      ).toEqual({ n: 1 });
-    }
     control = startControlPlane(directory);
     origin = `http://127.0.0.1:${(await control.waitFor(/MATE_CONTROL_PLANE_LISTENING (\d+)/))[1]}`;
     cookie = await login(origin);

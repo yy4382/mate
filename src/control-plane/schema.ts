@@ -11,7 +11,6 @@ import { workspaceAccessAuditSchema } from "./workspace-access-schema.js";
 import { agentProcessOperationsSchema } from "./process-operations-schema.js";
 import { recoverySchema } from "./recovery-schema.js";
 import { agentLifecycleSchema } from "./agent-lifecycle-schema.js";
-import { recoveryHoldSchema } from "./recovery-holds.js";
 import { ownerPushSchema } from "./push-schema.js";
 
 /** Sole supported first-release format; older experimental databases are left untouched. */
@@ -28,7 +27,6 @@ export const controlPlaneSchema = [
   conversationAttentionSchema,
   taskReminderSchema,
   agentLifecycleSchema,
-  recoveryHoldSchema,
   agentSessionSchema,
   ownerPushSchema,
 ].join("\n");

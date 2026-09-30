@@ -8,7 +8,6 @@ import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { createControlPlaneApp } from "../../src/control-plane/http.js";
 import { deriveAgentProcessOperationId } from "../../src/control-plane/agent-process-operations.js";
-import { holdAgentsForRecovery } from "../../src/control-plane/recovery-holds.js";
 import type { NodeSocket } from "../../src/control-plane/nodes/directory.js";
 import type { NodeControlMessage } from "../../src/nodes/protocol.js";
 
@@ -103,59 +102,6 @@ async function waitFor(condition: () => boolean): Promise<void> {
   }
   throw new Error("The Agent process recovery condition did not settle");
 }
-
-it("does not activate or schedule an Agent while a recovery hold remains", async () => {
-  const { app, cookie, db, nodeId, socket, keyPair } = await setup();
-  const agentId = randomUUID();
-  app.agents.prepare({
-    id: agentId,
-    nodeId,
-    name: "Recovery held",
-    role: "Recovery test",
-    description: "Must remain held",
-    model: { provider: "openai", id: "gpt-4.1" },
-  });
-  app.agents.complete(
-    agentId,
-    {
-      username: `mate_${agentId.replaceAll("-", "").slice(0, 27)}`,
-      uid: 23003,
-      gid: 23003,
-      workspace: `/var/lib/mate/agents/${agentId}`,
-      workspaceMarker: "a".repeat(64),
-    },
-    app.chat,
-  );
-  holdAgentsForRecovery(db, [agentId], "node_identity_unproven");
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  await app.request("/api/owner/model-credentials/openai", {
-    method: "PUT",
-    headers: { cookie, "content-type": "application/json" },
-    body: JSON.stringify({ apiKey: "synthetic-key" }),
-  });
-  app.chat.createMessage(direct.id, "Do not run while recovery is unresolved.");
-  await new Promise((resolve) => setTimeout(resolve, 600));
-  expect(socket.sent.some((text) => JSON.parse(text).type === "control.agent.run")).toBe(false);
-
-  app.nodes.close(socket);
-  const reconnect = new FakeNodeSocket();
-  app.nodes.open(reconnect);
-  const challenge = JSON.parse(reconnect.sent[0]!) as { nonce: string };
-  await app.nodes.receive(
-    reconnect,
-    JSON.stringify({
-      type: "node.authenticate",
-      requestId: randomUUID(),
-      nodeId,
-      signature: sign(null, Buffer.from(challenge.nonce), keyPair.privateKey).toString("base64url"),
-    }),
-  );
-  expect(reconnect.sent.some((text) => JSON.parse(text).type === "control.agent.activate")).toBe(
-    false,
-  );
-  expect(reconnect.sent.some((text) => JSON.parse(text).type === "control.agent.run")).toBe(false);
-  expect(await app.runs?.resumeAgent(agentId)).toMatchObject({ ok: false });
-});
 
 async function sendTool(
   app: ReturnType<typeof createControlPlaneApp>,
