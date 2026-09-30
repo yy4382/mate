@@ -20,9 +20,9 @@
     "test:linux-single-account-node": "pnpm --filter @mate/control-plane run test:linux-single-account-node",
     "test:linux-ordinary-command-failure": "pnpm --filter @mate/node run test:linux-ordinary-command-failure",
     "check": "pnpm run format:check && pnpm test",
-    "start": "pnpm --filter @mate/control-plane start",
-    "start:control-plane": "pnpm --filter @mate/control-plane start",
-    "start:node": "pnpm --filter @mate/node start",
+    "start": "node apps/control-plane/dist/main.js",
+    "start:control-plane": "node apps/control-plane/dist/main.js",
+    "start:node": "node apps/node/dist/main.js",
     "dev:web": "pnpm --filter @mate/web run dev"
   },
   "devDependencies": {

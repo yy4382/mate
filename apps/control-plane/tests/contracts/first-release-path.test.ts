@@ -8,8 +8,8 @@ const manifest = JSON.parse(readFileSync(resolve("../../package.json"), "utf8"))
 };
 
 it("exposes the Linux-user web control plane without superseded deployment paths", () => {
-  expect(manifest.scripts["start:control-plane"]).toBe("pnpm --filter @mate/control-plane start");
-  expect(manifest.scripts["start:node"]).toBe("pnpm --filter @mate/node start");
+  expect(manifest.scripts["start:control-plane"]).toBe("node apps/control-plane/dist/main.js");
+  expect(manifest.scripts["start:node"]).toBe("node apps/node/dist/main.js");
   expect(manifest.scripts).not.toHaveProperty("config:check");
   expect(
     Object.keys(manifest.dependencies ?? {}).filter((name) => name.startsWith("@slack/")),
