@@ -4,19 +4,21 @@ import { defineAgentTool, type AgentToolContext } from "./agent-tool-entry.js";
 import {
   WORKSPACE_WRITE_BYTES_BASE64_MAX_CHARS,
   WORKSPACE_WRITE_MAX_BYTES,
-} from "../execution/backend.js";
-import { MAX_NODE_MESSAGE_BYTES } from "../nodes/protocol.js";
+  MAX_NODE_MESSAGE_BYTES,
+  type Operation,
+  type ControlWorkspaceOperation,
+  type NodeWorkspaceOperationResult,
+} from "@mate/protocol";
+
 import { isDeepStrictEqual } from "node:util";
 import { AgentSession } from "./agent-session.js";
 import type Database from "better-sqlite3";
 import { recordAgentActivity } from "./activity.js";
-import { workspaceReceiptRequestHash } from "../nodes/workspace-receipt.js";
+import { workspaceReceiptRequestHash } from "@mate/protocol/node";
 import type { OwnerChat } from "./owner-chat.js";
 import { createHash, randomUUID } from "node:crypto";
 import { posix as posixPath } from "node:path";
 import type { NodeDirectory } from "./nodes/directory.js";
-import type { Operation } from "../execution/backend.js";
-import type { ControlWorkspaceOperation, NodeWorkspaceOperationResult } from "../nodes/protocol.js";
 
 const workspacePath = z.string().max(4096);
 const workspaceVersion = z

@@ -1,5 +1,16 @@
 import { createHash } from "node:crypto";
-import type { Operation } from "../execution/backend.js";
+import type { AgentProcessOperation } from "./process-operations.js";
+import type { Operation } from "./workspace-operations.js";
+
+export function durableToolIdentity(
+  actionScopeId: string,
+  assistantId: string,
+  toolCallId: string,
+): string {
+  return `mate:${actionScopeId}:${createHash("sha256")
+    .update(JSON.stringify([assistantId, toolCallId]))
+    .digest("hex")}:1`;
+}
 
 /** Hash the stable Agent and requested filesystem mutation recorded by both services. */
 export function workspaceReceiptRequestHash(agentId: string, operation: Operation): string {
@@ -16,4 +27,12 @@ function canonical(value: unknown): unknown {
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([key, item]) => [key, canonical(item)]),
   );
+}
+
+/** Digest the exact node process intent also reconstructed during control-plane reconciliation. */
+export function processOperationRequestHash(
+  agentId: string,
+  operation: AgentProcessOperation,
+): string {
+  return createHash("sha256").update(JSON.stringify({ agentId, operation })).digest("hex");
 }

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { runAgentModel } from "../../src/nodes/agent-runner.js";
-import { NodeControlMessageSchema } from "../../src/nodes/protocol.js";
+import { NodeControlMessageSchema } from "@mate/protocol";
 
 interface WorkerAccountProbe {
   pid: number;

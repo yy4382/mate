@@ -1,14 +1,12 @@
-import { agentProcessOperationSchema } from "../../nodes/process-operations.js";
+import { processOperationRequestHash } from "@mate/protocol/node";
 import {
+  agentProcessOperationSchema,
   SessionAssembly,
   sessionFragment,
   sessionFragmentCharacters,
-} from "../../nodes/session-transport.js";
-import { sessionCommitSchema } from "../../nodes/session-record.js";
-import type { SessionCommit, ModelContextMessage } from "../../nodes/session-record.js";
-import type Database from "better-sqlite3";
-import { createHash, createPublicKey, randomBytes, randomUUID, verify } from "node:crypto";
-import {
+  sessionCommitSchema,
+  type SessionCommit,
+  type ModelContextMessage,
   NodeControlMessageSchema,
   NodeRequestIdSchema,
   NodeRequestSchema,
@@ -19,11 +17,13 @@ import {
   type ControlWorkspaceOperation,
   type AgentProvisionStage,
   type NodeRequest,
-} from "../../nodes/protocol.js";
-import type {
-  AgentProcessOperation,
-  AgentProcessOperationState,
-} from "../../nodes/process-operations.js";
+  type AgentProcessOperation,
+  type AgentProcessOperationState,
+} from "@mate/protocol";
+
+import type Database from "better-sqlite3";
+import { createHash, createPublicKey, randomBytes, randomUUID, verify } from "node:crypto";
+
 import { recordAgentActivity } from "../activity.js";
 
 export const DEFAULT_NODE_PAIRING_TOKEN_TTL_MS = 10 * 60 * 1000;
@@ -958,9 +958,7 @@ export class NodeDirectory {
           const operation = agentProcessOperationSchema.parse(
             JSON.parse(row.request_json).operation,
           );
-          requestHash = createHash("sha256")
-            .update(JSON.stringify({ agentId: row.agent_id, operation }))
-            .digest("hex");
+          requestHash = processOperationRequestHash(row.agent_id, operation);
         } catch {
           /* Keep an unreadable intent unknown, even if a node has some result. */
         }

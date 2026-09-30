@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { ModelContextMessage, SessionCommit } from "../../src/nodes/session-record.js";
+import type { ModelContextMessage, SessionCommit } from "@mate/protocol";
 
 export function assistantMessage(text: string): AssistantMessage {
   return {

@@ -17,9 +17,11 @@ import { createControlPlaneApp } from "../../src/control-plane/http.js";
 import { WorkspaceService } from "../../src/control-plane/workspace.js";
 import type { NodeSocket } from "../../src/control-plane/nodes/directory.js";
 import { runAgentModel, type AgentRunTransport } from "../../src/nodes/agent-runner.js";
-import { AgentProvisionStageSchema } from "../../src/nodes/protocol.js";
-import type { NodeControlMessage } from "../../src/nodes/protocol.js";
-import type { ModelContextMessage } from "../../src/nodes/model-worker.js";
+import {
+  AgentProvisionStageSchema,
+  type NodeControlMessage,
+  type ModelContextMessage,
+} from "@mate/protocol";
 
 const password = "agent-direct-message-owner-password";
 type OwnerMessageLike = { id: string; text: string };

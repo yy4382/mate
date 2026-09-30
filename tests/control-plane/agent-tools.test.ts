@@ -1,4 +1,4 @@
-import { WORKSPACE_WRITE_MAX_BYTES } from "../../src/execution/backend.js";
+import { WORKSPACE_WRITE_MAX_BYTES } from "@mate/protocol";
 import { expect, it } from "vitest";
 import { z } from "zod";
 import { readFileSync } from "node:fs";

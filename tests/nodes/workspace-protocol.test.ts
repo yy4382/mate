@@ -3,12 +3,11 @@ import {
   WORKSPACE_WRITE_BYTES_BASE64_MAX_CHARS,
   WORKSPACE_WRITE_MAX_BYTES,
   operationSchema,
-} from "../../src/execution/backend.js";
-import {
   MAX_NODE_MESSAGE_BYTES,
   NodeControlMessageSchema,
   NodeRequestSchema,
-} from "../../src/nodes/protocol.js";
+} from "@mate/protocol";
+
 import { sendWorkspaceOperationResult } from "../../src/nodes/workspace-result.js";
 
 const requestId = "2ee1d608-4dc4-458a-b143-3c6a7919e84a",

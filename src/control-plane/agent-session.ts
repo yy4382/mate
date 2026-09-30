@@ -1,11 +1,7 @@
-import { durableToolIdentity } from "../nodes/session-record.js";
+import { durableToolIdentity } from "@mate/protocol/node";
 import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
-import type {
-  ModelContextMessage,
-  SessionCheckpoint,
-  SessionCommit,
-} from "../nodes/session-record.js";
+import type { ModelContextMessage, SessionCheckpoint, SessionCommit } from "@mate/protocol";
 
 export const agentSessionSchema = `
 CREATE TABLE owner_agent_session_records (

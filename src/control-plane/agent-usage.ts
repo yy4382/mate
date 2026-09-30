@@ -1,5 +1,5 @@
 import type Database from "better-sqlite3";
-import type { ReportedUsage } from "../nodes/session-compaction.js";
+import type { ReportedUsage } from "@mate/protocol";
 
 type Metric = { value: number | null; knownRequests: number; missingRequests: number };
 type TokenName =

@@ -10,7 +10,7 @@ import {
   agentProcessOperationSchema,
   type AgentProcessOperation,
   type AgentProcessOperationState,
-} from "../nodes/process-operations.js";
+} from "@mate/protocol";
 
 const uuidSchema = z.string().uuid();
 const stableActionIdSchema = z

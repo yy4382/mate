@@ -3,7 +3,7 @@ import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import { operationSchema } from "../../src/execution/backend.js";
+import { operationSchema } from "@mate/protocol";
 
 const roots: string[] = [];
 const temp = () => {

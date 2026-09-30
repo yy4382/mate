@@ -22,7 +22,7 @@ import {
   prepareAgentWorkspace,
   readAgentWorkspaceIdentity,
 } from "../../src/nodes/agent-provisioner.js";
-import { NodeControlMessageSchema, type NodeRequest } from "../../src/nodes/protocol.js";
+import { NodeControlMessageSchema, type NodeRequest } from "@mate/protocol";
 
 const roots: string[] = [];
 

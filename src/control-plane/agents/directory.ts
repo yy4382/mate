@@ -1,8 +1,8 @@
 import type Database from "better-sqlite3";
 import { createHash, randomUUID } from "node:crypto";
 import { basename, resolve } from "node:path";
-import type { AgentWorkspaceIdentity } from "../../nodes/agent-provisioner.js";
-import type { AgentProvisionStage } from "../../nodes/protocol.js";
+import { type AgentWorkspaceIdentity, type AgentProvisionStage } from "@mate/protocol";
+
 import { nodeAccountOf } from "../nodes/directory.js";
 import { NodeAccountConflict } from "../nodes/directory.js";
 import type { NodeAccount, NodeDirectory } from "../nodes/directory.js";

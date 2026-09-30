@@ -97,7 +97,7 @@ export interface OwnerMessageDeliveryPage {
 }
 
 export interface AgentRunContextPage {
-  messages: import("../nodes/session-record.js").ModelContextMessage[];
+  messages: import("@mate/protocol").ModelContextMessage[];
   /** Next message position in the ordered run context; null marks the final page. */
   nextCursor: number | null;
 }

@@ -9,7 +9,7 @@ import { afterEach, expect, it } from "vitest";
 import { createControlPlaneApp } from "../../src/control-plane/http.js";
 import { deriveAgentProcessOperationId } from "../../src/control-plane/agent-process-operations.js";
 import type { NodeSocket } from "../../src/control-plane/nodes/directory.js";
-import type { NodeControlMessage } from "../../src/nodes/protocol.js";
+import type { NodeControlMessage } from "@mate/protocol";
 
 const password = "agent-process-tool-test-owner-password";
 const fixtures: Array<{

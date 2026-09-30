@@ -1,4 +1,4 @@
-import { NodeRequestSchema } from "./protocol.js";
+import { NodeRequestSchema } from "@mate/protocol";
 
 const RESULT_TEXT_LIMIT = 12_000;
 

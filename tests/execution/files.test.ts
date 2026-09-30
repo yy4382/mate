@@ -11,7 +11,7 @@ import {
 import { tmpdir, homedir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
-import type { Operation } from "../../src/execution/backend.js";
+import type { Operation } from "@mate/protocol";
 const roots: string[] = [];
 const temp = () => {
   const root = realpathSync(mkdtempSync(`${tmpdir()}/mate-files-`));
@@ -131,8 +131,7 @@ it("backend decodes split Unicode output as a stream", async () => {
 });
 it("binary operations accept a maximum-size canonical payload and bounded chunks without text loss", async () => {
   const root = temp();
-  const { operationSchema, WORKSPACE_WRITE_MAX_BYTES } =
-      await import("../../src/execution/backend.js"),
+  const { operationSchema, WORKSPACE_WRITE_MAX_BYTES } = await import("@mate/protocol"),
     data = Buffer.alloc(WORKSPACE_WRITE_MAX_BYTES, 255);
   const op = operationSchema.parse({
     kind: "write_bytes",

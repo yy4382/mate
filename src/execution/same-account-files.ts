@@ -3,12 +3,8 @@ import { existsSync, statSync, realpathSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import {
-  operationSchema,
-  type ExecutionBackend,
-  type ExecutionRequest,
-  type ExecutionResult,
-} from "./backend.js";
+import { operationSchema } from "@mate/protocol";
+import { type ExecutionBackend, type ExecutionRequest, type ExecutionResult } from "./backend.js";
 import { killProcessGroup } from "./linux-processes.js";
 import { within } from "./paths.js";
 

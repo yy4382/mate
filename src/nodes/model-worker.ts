@@ -1,3 +1,4 @@
+import { durableToolIdentity } from "@mate/protocol/node";
 import { randomUUID } from "node:crypto";
 import {
   Agent,
@@ -9,16 +10,19 @@ import { Type, validateToolCall } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { z } from "zod";
 
-import { contextMessageSchema, durableToolIdentity, type SessionCommit } from "./session-record.js";
+import {
+  contextMessageSchema,
+  type SessionCommit,
+  type ModelContextMessage,
+  type ReportedUsage,
+} from "@mate/protocol";
 import {
   SessionCompaction,
   confirmedModelResponse,
   providerResponseComplete,
   reportedGoogleUsage,
   reportedUsage,
-  type ReportedUsage,
 } from "./session-compaction.js";
-export type { ModelContextMessage } from "./session-record.js";
 
 const runSchema = z
   .object({

@@ -1,3 +1,10 @@
+import {
+  type AgentWorkspaceIdentity,
+  AgentProvisionStageSchema,
+  type AgentProvisionStage,
+  type NodeControlMessage,
+  type NodeRequest,
+} from "@mate/protocol";
 import { createHash, randomBytes } from "node:crypto";
 import {
   constants as fsConstants,
@@ -18,12 +25,6 @@ import {
 } from "node:fs";
 import { userInfo } from "node:os";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
-import {
-  AgentProvisionStageSchema,
-  type AgentProvisionStage,
-  type NodeControlMessage,
-  type NodeRequest,
-} from "./protocol.js";
 
 export type AgentProvisionFailureCode =
   | "unsupported_host"
@@ -31,19 +32,6 @@ export type AgentProvisionFailureCode =
   | "account_conflict"
   | "identity_mismatch"
   | "filesystem_error";
-
-/**
- * One Agent's default workspace plus the single host account that owns it. Mate runs the control
- * plane, the node, the model worker and every Agent command under the same ordinary account, so
- * this account identity is identical for every Agent on the node and is never created by Mate.
- */
-export interface AgentWorkspaceIdentity {
-  username: string;
-  uid: number;
-  gid: number;
-  workspace: string;
-  workspaceMarker: string;
-}
 
 export class AgentProvisioningError extends Error {
   constructor(

@@ -1,32 +1,15 @@
+import {
+  agentProcessOperationSchema,
+  type AgentProcessOperation,
+  type AgentProcessOperationState,
+} from "@mate/protocol";
+import { processOperationRequestHash } from "@mate/protocol/node";
 import { createHash, randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import { z } from "zod";
 
 const agentIdSchema = z.string().uuid();
 const operationIdSchema = z.string().uuid();
-
-/** Only ordinary Agent commands and process controls cross this boundary. */
-export const agentProcessOperationSchema = z.discriminatedUnion("kind", [
-  z
-    .object({
-      kind: z.literal("exec"),
-      command: z.string().min(1).max(16_000),
-      cwd: z.string().max(4096),
-    })
-    .strict(),
-  z.object({ kind: z.literal("process.list") }).strict(),
-  z
-    .object({
-      kind: z.literal("process.inspect"),
-      targetOperationId: z.string().uuid(),
-    })
-    .strict(),
-  z.object({ kind: z.literal("process.stop"), targetOperationId: z.string().uuid() }).strict(),
-  z.object({ kind: z.literal("process.stop_all") }).strict(),
-]);
-
-export type AgentProcessOperation = z.infer<typeof agentProcessOperationSchema>;
-export type AgentProcessOperationState = "started" | "succeeded" | "failed" | "unknown";
 
 /**
  * What one Agent-wide stop can speak for: only the commands the node process that answered still
@@ -210,7 +193,7 @@ export class AgentProcessOperations {
     operationIdSchema.parse(operationId);
     const operation = agentProcessOperationSchema.parse(operationInput),
       request = JSON.stringify({ agentId, operation }),
-      requestHash = createHash("sha256").update(request).digest("hex");
+      requestHash = processOperationRequestHash(agentId, operation);
     let row = this.database
       .transaction(() => {
         const old = this.findOperation.get(operationId) as OperationRow | undefined;

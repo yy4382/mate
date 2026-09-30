@@ -1,6 +1,18 @@
-import { createHash } from "node:crypto";
 import type { Message } from "@earendil-works/pi-ai";
 import { z } from "zod";
+
+export const reportedUsageSchema = z
+  .object({
+    sourceApi: z.string(),
+    inputBasis: z.enum(["includes_cache", "excludes_cache", "unknown"]),
+    input: z.number().nonnegative().optional(),
+    output: z.number().nonnegative().optional(),
+    cacheRead: z.number().nonnegative().optional(),
+    cacheWrite: z.number().nonnegative().optional(),
+    reasoning: z.number().nonnegative().optional(),
+  })
+  .strict();
+export type ReportedUsage = z.infer<typeof reportedUsageSchema>;
 
 // Preserve Pi/provider extension fields (signatures, replay data and usage) verbatim.
 const contentBlock = z.looseObject({ type: z.string() });
@@ -61,19 +73,7 @@ export const sessionCommitSchema = z.discriminatedUnion("kind", [
       message: piMessageSchema,
       modelRequest: z.literal(true).optional(),
       // Only assistant responses carry this. Absence on older/scripted records means unknown.
-      reportedUsage: z
-        .object({
-          sourceApi: z.string(),
-          inputBasis: z.enum(["includes_cache", "excludes_cache", "unknown"]),
-          input: z.number().nonnegative().optional(),
-          output: z.number().nonnegative().optional(),
-          cacheRead: z.number().nonnegative().optional(),
-          cacheWrite: z.number().nonnegative().optional(),
-          reasoning: z.number().nonnegative().optional(),
-        })
-        .strict()
-        .nullable()
-        .optional(),
+      reportedUsage: reportedUsageSchema.nullable().optional(),
     })
     .strict(),
   z
@@ -92,18 +92,7 @@ export const sessionCommitSchema = z.discriminatedUnion("kind", [
       usage: z.json(),
       // Null means this provider did not expose its raw HTTP usage through Pi's fetch hook.
       // Missing fields in an object mean the response was inspected but did not report them.
-      reportedUsage: z
-        .object({
-          sourceApi: z.string(),
-          inputBasis: z.enum(["includes_cache", "excludes_cache", "unknown"]),
-          input: z.number().nonnegative().optional(),
-          output: z.number().nonnegative().optional(),
-          cacheRead: z.number().nonnegative().optional(),
-          cacheWrite: z.number().nonnegative().optional(),
-          reasoning: z.number().nonnegative().optional(),
-        })
-        .strict()
-        .nullable(),
+      reportedUsage: reportedUsageSchema.nullable(),
     })
     .strict(),
 ]);
@@ -119,13 +108,3 @@ export const contextMessageSchema = z
   })
   .strict();
 export type ModelContextMessage = z.infer<typeof contextMessageSchema>;
-
-export function durableToolIdentity(
-  actionScopeId: string,
-  assistantId: string,
-  toolCallId: string,
-): string {
-  return `mate:${actionScopeId}:${createHash("sha256")
-    .update(JSON.stringify([assistantId, toolCallId]))
-    .digest("hex")}:1`;
-}

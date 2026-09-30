@@ -1,6 +1,12 @@
-import { sessionFragment, sessionFragmentCharacters } from "../../src/nodes/session-transport.js";
+import {
+  sessionFragment,
+  sessionFragmentCharacters,
+  type SessionCommit,
+  type NodeControlMessage,
+  type ModelContextMessage,
+} from "@mate/protocol";
 import { assistantMessage } from "../helpers/session.js";
-import type { SessionCommit } from "../../src/nodes/session-record.js";
+
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import Database from "better-sqlite3";
 import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
@@ -9,8 +15,6 @@ import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { createControlPlaneApp } from "../../src/control-plane/http.js";
 import type { NodeSocket } from "../../src/control-plane/nodes/directory.js";
-import type { NodeControlMessage } from "../../src/nodes/protocol.js";
-import type { ModelContextMessage } from "../../src/nodes/model-worker.js";
 
 const password = "agent-run-transcript-owner-password";
 const fixtures: Array<{

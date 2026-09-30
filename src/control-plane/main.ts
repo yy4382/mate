@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { WebSocketServer } from "ws";
 import { createControlPlaneApp, type ControlPlaneAppOptions } from "./http.js";
-import { MAX_NODE_MESSAGE_BYTES } from "../nodes/protocol.js";
+import { MAX_NODE_MESSAGE_BYTES } from "@mate/protocol";
 
 export function startControlPlane(
   port = parsePort(process.env.MATE_CONTROL_PLANE_PORT ?? "8787"),

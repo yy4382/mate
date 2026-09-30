@@ -6,7 +6,7 @@ import Database from "better-sqlite3";
 import { afterEach, expect } from "vitest";
 import { createControlPlaneApp } from "../../src/control-plane/http.js";
 import type { NodeSocket } from "../../src/control-plane/nodes/directory.js";
-import type { NodeControlMessage } from "../../src/nodes/protocol.js";
+import type { NodeControlMessage } from "@mate/protocol";
 
 const password = "agent-tool-fixture-owner-password";
 const fixtures: Array<{

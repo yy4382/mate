@@ -10,14 +10,16 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import type { ExecutionBackend, ExecutionResult, Operation } from "../execution/backend.js";
+import { type Operation, type AgentWorkspaceIdentity } from "@mate/protocol";
+import type { ExecutionBackend, ExecutionResult } from "../execution/backend.js";
 import {
   SameAccountFileBackend,
   type FileExecutionAccount,
 } from "../execution/same-account-files.js";
 import { within } from "../execution/paths.js";
-import { readAgentWorkspaceIdentity, type AgentWorkspaceIdentity } from "./agent-provisioner.js";
-import { workspaceReceiptRequestHash } from "./workspace-receipt.js";
+import { readAgentWorkspaceIdentity } from "./agent-provisioner.js";
+
+import { workspaceReceiptRequestHash } from "@mate/protocol/node";
 
 export type WorkspaceMode = "owner_read" | "agent_read" | "agent_action" | "agent_publish";
 

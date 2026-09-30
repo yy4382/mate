@@ -12,7 +12,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { ExecutionBackend, ExecutionResult, Operation } from "../../src/execution/backend.js";
+import type { Operation } from "@mate/protocol";
+import type { ExecutionBackend, ExecutionResult } from "../../src/execution/backend.js";
 import { prepareAgentWorkspace } from "../../src/nodes/agent-provisioner.js";
 import {
   LinuxWorkspaceExecutor,

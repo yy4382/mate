@@ -7,8 +7,7 @@ import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { createControlPlaneApp } from "../../src/control-plane/http.js";
 import type { NodeSocket } from "../../src/control-plane/nodes/directory.js";
-import type { NodeControlMessage } from "../../src/nodes/protocol.js";
-import type { ModelContextMessage } from "../../src/nodes/model-worker.js";
+import { type NodeControlMessage, type ModelContextMessage } from "@mate/protocol";
 
 const password = "agent-run-notice-owner-password";
 const fixtures: Array<{

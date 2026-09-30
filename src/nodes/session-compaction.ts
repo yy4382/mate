@@ -1,3 +1,9 @@
+import {
+  type ReportedUsage,
+  type ModelContextMessage,
+  type SessionCheckpoint,
+  type SessionCommit,
+} from "@mate/protocol";
 import { randomUUID } from "node:crypto";
 import type { AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
 import {
@@ -6,7 +12,6 @@ import {
   type AssistantMessage,
   type Model,
 } from "@earendil-works/pi-ai";
-import type { ModelContextMessage, SessionCheckpoint, SessionCommit } from "./session-record.js";
 
 // Pi coding-agent v0.86.0 defaults, scaled down for models with smaller windows.
 const RESERVE_TOKENS = 16_384;
@@ -59,16 +64,6 @@ Summarize the prefix to provide context for the retained suffix:
 - [Information needed to understand the retained recent work, including uncertain effects]
 
 Be concise. Focus on what's needed to understand the kept suffix.`;
-
-export type ReportedUsage = {
-  sourceApi: string;
-  inputBasis: "includes_cache" | "excludes_cache" | "unknown";
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  reasoning?: number;
-};
 
 /** Pi's normalized Usage fills absent provider fields with zero. Inspect only the provider's
  * usage fields at the HTTP boundary; never retain its response body or assume an absent field is 0. */

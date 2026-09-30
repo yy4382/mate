@@ -1,9 +1,13 @@
 import { randomUUID } from "node:crypto";
-import type { NodeControlMessage, NodeRequest } from "./protocol.js";
-import { NodeRequestSchema } from "./protocol.js";
+import {
+  type NodeControlMessage,
+  type NodeRequest,
+  NodeRequestSchema,
+  type SessionCommit,
+  type ModelContextMessage,
+} from "@mate/protocol";
+
 import { ModelRunFailure, startModelProcess, type ModelProcessSession } from "./model-process.js";
-import type { SessionCommit } from "./session-record.js";
-import type { ModelContextMessage } from "./model-worker.js";
 
 type AgentRunMessage = Extract<NodeControlMessage, { type: "control.agent.run" }>;
 

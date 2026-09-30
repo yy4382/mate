@@ -2,7 +2,7 @@ import { sessionFragmentSchema } from "./session-transport.js";
 import { contextMessageSchema, sessionCommitSchema } from "./session-record.js";
 import { z } from "zod";
 import { agentProcessOperationSchema } from "./process-operations.js";
-import { operationSchema } from "../execution/backend.js";
+import { operationSchema } from "./workspace-operations.js";
 
 export const MAX_NODE_MESSAGE_BYTES = 1024 * 1024;
 
@@ -35,7 +35,7 @@ const workspaceExecutionResultSchema = z
  * The single host account every Agent on a node runs under, plus this Agent's own workspace. Mate
  * reads these facts from the running account; it never creates an account or switches UID/GID.
  */
-const provisionIdentitySchema = z
+export const provisionIdentitySchema = z
   .object({
     username: z.string().min(1).max(255),
     uid: z.number().int().nonnegative(),
@@ -487,3 +487,5 @@ export type ControlWorkspaceOperation = Extract<
   NodeControlMessage,
   { type: "control.workspace.operation" }
 >;
+
+export type AgentWorkspaceIdentity = z.infer<typeof provisionIdentitySchema>;

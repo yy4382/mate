@@ -11,7 +11,7 @@ pnpm install --frozen-lockfile
 pnpm build
 ```
 
-构建生成 `dist/src/control-plane/main.js`、`dist/src/node/main.js` 和 `dist/web`。运行时保留构建结果、`package.json` 与安装好的依赖；数据目录放在构建输出之外。
+构建生成 `dist/src/control-plane/main.js`、`dist/src/node/main.js` 和 `dist/web`。运行时保留构建结果、`package.json` 与安装好的依赖，包括 workspace 链接指向的 `packages/protocol/package.json` 和 `packages/protocol/dist`；数据目录放在构建输出之外。
 
 准备仅自己可读的初始密码文件，内容为 12–1024 UTF-8 字节。以下路径是同一账号的示例，可替换为自己的绝对路径：
 

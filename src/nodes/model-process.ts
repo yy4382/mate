@@ -2,7 +2,7 @@ import { fork, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { sessionCommitSchema, type SessionCommit } from "./session-record.js";
+import { sessionCommitSchema, type SessionCommit } from "@mate/protocol";
 import type { ModelRunSpec } from "./model-worker.js";
 
 const transcriptMessageSchema = z

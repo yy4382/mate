@@ -23,7 +23,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { within } from "./paths.js";
 import { createAtomicNoReplaceRename } from "./atomic-rename.js";
 import { commitFileIfHashMatches, moveFileNoReplace } from "./workspace-mutations.js";
-import type { Operation } from "./backend.js";
+import type { Operation } from "@mate/protocol";
 type FlockSync = typeof import("fs-ext").flockSync;
 const flockSync: FlockSync | undefined =
   process.platform === "linux"

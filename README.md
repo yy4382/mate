@@ -12,6 +12,8 @@ Mate 是让 Agent 同事持续工作与协作的个人环境。所有者通过 M
 - [运行配置](docs/CONFIGURATION.md)
 - [架构决定](docs/adr/0003-web-control-plane-and-linux-nodes.md)
 
+控制面和节点共用的通信校验、会话记录、操作数据与身份计算位于 `packages/protocol`（`@mate/protocol`）；摘要与工具调用身份通过 `@mate/protocol/node` 导出。数据库账本、模型与命令、文件执行保留在运行实现中。根构建会先构建协议 package。
+
 ## 本地检查
 
 按 `package.json` 指定的 Node 24 与 pnpm 版本运行：

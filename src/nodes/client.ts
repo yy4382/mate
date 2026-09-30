@@ -1,24 +1,25 @@
 import {
+  type AgentWorkspaceIdentity,
   SessionAssembly,
   sessionFragment,
   sessionFragmentCharacters,
   type SessionFragment,
-} from "./session-transport.js";
-import { contextMessageSchema } from "./session-record.js";
-import type { SessionCommit } from "./session-record.js";
+  contextMessageSchema,
+  type SessionCommit,
+  NodeControlMessageSchema,
+  NodeRequestSchema,
+  type AgentProvisionStage,
+} from "@mate/protocol";
+
 import { createPrivateKey, randomUUID, sign } from "node:crypto";
 import { isAbsolute, join, resolve as resolvePath } from "node:path";
 import { WebSocket } from "ws";
 import { loadOrCreateNodeIdentity, type NodeIdentity } from "./identity.js";
 import { readAgentWorkspaceIdentity } from "./agent-provisioner.js";
-import { NodeControlMessageSchema, NodeRequestSchema } from "./protocol.js";
-import {
-  handleAgentProvisionRequest,
-  prepareAgentWorkspace,
-  type AgentWorkspaceIdentity,
-} from "./agent-provisioner.js";
+
+import { handleAgentProvisionRequest, prepareAgentWorkspace } from "./agent-provisioner.js";
 import { makeAgentRunRequest, runAgentModel, type AgentRunPage } from "./agent-runner.js";
-import type { AgentProvisionStage } from "./protocol.js";
+
 import { openNodeProcessOperations } from "./process-operation-runtime.js";
 import type { AgentProcessOperations } from "./process-operations.js";
 import { LinuxWorkspaceExecutor, type WorkspaceExecutionRequest } from "./workspace-execution.js";
