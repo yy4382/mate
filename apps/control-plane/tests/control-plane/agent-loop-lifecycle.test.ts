@@ -3,6 +3,91 @@ import type { ServerResponse } from "node:http";
 import { loopFixture, respond } from "../helpers/agent-loop.js";
 import { eventually, stopProcess } from "../helpers/run-services.js";
 
+it("heartbeat expiry at completion ends the durable run before releasing its slot and automatically recovers", async () => {
+  const fixture = await loopFixture(
+    (_request, response) => respond(response, "完整结束。"),
+    ', beforeRunFinish: async () => { if (!globalThis.crossedHeartbeat) { globalThis.crossedHeartbeat = true; console.log("MATE_HEARTBEAT_BOUNDARY"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 750); } }',
+    undefined,
+    ", nodeHeartbeatTimeoutMs: 500",
+  );
+  try {
+    const agent = await fixture.agent();
+    const session = fixture.db((db) =>
+      db.prepare("SELECT id FROM owner_agent_sessions WHERE agent_id=?").get(agent.id),
+    );
+    await fixture.send(agent.channelId, "跨越心跳边界");
+    await fixture.control.waitFor(/MATE_HEARTBEAT_BOUNDARY/);
+    await fixture.completed(agent.id);
+    expect(
+      fixture.db((db) =>
+        db
+          .prepare(
+            "SELECT state,error_code FROM owner_agent_runs WHERE agent_id=? ORDER BY rowid LIMIT 1",
+          )
+          .get(agent.id),
+      ),
+    ).toEqual({ state: "failed", error_code: "interrupted" });
+    expect(fixture.requests).toHaveLength(1);
+    expect(
+      fixture.db((db) =>
+        db.prepare("SELECT id FROM owner_agent_sessions WHERE agent_id=?").get(agent.id),
+      ),
+    ).toEqual(session);
+    await fixture.send(agent.channelId, "继续下一项工作");
+    await eventually(() => fixture.requests[1], "next work after heartbeat recovery");
+    await fixture.completed(agent.id);
+  } finally {
+    await fixture.close();
+  }
+}, 30000);
+
+it.each(["openai", "anthropic"] as const)(
+  "after a next-run provider edit, changing %s credentials invalidates only a run admitted with that provider",
+  async (changedProvider) => {
+    const responses: ServerResponse[] = [];
+    const fixture = await loopFixture((_request, response) => {
+      responses.push(response);
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write('data: {"type":"response.created","response":{"id":"stalled"}}\n\n');
+    });
+    try {
+      await fixture.api("/api/owner/model-credentials/anthropic", "PUT", {
+        apiKey: "synthetic-anthropic-key",
+      });
+      const agent = await fixture.agent();
+      await fixture.send(agent.channelId, "保留当前配置直到下一轮");
+      await eventually(() => responses[0], "old-provider SSE request");
+      const run = fixture.db((db) =>
+        db.prepare("SELECT id FROM owner_agent_runs WHERE agent_id=?").get(agent.id),
+      ) as { id: string };
+      await fixture.api(`/api/owner/agents/${agent.id}/model`, "PUT", {
+        provider: "anthropic",
+        id: "claude-sonnet-4-5",
+      });
+      await fixture.api(`/api/owner/model-credentials/${changedProvider}`, "PUT", {
+        apiKey: "synthetic-updated-key",
+      });
+      await new Promise((done) => setTimeout(done, 350));
+      expect(
+        fixture.db((db) => db.prepare("SELECT state FROM owner_agent_runs WHERE id=?").get(run.id)),
+      ).toEqual({ state: changedProvider === "openai" ? "failed" : "running" });
+      expect(responses[0]!.destroyed).toBe(changedProvider === "openai");
+      if (changedProvider === "anthropic") {
+        // Revoking the originally admitted provider must still cancel this unchanged loop.
+        await fixture.api("/api/owner/model-credentials/openai", "DELETE");
+        await eventually(
+          () => (responses[0]!.destroyed ? true : undefined),
+          "admitted key revoked",
+        );
+      }
+      await fixture.api(`/api/owner/agents/${agent.id}/pause`, "POST");
+    } finally {
+      await fixture.close();
+    }
+  },
+  30000,
+);
+
 it.each(
   (["pause", "credentials", "offline", "shutdown"] as const).flatMap((cause) =>
     (["starting", "http", "sse", "summary"] as const).map((phase) => [cause, phase] as const),

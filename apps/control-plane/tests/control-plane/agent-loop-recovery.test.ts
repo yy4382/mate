@@ -1,8 +1,174 @@
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { loopFixture, respond } from "../helpers/agent-loop.js";
 import { eventually, stopProcess } from "../helpers/run-services.js";
+
+it("a compacted pending tool resumes its original identity without presenting the summarized seed again", async () => {
+  let count = 0;
+  const fixture = await loopFixture(
+    (_request, response) => {
+      if (count++ === 0)
+        respond(response, [{ name: "tools.list", input: {} }], "x".repeat(28000), 15000);
+      else if (count === 2) respond(response, "## Goal\n继续原来的工作，保留工具结果。");
+      else if (count === 3)
+        respond(response, [
+          {
+            name: "tools.call",
+            input: {
+              name: "process.exec",
+              input: { command: "printf 'once\\n' >> compacted-effect.txt" },
+            },
+          },
+        ]);
+      else respond(response, "完成。");
+    },
+    ', afterSessionCommit: async entry => { if (entry.kind === "message" && entry.message.role === "assistant" && entry.message.content.some(part => part.type === "toolCall" && part.arguments.name === "process.exec")) { console.log("MATE_COMPACTED_TOOL"); await new Promise(() => {}); } }',
+    16000,
+  );
+  try {
+    const agent = await fixture.agent();
+    await fixture.send(agent.channelId, "压缩前的已呈现seed绝不能重附");
+    await fixture.control.waitFor(/MATE_COMPACTED_TOOL/);
+    expect(existsSync(join(agent.workspace, "compacted-effect.txt"))).toBe(false);
+    await fixture.restartControl();
+    await fixture.completed(agent.id);
+    expect(fixture.requests).toHaveLength(4);
+    expect(JSON.stringify(fixture.requests[3]!.input)).not.toContain(
+      "压缩前的已呈现seed绝不能重附",
+    );
+    expect(JSON.stringify(fixture.requests[3]!.input)).toContain("function_call_output");
+    expect(readFileSync(join(agent.workspace, "compacted-effect.txt"), "utf8")).toBe("once\n");
+    expect(
+      fixture.db((db) =>
+        db
+          .prepare("SELECT COUNT(*) AS n FROM owner_agent_process_operations WHERE agent_id=?")
+          .get(agent.id),
+      ),
+    ).toEqual({ n: 1 });
+  } finally {
+    await fixture.close();
+  }
+}, 30000);
+
+it("a crash after compacted history and a complete answer does not present its persisted seed again", async () => {
+  let count = 0;
+  const fixture = await loopFixture(
+    (_request, response) => {
+      if (count++ === 0)
+        respond(response, [{ name: "tools.list", input: {} }], "x".repeat(28000), 15000);
+      else if (count === 2) respond(response, "## Goal\n保留原始输入和已经完成的工具结果。");
+      else respond(response, "完整结束。");
+    },
+    ', beforeRunFinish: async () => { console.log("MATE_COMPACTED_FINISH"); await new Promise(() => {}); }',
+    16000,
+  );
+  try {
+    const agent = await fixture.agent();
+    const session = fixture.db((db) =>
+      db.prepare("SELECT id FROM owner_agent_sessions WHERE agent_id=?").get(agent.id),
+    );
+    const seed = await fixture.send(agent.channelId, "已经持久呈现并压缩的原始输入");
+    await fixture.control.waitFor(/MATE_COMPACTED_FINISH/);
+    expect(
+      fixture.db((db) =>
+        db
+          .prepare("SELECT COUNT(*) AS n FROM owner_agent_session_records WHERE kind='compaction'")
+          .get(),
+      ),
+    ).toEqual({ n: 1 });
+    expect(fixture.requests).toHaveLength(3);
+    await fixture.restartControl();
+    await fixture.completed(agent.id);
+    expect(fixture.requests).toHaveLength(3);
+    expect(
+      fixture.db((db) =>
+        db.prepare("SELECT id FROM owner_agent_sessions WHERE agent_id=?").get(agent.id),
+      ),
+    ).toEqual(session);
+    expect(
+      fixture.db((db) =>
+        db
+          .prepare(
+            "SELECT COUNT(*) AS n FROM owner_agent_session_records WHERE json_extract(payload_json,'$.message.content') LIKE '%已经持久呈现并压缩的原始输入%' AND json_extract(payload_json,'$.message.role')='user'",
+          )
+          .get(),
+      ),
+    ).toEqual({ n: 1 });
+    expect(
+      fixture.db((db) =>
+        db
+          .prepare(
+            "SELECT state FROM owner_message_deliveries WHERE message_id=? AND recipient_id=?",
+          )
+          .get(seed.id, agent.id),
+      ),
+    ).toEqual({ state: "handled" });
+  } finally {
+    await fixture.close();
+  }
+}, 30000);
+
+it.each(["missing", "replaced"] as const)(
+  "automatic recovery waits for the original %s workspace without recreating it",
+  async (fault) => {
+    const fixture = await loopFixture((request, response) =>
+      respond(
+        response,
+        request.input.some((item) => JSON.stringify(item).includes("离线输入"))
+          ? request.input.some((item) => item.type === "function_call_output")
+            ? "恢复完成。"
+            : [
+                {
+                  name: "tools.call",
+                  input: {
+                    name: "process.exec",
+                    input: { command: "printf 'once\\n' >> verified-effect.txt" },
+                  },
+                },
+              ]
+          : "第一轮完成。",
+      ),
+    );
+    try {
+      const agent = await fixture.agent();
+      await fixture.send(agent.channelId, "原始输入");
+      await fixture.completed(agent.id);
+      const session = fixture.db((db) =>
+        db.prepare("SELECT id FROM owner_agent_sessions WHERE agent_id=?").get(agent.id),
+      );
+      const markerPath = join(agent.workspace, ".mate-workspace-id");
+      const marker = readFileSync(markerPath, "utf8");
+      await fixture.stopNode();
+      if (fault === "missing") renameSync(agent.workspace, `${agent.workspace}-saved`);
+      else writeFileSync(markerPath, `${"f".repeat(64)}\n`, { mode: 0o600 });
+      await fixture.send(agent.channelId, "离线输入");
+      await fixture.reconnectNode();
+      await new Promise((done) => setTimeout(done, 900));
+      expect(fixture.requests).toHaveLength(1);
+      expect(existsSync(join(agent.workspace, "verified-effect.txt"))).toBe(false);
+      if (fault === "missing") {
+        expect(existsSync(agent.workspace)).toBe(false);
+        renameSync(`${agent.workspace}-saved`, agent.workspace);
+      } else writeFileSync(markerPath, marker, { mode: 0o600 });
+      await eventually(
+        () => (existsSync(join(agent.workspace, "verified-effect.txt")) ? true : undefined),
+        "original workspace restored and automatically continued",
+      );
+      await fixture.completed(agent.id);
+      expect(readFileSync(join(agent.workspace, "verified-effect.txt"), "utf8")).toBe("once\n");
+      expect(
+        fixture.db((db) =>
+          db.prepare("SELECT id FROM owner_agent_sessions WHERE agent_id=?").get(agent.id),
+        ),
+      ).toEqual(session);
+      expect(JSON.stringify(fixture.requests[1]!.input)).toContain("原始输入");
+    } finally {
+      await fixture.close();
+    }
+  },
+  30000,
+);
 
 it("a rejected assistant commit keeps the service responsive and prevents its tool from executing", async () => {
   let requests = 0;

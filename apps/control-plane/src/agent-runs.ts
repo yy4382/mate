@@ -21,6 +21,8 @@ const maxRetryDelayMs = 5 * 60_000;
 interface RunCandidate {
   agent_id: string;
   node_id: string;
+  home: string | null;
+  home_marker: string | null;
   session_id: string;
   name: string;
   role: string;
@@ -36,7 +38,7 @@ interface RunCandidate {
 export class AgentRunCoordinator {
   private readonly activeAgents = new Map<
     string,
-    { runId: string; nodeId: string; loop: AgentLoop }
+    { runId: string; nodeId: string; provider: string; loop: AgentLoop }
   >();
   /** Deliveries already announced to their run: delivery id to the run that was told. */
   private readonly noticedDeliveries = new Map<string, string>();
@@ -112,14 +114,8 @@ export class AgentRunCoordinator {
        WHERE paused_reason='credentials' AND agent_id IN (SELECT id FROM owner_agents WHERE provider=?)`,
         )
         .run(this.now(), provider);
-    const running = this.db
-      .prepare(
-        `SELECT r.id,a.id AS agent_id FROM owner_agent_runs r
-         JOIN owner_agents a ON a.id=r.agent_id
-         WHERE r.state='running' AND a.provider=?`,
-      )
-      .all(provider) as Array<{ id: string; agent_id: string }>;
-    for (const run of running) this.invalidateRun(run.id, run.agent_id);
+    const running = [...this.activeAgents].filter(([, run]) => run.provider === provider);
+    for (const [agentId, run] of running) this.invalidateRun(run.runId, agentId);
     return running.length;
   }
 
@@ -470,6 +466,30 @@ export class AgentRunCoordinator {
       | undefined;
     if (row?.paused_reason !== "manual" && row?.paused_reason !== "context")
       return { ok: false, error: "Agent 尚未停用。" };
+    const verification = await this.verifyExecutionEnvironment(agentId, row);
+    if (!verification.ok) return verification;
+    if (this.pauseReason(agentId) !== row.paused_reason)
+      return { ok: false, error: "停用状态已变化，请重试。" };
+    this.db
+      .prepare(
+        "UPDATE owner_agent_run_control SET paused_reason=NULL,temporary_failures=0,updated_at=? WHERE agent_id=?",
+      )
+      .run(this.now(), agentId);
+    recordAgentActivity(this.db, {
+      agentId,
+      kind: "run.resumed",
+      summary: "所有者已恢复 Agent 运行。",
+      at: this.now(),
+    });
+    this.nodes.activateAgent(row.node_id, agentId);
+    this.wake();
+    return { ok: true };
+  }
+
+  private async verifyExecutionEnvironment(
+    agentId: string,
+    row: { node_id: string; home: string | null; home_marker: string | null },
+  ): Promise<{ ok: boolean; error?: string }> {
     let verified;
     try {
       verified = await this.nodes.provisionAgent(
@@ -494,22 +514,7 @@ export class AgentRunCoordinator {
       verified.identity.gid !== nodeAccount.gid ||
       verified.identity.workspace !== row.home
     )
-      return { ok: false, error: "运行账号或 Agent 工作区已缺失或改变；保持停用，请修复原数据。" };
-    if (this.pauseReason(agentId) !== row.paused_reason)
-      return { ok: false, error: "停用状态已变化，请重试。" };
-    this.db
-      .prepare(
-        "UPDATE owner_agent_run_control SET paused_reason=NULL,temporary_failures=0,updated_at=? WHERE agent_id=?",
-      )
-      .run(this.now(), agentId);
-    recordAgentActivity(this.db, {
-      agentId,
-      kind: "run.resumed",
-      summary: "所有者已恢复 Agent 运行。",
-      at: this.now(),
-    });
-    this.nodes.activateAgent(row.node_id, agentId);
-    this.wake();
+      return { ok: false, error: "原运行账号或 Agent 工作区未通过核验；请修复原数据。" };
     return { ok: true };
   }
 
@@ -538,11 +543,16 @@ export class AgentRunCoordinator {
         const runId = this.beginRun(candidate);
         if (!runId) continue;
         const loop = new AgentLoop(),
-          active = { runId, nodeId: candidate.node_id, loop };
+          active = { runId, nodeId: candidate.node_id, provider: candidate.provider, loop };
         this.activeAgents.set(candidate.agent_id, active);
         void this.advance(candidate, active, apiKey).finally(() => {
-          if (this.activeAgents.get(candidate.agent_id) === active)
+          if (this.activeAgents.get(candidate.agent_id) === active) {
+            // Heartbeat age may invalidate current() before the directory's offline sweep runs.
+            // End any still-owned durable run before releasing the admission slot.
+            this.finishRun(active.runId, candidate.agent_id, false, "node_disconnected");
+            active.loop.cancel();
             this.activeAgents.delete(candidate.agent_id);
+          }
           if (!this.closed) this.wake();
         });
       }
@@ -608,7 +618,7 @@ export class AgentRunCoordinator {
     const onlineNodePlaceholders = onlineNodeIds.map(() => "?").join(",");
     return this.db
       .prepare(
-        `SELECT a.id AS agent_id,a.node_id,s.id AS session_id,a.name,a.role,a.description,
+        `SELECT a.id AS agent_id,a.node_id,a.home,a.home_marker,s.id AS session_id,a.name,a.role,a.description,
                 a.provider,a.model_id,d.channel_id,c.visibility AS channel_visibility,
                 d.id AS delivery_id
          FROM owner_message_deliveries d
@@ -747,6 +757,8 @@ export class AgentRunCoordinator {
       JOIN owner_channels c ON c.id=d.channel_id
       WHERE d.recipient_kind='agent' AND d.recipient_id=? AND d.channel_id=? AND d.state='pending'
         AND d.seq>=? AND d.seq<=?
+        AND NOT EXISTS (SELECT 1 FROM owner_agent_session_records experienced
+          WHERE experienced.agent_id=d.recipient_id AND experienced.id=d.id)
         AND (NOT EXISTS (SELECT 1 FROM owner_message_deliveries seed JOIN owner_messages sm ON sm.id=seed.message_id WHERE seed.id=? AND sm.internal_kind='reminder') OR m.internal_kind='reminder')
       ORDER BY d.seq`,
       )
@@ -760,18 +772,16 @@ export class AgentRunCoordinator {
     }>;
     const messages = [
       ...history,
-      ...input
-        .filter((row) => !history.some((entry) => entry.id === row.id))
-        .map((row) => ({
-          id: row.id,
-          actionScopeId: run.delivery_id,
-          pending: true,
-          message: {
-            role: "user" as const,
-            timestamp: row.created_at,
-            content: `[消息来源：频道 ${run.channel_id}；可见范围：${row.visibility === "public" ? "公开" : "私密"}；讨论串：${row.root_id ?? "无"}；引用：${row.quote_id ?? "无"}]\n${row.text}`,
-          },
-        })),
+      ...input.map((row) => ({
+        id: row.id,
+        actionScopeId: run.delivery_id,
+        pending: true,
+        message: {
+          role: "user" as const,
+          timestamp: row.created_at,
+          content: `[消息来源：频道 ${run.channel_id}；可见范围：${row.visibility === "public" ? "公开" : "私密"}；讨论串：${row.root_id ?? "无"}；引用：${row.quote_id ?? "无"}]\n${row.text}`,
+        },
+      })),
       // Append pending late-receipt corrections after the admitted input batch.
       ...new AgentSession(this.db).pendingCorrections(agentId, run.delivery_id),
     ];
@@ -811,6 +821,18 @@ export class AgentRunCoordinator {
     try {
       await this.testDependencies.beforeRunStart?.(active.runId);
       if (!this.current(active.runId, candidate)) return;
+      const verification = await this.verifyExecutionEnvironment(candidate.agent_id, candidate);
+      if (!this.current(active.runId, candidate)) return;
+      if (!verification.ok) {
+        this.finishRun(
+          active.runId,
+          candidate.agent_id,
+          false,
+          "execution_environment",
+          verification.error,
+        );
+        return;
+      }
       const messages = this.readRunContext(active.runId, candidate.agent_id);
       if (!messages) throw new Error("Run context is unavailable");
       const result = await active.loop.run(
@@ -895,6 +917,7 @@ export class AgentRunCoordinator {
     const interrupted = code === "node_disconnected" || code === "aborted";
     const credentialFailure = code === "credentials_invalid" || code === "model_unavailable";
     const contextFailure = code === "context_failed";
+    const environmentFailure = code === "execution_environment";
     let contextPaused = false;
     let delay = 0;
     if (credentialFailure)
@@ -955,8 +978,13 @@ export class AgentRunCoordinator {
           ? "模型凭据或模型配置需要所有者处理，运行已暂停。"
           : contextPaused
             ? "上下文压缩连续失败，运行已暂停；请检查模型容量或摘要响应。"
-            : "模型服务暂时失败，稍后退避重试。",
-      detail: { code: safeFailureCode(code), ...(contextFailure && reason ? { reason } : {}) },
+            : environmentFailure
+              ? "原节点运行账号或 Agent 工作区未通过核验；保留队列，稍后退避重试。"
+              : "模型服务暂时失败，稍后退避重试。",
+      detail: {
+        code: safeFailureCode(code),
+        ...((contextFailure || environmentFailure) && reason ? { reason } : {}),
+      },
       at: this.now(),
     });
   }

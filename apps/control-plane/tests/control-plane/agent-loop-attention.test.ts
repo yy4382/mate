@@ -107,68 +107,107 @@ it.each(["read", "defer", "continue", "next-run"] as const)(
   30000,
 );
 
-it("a fresh Pi request observes a send conflict and can explicitly continue its draft", async () => {
-  const responses: ServerResponse[] = [];
-  const fixture = await loopFixture((_request, response) => responses.push(response));
-  try {
-    const agent = await fixture.agent();
-    await fixture.send(agent.channelId, "先准备发言");
-    await eventually(() => responses[0], "first request");
-    await fixture.send(agent.channelId, "准备期间对话变化");
-    respond(responses[0]!, [
-      {
-        name: "tools.call",
-        input: {
-          name: "messages.send",
-          input: { conversationId: agent.channelId, text: "我选择继续" },
+it.each(["revise", "abandon", "defer", "continue"] as const)(
+  "a fresh Pi request observes a send conflict and can choose %s",
+  async (choice) => {
+    const responses: ServerResponse[] = [];
+    const fixture = await loopFixture((_request, response) => responses.push(response));
+    try {
+      const agent = await fixture.agent();
+      await fixture.send(agent.channelId, "先准备发言");
+      await eventually(() => responses[0], "first request");
+      await fixture.send(agent.channelId, "准备期间对话变化");
+      respond(responses[0]!, [
+        {
+          name: "tools.call",
+          input: {
+            name: "messages.send",
+            input: { conversationId: agent.channelId, text: "我选择继续" },
+          },
         },
-      },
-    ]);
-    await eventually(() => responses[1], "conflict result");
-    const conflict = fixture.requests[1]!.input.find(
-      (item: any) => item.type === "function_call_output",
-    );
-    const result = JSON.parse(conflict.output);
-    expect(result.status).toBe("needs_review");
-    expect(result.changes).toBeDefined();
-    respond(responses[1]!, [
-      {
-        name: "tools.call",
-        input: { name: "drafts.review", input: { draftId: result.draftId, choice: "continue" } },
-      },
-    ]);
-    await eventually(() => responses[2], "explicit continuation");
-    respond(responses[2]!, [
-      {
-        name: "tools.call",
-        input: {
-          name: "messages.send",
-          input: { conversationId: agent.channelId, text: "我选择继续", draftId: result.draftId },
+      ]);
+      await eventually(() => responses[1], "conflict result");
+      const conflict = fixture.requests[1]!.input.find(
+        (item: any) => item.type === "function_call_output",
+      );
+      const result = JSON.parse(conflict.output);
+      expect(result.status).toBe("needs_review");
+      expect(result.changes).toBeDefined();
+      const text = choice === "revise" ? "我根据新消息修改" : "我选择继续";
+      respond(responses[1]!, [
+        {
+          name: "tools.call",
+          input: {
+            name: "drafts.review",
+            input: { draftId: result.draftId, choice, ...(choice === "revise" ? { text } : {}) },
+          },
         },
-      },
-    ]);
-    await eventually(() => responses[3], "atomic message commit");
-    expect(JSON.stringify(fixture.requests[3]!.input)).toContain("我选择继续");
-    respond(responses[3]!, "结束。");
-    await eventually(
-      () =>
-        fixture.db(
-          (db) =>
-            db
-              .prepare(
-                "SELECT COUNT(*) AS n FROM owner_agent_runs WHERE agent_id=? AND state='completed'",
-              )
-              .get(agent.id) as any,
-        )?.n,
-      "first completed run",
-    );
-    if (responses[4]) respond(responses[4], "新输入处理完毕。");
-    expect(
-      (await fixture.api(`/api/owner/channels/${agent.channelId}/messages`)).messages
-        .filter((m: any) => m.author.kind === "agent")
-        .map((m: any) => m.text),
-    ).toEqual(["我选择继续"]);
-  } finally {
-    await fixture.close();
-  }
-}, 30000);
+      ]);
+      await eventually(() => responses[2], "explicit draft choice");
+      const state =
+        choice === "revise"
+          ? "editing"
+          : choice === "abandon"
+            ? "abandoned"
+            : choice === "defer"
+              ? "deferred"
+              : "ready";
+      expect(
+        fixture.db((db) =>
+          db.prepare("SELECT state,text FROM owner_agent_drafts WHERE id=?").get(result.draftId),
+        ),
+      ).toEqual({ state, text });
+      expect(JSON.stringify(fixture.requests[2]!.input)).toContain(state);
+      let index = 2;
+      if (choice === "revise") {
+        respond(responses[index]!, [
+          {
+            name: "tools.call",
+            input: {
+              name: "drafts.review",
+              input: { draftId: result.draftId, choice: "continue" },
+            },
+          },
+        ]);
+        index++;
+        await eventually(() => responses[index], "revised draft ready");
+      }
+      if (choice === "revise" || choice === "continue") {
+        respond(responses[index]!, [
+          {
+            name: "tools.call",
+            input: {
+              name: "messages.send",
+              input: { conversationId: agent.channelId, text, draftId: result.draftId },
+            },
+          },
+        ]);
+        index++;
+        await eventually(() => responses[index], "atomic message commit");
+        expect(JSON.stringify(fixture.requests[index]!.input)).toContain(text);
+      }
+      respond(responses[index]!, "结束。");
+      await eventually(
+        () =>
+          fixture.db(
+            (db) =>
+              db
+                .prepare(
+                  "SELECT COUNT(*) AS n FROM owner_agent_runs WHERE agent_id=? AND state='completed'",
+                )
+                .get(agent.id) as any,
+          )?.n,
+        "first completed run",
+      );
+      if (responses[index + 1]) respond(responses[index + 1]!, "新输入处理完毕。");
+      expect(
+        (await fixture.api(`/api/owner/channels/${agent.channelId}/messages`)).messages
+          .filter((m: any) => m.author.kind === "agent")
+          .map((m: any) => m.text),
+      ).toEqual(choice === "revise" || choice === "continue" ? [text] : []);
+    } finally {
+      await fixture.close();
+    }
+  },
+  30000,
+);

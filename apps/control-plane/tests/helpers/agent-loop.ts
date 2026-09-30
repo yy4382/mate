@@ -71,6 +71,7 @@ export async function loopFixture(
   handler: (request: ProviderRequest, response: ServerResponse) => void,
   extraControl: string | ((directory: string) => string) = "",
   contextWindow?: number,
+  controlOptions = "",
 ) {
   const directory = mkdtempSync(join(tmpdir(), "mate-control-loop-"));
   chmodSync(directory, 0o700);
@@ -100,7 +101,7 @@ export async function loopFixture(
         ? extraControl
         : extraControl(directory)
       : "";
-    const runner = `const { startControlPlane } = await import(${JSON.stringify(pathToFileURL(resolve("dist/main.js")).href)}); startControlPlane(${port}, undefined, { dataDir: process.env.MATE_CONTROL_PLANE_DATA_DIR, passwordFile: process.env.MATE_OWNER_PASSWORD_FILE }, { modelForRun: ${modelForRun}${hooks} });`;
+    const runner = `const { startControlPlane } = await import(${JSON.stringify(pathToFileURL(resolve("dist/main.js")).href)}); startControlPlane(${port}, undefined, { dataDir: process.env.MATE_CONTROL_PLANE_DATA_DIR, passwordFile: process.env.MATE_OWNER_PASSWORD_FILE${controlOptions} }, { modelForRun: ${modelForRun}${hooks} });`;
     control = new ProcessOutput(
       spawn(process.execPath, ["--input-type=module", "--eval", runner], {
         env: {
