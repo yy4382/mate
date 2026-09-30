@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { inputMessage, assistantText } from "../helpers/session.js";
 import { resolve } from "node:path";
 import { expect, it } from "vitest";
@@ -20,7 +21,7 @@ it("does not settle the Pi model process until the control-plane transcript ACK 
     provider: "openai",
     modelId: "gpt-4o-mini",
     apiKey: "synthetic-process-test-key",
-    entry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
+    entry: fileURLToPath(new URL("../fixtures/direct-message-model-worker.mjs", import.meta.url)),
     onTranscript: async (entry) => {
       const text = assistantText(entry);
       if (text === undefined) return true;
@@ -83,7 +84,7 @@ it("waits for the control-plane tool result before asking Pi to generate its fin
     provider: "openai",
     modelId: "gpt-4o-mini",
     apiKey: "synthetic-key-tool-ack",
-    entry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
+    entry: fileURLToPath(new URL("../fixtures/direct-message-model-worker.mjs", import.meta.url)),
     onTranscript: async (entry) => {
       const text = assistantText(entry);
       if (text === undefined) return true;
@@ -142,7 +143,7 @@ it("marks each message source and tells Pi how to speak in a chosen conversation
     provider: "openai",
     modelId: "gpt-4o-mini",
     apiKey: "synthetic-key-inspect-context",
-    entry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
+    entry: fileURLToPath(new URL("../fixtures/direct-message-model-worker.mjs", import.meta.url)),
     onTranscript: async (entry) => {
       const text = assistantText(entry);
       if (text === undefined) return true;
@@ -193,7 +194,7 @@ it("lets the Agent schedule its own work from its record, claimed tasks, reminde
     provider: "openai",
     modelId: "gpt-4o-mini",
     apiKey: "synthetic-key-inspect-context",
-    entry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
+    entry: fileURLToPath(new URL("../fixtures/direct-message-model-worker.mjs", import.meta.url)),
     onTranscript: async (entry) => {
       const text = assistantText(entry);
       if (text === undefined) return true;
@@ -256,7 +257,7 @@ it("asks the Agent not to browse a peer's workspace instead of gating that read"
     provider: "openai",
     modelId: "gpt-4o-mini",
     apiKey: "synthetic-key-inspect-context",
-    entry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
+    entry: fileURLToPath(new URL("../fixtures/direct-message-model-worker.mjs", import.meta.url)),
     onTranscript: async (entry) => {
       const text = assistantText(entry);
       if (text === undefined) return true;
@@ -301,7 +302,7 @@ it("lets a scripted Agent read its reminders first and then stay silent", async 
     provider: "openai",
     modelId: "gpt-4o-mini",
     apiKey: "synthetic-key-reminders-silent",
-    entry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
+    entry: fileURLToPath(new URL("../fixtures/direct-message-model-worker.mjs", import.meta.url)),
     onTranscript: async (entry) => {
       if (entry.kind === "message" && entry.message.role === "assistant") transcriptCount++;
       return true;
@@ -357,7 +358,7 @@ it.each([
       provider: "openai",
       modelId: "gpt-4o-mini",
       apiKey,
-      entry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
+      entry: fileURLToPath(new URL("../fixtures/direct-message-model-worker.mjs", import.meta.url)),
       onTranscript: async (entry) => {
         if (entry.kind === "message" && entry.message.role === "assistant") transcriptCount++;
         return true;
@@ -396,7 +397,7 @@ it("treats empty Pi content with a normal stop reason as a successful silent tur
     provider: "openai",
     modelId: "gpt-4o-mini",
     apiKey: "synthetic-key-silent",
-    entry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
+    entry: fileURLToPath(new URL("../fixtures/direct-message-model-worker.mjs", import.meta.url)),
     onTranscript: async (entry) => {
       if (entry.kind === "message" && entry.message.role === "assistant") transcriptCount++;
       return true;

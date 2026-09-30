@@ -130,8 +130,8 @@ function startNode(options: {
   workspaceRoot: string;
   pairingToken?: string;
 }): ProcessOutput {
-  const clientModule = pathToFileURL(resolve("dist/src/nodes/client.js")).href,
-    executorModule = pathToFileURL(resolve("dist/src/nodes/workspace-execution.js")).href,
+  const clientModule = import.meta.resolve("@mate/node"),
+    executorModule = import.meta.resolve("@mate/node/workspace-execution"),
     runner = `
       const { runLinuxNodeWithTestDependencies } = await import(${JSON.stringify(clientModule)});
       const { LinuxWorkspaceExecutor } = await import(${JSON.stringify(executorModule)});

@@ -12,7 +12,7 @@ Mate 是让 Agent 同事持续工作与协作的个人环境。所有者通过 M
 - [运行配置](docs/CONFIGURATION.md)
 - [架构决定](docs/adr/0003-web-control-plane-and-linux-nodes.md)
 
-控制面和节点共用的通信校验、会话记录、操作数据与身份计算位于 `packages/protocol`（`@mate/protocol`）；摘要与工具调用身份通过 `@mate/protocol/node` 导出。数据库账本、模型与命令、文件执行保留在运行实现中。根构建会先构建协议 package。
+控制面和节点共用的通信校验、会话记录、操作数据与身份计算位于 `packages/protocol`（`@mate/protocol`）；摘要与工具调用身份通过 `@mate/protocol/node` 导出。Linux 节点、模型与命令、文件执行和节点操作账本位于 `apps/node`（`@mate/node`），节点构建会同时生成模型进程、文件操作辅助进程和原生重命名程序。控制面只使用协议 package 的共享定义；控制面与节点联调测试通过节点的明确导出使用节点。根构建会先构建协议 package。
 
 ## 本地检查
 

@@ -21,15 +21,6 @@ export class UnsupportedDatabaseError extends Error {
   }
 }
 
-/** Open a separate private node-side operation ledger through the storage boundary. */
-export function openNodeProcessDatabase(path: string): Database.Database {
-  const db = openWritable(path);
-  db.pragma("foreign_keys = ON");
-  db.pragma("journal_mode = DELETE");
-  db.pragma("synchronous = FULL");
-  return db;
-}
-
 /** Open the private control-plane database through the same writable SQLite boundary. */
 export function openControlPlaneDatabase(path: string, schema: string): Database.Database {
   const empty = !existsSync(path) || statSync(path).size === 0,

@@ -700,7 +700,7 @@ it("expires a blackholed node from owner status and reconnects after its pong de
     });
     expect(tokenResponse.status).toBe(201);
     const { pairingToken } = (await tokenResponse.json()) as { pairingToken: string };
-    const nodeModuleUrl = pathToFileURL(resolve("dist/src/nodes/client.js")).href;
+    const nodeModuleUrl = import.meta.resolve("@mate/node");
     const nodeRunner = `const { runLinuxNode } = await import(${JSON.stringify(nodeModuleUrl)}); await runLinuxNode({ controlPlaneUrl: process.env.MATE_CONTROL_PLANE_URL, dataDirectory: process.env.MATE_NODE_DATA_DIR, pairingToken: process.env.MATE_NODE_PAIRING_TOKEN, heartbeatIntervalMs: 50, heartbeatTimeoutMs: 1200 }, new AbortController().signal);`;
     node = new ProcessOutput(
       spawn(process.execPath, ["--input-type=module", "--eval", nodeRunner], {
@@ -779,7 +779,7 @@ it("reclaims a blackholed WebSocket slot and reconnects the same node identity",
     expect(tokenResponse.status).toBe(201);
     const { pairingToken } = (await tokenResponse.json()) as { pairingToken: string };
     proxy = await startTcpBlackholeProxy(controlPort);
-    const nodeModuleUrl = pathToFileURL(resolve("dist/src/nodes/client.js")).href;
+    const nodeModuleUrl = import.meta.resolve("@mate/node");
     const nodeRunner = `const { runLinuxNode } = await import(${JSON.stringify(nodeModuleUrl)}); await runLinuxNode({ controlPlaneUrl: process.env.MATE_CONTROL_PLANE_URL, dataDirectory: process.env.MATE_NODE_DATA_DIR, pairingToken: process.env.MATE_NODE_PAIRING_TOKEN, heartbeatIntervalMs: 40, heartbeatTimeoutMs: 600 }, new AbortController().signal);`;
     node = new ProcessOutput(
       spawn(process.execPath, ["--input-type=module", "--eval", nodeRunner], {
@@ -840,7 +840,7 @@ it("keeps retrying when the WebSocket handshake never completes", async () => {
   const directory = mkdtempSync(join(tmpdir(), "mate-node-handshake-timeout-"));
   chmodSync(directory, 0o700);
   const endpoint = await startUnresponsiveWebSocketEndpoint();
-  const moduleUrl = pathToFileURL(resolve("dist/src/nodes/client.js")).href;
+  const moduleUrl = import.meta.resolve("@mate/node");
   const runner = `const { runLinuxNode } = await import(${JSON.stringify(moduleUrl)}); await runLinuxNode({ controlPlaneUrl: process.env.MATE_CONTROL_PLANE_URL, dataDirectory: process.env.MATE_NODE_DATA_DIR, pairingToken: process.env.MATE_NODE_PAIRING_TOKEN }, new AbortController().signal);`;
   const node = new ProcessOutput(
     spawn(process.execPath, ["--input-type=module", "--eval", runner], {
@@ -872,7 +872,7 @@ it("aborts a connecting WebSocket without an unhandled error", async () => {
   const directory = mkdtempSync(join(tmpdir(), "mate-node-handshake-abort-"));
   chmodSync(directory, 0o700);
   const endpoint = await startUnresponsiveWebSocketEndpoint();
-  const moduleUrl = pathToFileURL(resolve("dist/src/nodes/client.js")).href;
+  const moduleUrl = import.meta.resolve("@mate/node");
   const runner = `const { runLinuxNode } = await import(${JSON.stringify(moduleUrl)}); const controller = new AbortController(); process.on("message", (message) => { if (message === "abort") { controller.abort(); process.disconnect(); } }); await runLinuxNode({ controlPlaneUrl: process.env.MATE_CONTROL_PLANE_URL, dataDirectory: process.env.MATE_NODE_DATA_DIR, pairingToken: process.env.MATE_NODE_PAIRING_TOKEN }, controller.signal);`;
   const node = new ProcessOutput(
     spawn(process.execPath, ["--input-type=module", "--eval", runner], {
@@ -951,7 +951,7 @@ it("pairs a node over WebSocket, confirms requests, and restores status after re
       if (token) env.MATE_NODE_PAIRING_TOKEN = token;
       else delete env.MATE_NODE_PAIRING_TOKEN;
       return new ProcessOutput(
-        spawn(process.execPath, [resolve("dist/src/node/main.js")], {
+        spawn(process.execPath, [resolve("apps/node/dist/main.js")], {
           cwd: process.cwd(),
           env,
           stdio: ["ignore", "pipe", "pipe"],
@@ -1180,7 +1180,7 @@ it("rejects an expired pairing token in a control-plane process with a short ass
     await delay(350);
 
     node = new ProcessOutput(
-      spawn(process.execPath, [resolve("dist/src/node/main.js")], {
+      spawn(process.execPath, [resolve("apps/node/dist/main.js")], {
         cwd: process.cwd(),
         env: {
           ...process.env,

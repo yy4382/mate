@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -324,11 +325,20 @@ async function handleProvision(
 }
 
 it("never reads or creates a Linux account for the Agent", () => {
-  const source = readFileSync(resolve("src/nodes/agent-provisioner.ts"), "utf8");
+  const source = readFileSync(
+    fileURLToPath(new URL("../../src/nodes/agent-provisioner.ts", import.meta.url)),
+    "utf8",
+  );
   for (const forbidden of ["useradd", "getent", "setpriv", "systemd", "fchownSync", "geteuid"])
     expect(source).not.toContain(forbidden);
-  expect(existsSync(resolve("src/nodes/agent-provisioner.ts"))).toBe(true);
-  expect(lstatSync(resolve("src/nodes/agent-provisioner.ts")).isFile()).toBe(true);
+  expect(
+    existsSync(fileURLToPath(new URL("../../src/nodes/agent-provisioner.ts", import.meta.url))),
+  ).toBe(true);
+  expect(
+    lstatSync(
+      fileURLToPath(new URL("../../src/nodes/agent-provisioner.ts", import.meta.url)),
+    ).isFile(),
+  ).toBe(true);
   // The running account is reported, not invented from the Agent ID.
   expect(source).not.toContain("linuxUsernameForAgentId");
   expect(userInfo().username.length).toBeGreaterThan(0);

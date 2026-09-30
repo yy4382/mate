@@ -175,10 +175,10 @@ async function exerciseCompaction(
       workspaceRoot: join(directory, "workspaces"),
       modelWorkerEntry: resolve(
         summaryMode === "interrupt"
-          ? "tests/fixtures/interrupted-compaction-model-worker.mjs"
+          ? "apps/node/tests/fixtures/interrupted-compaction-model-worker.mjs"
           : summaryMode === "recoveryOrder"
-            ? "tests/fixtures/interrupted-tool-result-model-worker.mjs"
-            : "tests/fixtures/protocol-model-worker.mjs",
+            ? "apps/node/tests/fixtures/interrupted-tool-result-model-worker.mjs"
+            : "apps/node/tests/fixtures/protocol-model-worker.mjs",
       ),
     };
     node = startNode({ ...nodeOptions, origin, pairingToken: pairing.pairingToken });
@@ -231,7 +231,7 @@ async function exerciseCompaction(
       ).toEqual({ n: 0 });
       node = startNode({
         ...nodeOptions,
-        modelWorkerEntry: resolve("tests/fixtures/protocol-model-worker.mjs"),
+        modelWorkerEntry: resolve("apps/node/tests/fixtures/protocol-model-worker.mjs"),
         origin,
       });
       await node.waitFor(/MATE_NODE_CONNECTED/);
@@ -269,7 +269,7 @@ async function exerciseCompaction(
       await api(`/api/owner/channels/${dm}/messages`, { text: "New input after the tool call" });
       node = startNode({
         ...nodeOptions,
-        modelWorkerEntry: resolve("tests/fixtures/protocol-model-worker.mjs"),
+        modelWorkerEntry: resolve("apps/node/tests/fixtures/protocol-model-worker.mjs"),
         origin,
       });
       await node.waitFor(/MATE_NODE_CONNECTED/);

@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { lstatSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,7 +11,9 @@ import {
 } from "../../src/execution/workspace-mutations.js";
 
 const roots: string[] = [];
-const renameNoReplace = createAtomicNoReplaceRename(resolve("dist/src/execution/rename-noreplace"));
+const renameNoReplace = createAtomicNoReplaceRename(
+  fileURLToPath(new URL("../../dist/execution/rename-noreplace", import.meta.url)),
+);
 const temp = () => {
   const root = mkdtempSync(join(tmpdir(), "mate-workspace-mutations-"));
   roots.push(root);

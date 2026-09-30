@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { expect, it } from "vitest";
 import { startModelProcess } from "../../src/nodes/model-process.js";
@@ -18,7 +19,7 @@ it("persists a complete assistant tool call before execution and its result befo
     provider: "openai",
     modelId: "gpt-4o-mini",
     apiKey: "synthetic-key-tool-ack",
-    entry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
+    entry: fileURLToPath(new URL("../fixtures/direct-message-model-worker.mjs", import.meta.url)),
     onTranscript: async (entry: any) => {
       commits.push(entry);
       if (entry.message?.role === "assistant" && entry.message.stopReason === "toolUse") {
@@ -83,7 +84,7 @@ it.each(["assistant", "toolResult"] as const)(
       provider: "openai",
       modelId: "gpt-4o-mini",
       apiKey: "synthetic-key-tool-ack",
-      entry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
+      entry: fileURLToPath(new URL("../fixtures/direct-message-model-worker.mjs", import.meta.url)),
       onTranscript: async (entry: any) => {
         commits.push(entry);
         return entry.message?.role !== role;

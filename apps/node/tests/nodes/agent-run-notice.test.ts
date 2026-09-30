@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { inputMessage, assistantText } from "../helpers/session.js";
 import Database from "better-sqlite3";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -184,7 +185,9 @@ async function startNode(): Promise<{
     },
     controller.signal,
     {
-      modelWorkerEntry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
+      modelWorkerEntry: fileURLToPath(
+        new URL("../fixtures/direct-message-model-worker.mjs", import.meta.url),
+      ),
       processOperations: new AgentProcessOperations(database, async () => ({
         state: "succeeded",
         receipt: {},

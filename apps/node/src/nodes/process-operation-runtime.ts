@@ -1,6 +1,6 @@
 import { chmodSync, lstatSync, mkdirSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
-import { openNodeProcessDatabase } from "../storage/initialize.js";
+import { openNodeProcessDatabase } from "./database.js";
 import {
   createLinuxAgentProcessExecutor,
   type LinuxAgentProcessExecutorOptions,

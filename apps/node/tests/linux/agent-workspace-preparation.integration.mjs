@@ -13,7 +13,7 @@ import {
   AgentProvisioningError,
   prepareAgentWorkspace,
   readAgentWorkspaceIdentity,
-} from "../../dist/src/nodes/agent-provisioner.js";
+} from "@mate/node/agent-provisioner";
 
 const launchingUid = typeof process.getuid === "function" ? process.getuid() : undefined;
 if (launchingUid === 0)

@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { inputMessage, assistantText } from "../helpers/session.js";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
@@ -16,7 +17,9 @@ interface WorkerAccountProbe {
   groups: number[] | null;
 }
 
-const probeEntry = resolve("tests/fixtures/account-probe-model-worker.mjs");
+const probeEntry = fileURLToPath(
+  new URL("../fixtures/account-probe-model-worker.mjs", import.meta.url),
+);
 const roots: string[] = [];
 
 afterEach(() => {

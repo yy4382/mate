@@ -73,7 +73,7 @@ it("preserves the observed unknown result and appends a late receipt through ano
       nodeData: join(directory, "node"),
       workspaceRoot: join(directory, "workspaces"),
       pairingToken: token.pairingToken,
-      modelWorkerEntry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
+      modelWorkerEntry: resolve("apps/node/tests/fixtures/direct-message-model-worker.mjs"),
     });
     const nodeId = (await node.waitFor(/MATE_NODE_PAIRED ([0-9a-f-]+)/))[1]!;
     const agentId = randomUUID();

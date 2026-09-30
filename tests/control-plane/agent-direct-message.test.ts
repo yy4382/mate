@@ -16,7 +16,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createControlPlaneApp } from "../../src/control-plane/http.js";
 import { WorkspaceService } from "../../src/control-plane/workspace.js";
 import type { NodeSocket } from "../../src/control-plane/nodes/directory.js";
-import { runAgentModel, type AgentRunTransport } from "../../src/nodes/agent-runner.js";
+import { runAgentModel, type AgentRunTransport } from "@mate/node/agent-runner";
 import {
   AgentProvisionStageSchema,
   type NodeControlMessage,
@@ -1328,7 +1328,7 @@ it("restarts the real Pi worker after a lost result without replaying a committe
       run as Parameters<typeof runAgentModel>[0],
       transportFor(run, controller, dropFirstToolReply),
       controller.signal,
-      { modelWorkerEntry: resolve("tests/fixtures/direct-message-model-worker.mjs") },
+      { modelWorkerEntry: resolve("apps/node/tests/fixtures/direct-message-model-worker.mjs") },
     );
   };
 
@@ -1480,7 +1480,7 @@ it("records every plain turn of one run, including narration beside a tool call"
     },
   };
   await runAgentModel(run, transport, new AbortController().signal, {
-    modelWorkerEntry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
+    modelWorkerEntry: resolve("apps/node/tests/fixtures/direct-message-model-worker.mjs"),
   });
   await Promise.all(resultAcks);
 
@@ -4690,7 +4690,7 @@ it("keeps a real Pi model reply private when its reminder runs in an archived DM
     result: (ok, code) => responses.push({ ok, ...(code ? { code } : {}) }),
   };
   await runAgentModel(run, transport, new AbortController().signal, {
-    modelWorkerEntry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
+    modelWorkerEntry: resolve("apps/node/tests/fixtures/direct-message-model-worker.mjs"),
   });
   expect(responses).toEqual([{ ok: true }]);
   await app.nodes.receive(

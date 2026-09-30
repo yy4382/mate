@@ -2,7 +2,7 @@
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 const workerMode = process.env.MATE_MODEL_WORKER;
 delete process.env.MATE_MODEL_WORKER;
-const { serveModelWorker } = await import("../../dist/src/nodes/model-worker.js");
+const { serveModelWorker } = await import("@mate/node/model-worker");
 process.env.MATE_MODEL_WORKER = workerMode;
 serveModelWorker((model, context) => {
   const stream = createAssistantMessageEventStream();

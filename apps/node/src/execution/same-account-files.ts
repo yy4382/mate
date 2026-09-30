@@ -34,7 +34,7 @@ export class SameAccountFileBackend implements ExecutionBackend {
       helperPath ??
       (existsSync(adjacent)
         ? adjacent
-        : resolve(dirname(adjacent), "../../dist/src/execution/file-operation.mjs"));
+        : resolve(dirname(adjacent), "../../dist/execution/file-operation.mjs"));
   }
   async execute(request: ExecutionRequest, signal?: AbortSignal): Promise<ExecutionResult> {
     const op = operationSchema.parse(request.operation);

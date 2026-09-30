@@ -11,7 +11,7 @@ pnpm install --frozen-lockfile
 pnpm build
 ```
 
-构建生成 `dist/src/control-plane/main.js`、`dist/src/node/main.js` 和 `dist/web`。运行时保留构建结果、`package.json` 与安装好的依赖，包括 workspace 链接指向的 `packages/protocol/package.json` 和 `packages/protocol/dist`；数据目录放在构建输出之外。
+构建生成 `dist/src/control-plane/main.js`、`apps/node/dist/main.js` 和 `dist/web`。运行时保留构建结果、`package.json` 与安装好的依赖，包括 workspace 链接指向的 `packages/protocol/package.json` 和 `packages/protocol/dist`，以及 `apps/node/package.json`、`apps/node/dist` 与节点包依赖；数据目录放在构建输出之外。
 
 准备仅自己可读的初始密码文件，内容为 12–1024 UTF-8 字节。以下路径是同一账号的示例，可替换为自己的绝对路径：
 
@@ -43,7 +43,7 @@ MATE_CONTROL_PLANE_URL=http://127.0.0.1:8787 \
 MATE_NODE_DATA_DIR="$HOME/mate/data/node" \
 MATE_NODE_AGENT_WORKSPACE_ROOT="$HOME/mate/agents" \
 MATE_NODE_PAIRING_TOKEN='网页生成的令牌' \
-node dist/src/node/main.js
+node apps/node/dist/main.js
 ```
 
 节点输出 `MATE_NODE_PAIRED` 和 `MATE_NODE_CONNECTED` 后，网页显示在线，可创建 Agent、设置模型服务 API key 并开始交流。配对身份保存在节点数据目录的 `node-identity.json`；以后用原路径启动，省略 `MATE_NODE_PAIRING_TOKEN`。模型凭据在网页管理，不放在启动配置里。所有环境变量见[运行配置](CONFIGURATION.md)。

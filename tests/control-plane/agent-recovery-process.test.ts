@@ -81,11 +81,11 @@ function startNode(
   fault: "before_receipt" | "normal",
   workspaceFault: "before_receipt" | "normal" | "disabled" = "disabled",
 ): Child {
-  const client = pathToFileURL(resolve("dist/src/nodes/client.js")).href;
-  const ledger = pathToFileURL(resolve("dist/src/nodes/process-operations.js")).href;
-  const storage = pathToFileURL(resolve("dist/src/storage/initialize.js")).href;
-  const workspace = pathToFileURL(resolve("dist/src/nodes/workspace-execution.js")).href;
-  const worker = resolve("tests/fixtures/direct-message-model-worker.mjs");
+  const client = import.meta.resolve("@mate/node");
+  const ledger = import.meta.resolve("@mate/node/process-operations");
+  const storage = import.meta.resolve("@mate/node/database");
+  const workspace = import.meta.resolve("@mate/node/workspace-execution");
+  const worker = resolve("apps/node/tests/fixtures/direct-message-model-worker.mjs");
   const runner = `
     const {runLinuxNodeWithTestDependencies}=await import(${JSON.stringify(client)});
     const {AgentProcessOperations}=await import(${JSON.stringify(ledger)});

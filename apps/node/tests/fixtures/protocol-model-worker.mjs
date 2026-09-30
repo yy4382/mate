@@ -2,7 +2,7 @@
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 const workerMode = process.env.MATE_MODEL_WORKER;
 delete process.env.MATE_MODEL_WORKER;
-const { serveModelWorker } = await import("../../dist/src/nodes/model-worker.js");
+const { serveModelWorker } = await import("@mate/node/model-worker");
 process.env.MATE_MODEL_WORKER = workerMode;
 const models = builtinModels();
 serveModelWorker((model, context, options) =>

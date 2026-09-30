@@ -111,7 +111,7 @@ it("reports weighted Agent usage through owner HTTP across model and service res
     const nodeOptions = {
       nodeData: join(directory, "node-data"),
       workspaceRoot: join(directory, "workspaces"),
-      modelWorkerEntry: resolve("tests/fixtures/protocol-model-worker.mjs"),
+      modelWorkerEntry: resolve("apps/node/tests/fixtures/protocol-model-worker.mjs"),
     };
     node = startNode({ ...nodeOptions, origin, pairingToken: pairing.pairingToken });
     const nodeId = (await node.waitFor(/MATE_NODE_PAIRED ([0-9a-f-]+)/i))[1]!;
@@ -295,7 +295,7 @@ it("reports positive Google SDK usage and keeps Pi-normalized zeros unavailable"
       pairingToken: pairing.pairingToken,
       nodeData: join(directory, "node-data"),
       workspaceRoot: join(directory, "workspaces"),
-      modelWorkerEntry: resolve("tests/fixtures/google-usage-model-worker.mjs"),
+      modelWorkerEntry: resolve("apps/node/tests/fixtures/google-usage-model-worker.mjs"),
     });
     const nodeId = (await node.waitFor(/MATE_NODE_PAIRED ([0-9a-f-]+)/i))[1]!;
     const agentId = randomUUID();

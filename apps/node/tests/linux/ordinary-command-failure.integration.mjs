@@ -16,10 +16,10 @@ import { tmpdir, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import Database from "better-sqlite3";
-import { prepareAgentWorkspace } from "../../dist/src/nodes/agent-provisioner.js";
-import { createLinuxAgentProcessExecutor } from "../../dist/src/nodes/linux-process-executor.js";
-import { AgentProcessOperations } from "../../dist/src/nodes/process-operations.js";
-import { openNodeProcessDatabase } from "../../dist/src/storage/initialize.js";
+import { prepareAgentWorkspace } from "@mate/node/agent-provisioner";
+import { createLinuxAgentProcessExecutor } from "@mate/node/linux-process-executor";
+import { AgentProcessOperations } from "@mate/node/process-operations";
+import { openNodeProcessDatabase } from "@mate/node/database";
 
 const launchingUid = typeof process.getuid === "function" ? process.getuid() : undefined;
 if (launchingUid === 0)
@@ -67,9 +67,9 @@ function openNode(commandTimeoutMs) {
 
 /** Start a real node process that runs one command and hard-exits before its result settles. */
 function startCrashingNode(agentId, operationId, command, commandTimeoutMs, ledger) {
-  const storageEntry = pathToFileURL(resolve("dist/src/storage/initialize.js")).href,
-    executorEntry = pathToFileURL(resolve("dist/src/nodes/linux-process-executor.js")).href,
-    operationsEntry = pathToFileURL(resolve("dist/src/nodes/process-operations.js")).href,
+  const storageEntry = import.meta.resolve("@mate/node/database"),
+    executorEntry = import.meta.resolve("@mate/node/linux-process-executor"),
+    operationsEntry = import.meta.resolve("@mate/node/process-operations"),
     script = `
       const { openNodeProcessDatabase } = await import(${JSON.stringify(storageEntry)});
       const { createLinuxAgentProcessExecutor } = await import(${JSON.stringify(executorEntry)});

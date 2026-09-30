@@ -7,8 +7,8 @@ if (process.platform !== "linux" && process.platform !== "darwin") {
   process.exit(0);
 }
 
-const output = resolve("dist/src/execution/rename-noreplace");
-mkdirSync(resolve("dist/src/execution"), { recursive: true });
+const output = resolve("dist/execution/rename-noreplace");
+mkdirSync(resolve("dist/execution"), { recursive: true });
 const compilation = spawnSync(
   process.env.CC || "cc",
   [

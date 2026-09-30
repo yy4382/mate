@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,7 +17,7 @@ afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true
 function invoke(root: string, operation: Record<string, unknown>) {
   const result = spawnSync(
     process.execPath,
-    [resolve("dist/src/execution/file-operation.mjs"), root],
+    [fileURLToPath(new URL("../../dist/execution/file-operation.mjs", import.meta.url)), root],
     { input: JSON.stringify(operation), encoding: "utf8" },
   );
   return { code: result.status, stdout: result.stdout, stderr: result.stderr };

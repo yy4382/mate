@@ -111,7 +111,7 @@ it("keeps the actual OpenAI request prefix across tool loops, DM, channel, threa
     const nodeOptions = {
       nodeData: join(directory, "node-data"),
       workspaceRoot: join(directory, "workspaces"),
-      modelWorkerEntry: resolve("tests/fixtures/protocol-model-worker.mjs"),
+      modelWorkerEntry: resolve("apps/node/tests/fixtures/protocol-model-worker.mjs"),
     };
     node = startNode({ ...nodeOptions, origin, pairingToken: pairing.pairingToken });
     const nodeId = (await node.waitFor(/MATE_NODE_PAIRED ([0-9a-f-]+)/i))[1]!;

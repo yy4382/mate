@@ -25,7 +25,7 @@ import {
 import { createServer } from "node:net";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
-import { startModelProcess } from "../../dist/src/nodes/model-process.js";
+import { startModelProcess } from "@mate/node/model-process";
 
 const launchingUid = typeof process.getuid === "function" ? process.getuid() : undefined;
 if (launchingUid === 0)
@@ -218,7 +218,7 @@ async function probeModelWorkerAccount() {
       provider: "openai",
       modelId: "gpt-4o-mini",
       apiKey: "synthetic-key-single-account-probe",
-      entry: join(process.cwd(), "tests/fixtures/account-probe-model-worker.mjs"),
+      entry: join(process.cwd(), "apps/node/tests/fixtures/account-probe-model-worker.mjs"),
       onTranscript: async (entry) => {
         if (entry.kind !== "message" || entry.message.role !== "assistant") return true;
         probe = JSON.parse(entry.message.content[0].text);
@@ -271,7 +271,7 @@ try {
 
   const startNode = (token, dataDirectory = nodeData, controlPlaneUrl = origin) =>
     start(
-      "dist/src/node/main.js",
+      "apps/node/dist/main.js",
       {
         MATE_CONTROL_PLANE_URL: controlPlaneUrl,
         MATE_NODE_DATA_DIR: dataDirectory,

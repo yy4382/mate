@@ -134,8 +134,8 @@ function startNode(options: {
   /** The node's ordinary-command time bound; tests that need a command to outlive the node raise it. */
   commandTimeoutMs?: number;
 }): ProcessOutput {
-  const clientModule = pathToFileURL(resolve("dist/src/nodes/client.js")).href,
-    runtimeModule = pathToFileURL(resolve("dist/src/nodes/process-operation-runtime.js")).href,
+  const clientModule = import.meta.resolve("@mate/node"),
+    runtimeModule = import.meta.resolve("@mate/node/process-operation-runtime"),
     runner = `
       const { runLinuxNodeWithTestDependencies } = await import(${JSON.stringify(clientModule)});
       const { openNodeProcessOperations } = await import(${JSON.stringify(runtimeModule)});
@@ -317,7 +317,7 @@ it("runs an Agent's ordinary commands as the launching account and reports every
       nodeData,
       workspaceRoot,
       pairingToken: pairing.pairingToken,
-      modelWorkerEntry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
+      modelWorkerEntry: resolve("apps/node/tests/fixtures/direct-message-model-worker.mjs"),
     });
     const nodeId = (await node.waitFor(/MATE_NODE_PAIRED ([0-9a-f-]+)/i))[1]!;
     const agent = await createAgent(origin, cookie, nodeId),
@@ -483,7 +483,7 @@ it("does not run a state-changing command twice when its lost receipt is retried
       nodeData,
       workspaceRoot,
       pairingToken: pairing.pairingToken,
-      modelWorkerEntry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
+      modelWorkerEntry: resolve("apps/node/tests/fixtures/direct-message-model-worker.mjs"),
     });
     const nodeId = (await node.waitFor(/MATE_NODE_PAIRED ([0-9a-f-]+)/i))[1]!;
     const agent = await createAgent(origin, cookie, nodeId),
@@ -589,7 +589,7 @@ it.each([false, true])(
         nodeData,
         workspaceRoot,
         pairingToken: pairing.pairingToken,
-        modelWorkerEntry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
+        modelWorkerEntry: resolve("apps/node/tests/fixtures/direct-message-model-worker.mjs"),
         commandTimeoutMs: 20_000,
       });
       const nodeId = (await node.waitFor(/MATE_NODE_PAIRED ([0-9a-f-]+)/i))[1]!;
@@ -638,7 +638,7 @@ it.each([false, true])(
         origin,
         nodeData,
         workspaceRoot,
-        modelWorkerEntry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
+        modelWorkerEntry: resolve("apps/node/tests/fixtures/direct-message-model-worker.mjs"),
         commandTimeoutMs: 20_000,
       });
       await restarted.waitFor(/MATE_NODE_CONNECTED ([0-9a-f-]+)/i);

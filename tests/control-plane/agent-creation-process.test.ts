@@ -20,7 +20,7 @@ import { WebSocket, WebSocketServer, type RawData } from "ws";
 
 const ownerPassword = "agent-creation-process-owner-password";
 /** This worker reports the account and runtime the node really started it with. */
-const probeWorker = resolve("tests/fixtures/account-probe-model-worker.mjs");
+const probeWorker = resolve("apps/node/tests/fixtures/account-probe-model-worker.mjs");
 
 interface ModelWorkerAccount {
   pid: number;
@@ -244,7 +244,7 @@ function startNode(options: {
   pairingToken?: string;
   modelWorkerEntry: string;
 }): ProcessOutput {
-  const clientModule = pathToFileURL(resolve("dist/src/nodes/client.js")).href,
+  const clientModule = import.meta.resolve("@mate/node"),
     runner = `
       const { runLinuxNodeWithTestDependencies } = await import(${JSON.stringify(clientModule)});
       const controller = new AbortController();
@@ -446,7 +446,7 @@ it("shows a diagnosable failure on the web when the node cannot prepare the work
       nodeData,
       workspaceRoot: readonlyRoot,
       pairingToken,
-      modelWorkerEntry: resolve("tests/fixtures/direct-message-model-worker.mjs"),
+      modelWorkerEntry: resolve("apps/node/tests/fixtures/direct-message-model-worker.mjs"),
     });
     const paired = await node.waitFor(/MATE_NODE_PAIRED ([0-9a-f-]+)/i);
 

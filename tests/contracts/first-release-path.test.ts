@@ -9,7 +9,7 @@ const manifest = JSON.parse(readFileSync(resolve("package.json"), "utf8")) as {
 
 it("exposes the Linux-user web control plane without superseded deployment paths", () => {
   expect(manifest.scripts["start:control-plane"]).toBe("node dist/src/control-plane/main.js");
-  expect(manifest.scripts["start:node"]).toBe("node dist/src/node/main.js");
+  expect(manifest.scripts["start:node"]).toBe("node apps/node/dist/main.js");
   expect(manifest.scripts).not.toHaveProperty("config:check");
   expect(Object.keys(manifest.dependencies).filter((name) => name.startsWith("@slack/"))).toEqual(
     [],
@@ -26,11 +26,13 @@ it("exposes the Linux-user web control plane without superseded deployment paths
 });
 
 it("runs the node and its short-lived model worker as the launching account", () => {
-  expect(existsSync(resolve("src/nodes/model-identity.ts"))).toBe(false);
-  expect(readFileSync(resolve("src/nodes/client.ts"), "utf8")).not.toContain(
+  expect(existsSync(resolve("apps/node/src/nodes/model-identity.ts"))).toBe(false);
+  expect(readFileSync(resolve("apps/node/src/nodes/client.ts"), "utf8")).not.toContain(
     "ensureModelWorkerIdentity",
   );
-  expect(readFileSync(resolve("src/nodes/model-process.ts"), "utf8")).not.toContain("setpriv");
+  expect(readFileSync(resolve("apps/node/src/nodes/model-process.ts"), "utf8")).not.toContain(
+    "setpriv",
+  );
 });
 
 it("keeps no implementation of a Mate-managed account, systemd unit or root service path", () => {
@@ -51,7 +53,7 @@ it("keeps no implementation of a Mate-managed account, systemd unit or root serv
   // Mate-created account name, or an identity switch are all things this release never does. Test
   // files are not scanned here because they name these strings in order to forbid them, and the
   // existence checks above are what keeps the removed checks themselves from coming back.
-  const sources = sourceFiles(resolve("src"));
+  const sources = [...sourceFiles(resolve("src")), ...sourceFiles(resolve("apps/node/src"))];
   for (const file of sources) {
     const text = readFileSync(file, "utf8");
     for (const forbidden of [

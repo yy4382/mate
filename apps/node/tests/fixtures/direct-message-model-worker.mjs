@@ -7,7 +7,7 @@ let syntheticToolTurn = 0;
 // Prevent the production entry guard from attaching the live provider stream a second time.
 const workerMode = process.env.MATE_MODEL_WORKER;
 delete process.env.MATE_MODEL_WORKER;
-const { serveModelWorker } = await import("../../dist/src/nodes/model-worker.js");
+const { serveModelWorker } = await import("@mate/node/model-worker");
 process.env.MATE_MODEL_WORKER = workerMode;
 
 serveModelWorker((model, context, options) => {

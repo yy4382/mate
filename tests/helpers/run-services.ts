@@ -138,12 +138,12 @@ export function startNode(options: {
   /** The node's ordinary-command time bound; tests that need a command to outlive the node raise it. */
   commandTimeoutMs?: number;
 }): ProcessOutput {
-  const clientModule = pathToFileURL(resolve("dist/src/nodes/client.js")).href,
-    runtimeModule = pathToFileURL(resolve("dist/src/nodes/process-operation-runtime.js")).href,
+  const clientModule = import.meta.resolve("@mate/node"),
+    runtimeModule = import.meta.resolve("@mate/node/process-operation-runtime"),
     runner = `
       const { runLinuxNodeWithTestDependencies } = await import(${JSON.stringify(clientModule)});
       const { openNodeProcessOperations } = await import(${JSON.stringify(runtimeModule)});
-      const { LinuxWorkspaceExecutor } = await import(${JSON.stringify(pathToFileURL(resolve("dist/src/nodes/workspace-execution.js")).href)});
+      const { LinuxWorkspaceExecutor } = await import(${JSON.stringify(import.meta.resolve("@mate/node/workspace-execution"))});
       const store = openNodeProcessOperations(
         process.env.MATE_NODE_DATA_DIR,
         process.env.MATE_NODE_AGENT_WORKSPACE_ROOT,

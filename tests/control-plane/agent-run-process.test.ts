@@ -277,8 +277,8 @@ it("runs Pi conversation tools through the authenticated Node and commits one ex
       });
     expect(pairingResponse.status).toBe(201);
     const pairing = (await pairingResponse.json()) as { pairingToken: string },
-      nodeModule = pathToFileURL(resolve("dist/src/nodes/client.js")).href,
-      fixture = resolve("tests/fixtures/direct-message-model-worker.mjs"),
+      nodeModule = import.meta.resolve("@mate/node"),
+      fixture = resolve("apps/node/tests/fixtures/direct-message-model-worker.mjs"),
       nodeRunner = `
         const { runLinuxNodeWithTestDependencies } = await import(${JSON.stringify(nodeModule)});
         const controller = new AbortController();
