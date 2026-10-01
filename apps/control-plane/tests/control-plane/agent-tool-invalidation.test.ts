@@ -461,7 +461,11 @@ it.each([
             const row = db!
               .prepare("SELECT * FROM owner_agent_process_operations WHERE operation_id=?")
               .get(oldReceipt.operationId) as any;
-            if (row?.state !== (boundary === "unconfirmed" ? "unknown" : "succeeded"))
+            // Disconnect first records a local unknown; reconciliation confirms the node receipt later.
+            if (
+              row?.state !== (boundary === "unconfirmed" ? "unknown" : "succeeded") ||
+              row.node_receipt_confirmed !== 1
+            )
               return undefined;
             expect(row).toMatchObject({
               operation_id: oldReceipt.operationId,

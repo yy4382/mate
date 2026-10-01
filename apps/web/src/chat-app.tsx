@@ -78,6 +78,16 @@ type DialogState = { kind: "create" } | { kind: "settings"; channel: Channel } |
 const maxLoadedMessages = 200;
 const emptyMessageWindow: MessageWindow = { messages: [], nextBefore: null, hasNewer: false };
 
+/** A received HTTP error, distinguishable from a lost or unreadable response. */
+class OwnerRequestError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 async function ownerJSON<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
@@ -85,11 +95,12 @@ async function ownerJSON<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (response.status === 401) {
     redirectToLogin();
-    throw new Error("登录状态已失效");
+    throw new OwnerRequestError(401, "登录状态已失效");
   }
   const result: unknown = await response.json().catch(() => null);
   if (!response.ok) {
-    throw new Error(
+    throw new OwnerRequestError(
+      response.status,
       typeof result === "object" && result !== null && "error" in result
         ? String(result.error)
         : "请求失败，请重试。",
@@ -693,11 +704,21 @@ export function ChatPage() {
         message={message}
         onCancel={() => setTaskCreation(null)}
         onCreate={async (title) => {
-          const task = await ownerJSON<Task>("/api/owner/tasks", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ messageId: message.id, title }),
-          });
+          let task: Task;
+          try {
+            task = await ownerJSON<Task>("/api/owner/tasks", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ messageId: message.id, title }),
+            });
+            if (!task || typeof task.id !== "string") throw new Error("Missing task result");
+          } catch (cause) {
+            // A gateway/server failure can occur after the control plane committed.
+            if (cause instanceof OwnerRequestError && cause.status < 500) throw cause;
+            throw new Error(
+              "创建提交结果未确认，可能已创建。请刷新查看任务列表，再决定是否创建另一项。",
+            );
+          }
           setTasks((current) => [...current.filter((existing) => existing.id !== task.id), task]);
           setTaskCreation((current) =>
             current?.message.id === message.id && current.position === position ? null : current,

@@ -75,19 +75,27 @@ it.each(["read", "defer", "continue", "next-run"] as const)(
         });
       }
       respond(responses[2]!, "完成。");
-      // The default next turn may contain the still-pending arrival. Complete it too.
-      await eventually(
-        () =>
-          fixture.db((db) => {
-            const rows = db
-              .prepare("SELECT state FROM owner_message_deliveries WHERE recipient_id=?")
-              .all(agent.id) as Array<{ state: string }>;
-            return rows.every((row) => row.state === "handled") || responses[3] ? true : undefined;
-          }),
-        "completion or pending next run",
-      );
-      if (responses[3]) respond(responses[3], "完成新的输入。");
-      await fixture.completed(agent.id);
+      // Arrivals and workspace receipt facts can add requests before the next run.
+      let nextResponse = 3;
+      await eventually(() => {
+        while (nextResponse < responses.length) {
+          const response = responses[nextResponse++]!;
+          if (!response.writableEnded && !response.destroyed) respond(response, "完成新的输入。");
+        }
+        return fixture.db((db) => {
+          const pending = db
+            .prepare(
+              "SELECT COUNT(*) AS n FROM owner_message_deliveries WHERE recipient_id=? AND state='pending'",
+            )
+            .get(agent.id) as { n: number };
+          const latest = db
+            .prepare(
+              "SELECT state FROM owner_agent_runs WHERE agent_id=? ORDER BY rowid DESC LIMIT 1",
+            )
+            .get(agent.id) as { state: string };
+          return pending.n === 0 && latest.state === "completed" ? true : undefined;
+        });
+      }, "all pending inputs and provider requests completed");
       expect(
         fixture.db((db) =>
           db

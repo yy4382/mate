@@ -139,6 +139,7 @@ let attachments: Array<{
 }>;
 let attachmentUploads: Array<{ channelId: string; body: BodyInit | null; headers: Headers }>;
 let failNextAttachmentUpload: boolean;
+let loseNextTaskResponse: "network" | "invalid" | "gateway" | null;
 
 function delayNextPost(): { started: Promise<void>; release: () => void } {
   let signalStarted!: () => void, release!: () => void;
@@ -236,6 +237,13 @@ function installFetch(): void {
           ownerAgentId: null,
         };
         tasks.push(task);
+        if (loseNextTaskResponse) {
+          const fault = loseNextTaskResponse;
+          loseNextTaskResponse = null;
+          if (fault === "invalid") return json(201, null);
+          if (fault === "gateway") return json(502, { error: "上游响应丢失" });
+          throw new TypeError("Failed to fetch");
+        }
         return json(201, task);
       }
       return json(200, { tasks });
@@ -338,6 +346,7 @@ async function openChat(): Promise<ReturnType<typeof userEvent.setup>> {
 }
 
 beforeEach(() => {
+  loseNextTaskResponse = null;
   window.history.replaceState({}, "", "/");
   channels = [publicChannel, privateChannel];
   history = new Map([
@@ -839,3 +848,31 @@ it("creates titled tasks repeatedly on the root and reply and shows every title,
   expect(await screen.findByText(/根消息第三项/)).not.toBeNull();
   expect(screen.queryByText(/回复第一项/)).toBeNull();
 });
+
+it.each(["network", "invalid", "gateway"] as const)(
+  "reports an unconfirmed create truthfully after a %s response loss and does not automatically repeat it",
+  async (fault) => {
+    const root = message(publicChannel.id, "uncertain-task", "可能已经提交的事项", "1");
+    history.set(publicChannel.id, [root]);
+    const user = await openChat();
+    await user.click(screen.getByRole("button", { name: `消息 ${root.text} 的操作` }));
+    await user.click(screen.getByRole("button", { name: "从消息建任务" }));
+    loseNextTaskResponse = fault;
+    await user.click(screen.getByRole("button", { name: "创建任务", exact: true }));
+    expect((await screen.findByRole("alert")).textContent).toContain("提交结果未确认");
+    expect(screen.getByRole("alert").textContent).toContain("可能已创建");
+    expect(taskPosts).toEqual([{ messageId: root.id, title: root.text }]);
+    expect(tasks).toHaveLength(1);
+    cleanup();
+    TestEventSource.instances = [];
+    await openChat();
+    expect(await screen.findByText(/任务 · 待认领/)).not.toBeNull();
+    expect(taskPosts).toHaveLength(1);
+    // The owner can still deliberately record another task with the same title.
+    await user.click(screen.getByRole("button", { name: `消息 ${root.text} 的操作` }));
+    await user.click(screen.getByRole("button", { name: "从消息建任务" }));
+    await user.click(screen.getByRole("button", { name: "创建任务", exact: true }));
+    await waitFor(() => expect(taskPosts).toHaveLength(2));
+    expect(tasks).toHaveLength(2);
+  },
+);

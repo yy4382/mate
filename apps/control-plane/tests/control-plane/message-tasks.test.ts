@@ -1,6 +1,8 @@
 import { expect, it } from "vitest";
 import { loopFixture, respond, type ProviderRequest } from "../helpers/agent-loop.js";
 import { eventually } from "../helpers/run-services.js";
+import Database from "better-sqlite3";
+import { join } from "node:path";
 
 function results(request: ProviderRequest): any[] {
   return request.input
@@ -478,6 +480,45 @@ it("task additions preserve a ready message-change draft and a fresh snapshot ap
       (await action("tasks.review", { draftId: held.draftId, choice: "inspect" })).changes,
     ).toEqual([expect.objectContaining({ text: "刷新任务事实之后又有正文变化" })]);
     await action("tasks.review", { draftId: held.draftId, choice: "continue" });
+    // Fail the final success-receipt write, after task, activity and draft application.
+    const writer = new Database(
+      join(fixture.directory, "control-plane-data", "control-plane.sqlite"),
+    );
+    try {
+      writer.exec(`CREATE TRIGGER refuse_task_receipt BEFORE INSERT ON owner_agent_tool_actions
+        WHEN NEW.operation='tasks.create' AND json_extract(NEW.result_json,'$.status')='created'
+        BEGIN SELECT RAISE(ABORT,'synthetic task receipt failure'); END;`);
+      expect(
+        await action("tasks.create", {
+          ...input,
+          taskSnapshot: changed.taskSnapshot,
+          draftId: held.draftId,
+        }),
+      ).toMatchObject({ error: "Agent tool request was refused" });
+      expect((await fixture.api("/api/owner/tasks")).tasks).toHaveLength(3);
+      expect(
+        fixture.db((db) =>
+          db.prepare("SELECT COUNT(*) AS n FROM owner_task_events WHERE kind='created'").get(),
+        ),
+      ).toEqual({ n: 3 });
+      expect(
+        fixture.db((db) =>
+          db
+            .prepare(
+              "SELECT COUNT(*) AS n FROM owner_agent_tool_actions WHERE operation='tasks.create' AND json_extract(result_json,'$.status')='created'",
+            )
+            .get(),
+        ),
+      ).toEqual({ n: 1 });
+      expect(
+        fixture.db((db) =>
+          db.prepare("SELECT state FROM owner_task_drafts WHERE id=?").get(held.draftId),
+        ),
+      ).toEqual({ state: "ready" });
+      writer.exec("DROP TRIGGER refuse_task_receipt");
+    } finally {
+      writer.close();
+    }
     const applied = await action("tasks.create", {
       ...input,
       taskSnapshot: changed.taskSnapshot,
