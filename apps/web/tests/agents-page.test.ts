@@ -529,6 +529,15 @@ it("browses an Agent default workspace read-only, previews and streams downloads
   expect(await screen.findByRole("button", { name: /tail.txt/ })).not.toBeNull();
   expect(fetchMock.mock.calls.some(([input]) => String(input).includes("offset=3"))).toBe(true);
 
+  agents = agents.map((agent) => ({
+    ...agent,
+    description: "Status refreshed without changing the workspace",
+  }));
+  await screen.findByDisplayValue("Status refreshed without changing the workspace", undefined, {
+    timeout: 4500,
+  });
+  expect(screen.getByRole("button", { name: /tail.txt/ })).not.toBeNull();
+
   await user.click(screen.getByRole("button", { name: /projects\// }));
   expect(await screen.findByRole("button", { name: /plan.md/ })).not.toBeNull();
 });

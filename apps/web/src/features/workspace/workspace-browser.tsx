@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AgentSummary } from "../agents/agent-responses.js";
 import type { NodeSummary } from "../nodes/node-responses.js";
 import type { WorkspaceEntry, WorkspaceFileStat, WorkspaceVersion } from "@mate/protocol/workspace";
@@ -48,6 +48,8 @@ export function WorkspaceBrowser({
     version: WorkspaceVersion;
   } | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
+  const requestGeneration = useRef(0);
+  const previewRequest = useRef(0);
   const currentAgent = available.find((agent) => agent.id === agentId) ?? available[0];
   const currentNode = currentAgent
     ? nodes.find((node) => node.id === currentAgent.nodeId)
@@ -62,6 +64,11 @@ export function WorkspaceBrowser({
   }, [agentId, currentAgent]);
 
   useEffect(() => {
+    requestGeneration.current += 1;
+    setLoading(false);
+    setLoadingMore(false);
+    setPreviewBusy(false);
+    setPreview(null);
     if (!currentAgent) {
       setEntries([]);
       setNextOffset(null);
@@ -113,11 +120,23 @@ export function WorkspaceBrowser({
       });
     return () => {
       active = false;
+      requestGeneration.current += 1;
     };
-  }, [currentAgent, currentNode, path, refresh]);
+  }, [
+    currentAgent?.id,
+    currentNode?.id,
+    currentNode?.online,
+    currentNode?.lastConnectedAt,
+    path,
+    refresh,
+  ]);
 
   async function previewFile(filePath: string, offset = 0, knownStat?: WorkspaceFileStat) {
     if (!currentAgent) return;
+    const generation = requestGeneration.current,
+      request = ++previewRequest.current,
+      isCurrent = () =>
+        generation === requestGeneration.current && request === previewRequest.current;
     setPreviewBusy(true);
     setError(null);
     try {
@@ -127,6 +146,7 @@ export function WorkspaceBrowser({
           `/api/owner/agents/${encodeURIComponent(currentAgent.id)}/workspace/stat?${new URLSearchParams({ path: filePath })}`,
           statSchema,
         ));
+      if (!isCurrent()) return;
       if (stat.type !== "file") throw new Error("只能预览普通文件。");
       const query = new URLSearchParams({
           path: filePath,
@@ -137,6 +157,7 @@ export function WorkspaceBrowser({
           `/api/owner/agents/${encodeURIComponent(currentAgent.id)}/workspace/chunk?${query}`,
           chunkSchema,
         );
+      if (!isCurrent()) return;
       setPreview({
         path: filePath,
         size: chunk.totalBytes,
@@ -145,14 +166,16 @@ export function WorkspaceBrowser({
         version: chunk.version,
       });
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "文件预览失败，请重试。");
+      if (isCurrent())
+        setError(reason instanceof Error ? reason.message : "文件预览失败，请重试。");
     } finally {
-      setPreviewBusy(false);
+      if (isCurrent()) setPreviewBusy(false);
     }
   }
 
   async function loadMoreEntries() {
     if (!currentAgent || nextOffset === null || loadingMore) return;
+    const generation = requestGeneration.current;
     const query = new URLSearchParams({ path, offset: String(nextOffset), limit: "32" });
     setLoadingMore(true);
     setError(null);
@@ -161,15 +184,17 @@ export function WorkspaceBrowser({
         `/api/owner/agents/${encodeURIComponent(currentAgent.id)}/workspace?${query}`,
         directoryPageSchema,
       );
+      if (generation !== requestGeneration.current) return;
       setEntries((current) => {
         const existing = new Set(current.map((entry) => entry.name));
         return [...current, ...result.entries.filter((entry) => !existing.has(entry.name))];
       });
       setNextOffset(result.nextOffset);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "读取更多目录项失败，请重试。");
+      if (generation === requestGeneration.current)
+        setError(reason instanceof Error ? reason.message : "读取更多目录项失败，请重试。");
     } finally {
-      setLoadingMore(false);
+      if (generation === requestGeneration.current) setLoadingMore(false);
     }
   }
 
