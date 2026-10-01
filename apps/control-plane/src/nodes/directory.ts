@@ -1,3 +1,5 @@
+import type { NodeSummary } from "@mate/protocol/owner";
+import { z } from "zod";
 import { processOperationRequestHash } from "@mate/protocol/node";
 import {
   agentProcessOperationSchema,
@@ -17,7 +19,7 @@ import {
 import type Database from "better-sqlite3";
 import { createHash, createPublicKey, randomBytes, randomUUID, verify } from "node:crypto";
 
-import { recordAgentActivity } from "../activity.js";
+import { recordAgentActivity } from "../runtime/activity.js";
 
 export const DEFAULT_NODE_PAIRING_TOKEN_TTL_MS = 10 * 60 * 1000;
 export const DEFAULT_NODE_MAX_CONNECTIONS = 128;
@@ -51,12 +53,6 @@ interface SocketSession {
     blocking: boolean;
   };
   handshakeTimeout?: ReturnType<typeof setTimeout>;
-}
-
-export interface NodeSummary {
-  id: string;
-  online: boolean;
-  lastConnectedAt: string | null;
 }
 
 /** The one ordinary Linux account a paired node runs every one of its Agents under. */
@@ -229,11 +225,16 @@ export class NodeDirectory {
    * node's first successful workspace preparation recorded it.
    */
   account(nodeId: string): NodeAccount | undefined {
-    const row = this.database
-      .prepare(
-        "SELECT linux_username,uid,gid FROM nodes WHERE id=? AND linux_username IS NOT NULL AND uid IS NOT NULL AND gid IS NOT NULL",
-      )
-      .get(nodeId) as { linux_username: string; uid: number; gid: number } | undefined;
+    const row = z
+      .looseObject({ linux_username: z.string(), uid: z.number(), gid: z.number() })
+      .optional()
+      .parse(
+        this.database
+          .prepare(
+            "SELECT linux_username,uid,gid FROM nodes WHERE id=? AND linux_username IS NOT NULL AND uid IS NOT NULL AND gid IS NOT NULL",
+          )
+          .get(nodeId),
+      );
     return row ? { username: row.linux_username, uid: row.uid, gid: row.gid } : undefined;
   }
 
@@ -267,9 +268,14 @@ export class NodeDirectory {
   }
 
   list(): NodeSummary[] {
-    const rows = this.database
-      .prepare("SELECT id, last_connected_at FROM nodes ORDER BY paired_at, id")
-      .all() as Array<{ id: string; last_connected_at: number | null }>;
+    const rows = z
+      .looseObject({ id: z.string(), last_connected_at: z.number().nullable() })
+      .array()
+      .parse(
+        this.database
+          .prepare("SELECT id, last_connected_at FROM nodes ORDER BY paired_at, id")
+          .all(),
+      );
     const now = this.now();
     return rows.map((row) => {
       const socket = this.connected.get(row.id);
@@ -450,8 +456,10 @@ export class NodeDirectory {
     nodeId: string,
     request: NodeWorkspaceOperationStart,
   ): Promise<NodeWorkspaceOperationResult> {
-    const controlMessage = NodeControlMessageSchema.parse(request) as NodeWorkspaceOperationStart,
-      existing = this.pendingWorkspaceOperations.get(request.requestId);
+    const controlMessage = NodeControlMessageSchema.parse(request);
+    if (controlMessage.type !== "control.workspace.operation")
+      throw new Error("Invalid workspace operation");
+    const existing = this.pendingWorkspaceOperations.get(request.requestId);
     if (existing) {
       if (
         existing.nodeId !== nodeId ||
@@ -623,9 +631,10 @@ export class NodeDirectory {
   ): void {
     if (session.nodeId)
       return this.reject(socket, request.requestId, "invalid_identity", "连接已完成身份验证。");
-    const row = this.database
-      .prepare("SELECT public_key FROM nodes WHERE id=?")
-      .get(request.nodeId) as { public_key: string } | undefined;
+    const row = z
+      .looseObject({ public_key: z.string() })
+      .optional()
+      .parse(this.database.prepare("SELECT public_key FROM nodes WHERE id=?").get(request.nodeId));
     if (!row) {
       this.send(socket, {
         type: "control.error",
@@ -716,21 +725,22 @@ export class NodeDirectory {
     blocking: boolean,
   ): void {
     if (!session.nodeId || this.connected.get(session.nodeId) !== socket) return;
-    const rows = this.database
-      .prepare(
-        `SELECT operation_id,agent_id,request_json FROM (
+    const rows = z
+      .looseObject({ operation_id: z.string(), agent_id: z.string(), request_json: z.string() })
+      .array()
+      .parse(
+        this.database
+          .prepare(
+            `SELECT operation_id,agent_id,request_json FROM (
           SELECT operation_id,agent_id,request_json FROM owner_agent_process_operations
           WHERE node_id=? AND (? OR state IN ('executing','unknown'))
           UNION ALL
           SELECT operation_id,agent_id,'{"operation":{"kind":"process.stop_all"}}' AS request_json FROM owner_agent_stop_intents
           WHERE node_id=? AND state IN ('executing','unknown')
         ) WHERE operation_id>? ORDER BY operation_id LIMIT 100`,
-      )
-      .all(session.nodeId, blocking ? 1 : 0, session.nodeId, cursor) as Array<{
-      operation_id: string;
-      agent_id: string;
-      request_json: string;
-    }>;
+          )
+          .all(session.nodeId, blocking ? 1 : 0, session.nodeId, cursor),
+      );
     if (rows.length === 0) {
       this.startWorkspaceReconciliation(socket, session, "", blocking);
       return;
@@ -833,9 +843,17 @@ export class NodeDirectory {
       }
       return;
     }
-    const rows = this.database
-      .prepare(
-        `SELECT json_extract(CASE WHEN json_valid(action.result_json) THEN action.result_json ELSE '{}' END,'$.operationId') AS operation_id,
+    const rows = z
+      .looseObject({
+        operation_id: z.string(),
+        agent_id: z.string(),
+        request_hash: z.string().nullable(),
+      })
+      .array()
+      .parse(
+        this.database
+          .prepare(
+            `SELECT json_extract(CASE WHEN json_valid(action.result_json) THEN action.result_json ELSE '{}' END,'$.operationId') AS operation_id,
               action.agent_id, json_extract(CASE WHEN json_valid(action.result_json) THEN action.result_json ELSE '{}' END,'$.nodeRequestHash') AS request_hash
        FROM owner_agent_tool_actions action
        JOIN owner_agents agent ON agent.id=action.agent_id
@@ -843,12 +861,9 @@ export class NodeDirectory {
          AND (? OR json_extract(CASE WHEN json_valid(action.result_json) THEN action.result_json ELSE '{}' END,'$.state') IN ('executing','unknown'))
          AND json_extract(CASE WHEN json_valid(action.result_json) THEN action.result_json ELSE '{}' END,'$.operationId')>?
        ORDER BY operation_id LIMIT 100`,
-      )
-      .all(session.nodeId, blocking ? 1 : 0, cursor) as Array<{
-      operation_id: string;
-      agent_id: string;
-      request_hash: string | null;
-    }>;
+          )
+          .all(session.nodeId, blocking ? 1 : 0, cursor),
+      );
     if (rows.length === 0) {
       if (blocking) {
         session.ready = true;

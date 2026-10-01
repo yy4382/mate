@@ -3,9 +3,10 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createElement } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { AgentsPage, waitForDownloadStatus } from "../src/agents-page.js";
+import { AgentsPage } from "../src/features/agents/agents-page.js";
+import { waitForDownloadStatus } from "../src/features/workspace/download-status.js";
 
-vi.mock("../src/agents-page.css", () => ({}));
+vi.mock("../src/features/agents/agents-page.css", () => ({}));
 vi.mock("../src/navigation.js", () => ({ redirectToLogin: vi.fn() }));
 
 const nodeId = "c5342142-9cf5-4b22-86f3-bdc46bb471f2";
@@ -40,7 +41,7 @@ let workspacePages: Array<{
   path: string;
   offset: number;
   entries: Array<{ name: string; type: string; size: number }>;
-  nextOffset: string | null;
+  nextOffset: number | null;
 }>;
 let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -486,7 +487,7 @@ it("browses an Agent default workspace read-only, previews and streams downloads
         { name: "projects", type: "directory", size: 0 },
         { name: "shortcut", type: "symlink", size: 0 },
       ],
-      nextOffset: "3",
+      nextOffset: 3,
     },
     {
       path: "",
@@ -965,4 +966,16 @@ it("keeps a no-record node conflict visible through refreshes until the owner st
 
   await user.click(screen.getByRole("button", { name: "新建资料" }));
   expect(screen.queryByRole("alert")).toBeNull();
+});
+
+it("keeps malformed node responses out of Agent state and shows the existing Chinese read error", async () => {
+  fetchMock.mockImplementationOnce(async () =>
+    json(200, { nodes: [{ id: 7, online: true, lastConnectedAt: null }] }),
+  );
+  render(createElement(AgentsPage));
+  expect(await screen.findByRole("alert")).toHaveProperty(
+    "textContent",
+    "暂时无法读取控制面资料。",
+  );
+  expect(screen.queryByRole("option", { name: "在线 · 7" })).toBeNull();
 });

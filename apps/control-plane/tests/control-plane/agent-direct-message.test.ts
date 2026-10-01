@@ -1,5 +1,5 @@
 import { toolTestApp, bindToolSocket, toolTestInput, type TestRun } from "../helpers/tool-run.js";
-import { type ModelContextMessage } from "../../src/session-record.js";
+import { type ModelContextMessage } from "../../src/runtime/session/record.js";
 import { assistantEntry } from "../helpers/session.js";
 import {
   chmodSync,
@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createControlPlaneApp } from "../../src/http.js";
-import { WorkspaceService } from "../../src/workspace.js";
+import { WorkspaceService } from "../../src/workspaces/service.js";
 import type { NodeSocket } from "../../src/nodes/directory.js";
 import { AgentProvisionStageSchema, type NodeControlMessage } from "@mate/protocol";
 

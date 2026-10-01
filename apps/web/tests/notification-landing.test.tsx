@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
-import { ChatPage } from "../src/chat-app.js";
+import { ChatPage } from "../src/features/conversations/chat-page.js";
 
 const root = {
   id: "old-root",
@@ -31,6 +31,7 @@ afterEach(() => {
 async function land(
   target: { messageId: string },
   context?: unknown,
+  expectFallback = false,
 ): Promise<{ scrolled: string[]; requested: string[] }> {
   const targetId = `message-${target.messageId}`;
   window.history.replaceState({}, "", `/app?channel=room&message=${target.messageId}`);
@@ -92,7 +93,7 @@ async function land(
     }),
   );
   render(<ChatPage />);
-  if (context === null || context instanceof Error)
+  if (context === null || context instanceof Error || expectFallback)
     await waitFor(() => expect(document.getElementById(`message-${root.id}`)).not.toBeNull());
   else await waitFor(() => expect(scrolled).toContain(targetId));
   return { scrolled, requested };
@@ -162,3 +163,26 @@ for (const failure of [null, new Error("network down")]) {
     ).toHaveLength(1);
   });
 }
+
+it.each([
+  { kind: "unknown", messageId: "malformed-message" },
+  {
+    kind: "timeline",
+    messageId: "malformed-message",
+    page: { messages: [{ ...root, order: "invalid" }], nextBefore: null },
+    hasNewer: true,
+  },
+  { kind: "thread", messageId: "malformed-message", thread: { root, replies: [null] } },
+])(
+  "falls back to latest messages when a successful context response is malformed",
+  async (context) => {
+    const { requested } = await land({ messageId: "malformed-message" }, context, true);
+    expect(document.querySelector('.conversation-panel [role="alert"]')?.textContent).toContain(
+      "通知中的消息",
+    );
+    expect(document.getElementById(`message-${root.id}`)?.textContent).toContain("旧消息");
+    expect(
+      requested.filter((path) => path.endsWith("/messages/malformed-message/context")),
+    ).toHaveLength(1);
+  },
+);

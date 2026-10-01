@@ -1,4 +1,4 @@
-import { type ModelContextMessage, type SessionCommit } from "../../src/session-record.js";
+import { type ModelContextMessage, type SessionCommit } from "../../src/runtime/session/record.js";
 import { randomUUID } from "node:crypto";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 

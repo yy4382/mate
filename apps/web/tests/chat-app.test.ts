@@ -3,10 +3,15 @@ import { act, cleanup, render, screen, waitFor, within } from "@testing-library/
 import userEvent from "@testing-library/user-event";
 import { createElement } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { ChatPage } from "../src/chat-app.js";
+import { ChatPage } from "../src/features/conversations/chat-page.js";
+import {
+  messageSchema,
+  readChatEvent,
+} from "../src/features/conversations/conversation-responses.js";
+import { ownerJSON, OwnerRequestError } from "../src/features/conversations/owner-request.js";
 import { redirectToLogin } from "../src/navigation.js";
 
-vi.mock("../src/chat.css", () => ({}));
+vi.mock("../src/features/conversations/chat.css", () => ({}));
 vi.mock("../src/navigation.js", () => ({ redirectToLogin: vi.fn() }));
 
 interface FixtureChannel {
@@ -139,7 +144,7 @@ let attachments: Array<{
 }>;
 let attachmentUploads: Array<{ channelId: string; body: BodyInit | null; headers: Headers }>;
 let failNextAttachmentUpload: boolean;
-let loseNextTaskResponse: "network" | "invalid" | "gateway" | null;
+let loseNextTaskResponse: "network" | "invalid" | "malformed" | "unreadable" | "gateway" | null;
 
 function delayNextPost(): { started: Promise<void>; release: () => void } {
   let signalStarted!: () => void, release!: () => void;
@@ -241,6 +246,8 @@ function installFetch(): void {
           const fault = loseNextTaskResponse;
           loseNextTaskResponse = null;
           if (fault === "invalid") return json(201, null);
+          if (fault === "malformed") return json(201, { ...task, status: "invalid" });
+          if (fault === "unreadable") return new Response("invalid JSON", { status: 201 });
           if (fault === "gateway") return json(502, { error: "上游响应丢失" });
           throw new TypeError("Failed to fetch");
         }
@@ -849,7 +856,66 @@ it("creates titled tasks repeatedly on the root and reply and shows every title,
   expect(screen.queryByText(/回复第一项/)).toBeNull();
 });
 
-it.each(["network", "invalid", "gateway"] as const)(
+it("keeps a newer task form open when an earlier message's create finishes", async () => {
+  const first = message(publicChannel.id, "first-task-source", "第一项工作的消息", "1");
+  const second = message(publicChannel.id, "second-task-source", "第二项工作的消息", "2");
+  history.set(publicChannel.id, [first, second]);
+  const handleFetch = fetchMock.getMockImplementation()!;
+  let signalStarted!: () => void, release!: () => void;
+  let signalSecondStarted!: () => void, releaseSecond!: () => void;
+  const started = new Promise<void>((resolve) => (signalStarted = resolve));
+  const waiting = new Promise<void>((resolve) => (release = resolve));
+  const secondStarted = new Promise<void>((resolve) => (signalSecondStarted = resolve));
+  const secondWaiting = new Promise<void>((resolve) => (releaseSecond = resolve));
+  fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const response = await handleFetch(input, init);
+    if (String(input) === "/api/owner/tasks" && init?.method === "POST") {
+      if (JSON.parse(String(init.body)).messageId === first.id) {
+        signalStarted();
+        await waiting;
+      } else {
+        signalSecondStarted();
+        await secondWaiting;
+      }
+    }
+    return response;
+  });
+  const user = await openChat();
+  await user.click(screen.getByRole("button", { name: `消息 ${first.text} 的操作` }));
+  await user.click(screen.getByRole("button", { name: "从消息建任务" }));
+  await user.click(screen.getByRole("button", { name: "创建任务", exact: true }));
+  await started;
+
+  await user.click(screen.getByRole("button", { name: `消息 ${second.text} 的操作` }));
+  await user.click(screen.getByRole("button", { name: "从消息建任务" }));
+  const title = screen.getByRole("textbox", { name: "任务标题" });
+  await user.clear(title);
+  await user.type(title, "继续编辑第二项任务");
+  await user.click(screen.getByRole("button", { name: "创建任务", exact: true }));
+  await secondStarted;
+  await act(async () => release());
+
+  expect((screen.getByRole("textbox", { name: "任务标题" }) as HTMLInputElement).value).toBe(
+    "继续编辑第二项任务",
+  );
+  expect(document.getElementById(`message-${first.id}`)?.textContent).toContain(
+    `任务 · 待认领 · ${first.text}`,
+  );
+  expect(
+    (screen.getByRole("button", { name: "创建任务", exact: true }) as HTMLButtonElement).disabled,
+  ).toBe(true);
+  await act(async () => releaseSecond());
+  await waitFor(() => expect(screen.queryByRole("form", { name: "创建任务" })).toBeNull());
+  expect(taskPosts).toEqual([
+    { messageId: first.id, title: first.text },
+    { messageId: second.id, title: "继续编辑第二项任务" },
+  ]);
+  expect(document.getElementById(`message-${second.id}`)?.textContent).toContain(
+    "任务 · 待认领 · 继续编辑第二项任务",
+  );
+});
+
+it.each(["network", "invalid", "malformed", "unreadable", "gateway"] as const)(
   "reports an unconfirmed create truthfully after a %s response loss and does not automatically repeat it",
   async (fault) => {
     const root = message(publicChannel.id, "uncertain-task", "可能已经提交的事项", "1");
@@ -876,3 +942,117 @@ it.each(["network", "invalid", "gateway"] as const)(
     expect(tasks).toHaveLength(2);
   },
 );
+
+it("keeps optional message metadata absent, including nested replies, and tolerates extra fields", () => {
+  const wire = message(publicChannel.id, "minimal", "只有必需字段", "1");
+  const parsed = messageSchema.parse({ ...wire, futureField: { preserved: true } });
+  expect(parsed).toEqual({ ...wire, futureField: { preserved: true } });
+  expect(parsed).not.toHaveProperty("quoteId");
+  expect(parsed).not.toHaveProperty("replyCount");
+  expect(parsed).not.toHaveProperty("recentReplies");
+  const nested = messageSchema.parse({ ...wire, recentReplies: [{ ...wire, rootId: wire.id }] });
+  expect(nested.recentReplies?.[0]).not.toHaveProperty("recentReplies");
+  expect(messageSchema.safeParse({ ...wire, order: "not-an-integer" }).success).toBe(false);
+});
+
+it("validates successful owner responses without losing HTTP error status", async () => {
+  const wire = message(publicChannel.id, "parsed", "校验后的消息", "1");
+  fetchMock.mockResolvedValueOnce(json(200, { ...wire, futureField: true }));
+  expect(await ownerJSON("/message", messageSchema)).toEqual({ ...wire, futureField: true });
+  fetchMock.mockResolvedValueOnce(json(200, { ...wire, text: 42 }));
+  await expect(ownerJSON("/message", messageSchema)).rejects.toThrow("服务器响应无效");
+  fetchMock.mockResolvedValueOnce(json(422, { error: "请求内容无效" }));
+  await expect(ownerJSON("/message", messageSchema)).rejects.toMatchObject({
+    status: 422,
+    message: "请求内容无效",
+  });
+  fetchMock.mockResolvedValueOnce(new Response("bad gateway", { status: 502 }));
+  await expect(ownerJSON("/message", messageSchema)).rejects.toBeInstanceOf(OwnerRequestError);
+  fetchMock.mockResolvedValueOnce(json(401, {}));
+  await expect(ownerJSON("/message", messageSchema)).rejects.toMatchObject({ status: 401 });
+  expect(redirectToLogin).toHaveBeenCalledOnce();
+});
+
+it("ignores invalid stream payloads and still receives a subsequent valid message", async () => {
+  await openChat();
+  const stream = TestEventSource.instances[0]!;
+  const incoming = message(publicChannel.id, "validated-live", "有效的实时消息", "1");
+  const envelope = { channelId: publicChannel.id, kind: "message.created" };
+  expect(readChatEvent(new Event("message.created"))).toBeNull();
+  expect(readChatEvent(new MessageEvent("message.created", { data: "invalid JSON" }))).toBeNull();
+  expect(readChatEvent(new MessageEvent("message.created", { data: {} }))).toBeNull();
+  act(() => {
+    stream.emit("message.created", { ...envelope, payload: { id: incoming.id } });
+    stream.emit("message.created", { ...envelope, payload: { ...incoming, order: "bad" } });
+    stream.emit("message.created", {
+      ...envelope,
+      kind: "channel.created",
+      payload: publicChannel,
+    });
+  });
+  expect(screen.queryByText(incoming.text)).toBeNull();
+  act(() => stream.emit("message.created", { ...envelope, payload: incoming, futureField: true }));
+  expect(await screen.findByText(incoming.text)).not.toBeNull();
+});
+
+it("shows a known task rejection without calling it an uncertain submission", async () => {
+  const root = message(publicChannel.id, "rejected-task", "未获准创建的事项", "1");
+  history.set(publicChannel.id, [root]);
+  const user = await openChat();
+  const handleFetch = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) =>
+    String(input) === "/api/owner/tasks" && init?.method === "POST"
+      ? Promise.resolve(json(403, { error: "无法在此消息创建任务" }))
+      : handleFetch(input, init),
+  );
+  await user.click(screen.getByRole("button", { name: `消息 ${root.text} 的操作` }));
+  await user.click(screen.getByRole("button", { name: "从消息建任务" }));
+  await user.click(screen.getByRole("button", { name: "创建任务", exact: true }));
+  expect((await screen.findByRole("alert")).textContent).toBe("无法在此消息创建任务");
+  expect(screen.getByRole("form", { name: "创建任务" })).not.toBeNull();
+  expect(taskPosts).toHaveLength(0);
+});
+
+it("parses channel events and rejects malformed channel updates", async () => {
+  await openChat();
+  const stream = TestEventSource.instances[0]!;
+  const added = { ...publicChannel, id: "new-channel", name: "新增频道", visibility: "private" };
+  act(() =>
+    stream.emit("channel.created", {
+      kind: "channel.created",
+      channelId: added.id,
+      payload: added,
+    }),
+  );
+  expect(await screen.findByRole("button", { name: /新增频道/ })).not.toBeNull();
+  act(() =>
+    stream.emit("channel.updated", {
+      kind: "channel.updated",
+      channelId: added.id,
+      payload: { ...added, name: "不合法更新", visibility: "invalid" },
+    }),
+  );
+  expect(screen.queryByRole("button", { name: /不合法更新/ })).toBeNull();
+  act(() =>
+    stream.emit("channel.updated", {
+      kind: "channel.updated",
+      channelId: added.id,
+      payload: { ...added, name: "改名频道", archived: true },
+    }),
+  );
+  expect(await screen.findByRole("button", { name: /改名频道.*已归档/ })).not.toBeNull();
+});
+
+it("reconnects from a fresh snapshot and ignores messages from the closed stream", async () => {
+  await openChat();
+  const oldStream = TestEventSource.instances[0]!;
+  act(() => oldStream.emit("snapshot_required"));
+  await waitFor(() => expect(TestEventSource.instances).toHaveLength(2));
+  expect(oldStream.closed).toBe(true);
+  const incoming = message(publicChannel.id, "fresh-stream", "重连后的消息", "1");
+  const envelope = { kind: "message.created", channelId: publicChannel.id, payload: incoming };
+  act(() => oldStream.emit("message.created", envelope));
+  expect(screen.queryByText(incoming.text)).toBeNull();
+  act(() => TestEventSource.instances[1]!.emit("message.created", envelope));
+  expect(await screen.findByText(incoming.text)).not.toBeNull();
+});

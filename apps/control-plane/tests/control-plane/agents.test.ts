@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { createControlPlaneApp } from "../../src/http.js";
-import { OwnerAuth } from "../../src/owner-auth.js";
+import { OwnerAuth } from "../../src/auth/service.js";
 import { nodeDirectorySchema } from "../../src/nodes/schema.js";
 import { newAgentRequestSchema } from "../../src/agents/contracts.js";
 import { AgentDirectory, AgentRequestConflict } from "../../src/agents/directory.js";

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { createControlPlaneApp } from "../../src/http.js";
-import { OwnerChat } from "../../src/owner-chat.js";
+import { OwnerChat } from "../../src/conversations/service.js";
 
 const password = "owner-password-used-only-by-this-test";
 const cases: Array<{ app: ReturnType<typeof createControlPlaneApp>; dataDir: string }> = [];
