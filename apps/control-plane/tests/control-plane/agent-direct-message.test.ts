@@ -641,7 +641,7 @@ it("keeps a non-member Agent out of a private channel that holds a task", async 
       visibility: "private",
     }),
     secret = app.chat.createMessage(privateRoom.id, "Private planning message.")!;
-  app.chat.createTaskForMessage(secret.id, "human", "owner");
+  app.chat.createTaskForMessage(secret.id, "human", "owner", secret.text);
   await app.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
@@ -1046,7 +1046,7 @@ it("does not let a member transfer a task to a public-channel non-member", async
 
   const memberStart = socket.sent.length;
   const anchor = app.chat.createMessage(room.id, "Review deployment", { asTask: true })!;
-  const task = app.chat.taskForMessage(anchor.id)!;
+  const task = app.chat.tasksForMessage(anchor.id)[0]!;
   const memberRun = await waitForRun(socket, memberStart);
 
   // The onlooker can read the room, but tasks stay member-only: it neither sees this one
@@ -3455,7 +3455,7 @@ it("holds Agent task changes for fresh discussion and queues an offline reminder
   });
   const from = socket.sent.length;
   const anchor = app.chat.createMessage(dm.id, "Investigate the alert", { asTask: true })!;
-  const task = app.chat.taskForMessage(anchor.id)!;
+  const task = app.chat.tasksForMessage(anchor.id)[0]!;
   const run = await waitForRun(socket, from);
   const changedMessage = app.chat.createMessage(dm.id, "Please include the restart case")!;
   async function tool(id: string, name: string, input: Record<string, unknown>) {
@@ -3541,7 +3541,10 @@ it("holds Agent task changes for fresh discussion and queues an offline reminder
   });
   expect(updated).toMatchObject({ ok: true, result: { status: "done", version: 3 } });
   const taskSource = app.chat.createMessage(dm.id, "A separate new task")!;
-  const createHeld = await tool("create-held", "tasks.create", { messageId: taskSource.id });
+  const createHeld = await tool("create-held", "tasks.create", {
+    messageId: taskSource.id,
+    title: taskSource.text,
+  });
   expect(createHeld.error).toBeUndefined();
   expect(createHeld).toMatchObject({ ok: true, result: { status: "needs_review" } });
   const createDraft = (createHeld.result as { draftId: string }).draftId;
@@ -3550,12 +3553,20 @@ it("holds Agent task changes for fresh discussion and queues an offline reminder
   expect(
     await tool("create-applied", "tasks.create", {
       messageId: taskSource.id,
+      title: taskSource.text,
       draftId: createDraft,
     }),
   ).toMatchObject({
     ok: true,
-    result: { messageId: taskSource.id, title: taskSource.text },
+    result: { status: "created", task: { messageId: taskSource.id, title: taskSource.text } },
   });
+  expect(
+    await tool("create-applied", "tasks.create", {
+      messageId: taskSource.id,
+      title: "不同请求",
+      draftId: createDraft,
+    }),
+  ).toMatchObject({ ok: false, error: "Action ID was already used for a different request" });
   const inaccessible = app.chat.createChannel({
     name: "Private",
     description: "",
@@ -3564,7 +3575,7 @@ it("holds Agent task changes for fresh discussion and queues an offline reminder
   const secret = app.chat.createMessage(inaccessible.id, "Secret task", { asTask: true })!;
   expect(
     await tool("secret-claim", "tasks.claim", {
-      taskId: app.chat.taskForMessage(secret.id)!.id,
+      taskId: app.chat.tasksForMessage(secret.id)[0]!.id,
       expectedVersion: 1,
     }),
   ).toMatchObject({ ok: false, error: "Conversation is not available" });
@@ -3689,7 +3700,7 @@ it("lets peers coordinate on one task without a tree and preserves a newer claim
   });
   const from = socket.sent.length;
   const anchor = app.chat.createMessage(room.id, "Review deployment", { asTask: true })!;
-  const task = app.chat.taskForMessage(anchor.id)!;
+  const task = app.chat.tasksForMessage(anchor.id)[0]!;
   await waitForRun(socket, from);
   let runs: Array<TestRun> = [];
   const deadline = Date.now() + 4000;

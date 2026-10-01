@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createElement } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -98,14 +98,15 @@ let history: Map<string, FixtureMessage[]>;
 let sessionStatus: number;
 let fetchMock: ReturnType<typeof vi.fn>;
 let posts: Array<{ channelId: string; text: string }>;
-let taskPosts: Array<{ messageId?: string; asTask?: boolean }>;
+let taskPosts: Array<{ messageId?: string; title?: string; asTask?: boolean }>;
 let tasks: Array<{
   id: string;
   messageId: string;
   channelId: string;
   title: string;
-  status: "open";
-  ownerAgentId: null;
+  status: "open" | "in_progress" | "done";
+  ownerAgentId: string | null;
+  ownerAgentName?: string | null;
 }>;
 let positionPosts: Array<{ rootId?: string; quoteId?: string }>;
 let nextPostGate: {
@@ -223,14 +224,14 @@ function installFetch(): void {
     }
     if (url === "/api/owner/tasks") {
       if (init?.method === "POST") {
-        const body = JSON.parse(String(init.body)) as { messageId: string };
+        const body = JSON.parse(String(init.body)) as { messageId: string; title: string };
         const anchor = [...history.values()].flat().find((entry) => entry.id === body.messageId)!;
-        taskPosts.push({ messageId: body.messageId });
+        taskPosts.push({ messageId: body.messageId, title: body.title });
         const task = {
           id: `task-${tasks.length + 1}`,
           messageId: anchor.id,
           channelId: anchor.channelId,
-          title: anchor.text,
+          title: body.title.trim(),
           status: "open" as const,
           ownerAgentId: null,
         };
@@ -763,6 +764,78 @@ it("offers task sending and creating from an existing message with a visible tas
   await user.click(screen.getByRole("button", { name: "发送", exact: true }));
   await user.click(screen.getByRole("button", { name: "消息 Follow up later 的操作" }));
   await user.click(screen.getByRole("button", { name: "从消息建任务" }));
-  await waitFor(() => expect(taskPosts).toContainEqual({ messageId: "message-2" }));
+  await user.click(screen.getByRole("button", { name: "创建任务", exact: true }));
+  await waitFor(() =>
+    expect(taskPosts).toContainEqual({ messageId: "message-2", title: "Follow up later" }),
+  );
   expect(screen.getAllByText(/任务 · 待认领/)).toHaveLength(2);
+});
+
+it("creates titled tasks repeatedly on the root and reply and shows every title, owner and state in its own position", async () => {
+  const root = message(publicChannel.id, "root-task", "根消息的多个事项", "1");
+  const reply = {
+    ...message(publicChannel.id, "reply-task", "回复里的多个事项", "2"),
+    rootId: root.id,
+  };
+  history.set(publicChannel.id, [root, reply]);
+  tasks.push({
+    id: "existing-root",
+    messageId: root.id,
+    channelId: publicChannel.id,
+    title: "既有根任务",
+    status: "in_progress",
+    ownerAgentId: "agent-1",
+    ownerAgentName: "同事甲",
+  });
+  const user = await openChat();
+  await user.click(screen.getByRole("button", { name: `消息 ${root.text} 的操作` }));
+  await user.click(screen.getByRole("button", { name: "从消息建任务" }));
+  const title = screen.getByRole("textbox", { name: "任务标题" });
+  expect((title as HTMLInputElement).value).toBe(root.text);
+  await user.clear(title);
+  await user.type(title, "  新的根任务  ");
+  await user.click(screen.getByRole("button", { name: "创建任务", exact: true }));
+  await waitFor(() =>
+    expect(taskPosts).toContainEqual({ messageId: root.id, title: "新的根任务" }),
+  );
+  await user.click(screen.getByRole("button", { name: `消息 ${root.text} 的操作` }));
+  await user.click(screen.getByRole("button", { name: "查看讨论串" }));
+  const thread = await screen.findByRole("complementary", { name: "讨论串" });
+  const threadRoot = thread.querySelector(".thread-root")!;
+  expect(threadRoot.textContent).toContain("既有根任务");
+  expect(threadRoot.textContent).toContain("新的根任务");
+  expect(threadRoot.textContent).toContain("同事甲");
+  expect(threadRoot.textContent).toContain("进行中");
+  await user.click(within(thread).getByRole("button", { name: "从消息建任务", exact: true }));
+  await user.clear(screen.getByRole("textbox", { name: "任务标题" }));
+  await user.type(screen.getByRole("textbox", { name: "任务标题" }), "根消息第三项");
+  await user.click(screen.getByRole("button", { name: "创建任务", exact: true }));
+  for (const titleText of ["回复第一项", "回复第二项"]) {
+    await user.click(within(thread).getByRole("button", { name: `消息 ${reply.text} 的操作` }));
+    await user.click(
+      within(thread.querySelector(`#message-${reply.id}`) as HTMLElement).getByRole("button", {
+        name: "从消息建任务",
+        exact: true,
+      }),
+    );
+    await user.clear(screen.getByRole("textbox", { name: "任务标题" }));
+    await user.type(screen.getByRole("textbox", { name: "任务标题" }), titleText);
+    await user.click(screen.getByRole("button", { name: "创建任务", exact: true }));
+    await waitFor(() =>
+      expect(taskPosts).toContainEqual({ messageId: reply.id, title: titleText }),
+    );
+  }
+  const replyRow = thread.querySelector(`#message-${reply.id}`)!;
+  expect(replyRow.textContent).toContain("回复第一项");
+  expect(replyRow.textContent).toContain("回复第二项");
+  expect(replyRow.textContent).toContain("待认领");
+  expect(replyRow.textContent).not.toContain("既有根任务");
+  expect(threadRoot.textContent).not.toContain("回复第一项");
+  expect(tasks.filter((task) => task.messageId === root.id)).toHaveLength(3);
+  expect(tasks.filter((task) => task.messageId === reply.id)).toHaveLength(2);
+  cleanup();
+  TestEventSource.instances = [];
+  await openChat();
+  expect(await screen.findByText(/根消息第三项/)).not.toBeNull();
+  expect(screen.queryByText(/回复第一项/)).toBeNull();
 });

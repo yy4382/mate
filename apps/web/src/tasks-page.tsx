@@ -110,7 +110,11 @@ export function TasksPage() {
                       {" "}
                       · {task.ownerAgentId ? (task.ownerAgentName ?? task.ownerAgentId) : "未认领"}
                     </span>
-                    <a href={`/app?channel=${encodeURIComponent(task.channelId)}`}>查看原消息</a>
+                    <a
+                      href={`/app?channel=${encodeURIComponent(task.channelId)}&message=${encodeURIComponent(task.messageId)}`}
+                    >
+                      查看原消息
+                    </a>
                     {selected === task.id && (
                       <ol aria-label="任务活动">
                         {activity.map((event) => (

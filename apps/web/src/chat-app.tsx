@@ -155,6 +155,10 @@ export function ChatPage() {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [asTask, setAsTask] = useState(false);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [taskCreation, setTaskCreation] = useState<{
+    message: Message;
+    position: "timeline" | "thread-root" | "thread-reply";
+  } | null>(null);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [loadingLatestChannelId, setLoadingLatestChannelId] = useState<string | null>(null);
@@ -673,20 +677,34 @@ export function ChatPage() {
     }
   }
 
-  async function createTaskFromMessage(message: Message) {
-    setError(null);
-    try {
-      await ownerJSON<Task>("/api/owner/tasks", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messageId: message.id }),
-      });
-      const result = await ownerJSON<{ tasks: Task[] }>("/api/owner/tasks");
-      setTasks(result.tasks);
-      setOpenMenuId(null);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "无法建立任务");
-    }
+  function openTaskCreation(
+    message: Message,
+    position: NonNullable<typeof taskCreation>["position"],
+  ) {
+    setTaskCreation({ message, position });
+    setOpenMenuId(null);
+  }
+
+  function taskForm(message: Message, position: NonNullable<typeof taskCreation>["position"]) {
+    if (taskCreation?.message.id !== message.id || taskCreation.position !== position) return null;
+    return (
+      <TaskCreationForm
+        key={`${message.id}:${position}`}
+        message={message}
+        onCancel={() => setTaskCreation(null)}
+        onCreate={async (title) => {
+          const task = await ownerJSON<Task>("/api/owner/tasks", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ messageId: message.id, title }),
+          });
+          setTasks((current) => [...current.filter((existing) => existing.id !== task.id), task]);
+          setTaskCreation((current) =>
+            current?.message.id === message.id && current.position === position ? null : current,
+          );
+        }}
+      />
+    );
   }
 
   async function loadOlder() {
@@ -1055,20 +1073,8 @@ export function ChatPage() {
                         </span>
                       )}
                       <p>{message.text}</p>
-                      {tasks.find((task) => task.messageId === message.id) && (
-                        <a className="message-task-card" href="/app/tasks">
-                          任务 ·{" "}
-                          {tasks.find((task) => task.messageId === message.id)?.status === "done"
-                            ? "已完成"
-                            : tasks.find((task) => task.messageId === message.id)?.status ===
-                                "in_progress"
-                              ? "进行中"
-                              : "待认领"}
-                          {tasks.find((task) => task.messageId === message.id)?.ownerAgentId
-                            ? ` · ${tasks.find((task) => task.messageId === message.id)?.ownerAgentName ?? tasks.find((task) => task.messageId === message.id)?.ownerAgentId}`
-                            : ""}
-                        </a>
-                      )}
+                      <MessageTasks tasks={tasks} messageId={message.id} />
+                      {taskForm(message, "timeline")}
                       {!!message.replyCount && (
                         <button
                           type="button"
@@ -1117,14 +1123,12 @@ export function ChatPage() {
                           <button type="button" onClick={() => void openThread(message)}>
                             查看讨论串
                           </button>
-                          {!tasks.some((task) => task.messageId === message.id) && (
-                            <button
-                              type="button"
-                              onClick={() => void createTaskFromMessage(message)}
-                            >
-                              从消息建任务
-                            </button>
-                          )}
+                          <button
+                            type="button"
+                            onClick={() => openTaskCreation(message, "timeline")}
+                          >
+                            从消息建任务
+                          </button>
                         </div>
                       )}
                     </div>
@@ -1268,12 +1272,19 @@ export function ChatPage() {
           <article className="thread-root">
             <strong>{threadRoot.author.kind === "human" ? "你" : "Agent"}</strong>
             <p>{threadRoot.text}</p>
+            <MessageTasks tasks={tasks} messageId={threadRoot.id} />
+            <button type="button" onClick={() => openTaskCreation(threadRoot, "thread-root")}>
+              从消息建任务
+            </button>
+            {taskForm(threadRoot, "thread-root")}
           </article>
           <div className="thread-replies">
             {threadReplies.map((reply) => (
               <article id={`message-${reply.id}`} key={reply.id} tabIndex={0}>
                 <strong>{reply.author.kind === "human" ? "你" : "Agent"}</strong>
                 <p>{reply.text}</p>
+                <MessageTasks tasks={tasks} messageId={reply.id} />
+                {taskForm(reply, "thread-reply")}
                 <div className="message-actions">
                   <button
                     type="button"
@@ -1309,6 +1320,9 @@ export function ChatPage() {
                         }}
                       >
                         讨论串回复
+                      </button>
+                      <button type="button" onClick={() => openTaskCreation(reply, "thread-reply")}>
+                        从消息建任务
                       </button>
                     </div>
                   )}
@@ -1354,6 +1368,81 @@ export function ChatPage() {
         />
       )}
     </div>
+  );
+}
+
+function MessageTasks({ tasks, messageId }: { tasks: Task[]; messageId: string }) {
+  return (
+    <div className="message-tasks">
+      {tasks
+        .filter((task) => task.messageId === messageId)
+        .map((task) => (
+          <a key={task.id} className="message-task-card" href="/app/tasks">
+            任务 ·{" "}
+            {task.status === "done"
+              ? "已完成"
+              : task.status === "in_progress"
+                ? "进行中"
+                : "待认领"}{" "}
+            · {task.title} · 负责人：{task.ownerAgentName ?? task.ownerAgentId ?? "无"}
+          </a>
+        ))}
+    </div>
+  );
+}
+
+function TaskCreationForm({
+  message,
+  onCreate,
+  onCancel,
+}: {
+  message: Message;
+  onCreate: (title: string) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [title, setTitle] = useState(message.text.trim().slice(0, 200));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const titleRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    titleRef.current?.focus();
+  }, []);
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (busy || !title.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onCreate(title.trim());
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "无法建立任务");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <form className="message-task-form" aria-label="创建任务" onSubmit={submit}>
+      <label>
+        任务标题
+        <input
+          ref={titleRef}
+          value={title}
+          onChange={(event) => setTitle(event.currentTarget.value)}
+          required
+          maxLength={200}
+          disabled={busy}
+        />
+      </label>
+      {error && <p role="alert">{error}</p>}
+      <div>
+        <button type="submit" disabled={busy || !title.trim()}>
+          创建任务
+        </button>
+        <button type="button" onClick={onCancel} disabled={busy}>
+          取消
+        </button>
+      </div>
+    </form>
   );
 }
 

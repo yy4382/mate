@@ -654,18 +654,17 @@ export function createControlPlaneApp(
   });
   app.post("/api/owner/tasks", async (context) => {
     const parsed = z
-      .object({ messageId: z.string().uuid() })
+      .object({ messageId: z.string().uuid(), title: z.string().trim().min(1).max(200) })
       .strict()
       .safeParse(await context.req.json().catch(() => null));
-    if (!parsed.success) return context.json({ error: "消息 ID 无效" }, 400);
+    if (!parsed.success)
+      return context.json({ error: "请提供消息 ID 和 1 至 200 字符的任务标题" }, 400);
     try {
       return context.json(
-        ownerChat.createTaskForMessage(parsed.data.messageId, "human", "owner"),
+        ownerChat.createTaskForMessage(parsed.data.messageId, "human", "owner", parsed.data.title),
         201,
       );
     } catch (error) {
-      if (error instanceof Error && error.message.includes("UNIQUE"))
-        return context.json({ error: "这条消息已有任务" }, 409);
       if (error instanceof Error && error.message === "Message is not available")
         return context.json({ error: "消息不存在" }, 404);
       throw error;

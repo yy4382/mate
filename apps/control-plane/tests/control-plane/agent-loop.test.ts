@@ -50,7 +50,14 @@ it("one real Pi run uses authorized conversation, task, file and command tools a
   let channelId = "",
     messageId = "",
     turn = 0;
-  const fixture = await loopFixture((_request, response) => {
+  const fixture = await loopFixture((request, response) => {
+    let previous: any;
+    try {
+      previous = JSON.parse(
+        request.input.filter((item) => item.type === "function_call_output").at(-1)?.output ??
+          "null",
+      );
+    } catch {}
     const steps = [
       [
         { name: "tools.list", input: {} },
@@ -62,7 +69,18 @@ it("one real Pi run uses authorized conversation, task, file and command tools a
           input: { name: "conversations.read", input: { conversationId: channelId } },
         },
       ],
-      [{ name: "tools.call", input: { name: "tasks.claim_message", input: { messageId } } }],
+      [
+        {
+          name: "tools.call",
+          input: { name: "tasks.create", input: { messageId, title: "使用本机工具" } },
+        },
+      ],
+      [
+        {
+          name: "tools.call",
+          input: { name: "tasks.claim", input: { taskId: previous?.task?.id, expectedVersion: 1 } },
+        },
+      ],
       [
         {
           name: "tools.call",
@@ -136,7 +154,7 @@ it("one real Pi run uses authorized conversation, task, file and command tools a
     ) as Array<{ payload_json: string }>;
     expect(
       records.filter((row) => JSON.parse(row.payload_json).message?.role === "toolResult"),
-    ).toHaveLength(10);
+    ).toHaveLength(11);
     // Model credentials never enter either node operation ledger or its identity file.
     for (const name of readdirSync(join(fixture.directory, "node-data"))) {
       if (name.endsWith(".sqlite") || name.endsWith(".json"))

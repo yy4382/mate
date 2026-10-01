@@ -5,7 +5,7 @@
 export const taskReminderSchema = `
 CREATE TABLE owner_tasks (
   id TEXT PRIMARY KEY,
-  message_id TEXT NOT NULL UNIQUE REFERENCES owner_messages(id),
+  message_id TEXT NOT NULL REFERENCES owner_messages(id),
   title TEXT NOT NULL,
   status TEXT NOT NULL CHECK(status IN ('open','in_progress','done')),
   owner_agent_id TEXT REFERENCES owner_agents(id),
@@ -13,6 +13,7 @@ CREATE TABLE owner_tasks (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
+CREATE INDEX owner_tasks_message ON owner_tasks(message_id);
 CREATE INDEX owner_tasks_board ON owner_tasks(status,updated_at);
 CREATE TABLE owner_task_events (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,

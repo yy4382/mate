@@ -1,6 +1,7 @@
 import { AgentSession } from "./agent-session.js";
 import type Database from "better-sqlite3";
 import { createHash, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { defineAgentTool, type CurrentAgentToolRun } from "./agent-tool-entry.js";
 import { nodeAccountOf } from "./nodes/directory.js";
@@ -51,15 +52,6 @@ export interface OwnerTask {
   version: number;
   createdAt: number;
   updatedAt: number;
-}
-
-/** The outcome of the Agent's one direct claim call for a message. */
-export interface OwnerTaskClaim {
-  outcome: "claimed" | "conflict";
-  created: boolean;
-  messageId: string;
-  channelId: string;
-  task: OwnerTask;
 }
 
 export interface OwnerReminder {
@@ -226,10 +218,15 @@ const conversationId = z.string().uuid(),
 
 const taskToolSchemas = {
   "tasks.create": z
-    .object({ messageId: z.string().uuid(), draftId: z.string().uuid().optional() })
-    .strict(),
-  "tasks.claim_message": z
-    .object({ messageId: z.string().uuid(), draftId: z.string().uuid().optional() })
+    .object({
+      messageId: z.string().uuid(),
+      title: z.string().trim().min(1).max(200),
+      taskSnapshot: z
+        .string()
+        .regex(/^[a-f0-9]{64}$/)
+        .optional(),
+      draftId: z.string().uuid().optional(),
+    })
     .strict(),
   "tasks.claim": z
     .object({
@@ -589,7 +586,7 @@ export class OwnerChat {
         });
         this.queueDeliveries(message, at);
         this.record("message.created", channelId, message);
-        if (position.asTask) this.createTaskForMessage(id, "human", "owner");
+        if (position.asTask) this.createTaskForMessage(id, "human", "owner", text.slice(0, 200));
         return message;
       })
       .immediate();
@@ -661,6 +658,7 @@ export class OwnerChat {
     messageId: string,
     actorKind: OwnerPrincipalKind,
     actorId: string,
+    title: string,
   ): OwnerTask {
     return this.db
       .transaction(() => {
@@ -671,7 +669,7 @@ export class OwnerChat {
           .get(messageId) as { id: string; channel_id: string; text: string } | undefined;
         if (!message) throw new Error("Message is not available");
         if (actorKind === "agent") this.requireAgentConversation(actorId, message.channel_id);
-        const id = this.insertTask(message, "open", null, this.now());
+        const id = this.insertTask(message.id, title, this.now());
         this.taskEvent(id, actorKind, actorId, "created", "");
         const task = this.readTask(id)!;
         this.record("task.created", message.channel_id, task);
@@ -680,118 +678,15 @@ export class OwnerChat {
       .immediate();
   }
 
-  /** Insert the one task row for a message; callers own its status, owner and recorded events. */
-  private insertTask(
-    message: { id: string; text: string },
-    status: OwnerTask["status"],
-    ownerAgentId: string | null,
-    at: number,
-  ): string {
+  /** Insert one independent, unclaimed task; callers commit its activity with the task. */
+  private insertTask(messageId: string, title: string, at: number): string {
     const id = randomUUID();
     this.db
       .prepare(
-        "INSERT INTO owner_tasks(id,message_id,title,status,owner_agent_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+        "INSERT INTO owner_tasks(id,message_id,title,status,created_at,updated_at) VALUES(?,?,?,'open',?,?)",
       )
-      .run(id, message.id, message.text.slice(0, 200), status, ownerAgentId, at, at);
+      .run(id, messageId, title, at, at);
     return id;
-  }
-
-  /**
-   * The task a direct claim acts on. A task already anchored on the named message wins, because an
-   * Agent may name a reply that carries its own task; otherwise the discussion's original top-level
-   * message is the anchor. Returns nothing when the named message is not available.
-   */
-  private directClaimTarget(
-    messageId: string,
-  ): { channelId: string; anchorMessageId: string; task: OwnerTask | undefined } | undefined {
-    const message = this.db
-      .prepare(
-        "SELECT id,channel_id,root_id FROM owner_messages WHERE id=? AND internal_kind IS NULL",
-      )
-      .get(messageId) as { id: string; channel_id: string; root_id: string | null } | undefined;
-    if (!message) return undefined;
-    const named = this.taskForMessage(message.id);
-    if (named)
-      return { channelId: message.channel_id, anchorMessageId: named.messageId, task: named };
-    const anchorMessageId = message.root_id ?? message.id;
-    return {
-      channelId: message.channel_id,
-      anchorMessageId,
-      task: anchorMessageId === message.id ? undefined : this.taskForMessage(anchorMessageId),
-    };
-  }
-
-  /**
-   * The Agent's one call for a readable message: create the task anchored on that conversation's
-   * original top-level message and claim it, or claim the task already anchored on the named
-   * message. A peer's claim is reported as a conflict instead of being taken over. The caller must
-   * already be able to read the conversation, and owning the task never grants that access.
-   */
-  private claimTaskForMessage(agentId: string, messageId: string): OwnerTaskClaim {
-    return this.db
-      .transaction((): OwnerTaskClaim => {
-        const target = this.directClaimTarget(messageId);
-        if (!target) throw new AgentToolRefusal("Message is not available");
-        const anchor = this.db
-          .prepare(
-            "SELECT id,channel_id,root_id,text FROM owner_messages WHERE id=? AND internal_kind IS NULL",
-          )
-          .get(target.anchorMessageId) as
-          { id: string; channel_id: string; root_id: string | null; text: string } | undefined;
-        // A task already anchored on the named message is claimed as it stands; otherwise the
-        // anchor must be the discussion's original top-level message.
-        if (!anchor || anchor.channel_id !== target.channelId || (!target.task && anchor.root_id))
-          throw new AgentToolRefusal("Task anchor is not available");
-        this.requireAgentConversation(agentId, anchor.channel_id);
-        const existing = target.task;
-        if (existing) {
-          if (existing.ownerAgentId === agentId)
-            // Already this Agent's task: a repeated call changes nothing.
-            return {
-              outcome: "claimed",
-              created: false,
-              messageId: anchor.id,
-              channelId: anchor.channel_id,
-              task: existing,
-            };
-          if (existing.ownerAgentId)
-            return {
-              outcome: "conflict",
-              created: false,
-              messageId: anchor.id,
-              channelId: anchor.channel_id,
-              task: existing,
-            };
-          this.db
-            .prepare(
-              "UPDATE owner_tasks SET status='in_progress',owner_agent_id=?,version=version+1,updated_at=? WHERE id=?",
-            )
-            .run(agentId, this.now(), existing.id);
-          this.taskEvent(existing.id, "agent", agentId, "claim", "");
-          const claimed = this.readTask(existing.id)!;
-          this.record("task.updated", anchor.channel_id, claimed);
-          return {
-            outcome: "claimed",
-            created: false,
-            messageId: anchor.id,
-            channelId: anchor.channel_id,
-            task: claimed,
-          };
-        }
-        const id = this.insertTask(anchor, "in_progress", agentId, this.now());
-        this.taskEvent(id, "agent", agentId, "created", "");
-        this.taskEvent(id, "agent", agentId, "claim", "");
-        const task = this.readTask(id)!;
-        this.record("task.created", anchor.channel_id, task);
-        return {
-          outcome: "claimed",
-          created: true,
-          messageId: anchor.id,
-          channelId: anchor.channel_id,
-          task,
-        };
-      })
-      .immediate();
   }
 
   readTask(id: string): OwnerTask | undefined {
@@ -799,10 +694,19 @@ export class OwnerChat {
     return row && toTask(row);
   }
 
-  taskForMessage(messageId: string): OwnerTask | undefined {
-    const row = this.db.prepare(`${taskSelection} WHERE t.message_id=?`).get(messageId) as
-      TaskRow | undefined;
-    return row && toTask(row);
+  tasksForMessage(messageId: string): OwnerTask[] {
+    return (
+      this.db
+        .prepare(`${taskSelection} WHERE t.message_id=? ORDER BY t.id`)
+        .all(messageId) as TaskRow[]
+    ).map(toTask);
+  }
+
+  /** Only additions to the ID set invalidate a create decision; task edits do not. */
+  private taskSnapshot(tasks: OwnerTask[]): string {
+    return createHash("sha256")
+      .update(JSON.stringify(tasks.map((task) => task.id)))
+      .digest("hex");
   }
 
   listTasks(): OwnerTask[] {
@@ -853,13 +757,7 @@ export class OwnerChat {
   } {
     const input = JSON.parse(draft.input_json) as { messageId?: string };
     const task = draft.task_id ? this.readTask(draft.task_id) : undefined;
-    // A direct claim is reviewed at its target's anchor, the same position the claim itself is
-    // gated on, so a later apply cannot quietly pass a change its own review would have shown.
-    const claimAnchorId =
-      draft.action === "tasks.claim_message" && input.messageId
-        ? (this.directClaimTarget(input.messageId)?.anchorMessageId ?? input.messageId)
-        : input.messageId;
-    const messageId = task?.messageId ?? claimAnchorId;
+    const messageId = task?.messageId ?? input.messageId;
     const message = this.db
       .prepare("SELECT channel_id,root_id FROM owner_messages WHERE id=?")
       .get(messageId) as { channel_id: string; root_id: string | null } | undefined;
@@ -1603,29 +1501,18 @@ export class OwnerChat {
       ),
       "tasks.create": tool(
         {
-          description: "从你可读取的已有消息创建任务；消息是唯一规范锚点。",
+          description:
+            "为指定原消息创建带标题的待认领任务，不自动分配负责人。多个正交事项（修复登录／整理部署说明）分别建任务，同一工作的步骤（排查／修改／验证）留在一个任务中。taskSnapshot 原样带回；未提供表示预期没有任务。返回 tasks_changed 时先查看全部任务，可认领、协调、放弃或携标记另建；成功返回 task 与更新标记。已有任务的标题、负责人、状态变化不影响标记。",
           schema: taskToolSchemas["tasks.create"],
         },
         (run, toolCallId, args) => {
           return this.executeTaskChange(run, toolCallId, { name: "tasks.create", input: args });
         },
       ),
-      "tasks.claim_message": tool(
-        {
-          description:
-            "对一条你可读取的消息直接发起认领：该消息已有任务时认领那个任务（讨论串回复也可能带有自己的任务），否则创建并认领该讨论原顶层消息对应的任务；结果中的 messageId 是本次认领的任务锚点。已被同伴认领时返回 outcome=conflict 而不抢占，你仍可阅读、讨论或提供不冲突的协助。",
-          schema: taskToolSchemas["tasks.claim_message"],
-        },
-        (run, toolCallId, args) => {
-          return this.executeTaskChange(run, toolCallId, {
-            name: "tasks.claim_message",
-            input: args,
-          });
-        },
-      ),
       "tasks.claim": tool(
         {
-          description: "认领一个可见任务；先检查相关讨论的新变化。",
+          description:
+            "按明确 taskId 与看到的 expectedVersion 认领可见任务；先检查相关讨论的新变化，同伴先认领时保留其归属。纯交流、提醒和不冲突的协助无需认领。",
           schema: taskToolSchemas["tasks.claim"],
         },
         (run, toolCallId, args) => {
@@ -1926,17 +1813,13 @@ export class OwnerChat {
           .get(messageId) as { id: string; channel_id: string; root_id: string | null } | undefined)
       : undefined;
     if (!task && !message) throw new AgentToolRefusal("Task or message is not available");
-    if (taskOperation === "tasks.create" && messageId && this.taskForMessage(messageId))
-      throw new AgentToolRefusal("Message already has a task; use tasks.claim_message to claim it");
     const channelId = task?.channelId ?? message!.channel_id;
     this.requireAgentConversation(run.agent_id, channelId);
     return this.recordAgentToolAction(run, toolCallId, taskOperation, args, () => {
-      // Freshness follows the message the operation actually changes: a direct claim is scoped
-      // to its target's anchor, not to whichever message id the Agent happened to pass.
-      const anchorMessageId =
-        taskOperation === "tasks.claim_message"
-          ? (this.directClaimTarget(messageId!)?.anchorMessageId ?? messageId!)
-          : (task?.messageId ?? messageId!);
+      const tasks = taskOperation === "tasks.create" ? this.tasksForMessage(messageId!) : undefined;
+      const taskFacts = tasks ? { tasks, taskSnapshot: this.taskSnapshot(tasks) } : undefined;
+      let readyDraft: TaskDraftRow | undefined;
+      const anchorMessageId = task?.messageId ?? messageId!;
       const anchor = this.db
         .prepare("SELECT root_id FROM owner_messages WHERE id=?")
         .get(anchorMessageId) as { root_id: string | null } | undefined;
@@ -1965,7 +1848,7 @@ export class OwnerChat {
               this.now(),
             );
           this.recordTaskDraftReviews(draftId, changes);
-          return { channelId, status: "needs_review", draftId, changes };
+          return { channelId, status: "needs_review", draftId, changes, ...taskFacts };
         }
       } else {
         const draft = this.db
@@ -1979,22 +1862,48 @@ export class OwnerChat {
         )
           throw new AgentToolRefusal("Task draft is not ready");
         const original = JSON.parse(draft.input_json) as Record<string, unknown>;
-        const current = { ...args };
+        const current: Record<string, unknown> = { ...args };
         delete current.draftId;
         delete original.draftId;
-        if (JSON.stringify(original) !== JSON.stringify(current))
+        // A refreshed snapshot is new task knowledge, not a revision of the draft's work.
+        if (taskOperation === "tasks.create") {
+          delete current.taskSnapshot;
+          delete original.taskSnapshot;
+        }
+        if (!isDeepStrictEqual(original, current))
           throw new AgentToolRefusal("Task draft changed; revise it first");
         if (this.unreviewedTaskChanges(draft).length)
           throw new AgentToolRefusal("Conversation changed; review the task draft again");
+        readyDraft = draft;
+      }
+      let result: unknown;
+      if (request.name === "tasks.create") {
+        const taskSnapshot = taskFacts!.taskSnapshot;
+        if (
+          request.input.taskSnapshot === undefined
+            ? tasks!.length > 0
+            : request.input.taskSnapshot !== taskSnapshot
+        )
+          return { status: "tasks_changed", ...taskFacts };
+        const created = this.createTaskForMessage(
+          messageId!,
+          "agent",
+          run.agent_id,
+          request.input.title,
+        );
+        result = {
+          status: "created",
+          task: created,
+          taskSnapshot: this.taskSnapshot(this.tasksForMessage(messageId!)),
+        };
+      } else {
+        result = this.mutateTask(run.agent_id, task!, request);
+      }
+      if (readyDraft)
         this.db
           .prepare("UPDATE owner_task_drafts SET state='applied',updated_at=? WHERE id=?")
-          .run(this.now(), draft.id);
-      }
-      if (taskOperation === "tasks.create")
-        return this.createTaskForMessage(messageId!, "agent", run.agent_id);
-      if (taskOperation === "tasks.claim_message")
-        return this.claimTaskForMessage(run.agent_id, messageId!);
-      return this.mutateTask(run.agent_id, task!, request);
+          .run(this.now(), readyDraft.id);
+      return result;
     });
   }
 
@@ -2446,7 +2355,7 @@ export class OwnerChat {
     });
     this.queueDeliveries(message, at);
     this.record("message.created", channelId, message);
-    if (asTask) this.createTaskForMessage(id, "agent", run.agent_id);
+    if (asTask) this.createTaskForMessage(id, "agent", run.agent_id, text.slice(0, 200));
     return message;
   }
 

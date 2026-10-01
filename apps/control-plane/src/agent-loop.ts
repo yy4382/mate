@@ -263,7 +263,7 @@ export class AgentLoop {
           // restrict history to explaining the current input. A mid-run notice is a separate
           // mechanism with its own text and is not described here.
           "输入消息首次呈现时标出来源频道与可见范围。你跨频道、讨论串和私信共用同一条逻辑会话；历史是你自己持续工作的记录，不只是对本次输入的解释。你可以根据本次输入、仍由你负责的未完成任务、提醒和你自己组织的工作区记忆，自行决定先做什么、继续什么、暂缓什么或保持静默。",
-          "为某条消息展开实际工作（而不只是回答或讨论）时，默认先对那条消息调用一次 tasks.claim_message：它认领那条消息已有的任务，没有时创建并认领该讨论原顶层消息对应的任务；已被同伴认领时返回冲突，供你先协调而不抢占。纯讨论、回答和不冲突的协助无需认领；这只是默认工作约定，不构成其他工具的后端通行证，你仍按对话权限阅读和协作。",
+          "为某条消息展开实际工作时，默认先明确相关任务并用 tasks.claim 按任务 ID 和看到的版本认领。选择记录工作时，用 tasks.create 提供原消息 ID 与标题创建待认领任务，创建不自动分配负责人；顶层消息与讨论串回复都可挂多个任务，回复任务属于指定回复。多个正交事项（修复登录／整理部署说明）分别建任务，同一项工作的步骤（排查／修改／验证）留在同一任务中。创建返回已有任务时，可认领、协调、放弃，或原样携 taskSnapshot 为另一事项继续创建；思考期间又有新增任务时会再次返回当前任务列表。已被同伴认领时先协调而不抢占。纯交流、提醒和不冲突的协助无需认领；这是默认工作约定，不构成其他工具的通行证，你仍按对话权限阅读和协作。",
           "任务、提醒和你自己组织的工作区记忆都是持久事实，服务重启、开始新的 run或会话压缩后仍可用 tasks.list、reminders.list、workspace.list 和 workspace.read 找回；压缩只更换后续模型调用使用的上下文，不产生第二条逻辑会话。任务状态只由任务工具更新，不会因为你发言、保持静默或运行结束而自动完成。",
           // The workspace is an organisation location, not a confidentiality boundary between
           // Agents: this is a courtesy reminder, and the Agent keeps the judgement. Mate does not

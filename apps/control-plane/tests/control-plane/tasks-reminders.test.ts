@@ -67,7 +67,7 @@ it("commits a task with its new message and keeps the message as its unique anch
   });
 });
 
-it("creates a task from an existing message once without changing conversation access", async () => {
+it("creates multiple titled tasks from an existing message without changing conversation access", async () => {
   const f = await setup();
   const sent = await f.app.request(`/api/owner/channels/${f.channel.id}/messages`, {
     method: "POST",
@@ -75,14 +75,24 @@ it("creates a task from an existing message once without changing conversation a
     body: JSON.stringify({ text: "先调查" }),
   });
   const message = await sent.json();
-  const create = () =>
+  const create = (title: unknown) =>
     f.app.request("/api/owner/tasks", {
       method: "POST",
       headers: { cookie: f.cookie, "content-type": "application/json" },
-      body: JSON.stringify({ messageId: message.id }),
+      body: JSON.stringify({ messageId: message.id, title }),
     });
-  expect((await create()).status).toBe(201);
-  expect((await create()).status).toBe(409);
+  for (const title of [undefined, "  ", "x".repeat(201)])
+    expect((await create(title)).status).toBe(400);
+  expect((await create("  调查  ")).status).toBe(201);
+  expect((await create("调查")).status).toBe(201);
+  expect((await create("x".repeat(200))).status).toBe(201);
+  const listed = await f.app.request("/api/owner/tasks", { headers: { cookie: f.cookie } });
+  const { tasks } = await listed.json();
+  expect(tasks).toHaveLength(3);
+  expect(tasks.filter((task: any) => task.title === "调查")).toHaveLength(2);
+  expect(
+    tasks.every((task: any) => task.messageId === message.id && task.ownerAgentId === null),
+  ).toBe(true);
 });
 
 it("rolls back a new message and its deliveries if task creation cannot commit", async () => {

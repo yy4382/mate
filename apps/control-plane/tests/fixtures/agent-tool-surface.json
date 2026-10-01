@@ -237,7 +237,7 @@
   },
   {
     "name": "tasks.create",
-    "description": "从你可读取的已有消息创建任务；消息是唯一规范锚点。",
+    "description": "为指定原消息创建带标题的待认领任务，不自动分配负责人。多个正交事项（修复登录／整理部署说明）分别建任务，同一工作的步骤（排查／修改／验证）留在一个任务中。taskSnapshot 原样带回；未提供表示预期没有任务。返回 tasks_changed 时先查看全部任务，可认领、协调、放弃或携标记另建；成功返回 task 与更新标记。已有任务的标题、负责人、状态变化不影响标记。",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -247,27 +247,14 @@
           "format": "uuid",
           "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         },
-        "draftId": {
+        "title": {
           "type": "string",
-          "format": "uuid",
-          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-        }
-      },
-      "required": ["messageId"],
-      "additionalProperties": false
-    }
-  },
-  {
-    "name": "tasks.claim_message",
-    "description": "对一条你可读取的消息直接发起认领：该消息已有任务时认领那个任务（讨论串回复也可能带有自己的任务），否则创建并认领该讨论原顶层消息对应的任务；结果中的 messageId 是本次认领的任务锚点。已被同伴认领时返回 outcome=conflict 而不抢占，你仍可阅读、讨论或提供不冲突的协助。",
-    "inputSchema": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "type": "object",
-      "properties": {
-        "messageId": {
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "taskSnapshot": {
           "type": "string",
-          "format": "uuid",
-          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          "pattern": "^[a-f0-9]{64}$"
         },
         "draftId": {
           "type": "string",
@@ -275,13 +262,13 @@
           "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
         }
       },
-      "required": ["messageId"],
+      "required": ["messageId", "title"],
       "additionalProperties": false
     }
   },
   {
     "name": "tasks.claim",
-    "description": "认领一个可见任务；先检查相关讨论的新变化。",
+    "description": "按明确 taskId 与看到的 expectedVersion 认领可见任务；先检查相关讨论的新变化，同伴先认领时保留其归属。纯交流、提醒和不冲突的协助无需认领。",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",

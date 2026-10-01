@@ -2,8 +2,8 @@ import Database from "better-sqlite3";
 import { existsSync, statSync } from "node:fs";
 
 const CONTROL_PLANE_APPLICATION_ID = 0x4d43504c;
-// Revision 31 removes the maintenance-only Agent recovery-hold table.
-const CONTROL_PLANE_FORMAT_REVISION = 31;
+// Revision 32 allows multiple independent tasks per message.
+const CONTROL_PLANE_FORMAT_REVISION = 32;
 
 const moveAside =
   "Mate does not migrate or erase a database it does not recognise: if this file was not created by this release, move it aside and point MATE_CONTROL_PLANE_DATA_DIR at a new, empty directory.";

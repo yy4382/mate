@@ -41,6 +41,26 @@ it("shows the canonical task card and its activity without adding chat text", as
                 version: 2,
                 updatedAt: 1,
               },
+              {
+                id: "task-2",
+                messageId: "message-1",
+                channelId: "channel-1",
+                title: "Write deployment notes",
+                status: "open",
+                ownerAgentId: null,
+                version: 1,
+                updatedAt: 1,
+              },
+              {
+                id: "task-reply",
+                messageId: "reply-1",
+                channelId: "channel-1",
+                title: "Verify thread reply",
+                status: "done",
+                ownerAgentId: "peer-2",
+                version: 2,
+                updatedAt: 1,
+              },
             ],
           }),
     ),
@@ -48,9 +68,15 @@ it("shows the canonical task card and its activity without adding chat text", as
   render(createElement(TasksPage));
   await userEvent.setup().click(await screen.findByRole("button", { name: "Review deployment" }));
   expect(await screen.findByText(/claimed · peer/)).not.toBeNull();
-  expect(screen.getByRole("link", { name: "查看原消息" }).getAttribute("href")).toContain(
-    "channel-1",
-  );
+  expect(screen.getByRole("button", { name: "Write deployment notes" })).not.toBeNull();
+  expect(screen.getByRole("button", { name: "Verify thread reply" })).not.toBeNull();
+  expect(
+    screen.getAllByRole("link", { name: "查看原消息" }).map((link) => link.getAttribute("href")),
+  ).toEqual([
+    "/app?channel=channel-1&message=message-1",
+    "/app?channel=channel-1&message=message-1",
+    "/app?channel=channel-1&message=reply-1",
+  ]);
 });
 
 it("shows an unrun firing as pending and exposes no owner mutation control", async () => {

@@ -1152,3 +1152,24 @@
   top: 8px;
   right: 10px;
 }
+.message-tasks {
+  display: grid;
+  gap: 0.4rem;
+  margin-block: 0.4rem;
+}
+.message-task-form {
+  display: grid;
+  gap: 0.5rem;
+  margin-block: 0.75rem;
+}
+.message-task-form label {
+  display: grid;
+  gap: 0.3rem;
+}
+.message-task-form input {
+  width: 100%;
+  padding: 0.5rem;
+}
+.message-task-form button {
+  margin-right: 0.5rem;
+}
