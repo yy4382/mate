@@ -20,6 +20,7 @@
     "test:linux-single-account-node": "pnpm --filter @mate/control-plane run test:linux-single-account-node",
     "test:linux-ordinary-command-failure": "pnpm --filter @mate/node run test:linux-ordinary-command-failure",
     "check": "pnpm run format:check && pnpm test",
+    "check:provider": "node apps/control-plane/dist/providers/active-check-cli.js",
     "start": "node apps/control-plane/dist/main.js",
     "start:control-plane": "node apps/control-plane/dist/main.js",
     "start:node": "node apps/node/dist/main.js",
