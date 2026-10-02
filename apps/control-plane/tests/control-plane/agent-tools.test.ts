@@ -420,6 +420,8 @@ it("refuses every registered operation and meta tool for ended, absent and anoth
     "process.list": {},
     "process.inspect": { targetOperationId: id },
     "process.stop": { targetOperationId: id },
+    "history.search": { query: "past observation" },
+    "history.read": { id },
   };
   expect(Object.keys(inputs).sort()).toEqual([...names].sort());
   for (const name of names) {

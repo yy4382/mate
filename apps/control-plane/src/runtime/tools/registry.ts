@@ -1,3 +1,4 @@
+import { AgentHistory } from "../../agent-history.js";
 import { currentAgentToolRunSchema } from "./entry.js";
 import type Database from "better-sqlite3";
 import { z } from "zod";
@@ -35,6 +36,7 @@ export class AgentTools {
         ...workspace.agentTools(),
         ...attachments.agentTools(),
         ...processes.agentTools(),
+        ...new AgentHistory(database).agentTools(),
       }),
     );
     this.meta = new Map(
