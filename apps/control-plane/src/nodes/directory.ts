@@ -745,7 +745,18 @@ export class NodeDirectory {
       this.startWorkspaceReconciliation(socket, session, "", blocking);
       return;
     }
-    const validRows = rows.filter((row) => NodeRequestIdSchema.safeParse(row.operation_id).success);
+    // The current request owns its normal result until timeout or disconnect. A missing
+    // receipt during that wait is not a recovery fact, just as for workspace operations.
+    const validRows = rows.filter(
+      (row) =>
+        NodeRequestIdSchema.safeParse(row.operation_id).success &&
+        ![...this.pendingAgentProcessOperations.values()].some(
+          (pending) =>
+            pending.nodeId === session.nodeId &&
+            pending.agentId === row.agent_id &&
+            pending.operationId === row.operation_id,
+        ),
+    );
     if (validRows.length === 0) {
       this.startReconciliation(socket, session, rows.at(-1)!.operation_id, blocking);
       return;
