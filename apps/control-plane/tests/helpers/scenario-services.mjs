@@ -36,6 +36,17 @@ if (process.argv[2] === "control-plane") {
     process.env.MATE_NODE_AGENT_WORKSPACE_ROOT,
     { commandTimeoutMs: Number(process.env.MATE_SCENARIO_COMMAND_TIMEOUT_MS) },
   );
+  const workspaceExecutor = process.env.MATE_SCENARIO_FILE_BOUNDARY
+    ? (await import("./scenario-file-boundary.mjs")).createFileBoundaryExecutor(
+        process.env.MATE_NODE_AGENT_WORKSPACE_ROOT,
+        process.env.MATE_NODE_DATA_DIR,
+        process.env.MATE_SCENARIO_FILE_BOUNDARY,
+        controller.signal,
+      )
+    : new LinuxWorkspaceExecutor(
+        process.env.MATE_NODE_AGENT_WORKSPACE_ROOT,
+        process.env.MATE_NODE_DATA_DIR,
+      );
   try {
     await runLinuxNodeWithTestDependencies(
       {
@@ -51,10 +62,7 @@ if (process.argv[2] === "control-plane") {
       controller.signal,
       {
         processOperations: store.operations,
-        workspaceExecutor: new LinuxWorkspaceExecutor(
-          process.env.MATE_NODE_AGENT_WORKSPACE_ROOT,
-          process.env.MATE_NODE_DATA_DIR,
-        ),
+        workspaceExecutor,
       },
     );
   } finally {

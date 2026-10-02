@@ -241,3 +241,18 @@ pnpm --filter @mate/control-plane exec vitest run tests/control-plane/report-wor
 ```
 
 这条测试也由 `pnpm check` 收录。失败沿同一个证据与清理入口报告实际步骤和关联事实；只使用合成模型和文件，实际平台以执行结果为准，真实 provider、Linux CI、容器和 VPS 各自验证。
+
+## 真实文件崩溃与收据边界
+
+`file-boundaries.test.ts` 使用同一个 `runScenario`、Owner 驱动、真实 Pi 与 HTTP/SSE 脚本服务。`environment.node.fileBoundary` 只供固定测试启动器选择第一次文件变更的暂停点：`before_execute` 在真实执行器写好 `executing` 收据后、调用文件 backend 前；`before_receipt` 使用现有 `beforeReceipt` 钩子，在实际文件变更后、终态收据前；`after_receipt` 在真实执行器返回后、node 回包前。到达事件带实际 Agent／operation／请求内容及摘要，等待有期限和取消信号；原数据重启后标记不再暂停新操作。生产入口没有这些配置。
+
+三条场景精确等待事件，再用 SIGKILL 终止本场景 node，并核对实际退出。执行前的原字节与版本保持不变；效果后的字节、inode 和纳秒版本证明原文件已变更，重启与对账没有再次替换。后续真实模型请求必须先看到旧文件结果未知，或看到原收据成功更正，再正常读取、补救同一文件或继续同一工作。控制面的唯一 session、各轮不重叠、原 operation 的真实派发与 backend 调用次数共同核验恢复没有盲目重放。收据后的场景先等实际工具超时产生未知结果、暂留模型响应，再崩溃／重启核对成功更正；这与未执行、已执行但无终态证据分别报告。
+
+保留 `agent-tool-invalidation.test.ts` 的既有文件断链、收据前崩溃和收据后重启案例，并增强收据后立即断链／重启的 wire 断言：原 operation、Agent 与请求摘要保持，对账使用新的 requestId，各回包匹配所属往返，成功更正实际到达模型。文件事实通过 `scenario-facts.ts` 的只读动作／收据投影及 `scenario-file-facts.ts` 校验，不写业务库。失败继续使用现有证据与清理入口；测试只操作合成工作区，不运行命令代替文件变更。
+
+```sh
+pnpm build
+pnpm --filter @mate/control-plane exec vitest run tests/control-plane/file-boundaries.test.ts tests/control-plane/agent-tool-invalidation.test.ts
+```
+
+两条文件均由 `pnpm check` 收录。macOS 是跨平台本地证据，Linux CI、真实 provider 和 VPS 仍各自验证；这里的合成效果证明测试矩阵内的执行次数，不承诺任意远端副作用严格一次。

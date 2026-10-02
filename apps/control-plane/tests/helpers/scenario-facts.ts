@@ -92,6 +92,11 @@ export function readScenarioFacts(directory: string) {
           "SELECT operation_id AS operationId,run_id AS runId,agent_id AS agentId,node_id AS nodeId,state,request_json AS request,receipt_json AS receipt FROM owner_agent_process_operations ORDER BY created_at,operation_id",
         )
         .all(),
+      toolActions: db
+        .prepare(
+          "SELECT session_id AS sessionId,action_id AS actionId,agent_id AS agentId,operation,request_hash AS requestHash,result_json AS receipt FROM owner_agent_tool_actions ORDER BY rowid",
+        )
+        .all(),
     };
   } finally {
     db.close();

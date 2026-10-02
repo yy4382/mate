@@ -28,6 +28,10 @@
       "types": "./dist/files/workspace-executor.d.ts",
       "import": "./dist/files/workspace-executor.js"
     },
+    "./same-account-files": {
+      "types": "./dist/files/same-account-files.d.ts",
+      "import": "./dist/files/same-account-files.js"
+    },
     "./database": {
       "types": "./dist/processes/operation-database.d.ts",
       "import": "./dist/processes/operation-database.js"
