@@ -49,6 +49,7 @@ export interface AgentLoopTestDependencies {
   afterSessionCommit?: (entry: SessionCommit) => Promise<void>;
   beforeRunFinish?: () => Promise<void>;
   beforeRunStart?: (runId: string) => Promise<void>;
+  afterToolCallDelta?: (delta: { sessionId: string; toolCallId: string; delta: string }) => void;
 }
 export type AgentLoopResult = { ok: true } | { ok: false; code: string; reason?: string };
 
@@ -293,6 +294,19 @@ export class AgentLoop {
     let unsuccessfulStopReason: "error" | "aborted" | undefined;
     let contextOverflow = false;
     const unsubscribe = agent.subscribe(async (event) => {
+      if (
+        event.type === "message_update" &&
+        event.assistantMessageEvent.type === "toolcall_delta"
+      ) {
+        const update = event.assistantMessageEvent;
+        const call = update.partial.content[update.contentIndex];
+        if (call?.type === "toolCall")
+          test.afterToolCallDelta?.({
+            sessionId: spec.sessionId,
+            toolCallId: call.id,
+            delta: update.delta,
+          });
+      }
       if (event.type !== "message_end") return;
       if (
         event.message.role !== "user" &&

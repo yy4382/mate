@@ -164,6 +164,20 @@ function createRequest(
         throw new Error("Cancellation expectation must precede request completion");
       expectedCancellation = z.string().min(1).parse(reason);
     },
+    /** Deliberately incomplete SSE; remains pending until the declared client cancellation. */
+    partialTool(argumentsPrefix: string) {
+      if (state !== "pending" || response.headersSent)
+        throw new Error("Partial tool requires a fresh pending response");
+      const callId = `unfinished_${randomUUID()}`;
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write(
+        `data: ${JSON.stringify({ type: "response.output_item.added", output_index: 0, item: { type: "function_call", id: callId, call_id: callId, name: "tools.call", arguments: "" } })}\n\n`,
+      );
+      response.write(
+        `data: ${JSON.stringify({ type: "response.function_call_arguments.delta", output_index: 0, delta: argumentsPrefix })}\n\n`,
+      );
+      return { callId, argumentsPrefix };
+    },
     reject() {
       finish({ kind: "failed" });
       response.destroy();

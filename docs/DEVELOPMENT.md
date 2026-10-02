@@ -104,7 +104,7 @@ pnpm build
 pnpm --filter @mate/control-plane exec vitest run tests/control-plane/scenario-driver.test.ts
 ```
 
-`message-tasks.test.ts` 沿用这些真实进程和持久库，验证消息及回复的多任务、两位 Agent 的明确认领与并发新增、消息草稿交错，以及任务提交后模型结果尚未确认时的控制面重启。模型输出由本地脚本 provider 指定，只验收工具和恢复能力；它不代表真实模型服务连接或 VPS 部署已验证。中文网页的标题输入和全部关联任务展示由 `apps/web/tests/chat-app.test.ts` 的现有交互接缝覆盖。
+`message-tasks.test.ts` 沿用这些真实进程和持久库，验证消息及回复的多任务、两位 Agent 的明确认领与并发新增、消息草稿交错。任务提交后模型结果尚未确认时的控制面重启场景已迁移到下文的 `cp-recovery-scenarios.test.ts`。模型输出由本地脚本 provider 指定，只验收工具和恢复能力；它不代表真实模型服务连接或 VPS 部署已验证。中文网页的标题输入和全部关联任务展示由 `apps/web/tests/chat-app.test.ts` 的现有交互接缝覆盖。
 
 ```sh
 pnpm build
@@ -241,3 +241,26 @@ pnpm --filter @mate/control-plane exec vitest run tests/control-plane/report-wor
 ```
 
 这条测试也由 `pnpm check` 收录。失败沿同一个证据与清理入口报告实际步骤和关联事实；只使用合成模型和文件，实际平台以执行结果为准，真实 provider、Linux CI、容器和 VPS 各自验证。
+
+## 控制面提交与重启恢复场景
+
+`cp-recovery-scenarios.test.ts` 把既有 CP 提交、压缩、任务结果、部分 SSE 和正常关停用例迁移到同一个 `runScenario`。每条场景使用下面的 ID；失败证据、模型步骤、真实平台/SHA、进程输出与退出、原消息/run/session/operation、API 与效果文件沿既有证据机制保存。迁移后原 `agent-loop-recovery.test.ts` 只保留工作区身份与拒绝提交测试；`message-tasks.test.ts` 保留其它任务行为，避免重复运行同一恢复矩阵。
+
+| 场景 ID | 确定的事件和主要证据 | 覆盖来源 |
+| --- | --- | --- |
+| `cp-assistant-before` / `cp-assistant-after` | 完整 assistant 提交前/后暂停，SIGKILL 的真实退出，恢复请求的已确认有序前缀与一次命令效果 | 迁移既有提交钩子用例，增加原消息/run 关联 |
+| `cp-result-before` / `cp-result-after` | 命令效果及收据已有、toolResult 未提交/已提交；恢复仅复用原 operation，旧 run 中断 | 迁移既有结果边界，并明确结果已提交但 run 未完成 |
+| `cp-task-result-before` | 创建任务的事务已提交、toolResult 未确认；实际模型收到原收据，ID/锚点/创建活动保留，显式认领及随后新建任务仍可用 | 迁移既有消息任务恢复用例 |
+| `cp-compacted-pending-tool` / `cp-compacted-finish` | 已确认摘要和保留历史存在，待工具调用/完整结束之后 SIGKILL；恢复及后续实际请求保留同一摘要与保留前缀，不重附被摘要覆盖的 seed | 迁移既有两条压缩恢复用例，并补恢复请求证明 |
+| `cp-partial-sse` | Pi 实际收到工具参数 delta 后 SIGKILL；取消及恢复完成后，半条消息没有入库/进入上下文，没有派发工具 | 迁移既有部分 SSE 用例，补 Pi 收到片段的事件 |
+| `cp-sigterm-command` | 文件证明真实命令已经产生效果；CP 收到 SIGTERM 并正常退出、node 与命令 PID 仍存活，测试明确放行命令后晚到收据按原 operation 对账；真实对话工具读取更正消息，后续 run 按该消息关联等待 | 迁移既有正常关停用例，以条件门替代固定 sleep |
+| `cp-manual-pause` | Owner API 暂停实际待响应模型；重启和重新认证后 pausedReason 仍为 manual 且无 current run，显式恢复后沿原 session 完成 | 新增 CP 重启的暂停组合 |
+
+```sh
+pnpm build
+pnpm --filter @mate/control-plane exec vitest run tests/control-plane/cp-recovery-scenarios.test.ts
+```
+
+新增 CP 场景仍声明普通结构化配置。`controlPlane.commitBoundary` 使用 `{ phase: "before" | "after", role: "assistant" | "toolResult", toolName? }` 或 `{ phase: "finish" }`；固定测试启动器通过现有提交依赖暂停一次，15 秒未打断则失败。一次性标记位于本场景临时目录，重启不再次暂停，重启启动器不重新注入提交故障。`restartControl("SIGKILL")` 明确崩溃；默认 `restartControl("SIGTERM")` 走正常关停，两者记录实际退出状态。`controlPlane.observePartialTool` 仅通过已有测试依赖容器中的观测回调报告真实 Pi 工具参数 delta，不新增生产配置或故障 API。脚本的 `partialTool(argumentsPrefix)` 发送未完成 SSE 并保持待响应，需先声明预期取消。
+
+`tests/scenarios/cp-restart.ts` 导出选定的 `runCpRestart(context, provider)`，默认复用 assistant 已提交但尚未派发命令的边界，供容器拓扑沿用同一模型脚本、成果与原身份断言。`scenario-recovery-facts.ts` 集中只读查询 Owner API 没有暴露的 transcript、原 run、操作与工具收据；任务、活动、模型请求和文件仍为主要成果证据。这些场景加入 `pnpm check`；本地 macOS 结果不能代替实际 Linux CI、镜像、真实 provider 或 VPS 验证。
