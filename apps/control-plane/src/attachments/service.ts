@@ -1,3 +1,4 @@
+import { fileType, textRange, unreadable } from "../workspaces/file-content.js";
 import {
   decodeChunk,
   operationIdForAction,
@@ -143,7 +144,7 @@ export class AttachmentService {
     attachmentId: string;
     offset: number;
     length: number;
-  }): { attachment: AttachmentSummary; offset: number; totalBytes: number; base64: string } {
+  }) {
     this.authorizeAgentConversationRead(input.agentId, input.channelId);
     if (
       !Number.isSafeInteger(input.offset) ||
@@ -179,13 +180,24 @@ export class AttachmentService {
         before.ino !== BigInt(beforePath.ino)
       )
         throw new AttachmentError("attachment_not_found", "附件内容暂不可用。", 404);
-      const bytes = Buffer.alloc(Math.min(input.length, row.size - input.offset));
-      let count = 0;
-      while (count < bytes.length) {
-        const read = readSync(descriptor, bytes, count, bytes.length - count, input.offset + count);
-        if (!read) break;
-        count += read;
-      }
+      const readRange = (offset: number, length: number) => {
+        const bytes = Buffer.alloc(Math.min(length, row.size - offset));
+        let count = 0;
+        while (count < bytes.length) {
+          const read = readSync(descriptor, bytes, count, bytes.length - count, offset + count);
+          if (!read) throw new AttachmentError("attachment_not_found", "附件内容传输未读全。", 409);
+          count += read;
+        }
+        return bytes;
+      };
+      const prefix = readRange(0, 8192);
+      const type = fileType(prefix, row.size > prefix.length);
+      const start = Math.max(0, input.offset - 3);
+      const end = Math.min(row.size, input.offset + input.length + 3);
+      const content =
+        type === "text/plain"
+          ? textRange(readRange(start, end - start), start, input.offset, input.length, row.size)
+          : unreadable(type, "上传图片或二进制附件不能直接读取。");
       const after = fstatSync(descriptor, { bigint: true });
       if (
         before.size !== after.size ||
@@ -193,12 +205,7 @@ export class AttachmentService {
         before.ctimeNs !== after.ctimeNs
       )
         throw new AttachmentError("attachment_not_found", "附件内容读取期间发生变化。", 409);
-      return {
-        attachment: toSummary(row),
-        offset: input.offset,
-        totalBytes: row.size,
-        base64: bytes.subarray(0, count).toString("base64"),
-      };
+      return { attachment: toSummary(row), totalBytes: row.size, ...content };
     } finally {
       closeSync(descriptor);
     }

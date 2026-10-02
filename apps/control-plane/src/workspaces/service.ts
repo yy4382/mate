@@ -1,3 +1,6 @@
+import { fileType, decodeText, textRange, unreadable } from "./file-content.js";
+import { WorkspaceImage } from "./image-result.js";
+import { workspaceVersionSchema } from "@mate/protocol/workspace";
 import { workspaceDirectoryResultSchema, workspaceStatResultSchema } from "./results.js";
 import { workspaceDownloadStatusSchema } from "./contracts.js";
 import {
@@ -385,22 +388,133 @@ export class WorkspaceService {
       { kind: "read" | "workspace_list" | "workspace_stat" | "workspace_read_chunk" }
     >,
   ): Promise<unknown> {
-    const { agentId } = identity;
     await identity.committed;
+    identity.requireCurrentRun();
+    if (operation.kind === "read" || operation.kind === "workspace_read_chunk") {
+      const version = operation.kind === "workspace_read_chunk" ? operation.version : undefined;
+      const prefix = await this.agentChunk(identity, operation.path, 0, 8192, version);
+      const type = fileType(prefix.bytes, prefix.totalBytes > prefix.bytes.length);
+      if (type !== "text/plain") {
+        if (operation.kind === "workspace_read_chunk")
+          return {
+            ...unreadable(type, "二进制分块不能直接读取；完整图片请使用 workspace.read。"),
+            version: prefix.version,
+            totalBytes: prefix.totalBytes,
+          };
+        if (!type.startsWith("image/")) return unreadable(type, "此文件类型不能直接读取。");
+        if (prefix.totalBytes > 5 * 1024 * 1024)
+          return unreadable(type, "图片超过 5 MiB 完整读取上限。");
+        const chunks = [prefix.bytes];
+        for (let offset = prefix.bytes.length; offset < prefix.totalBytes;) {
+          const chunk = await this.agentChunk(
+            identity,
+            operation.path,
+            offset,
+            8192,
+            prefix.version,
+          );
+          chunks.push(chunk.bytes);
+          offset += chunk.bytes.length;
+        }
+        return new WorkspaceImage(type, Buffer.concat(chunks).toString("base64"));
+      }
+      if (operation.kind === "read") {
+        if (prefix.totalBytes > 8192)
+          throw new WorkspaceError(
+            "not_file",
+            "File exceeds read limit; use workspace.read_chunk",
+            413,
+          );
+        return { content: decodeText(prefix.bytes) };
+      }
+      if (operation.offset > prefix.totalBytes)
+        throw new WorkspaceError("not_file", "文件分块位置超出文件大小。", 416);
+      const start = Math.max(0, operation.offset - 3);
+      const end = Math.min(prefix.totalBytes, operation.offset + operation.length + 3);
+      const parts: Buffer[] = [];
+      for (let offset = start; offset < end;) {
+        const chunk = await this.agentChunk(
+          identity,
+          operation.path,
+          offset,
+          Math.min(8192, end - offset),
+          prefix.version,
+        );
+        parts.push(chunk.bytes);
+        offset += chunk.bytes.length;
+      }
+      return {
+        ...textRange(
+          Buffer.concat(parts),
+          start,
+          operation.offset,
+          operation.length,
+          prefix.totalBytes,
+        ),
+        version: prefix.version,
+      };
+    }
+    const result = await this.agentReadOperation(identity, operation);
+    return parseOperationReceipt(result.stdout);
+  }
+
+  private async agentReadOperation(
+    identity: AgentToolContext,
+    operation: Extract<
+      Operation,
+      { kind: "workspace_list" | "workspace_stat" | "workspace_read_chunk" }
+    >,
+  ) {
     identity.requireCurrentRun();
     const result = await this.runNodeOperation(
       {
         type: "control.workspace.operation",
         requestId: randomUUID(),
         operationId: randomUUID(),
-        agentId,
+        agentId: identity.agentId,
         mode: "agent_read",
         operation,
       },
       identity.run.node_id,
     );
-    if (operation.kind === "read") return { content: result.stdout };
-    return parseOperationReceipt(result.stdout);
+    identity.requireCurrentRun();
+    return result;
+  }
+
+  private async agentChunk(
+    identity: AgentToolContext,
+    path: string,
+    offset: number,
+    length: number,
+    version?: WorkspaceVersion,
+  ) {
+    const result = await this.agentReadOperation(identity, {
+      kind: "workspace_read_chunk",
+      path,
+      offset,
+      length,
+      ...(version ? { version } : {}),
+    });
+    const parsed = z
+      .object({
+        base64: z.string(),
+        offset: z.number().int().nonnegative(),
+        totalBytes: z.number().int().nonnegative(),
+        version: workspaceVersionSchema,
+      })
+      .safeParse(parseOperationReceipt(result.stdout));
+    if (!parsed.success) throw invalidNodeResponse();
+    const value = parsed.data;
+    const bytes = Buffer.from(value.base64, "base64");
+    if (
+      bytes.toString("base64") !== value.base64 ||
+      value.offset !== offset ||
+      value.totalBytes !== value.version.size ||
+      (version && !sameVersion(version, value.version)) ||
+      bytes.length !== Math.min(length, Math.max(0, value.totalBytes - offset))
+    )
+      throw new WorkspaceError("invalid_response", "文件传输未读全或版本不一致。", 502);
+    return { bytes, version: value.version, totalBytes: value.totalBytes };
   }
 
   /** The body pulls only one bounded node chunk after the previous chunk is consumed. */

@@ -642,7 +642,7 @@
   },
   {
     "name": "workspace.read",
-    "description": "读取工作区中不超过 8 KiB 的 UTF-8 文本文件；相对路径从你的工作区开始，也可以用同伴的 Agent ID（见 agents.list）按路径读取同伴工作区中的文件。更大的文件使用 read_chunk 分页读取。",
+    "description": "读取不超过 8 KiB 的 UTF-8 文本，或不超过 5 MiB 的完整 PNG/JPEG/GIF/WebP 图片（模型须支持图片输入）；其它二进制返回类型与不可读取提示。类型按字节判断。相对路径从你的工作区开始，也可以用同伴的 Agent ID（见 agents.list）按路径读取同伴工作区。更大的文本使用 workspace.read_chunk。",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -658,7 +658,7 @@
   },
   {
     "name": "workspace.read_chunk",
-    "description": "分块读取工作区中的文件，路径规则与 workspace.read 相同；每次最多 8 KiB，并用返回的 version 继续读取同一版本。",
+    "description": "按字节范围读取 UTF-8 文本，路径规则与 workspace.read 相同；请求每次最多 8 KiB，字符边界各最多扩展 3 字节。返回 content、实际 offset/nextOffset、requestedOffset/requestedLength 与 version；继续读取用 nextOffset 和 version。二进制仅返回类型提示，完整图片用 workspace.read。",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -859,7 +859,7 @@
   },
   {
     "name": "attachments.read_chunk",
-    "description": "分块读取一个对话中的附件；公开频道无需加入即可读取，私有对话和私信仅限成员。每次最多 8 KiB。",
+    "description": "分块读取对话中的 UTF-8 文本附件；公开频道无需加入，私有对话和私信仅限成员。每次请求最多 8 KiB，字符边界各最多扩展 3 字节；返回 content、实际 offset/nextOffset 和 requestedOffset/requestedLength。上传图片或二进制只返回类型与不可读取提示，不受声明 MIME 或模型图片能力影响。",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",

@@ -25,12 +25,12 @@ export const workspaceToolDefinitions = {
   },
   "workspace.read": {
     description:
-      "读取工作区中不超过 8 KiB 的 UTF-8 文本文件；相对路径从你的工作区开始，也可以用同伴的 Agent ID（见 agents.list）按路径读取同伴工作区中的文件。更大的文件使用 read_chunk 分页读取。",
+      "读取不超过 8 KiB 的 UTF-8 文本，或不超过 5 MiB 的完整 PNG/JPEG/GIF/WebP 图片（模型须支持图片输入）；其它二进制返回类型与不可读取提示。类型按字节判断。相对路径从你的工作区开始，也可以用同伴的 Agent ID（见 agents.list）按路径读取同伴工作区。更大的文本使用 workspace.read_chunk。",
     schema: z.object({ path: workspacePath }).strict(),
   },
   "workspace.read_chunk": {
     description:
-      "分块读取工作区中的文件，路径规则与 workspace.read 相同；每次最多 8 KiB，并用返回的 version 继续读取同一版本。",
+      "按字节范围读取 UTF-8 文本，路径规则与 workspace.read 相同；请求每次最多 8 KiB，字符边界各最多扩展 3 字节。返回 content、实际 offset/nextOffset、requestedOffset/requestedLength 与 version；继续读取用 nextOffset 和 version。二进制仅返回类型提示，完整图片用 workspace.read。",
     schema: z
       .object({
         path: workspacePath,

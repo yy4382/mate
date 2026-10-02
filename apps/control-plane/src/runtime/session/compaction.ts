@@ -1,3 +1,4 @@
+import { projectImages } from "./image-context.js";
 import {
   reportedUsage,
   providerResponseComplete,
@@ -127,7 +128,7 @@ function contextTokens(entries: ModelContextMessage[], throughId?: string): numb
 
 function serialize(messages: AgentMessage[]): string {
   const parts: string[] = [];
-  for (const message of messages) {
+  for (const message of projectImages(messages, false)) {
     if (message.role === "user") {
       const content = contentText(message.content, "");
       if (content) parts.push(`[User]: ${content}`);
