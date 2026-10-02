@@ -8,6 +8,7 @@ import {
 } from "./bundle.js";
 import { manageNode, nodeServiceCommands } from "./service.js";
 import { nodePaths } from "./paths.js";
+import { uninstallNode } from "./uninstall.js";
 
 async function main() {
   requireOrdinaryAccount();
@@ -29,6 +30,12 @@ async function main() {
     process.stdout.write(
       `Mate ${metadata.version} CLI installed at ${process.env.HOME ?? "~"}/.local/bin/mate. No node service was installed or started.\n`,
     );
+    return;
+  }
+  if (args.length === 2 && args[0] === "node" && args[1] === "uninstall") {
+    const metadata = verifyBundle(directory);
+    probeBundle(directory, metadata);
+    process.stdout.write(await uninstallNode(nodePaths(), directory));
     return;
   }
   if (args[0] === "node" && args[1] && nodeServiceCommands.includes(args[1])) {
@@ -59,7 +66,7 @@ async function main() {
     return;
   }
   throw new Error(
-    "Usage: mate --version; mate node install/start/stop/restart/status/logs [--lines <number>] [--follow]",
+    "Usage: mate --version; mate node uninstall; mate node install/start/stop/restart/status/logs [--lines <number>] [--follow]",
   );
 }
 
