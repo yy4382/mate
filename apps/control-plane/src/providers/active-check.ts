@@ -26,6 +26,7 @@ const reportSchema = z.object({
     "tool_call_not_associated",
     "tool_result_not_acknowledged",
     "provider_error",
+    "model_declined",
     "owner_cancelled",
     "timeout",
   ]),
@@ -97,6 +98,7 @@ export async function checkProviderProtocol(
         report.observed.toolCallAssociated = context.messages.some(
           (message) =>
             message.role === "toolResult" &&
+            callId.length > 0 &&
             callId === announcedCallId &&
             message.toolCallId === callId &&
             message.toolName === "mate_protocol_probe" &&
@@ -136,8 +138,13 @@ export async function checkProviderProtocol(
       report.observed.textStream = true;
     if (event.type !== "message_end" || event.message.role !== "assistant") return;
     if (event.message.stopReason === "error" || event.message.stopReason === "aborted") {
-      report.status = "failed";
-      report.reason = "provider_error";
+      // Pi normalizes these completed model-decline outcomes to error. They do not prove
+      // broken transport; classify only the structured terminal reason, never error prose.
+      const declined = ["refusal", "sensitive", "content_filter"].includes(
+        event.message.rawStopReason ?? "",
+      );
+      report.status = declined ? "unverified" : "failed";
+      report.reason = declined ? "model_declined" : "provider_error";
     }
     if (report.stage === "text")
       report.observed.textCompleted = event.message.stopReason === "stop";
@@ -165,7 +172,7 @@ export async function checkProviderProtocol(
       report.reason = timedOut ? "timeout" : "owner_cancelled";
       return true;
     }
-    return report.status === "failed";
+    return report.status === "failed" || report.reason === "model_declined";
   };
   try {
     if (failedOrCancelled()) return report;
@@ -202,13 +209,21 @@ export async function checkProviderProtocol(
       report.reason = "tool_not_observed";
       return report;
     }
-    agent.state.tools = [];
+    if (!callId || callId !== announcedCallId) {
+      report.status = "failed";
+      report.reason = "tool_call_not_associated";
+      return report;
+    }
+    // Some adapters require the matching tool declaration with tool-use/result history.
+    // Keep it declared; the one-turn stop and execute guard still prevent another probe effect.
     report.stage = "continuation";
     report.httpStatus = null;
     await agent.continue();
     if (failedOrCancelled()) return report;
-    if (!report.observed.toolCallAssociated) report.reason = "tool_call_not_associated";
-    else if (!report.observed.continuationCompleted || !report.observed.toolResultAcknowledged)
+    if (!report.observed.toolCallAssociated) {
+      report.status = "failed";
+      report.reason = "tool_call_not_associated";
+    } else if (!report.observed.continuationCompleted || !report.observed.toolResultAcknowledged)
       report.reason = "tool_result_not_acknowledged";
     else {
       report.status = "passed";
