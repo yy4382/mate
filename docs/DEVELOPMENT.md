@@ -93,6 +93,17 @@ pnpm --filter @mate/control-plane exec vitest run tests/control-plane/scripted-p
 
 `message-tasks.test.ts` 沿用这些真实进程和持久库，验证消息及回复的多任务、两位 Agent 的明确认领与并发新增、消息草稿交错，以及任务提交后模型结果尚未确认时的控制面重启。模型输出由本地脚本 provider 指定，只验收工具和恢复能力；它不代表真实模型服务连接或 VPS 部署已验证。中文网页的标题输入和全部关联任务展示由 `apps/web/tests/chat-app.test.ts` 的现有交互接缝覆盖。
 
+场景驱动使用 `tests/helpers/scenario-driver.ts` 的 `createScenarioDriver(environment)`。`sendOwnerMessage(agent, text)` 只发送普通 Owner 消息，先记录该 Agent 当前活动游标，返回实际消息、Agent/session 身份和游标。将返回值交给 `waitForRun(target, "completed")`，等待该消息所属 run 的持久关联和游标后的 Owner 运行活动共同成立；已有 completed 不会满足新消息。已取得 run ID 时可传 `{ ...target, runId }`，将等待固定到那一轮。观察即将释放的同伴反馈时，先 `observe(agent)`，再用实际消息工具结果组成 `{ ...observation, message }`。这些关联只是观察条件，不限制 Agent 阅读或行动。
+
+`messages(channelId)` 读取分页主时间线，`thread(channelId, rootId)` 读取根消息及回复，`tasks()`、`attachments(channelId)` 和 `activity(agentId, after)` 分别读取真实 Owner API，并复用协议 schemas；活动投影在读取边界核对现有 `AgentActivityEvent` 契约。`waitForTask` 要求具体 ID、消息锚点、频道、负责人和状态；`waitForMessage` 要求具体 ID、频道、rootId、作者和文字。`assertAttachment({ agent, channelId, attachmentId, path, expectedBytes })` 核对实际上传者、附件元数据以及三份字节：Owner 下载、真实 Agent 工作区文件和独立的合成预期。它们不调用 Agent 工具，也不写业务数据库。消息与 run 的关联仅在 `scenario-facts.ts` 中集中打开只读数据库，读取原 session 和 run 输入所覆盖的消息，不以任意非空行表示成功。
+
+条件等待共用 `waitForScenario(label, read, matches, { timeoutMs, signal })`，默认 5 秒；截止时间覆盖读取本身和轮询间隔，取消信号也传给 Owner HTTP 请求。条件未成立、读取失败和取消都抛出带原始 `cause` 的 `ScenarioWaitError`，含等待标签和 `lastFacts`（最后一次完整观察；尚无观察时为 `undefined`）。`scenario-driver.test.ts` 的短单 Agent 报告是完整可运行样例：先完成 R1，再发新的 Owner 普通消息，由 R2 自己读取、创建/认领任务、用真实普通命令生成总计 12 的文件、发布附件、显式回复原请求并完成任务。反例覆盖旧消息/游标、错误 run ID、错误负责人/作者、真实事件流停滞与取消，以及 run 已结束但任务仍在进行中。新增场景只需描述模型步骤、输入和预期成果：
+
+```sh
+pnpm build
+pnpm --filter @mate/control-plane exec vitest run tests/control-plane/scenario-driver.test.ts
+```
+
 ```sh
 pnpm build
 pnpm --filter @mate/control-plane exec vitest run tests/control-plane/message-tasks.test.ts

@@ -299,15 +299,20 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
       if (beforeClose.has(name)) throw new Error(`Before-close action already registered: ${name}`);
       beforeClose.set(name, collect);
     },
-    async request(path: string, input: { method?: string; body?: unknown } = {}) {
+    async request(
+      path: string,
+      input: { method?: string; body?: unknown; signal?: AbortSignal } = {},
+    ) {
       if (!collectingEvidence) assertOpen();
       const response = await fetch(new URL(path, origin), {
         method: input.method ?? "GET",
         headers: { cookie, "content-type": "application/json" },
         ...(input.body === undefined ? {} : { body: JSON.stringify(input.body) }),
-        signal: collectingEvidence
-          ? AbortSignal.timeout(15_000)
-          : AbortSignal.any([cancellation.signal, AbortSignal.timeout(15_000)]),
+        signal: AbortSignal.any([
+          AbortSignal.timeout(15_000),
+          ...(collectingEvidence ? [] : [cancellation.signal]),
+          ...(input.signal ? [input.signal] : []),
+        ]),
       });
       if (!response.ok)
         throw new Error(
