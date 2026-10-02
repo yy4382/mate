@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { z } from "zod";
@@ -23,6 +23,135 @@ console.info(
     gid: process.getgid?.(),
   }),
 );
+
+it("cancels immediately while the provider is still binding without losing the cancellation cause", async () => {
+  const controller = new AbortController();
+  const reason = new Error("Cancelled before local provider listening");
+  const starting = createScenarioEnvironment({ signal: controller.signal, provider: () => {} });
+  controller.abort(reason);
+  try {
+    await starting;
+    throw new Error("Immediate cancellation unexpectedly started");
+  } catch (error) {
+    if (!(error instanceof ScenarioStartupError)) throw error;
+    expect(error.cause).toBe(reason);
+    expect(error.processes).toEqual([]);
+    expect(existsSync(error.directory)).toBe(false);
+    expect(error.cleanupReports.flatMap((report) => report.failures)).toEqual([]);
+    expect(await error.close()).toEqual({ released: [], failures: [] });
+  }
+}, 30_000);
+
+it("bounds stalled evidence and resource callbacks, cleans other services, and retries the unreleased resource", async () => {
+  const environment = await createScenarioEnvironment({
+    provider: () => {},
+    cleanupTimeoutMs: 1000,
+  });
+  let attempts = 0;
+  let evidenceCancelled = false;
+  try {
+    environment.beforeClose(
+      "stalled evidence",
+      (signal) =>
+        new Promise<void>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              evidenceCancelled = true;
+              reject(signal.reason);
+            },
+            { once: true },
+          );
+        }),
+    );
+    environment.registerCleanup("stalled release", (signal) => {
+      if (++attempts > 1) return;
+      return new Promise<void>((_resolve, reject) =>
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true }),
+      );
+    });
+    const report = await environment.close();
+    expect(report.failures.map((failure) => failure.resource)).toEqual([
+      "before close: stalled evidence",
+      "stalled release",
+    ]);
+    expect(evidenceCancelled).toBe(true);
+    expect(environment.processes.every((output) => output.exitStatus !== undefined)).toBe(true);
+    expect(existsSync(environment.directory)).toBe(false);
+    expect(environment.resources).toEqual(["stalled release"]);
+    expect(await environment.close()).toEqual({ released: ["stalled release"], failures: [] });
+    expect(attempts).toBe(2);
+  } finally {
+    await environment.close();
+  }
+}, 30_000);
+
+it("does not replace a scenario resource whose display name matches a later node process", async () => {
+  const environment = await createScenarioEnvironment({ provider: () => {} });
+  let released = false;
+  try {
+    environment.registerCleanup("node process 3", () => {
+      released = true;
+    });
+    await environment.restartNode();
+    expect((await environment.close()).failures).toEqual([]);
+    expect(released).toBe(true);
+    expect(environment.resources).toEqual([]);
+  } finally {
+    await environment.close();
+  }
+}, 30_000);
+
+it("rejects overlapping service restarts without creating duplicate same-identity processes", async () => {
+  const environment = await createScenarioEnvironment({ provider: () => {} });
+  try {
+    for (const restart of [environment.restartNode, environment.restartControl]) {
+      const results = await Promise.allSettled([restart(), restart()]);
+      expect(results.map((result) => result.status)).toEqual(["fulfilled", "rejected"]);
+      expect(results[1]).toEqual({
+        status: "rejected",
+        reason: expect.objectContaining({
+          message: "Scenario service restart already in progress",
+        }),
+      });
+      expect(
+        environment.processes.filter((output) => output.exitStatus === undefined),
+      ).toHaveLength(2);
+    }
+  } finally {
+    expect((await environment.close()).failures).toEqual([]);
+  }
+}, 30_000);
+
+it("retains a retryable lifecycle when startup cleanup cannot initially remove its private directory", async () => {
+  let failure: ScenarioStartupError | undefined;
+  try {
+    await createScenarioEnvironment({
+      provider: () => {},
+      node: { heartbeatIntervalMs: 2000, heartbeatTimeoutMs: 100 },
+      beforeClose(facts) {
+        chmodSync(facts.directory, 0o500);
+      },
+    });
+    throw new Error("Invalid node configuration unexpectedly started");
+  } catch (error) {
+    if (!(error instanceof ScenarioStartupError)) throw error;
+    failure = error;
+    expect(String(error.cause)).toContain("heartbeat timeout must be longer");
+    expect(error.cleanup.failures).toEqual([
+      { resource: "synthetic directory", error: expect.any(Error) },
+    ]);
+    expect(error.processes.every((output) => output.exitStatus !== undefined)).toBe(true);
+    chmodSync(error.directory, 0o700);
+    expect(await error.close()).toEqual({ released: ["synthetic directory"], failures: [] });
+    expect(existsSync(error.directory)).toBe(false);
+  } finally {
+    if (failure && existsSync(failure.directory)) {
+      chmodSync(failure.directory, 0o700);
+      rmSync(failure.directory, { recursive: true, force: true });
+    }
+  }
+}, 30_000);
 
 it("prepares a real logged-in paired Agent whose Pi run can execute an ordinary node command", async () => {
   const environment = await createScenarioEnvironment({

@@ -20,6 +20,7 @@ const agentConfigurationSchema = z.object({
   }),
 });
 const configurationSchema = z.object({
+  cleanupTimeoutMs: z.number().int().positive().default(5000),
   agents: z.array(agentConfigurationSchema).default([]),
   controlPlane: z
     .object({ nodeOperationTimeoutMs: z.number().int().positive().optional() })
@@ -45,7 +46,7 @@ export type ScenarioConfiguration = z.input<typeof configurationSchema> & {
   provider: (request: ProviderRequest, response: ServerResponse) => void | Promise<void>;
   signal?: AbortSignal;
   observeProcess?: (service: "control-plane" | "node", output: ProcessOutput) => void;
-  beforeClose?: (facts: ScenarioFacts) => void | Promise<void>;
+  beforeClose?: (facts: ScenarioFacts, signal: AbortSignal) => void | Promise<void>;
 };
 export type PreparedScenarioAgent = z.infer<typeof preparedAgentSchema>;
 export type ScenarioFacts = {
@@ -60,6 +61,7 @@ export type CleanupReport = {
   released: string[];
   failures: Array<{ resource: string; error: unknown }>;
 };
+type CleanupAction = (signal: AbortSignal) => void | Promise<void>;
 
 /** Startup keeps the original cause separate from best-effort cleanup results. */
 export class ScenarioStartupError extends Error {
@@ -68,6 +70,8 @@ export class ScenarioStartupError extends Error {
     readonly directory: string,
     readonly processes: ProcessOutput[],
     readonly cleanup: CleanupReport,
+    readonly close: () => Promise<CleanupReport>,
+    readonly cleanupReports: readonly CleanupReport[],
   ) {
     super(`Scenario startup failed: ${cause instanceof Error ? cause.message : String(cause)}`, {
       cause,
@@ -79,10 +83,15 @@ export class ScenarioStartupError extends Error {
 export async function createScenarioEnvironment(options: ScenarioConfiguration) {
   const configuration = configurationSchema.parse(options);
   const directory = mkdtempSync(join(tmpdir(), "mate-scenario-"));
-  const resources = new Map<string, () => void | Promise<void>>();
-  const beforeClose = new Map<string, () => void | Promise<void>>();
+  const resources = new Map<symbol, { name: string; release: CleanupAction }>();
+  const beforeClose = new Map<string, CleanupAction>();
   const cleanupReports: CleanupReport[] = [];
-  resources.set("synthetic directory", () => rmSync(directory, { recursive: true, force: true }));
+  function registerResource(name: string, release: CleanupAction) {
+    resources.set(Symbol(name), { name, release });
+  }
+  registerResource("synthetic directory", () =>
+    rmSync(directory, { recursive: true, force: true }),
+  );
   const requests: ProviderRequest[] = [];
   const pending = new Set<ServerResponse>();
   const providerErrors: unknown[] = [];
@@ -100,13 +109,16 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
       response.destroy();
     }
   });
-  resources.set("local provider", async () => {
+  registerResource("local provider", async () => {
     for (const response of pending) response.destroy();
     provider.closeAllConnections();
-    if (provider.listening)
-      await new Promise<void>((resolveClose, reject) =>
-        provider.close((error) => (error ? reject(error) : resolveClose())),
-      );
+    // close() also cancels a pending listen/DNS lookup before the server has a handle.
+    await new Promise<void>((resolveClose, reject) =>
+      provider.close((error) => {
+        if (error && !("code" in error && error.code === "ERR_SERVER_NOT_RUNNING")) reject(error);
+        else resolveClose();
+      }),
+    );
   });
 
   let origin = "";
@@ -118,13 +130,45 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
   let closing: Promise<CleanupReport> | undefined;
   let closed = false;
   let collectingEvidence = false;
+  let restarting = false;
   const processes: ProcessOutput[] = [];
   const agents: PreparedScenarioAgent[] = [];
   const cancellation = new AbortController();
   const runner = fileURLToPath(new URL("./scenario-services.mjs", import.meta.url));
 
   function assertOpen() {
+    cancellation.signal.throwIfAborted();
     if (closed) throw new Error("Scenario environment is closed");
+  }
+
+  async function cleanupAction(name: string, action: CleanupAction) {
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        Promise.resolve().then(() => action(controller.signal)),
+        new Promise<void>((_resolve, reject) => {
+          timer = setTimeout(() => {
+            const error = new Error(`Scenario cleanup timed out: ${name}`);
+            controller.abort(error);
+            reject(error);
+          }, configuration.cleanupTimeoutMs);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async function restartService(relaunch: () => Promise<void>) {
+    assertOpen();
+    if (restarting) throw new Error("Scenario service restart already in progress");
+    restarting = true;
+    try {
+      await relaunch();
+    } finally {
+      restarting = false;
+    }
   }
 
   function launch(service: "control-plane" | "node", environment: NodeJS.ProcessEnv) {
@@ -143,7 +187,7 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
       }),
     );
     processes.push(output);
-    resources.set(`${service} process ${processes.length}`, () => stopProcess(output));
+    registerResource(`${service} process ${processes.length}`, () => stopProcess(output));
     options.observeProcess?.(service, output);
     return output;
   }
@@ -187,7 +231,7 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
     agents,
     cleanupReports,
     get resources() {
-      return [...resources.keys()];
+      return [...resources.values()].map((resource) => resource.name);
     },
     get origin() {
       return origin;
@@ -204,13 +248,14 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
       return node;
     },
     /** Register a scenario-owned resource immediately after creating it. Failed releases remain retryable. */
-    registerCleanup(name: string, release: () => void | Promise<void>) {
+    registerCleanup(name: string, release: CleanupAction) {
       assertOpen();
-      if (resources.has(name)) throw new Error(`Scenario resource already registered: ${name}`);
-      resources.set(name, release);
+      if ([...resources.values()].some((resource) => resource.name === name))
+        throw new Error(`Scenario resource already registered: ${name}`);
+      registerResource(name, release);
     },
     /** Evidence is captured while services and synthetic files still exist. */
-    beforeClose(name: string, collect: () => void | Promise<void>) {
+    beforeClose(name: string, collect: CleanupAction) {
       assertOpen();
       if (beforeClose.has(name)) throw new Error(`Before-close action already registered: ${name}`);
       beforeClose.set(name, collect);
@@ -258,22 +303,24 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
       return prepared;
     },
     async restartNode() {
-      assertOpen();
-      await stopProcess(node);
-      await launchNode().waitFor(/MATE_NODE_CONNECTED/, 15_000, { signal: cancellation.signal });
+      return restartService(async () => {
+        await stopProcess(node);
+        await launchNode().waitFor(/MATE_NODE_CONNECTED/, 15_000, { signal: cancellation.signal });
+      });
     },
     async restartControl() {
-      assertOpen();
-      const port = Number(new URL(origin).port);
-      const nodeCursor = environment.node.text.length;
-      await stopProcess(control);
-      await launchControl(port).waitFor(/MATE_CONTROL_PLANE_LISTENING (\d+)/, 15_000, {
-        signal: cancellation.signal,
-      });
-      cookie = await login(origin, cancellation.signal);
-      await environment.node.waitFor(/MATE_NODE_CONNECTED/, 15_000, {
-        after: nodeCursor,
-        signal: cancellation.signal,
+      return restartService(async () => {
+        const port = Number(new URL(origin).port);
+        const nodeCursor = environment.node.text.length;
+        await stopProcess(control);
+        await launchControl(port).waitFor(/MATE_CONTROL_PLANE_LISTENING (\d+)/, 15_000, {
+          signal: cancellation.signal,
+        });
+        cookie = await login(origin, cancellation.signal);
+        await environment.node.waitFor(/MATE_NODE_CONNECTED/, 15_000, {
+          after: nodeCursor,
+          signal: cancellation.signal,
+        });
       });
     },
     async close(): Promise<CleanupReport> {
@@ -288,7 +335,7 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
         collectingEvidence = true;
         for (const [name, collect] of beforeClose) {
           try {
-            await collect();
+            await cleanupAction(`before close: ${name}`, collect);
           } catch (error) {
             report.failures.push({ resource: `before close: ${name}`, error });
           } finally {
@@ -296,10 +343,10 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
           }
         }
         collectingEvidence = false;
-        for (const [name, release] of [...resources].reverse()) {
+        for (const [id, { name, release }] of [...resources].reverse()) {
           try {
-            await release();
-            resources.delete(name);
+            await cleanupAction(name, release);
+            resources.delete(id);
             report.released.push(name);
           } catch (error) {
             report.failures.push({ resource: name, error });
@@ -317,7 +364,7 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
   };
 
   if (options.beforeClose)
-    beforeClose.set("scenario evidence", () => options.beforeClose?.(environment));
+    beforeClose.set("scenario evidence", (signal) => options.beforeClose?.(environment, signal));
 
   function cancel(reason: unknown) {
     cancellation.abort(reason);
@@ -338,10 +385,18 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
     mkdirSync(join(directory, "tmp"), { mode: 0o700 });
     writeFileSync(join(directory, "owner-password"), `${ownerPassword}\n`, { mode: 0o600 });
     await new Promise<void>((resolveListen, reject) => {
-      provider.once("error", reject);
+      const finish = (error?: unknown) => {
+        provider.removeListener("error", failed);
+        cancellation.signal.removeEventListener("abort", aborted);
+        if (error !== undefined) reject(error);
+        else resolveListen();
+      };
+      const failed = (error: Error) => finish(error);
+      const aborted = () => finish(cancellation.signal.reason);
+      provider.once("error", failed);
+      cancellation.signal.addEventListener("abort", aborted, { once: true });
       provider.listen(0, "127.0.0.1", () => {
-        provider.removeListener("error", reject);
-        resolveListen();
+        finish();
       });
     });
     const address = provider.address();
@@ -375,6 +430,13 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
     return environment;
   } catch (error) {
     const cleanup = await environment.close();
-    throw new ScenarioStartupError(error, directory, processes, cleanup);
+    throw new ScenarioStartupError(
+      error,
+      directory,
+      processes,
+      cleanup,
+      environment.close,
+      cleanupReports,
+    );
   }
 }
