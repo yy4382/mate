@@ -12,16 +12,16 @@ import {
 import {
   readManagedUnit,
   recoverUnitStaging,
-  renderNodeUnit,
+  interruptedUnitFiles,
+  publishNodeUnit,
   serviceReferencesBundle,
 } from "./service.js";
 import { systemdUserManager, type ServiceFacts } from "./systemd.js";
 import { bundleRequest, withReleaseBundle } from "./acquire-bundle.js";
 import { z } from "zod";
 import { probeBundle, verifyBundle } from "./bundle.js";
-import { randomUUID } from "node:crypto";
-import { dirname, join } from "node:path";
-import { renameSync, rmSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+import { finishSameVersionRepair, prepareSameVersionRepair } from "./repair-bundle.js";
 
 function assertStopped(facts: ServiceFacts) {
   if (
@@ -46,8 +46,9 @@ export async function updateNode(
   manager.assertAvailable({ effectiveCommand: false });
   return withManagementLock(paths, async () => {
     const unitVersion = readManagedUnit(paths),
+      previousUnits = interruptedUnitFiles(paths),
       selected = installedEntryVersion(paths);
-    if (!unitVersion)
+    if (!unitVersion && !previousUnits.length)
       throw new Error("Mate user service is not installed; install it before updating");
     const inspectStopped = () => {
       const facts = manager.inspect({ effectiveCommand: false });
@@ -68,6 +69,7 @@ export async function updateNode(
       inspectStopped();
       recoverInstallationStaging(paths);
       recoverUnitStaging(paths, request.version);
+      const repaired = prepareSameVersionRepair(paths, metadata);
       installBundleFiles(paths, directory, metadata);
       if (readManagedUnit(paths) !== unitVersion || installedEntryVersion(paths) !== selected)
         throw new Error("Installed references changed while staging; retry update");
@@ -79,16 +81,7 @@ export async function updateNode(
         inspectStopped();
         if (readManagedUnit(paths) !== unitVersion)
           throw new Error("User unit changed concurrently; resolve the conflict before retrying");
-        const temporary = join(dirname(paths.unit), `.mate-node-unit-${randomUUID()}`);
-        try {
-          writeFileSync(temporary, renderNodeUnit(paths, metadata.version), {
-            mode: 0o600,
-            flag: "wx",
-          });
-          renameSync(temporary, paths.unit);
-        } finally {
-          rmSync(temporary, { force: true });
-        }
+        publishNodeUnit(paths, metadata.version, unitVersion, directory);
         manager.run("daemon-reload");
         const facts = manager.inspect();
         assertStopped(facts);
@@ -105,6 +98,7 @@ export async function updateNode(
           throw new Error(
             "Service enabled/disabled state changed during update; inspect the actual user manager state",
           );
+        finishSameVersionRepair(repaired, metadata);
         return `Mate complete bundle updated to ${metadata.version}\nEntry: ${paths.entry}\nUnit: ${paths.unit}\nActive: ${facts.active} (${facts.sub}); PID: ${facts.pid}; pending job: ${facts.job}\nEnabled: ${facts.enabled}\nConfiguration and node identity/data/workspaces were preserved. The executing CLI's old complete bundle was retained. Start the same-version control plane, then run mate node start explicitly.\n`;
       } catch (error) {
         throw new Error(

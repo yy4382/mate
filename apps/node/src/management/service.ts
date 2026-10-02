@@ -62,12 +62,12 @@ export function recoverUnitStaging(paths: ReturnType<typeof nodePaths>, version:
   }
 }
 
-export function readManagedUnit(paths: ReturnType<typeof nodePaths>) {
-  const info = lstatIfPresent(paths.unit);
+function readManagedUnitFile(paths: ReturnType<typeof nodePaths>, file: string) {
+  const info = lstatIfPresent(file);
   if (!info) return undefined;
   if (!info.isFile() || info.uid !== process.getuid?.())
-    throw new Error(`Non-Mate user unit conflict: ${paths.unit}`);
-  const text = readFileSync(paths.unit, "utf8"),
+    throw new Error(`Non-Mate user unit conflict: ${file}`);
+  const text = readFileSync(file, "utf8"),
     version = text.match(/^# Mate bundle version: (.+)$/m)?.[1];
   if (
     !version ||
@@ -75,9 +75,55 @@ export function readManagedUnit(paths: ReturnType<typeof nodePaths>) {
     text !== renderNodeUnit(paths, version)
   )
     throw new Error(
-      `Non-Mate or modified user unit conflict: ${paths.unit}; keep custom service environment in a systemd drop-in`,
+      `Non-Mate or modified user unit conflict: ${file}; keep custom service environment in a systemd drop-in`,
     );
   return version;
+}
+
+export function readManagedUnit(paths: ReturnType<typeof nodePaths>) {
+  return readManagedUnitFile(paths, paths.unit);
+}
+
+/** A moved unit is its own ownership evidence, not a persisted maintenance intent. */
+export function interruptedUnitFiles(paths: ReturnType<typeof nodePaths>) {
+  if (!lstatIfPresent(dirname(paths.unit))) return [];
+  return readdirSync(dirname(paths.unit))
+    .filter((name) =>
+      /^\.mate-node-previous-unit-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(
+        name,
+      ),
+    )
+    .map((name) => {
+      const file = join(dirname(paths.unit), name);
+      return { file, version: readManagedUnitFile(paths, file) };
+    });
+}
+
+export function publishNodeUnit(
+  paths: ReturnType<typeof nodePaths>,
+  version: string,
+  oldVersion: string | undefined,
+  bundleDirectory: string,
+) {
+  const noReplace = createAtomicNoReplaceRename(
+    join(bundleDirectory, "app/apps/node/dist/files/rename-noreplace"),
+  );
+  const temporary = join(dirname(paths.unit), `.mate-node-unit-${randomUUID()}`);
+  const previous = join(dirname(paths.unit), `.mate-node-previous-unit-${randomUUID()}`);
+  try {
+    writeFileSync(temporary, renderNodeUnit(paths, version), { mode: 0o600, flag: "wx" });
+    if (oldVersion !== undefined) {
+      noReplace(paths.unit, previous);
+      if (readManagedUnitFile(paths, previous) !== oldVersion)
+        throw new Error(
+          `Concurrent user unit was preserved at ${previous}; resolve it before retrying update`,
+        );
+    }
+    noReplace(temporary, paths.unit);
+    for (const backup of interruptedUnitFiles(paths)) rmSync(backup.file);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
 }
 
 function prepareNodeDirectories(
