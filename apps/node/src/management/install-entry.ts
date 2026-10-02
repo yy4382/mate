@@ -121,7 +121,15 @@ function assertPartialInstallation(stage: string, verifiedDirectory: string) {
       const path = part ? `${part}/${name}` : name,
         absolute = join(stage, path),
         info = lstatSync(absolute);
-      if (path === ".mate-install-stage") continue;
+      if (path === ".mate-install-stage") {
+        if (
+          !info.isFile() ||
+          info.uid !== process.getuid?.() ||
+          readFileSync(absolute, "utf8") !== installationStageMarker
+        )
+          throw new Error(`Unknown interrupted installation marker preserved: ${absolute}`);
+        continue;
+      }
       if (info.isDirectory() && directories.has(path)) {
         visit(path);
         continue;
@@ -194,6 +202,8 @@ export function recoverInstallationStaging(
         rmSync(stage, { recursive: true });
         continue;
       }
+      if (info && markerContents !== installationStageMarker)
+        throw new Error(`Unknown interrupted installation marker preserved: ${marker}`);
       if (markerContents === installationStageMarker) {
         assertPartialInstallation(stage, verifiedDirectory);
         rmSync(stage, { recursive: true });

@@ -3,6 +3,7 @@ import {
   copyFileSync,
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -298,6 +299,27 @@ test("a valid installation marker never authorizes deleting an extra unknown fil
   );
   expect(readFileSync(join(stage, "non-mate-fixture"), "utf8")).toBe("private non-Mate file");
 });
+
+test.each(["directory", "link", "contents"])(
+  "uninstall preserves an installation marker conflict (%s) and reports it",
+  async (kind) => {
+    const f = fixture(),
+      stage = join(f.paths.versionsDirectory, ".install-12345678-1234-1234-1234-123456789abc"),
+      marker = join(stage, ".mate-install-stage");
+    cpSync(f.bundle, stage, { recursive: true });
+    if (kind === "directory") mkdirSync(marker);
+    else if (kind === "link") symlinkSync(f.paths.configuration, marker);
+    else writeFileSync(marker, "non-Mate marker contents");
+    await expect(uninstallNode(f.paths, f.recovery, f.manager)).rejects.toThrow(
+      "Unknown interrupted installation marker preserved",
+    );
+    expect(lstatSync(marker).isDirectory()).toBe(kind === "directory");
+    expect(lstatSync(marker).isSymbolicLink()).toBe(kind === "link");
+    if (kind === "contents") expect(readFileSync(marker, "utf8")).toBe("non-Mate marker contents");
+    expect(existsSync(join(stage, "bundle.json"))).toBe(true);
+    expect(existsSync(f.bundle)).toBe(true);
+  },
+);
 
 test("uninstall cleans a damaged repair backup only with the verified package inventory and preserves unknown repair files", async () => {
   const f = fixture(),

@@ -172,6 +172,18 @@ cut_update_and_uninstall() {
     grep -q 'unknown test file' "$staged/non-mate-fixture"
     rm "$staged/non-mate-fixture"
   fi
+  if [ "$cut_phase" = install ]; then
+    # Synthetic marker conflict on a complete actual bundle after the observed copy cut.
+    # A complete inventory must not authorize removing this same-name empty directory.
+    cp -R "$work/new-package/mate-node/." "$staged/"
+    rm "$staged/.mate-install-stage"; mkdir "$staged/.mate-install-stage"
+    if "$uninstall_runtime" "$uninstall_cli" node uninstall >"$work/install-marker-conflict.log" 2>&1; then exit 1; fi
+    grep -q 'Unknown interrupted installation marker preserved' "$work/install-marker-conflict.log"
+    [ -d "$staged/.mate-install-stage" ] && [ -f "$staged/bundle.json" ]
+    check_retained
+    printf 'Preserved synthetic same-name marker directory on complete actual stage: %s\n' "$staged"
+    rmdir "$staged/.mate-install-stage"
+  fi
   "$uninstall_runtime" "$uninstall_cli" node uninstall >"$work/uninstall-$cut_phase.log" 2>&1
   [ ! -e "$unit" ] && [ ! -e "$bundle" ] && [ ! -L "$entry" ]
   for path in "$HOME/.local/lib/mate-node/versions"/.install-* "$HOME/.local/lib/mate-node/versions"/.repair-* "$HOME/.config/systemd/user"/.mate-node-previous-unit-* "$HOME/.config/systemd/user"/.mate-node-unit-*; do [ ! -e "$path" ]; done
