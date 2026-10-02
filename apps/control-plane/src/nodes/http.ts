@@ -47,8 +47,14 @@ function asNodeSocket(
 ): NodeSocket {
   const existing = adapters.get(socket);
   if (existing) return existing;
-  const rawSocket = socket.raw as { terminate?: () => void } | undefined;
-  if (!rawSocket?.terminate) throw new Error("节点 WebSocket 适配器没有提供强制终止能力");
+  const rawSocket = socket.raw;
+  if (
+    typeof rawSocket !== "object" ||
+    rawSocket === null ||
+    !("terminate" in rawSocket) ||
+    typeof rawSocket.terminate !== "function"
+  )
+    throw new Error("节点 WebSocket 适配器没有提供强制终止能力");
   const forceTerminate = rawSocket.terminate.bind(rawSocket);
   const adapter: NodeSocket = {
     send: (data) => socket.send(data),

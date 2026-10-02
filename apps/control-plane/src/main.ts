@@ -28,7 +28,7 @@ export function startControlPlane(
   const websocketServerAdapter = websocketServer as WebSocketServerLike;
   const server = serve({
     fetch: app.fetch,
-    hostname: "127.0.0.1",
+    hostname: process.env.MATE_CONTROL_PLANE_HOST ?? "127.0.0.1",
     port,
     websocket: { server: websocketServerAdapter },
   });

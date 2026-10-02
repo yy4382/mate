@@ -1,10 +1,10 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
-import { ChatPage } from "./chat-app.js";
-import { NodesPage } from "./nodes-page.js";
-import { AgentsPage } from "./agents-page.js";
-import { TasksPage } from "./tasks-page.js";
-import { RemindersPage } from "./reminders-page.js";
+import { ChatPage } from "./features/conversations/chat-page.js";
+import { NodesPage } from "./features/nodes/nodes-page.js";
+import { AgentsPage } from "./features/agents/agents-page.js";
+import { TasksPage } from "./features/tasks/tasks-page.js";
+import { RemindersPage } from "./features/reminders/reminders-page.js";
 import { watchServiceStatus, type ServiceState } from "./status-monitor.js";
 import { appReturnPath } from "./navigation.js";
 import "./style.css";

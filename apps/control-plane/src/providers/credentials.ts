@@ -1,0 +1,80 @@
+import type { ModelCredentialSummary } from "@mate/protocol/owner";
+import { z } from "zod";
+import type Database from "better-sqlite3";
+import { isSupportedModelProvider } from "./catalog.js";
+
+/** API keys are control-plane secrets. Callers can list presence or read a key for one run. */
+export class ModelCredentialDirectory {
+  constructor(
+    private readonly db: Database.Database,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  list(): ModelCredentialSummary[] {
+    const rows = z
+      .looseObject({ provider: z.string(), updated_at: z.number() })
+      .array()
+      .parse(
+        this.db
+          .prepare("SELECT provider,updated_at FROM model_credentials ORDER BY provider")
+          .all(),
+      );
+    return rows.map((row) => ({
+      provider: row.provider,
+      configured: true,
+      updatedAt: row.updated_at,
+    }));
+  }
+
+  has(provider: string): boolean {
+    if (!isSupportedModelProvider(provider)) return false;
+    return (
+      this.db.prepare("SELECT 1 FROM model_credentials WHERE provider=?").get(provider) !==
+      undefined
+    );
+  }
+
+  readForRun(provider: string): string | undefined {
+    if (!isSupportedModelProvider(provider)) return undefined;
+    const row = z
+      .looseObject({ api_key: z.string() })
+      .optional()
+      .parse(
+        this.db.prepare("SELECT api_key FROM model_credentials WHERE provider=?").get(provider),
+      );
+    return row?.api_key;
+  }
+
+  put(provider: string, apiKey: string): boolean {
+    if (!isSupportedModelProvider(provider)) return false;
+    const existing = z
+      .looseObject({ api_key: z.string() })
+      .optional()
+      .parse(
+        this.db.prepare("SELECT api_key FROM model_credentials WHERE provider=?").get(provider),
+      );
+    if (existing?.api_key === apiKey) return false;
+    this.db
+      .prepare(
+        `INSERT INTO model_credentials(provider,api_key,updated_at) VALUES(?,?,?)
+         ON CONFLICT(provider) DO UPDATE SET api_key=excluded.api_key,updated_at=excluded.updated_at`,
+      )
+      .run(provider, apiKey, this.now());
+    return true;
+  }
+
+  delete(provider: string): boolean {
+    if (!isSupportedModelProvider(provider)) return false;
+    return (
+      this.db.prepare("DELETE FROM model_credentials WHERE provider=?").run(provider).changes === 1
+    );
+  }
+}
+
+/**
+ * SQL for "the Agent in scope has a credential row for its current provider", where the Agent table
+ * is aliased `a`. Readiness is asked here rather than stored, so it stays one predicate instead of a
+ * hand-written copy in every query that gates on it.
+ */
+export const providerCredentialExistsSql =
+  "EXISTS (SELECT 1 FROM model_credentials c WHERE c.provider=a.provider)";

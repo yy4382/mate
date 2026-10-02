@@ -13,3 +13,6 @@ mate.local.json
 
 # pnpm content-addressable store (dependency cache, never source).
 .pnpm-store/
+
+# Synthetic integration failure evidence (CI artifacts), never runtime databases.
+artifacts/scenarios/

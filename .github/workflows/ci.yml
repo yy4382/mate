@@ -1,0 +1,74 @@
+name: Linux checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Node 24 / ordinary account
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout tested commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up project Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.21.0"
+          package-manager-cache: false
+
+      - name: Set up project pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          run_install: false
+
+      - name: Record tested SHA and actual platform
+        run: |
+          node --input-type=module -e '
+            import assert from "node:assert/strict";
+            import { execFileSync } from "node:child_process";
+            import { release } from "node:os";
+            assert.equal(process.platform, "linux");
+            assert.notEqual(process.getuid(), 0);
+            console.log(JSON.stringify({
+              sha: execFileSync("git", ["rev-parse", "HEAD"]).toString().trim(),
+              platform: process.platform,
+              arch: process.arch,
+              kernel: release(),
+              uid: process.getuid(),
+              gid: process.getgid(),
+              node: process.version,
+            }));
+          '
+          pnpm --version
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Project checks, ordinary account scripts and delivered container scenarios
+        run: pnpm check:ci
+
+      - name: Reclaim manifest-owned scenario resources
+        if: ${{ always() }}
+        timeout-minutes: 2
+        run: |
+          if [ -f apps/control-plane/tests/helpers/scenario-cleanup.mjs ]; then
+            node apps/control-plane/tests/helpers/scenario-cleanup.mjs --root artifacts/scenarios
+          fi
+
+      - name: Upload synthetic failure evidence
+        if: ${{ always() && (failure() || cancelled()) }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scenario-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/scenarios/
+          if-no-files-found: ignore
+          retention-days: 7

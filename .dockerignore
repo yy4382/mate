@@ -1,0 +1,9 @@
+.git
+**/node_modules
+**/dist
+**/coverage
+**/.env
+**/.env.*
+**/data
+docs/reference
+*.log
