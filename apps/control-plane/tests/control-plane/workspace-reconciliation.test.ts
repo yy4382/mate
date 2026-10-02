@@ -26,19 +26,43 @@ function event() {
 }
 
 async function fixture(options: { nodeOperationTimeoutMs?: number } = {}) {
+  const resourceReleases: Array<() => void | Promise<void>> = [];
+  let closing: Promise<void> | undefined;
+  const close = () => {
+    closing ??= (async () => {
+      const failures: unknown[] = [];
+      for (const release of resourceReleases.splice(0).reverse()) {
+        try {
+          await release();
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      if (failures.length)
+        throw new AggregateError(failures, "Reconciliation fixture cleanup failed");
+    })();
+    return closing;
+  };
+  cleanups.push(close);
   const directory = mkdtempSync(join(tmpdir(), "mate-workspace-reconciliation-"));
+  resourceReleases.push(() => rmSync(directory, { recursive: true, force: true }));
   chmodSync(directory, 0o700);
   const passwordFile = join(directory, "owner-password"),
     password = "synthetic-reconciliation-password";
   writeFileSync(passwordFile, password, { mode: 0o600 });
-  const app = toolTestApp({ dataDir: join(directory, "control"), passwordFile, ...options }),
-    db = new Database(join(directory, "control", "control-plane.sqlite")),
-    login = await app.request("/api/auth/login", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ password }),
-    }),
-    cookie = login.headers.get("set-cookie")!.split(";", 1)[0]!,
+  const app = toolTestApp({ dataDir: join(directory, "control"), passwordFile, ...options });
+  resourceReleases.push(() => app.close());
+  const db = new Database(join(directory, "control", "control-plane.sqlite"));
+  resourceReleases.push(() => {
+    db.close();
+  });
+  const login = await app.request("/api/auth/login", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ password }),
+  });
+  expect(login.status, await login.clone().text()).toBe(204);
+  const cookie = login.headers.get("set-cookie")!.split(";", 1)[0]!,
     api = async (path: string, body?: unknown) => {
       const response = await app.request(path, {
         method: body === undefined ? "GET" : "POST",
@@ -49,8 +73,15 @@ async function fixture(options: { nodeOperationTimeoutMs?: number } = {}) {
       return response.json();
     },
     pairing = await api("/api/owner/nodes/pairing-tokens", {}),
-    server = new WebSocketServer({ port: 0, host: "127.0.0.1" }),
-    sent: string[] = [],
+    server = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+  resourceReleases.push(async () => {
+    for (const socket of server.clients) socket.terminate();
+    if (!server.address()) return;
+    await new Promise<void>((done, reject) =>
+      server.close((error) => (error ? reject(error) : done())),
+    );
+  });
+  const sent: string[] = [],
     received: NodeRequest[] = [],
     heartbeats: Array<Extract<NodeRequest, { type: "node.ping" }>> = [],
     errors: unknown[] = [],
@@ -83,7 +114,13 @@ async function fixture(options: { nodeOperationTimeoutMs?: number } = {}) {
     });
     network.on("close", () => app.nodes.close(socket));
   });
-  await new Promise<void>((done) => server.once("listening", done));
+  await new Promise<void>((done, reject) => {
+    server.once("error", reject);
+    server.once("listening", () => {
+      server.off("error", reject);
+      done();
+    });
+  });
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Missing WebSocket port");
   const controller = new AbortController(),
@@ -112,23 +149,11 @@ async function fixture(options: { nodeOperationTimeoutMs?: number } = {}) {
     );
   // Observe a fatal node error immediately; cleanup still awaits and reports the rejection.
   void node.catch((error: unknown) => errors.push(error));
-  let closing: Promise<void> | undefined;
-  const close = () => {
-    closing ??= (async () => {
-      releaseReceipt.resolve();
-      controller.abort();
-      try {
-        await node;
-      } finally {
-        app.close();
-        await new Promise<void>((done) => server.close(() => done()));
-        db.close();
-        rmSync(directory, { recursive: true, force: true });
-      }
-    })();
-    return closing;
-  };
-  cleanups.push(close);
+  resourceReleases.push(async () => {
+    releaseReceipt.resolve();
+    controller.abort();
+    await node;
+  });
   const paired = await eventually(
     () => received.find((message) => message.type === "node.pair"),
     "real node pairing",
