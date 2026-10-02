@@ -48,6 +48,8 @@ const configurationSchema = z.object({
       heartbeatTimeoutMs: z.number().int().positive().default(2000),
       commandBoundary: z.enum(["before_execute", "before_receipt"]).optional(),
       networkProxy: z.boolean().default(false),
+      fileBoundary: z.enum(["before_execute", "before_receipt", "after_receipt"]).optional(),
+      holdFirstFileExecution: z.boolean().default(false),
     })
     .prefault({}),
 });
@@ -316,6 +318,12 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
       MATE_SCENARIO_HEARTBEAT_TIMEOUT_MS: String(configuration.node.heartbeatTimeoutMs),
       ...(configuration.node.commandBoundary
         ? { MATE_SCENARIO_COMMAND_BOUNDARY: configuration.node.commandBoundary }
+        : {}),
+      ...(configuration.node.fileBoundary
+        ? { MATE_SCENARIO_FILE_BOUNDARY: configuration.node.fileBoundary }
+        : {}),
+      ...(configuration.node.holdFirstFileExecution
+        ? { MATE_SCENARIO_HOLD_FIRST_FILE_EXECUTION: "1" }
         : {}),
       ...(pairingToken ? { MATE_NODE_PAIRING_TOKEN: pairingToken } : {}),
     });

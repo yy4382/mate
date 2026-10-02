@@ -8,8 +8,9 @@ import Database from "better-sqlite3";
 import { WebSocket, WebSocketServer } from "ws";
 import { expect, it } from "vitest";
 import { z } from "zod";
-import { processOperationRequestHash } from "@mate/protocol/node";
+import { processOperationRequestHash, workspaceReceiptRequestHash } from "@mate/protocol/node";
 import { readScriptedToolResult } from "../helpers/scripted-tool-results.js";
+import { fileModelCorrections } from "../helpers/scenario-file-facts.js";
 import {
   eventually,
   login,
@@ -588,6 +589,63 @@ it.each([
         db.prepare("SELECT state,error_code FROM owner_agent_runs WHERE id=?").get(oldRun.runId),
       ).toEqual(interrupted);
       if (oldReceipt) {
+        if (
+          firstTool === "file" &&
+          boundary === "receipt" &&
+          (cause === "disconnect" || cause === "restart")
+        ) {
+          const original = wire.find(
+            (message) =>
+              message.type === "control.workspace.operation" &&
+              message.operationId === oldReceipt.operationId,
+          );
+          const reconciliation = wire.find(
+            (message) =>
+              message.type === "control.workspace.reconcile" &&
+              message.operations.some(
+                (operation: { operationId: string }) =>
+                  operation.operationId === oldReceipt.operationId,
+              ),
+          );
+          const reconciled = wire.find(
+            (message) =>
+              message.type === "node.workspace.reconcile.result" &&
+              message.requestId === reconciliation?.requestId,
+          );
+          expect(original).toBeDefined();
+          expect(reconciliation).toBeDefined();
+          expect(reconciliation.requestId).not.toBe(original.requestId);
+          expect(oldReceipt.requestId).toBe(original.requestId);
+          expect(reconciliation.operations).toContainEqual({
+            agentId,
+            operationId: oldReceipt.operationId,
+            requestHash: workspaceReceiptRequestHash(agentId, original.operation),
+          });
+          expect(nodeReceipt.requestHash).toBe(
+            workspaceReceiptRequestHash(agentId, original.operation),
+          );
+          expect(reconciled.receipts).toContainEqual({
+            agentId,
+            operationId: oldReceipt.operationId,
+            result: { ...oldReceipt.result, revision: nodeReceipt.revision },
+          });
+          const corrections = z
+            .object({ input: z.array(z.unknown()) })
+            .array()
+            .parse(requests)
+            .flatMap((request) => fileModelCorrections(request.input));
+          expect(corrections).toContainEqual(
+            expect.objectContaining({
+              operationId: oldReceipt.operationId,
+              state: "succeeded",
+              receipt: expect.objectContaining({
+                operationId: oldReceipt.operationId,
+                nodeRequestHash: nodeReceipt.requestHash,
+                revision: nodeReceipt.revision,
+              }),
+            }),
+          );
+        }
         expect(
           wire.filter(
             (message) =>
