@@ -1,3 +1,4 @@
+import { buildSummaryRequest, summaryMessage } from "./prompts/index.js";
 import {
   type ReportedUsage,
   type ModelContextMessage,
@@ -7,65 +8,11 @@ import {
 
 import { randomUUID } from "node:crypto";
 import type { AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
-import {
-  contentText,
-  normalizeContext,
-  type AssistantMessage,
-  type Model,
-} from "@earendil-works/pi-ai";
+import { contentText, type AssistantMessage, type Model } from "@earendil-works/pi-ai";
 
 // Pi coding-agent v0.86.0 defaults, scaled down for models with smaller windows.
 const RESERVE_TOKENS = 16_384;
 const KEEP_RECENT_TOKENS = 20_000;
-const TOOL_RESULT_MAX_CHARS = 2_000;
-const SYSTEM_PROMPT = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.
-
-Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.`;
-const INITIAL_PROMPT = `The messages above are a conversation to summarize. Create a structured context checkpoint summary that another LLM will use to continue the work.
-
-Use this EXACT format:
-## Goal
-[What is the user trying to accomplish? Can be multiple items if the session covers different tasks.]
-
-## Constraints & Preferences
-- [Any constraints, preferences, or requirements mentioned by user]
-- [Or "(none)" if none were mentioned]
-
-## Progress
-### Done
-- [x] [Completed tasks/changes]
-
-### In Progress
-- [ ] [Current work]
-
-### Blocked
-- [Issues preventing progress, if any]
-
-## Key Decisions
-- **[Decision]**: [Brief rationale]
-
-## Next Steps
-1. [Ordered list of what should happen next]
-## Critical Context
-- [Any data, examples, or references needed to continue]
-- [Or "(none)" if not applicable]
-
-Keep each section concise. Preserve exact conversation IDs, task ownership, pending work, tool names, arguments, results, paths and error messages. A tool result is an observation, not permission to repeat a side effect.`;
-const UPDATE_PROMPT = `The messages above are NEW conversation messages to incorporate into the existing summary provided in <previous-summary> tags.
-
-Update the existing structured summary. Preserve previous facts, add new progress and decisions, move completed work to Done, and update Next Steps. Preserve exact conversation IDs, task ownership, pending work, tool names, arguments, results, paths and error messages. Remove a prior fact only if it is no longer relevant. Use the same format as the previous summary.`;
-const PREFIX_PROMPT = `This is the PREFIX of a turn that was too large to keep. The SUFFIX (recent work) is retained.
-Summarize the prefix to provide context for the retained suffix:
-## Original Request
-[What was requested in this turn?]
-
-## Early Progress
-- [Key decisions, tool observations and work done in the prefix]
-## Context for Suffix
-- [Information needed to understand the retained recent work, including uncertain effects]
-
-Be concise. Focus on what's needed to understand the kept suffix.`;
-
 export class SummaryResponseError extends Error {
   constructor(readonly response: AssistantMessage) {
     super(`Summarization failed with ${response.stopReason}`);
@@ -232,47 +179,6 @@ function contextTokens(entries: ModelContextMessage[], throughId?: string): numb
   return entries.reduce((sum, entry) => sum + estimate(entry.message), 0);
 }
 
-function serialize(messages: AgentMessage[]): string {
-  const parts: string[] = [];
-  for (const message of messages) {
-    if (message.role === "user") {
-      const content = contentText(message.content, "");
-      if (content) parts.push(`[User]: ${content}`);
-    } else if (message.role === "assistant") {
-      const thinking = message.content
-        .filter((block) => block.type === "thinking")
-        .map((block) => block.thinking);
-      const calls = message.content
-        .filter((block) => block.type === "toolCall")
-        .map(
-          (block) =>
-            `${block.name}(${Object.entries(block.arguments)
-              .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
-              .join(", ")})`,
-        );
-      if (thinking.length) parts.push(`[Assistant thinking]: ${thinking.join("\n")}`);
-      if (message.content.some((block) => block.type === "text"))
-        parts.push(`[Assistant]: ${contentText(message.content)}`);
-      if (calls.length) parts.push(`[Assistant tool calls]: ${calls.join("; ")}`);
-    } else if (message.role === "toolResult") {
-      const content = contentText(message.content, "");
-      if (content)
-        parts.push(
-          `[Tool result]: ${content.length <= TOOL_RESULT_MAX_CHARS ? content : `${content.slice(0, TOOL_RESULT_MAX_CHARS)}\n\n[... ${content.length - TOOL_RESULT_MAX_CHARS} more characters truncated]`}`,
-        );
-    }
-  }
-  return parts.join("\n\n");
-}
-
-function summaryMessage(summary: string): AgentMessage {
-  return {
-    role: "user",
-    content: [{ type: "text", text: `[会话压缩摘要]\n${summary}` }],
-    timestamp: 0,
-  };
-}
-
 /** One run's committed records and the latest acknowledged checkpoint. The provider sees a
  * transformed request; Agent's full in-memory transcript and SQLite's original rows stay intact. */
 export class SessionCompaction {
@@ -409,17 +315,10 @@ export class SessionCompaction {
     reserve: number,
     signal?: AbortSignal,
   ): Promise<{ text: string; requestId: string }> {
-    const conversation = serialize(messages);
-    const prompt = `<conversation>\n${conversation}\n</conversation>\n\n${previous ? `<previous-summary>\n${previous}\n</previous-summary>\n\n` : ""}${prefix ? PREFIX_PROMPT : previous ? UPDATE_PROMPT : INITIAL_PROMPT}`;
+    const { systemPrompt, prompt, context } = buildSummaryRequest(messages, previous, prefix);
     const maxTokens = Math.min(Math.floor((prefix ? 0.5 : 0.8) * reserve), this.model.maxTokens);
-    if (maxTokens < 1 || textTokens(SYSTEM_PROMPT + prompt) + maxTokens > this.model.contextWindow)
+    if (maxTokens < 1 || textTokens(systemPrompt + prompt) + maxTokens > this.model.contextWindow)
       throw new Error("Summary request has no legal input and output capacity");
-    const context = normalizeContext({
-      systemPrompt: SYSTEM_PROMPT,
-      messages: [
-        { role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() },
-      ],
-    });
     const requestId = randomUUID();
     let inspectedUsage: Promise<{ usage: ReportedUsage; complete: boolean } | null> | undefined;
     const response = (await (

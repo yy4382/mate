@@ -23,7 +23,8 @@
     "start": "node apps/control-plane/dist/main.js",
     "start:control-plane": "node apps/control-plane/dist/main.js",
     "start:node": "node apps/node/dist/main.js",
-    "dev:web": "pnpm --filter @mate/web run dev"
+    "dev:web": "pnpm --filter @mate/web run dev",
+    "prompt:inspect": "node apps/control-plane/dist/prompts/inspect.js"
   },
   "devDependencies": {
     "prettier": "3.9.9",

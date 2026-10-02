@@ -159,10 +159,16 @@ it.each(["initial", "update", "prefix"] as const)(
       },
     );
     compaction.forceAfterOverflow();
-    const system: AgentMessage = { role: "system", content: "synthetic system" };
+    const system: AgentMessage = { role: "system", content: "synthetic system", timestamp: 0 };
     const transformed = await compaction.transform([system, ...messages]);
     expect(requests).toMatchSnapshot();
-    expect(transformed.slice(0, 2)).toMatchSnapshot();
+    expect(
+      transformed
+        .slice(0, 2)
+        .map((message) =>
+          message.role === "system" ? { role: message.role, content: message.content } : message,
+        ),
+    ).toMatchSnapshot();
     expect(transformed.slice(2)).toEqual([retained]);
     const checkpoint = commits.find((entry) => entry.kind === "compaction") as SessionCheckpoint;
     expect(checkpoint.firstKeptEntryId).toBe(entries.at(-1)!.id);
