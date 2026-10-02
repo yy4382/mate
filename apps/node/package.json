@@ -3,38 +3,45 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "files": [
+    "dist"
+  ],
   "exports": {
     ".": {
-      "types": "./dist/nodes/client.d.ts",
-      "import": "./dist/nodes/client.js"
+      "types": "./dist/connection/node-client.d.ts",
+      "import": "./dist/connection/node-client.js"
     },
     "./main": {
       "types": "./dist/main.d.ts",
       "import": "./dist/main.js"
     },
     "./agent-provisioner": {
-      "types": "./dist/nodes/agent-provisioner.d.ts",
-      "import": "./dist/nodes/agent-provisioner.js"
+      "types": "./dist/provisioning/agent-workspace.d.ts",
+      "import": "./dist/provisioning/agent-workspace.js"
     },
     "./process-operations": {
-      "types": "./dist/nodes/process-operations.d.ts",
-      "import": "./dist/nodes/process-operations.js"
+      "types": "./dist/processes/operation-ledger.d.ts",
+      "import": "./dist/processes/operation-ledger.js"
     },
     "./process-operation-runtime": {
-      "types": "./dist/nodes/process-operation-runtime.d.ts",
-      "import": "./dist/nodes/process-operation-runtime.js"
+      "types": "./dist/processes/operation-runtime.d.ts",
+      "import": "./dist/processes/operation-runtime.js"
     },
     "./workspace-execution": {
-      "types": "./dist/nodes/workspace-execution.d.ts",
-      "import": "./dist/nodes/workspace-execution.js"
+      "types": "./dist/files/workspace-executor.d.ts",
+      "import": "./dist/files/workspace-executor.js"
+    },
+    "./same-account-files": {
+      "types": "./dist/files/same-account-files.d.ts",
+      "import": "./dist/files/same-account-files.js"
     },
     "./database": {
-      "types": "./dist/nodes/database.d.ts",
-      "import": "./dist/nodes/database.js"
+      "types": "./dist/processes/operation-database.d.ts",
+      "import": "./dist/processes/operation-database.js"
     },
     "./linux-process-executor": {
-      "types": "./dist/nodes/linux-process-executor.d.ts",
-      "import": "./dist/nodes/linux-process-executor.js"
+      "types": "./dist/processes/linux-process-executor.d.ts",
+      "import": "./dist/processes/linux-process-executor.js"
     }
   },
   "scripts": {
@@ -49,6 +56,7 @@
   "dependencies": {
     "@mate/protocol": "workspace:*",
     "better-sqlite3": "13.0.3",
+    "dbus-native": "0.16.0",
     "fs-ext": "2.1.1",
     "ws": "8.21.3",
     "zod": "4.6.5"

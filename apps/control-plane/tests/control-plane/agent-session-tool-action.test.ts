@@ -5,8 +5,9 @@ import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
 import type { ToolCall } from "@earendil-works/pi-ai";
 import { expect, it } from "vitest";
-import { AgentSession, agentSessionSchema } from "../../src/agent-session.js";
-import { durableToolIdentity } from "../../src/agent-tool-identity.js";
+import { AgentSession } from "../../src/runtime/session/service.js";
+import { agentSessionSchema } from "../../src/runtime/session/schema.js";
+import { durableToolIdentity } from "../../src/runtime/tools/identity.js";
 import { assistantMessage } from "../helpers/session.js";
 
 function fixture() {

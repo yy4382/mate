@@ -1,4 +1,4 @@
-import { sessionConfigurationSchema } from "../session-record.js";
+import { sessionConfigurationSchema } from "../runtime/session/record.js";
 import { buildAgentSystemPrompt } from "./system.js";
 import { runtimeSources } from "./runtime.js";
 import { summarySources } from "./summary.js";
@@ -44,7 +44,7 @@ export function inspectConfigurationSnapshot(
     // formatVersion 1 stores final text and schemas, not section provenance. Do not infer it
     // from today's templates or split profile fields on newlines.
     provenance: "unavailable-in-snapshot",
-    source: "session-record.ts#sessionConfigurationSchema",
+    source: "apps/control-plane/src/runtime/session/record.ts#sessionConfigurationSchema",
     toolCount: parsed.data.tools.length,
     ...(options.showContent
       ? { systemPrompt: parsed.data.systemPrompt, tools: parsed.data.tools }

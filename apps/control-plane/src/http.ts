@@ -1,13 +1,20 @@
-import type { AgentLoopTestDependencies } from "./agent-loop.js";
-import { AgentTools } from "./agent-tools.js";
-import { AgentProcessOperationBroker } from "./agent-process-operations.js";
+import {
+  newChannelSchema,
+  updateChannelSchema,
+  newMessageSchema,
+  ownerChannelInvitationSchema,
+} from "./conversations/contracts.js";
+import type { AgentLoopTestDependencies } from "./runtime/loop.js";
+import { AgentTools } from "./runtime/tools/registry.js";
+import { AgentProcessOperationBroker } from "./runtime/process-operations.js";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { resolve } from "node:path";
 import { z } from "zod";
-import { OWNER_SESSION_COOKIE, OwnerAuth } from "./owner-auth.js";
-import { ArchivedChannelError, OwnerChat } from "./owner-chat.js";
-import { LoginGate } from "./login-gate.js";
+import { OWNER_SESSION_COOKIE, OwnerAuth } from "./auth/service.js";
+import { OwnerChat } from "./conversations/service.js";
+import { ArchivedChannelError } from "./conversations/errors.js";
+import { LoginGate } from "./auth/login-gate.js";
 import { NodeDirectory, type NodeDirectoryOptions } from "./nodes/directory.js";
 import { registerNodeRoutes } from "./nodes/http.js";
 import { AgentDirectory, AgentRequestConflict } from "./agents/directory.js";
@@ -17,46 +24,20 @@ import {
   agentProfilePatchSchema,
   agentModelPatchSchema,
 } from "./agents/contracts.js";
-import { ModelCredentialDirectory } from "./model-credentials.js";
-import { isSupportedModelProvider, supportedModelProviders } from "./model-providers.js";
-import { AgentRunCoordinator } from "./agent-runs.js";
-import { AttachmentError, AttachmentService } from "./attachments.js";
-import { WorkspaceError, WorkspaceService } from "./workspace.js";
-import { registerWorkspaceRoutes } from "./workspace-http.js";
-import { listAgentActivity } from "./activity.js";
-import { OwnerPush } from "./owner-push.js";
-import { agentUsage } from "./agent-usage.js";
+import { ModelCredentialDirectory } from "./providers/credentials.js";
+import { isSupportedModelProvider, supportedModelProviders } from "./providers/catalog.js";
+import { AgentRunCoordinator } from "./runtime/runs.js";
+import { AttachmentService } from "./attachments/service.js";
+import { WorkspaceService } from "./workspaces/service.js";
+import { registerWorkspaceRoutes } from "./workspaces/http.js";
+import { listAgentActivity } from "./runtime/activity.js";
+import { OwnerPush } from "./notifications/push.js";
+import { agentUsage } from "./runtime/usage.js";
 
 export function mentionsOwner(text: string): boolean {
   return /(?:^|[^\p{L}\p{N}_])@(?:owner|所有者)(?=$|[^\p{L}\p{N}_])/iu.test(text);
 }
 
-const newChannelSchema = z
-  .object({
-    name: z.string().trim().min(1).max(80),
-    description: z.string().trim().max(500),
-    visibility: z.enum(["public", "private"]),
-  })
-  .strict();
-const updateChannelSchema = z
-  .object({
-    name: z.string().trim().min(1).max(80).optional(),
-    description: z.string().trim().max(500).optional(),
-    visibility: z.enum(["public", "private"]).optional(),
-    archived: z.boolean().optional(),
-  })
-  .strict()
-  .refine((value) => Object.keys(value).length > 0);
-const newMessageSchema = z
-  .object({
-    text: z.string().trim().min(1).max(20_000),
-    rootId: z.string().uuid().optional(),
-    quoteId: z.string().uuid().optional(),
-    asTask: z.boolean().optional(),
-  })
-  .strict()
-  .refine((value) => !(value.rootId && value.quoteId));
-const ownerChannelInvitationSchema = z.object({ agentId: z.string().uuid() }).strict();
 const modelCredentialInputSchema = z
   .object({
     apiKey: z
@@ -238,9 +219,7 @@ export function createControlPlaneApp(
       return context.json({ error: "请输入密码" }, 400);
     }
     const password =
-      typeof body === "object" && body !== null && "password" in body
-        ? (body as { password?: unknown }).password
-        : undefined;
+      typeof body === "object" && body !== null && "password" in body ? body.password : undefined;
     if (typeof password !== "string" || !password || Buffer.byteLength(password, "utf8") > 1024)
       return context.json({ error: "请输入密码" }, 400);
 

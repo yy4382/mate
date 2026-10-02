@@ -8,8 +8,9 @@ import { cpus, platform, release, tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import Database from "better-sqlite3";
-import { AgentSession, agentSessionSchema } from "../dist/agent-session.js";
-import { durableToolIdentity } from "../dist/agent-tool-identity.js";
+import { AgentSession } from "../dist/runtime/session/service.js";
+import { agentSessionSchema } from "../dist/runtime/session/schema.js";
+import { durableToolIdentity } from "../dist/runtime/tools/identity.js";
 
 const warmups = 10;
 const iterations = 50;

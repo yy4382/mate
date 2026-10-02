@@ -97,3 +97,84 @@ it("does not claim an operation completed when its node disconnects", async () =
     context.database.close();
   }
 });
+
+it("periodic receipt recovery skips a current command wait and still queries other missing receipts", async () => {
+  const context = await authenticatedNode(),
+    operationId = randomUUID(),
+    recoveryId = randomUUID(),
+    agentId = randomUUID(),
+    receipts: unknown[] = [];
+  try {
+    context.directory.setProcessReceiptHandler(
+      (_nodeId, receipt) => receipts.push(receipt),
+      () => {},
+    );
+    const insert = context.database.prepare(
+      "INSERT INTO owner_agent_process_operations VALUES(?,?,?,'executing',?)",
+    );
+    for (const id of [operationId, recoveryId])
+      insert.run(
+        id,
+        agentId,
+        context.nodeId,
+        JSON.stringify({ operation: { kind: "process.list" } }),
+      );
+    const pending = context.directory.executeAgentProcessOperation(context.nodeId, {
+      operationId,
+      agentId,
+      operation: { kind: "process.list" },
+    });
+    // Observe rejection immediately; finally closes the connection even if an assertion fails.
+    void pending.catch(() => {});
+    await context.directory.receive(
+      context.socket,
+      JSON.stringify({
+        type: "node.ping",
+        requestId: randomUUID(),
+        sentAt: Date.now(),
+      }),
+    );
+    const reconciliation = context.socket.messages.find(
+      (message) => message.type === "control.process.reconcile",
+    );
+    expect(reconciliation).toMatchObject({
+      operations: [{ operationId: recoveryId, agentId, requestHash: expect.any(String) }],
+    });
+    await context.directory.receive(
+      context.socket,
+      JSON.stringify({
+        type: "node.process.reconcile.result",
+        requestId: reconciliation!.requestId,
+        receipts: [],
+      }),
+    );
+    expect(receipts).toEqual([
+      {
+        operationId: recoveryId,
+        agentId,
+        state: "unknown",
+        receipt: { reason: "no_durable_node_receipt" },
+      },
+    ]);
+    await expect(pending).rejects.toThrow("Node operation timed out");
+    context.socket.messages.length = 0;
+    await context.directory.receive(
+      context.socket,
+      JSON.stringify({
+        type: "node.ping",
+        requestId: randomUUID(),
+        sentAt: Date.now(),
+      }),
+    );
+    expect(
+      context.socket.messages.find((message) => message.type === "control.process.reconcile"),
+    ).toMatchObject({
+      operations: expect.arrayContaining([
+        { operationId, agentId, requestHash: expect.any(String) },
+      ]),
+    });
+  } finally {
+    context.directory.closeAll();
+    context.database.close();
+  }
+});
