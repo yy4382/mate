@@ -47,6 +47,8 @@
 
 `tests/scenarios/report-workflow.ts` 是完整正常工作样例：甲从 Owner 普通请求创建／认领任务、真实生成草稿，经 peer DM 附件让乙独立复核，乙真实反馈后甲继续原 session 的第二轮并交付最终报告。它同时保留模型脚本与任务、消息路由、文件／附件字节、session／run 断言，供现有环境的其它拓扑复用；`tests/control-plane/report-workflow.test.ts` 只装配同一 `runScenario` 入口。开发说明的“新增正常工作场景”展示短单 Agent 写法和完整样例入口。
 
+`scenario-network.ts` 只控制环境主 node 的原始 TCP 链路，提供立即断开、双向静默丢帧、明确恢复和带游标／期限的帧观察；它不回复心跳。`scenario-network-facts.ts` 集中读取 Owner API 没有暴露的提醒投递与待处理队列。`tests/scenarios/node-network-recovery.ts` 保留可复用的普通请求断网／接续脚本与断言；`tests/control-plane/node-network.test.ts` 还覆盖实际摘要、离线队列、人工暂停、独立在线节点和观察取消。网络事件沿现有失败证据与环境清理入口保存。
+
 ## 网页按用户功能找代码
 
 下面的功能目录都位于 `apps/web/src/features/`。
