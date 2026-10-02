@@ -1,0 +1,147 @@
+// Independent recovery after the scenario driver is killed. Only explicit owned manifests are read.
+import { execFileSync } from "node:child_process";
+import { existsSync, lstatSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+
+function running(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error.code === "ESRCH") return false;
+    throw error;
+  }
+}
+function command(pid) {
+  try {
+    return execFileSync("ps", ["-p", String(pid), "-o", "command="], {
+      encoding: "utf8",
+      timeout: 2000,
+    }).trim();
+  } catch (error) {
+    if (error.status === 1 && !running(pid)) return undefined;
+    throw error;
+  }
+}
+async function cleanup(file) {
+  const report = { manifest: file, released: [], residual: [], errors: [] };
+  try {
+    if (lstatSync(file).isSymbolicLink()) throw new Error("Refusing symlink resource manifest");
+    const manifest = JSON.parse(readFileSync(file, "utf8"));
+    if (
+      manifest.version !== 1 ||
+      !isAbsolute(manifest.directory) ||
+      !basename(manifest.directory).startsWith("mate-scenario-") ||
+      typeof manifest.ownership !== "string" ||
+      !/^[0-9a-f-]{36}$/i.test(manifest.ownership) ||
+      !Number.isSafeInteger(manifest.driverPid) ||
+      !Array.isArray(manifest.processes)
+    )
+      throw new Error("Invalid scenario resource manifest");
+    if (!existsSync(manifest.directory)) {
+      report.released.push("synthetic directory already absent");
+      return report;
+    }
+    if (
+      lstatSync(manifest.directory).isSymbolicLink() ||
+      readFileSync(join(manifest.directory, ".mate-scenario-owner"), "utf8") !== manifest.ownership
+    )
+      throw new Error("Scenario directory ownership mismatch");
+    if (running(manifest.driverPid))
+      throw new Error("Scenario driver is still alive; use its registered close() instead");
+    for (const output of [...manifest.processes].reverse()) {
+      try {
+        if (
+          !Number.isSafeInteger(output.pid) ||
+          output.pid < 1 ||
+          typeof output.marker !== "string" ||
+          !output.marker.endsWith(` ${manifest.ownership}`) ||
+          !["node", "control-plane"].includes(output.service)
+        )
+          throw new Error("Invalid owned process identity");
+        let actual = command(output.pid);
+        if (actual === undefined) {
+          report.released.push(`${output.service} ${output.pid} already absent`);
+          continue;
+        }
+        if (!actual.endsWith(output.marker))
+          throw new Error(`Process ${output.pid} identity changed; no signal sent`);
+        process.kill(output.pid, "SIGTERM");
+        for (let index = 0; index < 80; index++) {
+          actual = command(output.pid);
+          if (actual === undefined || !actual.endsWith(output.marker)) break;
+          await delay(25);
+        }
+        if (actual?.endsWith(output.marker)) {
+          process.kill(output.pid, "SIGKILL");
+          for (let index = 0; index < 80; index++) {
+            actual = command(output.pid);
+            if (actual === undefined || !actual.endsWith(output.marker)) break;
+            await delay(25);
+          }
+        }
+        if (actual?.endsWith(output.marker)) throw new Error(`Process ${output.pid} did not exit`);
+        report.released.push(`${output.service} ${output.pid}`);
+      } catch (error) {
+        report.residual.push(output);
+        report.errors.push(String(error));
+      }
+    }
+    if (!report.residual.length) {
+      rmSync(manifest.directory, { recursive: true, force: true });
+      report.released.push("synthetic directory");
+    }
+  } catch (error) {
+    report.errors.push(String(error));
+    report.residual.push({ resource: file });
+  }
+  return report;
+}
+
+const arguments_ = process.argv.slice(2);
+if (arguments_[0] === "--") arguments_.shift();
+let files;
+if (arguments_[0] === "--root" && arguments_.length === 2) {
+  const root = resolve(arguments_[1]);
+  files = existsSync(root)
+    ? readdirSync(root, { withFileTypes: true })
+        .filter(
+          (entry) =>
+            entry.isDirectory() &&
+            entry.name.startsWith("scenario-") &&
+            existsSync(join(root, entry.name, "resources.json")),
+        )
+        .map((entry) => join(root, entry.name, "resources.json"))
+    : [];
+} else if (arguments_.length === 1) files = [resolve(arguments_[0])];
+else {
+  console.error("Usage: pnpm cleanup:scenarios -- --root <evidence-root> | <resources.json>");
+  process.exit(1);
+}
+const reports = [];
+for (const file of files) {
+  const report = await cleanup(file);
+  reports.push(report);
+  try {
+    writeFileSync(
+      join(dirname(file), "independent-cleanup.json"),
+      `${JSON.stringify(report, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+  } catch (error) {
+    report.errors.push(String(error));
+  }
+}
+console.log(
+  JSON.stringify(
+    {
+      guarantee:
+        "best effort; SIGKILL does not execute finally; only manifest-owned service identities and marked directories are reclaimed",
+      reports,
+    },
+    null,
+    2,
+  ),
+);
+if (reports.some((report) => report.errors.length || report.residual.length)) process.exitCode = 1;

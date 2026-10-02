@@ -62,3 +62,37 @@ export function readMessageRuns(directory: string, agentId: string, messageId: s
     db.close();
   }
 }
+
+/** Narrow diagnostic projections; auth, credentials and full databases are never exported. */
+export function readScenarioFacts(directory: string) {
+  const db = new Database(join(directory, "control-plane-data", "control-plane.sqlite"), {
+    readonly: true,
+    fileMustExist: true,
+  });
+  try {
+    return {
+      sessions: db
+        .prepare(
+          "SELECT id,agent_id AS agentId,created_at AS createdAt FROM owner_agent_sessions ORDER BY created_at,id",
+        )
+        .all(),
+      runs: db
+        .prepare(
+          "SELECT id,agent_id AS agentId,node_id AS nodeId,delivery_id AS deliveryId,state,error_code AS errorCode,started_at AS startedAt,completed_at AS completedAt FROM owner_agent_runs ORDER BY rowid",
+        )
+        .all(),
+      transcript: db
+        .prepare(
+          "SELECT seq,id,agent_id AS agentId,run_id AS runId,action_scope_id AS actionScopeId,kind,payload_json AS payload FROM owner_agent_session_records ORDER BY seq",
+        )
+        .all(),
+      operations: db
+        .prepare(
+          "SELECT operation_id AS operationId,run_id AS runId,agent_id AS agentId,node_id AS nodeId,state,request_json AS request,receipt_json AS receipt FROM owner_agent_process_operations ORDER BY created_at,operation_id",
+        )
+        .all(),
+    };
+  } finally {
+    db.close();
+  }
+}
