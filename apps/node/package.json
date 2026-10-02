@@ -52,6 +52,7 @@
   "dependencies": {
     "@mate/protocol": "workspace:*",
     "better-sqlite3": "13.0.3",
+    "dbus-native": "0.16.0",
     "fs-ext": "2.1.1",
     "ws": "8.21.3",
     "zod": "4.6.5"

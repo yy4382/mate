@@ -32,7 +32,7 @@
 - `provisioning/`：准备同一运行账号下的 Agent 默认工作区。
 - `files/`：文件操作入口、辅助进程、路径检查与原子文件操作。
 - `processes/`：普通命令、进程状态、操作运行与持久收据。
-- `management/`：完整发布包契约与校验、现有账号目录规则、唯一 CLI 入口安装；`deploy/node/` 是离线生产包构建、薄 bootstrap 和实际包外部验收入口。见 [完整 node 包说明](NODE_BUNDLE.md)。
+- `management/`：完整发布包契约与校验、现有账号目录规则、唯一 CLI 入口安装、私有节点配置和 systemd 用户服务管理；`deploy/node/` 是离线生产包构建、薄 bootstrap 和实际包外部验收入口。见 [完整 node 包说明](NODE_BUNDLE.md) 与 [用户服务说明](NODE_SERVICE.md)。
 
 对应测试也按这些目录组织。外部使用节点时，依赖 package 的明确导出；内部移动文件不要求调用方知道新的磁盘路径。
 

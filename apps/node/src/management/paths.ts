@@ -11,6 +11,7 @@ export function nodePaths(home = homedir()) {
     entry: join(home, ".local/bin/mate"),
     unit: join(home, ".config/systemd/user/mate-node.service"),
     configDirectory: join(home, ".config/mate"),
+    configuration: join(home, ".config/mate/node.json"),
     dataDirectory: join(home, ".local/share/mate/node"),
   };
 }

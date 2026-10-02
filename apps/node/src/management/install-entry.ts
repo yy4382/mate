@@ -238,7 +238,8 @@ export async function bootstrapInstall(
     const quote = (path: string) => JSON.stringify(path.replaceAll("%", "%%"));
     if (
       serviceEntries.length !== 1 ||
-      serviceEntries[0] !== `ExecStart=${quote(entrypoints.runtime)} ${quote(entrypoints.node)}`
+      serviceEntries[0] !==
+        `ExecStart=:${quote(entrypoints.runtime)} ${quote(entrypoints.node)} --config-file ${quote(paths.configuration)}`
     )
       throw new Error(
         "The node user unit does not reference its declared complete bundle; use mate node update to diagnose it",

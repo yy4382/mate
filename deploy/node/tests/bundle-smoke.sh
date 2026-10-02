@@ -37,7 +37,7 @@ if [ -n "$fixtures" ]; then
   test "$("$HOME/.local/bin/mate" --version)" = "$version"
 fi
 mkdir -p "$HOME/.config/systemd/user"
-printf '# Mate node service\n# Mate bundle version: %s\n[Service]\nExecStart="%s/node/bin/node" "%s/app/apps/node/dist/main.js"\n' "$version" "$HOME/.local/lib/mate-node/versions/$version" "$HOME/.local/lib/mate-node/versions/$version" > "$HOME/.config/systemd/user/mate-node.service"
+printf '# Mate node service\n# Mate bundle version: %s\n[Service]\nExecStart=:"%s/node/bin/node" "%s/app/apps/node/dist/main.js" --config-file "%s/.config/mate/node.json"\n' "$version" "$HOME/.local/lib/mate-node/versions/$version" "$HOME/.local/lib/mate-node/versions/$version" "$HOME" > "$HOME/.config/systemd/user/mate-node.service"
 cp "$HOME/.config/systemd/user/mate-node.service" "$test_home/unit-before"
 rm "$HOME/.local/bin/mate"
 sh "$bootstrap" --version "$version" --package "$bundle" --sha256 "$checksum"

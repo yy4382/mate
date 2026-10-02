@@ -41,7 +41,7 @@ unset GH_TOKEN GITHUB_TOKEN
 ~/.local/bin/mate --version
 ```
 
-用户自行把 `~/.local/bin` 加入 PATH；bootstrap 不修改 shell profile。绝对入口始终可用。管理 CLI 安装不要求 user manager，也不创建 node 配置、数据、用户单元或后台进程。node 服务命令另由 `mate node` 管理；bootstrap 不调用 systemctl/journalctl、不启停服务。
+用户自行把 `~/.local/bin` 加入 PATH；bootstrap 不修改 shell profile。绝对入口始终可用。管理 CLI 安装不要求 user manager，也不创建 node 配置、数据、用户单元或后台进程。node 服务命令由 `mate node install/start/stop/restart/status/logs` 管理，首次私有配置与用户服务步骤见 [用户服务说明](NODE_SERVICE.md)；bootstrap 不调用 systemctl/journalctl、不启停服务。
 
 已有 node 用户单元时，同版 bootstrap 只校验完整包并修复管理入口，不修改单元和配置。单元必须明确引用同版包内 Node 与 node 入口；不同版本请求拒绝并提示 `mate node update`。公共入口或程序损坏时，需要使用已校验的本地包内同一 CLI 执行恢复命令；不能引入第二套 shell 更新逻辑。包内 CLI 位于 `mate-node/app/apps/node/dist/management/cli.js`，运行时位于 `mate-node/node/bin/node`，后续管理命令使用这两个绝对路径。
 
