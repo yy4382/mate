@@ -4,7 +4,6 @@ import { Agent } from "@earendil-works/pi-agent-core";
 import { Type, type Api, type Model } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { isSupportedModel } from "./catalog.js";
-import { providerResponseComplete } from "../runtime/provider-response.js";
 
 const selectionSchema = z.object({
   provider: z.string().min(1),
@@ -47,6 +46,40 @@ const reportSchema = z.object({
 /** Only test code redirects the real Pi adapter to a synthetic HTTP service. */
 export interface ProviderCheckTestDependencies {
   modelForCheck: (model: Model<Api>) => Model<Api>;
+}
+
+const responseEventSchema = z.record(z.string(), z.unknown());
+
+/** A completed decline needs a normal terminal event, rather than a terminal provider error. */
+function normalDeclineTermination(body: string, api: Api) {
+  let terminal = false;
+  for (const frame of body.split(/\r?\n\r?\n/)) {
+    const lines = frame.split(/\r?\n/);
+    if (lines.some((line) => /^event:\s*(error|response\.failed)\s*$/.test(line))) return false;
+    const data = lines
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trimStart())
+      .join("\n")
+      .trim();
+    if (!data) continue;
+    if (data === "[DONE]") {
+      if (api === "openai-completions") terminal = true;
+      continue;
+    }
+    try {
+      const event = responseEventSchema.parse(JSON.parse(data));
+      if (
+        event.type === "error" ||
+        event.type === "response.failed" ||
+        (event.error !== undefined && event.error !== null)
+      )
+        return false;
+      if (api === "anthropic-messages" && event.type === "message_stop") terminal = true;
+    } catch {
+      return false;
+    }
+  }
+  return terminal;
 }
 
 /** An explicit, transient transport probe. It owns no Mate Agent, node or persistent session. */
@@ -131,7 +164,7 @@ export async function checkProviderProtocol(
                 completeResponse = response
                   .clone()
                   .text()
-                  .then((body) => providerResponseComplete(body, response.status))
+                  .then((body) => normalDeclineTermination(body, model.api))
                   .catch(() => false);
                 return response;
               },

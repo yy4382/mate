@@ -98,7 +98,7 @@ function text(response: ServerResponse, value: string) {
 function anthropicReply(
   response: ServerResponse,
   reply: { text: string; stopReason?: string } | { callId: string },
-  complete = true,
+  ending: "message_stop" | "eof" | "error" | "malformed" = "message_stop",
 ) {
   response.writeHead(200, { "content-type": "text/event-stream" });
   const events = [
@@ -143,16 +143,21 @@ function anthropicReply(
     { type: "message_stop" },
   ];
   for (const event of events) {
-    if (event.type === "message_stop" && !complete) continue;
+    if (event.type === "message_stop" && ending !== "message_stop") continue;
     response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
   }
+  if (ending === "error")
+    response.write(
+      `event: error\ndata: ${JSON.stringify({ type: "error", error: { type: "overloaded_error", message: "private provider error after refusal" } })}\n\n`,
+    );
+  if (ending === "malformed") response.write("data: {invalid-json}\n\n");
   response.end();
 }
 
 function completionsReply(
   response: ServerResponse,
   delta: Record<string, unknown>,
-  finishReason: "stop" | "tool_calls",
+  finishReason: "stop" | "tool_calls" | "content_filter",
 ) {
   response.writeHead(200, { "content-type": "text/event-stream" });
   for (const [currentDelta, reason] of [
@@ -262,7 +267,7 @@ it("a refusal reason in an incomplete Anthropic stream is still a protocol failu
         index === 0
           ? { text: "短文本" }
           : { text: "private refusal explanation", stopReason: "refusal" },
-        index === 0,
+        index === 0 ? "message_stop" : "eof",
       ),
     async (baseUrl) => {
       const result = await checkProviderProtocol(
@@ -274,6 +279,33 @@ it("a refusal reason in an incomplete Anthropic stream is still a protocol failu
     },
   );
 });
+
+it.each(z.enum(["error", "malformed"]).options)(
+  "an Anthropic refusal followed by %s must retain the actual protocol failure",
+  async (ending) => {
+    await withProvider(
+      (_request, response, index) =>
+        anthropicReply(
+          response,
+          index === 0
+            ? { text: "短文本" }
+            : { text: "private refusal explanation", stopReason: "refusal" },
+          index === 0 ? "message_stop" : ending,
+        ),
+      async (baseUrl, requests) => {
+        const result = await checkProviderProtocol(
+          { provider: "anthropic", modelId: "claude-sonnet-4-5", apiKey: "synthetic-key" },
+          { modelForCheck: (model) => ({ ...model, baseUrl: baseUrl.replace(/\/v1$/, "") }) },
+        );
+        expect(result).toMatchObject({ status: "failed", reason: "provider_error", stage: "tool" });
+        expect(requests).toHaveLength(2);
+        expect(JSON.stringify(result)).not.toMatch(
+          /private provider error|private refusal explanation/,
+        );
+      },
+    );
+  },
+);
 
 it.each(["SAFETY", "BLOCKLIST"])(
   "a complete Google %s model decline remains unverified",
@@ -361,6 +393,31 @@ it("mixed continuation text and a repeated Chat Completions tool call cannot pas
       );
       expect(result).toMatchObject({ status: "unverified", reason: "additional_tool_call" });
       expect(requests).toHaveLength(3);
+    },
+  );
+});
+
+it("a normally terminated Chat Completions content filter remains a model choice", async () => {
+  await withProvider(
+    (_request, response, index) =>
+      completionsReply(
+        response,
+        { role: "assistant", content: "短文本" },
+        index === 0 ? "stop" : "content_filter",
+      ),
+    async (baseUrl, requests) => {
+      const result = await checkProviderProtocol(
+        { provider: "deepseek", modelId: "deepseek-flash", apiKey: "synthetic-key" },
+        { modelForCheck: (model) => ({ ...model, baseUrl }) },
+      );
+      expect(result).toMatchObject({
+        status: "unverified",
+        reason: "model_declined",
+        stage: "tool",
+        httpStatus: 200,
+      });
+      expect(result.observed.toolExecuted).toBe(false);
+      expect(requests).toHaveLength(2);
     },
   );
 });
