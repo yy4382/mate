@@ -1,5 +1,7 @@
 # 用 mate node 管理当前账号的用户服务
 
+卸载、保留数据及公共入口失效后的本地包恢复见 [node 卸载说明](NODE_UNINSTALL.md)。
+
 先按 [完整包说明](NODE_BUNDLE.md) 用薄 bootstrap 安装明确版本的管理入口。以下命令均使用当前普通账号，绝对 CLI 路径为 `~/.local/bin/mate`。Mate 不创建账号、不切换身份、不安装系统软件，也不配置 sudo、Docker 权限或 linger。
 
 ## 首次配置与安装
