@@ -77,7 +77,9 @@ case "$phase" in
       [ "$(id -u)" = 0 ] || { echo 'After-boot observation needs the existing external VM supervisor with full journal access; it never executes Mate' >&2; exit 1; }
       startup_journal=$(journalctl --system --boot=0 --quiet _SYSTEMD_UNIT=systemd-logind.service -n 1 --output=cat)
       [ -n "$startup_journal" ] || { echo 'No complete boot logind evidence available' >&2; exit 1; }
-      owner_sessions=$(journalctl --system --boot=0 --quiet _SYSTEMD_UNIT=systemd-logind.service "USER_ID=$account_name" --field=SESSION_ID)
+      # A normal entry query honours boot/account matches. --field queries
+      # unique values across the journal and would ignore those matches.
+      owner_sessions=$(journalctl --system --boot=0 --quiet _SYSTEMD_UNIT=systemd-logind.service "USER_ID=$account_name" MESSAGE_ID=8d45620c1a4348dbb17410da57c60c66 --output=json)
       [ -z "$owner_sessions" ] || { echo 'Owner already logged in during this boot; cannot claim boot-triggered startup' >&2; exit 1; }
     fi
     printf 'PASS: %s with no owner login sessions, existing linger, enabled service, dedicated runtime and unchanged identity/unit\n' "$phase"
