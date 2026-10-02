@@ -79,3 +79,5 @@ Pi 会话保留供应商扩展字段。会话边界的窄适配不能改成会�
 真实文件崩溃场景在 `tests/control-plane/file-boundaries.test.ts`，复用同一环境、脚本 provider、驱动与失败证据。固定启动器的 `scenario-file-boundary.mjs` 通过 `@mate/node/workspace-execution` 和 `@mate/node/same-account-files` 的明确导出，只包住真实 `LinuxWorkspaceExecutor` 和 `SameAccountFileBackend` 的执行／收据边界，记录带实际操作身份的事件；无生产故障开关。`scenario-file-facts.ts` 校验现有只读动作投影、模型真正收到的收据更正与文件版本。原 `agent-tool-invalidation.test.ts` 的文件路径继续覆盖断链与收据对账，并核对可变 requestId 和稳定 operation／Agent／请求摘要。
 
 文件启动器用 `AsyncLocalStorage` 保留每个真实请求的身份，使并发 Agent 的文件完成不会错归目标收据边界。双 Agent 回归用有界的首个执行暂留验证这个观察契约；会话事实投影也用于核对原 run 已提交的调用及崩溃前完整模型输入前缀。
+
+交付拓扑的测试适配在 `tests/helpers/scenario-container.ts`，由同一 `scenario-environment.ts` 的 `container: { image }` 配置选择；测试 override 只存在于场景合成目录。`tests/container/run.mjs` 使用 B 原构建入口创建当前 SHA 的唯一镜像，`delivered-scenarios.integration.ts` 复用正常 workflow 与两个选定恢复导出，并验证驱动 SIGKILL 后的独立回收。生产交付文件不导入这些测试代码；完整入口、实际证据与未验证边界见开发说明。

@@ -13,11 +13,11 @@ pnpm install --frozen-lockfile
 pnpm check:ci
 ```
 
-`pnpm check:ci` 依次运行 `pnpm check`、`pnpm typecheck`、`pnpm test:linux-single-account-node`、`pnpm test:single-account-agent-workspace` 和 `pnpm test:linux-ordinary-command-failure`，任一步失败都会保留非零结果，没有自动重试。`pnpm check` 的 `test:unit` 名称沿用 package 既有命名，其中已经包含真实控制面/node 子进程、Pi、HTTP/SSE、WebSocket、SQLite、普通命令／文件和完整双 Agent 报告 workflow；CI 不再次运行这整套测试。三个独立脚本不在 `pnpm check` 内，因此由同一入口另行运行。后续普通 Vitest 故障场景加入既有测试目录，自动进入这条入口。
+`pnpm check:ci` 依次运行 `pnpm check`、`pnpm typecheck`、`pnpm test:linux-single-account-node`、`pnpm test:single-account-agent-workspace`、`pnpm test:linux-ordinary-command-failure` 和 `pnpm test:container-scenarios`，任一步失败都会保留非零结果，没有自动重试。`pnpm check` 的 `test:unit` 名称沿用 package 既有命名，其中已经包含真实控制面/node 子进程、Pi、HTTP/SSE、WebSocket、SQLite、普通命令／文件和完整双 Agent 报告 workflow；CI 不再次运行这整套测试。三个独立脚本不在 `pnpm check` 内，因此由同一入口另行运行。后续普通 Vitest 故障场景加入既有测试目录，自动进入这条入口。
 
 CI 日志记录实际 checkout SHA、内核／平台／架构、运行账号 UID/GID、Node 和 pnpm 版本；PR 默认检查 GitHub 的合并提交，实际 SHA 以日志为准。先前步骤失败或取消时，`always()` 独立步骤仍在两分钟期限内尽力回收 `artifacts/scenarios` 清单所属资源，直接用 Node 执行现有回收器，依赖安装失败也能尝试。清理残留仍使作业失败；SIGKILL 或 runner 丢失不能保证资源已经回收。失败或取消且有合成证据目录时，上传场景摘要、关联事实、效果文件与清理报告，保留 7 天；目录中不包含完整数据库或凭据。
 
-这些检查只使用本地合成 provider 和普通账号，不调用 `check:provider`，不发送公网 Push、不发布镜像／Release或部署，不更改宿主账号、权限或仓库保护。macOS 上同一命令通过只证明跨平台源码行为；实际 Linux 通过证据须记录远端 Actions run URL、实际 SHA 与终态，并在 PR 合并前核对。真实 provider、控制面容器、VPS 和宿主用户服务安装各自单独报告，未执行时保持“未验证”。
+这些检查只使用本地合成 provider 和普通账号，不调用 `check:provider`，不发送公网 Push、不发布镜像／Release或部署，不更改宿主账号、权限或仓库保护。macOS 上同一命令通过只证明跨平台源码行为；实际 Linux 通过证据须记录远端 Actions run URL、实际 SHA 与终态，并在 PR 合并前核对。真实 provider、VPS 和宿主用户服务安装各自单独报告，未执行时保持“未验证”。
 
 ## 源码开发
 
@@ -336,3 +336,17 @@ pnpm --filter @mate/control-plane exec vitest run tests/control-plane/file-bound
 两条文件均由 `pnpm check` 收录。macOS 是跨平台本地证据，Linux CI、真实 provider 和 VPS 仍各自验证；这里的合成效果证明测试矩阵内的执行次数，不承诺任意远端副作用严格一次。
 
 并发回归仍走真实双 Agent 文件路径：测试配置 `node.holdFirstFileExecution` 暂留首个操作的 backend，以带原操作身份的事件确认其已持久开始但尚未执行；另一 Agent 先真实完成文件与终态收据，此时不得出现首个操作的收据前事件。释放首个执行后，才观察它的真实效果与对应暂停点。启动器用 Node 的异步请求作用域关联既有 `beforeReceipt` 回调，避免另一 Agent 的完成错误标记目标操作；两道释放均有期限和取消信号。恢复历史还核对原 run 已持久提交的工具调用 ID／参数，收据后场景以崩溃前最后一个实际请求（含原调用和未知结果）核对完整恢复前缀。
+
+## 交付镜像上的同一报告 workflow 与恢复场景
+
+`pnpm test:container-scenarios` 从当前 checkout 使用 `deploy/control-plane/build.mjs` 和原 `Dockerfile` 构建唯一命名的本地镜像，随后运行 `tests/container/delivered-scenarios.integration.ts`。需要现有普通账号可操作的 Docker Engine/Compose、非零 UID/GID 和空闲的宿主 loopback 8787；缺少 Docker、交付文件、镜像构建或端口条件会明确失败，不跳过。构建不会下载 Mate Release、推送 registry 或部署。
+
+每个场景先运行未改入口的生产 Compose，实际检查中文网页、登录、node 配对、容器内非 loopback 接口 HTTP、宿主 `127.0.0.1:8787` 发布、同账号 UID/GID 与挂载。随后在同一镜像、数据库目录和已配对 node 上切换隔离测试 override：只读挂载已有 `scenario-services.mjs`，通过既有测试依赖注入脚本模型／提交暂停点。生产 Compose 和镜像没有测试 hook。合成 provider 在宿主临时端口监听供容器通过 `host.docker.internal` 回调；Linux 使用 Compose `host-gateway`，node 仍连接宿主 loopback，网络代理仅控制指定 node 链路。
+
+套件直接复用 `runReportWorkflow`、`runNodeNetworkRecovery(..., "blackhole")` 和 `runCpRestart`：相同模型步骤、真实任务／附件／工作区文件、唯一 session 与原 run 断言在交付拓扑执行；只选 assistant 提交后 SIGKILL，不复制深层提交矩阵。Owner 下载仍与真正发布的附件字节及 node 成果文件比较，CP 没有 node 数据／工作区挂载。node 使用本次源码构建和宿主 Node，结果不声称使用完整发布包。
+
+容器套件固定使用显示成功日志的 reporter。`MATE_CONTAINER_PRODUCTION` 与 `MATE_CONTAINER_WRAPPER` 分别记录原入口和包装器的被测 SHA、镜像 ID／架构、宿主与容器实际环境、UID/GID、端口和挂载；失败沿 `artifacts/scenarios` 保存同一摘要、实际模型请求、关联事实、效果文件与清理结果。新增 SIGKILL 驱动探针证明活驱动拒绝独立删除，驱动退出后只按清单和 Docker 归属标签回收本项目的容器／网络及 node；重复回收确认资源已不存在。每个 Compose project 在创建前登记，覆盖创建中断；不会扫描或 prune 宿主其它 Docker 资源。
+
+`pnpm check:ci` 在既有检查和三个普通账号脚本之后运行此入口；既有 CI `always()` 清理继续读取同一资源清单，失败证据仍由同一步上传。成功场景释放容器、网络和合成目录，驱动最后删除自己的唯一镜像标签。SIGKILL／runner 丢失仍只能由独立清理尽力回收，不能保证 finally 执行。
+
+本地 macOS + Linux arm64 Docker 的通过只证明该混合拓扑；真正 Linux host 的证据须来自新提交的实际 CI。容器通过不代表 systemd 用户服务、linger、bootstrap／CLI 安装／整包更新／卸载、Ubuntu／Debian × x86_64／arm64 宿主矩阵、真实 provider、公开 HTTPS/Web Push 或 VPS 部署。

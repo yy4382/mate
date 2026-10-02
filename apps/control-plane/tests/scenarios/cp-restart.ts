@@ -77,9 +77,9 @@ export async function runCpRestart(
   });
   const oldControl = environment.control;
   await step("SIGKILL exit and same-data restart", async () => {
-    await environment.restartControl("SIGKILL");
-    assert.equal(oldControl.exitStatus?.signal, "SIGKILL");
-    return { exitStatus: oldControl.exitStatus, oldRun };
+    const termination = await environment.restartControl("SIGKILL");
+    assert.equal(termination?.signal, "SIGKILL");
+    return { exitStatus: oldControl.exitStatus, termination, oldRun };
   });
   const resumed = await driver.waitForRun(work, "completed", { signal });
   await step("original session, interrupted run and one effect", () => {
