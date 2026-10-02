@@ -8,6 +8,7 @@ const commandTimeoutMs = 700;
 export class ProcessOutput {
   text = "";
   exitStatus: { code: number | null; signal: NodeJS.Signals | null } | undefined;
+  spawnError: Error | undefined;
   private readonly changes = new Set<() => void>();
   readonly exited: Promise<void>;
 
@@ -16,6 +17,11 @@ export class ProcessOutput {
     child.stdout.setEncoding("utf8").on("data", (chunk: string) => this.append(chunk));
     child.stderr.setEncoding("utf8").on("data", (chunk: string) => this.append(chunk));
     this.exited = new Promise((resolveExit) => {
+      child.once("error", (error) => {
+        this.spawnError = error;
+        this.changed();
+        resolveExit();
+      });
       child.once("exit", (code, signal) => {
         this.exitStatus = { code, signal };
         this.changed();
@@ -24,23 +30,33 @@ export class ProcessOutput {
     });
   }
 
-  waitFor(pattern: RegExp, timeoutMs = 15_000): Promise<RegExpMatchArray> {
-    const current = this.text.match(pattern);
+  waitFor(
+    pattern: RegExp,
+    timeoutMs = 15_000,
+    options: { after?: number; signal?: AbortSignal } = {},
+  ): Promise<RegExpMatchArray> {
+    if (options.signal?.aborted) return Promise.reject(options.signal.reason);
+    const current = this.text.slice(options.after ?? 0).match(pattern);
     if (current) return Promise.resolve(current);
+    if (this.exitStatus || this.spawnError)
+      return Promise.reject(this.spawnError ?? new Error(`Test process exited: ${this.text}`));
     return new Promise((resolveMatch, reject) => {
-      const finish = (match?: RegExpMatchArray) => {
+      const finish = (match?: RegExpMatchArray, error?: unknown) => {
         clearTimeout(timeout);
         this.changes.delete(check);
+        options.signal?.removeEventListener("abort", abort);
         if (match) resolveMatch(match);
-        else reject(new Error(`Test process did not produce ${pattern}: ${this.text}`));
+        else reject(error ?? new Error(`Test process did not produce ${pattern}: ${this.text}`));
       };
+      const abort = () => finish(undefined, options.signal?.reason);
       const check = () => {
-        const match = this.text.match(pattern);
+        const match = this.text.slice(options.after ?? 0).match(pattern);
         if (match) finish(match);
-        else if (this.exitStatus) finish();
+        else if (this.exitStatus || this.spawnError) finish(undefined, this.spawnError);
       };
       const timeout = setTimeout(() => finish(), timeoutMs);
       this.changes.add(check);
+      options.signal?.addEventListener("abort", abort, { once: true });
     });
   }
 
@@ -55,18 +71,26 @@ export class ProcessOutput {
 }
 
 export async function stopProcess(output: ProcessOutput | undefined): Promise<void> {
-  if (!output || output.exitStatus) return;
+  if (!output || output.exitStatus || output.spawnError) return;
   output.child.kill("SIGTERM");
-  await Promise.race([
-    output.exited,
-    new Promise<void>((resolveStop) =>
-      setTimeout(() => {
-        output.child.kill("SIGKILL");
-        resolveStop();
-      }, 2000),
-    ),
-  ]);
-  await output.exited;
+  if (await waitForExit(output, 2000)) return;
+  output.child.kill("SIGKILL");
+  if (!(await waitForExit(output, 2000)))
+    throw new Error(`Test process ${output.child.pid} did not exit after SIGKILL`);
+}
+
+async function waitForExit(output: ProcessOutput, timeoutMs: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      output.exited.then(() => true),
+      new Promise<boolean>((resolveTimeout) => {
+        timer = setTimeout(() => resolveTimeout(false), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function delay(ms: number): Promise<void> {
@@ -87,11 +111,12 @@ export async function eventually<T>(
   throw new Error(`Timed out waiting for ${label}`);
 }
 
-export async function login(origin: string): Promise<string> {
+export async function login(origin: string, signal?: AbortSignal): Promise<string> {
   const response = await fetch(new URL("/api/auth/login", origin), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ password: ownerPassword }),
+    ...(signal ? { signal } : {}),
   });
   expect(response.status).toBe(204);
   return response.headers.get("set-cookie")!.split(";", 1)[0]!;
