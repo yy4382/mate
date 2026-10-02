@@ -39,27 +39,11 @@ sh deploy/node/tests/uninstall-smoke.sh ARCHIVE BOOTSTRAP SHA256 VERSION PEER_MJ
 
 `PEER_MJS` 是交付测试目录中的 `user-service-peer.mjs`；`UPDATE_CUT_MJS` 是 `update-cut.mjs`。包验证覆盖获取/校验/平台/原生依赖、目录权限与冲突；用户服务覆盖真实安装、拒绝令牌后原身份重试、日志、重复安装、停止/禁用、异常重启和缺 manager。更新与卸载通过外部文件/进程观察器对真实 CLI 发信号，在入口、安装、单元、reload、修复清理或卸载之间中断；观察不到实际中断就失败。预检错误保留旧安装，并发 Mate 管理拒绝，混合版本不能假报正常，保留配置/身份/数据，重装沿用原身份。具体边界见 [完整包](NODE_BUNDLE.md)、[用户服务](NODE_SERVICE.md)、[更新](NODE_UPDATE.md)及[卸载](NODE_UNINSTALL.md)。慢速架构模拟更新观察可设置 `MATE_TEST_CUT_TIMEOUT_SECONDS=600`，不改变通过条件。
 
-预配置 Linger=yes 的真实宿主/VM 另有三阶段只读观察入口。首先由 Mate 的普通账号安装并 enable/start 服务，让 node 空闲、身份文件已存在。观察命令由该账号登录会话之外的已有 VM supervisor 执行；开机后观察需要它已有的系统 journal 完整读取权限，不执行 root Mate CLI，不新建账号或权限。以下每步中的路径是同一份 VM 外部观察文件，必须随 VM 重启保留：
-
-```sh
-# 普通 Mate 账号仍登录时；observer 本身不能使用该账号。
-sh deploy/node/tests/linger-smoke.sh before-logout 1000 /home/ubuntu \
-  /home/ubuntu/.local/share/mate/node/node-identity.json /private-observer/linger-facts
-# 操作者关闭该账号全部现有登录会话，再从已有外部 supervisor 执行。
-sh deploy/node/tests/linger-smoke.sh after-logout 1000 /home/ubuntu \
-  /home/ubuntu/.local/share/mate/node/node-identity.json /private-observer/linger-facts
-# 操作者在已授权隔离环境重启 VM；在任何 Mate 账号登录之前，supervisor 执行。
-sh deploy/node/tests/linger-smoke.sh after-boot 1000 /home/ubuntu \
-  /home/ubuntu/.local/share/mate/node/node-identity.json /private-observer/linger-facts
-```
-
-观察器拒绝容器、Linger=no、同账号观察和当前仍有 owner 会话的情况；注销后要求原 manager/node 的 PID 与进程启动时钟均未改变。开机后要求 boot ID 变化、已有 enabled 单元的 cgroup 内存在该账号的专用 node 进程，并核对原单元/身份 hash；还读取本次 boot 的完整 logind journal，拒绝 owner 曾登录再注销后才观察的情况。systemd [255](https://github.com/systemd/systemd/blob/v255/src/login/logind-session.c#L734) 与 [257](https://github.com/systemd/systemd/blob/v257/src/login/logind-session.c#L794) 的会话日志都带用户名 `USER_ID` 和 `SESSION_ID`，检查使用这些字段，不靠当前会话列表为空冒充未登录。脚本不注销会话、重启 VM、启动 user manager 或配置 linger；缺环境权限/证据就失败，不能填写通过。
-
 联通脚本另用镜像内 SQLite 创建 schema revision 999 的合成外部控制面数据库，实际生产入口拒绝后核对数据库 SHA-256 未改变；现有 `pnpm check` 还覆盖格式/结构错误持久化边界。包装工具不迁移数据库、重建身份或重放未知副作用。包装矩阵不是 A 的深层 runtime 故障矩阵替代品。
 
 ## 本轮验收来源与发布缺口
 
-下表是绑定被测 source 和版本的历史验收证据，不代表任意后续 HEAD。详细运行记录、首次失败、修复与复验结果以 [#138](https://github.com/yy4382/mate/issues/138)、[更新 #136](https://github.com/yy4382/mate/issues/136)、[卸载 #137](https://github.com/yy4382/mate/issues/137) 和[草稿 PR #153](https://github.com/yy4382/mate/pull/153) 为准。`PASS` 必须来自脚本完成且进程退出 0，早期输出或产物生成不算通过。本轮没有实际 VPS、Release 或 GHCR 发布。
+下表是绑定被测 source 和版本的历史验收证据，不代表任意后续 HEAD。详细运行记录、首次失败、修复与复验结果以 [#138](https://github.com/yy4382/mate/issues/138)、[更新 #136](https://github.com/yy4382/mate/issues/136)、[卸载 #137](https://github.com/yy4382/mate/issues/137) 和[PR #153](https://github.com/yy4382/mate/pull/153) 为准。`PASS` 必须来自脚本完成且进程退出 0，早期输出或产物生成不算通过。本轮没有实际 VPS、Release 或 GHCR 发布。
 
 | 实际环境 | 已执行项目与来源 | 结果范围 |
 | --- | --- | --- |
@@ -83,7 +67,7 @@ sh deploy/node/tests/linger-smoke.sh after-boot 1000 /home/ubuntu \
 | Ubuntu 24.04 x86_64，QEMU TCG 架构模拟，UID/GID 1000，systemd 255，Linger=no | source `67ed17b0`，完整演练 PASS / exit 0 | source `e11196b3`，完整演练 PASS / exit 0 |
 | Debian 13 x86_64，QEMU TCG 架构模拟，UID/GID 1000，systemd 257，Linger=no | source `e11196b3`，首次 FAIL / exit 1；从原失败状态接续尾部 RECOVERY_PASS / exit 0，范围见下文 | source `e11196b3`，完整演练 PASS / exit 0 |
 
-Debian x86_64 更新首次在同版本损坏程序恢复阶段，因读取有效 `ExecStartEx` 的子进程达到原有 10 秒截止而报 `ETIMEDOUT`，原因未确定；首次失败保留，不能称四组合首次全部通过。接续验收使用原失败磁盘的新 overlay，原磁盘大小、mtime 和 SHA-256 前后均未改变；核对原 `data.before` 和外部完整包的全文件清单后，以原 CLI 对原合成包执行一次真实重试。完整安装、原生依赖、入口及单元引用、修复备份清理、原配置和数据哈希、显式 start/stop 均通过。预登录 fixture 临时移走并恢复原 Mate 单元的 enablement 链接以防自动启动，这是测试准备，不是 Mate 的恢复行为；只读诊断成功也不代替该接续验收。详细失败及接续链见 [#136](https://github.com/yy4382/mate/issues/136) 和[草稿 PR #153](https://github.com/yy4382/mate/pull/153)。
+Debian x86_64 更新首次在同版本损坏程序恢复阶段，因读取有效 `ExecStartEx` 的子进程达到原有 10 秒截止而报 `ETIMEDOUT`，原因未确定；首次失败保留，不能称四组合首次全部通过。接续验收使用原失败磁盘的新 overlay，原磁盘大小、mtime 和 SHA-256 前后均未改变；核对原 `data.before` 和外部完整包的全文件清单后，以原 CLI 对原合成包执行一次真实重试。完整安装、原生依赖、入口及单元引用、修复备份清理、原配置和数据哈希、显式 start/stop 均通过。预登录 fixture 临时移走并恢复原 Mate 单元的 enablement 链接以防自动启动，这是测试准备，不是 Mate 的恢复行为；只读诊断成功也不代替该接续验收。详细失败及接续链见 [#136](https://github.com/yy4382/mate/issues/136) 和[PR #153](https://github.com/yy4382/mate/pull/153)。
 
 | 验收用途 | 基础版本 / 架构 | 压缩包 SHA-256 | 绑定来源 |
 | --- | --- | --- | --- |
@@ -103,6 +87,6 @@ Debian x86_64 更新首次在同版本损坏程序恢复阶段，因读取有效
 
 #133 历史 arm64 镜像为 `mate-control-plane:ticket133`，发布版本 `0.1.0-ticket133`，revision `0bf1179e73155410b0309b8d85f6b5e756f2d255`，image ID `sha256:c3d59820a5f33b15f7ca6500f8b69ad3a29ad80e76b35f43abf6e6d4a83586d6`，镜像体积 372867138 字节；[票据证据](https://github.com/yy4382/mate/issues/133#issuecomment-5946788178) 明确使用的是开发 node 接口，而非同版完整包联通。因此它只证明该历史来源和范围，不替代上述原生同版完整交付验收。
 
-本轮上述 source 的四个真实 user-manager VM 均为 Linger=no；没有预配置 Linger=yes 的真实宿主/VM 注销和开机证据。这两项未验收，不能据上述成功宣称完整发布矩阵通过。Mate 不为填表擅自配置 linger；新登录启动 manager 不能冒充开机自动运行。
+本轮上述 source 的四个真实 user-manager VM 均为 Linger=no；未执行 Linger=yes 注销及开机测试。用户已取消这两项强制验收，相关观察入口已移除；取消不表示测试通过。用户服务 enable 与用户自行配置 linger 的运行边界仍见[用户服务说明](NODE_SERVICE.md)。
 
 本轮未验证真实模型 provider 的传输兼容、公开 HTTPS/WSS/Web Push、实际私有 Release 下载、GHCR 获取或 VPS 部署。脚本化 provider、获取替身和本地构建证据均保留各自名称，不能据此推导这些集成已经验收或收缩原矩阵。

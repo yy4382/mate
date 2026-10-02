@@ -621,7 +621,7 @@ try {
     "PASS: delivered image + production Compose + complete node runtime; owner API, real WebSocket/Pi/persistence, same-account commands/files, node-published attachment, replacement, original IDs/tasks/session/workspace, password-free recreation",
   );
   console.log(
-    "NOT RUN: real provider, HTTPS/Web Push, user-service lifecycle, linger logout/boot, VPS deployment; Docker-daemon policy is a separate isolated-host command",
+    "NOT RUN: real provider, HTTPS/Web Push, user-service lifecycle, VPS deployment; Docker-daemon policy is a separate isolated-host command",
   );
 } finally {
   await cleanup();
