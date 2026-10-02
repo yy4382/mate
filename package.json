@@ -31,7 +31,8 @@
     "cleanup:scenarios": "node apps/control-plane/tests/helpers/scenario-cleanup.mjs",
     "build:image:control-plane": "node deploy/control-plane/build.mjs",
     "test:image:control-plane": "node deploy/control-plane/verify.mjs",
-    "test:container-scenarios": "pnpm build && node apps/control-plane/tests/container/run.mjs"
+    "test:container-scenarios": "pnpm build && node apps/control-plane/tests/container/run.mjs",
+    "prompt:inspect": "node apps/control-plane/dist/prompts/inspect.js"
   },
   "devDependencies": {
     "prettier": "3.9.9",

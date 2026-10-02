@@ -159,6 +159,29 @@ pnpm test:linux-ordinary-command-failure
 
 Pi 当前的 Google SDK 适配器不开放响应体截取，并把未报告的字段归一成零。Mate 对这一路径只将 Pi 返回的正值视为已报告；归一化零仍显示为未知，不能据此声称 Google 的缓存命中率为 0%。
 
+## 提示词构建与本地诊断
+
+提示词统一入口为 `apps/control-plane/src/prompts/index.ts`。`system.ts` 按固定顺序构建普通 Agent 系统提示：前三段来自本次 run 的 profile（name、role、description），其余段为固定约定；每段与原文一起声明源码位置和启用条件。`runtime.ts` 单独构建输入来源、忙时通知、运行/上下文恢复、收据更正和摘要回填的用户消息。`summary.ts` 只构建一次性摘要请求（初始、更新、长轮次前缀），将历史转为临时文本，不提供工作工具。调用方仍负责调度、容量判断、持久提交和恢复。
+
+先构建，然后查看来源、顺序、角色及启用条件；默认不输出正文，不读运行目录、数据库或环境凭据：
+
+```sh
+pnpm build:control-plane
+pnpm prompt:inspect
+pnpm prompt:inspect --show-content
+```
+
+`--show-content` 在没有快照参数时仅显示合成 profile 的最终 system prompt 和逐段文本，与 AgentLoop 使用同一构建函数。真实运行的完整 system prompt 和工具 schema 仍由现有 configuration 会话记录保存，不另建配置或复制 schema。需要核对某次运行时，将那一条记录的 `payload_json`（或其中的 `configuration` 对象）保存到自己控制的私密 JSON 文件，再显式指定：
+
+```sh
+pnpm prompt:inspect --snapshot /ABSOLUTE/private/configuration.json
+pnpm prompt:inspect --snapshot /ABSOLUTE/private/configuration.json --show-content
+```
+
+快照默认仅报告类型、工具数量及来源可用性；加 `--show-content` 才显示该快照原有的最终 system prompt 和工具 schema。它们可能包含私密 profile 或描述，输出和快照都不应提交到 Git。诊断不输出快照中无关字段或凭据字段，失败也不回显文件名或输入内容。现有快照没有分段来源，诊断会标记 `unavailable-in-snapshot`，不会用今天的模板冒充历史来源；当前源码的来源清单用不带 `--snapshot` 的命令查看。
+
+`prompt-characterization.test.ts` 的快照冻结于重构前实现 `b0dfb0dc`，使用合成数据核对普通请求/配置、恢复通知、三类摘要请求及恢复后上下文顺序。它是保持旧输出的回归基线；重构时不要用更新快照来消除差异。注意力选择、压缩失败/中断和持久恢复仍由现有集成测试覆盖。
+
 ## 所有者主动检查真实模型供应商
 
 `pnpm check:provider` 是独立的主动检查入口。它不会由 `pnpm check`、PR/main CI 或定时任务调用。先运行 `pnpm build`，再用 `pnpm check:provider --list` 选择 Mate 已支持的 provider/model。所有者自行准备只有自己可读的 API key 文件（例如权限 `600`），显式指定后才会请求供应商；不会读取 Mate 数据库或环境变量中的 API key。未指定文件、文件为空或不可读时记为 `unverified`（未验证），不阻塞其它开发。
