@@ -10,6 +10,8 @@
     "build": "pnpm -r run build",
     "build:protocol": "pnpm --filter @mate/protocol run build",
     "build:node": "pnpm --filter @mate/node... run build",
+    "build:bundle:node": "sh deploy/node/build-bundle.sh",
+    "test:bundle:node": "sh deploy/node/tests/run-container-smoke.sh",
     "build:web": "pnpm --filter @mate/web run build",
     "build:control-plane": "pnpm --filter @mate/control-plane... run build",
     "typecheck": "pnpm run build && pnpm -r run typecheck",
