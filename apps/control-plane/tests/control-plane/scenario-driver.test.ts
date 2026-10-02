@@ -1,0 +1,534 @@
+import { expect, it } from "vitest";
+import { createScenarioEnvironment } from "../helpers/scenario-environment.js";
+import {
+  createScenarioDriver,
+  ScenarioWaitError,
+  waitForScenario,
+} from "../helpers/scenario-driver.js";
+import { createScriptedProvider, type ScriptedRequest } from "../helpers/scripted-provider.js";
+import {
+  attachmentSummarySchema,
+  ownerChatSnapshotSchema,
+  ownerMessageSchema,
+  ownerReminderSchema,
+  ownerTaskSchema,
+} from "@mate/protocol/owner";
+import { scriptedToolResultSchemas } from "../helpers/scripted-tool-results.js";
+import { z } from "zod";
+import { loopFixture, respond } from "../helpers/agent-loop.js";
+import { readMessageRuns } from "../helpers/scenario-facts.js";
+
+const expectedReport = "输入：2,4,6\n总计：12\n";
+
+it("does not backfill an original batch's uncommitted message from a future recovery run", async () => {
+  const fixture = await loopFixture(
+    (_request, response) => respond(response, "恢复同批消息后结束。"),
+    ", beforeSessionCommit: async entry => { if (entry.kind === 'message' && entry.message.role === 'user' && typeof entry.message.content === 'string' && entry.message.content.includes('B 在提交前中断')) { console.log('MATE_SCENARIO_SECOND_INPUT_PENDING'); await new Promise(() => {}); } }",
+  );
+  try {
+    const agent = await fixture.agent("同批未提交");
+    await fixture.stopNode();
+    const first = ownerMessageSchema.parse(
+      await fixture.send(agent.channelId, "A 已确认的原始输入。"),
+    );
+    const second = ownerMessageSchema.parse(
+      await fixture.send(agent.channelId, "B 在提交前中断。"),
+    );
+    await fixture.reconnectNode();
+    await fixture.control.waitFor(/MATE_SCENARIO_SECOND_INPUT_PENDING/);
+    expect(fixture.requests).toEqual([]);
+    const original = readMessageRuns(fixture.directory, agent.id, first.id)[0];
+    if (!original) throw new Error("Expected original seed run");
+    expect(readMessageRuns(fixture.directory, agent.id, second.id)).toEqual([]);
+    const oldControl = fixture.control;
+    await fixture.restartControl();
+    expect(oldControl.exitStatus?.signal).toBe("SIGKILL");
+    const runs = await waitForScenario(
+      "confirmed second input in recovery run",
+      () => readMessageRuns(fixture.directory, agent.id, second.id),
+      (facts) => facts.some((run) => run.state === "completed"),
+    );
+    expect(runs.map((run) => run.id)).not.toContain(original.id);
+    expect(runs).toEqual([
+      expect.objectContaining({
+        state: "completed",
+        sessionId: original.sessionId,
+        messageIds: [first.id, second.id],
+      }),
+    ]);
+    expect(fixture.requests).toHaveLength(1);
+    expect(JSON.stringify(fixture.requests[0])).toContain("A 已确认的原始输入。");
+    expect(JSON.stringify(fixture.requests[0])).toContain("B 在提交前中断。");
+  } finally {
+    await fixture.close();
+  }
+}, 30_000);
+
+it("does not backfill a later retry's new message into the original failed run", async () => {
+  const provider = createScriptedProvider();
+  const environment = await createScenarioEnvironment({
+    agents: [{ name: "重试关联" }],
+    provider: provider.handle,
+  });
+  environment.registerCleanup("scripted provider", () => provider.close());
+  try {
+    const agent = environment.agents[0];
+    if (!agent) throw new Error("Expected prepared Agent");
+    const driver = createScenarioDriver(environment);
+    provider.forAgent(agent, [
+      function originalSeed(request: ScriptedRequest) {
+        request.expectCancellation("Owner pause before the later input");
+      },
+      function expandedRetry(_request: ScriptedRequest) {},
+    ]);
+    const observation = await driver.observe(agent);
+    const seed = await driver.sendOwnerMessage(agent, "先处理种子 A。");
+    const pending = await provider.waitFor(agent.summary.id, "originalSeed");
+    const original = await driver.waitForRun(seed, "running");
+    const message = ownerMessageSchema.parse(
+      await (
+        await environment.request(`/api/owner/channels/${agent.channelId}/messages`, {
+          method: "POST",
+          body: { text: "后来才加入的 B。" },
+        })
+      ).json(),
+    );
+    const target = { ...observation, message };
+    expect(JSON.stringify(pending.payload.input)).not.toContain("后来才加入的 B。");
+    await environment.request(`/api/owner/agents/${agent.summary.id}/pause`, { method: "POST" });
+    expect(await pending.outcome).toEqual({
+      kind: "cancelled",
+      reason: "Owner pause before the later input",
+    });
+    expect((await driver.waitForRun({ ...seed, runId: original.id }, "failed")).id).toBe(
+      original.id,
+    );
+    await environment.request(`/api/owner/agents/${agent.summary.id}/resume`, { method: "POST" });
+    const retry = await provider.waitFor(agent.summary.id, "expandedRetry");
+    expect(JSON.stringify(retry.payload.input)).toContain("后来才加入的 B。");
+    expect(retry.sessionId).toBe(pending.sessionId);
+    await expect(driver.waitForRun(target, "failed", { timeoutMs: 100 })).rejects.toBeInstanceOf(
+      ScenarioWaitError,
+    );
+    expect(
+      readMessageRuns(environment.directory, agent.summary.id, message.id).map((run) => run.id),
+    ).not.toContain(original.id);
+    const current = await driver.waitForRun(target, "running");
+    expect(current.id).not.toBe(original.id);
+    retry.text("重试处理 A 和 B 后结束。");
+    expect((await driver.waitForRun(target, "completed")).id).toBe(current.id);
+    await provider.assertComplete();
+  } finally {
+    expect((await environment.close()).failures).toEqual([]);
+  }
+}, 30_000);
+
+it("retains the actual seed association before input commit and across control-plane recovery", async () => {
+  const fixture = await loopFixture(
+    (_request, response) => respond(response, "恢复轮结束。"),
+    ", beforeSessionCommit: async entry => { if (entry.kind === 'message' && entry.message.role === 'user') { console.log('MATE_SCENARIO_INPUT_PENDING'); await new Promise(() => {}); } }",
+  );
+  try {
+    const agent = await fixture.agent("未提交输入");
+    const message = ownerMessageSchema.parse(
+      await fixture.send(agent.channelId, "在原 session 恢复本消息。"),
+    );
+    await fixture.control.waitFor(/MATE_SCENARIO_INPUT_PENDING/);
+    expect(fixture.requests).toEqual([]);
+    const seed = readMessageRuns(fixture.directory, agent.id, message.id)[0];
+    if (!seed) throw new Error("Expected admitted seed run before its input commit");
+    expect(seed).toMatchObject({ state: "running", messageIds: [message.id] });
+    const oldControl = fixture.control;
+    await fixture.restartControl();
+    expect(oldControl.exitStatus?.signal).toBe("SIGKILL");
+    const runs = await waitForScenario(
+      "same message's recovered seed run completed",
+      () => readMessageRuns(fixture.directory, agent.id, message.id),
+      (facts) => facts.some((run) => run.id !== seed.id && run.state === "completed"),
+    );
+    expect(runs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: seed.id,
+          state: "failed",
+          errorCode: "interrupted",
+          sessionId: seed.sessionId,
+          messageIds: [message.id],
+        }),
+        expect.objectContaining({
+          state: "completed",
+          sessionId: seed.sessionId,
+          messageIds: [message.id],
+        }),
+      ]),
+    );
+    expect(fixture.requests).toHaveLength(1);
+    expect(JSON.stringify(fixture.requests[0])).toContain("在原 session 恢复本消息。");
+  } finally {
+    await fixture.close();
+  }
+}, 30_000);
+
+it("does not assign a queued ordinary Owner message to a reminder-only run with an overlapping sequence range", async () => {
+  const provider = createScriptedProvider();
+  const environment = await createScenarioEnvironment({
+    agents: [{ name: "提醒关联" }],
+    provider: provider.handle,
+  });
+  environment.registerCleanup("scripted provider", () => provider.close());
+  try {
+    const agent = environment.agents[0];
+    if (!agent) throw new Error("Expected prepared Agent");
+    const driver = createScenarioDriver(environment);
+    provider.forAgent(agent, [
+      function scheduleReminder(request: ScriptedRequest) {
+        request.call("reminders.create", {
+          conversationId: agent.channelId,
+          text: "只处理到期提醒",
+          dueAt: Date.now() + 1500,
+        });
+      },
+      function finishPreparation(request: ScriptedRequest) {
+        expect(request.result("reminders.create", ownerReminderSchema).state).toBe("active");
+        request.text("已设置合成提醒。");
+      },
+      function reminderOnly(_request: ScriptedRequest) {},
+      function ordinaryWork(_request: ScriptedRequest) {},
+    ]);
+    const setup = await driver.sendOwnerMessage(agent, "请设置合成提醒。");
+    await driver.waitForRun(setup, "completed");
+    await environment.request(`/api/owner/agents/${agent.summary.id}/pause`, { method: "POST" });
+    await waitForScenario(
+      "actual reminder fired while manually paused",
+      async (signal) =>
+        z.object({ reminders: z.array(ownerReminderSchema) }).parse(
+          await (
+            await environment.request(`/api/owner/agents/${agent.summary.id}/reminders`, {
+              signal,
+            })
+          ).json(),
+        ),
+      (facts) => facts.reminders.some((reminder) => reminder.state === "fired"),
+    );
+    const work = await driver.sendOwnerMessage(agent, "普通工作仍待处理。");
+    await environment.request(`/api/owner/agents/${agent.summary.id}/resume`, { method: "POST" });
+    const reminder = await provider.waitFor(agent.summary.id, "reminderOnly");
+    expect(JSON.stringify(reminder.payload.input)).toContain("只处理到期提醒");
+    expect(JSON.stringify(reminder.payload.input)).not.toContain("普通工作仍待处理。");
+    const started = (await driver.activity(agent.summary.id, work.afterActivity)).find(
+      (event) => event.kind === "run.started",
+    );
+    if (!started?.referenceId) throw new Error("Expected actual reminder run ID");
+    reminder.text("提醒轮结束。");
+    const ordinary = await provider.waitFor(agent.summary.id, "ordinaryWork");
+    expect(JSON.stringify(ordinary.payload.input)).toContain("普通工作仍待处理。");
+    await waitForScenario(
+      "reminder run completed in Owner activity",
+      (signal) => driver.activity(agent.summary.id, work.afterActivity, signal),
+      (events) =>
+        events.some(
+          (event) => event.kind === "run.completed" && event.referenceId === started.referenceId,
+        ),
+    );
+    await expect(driver.waitForRun(work, "completed", { timeoutMs: 100 })).rejects.toBeInstanceOf(
+      ScenarioWaitError,
+    );
+    const running = await driver.waitForRun(work, "running");
+    expect(running.id).not.toBe(started.referenceId);
+    ordinary.text("普通消息对应轮结束。");
+    expect((await driver.waitForRun(work, "completed")).id).toBe(running.id);
+    await provider.assertComplete();
+  } finally {
+    expect((await environment.close()).failures).toEqual([]);
+  }
+}, 30_000);
+
+it("waits for this message's new run after its activity cursor instead of an old completed run", async () => {
+  const provider = createScriptedProvider();
+  const environment = await createScenarioEnvironment({
+    agents: [{ name: "关联等待" }],
+    provider: provider.handle,
+  });
+  environment.registerCleanup("scripted provider", () => provider.close());
+  try {
+    const agent = environment.agents[0];
+    if (!agent) throw new Error("Expected prepared Agent");
+    const driver = createScenarioDriver(environment);
+    provider.forAgent(agent, [
+      function oldRun(request: ScriptedRequest) {
+        request.text("旧轮结束。");
+      },
+      function newRun(_request: ScriptedRequest) {},
+    ]);
+    const firstMessage = await driver.sendOwnerMessage(agent, "先完成旧轮。");
+    const first = await driver.waitForRun(firstMessage, "completed");
+    const secondMessage = await driver.sendOwnerMessage(agent, "开启本次新轮。");
+    const pending = await provider.waitFor(agent.summary.id, "newRun");
+    const second = await driver.waitForRun(secondMessage, "running");
+    expect(second.id).not.toBe(first.id);
+    expect(second.sessionId).toBe(first.sessionId);
+    expect(second.messageIds).toContain(secondMessage.message.id);
+    expect(second.messageIds).not.toContain(firstMessage.message.id);
+    const failure = await driver
+      .waitForRun(secondMessage, "completed", { timeoutMs: 100 })
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ScenarioWaitError);
+    if (!(failure instanceof ScenarioWaitError)) throw new Error("Expected bounded wait failure");
+    expect(failure.message).toContain(secondMessage.message.id);
+    expect(failure.lastFacts).toMatchObject({
+      runs: [expect.objectContaining({ id: second.id, state: "running" })],
+    });
+    await expect(
+      driver.waitForRun({ ...secondMessage, message: firstMessage.message }, "completed", {
+        timeoutMs: 100,
+      }),
+    ).rejects.toMatchObject({
+      lastFacts: { runs: [expect.objectContaining({ id: first.id, state: "completed" })] },
+    });
+    const cancellation = new Error("this scenario was cancelled");
+    await expect(
+      driver.waitForRun(secondMessage, "completed", { signal: AbortSignal.abort(cancellation) }),
+    ).rejects.toMatchObject({ cause: cancellation });
+    pending.text("新轮结束。");
+    expect((await driver.waitForRun({ ...secondMessage, runId: second.id }, "completed")).id).toBe(
+      second.id,
+    );
+    await expect(
+      driver.waitForRun({ ...secondMessage, runId: first.id }, "completed", { timeoutMs: 100 }),
+    ).rejects.toBeInstanceOf(ScenarioWaitError);
+    await provider.assertComplete();
+  } finally {
+    expect((await environment.close()).failures).toEqual([]);
+  }
+}, 30_000);
+
+it("bounds an observer stalled on a real Owner event stream and keeps its last completed observation", async () => {
+  const provider = createScriptedProvider();
+  const environment = await createScenarioEnvironment({ provider: provider.handle });
+  environment.registerCleanup("scripted provider", () => provider.close());
+  try {
+    let cursor: number | undefined;
+    const failure = await waitForScenario(
+      "empty Owner event stream",
+      async (signal) => {
+        if (cursor === undefined) {
+          const snapshot = ownerChatSnapshotSchema.parse(
+            await (await environment.request("/api/owner/snapshot", { signal })).json(),
+          );
+          cursor = snapshot.cursor;
+          return { cursor };
+        }
+        await (await environment.request(`/api/owner/events?cursor=${cursor}`, { signal })).text();
+        return { cursor };
+      },
+      () => false,
+      { timeoutMs: 100 },
+    ).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ScenarioWaitError);
+    if (!(failure instanceof ScenarioWaitError))
+      throw new Error("Expected bounded observer failure");
+    expect(failure.lastFacts).toEqual({ cursor });
+    expect(failure.message).toContain("empty Owner event stream");
+    await provider.assertComplete();
+  } finally {
+    expect((await environment.close()).failures).toEqual([]);
+  }
+}, 30_000);
+
+it("delivers a short single-Agent report through a new Owner message, claimed task, real file and explicit reply", async () => {
+  const provider = createScriptedProvider();
+  const environment = await createScenarioEnvironment({
+    agents: [{ name: "报告同事" }],
+    provider: provider.handle,
+  });
+  environment.registerCleanup("scripted provider", () => provider.close());
+  try {
+    const agent = environment.agents[0];
+    if (!agent) throw new Error("Expected prepared Agent");
+    const driver = createScenarioDriver(environment);
+    let messageId = "",
+      taskId = "",
+      attachmentId = "",
+      replyId = "";
+    provider.forAgent(agent, [
+      function finishOldRun(request: ScriptedRequest) {
+        request.text("旧轮只是内部正文。");
+      },
+      function readWork(request: ScriptedRequest) {
+        expect(JSON.stringify(request.payload.input)).toContain("先完成旧轮。");
+        request.call("conversations.read", { conversationId: agent.channelId });
+      },
+      function createTask(request: ScriptedRequest) {
+        const message = request
+          .result("conversations.read", scriptedToolResultSchemas["conversations.read"])
+          .messages.find((candidate) => candidate.text === "请生成 2、4、6 的报告。");
+        if (!message) throw new Error("Expected actual new Owner message");
+        messageId = message.id;
+        expect(message.author).toEqual({ kind: "human", id: "owner" });
+        request.call("tasks.create", { messageId, title: "三条合成数值报告" });
+      },
+      function claimTask(request: ScriptedRequest) {
+        const task = request.result("tasks.create", scriptedToolResultSchemas["tasks.create"]).task;
+        taskId = task.id;
+        expect(task.messageId).toBe(messageId);
+        request.call("tasks.claim", { taskId, expectedVersion: task.version });
+      },
+      function generateReport(request: ScriptedRequest) {
+        const task = request.result("tasks.claim", scriptedToolResultSchemas["tasks.claim"]);
+        expect(task).toMatchObject({ ownerAgentId: agent.summary.id, status: "in_progress" });
+        request.call("process.exec", {
+          command: `printf '2\\n4\\n6\\n' > values.txt; awk '{sum += $1} END {printf "输入：2,4,6\\n总计：%d\\n", sum}' values.txt > report.txt; cat report.txt`,
+        });
+      },
+      function publishReport(request: ScriptedRequest) {
+        const result = request.result("process.exec", scriptedToolResultSchemas["process.exec"]);
+        expect(result).toMatchObject({
+          state: "succeeded",
+          receipt: { code: 0, stdout: expectedReport },
+        });
+        request.call("attachments.publish", {
+          conversationId: agent.channelId,
+          path: "report.txt",
+        });
+      },
+      function replyToOwner(request: ScriptedRequest) {
+        const attachment = request.result("attachments.publish", attachmentSummarySchema);
+        attachmentId = attachment.id;
+        expect(attachment.channelId).toBe(agent.channelId);
+        request.call("messages.send", {
+          conversationId: agent.channelId,
+          rootId: messageId,
+          text: `报告已交付：${attachmentId}`,
+        });
+      },
+      function completeTask(request: ScriptedRequest) {
+        const reply = request.result("messages.send", ownerMessageSchema);
+        replyId = reply.id;
+        expect(reply).toMatchObject({
+          channelId: agent.channelId,
+          rootId: messageId,
+          author: { kind: "agent", id: agent.summary.id },
+        });
+        const task = request.result("tasks.claim", scriptedToolResultSchemas["tasks.claim"]);
+        request.call("tasks.update", { taskId, expectedVersion: task.version, status: "done" });
+      },
+      function finishNewRun(request: ScriptedRequest) {
+        expect(request.result("tasks.update", ownerTaskSchema)).toMatchObject({
+          id: taskId,
+          status: "done",
+        });
+        request.text("新轮内部正文结束。");
+      },
+    ]);
+    const firstMessage = await driver.sendOwnerMessage(agent, "先完成旧轮。");
+    const firstRun = await driver.waitForRun(firstMessage, "completed");
+    expect(await driver.messages(agent.channelId)).toHaveLength(1);
+    const work = await driver.sendOwnerMessage(agent, "请生成 2、4、6 的报告。");
+    const secondRun = await driver.waitForRun(work, "completed");
+    expect(secondRun.id).not.toBe(firstRun.id);
+    expect(secondRun.sessionId).toBe(agent.summary.sessionId);
+    expect(messageId).toBe(work.message.id);
+    const task = await driver.waitForTask({
+      id: taskId,
+      messageId,
+      channelId: agent.channelId,
+      ownerAgentId: agent.summary.id,
+      status: "done",
+    });
+    expect(task.version).toBe(3);
+    await expect(
+      driver.waitForTask({ ...task, ownerAgentId: null }, { timeoutMs: 100 }),
+    ).rejects.toBeInstanceOf(ScenarioWaitError);
+    const reply = await driver.waitForMessage({
+      id: replyId,
+      channelId: agent.channelId,
+      rootId: messageId,
+      author: { kind: "agent", id: agent.summary.id },
+      text: `报告已交付：${attachmentId}`,
+    });
+    expect(reply.id).not.toBe(work.message.id);
+    await expect(
+      driver.waitForMessage(
+        { ...reply, author: { kind: "human", id: "owner" } },
+        { timeoutMs: 100 },
+      ),
+    ).rejects.toBeInstanceOf(ScenarioWaitError);
+    expect((await driver.thread(agent.channelId, messageId)).replies).toEqual([reply]);
+    expect((await driver.messages(agent.channelId)).map((message) => message.text)).toEqual([
+      "先完成旧轮。",
+      "请生成 2、4、6 的报告。",
+    ]);
+    await driver.assertAttachment({
+      agent,
+      channelId: agent.channelId,
+      attachmentId,
+      path: "report.txt",
+      expectedBytes: Buffer.from(expectedReport),
+    });
+    await provider.assertComplete();
+  } finally {
+    expect((await environment.close()).failures).toEqual([]);
+  }
+}, 30_000);
+
+it("observes run completion while its explicitly claimed task remains in progress", async () => {
+  const provider = createScriptedProvider();
+  const environment = await createScenarioEnvironment({
+    agents: [{ name: "保留任务" }],
+    provider: provider.handle,
+  });
+  environment.registerCleanup("scripted provider", () => provider.close());
+  try {
+    const agent = environment.agents[0];
+    if (!agent) throw new Error("Expected prepared Agent");
+    const driver = createScenarioDriver(environment);
+    let taskId = "";
+    provider.forAgent(agent, [
+      function readOwner(request: ScriptedRequest) {
+        request.call("conversations.read", { conversationId: agent.channelId });
+      },
+      function createWork(request: ScriptedRequest) {
+        const message = request.result(
+          "conversations.read",
+          scriptedToolResultSchemas["conversations.read"],
+        ).messages[0];
+        if (!message) throw new Error("Expected real Owner input");
+        request.call("tasks.create", { messageId: message.id, title: "稍后继续的工作" });
+      },
+      function claimWork(request: ScriptedRequest) {
+        const task = request.result("tasks.create", scriptedToolResultSchemas["tasks.create"]).task;
+        taskId = task.id;
+        request.call("tasks.claim", { taskId, expectedVersion: task.version });
+      },
+      function endRun(request: ScriptedRequest) {
+        expect(request.result("tasks.claim", scriptedToolResultSchemas["tasks.claim"]).status).toBe(
+          "in_progress",
+        );
+        request.text("本轮结束，工作留待继续。");
+      },
+    ]);
+    const work = await driver.sendOwnerMessage(agent, "认领后稍后继续。");
+    await driver.waitForRun(work, "completed");
+    const target = {
+      id: taskId,
+      messageId: work.message.id,
+      channelId: agent.channelId,
+      ownerAgentId: agent.summary.id,
+    };
+    const failure = await driver
+      .waitForTask({ ...target, status: "done" }, { timeoutMs: 100 })
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ScenarioWaitError);
+    if (!(failure instanceof ScenarioWaitError)) throw new Error("Expected task wait failure");
+    expect(failure.lastFacts).toEqual([
+      expect.objectContaining({ id: taskId, status: "in_progress" }),
+    ]);
+    expect((await driver.waitForTask({ ...target, status: "in_progress" })).ownerAgentId).toBe(
+      agent.summary.id,
+    );
+    expect((await driver.thread(agent.channelId, work.message.id)).replies).toEqual([]);
+    await provider.assertComplete();
+  } finally {
+    expect((await environment.close()).failures).toEqual([]);
+  }
+}, 30_000);

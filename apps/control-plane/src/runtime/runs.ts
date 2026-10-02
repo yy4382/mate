@@ -1,3 +1,4 @@
+import { sourceMessage } from "../prompts/index.js";
 import { z } from "zod";
 import { queueUncertainOperationFacts } from "./recovery-context.js";
 import { AgentSession } from "./session/service.js";
@@ -800,11 +801,7 @@ export class AgentRunCoordinator {
         id: row.id,
         actionScopeId: run.delivery_id,
         pending: true,
-        message: {
-          role: "user" as const,
-          timestamp: row.created_at,
-          content: `[消息来源：频道 ${run.channel_id}；可见范围：${row.visibility === "public" ? "公开" : "私密"}；讨论串：${row.root_id ?? "无"}；引用：${row.quote_id ?? "无"}]\n${row.text}`,
-        },
+        message: sourceMessage(run.channel_id, row),
       })),
       // Append pending late-receipt corrections after the admitted input batch.
       ...new AgentSession(this.db).pendingCorrections(agentId, run.delivery_id),

@@ -410,6 +410,7 @@ interface TcpBlackholeProxy {
   applicationFramesDropped: number;
   closeFramesDropped: number;
   firstClientSocket: TcpSocket | undefined;
+  clientOpenAtControlPlaneExpiry: boolean | undefined;
   close(): Promise<void>;
 }
 
@@ -422,10 +423,12 @@ async function startTcpBlackholeProxy(targetPort: number): Promise<TcpBlackholeP
     applicationFramesDropped: 0,
     closeFramesDropped: 0,
     firstClientSocket: undefined,
+    clientOpenAtControlPlaneExpiry: undefined,
     close: async () => {},
   };
   const server = createTcpServer((clientSocket) => {
     stats.connections++;
+    const firstConnection = stats.connections === 1;
     stats.firstClientSocket ??= clientSocket;
     clientSockets.add(clientSocket);
     clientSocket.once("close", () => clientSockets.delete(clientSocket));
@@ -466,6 +469,8 @@ async function startTcpBlackholeProxy(targetPort: number): Promise<TcpBlackholeP
       if (!blackhole) upstream.destroy();
     });
     upstream.on("close", () => {
+      if (firstConnection && blackhole)
+        stats.clientOpenAtControlPlaneExpiry = !clientSocket.destroyed;
       if (!blackhole) clientSocket.destroy();
     });
   });
@@ -807,7 +812,9 @@ it("reclaims a blackholed WebSocket slot and reconnects the same node identity",
       (candidate) => candidate?.id === paired[1] && candidate?.online === false,
     );
     expect(offline.lastConnectedAt).toBeTruthy();
-    expect(proxy.firstClientSocket?.destroyed).toBe(false);
+    // Deliberately observe after the node's own deadline; the owner response may arrive late.
+    await node.waitFor(/Node WebSocket disconnected; reconnecting\./, 5000);
+    expect(proxy.clientOpenAtControlPlaneExpiry).toBe(true);
     expect(proxy.applicationFramesDropped).toBeGreaterThan(0);
 
     const droppedCloseDeadline = Date.now() + 3000;

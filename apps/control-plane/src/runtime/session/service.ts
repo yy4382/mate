@@ -1,3 +1,4 @@
+import { receiptCorrectionMessage } from "../../prompts/index.js";
 import { sessionCheckpointSchema } from "./record.js";
 import { type ModelContextMessage, type SessionCheckpoint, type SessionCommit } from "./record.js";
 import { durableToolIdentity } from "../tools/identity.js";
@@ -101,12 +102,7 @@ export class AgentSession {
           `INSERT OR IGNORE INTO owner_agent_session_updates(id,agent_id,message_json)
       SELECT ?,?,? WHERE NOT EXISTS (SELECT 1 FROM owner_agent_session_records WHERE id=?)`,
         )
-        .run(
-          id,
-          agentId,
-          JSON.stringify({ role: "user", content: `Mate 收据更正：${fact}`, timestamp }),
-          id,
-        ).changes > 0
+        .run(id, agentId, JSON.stringify(receiptCorrectionMessage(fact, timestamp)), id).changes > 0
     );
   }
 

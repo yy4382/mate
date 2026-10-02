@@ -1,5 +1,5 @@
 import type { AgentSummary } from "./agent-responses.js";
-import { useEffect, useState } from "react";
+import { useLayoutEffect, useState } from "react";
 import type {
   ModelCredentialSummary as ModelCredential,
   ModelProviderSummary as ModelProvider,
@@ -25,7 +25,8 @@ export function AgentEditor({
   const [modelId, setModelId] = useState(agent.model.id);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
+  // Synchronize refreshed settings before the form can receive owner input.
+  useLayoutEffect(() => {
     setName(agent.name);
     setRole(agent.role);
     setDescription(agent.description);
