@@ -24,7 +24,7 @@ const credentialAssignment = new RegExp(
 
 type Provider = ReturnType<typeof createScriptedProvider>;
 type Environment = Awaited<ReturnType<typeof createScenarioEnvironment>>;
-type ScenarioContext = {
+export type ScenarioContext = {
   evidenceDirectory: string;
   environment: Environment;
   driver: ReturnType<typeof createScenarioDriver>;

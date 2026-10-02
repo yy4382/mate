@@ -184,3 +184,60 @@ pnpm --filter @mate/control-plane exec vitest run tests/control-plane/scenario-e
 ```
 
 该文件覆盖短真实命令场景的断言失败、无法达到事件的超时、真实 SIGINT／SIGTERM、保存与单项释放同时失败、采集 API 停滞、半途启动失败、合成凭据排除，完整公共讨论串和 node 收据，以及杀死实际驱动后（包括运行目录已缺失）独立回收和再次运行。退出竞态回归用 `cc` 编译一个小型临时 holder，通过 `waitid(WNOWAIT)` 保留真实已退出 Node 的 PID，再验证回收器读取 `Z` 状态且不发送信号；另一个真实 Node 连接重试场景验证准备期间终止 holder 也终止并回收其直接子进程。测试失败保留首错、初始报告和路径，收尾错误单独报告；通过后删除本次临时文件。它只用本地脚本模型；macOS 结果是跨平台证据，不替代 Linux CI、真实 provider 或 VPS 验证。
+
+## 新增正常工作场景
+
+在 `apps/control-plane/tests/control-plane/` 新建普通 Vitest 测试，复用 `runScenario`；只写本场景的 Agent 配置、命名模型步骤、Owner 输入和成果断言。短单 Agent 样例可从 `scenario-evidence.test.ts` 的第一条真实报告测试开始，其核心用法如下（导入路径相对于这个测试目录）：
+
+```ts
+import assert from "node:assert/strict";
+import { join } from "node:path";
+import { it } from "vitest";
+import { runScenario } from "../helpers/scenario-evidence.js";
+import { createScriptedProvider } from "../helpers/scripted-provider.js";
+import { scriptedToolResultSchemas } from "../helpers/scripted-tool-results.js";
+
+it("writes a short report with a real command", async () => {
+  const provider = createScriptedProvider();
+  await runScenario({
+    name: "short-report",
+    provider,
+    environment: { agents: [{ name: "报告同事" }] },
+    async run({ environment, driver, signal, step, effectFile }) {
+      const agent = environment.agents[0];
+      assert.ok(agent);
+      provider.forAgent(agent, [
+        function writeReport(request) {
+          request.call("process.exec", {
+            command: "printf 'total=12\\n' > report.txt; cat report.txt",
+          });
+        },
+        function acknowledgeReport(request) {
+          const result = request.result("process.exec", scriptedToolResultSchemas["process.exec"]);
+          assert.equal(result.receipt?.stdout, "total=12\n");
+          request.text("本轮内部正文结束。");
+        },
+      ]);
+      effectFile("report.txt", join(agent.workspace, "report.txt"));
+      await step("report run completed", async () => {
+        const work = await driver.sendOwnerMessage(agent, "写合成报告。");
+        return driver.waitForRun(work, "completed", { signal });
+      });
+      await provider.assertComplete();
+    },
+  });
+}, 30_000);
+```
+
+完整双 Agent 样例的模型步骤与成果断言在 `tests/scenarios/report-workflow.ts`，测试入口在 `tests/control-plane/report-workflow.test.ts`。入口仍只有 `runScenario({ name, provider, environment, run })`，`environment.agents` 使用导出的 `reportWorkflowAgents`，`run` 调用 `runReportWorkflow(context, provider)`。因此其它交付拓扑可以复用同一函数及现有 `ScenarioContext`，无需复制启动、SSE、等待或证据逻辑；本样例不增加通用适配平台。
+
+Owner 发送普通请求后，甲实际创建并认领主任务，写入 2、4、6，用普通命令生成含总计 12 的草稿，再发现乙、建立 peer DM、发布草稿附件并发送带 `asTask` 的独立复核请求。脚本只暂留乙的真实 HTTP 响应；驱动确认甲 R1 已结束且主任务仍在进行后释放。乙读取附件原字节，通过工作区工具保存到自己的文件，再用命令实际读取并校验；乙在原复核讨论串反馈记录数 3，完成自己的任务。
+
+实际反馈触发甲 R2；模型请求保留 R1 的有序前缀，甲读取复核讨论串后修订文件，在 Owner 原请求讨论串显式交付，并完成主任务。断言核对 Owner 下载、甲最终文件与预期字节相等，乙校验文件与已发布草稿字节相等，两个任务各自的锚点／负责人／状态，以及甲跨两个 DM、讨论串和两次 run 的同一 session、乙的独立 session、每 Agent 至多一个 current run。任务设为 done 时 run 仍在进行，普通模型正文仍只在会话中；结束 run 后再核对成果。复核只是本样例的自主协作选择，不是产品强制流程或父子任务。
+
+```sh
+pnpm build
+pnpm --filter @mate/control-plane exec vitest run tests/control-plane/report-workflow.test.ts
+```
+
+这条测试也由 `pnpm check` 收录。失败沿同一个证据与清理入口报告实际步骤和关联事实；只使用合成模型和文件，实际平台以执行结果为准，真实 provider、Linux CI、容器和 VPS 各自验证。
