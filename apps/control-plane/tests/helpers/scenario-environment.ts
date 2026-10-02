@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import type { ProviderRequest } from "./agent-loop.js";
 import { ProcessOutput, login, ownerPassword, stopProcess } from "./run-services.js";
+import { createScenarioNodeLink, type NodeLinkEvent } from "./scenario-network.js";
 
 const agentConfigurationSchema = z.object({
   name: z.string().min(1),
@@ -25,6 +26,7 @@ const configurationSchema = z.object({
   controlPlane: z
     .object({
       nodeOperationTimeoutMs: z.number().int().positive().optional(),
+      nodeHeartbeatTimeoutMs: z.number().int().positive().optional(),
       modelContextWindow: z.number().int().positive().optional(),
     })
     .default({}),
@@ -34,6 +36,7 @@ const configurationSchema = z.object({
       heartbeatIntervalMs: z.number().int().positive().default(100),
       heartbeatTimeoutMs: z.number().int().positive().default(2000),
       commandBoundary: z.enum(["before_execute", "before_receipt"]).optional(),
+      networkProxy: z.boolean().default(false),
     })
     .prefault({}),
 });
@@ -61,6 +64,7 @@ export type ScenarioFacts = {
   processes: readonly ProcessOutput[];
   agents: readonly PreparedScenarioAgent[];
   requests: readonly ProviderRequest[];
+  network?: readonly NodeLinkEvent[];
   redact: (text: string) => string;
   startupFailure?: unknown;
 };
@@ -180,6 +184,8 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
   let startupFailure: unknown;
   let control: ProcessOutput | undefined;
   let node: ProcessOutput | undefined;
+  let nodeLink: Awaited<ReturnType<typeof createScenarioNodeLink>> | undefined;
+  let additionalNodes = 0;
   let closing: Promise<CleanupReport> | undefined;
   let closed = false;
   let collectingEvidence = false;
@@ -257,6 +263,13 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
       MATE_CONTROL_PLANE_DATA_DIR: join(directory, "control-plane-data"),
       MATE_OWNER_PASSWORD_FILE: join(directory, "owner-password"),
       MATE_SCENARIO_PROVIDER_URL: providerUrl,
+      ...(configuration.controlPlane.nodeHeartbeatTimeoutMs === undefined
+        ? {}
+        : {
+            MATE_SCENARIO_NODE_HEARTBEAT_TIMEOUT_MS: String(
+              configuration.controlPlane.nodeHeartbeatTimeoutMs,
+            ),
+          }),
       ...(configuration.controlPlane.modelContextWindow === undefined
         ? {}
         : {
@@ -275,11 +288,14 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
     return control;
   }
 
-  function launchNode(pairingToken?: string) {
-    node = launch("node", {
-      MATE_CONTROL_PLANE_URL: origin,
-      MATE_NODE_DATA_DIR: join(directory, "node-data"),
-      MATE_NODE_AGENT_WORKSPACE_ROOT: join(directory, "workspaces"),
+  function launchNode(pairingToken?: string, additional = 0) {
+    const output = launch("node", {
+      MATE_CONTROL_PLANE_URL: additional ? origin : (nodeLink?.origin ?? origin),
+      MATE_NODE_DATA_DIR: join(directory, additional ? `node-data-${additional}` : "node-data"),
+      MATE_NODE_AGENT_WORKSPACE_ROOT: join(
+        directory,
+        additional ? `workspaces-${additional}` : "workspaces",
+      ),
       MATE_SCENARIO_COMMAND_TIMEOUT_MS: String(configuration.node.commandTimeoutMs),
       MATE_SCENARIO_HEARTBEAT_INTERVAL_MS: String(configuration.node.heartbeatIntervalMs),
       MATE_SCENARIO_HEARTBEAT_TIMEOUT_MS: String(configuration.node.heartbeatTimeoutMs),
@@ -288,7 +304,8 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
         : {}),
       ...(pairingToken ? { MATE_NODE_PAIRING_TOKEN: pairingToken } : {}),
     });
-    return node;
+    if (!additional) node = output;
+    return output;
   }
 
   const environment = {
@@ -316,6 +333,13 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
     },
     get nodeId() {
       return nodeId;
+    },
+    get network() {
+      return nodeLink?.events ?? [];
+    },
+    get nodeLink() {
+      if (!nodeLink) throw new Error("Scenario node network proxy is not configured");
+      return nodeLink;
     },
     get control() {
       if (!control) throw new Error("Control plane has not started");
@@ -359,13 +383,28 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
         );
       return response;
     },
-    async prepareAgent(input: z.input<typeof agentConfigurationSchema>) {
+    async additionalNode() {
+      const pairing = z
+        .object({ pairingToken: z.string() })
+        .parse(
+          await (
+            await environment.request("/api/owner/nodes/pairing-tokens", { method: "POST" })
+          ).json(),
+        );
+      sensitiveValues.push(pairing.pairingToken);
+      const output = launchNode(pairing.pairingToken, ++additionalNodes);
+      const paired = await output.waitFor(/MATE_NODE_PAIRED ([0-9a-f-]+)/i, 15_000, {
+        signal: cancellation.signal,
+      });
+      return { id: z.string().parse(paired[1]), process: output };
+    },
+    async prepareAgent(input: z.input<typeof agentConfigurationSchema>, targetNodeId = nodeId) {
       const profile = agentConfigurationSchema.parse(input);
       const created = z.object({ agent: agentSummarySchema }).parse(
         await (
           await environment.request("/api/owner/agents", {
             method: "POST",
-            body: { ...profile, id: randomUUID(), nodeId },
+            body: { ...profile, id: randomUUID(), nodeId: targetNodeId },
           })
         ).json(),
       );
@@ -492,6 +531,12 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
       signal: cancellation.signal,
     });
     origin = `http://127.0.0.1:${listening[1]}`;
+    if (configuration.node.networkProxy) {
+      nodeLink = await createScenarioNodeLink(origin, {
+        signal: cancellation.signal,
+        registerCleanup: (release) => registerResource("node network proxy", release),
+      });
+    }
     cookie = await login(origin, cancellation.signal);
     sensitiveValues.push(cookie, cookie.slice(cookie.indexOf("=") + 1));
     const pairing = z

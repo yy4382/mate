@@ -13,6 +13,7 @@ import {
   type ScenarioFacts,
 } from "./scenario-environment.js";
 import { readNodeScenarioFacts, readScenarioFacts } from "./scenario-facts.js";
+import { readNetworkQueueFacts } from "./scenario-network-facts.js";
 import type { createScriptedProvider } from "./scripted-provider.js";
 
 const credentialNamePattern = String.raw`(?:password|cookie|set[_-]?cookie|authorization|(?:api|secret|private)[_-]?key|(?:(?:pairing|download|access|refresh|session|csrf)[_-]?)?token|credentials?)`;
@@ -210,6 +211,7 @@ export async function runScenario<T>(options: {
           kind: request.kind,
           step: request.step,
           state: request.state,
+          lateReleases: request.lateReleases,
           payload: request.payload,
         })),
       ),
@@ -219,6 +221,16 @@ export async function runScenario<T>(options: {
       save("persistent-facts.json", persistent);
     });
     attempt(() => save("node-facts.json", readNodeScenarioFacts(facts.directory)));
+    attempt(() => save("network.json", facts.network ?? []));
+    attempt(() =>
+      save(
+        "network-queues.json",
+        facts.agents.map((agent) => ({
+          agentId: agent.summary.id,
+          ...readNetworkQueueFacts(facts.directory, agent.summary.id),
+        })),
+      ),
+    );
     if (environment) {
       const driver = createScenarioDriver(environment);
       try {

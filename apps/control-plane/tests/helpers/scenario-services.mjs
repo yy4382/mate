@@ -7,6 +7,9 @@ if (process.argv[2] === "control-plane") {
     {
       dataDir: process.env.MATE_CONTROL_PLANE_DATA_DIR,
       passwordFile: process.env.MATE_OWNER_PASSWORD_FILE,
+      ...(process.env.MATE_SCENARIO_NODE_HEARTBEAT_TIMEOUT_MS
+        ? { nodeHeartbeatTimeoutMs: Number(process.env.MATE_SCENARIO_NODE_HEARTBEAT_TIMEOUT_MS) }
+        : {}),
       ...(process.env.MATE_SCENARIO_NODE_OPERATION_TIMEOUT_MS
         ? { nodeOperationTimeoutMs: Number(process.env.MATE_SCENARIO_NODE_OPERATION_TIMEOUT_MS) }
         : {}),

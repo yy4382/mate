@@ -277,3 +277,22 @@ pnpm test:linux-ordinary-command-failure
 ```
 
 Vitest 场景均由 `pnpm check` 收录；独立普通命令脚本仍按上述入口运行。命令输出的实际平台决定证据归属，macOS 是跨平台验证，不替代 Linux CI、真实 provider 或 VPS。
+
+## 在真实模型事件点控制节点链路
+
+`node: { networkProxy: true }` 让本场景的主 node 通过 `scenario-network.ts` 的原始 TCP 代理连接 CP；Owner API 和 `additionalNode()` 新建的独立节点仍直连同一个 CP。代理不建立 WebSocket 端点，不回复 ping/pong，也不改宿主防火墙。`environment.nodeLink.observe()` 返回当前事件游标；`disconnect()` 立即关闭已建链路，`blackhole()` 保持现有 socket 并静默丢弃双向流量，两种模式都阻止后续连接绕过代理。`restore()` 明确恢复，并关闭残存连接，让真实 node 使用原身份重新认证。
+
+在命名模型请求或实际摘要请求到达后注入，用 `nodeLink.waitFor(predicate, { after, signal, timeoutMs })` 等待游标之后的具体帧、关闭或被阻止的重连。它沿用驱动的期限、取消和最后事实报告；控制方法同步返回，关闭沿环境唯一的资源登记流程释放 socket 和监听端口。事件只保存连接号、方向、帧类型、丢弃事实及实际 Agent/run/operation/request ID，不复制含配对凭据的帧正文。失败证据另含 `network.json` 和 `network-queues.json`，与真实进程的退出／存活状态分开。
+
+`tests/scenarios/node-network-recovery.ts` 导出 `nodeNetworkConfiguration` 和 `runNodeNetworkRecovery(context, provider, "blackhole" | "disconnect")`；原生入口与后续拓扑可复用同一模型脚本、驱动和断言。黑洞样例在 Pi 请求暂留期间发起真实 Owner 工作区只读预览，从而观察实际控制面到 node 的帧被丢弃；节点自身的心跳与关闭帧提供反向证据。随后等待 Owner 节点离线、指定旧 run 的 interrupted 活动与 HTTP 取消，尝试迟到任务／消息／附件／命令输出并核对无新增效果，再等待被阻止的真实重连后明确恢复。
+
+迟到输出使用 `await request.releaseLate(content)`：仅在真实 HTTP 客户端关闭且 outcome 为 cancelled 后，仍调用既有 SSE 编码与原响应的写入。它记录每段写入是否被接受、实际响应销毁／结束状态和流错误，有请求配置的截止时间；取消终态保持不变。已关闭传输上的写入尝试不能送达 Mate，记录不会声称已送达或变成新响应。证据中的模型请求包含 `lateReleases`；恢复完成后再次核对旧 run 仍 failed、迟到内容未进入实际模型上下文／摘要，任务、消息、附件与操作没有新增。普通 `text`／`call` 的迟到调用仍只返回 late，不隐式触发这项故障尝试。
+
+`tests/control-plane/node-network.test.ts` 还覆盖实际待响应摘要取消、已确认 checkpoint 保留、离线普通消息与到期提醒、人工暂停不解除，以及独立在线节点在故障期间执行真实命令。普通请求恢复核对已确认上下文的有序前缀，摘要恢复核对实际模型收到确认摘要；恢复仍只有原 Agent session，旧 run 不重新取得资格。它们由 `pnpm check` 自动收录，单独运行方式如下：
+
+```sh
+pnpm build
+pnpm --filter @mate/control-plane exec vitest run tests/control-plane/node-network.test.ts
+```
+
+场景只使用合成数据与本地 HTTP/SSE。输出记录实际平台；macOS 通过不代表 Linux CI、容器、真实 provider 或 VPS 已验证。
