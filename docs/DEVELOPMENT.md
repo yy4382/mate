@@ -1,8 +1,8 @@
 # 本地开发与验证
 
-已确认的首版包装目标是控制面镜像/Compose 与 node 用户目录完整包、薄 bootstrap、统一 `mate node` CLI 及 systemd 用户服务，见 [ADR-0009](adr/0009-lightweight-linux-packaging.md)；该包装尚未实现。下文记录当前源码构建与真实进程测试，不代表发布包或用户服务已验收。未来包装测试须单独记录 Ubuntu 24.04、Debian 13 的 x86_64/arm64 及真实 bootstrap → 包内 CLI → user manager 证据，包括 CLI 自身和专用 Node 的整包更新；容器不能替代用户服务安装验收。
+生产只有控制面镜像/Compose 与 node 完整包、薄 bootstrap、统一 `mate node` CLI 和 systemd 用户服务路径，见[运维说明](OPERATIONS.md)。下文源码入口用于开发和测试，不是 VPS 的安装方式。真实产物及 Ubuntu 24.04/Debian 13 x86_64/arm64 用户服务证据单独记录在[部署验收](DEPLOYMENT_ACCEPTANCE.md)；容器和替身不能替代真实 user manager。
 
-使用 Node 24 和 pnpm 10.33.0。运行 `pnpm install --frozen-lockfile`、`pnpm check`、`pnpm typecheck`。`pnpm build` 将控制面编译到 `apps/control-plane/dist`、节点编译到 `apps/node/dist`，将网页写入 `apps/web/dist`。节点可单独用 `pnpm build:node` 构建，并通过 `pnpm --filter @mate/node test` 运行本地行为测试。运行环境变量见[配置说明](CONFIGURATION.md)，Linux 上以普通账号直接启动、停止重启与诊断见[运维说明](OPERATIONS.md)。
+使用 Node 24 和 pnpm 10.33.0。运行 `pnpm install --frozen-lockfile`、`pnpm check`、`pnpm typecheck`。`pnpm build` 将控制面编译到 `apps/control-plane/dist`、节点编译到 `apps/node/dist`，将网页写入 `apps/web/dist`。节点可单独用 `pnpm build:node` 构建，并通过 `pnpm --filter @mate/node test` 运行本地行为测试。运行环境变量见[配置说明](CONFIGURATION.md)，生产部署与诊断见[运维说明](OPERATIONS.md)。
 
 控制面本地启动需要一个只有当前用户可读的初始密码文件（12–1024 UTF-8 字节）和一个绝对数据目录：
 

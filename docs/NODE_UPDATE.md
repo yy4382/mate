@@ -2,11 +2,11 @@
 
 所有者选择明确的兼容发布版本，CLI、专用 Node 和 node 一起更换，不能分别选版本。CLI 不停止控制面、不代替所有者停机、不启动更新后的 node，也不迁移数据库或自动回滚。没有 `latest`、自动更新服务或任意历史格式兼容承诺。
 
-维护顺序是 `mate node stop` → 控制面 stop → 更换两侧同一版本 → 控制面 start → `mate node start`。例如从仓库的 Compose 目录及现有普通账号操作：
+维护顺序是 `mate node stop` → 控制面 stop → 更换两侧同一版本 → 控制面 start → `mate node start`。例如在保存交付 `compose.yaml` 与私有 `.env` 的目录，以现有普通账号操作：
 
 ```sh
 ~/.local/bin/mate node stop
-docker compose --env-file .env -f deploy/control-plane/compose.yaml stop
+docker compose --env-file .env -f compose.yaml stop
 
 # 获取可信完整包及其 SHA-256；用实际文件和对应校验值替换占位符。
 ~/.local/bin/mate node update --version 0.2.0 \
@@ -15,7 +15,8 @@ docker compose --env-file .env -f deploy/control-plane/compose.yaml stop
 
 # 把现有 .env 中的 MATE_CONTROL_PLANE_IMAGE 改为相同 0.2.0 版本的镜像。
 # 沿用原 UID/GID、私有 bind 数据目录和原配置，不重新初始化所有者密码。
-docker compose --env-file .env -f deploy/control-plane/compose.yaml up -d --force-recreate
+docker compose --env-file .env -f compose.yaml create --force-recreate
+docker compose --env-file .env -f compose.yaml start
 ~/.local/bin/mate node start
 ~/.local/bin/mate node status
 ~/.local/bin/mate node logs --lines 100
