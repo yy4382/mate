@@ -150,6 +150,13 @@ it("keeps offline messages, due reminders and manual pause while another node co
       environment.nodeLink.disconnect();
       await driver.waitForRun({ ...work, runId: oldRun.id }, "failed", { signal });
       assert.deepEqual(await pending.outcome, { kind: "cancelled", reason: "queue node offline" });
+      assert.equal(
+        readNetworkQueueFacts(environment.directory, agent.summary.id).reminders.find(
+          (reminder) => reminder.id === reminderId,
+        )?.state,
+        "active",
+        "The reminder must still be active after confirmed offline, before its due firing",
+      );
       const queued = await driver.sendOwnerMessage(agent, "离线新消息。");
       await step("due reminder has a persistent pending delivery while offline", () =>
         waitForScenario(
@@ -292,12 +299,20 @@ it("cancels an actual pending summary, retains the acknowledged checkpoint and r
           kind: "cancelled",
           reason: "summary node offline",
         });
-        assert.equal(pending.text("## Goal\n未确认摘要 FORBIDDEN"), "late");
+        const lateRelease = await pending.releaseLate("## Goal\n未确认摘要 FORBIDDEN");
+        assert.equal(lateRelease.clientClosed, true);
+        assert.equal(lateRelease.responseDestroyed, true);
+        assert.deepEqual(lateRelease.writesAccepted, [false]);
+        assert.equal(lateRelease.ended, true);
+        assert.deepEqual(await pending.outcome, {
+          kind: "cancelled",
+          reason: "summary node offline",
+        });
         assert.deepEqual(checkpoints(), confirmed);
         assert.equal(environment.control.exitStatus, undefined);
         assert.equal(environment.node.exitStatus, undefined);
         assert.match(await preview, /node_offline|workspace_unavailable|节点/);
-        return stopped;
+        return { stopped, lateRelease };
       });
       await environment.nodeLink.waitFor((event) => event.kind === "blocked", { after, signal });
       const cursor = environment.nodeLink.observe();
@@ -309,6 +324,14 @@ it("cancels an actual pending summary, retains the acknowledged checkpoint and r
       const completed = await driver.waitForRun(work, "completed", { signal });
       assert.notEqual(completed.id, oldRun.id);
       assert.equal(completed.sessionId, oldRun.sessionId);
+      assert.equal(
+        z
+          .object({ id: z.string(), state: z.string() })
+          .array()
+          .parse(readScenarioFacts(environment.directory).runs)
+          .find((run) => run.id === oldRun.id)?.state,
+        "failed",
+      );
       assert.equal(checkpoints().length, 2);
       assert.deepEqual(checkpoints()[0], confirmed[0]);
       assert.doesNotMatch(JSON.stringify(checkpoints()), /FORBIDDEN/);

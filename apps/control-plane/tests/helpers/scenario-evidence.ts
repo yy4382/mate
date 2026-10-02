@@ -211,6 +211,7 @@ export async function runScenario<T>(options: {
           kind: request.kind,
           step: request.step,
           state: request.state,
+          lateReleases: request.lateReleases,
           payload: request.payload,
         })),
       ),

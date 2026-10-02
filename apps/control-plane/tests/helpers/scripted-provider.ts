@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ServerResponse } from "node:http";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { z } from "zod";
 import { respond, type ProviderRequest } from "./agent-loop.js";
 import { conversationToolDefinitions } from "../../src/conversations/tool-contracts.js";
@@ -49,6 +50,15 @@ const outcomeSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("failed") }),
 ]);
 export type ScriptedOutcome = z.output<typeof outcomeSchema>;
+const lateReleaseSchema = z.object({
+  responseId: z.string().uuid(),
+  clientClosed: z.boolean(),
+  responseDestroyed: z.boolean(),
+  writesAccepted: z.array(z.boolean()),
+  ended: z.boolean(),
+  errorCode: z.string().nullable(),
+  content: z.unknown(),
+});
 export type ScriptedRequest = ReturnType<typeof createRequest>;
 export type ModelStep = (request: ScriptedRequest) => void | Promise<void>;
 
@@ -64,6 +74,8 @@ function createRequest(
     .enum(["pending", "responded", "cancelled", "closed", "timeout", "failed"])
     .parse("pending");
   let expectedCancellation: string | undefined;
+  let clientClosed = false;
+  const lateReleases: z.output<typeof lateReleaseSchema>[] = [];
   let stepFinished = false;
   let resolveFinished!: () => void;
   const finished = new Promise<void>((resolve) => {
@@ -100,6 +112,7 @@ function createRequest(
     return "responded";
   }
   response.once("close", () => {
+    clientClosed = true;
     if (state !== "pending") return;
     if (expectedCancellation) finish({ kind: "cancelled", reason: expectedCancellation });
     else {
@@ -126,6 +139,7 @@ function createRequest(
     step,
     payload,
     outcome,
+    lateReleases,
     finished,
     get stepFinished() {
       return stepFinished;
@@ -144,6 +158,43 @@ function createRequest(
     },
     text(text: string, options: { inputTokens?: number } = {}) {
       return send(text, undefined, options.inputTokens);
+    },
+    /** Attempts the real SSE encoder after observed client cancellation; never claims delivery. */
+    async releaseLate(content: string | ScriptedToolCall[]) {
+      if (state !== "cancelled" || !clientClosed)
+        throw new Error("Late release requires observed HTTP client cancellation");
+      const responseId = randomUUID();
+      const writesAccepted: boolean[] = [];
+      let errorCode: string | null = null;
+      const recordError = (error: unknown) => {
+        const parsed = z
+          .looseObject({ code: z.string().optional(), name: z.string().optional() })
+          .safeParse(error);
+        errorCode = parsed.success ? (parsed.data.code ?? parsed.data.name ?? "Error") : "Error";
+      };
+      response.on("error", recordError);
+      try {
+        respond(response, content, undefined, undefined, responseId, (accepted) =>
+          writesAccepted.push(accepted),
+        );
+        // Observe deferred stream errors without leaving an unbounded response/drain wait.
+        await nextTurn(undefined, { signal: AbortSignal.timeout(timeoutMs) });
+      } catch (error) {
+        recordError(error);
+      } finally {
+        response.removeListener("error", recordError);
+      }
+      const attempt = lateReleaseSchema.parse({
+        responseId,
+        clientClosed,
+        responseDestroyed: response.destroyed,
+        writesAccepted,
+        ended: response.writableEnded,
+        errorCode,
+        content,
+      });
+      lateReleases.push(attempt);
+      return attempt;
     },
     tools(calls: ScriptedToolCall[], options: { prefix?: string; inputTokens?: number } = {}) {
       return send(calls, options.prefix, options.inputTokens);

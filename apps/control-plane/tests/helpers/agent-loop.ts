@@ -23,6 +23,7 @@ export function respond(
   prefix?: string,
   inputTokens = 50,
   identity?: string,
+  observeWrite?: (accepted: boolean) => void,
 ): void {
   response.writeHead(200, { "content-type": "text/event-stream" });
   const output =
@@ -57,11 +58,12 @@ export function respond(
             status: "completed",
           })),
         ];
-  output.forEach((item, index) =>
-    response.write(
+  output.forEach((item, index) => {
+    const accepted = response.write(
       `data: ${JSON.stringify({ type: "response.output_item.done", output_index: index, item })}\n\n`,
-    ),
-  );
+    );
+    observeWrite?.(accepted);
+  });
   response.end(
     `data: ${JSON.stringify({ type: "response.completed", response: { id: `resp_${identity ?? "synthetic"}`, status: "completed", output, usage: { input_tokens: inputTokens, output_tokens: 10, total_tokens: inputTokens + 10, input_tokens_details: { cached_tokens: 5 }, output_tokens_details: { reasoning_tokens: 0 } } } })}\n\n`,
   );

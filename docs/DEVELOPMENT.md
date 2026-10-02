@@ -250,6 +250,8 @@ pnpm --filter @mate/control-plane exec vitest run tests/control-plane/report-wor
 
 `tests/scenarios/node-network-recovery.ts` 导出 `nodeNetworkConfiguration` 和 `runNodeNetworkRecovery(context, provider, "blackhole" | "disconnect")`；原生入口与后续拓扑可复用同一模型脚本、驱动和断言。黑洞样例在 Pi 请求暂留期间发起真实 Owner 工作区只读预览，从而观察实际控制面到 node 的帧被丢弃；节点自身的心跳与关闭帧提供反向证据。随后等待 Owner 节点离线、指定旧 run 的 interrupted 活动与 HTTP 取消，尝试迟到任务／消息／附件／命令输出并核对无新增效果，再等待被阻止的真实重连后明确恢复。
 
+迟到输出使用 `await request.releaseLate(content)`：仅在真实 HTTP 客户端关闭且 outcome 为 cancelled 后，仍调用既有 SSE 编码与原响应的写入。它记录每段写入是否被接受、实际响应销毁／结束状态和流错误，有请求配置的截止时间；取消终态保持不变。已关闭传输上的写入尝试不能送达 Mate，记录不会声称已送达或变成新响应。证据中的模型请求包含 `lateReleases`；恢复完成后再次核对旧 run 仍 failed、迟到内容未进入实际模型上下文／摘要，任务、消息、附件与操作没有新增。普通 `text`／`call` 的迟到调用仍只返回 late，不隐式触发这项故障尝试。
+
 `tests/control-plane/node-network.test.ts` 还覆盖实际待响应摘要取消、已确认 checkpoint 保留、离线普通消息与到期提醒、人工暂停不解除，以及独立在线节点在故障期间执行真实命令。普通请求恢复核对已确认上下文的有序前缀，摘要恢复核对实际模型收到确认摘要；恢复仍只有原 Agent session，旧 run 不重新取得资格。它们由 `pnpm check` 自动收录，单独运行方式如下：
 
 ```sh

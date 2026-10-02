@@ -31,6 +31,7 @@ export async function runNodeNetworkRecovery(
       assert.equal(request.sessionId, agent?.summary.sessionId);
       assert.match(JSON.stringify(request.payload.input), /网络恢复工作/);
       assert.match(JSON.stringify(request.payload.input), /已确认历史记号/);
+      assert.doesNotMatch(JSON.stringify(request.payload.input), /FORBIDDEN/);
       const original = provider.requests.find((candidate) => candidate.step === "pending");
       assert.ok(original);
       assert.deepEqual(
@@ -91,28 +92,43 @@ export async function runNodeNetworkRecovery(
     assert.equal(environment.control.exitStatus, undefined);
     assert.equal(environment.node.exitStatus, undefined);
     assert.match(JSON.stringify(await preview), /node_offline|workspace_unavailable|节点/);
-    assert.equal(
-      pending.call("tasks.create", { messageId: work.message.id, title: "迟到旧任务" }),
-      "late",
-    );
-    assert.equal(
-      pending.call("messages.send", { conversationId: agent.channelId, text: "迟到消息" }),
-      "late",
-    );
-    assert.equal(
-      pending.call("attachments.publish", {
-        conversationId: agent.channelId,
-        path: "MEMORY.md",
-      }),
-      "late",
-    );
-    assert.equal(pending.call("process.exec", { command: "printf forbidden" }), "late");
-    assert.equal(pending.text("迟到正文"), "late");
+    const lateRelease = await pending.releaseLate([
+      {
+        name: "tools.call",
+        input: {
+          name: "tasks.create",
+          input: { messageId: work.message.id, title: "FORBIDDEN 迟到旧任务" },
+        },
+      },
+      {
+        name: "tools.call",
+        input: {
+          name: "messages.send",
+          input: { conversationId: agent.channelId, text: "FORBIDDEN 迟到消息" },
+        },
+      },
+      {
+        name: "tools.call",
+        input: {
+          name: "attachments.publish",
+          input: { conversationId: agent.channelId, path: "MEMORY.md" },
+        },
+      },
+      {
+        name: "tools.call",
+        input: { name: "process.exec", input: { command: "printf FORBIDDEN" } },
+      },
+    ]);
+    assert.equal(lateRelease.clientClosed, true);
+    assert.equal(lateRelease.responseDestroyed, true);
+    assert.deepEqual(lateRelease.writesAccepted, [false, false, false, false]);
+    assert.equal(lateRelease.ended, true);
+    assert.deepEqual(await pending.outcome, { kind: "cancelled", reason: "node offline" });
     assert.deepEqual(await driver.tasks(), before.tasks);
     assert.deepEqual(await driver.messages(agent.channelId), before.messages);
     assert.deepEqual(await driver.attachments(agent.channelId), before.attachments);
     assert.deepEqual(readScenarioFacts(environment.directory).operations, before.operations);
-    return stopped;
+    return { stopped, lateRelease };
   });
   await step("reconnect attempt remains blocked until explicit restore", async () => {
     const blocked = await environment.nodeLink.waitFor((event) => event.kind === "blocked", {
@@ -146,6 +162,17 @@ export async function runNodeNetworkRecovery(
     1,
   );
   assert.equal(readNetworkQueueFacts(environment.directory, agent.summary.id).running.length, 0);
+  assert.equal(
+    z
+      .object({ id: z.string(), state: z.string() })
+      .array()
+      .parse(readScenarioFacts(environment.directory).runs)
+      .find((run) => run.id === oldRun.id)?.state,
+    "failed",
+  );
+  assert.deepEqual(await driver.messages(agent.channelId), before.messages);
+  assert.deepEqual(await driver.attachments(agent.channelId), before.attachments);
+  assert.deepEqual(readScenarioFacts(environment.directory).operations, before.operations);
   assert.deepEqual(await driver.tasks(), []);
   await provider.assertComplete();
 }
