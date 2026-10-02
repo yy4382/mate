@@ -125,3 +125,30 @@ export function readFileSessionFacts(directory: string, agentId: string) {
       .filter((row) => row.agentId === agentId),
   };
 }
+
+export function readCommittedFileCalls(directory: string, agentId: string, runId: string) {
+  return readScenarioFacts(directory).transcript.flatMap((row) => {
+    const record = z
+      .object({ agentId: z.string(), runId: z.string(), payload: z.string() })
+      .parse(row);
+    if (record.agentId !== agentId || record.runId !== runId) return [];
+    const entry = z
+      .object({
+        message: z.object({ role: z.literal("assistant"), content: z.array(z.unknown()) }),
+      })
+      .safeParse(JSON.parse(record.payload));
+    return entry.success
+      ? entry.data.message.content.flatMap((part) => {
+          const call = z
+            .object({
+              type: z.literal("toolCall"),
+              id: z.string(),
+              name: z.string(),
+              arguments: z.unknown(),
+            })
+            .safeParse(part);
+          return call.success ? [call.data] : [];
+        })
+      : [];
+  });
+}

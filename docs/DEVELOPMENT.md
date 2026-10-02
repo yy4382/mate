@@ -256,3 +256,5 @@ pnpm --filter @mate/control-plane exec vitest run tests/control-plane/file-bound
 ```
 
 两条文件均由 `pnpm check` 收录。macOS 是跨平台本地证据，Linux CI、真实 provider 和 VPS 仍各自验证；这里的合成效果证明测试矩阵内的执行次数，不承诺任意远端副作用严格一次。
+
+并发回归仍走真实双 Agent 文件路径：测试配置 `node.holdFirstFileExecution` 暂留首个操作的 backend，以带原操作身份的事件确认其已持久开始但尚未执行；另一 Agent 先真实完成文件与终态收据，此时不得出现首个操作的收据前事件。释放首个执行后，才观察它的真实效果与对应暂停点。启动器用 Node 的异步请求作用域关联既有 `beforeReceipt` 回调，避免另一 Agent 的完成错误标记目标操作；两道释放均有期限和取消信号。恢复历史还核对原 run 已持久提交的工具调用 ID／参数，收据后场景以崩溃前最后一个实际请求（含原调用和未知结果）核对完整恢复前缀。

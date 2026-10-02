@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { it } from "vitest";
 import { z } from "zod";
@@ -10,6 +10,7 @@ import {
   fileModelCorrections,
   fileBoundarySchema,
   readFileActions,
+  readCommittedFileCalls,
   readFileBoundary,
   readFileNodeEvents,
   readFileSessionFacts,
@@ -98,6 +99,35 @@ it.each(
               request.payload.input.slice(0, initial.payload.input.length),
               initial.payload.input,
             );
+            const [action] = readFileActions(environment.directory);
+            assert.ok(action);
+            const calls = readCommittedFileCalls(
+              environment.directory,
+              agent.summary.id,
+              action.receipt.runId,
+            );
+            assert.equal(calls.length, 1);
+            const [committed] = calls;
+            assert.ok(committed);
+            const recovered = z
+              .object({
+                type: z.literal("function_call"),
+                call_id: z.string(),
+                id: z.string(),
+                name: z.string(),
+                arguments: z.string(),
+              })
+              .array()
+              .parse(
+                request.payload.input.filter(
+                  (item) => z.object({ type: z.literal("function_call") }).safeParse(item).success,
+                ),
+              );
+            const [call] = recovered;
+            assert.ok(call);
+            assert.equal(committed.id, `${call.call_id}|${call.id}`);
+            assert.equal(committed.name, call.name);
+            assert.deepEqual(committed.arguments, JSON.parse(call.arguments));
             request.call("workspace.read", { path: "revision.txt" });
           },
           function remediate(request) {
@@ -286,8 +316,15 @@ it("a durable file receipt withheld from the control plane corrects the informed
             agent.summary.id,
             agent.summary.sessionId,
           );
-          const initial = provider.requests[0];
-          assert.ok(initial);
+          const initial = provider.requests.find(
+            (request) =>
+              request.step === "observeUnknownBeforeNewDecision" &&
+              request.agentId === agent.summary.id,
+          );
+          assert.ok(
+            initial,
+            "Expected the actual pre-crash request with the persisted edit and unknown result",
+          );
           assert.deepEqual(
             request.payload.input.slice(0, initial.payload.input.length),
             initial.payload.input,
@@ -391,6 +428,105 @@ it("a durable file receipt withheld from the control plane corrects the informed
           .length,
         1,
       );
+    },
+  });
+}, 30_000);
+
+it("a faster peer file mutation cannot report the held Agent's receipt boundary", async () => {
+  const provider = createScriptedProvider({ timeoutMs: 15_000 });
+  await runScenario({
+    name: "file-concurrent-receipt-identity",
+    provider,
+    environment: {
+      agents: [{ name: "暂留文件执行的同事" }, { name: "先完成文件的同事" }],
+      node: { fileBoundary: "before_receipt", holdFirstFileExecution: true },
+    },
+    async run({ environment, driver, signal, step, effectFile }) {
+      const [held, peer] = environment.agents;
+      assert.ok(held && peer);
+      const heldFile = join(held.workspace, "held.txt");
+      const peerFile = join(peer.workspace, "peer.txt");
+      effectFile("held.txt", heldFile);
+      effectFile("peer.txt", peerFile);
+      provider.forAgent(held, [
+        function writeHeldFile(request) {
+          request.call("workspace.write", { path: "held.txt", content: "held Agent completed\n" });
+        },
+        function finishHeld(request) {
+          assert.equal(
+            request.result("workspace.write", z.object({ sha256: z.string() })).sha256,
+            createHash("sha256").update("held Agent completed\n").digest("hex"),
+          );
+          request.text("暂留同事已完成。");
+        },
+      ]);
+      provider.forAgent(peer, [
+        function writePeerFile(request) {
+          request.call("workspace.write", { path: "peer.txt", content: "peer completed first\n" });
+        },
+        function finishPeer(request) {
+          assert.equal(
+            request.result("workspace.write", z.object({ sha256: z.string() })).sha256,
+            createHash("sha256").update("peer completed first\n").digest("hex"),
+          );
+          request.text("同伴先完成。");
+        },
+      ]);
+      const heldWork = await driver.sendOwnerMessage(held, "写入自己的合成文件。");
+      await step("first Agent has durable start and is held before real execution", async () => {
+        await environment.node.waitFor(/MATE_SCENARIO_FILE_EXECUTION_HELD /, 5000, { signal });
+        const actions = readFileActions(environment.directory);
+        assert.equal(actions.length, 1);
+        assert.equal(actions[0]?.agentId, held.summary.id);
+        assert.equal(actions[0]?.receipt.state, "executing");
+        assert.equal(existsSync(heldFile), false);
+        return actions;
+      });
+      const peerWork = await driver.sendOwnerMessage(peer, "写入自己的另一份合成文件。");
+      await step(
+        "peer's actual file and terminal receipt complete while first Agent stays held",
+        async () => {
+          const run = await driver.waitForRun(peerWork, "completed", { signal });
+          assert.equal(readFileSync(peerFile, "utf8"), "peer completed first\n");
+          assert.equal(existsSync(heldFile), false);
+          assert.equal(
+            existsSync(join(environment.directory, "node-data", "file-boundary-reached.json")),
+            false,
+          );
+          const peerAction = readFileActions(environment.directory).find(
+            (action) => action.agentId === peer.summary.id,
+          );
+          assert.equal(peerAction?.receipt.state, "succeeded");
+          return { run, peerAction };
+        },
+      );
+      writeFileSync(join(environment.directory, "node-data", "file-execution-release"), "release", {
+        mode: 0o600,
+      });
+      await step("only held Agent's real mutation reports its own receipt boundary", async () => {
+        await environment.node.waitFor(/MATE_SCENARIO_FILE_BOUNDARY /, 5000, { signal });
+        const boundary = readFileBoundary(environment.directory);
+        assert.equal(boundary.agentId, held.summary.id);
+        assert.equal(readFileSync(heldFile, "utf8"), "held Agent completed\n");
+        const receipt = readNodeScenarioFacts(environment.directory).fileReceipts.find(
+          (receipt) => receipt.operationId === boundary.operationId,
+        );
+        assert.equal(receipt?.state, "executing");
+        const action = readFileActions(environment.directory).find(
+          (action) => action.receipt.operationId === boundary.operationId,
+        );
+        assert.equal(action?.agentId, held.summary.id);
+        assert.equal(action?.receipt.state, "executing");
+        return { boundary, receipt, action };
+      });
+      writeFileSync(join(environment.directory, "node-data", "file-boundary-release"), "release", {
+        mode: 0o600,
+      });
+      await driver.waitForRun(heldWork, "completed", { signal });
+      await provider.assertComplete();
+      assertOneSessionAndCurrentRun(environment.directory, held.summary.id, held.summary.sessionId);
+      assertOneSessionAndCurrentRun(environment.directory, peer.summary.id, peer.summary.sessionId);
+      assert.notEqual(held.summary.sessionId, peer.summary.sessionId);
     },
   });
 }, 30_000);

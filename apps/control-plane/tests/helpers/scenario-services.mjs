@@ -42,6 +42,7 @@ if (process.argv[2] === "control-plane") {
         process.env.MATE_NODE_DATA_DIR,
         process.env.MATE_SCENARIO_FILE_BOUNDARY,
         controller.signal,
+        process.env.MATE_SCENARIO_HOLD_FIRST_FILE_EXECUTION === "1",
       )
     : new LinuxWorkspaceExecutor(
         process.env.MATE_NODE_AGENT_WORKSPACE_ROOT,
