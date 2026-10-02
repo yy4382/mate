@@ -4,6 +4,23 @@
 
 使用 Node 24 和 pnpm 10.33.0。运行 `pnpm install --frozen-lockfile`、`pnpm check`、`pnpm typecheck`。`pnpm build` 将控制面编译到 `apps/control-plane/dist`、节点编译到 `apps/node/dist`，将网页写入 `apps/web/dist`。节点可单独用 `pnpm build:node` 构建，并通过 `pnpm --filter @mate/node test` 运行本地行为测试。运行环境变量见[配置说明](CONFIGURATION.md)，Linux 上以普通账号直接启动、停止重启与诊断见[运维说明](OPERATIONS.md)。
 
+## 无凭据 PR/main Linux 检查
+
+`.github/workflows/ci.yml` 在 PR 和 main 提交上使用 Ubuntu 24.04 runner、Node 24.21.0（与 `pnpm-workspace.yaml` 一致）、`package.json` 的 pnpm 10.33.0 和冻结锁文件。源码权限为 `contents: read`，Actions 固定到经官方仓库 tag 核验的完整提交；单个作业上限为 30 分钟。干净 checkout 在本地和 CI 使用同一个入口：
+
+```sh
+pnpm install --frozen-lockfile
+pnpm check:ci
+```
+
+`pnpm check:ci` 依次运行 `pnpm check`、`pnpm typecheck`、`pnpm test:linux-single-account-node`、`pnpm test:single-account-agent-workspace` 和 `pnpm test:linux-ordinary-command-failure`，任一步失败都会保留非零结果，没有自动重试。`pnpm check` 的 `test:unit` 名称沿用 package 既有命名，其中已经包含真实控制面/node 子进程、Pi、HTTP/SSE、WebSocket、SQLite、普通命令／文件和完整双 Agent 报告 workflow；CI 不再次运行这整套测试。三个独立脚本不在 `pnpm check` 内，因此由同一入口另行运行。后续普通 Vitest 故障场景加入既有测试目录，自动进入这条入口。
+
+CI 日志记录实际 checkout SHA、内核／平台／架构、运行账号 UID/GID、Node 和 pnpm 版本；PR 默认检查 GitHub 的合并提交，实际 SHA 以日志为准。先前步骤失败或取消时，`always()` 独立步骤仍在两分钟期限内尽力回收 `artifacts/scenarios` 清单所属资源，直接用 Node 执行现有回收器，依赖安装失败也能尝试。清理残留仍使作业失败；SIGKILL 或 runner 丢失不能保证资源已经回收。失败或取消且有合成证据目录时，上传场景摘要、关联事实、效果文件与清理报告，保留 7 天；目录中不包含完整数据库或凭据。
+
+这些检查只使用本地合成 provider 和普通账号，不调用 `check:provider`，不发送公网 Push、不发布镜像／Release或部署，不更改宿主账号、权限或仓库保护。macOS 上同一命令通过只证明跨平台源码行为；实际 Linux 通过证据须记录远端 Actions run URL、实际 SHA 与终态，并在 PR 合并前核对。真实 provider、控制面容器、VPS 和宿主用户服务安装各自单独报告，未执行时保持“未验证”。
+
+## 源码开发
+
 控制面本地启动需要一个只有当前用户可读的初始密码文件（12–1024 UTF-8 字节）和一个绝对数据目录：
 
 ```sh
