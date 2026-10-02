@@ -432,7 +432,10 @@ try {
     String(gid),
     agent.linuxIdentity.workspace,
   ]);
-  assert.deepEqual(writtenFile, { written: true });
+  const expectedFileHash = createHash("sha256")
+    .update("synthetic delivered workspace file\n")
+    .digest("hex");
+  assert.deepEqual(writtenFile, { sha256: expectedFileHash });
   assert.deepEqual(readFile, { content: "synthetic delivered workspace file\n" });
   assert.equal(readlinkSync(`/proc/${node.pid}/exe`), process.execPath);
   console.log(
@@ -460,10 +463,7 @@ try {
   assert.equal(attachment.channelId, channelId);
   assert.equal(attachment.filename, "包内节点资料.txt");
   assert.equal(attachment.size, Buffer.byteLength("synthetic delivered workspace file\n"));
-  assert.equal(
-    attachment.sha256,
-    createHash("sha256").update("synthetic delivered workspace file\n").digest("hex"),
-  );
+  assert.equal(attachment.sha256, expectedFileHash);
   assert.deepEqual(attachment.uploader, { kind: "agent", id: agent.id });
   const file = await api(`/api/owner/agents/${agent.id}/workspace/chunk?path=delivery.txt`);
   assert.equal(
