@@ -6,6 +6,9 @@ bootstrap=$2
 checksum=$3
 version=$4
 cut_script=$5
+cut_timeout=${MATE_TEST_CUT_TIMEOUT_SECONDS:-180}
+case "$cut_timeout" in ''|*[!0-9]*) echo 'Invalid test cut timeout' >&2; exit 1 ;; esac
+[ "$cut_timeout" -ge 1 ] && [ "$cut_timeout" -le 1800 ] || { echo 'Test cut timeout must be 1..1800 seconds' >&2; exit 1; }
 [ "$(id -u)" != 0 ] || { echo 'Use the existing ordinary test account' >&2; exit 1; }
 [ "$(systemd-detect-virt --container 2>/dev/null || true)" = none ] || { echo 'Containers are not service acceptance' >&2; exit 1; }
 command -v node >/dev/null 2>&1 && { echo 'Host Node must not supplement the bundle' >&2; exit 1; }
@@ -139,13 +142,13 @@ begin_cut() {
   cut_version=$2
   runner=${3:-$entry}
   rm -f "$work/observer.ready" "$work/cut.json" "$work/update.pid"
-  "$runtime" "$cut_script" "$entry" "$unit" "$cut_version" "$work/update.pid" "$work/observer.ready" "$work/cut.json" "$cut_phase" >"$work/observer.log" 2>&1 &
+  MATE_TEST_CUT_TIMEOUT_SECONDS="$cut_timeout" "$runtime" "$cut_script" "$entry" "$unit" "$cut_version" "$work/update.pid" "$work/observer.ready" "$work/cut.json" "$cut_phase" >"$work/observer.log" 2>&1 &
   observer_pid=$!
   i=0; until [ -f "$work/observer.ready" ]; do i=$((i+1)); [ "$i" -lt 100 ] || exit 1; sleep 0.1; done
   "$runner" node update --version "$cut_version" --package "$work/new.tar.gz" --sha256 "$new_checksum" >"$work/cut-update.log" 2>&1 &
   update_pid=$!
   printf '%s\n' "$update_pid" >"$work/update.pid"
-  i=0; until [ -f "$work/cut.json" ]; do i=$((i+1)); [ "$i" -lt 180 ] || exit 1; sleep 1; done
+  i=0; until [ -f "$work/cut.json" ]; do i=$((i+1)); [ "$i" -lt "$cut_timeout" ] || exit 1; sleep 1; done
   cat "$work/cut.json"
 }
 phase=entry-cut-and-concurrent-cli-management

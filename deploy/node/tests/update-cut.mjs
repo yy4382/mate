@@ -4,6 +4,9 @@ import { dirname, join } from "node:path";
 const [entry, unit, version, pidFile, ready, result, phase] = process.argv.slice(2);
 if (![entry, unit, version, pidFile, ready, result, phase].every(Boolean))
   throw new Error("Missing cut observer arguments");
+const timeoutSeconds = Number(process.env.MATE_TEST_CUT_TIMEOUT_SECONDS ?? "180");
+if (!Number.isSafeInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 1800)
+  throw new Error("Test cut timeout must be an integer from 1 to 1800 seconds");
 let done = false;
 const observers = [];
 function inspect() {
@@ -74,5 +77,5 @@ const timeout = setTimeout(() => {
   clearInterval(interval);
   process.stderr.write("Actual CLI cut point was not captured\n");
   process.exitCode = 1;
-}, 180_000);
+}, timeoutSeconds * 1000);
 writeFileSync(ready, "ready\n");
