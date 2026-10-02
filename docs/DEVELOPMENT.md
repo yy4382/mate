@@ -36,6 +36,17 @@ pnpm test:single-account-agent-workspace
 
 从网页创建 Agent 到首次私信产生模型运行并写入该 Agent 自己的会话记录，由 `apps/control-plane/tests/control-plane/agent-loop.test.ts` 用真实控制面内 Pi 循环、本地 HTTP/SSE provider、WebSocket、节点与持久库覆盖；它在 macOS 与 Linux 上都会运行。数据目录的格式拒绝与日常接续见[运行手册](OPERATIONS.md#数据与日常接续)。
 
+新增真实进程场景可使用 `apps/control-plane/tests/helpers/scenario-environment.ts` 的 `createScenarioEnvironment({ agents, provider, controlPlane, node })`。`agents` 声明合成 Agent 资料；`provider` 沿用现有 `agent-loop.ts` 的 HTTP/SSE handler 与 `respond`；可选的 `controlPlane` 和 `node` 配置指定操作、命令与心跳时限。环境返回前已完成 Owner 登录、真实节点配对、合成模型凭据和 Agent 工作区准备；`agents` 返回实际资料（含 session ID）、Owner 私信频道与工作区。用 `request(path, { method, body })` 驱动真实 Owner API，场景不需要拼启动源码。启动文件 `scenario-services.mjs` 使用本次构建的控制面和节点；子进程以现有账号运行，只有必要变量、合成 HOME/临时目录及程序搜索路径。
+
+每套环境拥有自己的临时目录、模型端口、控制面端口和进程；`restartControl()` 与 `restartNode()` 沿用这些目录和原身份，控制面重启会重新登录并等待节点重新认证。始终在 `finally` 中 `await environment.close()`；关闭报告的 `failures` 单独记录，失败的资源保留登记，可再次关闭重试。额外的本场景资源创建后立刻用 `registerCleanup(name, release)` 登记；释放函数应有自己的等待上限。用 `beforeClose(name, collect)` 在服务和文件释放前收集证据，启动失败也需要证据时使用配置的 `beforeClose(facts)`。`observeProcess(service, output)` 提供已登记的真实进程输出，用于事件观察；配置的 AbortSignal 和驱动 SIGINT/SIGTERM 都进入同一清理流程。启动错误 `ScenarioStartupError` 保留原始 `cause`、进程状态与独立清理报告。`processes`、`resources`、`cleanupReports` 可用于报告已创建资源与残留，不扫描宿主已有服务。
+
+`scenario-environment.test.ts` 是短的可运行使用示例，覆盖普通工具、双环境并行隔离、原身份重启、半途失败、真实信号取消、单项释放失败后重试与环境变量边界。它打印实际平台；macOS 结果是跨平台证据，Linux 结果也不代表真实 provider 或 VPS 已验证：
+
+```sh
+pnpm build
+pnpm --filter @mate/control-plane exec vitest run tests/control-plane/scenario-environment.test.ts
+```
+
 `message-tasks.test.ts` 沿用这些真实进程和持久库，验证消息及回复的多任务、两位 Agent 的明确认领与并发新增、消息草稿交错，以及任务提交后模型结果尚未确认时的控制面重启。模型输出由本地脚本 provider 指定，只验收工具和恢复能力；它不代表真实模型服务连接或 VPS 部署已验证。中文网页的标题输入和全部关联任务展示由 `apps/web/tests/chat-app.test.ts` 的现有交互接缝覆盖。
 
 ```sh
