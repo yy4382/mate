@@ -6,6 +6,8 @@ import {
   runningBundleDirectory,
   verifyBundle,
 } from "./bundle.js";
+import { manageNode, nodeServiceCommands } from "./service.js";
+import { nodePaths } from "./paths.js";
 
 async function main() {
   requireOrdinaryAccount();
@@ -29,7 +31,36 @@ async function main() {
     );
     return;
   }
-  throw new Error("Usage: mate --version. Node service commands are not installed by bootstrap.");
+  if (args[0] === "node" && args[1] && nodeServiceCommands.includes(args[1])) {
+    const command = args[1];
+    let lines = 100,
+      follow = false;
+    const options = args.slice(2);
+    if (command !== "logs" && options.length)
+      throw new Error("This service command takes no arguments");
+    while (options.length) {
+      const option = options.shift();
+      if (option === "--follow") follow = true;
+      else if (option === "--lines") {
+        const value = options.shift();
+        if (!value || !/^\d+$/.test(value))
+          throw new Error("Use mate node logs --lines <number> [--follow]");
+        lines = Number(value);
+      } else throw new Error("Use mate node logs [--lines <number>] [--follow]");
+    }
+    const metadata = verifyBundle(directory);
+    probeBundle(directory, metadata);
+    process.stdout.write(
+      await manageNode(command, nodePaths(), directory, metadata.version, undefined, {
+        lines,
+        follow,
+      }),
+    );
+    return;
+  }
+  throw new Error(
+    "Usage: mate --version; mate node install/start/stop/restart/status/logs [--lines <number>] [--follow]",
+  );
 }
 
 void main().catch((error: unknown) => {
