@@ -20,6 +20,109 @@ import { readMessageRuns } from "../helpers/scenario-facts.js";
 
 const expectedReport = "输入：2,4,6\n总计：12\n";
 
+it("does not backfill an original batch's uncommitted message from a future recovery run", async () => {
+  const fixture = await loopFixture(
+    (_request, response) => respond(response, "恢复同批消息后结束。"),
+    ", beforeSessionCommit: async entry => { if (entry.kind === 'message' && entry.message.role === 'user' && typeof entry.message.content === 'string' && entry.message.content.includes('B 在提交前中断')) { console.log('MATE_SCENARIO_SECOND_INPUT_PENDING'); await new Promise(() => {}); } }",
+  );
+  try {
+    const agent = await fixture.agent("同批未提交");
+    await fixture.stopNode();
+    const first = ownerMessageSchema.parse(
+      await fixture.send(agent.channelId, "A 已确认的原始输入。"),
+    );
+    const second = ownerMessageSchema.parse(
+      await fixture.send(agent.channelId, "B 在提交前中断。"),
+    );
+    await fixture.reconnectNode();
+    await fixture.control.waitFor(/MATE_SCENARIO_SECOND_INPUT_PENDING/);
+    expect(fixture.requests).toEqual([]);
+    const original = readMessageRuns(fixture.directory, agent.id, first.id)[0];
+    if (!original) throw new Error("Expected original seed run");
+    expect(readMessageRuns(fixture.directory, agent.id, second.id)).toEqual([]);
+    const oldControl = fixture.control;
+    await fixture.restartControl();
+    expect(oldControl.exitStatus?.signal).toBe("SIGKILL");
+    const runs = await waitForScenario(
+      "confirmed second input in recovery run",
+      () => readMessageRuns(fixture.directory, agent.id, second.id),
+      (facts) => facts.some((run) => run.state === "completed"),
+    );
+    expect(runs.map((run) => run.id)).not.toContain(original.id);
+    expect(runs).toEqual([
+      expect.objectContaining({
+        state: "completed",
+        sessionId: original.sessionId,
+        messageIds: [first.id, second.id],
+      }),
+    ]);
+    expect(fixture.requests).toHaveLength(1);
+    expect(JSON.stringify(fixture.requests[0])).toContain("A 已确认的原始输入。");
+    expect(JSON.stringify(fixture.requests[0])).toContain("B 在提交前中断。");
+  } finally {
+    await fixture.close();
+  }
+}, 30_000);
+
+it("does not backfill a later retry's new message into the original failed run", async () => {
+  const provider = createScriptedProvider();
+  const environment = await createScenarioEnvironment({
+    agents: [{ name: "重试关联" }],
+    provider: provider.handle,
+  });
+  environment.registerCleanup("scripted provider", () => provider.close());
+  try {
+    const agent = environment.agents[0];
+    if (!agent) throw new Error("Expected prepared Agent");
+    const driver = createScenarioDriver(environment);
+    provider.forAgent(agent, [
+      function originalSeed(request: ScriptedRequest) {
+        request.expectCancellation("Owner pause before the later input");
+      },
+      function expandedRetry(_request: ScriptedRequest) {},
+    ]);
+    const observation = await driver.observe(agent);
+    const seed = await driver.sendOwnerMessage(agent, "先处理种子 A。");
+    const pending = await provider.waitFor(agent.summary.id, "originalSeed");
+    const original = await driver.waitForRun(seed, "running");
+    const message = ownerMessageSchema.parse(
+      await (
+        await environment.request(`/api/owner/channels/${agent.channelId}/messages`, {
+          method: "POST",
+          body: { text: "后来才加入的 B。" },
+        })
+      ).json(),
+    );
+    const target = { ...observation, message };
+    expect(JSON.stringify(pending.payload.input)).not.toContain("后来才加入的 B。");
+    await environment.request(`/api/owner/agents/${agent.summary.id}/pause`, { method: "POST" });
+    expect(await pending.outcome).toEqual({
+      kind: "cancelled",
+      reason: "Owner pause before the later input",
+    });
+    expect((await driver.waitForRun({ ...seed, runId: original.id }, "failed")).id).toBe(
+      original.id,
+    );
+    await environment.request(`/api/owner/agents/${agent.summary.id}/resume`, { method: "POST" });
+    const retry = await provider.waitFor(agent.summary.id, "expandedRetry");
+    expect(JSON.stringify(retry.payload.input)).toContain("后来才加入的 B。");
+    expect(retry.sessionId).toBe(pending.sessionId);
+    await expect(driver.waitForRun(target, "failed", { timeoutMs: 100 })).rejects.toBeInstanceOf(
+      ScenarioWaitError,
+    );
+    expect(
+      readMessageRuns(environment.directory, agent.summary.id, message.id).map((run) => run.id),
+    ).not.toContain(original.id);
+    const current = await driver.waitForRun(target, "running");
+    expect(current.id).not.toBe(original.id);
+    retry.text("重试处理 A 和 B 后结束。");
+    expect((await driver.waitForRun(target, "completed")).id).toBe(current.id);
+    await provider.assertComplete();
+  } finally {
+    expect((await environment.close()).failures).toEqual([]);
+  }
+}, 30_000);
+
 it("retains the actual seed association before input commit and across control-plane recovery", async () => {
   const fixture = await loopFixture(
     (_request, response) => respond(response, "恢复轮结束。"),

@@ -214,13 +214,10 @@ export function createScenarioDriver(
             facts.events.some(
               (event) => event.kind === "run.started" && event.referenceId === run.id,
             ) &&
-            (state === "running" ||
+            // Manual pause has only Agent-level activity; its exact failed run state is durable.
+            (state !== "completed" ||
               facts.events.some(
-                (event) =>
-                  event.referenceId === run.id &&
-                  (state === "completed"
-                    ? event.kind === "run.completed"
-                    : event.kind === "run.failed" || event.kind === "run.interrupted"),
+                (event) => event.referenceId === run.id && event.kind === "run.completed",
               )),
         );
       }
