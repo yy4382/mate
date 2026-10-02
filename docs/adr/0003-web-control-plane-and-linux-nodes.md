@@ -6,8 +6,8 @@ Mate 的所有者需要在一个地方交流、查看任务和运行状态，也
 
 所属节点离线或停止时，该 Agent 的整个 run 停止推进，控制面仍保存消息与到期提醒；原节点恢复后，沿用原 Agent 身份和唯一 session 接续，人工暂停仍有效。旧 run 失去提交资格，已派发本机操作的结果仍按操作 ID 和节点收据核对；未知结果不盲目重放，也不阻止执行环境恢复后的后续工作。本地收据保存执行证据，不是第二份 Agent 会话或调度状态；具体存储介质不是产品要求。
 
-控制面、节点和 Agent 命令在同一台主机上使用同一个现有的非 root 账号；Agent 的命令是普通子进程，若命令显式调用 `sudo`，结果只取决于宿主权限。Mate 不创建账号、不切换身份、不管理 systemd。模型凭据、Pi 循环与会话持久化由控制面拥有；节点保留本地操作和收据。
+控制面、节点和 Agent 命令在同一台主机上使用同一个现有的非 root 账号；Agent 的命令是普通子进程，若命令显式调用 `sudo`，结果只取决于宿主权限。Mate 不创建账号、不切换身份；[ADR-0009](0009-lightweight-linux-packaging.md) 仅允许安装器管理 node 的 systemd 用户服务，不为 Agent 命令创建单元。模型凭据、Pi 循环与会话持久化由控制面拥有；节点保留本地操作和收据。
 
-首版验收同一台低资源 Linux VPS 上两个同账号普通进程、HTTPS 和命令执行。构建后的两个入口直接启动，Mate 不管理发布或维护期备份恢复（见 [ADR-0008](0008-direct-process-startup.md)）。远程 Linux 节点可以手动配对，但跨机部署不作为首版验收。首版不支持 Slack 操作路径、旧数据迁移或 Agent 跨节点迁移。旧实现、配置、测试和运维入口不长期保留两套运行方式。
+首版验收同一台低资源 Linux VPS 上控制面镜像/Compose 与同账号 node 发布包和用户服务、HTTPS 和命令执行；容器 UID/GID 使用该宿主账号。有限包装见 [ADR-0009](0009-lightweight-linux-packaging.md)，不提供维护期协调备份恢复。远程 Linux 节点可以手动配对，但跨机部署不作为首版验收。首版不支持 Slack 操作路径、旧数据迁移或 Agent 跨节点迁移。旧实现、配置、测试和运维入口不长期保留两套运行方式。
 
 完整目标行为与验收边界见 [产品方向](../PROJECT_DIRECTION.md)、[网页与节点基线规格 #70](https://github.com/yy4382/mate/issues/70)和[控制面进程内 Agent 循环规格 #125](https://github.com/yy4382/mate/issues/125)；#125 取代 #70 中模型循环所在侧的决定。单账号执行原因见 [ADR-0004](0004-single-account-command-execution.md)，首版兼容性取舍见 [ADR-0002](0002-first-release-compatibility-reset.md)。

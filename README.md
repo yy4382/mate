@@ -2,7 +2,7 @@
 
 Mate 是让 Agent 同事持续工作与协作的个人环境。所有者通过 Mate 自己的中文网页交流、管理频道与 Agent、查看运行状态。每个 Agent 跨频道、讨论串和私信共用一条连续上下文，至多运行一条主模型循环，并有自己的默认工作区。运行层使用 `@earendil-works/pi-agent-core` 与 `@earendil-works/pi-ai`。
 
-首个可用版本面向低资源 Linux VPS：控制面和节点以同一个现有普通账号运行，Mate 不创建用户、不切换身份、不操作 systemd。Agent 命令是普通子进程；Agent 显式使用 `sudo` 时，由宿主的 sudo 配置决定权限。网页支持手机使用、PWA 安装和所有者主动授权的 Web Push。
+首个可用版本面向低资源 Linux VPS：目标是控制面 Docker 镜像/Compose 与现有普通账号目录内的 node 发布包及 systemd 用户服务，详见 [ADR-0009](docs/adr/0009-lightweight-linux-packaging.md)。该包装尚未实现，当前源码入口与验证步骤见下文。Mate 不创建用户、不切换身份、不为 Agent 命令建 systemd 单元；Agent 显式使用 `sudo` 时，由宿主的 sudo 配置决定权限。网页支持手机使用、PWA 安装和所有者主动授权的 Web Push。
 
 ## 文档
 
