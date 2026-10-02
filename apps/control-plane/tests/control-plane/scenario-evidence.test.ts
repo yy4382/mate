@@ -1,4 +1,5 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -591,5 +592,93 @@ it("reports a changed service identity without signalling that service or deleti
     });
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+}, 30_000);
+
+it("reclaims an owned exited node whose PID still exists, without signalling its zombie", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mate-evidence-zombie-"));
+  const directory = mkdtempSync(join(tmpdir(), "mate-scenario-zombie-"));
+  const ownership = randomUUID();
+  const entry = resolve("tests/helpers/scenario-services.mjs");
+  const executable = join(root, "zombie-holder");
+  writeFileSync(join(directory, ".mate-scenario-owner"), ownership);
+  let holder: ProcessOutput | undefined;
+  try {
+    execFileSync("cc", ["tests/fixtures/scenario-zombie-holder.c", "-o", executable], {
+      timeout: 10_000,
+    });
+    holder = new ProcessOutput(
+      spawn(executable, [process.execPath, entry, "node", ownership], {
+        env: {
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          MATE_NODE_DATA_DIR: join(directory, "node-data"),
+          MATE_NODE_AGENT_WORKSPACE_ROOT: join(directory, "workspaces"),
+          MATE_CONTROL_PLANE_URL: "http://127.0.0.1:1",
+          MATE_SCENARIO_COMMAND_TIMEOUT_MS: "700",
+          MATE_SCENARIO_HEARTBEAT_INTERVAL_MS: "2000",
+          MATE_SCENARIO_HEARTBEAT_TIMEOUT_MS: "100",
+        },
+        stdio: ["pipe", "pipe", "pipe"],
+      }),
+    );
+    const ready = await holder.waitFor(/MATE_ZOMBIE_READY (\d+) (\d+)/);
+    const pid = Number(ready[1]);
+    expect(Number(ready[2])).toBe(1);
+    expect(holder.text).toContain("A new Linux node requires MATE_NODE_PAIRING_TOKEN");
+    // WNOWAIT guarantees an exited, unreaped real Node; kill(0) alone still sees its PID.
+    expect(process.kill(pid, 0)).toBe(true);
+    expect(
+      execFileSync("ps", ["-p", String(pid), "-o", "stat="], { encoding: "utf8" }).trim(),
+    ).toMatch(/^Z/);
+    const manifest = join(root, "resources.json");
+    writeFileSync(
+      manifest,
+      JSON.stringify({
+        version: 1,
+        directory,
+        ownership,
+        driverPid: 2147483647,
+        processes: [{ service: "node", pid, marker: `${entry} node ${ownership}` }],
+      }),
+    );
+    const result = spawnSync(process.execPath, ["tests/helpers/scenario-cleanup.mjs", manifest], {
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+    writeFileSync(join(root, "independent-cleanup-initial.json"), result.stdout);
+    expect(result.status, `Initial zombie cleanup: ${result.stdout}\n${result.stderr}`).toBe(0);
+    const report = JSON.parse(result.stdout).reports[0];
+    expect(report.residual).toEqual([]);
+    expect(report.observations).toContainEqual(
+      expect.objectContaining({
+        pid,
+        state: expect.stringMatching(/^Z/),
+        identityMatches: false,
+      }),
+    );
+    expect(report.signals).toEqual([]);
+    expect(existsSync(directory)).toBe(false);
+    expect(process.kill(pid, 0)).toBe(true);
+  } finally {
+    try {
+      if (holder) {
+        holder.child.stdin?.end("release");
+        const observed = holder;
+        try {
+          const status = await waitForScenario(
+            "zombie holder reaps its exited child",
+            () => observed.exitStatus,
+            (status) => status !== undefined,
+            { timeoutMs: 2000 },
+          );
+          expect(status).toEqual({ code: 0, signal: null });
+        } finally {
+          await stopProcess(holder);
+        }
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
+    }
   }
 }, 30_000);
