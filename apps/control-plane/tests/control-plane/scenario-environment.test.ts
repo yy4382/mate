@@ -245,7 +245,7 @@ it("prepares a real logged-in paired Agent whose Pi run can execute an ordinary 
     expect(readFileSync(join(agent.workspace, "result.txt"), "utf8")).toBe("command-ran");
     await provider.assertComplete();
   } finally {
-    provider.close();
+    await provider.close();
     expect((await environment.close()).failures).toEqual([]);
   }
   expect(existsSync(environment.directory)).toBe(false);

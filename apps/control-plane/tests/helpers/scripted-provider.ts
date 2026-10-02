@@ -249,7 +249,11 @@ export function createScriptedProvider(options: { timeoutMs?: number } = {}) {
       });
       request.signal.addEventListener("abort", resolveAbort, { once: true });
       const execution = Promise.resolve()
-        .then(() => step(request))
+        .then(() => {
+          const result = step(request);
+          if (result) return result.then(() => request.finishStep());
+          request.finishStep();
+        })
         .catch((error: unknown) => {
           if (request.signal.aborted && error === request.signal.reason) return;
           fail(
@@ -313,11 +317,14 @@ export function createScriptedProvider(options: { timeoutMs?: number } = {}) {
       )
         throw new Error("Scripted provider has unfinished steps or requests");
     },
-    close() {
+    async close() {
       closed = true;
-      for (const request of requests)
-        if (request.state === "pending" || !request.stepFinished) request.close();
+      for (const request of requests) if (request.state === "pending") request.close();
       for (const change of [...changes]) change();
+      // Drain already-ready Promise continuations before deciding an answered step is unfinished.
+      if (requests.some((request) => request.state === "responded" && !request.stepFinished))
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      for (const request of requests) if (!request.stepFinished) request.close();
     },
   };
 }

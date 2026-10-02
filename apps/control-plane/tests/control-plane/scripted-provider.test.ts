@@ -38,7 +38,7 @@ it("routes interleaved real requests from two Agents using the same model and th
     expect(await pending.outcome).toEqual({ kind: "responded" });
     await provider.assertComplete();
   } finally {
-    provider.close();
+    await provider.close();
     expect((await environment.close()).failures).toEqual([]);
   }
 }, 30_000);
@@ -119,7 +119,7 @@ it("keeps dynamic task IDs and real command results in each interleaved Agent's 
     ]);
     await provider.assertComplete();
   } finally {
-    provider.close();
+    await provider.close();
     expect((await environment.close()).failures).toEqual([]);
   }
 }, 30_000);
@@ -175,7 +175,7 @@ it("associates a real compaction summary with the original Agent while its peer 
     expect(await continuation.outcome).toEqual({ kind: "responded" });
     await provider.assertComplete();
   } finally {
-    provider.close();
+    await provider.close();
     expect((await environment.close()).failures).toEqual([]);
   }
 }, 30_000);
@@ -216,7 +216,7 @@ it("records expected client cancellation, refuses late output, and leaves the re
     expect(page.messages.map((message: { text: string }) => message.text)).toEqual(["等待暂停。"]);
     await provider.assertComplete();
   } finally {
-    provider.close();
+    await provider.close();
     expect((await environment.close()).failures).toEqual([]);
   }
 }, 30_000);
@@ -245,7 +245,7 @@ it.each(["timeout", "closed"])(
         body: { text: "等待结果。" },
       });
       const pending = await provider.waitFor(agent.summary.id, "pendingStep");
-      if (kind === "closed") provider.close();
+      if (kind === "closed") await provider.close();
       expect(await pending.outcome).toEqual({ kind });
       expect(pending.signal.aborted).toBe(true);
       expect(pending.text("迟到正文")).toBe("late");
@@ -257,7 +257,7 @@ it.each(["timeout", "closed"])(
         await expect(provider.assertComplete()).rejects.toThrow("等待结果。");
       } else await provider.assertComplete();
     } finally {
-      provider.close();
+      await provider.close();
       expect((await environment.close()).failures).toEqual([]);
     }
   },
@@ -288,7 +288,7 @@ it.each(["unexpected_request", "script_exhausted", "late_request"])(
             throw new Error("Late request executed a step");
           },
         ]);
-        provider.close();
+        await provider.close();
       }
       await environment.request(`/api/owner/channels/${agent.channelId}/messages`, {
         method: "POST",
@@ -303,7 +303,7 @@ it.each(["unexpected_request", "script_exhausted", "late_request"])(
       await expect(provider.assertComplete()).rejects.toThrow(error);
       expect(environment.providerErrors[0]).toBe(error);
     } finally {
-      provider.close();
+      await provider.close();
       expect((await environment.close()).failures).toEqual([]);
     }
   },
@@ -330,14 +330,14 @@ it("bounds a named-step observation, reports the last request, and wakes observa
       code: "wait_timeout",
       message: expect.stringContaining("最后实际请求"),
     });
-    provider.close();
+    await provider.close();
     expect(await pending.outcome).toEqual({ kind: "closed" });
     const clean = createScriptedProvider();
     const waiting = clean.waitFor(agent.summary.id, "notStarted");
-    clean.close();
+    await clean.close();
     await expect(waiting).rejects.toMatchObject({ code: "provider_closed" });
   } finally {
-    provider.close();
+    await provider.close();
     expect((await environment.close()).failures).toEqual([]);
   }
 }, 30_000);
@@ -363,7 +363,7 @@ it("treats an unannounced real client cancellation as a failure", async () => {
     expect(provider.errors[0]?.code).toBe("unexpected_cancellation");
     await expect(provider.assertComplete()).rejects.toThrow("没有声明取消。");
   } finally {
-    provider.close();
+    await provider.close();
     expect((await environment.close()).failures).toEqual([]);
   }
 }, 30_000);
@@ -400,7 +400,7 @@ it.each(["step_failed", "step_timeout"])(
         code,
       });
     } finally {
-      provider.close();
+      await provider.close();
       expect((await environment.close()).failures).toEqual([]);
     }
   },
@@ -487,7 +487,7 @@ it("waits for async steps that arrive while completion is already waiting on a r
     await observed;
   } finally {
     releaseSecond();
-    provider.close();
+    await provider.close();
     expect((await environment.close()).failures).toEqual([]);
   }
 }, 30000);
@@ -520,7 +520,7 @@ it("records closing a replied but unfinished step and preserves its later non-ca
     });
     const request = await provider.waitFor(agent.summary.id, "replyThenFail");
     expect(await request.outcome).toEqual({ kind: "responded" });
-    provider.close();
+    await provider.close();
     releaseStep();
     await expect(provider.assertComplete()).rejects.toMatchObject({
       code: "step_cancelled",
@@ -530,7 +530,44 @@ it("records closing a replied but unfinished step and preserves its later non-ca
     expect(provider.errors.find((error) => error.code === "step_failed")?.cause).toBe(original);
   } finally {
     releaseStep();
-    provider.close();
+    await provider.close();
     expect((await environment.close()).failures).toEqual([]);
   }
 }, 30000);
+
+it.each(["sync", "async"])(
+  "allows immediate close after a %s step has actually returned its reply",
+  async (kind) => {
+    const provider = createScriptedProvider();
+    const environment = await createScenarioEnvironment({
+      agents: [{ name: "正常关闭" }],
+      provider: provider.handle,
+    });
+    environment.registerCleanup("scripted provider", () => provider.close());
+    try {
+      const agent = environment.agents[0];
+      if (!agent) throw new Error("Expected prepared Agent");
+      function synchronousReply(request: ScriptedRequest) {
+        request.text("同步正文。");
+      }
+      async function fulfilledReply(request: ScriptedRequest) {
+        request.text("异步已完成正文。");
+      }
+      const step = kind === "sync" ? synchronousReply : fulfilledReply;
+      provider.forAgent(agent, [step]);
+      await environment.request(`/api/owner/channels/${agent.channelId}/messages`, {
+        method: "POST",
+        body: { text: "回复后立即正常关闭。" },
+      });
+      const request = await provider.waitFor(agent.summary.id, step.name);
+      expect(await request.outcome).toEqual({ kind: "responded" });
+      await provider.close();
+      await provider.assertComplete();
+      expect(provider.errors).toEqual([]);
+    } finally {
+      await provider.close();
+      expect((await environment.close()).failures).toEqual([]);
+    }
+  },
+  30000,
+);
