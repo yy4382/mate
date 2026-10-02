@@ -1,3 +1,5 @@
+import { projectImages } from "./session/image-context.js";
+import { WorkspaceImage } from "../workspaces/image-result.js";
 import { z } from "zod";
 import {
   confirmedModelResponse,
@@ -199,17 +201,17 @@ export class AgentLoop {
           input: Type.Record(Type.String(), Type.Any()),
         }),
         executionMode: "sequential",
-        execute: async (toolCallId, input, signal) => ({
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                await forwardTool(toolCallId, "tools.call", toolInputSchema.parse(input), signal),
-              ),
-            },
-          ],
-          details: null,
-        }),
+        execute: async (toolCallId, input, signal) => {
+          const parsed = toolInputSchema.parse(input);
+          const result = await forwardTool(toolCallId, "tools.call", parsed, signal);
+          return {
+            content:
+              parsed.name === "workspace.read" && result instanceof WorkspaceImage
+                ? result.content(model.input.includes("image"))
+                : [{ type: "text", text: JSON.stringify(result) }],
+            details: null,
+          };
+        },
       },
     ];
     let compactionFailed = false;
@@ -250,7 +252,10 @@ export class AgentLoop {
       },
       transformContext: async (messages, signal) => {
         try {
-          return await compaction.transform(messages, signal);
+          return projectImages(
+            await compaction.transform(messages, signal),
+            model.input.includes("image"),
+          );
         } catch (error) {
           if (
             error instanceof SummaryResponseError &&

@@ -1,3 +1,4 @@
+import { projectImages } from "./image-context.js";
 import { buildSummaryRequest, summaryMessage } from "../../prompts/index.js";
 import {
   reportedUsage,
@@ -207,7 +208,11 @@ export class SessionCompaction {
     reserve: number,
     signal?: AbortSignal,
   ): Promise<{ text: string; requestId: string }> {
-    const { systemPrompt, prompt, context } = buildSummaryRequest(messages, previous, prefix);
+    const { systemPrompt, prompt, context } = buildSummaryRequest(
+      projectImages(messages, false),
+      previous,
+      prefix,
+    );
     const maxTokens = Math.min(Math.floor((prefix ? 0.5 : 0.8) * reserve), this.model.maxTokens);
     if (maxTokens < 1 || textTokens(systemPrompt + prompt) + maxTokens > this.model.contextWindow)
       throw new Error("Summary request has no legal input and output capacity");

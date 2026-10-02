@@ -907,9 +907,7 @@ it("lets a non-member Agent read a public channel's attachments but keeps publis
     },
   });
   expect(publicChunk).toMatchObject({ ok: true });
-  expect(Buffer.from((publicChunk.result as { base64: string }).base64, "base64").toString()).toBe(
-    "public attachment body",
-  );
+  expect(publicChunk.result).toMatchObject({ content: "public attachment body" });
 
   const privateList = await callAgentTool(app, socket, run, "list-private-files", "tools.call", {
     name: "attachments.list",
@@ -2243,7 +2241,15 @@ it("sends an Agent's own workspace read of a peer workspace to the node as an ag
         ok: true,
         result: {
           code: 0,
-          stdout: kind === "read" ? "peer memory\n" : JSON.stringify({ type: "file", size: 13 }),
+          stdout:
+            kind === "workspace_read_chunk"
+              ? JSON.stringify({
+                  base64: Buffer.from("peer memory\n").toString("base64"),
+                  offset: 0,
+                  totalBytes: 12,
+                  version: { size: 12, device: "1", inode: "1", modifiedNs: "1", changedNs: "1" },
+                })
+              : JSON.stringify({ type: "file", size: 12 }),
           stderr: "",
           truncated: false,
         },
@@ -2265,7 +2271,7 @@ it("sends an Agent's own workspace read of a peer workspace to the node as an ag
     type: "control.workspace.operation",
     agentId,
     mode: "agent_read",
-    operation: { kind: "read", path: peerPath },
+    operation: { kind: "workspace_read_chunk", path: peerPath, offset: 0, length: 8192 },
   });
   // The read stays attributed to the Agent, and no file content reaches the owner activity view.
   expect(

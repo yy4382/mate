@@ -8,7 +8,7 @@ export const attachmentToolDefinitions = {
   },
   "attachments.read_chunk": {
     description:
-      "分块读取一个对话中的附件；公开频道无需加入即可读取，私有对话和私信仅限成员。每次最多 8 KiB。",
+      "分块读取对话中的 UTF-8 文本附件；公开频道无需加入，私有对话和私信仅限成员。每次请求最多 8 KiB，字符边界各最多扩展 3 字节；返回 content、实际 offset/nextOffset 和 requestedOffset/requestedLength。上传图片或二进制只返回类型与不可读取提示，不受声明 MIME 或模型图片能力影响。",
     schema: z
       .object({
         conversationId,

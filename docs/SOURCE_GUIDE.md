@@ -18,7 +18,7 @@
 - `conversations/`：频道、私信、消息、已读与暂缓、消息关联任务和提醒。`service.ts` 保留事务与业务编排；`contracts.ts` 是请求校验，`rows.ts` 解释数据库查询结果，`tool-contracts.ts` 描述 Agent 能看到的工具。
 - `agents/`：Agent 身份、资料、创建与目录；供应商模型的校验仍在控制面，不能带进浏览器。
 - `runtime/`：run 调度、模型循环、操作收据与恢复、活动和用量。`session/` 管完整历史和压缩，`tools/` 管工具入口和当前 run 检查；`provider-response.ts` 只解释供应商响应中的结束和用量证据。
-- `workspaces/`：文件浏览、下载和 Agent 文件操作的控制面逻辑。`contracts.ts` 和 `results.ts` 分别放请求契约与结果解释；副作用提交顺序留在服务中。
+- `workspaces/`：文件浏览、下载和 Agent 文件操作的控制面逻辑。`file-content.ts` 负责有界字节分类与 UTF-8 范围，`image-result.ts` 是文件工具专用的图片返回路径；`runtime/session/image-context.ts` 只在请求时投影历史图片。`contracts.ts` 和 `results.ts` 分别放请求契约与结果解释；副作用提交顺序留在服务中。
 - `attachments/`：附件操作及相应工具描述。
 - `nodes/`：控制面的节点目录和连接路由；与 `apps/node` 的机器端代码不同。
 - `auth/`、`providers/`、`notifications/`：所有者登录、模型凭据和供应商目录、网页推送。
@@ -86,3 +86,9 @@ Pi 会话保留供应商扩展字段。会话边界的窄适配不能改成会�
 交付拓扑的测试适配在 `tests/helpers/scenario-container.ts`，由同一 `scenario-environment.ts` 的 `container: { image }` 配置选择；测试 override 只存在于场景合成目录。`tests/container/run.mjs` 使用 B 原构建入口创建当前 SHA 的唯一镜像，`delivered-scenarios.integration.ts` 复用正常 workflow 与两个选定恢复导出，并验证驱动 SIGKILL 后的独立回收。生产交付文件不导入这些测试代码；完整入口、实际证据与未验证边界见开发说明。
 
 `deploy/tests/delivery-smoke.sh` 从实际完整包启动独立镜像/Compose 联通验收；`delivery.mjs` 只用 Node 内置库，经所有者 API 与真实 Pi/节点检查程序和数据，`control-plane-fixture.mjs` 仅在测试 override 注入合成模型 HTTP/SSE 地址。生产配置不导入这些测试文件。真实四平台用户服务命令与证据边界见 [部署验收](DEPLOYMENT_ACCEPTANCE.md)。
+
+## Agent 文件读取的内容边界
+
+文件与附件读取先探测同一版本至多 8 KiB 的前缀，再检查请求范围。PNG/JPEG/GIF/WebP 按固定字节签名判断；文本使用严格 UTF-8 和控制字符检查。有限探测不保证识别所有未知二进制，也不检查图片内部编码损坏。完整文件系统图片通过节点有界分块读取，最大 5 MiB；短读、版本变化和超过上限均不能成为图片内容块。请求中的模型须明确声明图片输入能力。上传图片或二进制始终只给类型提示，上传文本继续可读；Mate 不安装转换程序。
+
+文本范围为完整 UTF-8 字符在两端各最多多读 3 字节。`requestedOffset`/`requestedLength` 保留请求，`offset`/`nextOffset` 给出实际文本字节范围（右端不包含）；使用 `nextOffset` 继续，文件系统读取同时传回原 `version`。图片持久化为 Pi 内容块；纯文本模型与压缩请求将其投影为提示，不修改原始 transcript。

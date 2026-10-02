@@ -28,7 +28,8 @@ const attachmentChunkSchema = z.object({
   attachment: attachmentSummarySchema,
   offset: z.number(),
   totalBytes: z.number(),
-  base64: z.string(),
+  content: z.string(),
+  nextOffset: z.number(),
 });
 
 function messageWithText(messages: z.output<typeof ownerMessageSchema>[], text: string) {
@@ -287,8 +288,12 @@ export async function runReportWorkflow(
       assert.equal(chunk.offset, 0);
       assert.equal(chunk.totalBytes, Buffer.byteLength(draftContent));
       assert.equal(chunk.attachment.channelId, peerConversationId);
-      assert.equal(Buffer.from(chunk.base64, "base64").toString("utf8"), draftContent);
-      request.call("workspace.write_bytes", { path: "reviewed-draft.txt", base64: chunk.base64 });
+      assert.equal(chunk.nextOffset, chunk.totalBytes);
+      assert.equal(chunk.content, draftContent);
+      request.call("workspace.write_bytes", {
+        path: "reviewed-draft.txt",
+        base64: Buffer.from(chunk.content, "utf8").toString("base64"),
+      });
     },
     function validateActualCopiedFile(request) {
       request.result("workspace.write_bytes", writeSchema);

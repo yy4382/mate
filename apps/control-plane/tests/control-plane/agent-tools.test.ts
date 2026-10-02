@@ -236,7 +236,7 @@ it("executes file and process tools with defaults, receipts and domain-specific 
       attachmentId: attachment.id,
       offset: 0,
     }),
-  ).toMatchObject({ ok: true, result: { base64: "aGVsbG8=", totalBytes: 5, offset: 0 } });
+  ).toMatchObject({ ok: true, result: { content: "hello", totalBytes: 5, offset: 0 } });
   const executed = await call(7, "process.exec", { command: "printf ran" });
   expect(executed).toMatchObject({
     ok: true,
