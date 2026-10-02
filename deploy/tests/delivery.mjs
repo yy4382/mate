@@ -419,15 +419,21 @@ try {
   );
   const results = [...observed.values()];
   assert.equal(results.length, 4);
-  for (const result of results) assert.equal(result.ok, true, JSON.stringify(result));
-  assert.equal(results[0].result.state, "succeeded");
-  const command = results[0].result.receipt;
+  const [commandResult, writtenFile, readFile, publishedAttachment] = results;
+  assert.equal(commandResult.state, "succeeded", JSON.stringify(commandResult));
+  const command = commandResult.receipt;
   assert.equal(command.code, 0, JSON.stringify(command));
+  assert.equal(command.signal, null);
+  assert.equal(command.timedOut, false);
+  assert.equal(command.processGroupRunning, false);
+  assert.equal(command.cwd, agent.linuxIdentity.workspace);
   assert.deepEqual(command.stdout.trim().split("\n"), [
     String(uid),
     String(gid),
     agent.linuxIdentity.workspace,
   ]);
+  assert.deepEqual(writtenFile, { written: true });
+  assert.deepEqual(readFile, { content: "synthetic delivered workspace file\n" });
   assert.equal(readlinkSync(`/proc/${node.pid}/exe`), process.execPath);
   console.log(
     JSON.stringify({
@@ -447,8 +453,18 @@ try {
   );
   const effectFile = join(agent.linuxIdentity.workspace, "effect-count.txt");
   assert.equal(readFileSync(effectFile, "utf8"), "once\n");
-  const attachment = (await api(`/api/owner/channels/${channelId}/attachments`)).attachments[0];
-  assert.ok(attachment);
+  const { attachments } = await api(`/api/owner/channels/${channelId}/attachments`);
+  assert.equal(attachments.length, 1);
+  const [attachment] = attachments;
+  assert.deepEqual(publishedAttachment, attachment);
+  assert.equal(attachment.channelId, channelId);
+  assert.equal(attachment.filename, "包内节点资料.txt");
+  assert.equal(attachment.size, Buffer.byteLength("synthetic delivered workspace file\n"));
+  assert.equal(
+    attachment.sha256,
+    createHash("sha256").update("synthetic delivered workspace file\n").digest("hex"),
+  );
+  assert.deepEqual(attachment.uploader, { kind: "agent", id: agent.id });
   const file = await api(`/api/owner/agents/${agent.id}/workspace/chunk?path=delivery.txt`);
   assert.equal(
     Buffer.from(file.base64, "base64").toString(),
