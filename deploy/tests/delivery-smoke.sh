@@ -14,9 +14,11 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 directory=$(mktemp -d "${TMPDIR:-/tmp}/mate-delivery-XXXXXX")
 chmod 700 "$directory"
 mkdir -m 700 "$directory/home"
-export HOME="$directory/home"
+mate_home="$directory/home"
 printf 'Delivery evidence retained at %s\n' "$directory"
-sh "$bootstrap" --version "$version" --package "$archive" --sha256 "$digest"
-bundle="$HOME/.local/lib/mate-node/versions/$version"
-"$HOME/.local/bin/mate" --version
+# Only the management installation uses an isolated HOME. Docker retains the
+# account's existing context/configuration; no credentials are copied or changed.
+HOME="$mate_home" sh "$bootstrap" --version "$version" --package "$archive" --sha256 "$digest"
+bundle="$mate_home/.local/lib/mate-node/versions/$version"
+HOME="$mate_home" "$mate_home/.local/bin/mate" --version
 exec "$bundle/node/bin/node" "$root/deploy/tests/delivery.mjs" "$image" "$bundle" "$directory" "$version" "$archive" "$root" "$daemon_recovery"

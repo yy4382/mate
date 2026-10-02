@@ -49,6 +49,7 @@ jobs:
           persist-credentials: false
 
       - name: Build the locked complete package
+        id: package
         run: |
           sh deploy/node/build-bundle.sh "$MATE_VERSION" x64 dist/node-bundles
           printf '%s\n' "$GITHUB_SHA" > dist/node-bundles/SOURCE_COMMIT
@@ -74,6 +75,7 @@ jobs:
           df -h .
 
       - name: Save the private validation package
+        if: ${{ always() && steps.package.outcome == 'success' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: mate-node-x64-${{ github.sha }}

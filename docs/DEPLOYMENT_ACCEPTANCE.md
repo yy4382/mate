@@ -39,6 +39,22 @@ sh deploy/node/tests/uninstall-smoke.sh ARCHIVE BOOTSTRAP SHA256 VERSION PEER_MJ
 
 `PEER_MJS` 是交付测试目录中的 `user-service-peer.mjs`；`UPDATE_CUT_MJS` 是 `update-cut.mjs`。包验证覆盖获取/校验/平台/原生依赖、目录权限与冲突；用户服务覆盖真实安装、拒绝令牌后原身份重试、日志、重复安装、停止/禁用、异常重启和缺 manager。更新与卸载通过外部文件/进程观察器对真实 CLI 发信号，在入口、安装、单元、reload、修复清理或卸载之间中断；观察不到实际中断就失败。预检错误保留旧安装，并发 Mate 管理拒绝，混合版本不能假报正常，保留配置/身份/数据，重装沿用原身份。具体边界见 [完整包](NODE_BUNDLE.md)、[用户服务](NODE_SERVICE.md)、[更新](NODE_UPDATE.md)及[卸载](NODE_UNINSTALL.md)。慢速架构模拟更新观察可设置 `MATE_TEST_CUT_TIMEOUT_SECONDS=600`，不改变通过条件。
 
+预配置 Linger=yes 的真实宿主/VM 另有三阶段只读观察入口。首先由 Mate 的普通账号安装并 enable/start 服务，让 node 空闲、身份文件已存在。观察命令由该账号登录会话之外的已有 VM supervisor 执行；开机后观察需要它已有的系统 journal 完整读取权限，不执行 root Mate CLI，不新建账号或权限。以下每步中的路径是同一份 VM 外部观察文件，必须随 VM 重启保留：
+
+```sh
+# 普通 Mate 账号仍登录时；observer 本身不能使用该账号。
+sh deploy/node/tests/linger-smoke.sh before-logout 1000 /home/ubuntu \
+  /home/ubuntu/.local/share/mate/node/node-identity.json /private-observer/linger-facts
+# 操作者关闭该账号全部现有登录会话，再从已有外部 supervisor 执行。
+sh deploy/node/tests/linger-smoke.sh after-logout 1000 /home/ubuntu \
+  /home/ubuntu/.local/share/mate/node/node-identity.json /private-observer/linger-facts
+# 操作者在已授权隔离环境重启 VM；在任何 Mate 账号登录之前，supervisor 执行。
+sh deploy/node/tests/linger-smoke.sh after-boot 1000 /home/ubuntu \
+  /home/ubuntu/.local/share/mate/node/node-identity.json /private-observer/linger-facts
+```
+
+观察器拒绝容器、Linger=no、同账号观察和当前仍有 owner 会话的情况；注销后要求原 manager/node 的 PID 与进程启动时钟均未改变。开机后要求 boot ID 变化、已有 enabled 单元的 cgroup 内存在该账号的专用 node 进程，并核对原单元/身份 hash；还读取本次 boot 的完整 logind journal，拒绝 owner 曾登录再注销后才观察的情况。systemd [255](https://github.com/systemd/systemd/blob/v255/src/login/logind-session.c#L734) 与 [257](https://github.com/systemd/systemd/blob/v257/src/login/logind-session.c#L794) 的会话日志都带用户名 `USER_ID` 和 `SESSION_ID`，检查使用这些字段，不靠当前会话列表为空冒充未登录。脚本不注销会话、重启 VM、启动 user manager 或配置 linger；缺环境权限/证据就失败，不能填写通过。
+
 联通脚本另用镜像内 SQLite 创建 schema revision 999 的合成外部控制面数据库，实际生产入口拒绝后核对数据库 SHA-256 未改变；现有 `pnpm check` 还覆盖格式/结构错误持久化边界。包装工具不迁移数据库、重建身份或重放未知副作用。包装矩阵不是 A 的深层 runtime 故障矩阵替代品。
 
 ## 已执行证据与发布缺口
@@ -47,12 +63,23 @@ sh deploy/node/tests/uninstall-smoke.sh ARCHIVE BOOTSTRAP SHA256 VERSION PEER_MJ
 
 | 实际环境 | 已执行项目 | 当前结果与边界 |
 | --- | --- | --- |
-| Ubuntu 24.04 arm64，官方 cloud image 的 HVF VM，账号 UID/GID 1000，真实 systemd 255，Linger=no | #134 完整包；#135 用户服务，source `8a56fb5326a77138a02fb5e24def8b83ac7212f8` | 两项 PASS；更新、卸载最终组合另行记录 |
-| Debian 13 arm64，官方 cloud image 的 HVF VM，账号 UID/GID 1000，真实 systemd 257，Linger=no | 同上 | 两项 PASS；更新、卸载最终组合另行记录 |
-| Ubuntu 24.04 x86_64，官方 cloud image 的 QEMU TCG 架构模拟 VM，账号 UID/GID 1000，真实 systemd 255，Linger=no | 同上 | 两项 PASS；不是原生 x86_64 性能测量；更新、卸载最终组合另行记录 |
-| Debian 13 x86_64，官方 cloud image 的 QEMU TCG 架构模拟 VM，账号 UID/GID 1000，真实 systemd 257，Linger=no | 同上 | 两项 PASS；不是原生 x86_64 性能测量；更新、卸载最终组合另行记录 |
+| Ubuntu 24.04 arm64，官方 cloud image 的 HVF VM，账号 UID/GID 1000，真实 systemd 255，Linger=no | #134 完整包；#135 用户服务，source `8a56fb5326a77138a02fb5e24def8b83ac7212f8` | 两项 PASS；包版本均为 `0.1.0`，架构对应标识见下表；更新、卸载最终组合另行记录 |
+| Debian 13 arm64，官方 cloud image 的 HVF VM，账号 UID/GID 1000，真实 systemd 257，Linger=no | 同上（版本 `0.1.0`） | 两项 PASS；包版本均为 `0.1.0`，架构对应标识见下表；更新、卸载最终组合另行记录 |
+| Ubuntu 24.04 x86_64，官方 cloud image 的 QEMU TCG 架构模拟 VM，账号 UID/GID 1000，真实 systemd 255，Linger=no | 同上（版本 `0.1.0`） | 两项 PASS；不是原生 x86_64 性能测量；更新、卸载最终组合另行记录 |
+| Debian 13 x86_64，官方 cloud image 的 QEMU TCG 架构模拟 VM，账号 UID/GID 1000，真实 systemd 257，Linger=no | 同上（版本 `0.1.0`） | 两项 PASS；不是原生 x86_64 性能测量；更新、卸载最终组合另行记录 |
 | Ubuntu 24.04 原生 x86_64 hosted VM | 最终同版镜像/包联通及隔离 Docker 恢复 | 新入口待实际执行，不填写通过 |
 | macOS 驱动的 Orb Linux arm64 容器 | #133 实际镜像/Compose、私有挂载、配对、附件、密码移除后替换、异常退出和显式停止 | PASS；容器结果不是四 VM 用户服务或 Docker daemon 重启证据 |
+
+已实际运行的包标识：
+
+| 测试 | 版本 / 架构 | 压缩包 SHA-256 | 绑定来源 |
+| --- | --- | --- | --- |
+| #134 完整包 | `0.1.0` / arm64 | `d19d52f5c414d46b9fc13fd7ccb6b605343874cd4ac07cc62ba6a4406fb6c37b` | 原本地构建没有 `SOURCE_COMMIT` 文件；实际包清单和四 VM 原始验证结果见 [#134](https://github.com/yy4382/mate/issues/134)，不补造来源标记 |
+| #134 完整包 | `0.1.0` / x64 | `5073f8f5745c6d1bc1ddd2837ebbdd7d8938ab84387e552482a755cbc6869fcb` | `357d460657790092a0cdac1564ee998e6d7c5712`，[原生构建 Actions](https://github.com/yy4382/mate/actions/runs/36976798658) |
+| #135 用户服务 | `0.1.0` / arm64 | `6ef1ef557de9c7215345122cd2b006d901269e99f747283f58c557e0a59c0fa8` | `8a56fb5326a77138a02fb5e24def8b83ac7212f8` |
+| #135 用户服务 | `0.1.0` / x64 | `cc6a8393f7e1f9432969ad2c889c38f011877cec4f0e89f8274061b5b179c7b7` | 同一 `8a56fb5`，[原生构建 Actions](https://github.com/yy4382/mate/actions/runs/36986065923) |
+
+#133 已测 arm64 镜像为 `mate-control-plane:ticket133`，发布版本 `0.1.0-ticket133`，revision `0bf1179e73155410b0309b8d85f6b5e756f2d255`，image ID `sha256:c3d59820a5f33b15f7ca6500f8b69ad3a29ad80e76b35f43abf6e6d4a83586d6`，镜像体积 372867138 字节；[票据证据](https://github.com/yy4382/mate/issues/133#issuecomment-5946788178) 明确使用的是开发 node 接口，而非同版完整包联通。因此它不替代上面的同版完整交付验收。
 
 四 VM 当前均没有预配置 linger。没有执行“预配置 linger 后注销仍运行”及“开机用户 manager/服务自动运行”，因此这两项仍未验收，#138 与 #131 不能据上述成功宣称完整发布矩阵通过。Mate 不为填表擅自配置 linger。后续需用户已准备好的 Linger=yes 隔离宿主/VM，记录注销前后会话事实、原服务 PID/身份、开机前后 boot ID、服务 enable/active 和日志；新登录启动 manager 不能冒充开机自动运行。
 
