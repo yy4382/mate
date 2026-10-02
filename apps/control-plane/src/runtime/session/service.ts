@@ -125,14 +125,31 @@ export class AgentSession {
     agentId: string,
     identity: string,
   ): { actionScopeId: string; name: string; input: unknown } | undefined {
-    for (const entry of this.read(agentId)) {
+    // The scope narrows candidates only; the original assistant entry still proves the full ID.
+    const match =
+      /^mate:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):[0-9a-f]{64}:1$/.exec(
+        identity,
+      );
+    if (!match || match[0] !== identity) return undefined;
+    const rows = this.db
+      .prepare(
+        `SELECT id,payload_json,action_scope_id FROM owner_agent_session_records
+         WHERE agent_id=? AND action_scope_id=? AND kind='message' ORDER BY seq`,
+      )
+      .iterate(agentId, match[1]) as Iterable<{
+      id: string;
+      payload_json: string;
+      action_scope_id: string;
+    }>;
+    for (const row of rows) {
+      const entry = JSON.parse(row.payload_json) as Extract<SessionCommit, { kind: "message" }>;
       if (entry.message.role !== "assistant") continue;
       for (const call of entry.message.content) {
         if (
           call.type === "toolCall" &&
-          durableToolIdentity(entry.actionScopeId, entry.id, call.id) === identity
+          durableToolIdentity(row.action_scope_id, row.id, call.id) === identity
         )
-          return { actionScopeId: entry.actionScopeId, name: call.name, input: call.arguments };
+          return { actionScopeId: row.action_scope_id, name: call.name, input: call.arguments };
       }
     }
     return undefined;
