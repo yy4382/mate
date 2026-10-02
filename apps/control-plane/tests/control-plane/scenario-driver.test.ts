@@ -10,11 +10,135 @@ import {
   attachmentSummarySchema,
   ownerChatSnapshotSchema,
   ownerMessageSchema,
+  ownerReminderSchema,
   ownerTaskSchema,
 } from "@mate/protocol/owner";
 import { scriptedToolResultSchemas } from "../helpers/scripted-tool-results.js";
+import { z } from "zod";
+import { loopFixture, respond } from "../helpers/agent-loop.js";
+import { readMessageRuns } from "../helpers/scenario-facts.js";
 
 const expectedReport = "输入：2,4,6\n总计：12\n";
+
+it("retains the actual seed association before input commit and across control-plane recovery", async () => {
+  const fixture = await loopFixture(
+    (_request, response) => respond(response, "恢复轮结束。"),
+    ", beforeSessionCommit: async entry => { if (entry.kind === 'message' && entry.message.role === 'user') { console.log('MATE_SCENARIO_INPUT_PENDING'); await new Promise(() => {}); } }",
+  );
+  try {
+    const agent = await fixture.agent("未提交输入");
+    const message = ownerMessageSchema.parse(
+      await fixture.send(agent.channelId, "在原 session 恢复本消息。"),
+    );
+    await fixture.control.waitFor(/MATE_SCENARIO_INPUT_PENDING/);
+    expect(fixture.requests).toEqual([]);
+    const seed = readMessageRuns(fixture.directory, agent.id, message.id)[0];
+    if (!seed) throw new Error("Expected admitted seed run before its input commit");
+    expect(seed).toMatchObject({ state: "running", messageIds: [message.id] });
+    const oldControl = fixture.control;
+    await fixture.restartControl();
+    expect(oldControl.exitStatus?.signal).toBe("SIGKILL");
+    const runs = await waitForScenario(
+      "same message's recovered seed run completed",
+      () => readMessageRuns(fixture.directory, agent.id, message.id),
+      (facts) => facts.some((run) => run.id !== seed.id && run.state === "completed"),
+    );
+    expect(runs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: seed.id,
+          state: "failed",
+          errorCode: "interrupted",
+          sessionId: seed.sessionId,
+          messageIds: [message.id],
+        }),
+        expect.objectContaining({
+          state: "completed",
+          sessionId: seed.sessionId,
+          messageIds: [message.id],
+        }),
+      ]),
+    );
+    expect(fixture.requests).toHaveLength(1);
+    expect(JSON.stringify(fixture.requests[0])).toContain("在原 session 恢复本消息。");
+  } finally {
+    await fixture.close();
+  }
+}, 30_000);
+
+it("does not assign a queued ordinary Owner message to a reminder-only run with an overlapping sequence range", async () => {
+  const provider = createScriptedProvider();
+  const environment = await createScenarioEnvironment({
+    agents: [{ name: "提醒关联" }],
+    provider: provider.handle,
+  });
+  environment.registerCleanup("scripted provider", () => provider.close());
+  try {
+    const agent = environment.agents[0];
+    if (!agent) throw new Error("Expected prepared Agent");
+    const driver = createScenarioDriver(environment);
+    provider.forAgent(agent, [
+      function scheduleReminder(request: ScriptedRequest) {
+        request.call("reminders.create", {
+          conversationId: agent.channelId,
+          text: "只处理到期提醒",
+          dueAt: Date.now() + 1500,
+        });
+      },
+      function finishPreparation(request: ScriptedRequest) {
+        expect(request.result("reminders.create", ownerReminderSchema).state).toBe("active");
+        request.text("已设置合成提醒。");
+      },
+      function reminderOnly(_request: ScriptedRequest) {},
+      function ordinaryWork(_request: ScriptedRequest) {},
+    ]);
+    const setup = await driver.sendOwnerMessage(agent, "请设置合成提醒。");
+    await driver.waitForRun(setup, "completed");
+    await environment.request(`/api/owner/agents/${agent.summary.id}/pause`, { method: "POST" });
+    await waitForScenario(
+      "actual reminder fired while manually paused",
+      async (signal) =>
+        z.object({ reminders: z.array(ownerReminderSchema) }).parse(
+          await (
+            await environment.request(`/api/owner/agents/${agent.summary.id}/reminders`, {
+              signal,
+            })
+          ).json(),
+        ),
+      (facts) => facts.reminders.some((reminder) => reminder.state === "fired"),
+    );
+    const work = await driver.sendOwnerMessage(agent, "普通工作仍待处理。");
+    await environment.request(`/api/owner/agents/${agent.summary.id}/resume`, { method: "POST" });
+    const reminder = await provider.waitFor(agent.summary.id, "reminderOnly");
+    expect(JSON.stringify(reminder.payload.input)).toContain("只处理到期提醒");
+    expect(JSON.stringify(reminder.payload.input)).not.toContain("普通工作仍待处理。");
+    const started = (await driver.activity(agent.summary.id, work.afterActivity)).find(
+      (event) => event.kind === "run.started",
+    );
+    if (!started?.referenceId) throw new Error("Expected actual reminder run ID");
+    reminder.text("提醒轮结束。");
+    const ordinary = await provider.waitFor(agent.summary.id, "ordinaryWork");
+    expect(JSON.stringify(ordinary.payload.input)).toContain("普通工作仍待处理。");
+    await waitForScenario(
+      "reminder run completed in Owner activity",
+      (signal) => driver.activity(agent.summary.id, work.afterActivity, signal),
+      (events) =>
+        events.some(
+          (event) => event.kind === "run.completed" && event.referenceId === started.referenceId,
+        ),
+    );
+    await expect(driver.waitForRun(work, "completed", { timeoutMs: 100 })).rejects.toBeInstanceOf(
+      ScenarioWaitError,
+    );
+    const running = await driver.waitForRun(work, "running");
+    expect(running.id).not.toBe(started.referenceId);
+    ordinary.text("普通消息对应轮结束。");
+    expect((await driver.waitForRun(work, "completed")).id).toBe(running.id);
+    await provider.assertComplete();
+  } finally {
+    expect((await environment.close()).failures).toEqual([]);
+  }
+}, 30_000);
 
 it("waits for this message's new run after its activity cursor instead of an old completed run", async () => {
   const provider = createScriptedProvider();

@@ -12,7 +12,12 @@ const runSchema = z.object({
   messageIds: z.array(ownerMessageSchema.shape.id),
 });
 
-/** Read-only identities not exposed by Owner activity; never writes scenario business facts. */
+/**
+ * A run belongs to its admitted seed even before an input commit. Additional messages belong only
+ * when their real delivery IDs were committed under that seed's action scope. Recovery retains
+ * that scope; a sequence range alone would wrongly include ordinary messages in reminder runs.
+ * These are read-only correlation facts, never scenario business writes or an action boundary.
+ */
 export function readMessageRuns(directory: string, agentId: string, messageId: string) {
   const db = new Database(join(directory, "control-plane-data", "control-plane.sqlite"), {
     readonly: true,
@@ -22,18 +27,25 @@ export function readMessageRuns(directory: string, agentId: string, messageId: s
     return runSchema.array().parse(
       db
         .prepare(
-          `SELECT r.id, r.agent_id AS agentId, s.id AS sessionId, r.state,
+          `WITH messageInputs AS (
+             SELECT r.id AS runId, d.message_id AS messageId, d.seq AS sequence
+             FROM owner_agent_runs r
+             JOIN owner_message_deliveries d ON d.recipient_kind='agent' AND d.recipient_id=r.agent_id
+             WHERE r.agent_id=? AND (d.id=r.delivery_id OR EXISTS (
+               SELECT 1 FROM owner_agent_session_records input
+               WHERE input.agent_id=r.agent_id AND input.kind='message'
+                 AND input.id=d.id AND input.action_scope_id=r.delivery_id
+             ))
+           )
+           SELECT r.id, r.agent_id AS agentId, s.id AS sessionId, r.state,
              r.error_code AS errorCode,
-             (SELECT json_group_array(d.message_id) FROM owner_message_deliveries d
-              WHERE d.recipient_kind='agent' AND d.recipient_id=r.agent_id
-                AND d.seq BETWEEN start.seq AND r.input_end_seq) AS messages
+             (SELECT json_group_array(messageId) FROM (
+               SELECT messageId FROM messageInputs WHERE runId=r.id ORDER BY sequence
+             )) AS messages
            FROM owner_agent_runs r
            JOIN owner_agent_sessions s ON s.agent_id=r.agent_id
-           JOIN owner_message_deliveries start ON start.id=r.delivery_id
-           WHERE r.agent_id=? AND EXISTS (
-             SELECT 1 FROM owner_message_deliveries target
-             WHERE target.recipient_kind='agent' AND target.recipient_id=r.agent_id
-               AND target.message_id=? AND target.seq BETWEEN start.seq AND r.input_end_seq
+           WHERE EXISTS (
+             SELECT 1 FROM messageInputs WHERE runId=r.id AND messageId=?
            ) ORDER BY r.started_at,r.id`,
         )
         .all(agentId, messageId)
