@@ -1,0 +1,18 @@
+services:
+  control-plane:
+    image: ${MATE_CONTROL_PLANE_IMAGE:?Set the exact control-plane image tag or digest}
+    user: "${MATE_UID:?Set the existing owner UID}:${MATE_GID:?Set the existing owner GID}"
+    environment:
+      MATE_CONTROL_PLANE_HOST: 0.0.0.0
+      MATE_CONTROL_PLANE_PORT: "8787"
+      MATE_CONTROL_PLANE_DATA_DIR: /var/lib/mate/control-plane
+      MATE_PUBLIC_ORIGIN: ${MATE_PUBLIC_ORIGIN:-}
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - type: bind
+        source: ${MATE_CONTROL_PLANE_DATA_DIR:?Set an existing private absolute data directory}
+        target: /var/lib/mate/control-plane
+        bind:
+          create_host_path: false
+    restart: unless-stopped

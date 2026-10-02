@@ -38,5 +38,8 @@
     "typescript": "7.0.2",
     "vitest": "5.0.1",
     "@mate/node": "workspace:*"
-  }
+  },
+  "files": [
+    "dist"
+  ]
 }
