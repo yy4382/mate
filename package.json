@@ -23,7 +23,9 @@
     "start": "node apps/control-plane/dist/main.js",
     "start:control-plane": "node apps/control-plane/dist/main.js",
     "start:node": "node apps/node/dist/main.js",
-    "dev:web": "pnpm --filter @mate/web run dev"
+    "dev:web": "pnpm --filter @mate/web run dev",
+    "build:image:control-plane": "node deploy/control-plane/build.mjs",
+    "test:image:control-plane": "node deploy/control-plane/verify.mjs"
   },
   "devDependencies": {
     "prettier": "3.9.9",

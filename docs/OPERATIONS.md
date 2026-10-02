@@ -1,6 +1,6 @@
 # Linux 运行与运维（普通账号）
 
-已确认的首版运行路径是控制面镜像/Compose 与普通账号 node 完整包、薄 bootstrap、统一 `mate node` CLI 及用户服务，见 [ADR-0009](adr/0009-lightweight-linux-packaging.md)；尚未实现发布产物或用户服务验收。下文暂为当前源码入口的启动与诊断说明，不能视为 node 安装包/systemd 操作手册；包装实现后以新的发布路径替换此部署部分，源码入口仅用于开发与测试。
+已确认的首版运行路径是控制面镜像/Compose 与普通账号 node 完整包、薄 bootstrap、统一 `mate node` CLI 及用户服务，见 [ADR-0009](adr/0009-lightweight-linux-packaging.md)；控制面镜像与 Compose 的唯一部署入口见[控制面部署](CONTROL_PLANE_DEPLOYMENT.md)。node 完整包仍待实现与真实用户服务验收；下文源码入口仅用于开发与测试，不能视为 node 安装包/systemd 操作手册。
 
 当前控制面在自身进程内异步推进 Agent 模型循环，节点在同一现有普通账号下启动普通命令子进程。Mate 不创建用户、不切换 UID/GID、不为命令创建 systemd 单元，也不修改 sudoers。HTTPS 代理由宿主配置；目标中的薄 bootstrap 只安装 CLI，CLI 管理 node 用户服务，linger 仍须由用户明确自行配置。
 
