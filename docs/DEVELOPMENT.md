@@ -181,4 +181,4 @@ pnpm build
 pnpm --filter @mate/control-plane exec vitest run tests/control-plane/scenario-evidence.test.ts
 ```
 
-该文件覆盖短真实命令场景的断言失败、无法达到事件的超时、真实 SIGINT／SIGTERM、保存与单项释放同时失败、采集 API 停滞、半途启动失败、合成凭据排除，完整公共讨论串和 node 收据，以及杀死实际驱动后（包括运行目录已缺失）独立回收和再次运行。退出竞态回归用 `cc` 编译一个小型临时 holder，通过 `waitid(WNOWAIT)` 保留真实已退出 Node 的 PID，再验证回收器读取 `Z` 状态且不发送信号；测试结束由 holder 回收 PID，并删除本次临时文件。它只用本地脚本模型；macOS 结果是跨平台证据，不替代 Linux CI、真实 provider 或 VPS 验证。
+该文件覆盖短真实命令场景的断言失败、无法达到事件的超时、真实 SIGINT／SIGTERM、保存与单项释放同时失败、采集 API 停滞、半途启动失败、合成凭据排除，完整公共讨论串和 node 收据，以及杀死实际驱动后（包括运行目录已缺失）独立回收和再次运行。退出竞态回归用 `cc` 编译一个小型临时 holder，通过 `waitid(WNOWAIT)` 保留真实已退出 Node 的 PID，再验证回收器读取 `Z` 状态且不发送信号；另一个真实 Node 连接重试场景验证准备期间终止 holder 也终止并回收其直接子进程。测试失败保留首错、初始报告和路径，收尾错误单独报告；通过后删除本次临时文件。它只用本地脚本模型；macOS 结果是跨平台证据，不替代 Linux CI、真实 provider 或 VPS 验证。
