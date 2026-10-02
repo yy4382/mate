@@ -1,3 +1,4 @@
+import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import Database from "better-sqlite3";
 import { join } from "node:path";
 import { z } from "zod";
@@ -95,4 +96,45 @@ export function readScenarioFacts(directory: string) {
   } finally {
     db.close();
   }
+}
+
+/** Node evidence is limited to its operation ledger and individual synthetic file receipts. */
+export function readNodeScenarioFacts(directory: string) {
+  const path = join(directory, "node-data", "agent-process-operations.sqlite");
+  function operations() {
+    if (!existsSync(path)) return [];
+    const db = new Database(path, { readonly: true, fileMustExist: true });
+    try {
+      return db
+        .prepare(
+          "SELECT operation_id AS operationId,agent_id AS agentId,state,request,receipt,revision,created_at AS createdAt,updated_at AS updatedAt FROM agent_process_operations ORDER BY created_at,operation_id",
+        )
+        .all();
+    } finally {
+      db.close();
+    }
+  }
+  const receiptsDirectory = join(directory, "node-data", "workspace-receipts");
+  const receiptSchema = z.object({
+    operationId: z.string(),
+    agentId: z.string(),
+    requestHash: z.string(),
+    state: z.string(),
+    result: z.unknown().optional(),
+    revision: z.number().optional(),
+    updatedAt: z.number().optional(),
+  });
+  const fileReceipts = existsSync(receiptsDirectory)
+    ? readdirSync(receiptsDirectory)
+        .filter((name) => /^[0-9a-f-]{36}\.json$/i.test(name))
+        .sort()
+        .map((name) => {
+          const path = join(receiptsDirectory, name);
+          const stat = lstatSync(path);
+          if (!stat.isFile() || stat.isSymbolicLink())
+            throw new Error("Scenario receipt must be a regular file");
+          return receiptSchema.parse(JSON.parse(readFileSync(path, "utf8")));
+        })
+    : [];
+  return { operations: operations(), fileReceipts };
 }

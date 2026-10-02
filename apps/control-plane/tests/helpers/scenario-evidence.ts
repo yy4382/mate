@@ -1,3 +1,5 @@
+import { ownerChannelSchema } from "@mate/protocol/owner";
+import { z } from "zod";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { arch, release } from "node:os";
@@ -10,8 +12,15 @@ import {
   type ScenarioConfiguration,
   type ScenarioFacts,
 } from "./scenario-environment.js";
-import { readScenarioFacts } from "./scenario-facts.js";
+import { readNodeScenarioFacts, readScenarioFacts } from "./scenario-facts.js";
 import type { createScriptedProvider } from "./scripted-provider.js";
+
+const credentialNamePattern = String.raw`(?:password|cookie|set[_-]?cookie|authorization|(?:api|secret|private)[_-]?key|(?:(?:pairing|download|access|refresh|session|csrf)[_-]?)?token|credentials?)`;
+const credentialField = new RegExp(`^${credentialNamePattern}$`, "i");
+const credentialAssignment = new RegExp(
+  `(["']?${credentialNamePattern}["']?\\s*[:=]\\s*)(?:"[^"\\n]*"|'[^'\\n]*'|[^\\s,;}]+)`,
+  "gi",
+);
 
 type Provider = ReturnType<typeof createScriptedProvider>;
 type Environment = Awaited<ReturnType<typeof createScenarioEnvironment>>;
@@ -127,21 +136,14 @@ export async function runScenario<T>(options: {
         } catch {
           /* Ordinary synthetic text. */
         }
-        return text.replace(
-          /(["']?(?:password|cookie|api[_-]?key|pairing[_-]?token|download[_-]?token|access[_-]?token|refresh[_-]?token|private[_-]?key|authorization)["']?\s*[:=]\s*)(?:"[^"\n]*"|'[^'\n]*'|[^\s,;}]+)/gi,
-          "$1[REDACTED]",
-        );
+        return text.replace(credentialAssignment, "$1[REDACTED]");
       }
       if (Array.isArray(value)) return value.map(redact);
       if (value && typeof value === "object")
         return Object.fromEntries(
           Object.entries(value).map(([key, entry]) => [
             key,
-            /^(password|cookie|set-cookie|authorization|apiKey|api_key|pairingToken|downloadToken|accessToken|refreshToken|privateKey|credentials?)$/i.test(
-              key,
-            )
-              ? "[REDACTED]"
-              : redact(entry),
+            credentialField.test(key) ? "[REDACTED]" : redact(entry),
           ]),
         );
       return value;
@@ -150,8 +152,8 @@ export async function runScenario<T>(options: {
       visited = new WeakSet<object>();
       return redact(value);
     };
-    function save(name: string, value: unknown) {
-      collectionSignal.throwIfAborted();
+    function save(name: string, value: unknown, checkDeadline = true) {
+      if (checkDeadline) collectionSignal.throwIfAborted();
       writeFileSync(
         join(evidenceDirectory, name),
         `${JSON.stringify(redactEvidence(value), null, 2)}\n`,
@@ -167,6 +169,37 @@ export async function runScenario<T>(options: {
         evidenceErrors.push(error);
       }
     }
+    let persistent: ReturnType<typeof readScenarioFacts> | undefined;
+    function saveSummary() {
+      save(
+        "summary.json",
+        {
+          name: options.name,
+          checkout,
+          assertions,
+          lastEvent,
+          error: failure,
+          evidenceErrors,
+          providerErrors: options.provider.errors,
+          nodeId: facts.nodeId,
+          runs: persistent?.runs,
+          operations: persistent?.operations,
+          agents: facts.agents.map((agent) => ({
+            agentId: agent.summary.id,
+            sessionId: agent.summary.sessionId,
+            channelId: agent.channelId,
+          })),
+          processes: facts.processes.map((output) => ({
+            pid: output.child.pid,
+            exitStatus: output.exitStatus ?? null,
+            spawnError: output.spawnError,
+            output: output.text,
+          })),
+        },
+        false,
+      );
+    }
+    attempt(saveSummary);
     attempt(() =>
       save(
         "model-requests.json",
@@ -181,13 +214,41 @@ export async function runScenario<T>(options: {
         })),
       ),
     );
-    let persistent: ReturnType<typeof readScenarioFacts> | undefined;
     attempt(() => {
       persistent = readScenarioFacts(facts.directory);
       save("persistent-facts.json", persistent);
     });
+    attempt(() => save("node-facts.json", readNodeScenarioFacts(facts.directory)));
     if (environment) {
       const driver = createScenarioDriver(environment);
+      try {
+        const channels = z
+          .object({ channels: z.array(ownerChannelSchema) })
+          .parse(
+            await (
+              await environment.request("/api/owner/channels", { signal: collectionSignal })
+            ).json(),
+          ).channels;
+        for (const channel of channels) {
+          try {
+            const messages = await driver.messages(channel.id, collectionSignal);
+            const threads = [];
+            for (const message of messages)
+              if (message.replyCount > 0)
+                threads.push(await driver.thread(channel.id, message.id, collectionSignal));
+            save(`channel-${channel.id}.json`, {
+              channel,
+              messages,
+              threads,
+              attachments: await driver.attachments(channel.id, collectionSignal),
+            });
+          } catch (error) {
+            evidenceErrors.push(error);
+          }
+        }
+      } catch (error) {
+        evidenceErrors.push(error);
+      }
       for (const agent of facts.agents) {
         try {
           save(`owner-${agent.summary.id}.json`, {
@@ -221,31 +282,7 @@ export async function runScenario<T>(options: {
         if (typeof clean !== "string") throw new Error("Unexpected effect redaction");
         writeFileSync(destination, clean === text ? bytes : clean, { mode: 0o600 });
       });
-    attempt(() =>
-      save("summary.json", {
-        name: options.name,
-        checkout,
-        assertions,
-        lastEvent,
-        error: failure,
-        evidenceErrors,
-        providerErrors: options.provider.errors,
-        nodeId: facts.nodeId,
-        runs: persistent?.runs,
-        operations: persistent?.operations,
-        agents: facts.agents.map((agent) => ({
-          agentId: agent.summary.id,
-          sessionId: agent.summary.sessionId,
-          channelId: agent.channelId,
-        })),
-        processes: facts.processes.map((output) => ({
-          pid: output.child.pid,
-          exitStatus: output.exitStatus ?? null,
-          spawnError: output.spawnError,
-          output: output.text,
-        })),
-      }),
-    );
+    attempt(saveSummary);
   }
 
   let result: T | undefined;

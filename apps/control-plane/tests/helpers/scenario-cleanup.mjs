@@ -39,16 +39,16 @@ async function cleanup(file) {
       !Array.isArray(manifest.processes)
     )
       throw new Error("Invalid scenario resource manifest");
-    if (!existsSync(manifest.directory)) {
-      report.released.push("synthetic directory already absent");
-      return report;
-    }
+    const directoryPresent = existsSync(manifest.directory);
     if (
-      lstatSync(manifest.directory).isSymbolicLink() ||
-      readFileSync(join(manifest.directory, ".mate-scenario-owner"), "utf8") !== manifest.ownership
+      directoryPresent &&
+      (lstatSync(manifest.directory).isSymbolicLink() ||
+        readFileSync(join(manifest.directory, ".mate-scenario-owner"), "utf8") !==
+          manifest.ownership)
     )
       throw new Error("Scenario directory ownership mismatch");
-    if (running(manifest.driverPid))
+    const driverAlive = running(manifest.driverPid);
+    if (directoryPresent && driverAlive)
       throw new Error("Scenario driver is still alive; use its registered close() instead");
     for (const output of [...manifest.processes].reverse()) {
       try {
@@ -67,6 +67,7 @@ async function cleanup(file) {
         }
         if (!actual.endsWith(output.marker))
           throw new Error(`Process ${output.pid} identity changed; no signal sent`);
+        if (driverAlive) throw new Error("Scenario driver is still alive; no signal sent");
         process.kill(output.pid, "SIGTERM");
         for (let index = 0; index < 80; index++) {
           actual = command(output.pid);
@@ -89,8 +90,10 @@ async function cleanup(file) {
       }
     }
     if (!report.residual.length) {
-      rmSync(manifest.directory, { recursive: true, force: true });
-      report.released.push("synthetic directory");
+      if (directoryPresent) rmSync(manifest.directory, { recursive: true, force: true });
+      report.released.push(
+        directoryPresent ? "synthetic directory" : "synthetic directory already absent",
+      );
     }
   } catch (error) {
     report.errors.push(String(error));

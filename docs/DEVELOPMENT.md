@@ -162,7 +162,7 @@ JSON 仅含所选模型、状态、阶段、HTTP 状态及协议观察布尔值�
 
 新增场景可用 `tests/helpers/scenario-evidence.ts` 的 `runScenario({ name, provider, environment, run })` 包住整套工作。`provider` 是 `createScriptedProvider()` 的返回值，`environment` 直接沿用环境配置；`run` 收到已就绪的 `environment`、同一个 `driver`、取消 `signal`、`step(name, action)` 和 `effectFile(name, workspacePath)`。`step` 执行普通函数、保留实际返回事实并记录通过／失败；`effectFile` 只登记本场景 Agent 工作区中的具体合成成果，不复制目录、数据库或用户文件。`scenario-evidence.test.ts` 的第一条短报告场景是可运行例子；完整 workflow 可直接沿用此入口。
 
-包装使用环境现有 `beforeClose` 保存有序模型请求与工具结果、只读会话／run／operation 投影、相关 Owner 消息／任务／活动／附件元数据、显式效果文件和进程输出。摘要记录实际 `git rev-parse HEAD`、是否有未提交修改、内核／平台／架构、命名断言和最后成功事件；不会把规划基线当成被测版本。证据排除已用密码、Cookie、配对／模型凭据，以及凭据字段、Bearer 值和私钥文本；场景只允许合成数据，不应向它注入真实用户目录或凭据。
+包装使用环境现有 `beforeClose` 保存有序模型请求与工具结果、只读会话／run／operation 投影、node 本地命令及文件收据、本场景所有频道与完整讨论串、Owner 任务／活动／附件元数据、显式效果文件和进程输出。在任何 API 等待前先写基础摘要，采集期限届满也保留原错误、命名步骤和最后事件；后续补充取得的事实和保存错误。摘要记录实际 `git rev-parse HEAD`、是否有未提交修改、内核／平台／架构、命名断言和最后成功事件；不会把规划基线当成被测版本。证据排除已用密码、Cookie、配对／模型凭据，以及凭据字段、Bearer 值和私钥文本；场景只允许合成数据，不应向它注入真实用户目录或凭据。
 
 成功后删除本次证据目录；失败打印 `MATE_SCENARIO_EVIDENCE <本地目录>` 并抛出 `ScenarioFailure`。原始错误在 `cause`，保存错误在 `evidenceErrors`，资源释放结果在 `cleanup`；`close()` 直接重试原环境尚未确认释放的登记项。清理结果另存 `cleanup.json`，不会覆盖清理前的摘要。默认目录为当前 checkout 根下的 `artifacts/scenarios/scenario-*`（可用 `evidenceRoot` 指定）；CI 可以直接上传该目录。框架自身的受控失败由外层测试核对，正常 `pnpm check` 仍必须全绿。
 
@@ -174,11 +174,11 @@ pnpm cleanup:scenarios -- --root artifacts/scenarios
 pnpm cleanup:scenarios -- /ABSOLUTE/evidence/scenario-XXXXXX/resources.json
 ```
 
-独立入口只读取指定目录的本次 manifests，核对私有运行目录中的归属标记及各服务进程的实际参数，尽力停止已确认的 CP/node，再删除本次运行数据。驱动还在、身份变化、标记错误或不能确认退出时报告 `residual`／`errors` 并非零退出；不会扫描用户服务或全局 prune。它不能重新执行驱动进程中的自定义释放闭包，也不声称任意命令后代都已回收。常规关闭仍由环境唯一的登记／释放机制负责。
+独立入口只读取指定目录的本次 manifests，核对私有运行目录中的归属标记及各服务进程的实际参数，尽力停止已确认的 CP/node，再删除本次运行数据。即使运行目录已不存在，也继续核查清单中的服务，避免把删除目录当成停止服务。驱动还在、身份变化、标记错误或不能确认退出时报告 `residual`／`errors` 并非零退出；不会扫描用户服务或全局 prune。它不能重新执行驱动进程中的自定义释放闭包，也不声称任意命令后代都已回收。常规关闭仍由环境唯一的登记／释放机制负责。
 
 ```sh
 pnpm build
 pnpm --filter @mate/control-plane exec vitest run tests/control-plane/scenario-evidence.test.ts
 ```
 
-该文件覆盖短真实命令场景的断言失败、无法达到事件的超时、真实 SIGINT／SIGTERM、保存与单项释放同时失败、半途启动失败、合成凭据排除，以及杀死实际驱动后独立回收和再次运行。它只用本地脚本模型；macOS 结果是跨平台证据，不替代 Linux CI、真实 provider 或 VPS 验证。
+该文件覆盖短真实命令场景的断言失败、无法达到事件的超时、真实 SIGINT／SIGTERM、保存与单项释放同时失败、采集 API 停滞、半途启动失败、合成凭据排除，完整公共讨论串和 node 收据，以及杀死实际驱动后（包括运行目录已缺失）独立回收和再次运行。它只用本地脚本模型；macOS 结果是跨平台证据，不替代 Linux CI、真实 provider 或 VPS 验证。
