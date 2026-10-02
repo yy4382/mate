@@ -166,7 +166,7 @@ JSON 仅含所选模型、状态、阶段、HTTP 状态及协议观察布尔值�
 
 成功后删除本次证据目录；失败打印 `MATE_SCENARIO_EVIDENCE <本地目录>` 并抛出 `ScenarioFailure`。原始错误在 `cause`，保存错误在 `evidenceErrors`，资源释放结果在 `cleanup`；`close()` 直接重试原环境尚未确认释放的登记项。清理结果另存 `cleanup.json`，不会覆盖清理前的摘要。默认目录为当前 checkout 根下的 `artifacts/scenarios/scenario-*`（可用 `evidenceRoot` 指定）；CI 可以直接上传该目录。框架自身的受控失败由外层测试核对，正常 `pnpm check` 仍必须全绿。
 
-SIGINT／SIGTERM 通过同一取消和登记清理路径收尾。SIGKILL 不能执行 `finally`；创建环境时立即写入证据目录的 `resources.json`，服务启动后更新其 PID、随机归属标记与参数。在驱动确实退出后可独立运行：
+SIGINT／SIGTERM 通过同一取消和登记清理路径收尾。SIGKILL 不能执行 `finally`；创建环境时立即写入证据目录的 `resources.json`，服务启动后更新其 PID、随机归属标记与参数。独立回收记录有限的进程状态、身份匹配结果及实际信号，不复制未知进程的参数；`Z` 表示进程已经退出但 PID 尚待父进程回收，无需发送信号。存活且身份不符的进程仍报告残留，不发送信号。在驱动确实退出后可独立运行：
 
 ```sh
 pnpm cleanup:scenarios -- --root artifacts/scenarios
@@ -181,7 +181,7 @@ pnpm build
 pnpm --filter @mate/control-plane exec vitest run tests/control-plane/scenario-evidence.test.ts
 ```
 
-该文件覆盖短真实命令场景的断言失败、无法达到事件的超时、真实 SIGINT／SIGTERM、保存与单项释放同时失败、采集 API 停滞、半途启动失败、合成凭据排除，完整公共讨论串和 node 收据，以及杀死实际驱动后（包括运行目录已缺失）独立回收和再次运行。它只用本地脚本模型；macOS 结果是跨平台证据，不替代 Linux CI、真实 provider 或 VPS 验证。
+该文件覆盖短真实命令场景的断言失败、无法达到事件的超时、真实 SIGINT／SIGTERM、保存与单项释放同时失败、采集 API 停滞、半途启动失败、合成凭据排除，完整公共讨论串和 node 收据，以及杀死实际驱动后（包括运行目录已缺失）独立回收和再次运行。退出竞态回归用 `cc` 编译一个小型临时 holder，通过 `waitid(WNOWAIT)` 保留真实已退出 Node 的 PID，再验证回收器读取 `Z` 状态且不发送信号；另一个真实 Node 连接重试场景验证准备期间终止 holder 也终止并回收其直接子进程。测试失败保留首错、初始报告和路径，收尾错误单独报告；通过后删除本次临时文件。它只用本地脚本模型；macOS 结果是跨平台证据，不替代 Linux CI、真实 provider 或 VPS 验证。
 
 ## 新增正常工作场景
 
