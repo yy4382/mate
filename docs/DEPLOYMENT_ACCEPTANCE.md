@@ -57,20 +57,42 @@ sh deploy/node/tests/linger-smoke.sh after-boot 1000 /home/ubuntu \
 
 联通脚本另用镜像内 SQLite 创建 schema revision 999 的合成外部控制面数据库，实际生产入口拒绝后核对数据库 SHA-256 未改变；现有 `pnpm check` 还覆盖格式/结构错误持久化边界。包装工具不迁移数据库、重建身份或重放未知副作用。包装矩阵不是 A 的深层 runtime 故障矩阵替代品。
 
-## 已执行证据与发布缺口
+## 本轮验收来源与发布缺口
 
-下表只记录实际结果；后续运行须附被测 source、包 SHA-256、镜像 ID、系统/架构、账号、host/VM/container、真实 manager 或替身。`PASS` 必须来自脚本完成且进程退出 0，早期输出或产物生成不算通过。本轮没有实际 VPS、Release 或 GHCR 发布。
+下表是绑定被测 source 和版本的历史验收证据，不代表任意后续 HEAD。详细运行记录、首次失败、修复与复验结果以 [#138](https://github.com/yy4382/mate/issues/138)、[更新 #136](https://github.com/yy4382/mate/issues/136)、[卸载 #137](https://github.com/yy4382/mate/issues/137) 和[草稿 PR #153](https://github.com/yy4382/mate/pull/153) 为准。`PASS` 必须来自脚本完成且进程退出 0，早期输出或产物生成不算通过。本轮没有实际 VPS、Release 或 GHCR 发布。
 
-| 实际环境 | 已执行项目 | 当前结果与边界 |
+| 实际环境 | 已执行项目与来源 | 结果范围 |
 | --- | --- | --- |
-| Ubuntu 24.04 arm64，官方 cloud image 的 HVF VM，账号 UID/GID 1000，真实 systemd 255，Linger=no | #134 完整包；#135 用户服务，source `8a56fb5326a77138a02fb5e24def8b83ac7212f8` | 两项 PASS；包版本均为 `0.1.0`，架构对应标识见下表；更新、卸载最终组合另行记录 |
-| Debian 13 arm64，官方 cloud image 的 HVF VM，账号 UID/GID 1000，真实 systemd 257，Linger=no | 同上（版本 `0.1.0`） | 两项 PASS；包版本均为 `0.1.0`，架构对应标识见下表；更新、卸载最终组合另行记录 |
-| Ubuntu 24.04 x86_64，官方 cloud image 的 QEMU TCG 架构模拟 VM，账号 UID/GID 1000，真实 systemd 255，Linger=no | 同上（版本 `0.1.0`） | 两项 PASS；不是原生 x86_64 性能测量；更新、卸载最终组合另行记录 |
-| Debian 13 x86_64，官方 cloud image 的 QEMU TCG 架构模拟 VM，账号 UID/GID 1000，真实 systemd 257，Linger=no | 同上（版本 `0.1.0`） | 两项 PASS；不是原生 x86_64 性能测量；更新、卸载最终组合另行记录 |
-| Ubuntu 24.04 原生 x86_64 hosted VM | 最终同版镜像/包联通及隔离 Docker 恢复 | 新入口待实际执行，不填写通过 |
-| macOS 驱动的 Orb Linux arm64 容器 | #133 实际镜像/Compose、私有挂载、配对、附件、密码移除后替换、异常退出和显式停止 | PASS；容器结果不是四 VM 用户服务或 Docker daemon 重启证据 |
+| Ubuntu 24.04 arm64，官方 cloud image 的 HVF VM，账号 UID/GID 1000，真实 systemd 255，Linger=no | 历史 #134 完整包；#135 用户服务（用户服务 source `8a56fb5326a77138a02fb5e24def8b83ac7212f8`） | 两项 PASS；版本均为 `0.1.0`，所测产物标识见下表 |
+| Debian 13 arm64，官方 cloud image 的 HVF VM，账号 UID/GID 1000，真实 systemd 257，Linger=no | 同上（版本 `0.1.0`） | 两项 PASS；所测产物标识见下表 |
+| Ubuntu 24.04 x86_64，官方 cloud image 的 QEMU TCG 架构模拟 VM，账号 UID/GID 1000，真实 systemd 255，Linger=no | 同上（版本 `0.1.0`） | 两项 PASS；不是原生 x86_64 性能测量 |
+| Debian 13 x86_64，官方 cloud image 的 QEMU TCG 架构模拟 VM，账号 UID/GID 1000，真实 systemd 257，Linger=no | 同上（版本 `0.1.0`） | 两项 PASS；不是原生 x86_64 性能测量 |
+| Ubuntu 24.04.5 原生 x86_64 Microsoft hosted VM，账号 UID/GID 1001 | [Actions 37004417625](https://github.com/yy4382/mate/actions/runs/37004417625)，source `e11196b3fb4bf6b49498c021b09debb93b1fadaf`，版本 `0.1.0` | 同版镜像/完整包联通与隔离 Docker 恢复 PASS；驱动和 node 使用包内 Node `24.21.0`，不包含 user manager 生命周期验收 |
+| macOS 驱动的 Orb Linux arm64 容器 | 历史 #133 实际镜像/Compose、私有挂载、配对、附件、密码移除后替换、异常退出和显式停止，来源见下文 | PASS；容器结果不是四 VM 用户服务或 Docker daemon 重启证据 |
 
-已实际运行的包标识：
+原生联通验收的镜像 ID 为 `sha256:bd1bb43b5e781e392a95b359222127830cd40ce1e9ab3f4170ad7dabacda6449`，镜像体积 354,505,451 字节；完整 x64 包 SHA-256 为 `05db4095e5bb886672763da9db4816a56096fcee96342956bb6af5d81106221e`，压缩包体积 89,505,812 字节。镜像 revision 与包旁 `SOURCE_COMMIT` 均为上述 `e11196b3` 来源。脚本实际完成首次登录、配对与普通工具操作、容器替换及 node 重启后的持久状态恢复、密码文件移除后重建、隔离 Docker 异常恢复及显式 stop 保持停止，并拒绝 schema revision 999 的外部数据库且保留原字节。
+
+该次确定性演练采样为 node RSS 91,100 kB、控制面容器 115.2 MiB；完整包展开占用 275,004 KiB，控制面数据 1,300 KiB，node 数据 56 KiB。构建 VM 已有系统 Node 和编译器；运行过程使用专用包内 Node。四个真实 VM 的登录 PATH 检查未找到 `node`、`pnpm` 或 `cc`，程序运行只使用包内 Node，不调用宿主 pnpm/编译器；包装验收来源在下表记录。上述数字是指定演练的观察值，不是最低 VPS 配置或使用配额。
+
+上述四个真实 user-manager VM 的更新和卸载结果如下。包标识在下表绑定各次被测 source；更新演练从实际基础包派生合成兼容版本，用于整包切换和中断恢复，未下载真实 Release。
+
+| 实际 VM | 更新 #136 | 卸载 #137 |
+| --- | --- | --- |
+| Ubuntu 24.04 arm64，HVF，UID/GID 1000，systemd 255，Linger=no | source `67ed17b0`，完整演练 PASS / exit 0 | source `e11196b3`，完整演练 PASS / exit 0 |
+| Debian 13 arm64，HVF，UID/GID 1000，systemd 257，Linger=no | source `67ed17b0`，完整演练 PASS / exit 0 | source `e11196b3`，完整演练 PASS / exit 0 |
+| Ubuntu 24.04 x86_64，QEMU TCG 架构模拟，UID/GID 1000，systemd 255，Linger=no | source `67ed17b0`，完整演练 PASS / exit 0 | source `e11196b3`，完整演练 PASS / exit 0 |
+| Debian 13 x86_64，QEMU TCG 架构模拟，UID/GID 1000，systemd 257，Linger=no | source `e11196b3`，首次 FAIL / exit 1；从原失败状态接续尾部 RECOVERY_PASS / exit 0，范围见下文 | source `e11196b3`，完整演练 PASS / exit 0 |
+
+Debian x86_64 更新首次在同版本损坏程序恢复阶段，因读取有效 `ExecStartEx` 的子进程达到原有 10 秒截止而报 `ETIMEDOUT`，原因未确定；首次失败保留，不能称四组合首次全部通过。接续验收使用原失败磁盘的新 overlay，原磁盘大小、mtime 和 SHA-256 前后均未改变；核对原 `data.before` 和外部完整包的全文件清单后，以原 CLI 对原合成包执行一次真实重试。完整安装、原生依赖、入口及单元引用、修复备份清理、原配置和数据哈希、显式 start/stop 均通过。预登录 fixture 临时移走并恢复原 Mate 单元的 enablement 链接以防自动启动，这是测试准备，不是 Mate 的恢复行为；只读诊断成功也不代替该接续验收。详细失败及接续链见 [#136](https://github.com/yy4382/mate/issues/136) 和[草稿 PR #153](https://github.com/yy4382/mate/pull/153)。
+
+| 验收用途 | 基础版本 / 架构 | 压缩包 SHA-256 | 绑定来源 |
+| --- | --- | --- | --- |
+| #136 两个 arm64 VM 更新 | `0.1.0` / arm64 | `eb5c16766085817e9a1cf3aff5acb71cbacdc3cb3f84e8deca661262ac7b0394` | `67ed17b0c9acdb2ec8d45bf145137ede454d6f18` |
+| #136 Ubuntu x86_64 VM 更新 | `0.1.0` / x64 | `f72bec826cc459f5942576ed0b208ac56500bec2f247351ee8cadef1e24dcb6f` | 同一 `67ed17b0` |
+| #137 两个 arm64 VM 卸载 | `0.1.0` / arm64 | `579b9fdd90283e62d07932444a09ca9836677960a26c4f3f9d982ad10b049989` | `e11196b3fb4bf6b49498c021b09debb93b1fadaf` |
+| #136 Debian x86_64 更新与接续；#137 两个 x86_64 VM 卸载；原生联通 | `0.1.0` / x64 | `05db4095e5bb886672763da9db4816a56096fcee96342956bb6af5d81106221e` | 同一 `e11196b3` |
+
+#134/#135 已实际运行的历史包标识，不表示最终候选产物：
 
 | 测试 | 版本 / 架构 | 压缩包 SHA-256 | 绑定来源 |
 | --- | --- | --- | --- |
@@ -79,8 +101,8 @@ sh deploy/node/tests/linger-smoke.sh after-boot 1000 /home/ubuntu \
 | #135 用户服务 | `0.1.0` / arm64 | `6ef1ef557de9c7215345122cd2b006d901269e99f747283f58c557e0a59c0fa8` | `8a56fb5326a77138a02fb5e24def8b83ac7212f8` |
 | #135 用户服务 | `0.1.0` / x64 | `cc6a8393f7e1f9432969ad2c889c38f011877cec4f0e89f8274061b5b179c7b7` | 同一 `8a56fb5`，[原生构建 Actions](https://github.com/yy4382/mate/actions/runs/36986065923) |
 
-#133 已测 arm64 镜像为 `mate-control-plane:ticket133`，发布版本 `0.1.0-ticket133`，revision `0bf1179e73155410b0309b8d85f6b5e756f2d255`，image ID `sha256:c3d59820a5f33b15f7ca6500f8b69ad3a29ad80e76b35f43abf6e6d4a83586d6`，镜像体积 372867138 字节；[票据证据](https://github.com/yy4382/mate/issues/133#issuecomment-5946788178) 明确使用的是开发 node 接口，而非同版完整包联通。因此它不替代上面的同版完整交付验收。
+#133 历史 arm64 镜像为 `mate-control-plane:ticket133`，发布版本 `0.1.0-ticket133`，revision `0bf1179e73155410b0309b8d85f6b5e756f2d255`，image ID `sha256:c3d59820a5f33b15f7ca6500f8b69ad3a29ad80e76b35f43abf6e6d4a83586d6`，镜像体积 372867138 字节；[票据证据](https://github.com/yy4382/mate/issues/133#issuecomment-5946788178) 明确使用的是开发 node 接口，而非同版完整包联通。因此它只证明该历史来源和范围，不替代上述原生同版完整交付验收。
 
-四 VM 当前均没有预配置 linger。没有执行“预配置 linger 后注销仍运行”及“开机用户 manager/服务自动运行”，因此这两项仍未验收，#138 与 #131 不能据上述成功宣称完整发布矩阵通过。Mate 不为填表擅自配置 linger。后续需用户已准备好的 Linger=yes 隔离宿主/VM，记录注销前后会话事实、原服务 PID/身份、开机前后 boot ID、服务 enable/active 和日志；新登录启动 manager 不能冒充开机自动运行。
+本轮上述 source 的四个真实 user-manager VM 均为 Linger=no；没有预配置 Linger=yes 的真实宿主/VM 注销和开机证据。这两项未验收，不能据上述成功宣称完整发布矩阵通过。Mate 不为填表擅自配置 linger；新登录启动 manager 不能冒充开机自动运行。
 
-真实模型 provider 的传输兼容、公开 HTTPS/WSS/Web Push、实际私有 Release 下载、GHCR 获取和 VPS 部署仍单独执行。脚本化 provider、获取替身和本地构建证据均保留各自名称，PR 必须列出这些缺口，不收缩原验收矩阵。
+本轮未验证真实模型 provider 的传输兼容、公开 HTTPS/WSS/Web Push、实际私有 Release 下载、GHCR 获取或 VPS 部署。脚本化 provider、获取替身和本地构建证据均保留各自名称，不能据此推导这些集成已经验收或收缩原矩阵。
