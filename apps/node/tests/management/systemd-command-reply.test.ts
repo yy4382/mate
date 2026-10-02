@@ -7,7 +7,9 @@ import { serviceReferencesBundle } from "../../src/management/service.js";
 import { nodePaths } from "../../src/management/paths.js";
 import dbus, { Variant } from "dbus-native";
 import { createServer } from "node:net";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -100,3 +102,74 @@ test("the peer adapter reads binary properties with no bus daemon or Hello and p
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test.each(["request-rejected", "unrecognized-reply", "transport", "timeout"])(
+  "the standalone property reader reports %s without reply or credential data",
+  async (category) => {
+    const directory = mkdtempSync(join(tmpdir(), "mate-private-failure-")),
+      socket = join(directory, "systemd/private"),
+      secret = "synthetic-private-reply-and-download-secret";
+    mkdirSync(join(directory, "systemd"));
+    const server = createServer((stream) => {
+      const connection = dbus.createConnection({ stream, server: true, authMethods: ["EXTERNAL"] });
+      connection.on("message", (message) => {
+        if (!message.serial) {
+          stream.destroy();
+          return;
+        }
+        if (category === "transport") {
+          stream.destroy();
+          return;
+        }
+        if (category === "timeout") return;
+        connection.message({
+          type:
+            category === "request-rejected"
+              ? dbus.messageType.error
+              : dbus.messageType.methodReturn,
+          serial: 1,
+          replySerial: message.serial,
+          errorName: "org.freedesktop.DBus.Error.Failed",
+          signature: category === "request-rejected" ? "s" : "v",
+          body: category === "request-rejected" ? [secret] : [new Variant("as", [secret])],
+        });
+      });
+    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(socket, resolve);
+      });
+      const child = spawn(
+        process.execPath,
+        [
+          fileURLToPath(new URL("../../dist/management/systemd-property.js", import.meta.url)),
+          "Version",
+        ],
+        { env: { ...process.env, XDG_RUNTIME_DIR: directory, GH_TOKEN: secret }, timeout: 10000 },
+      );
+      let stdout = "",
+        stderr = "";
+      child.stdout.on("data", (data) => {
+        stdout += data.toString();
+      });
+      child.stderr.on("data", (data) => {
+        stderr += data.toString();
+      });
+      const status = await new Promise<number | null>((resolve, reject) => {
+        child.once("error", reject);
+        child.once("close", resolve);
+      });
+      expect(status).toBe(1);
+      expect(stderr).toContain(`"category":"${category}"`);
+      if (category === "timeout") expect(stderr).toContain('"code":"ETIMEDOUT"');
+      expect(stdout).toBe("");
+      expect(stderr).not.toContain(secret);
+      expect(stderr).not.toContain("org.freedesktop.DBus.Error.Failed");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+  15000,
+);

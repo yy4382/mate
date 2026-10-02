@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { z } from "zod";
 import { fileURLToPath } from "node:url";
 import { withoutDownloadCredentials } from "./bundle.js";
+import { privatePropertyFailure } from "./systemd-property.js";
 
 export const serviceFacts = z.object({
   load: z.string().min(1),
@@ -38,18 +39,36 @@ function systemctl(args: string[]) {
 }
 
 function privateProperty(property: "Version" | "ExecStartEx") {
-  return spawnSync(
+  const start = performance.now();
+  const result = spawnSync(
     process.execPath,
     [fileURLToPath(new URL("./systemd-property.js", import.meta.url)), property],
     { encoding: "utf8", timeout: 10_000, env: withoutDownloadCredentials(process.env) },
   );
+  return { ...result, elapsedMs: Math.round(performance.now() - start) };
+}
+
+function propertyFailureDetails(result: ReturnType<typeof privateProperty>) {
+  const readFailure = () => {
+    try {
+      const parsed = privatePropertyFailure.safeParse(JSON.parse(result.stderr));
+      return parsed.success ? parsed.data : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const failure = readFailure(),
+    code = privatePropertyFailure.shape.code.safeParse(
+      result.error && "code" in result.error ? result.error.code : undefined,
+    );
+  return `category=${failure?.category ?? (result.error ? "process-failure" : "child-failure")}; exit=${result.status ?? "none"}; signal=${result.signal ?? "none"}; code=${failure?.code ?? (code.success ? code.data : undefined) ?? "unknown"}; elapsed=${result.elapsedMs}ms`;
 }
 
 function effectiveExecStart() {
   const result = privateProperty("ExecStartEx");
   if (result.status !== 0)
     throw new Error(
-      "Could not inspect the effective user service command; its references are unknown",
+      `Could not inspect the effective user service command; its references are unknown (${propertyFailureDetails(result)})`,
     );
   try {
     return serviceFacts.shape.execStart.parse(JSON.parse(result.stdout));
@@ -70,7 +89,7 @@ export const systemdUserManager: UserServiceManager = {
     const bus = privateProperty("Version");
     if (bus.status !== 0)
       throw new Error(
-        "Effective user manager inspection unavailable: the complete bundle must connect to systemd's existing private socket; Mate does not install software or a session bus",
+        `Effective user manager inspection unavailable: the complete bundle must connect to systemd's existing private socket; Mate does not install software or a session bus (${propertyFailureDetails(bus)})`,
       );
   },
   inspect(options) {
