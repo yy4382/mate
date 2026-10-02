@@ -31,11 +31,21 @@ if (process.argv[2] === "control-plane") {
   const controller = new AbortController();
   process.once("SIGINT", () => controller.abort());
   process.once("SIGTERM", () => controller.abort());
-  const store = openNodeProcessOperations(
-    process.env.MATE_NODE_DATA_DIR,
-    process.env.MATE_NODE_AGENT_WORKSPACE_ROOT,
-    { commandTimeoutMs: Number(process.env.MATE_SCENARIO_COMMAND_TIMEOUT_MS) },
-  );
+  const store = process.env.MATE_SCENARIO_COMMAND_BOUNDARY
+    ? await (
+        await import("./scenario-command-boundary.mjs")
+      ).openCommandBoundaryStore({
+        dataDirectory: process.env.MATE_NODE_DATA_DIR,
+        workspaceRoot: process.env.MATE_NODE_AGENT_WORKSPACE_ROOT,
+        commandTimeoutMs: Number(process.env.MATE_SCENARIO_COMMAND_TIMEOUT_MS),
+        boundary: process.env.MATE_SCENARIO_COMMAND_BOUNDARY,
+        signal: controller.signal,
+      })
+    : openNodeProcessOperations(
+        process.env.MATE_NODE_DATA_DIR,
+        process.env.MATE_NODE_AGENT_WORKSPACE_ROOT,
+        { commandTimeoutMs: Number(process.env.MATE_SCENARIO_COMMAND_TIMEOUT_MS) },
+      );
   try {
     await runLinuxNodeWithTestDependencies(
       {

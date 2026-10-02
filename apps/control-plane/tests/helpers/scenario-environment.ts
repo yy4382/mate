@@ -33,6 +33,7 @@ const configurationSchema = z.object({
       commandTimeoutMs: z.number().int().positive().default(700),
       heartbeatIntervalMs: z.number().int().positive().default(100),
       heartbeatTimeoutMs: z.number().int().positive().default(2000),
+      commandBoundary: z.enum(["before_execute", "before_receipt"]).optional(),
     })
     .prefault({}),
 });
@@ -282,6 +283,9 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
       MATE_SCENARIO_COMMAND_TIMEOUT_MS: String(configuration.node.commandTimeoutMs),
       MATE_SCENARIO_HEARTBEAT_INTERVAL_MS: String(configuration.node.heartbeatIntervalMs),
       MATE_SCENARIO_HEARTBEAT_TIMEOUT_MS: String(configuration.node.heartbeatTimeoutMs),
+      ...(configuration.node.commandBoundary
+        ? { MATE_SCENARIO_COMMAND_BOUNDARY: configuration.node.commandBoundary }
+        : {}),
       ...(pairingToken ? { MATE_NODE_PAIRING_TOKEN: pairingToken } : {}),
     });
     return node;

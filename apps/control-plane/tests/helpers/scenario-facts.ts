@@ -89,7 +89,7 @@ export function readScenarioFacts(directory: string) {
         .all(),
       operations: db
         .prepare(
-          "SELECT operation_id AS operationId,run_id AS runId,agent_id AS agentId,node_id AS nodeId,state,request_json AS request,receipt_json AS receipt FROM owner_agent_process_operations ORDER BY created_at,operation_id",
+          "SELECT operation_id AS operationId,run_id AS runId,agent_id AS agentId,node_id AS nodeId,state,request_json AS request,receipt_json AS receipt,node_receipt_confirmed AS nodeReceiptConfirmed,node_receipt_revision AS nodeReceiptRevision FROM owner_agent_process_operations ORDER BY created_at,operation_id",
         )
         .all(),
     };
