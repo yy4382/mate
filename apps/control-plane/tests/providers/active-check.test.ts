@@ -98,6 +98,7 @@ function text(response: ServerResponse, value: string) {
 function anthropicReply(
   response: ServerResponse,
   reply: { text: string; stopReason?: string } | { callId: string },
+  complete = true,
 ) {
   response.writeHead(200, { "content-type": "text/event-stream" });
   const events = [
@@ -141,9 +142,34 @@ function anthropicReply(
     },
     { type: "message_stop" },
   ];
-  for (const event of events)
+  for (const event of events) {
+    if (event.type === "message_stop" && !complete) continue;
     response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+  }
   response.end();
+}
+
+function completionsReply(
+  response: ServerResponse,
+  delta: Record<string, unknown>,
+  finishReason: "stop" | "tool_calls",
+) {
+  response.writeHead(200, { "content-type": "text/event-stream" });
+  for (const [currentDelta, reason] of [
+    [delta, null],
+    [{}, finishReason],
+  ]) {
+    response.write(
+      `data: ${JSON.stringify({
+        id: "chatcmpl_check",
+        object: "chat.completion.chunk",
+        created: 1,
+        model: "deepseek-flash",
+        choices: [{ index: 0, delta: currentDelta, finish_reason: reason }],
+      })}\n\n`,
+    );
+  }
+  response.end("data: [DONE]\n\n");
 }
 
 it("an owner check without an explicitly supplied credential remains unverified", async () => {
@@ -216,13 +242,128 @@ it.each(["no_tool", "no_acknowledgement", "repeat_tool"])(
         );
         expect(result.status).toBe("unverified");
         expect(result.reason).toBe(
-          choice === "no_tool" ? "tool_not_observed" : "tool_result_not_acknowledged",
+          choice === "no_tool"
+            ? "tool_not_observed"
+            : choice === "repeat_tool"
+              ? "additional_tool_call"
+              : "tool_result_not_acknowledged",
         );
         expect(requests).toHaveLength(choice === "no_tool" ? 2 : 3);
       },
     );
   },
 );
+
+it("a refusal reason in an incomplete Anthropic stream is still a protocol failure", async () => {
+  await withProvider(
+    (_request, response, index) =>
+      anthropicReply(
+        response,
+        index === 0
+          ? { text: "短文本" }
+          : { text: "private refusal explanation", stopReason: "refusal" },
+        index === 0,
+      ),
+    async (baseUrl) => {
+      const result = await checkProviderProtocol(
+        { provider: "anthropic", modelId: "claude-sonnet-4-5", apiKey: "synthetic-key" },
+        { modelForCheck: (model) => ({ ...model, baseUrl: baseUrl.replace(/\/v1$/, "") }) },
+      );
+      expect(result).toMatchObject({ status: "failed", reason: "provider_error", stage: "tool" });
+      expect(result.observed.toolExecuted).toBe(false);
+    },
+  );
+});
+
+it.each(["SAFETY", "BLOCKLIST"])(
+  "a complete Google %s model decline remains unverified",
+  async (finishReason) => {
+    await withProvider(
+      (_request, response, index) => {
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.end(
+          `data: ${JSON.stringify({
+            candidates: [
+              {
+                content: { role: "model", parts: [{ text: "短文本" }] },
+                finishReason: index === 0 ? "STOP" : finishReason,
+              },
+            ],
+            usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 3, totalTokenCount: 8 },
+          })}\n\n`,
+        );
+      },
+      async (baseUrl, requests) => {
+        const result = await checkProviderProtocol(
+          { provider: "google", modelId: "gemini-2.5-flash", apiKey: "synthetic-key" },
+          { modelForCheck: (model) => ({ ...model, baseUrl }) },
+        );
+        expect(result).toMatchObject({
+          status: "unverified",
+          reason: "model_declined",
+          stage: "tool",
+        });
+        expect(result.observed.toolExecuted).toBe(false);
+        expect(requests).toHaveLength(2);
+      },
+    );
+  },
+);
+
+it("a Google decline followed by malformed SSE remains a protocol failure", async () => {
+  await withProvider(
+    (_request, response, index) => {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write(
+        `data: ${JSON.stringify({ candidates: [{ content: { role: "model", parts: [{ text: "短文本" }] }, finishReason: index === 0 ? "STOP" : "SAFETY" }] })}\n\n`,
+      );
+      response.end(index === 0 ? "" : "data: {invalid-json}\n\n");
+    },
+    async (baseUrl) => {
+      const result = await checkProviderProtocol(
+        { provider: "google", modelId: "gemini-2.5-flash", apiKey: "synthetic-key" },
+        { modelForCheck: (model) => ({ ...model, baseUrl }) },
+      );
+      expect(result).toMatchObject({ status: "failed", reason: "provider_error", stage: "tool" });
+    },
+  );
+});
+
+it("mixed continuation text and a repeated Chat Completions tool call cannot pass even with a stop finish reason", async () => {
+  await withProvider(
+    (request, response, index) => {
+      const content =
+        index === 0
+          ? "短文本"
+          : request.messages?.find((message) => message.role === "tool")?.content;
+      const delta = {
+        role: "assistant",
+        ...(index !== 1 ? { content } : {}),
+        ...(index > 0
+          ? {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: `probe_call_${index}`,
+                  type: "function",
+                  function: { name: "mate_protocol_probe", arguments: "{}" },
+                },
+              ],
+            }
+          : {}),
+      };
+      completionsReply(response, delta, index === 1 ? "tool_calls" : "stop");
+    },
+    async (baseUrl, requests) => {
+      const result = await checkProviderProtocol(
+        { provider: "deepseek", modelId: "deepseek-flash", apiKey: "synthetic-key" },
+        { modelForCheck: (model) => ({ ...model, baseUrl }) },
+      );
+      expect(result).toMatchObject({ status: "unverified", reason: "additional_tool_call" });
+      expect(requests).toHaveLength(3);
+    },
+  );
+});
 
 it("HTTP rejection records its status without retaining provider prose or credentials", async () => {
   await withProvider(
@@ -417,7 +558,6 @@ it.each(["empty", "missing"])(
   async (idKind) => {
     await withProvider(
       (request, response, index) => {
-        response.writeHead(200, { "content-type": "text/event-stream" });
         const delta =
           index === 1
             ? {
@@ -438,21 +578,7 @@ it.each(["empty", "missing"])(
                     ? "短文本"
                     : request.messages?.find((message) => message.role === "tool")?.content,
               };
-        for (const [currentDelta, finishReason] of [
-          [delta, null],
-          [{}, index === 1 ? "tool_calls" : "stop"],
-        ]) {
-          response.write(
-            `data: ${JSON.stringify({
-              id: "chatcmpl_check",
-              object: "chat.completion.chunk",
-              created: 1,
-              model: "deepseek-flash",
-              choices: [{ index: 0, delta: currentDelta, finish_reason: finishReason }],
-            })}\n\n`,
-          );
-        }
-        response.end("data: [DONE]\n\n");
+        completionsReply(response, delta, index === 1 ? "tool_calls" : "stop");
       },
       async (baseUrl, requests) => {
         const result = await checkProviderProtocol(

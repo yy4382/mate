@@ -4,6 +4,7 @@ import { Agent } from "@earendil-works/pi-agent-core";
 import { Type, type Api, type Model } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { isSupportedModel } from "./catalog.js";
+import { providerResponseComplete } from "../runtime/provider-response.js";
 
 const selectionSchema = z.object({
   provider: z.string().min(1),
@@ -25,6 +26,7 @@ const reportSchema = z.object({
     "tool_not_observed",
     "tool_call_not_associated",
     "tool_result_not_acknowledged",
+    "additional_tool_call",
     "provider_error",
     "model_declined",
     "owner_cancelled",
@@ -84,7 +86,9 @@ export async function checkProviderProtocol(
     announcedCallId = "",
     callCount = 0,
     executionCount = 0,
+    continuationCalls = false,
     timedOut = false;
+  let completeResponse = Promise.resolve(false);
   const agent = new Agent({
     initialState: {
       model,
@@ -94,6 +98,7 @@ export async function checkProviderProtocol(
     // Each probe phase is one explicit Pi turn, with one result continuation requested below.
     shouldStopAfterTurn: () => true,
     streamFn: (model, context, options) => {
+      completeResponse = Promise.resolve(false);
       if (report.stage === "continuation") {
         report.observed.toolCallAssociated = context.messages.some(
           (message) =>
@@ -122,13 +127,19 @@ export async function checkProviderProtocol(
               fetch: async (request: RequestInfo | URL, init?: RequestInit) => {
                 const response = await fetch(request, init);
                 report.httpStatus = response.status;
+                // Inspect terminal evidence transiently; no body is retained in the report or on disk.
+                completeResponse = response
+                  .clone()
+                  .text()
+                  .then((body) => providerResponseComplete(body, response.status))
+                  .catch(() => false);
                 return response;
               },
             }),
       });
     },
   });
-  const unsubscribe = agent.subscribe((event) => {
+  const unsubscribe = agent.subscribe(async (event) => {
     if (
       event.type === "message_update" &&
       report.stage === "text" &&
@@ -140,9 +151,30 @@ export async function checkProviderProtocol(
     if (event.message.stopReason === "error" || event.message.stopReason === "aborted") {
       // Pi normalizes these completed model-decline outcomes to error. They do not prove
       // broken transport; classify only the structured terminal reason, never error prose.
-      const declined = ["refusal", "sensitive", "content_filter"].includes(
-        event.message.rawStopReason ?? "",
-      );
+      const nativeReason = event.message.rawStopReason ?? "";
+      const httpDeclined =
+        ["refusal", "sensitive", "content_filter"].includes(nativeReason) &&
+        report.httpStatus !== null &&
+        report.httpStatus >= 200 &&
+        report.httpStatus < 300 &&
+        (await completeResponse);
+      // Pi's Google adapter does not expose fetch. In pinned Pi 0.86.0 this exact adapter-generated
+      // diagnostic is emitted only after SDK stream iteration finishes, distinct from SDK/parse errors.
+      // Require both the structured content-decline reason and that completion diagnostic.
+      const googleDeclined =
+        (event.message.api === "google-generative-ai" || event.message.api === "google-vertex") &&
+        [
+          "SAFETY",
+          "BLOCKLIST",
+          "PROHIBITED_CONTENT",
+          "SPII",
+          "RECITATION",
+          "IMAGE_SAFETY",
+          "IMAGE_PROHIBITED_CONTENT",
+          "IMAGE_RECITATION",
+        ].includes(nativeReason) &&
+        event.message.errorMessage === `Provider stopped with: ${nativeReason}`;
+      const declined = httpDeclined || googleDeclined;
       report.status = declined ? "unverified" : "failed";
       report.reason = declined ? "model_declined" : "provider_error";
     }
@@ -154,6 +186,7 @@ export async function checkProviderProtocol(
       announcedCallId = calls[0]?.id ?? "";
     }
     if (report.stage === "continuation") {
+      continuationCalls = event.message.content.some((content) => content.type === "toolCall");
       report.observed.continuationCompleted = event.message.stopReason === "stop";
       report.observed.toolResultAcknowledged = event.message.content.some(
         (content) => content.type === "text" && content.text.includes(marker),
@@ -223,7 +256,8 @@ export async function checkProviderProtocol(
     if (!report.observed.toolCallAssociated) {
       report.status = "failed";
       report.reason = "tool_call_not_associated";
-    } else if (!report.observed.continuationCompleted || !report.observed.toolResultAcknowledged)
+    } else if (continuationCalls || executionCount !== 1) report.reason = "additional_tool_call";
+    else if (!report.observed.continuationCompleted || !report.observed.toolResultAcknowledged)
       report.reason = "tool_result_not_acknowledged";
     else {
       report.status = "passed";

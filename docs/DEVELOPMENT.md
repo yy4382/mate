@@ -84,10 +84,10 @@ pnpm check:provider --provider openai --model gpt-4o-mini
 pnpm check:provider --provider openai --model gpt-4o-mini --api-key-file /ABSOLUTE/private/provider-key
 ```
 
-检查复用真正的 Pi Agent/core 和 Pi 供应商适配器，在内存中观察一条短文本流结束，再调用一次 `mate_protocol_probe`。这个工具仅返回临时随机标记，不读写文件、不执行 node 命令、也不访问外部服务。第三次请求携带对应的非空调用 ID、工具声明和工具结果；只有续接正常结束并实际回复该标记，才报告 `passed`。工具未调用或结果未被确认分别报告 `tool_not_observed` / `tool_result_not_acknowledged` 和 `unverified`；实际观察到的结构化模型拒绝（`refusal`、`sensitive`、`content_filter`）报告 `model_declined` / `unverified`。这些模型选择不算 harness 失败，也不要求模型完成协作或故障矩阵。
+检查复用真正的 Pi Agent/core 和 Pi 供应商适配器，在内存中观察一条短文本流结束，再调用一次 `mate_protocol_probe`。这个工具仅返回临时随机标记，不读写文件、不执行 node 命令、也不访问外部服务。第三次请求携带对应的非空调用 ID、工具声明和工具结果；只有续接正常结束、实际回复该标记且未再次请求工具，才报告 `passed`。工具未调用、结果未被确认或续接再次请求工具分别报告 `tool_not_observed` / `tool_result_not_acknowledged` / `additional_tool_call` 和 `unverified`。经完整协议终止证据确认的结构化模型拒绝（例如 Anthropic 的 `refusal`、OpenAI 的 `content_filter` 和 Google 的 `SAFETY`）报告 `model_declined` / `unverified`；拒绝原因后发生截流或解析错误仍是协议失败。Google SDK 不提供 fetch 钩子，检查依照固定 Pi 版本中仅在 SDK 流正常结束后生成的完成诊断区分拒绝与 SDK/解析错误。这些模型选择不算 harness 失败，也不要求模型完成协作或故障矩阵。
 
 真实传输或协议错误报告 `failed` / `provider_error`、发生阶段和实际捕获的 HTTP 状态（不可观察时为 `null`）；空或不匹配的工具调用 ID 报告 `failed` / `tool_call_not_associated`，不发送无法关联的续接。失败进程退出码为 1。Ctrl+C / SIGTERM 报告 `owner_cancelled`；`--timeout-ms` 设置本次检查的等待期限（默认 30 秒，最多 5 分钟），超时报告 `timeout`；二者均为未验证。这是主动检查的等待期限，不影响 Mate Agent 的 token、费用或 run 使用量。
 
 JSON 仅含所选模型、状态、阶段、HTTP 状态及协议观察布尔值，不保存或上传完整提示/回复、凭据、文件路径、原始错误正文或随机标记。入口不创建 Mate Agent、持久会话或外部服务资源。结果只描述本次实际观察到的错误或取消；成功检查不会声称也测试了其它错误类型。
 
-`tests/providers/active-check.test.ts` 用本地合成 HTTP/SSE 服务验证真实 Pi 的文本、工具关联/续接、模型未调用、HTTP 拒绝、截流与取消，以及 CLI 缺凭据行为。注入合成服务的结果始终标记 `connection: "synthetic"`；所有者入口标记 `connection: "real"`，仍须同时有 `status: "passed"` 才能算本次真实连接验证通过。合成验证不会自动触发真实调用。当前真实 provider 结果应单独报告，未配置/未调用时写“未验证”。
+`tests/providers/active-check.test.ts` 用本地合成 HTTP/SSE 服务验证真实 Pi 的文本、工具关联/续接、模型未调用、Anthropic/Google 拒绝与不完整协议的区别、空调用 ID、重复工具、HTTP 拒绝、截流与取消，以及 CLI 缺凭据行为。注入合成服务的结果始终标记 `connection: "synthetic"`；所有者入口标记 `connection: "real"`，仍须同时有 `status: "passed"` 才能算本次真实连接验证通过。合成验证不会自动触发真实调用。当前真实 provider 结果应单独报告，未配置/未调用时写“未验证”。
