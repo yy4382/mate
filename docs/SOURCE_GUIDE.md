@@ -47,6 +47,8 @@
 
 `tests/scenarios/report-workflow.ts` 是完整正常工作样例：甲从 Owner 普通请求创建／认领任务、真实生成草稿，经 peer DM 附件让乙独立复核，乙真实反馈后甲继续原 session 的第二轮并交付最终报告。它同时保留模型脚本与任务、消息路由、文件／附件字节、session／run 断言，供现有环境的其它拓扑复用；`tests/control-plane/report-workflow.test.ts` 只装配同一 `runScenario` 入口。开发说明的“新增正常工作场景”展示短单 Agent 写法和完整样例入口。
 
+`tests/control-plane/command-crash-recovery.test.ts` 补充命令 start 后执行前／效果后收据前的真实 node SIGKILL 与恢复后的主动效果检查。`scenario-command-boundary.mjs` 只在固定测试启动文件注入既有真实 ledger/executor，暂停可释放、取消并有期限；`scenario-command-facts.ts` 在既有只读事实投影上解析命令身份、收据和实际模型可见的更正。收据已持久化后失效／对账继续复用 `agent-tool-invalidation.test.ts` 的命令用例；覆盖映射与运行入口见开发说明的“真实命令的 node 崩溃与收据边界”。
+
 ## 网页按用户功能找代码
 
 下面的功能目录都位于 `apps/web/src/features/`。

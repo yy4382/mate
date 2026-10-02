@@ -7,6 +7,9 @@ import { join, resolve } from "node:path";
 import Database from "better-sqlite3";
 import { WebSocket, WebSocketServer } from "ws";
 import { expect, it } from "vitest";
+import { z } from "zod";
+import { processOperationRequestHash } from "@mate/protocol/node";
+import { readScriptedToolResult } from "../helpers/scripted-tool-results.js";
 import {
   eventually,
   login,
@@ -601,6 +604,65 @@ it.each([
             "utf8",
           ),
         ).toBe(firstTool === "command" ? "once\n" : "normal contents\nonce");
+        if (
+          firstTool === "command" &&
+          boundary === "receipt" &&
+          ["disconnect", "restart"].includes(cause)
+        ) {
+          // Recovery consumes the confirmed original command result before making its new tool
+          // decision. A matching SQLite row alone would not prove the model received this fact.
+          expect(
+            readScriptedToolResult(
+              z.array(z.unknown()).parse(requests[1].input),
+              "process.exec",
+              z.looseObject({
+                operationId: z.string().uuid(),
+                state: z.string(),
+                receipt: z.unknown(),
+              }),
+            ),
+          ).toMatchObject({
+            operationId: oldReceipt.operationId,
+            state: "succeeded",
+            receipt: oldReceipt.receipt,
+          });
+          const originalRequest = wire.find(
+            (message) =>
+              message.type === "control.process.operation" &&
+              message.operationId === oldReceipt.operationId,
+          );
+          const reconciliation = wire.find(
+            (message) =>
+              message.type === "control.process.reconcile" &&
+              message.operations.some(
+                (operation: { operationId: string }) =>
+                  operation.operationId === oldReceipt.operationId,
+              ),
+          );
+          expect(reconciliation).toBeDefined();
+          expect(reconciliation.requestId).not.toBe(originalRequest.requestId);
+          expect(reconciliation.operations).toContainEqual({
+            operationId: oldReceipt.operationId,
+            agentId,
+            requestHash: processOperationRequestHash(
+              agentId,
+              JSON.parse(nodeReceipt.request).operation,
+            ),
+          });
+          expect(
+            wire.find(
+              (message) =>
+                message.type === "node.process.reconcile.result" &&
+                message.requestId === reconciliation.requestId,
+            )?.receipts,
+          ).toContainEqual({
+            operationId: oldReceipt.operationId,
+            agentId,
+            state: "succeeded",
+            receipt: oldReceipt.receipt,
+            revision: nodeReceipt.revision,
+          });
+        }
       }
     } finally {
       releaseRecovery();

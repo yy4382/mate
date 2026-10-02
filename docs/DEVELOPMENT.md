@@ -258,3 +258,22 @@ pnpm --filter @mate/control-plane exec vitest run tests/control-plane/report-wor
 ```
 
 这条测试也由 `pnpm check` 收录。失败沿同一个证据与清理入口报告实际步骤和关联事实；只使用合成模型和文件，实际平台以执行结果为准，真实 provider、Linux CI、容器和 VPS 各自验证。
+
+## 真实命令的 node 崩溃与收据边界
+
+每条场景在模型工作前准备空的合成效果计数文件，并立刻登记其真实路径，零次、一次及禁止的重复效果都能在失败清理前保存。受控失败回归让真实命令写入两次效果，确认原断言失败时证据仍保留两条原始记录；它不会把失败效果改写成通过结果。
+
+`tests/control-plane/command-crash-recovery.test.ts` 复用同一 `runScenario`、按 Agent provider 和消息/run 驱动，补充两个精确进程边界：`node.commandBoundary: "before_execute"` 在 node 持久保存 start 后、真实执行器调用前暂停；`"before_receipt"` 在真实命令返回后、ledger 提交收据前暂停。固定测试启动文件通过既有 node 测试依赖包裹真实 ledger/executor，不提供生产故障配置。事件输出携带实际 Agent、operation ID 和原请求。暂停默认最多 15 秒，响应 node 终止取消；在本场景的 `node-data/command-boundary-release` 写入合成释放文件可继续，本票也验证释放后同一 run 完成且效果一次。已到达的标记只在当前私有数据目录保存，原身份重启不会再暂停新的检查命令。
+
+两条崩溃场景先核对 durable start、空收据和实际效果（分别零次／一次），再发送 SIGKILL 并核对目标 node 的真实退出信号。重启复用原身份、数据和唯一 session，原 operation 对账为 unknown；实际恢复模型请求先看到关联原 operation 和请求内容的未知事实，再主动执行新命令检查原效果。检查也可正常产生新的记录；历史未知保持未知，不能自动判成功／未执行或自动重放。持续心跳可能在崩溃前已把尚无收据的操作记为未知，这与命令效果是分别观察的事实。场景完成后核对效果计数、原操作身份和 revision、旧 run 失败、新 run 完成及有序上下文前缀。失败沿公共证据入口保留步骤、真实进程状态、操作收据和已登记效果文件。
+
+已存在的命令路径继续复用：`agent-tool-invalidation.test.ts` 的 `disconnect/restart at receipt ... command` 在真实收据落盘后截住回包，检查控制面未收到时的原意图，并在断链或 node SIGKILL 重启后按 operation ID、Agent、原请求摘要和节点收据核对。这里补充实际恢复模型在新工具前收到原 succeeded 结果、对账的新 requestId 与回包 requestId 匹配且不同于执行往返的断言。`disconnect at unconfirmed ... command` 仍覆盖已有命令效果后的崩溃；`pnpm test:linux-ordinary-command-failure` 保留普通账号 timeout、命令仍运行时 node 退出和原收据不重放检查。该脚本的 node 是主动硬退出，不能冒充 SIGKILL 证据。SIGKILL node 也不等于所有 shell 后代已结束；本场景只报告实际目标退出和效果，不扫描宿主进程、不使用 sudo、切换账号或修改权限。其它失效与文件矩阵保留，不为了统一而重写。
+
+```sh
+pnpm build
+pnpm --filter @mate/control-plane exec vitest run tests/control-plane/command-crash-recovery.test.ts
+pnpm --filter @mate/control-plane exec vitest run tests/control-plane/agent-tool-invalidation.test.ts -t 'disconnect at receipt stops the old command|restart at receipt stops the old command|disconnect at unconfirmed stops the old command'
+pnpm test:linux-ordinary-command-failure
+```
+
+Vitest 场景均由 `pnpm check` 收录；独立普通命令脚本仍按上述入口运行。命令输出的实际平台决定证据归属，macOS 是跨平台验证，不替代 Linux CI、真实 provider 或 VPS。
