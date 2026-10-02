@@ -212,6 +212,7 @@ for (const mode of ["timeout", "SIGINT", "SIGTERM", "SIGKILL", "SIGKILL-no-direc
       ),
     );
     let passed = false;
+    let failed = false;
     try {
       const ready = JSON.parse(
         (await probe.waitFor(/MATE_EVIDENCE_READY (\{[^\n]+\})/))[1] ?? "null",
@@ -235,13 +236,14 @@ for (const mode of ["timeout", "SIGINT", "SIGTERM", "SIGKILL", "SIGKILL-no-direc
         expect((await fetch(ready.origin)).ok).toBe(true);
         if (mode === "SIGKILL-no-directory")
           rmSync(ready.directory, { recursive: true, force: true });
-        const result = JSON.parse(
-          execFileSync(
-            process.execPath,
-            ["tests/helpers/scenario-cleanup.mjs", join(directory, "resources.json")],
-            { encoding: "utf8", timeout: 15_000 },
-          ),
+        const initial = spawnSync(
+          process.execPath,
+          ["tests/helpers/scenario-cleanup.mjs", join(directory, "resources.json")],
+          { encoding: "utf8", timeout: 15_000 },
         );
+        writeFileSync(join(directory, "independent-cleanup-initial.json"), initial.stdout);
+        expect(initial.status, initial.stdout || String(initial.error)).toBe(0);
+        const result = JSON.parse(initial.stdout);
         expect(result.guarantee).toContain("SIGKILL does not execute finally");
         expect(result.reports[0]).toMatchObject({ residual: [], errors: [] });
       } else {
@@ -273,16 +275,24 @@ for (const mode of ["timeout", "SIGINT", "SIGTERM", "SIGKILL", "SIGKILL-no-direc
         },
       });
       passed = true;
+    } catch (error) {
+      failed = true;
+      throw error;
     } finally {
-      await stopProcess(probe);
-      if (probe.text.includes("Error")) console.error(probe.text);
-      // Only this test's manifests, never a global scan/prune. Also handles an early parent assertion failure.
-      execFileSync(process.execPath, ["tests/helpers/scenario-cleanup.mjs", "--root", root], {
-        encoding: "utf8",
-        timeout: 15_000,
-      });
-      if (passed) rmSync(root, { recursive: true, force: true });
-      else console.error(`MATE_SCENARIO_PROBE_RETAINED ${root}`);
+      if (!passed) console.error(probe.text);
+      try {
+        await stopProcess(probe);
+        // Only this test's manifests, never a global scan/prune.
+        execFileSync(process.execPath, ["tests/helpers/scenario-cleanup.mjs", "--root", root], {
+          encoding: "utf8",
+          timeout: 15_000,
+        });
+        if (passed) rmSync(root, { recursive: true, force: true });
+      } catch (error) {
+        console.error(`MATE_SCENARIO_PROBE_CLEANUP_FAILED ${root}`, error);
+        if (!failed) throw error;
+      }
+      if (!passed) console.error(`MATE_SCENARIO_PROBE_RETAINED ${root}`);
     }
   }, 45_000);
 }
