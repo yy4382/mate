@@ -35,6 +35,10 @@ case "$node_pid" in ''|*[!0-9]*) echo 'Expected exactly one idle node process in
 [ "$(stat -c %u "/proc/$node_pid")" = "$target_uid" ]
 runtime=$(readlink -f "/proc/$node_pid/exe")
 case "$runtime" in "$target_home"/.local/lib/mate-node/versions/*/node/bin/node) ;; *) echo 'Service is not running the installed dedicated runtime' >&2; exit 1 ;; esac
+bundle=${runtime%/node/bin/node}
+actual_command=$(tr '\000' '\n' < "/proc/$node_pid/cmdline")
+expected_command=$(printf '%s\n' "$runtime" "$bundle/app/apps/node/dist/main.js" --config-file "$target_home/.config/mate/node.json")
+[ "$actual_command" = "$expected_command" ] || { echo 'Running process is not the configured Mate node entry' >&2; exit 1; }
 boot_id=$(cat /proc/sys/kernel/random/boot_id)
 unit_sha=$(sha256sum "$unit" | awk '{print $1}')
 identity_sha=$(sha256sum "$identity" | awk '{print $1}')
