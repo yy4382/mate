@@ -75,7 +75,7 @@ function checkExistingAncestors(paths: ReturnType<typeof nodePaths>, path: strin
   }
 }
 
-function retainedLocations(paths: ReturnType<typeof nodePaths>) {
+function retainedLocations(paths: ReturnType<typeof nodePaths>, ensureSeparate = true) {
   const config = lstatIfPresent(paths.configuration)
     ? readNodeConfiguration(paths.configuration, paths)
     : undefined;
@@ -90,7 +90,7 @@ function retainedLocations(paths: ReturnType<typeof nodePaths>) {
     }
     return join(realpathSync(ancestor), ...missing);
   };
-  for (const retained of [paths.configDirectory, data, workspace]) {
+  for (const retained of ensureSeparate ? [paths.configDirectory, data, workspace] : []) {
     const part = relative(canonical(paths.programDirectory), canonical(retained));
     const reverse = relative(canonical(retained), canonical(paths.programDirectory));
     const nested = (value: string) =>
@@ -156,7 +156,17 @@ function remainingProgramFiles(directory: string, version: string) {
     }
   };
   visit("");
-  return { directory, files, folders };
+  return {
+    directory,
+    files,
+    folders,
+    records,
+    manifest,
+    manifestHash: createHash("sha256")
+      .update(readFileSync(join(directory, "bundle.json")))
+      .digest("hex"),
+    identities: new Map([...files, ...folders].map((file) => [file, lstatIfPresent(file)])),
+  };
 }
 
 export async function uninstallNode(
@@ -166,8 +176,14 @@ export async function uninstallNode(
 ) {
   requireOrdinaryAccount();
   const completed: string[] = [];
-  let preserved = `Preserved configuration: ${paths.configDirectory}\nPreserved default node data/workspaces: ${paths.dataDirectory}\nCustom locations remain in ${paths.configuration}; no data was removed.\n`;
+  let preserved = `Preserved configuration: ${paths.configDirectory}\nPreserved default node identity: ${join(paths.dataDirectory, "node-identity.json")}\nPreserved default operation receipts: ${paths.dataDirectory}\nPreserved default Agent workspaces: ${join(paths.dataDirectory, "agents")}\nCustom locations could not be read from ${paths.configuration}; no data was removed.\nPreserved control-plane database/model credentials/attachments: the MATE_CONTROL_PLANE_DATA_DIR bind directory from your Compose .env\n`;
   try {
+    try {
+      preserved = retainedLocations(paths, false);
+    } catch {
+      // Damaged configuration must not prevent stopping an owned service. The destructive
+      // program phase validates it again and fails before deleting any program files.
+    }
     for (const path of [paths.programDirectory, dirname(paths.entry), dirname(paths.unit)])
       checkExistingAncestors(paths, path);
     manager.assertAvailable({ effectiveCommand: false });
@@ -252,6 +268,9 @@ export async function uninstallNode(
       completed.push("User manager reloaded");
       preserved = retainedLocations(paths);
       for (const file of interrupted) {
+        checkExistingAncestors(paths, dirname(file));
+        if (!inspectRemovalStaging(paths).includes(file))
+          throw new Error(`Interrupted removal file changed; preserved: ${file}`);
         rmSync(file);
         completed.push(`Interrupted removal file cleaned: ${file}`);
       }
@@ -282,8 +301,43 @@ export async function uninstallNode(
           Number(basename(a.directory) === selected) - Number(basename(b.directory) === selected),
       );
       const removeBundle = (bundle: ReturnType<typeof remainingProgramFiles>) => {
-        for (const file of bundle.files) rmSync(file);
-        for (const folder of bundle.folders) rmdirSync(folder);
+        for (const file of bundle.files) {
+          checkExistingAncestors(paths, dirname(file));
+          const info = lstatIfPresent(file),
+            previous = bundle.identities.get(file),
+            record = bundle.records.get(relative(bundle.directory, file).split(sep).join("/"));
+          if (
+            !info?.isFile() ||
+            info.uid !== process.getuid?.() ||
+            info.dev !== previous?.dev ||
+            info.ino !== previous.ino ||
+            !record ||
+            createHash("sha256").update(readFileSync(file)).digest("hex") !== record.sha256 ||
+            ((info.mode & 0o111) !== 0) !== record.executable
+          )
+            throw new Error(`Program file changed before removal; preserved: ${file}`);
+          rmSync(file);
+        }
+        for (const folder of bundle.folders) {
+          checkExistingAncestors(paths, folder);
+          const info = lstatIfPresent(folder),
+            previous = bundle.identities.get(folder);
+          if (info?.dev !== previous?.dev || info?.ino !== previous?.ino)
+            throw new Error(`Program directory changed before removal; preserved: ${folder}`);
+          rmdirSync(folder);
+        }
+        checkExistingAncestors(paths, bundle.directory);
+        const manifest = lstatIfPresent(join(bundle.directory, "bundle.json"));
+        if (
+          !manifest?.isFile() ||
+          manifest.uid !== process.getuid?.() ||
+          manifest.dev !== bundle.manifest.dev ||
+          manifest.ino !== bundle.manifest.ino ||
+          createHash("sha256")
+            .update(readFileSync(join(bundle.directory, "bundle.json")))
+            .digest("hex") !== bundle.manifestHash
+        )
+          throw new Error(`Program inventory changed; preserved: ${bundle.directory}`);
         rmSync(join(bundle.directory, "bundle.json"));
         rmdirSync(bundle.directory);
         completed.push(`Program bundle removed: ${bundle.directory}`);

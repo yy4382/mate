@@ -74,6 +74,8 @@ done
 [ "$killed" = yes ] || { echo 'No live uninstall interruption point observed' >&2; exit 1; }
 if wait "$cli_pid"; then exit 1; fi
 cli_pid=
+[ -f "$bundle/bundle.json" ] || { echo 'Uninstall already completed before SIGKILL; no recovery evidence established' >&2; exit 1; }
+printf 'Observed live uninstall SIGKILL with remaining owned bundle inventory: %s\n' "$bundle/bundle.json"
 # Prepare the explicitly requested unavailable-public-entry recovery case; never reinstall/start.
 if [ -L "$entry" ]; then rm "$entry"; fi
 phase=local-bundle-recovery

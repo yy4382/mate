@@ -228,3 +228,26 @@ test("interrupted entry and unit removal files resume without a public managemen
   expect(existsSync(unitStage)).toBe(false);
   expect(existsSync(entryStage)).toBe(false);
 });
+
+test("early manager failure reports configured retained locations without modifying service or data", async () => {
+  const f = fixture(),
+    data = join(f.paths.home, "custom-data"),
+    workspace = join(f.paths.home, "custom-workspaces");
+  writeFileSync(
+    f.paths.configuration,
+    JSON.stringify({
+      MATE_CONTROL_PLANE_URL: "http://127.0.0.1:8787",
+      MATE_NODE_DATA_DIR: data,
+      MATE_NODE_AGENT_WORKSPACE_ROOT: workspace,
+    }),
+  );
+  f.manager.assertAvailable = () => {
+    throw new Error("User manager unavailable");
+  };
+  const attempt = uninstallNode(f.paths, f.recovery, f.manager);
+  await expect(attempt).rejects.toThrow(join(data, "node-identity.json"));
+  await expect(attempt).rejects.toThrow(workspace);
+  await expect(attempt).rejects.toThrow("MATE_CONTROL_PLANE_DATA_DIR");
+  expect(existsSync(f.paths.unit)).toBe(true);
+  expect(existsSync(f.bundle)).toBe(true);
+});
