@@ -1,6 +1,6 @@
 # 本地开发与验证
 
-已确认的首版包装目标是控制面镜像/Compose 与 node 用户目录安装及 systemd 用户服务，见 [ADR-0009](adr/0009-lightweight-linux-packaging.md)；该包装尚未实现。下文记录当前源码构建与真实进程测试，不代表发布包或用户服务已验收。未来包装测试须单独记录 Ubuntu 24.04、Debian 13 的 x86_64/arm64 及真实 user manager 证据，容器不能替代用户服务安装验收。
+已确认的首版包装目标是控制面镜像/Compose 与 node 用户目录完整包、薄 bootstrap、统一 `mate node` CLI 及 systemd 用户服务，见 [ADR-0009](adr/0009-lightweight-linux-packaging.md)；该包装尚未实现。下文记录当前源码构建与真实进程测试，不代表发布包或用户服务已验收。未来包装测试须单独记录 Ubuntu 24.04、Debian 13 的 x86_64/arm64 及真实 bootstrap → 包内 CLI → user manager 证据，包括 CLI 自身和专用 Node 的整包更新；容器不能替代用户服务安装验收。
 
 使用 Node 24 和 pnpm 10.33.0。运行 `pnpm install --frozen-lockfile`、`pnpm check`、`pnpm typecheck`。`pnpm build` 将控制面编译到 `apps/control-plane/dist`、节点编译到 `apps/node/dist`，将网页写入 `apps/web/dist`。节点可单独用 `pnpm build:node` 构建，并通过 `pnpm --filter @mate/node test` 运行本地行为测试。运行环境变量见[配置说明](CONFIGURATION.md)，Linux 上以普通账号直接启动、停止重启与诊断见[运维说明](OPERATIONS.md)。
 
@@ -62,7 +62,7 @@ pnpm test:linux-ordinary-command-failure
 
 该检查以启动账号运行，不需要 root、容器或服务管理器，macOS 与 Linux 都可运行，并打印一行 JSON 证据；它记录 `kernel`、`linuxKernel` 与 `containerized`。它不覆盖宿主的 `sudo` 策略：普通账号无法终止 `sudo` 派生的 root 后代，Mate 对此不作任何声明。
 
-`apps/node/tests/files/same-account-files.test.ts` 与 `apps/node/tests/provisioning/agent-workspace.test.ts` 覆盖文件工具在普通账号下的执行、工作区准备，以及节点以 root 运行时拒绝报告运行账号。`apps/control-plane/tests/control-plane/agents.test.ts` 覆盖控制面拒绝以 root 账号完成的 Agent 创建。**不要再引入以 root 运行节点、按 Agent 创建 Linux 账号或按命令创建 systemd 单元的检查**：这些旧路径已移除。ADR-0009 的 node 安装器用户服务是有限包装范围，不是 Agent 执行路径。
+`apps/node/tests/files/same-account-files.test.ts` 与 `apps/node/tests/provisioning/agent-workspace.test.ts` 覆盖文件工具在普通账号下的执行、工作区准备，以及节点以 root 运行时拒绝报告运行账号。`apps/control-plane/tests/control-plane/agents.test.ts` 覆盖控制面拒绝以 root 账号完成的 Agent 创建。**不要再引入以 root 运行节点、按 Agent 创建 Linux 账号或按命令创建 systemd 单元的检查**：这些旧路径已移除。ADR-0009 的 由统一 CLI 管理的 node 用户服务是有限包装范围，不是 Agent 执行路径。
 
 # Agent token 与缓存统计
 
