@@ -1,9 +1,30 @@
-import dbus from "dbus-native";
+import dbus, { ConnectionClosedError, DBusError, TimeoutError } from "dbus-native";
 import { z } from "zod";
 import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const propertyName = z.enum(["Version", "ExecStartEx"]);
+// Only these fixed facts may cross the child's stderr boundary; never serialize an error body.
+export const privatePropertyFailure = z.strictObject({
+  category: z.enum(["timeout", "transport", "unrecognized-reply", "request-rejected", "unknown"]),
+  code: z
+    .enum([
+      "ENOENT",
+      "EACCES",
+      "EPERM",
+      "ECONNREFUSED",
+      "ECONNRESET",
+      "ECONNCLOSED",
+      "EPIPE",
+      "ETIMEDOUT",
+      "EIO",
+      "ENOMEM",
+      "ENFILE",
+      "EMFILE",
+      "ENOEXEC",
+    ])
+    .optional(),
+});
 const execStartProperty = z.object({
   signature: z.literal("a(sasasttttuii)"),
   value: z.array(
@@ -26,7 +47,9 @@ const execStartProperty = z.object({
 export function readExecStartProperty(property: unknown) {
   const parsed = execStartProperty.safeParse(property);
   if (!parsed.success)
-    throw new Error("User manager returned unrecognized effective command facts");
+    throw new Error("User manager returned unrecognized effective command facts", {
+      cause: parsed.error,
+    });
   return parsed.data.value.map(([path, argv, flags]) => ({ path, argv, flags }));
 }
 
@@ -70,8 +93,27 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     process.stdout.write(
       `${JSON.stringify(await readPrivateProperty(property, join(runtime, "systemd/private")))}\n`,
     );
-  } catch {
-    process.stderr.write("Could not inspect the existing user manager's typed property\n");
+  } catch (error) {
+    const source = error instanceof ConnectionClosedError && error.cause ? error.cause : error,
+      code = privatePropertyFailure.shape.code.safeParse(
+        source instanceof Error && "code" in source ? source.code : undefined,
+      );
+    const category =
+      error instanceof TimeoutError
+        ? "timeout"
+        : error instanceof ConnectionClosedError
+          ? "transport"
+          : error instanceof z.ZodError ||
+              (error instanceof Error && error.cause instanceof z.ZodError)
+            ? "unrecognized-reply"
+            : error instanceof DBusError
+              ? "request-rejected"
+              : code.success && code.data
+                ? "transport"
+                : "unknown";
+    process.stderr.write(
+      `${JSON.stringify(privatePropertyFailure.parse({ category, ...(code.success && code.data ? { code: code.data } : {}) }))}\n`,
+    );
     process.exitCode = 1;
   }
 }
