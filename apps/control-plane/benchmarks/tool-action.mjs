@@ -167,7 +167,7 @@ try {
         },
         commit: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
         sourceSha256: createHash("sha256")
-          .update(readFileSync(new URL("../src/agent-session.ts", import.meta.url)))
+          .update(readFileSync(new URL("../src/runtime/session/service.ts", import.meta.url)))
           .digest("hex"),
         method: {
           warmups,
