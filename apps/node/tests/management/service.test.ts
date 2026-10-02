@@ -65,6 +65,7 @@ function fixture() {
         sub: active === "active" ? "running" : "dead",
         enabled,
         pid,
+        job: 0,
         fragment: active === "missing" ? "/foreign.service" : paths.unit,
         needsReload: false,
         type: "exec",

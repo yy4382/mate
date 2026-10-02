@@ -9,6 +9,8 @@ import {
 import { manageNode, nodeServiceCommands } from "./service.js";
 import { nodePaths } from "./paths.js";
 import { uninstallNode } from "./uninstall.js";
+import { updateNode } from "./update.js";
+import { bundleRequest } from "./acquire-bundle.js";
 
 async function main() {
   requireOrdinaryAccount();
@@ -36,6 +38,23 @@ async function main() {
     const metadata = verifyBundle(directory);
     probeBundle(directory, metadata);
     process.stdout.write(await uninstallNode(nodePaths(), directory));
+    return;
+  }
+  if (args[0] === "node" && args[1] === "update") {
+    const options: Record<string, string> = {};
+    for (let i = 2; i < args.length; i += 2) {
+      const name = args[i],
+        value = args[i + 1];
+      if (
+        !name ||
+        !value ||
+        !["--version", "--package", "--sha256"].includes(name) ||
+        options[name.slice(2)] !== undefined
+      )
+        throw new Error("Use mate node update --version VERSION [--package FILE --sha256 SHA256]");
+      options[name.slice(2)] = value;
+    }
+    process.stdout.write(await updateNode(bundleRequest.parse(options)));
     return;
   }
   if (args[0] === "node" && args[1] && nodeServiceCommands.includes(args[1])) {
@@ -66,7 +85,7 @@ async function main() {
     return;
   }
   throw new Error(
-    "Usage: mate --version; mate node uninstall; mate node install/start/stop/restart/status/logs [--lines <number>] [--follow]",
+    "Usage: mate --version; mate node uninstall; mate node install/start/stop/restart/status/logs; mate node update --version VERSION [--package FILE --sha256 SHA256]",
   );
 }
 

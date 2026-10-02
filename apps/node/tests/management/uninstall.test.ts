@@ -94,6 +94,7 @@ function fixture() {
         sub: active === "active" ? "running" : "dead",
         enabled,
         pid: active === "active" ? 42 : 0,
+        job: 0,
         fragment: loaded ? paths.unit : "",
         needsReload: false,
         type: "exec",

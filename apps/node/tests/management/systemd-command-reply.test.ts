@@ -38,6 +38,7 @@ test("one argument containing typed-looking lines cannot impersonate several arg
         sub: "dead",
         enabled: "disabled",
         pid: 0,
+        job: 0,
         fragment: paths.unit,
         needsReload: false,
         type: "exec",

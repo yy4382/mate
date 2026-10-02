@@ -9,6 +9,7 @@ export const serviceFacts = z.object({
   sub: z.string().min(1),
   enabled: z.string(),
   pid: z.number().int().nonnegative(),
+  job: z.number().int().nonnegative(),
   fragment: z.string(),
   needsReload: z.boolean(),
   execStart: z.array(
@@ -76,7 +77,8 @@ export const systemdUserManager: UserServiceManager = {
     const result = systemctl([
       "show",
       nodeUnitName,
-      "--property=LoadState,ActiveState,SubState,UnitFileState,MainPID,FragmentPath,NeedDaemonReload,Type",
+      "--all",
+      "--property=LoadState,ActiveState,SubState,UnitFileState,MainPID,Job,FragmentPath,NeedDaemonReload,Type",
     ]);
     const values = Object.fromEntries(
       result.stdout
@@ -95,6 +97,7 @@ export const systemdUserManager: UserServiceManager = {
       sub: values.SubState,
       enabled: values.UnitFileState ?? "",
       pid: Number(values.MainPID),
+      job: values.Job === "" ? 0 : /^\d+$/.test(values.Job ?? "") ? Number(values.Job) : undefined,
       fragment: values.FragmentPath ?? "",
       needsReload: values.NeedDaemonReload === "yes",
       execStart:

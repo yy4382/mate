@@ -23,6 +23,7 @@ import {
   probeBundle,
   releaseVersion,
   runningBundleDirectory,
+  type BundleMetadata,
   verifyBundle,
 } from "./bundle.js";
 import { createAtomicNoReplaceRename } from "../files/atomic-rename.js";
@@ -47,7 +48,7 @@ export function prepareManagedDirectory(path: string) {
   checkManagedDirectory(path);
 }
 
-function preflightDirectory(path: string): void {
+export function preflightDirectory(path: string): void {
   if (existsSync(path)) checkManagedDirectory(path);
   else preflightDirectory(dirname(path));
 }
@@ -98,7 +99,7 @@ export function lstatIfPresent(path: string) {
 const installationStageMarker = "Mate node bootstrap staging\n";
 const temporaryId = "[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}";
 
-function recoverInstallationStaging(paths: ReturnType<typeof nodePaths>) {
+export function recoverInstallationStaging(paths: ReturnType<typeof nodePaths>) {
   if (existsSync(paths.versionsDirectory)) {
     for (const name of readdirSync(paths.versionsDirectory)) {
       if (!new RegExp(`^\\.install-${temporaryId}$`).test(name)) continue;
@@ -153,7 +154,7 @@ function recoverInstallationStaging(paths: ReturnType<typeof nodePaths>) {
   }
 }
 
-function publishManagementEntry(
+export function publishManagementEntry(
   paths: ReturnType<typeof nodePaths>,
   version: string,
   oldVersion: string | undefined,
@@ -201,6 +202,45 @@ function publishManagementEntry(
   } finally {
     rmSync(temporaryEntry, { force: true });
   }
+}
+
+/** Called while holding the management lock; publishing the entry is a separate decision. */
+export function installBundleFiles(
+  paths: ReturnType<typeof nodePaths>,
+  bundleDirectory: string,
+  metadata: BundleMetadata,
+) {
+  const version = metadata.version;
+  const destination = join(paths.versionsDirectory, version);
+  if (lstatIfPresent(destination)) {
+    checkManagedDirectory(destination);
+    const installed = verifyBundle(destination, version);
+    probeBundle(destination, installed);
+    if (JSON.stringify(installed) !== JSON.stringify(metadata))
+      throw new Error("Same-version bundle differs from the installed files; do not overwrite it");
+  } else {
+    prepareManagedDirectory(paths.versionsDirectory);
+    const stage = join(paths.versionsDirectory, `.install-${randomUUID()}`);
+    try {
+      mkdirSync(stage, { mode: 0o700 });
+      writeFileSync(join(stage, ".mate-install-stage"), installationStageMarker, { mode: 0o600 });
+      cpSync(bundleDirectory, stage, {
+        recursive: true,
+        dereference: false,
+        errorOnExist: true,
+        force: false,
+      });
+      rmSync(join(stage, ".mate-install-stage"));
+      verifyBundle(stage, version);
+      probeBundle(stage, metadata);
+      createAtomicNoReplaceRename(
+        join(runningBundleDirectory(), "app/apps/node/dist/files/rename-noreplace"),
+      )(stage, destination);
+    } finally {
+      rmSync(stage, { recursive: true, force: true });
+    }
+  }
+  return destination;
 }
 
 export async function bootstrapInstall(
@@ -260,37 +300,7 @@ export async function bootstrapInstall(
       Boolean(currentUnit) !== Boolean(unit)
     )
       throw new Error("Node user unit changed concurrently; retry bootstrap");
-    const destination = join(paths.versionsDirectory, version);
-    if (lstatIfPresent(destination)) {
-      checkManagedDirectory(destination);
-      const installed = verifyBundle(destination, version);
-      probeBundle(destination, installed);
-      if (JSON.stringify(installed) !== JSON.stringify(metadata))
-        throw new Error(
-          "Same-version bundle differs from the installed files; do not overwrite it",
-        );
-    } else {
-      prepareManagedDirectory(paths.versionsDirectory);
-      const stage = join(paths.versionsDirectory, `.install-${randomUUID()}`);
-      try {
-        mkdirSync(stage, { mode: 0o700 });
-        writeFileSync(join(stage, ".mate-install-stage"), installationStageMarker, { mode: 0o600 });
-        cpSync(bundleDirectory, stage, {
-          recursive: true,
-          dereference: false,
-          errorOnExist: true,
-          force: false,
-        });
-        rmSync(join(stage, ".mate-install-stage"));
-        verifyBundle(stage, version);
-        probeBundle(stage, metadata);
-        createAtomicNoReplaceRename(
-          join(runningBundleDirectory(), "app/apps/node/dist/files/rename-noreplace"),
-        )(stage, destination);
-      } finally {
-        rmSync(stage, { recursive: true, force: true });
-      }
-    }
+    installBundleFiles(paths, bundleDirectory, metadata);
     prepareManagedDirectory(dirname(paths.entry));
     if (installedEntryVersion(paths) !== oldVersion)
       throw new Error("Mate entry changed while staging; installed files were preserved");
