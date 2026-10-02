@@ -4,7 +4,7 @@ import { existsSync, lstatSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
-function running(pid) {
+function pidExists(pid) {
   try {
     process.kill(pid, 0);
     return true;
@@ -13,19 +13,33 @@ function running(pid) {
     throw error;
   }
 }
-function command(pid) {
+function processState(pid) {
   try {
-    return execFileSync("ps", ["-p", String(pid), "-o", "command="], {
+    const output = execFileSync("ps", ["-p", String(pid), "-o", "stat=", "-o", "command="], {
       encoding: "utf8",
       timeout: 2000,
     }).trim();
+    const match = /^(\S+)\s+(.+)$/.exec(output);
+    if (!match) throw new Error(`Unable to read process ${pid} state`);
+    return { state: match[1], command: match[2] };
   } catch (error) {
-    if (error.status === 1 && !running(pid)) return undefined;
+    if (error.status === 1 && !pidExists(pid)) return undefined;
     throw error;
   }
 }
+// Zombies have exited and released their resources, even though kill(pid, 0) still succeeds.
+function exited(actual) {
+  return actual === undefined || actual.state.startsWith("Z");
+}
 async function cleanup(file) {
-  const report = { manifest: file, released: [], residual: [], errors: [] };
+  const report = {
+    manifest: file,
+    released: [],
+    residual: [],
+    errors: [],
+    observations: [],
+    signals: [],
+  };
   try {
     if (lstatSync(file).isSymbolicLink()) throw new Error("Refusing symlink resource manifest");
     const manifest = JSON.parse(readFileSync(file, "utf8"));
@@ -47,7 +61,7 @@ async function cleanup(file) {
           manifest.ownership)
     )
       throw new Error("Scenario directory ownership mismatch");
-    const driverAlive = running(manifest.driverPid);
+    const driverAlive = !exited(processState(manifest.driverPid));
     if (directoryPresent && driverAlive)
       throw new Error("Scenario driver is still alive; use its registered close() instead");
     for (const output of [...manifest.processes].reverse()) {
@@ -60,29 +74,64 @@ async function cleanup(file) {
           !["node", "control-plane"].includes(output.service)
         )
           throw new Error("Invalid owned process identity");
-        let actual = command(output.pid);
-        if (actual === undefined) {
-          report.released.push(`${output.service} ${output.pid} already absent`);
+        function observe(phase) {
+          const actual = processState(output.pid);
+          // Record state and the comparison, never an unrelated process's potentially secret argv.
+          const observation = {
+            service: output.service,
+            pid: output.pid,
+            phase,
+            state: actual?.state ?? "absent",
+            identityMatches: actual?.command.endsWith(output.marker) ?? false,
+          };
+          if (JSON.stringify(report.observations.at(-1)) !== JSON.stringify(observation))
+            report.observations.push(observation);
+          return actual;
+        }
+        function requireIdentity(actual) {
+          if (!actual.command.endsWith(output.marker))
+            throw new Error(
+              `Process ${output.pid} identity changed; no ${report.signals.some((entry) => entry.pid === output.pid) ? "further " : ""}signal sent`,
+            );
+        }
+        function inspect(phase) {
+          const actual = observe(phase);
+          // An exit can happen during ps's argv read. Confirm before declaring a live mismatch.
+          return !exited(actual) && !actual.command.endsWith(output.marker)
+            ? observe(`${phase} confirm`)
+            : actual;
+        }
+        let actual = inspect("initial");
+        if (exited(actual)) {
+          report.released.push(
+            `${output.service} ${output.pid} already ${actual ? "exited" : "absent"}`,
+          );
           continue;
         }
-        if (!actual.endsWith(output.marker))
-          throw new Error(`Process ${output.pid} identity changed; no signal sent`);
+        requireIdentity(actual);
         if (driverAlive) throw new Error("Scenario driver is still alive; no signal sent");
-        process.kill(output.pid, "SIGTERM");
-        for (let index = 0; index < 80; index++) {
-          actual = command(output.pid);
-          if (actual === undefined || !actual.endsWith(output.marker)) break;
-          await delay(25);
-        }
-        if (actual?.endsWith(output.marker)) {
-          process.kill(output.pid, "SIGKILL");
+        for (const signal of ["SIGTERM", "SIGKILL"]) {
+          actual = inspect(`before ${signal}`);
+          if (exited(actual)) break;
+          requireIdentity(actual);
+          try {
+            process.kill(output.pid, signal);
+            report.signals.push({ service: output.service, pid: output.pid, signal });
+          } catch (error) {
+            // The identified service may exit between the observation and the signal.
+            if (error.code !== "ESRCH") throw error;
+            actual = inspect(`${signal} race`);
+            if (!exited(actual)) throw error;
+          }
           for (let index = 0; index < 80; index++) {
-            actual = command(output.pid);
-            if (actual === undefined || !actual.endsWith(output.marker)) break;
+            actual = inspect(signal);
+            if (exited(actual)) break;
+            requireIdentity(actual);
             await delay(25);
           }
+          if (exited(actual)) break;
         }
-        if (actual?.endsWith(output.marker)) throw new Error(`Process ${output.pid} did not exit`);
+        if (!exited(actual)) throw new Error(`Process ${output.pid} did not exit`);
         report.released.push(`${output.service} ${output.pid}`);
       } catch (error) {
         report.residual.push(output);
