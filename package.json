@@ -24,7 +24,8 @@
     "start": "node apps/control-plane/dist/main.js",
     "start:control-plane": "node apps/control-plane/dist/main.js",
     "start:node": "node apps/node/dist/main.js",
-    "dev:web": "pnpm --filter @mate/web run dev"
+    "dev:web": "pnpm --filter @mate/web run dev",
+    "cleanup:scenarios": "node apps/control-plane/tests/helpers/scenario-cleanup.mjs"
   },
   "devDependencies": {
     "prettier": "3.9.9",

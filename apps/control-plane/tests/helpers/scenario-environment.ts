@@ -1,7 +1,7 @@
 import { agentSummarySchema, ownerChannelSchema } from "@mate/protocol/owner";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -48,6 +48,7 @@ const preparedAgentSchema = z.object({
 export type ScenarioConfiguration = z.input<typeof configurationSchema> & {
   provider: (request: ProviderRequest, response: ServerResponse) => void | Promise<void>;
   signal?: AbortSignal;
+  resourceManifestPath?: string;
   observeProcess?: (service: "control-plane" | "node", output: ProcessOutput) => void;
   beforeClose?: (facts: ScenarioFacts, signal: AbortSignal) => void | Promise<void>;
 };
@@ -59,6 +60,8 @@ export type ScenarioFacts = {
   processes: readonly ProcessOutput[];
   agents: readonly PreparedScenarioAgent[];
   requests: readonly ProviderRequest[];
+  redact: (text: string) => string;
+  startupFailure?: unknown;
 };
 export type CleanupReport = {
   released: string[];
@@ -116,6 +119,21 @@ export class ScenarioStartupError extends Error {
 export async function createScenarioEnvironment(options: ScenarioConfiguration) {
   const configuration = configurationSchema.parse(options);
   const directory = mkdtempSync(join(tmpdir(), "mate-scenario-"));
+  const ownership = randomUUID();
+  const ownedProcesses: Array<{ pid: number; service: string; marker: string }> = [];
+  const sensitiveValues = [ownerPassword, "synthetic-control-only-key"];
+  function saveResources() {
+    if (!options.resourceManifestPath) return;
+    const manifest = {
+      version: 1,
+      directory,
+      ownership,
+      driverPid: process.pid,
+      processes: ownedProcesses,
+    };
+    writeFileSync(`${options.resourceManifestPath}.tmp`, JSON.stringify(manifest), { mode: 0o600 });
+    renameSync(`${options.resourceManifestPath}.tmp`, options.resourceManifestPath);
+  }
   const resources = new Map<symbol, ReturnType<typeof createCleanupResource>>();
   const beforeClose = new Map<string, CleanupAction>();
   const cleanupReports: CleanupReport[] = [];
@@ -158,6 +176,7 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
   let cookie = "";
   let nodeId = "";
   let providerUrl = "";
+  let startupFailure: unknown;
   let control: ProcessOutput | undefined;
   let node: ProcessOutput | undefined;
   let closing: Promise<CleanupReport> | undefined;
@@ -206,7 +225,7 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
   function launch(service: "control-plane" | "node", environment: NodeJS.ProcessEnv) {
     assertOpen();
     const output = new ProcessOutput(
-      spawn(process.execPath, [runner, service], {
+      spawn(process.execPath, [runner, service, ownership], {
         cwd: directory,
         env: {
           PATH: process.env.PATH ?? "/usr/bin:/bin",
@@ -219,7 +238,14 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
       }),
     );
     processes.push(output);
+    if (output.child.pid)
+      ownedProcesses.push({
+        pid: output.child.pid,
+        service,
+        marker: `${runner} ${service} ${ownership}`,
+      });
     registerResource(`${service} process ${processes.length}`, () => stopProcess(output));
+    saveResources();
     options.observeProcess?.(service, output);
     return output;
   }
@@ -263,6 +289,15 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
 
   const environment = {
     directory,
+    get startupFailure() {
+      return startupFailure;
+    },
+    redact(text: string) {
+      return sensitiveValues.reduce(
+        (result, secret) => (secret ? result.replaceAll(secret, "[REDACTED]") : result),
+        text,
+      );
+    },
     requests,
     pending,
     providerErrors,
@@ -361,6 +396,7 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
           signal: cancellation.signal,
         });
         cookie = await login(origin, cancellation.signal);
+        sensitiveValues.push(cookie, cookie.slice(cookie.indexOf("=") + 1));
         await environment.node.waitFor(/MATE_NODE_CONNECTED/, 15_000, {
           after: nodeCursor,
           signal: cancellation.signal,
@@ -425,6 +461,8 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
   try {
     assertOpen();
     chmodSync(directory, 0o700);
+    writeFileSync(join(directory, ".mate-scenario-owner"), ownership, { mode: 0o600 });
+    saveResources();
     mkdirSync(join(directory, "home"), { mode: 0o700 });
     mkdirSync(join(directory, "tmp"), { mode: 0o700 });
     writeFileSync(join(directory, "owner-password"), `${ownerPassword}\n`, { mode: 0o600 });
@@ -451,6 +489,7 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
     });
     origin = `http://127.0.0.1:${listening[1]}`;
     cookie = await login(origin, cancellation.signal);
+    sensitiveValues.push(cookie, cookie.slice(cookie.indexOf("=") + 1));
     const pairing = z
       .object({ pairingToken: z.string() })
       .parse(
@@ -458,6 +497,7 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
           await environment.request("/api/owner/nodes/pairing-tokens", { method: "POST" })
         ).json(),
       );
+    sensitiveValues.push(pairing.pairingToken);
     const paired = await launchNode(pairing.pairingToken).waitFor(
       /MATE_NODE_PAIRED ([0-9a-f-]+)/i,
       15_000,
@@ -473,6 +513,7 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
     for (const agent of configuration.agents) await environment.prepareAgent(agent);
     return environment;
   } catch (error) {
+    startupFailure = error;
     const cleanup = await environment.close();
     throw new ScenarioStartupError(
       error,

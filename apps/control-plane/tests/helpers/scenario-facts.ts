@@ -1,3 +1,4 @@
+import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import Database from "better-sqlite3";
 import { join } from "node:path";
 import { z } from "zod";
@@ -61,4 +62,79 @@ export function readMessageRuns(directory: string, agentId: string, messageId: s
   } finally {
     db.close();
   }
+}
+
+/** Narrow diagnostic projections; auth, credentials and full databases are never exported. */
+export function readScenarioFacts(directory: string) {
+  const db = new Database(join(directory, "control-plane-data", "control-plane.sqlite"), {
+    readonly: true,
+    fileMustExist: true,
+  });
+  try {
+    return {
+      sessions: db
+        .prepare(
+          "SELECT id,agent_id AS agentId,created_at AS createdAt FROM owner_agent_sessions ORDER BY created_at,id",
+        )
+        .all(),
+      runs: db
+        .prepare(
+          "SELECT id,agent_id AS agentId,node_id AS nodeId,delivery_id AS deliveryId,state,error_code AS errorCode,started_at AS startedAt,completed_at AS completedAt FROM owner_agent_runs ORDER BY rowid",
+        )
+        .all(),
+      transcript: db
+        .prepare(
+          "SELECT seq,id,agent_id AS agentId,run_id AS runId,action_scope_id AS actionScopeId,kind,payload_json AS payload FROM owner_agent_session_records ORDER BY seq",
+        )
+        .all(),
+      operations: db
+        .prepare(
+          "SELECT operation_id AS operationId,run_id AS runId,agent_id AS agentId,node_id AS nodeId,state,request_json AS request,receipt_json AS receipt FROM owner_agent_process_operations ORDER BY created_at,operation_id",
+        )
+        .all(),
+    };
+  } finally {
+    db.close();
+  }
+}
+
+/** Node evidence is limited to its operation ledger and individual synthetic file receipts. */
+export function readNodeScenarioFacts(directory: string) {
+  const path = join(directory, "node-data", "agent-process-operations.sqlite");
+  function operations() {
+    if (!existsSync(path)) return [];
+    const db = new Database(path, { readonly: true, fileMustExist: true });
+    try {
+      return db
+        .prepare(
+          "SELECT operation_id AS operationId,agent_id AS agentId,state,request,receipt,revision,created_at AS createdAt,updated_at AS updatedAt FROM agent_process_operations ORDER BY created_at,operation_id",
+        )
+        .all();
+    } finally {
+      db.close();
+    }
+  }
+  const receiptsDirectory = join(directory, "node-data", "workspace-receipts");
+  const receiptSchema = z.object({
+    operationId: z.string(),
+    agentId: z.string(),
+    requestHash: z.string(),
+    state: z.string(),
+    result: z.unknown().optional(),
+    revision: z.number().optional(),
+    updatedAt: z.number().optional(),
+  });
+  const fileReceipts = existsSync(receiptsDirectory)
+    ? readdirSync(receiptsDirectory)
+        .filter((name) => /^[0-9a-f-]{36}\.json$/i.test(name))
+        .sort()
+        .map((name) => {
+          const path = join(receiptsDirectory, name);
+          const stat = lstatSync(path);
+          if (!stat.isFile() || stat.isSymbolicLink())
+            throw new Error("Scenario receipt must be a regular file");
+          return receiptSchema.parse(JSON.parse(readFileSync(path, "utf8")));
+        })
+    : [];
+  return { operations: operations(), fileReceipts };
 }

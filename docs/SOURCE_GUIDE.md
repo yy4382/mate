@@ -43,6 +43,8 @@
 
 `scenario-driver.ts` 集中读取 Owner 消息、任务、活动与附件，提供带期限和最后事实的条件等待，以及消息/run/当前游标的关联。`scenario-facts.ts` 只读补充 Owner API 没有暴露的 session、run seed 和实际已提交投递关系；业务结果仍由真实工具产生。`tests/control-plane/scenario-driver.test.ts` 先完成旧 run，再用新 Owner 普通消息驱动任务、命令生成文件、附件发布和显式线程回复，核对 Owner 下载与实际工作区字节；同时覆盖旧完成记录、取消、读取停滞、任务/run 分离、提醒和普通消息的实际输入，以及 seed 输入未提交前的中断/恢复。
 
+`scenario-evidence.ts` 用同一环境生命周期包装场景，保留原始失败、清理前的合成证据及释放结果；`scenario-cleanup.mjs` 提供驱动 SIGKILL 后的独立、归属核验回收入口。`scenario-evidence.test.ts` 是短真实文件成果、失败／取消／再运行的使用样例。文件目录可直接作 CI artifact，操作方式见开发说明的“场景失败证据与独立回收”。
+
 ## 网页按用户功能找代码
 
 下面的功能目录都位于 `apps/web/src/features/`。
