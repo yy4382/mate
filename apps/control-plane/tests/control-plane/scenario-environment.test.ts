@@ -42,6 +42,63 @@ it("cancels immediately while the provider is still binding without losing the c
   }
 }, 30_000);
 
+it("waits for a timed-out release still finishing cancellation instead of invoking it concurrently", async () => {
+  const environment = await createScenarioEnvironment({
+    provider: () => {},
+    cleanupTimeoutMs: 1000,
+  });
+  let finishRelease = () => {};
+  const releaseFinishing = new Promise<void>((resolve) => {
+    finishRelease = resolve;
+  });
+  let finishObserved = () => {};
+  const releaseFinished = new Promise<void>((resolve) => {
+    finishObserved = resolve;
+  });
+  let attempts = 0;
+  let active = 0;
+  let abortObserved = false;
+  try {
+    environment.registerCleanup("finishing cancellation", (signal) => {
+      attempts++;
+      active++;
+      signal.addEventListener(
+        "abort",
+        () => {
+          abortObserved = true;
+        },
+        { once: true },
+      );
+      return releaseFinishing.finally(() => {
+        active--;
+        finishObserved();
+      });
+    });
+    for (let close = 0; close < 2; close++) {
+      const report = await environment.close();
+      expect(report.failures.map((failure) => failure.resource)).toEqual([
+        "finishing cancellation",
+      ]);
+      expect(environment.resources).toEqual(["finishing cancellation"]);
+    }
+    expect(abortObserved).toBe(true);
+    expect(attempts).toBe(1);
+    expect(active).toBe(1);
+    finishRelease();
+    await releaseFinished;
+    expect(await environment.close()).toEqual({
+      released: ["finishing cancellation"],
+      failures: [],
+    });
+    expect(attempts).toBe(1);
+    expect(active).toBe(0);
+  } finally {
+    finishRelease();
+    await releaseFinished;
+    await environment.close();
+  }
+}, 30_000);
+
 it("bounds stalled evidence and resource callbacks, cleans other services, and retries the unreleased resource", async () => {
   const environment = await createScenarioEnvironment({
     provider: () => {},

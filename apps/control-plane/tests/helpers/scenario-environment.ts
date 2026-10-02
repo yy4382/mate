@@ -63,6 +63,36 @@ export type CleanupReport = {
 };
 type CleanupAction = (signal: AbortSignal) => void | Promise<void>;
 
+function createCleanupResource(name: string, action: CleanupAction) {
+  let inFlight: Promise<void> | undefined;
+  let controller: AbortController | undefined;
+  let released = false;
+  return {
+    name,
+    start() {
+      if (released) return Promise.resolve();
+      if (inFlight) return inFlight;
+      const current = new AbortController();
+      controller = current;
+      inFlight = Promise.resolve()
+        .then(() => action(current.signal))
+        .then(
+          () => {
+            released = true;
+          },
+          (error: unknown) => {
+            inFlight = undefined;
+            throw error;
+          },
+        );
+      return inFlight;
+    },
+    cancel(reason: Error) {
+      controller?.abort(reason);
+    },
+  };
+}
+
 /** Startup keeps the original cause separate from best-effort cleanup results. */
 export class ScenarioStartupError extends Error {
   constructor(
@@ -83,11 +113,11 @@ export class ScenarioStartupError extends Error {
 export async function createScenarioEnvironment(options: ScenarioConfiguration) {
   const configuration = configurationSchema.parse(options);
   const directory = mkdtempSync(join(tmpdir(), "mate-scenario-"));
-  const resources = new Map<symbol, { name: string; release: CleanupAction }>();
+  const resources = new Map<symbol, ReturnType<typeof createCleanupResource>>();
   const beforeClose = new Map<string, CleanupAction>();
   const cleanupReports: CleanupReport[] = [];
   function registerResource(name: string, release: CleanupAction) {
-    resources.set(Symbol(name), { name, release });
+    resources.set(Symbol(name), createCleanupResource(name, release));
   }
   registerResource("synthetic directory", () =>
     rmSync(directory, { recursive: true, force: true }),
@@ -141,16 +171,15 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
     if (closed) throw new Error("Scenario environment is closed");
   }
 
-  async function cleanupAction(name: string, action: CleanupAction) {
-    const controller = new AbortController();
+  async function cleanupAction(resource: ReturnType<typeof createCleanupResource>) {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
-        Promise.resolve().then(() => action(controller.signal)),
+        resource.start(),
         new Promise<void>((_resolve, reject) => {
           timer = setTimeout(() => {
-            const error = new Error(`Scenario cleanup timed out: ${name}`);
-            controller.abort(error);
+            const error = new Error(`Scenario cleanup timed out: ${resource.name}`);
+            resource.cancel(error);
             reject(error);
           }, configuration.cleanupTimeoutMs);
         }),
@@ -335,7 +364,7 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
         collectingEvidence = true;
         for (const [name, collect] of beforeClose) {
           try {
-            await cleanupAction(`before close: ${name}`, collect);
+            await cleanupAction(createCleanupResource(`before close: ${name}`, collect));
           } catch (error) {
             report.failures.push({ resource: `before close: ${name}`, error });
           } finally {
@@ -343,13 +372,13 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
           }
         }
         collectingEvidence = false;
-        for (const [id, { name, release }] of [...resources].reverse()) {
+        for (const [id, resource] of [...resources].reverse()) {
           try {
-            await cleanupAction(name, release);
+            await cleanupAction(resource);
             resources.delete(id);
-            report.released.push(name);
+            report.released.push(resource.name);
           } catch (error) {
-            report.failures.push({ resource: name, error });
+            report.failures.push({ resource: resource.name, error });
           }
         }
         cleanupReports.push(report);
