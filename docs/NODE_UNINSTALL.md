@@ -22,6 +22,8 @@ CLI 先确认本安装单元的归属，停止并禁用 `mate-node.service`，�
 
 配置损坏、权限不符或数据路径与程序树重叠时，服务清理可以已经完成，但程序删除会拒绝，防止把数据当程序删除；错误输出不包含配置内容。没有可连接的真实用户管理器时也会明确失败；从该账号现有登录会话重试，Mate 不切换系统服务或配置 linger。
 
+如果更新中断留下实际单元备份，卸载复用同一归属校验；原单元路径缺失时，只把该已核验备份移回，让 systemd 清除原 enable 链接，随后停止、禁用、移除，不 install、enable 或 start。安装暂存目录沿用原安装恢复接口。损坏程序的 `.repair-*` 备份必须有与本次已校验完整包一致的原库存，才能清理已缺失或损坏的列出文件；版本或库存不匹配时保留并明确失败，改用该备份原版本的已校验本地完整包执行同一 uninstall。不会为了卸载重新生成管理入口或安装程序。
+
 ## 公共入口已失效时继续同一卸载
 
 保留一个可信的本地完整发布包。下面的 SHA-256 必须来自已校验的构建输出或对应明确版本 Release；此恢复过程只解包和调用原 CLI，不执行 bootstrap/install，不 enable 或 start。示例使用 arm64，x86_64 使用 `linux-x64` 包：
@@ -53,7 +55,7 @@ docker compose --env-file .env -f compose.yaml down
 ```sh
 sh deploy/node/tests/uninstall-smoke.sh \
   /path/mate-node-0.1.0-linux-arm64.tar.gz /path/bootstrap.sh \
-  '<SHA-256>' 0.1.0 /path/user-service-peer.mjs
+  '<SHA-256>' 0.1.0 /path/user-service-peer.mjs /path/update-cut.mjs
 ```
 
-脚本使用真实 bootstrap、完整包 CLI 和 systemd 用户管理器，验证外来单元/入口保留、实际 SIGKILL 后公共入口丢失时从本地完整包恢复、重复清理、重新安装原身份和正常自卸载。WebSocket 外部协议服务是合成替身，不是实际控制面/provider。临时目录与用户管理器替身的单元测试另外记录，不能替代上述真实服务证据；四平台矩阵的运行结果由交付验收单独记录。
+脚本使用真实 bootstrap、完整包 CLI 和 systemd 用户管理器，验证外来单元/入口保留、实际 SIGKILL 后公共入口丢失时从本地完整包恢复、重复清理、重新安装原身份和正常自卸载；还从外部暂停实际更新进程，确认已发生的单元移动、程序复制或修复清理残留后杀死进程，再执行同一卸载。修复备份中的额外测试文件必须保留，移除该测试冲突后才重试。WebSocket 外部协议服务是合成替身，不是实际控制面/provider。临时目录与用户管理器替身的单元测试另外记录，不能替代上述真实服务证据；四平台矩阵的运行结果由交付验收单独记录。

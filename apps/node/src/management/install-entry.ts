@@ -2,12 +2,14 @@ import {
   constants,
   accessSync,
   closeSync,
+  fstatSync,
   cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
+  readSync,
   readlinkSync,
   readdirSync,
   rmSync,
@@ -21,6 +23,7 @@ import { nodePaths } from "./paths.js";
 import {
   bundleEntrypoints,
   probeBundle,
+  readBundle,
   releaseVersion,
   runningBundleDirectory,
   type BundleMetadata,
@@ -99,7 +102,76 @@ export function lstatIfPresent(path: string) {
 const installationStageMarker = "Mate node bootstrap staging\n";
 const temporaryId = "[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}";
 
-export function recoverInstallationStaging(paths: ReturnType<typeof nodePaths>) {
+function assertPartialInstallation(stage: string, verifiedDirectory: string) {
+  const metadata = readBundle(verifiedDirectory),
+    files = new Set(["bundle.json", ...metadata.files.map((file) => file.path)]),
+    directories = new Set<string>();
+  const left = Buffer.allocUnsafe(64 * 1024),
+    right = Buffer.allocUnsafe(64 * 1024);
+  for (const file of files) {
+    let parent = dirname(file);
+    while (parent !== ".") {
+      directories.add(parent);
+      parent = dirname(parent);
+    }
+  }
+  const visit = (part: string) => {
+    checkManagedDirectory(join(stage, part));
+    for (const name of readdirSync(join(stage, part))) {
+      const path = part ? `${part}/${name}` : name,
+        absolute = join(stage, path),
+        info = lstatSync(absolute);
+      if (path === ".mate-install-stage") continue;
+      if (info.isDirectory() && directories.has(path)) {
+        visit(path);
+        continue;
+      }
+      if (!files.has(path) || !info.isFile() || info.uid !== process.getuid?.())
+        throw new Error(`Unknown interrupted installation object preserved: ${absolute}`);
+      const staged = openSync(absolute, constants.O_RDONLY | constants.O_NOFOLLOW);
+      try {
+        const original = openSync(
+          join(verifiedDirectory, path),
+          constants.O_RDONLY | constants.O_NOFOLLOW,
+        );
+        try {
+          const copied = fstatSync(staged),
+            source = fstatSync(original);
+          if (
+            !copied.isFile() ||
+            copied.uid !== process.getuid?.() ||
+            !source.isFile() ||
+            source.uid !== process.getuid?.() ||
+            copied.size > source.size
+          )
+            throw new Error(`Unknown interrupted installation file preserved: ${absolute}`);
+          for (let position = 0; position < copied.size;) {
+            const length = Math.min(left.length, copied.size - position);
+            if (
+              readSync(staged, left, 0, length, position) !== length ||
+              readSync(original, right, 0, length, position) !== length ||
+              !left.subarray(0, length).equals(right.subarray(0, length))
+            )
+              throw new Error(
+                `Unknown interrupted installation contents preserved: ${absolute}; retry with the original version's verified local complete bundle`,
+              );
+            position += length;
+          }
+        } finally {
+          closeSync(original);
+        }
+      } finally {
+        closeSync(staged);
+      }
+    }
+  };
+  visit("");
+}
+
+export function recoverInstallationStaging(
+  paths: ReturnType<typeof nodePaths>,
+  verifiedDirectory: string,
+) {
   if (existsSync(paths.versionsDirectory)) {
     for (const name of readdirSync(paths.versionsDirectory)) {
       if (!new RegExp(`^\\.install-${temporaryId}$`).test(name)) continue;
@@ -123,12 +195,15 @@ export function recoverInstallationStaging(paths: ReturnType<typeof nodePaths>) 
         continue;
       }
       if (markerContents === installationStageMarker) {
+        assertPartialInstallation(stage, verifiedDirectory);
         rmSync(stage, { recursive: true });
         continue;
       }
       // The marker is removed only after the full copy; a complete inventory proves ownership.
       try {
-        verifyBundle(stage);
+        assertPartialInstallation(stage, verifiedDirectory);
+        if (JSON.stringify(verifyBundle(stage)) !== JSON.stringify(readBundle(verifiedDirectory)))
+          throw new Error("Interrupted stage inventory differs from the verified source");
       } catch {
         throw new Error(`Unrecognized interrupted installation directory: ${stage}`);
       }
@@ -290,7 +365,7 @@ export async function bootstrapInstall(
       );
   }
   return withManagementLock(paths, () => {
-    recoverInstallationStaging(paths);
+    recoverInstallationStaging(paths, bundleDirectory);
     // Repeat mutable facts inside the lock, including another bootstrap's changes.
     if (installedEntryVersion(paths) !== oldVersion)
       throw new Error("Mate entry changed concurrently; retry bootstrap");

@@ -16,11 +16,27 @@ function inspect() {
     const unitVersion = existsSync(unit)
       ? readFileSync(unit, "utf8").match(/^# Mate bundle version: (.+)$/m)?.[1]
       : undefined;
-    if (!target.endsWith(`/${version}/bin/mate`) || (phase === "unit" && unitVersion !== version))
+    let installationEvidence;
+    if (phase === "install") {
+      const versions = dirname(dirname(dirname(target)));
+      for (const name of readdirSync(versions).filter((name) => name.startsWith(".install-"))) {
+        const stage = join(versions, name);
+        if (
+          existsSync(join(stage, ".mate-install-stage")) &&
+          existsSync(join(stage, "app/apps/node/dist/main.js"))
+        )
+          installationEvidence = { stage, markerPresent: true, mainPresent: true };
+      }
+      if (!installationEvidence) return;
+    } else if (
+      !target.endsWith(`/${version}/bin/mate`) ||
+      (phase === "unit" && unitVersion !== version)
+    )
       return;
     if (
       phase === "unit-moved" &&
-      !readdirSync(dirname(unit)).some((name) => name.startsWith(".mate-node-previous-unit-"))
+      (existsSync(unit) ||
+        !readdirSync(dirname(unit)).some((name) => name.startsWith(".mate-node-previous-unit-")))
     )
       return;
     let repairEvidence;
@@ -61,7 +77,15 @@ function inspect() {
     done = true;
     writeFileSync(
       result,
-      JSON.stringify({ pid, children, target, unitVersion, phase, repairEvidence }),
+      JSON.stringify({
+        pid,
+        children,
+        target,
+        unitVersion,
+        phase,
+        repairEvidence,
+        installationEvidence,
+      }),
     );
     for (const observer of observers) observer.close();
     clearInterval(interval);

@@ -8,11 +8,19 @@ import {
   installedEntryVersion,
   lstatIfPresent,
   requireOrdinaryAccount,
+  recoverInstallationStaging,
   withManagementLock,
 } from "./install-entry.js";
 import { nodePaths } from "./paths.js";
-import { readManagedUnit, renderNodeUnit, serviceReferencesBundle } from "./service.js";
+import {
+  readManagedUnit,
+  renderNodeUnit,
+  serviceReferencesBundle,
+  interruptedUnitFiles,
+  recoverUnitStaging,
+} from "./service.js";
 import { systemdUserManager } from "./systemd.js";
+import { finishSameVersionRepair } from "./repair-bundle.js";
 import { createAtomicNoReplaceRename } from "../files/atomic-rename.js";
 
 function inspectRemovalStaging(paths: ReturnType<typeof nodePaths>) {
@@ -189,6 +197,15 @@ export async function uninstallNode(
     manager.assertAvailable({ effectiveCommand: false });
     return await withManagementLock(paths, () => {
       const interrupted = inspectRemovalStaging(paths);
+      const previousUnits = interruptedUnitFiles(paths);
+      if (!lstatIfPresent(paths.unit) && previousUnits[0]) {
+        createAtomicNoReplaceRename(
+          join(runningDirectory, "app/apps/node/dist/files/rename-noreplace"),
+        )(previousUnits[0].file, paths.unit);
+        completed.push(
+          "Moved owned unit restored only to stop/disable it; no service installed or started",
+        );
+      }
       const selected = installedEntryVersion(paths),
         unitVersion = readManagedUnit(paths),
         facts = manager.inspect({ effectiveCommand: false });
@@ -267,6 +284,45 @@ export async function uninstallNode(
         throw new Error("User service remains loaded after reload; program files preserved");
       completed.push("User manager reloaded");
       preserved = retainedLocations(paths);
+      recoverInstallationStaging(paths, runningDirectory);
+      if (previousUnits.length) {
+        for (const backup of interruptedUnitFiles(paths)) rmSync(backup.file);
+        completed.push("Owned interrupted update unit backups cleaned");
+      }
+      const unitStages =
+        lstatIfPresent(dirname(paths.unit)) &&
+        readdirSync(dirname(paths.unit)).some((name) => name.startsWith(".mate-node-unit-"));
+      const repairStages = lstatIfPresent(paths.versionsDirectory)
+        ? readdirSync(paths.versionsDirectory)
+            .filter((name) =>
+              /^\.repair-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(name),
+            )
+            .map((name) => join(paths.versionsDirectory, name))
+        : [];
+      if (unitStages || repairStages.length) {
+        // The command's complete bundle was verified before entering this boundary. Repair
+        // backups need this trusted same-version inventory; a name alone never authorizes deletion.
+        const metadata = readBundle(runningDirectory);
+        if (unitStages) recoverUnitStaging(paths, metadata.version);
+        for (const directory of repairStages) {
+          checkManagedDirectory(directory);
+          if (readdirSync(directory).length === 0) {
+            rmdirSync(directory);
+            continue;
+          }
+          const manifest = lstatIfPresent(join(directory, "bundle.json"));
+          if (
+            !manifest?.isFile() ||
+            manifest.uid !== process.getuid?.() ||
+            JSON.stringify(readBundle(directory)) !== JSON.stringify(metadata)
+          )
+            throw new Error(
+              `Repair inventory cannot be confirmed: ${directory}; retry uninstall from a verified local complete bundle of that inventory's original version`,
+            );
+          finishSameVersionRepair([directory], metadata);
+          completed.push(`Owned interrupted repair backup cleaned: ${directory}`);
+        }
+      }
       for (const file of interrupted) {
         checkExistingAncestors(paths, dirname(file));
         if (!inspectRemovalStaging(paths).includes(file))

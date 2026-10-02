@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -58,11 +59,12 @@ function fixture() {
     }),
   );
   const recovery = join(home, "recovery");
-  mkdirSync(join(recovery, "app/apps/node/dist/files"), { recursive: true });
+  cpSync(bundle, recovery, { recursive: true });
   copyFileSync(
     fileURLToPath(new URL("../../dist/files/rename-noreplace", import.meta.url)),
     join(recovery, "app/apps/node/dist/files/rename-noreplace"),
   );
+  copyFileSync(join(bundle, "bundle.json"), join(recovery, "bundle.json"));
   mkdirSync(dirname(paths.entry), { recursive: true });
   symlinkSync(join(bundle, "bin/mate"), paths.entry);
   mkdirSync(dirname(paths.unit), { recursive: true });
@@ -251,4 +253,61 @@ test("early manager failure reports configured retained locations without modify
   await expect(attempt).rejects.toThrow("MATE_CONTROL_PLANE_DATA_DIR");
   expect(existsSync(f.paths.unit)).toBe(true);
   expect(existsSync(f.bundle)).toBe(true);
+});
+
+test("uninstall resumes an update's moved owned unit and incomplete installation without starting", async () => {
+  const f = fixture(),
+    backup = join(
+      dirname(f.paths.unit),
+      ".mate-node-previous-unit-12345678-1234-1234-1234-123456789abc",
+    ),
+    stage = join(f.paths.versionsDirectory, ".install-12345678-1234-1234-1234-123456789abc");
+  writeFileSync(backup, readFileSync(f.paths.unit));
+  rmSync(f.paths.unit);
+  mkdirSync(stage);
+  writeFileSync(join(stage, ".mate-install-stage"), "Mate node bootstrap staging\n", {
+    mode: 0o600,
+  });
+  mkdirSync(join(stage, "app/apps/node/dist"), { recursive: true });
+  writeFileSync(join(stage, "app/apps/node/dist/main.js"), "synthetic-");
+  const run = f.manager.run;
+  f.manager.run = (action) => {
+    if (action === "disable" && !existsSync(f.paths.unit))
+      throw new Error("Missing unit cannot disable");
+    if (action === "start" || action === "enable")
+      throw new Error("Uninstall cannot start or enable");
+    run(action);
+  };
+  await expect(uninstallNode(f.paths, f.recovery, f.manager)).resolves.toContain(
+    "User service disabled",
+  );
+  expect(existsSync(backup)).toBe(false);
+  expect(existsSync(stage)).toBe(false);
+});
+
+test("a valid installation marker never authorizes deleting an extra unknown file", async () => {
+  const f = fixture(),
+    stage = join(f.paths.versionsDirectory, ".install-12345678-1234-1234-1234-123456789abc");
+  mkdirSync(stage);
+  writeFileSync(join(stage, ".mate-install-stage"), "Mate node bootstrap staging\n", {
+    mode: 0o600,
+  });
+  writeFileSync(join(stage, "non-mate-fixture"), "private non-Mate file");
+  await expect(uninstallNode(f.paths, f.recovery, f.manager)).rejects.toThrow(
+    "Unknown interrupted installation",
+  );
+  expect(readFileSync(join(stage, "non-mate-fixture"), "utf8")).toBe("private non-Mate file");
+});
+
+test("uninstall cleans a damaged repair backup only with the verified package inventory and preserves unknown repair files", async () => {
+  const f = fixture(),
+    backup = join(f.paths.versionsDirectory, ".repair-12345678-1234-1234-1234-123456789abc");
+  cpSync(f.bundle, backup, { recursive: true });
+  writeFileSync(join(backup, "app/apps/node/dist/main.js"), "damaged known program");
+  writeFileSync(join(backup, "unknown.txt"), "non-Mate");
+  await expect(uninstallNode(f.paths, f.recovery, f.manager)).rejects.toThrow("Unknown file");
+  expect(readFileSync(join(backup, "unknown.txt"), "utf8")).toBe("non-Mate");
+  rmSync(join(backup, "unknown.txt"));
+  await uninstallNode(f.paths, f.recovery, f.manager);
+  expect(existsSync(backup)).toBe(false);
 });

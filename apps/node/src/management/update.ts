@@ -67,7 +67,7 @@ export async function updateNode(
       if (readManagedUnit(paths) !== unitVersion || installedEntryVersion(paths) !== selected)
         throw new Error("Installed references changed while acquiring; retry update");
       inspectStopped();
-      recoverInstallationStaging(paths);
+      recoverInstallationStaging(paths, directory);
       recoverUnitStaging(paths, request.version);
       const repaired = prepareSameVersionRepair(paths, metadata);
       installBundleFiles(paths, directory, metadata);
