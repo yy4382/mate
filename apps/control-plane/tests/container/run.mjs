@@ -79,6 +79,7 @@ try {
   try {
     const ids = execFileSync("docker", ["image", "ls", "--quiet", "--no-trunc", image], {
       encoding: "utf8",
+      timeout: 10_000,
     }).trim();
     if (ids) execFileSync("docker", ["image", "rm", image], { stdio: "inherit", timeout: 30_000 });
   } catch (error) {

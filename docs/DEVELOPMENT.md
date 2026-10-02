@@ -328,7 +328,7 @@ pnpm --filter @mate/control-plane exec vitest run tests/control-plane/cp-recover
 
 套件直接复用 `runReportWorkflow`、`runNodeNetworkRecovery(..., "blackhole")` 和 `runCpRestart`：相同模型步骤、真实任务／附件／工作区文件、唯一 session 与原 run 断言在交付拓扑执行；只选 assistant 提交后 SIGKILL，不复制深层提交矩阵。Owner 下载仍与真正发布的附件字节及 node 成果文件比较，CP 没有 node 数据／工作区挂载。node 使用本次源码构建和宿主 Node，结果不声称使用完整发布包。
 
-日志中的 `MATE_CONTAINER_PRODUCTION` 记录被测 SHA、镜像 ID／架构、宿主与容器实际环境、UID/GID、端口和挂载；失败沿 `artifacts/scenarios` 保存同一摘要、实际模型请求、关联事实、效果文件与清理结果。新增 SIGKILL 驱动探针证明活驱动拒绝独立删除，驱动退出后只按清单和 Docker 归属标签回收本项目的容器／网络及 node；重复回收确认资源已不存在。每个 Compose project 在创建前登记，覆盖创建中断；不会扫描或 prune 宿主其它 Docker 资源。
+容器套件固定使用显示成功日志的 reporter。`MATE_CONTAINER_PRODUCTION` 与 `MATE_CONTAINER_WRAPPER` 分别记录原入口和包装器的被测 SHA、镜像 ID／架构、宿主与容器实际环境、UID/GID、端口和挂载；失败沿 `artifacts/scenarios` 保存同一摘要、实际模型请求、关联事实、效果文件与清理结果。新增 SIGKILL 驱动探针证明活驱动拒绝独立删除，驱动退出后只按清单和 Docker 归属标签回收本项目的容器／网络及 node；重复回收确认资源已不存在。每个 Compose project 在创建前登记，覆盖创建中断；不会扫描或 prune 宿主其它 Docker 资源。
 
 `pnpm check:ci` 在既有检查和三个普通账号脚本之后运行此入口；既有 CI `always()` 清理继续读取同一资源清单，失败证据仍由同一步上传。成功场景释放容器、网络和合成目录，驱动最后删除自己的唯一镜像标签。SIGKILL／runner 丢失仍只能由独立清理尽力回收，不能保证 finally 执行。
 

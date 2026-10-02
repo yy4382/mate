@@ -639,6 +639,7 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
         after: cursor,
         signal: cancellation.signal,
       });
+      container.reportWrapper();
     }
     await environment.request("/api/owner/model-credentials/openai", {
       method: "PUT",

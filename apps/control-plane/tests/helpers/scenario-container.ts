@@ -108,7 +108,16 @@ export function createScenarioContainer(options: {
       runtime: process.version,
       kernel: release(),
     },
-    node: "source build, ordinary host child process",
+    node: {
+      entry: "apps/node/dist via scenario-services.mjs",
+      runtime: process.execPath,
+      platform: process.platform,
+      arch: process.arch,
+      kernel: release(),
+      uid,
+      gid,
+      serviceManager: "ordinary child process",
+    },
     origin: "http://127.0.0.1:8787",
     production: { web: false, login: false, pairedNode: "", container: {} },
     wrapper: { launcher: "scenario-services.mjs", containers: containerSchema.array().parse([]) },
@@ -202,37 +211,41 @@ export function createScenarioContainer(options: {
     if (signal === "SIGKILL") assert.equal(state.State.ExitCode, 137);
     return { signal, container: { id, ...state.State }, attachExit: output.exitStatus };
   }
-  return {
-    topology,
-    start,
-    stop,
-    verifyProduction(nodeId: string) {
-      const runtime = JSON.parse(
-        docker([
-          "exec",
-          id,
-          "node",
-          "--input-type=module",
-          "-e",
-          `
+  function runtimeFacts() {
+    const runtime = JSON.parse(
+      docker([
+        "exec",
+        id,
+        "node",
+        "--input-type=module",
+        "-e",
+        `
         import { networkInterfaces, release } from 'node:os';
         const address = Object.values(networkInterfaces()).flat().find(entry => !entry.internal && entry.family === 'IPv4')?.address;
         if (!address || !(await fetch('http://' + address + ':8787/api/status')).ok) throw new Error('Container interface listener unavailable');
         console.log(JSON.stringify({ platform: process.platform, arch: process.arch, node: process.version, kernel: release(), uid: process.getuid(), gid: process.getgid(), interfaceAddress: address }));
       `,
-        ]),
-      );
-      const checked = z
-        .object({
-          platform: z.literal("linux"),
-          arch: z.string(),
-          node: z.string(),
-          kernel: z.string(),
-          uid: z.literal(uid),
-          gid: z.literal(gid),
-          interfaceAddress: z.string(),
-        })
-        .parse(runtime);
+      ]),
+    );
+    const checked = z
+      .object({
+        platform: z.literal("linux"),
+        arch: z.string(),
+        node: z.string(),
+        kernel: z.string(),
+        uid: z.literal(uid),
+        gid: z.literal(gid),
+        interfaceAddress: z.string(),
+      })
+      .parse(runtime);
+    return checked;
+  }
+  return {
+    topology,
+    start,
+    stop,
+    verifyProduction(nodeId: string) {
+      const checked = runtimeFacts();
       topology.production = {
         web: true,
         login: true,
@@ -241,6 +254,16 @@ export function createScenarioContainer(options: {
       };
       console.log(
         `MATE_CONTAINER_PRODUCTION ${JSON.stringify({ image: topology.image, imageId: topology.imageId, sourceSha: sha, imagePlatform: topology.imagePlatform, host: topology.host, uid, gid, project, originalEntrypoint: true, web: true, login: true, pairedNode: nodeId, runtime: checked, ports: inspect().HostConfig.PortBindings, mounts: inspect().Mounts, node: topology.node })}`,
+      );
+    },
+    reportWrapper() {
+      const state = inspect();
+      assert.equal(state.State.Running, true);
+      assert.equal(state.Image, image.Id);
+      assert.equal(state.Config.User, `${uid}:${gid}`);
+      const runtime = runtimeFacts();
+      console.log(
+        `MATE_CONTAINER_WRAPPER ${JSON.stringify({ sourceSha: sha, image: options.image, imageId: state.Image, imagePlatform: topology.imagePlatform, project, containerId: state.Id, runtime, node: topology.node, entrypoint: "/opt/mate/apps/control-plane/tests/helpers/scenario-services.mjs", testDependencies: state.Config.Env.filter((value) => value.startsWith("MATE_SCENARIO_")).map((value) => value.split("=")[0]), ports: state.HostConfig.PortBindings, mounts: state.Mounts })}`,
       );
     },
     providerUrl: (port: number) => `http://host.docker.internal:${port}/v1`,
