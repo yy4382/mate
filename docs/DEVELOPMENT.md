@@ -96,3 +96,17 @@ pnpm prompt:inspect --snapshot /ABSOLUTE/private/configuration.json --show-conte
 快照默认仅报告类型、工具数量及来源可用性；加 `--show-content` 才显示该快照原有的最终 system prompt 和工具 schema。它们可能包含私密 profile 或描述，输出和快照都不应提交到 Git。诊断不输出快照中无关字段或凭据字段，失败也不回显文件名或输入内容。现有快照没有分段来源，诊断会标记 `unavailable-in-snapshot`，不会用今天的模板冒充历史来源；当前源码的来源清单用不带 `--snapshot` 的命令查看。
 
 `prompt-characterization.test.ts` 的快照冻结于重构前实现 `b0dfb0dc`，使用合成数据核对普通请求/配置、恢复通知、三类摘要请求及恢复后上下文顺序。它是保持旧输出的回归基线；重构时不要用更新快照来消除差异。注意力选择、压缩失败/中断和持久恢复仍由现有集成测试覆盖。
+
+## Agent 已确认历史检索
+
+Agent 通过 `tools.list` / `tools.describe` 发现 `history.search` 与 `history.read`，再由 `tools.call` 调用。两个工具沿用当前 run、node、Agent 核验，不接受目标 Agent；只观察调用者自己的已确认 `kind=message` 原记录，不改变注意力、任务、权限、压缩点或操作收据。配置、用量、流式未确认片段和未消费的 pending correction 不在结果中。压缩只改变后续上下文，原记录 ID、来源、时间和正文继续可读；旧历史不是当前指令或重新执行工具的授权。
+
+搜索和读取共用确定性文字投影：字符串正文保持原样；内容块按原顺序以换行分隔，`text` 只取文字，`toolCall` 写为 `工具调用 名称 (ID)` 加换行和 JSON 参数，其他块写为 `[非文字内容已省略]`。`toolResult` 在正文前写入 `工具结果 名称 (ID)`。图片、隐藏思维、协议签名及其他扩展字段不输出。原正文中的频道及可见范围标记不从当前对话状态重建。结果同时给出记录 `id`、`agentId`、`seq`、`runId`、`actionScopeId`、`role`、原消息 `timestamp`、持久确认 `confirmedAt`（均为 Unix 毫秒时间）及 assistant 的 `toolCalls` 或结果的 `toolCallId` / `toolName` / `isError`。
+
+`history.search({query, cursor?})` 使用大小写敏感的字面子串，不解释正则。空字符串及包含未配对代理字符的查询拒绝。每次按 `seq` 升序扫描最多 100 条，返回最多 20 条，每条只报首个命中。`match` 为完整命中的 `[start,end)`；`excerpt` 带文字和自己的 `[start,end)`，最多 400 个 UTF-16 代码单元，命中前保留最多约 100 单元，边界不切代理对。长查询的命中可超过摘录，应按 ID 续读。所有范围均从投影文字的 0 开始。
+
+首请求固定调用者当时最高消息 `seq`；原样携返回的 `nextCursor` 和同一查询继续，直到 `nextCursor=null`。游标包含 Agent、原查询、固定上界 `through` 和已扫描位置 `after`，不是权限凭证；服务端校验字段类型、非负安全整数、`after<=through`、上界未超出自己的已确认记录，以及 Agent/查询匹配。空命中但游标非空时仍可继续；命中满 20 条只推进到最后处理的记录，新追加消息需新搜索。
+
+`history.read({id, offset?, maxChars?})` 默认从 0 返回最多 8,000 个 UTF-16 代码单元，`maxChars` 为 2 至 16,000。返回 `text`、`offset`、`nextOffset`、`totalLength` 和同 Agent 的 `previousId` / `nextId`；按 `nextOffset` 续读不会静默丢失尾部。offset 等于总长度时返回空片段和 `nextOffset=null`，超界或位于代理对中间则拒绝。未知记录 ID 和他人记录 ID 使用同一拒绝。
+
+这些限制是观察分页约束，不是 Agent 运行或用量额度。100 条记录的上限不保证固定 CPU、内存或读取字节成本：巨型原消息仍需读取、解析并构造整个文字投影，分段阅读也有这一成本；首版不引入全文索引或改写原始历史。
