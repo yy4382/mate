@@ -155,7 +155,12 @@ it.skipIf(!process.env.MATE_EVIDENCE_PROBE_MODE)(
       name: `real-${mode}`,
       evidenceRoot,
       provider,
-      environment: { agents: [{ name: "信号证据同事" }] },
+      environment: {
+        agents: [{ name: "信号证据同事" }],
+        ...(process.env.MATE_EVIDENCE_PROBE_IMAGE
+          ? { container: { image: process.env.MATE_EVIDENCE_PROBE_IMAGE } }
+          : {}),
+      },
       async run({ environment, driver, step, effectFile, signal }) {
         const agent = environment.agents[0];
         if (!agent) throw new Error("Expected prepared Agent");

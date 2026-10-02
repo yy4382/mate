@@ -10,6 +10,7 @@ import { z } from "zod";
 import type { ProviderRequest } from "./agent-loop.js";
 import { ProcessOutput, login, ownerPassword, stopProcess } from "./run-services.js";
 import { createScenarioNodeLink, type NodeLinkEvent } from "./scenario-network.js";
+import { createScenarioContainer } from "./scenario-container.js";
 
 const agentConfigurationSchema = z.object({
   name: z.string().min(1),
@@ -22,6 +23,7 @@ const agentConfigurationSchema = z.object({
 });
 const configurationSchema = z.object({
   cleanupTimeoutMs: z.number().int().positive().default(5000),
+  container: z.object({ image: z.string().min(1) }).optional(),
   agents: z.array(agentConfigurationSchema).default([]),
   controlPlane: z
     .object({
@@ -76,6 +78,7 @@ export type ScenarioFacts = {
   agents: readonly PreparedScenarioAgent[];
   requests: readonly ProviderRequest[];
   network?: readonly NodeLinkEvent[];
+  topology?: ReturnType<typeof createScenarioContainer>["topology"] | undefined;
   redact: (text: string) => string;
   startupFailure?: unknown;
 };
@@ -137,6 +140,12 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
   const directory = mkdtempSync(join(tmpdir(), "mate-scenario-"));
   const ownership = randomUUID();
   const ownedProcesses: Array<{ pid: number; service: string; marker: string }> = [];
+  const ownedContainers: Array<{
+    id: string;
+    project: string;
+    ownership: string;
+    networks: string[];
+  }> = [];
   const sensitiveValues = [ownerPassword, "synthetic-control-only-key"];
   function saveResources() {
     if (!options.resourceManifestPath) return;
@@ -146,6 +155,7 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
       ownership,
       driverPid: process.pid,
       processes: ownedProcesses,
+      containers: ownedContainers,
     };
     writeFileSync(`${options.resourceManifestPath}.tmp`, JSON.stringify(manifest), { mode: 0o600 });
     renameSync(`${options.resourceManifestPath}.tmp`, options.resourceManifestPath);
@@ -201,6 +211,8 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
   let closed = false;
   let collectingEvidence = false;
   let restarting = false;
+  let container: ReturnType<typeof createScenarioContainer> | undefined;
+  let wrapped = false;
   const processes: ProcessOutput[] = [];
   const agents: PreparedScenarioAgent[] = [];
   const cancellation = new AbortController();
@@ -229,12 +241,12 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
     }
   }
 
-  async function restartService(relaunch: () => Promise<void>) {
+  async function restartService<T>(relaunch: () => Promise<T>) {
     assertOpen();
     if (restarting) throw new Error("Scenario service restart already in progress");
     restarting = true;
     try {
-      await relaunch();
+      return await relaunch();
     } finally {
       restarting = false;
     }
@@ -269,7 +281,7 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
   }
 
   function launchControl(port = 0, injectFault = true) {
-    control = launch("control-plane", {
+    const input = {
       MATE_CONTROL_PLANE_PORT: String(port),
       MATE_CONTROL_PLANE_DATA_DIR: join(directory, "control-plane-data"),
       MATE_OWNER_PASSWORD_FILE: join(directory, "owner-password"),
@@ -299,7 +311,12 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
               configuration.controlPlane.nodeOperationTimeoutMs,
             ),
           }),
-    });
+    };
+    if (container) {
+      control = container.start(input, wrapped);
+      processes.push(control);
+      options.observeProcess?.("control-plane", control);
+    } else control = launch("control-plane", input);
     return control;
   }
 
@@ -351,6 +368,9 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
     },
     get network() {
       return nodeLink?.events ?? [];
+    },
+    get topology() {
+      return container?.topology;
     },
     get nodeLink() {
       if (!nodeLink) throw new Error("Scenario node network proxy is not configured");
@@ -449,7 +469,9 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
       return restartService(async () => {
         const port = Number(new URL(origin).port);
         const nodeCursor = environment.node.text.length;
-        if (signal === "SIGKILL" && control && !control.exitStatus) {
+        const oldControl = environment.control;
+        const containerExit = container ? await container.stop(oldControl, signal) : undefined;
+        if (!container && signal === "SIGKILL" && control && !control.exitStatus) {
           control.child.kill(signal);
           let timer: ReturnType<typeof setTimeout> | undefined;
           try {
@@ -465,7 +487,7 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
           } finally {
             clearTimeout(timer);
           }
-        } else await stopProcess(control);
+        } else if (!container) await stopProcess(control);
         await launchControl(port, false).waitFor(/MATE_CONTROL_PLANE_LISTENING (\d+)/, 15_000, {
           signal: cancellation.signal,
         });
@@ -475,6 +497,7 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
           after: nodeCursor,
           signal: cancellation.signal,
         });
+        return containerExit ?? oldControl.exitStatus;
       });
     },
     async close(): Promise<CleanupReport> {
@@ -540,6 +563,19 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
     mkdirSync(join(directory, "home"), { mode: 0o700 });
     mkdirSync(join(directory, "tmp"), { mode: 0o700 });
     writeFileSync(join(directory, "owner-password"), `${ownerPassword}\n`, { mode: 0o600 });
+    if (configuration.container) {
+      // Register cleanup before creating any container/network, including partial startup.
+      registerResource("scenario Compose project", () => container?.close());
+      container = createScenarioContainer({
+        ...configuration.container,
+        directory,
+        ownership,
+        save(resource) {
+          ownedContainers.push(resource);
+          saveResources();
+        },
+      });
+    }
     await new Promise<void>((resolveListen, reject) => {
       const finish = (error?: unknown) => {
         provider.removeListener("error", failed);
@@ -551,13 +587,13 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
       const aborted = () => finish(cancellation.signal.reason);
       provider.once("error", failed);
       cancellation.signal.addEventListener("abort", aborted, { once: true });
-      provider.listen(0, "127.0.0.1", () => {
+      provider.listen(0, container ? "0.0.0.0" : "127.0.0.1", () => {
         finish();
       });
     });
     const address = provider.address();
     if (!address || typeof address === "string") throw new Error("Local provider has no port");
-    providerUrl = `http://127.0.0.1:${address.port}/v1`;
+    providerUrl = container?.providerUrl(address.port) ?? `http://127.0.0.1:${address.port}/v1`;
     const listening = await launchControl().waitFor(/MATE_CONTROL_PLANE_LISTENING (\d+)/, 15_000, {
       signal: cancellation.signal,
     });
@@ -586,6 +622,24 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
       },
     );
     nodeId = z.string().parse(paired[1]);
+    if (container) {
+      const web = await fetch(new URL("/", origin));
+      if (!web.ok || !(await web.text()).includes('<html lang="zh-CN">'))
+        throw new Error("Production image did not serve the Chinese web entry");
+      container.verifyProduction(nodeId);
+      wrapped = true;
+      const cursor = environment.node.text.length;
+      await container.stop(environment.control, "SIGTERM");
+      await launchControl(8787).waitFor(/MATE_CONTROL_PLANE_LISTENING (\d+)/, 15_000, {
+        signal: cancellation.signal,
+      });
+      cookie = await login(origin, cancellation.signal);
+      sensitiveValues.push(cookie, cookie.slice(cookie.indexOf("=") + 1));
+      await environment.node.waitFor(/MATE_NODE_CONNECTED/, 15_000, {
+        after: cursor,
+        signal: cancellation.signal,
+      });
+    }
     await environment.request("/api/owner/model-credentials/openai", {
       method: "PUT",
       body: { apiKey: "synthetic-control-only-key" },

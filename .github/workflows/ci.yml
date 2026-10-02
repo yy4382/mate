@@ -53,7 +53,7 @@ jobs:
       - name: Install locked dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Project checks, report workflow and three ordinary account scripts
+      - name: Project checks, ordinary account scripts and delivered container scenarios
         run: pnpm check:ci
 
       - name: Reclaim manifest-owned scenario resources

@@ -177,6 +177,7 @@ export async function runScenario<T>(options: {
         {
           name: options.name,
           checkout,
+          topology: facts.topology,
           assertions,
           lastEvent,
           error: failure,

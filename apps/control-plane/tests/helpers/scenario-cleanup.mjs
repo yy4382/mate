@@ -31,6 +31,21 @@ function processState(pid) {
 function exited(actual) {
   return actual === undefined || actual.state.startsWith("Z");
 }
+function dockerInspect(kind, id) {
+  try {
+    return JSON.parse(
+      execFileSync("docker", [kind, "inspect", id], {
+        encoding: "utf8",
+        timeout: 10_000,
+        stdio: ["ignore", "pipe", "pipe"],
+      }),
+    )[0];
+  } catch (error) {
+    if (/No such (object|container|network)|network [^\n]+ not found/i.test(String(error.stderr)))
+      return undefined;
+    throw error;
+  }
+}
 async function cleanup(file) {
   const report = {
     manifest: file,
@@ -138,6 +153,66 @@ async function cleanup(file) {
         report.errors.push(String(error));
       }
     }
+    for (const resource of [...(manifest.containers ?? [])].reverse()) {
+      try {
+        if (driverAlive) throw new Error("Scenario driver is still alive; no Docker removal sent");
+        if (
+          !(resource.id === "" || /^[0-9a-f]{64}$/.test(resource.id)) ||
+          resource.ownership !== manifest.ownership ||
+          resource.project !== `mate-a-scenario-${manifest.ownership}` ||
+          !Array.isArray(resource.networks) ||
+          !resource.networks.every((id) => /^[0-9a-f]{64}$/.test(id))
+        )
+          throw new Error("Invalid owned Docker identity");
+        const ids = resource.id
+          ? [resource.id]
+          : execFileSync(
+              "docker",
+              [
+                "container",
+                "ls",
+                "--all",
+                "--quiet",
+                "--no-trunc",
+                "--filter",
+                `label=com.docker.compose.project=${resource.project}`,
+              ],
+              { encoding: "utf8", timeout: 10_000 },
+            )
+              .trim()
+              .split(/\s+/)
+              .filter(Boolean);
+        for (const id of ids) {
+          const container = dockerInspect("container", id);
+          if (container) {
+            if (
+              container.Config.Labels["mate.scenario.owner"] !== manifest.ownership ||
+              container.Config.Labels["com.docker.compose.project"] !== resource.project
+            )
+              throw new Error("Container ownership mismatch; no removal sent");
+            execFileSync("docker", ["container", "rm", "--force", id], {
+              timeout: 10_000,
+              stdio: "pipe",
+            });
+          }
+          report.released.push(`container ${id} ${container ? "removed" : "already absent"}`);
+        }
+        for (const id of resource.networks.length
+          ? resource.networks
+          : [`${resource.project}_default`]) {
+          const network = dockerInspect("network", id);
+          if (network) {
+            if (network.Labels["com.docker.compose.project"] !== resource.project)
+              throw new Error("Network ownership mismatch; no removal sent");
+            execFileSync("docker", ["network", "rm", id], { timeout: 10_000, stdio: "pipe" });
+          }
+          report.released.push(`network ${id} ${network ? "removed" : "already absent"}`);
+        }
+      } catch (error) {
+        report.residual.push(resource);
+        report.errors.push(String(error));
+      }
+    }
     if (!report.residual.length) {
       if (directoryPresent) rmSync(manifest.directory, { recursive: true, force: true });
       report.released.push(
@@ -156,16 +231,18 @@ if (arguments_[0] === "--") arguments_.shift();
 let files;
 if (arguments_[0] === "--root" && arguments_.length === 2) {
   const root = resolve(arguments_[1]);
-  files = existsSync(root)
-    ? readdirSync(root, { withFileTypes: true })
-        .filter(
-          (entry) =>
-            entry.isDirectory() &&
-            entry.name.startsWith("scenario-") &&
-            existsSync(join(root, entry.name, "resources.json")),
-        )
-        .map((entry) => join(root, entry.name, "resources.json"))
-    : [];
+  function ownedManifests(directory) {
+    if (!existsSync(directory)) return [];
+    return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+      if (!entry.isDirectory() || !entry.name.startsWith("scenario-")) return [];
+      const child = join(directory, entry.name);
+      return [
+        ...(existsSync(join(child, "resources.json")) ? [join(child, "resources.json")] : []),
+        ...ownedManifests(child),
+      ];
+    });
+  }
+  files = ownedManifests(root);
 } else if (arguments_.length === 1) files = [resolve(arguments_[0])];
 else {
   console.error("Usage: pnpm cleanup:scenarios -- --root <evidence-root> | <resources.json>");
