@@ -26,12 +26,14 @@ const usage = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 const results = [];
+let sqliteVersion;
 const directory = mkdtempSync(join(tmpdir(), "mate-tool-action-benchmark-"));
 try {
   for (const count of [100, 1000, 10000]) {
     for (const layout of ["many-scopes", "single-scope"]) {
       const db = new Database(join(directory, `${count}-${layout}.sqlite`));
       try {
+        sqliteVersion = db.prepare("SELECT sqlite_version() AS version").get().version;
         db.pragma("journal_mode = WAL");
         db.pragma("foreign_keys = ON");
         db.exec(`CREATE TABLE owner_agents(id TEXT PRIMARY KEY);
@@ -160,8 +162,7 @@ try {
           release: release(),
           arch: process.arch,
           cpu: cpus()[0]?.model,
-          sqlite: new Database(":memory:").prepare("SELECT sqlite_version() AS version").get()
-            .version,
+          sqlite: sqliteVersion,
         },
         commit: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
         sourceSha256: createHash("sha256")
