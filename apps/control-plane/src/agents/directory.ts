@@ -1,3 +1,5 @@
+import { agentProvisioningStageSchema } from "@mate/protocol/owner";
+import { z } from "zod";
 import type Database from "better-sqlite3";
 import { createHash, randomUUID } from "node:crypto";
 import { basename, resolve } from "node:path";
@@ -6,40 +8,40 @@ import { type AgentWorkspaceIdentity, type AgentProvisionStage } from "@mate/pro
 import { nodeAccountOf } from "../nodes/directory.js";
 import { NodeAccountConflict } from "../nodes/directory.js";
 import type { NodeAccount, NodeDirectory } from "../nodes/directory.js";
-import { providerCredentialExistsSql } from "../model-credentials.js";
-import type { OwnerChat } from "../owner-chat.js";
+import { providerCredentialExistsSql } from "../providers/credentials.js";
+import type { OwnerChat } from "../conversations/service.js";
 import type {
   AgentSummary,
   AgentProvisioningStage,
   AgentProvisioningStatus,
   NewAgentRequest,
 } from "./contracts.js";
-import type { z } from "zod";
 import type { agentProfilePatchSchema } from "./contracts.js";
 
-interface AgentRow {
-  id: string;
-  node_id: string;
-  name: string;
-  role: string;
-  description: string;
-  provider: string;
-  model_id: string;
-  initial_channel_id: string | null;
-  session_id: string;
-  provision_request_id: string;
-  request_hash: string;
-  stage: AgentProvisioningStage;
-  error: string | null;
-  linux_username: string | null;
-  uid: number | null;
-  gid: number | null;
-  home: string | null;
-  home_marker: string | null;
-  created_at: number;
-  updated_at: number;
-  provider_credential: number;
-}
+const agentRowSchema = z.looseObject({
+  id: z.string(),
+  node_id: z.string(),
+  name: z.string(),
+  role: z.string(),
+  description: z.string(),
+  provider: z.string(),
+  model_id: z.string(),
+  initial_channel_id: z.string().nullable(),
+  session_id: z.string(),
+  provision_request_id: z.string(),
+  request_hash: z.string(),
+  stage: agentProvisioningStageSchema,
+  error: z.string().nullable(),
+  linux_username: z.string().nullable(),
+  uid: z.number().nullable(),
+  gid: z.number().nullable(),
+  home: z.string().nullable(),
+  home_marker: z.string().nullable(),
+  created_at: z.number(),
+  updated_at: z.number(),
+  provider_credential: z.number(),
+});
+type AgentRow = z.infer<typeof agentRowSchema>;
 
 /**
  * The stages a node's progress and failure reports may still move. A finished or failed Agent is
@@ -95,7 +97,9 @@ export class AgentDirectory {
   ) {}
 
   list(): AgentSummary[] {
-    const rows = this.db.prepare(`${agentRowQuery} ORDER BY a.created_at,a.id`).all() as AgentRow[];
+    const rows = agentRowSchema
+      .array()
+      .parse(this.db.prepare(`${agentRowQuery} ORDER BY a.created_at,a.id`).all());
     return rows.map(toAgent);
   }
 
@@ -171,9 +175,14 @@ export class AgentDirectory {
         }
 
         if (input.initialChannelId) {
-          const channel = this.db
-            .prepare("SELECT archived FROM owner_channels WHERE id=?")
-            .get(input.initialChannelId) as { archived: number } | undefined;
+          const channel = z
+            .looseObject({ archived: z.number() })
+            .optional()
+            .parse(
+              this.db
+                .prepare("SELECT archived FROM owner_channels WHERE id=?")
+                .get(input.initialChannelId),
+            );
           if (!channel || channel.archived)
             throw new AgentRequestConflict("所选初始频道不存在或已归档，请更新表单后重试。");
         }
@@ -303,7 +312,9 @@ export class AgentDirectory {
   }
 
   private read(id: string): AgentRow | undefined {
-    return this.db.prepare(`${agentRowQuery} WHERE a.id=?`).get(id) as AgentRow | undefined;
+    return agentRowSchema
+      .optional()
+      .parse(this.db.prepare(`${agentRowQuery} WHERE a.id=?`).get(id));
   }
 }
 

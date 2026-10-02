@@ -1,8 +1,8 @@
 import type Database from "better-sqlite3";
 import { z } from "zod";
-import { defineAgentTool } from "./agent-tool-entry.js";
-import { AgentToolRefusal } from "./owner-chat.js";
-import type { SessionCommit } from "./session-record.js";
+import { defineAgentTool } from "./runtime/tools/entry.js";
+import { AgentToolRefusal } from "./conversations/errors.js";
+import type { SessionCommit } from "./runtime/session/record.js";
 
 const cursorSchema = z
   .object({

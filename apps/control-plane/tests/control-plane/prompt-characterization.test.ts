@@ -1,13 +1,13 @@
 import { createServer } from "node:http";
 import { expect, it } from "vitest";
 import type { AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
-import { AgentLoop } from "../../src/agent-loop.js";
-import { SessionCompaction } from "../../src/session-compaction.js";
+import { AgentLoop } from "../../src/runtime/loop.js";
+import { SessionCompaction } from "../../src/runtime/session/compaction.js";
 import type {
   ModelContextMessage,
   SessionCommit,
   SessionCheckpoint,
-} from "../../src/session-record.js";
+} from "../../src/runtime/session/record.js";
 import { answer, model, scripted } from "../helpers/pi.js";
 import { respond } from "../helpers/agent-loop.js";
 

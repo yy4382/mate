@@ -7,8 +7,8 @@ if (process.platform !== "linux" && process.platform !== "darwin") {
   process.exit(0);
 }
 
-const output = resolve("dist/execution/rename-noreplace");
-mkdirSync(resolve("dist/execution"), { recursive: true });
+const output = resolve("dist/files/rename-noreplace");
+mkdirSync(resolve("dist/files"), { recursive: true });
 const compilation = spawnSync(
   process.env.CC || "cc",
   [
@@ -17,7 +17,7 @@ const compilation = spawnSync(
     "-Wall",
     "-Wextra",
     "-Werror",
-    resolve("src/execution/rename-noreplace.c"),
+    resolve("src/files/rename-noreplace.c"),
     "-o",
     output,
   ],

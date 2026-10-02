@@ -3,8 +3,8 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createElement } from "react";
 import { afterEach, expect, it, vi } from "vitest";
-import { TasksPage } from "../src/tasks-page.js";
-import { RemindersPage } from "../src/reminders-page.js";
+import { TasksPage } from "../src/features/tasks/tasks-page.js";
+import { RemindersPage } from "../src/features/reminders/reminders-page.js";
 vi.mock("../src/navigation.js", () => ({ redirectToLogin: vi.fn() }));
 afterEach(() => {
   cleanup();

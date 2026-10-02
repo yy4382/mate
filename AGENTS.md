@@ -2,7 +2,7 @@
 
 ## First usable release and stopping conditions
 
-- The first usable release must be deployable on a low-resource Linux VPS and operable through Mate's own Chinese web interface. The control plane and Linux node keep separate responsibilities but run as ordinary processes under the same existing, unprivileged Linux account. Mate does not create users, switch Unix identities, or operate systemd. VPS packaging is a release requirement, not a post-experiment extra. See [ADR-0003](docs/adr/0003-web-control-plane-and-linux-nodes.md) and [ADR-0004](docs/adr/0004-single-account-command-execution.md).
+- The first usable release must be deployable on a low-resource Linux VPS and operable through Mate's own Chinese web interface. The control plane ships as a Docker image with Compose; the Linux node ships with a matching management CLI and dedicated Node runtime under the existing, unprivileged account and uses that account's systemd user service. A thin shell bootstrap only acquires and installs the CLI; the unified `mate node` CLI owns installation, service management, logs, manual whole-bundle updates, and uninstall. Both components retain separate responsibilities and use the same host account's UID/GID. Mate does not create users, switch Unix identities, install system software, or configure Docker privileges or linger. VPS packaging is a release requirement, not a post-experiment extra. See [ADR-0003](docs/adr/0003-web-control-plane-and-linux-nodes.md), [ADR-0004](docs/adr/0004-single-account-command-execution.md), and [ADR-0009](docs/adr/0009-lightweight-linux-packaging.md).
 - This is a pre-release experiment with no existing production deployment to preserve. Implement the single-account release as the sole supported deployment path. For compatibility decisions in the first-release simplification, follow [ADR-0002](docs/adr/0002-first-release-compatibility-reset.md).
 - When a major decision changes, remove superseded implementation, configuration, tests, and operating instructions rather than maintaining a parallel path. Keep one short first-principles explanation of the new choice; Git history preserves the detailed past. Do not retain an abandoned plan or acceptance checklist as a current requirement.
 - Continue until all feasible development and validation are complete and only actual provider connection and VPS deployment remain, OR a critical architecture/product decision genuinely requires the user. Do not stop at intermediate module checkpoints.
@@ -19,9 +19,26 @@
 - Message freshness gating surfaces concurrent changes and preserves the Agent's choices to revise, retry, stay silent, or explicitly continue. It is not command review or model-quality filtering. Preserve unread/seen/deferred distinctions; the control plane makes its own message commits atomic.
 - Review product-semantic fidelity and reachable alternative choices as well as correctness/recovery. Passing a scripted happy path does not establish the entire action space.
 - Use pnpm for dependency installation and scripts. Do not reintroduce npm lockfiles.
-- Run Agent commands as ordinary child processes under Mate's existing Linux account; do not create users, switch UID/GID, or invoke systemd. If an Agent writes `sudo` in its command, the host's existing sudo policy alone determines whether it succeeds. Do not add Mate-specific privilege elevation, per-command UI approval, or automatic sudo configuration. Preserve the command's output and result; record state-changing operations so interrupted or uncertain effects are not blindly repeated.
+- Run Agent commands as ordinary child processes under Mate's existing Linux account; do not create users, switch UID/GID, or wrap commands in systemd units. The systemd user service for the node, managed by its CLI, is the limited packaging exception; it does not manage Agent commands through systemd. If an Agent writes `sudo` in its command, the host's existing sudo policy alone determines whether it succeeds. Do not add Mate-specific privilege elevation, per-command UI approval, or automatic sudo configuration. Preserve the command's output and result; record state-changing operations so interrupted or uncertain effects are not blindly repeated.
 - Evaluate harness capability assuming an arbitrarily intelligent model: tools, environment, system prompt, reachable control flows, persistence and recovery. Do not make model performance or spontaneous collaboration quality a delivery blocker. Scripted model tests are valid harness tests; real provider checks concern transport and protocol compatibility only.
 - Prefer mature, widely used, well-fitting libraries. Treat researched versions as candidates to verify, not an already tested lockfile.
+
+## TypeScript and Zod conventions
+
+- Write idiomatic TypeScript, not TypeScript shaped like another statically typed language. Let types flow from values, functions, and schemas through inference.
+- Put explicit TypeScript types primarily at module boundaries where they document or constrain a public contract. Avoid annotating local variables and internal return values when inference is sufficient.
+- Prefer Zod schemas as the single runtime and static source of truth for domain data. Derive parsed types with `z.infer<typeof schema>` or `z.output<typeof schema>`, and input types with `z.input<typeof schema>` when defaults or transforms make inputs differ from outputs. Reuse and compose schemas instead of duplicating hand-written interfaces.
+- Avoid manual casts (`as`), type assertions, redundant `: Type` annotations, and broad `any`. Fix the data flow or narrow values with schemas and type guards instead. Use `satisfies` only when a boundary needs conformance without losing inference. If an external library requires an assertion that cannot be expressed through its public types, keep it local to that adapter and explain the invariant that makes it safe.
+- Prefer expressions and small inferred functions over declaring intermediate variables solely to attach types to them. Do not add generic abstractions just to reduce a few annotations.
+- Keep strict TypeScript checks enabled, including `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`. A type error should normally be solved by improving the schema, public contract, or inference path rather than overriding the checker.
+
+## Source organization
+
+- Group code by domain and reason to change. Use concrete file names that explain the responsibility; avoid catch-all `utils` or `types` modules and mechanical file-size targets.
+- Keep related schemas, persistence and behavior discoverable together, while distinguishing database DDL from runtime data contracts in file names.
+- Share browser-safe wire contracts through explicit protocol exports. Keep Node-only helpers and provider-specific validation out of browser imports.
+- Preserve transaction ownership, validation behavior and recovery guarantees when extracting modules. Do not replace a large class with helpers that all receive that class or a giant dependency bag.
+- Update imports, tests, package exports and the source-navigation documentation when moving code. Remove obsolete paths instead of retaining forwarding files just for the previous layout.
 
 ## Delivery process — explicit user instruction
 

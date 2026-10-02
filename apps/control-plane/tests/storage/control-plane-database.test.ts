@@ -3,9 +3,9 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { OwnerAuth } from "../../src/owner-auth.js";
+import { OwnerAuth } from "../../src/auth/service.js";
 import { preparingStages } from "../../src/agents/directory.js";
-import { controlPlaneSchema } from "../../src/schema.js";
+import { controlPlaneSchema } from "../../src/storage/schema.js";
 
 const dataDirectories: string[] = [];
 const applicationId = 0x4d43504c;

@@ -3,7 +3,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createElement } from "react";
 import { afterEach, expect, it, vi } from "vitest";
-import { NodesPage } from "../src/nodes-page.js";
+import { NodesPage } from "../src/features/nodes/nodes-page.js";
 vi.mock("../src/navigation.js", () => ({ redirectToLogin: vi.fn() }));
 afterEach(() => {
   cleanup();
@@ -47,4 +47,22 @@ it("offers a one-time pairing token with a hidden-input start command", async ()
   expect(await screen.findByText("one-time-pairing-token")).not.toBeNull();
   expect(screen.getByText(/read -r -s -p '配对令牌: ' MATE_NODE_PAIRING_TOKEN/)).not.toBeNull();
   expect(screen.getByText(/node apps\/node\/dist\/main\.js/)).not.toBeNull();
+});
+
+it("rejects malformed pairing data without exposing it as a usable token", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) =>
+      init?.method === "POST"
+        ? json({ pairingToken: 42, expiresAt: "2026-09-27T10:10:00.000Z" })
+        : json({ nodes: [], futureMetadata: { revision: 2 } }),
+    ),
+  );
+  render(createElement(NodesPage));
+  await userEvent.setup().click(await screen.findByRole("button", { name: "创建一次性令牌" }));
+  expect(await screen.findByRole("alert")).toHaveProperty(
+    "textContent",
+    "无法创建配对令牌，请稍后重试。",
+  );
+  expect(screen.queryByText("42")).toBeNull();
 });

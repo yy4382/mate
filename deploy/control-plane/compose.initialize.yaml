@@ -1,0 +1,11 @@
+services:
+  control-plane:
+    environment:
+      MATE_OWNER_PASSWORD_FILE: /run/mate/owner-password
+    volumes:
+      - type: bind
+        source: ${MATE_OWNER_PASSWORD_FILE:?Set an existing private absolute initial password file}
+        target: /run/mate/owner-password
+        read_only: true
+        bind:
+          create_host_path: false

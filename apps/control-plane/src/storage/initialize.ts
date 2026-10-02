@@ -102,10 +102,10 @@ function controlPlaneVerdict(db: Database.Database, schema: string): Verdict {
       .filter((object) => !objects.has(object))
       .map((object) => object.replace(":", " "));
     const usageColumn = db
-      .prepare(
+      .prepare<[], { hidden: number }>(
         "SELECT hidden FROM pragma_table_xinfo('owner_agent_session_records') WHERE name='usage_json'",
       )
-      .get() as { hidden: number } | undefined;
+      .get();
     // SQLite table_xinfo marks a STORED generated column with hidden=3.
     if (usageColumn?.hidden !== 3)
       missing.push("generated column owner_agent_session_records.usage_json");
@@ -117,8 +117,10 @@ function controlPlaneVerdict(db: Database.Database, schema: string): Verdict {
 
 function databaseObjects(db: Database.Database): Set<string> {
   const objects = db
-    .prepare("SELECT type,name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'")
-    .all() as { type: string; name: string }[];
+    .prepare<[], { type: string; name: string }>(
+      "SELECT type,name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'",
+    )
+    .all();
   return new Set(objects.map((row) => `${row.type}:${row.name}`));
 }
 
@@ -145,7 +147,13 @@ type Verdict =
 
 function describe(cause: unknown): { code: string; detail: string } {
   return {
-    code: (cause as { code?: string } | null)?.code ?? "",
+    code:
+      typeof cause === "object" &&
+      cause !== null &&
+      "code" in cause &&
+      typeof cause.code === "string"
+        ? cause.code
+        : "",
     detail: cause instanceof Error ? cause.message : String(cause),
   };
 }

@@ -1,11 +1,11 @@
 import Database from "better-sqlite3";
-import { AgentTools } from "../../src/agent-tools.js";
-import { AgentProcessOperationBroker } from "../../src/agent-process-operations.js";
+import { AgentTools } from "../../src/runtime/tools/registry.js";
+import { AgentProcessOperationBroker } from "../../src/runtime/process-operations.js";
 import { answer } from "../helpers/pi.js";
 import { randomUUID } from "node:crypto";
 import { expect, it } from "vitest";
-import { AgentSession } from "../../src/agent-session.js";
-import type { SessionCommit } from "../../src/session-record.js";
+import { AgentSession } from "../../src/runtime/session/service.js";
+import type { SessionCommit } from "../../src/runtime/session/record.js";
 import { setup, authorizeModel, addAgent, waitForRuns } from "../helpers/agent-tool-fixture.js";
 
 async function historyFixture() {
