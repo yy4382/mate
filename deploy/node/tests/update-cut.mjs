@@ -1,6 +1,6 @@
 // External fixture: observe installed files and pause the actual CLI, without production hooks.
-import { watch, readFileSync, readlinkSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { watch, readFileSync, readlinkSync, writeFileSync, existsSync, readdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 const [entry, unit, version, pidFile, ready, result, phase] = process.argv.slice(2);
 if (![entry, unit, version, pidFile, ready, result, phase].every(Boolean))
   throw new Error("Missing cut observer arguments");
@@ -10,9 +10,36 @@ function inspect() {
   if (done) return;
   try {
     const target = readlinkSync(entry);
-    const unitVersion = readFileSync(unit, "utf8").match(/^# Mate bundle version: (.+)$/m)?.[1];
+    const unitVersion = existsSync(unit)
+      ? readFileSync(unit, "utf8").match(/^# Mate bundle version: (.+)$/m)?.[1]
+      : undefined;
     if (!target.endsWith(`/${version}/bin/mate`) || (phase === "unit" && unitVersion !== version))
       return;
+    if (
+      phase === "unit-moved" &&
+      !readdirSync(dirname(unit)).some((name) => name.startsWith(".mate-node-previous-unit-"))
+    )
+      return;
+    let repairEvidence;
+    if (phase === "repair-cleanup") {
+      const versions = dirname(dirname(dirname(target)));
+      const backups = readdirSync(versions).filter((name) => name.startsWith(".repair-"));
+      for (const name of backups) {
+        const backup = join(versions, name),
+          manifest = join(backup, "bundle.json");
+        if (!existsSync(manifest)) continue;
+        const metadata = JSON.parse(readFileSync(manifest, "utf8"));
+        const first = metadata.files[0]?.path;
+        if (
+          metadata.version === version &&
+          first &&
+          !existsSync(join(backup, first)) &&
+          existsSync(join(versions, version, "node/bin/node"))
+        )
+          repairEvidence = { backup, missingPayload: first, manifestPresent: true };
+      }
+      if (!repairEvidence) return;
+    }
     const pid = Number(readFileSync(pidFile, "utf8"));
     if (!Number.isSafeInteger(pid) || pid <= 1) throw new Error("Unsafe test CLI PID");
     process.kill(pid, "SIGSTOP");
@@ -29,7 +56,10 @@ function inspect() {
       }
     }
     done = true;
-    writeFileSync(result, JSON.stringify({ pid, children, target, unitVersion, phase }));
+    writeFileSync(
+      result,
+      JSON.stringify({ pid, children, target, unitVersion, phase, repairEvidence }),
+    );
     for (const observer of observers) observer.close();
     clearInterval(interval);
     clearTimeout(timeout);

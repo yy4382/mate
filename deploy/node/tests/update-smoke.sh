@@ -137,11 +137,12 @@ cmp "$work/data.before" "$work/data.after"
 begin_cut() {
   cut_phase=$1
   cut_version=$2
+  runner=${3:-$entry}
   rm -f "$work/observer.ready" "$work/cut.json" "$work/update.pid"
   "$runtime" "$cut_script" "$entry" "$unit" "$cut_version" "$work/update.pid" "$work/observer.ready" "$work/cut.json" "$cut_phase" >"$work/observer.log" 2>&1 &
   observer_pid=$!
   i=0; until [ -f "$work/observer.ready" ]; do i=$((i+1)); [ "$i" -lt 100 ] || exit 1; sleep 0.1; done
-  "$entry" node update --version "$cut_version" --package "$work/new.tar.gz" --sha256 "$new_checksum" >"$work/cut-update.log" 2>&1 &
+  "$runner" node update --version "$cut_version" --package "$work/new.tar.gz" --sha256 "$new_checksum" >"$work/cut-update.log" 2>&1 &
   update_pid=$!
   printf '%s\n' "$update_pid" >"$work/update.pid"
   i=0; until [ -f "$work/cut.json" ]; do i=$((i+1)); [ "$i" -lt 180 ] || exit 1; sleep 1; done
@@ -167,6 +168,27 @@ grep -q references "$work/partial-entry-start.log"
 "$entry" node status >"$work/v3-status.log"
 grep -q 'Enabled: enabled' "$work/v3-status.log"
 grep -q 'Active: inactive' "$work/v3-status.log"
+phase=unit-moved-before-publish-cut
+captured=no
+for attempt in 1 2 3; do
+  cut_version="0.3.1-unitmove-$attempt"
+  prepare_package "$cut_version"
+  begin_cut unit-moved "$cut_version"
+  if [ ! -e "$unit" ]; then captured=yes; fi
+  cleanup_cut
+  if [ "$captured" = yes ]; then
+    if "$entry" node status >"$work/missing-unit-status.log" 2>&1; then exit 1; fi
+    grep -q 'references differ' "$work/missing-unit-status.log"
+    if "$entry" node start >"$work/missing-unit-start.log" 2>&1; then exit 1; fi
+    grep -q references "$work/missing-unit-start.log"
+  else printf 'Unit move cut occurred after publish; retrying another synthetic release\n'; fi
+  "$entry" node update --version "$cut_version" --package "$work/new.tar.gz" --sha256 "$new_checksum" >"$work/recover-moved-unit.log" 2>&1
+  [ "$captured" = no ] || break
+done
+[ "$captured" = yes ] || { echo 'Missing canonical unit cut was not captured; this seam remains unverified' >&2; exit 1; }
+"$entry" node status >"$work/recovered-moved-unit-status.log"
+grep -q 'Enabled: enabled' "$work/recovered-moved-unit-status.log"
+grep -q 'Active: inactive' "$work/recovered-moved-unit-status.log"
 phase=unit-reload-cut
 captured=no
 for attempt in 1 2 3; do
@@ -193,6 +215,26 @@ phase=same-version-damaged-program-recovery
 current="$program/versions/$cut_version"
 printf 'damaged public launcher\n' >"$current/bin/mate"
 external="$work/package/mate-node"
+phase=unknown-repair-file-conflict
+printf 'foreign program note\n' >"$current/foreign-note"
+if "$external/bin/mate" node update --version "$cut_version" --package "$work/new.tar.gz" --sha256 "$new_checksum" >"$work/unknown-repair-file.log" 2>&1; then exit 1; fi
+grep -q 'Unknown file' "$work/unknown-repair-file.log"
+grep -q 'foreign program note' "$current/foreign-note"
+rm "$current/foreign-note"
+phase=known-path-link-repair-conflict
+printf 'foreign link target\n' >"$work/foreign-link-target"
+rm "$current/bin/mate"
+ln -s "$work/foreign-link-target" "$current/bin/mate"
+if "$external/bin/mate" node update --version "$cut_version" --package "$work/new.tar.gz" --sha256 "$new_checksum" >"$work/known-path-link.log" 2>&1; then exit 1; fi
+grep -q 'Unknown file' "$work/known-path-link.log"
+[ -L "$current/bin/mate" ]
+grep -q 'foreign link target' "$work/foreign-link-target"
+rm "$current/bin/mate"
+printf 'damaged public launcher\n' >"$current/bin/mate"
+phase=repair-cleanup-interruption
+begin_cut repair-cleanup "$cut_version" "$external/bin/mate"
+cleanup_cut
+phase=same-version-damaged-program-recovery
 "$external/node/bin/node" "$external/app/apps/node/dist/management/cli.js" node update --version "$cut_version" --package "$work/new.tar.gz" --sha256 "$new_checksum" >"$work/repair-same-version.log" 2>&1
 [ "$("$entry" --version)" = "$cut_version" ]
 "$entry" node status >"$work/final-status.log"
