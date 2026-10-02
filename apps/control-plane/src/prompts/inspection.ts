@@ -1,4 +1,4 @@
-import { sessionConfigurationSchema } from "../session-record.js";
+import { sessionConfigurationSchema } from "../runtime/session/record.js";
 import { buildAgentSystemPrompt } from "./system.js";
 import { runtimeSources } from "./runtime.js";
 import { summarySources } from "./summary.js";
