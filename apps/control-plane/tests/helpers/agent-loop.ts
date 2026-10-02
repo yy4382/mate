@@ -22,6 +22,7 @@ export function respond(
   content: string | Array<{ name: string; input: unknown }>,
   prefix?: string,
   inputTokens = 50,
+  identity?: string,
 ): void {
   response.writeHead(200, { "content-type": "text/event-stream" });
   const output =
@@ -29,7 +30,7 @@ export function respond(
       ? [
           {
             type: "message",
-            id: "msg_synthetic",
+            id: `msg_${identity ?? "synthetic"}`,
             role: "assistant",
             status: "completed",
             content: [{ type: "output_text", text: content, annotations: [] }],
@@ -40,7 +41,7 @@ export function respond(
             ? [
                 {
                   type: "message",
-                  id: "msg_synthetic",
+                  id: `msg_${identity ?? "synthetic"}`,
                   role: "assistant",
                   status: "completed",
                   content: [{ type: "output_text", text: prefix, annotations: [] }],
@@ -49,8 +50,8 @@ export function respond(
             : []),
           ...content.map((call, index) => ({
             type: "function_call",
-            id: `fc_${index}`,
-            call_id: `call_${index}`,
+            id: identity ? `fc_${identity}_${index}` : `fc_${index}`,
+            call_id: identity ? `call_${identity}_${index}` : `call_${index}`,
             name: call.name,
             arguments: JSON.stringify(call.input),
             status: "completed",
@@ -62,7 +63,7 @@ export function respond(
     ),
   );
   response.end(
-    `data: ${JSON.stringify({ type: "response.completed", response: { id: "resp_synthetic", status: "completed", output, usage: { input_tokens: inputTokens, output_tokens: 10, total_tokens: inputTokens + 10, input_tokens_details: { cached_tokens: 5 }, output_tokens_details: { reasoning_tokens: 0 } } } })}\n\n`,
+    `data: ${JSON.stringify({ type: "response.completed", response: { id: `resp_${identity ?? "synthetic"}`, status: "completed", output, usage: { input_tokens: inputTokens, output_tokens: 10, total_tokens: inputTokens + 10, input_tokens_details: { cached_tokens: 5 }, output_tokens_details: { reasoning_tokens: 0 } } } })}\n\n`,
   );
 }
 

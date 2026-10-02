@@ -1,9 +1,11 @@
 import { chmodSync, existsSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { scriptedToolResultSchemas } from "../helpers/scripted-tool-results.js";
 import { expect, it } from "vitest";
 import { z } from "zod";
 import { agentSummarySchema, nodeSummarySchema } from "@mate/protocol/owner";
 import { respond } from "../helpers/agent-loop.js";
+import { createScriptedProvider, type ScriptedRequest } from "../helpers/scripted-provider.js";
 import { eventually } from "../helpers/run-services.js";
 import { createServer } from "node:http";
 import {
@@ -211,48 +213,39 @@ it("retains a retryable lifecycle when startup cleanup cannot initially remove i
 }, 30_000);
 
 it("prepares a real logged-in paired Agent whose Pi run can execute an ordinary node command", async () => {
+  const provider = createScriptedProvider();
   const environment = await createScenarioEnvironment({
     agents: [{ name: "场景同事" }],
-    provider(request, response) {
-      if (
-        request.input.some(
-          (item) => item.type === "function_call_output" && item.output.includes("command-ran"),
-        )
-      )
-        respond(response, "完成。");
-      else
-        respond(response, [
-          {
-            name: "tools.call",
-            input: {
-              name: "process.exec",
-              input: { command: "printf 'command-ran' > result.txt; cat result.txt" },
-            },
-          },
-        ]);
-    },
+    provider: provider.handle,
   });
+  environment.registerCleanup("scripted provider", () => provider.close());
   try {
-    const agent = environment.agents[0]!;
+    const agent = environment.agents[0];
+    if (!agent) throw new Error("Expected prepared Agent");
+    provider.forAgent(agent, [
+      function executeCommand(request: ScriptedRequest) {
+        request.call("process.exec", {
+          command: "printf 'command-ran' > result.txt; cat result.txt",
+        });
+      },
+      function inspectRealResult(request: ScriptedRequest) {
+        expect(
+          request.result("process.exec", scriptedToolResultSchemas["process.exec"]).receipt?.stdout,
+        ).toBe("command-ran");
+        request.text("完成。");
+      },
+    ]);
     expect(agent.summary.status).toBe("ready");
     await environment.request(`/api/owner/channels/${agent.channelId}/messages`, {
       method: "POST",
       body: { text: "执行普通命令。" },
     });
-    await eventually(
-      () =>
-        existsSync(join(agent.workspace, "result.txt")) &&
-        environment.requests.some((request) =>
-          request.input.some(
-            (item) => item.type === "function_call_output" && item.output.includes("command-ran"),
-          ),
-        )
-          ? true
-          : undefined,
-      "real command file and model-visible result",
-    );
+    const result = await provider.waitFor(agent.summary.id, "inspectRealResult");
+    expect(await result.outcome).toEqual({ kind: "responded" });
     expect(readFileSync(join(agent.workspace, "result.txt"), "utf8")).toBe("command-ran");
+    await provider.assertComplete();
   } finally {
+    provider.close();
     expect((await environment.close()).failures).toEqual([]);
   }
   expect(existsSync(environment.directory)).toBe(false);

@@ -23,7 +23,10 @@ const configurationSchema = z.object({
   cleanupTimeoutMs: z.number().int().positive().default(5000),
   agents: z.array(agentConfigurationSchema).default([]),
   controlPlane: z
-    .object({ nodeOperationTimeoutMs: z.number().int().positive().optional() })
+    .object({
+      nodeOperationTimeoutMs: z.number().int().positive().optional(),
+      modelContextWindow: z.number().int().positive().optional(),
+    })
     .default({}),
   node: z
     .object({
@@ -227,6 +230,13 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
       MATE_CONTROL_PLANE_DATA_DIR: join(directory, "control-plane-data"),
       MATE_OWNER_PASSWORD_FILE: join(directory, "owner-password"),
       MATE_SCENARIO_PROVIDER_URL: providerUrl,
+      ...(configuration.controlPlane.modelContextWindow === undefined
+        ? {}
+        : {
+            MATE_SCENARIO_MODEL_CONTEXT_WINDOW: String(
+              configuration.controlPlane.modelContextWindow,
+            ),
+          }),
       ...(configuration.controlPlane.nodeOperationTimeoutMs === undefined
         ? {}
         : {

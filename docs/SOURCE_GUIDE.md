@@ -39,7 +39,7 @@
 
 ## 真实进程场景辅助代码
 
-`apps/control-plane/tests/helpers/scenario-environment.ts` 接收结构化服务和 Agent 配置，拥有登录、配对、工作区准备、保留身份的重启、资源登记与尽力清理。`scenario-services.mjs` 是使用本次构建结果的固定测试启动文件；`run-services.ts` 提供真实输出等待、输出游标、取消与有界停进程。模型输出沿用 `agent-loop.ts` 的本地 HTTP/SSE handler 和 `respond`。`tests/control-plane/scenario-environment.test.ts` 从真实 Owner API、模型工具结果和文件字节验证生命周期；新增场景入口与使用边界见 [DEVELOPMENT.md](DEVELOPMENT.md)。
+`apps/control-plane/tests/helpers/scenario-environment.ts` 接收结构化服务和 Agent 配置，拥有登录、配对、工作区准备、保留身份的重启、资源登记与尽力清理。`scenario-services.mjs` 是使用本次构建结果的固定测试启动文件；`run-services.ts` 提供真实输出等待、输出游标、取消与有界停进程。模型输出沿用 `agent-loop.ts` 的本地 HTTP/SSE handler 和 `respond`。`scripted-provider.ts` 按 Agent 原 session 关联命名普通函数步骤，负责响应释放、取消与截止时间；`scripted-tool-results.ts` 通过真实调用 ID 读取工具结果并复用领域 schemas。`tests/control-plane/scripted-provider.test.ts` 包含同 model 双 Agent 交错工具、真实摘要与失败路径探针。`tests/control-plane/scenario-environment.test.ts` 从真实 Owner API、模型工具结果和文件字节验证生命周期；新增场景入口与使用边界见 [DEVELOPMENT.md](DEVELOPMENT.md)。
 
 ## 网页按用户功能找代码
 

@@ -47,6 +47,50 @@ pnpm build
 pnpm --filter @mate/control-plane exec vitest run tests/control-plane/scenario-environment.test.ts
 ```
 
+按 Agent 编写模型脚本时，使用 `tests/helpers/scripted-provider.ts` 的 `createScriptedProvider({ timeoutMs })`，把 `handle` 交给同一环境。`forAgent(preparedAgent, steps)` 接收普通的命名 TypeScript 函数；每个 Agent 内步骤名称唯一，供 `waitFor(agentId, stepName)` 等待本步骤的真实请求。脚本按准备好的 session 分路，同 provider/model 的 Agent 不需要不同 model ID。固定测试启动文件只在既有 `modelForRun` 测试依赖中读取 session ID 并改写本地 URL；摘要的独立请求/缓存 ID 不作为 Agent 身份。`controlPlane.modelContextWindow` 只供真实压缩探针缩小测试模型上下文。
+
+```ts
+const provider = createScriptedProvider();
+const environment = await createScenarioEnvironment({
+  agents: [{ name: "场景同事" }],
+  provider: provider.handle,
+});
+environment.registerCleanup("scripted provider", () => provider.close());
+try {
+  const agent = environment.agents[0];
+  if (!agent) throw new Error("Expected prepared Agent");
+  provider.forAgent(agent, [
+    function executeCommand(request: ScriptedRequest) {
+      request.call("process.exec", { command: "printf 'command-ran' > result.txt; cat result.txt" });
+    },
+    function inspectRealResult(request: ScriptedRequest) {
+      const result = request.result("process.exec", scriptedToolResultSchemas["process.exec"]);
+      expect(result.receipt?.stdout).toBe("command-ran");
+      request.text("完成。");
+    },
+  ]);
+  await environment.request(`/api/owner/channels/${agent.channelId}/messages`, {
+    method: "POST", body: { text: "执行普通命令。" },
+  });
+  const result = await provider.waitFor(agent.summary.id, "inspectRealResult");
+  expect(await result.outcome).toEqual({ kind: "responded" });
+  await provider.assertComplete();
+} finally {
+  await environment.close();
+}
+```
+
+完整可运行版本在 `scenario-environment.test.ts` 的普通命令场景，导入 `createScriptedProvider`、`ScriptedRequest` 和 `scriptedToolResultSchemas` 后即可使用。`request.text`、`call` 和 `tools` 复用既有 OpenAI Responses SSE；每个响应与工具调用有新的 ID。`request.result(name, schema)` 按实际调用 ID 找到对应结果并用 Zod 解析；常用对话、任务和命令结果投影在 `scripted-tool-results.ts`，其它真实结果可传已有领域 schema。它不制造工具结果或写业务库。
+
+模型请求与步骤默认都在 5 秒内结束；等待命名步骤也有截止时间。暂留响应可让命名步骤直接返回，由驱动拿到请求后调用 `text` 或 `call` 释放。异步步骤应响应 `request.signal`；`assertComplete()` 等待有界步骤收尾，再拒绝错误、未用步骤或待响应请求。意外请求、脚本耗尽、步骤失败、步骤超时和响应超时会记录含 Agent/session、步骤与实际请求的 `ScriptedProviderError`，没有隐式“完成”兜底。预期客户端取消需先调用 `request.expectCancellation(reason)`，实际 HTTP 关闭后 `outcome` 为 `cancelled`；未声明的取消为失败，框架关闭为 `closed`，待响应超时为 `timeout`。已结束请求再释放返回 `late`，脚本关闭后新请求报告 `late_request`，不会继续执行步骤。`close` 登记到环境现有清理入口，及时结清本脚本的等待与响应；合成请求与诊断保留在 `requests`/`errors`，可在环境的 `beforeClose` 中读取。
+
+`scripted-provider.test.ts` 用真实 CP/node/Pi/HTTP-SSE 验证同 model 双 Agent 交错、动态任务身份、重复命令调用的正确结果、真实摘要与普通请求分路，以及取消、迟到、耗尽和截止时间。它只用合成模型凭据，不代表真实 provider 或 Linux VPS 已验证：
+
+```sh
+pnpm build
+pnpm --filter @mate/control-plane exec vitest run tests/control-plane/scripted-provider.test.ts tests/control-plane/scenario-environment.test.ts
+```
+
 `message-tasks.test.ts` 沿用这些真实进程和持久库，验证消息及回复的多任务、两位 Agent 的明确认领与并发新增、消息草稿交错，以及任务提交后模型结果尚未确认时的控制面重启。模型输出由本地脚本 provider 指定，只验收工具和恢复能力；它不代表真实模型服务连接或 VPS 部署已验证。中文网页的标题输入和全部关联任务展示由 `apps/web/tests/chat-app.test.ts` 的现有交互接缝覆盖。
 
 ```sh

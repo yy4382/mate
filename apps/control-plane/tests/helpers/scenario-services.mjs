@@ -12,7 +12,16 @@ if (process.argv[2] === "control-plane") {
         : {}),
     },
     {
-      modelForRun: (model) => ({ ...model, baseUrl: process.env.MATE_SCENARIO_PROVIDER_URL }),
+      modelForRun: (model, _apiKey, session) => ({
+        ...model,
+        ...(process.env.MATE_SCENARIO_MODEL_CONTEXT_WINDOW
+          ? {
+              contextWindow: Number(process.env.MATE_SCENARIO_MODEL_CONTEXT_WINDOW),
+              maxTokens: 1000,
+            }
+          : {}),
+        baseUrl: `${process.env.MATE_SCENARIO_PROVIDER_URL}/session/${session.sessionId}`,
+      }),
     },
   );
 } else if (process.argv[2] === "node") {
