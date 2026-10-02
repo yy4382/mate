@@ -1,0 +1,68 @@
+name: Node package validation
+
+on:
+  # This private validation branch supplies a native x64 builder before the
+  # workflow exists on main. Deleting the branch removes this push trigger.
+  push:
+    branches:
+      - feat/linux-lightweight-deployment
+    paths:
+      - .github/workflows/node-package-validation.yml
+      - deploy/node/**
+      - apps/node/**
+      - packages/protocol/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - tsconfig.json
+      - .dockerignore
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Explicit local Mate bundle version
+        required: true
+        default: "0.1.0"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: node-package-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node-package-x64:
+    name: Build and check x64 node package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      MATE_VERSION: ${{ inputs.version || '0.1.0' }}
+    steps:
+      - name: Check out this revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build the locked complete package
+        run: |
+          sh deploy/node/build-bundle.sh "$MATE_VERSION" x64 dist/node-bundles
+          printf '%s\n' "$GITHUB_SHA" > dist/node-bundles/SOURCE_COMMIT
+
+      - name: Check actual package in target-system containers
+        # These are packaging checks, not the real host/VM user-manager matrix.
+        run: sh deploy/node/tests/run-container-smoke.sh "$MATE_VERSION" x64 dist/node-bundles
+
+      - name: Save the private validation package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mate-node-x64-${{ github.sha }}
+          path: |
+            dist/node-bundles/*.tar.gz
+            dist/node-bundles/*.tar.gz.sha256
+            dist/node-bundles/SHA256SUMS
+            dist/node-bundles/bootstrap.sh
+            dist/node-bundles/SOURCE_COMMIT
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0

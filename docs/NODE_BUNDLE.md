@@ -13,6 +13,8 @@ pnpm build:bundle:node 0.1.0 arm64 dist/node-bundles
 
 输出包括 `mate-node-0.1.0-linux-x64.tar.gz`、`mate-node-0.1.0-linux-arm64.tar.gz`、`SHA256SUMS` 和 `bootstrap.sh`。构建不会发布 GitHub Release、上传镜像或启动服务。原锁文件与原相对 workspace 布局用于离线冻结生产安装；最终包中没有源码 checkout 链接、开发依赖、系统软件安装步骤或 pnpm。
 
+仓库另有独立 `Node package validation` workflow，使用预配的 Ubuntu 24.04 原生 x86_64 hosted runner 构建相同产物，并运行下文的容器包检查。它只有仓库内容读取权限，不发布 Release 或镜像；成功产物作为私有 Actions artifact 保留 3 天，包含 `SOURCE_COMMIT` 供下载者核对被测提交。首轮通过 `feat/linux-lightweight-deployment` 分支的包装相关 push 触发；合并到默认分支后也可明确版本手动运行。该检查不增加每次 PR/main 的故障恢复或用户服务矩阵，真实宿主/VM 验收继续单独采证。
+
 `bundle.json` 记录完整包版本、专用 Node 版本、架构、构建系统以及扫描全部 ELF 文件得出的最高 GLIBC、GLIBCXX 和 CXXABI 符号要求。它不是只看 Node 官方二进制得到的估计。构建还用包内 Node 实际加载 SQLite、加解文件锁并执行重命名；安装时重复完整文件校验和原生预检。
 
 目标系统仅为 Ubuntu 24.04、Debian 13 的 x86_64/arm64。元数据的 `targetSystems` 表示目标范围；实际运行证据必须另附环境、架构和结果。构建成功或容器成功不能表示真实宿主/VM 的用户服务矩阵已通过。
