@@ -129,7 +129,10 @@ export function verifyBundle(directory: string, expectedVersion?: string) {
 /** Run with the bundle's Node, loading both native addons and the rename helper. */
 export function probeBundle(directory: string, metadata = readBundle(directory)) {
   const runtime = join(directory, "node/bin/node");
-  const version = spawnSync(runtime, ["--version"], { encoding: "utf8" });
+  const version = spawnSync(runtime, ["--version"], {
+    encoding: "utf8",
+    env: withoutDownloadCredentials(process.env),
+  });
   if (version.status !== 0 || version.stdout.trim() !== metadata.nodeVersion)
     throw new Error("Dedicated Node is unavailable or does not match bundle metadata");
   const result = spawnSync(
