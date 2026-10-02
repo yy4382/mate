@@ -1,7 +1,11 @@
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
-import { defaultAgentWorkspaceRoot, runLinuxNode, type LinuxNodeOptions } from "./nodes/client.js";
+import {
+  defaultAgentWorkspaceRoot,
+  runLinuxNode,
+  type LinuxNodeOptions,
+} from "./connection/node-client.js";
 
 export function nodeOptionsFromEnvironment(
   environment: NodeJS.ProcessEnv = process.env,

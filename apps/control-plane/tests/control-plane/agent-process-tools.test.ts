@@ -1,5 +1,5 @@
 import { toolTestApp, toolTestInput, type TestRun } from "../helpers/tool-run.js";
-import { AgentSession } from "../../src/agent-session.js";
+import { AgentSession } from "../../src/runtime/session/service.js";
 import { assistantEntry } from "../helpers/session.js";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import Database from "better-sqlite3";
@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { createControlPlaneApp } from "../../src/http.js";
-import { deriveAgentProcessOperationId } from "../../src/agent-process-operations.js";
+import { deriveAgentProcessOperationId } from "../../src/runtime/process-operations.js";
 import type { NodeSocket } from "../../src/nodes/directory.js";
 import type { NodeControlMessage } from "@mate/protocol";
 

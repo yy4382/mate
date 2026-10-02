@@ -1,8 +1,8 @@
 import Database from "better-sqlite3";
 import { expect, it } from "vitest";
-import { OwnerPush } from "../../src/owner-push.js";
+import { OwnerPush } from "../../src/notifications/push.js";
 import { createControlPlaneApp, mentionsOwner } from "../../src/http.js";
-import { controlPlaneSchema } from "../../src/schema.js";
+import { controlPlaneSchema } from "../../src/storage/schema.js";
 import { openControlPlaneDatabase } from "../../src/storage/initialize.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

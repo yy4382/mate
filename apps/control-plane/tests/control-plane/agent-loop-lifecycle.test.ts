@@ -160,13 +160,15 @@ it.each(
           () => (oldResponse.destroyed ? true : undefined),
           "provider transport aborted",
         );
-      expect(
-        fixture.db((db) =>
-          db
-            .prepare("SELECT state FROM owner_agent_runs WHERE agent_id=? ORDER BY rowid LIMIT 1")
-            .get(agent.id),
-        ),
-      ).toEqual({ state: "failed" });
+      await expect
+        .poll(() =>
+          fixture.db((db) =>
+            db
+              .prepare("SELECT state FROM owner_agent_runs WHERE agent_id=? ORDER BY rowid LIMIT 1")
+              .get(agent.id),
+          ),
+        )
+        .toEqual({ state: "failed" });
       expect(
         fixture.db((db) =>
           db
@@ -319,13 +321,15 @@ it("an authentication rejection pauses with a credential reason until corrected"
           : undefined,
       "credential pause",
     );
-    expect(
-      fixture.db((db) =>
-        db
-          .prepare("SELECT error_code,retry_at FROM owner_agent_runs WHERE agent_id=?")
-          .get(agent.id),
-      ),
-    ).toEqual({ error_code: "credentials_invalid", retry_at: null });
+    await expect
+      .poll(() =>
+        fixture.db((db) =>
+          db
+            .prepare("SELECT error_code,retry_at FROM owner_agent_runs WHERE agent_id=?")
+            .get(agent.id),
+        ),
+      )
+      .toEqual({ error_code: "credentials_invalid", retry_at: null });
     await fixture.api("/api/owner/model-credentials/openai", "PUT", {
       apiKey: "synthetic-fixed-key",
     });

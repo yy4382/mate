@@ -1,3 +1,4 @@
+import { conversationSchema } from "../../src/conversations/schema.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import Database from "better-sqlite3";
 import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
@@ -14,7 +15,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { WebSocket as UpstreamWebSocket, WebSocketServer, type RawData } from "ws";
 import { expect, it } from "vitest";
-import { ownerAuthSchema } from "../../src/owner-auth-schema.js";
+import { ownerAuthSchema } from "../../src/auth/schema.js";
 
 const ownerPassword = "node-process-owner-password-used-only-by-this-test";
 const observedCloses = new WeakMap<WebSocket, CloseEvent>();
@@ -1091,7 +1092,7 @@ it("refuses an old experimental database without modifying its saved owner chat"
   writeFileSync(passwordFile, `${ownerPassword}\n`, { mode: 0o600 });
   const databasePath = join(dataDir, "control-plane.sqlite");
   const legacy = new Database(databasePath);
-  legacy.exec(ownerAuthSchema);
+  legacy.exec(ownerAuthSchema + conversationSchema);
   legacy.pragma("application_id = 1296257100");
   legacy.pragma("user_version = 3");
   legacy

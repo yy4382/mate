@@ -11,11 +11,20 @@
     "./node": {
       "types": "./dist/node.d.ts",
       "import": "./dist/node.js"
+    },
+    "./owner": {
+      "types": "./dist/owner.d.ts",
+      "import": "./dist/owner.js"
+    },
+    "./workspace": {
+      "types": "./dist/workspace.d.ts",
+      "import": "./dist/workspace.js"
     }
   },
   "scripts": {
     "build": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\" && tsc -p tsconfig.json",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test:unit": "node --test tests/*.test.mjs && tsc --noEmit -p tsconfig.tests.json"
   },
   "dependencies": {
     "zod": "4.6.5"

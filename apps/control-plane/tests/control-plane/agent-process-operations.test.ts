@@ -1,12 +1,13 @@
-import { AgentSession, agentSessionSchema } from "../../src/agent-session.js";
+import { AgentSession } from "../../src/runtime/session/service.js";
+import { agentSessionSchema } from "../../src/runtime/session/schema.js";
 import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import { expect, it, vi } from "vitest";
 import {
   AgentProcessOperationBroker,
   deriveAgentProcessOperationId,
-} from "../../src/agent-process-operations.js";
-import { agentProcessOperationsSchema } from "../../src/process-operations-schema.js";
+} from "../../src/runtime/process-operations.js";
+import { agentProcessOperationsSchema } from "../../src/runtime/process-schema.js";
 
 function setup() {
   const database = new Database(":memory:");

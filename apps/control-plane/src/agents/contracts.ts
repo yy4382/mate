@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { isSupportedModel, isSupportedModelProvider } from "../model-providers.js";
+import { isSupportedModel, isSupportedModelProvider } from "../providers/catalog.js";
 
 export const newAgentRequestSchema = z
   .object({
@@ -39,32 +39,8 @@ export const agentProfilePatchSchema = z
 
 export const agentModelPatchSchema = newAgentRequestSchema.shape.model;
 
-export type AgentProvisioningStatus = "provisioning" | "waiting_credentials" | "ready" | "failed";
-export type AgentProvisioningStage =
-  | "queued"
-  | "checking_account"
-  | "preparing_workspace"
-  | "verifying_workspace"
-  | "complete"
-  | "failed";
-
-export interface AgentSummary {
-  id: string;
-  nodeId: string;
-  name: string;
-  role: string;
-  description: string;
-  model: NewAgentRequest["model"];
-  initialChannelId: string | null;
-  sessionId: string;
-  status: AgentProvisioningStatus;
-  stage: AgentProvisioningStage;
-  error: string | null;
-  /**
-   * The single account this Agent's node runs under, plus this Agent's own workspace path. Every
-   * Agent on one node reports the same username, UID and GID with a different workspace.
-   */
-  linuxIdentity: { username: string; uid: number; gid: number; workspace: string } | null;
-  createdAt: number;
-  updatedAt: number;
-}
+export type {
+  AgentProvisioningStatus,
+  AgentProvisioningStage,
+  AgentSummary,
+} from "@mate/protocol/owner";

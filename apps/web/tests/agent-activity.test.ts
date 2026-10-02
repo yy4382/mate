@@ -3,7 +3,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createElement } from "react";
 import { afterEach, expect, it, vi } from "vitest";
-import { AgentActivity } from "../src/agent-activity.js";
+import { AgentActivity } from "../src/features/agents/agent-activity.js";
 
 afterEach(() => {
   cleanup();

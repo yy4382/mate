@@ -23,6 +23,23 @@
 - Evaluate harness capability assuming an arbitrarily intelligent model: tools, environment, system prompt, reachable control flows, persistence and recovery. Do not make model performance or spontaneous collaboration quality a delivery blocker. Scripted model tests are valid harness tests; real provider checks concern transport and protocol compatibility only.
 - Prefer mature, widely used, well-fitting libraries. Treat researched versions as candidates to verify, not an already tested lockfile.
 
+## TypeScript and Zod conventions
+
+- Write idiomatic TypeScript, not TypeScript shaped like another statically typed language. Let types flow from values, functions, and schemas through inference.
+- Put explicit TypeScript types primarily at module boundaries where they document or constrain a public contract. Avoid annotating local variables and internal return values when inference is sufficient.
+- Prefer Zod schemas as the single runtime and static source of truth for domain data. Derive parsed types with `z.infer<typeof schema>` or `z.output<typeof schema>`, and input types with `z.input<typeof schema>` when defaults or transforms make inputs differ from outputs. Reuse and compose schemas instead of duplicating hand-written interfaces.
+- Avoid manual casts (`as`), type assertions, redundant `: Type` annotations, and broad `any`. Fix the data flow or narrow values with schemas and type guards instead. Use `satisfies` only when a boundary needs conformance without losing inference. If an external library requires an assertion that cannot be expressed through its public types, keep it local to that adapter and explain the invariant that makes it safe.
+- Prefer expressions and small inferred functions over declaring intermediate variables solely to attach types to them. Do not add generic abstractions just to reduce a few annotations.
+- Keep strict TypeScript checks enabled, including `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`. A type error should normally be solved by improving the schema, public contract, or inference path rather than overriding the checker.
+
+## Source organization
+
+- Group code by domain and reason to change. Use concrete file names that explain the responsibility; avoid catch-all `utils` or `types` modules and mechanical file-size targets.
+- Keep related schemas, persistence and behavior discoverable together, while distinguishing database DDL from runtime data contracts in file names.
+- Share browser-safe wire contracts through explicit protocol exports. Keep Node-only helpers and provider-specific validation out of browser imports.
+- Preserve transaction ownership, validation behavior and recovery guarantees when extracting modules. Do not replace a large class with helpers that all receive that class or a giant dependency bag.
+- Update imports, tests, package exports and the source-navigation documentation when moving code. Remove obsolete paths instead of retaining forwarding files just for the previous layout.
+
 ## Delivery process — explicit user instruction
 
 The flow is the engineering skills in `.agents/skills/`; this section records the requirements that sit on top of them. Tracker, label vocabulary and domain-doc layout are in `docs/agents/`.
