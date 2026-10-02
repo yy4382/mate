@@ -37,7 +37,8 @@ const quote = (value: string) => {
 export function renderNodeUnit(paths: ReturnType<typeof nodePaths>, version: string) {
   const entries = bundleEntrypoints(join(paths.versionsDirectory, releaseVersion.parse(version)));
   // ':' disables environment substitution in literal absolute arguments; quote also escapes '%'.
-  return `# Mate node service\n# Mate bundle version: ${version}\n[Unit]\nDescription=Mate Linux node\n\n[Service]\nType=exec\nExecStart=:${quote(entries.runtime)} ${quote(entries.node)} --config-file ${quote(paths.configuration)}\nUnsetEnvironment=GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN\nWorkingDirectory=${quote(paths.home)}\nRestart=on-failure\nRestartSec=5s\nKillMode=mixed\nTimeoutStopSec=45s\nUMask=0077\n\n[Install]\nWantedBy=default.target\n`;
+  // WorkingDirectory is a scalar, not an ExecStart word; '~' selects this account's home.
+  return `# Mate node service\n# Mate bundle version: ${version}\n[Unit]\nDescription=Mate Linux node\n\n[Service]\nType=exec\nExecStart=:${quote(entries.runtime)} ${quote(entries.node)} --config-file ${quote(paths.configuration)}\nUnsetEnvironment=GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN\nWorkingDirectory=~\nRestart=on-failure\nRestartSec=5s\nKillMode=mixed\nTimeoutStopSec=45s\nUMask=0077\n\n[Install]\nWantedBy=default.target\n`;
 }
 
 function recoverUnitStaging(paths: ReturnType<typeof nodePaths>, version: string) {
