@@ -921,7 +921,7 @@ it.each(["network", "invalid", "malformed", "unreadable", "gateway"] as const)(
     const root = message(publicChannel.id, "uncertain-task", "可能已经提交的事项", "1");
     history.set(publicChannel.id, [root]);
     const user = await openChat();
-    await user.click(screen.getByRole("button", { name: `消息 ${root.text} 的操作` }));
+    await user.click(await screen.findByRole("button", { name: `消息 ${root.text} 的操作` }));
     await user.click(screen.getByRole("button", { name: "从消息建任务" }));
     loseNextTaskResponse = fault;
     await user.click(screen.getByRole("button", { name: "创建任务", exact: true }));
