@@ -51,6 +51,8 @@
 
 `scenario-network.ts` 只控制环境主 node 的原始 TCP 链路，提供立即断开、双向静默丢帧、明确恢复和带游标／期限的帧观察；它不回复心跳。`scenario-network-facts.ts` 集中读取 Owner API 没有暴露的提醒投递与待处理队列。`tests/scenarios/node-network-recovery.ts` 保留可复用的普通请求断网／接续脚本与断言；`tests/control-plane/node-network.test.ts` 还覆盖实际摘要、离线队列、人工暂停、独立在线节点和观察取消。网络事件沿现有失败证据与环境清理入口保存。
 
+`tests/control-plane/cp-recovery-scenarios.test.ts` 复用并迁移既有 CP 提交、任务收据、压缩、部分 SSE 与 SIGTERM 恢复覆盖，使用同一场景 ID/证据机制。`tests/scenarios/cp-restart.ts` 保留选定提交后重启场景的模型和成果断言供容器复用；`scenario-recovery-facts.ts` 集中只读补充原 session/run、完整提交与收据事实，Owner API 和实际模型请求仍为主要证据。固定测试启动器仅注入既有提交钩子及 Pi 参数 delta 观测；具体边界与入口见开发说明的“控制面提交与重启恢复场景”。
+
 ## 网页按用户功能找代码
 
 下面的功能目录都位于 `apps/web/src/features/`。

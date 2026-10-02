@@ -213,6 +213,7 @@ export async function runScenario<T>(options: {
           state: request.state,
           lateReleases: request.lateReleases,
           payload: request.payload,
+          responseOutput: request.responseOutput,
         })),
       ),
     );

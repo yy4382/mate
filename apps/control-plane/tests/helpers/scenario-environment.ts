@@ -28,8 +28,19 @@ const configurationSchema = z.object({
       nodeOperationTimeoutMs: z.number().int().positive().optional(),
       nodeHeartbeatTimeoutMs: z.number().int().positive().optional(),
       modelContextWindow: z.number().int().positive().optional(),
+      observePartialTool: z.boolean().default(false),
+      commitBoundary: z
+        .discriminatedUnion("phase", [
+          z.object({
+            phase: z.enum(["before", "after"]),
+            role: z.enum(["assistant", "toolResult"]),
+            toolName: z.string().optional(),
+          }),
+          z.object({ phase: z.literal("finish") }),
+        ])
+        .optional(),
     })
-    .default({}),
+    .prefault({}),
   node: z
     .object({
       commandTimeoutMs: z.number().int().positive().default(700),
@@ -257,7 +268,7 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
     return output;
   }
 
-  function launchControl(port = 0) {
+  function launchControl(port = 0, injectFault = true) {
     control = launch("control-plane", {
       MATE_CONTROL_PLANE_PORT: String(port),
       MATE_CONTROL_PLANE_DATA_DIR: join(directory, "control-plane-data"),
@@ -270,6 +281,10 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
               configuration.controlPlane.nodeHeartbeatTimeoutMs,
             ),
           }),
+      MATE_SCENARIO_OBSERVE_PARTIAL_TOOL: String(configuration.controlPlane.observePartialTool),
+      ...(!injectFault || configuration.controlPlane.commitBoundary === undefined
+        ? {}
+        : { MATE_SCENARIO_CP_BOUNDARY: JSON.stringify(configuration.controlPlane.commitBoundary) }),
       ...(configuration.controlPlane.modelContextWindow === undefined
         ? {}
         : {
@@ -430,12 +445,28 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
         await launchNode().waitFor(/MATE_NODE_CONNECTED/, 15_000, { signal: cancellation.signal });
       });
     },
-    async restartControl() {
+    async restartControl(signal: "SIGTERM" | "SIGKILL" = "SIGTERM") {
       return restartService(async () => {
         const port = Number(new URL(origin).port);
         const nodeCursor = environment.node.text.length;
-        await stopProcess(control);
-        await launchControl(port).waitFor(/MATE_CONTROL_PLANE_LISTENING (\d+)/, 15_000, {
+        if (signal === "SIGKILL" && control && !control.exitStatus) {
+          control.child.kill(signal);
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            await Promise.race([
+              control.exited,
+              new Promise<never>((_resolve, reject) => {
+                timer = setTimeout(
+                  () => reject(new Error("Control plane did not exit after SIGKILL")),
+                  5000,
+                );
+              }),
+            ]);
+          } finally {
+            clearTimeout(timer);
+          }
+        } else await stopProcess(control);
+        await launchControl(port, false).waitFor(/MATE_CONTROL_PLANE_LISTENING (\d+)/, 15_000, {
           signal: cancellation.signal,
         });
         cookie = await login(origin, cancellation.signal);

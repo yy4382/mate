@@ -77,6 +77,7 @@ function createRequest(
   let clientClosed = false;
   const lateReleases: z.output<typeof lateReleaseSchema>[] = [];
   let stepFinished = false;
+  let responseOutput: readonly unknown[] | undefined;
   let resolveFinished!: () => void;
   const finished = new Promise<void>((resolve) => {
     resolveFinished = resolve;
@@ -107,7 +108,9 @@ function createRequest(
   }
   function send(content: string | ScriptedToolCall[], prefix?: string, inputTokens?: number) {
     if (state !== "pending") return "late";
-    respond(response, content, prefix, inputTokens, randomUUID());
+    respond(response, content, prefix, inputTokens, randomUUID(), (_accepted, output) => {
+      responseOutput = output;
+    });
     finish({ kind: "responded" });
     return "responded";
   }
@@ -138,6 +141,9 @@ function createRequest(
       : "normal",
     step,
     payload,
+    get responseOutput() {
+      return responseOutput;
+    },
     outcome,
     lateReleases,
     finished,
@@ -214,6 +220,20 @@ function createRequest(
       if (state !== "pending")
         throw new Error("Cancellation expectation must precede request completion");
       expectedCancellation = z.string().min(1).parse(reason);
+    },
+    /** Deliberately incomplete SSE; remains pending until the declared client cancellation. */
+    partialTool(argumentsPrefix: string) {
+      if (state !== "pending" || response.headersSent)
+        throw new Error("Partial tool requires a fresh pending response");
+      const callId = `unfinished_${randomUUID()}`;
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write(
+        `data: ${JSON.stringify({ type: "response.output_item.added", output_index: 0, item: { type: "function_call", id: callId, call_id: callId, name: "tools.call", arguments: "" } })}\n\n`,
+      );
+      response.write(
+        `data: ${JSON.stringify({ type: "response.function_call_arguments.delta", output_index: 0, delta: argumentsPrefix })}\n\n`,
+      );
+      return { callId, argumentsPrefix };
     },
     reject() {
       finish({ kind: "failed" });
