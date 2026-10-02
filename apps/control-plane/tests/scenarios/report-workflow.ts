@@ -37,13 +37,6 @@ function messageWithText(messages: z.output<typeof ownerMessageSchema>[], text: 
   return message;
 }
 
-function participantMessages(messages: z.output<typeof ownerMessageSchema>[]) {
-  // Existing late-receipt notices are authored by Mate, independently of Agent model text.
-  return messages.filter(
-    (message) => !(message.author.kind === "agent" && message.author.id === "mate-system"),
-  );
-}
-
 /** One sample collaboration choice, reusable with the existing scenario environment and driver. */
 export async function runReportWorkflow(
   { environment, driver, signal, step, effectFile }: ScenarioContext,
@@ -361,9 +354,7 @@ export async function runReportWorkflow(
     assert.notEqual(reviewTask.id, claimedTask(last).id);
     assert.equal(claimedTask(last).messageId, work.message.id);
     assert.deepEqual(
-      participantMessages(await driver.messages(author.channelId, signal)).map(
-        (message) => message.text,
-      ),
+      (await driver.messages(author.channelId, signal)).map((message) => message.text),
       [ownerRequest],
     );
     assert.deepEqual(await driver.messages(peerConversationId, signal), [invitation]);
@@ -444,16 +435,14 @@ export async function runReportWorkflow(
         [reply],
       );
       assert.deepEqual(
-        participantMessages(await driver.messages(author.channelId, signal)).map(
-          (item) => item.text,
-        ),
+        (await driver.messages(author.channelId, signal)).map((item) => item.text),
         [ownerRequest],
       );
       assert.deepEqual(
         (await driver.messages(peerConversationId, signal)).map((item) => item.text),
         [reviewRequest],
       );
-      assert.deepEqual(participantMessages(await driver.messages(peer.channelId, signal)), []);
+      assert.deepEqual(await driver.messages(peer.channelId, signal), []);
       assert.deepEqual(readFileSync(join(peer.workspace, "reviewed-draft.txt")), draft.bytes);
       return driver.assertAttachment({
         agent: author,
