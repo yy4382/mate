@@ -30,5 +30,9 @@
   },
   "exports": {
     "./assets": "./assets.mjs"
-  }
+  },
+  "files": [
+    "dist",
+    "assets.mjs"
+  ]
 }

@@ -1,73 +1,66 @@
 # Linux 运行与运维（普通账号）
 
-Mate 在低资源 Linux VPS 上以一个现有普通账号运行。控制面与节点是两个普通进程，控制面在自身进程内异步推进 Agent 模型循环，节点在该账号下启动普通命令子进程。Mate 不创建用户、不切换 UID/GID、不操作 systemd，也不修改 sudoers。HTTPS 和进程的开机启动、退出后重启由宿主自行安排。
+生产运行只使用控制面 Docker 镜像/Compose 与现有普通账号目录中的 node 完整包。薄 bootstrap 获取并安装管理 CLI，随后用 `mate node` 管理用户服务；源码构建和直接进程入口仅用于[本地开发](DEVELOPMENT.md)。两个组件选择同一明确发布版本。首次发布与 VPS 部署仍需单独执行，验证完成不代表产物已经发布。
 
-## 构建与准备
+控制面拥有模型凭据、Pi 循环和唯一 Agent session；node 拥有宿主工作区、普通命令及收据。两者使用同一现有非零 UID/GID。Mate 不创建账号、安装系统软件、切换 Unix 身份或修改 sudo、Docker 权限、linger。Agent 的命令是该账号的普通 shell 子进程，命令中显式 `sudo` 的结果由宿主已有策略决定。
 
-使用 Node.js `24.21.0` 与 pnpm `10.33.0`，以运行 Mate 的普通账号执行：
+## 安装与配对顺序
 
-```sh
-pnpm install --frozen-lockfile
-pnpm build
-```
+1. 准备 Ubuntu 24.04 或 Debian 13 的 x86_64/arm64 普通账号，现有 Docker Engine/Compose 和可用的 systemd user manager。完整包包含专用 Node 和原生依赖，运行宿主不需要 Node、pnpm 或编译器。完整包扫描得到的系统库底线与平台证据见[完整包说明](NODE_BUNDLE.md)和[验收说明](DEPLOYMENT_ACCEPTANCE.md)。
+2. 按[控制面部署](CONTROL_PLANE_DEPLOYMENT.md)取得明确版本镜像，准备当前账号持有的私有 bind 目录和首次密码文件，用初始化 Compose 启动并成功登录。成功登录后去掉初始化 override、密码挂载和环境配置；后续重建读取已有密码哈希。
+3. 按[完整包说明](NODE_BUNDLE.md)用本地包与可信 SHA-256，或现有 `gh` 的临时私有 Release 鉴权，运行薄 bootstrap。下载凭据只用于本次获取，不进入 node 配置、用户服务或 Agent 环境。私有镜像登录由用户预先完成。
+4. 网页“节点管理”生成一次性配对令牌，按[用户服务说明](NODE_SERVICE.md)写入 `~/.config/mate/node.json`，再执行 `~/.local/bin/mate node install`。同机 URL 是 `http://127.0.0.1:8787`，不能使用容器服务名。网页确认原节点在线后移除配置中的令牌。
+5. 通过中文网页创建 Agent、配置控制面模型凭据并发送消息。Agent 的工作区属于原宿主账号，不挂载到控制面。浏览器通过宿主已有 HTTPS 代理访问公开原点；域名、证书、WSS 与 Web Push 沿用[配置说明](CONFIGURATION.md)，Mate 不另装代理或证书服务。
 
-构建生成 `apps/control-plane/dist/main.js`、`apps/node/dist/main.js` 和 `apps/web/dist`。运行时保留四个 package 的 `package.json`、构建结果和安装好的依赖：`apps/control-plane`、`apps/node`、`apps/web`、`packages/protocol`。web 还须保留导出文件 `assets.mjs`，控制面通过它定位该 package 的 `dist`；workspace 链接须指向交付目录内的 package。数据目录放在构建输出之外。
+安装程序成功、用户服务启动与网页节点在线是三个可分别观察的事实。CLI 报告真实服务状态，网页和 journal 确认配对/在线。配对失败保留原身份，在同一配置换新令牌后 restart；控制面暂时不可达时排查 URL、端口、HTTPS 和容器日志，不删除身份建立替代节点。
 
-若要把构建结果移到源码之外，先在新目录按相同相对位置准备上述 package 文件，并保留根 `package.json`、`pnpm-workspace.yaml` 和 `pnpm-lock.yaml`，再运行 `pnpm install --prod --frozen-lockfile`，不要复制指向原 checkout 的 `node_modules` 符号链接。入口、网页和节点辅助程序均按 package 自己的位置解析，可从任意工作目录运行绝对入口路径。这个目录是普通构建交付内容，Mate 不提供发布或进程管理器。
+## 位置、环境与日常管理
 
-准备仅自己可读的初始密码文件，内容为 12–1024 UTF-8 字节。以下路径是同一账号的示例，可替换为自己的绝对路径：
+| 内容 | 实际位置或入口 |
+| --- | --- |
+| 唯一 CLI | `~/.local/bin/mate` |
+| 完整程序、CLI 和专用运行时 | `~/.local/lib/mate-node/versions/<版本>` |
+| 私有 node 配置 | `~/.config/mate/node.json`，0600；目录 0700 |
+| 用户单元 | `~/.config/systemd/user/mate-node.service` |
+| node 身份与收据 | 默认 `~/.local/share/mate/node`；可由配置改为独立绝对路径 |
+| Agent 默认工作区 | 默认 node 数据目录的 `agents` 子目录；可配置独立绝对路径 |
+| 控制面数据库、模型凭据和附件 | Compose `.env` 中 `MATE_CONTROL_PLANE_DATA_DIR` 指定的私有宿主 bind 目录 |
+| node 日志 | 宿主已有用户 journal，`mate node logs` |
+| 控制面日志 | `docker compose -f compose.yaml logs`，使用宿主现有日志策略 |
 
-```sh
-install -d -m 0700 "$HOME/mate/data"
-umask 077
-cat > "$HOME/mate/owner-password"
-chmod 0600 "$HOME/mate/owner-password"
-```
-
-## 直接启动
-
-在第一个终端、构建所在目录启动控制面：
-
-```sh
-MATE_CONTROL_PLANE_DATA_DIR="$HOME/mate/data/control-plane" \
-MATE_OWNER_PASSWORD_FILE="$HOME/mate/owner-password" \
-MATE_CONTROL_PLANE_PORT=8787 \
-MATE_PUBLIC_ORIGIN=https://mate.example.org \
-node apps/control-plane/dist/main.js
-```
-
-出现 `MATE_CONTROL_PLANE_LISTENING 8787` 后，可用 `curl http://127.0.0.1:8787/api/status` 检查控制面是否回答。它只监听本机；宿主的 HTTPS 反向代理把公开原点转到 `127.0.0.1:8787`。域名、证书与公开端口由宿主配置。浏览器打开公开原点，用初始密码登录，在“节点管理”生成一次性配对令牌。
-
-在第二个终端以同一账号启动节点：
+用户自行把 `~/.local/bin` 加入 PATH，绝对 CLI 路径一直可用。用户服务直接使用所选包内 Node 与 node 的绝对路径，不加载交互 shell 启动文件。Agent 命令仍使用账号既有宿主工具环境；专用 Node 不加入系统 PATH。服务环境由用户在已有 systemd drop-in 配置，CLI 会拒绝改写包/配置执行引用的冲突。
 
 ```sh
-MATE_CONTROL_PLANE_URL=http://127.0.0.1:8787 \
-MATE_NODE_DATA_DIR="$HOME/mate/data/node" \
-MATE_NODE_AGENT_WORKSPACE_ROOT="$HOME/mate/agents" \
-MATE_NODE_PAIRING_TOKEN='网页生成的令牌' \
-node apps/node/dist/main.js
+~/.local/bin/mate --version
+~/.local/bin/mate node status
+~/.local/bin/mate node logs --lines 100
+~/.local/bin/mate node stop
+~/.local/bin/mate node start
+~/.local/bin/mate node restart
+
+# 在保存交付 Compose 与私有 .env 的目录操作控制面。
+docker compose -f compose.yaml logs --tail 100 -f
+docker compose -f compose.yaml stop
+docker compose -f compose.yaml start
 ```
 
-节点输出 `MATE_NODE_PAIRED` 和 `MATE_NODE_CONNECTED` 后，网页显示在线，可创建 Agent、设置模型服务 API key 并开始交流。配对身份保存在节点数据目录的 `node-identity.json`；以后用原路径启动，省略 `MATE_NODE_PAIRING_TOKEN`。模型凭据在网页管理，仅控制面保存并用于模型请求，不下发节点，不放在启动配置里。所有环境变量见[运行配置](CONFIGURATION.md)。
+node 异常退出由用户服务重启；显式 stop 保持停止。重复 install 不重启现有服务、不撤销停止或 disabled 选择。`enable` 仅使该账号 user manager 启动目标包含服务；注销后及开机运行还取决于用户自己预配置的 linger。Mate 只读当前事实，不配置 linger；缺 user manager 时服务命令明确失败，bootstrap 与版本命令仍可用。
 
-远程 Linux 节点使用同样的构建入口和本机数据路径，将 `MATE_CONTROL_PLANE_URL` 设置为控制面的 HTTPS 原点，使用网页配对令牌。跨机部署不是首版验收范围。
+## 手动更新、恢复与卸载
+
+按[node 停机更新](NODE_UPDATE.md)先停止 node，再停止控制面，取得并校验两侧同版产物，CLI 同步更换管理程序、专用 Node 和 node，Compose 更换镜像；先显式启动控制面，确认可登录后再显式启动 node。更新保持停止，保留 enabled/disabled 选择、配置、身份、收据和工作区，不迁移数据或自动回滚。管理命令持有短暂本机锁，并发 Mate 管理明确拒绝；它不禁止同账号其它程序修改文件，维护时不要同时用原始 systemctl 改服务。
+
+切换、单元发布或 reload 中断后先查看真实状态，再用原参数重试同一 update。公共入口或同版包损坏时，从可信校验后的本地完整包用其专用 Node 调用同一 CLI；清单损坏、未知文件或外来单元保留并拒绝，不通过覆盖隐藏问题。
+
+[node 卸载](NODE_UNINSTALL.md)先停止/禁用并移除 Mate 用户单元，再只删除能由实际库存确认的程序与唯一入口。配置、身份、收据、Agent 工作区以及控制面 bind 数据全部保留。中断后可从保留的本地完整包继续同一 CLI 卸载，重新安装沿用原身份。控制面由所有者 `docker compose -f compose.yaml down` 清理容器和项目网络，bind 数据保留；CLI 不操作 Docker、镜像缓存或宿主软件。
+
+独立实际产物与四平台用户服务验证命令、环境记录以及尚未验收的真实集成项见[部署验收](DEPLOYMENT_ACCEPTANCE.md)。资源数字来自指定演练的过程采样，不是未经测量的最低 VPS 配置。
 
 ## 记录与查看任务
 
 在时间线消息的操作菜单、讨论串根消息或回复的操作菜单选择“从消息建任务”，编辑预填的标题后点击“创建任务”即可提交。标题去掉两端空白后须为 1 至 200 字符；同一消息可以继续添加其它任务，回复任务始终挂在所选回复上。消息旁显示全部任务的标题、负责人和状态，“任务看板”保留每项任务及原消息链接。发送时勾选“作为任务发送”只附带一个以消息正文为默认标题的任务。
 
 Agent 用 `tasks.create` 指定原消息与标题建立待认领任务，再用 `tasks.claim` 明确任务 ID 和看到的版本认领。创建返回 `tasks_changed` 时包含当前全部关联任务及 `taskSnapshot` 标记；Agent 可以认领已有任务、协调、放弃，或原样带回标记为另一事项创建。成功创建返回新任务及更新标记。正文变化仍通过现有任务草稿选择处理，更新任务标记不修改草稿中的标题或消息锚点。已完成的调用在同一会话中按操作 ID 返回持久结果。
-
-## 停止、重启与诊断
-
-在前台终端按 Ctrl-C，或由宿主向相应进程发送 SIGTERM。重启时重新执行上述启动命令，并沿用原数据路径；不要删除节点身份或新建会话来绕过错误。节点在正常退出时尽力结束自己跟踪的普通命令进程组，无法确认结束的命令如实写入输出与收据。普通账号能否终止由 `sudo` 派生的 root 后代取决于宿主权限。
-
-控制面是否回答可从 `/api/status` 检查，节点是否完成认证则看网页和 `MATE_NODE_CONNECTED`。两个进程的标准输出、标准错误由启动终端或宿主保存，Mate 不提供独立的服务状态、日志或启停 CLI。
-
-- `Node WebSocket disconnected; reconnecting.` 或 `Node WebSocket connection failed; retrying.` 表示节点仍在尝试连接；检查控制面进程、URL、端口和反向代理。
-- 配对令牌无效、过期或已使用时，在网页重新生成令牌。已配对节点使用保存的原身份认证，不应靠删除 `node-identity.json` 排查连接问题。
-- 每次运行开始前都通过原节点核验账号、工作区路径和标记；缺失或改变时保留输入队列并退避重试，不重建工作区。修复原数据后自动接续；网页停用后的恢复也使用同一核验，不能用新身份替代。
-- 临时模型服务失败自动退避；人工暂停、凭据错误和上下文压缩失败在网页显示原因，按实际原因修复。历史操作结果未知仍是未知，不因 Agent 继续工作而改成成功。
 
 ## 数据与日常接续
 
@@ -77,4 +70,4 @@ Agent 用 `tasks.create` 指定原消息与标题建立待认领任务，再用 
 
 模型上下文接近容量时，运行进程请求摘要，控制面确认摘要与保留起点后才采用压缩上下文；原始完整历史仍保留。摘要连续失败或无法合法切分时，网页动态提供具体失败原因，所有者修复后重试。累计 token 或费用不触发停工。
 
-当前版本不提供部署登记、升级、协调备份、整套数据复制恢复、维护对账或人工释放入口，取舍见 [ADR-0008](adr/0008-direct-process-startup.md)。日常运行持久化与故障接续继续由运行时负责。数据库格式不匹配或结构缺失时，启动拒绝修改并报告文件与原因；首版不迁移旧实验格式。保留原文件进行排查，或将 `MATE_CONTROL_PLANE_DATA_DIR` 指向新的空目录。
+完整包的实际手动更新入口见 [node 停机更新与恢复](NODE_UPDATE.md)：先 `mate node stop`，再停止控制面，更换两侧同版产物，启动控制面后才显式 `mate node start`。CLI 一起更换管理程序、专用 Node 与 node，更新后保持停止并保留数据；损坏入口可从校验后的本地包执行同一 CLI 恢复。真实平台验收另记，不恢复部署登记、协调备份、整套数据复制恢复、维护对账或人工释放入口。日常持久化与故障接续继续由运行时负责。数据库格式不匹配或结构缺失时，启动拒绝修改并报告文件与原因；首版不迁移旧实验格式。保留原文件进行排查，或将 `MATE_CONTROL_PLANE_DATA_DIR` 指向新的空目录。

@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "files": [
+    "dist"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -32,5 +35,8 @@
   "devDependencies": {
     "@types/node": "24.13.6",
     "typescript": "7.0.2"
-  }
+  },
+  "files": [
+    "dist"
+  ]
 }

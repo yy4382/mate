@@ -1,8 +1,8 @@
 # Mate 产品方向
 
-2026-10-01。本文定义首个可用版本的目标行为；当前代码是否已实现，以源码、测试和配置为准。[网页控制面与 Linux 节点 spec #70](https://github.com/yy4382/mate/issues/70)需按本次已确认的单账号与交互决定修订。设计决策见 [ADR-0002](adr/0002-first-release-compatibility-reset.md)、[ADR-0003](adr/0003-web-control-plane-and-linux-nodes.md)、[ADR-0004](adr/0004-single-account-command-execution.md)、[ADR-0007](adr/0007-continue-with-uncertain-operation-results.md) 和 [ADR-0008](adr/0008-direct-process-startup.md)。开发流程与停止条件见 [AGENTS.md](../AGENTS.md)。
+2026-10-02。本文定义首个可用版本的目标行为；当前代码是否已实现，以源码、测试和配置为准。[网页控制面与 Linux 节点 spec #70](https://github.com/yy4382/mate/issues/70)需按本次已确认的单账号与交互决定修订。设计决策见 [ADR-0002](adr/0002-first-release-compatibility-reset.md)、[ADR-0003](adr/0003-web-control-plane-and-linux-nodes.md)、[ADR-0004](adr/0004-single-account-command-execution.md)、[ADR-0007](adr/0007-continue-with-uncertain-operation-results.md) 和 [ADR-0009](adr/0009-lightweight-linux-packaging.md)。开发流程与停止条件见 [AGENTS.md](../AGENTS.md)。
 
-首版必须能部署在低资源 Linux VPS，以 Mate 自己的中文网页操作。控制面和节点保留各自职责，在同机以一个现有的普通 Linux 账号运行；Mate 不创建用户、不切换身份、不操作 systemd。远程 Linux 节点应能手动配对使用，但跨机部署不作为首版验收范围。
+首版必须能部署在低资源 Linux VPS，以 Mate 自己的中文网页操作。控制面镜像/Compose 与宿主 node 用户服务保留各自职责，在同机使用一个现有普通 Linux 账号的 UID/GID；node 发布包内带同版本管理 CLI、专用 Node、程序和依赖，VPS 不现场编译。薄 shell bootstrap 只获取并安装 CLI 入口，统一 `mate node` CLI 管理用户服务及手动整包更新；停机后更新，完成后保持停止。Mate 不创建用户、不切换身份、不为 Agent 命令建 systemd 单元，bootstrap 与 CLI 不修改系统软件、sudo/Docker 权限或 linger。验收 Ubuntu 24.04 与 Debian 13 的 x86_64/arm64。远程 Linux 节点应能手动配对使用，但跨机部署不作为首版验收范围。
 
 Agent 模型调用与循环由控制面在进程内异步推进，节点只承担工作区和本机执行；[经独立设计审查的规格 #125](https://github.com/yy4382/mate/issues/125)取代 #70 中模型循环所在侧的决定。
 
@@ -41,7 +41,7 @@ Agent 从已有消息创建任务时，控制面提供该消息上已存在或�
 
 控制面直接等待完整会话记录的持久提交，不再通过节点传输上下文、请求 transcript 确认或回报模型 run 完成。控制面根据同一 current run 事实拒绝旧模型输出和工具行动；异步工具在等待后继续派发新本机请求或提交新的可见副作用前仍须检查资格。控制面与节点按操作 ID、请求内容、收据和重连协议核对已有本机执行；失效 run 的操作收据仍可登记，但不能继续其工作流。节点收据是执行证据，不是会话或调度库；不为模型搬迁强制改换存储介质。控制面或节点离线时 Agent 循环停止；已启动的本地命令可能继续，结果在重连后核对。模型服务级 API key 由控制面保存并直接用于 provider 请求，不下发节点；首版仅支持 API key，不支持订阅账号 OAuth。
 
-首版同机以现有账号直接启动构建后的控制面和节点两个普通进程，HTTPS 可由宿主的反向代理提供；Mate 不安装或操作 systemd。Mate 不提供发布登记、进程管理、升级或维护期协调备份恢复，运行配置为各进程环境变量。日常会话持久化、断连重连、节点收据和重启接续继续保留；历史操作未知不阻止后续工作、不自动重放，也不解除人工暂停。身份、会话或执行环境实际不可用时报告具体原因，由所有者修复原数据与环境。远程节点提供直接启动、wss 配对和故障排查说明。
+首版使用私有控制面镜像/Compose 与普通账号 node 安装包和用户服务，HTTPS 由宿主已有代理提供。通用下载、版本选择、配置处理与 Linux 目录/服务管理分开，不实现其他平台或部署平台。程序、配置和数据分置；同一发布版本手动升级保留原数据、身份、会话与工作区，卸载仅移除 Mate 程序/用户单元。用户明确自行配置 linger；Mate 不提供自动升级/回滚、数据清除、发布登记或维护期协调备份恢复。包装已有实现；真实平台结果与未验收项见[部署验收](DEPLOYMENT_ACCEPTANCE.md)，容器测试不能替代真实用户服务证据。日常会话持久化、断连重连、节点收据和重启接续继续保留；历史操作未知不阻止后续工作、不自动重放，也不解除人工暂停。身份、会话或执行环境实际不可用时报告具体原因，由所有者修复原数据与环境。远程节点提供配对和故障排查说明。
 
 ## 验收原则
 
