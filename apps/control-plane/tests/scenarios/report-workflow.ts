@@ -19,6 +19,7 @@ const reviewRequest = "请复核 draft.txt 的输入和总计，并反馈需补�
 const feedback = "总计正确，请补记录数 3。";
 const draftContent = "输入：2,4,6\n总计：12\n";
 const finalContent = "输入：2,4,6\n总计：12\n记录数：3\n";
+const draftRunBody = "草稿已共享，本轮内部正文结束，主任务留待反馈后继续。";
 const threadSchema = z.object({ root: ownerMessageSchema, replies: z.array(ownerMessageSchema) });
 const tasksSchema = z.object({ tasks: z.array(ownerTaskSchema) });
 const writeSchema = z.object({ sha256: z.string().regex(/^[a-f0-9]{64}$/) });
@@ -164,7 +165,7 @@ export async function runReportWorkflow(
       assert.equal(invitation.rootId, null);
       assert.equal(invitation.text, reviewRequest);
       assert.deepEqual(invitation.author, { kind: "agent", id: author.summary.id });
-      request.text("草稿已共享，本轮内部正文结束，主任务留待反馈后继续。");
+      request.text(draftRunBody);
     },
     function readPeerFeedback(request) {
       assert.ok(JSON.stringify(request.payload.input).includes(feedback));
@@ -175,6 +176,19 @@ export async function runReportWorkflow(
         request.payload.input.slice(0, first.payload.input.length),
         first.payload.input,
         "R2 preserves the actual ordered R1 request prefix",
+      );
+      const continuation = request.payload.input.slice(first.payload.input.length);
+      z.object({
+        type: z.literal("message"),
+        role: z.literal("assistant"),
+        status: z.literal("completed"),
+        content: z
+          .array(z.object({ type: z.literal("output_text"), text: z.literal(draftRunBody) }))
+          .length(1),
+      }).parse(continuation[0]);
+      assert.ok(
+        JSON.stringify(continuation.slice(1)).includes(feedback),
+        "The completed R1 assistant body precedes the actual peer feedback in R2",
       );
       const invitation = request.result("messages.send", ownerMessageSchema);
       request.call("conversations.read_thread", {
