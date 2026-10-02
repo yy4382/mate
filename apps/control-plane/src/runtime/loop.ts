@@ -40,11 +40,16 @@ export interface AgentLoopSpec {
 }
 /** Fault injection at persistence boundaries, and a local HTTP provider in integration tests. */
 export interface AgentLoopTestDependencies {
-  modelForRun?: (model: Model<Api>, apiKey: string) => Model<Api>;
+  modelForRun?: (
+    model: Model<Api>,
+    apiKey: string,
+    session: { readonly sessionId: string },
+  ) => Model<Api>;
   beforeSessionCommit?: (entry: SessionCommit) => Promise<void>;
   afterSessionCommit?: (entry: SessionCommit) => Promise<void>;
   beforeRunFinish?: () => Promise<void>;
   beforeRunStart?: (runId: string) => Promise<void>;
+  afterToolCallDelta?: (delta: { sessionId: string; toolCallId: string; delta: string }) => void;
 }
 export type AgentLoopResult = { ok: true } | { ok: false; code: string; reason?: string };
 
@@ -80,7 +85,8 @@ export class AgentLoop {
     const registry = builtinModels();
     const selected = registry.getModel(spec.provider, spec.modelId);
     if (!selected) return { ok: false, code: "model_unavailable" };
-    const model = test.modelForRun?.(selected, spec.apiKey) ?? selected,
+    const model =
+        test.modelForRun?.(selected, spec.apiKey, { sessionId: spec.sessionId }) ?? selected,
       apiKey = spec.apiKey;
     let credentialResponse = false;
     const stream: StreamFn = (model, context, options) => {
@@ -288,6 +294,19 @@ export class AgentLoop {
     let unsuccessfulStopReason: "error" | "aborted" | undefined;
     let contextOverflow = false;
     const unsubscribe = agent.subscribe(async (event) => {
+      if (
+        event.type === "message_update" &&
+        event.assistantMessageEvent.type === "toolcall_delta"
+      ) {
+        const update = event.assistantMessageEvent;
+        const call = update.partial.content[update.contentIndex];
+        if (call?.type === "toolCall")
+          test.afterToolCallDelta?.({
+            sessionId: spec.sessionId,
+            toolCallId: call.id,
+            delta: update.delta,
+          });
+      }
       if (event.type !== "message_end") return;
       if (
         event.message.role !== "user" &&
