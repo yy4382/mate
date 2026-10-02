@@ -422,7 +422,7 @@ try {
   for (const result of results) assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(results[0].result.state, "succeeded");
   const command = results[0].result.receipt;
-  assert.equal(command.exitCode, 0, JSON.stringify(command));
+  assert.equal(command.code, 0, JSON.stringify(command));
   assert.deepEqual(command.stdout.trim().split("\n"), [
     String(uid),
     String(gid),
