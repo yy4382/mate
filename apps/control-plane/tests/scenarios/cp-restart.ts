@@ -19,6 +19,13 @@ const boundaryEventSchema = z.object({
   role: z.string(),
   toolName: z.string(),
 });
+const responseCallSchema = z.object({
+  type: z.literal("function_call"),
+  id: z.string(),
+  call_id: z.string(),
+  name: z.literal("tools.call"),
+  arguments: z.string(),
+});
 
 /** Selected restart scenario also used by the delivered-container topology. */
 export async function runCpRestart(
@@ -58,7 +65,7 @@ export async function runCpRestart(
     return boundaryEventSchema.parse(JSON.parse(z.string().parse(match[1])));
   });
   const oldRun = await driver.waitForRun(work, "running", { signal });
-  await step("confirmed history at fault", () => {
+  const beforeFault = await step("confirmed history at fault", () => {
     const facts = readRecoveryFacts(environment.directory, agent.summary.id);
     assert.equal(facts.runs.filter((run) => run.state === "running").length, 1);
     assert.equal(
@@ -89,8 +96,41 @@ export async function runCpRestart(
     assert.equal(readFileSync(join(agent.workspace, "effect.txt"), "utf8"), "once\n");
     const originalInput = provider.requests[0]?.payload.input;
     assert.ok(originalInput);
-    for (const request of provider.requests)
-      assert.deepEqual(request.payload.input.slice(0, originalInput.length), originalInput);
+    // The call is observed from the actual SSE encoder, not reconstructed from runtime code.
+    // Read-only records determine which complete messages were confirmed before the fault.
+    const call = responseCallSchema.parse(provider.requests[0]?.responseOutput?.[0]);
+    const committed = beforeFault.facts.entries.flatMap(({ entry }) =>
+      entry.kind === "message" ? [entry.message] : [],
+    );
+    const assistant = committed.find((message) => message.role === "assistant");
+    const result = committed.find((message) => message.role === "toolResult");
+    if (assistant?.role === "assistant") {
+      const tool = assistant.content.find((part) => part.type === "toolCall");
+      assert.ok(tool?.type === "toolCall");
+      assert.equal(tool.id, `${call.call_id}|${call.id}`);
+      assert.deepEqual(tool.arguments, JSON.parse(call.arguments));
+    }
+    if (result?.role === "toolResult")
+      assert.equal(result.toolCallId, `${call.call_id}|${call.id}`);
+    const resultText = result?.content[0];
+    if (result) assert.ok(resultText?.type === "text");
+    const prefix = [
+      ...originalInput,
+      ...(assistant ? [call] : []),
+      ...(resultText?.type === "text"
+        ? [{ type: "function_call_output", call_id: call.call_id, output: resultText.text }]
+        : []),
+    ];
+    for (const request of provider.requests.slice(1)) {
+      assert.deepEqual(request.payload.input.slice(0, prefix.length), prefix);
+      if (!assistant) assert.ok(!JSON.stringify(request.payload.input).includes(call.call_id));
+    }
+    const originalOperation = beforeFault.facts.operations[0];
+    if (originalOperation) {
+      assert.equal(facts.operations[0]?.operationId, originalOperation.operationId);
+      assert.equal(facts.operations[0]?.runId, originalOperation.runId);
+      assert.equal(facts.operations[0]?.request, originalOperation.request);
+    }
     return { resumed, facts };
   });
   await provider.assertComplete();

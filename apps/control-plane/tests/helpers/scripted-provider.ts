@@ -65,6 +65,7 @@ function createRequest(
     .parse("pending");
   let expectedCancellation: string | undefined;
   let stepFinished = false;
+  let responseOutput: readonly unknown[] | undefined;
   let resolveFinished!: () => void;
   const finished = new Promise<void>((resolve) => {
     resolveFinished = resolve;
@@ -95,7 +96,9 @@ function createRequest(
   }
   function send(content: string | ScriptedToolCall[], prefix?: string, inputTokens?: number) {
     if (state !== "pending") return "late";
-    respond(response, content, prefix, inputTokens, randomUUID());
+    respond(response, content, prefix, inputTokens, randomUUID(), (_accepted, output) => {
+      responseOutput = output;
+    });
     finish({ kind: "responded" });
     return "responded";
   }
@@ -125,6 +128,9 @@ function createRequest(
       : "normal",
     step,
     payload,
+    get responseOutput() {
+      return responseOutput;
+    },
     outcome,
     finished,
     get stepFinished() {
