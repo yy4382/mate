@@ -244,6 +244,8 @@ pnpm --filter @mate/control-plane exec vitest run tests/control-plane/report-wor
 
 ## 真实命令的 node 崩溃与收据边界
 
+每条场景在模型工作前准备空的合成效果计数文件，并立刻登记其真实路径，零次、一次及禁止的重复效果都能在失败清理前保存。受控失败回归让真实命令写入两次效果，确认原断言失败时证据仍保留两条原始记录；它不会把失败效果改写成通过结果。
+
 `tests/control-plane/command-crash-recovery.test.ts` 复用同一 `runScenario`、按 Agent provider 和消息/run 驱动，补充两个精确进程边界：`node.commandBoundary: "before_execute"` 在 node 持久保存 start 后、真实执行器调用前暂停；`"before_receipt"` 在真实命令返回后、ledger 提交收据前暂停。固定测试启动文件通过既有 node 测试依赖包裹真实 ledger/executor，不提供生产故障配置。事件输出携带实际 Agent、operation ID 和原请求。暂停默认最多 15 秒，响应 node 终止取消；在本场景的 `node-data/command-boundary-release` 写入合成释放文件可继续，本票也验证释放后同一 run 完成且效果一次。已到达的标记只在当前私有数据目录保存，原身份重启不会再暂停新的检查命令。
 
 两条崩溃场景先核对 durable start、空收据和实际效果（分别零次／一次），再发送 SIGKILL 并核对目标 node 的真实退出信号。重启复用原身份、数据和唯一 session，原 operation 对账为 unknown；实际恢复模型请求先看到关联原 operation 和请求内容的未知事实，再主动执行新命令检查原效果。检查也可正常产生新的记录；历史未知保持未知，不能自动判成功／未执行或自动重放。持续心跳可能在崩溃前已把尚无收据的操作记为未知，这与命令效果是分别观察的事实。场景完成后核对效果计数、原操作身份和 revision、旧 run 失败、新 run 完成及有序上下文前缀。失败沿公共证据入口保留步骤、真实进程状态、操作收据和已登记效果文件。
