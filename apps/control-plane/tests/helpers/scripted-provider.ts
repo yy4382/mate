@@ -15,6 +15,7 @@ const failureCodeSchema = z.enum([
   "script_exhausted",
   "step_failed",
   "step_timeout",
+  "step_cancelled",
   "wait_timeout",
   "late_request",
   "provider_closed",
@@ -168,6 +169,13 @@ function createRequest(
       response.destroy();
     },
     close() {
+      if (state === "responded" && !stepFinished && !controller.signal.aborted)
+        fail(
+          new ScriptedProviderError(
+            "step_cancelled",
+            `Closed unfinished model step: Agent ${agent.summary.name} (${agent.summary.id}), session ${agent.summary.sessionId}, step ${step}, request ${JSON.stringify(payload)}`,
+          ),
+        );
       finish({ kind: "closed" });
       controller.abort(new Error(`Model step closed: ${step}`));
       clearTimeout(timer);
@@ -243,7 +251,7 @@ export function createScriptedProvider(options: { timeoutMs?: number } = {}) {
       const execution = Promise.resolve()
         .then(() => step(request))
         .catch((error: unknown) => {
-          if (request.signal.aborted) return;
+          if (request.signal.aborted && error === request.signal.reason) return;
           fail(
             new ScriptedProviderError(
               "step_failed",
@@ -293,7 +301,11 @@ export function createScriptedProvider(options: { timeoutMs?: number } = {}) {
       });
     },
     async assertComplete() {
-      await Promise.all(requests.map((request) => request.finished));
+      let observed = -1;
+      while (observed !== requests.length) {
+        observed = requests.length;
+        await Promise.all(requests.map((request) => request.finished));
+      }
       if (errors[0]) throw errors[0];
       if (
         requests.some((request) => request.state === "pending") ||
