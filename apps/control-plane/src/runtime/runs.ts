@@ -16,6 +16,23 @@ import { recordAgentActivity } from "./activity.js";
 const schedulerIntervalMs = 250;
 const retryDelayMs = 1500;
 const maxRetryDelayMs = 5 * 60_000;
+/** Bounds exponent growth even after a long sequence of failures. */
+const maxRetryExponent = 16;
+
+function classifyRunFailure(code: string | undefined) {
+  if (code === "node_disconnected" || code === "aborted") return "interrupted";
+  if (code === "credentials_invalid" || code === "model_unavailable") return "credentials";
+  if (code === "context_failed") return "context";
+  if (code === "execution_environment") return "environment";
+  return "temporary";
+}
+
+function runRetryDelayMs(consecutiveFailures: number): number {
+  return Math.min(
+    maxRetryDelayMs,
+    retryDelayMs * 2 ** Math.min(consecutiveFailures - 1, maxRetryExponent),
+  );
+}
 
 interface RunCandidate {
   agent_id: string;
@@ -41,7 +58,8 @@ export class AgentRunCoordinator {
   >();
   /** Deliveries already announced to their run: delivery id to the run that was told. */
   private readonly noticedDeliveries = new Map<string, string>();
-  private readonly timer: ReturnType<typeof setInterval>;
+  private timer: ReturnType<typeof setInterval> | undefined;
+  private started = false;
   private draining = false;
   private closed = false;
   private readonly now: () => number;
@@ -57,8 +75,14 @@ export class AgentRunCoordinator {
     private readonly testDependencies: AgentLoopTestDependencies = {},
   ) {
     this.now = now;
+  }
+
+  /** Begin recovery, node callbacks and scheduling after all services are assembled. */
+  start(): void {
+    if (this.started || this.closed) return;
+    this.started = true;
     this.recoverInterruptedRuns();
-    nodes.setProcessReceiptHandler(
+    this.nodes.setProcessReceiptHandler(
       (nodeId, receipt) => {
         if (this.reconcileStop(nodeId, receipt)) return;
         const outcome = this.processOperations.reconcile(
@@ -69,15 +93,15 @@ export class AgentRunCoordinator {
         );
         if (outcome.corrected) this.wake();
         if (this.nodes.list().some((node) => node.id === nodeId && node.online))
-          void this.dispatchPendingStops(false);
+          void this.dispatchPendingStops("settled_receipts");
       },
       () => {
         this.activateEnabledAgents();
         this.wake();
-        void this.dispatchPendingStops(true);
+        void this.dispatchPendingStops("node_ready");
       },
     );
-    nodes.setOfflineHandler((nodeId) => {
+    this.nodes.setOfflineHandler((nodeId) => {
       for (const [agentId, active] of this.activeAgents) {
         if (active.nodeId !== nodeId) continue;
         this.finishRun(active.runId, agentId, false, "node_disconnected");
@@ -90,6 +114,7 @@ export class AgentRunCoordinator {
   }
 
   close(): void {
+    if (this.closed) return;
     this.closed = true;
     clearInterval(this.timer);
     for (const [agentId, active] of this.activeAgents) {
@@ -99,9 +124,9 @@ export class AgentRunCoordinator {
   }
 
   wake(): void {
-    if (!this.closed) {
+    if (this.started && !this.closed) {
       void this.drain();
-      void this.dispatchPendingStops(false);
+      void this.dispatchPendingStops("settled_receipts");
     }
   }
 
@@ -302,7 +327,7 @@ export class AgentRunCoordinator {
     );
   }
 
-  private async dispatchPendingStops(all: boolean): Promise<void> {
+  private async dispatchPendingStops(mode: "settled_receipts" | "node_ready"): Promise<void> {
     if (this.closed) return;
     const rows = this.db
       .prepare<
@@ -334,7 +359,7 @@ export class AgentRunCoordinator {
           )
           .run(nextId, row.agent_id, row.node_id, this.now(), this.now());
         void this.dispatchStop(nextId, row.agent_id, row.node_id);
-      } else if (all && row.state === "unknown") {
+      } else if (mode === "node_ready" && row.state === "unknown") {
         // A node may have durably returned unknown for the old ID. A fresh idempotent stop
         // request rechecks all scopes after the node has finished receipt reconciliation.
         const nextId = randomUUID();
@@ -344,7 +369,8 @@ export class AgentRunCoordinator {
           )
           .run(nextId, row.agent_id, row.node_id, this.now(), this.now());
         void this.dispatchStop(nextId, row.agent_id, row.node_id);
-      } else if (all) void this.dispatchStop(row.operation_id, row.agent_id, row.node_id);
+      } else if (mode === "node_ready")
+        void this.dispatchStop(row.operation_id, row.agent_id, row.node_id);
     }
   }
 
@@ -937,10 +963,11 @@ export class AgentRunCoordinator {
         .run(this.now(), agentId);
       return;
     }
-    const interrupted = code === "node_disconnected" || code === "aborted";
-    const credentialFailure = code === "credentials_invalid" || code === "model_unavailable";
-    const contextFailure = code === "context_failed";
-    const environmentFailure = code === "execution_environment";
+    const failure = classifyRunFailure(code),
+      interrupted = failure === "interrupted",
+      credentialFailure = failure === "credentials",
+      contextFailure = failure === "context",
+      environmentFailure = failure === "environment";
     let contextPaused = false;
     let delay = 0;
     if (credentialFailure)
@@ -959,10 +986,7 @@ export class AgentRunCoordinator {
         )
         .get(agentId, this.now());
       if (!row) throw new Error("Run retry update did not return a row");
-      delay = Math.min(
-        maxRetryDelayMs,
-        retryDelayMs * 2 ** Math.min(row.temporary_failures - 1, 16),
-      );
+      delay = runRetryDelayMs(row.temporary_failures);
       const priorFailure = this.db
         .prepare<unknown[], { error_code: string }>(
           "SELECT error_code FROM owner_agent_runs WHERE agent_id=? AND state='failed' ORDER BY rowid DESC LIMIT 1",
