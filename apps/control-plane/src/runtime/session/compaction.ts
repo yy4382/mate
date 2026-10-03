@@ -1,8 +1,7 @@
 import { projectImages } from "./image-context.js";
 import { buildSummaryRequest, summaryMessage } from "../../prompts/index.js";
 import {
-  reportedUsage,
-  providerResponseComplete,
+  inspectProviderResponse,
   reportedGoogleUsage,
   confirmedModelResponse,
 } from "../provider-response.js";
@@ -231,14 +230,7 @@ export class SessionCompaction {
           : {
               fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
                 const response = await fetch(input, init);
-                inspectedUsage = response
-                  .clone()
-                  .text()
-                  .then((body) => ({
-                    usage: reportedUsage(body, this.model.api),
-                    complete: providerResponseComplete(body, response.status),
-                  }))
-                  .catch(() => null);
+                inspectedUsage = inspectProviderResponse(response, this.model.api);
                 return response;
               },
             }),

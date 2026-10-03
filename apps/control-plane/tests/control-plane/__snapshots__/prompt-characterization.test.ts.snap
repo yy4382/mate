@@ -235,8 +235,8 @@ exports[`preserves the full normal request and configuration (recovery=false) 1`
 {
   "formatVersion": 1,
   "modelId": "gpt-4o-mini",
-  "piAgentVersion": "0.86.0",
-  "piAiVersion": "0.86.0",
+  "piAgentVersion": "1.0.0",
+  "piAiVersion": "1.0.0",
   "provider": "openai",
   "systemPrompt": "你是 Mate 中的 Agent 同事「同事」。
 你的角色：持续工作
@@ -414,8 +414,8 @@ exports[`preserves the full normal request and configuration (recovery=true) 1`]
 {
   "formatVersion": 1,
   "modelId": "gpt-4o-mini",
-  "piAgentVersion": "0.86.0",
-  "piAiVersion": "0.86.0",
+  "piAgentVersion": "1.0.0",
+  "piAiVersion": "1.0.0",
   "provider": "openai",
   "systemPrompt": "你是 Mate 中的 Agent 同事「同事」。
 你的角色：持续工作

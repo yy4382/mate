@@ -129,7 +129,7 @@ export async function checkProviderProtocol(
         "You are checking provider transport and tool protocol. Follow only the short check instructions.",
     },
     // Each probe phase is one explicit Pi turn, with one result continuation requested below.
-    shouldStopAfterTurn: () => true,
+    finishTurn: () => ({ action: "end" }),
     streamFn: (model, context, options) => {
       completeResponse = Promise.resolve(false);
       if (report.stage === "continuation") {
@@ -191,7 +191,7 @@ export async function checkProviderProtocol(
         report.httpStatus >= 200 &&
         report.httpStatus < 300 &&
         (await completeResponse);
-      // Pi's Google adapter does not expose fetch. In pinned Pi 0.86.0 this exact adapter-generated
+      // Pi's Google adapter does not expose fetch. In pinned Pi 1.0.0 this exact adapter-generated
       // diagnostic is emitted only after SDK stream iteration finishes, distinct from SDK/parse errors.
       // Require both the structured content-decline reason and that completion diagnostic.
       const googleDeclined =

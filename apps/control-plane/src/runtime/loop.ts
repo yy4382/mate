@@ -3,9 +3,8 @@ import { WorkspaceImage } from "../workspaces/image-result.js";
 import { z } from "zod";
 import {
   confirmedModelResponse,
-  providerResponseComplete,
+  inspectProviderResponse,
   reportedGoogleUsage,
-  reportedUsage,
 } from "./provider-response.js";
 import {
   buildAgentSystemPrompt,
@@ -237,14 +236,7 @@ export class AgentLoop {
             : {
                 fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
                   const response = await fetch(input, init);
-                  inspectedNormalUsage = response
-                    .clone()
-                    .text()
-                    .then((body) => ({
-                      usage: reportedUsage(body, selectedModel.api),
-                      complete: providerResponseComplete(body, response.status),
-                    }))
-                    .catch(() => null);
+                  inspectedNormalUsage = inspectProviderResponse(response, selectedModel.api);
                   return response;
                 },
               }),
@@ -359,8 +351,8 @@ export class AgentLoop {
           tools: tools.map(({ name, description, parameters }) =>
             JSON.parse(JSON.stringify({ name, description, parameters })),
           ),
-          piAgentVersion: "0.86.0",
-          piAiVersion: "0.86.0",
+          piAgentVersion: "1.0.0",
+          piAiVersion: "1.0.0",
           formatVersion: 1,
         },
       });
