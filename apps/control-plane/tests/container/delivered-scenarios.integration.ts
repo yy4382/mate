@@ -12,10 +12,10 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { z } from "zod";
-import { ProcessOutput, stopProcess } from "../helpers/run-services.js";
-import { waitForScenario } from "../helpers/scenario-driver.js";
-import { runScenario } from "../helpers/scenario-evidence.js";
-import { createScriptedProvider } from "../helpers/scripted-provider.js";
+import { ProcessOutput, stopProcess } from "../support/environment/run-services.js";
+import { waitForScenario } from "../support/scenario/scenario-driver.js";
+import { runScenario } from "../support/scenario/scenario-evidence.js";
+import { createScriptedProvider } from "../support/agent/scripted-provider.js";
 import { reportWorkflowAgents, runReportWorkflow } from "../scenarios/report-workflow.js";
 import {
   nodeNetworkConfiguration,
@@ -67,7 +67,7 @@ it("independently reclaims only manifest-owned containers, network and node afte
       [
         resolve("node_modules/vitest/vitest.mjs"),
         "run",
-        "tests/control-plane/scenario-evidence.test.ts",
+        "tests/scenarios/evidence/probe.test.ts",
         "-t",
         "^standalone evidence probe$",
       ],
@@ -99,7 +99,7 @@ it("independently reclaims only manifest-owned containers, network and node afte
     // A live driver is a real refusal boundary, even though the manifest owns the resources.
     const refused = spawnSync(
       process.execPath,
-      ["tests/helpers/scenario-cleanup.mjs", join(evidence, "resources.json")],
+      ["tests/support/environment/scenario-cleanup.mjs", join(evidence, "resources.json")],
       { encoding: "utf8", timeout: 20_000 },
     );
     assert.equal(refused.status, 1);
@@ -119,7 +119,7 @@ it("independently reclaims only manifest-owned containers, network and node afte
     );
     const cleanup = spawnSync(
       process.execPath,
-      ["tests/helpers/scenario-cleanup.mjs", join(evidence, "resources.json")],
+      ["tests/support/environment/scenario-cleanup.mjs", join(evidence, "resources.json")],
       { encoding: "utf8", timeout: 30_000 },
     );
     assert.equal(cleanup.status, 0, `${cleanup.stdout}\n${cleanup.stderr}`);
@@ -164,7 +164,7 @@ it("independently reclaims only manifest-owned containers, network and node afte
     await stopProcess(probe);
     const cleanup = spawnSync(
       process.execPath,
-      ["tests/helpers/scenario-cleanup.mjs", "--root", root],
+      ["tests/support/environment/scenario-cleanup.mjs", "--root", root],
       { encoding: "utf8", timeout: 30_000 },
     );
     if (cleanup.status !== 0) {

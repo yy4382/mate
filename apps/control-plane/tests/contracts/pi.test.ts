@@ -2,7 +2,7 @@ import { expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { Agent, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
-import { answer, deferred, model, scripted } from "../helpers/pi.js";
+import { answer, deferred, model, scripted } from "../support/agent/pi.js";
 
 function setup(execute: () => void) {
   const tool: AgentTool = {

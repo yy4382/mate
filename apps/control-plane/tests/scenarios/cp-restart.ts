@@ -2,10 +2,13 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import type { ScenarioContext } from "../helpers/scenario-evidence.js";
-import { readRecoveryFacts } from "../helpers/scenario-recovery-facts.js";
-import type { createScriptedProvider, ScriptedRequest } from "../helpers/scripted-provider.js";
-import { scriptedToolResultSchemas } from "../helpers/scripted-tool-results.js";
+import type { ScenarioContext } from "../support/scenario/scenario-evidence.js";
+import { readRecoveryFacts } from "../support/facts/scenario-recovery-facts.js";
+import type {
+  createScriptedProvider,
+  ScriptedRequest,
+} from "../support/agent/scripted-provider.js";
+import { scriptedToolResultSchemas } from "../support/agent/scripted-tool-results.js";
 
 export const cpCommitCases = [
   { id: "cp-assistant-before", phase: "before", role: "assistant" },

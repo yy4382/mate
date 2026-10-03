@@ -2,7 +2,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
-const root = fileURLToPath(new URL("../../../../", import.meta.url));
+const root = fileURLToPath(new URL("../../../..", import.meta.url));
 const sha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
 const image = `mate-a-scenarios:${sha.slice(0, 12)}-${randomUUID()}`;
 let current;
@@ -69,7 +69,11 @@ try {
   try {
     execFileSync(
       process.execPath,
-      ["apps/control-plane/tests/helpers/scenario-cleanup.mjs", "--root", "artifacts/scenarios"],
+      [
+        "apps/control-plane/tests/support/environment/scenario-cleanup.mjs",
+        "--root",
+        "artifacts/scenarios",
+      ],
       { cwd: root, stdio: "inherit", timeout: 90_000 },
     );
   } catch (error) {

@@ -8,10 +8,13 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import type { ScenarioContext } from "../helpers/scenario-evidence.js";
-import { readScenarioFacts } from "../helpers/scenario-facts.js";
-import type { createScriptedProvider, ScriptedRequest } from "../helpers/scripted-provider.js";
-import { scriptedToolResultSchemas } from "../helpers/scripted-tool-results.js";
+import type { ScenarioContext } from "../support/scenario/scenario-evidence.js";
+import { readScenarioFacts } from "../support/facts/scenario-facts.js";
+import type {
+  createScriptedProvider,
+  ScriptedRequest,
+} from "../support/agent/scripted-provider.js";
+import { scriptedToolResultSchemas } from "../support/agent/scripted-tool-results.js";
 
 export const reportWorkflowAgents = [{ name: "甲：报告作者" }, { name: "乙：独立复核" }];
 const ownerRequest = "请用合成数值 2、4、6 制作报告，找同伴复核后交付文件。";
