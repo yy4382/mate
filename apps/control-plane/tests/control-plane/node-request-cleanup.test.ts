@@ -1,5 +1,6 @@
 import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { expect, it, vi } from "vitest";
+import { z } from "zod";
 import { NodeControlMessageSchema, type ControlWorkspaceOperation } from "@mate/protocol";
 import { setup, FakeNodeSocket } from "../helpers/agent-tool-fixture.js";
 import { bindToolSocket, toolTestInput } from "../helpers/tool-run.js";
@@ -9,7 +10,7 @@ async function additionalNode(context: Awaited<ReturnType<typeof setup>>) {
     method: "POST",
     headers: { cookie: context.cookie },
   });
-  const { pairingToken } = (await response.json()) as { pairingToken: string };
+  const { pairingToken } = z.object({ pairingToken: z.string() }).parse(await response.json());
   const nodeId = randomUUID();
   const socket = new FakeNodeSocket();
   const keys = generateKeyPairSync("ed25519", {
