@@ -1,5 +1,9 @@
 import type Database from "better-sqlite3";
-import type { NodeWorkspaceOperationResult } from "@mate/protocol";
+import {
+  workspaceFailureCodeSchema,
+  workspaceResultIsUnknown,
+  type NodeWorkspaceOperationResult,
+} from "@mate/protocol";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { AgentSession } from "../runtime/session/service.js";
@@ -54,7 +58,10 @@ export class WorkspaceActionLedger {
   ):
     | { kind: "new" }
     | { kind: "done"; result: unknown }
-    | { kind: "failed"; code: number; stderr: string } {
+    | ({ kind: "failed" } & Pick<
+        Extract<NodeWorkspaceOperationResult, { ok: true }>["result"],
+        "code" | "stderr" | "errorCode"
+      >) {
     const {
       sessionId,
       actionId,
@@ -94,10 +101,14 @@ export class WorkspaceActionLedger {
           typeof result.stderr !== "string"
         )
           throw new WorkspaceError("operation_unknown", "文件操作失败收据无法读取。", 409);
+        const errorCode = workspaceFailureCodeSchema.safeParse(
+          "errorCode" in result ? result.errorCode : undefined,
+        );
         return {
           kind: "failed",
           code: result.code,
           stderr: result.stderr,
+          ...(errorCode.success ? { errorCode: errorCode.data } : {}),
         };
       }
       if (envelope.operationId && envelope.operationId !== operationId)
@@ -356,13 +367,17 @@ export class WorkspaceActionLedger {
       };
     } else if (result.result.code !== 0) {
       envelope = {
-        state: result.result.stderr.startsWith("operation_unknown:") ? "unknown" : "failed",
+        state: workspaceResultIsUnknown(result.result) ? "unknown" : "failed",
         operationId: result.operationId,
         runId: identity.runId,
         channelId: identity.channelId,
         operation: identity.operation,
         ...(revision !== undefined ? { revision } : {}),
-        result: { code: result.result.code, stderr: result.result.stderr },
+        result: {
+          code: result.result.code,
+          stderr: result.result.stderr,
+          ...(result.result.errorCode !== undefined ? { errorCode: result.result.errorCode } : {}),
+        },
         error: result.result.stderr || "File operation failed",
       };
     } else {

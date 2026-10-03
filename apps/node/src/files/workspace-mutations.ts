@@ -1,3 +1,4 @@
+import { FileOperationError } from "./file-failures.js";
 import { lstatSync } from "node:fs";
 import { createHash } from "node:crypto";
 
@@ -10,14 +11,17 @@ export function moveFileNoReplace(
 ): void {
   const original = lstatSync(source);
   if (!original.isFile() || original.isSymbolicLink())
-    throw new Error("not_file: Only regular files can be moved safely");
+    throw new FileOperationError("not_file", "not_file: Only regular files can be moved safely");
   const immediatelyBeforeRename = lstatSync(source);
   if (
     !immediatelyBeforeRename.isFile() ||
     immediatelyBeforeRename.dev !== original.dev ||
     immediatelyBeforeRename.ino !== original.ino
   )
-    throw new Error("file_changed: A file changed while it was being moved");
+    throw new FileOperationError(
+      "file_changed",
+      "file_changed: A file changed while it was being moved",
+    );
   beforeRename?.();
   renameNoReplace(source, destination);
 }
@@ -35,6 +39,9 @@ export function commitFileIfHashMatches(
   beforeFinalCheck?.();
   const actualHash = createHash("sha256").update(readCurrent()).digest("hex");
   if (actualHash !== expectedHash)
-    throw new Error("file_changed: File changed before the edit could be committed");
+    throw new FileOperationError(
+      "file_changed",
+      "file_changed: File changed before the edit could be committed",
+    );
   commit();
 }
