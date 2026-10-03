@@ -108,6 +108,8 @@ Pi 会话保留供应商扩展字段。会话边界的窄适配不能改成会�
 
 `deploy/tests/delivery-smoke.sh` 从实际完整包启动独立镜像/Compose 联通验收；`delivery.mjs` 只用 Node 内置库，经所有者 API 与真实 Pi/节点检查程序和数据，`control-plane-fixture.mjs` 仅在测试 override 注入合成模型 HTTP/SSE 地址。生产配置不导入这些测试文件。真实四平台用户服务命令与证据边界见 [部署验收](DEPLOYMENT_ACCEPTANCE.md)。
 
+机器端 `connection/node-client.ts` 拥有认证、心跳、重连和 socket 生命周期；`process-requests.ts` 与 `workspace-requests.ts` 各自拥有完整操作及收据对账。发送能力绑定发起请求的原 socket；关闭不取消已经执行的副作用，也不把结果转给新的连接。两类原 Promise 错误处理分别保留。
+
 ## Agent 文件读取的内容边界
 
 文件与附件读取先探测同一版本至多 8 KiB 的前缀，再检查请求范围。PNG/JPEG/GIF/WebP 按固定字节签名判断；文本使用严格 UTF-8 和控制字符检查。有限探测不保证识别所有未知二进制，也不检查图片内部编码损坏。完整文件系统图片通过节点有界分块读取，最大 5 MiB；短读、版本变化和超过上限均不能成为图片内容块。请求中的模型须明确声明图片输入能力。上传图片或二进制始终只给类型提示，上传文本继续可读；Mate 不安装转换程序。
