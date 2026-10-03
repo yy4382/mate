@@ -186,7 +186,7 @@ switch (operation.kind) {
     json({
       type: stat.isDirectory() ? "directory" : stat.isFile() ? "file" : "other",
       size: stat.size,
-      sha256: stat.isFile() && stat.size <= 1000000 ? hash(content(path)) : null,
+      sha256: stat.isFile() && stat.size <= maxTextFileBytes ? hash(content(path)) : null,
     });
     break;
   }
