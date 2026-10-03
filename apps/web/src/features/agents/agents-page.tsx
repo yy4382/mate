@@ -26,8 +26,12 @@ import {
   type ChannelSummary,
 } from "./agent-responses.js";
 import { nodesResponseSchema, type NodeSummary } from "../nodes/node-responses.js";
+import { useModelCredentials } from "./use-model-credentials.js";
 import "./agents-page.css";
 import { WorkspaceBrowser } from "../workspace/workspace-browser.js";
+
+/** Refresh node/Agent/provisioning facts independently of form submissions. */
+const directoryPollIntervalMs = 3_000;
 
 const stageLabels: Record<AgentSummary["stage"], string> = {
   queued: "等待节点处理",
@@ -45,11 +49,18 @@ export function AgentsPage() {
   const [agents, setAgents] = useState<AgentSummary[]>([]);
   const [providers, setProviders] = useState<ModelProvider[]>([]);
   const [credentials, setCredentials] = useState<ModelCredential[]>([]);
-  const [credentialProvider, setCredentialProvider] = useState("openai");
-  const [credentialKey, setCredentialKey] = useState("");
-  const [credentialBusy, setCredentialBusy] = useState(false);
-  const [credentialError, setCredentialError] = useState<string | null>(null);
-  const [credentialSaved, setCredentialSaved] = useState(false);
+  const {
+    credentialProvider,
+    setCredentialProvider,
+    credentialKey,
+    setCredentialKey,
+    credentialBusy,
+    credentialError,
+    credentialSaved,
+    reconcileProviders,
+    submitCredential,
+    revokeCredential,
+  } = useModelCredentials();
   const [directChannels, setDirectChannels] = useState<Record<string, string>>({});
   const [openingDirectMessage, setOpeningDirectMessage] = useState<string | null>(null);
   const [inviteChannels, setInviteChannels] = useState<Record<string, string>>({});
@@ -62,65 +73,67 @@ export function AgentsPage() {
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [creationError, setCreationError] = useState<string | null>(null);
 
-  const refresh = useCallback(async (signal?: AbortSignal) => {
-    try {
-      const [
-        nodeResult,
-        channelResult,
-        invitationChannelResult,
-        agentResult,
-        providerResult,
-        credentialResult,
-      ] = await Promise.all([
-        readJSON("/api/owner/nodes", nodesResponseSchema, signal),
-        readJSON("/api/owner/channels", channelsResponseSchema, signal),
-        readJSON("/api/owner/invitable-channels", channelsResponseSchema, signal),
-        readJSON("/api/owner/agents", agentsResponseSchema, signal),
-        readJSON("/api/owner/model-providers", providersResponseSchema, signal),
-        readJSON("/api/owner/model-credentials", credentialsResponseSchema, signal),
-      ]);
-      if (signal?.aborted) return;
-      setNodes(nodeResult.nodes);
-      setChannels(channelResult.channels);
-      setInvitableChannels(invitationChannelResult.channels);
-      setAgents(agentResult.agents);
-      setProviders(providerResult.providers);
-      setCredentials(credentialResult.credentials);
-      setCredentialProvider((current) =>
-        providerResult.providers.some((provider) => provider.id === current)
-          ? current
-          : (providerResult.providers[0]?.id ?? ""),
-      );
-      setDraft((current) => {
-        const provider =
-          providerResult.providers.find((candidate) => candidate.id === current.provider) ??
-          providerResult.providers[0];
-        const model =
-          provider?.models.find((candidate) => candidate.id === current.modelId) ??
-          provider?.models[0];
-        return {
-          ...current,
-          nodeId:
-            current.nodeId && nodeResult.nodes.some((node) => node.id === current.nodeId)
-              ? current.nodeId
-              : (nodeResult.nodes.find((node) => node.online)?.id ?? ""),
-          provider: provider?.id ?? "",
-          modelId: model?.id ?? "",
-        };
-      });
-      setRefreshError(null);
-    } catch (reason) {
-      if (!signal?.aborted)
-        setRefreshError(reason instanceof Error ? reason.message : "读取失败，请重试。");
-    } finally {
-      if (!signal?.aborted) setLoading(false);
-    }
-  }, []);
+  const refresh = useCallback(
+    async (signal?: AbortSignal) => {
+      try {
+        const [
+          nodeResult,
+          channelResult,
+          invitationChannelResult,
+          agentResult,
+          providerResult,
+          credentialResult,
+        ] = await Promise.all([
+          readJSON("/api/owner/nodes", nodesResponseSchema, signal),
+          readJSON("/api/owner/channels", channelsResponseSchema, signal),
+          readJSON("/api/owner/invitable-channels", channelsResponseSchema, signal),
+          readJSON("/api/owner/agents", agentsResponseSchema, signal),
+          readJSON("/api/owner/model-providers", providersResponseSchema, signal),
+          readJSON("/api/owner/model-credentials", credentialsResponseSchema, signal),
+        ]);
+        if (signal?.aborted) return;
+        setNodes(nodeResult.nodes);
+        setChannels(channelResult.channels);
+        setInvitableChannels(invitationChannelResult.channels);
+        setAgents(agentResult.agents);
+        setProviders(providerResult.providers);
+        setCredentials(credentialResult.credentials);
+        reconcileProviders(providerResult.providers);
+        setDraft((current) => {
+          const provider =
+            providerResult.providers.find((candidate) => candidate.id === current.provider) ??
+            providerResult.providers[0];
+          const model =
+            provider?.models.find((candidate) => candidate.id === current.modelId) ??
+            provider?.models[0];
+          return {
+            ...current,
+            nodeId:
+              current.nodeId && nodeResult.nodes.some((node) => node.id === current.nodeId)
+                ? current.nodeId
+                : (nodeResult.nodes.find((node) => node.online)?.id ?? ""),
+            provider: provider?.id ?? "",
+            modelId: model?.id ?? "",
+          };
+        });
+        setRefreshError(null);
+      } catch (reason) {
+        if (!signal?.aborted)
+          setRefreshError(reason instanceof Error ? reason.message : "读取失败，请重试。");
+      } finally {
+        if (!signal?.aborted) setLoading(false);
+      }
+    },
+    [reconcileProviders],
+  );
 
   useEffect(() => {
     const controller = new AbortController();
     void refresh(controller.signal);
-    const interval = window.setInterval(() => void refresh(controller.signal), 3000);
+    const interval = window.setInterval(
+      () => void refresh(controller.signal),
+      directoryPollIntervalMs,
+    );
     return () => {
       controller.abort();
       window.clearInterval(interval);
@@ -164,58 +177,6 @@ export function AgentsPage() {
   function submitForm(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     void submitRequest(requestFromDraft(draft));
-  }
-
-  async function submitCredential(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!credentialProvider || !credentialKey) return;
-    setCredentialBusy(true);
-    setCredentialError(null);
-    setCredentialSaved(false);
-    try {
-      const response = await fetch(
-        `/api/owner/model-credentials/${encodeURIComponent(credentialProvider)}`,
-        {
-          method: "PUT",
-          headers: { Accept: "application/json", "Content-Type": "application/json" },
-          body: JSON.stringify({ apiKey: credentialKey }),
-        },
-      );
-      if (response.status === 401) {
-        redirectToLogin();
-        return;
-      }
-      const result: unknown = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(errorMessage(result, "无法保存模型凭据，请重试。"));
-      setCredentialKey("");
-      setCredentialSaved(true);
-      await refresh();
-    } catch (reason) {
-      setCredentialError(reason instanceof Error ? reason.message : "无法保存模型凭据，请重试。");
-    } finally {
-      setCredentialBusy(false);
-    }
-  }
-
-  async function revokeCredential(provider: string) {
-    setCredentialBusy(true);
-    setCredentialError(null);
-    try {
-      const response = await fetch(`/api/owner/model-credentials/${encodeURIComponent(provider)}`, {
-        method: "DELETE",
-        headers: { Accept: "application/json" },
-      });
-      if (response.status === 401) {
-        redirectToLogin();
-        return;
-      }
-      if (!response.ok) throw new Error("无法撤销模型服务凭据。");
-      await refresh();
-    } catch (reason) {
-      setCredentialError(reason instanceof Error ? reason.message : "无法撤销模型服务凭据。");
-    } finally {
-      setCredentialBusy(false);
-    }
   }
 
   async function openDirectMessage(agentId: string) {
@@ -312,7 +273,7 @@ export function AgentsPage() {
           <p className="agents-intro">
             每家服务保存一份 API key。页面只显示已配置状态；运行开始时控制面才会把 key 发送给节点。
           </p>
-          <form className="agent-form" onSubmit={submitCredential}>
+          <form className="agent-form" onSubmit={(event) => void submitCredential(event, refresh)}>
             <label>
               模型服务
               <select
@@ -358,7 +319,7 @@ export function AgentsPage() {
                   <button
                     type="button"
                     disabled={credentialBusy}
-                    onClick={() => void revokeCredential(credential.provider)}
+                    onClick={() => void revokeCredential(credential.provider, refresh)}
                   >
                     撤销 API key
                   </button>

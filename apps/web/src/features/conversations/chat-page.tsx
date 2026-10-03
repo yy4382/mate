@@ -1,17 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import {
-  attachmentResponseSchema,
-  attachmentsResponseSchema,
   channelSchema,
   messageContextSchema,
   messagePageSchema,
   messageSchema,
-  pushPublicKeySchema,
-  pushSubscriptionSchema,
   readChatEvent,
   snapshotSchema,
-  threadSchema,
-  type Attachment,
   type Channel,
   type Message,
 } from "./conversation-responses.js";
@@ -21,8 +15,6 @@ import { MessageTasks, useMessageTasks, type TaskCreationPosition } from "./mess
 import {
   appendToLatestWindow,
   emptyMessageWindow,
-  mergeMessage,
-  mergeMessages,
   mergeLoadedPage,
   receiveMessage,
   replaceWithLatestPage,
@@ -30,6 +22,9 @@ import {
   type MessageWindow,
 } from "./message-window.js";
 import { ownerJSON } from "./owner-request.js";
+import { useOwnerPush } from "./use-owner-push.js";
+import { useConversationAttachments } from "./use-conversation-attachments.js";
+import { useConversationThread } from "./use-conversation-thread.js";
 import "./chat.css";
 
 type MobileView = "home" | "channels" | "chat" | "thread";
@@ -43,11 +38,6 @@ export function ChatPage() {
   const [authenticated, setAuthenticated] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [channels, setChannels] = useState<Channel[]>([]);
-  const [pushState, setPushState] = useState<string | null>(null);
-  const [pushReady, setPushReady] = useState<{
-    registration: ServiceWorkerRegistration;
-    key: Uint8Array<ArrayBuffer>;
-  } | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [messageWindows, setMessageWindows] = useState<Record<string, MessageWindow>>({});
   const [historyRefresh, setHistoryRefresh] = useState(0);
@@ -62,97 +52,40 @@ export function ChatPage() {
   const [error, setError] = useState<string | null>(null);
   const [deepLinkError, setDeepLinkError] = useState<string | null>(null);
   const [fallbackRefresh, setFallbackRefresh] = useState(0);
-  const [attachmentsByChannel, setAttachmentsByChannel] = useState<Record<string, Attachment[]>>(
-    {},
-  );
-  const [attachmentError, setAttachmentError] = useState<string | null>(null);
-  const [attachmentBusy, setAttachmentBusy] = useState(false);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const attachmentInputRef = useRef<HTMLInputElement | null>(null);
   const [live, setLive] = useState(false);
   const [mobileView, setMobileView] = useState<MobileView>("home");
   const [dialog, setDialog] = useState<DialogState>(null);
-  const [threadRoot, setThreadRoot] = useState<Message | null>(null);
-  const [threadReplies, setThreadReplies] = useState<Message[]>([]);
   const [replyTarget, setReplyTarget] = useState<{
     kind: "quote" | "thread";
     message: Message;
   } | null>(null);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const streamRef = useRef<EventSource | null>(null);
-  const threadRootIdRef = useRef<string | null>(null);
-  const threadRequestRef = useRef(0);
   const selectedIdRef = useRef<string | null>(null);
   const handledDeepLinkRef = useRef<string | null>(null);
   const failedDeepLinkRef = useRef<string | null>(null);
   const draft = selectedId ? (drafts[selectedId] ?? "") : "";
   selectedIdRef.current = selectedId;
-  threadRootIdRef.current = threadRoot?.id ?? null;
+  const { pushState, pushReady, enablePush } = useOwnerPush(authenticated);
+  const {
+    currentAttachments,
+    attachmentError,
+    attachmentBusy,
+    selectedFile,
+    setSelectedFile,
+    attachmentInputRef,
+    uploadAttachment,
+  } = useConversationAttachments(authenticated, selectedId);
+  const thread = useConversationThread({ selectedIdRef, onError: setError });
+  const { threadRoot, threadReplies } = thread;
 
   const closeDialog = useCallback(() => setDialog(null), []);
-  async function enablePush() {
-    try {
-      if (!pushReady) throw new Error("通知尚未就绪，请稍后重试。");
-      if (Notification.permission === "denied")
-        throw new Error("通知已被浏览器拒绝，请在浏览器设置中重新允许。");
-      // Start subscription in this click handler so iOS preserves the user gesture.
-      const subscription = await pushReady.registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: pushReady.key,
-      });
-      await ownerJSON("/api/owner/push/subscriptions", pushSubscriptionSchema, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(subscription),
-      });
-      setPushState("已开启通知");
-    } catch (cause) {
-      setPushState(cause instanceof Error ? cause.message : "无法开启通知");
-    }
-  }
-
-  useEffect(() => {
-    if (!authenticated || !("serviceWorker" in navigator) || !("PushManager" in window)) return;
-    let active = true;
-    void Promise.all([
-      navigator.serviceWorker.register("/sw.js"),
-      ownerJSON("/api/owner/push/public-key", pushPublicKeySchema),
-    ])
-      .then(([registration, { publicKey }]) => {
-        if (!active) return;
-        const key = Uint8Array.from(atob(publicKey.replace(/-/g, "+").replace(/_/g, "/")), (char) =>
-          char.charCodeAt(0),
-        );
-        setPushReady({ registration, key });
-      })
-      .catch(() => {
-        if (active) setPushState("通知暂不可用，请刷新页面重试。");
-      });
-    return () => {
-      active = false;
-    };
-  }, [authenticated]);
-  const openThread = useCallback(async (message: Message) => {
-    const request = ++threadRequestRef.current;
-    threadRootIdRef.current = message.id;
-    setThreadRoot(message);
-    setThreadReplies([]);
+  function openThread(message: Message) {
+    const opening = thread.open(message);
     setMobileView("thread");
     setOpenMenuId(null);
-    try {
-      const thread = await ownerJSON(
-        `/api/owner/channels/${encodeURIComponent(message.channelId)}/threads/${encodeURIComponent(message.id)}`,
-        threadSchema,
-      );
-      if (threadRequestRef.current !== request || selectedIdRef.current !== message.channelId)
-        return;
-      setThreadRoot(thread.root);
-      setThreadReplies((current) => mergeMessages(thread.replies, current));
-    } catch (cause) {
-      if (threadRequestRef.current === request)
-        setError(cause instanceof Error ? cause.message : "无法读取讨论串。");
-    }
-  }, []);
+    return opening;
+  }
 
   useEffect(() => {
     const controller = new AbortController();
@@ -249,11 +182,7 @@ export function ChatPage() {
           }
           if (selectedIdRef.current !== update.channelId) return;
           if (update.payload.rootId) {
-            setThreadReplies((current) =>
-              threadRootIdRef.current === update.payload.rootId
-                ? mergeMessage(current, update.payload)
-                : current,
-            );
+            thread.receiveStreamReply(update.payload);
           }
           setMessageWindows((current) => ({
             [update.channelId]: receiveMessage(
@@ -286,10 +215,7 @@ export function ChatPage() {
   }, [authenticated]);
 
   useEffect(() => {
-    ++threadRequestRef.current;
-    threadRootIdRef.current = null;
-    setThreadRoot(null);
-    setThreadReplies([]);
+    thread.reset();
     setReplyTarget(null);
     setDeepLinkError(null);
     setMessageWindows((current) =>
@@ -345,9 +271,7 @@ export function ChatPage() {
       .then((context) => {
         if (!active || selectedIdRef.current !== channelId) return;
         if (context.kind === "thread") {
-          threadRootIdRef.current = context.thread.root.id;
-          setThreadRoot(context.thread.root);
-          setThreadReplies(context.thread.replies);
+          thread.install(context.thread);
           setMobileView("thread");
           void ownerJSON(
             `/api/owner/channels/${encodeURIComponent(channelId)}/messages`,
@@ -379,34 +303,6 @@ export function ChatPage() {
   }, [authenticated, selectedId]);
 
   useEffect(() => {
-    if (!authenticated || !selectedId) return;
-    const channelId = selectedId;
-    let active = true;
-    setAttachmentError(null);
-    setSelectedFile(null);
-    if (attachmentInputRef.current) attachmentInputRef.current.value = "";
-    async function refreshAttachments() {
-      try {
-        const result = await ownerJSON(
-          `/api/owner/channels/${encodeURIComponent(channelId)}/attachments`,
-          attachmentsResponseSchema,
-        );
-        if (active)
-          setAttachmentsByChannel((current) => ({ ...current, [channelId]: result.attachments }));
-      } catch (cause) {
-        if (active)
-          setAttachmentError(cause instanceof Error ? cause.message : "暂时无法读取频道附件。");
-      }
-    }
-    void refreshAttachments();
-    const interval = window.setInterval(() => void refreshAttachments(), 5000);
-    return () => {
-      active = false;
-      window.clearInterval(interval);
-    };
-  }, [authenticated, selectedId]);
-
-  useEffect(() => {
     const query = new URLSearchParams(window.location.search);
     const channelId = query.get("channel"),
       messageId = query.get("message");
@@ -424,7 +320,6 @@ export function ChatPage() {
     ? (messageWindows[selectedId] ?? emptyMessageWindow)
     : emptyMessageWindow;
   const currentMessages = currentWindow.messages;
-  const currentAttachments = selectedId ? (attachmentsByChannel[selectedId] ?? []) : [];
   const loadingLatest = selectedId !== null && loadingLatestChannelId === selectedId;
 
   async function logout() {
@@ -465,8 +360,7 @@ export function ChatPage() {
           }),
         },
       );
-      if (replyTarget?.kind === "thread")
-        setThreadReplies((current) => mergeMessage(current, message));
+      if (replyTarget?.kind === "thread") thread.appendSubmittedReply(message);
       if (selectedIdRef.current === channelId && !message.rootId)
         setMessageWindows((current) => {
           const window = current[channelId] ?? emptyMessageWindow;
@@ -486,38 +380,6 @@ export function ChatPage() {
       setError(cause instanceof Error ? cause.message : "消息发送失败，请重试。");
     } finally {
       setBusy(false);
-    }
-  }
-
-  async function uploadAttachment() {
-    if (!selected || selected.archived || !selectedFile || attachmentBusy) return;
-    const channelId = selected.id,
-      file = selectedFile;
-    setAttachmentBusy(true);
-    setAttachmentError(null);
-    try {
-      const result = await ownerJSON(
-        `/api/owner/channels/${encodeURIComponent(channelId)}/attachments`,
-        attachmentResponseSchema,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": file.type || "application/octet-stream",
-            "X-Mate-Filename": encodeURIComponent(file.name),
-          },
-          body: file,
-        },
-      );
-      setAttachmentsByChannel((current) => ({
-        ...current,
-        [channelId]: [...(current[channelId] ?? []), result.attachment],
-      }));
-      setSelectedFile(null);
-      if (attachmentInputRef.current) attachmentInputRef.current.value = "";
-    } catch (cause) {
-      setAttachmentError(cause instanceof Error ? cause.message : "附件上传失败，请重试。");
-    } finally {
-      setAttachmentBusy(false);
     }
   }
 
@@ -1021,7 +883,7 @@ export function ChatPage() {
                     )}
                     <button
                       type="button"
-                      onClick={() => void uploadAttachment()}
+                      onClick={() => void uploadAttachment(selected)}
                       disabled={busy || attachmentBusy || !selectedFile}
                     >
                       {attachmentBusy ? "正在上传…" : "上传附件"}
@@ -1054,9 +916,7 @@ export function ChatPage() {
             <button
               type="button"
               onClick={() => {
-                ++threadRequestRef.current;
-                threadRootIdRef.current = null;
-                setThreadRoot(null);
+                thread.close();
                 setMobileView("chat");
               }}
               aria-label="关闭讨论串"
