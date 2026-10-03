@@ -18,7 +18,7 @@
 - `conversations/`：频道、私信、消息、已读与暂缓、消息关联任务和提醒。`service.ts` 管频道、消息、注意力和交付；`tasks.ts` 集中任务认领、任务草稿与提醒规则，并通过同步对话能力保持原事务；`tool-actions.ts` 在工具入口的事务内复用持久调用结果；`contracts.ts` 是请求校验，`rows.ts` 解释数据库查询结果，`tool-contracts.ts` 描述 Agent 能看到的工具。
 - `agents/`：Agent 身份、资料、创建与目录；供应商模型的校验仍在控制面，不能带进浏览器。
 - `runtime/`：run 调度、模型循环、操作收据与恢复、活动和用量。`session/` 管完整历史和压缩，`tools/` 管工具入口和当前 run 检查；`provider-response.ts` 只解释供应商响应中的结束和用量证据。
-- `workspaces/`：文件浏览、下载和 Agent 文件操作的控制面逻辑。`file-content.ts` 负责有界字节分类与 UTF-8 范围，`image-result.ts` 是文件工具专用的图片返回路径；`runtime/session/image-context.ts` 只在请求时投影历史图片。`contracts.ts` 和 `results.ts` 分别放请求契约与结果解释；副作用提交顺序留在服务中。
+- `workspaces/`：文件浏览、下载和 Agent 文件操作的控制面逻辑。`file-content.ts` 负责有界字节分类与 UTF-8 范围，`image-result.ts` 是文件工具专用的图片返回路径；`runtime/session/image-context.ts` 只在请求时投影历史图片。`contracts.ts` 和 `results.ts` 分别放请求契约与结果解释；`action-ledger.ts` 保存文件变更意图、结果与迟到收据更正；服务入口明确先保存并等待提交，再复验 current run 和调用 node。身份 map 只是有期限的内存加速，重启或过期后仍查询持久操作。
 - `attachments/`：附件操作及相应工具描述。
 - `nodes/`：`directory.ts` 拥有配对、连接身份、在线状态、请求身份核验和分领域收据对账；`pending-requests.ts` 仅拥有请求 Promise 与计时器，成功、超时、发送失败、断连都先移除请求和清理计时器。迟到的 process/workspace 收据仍进入各自的持久更正入口，不能自动重放。与 `apps/node` 的机器端代码不同。
 - `auth/`、`providers/`、`notifications/`：所有者登录、模型凭据和供应商目录、网页推送。
