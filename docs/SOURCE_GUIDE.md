@@ -29,7 +29,7 @@
 ## 从一次操作追到证据
 
 - Owner 发消息：`conversations/http.ts` → `OwnerChat.createMessage`（原子保存消息/投递）→ `runs.wake/drain`（准入同一 Agent 的唯一 current run）→ `AgentLoop.run` → `AgentSession` 的原 session 历史与 Pi 请求。
-- 模型用工具：`runtime/tools/registry.ts` 在工具入口事务内复验 current run；任务/提醒等同步效果在这个事务里完成。文件/命令工具先保存 node 意图，等待入口事务提交，再复验 current run 并调用 node。文件结果进 `WorkspaceActionLedger`，命令结果进 `AgentProcessOperationBroker`；`recovery-context.ts` 把后来的证据送回原 session。
+- 模型用工具：`runtime/tools/registry.ts` 在工具入口事务内复验 current run；任务/提醒等同步效果在这个事务里完成。文件变更/命令工具先保存 node 意图；文件读取无需变更意图。两者都等待入口事务提交，再复验 current run 并调用 node。文件结果进 `WorkspaceActionLedger`，命令结果进 `AgentProcessOperationBroker`；`recovery-context.ts` 把后来的证据送回原 session。
 - 文件读取：`WorkspaceService` 验证身份和范围 → node `LinuxWorkspaceExecutor` → 同账号 helper → `file-content.ts`/`image-result.ts` 解释有限字节；变更先写 node 收据意图，再执行并写终态。
 - node 恢复：`connection/node-client.ts` 重连 → `NodeDirectory` 验证连接身份 → 先 process、再 workspace 分页核对 → 标为 ready → 原 Agent 队列继续。未确认的副作用保持 unknown，不因重连重放。
 
