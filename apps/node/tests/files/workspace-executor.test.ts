@@ -1,4 +1,5 @@
 import { afterEach, expect, it } from "vitest";
+import { z } from "zod";
 import {
   chmodSync,
   lstatSync,
@@ -455,9 +456,13 @@ it.each(["file_changed", "operation_unknown"] as const)(
     }));
     const node = new LinuxWorkspaceExecutor(fixture.homeRoot, fixture.root, fixture.dependencies);
     const original = await node.execute(action());
-    const stored = JSON.parse(
-      readFileSync(join(fixture.root, "workspace-receipts", `${operationId}.json`), "utf8"),
-    );
+    const stored = z
+      .object({ state: z.string() })
+      .parse(
+        JSON.parse(
+          readFileSync(join(fixture.root, "workspace-receipts", `${operationId}.json`), "utf8"),
+        ),
+      );
     expect(stored.state).toBe(errorCode === "operation_unknown" ? "unknown" : "failed");
     const restarted = new LinuxWorkspaceExecutor(
       fixture.homeRoot,
