@@ -6,6 +6,7 @@ import {
   NodeControlMessageSchema,
   NodeRequestIdSchema,
   NodeRequestSchema,
+  MAX_NODE_RECEIPTS_PER_PAGE,
   type NodeControlMessage,
   type NodeAgentProvisionResult,
   type NodeWorkspaceOperationResult,
@@ -29,6 +30,11 @@ export const DEFAULT_NODE_HANDSHAKE_TIMEOUT_MS = 10_000;
 export const DEFAULT_NODE_HEARTBEAT_TIMEOUT_MS = 35_000;
 export const DEFAULT_NODE_OPERATION_TIMEOUT_MS = 60_000;
 export const DEFAULT_NODE_PROCESS_OPERATION_TIMEOUT_MS = 75_000;
+
+// Scan roughly four times per timeout, bounded to avoid busy timers or slow expiry checks.
+const minHeartbeatSweepIntervalMs = 10;
+const maxHeartbeatSweepIntervalMs = 1_000;
+const sweepsPerHeartbeatWindow = 4;
 
 export interface NodeSocket {
   send(data: string): void;
@@ -181,7 +187,13 @@ export class NodeDirectory {
     );
     if (this.maxUnauthenticatedConnections > this.maxConnections)
       throw new Error("Unauthenticated node connection limit cannot exceed the total limit");
-    const sweepIntervalMs = Math.max(10, Math.min(1000, Math.floor(this.heartbeatTimeoutMs / 4)));
+    const sweepIntervalMs = Math.max(
+      minHeartbeatSweepIntervalMs,
+      Math.min(
+        maxHeartbeatSweepIntervalMs,
+        Math.floor(this.heartbeatTimeoutMs / sweepsPerHeartbeatWindow),
+      ),
+    );
     this.heartbeatSweepTimer = setInterval(() => this.expireInactiveConnections(), sweepIntervalMs);
     this.heartbeatSweepTimer.unref?.();
   }
@@ -682,9 +694,15 @@ export class NodeDirectory {
           UNION ALL
           SELECT operation_id,agent_id,'{"operation":{"kind":"process.stop_all"}}' AS request_json FROM owner_agent_stop_intents
           WHERE node_id=? AND state IN ('executing','unknown')
-        ) WHERE operation_id>? ORDER BY operation_id LIMIT 100`,
+        ) WHERE operation_id>? ORDER BY operation_id LIMIT ?`,
           )
-          .all(session.nodeId, blocking ? 1 : 0, session.nodeId, cursor),
+          .all(
+            session.nodeId,
+            blocking ? 1 : 0,
+            session.nodeId,
+            cursor,
+            MAX_NODE_RECEIPTS_PER_PAGE,
+          ),
       );
     if (rows.length === 0) {
       this.startWorkspaceReconciliation(socket, session, "", blocking);
@@ -816,9 +834,9 @@ export class NodeDirectory {
        WHERE agent.node_id=? AND action.operation LIKE 'workspace.%'
          AND (? OR json_extract(CASE WHEN json_valid(action.result_json) THEN action.result_json ELSE '{}' END,'$.state') IN ('executing','unknown'))
          AND json_extract(CASE WHEN json_valid(action.result_json) THEN action.result_json ELSE '{}' END,'$.operationId')>?
-       ORDER BY operation_id LIMIT 100`,
+       ORDER BY operation_id LIMIT ?`,
           )
-          .all(session.nodeId, blocking ? 1 : 0, cursor),
+          .all(session.nodeId, blocking ? 1 : 0, cursor, MAX_NODE_RECEIPTS_PER_PAGE),
       );
     if (rows.length === 0) {
       if (blocking) {
