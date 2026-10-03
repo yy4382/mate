@@ -7,3 +7,6 @@
 **/data
 docs/reference
 *.log
+# Agent directory and credential state are source, not runtime data.
+!apps/web/src/features/agents/data
+!apps/web/src/features/agents/data/**
