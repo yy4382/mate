@@ -1,6 +1,7 @@
-import { z } from "zod";
-import { createHash } from "node:crypto";
 import type { WorkspaceVersion } from "@mate/protocol/workspace";
+import { FILE_CHUNK_MAX_BYTES } from "@mate/protocol/workspace";
+import { createHash } from "node:crypto";
+import { z } from "zod";
 import { WorkspaceError } from "../workspaces/errors.js";
 import { isWorkspaceVersion as isVersion, sameVersion } from "../workspaces/results.js";
 import { AttachmentError } from "./errors.js";
@@ -21,7 +22,11 @@ export function decodeChunk(
   )
     throw new WorkspaceError("file_changed", "File changed during publish", 409);
   const bytes = Buffer.from(value.base64, "base64");
-  if (!bytes.length || bytes.length > 8192 || bytes.length > expectedSize - expectedOffset)
+  if (
+    !bytes.length ||
+    bytes.length > FILE_CHUNK_MAX_BYTES ||
+    bytes.length > expectedSize - expectedOffset
+  )
     throw new WorkspaceError("file_changed", "Invalid or incomplete node chunk", 409);
   return bytes;
 }

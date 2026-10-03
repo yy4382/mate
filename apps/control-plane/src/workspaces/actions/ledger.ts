@@ -1,16 +1,16 @@
-import type Database from "better-sqlite3";
 import {
   workspaceFailureCodeSchema,
   workspaceResultIsUnknown,
   type NodeWorkspaceOperationResult,
 } from "@mate/protocol";
+import type Database from "better-sqlite3";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
-import { AgentSession } from "../runtime/session/service.js";
-import { workspaceOperationSummary } from "../runtime/recovery-context.js";
-import { recordAgentActivity } from "../runtime/activity.js";
-import { parseEnvelope } from "./results.js";
-import { WorkspaceError } from "./errors.js";
+import { recordAgentActivity } from "../../runtime/activity.js";
+import { workspaceOperationSummary } from "../../runtime/recovery-context.js";
+import { AgentSession } from "../../runtime/session/service.js";
+import { WorkspaceError } from "../errors.js";
+import { parseEnvelope } from "../results.js";
 
 interface WorkspaceActionKey {
   sessionId: string;

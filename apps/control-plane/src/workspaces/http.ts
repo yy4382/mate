@@ -4,10 +4,10 @@ import {
 } from "@mate/protocol/workspace";
 import { Hono, type Context } from "hono";
 import { z } from "zod";
-import { AttachmentService } from "../attachments/service.js";
 import { AttachmentError } from "../attachments/errors.js";
-import { WorkspaceService } from "./service.js";
+import { AttachmentService } from "../attachments/service.js";
 import { WorkspaceError } from "./errors.js";
+import { WorkspaceService } from "./service.js";
 
 export function registerWorkspaceRoutes(
   app: Hono,

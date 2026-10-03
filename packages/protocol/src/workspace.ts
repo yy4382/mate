@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+/** Maximum bytes in a bounded workspace or attachment file chunk. */
+export const FILE_CHUNK_MAX_BYTES = 8 * 1024;
+
 /** A file's identity and revision, shared by owner reads and node workspace operations. */
 export const workspaceVersionSchema = z
   .object({

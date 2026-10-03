@@ -1,5 +1,5 @@
 import { projectImages } from "./session/image-context.js";
-import { WorkspaceImage } from "../workspaces/image-result.js";
+import { WorkspaceImage } from "../workspaces/reads/image-result.js";
 import { z } from "zod";
 import {
   confirmedModelResponse,
