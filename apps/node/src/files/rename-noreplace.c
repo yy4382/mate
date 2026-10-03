@@ -13,6 +13,18 @@
 #endif
 #endif
 
+/* POSIX errno names are stable across hosts; numeric errno values are not. */
+static const char *errno_code(int error_number) {
+  switch (error_number) {
+    case EACCES: return "EACCES";
+    case EPERM: return "EPERM";
+    case ENOENT: return "ENOENT";
+    case EISDIR: return "EISDIR";
+    case ELOOP: return "ELOOP";
+    default: return "";
+  }
+}
+
 int main(int argc, char **argv) {
   if (argc != 3) {
     fprintf(stderr, "Usage: rename-noreplace SOURCE_NAME DESTINATION_NAME\n");
@@ -30,14 +42,16 @@ int main(int argc, char **argv) {
 #endif
 
   if (result == 0) return 0;
-  if (errno == EEXIST) {
+  int error_number = errno;
+  if (error_number == EEXIST) {
     fprintf(stderr, "destination_exists: The move destination already exists\n");
     return 17;
   }
-  if (errno == ENOSYS || errno == EOPNOTSUPP || errno == EINVAL) {
+  if (error_number == ENOSYS || error_number == EOPNOTSUPP || error_number == EINVAL) {
     fprintf(stderr, "atomic_move_unavailable: The filesystem lacks atomic no-replace rename\n");
     return 78;
   }
-  fprintf(stderr, "atomic_move_failed: %s\n", strerror(errno));
+  fprintf(stdout, "%s", errno_code(error_number));
+  fprintf(stderr, "atomic_move_failed: %s\n", strerror(error_number));
   return 1;
 }

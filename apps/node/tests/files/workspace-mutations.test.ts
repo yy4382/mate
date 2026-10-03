@@ -1,6 +1,14 @@
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
-import { lstatSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  lstatSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
@@ -62,6 +70,17 @@ it("fails a move explicitly when the atomic no-replace helper is unavailable", (
     /atomic_move_unavailable/,
   );
   expect(readFileSync(source, "utf8")).toBe("source remains intact");
+  expect(() => readFileSync(destination)).toThrow();
+});
+
+it("retains native ENOENT if the source disappears just before the atomic rename", () => {
+  const root = temp(),
+    source = join(root, "source.txt"),
+    destination = join(root, "destination.txt");
+  writeFileSync(source, "removed concurrently");
+  expect(() =>
+    moveFileNoReplace(source, destination, renameNoReplace, () => unlinkSync(source)),
+  ).toThrow(expect.objectContaining({ code: "ENOENT" }));
   expect(() => readFileSync(destination)).toThrow();
 });
 

@@ -7,6 +7,8 @@ import {
   statSync,
   symlinkSync,
   chmodSync,
+  mkdirSync,
+  readFileSync,
 } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +19,30 @@ const roots: string[] = [];
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
+
+it.skipIf(process.getuid!() === 0)(
+  "reports a native move permission failure without modifying either directory",
+  async () => {
+    const root = workspace(),
+      protectedDirectory = join(root, "protected"),
+      backend = new SameAccountFileBackend({ ...identity, home: root });
+    mkdirSync(protectedDirectory, { mode: 0o500 });
+    writeFileSync(join(root, "source.txt"), "source remains intact");
+    try {
+      const result = await backend.execute({
+        root,
+        timeoutMs: 5_000,
+        operation: { kind: "move", path: "source.txt", destination: "protected/moved.txt" },
+      });
+      expect(result).toMatchObject({ code: 1, errorCode: "permission_denied" });
+      expect(result.stderr).toContain("atomic_move_failed:");
+      expect(readFileSync(join(root, "source.txt"), "utf8")).toBe("source remains intact");
+      expect(() => readFileSync(join(protectedDirectory, "moved.txt"))).toThrow();
+    } finally {
+      chmodSync(protectedDirectory, 0o700);
+    }
+  },
+);
 function workspace() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "mate-same-account-files-")));
   roots.push(root);
