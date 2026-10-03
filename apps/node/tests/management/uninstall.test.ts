@@ -17,8 +17,8 @@ import { fileURLToPath } from "node:url";
 import { afterEach, expect, test } from "vitest";
 import { uninstallNode } from "../../src/management/uninstall.js";
 import { nodePaths } from "../../src/management/paths.js";
-import { renderNodeUnit } from "../../src/management/service.js";
-import type { UserServiceManager } from "../../src/management/systemd.js";
+import { renderNodeUnit } from "../../src/management/service/commands.js";
+import type { UserServiceManager } from "../../src/management/service/systemd.js";
 
 const homes: string[] = [];
 afterEach(() => {

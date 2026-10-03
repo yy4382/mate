@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { z } from "zod";
 import { fileURLToPath } from "node:url";
-import { withoutDownloadCredentials } from "./bundle.js";
+import { withoutDownloadCredentials } from "../bundle.js";
 import { privatePropertyFailure } from "./systemd-property.js";
 
 export const serviceFacts = z.object({

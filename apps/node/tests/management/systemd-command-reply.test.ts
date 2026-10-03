@@ -2,8 +2,8 @@ import { expect, test } from "vitest";
 import {
   readExecStartProperty,
   readPrivateProperty,
-} from "../../src/management/systemd-property.js";
-import { serviceReferencesBundle } from "../../src/management/service.js";
+} from "../../src/management/service/systemd-property.js";
+import { serviceReferencesBundle } from "../../src/management/service/commands.js";
 import { nodePaths } from "../../src/management/paths.js";
 import dbus, { Variant } from "dbus-native";
 import { createServer } from "node:net";
@@ -143,7 +143,9 @@ test.each(["request-rejected", "unrecognized-reply", "transport", "timeout"])(
       const child = spawn(
         process.execPath,
         [
-          fileURLToPath(new URL("../../dist/management/systemd-property.js", import.meta.url)),
+          fileURLToPath(
+            new URL("../../dist/management/service/systemd-property.js", import.meta.url),
+          ),
           "Version",
         ],
         { env: { ...process.env, XDG_RUNTIME_DIR: directory, GH_TOKEN: secret }, timeout: 10000 },

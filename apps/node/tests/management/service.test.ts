@@ -13,8 +13,8 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, test } from "vitest";
 import { nodePaths } from "../../src/management/paths.js";
-import { manageNode, renderNodeUnit } from "../../src/management/service.js";
-import type { UserServiceManager } from "../../src/management/systemd.js";
+import { manageNode, renderNodeUnit } from "../../src/management/service/commands.js";
+import type { UserServiceManager } from "../../src/management/service/systemd.js";
 
 const directories: string[] = [];
 afterEach(() => {

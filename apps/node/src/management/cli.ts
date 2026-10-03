@@ -6,7 +6,7 @@ import {
   runningBundleDirectory,
   verifyBundle,
 } from "./bundle.js";
-import { manageNode, nodeServiceCommands } from "./service.js";
+import { manageNode, nodeServiceCommands } from "./service/commands.js";
 import { nodePaths } from "./paths.js";
 import { uninstallNode } from "./uninstall.js";
 import { updateNode } from "./update.js";
