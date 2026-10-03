@@ -1,3 +1,4 @@
+import { FileOperationError, fileFailure } from "./file-failures.js";
 import { systemErrorCode } from "../system-error.js";
 // Fixed file helper launched under Mate's existing account. Requests use stdin.
 import {
@@ -36,6 +37,11 @@ const flockSync: FlockSync | undefined =
 const renameNoReplace = createAtomicNoReplaceRename(
   fileURLToPath(new URL("./rename-noreplace", import.meta.url)),
 );
+process.on("uncaughtException", (error) => {
+  process.stderr.write(JSON.stringify(fileFailure(error)));
+  process.exitCode = 1;
+});
+
 const root = resolve(process.argv[2]!);
 if (!lstatSync(root).isDirectory()) throw new Error("Workspace root must be a directory");
 const privateMode = process.argv[3] !== "022";
@@ -49,7 +55,10 @@ if (rootDescriptor !== undefined) {
   const rootStat = fstatSync(rootDescriptor),
     pathStat = lstatSync(root);
   if (!rootStat.isDirectory() || rootStat.dev !== pathStat.dev || rootStat.ino !== pathStat.ino)
-    throw new Error("unsafe_path: Workspace root changed while it was opened");
+    throw new FileOperationError(
+      "unsafe_path",
+      "unsafe_path: Workspace root changed while it was opened",
+    );
 }
 const operation = operationSchema.parse(JSON.parse(readFileSync(0, "utf8")));
 const mutatingKinds = new Set<Operation["kind"]>([
@@ -75,12 +84,13 @@ function checked(path: string, allowMissing = false, createParents = false): str
     if (workspacePath === root) workspacePath = ".";
     else if (workspacePath.startsWith(`${root}/`))
       workspacePath = workspacePath.slice(root.length + 1);
-    else throw new Error("unsafe_path: Path escapes the workspace");
+    else throw new FileOperationError("unsafe_path", "unsafe_path: Path escapes the workspace");
   }
-  if (workspacePath.includes("\0")) throw new Error("unsafe_path: Invalid workspace path");
+  if (workspacePath.includes("\0"))
+    throw new FileOperationError("unsafe_path", "unsafe_path: Invalid workspace path");
   const parts = workspacePath.split("/").filter((part) => part !== "" && part !== ".");
   if (parts.some((part) => part === ".."))
-    throw new Error("unsafe_path: Path escapes the workspace");
+    throw new FileOperationError("unsafe_path", "unsafe_path: Path escapes the workspace");
   if (pinnedDirectoryPaths && rootDescriptor !== undefined) {
     if (parts.length === 0) return `${descriptorPath(rootDescriptor)}/.`;
     let parent = rootDescriptor,
@@ -113,7 +123,10 @@ function checked(path: string, allowMissing = false, createParents = false): str
       const target = `${descriptorPath(parent)}/${parts.at(-1)!}`;
       try {
         if (lstatSync(target).isSymbolicLink())
-          throw new Error("unsafe_path: Symbolic links are not followed in the workspace");
+          throw new FileOperationError(
+            "unsafe_path",
+            "unsafe_path: Symbolic links are not followed in the workspace",
+          );
       } catch (error) {
         if (systemErrorCode(error) !== "ENOENT" || !allowMissing) throw error;
       }
@@ -128,11 +141,15 @@ function checked(path: string, allowMissing = false, createParents = false): str
     missing = false;
   for (const part of parts) {
     target = resolve(target, part);
-    if (!within(root, target)) throw new Error("unsafe_path: Path escapes the workspace");
+    if (!within(root, target))
+      throw new FileOperationError("unsafe_path", "unsafe_path: Path escapes the workspace");
     if (missing) continue;
     try {
       if (lstatSync(target).isSymbolicLink())
-        throw new Error("unsafe_path: Symbolic links are not followed in the workspace");
+        throw new FileOperationError(
+          "unsafe_path",
+          "unsafe_path: Symbolic links are not followed in the workspace",
+        );
     } catch (error) {
       if (systemErrorCode(error) === "ENOENT" && allowMissing) missing = true;
       else throw error;
@@ -158,7 +175,10 @@ function directoryNames(path: string): string[] {
   if (!pinnedDirectoryPaths) return readdirSync(path);
   const before = lstatSync(path);
   if (!before.isDirectory() || before.isSymbolicLink())
-    throw new Error("unsafe_path: A real workspace directory is required");
+    throw new FileOperationError(
+      "unsafe_path",
+      "unsafe_path: A real workspace directory is required",
+    );
   const descriptor = openSync(
     path,
     constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
@@ -166,7 +186,10 @@ function directoryNames(path: string): string[] {
   try {
     const opened = fstatSync(descriptor);
     if (!opened.isDirectory() || opened.dev !== before.dev || opened.ino !== before.ino)
-      throw new Error("unsafe_path: Workspace directory changed while it was opened");
+      throw new FileOperationError(
+        "unsafe_path",
+        "unsafe_path: Workspace directory changed while it was opened",
+      );
     return readdirSync(descriptorPath(descriptor));
   } finally {
     closeSync(descriptor);
@@ -176,7 +199,8 @@ function content(path: string): Buffer {
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const stat = fstatSync(fd);
-    if (!stat.isFile() || stat.nlink !== 1) throw new Error("Regular single-link file required");
+    if (!stat.isFile() || stat.nlink !== 1)
+      throw new FileOperationError("not_file", "Regular single-link file required");
     const buf = Buffer.alloc(1000001),
       n = readSync(fd, buf, 0, buf.length, 0);
     if (n > 1000000) throw new Error("File exceeds 1 MB limit");
@@ -200,7 +224,8 @@ function save(
     let existing = false;
     try {
       const stat = lstatSync(path);
-      if (stat.isSymbolicLink()) throw new Error("unsafe_path: Symbolic links are not followed");
+      if (stat.isSymbolicLink())
+        throw new FileOperationError("unsafe_path", "unsafe_path: Symbolic links are not followed");
       existing = true;
     } catch (error) {
       if (systemErrorCode(error) !== "ENOENT") throw error;
@@ -291,7 +316,8 @@ switch (operation.kind) {
     break;
   case "edit": {
     const value = content(path);
-    if (hash(value) !== operation.expectedHash) throw new Error("File changed");
+    if (hash(value) !== operation.expectedHash)
+      throw new FileOperationError("file_changed", "File changed");
     const text = value.toString("utf8"),
       first = text.indexOf(operation.oldText);
     if (first < 0 || text.indexOf(operation.oldText, first + operation.oldText.length) >= 0)
@@ -341,18 +367,25 @@ switch (operation.kind) {
   }
   case "workspace_stat": {
     const stat = lstatSync(path);
-    if (stat.isSymbolicLink()) throw new Error("unsafe_path: Symbolic links are not followed");
+    if (stat.isSymbolicLink())
+      throw new FileOperationError("unsafe_path", "unsafe_path: Symbolic links are not followed");
     if (stat.isDirectory()) {
       json({ type: "directory", size: stat.size, modifiedAt: stat.mtimeMs });
       break;
     }
     if (!stat.isFile() || stat.nlink !== 1)
-      throw new Error("not_regular_file: A regular single-link file is required");
+      throw new FileOperationError(
+        "not_file",
+        "not_regular_file: A regular single-link file is required",
+      );
     const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
       const opened = fstatSync(fd, { bigint: true });
       if (!opened.isFile() || opened.nlink !== 1n || opened.ino !== BigInt(stat.ino))
-        throw new Error("file_changed: File changed while it was being inspected");
+        throw new FileOperationError(
+          "file_changed",
+          "file_changed: File changed while it was being inspected",
+        );
       json({
         type: "file",
         size: Number(opened.size),
@@ -369,10 +402,16 @@ switch (operation.kind) {
     try {
       const before = fstatSync(fd, { bigint: true });
       if (!before.isFile() || before.nlink !== 1n)
-        throw new Error("not_regular_file: A regular single-link file is required");
+        throw new FileOperationError(
+          "not_file",
+          "not_regular_file: A regular single-link file is required",
+        );
       const version = versionOf(before);
       if (operation.version && !sameVersion(version, operation.version))
-        throw new Error("file_changed: File changed while it was being read");
+        throw new FileOperationError(
+          "file_changed",
+          "file_changed: File changed while it was being read",
+        );
       const bytes = Number(before.size);
       if (!Number.isSafeInteger(bytes)) throw new Error("file_too_large: File size is unsupported");
       const chunk = Buffer.alloc(Math.min(operation.length, Math.max(0, bytes - operation.offset)));
@@ -384,7 +423,10 @@ switch (operation.kind) {
       }
       const after = fstatSync(fd, { bigint: true });
       if (!sameVersion(version, versionOf(after)))
-        throw new Error("file_changed: File changed while it was being read");
+        throw new FileOperationError(
+          "file_changed",
+          "file_changed: File changed while it was being read",
+        );
       json({
         base64: chunk.subarray(0, count).toString("base64"),
         offset: operation.offset,
@@ -448,7 +490,11 @@ switch (operation.kind) {
             visit(childRelativePath, childPath);
           } catch (error) {
             const code = systemErrorCode(error);
-            if (code !== "ENOENT" && code !== "ENOTDIR" && !String(error).includes("unsafe_path"))
+            if (
+              code !== "ENOENT" &&
+              code !== "ENOTDIR" &&
+              !(error instanceof FileOperationError && error.errorCode === "unsafe_path")
+            )
               throw error;
           } finally {
             releasePinned(childPath);
@@ -513,7 +559,7 @@ switch (operation.kind) {
       operation.expectedHash &&
       (!stat.isFile() || hash(content(path)) !== operation.expectedHash)
     )
-      throw new Error("File changed");
+      throw new FileOperationError("file_changed", "File changed");
     // Nonempty directories require explicit child removals (or an authorized exec).
     if (stat.isDirectory()) rmdirSync(path);
     else if (stat.isFile()) unlinkSync(path);

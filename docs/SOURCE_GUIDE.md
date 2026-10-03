@@ -18,7 +18,7 @@
 - `conversations/`：频道、私信、消息、已读与暂缓、消息关联任务和提醒。`service.ts` 管频道、消息、注意力和交付；`tasks.ts` 集中任务认领、任务草稿与提醒规则，并通过同步对话能力保持原事务；`tool-actions.ts` 在工具入口的事务内复用持久调用结果；`contracts.ts` 是请求校验，`rows.ts` 解释数据库查询结果，`tool-contracts.ts` 描述 Agent 能看到的工具；`http.ts` 注册会话、任务、提醒与事件流入口。
 - `agents/`：Agent 身份、资料、创建与目录；`http.ts` 注册 Agent 和模型供应商入口；供应商模型的校验仍在控制面，不能带进浏览器。
 - `runtime/`：`runs.ts` 构造时只收依赖，工厂显式 `start()` 启动恢复与调度；`close()` 在关闭 node 和数据库前取消运行。run 调度、模型循环、操作收据与恢复、活动和用量。`session/` 管完整历史和压缩，`tools/` 管工具入口和当前 run 检查；`provider-response.ts` 只解释供应商响应中的结束和用量证据。
-- `workspaces/`：文件浏览、下载和 Agent 文件操作的控制面逻辑。`file-content.ts` 负责有界字节分类与 UTF-8 范围，`image-result.ts` 是文件工具专用的图片返回路径；`runtime/session/image-context.ts` 只在请求时投影历史图片。`contracts.ts` 和 `results.ts` 分别放请求契约与结果解释；`action-ledger.ts` 保存文件变更意图、结果与迟到收据更正；服务入口明确先保存并等待提交，再复验 current run 和调用 node。身份 map 只是有期限的内存加速，重启或过期后仍查询持久操作。
+- `workspaces/`：文件浏览、下载和 Agent 文件操作的控制面逻辑。`file-content.ts` 负责有界字节分类与 UTF-8 范围，`image-result.ts` 是文件工具专用的图片返回路径；`runtime/session/image-context.ts` 只在请求时投影历史图片。`contracts.ts` 和 `results.ts` 分别放请求契约与结果解释；`action-ledger.ts` 保存文件变更意图、结果与迟到收据更正；服务入口明确先保存并等待提交，再复验 current run 和调用 node。身份 map 只是有期限的内存加速，重启或过期后仍查询持久操作。文件结果的稳定错误码来自 protocol `workspace-failures.ts`；`results.ts` 只在无 code 的旧结果边界适配诊断，旧 unknown 前缀规则与展示映射不同，不回填旧收据。
 - `attachments/`：附件操作及相应工具描述。
 - `nodes/`：`directory.ts` 拥有配对、连接身份、在线状态、请求身份核验和分领域收据对账；`pending-requests.ts` 仅拥有请求 Promise 与计时器，成功、超时、发送失败、断连都先移除请求和清理计时器。迟到的 process/workspace 收据仍进入各自的持久更正入口，不能自动重放。与 `apps/node` 的机器端代码不同。
 - `auth/`、`providers/`、`notifications/`：所有者登录、模型凭据和供应商目录、网页推送。
@@ -51,7 +51,7 @@ SQLite 的 session/run/交付/动作记录和 node 本地收据是持久事实�
 
 - `connection/`：节点身份、配对、WebSocket 连接及重连。
 - `provisioning/`：准备同一运行账号下的 Agent 默认工作区。
-- `files/`：文件操作入口、辅助进程、路径检查与原子文件操作。
+- `files/`：文件操作入口、辅助进程、路径检查与原子文件操作。`file-failures.ts` 归一具名文件错误和系统 errno；helper 非零退出在 stderr 写有界错误 JSON，backend 解析并保留诊断，新 code 随结果和收据传递，成功 stdout 保持原格式。
 - `processes/`：普通命令、进程状态、操作运行与持久收据。
 - `management/`：完整发布包契约与校验、现有账号目录规则、唯一 CLI 入口安装、私有节点配置和 systemd 用户服务管理；`acquire-bundle.ts` 只获取临时完整包，`update.ts` 在停止事实与管理锁内切换，`repair-bundle.ts` 处理可信原清单下的外部 CLI 同版修复；`deploy/node/` 是离线生产包构建、薄 bootstrap 和实际包外部验收入口。见 [完整 node 包说明](NODE_BUNDLE.md)、[用户服务说明](NODE_SERVICE.md) 与 [停机更新](NODE_UPDATE.md)。
 

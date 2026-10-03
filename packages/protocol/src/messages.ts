@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { agentProcessOperationSchema } from "./process-operations.js";
+import { workspaceFailureCodeSchema } from "./workspace-failures.js";
 import { operationSchema } from "./workspace-operations.js";
 
 export const MAX_NODE_MESSAGE_BYTES = 1024 * 1024;
@@ -25,6 +26,7 @@ const agentWorkspaceReadOperationSchema = operationSchema.refine((operation) =>
 const workspaceExecutionResultSchema = z
   .object({
     code: z.number().int(),
+    errorCode: workspaceFailureCodeSchema.optional(),
     stdout: z.string().max(12_000),
     stderr: z.string().max(12_000),
     truncated: z.boolean(),

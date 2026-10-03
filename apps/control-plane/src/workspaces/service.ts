@@ -669,7 +669,8 @@ export class WorkspaceService {
       },
       recorded = this.actions.prepare(intent, input.toolInput);
     if (recorded.kind === "done") return recorded.result;
-    if (recorded.kind === "failed") throw confirmedFileFailure(recorded.code, recorded.stderr);
+    if (recorded.kind === "failed")
+      throw confirmedFileFailure(recorded.code, recorded.stderr, recorded.errorCode);
     await input.committed;
     this.actions.track(operationId, {
       sessionId: authorized.session_id,
@@ -832,21 +833,16 @@ export class WorkspaceService {
       .run(result, errorCode ?? null, Date.now(), Date.now() + DOWNLOAD_STATUS_TTL_MS, downloadId);
   }
 
-  private async runNodeOperation(
-    request: ControlWorkspaceOperation,
-    nodeId: string,
-  ): Promise<{
-    code: number;
-    stdout: string;
-    stderr: string;
-    truncated: boolean;
-    revision?: number;
-  }> {
+  private async runNodeOperation(request: ControlWorkspaceOperation, nodeId: string) {
     try {
       const response = await this.nodes.workspaceOperation(nodeId, request);
       if (!response.ok) throw mapNodeError(response.error);
       if (response.result.code !== 0) {
-        throw confirmedFileFailure(response.result.code, response.result.stderr);
+        throw confirmedFileFailure(
+          response.result.code,
+          response.result.stderr,
+          response.result.errorCode,
+        );
       }
       if (response.result.truncated) throw invalidNodeResponse();
       const revision = response.revision ?? response.result.revision;

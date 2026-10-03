@@ -108,3 +108,24 @@ it("swallows both primary and fallback send failures without an unhandled reject
   ).not.toThrow();
   expect(sends).toBe(2);
 });
+
+it("preserves a stable file failure code when wire output is truncated", () => {
+  let sent: unknown;
+  sendWorkspaceOperationResult(
+    (message) => {
+      sent = message;
+    },
+    { requestId, operationId: "5fe049b7-0cd2-4f37-aea1-4636e151f3bf", agentId },
+    {
+      code: 1,
+      errorCode: "permission_denied",
+      stdout: "",
+      stderr: "operation_unknown: ".repeat(1_000),
+      truncated: false,
+    },
+  );
+  expect(NodeRequestSchema.parse(sent)).toMatchObject({
+    ok: true,
+    result: { code: 1, errorCode: "permission_denied", truncated: true },
+  });
+});

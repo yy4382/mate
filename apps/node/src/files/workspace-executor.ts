@@ -11,6 +11,8 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
+  workspaceResultIsUnknown,
+  type WorkspaceFailureCode,
   type Operation,
   type AgentWorkspaceIdentity,
   type ControlWorkspaceOperation,
@@ -122,7 +124,10 @@ export class LinuxWorkspaceExecutor {
       return existingCall.requestHash === requestHash
         ? existingCall.promise
         : Promise.resolve(
-            failed("operation_conflict: Operation ID was reused for another file request"),
+            failed(
+              "operation_conflict",
+              "operation_conflict: Operation ID was reused for another file request",
+            ),
           );
     const operation = this.executeOnce(request, requestHash, signal).finally(() => {
       if (this.active.get(key)?.promise === operation) this.active.delete(key);
@@ -141,7 +146,10 @@ export class LinuxWorkspaceExecutor {
     )
       throw new Error("Historical file receipt identity or state is invalid");
     if (requestHash !== undefined && requestHash !== receipt.requestHash)
-      return failed("operation_unknown: Historical file request does not match the receipt");
+      return failed(
+        "operation_unknown",
+        "operation_unknown: Historical file request does not match the receipt",
+      );
     return receipt.result;
   }
 
@@ -162,16 +170,21 @@ export class LinuxWorkspaceExecutor {
       existing = records ? this.readReceipt(request.operationId) : undefined;
     if (existing) {
       if (existing.agentId !== request.agentId || existing.requestHash !== requestHash)
-        return failed("operation_conflict: Operation ID was reused for another file request");
+        return failed(
+          "operation_conflict",
+          "operation_conflict: Operation ID was reused for another file request",
+        );
       if (
         existing.state === "succeeded" ||
         existing.state === "failed" ||
         existing.state === "unknown"
       )
         return (
-          existing.result ?? failed("operation_unknown: The file operation result is unavailable")
+          existing.result ??
+          failed("operation_unknown", "operation_unknown: The file operation result is unavailable")
         );
       const result = failed(
+        "operation_unknown",
         "operation_unknown: A previous node process stopped during this operation",
       );
       this.writeReceipt({
@@ -186,10 +199,13 @@ export class LinuxWorkspaceExecutor {
 
     const identity = this.lookupIdentity(request.agentId, this.homeRoot);
     if (resolve(identity.workspace) !== identity.workspace)
-      return failed("identity_mismatch: Agent workspace is not canonical");
+      return failed("workspace_unavailable", "identity_mismatch: Agent workspace is not canonical");
     const expectedWorkspace = join(resolve(this.homeRoot), request.agentId.toLowerCase());
     if (identity.workspace !== expectedWorkspace)
-      return failed("identity_mismatch: Agent workspace does not match its stable ID");
+      return failed(
+        "workspace_unavailable",
+        "identity_mismatch: Agent workspace does not match its stable ID",
+      );
     if (records)
       this.writeReceipt({
         operationId: request.operationId,
@@ -223,7 +239,10 @@ export class LinuxWorkspaceExecutor {
         signal,
       );
     } catch {
-      result = failed("operation_unknown: The node could not confirm the file operation result");
+      result = failed(
+        "operation_unknown",
+        "operation_unknown: The node could not confirm the file operation result",
+      );
       if (records)
         this.writeReceipt({
           operationId: request.operationId,
@@ -244,11 +263,7 @@ export class LinuxWorkspaceExecutor {
         agentId: request.agentId,
         requestHash,
         state:
-          result.code === 0
-            ? "succeeded"
-            : result.stderr.startsWith("operation_unknown:")
-              ? "unknown"
-              : "failed",
+          result.code === 0 ? "succeeded" : workspaceResultIsUnknown(result) ? "unknown" : "failed",
         result,
         revision: 2,
         updatedAt: this.now(),
@@ -361,6 +376,6 @@ function validateRequest(request: WorkspaceExecutionRequest): void {
     throw new Error("Owner browsing and file publishing allow read operations only");
 }
 
-function failed(stderr: string): ExecutionResult {
-  return { code: 1, stdout: "", stderr: stderr.slice(0, 240), truncated: false };
+function failed(errorCode: WorkspaceFailureCode, stderr: string): ExecutionResult {
+  return { code: 1, errorCode, stdout: "", stderr: stderr.slice(0, 240), truncated: false };
 }

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { createHash } from "node:crypto";
 import { posix as posixPath } from "node:path";
-import type { Operation } from "@mate/protocol";
+import type { Operation, WorkspaceFailureCode } from "@mate/protocol";
 import type { WorkspaceVersion } from "@mate/protocol/workspace";
 import { WorkspaceError } from "./errors.js";
 
@@ -57,26 +57,48 @@ export function invalidNodeResponse(): WorkspaceError {
   return new WorkspaceError("invalid_response", "节点返回了无效的文件结果。", 502);
 }
 
-export function mapNodeError(message: string): WorkspaceError {
-  if (/operation_conflict/i.test(message))
-    return new WorkspaceError("operation_conflict", "操作 ID 已用于不同的文件请求。", 409);
-  if (/operation_unknown|outcome may be unknown/i.test(message))
-    return new WorkspaceError("operation_unknown", "文件操作结果尚未确认，不会自动重试。", 409);
+/** Legacy diagnostic adaptation is only for results with no structured code. */
+function legacyFileFailureCode(message: string) {
+  if (/operation_conflict/i.test(message)) return "operation_conflict";
+  if (/operation_unknown|outcome may be unknown/i.test(message)) return "operation_unknown";
   if (/unsafe_path|symbolic link|symlink|escapes the workspace/i.test(message))
-    return new WorkspaceError("unsafe_path", "路径不在可读取的工作区范围内。", 403);
-  if (/file_changed|file changed|changed while/i.test(message))
-    return new WorkspaceError("file_changed", "文件在读取期间发生变化，请重新加载。", 409);
-  if (/permission[_ ]denied|eacces|eperm/i.test(message))
-    return new WorkspaceError("permission_denied", "当前运行账号没有读取此文件的权限。", 403);
-  if (/enoent|not found|no such file or directory/i.test(message))
-    return new WorkspaceError("not_found", "文件或目录不存在。", 404);
+    return "unsafe_path";
+  if (/file_changed|file changed|changed while/i.test(message)) return "file_changed";
+  if (/permission[_ ]denied|eacces|eperm/i.test(message)) return "permission_denied";
+  if (/enoent|not found|no such file or directory/i.test(message)) return "not_found";
   if (/not_file|not_regular_file|regular single-link|is a directory/i.test(message))
-    return new WorkspaceError("not_file", "只能读取普通文件。", 400);
-  return new WorkspaceError("workspace_unavailable", "节点无法完成文件请求。", 502);
+    return "not_file";
+  return "workspace_unavailable";
 }
 
-export function confirmedFileFailure(code: number, stderr: string): WorkspaceError {
-  const mapped = mapNodeError(stderr || "File request failed");
+export function mapNodeError(message: string, errorCode?: WorkspaceFailureCode): WorkspaceError {
+  const code = errorCode ?? legacyFileFailureCode(message);
+  switch (code) {
+    case "operation_conflict":
+      return new WorkspaceError(code, "操作 ID 已用于不同的文件请求。", 409);
+    case "operation_unknown":
+      return new WorkspaceError(code, "文件操作结果尚未确认，不会自动重试。", 409);
+    case "unsafe_path":
+      return new WorkspaceError(code, "路径不在可读取的工作区范围内。", 403);
+    case "file_changed":
+      return new WorkspaceError(code, "文件在读取期间发生变化，请重新加载。", 409);
+    case "permission_denied":
+      return new WorkspaceError(code, "当前运行账号没有读取此文件的权限。", 403);
+    case "not_found":
+      return new WorkspaceError(code, "文件或目录不存在。", 404);
+    case "not_file":
+      return new WorkspaceError(code, "只能读取普通文件。", 400);
+    case "workspace_unavailable":
+      return new WorkspaceError(code, "节点无法完成文件请求。", 502);
+  }
+}
+
+export function confirmedFileFailure(
+  code: number,
+  stderr: string,
+  errorCode?: WorkspaceFailureCode,
+): WorkspaceError {
+  const mapped = mapNodeError(stderr || "File request failed", errorCode);
   return new WorkspaceError(mapped.code, `${mapped.message}（节点结果码 ${code}）`, mapped.status);
 }
 

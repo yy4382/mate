@@ -1,4 +1,5 @@
 import { afterEach, expect, it } from "vitest";
+import { z } from "zod";
 import {
   chmodSync,
   lstatSync,
@@ -369,7 +370,12 @@ it("keeps a receipt for a different historical file request unproven during reco
 it("reads legacy file receipts with extension fields and full captured output without replay", async () => {
   const fixture = setup(() => success),
     executor = new LinuxWorkspaceExecutor(fixture.homeRoot, fixture.root, fixture.dependencies),
-    result = { ...success, stdout: "x".repeat(32_000), detail: { retained: true } };
+    result = {
+      ...success,
+      stdout: "x".repeat(32_000),
+      detail: { retained: true },
+      errorCode: "historical_extension",
+    };
   writeFileSync(
     join(fixture.root, "workspace-receipts", `${operationId}.json`),
     JSON.stringify({
@@ -434,3 +440,37 @@ it("refuses a malformed persisted file result without replaying its side effect"
   expect(readFileSync(receiptPath, "utf8")).toBe(malformed);
   expect(fixture.calls).toHaveLength(0);
 });
+
+it.each(["file_changed", "operation_unknown"] as const)(
+  "records and reuses %s by code rather than misleading diagnostics",
+  async (errorCode) => {
+    const fixture = setup(() => ({
+      code: 1,
+      stdout: "",
+      truncated: false,
+      errorCode,
+      stderr:
+        errorCode === "file_changed"
+          ? "operation_unknown: misleading prose"
+          : "ENOENT: no such file",
+    }));
+    const node = new LinuxWorkspaceExecutor(fixture.homeRoot, fixture.root, fixture.dependencies);
+    const original = await node.execute(action());
+    const stored = z
+      .object({ state: z.string() })
+      .parse(
+        JSON.parse(
+          readFileSync(join(fixture.root, "workspace-receipts", `${operationId}.json`), "utf8"),
+        ),
+      );
+    expect(stored.state).toBe(errorCode === "operation_unknown" ? "unknown" : "failed");
+    const restarted = new LinuxWorkspaceExecutor(
+      fixture.homeRoot,
+      fixture.root,
+      fixture.dependencies,
+    );
+    expect(await restarted.execute(action())).toEqual(original);
+    expect(restarted.status(agentId, operationId)).toEqual(original);
+    expect(fixture.calls).toHaveLength(1);
+  },
+);

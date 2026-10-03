@@ -1,13 +1,48 @@
 import { afterEach, expect, it } from "vitest";
-import { writeFileSync, mkdtempSync, realpathSync, rmSync, statSync } from "node:fs";
+import {
+  writeFileSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  chmodSync,
+  mkdirSync,
+  readFileSync,
+} from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
+import type { Operation, WorkspaceFailureCode } from "@mate/protocol";
 import { SameAccountFileBackend } from "../../src/files/same-account-files.js";
 
 const roots: string[] = [];
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
+
+it.skipIf(process.getuid!() === 0)(
+  "reports a native move permission failure without modifying either directory",
+  async () => {
+    const root = workspace(),
+      protectedDirectory = join(root, "protected"),
+      backend = new SameAccountFileBackend({ ...identity, home: root });
+    mkdirSync(protectedDirectory, { mode: 0o500 });
+    writeFileSync(join(root, "source.txt"), "source remains intact");
+    try {
+      const result = await backend.execute({
+        root,
+        timeoutMs: 5_000,
+        operation: { kind: "move", path: "source.txt", destination: "protected/moved.txt" },
+      });
+      expect(result).toMatchObject({ code: 1, errorCode: "permission_denied" });
+      expect(result.stderr).toContain("atomic_move_failed:");
+      expect(readFileSync(join(root, "source.txt"), "utf8")).toBe("source remains intact");
+      expect(() => readFileSync(join(protectedDirectory, "moved.txt"))).toThrow();
+    } finally {
+      chmodSync(protectedDirectory, 0o700);
+    }
+  },
+);
 function workspace() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "mate-same-account-files-")));
   roots.push(root);
@@ -96,4 +131,53 @@ it("cancels and times out a file helper without blocking other work", async () =
   await cancelled;
   await expect(backend.execute({ ...request, timeoutMs: 50 })).rejects.toThrow("timed out");
   await expect(backend.execute(request, controller.signal)).rejects.toThrow("aborted");
+});
+
+it("carries real helper path, version, missing-file and permission failures by code", async () => {
+  const root = workspace();
+  writeFileSync(join(root, "file.txt"), "original");
+  writeFileSync(join(root, "protected.txt"), "private", { mode: 0o000 });
+  symlinkSync("file.txt", join(root, "link.txt"));
+  const backend = new SameAccountFileBackend({ ...identity, home: root });
+  const cases: Array<{ operation: Operation; errorCode: WorkspaceFailureCode }> = [
+    { operation: { kind: "read", path: "missing.txt" }, errorCode: "not_found" },
+    { operation: { kind: "read", path: "link.txt" }, errorCode: "unsafe_path" },
+    {
+      operation: {
+        kind: "edit",
+        path: "file.txt",
+        oldText: "original",
+        newText: "changed",
+        expectedHash: "0".repeat(64),
+      },
+      errorCode: "file_changed",
+    },
+    { operation: { kind: "read", path: "." }, errorCode: "not_file" },
+  ];
+  if (process.getuid!() !== 0)
+    cases.push({
+      operation: { kind: "read", path: "protected.txt" },
+      errorCode: "permission_denied",
+    });
+  try {
+    for (const testCase of cases) {
+      const result = await backend.execute({
+        root,
+        timeoutMs: 5_000,
+        operation: testCase.operation,
+      });
+      expect(result.code).not.toBe(0);
+      expect(result.errorCode).toBe(testCase.errorCode);
+      expect(result.stderr.length).toBeGreaterThan(0);
+    }
+    expect(
+      await backend.execute({
+        root,
+        timeoutMs: 5_000,
+        operation: { kind: "read", path: "file.txt" },
+      }),
+    ).toMatchObject({ code: 0, stderr: "" });
+  } finally {
+    chmodSync(join(root, "protected.txt"), 0o600);
+  }
 });

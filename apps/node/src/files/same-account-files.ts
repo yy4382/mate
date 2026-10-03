@@ -11,6 +11,7 @@ import {
 } from "./file-execution.js";
 import { killProcessGroup } from "../processes/linux-processes.js";
 import { within } from "./path-resolution.js";
+import { helperFailureSchema } from "./file-failures.js";
 
 const accountSchema = z
   .object({
@@ -115,13 +116,25 @@ export class SameAccountFileBackend implements ExecutionBackend {
         }
         if (interrupted)
           reject(new Error("File execution aborted or timed out; outcome may be unknown"));
-        else
+        else {
+          const diagnostic = Buffer.concat(stderr).toString("utf8");
+          let failure: z.infer<typeof helperFailureSchema> | undefined;
+          if (code !== 0) {
+            try {
+              const parsed = helperFailureSchema.safeParse(JSON.parse(diagnostic));
+              if (parsed.success) failure = parsed.data;
+            } catch {
+              // Foreign/test helpers can still return raw diagnostics; do not invent evidence.
+            }
+          }
           resolvePromise({
             code: code ?? 1,
             stdout: Buffer.concat(stdout).toString("utf8"),
-            stderr: Buffer.concat(stderr).toString("utf8"),
+            stderr: failure?.message ?? diagnostic,
+            ...(failure ? { errorCode: failure.errorCode } : {}),
             truncated: truncated || openPipes,
           });
+        }
       };
       // A background child may inherit these pipes. Return after the helper exits, then close transient output capture.
       child.once("exit", (code) => {

@@ -1,4 +1,8 @@
-import { NodeRequestSchema, type NodeWorkspaceOperationResult } from "@mate/protocol";
+import {
+  workspaceFailureCodeSchema,
+  NodeRequestSchema,
+  type NodeWorkspaceOperationResult,
+} from "@mate/protocol";
 
 type WorkspaceOperationSuccess = Extract<NodeWorkspaceOperationResult, { ok: true }>;
 
@@ -16,6 +20,7 @@ export function sendWorkspaceOperationResult(
       result.truncated ||
       stdout.length !== result.stdout.length ||
       stderr.length !== result.stderr.length;
+  const errorCode = workspaceFailureCodeSchema.safeParse(result.errorCode);
   try {
     send(
       NodeRequestSchema.parse({
@@ -24,6 +29,7 @@ export function sendWorkspaceOperationResult(
         ok: true,
         result: {
           code: result.code,
+          ...(errorCode.success ? { errorCode: errorCode.data } : {}),
           stdout,
           stderr,
           truncated,
