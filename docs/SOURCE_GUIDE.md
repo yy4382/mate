@@ -15,7 +15,7 @@
 
 ## 控制面按领域找代码
 
-- `conversations/`：频道、私信、消息、已读与暂缓、消息关联任务和提醒。`service.ts` 保留事务与业务编排；`contracts.ts` 是请求校验，`rows.ts` 解释数据库查询结果，`tool-contracts.ts` 描述 Agent 能看到的工具。
+- `conversations/`：频道、私信、消息、已读与暂缓、消息关联任务和提醒。`service.ts` 管频道、消息、注意力和交付；`tasks.ts` 集中任务认领、任务草稿与提醒规则，并通过同步对话能力保持原事务；`tool-actions.ts` 在工具入口的事务内复用持久调用结果；`contracts.ts` 是请求校验，`rows.ts` 解释数据库查询结果，`tool-contracts.ts` 描述 Agent 能看到的工具。
 - `agents/`：Agent 身份、资料、创建与目录；供应商模型的校验仍在控制面，不能带进浏览器。
 - `runtime/`：run 调度、模型循环、操作收据与恢复、活动和用量。`session/` 管完整历史和压缩，`tools/` 管工具入口和当前 run 检查；`provider-response.ts` 只解释供应商响应中的结束和用量证据。
 - `workspaces/`：文件浏览、下载和 Agent 文件操作的控制面逻辑。`file-content.ts` 负责有界字节分类与 UTF-8 范围，`image-result.ts` 是文件工具专用的图片返回路径；`runtime/session/image-context.ts` 只在请求时投影历史图片。`contracts.ts` 和 `results.ts` 分别放请求契约与结果解释；副作用提交顺序留在服务中。
