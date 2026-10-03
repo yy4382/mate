@@ -40,7 +40,7 @@ export class WorkspaceActionLedger {
     private readonly notifyCorrection: (
       agentId: string,
       operationId: string,
-      state: string,
+      state: "succeeded" | "failed",
     ) => void,
   ) {}
 
