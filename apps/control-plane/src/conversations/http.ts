@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { AgentDirectory } from "../agents/directory.js";
 import type { OwnerAuth } from "../auth/service.js";
 import { sessionToken } from "../auth/session-cookie.js";
-import type { AgentRunCoordinator } from "../runtime/runs.js";
+import type { AgentRunCoordinator } from "../runtime/runs/coordinator.js";
 import {
   newChannelSchema,
   newMessageSchema,

@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 import { join } from "node:path";
-import { queueUncertainOperationFacts } from "../../../src/runtime/recovery-context.js";
+import { queueUncertainOperationFacts } from "../../../src/runtime/recovery/context.js";
 import { AgentSession } from "../../../src/runtime/session/service.js";
 import {
   createControlPlaneApp,

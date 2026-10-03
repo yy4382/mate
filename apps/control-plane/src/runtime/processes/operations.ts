@@ -1,16 +1,16 @@
-import { parseHistory } from "./recovery-context.js";
-import { isDeepStrictEqual } from "node:util";
-import { defineAgentTool, type AgentToolContext } from "./tools/entry.js";
-import { AgentSession } from "./session/service.js";
-import { createHash } from "node:crypto";
-import type Database from "better-sqlite3";
-import { z } from "zod";
-import { recordAgentActivity } from "./activity.js";
 import {
   agentProcessOperationSchema,
   type AgentProcessOperation,
   type AgentProcessOperationState,
 } from "@mate/protocol";
+import type Database from "better-sqlite3";
+import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import { z } from "zod";
+import { recordAgentActivity } from "../activity.js";
+import { parseHistory } from "../recovery/context.js";
+import { AgentSession } from "../session/service.js";
+import { defineAgentTool, type AgentToolContext } from "../tools/entry.js";
 
 const uuidSchema = z.string().uuid();
 const stableActionIdSchema = z

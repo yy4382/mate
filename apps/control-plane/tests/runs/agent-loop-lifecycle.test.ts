@@ -408,7 +408,7 @@ it("offline messages and due reminders queue while another online node's Agent k
 
 it("retries shutdown after a durable run update fails and cancels both active provider requests", async () => {
   const responses: ServerResponse[] = [];
-  const coordinatorUrl = new URL("../../dist/runtime/runs.js", import.meta.url).href;
+  const coordinatorUrl = new URL("../../dist/runtime/runs/coordinator.js", import.meta.url).href;
   const fixture = await loopFixture(
     (_request, response) => responses.push(response),
     (directory) => `, beforeRunStart: async () => {

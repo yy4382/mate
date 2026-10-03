@@ -1,7 +1,7 @@
-import { z } from "zod";
-const receiptEnvelopeSchema = z.record(z.string(), z.unknown());
 import type Database from "better-sqlite3";
-import { AgentSession } from "./session/service.js";
+import { z } from "zod";
+import { AgentSession } from "../session/service.js";
+const receiptEnvelopeSchema = z.record(z.string(), z.unknown());
 
 /** Existing operation records remain the authority; these are private additions to the same session. */
 export function queueUncertainOperationFacts(

@@ -6,8 +6,8 @@ import { expect, it, vi } from "vitest";
 import {
   AgentProcessOperationBroker,
   deriveAgentProcessOperationId,
-} from "../../../src/runtime/process-operations.js";
-import { agentProcessOperationsSchema } from "../../../src/runtime/process-schema.js";
+} from "../../../src/runtime/processes/operations.js";
+import { agentProcessOperationsSchema } from "../../../src/runtime/processes/schema.js";
 
 function setup() {
   const database = new Database(":memory:");
