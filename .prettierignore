@@ -21,3 +21,6 @@ mate.local.json
 
 # The pnpm content-addressable store: package metadata, never source.
 .pnpm-store/
+
+# Directory refresh and credential state are source, not runtime data.
+!apps/web/src/features/agents/data/

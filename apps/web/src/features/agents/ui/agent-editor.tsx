@@ -1,11 +1,11 @@
-import type { AgentSummary } from "./agent-responses.js";
-import { useLayoutEffect, useState } from "react";
 import type {
   ModelCredentialSummary as ModelCredential,
   ModelProviderSummary as ModelProvider,
 } from "@mate/protocol/owner";
-import { redirectToLogin } from "../../navigation.js";
-import { errorMessage } from "./agent-requests.js";
+import { useLayoutEffect, useState } from "react";
+import { redirectToLogin } from "../../../navigation.js";
+import { errorMessage } from "../agent-requests.js";
+import type { AgentSummary } from "../agent-responses.js";
 
 export function AgentEditor({
   agent,

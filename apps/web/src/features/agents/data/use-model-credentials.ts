@@ -1,7 +1,7 @@
-import { useCallback, useState, type FormEvent } from "react";
 import type { ModelProviderSummary } from "@mate/protocol/owner";
-import { redirectToLogin } from "../../navigation.js";
-import { errorMessage } from "./agent-requests.js";
+import { useCallback, useState, type FormEvent } from "react";
+import { redirectToLogin } from "../../../navigation.js";
+import { errorMessage } from "../agent-requests.js";
 
 export function useModelCredentials() {
   const [credentialProvider, setCredentialProvider] = useState("openai");

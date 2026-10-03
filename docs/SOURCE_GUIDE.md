@@ -83,7 +83,7 @@ SQLite 的 session/run/交付/动作记录和 node 本地收据是持久事实�
 下面的功能目录都位于 `apps/web/src/features/`。
 
 - `conversations/`：`chat-page.tsx` 保留唯一频道选择/ref、认证、提交/draft/busy、回复目标、移动视图与 DOM 通知滚动。`feed/use-conversation-feed.ts` 拥有 snapshot/SSE、频道目录、历史窗口与 older/latest/通知 context 数据流，使用同一 ref 检查迟到响应；thread 能力解构为稳定函数，避免重开 SSE。`feed/use-conversation-thread.ts`、`use-conversation-attachments.ts`、`use-owner-push.ts` 各自保留原讨论串、附件与点击通知流程。`ui/` 放频道导航、时间线、讨论串、受控 composer、频道弹窗与唯一消息任务表单；各位置/key 不变。`styles/` 的 shell→conversation→dialog→mobile→message-details 由页面固定顺序导入，保留共享选择器和原移动级联；无转发桶或镜像 selection。
-- `agents/`：Agent 页面、资料编辑、草稿与活动展示。`use-model-credentials.ts` 拥有模型凭据提交及表单反馈；统一目录刷新仍在页面，完成请求后再刷新。
+- `agents/`：`agents-page.tsx` 保留唯一创建 draft、submitting、页面级私信/邀请互斥和错误，以及 Agent 行展示。`data/use-agent-directory.ts` 拥有六类目录、轮询与 refresh；本次 nodes/providers 通过稳定回调按原顺序对账 provider/draft，异常吞并和 abort 保持。`data/use-model-credentials.ts` 的凭据状态仍常驻页面，busy 覆盖显式 refresh。`ui/agent-creation-form.tsx` 与 `model-credentials-form.tsx` 是受控完整表单；已有 Editor、Activity 和 stop-status 按展示归入 `ui/`，不增加行包装或局部请求状态。
 - `workspace/`：工作区浏览、下载操作及状态查询。
 - `nodes/`、`tasks/`、`reminders/`：相应管理页面。
 

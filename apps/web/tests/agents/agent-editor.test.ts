@@ -3,7 +3,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createElement, useEffect, useState } from "react";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
-import { AgentEditor } from "../../src/features/agents/agent-editor.js";
+import { AgentEditor } from "../../src/features/agents/ui/agent-editor.js";
 import { agentSchema } from "../../src/features/agents/agent-responses.js";
 import { modelCredentialSummarySchema } from "@mate/protocol/owner";
 
