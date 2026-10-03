@@ -54,5 +54,4 @@ it("ignores invalid stream payloads and still receives a subsequent valid messag
   expect(await screen.findByText(incoming.text)).not.toBeNull();
 });
 
-vi.mock("../../src/features/conversations/chat.css", () => ({}));
 vi.mock("../../src/navigation.js", () => ({ redirectToLogin: vi.fn() }));

@@ -1,4 +1,4 @@
-import type { Message, MessagePage } from "./conversation-responses.js";
+import type { Message, MessagePage } from "../conversation-responses.js";
 
 export type MessageWindow = MessagePage & { hasNewer: boolean };
 

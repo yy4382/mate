@@ -1,0 +1,151 @@
+.dialog-backdrop {
+  position: fixed;
+  z-index: 10;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgb(27 32 25 / 44%);
+}
+
+.channel-dialog {
+  width: min(100%, 480px);
+  max-height: min(90vh, 740px);
+  overflow: auto;
+  padding: 24px;
+  border: 1px solid #e3e1d8;
+  border-radius: 17px;
+  background: #fffefa;
+  box-shadow: 0 24px 70px rgb(20 25 17 / 20%);
+}
+
+.dialog-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 19px;
+}
+
+.dialog-heading h2 {
+  margin: 0;
+  color: #2e342c;
+  font-size: 20px;
+  font-weight: 650;
+}
+
+.channel-form {
+  display: grid;
+  gap: 9px;
+}
+
+.channel-form > label:not(.radio-row):not(.archive-row) {
+  margin-top: 5px;
+  color: #4c5148;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.channel-form > input,
+.channel-form > textarea {
+  min-height: 42px;
+  padding: 9px 11px;
+  border: 1px solid #dfded6;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.channel-form > input:focus,
+.channel-form > textarea:focus {
+  border-color: #879c78;
+  outline: 3px solid rgb(132 155 112 / 16%);
+}
+
+.channel-form fieldset {
+  display: grid;
+  gap: 7px;
+  margin: 11px 0 4px;
+  padding: 0;
+  border: 0;
+}
+
+.channel-form legend {
+  margin-bottom: 8px;
+  color: #4c5148;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.radio-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px;
+  border: 1px solid #e6e4dc;
+  border-radius: 9px;
+  cursor: pointer;
+}
+
+.radio-row:has(input:checked) {
+  border-color: #a5b598;
+  background: #f2f5ef;
+}
+
+.radio-row input,
+.archive-row input {
+  accent-color: #526b48;
+}
+
+.radio-row span {
+  display: grid;
+  gap: 3px;
+}
+
+.radio-row strong {
+  color: #44493f;
+  font-size: 12px;
+}
+
+.radio-row small {
+  color: #81867d;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.archive-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 9px;
+  color: #62675e;
+  font-size: 12px;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+  margin-top: 17px;
+}
+
+.dialog-actions .secondary-button {
+  border: 1px solid #deddd4;
+  background: #fff;
+  color: #5e645a;
+}
+
+.dialog-actions button:disabled,
+.message-composer button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
+}

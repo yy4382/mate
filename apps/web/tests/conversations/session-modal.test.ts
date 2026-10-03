@@ -49,5 +49,4 @@ it("traps modal focus, closes on Escape, and restores focus to its opener", asyn
   expect(document.activeElement).toBe(opener);
 });
 
-vi.mock("../../src/features/conversations/chat.css", () => ({}));
 vi.mock("../../src/navigation.js", () => ({ redirectToLogin: vi.fn() }));

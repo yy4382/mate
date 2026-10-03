@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import { useOwnerPush } from "../../src/features/conversations/use-owner-push.js";
+import { useOwnerPush } from "../../src/features/conversations/feed/use-owner-push.js";
 
 afterEach(() => {
   cleanup();

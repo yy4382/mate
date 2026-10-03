@@ -132,5 +132,4 @@ it("reconnects from a fresh snapshot and ignores messages from the closed stream
   expect(await screen.findByText(incoming.text)).not.toBeNull();
 });
 
-vi.mock("../../src/features/conversations/chat.css", () => ({}));
 vi.mock("../../src/navigation.js", () => ({ redirectToLogin: vi.fn() }));

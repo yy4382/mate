@@ -65,5 +65,4 @@ it("shows a useful upload failure and lets the owner retry without losing the se
   expect(fixture.attachmentUploads[1]?.body).toBe(file);
 });
 
-vi.mock("../../src/features/conversations/chat.css", () => ({}));
 vi.mock("../../src/navigation.js", () => ({ redirectToLogin: vi.fn() }));
