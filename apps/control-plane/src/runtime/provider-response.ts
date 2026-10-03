@@ -108,8 +108,10 @@ export async function inspectProviderResponse(response: Response, api: string) {
       body += decoder.decode();
     }
   } catch {
-    // A cancelled/truncated stream without a complete terminal event remains unconfirmed.
-    if (!providerResponseComplete(body, response.status)) return null;
+    // Only fully delimited SSE frames survive cancellation. The HTTP-error shortcut
+    // requires a clean read, and an unfinished trailing frame carries no evidence.
+    body = body.replace(/\r\n?/g, "\n").split("\n\n").slice(0, -1).join("\n\n");
+    if (!body.includes("data:") || !providerResponseComplete(body, 200)) return null;
   } finally {
     reader?.releaseLock();
   }
