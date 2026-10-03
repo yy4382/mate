@@ -27,7 +27,7 @@ function classifyRunFailure(code: string | undefined) {
   return "temporary";
 }
 
-function runRetryDelayMs(consecutiveFailures: number): number {
+function runRetryDelayMs(consecutiveFailures: number) {
   return Math.min(
     maxRetryDelayMs,
     retryDelayMs * 2 ** Math.min(consecutiveFailures - 1, maxRetryExponent),
@@ -114,7 +114,7 @@ export class AgentRunCoordinator {
   }
 
   close(): void {
-    if (this.closed) return;
+    // A failed durable update must still allow a later close to finish cancelling runs.
     this.closed = true;
     clearInterval(this.timer);
     for (const [agentId, active] of this.activeAgents) {

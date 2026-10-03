@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import type { ServerResponse } from "node:http";
+import { join } from "node:path";
 import { loopFixture, respond } from "../helpers/agent-loop.js";
 import { eventually, stopProcess } from "../helpers/run-services.js";
 
@@ -400,6 +401,70 @@ it("offline messages and due reminders queue while another online node's Agent k
         db.prepare("SELECT COUNT(*) AS n FROM owner_agent_sessions WHERE agent_id=?").get(first.id),
       ),
     ).toEqual({ n: 1 });
+  } finally {
+    await fixture.close();
+  }
+}, 30000);
+
+it("retries shutdown after a durable run update fails and cancels both active provider requests", async () => {
+  const responses: ServerResponse[] = [];
+  const coordinatorUrl = new URL("../../dist/runtime/runs.js", import.meta.url).href;
+  const fixture = await loopFixture(
+    (_request, response) => responses.push(response),
+    (directory) => `, beforeRunStart: async () => {
+      if (globalThis.shutdownFaultInstalled) return;
+      globalThis.shutdownFaultInstalled = true;
+      const { AgentRunCoordinator } = await import(${JSON.stringify(coordinatorUrl)});
+      const { default: Database } = await import('better-sqlite3');
+      const close = AgentRunCoordinator.prototype.close;
+      AgentRunCoordinator.prototype.close = function() {
+        const prepare = Database.prototype.prepare;
+        let failOnce = true;
+        Database.prototype.prepare = function(sql, ...args) {
+          if (failOnce && sql.startsWith("UPDATE owner_agent_runs SET state='failed'")) {
+            failOnce = false;
+            throw new Error('synthetic shutdown storage failure');
+          }
+          return prepare.call(this, sql, ...args);
+        };
+        try {
+          try { close.call(this); }
+          catch (error) {
+            if (error.message !== 'synthetic shutdown storage failure') throw error;
+            console.log('MATE_SHUTDOWN_STORAGE_FAILED');
+            close.call(this);
+            const facts = new Database(${JSON.stringify(join(directory, "control-plane-data", "control-plane.sqlite"))}, { readonly: true });
+            try {
+              const stopped = facts.prepare("SELECT count(*) AS count FROM owner_agent_runs WHERE state='failed'").get().count;
+              console.log('MATE_RETRIED_SHUTDOWN_STOPPED ' + stopped);
+            } finally { facts.close(); }
+          }
+        } finally { Database.prototype.prepare = prepare; }
+      };
+    }`,
+  );
+  try {
+    const first = await fixture.agent();
+    const second = await fixture.agent();
+    await fixture.send(first.channelId, "关闭时仍在等待模型。");
+    await fixture.send(second.channelId, "另一位 Agent 也在等待模型。");
+    await eventually(() => (responses.length === 2 ? true : undefined), "two active requests");
+    await stopProcess(fixture.control);
+    expect(fixture.control.text).toContain("MATE_SHUTDOWN_STORAGE_FAILED");
+    expect(fixture.control.text).toContain("MATE_RETRIED_SHUTDOWN_STOPPED 2");
+    expect(fixture.control.exitStatus?.code).toBe(0);
+    expect(
+      fixture.db((db) =>
+        db.prepare("SELECT state,error_code FROM owner_agent_runs ORDER BY rowid").all(),
+      ),
+    ).toEqual([
+      { state: "failed", error_code: "interrupted" },
+      { state: "failed", error_code: "interrupted" },
+    ]);
+    await eventually(
+      () => (responses.every((response) => response.destroyed) ? true : undefined),
+      "both transports cancelled",
+    );
   } finally {
     await fixture.close();
   }
