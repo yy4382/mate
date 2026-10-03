@@ -92,6 +92,35 @@ export function providerResponseComplete(body: string, status: number): boolean 
   return false;
 }
 
+/** OpenAI SDK 7 aborts the response after Pi consumes a terminal error event. Preserve
+ * already received terminal evidence even when reading the response clone then fails. */
+export async function inspectProviderResponse(response: Response, api: string) {
+  const reader = response.clone().body?.getReader();
+  const decoder = new TextDecoder();
+  let body = "";
+  try {
+    if (reader) {
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        body += decoder.decode(chunk.value, { stream: true });
+      }
+      body += decoder.decode();
+    }
+  } catch {
+    // Only fully delimited SSE frames survive cancellation. The HTTP-error shortcut
+    // requires a clean read, and an unfinished trailing frame carries no evidence.
+    body = body.replace(/\r\n?/g, "\n").split("\n\n").slice(0, -1).join("\n\n");
+    if (!body.includes("data:") || !providerResponseComplete(body, 200)) return null;
+  } finally {
+    reader?.releaseLock();
+  }
+  return {
+    usage: reportedUsage(body, api),
+    complete: providerResponseComplete(body, response.status),
+  };
+}
+
 /** Google's Pi adapters do not accept a custom fetch. A positive Pi value proves the SDK
  * reported it; zero still means either a real zero or Pi's fallback for an absent field. */
 export function reportedGoogleUsage(message: AssistantMessage): ReportedUsage {

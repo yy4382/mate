@@ -240,8 +240,8 @@ it("keeps the actual OpenAI request prefix across tools, DM, public/private chan
       .all(agentId) as Array<{ payload_json: string }>;
     expect(JSON.parse(configurations.at(-1)!.payload_json).configuration).toMatchObject({
       modelId: "gpt-4.1-mini",
-      piAgentVersion: "0.86.0",
-      piAiVersion: "0.86.0",
+      piAgentVersion: "1.0.0",
+      piAiVersion: "1.0.0",
     });
   } finally {
     db?.close();
