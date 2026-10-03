@@ -60,8 +60,8 @@
 
 下面的功能目录都位于 `apps/web/src/features/`。
 
-- `conversations/`：聊天、频道弹窗、消息列表与消息关联任务。
-- `agents/`：Agent 页面、资料编辑、草稿与活动展示。
+- `conversations/`：聊天、频道弹窗、消息列表与消息关联任务。`chat-page.tsx` 保留频道选择、事件重连和页面组合；`use-conversation-thread.ts` 拥有讨论串根/回复和请求序号，使用页面同一 selectedId ref 检查迟到响应；`use-conversation-attachments.ts` 拥有附件轮询和上传；`use-owner-push.ts` 保留点击中的通知订阅。
+- `agents/`：Agent 页面、资料编辑、草稿与活动展示。`use-model-credentials.ts` 拥有模型凭据提交及表单反馈；统一目录刷新仍在页面，完成请求后再刷新。
 - `workspace/`：工作区浏览、下载操作及状态查询。
 - `nodes/`、`tasks/`、`reminders/`：相应管理页面。
 
