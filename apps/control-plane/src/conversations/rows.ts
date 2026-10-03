@@ -1,11 +1,11 @@
+import type { OwnerChannel, OwnerMessage, OwnerReminder, OwnerTask } from "@mate/protocol/owner";
 import {
   channelVisibilitySchema,
   ownerPrincipalKindSchema,
-  ownerTaskSchema,
   ownerReminderSchema,
+  ownerTaskSchema,
 } from "@mate/protocol/owner";
 import { z } from "zod";
-import type { OwnerChannel, OwnerMessage, OwnerTask, OwnerReminder } from "@mate/protocol/owner";
 export const channelRowSchema = z.looseObject({
   id: z.string(),
   name: z.string(),

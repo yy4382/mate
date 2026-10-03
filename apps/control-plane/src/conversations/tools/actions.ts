@@ -1,8 +1,8 @@
 import type Database from "better-sqlite3";
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { AgentToolRefusal } from "./errors.js";
-import { defineAgentTool, type CurrentAgentToolRun } from "../runtime/tools/entry.js";
+import { defineAgentTool, type CurrentAgentToolRun } from "../../runtime/tools/entry.js";
+import { AgentToolRefusal } from "../errors.js";
 
 /** Keep schema output inference while adapting the registry identity to conversation rules. */
 export function defineConversationTool<S extends z.ZodType>(

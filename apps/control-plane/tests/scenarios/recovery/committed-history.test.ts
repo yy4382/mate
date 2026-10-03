@@ -5,7 +5,7 @@ import { runScenario } from "../../support/scenario/scenario-evidence.js";
 import { createScriptedProvider } from "../../support/agent/scripted-provider.js";
 import { z } from "zod";
 import { ownerTaskSchema } from "@mate/protocol/owner";
-import { taskToolSchemas } from "../../../src/conversations/tool-contracts.js";
+import { taskToolSchemas } from "../../../src/conversations/tools/contracts.js";
 import { scriptedToolResultSchemas } from "../../support/agent/scripted-tool-results.js";
 
 import { readRecoveryFacts } from "../../support/facts/scenario-recovery-facts.js";

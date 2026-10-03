@@ -1,7 +1,7 @@
 import { conversationSchema } from "../conversations/schema.js";
 import { agentSessionSchema } from "../runtime/session/schema.js";
-import { conversationAttentionSchema } from "../conversations/attention-schema.js";
-import { taskReminderSchema } from "../conversations/task-schema.js";
+import { conversationAttentionSchema } from "../conversations/messages/schema.js";
+import { taskReminderSchema } from "../conversations/tasks/schema.js";
 import { nodeDirectorySchema } from "../nodes/schema.js";
 import { ownerAuthSchema } from "../auth/schema.js";
 import { agentDirectorySchema } from "../agents/schema.js";
