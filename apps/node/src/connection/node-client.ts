@@ -100,18 +100,20 @@ async function runLinuxNodeInternal(
     while (!signal.aborted) {
       try {
         const connected = await connectOnce(
-          socketUrl,
-          identity,
-          () => pairingToken,
-          () => {
-            pairingToken = undefined;
+          {
+            url: socketUrl,
+            identity,
+            getPairingToken: () => pairingToken,
+            clearPairingToken: () => {
+              pairingToken = undefined;
+            },
+            heartbeatIntervalMs,
+            heartbeatTimeoutMs,
+            agentWorkspaceRoot,
+            testDependencies: dependencies,
+            processOperations,
+            workspaceExecutor,
           },
-          heartbeatIntervalMs,
-          heartbeatTimeoutMs,
-          agentWorkspaceRoot,
-          dependencies,
-          processOperations,
-          workspaceExecutor,
           signal,
         );
         if (signal.aborted) break;
@@ -175,17 +177,32 @@ export function toWebSocketUrl(controlPlaneUrl: string): string {
   return url.toString();
 }
 
+interface NodeConnectionOptions {
+  url: string;
+  identity: NodeIdentity;
+  getPairingToken: () => string | undefined;
+  clearPairingToken: () => void;
+  heartbeatIntervalMs: number;
+  heartbeatTimeoutMs: number;
+  agentWorkspaceRoot: string;
+  testDependencies: NodeTestDependencies;
+  processOperations: AgentProcessOperations;
+  workspaceExecutor: NodeTestDependencies["workspaceExecutor"];
+}
+
 function connectOnce(
-  url: string,
-  identity: NodeIdentity,
-  getPairingToken: () => string | undefined,
-  clearPairingToken: () => void,
-  heartbeatIntervalMs: number,
-  heartbeatTimeoutMs: number,
-  agentWorkspaceRoot: string,
-  testDependencies: NodeTestDependencies,
-  processOperations: AgentProcessOperations,
-  workspaceExecutor: NodeTestDependencies["workspaceExecutor"],
+  {
+    url,
+    identity,
+    getPairingToken,
+    clearPairingToken,
+    heartbeatIntervalMs,
+    heartbeatTimeoutMs,
+    agentWorkspaceRoot,
+    testDependencies,
+    processOperations,
+    workspaceExecutor,
+  }: NodeConnectionOptions,
   signal: AbortSignal,
 ): Promise<boolean> {
   if (signal.aborted) return Promise.resolve(false);
