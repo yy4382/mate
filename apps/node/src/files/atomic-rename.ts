@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { constants, closeSync, openSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { FileOperationError } from "./file-failures.js";
+import { systemErrorCode } from "../system-error.js";
 
 const pinnedPathPattern = /^\/proc\/self\/fd\/(\d+)\/([^/]+)$/;
 
@@ -17,7 +18,11 @@ export function createAtomicNoReplaceRename(helperPath: string) {
           stdio: ["ignore", "pipe", "pipe", sourceEntry.directory, destinationEntry.directory],
           timeout: 5000,
         });
-        if (result.error) throw new Error(`atomic_move_unavailable: ${result.error.message}`);
+        if (result.error)
+          throw Object.assign(
+            new Error(`atomic_move_unavailable: ${result.error.message}`, { cause: result.error }),
+            { code: systemErrorCode(result.error) },
+          );
         if (result.status === 17)
           throw new Error("destination_exists: The move destination already exists");
         if (result.status !== 0)

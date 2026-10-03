@@ -67,7 +67,25 @@ it("fails a move explicitly when the atomic no-replace helper is unavailable", (
   writeFileSync(source, "source remains intact");
 
   expect(() => moveFileNoReplace(source, destination, unavailableRename)).toThrow(
-    /atomic_move_unavailable/,
+    expect.objectContaining({
+      message: expect.stringMatching(/atomic_move_unavailable/),
+      code: "ENOENT",
+    }),
+  );
+  expect(readFileSync(source, "utf8")).toBe("source remains intact");
+  expect(() => readFileSync(destination)).toThrow();
+});
+
+it("retains EACCES when the native rename helper cannot be executed", () => {
+  const root = temp(),
+    source = join(root, "source.txt"),
+    destination = join(root, "destination.txt"),
+    helper = join(root, "not-executable"),
+    unavailableRename = createAtomicNoReplaceRename(helper);
+  writeFileSync(source, "source remains intact");
+  writeFileSync(helper, "#!/bin/sh\nexit 0\n", { mode: 0o600 });
+  expect(() => moveFileNoReplace(source, destination, unavailableRename)).toThrow(
+    expect.objectContaining({ code: "EACCES" }),
   );
   expect(readFileSync(source, "utf8")).toBe("source remains intact");
   expect(() => readFileSync(destination)).toThrow();
