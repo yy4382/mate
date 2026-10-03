@@ -53,9 +53,9 @@ SQLite 的 session/run/交付/动作记录和 node 本地收据是持久事实�
 - `provisioning/`：准备同一运行账号下的 Agent 默认工作区。
 - `files/`：文件操作入口、辅助进程、路径检查与原子文件操作。`file-failures.ts` 归一具名文件错误和系统 errno；helper 非零退出在 stderr 写有界错误 JSON，backend 解析并保留诊断，新 code 随结果和收据传递，成功 stdout 保持原格式。
 - `processes/`：普通命令、进程状态、操作运行与持久收据。
-- `management/`：完整发布包契约与校验、现有账号目录规则、唯一 CLI 入口安装、私有节点配置和 systemd 用户服务管理；`service/commands.ts` 拥有服务启停/状态命令，`service/systemd.ts` 保留私有 D-Bus 调用，`service/systemd-property.ts` 是其相邻 subprocess helper；`acquire-bundle.ts` 只获取临时完整包，`update.ts` 在停止事实与管理锁内切换，`repair-bundle.ts` 处理可信原清单下的外部 CLI 同版修复；`deploy/node/` 是离线生产包构建、薄 bootstrap 和实际包外部验收入口。见 [完整 node 包说明](NODE_BUNDLE.md)、[用户服务说明](NODE_SERVICE.md) 与 [停机更新](NODE_UPDATE.md)。
+- `management/`：完整发布包契约与校验、现有账号目录规则、唯一 CLI 入口安装、私有节点配置和 systemd 用户服务管理；`service/commands.ts` 拥有服务启停/状态命令，`service/systemd.ts` 保留私有 D-Bus 调用，`service/systemd-property.ts` 是其相邻 subprocess helper；`acquire-bundle.ts` 只获取临时完整包，`update.ts` 在停止事实与管理锁内切换，`repair-bundle.ts` 处理可信原清单下的外部 CLI 同版修复；`deploy/node/` 是离线生产包构建、薄 bootstrap 和实际包外部验收入口。见 [完整 node 包说明](node/NODE_BUNDLE.md)、[用户服务说明](node/NODE_SERVICE.md) 与 [停机更新](node/NODE_UPDATE.md)。
 
-节点卸载由 `management/uninstall.ts` 根据实际单元、入口与包库存继续清理，使用同一管理锁并保留配置与数据；命令恢复和真实服务验收入口见 [卸载说明](NODE_UNINSTALL.md)。
+节点卸载由 `management/uninstall.ts` 根据实际单元、入口与包库存继续清理，使用同一管理锁并保留配置与数据；命令恢复和真实服务验收入口见 [卸载说明](node/NODE_UNINSTALL.md)。
 
 对应测试也按这些目录组织。外部使用节点时，依赖 package 的明确导出；内部移动文件不要求调用方知道新的磁盘路径。
 
@@ -132,3 +132,9 @@ Pi 会话保留供应商扩展字段。会话边界的窄适配不能改成会�
 | `tests/support/environment/scenario-environment.ts`（519 行） | 配置与重试清理已经移出。余下闭包拥有同一组服务实例、认证 cookie、启动取消与重启互斥；启动/重启必须更新同一实例供请求和清理读取。再拆需要暴露可变服务引用或第二套生命周期。 |
 | `tests/linux/single-account-node.integration.mjs`（517 行） | 一次普通账号下真实控制面/节点/普通命令的完整生命周期验收，最后的统一清理覆盖每个提前失败。只超出少量行，拆成阶段函数会增加远程进程和目录状态传递。 |
 | `deploy/tests/delivery.mjs`（628 行） | 一个完整离线包与 Compose 交付验收，镜像/服务/临时目录归属和统一 finally 在同一次运行中核验。每个阶段依赖实际前一阶段产生的包和持久身份；拆分为多条测试会改变同包接续证据，抽象资源袋收益不足。 |
+
+## 仓库根目录的必要尺寸例外
+
+排除两份锁文件后，仓库根目录有 11 个直接文件。`.dockerignore`、`.gitignore`、`.nvmrc`、`.prettierignore`、`.prettierrc.json`、`package.json`、`pnpm-workspace.yaml` 和 `tsconfig.json` 是现有工具从根目录使用的八个入口；`README.md`、`AGENTS.md` 和 `CONTEXT.md` 按项目约定也保留在根目录。只为少一个文件而新建配置目录，会增加工具路径配置与首次阅读成本，本轮保留这些实际入口。
+
+节点包、用户服务、更新与卸载四篇指南完整归在 `docs/node/`，运行步骤仍从 [OPERATIONS.md](OPERATIONS.md) 进入；不增加索引副本或转发页。目录和代码行数是设计默认值，没有新增尺寸 CI 门禁。
