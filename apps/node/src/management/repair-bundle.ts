@@ -10,7 +10,7 @@ import {
   type BundleMetadata,
 } from "./bundle.js";
 import { checkManagedDirectory, lstatIfPresent } from "./install-entry.js";
-import { createAtomicNoReplaceRename } from "../files/atomic-rename.js";
+import { createAtomicNoReplaceRename } from "../files/mutations/atomic-rename.js";
 
 /** A trusted unchanged inventory identifies damaged owned program files, never arbitrary extra files. */
 function assertRepairOwnership(directory: string, metadata: BundleMetadata) {

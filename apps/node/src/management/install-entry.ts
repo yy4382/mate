@@ -29,7 +29,7 @@ import {
   type BundleMetadata,
   verifyBundle,
 } from "./bundle.js";
-import { createAtomicNoReplaceRename } from "../files/atomic-rename.js";
+import { createAtomicNoReplaceRename } from "../files/mutations/atomic-rename.js";
 
 export function requireOrdinaryAccount() {
   if (process.getuid?.() === 0)

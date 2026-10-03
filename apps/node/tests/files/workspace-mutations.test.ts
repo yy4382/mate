@@ -12,8 +12,8 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
-import { createAtomicNoReplaceRename } from "../../src/files/atomic-rename.js";
-import { commitFileIfHashMatches, moveFileNoReplace } from "../../src/files/workspace-mutations.js";
+import { createAtomicNoReplaceRename } from "../../src/files/mutations/atomic-rename.js";
+import { commitFileIfHashMatches, moveFileNoReplace } from "../../src/files/mutations/workspace.js";
 
 const roots: string[] = [];
 const renameNoReplace = createAtomicNoReplaceRename(
