@@ -1,3 +1,4 @@
+import { NodeRequestError } from "../nodes/pending-requests.js";
 import { fileType, decodeText, textRange, unreadable } from "./file-content.js";
 import { WorkspaceImage } from "./image-result.js";
 import { workspaceVersionSchema } from "@mate/protocol/workspace";
@@ -889,10 +890,9 @@ export class WorkspaceService {
       };
     } catch (error) {
       if (error instanceof WorkspaceError) throw error;
-      const message = error instanceof Error ? error.message : "Node file request failed";
-      if (/timed out|timeout|outcome is unknown/i.test(message))
+      if (error instanceof NodeRequestError && error.code === "timeout")
         throw new WorkspaceError("operation_unknown", "文件操作结果尚未确认，不会自动重试。", 409);
-      if (/offline|disconnected/i.test(message)) {
+      if (error instanceof NodeRequestError && error.code === "offline") {
         const agentId = request.agentId,
           agent = z
             .looseObject({ node_id: z.string() })

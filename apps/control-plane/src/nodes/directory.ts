@@ -13,11 +13,12 @@ import {
   type AgentProvisionStage,
   type NodeRequest,
   type AgentProcessOperation,
-  type AgentProcessOperationState,
 } from "@mate/protocol";
 
 import type Database from "better-sqlite3";
 import { createHash, createPublicKey, randomBytes, randomUUID, verify } from "node:crypto";
+
+import { PendingNodeRequests, NodeRequestError } from "./pending-requests.js";
 
 import { recordAgentActivity } from "../runtime/activity.js";
 
@@ -95,49 +96,15 @@ export interface NodeDirectoryOptions {
   processOperationTimeoutMs?: number;
 }
 
-interface PendingAgentProvision {
-  nodeId: string;
-  agentId: string;
-  onProgress: (stage: AgentProvisionStage) => void;
-  promise: Promise<NodeAgentProvisionResult>;
-  resolve: (result: NodeAgentProvisionResult) => void;
-  reject: (error: Error) => void;
-  timeout: ReturnType<typeof setTimeout>;
-}
-
-interface PendingAgentProcessOperation {
-  nodeId: string;
-  agentId: string;
-  operationId: string;
-  promise: Promise<{
-    operationId: string;
-    agentId: string;
-    state: Exclude<AgentProcessOperationState, "started">;
-    receipt: unknown | null;
-    revision?: number;
-  }>;
-  resolve: (result: {
-    operationId: string;
-    agentId: string;
-    state: Exclude<AgentProcessOperationState, "started">;
-    receipt: unknown | null;
-    revision?: number;
-  }) => void;
-  reject: (error: Error) => void;
-  timeout: ReturnType<typeof setTimeout>;
-}
-
+type ProcessOperationResult = Pick<
+  Extract<NodeRequest, { type: "node.process.operation.result" }>,
+  "operationId" | "agentId" | "state" | "receipt"
+> & {
+  revision?: NonNullable<
+    Extract<NodeRequest, { type: "node.process.operation.result" }>["revision"]
+  >;
+};
 export type NodeWorkspaceOperationStart = ControlWorkspaceOperation;
-
-interface PendingWorkspaceOperation {
-  nodeId: string;
-  operationId: string;
-  agentId: string;
-  promise: Promise<NodeWorkspaceOperationResult>;
-  resolve: (result: NodeWorkspaceOperationResult) => void;
-  reject: (error: Error) => void;
-  timeout: ReturnType<typeof setTimeout>;
-}
 
 /** Pairing credentials and durable node identities for this control plane. */
 export class NodeDirectory {
@@ -154,9 +121,18 @@ export class NodeDirectory {
   private readonly connected = new Map<string, NodeSocket>();
   private readonly sockets = new Set<NodeSocket>();
   private readonly unauthenticated = new Set<NodeSocket>();
-  private readonly pendingAgentProvisions = new Map<string, PendingAgentProvision>();
-  private readonly pendingAgentProcessOperations = new Map<string, PendingAgentProcessOperation>();
-  private readonly pendingWorkspaceOperations = new Map<string, PendingWorkspaceOperation>();
+  private readonly pendingAgentProvisions = new PendingNodeRequests<
+    NodeAgentProvisionResult,
+    { nodeId: string; agentId: string; onProgress: (stage: AgentProvisionStage) => void }
+  >();
+  private readonly pendingAgentProcessOperations = new PendingNodeRequests<
+    ProcessOperationResult,
+    { nodeId: string; agentId: string; operationId: string }
+  >();
+  private readonly pendingWorkspaceOperations = new PendingNodeRequests<
+    NodeWorkspaceOperationResult,
+    { nodeId: string; agentId: string; operationId: string }
+  >();
   private workspaceOperationResultHandler?: (
     nodeId: string,
     result: NodeWorkspaceOperationResult,
@@ -368,12 +344,18 @@ export class NodeDirectory {
       });
       this.connected.delete(nodeId);
       this.onOffline?.(nodeId);
-      this.rejectAgentProvisions(nodeId, new Error("节点连接已断开，Agent 创建结果尚未确认。"));
-      this.rejectAgentProcessOperations(
+      this.pendingAgentProvisions.rejectForNode(
         nodeId,
-        new Error("节点连接已断开，普通操作结果尚未确认。"),
+        new NodeRequestError("disconnected", "节点连接已断开，Agent 创建结果尚未确认。"),
       );
-      this.rejectWorkspaceOperations(nodeId, new Error("节点连接已断开，文件操作结果尚未确认。"));
+      this.pendingAgentProcessOperations.rejectForNode(
+        nodeId,
+        new NodeRequestError("disconnected", "节点连接已断开，普通操作结果尚未确认。"),
+      );
+      this.pendingWorkspaceOperations.rejectForNode(
+        nodeId,
+        new NodeRequestError("disconnected", "节点连接已断开，文件操作结果尚未确认。"),
+      );
     }
     this.sessions.delete(socket);
   }
@@ -394,7 +376,9 @@ export class NodeDirectory {
     const existing = this.pendingAgentProvisions.get(requestId);
     if (existing) {
       if (existing.nodeId !== nodeId || existing.agentId !== agentId)
-        return Promise.reject(new Error("Agent 创建请求标识已被另一请求使用。"));
+        return Promise.reject(
+          new NodeRequestError("identity_conflict", "Agent 创建请求标识已被另一请求使用。"),
+        );
       return existing.promise;
     }
     const socket = this.connected.get(nodeId),
@@ -405,37 +389,26 @@ export class NodeDirectory {
       session.nodeId !== nodeId ||
       this.now() - session.lastHeartbeatAt >= this.heartbeatTimeoutMs
     )
-      return Promise.reject(new Error("所选节点当前离线，Agent 创建尚未开始。"));
-
-    let resolveResult!: (result: NodeAgentProvisionResult) => void,
-      rejectResult!: (error: Error) => void;
-    const promise = new Promise<NodeAgentProvisionResult>((resolve, reject) => {
-      resolveResult = resolve;
-      rejectResult = reject;
-    });
-    const timeout = setTimeout(() => {
-      this.finishAgentProvision(
-        requestId,
-        undefined,
-        new Error("节点执行 Agent 创建超时，结果尚未确认。"),
+      return Promise.reject(
+        new NodeRequestError("offline", "所选节点当前离线，Agent 创建尚未开始。"),
       );
-    }, this.operationTimeoutMs);
-    this.pendingAgentProvisions.set(requestId, {
-      nodeId,
-      agentId,
-      onProgress,
-      promise,
-      resolve: resolveResult,
-      reject: rejectResult,
-      timeout,
-    });
+
+    const promise = this.pendingAgentProvisions.start(
+      requestId,
+      { nodeId, agentId, onProgress },
+      this.operationTimeoutMs,
+      new NodeRequestError("timeout", "节点执行 Agent 创建超时，结果尚未确认。"),
+    );
     try {
       this.send(socket, controlMessage);
     } catch (error) {
-      this.finishAgentProvision(
+      this.pendingAgentProvisions.reject(
         requestId,
-        undefined,
-        error instanceof Error ? error : new Error("无法向节点发送 Agent 创建请求。"),
+        new NodeRequestError(
+          "send_failed",
+          error instanceof Error ? error.message : "无法向节点发送 Agent 创建请求。",
+          { cause: error },
+        ),
       );
     }
     return promise;
@@ -466,7 +439,12 @@ export class NodeDirectory {
         existing.operationId !== request.operationId ||
         existing.agentId !== request.agentId
       )
-        return Promise.reject(new Error("Workspace operation request identity conflict"));
+        return Promise.reject(
+          new NodeRequestError(
+            "identity_conflict",
+            "Workspace operation request identity conflict",
+          ),
+        );
       return existing.promise;
     }
     const socket = this.connected.get(nodeId),
@@ -477,37 +455,22 @@ export class NodeDirectory {
       session.nodeId !== nodeId ||
       this.now() - session.lastHeartbeatAt >= this.heartbeatTimeoutMs
     )
-      return Promise.reject(new Error("Selected node is offline"));
+      return Promise.reject(new NodeRequestError("offline", "Selected node is offline"));
 
-    let resolveResult!: (result: NodeWorkspaceOperationResult) => void,
-      rejectResult!: (error: Error) => void;
-    const promise = new Promise<NodeWorkspaceOperationResult>((resolve, reject) => {
-      resolveResult = resolve;
-      rejectResult = reject;
-    });
-    const timeout = setTimeout(() => {
-      this.finishWorkspaceOperation(
-        request.requestId,
-        undefined,
-        new Error("Node file operation timed out; result is unknown"),
-      );
-    }, this.operationTimeoutMs);
-    this.pendingWorkspaceOperations.set(request.requestId, {
-      nodeId,
-      operationId: request.operationId,
-      agentId: request.agentId,
-      promise,
-      resolve: resolveResult,
-      reject: rejectResult,
-      timeout,
-    });
+    const promise = this.pendingWorkspaceOperations.start(
+      request.requestId,
+      { nodeId, operationId: request.operationId, agentId: request.agentId },
+      this.operationTimeoutMs,
+      new NodeRequestError("timeout", "Node file operation timed out; result is unknown"),
+    );
     try {
       this.send(socket, controlMessage);
-    } catch {
-      this.finishWorkspaceOperation(
+    } catch (error) {
+      this.pendingWorkspaceOperations.reject(
         request.requestId,
-        undefined,
-        new Error("Could not send workspace operation to node"),
+        new NodeRequestError("send_failed", "Could not send workspace operation to node", {
+          cause: error,
+        }),
       );
     }
     return promise;
@@ -524,13 +487,7 @@ export class NodeDirectory {
   executeAgentProcessOperation(
     nodeId: string,
     request: { operationId: string; agentId: string; operation: AgentProcessOperation },
-  ): Promise<{
-    operationId: string;
-    agentId: string;
-    state: Exclude<AgentProcessOperationState, "started">;
-    receipt: unknown | null;
-    revision?: number;
-  }> {
+  ): Promise<ProcessOperationResult> {
     const operationId = NodeRequestIdSchema.parse(request.operationId),
       agentId = NodeRequestIdSchema.parse(request.agentId),
       requestId = randomUUID(),
@@ -548,7 +505,12 @@ export class NodeDirectory {
         existing.agentId !== agentId ||
         existing.operationId !== operationId
       )
-        return Promise.reject(new Error("Agent process operation request identity conflict"));
+        return Promise.reject(
+          new NodeRequestError(
+            "identity_conflict",
+            "Agent process operation request identity conflict",
+          ),
+        );
       return existing.promise;
     }
     const socket = this.connected.get(nodeId),
@@ -560,39 +522,22 @@ export class NodeDirectory {
       !session.ready ||
       this.now() - session.lastHeartbeatAt >= this.heartbeatTimeoutMs
     )
-      return Promise.reject(new Error("Selected node is offline"));
+      return Promise.reject(new NodeRequestError("offline", "Selected node is offline"));
 
-    let resolveResult!: PendingAgentProcessOperation["resolve"],
-      rejectResult!: PendingAgentProcessOperation["reject"];
-    const promise = new Promise<Awaited<PendingAgentProcessOperation["promise"]>>(
-      (resolve, reject) => {
-        resolveResult = resolve;
-        rejectResult = reject;
-      },
+    const promise = this.pendingAgentProcessOperations.start(
+      requestId,
+      { nodeId, agentId, operationId },
+      this.processOperationTimeoutMs,
+      new NodeRequestError("timeout", "Node operation timed out; its result is not confirmed"),
     );
-    const timeout = setTimeout(() => {
-      this.finishAgentProcessOperation(
-        requestId,
-        undefined,
-        new Error("Node operation timed out; its result is not confirmed"),
-      );
-    }, this.processOperationTimeoutMs);
-    this.pendingAgentProcessOperations.set(requestId, {
-      nodeId,
-      agentId,
-      operationId,
-      promise,
-      resolve: resolveResult,
-      reject: rejectResult,
-      timeout,
-    });
     try {
       this.send(socket, controlMessage);
-    } catch {
-      this.finishAgentProcessOperation(
+    } catch (error) {
+      this.pendingAgentProcessOperations.reject(
         requestId,
-        undefined,
-        new Error("Could not send Agent process operation"),
+        new NodeRequestError("send_failed", "Could not send Agent process operation", {
+          cause: error,
+        }),
       );
     }
     return promise;
@@ -991,7 +936,7 @@ export class NodeDirectory {
       pending.onProgress(request.stage);
       return;
     }
-    this.finishAgentProvision(request.requestId, request);
+    this.pendingAgentProvisions.resolve(request.requestId, request);
   }
 
   private receiveAgentProcessOperationResult(
@@ -1025,7 +970,13 @@ export class NodeDirectory {
         "invalid_identity",
         "普通操作收据与节点请求不匹配。",
       );
-    this.finishAgentProcessOperation(request.requestId, request);
+    this.pendingAgentProcessOperations.resolve(request.requestId, {
+      operationId: request.operationId,
+      agentId: request.agentId,
+      state: request.state,
+      receipt: request.receipt,
+      ...(request.revision !== undefined ? { revision: request.revision } : {}),
+    });
   }
 
   private receiveWorkspaceOperationResult(
@@ -1053,7 +1004,7 @@ export class NodeDirectory {
         "文件操作结果与控制面请求不匹配。",
       );
     this.deliverWorkspaceOperationResult(nodeId, request);
-    this.finishWorkspaceOperation(request.requestId, request);
+    this.pendingWorkspaceOperations.resolve(request.requestId, request);
   }
 
   private deliverWorkspaceOperationResult(
@@ -1065,70 +1016,6 @@ export class NodeDirectory {
     } catch {
       // A receipt write failure does not make the node protocol unauthenticated; a replay can recover it.
     }
-  }
-
-  private finishAgentProvision(
-    requestId: string,
-    result?: NodeAgentProvisionResult,
-    error?: Error,
-  ): void {
-    const pending = this.pendingAgentProvisions.get(requestId);
-    if (!pending) return;
-    this.pendingAgentProvisions.delete(requestId);
-    clearTimeout(pending.timeout);
-    if (error) pending.reject(error);
-    else if (result) pending.resolve(result);
-  }
-
-  private rejectAgentProvisions(nodeId: string, error: Error): void {
-    for (const [requestId, pending] of this.pendingAgentProvisions) {
-      if (pending.nodeId === nodeId) this.finishAgentProvision(requestId, undefined, error);
-    }
-  }
-
-  private rejectAgentProcessOperations(nodeId: string, error: Error): void {
-    for (const [requestId, pending] of this.pendingAgentProcessOperations) {
-      if (pending.nodeId === nodeId) this.finishAgentProcessOperation(requestId, undefined, error);
-    }
-  }
-
-  private finishAgentProcessOperation(
-    requestId: string,
-    result?: Extract<NodeRequest, { type: "node.process.operation.result" }>,
-    error?: Error,
-  ): void {
-    const pending = this.pendingAgentProcessOperations.get(requestId);
-    if (!pending) return;
-    this.pendingAgentProcessOperations.delete(requestId);
-    clearTimeout(pending.timeout);
-    if (error) pending.reject(error);
-    else if (result)
-      pending.resolve({
-        operationId: result.operationId,
-        agentId: result.agentId,
-        state: result.state,
-        receipt: result.receipt,
-        ...(result.revision !== undefined ? { revision: result.revision } : {}),
-      });
-  }
-
-  private rejectWorkspaceOperations(nodeId: string, error: Error): void {
-    for (const [requestId, pending] of this.pendingWorkspaceOperations) {
-      if (pending.nodeId === nodeId) this.finishWorkspaceOperation(requestId, undefined, error);
-    }
-  }
-
-  private finishWorkspaceOperation(
-    requestId: string,
-    result?: NodeWorkspaceOperationResult,
-    error?: Error,
-  ): void {
-    const pending = this.pendingWorkspaceOperations.get(requestId);
-    if (!pending) return;
-    this.pendingWorkspaceOperations.delete(requestId);
-    clearTimeout(pending.timeout);
-    if (error) pending.reject(error);
-    else if (result) pending.resolve(result);
   }
 
   private markConnected(socket: NodeSocket, session: SocketSession, nodeId: string): void {

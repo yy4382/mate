@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { expect, it } from "vitest";
+import { NodeRequestError } from "../../src/nodes/pending-requests.js";
 import { NodeDirectory, type NodeSocket } from "../../src/nodes/directory.js";
 
 class TestNodeSocket implements NodeSocket {
@@ -91,7 +92,7 @@ it("does not claim an operation completed when its node disconnects", async () =
       operation: { kind: "process.list" },
     });
     context.directory.close(context.socket);
-    await expect(pending).rejects.toThrow("普通操作结果尚未确认");
+    await expect(pending).rejects.toMatchObject({ name: "NodeRequestError", code: "disconnected" });
   } finally {
     context.directory.closeAll();
     context.database.close();
@@ -156,7 +157,8 @@ it("periodic receipt recovery skips a current command wait and still queries oth
         receipt: { reason: "no_durable_node_receipt" },
       },
     ]);
-    await expect(pending).rejects.toThrow("Node operation timed out");
+    await expect(pending).rejects.toBeInstanceOf(NodeRequestError);
+    await expect(pending).rejects.toMatchObject({ code: "timeout" });
     context.socket.messages.length = 0;
     await context.directory.receive(
       context.socket,

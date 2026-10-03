@@ -20,7 +20,7 @@
 - `runtime/`：run 调度、模型循环、操作收据与恢复、活动和用量。`session/` 管完整历史和压缩，`tools/` 管工具入口和当前 run 检查；`provider-response.ts` 只解释供应商响应中的结束和用量证据。
 - `workspaces/`：文件浏览、下载和 Agent 文件操作的控制面逻辑。`file-content.ts` 负责有界字节分类与 UTF-8 范围，`image-result.ts` 是文件工具专用的图片返回路径；`runtime/session/image-context.ts` 只在请求时投影历史图片。`contracts.ts` 和 `results.ts` 分别放请求契约与结果解释；副作用提交顺序留在服务中。
 - `attachments/`：附件操作及相应工具描述。
-- `nodes/`：控制面的节点目录和连接路由；与 `apps/node` 的机器端代码不同。
+- `nodes/`：`directory.ts` 拥有配对、连接身份、在线状态、请求身份核验和分领域收据对账；`pending-requests.ts` 仅拥有请求 Promise 与计时器，成功、超时、发送失败、断连都先移除请求和清理计时器。迟到的 process/workspace 收据仍进入各自的持久更正入口，不能自动重放。与 `apps/node` 的机器端代码不同。
 - `auth/`、`providers/`、`notifications/`：所有者登录、模型凭据和供应商目录、网页推送。
 - `storage/`：数据库初始化与各领域表的装配。领域里的 `schema.ts`、`*-schema.ts` 是 SQL 表定义，与 Zod 的 `contracts.ts` 分工不同。
 
