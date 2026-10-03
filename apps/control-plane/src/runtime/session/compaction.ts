@@ -16,7 +16,15 @@ import { randomUUID } from "node:crypto";
 import type { AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
 import { contentText, type AssistantMessage, type Model, type Api } from "@earendil-works/pi-ai";
 
-// Pi coding-agent v0.86.0 defaults, scaled down for models with smaller windows.
+// Capacity headroom and recent context are capped in tokens, then scaled for smaller windows.
+// Fallback estimates are deliberately approximate; reported provider usage is preferred.
+const estimatedCharsPerToken = 4;
+const estimatedTokensPerImage = 1_200;
+const estimatedMessageOverheadTokens = 4;
+const reserveWindowRatio = 0.2;
+const recentAvailableWindowRatio = 0.5;
+const splitTurnSummaryOutputRatio = 0.5;
+const historySummaryOutputRatio = 0.8;
 const RESERVE_TOKENS = 16_384;
 const KEEP_RECENT_TOKENS = 20_000;
 export class SummaryResponseError extends Error {
@@ -26,7 +34,7 @@ export class SummaryResponseError extends Error {
 }
 
 function textTokens(text: string): number {
-  return Math.ceil(text.length / 4);
+  return Math.ceil(text.length / estimatedCharsPerToken);
 }
 
 function estimate(message: AgentMessage): number {
@@ -35,7 +43,11 @@ function estimate(message: AgentMessage): number {
       typeof message.content === "string"
         ? 0
         : message.content.filter((block) => block.type === "image").length;
-    return textTokens(contentText(message.content)) + images * 1_200 + 4;
+    return (
+      textTokens(contentText(message.content)) +
+      images * estimatedTokensPerImage +
+      estimatedMessageOverheadTokens
+    );
   }
   if (message.role !== "assistant") return 0;
   return (
@@ -48,7 +60,7 @@ function estimate(message: AgentMessage): number {
           return "";
         })
         .join(""),
-    ) + 4
+    ) + estimatedMessageOverheadTokens
   );
 }
 
@@ -107,10 +119,13 @@ export class SessionCompaction {
     const active = this.entries.slice(activeStart);
     const summary = this.checkpoint ? [summaryMessage(this.checkpoint.summary)] : [];
     const current = [...system, ...summary, ...active.map((entry) => entry.message)];
-    const reserve = Math.min(RESERVE_TOKENS, Math.floor(this.model.contextWindow * 0.2));
+    const reserve = Math.min(
+      RESERVE_TOKENS,
+      Math.floor(this.model.contextWindow * reserveWindowRatio),
+    );
     const keep = Math.min(
       KEEP_RECENT_TOKENS,
-      Math.floor((this.model.contextWindow - reserve) * 0.5),
+      Math.floor((this.model.contextWindow - reserve) * recentAvailableWindowRatio),
     );
     const estimateBefore =
       contextTokens(active, this.checkpoint?.throughEntryId) +
@@ -212,7 +227,10 @@ export class SessionCompaction {
       previous,
       prefix,
     );
-    const maxTokens = Math.min(Math.floor((prefix ? 0.5 : 0.8) * reserve), this.model.maxTokens);
+    const maxTokens = Math.min(
+      Math.floor((prefix ? splitTurnSummaryOutputRatio : historySummaryOutputRatio) * reserve),
+      this.model.maxTokens,
+    );
     if (maxTokens < 1 || textTokens(systemPrompt + prompt) + maxTokens > this.model.contextWindow)
       throw new Error("Summary request has no legal input and output capacity");
     const requestId = randomUUID();

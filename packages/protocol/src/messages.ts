@@ -3,6 +3,8 @@ import { agentProcessOperationSchema } from "./process-operations.js";
 import { operationSchema } from "./workspace-operations.js";
 
 export const MAX_NODE_MESSAGE_BYTES = 1024 * 1024;
+/** Process and workspace reconciliation share a wire capacity of records per page. */
+export const MAX_NODE_RECEIPTS_PER_PAGE = 100;
 
 export const NodeRequestIdSchema = z.string().uuid();
 const requestIdSchema = NodeRequestIdSchema;
@@ -147,7 +149,7 @@ const NodeRequestShapeSchema = z.discriminatedUnion("type", [
             })
             .strict(),
         )
-        .max(100),
+        .max(MAX_NODE_RECEIPTS_PER_PAGE),
     })
     .strict(),
   z
@@ -164,7 +166,7 @@ const NodeRequestShapeSchema = z.discriminatedUnion("type", [
             })
             .strict(),
         )
-        .max(100),
+        .max(MAX_NODE_RECEIPTS_PER_PAGE),
     })
     .strict(),
 ]);
@@ -273,7 +275,7 @@ const NodeControlMessageShapeSchema = z.discriminatedUnion("type", [
             })
             .strict(),
         )
-        .max(100),
+        .max(MAX_NODE_RECEIPTS_PER_PAGE),
     })
     .strict(),
   z
@@ -290,7 +292,7 @@ const NodeControlMessageShapeSchema = z.discriminatedUnion("type", [
             })
             .strict(),
         )
-        .max(100),
+        .max(MAX_NODE_RECEIPTS_PER_PAGE),
     })
     .strict(),
   z.object({

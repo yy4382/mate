@@ -26,6 +26,27 @@
 
 没有为了缩短文件而引入通用仓储层，也没有把事务拆成通过庞大上下文对象相互调用的小函数。跨领域操作仍应能看清在哪个事务里提交。
 
+## 从一次操作追到证据
+
+- Owner 发消息：`conversations/http.ts` → `OwnerChat.createMessage`（原子保存消息/投递）→ `runs.wake/drain`（准入同一 Agent 的唯一 current run）→ `AgentLoop.run` → `AgentSession` 的原 session 历史与 Pi 请求。
+- 模型用工具：`runtime/tools/registry.ts` 在工具入口事务内复验 current run；任务/提醒等同步效果在这个事务里完成。文件变更/命令工具先保存 node 意图；文件读取无需变更意图。两者都等待入口事务提交，再复验 current run 并调用 node。文件结果进 `WorkspaceActionLedger`，命令结果进 `AgentProcessOperationBroker`；`recovery-context.ts` 把后来的证据送回原 session。
+- 文件读取：`WorkspaceService` 验证身份和范围 → node `LinuxWorkspaceExecutor` → 同账号 helper → `file-content.ts`/`image-result.ts` 解释有限字节；变更先写 node 收据意图，再执行并写终态。
+- node 恢复：`connection/node-client.ts` 重连 → `NodeDirectory` 验证连接身份 → 先 process、再 workspace 分页核对 → 标为 ready → 原 Agent 队列继续。未确认的副作用保持 unknown，不因重连重放。
+
+| 身份或状态 | 生命周期与作用 |
+| --- | --- |
+| sessionId | Agent 的持久逻辑上下文，跨 run/频道/线程继续 |
+| runId | 一次工作轮次；current run 资格决定工具请求能否生效 |
+| deliveryId | 某消息给某 Agent 的持久注意力投递；handled 不等于任务完成 |
+| actionId | 原 session 中的模型工具调用身份，复用已保存的工具结果 |
+| operationId | node 副作用的稳定身份，跨临时请求和重启查证据；文件由 actionId 确定性生成 |
+| requestId | node 请求/回复关联；一般 RPC 等待是内存状态，Agent 创建的 provision_request_id 则持久保存并在失败重试时复用；与副作用 operationId 分工不同 |
+| requestHash / nodeRequestHash | 分别校验工具输入、node 操作参数是否与原意图一致；不能当作 operationId |
+| receipt revision / file version | 前者是同一收据的新旧证据；后者是具体文件版本，控制读写一致性 |
+| online / ready / unknown | ready 是连接完成启动对账的内部状态；对外 online 同时要求连接身份匹配、ready 和心跳未过期；unknown 表示执行效果尚无确定证据 |
+
+SQLite 的 session/run/交付/动作记录和 node 本地收据是持久事实；pending 请求与短期身份 map 只加速关联，丢失后回查持久记录。固定测试启动器的暂停和合成 provider 只用于验证这些边界，不是生产调度依赖。
+
 ## 节点按执行职责找代码
 
 - `connection/`：节点身份、配对、WebSocket 连接及重连。

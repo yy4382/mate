@@ -36,6 +36,9 @@ export interface TaskConversationAccess {
   recordTaskEvent(kind: string, channelId: string, task: OwnerTask): void;
 }
 
+/** Due reminders are processed in bounded batches; later sweeps continue remaining work. */
+const dueReminderBatchSize = 100;
+
 /** Every task projection derives its channel from its anchor message. */
 const taskSelection = `SELECT t.*,a.name AS owner_agent_name,m.channel_id
          FROM owner_tasks t
@@ -297,9 +300,9 @@ export class TaskService {
           .parse(
             this.db
               .prepare(
-                "SELECT id,agent_id FROM owner_reminders WHERE state='active' AND due_at<=? ORDER BY due_at,id LIMIT 100",
+                "SELECT id,agent_id FROM owner_reminders WHERE state='active' AND due_at<=? ORDER BY due_at,id LIMIT ?",
               )
-              .all(this.now()),
+              .all(this.now(), dueReminderBatchSize),
           );
         for (const candidate of due) {
           const reminder = this.readReminder(candidate.id)!;

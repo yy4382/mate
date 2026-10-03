@@ -145,8 +145,14 @@ export function parseEnvelope(value: string) {
   }
 }
 
+/** Keep owner-visible operation diagnostics short; this is a character bound, not bytes. */
+const operationErrorPreviewChars = 240;
+
 export function safeError(error: unknown): string {
-  return (error instanceof WorkspaceError ? error.message : "文件操作结果尚未确认。").slice(0, 240);
+  return (error instanceof WorkspaceError ? error.message : "文件操作结果尚未确认。").slice(
+    0,
+    operationErrorPreviewChars,
+  );
 }
 
 export function operationPaths(operation: Operation): string[] {
