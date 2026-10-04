@@ -12,8 +12,8 @@ import { tmpdir } from "node:os";
 import { afterEach, expect, test } from "vitest";
 import { updateNode } from "../../src/management/update.js";
 import { nodePaths } from "../../src/management/paths.js";
-import { renderNodeUnit } from "../../src/management/service.js";
-import { type UserServiceManager } from "../../src/management/systemd.js";
+import { renderNodeUnit } from "../../src/management/service/commands.js";
+import { type UserServiceManager } from "../../src/management/service/systemd.js";
 import { withManagementLock } from "../../src/management/install-entry.js";
 
 const homes: string[] = [];

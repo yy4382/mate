@@ -18,8 +18,8 @@ import {
   serviceReferencesBundle,
   interruptedUnitFiles,
   recoverUnitStaging,
-} from "./service.js";
-import { systemdUserManager } from "./systemd.js";
+} from "./service/commands.js";
+import { systemdUserManager } from "./service/systemd.js";
 import { finishSameVersionRepair } from "./repair-bundle.js";
 import { createAtomicNoReplaceRename } from "../files/mutations/atomic-rename.js";
 

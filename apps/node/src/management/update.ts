@@ -15,8 +15,8 @@ import {
   interruptedUnitFiles,
   publishNodeUnit,
   serviceReferencesBundle,
-} from "./service.js";
-import { systemdUserManager, type ServiceFacts } from "./systemd.js";
+} from "./service/commands.js";
+import { systemdUserManager, type ServiceFacts } from "./service/systemd.js";
 import { bundleRequest, withReleaseBundle } from "./acquire-bundle.js";
 import { z } from "zod";
 import { probeBundle, verifyBundle } from "./bundle.js";

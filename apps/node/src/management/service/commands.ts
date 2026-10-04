@@ -9,8 +9,8 @@ import {
 } from "node:fs";
 import { basename, dirname, join, resolve, relative, isAbsolute, sep } from "node:path";
 import { randomUUID } from "node:crypto";
-import { bundleEntrypoints, releaseVersion } from "./bundle.js";
-import { readNodeConfiguration } from "./configuration.js";
+import { bundleEntrypoints, releaseVersion } from "../bundle.js";
+import { readNodeConfiguration } from "../configuration.js";
 import {
   checkManagedDirectory,
   installedEntryVersion,
@@ -18,15 +18,15 @@ import {
   prepareManagedDirectory,
   requireOrdinaryAccount,
   withManagementLock,
-} from "./install-entry.js";
-import { nodePaths } from "./paths.js";
+} from "../install-entry.js";
+import { nodePaths } from "../paths.js";
 import {
   nodeUnitName,
   systemdUserManager,
   type UserServiceManager,
   type InspectionOptions,
 } from "./systemd.js";
-import { createAtomicNoReplaceRename } from "../files/mutations/atomic-rename.js";
+import { createAtomicNoReplaceRename } from "../../files/mutations/atomic-rename.js";
 
 export const nodeServiceCommands = ["install", "start", "stop", "restart", "status", "logs"];
 const quote = (value: string) => {
