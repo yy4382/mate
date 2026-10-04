@@ -37,7 +37,7 @@ sh deploy/node/tests/update-smoke.sh ARCHIVE BOOTSTRAP SHA256 VERSION UPDATE_CUT
 sh deploy/node/tests/uninstall-smoke.sh ARCHIVE BOOTSTRAP SHA256 VERSION PEER_MJS UPDATE_CUT_MJS
 ```
 
-`PEER_MJS` 是交付测试目录中的 `user-service-peer.mjs`；`UPDATE_CUT_MJS` 是 `update-cut.mjs`。包验证覆盖获取/校验/平台/原生依赖、目录权限与冲突；用户服务覆盖真实安装、拒绝令牌后原身份重试、日志、重复安装、停止/禁用、异常重启和缺 manager。更新与卸载通过外部文件/进程观察器对真实 CLI 发信号，在入口、安装、单元、reload、修复清理或卸载之间中断；观察不到实际中断就失败。预检错误保留旧安装，并发 Mate 管理拒绝，混合版本不能假报正常，保留配置/身份/数据，重装沿用原身份。具体边界见 [完整包](NODE_BUNDLE.md)、[用户服务](NODE_SERVICE.md)、[更新](NODE_UPDATE.md)及[卸载](NODE_UNINSTALL.md)。慢速架构模拟更新观察可设置 `MATE_TEST_CUT_TIMEOUT_SECONDS=600`，不改变通过条件。
+`PEER_MJS` 是交付测试目录中的 `user-service-peer.mjs`；`UPDATE_CUT_MJS` 是 `update-cut.mjs`。包验证覆盖获取/校验/平台/原生依赖、目录权限与冲突；用户服务覆盖真实安装、拒绝令牌后原身份重试、日志、重复安装、停止/禁用、异常重启和缺 manager。更新与卸载通过外部文件/进程观察器对真实 CLI 发信号，在入口、安装、单元、reload、修复清理或卸载之间中断；观察不到实际中断就失败。预检错误保留旧安装，并发 Mate 管理拒绝，混合版本不能假报正常，保留配置/身份/数据，重装沿用原身份。具体边界见 [完整包](node/NODE_BUNDLE.md)、[用户服务](node/NODE_SERVICE.md)、[更新](node/NODE_UPDATE.md)及[卸载](node/NODE_UNINSTALL.md)。慢速架构模拟更新观察可设置 `MATE_TEST_CUT_TIMEOUT_SECONDS=600`，不改变通过条件。
 
 联通脚本另用镜像内 SQLite 创建 schema revision 999 的合成外部控制面数据库，实际生产入口拒绝后核对数据库 SHA-256 未改变；现有 `pnpm check` 还覆盖格式/结构错误持久化边界。包装工具不迁移数据库、重建身份或重放未知副作用。包装矩阵不是 A 的深层 runtime 故障矩阵替代品。
 
@@ -87,6 +87,6 @@ Debian x86_64 更新首次在同版本损坏程序恢复阶段，因读取有效
 
 #133 历史 arm64 镜像为 `mate-control-plane:ticket133`，发布版本 `0.1.0-ticket133`，revision `0bf1179e73155410b0309b8d85f6b5e756f2d255`，image ID `sha256:c3d59820a5f33b15f7ca6500f8b69ad3a29ad80e76b35f43abf6e6d4a83586d6`，镜像体积 372867138 字节；[票据证据](https://github.com/yy4382/mate/issues/133#issuecomment-5946788178) 明确使用的是开发 node 接口，而非同版完整包联通。因此它只证明该历史来源和范围，不替代上述原生同版完整交付验收。
 
-本轮上述 source 的四个真实 user-manager VM 均为 Linger=no；未执行 Linger=yes 注销及开机测试。用户已取消这两项强制验收，相关观察入口已移除；取消不表示测试通过。用户服务 enable 与用户自行配置 linger 的运行边界仍见[用户服务说明](NODE_SERVICE.md)。
+本轮上述 source 的四个真实 user-manager VM 均为 Linger=no；未执行 Linger=yes 注销及开机测试。用户已取消这两项强制验收，相关观察入口已移除；取消不表示测试通过。用户服务 enable 与用户自行配置 linger 的运行边界仍见[用户服务说明](node/NODE_SERVICE.md)。
 
 本轮未验证真实模型 provider 的传输兼容、公开 HTTPS/WSS/Web Push、实际私有 Release 下载、GHCR 获取或 VPS 部署。脚本化 provider、获取替身和本地构建证据均保留各自名称，不能据此推导这些集成已经验收或收缩原矩阵。

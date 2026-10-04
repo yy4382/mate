@@ -6,10 +6,10 @@
 
 ## 安装与配对顺序
 
-1. 准备 Ubuntu 24.04 或 Debian 13 的 x86_64/arm64 普通账号，现有 Docker Engine/Compose 和可用的 systemd user manager。完整包包含专用 Node 和原生依赖，运行宿主不需要 Node、pnpm 或编译器。完整包扫描得到的系统库底线与平台证据见[完整包说明](NODE_BUNDLE.md)和[验收说明](DEPLOYMENT_ACCEPTANCE.md)。
+1. 准备 Ubuntu 24.04 或 Debian 13 的 x86_64/arm64 普通账号，现有 Docker Engine/Compose 和可用的 systemd user manager。完整包包含专用 Node 和原生依赖，运行宿主不需要 Node、pnpm 或编译器。完整包扫描得到的系统库底线与平台证据见[完整包说明](node/NODE_BUNDLE.md)和[验收说明](DEPLOYMENT_ACCEPTANCE.md)。
 2. 按[控制面部署](CONTROL_PLANE_DEPLOYMENT.md)取得明确版本镜像，准备当前账号持有的私有 bind 目录和首次密码文件，用初始化 Compose 启动并成功登录。成功登录后去掉初始化 override、密码挂载和环境配置；后续重建读取已有密码哈希。
-3. 按[完整包说明](NODE_BUNDLE.md)用本地包与可信 SHA-256，或现有 `gh` 的临时私有 Release 鉴权，运行薄 bootstrap。下载凭据只用于本次获取，不进入 node 配置、用户服务或 Agent 环境。私有镜像登录由用户预先完成。
-4. 网页“节点管理”生成一次性配对令牌，按[用户服务说明](NODE_SERVICE.md)写入 `~/.config/mate/node.json`，再执行 `~/.local/bin/mate node install`。同机 URL 是 `http://127.0.0.1:8787`，不能使用容器服务名。网页确认原节点在线后移除配置中的令牌。
+3. 按[完整包说明](node/NODE_BUNDLE.md)用本地包与可信 SHA-256，或现有 `gh` 的临时私有 Release 鉴权，运行薄 bootstrap。下载凭据只用于本次获取，不进入 node 配置、用户服务或 Agent 环境。私有镜像登录由用户预先完成。
+4. 网页“节点管理”生成一次性配对令牌，按[用户服务说明](node/NODE_SERVICE.md)写入 `~/.config/mate/node.json`，再执行 `~/.local/bin/mate node install`。同机 URL 是 `http://127.0.0.1:8787`，不能使用容器服务名。网页确认原节点在线后移除配置中的令牌。
 5. 通过中文网页创建 Agent、配置控制面模型凭据并发送消息。Agent 的工作区属于原宿主账号，不挂载到控制面。浏览器通过宿主已有 HTTPS 代理访问公开原点；域名、证书、WSS 与 Web Push 沿用[配置说明](CONFIGURATION.md)，Mate 不另装代理或证书服务。
 
 安装程序成功、用户服务启动与网页节点在线是三个可分别观察的事实。CLI 报告真实服务状态，网页和 journal 确认配对/在线。配对失败保留原身份，在同一配置换新令牌后 restart；控制面暂时不可达时排查 URL、端口、HTTPS 和容器日志，不删除身份建立替代节点。
@@ -48,11 +48,11 @@ node 异常退出由用户服务重启；显式 stop 保持停止。重复 insta
 
 ## 手动更新、恢复与卸载
 
-按[node 停机更新](NODE_UPDATE.md)先停止 node，再停止控制面，取得并校验两侧同版产物，CLI 同步更换管理程序、专用 Node 和 node，Compose 更换镜像；先显式启动控制面，确认可登录后再显式启动 node。更新保持停止，保留 enabled/disabled 选择、配置、身份、收据和工作区，不迁移数据或自动回滚。管理命令持有短暂本机锁，并发 Mate 管理明确拒绝；它不禁止同账号其它程序修改文件，维护时不要同时用原始 systemctl 改服务。
+按[node 停机更新](node/NODE_UPDATE.md)先停止 node，再停止控制面，取得并校验两侧同版产物，CLI 同步更换管理程序、专用 Node 和 node，Compose 更换镜像；先显式启动控制面，确认可登录后再显式启动 node。更新保持停止，保留 enabled/disabled 选择、配置、身份、收据和工作区，不迁移数据或自动回滚。管理命令持有短暂本机锁，并发 Mate 管理明确拒绝；它不禁止同账号其它程序修改文件，维护时不要同时用原始 systemctl 改服务。
 
 切换、单元发布或 reload 中断后先查看真实状态，再用原参数重试同一 update。公共入口或同版包损坏时，从可信校验后的本地完整包用其专用 Node 调用同一 CLI；清单损坏、未知文件或外来单元保留并拒绝，不通过覆盖隐藏问题。
 
-[node 卸载](NODE_UNINSTALL.md)先停止/禁用并移除 Mate 用户单元，再只删除能由实际库存确认的程序与唯一入口。配置、身份、收据、Agent 工作区以及控制面 bind 数据全部保留。中断后可从保留的本地完整包继续同一 CLI 卸载，重新安装沿用原身份。控制面由所有者 `docker compose -f compose.yaml down` 清理容器和项目网络，bind 数据保留；CLI 不操作 Docker、镜像缓存或宿主软件。
+[node 卸载](node/NODE_UNINSTALL.md)先停止/禁用并移除 Mate 用户单元，再只删除能由实际库存确认的程序与唯一入口。配置、身份、收据、Agent 工作区以及控制面 bind 数据全部保留。中断后可从保留的本地完整包继续同一 CLI 卸载，重新安装沿用原身份。控制面由所有者 `docker compose -f compose.yaml down` 清理容器和项目网络，bind 数据保留；CLI 不操作 Docker、镜像缓存或宿主软件。
 
 独立实际产物与四平台用户服务验证命令、环境记录以及尚未验收的真实集成项见[部署验收](DEPLOYMENT_ACCEPTANCE.md)。资源数字来自指定演练的过程采样，不是未经测量的最低 VPS 配置。
 
@@ -70,4 +70,4 @@ Agent 用 `tasks.create` 指定原消息与标题建立待认领任务，再用 
 
 模型上下文接近容量时，运行进程请求摘要，控制面确认摘要与保留起点后才采用压缩上下文；原始完整历史仍保留。摘要连续失败或无法合法切分时，网页动态提供具体失败原因，所有者修复后重试。累计 token 或费用不触发停工。
 
-完整包的实际手动更新入口见 [node 停机更新与恢复](NODE_UPDATE.md)：先 `mate node stop`，再停止控制面，更换两侧同版产物，启动控制面后才显式 `mate node start`。CLI 一起更换管理程序、专用 Node 与 node，更新后保持停止并保留数据；损坏入口可从校验后的本地包执行同一 CLI 恢复。真实平台验收另记，不恢复部署登记、协调备份、整套数据复制恢复、维护对账或人工释放入口。日常持久化与故障接续继续由运行时负责。数据库格式不匹配或结构缺失时，启动拒绝修改并报告文件与原因；首版不迁移旧实验格式。保留原文件进行排查，或将 `MATE_CONTROL_PLANE_DATA_DIR` 指向新的空目录。
+完整包的实际手动更新入口见 [node 停机更新与恢复](node/NODE_UPDATE.md)：先 `mate node stop`，再停止控制面，更换两侧同版产物，启动控制面后才显式 `mate node start`。CLI 一起更换管理程序、专用 Node 与 node，更新后保持停止并保留数据；损坏入口可从校验后的本地包执行同一 CLI 恢复。真实平台验收另记，不恢复部署登记、协调备份、整套数据复制恢复、维护对账或人工释放入口。日常持久化与故障接续继续由运行时负责。数据库格式不匹配或结构缺失时，启动拒绝修改并报告文件与原因；首版不迁移旧实验格式。保留原文件进行排查，或将 `MATE_CONTROL_PLANE_DATA_DIR` 指向新的空目录。
