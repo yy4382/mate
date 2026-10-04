@@ -28,7 +28,7 @@
     "start:control-plane": "node apps/control-plane/dist/main.js",
     "start:node": "node apps/node/dist/main.js",
     "dev:web": "pnpm --filter @mate/web run dev",
-    "cleanup:scenarios": "node apps/control-plane/tests/helpers/scenario-cleanup.mjs",
+    "cleanup:scenarios": "node apps/control-plane/tests/support/environment/scenario-cleanup.mjs",
     "build:image:control-plane": "node deploy/control-plane/build.mjs",
     "test:image:control-plane": "node deploy/control-plane/verify.mjs",
     "test:container-scenarios": "pnpm build && node apps/control-plane/tests/container/run.mjs",

@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { nodeSummarySchema } from "@mate/protocol/owner";
 import { z } from "zod";
-import type { ScenarioContext } from "../helpers/scenario-evidence.js";
-import { readScenarioFacts } from "../helpers/scenario-facts.js";
-import { readNetworkQueueFacts } from "../helpers/scenario-network-facts.js";
-import type { createScriptedProvider } from "../helpers/scripted-provider.js";
+import type { ScenarioContext } from "../support/scenario/scenario-evidence.js";
+import { readScenarioFacts } from "../support/facts/scenario-facts.js";
+import { readNetworkQueueFacts } from "../support/facts/scenario-network-facts.js";
+import type { createScriptedProvider } from "../support/agent/scripted-provider.js";
 
 export const nodeNetworkConfiguration = {
   agents: [{ name: "断网同事" }],

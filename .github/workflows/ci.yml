@@ -60,8 +60,8 @@ jobs:
         if: ${{ always() }}
         timeout-minutes: 2
         run: |
-          if [ -f apps/control-plane/tests/helpers/scenario-cleanup.mjs ]; then
-            node apps/control-plane/tests/helpers/scenario-cleanup.mjs --root artifacts/scenarios
+          if [ -f apps/control-plane/tests/support/environment/scenario-cleanup.mjs ]; then
+            node apps/control-plane/tests/support/environment/scenario-cleanup.mjs --root artifacts/scenarios
           fi
 
       - name: Upload synthetic failure evidence
