@@ -26,7 +26,7 @@ import {
   type UserServiceManager,
   type InspectionOptions,
 } from "./systemd.js";
-import { createAtomicNoReplaceRename } from "../files/atomic-rename.js";
+import { createAtomicNoReplaceRename } from "../files/mutations/atomic-rename.js";
 
 export const nodeServiceCommands = ["install", "start", "stop", "restart", "status", "logs"];
 const quote = (value: string) => {

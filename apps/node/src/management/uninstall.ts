@@ -21,7 +21,7 @@ import {
 } from "./service.js";
 import { systemdUserManager } from "./systemd.js";
 import { finishSameVersionRepair } from "./repair-bundle.js";
-import { createAtomicNoReplaceRename } from "../files/atomic-rename.js";
+import { createAtomicNoReplaceRename } from "../files/mutations/atomic-rename.js";
 
 function inspectRemovalStaging(paths: ReturnType<typeof nodePaths>) {
   const uuid = "[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}";

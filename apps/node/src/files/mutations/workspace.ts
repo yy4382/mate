@@ -1,6 +1,6 @@
-import { FileOperationError } from "./file-failures.js";
-import { lstatSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { lstatSync } from "node:fs";
+import { FileOperationError } from "../file-failures.js";
 
 /** Moves a regular file through an OS atomic no-replace rename primitive. */
 export function moveFileNoReplace(

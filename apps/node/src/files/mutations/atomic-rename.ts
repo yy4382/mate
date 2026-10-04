@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { constants, closeSync, openSync } from "node:fs";
+import { closeSync, constants, openSync } from "node:fs";
 import { basename, dirname } from "node:path";
-import { FileOperationError } from "./file-failures.js";
-import { systemErrorCode } from "../system-error.js";
+import { systemErrorCode } from "../../system-error.js";
+import { FileOperationError } from "../file-failures.js";
 
 const pinnedPathPattern = /^\/proc\/self\/fd\/(\d+)\/([^/]+)$/;
 
