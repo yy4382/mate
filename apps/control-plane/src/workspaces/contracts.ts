@@ -1,5 +1,6 @@
-import { z } from "zod";
 import { workspaceVersionSchema } from "@mate/protocol/workspace";
+import { z } from "zod";
+
 export const workspaceChunkSchema = z.object({
   bytes: z.instanceof(Uint8Array),
   offset: z.number(),

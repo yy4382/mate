@@ -8,7 +8,7 @@ import { agentDirectorySchema } from "../agents/schema.js";
 import { modelCredentialSchema } from "../providers/schema.js";
 import { agentRunSchema } from "../runtime/run-schema.js";
 import { workspaceSchema } from "../workspaces/schema.js";
-import { workspaceAccessAuditSchema } from "../workspaces/access-schema.js";
+import { workspaceAccessAuditSchema } from "../workspaces/access/schema.js";
 import { agentProcessOperationsSchema } from "../runtime/process-schema.js";
 import { recoverySchema } from "../runtime/recovery-schema.js";
 import { agentLifecycleSchema } from "../runtime/lifecycle-schema.js";

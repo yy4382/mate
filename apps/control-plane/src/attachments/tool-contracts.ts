@@ -1,4 +1,6 @@
+import { FILE_CHUNK_MAX_BYTES } from "@mate/protocol/workspace";
 import { z } from "zod";
+
 const conversationId = z.string().uuid();
 
 export const attachmentToolDefinitions = {
@@ -14,7 +16,7 @@ export const attachmentToolDefinitions = {
         conversationId,
         attachmentId: z.string().uuid(),
         offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
-        length: z.number().int().min(1).max(8192).default(8192),
+        length: z.number().int().min(1).max(FILE_CHUNK_MAX_BYTES).default(FILE_CHUNK_MAX_BYTES),
       })
       .strict(),
   },

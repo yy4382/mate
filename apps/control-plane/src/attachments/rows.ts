@@ -1,5 +1,7 @@
-import { z } from "zod";
 import type { AttachmentSummary } from "@mate/protocol/owner";
+import type Database from "better-sqlite3";
+import { z } from "zod";
+
 export const attachmentRowSchema = z.looseObject({
   id: z.string(),
   channel_id: z.string(),
@@ -28,4 +30,45 @@ export function toSummary(row: AttachmentRow): AttachmentSummary {
         : { kind: "agent", id: row.uploader_id },
     createdAt: row.created_at,
   };
+}
+export function readReady(db: Database.Database, id: string): AttachmentSummary | undefined {
+  const row = attachmentRowSchema.optional().parse(
+    db
+      .prepare(
+        `SELECT id,channel_id,storage_key,filename,content_type,size,sha256,
+                uploader_kind,uploader_id,created_at
+         FROM owner_conversation_attachments WHERE id=? AND state='ready'`,
+      )
+      .get(id),
+  );
+  return row ? toSummary(row) : undefined;
+}
+export function insertUploading(
+  db: Database.Database,
+  input: {
+    id: string;
+    channelId: string;
+    storageKey: string;
+    filename: string;
+    contentType: string;
+    uploaderKind: "human" | "agent";
+    uploaderId: string;
+    createdAt: number;
+  },
+): void {
+  db.prepare(
+    `INSERT INTO owner_conversation_attachments(
+       id,channel_id,storage_key,filename,content_type,size,sha256,uploader_kind,uploader_id,state,created_at
+     ) VALUES(?,?,?,?,?,0,? ,?,?,'uploading',?)`,
+  ).run(
+    input.id,
+    input.channelId,
+    input.storageKey,
+    input.filename,
+    input.contentType,
+    "0".repeat(64),
+    input.uploaderKind,
+    input.uploaderId,
+    input.createdAt,
+  );
 }

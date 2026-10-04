@@ -1,10 +1,14 @@
-import { z } from "zod";
-import { workspaceVersionSchema as workspaceVersion } from "@mate/protocol/workspace";
 import {
+  MAX_NODE_MESSAGE_BYTES,
   WORKSPACE_WRITE_BYTES_BASE64_MAX_CHARS,
   WORKSPACE_WRITE_MAX_BYTES,
-  MAX_NODE_MESSAGE_BYTES,
 } from "@mate/protocol";
+import {
+  FILE_CHUNK_MAX_BYTES,
+  workspaceVersionSchema as workspaceVersion,
+} from "@mate/protocol/workspace";
+import { z } from "zod";
+
 const workspacePath = z.string().max(4096);
 
 export const workspaceToolDefinitions = {
@@ -35,7 +39,7 @@ export const workspaceToolDefinitions = {
       .object({
         path: workspacePath,
         offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
-        length: z.number().int().min(1).max(8192).default(8192),
+        length: z.number().int().min(1).max(FILE_CHUNK_MAX_BYTES).default(FILE_CHUNK_MAX_BYTES),
         version: workspaceVersion.optional(),
       })
       .strict(),

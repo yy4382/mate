@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { workspaceVersionSchema } from "./workspace.js";
+import { FILE_CHUNK_MAX_BYTES, workspaceVersionSchema } from "./workspace.js";
 
 /** Leave room for the full JSON request envelope inside the 1 MiB WebSocket frame. */
 export const WORKSPACE_WRITE_MAX_BYTES = 700 * 1024;
@@ -28,7 +28,7 @@ export const operationSchema = z.discriminatedUnion("kind", [
       kind: z.literal("workspace_read_chunk"),
       path: z.string().max(4096),
       offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
-      length: z.number().int().min(1).max(8192),
+      length: z.number().int().min(1).max(FILE_CHUNK_MAX_BYTES),
       version: workspaceVersionSchema.optional(),
     })
     .strict(),

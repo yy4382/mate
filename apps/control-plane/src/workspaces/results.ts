@@ -1,8 +1,8 @@
-import { z } from "zod";
-import { createHash } from "node:crypto";
-import { posix as posixPath } from "node:path";
 import type { Operation, WorkspaceFailureCode } from "@mate/protocol";
 import type { WorkspaceVersion } from "@mate/protocol/workspace";
+import { createHash } from "node:crypto";
+import { posix as posixPath } from "node:path";
+import { z } from "zod";
 import { WorkspaceError } from "./errors.js";
 
 // Node responses historically allow extension fields and non-decimal version strings.

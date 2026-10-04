@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { createWriteStream, openSync, fsyncSync, closeSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, createWriteStream, fsyncSync, openSync, unlinkSync, writeSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
@@ -85,4 +86,9 @@ export function writeAll(descriptor: number, bytes: Uint8Array, offset: number):
     if (count <= 0) throw new Error("Could not write streamed attachment bytes");
     written += count;
   }
+}
+export function storagePath(directory: string, name: string): string {
+  const path = resolve(directory, name);
+  if (dirname(path) !== directory) throw new Error("Invalid attachment storage key");
+  return path;
 }
