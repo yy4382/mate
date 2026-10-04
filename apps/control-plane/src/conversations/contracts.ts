@@ -1,5 +1,5 @@
-import { z } from "zod";
 import { ownerChannelSchema } from "@mate/protocol/owner";
+import { z } from "zod";
 
 /** Facts an Agent may discover without gaining membership or changing attention. */
 export const agentConversationFactsSchema = ownerChannelSchema

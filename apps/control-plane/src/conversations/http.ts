@@ -1,17 +1,17 @@
 import type { Hono } from "hono";
 import { z } from "zod";
+import type { AgentDirectory } from "../agents/directory.js";
+import type { OwnerAuth } from "../auth/service.js";
+import { sessionToken } from "../auth/session-cookie.js";
+import type { AgentRunCoordinator } from "../runtime/runs.js";
 import {
   newChannelSchema,
-  updateChannelSchema,
   newMessageSchema,
   ownerChannelInvitationSchema,
+  updateChannelSchema,
 } from "./contracts.js";
 import { ArchivedChannelError } from "./errors.js";
 import type { OwnerChat } from "./service.js";
-import type { OwnerAuth } from "../auth/service.js";
-import { sessionToken } from "../auth/session-cookie.js";
-import type { AgentDirectory } from "../agents/directory.js";
-import type { AgentRunCoordinator } from "../runtime/runs.js";
 
 /** One delayed database poll per open owner event stream, in milliseconds. */
 const eventPollIntervalMs = 250;

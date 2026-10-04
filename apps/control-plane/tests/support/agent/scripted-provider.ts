@@ -3,7 +3,7 @@ import type { ServerResponse } from "node:http";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { z } from "zod";
 import { respond, type ProviderRequest } from "./agent-loop.js";
-import { conversationToolDefinitions } from "../../../src/conversations/tool-contracts.js";
+import { conversationToolDefinitions } from "../../../src/conversations/tools/contracts.js";
 import { workspaceToolDefinitions } from "../../../src/workspaces/tool-contracts.js";
 import { attachmentToolDefinitions } from "../../../src/attachments/tool-contracts.js";
 import { readScriptedToolResult } from "./scripted-tool-results.js";

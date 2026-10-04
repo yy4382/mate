@@ -15,7 +15,7 @@
 
 ## 控制面按领域找代码
 
-- `conversations/`：频道、私信、消息、已读与暂缓、消息关联任务和提醒。`service.ts` 管频道、消息、注意力和交付；`tasks.ts` 集中任务认领、任务草稿与提醒规则，并通过同步对话能力保持原事务；`tool-actions.ts` 在工具入口的事务内复用持久调用结果；`contracts.ts` 是请求校验，`rows.ts` 解释数据库查询结果，`tool-contracts.ts` 描述 Agent 能看到的工具；`http.ts` 注册会话、任务、提醒与事件流入口。
+- `conversations/`：`service.ts` 装配共享数据库/时钟下的既有 OwnerChat 公共入口，保留同一读事务内的 snapshot 与工具目录组合；下层不依赖整个 OwnerChat。`channels/directory.ts` 管 Owner/peer DM、频道事实和 read/member 授权，`channels/membership.ts` 管频道 CRUD、加入与邀请并单向依赖目录。`messages/timeline.ts` 管消息分页、讨论串和读取正文后的 presented 标记；`messages/attention.ts` 管注意力、消息草稿和发送新鲜度；`messages/writer.ts` 保存消息及迟到收据更正，`messages/deliveries.ts` 管当前成员快照、pending/handled 和 run 完成。`tasks/service.ts` 管任务认领及任务草稿，`tasks/reminders.ts` 集中提醒 CRUD、到期持久投递与 handled 同步；提醒保持专用单接收者投递。`events.ts` 在原事务位置保存事件和调用原 push 回调；`tools/actions.ts` 复用持久工具结果，`tools/contracts.ts` 保留 Zod 工具定义及输入推导。`contracts.ts`、`rows.ts`、`schema.ts` 和 `http.ts` 分别负责请求校验、持久查询投影、表装配及领域 HTTP 入口。
 - `agents/`：Agent 身份、资料、创建与目录；`http.ts` 注册 Agent 和模型供应商入口；供应商模型的校验仍在控制面，不能带进浏览器。
 - `runtime/`：`runs.ts` 构造时只收依赖，工厂显式 `start()` 启动恢复与调度；`close()` 在关闭 node 和数据库前取消运行。run 调度、模型循环、操作收据与恢复、活动和用量。`session/` 管完整历史和压缩，`tools/` 管工具入口和当前 run 检查；`provider-response.ts` 只解释供应商响应中的结束和用量证据。
 - `workspaces/`：文件浏览、下载和 Agent 文件操作的控制面逻辑。`file-content.ts` 负责有界字节分类与 UTF-8 范围，`image-result.ts` 是文件工具专用的图片返回路径；`runtime/session/image-context.ts` 只在请求时投影历史图片。`contracts.ts` 和 `results.ts` 分别放请求契约与结果解释；`action-ledger.ts` 保存文件变更意图、结果与迟到收据更正；服务入口明确先保存并等待提交，再复验 current run 和调用 node。身份 map 只是有期限的内存加速，重启或过期后仍查询持久操作。文件结果的稳定错误码来自 protocol `workspace-failures.ts`；`results.ts` 只在无 code 的旧结果边界适配诊断，旧 unknown 前缀规则与展示映射不同，不回填旧收据。
