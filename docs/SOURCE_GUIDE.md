@@ -20,8 +20,7 @@
 - `runtime/`：`runs.ts` 构造时只收依赖，工厂显式 `start()` 启动恢复与调度；`close()` 在关闭 node 和数据库前取消运行。run 调度、模型循环、操作收据与恢复、活动和用量。`session/` 管完整历史和压缩，`tools/` 管工具入口和当前 run 检查；`provider-response.ts` 只解释供应商响应中的结束和用量证据。
 - `workspaces/`：`service.ts` 装配既有公开入口和工具组合；`access/service.ts` 集中节点结果/错误适配、owner 工作区可用性和不含正文的访问审计。`reads/service.ts` 拥有 owner/Agent/发布读取，`reads/file-content.ts` 解释有界字节和 UTF-8 范围，`reads/image-result.ts` 保留图片工具结果；普通 Agent 读取在 node 请求前后复验 run，发布读取仍由附件最终提交复验。`actions/service.ts` 保留 prepare→等待 committed→track→复验→node→complete/unknown 的完整变更流程，`actions/ledger.ts` 拥有持久意图、结果及迟到收据更正，不自动重放未知副作用。`downloads/service.ts` 拥有有界流、session 绑定、24h 状态保留、启动恢复与计时器；每次 owner stat/chunk 仍独立审计。`contracts.ts` 和 `results.ts` 保留各自原有契约/解析条件，稳定文件失败码来自 protocol `workspace-failures.ts`，旧结果适配与 unknown 前缀规则不变。
 - `attachments/`：`service.ts` 保留 owner 上传、附件读取、重启恢复和工具组合；`publication.ts` 完整拥有 Agent 文件发布，只依赖工作区发布读取能力。首个 await 前同步 reservation/uploading；最后一次 stat 和原 hook 后，在原事务内复验 run、rename/fsync、保存 ready 与成功收据。`access.ts` 分别保留 public/member/owner 三种权限；`rows.ts` 保存共享行投影及上传中记录，`storage.ts` 保存私有安全路径和有界流函数，无通用存储层。
-- `attachments/`：附件操作及相应工具描述。
-- `nodes/`：`directory.ts` 拥有配对、连接身份、在线状态、请求身份核验和分领域收据对账；`pending-requests.ts` 仅拥有请求 Promise 与计时器，成功、超时、发送失败、断连都先移除请求和清理计时器。迟到的 process/workspace 收据仍进入各自的持久更正入口，不能自动重放。与 `apps/node` 的机器端代码不同。
+- `nodes/`：`directory.ts` 拥有 socket 生命周期、当前连接、心跳、在线状态、消息分派和装配。`identity.ts` 拥有持久配对身份、令牌/签名及账号记录，账号记录继续参加调用方事务；`operations.ts` 拥有三种完整请求的身份、超时和结果，`pending-requests.ts` 只管理 Promise 与计时器。`reconciliation.ts` 保留进程→文件→ready 的持久分页与缺失/冲突收据处理，只查询在途身份并传递领域结果；`transport.ts` 是共享 socket/session 类型和无状态发送/拒绝。断线与迟到 process/workspace 收据仍进入原更正入口，未知副作用不自动重放。
 - `auth/`、`providers/`、`notifications/`：所有者登录、模型凭据和供应商目录、网页推送。
 - `storage/`：数据库初始化与各领域表的装配。领域里的 `schema.ts`、`*-schema.ts` 是 SQL 表定义，与 Zod 的 `contracts.ts` 分工不同。
 

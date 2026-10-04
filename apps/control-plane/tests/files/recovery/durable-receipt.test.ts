@@ -155,6 +155,8 @@ it("a durable file receipt withheld from the control plane corrects the informed
       const boundaryVersion = readFileVersion(path);
       assert.notDeepEqual(boundaryVersion, originalVersion);
       const unknown = await provider.waitFor(agent.summary.id, "observeUnknownBeforeNewDecision");
+      // waitFor observes arrival before the provider step runs; arm its cancellation first.
+      await unknown.finished;
       const [started] = readFileActions(environment.directory);
       assert.ok(started);
       environment.node.child.kill("SIGKILL");
