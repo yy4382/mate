@@ -5,7 +5,7 @@ import { randomUUID, sign } from "node:crypto";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 
-import { deriveAgentProcessOperationId } from "../../../src/runtime/process-operations.js";
+import { deriveAgentProcessOperationId } from "../../../src/runtime/processes/operations.js";
 
 import {
   password,

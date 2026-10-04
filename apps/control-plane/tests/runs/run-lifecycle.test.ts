@@ -8,9 +8,9 @@ import { NodeDirectory } from "../../src/nodes/directory.js";
 import { ModelCredentialDirectory } from "../../src/providers/credentials.js";
 import { WorkspaceService } from "../../src/workspaces/service.js";
 import { AttachmentService } from "../../src/attachments/service.js";
-import { AgentProcessOperationBroker } from "../../src/runtime/process-operations.js";
+import { AgentProcessOperationBroker } from "../../src/runtime/processes/operations.js";
 import { AgentTools } from "../../src/runtime/tools/registry.js";
-import { AgentRunCoordinator } from "../../src/runtime/runs.js";
+import { AgentRunCoordinator } from "../../src/runtime/runs/coordinator.js";
 
 it("assembles without work, starts once, and cannot restart after close", () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mate-run-lifecycle-"));

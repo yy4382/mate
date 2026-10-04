@@ -8,7 +8,7 @@ import { WorkspaceService } from "../../workspaces/service.js";
 import { WorkspaceError } from "../../workspaces/errors.js";
 import { AttachmentService } from "../../attachments/service.js";
 import { AttachmentError } from "../../attachments/errors.js";
-import type { AgentProcessOperationBroker } from "../process-operations.js";
+import type { AgentProcessOperationBroker } from "../processes/operations.js";
 import {
   defineAgentTool,
   type AgentToolEntry,

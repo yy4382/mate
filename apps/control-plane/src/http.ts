@@ -1,7 +1,7 @@
 import { registerConversationRoutes } from "./conversations/http.js";
 import type { AgentLoopTestDependencies } from "./runtime/loop.js";
 import { AgentTools } from "./runtime/tools/registry.js";
-import { AgentProcessOperationBroker } from "./runtime/process-operations.js";
+import { AgentProcessOperationBroker } from "./runtime/processes/operations.js";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono, type MiddlewareHandler } from "hono";
 import { resolve } from "node:path";
@@ -15,7 +15,7 @@ import { registerNodeRoutes } from "./nodes/http.js";
 import { AgentDirectory } from "./agents/directory.js";
 import { registerAgentRoutes } from "./agents/http.js";
 import { ModelCredentialDirectory } from "./providers/credentials.js";
-import { AgentRunCoordinator } from "./runtime/runs.js";
+import { AgentRunCoordinator } from "./runtime/runs/coordinator.js";
 import { AttachmentService } from "./attachments/service.js";
 import { WorkspaceService } from "./workspaces/service.js";
 import { registerWorkspaceRoutes } from "./workspaces/http.js";

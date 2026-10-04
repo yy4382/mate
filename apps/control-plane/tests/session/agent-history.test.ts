@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 import { AgentTools } from "../../src/runtime/tools/registry.js";
-import { AgentProcessOperationBroker } from "../../src/runtime/process-operations.js";
+import { AgentProcessOperationBroker } from "../../src/runtime/processes/operations.js";
 import { answer } from "../support/agent/pi.js";
 import { randomUUID } from "node:crypto";
 import { afterEach, expect, it } from "vitest";

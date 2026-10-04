@@ -7,7 +7,7 @@ import type Database from "better-sqlite3";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { recordAgentActivity } from "../../runtime/activity.js";
-import { workspaceOperationSummary } from "../../runtime/recovery-context.js";
+import { workspaceOperationSummary } from "../../runtime/recovery/context.js";
 import { AgentSession } from "../../runtime/session/service.js";
 import { WorkspaceError } from "../errors.js";
 import { parseEnvelope } from "../results.js";

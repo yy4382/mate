@@ -12,7 +12,7 @@ import type { OwnerChat } from "../conversations/service.js";
 import type { NodeDirectory } from "../nodes/directory.js";
 import type { ModelCredentialDirectory } from "../providers/credentials.js";
 import { isSupportedModelProvider, supportedModelProviders } from "../providers/catalog.js";
-import type { AgentRunCoordinator } from "../runtime/runs.js";
+import type { AgentRunCoordinator } from "../runtime/runs/coordinator.js";
 import { listAgentActivity } from "../runtime/activity.js";
 import { agentUsage } from "../runtime/usage.js";
 
