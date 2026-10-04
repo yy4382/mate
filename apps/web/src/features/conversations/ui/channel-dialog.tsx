@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import type { Channel } from "./conversation-responses.js";
+import type { Channel } from "../conversation-responses.js";
 
 export type ChannelDraft = Pick<Channel, "name" | "description" | "visibility">;
 export type ChannelSettings = ChannelDraft & Pick<Channel, "archived">;

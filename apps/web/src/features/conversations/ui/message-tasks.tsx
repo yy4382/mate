@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import type { Message } from "./conversation-responses.js";
-import { taskSchema, tasksResponseSchema, type Task } from "../tasks/task-responses.js";
-import { ownerJSON, OwnerRequestError } from "./owner-request.js";
+import { taskSchema, tasksResponseSchema, type Task } from "../../tasks/task-responses.js";
+import type { Message } from "../conversation-responses.js";
+import { ownerJSON, OwnerRequestError } from "../owner-request.js";
 
 export type TaskCreationPosition = "timeline" | "thread-root" | "thread-reply";
 

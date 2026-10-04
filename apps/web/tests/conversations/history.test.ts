@@ -133,5 +133,4 @@ it("ignores a failed latest-page request after switching to another channel", as
   expect(document.querySelectorAll(".message-row")).toHaveLength(1);
 });
 
-vi.mock("../../src/features/conversations/chat.css", () => ({}));
 vi.mock("../../src/navigation.js", () => ({ redirectToLogin: vi.fn() }));

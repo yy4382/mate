@@ -65,5 +65,4 @@ it("preserves text typed during an in-flight send after the submitted message su
   ).toBe("提交 A期间输入 B");
 });
 
-vi.mock("../../src/features/conversations/chat.css", () => ({}));
 vi.mock("../../src/navigation.js", () => ({ redirectToLogin: vi.fn() }));

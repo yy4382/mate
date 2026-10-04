@@ -115,5 +115,4 @@ it("keeps the newer thread when an earlier thread request completes last", async
   );
 });
 
-vi.mock("../../src/features/conversations/chat.css", () => ({}));
 vi.mock("../../src/navigation.js", () => ({ redirectToLogin: vi.fn() }));

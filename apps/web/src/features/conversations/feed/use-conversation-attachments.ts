@@ -4,8 +4,8 @@ import {
   attachmentsResponseSchema,
   type Attachment,
   type Channel,
-} from "./conversation-responses.js";
-import { ownerJSON } from "./owner-request.js";
+} from "../conversation-responses.js";
+import { ownerJSON } from "../owner-request.js";
 
 /** Refresh the selected channel's attachment list every five seconds. */
 const attachmentPollIntervalMs = 5_000;

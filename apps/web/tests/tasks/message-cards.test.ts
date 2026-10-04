@@ -209,5 +209,4 @@ it("shows a known task rejection without calling it an uncertain submission", as
   expect(fixture.taskPosts).toHaveLength(0);
 });
 
-vi.mock("../../src/features/conversations/chat.css", () => ({}));
 vi.mock("../../src/navigation.js", () => ({ redirectToLogin: vi.fn() }));

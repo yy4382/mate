@@ -1,0 +1,353 @@
+.conversation-panel {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  background: #f9f8f5;
+}
+
+.conversation-header {
+  display: flex;
+  min-height: 82px;
+  align-items: center;
+  gap: 13px;
+  padding: 14px 26px;
+  border-bottom: 1px solid #e9e7e0;
+  background: rgb(255 255 255 / 54%);
+}
+
+.conversation-title {
+  min-width: 0;
+  flex: 1;
+}
+
+.title-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.conversation-header h1 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-title > p {
+  overflow: hidden;
+  margin: 5px 0 0 28px;
+  color: #777c73;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.archived-pill {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border-radius: 20px;
+  background: #edebe5;
+  color: #73776f;
+  font-size: 10px;
+}
+
+.mobile-back-button {
+  display: none;
+  width: 34px;
+  min-height: 38px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #53634b;
+  font-size: 32px;
+  font-weight: 300;
+}
+
+.message-list {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 22px;
+  overflow: auto;
+  padding: 25px clamp(18px, 5vw, 72px) 28px;
+}
+
+.load-older-button {
+  align-self: center;
+  min-height: 34px;
+  padding: 0 13px;
+  border: 1px solid #e1e0d8;
+  border-radius: 20px;
+  background: #fff;
+  color: #687362;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.message-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.message-avatar {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 11px;
+  background: #e4eadd;
+  color: #42563c;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.message-content {
+  min-width: 0;
+  max-width: 780px;
+  padding-top: 1px;
+}
+
+.message-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+
+.message-meta strong {
+  color: #33382f;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.message-meta time {
+  color: #999b93;
+  font-size: 10px;
+}
+
+.message-content p {
+  margin: 5px 0 0;
+  color: #33372f;
+  font-size: 13px;
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.conversation-empty {
+  display: flex;
+  min-height: 100%;
+  align-items: center;
+  flex-direction: column;
+  justify-content: center;
+  padding: 30px;
+  text-align: center;
+}
+
+.empty-channel-symbol {
+  display: grid;
+  width: 58px;
+  height: 58px;
+  place-items: center;
+  border: 1px solid #e1e4da;
+  border-radius: 18px;
+  background: #eef1e9;
+  color: #63765a;
+  font-size: 26px;
+}
+
+.conversation-empty h2 {
+  margin: 17px 0 0;
+  color: #32372f;
+  font-size: 17px;
+  font-weight: 620;
+}
+
+.conversation-empty p,
+.conversation-placeholder {
+  margin: 8px 0 0;
+  color: #81867d;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.conversation-empty > button {
+  margin-top: 20px;
+  padding: 0 16px;
+}
+
+.message-composer {
+  margin: 0 clamp(16px, 4vw, 56px) 24px;
+  padding: 12px 13px 10px;
+  border: 1px solid #deded5;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 5px 16px rgb(51 54 45 / 4%);
+}
+
+.message-composer:focus-within {
+  border-color: #aebda3;
+  box-shadow: 0 0 0 3px rgb(132 155 112 / 13%);
+}
+
+.message-composer textarea,
+.channel-form textarea {
+  width: 100%;
+  resize: vertical;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #33372f;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.message-composer textarea {
+  min-height: 49px;
+  max-height: 180px;
+}
+
+.message-composer textarea::placeholder,
+.channel-form textarea::placeholder {
+  color: #a0a198;
+}
+
+.composer-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 6px;
+}
+
+.composer-footer > span {
+  color: #979a91;
+  font-size: 10px;
+}
+
+.composer-footer button,
+.dialog-actions button,
+.mobile-welcome button,
+.conversation-empty > button {
+  min-height: 36px;
+  padding: 0 15px;
+  border-radius: 8px;
+  background: #344d2d;
+  color: #fffefa;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.composer-actions button {
+  min-height: 34px;
+  padding: 0 12px;
+}
+
+.attachment-picker {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  padding: 0 10px;
+  border: 1px solid #dfe2d9;
+  border-radius: 8px;
+  color: #52604b;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 550;
+}
+
+.attachment-picker input {
+  width: 1px;
+  max-width: 1px;
+  margin-left: 5px;
+  opacity: 0.02;
+}
+
+.selected-attachment {
+  max-width: 180px;
+  overflow: hidden;
+  color: #646b60;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-attachments {
+  max-height: 130px;
+  flex: 0 0 auto;
+  overflow: auto;
+  margin: 0 clamp(16px, 4vw, 56px) 10px;
+  padding: 10px 12px;
+  border: 1px solid #e4e5dc;
+  border-radius: 10px;
+  background: rgb(255 255 255 / 64%);
+}
+
+.conversation-attachments h2 {
+  margin: 0 0 7px;
+  color: #65705f;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.conversation-attachments ul {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.conversation-attachments li {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+  color: #73796e;
+  font-size: 10px;
+}
+
+.conversation-attachments li a {
+  min-width: 0;
+  overflow: hidden;
+  color: #405438;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-attachments li small {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.conversation-attachments > p {
+  margin: 0;
+  color: #9b3b2b;
+  font-size: 11px;
+}
+
+.archived-notice {
+  margin: 0 clamp(16px, 4vw, 56px) 24px;
+  padding: 14px;
+  border: 1px solid #e5e2d9;
+  border-radius: 10px;
+  background: #f1f0eb;
+  color: #787c73;
+  font-size: 12px;
+  text-align: center;
+}
+
+.mobile-welcome,
+.mobile-bottom-nav {
+  display: none;
+}

@@ -1,8 +1,8 @@
 import { useCallback, useRef, useState, type RefObject } from "react";
 import type { z } from "zod";
-import { threadSchema, type Message } from "./conversation-responses.js";
+import { threadSchema, type Message } from "../conversation-responses.js";
+import { ownerJSON } from "../owner-request.js";
 import { mergeMessage, mergeMessages } from "./message-window.js";
-import { ownerJSON } from "./owner-request.js";
 
 export function useConversationThread({
   selectedIdRef,

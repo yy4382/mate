@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { pushPublicKeySchema, pushSubscriptionSchema } from "./conversation-responses.js";
-import { ownerJSON } from "./owner-request.js";
+import { pushPublicKeySchema, pushSubscriptionSchema } from "../conversation-responses.js";
+import { ownerJSON } from "../owner-request.js";
 
 export function useOwnerPush(authenticated: boolean) {
   const [pushState, setPushState] = useState<string | null>(null);
