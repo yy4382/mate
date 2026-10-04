@@ -1,4 +1,3 @@
-import { systemErrorCode } from "../system-error.js";
 import {
   createPrivateKey,
   createPublicKey,
@@ -9,6 +8,7 @@ import {
 import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { z } from "zod";
+import { systemErrorCode } from "../system-error.js";
 
 const savedIdentitySchema = z
   .object({

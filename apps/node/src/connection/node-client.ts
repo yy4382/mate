@@ -1,29 +1,28 @@
 import { NodeControlMessageSchema, NodeRequestSchema } from "@mate/protocol";
+import { NodeProcessRequests } from "./process-requests.js";
+import { NodeWorkspaceRequests, type NodeWorkspaceExecutor } from "./workspace-requests.js";
 
 import { createPrivateKey, randomUUID, sign } from "node:crypto";
 import { join, resolve as resolvePath } from "node:path";
 import { WebSocket } from "ws";
-import { loadOrCreateNodeIdentity, type NodeIdentity } from "./node-identity.js";
 import {
   handleAgentProvisionRequest,
   prepareAgentWorkspace,
   readAgentWorkspaceIdentity,
   type AgentWorkspaceRunner,
 } from "../provisioning/agent-workspace.js";
+import { loadOrCreateNodeIdentity, type NodeIdentity } from "./node-identity.js";
 
-import { openNodeProcessOperations } from "../processes/operation-runtime.js";
+import { LinuxWorkspaceExecutor } from "../files/workspace-executor.js";
 import type { AgentProcessOperations } from "../processes/operation-ledger.js";
-import {
-  LinuxWorkspaceExecutor,
-  type WorkspaceExecutionRequest,
-} from "../files/workspace-executor.js";
-import { sendWorkspaceOperationResult } from "../files/workspace-result.js";
+import { openNodeProcessOperations } from "../processes/operation-runtime.js";
 
 const INITIAL_RETRY_MS = 250;
 const MAX_RETRY_MS = 10_000;
 const HANDSHAKE_TIMEOUT_MS = 10_000;
 const HEARTBEAT_INTERVAL_MS = 10_000;
 const HEARTBEAT_TIMEOUT_MS = 30_000;
+const HEARTBEAT_CLOSE_GRACE_MS = 25;
 
 export interface LinuxNodeOptions {
   controlPlaneUrl: string;
@@ -41,8 +40,7 @@ export function defaultAgentWorkspaceRoot(dataDirectory: string): string {
 
 interface NodeTestDependencies {
   processOperations?: AgentProcessOperations;
-  workspaceExecutor?: Pick<LinuxWorkspaceExecutor, "execute" | "status"> &
-    Partial<Pick<LinuxWorkspaceExecutor, "receiptRevision">>;
+  workspaceExecutor?: NodeWorkspaceExecutor;
   prepareAgentWorkspace?: AgentWorkspaceRunner;
 }
 
@@ -219,6 +217,10 @@ function connectOnce(
       forceTerminateTimeout: ReturnType<typeof setTimeout> | undefined,
       pendingPing: string | undefined,
       timeout: ReturnType<typeof setTimeout> | undefined;
+    const canSend = () => socket.readyState === WebSocket.OPEN && authenticated;
+    const send = (request: unknown) => sendRequest(socket, request);
+    const processRequests = new NodeProcessRequests(processOperations, canSend, send);
+    const workspaceRequests = new NodeWorkspaceRequests(workspaceExecutor, canSend, send);
     const cleanup = () => {
       if (heartbeat) clearInterval(heartbeat);
       if (pingTimeout) clearTimeout(pingTimeout);
@@ -265,7 +267,7 @@ function connectOnce(
           if (settled) return;
           socket.terminate();
           resolve(true);
-        }, 25);
+        }, HEARTBEAT_CLOSE_GRACE_MS);
       }, heartbeatTimeoutMs);
       try {
         sendRequest(socket, { type: "node.ping", requestId, sentAt: Date.now() });
@@ -379,140 +381,25 @@ function connectOnce(
       if (message.type === "control.process.operation") {
         if (!authenticated)
           throw new NodeAuthenticationError("控制面在节点身份验证前请求普通操作。");
-        const { requestId, operationId, agentId, operation } = message;
-        // Do not bind execution to this WebSocket's lifetime. Node receipts let the control plane
-        // reconcile the same operation after a reconnect; the command's own result is recorded
-        // from what the ordinary child process did.
-        void processOperations
-          .execute(agentId, operationId, operation)
-          .then((result) => {
-            if (socket.readyState !== WebSocket.OPEN || !authenticated) return;
-            sendRequest(socket, {
-              type: "node.process.operation.result",
-              requestId,
-              operationId,
-              agentId,
-              state: result.state === "started" ? "unknown" : result.state,
-              receipt: result.receipt,
-              revision: result.revision,
-            });
-          })
-          .catch(() => {
-            if (socket.readyState !== WebSocket.OPEN || !authenticated) return;
-            sendRequest(socket, {
-              type: "node.process.operation.result",
-              requestId,
-              operationId,
-              agentId,
-              state: "unknown",
-              receipt: { reason: "node_operation_result_unavailable" },
-            });
-          });
+        processRequests.operation(message);
         return;
       }
       if (message.type === "control.workspace.operation") {
         if (!authenticated)
           throw new NodeAuthenticationError("控制面在节点身份验证前请求工作区操作。");
-        const { requestId, operationId, agentId, mode, operation } = message,
-          request: WorkspaceExecutionRequest = { operationId, agentId, mode, operation };
-        if (!workspaceExecutor) {
-          sendRequest(socket, {
-            type: "node.workspace.operation.result",
-            requestId,
-            operationId,
-            agentId,
-            ok: false,
-            error: "Linux workspace executor is unavailable",
-          });
-          return;
-        }
-        void workspaceExecutor
-          .execute(request)
-          .then(
-            (result) => {
-              if (socket.readyState !== WebSocket.OPEN || !authenticated) return;
-              const revision = workspaceExecutor.receiptRevision?.(agentId, operationId);
-              sendWorkspaceOperationResult(
-                (response) => sendRequest(socket, response),
-                {
-                  requestId,
-                  operationId,
-                  agentId,
-                  ...(revision !== undefined ? { revision } : {}),
-                },
-                result,
-              );
-            },
-            () => {
-              if (socket.readyState !== WebSocket.OPEN || !authenticated) return;
-              sendRequest(socket, {
-                type: "node.workspace.operation.result",
-                requestId,
-                operationId,
-                agentId,
-                ok: false,
-                error: "Linux workspace operation could not be confirmed",
-              });
-            },
-          )
-          .catch(() => undefined);
+        workspaceRequests.operation(message);
         return;
       }
       if (message.type === "control.process.reconcile") {
         if (!authenticated)
           throw new NodeAuthenticationError("控制面在节点身份验证前请求操作对账。");
-        sendRequest(socket, {
-          type: "node.process.reconcile.result",
-          requestId: message.requestId,
-          receipts: message.operations.flatMap(({ agentId, operationId, requestHash }) => {
-            try {
-              const result = processOperations.status(agentId, operationId, requestHash);
-              if (!result || result.state === "started") return [];
-              const receipt = {
-                operationId,
-                agentId,
-                state: result.state,
-                receipt: result.receipt,
-                revision: result.revision,
-              };
-              return NodeRequestSchema.safeParse({
-                type: "node.process.reconcile.result",
-                requestId: message.requestId,
-                receipts: [receipt],
-              }).success
-                ? [receipt]
-                : [];
-            } catch {
-              return [];
-            }
-          }),
-        });
+        processRequests.reconcile(message);
         return;
       }
       if (message.type === "control.workspace.reconcile") {
         if (!authenticated)
           throw new NodeAuthenticationError("控制面在节点身份验证前请求文件操作对账。");
-        sendRequest(socket, {
-          type: "node.workspace.reconcile.result",
-          requestId: message.requestId,
-          receipts: message.operations.flatMap(({ agentId, operationId, requestHash }) => {
-            try {
-              const result = workspaceExecutor?.status(agentId, operationId, requestHash);
-              const revision = workspaceExecutor?.receiptRevision?.(agentId, operationId);
-              if (!result) return [];
-              const receipt = { operationId, agentId, result: { ...result, revision } };
-              return NodeRequestSchema.safeParse({
-                type: "node.workspace.reconcile.result",
-                requestId: message.requestId,
-                receipts: [receipt],
-              }).success
-                ? [receipt]
-                : [];
-            } catch {
-              return [];
-            }
-          }),
-        });
+        workspaceRequests.reconcile(message);
         return;
       }
       if (message.type === "control.agent.provision") {
