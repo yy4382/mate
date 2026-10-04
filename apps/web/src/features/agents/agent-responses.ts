@@ -1,11 +1,11 @@
-import { z } from "zod";
 import {
-  agentSummarySchema,
   agentStopSchema,
+  agentSummarySchema,
   modelCredentialSummarySchema,
   modelProviderSummarySchema,
   ownerChannelSchema,
 } from "@mate/protocol/owner";
+import { z } from "zod";
 
 // Creation responses may omit the optional initial invitation; the screen does not require
 // persistence timestamps or the session ID to render or retry the stable Agent request.

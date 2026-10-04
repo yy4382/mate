@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { activityPageSchema, pauseResponseSchema, type ActivityPage } from "./agent-responses.js";
+import { activityPageSchema, pauseResponseSchema, type ActivityPage } from "../agent-responses.js";
 import { agentStopStatus } from "./agent-stop-status.js";
 
 export function AgentActivity({ agentId }: { agentId: string }) {

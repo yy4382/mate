@@ -16,3 +16,6 @@ mate.local.json
 
 # Synthetic integration failure evidence (CI artifacts), never runtime databases.
 artifacts/scenarios/
+
+# Directory refresh and credential state are source, not runtime data.
+!apps/web/src/features/agents/data/
