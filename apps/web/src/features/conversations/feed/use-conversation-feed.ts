@@ -62,23 +62,23 @@ export function useConversationFeed({
   const loadingLatest = selectedId !== null && loadingLatestChannelId === selectedId;
   useEffect(() => {
     if (!authenticated) return;
-    let active = true,
-      checkingSession = false,
-      expired = false;
+    let active = true;
+    let checkingSession = false;
+    let expired = false;
 
     async function connectFromSnapshot() {
       try {
         const snapshot = await ownerJSON("/api/owner/snapshot", snapshotSchema);
         if (!active) return;
         setChannels(snapshot.channels);
-        const current = selectedIdRef.current,
-          requestedChannelId = new URLSearchParams(window.location.search).get("channel"),
-          initialSelection =
-            snapshot.channels.find((channel) => channel.id === current)?.id ??
-            snapshot.channels.find((channel) => channel.id === requestedChannelId)?.id ??
-            snapshot.channels.find((channel) => !channel.archived)?.id ??
-            snapshot.channels[0]?.id ??
-            null;
+        const current = selectedIdRef.current;
+        const requestedChannelId = new URLSearchParams(window.location.search).get("channel");
+        const initialSelection =
+          snapshot.channels.find((channel) => channel.id === current)?.id ??
+          snapshot.channels.find((channel) => channel.id === requestedChannelId)?.id ??
+          snapshot.channels.find((channel) => !channel.archived)?.id ??
+          snapshot.channels[0]?.id ??
+          null;
         // The stream can deliver a buffered first event before React commits this state update.
         selectedIdRef.current = initialSelection;
         onSelect(initialSelection);
@@ -205,9 +205,9 @@ export function useConversationFeed({
 
   useEffect(() => {
     if (!authenticated || !selectedId) return;
-    const query = new URLSearchParams(window.location.search),
-      channelId = query.get("channel"),
-      messageId = query.get("message");
+    const query = new URLSearchParams(window.location.search);
+    const channelId = query.get("channel");
+    const messageId = query.get("message");
     if (!messageId || channelId !== selectedId) return;
     const targetId = `message-${messageId}`;
     if (handledDeepLinkRef.current === targetId || failedDeepLinkRef.current === targetId) return;
@@ -251,8 +251,8 @@ export function useConversationFeed({
   }, [authenticated, selectedId, onMobileView, onError, installThread]);
   async function loadOlder() {
     if (!selectedId || !currentWindow.nextBefore) return;
-    const channelId = selectedId,
-      cursor = currentWindow.nextBefore;
+    const channelId = selectedId;
+    const cursor = currentWindow.nextBefore;
     setLoadingOlder(true);
     onError(null);
     try {

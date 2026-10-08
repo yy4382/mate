@@ -1,12 +1,24 @@
 import type { Message } from "../conversation-responses.js";
-import type { TaskCreationPosition, useMessageTasks } from "./message-tasks.js";
-import { MessageTasks } from "./message-tasks.js";
+import { MessageTasks, TaskCreationForm, type MessageTaskControls } from "./message-tasks.js";
+
+type ConversationThreadProps = {
+  threadRoot: Message;
+  threadReplies: Message[];
+  openMenuId: string | null;
+  onToggleMenu: (id: string) => void;
+  onQuote: (message: Message) => void;
+  onReply: (message: Message) => void;
+  onComposeReply: (message: Message) => void;
+  onClose: () => void;
+} & MessageTaskControls;
 
 export function ConversationThread({
   threadRoot,
   threadReplies,
   tasks,
-  taskForm,
+  taskCreation,
+  createTask,
+  cancelTaskCreation,
   openTaskCreation,
   openMenuId,
   onToggleMenu,
@@ -14,19 +26,7 @@ export function ConversationThread({
   onReply,
   onComposeReply,
   onClose,
-}: {
-  threadRoot: Message;
-  threadReplies: Message[];
-  tasks: ReturnType<typeof useMessageTasks>["tasks"];
-  taskForm: ReturnType<typeof useMessageTasks>["taskForm"];
-  openTaskCreation: (message: Message, position: TaskCreationPosition) => void;
-  openMenuId: string | null;
-  onToggleMenu: (id: string) => void;
-  onQuote: (message: Message) => void;
-  onReply: (message: Message) => void;
-  onComposeReply: (message: Message) => void;
-  onClose: () => void;
-}) {
+}: ConversationThreadProps) {
   return (
     <aside className="thread-panel" aria-label="讨论串">
       <header>
@@ -48,7 +48,16 @@ export function ConversationThread({
         <button type="button" onClick={() => openTaskCreation(threadRoot, "thread-root")}>
           从消息建任务
         </button>
-        {taskForm(threadRoot, "thread-root")}
+        {taskCreation?.message.id === threadRoot.id && taskCreation.position === "thread-root" && (
+          <TaskCreationForm
+            key={`${threadRoot.id}:thread-root`}
+            message={threadRoot}
+            onCancel={cancelTaskCreation}
+            onCreate={(title) =>
+              createTask({ message: threadRoot, position: "thread-root", title })
+            }
+          />
+        )}
       </article>
       <div className="thread-replies">
         {threadReplies.map((reply) => (
@@ -56,7 +65,16 @@ export function ConversationThread({
             <strong>{reply.author.kind === "human" ? "你" : "Agent"}</strong>
             <p>{reply.text}</p>
             <MessageTasks tasks={tasks} messageId={reply.id} />
-            {taskForm(reply, "thread-reply")}
+            {taskCreation?.message.id === reply.id && taskCreation.position === "thread-reply" && (
+              <TaskCreationForm
+                key={`${reply.id}:thread-reply`}
+                message={reply}
+                onCancel={cancelTaskCreation}
+                onCreate={(title) =>
+                  createTask({ message: reply, position: "thread-reply", title })
+                }
+              />
+            )}
             <div className="message-actions">
               <button
                 type="button"

@@ -81,7 +81,7 @@ SQLite 的 session/run/交付/动作记录和 node 本地收据是持久事实�
 
 下面的功能目录都位于 `apps/web/src/features/`。
 
-- `conversations/`：`chat-page.tsx` 保留唯一频道选择/ref、认证、提交/draft/busy、回复目标、移动视图与 DOM 通知滚动。`feed/use-conversation-feed.ts` 拥有 snapshot/SSE、频道目录、历史窗口与 older/latest/通知 context 数据流，接收频道选择值、具名回调，以及 thread 提供的 `receiveStreamReply`、`installThread` 两个动作。`feed/use-conversation-thread.ts`、`use-conversation-attachments.ts`、`use-owner-push.ts` 分别提供讨论串、附件与点击通知流程；`owner-request.ts` 处理对话请求及带 HTTP 状态的错误。`ui/` 放频道导航、时间线、讨论串、受控 composer、频道弹窗与唯一消息任务表单；各位置/key 不变。`styles/` 的 shell→conversation→dialog→mobile→message-details 由页面固定顺序导入，保留共享选择器和原移动级联；无转发桶或镜像 selection。
+- `conversations/`：从 `chat-page.tsx` 看频道选择、认证、消息提交、回复目标和移动视图的页面组合。`feed/use-conversation-feed.ts` 维护频道目录、事件流与历史窗口，使用具名回调和讨论串的 `receiveStreamReply`、`installThread` 动作；同目录的 thread、attachments、owner-push hooks 分别管理讨论串、附件与通知。`feed/use-message-tasks.ts` 提供消息任务、创建位置和提交/取消动作；`ui/message-tasks.tsx` 展示任务卡及 `TaskCreationForm`，时间线和讨论串在各自消息位置显式渲染表单。其余 `ui/` 文件对应频道导航、时间线、讨论串、消息输入和频道弹窗。`owner-request.ts` 处理对话请求及 HTTP 状态错误；`styles/` 按 shell→conversation→dialog→mobile→message-details 导入，各文件内部按界面区域分组。
 - `agents/`：`agents-page.tsx` 保留唯一创建 draft、submitting、页面级私信/邀请互斥和错误，以及 Agent 行展示。`agent-requests.ts` 的 `readAgentDirectory` 并行读取六类目录；`data/use-agent-directory.ts` 拥有目录状态、轮询与 refresh，并把 nodes/providers 交给页面回调整理表单选择。`data/use-model-credentials.ts` 拥有凭据表单状态、提交与撤销动作。`ui/agent-creation-form.tsx` 与 `model-credentials-form.tsx` 是受控完整表单；已有 Editor、Activity 和 stop-status 按展示归入 `ui/`，不增加行包装或局部请求状态。
 - `workspace/`：工作区浏览、下载操作及状态查询。
 - `nodes/`、`tasks/`、`reminders/`：相应管理页面。

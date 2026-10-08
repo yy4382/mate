@@ -54,8 +54,8 @@ export function useConversationAttachments({
 
   async function uploadAttachment(selected: Channel | null) {
     if (!selected || selected.archived || !selectedFile || attachmentBusy) return;
-    const channelId = selected.id,
-      file = selectedFile;
+    const channelId = selected.id;
+    const file = selectedFile;
     setAttachmentBusy(true);
     setAttachmentError(null);
     try {
