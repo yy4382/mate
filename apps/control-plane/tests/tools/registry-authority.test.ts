@@ -5,14 +5,14 @@ import { z } from "zod";
 
 import {
   cleanupAgentToolFixture,
-  setup,
+  createAgentToolFixture,
   authorizeModel,
   addAgent,
   waitForRuns,
 } from "../support/agent/agent-tool-fixture.js";
 
 it("maps storage exceptions once and rolls back conversation effects", async () => {
-  const { app, cookie, db, nodeId, socket } = await setup();
+  const { app, cookie, db, nodeId, socket } = await createAgentToolFixture();
   const agentId = addAgent(app, nodeId, "Storage failure");
   const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
   await authorizeModel(app, cookie);
@@ -43,7 +43,7 @@ it("maps storage exceptions once and rolls back conversation effects", async () 
 });
 
 it("refuses every registered operation and meta tool for ended, absent and another Agent's runs before any effect", async () => {
-  const { app, cookie, db, nodeId, socket } = await setup();
+  const { app, cookie, db, nodeId, socket } = await createAgentToolFixture();
   const agentId = addAgent(app, nodeId, "Current-run caller");
   const otherAgentId = addAgent(app, nodeId, "Other Agent");
   const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
@@ -171,7 +171,7 @@ it("refuses every registered operation and meta tool for ended, absent and anoth
 });
 
 it("admits only prepared Agents and lifecycle requests cannot change their node or regress their preparation", async () => {
-  const { app, cookie, nodeId, socket } = await setup();
+  const { app, cookie, nodeId, socket } = await createAgentToolFixture();
   const agentId = crypto.randomUUID();
   const request = {
     id: agentId,

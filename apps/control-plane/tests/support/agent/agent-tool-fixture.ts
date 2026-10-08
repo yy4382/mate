@@ -35,7 +35,7 @@ export class FakeNodeSocket implements NodeSocket {
   terminate() {}
 }
 
-export async function setup() {
+export async function createAgentToolFixture() {
   const directory = mkdtempSync(join(tmpdir(), "mate-agent-tool-fixture-"));
   chmodSync(directory, 0o700);
   const passwordFile = join(directory, "owner-password");

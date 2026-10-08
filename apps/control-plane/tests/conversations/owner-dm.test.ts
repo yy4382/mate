@@ -4,11 +4,15 @@ import { randomUUID } from "node:crypto";
 
 import { afterEach, expect, it } from "vitest";
 
-import { cleanupFixture, setup, waitForRun } from "../support/agent/conversation-fixture.js";
+import {
+  cleanupFixture,
+  createConversationFixture,
+  waitForRun,
+} from "../support/agent/conversation-fixture.js";
 afterEach(cleanupFixture);
 
 it("creates one private owner DM and keeps its input queued while the Agent awaits credentials", async () => {
-  const { app, cookie, nodeId } = await setup();
+  const { app, cookie, nodeId } = await createConversationFixture();
   const agentId = randomUUID();
   const prepared = app.agents.prepare({
     id: agentId,
@@ -54,7 +58,7 @@ it("creates one private owner DM and keeps its input queued while the Agent awai
 });
 
 it("routes Agent conversation discovery through its current control-plane run", async () => {
-  const { app, cookie, nodeId, socket } = await setup();
+  const { app, cookie, nodeId, socket } = await createConversationFixture();
   const agentId = randomUUID();
   app.agents.prepare({
     id: agentId,

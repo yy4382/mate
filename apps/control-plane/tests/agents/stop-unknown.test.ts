@@ -9,14 +9,14 @@ import { afterEach, expect, it } from "vitest";
 import {
   fixtures,
   cleanupFixture,
-  setup,
+  createAgentCreationFixture,
   login,
   pairNode,
 } from "../support/agent/creation-fixture.js";
 afterEach(cleanupFixture);
 
 it("reports an earlier command whose termination the node cannot confirm as unknown, not stopped", async () => {
-  const app = setup();
+  const app = createAgentCreationFixture();
   const cookie = await login(app);
   const { id: nodeId, socket } = await pairNode(app, cookie);
   const id = randomUUID();
@@ -122,7 +122,7 @@ it("reports an earlier command whose termination the node cannot confirm as unkn
 });
 
 it("counts every command whose termination nothing proved, however the node answered", async () => {
-  const app = setup();
+  const app = createAgentCreationFixture();
   const cookie = await login(app);
   const { id: nodeId, socket } = await pairNode(app, cookie);
   const id = randomUUID();
@@ -269,7 +269,7 @@ it("counts every command whose termination nothing proved, however the node answ
 });
 
 it("uses a fresh stop operation ID after an unknown node receipt", async () => {
-  const app = setup();
+  const app = createAgentCreationFixture();
   const cookie = await login(app);
   const { id: nodeId, socket } = await pairNode(app, cookie);
   const id = randomUUID();

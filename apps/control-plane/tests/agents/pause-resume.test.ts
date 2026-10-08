@@ -4,11 +4,16 @@ import { randomUUID } from "node:crypto";
 
 import { afterEach, expect, it } from "vitest";
 
-import { cleanupFixture, setup, login, pairNode } from "../support/agent/creation-fixture.js";
+import {
+  cleanupFixture,
+  createAgentCreationFixture,
+  login,
+  pairNode,
+} from "../support/agent/creation-fixture.js";
 afterEach(cleanupFixture);
 
 it("keeps manual pause until explicit resume, requires the original workspace, and allows unknown command results", async () => {
-  const app = setup();
+  const app = createAgentCreationFixture();
   const cookie = await login(app);
   const { id: nodeId, socket } = await pairNode(app, cookie);
   const id = randomUUID();

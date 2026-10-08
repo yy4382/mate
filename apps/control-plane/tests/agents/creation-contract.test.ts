@@ -7,11 +7,16 @@ import { afterEach, expect, it } from "vitest";
 
 import { newAgentRequestSchema } from "../../src/agents/contracts.js";
 
-import { cleanupFixture, setup, login, pairNode } from "../support/agent/creation-fixture.js";
+import {
+  cleanupFixture,
+  createAgentCreationFixture,
+  login,
+  pairNode,
+} from "../support/agent/creation-fixture.js";
 afterEach(cleanupFixture);
 
 it("keeps an offline-node Agent form unsubmitted", async () => {
-  const app = setup();
+  const app = createAgentCreationFixture();
   const cookie = await login(app);
   const input = {
     id: "ed1e60c8-bdda-4f46-a857-bbd542f82640",
@@ -36,7 +41,7 @@ it("keeps an offline-node Agent form unsubmitted", async () => {
 });
 
 it("rejects a model outside the provider registry before persisting an Agent", async () => {
-  const app = setup();
+  const app = createAgentCreationFixture();
   const cookie = await login(app);
   const { id: nodeId, socket } = await pairNode(app, cookie);
   const input = {
@@ -90,7 +95,7 @@ it("rejects credential fields outside the Agent creation contract", () => {
 });
 
 it("sends only the bounded Agent provisioning operation to the selected online node", async () => {
-  const app = setup();
+  const app = createAgentCreationFixture();
   const cookie = await login(app);
   const { id: nodeId, socket } = await pairNode(app, cookie);
   const agentId = "ed1e60c8-bdda-4f46-a857-bbd542f82640";

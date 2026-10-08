@@ -3,14 +3,14 @@ import { afterEach, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import {
   cleanupAgentToolFixture,
-  setup,
+  createAgentToolFixture,
   authorizeModel,
   addAgent,
   waitForRuns,
 } from "../support/agent/agent-tool-fixture.js";
 
 it("discovers and invokes conversation tools through the shared Agent tools interface", async () => {
-  const { app, cookie, nodeId, socket } = await setup();
+  const { app, cookie, nodeId, socket } = await createAgentToolFixture();
   const agentId = addAgent(app, nodeId, "Tool caller");
   const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
   await authorizeModel(app, cookie);
@@ -55,7 +55,7 @@ it("discovers and invokes conversation tools through the shared Agent tools inte
 });
 
 it("preserves the complete model-visible catalog and rejects invalid input before any effect", async () => {
-  const { app, cookie, nodeId, socket } = await setup();
+  const { app, cookie, nodeId, socket } = await createAgentToolFixture();
   const agentId = addAgent(app, nodeId, "Catalog reader");
   const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
   await authorizeModel(app, cookie);

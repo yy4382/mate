@@ -4,12 +4,12 @@ import { z } from "zod";
 import { NodeControlMessageSchema, type ControlWorkspaceOperation } from "@mate/protocol";
 import {
   cleanupAgentToolFixture,
-  setup,
+  createAgentToolFixture,
   FakeNodeSocket,
 } from "../support/agent/agent-tool-fixture.js";
 import { bindToolSocket, toolTestInput } from "../support/agent/tool-run.js";
 
-async function additionalNode(context: Awaited<ReturnType<typeof setup>>) {
+async function additionalNode(context: Awaited<ReturnType<typeof createAgentToolFixture>>) {
   const response = await context.app.http.request("/api/owner/nodes/pairing-tokens", {
     method: "POST",
     headers: { cookie: context.cookie },
@@ -63,7 +63,7 @@ function workspaceResult(request: ControlWorkspaceOperation) {
 }
 
 it("disconnect cancels all three request kinds on that node while another node still completes", async () => {
-  const context = await setup();
+  const context = await createAgentToolFixture();
   const peer = await additionalNode(context);
   const localFile = workspaceRequest();
   const peerFile = workspaceRequest();
@@ -95,7 +95,7 @@ it("disconnect cancels all three request kinds on that node while another node s
 });
 
 it("duplicate completion leaves no old timeout able to reject a later request with that correlation ID", async () => {
-  const context = await setup();
+  const context = await createAgentToolFixture();
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   try {
     const first = workspaceRequest();

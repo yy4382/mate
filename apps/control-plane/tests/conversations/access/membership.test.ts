@@ -6,7 +6,7 @@ import { afterEach, expect, it } from "vitest";
 import {
   OwnerMessageLike,
   cleanupFixture,
-  setup,
+  createConversationFixture,
   prepareVerifiedAgent,
   finishRun,
   waitForRun,
@@ -15,7 +15,7 @@ import {
 afterEach(cleanupFixture);
 
 it("limits read and send to joined conversations while exposing only public metadata", async () => {
-  const { app, cookie, nodeId, socket } = await setup();
+  const { app, cookie, nodeId, socket } = await createConversationFixture();
   const agentId = randomUUID();
   app.agents.prepare({
     id: agentId,
@@ -165,7 +165,7 @@ it("limits read and send to joined conversations while exposing only public meta
 });
 
 it("lets a non-member Agent read a public channel's timeline and thread but not speak", async () => {
-  const { app, cookie, nodeId, socket } = await setup();
+  const { app, cookie, nodeId, socket } = await createConversationFixture();
   const agentId = await prepareVerifiedAgent(app, nodeId, "Curious colleague");
   const ownDirect = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
   const publicRoom = app.chat.channels.createChannel({
@@ -232,7 +232,7 @@ it("lets a non-member Agent read a public channel's timeline and thread but not 
 });
 
 it("keeps a non-member Agent out of a private channel that holds a task", async () => {
-  const { app, cookie, nodeId, socket } = await setup();
+  const { app, cookie, nodeId, socket } = await createConversationFixture();
   const agentId = await prepareVerifiedAgent(app, nodeId, "Private outsider");
   const ownDirect = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
   const privateRoom = app.chat.channels.createChannel({
@@ -294,7 +294,7 @@ it("keeps a non-member Agent out of a private channel that holds a task", async 
 });
 
 it("lets a non-member Agent join a public channel, then speak and receive later activity", async () => {
-  const { app, cookie, nodeId, socket } = await setup();
+  const { app, cookie, nodeId, socket } = await createConversationFixture();
   const agentId = await prepareVerifiedAgent(app, nodeId, "Joining colleague");
   const ownDirect = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
   const publicRoom = app.chat.channels.createChannel({
@@ -358,7 +358,7 @@ it("lets a non-member Agent join a public channel, then speak and receive later 
 });
 
 it("does not let an outsider read or join a peer direct message through the public read path", async () => {
-  const { app, cookie, db, nodeId, socket } = await setup();
+  const { app, cookie, db, nodeId, socket } = await createConversationFixture();
   const firstAgentId = await prepareVerifiedAgent(app, nodeId, "Chatty colleague"),
     secondAgentId = await prepareVerifiedAgent(app, nodeId, "Quiet colleague"),
     outsiderId = await prepareVerifiedAgent(app, nodeId, "Outsider colleague");

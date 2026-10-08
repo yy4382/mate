@@ -2,11 +2,16 @@ import { randomUUID } from "node:crypto";
 
 import { afterEach, expect, it } from "vitest";
 
-import { cleanupFixture, setup, login, pairNode } from "../support/agent/creation-fixture.js";
+import {
+  cleanupFixture,
+  createAgentCreationFixture,
+  login,
+  pairNode,
+} from "../support/agent/creation-fixture.js";
 afterEach(cleanupFixture);
 
 it("finds an online Agent beyond more than one page of offline deliveries", async () => {
-  const app = setup();
+  const app = createAgentCreationFixture();
   const cookie = await login(app);
   const offlineNode = await pairNode(app, cookie),
     onlineNode = await pairNode(app, cookie);

@@ -1,4 +1,4 @@
-// Build B's delivery from this checkout, then run the same synthetic scenario functions.
+// Build this checkout’s delivery image, then run the synthetic scenario functions.
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";

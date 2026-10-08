@@ -8,11 +8,15 @@ import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import { afterEach, expect, it } from "vitest";
 
-import { cleanupFixture, setup, waitForRun } from "../support/agent/conversation-fixture.js";
+import {
+  cleanupFixture,
+  createConversationFixture,
+  waitForRun,
+} from "../support/agent/conversation-fixture.js";
 afterEach(cleanupFixture);
 
 it("keeps an archived run input pending and retries it after the owner unarchives the channel", async () => {
-  const { app, cookie, directory, nodeId, socket } = await setup();
+  const { app, cookie, directory, nodeId, socket } = await createConversationFixture();
   const agentId = randomUUID();
   app.agents.prepare({
     id: agentId,

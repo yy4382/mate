@@ -133,6 +133,10 @@ Pi 会话保留供应商扩展字段。会话边界的窄适配不能改成会�
 
 控制面 `tests/` 下的 `http`、`conversations`、`tasks`、`agents`、`session`、`tools`、`runs`、`nodes` 和 `files` 对应现有能力；`scenarios` 保留完整工作和恢复场景。浏览器测试使用同样的功能词汇，组件测试和 HTTP/事件响应契约测试分别放在功能目录和 `contracts`。Vitest 递归发现这些目录，无需维护测试文件清单。
 
+控制面的小型准备入口按用途命名：`createAgentCreationFixture` 提供创建资料的应用，`createConversationFixture` 提供已登录并配对节点的对话环境，`createAgentToolFixture` 和 `createProcessToolFixture` 分别提供工具与进程调用环境。网页 `tests/support/chat-fixture.ts` 与 `agents-fixture.ts` 用普通工厂创建有初值的数据，复用已有协议投影；测试直接调整数据、调用页面，再观察断言，HTTP 回复使用原生 `Response`。
+
+`apps/control-plane/benchmarks/tool-action.mjs` 先准备固定合成历史，再测量既有动作读取；`syntheticMessage` 与 `actionIdentity` 分别表达历史内容和目标位置。`docs/research/pi-compaction-prefix-probe.mjs` 是不发送网络请求的自有序列化探针，`captureRequestPayload` 读取请求形状，`withoutCacheMarkers` 表达比较时略去的缓存标记。
+
 共享环境位于控制面 `tests/support/`：`agent` 装配合成 Agent/模型和套接字，`node` 观察进程与连接，`provider` 模拟传输协议，`facts` 解析只读持久证据，`scenario` 提供场景驱动与失败证据，`environment` 管实际服务启动、配置和资源清理。大型场景按能力拆成完整用例，各套件显式注册自己的清理；没有兼容转发目录。`ScenarioResources` 在服务还存在时先收集证据，再逆序释放资源；失败的释放仍可在下一次 close 重试，超时不会重复发起正在进行的释放。
 
 本轮整理后保留的测试文件尺寸例外如下；这些是具体取舍，不是目录或行数的 CI 豁免规则。

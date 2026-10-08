@@ -3,72 +3,76 @@ import { cleanup } from "@testing-library/react";
 
 import { vi } from "vitest";
 
-class FixtureState {
-  agents!: Array<Record<string, unknown>>;
-  posts!: Array<Record<string, unknown>>;
-  providers!: Array<{ id: string; name: string; models: Array<{ id: string; name: string }> }>;
-  credentials!: Array<{ provider: string; configured: true; updatedAt: number }>;
-  credentialWrites!: Array<{ provider: string; apiKey: string }>;
-  agentUpdates!: Array<{ path: string; body: Record<string, unknown> }>;
-  invitationPosts!: Array<{ url: string; body: Record<string, unknown> }>;
-  nodeOnline!: boolean;
-  nodeLastConnectedAt!: string | null;
-  postConflict!: boolean;
-  workspaceFailure!: { status: number; body: unknown } | null;
-  workspaceDownloadResponse!: Response | null;
-  workspaceDownloadStatus!: {
-    state: "started" | "succeeded" | "failed" | "cancelled";
-    errorCode: string | null;
-  } | null;
-  workspacePages!: Array<{
+import type { ModelCredentialSummary, ModelProviderSummary } from "@mate/protocol/owner";
+import type { WorkspaceDownloadStatus } from "@mate/protocol/workspace";
+
+type FixtureState = {
+  agents: Array<Record<string, unknown>>;
+  posts: Array<Record<string, unknown>>;
+  providers: ModelProviderSummary[];
+  credentials: ModelCredentialSummary[];
+  credentialWrites: Array<{ provider: string; apiKey: string }>;
+  agentUpdates: Array<{ path: string; body: Record<string, unknown> }>;
+  invitationPosts: Array<{ url: string; body: Record<string, unknown> }>;
+  nodeOnline: boolean;
+  nodeLastConnectedAt: string | null;
+  postConflict: boolean;
+  workspaceFailure: { status: number; body: unknown } | null;
+  workspaceDownloadResponse: Response | null;
+  workspaceDownloadStatus: Omit<WorkspaceDownloadStatus, "downloadId"> | null;
+  workspacePages: Array<{
     path: string;
     offset: number;
     entries: Array<{ name: string; type: string; size: number }>;
     nextOffset: number | null;
   }>;
-  fetchMock!: ReturnType<typeof vi.fn>;
+  fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
+};
+
+function createAgentsFixture(): FixtureState {
+  return {
+    agents: [],
+    posts: [],
+    providers: [
+      {
+        id: "openai",
+        name: "OpenAI",
+        models: [
+          { id: "gpt-4.1", name: "GPT-4.1" },
+          { id: "gpt-4o-mini", name: "GPT-4o mini" },
+        ],
+      },
+      {
+        id: "anthropic",
+        name: "Anthropic",
+        models: [{ id: "claude-sonnet-4", name: "Claude Sonnet 4" }],
+      },
+    ],
+    credentials: [],
+    credentialWrites: [],
+    agentUpdates: [],
+    invitationPosts: [],
+    nodeOnline: true,
+    nodeLastConnectedAt: null,
+    postConflict: false,
+    workspaceFailure: null,
+    workspaceDownloadResponse: null,
+    workspaceDownloadStatus: { state: "succeeded", errorCode: null },
+    workspacePages: [],
+    fetchMock: vi.fn<typeof fetch>(),
+  };
 }
-export const fixture = new FixtureState();
+
+export const fixture = createAgentsFixture();
 export const nodeId = "c5342142-9cf5-4b22-86f3-bdc46bb471f2";
 export const channelId = "c2ec7538-cbd6-4c37-9022-9405d031eb9f";
 export const sessionId = "d3db0e77-1761-4426-9a56-e65e67f400be";
 export function json(status: number, body: unknown): Response {
-  return {
-    status,
-    ok: status >= 200 && status < 300,
-    json: async () => body,
-  } as Response;
+  return Response.json(body, { status });
 }
 export function resetFixture() {
   Reflect.deleteProperty(window, "showSaveFilePicker");
-  fixture.agents = [];
-  fixture.posts = [];
-  fixture.providers = [
-    {
-      id: "openai",
-      name: "OpenAI",
-      models: [
-        { id: "gpt-4.1", name: "GPT-4.1" },
-        { id: "gpt-4o-mini", name: "GPT-4o mini" },
-      ],
-    },
-    {
-      id: "anthropic",
-      name: "Anthropic",
-      models: [{ id: "claude-sonnet-4", name: "Claude Sonnet 4" }],
-    },
-  ];
-  fixture.credentials = [];
-  fixture.credentialWrites = [];
-  fixture.agentUpdates = [];
-  fixture.invitationPosts = [];
-  fixture.nodeOnline = true;
-  fixture.nodeLastConnectedAt = null;
-  fixture.postConflict = false;
-  fixture.workspaceFailure = null;
-  fixture.workspaceDownloadResponse = null;
-  fixture.workspaceDownloadStatus = { state: "succeeded", errorCode: null };
-  fixture.workspacePages = [];
+  Object.assign(fixture, createAgentsFixture());
   fixture.fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url === "/api/owner/nodes")
@@ -96,12 +100,7 @@ export function resetFixture() {
             updatedAt: 3,
           },
         ];
-        return {
-          status: 204,
-          ok: true,
-          json: async () => null,
-          text: async () => "",
-        } as Response;
+        return new Response(null, { status: 204 });
       }
       return json(200, { credentials: fixture.credentials });
     }
@@ -179,17 +178,14 @@ export function resetFixture() {
       if (workspaceMatch[2] === "download")
         return (
           fixture.workspaceDownloadResponse ??
-          ({
-            status: 200,
-            ok: true,
-            body: new ReadableStream<Uint8Array>({
+          new Response(
+            new ReadableStream<Uint8Array>({
               start(controller) {
                 controller.enqueue(new TextEncoder().encode("hello"));
                 controller.close();
               },
             }),
-            json: async () => ({}),
-          } as Response)
+          )
         );
       const offset = Number(urlObject.searchParams.get("offset") ?? 0);
       const page = fixture.workspacePages.find(

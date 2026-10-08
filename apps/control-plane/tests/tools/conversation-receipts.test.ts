@@ -6,7 +6,7 @@ import { afterEach, expect, it } from "vitest";
 
 import {
   cleanupFixture,
-  setup,
+  createConversationFixture,
   pairAnotherNode,
   waitForRun,
   callAgentTool,
@@ -14,7 +14,7 @@ import {
 afterEach(cleanupFixture);
 
 it("replays a committed tool action after its reply is lost and the delivery retries", async () => {
-  const { app, cookie, db, nodeId, socket } = await setup();
+  const { app, cookie, db, nodeId, socket } = await createConversationFixture();
   const agentId = randomUUID();
   app.agents.prepare({
     id: agentId,
@@ -110,7 +110,7 @@ it("replays a committed tool action after its reply is lost and the delivery ret
 });
 
 it("keeps a running Agent's tool catalogue and refuses stale or forged tool runs", async () => {
-  const { app, cookie, nodeId, socket } = await setup();
+  const { app, cookie, nodeId, socket } = await createConversationFixture();
   const agentId = randomUUID();
   app.agents.prepare({
     id: agentId,
