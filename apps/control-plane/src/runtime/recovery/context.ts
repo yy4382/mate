@@ -25,8 +25,8 @@ export function queueUncertainOperationFacts(
     )
     .all(agentId);
   for (const row of processes) {
-    const request = parseHistory(row.request_json),
-      receipt = parseHistory(row.receipt_json);
+    const request = parseHistory(row.request_json);
+    const receipt = parseHistory(row.receipt_json);
     if (["succeeded", "failed"].includes(row.state) && request.ok && receipt.ok) continue;
     session.queueCorrection(
       agentId,
@@ -108,7 +108,7 @@ export function queueUncertainOperationFacts(
 export function parseHistory(value: string | null): { ok: boolean; value: unknown } {
   if (value === null) return { ok: true, value: null };
   try {
-    return { ok: true, value: JSON.parse(value) as unknown };
+    return { ok: true, value: JSON.parse(value) };
   } catch {
     return { ok: false, value };
   }

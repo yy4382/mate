@@ -8,7 +8,7 @@ interface PushPayload {
   tag: string;
 }
 
-type Sender = (subscription: PushSubscription, payload: PushPayload) => Promise<unknown>;
+type PushSender = (subscription: PushSubscription, payload: PushPayload) => Promise<unknown>;
 
 const deliveryRowSchema = z.looseObject({
   event_key: z.string(),
@@ -37,22 +37,11 @@ export class OwnerPush {
 
   constructor(
     private readonly db: Database.Database,
-    private readonly sender: Sender = async (subscription, payload) => {
-      await webpush.sendNotification(subscription, JSON.stringify(payload), {
-        vapidDetails: {
-          subject: process.env.MATE_PUBLIC_ORIGIN ?? "mailto:owner@mate.invalid",
-          publicKey: this.keys.publicKey,
-          privateKey: this.keys.privateKey,
-        },
-        TTL: 3600,
-        timeout: 10_000,
-      });
-    },
+    private readonly sender: PushSender = (subscription, payload) =>
+      this.sendNotification(subscription, payload),
     private readonly now: () => number = Date.now,
   ) {
-    // Requeue deliveries an earlier release left failed so they are retried instead of stranded.
-    // This release writes only 'pending' and 'sent'; the tables and retry columns come from the
-    // control-plane format, which this service does not create or extend.
+    // Persisted failed deliveries re-enter the pending outbox; delivery writes pending or sent.
     db.prepare("UPDATE owner_push_deliveries SET state='pending' WHERE state='failed'").run();
     let keys = pushKeyRowSchema
       .optional()
@@ -69,6 +58,18 @@ export class OwnerPush {
     this.keys = { publicKey: keys.public_key, privateKey: keys.private_key };
     this.timer = setInterval(() => void this.deliver().catch(() => undefined), 5000);
     this.timer.unref();
+  }
+
+  private async sendNotification(subscription: PushSubscription, payload: PushPayload) {
+    await webpush.sendNotification(subscription, JSON.stringify(payload), {
+      vapidDetails: {
+        subject: process.env.MATE_PUBLIC_ORIGIN ?? "mailto:owner@mate.invalid",
+        publicKey: this.keys.publicKey,
+        privateKey: this.keys.privateKey,
+      },
+      TTL: 3600,
+      timeout: 10_000,
+    });
   }
 
   get publicKey(): string {
@@ -105,7 +106,7 @@ export class OwnerPush {
   }
 
   /** Must be called inside the transaction that creates the message it points at. */
-  queue(key: string, title: string, url: string): void {
+  queue({ eventKey, title, url }: { eventKey: string; title: string; url: string }): void {
     if (!this.db.inTransaction) throw new Error("Push enqueue requires the fact transaction");
     if (!url.startsWith("/app?") || url.length > 2048) throw new Error("Invalid push target");
     const now = this.now();
@@ -113,14 +114,14 @@ export class OwnerPush {
       .prepare(
         "INSERT OR IGNORE INTO owner_push_events(event_key,title,url,created_at) VALUES(?,?,?,?)",
       )
-      .run(key, title, url, now);
+      .run(eventKey, title, url, now);
     if (!inserted.changes) return;
     this.db
       .prepare(
         `INSERT INTO owner_push_deliveries(event_key,endpoint,state,updated_at)
       SELECT ?,endpoint,'pending',? FROM owner_push_subscriptions`,
       )
-      .run(key, now);
+      .run(eventKey, now);
   }
 
   async deliver(): Promise<void> {

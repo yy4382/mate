@@ -5,12 +5,7 @@ import {
   reportedGoogleUsage,
   confirmedModelResponse,
 } from "../provider-response.js";
-import {
-  type ReportedUsage,
-  type ModelContextMessage,
-  type SessionCheckpoint,
-  type SessionCommit,
-} from "./record.js";
+import { type ModelContextMessage, type SessionCheckpoint, type SessionCommit } from "./record.js";
 
 import { randomUUID } from "node:crypto";
 import type { AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
@@ -37,7 +32,7 @@ function textTokens(text: string): number {
   return Math.ceil(text.length / estimatedCharsPerToken);
 }
 
-function estimate(message: AgentMessage): number {
+function estimateMessageTokens(message: AgentMessage) {
   if (message.role === "user" || message.role === "system" || message.role === "toolResult") {
     const images =
       typeof message.content === "string"
@@ -64,7 +59,7 @@ function estimate(message: AgentMessage): number {
   );
 }
 
-function contextTokens(entries: ModelContextMessage[], throughId?: string): number {
+function estimateContextTokens(entries: ModelContextMessage[], throughId?: string) {
   const anchor = throughId ? entries.findIndex((entry) => entry.id === throughId) + 1 : 0;
   for (let i = entries.length - 1; i >= anchor; i--) {
     const message = entries[i]!.message;
@@ -78,9 +73,12 @@ function contextTokens(entries: ModelContextMessage[], throughId?: string): numb
     const total =
       usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
     if (total > 0)
-      return total + entries.slice(i + 1).reduce((sum, entry) => sum + estimate(entry.message), 0);
+      return (
+        total +
+        entries.slice(i + 1).reduce((sum, entry) => sum + estimateMessageTokens(entry.message), 0)
+      );
   }
-  return entries.reduce((sum, entry) => sum + estimate(entry.message), 0);
+  return entries.reduce((sum, entry) => sum + estimateMessageTokens(entry.message), 0);
 }
 
 /** One run's committed records and the latest acknowledged checkpoint. The provider sees a
@@ -128,8 +126,8 @@ export class SessionCompaction {
       Math.floor((this.model.contextWindow - reserve) * recentAvailableWindowRatio),
     );
     const estimateBefore =
-      contextTokens(active, this.checkpoint?.throughEntryId) +
-      [...system, ...summary].reduce((sum, message) => sum + estimate(message), 0);
+      estimateContextTokens(active, this.checkpoint?.throughEntryId) +
+      [...system, ...summary].reduce((sum, message) => sum + estimateMessageTokens(message), 0);
     const forced = this.forced;
     this.forced = false;
     if (!forced && estimateBefore <= this.model.contextWindow - reserve) return current;
@@ -141,7 +139,7 @@ export class SessionCompaction {
     let accumulated = 0;
     let cut = -1;
     for (let i = active.length - 1; i >= 0; i--) {
-      accumulated += estimate(active[i]!.message);
+      accumulated += estimateMessageTokens(active[i]!.message);
       if (accumulated < keep) continue;
       for (let candidate = i; candidate < active.length; candidate++) {
         if (active[candidate]!.message.role !== "toolResult") {
@@ -175,18 +173,24 @@ export class SessionCompaction {
     let nextSummary = this.checkpoint?.summary ?? "No prior history.";
     const summaryRequestIds: string[] = [];
     if (history.length) {
-      const result = await this.summarize(
-        history,
-        this.checkpoint?.summary,
-        false,
-        reserve,
+      const result = await this.summarize({
+        messages: history,
+        previousSummary: this.checkpoint?.summary,
+        splitTurnPrefix: false,
+        reserveTokens: reserve,
         signal,
-      );
+      });
       nextSummary = result.text;
       summaryRequestIds.push(result.requestId);
     }
     if (prefix.length) {
-      const result = await this.summarize(prefix, undefined, true, reserve, signal);
+      const result = await this.summarize({
+        messages: prefix,
+        previousSummary: undefined,
+        splitTurnPrefix: true,
+        reserveTokens: reserve,
+        signal,
+      });
       nextSummary += `\n\n---\n\n**Turn Context (split turn):**\n\n${result.text}`;
       summaryRequestIds.push(result.requestId);
     }
@@ -197,7 +201,7 @@ export class SessionCompaction {
       ...retained.map((entry) => entry.message),
     ];
     if (
-      resulting.reduce((sum, message) => sum + estimate(message), 0) >
+      resulting.reduce((sum, message) => sum + estimateMessageTokens(message), 0) >
       this.model.contextWindow - reserve
     )
       throw new Error("Compacted context still exceeds model capacity");
@@ -215,26 +219,34 @@ export class SessionCompaction {
     return resulting;
   }
 
-  private async summarize(
-    messages: AgentMessage[],
-    previous: string | undefined,
-    prefix: boolean,
-    reserve: number,
-    signal?: AbortSignal,
-  ): Promise<{ text: string; requestId: string }> {
+  private async summarize({
+    messages,
+    previousSummary,
+    splitTurnPrefix,
+    reserveTokens,
+    signal,
+  }: {
+    messages: AgentMessage[];
+    previousSummary: string | undefined;
+    splitTurnPrefix: boolean;
+    reserveTokens: number;
+    signal: AbortSignal | undefined;
+  }) {
     const { systemPrompt, prompt, context } = buildSummaryRequest(
       projectImages(messages, false),
-      previous,
-      prefix,
+      previousSummary,
+      splitTurnPrefix,
     );
     const maxTokens = Math.min(
-      Math.floor((prefix ? splitTurnSummaryOutputRatio : historySummaryOutputRatio) * reserve),
+      Math.floor(
+        (splitTurnPrefix ? splitTurnSummaryOutputRatio : historySummaryOutputRatio) * reserveTokens,
+      ),
       this.model.maxTokens,
     );
     if (maxTokens < 1 || textTokens(systemPrompt + prompt) + maxTokens > this.model.contextWindow)
       throw new Error("Summary request has no legal input and output capacity");
     const requestId = randomUUID();
-    let inspectedUsage: Promise<{ usage: ReportedUsage; complete: boolean } | null> | undefined;
+    let inspectedUsage: ReturnType<typeof inspectProviderResponse> | undefined;
     const response = await (
       await this.stream(this.model, context, {
         apiKey: this.apiKey,

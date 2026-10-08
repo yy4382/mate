@@ -3,6 +3,9 @@ import { z } from "zod";
 import type Database from "better-sqlite3";
 import { isSupportedModelProvider } from "./catalog.js";
 
+const credentialSummaryRowSchema = z.looseObject({ provider: z.string(), updated_at: z.number() });
+const credentialKeyRowSchema = z.looseObject({ api_key: z.string() });
+
 /** API keys are control-plane secrets. Callers can list presence or read a key for one run. */
 export class ModelCredentialDirectory {
   constructor(
@@ -11,8 +14,7 @@ export class ModelCredentialDirectory {
   ) {}
 
   list(): ModelCredentialSummary[] {
-    const rows = z
-      .looseObject({ provider: z.string(), updated_at: z.number() })
+    const rows = credentialSummaryRowSchema
       .array()
       .parse(
         this.db
@@ -36,8 +38,7 @@ export class ModelCredentialDirectory {
 
   readForRun(provider: string): string | undefined {
     if (!isSupportedModelProvider(provider)) return undefined;
-    const row = z
-      .looseObject({ api_key: z.string() })
+    const row = credentialKeyRowSchema
       .optional()
       .parse(
         this.db.prepare("SELECT api_key FROM model_credentials WHERE provider=?").get(provider),
@@ -47,8 +48,7 @@ export class ModelCredentialDirectory {
 
   put(provider: string, apiKey: string): boolean {
     if (!isSupportedModelProvider(provider)) return false;
-    const existing = z
-      .looseObject({ api_key: z.string() })
+    const existing = credentialKeyRowSchema
       .optional()
       .parse(
         this.db.prepare("SELECT api_key FROM model_credentials WHERE provider=?").get(provider),

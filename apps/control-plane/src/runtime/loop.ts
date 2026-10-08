@@ -13,14 +13,15 @@ import {
   contextRecoveryMessage,
   type AgentProfile,
 } from "../prompts/index.js";
-import {
-  type SessionCommit,
-  type ModelContextMessage,
-  type ReportedUsage,
-} from "./session/record.js";
+import { type SessionCommit, type ModelContextMessage } from "./session/record.js";
 import { durableToolIdentity } from "./tools/identity.js";
 import { randomUUID } from "node:crypto";
-import { Agent, type AgentTool, type StreamFn } from "@earendil-works/pi-agent-core";
+import {
+  Agent,
+  type AgentOptions,
+  type AgentTool,
+  type StreamFn,
+} from "@earendil-works/pi-agent-core";
 import {
   Type,
   validateToolCall,
@@ -31,6 +32,7 @@ import {
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 
 import { SessionCompaction, SummaryResponseError } from "./session/compaction.js";
+import type { AgentToolCallResult } from "./tools/registry.js";
 
 export interface AgentLoopSpec {
   sessionId: string;
@@ -56,6 +58,16 @@ export interface AgentLoopTestDependencies {
 }
 export type AgentLoopResult = { ok: true } | { ok: false; code: string; reason?: string };
 
+export interface AgentLoopActions {
+  isCurrent(): boolean;
+  appendSessionEntry(entry: SessionCommit): boolean;
+  executeTool(request: {
+    toolCallId: string;
+    operation: string;
+    input: Record<string, unknown>;
+  }): Promise<AgentToolCallResult>;
+}
+
 /** The transient Pi handle only advances the durable session owned by the control plane. */
 export class AgentLoop {
   private agent: Agent | undefined;
@@ -72,25 +84,19 @@ export class AgentLoop {
   }
   async run(
     spec: AgentLoopSpec,
-    current: () => boolean,
-    append: (entry: SessionCommit) => boolean,
-    execute: (
-      toolCallId: string,
-      operation: string,
-      input: Record<string, unknown>,
-    ) => Promise<{ ok: true; result: unknown } | { ok: false; error: string }>,
+    actions: AgentLoopActions,
     test: AgentLoopTestDependencies = {},
   ): Promise<AgentLoopResult> {
     const assertCurrent = () => {
-      if (this.controller.signal.aborted || !current())
+      if (this.controller.signal.aborted || !actions.isCurrent())
         throw new Error("Agent run is no longer current");
     };
     const registry = builtinModels();
     const selected = registry.getModel(spec.provider, spec.modelId);
     if (!selected) return { ok: false, code: "model_unavailable" };
     const model =
-        test.modelForRun?.(selected, spec.apiKey, { sessionId: spec.sessionId }) ?? selected,
-      apiKey = spec.apiKey;
+      test.modelForRun?.(selected, spec.apiKey, { sessionId: spec.sessionId }) ?? selected;
+    const apiKey = spec.apiKey;
     let credentialResponse = false;
     const stream: StreamFn = (model, context, options) => {
       assertCurrent();
@@ -116,13 +122,14 @@ export class AgentLoop {
     const transcript = spec.messages
       .filter((entry) => !entry.pending)
       .map((entry) => entry.message);
-    let assistantIdentity = "",
-      actionScopeId = spec.actionScopeId;
+    let assistantIdentity = "";
+    let actionScopeId = spec.actionScopeId;
     const commit = async (entry: SessionCommit) => {
       assertCurrent();
       await test.beforeSessionCommit?.(entry);
       assertCurrent();
-      if (!append(entry)) throw new Error("Session persistence rejected the entry");
+      if (!actions.appendSessionEntry(entry))
+        throw new Error("Session persistence rejected the entry");
       await test.afterSessionCommit?.(entry);
       assertCurrent();
     };
@@ -141,11 +148,11 @@ export class AgentLoop {
     ): Promise<unknown> => {
       assertCurrent();
       if (signal?.aborted) throw new Error("Tool call aborted");
-      const result = await execute(
-        durableToolIdentity(actionScopeId, assistantIdentity, toolCallId),
+      const result = await actions.executeTool({
+        toolCallId: durableToolIdentity(actionScopeId, assistantIdentity, toolCallId),
         operation,
         input,
-      );
+      });
       assertCurrent();
       if (!result.ok) throw new Error(result.error);
       return result.result;
@@ -215,51 +222,55 @@ export class AgentLoop {
     ];
     let compactionFailed = false;
     let compactionError: string | undefined;
-    let inspectedNormalUsage:
-      Promise<{ usage: ReportedUsage; complete: boolean } | null> | undefined;
+    let inspectedNormalUsage: ReturnType<typeof inspectProviderResponse> | undefined;
     let normalRequestPending = false;
+    const streamNormalResponse: StreamFn = (selectedModel, context, options) => {
+      assertCurrent();
+      normalRequestPending = true;
+      inspectedNormalUsage = undefined;
+      return stream(selectedModel, context, {
+        ...options,
+        apiKey,
+        env: {},
+        ...(selectedModel.api === "google-generative-ai" || selectedModel.api === "google-vertex"
+          ? {}
+          : {
+              fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+                const response = await fetch(input, init);
+                inspectedNormalUsage = inspectProviderResponse(response, selectedModel.api);
+                return response;
+              },
+            }),
+      });
+    };
+    const transformModelContext: NonNullable<AgentOptions["transformContext"]> = async (
+      messages,
+      signal,
+    ) => {
+      try {
+        return projectImages(
+          await compaction.transform(messages, signal),
+          model.input.includes("image"),
+        );
+      } catch (error) {
+        if (
+          error instanceof SummaryResponseError &&
+          error.response.errorMessage &&
+          providerCredentialError(error.response.errorMessage)
+        )
+          credentialResponse = true;
+        compactionFailed = true;
+        compactionError = error instanceof Error ? error.message : String(error);
+        throw error;
+      }
+    };
     const agent = new Agent({
       sessionId: spec.sessionId,
       onResponse: (response) => {
         if (response.status === 401 || response.status === 403) credentialResponse = true;
       },
-      streamFn: (selectedModel, context, options) => {
-        assertCurrent();
-        normalRequestPending = true;
-        inspectedNormalUsage = undefined;
-        return stream(selectedModel, context, {
-          ...options,
-          apiKey,
-          env: {},
-          ...(selectedModel.api === "google-generative-ai" || selectedModel.api === "google-vertex"
-            ? {}
-            : {
-                fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
-                  const response = await fetch(input, init);
-                  inspectedNormalUsage = inspectProviderResponse(response, selectedModel.api);
-                  return response;
-                },
-              }),
-        });
-      },
-      transformContext: async (messages, signal) => {
-        try {
-          return projectImages(
-            await compaction.transform(messages, signal),
-            model.input.includes("image"),
-          );
-        } catch (error) {
-          if (
-            error instanceof SummaryResponseError &&
-            error.response.errorMessage &&
-            providerCredentialError(error.response.errorMessage)
-          )
-            credentialResponse = true;
-          compactionFailed = true;
-          compactionError = error instanceof Error ? error.message : String(error);
-          throw error;
-        }
-      },
+      streamFn: streamNormalResponse,
+      transformContext: transformModelContext,
       initialState: {
         model,
         systemPrompt: buildAgentSystemPrompt(spec.prompt).systemPrompt,
@@ -275,7 +286,13 @@ export class AgentLoop {
     this.controller.signal.addEventListener("abort", abort, { once: true });
     let unsuccessfulStopReason: "error" | "aborted" | undefined;
     let contextOverflow = false;
-    const unsubscribe = agent.subscribe(async (event) => {
+    const failureCode = () => {
+      if (this.controller.signal.aborted) return "aborted";
+      if (credentialResponse) return "credentials_invalid";
+      if (compactionFailed) return "context_failed";
+      return "model_failed";
+    };
+    const persistAgentEvent: Parameters<Agent["subscribe"]>[0] = async (event) => {
       if (
         event.type === "message_update" &&
         event.assistantMessageEvent.type === "toolcall_delta"
@@ -337,7 +354,8 @@ export class AgentLoop {
         if (event.message.stopReason === "error" && isContextOverflow(event.message.errorMessage))
           contextOverflow = true;
       }
-    });
+    };
+    const unsubscribe = agent.subscribe(persistAgentEvent);
 
     try {
       assertCurrent();
@@ -377,8 +395,8 @@ export class AgentLoop {
             continue;
           assistantIdentity = entry.id;
           actionScopeId = entry.actionScopeId;
-          let content: ToolResultMessage["content"],
-            isError = false;
+          let content: ToolResultMessage["content"];
+          let isError = false;
           try {
             if (entry.message.stopReason === "length")
               throw new Error("Tool call was not executed because the model output was truncated");
@@ -445,13 +463,7 @@ export class AgentLoop {
     } catch (error) {
       return {
         ok: false,
-        code: this.controller.signal.aborted
-          ? "aborted"
-          : credentialResponse
-            ? "credentials_invalid"
-            : compactionFailed
-              ? "context_failed"
-              : "model_failed",
+        code: failureCode(),
         ...(compactionFailed
           ? {
               reason: (

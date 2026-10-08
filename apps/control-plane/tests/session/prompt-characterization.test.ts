@@ -11,7 +11,7 @@ import type {
 import { answer, model, scripted } from "../support/agent/pi.js";
 import { respond } from "../support/agent/agent-loop.js";
 
-// Frozen from b0dfb0dc before extracting prompts. Synthetic content only; omit clock/UUID fields.
+// Request snapshots contain synthetic content and omit clock/UUID fields.
 it.each([false, true])(
   "preserves the full normal request and configuration (recovery=%s)",
   async (recovery) => {
@@ -51,12 +51,14 @@ it.each([false, true])(
             modelId: "gpt-4o-mini",
             apiKey: "synthetic-key",
           },
-          () => true,
-          (entry) => {
-            commits.push(entry);
-            return true;
+          {
+            isCurrent: () => true,
+            appendSessionEntry: (entry) => {
+              commits.push(entry);
+              return true;
+            },
+            executeTool: async () => ({ ok: true, result: {} }),
           },
-          async () => ({ ok: true, result: {} }),
           {
             modelForRun: (selected) => ({
               ...selected,

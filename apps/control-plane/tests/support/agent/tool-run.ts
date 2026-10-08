@@ -9,8 +9,8 @@ import {
 } from "../../../src/application.js";
 import type { NodeSocket } from "../../../src/nodes/transport.js";
 
-/** Existing authorization tests pause the real scheduler before the external provider boundary.
- * Their calls now enter the public tool/session services directly, without a model transport. */
+/** Tool/session tests pause the real scheduler before the external provider boundary.
+ * Calls enter the public tool/session services directly, without a model transport. */
 export interface TestRun {
   type: "test.run.started";
   requestId: string;
@@ -29,9 +29,9 @@ const fixtures = new WeakMap<
 >();
 const socketNodes = new WeakMap<object, string>();
 export function toolTestApp(options: ControlPlaneOptions): ControlPlane {
-  const path = join(options.dataDir!, "control-plane.sqlite"),
-    sockets = new Map<string, { sent: string[] }>(),
-    gates = new Map<string, () => void>();
+  const path = join(options.dataDir!, "control-plane.sqlite");
+  const sockets = new Map<string, { sent: string[] }>();
+  const gates = new Map<string, () => void>();
   const app = createControlPlane(options, {
     beforeRunStart: async (runId) => {
       const db = new Database(path);
@@ -77,18 +77,18 @@ export async function toolTestInput(
   socket: NodeSocket & { sent: string[] },
   raw: string,
 ): Promise<void> {
-  const input = JSON.parse(raw),
-    fixture = fixtures.get(app)!;
+  const input = JSON.parse(raw);
+  const fixture = fixtures.get(app)!;
   if (input.type === "node.pair" || input.type === "node.authenticate")
     bindToolSocket(app, input.nodeId, socket);
   if (input.type === "session.read") {
     const db = new Database(fixture.path);
     try {
       queueUncertainOperationFacts(db, input.agentId, Date.now());
-      const session = new AgentSession(db),
-        run = db
-          .prepare("SELECT delivery_id FROM owner_agent_runs WHERE id=?")
-          .get(input.runId) as { delivery_id: string };
+      const session = new AgentSession(db);
+      const run = db
+        .prepare("SELECT delivery_id FROM owner_agent_runs WHERE id=?")
+        .get(input.runId) as { delivery_id: string };
       socket.sent.push(
         JSON.stringify({
           messages: [
@@ -124,9 +124,7 @@ export async function toolTestInput(
     const db = new Database(fixture.path);
     try {
       const accepted = new AgentSession(db).append(
-        input.runId,
-        socketNodes.get(socket)!,
-        input.agentId,
+        { runId: input.runId, nodeId: socketNodes.get(socket)!, agentId: input.agentId },
         input.entry,
       );
       socket.sent.push(JSON.stringify({ type: "session.commit", accepted }));

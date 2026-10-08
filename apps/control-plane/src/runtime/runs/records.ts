@@ -228,7 +228,10 @@ export class RunRecords {
     return messages;
   }
 
-  finishRun(runId: string, agentId: string, ok: boolean, code?: string, reason?: string): void {
+  finishRun(
+    { runId, agentId }: { runId: string; agentId: string },
+    { ok, code, reason }: { ok: boolean; code?: string | undefined; reason?: string | undefined },
+  ): void {
     const existing = this.db
       .prepare<unknown[], { state: string }>(
         "SELECT state FROM owner_agent_runs WHERE id=? AND agent_id=?",
@@ -251,11 +254,11 @@ export class RunRecords {
         .run(this.now(), agentId);
       return;
     }
-    const failure = classifyRunFailure(code),
-      interrupted = failure === "interrupted",
-      credentialFailure = failure === "credentials",
-      contextFailure = failure === "context",
-      environmentFailure = failure === "environment";
+    const failure = classifyRunFailure(code);
+    const interrupted = failure === "interrupted";
+    const credentialFailure = failure === "credentials";
+    const contextFailure = failure === "context";
+    const environmentFailure = failure === "environment";
     let contextPaused = false;
     let delay = 0;
     if (credentialFailure)
