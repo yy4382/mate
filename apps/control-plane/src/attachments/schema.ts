@@ -1,5 +1,5 @@
-/** Conversation attachment metadata for the Linux-node release. */
-export const workspaceSchema = `
+/** Conversation attachment metadata; file bytes live in the attachment storage directory. */
+export const attachmentStorageSchema = `
 CREATE TABLE owner_conversation_attachments (
   id TEXT PRIMARY KEY,
   channel_id TEXT NOT NULL REFERENCES owner_channels(id),

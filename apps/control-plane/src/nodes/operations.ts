@@ -19,7 +19,6 @@ type ProcessOperationResult = Pick<
     Extract<NodeRequest, { type: "node.process.operation.result" }>["revision"]
   >;
 };
-export type NodeWorkspaceOperationStart = ControlWorkspaceOperation;
 
 export class NodeOperations {
   private readonly pendingAgentProvisions = new PendingNodeRequests<
@@ -52,13 +51,19 @@ export class NodeOperations {
     private readonly operationTimeoutMs: number,
     private readonly processOperationTimeoutMs: number,
   ) {}
-  provisionAgent(
-    nodeId: string,
-    requestId: string,
-    agentId: string,
-    onProgress: (stage: AgentProvisionStage) => void,
+  provisionAgent({
+    nodeId,
+    requestId,
+    agentId,
+    onProgress,
     verifyOnly = false,
-  ): Promise<NodeAgentProvisionResult> {
+  }: {
+    nodeId: string;
+    requestId: string;
+    agentId: string;
+    onProgress: (stage: AgentProvisionStage) => void;
+    verifyOnly?: boolean;
+  }): Promise<NodeAgentProvisionResult> {
     const controlMessage = NodeControlMessageSchema.parse({
       type: "control.agent.provision",
       requestId,
@@ -102,7 +107,7 @@ export class NodeOperations {
 
   workspaceOperation(
     nodeId: string,
-    request: NodeWorkspaceOperationStart,
+    request: ControlWorkspaceOperation,
   ): Promise<NodeWorkspaceOperationResult> {
     const controlMessage = NodeControlMessageSchema.parse(request);
     if (controlMessage.type !== "control.workspace.operation")
@@ -148,16 +153,16 @@ export class NodeOperations {
     nodeId: string,
     request: { operationId: string; agentId: string; operation: AgentProcessOperation },
   ): Promise<ProcessOperationResult> {
-    const operationId = NodeRequestIdSchema.parse(request.operationId),
-      agentId = NodeRequestIdSchema.parse(request.agentId),
-      requestId = randomUUID(),
-      controlMessage = NodeControlMessageSchema.parse({
-        type: "control.process.operation",
-        requestId,
-        operationId,
-        agentId,
-        operation: request.operation,
-      });
+    const operationId = NodeRequestIdSchema.parse(request.operationId);
+    const agentId = NodeRequestIdSchema.parse(request.agentId);
+    const requestId = randomUUID();
+    const controlMessage = NodeControlMessageSchema.parse({
+      type: "control.process.operation",
+      requestId,
+      operationId,
+      agentId,
+      operation: request.operation,
+    });
     const existing = this.pendingAgentProcessOperations.get(requestId);
     if (existing) {
       if (
@@ -312,14 +317,20 @@ export class NodeOperations {
       new NodeRequestError("disconnected", "节点连接已断开，文件操作结果尚未确认。"),
     );
   }
-  hasPendingProcess(nodeId: string, agentId: string, operationId: string): boolean {
+  hasPendingProcess(identity: { nodeId: string; agentId: string; operationId: string }) {
     return [...this.pendingAgentProcessOperations.values()].some(
-      (p) => p.nodeId === nodeId && p.agentId === agentId && p.operationId === operationId,
+      (pending) =>
+        pending.nodeId === identity.nodeId &&
+        pending.agentId === identity.agentId &&
+        pending.operationId === identity.operationId,
     );
   }
-  hasPendingWorkspace(nodeId: string, agentId: string, operationId: string): boolean {
+  hasPendingWorkspace(identity: { nodeId: string; agentId: string; operationId: string }) {
     return [...this.pendingWorkspaceOperations.values()].some(
-      (p) => p.nodeId === nodeId && p.agentId === agentId && p.operationId === operationId,
+      (pending) =>
+        pending.nodeId === identity.nodeId &&
+        pending.agentId === identity.agentId &&
+        pending.operationId === identity.operationId,
     );
   }
   deliverProcessReceipt(

@@ -417,7 +417,7 @@ it("preserves confirmed records across compaction and database reopening without
       app.chat,
       app.workspace,
       app.attachments,
-      new AgentProcessOperationBroker(reopened, app.nodes),
+      new AgentProcessOperationBroker(reopened, app.nodes.operations),
     );
     const read = (name: string, input: unknown) =>
       tools.execute(identity, "tools.call", { name, input });

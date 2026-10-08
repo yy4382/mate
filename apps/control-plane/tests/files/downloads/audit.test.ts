@@ -289,9 +289,9 @@ it("expires abandoned download status with a terminal audit result and clears it
     Date.now() - 1,
   );
 
-  expect(() => app.workspace.downloadStatus(agentId, downloadId, "unrelated-session")).toThrow(
-    "找不到这次文件下载记录",
-  );
+  expect(() =>
+    app.workspace.downloads.status({ agentId, downloadId, ownerSessionToken: "unrelated-session" }),
+  ).toThrow("找不到这次文件下载记录");
   expect(
     db
       .prepare(

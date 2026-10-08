@@ -3,30 +3,24 @@ import { FILE_CHUNK_MAX_BYTES } from "@mate/protocol/workspace";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { WorkspaceError } from "../workspaces/errors.js";
-import { isWorkspaceVersion as isVersion, sameVersion } from "../workspaces/results.js";
+import { isWorkspaceVersion, sameVersion } from "../workspaces/results.js";
 import { AttachmentError } from "./errors.js";
 
 export function decodeChunk(
   value: Record<string, unknown>,
-  expectedOffset: number,
-  expectedSize: number,
-  expectedVersion: WorkspaceVersion,
-): Buffer {
+  { offset, size, version }: { offset: number; size: number; version: WorkspaceVersion },
+) {
   if (
     typeof value.base64 !== "string" ||
-    value.offset !== expectedOffset ||
-    value.totalBytes !== expectedSize ||
-    !isVersion(value.version) ||
-    !sameVersion(expectedVersion, value.version) ||
+    value.offset !== offset ||
+    value.totalBytes !== size ||
+    !isWorkspaceVersion(value.version) ||
+    !sameVersion(version, value.version) ||
     Buffer.from(value.base64, "base64").toString("base64") !== value.base64
   )
     throw new WorkspaceError("file_changed", "File changed during publish", 409);
   const bytes = Buffer.from(value.base64, "base64");
-  if (
-    !bytes.length ||
-    bytes.length > FILE_CHUNK_MAX_BYTES ||
-    bytes.length > expectedSize - expectedOffset
-  )
+  if (!bytes.length || bytes.length > FILE_CHUNK_MAX_BYTES || bytes.length > size - offset)
     throw new WorkspaceError("file_changed", "Invalid or incomplete node chunk", 409);
   return bytes;
 }
@@ -57,8 +51,7 @@ export function parseActionResult(value: string) {
   }
 }
 
-// Recovery deliberately validates only the fields the existing receipt reader required.
-// New uploads use AttachmentSummary; older readable receipts keep their extension fields.
+// Publication receipts expose these fields and retain any additional stored metadata.
 const publishedAttachmentReceiptSchema = z.looseObject({
   id: z.string(),
   channelId: z.string(),

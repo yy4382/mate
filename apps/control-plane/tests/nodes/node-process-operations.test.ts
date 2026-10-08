@@ -2,7 +2,8 @@ import Database from "better-sqlite3";
 import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { expect, it } from "vitest";
 import { NodeRequestError } from "../../src/nodes/pending-requests.js";
-import { NodeDirectory, type NodeSocket } from "../../src/nodes/directory.js";
+import { NodeDirectory } from "../../src/nodes/directory.js";
+import type { NodeSocket } from "../../src/nodes/transport.js";
 
 class TestNodeSocket implements NodeSocket {
   readonly messages: Record<string, unknown>[] = [];
@@ -51,7 +52,7 @@ it("routes a node receipt back to the matching ordinary operation request", asyn
     operationId = randomUUID(),
     agentId = randomUUID();
   try {
-    const pending = context.directory.executeAgentProcessOperation(context.nodeId, {
+    const pending = context.directory.operations.executeAgentProcessOperation(context.nodeId, {
       operationId,
       agentId,
       operation: { kind: "exec", command: "printf hello", cwd: "." },
@@ -86,7 +87,7 @@ it("routes a node receipt back to the matching ordinary operation request", asyn
 it("does not claim an operation completed when its node disconnects", async () => {
   const context = await authenticatedNode();
   try {
-    const pending = context.directory.executeAgentProcessOperation(context.nodeId, {
+    const pending = context.directory.operations.executeAgentProcessOperation(context.nodeId, {
       operationId: randomUUID(),
       agentId: randomUUID(),
       operation: { kind: "process.list" },
@@ -120,7 +121,7 @@ it("periodic receipt recovery skips a current command wait and still queries oth
         context.nodeId,
         JSON.stringify({ operation: { kind: "process.list" } }),
       );
-    const pending = context.directory.executeAgentProcessOperation(context.nodeId, {
+    const pending = context.directory.operations.executeAgentProcessOperation(context.nodeId, {
       operationId,
       agentId,
       operation: { kind: "process.list" },

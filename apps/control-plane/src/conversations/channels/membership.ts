@@ -8,7 +8,7 @@ import type Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
-import { nodeAccountOf } from "../../nodes/directory.js";
+import { nodeAccountOf } from "../../nodes/identity.js";
 
 import type { ConversationEvents } from "../events.js";
 import { type ConversationToolActions, defineConversationTool } from "../tools/actions.js";

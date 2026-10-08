@@ -32,10 +32,17 @@ export function unreadable(type: string, reason: string) {
 /** The caller supplies up to three context bytes at either edge under the same file version. */
 export function textRange(
   bytes: Buffer,
-  readOffset: number,
-  offset: number,
-  length: number,
-  totalBytes: number,
+  {
+    readOffset,
+    offset,
+    length,
+    totalBytes,
+  }: {
+    readOffset: number;
+    offset: number;
+    length: number;
+    totalBytes: number;
+  },
 ) {
   let start = offset - readOffset;
   let end = Math.min(offset + length, totalBytes) - readOffset;

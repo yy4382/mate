@@ -3,8 +3,8 @@ import { workspaceReceiptRequestHash } from "@mate/protocol/node";
 import type Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import type { OwnerChat } from "../../conversations/service.js";
-import type { NodeDirectory } from "../../nodes/directory.js";
+import type { MessageWriter } from "../../conversations/messages/writer.js";
+import type { NodeOperations } from "../../nodes/operations.js";
 import { AgentSession } from "../../runtime/session/service.js";
 import { defineAgentTool, type AgentToolContext } from "../../runtime/tools/entry.js";
 import type { WorkspaceAccess } from "../access/service.js";
@@ -26,14 +26,14 @@ export class WorkspaceActions {
   private readonly actions: WorkspaceActionLedger;
   constructor(
     private readonly db: Database.Database,
-    private readonly nodes: NodeDirectory,
+    private readonly nodeOperations: Pick<NodeOperations, "setWorkspaceOperationResultHandler">,
     private readonly access: WorkspaceAccess,
-    notify: OwnerChat["notifyAgentReceiptCorrection"],
+    notify: MessageWriter["notifyAgentReceiptCorrection"],
   ) {
     this.actions = new WorkspaceActionLedger(db, notify);
   }
   registerResultHandler(): void {
-    this.nodes.setWorkspaceOperationResultHandler((nodeId, result) =>
+    this.nodeOperations.setWorkspaceOperationResultHandler((nodeId, result) =>
       this.actions.receive(nodeId, result),
     );
   }
@@ -144,14 +144,7 @@ export class WorkspaceActions {
     );
   }
 
-  private async agentActionUnchecked(
-    input: AgentToolContext & {
-      actionId: string;
-      operationName: string;
-      toolInput: Record<string, unknown>;
-      operation: Operation;
-    },
-  ): Promise<unknown> {
+  private async agentActionUnchecked(input: Parameters<WorkspaceActions["agentAction"]>[0]) {
     const authorized = input.run;
     if (!isMutatingOperation(input.operation))
       throw new WorkspaceError("workspace_unavailable", "此文件操作不允许修改工作区。", 403);
@@ -164,21 +157,21 @@ export class WorkspaceActions {
       )
         throw new WorkspaceError("operation_conflict", "文件操作 ID 与已保存调用不匹配。", 403);
     }
-    const operationId = deterministicOperationId(input.actionId),
-      requestHash = hashToolRequest(input.operationName, input.toolInput),
-      nodeRequestHash = workspaceReceiptRequestHash(input.agentId, input.operation),
-      intent = {
-        sessionId: authorized.session_id,
-        actionId: input.actionId,
-        agentId: input.agentId,
-        operation: input.operationName,
-        requestHash,
-        nodeRequestHash,
-        operationId,
-        runId: input.runId,
-        channelId: authorized.channel_id,
-      },
-      recorded = this.actions.prepare(intent, input.toolInput);
+    const operationId = deterministicOperationId(input.actionId);
+    const requestHash = hashToolRequest(input.operationName, input.toolInput);
+    const nodeRequestHash = workspaceReceiptRequestHash(input.agentId, input.operation);
+    const intent = {
+      sessionId: authorized.session_id,
+      actionId: input.actionId,
+      agentId: input.agentId,
+      operation: input.operationName,
+      requestHash,
+      nodeRequestHash,
+      operationId,
+      runId: input.runId,
+      channelId: authorized.channel_id,
+    };
+    const recorded = this.actions.prepare(intent, input.toolInput);
     if (recorded.kind === "done") return recorded.result;
     if (recorded.kind === "failed")
       throw confirmedFileFailure(recorded.code, recorded.stderr, recorded.errorCode);
@@ -196,27 +189,27 @@ export class WorkspaceActions {
     try {
       input.requireCurrentRun();
       const result = await this.access.runNodeOperation(
-          {
-            type: "control.workspace.operation",
-            requestId: randomUUID(),
-            operationId,
-            agentId: input.agentId,
-            mode: "agent_action",
-            operation: input.operation,
-          },
-          authorized.node_id,
-        ),
-        value = parseOperationReceipt(result.stdout),
-        envelope = {
-          state: "succeeded" as const,
+        {
+          type: "control.workspace.operation",
+          requestId: randomUUID(),
           operationId,
-          runId: input.runId,
-          channelId: authorized.channel_id,
-          operation: input.operationName,
-          nodeRequestHash,
-          ...(result.revision !== undefined ? { revision: result.revision } : {}),
-          result: value,
-        };
+          agentId: input.agentId,
+          mode: "agent_action",
+          operation: input.operation,
+        },
+        authorized.node_id,
+      );
+      const value = parseOperationReceipt(result.stdout);
+      const envelope = {
+        state: "succeeded" as const,
+        operationId,
+        runId: input.runId,
+        channelId: authorized.channel_id,
+        operation: input.operationName,
+        nodeRequestHash,
+        ...(result.revision !== undefined ? { revision: result.revision } : {}),
+        result: value,
+      };
       this.actions.complete(intent, envelope);
       this.actions.forget(operationId);
       return value;

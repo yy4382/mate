@@ -6,7 +6,7 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import { expect } from "vitest";
 import { createControlPlane } from "../../../src/application.js";
-import type { NodeSocket } from "../../../src/nodes/directory.js";
+import type { NodeSocket } from "../../../src/nodes/transport.js";
 import type { NodeControlMessage } from "@mate/protocol";
 
 const password = "agent-tool-fixture-owner-password";

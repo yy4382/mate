@@ -77,20 +77,20 @@ export function createControlPlane(
       : {}),
   };
   const nodes = new NodeDirectory(ownerAuth.db, nodeOptions);
-  const agents = new AgentDirectory(ownerAuth.db, options.now ?? Date.now, nodes);
+  const agents = new AgentDirectory(ownerAuth.db, options.now ?? Date.now, nodes.identity);
   const modelCredentials = new ModelCredentialDirectory(ownerAuth.db, options.now);
   const ownerChat = new OwnerChat(ownerAuth.db, options.now);
   const push = new OwnerPush(ownerAuth.db);
   const workspace = new WorkspaceService(ownerAuth.db, nodes, ownerChat);
   const attachments = new AttachmentService(
     ownerAuth.db,
-    workspace,
+    workspace.reads,
     resolve(dataDir, "attachments"),
     options.maxAttachmentBytes,
     options.now,
     testDependencies.beforeAgentAttachmentCommit,
   );
-  const processes = new AgentProcessOperationBroker(ownerAuth.db, nodes, options.now);
+  const processes = new AgentProcessOperationBroker(ownerAuth.db, nodes.operations, options.now);
   const tools = new AgentTools(ownerAuth.db, ownerChat, workspace, attachments, processes);
   const runs = new AgentRunCoordinator(
     ownerAuth.db,

@@ -77,7 +77,7 @@ it("continues past a whole page of in-flight writes and reconciles every histori
     ),
     pending = waiting.map((operationId) => {
       context.record(operationId, "executing");
-      return context.app.nodes.workspaceOperation(context.nodeId, {
+      return context.app.nodes.operations.workspaceOperation(context.nodeId, {
         type: "control.workspace.operation",
         requestId: randomUUID(),
         operationId,

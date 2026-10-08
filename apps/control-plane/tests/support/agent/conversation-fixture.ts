@@ -8,7 +8,7 @@ import { join, resolve } from "node:path";
 import { expect } from "vitest";
 import { createControlPlane } from "../../../src/application.js";
 
-import type { NodeSocket } from "../../../src/nodes/directory.js";
+import type { NodeSocket } from "../../../src/nodes/transport.js";
 
 export const password = "agent-direct-message-owner-password";
 export type OwnerMessageLike = { id: string; text: string };
