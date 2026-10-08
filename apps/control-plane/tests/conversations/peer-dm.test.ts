@@ -57,14 +57,14 @@ it("lets one Agent discover and open an explicit peer DM that both Agents and th
     model: { provider: "openai", id: "gpt-4.1" },
   });
   app.agents.fail(failedAgentId, "Synthetic provisioning failure.");
-  const firstDirect = app.chat.getOrCreateAgentDirectChannel(firstAgentId)!;
+  const firstDirect = app.chat.conversations.getOrCreateAgentDirectChannel(firstAgentId)!;
   await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
   });
   const runStart = socket.sent.length;
-  app.chat.createMessage(firstDirect.id, "Start peer DM run.");
+  app.chat.messages.createMessage({ channelId: firstDirect.id, text: "Start peer DM run." });
   const firstRun = await waitForRun(socket, runStart);
   const discover = await callAgentTool(app, socket, firstRun, "agents-list", "tools.call", {
     name: "agents.list",
@@ -94,24 +94,24 @@ it("lets one Agent discover and open an explicit peer DM that both Agents and th
   });
   expect(failedDm).toMatchObject({ ok: false, error: "Direct-message target is not available" });
 
-  const openInput = { name: "conversations.open_dm", input: { targetAgentId: secondAgentId } },
-    secondRunStart = socket.sent.length,
-    opened = await callAgentTool(
-      app,
-      socket,
-      firstRun,
-      "same-open-dm-action",
-      "tools.call",
-      openInput,
-    ),
-    openedAgain = await callAgentTool(
-      app,
-      socket,
-      firstRun,
-      "same-open-dm-action",
-      "tools.call",
-      openInput,
-    );
+  const openInput = { name: "conversations.open_dm", input: { targetAgentId: secondAgentId } };
+  const secondRunStart = socket.sent.length;
+  const opened = await callAgentTool(
+    app,
+    socket,
+    firstRun,
+    "same-open-dm-action",
+    "tools.call",
+    openInput,
+  );
+  const openedAgain = await callAgentTool(
+    app,
+    socket,
+    firstRun,
+    "same-open-dm-action",
+    "tools.call",
+    openInput,
+  );
   expect(opened).toMatchObject({ ok: true });
   expect(openedAgain.result).toEqual(opened.result);
   const peerDm = opened.result as {
@@ -122,7 +122,7 @@ it("lets one Agent discover and open an explicit peer DM that both Agents and th
   expect(peerDm.visibility).toBe("private");
   expect(peerDm.name).toContain("First colleague");
   expect(peerDm.name).toContain("Second colleague");
-  expect(app.chat.listChannels().map((channel) => channel.id)).toContain(peerDm.id);
+  expect(app.chat.channels.listChannels().map((channel) => channel.id)).toContain(peerDm.id);
   const ownerChannels = await app.http.request("/api/owner/channels", { headers: { cookie } });
   expect(ownerChannels.status).toBe(200);
   const listedOwnerChannels = (await ownerChannels.json()) as {

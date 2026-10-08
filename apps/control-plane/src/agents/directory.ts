@@ -302,7 +302,7 @@ export class AgentDirectory {
         }
         if (
           current.initial_channel_id &&
-          !ownerChat.inviteAgentToChannel(current.initial_channel_id, id)
+          !ownerChat.channels.inviteAgentToChannel(current.initial_channel_id, id)
         )
           throw new AgentRequestConflict(
             "所选初始频道已归档或不可用，取消邀请；解除归档后可按原请求重试。",

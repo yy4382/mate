@@ -41,14 +41,14 @@ it.each(["restart", "reconnect", "conflicting receipt", "malformed workspace"])(
       },
       app.chat,
     );
-    const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+    const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
     await app.http.request("/api/owner/model-credentials/openai", {
       method: "PUT",
       headers: { cookie, "content-type": "application/json" },
       body: JSON.stringify({ apiKey: "synthetic-key" }),
     });
     const start = socket.sent.length;
-    app.chat.createMessage(direct.id, "Run a command once.");
+    app.chat.messages.createMessage({ channelId: direct.id, text: "Run a command once." });
     const run = await waitForRun(socket, start);
     const actionId = `mate:${run.actionScopeId}:${"f".repeat(64)}:1`,
       operationId = deriveAgentProcessOperationId(agentId, actionId),

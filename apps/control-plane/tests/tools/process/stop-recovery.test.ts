@@ -33,14 +33,14 @@ it("rechecks stopped scopes after a restarted node confirms an ordinary operatio
     workspaceMarker: "a".repeat(64),
   };
   app.agents.complete(agentId, identity, app.chat);
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
   await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-key" }),
   });
   const start = socket.sent.length;
-  app.chat.createMessage(direct.id, "Start a command.");
+  app.chat.messages.createMessage({ channelId: direct.id, text: "Start a command." });
   const run = await waitForRun(socket, start);
   const operationId = randomUUID(),
     stableActionId = `mate:${run.actionScopeId}:${"c".repeat(64)}:1`;

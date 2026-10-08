@@ -109,12 +109,12 @@ export async function pairAnotherNode(
   const pairingToken = ((await token.json()) as { pairingToken: string }).pairingToken,
     socket = new FakeNodeSocket();
   app.nodes.open(socket);
-  const challenge = JSON.parse(socket.sent[0]!) as { nonce: string },
-    keyPair = generateKeyPairSync("ed25519", {
-      privateKeyEncoding: { type: "pkcs8", format: "pem" },
-      publicKeyEncoding: { type: "spki", format: "pem" },
-    }),
-    nodeId = randomUUID();
+  const challenge = JSON.parse(socket.sent[0]!) as { nonce: string };
+  const keyPair = generateKeyPairSync("ed25519", {
+    privateKeyEncoding: { type: "pkcs8", format: "pem" },
+    publicKeyEncoding: { type: "spki", format: "pem" },
+  });
+  const nodeId = randomUUID();
   bindToolSocket(app, nodeId, socket);
   await toolTestInput(
     app,
@@ -306,14 +306,14 @@ export async function startReminderFixture(fixture: Awaited<ReturnType<typeof se
     },
     app.chat,
   );
-  const dm = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  const dm = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
   await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-reminder-key" }),
   });
   const from = socket.sent.length;
-  app.chat.createMessage(dm.id, "Set a follow-up reminder");
+  app.chat.messages.createMessage({ channelId: dm.id, text: "Set a follow-up reminder" });
   const initialRun = await waitForRun(socket, from);
   const create = await callAgentTool(app, socket, initialRun, "create-followup", "tools.call", {
     name: "reminders.create",

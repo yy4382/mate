@@ -40,23 +40,30 @@ it("holds Agent task changes for fresh discussion and queues an offline reminder
     },
     app.chat,
   );
-  const dm = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  const dm = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
   await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-task-key" }),
   });
   const from = socket.sent.length;
-  const anchor = app.chat.createMessage(dm.id, "Investigate the alert", { asTask: true })!;
-  const task = app.chat.tasksForMessage(anchor.id)[0]!;
+  const anchor = app.chat.messages.createMessage({
+    channelId: dm.id,
+    text: "Investigate the alert",
+    asTask: true,
+  })!;
+  const task = app.chat.tasks.tasksForMessage(anchor.id)[0]!;
   const run = await waitForRun(socket, from);
-  const changedMessage = app.chat.createMessage(dm.id, "Please include the restart case")!;
+  const changedMessage = app.chat.messages.createMessage({
+    channelId: dm.id,
+    text: "Please include the restart case",
+  })!;
   async function tool(id: string, name: string, input: Record<string, unknown>) {
     return callAgentTool(app, socket, run, id, "tools.call", { name, input });
   }
   const held = await tool("claim-held", "tasks.claim", { taskId: task.id, expectedVersion: 1 });
   expect(held).toMatchObject({ ok: true, result: { status: "needs_review" } });
-  expect(app.chat.listAgentAttention(agentId, dm.id)).toEqual(
+  expect(app.chat.attention.listAgentAttention(agentId, dm.id)).toEqual(
     expect.arrayContaining([
       expect.objectContaining({
         messageId: changedMessage.id,
@@ -67,20 +74,23 @@ it("holds Agent task changes for fresh discussion and queues an offline reminder
       }),
     ]),
   );
-  expect(app.chat.readTask(task.id)).toMatchObject({ ownerAgentId: null, version: 1 });
-  expect(app.chat.taskActivity(task.id)).toHaveLength(1);
+  expect(app.chat.tasks.readTask(task.id)).toMatchObject({ ownerAgentId: null, version: 1 });
+  expect(app.chat.tasks.taskActivity(task.id)).toHaveLength(1);
   const draftId = (held.result as { draftId: string }).draftId;
   expect((await tool("claim-keep", "tasks.review", { draftId, choice: "keep" })).ok).toBe(true);
   expect((await tool("claim-continue", "tasks.review", { draftId, choice: "continue" })).ok).toBe(
     true,
   );
-  const lateChange = app.chat.createMessage(dm.id, "A newer decision arrived")!;
+  const lateChange = app.chat.messages.createMessage({
+    channelId: dm.id,
+    text: "A newer decision arrived",
+  })!;
   expect(
     await tool("claim-stale", "tasks.claim", { taskId: task.id, expectedVersion: 1, draftId }),
   ).toMatchObject({ ok: false, error: "Conversation changed; review the task draft again" });
-  expect(app.chat.readTask(task.id)).toMatchObject({ ownerAgentId: null, version: 1 });
+  expect(app.chat.tasks.readTask(task.id)).toMatchObject({ ownerAgentId: null, version: 1 });
   await tool("claim-inspect-late", "tasks.review", { draftId, choice: "inspect" });
-  expect(app.chat.listAgentAttention(agentId, dm.id)).toEqual(
+  expect(app.chat.attention.listAgentAttention(agentId, dm.id)).toEqual(
     expect.arrayContaining([
       expect.objectContaining({
         messageId: lateChange.id,
@@ -124,8 +134,8 @@ it("holds Agent task changes for fresh discussion and queues an offline reminder
       },
     ),
   ).toMatchObject({ ok: false });
-  expect(app.chat.taskActivity(task.id)).toHaveLength(2);
-  expect(app.chat.listMessages(dm.id, undefined, 100)?.messages).toHaveLength(3);
+  expect(app.chat.tasks.taskActivity(task.id)).toHaveLength(2);
+  expect(app.chat.timeline.listMessages(dm.id, undefined, 100)?.messages).toHaveLength(3);
   const updated = await tool("update-direct", "tasks.update", {
     taskId: task.id,
     expectedVersion: 2,
@@ -133,7 +143,10 @@ it("holds Agent task changes for fresh discussion and queues an offline reminder
     note: "Verified after restart",
   });
   expect(updated).toMatchObject({ ok: true, result: { status: "done", version: 3 } });
-  const taskSource = app.chat.createMessage(dm.id, "A separate new task")!;
+  const taskSource = app.chat.messages.createMessage({
+    channelId: dm.id,
+    text: "A separate new task",
+  })!;
   const createHeld = await tool("create-held", "tasks.create", {
     messageId: taskSource.id,
     title: taskSource.text,
@@ -160,15 +173,19 @@ it("holds Agent task changes for fresh discussion and queues an offline reminder
       draftId: createDraft,
     }),
   ).toMatchObject({ ok: false, error: "Action ID was already used for a different request" });
-  const inaccessible = app.chat.createChannel({
+  const inaccessible = app.chat.channels.createChannel({
     name: "Private",
     description: "",
     visibility: "private",
   });
-  const secret = app.chat.createMessage(inaccessible.id, "Secret task", { asTask: true })!;
+  const secret = app.chat.messages.createMessage({
+    channelId: inaccessible.id,
+    text: "Secret task",
+    asTask: true,
+  })!;
   expect(
     await tool("secret-claim", "tasks.claim", {
-      taskId: app.chat.tasksForMessage(secret.id)[0]!.id,
+      taskId: app.chat.tasks.tasksForMessage(secret.id)[0]!.id,
       expectedVersion: 1,
     }),
   ).toMatchObject({ ok: false, error: "Conversation is not available" });
@@ -207,8 +224,8 @@ it("holds Agent task changes for fresh discussion and queues an offline reminder
   expect(reminder.ok).toBe(true);
   const reminderId = (reminder.result as { id: string }).id;
   app.nodes.closeAll();
-  app.chat.fireDueReminders();
-  const reminders = app.chat.listAgentReminders(agentId);
+  app.chat.reminders.fireDueReminders();
+  const reminders = app.chat.reminders.listAgentReminders(agentId);
   expect(reminders).toEqual(
     expect.arrayContaining([
       expect.objectContaining({
@@ -226,9 +243,9 @@ it("holds Agent task changes for fresh discussion and queues an offline reminder
       "SELECT id,state FROM owner_message_deliveries WHERE id=(SELECT delivery_id FROM owner_reminder_firings WHERE reminder_id=?)",
     )
     .get(reminderId) as { id: string; state: string };
-  expect(app.chat.acknowledgeDelivery(delivery.id, "agent", agentId)).toBe(false);
+  expect(app.chat.deliveries.acknowledgeDelivery(delivery.id, "agent", agentId)).toBe(false);
   expect(delivery.state).toBe("pending");
-  expect(app.chat.listMessages(dm.id, undefined, 100)?.messages).toHaveLength(4);
+  expect(app.chat.timeline.listMessages(dm.id, undefined, 100)?.messages).toHaveLength(4);
   app.close();
   const restarted = toolTestApp({
     dataDir: join(fixtures.at(-1)!.directory, "control-plane"),
@@ -239,7 +256,7 @@ it("holds Agent task changes for fresh discussion and queues an offline reminder
     directory: fixtures.at(-1)!.directory,
     db: new Database(join(fixtures.at(-1)!.directory, "control-plane", "control-plane.sqlite")),
   });
-  expect(restarted.chat.listAgentReminders(agentId)).toEqual(
+  expect(restarted.chat.reminders.listAgentReminders(agentId)).toEqual(
     expect.arrayContaining([
       expect.objectContaining({
         id: reminderId,
@@ -255,10 +272,13 @@ it("marks a reminder handled when a preceding DM delivery starts the completed b
   const { app, nodeId, socket, nodePrivateKey, db } = fixture;
   const { agentId, dm, reminderId } = await startReminderFixture(fixture);
   app.nodes.close(socket);
-  const ordinary = app.chat.createMessage(dm.id, "An earlier offline message")!;
+  const ordinary = app.chat.messages.createMessage({
+    channelId: dm.id,
+    text: "An earlier offline message",
+  })!;
   await new Promise((resolve) => setTimeout(resolve, 280));
-  app.chat.fireDueReminders();
-  const pending = app.chat.listPendingDeliveries("agent", agentId).deliveries;
+  app.chat.reminders.fireDueReminders();
+  const pending = app.chat.deliveries.listPendingDeliveries("agent", agentId).deliveries;
   expect(pending).toHaveLength(2);
   expect(pending[0]?.messageId).toBe(ordinary.id);
   const reconnected = await reconnectNode(app, nodeId, nodePrivateKey);
@@ -278,9 +298,9 @@ it("marks a reminder handled when a preceding DM delivery starts the completed b
       ok: true,
     }),
   );
-  expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toHaveLength(0);
-  app.chat.syncHandledReminders();
-  expect(app.chat.listAgentReminders(agentId)[0]).toMatchObject({
+  expect(app.chat.deliveries.listPendingDeliveries("agent", agentId).deliveries).toHaveLength(0);
+  app.chat.reminders.syncHandledReminders();
+  expect(app.chat.reminders.listAgentReminders(agentId)[0]).toMatchObject({
     id: reminderId,
     firing: { handledAt: expect.any(Number) },
   });

@@ -18,9 +18,9 @@ async function historyFixture() {
   const fixture = await setup();
   const { app, cookie, nodeId, socket, db } = fixture;
   const agentId = addAgent(app, nodeId, "History reader");
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
   await authorizeModel(app, cookie);
-  app.chat.createMessage(direct.id, "Read confirmed history.");
+  app.chat.messages.createMessage({ channelId: direct.id, text: "Read confirmed history." });
   const run = (await waitForRuns(socket, 0, [agentId])).get(agentId)!;
   const identity = { runId: run.runId, nodeId, agentId, toolCallId: "history-observation" };
   const session = new AgentSession(db);
@@ -330,8 +330,11 @@ it("rejects malformed pagination, query changes, foreign cursors and records wit
   expect(await call("history.search", { query: "" })).toMatchObject({ ok: false });
   expect(await call("history.search", { query: "\ud83d" })).toMatchObject({ ok: false });
   const otherId = addAgent(app, nodeId, "Other history");
-  const direct = app.chat.getOrCreateAgentDirectChannel(otherId)!;
-  app.chat.createMessage(direct.id, "Start another independent history.");
+  const direct = app.chat.conversations.getOrCreateAgentDirectChannel(otherId)!;
+  app.chat.messages.createMessage({
+    channelId: direct.id,
+    text: "Start another independent history.",
+  });
   const otherRun = (await waitForRuns(socket, 0, [otherId])).get(otherId)!;
   const foreignId = randomUUID();
   expect(
@@ -361,7 +364,7 @@ it("rejects malformed pagination, query changes, foreign cursors and records wit
     result: { previousId: null, nextId: expect.any(String) },
   });
   app.runs?.close();
-  app.chat.completeAgentRun(run.runId, agentId);
+  app.chat.deliveries.completeAgentRun(run.runId, agentId);
   expect(await call("history.read", { id: firstId })).toEqual({
     ok: false,
     error: "Agent run is no longer active",

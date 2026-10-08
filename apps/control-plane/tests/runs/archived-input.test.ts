@@ -33,8 +33,8 @@ it("keeps an archived run input pending and retries it after the owner unarchive
     },
     app.chat,
   );
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  app.chat.createMessage(direct.id, "归档期间不可写入回复的私信。");
+  const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
+  app.chat.messages.createMessage({ channelId: direct.id, text: "归档期间不可写入回复的私信。" });
   const runStart = socket.sent.length;
   const credential = await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
@@ -66,7 +66,7 @@ it("keeps an archived run input pending and retries it after the owner unarchive
     type: "session.commit",
     accepted: true,
   });
-  expect(app.chat.listMessages(direct.id, undefined, 20)?.messages).toMatchObject([
+  expect(app.chat.timeline.listMessages(direct.id, undefined, 20)?.messages).toMatchObject([
     { author: { kind: "human" }, text: "归档期间不可写入回复的私信。" },
   ]);
 
@@ -94,7 +94,7 @@ it("keeps an archived run input pending and retries it after the owner unarchive
   } finally {
     db.close();
   }
-  expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toMatchObject([
+  expect(app.chat.deliveries.listPendingDeliveries("agent", agentId).deliveries).toMatchObject([
     { message: { text: "归档期间不可写入回复的私信。" } },
   ]);
 
@@ -130,7 +130,7 @@ it("keeps an archived run input pending and retries it after the owner unarchive
     type: "session.commit",
     accepted: true,
   });
-  expect(app.chat.listMessages(direct.id, undefined, 20)?.messages).toMatchObject([
+  expect(app.chat.timeline.listMessages(direct.id, undefined, 20)?.messages).toMatchObject([
     { author: { kind: "human" }, text: "归档期间不可写入回复的私信。" },
   ]);
   await toolTestInput(
@@ -144,5 +144,5 @@ it("keeps an archived run input pending and retries it after the owner unarchive
       ok: true,
     }),
   );
-  expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toHaveLength(0);
+  expect(app.chat.deliveries.listPendingDeliveries("agent", agentId).deliveries).toHaveLength(0);
 });

@@ -35,20 +35,20 @@ it("replays a committed tool action after its reply is lost and the delivery ret
     },
     app.chat,
   );
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
   await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
   });
   const runStart = socket.sent.length;
-  app.chat.createMessage(direct.id, "Start retryable tool action.");
-  const firstRun = await waitForRun(socket, runStart),
-    actionId = "retry-after-lost-tool-result",
-    input = {
-      name: "messages.send",
-      input: { conversationId: direct.id, text: "提交一次，即使回执丢失也不重复。" },
-    };
+  app.chat.messages.createMessage({ channelId: direct.id, text: "Start retryable tool action." });
+  const firstRun = await waitForRun(socket, runStart);
+  const actionId = "retry-after-lost-tool-result";
+  const input = {
+    name: "messages.send",
+    input: { conversationId: direct.id, text: "提交一次，即使回执丢失也不重复。" },
+  };
   socket.dropToolCallId = actionId;
   const sentBeforeToolCall = socket.sent.length;
   await toolTestInput(
@@ -71,7 +71,7 @@ it("replays a committed tool action after its reply is lost and the delivery ret
   expect(original).toBeDefined();
   const originalResult = JSON.parse(original!.result_json) as unknown;
   expect(
-    app.chat
+    app.chat.timeline
       .listMessages(direct.id, undefined, 100)!
       .messages.filter((message) => message.text === input.input.text),
   ).toHaveLength(1);
@@ -98,7 +98,7 @@ it("replays a committed tool action after its reply is lost and the delivery ret
   const replay = await callAgentTool(app, socket, retryRun, actionId, "tools.call", input);
   expect(replay).toMatchObject({ ok: true, result: originalResult });
   expect(
-    app.chat
+    app.chat.timeline
       .listMessages(direct.id, undefined, 100)!
       .messages.filter((message) => message.text === input.input.text),
   ).toHaveLength(1);
@@ -131,14 +131,14 @@ it("keeps a running Agent's tool catalogue and refuses stale or forged tool runs
     },
     app.chat,
   );
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
   await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
   });
   const runStart = socket.sent.length;
-  app.chat.createMessage(direct.id, "Start a tool-call run.");
+  app.chat.messages.createMessage({ channelId: direct.id, text: "Start a tool-call run." });
   const run = await waitForRun(socket, runStart);
 
   const listed = await callAgentTool(app, socket, run, "normal-tools-list", "tools.list", {});
@@ -162,11 +162,18 @@ it("keeps a running Agent's tool catalogue and refuses stale or forged tool runs
     ),
   ).toBe(true);
 
-  const otherNode = await pairAnotherNode(app, cookie),
-    forgedNode = await callAgentTool(app, otherNode.socket, run, "forged-node-call", "tools.call", {
+  const otherNode = await pairAnotherNode(app, cookie);
+  const forgedNode = await callAgentTool(
+    app,
+    otherNode.socket,
+    run,
+    "forged-node-call",
+    "tools.call",
+    {
       name: "messages.send",
       input: { conversationId: direct.id, text: "Forged node must not send." },
-    });
+    },
+  );
   expect(forgedNode).toMatchObject({ type: "tools.result", ok: false });
   const forgedAgent = await callAgentTool(
     app,
@@ -203,6 +210,8 @@ it("keeps a running Agent's tool catalogue and refuses stale or forged tool runs
   });
   expect(stale).toMatchObject({ ok: false, error: "Agent run is no longer active" });
   expect(
-    app.chat.listMessages(direct.id, undefined, 100)!.messages.map((message) => message.text),
+    app.chat.timeline
+      .listMessages(direct.id, undefined, 100)!
+      .messages.map((message) => message.text),
   ).not.toContain("Forged node must not send.");
 });

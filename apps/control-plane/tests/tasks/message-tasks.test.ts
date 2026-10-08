@@ -1,10 +1,11 @@
+import type { OwnerTask } from "@mate/protocol/owner";
 import { expect, it } from "vitest";
 import { loopFixture, respond, type ProviderRequest } from "../support/agent/agent-loop.js";
 import { eventually } from "../support/environment/run-services.js";
 import Database from "better-sqlite3";
 import { join } from "node:path";
 
-function results(request: ProviderRequest): any[] {
+function toolResults(request: ProviderRequest) {
   return request.input
     .filter((item) => item.type === "function_call_output")
     .map((item) => {
@@ -21,14 +22,14 @@ function call(response: Parameters<typeof respond>[0], name: string, input: unkn
 }
 
 it("a real Pi run creates independent titled tasks on a root and reply and explicitly claims one", async () => {
-  let rootId = "",
-    replyId = "",
-    channelId = "",
-    sentId = "",
-    step = -2;
-  const observed: any[] = [];
+  let rootId = "";
+  let replyId = "";
+  let channelId = "";
+  let sentId = "";
+  let step = -2;
+  const observed: ReturnType<typeof toolResults> = [];
   const fixture = await loopFixture((request, response) => {
-    observed.push(...results(request).slice(observed.length));
+    observed.push(...toolResults(request).slice(observed.length));
     const previous = observed.at(-1);
     switch (step++) {
       case -2:
@@ -96,7 +97,9 @@ it("a real Pi run creates independent titled tasks on a root and reply and expli
     expect(prompt).toContain("排查／修改／验证");
     expect(prompt).toContain("tasks.claim");
     expect(prompt).not.toContain("tasks.claim_message");
-    expect(observed[0].tools.map((tool: any) => tool.name)).not.toContain("tasks.claim_message");
+    expect(observed[0].tools.map((tool: { name: string }) => tool.name)).not.toContain(
+      "tasks.claim_message",
+    );
     expect(observed[1]).toMatchObject({
       description: expect.stringContaining("携标记另建"),
       inputSchema: { required: ["messageId", "title"] },
@@ -146,7 +149,7 @@ it("a real Pi run creates independent titled tasks on a root and reply and expli
         expect.objectContaining({ messageId: sentId, title: "另一个事项", ownerAgentId: null }),
       ]),
     );
-    expect(new Set(tasks.map((task: any) => task.id)).size).toBe(6);
+    expect(new Set(tasks.map((task: OwnerTask) => task.id)).size).toBe(6);
     await fixture.restartControl();
     expect((await fixture.api("/api/owner/tasks")).tasks).toEqual(tasks);
   } finally {
@@ -160,8 +163,8 @@ it("two Agents see additions atomically, can create after reconsidering, and kee
   let finish = false;
   const fixture = await loopFixture((request, response) => {
     if (finish) return respond(response, "完成。");
-    const queue = responses.get(request.model) ?? [],
-      history = requests.get(request.model) ?? [];
+    const queue = responses.get(request.model) ?? [];
+    const history = requests.get(request.model) ?? [];
     queue.push(response);
     history.push(request);
     responses.set(request.model, queue);
@@ -195,7 +198,7 @@ it("two Agents see additions atomically, can create after reconsidering, and kee
       call(responses.get(model)![index]!, name, input);
       indices.set(model, index + 1);
       await eventually(() => requests.get(model)?.[index + 1], "peer tool result");
-      return results(requests.get(model)![index + 1]!).at(-1);
+      return toolResults(requests.get(model)![index + 1]!).at(-1);
     }
     await eventually(
       () => (modelIds.every((id) => responses.get(id)?.[0]) ? true : undefined),
@@ -207,13 +210,13 @@ it("two Agents see additions atomically, can create after reconsidering, and kee
       ),
     );
     expect(outcomes.map((result) => result.status).sort()).toEqual(["created", "tasks_changed"]);
-    const winnerIndex = outcomes.findIndex((result) => result.status === "created"),
-      loserIndex = 1 - winnerIndex;
-    const winning = outcomes[winnerIndex],
-      losing = outcomes[loserIndex];
-    const winner = modelIds[winnerIndex]!,
-      loser = modelIds[loserIndex]!;
-    expect(losing.tasks.map((task: any) => task.id)).toEqual([winning.task.id]);
+    const winnerIndex = outcomes.findIndex((result) => result.status === "created");
+    const loserIndex = 1 - winnerIndex;
+    const winning = outcomes[winnerIndex];
+    const losing = outcomes[loserIndex];
+    const winner = modelIds[winnerIndex]!;
+    const loser = modelIds[loserIndex]!;
+    expect(losing.tasks.map((task: OwnerTask) => task.id)).toEqual([winning.task.id]);
     expect(
       (await action(loser, "tasks.create", { messageId: root.id, title: "同一标题" })).status,
     ).toBe("tasks_changed");
@@ -244,8 +247,8 @@ it("two Agents see additions atomically, can create after reconsidering, and kee
       status: "tasks_changed",
       tasks: expect.arrayContaining([expect.objectContaining({ id: ownerTask.id })]),
     });
-    const winnerAgent = winnerIndex === 0 ? first : second,
-      loserAgent = loserIndex === 0 ? first : second;
+    const winnerAgent = winnerIndex === 0 ? first : second;
+    const loserAgent = loserIndex === 0 ? first : second;
     expect(
       await action(winner, "tasks.claim", { taskId: winning.task.id, expectedVersion: 1 }),
     ).toMatchObject({ ownerAgentId: winnerAgent.id, version: 2 });
@@ -332,7 +335,7 @@ it("task additions preserve a ready message-change draft and a fresh snapshot ap
       await eventually(() => responses[index], "scripted model request");
       call(responses[index++]!, name, input);
       await eventually(() => responses[index], "scripted tool result");
-      return results(fixture.requests[index]!).at(-1);
+      return toolResults(fixture.requests[index]!).at(-1);
     }
     const first = await action("tasks.create", { messageId: reply.id, title: "第一项" });
     expect(first.status).toBe("created");

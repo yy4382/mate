@@ -2,7 +2,7 @@ import { AgentHistory } from "../../agent-history.js";
 import { currentAgentToolRunSchema } from "./entry.js";
 import type Database from "better-sqlite3";
 import { z } from "zod";
-import { OwnerChat } from "../../conversations/service.js";
+import type { OwnerChat } from "../../conversations/service.js";
 import { AgentToolRefusal } from "../../conversations/errors.js";
 import { WorkspaceService } from "../../workspaces/service.js";
 import { WorkspaceError } from "../../workspaces/errors.js";

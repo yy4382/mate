@@ -36,25 +36,28 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
     },
     app.chat,
   );
-  const channel = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  const channel = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
   await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
   });
   const runStart = socket.sent.length;
-  app.chat.createMessage(channel.id, "Use workspace files and publish the result.");
+  app.chat.messages.createMessage({
+    channelId: channel.id,
+    text: "Use workspace files and publish the result.",
+  });
   const run = await waitForRun(socket, runStart);
-  const requests: Array<Record<string, unknown>> = [],
-    nodeReceipts = new Map<
-      string,
-      { code: number; stdout: string; stderr: string; truncated: boolean }
-    >();
-  let heldRequest: Record<string, unknown> | undefined,
-    holdNextResponse = false,
-    failNextResponse = false,
-    expectedActionId: string | undefined,
-    executingEnvelope: unknown;
+  const requests: Array<Record<string, unknown>> = [];
+  const nodeReceipts = new Map<
+    string,
+    { code: number; stdout: string; stderr: string; truncated: boolean }
+  >();
+  let heldRequest: Record<string, unknown> | undefined;
+  let holdNextResponse = false;
+  let failNextResponse = false;
+  let expectedActionId: string | undefined;
+  let executingEnvelope: unknown;
   socket.onWorkspaceOperation = async (message) => {
     requests.push(message);
     const operationId = String(message.operationId),
@@ -209,7 +212,7 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
   const lateReceipt = nodeReceipts.get(String(heldRequest!.operationId))!;
   const correctedStart = socket.sent.length;
   const unavailableNotification = vi
-    .spyOn(app.chat, "notifyAgentReceiptCorrection")
+    .spyOn(app.chat.messages, "notifyAgentReceiptCorrection")
     .mockImplementation(() => {
       throw new Error("crash before notification commit");
     });
@@ -364,10 +367,10 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
   expect(requests).toHaveLength(beforeFailedReplay);
 
   const immediateFailureInput = {
-      name: "workspace.write",
-      input: { path: "protected.txt", content: "no" },
-    },
-    immediateFailureId = stableToolActionId(correctedRun.actionScopeId, immediateFailureInput);
+    name: "workspace.write",
+    input: { path: "protected.txt", content: "no" },
+  };
+  const immediateFailureId = stableToolActionId(correctedRun.actionScopeId, immediateFailureInput);
   expectedActionId = immediateFailureId;
   failNextResponse = true;
   const originalFailure = await callAgentTool(

@@ -1,9 +1,6 @@
 import { eventRowSchema } from "./rows.js";
-
 import type { OwnerChannel, OwnerChatEvent, OwnerMessage, OwnerTask } from "@mate/protocol/owner";
-
 import type Database from "better-sqlite3";
-
 import { z } from "zod";
 
 const retainedChatEventCount = 1000;

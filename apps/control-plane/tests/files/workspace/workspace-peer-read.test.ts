@@ -35,14 +35,17 @@ it("sends an Agent's own workspace read of a peer workspace to the node as an ag
     },
     app.chat,
   );
-  const channel = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  const channel = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
   await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-peer-read-key" }),
   });
   const runStart = socket.sent.length;
-  app.chat.createMessage(channel.id, "Read the peer's memory entry point.");
+  app.chat.messages.createMessage({
+    channelId: channel.id,
+    text: "Read the peer's memory entry point.",
+  });
   const run = await waitForRun(socket, runStart);
 
   const requests: Array<Record<string, unknown>> = [];
@@ -79,11 +82,11 @@ it("sends an Agent's own workspace read of a peer workspace to the node as an ag
   // The path the Agent asked for is the path the node is asked to read, under the read mode that
   // reaches the shared workspace root. A read confined to the Agent's own directory would come
   // back as a refusal instead of the peer's file.
-  const peerPath = `../${peerAgentId}/MEMORY.md`,
-    read = await callAgentTool(app, socket, run, "workspace-peer-read", "tools.call", {
-      name: "workspace.read",
-      input: { path: peerPath },
-    });
+  const peerPath = `../${peerAgentId}/MEMORY.md`;
+  const read = await callAgentTool(app, socket, run, "workspace-peer-read", "tools.call", {
+    name: "workspace.read",
+    input: { path: peerPath },
+  });
   expect(read).toMatchObject({ ok: true, result: { content: "peer memory\n" } });
   expect(requests).toHaveLength(1);
   expect(requests[0]).toMatchObject({

@@ -134,7 +134,7 @@ export async function toolTestInput(
       db.close();
     }
   } else if (input.type === "run.complete") {
-    if (input.ok) app.chat.completeAgentRun(input.runId, input.agentId);
+    if (input.ok) app.chat.deliveries.completeAgentRun(input.runId, input.agentId);
     else {
       const db = new Database(fixture.path);
       try {

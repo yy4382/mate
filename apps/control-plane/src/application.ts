@@ -5,7 +5,7 @@ import { AgentProcessOperationBroker } from "./runtime/processes/operations.js";
 import { Hono } from "hono";
 import { resolve } from "node:path";
 import { OwnerAuth } from "./auth/service.js";
-import { OwnerChat } from "./conversations/service.js";
+import { createOwnerChat } from "./conversations/service.js";
 import { sessionToken } from "./auth/session-cookie.js";
 import { NodeDirectory } from "./nodes/directory.js";
 import { createNodeRoutes } from "./nodes/http.js";
@@ -79,9 +79,9 @@ export function createControlPlane(
   const nodes = new NodeDirectory(ownerAuth.db, nodeOptions);
   const agents = new AgentDirectory(ownerAuth.db, options.now ?? Date.now, nodes.identity);
   const modelCredentials = new ModelCredentialDirectory(ownerAuth.db, options.now);
-  const ownerChat = new OwnerChat(ownerAuth.db, options.now);
+  const ownerChat = createOwnerChat(ownerAuth.db, options.now);
   const push = new OwnerPush(ownerAuth.db);
-  const workspace = new WorkspaceService(ownerAuth.db, nodes, ownerChat);
+  const workspace = new WorkspaceService(ownerAuth.db, nodes, ownerChat.messages);
   const attachments = new AttachmentService(
     ownerAuth.db,
     workspace.reads,
@@ -102,7 +102,7 @@ export function createControlPlane(
     options.now,
     testDependencies,
   );
-  ownerChat.setPushHandler((message, directToOwner) => {
+  ownerChat.events.setPushHandler((message, directToOwner) => {
     if (!directToOwner && !mentionsOwner(message.text)) return;
     push.queue(
       `message:${message.id}`,

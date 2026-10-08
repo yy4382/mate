@@ -1,13 +1,11 @@
 import type Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
-
 import type { OwnerReminder } from "@mate/protocol/owner";
 import { z } from "zod";
 import { AgentToolRefusal } from "../errors.js";
 import { reminderRowSchema, toReminder } from "../rows.js";
 import { type ConversationToolActions, defineConversationTool } from "../tools/actions.js";
 import { conversationToolDefinitions } from "../tools/contracts.js";
-
 import type { ConversationDirectory } from "../channels/directory.js";
 import type { TaskService } from "./service.js";
 const dueReminderBatchSize = 100;
@@ -87,9 +85,9 @@ export class ReminderService {
                 )
                 .get(channel.id),
             );
-          const messageId = randomUUID(),
-            deliveryId = randomUUID(),
-            at = this.now();
+          const messageId = randomUUID();
+          const deliveryId = randomUUID();
+          const at = this.now();
           this.db
             .prepare(
               "INSERT INTO owner_messages(id,channel_id,order_seq,text,author_kind,author_id,internal_kind,created_at) VALUES(?,?,?,?,'agent',?,'reminder',?)",
@@ -134,6 +132,7 @@ export class ReminderService {
       )
       .run();
   }
+
   agentTools() {
     return {
       "reminders.create": defineConversationTool(
@@ -146,8 +145,8 @@ export class ReminderService {
               if (!task || task.channelId !== args.conversationId)
                 throw new AgentToolRefusal("Task is not in this conversation");
             }
-            const id = randomUUID(),
-              at = this.now();
+            const id = randomUUID();
+            const at = this.now();
             this.db
               .prepare(
                 "INSERT INTO owner_reminders(id,agent_id,channel_id,task_id,text,due_at,state,created_at,updated_at) VALUES(?,?,?,?,?,?,'active',?,?)",
