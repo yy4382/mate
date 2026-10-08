@@ -22,16 +22,16 @@ if (!image)
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const nodeEntry = resolve(process.argv[3] ?? join(root, "apps/node/dist/main.js"));
 const nodeRuntime = resolve(process.argv[4] ?? process.execPath);
-const uid = process.getuid(),
-  gid = process.getgid();
+const uid = process.getuid();
+const gid = process.getgid();
 assert.ok(
   uid > 0 && gid > 0,
   "Run acceptance as an existing ordinary account with nonzero UID/GID",
 );
 const directory = mkdtempSync(join(tmpdir(), "mate-control-plane-image-"));
 chmodSync(directory, 0o700);
-const data = join(directory, "control-plane"),
-  passwordFile = join(directory, "owner-password");
+const data = join(directory, "control-plane");
+const passwordFile = join(directory, "owner-password");
 mkdirSync(data, { mode: 0o700 });
 const password = "synthetic-control-plane-image-test-password";
 writeFileSync(passwordFile, `${password}\n`, { mode: 0o600 });
@@ -46,11 +46,11 @@ const env = {
   MATE_CONTROL_PLANE_DATA_DIR: data,
   MATE_OWNER_PASSWORD_FILE: passwordFile,
 };
-let initialize = true,
-  node,
-  nodeOutput = "",
-  occupiedName,
-  cleanupPromise;
+let initialize = true;
+let node;
+let nodeOutput = "";
+let occupiedName;
+let cleanupPromise;
 const origin = "http://127.0.0.1:8787";
 const delay = (ms) => new Promise((done) => setTimeout(done, ms));
 function docker(args, options = {}) {
@@ -119,8 +119,8 @@ async function json(path, cookie, body) {
 }
 function owners(path) {
   for (const name of readdirSync(path)) {
-    const file = join(path, name),
-      state = statSync(file);
+    const file = join(path, name);
+    const state = statSync(file);
     assert.equal(state.uid, uid, `UID for ${file}`);
     assert.equal(state.gid, gid, `GID for ${file}`);
     if (state.isDirectory()) owners(file);
@@ -202,16 +202,7 @@ try {
     image,
     "--input-type=module",
     "-e",
-    `
-    import { accessSync, existsSync, readdirSync, realpathSync, lstatSync } from 'node:fs';
-    import { join } from 'node:path';
-    if (existsSync('src') || existsSync('tests')) throw new Error('Source/tests entered the delivery package');
-    for (const path of ['/usr/local/bin/pnpm','/usr/local/bin/npm','/usr/bin/g++','/usr/bin/make']) if (existsSync(path)) throw new Error('Build tool in runtime: '+path);
-    const visit = path => { for (const name of readdirSync(path)) { const file = join(path,name); const state = lstatSync(file); if(state.isSymbolicLink() && !realpathSync(file).startsWith('/opt/mate/')) throw new Error('Dependency outside delivery: '+file); if(state.isDirectory()) visit(file); }};
-    visit('/opt/mate');
-    const { webRoot } = await import('@mate/web/assets'); accessSync(join(webRoot,'index.html')); accessSync(join(webRoot,'manifest.webmanifest'));
-    await import('better-sqlite3'); await import('argon2');
-  `,
+    readFileSync(new URL("./runtime-package-check.mjs", import.meta.url), "utf8"),
   ]);
   const missing = join(directory, "missing-data");
   assert.throws(

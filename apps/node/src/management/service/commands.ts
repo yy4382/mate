@@ -1,15 +1,6 @@
-import {
-  accessSync,
-  constants,
-  readFileSync,
-  readdirSync,
-  realpathSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { accessSync, constants, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve, relative, isAbsolute, sep } from "node:path";
 import { randomUUID } from "node:crypto";
-import { bundleEntrypoints, releaseVersion } from "../bundle.js";
 import { readNodeConfiguration } from "../configuration.js";
 import {
   checkManagedDirectory,
@@ -26,106 +17,15 @@ import {
   type UserServiceManager,
   type InspectionOptions,
 } from "./systemd.js";
+import {
+  readManagedUnit,
+  recoverUnitStaging,
+  renderNodeUnit,
+  serviceReferencesBundle,
+} from "./unit.js";
 import { createAtomicNoReplaceRename } from "../../files/mutations/atomic-rename.js";
 
 export const nodeServiceCommands = ["install", "start", "stop", "restart", "status", "logs"];
-const quote = (value: string) => {
-  if (/[\r\n\0]/.test(value))
-    throw new Error("Service paths cannot contain newline or NUL characters");
-  return JSON.stringify(value.replaceAll("%", "%%"));
-};
-export function renderNodeUnit(paths: ReturnType<typeof nodePaths>, version: string) {
-  const entries = bundleEntrypoints(join(paths.versionsDirectory, releaseVersion.parse(version)));
-  // ':' disables environment substitution in literal absolute arguments; quote also escapes '%'.
-  // WorkingDirectory is a scalar, not an ExecStart word; '~' selects this account's home.
-  return `# Mate node service\n# Mate bundle version: ${version}\n[Unit]\nDescription=Mate Linux node\n\n[Service]\nType=exec\nExecStart=:${quote(entries.runtime)} ${quote(entries.node)} --config-file ${quote(paths.configuration)}\nUnsetEnvironment=GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN\nWorkingDirectory=~\nRestart=on-failure\nRestartSec=5s\nKillMode=mixed\nTimeoutStopSec=45s\nUMask=0077\n\n[Install]\nWantedBy=default.target\n`;
-}
-
-export function recoverUnitStaging(paths: ReturnType<typeof nodePaths>, version: string) {
-  if (!lstatIfPresent(dirname(paths.unit))) return;
-  const expected = renderNodeUnit(paths, version);
-  for (const name of readdirSync(dirname(paths.unit))) {
-    if (
-      !/^\.mate-node-unit-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(name)
-    )
-      continue;
-    const file = join(dirname(paths.unit), name),
-      info = lstatIfPresent(file);
-    if (
-      !info?.isFile() ||
-      info.uid !== process.getuid?.() ||
-      (info.mode & 0o077) !== 0 ||
-      !expected.startsWith(readFileSync(file, "utf8"))
-    )
-      throw new Error(`Unknown interrupted user unit file was preserved: ${file}`);
-    rmSync(file);
-  }
-}
-
-function readManagedUnitFile(paths: ReturnType<typeof nodePaths>, file: string) {
-  const info = lstatIfPresent(file);
-  if (!info) return undefined;
-  if (!info.isFile() || info.uid !== process.getuid?.())
-    throw new Error(`Non-Mate user unit conflict: ${file}`);
-  const text = readFileSync(file, "utf8"),
-    version = text.match(/^# Mate bundle version: (.+)$/m)?.[1];
-  if (
-    !version ||
-    !releaseVersion.safeParse(version).success ||
-    text !== renderNodeUnit(paths, version)
-  )
-    throw new Error(
-      `Non-Mate or modified user unit conflict: ${file}; keep custom service environment in a systemd drop-in`,
-    );
-  return version;
-}
-
-export function readManagedUnit(paths: ReturnType<typeof nodePaths>) {
-  return readManagedUnitFile(paths, paths.unit);
-}
-
-/** A moved unit is its own ownership evidence, not a persisted maintenance intent. */
-export function interruptedUnitFiles(paths: ReturnType<typeof nodePaths>) {
-  if (!lstatIfPresent(dirname(paths.unit))) return [];
-  return readdirSync(dirname(paths.unit))
-    .filter((name) =>
-      /^\.mate-node-previous-unit-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(
-        name,
-      ),
-    )
-    .map((name) => {
-      const file = join(dirname(paths.unit), name);
-      return { file, version: readManagedUnitFile(paths, file) };
-    });
-}
-
-export function publishNodeUnit(
-  paths: ReturnType<typeof nodePaths>,
-  version: string,
-  oldVersion: string | undefined,
-  bundleDirectory: string,
-) {
-  const noReplace = createAtomicNoReplaceRename(
-    join(bundleDirectory, "app/apps/node/dist/files/rename-noreplace"),
-  );
-  const temporary = join(dirname(paths.unit), `.mate-node-unit-${randomUUID()}`);
-  const previous = join(dirname(paths.unit), `.mate-node-previous-unit-${randomUUID()}`);
-  try {
-    writeFileSync(temporary, renderNodeUnit(paths, version), { mode: 0o600, flag: "wx" });
-    if (oldVersion !== undefined) {
-      noReplace(paths.unit, previous);
-      if (readManagedUnitFile(paths, previous) !== oldVersion)
-        throw new Error(
-          `Concurrent user unit was preserved at ${previous}; resolve it before retrying update`,
-        );
-    }
-    noReplace(temporary, paths.unit);
-    for (const backup of interruptedUnitFiles(paths)) rmSync(backup.file);
-  } finally {
-    rmSync(temporary, { force: true });
-  }
-}
-
 function prepareNodeDirectories(
   paths: ReturnType<typeof nodePaths>,
   config: ReturnType<typeof readNodeConfiguration>,
@@ -163,43 +63,46 @@ function prepareNodeDirectories(
     throw new Error("Node data directory must be private (0700)");
 }
 
-function report(
+function renderServiceReport(
   paths: ReturnType<typeof nodePaths>,
   version: string,
   manager: UserServiceManager,
   options?: InspectionOptions,
 ) {
-  const config = readNodeConfiguration(paths.configuration, paths),
-    facts = manager.inspect(options);
-  return `Mate bundle: ${version}\nUnit bundle: ${readManagedUnit(paths) ?? "not installed"}\nUnit: ${paths.unit}\nConfiguration: ${paths.configuration}\nData: ${config.dataDirectory}\nAgent workspaces: ${config.agentWorkspaceRoot}\nControl plane: ${config.controlPlaneUrl}\nUser manager: available\nService: ${nodeUnitName}\nLoaded: ${facts.load}\nEnabled: ${facts.enabled || "unknown"}\nActive: ${facts.active} (${facts.sub}); PID: ${facts.pid}\nLinger: ${manager.linger()} (enable does not provide login-independent startup; Mate never changes linger)\nService active does not establish pairing or online status. Check the web interface and mate node logs.\n`;
+  const config = readNodeConfiguration(paths.configuration, paths);
+  const facts = manager.inspect(options);
+  return `Mate bundle: ${version}
+Unit bundle: ${readManagedUnit(paths) ?? "not installed"}
+Unit: ${paths.unit}
+Configuration: ${paths.configuration}
+Data: ${config.dataDirectory}
+Agent workspaces: ${config.agentWorkspaceRoot}
+Control plane: ${config.controlPlaneUrl}
+User manager: available
+Service: ${nodeUnitName}
+Loaded: ${facts.load}
+Enabled: ${facts.enabled || "unknown"}
+Active: ${facts.active} (${facts.sub}); PID: ${facts.pid}
+Linger: ${manager.linger()} (enable does not provide login-independent startup; Mate never changes linger)
+Service active does not establish pairing or online status. Check the web interface and mate node logs.
+`;
 }
 
-export function serviceReferencesBundle(
-  facts: ReturnType<UserServiceManager["inspect"]>,
-  paths: ReturnType<typeof nodePaths>,
-  version: string,
-) {
-  const entries = bundleEntrypoints(join(paths.versionsDirectory, version)),
-    command = facts.execStart[0];
-  return (
-    facts.type === "exec" &&
-    facts.execStart.length === 1 &&
-    command?.flags.length === 1 &&
-    command.flags[0] === "no-env-expand" &&
-    command?.path === entries.runtime &&
-    JSON.stringify(command.argv) ===
-      JSON.stringify([entries.runtime, entries.node, "--config-file", paths.configuration])
-  );
-}
-
-/** Public command boundary; a manager replacement is only for early branch tests. */
+/** Execute one service command against the selected installed bundle. */
 export async function manageNode(
   command: string,
-  paths: ReturnType<typeof nodePaths>,
-  bundleDirectory: string,
-  version: string,
+  {
+    paths,
+    bundleDirectory,
+    version,
+    logs = { lines: 100, follow: false },
+  }: {
+    paths: ReturnType<typeof nodePaths>;
+    bundleDirectory: string;
+    version: string;
+    logs?: { lines: number; follow: boolean };
+  },
   manager = systemdUserManager,
-  logOptions = { lines: 100, follow: false },
 ) {
   requireOrdinaryAccount();
   const inspection = { effectiveCommand: command !== "stop" && command !== "logs" };
@@ -213,12 +116,12 @@ export async function manageNode(
       throw new Error(
         "Management entry and running complete bundle differ; use mate node update to diagnose the installed version",
       );
-    const unitVersion = readManagedUnit(paths),
-      facts = manager.inspect(inspection);
+    const unitVersion = readManagedUnit(paths);
+    const facts = manager.inspect(inspection);
     if (facts.load !== "not-found" && facts.fragment !== paths.unit)
       throw new Error(`Non-Mate manager unit conflicts with ${paths.unit}`);
     if (command === "status") {
-      const output = report(paths, version, manager);
+      const output = renderServiceReport(paths, version, manager);
       if (
         !unitVersion ||
         unitVersion !== version ||
@@ -233,13 +136,9 @@ export async function manageNode(
     }
     if (command === "logs") {
       if (!unitVersion) throw new Error("Mate user service is not installed");
-      if (
-        !Number.isSafeInteger(logOptions.lines) ||
-        logOptions.lines < 0 ||
-        logOptions.lines > 100_000
-      )
+      if (!Number.isSafeInteger(logs.lines) || logs.lines < 0 || logs.lines > 100_000)
         throw new Error("Use --lines with an integer from 0 to 100000");
-      if (manager.logs(logOptions.lines, logOptions.follow) !== 0)
+      if (manager.logs(logs.lines, logs.follow) !== 0)
         throw new Error("User journal command failed");
       return "";
     }
@@ -286,7 +185,7 @@ export async function manageNode(
             "Effective user service command/configuration references differ; resolve the systemd drop-in before starting",
           );
       }
-      return `${report(paths, version, manager)}Existing stopped/disabled units are preserved. Use mate node start to start explicitly.\n`;
+      return `${renderServiceReport(paths, version, manager)}Existing stopped/disabled units are preserved. Use mate node start to start explicitly.\n`;
     }
     if (
       !unitVersion ||
@@ -307,7 +206,7 @@ export async function manageNode(
       throw new Error("Unknown node service command");
     manager.run(command);
     try {
-      return report(paths, version, manager, inspection);
+      return renderServiceReport(paths, version, manager, inspection);
     } catch (error) {
       throw new Error(
         `User service ${command} completed; status unavailable: ${error instanceof Error ? error.message : "unknown error"}`,

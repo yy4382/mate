@@ -35,8 +35,8 @@ function assertRepairOwnership(directory: string, metadata: BundleMetadata) {
   }
   const visit = (relative: string) => {
     for (const name of readdirSync(join(directory, relative))) {
-      const path = relative ? `${relative}/${name}` : name,
-        info = lstatSync(join(directory, path));
+      const path = relative ? `${relative}/${name}` : name;
+      const info = lstatSync(join(directory, path));
       if (
         info.uid !== process.getuid?.() ||
         (!info.isDirectory() && !info.isFile()) ||

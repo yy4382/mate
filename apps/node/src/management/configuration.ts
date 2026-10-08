@@ -4,15 +4,15 @@ import { z } from "zod";
 import { toWebSocketUrl } from "../connection/node-client.js";
 import { nodePaths } from "./paths.js";
 
-const absolutePath = z
+const absolutePathSchema = z
   .string()
   .refine(isAbsolute)
   .refine((value) => !/[\r\n\0]/.test(value));
-export const nodeConfiguration = z
+export const nodeConfigurationSchema = z
   .object({
     MATE_CONTROL_PLANE_URL: z.string().min(1),
-    MATE_NODE_DATA_DIR: absolutePath.optional(),
-    MATE_NODE_AGENT_WORKSPACE_ROOT: absolutePath.optional(),
+    MATE_NODE_DATA_DIR: absolutePathSchema.optional(),
+    MATE_NODE_AGENT_WORKSPACE_ROOT: absolutePathSchema.optional(),
     MATE_NODE_PAIRING_TOKEN: z.string().min(32).max(256).optional(),
   })
   .strict();
@@ -38,7 +38,7 @@ export function readNodeConfiguration(file: string, paths = nodePaths()) {
   } catch {
     throw new Error("Node configuration is not valid JSON; contents were omitted");
   }
-  const parsed = nodeConfiguration.safeParse(decoded);
+  const parsed = nodeConfigurationSchema.safeParse(decoded);
   if (!parsed.success)
     throw new Error(
       "Node configuration is not valid; use the documented URL and absolute path fields",
