@@ -175,7 +175,10 @@ async function fixture(options: { nodeOperationTimeoutMs?: number } = {}) {
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-no-provider-request" }),
   });
-  app.chat.createMessage(direct.channel.id, "写一份合成文件后保持静默。");
+  app.chat.messages.createMessage({
+    channelId: direct.channel.id,
+    text: "写一份合成文件后保持静默。",
+  });
   const run = await eventually(() => {
     for (const text of sent) {
       const parsed = z

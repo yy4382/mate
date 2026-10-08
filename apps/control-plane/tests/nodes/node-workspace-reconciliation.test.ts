@@ -10,7 +10,7 @@ async function recordedOperations() {
   const context = await setup(),
     agentId = addAgent(context.app, context.nodeId, "收据同事"),
     agent = context.app.agents.get(agentId)!,
-    channel = context.app.chat.getOrCreateAgentDirectChannel(agentId)!,
+    channel = context.app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!,
     sessionId = agent.sessionId,
     runId = randomUUID(),
     operation = { kind: "write", path: "history.txt", content: "synthetic\n" } as const,

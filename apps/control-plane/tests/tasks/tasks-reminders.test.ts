@@ -1,3 +1,4 @@
+import type { OwnerTask } from "@mate/protocol/owner";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,7 +13,7 @@ afterEach(() => {
   }
 });
 
-async function setup() {
+async function ownerTaskFixture() {
   const dir = mkdtempSync(join(tmpdir(), "mate-task-reminder-"));
   chmodSync(dir, 0o700);
   const passwordFile = join(dir, "password");
@@ -35,50 +36,60 @@ async function setup() {
 }
 
 it("commits a task with its new message and keeps the message as its unique anchor across restart", async () => {
-  const f = await setup();
-  const response = await f.app.http.request(`/api/owner/channels/${f.channel.id}/messages`, {
-    method: "POST",
-    headers: { cookie: f.cookie, "content-type": "application/json" },
-    body: JSON.stringify({ text: "整理方案", asTask: true }),
-  });
+  const fixture = await ownerTaskFixture();
+  const response = await fixture.app.http.request(
+    `/api/owner/channels/${fixture.channel.id}/messages`,
+    {
+      method: "POST",
+      headers: { cookie: fixture.cookie, "content-type": "application/json" },
+      body: JSON.stringify({ text: "整理方案", asTask: true }),
+    },
+  );
   expect(response.status).toBe(201);
   const message = await response.json();
-  const first = await f.app.http.request("/api/owner/tasks", { headers: { cookie: f.cookie } });
+  const first = await fixture.app.http.request("/api/owner/tasks", {
+    headers: { cookie: fixture.cookie },
+  });
   expect(await first.json()).toMatchObject({
     tasks: [
       expect.objectContaining({
         messageId: message.id,
-        channelId: f.channel.id,
+        channelId: fixture.channel.id,
         title: "整理方案",
         status: "open",
       }),
     ],
   });
-  f.app.close();
+  fixture.app.close();
   const restarted = createControlPlane({
-    dataDir: f.dir,
-    passwordFile: f.passwordFile,
+    dataDir: fixture.dir,
+    passwordFile: fixture.passwordFile,
     now: () => 1_000,
   });
-  fixtures.push({ app: restarted, dir: f.dir });
-  const after = await restarted.http.request("/api/owner/tasks", { headers: { cookie: f.cookie } });
+  fixtures.push({ app: restarted, dir: fixture.dir });
+  const after = await restarted.http.request("/api/owner/tasks", {
+    headers: { cookie: fixture.cookie },
+  });
   expect(await after.json()).toMatchObject({
-    tasks: [expect.objectContaining({ messageId: message.id, channelId: f.channel.id })],
+    tasks: [expect.objectContaining({ messageId: message.id, channelId: fixture.channel.id })],
   });
 });
 
 it("creates multiple titled tasks from an existing message without changing conversation access", async () => {
-  const f = await setup();
-  const sent = await f.app.http.request(`/api/owner/channels/${f.channel.id}/messages`, {
-    method: "POST",
-    headers: { cookie: f.cookie, "content-type": "application/json" },
-    body: JSON.stringify({ text: "先调查" }),
-  });
+  const fixture = await ownerTaskFixture();
+  const sent = await fixture.app.http.request(
+    `/api/owner/channels/${fixture.channel.id}/messages`,
+    {
+      method: "POST",
+      headers: { cookie: fixture.cookie, "content-type": "application/json" },
+      body: JSON.stringify({ text: "先调查" }),
+    },
+  );
   const message = await sent.json();
   const create = (title: unknown) =>
-    f.app.http.request("/api/owner/tasks", {
+    fixture.app.http.request("/api/owner/tasks", {
       method: "POST",
-      headers: { cookie: f.cookie, "content-type": "application/json" },
+      headers: { cookie: fixture.cookie, "content-type": "application/json" },
       body: JSON.stringify({ messageId: message.id, title }),
     });
   for (const title of [undefined, "  ", "x".repeat(201)])
@@ -86,28 +97,35 @@ it("creates multiple titled tasks from an existing message without changing conv
   expect((await create("  调查  ")).status).toBe(201);
   expect((await create("调查")).status).toBe(201);
   expect((await create("x".repeat(200))).status).toBe(201);
-  const listed = await f.app.http.request("/api/owner/tasks", { headers: { cookie: f.cookie } });
+  const listed = await fixture.app.http.request("/api/owner/tasks", {
+    headers: { cookie: fixture.cookie },
+  });
   const { tasks } = await listed.json();
   expect(tasks).toHaveLength(3);
-  expect(tasks.filter((task: any) => task.title === "调查")).toHaveLength(2);
+  expect(tasks.filter((task: OwnerTask) => task.title === "调查")).toHaveLength(2);
   expect(
-    tasks.every((task: any) => task.messageId === message.id && task.ownerAgentId === null),
+    tasks.every((task: OwnerTask) => task.messageId === message.id && task.ownerAgentId === null),
   ).toBe(true);
 });
 
 it("rolls back a new message and its deliveries if task creation cannot commit", async () => {
-  const f = await setup();
-  const db = new Database(join(f.dir, "control-plane.sqlite"));
+  const fixture = await ownerTaskFixture();
+  const db = new Database(join(fixture.dir, "control-plane.sqlite"));
   db.exec(`CREATE TRIGGER refuse_task BEFORE INSERT ON owner_tasks
     BEGIN SELECT RAISE(ABORT,'synthetic task failure'); END;`);
-  const response = await f.app.http.request(`/api/owner/channels/${f.channel.id}/messages`, {
-    method: "POST",
-    headers: { cookie: f.cookie, "content-type": "application/json" },
-    body: JSON.stringify({ text: "This cannot become a task", asTask: true }),
-  });
+  const response = await fixture.app.http.request(
+    `/api/owner/channels/${fixture.channel.id}/messages`,
+    {
+      method: "POST",
+      headers: { cookie: fixture.cookie, "content-type": "application/json" },
+      body: JSON.stringify({ text: "This cannot become a task", asTask: true }),
+    },
+  );
   expect(response.status).toBe(500);
   expect(
-    db.prepare("SELECT count(*) AS n FROM owner_messages WHERE channel_id=?").get(f.channel.id),
+    db
+      .prepare("SELECT count(*) AS n FROM owner_messages WHERE channel_id=?")
+      .get(fixture.channel.id),
   ).toEqual({ n: 0 });
   expect(db.prepare("SELECT count(*) AS n FROM owner_tasks").get()).toEqual({ n: 0 });
   expect(db.prepare("SELECT count(*) AS n FROM owner_message_deliveries").get()).toEqual({ n: 0 });

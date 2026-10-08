@@ -33,7 +33,11 @@ async function setup() {
       body: JSON.stringify({ password }),
     }),
     cookie = login.headers.get("set-cookie")!.split(";", 1)[0]!,
-    channel = app.chat.createChannel({ name: "附件测试", description: "", visibility: "private" });
+    channel = app.chat.channels.createChannel({
+      name: "附件测试",
+      description: "",
+      visibility: "private",
+    });
   return { app, cookie, directory, passwordFile, channel };
 }
 
@@ -91,7 +95,7 @@ it("streams a Unicode owner upload into a channel and streams it back only throu
   }
   expect(Buffer.concat(parts).toString()).toBe("第一段\n第二段");
 
-  const anotherChannel = app.chat.createChannel({
+  const anotherChannel = app.chat.channels.createChannel({
     name: "另一个对话",
     description: "",
     visibility: "private",

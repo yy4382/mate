@@ -15,7 +15,7 @@
 
 ## 控制面按领域找代码
 
-- `conversations/`：`service.ts` 装配共享数据库/时钟下的既有 OwnerChat 公共入口，保留同一读事务内的 snapshot 与工具目录组合；下层不依赖整个 OwnerChat。`channels/directory.ts` 管 Owner/peer DM、频道事实和 read/member 授权，`channels/membership.ts` 管频道 CRUD、加入与邀请并单向依赖目录。`messages/timeline.ts` 管消息分页、讨论串和读取正文后的 presented 标记；`messages/attention.ts` 管注意力、消息草稿和发送新鲜度；`messages/writer.ts` 保存消息及迟到收据更正，`messages/deliveries.ts` 管当前成员快照、pending/handled 和 run 完成。`tasks/service.ts` 管任务认领及任务草稿，`tasks/reminders.ts` 集中提醒 CRUD、到期持久投递与 handled 同步；提醒保持专用单接收者投递。`events.ts` 在原事务位置保存事件和调用原 push 回调；`tools/actions.ts` 复用持久工具结果，`tools/contracts.ts` 保留 Zod 工具定义及输入推导。`contracts.ts`、`rows.ts`、`schema.ts` 和 `http.ts` 分别负责请求校验、持久查询投影、表装配及领域 HTTP 入口。
+- `conversations/`：从 `http.ts` 的所有者动作进入实际领域能力。`service.ts` 的 `createOwnerChat` 用共享数据库和时钟装配这些能力，只集中 snapshot 读事务和 Agent 工具目录组合。`channels/membership.ts` 实现频道创建、更新、加入和邀请；`channels/directory.ts` 提供对话事实、成员读取与唯一私信，调用方通过 `chat.channels` 和 `chat.conversations` 直达。`messages/writer.ts` 保存消息及收据更正，`timeline.ts` 提供消息分页、讨论串与读取后的 presented 标记，`attention.ts` 管注意力、草稿和讨论位置检查；`deliveries.ts` 管成员快照、pending/handled 和 run 完成。`tasks/service.ts` 管任务创建、责任、活动与草稿，`reminders.ts` 管提醒和专用单接收者投递。消息、任务和讨论位置的长输入使用具名参数，草稿选择的状态表达集中在 `tools/contracts.ts`。请求 Zod 契约在 `contracts.ts`，持久查询投影在 `rows.ts`，SQL 表定义在各 `schema.ts`；`events.ts` 保存事件并调用推送，`tools/actions.ts` 复用持久工具结果。
 - `agents/`：Agent 身份、资料、创建与目录；`http.ts` 注册 Agent 和模型供应商入口；供应商模型的校验仍在控制面，不能带进浏览器。
 - `runtime/`：`runs/coordinator.ts` 构造时只收依赖，工厂显式 `start()` 启动恢复与调度；`close()` 在关闭 node 和数据库前取消运行。`runs/coordinator.ts` 拥有唯一 active map、调度/消息提示、模型推进和取消；`runs/records.ts` 拥有候选准入、上下文边界、完成/失败/退避与重启恢复；`runs/control.ts` 拥有人工暂停、命令停止及收据、恢复和环境核验。暂停提交后由协调器取消再派发，恢复激活后立即 wake；关闭检查继续使用同一窄能力。`processes/operations.ts` 保留完整进程账本与更正，`recovery/context.ts` 只组织恢复输入；SQL 表定义放在相应能力的 schema。`session/` 管完整历史和压缩，`tools/` 管工具入口和当前 run 检查；`provider-response.ts` 只解释供应商响应中的结束和用量证据。
 - `workspaces/`：`service.ts` 装配既有公开入口和工具组合；`access/service.ts` 集中节点结果/错误适配、owner 工作区可用性和不含正文的访问审计。`reads/service.ts` 拥有 owner/Agent/发布读取，`reads/file-content.ts` 解释有界字节和 UTF-8 范围，`reads/image-result.ts` 保留图片工具结果；普通 Agent 读取在 node 请求前后复验 run，发布读取仍由附件最终提交复验。`actions/service.ts` 保留 prepare→等待 committed→track→复验→node→complete/unknown 的完整变更流程，`actions/ledger.ts` 拥有持久意图、结果及迟到收据更正，不自动重放未知副作用。`downloads/service.ts` 拥有有界流、session 绑定、24h 状态保留、启动恢复与计时器；每次 owner stat/chunk 仍独立审计。`contracts.ts` 和 `results.ts` 保留各自原有契约/解析条件，稳定文件失败码来自 protocol `workspace-failures.ts`，旧结果适配与 unknown 前缀规则不变。
@@ -28,7 +28,7 @@
 
 ## 从一次操作追到证据
 
-- Owner 发消息：`conversations/http.ts` → `OwnerChat.createMessage`（原子保存消息/投递）→ `runs.wake/drain`（准入同一 Agent 的唯一 current run）→ `AgentLoop.run` → `AgentSession` 的原 session 历史与 Pi 请求。
+- Owner 发消息：`conversations/http.ts` → `chat.messages.createMessage`（原子保存消息/投递）→ `runs.wake/drain`（准入同一 Agent 的唯一 current run）→ `AgentLoop.run` → `AgentSession` 的原 session 历史与 Pi 请求。
 - 模型用工具：`runtime/tools/registry.ts` 在工具入口事务内复验 current run；任务/提醒等同步效果在这个事务里完成。文件变更/命令工具先保存 node 意图；文件读取无需变更意图。两者都等待入口事务提交，再复验 current run 并调用 node。文件结果进 `WorkspaceActionLedger`，命令结果进 `AgentProcessOperationBroker`；`recovery/context.ts` 把后来的证据送回原 session。
 - 文件读取：`WorkspaceService` 装配 → `WorkspaceReads` 验证范围并通过 `WorkspaceAccess` 请求 node → `LinuxWorkspaceExecutor` 与同账号 helper → `reads/file-content.ts`/`reads/image-result.ts` 解释有限字节；变更先保存意图并等待提交，再调用 node 和记录收据终态。
 - node 恢复：`connection/node-client.ts` 重连 → `NodeDirectory` 验证连接身份 → 先 process、再 workspace 分页核对 → 标为 ready → 原 Agent 队列继续。未确认的副作用保持 unknown，不因重连重放。

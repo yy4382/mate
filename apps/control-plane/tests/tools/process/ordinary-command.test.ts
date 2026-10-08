@@ -35,14 +35,17 @@ it("dispatches ordinary commands from a durable intent without privileged approv
     },
     app.chat,
   );
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
   await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-process-tool-key" }),
   });
   const startAt = socket.sent.length;
-  app.chat.createMessage(direct.id, "Use the ordinary process tools.");
+  app.chat.messages.createMessage({
+    channelId: direct.id,
+    text: "Use the ordinary process tools.",
+  });
   const run = await waitForRun(socket, startAt);
 
   await sendTool(app, socket, run, "list-process-tools", "tools.list", {});
@@ -158,14 +161,14 @@ it("offers no privileged request or approval-status tool and no owner approval r
     },
     app.chat,
   );
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
   await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-tool-surface-key" }),
   });
   const startAt = socket.sent.length;
-  app.chat.createMessage(direct.id, "What can you run?");
+  app.chat.messages.createMessage({ channelId: direct.id, text: "What can you run?" });
   const run = await waitForRun(socket, startAt);
 
   await sendTool(app, socket, run, "list-all-tools", "tools.list", {});
@@ -231,14 +234,17 @@ it("runs an explicit sudo the Agent wrote as one ordinary command with its own r
     },
     app.chat,
   );
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
   await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-sudo-key" }),
   });
   const startAt = socket.sent.length;
-  app.chat.createMessage(direct.id, "Run a command that asks for root.");
+  app.chat.messages.createMessage({
+    channelId: direct.id,
+    text: "Run a command that asks for root.",
+  });
   const run = await waitForRun(socket, startAt);
 
   const command = "sudo -n systemctl restart nginx";

@@ -11,9 +11,9 @@ async function fileTools(bytes: Buffer, fault?: "short" | "changed" | "revoked")
   const fixture = await setup();
   const { app, cookie, nodeId, socket } = fixture;
   const agentId = addAgent(app, nodeId, "File reader");
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
   await authorizeModel(app, cookie);
-  app.chat.createMessage(direct.id, "Read bytes.");
+  app.chat.messages.createMessage({ channelId: direct.id, text: "Read bytes." });
   const run = (await waitForRuns(socket, 0, [agentId])).get(agentId)!;
   const version = { size: bytes.length, modifiedNs: "1", changedNs: "1", inode: "1", device: "1" };
   let reads = 0;
@@ -204,7 +204,7 @@ it("keeps text navigation lossless at four-byte characters and refuses private u
     ok: true,
     result: { content: "B", offset: 5, nextOffset: 6 },
   });
-  const privateChannel = app.chat.createChannel({
+  const privateChannel = app.chat.channels.createChannel({
     name: "Private images",
     visibility: "private",
     description: "",

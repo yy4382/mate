@@ -14,12 +14,15 @@ import {
 it("maps storage exceptions once and rolls back conversation effects", async () => {
   const { app, cookie, db, nodeId, socket } = await setup();
   const agentId = addAgent(app, nodeId, "Storage failure");
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
   await authorizeModel(app, cookie);
-  app.chat.createMessage(direct.id, "A storage failure must not half-send.");
+  app.chat.messages.createMessage({
+    channelId: direct.id,
+    text: "A storage failure must not half-send.",
+  });
   const run = (await waitForRuns(socket, 0, [agentId])).get(agentId)!;
   const identity = { runId: run.runId, nodeId, agentId, toolCallId: "storage-failure" };
-  const before = app.chat.listMessages(direct.id, undefined, 50);
+  const before = app.chat.timeline.listMessages(direct.id, undefined, 50);
   db.exec(
     "CREATE TRIGGER tool_storage_failure BEFORE INSERT ON owner_agent_tool_actions BEGIN SELECT RAISE(ABORT, 'synthetic persistence failure'); END",
   );
@@ -29,7 +32,7 @@ it("maps storage exceptions once and rolls back conversation effects", async () 
       input: { conversationId: direct.id, text: "Must roll back" },
     }),
   ).toEqual({ ok: false, error: "Agent tool request was refused" });
-  expect(app.chat.listMessages(direct.id, undefined, 50)).toEqual(before);
+  expect(app.chat.timeline.listMessages(direct.id, undefined, 50)).toEqual(before);
   db.exec("DROP TRIGGER tool_storage_failure");
   expect(
     await app.tools.execute(identity, "tools.call", {
@@ -43,8 +46,11 @@ it("refuses every registered operation and meta tool for ended, absent and anoth
   const { app, cookie, db, nodeId, socket } = await setup();
   const agentId = addAgent(app, nodeId, "Current-run caller");
   const otherAgentId = addAgent(app, nodeId, "Other Agent");
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  const message = app.chat.createMessage(direct.id, "Exercise the complete registry.")!;
+  const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
+  const message = app.chat.messages.createMessage({
+    channelId: direct.id,
+    text: "Exercise the complete registry.",
+  })!;
   await authorizeModel(app, cookie);
   const run = (await waitForRuns(socket, 0, [agentId])).get(agentId)!;
   const identity = {
@@ -178,7 +184,7 @@ it("admits only prepared Agents and lifecycle requests cannot change their node 
   app.agents.prepare(request);
   await authorizeModel(app, cookie);
   app.runs?.wake();
-  expect(app.chat.getOrCreateAgentDirectChannel(agentId)).toBeUndefined();
+  expect(app.chat.conversations.getOrCreateAgentDirectChannel(agentId)).toBeUndefined();
   expect(
     socket.sent
       .map((text) => JSON.parse(text))
@@ -202,8 +208,8 @@ it("admits only prepared Agents and lifecycle requests cannot change their node 
     },
     app.chat,
   );
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  app.chat.createMessage(direct.id, "Now the workspace is ready.");
+  const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
+  app.chat.messages.createMessage({ channelId: direct.id, text: "Now the workspace is ready." });
   const run = (await waitForRuns(socket, 0, [agentId])).get(agentId)!;
   app.agents.updateStage(agentId, "preparing_workspace");
   app.agents.fail(agentId, "Late preparation failure");

@@ -3,7 +3,7 @@ import { workspaceReceiptRequestHash } from "@mate/protocol/node";
 import type Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import type { OwnerChat } from "../../conversations/service.js";
+import type { MessageWriter } from "../../conversations/messages/writer.js";
 import type { NodeDirectory } from "../../nodes/directory.js";
 import { AgentSession } from "../../runtime/session/service.js";
 import { defineAgentTool, type AgentToolContext } from "../../runtime/tools/entry.js";
@@ -28,7 +28,7 @@ export class WorkspaceActions {
     private readonly db: Database.Database,
     private readonly nodes: NodeDirectory,
     private readonly access: WorkspaceAccess,
-    notify: OwnerChat["notifyAgentReceiptCorrection"],
+    notify: MessageWriter["notifyAgentReceiptCorrection"],
   ) {
     this.actions = new WorkspaceActionLedger(db, notify);
   }

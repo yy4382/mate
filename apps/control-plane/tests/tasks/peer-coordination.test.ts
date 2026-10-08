@@ -18,26 +18,30 @@ it("does not let a member transfer a task to a public-channel non-member", async
   const { app, cookie, nodeId, socket } = await setup();
   const memberId = await prepareVerifiedAgent(app, nodeId, "Task owner"),
     outsiderId = await prepareVerifiedAgent(app, nodeId, "Interested onlooker");
-  const room = app.chat.createChannel({
+  const room = app.chat.channels.createChannel({
     name: "Shared work",
     description: "A public room with a task.",
     visibility: "public",
   });
-  app.chat.inviteAgentToChannel(room.id, memberId);
+  app.chat.channels.inviteAgentToChannel(room.id, memberId);
   await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-transfer-key" }),
   });
   // Start the non-member's own run first, from its private DM.
-  const outsiderDirect = app.chat.getOrCreateAgentDirectChannel(outsiderId)!,
+  const outsiderDirect = app.chat.conversations.getOrCreateAgentDirectChannel(outsiderId)!,
     outsiderStart = socket.sent.length;
-  app.chat.createMessage(outsiderDirect.id, "Start an onlooker run.");
+  app.chat.messages.createMessage({ channelId: outsiderDirect.id, text: "Start an onlooker run." });
   const outsiderRun = await waitForRun(socket, outsiderStart);
 
   const memberStart = socket.sent.length;
-  const anchor = app.chat.createMessage(room.id, "Review deployment", { asTask: true })!;
-  const task = app.chat.tasksForMessage(anchor.id)[0]!;
+  const anchor = app.chat.messages.createMessage({
+    channelId: room.id,
+    text: "Review deployment",
+    asTask: true,
+  })!;
+  const task = app.chat.tasks.tasksForMessage(anchor.id)[0]!;
   const memberRun = await waitForRun(socket, memberStart);
 
   // The onlooker can read the room, but tasks stay member-only: it neither sees this one
@@ -76,7 +80,7 @@ it("does not let a member transfer a task to a public-channel non-member", async
     ok: false,
     error: "Transfer target is not a conversation member",
   });
-  const after = app.chat.readTask(task.id)!;
+  const after = app.chat.tasks.readTask(task.id)!;
   expect(after.ownerAgentId).toBe(memberId);
   expect(after.version).toBe(2);
   // The non-member still cannot act on a task it can merely read.
@@ -117,21 +121,25 @@ it("lets peers coordinate on one task without a tree and preserves a newer claim
       app.chat,
     );
   }
-  const room = app.chat.createChannel({
+  const room = app.chat.channels.createChannel({
     name: "Shared work",
     description: "",
     visibility: "public",
   });
-  expect(app.chat.inviteAgentToChannel(room.id, firstId)).toBe(true);
-  expect(app.chat.inviteAgentToChannel(room.id, secondId)).toBe(true);
+  expect(app.chat.channels.inviteAgentToChannel(room.id, firstId)).toBe(true);
+  expect(app.chat.channels.inviteAgentToChannel(room.id, secondId)).toBe(true);
   await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-peer-key" }),
   });
   const from = socket.sent.length;
-  const anchor = app.chat.createMessage(room.id, "Review deployment", { asTask: true })!;
-  const task = app.chat.tasksForMessage(anchor.id)[0]!;
+  const anchor = app.chat.messages.createMessage({
+    channelId: room.id,
+    text: "Review deployment",
+    asTask: true,
+  })!;
+  const task = app.chat.tasks.tasksForMessage(anchor.id)[0]!;
   await waitForRun(socket, from);
   let runs: Array<TestRun> = [];
   const deadline = Date.now() + 4000;
@@ -175,6 +183,6 @@ it("lets peers coordinate on one task without a tree and preserves a newer claim
       agentId: firstId,
     }),
   ).toMatchObject({ ok: true, result: { ownerAgentId: firstId, version: 6 } });
-  expect(app.chat.taskActivity(task.id)).toHaveLength(6);
-  expect(app.chat.listMessages(room.id, undefined, 10)?.messages).toHaveLength(1);
+  expect(app.chat.tasks.taskActivity(task.id)).toHaveLength(6);
+  expect(app.chat.timeline.listMessages(room.id, undefined, 10)?.messages).toHaveLength(1);
 });

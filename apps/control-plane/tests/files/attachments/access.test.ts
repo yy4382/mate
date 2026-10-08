@@ -12,13 +12,13 @@ afterEach(cleanupFixture);
 it("lets a non-member Agent read a public channel's attachments but keeps publish member-only", async () => {
   const { app, cookie, nodeId, socket } = await setup();
   const agentId = await prepareVerifiedAgent(app, nodeId, "Attachment reader");
-  const ownDirect = app.chat.getOrCreateAgentDirectChannel(agentId)!,
-    publicRoom = app.chat.createChannel({
+  const ownDirect = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!,
+    publicRoom = app.chat.channels.createChannel({
       name: "Open files",
       description: "Public attachments are readable.",
       visibility: "public",
     }),
-    privateRoom = app.chat.createChannel({
+    privateRoom = app.chat.channels.createChannel({
       name: "Closed files",
       description: "Private attachments stay closed.",
       visibility: "private",
@@ -43,7 +43,10 @@ it("lets a non-member Agent read a public channel's attachments but keeps publis
     body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
   });
   const runStart = socket.sent.length;
-  app.chat.createMessage(ownDirect.id, "Start a conversation tool run.");
+  app.chat.messages.createMessage({
+    channelId: ownDirect.id,
+    text: "Start a conversation tool run.",
+  });
   const run = await waitForRun(socket, runStart);
 
   const publicList = await callAgentTool(app, socket, run, "list-public-files", "tools.call", {

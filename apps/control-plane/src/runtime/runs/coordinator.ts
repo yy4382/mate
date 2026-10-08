@@ -53,7 +53,7 @@ export class AgentRunCoordinator {
           nodeId,
           receipt,
           (agentId, operationId, state) =>
-            this.chat.notifyAgentReceiptCorrection(agentId, operationId, state),
+            this.chat.messages.notifyAgentReceiptCorrection(agentId, operationId, state),
         );
         if (outcome.corrected) this.wake();
         if (this.nodes.list().some((node) => node.id === nodeId && node.online))
@@ -130,7 +130,7 @@ export class AgentRunCoordinator {
     if (this.draining || this.closed) return;
     this.draining = true;
     try {
-      this.chat.fireDueReminders();
+      this.chat.reminders.fireDueReminders();
       this.notifyBusyRuns();
       const onlineNodeIds = this.nodes
         .list()

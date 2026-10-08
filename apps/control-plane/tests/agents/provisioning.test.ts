@@ -52,7 +52,7 @@ it("persists a stable Agent session, verifies provisioning, then queues its init
     requestId: expect.any(String),
     agentId: input.id,
   });
-  expect(app.chat.inviteAgentToChannel(channelId, input.id)).toBe(false);
+  expect(app.chat.channels.inviteAgentToChannel(channelId, input.id)).toBe(false);
   await toolTestInput(
     app,
     socket,
@@ -108,7 +108,7 @@ it("persists a stable Agent session, verifies provisioning, then queues its init
       workspace: `/var/lib/mate/agents/${input.id}`,
     },
   });
-  expect(app.chat.inviteAgentToChannel(channelId, input.id)).toBe(true);
+  expect(app.chat.channels.inviteAgentToChannel(channelId, input.id)).toBe(true);
   const sentCount = socket.sent.length;
   const repeat = await app.http.request("/api/owner/agents", {
     method: "POST",
@@ -121,8 +121,8 @@ it("persists a stable Agent session, verifies provisioning, then queues its init
   );
   expect(socket.sent).toHaveLength(sentCount);
 
-  app.chat.createMessage(channelId, "A queued first message");
-  expect(app.chat.listPendingDeliveries("agent", input.id).deliveries).toHaveLength(1);
+  app.chat.messages.createMessage({ channelId: channelId, text: "A queued first message" });
+  expect(app.chat.deliveries.listPendingDeliveries("agent", input.id).deliveries).toHaveLength(1);
 });
 
 it("retains one failed request and retries it with the same Agent and provisioning IDs", async () => {

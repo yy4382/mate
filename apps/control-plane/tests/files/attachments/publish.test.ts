@@ -35,13 +35,13 @@ it("publishes Agent workspace files to a joined conversation in bounded chunks a
     },
     app.chat,
   );
-  const channel = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  const destination = app.chat.createChannel({
+  const channel = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
+  const destination = app.chat.channels.createChannel({
     name: "Shared research",
     description: "Agent has explicitly joined this conversation.",
     visibility: "public",
   });
-  expect(app.chat.inviteAgentToChannel(destination.id, agentId)).toBe(true);
+  expect(app.chat.channels.inviteAgentToChannel(destination.id, agentId)).toBe(true);
   db.prepare(
     `UPDATE owner_channel_memberships SET active=0
      WHERE channel_id=? AND principal_kind='human' AND principal_id='owner'`,
@@ -52,7 +52,10 @@ it("publishes Agent workspace files to a joined conversation in bounded chunks a
     body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
   });
   const runStart = socket.sent.length;
-  app.chat.createMessage(channel.id, "Publish a note from the workspace.");
+  app.chat.messages.createMessage({
+    channelId: channel.id,
+    text: "Publish a note from the workspace.",
+  });
   const run = await waitForRun(socket, runStart),
     requests: Array<Record<string, unknown>> = [],
     version = { device: "1", inode: "2", size: 5, modifiedNs: "3", changedNs: "4" };
@@ -92,7 +95,7 @@ it("publishes Agent workspace files to a joined conversation in bounded chunks a
     );
   };
 
-  const unjoined = app.chat.createChannel({
+  const unjoined = app.chat.channels.createChannel({
     name: "Not joined",
     description: "The Agent must not publish here.",
     visibility: "public",

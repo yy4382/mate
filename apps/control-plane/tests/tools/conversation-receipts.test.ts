@@ -35,14 +35,14 @@ it("replays a committed tool action after its reply is lost and the delivery ret
     },
     app.chat,
   );
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
   await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
   });
   const runStart = socket.sent.length;
-  app.chat.createMessage(direct.id, "Start retryable tool action.");
+  app.chat.messages.createMessage({ channelId: direct.id, text: "Start retryable tool action." });
   const firstRun = await waitForRun(socket, runStart),
     actionId = "retry-after-lost-tool-result",
     input = {
@@ -71,7 +71,7 @@ it("replays a committed tool action after its reply is lost and the delivery ret
   expect(original).toBeDefined();
   const originalResult = JSON.parse(original!.result_json) as unknown;
   expect(
-    app.chat
+    app.chat.timeline
       .listMessages(direct.id, undefined, 100)!
       .messages.filter((message) => message.text === input.input.text),
   ).toHaveLength(1);
@@ -98,7 +98,7 @@ it("replays a committed tool action after its reply is lost and the delivery ret
   const replay = await callAgentTool(app, socket, retryRun, actionId, "tools.call", input);
   expect(replay).toMatchObject({ ok: true, result: originalResult });
   expect(
-    app.chat
+    app.chat.timeline
       .listMessages(direct.id, undefined, 100)!
       .messages.filter((message) => message.text === input.input.text),
   ).toHaveLength(1);
@@ -131,14 +131,14 @@ it("keeps a running Agent's tool catalogue and refuses stale or forged tool runs
     },
     app.chat,
   );
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
   await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
   });
   const runStart = socket.sent.length;
-  app.chat.createMessage(direct.id, "Start a tool-call run.");
+  app.chat.messages.createMessage({ channelId: direct.id, text: "Start a tool-call run." });
   const run = await waitForRun(socket, runStart);
 
   const listed = await callAgentTool(app, socket, run, "normal-tools-list", "tools.list", {});
@@ -203,6 +203,8 @@ it("keeps a running Agent's tool catalogue and refuses stale or forged tool runs
   });
   expect(stale).toMatchObject({ ok: false, error: "Agent run is no longer active" });
   expect(
-    app.chat.listMessages(direct.id, undefined, 100)!.messages.map((message) => message.text),
+    app.chat.timeline
+      .listMessages(direct.id, undefined, 100)!
+      .messages.map((message) => message.text),
   ).not.toContain("Forged node must not send.");
 });

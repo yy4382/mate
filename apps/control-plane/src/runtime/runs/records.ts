@@ -236,7 +236,7 @@ export class RunRecords {
       .get(runId, agentId);
     if (!existing || existing.state !== "running") return;
     if (ok) {
-      if (this.chat.completeAgentRun(runId, agentId))
+      if (this.chat.deliveries.completeAgentRun(runId, agentId))
         recordAgentActivity(this.db, {
           agentId,
           kind: "run.completed",

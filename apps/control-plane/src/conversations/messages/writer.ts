@@ -1,18 +1,15 @@
 import type { OwnerMessage } from "@mate/protocol/owner";
 import { ArchivedChannelError } from "../errors.js";
 import { toMessage } from "../rows.js";
-
 import type Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { AgentSession } from "../../runtime/session/service.js";
 import type { CurrentAgentToolRun } from "../../runtime/tools/entry.js";
-
+import type { NewOwnerMessage } from "../contracts.js";
 import type { TaskService } from "../tasks/service.js";
-
 import type { ConversationDirectory } from "../channels/directory.js";
 import type { ConversationEvents } from "../events.js";
-
 import type { MessageDeliveries } from "./deliveries.js";
 const automaticTaskTitleLength = 200;
 
@@ -26,17 +23,13 @@ export class MessageWriter {
     private readonly now: () => number,
   ) {}
 
-  createMessage(
-    channelId: string,
-    text: string,
-    position: {
-      rootId?: string | undefined;
-      quoteId?: string | undefined;
-      asTask?: boolean | undefined;
-    } = {},
-  ): OwnerMessage | undefined {
-    const id = randomUUID(),
-      at = this.now();
+  createMessage({
+    channelId,
+    text,
+    ...position
+  }: NewOwnerMessage & { channelId: string }): OwnerMessage | undefined {
+    const id = randomUUID();
+    const at = this.now();
     return this.db
       .transaction(() => {
         const channel = z
@@ -97,7 +90,12 @@ export class MessageWriter {
         this.deliveries.queueDeliveries(message, at);
         this.events.record("message.created", channelId, message);
         if (position.asTask)
-          this.createTaskForMessage(id, "human", "owner", text.slice(0, automaticTaskTitleLength));
+          this.createTaskForMessage({
+            messageId: id,
+            actorKind: "human",
+            actorId: "owner",
+            title: text.slice(0, automaticTaskTitleLength),
+          });
         return message;
       })
       .immediate();
@@ -110,8 +108,8 @@ export class MessageWriter {
     state: "succeeded" | "failed",
   ): void {
     const channel = this.directory.getOrCreateAgentDirectChannel(agentId);
-    const at = this.now(),
-      id = randomUUID();
+    const at = this.now();
+    const id = randomUUID();
     const processReceipt = z
       .looseObject({ receipt_json: z.string().nullable() })
       .optional()
@@ -181,26 +179,21 @@ export class MessageWriter {
 
   createAgentToolMessage(
     run: CurrentAgentToolRun,
-    toolActionId: string,
-    channelId: string,
-    text: string,
-    rootId?: string,
-    quoteId?: string,
-    asTask?: boolean,
+    { channelId, text, rootId, quoteId, asTask }: NewOwnerMessage & { channelId: string },
   ): OwnerMessage {
     if (!this.db.inTransaction)
       throw new Error("Agent tool message requires its action transaction");
-    const id = randomUUID(),
-      at = this.now(),
-      sequence = z
-        .looseObject({ next: z.number() })
-        .parse(
-          this.db
-            .prepare(
-              "SELECT COALESCE(MAX(order_seq),0)+1 AS next FROM owner_messages WHERE channel_id=?",
-            )
-            .get(channelId),
-        );
+    const id = randomUUID();
+    const at = this.now();
+    const sequence = z
+      .looseObject({ next: z.number() })
+      .parse(
+        this.db
+          .prepare(
+            "SELECT COALESCE(MAX(order_seq),0)+1 AS next FROM owner_messages WHERE channel_id=?",
+          )
+          .get(channelId),
+      );
     this.db
       .prepare(
         "INSERT INTO owner_messages(id,channel_id,order_seq,text,root_id,quote_id,author_kind,author_id,created_at) VALUES(?,?,?,?,?,?, 'agent', ?,?)",
@@ -220,7 +213,12 @@ export class MessageWriter {
     this.deliveries.queueDeliveries(message, at);
     this.events.record("message.created", channelId, message);
     if (asTask)
-      this.createTaskForMessage(id, "agent", run.agent_id, text.slice(0, automaticTaskTitleLength));
+      this.createTaskForMessage({
+        messageId: id,
+        actorKind: "agent",
+        actorId: run.agent_id,
+        title: text.slice(0, automaticTaskTitleLength),
+      });
     return message;
   }
 }

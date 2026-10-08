@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { createControlPlane } from "../../src/application.js";
-import { OwnerChat } from "../../src/conversations/service.js";
+import { createOwnerChat } from "../../src/conversations/service.js";
 
 const password = "owner-password-used-only-by-this-test";
 const cases: Array<{ app: ReturnType<typeof createControlPlane>; dataDir: string }> = [];
@@ -60,7 +60,7 @@ function addSyntheticMember(dataDir: string, channelId: string): void {
 function pendingDeliveries(dataDir: string) {
   const db = new Database(join(dataDir, "control-plane.sqlite"));
   try {
-    return new OwnerChat(db).listPendingDeliveries("agent", syntheticAgent).deliveries;
+    return createOwnerChat(db).deliveries.listPendingDeliveries("agent", syntheticAgent).deliveries;
   } finally {
     db.close();
   }
@@ -69,7 +69,7 @@ function pendingDeliveries(dataDir: string) {
 function pendingOwnerDeliveries(dataDir: string) {
   const db = new Database(join(dataDir, "control-plane.sqlite"));
   try {
-    return new OwnerChat(db).listPendingDeliveries("human", "owner").deliveries;
+    return createOwnerChat(db).deliveries.listPendingDeliveries("human", "owner").deliveries;
   } finally {
     db.close();
   }
@@ -112,10 +112,14 @@ it("persists one delivery per member in the message transaction and resumes the 
 
   const db = new Database(join(fixture.dataDir, "control-plane.sqlite"));
   try {
-    const chat = new OwnerChat(db);
-    expect(chat.acknowledgeDelivery(firstRead[0]!.id, "agent", syntheticAgent)).toBe(true);
-    expect(chat.acknowledgeDelivery(firstRead[0]!.id, "agent", syntheticAgent)).toBe(false);
-    expect(chat.listPendingDeliveries("agent", syntheticAgent).deliveries).toEqual([]);
+    const chat = createOwnerChat(db);
+    expect(chat.deliveries.acknowledgeDelivery(firstRead[0]!.id, "agent", syntheticAgent)).toBe(
+      true,
+    );
+    expect(chat.deliveries.acknowledgeDelivery(firstRead[0]!.id, "agent", syntheticAgent)).toBe(
+      false,
+    );
+    expect(chat.deliveries.listPendingDeliveries("agent", syntheticAgent).deliveries).toEqual([]);
   } finally {
     db.close();
   }

@@ -306,14 +306,14 @@ export async function startReminderFixture(fixture: Awaited<ReturnType<typeof se
     },
     app.chat,
   );
-  const dm = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  const dm = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
   await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-reminder-key" }),
   });
   const from = socket.sent.length;
-  app.chat.createMessage(dm.id, "Set a follow-up reminder");
+  app.chat.messages.createMessage({ channelId: dm.id, text: "Set a follow-up reminder" });
   const initialRun = await waitForRun(socket, from);
   const create = await callAgentTool(app, socket, initialRun, "create-followup", "tools.call", {
     name: "reminders.create",

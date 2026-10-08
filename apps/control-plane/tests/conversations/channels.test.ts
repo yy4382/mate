@@ -141,7 +141,7 @@ it("refuses to publish a direct message as a public channel", async () => {
     });
     // The owner DM channel exists once the Agent's workspace preparation reached `complete`.
     db.prepare("UPDATE owner_agents SET stage='complete' WHERE id=?").run(agentId);
-    const direct = app.chat.getOrCreateAgentDirectChannel(agentId);
+    const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId);
     if (!direct) throw new Error("The direct message fixture did not create a channel");
 
     const publish = await app.http.request(`/api/owner/channels/${direct.id}`, {
@@ -151,9 +151,9 @@ it("refuses to publish a direct message as a public channel", async () => {
     });
     expect(publish.status).toBe(400);
     expect(await publish.json()).toEqual({ error: "私信不能改为公开" });
-    expect(app.chat.listChannels().find((channel) => channel.id === direct.id)?.visibility).toBe(
-      "private",
-    );
+    expect(
+      app.chat.channels.listChannels().find((channel) => channel.id === direct.id)?.visibility,
+    ).toBe("private");
 
     // Renaming the same direct message still works.
     const rename = await app.http.request(`/api/owner/channels/${direct.id}`, {

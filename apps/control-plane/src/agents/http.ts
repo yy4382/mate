@@ -250,7 +250,9 @@ export function createAgentRoutes({
       }
     })
     .post("/api/owner/agents/:agentId/direct-channel", (context) => {
-      const channel = ownerChat.getOrCreateAgentDirectChannel(context.req.param("agentId"));
+      const channel = ownerChat.conversations.getOrCreateAgentDirectChannel(
+        context.req.param("agentId"),
+      );
       if (!channel) return context.json({ error: "Agent 私信暂不可用。" }, 404);
       context.header("Cache-Control", "no-store");
       return context.json({ channel });

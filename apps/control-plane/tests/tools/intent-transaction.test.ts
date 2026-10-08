@@ -15,9 +15,9 @@ it.each(["process.exec", "workspace.write", "attachments.publish"])(
   async (name) => {
     const { app, cookie, db, nodeId, socket } = await setup();
     const agentId = addAgent(app, nodeId, "Late receipt");
-    const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+    const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
     await authorizeModel(app, cookie);
-    app.chat.createMessage(direct.id, "Accept one operation.");
+    app.chat.messages.createMessage({ channelId: direct.id, text: "Accept one operation." });
     const run = (await waitForRuns(socket, 0, [agentId])).get(agentId)!;
     const identity = {
       runId: run.runId,
@@ -138,7 +138,10 @@ it.each(["process.exec", "workspace.write", "attachments.publish"])(
     });
     expect(socket.sent).toHaveLength(sentAfterReceipt);
     const beforeNext = socket.sent.length;
-    app.chat.createMessage(direct.id, "Continue in the same session.");
+    app.chat.messages.createMessage({
+      channelId: direct.id,
+      text: "Continue in the same session.",
+    });
     const next = (await waitForRuns(socket, beforeNext, [agentId])).get(agentId)!;
     expect(next.runId).not.toBe(run.runId);
     expect(next.sessionId).toBe(run.sessionId);
@@ -157,9 +160,12 @@ it.each(["process.exec", "workspace.write", "attachments.publish"])(
   async (name) => {
     const { app, cookie, db, nodeId, socket } = await setup();
     const agentId = addAgent(app, nodeId, "Commit failure");
-    const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+    const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
     await authorizeModel(app, cookie);
-    app.chat.createMessage(direct.id, "Commit must precede dispatch.");
+    app.chat.messages.createMessage({
+      channelId: direct.id,
+      text: "Commit must precede dispatch.",
+    });
     const run = (await waitForRuns(socket, 0, [agentId])).get(agentId)!;
     const identity = {
       runId: run.runId,
@@ -196,9 +202,9 @@ it.each(["process.exec", "workspace.write", "attachments.publish"])(
   async (name) => {
     const { app, cookie, db, nodeId, socket } = await setup();
     const agentId = addAgent(app, nodeId, "Preparation failure");
-    const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+    const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
     await authorizeModel(app, cookie);
-    app.chat.createMessage(direct.id, "Preparation must be atomic.");
+    app.chat.messages.createMessage({ channelId: direct.id, text: "Preparation must be atomic." });
     const run = (await waitForRuns(socket, 0, [agentId])).get(agentId)!;
     const identity = {
       runId: run.runId,

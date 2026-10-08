@@ -34,8 +34,11 @@ it("finds an online Agent beyond more than one page of offline deliveries", asyn
       },
       app.chat,
     );
-    const direct = app.chat.getOrCreateAgentDirectChannel(id)!;
-    app.chat.createMessage(direct.id, `离线 Agent ${index} 的排队输入。`);
+    const direct = app.chat.conversations.getOrCreateAgentDirectChannel(id)!;
+    app.chat.messages.createMessage({
+      channelId: direct.id,
+      text: `离线 Agent ${index} 的排队输入。`,
+    });
   }
 
   const onlineAgentId = randomUUID();
@@ -58,8 +61,8 @@ it("finds an online Agent beyond more than one page of offline deliveries", asyn
     },
     app.chat,
   );
-  const onlineDirect = app.chat.getOrCreateAgentDirectChannel(onlineAgentId)!;
-  app.chat.createMessage(onlineDirect.id, "在线 Agent 的排队输入。");
+  const onlineDirect = app.chat.conversations.getOrCreateAgentDirectChannel(onlineAgentId)!;
+  app.chat.messages.createMessage({ channelId: onlineDirect.id, text: "在线 Agent 的排队输入。" });
 
   const credential = await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
@@ -80,5 +83,7 @@ it("finds an online Agent beyond more than one page of offline deliveries", asyn
     agentId: onlineAgentId,
     channelId: onlineDirect.id,
   });
-  expect(app.chat.listPendingDeliveries("agent", onlineAgentId).deliveries).toHaveLength(1);
+  expect(app.chat.deliveries.listPendingDeliveries("agent", onlineAgentId).deliveries).toHaveLength(
+    1,
+  );
 });

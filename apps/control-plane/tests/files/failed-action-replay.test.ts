@@ -41,14 +41,14 @@ it.each(["legacy", "structured"])(
       },
       app.chat,
     );
-    const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+    const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
     await app.http.request("/api/owner/model-credentials/openai", {
       method: "PUT",
       headers: { cookie, "content-type": "application/json" },
       body: JSON.stringify({ apiKey: "synthetic-key" }),
     });
     const start = socket.sent.length;
-    app.chat.createMessage(direct.id, "Attempt one file action.");
+    app.chat.messages.createMessage({ channelId: direct.id, text: "Attempt one file action." });
     const firstRun = await waitForRun(socket, start);
     const input = { name: "workspace.write", input: { path: "protected.txt", content: "no" } },
       actionId = stableToolActionId(firstRun.actionScopeId, input);

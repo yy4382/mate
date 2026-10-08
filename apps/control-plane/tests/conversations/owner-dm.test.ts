@@ -50,7 +50,7 @@ it("creates one private owner DM and keeps its input queued while the Agent awai
     body: JSON.stringify({ text: "请给我一个简短研究计划。" }),
   });
   expect(post.status).toBe(201);
-  expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toHaveLength(1);
+  expect(app.chat.deliveries.listPendingDeliveries("agent", agentId).deliveries).toHaveLength(1);
 });
 
 it("routes Agent conversation discovery through its current control-plane run", async () => {
@@ -75,18 +75,18 @@ it("routes Agent conversation discovery through its current control-plane run", 
     },
     app.chat,
   );
-  const ownChannel = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  const publicRoom = app.chat.createChannel({
+  const ownChannel = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
+  const publicRoom = app.chat.channels.createChannel({
     name: "Discoverable room",
     description: "Public metadata is visible to every Agent.",
     visibility: "public",
   });
-  const otherPrivateRoom = app.chat.createChannel({
+  const otherPrivateRoom = app.chat.channels.createChannel({
     name: "Hidden room",
     description: "Private metadata is member-only.",
     visibility: "private",
   });
-  app.chat.createMessage(ownChannel.id, "列出可见对话。");
+  app.chat.messages.createMessage({ channelId: ownChannel.id, text: "列出可见对话。" });
   const runStart = socket.sent.length;
   const credential = await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",

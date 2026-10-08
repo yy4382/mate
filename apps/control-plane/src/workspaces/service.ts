@@ -2,7 +2,7 @@ import type { Operation } from "@mate/protocol";
 import type { WorkspaceVersion } from "@mate/protocol/workspace";
 import { FILE_CHUNK_MAX_BYTES } from "@mate/protocol/workspace";
 import type Database from "better-sqlite3";
-import type { OwnerChat } from "../conversations/service.js";
+import type { MessageWriter } from "../conversations/messages/writer.js";
 import type { NodeDirectory } from "../nodes/directory.js";
 import type { AgentToolContext } from "../runtime/tools/entry.js";
 import { WorkspaceAccess } from "./access/service.js";
@@ -16,7 +16,11 @@ export class WorkspaceService {
   private readonly reads: WorkspaceReads;
   private readonly actions: WorkspaceActions;
   private readonly downloads: WorkspaceDownloads;
-  constructor(db: Database.Database, nodes: NodeDirectory, chat: OwnerChat) {
+  constructor(
+    db: Database.Database,
+    nodes: NodeDirectory,
+    chat: Pick<MessageWriter, "notifyAgentReceiptCorrection">,
+  ) {
     const access = new WorkspaceAccess(db, nodes);
     this.reads = new WorkspaceReads(access);
     this.actions = new WorkspaceActions(db, nodes, access, (agentId, operationId, state) =>

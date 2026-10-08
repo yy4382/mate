@@ -1,12 +1,10 @@
 import { ownerPrincipalKindSchema } from "@mate/protocol/owner";
 import { pendingDeliveryRowSchema, toMessage } from "../rows.js";
-
 import type {
   OwnerMessage,
   OwnerMessageDeliveryPage,
   OwnerPrincipalKind,
 } from "@mate/protocol/owner";
-
 import type Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -42,27 +40,27 @@ export class MessageDeliveries {
         )
         .all(recipientKind, recipientId, after, limit + 1),
     );
-    const hasMore = rows.length > limit,
-      deliveries = rows.slice(0, limit).map((row) => ({
-        sequence: row.delivery_sequence,
-        id: row.delivery_id,
-        messageId: row.message_id,
-        channelId: row.channel_id,
-        recipient: { kind: row.recipient_kind, id: row.recipient_id },
-        state: row.state,
-        createdAt: row.delivery_created_at,
-        message: toMessage({
-          id: row.message_id,
-          channel_id: row.channel_id,
-          order_seq: row.order_seq,
-          text: row.text,
-          root_id: row.root_id,
-          quote_id: row.quote_id,
-          author_kind: row.author_kind,
-          author_id: row.author_id,
-          created_at: row.created_at,
-        }),
-      }));
+    const hasMore = rows.length > limit;
+    const deliveries = rows.slice(0, limit).map((row) => ({
+      sequence: row.delivery_sequence,
+      id: row.delivery_id,
+      messageId: row.message_id,
+      channelId: row.channel_id,
+      recipient: { kind: row.recipient_kind, id: row.recipient_id },
+      state: row.state,
+      createdAt: row.delivery_created_at,
+      message: toMessage({
+        id: row.message_id,
+        channel_id: row.channel_id,
+        order_seq: row.order_seq,
+        text: row.text,
+        root_id: row.root_id,
+        quote_id: row.quote_id,
+        author_kind: row.author_kind,
+        author_id: row.author_id,
+        created_at: row.created_at,
+      }),
+    }));
     return {
       deliveries,
       nextAfter: hasMore ? (deliveries.at(-1)?.sequence ?? after) : null,

@@ -47,8 +47,8 @@ it("reports an earlier command whose termination the node cannot confirm as unkn
     runId = randomUUID(),
     at = Date.now();
   try {
-    const channel = app.chat.getOrCreateAgentDirectChannel(id)!;
-    app.chat.createMessage(channel.id, "先跑一条普通命令。");
+    const channel = app.chat.conversations.getOrCreateAgentDirectChannel(id)!;
+    app.chat.messages.createMessage({ channelId: channel.id, text: "先跑一条普通命令。" });
     const delivery = db
       .prepare(
         `SELECT id FROM owner_message_deliveries
@@ -157,8 +157,8 @@ it("counts every command whose termination nothing proved, however the node answ
     neverStarted = randomUUID(),
     rejectedByNode = randomUUID();
   try {
-    const channel = app.chat.getOrCreateAgentDirectChannel(id)!;
-    app.chat.createMessage(channel.id, "先跑几条普通命令。");
+    const channel = app.chat.conversations.getOrCreateAgentDirectChannel(id)!;
+    app.chat.messages.createMessage({ channelId: channel.id, text: "先跑几条普通命令。" });
     const delivery = db
       .prepare(
         `SELECT id FROM owner_message_deliveries

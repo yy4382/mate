@@ -12,15 +12,15 @@ import {
 it("executes file and process tools with defaults, receipts and domain-specific refusals", async () => {
   const { app, cookie, db, nodeId, socket } = await setup();
   const agentId = addAgent(app, nodeId, "File and process operator");
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
   await authorizeModel(app, cookie);
-  const source = app.chat.createChannel({
+  const source = app.chat.channels.createChannel({
     name: "Trigger A",
     description: "",
     visibility: "public",
   });
-  app.chat.joinAgentToPublicChannel(agentId, source.id);
-  app.chat.createMessage(source.id, "Write and publish a file.");
+  app.chat.channels.joinAgentToPublicChannel(agentId, source.id);
+  app.chat.messages.createMessage({ channelId: source.id, text: "Write and publish a file." });
   const run = (await waitForRuns(socket, 0, [agentId])).get(agentId)!;
   const identity = { runId: run.runId, nodeId, agentId };
   const call = (id: number, name: string, input: Record<string, unknown>) =>
@@ -217,7 +217,7 @@ it("executes file and process tools with defaults, receipts and domain-specific 
     ok: false,
     error: "An Agent cannot open a direct message with itself",
   });
-  const privateChannel = app.chat.createChannel({
+  const privateChannel = app.chat.channels.createChannel({
     name: "Unrelated",
     description: "",
     visibility: "private",

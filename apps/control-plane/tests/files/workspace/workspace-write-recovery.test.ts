@@ -36,14 +36,17 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
     },
     app.chat,
   );
-  const channel = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  const channel = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
   await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
   });
   const runStart = socket.sent.length;
-  app.chat.createMessage(channel.id, "Use workspace files and publish the result.");
+  app.chat.messages.createMessage({
+    channelId: channel.id,
+    text: "Use workspace files and publish the result.",
+  });
   const run = await waitForRun(socket, runStart);
   const requests: Array<Record<string, unknown>> = [],
     nodeReceipts = new Map<
@@ -209,7 +212,7 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
   const lateReceipt = nodeReceipts.get(String(heldRequest!.operationId))!;
   const correctedStart = socket.sent.length;
   const unavailableNotification = vi
-    .spyOn(app.chat, "notifyAgentReceiptCorrection")
+    .spyOn(app.chat.messages, "notifyAgentReceiptCorrection")
     .mockImplementation(() => {
       throw new Error("crash before notification commit");
     });
