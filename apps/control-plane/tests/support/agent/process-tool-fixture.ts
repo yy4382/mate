@@ -6,13 +6,13 @@ import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createControlPlaneApp } from "../../../src/http.js";
+import { createControlPlane } from "../../../src/application.js";
 
 import type { NodeSocket } from "../../../src/nodes/directory.js";
 
 export const password = "agent-process-tool-test-owner-password";
 export const fixtures: Array<{
-  app: ReturnType<typeof createControlPlaneApp>;
+  app: ReturnType<typeof createControlPlane>;
   directory: string;
   db: InstanceType<typeof Database>;
 }> = [];
@@ -41,13 +41,13 @@ export async function setup() {
   const app = toolTestApp({ dataDir: join(directory, "control-plane"), passwordFile });
   const db = new Database(join(directory, "control-plane", "control-plane.sqlite"));
   fixtures.push({ app, directory, db });
-  const login = await app.request("/api/auth/login", {
+  const login = await app.http.request("/api/auth/login", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ password }),
   });
   const cookie = login.headers.get("set-cookie")!.split(";", 1)[0]!;
-  const tokenResponse = await app.request("/api/owner/nodes/pairing-tokens", {
+  const tokenResponse = await app.http.request("/api/owner/nodes/pairing-tokens", {
     method: "POST",
     headers: { cookie },
   });
@@ -94,7 +94,7 @@ export async function waitFor(condition: () => boolean): Promise<void> {
   throw new Error("The Agent process recovery condition did not settle");
 }
 export async function sendTool(
-  app: ReturnType<typeof createControlPlaneApp>,
+  app: ReturnType<typeof createControlPlane>,
   socket: FakeNodeSocket,
   run: { runId: string; agentId: string },
   toolCallId: string,

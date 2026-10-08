@@ -39,7 +39,7 @@ it("persists separate attention and draft choices while gating stale sends", asy
     app.chat,
   );
   const dm = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  await app.request("/api/owner/model-credentials/openai", {
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-attention-key" }),
@@ -205,7 +205,7 @@ it("does not let a saved draft or a later paginated read hide unseen conversatio
     app.chat,
   );
   const dm = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  await app.request("/api/owner/model-credentials/openai", {
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-freshness-key" }),

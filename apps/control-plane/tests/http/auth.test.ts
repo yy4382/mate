@@ -13,10 +13,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { createControlPlaneApp } from "../../src/http.js";
+import { createControlPlane } from "../../src/application.js";
 
 const password = "owner-password-used-only-by-this-test";
-const cases: Array<{ app: ReturnType<typeof createControlPlaneApp>; dataDir: string }> = [];
+const cases: Array<{ app: ReturnType<typeof createControlPlane>; dataDir: string }> = [];
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -39,7 +39,7 @@ function setup(
     writeFileSync(passwordFile, `${password}\n`, { mode: 0o600 });
     chmodSync(passwordFile, 0o600);
   }
-  const app = createControlPlaneApp({
+  const app = createControlPlane({
     dataDir,
     passwordFile,
     ...(options.now ? { now: options.now } : {}),
@@ -54,8 +54,8 @@ function setup(
   return { app, dataDir, passwordFile };
 }
 
-function login(app: ReturnType<typeof createControlPlaneApp>, attemptedPassword = password) {
-  return app.request("/api/auth/login", {
+function login(app: ReturnType<typeof createControlPlane>, attemptedPassword = password) {
+  return app.http.request("/api/auth/login", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ password: attemptedPassword }),
@@ -71,10 +71,10 @@ function cookiePair(response: Response): string {
 it("keeps the status entry public while an unconfigured owner fails closed", async () => {
   const { app } = setup({ passwordFile: false });
 
-  const page = await app.request("/");
-  const status = await app.request("/api/status");
+  const page = await app.http.request("/");
+  const status = await app.http.request("/api/status");
   const loginResponse = await login(app);
-  const privateApi = await app.request("/api/owner/session");
+  const privateApi = await app.http.request("/api/owner/session");
 
   expect(page.status).toBe(200);
   expect(status.status).toBe(200);
@@ -154,11 +154,11 @@ it("keeps private pages and APIs available after refresh only with a valid sessi
   const cookie = cookiePair(accepted);
   const headers = { cookie };
 
-  const unauthenticatedPage = await app.request("/app");
-  const unauthenticatedApi = await app.request("/api/owner/session");
-  const privatePage = await app.request("/app", { headers });
-  const privateApi = await app.request("/api/owner/session", { headers });
-  const refreshedPage = await app.request("/app", { headers });
+  const unauthenticatedPage = await app.http.request("/app");
+  const unauthenticatedApi = await app.http.request("/api/owner/session");
+  const privatePage = await app.http.request("/app", { headers });
+  const privateApi = await app.http.request("/api/owner/session", { headers });
+  const refreshedPage = await app.http.request("/app", { headers });
 
   expect(unauthenticatedPage.status).toBe(302);
   expect(unauthenticatedPage.headers.get("location")).toBe("/login");
@@ -178,19 +178,22 @@ it("expires sessions, and logout revokes the session and clears the cookie", asy
   const headers = { cookie: cookiePair(accepted) };
 
   expect(acceptedCookie).toMatch(/; Max-Age=1/i);
-  expect((await app.request("/api/owner/session", { headers })).status).toBe(200);
+  expect((await app.http.request("/api/owner/session", { headers })).status).toBe(200);
   now += 501;
-  expect((await app.request("/api/owner/session", { headers })).status).toBe(401);
+  expect((await app.http.request("/api/owner/session", { headers })).status).toBe(401);
 
   now = 2_000;
   const nextLogin = await login(app);
   const nextHeaders = { cookie: cookiePair(nextLogin) };
-  expect((await app.request("/api/owner/session", { headers: nextHeaders })).status).toBe(200);
-  const logout = await app.request("/api/auth/logout", { method: "POST", headers: nextHeaders });
+  expect((await app.http.request("/api/owner/session", { headers: nextHeaders })).status).toBe(200);
+  const logout = await app.http.request("/api/auth/logout", {
+    method: "POST",
+    headers: nextHeaders,
+  });
 
   expect(logout.status).toBe(204);
   expect(logout.headers.get("set-cookie")).toMatch(/; Max-Age=0/i);
-  expect((await app.request("/api/owner/session", { headers: nextHeaders })).status).toBe(401);
+  expect((await app.http.request("/api/owner/session", { headers: nextHeaders })).status).toBe(401);
 });
 
 it("deletes logged-out sessions and cleans expired rows in batches of at most 100", async () => {
@@ -200,7 +203,7 @@ it("deletes logged-out sessions and cleans expired rows in batches of at most 10
   const oldCookie = cookiePair(firstLogin);
   const oldToken = oldCookie.slice(oldCookie.indexOf("=") + 1);
   const oldTokenHash = createHash("sha256").update(oldToken).digest("hex");
-  const logout = await app.request("/api/auth/logout", {
+  const logout = await app.http.request("/api/auth/logout", {
     method: "POST",
     headers: { cookie: oldCookie },
   });
@@ -230,9 +233,9 @@ it("deletes logged-out sessions and cleans expired rows in batches of at most 10
   expect(loggedOutRow).toBeUndefined();
   expect(cleanupPlan.some((step) => step.detail.includes("owner_sessions_expiry"))).toBe(true);
   expect(beforeLogin).toBe(250);
-  expect((await app.request("/api/owner/session", { headers: { cookie: oldCookie } })).status).toBe(
-    401,
-  );
+  expect(
+    (await app.http.request("/api/owner/session", { headers: { cookie: oldCookie } })).status,
+  ).toBe(401);
 
   expect((await login(app)).status).toBe(204);
 
@@ -253,10 +256,10 @@ it("does not use a password file again after first-time setup", async () => {
   app.close();
   rmSync(passwordFile);
 
-  const restarted = createControlPlaneApp({ dataDir, passwordFile, webRoot: dataDir });
+  const restarted = createControlPlane({ dataDir, passwordFile, webRoot: dataDir });
   cases.push({ app: restarted, dataDir });
   expect((await login(restarted)).status).toBe(204);
-  expect((await restarted.request("/app", { headers: { cookie } })).status).toBe(200);
+  expect((await restarted.http.request("/app", { headers: { cookie } })).status).toBe(200);
 });
 
 it("rejects a first-time password file that other accounts can read", async () => {
@@ -280,13 +283,13 @@ it("rejects a symlink as the initial owner password file", async () => {
   chmodSync(passwordFile, 0o600);
   symlinkSync(passwordFile, linkedPasswordFile);
   const linkedDataDir = join(dataDir, "linked-state");
-  const linkedApp = createControlPlaneApp({
+  const linkedApp = createControlPlane({
     dataDir: linkedDataDir,
     passwordFile: linkedPasswordFile,
     webRoot: dataDir,
   });
   cases.push({ app: linkedApp, dataDir });
-  const linkedResponse = await linkedApp.request("/api/auth/login", {
+  const linkedResponse = await linkedApp.http.request("/api/auth/login", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ password }),

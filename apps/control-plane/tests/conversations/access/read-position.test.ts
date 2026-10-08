@@ -22,7 +22,7 @@ it("does not backfill a just-joined channel as unread nor forget what was alread
     }),
     oldRoot = app.chat.createMessage(publicRoom.id, "History before joining.")!;
   app.chat.createMessage(publicRoom.id, "Another old note.", { rootId: oldRoot.id });
-  await app.request("/api/owner/model-credentials/openai", {
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-tools-key" }),

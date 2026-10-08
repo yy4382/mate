@@ -53,7 +53,7 @@ it("commits an eligible peer invitation once and rejects invalid invitation targ
     visibility: "private",
   });
   expect(app.chat.inviteAgentToChannel(room.id, inviterId)).toBe(true);
-  await app.request("/api/owner/model-credentials/openai", {
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
@@ -148,13 +148,15 @@ it("lets the owner invite an existing Agent to a channel through the authenticat
   app.chat.createMessage(channel.id, "邀请之前的历史也应对新成员可读。");
   const route = `/api/owner/channels/${channel.id}/invitations`,
     ownerDm = app.chat.getOrCreateAgentDirectChannel(agentId)!,
-    invitableChannels = await app.request("/api/owner/invitable-channels", { headers: { cookie } }),
+    invitableChannels = await app.http.request("/api/owner/invitable-channels", {
+      headers: { cookie },
+    }),
     invitableBody = (await invitableChannels.json()) as { channels: Array<{ id: string }> };
   expect(invitableChannels.status).toBe(200);
   expect(invitableBody.channels.map((item) => item.id)).toContain(channel.id);
   expect(invitableBody.channels.map((item) => item.id)).not.toContain(ownerDm.id);
 
-  const unverifiedInvite = await app.request(route, {
+  const unverifiedInvite = await app.http.request(route, {
     method: "POST",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ agentId: unverifiedAgentId }),
@@ -167,14 +169,14 @@ it("lets the owner invite an existing Agent to a channel through the authenticat
       )
       .get(channel.id, unverifiedAgentId),
   ).toBeUndefined();
-  const unauthenticated = await app.request(route, {
+  const unauthenticated = await app.http.request(route, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ agentId }),
   });
   expect(unauthenticated.status).toBe(401);
 
-  const invite = await app.request(route, {
+  const invite = await app.http.request(route, {
     method: "POST",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ agentId }),
@@ -193,14 +195,14 @@ it("lets the owner invite an existing Agent to a channel through the authenticat
       .get(channel.id, agentId),
   ).toEqual({ active: 1 });
   expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toHaveLength(0);
-  const privateDmInvite = await app.request(`/api/owner/channels/${ownerDm.id}/invitations`, {
+  const privateDmInvite = await app.http.request(`/api/owner/channels/${ownerDm.id}/invitations`, {
     method: "POST",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ agentId }),
   });
   expect(privateDmInvite.status).toBe(409);
 
-  await app.request("/api/owner/model-credentials/openai", {
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-tools-key" }),

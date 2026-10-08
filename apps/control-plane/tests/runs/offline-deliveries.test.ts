@@ -61,7 +61,7 @@ it("finds an online Agent beyond more than one page of offline deliveries", asyn
   const onlineDirect = app.chat.getOrCreateAgentDirectChannel(onlineAgentId)!;
   app.chat.createMessage(onlineDirect.id, "在线 Agent 的排队输入。");
 
-  const credential = await app.request("/api/owner/model-credentials/openai", {
+  const credential = await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-scheduler-key" }),

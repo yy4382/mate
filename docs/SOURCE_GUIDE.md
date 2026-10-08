@@ -7,7 +7,7 @@
 | 位置 | 负责什么 | 建议从哪里开始 |
 | --- | --- | --- |
 | `apps/web` | 所有者使用的中文网页 | `src/main.tsx`，然后进入相应功能目录 |
-| `apps/control-plane` | 登录、持久状态、会话和工具循环、调度与请求路由 | `src/main.ts` 装配，`src/http.ts` 装配服务、明确启动协调器并注册领域 HTTP 入口 |
+| `apps/control-plane` | 登录、持久状态、会话和工具循环、调度与请求路由 | `src/main.ts` 启动，`src/application.ts` 组装服务与领域应用，`src/http.ts` 定义登录、推送和网页路由 |
 | `apps/node` | 机器连接、Agent 工作区、文件与命令执行、本地收据 | `src/main.ts`，然后看 `src/connection/node-client.ts` |
 | `packages/protocol` | 跨 package 的运行时数据契约及其推导类型 | `src/owner.ts`、`src/workspace.ts` 和节点消息、操作契约 |
 

@@ -24,7 +24,7 @@ it("does not let a member transfer a task to a public-channel non-member", async
     visibility: "public",
   });
   app.chat.inviteAgentToChannel(room.id, memberId);
-  await app.request("/api/owner/model-credentials/openai", {
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-transfer-key" }),
@@ -124,7 +124,7 @@ it("lets peers coordinate on one task without a tree and preserves a newer claim
   });
   expect(app.chat.inviteAgentToChannel(room.id, firstId)).toBe(true);
   expect(app.chat.inviteAgentToChannel(room.id, secondId)).toBe(true);
-  await app.request("/api/owner/model-credentials/openai", {
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-peer-key" }),

@@ -1,7 +1,8 @@
 import Database from "better-sqlite3";
 import { expect, it } from "vitest";
 import { OwnerPush } from "../../src/notifications/push.js";
-import { createControlPlaneApp, mentionsOwner } from "../../src/http.js";
+import { createControlPlane } from "../../src/application.js";
+import { mentionsOwner } from "../../src/notifications/mentions-owner.js";
 import { controlPlaneSchema } from "../../src/storage/schema.js";
 import { openControlPlaneDatabase } from "../../src/storage/initialize.js";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -138,11 +139,12 @@ it("refuses a database the unified schema did not initialize", () => {
 
 it("requires owner login for subscription and exposes a usable Push public key", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mate-push-api-"));
-  const app = createControlPlaneApp({ dataDir });
+  const app = createControlPlane({ dataDir });
   try {
-    expect((await app.request("/api/owner/push/public-key")).status).toBe(401);
+    expect((await app.http.request("/api/owner/push/public-key")).status).toBe(401);
     expect(
-      (await app.request("/api/owner/push/subscriptions", { method: "POST", body: "{}" })).status,
+      (await app.http.request("/api/owner/push/subscriptions", { method: "POST", body: "{}" }))
+        .status,
     ).toBe(401);
     expect(app.push.publicKey).toMatch(/^[\w-]+$/);
   } finally {

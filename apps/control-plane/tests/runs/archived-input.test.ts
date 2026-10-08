@@ -36,7 +36,7 @@ it("keeps an archived run input pending and retries it after the owner unarchive
   const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
   app.chat.createMessage(direct.id, "归档期间不可写入回复的私信。");
   const runStart = socket.sent.length;
-  const credential = await app.request("/api/owner/model-credentials/openai", {
+  const credential = await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-archive-race-key" }),
@@ -44,7 +44,7 @@ it("keeps an archived run input pending and retries it after the owner unarchive
   expect(credential.status).toBe(204);
   const run = await waitForRun(socket, runStart);
 
-  const archive = await app.request(`/api/owner/channels/${direct.id}`, {
+  const archive = await app.http.request(`/api/owner/channels/${direct.id}`, {
     method: "PATCH",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ archived: true }),
@@ -107,7 +107,7 @@ it("keeps an archived run input pending and retries it after the owner unarchive
   );
 
   const retryStart = socket.sent.length;
-  const unarchive = await app.request(`/api/owner/channels/${direct.id}`, {
+  const unarchive = await app.http.request(`/api/owner/channels/${direct.id}`, {
     method: "PATCH",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ archived: false }),

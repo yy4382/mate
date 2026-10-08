@@ -36,7 +36,7 @@ it("edits each profile field without changing an Agent's identity or session", a
     { role: "Writer" },
     { description: "New description" },
   ]) {
-    const response = await app.request(`/api/owner/agents/${id}/profile`, {
+    const response = await app.http.request(`/api/owner/agents/${id}/profile`, {
       method: "PATCH",
       headers: { cookie, "content-type": "application/json" },
       body: JSON.stringify(patch),
@@ -80,14 +80,14 @@ it("requires an existing provider key before changing the model and preserves th
   );
   const sessionId = app.agents.get(id)!.sessionId;
   const change = (model: object) =>
-    app.request(`/api/owner/agents/${id}/model`, {
+    app.http.request(`/api/owner/agents/${id}/model`, {
       method: "PUT",
       headers: { cookie, "content-type": "application/json" },
       body: JSON.stringify(model),
     });
   expect((await change({ provider: "openai", id: "gpt-4.1-mini" })).status).toBe(409);
   expect(app.agents.get(id)!.model).toEqual({ provider: "openai", id: "gpt-4.1" });
-  const key = await app.request("/api/owner/model-credentials/openai", {
+  const key = await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-key" }),

@@ -6,14 +6,14 @@ import { createHash, generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expect } from "vitest";
-import { createControlPlaneApp } from "../../../src/http.js";
+import { createControlPlane } from "../../../src/application.js";
 
 import type { NodeSocket } from "../../../src/nodes/directory.js";
 
 export const password = "agent-direct-message-owner-password";
 export type OwnerMessageLike = { id: string; text: string };
 export const fixtures: Array<{
-  app: ReturnType<typeof createControlPlaneApp>;
+  app: ReturnType<typeof createControlPlane>;
   directory: string;
   db: InstanceType<typeof Database>;
 }> = [];
@@ -55,13 +55,13 @@ export async function setup(options: { nodeOperationTimeoutMs?: number } = {}) {
   });
   const db = new Database(join(directory, "control-plane", "control-plane.sqlite"));
   fixtures.push({ app, directory, db });
-  const login = await app.request("/api/auth/login", {
+  const login = await app.http.request("/api/auth/login", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ password }),
   });
   const cookie = login.headers.get("set-cookie")!.split(";", 1)[0]!;
-  const token = await app.request("/api/owner/nodes/pairing-tokens", {
+  const token = await app.http.request("/api/owner/nodes/pairing-tokens", {
     method: "POST",
     headers: { cookie },
   });
@@ -99,10 +99,10 @@ export async function setup(options: { nodeOperationTimeoutMs?: number } = {}) {
   };
 }
 export async function pairAnotherNode(
-  app: ReturnType<typeof createControlPlaneApp>,
+  app: ReturnType<typeof createControlPlane>,
   cookie: string,
 ): Promise<{ nodeId: string; socket: FakeNodeSocket }> {
-  const token = await app.request("/api/owner/nodes/pairing-tokens", {
+  const token = await app.http.request("/api/owner/nodes/pairing-tokens", {
     method: "POST",
     headers: { cookie },
   });
@@ -131,7 +131,7 @@ export async function pairAnotherNode(
   return { nodeId, socket };
 }
 export async function reconnectNode(
-  app: ReturnType<typeof createControlPlaneApp>,
+  app: ReturnType<typeof createControlPlane>,
   nodeId: string,
   privateKey: string,
 ): Promise<FakeNodeSocket> {
@@ -159,7 +159,7 @@ export async function reconnectNode(
  * username, UID and GID and differ only in Agent ID, workspace and session.
  */
 export async function prepareVerifiedAgent(
-  app: ReturnType<typeof createControlPlaneApp>,
+  app: ReturnType<typeof createControlPlane>,
   nodeId: string,
   name: string,
 ) {
@@ -186,7 +186,7 @@ export async function prepareVerifiedAgent(
   return agentId;
 }
 export async function finishRun(
-  app: ReturnType<typeof createControlPlaneApp>,
+  app: ReturnType<typeof createControlPlane>,
   socket: FakeNodeSocket,
   run: { runId: string; agentId: string },
 ) {
@@ -214,7 +214,7 @@ export async function waitForRun(socket: FakeNodeSocket, fromIndex: number): Pro
   throw new Error("The queued Agent input did not start a run");
 }
 export async function callAgentTool(
-  app: ReturnType<typeof createControlPlaneApp>,
+  app: ReturnType<typeof createControlPlane>,
   socket: FakeNodeSocket,
   run: { runId: string; agentId: string },
   toolCallId: string,
@@ -307,7 +307,7 @@ export async function startReminderFixture(fixture: Awaited<ReturnType<typeof se
     app.chat,
   );
   const dm = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  await app.request("/api/owner/model-credentials/openai", {
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-reminder-key" }),

@@ -19,7 +19,7 @@ it("persists a stable Agent session, verifies provisioning, then queues its init
   const app = setup();
   const cookie = await login(app);
   const { id: nodeId, socket } = await pairNode(app, cookie);
-  const channelResponse = await app.request("/api/owner/channels", {
+  const channelResponse = await app.http.request("/api/owner/channels", {
     method: "POST",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ name: "Research", description: "Research work", visibility: "private" }),
@@ -36,7 +36,7 @@ it("persists a stable Agent session, verifies provisioning, then queues its init
     initialChannelId: channelId,
   };
 
-  const creation = app.request("/api/owner/agents", {
+  const creation = app.http.request("/api/owner/agents", {
     method: "POST",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify(input),
@@ -63,7 +63,7 @@ it("persists a stable Agent session, verifies provisioning, then queues its init
       stage: "preparing_workspace",
     }),
   );
-  const progressResponse = await app.request("/api/owner/agents", { headers: { cookie } });
+  const progressResponse = await app.http.request("/api/owner/agents", { headers: { cookie } });
   const progress = (await progressResponse.json()) as { agents: Array<{ stage: string }> };
   expect(progress.agents[0]?.stage).toBe("preparing_workspace");
   await toolTestInput(
@@ -110,7 +110,7 @@ it("persists a stable Agent session, verifies provisioning, then queues its init
   });
   expect(app.chat.inviteAgentToChannel(channelId, input.id)).toBe(true);
   const sentCount = socket.sent.length;
-  const repeat = await app.request("/api/owner/agents", {
+  const repeat = await app.http.request("/api/owner/agents", {
     method: "POST",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify(input),
@@ -137,14 +137,14 @@ it("retains one failed request and retries it with the same Agent and provisioni
     nodeId,
     model: { provider: "openai", id: "gpt-4.1" },
   };
-  const failedCreation = app.request("/api/owner/agents", {
+  const failedCreation = app.http.request("/api/owner/agents", {
     method: "POST",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify(input),
   });
   await new Promise((resolve) => setTimeout(resolve, 0));
   const firstCommand = JSON.parse(socket.sent.at(-1)!) as { requestId: string };
-  const concurrentDuplicate = app.request("/api/owner/agents", {
+  const concurrentDuplicate = app.http.request("/api/owner/agents", {
     method: "POST",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify(input),
@@ -172,7 +172,7 @@ it("retains one failed request and retries it with the same Agent and provisioni
   expect(failedAgent.agent.status).toBe("failed");
   expect(concurrentFailedAgent.agent).toEqual(failedAgent.agent);
 
-  const retry = app.request("/api/owner/agents", {
+  const retry = app.http.request("/api/owner/agents", {
     method: "POST",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify(input),

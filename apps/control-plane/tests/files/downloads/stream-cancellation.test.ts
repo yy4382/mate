@@ -78,7 +78,7 @@ it("streams the owner workspace download one bounded node chunk at a time and st
     );
   };
 
-  const listing = await app.request(
+  const listing = await app.http.request(
     `/api/owner/agents/${agentId}/workspace?path=&offset=0&limit=32`,
     {
       headers: { cookie },
@@ -90,7 +90,7 @@ it("streams the owner workspace download one bounded node chunk at a time and st
   });
 
   const completedDownloadId = randomUUID(),
-    download = await app.request(
+    download = await app.http.request(
       `/api/owner/agents/${agentId}/workspace/download?path=large.bin&downloadId=${completedDownloadId}`,
       { headers: { cookie } },
     );
@@ -118,18 +118,21 @@ it("streams the owner workspace download one bounded node chunk at a time and st
   ).toEqual({ result: "succeeded", completed_at: expect.any(Number) });
   expect(
     await (
-      await app.request(`/api/owner/agents/${agentId}/workspace/downloads/${completedDownloadId}`, {
-        headers: { cookie },
-      })
+      await app.http.request(
+        `/api/owner/agents/${agentId}/workspace/downloads/${completedDownloadId}`,
+        {
+          headers: { cookie },
+        },
+      )
     ).json(),
   ).toMatchObject({ state: "succeeded", errorCode: null });
-  const secondLogin = await app.request("/api/auth/login", {
+  const secondLogin = await app.http.request("/api/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ password }),
     }),
     secondCookie = secondLogin.headers.get("set-cookie")!.split(";", 1)[0]!,
-    otherSessionStatus = await app.request(
+    otherSessionStatus = await app.http.request(
       `/api/owner/agents/${agentId}/workspace/downloads/${completedDownloadId}`,
       { headers: { cookie: secondCookie } },
     );
@@ -137,7 +140,7 @@ it("streams the owner workspace download one bounded node chunk at a time and st
   db.prepare(
     "UPDATE owner_workspace_access_audit SET download_expires_at=? WHERE download_id=?",
   ).run(Date.now() - 1, completedDownloadId);
-  const expiredStatus = await app.request(
+  const expiredStatus = await app.http.request(
     `/api/owner/agents/${agentId}/workspace/downloads/${completedDownloadId}`,
     { headers: { cookie } },
   );
@@ -157,7 +160,7 @@ it("streams the owner workspace download one bounded node chunk at a time and st
       (request) => request.kind === "workspace_read_chunk",
     ).length,
     interruptedDownloadId = randomUUID(),
-    interrupted = await app.request(
+    interrupted = await app.http.request(
       `/api/owner/agents/${agentId}/workspace/download?path=large.bin&downloadId=${interruptedDownloadId}`,
       { headers: { cookie } },
     ),
@@ -172,7 +175,7 @@ it("streams the owner workspace download one bounded node chunk at a time and st
   expect(interruptedChunks).toBeLessThanOrEqual(2);
   expect(
     await (
-      await app.request(
+      await app.http.request(
         `/api/owner/agents/${agentId}/workspace/downloads/${interruptedDownloadId}`,
         { headers: { cookie } },
       )

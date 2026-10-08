@@ -3,11 +3,11 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { createControlPlaneApp } from "../../src/http.js";
+import { createControlPlane } from "../../src/application.js";
 import { OwnerChat } from "../../src/conversations/service.js";
 
 const password = "owner-password-used-only-by-this-test";
-const cases: Array<{ app: ReturnType<typeof createControlPlaneApp>; dataDir: string }> = [];
+const cases: Array<{ app: ReturnType<typeof createControlPlane>; dataDir: string }> = [];
 const syntheticAgent = "fixture-agent-with-channel-membership";
 
 afterEach(() => {
@@ -22,13 +22,13 @@ function setup() {
   chmodSync(dataDir, 0o700);
   const passwordFile = join(dataDir, "owner-password");
   writeFileSync(passwordFile, `${password}\n`, { mode: 0o600 });
-  const app = createControlPlaneApp({ dataDir, passwordFile });
+  const app = createControlPlane({ dataDir, passwordFile });
   cases.push({ app, dataDir });
   return { app, dataDir };
 }
 
-async function ownerCookie(app: ReturnType<typeof createControlPlaneApp>): Promise<string> {
-  const login = await app.request("/api/auth/login", {
+async function ownerCookie(app: ReturnType<typeof createControlPlane>): Promise<string> {
+  const login = await app.http.request("/api/auth/login", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ password }),
@@ -37,8 +37,8 @@ async function ownerCookie(app: ReturnType<typeof createControlPlaneApp>): Promi
   return login.headers.get("set-cookie")!.split(";", 1)[0]!;
 }
 
-async function createChannel(app: ReturnType<typeof createControlPlaneApp>, cookie: string) {
-  const response = await app.request("/api/owner/channels", {
+async function createChannel(app: ReturnType<typeof createControlPlane>, cookie: string) {
+  const response = await app.http.request("/api/owner/channels", {
     method: "POST",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ name: "投递验证", description: "", visibility: "private" }),
@@ -81,7 +81,7 @@ it("persists one delivery per member in the message transaction and resumes the 
   const channel = await createChannel(fixture.app, cookie);
   addSyntheticMember(fixture.dataDir, channel.id);
 
-  const response = await fixture.app.request(`/api/owner/channels/${channel.id}/messages`, {
+  const response = await fixture.app.http.request(`/api/owner/channels/${channel.id}/messages`, {
     method: "POST",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ text: "等待成员处理" }),
@@ -91,7 +91,7 @@ it("persists one delivery per member in the message transaction and resumes the 
   expect(message.author).toEqual({ kind: "human", id: "owner" });
 
   fixture.app.close();
-  const restarted = createControlPlaneApp({
+  const restarted = createControlPlane({
     dataDir: fixture.dataDir,
     passwordFile: join(fixture.dataDir, "owner-password"),
   });
@@ -125,7 +125,7 @@ it("does not backfill a message to an Agent who joins after that message", async
   const fixture = setup();
   const cookie = await ownerCookie(fixture.app);
   const channel = await createChannel(fixture.app, cookie);
-  const earlier = await fixture.app.request(`/api/owner/channels/${channel.id}/messages`, {
+  const earlier = await fixture.app.http.request(`/api/owner/channels/${channel.id}/messages`, {
     method: "POST",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ text: "加入前的消息" }),
@@ -134,7 +134,7 @@ it("does not backfill a message to an Agent who joins after that message", async
   addSyntheticMember(fixture.dataDir, channel.id);
   expect(pendingDeliveries(fixture.dataDir)).toEqual([]);
 
-  const later = await fixture.app.request(`/api/owner/channels/${channel.id}/messages`, {
+  const later = await fixture.app.http.request(`/api/owner/channels/${channel.id}/messages`, {
     method: "POST",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ text: "加入后的消息" }),
@@ -166,13 +166,13 @@ it("rolls back both the message and its delivery if durable delivery persistence
   `);
   db.close();
 
-  const response = await fixture.app.request(`/api/owner/channels/${channel.id}/messages`, {
+  const response = await fixture.app.http.request(`/api/owner/channels/${channel.id}/messages`, {
     method: "POST",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ text: "不能留下半次提交" }),
   });
   expect(response.status).toBe(500);
-  const history = await fixture.app.request(`/api/owner/channels/${channel.id}/messages`, {
+  const history = await fixture.app.http.request(`/api/owner/channels/${channel.id}/messages`, {
     headers: { cookie },
   });
   expect(await history.json()).toEqual({ messages: [], nextBefore: null });

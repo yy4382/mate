@@ -49,7 +49,7 @@ it("limits read and send to joined conversations while exposing only public meta
     });
   app.chat.createMessage(publicRoom.id, "Public message body.");
   app.chat.createMessage(privateRoom.id, "Private message body.");
-  await app.request("/api/owner/model-credentials/openai", {
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
@@ -172,7 +172,7 @@ it("lets a non-member Agent read a public channel's timeline and thread but not 
     }),
     root = app.chat.createMessage(publicRoom.id, "Public planning message.")!;
   app.chat.createMessage(publicRoom.id, "First public reply.", { rootId: root.id });
-  await app.request("/api/owner/model-credentials/openai", {
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
@@ -229,7 +229,7 @@ it("keeps a non-member Agent out of a private channel that holds a task", async 
     }),
     secret = app.chat.createMessage(privateRoom.id, "Private planning message.")!;
   app.chat.createTaskForMessage(secret.id, "human", "owner", secret.text);
-  await app.request("/api/owner/model-credentials/openai", {
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
@@ -279,7 +279,7 @@ it("lets a non-member Agent join a public channel, then speak and receive later 
       visibility: "public",
     });
   app.chat.createMessage(publicRoom.id, "Old standup note.");
-  await app.request("/api/owner/model-credentials/openai", {
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
@@ -337,7 +337,7 @@ it("does not let an outsider read or join a peer direct message through the publ
     outsiderId = await prepareVerifiedAgent(app, nodeId, "Outsider colleague");
   // Seed the peer DM through its own tables: the factory path requires the tool transaction.
   const outsiderDirect = app.chat.getOrCreateAgentDirectChannel(outsiderId)!;
-  await app.request("/api/owner/model-credentials/openai", {
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-tools-key" }),

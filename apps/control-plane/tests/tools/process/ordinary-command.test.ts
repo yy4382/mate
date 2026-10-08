@@ -36,7 +36,7 @@ it("dispatches ordinary commands from a durable intent without privileged approv
     app.chat,
   );
   const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  await app.request("/api/owner/model-credentials/openai", {
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-process-tool-key" }),
@@ -159,7 +159,7 @@ it("offers no privileged request or approval-status tool and no owner approval r
     app.chat,
   );
   const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  await app.request("/api/owner/model-credentials/openai", {
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-tool-surface-key" }),
@@ -189,15 +189,15 @@ it("offers no privileged request or approval-status tool and no owner approval r
 
   const requestId = randomUUID();
   expect(
-    (await app.request(`/api/owner/channels/${direct.id}/approvals`, { headers: { cookie } }))
+    (await app.http.request(`/api/owner/channels/${direct.id}/approvals`, { headers: { cookie } }))
       .status,
   ).toBe(404);
   expect(
-    (await app.request(`/api/owner/approvals/${requestId}`, { headers: { cookie } })).status,
+    (await app.http.request(`/api/owner/approvals/${requestId}`, { headers: { cookie } })).status,
   ).toBe(404);
   expect(
     (
-      await app.request(`/api/owner/approvals/${requestId}/decision`, {
+      await app.http.request(`/api/owner/approvals/${requestId}/decision`, {
         method: "POST",
         headers: { cookie, "content-type": "application/json", origin: "http://localhost" },
         body: JSON.stringify({ decision: "approve" }),
@@ -232,7 +232,7 @@ it("runs an explicit sudo the Agent wrote as one ordinary command with its own r
     app.chat,
   );
   const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  await app.request("/api/owner/model-credentials/openai", {
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-sudo-key" }),

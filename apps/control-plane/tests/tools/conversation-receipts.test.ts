@@ -36,7 +36,7 @@ it("replays a committed tool action after its reply is lost and the delivery ret
     app.chat,
   );
   const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  await app.request("/api/owner/model-credentials/openai", {
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
@@ -132,7 +132,7 @@ it("keeps a running Agent's tool catalogue and refuses stale or forged tool runs
     app.chat,
   );
   const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  await app.request("/api/owner/model-credentials/openai", {
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-tools-key" }),

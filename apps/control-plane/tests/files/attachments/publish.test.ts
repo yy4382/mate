@@ -46,7 +46,7 @@ it("publishes Agent workspace files to a joined conversation in bounded chunks a
     `UPDATE owner_channel_memberships SET active=0
      WHERE channel_id=? AND principal_kind='human' AND principal_id='owner'`,
   ).run(destination.id);
-  await app.request("/api/owner/model-credentials/openai", {
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
@@ -132,11 +132,11 @@ it("publishes Agent workspace files to a joined conversation in bounded chunks a
   expect(requests.every((request) => request.mode === "agent_publish")).toBe(true);
   expect((requests[1]?.operation as { length: number }).length).toBeLessThanOrEqual(8192);
 
-  const sourceList = await app.request(`/api/owner/channels/${channel.id}/attachments`, {
+  const sourceList = await app.http.request(`/api/owner/channels/${channel.id}/attachments`, {
     headers: { cookie },
   });
   expect(((await sourceList.json()) as { attachments: unknown[] }).attachments).toEqual([]);
-  const ownerList = await app.request(`/api/owner/channels/${destination.id}/attachments`, {
+  const ownerList = await app.http.request(`/api/owner/channels/${destination.id}/attachments`, {
     headers: { cookie },
   });
   expect(ownerList.status).toBe(200);
@@ -144,7 +144,7 @@ it("publishes Agent workspace files to a joined conversation in bounded chunks a
     attachments: Array<{ id: string; filename: string }>;
   };
   expect(items.attachments).toMatchObject([{ filename: "共享笔记.txt" }]);
-  const content = await app.request(
+  const content = await app.http.request(
     `/api/owner/channels/${destination.id}/attachments/${items.attachments[0]!.id}/content`,
     { headers: { cookie } },
   );

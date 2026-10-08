@@ -37,7 +37,7 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
     app.chat,
   );
   const channel = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  await app.request("/api/owner/model-credentials/openai", {
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
@@ -157,13 +157,16 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
   expect(db.prepare("PRAGMA table_info(owner_workspace_access_audit)").all()).not.toContainEqual(
     expect.objectContaining({ name: "content" }),
   );
-  const safeActivity = await app.request(`/api/owner/agents/${agentId}/activity`, {
+  const safeActivity = await app.http.request(`/api/owner/agents/${agentId}/activity`, {
     headers: { cookie },
   });
   expect(await safeActivity.text()).not.toContain("hello");
-  const detailedActivity = await app.request(`/api/owner/agents/${agentId}/activity?detail=1`, {
-    headers: { cookie },
-  });
+  const detailedActivity = await app.http.request(
+    `/api/owner/agents/${agentId}/activity?detail=1`,
+    {
+      headers: { cookie },
+    },
+  );
   expect(await detailedActivity.text()).toContain("notes.txt");
   expect(
     await callAgentTool(app, socket, run, firstActionId, "tools.call", firstInput),

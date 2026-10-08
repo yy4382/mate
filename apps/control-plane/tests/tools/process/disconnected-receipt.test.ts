@@ -38,7 +38,7 @@ it("reconciles a durable node receipt before resuming a disconnected Agent", asy
     app.chat,
   );
   const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  await app.request("/api/owner/model-credentials/openai", {
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-recovery-key" }),
@@ -162,7 +162,7 @@ it("reconciles a durable node receipt before resuming a disconnected Agent", asy
     type: "tools.result",
     ok: false,
   });
-  const safeResponse = await app.request(`/api/owner/agents/${agentId}/activity`, {
+  const safeResponse = await app.http.request(`/api/owner/agents/${agentId}/activity`, {
     headers: { cookie },
   });
   expect(safeResponse.status).toBe(200);
@@ -172,9 +172,12 @@ it("reconciles a durable node receipt before resuming a disconnected Agent", asy
   expect(safe.events.some((event) => event.kind === "receipt.corrected")).toBe(true);
   expect(safe.events.every((event) => event.detail === undefined)).toBe(true);
   expect(JSON.stringify(safe)).not.toContain("printf once");
-  const expandedResponse = await app.request(`/api/owner/agents/${agentId}/activity?detail=1`, {
-    headers: { cookie },
-  });
+  const expandedResponse = await app.http.request(
+    `/api/owner/agents/${agentId}/activity?detail=1`,
+    {
+      headers: { cookie },
+    },
+  );
   const expanded = (await expandedResponse.json()) as { events: Array<{ detail?: unknown }> };
   expect(JSON.stringify(expanded)).toContain("printf once");
   const notification = db

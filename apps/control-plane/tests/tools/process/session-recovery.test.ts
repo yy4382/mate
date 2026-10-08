@@ -42,7 +42,7 @@ it.each(["restart", "reconnect", "conflicting receipt", "malformed workspace"])(
       app.chat,
     );
     const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-    await app.request("/api/owner/model-credentials/openai", {
+    await app.http.request("/api/owner/model-credentials/openai", {
       method: "PUT",
       headers: { cookie, "content-type": "application/json" },
       body: JSON.stringify({ apiKey: "synthetic-key" }),

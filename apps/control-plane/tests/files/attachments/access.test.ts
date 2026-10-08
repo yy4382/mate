@@ -24,7 +24,7 @@ it("lets a non-member Agent read a public channel's attachments but keeps publis
       visibility: "private",
     });
   const upload = async (channelId: string, filename: string, body: string) =>
-    app.request(`/api/owner/channels/${channelId}/attachments`, {
+    app.http.request(`/api/owner/channels/${channelId}/attachments`, {
       method: "POST",
       headers: {
         cookie,
@@ -37,7 +37,7 @@ it("lets a non-member Agent read a public channel's attachments but keeps publis
   expect(publicUpload.status).toBe(201);
   const publicAttachment = (await publicUpload.json()) as { attachment: { id: string } };
   expect((await upload(privateRoom.id, "机密.txt", "private attachment body")).status).toBe(201);
-  await app.request("/api/owner/model-credentials/openai", {
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-tools-key" }),

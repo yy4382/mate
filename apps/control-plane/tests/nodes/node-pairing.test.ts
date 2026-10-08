@@ -2,10 +2,10 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { createControlPlaneApp } from "../../src/http.js";
+import { createControlPlane } from "../../src/application.js";
 
 const ownerPassword = "owner-password-used-only-by-this-test";
-const fixtures: Array<{ app: ReturnType<typeof createControlPlaneApp>; directory: string }> = [];
+const fixtures: Array<{ app: ReturnType<typeof createControlPlane>; directory: string }> = [];
 
 afterEach(() => {
   for (const { app, directory } of fixtures.splice(0)) {
@@ -19,7 +19,7 @@ function setup() {
   chmodSync(directory, 0o700);
   const passwordFile = join(directory, "owner-password");
   writeFileSync(passwordFile, `${ownerPassword}\n`, { mode: 0o600 });
-  const app = createControlPlaneApp({
+  const app = createControlPlane({
     dataDir: join(directory, "control-plane"),
     passwordFile,
   });
@@ -27,8 +27,8 @@ function setup() {
   return app;
 }
 
-async function login(app: ReturnType<typeof createControlPlaneApp>): Promise<string> {
-  const response = await app.request("/api/auth/login", {
+async function login(app: ReturnType<typeof createControlPlane>): Promise<string> {
+  const response = await app.http.request("/api/auth/login", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ password: ownerPassword }),
@@ -42,12 +42,12 @@ async function login(app: ReturnType<typeof createControlPlaneApp>): Promise<str
 it("lets only the signed-in owner create a one-time node pairing token", async () => {
   const app = setup();
 
-  const rejected = await app.request("/api/owner/nodes/pairing-tokens", { method: "POST" });
-  const anonymousList = await app.request("/api/owner/nodes");
-  const anonymousPage = await app.request("/app/nodes", { redirect: "manual" });
-  const publicStatus = await app.request("/api/status");
+  const rejected = await app.http.request("/api/owner/nodes/pairing-tokens", { method: "POST" });
+  const anonymousList = await app.http.request("/api/owner/nodes");
+  const anonymousPage = await app.http.request("/app/nodes", { redirect: "manual" });
+  const publicStatus = await app.http.request("/api/status");
   const cookie = await login(app);
-  const created = await app.request("/api/owner/nodes/pairing-tokens", {
+  const created = await app.http.request("/api/owner/nodes/pairing-tokens", {
     method: "POST",
     headers: { cookie },
   });
@@ -58,7 +58,7 @@ it("lets only the signed-in owner create a one-time node pairing token", async (
   expect(await publicStatus.json()).toEqual({ status: "running" });
   expect(created.status).toBe(201);
   const token = (await created.json()) as { pairingToken?: unknown; expiresAt?: unknown };
-  const nodes = await app.request("/api/owner/nodes", { headers: { cookie } });
+  const nodes = await app.http.request("/api/owner/nodes", { headers: { cookie } });
   const nodesBody = await nodes.text();
 
   expect(typeof token.pairingToken).toBe("string");

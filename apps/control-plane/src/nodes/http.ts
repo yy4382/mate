@@ -1,40 +1,41 @@
 import { upgradeWebSocket } from "@hono/node-server";
-import type { Hono } from "hono";
+import { Hono } from "hono";
 import type { NodeDirectory, NodeSocket } from "./directory.js";
 
-export function registerNodeRoutes(app: Hono, nodes: NodeDirectory): void {
+export function createNodeRoutes(nodes: NodeDirectory) {
   const adapters = new WeakMap<object, NodeSocket>();
-  app.get(
-    "/api/nodes/connect",
-    upgradeWebSocket(() => ({
-      onOpen(_event, socket) {
-        nodes.open(asNodeSocket(socket, adapters));
-      },
-      onMessage(event, socket) {
-        const nodeSocket = asNodeSocket(socket, adapters);
-        void nodes.receive(nodeSocket, event.data).catch(() => {
-          nodes.close(nodeSocket);
-          nodeSocket.terminate();
-        });
-      },
-      onClose(_event, socket) {
-        nodes.close(asNodeSocket(socket, adapters));
-      },
-      onError(_event, socket) {
-        nodes.close(asNodeSocket(socket, adapters));
-      },
-    })),
-  );
+  return new Hono()
+    .get(
+      "/api/nodes/connect",
+      upgradeWebSocket(() => ({
+        onOpen(_event, socket) {
+          nodes.open(asNodeSocket(socket, adapters));
+        },
+        onMessage(event, socket) {
+          const nodeSocket = asNodeSocket(socket, adapters);
+          void nodes.receive(nodeSocket, event.data).catch(() => {
+            nodes.close(nodeSocket);
+            nodeSocket.terminate();
+          });
+        },
+        onClose(_event, socket) {
+          nodes.close(asNodeSocket(socket, adapters));
+        },
+        onError(_event, socket) {
+          nodes.close(asNodeSocket(socket, adapters));
+        },
+      })),
+    )
 
-  app.post("/api/owner/nodes/pairing-tokens", (context) => {
-    context.header("Cache-Control", "no-store");
-    return context.json(nodes.createPairingToken(), 201);
-  });
+    .post("/api/owner/nodes/pairing-tokens", (context) => {
+      context.header("Cache-Control", "no-store");
+      return context.json(nodes.createPairingToken(), 201);
+    })
 
-  app.get("/api/owner/nodes", (context) => {
-    context.header("Cache-Control", "no-store");
-    return context.json({ nodes: nodes.list() });
-  });
+    .get("/api/owner/nodes", (context) => {
+      context.header("Cache-Control", "no-store");
+      return context.json({ nodes: nodes.list() });
+    });
 }
 
 function asNodeSocket(

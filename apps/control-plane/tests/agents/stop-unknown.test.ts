@@ -83,8 +83,12 @@ it("reports an earlier command whose termination the node cannot confirm as unkn
       at,
     );
     expect(
-      (await app.request(`/api/owner/agents/${id}/pause`, { method: "POST", headers: { cookie } }))
-        .status,
+      (
+        await app.http.request(`/api/owner/agents/${id}/pause`, {
+          method: "POST",
+          headers: { cookie },
+        })
+      ).status,
     ).toBe(200);
     const stopRequest = socket.sent
       .map((text) => JSON.parse(text) as Record<string, unknown>)
@@ -209,7 +213,10 @@ it("counts every command whose termination nothing proved, however the node answ
       timedOut: false,
       processGroupRunning: true,
     });
-    await app.request(`/api/owner/agents/${id}/pause`, { method: "POST", headers: { cookie } });
+    await app.http.request(`/api/owner/agents/${id}/pause`, {
+      method: "POST",
+      headers: { cookie },
+    });
     const stopRequest = socket.sent
       .map((text) => JSON.parse(text) as Record<string, unknown>)
       .find(
@@ -247,7 +254,7 @@ it("counts every command whose termination nothing proved, however the node answ
     expect(stop.unconfirmedOperationIds).not.toContain(neverStarted);
     expect(stop.unconfirmedOperationIds).not.toContain(rejectedByNode);
     const activity = (await (
-      await app.request(`/api/owner/agents/${id}/activity?detail=1`, { headers: { cookie } })
+      await app.http.request(`/api/owner/agents/${id}/activity?detail=1`, { headers: { cookie } })
     ).json()) as {
       events: Array<{ kind: string; summary: string; referenceId: string | null }>;
     };
@@ -286,7 +293,7 @@ it("uses a fresh stop operation ID after an unknown node receipt", async () => {
     app.chat,
   );
   const pause = () =>
-    app.request(`/api/owner/agents/${id}/pause`, { method: "POST", headers: { cookie } });
+    app.http.request(`/api/owner/agents/${id}/pause`, { method: "POST", headers: { cookie } });
   expect((await pause()).status).toBe(200);
   const stopRequests = () =>
     socket.sent

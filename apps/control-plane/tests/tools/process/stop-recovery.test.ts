@@ -34,7 +34,7 @@ it("rechecks stopped scopes after a restarted node confirms an ordinary operatio
   };
   app.agents.complete(agentId, identity, app.chat);
   const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  await app.request("/api/owner/model-credentials/openai", {
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-key" }),

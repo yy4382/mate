@@ -58,7 +58,7 @@ it("lets one Agent discover and open an explicit peer DM that both Agents and th
   });
   app.agents.fail(failedAgentId, "Synthetic provisioning failure.");
   const firstDirect = app.chat.getOrCreateAgentDirectChannel(firstAgentId)!;
-  await app.request("/api/owner/model-credentials/openai", {
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
@@ -123,7 +123,7 @@ it("lets one Agent discover and open an explicit peer DM that both Agents and th
   expect(peerDm.name).toContain("First colleague");
   expect(peerDm.name).toContain("Second colleague");
   expect(app.chat.listChannels().map((channel) => channel.id)).toContain(peerDm.id);
-  const ownerChannels = await app.request("/api/owner/channels", { headers: { cookie } });
+  const ownerChannels = await app.http.request("/api/owner/channels", { headers: { cookie } });
   expect(ownerChannels.status).toBe(200);
   const listedOwnerChannels = (await ownerChannels.json()) as {
     channels: Array<{ id: string; name: string; description: string }>;
@@ -178,7 +178,7 @@ it("lets one Agent discover and open an explicit peer DM that both Agents and th
       ],
     },
   });
-  const ownerMessages = await app.request(`/api/owner/channels/${peerDm.id}/messages`, {
+  const ownerMessages = await app.http.request(`/api/owner/channels/${peerDm.id}/messages`, {
     headers: { cookie },
   });
   expect(ownerMessages.status).toBe(200);

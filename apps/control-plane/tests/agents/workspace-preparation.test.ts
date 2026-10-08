@@ -44,7 +44,7 @@ it("refuses the owner's workspace preview until preparation finished, then serve
     );
   };
   const preview = () =>
-    app.request(`/api/owner/agents/${agentId}/workspace`, { headers: { cookie } });
+    app.http.request(`/api/owner/agents/${agentId}/workspace`, { headers: { cookie } });
 
   const refused = await preview();
   expect(refused.status).toBe(404);

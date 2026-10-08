@@ -31,20 +31,20 @@ it("creates one private owner DM and keeps its input queued while the Agent awai
   );
   expect(prepared.agent.sessionId).toBe(app.agents.get(agentId)?.sessionId);
 
-  const direct = await app.request(`/api/owner/agents/${agentId}/direct-channel`, {
+  const direct = await app.http.request(`/api/owner/agents/${agentId}/direct-channel`, {
     method: "POST",
     headers: { cookie },
   });
   expect(direct.status).toBe(200);
   const { channel } = (await direct.json()) as { channel: { id: string; visibility: string } };
   expect(channel.visibility).toBe("private");
-  const repeated = await app.request(`/api/owner/agents/${agentId}/direct-channel`, {
+  const repeated = await app.http.request(`/api/owner/agents/${agentId}/direct-channel`, {
     method: "POST",
     headers: { cookie },
   });
   expect(((await repeated.json()) as { channel: { id: string } }).channel.id).toBe(channel.id);
 
-  const post = await app.request(`/api/owner/channels/${channel.id}/messages`, {
+  const post = await app.http.request(`/api/owner/channels/${channel.id}/messages`, {
     method: "POST",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ text: "请给我一个简短研究计划。" }),
@@ -88,7 +88,7 @@ it("routes Agent conversation discovery through its current control-plane run", 
   });
   app.chat.createMessage(ownChannel.id, "列出可见对话。");
   const runStart = socket.sent.length;
-  const credential = await app.request("/api/owner/model-credentials/openai", {
+  const credential = await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-tools-key" }),

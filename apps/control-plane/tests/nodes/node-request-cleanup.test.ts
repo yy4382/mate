@@ -10,7 +10,7 @@ import {
 import { bindToolSocket, toolTestInput } from "../support/agent/tool-run.js";
 
 async function additionalNode(context: Awaited<ReturnType<typeof setup>>) {
-  const response = await context.app.request("/api/owner/nodes/pairing-tokens", {
+  const response = await context.app.http.request("/api/owner/nodes/pairing-tokens", {
     method: "POST",
     headers: { cookie: context.cookie },
   });

@@ -3,10 +3,10 @@ import { join } from "node:path";
 import { queueUncertainOperationFacts } from "../../../src/runtime/recovery/context.js";
 import { AgentSession } from "../../../src/runtime/session/service.js";
 import {
-  createControlPlaneApp,
-  type ControlPlaneAppOptions,
-  type ControlPlaneApp,
-} from "../../../src/http.js";
+  createControlPlane,
+  type ControlPlaneOptions,
+  type ControlPlane,
+} from "../../../src/application.js";
 import type { NodeSocket } from "../../../src/nodes/directory.js";
 
 /** Existing authorization tests pause the real scheduler before the external provider boundary.
@@ -24,15 +24,15 @@ export interface TestRun {
   modelId: string;
 }
 const fixtures = new WeakMap<
-  ControlPlaneApp,
+  ControlPlane,
   { path: string; sockets: Map<string, { sent: string[] }>; gates: Map<string, () => void> }
 >();
 const socketNodes = new WeakMap<object, string>();
-export function toolTestApp(options: ControlPlaneAppOptions): ControlPlaneApp {
+export function toolTestApp(options: ControlPlaneOptions): ControlPlane {
   const path = join(options.dataDir!, "control-plane.sqlite"),
     sockets = new Map<string, { sent: string[] }>(),
     gates = new Map<string, () => void>();
-  const app = createControlPlaneApp(options, {
+  const app = createControlPlane(options, {
     beforeRunStart: async (runId) => {
       const db = new Database(path);
       try {
@@ -65,7 +65,7 @@ export function toolTestApp(options: ControlPlaneAppOptions): ControlPlaneApp {
   return app;
 }
 export function bindToolSocket(
-  app: ControlPlaneApp,
+  app: ControlPlane,
   nodeId: string,
   socket: { sent: string[] },
 ): void {
@@ -73,7 +73,7 @@ export function bindToolSocket(
   socketNodes.set(socket, nodeId);
 }
 export async function toolTestInput(
-  app: ControlPlaneApp,
+  app: ControlPlane,
   socket: NodeSocket & { sent: string[] },
   raw: string,
 ): Promise<void> {

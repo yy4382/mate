@@ -29,7 +29,7 @@ it("keeps manual pause until explicit resume, requires the original workspace, a
   };
   app.agents.complete(id, identity, app.chat);
   const sessionId = app.agents.get(id)!.sessionId;
-  const pause = await app.request(`/api/owner/agents/${id}/pause`, {
+  const pause = await app.http.request(`/api/owner/agents/${id}/pause`, {
     method: "POST",
     headers: { cookie },
   });
@@ -69,7 +69,7 @@ it("keeps manual pause until explicit resume, requires the original workspace, a
   );
   for (let attempt = 0; attempt < 30 && app.runs?.stopStatus(id).state !== "unknown"; attempt++)
     await new Promise((resolve) => setTimeout(resolve, 10));
-  const resuming = app.request(`/api/owner/agents/${id}/resume`, {
+  const resuming = app.http.request(`/api/owner/agents/${id}/resume`, {
     method: "POST",
     headers: { cookie },
   });
@@ -90,7 +90,7 @@ it("keeps manual pause until explicit resume, requires the original workspace, a
   );
   expect((await resuming).status).toBe(409);
   expect(app.runs?.pauseReason(id)).toBe("manual");
-  const repaired = app.request(`/api/owner/agents/${id}/resume`, {
+  const repaired = app.http.request(`/api/owner/agents/${id}/resume`, {
     method: "POST",
     headers: { cookie },
   });

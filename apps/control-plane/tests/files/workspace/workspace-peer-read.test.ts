@@ -36,7 +36,7 @@ it("sends an Agent's own workspace read of a peer workspace to the node as an ag
     app.chat,
   );
   const channel = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  await app.request("/api/owner/model-credentials/openai", {
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-peer-read-key" }),
@@ -106,7 +106,7 @@ it("sends an Agent's own workspace read of a peer workspace to the node as an ag
     operation: "read",
     result: "succeeded",
   });
-  const activity = await app.request(`/api/owner/agents/${agentId}/activity?detail=1`, {
+  const activity = await app.http.request(`/api/owner/agents/${agentId}/activity?detail=1`, {
     headers: { cookie },
   });
   expect(await activity.text()).not.toContain("peer memory");

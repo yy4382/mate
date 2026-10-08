@@ -75,35 +75,41 @@ it("records owner workspace reads and safe failure codes without file contents",
     );
   };
 
-  const listing = await app.request(`/api/owner/agents/${agentId}/workspace?path=`, {
+  const listing = await app.http.request(`/api/owner/agents/${agentId}/workspace?path=`, {
       headers: { cookie },
     }),
-    absoluteListing = await app.request(
+    absoluteListing = await app.http.request(
       `/api/owner/agents/${agentId}/workspace?path=${encodeURIComponent(`/var/lib/mate/agents/${agentId}/notes`)}`,
       { headers: { cookie } },
     ),
-    relativeTraversal = await app.request(
+    relativeTraversal = await app.http.request(
       `/api/owner/agents/${agentId}/workspace?path=${encodeURIComponent("../../etc/passwd")}`,
       { headers: { cookie } },
     ),
-    absoluteTraversal = await app.request(
+    absoluteTraversal = await app.http.request(
       `/api/owner/agents/${agentId}/workspace?path=${encodeURIComponent(`/var/lib/mate/agents/${agentId}/notes/../safe.txt`)}`,
       { headers: { cookie } },
     ),
-    nulPath = await app.request(
+    nulPath = await app.http.request(
       `/api/owner/agents/${agentId}/workspace?path=${encodeURIComponent("notes\0.txt")}`,
       { headers: { cookie } },
     ),
-    outsideAbsoluteListing = await app.request(
+    outsideAbsoluteListing = await app.http.request(
       `/api/owner/agents/${agentId}/workspace?path=${encodeURIComponent("/etc/passwd")}`,
       { headers: { cookie } },
     ),
-    missing = await app.request(`/api/owner/agents/${agentId}/workspace/stat?path=missing.txt`, {
-      headers: { cookie },
-    }),
-    denied = await app.request(`/api/owner/agents/${agentId}/workspace/stat?path=private.txt`, {
-      headers: { cookie },
-    });
+    missing = await app.http.request(
+      `/api/owner/agents/${agentId}/workspace/stat?path=missing.txt`,
+      {
+        headers: { cookie },
+      },
+    ),
+    denied = await app.http.request(
+      `/api/owner/agents/${agentId}/workspace/stat?path=private.txt`,
+      {
+        headers: { cookie },
+      },
+    );
   expect(listing.status).toBe(200);
   expect(absoluteListing.status).toBe(200);
   expect(relativeTraversal.status).toBe(403);
@@ -113,7 +119,7 @@ it("records owner workspace reads and safe failure codes without file contents",
   expect(missing.status).toBe(404);
   expect(denied.status).toBe(403);
   const changedDownloadId = randomUUID(),
-    changed = await app.request(
+    changed = await app.http.request(
       `/api/owner/agents/${agentId}/workspace/download?path=changed.txt&downloadId=${changedDownloadId}`,
       { headers: { cookie } },
     );
@@ -121,14 +127,17 @@ it("records owner workspace reads and safe failure codes without file contents",
   await expect(changed.arrayBuffer()).rejects.toThrow();
   expect(
     await (
-      await app.request(`/api/owner/agents/${agentId}/workspace/downloads/${changedDownloadId}`, {
-        headers: { cookie },
-      })
+      await app.http.request(
+        `/api/owner/agents/${agentId}/workspace/downloads/${changedDownloadId}`,
+        {
+          headers: { cookie },
+        },
+      )
     ).json(),
   ).toMatchObject({ state: "failed", errorCode: "file_changed" });
 
   const missingDownloadId = randomUUID(),
-    missingDownload = await app.request(
+    missingDownload = await app.http.request(
       `/api/owner/agents/${agentId}/workspace/download?path=missing.txt&downloadId=${missingDownloadId}`,
       { headers: { cookie } },
     );
@@ -136,14 +145,17 @@ it("records owner workspace reads and safe failure codes without file contents",
   expect(await missingDownload.json()).toMatchObject({ code: "not_found" });
   expect(
     await (
-      await app.request(`/api/owner/agents/${agentId}/workspace/downloads/${missingDownloadId}`, {
-        headers: { cookie },
-      })
+      await app.http.request(
+        `/api/owner/agents/${agentId}/workspace/downloads/${missingDownloadId}`,
+        {
+          headers: { cookie },
+        },
+      )
     ).json(),
   ).toMatchObject({ state: "failed", errorCode: "not_found" });
 
   const permissionDownloadId = randomUUID(),
-    permissionDownload = await app.request(
+    permissionDownload = await app.http.request(
       `/api/owner/agents/${agentId}/workspace/download?path=private.txt&downloadId=${permissionDownloadId}`,
       { headers: { cookie } },
     );
@@ -151,14 +163,14 @@ it("records owner workspace reads and safe failure codes without file contents",
   expect(await permissionDownload.json()).toMatchObject({ code: "permission_denied" });
   expect(
     await (
-      await app.request(
+      await app.http.request(
         `/api/owner/agents/${agentId}/workspace/downloads/${permissionDownloadId}`,
         { headers: { cookie } },
       )
     ).json(),
   ).toMatchObject({ state: "failed", errorCode: "permission_denied" });
 
-  const browserError = await app.request(
+  const browserError = await app.http.request(
     `/api/owner/agents/${agentId}/workspace/download?path=missing.txt&downloadId=${randomUUID()}&format=browser`,
     { headers: { cookie } },
   );

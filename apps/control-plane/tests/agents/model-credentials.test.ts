@@ -4,10 +4,10 @@ import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { createControlPlaneApp } from "../../src/http.js";
+import { createControlPlane } from "../../src/application.js";
 
 const password = "owner-password-used-only-by-this-test";
-const fixtures: Array<{ app: ReturnType<typeof createControlPlaneApp>; directory: string }> = [];
+const fixtures: Array<{ app: ReturnType<typeof createControlPlane>; directory: string }> = [];
 
 afterEach(() => {
   for (const { app, directory } of fixtures.splice(0)) {
@@ -22,13 +22,13 @@ function setup() {
   const passwordFile = join(directory, "owner-password");
   writeFileSync(passwordFile, `${password}\n`, { mode: 0o600 });
   const dataDir = join(directory, "control-plane-data");
-  const app = createControlPlaneApp({ dataDir, passwordFile });
+  const app = createControlPlane({ dataDir, passwordFile });
   fixtures.push({ app, directory });
   return { app, directory, dataDir, passwordFile };
 }
 
-async function login(app: ReturnType<typeof createControlPlaneApp>): Promise<string> {
-  const response = await app.request("/api/auth/login", {
+async function login(app: ReturnType<typeof createControlPlane>): Promise<string> {
+  const response = await app.http.request("/api/auth/login", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ password }),
@@ -42,14 +42,14 @@ it("stores one API key per supported provider without returning it and keeps onl
   const cookie = await login(fixture.app);
   const syntheticKey = `fixture-${crypto.randomUUID()}`;
 
-  const anonymousWrite = await fixture.app.request("/api/owner/model-credentials/openai", {
+  const anonymousWrite = await fixture.app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ apiKey: syntheticKey }),
   });
   expect(anonymousWrite.status).toBe(401);
 
-  const write = await fixture.app.request("/api/owner/model-credentials/openai", {
+  const write = await fixture.app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: syntheticKey }),
@@ -58,7 +58,7 @@ it("stores one API key per supported provider without returning it and keeps onl
   const writeBody = await write.text();
   expect(writeBody.includes(syntheticKey)).toBe(false);
 
-  const listing = await fixture.app.request("/api/owner/model-credentials", {
+  const listing = await fixture.app.http.request("/api/owner/model-credentials", {
     headers: { cookie },
   });
   const listingBody = await listing.text();
@@ -70,7 +70,7 @@ it("stores one API key per supported provider without returning it and keeps onl
   expect(statSync(fixture.dataDir).mode & 0o777).toBe(0o700);
   expect(statSync(join(fixture.dataDir, "control-plane.sqlite")).mode & 0o777).toBe(0o600);
 
-  const unsupportedProvider = await fixture.app.request(
+  const unsupportedProvider = await fixture.app.http.request(
     "/api/owner/model-credentials/unknown-service",
     {
       method: "PUT",
@@ -82,12 +82,12 @@ it("stores one API key per supported provider without returning it and keeps onl
   expect((await unsupportedProvider.text()).includes(syntheticKey)).toBe(false);
 
   fixture.app.close();
-  const restarted = createControlPlaneApp({
+  const restarted = createControlPlane({
     dataDir: fixture.dataDir,
     passwordFile: fixture.passwordFile,
   });
   fixtures.push({ app: restarted, directory: fixture.directory });
-  const afterRestart = await restarted.request("/api/owner/model-credentials", {
+  const afterRestart = await restarted.http.request("/api/owner/model-credentials", {
     headers: { cookie },
   });
   const restartedBody = await afterRestart.text();
@@ -143,7 +143,7 @@ it("answers Agent readiness from the credential row instead of writing Agent sta
   faultDb.close();
 
   const cookie = await login(fixture.app);
-  const configured = await fixture.app.request("/api/owner/model-credentials/openai", {
+  const configured = await fixture.app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-derived-readiness-key" }),
@@ -154,7 +154,7 @@ it("answers Agent readiness from the credential row instead of writing Agent sta
   expect(withKey.updatedAt).toBe(before.updatedAt);
 
   // Removing it moves the same derived answer back, again without touching the Agent row.
-  const removed = await fixture.app.request("/api/owner/model-credentials/openai", {
+  const removed = await fixture.app.http.request("/api/owner/model-credentials/openai", {
     method: "DELETE",
     headers: { cookie },
   });
@@ -166,14 +166,14 @@ it("answers Agent readiness from the credential row instead of writing Agent sta
   const repairDb = new Database(databasePath);
   repairDb.exec("DROP TRIGGER reject_agent_update");
   repairDb.close();
-  const restarted = createControlPlaneApp({
+  const restarted = createControlPlane({
     dataDir: fixture.dataDir,
     passwordFile: fixture.passwordFile,
   });
   fixtures.push({ app: restarted, directory: fixture.directory });
   const restartCookie = await login(restarted);
   expect(restarted.agents.get(agentId)?.status).toBe("waiting_credentials");
-  const retried = await restarted.request("/api/owner/model-credentials/openai", {
+  const retried = await restarted.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie: restartCookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-transaction-key" }),

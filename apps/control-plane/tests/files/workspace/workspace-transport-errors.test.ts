@@ -23,7 +23,7 @@ it.each([
       .spyOn(context.app.nodes, "workspaceOperation")
       .mockRejectedValueOnce(new NodeRequestError(reason, diagnostic));
     try {
-      const response = await context.app.request(
+      const response = await context.app.http.request(
         `/api/owner/agents/${agentId}/workspace/stat?path=report.txt`,
         { headers: { cookie: context.cookie } },
       );

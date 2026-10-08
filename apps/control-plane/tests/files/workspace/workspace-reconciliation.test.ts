@@ -56,7 +56,7 @@ async function fixture(options: { nodeOperationTimeoutMs?: number } = {}) {
   resourceReleases.push(() => {
     db.close();
   });
-  const login = await app.request("/api/auth/login", {
+  const login = await app.http.request("/api/auth/login", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ password }),
@@ -64,7 +64,7 @@ async function fixture(options: { nodeOperationTimeoutMs?: number } = {}) {
   expect(login.status, await login.clone().text()).toBe(204);
   const cookie = login.headers.get("set-cookie")!.split(";", 1)[0]!,
     api = async (path: string, body?: unknown) => {
-      const response = await app.request(path, {
+      const response = await app.http.request(path, {
         method: body === undefined ? "GET" : "POST",
         headers: { cookie, "content-type": "application/json" },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -170,7 +170,7 @@ async function fixture(options: { nodeOperationTimeoutMs?: number } = {}) {
     }),
     agentId = z.object({ agent: z.object({ id: z.string() }) }).parse(created).agent.id,
     direct = await api(`/api/owner/agents/${agentId}/direct-channel`, {});
-  await app.request("/api/owner/model-credentials/openai", {
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-no-provider-request" }),
