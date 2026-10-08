@@ -1,3 +1,4 @@
+/* Page shell and headings */
 .nodes-page-shell {
   align-items: start;
   padding-block: 32px;
@@ -63,6 +64,7 @@
   line-height: 1.6;
 }
 
+/* Paired nodes and presence */
 .node-list {
   margin: 0;
   padding: 0;
@@ -117,6 +119,7 @@
   font-size: 12px;
 }
 
+/* Pairing token and startup command */
 .pairing-section {
   margin-top: 30px;
   padding-top: 22px;
@@ -182,6 +185,7 @@
   margin-top: 20px;
 }
 
+/* Mobile layout */
 @media (max-width: 520px) {
   .nodes-card {
     padding: 28px 22px;

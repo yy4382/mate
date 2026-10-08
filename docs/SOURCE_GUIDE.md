@@ -82,9 +82,10 @@ SQLite 的 session/run/交付/动作记录和 node 本地收据是持久事实�
 下面的功能目录都位于 `apps/web/src/features/`。
 
 - `conversations/`：`chat-page.tsx` 保留唯一频道选择/ref、认证、提交/draft/busy、回复目标、移动视图与 DOM 通知滚动。`feed/use-conversation-feed.ts` 拥有 snapshot/SSE、频道目录、历史窗口与 older/latest/通知 context 数据流，接收频道选择值、具名回调，以及 thread 提供的 `receiveStreamReply`、`installThread` 两个动作。`feed/use-conversation-thread.ts`、`use-conversation-attachments.ts`、`use-owner-push.ts` 分别提供讨论串、附件与点击通知流程；`owner-request.ts` 处理对话请求及带 HTTP 状态的错误。`ui/` 放频道导航、时间线、讨论串、受控 composer、频道弹窗与唯一消息任务表单；各位置/key 不变。`styles/` 的 shell→conversation→dialog→mobile→message-details 由页面固定顺序导入，保留共享选择器和原移动级联；无转发桶或镜像 selection。
-- `agents/`：`agents-page.tsx` 保留唯一创建 draft、submitting、页面级私信/邀请互斥和错误，以及 Agent 行展示。`agent-requests.ts` 的 `readAgentDirectory` 并行读取六类目录；`data/use-agent-directory.ts` 拥有目录状态、轮询与 refresh，并把 nodes/providers 交给页面回调整理表单选择。`data/use-model-credentials.ts` 拥有凭据表单状态、提交与撤销动作。`ui/agent-creation-form.tsx` 与 `model-credentials-form.tsx` 是受控完整表单；已有 Editor、Activity 和 stop-status 按展示归入 `ui/`，不增加行包装或局部请求状态。
-- `workspace/`：工作区浏览、下载操作及状态查询。
-- `nodes/`、`tasks/`、`reminders/`：相应管理页面。
+- `agents/`：从 `agents-page.tsx` 阅读创建资料、私信、邀请与 Agent 列表。`agent-requests.ts` 的 `readAgentDirectory` 并行读取六类目录；`data/use-agent-directory.ts` 管目录状态、轮询与 refresh，把 nodes/providers 交给页面回调整理表单选择。`data/use-model-credentials.ts` 管凭据表单状态、提交与撤销。`ui/` 包含受控创建/凭据表单、设置编辑器、动态展示及状态文案；`agent-status.ts` 和 `agent-stop-status.ts` 分别说明 Agent 当前状态与停止结果。
+- `workspace/`：`workspace-browser.tsx` 展示目录与文件预览，`use-workspace-download.ts` 提供下载动作，`download-status.ts` 读取下载结果并提供文案。HTTP 请求和显示投影分别在 `workspace-requests.ts`、`workspace-responses.ts`；样式按选择、路径、目录、预览分组。
+- `nodes/`：`nodes-page.tsx` 展示配对节点和一次性令牌；`node-responses.ts` 定义页面读取的资料，样式按节点列表、配对结果和移动布局分组。
+- `tasks/`、`reminders/`：各自的 page 从资料读取走到列表展示，展示函数解释负责人和提醒状态文案；对应的 responses 文件定义显示投影。
 
 页面和相关样式放在同一功能目录。`apps/web/src/http-json.ts` 共享 JSON 提交、容错响应读取和错误文案提取；领域请求分别表达资料读取的取消信号、对话 HTTP 错误状态、工作区错误码和连接时间。跨请求的取消、过期响应和重新连接由各功能的状态管理。
 
