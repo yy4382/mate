@@ -1,156 +1,104 @@
 # 源码导航与类型约定
 
-第一次接触 Mate，可以先看下面的入口，再沿实际请求走向阅读。产品概念以根目录 `CONTEXT.md` 为准，运行和检查命令见 [DEVELOPMENT.md](DEVELOPMENT.md)。
+先从应用入口选择一条具体操作，再沿领域接口读到实现与相邻测试。产品术语见根目录 [CONTEXT.md](../CONTEXT.md)，启动和检查命令见 [DEVELOPMENT.md](DEVELOPMENT.md)，部署步骤见 [OPERATIONS.md](OPERATIONS.md)。
 
-## 四个 package
+## 从四个 package 的入口开始
 
-| 位置 | 负责什么 | 建议从哪里开始 |
-| --- | --- | --- |
-| `apps/web` | 所有者使用的中文网页 | `src/main.tsx`，然后进入相应功能目录 |
-| `apps/control-plane` | 登录、持久状态、会话和工具循环、调度与请求路由 | `src/main.ts` 启动，`src/application.ts` 组装服务与领域应用，`src/http.ts` 定义登录、推送和网页路由 |
-| `apps/node` | 机器连接、Agent 工作区、文件与命令执行、本地收据 | `src/main.ts`，然后看 `src/connection/node-client.ts` |
-| `packages/protocol` | 跨 package 的运行时数据契约及其推导类型 | `src/owner.ts`、`src/workspace.ts` 和节点消息、操作契约 |
+| 位置                 | 职责                                     | 阅读入口                                                                                                                                |
+| -------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/web`           | 所有者使用的中文网页                     | `src/main.tsx` 选择页面，再进入 `src/features/` 的相应功能。                                                                            |
+| `apps/control-plane` | 所有者登录、持久状态、模型循环与请求路由 | `src/main.ts` 启动服务；`src/application.ts` 的 `createControlPlane` 组装领域能力与 Hono 应用；`src/http.ts` 定义登录、推送和网页路由。 |
+| `apps/node`          | 节点连接、工作区、文件与普通命令执行     | `src/main.ts` 启动节点，`src/connection/node-client.ts` 组织连接；发布包管理从 `src/management/cli.ts` 进入。                           |
+| `packages/protocol`  | 跨包数据契约及其推导类型                 | `src/index.ts` 列出节点通信公共导出，`src/owner.ts` 与 `src/workspace.ts` 提供浏览器安全契约。                                          |
 
-控制面拥有模型循环，节点不运行模型。一次 run 结束也不表示消息关联的任务已经完成。
+控制面运行 Pi 模型循环，节点负责宿主操作。`createControlPlane` 返回 `http`、领域能力和 `close`；各领域 `http.ts` 构建自己的链式 Hono 应用，由 `application.ts` 用 `.route()` 组合。
 
-## 控制面按领域找代码
+## 沿具体操作阅读
 
-- `conversations/`：从 `http.ts` 的所有者动作进入实际领域能力。`service.ts` 的 `createOwnerChat` 用共享数据库和时钟装配这些能力，只集中 snapshot 读事务和 Agent 工具目录组合。`channels/membership.ts` 实现频道创建、更新、加入和邀请；`channels/directory.ts` 提供对话事实、成员读取与唯一私信，调用方通过 `chat.channels` 和 `chat.conversations` 直达。`messages/writer.ts` 保存消息及收据更正，`timeline.ts` 提供消息分页、讨论串与读取后的 presented 标记，`attention.ts` 管注意力、草稿和讨论位置检查；`deliveries.ts` 管成员快照、pending/handled 和 run 完成。`tasks/service.ts` 管任务创建、责任、活动与草稿，`reminders.ts` 管提醒和专用单接收者投递。消息、任务和讨论位置的长输入使用具名参数，草稿选择的状态表达集中在 `tools/contracts.ts`。请求 Zod 契约在 `contracts.ts`，持久查询投影在 `rows.ts`，SQL 表定义在各 `schema.ts`；`events.ts` 保存事件并调用推送，`tools/actions.ts` 复用持久工具结果。
-- `agents/`：Agent 身份、资料、创建与目录；`http.ts` 注册 Agent 和模型供应商入口；供应商模型的校验仍在控制面，不能带进浏览器。
-- `runtime/`：从 `runs/coordinator.ts` 的 `start`、`drain`、`advance` 阅读运行装配；`advance` 为 `AgentLoop.run` 提供 `isCurrent`、`appendSessionEntry`、`executeTool` 三项具名能力。`loop.ts` 持有短暂 Pi 对象，用 `streamNormalResponse`、`transformModelContext`、`persistAgentEvent` 表达响应请求、上下文转换和会话事件写入。协调器拥有唯一 active map、调度、消息提示和取消；`runs/records.ts` 保存候选准入、上下文边界、完成、失败、退避与重启恢复，`runs/control.ts` 组织人工暂停、命令停止及收据、恢复和环境核验。`session/service.ts` 用具名 run/node/Agent 身份写入完整历史，共用 `SessionMessageRow` 和 `projectContextMessage` 表达读取投影；`session/compaction.ts` 的摘要输入明确区分已有摘要和分割轮次前缀。`tools/registry.ts` 组合工具目录，集中发现、调用和当前 run 检查。进程账本与更正在 `processes/operations.ts`，恢复输入在 `recovery/context.ts`，供应商响应的结束和用量证据在 `provider-response.ts`；SQL 表定义放在相应能力的 schema。
-- `workspaces/`：从 `http.ts` 的具名请求沿 `WorkspaceService.reads`、`downloads` 找到 owner 浏览、分块和下载入口；`service.ts` 组装读取、变更、下载能力，组合 Agent 工具并关闭资源。`reads/service.ts` 拥有 owner/Agent/附件发布读取，`reads/file-content.ts` 解释字节类型与 UTF-8 范围，`reads/image-result.ts` 表达图片工具结果。`actions/service.ts` 连续表达文件变更步骤，`actions/ledger.ts` 保存意图、结果和迟到收据；`downloads/service.ts` 拥有有界流与下载状态。共享节点结果适配和访问记录在 `access/service.ts`，读取结果校验在 `results.ts`，数据契约与工具请求分别在 `contracts.ts` 和 `tool-contracts.ts`。
-- `attachments/`：从 `service.ts` 找到 owner 上传、列表、文本读取、下载和工具组合；Agent 发布直接由 `publication.ts` 表达完整用例，只接收 `WorkspaceReads.readForAgentPublish`。`access.ts` 表达对话读取、成员发布和 owner 权限，`rows.ts` 负责附件行投影与上传中记录，`schema.ts` 定义附件元数据表；文件流、名称和存储路径在 `storage.ts`，发布结果解析在 `results.ts`。
-- `nodes/`：`directory.ts` 拥有 socket 生命周期、当前连接、心跳、在线列表与消息分派，并组合 `identity` 和 `operations` 能力。配对令牌、签名与节点账号直接从 `identity.ts` 进入，账号记录参加调用方事务；Agent 工作区准备、文件操作和进程操作直接从 `operations.ts` 进入，准备请求用具名输入区分节点、请求、Agent 和核验模式。`pending-requests.ts` 管理等待中的 Promise 与计时器，`reconciliation.ts` 表达进程、文件收据的分页核对；`transport.ts` 定义 socket/session 及发送、拒绝消息。
-- `auth/`：所有者登录。`providers/credentials.ts` 保存模型凭据，`catalog.ts` 提供供应商与模型目录；`active-check.ts` 的 `streamCheckResponse` 和 `observeCheckEvent` 分别表达主动协议检查的请求与观察。`notifications/push.ts` 拥有网页推送 outbox，`queue` 用具名事件键、标题和目标入队，实际 Web Push 发送在 `sendNotification`。
-- `storage/`：数据库初始化与各领域表的装配。领域里的 `schema.ts`、`*-schema.ts` 是 SQL 表定义，与 Zod 的 `contracts.ts` 分工不同。
+下面的控制面路径相对于 `apps/control-plane/src/`，节点路径相对于 `apps/node/src/`。
 
-没有为了缩短文件而引入通用仓储层，也没有把事务拆成通过庞大上下文对象相互调用的小函数。跨领域操作仍应能看清在哪个事务里提交。
+| 想理解的操作   | 阅读路线                                                                                                                                                                                                                                       |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 所有者发送消息 | `conversations/http.ts` → `chat.messages.createMessage` → `conversations/messages/writer.ts`；模型工作继续沿 `runtime/runs/coordinator.ts` → `runtime/loop.ts` → `runtime/session/service.ts` 阅读。                                           |
+| 模型调用工具   | `runtime/tools/registry.ts` 组合目录与执行入口；对话、任务和提醒工具在 `conversations/`，文件工具在 `workspaces/`，普通命令工具在 `runtime/processes/operations.ts`。                                                                          |
+| 读取工作区文件 | `workspaces/http.ts` → `workspace.reads` → `workspaces/reads/service.ts` → `workspaces/access/service.ts` → `nodes.operations`；节点侧从 `connection/workspace-requests.ts` 进入 `files/workspace-executor.ts` 与 `files/file-operation.mts`。 |
+| 管理节点发布包 | 节点 `management/cli.ts` 解读参数，`management/service/commands.ts` 执行服务命令；安装、更新和卸载分别进入 `install-entry.ts`、`update.ts` 和 `uninstall.ts`。                                                                                 |
 
-## 从一次操作追到证据
+## 控制面按领域找实现
 
-- Owner 发消息：`conversations/http.ts` → `chat.messages.createMessage`（原子保存消息/投递）→ `runs.wake/drain`（准入同一 Agent 的唯一 current run）→ `AgentLoop.run` → `AgentSession` 的原 session 历史与 Pi 请求。
-- 模型用工具：`runtime/tools/registry.ts` 在工具入口事务内复验 current run；任务/提醒等同步效果在这个事务里完成。文件变更/命令工具先保存 node 意图；文件读取无需变更意图。两者都等待入口事务提交，再复验 current run 并调用 node。文件结果进 `WorkspaceActionLedger`，命令结果进 `AgentProcessOperationBroker`；`recovery/context.ts` 把后来的证据送回原 session。
-- 文件读取：owner 路由使用 `workspace.reads`，Agent 工具由 `WorkspaceService.agentTools()` 组合；两者进入 `WorkspaceReads`，经 `WorkspaceAccess` 和 `nodes.operations` 请求节点，再由 `LinuxWorkspaceExecutor`、同账号 helper 与 `reads/file-content.ts`/`reads/image-result.ts` 返回字节或模型内容。
-- node 恢复：`connection/node-client.ts` 重连 → `NodeDirectory` 验证连接身份 → 先 process、再 workspace 分页核对 → 标为 ready → 原 Agent 队列继续。未确认的副作用保持 unknown，不因重连重放。
+以下目录都位于 `apps/control-plane/src/`。
 
-| 身份或状态 | 生命周期与作用 |
-| --- | --- |
-| sessionId | Agent 的持久逻辑上下文，跨 run/频道/线程继续 |
-| runId | 一次工作轮次；current run 资格决定工具请求能否生效 |
-| deliveryId | 某消息给某 Agent 的持久注意力投递；handled 不等于任务完成 |
-| actionId | 原 session 中的模型工具调用身份，复用已保存的工具结果 |
-| operationId | node 副作用的稳定身份，跨临时请求和重启查证据；文件由 actionId 确定性生成 |
-| requestId | node 请求/回复关联；一般 RPC 等待是内存状态，Agent 创建的 provision_request_id 则持久保存并在失败重试时复用；与副作用 operationId 分工不同 |
-| requestHash / nodeRequestHash | 分别校验工具输入、node 操作参数是否与原意图一致；不能当作 operationId |
-| receipt revision / file version | 前者是同一收据的新旧证据；后者是具体文件版本，控制读写一致性 |
-| online / ready / unknown | ready 是连接完成启动对账的内部状态；对外 online 同时要求连接身份匹配、ready 和心跳未过期；unknown 表示执行效果尚无确定证据 |
+| 领域                 | 实现与相关定义                                                                                                                                                                                                                                                                                                                                                                                  |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 对话、频道与成员     | `conversations/service.ts` 的 `createOwnerChat` 组装领域能力，并组合 snapshot 与 Agent 工具。`channels/directory.ts` 提供对话目录和私信，`channels/membership.ts` 提供频道管理与成员动作；调用方通过 `chat.conversations`、`chat.channels` 进入。                                                                                                                                               |
+| 消息与注意力         | `conversations/messages/writer.ts` 保存消息，`timeline.ts` 读取消息页与讨论串，`attention.ts` 管注意力、草稿和讨论位置，`deliveries.ts` 管消息投递；`events.ts` 保存事件并连接推送。                                                                                                                                                                                                            |
+| 任务与提醒           | `conversations/tasks/service.ts` 管任务、责任与活动，`tasks/reminders.ts` 管提醒。工具输入在 `conversations/tools/contracts.ts`，工具结果持久化在 `tools/actions.ts`。                                                                                                                                                                                                                          |
+| Agent                | `agents/http.ts` 构建 Agent 与模型供应商路由；`directory.ts` 管身份、资料、创建阶段与目录，`contracts.ts` 定义请求。                                                                                                                                                                                                                                                                            |
+| 模型运行与会话       | `runtime/runs/coordinator.ts` 组织运行，`loop.ts` 连接 Pi 响应、上下文转换和会话事件。`runs/records.ts` 保存运行记录，`runs/control.ts` 提供人工运行控制；`session/service.ts` 保存完整会话，`session/compaction.ts` 组织摘要输入，`session/image-context.ts` 投影图片内容。                                                                                                                    |
+| 工具与操作记录       | `runtime/tools/registry.ts` 组合并调用工具，`entry.ts` 与 `identity.ts` 定义工具入口和身份；`runtime/processes/operations.ts` 连接普通命令与操作记录，`runtime/recovery/context.ts` 组装运行接续输入。                                                                                                                                                                                          |
+| 工作区               | `workspaces/service.ts` 组装 `reads`、`actions`、`downloads` 和 Agent 工具。`reads/service.ts` 读取文件，`reads/file-content.ts` 解释文本与字节，`reads/image-result.ts` 表达图片结果；`actions/service.ts` 执行文件变更，`actions/ledger.ts` 保存操作记录；`downloads/service.ts` 管下载。节点适配在 `access/service.ts`，结果与请求契约在 `results.ts`、`contracts.ts`、`tool-contracts.ts`。 |
+| 附件                 | `attachments/service.ts` 提供上传、列表、读取、下载和工具组合；`publication.ts` 表达 Agent 文件发布；`access.ts` 处理对话权限，`rows.ts` 投影数据库行，`storage.ts` 管文件流与存储路径，`results.ts` 解析发布结果。                                                                                                                                                                             |
+| 节点                 | `nodes/directory.ts` 管连接并组合 `identity` 与 `operations`。`identity.ts` 管配对、签名和账号记录，`operations.ts` 提供工作区准备、文件与进程请求；`pending-requests.ts` 关联等待中的请求，`reconciliation.ts` 读取操作收据，`transport.ts` 定义 socket/session 与消息发送。                                                                                                                   |
+| 登录、供应商与通知   | `auth/service.ts` 保存所有者凭据和会话，`session-cookie.ts` 表达 cookie，`login-gate.ts` 组织密码检查。`providers/catalog.ts` 提供模型目录，`credentials.ts` 保存模型凭据，`active-check.ts` 与 `active-check-cli.ts` 提供主动协议检查。`notifications/push.ts` 管网页推送，`mentions-owner.ts` 识别所有者提及。                                                                                |
+| 提示词、历史与数据库 | `prompts/index.ts` 列出提示词构建入口，`system.ts`、`runtime.ts`、`summary.ts` 分别构造系统、运行消息和摘要提示，`inspection.ts` 与 `inspect.ts` 提供本地诊断；`agent-history.ts` 提供已确认历史检索。`storage/initialize.ts` 打开控制面数据库，`storage/schema.ts` 装配领域 SQL 表定义。                                                                                                       |
 
-SQLite 的 session/run/交付/动作记录和 node 本地收据是持久事实；pending 请求与短期身份 map 只加速关联，丢失后回查持久记录。固定测试启动器的暂停和合成 provider 只用于验证这些边界，不是生产调度依赖。
+领域中的 `schema.ts`、`*-schema.ts` 是 SQL 表定义，`contracts.ts` 是 Zod 数据契约，`rows.ts` 是数据库查询投影。附件表定义位于 `attachments/schema.ts`。
 
-## 节点按执行职责找代码
+## 网页按用户功能找实现
 
-- `connection/`：从 `node-client.ts` 进入身份验证、心跳与重连；`node-identity.ts` 读取或创建节点身份。`process-requests.ts`、`workspace-requests.ts` 分别处理当前连接的操作请求与收据对账。
-- `provisioning/`：`agent-workspace.ts` 准备、核验同一运行账号下的 Agent 默认工作区与 MEMORY.md；`workspace-marker.ts` 管理工作区身份标记，`errors.ts` 定义创建失败。
-- `files/`：`workspace-executor.ts` 选择读取工作区、执行操作并保存收据；`same-account-files.ts` 启动同账号 helper、收集输出，`workspace-result.ts` 将结果写入协议响应。`file-operation.mts` 按操作种类分派，具名函数表达内容读取、保存与 JSON 输出；`fixed-workspace-paths.ts` 拥有目录描述符与路径检查，缺失路径和父目录创建由具名选项表达。`mutations/` 提供原子重命名与内容核验。`file-failures.ts` 归一具名文件错误和系统 errno；helper 非零退出在 stderr 写有界错误 JSON，backend 解析诊断，错误码随结果和收据传递。
-- `processes/`：`operation-runtime.ts` 装配数据库与命令执行器；`operation-ledger.ts` 保存请求和持久收据。`linux-process-executor.ts` 按普通命令、查询和停止操作分派；`ordinary-command.ts` 拥有子进程、输出与跟踪记录，`linux-processes.ts` 提供进程信号和 Linux 状态读取。
-- `management/`：从 `cli.ts` 阅读命令选择、参数解读与终端输出。`bundle.ts` 定义完整发布包的 Zod 契约与校验；`acquire-bundle.ts` 获取临时完整包，`install-entry.ts` 管账号目录、管理锁和唯一 CLI 入口，`configuration.ts` 读取私有节点配置。`service/commands.ts` 按安装、启停、状态和日志组织完整命令；`service/unit.ts` 定义单元文本、实际引用核对与单元文件发布；`service/systemd.ts` 是宿主用户服务工具的适配，`systemd-property.ts` 是读取私有 D-Bus 属性的子进程。`update.ts` 组织停机整包切换，`repair-bundle.ts` 处理清单匹配的同版修复，`uninstall.ts` 清理程序并保留配置与数据。`deploy/node/` 提供离线包构建、薄 bootstrap 和实际包验收入口。见 [完整 node 包说明](node/NODE_BUNDLE.md)、[用户服务说明](node/NODE_SERVICE.md) 与 [停机更新](node/NODE_UPDATE.md)。
+功能目录位于 `apps/web/src/features/`。
 
-节点卸载由 `management/uninstall.ts` 根据实际单元、入口与包库存继续清理，使用同一管理锁并保留配置与数据；命令恢复和真实服务验收入口见 [卸载说明](node/NODE_UNINSTALL.md)。
+| 功能             | 页面、数据与展示                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 对话             | `conversations/chat-page.tsx` 组合频道选择、提交和移动视图。`feed/use-conversation-feed.ts` 提供 snapshot、事件流与历史窗口；`use-conversation-thread.ts`、`use-conversation-attachments.ts`、`use-owner-push.ts` 分别提供讨论串、附件和通知动作。`feed/use-message-tasks.ts` 提供消息任务状态与动作，`ui/message-tasks.tsx` 显式展示任务卡与 `TaskCreationForm`。其他 `ui/` 文件对应侧栏、时间线、讨论串、编辑器与频道弹窗。 |
+| Agent 与模型凭据 | `agents/agents-page.tsx` 组合创建、目录与工作区。`agent-requests.ts` 的 `readAgentDirectory` 读取目录；`data/use-agent-directory.ts` 与 `use-model-credentials.ts` 提供数据和动作。`ui/` 放创建、编辑、凭据表单和活动组件；`agent-status.ts`、`agent-stop-status.ts` 解释展示文案。                                                                                                                                           |
+| 节点             | `nodes/nodes-page.tsx` 提供节点列表与配对令牌，`node-responses.ts` 定义页面响应投影。                                                                                                                                                                                                                                                                                                                                         |
+| 任务与提醒       | `tasks/tasks-page.tsx` 与 `reminders/reminders-page.tsx` 展示相应管理界面；响应投影分别在 `task-responses.ts`、`reminder-responses.ts`。                                                                                                                                                                                                                                                                                      |
+| 工作区           | `workspace/workspace-browser.tsx` 展示目录与文件预览，`use-workspace-download.ts` 提供下载状态与动作，`download-status.ts` 解释状态文案，`workspace-requests.ts` 与 `workspace-responses.ts` 表达请求和响应。                                                                                                                                                                                                                 |
 
-对应测试也按这些目录组织。外部使用节点时，依赖 package 的明确导出；内部移动文件不要求调用方知道新的磁盘路径。
+`apps/web/src/http-json.ts` 共享 JSON 请求、响应读取和错误文案提取；资料读取、对话和工作区分别使用 `readJSON`、`ownerJSON`、`workspaceJSON`。各功能的 `*-responses.ts` 从 protocol 推导页面投影。
 
-所有者主动运行的供应商协议检查位于控制面 `providers/active-check.ts`，`active-check-cli.ts` 负责显式模型选择、私密凭据文件和终端取消。它使用现有 Pi 库，独立于 Mate 的持久 Agent/session 和 node；合成 HTTP/SSE 验证在 `tests/providers/check-*.test.ts`。入口与结果含义见 [DEVELOPMENT.md](DEVELOPMENT.md#所有者主动检查真实模型供应商)。
+页面样式与功能相邻。`src/style.css` 定义全局基础；对话页按 shell → conversation → dialog → mobile → message-details 的顺序导入 `conversations/styles/`，其余功能使用相邻 CSS 文件。PWA 的注册与推送授权入口在 `conversations/feed/use-owner-push.ts`，推送与点击处理在 `public/sw.js`，应用信息与图标在 `public/manifest.webmanifest` 和 `public/icon*`；`assets.mjs` 通过 `@mate/web/assets` 导出网页构建目录。
 
-## 真实进程场景辅助代码
+## 节点按执行职责找实现
 
-`apps/control-plane/tests/support/environment/scenario-environment.ts` 接收结构化服务和 Agent 配置，拥有登录、配对、工作区准备、保留身份的重启、资源登记与尽力清理。`scenario-services.mjs` 是使用本次构建结果的固定测试启动文件；`run-services.ts` 提供真实输出等待、输出游标、取消与有界停进程。模型输出沿用 `agent-loop.ts` 的本地 HTTP/SSE handler 和 `respond`。`scripted-provider.ts` 按 Agent 原 session 关联命名普通函数步骤，负责响应释放、取消与截止时间；`scripted-tool-results.ts` 通过真实调用 ID 读取工具结果并复用领域 schemas。`tests/providers/scripted-agent-routing.test.ts` 包含同 model 双 Agent 交错工具、真实摘要与失败路径探针。`tests/scenarios/environment/startup.test.ts` 从真实 Owner API、模型工具结果和文件字节验证生命周期；新增场景入口与使用边界见 [DEVELOPMENT.md](DEVELOPMENT.md)。
+以下目录都位于 `apps/node/src/`。
 
-`scenario-driver.ts` 集中读取 Owner 消息、任务、活动与附件，提供带期限和最后事实的条件等待，以及消息/run/当前游标的关联。`scenario-facts.ts` 只读补充 Owner API 没有暴露的 session、run seed 和实际已提交投递关系；业务结果仍由真实工具产生。`tests/scenarios/driver/seed-recovery.test.ts` 先完成旧 run，再用新 Owner 普通消息驱动任务、命令生成文件、附件发布和显式线程回复，核对 Owner 下载与实际工作区字节；同时覆盖旧完成记录、取消、读取停滞、任务/run 分离、提醒和普通消息的实际输入，以及 seed 输入未提交前的中断/恢复。
+| 职责             | 实现入口                                                                                                                                                                                                                                                                                                                                                                                         |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 连接与请求       | `connection/node-client.ts` 组织认证、心跳和重连，`node-identity.ts` 管节点身份；`process-requests.ts` 与 `workspace-requests.ts` 分派进程、文件及收据请求。                                                                                                                                                                                                                                     |
+| Agent 工作区     | `provisioning/agent-workspace.ts` 准备默认工作区和 `MEMORY.md`，`workspace-marker.ts` 管工作区身份标记，`errors.ts` 定义创建错误。                                                                                                                                                                                                                                                               |
+| 文件操作         | `files/workspace-executor.ts` 选择工作区、执行操作并保存收据；`same-account-files.ts` 启动辅助进程，`workspace-result.ts` 组织响应。`file-operation.mts` 分派实际文件操作，`fixed-workspace-paths.ts` 管目录描述符和路径，`mutations/` 提供内容变更与原子重命名，`file-failures.ts` 表达错误。原生程序在 `files/rename-noreplace.c`，构建入口在 `apps/node/scripts/build-rename-noreplace.mjs`。 |
+| 普通命令         | `processes/operation-runtime.ts` 装配数据库与执行器，`operation-ledger.ts` 保存操作收据，`operation-database.ts` 打开操作数据库；`linux-process-executor.ts` 分派命令、查询和停止，`ordinary-command.ts` 管子进程与输出，`linux-processes.ts` 适配 Linux 进程信息。                                                                                                                              |
+| CLI 与发布包管理 | `management/cli.ts` 解读命令，`service/commands.ts` 组织安装、启停、状态和日志，`service/unit.ts` 管单元文本与文件，`service/systemd.ts`、`systemd-property.ts` 适配用户服务工具。`bundle.ts` 定义发布包契约，`acquire-bundle.ts` 获取完整包，`install-entry.ts` 管管理目录与 CLI 入口，`configuration.ts` 读取配置；`update.ts`、`repair-bundle.ts`、`uninstall.ts` 对应更新、修复和卸载。      |
 
-`scenario-evidence.ts` 用同一环境生命周期包装场景，保留原始失败、清理前的合成证据及释放结果；`scenario-cleanup.mjs` 提供驱动 SIGKILL 后的独立、归属核验回收入口。`tests/scenarios/evidence/assertions-cleanup.test.ts` 是短真实文件成果、失败／取消／再运行的使用样例。文件目录可直接作 CI artifact，操作方式见开发说明的“场景失败证据与独立回收”。
+跨包使用节点能力时，从 `apps/node/package.json` 的明确导出进入。发布包管理说明集中在 `docs/node/`，从[完整包说明](node/NODE_BUNDLE.md)进入；日常操作见 [OPERATIONS.md](OPERATIONS.md)。
 
-`tests/scenarios/report-workflow.ts` 是完整正常工作样例：甲从 Owner 普通请求创建／认领任务、真实生成草稿，经 peer DM 附件让乙独立复核，乙真实反馈后甲继续原 session 的第二轮并交付最终报告。它同时保留模型脚本与任务、消息路由、文件／附件字节、session／run 断言，供现有环境的其它拓扑复用；`tests/scenarios/report-workflow.test.ts` 只装配同一 `runScenario` 入口。开发说明的“新增正常工作场景”展示短单 Agent 写法和完整样例入口。
+## 跨包契约与类型来源
 
-`tests/files/command-crash-recovery.test.ts` 补充命令 start 后执行前／效果后收据前的真实 node SIGKILL 与恢复后的主动效果检查。`scenario-command-boundary.mjs` 只在固定测试启动文件注入既有真实 ledger/executor，暂停可释放、取消并有期限；`scenario-command-facts.ts` 在既有只读事实投影上解析命令身份、收据和实际模型可见的更正。收据已持久化后失效／对账继续复用 `tests/tools/recovery/invalidation.test.ts` 的命令用例；覆盖映射与运行入口见开发说明的“真实命令的 node 崩溃与收据边界”。
+| 公共入口                   | 源码与用途                                                                                                                                               |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@mate/protocol`           | `packages/protocol/src/index.ts` 明确导出消息、操作与错误；`messages.ts` 组合工作区身份、结果、收据和 `NodeRequestSchema` / `NodeControlMessageSchema`。 |
+| `@mate/protocol/owner`     | `owner.ts` 定义所有者 HTTP 与事件流资料，例如 `ownerMessageSchema` / `OwnerMessage`、`agentSummarySchema` / `AgentSummary`。                             |
+| `@mate/protocol/workspace` | `workspace.ts` 定义文件版本、目录页、文件块和下载状态。                                                                                                  |
+| `@mate/protocol/node`      | `node.ts` 使用 Node 加密库计算操作请求摘要。                                                                                                             |
 
-`scenario-network.ts` 只控制环境主 node 的原始 TCP 链路，提供立即断开、双向静默丢帧、明确恢复和带游标／期限的帧观察；它不回复心跳。`scenario-network-facts.ts` 集中读取 Owner API 没有暴露的提醒投递与待处理队列。`tests/scenarios/node-network-recovery.ts` 保留可复用的普通请求断网／接续脚本与断言；`tests/nodes/node-network.test.ts` 还覆盖实际摘要、离线队列、人工暂停、独立在线节点和观察取消。网络事件沿现有失败证据与环境清理入口保存。
+工作区操作在 `workspace-operations.ts` 使用 `workspaceOperationSchema` / `WorkspaceOperation`，进程操作在 `process-operations.ts` 使用 `agentProcessOperationSchema` / `AgentProcessOperation`。网页从 `owner` 和 `workspace` 两个浏览器安全入口导入契约，只需要静态形状时使用 `import type`。
 
-`tests/scenarios/recovery/` 按已提交历史、压缩和命令暂停分组，覆盖既有 CP 提交、任务收据、压缩、部分 SSE 与 SIGTERM 恢复，使用同一场景 ID/证据机制。`tests/scenarios/cp-restart.ts` 保留选定提交后重启场景的模型和成果断言供容器复用；`scenario-recovery-facts.ts` 集中只读补充原 session/run、完整提交与收据事实，Owner API 和实际模型请求仍为主要证据。固定测试启动器仅注入既有提交钩子及 Pi 参数 delta 观测；具体边界与入口见开发说明的“控制面提交与重启恢复场景”。
+Zod 契约提供运行时和静态类型来源：`z.infer` 或 `z.output` 表示解析后的值，`z.input` 表示含默认值或转换前的输入。模块边界和数据库查询保留需要的类型约束；局部值、普通实现函数和链式 Hono 路由使用推断。相关 schemas 通过组合复用，接口从已有值、函数或推导类型表达。
 
-## 网页按用户功能找代码
+## 测试、构建与开发脚本
 
-下面的功能目录都位于 `apps/web/src/features/`。
+各包测试目录沿领域与功能组织，Vitest 配置发现 `*.test.ts`，网页也发现 `*.test.tsx`；protocol 使用 `tests/contracts.test.mjs` 与 `contracts.types.ts`。控制面的 `tests/scenarios/` 放完整场景，`tests/container/` 放交付容器场景，节点与控制面的 `tests/linux/` 放独立进程脚本。运行方式见 [DEVELOPMENT.md](DEVELOPMENT.md)。
 
-- `conversations/`：从 `chat-page.tsx` 看频道选择、认证、消息提交、回复目标和移动视图的页面组合。`feed/use-conversation-feed.ts` 维护频道目录、事件流与历史窗口，使用具名回调和讨论串的 `receiveStreamReply`、`installThread` 动作；同目录的 thread、attachments、owner-push hooks 分别管理讨论串、附件与通知。`feed/use-message-tasks.ts` 提供消息任务、创建位置和提交/取消动作；`ui/message-tasks.tsx` 展示任务卡及 `TaskCreationForm`，时间线和讨论串在各自消息位置显式渲染表单。其余 `ui/` 文件对应频道导航、时间线、讨论串、消息输入和频道弹窗。`owner-request.ts` 处理对话请求及 HTTP 状态错误；`styles/` 按 shell→conversation→dialog→mobile→message-details 导入，各文件内部按界面区域分组。
-- `agents/`：从 `agents-page.tsx` 阅读创建资料、私信、邀请与 Agent 列表。`agent-requests.ts` 的 `readAgentDirectory` 并行读取六类目录；`data/use-agent-directory.ts` 管目录状态、轮询与 refresh，把 nodes/providers 交给页面回调整理表单选择。`data/use-model-credentials.ts` 管凭据表单状态、提交与撤销。`ui/` 包含受控创建/凭据表单、设置编辑器、动态展示及状态文案；`agent-status.ts` 和 `agent-stop-status.ts` 分别说明 Agent 当前状态与停止结果。
-- `workspace/`：`workspace-browser.tsx` 展示目录与文件预览，`use-workspace-download.ts` 提供下载动作，`download-status.ts` 读取下载结果并提供文案。HTTP 请求和显示投影分别在 `workspace-requests.ts`、`workspace-responses.ts`；样式按选择、路径、目录、预览分组。
-- `nodes/`：`nodes-page.tsx` 展示配对节点和一次性令牌；`node-responses.ts` 定义页面读取的资料，样式按节点列表、配对结果和移动布局分组。
-- `tasks/`、`reminders/`：各自的 page 从资料读取走到列表展示，展示函数解释负责人和提醒状态文案；对应的 responses 文件定义显示投影。
+| 需要的辅助能力       | 阅读入口                                                                                                                                                                                                                                                                                                                        |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 创建、对话或工具准备 | 控制面 `tests/support/agent/` 的 `createAgentCreationFixture`、`createConversationFixture`、`createAgentToolFixture`、`createProcessToolFixture`；文件名分别为 `creation-fixture.ts`、`conversation-fixture.ts`、`agent-tool-fixture.ts`、`process-tool-fixture.ts`。网页 `tests/support/` 提供带初始值的对话与 Agent fixture。 |
+| 脚本模型与工具结果   | 控制面 `tests/support/agent/agent-loop.ts` 提供本地 HTTP/SSE，`scripted-provider.ts` 提供具名模型步骤，`scripted-tool-results.ts` 读取工具结果。                                                                                                                                                                                |
+| 场景服务与驱动       | 控制面 `tests/support/environment/scenario-environment.ts` 装配服务，`scenario-configuration.ts` 定义配置，`run-services.ts` 管进程输出；`tests/support/scenario/scenario-driver.ts` 驱动所有者 API，`scenario-evidence.ts` 组织场景及证据。`facts/` 放只读事实投影，`node/` 放连接辅助代码。                                   |
+| 完整使用示例         | 控制面 `tests/scenarios/report-workflow.ts` 展示两名 Agent 的报告协作，`report-workflow.test.ts` 装配运行入口；其他场景按环境、驱动、证据和恢复能力分组。                                                                                                                                                                       |
+| benchmark 与研究探针 | `apps/control-plane/benchmarks/tool-action.mjs` 准备合成会话并输出查询测量，说明见 [tool-action-lookup.md](research/tool-action-lookup.md)；`docs/research/pi-compaction-prefix-probe.mjs` 观察合成请求序列化，说明见 [pi-compaction-cache.md](research/pi-compaction-cache.md)。                                               |
 
-页面和相关样式放在同一功能目录。`apps/web/src/http-json.ts` 共享 JSON 提交、容错响应读取和错误文案提取；领域请求分别表达资料读取的取消信号、对话 HTTP 错误状态、工作区错误码和连接时间。跨请求的取消、过期响应和重新连接由各功能的状态管理。
+控制面交付在 `deploy/control-plane/`：`Dockerfile`、`compose.yaml` 和 `compose.initialize.yaml` 定义镜像及运行配置，`entrypoint.mjs` 是容器入口，`build.mjs`、`verify.mjs` 提供构建与本地验收，`runtime-package-check.mjs` 检查发布内容。节点完整包在 `deploy/node/`：`build-bundle.sh` 构建，`create-metadata.mjs` 写清单，`bootstrap.sh` 安装 CLI，`mate-entry.sh` 是命令入口。相邻 `tests/` 和 `deploy/tests/` 提供完整包与联合交付脚本。
 
-## 数据契约如何共用
-
-Zod schema 是需要运行时校验的领域数据的类型来源。`z.infer` 或 `z.output` 表示解析后的值；带默认值或转换的输入使用 `z.input`。本地临时值和简单实现函数优先使用推导，模块接口和需要约束的公共形状保留显式类型。
-
-浏览器使用 `@mate/protocol/owner` 和 `@mate/protocol/workspace`，避免依赖含 Node 专用校验的根导出或供应商 SDK。网页只需要静态形状时使用 `import type`；HTTP 和事件流响应需要实际校验时，使用这些浏览器安全的 Zod 契约及保留额外字段的显示投影。运行时校验会引入 Zod，但不应引入 Node 专用工具或模型 SDK。
-
-从调用方的 import 选择契约入口：
-
-| 公开入口 | 定义与阅读路线 |
-| --- | --- |
-| `@mate/protocol` | `packages/protocol/src/index.ts` 明确列出控制面与节点共用的消息、操作和错误。`messages.ts` 先定义工作区身份、结果、收据和操作模式，再组成 `NodeRequestSchema` 与 `NodeControlMessageSchema`。 |
-| `@mate/protocol/owner` | `owner.ts` 定义所有者 HTTP 与事件流的完整资料，如 `ownerMessageSchema` / `OwnerMessage`、`agentSummarySchema` / `AgentSummary`。网页各功能的 `*-responses.ts` 从这里推导屏幕需要的投影。 |
-| `@mate/protocol/workspace` | `workspace.ts` 定义文件版本、目录页、文件块和下载状态；控制面、节点和网页共用这些形状。 |
-| `@mate/protocol/node` | `node.ts` 计算工作区与进程操作请求摘要，使用 Node 的加密库。 |
-
-工作区操作使用 `workspaceOperationSchema` / `WorkspaceOperation`，进程操作使用 `agentProcessOperationSchema` / `AgentProcessOperation`；两者分别定义于 `workspace-operations.ts` 和 `process-operations.ts`。需要工作区操作的未解析输入时，使用 `z.input<typeof workspaceOperationSchema>`，解析后的 `WorkspaceOperation` 已含分页默认值。控制面节点账号类型直接从 `AgentWorkspaceIdentity` 选取账号字段，无需再从 schema 重复推导同一资料。
-
-数据库查询的参数和行类型写在查询边界；对不可信持久数据或外部结果使用已有 Zod 契约或明确的类型收窄。不要靠 `as` 跳过检查，也不要为了消除一个断言而发明通用框架。
-
-Pi 会话保留供应商扩展字段。会话边界的窄适配不能改成会删掉未知字段的重新构造；变更 Zod schema 时也必须保留原本的严格或宽松行为、默认值、错误映射和恢复含义。
-
-控制面容器交付位于 `deploy/control-plane`：`Dockerfile` 生成生产镜像，`compose.yaml` 仅运行控制面，`compose.initialize.yaml` 只供首次密码初始化，`entrypoint.mjs` 检查普通账号与私有挂载，`build.mjs` 和 `verify.mjs` 是明确版本本地构建及隔离接口验收入口。
-
-真实文件崩溃场景在 `tests/files/recovery/crash-boundaries.test.ts`，复用同一环境、脚本 provider、驱动与失败证据。固定启动器的 `scenario-file-boundary.mjs` 通过 `@mate/node/workspace-execution` 和 `@mate/node/same-account-files` 的明确导出，只包住真实 `LinuxWorkspaceExecutor` 和 `SameAccountFileBackend` 的执行／收据边界，记录带实际操作身份的事件；无生产故障开关。`scenario-file-facts.ts` 校验现有只读动作投影、模型真正收到的收据更正与文件版本。原 `tests/tools/recovery/invalidation.test.ts` 的文件路径继续覆盖断链与收据对账，并核对可变 requestId 和稳定 operation／Agent／请求摘要。
-
-文件启动器用 `AsyncLocalStorage` 保留每个真实请求的身份，使并发 Agent 的文件完成不会错归目标收据边界。双 Agent 回归用有界的首个执行暂留验证这个观察契约；会话事实投影也用于核对原 run 已提交的调用及崩溃前完整模型输入前缀。
-
-交付拓扑的测试适配在 `tests/support/environment/scenario-container.ts`，由同一 `scenario-environment.ts` 的 `container: { image }` 配置选择；测试 override 只存在于场景合成目录。`tests/container/run.mjs` 使用 B 原构建入口创建当前 SHA 的唯一镜像，`delivered-scenarios.integration.ts` 复用正常 workflow 与两个选定恢复导出，并验证驱动 SIGKILL 后的独立回收。生产交付文件不导入这些测试代码；完整入口、实际证据与未验证边界见开发说明。
-
-`deploy/tests/delivery-smoke.sh` 从实际完整包启动独立镜像/Compose 联通验收；`delivery.mjs` 只用 Node 内置库，经所有者 API 与真实 Pi/节点检查程序和数据，`control-plane-fixture.mjs` 仅在测试 override 注入合成模型 HTTP/SSE 地址。生产配置不导入这些测试文件。真实四平台用户服务命令与证据边界见 [部署验收](DEPLOYMENT_ACCEPTANCE.md)。
-
-机器端 `connection/node-client.ts` 拥有认证、心跳、重连和 socket 生命周期；`process-requests.ts` 与 `workspace-requests.ts` 各自拥有完整操作及收据对账。发送能力绑定发起请求的原 socket；关闭不取消已经执行的副作用，也不把结果转给新的连接。两类原 Promise 错误处理分别保留。
-
-机器端 `files/file-operation.mts` 保留实际 worker、操作分派和原错误输出位置；`fixed-workspace-paths.ts` 拥有固定目录描述符、路径核验、短变更锁和逐个释放。`files/mutations/` 集中原子 rename 及基于哈希的完整提交/移动；worker 与 native helper 的实际位置不变。`provisioning/agent-workspace.ts` 保留 MEMORY 初始化及同 Agent 互斥，`workspace-marker.ts` 拥有标记的完整创建、验证和崩溃恢复，共享错误单向来自 `errors.ts`。
-
-## Agent 文件读取的内容边界
-
-文件与附件读取先探测同一版本至多 8 KiB 的前缀，再检查请求范围。PNG/JPEG/GIF/WebP 按固定字节签名判断；文本使用严格 UTF-8 和控制字符检查。有限探测不保证识别所有未知二进制，也不检查图片内部编码损坏。完整文件系统图片通过节点有界分块读取，最大 5 MiB；短读、版本变化和超过上限均不能成为图片内容块。请求中的模型须明确声明图片输入能力。上传图片或二进制始终只给类型提示，上传文本继续可读；Mate 不安装转换程序。
-
-文本范围为完整 UTF-8 字符在两端各最多多读 3 字节。`requestedOffset`/`requestedLength` 保留请求，`offset`/`nextOffset` 给出实际文本字节范围（右端不包含）；使用 `nextOffset` 继续，文件系统读取同时传回原 `version`。图片持久化为 Pi 内容块；纯文本模型与压缩请求将其投影为提示，不修改原始 transcript。
-
-## 测试目录按能力组织
-
-控制面 `tests/` 下的 `http`、`conversations`、`tasks`、`agents`、`session`、`tools`、`runs`、`nodes` 和 `files` 对应现有能力；`scenarios` 保留完整工作和恢复场景。浏览器测试使用同样的功能词汇，组件测试和 HTTP/事件响应契约测试分别放在功能目录和 `contracts`。Vitest 递归发现这些目录，无需维护测试文件清单。
-
-控制面的小型准备入口按用途命名：`createAgentCreationFixture` 提供创建资料的应用，`createConversationFixture` 提供已登录并配对节点的对话环境，`createAgentToolFixture` 和 `createProcessToolFixture` 分别提供工具与进程调用环境。网页 `tests/support/chat-fixture.ts` 与 `agents-fixture.ts` 用普通工厂创建有初值的数据，复用已有协议投影；测试直接调整数据、调用页面，再观察断言，HTTP 回复使用原生 `Response`。
-
-`apps/control-plane/benchmarks/tool-action.mjs` 先准备固定合成历史，再测量既有动作读取；`syntheticMessage` 与 `actionIdentity` 分别表达历史内容和目标位置。`docs/research/pi-compaction-prefix-probe.mjs` 是不发送网络请求的自有序列化探针，`captureRequestPayload` 读取请求形状，`withoutCacheMarkers` 表达比较时略去的缓存标记。
-
-共享环境位于控制面 `tests/support/`：`agent` 装配合成 Agent/模型和套接字，`node` 观察进程与连接，`provider` 模拟传输协议，`facts` 解析只读持久证据，`scenario` 提供场景驱动与失败证据，`environment` 管实际服务启动、配置和资源清理。大型场景按能力拆成完整用例，各套件显式注册自己的清理；没有兼容转发目录。`ScenarioResources` 在服务还存在时先收集证据，再逆序释放资源；失败的释放仍可在下一次 close 重试，超时不会重复发起正在进行的释放。
-
-本轮整理后保留的测试文件尺寸例外如下；这些是具体取舍，不是目录或行数的 CI 豁免规则。
-
-| 文件 | 保留在一起的原因 |
-| --- | --- |
-| `tests/tools/recovery/invalidation.test.ts`（740 行） | 一个 16 组合参数矩阵连续观察同一份 held wire 回包、旧 run、node 持久收据、恢复模型输入与效果次数。按暂停/凭据/断链/重启拆文件会复制主要断言；把各阶段分成接受可变上下文的 helper 会隐藏实际时序。 |
-| `tests/support/environment/scenario-environment.ts`（519 行） | 配置与重试清理已经移出。余下闭包拥有同一组服务实例、认证 cookie、启动取消与重启互斥；启动/重启必须更新同一实例供请求和清理读取。再拆需要暴露可变服务引用或第二套生命周期。 |
-| `tests/linux/single-account-node.integration.mjs`（517 行） | 一次普通账号下真实控制面/节点/普通命令的完整生命周期验收，最后的统一清理覆盖每个提前失败。只超出少量行，拆成阶段函数会增加远程进程和目录状态传递。 |
-| `deploy/tests/delivery.mjs`（628 行） | 一个完整离线包与 Compose 交付验收，镜像/服务/临时目录归属和统一 finally 在同一次运行中核验。每个阶段依赖实际前一阶段产生的包和持久身份；拆分为多条测试会改变同包接续证据，抽象资源袋收益不足。 |
-
-## 仓库根目录的必要尺寸例外
-
-排除两份锁文件后，仓库根目录有 11 个直接文件。`.dockerignore`、`.gitignore`、`.nvmrc`、`.prettierignore`、`.prettierrc.json`、`package.json`、`pnpm-workspace.yaml` 和 `tsconfig.json` 是现有工具从根目录使用的八个入口；`README.md`、`AGENTS.md` 和 `CONTEXT.md` 按项目约定也保留在根目录。只为少一个文件而新建配置目录，会增加工具路径配置与首次阅读成本，本轮保留这些实际入口。
-
-节点包、用户服务、更新与卸载四篇指南完整归在 `docs/node/`，运行步骤仍从 [OPERATIONS.md](OPERATIONS.md) 进入；不增加索引副本或转发页。目录和代码行数是设计默认值，没有新增尺寸 CI 门禁。
+根 `package.json` 汇总构建和检查命令，`pnpm-workspace.yaml` 声明包与 Node 版本，`tsconfig.json` 提供共享严格类型设置，各包配置自己的编译与测试范围。`.prettierrc.json` 与 `.prettierignore` 定义格式范围；网页 `vite.config.ts` 定义构建与开发代理。`.github/workflows/ci.yml` 运行项目 Linux 检查，`node-package-validation.yml` 运行完整包交付检查。
