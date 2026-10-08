@@ -8,7 +8,7 @@ import { join } from "node:path";
 
 import { createControlPlane } from "../../../src/application.js";
 
-import type { NodeSocket } from "../../../src/nodes/directory.js";
+import type { NodeSocket } from "../../../src/nodes/transport.js";
 
 export const password = "agent-process-tool-test-owner-password";
 export const fixtures: Array<{

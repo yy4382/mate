@@ -68,15 +68,20 @@ it("disconnect cancels all three request kinds on that node while another node s
   const localFile = workspaceRequest();
   const peerFile = workspaceRequest();
   const cancelled = [
-    context.app.nodes.provisionAgent(context.nodeId, randomUUID(), randomUUID(), () => {}),
-    context.app.nodes.workspaceOperation(context.nodeId, localFile),
-    context.app.nodes.executeAgentProcessOperation(context.nodeId, {
+    context.app.nodes.operations.provisionAgent({
+      nodeId: context.nodeId,
+      requestId: randomUUID(),
+      agentId: randomUUID(),
+      onProgress: () => {},
+    }),
+    context.app.nodes.operations.workspaceOperation(context.nodeId, localFile),
+    context.app.nodes.operations.executeAgentProcessOperation(context.nodeId, {
       operationId: randomUUID(),
       agentId: randomUUID(),
       operation: { kind: "process.list" },
     }),
   ].map((pending) => pending.catch((error: unknown) => error));
-  const other = context.app.nodes.workspaceOperation(peer.nodeId, peerFile);
+  const other = context.app.nodes.operations.workspaceOperation(peer.nodeId, peerFile);
   let peerSettled = false;
   void other.then(() => {
     peerSettled = true;
@@ -94,15 +99,15 @@ it("duplicate completion leaves no old timeout able to reject a later request wi
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   try {
     const first = workspaceRequest();
-    const pending = context.app.nodes.workspaceOperation(context.nodeId, first);
-    expect(context.app.nodes.workspaceOperation(context.nodeId, first)).toBe(pending);
+    const pending = context.app.nodes.operations.workspaceOperation(context.nodeId, first);
+    expect(context.app.nodes.operations.workspaceOperation(context.nodeId, first)).toBe(pending);
     await vi.advanceTimersByTimeAsync(30_000);
     const result = workspaceResult(first);
     await context.app.nodes.receive(context.socket, JSON.stringify(result));
     await expect(pending).resolves.toMatchObject({ operationId: first.operationId });
     await context.app.nodes.receive(context.socket, JSON.stringify(result));
     const second = { ...workspaceRequest(), requestId: first.requestId };
-    const next = context.app.nodes.workspaceOperation(context.nodeId, second);
+    const next = context.app.nodes.operations.workspaceOperation(context.nodeId, second);
     let settled = false;
     void next.then(
       () => {

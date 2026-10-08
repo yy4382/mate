@@ -45,6 +45,7 @@ export class NodeIdentity {
       .run(hashToken(pairingToken), createdAt, expiresAt);
     return { pairingToken, expiresAt: new Date(expiresAt).toISOString() };
   }
+  /** The node account is absent until its first successful workspace preparation. */
   account(nodeId: string): NodeAccount | undefined {
     const row = z
       .looseObject({ linux_username: z.string(), uid: z.number(), gid: z.number() })
@@ -58,6 +59,7 @@ export class NodeIdentity {
       );
     return row ? { username: row.linux_username, uid: row.uid, gid: row.gid } : undefined;
   }
+  /** Record or match the node account inside the caller's workspace-preparation transaction. */
   recordAccount(nodeId: string, account: NodeAccount): void {
     const recorded = this.database
       .prepare(

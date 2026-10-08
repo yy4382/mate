@@ -214,7 +214,7 @@ export class RunControl {
     if (this.activeStops.has(operationId)) return;
     this.activeStops.add(operationId);
     try {
-      const result = await this.nodes.executeAgentProcessOperation(nodeId, {
+      const result = await this.nodes.operations.executeAgentProcessOperation(nodeId, {
         operationId,
         agentId,
         operation: { kind: "process.stop_all" },
@@ -368,18 +368,18 @@ export class RunControl {
   ): Promise<{ ok: boolean; error?: string }> {
     let verified;
     try {
-      verified = await this.nodes.provisionAgent(
-        row.node_id,
-        randomUUID(),
+      verified = await this.nodes.operations.provisionAgent({
+        nodeId: row.node_id,
+        requestId: randomUUID(),
         agentId,
-        () => {},
-        true,
-      );
+        onProgress: () => {},
+        verifyOnly: true,
+      });
     } catch {
       return { ok: false, error: "原节点未能核验运行账号与 Agent 工作区，请恢复原节点后重试。" };
     }
     // Re-verify against the node's recorded account plus this Agent's own workspace and marker.
-    const nodeAccount = this.nodes.account(row.node_id);
+    const nodeAccount = this.nodes.identity.account(row.node_id);
     if (
       !verified.ok ||
       !row.home_marker ||

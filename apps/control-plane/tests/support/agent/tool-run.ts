@@ -7,7 +7,7 @@ import {
   type ControlPlaneOptions,
   type ControlPlane,
 } from "../../../src/application.js";
-import type { NodeSocket } from "../../../src/nodes/directory.js";
+import type { NodeSocket } from "../../../src/nodes/transport.js";
 
 /** Existing authorization tests pause the real scheduler before the external provider boundary.
  * Their calls now enter the public tool/session services directly, without a model transport. */

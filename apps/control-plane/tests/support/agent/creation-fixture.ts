@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { expect } from "vitest";
 import { createControlPlane } from "../../../src/application.js";
 
-import type { NodeSocket } from "../../../src/nodes/directory.js";
+import type { NodeSocket } from "../../../src/nodes/transport.js";
 export const ownerPassword = "agent-creation-owner-password";
 export const fixtures: Array<{ app: ReturnType<typeof createControlPlane>; directory: string }> =
   [];

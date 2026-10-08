@@ -16,7 +16,7 @@ export const attachmentRowSchema = z.looseObject({
 });
 export type AttachmentRow = z.infer<typeof attachmentRowSchema>;
 
-export function toSummary(row: AttachmentRow): AttachmentSummary {
+export function toAttachmentSummary(row: AttachmentRow): AttachmentSummary {
   return {
     id: row.id,
     channelId: row.channel_id,
@@ -31,7 +31,10 @@ export function toSummary(row: AttachmentRow): AttachmentSummary {
     createdAt: row.created_at,
   };
 }
-export function readReady(db: Database.Database, id: string): AttachmentSummary | undefined {
+export function readReadyAttachment(
+  db: Database.Database,
+  id: string,
+): AttachmentSummary | undefined {
   const row = attachmentRowSchema.optional().parse(
     db
       .prepare(
@@ -41,9 +44,9 @@ export function readReady(db: Database.Database, id: string): AttachmentSummary 
       )
       .get(id),
   );
-  return row ? toSummary(row) : undefined;
+  return row ? toAttachmentSummary(row) : undefined;
 }
-export function insertUploading(
+export function insertUploadingAttachment(
   db: Database.Database,
   input: {
     id: string;

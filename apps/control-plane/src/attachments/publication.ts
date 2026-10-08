@@ -5,8 +5,8 @@ import { closeSync, fsyncSync, openSync, renameSync } from "node:fs";
 import { z } from "zod";
 import type { AgentToolContext } from "../runtime/tools/entry.js";
 import { WorkspaceError } from "../workspaces/errors.js";
-import { isWorkspaceVersion as isVersion, sameVersion } from "../workspaces/results.js";
-import type { WorkspaceService } from "../workspaces/service.js";
+import { isWorkspaceVersion, sameVersion } from "../workspaces/results.js";
+import type { WorkspaceReads } from "../workspaces/reads/service.js";
 import { authorizeAgentConversation } from "./access.js";
 import { AttachmentError } from "./errors.js";
 import {
@@ -16,7 +16,7 @@ import {
   parseActionResult,
   parsePublishedAttachment,
 } from "./results.js";
-import { insertUploading, readReady } from "./rows.js";
+import { insertUploadingAttachment, readReadyAttachment } from "./rows.js";
 import {
   normalizeFilename,
   removeIfPresent,
@@ -29,7 +29,7 @@ import {
 export class AttachmentPublication {
   constructor(
     private readonly db: Database.Database,
-    private readonly workspaces: Pick<WorkspaceService, "readForAgentPublish">,
+    private readonly reads: Pick<WorkspaceReads, "readForAgentPublish">,
     private readonly directory: string,
     private readonly maximumBytes: number,
     private readonly now: () => number,
@@ -45,28 +45,28 @@ export class AttachmentPublication {
       filename?: string;
     },
   ) {
-    const scope = input.run,
-      filename = normalizeFilename(input.filename ?? input.path.split("/").at(-1) ?? "");
+    const scope = input.run;
+    const filename = normalizeFilename(input.filename ?? input.path.split("/").at(-1) ?? "");
     authorizeAgentConversation(this.db, input.agentId, input.channelId);
     if (!filename) throw new AttachmentError("invalid_filename", "文件名无效。", 400);
     if (!input.actionId.startsWith(`mate:${scope.action_scope_id}:`))
       throw new AttachmentError("operation_conflict", "文件发布 ID 与当前消息授权不匹配。", 403);
-    const operationId = operationIdForAction(input.actionId),
-      requestHash = createHash("sha256")
-        .update(
-          canonicalJson({
-            operation: input.operationName,
-            input: input.toolInput,
-            destination: { path: input.path, filename, channelId: input.channelId },
-          }),
-        )
-        .digest("hex"),
-      id = randomUUID(),
-      storageKey = randomUUID(),
-      tempPath = storagePath(this.directory, `${storageKey}.uploading`),
-      finalPath = storagePath(this.directory, `${storageKey}.blob`),
-      createdAt = this.now(),
-      contentType = "application/octet-stream";
+    const operationId = operationIdForAction(input.actionId);
+    const requestHash = createHash("sha256")
+      .update(
+        canonicalJson({
+          operation: input.operationName,
+          input: input.toolInput,
+          destination: { path: input.path, filename, channelId: input.channelId },
+        }),
+      )
+      .digest("hex");
+    const id = randomUUID();
+    const storageKey = randomUUID();
+    const tempPath = storagePath(this.directory, `${storageKey}.uploading`);
+    const finalPath = storagePath(this.directory, `${storageKey}.blob`);
+    const createdAt = this.now();
+    const contentType = "application/octet-stream";
     const reserve = this.db.transaction(() => {
       const existing = z
         .looseObject({ request_hash: z.string(), result_json: z.string() })
@@ -106,7 +106,7 @@ export class AttachmentPublication {
           JSON.stringify({ state: "executing", operationId }),
           createdAt,
         );
-      insertUploading(this.db, {
+      insertUploadingAttachment(this.db, {
         id,
         channelId: input.channelId,
         storageKey,
@@ -122,11 +122,11 @@ export class AttachmentPublication {
     if (reservation.kind === "done") return reservation.result;
     await input.committed;
     try {
-      const statResult = await this.workspaces.readForAgentPublish(input, {
+      const statResult = await this.reads.readForAgentPublish(input, {
         kind: "workspace_stat",
         path: input.path,
       });
-      if (statResult.type !== "file" || !isVersion(statResult.version))
+      if (statResult.type !== "file" || !isWorkspaceVersion(statResult.version))
         throw new AttachmentError("workspace_unavailable", "只能发布普通文件。", 400);
       if (
         typeof statResult.size !== "number" ||
@@ -136,19 +136,23 @@ export class AttachmentPublication {
       )
         throw new AttachmentError("too_large", "文件超过附件大小上限。", 413);
       const metadata = { size: statResult.size, version: statResult.version };
-      const descriptor = openSync(tempPath, "wx", 0o600),
-        digest = createHash("sha256");
+      const descriptor = openSync(tempPath, "wx", 0o600);
+      const digest = createHash("sha256");
       let offset = 0;
       try {
         while (offset < metadata.size) {
-          const chunkResult = await this.workspaces.readForAgentPublish(input, {
+          const chunkResult = await this.reads.readForAgentPublish(input, {
             kind: "workspace_read_chunk",
             path: input.path,
             offset,
             length: Math.min(FILE_CHUNK_MAX_BYTES, metadata.size - offset),
             version: metadata.version,
           });
-          const bytes = decodeChunk(chunkResult, offset, metadata.size, metadata.version);
+          const bytes = decodeChunk(chunkResult, {
+            offset,
+            size: metadata.size,
+            version: metadata.version,
+          });
           if (!bytes.length)
             throw new WorkspaceError("file_changed", "File ended during publish", 409);
           digest.update(bytes);
@@ -159,13 +163,13 @@ export class AttachmentPublication {
       } finally {
         closeSync(descriptor);
       }
-      const finalStat = await this.workspaces.readForAgentPublish(input, {
+      const finalStat = await this.reads.readForAgentPublish(input, {
         kind: "workspace_stat",
         path: input.path,
       });
       if (
         finalStat.type !== "file" ||
-        !isVersion(finalStat.version) ||
+        !isWorkspaceVersion(finalStat.version) ||
         !sameVersion(metadata.version, finalStat.version)
       )
         throw new WorkspaceError("file_changed", "File changed while it was being published", 409);
@@ -181,7 +185,7 @@ export class AttachmentPublication {
              SET size=?,sha256=?,state='ready' WHERE id=? AND state='uploading'`,
             )
             .run(metadata.size, digest.digest("hex"), id);
-          const result = readReady(this.db, id);
+          const result = readReadyAttachment(this.db, id);
           if (!result) throw new Error("Published attachment disappeared before commit");
           this.db
             .prepare(

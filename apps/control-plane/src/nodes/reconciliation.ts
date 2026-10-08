@@ -59,7 +59,11 @@ export class NodeReconciliation {
     const validRows = rows.filter(
       (row) =>
         NodeRequestIdSchema.safeParse(row.operation_id).success &&
-        !this.operations.hasPendingProcess(nodeId, row.agent_id, row.operation_id),
+        !this.operations.hasPendingProcess({
+          nodeId,
+          agentId: row.agent_id,
+          operationId: row.operation_id,
+        }),
     );
     if (validRows.length === 0) {
       this.startProcess(socket, session, rows.at(-1)!.operation_id, blocking);
@@ -192,7 +196,11 @@ export class NodeReconciliation {
     const validRows = rows.filter(
       (row) =>
         NodeRequestIdSchema.safeParse(row.operation_id).success &&
-        !this.operations.hasPendingWorkspace(nodeId, row.agent_id, row.operation_id),
+        !this.operations.hasPendingWorkspace({
+          nodeId,
+          agentId: row.agent_id,
+          operationId: row.operation_id,
+        }),
     );
     if (validRows.length === 0) {
       this.startWorkspaceReconciliation(socket, session, rows.at(-1)!.operation_id, blocking);

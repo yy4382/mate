@@ -225,12 +225,12 @@ export function createAgentRoutes({
 
       const task = (async (): Promise<AgentSummary> => {
         try {
-          const result = await nodes.provisionAgent(
-            input.nodeId,
-            prepared.requestId,
-            input.id,
-            (stage) => agents.updateStage(input.id, stage),
-          );
+          const result = await nodes.operations.provisionAgent({
+            nodeId: input.nodeId,
+            requestId: prepared.requestId,
+            agentId: input.id,
+            onProgress: (stage) => agents.updateStage(input.id, stage),
+          });
           if (!result.ok) return agents.fail(input.id, result.message) ?? prepared.agent;
           return agents.complete(input.id, result.identity, ownerChat);
         } catch (error) {

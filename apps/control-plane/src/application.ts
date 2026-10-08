@@ -84,13 +84,13 @@ export function createControlPlane(
   const workspace = new WorkspaceService(ownerAuth.db, nodes, ownerChat);
   const attachments = new AttachmentService(
     ownerAuth.db,
-    workspace,
+    workspace.reads,
     resolve(dataDir, "attachments"),
     options.maxAttachmentBytes,
     options.now,
     testDependencies.beforeAgentAttachmentCommit,
   );
-  const processes = new AgentProcessOperationBroker(ownerAuth.db, nodes, options.now);
+  const processes = new AgentProcessOperationBroker(ownerAuth.db, nodes.operations, options.now);
   const tools = new AgentTools(ownerAuth.db, ownerChat, workspace, attachments, processes);
   const runs = new AgentRunCoordinator(
     ownerAuth.db,

@@ -20,7 +20,7 @@ it.each([
     // Deliberately misleading words would send a text-based classifier down the wrong path.
     const diagnostic = "offline timeout disconnected diagnostic changed";
     const transport = vi
-      .spyOn(context.app.nodes, "workspaceOperation")
+      .spyOn(context.app.nodes.operations, "workspaceOperation")
       .mockRejectedValueOnce(new NodeRequestError(reason, diagnostic));
     try {
       const response = await context.app.http.request(

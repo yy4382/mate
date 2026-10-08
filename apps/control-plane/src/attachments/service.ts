@@ -18,14 +18,19 @@ import {
 import { isAbsolute, resolve } from "node:path";
 import { Readable } from "node:stream";
 import { z } from "zod";
-import { defineAgentTool, type AgentToolContext } from "../runtime/tools/entry.js";
+import { defineAgentTool } from "../runtime/tools/entry.js";
 import { fileType, textRange, unreadable } from "../workspaces/reads/file-content.js";
-import type { WorkspaceService } from "../workspaces/service.js";
+import type { WorkspaceReads } from "../workspaces/reads/service.js";
 import { authorizeAgentConversationRead, requireOwnerMembership } from "./access.js";
 import { AttachmentError } from "./errors.js";
 import { AttachmentPublication } from "./publication.js";
 import { parseActionResult } from "./results.js";
-import { attachmentRowSchema, insertUploading, readReady, toSummary } from "./rows.js";
+import {
+  attachmentRowSchema,
+  insertUploadingAttachment,
+  readReadyAttachment,
+  toAttachmentSummary,
+} from "./rows.js";
 import {
   normalizeContentType,
   normalizeFilename,
@@ -47,7 +52,10 @@ export class AttachmentService {
         attachmentToolDefinitions["attachments.list"],
         (identity, input) => {
           return {
-            attachments: this.listForAgent(identity.agentId, input.conversationId),
+            attachments: this.listForAgent({
+              agentId: identity.agentId,
+              channelId: input.conversationId,
+            }),
           };
         },
         "Agent 文件请求被拒绝。",
@@ -62,7 +70,7 @@ export class AttachmentService {
       "attachments.publish": defineAgentTool(
         attachmentToolDefinitions["attachments.publish"],
         (identity, input) => {
-          return this.publishNodeFile({
+          return this.publication.publishNodeFile({
             ...identity,
             path: input.path,
             ...(input.filename === undefined ? {} : { filename: input.filename }),
@@ -79,11 +87,11 @@ export class AttachmentService {
 
   private readonly directory: string;
   private readonly maximumBytes: number;
-  private readonly publication: AttachmentPublication;
+  readonly publication: AttachmentPublication;
 
   constructor(
     private readonly db: Database.Database,
-    workspaces: WorkspaceService,
+    reads: Pick<WorkspaceReads, "readForAgentPublish">,
     directory: string,
     maximumBytes = DEFAULT_ATTACHMENT_MAX_BYTES,
     private readonly now: () => number = Date.now,
@@ -102,7 +110,7 @@ export class AttachmentService {
     this.recoverInterruptedUploads();
     this.publication = new AttachmentPublication(
       db,
-      workspaces,
+      reads,
       this.directory,
       maximumBytes,
       now,
@@ -122,10 +130,16 @@ export class AttachmentService {
         )
         .all(channelId),
     );
-    return rows.map(toSummary);
+    return rows.map(toAttachmentSummary);
   }
 
-  listForAgent(agentId: string, channelId: string): AttachmentSummary[] {
+  listForAgent({
+    agentId,
+    channelId,
+  }: {
+    agentId: string;
+    channelId: string;
+  }): AttachmentSummary[] {
     authorizeAgentConversationRead(this.db, agentId, channelId);
     const rows = attachmentRowSchema.array().parse(
       this.db
@@ -137,7 +151,7 @@ export class AttachmentService {
         )
         .all(channelId),
     );
-    return rows.map(toSummary);
+    return rows.map(toAttachmentSummary);
   }
 
   readChunkForAgent(input: {
@@ -170,8 +184,8 @@ export class AttachmentService {
     if (!row) throw new AttachmentError("attachment_not_found", "附件不存在。", 404);
     if (input.offset > row.size)
       throw new AttachmentError("attachment_not_found", "附件分块位置超出文件大小。", 416);
-    const path = storagePath(this.directory, `${row.storage_key}.blob`),
-      beforePath = lstatSync(path);
+    const path = storagePath(this.directory, `${row.storage_key}.blob`);
+    const beforePath = lstatSync(path);
     if (!beforePath.isFile() || beforePath.isSymbolicLink() || beforePath.size !== row.size)
       throw new AttachmentError("attachment_not_found", "附件内容暂不可用。", 404);
     const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -199,7 +213,12 @@ export class AttachmentService {
       const end = Math.min(row.size, input.offset + input.length + 3);
       const content =
         type === "text/plain"
-          ? textRange(readRange(start, end - start), start, input.offset, input.length, row.size)
+          ? textRange(readRange(start, end - start), {
+              readOffset: start,
+              offset: input.offset,
+              length: input.length,
+              totalBytes: row.size,
+            })
           : unreadable(type, "上传图片或二进制附件不能直接读取。");
       const after = fstatSync(descriptor, { bigint: true });
       if (
@@ -208,7 +227,7 @@ export class AttachmentService {
         before.ctimeNs !== after.ctimeNs
       )
         throw new AttachmentError("attachment_not_found", "附件内容读取期间发生变化。", 409);
-      return { attachment: toSummary(row), totalBytes: row.size, ...content };
+      return { attachment: toAttachmentSummary(row), totalBytes: row.size, ...content };
     } finally {
       closeSync(descriptor);
     }
@@ -231,12 +250,12 @@ export class AttachmentService {
         input.expectedLength > this.maximumBytes)
     )
       throw new AttachmentError("too_large", "附件超过文件大小上限。", 413);
-    const id = randomUUID(),
-      storageKey = randomUUID(),
-      tempPath = storagePath(this.directory, `${storageKey}.uploading`),
-      finalPath = storagePath(this.directory, `${storageKey}.blob`),
-      createdAt = this.now();
-    insertUploading(this.db, {
+    const id = randomUUID();
+    const storageKey = randomUUID();
+    const tempPath = storagePath(this.directory, `${storageKey}.uploading`);
+    const finalPath = storagePath(this.directory, `${storageKey}.blob`);
+    const createdAt = this.now();
+    insertUploadingAttachment(this.db, {
       id,
       channelId: input.channelId,
       storageKey,
@@ -260,7 +279,7 @@ export class AttachmentService {
            SET size=?,sha256=?,state='ready' WHERE id=? AND state='uploading'`,
         )
         .run(outcome.size, outcome.sha256, id);
-      return readReady(this.db, id)!;
+      return readReadyAttachment(this.db, id)!;
     } catch (error) {
       removeIfPresent(tempPath);
       removeIfPresent(finalPath);
@@ -275,10 +294,7 @@ export class AttachmentService {
     }
   }
 
-  downloadForOwner(
-    channelId: string,
-    attachmentId: string,
-  ): { attachment: AttachmentSummary; stream: ReadableStream<Uint8Array> } {
+  downloadForOwner({ channelId, attachmentId }: { channelId: string; attachmentId: string }) {
     requireOwnerMembership(this.db, channelId, false);
     const row = attachmentRowSchema.optional().parse(
       this.db
@@ -291,30 +307,17 @@ export class AttachmentService {
         .get(attachmentId, channelId),
     );
     if (!row) throw new AttachmentError("attachment_not_found", "附件不存在。", 404);
-    const path = storagePath(this.directory, `${row.storage_key}.blob`),
-      stat = lstatSync(path);
+    const path = storagePath(this.directory, `${row.storage_key}.blob`);
+    const stat = lstatSync(path);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== row.size)
       throw new AttachmentError("attachment_not_found", "附件内容暂不可用。", 404);
     return {
-      attachment: toSummary(row),
+      attachment: toAttachmentSummary(row),
       stream: Readable.toWeb(
         createReadStream(path, { highWaterMark: 64 * 1024 }),
       ) as ReadableStream<Uint8Array>,
     };
   }
-  async publishNodeFile(
-    input: AgentToolContext & {
-      actionId: string;
-      operationName: string;
-      toolInput: Record<string, unknown>;
-      channelId: string;
-      path: string;
-      filename?: string;
-    },
-  ) {
-    return this.publication.publishNodeFile(input);
-  }
-
   private recoverInterruptedUploads(): void {
     const interrupted = z
       .looseObject({ id: z.string(), storage_key: z.string() })

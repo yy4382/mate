@@ -8,9 +8,6 @@ import { isEd25519PublicKey, NodeIdentity, verifySignature } from "./identity.js
 import { NodeOperations } from "./operations.js";
 import { NodeReconciliation } from "./reconciliation.js";
 import { reject, send, type NodeSocket, type SocketSession } from "./transport.js";
-export { NodeAccountConflict, nodeAccountOf, type NodeAccount } from "./identity.js";
-export type { NodeWorkspaceOperationStart } from "./operations.js";
-export type { NodeSocket } from "./transport.js";
 
 export const DEFAULT_NODE_PAIRING_TOKEN_TTL_MS = 10 * 60 * 1000;
 export const DEFAULT_NODE_MAX_CONNECTIONS = 128;
@@ -38,8 +35,8 @@ export interface NodeDirectoryOptions {
 
 /** Owns socket lifecycle, the current connection and heartbeat; assembles node capabilities. */
 export class NodeDirectory {
-  private readonly identity: NodeIdentity;
-  private readonly operations: NodeOperations;
+  readonly identity: NodeIdentity;
+  readonly operations: NodeOperations;
   private readonly reconciliation: NodeReconciliation;
   private readonly now: () => number;
   private readonly pairingTokenTtlMs: number;
@@ -114,47 +111,6 @@ export class NodeDirectory {
     );
     this.heartbeatSweepTimer = setInterval(() => this.expireInactiveConnections(), sweepIntervalMs);
     this.heartbeatSweepTimer.unref?.();
-  }
-
-  createPairingToken(): ReturnType<NodeIdentity["createPairingToken"]> {
-    return this.identity.createPairingToken();
-  }
-  /**
-   * The one ordinary Linux account every Agent on this node runs under, or undefined before the
-   * node's first successful workspace preparation recorded it.
-   */
-  account(nodeId: string): ReturnType<NodeIdentity["account"]> {
-    return this.identity.account(nodeId);
-  }
-  /**
-   * Record this node's account on its first successful workspace preparation, and require every
-   * later Agent on the same node to report the same account. Meant to run inside the caller's
-   * transaction: a mismatch throws so the Agent's workspace, stage and channel invitation roll back
-   * together instead of leaving a partially prepared Agent behind.
-   */
-  recordAccount(nodeId: string, account: Parameters<NodeIdentity["recordAccount"]>[1]): void {
-    this.identity.recordAccount(nodeId, account);
-  }
-  provisionAgent(
-    ...args: Parameters<NodeOperations["provisionAgent"]>
-  ): ReturnType<NodeOperations["provisionAgent"]> {
-    return this.operations.provisionAgent(...args);
-  }
-  /** Send one owner read, Agent file action, or Agent publication read to its paired node. */
-  workspaceOperation(
-    ...args: Parameters<NodeOperations["workspaceOperation"]>
-  ): ReturnType<NodeOperations["workspaceOperation"]> {
-    return this.operations.workspaceOperation(...args);
-  }
-  executeAgentProcessOperation(
-    ...args: Parameters<NodeOperations["executeAgentProcessOperation"]>
-  ): ReturnType<NodeOperations["executeAgentProcessOperation"]> {
-    return this.operations.executeAgentProcessOperation(...args);
-  }
-  setWorkspaceOperationResultHandler(
-    handler: Parameters<NodeOperations["setWorkspaceOperationResultHandler"]>[0],
-  ): void {
-    this.operations.setWorkspaceOperationResultHandler(handler);
   }
 
   list(): NodeSummary[] {
@@ -276,8 +232,8 @@ export class NodeDirectory {
   }
 
   activateAgent(nodeId: string, agentId: string): boolean {
-    const socket = this.connected.get(nodeId),
-      session = socket ? this.sessions.get(socket) : undefined;
+    const socket = this.connected.get(nodeId);
+    const session = socket ? this.sessions.get(socket) : undefined;
     if (!socket || !session?.ready || session.nodeId !== nodeId) return false;
     try {
       send(socket, {

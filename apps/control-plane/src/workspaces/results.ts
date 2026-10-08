@@ -5,8 +5,8 @@ import { posix as posixPath } from "node:path";
 import { z } from "zod";
 import { WorkspaceError } from "./errors.js";
 
-// Node responses historically allow extension fields and non-decimal version strings.
-// Keep that read boundary separate from the strict version schema accepted in tool requests.
+// Node response versions allow extension fields and non-decimal strings; tool request
+// versions use the stricter schema from protocol.
 export const workspaceVersionResultSchema = z.looseObject({
   device: z.string(),
   inode: z.string(),
@@ -19,7 +19,7 @@ const workspaceEntryResultSchema = z.looseObject({
   type: z.enum(["file", "directory", "symlink", "other"]),
   size: z.number().refine(Number.isSafeInteger).nonnegative(),
 });
-// The legacy list guard checked entries and pagination, but did not validate path.
+// Directory responses validate entries and pagination while retaining node metadata.
 export const workspaceDirectoryResultSchema = z.looseObject({
   entries: workspaceEntryResultSchema.array(),
   nextOffset: z.number().refine(Number.isSafeInteger).nullable(),
@@ -186,8 +186,8 @@ export function safeAuditPath(path: string, home?: string): string {
   if (path.includes("\0") || segments.includes("..")) return "[invalid path]";
   if (path.startsWith("/")) {
     if (!home?.startsWith("/")) return "[absolute path request]";
-    const normalizedHome = posixPath.normalize(home),
-      normalizedPath = posixPath.normalize(path);
+    const normalizedHome = posixPath.normalize(home);
+    const normalizedPath = posixPath.normalize(path);
     if (normalizedPath !== normalizedHome && !normalizedPath.startsWith(`${normalizedHome}/`))
       return "[absolute path request]";
     const relative = posixPath.relative(normalizedHome, normalizedPath);

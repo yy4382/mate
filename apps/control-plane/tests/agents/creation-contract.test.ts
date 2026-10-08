@@ -96,9 +96,12 @@ it("sends only the bounded Agent provisioning operation to the selected online n
   const agentId = "ed1e60c8-bdda-4f46-a857-bbd542f82640";
   const requestId = randomUUID();
   const stages: string[] = [];
-  const completed = app.nodes.provisionAgent(nodeId, requestId, agentId, (stage) =>
-    stages.push(stage),
-  );
+  const completed = app.nodes.operations.provisionAgent({
+    nodeId,
+    requestId,
+    agentId,
+    onProgress: (stage) => stages.push(stage),
+  });
   const command = JSON.parse(socket.sent.at(-1)!) as Record<string, unknown>;
 
   expect(command).toEqual({

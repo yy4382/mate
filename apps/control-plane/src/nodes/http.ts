@@ -1,6 +1,7 @@
 import { upgradeWebSocket } from "@hono/node-server";
 import { Hono } from "hono";
-import type { NodeDirectory, NodeSocket } from "./directory.js";
+import type { NodeDirectory } from "./directory.js";
+import type { NodeSocket } from "./transport.js";
 
 export function createNodeRoutes(nodes: NodeDirectory) {
   const adapters = new WeakMap<object, NodeSocket>();
@@ -29,7 +30,7 @@ export function createNodeRoutes(nodes: NodeDirectory) {
 
     .post("/api/owner/nodes/pairing-tokens", (context) => {
       context.header("Cache-Control", "no-store");
-      return context.json(nodes.createPairingToken(), 201);
+      return context.json(nodes.identity.createPairingToken(), 201);
     })
 
     .get("/api/owner/nodes", (context) => {
