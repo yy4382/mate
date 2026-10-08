@@ -1,5 +1,19 @@
 import type { Channel } from "../conversation-responses.js";
 
+type ConversationSidebarProps = {
+  channels: Channel[];
+  selectedId: string | null;
+  error: string | null;
+  busy: boolean;
+  live: boolean;
+  pushReady: boolean;
+  pushState: string | null;
+  enablePush: () => Promise<void>;
+  logout: () => Promise<void>;
+  onCreateChannel: () => void;
+  onSelectChannel: (id: string) => void;
+};
+
 export function ConversationSidebar({
   channels,
   selectedId,
@@ -12,19 +26,7 @@ export function ConversationSidebar({
   logout,
   onCreateChannel,
   onSelectChannel,
-}: {
-  channels: Channel[];
-  selectedId: string | null;
-  error: string | null;
-  busy: boolean;
-  live: boolean;
-  pushReady: boolean;
-  pushState: string | null;
-  enablePush: () => Promise<void>;
-  logout: () => Promise<void>;
-  onCreateChannel: () => void;
-  onSelectChannel: (id: string) => void;
-}) {
+}: ConversationSidebarProps) {
   return (
     <aside className="channel-sidebar" aria-label="频道列表">
       <div className="sidebar-heading">

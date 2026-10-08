@@ -1,3 +1,4 @@
+/* Channel header */
 .conversation-panel {
   display: flex;
   min-width: 0;
@@ -63,6 +64,7 @@
   font-weight: 300;
 }
 
+/* Timeline and messages */
 .message-list {
   display: flex;
   min-height: 0;
@@ -136,6 +138,7 @@
   white-space: pre-wrap;
 }
 
+/* Empty timeline */
 .conversation-empty {
   display: flex;
   min-height: 100%;
@@ -178,6 +181,7 @@
   padding: 0 16px;
 }
 
+/* Message composer and shared form controls */
 .message-composer {
   margin: 0 clamp(16px, 4vw, 56px) 24px;
   padding: 12px 13px 10px;
@@ -281,6 +285,7 @@
   white-space: nowrap;
 }
 
+/* Channel attachments */
 .conversation-attachments {
   max-height: 130px;
   flex: 0 0 auto;
@@ -336,6 +341,7 @@
   font-size: 11px;
 }
 
+/* Archived channel and mobile entry points */
 .archived-notice {
   margin: 0 clamp(16px, 4vw, 56px) 24px;
   padding: 14px;

@@ -12,9 +12,11 @@ export const emptyMessageWindow: MessageWindow = {
 export function mergeMessage(messages: Message[], incoming: Message): Message[] {
   if (messages.some((message) => message.id === incoming.id)) return messages;
   return [...messages, incoming].sort((left, right) => {
-    const a = BigInt(left.order),
-      b = BigInt(right.order);
-    return a < b ? -1 : a > b ? 1 : 0;
+    const leftOrder = BigInt(left.order);
+    const rightOrder = BigInt(right.order);
+    if (leftOrder < rightOrder) return -1;
+    if (leftOrder > rightOrder) return 1;
+    return 0;
   });
 }
 
@@ -27,9 +29,9 @@ function cursorIncludingEvicted(messages: Message[]): string {
 }
 
 export function appendToLatestWindow(window: MessageWindow, incoming: Message[]): MessageWindow {
-  const merged = mergeMessages(window.messages, incoming),
-    overflow = Math.max(0, merged.length - maxLoadedMessages),
-    evicted = merged.slice(0, overflow);
+  const merged = mergeMessages(window.messages, incoming);
+  const overflow = Math.max(0, merged.length - maxLoadedMessages);
+  const evicted = merged.slice(0, overflow);
   return {
     ...window,
     messages: overflow ? merged.slice(-maxLoadedMessages) : merged,
@@ -38,8 +40,8 @@ export function appendToLatestWindow(window: MessageWindow, incoming: Message[])
 }
 
 export function prependOlderWindow(window: MessageWindow, page: MessagePage): MessageWindow {
-  const merged = mergeMessages(window.messages, page.messages),
-    overflow = Math.max(0, merged.length - maxLoadedMessages);
+  const merged = mergeMessages(window.messages, page.messages);
+  const overflow = Math.max(0, merged.length - maxLoadedMessages);
   return {
     messages: overflow ? merged.slice(0, maxLoadedMessages) : merged,
     nextBefore: page.nextBefore,
@@ -54,11 +56,11 @@ export function mergeLoadedPage(window: MessageWindow, page: MessagePage): Messa
 
 /** Replace a historical window, retaining only live events newer than the returned page. */
 export function replaceWithLatestPage(window: MessageWindow, page: MessagePage): MessageWindow {
-  const newestLoadedOrder = page.messages.at(-1)?.order,
-    liveAfterPage =
-      newestLoadedOrder === undefined
-        ? []
-        : window.messages.filter((message) => BigInt(message.order) > BigInt(newestLoadedOrder));
+  const newestLoadedOrder = page.messages.at(-1)?.order;
+  const liveAfterPage =
+    newestLoadedOrder === undefined
+      ? []
+      : window.messages.filter((message) => BigInt(message.order) > BigInt(newestLoadedOrder));
   return appendToLatestWindow(
     { messages: page.messages, nextBefore: page.nextBefore, hasNewer: false },
     liveAfterPage,
@@ -73,10 +75,10 @@ export function receiveMessage(window: MessageWindow, incoming: Message): Messag
     ...window,
     messages: window.messages.map((message) => {
       if (message.id !== incoming.rootId) return message;
-      const lastReply = message.recentReplies?.at(-1),
-        alreadyIncluded =
-          message.recentReplies?.some((reply) => reply.id === incoming.id) ||
-          (lastReply && BigInt(incoming.order) <= BigInt(lastReply.order));
+      const lastReply = message.recentReplies?.at(-1);
+      const alreadyIncluded =
+        message.recentReplies?.some((reply) => reply.id === incoming.id) ||
+        (lastReply && BigInt(incoming.order) <= BigInt(lastReply.order));
       return {
         ...message,
         replyCount: alreadyIncluded ? (message.replyCount ?? 0) : (message.replyCount ?? 0) + 1,

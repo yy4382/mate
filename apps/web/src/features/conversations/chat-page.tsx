@@ -10,16 +10,16 @@ import {
 import { useConversationAttachments } from "./feed/use-conversation-attachments.js";
 import { useConversationFeed } from "./feed/use-conversation-feed.js";
 import { useConversationThread } from "./feed/use-conversation-thread.js";
+import { useMessageTasks, type TaskCreationPosition } from "./feed/use-message-tasks.js";
 import { useOwnerPush } from "./feed/use-owner-push.js";
 import { ownerJSON } from "./owner-request.js";
 import { ChannelDialog, type ChannelDraft, type ChannelSettings } from "./ui/channel-dialog.js";
 import { ConversationComposer, type ReplyTarget } from "./ui/conversation-composer.js";
 import { ConversationSidebar } from "./ui/conversation-sidebar.js";
 import { ConversationThread } from "./ui/conversation-thread.js";
-import { useMessageTasks, type TaskCreationPosition } from "./ui/message-tasks.js";
 import { MessageTimeline } from "./ui/message-timeline.js";
 
-// Preserve the original cascade, including mobile overrides before message-detail rules.
+// Message details follow mobile layout so their thread rules take precedence.
 import "./styles/shell.css";
 import "./styles/conversation.css";
 import "./styles/dialog.css";
@@ -29,6 +29,12 @@ import "./styles/message-details.css";
 type MobileView = "home" | "channels" | "chat" | "thread";
 type DialogState = { kind: "create" } | { kind: "settings"; channel: Channel } | null;
 
+function replyReference(target: ReplyTarget | null) {
+  if (target?.kind === "quote") return { quoteId: target.message.id };
+  if (target?.kind === "thread") return { rootId: target.message.rootId ?? target.message.id };
+  return {};
+}
+
 export function ChatPage() {
   const [authenticated, setAuthenticated] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -36,7 +42,7 @@ export function ChatPage() {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [asTask, setAsTask] = useState(false);
   const messageTasks = useMessageTasks(authenticated);
-  const { tasks, taskForm } = messageTasks;
+  const { tasks, taskCreation, createTask, cancelTaskCreation } = messageTasks;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mobileView, setMobileView] = useState<MobileView>("home");
@@ -123,8 +129,8 @@ export function ChatPage() {
 
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
-    const channelId = query.get("channel"),
-      messageId = query.get("message");
+    const channelId = query.get("channel");
+    const messageId = query.get("message");
     if (!selectedId || selectedId !== channelId || !messageId) return;
     const targetId = `message-${messageId}`;
     if (handledDeepLinkRef.current === targetId) return;
@@ -135,7 +141,6 @@ export function ChatPage() {
   }, [selectedId, messageWindows, threadReplies]);
 
   const selected = channels.find((channel) => channel.id === selectedId) ?? null;
-  const currentMessages = currentWindow.messages;
 
   async function logout() {
     setBusy(true);
@@ -153,8 +158,8 @@ export function ChatPage() {
   async function sendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selected || selected.archived || !draft.trim()) return;
-    const channelId = selected.id,
-      submittedDraft = draft;
+    const channelId = selected.id;
+    const submittedDraft = draft;
     setBusy(true);
     setError(null);
     try {
@@ -164,11 +169,7 @@ export function ChatPage() {
         jsonRequest("POST", {
           text: submittedDraft,
           ...(asTask ? { asTask: true } : {}),
-          ...(replyTarget?.kind === "quote"
-            ? { quoteId: replyTarget.message.id }
-            : replyTarget?.kind === "thread"
-              ? { rootId: replyTarget.message.rootId ?? replyTarget.message.id }
-              : {}),
+          ...replyReference(replyTarget),
         }),
       );
       if (replyTarget?.kind === "thread") thread.appendSubmittedReply(message);
@@ -207,6 +208,22 @@ export function ChatPage() {
     setMobileView("chat");
     document.getElementById("message-draft")?.focus();
   }
+  function quoteFromThread(message: Message) {
+    setReplyTarget({ kind: "quote", message });
+    setOpenMenuId(null);
+    setMobileView("chat");
+    document.getElementById("message-draft")?.focus();
+  }
+  function composeRootReply(message: Message) {
+    setReplyTarget({ kind: "thread", message });
+    setMobileView("chat");
+    document.getElementById("message-draft")?.focus();
+  }
+  function closeThread() {
+    thread.close();
+    setMobileView("chat");
+  }
+
   function openTaskCreation(message: Message, position: TaskCreationPosition) {
     messageTasks.openTaskCreation(message, position);
     setOpenMenuId(null);
@@ -365,7 +382,9 @@ export function ChatPage() {
               returnToLatest={returnToLatest}
               loadOlder={loadOlder}
               tasks={tasks}
-              taskForm={taskForm}
+              taskCreation={taskCreation}
+              createTask={createTask}
+              cancelTaskCreation={cancelTaskCreation}
               openMenuId={openMenuId}
               onToggleMenu={toggleMenu}
               onQuote={quoteMessage}
@@ -438,26 +457,16 @@ export function ChatPage() {
           threadRoot={threadRoot}
           threadReplies={threadReplies}
           tasks={tasks}
-          taskForm={taskForm}
+          taskCreation={taskCreation}
+          createTask={createTask}
+          cancelTaskCreation={cancelTaskCreation}
           openTaskCreation={openTaskCreation}
           openMenuId={openMenuId}
           onToggleMenu={toggleMenu}
-          onQuote={(message) => {
-            setReplyTarget({ kind: "quote", message });
-            setOpenMenuId(null);
-            setMobileView("chat");
-            document.getElementById("message-draft")?.focus();
-          }}
+          onQuote={quoteFromThread}
           onReply={composeThreadReply}
-          onComposeReply={(message) => {
-            setReplyTarget({ kind: "thread", message });
-            setMobileView("chat");
-            document.getElementById("message-draft")?.focus();
-          }}
-          onClose={() => {
-            thread.close();
-            setMobileView("chat");
-          }}
+          onComposeReply={composeRootReply}
+          onClose={closeThread}
         />
       )}
 

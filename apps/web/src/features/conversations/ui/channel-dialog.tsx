@@ -31,8 +31,8 @@ export function ChannelDialog({
 
   useEffect(() => {
     const previouslyFocused =
-        document.activeElement instanceof HTMLElement ? document.activeElement : null,
-      dialog = dialogRef.current;
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const dialog = dialogRef.current;
     if (!dialog) return;
     const modal = dialog;
     const focusable = () =>
@@ -55,9 +55,9 @@ export function ChannelDialog({
         return;
       }
       if (event.key !== "Tab") return;
-      const items = focusable(),
-        first = items[0],
-        last = items.at(-1);
+      const items = focusable();
+      const first = items[0];
+      const last = items.at(-1);
       if (!first || !last) {
         event.preventDefault();
         modal.focus();
@@ -86,6 +86,8 @@ export function ChannelDialog({
     if (kind === "create") onCreate(input);
     else onUpdate({ ...input, archived });
   }
+
+  const saveLabel = kind === "create" ? "创建频道" : "保存更改";
 
   return (
     <div
@@ -171,7 +173,7 @@ export function ChannelDialog({
               取消
             </button>
             <button type="submit" disabled={busy || !name.trim()}>
-              {busy ? "正在保存…" : kind === "create" ? "创建频道" : "保存更改"}
+              {busy ? "正在保存…" : saveLabel}
             </button>
           </div>
         </form>

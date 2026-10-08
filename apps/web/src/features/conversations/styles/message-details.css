@@ -1,10 +1,13 @@
+/* Message actions */
 .message-row {
   position: relative;
 }
+
 .message-actions {
   position: relative;
   margin-left: auto;
 }
+
 .message-menu-trigger {
   color: #344d2d;
   visibility: hidden;
@@ -14,6 +17,7 @@
   min-width: 36px;
   min-height: 36px;
 }
+
 .message-row:hover .message-menu-trigger,
 .message-row:focus-within .message-menu-trigger,
 .thread-replies article:hover .message-menu-trigger,
@@ -21,6 +25,7 @@
 .message-menu-trigger[aria-expanded="true"] {
   visibility: visible;
 }
+
 .message-menu {
   position: absolute;
   z-index: 4;
@@ -33,6 +38,7 @@
   background: white;
   box-shadow: 0 8px 25px #0002;
 }
+
 .message-menu button {
   color: #33372f;
   width: 100%;
@@ -41,10 +47,13 @@
   background: transparent;
   text-align: left;
 }
+
 .message-menu button:hover,
 .message-menu button:focus-visible {
   background: #e9eee4;
 }
+
+/* Thread preview and reply context */
 .thread-preview {
   display: block;
   margin-top: 8px;
@@ -54,10 +63,12 @@
   color: #476843;
   text-align: left;
 }
+
 .quote-reference {
   color: #687a60;
   font-size: 11px;
 }
+
 .reply-context {
   display: flex;
   align-items: center;
@@ -65,14 +76,18 @@
   color: #476843;
   font-size: 12px;
 }
+
 .reply-context button {
   color: #344d2d;
   border: 0;
   background: transparent;
 }
+
+/* Thread panel */
 .chat-shell:has(.thread-panel) {
   grid-template-columns: 76px 286px minmax(0, 1fr) minmax(280px, 32%);
 }
+
 .thread-panel {
   display: flex;
   flex-direction: column;
@@ -80,6 +95,7 @@
   border-left: 1px solid #e7e5dd;
   background: #fbfaf7;
 }
+
 .thread-panel header {
   display: flex;
   align-items: center;
@@ -87,39 +103,49 @@
   padding: 17px;
   border-bottom: 1px solid #e7e5dd;
 }
+
 .thread-panel header button {
   color: #344d2d;
   border: 0;
   background: transparent;
   font-size: 24px;
 }
+
 .thread-panel h2 {
   margin: 0;
   font-size: 17px;
 }
+
 .thread-root,
 .thread-replies article {
   padding: 14px 18px;
   border-bottom: 1px solid #e7e5dd;
 }
+
 .thread-root p,
 .thread-replies p {
   margin: 5px 0 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
 .thread-replies {
   flex: 1;
   overflow: auto;
 }
+
 .thread-reply-button {
   margin: 12px;
 }
+
+/* Touch message actions */
 @media (hover: none) {
   .message-menu-trigger {
     visibility: visible;
   }
 }
+
+/* Mobile thread layout */
 @media (max-width: 760px) {
   .chat-shell:has(.thread-panel) {
     display: flex;
@@ -143,33 +169,41 @@
   }
 }
 
+/* Reply action placement */
 .thread-replies article {
   position: relative;
   padding-right: 54px;
 }
+
 .thread-replies article .message-actions {
   position: absolute;
   top: 8px;
   right: 10px;
 }
+
+/* Message tasks and creation form */
 .message-tasks {
   display: grid;
   gap: 0.4rem;
   margin-block: 0.4rem;
 }
+
 .message-task-form {
   display: grid;
   gap: 0.5rem;
   margin-block: 0.75rem;
 }
+
 .message-task-form label {
   display: grid;
   gap: 0.3rem;
 }
+
 .message-task-form input {
   width: 100%;
   padding: 0.5rem;
 }
+
 .message-task-form button {
   margin-right: 0.5rem;
 }

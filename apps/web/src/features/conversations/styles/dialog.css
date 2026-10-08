@@ -1,3 +1,4 @@
+/* Channel dialog */
 .dialog-backdrop {
   position: fixed;
   z-index: 10;
@@ -34,6 +35,7 @@
   font-weight: 650;
 }
 
+/* Channel settings form */
 .channel-form {
   display: grid;
   gap: 9px;
@@ -121,6 +123,7 @@
   font-size: 12px;
 }
 
+/* Form actions */
 .dialog-actions {
   display: flex;
   justify-content: flex-end;
@@ -140,6 +143,7 @@
   opacity: 0.52;
 }
 
+/* Accessible labels */
 .visually-hidden {
   position: absolute;
   width: 1px;
