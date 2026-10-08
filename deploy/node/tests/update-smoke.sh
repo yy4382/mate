@@ -6,6 +6,7 @@ bootstrap=$2
 checksum=$3
 version=$4
 cut_script=$5
+test_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 cut_timeout=${MATE_TEST_CUT_TIMEOUT_SECONDS:-180}
 case "$cut_timeout" in ''|*[!0-9]*) echo 'Invalid test cut timeout' >&2; exit 1 ;; esac
 [ "$cut_timeout" -ge 1 ] && [ "$cut_timeout" -le 1800 ] || { echo 'Test cut timeout must be 1..1800 seconds' >&2; exit 1; }
@@ -25,17 +26,7 @@ update_pid=
 observer_pid=
 cleanup_cut() {
   if [ -f "$work/cut.json" ]; then
-    "$runtime" --input-type=module -e '
-      import { readFileSync } from "node:fs";
-      const cut = JSON.parse(readFileSync(process.argv[1], "utf8"));
-      for (const pid of [...cut.children, cut.pid]) {
-        try {
-          process.kill(pid, "SIGKILL");
-        } catch (e) {
-          if (e.code !== "ESRCH") throw e;
-        }
-      }
-    ' "$work/cut.json"
+    "$runtime" "$test_directory/cleanup-update-cut.mjs" "$work/cut.json"
     rm "$work/cut.json"
   fi
   if [ -n "$update_pid" ]; then kill -KILL "$update_pid" 2>/dev/null || true; wait "$update_pid" 2>/dev/null || true; update_pid=; fi
@@ -104,18 +95,7 @@ cmp "$unit" "$work/unit.before"
 phase=new-cli-preflight-failure
 cp "$work/new.tar.gz" "$work/good-v2.tar.gz"
 good_checksum=$new_checksum
-"$runtime" --input-type=module -e '
-  import { readFileSync, writeFileSync } from "node:fs";
-  import { createHash } from "node:crypto";
-  const dir = process.argv[1],
-    file = "app/apps/node/dist/management/cli.js";
-  writeFileSync(`${dir}/${file}`, "throw new Error(\"synthetic new CLI preflight failure\");\n");
-  const metadata = JSON.parse(readFileSync(`${dir}/bundle.json`, "utf8"));
-  metadata.files.find((entry) => entry.path === file).sha256 = createHash("sha256")
-    .update(readFileSync(`${dir}/${file}`))
-    .digest("hex");
-  writeFileSync(`${dir}/bundle.json`, JSON.stringify(metadata, null, 2) + "\n");
-' "$work/package/mate-node"
+"$runtime" "$test_directory/damage-update-cli-fixture.mjs" "$work/package/mate-node"
 tar -czf "$work/new.tar.gz" -C "$work/package" mate-node
 new_checksum=$(sha256sum "$work/new.tar.gz" | cut -d' ' -f1)
 if "$entry" node update --version 0.2.0 --package "$work/new.tar.gz" --sha256 "$new_checksum" >"$work/preflight.log" 2>&1; then exit 1; fi
@@ -248,29 +228,7 @@ printf 'damaged public launcher\n' >"$current/bin/mate"
 phase=repair-cleanup-interruption
 begin_cut repair-cleanup "$cut_version" "$external/bin/mate"
 # A pre-signal snapshot is not proof. Confirm the CLI is stopped and the actual backup is still partial.
-"$runtime" --input-type=module -e '
-  import { readFileSync, existsSync } from "node:fs";
-  import { join } from "node:path";
-  const cut = JSON.parse(readFileSync(process.argv[1], "utf8"));
-  if (!/^State:\s+T\b/m.test(readFileSync(`/proc/${cut.pid}/status`, "utf8")))
-    throw new Error("Actual update CLI is not stopped");
-  const evidence = cut.repairEvidence;
-  if (!evidence) throw new Error("No repair cleanup candidate was captured");
-  const manifest = join(evidence.backup, "bundle.json");
-  if (!existsSync(manifest) || existsSync(join(evidence.backup, evidence.missingPayload)))
-    throw new Error("Actual repair cleanup interruption was not captured");
-  const metadata = JSON.parse(readFileSync(manifest, "utf8"));
-  const remaining = metadata.files.filter((file) =>
-    existsSync(join(evidence.backup, file.path)),
-  ).length;
-  if (remaining === 0)
-    throw new Error(
-      "No payload remains in the stopped cleanup; partial cleanup seam is unverified",
-    );
-  process.stdout.write(
-    `MATE_REPAIR_CLEANUP_CUT_ASSERTED pid=${cut.pid} remaining=${remaining} manifest=present first-payload=missing\n`,
-  );
-' "$work/cut.json"
+"$runtime" "$test_directory/assert-repair-cleanup-cut.mjs" "$work/cut.json"
 cleanup_cut
 phase=same-version-damaged-program-recovery
 "$external/node/bin/node" "$external/app/apps/node/dist/management/cli.js" node update --version "$cut_version" --package "$work/new.tar.gz" --sha256 "$new_checksum" >"$work/repair-same-version.log" 2>&1

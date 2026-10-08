@@ -9,6 +9,7 @@ checksum=$3
 version=$4
 peer_script=$5
 cut_script=$6
+test_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 [ "$(id -u)" != 0 ] || { echo 'Use the existing ordinary test account' >&2; exit 1; }
 [ "$(systemd-detect-virt --container 2>/dev/null || true)" = none ] || { echo 'Containers do not establish service acceptance' >&2; exit 1; }
 command -v node >/dev/null 2>&1 && { echo 'Host Node must not supplement the package' >&2; exit 1; }
@@ -32,42 +33,7 @@ cleanup() {
   fi
   if [ -n "$observer_pid" ]; then kill "$observer_pid" 2>/dev/null || true; wait "$observer_pid" 2>/dev/null || true; fi
   if [ -n "$cli_pid" ] && [ -n "${recovery_runtime:-}" ]; then
-    "$recovery_runtime" --input-type=module -e '
-      import { readFileSync } from "node:fs";
-      const pid = Number(process.argv[1]),
-        parent = Number(process.argv[2]);
-      if (!Number.isSafeInteger(pid) || pid <= 1) throw new Error("Refusing unsafe cleanup PID");
-      try {
-        const own = readFileSync(`/proc/${pid}/status`, "utf8");
-        if (
-          Number(own.match(/^PPid:\s+(\d+)/m)?.[1]) !== parent ||
-          Number(own.match(/^Uid:\s+(\d+)/m)?.[1]) !== process.getuid()
-        )
-          throw new Error("Cleanup CLI ownership changed; preserved");
-        const children = readFileSync(`/proc/${pid}/task/${pid}/children`, "utf8")
-          .trim()
-          .split(/\s+/)
-          .filter(Boolean)
-          .map(Number);
-        for (const child of children) {
-          if (!Number.isSafeInteger(child) || child <= 1) throw new Error("Unsafe cleanup child");
-          try {
-            const status = readFileSync(`/proc/${child}/status`, "utf8");
-            if (
-              Number(status.match(/^PPid:\s+(\d+)/m)?.[1]) !== pid ||
-              Number(status.match(/^Uid:\s+(\d+)/m)?.[1]) !== process.getuid()
-            )
-              throw new Error("Cleanup child ownership changed; preserved");
-            process.kill(child, "SIGKILL");
-          } catch (error) {
-            if (!["ENOENT", "ESRCH"].includes(error.code)) throw error;
-          }
-        }
-        process.kill(pid, "SIGKILL");
-      } catch (error) {
-        if (!["ENOENT", "ESRCH"].includes(error.code)) throw error;
-      }
-    ' "$cli_pid" "$$" || { echo 'Owned CLI child cleanup failed; evidence retained' >&2; }
+    "$recovery_runtime" "$test_directory/cleanup-uninstall-cli.mjs" "$cli_pid" "$$" || { echo 'Owned CLI child cleanup failed; evidence retained' >&2; }
   fi
   if [ -n "$cli_pid" ]; then wait "$cli_pid" 2>/dev/null || true; fi
   if [ -n "$peer_pid" ]; then kill "$peer_pid" 2>/dev/null || true; wait "$peer_pid" 2>/dev/null || true; fi
@@ -168,50 +134,7 @@ cut_update_and_uninstall() {
   done
   wait "$observer_pid"; observer_pid=
   # Confirm the observed owned residual still exists after SIGSTOP; do not count a past cut.
-  "$recovery_runtime" --input-type=module -e '
-    import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-    import { dirname, join } from "node:path";
-    const cut = JSON.parse(readFileSync(process.argv[1], "utf8")),
-      pid = Number(process.argv[2]),
-      unit = process.argv[3];
-    if (
-      cut.pid !== pid ||
-      !Number.isSafeInteger(pid) ||
-      pid <= 1 ||
-      !/^State:\s+T/m.test(readFileSync(`/proc/${pid}/status`, "utf8"))
-    )
-      throw new Error("Actual update CLI is not paused at owned cut");
-    if (
-      cut.phase === "unit-moved" &&
-      (existsSync(unit) ||
-        !readdirSync(dirname(unit)).some((name) => name.startsWith(".mate-node-previous-unit-")))
-    )
-      throw new Error("Canonical unit is not missing with a remaining moved owned unit");
-    if (
-      cut.phase === "install" &&
-      (!existsSync(join(cut.installationEvidence.stage, ".mate-install-stage")) ||
-        !existsSync(join(cut.installationEvidence.stage, "app/apps/node/dist/main.js")))
-    )
-      throw new Error("No remaining actual copy stage");
-    if (
-      cut.phase === "repair-cleanup" &&
-      (!existsSync(join(cut.repairEvidence.backup, "bundle.json")) ||
-        existsSync(join(cut.repairEvidence.backup, cut.repairEvidence.missingPayload)))
-    )
-      throw new Error("No remaining partial owned repair inventory");
-    for (const child of cut.children) {
-      if (!Number.isSafeInteger(child) || child <= 1) throw new Error("Unsafe child PID");
-      try {
-        process.kill(child, "SIGKILL");
-      } catch (error) {
-        if (error.code !== "ESRCH") throw error;
-      }
-    }
-    process.kill(pid, "SIGKILL");
-    if (cut.repairEvidence) writeFileSync(process.argv[4], cut.repairEvidence.backup);
-    if (cut.installationEvidence) writeFileSync(process.argv[4], cut.installationEvidence.stage);
-    console.log("Verified actual owned cut:", JSON.stringify(cut));
-  ' "$work/cut.json" "$cli_pid" "$unit" "$work/stage-path"
+  "$recovery_runtime" "$test_directory/stop-update-cut-for-uninstall.mjs" "$work/cut.json" "$cli_pid" "$unit" "$work/stage-path"
   mv "$work/cut.json" "$work/cut-$cut_phase.json"
   if wait "$cli_pid"; then exit 1; fi
   cli_pid=
