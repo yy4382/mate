@@ -8,8 +8,8 @@ import { useWorkspaceDownload } from "./use-workspace-download.js";
 import "./workspace-browser.css";
 
 function decodeBase64(value: string) {
-  const binary = atob(value),
-    bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  const binary = atob(value);
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
   return new TextDecoder().decode(bytes);
 }
 
@@ -29,13 +29,13 @@ export function WorkspaceBrowser({
   agents: AgentSummary[];
   nodes: NodeSummary[];
 }) {
-  const available = agents.filter((agent) => agent.linuxIdentity !== null),
-    [agentId, setAgentId] = useState("");
+  const availableAgents = agents.filter((agent) => agent.linuxIdentity !== null);
+  const [agentId, setAgentId] = useState("");
   const [path, setPath] = useState("");
   const [entries, setEntries] = useState<WorkspaceEntry[]>([]);
   const [nextOffset, setNextOffset] = useState<number | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [refresh, setRefresh] = useState(0);
+  const [refreshVersion, setRefreshVersion] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastConnectedAt, setLastConnectedAt] = useState<string | null>(null);
@@ -50,7 +50,7 @@ export function WorkspaceBrowser({
   const [previewBusy, setPreviewBusy] = useState(false);
   const requestGeneration = useRef(0);
   const previewRequest = useRef(0);
-  const currentAgent = available.find((agent) => agent.id === agentId) ?? available[0];
+  const currentAgent = availableAgents.find((agent) => agent.id === agentId) ?? availableAgents[0];
   const currentNode = currentAgent
     ? nodes.find((node) => node.id === currentAgent.nodeId)
     : undefined;
@@ -128,15 +128,23 @@ export function WorkspaceBrowser({
     currentNode?.online,
     currentNode?.lastConnectedAt,
     path,
-    refresh,
+    refreshVersion,
   ]);
 
-  async function previewFile(filePath: string, offset = 0, knownStat?: WorkspaceFileStat) {
+  async function previewFile({
+    filePath,
+    offset = 0,
+    knownStat,
+  }: {
+    filePath: string;
+    offset?: number;
+    knownStat?: WorkspaceFileStat;
+  }) {
     if (!currentAgent) return;
-    const generation = requestGeneration.current,
-      request = ++previewRequest.current,
-      isCurrent = () =>
-        generation === requestGeneration.current && request === previewRequest.current;
+    const generation = requestGeneration.current;
+    const request = ++previewRequest.current;
+    const isCurrent = () =>
+      generation === requestGeneration.current && request === previewRequest.current;
     setPreviewBusy(true);
     setError(null);
     try {
@@ -149,14 +157,14 @@ export function WorkspaceBrowser({
       if (!isCurrent()) return;
       if (stat.type !== "file") throw new Error("只能预览普通文件。");
       const query = new URLSearchParams({
-          path: filePath,
-          offset: String(offset),
-          version: encodeVersion(stat.version),
-        }),
-        chunk = await workspaceJSON(
-          `/api/owner/agents/${encodeURIComponent(currentAgent.id)}/workspace/chunk?${query}`,
-          chunkSchema,
-        );
+        path: filePath,
+        offset: String(offset),
+        version: encodeVersion(stat.version),
+      });
+      const chunk = await workspaceJSON(
+        `/api/owner/agents/${encodeURIComponent(currentAgent.id)}/workspace/chunk?${query}`,
+        chunkSchema,
+      );
       if (!isCurrent()) return;
       setPreview({
         path: filePath,
@@ -171,6 +179,20 @@ export function WorkspaceBrowser({
     } finally {
       if (isCurrent()) setPreviewBusy(false);
     }
+  }
+
+  function previewChunk(offset: number) {
+    if (!preview) return;
+    return previewFile({
+      filePath: preview.path,
+      offset,
+      knownStat: {
+        type: "file",
+        size: preview.size,
+        modifiedAt: 0,
+        version: preview.version,
+      },
+    });
   }
 
   async function loadMoreEntries() {
@@ -219,14 +241,14 @@ export function WorkspaceBrowser({
           <button
             type="button"
             className="agent-new-button"
-            onClick={() => setRefresh((value) => value + 1)}
+            onClick={() => setRefreshVersion((value) => value + 1)}
             disabled={loading}
           >
             重新读取
           </button>
         )}
       </div>
-      {available.length === 0 ? (
+      {availableAgents.length === 0 ? (
         <p className="workspace-empty">还没有准备好默认工作区的 Agent。</p>
       ) : (
         <>
@@ -240,7 +262,7 @@ export function WorkspaceBrowser({
                 setPreview(null);
               }}
             >
-              {available.map((agent) => (
+              {availableAgents.map((agent) => (
                 <option key={agent.id} value={agent.id}>
                   {agent.name}
                 </option>
@@ -295,7 +317,7 @@ export function WorkspaceBrowser({
                         <button
                           type="button"
                           className="workspace-entry-button"
-                          onClick={() => void previewFile(entryPath)}
+                          onClick={() => void previewFile({ filePath: entryPath })}
                         >
                           <span aria-hidden="true">·</span>
                           <span>{entry.name}</span>
@@ -355,28 +377,14 @@ export function WorkspaceBrowser({
               <div className="workspace-preview-actions">
                 <button
                   type="button"
-                  onClick={() =>
-                    void previewFile(preview.path, Math.max(0, preview.offset - 8192), {
-                      type: "file",
-                      size: preview.size,
-                      modifiedAt: 0,
-                      version: preview.version,
-                    })
-                  }
+                  onClick={() => void previewChunk(Math.max(0, preview.offset - 8192))}
                   disabled={previewBusy || preview.offset === 0}
                 >
                   上一段
                 </button>
                 <button
                   type="button"
-                  onClick={() =>
-                    void previewFile(preview.path, preview.offset + 8192, {
-                      type: "file",
-                      size: preview.size,
-                      modifiedAt: 0,
-                      version: preview.version,
-                    })
-                  }
+                  onClick={() => void previewChunk(preview.offset + 8192)}
                   disabled={previewBusy || preview.offset + 8192 >= preview.size}
                 >
                   {previewBusy ? "读取中…" : "下一段"}

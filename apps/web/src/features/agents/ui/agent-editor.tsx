@@ -1,7 +1,4 @@
-import type {
-  ModelCredentialSummary as ModelCredential,
-  ModelProviderSummary as ModelProvider,
-} from "@mate/protocol/owner";
+import type { ModelCredentialSummary, ModelProviderSummary } from "@mate/protocol/owner";
 import { useLayoutEffect, useState } from "react";
 import { jsonRequest, readResponseJSON, responseErrorMessage } from "../../../http-json.js";
 import { redirectToLogin } from "../../../navigation.js";
@@ -14,8 +11,8 @@ export function AgentEditor({
   refresh,
 }: {
   agent: AgentSummary;
-  providers: ModelProvider[];
-  credentials: ModelCredential[];
+  providers: ModelProviderSummary[];
+  credentials: ModelCredentialSummary[];
   refresh: () => Promise<void>;
 }) {
   const [name, setName] = useState(agent.name);
@@ -33,7 +30,15 @@ export function AgentEditor({
     setProvider(agent.model.provider);
     setModelId(agent.model.id);
   }, [agent.name, agent.role, agent.description, agent.model.provider, agent.model.id]);
-  async function save(path: string, method: "PATCH" | "PUT", body: object) {
+  async function saveSettings({
+    path,
+    method,
+    body,
+  }: {
+    path: string;
+    method: "PATCH" | "PUT";
+    body: object;
+  }) {
     setBusy(true);
     setError(null);
     try {
@@ -54,7 +59,10 @@ export function AgentEditor({
       setBusy(false);
     }
   }
-  const selected = providers.find((item) => item.id === provider);
+  const selectedProvider = providers.find((item) => item.id === provider);
+  const hasModelCredential = credentials.some((item) => item.provider === provider);
+  const isCurrentModel = provider === agent.model.provider && modelId === agent.model.id;
+
   return (
     <div className="agent-editor">
       <label>
@@ -69,7 +77,9 @@ export function AgentEditor({
       <button
         type="button"
         disabled={busy || !name.trim() || name.trim() === agent.name}
-        onClick={() => void save("profile", "PATCH", { name: name.trim() })}
+        onClick={() =>
+          void saveSettings({ path: "profile", method: "PATCH", body: { name: name.trim() } })
+        }
       >
         保存名称
       </button>
@@ -85,7 +95,9 @@ export function AgentEditor({
       <button
         type="button"
         disabled={busy || !role.trim() || role.trim() === agent.role}
-        onClick={() => void save("profile", "PATCH", { role: role.trim() })}
+        onClick={() =>
+          void saveSettings({ path: "profile", method: "PATCH", body: { role: role.trim() } })
+        }
       >
         保存角色
       </button>
@@ -101,7 +113,13 @@ export function AgentEditor({
       <button
         type="button"
         disabled={busy || description.trim() === agent.description}
-        onClick={() => void save("profile", "PATCH", { description: description.trim() })}
+        onClick={() =>
+          void saveSettings({
+            path: "profile",
+            method: "PATCH",
+            body: { description: description.trim() },
+          })
+        }
       >
         保存描述
       </button>
@@ -130,25 +148,20 @@ export function AgentEditor({
           value={modelId}
           onChange={(event) => setModelId(event.target.value)}
         >
-          {selected?.models.map((item) => (
+          {selectedProvider?.models.map((item) => (
             <option key={item.id} value={item.id}>
               {item.name}
             </option>
           ))}
         </select>
       </label>
-      {!credentials.some((item) => item.provider === provider) && (
-        <p className="agent-field-hint">请先配置目标模型服务的 API key。</p>
-      )}
+      {!hasModelCredential && <p className="agent-field-hint">请先配置目标模型服务的 API key。</p>}
       <button
         type="button"
-        disabled={
-          busy ||
-          !modelId ||
-          !credentials.some((item) => item.provider === provider) ||
-          (provider === agent.model.provider && modelId === agent.model.id)
+        disabled={busy || !modelId || !hasModelCredential || isCurrentModel}
+        onClick={() =>
+          void saveSettings({ path: "model", method: "PUT", body: { provider, id: modelId } })
         }
-        onClick={() => void save("model", "PUT", { provider, id: modelId })}
       >
         切换模型
       </button>

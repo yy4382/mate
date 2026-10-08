@@ -7,13 +7,18 @@ import {
 import { useEffect, useState } from "react";
 import { redirectToLogin } from "../../navigation.js";
 
-const labels = { open: "待认领", in_progress: "进行中", done: "已完成" };
+const taskColumns = [
+  { status: "open", label: "待认领" },
+  { status: "in_progress", label: "进行中" },
+  { status: "done", label: "已完成" },
+];
 
 export function TasksPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [selected, setSelected] = useState<string | null>(null);
-  const [activity, setActivity] = useState<Activity[]>([]);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [taskActivity, setTaskActivity] = useState<Activity[]>([]);
   const [error, setError] = useState<string | null>(null);
+
   useEffect(() => {
     let live = true;
     async function refresh() {
@@ -44,10 +49,11 @@ export function TasksPage() {
       window.clearInterval(timer);
     };
   }, []);
+
   useEffect(() => {
-    if (!selected) return;
+    if (!selectedTaskId) return;
     let live = true;
-    void fetch(`/api/owner/tasks/${encodeURIComponent(selected)}/activity`)
+    void fetch(`/api/owner/tasks/${encodeURIComponent(selectedTaskId)}/activity`)
       .then(async (response) => {
         if (response.status === 401) {
           redirectToLogin();
@@ -57,7 +63,7 @@ export function TasksPage() {
         const parsed = taskActivityResponseSchema.safeParse(await response.json());
         if (!parsed.success) throw new Error("任务活动暂时无法读取");
         const body = parsed.data;
-        if (live) setActivity(body.events);
+        if (live) setTaskActivity(body.events);
       })
       .catch((cause: unknown) => {
         if (live) setError(cause instanceof Error ? cause.message : "读取失败");
@@ -65,7 +71,8 @@ export function TasksPage() {
     return () => {
       live = false;
     };
-  }, [selected, tasks]);
+  }, [selectedTaskId, tasks]);
+
   return (
     <main className="page-shell">
       <section className="agents-card" aria-labelledby="task-board-title">
@@ -82,9 +89,9 @@ export function TasksPage() {
             {error}
           </p>
         )}
-        {(["open", "in_progress", "done"] as const).map((status) => (
-          <section key={status} aria-label={labels[status]}>
-            <h2>{labels[status]}</h2>
+        {taskColumns.map(({ status, label }) => (
+          <section key={status} aria-label={label}>
+            <h2>{label}</h2>
             <ul>
               {tasks
                 .filter((task) => task.status === status)
@@ -92,23 +99,20 @@ export function TasksPage() {
                   <li key={task.id}>
                     <button
                       type="button"
-                      onClick={() => setSelected(task.id)}
-                      aria-expanded={selected === task.id}
+                      onClick={() => setSelectedTaskId(task.id)}
+                      aria-expanded={selectedTaskId === task.id}
                     >
                       {task.title}
                     </button>
-                    <span>
-                      {" "}
-                      · {task.ownerAgentId ? (task.ownerAgentName ?? task.ownerAgentId) : "未认领"}
-                    </span>
+                    <span> · {taskOwnerLabel(task)}</span>
                     <a
                       href={`/app?channel=${encodeURIComponent(task.channelId)}&message=${encodeURIComponent(task.messageId)}`}
                     >
                       查看原消息
                     </a>
-                    {selected === task.id && (
+                    {selectedTaskId === task.id && (
                       <ol aria-label="任务活动">
-                        {activity.map((event) => (
+                        {taskActivity.map((event) => (
                           <li key={event.seq}>
                             {event.kind} · {event.actorKind === "human" ? "你" : event.actorId}
                             {event.note ? ` · ${event.note}` : ""}
@@ -124,4 +128,8 @@ export function TasksPage() {
       </section>
     </main>
   );
+}
+
+function taskOwnerLabel(task: Task) {
+  return task.ownerAgentId ? (task.ownerAgentName ?? task.ownerAgentId) : "未认领";
 }

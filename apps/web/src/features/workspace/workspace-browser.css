@@ -1,3 +1,4 @@
+/* Agent selection and workspace path */
 .workspace-browser {
   margin-top: 28px;
 }
@@ -32,6 +33,7 @@
   overflow-wrap: anywhere;
 }
 
+/* Availability and feedback */
 .workspace-state,
 .workspace-error,
 .workspace-empty {
@@ -49,6 +51,7 @@
   color: #a33325;
 }
 
+/* Directory entries and downloads */
 .workspace-entry-list {
   margin: 0;
   padding: 0;
@@ -114,6 +117,7 @@
   opacity: 0.6;
 }
 
+/* File preview and chunk navigation */
 .workspace-preview {
   margin-top: 16px;
   padding: 12px;

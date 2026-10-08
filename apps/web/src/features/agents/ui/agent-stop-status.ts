@@ -16,13 +16,12 @@ export interface AgentStopStatus {
  * never reads the stop's success as "everything is gone".
  */
 export function agentStopStatus(stop: AgentStop | null | undefined): AgentStopStatus {
-  const unconfirmed = stop?.unconfirmedOperationIds?.length ?? 0,
-    // The node names its own scope; anything else is only "ordinary commands", not a wider claim.
-    scope = stop?.scope === thisNodeRunScope ? "本次节点运行启动的普通命令" : "普通命令",
-    // The count mixes commands from earlier node runs with process groups this very stop could not
-    // signal, so it is never described as "earlier commands".
-    unproven = `${unconfirmed} 条命令的终止无法确认`,
-    status = { retryLabel: "重新请求停止普通命令", awaitingProcessReceipts: false };
+  const unconfirmed = stop?.unconfirmedOperationIds?.length ?? 0;
+  // The node names its own scope; anything else is only "ordinary commands", not a wider claim.
+  const scope = stop?.scope === thisNodeRunScope ? "本次节点运行启动的普通命令" : "普通命令";
+  // The count includes commands whose originating node run or termination cannot be confirmed.
+  const unproven = `${unconfirmed} 条命令的终止无法确认`;
+  const status = { retryLabel: "重新请求停止普通命令", awaitingProcessReceipts: false };
   if (stop?.state === "succeeded")
     return {
       ...status,

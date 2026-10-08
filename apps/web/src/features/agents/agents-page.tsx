@@ -10,13 +10,9 @@ import {
   type AgentRequest,
   type Draft,
 } from "./agent-draft.js";
-import {
-  agentResponseSchema,
-  directChannelResponseSchema,
-  type AgentSummary,
-} from "./agent-responses.js";
+import { agentResponseSchema, directChannelResponseSchema } from "./agent-responses.js";
 import "./agents-page.css";
-// The workspace stylesheet retains its original overrides of shared Agent form styles.
+// Workspace form styles follow the shared Agent form styles in the cascade.
 import { WorkspaceBrowser } from "../workspace/workspace-browser.js";
 import { useAgentDirectory } from "./data/use-agent-directory.js";
 import { useModelCredentials } from "./data/use-model-credentials.js";
@@ -24,16 +20,8 @@ import { AgentActivity } from "./ui/agent-activity.js";
 import { AgentCreationForm } from "./ui/agent-creation-form.js";
 import { AgentEditor } from "./ui/agent-editor.js";
 import { agentStopStatus } from "./ui/agent-stop-status.js";
+import { agentStageLabels, agentStatusLabel } from "./ui/agent-status.js";
 import { ModelCredentialsForm } from "./ui/model-credentials-form.js";
-
-const stageLabels: Record<AgentSummary["stage"], string> = {
-  queued: "等待节点处理",
-  checking_account: "检查运行账号",
-  preparing_workspace: "准备默认工作区",
-  verifying_workspace: "核验工作区与记忆入口",
-  complete: "工作区与会话已核验",
-  failed: "创建未完成",
-};
 
 export function AgentsPage() {
   const [directChannels, setDirectChannels] = useState<Record<string, string>>({});
@@ -82,7 +70,7 @@ export function AgentsPage() {
     refresh,
   } = directory;
 
-  async function submitRequest(request: AgentRequest): Promise<void> {
+  async function submitAgentRequest(request: AgentRequest) {
     setSubmitting(true);
     setCreationError(null);
     try {
@@ -110,9 +98,19 @@ export function AgentsPage() {
     }
   }
 
-  function submitForm(event: FormEvent<HTMLFormElement>) {
+  function submitCreationForm(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    void submitRequest(requestFromDraft(draft));
+    void submitAgentRequest(requestFromDraft(draft));
+  }
+
+  function startNewDraft() {
+    const provider = providers[0];
+    setDraft({
+      ...newDraft(),
+      provider: provider?.id ?? "",
+      modelId: provider?.models[0]?.id ?? "",
+    });
+    setCreationError(null);
   }
 
   async function openDirectMessage(agentId: string) {
@@ -206,16 +204,8 @@ export function AgentsPage() {
           refreshError={refreshError}
           creationError={creationError}
           onDraftChange={setDraft}
-          onNewDraft={() => {
-            const provider = providers[0];
-            setDraft({
-              ...newDraft(),
-              provider: provider?.id ?? "",
-              modelId: provider?.models[0]?.id ?? "",
-            });
-            setCreationError(null);
-          }}
-          submitForm={submitForm}
+          onNewDraft={startNewDraft}
+          onSubmit={submitCreationForm}
         />
 
         <section aria-labelledby="agent-list-title">
@@ -233,163 +223,155 @@ export function AgentsPage() {
             </p>
           ) : (
             <ul className="agent-list">
-              {agents.map((agent) => (
-                <li className="agent-row" key={agent.id}>
-                  <div className="agent-row-heading">
-                    <div>
-                      <h3>{agent.name}</h3>
-                      <p>{agent.role}</p>
+              {agents.map((agent) => {
+                const directChannelId = directChannels[agent.id];
+                return (
+                  <li className="agent-row" key={agent.id}>
+                    <div className="agent-row-heading">
+                      <div>
+                        <h3>{agent.name}</h3>
+                        <p>{agent.role}</p>
+                      </div>
+                      <span className={`agent-status agent-status-${agent.status}`}>
+                        {agentStatusLabel(agent)}
+                      </span>
                     </div>
-                    <span className={`agent-status agent-status-${agent.status}`}>
-                      {agent.pausedReason === "manual"
-                        ? "已停用"
-                        : agent.pausedReason === "credentials"
-                          ? "凭据或模型错误"
-                          : agent.pausedReason === "context"
-                            ? "上下文压缩待处理"
-                            : agent.status === "waiting_credentials"
-                              ? "等待凭据"
-                              : agent.status === "provisioning"
-                                ? "正在创建"
-                                : agent.status === "ready"
-                                  ? "已就绪"
-                                  : "创建失败"}
-                    </span>
-                  </div>
-                  {agent.pausedReason === "manual" && (
-                    <p className="agent-credential-note" role="status">
-                      {agentStopStatus(agent.stop).summary}
-                      {agent.stop?.state === "succeeded"
-                        ? "复启前会核对运行账号与 Agent 工作区。"
-                        : ""}
+                    {agent.pausedReason === "manual" && (
+                      <p className="agent-credential-note" role="status">
+                        {agentStopStatus(agent.stop).summary}
+                        {agent.stop?.state === "succeeded"
+                          ? "复启前会核对运行账号与 Agent 工作区。"
+                          : ""}
+                      </p>
+                    )}
+                    <p className="agent-stage" role="status">
+                      {agentStageLabels[agent.stage]}
                     </p>
-                  )}
-                  <p className="agent-stage" role="status">
-                    {stageLabels[agent.stage]}
-                  </p>
-                  {agent.status === "waiting_credentials" && (
-                    <p className="agent-credential-note">
-                      默认工作区、记忆入口与会话已验证，运行账号为节点账号。配置模型凭据前不会启动运行；邀请频道中的消息会排队。
+                    {agent.status === "waiting_credentials" && (
+                      <p className="agent-credential-note">
+                        默认工作区、记忆入口与会话已验证，运行账号为节点账号。配置模型凭据前不会启动运行；邀请频道中的消息会排队。
+                      </p>
+                    )}
+                    {agent.status === "ready" && (
+                      <p className="agent-credential-note">
+                        模型服务凭据已配置；该 Agent 可以开始处理排队消息。
+                      </p>
+                    )}
+                    {agent.error && <p className="form-error">{agent.error}</p>}
+                    <p>
+                      <a href={`/app/agents/${encodeURIComponent(agent.id)}/reminders`}>查看提醒</a>
                     </p>
-                  )}
-                  {agent.status === "ready" && (
-                    <p className="agent-credential-note">
-                      模型服务凭据已配置；该 Agent 可以开始处理排队消息。
-                    </p>
-                  )}
-                  {agent.error && <p className="form-error">{agent.error}</p>}
-                  <p>
-                    <a href={`/app/agents/${encodeURIComponent(agent.id)}/reminders`}>查看提醒</a>
-                  </p>
-                  {agent.linuxIdentity && (
-                    <AgentEditor
-                      agent={agent}
-                      providers={providers}
-                      credentials={credentials}
-                      refresh={() => refresh()}
-                    />
-                  )}
-                  {agent.linuxIdentity && (
-                    <div className="agent-direct-message">
-                      {directChannels[agent.id] ? (
-                        <a href={`/app?channel=${encodeURIComponent(directChannels[agent.id]!)}`}>
-                          打开私信
-                        </a>
-                      ) : (
+                    {agent.linuxIdentity && (
+                      <AgentEditor
+                        agent={agent}
+                        providers={providers}
+                        credentials={credentials}
+                        refresh={refresh}
+                      />
+                    )}
+                    {agent.linuxIdentity && (
+                      <div className="agent-direct-message">
+                        {directChannelId ? (
+                          <a href={`/app?channel=${encodeURIComponent(directChannelId)}`}>
+                            打开私信
+                          </a>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={openingDirectMessage !== null}
+                            onClick={() => void openDirectMessage(agent.id)}
+                          >
+                            {openingDirectMessage === agent.id ? "正在打开…" : "私信"}
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {agent.linuxIdentity && (
+                      <div className="agent-direct-message">
+                        <label>
+                          邀请加入频道
+                          <select
+                            aria-label={`${agent.name} 邀请频道`}
+                            value={inviteChannels[agent.id] ?? ""}
+                            disabled={invitingAgent !== null || invitableChannels.length === 0}
+                            onChange={(event) =>
+                              setInviteChannels((current) => ({
+                                ...current,
+                                [agent.id]: event.target.value,
+                              }))
+                            }
+                          >
+                            <option value="">选择频道</option>
+                            {invitableChannels.map((channel) => (
+                              <option key={channel.id} value={channel.id}>
+                                {channel.name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
                         <button
                           type="button"
-                          disabled={openingDirectMessage !== null}
-                          onClick={() => void openDirectMessage(agent.id)}
+                          disabled={invitingAgent !== null || !inviteChannels[agent.id]}
+                          onClick={() => void inviteAgent(agent.id)}
                         >
-                          {openingDirectMessage === agent.id ? "正在打开…" : "私信"}
+                          {invitingAgent === agent.id ? "正在邀请…" : "邀请加入"}
                         </button>
-                      )}
-                    </div>
-                  )}
-                  {agent.linuxIdentity && (
-                    <div className="agent-direct-message">
-                      <label>
-                        邀请加入频道
-                        <select
-                          aria-label={`${agent.name} 邀请频道`}
-                          value={inviteChannels[agent.id] ?? ""}
-                          disabled={invitingAgent !== null || invitableChannels.length === 0}
-                          onChange={(event) =>
-                            setInviteChannels((current) => ({
-                              ...current,
-                              [agent.id]: event.target.value,
-                            }))
-                          }
-                        >
-                          <option value="">选择频道</option>
-                          {invitableChannels.map((channel) => (
-                            <option key={channel.id} value={channel.id}>
-                              {channel.name}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
+                        {invitationError && (
+                          <p className="form-error" role="alert">
+                            {invitationError}
+                          </p>
+                        )}
+                        {invitationNotice && (
+                          <p className="agent-field-hint" role="status">
+                            {invitationNotice}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    {agent.linuxIdentity && (
+                      <dl className="agent-linux-identity">
+                        <div>
+                          <dt>运行账号</dt>
+                          <dd>
+                            <code>{agent.linuxIdentity.username}</code>
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>账号 UID / GID</dt>
+                          <dd>
+                            <code>
+                              {agent.linuxIdentity.uid} / {agent.linuxIdentity.gid}
+                            </code>
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>默认工作区</dt>
+                          <dd>
+                            <code>{agent.linuxIdentity.workspace}</code>
+                          </dd>
+                        </div>
+                      </dl>
+                    )}
+                    {agent.linuxIdentity && <AgentActivity agentId={agent.id} />}
+                    {(agent.status === "failed" || agent.status === "provisioning") && (
                       <button
+                        className="agent-retry-button"
                         type="button"
-                        disabled={invitingAgent !== null || !inviteChannels[agent.id]}
-                        onClick={() => void inviteAgent(agent.id)}
+                        disabled={
+                          submitting ||
+                          !nodes.some((node) => node.id === agent.nodeId && node.online)
+                        }
+                        onClick={() => {
+                          setDraft(draftFromAgent(agent));
+                          void submitAgentRequest(requestFromDraft(draftFromAgent(agent)));
+                        }}
                       >
-                        {invitingAgent === agent.id ? "正在邀请…" : "邀请加入"}
+                        {agent.status === "failed" ? "按同一请求重试" : "继续此请求"}
                       </button>
-                      {invitationError && (
-                        <p className="form-error" role="alert">
-                          {invitationError}
-                        </p>
-                      )}
-                      {invitationNotice && (
-                        <p className="agent-field-hint" role="status">
-                          {invitationNotice}
-                        </p>
-                      )}
-                    </div>
-                  )}
-                  {agent.linuxIdentity && (
-                    <dl className="agent-linux-identity">
-                      <div>
-                        <dt>运行账号</dt>
-                        <dd>
-                          <code>{agent.linuxIdentity.username}</code>
-                        </dd>
-                      </div>
-                      <div>
-                        <dt>账号 UID / GID</dt>
-                        <dd>
-                          <code>
-                            {agent.linuxIdentity.uid} / {agent.linuxIdentity.gid}
-                          </code>
-                        </dd>
-                      </div>
-                      <div>
-                        <dt>默认工作区</dt>
-                        <dd>
-                          <code>{agent.linuxIdentity.workspace}</code>
-                        </dd>
-                      </div>
-                    </dl>
-                  )}
-                  {agent.linuxIdentity && <AgentActivity agentId={agent.id} />}
-                  {(agent.status === "failed" || agent.status === "provisioning") && (
-                    <button
-                      className="agent-retry-button"
-                      type="button"
-                      disabled={
-                        submitting || !nodes.some((node) => node.id === agent.nodeId && node.online)
-                      }
-                      onClick={() => {
-                        setDraft(draftFromAgent(agent));
-                        void submitRequest(requestFromDraft(draftFromAgent(agent)));
-                      }}
-                    >
-                      {agent.status === "failed" ? "按同一请求重试" : "继续此请求"}
-                    </button>
-                  )}
-                </li>
-              ))}
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           )}
         </section>

@@ -1,4 +1,4 @@
-import type { ModelProviderSummary as ModelProvider } from "@mate/protocol/owner";
+import type { ModelProviderSummary } from "@mate/protocol/owner";
 import type { FormEvent } from "react";
 import type { NodeSummary } from "../../nodes/node-responses.js";
 import type { Draft } from "../agent-draft.js";
@@ -16,30 +16,32 @@ export function AgentCreationForm({
   creationError,
   onDraftChange,
   onNewDraft,
-  submitForm,
+  onSubmit,
 }: {
   draft: Draft;
   savedDraft: AgentSummary | undefined;
   nodes: NodeSummary[];
   channels: ChannelSummary[];
-  providers: ModelProvider[];
+  providers: ModelProviderSummary[];
   loading: boolean;
   submitting: boolean;
   refreshError: string | null;
   creationError: string | null;
   onDraftChange: (draft: Draft) => void;
   onNewDraft: () => void;
-  submitForm: (event: FormEvent<HTMLFormElement>) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
-  const selectedNode = nodes.find((node) => node.id === draft.nodeId),
-    selectedProvider = providers.find((provider) => provider.id === draft.provider),
-    onlineNodes = nodes.filter((node) => node.online),
-    formLocked = savedDraft !== undefined,
-    canSubmit =
-      Boolean(selectedNode?.online) &&
-      Boolean(selectedProvider?.models.some((model) => model.id === draft.modelId)) &&
-      !submitting &&
-      savedDraft?.status !== "waiting_credentials";
+  const selectedNode = nodes.find((node) => node.id === draft.nodeId);
+  const selectedProvider = providers.find((provider) => provider.id === draft.provider);
+  const onlineNodes = nodes.filter((node) => node.online);
+  const formLocked = savedDraft !== undefined;
+  const canSubmit =
+    Boolean(selectedNode?.online) &&
+    Boolean(selectedProvider?.models.some((model) => model.id === draft.modelId)) &&
+    !submitting &&
+    savedDraft?.status !== "waiting_credentials";
+  const submitLabel = creationSubmitLabel(submitting, savedDraft?.status);
+
   return (
     <section className="agent-form-section" aria-labelledby="create-agent-title">
       <div className="agents-section-heading">
@@ -47,9 +49,7 @@ export function AgentCreationForm({
         <button
           className="agent-new-button"
           type="button"
-          onClick={() => {
-            onNewDraft();
-          }}
+          onClick={onNewDraft}
           disabled={submitting}
         >
           新建资料
@@ -58,7 +58,7 @@ export function AgentCreationForm({
       <p className="agents-intro">
         只在选择在线节点后提交。尚未配置模型 key 时，Agent 会等待凭据；私信会先排队。
       </p>
-      <form className="agent-form" onSubmit={submitForm}>
+      <form className="agent-form" onSubmit={onSubmit}>
         <label>
           Linux 节点
           <select
@@ -180,13 +180,15 @@ export function AgentCreationForm({
           </p>
         )}
         <button type="submit" disabled={!canSubmit}>
-          {submitting
-            ? "正在等待节点…"
-            : savedDraft?.status === "failed" || savedDraft?.status === "provisioning"
-              ? "按同一请求继续"
-              : "创建 Agent"}
+          {submitLabel}
         </button>
       </form>
     </section>
   );
+}
+
+function creationSubmitLabel(submitting: boolean, status: AgentSummary["status"] | undefined) {
+  if (submitting) return "正在等待节点…";
+  if (status === "failed" || status === "provisioning") return "按同一请求继续";
+  return "创建 Agent";
 }

@@ -70,7 +70,7 @@ export function NodesPage() {
     }
   }
 
-  const command = token
+  const nodeStartCommand = token
     ? [
         `export MATE_CONTROL_PLANE_URL='${window.location.origin}'`,
         "read -r -s -p '配对令牌: ' MATE_NODE_PAIRING_TOKEN; echo",
@@ -78,6 +78,7 @@ export function NodesPage() {
         "node apps/node/dist/main.js",
       ].join("\n")
     : "";
+  const pairingButtonLabel = tokenButtonLabel(creatingToken, token);
 
   return (
     <main className="page-shell nodes-page-shell">
@@ -130,7 +131,7 @@ export function NodesPage() {
             令牌只可使用一次，10 分钟后失效。创建后请立即复制到待配对 Linux 节点。
           </p>
           <button type="button" onClick={createPairingToken} disabled={creatingToken}>
-            {creatingToken ? "正在创建…" : token ? "重新创建令牌" : "创建一次性令牌"}
+            {pairingButtonLabel}
           </button>
           {token && (
             <div className="pairing-result" role="status">
@@ -141,7 +142,7 @@ export function NodesPage() {
                 shell 历史。
               </p>
               <pre className="node-start-command">
-                <code>{command}</code>
+                <code>{nodeStartCommand}</code>
               </pre>
             </div>
           )}
@@ -157,7 +158,12 @@ export function NodesPage() {
   );
 }
 
-function formatDate(value: string): string {
+function tokenButtonLabel(creating: boolean, token: PairingToken | null) {
+  if (creating) return "正在创建…";
+  return token ? "重新创建令牌" : "创建一次性令牌";
+}
+
+function formatDate(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime())
     ? "时间未知"

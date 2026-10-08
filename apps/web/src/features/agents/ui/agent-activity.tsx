@@ -8,6 +8,7 @@ export function AgentActivity({ agentId }: { agentId: string }) {
   const [expanded, setExpanded] = useState(false);
   const [page, setPage] = useState<ActivityPage | null>(null);
   const [error, setError] = useState<string | null>(null);
+
   async function changePause(action: "pause" | "resume") {
     try {
       const response = await fetch(`/api/owner/agents/${encodeURIComponent(agentId)}/${action}`, {
@@ -43,6 +44,7 @@ export function AgentActivity({ agentId }: { agentId: string }) {
       setError(reason instanceof Error ? reason.message : "无法改变 Agent 状态，请稍后重试。");
     }
   }
+
   useEffect(() => {
     if (!open) return;
     const controller = new AbortController();
@@ -68,7 +70,11 @@ export function AgentActivity({ agentId }: { agentId: string }) {
       clearInterval(timer);
     };
   }, [agentId, open, expanded]);
+
   const stopStatus = agentStopStatus(page?.stop);
+  const pausedReason = page?.pausedReason;
+  const pauseAction = pausedReason === "manual" || pausedReason === "context" ? "resume" : "pause";
+
   return (
     <section className="agent-activity" aria-label="Agent 动态">
       <button type="button" onClick={() => setOpen(!open)}>
@@ -78,31 +84,10 @@ export function AgentActivity({ agentId }: { agentId: string }) {
         <>
           <div className="agent-activity-toolbar">
             <span>{page?.nodeOnline ? "节点在线" : "节点离线 · 以下为最后已确认事实"}</span>
-            {page?.pausedReason && (
-              <span>
-                {page.pausedReason === "manual"
-                  ? "已停用"
-                  : page.pausedReason === "context"
-                    ? "上下文压缩待处理"
-                    : "模型凭据或配置待处理"}
-              </span>
-            )}
-            {page?.pausedReason === "manual" && <span role="status">{stopStatus.summary}</span>}
-            <button
-              type="button"
-              onClick={() =>
-                void changePause(
-                  page?.pausedReason === "manual" || page?.pausedReason === "context"
-                    ? "resume"
-                    : "pause",
-                )
-              }
-            >
-              {page?.pausedReason === "manual"
-                ? "复启 Agent"
-                : page?.pausedReason === "context"
-                  ? "重试 Agent"
-                  : "停用 Agent"}
+            {pausedReason && <span>{pausedReasonLabel(pausedReason)}</span>}
+            {pausedReason === "manual" && <span role="status">{stopStatus.summary}</span>}
+            <button type="button" onClick={() => void changePause(pauseAction)}>
+              {pauseButtonLabel(pausedReason)}
             </button>
             {page?.pausedReason === "manual" &&
               (page.stop?.state === "unknown" || page.stop?.state === "failed") && (
@@ -137,4 +122,16 @@ export function AgentActivity({ agentId }: { agentId: string }) {
       )}
     </section>
   );
+}
+
+function pausedReasonLabel(reason: ActivityPage["pausedReason"]) {
+  if (reason === "manual") return "已停用";
+  if (reason === "context") return "上下文压缩待处理";
+  return "模型凭据或配置待处理";
+}
+
+function pauseButtonLabel(reason: ActivityPage["pausedReason"] | undefined) {
+  if (reason === "manual") return "复启 Agent";
+  if (reason === "context") return "重试 Agent";
+  return "停用 Agent";
 }

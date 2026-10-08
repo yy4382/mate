@@ -1,7 +1,4 @@
-import type {
-  ModelCredentialSummary as ModelCredential,
-  ModelProviderSummary as ModelProvider,
-} from "@mate/protocol/owner";
+import type { ModelCredentialSummary, ModelProviderSummary } from "@mate/protocol/owner";
 import type { useModelCredentials } from "../data/use-model-credentials.js";
 
 export function ModelCredentialsForm({
@@ -10,8 +7,8 @@ export function ModelCredentialsForm({
   controls,
   refresh,
 }: {
-  providers: ModelProvider[];
-  credentials: ModelCredential[];
+  providers: ModelProviderSummary[];
+  credentials: ModelCredentialSummary[];
   controls: Omit<ReturnType<typeof useModelCredentials>, "reconcileProviders">;
   refresh: () => Promise<void>;
 }) {

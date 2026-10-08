@@ -1,19 +1,12 @@
-import { z } from "zod";
-import { ownerReminderSchema } from "@mate/protocol/owner";
 import { useEffect, useState } from "react";
 import { redirectToLogin } from "../../navigation.js";
-const reminderSchema = ownerReminderSchema
-  .pick({ id: true, text: true, dueAt: true, state: true })
-  .extend({
-    firing: z.looseObject({ handledAt: z.number().nullish() }).nullish(),
-  })
-  .loose();
-const remindersResponseSchema = z.looseObject({ reminders: z.array(reminderSchema) });
-type Reminder = z.infer<typeof reminderSchema>;
+import { remindersResponseSchema, type Reminder } from "./reminder-responses.js";
+
 export function RemindersPage() {
   const agentId = window.location.pathname.split("/")[3] ?? "";
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [error, setError] = useState<string | null>(null);
+
   useEffect(() => {
     let live = true;
     async function refresh() {
@@ -42,6 +35,7 @@ export function RemindersPage() {
       window.clearInterval(timer);
     };
   }, [agentId]);
+
   return (
     <main className="page-shell">
       <section className="agents-card" aria-labelledby="reminders-title">
@@ -63,14 +57,7 @@ export function RemindersPage() {
             {reminders.map((reminder) => (
               <li key={reminder.id}>
                 <strong>{reminder.text}</strong> ·{" "}
-                {new Date(reminder.dueAt).toLocaleString("zh-CN")} ·{" "}
-                {reminder.state === "active"
-                  ? "待触发"
-                  : reminder.state === "cancelled"
-                    ? "已取消"
-                    : reminder.firing?.handledAt
-                      ? "已处理"
-                      : "已触发，等待 Agent 处理"}
+                {new Date(reminder.dueAt).toLocaleString("zh-CN")} · {reminderStateLabel(reminder)}
               </li>
             ))}
           </ul>
@@ -78,4 +65,10 @@ export function RemindersPage() {
       </section>
     </main>
   );
+}
+
+function reminderStateLabel(reminder: Reminder) {
+  if (reminder.state === "active") return "待触发";
+  if (reminder.state === "cancelled") return "已取消";
+  return reminder.firing?.handledAt ? "已处理" : "已触发，等待 Agent 处理";
 }

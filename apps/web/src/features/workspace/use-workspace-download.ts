@@ -7,7 +7,17 @@ import {
   WorkspaceDownloadStatusUnavailableError,
 } from "./download-status.js";
 
-function downloadUrl(agentId: string, filePath: string, downloadId: string, format?: "browser") {
+function downloadUrl({
+  agentId,
+  filePath,
+  downloadId,
+  format,
+}: {
+  agentId: string;
+  filePath: string;
+  downloadId: string;
+  format?: "browser";
+}) {
   const query = new URLSearchParams({ path: filePath, downloadId });
   if (format) query.set("format", format);
   return `/api/owner/agents/${encodeURIComponent(agentId)}/workspace/download?${query}`;
@@ -45,7 +55,7 @@ export function useWorkspaceDownload(agentId: string | undefined) {
       if (!picker) {
         downloadId = crypto.randomUUID();
         const link = document.createElement("a");
-        link.href = downloadUrl(agentId, filePath, downloadId, "browser");
+        link.href = downloadUrl({ agentId, filePath, downloadId, format: "browser" });
         link.target = "_blank";
         link.rel = "noopener";
         link.style.display = "none";
@@ -75,7 +85,7 @@ export function useWorkspaceDownload(agentId: string | undefined) {
       if (controller.signal.aborted) return;
       downloadId = crypto.randomUUID();
       setDownloadState({ path: filePath, state: "downloading", message: "正在流式下载…" });
-      const response = await fetch(downloadUrl(agentId, filePath, downloadId), {
+      const response = await fetch(downloadUrl({ agentId, filePath, downloadId }), {
         cache: "no-store",
         signal: controller.signal,
       });
@@ -100,8 +110,8 @@ export function useWorkspaceDownload(agentId: string | undefined) {
         setDownloadState(null);
         return;
       }
-      let code = reason instanceof WorkspaceDownloadError ? reason.code : null,
-        statusError: unknown;
+      let code = reason instanceof WorkspaceDownloadError ? reason.code : null;
+      let statusError: unknown;
       if (downloadId && !code) {
         try {
           const status = await waitForDownloadStatus(agentId, downloadId, {
@@ -116,12 +126,7 @@ export function useWorkspaceDownload(agentId: string | undefined) {
       setDownloadState({
         path: filePath,
         state: "error",
-        message:
-          code !== null
-            ? downloadMessage(code, reason instanceof Error ? reason.message : undefined)
-            : statusError instanceof WorkspaceDownloadStatusUnavailableError
-              ? statusError.message
-              : "文件下载中断，请检查节点连接后重试。",
+        message: downloadFailureMessage(code, reason, statusError),
       });
     } finally {
       if (downloadAbortRef.current === controller) downloadAbortRef.current = null;
@@ -129,4 +134,11 @@ export function useWorkspaceDownload(agentId: string | undefined) {
   }
 
   return { downloadState, downloadFile };
+}
+
+function downloadFailureMessage(code: string | null, reason: unknown, statusError: unknown) {
+  if (code !== null)
+    return downloadMessage(code, reason instanceof Error ? reason.message : undefined);
+  if (statusError instanceof WorkspaceDownloadStatusUnavailableError) return statusError.message;
+  return "文件下载中断，请检查节点连接后重试。";
 }
