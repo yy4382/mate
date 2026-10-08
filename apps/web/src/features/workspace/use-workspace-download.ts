@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { readResponseJSON } from "../../http-json.js";
 import {
   downloadMessage,
   waitForDownloadStatus,
@@ -79,7 +80,7 @@ export function useWorkspaceDownload(agentId: string | undefined) {
         signal: controller.signal,
       });
       if (!response.ok) {
-        const body: unknown = await response.json().catch(() => null);
+        const body = await readResponseJSON(response);
         const details = typeof body === "object" && body !== null ? body : {};
         const code = "code" in details && typeof details.code === "string" ? details.code : "";
         throw new WorkspaceDownloadError(

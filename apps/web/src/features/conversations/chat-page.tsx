@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { jsonRequest } from "../../http-json.js";
 import { redirectToLogin } from "../../navigation.js";
 import {
   channelSchema,
@@ -54,7 +55,7 @@ export function ChatPage() {
     setSelectedFile,
     attachmentInputRef,
     uploadAttachment,
-  } = useConversationAttachments(authenticated, selectedId);
+  } = useConversationAttachments({ authenticated, selectedId });
   const thread = useConversationThread({ selectedIdRef, onError: setError });
   const { threadRoot, threadReplies } = thread;
   const expireSession = useCallback(() => {
@@ -70,7 +71,8 @@ export function ChatPage() {
     onSessionExpired: expireSession,
     onMobileView: setMobileView,
     onError: setError,
-    thread,
+    receiveStreamReply: thread.receiveStreamReply,
+    installThread: thread.installThread,
   });
   const {
     channels,
@@ -159,19 +161,15 @@ export function ChatPage() {
       const message = await ownerJSON(
         `/api/owner/channels/${encodeURIComponent(channelId)}/messages`,
         messageSchema,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            text: submittedDraft,
-            ...(asTask ? { asTask: true } : {}),
-            ...(replyTarget?.kind === "quote"
-              ? { quoteId: replyTarget.message.id }
-              : replyTarget?.kind === "thread"
-                ? { rootId: replyTarget.message.rootId ?? replyTarget.message.id }
-                : {}),
-          }),
-        },
+        jsonRequest("POST", {
+          text: submittedDraft,
+          ...(asTask ? { asTask: true } : {}),
+          ...(replyTarget?.kind === "quote"
+            ? { quoteId: replyTarget.message.id }
+            : replyTarget?.kind === "thread"
+              ? { rootId: replyTarget.message.rootId ?? replyTarget.message.id }
+              : {}),
+        }),
       );
       if (replyTarget?.kind === "thread") thread.appendSubmittedReply(message);
       feed.appendSubmittedMessage(channelId, message);
@@ -218,11 +216,11 @@ export function ChatPage() {
     setBusy(true);
     setError(null);
     try {
-      const channel = await ownerJSON("/api/owner/channels", channelSchema, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(input),
-      });
+      const channel = await ownerJSON(
+        "/api/owner/channels",
+        channelSchema,
+        jsonRequest("POST", input),
+      );
       feed.channelCreated(channel);
       setSelectedId(channel.id);
       setMobileView("chat");
@@ -242,11 +240,7 @@ export function ChatPage() {
       const channel = await ownerJSON(
         `/api/owner/channels/${encodeURIComponent(selected.id)}`,
         channelSchema,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(input),
-        },
+        jsonRequest("PATCH", input),
       );
       feed.channelUpdated(channel);
       setDialog(null);

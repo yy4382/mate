@@ -1,5 +1,6 @@
-import type { ModelProviderSummary as ModelProvider } from "@mate/protocol/owner";
+import type { ModelProviderSummary } from "@mate/protocol/owner";
 import { useCallback, useState, type FormEvent } from "react";
+import { jsonRequest, readResponseJSON, responseErrorMessage } from "../../http-json.js";
 import { redirectToLogin } from "../../navigation.js";
 import type { NodeSummary } from "../nodes/node-responses.js";
 import {
@@ -9,7 +10,6 @@ import {
   type AgentRequest,
   type Draft,
 } from "./agent-draft.js";
-import { errorMessage } from "./agent-requests.js";
 import {
   agentResponseSchema,
   directChannelResponseSchema,
@@ -48,7 +48,7 @@ export function AgentsPage() {
   const credentialControls = useModelCredentials();
   const { reconcileProviders } = credentialControls;
   const onRefreshed = useCallback(
-    (nodes: NodeSummary[], providers: ModelProvider[]) => {
+    (nodes: NodeSummary[], providers: ModelProviderSummary[]) => {
       reconcileProviders(providers);
       setDraft((current) => {
         const provider =
@@ -86,22 +86,19 @@ export function AgentsPage() {
     setSubmitting(true);
     setCreationError(null);
     try {
-      const response = await fetch("/api/owner/agents", {
-        method: "POST",
-        headers: { Accept: "application/json", "Content-Type": "application/json" },
-        body: JSON.stringify(request),
-      });
+      const response = await fetch("/api/owner/agents", jsonRequest("POST", request));
       if (response.status === 401) {
         redirectToLogin();
         return;
       }
-      const result: unknown = await response.json().catch(() => null);
+      const result = await readResponseJSON(response);
       const returned = agentResponseSchema.safeParse(result);
       if (returned.success) {
         const returnedAgent = returned.data.agent;
         directory.recordReturnedAgent(returnedAgent);
       }
-      if (!response.ok) throw new Error(errorMessage(result, "Agent 创建失败，请按同一请求重试。"));
+      if (!response.ok)
+        throw new Error(responseErrorMessage(result, "Agent 创建失败，请按同一请求重试。"));
       await refresh();
     } catch (reason) {
       setCreationError(
@@ -133,8 +130,8 @@ export function AgentsPage() {
         redirectToLogin();
         return;
       }
-      const result: unknown = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(errorMessage(result, "暂时无法打开私信。"));
+      const result = await readResponseJSON(response);
+      if (!response.ok) throw new Error(responseErrorMessage(result, "暂时无法打开私信。"));
       const parsed = directChannelResponseSchema.safeParse(result);
       if (!parsed.success) throw new Error("暂时无法打开私信。");
       setDirectChannels((current) => ({ ...current, [agentId]: parsed.data.channel.id }));
@@ -154,18 +151,15 @@ export function AgentsPage() {
     try {
       const response = await fetch(
         `/api/owner/channels/${encodeURIComponent(channelId)}/invitations`,
-        {
-          method: "POST",
-          headers: { Accept: "application/json", "Content-Type": "application/json" },
-          body: JSON.stringify({ agentId }),
-        },
+        jsonRequest("POST", { agentId }),
       );
       if (response.status === 401) {
         redirectToLogin();
         return;
       }
-      const result: unknown = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(errorMessage(result, "暂时无法邀请 Agent 加入频道。"));
+      const result = await readResponseJSON(response);
+      if (!response.ok)
+        throw new Error(responseErrorMessage(result, "暂时无法邀请 Agent 加入频道。"));
       setInvitationNotice(
         `${agents.find((agent) => agent.id === agentId)?.name ?? "Agent"} 已加入频道。`,
       );

@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import { readResponseJSON, responseErrorMessage } from "../../http-json.js";
 import { redirectToLogin } from "../../navigation.js";
 
 export async function workspaceJSON<T>(path: string, schema: z.ZodType<T>) {
@@ -7,11 +8,11 @@ export async function workspaceJSON<T>(path: string, schema: z.ZodType<T>) {
     redirectToLogin();
     throw new Error("登录状态已失效");
   }
-  const result: unknown = await response.json().catch(() => null);
+  const result = await readResponseJSON(response);
   if (!response.ok) {
     const details = typeof result === "object" && result !== null ? result : {};
     throw new WorkspaceRequestError(
-      errorMessage(result, "暂时无法读取 Agent 工作区。"),
+      responseErrorMessage(result, "暂时无法读取 Agent 工作区。"),
       "code" in details && typeof details.code === "string"
         ? details.code
         : "workspace_unavailable",
@@ -34,10 +35,4 @@ export class WorkspaceRequestError extends Error {
     super(message);
     this.name = "WorkspaceRequestError";
   }
-}
-
-function errorMessage(result: unknown, fallback: string): string {
-  return typeof result === "object" && result !== null && "error" in result
-    ? String(result.error)
-    : fallback;
 }

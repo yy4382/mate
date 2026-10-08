@@ -1,7 +1,7 @@
 import type { ModelProviderSummary } from "@mate/protocol/owner";
 import { useCallback, useState, type FormEvent } from "react";
+import { jsonRequest, readResponseJSON, responseErrorMessage } from "../../../http-json.js";
 import { redirectToLogin } from "../../../navigation.js";
-import { errorMessage } from "../agent-requests.js";
 
 export function useModelCredentials() {
   const [credentialProvider, setCredentialProvider] = useState("openai");
@@ -23,18 +23,14 @@ export function useModelCredentials() {
     try {
       const response = await fetch(
         `/api/owner/model-credentials/${encodeURIComponent(credentialProvider)}`,
-        {
-          method: "PUT",
-          headers: { Accept: "application/json", "Content-Type": "application/json" },
-          body: JSON.stringify({ apiKey: credentialKey }),
-        },
+        jsonRequest("PUT", { apiKey: credentialKey }),
       );
       if (response.status === 401) {
         redirectToLogin();
         return;
       }
-      const result: unknown = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(errorMessage(result, "无法保存模型凭据，请重试。"));
+      const result = await readResponseJSON(response);
+      if (!response.ok) throw new Error(responseErrorMessage(result, "无法保存模型凭据，请重试。"));
       setCredentialKey("");
       setCredentialSaved(true);
       await refresh();

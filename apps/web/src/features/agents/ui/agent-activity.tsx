@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { readResponseJSON } from "../../../http-json.js";
 import { activityPageSchema, pauseResponseSchema, type ActivityPage } from "../agent-responses.js";
 import { agentStopStatus } from "./agent-stop-status.js";
 
@@ -13,7 +14,7 @@ export function AgentActivity({ agentId }: { agentId: string }) {
         method: "POST",
       });
       if (!response.ok) {
-        const result: unknown = await response.json().catch(() => null);
+        const result = await readResponseJSON(response);
         throw new Error(
           typeof result === "object" &&
             result !== null &&
