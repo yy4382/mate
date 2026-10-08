@@ -1,23 +1,24 @@
 import Database from "better-sqlite3";
+import type { NodeRequest } from "@mate/protocol";
 import { randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 
-const mockSockets = vi.hoisted(() => ({ items: [] as Array<Record<string, any>> }));
-vi.mock("ws", () => {
+const mockSockets = vi.hoisted(() => {
+  const items: MockWebSocket[] = [];
   class MockWebSocket {
     static CONNECTING = 0;
     static OPEN = 1;
     static CLOSING = 2;
     static CLOSED = 3;
     readyState = MockWebSocket.CONNECTING;
-    sent: Record<string, unknown>[] = [];
-    listeners = new Map<string, Array<{ callback: (event: any) => void; once: boolean }>>();
+    sent: NodeRequest[] = [];
+    listeners = new Map<string, Array<{ callback: (event: unknown) => void; once: boolean }>>();
 
     constructor() {
-      mockSockets.items.push(this);
+      items.push(this);
       setTimeout(() => {
         if (this.readyState !== MockWebSocket.CONNECTING) return;
         this.readyState = MockWebSocket.OPEN;
@@ -29,13 +30,17 @@ vi.mock("ws", () => {
       }, 0);
     }
 
-    addEventListener(type: string, callback: (event: any) => void, options?: { once?: boolean }) {
+    addEventListener(
+      type: string,
+      callback: (event: unknown) => void,
+      options?: { once?: boolean },
+    ) {
       const values = this.listeners.get(type) ?? [];
       values.push({ callback, once: options?.once ?? false });
       this.listeners.set(type, values);
     }
 
-    removeEventListener(type: string, callback: (event: any) => void) {
+    removeEventListener(type: string, callback: (event: unknown) => void) {
       this.listeners.set(
         type,
         (this.listeners.get(type) ?? []).filter((listener) => listener.callback !== callback),
@@ -43,7 +48,8 @@ vi.mock("ws", () => {
     }
 
     send(data: string) {
-      const request = JSON.parse(data) as Record<string, unknown>;
+      // The production sender has already checked this message with NodeRequestSchema.
+      const request: NodeRequest = JSON.parse(data);
       this.sent.push(request);
       if (request.type === "node.authenticate")
         this.serverSend({
@@ -85,8 +91,9 @@ vi.mock("ws", () => {
       }
     }
   }
-  return { WebSocket: MockWebSocket };
+  return { items, MockWebSocket };
 });
+vi.mock("ws", () => ({ WebSocket: mockSockets.MockWebSocket }));
 
 import { loadOrCreateNodeIdentity } from "../../src/connection/node-identity.js";
 import { runLinuxNodeWithTestDependencies } from "../../src/connection/node-client.js";
@@ -115,7 +122,7 @@ async function waitFor<T>(promise: Promise<T>, timeoutMs = 5000): Promise<T> {
   }
 }
 
-async function waitForSocket(index: number): Promise<Record<string, any>> {
+async function waitForSocket(index: number) {
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
     const socket = mockSockets.items[index];
@@ -126,12 +133,12 @@ async function waitForSocket(index: number): Promise<Record<string, any>> {
 }
 
 async function waitForMessage(
-  socket: Record<string, any>,
-  type: string,
-): Promise<Record<string, unknown>> {
+  socket: InstanceType<typeof mockSockets.MockWebSocket>,
+  type: NodeRequest["type"],
+) {
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
-    const message = socket.sent.find((entry: Record<string, unknown>) => entry.type === type);
+    const message = socket.sent.find((entry) => entry.type === type);
     if (message) return message;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
@@ -140,35 +147,35 @@ async function waitForMessage(
 
 it("reconciles a running operation after its WebSocket disconnects without starting it twice", async () => {
   mockSockets.items.length = 0;
-  const directory = mkdtempSync(join(tmpdir(), "mate-process-client-")),
-    database = new Database(":memory:"),
-    started = deferred<void>(),
-    finish = deferred<{ state: "succeeded"; receipt: unknown }>(),
-    execute = vi.fn(async () => {
-      started.resolve();
-      return finish.promise;
-    }),
-    operations = new AgentProcessOperations(database, execute),
-    identity = loadOrCreateNodeIdentity(directory).identity,
-    controller = new AbortController(),
-    node = runLinuxNodeWithTestDependencies(
-      {
-        controlPlaneUrl: "http://node-control.test",
-        dataDirectory: directory,
-        heartbeatIntervalMs: 1000,
-        heartbeatTimeoutMs: 3000,
-      },
-      controller.signal,
-      { processOperations: operations },
-    );
+  const directory = mkdtempSync(join(tmpdir(), "mate-process-client-"));
+  const database = new Database(":memory:");
+  const started = deferred<void>();
+  const finish = deferred<{ state: "succeeded"; receipt: unknown }>();
+  const execute = vi.fn(async () => {
+    started.resolve();
+    return finish.promise;
+  });
+  const operations = new AgentProcessOperations(database, execute);
+  const identity = loadOrCreateNodeIdentity(directory).identity;
+  const controller = new AbortController();
+  const node = runLinuxNodeWithTestDependencies(
+    {
+      controlPlaneUrl: "http://node-control.test",
+      dataDirectory: directory,
+      heartbeatIntervalMs: 1000,
+      heartbeatTimeoutMs: 3000,
+    },
+    controller.signal,
+    { processOperations: operations },
+  );
 
   try {
     const first = await waitForSocket(0);
     await waitForMessage(first, "node.ping");
-    const operationId = randomUUID(),
-      agentId = randomUUID(),
-      operation = { kind: "exec", command: "printf once", cwd: "." },
-      firstRequestId = randomUUID();
+    const operationId = randomUUID();
+    const agentId = randomUUID();
+    const operation = { kind: "exec", command: "printf once", cwd: "." };
+    const firstRequestId = randomUUID();
     first.serverSend({
       type: "control.process.operation",
       requestId: firstRequestId,

@@ -30,7 +30,7 @@ export function createLinuxAgentProcessExecutor(
   const commandTimeoutMs = options.commandTimeoutMs ?? defaultCommandTimeoutMs;
   if (!Number.isSafeInteger(commandTimeoutMs) || commandTimeoutMs < 1 || commandTimeoutMs > 300_000)
     throw new Error("Agent command timeout must be between 1 and 300000 milliseconds");
-  const runner: AgentCommandRunner = options.runner ?? new OrdinaryCommandRunner();
+  const runner = options.runner ?? new OrdinaryCommandRunner();
   return async ({ agentId, operationId, operation }) => {
     switch (operation.kind) {
       case "exec": {

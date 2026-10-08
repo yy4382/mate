@@ -42,8 +42,8 @@ export class FixedWorkspacePaths {
       ? openSync(root, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
       : undefined;
     if (this.rootDescriptor !== undefined) {
-      const rootStat = fstatSync(this.rootDescriptor),
-        pathStat = lstatSync(root);
+      const rootStat = fstatSync(this.rootDescriptor);
+      const pathStat = lstatSync(root);
       if (!rootStat.isDirectory() || rootStat.dev !== pathStat.dev || rootStat.ino !== pathStat.ino)
         throw new FileOperationError(
           "unsafe_path",
@@ -62,7 +62,13 @@ export class FixedWorkspacePaths {
     )
       flockSync(this.rootDescriptor, "ex");
   }
-  checked(path: string, allowMissing = false, createParents = false): string {
+  checked(
+    path: string,
+    {
+      allowMissing = false,
+      createParents = false,
+    }: { allowMissing?: boolean; createParents?: boolean } = {},
+  ): string {
     let workspacePath = path;
     if (isAbsolute(workspacePath)) {
       if (workspacePath === this.root) workspacePath = ".";
@@ -77,8 +83,8 @@ export class FixedWorkspacePaths {
       throw new FileOperationError("unsafe_path", "unsafe_path: Path escapes the workspace");
     if (this.pinnedDirectoryPaths && this.rootDescriptor !== undefined) {
       if (parts.length === 0) return `${descriptorPath(this.rootDescriptor)}/.`;
-      let parent = this.rootDescriptor,
-        ownedParent = false;
+      let parent = this.rootDescriptor;
+      let ownedParent = false;
       try {
         for (const part of parts.slice(0, -1)) {
           const candidate = `${descriptorPath(parent)}/${part}`;
@@ -121,8 +127,8 @@ export class FixedWorkspacePaths {
         throw error;
       }
     }
-    let target = this.root,
-      missing = false;
+    let target = this.root;
+    let missing = false;
     for (const part of parts) {
       target = resolve(target, part);
       if (!within(this.root, target))
@@ -144,8 +150,8 @@ export class FixedWorkspacePaths {
 
   releasePinned(path: string): void {
     if (!this.pinnedDirectoryPaths || this.rootDescriptor === undefined) return;
-    const match = path.match(/^\/proc\/self\/fd\/(\d+)(?:\/|$)/),
-      descriptor = match ? Number(match[1]) : undefined;
+    const match = path.match(/^\/proc\/self\/fd\/(\d+)(?:\/|$)/);
+    const descriptor = match ? Number(match[1]) : undefined;
     if (
       descriptor !== undefined &&
       descriptor !== this.rootDescriptor &&

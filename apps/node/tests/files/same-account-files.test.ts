@@ -23,9 +23,9 @@ afterEach(() => {
 it.skipIf(process.getuid!() === 0)(
   "reports a native move permission failure without modifying either directory",
   async () => {
-    const root = workspace(),
-      protectedDirectory = join(root, "protected"),
-      backend = new SameAccountFileBackend({ ...identity, home: root });
+    const root = workspace();
+    const protectedDirectory = join(root, "protected");
+    const backend = new SameAccountFileBackend({ ...identity, home: root });
     mkdirSync(protectedDirectory, { mode: 0o500 });
     writeFileSync(join(root, "source.txt"), "source remains intact");
     try {
@@ -56,9 +56,9 @@ it("keeps provisioner-only identity metadata outside the strict execution backen
 });
 
 it("creates peer-readable work products without making private home files peer-readable", async () => {
-  const privateRoot = workspace(),
-    shared = workspace(),
-    backend = new SameAccountFileBackend({ ...identity, home: privateRoot });
+  const privateRoot = workspace();
+  const shared = workspace();
+  const backend = new SameAccountFileBackend({ ...identity, home: privateRoot });
   for (const root of [privateRoot, shared]) {
     expect(
       (
@@ -89,8 +89,8 @@ it("refuses a different execution account at call time", async () => {
 });
 
 it("keeps the file helper environment private and supplies the workspace home and CLI path", async () => {
-  const root = workspace(),
-    helper = join(root, "environment.cjs");
+  const root = workspace();
+  const helper = join(root, "environment.cjs");
   writeFileSync(helper, "process.stdin.resume();process.stdout.write(JSON.stringify(process.env))");
   process.env.MATE_FILE_ENV_TEST = "not-for-helper";
   try {
@@ -118,11 +118,11 @@ it("keeps the file helper environment private and supplies the workspace home an
 });
 
 it("cancels and times out a file helper without blocking other work", async () => {
-  const root = workspace(),
-    helper = join(root, "waiting.cjs");
+  const root = workspace();
+  const helper = join(root, "waiting.cjs");
   writeFileSync(helper, "process.stdin.resume();setInterval(()=>{},1000)");
-  const backend = new SameAccountFileBackend(identity, helper),
-    controller = new AbortController();
+  const backend = new SameAccountFileBackend(identity, helper);
+  const controller = new AbortController();
   const request = { root, timeoutMs: 5000, operation: { kind: "read" as const, path: "." } };
   const running = backend.execute(request, controller.signal);
   const cancelled = expect(running).rejects.toThrow("outcome may be unknown");

@@ -49,10 +49,10 @@ SQLite 的 session/run/交付/动作记录和 node 本地收据是持久事实�
 
 ## 节点按执行职责找代码
 
-- `connection/`：节点身份、配对、WebSocket 连接及重连。
-- `provisioning/`：准备同一运行账号下的 Agent 默认工作区。
-- `files/`：文件操作入口、辅助进程、路径检查与原子文件操作。`file-failures.ts` 归一具名文件错误和系统 errno；helper 非零退出在 stderr 写有界错误 JSON，backend 解析并保留诊断，新 code 随结果和收据传递，成功 stdout 保持原格式。
-- `processes/`：普通命令、进程状态、操作运行与持久收据。
+- `connection/`：从 `node-client.ts` 进入身份验证、心跳与重连；`node-identity.ts` 读取或创建节点身份。`process-requests.ts`、`workspace-requests.ts` 分别处理当前连接的操作请求与收据对账。
+- `provisioning/`：`agent-workspace.ts` 准备、核验同一运行账号下的 Agent 默认工作区与 MEMORY.md；`workspace-marker.ts` 管理工作区身份标记，`errors.ts` 定义创建失败。
+- `files/`：`workspace-executor.ts` 选择读取工作区、执行操作并保存收据；`same-account-files.ts` 启动同账号 helper、收集输出，`workspace-result.ts` 将结果写入协议响应。`file-operation.mts` 按操作种类分派，具名函数表达内容读取、保存与 JSON 输出；`fixed-workspace-paths.ts` 拥有目录描述符与路径检查，缺失路径和父目录创建由具名选项表达。`mutations/` 提供原子重命名与内容核验。`file-failures.ts` 归一具名文件错误和系统 errno；helper 非零退出在 stderr 写有界错误 JSON，backend 解析诊断，错误码随结果和收据传递。
+- `processes/`：`operation-runtime.ts` 装配数据库与命令执行器；`operation-ledger.ts` 保存请求和持久收据。`linux-process-executor.ts` 按普通命令、查询和停止操作分派；`ordinary-command.ts` 拥有子进程、输出与跟踪记录，`linux-processes.ts` 提供进程信号和 Linux 状态读取。
 - `management/`：完整发布包契约与校验、现有账号目录规则、唯一 CLI 入口安装、私有节点配置和 systemd 用户服务管理；`service/commands.ts` 拥有服务启停/状态命令，`service/systemd.ts` 保留私有 D-Bus 调用，`service/systemd-property.ts` 是其相邻 subprocess helper；`acquire-bundle.ts` 只获取临时完整包，`update.ts` 在停止事实与管理锁内切换，`repair-bundle.ts` 处理可信原清单下的外部 CLI 同版修复；`deploy/node/` 是离线生产包构建、薄 bootstrap 和实际包外部验收入口。见 [完整 node 包说明](node/NODE_BUNDLE.md)、[用户服务说明](node/NODE_SERVICE.md) 与 [停机更新](node/NODE_UPDATE.md)。
 
 节点卸载由 `management/uninstall.ts` 根据实际单元、入口与包库存继续清理，使用同一管理锁并保留配置与数据；命令恢复和真实服务验收入口见 [卸载说明](node/NODE_UNINSTALL.md)。

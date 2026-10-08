@@ -45,8 +45,8 @@ export class SameAccountFileBackend implements ExecutionBackend {
     const root = realpathSync(request.root);
     if (!statSync(root).isDirectory()) throw new Error("Workspace root is not a directory");
     const path = resolve(root, op.path);
-    const privateHome = within(realpathSync(account.home), path),
-      umask = privateHome ? "077" : "022";
+    const privateHome = within(realpathSync(account.home), path);
+    const umask = privateHome ? "077" : "022";
     if (process.getuid?.() !== account.uid || process.getgid?.() !== account.gid)
       throw new Error("File execution account does not match the running Mate account");
     const env = {
@@ -63,13 +63,13 @@ export class SameAccountFileBackend implements ExecutionBackend {
         detached: true,
         stdio: ["pipe", "pipe", "pipe"],
       });
-      const stdout: Buffer[] = [],
-        stderr: Buffer[] = [];
-      let outBytes = 0,
-        errBytes = 0,
-        truncated = false,
-        interrupted = false,
-        settled = false;
+      const stdout: Buffer[] = [];
+      const stderr: Buffer[] = [];
+      let outBytes = 0;
+      let errBytes = 0;
+      let truncated = false;
+      let interrupted = false;
+      let settled = false;
       const collect = (parts: Buffer[], size: number, chunk: Buffer): number => {
         const available = 65536 - size;
         if (available <= 0) {
@@ -118,15 +118,7 @@ export class SameAccountFileBackend implements ExecutionBackend {
           reject(new Error("File execution aborted or timed out; outcome may be unknown"));
         else {
           const diagnostic = Buffer.concat(stderr).toString("utf8");
-          let failure: z.infer<typeof helperFailureSchema> | undefined;
-          if (code !== 0) {
-            try {
-              const parsed = helperFailureSchema.safeParse(JSON.parse(diagnostic));
-              if (parsed.success) failure = parsed.data;
-            } catch {
-              // Foreign/test helpers can still return raw diagnostics; do not invent evidence.
-            }
-          }
+          const failure = code !== 0 ? readHelperFailure(diagnostic) : undefined;
           resolvePromise({
             code: code ?? 1,
             stdout: Buffer.concat(stdout).toString("utf8"),
@@ -147,5 +139,15 @@ export class SameAccountFileBackend implements ExecutionBackend {
       child.stdin!.on("error", () => {});
       child.stdin!.end(JSON.stringify(op));
     });
+  }
+}
+
+function readHelperFailure(diagnostic: string) {
+  try {
+    const parsed = helperFailureSchema.safeParse(JSON.parse(diagnostic));
+    return parsed.success ? parsed.data : undefined;
+  } catch {
+    // Foreign/test helpers can return raw diagnostics rather than Mate's structured failure.
+    return undefined;
   }
 }

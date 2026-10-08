@@ -207,16 +207,16 @@ function connectOnce(
   const socket = new WebSocket(url, { perMessageDeflate: false });
 
   return new Promise<boolean>((resolveConnection, rejectConnection) => {
-    let settled = false,
-      authenticated = false,
-      challenge: string | undefined,
-      authenticateRequestId: string | undefined,
-      pairRequestId: string | undefined,
-      heartbeat: ReturnType<typeof setInterval> | undefined,
-      pingTimeout: ReturnType<typeof setTimeout> | undefined,
-      forceTerminateTimeout: ReturnType<typeof setTimeout> | undefined,
-      pendingPing: string | undefined,
-      timeout: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
+    let authenticated = false;
+    let challenge: string | undefined;
+    let authenticateRequestId: string | undefined;
+    let pairRequestId: string | undefined;
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+    let pingTimeout: ReturnType<typeof setTimeout> | undefined;
+    let forceTerminateTimeout: ReturnType<typeof setTimeout> | undefined;
+    let pendingPing: string | undefined;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     const canSend = () => socket.readyState === WebSocket.OPEN && authenticated;
     const send = (request: unknown) => sendRequest(socket, request);
     const processRequests = new NodeProcessRequests(processOperations, canSend, send);
@@ -405,23 +405,25 @@ function connectOnce(
       if (message.type === "control.agent.provision") {
         if (!authenticated)
           throw new NodeAuthenticationError("控制面在节点身份验证前请求创建 Agent。");
+        const prepareWorkspace: AgentWorkspaceRunner = (agentId, onProgress) => {
+          if (message.verifyOnly)
+            return Promise.resolve(
+              readAgentWorkspaceIdentity(agentId, resolvePath(agentWorkspaceRoot)),
+            );
+          if (testDependencies.prepareAgentWorkspace)
+            return testDependencies.prepareAgentWorkspace(agentId, onProgress);
+          return prepareAgentWorkspace({
+            agentId,
+            workspaceRoot: resolvePath(agentWorkspaceRoot),
+            onProgress,
+          });
+        };
         void handleAgentProvisionRequest(
           message,
           (request) => {
             if (socket.readyState === WebSocket.OPEN) sendRequest(socket, request);
           },
-          (agentId, onProgress) =>
-            message.verifyOnly
-              ? Promise.resolve(
-                  readAgentWorkspaceIdentity(agentId, resolvePath(agentWorkspaceRoot)),
-                )
-              : testDependencies.prepareAgentWorkspace
-                ? testDependencies.prepareAgentWorkspace(agentId, onProgress)
-                : prepareAgentWorkspace({
-                    agentId,
-                    workspaceRoot: resolvePath(agentWorkspaceRoot),
-                    onProgress,
-                  }),
+          prepareWorkspace,
         ).catch(() => {
           // Provisioning failures are returned as bounded protocol results by its handler.
         });

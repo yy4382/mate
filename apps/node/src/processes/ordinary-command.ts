@@ -120,8 +120,8 @@ export class OrdinaryCommandRunner {
   }
 
   async run(request: OrdinaryCommandRequest): Promise<OrdinaryCommandReceipt> {
-    const startedAt = this.now(),
-      key = trackedKey(request.agentId, request.operationId);
+    const startedAt = this.now();
+    const key = trackedKey(request.agentId, request.operationId);
     let process_: ChildProcess;
     try {
       process_ = spawn("/bin/sh", ["-c", request.command], {
@@ -136,11 +136,11 @@ export class OrdinaryCommandRunner {
       throw new OrdinaryCommandNotStartedError(error);
     }
     const pid = process_.pid;
-    let timedOut = false,
-      exited = false,
-      opened = false,
-      hardStop: ReturnType<typeof setTimeout> | undefined,
-      releaseHardStop: (() => void) | undefined;
+    let timedOut = false;
+    let exited = false;
+    let opened = false;
+    let hardStop: ReturnType<typeof setTimeout> | undefined;
+    let releaseHardStop: (() => void) | undefined;
     // The listeners exist before any await, so a failed start is always this call's definite
     // result instead of an unhandled child-process error.
     const outcome = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
@@ -176,8 +176,8 @@ export class OrdinaryCommandRunner {
     // this brand-new command by mistake.
     for (const [otherKey, other] of this.tracked)
       if (other.pid === pid && otherKey !== key) this.tracked.delete(otherKey);
-    const stdout = new BoundedOutput(this.outputLimitBytes),
-      stderr = new BoundedOutput(this.outputLimitBytes);
+    const stdout = new BoundedOutput(this.outputLimitBytes);
+    const stderr = new BoundedOutput(this.outputLimitBytes);
     process_.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
     process_.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
 
@@ -257,8 +257,8 @@ export class OrdinaryCommandRunner {
   }
 
   async stopAll(agentId: string): Promise<{ stopped: string[]; unconfirmed: string[] }> {
-    const stopped: string[] = [],
-      unconfirmed: string[] = [];
+    const stopped: string[] = [];
+    const unconfirmed: string[] = [];
     for (const entry of this.list(agentId)) {
       const result = await this.stop(agentId, entry.operationId);
       if (result.state === "stopped") stopped.push(entry.operationId);
@@ -311,8 +311,8 @@ function processStartToken(pid: number): string | undefined {
   }
   // `/proc/<pid>/stat` is `pid (comm) state ppid pgrp session ... itrealvalue starttime ...`; the
   // command name is parenthesised and may contain spaces, so fields are counted from its close.
-  const closing = stat.lastIndexOf(")"),
-    token = closing < 0 ? undefined : stat.slice(closing + 2).split(" ")[19];
+  const closing = stat.lastIndexOf(")");
+  const token = closing < 0 ? undefined : stat.slice(closing + 2).split(" ")[19];
   return token !== undefined && /^\d+$/.test(token) ? token : undefined;
 }
 
@@ -360,8 +360,8 @@ function procGroupMember(pid: number): { group: number; state: string } | undefi
   }
   const closing = stat.lastIndexOf(")");
   if (closing < 0) return undefined;
-  const fields = stat.slice(closing + 2).split(" "),
-    group = Number(fields[2]);
+  const fields = stat.slice(closing + 2).split(" ");
+  const group = Number(fields[2]);
   return fields[0] && Number.isSafeInteger(group) ? { group, state: fields[0] } : undefined;
 }
 

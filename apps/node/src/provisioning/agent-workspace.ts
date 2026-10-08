@@ -49,8 +49,8 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
  * be created with root as its account.
  */
 export function nodeAccountIdentity(): Pick<AgentWorkspaceIdentity, "username" | "uid" | "gid"> {
-  const uid = typeof process.getuid === "function" ? process.getuid() : -1,
-    gid = typeof process.getgid === "function" ? process.getgid() : -1;
+  const uid = typeof process.getuid === "function" ? process.getuid() : -1;
+  const gid = typeof process.getgid === "function" ? process.getgid() : -1;
   if (uid === 0 || gid === 0)
     throw new AgentProvisioningError(
       "unsupported_host",
@@ -71,8 +71,8 @@ export function nodeAccountIdentity(): Pick<AgentWorkspaceIdentity, "username" |
 export async function prepareAgentWorkspace(
   options: AgentWorkspacePreparationOptions,
 ): Promise<AgentWorkspaceIdentity> {
-  const key = `${resolve(options.workspaceRoot)}\0${options.agentId.toLowerCase()}`,
-    running = activePreparations.get(key);
+  const key = `${resolve(options.workspaceRoot)}\0${options.agentId.toLowerCase()}`;
+  const running = activePreparations.get(key);
   if (running) return running;
   const operation = Promise.resolve()
     .then(() => prepareAgentWorkspaceOnce(options))
@@ -89,8 +89,8 @@ export function readAgentWorkspaceIdentity(
   workspaceRoot: string,
 ): AgentWorkspaceIdentity {
   verifyInputs(agentId, workspaceRoot);
-  const account = nodeAccountIdentity(),
-    workspace = agentWorkspacePath(workspaceRoot, agentId);
+  const account = nodeAccountIdentity();
+  const workspace = agentWorkspacePath(workspaceRoot, agentId);
   verifyWorkspaceRoot(resolve(workspaceRoot));
   verifyWorkspaceDirectory(workspace);
   verifyMemoryEntry(workspace);
@@ -105,11 +105,11 @@ async function prepareAgentWorkspaceOnce(
   options: AgentWorkspacePreparationOptions,
 ): Promise<AgentWorkspaceIdentity> {
   verifyInputs(options.agentId, options.workspaceRoot);
-  const account = nodeAccountIdentity(),
-    agentId = options.agentId.toLowerCase(),
-    workspaceRoot = resolve(options.workspaceRoot),
-    workspace = agentWorkspacePath(workspaceRoot, agentId),
-    progress = (stage: AgentProvisionStage) => options.onProgress?.(stage);
+  const account = nodeAccountIdentity();
+  const agentId = options.agentId.toLowerCase();
+  const workspaceRoot = resolve(options.workspaceRoot);
+  const workspace = agentWorkspacePath(workspaceRoot, agentId);
+  const progress = (stage: AgentProvisionStage) => options.onProgress?.(stage);
 
   progress("preparing_workspace");
   ensureWorkspaceRoot(workspaceRoot);
@@ -209,8 +209,8 @@ function ensureWorkspaceRoot(path: string): void {
 }
 
 function verifyWorkspaceRoot(path: string): void {
-  const root = resolve(path),
-    parent = dirname(root);
+  const root = resolve(path);
+  const parent = dirname(root);
   for (const current of parent === root ? [root] : [parent, root]) {
     const stat = lstatSafe(current);
     if (!stat.isDirectory() || stat.isSymbolicLink())
@@ -288,10 +288,9 @@ function ensureMemoryEntry(workspace: string): void {
     }
     // An interrupted create may leave only a prefix of the template. Finish it rather than
     // overwriting notes the Agent has since written.
-    const template = Buffer.from(initialMemory),
-      interruptedCreate =
-        contents.length <= template.length &&
-        template.subarray(0, contents.length).equals(contents);
+    const template = Buffer.from(initialMemory);
+    const interruptedCreate =
+      contents.length <= template.length && template.subarray(0, contents.length).equals(contents);
     if (interruptedCreate && contents.length < template.length) {
       try {
         rewriteInitialMemory(existingFd, template);

@@ -1,11 +1,10 @@
 import { NodeRequestSchema, type NodeControlMessage } from "@mate/protocol";
-import type {
-  LinuxWorkspaceExecutor,
-  WorkspaceExecutionRequest,
-} from "../files/workspace-executor.js";
+import type { LinuxWorkspaceExecutor } from "../files/workspace-executor.js";
 import { sendWorkspaceOperationResult } from "../files/workspace-result.js";
+
 export type NodeWorkspaceExecutor = Pick<LinuxWorkspaceExecutor, "execute" | "status"> &
   Partial<Pick<LinuxWorkspaceExecutor, "receiptRevision">>;
+
 /** Complete file execution and durable receipt replies for one initiating connection. */
 export class NodeWorkspaceRequests {
   constructor(
@@ -13,10 +12,11 @@ export class NodeWorkspaceRequests {
     private readonly canSend: () => boolean,
     private readonly send: (request: unknown) => void,
   ) {}
+
   operation(message: Extract<NodeControlMessage, { type: "control.workspace.operation" }>): void {
     const executor = this.executor;
-    const { requestId, operationId, agentId, mode, operation } = message,
-      request: WorkspaceExecutionRequest = { operationId, agentId, mode, operation };
+    const { requestId, operationId, agentId, mode, operation } = message;
+    const request = { operationId, agentId, mode, operation };
     if (!executor) {
       this.send({
         type: "node.workspace.operation.result",
@@ -58,8 +58,8 @@ export class NodeWorkspaceRequests {
         },
       )
       .catch(() => undefined);
-    return;
   }
+
   reconcile(message: Extract<NodeControlMessage, { type: "control.workspace.reconcile" }>): void {
     this.send({
       type: "node.workspace.reconcile.result",
@@ -82,6 +82,5 @@ export class NodeWorkspaceRequests {
         }
       }),
     });
-    return;
   }
 }

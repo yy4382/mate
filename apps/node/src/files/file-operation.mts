@@ -20,6 +20,7 @@ import {
   unlinkSync,
   writeFileSync,
   type BigIntStats,
+  type Stats,
 } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,28 +44,33 @@ paths.lockMutation(operation.kind);
 
 const maxTextFileBytes = 1_000_000;
 const maxFileHistoryEntries = 5;
-function content(path: string): Buffer {
+function readFileContent(path: string): Buffer {
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const stat = fstatSync(fd);
     if (!stat.isFile() || stat.nlink !== 1)
       throw new FileOperationError("not_file", "Regular single-link file required");
-    const buf = Buffer.alloc(maxTextFileBytes + 1),
-      n = readSync(fd, buf, 0, buf.length, 0);
-    if (n > maxTextFileBytes) throw new Error("File exceeds 1 MB limit");
-    return buf.subarray(0, n);
+    const buffer = Buffer.alloc(maxTextFileBytes + 1);
+    const bytesRead = readSync(fd, buffer, 0, buffer.length, 0);
+    if (bytesRead > maxTextFileBytes) throw new Error("File exceeds 1 MB limit");
+    return buffer.subarray(0, bytesRead);
   } finally {
     closeSync(fd);
   }
 }
-const hash = (data: Buffer | string) => createHash("sha256").update(data).digest("hex");
-const json = (value: unknown) => process.stdout.write(JSON.stringify(value));
-function save(
-  path: string,
-  value: string | Buffer,
-  workspacePath: string,
-  expectedCurrentHash?: string,
-) {
+const sha256 = (data: Buffer | string) => createHash("sha256").update(data).digest("hex");
+const writeJsonResult = (value: unknown) => process.stdout.write(JSON.stringify(value));
+function saveFile({
+  path,
+  value,
+  workspacePath,
+  expectedCurrentHash,
+}: {
+  path: string;
+  value: string | Buffer;
+  workspacePath: string;
+  expectedCurrentHash?: string;
+}) {
   if (Buffer.byteLength(value) > maxTextFileBytes) throw new Error("File exceeds 1 MB limit");
   if (!paths.pinnedDirectoryPaths) mkdirSync(dirname(path), { recursive: true });
   const temp = `${path}.${randomUUID()}.tmp`;
@@ -79,19 +85,18 @@ function save(
       if (systemErrorCode(error) !== "ENOENT") throw error;
     }
     if (existing) {
-      const old = content(path),
-        history = paths.checked(`${workspacePath}.history`, true);
+      const previousContent = readFileContent(path);
+      const history = paths.checked(`${workspacePath}.history`, { allowMissing: true });
       try {
         mkdirSync(history, { mode: 0o700 });
       } catch (error) {
         if (systemErrorCode(error) !== "EEXIST") throw error;
       }
-      const historyFile = paths.checked(
-        `${workspacePath}.history/${Date.now()}-${randomUUID()}`,
-        true,
-      );
+      const historyFile = paths.checked(`${workspacePath}.history/${Date.now()}-${randomUUID()}`, {
+        allowMissing: true,
+      });
       try {
-        writeFileSync(historyFile, old, { flag: "wx", mode: 0o600 });
+        writeFileSync(historyFile, previousContent, { flag: "wx", mode: 0o600 });
       } finally {
         paths.releasePinned(historyFile);
       }
@@ -115,7 +120,7 @@ function save(
     if (expectedCurrentHash) {
       commitFileIfHashMatches(
         expectedCurrentHash,
-        () => content(path),
+        () => readFileContent(path),
         () => renameSync(temp, path),
       );
     } else renameSync(temp, path);
@@ -125,90 +130,86 @@ function save(
     } finally {
       closeSync(dir);
     }
-    json({ sha256: hash(value) });
+    writeJsonResult({ sha256: sha256(value) });
   } finally {
     try {
       unlinkSync(temp);
     } catch {}
   }
 }
-const path = paths.checked(
-  operation.path,
-  operation.kind === "write" || operation.kind === "write_bytes" || operation.kind === "mkdir",
-  operation.kind === "write" || operation.kind === "write_bytes" || operation.kind === "mkdir",
-);
+const path = paths.checked(operation.path, {
+  allowMissing:
+    operation.kind === "write" || operation.kind === "write_bytes" || operation.kind === "mkdir",
+  createParents:
+    operation.kind === "write" || operation.kind === "write_bytes" || operation.kind === "mkdir",
+});
 switch (operation.kind) {
   case "read_bytes": {
-    const value = content(path);
-    json({
+    const value = readFileContent(path);
+    writeJsonResult({
       base64: value
         .subarray(operation.offset, operation.offset + operation.length)
         .toString("base64"),
       offset: operation.offset,
       totalBytes: value.length,
-      sha256: hash(value),
+      sha256: sha256(value),
     });
     break;
   }
   case "write_bytes": {
     const value = Buffer.from(operation.base64, "base64");
     if (value.toString("base64") !== operation.base64) throw new Error("Invalid base64");
-    save(path, value, operation.path);
+    saveFile({ path, value, workspacePath: operation.path });
     break;
   }
   case "read": {
-    const value = content(path);
+    const value = readFileContent(path);
     if (value.length > 8192) throw new Error("File exceeds read limit; use workspace.read_chunk");
     process.stdout.write(value);
     break;
   }
   case "write":
-    save(path, operation.content, operation.path);
+    saveFile({ path, value: operation.content, workspacePath: operation.path });
     break;
   case "edit": {
-    const value = content(path);
-    if (hash(value) !== operation.expectedHash)
+    const value = readFileContent(path);
+    if (sha256(value) !== operation.expectedHash)
       throw new FileOperationError("file_changed", "File changed");
-    const text = value.toString("utf8"),
-      first = text.indexOf(operation.oldText);
+    const text = value.toString("utf8");
+    const first = text.indexOf(operation.oldText);
     if (first < 0 || text.indexOf(operation.oldText, first + operation.oldText.length) >= 0)
       throw new Error("Edit must match exactly once");
-    save(
+    saveFile({
       path,
-      text.slice(0, first) + operation.newText + text.slice(first + operation.oldText.length),
-      operation.path,
-      operation.expectedHash,
-    );
+      value:
+        text.slice(0, first) + operation.newText + text.slice(first + operation.oldText.length),
+      workspacePath: operation.path,
+      expectedCurrentHash: operation.expectedHash,
+    });
     break;
   }
   case "stat": {
     const stat = lstatSync(path);
-    json({
+    writeJsonResult({
       type: stat.isDirectory() ? "directory" : stat.isFile() ? "file" : "other",
       size: stat.size,
-      sha256: stat.isFile() && stat.size <= maxTextFileBytes ? hash(content(path)) : null,
+      sha256: stat.isFile() && stat.size <= maxTextFileBytes ? sha256(readFileContent(path)) : null,
     });
     break;
   }
   case "workspace_list": {
-    const names = paths.directoryNames(path).sort(),
-      page = names.slice(operation.offset, operation.offset + operation.limit),
-      entries: Array<{ name: string; type: string; size: number }> = [];
+    const names = paths.directoryNames(path).sort();
+    const page = names.slice(operation.offset, operation.offset + operation.limit);
+    const entries: Array<{ name: string; type: string; size: number }> = [];
     for (const name of page) {
       const stat = lstatSync(resolve(path, name));
       entries.push({
         name,
-        type: stat.isSymbolicLink()
-          ? "symlink"
-          : stat.isDirectory()
-            ? "directory"
-            : stat.isFile()
-              ? "file"
-              : "other",
+        type: listedFileType(stat),
         size: stat.size,
       });
     }
-    json({
+    writeJsonResult({
       path: operation.path,
       entries,
       nextOffset:
@@ -221,7 +222,7 @@ switch (operation.kind) {
     if (stat.isSymbolicLink())
       throw new FileOperationError("unsafe_path", "unsafe_path: Symbolic links are not followed");
     if (stat.isDirectory()) {
-      json({ type: "directory", size: stat.size, modifiedAt: stat.mtimeMs });
+      writeJsonResult({ type: "directory", size: stat.size, modifiedAt: stat.mtimeMs });
       break;
     }
     if (!stat.isFile() || stat.nlink !== 1)
@@ -237,7 +238,7 @@ switch (operation.kind) {
           "file_changed",
           "file_changed: File changed while it was being inspected",
         );
-      json({
+      writeJsonResult({
         type: "file",
         size: Number(opened.size),
         modifiedAt: Number(opened.mtimeNs) / 1_000_000,
@@ -278,7 +279,7 @@ switch (operation.kind) {
           "file_changed",
           "file_changed: File changed while it was being read",
         );
-      json({
+      writeJsonResult({
         base64: chunk.subarray(0, count).toString("base64"),
         offset: operation.offset,
         totalBytes: bytes,
@@ -291,19 +292,13 @@ switch (operation.kind) {
   }
   case "list": {
     const entries: unknown[] = [];
-    let truncated = false,
-      bytes = 0;
+    let truncated = false;
+    let bytes = 0;
     for (const name of paths.directoryNames(path).sort()) {
       const stat = lstatSync(resolve(path, name));
       const entry = {
         name,
-        type: stat.isSymbolicLink()
-          ? "symlink"
-          : stat.isDirectory()
-            ? "directory"
-            : stat.isFile()
-              ? "file"
-              : "other",
+        type: listedFileType(stat),
         size: stat.size,
       };
       bytes += Buffer.byteLength(JSON.stringify(entry));
@@ -313,14 +308,14 @@ switch (operation.kind) {
       }
       entries.push(entry);
     }
-    json({ entries, truncated });
+    writeJsonResult({ entries, truncated });
     break;
   }
   case "search": {
     const matches: unknown[] = [];
-    let visited = 0,
-      bytes = 0,
-      truncated = false;
+    let visited = 0;
+    let bytes = 0;
+    let truncated = false;
     function visit(relativePath: string, file: string) {
       if (++visited > 1000) {
         truncated = true;
@@ -360,7 +355,7 @@ switch (operation.kind) {
       }
       let data: Buffer;
       try {
-        data = content(file);
+        data = readFileContent(file);
       } catch (error) {
         if (["ELOOP", "ENOENT", "ENOTDIR"].includes(systemErrorCode(error) ?? "")) return;
         throw error;
@@ -383,15 +378,15 @@ switch (operation.kind) {
         }
     }
     visit(operation.path, path);
-    json({ matches, visited, truncated });
+    writeJsonResult({ matches, visited, truncated });
     break;
   }
   case "mkdir":
     mkdirSync(path, { recursive: true, mode: privateMode ? 0o700 : 0o755 });
-    json({ created: operation.path });
+    writeJsonResult({ created: operation.path });
     break;
   case "move": {
-    const destination = paths.checked(operation.destination, true);
+    const destination = paths.checked(operation.destination, { allowMissing: true });
     moveFileNoReplace(path, destination, renameNoReplace);
     for (const directory of new Set([dirname(path), dirname(destination)])) {
       const fd = openSync(directory, "r");
@@ -401,23 +396,30 @@ switch (operation.kind) {
         closeSync(fd);
       }
     }
-    json({ moved: operation.path, destination: operation.destination });
+    writeJsonResult({ moved: operation.path, destination: operation.destination });
     break;
   }
   case "remove": {
     const stat = lstatSync(path);
     if (
       operation.expectedHash &&
-      (!stat.isFile() || hash(content(path)) !== operation.expectedHash)
+      (!stat.isFile() || sha256(readFileContent(path)) !== operation.expectedHash)
     )
       throw new FileOperationError("file_changed", "File changed");
     // Nonempty directories require explicit child removals (or an authorized exec).
     if (stat.isDirectory()) rmdirSync(path);
     else if (stat.isFile()) unlinkSync(path);
     else throw new Error("Regular file or empty directory required");
-    json({ removed: operation.path });
+    writeJsonResult({ removed: operation.path });
     break;
   }
+}
+
+function listedFileType(stat: Pick<Stats, "isSymbolicLink" | "isDirectory" | "isFile">) {
+  if (stat.isSymbolicLink()) return "symlink";
+  if (stat.isDirectory()) return "directory";
+  if (stat.isFile()) return "file";
+  return "other";
 }
 
 function versionOf(

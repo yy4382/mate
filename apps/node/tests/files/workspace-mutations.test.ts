@@ -27,9 +27,9 @@ const temp = () => {
 afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })));
 
 it("does not overwrite a move target created in the final pre-syscall race window", () => {
-  const root = temp(),
-    source = join(root, "source.txt"),
-    destination = join(root, "destination.txt");
+  const root = temp();
+  const source = join(root, "source.txt");
+  const destination = join(root, "destination.txt");
   writeFileSync(source, "original source");
 
   expect(() =>
@@ -42,10 +42,10 @@ it("does not overwrite a move target created in the final pre-syscall race windo
 });
 
 it("moves a source replacement instead of deleting it through a later by-path unlink", () => {
-  const root = temp(),
-    source = join(root, "source.txt"),
-    displaced = join(root, "displaced.txt"),
-    destination = join(root, "destination.txt");
+  const root = temp();
+  const source = join(root, "source.txt");
+  const displaced = join(root, "displaced.txt");
+  const destination = join(root, "destination.txt");
   writeFileSync(source, "selected source");
 
   moveFileNoReplace(source, destination, renameNoReplace, () => {
@@ -60,10 +60,10 @@ it("moves a source replacement instead of deleting it through a later by-path un
 });
 
 it("fails a move explicitly when the atomic no-replace helper is unavailable", () => {
-  const root = temp(),
-    source = join(root, "source.txt"),
-    destination = join(root, "destination.txt"),
-    unavailableRename = createAtomicNoReplaceRename(join(root, "missing-helper"));
+  const root = temp();
+  const source = join(root, "source.txt");
+  const destination = join(root, "destination.txt");
+  const unavailableRename = createAtomicNoReplaceRename(join(root, "missing-helper"));
   writeFileSync(source, "source remains intact");
 
   expect(() => moveFileNoReplace(source, destination, unavailableRename)).toThrow(
@@ -77,11 +77,11 @@ it("fails a move explicitly when the atomic no-replace helper is unavailable", (
 });
 
 it("retains EACCES when the native rename helper cannot be executed", () => {
-  const root = temp(),
-    source = join(root, "source.txt"),
-    destination = join(root, "destination.txt"),
-    helper = join(root, "not-executable"),
-    unavailableRename = createAtomicNoReplaceRename(helper);
+  const root = temp();
+  const source = join(root, "source.txt");
+  const destination = join(root, "destination.txt");
+  const helper = join(root, "not-executable");
+  const unavailableRename = createAtomicNoReplaceRename(helper);
   writeFileSync(source, "source remains intact");
   writeFileSync(helper, "#!/bin/sh\nexit 0\n", { mode: 0o600 });
   expect(() => moveFileNoReplace(source, destination, unavailableRename)).toThrow(
@@ -92,9 +92,9 @@ it("retains EACCES when the native rename helper cannot be executed", () => {
 });
 
 it("retains native ENOENT if the source disappears just before the atomic rename", () => {
-  const root = temp(),
-    source = join(root, "source.txt"),
-    destination = join(root, "destination.txt");
+  const root = temp();
+  const source = join(root, "source.txt");
+  const destination = join(root, "destination.txt");
   writeFileSync(source, "removed concurrently");
   expect(() =>
     moveFileNoReplace(source, destination, renameNoReplace, () => unlinkSync(source)),
@@ -103,14 +103,14 @@ it("retains native ENOENT if the source disappears just before the atomic rename
 });
 
 it("rejects an edit if the file changes between its initial hash check and commit", () => {
-  const root = temp(),
-    path = join(root, "shared.txt"),
-    original = Buffer.from("before"),
-    concurrent = Buffer.from("written by another command"),
-    replacement = Buffer.from("edited");
+  const root = temp();
+  const path = join(root, "shared.txt");
+  const original = Buffer.from("before");
+  const concurrent = Buffer.from("written by another command");
+  const replacement = Buffer.from("edited");
   writeFileSync(path, original);
-  const expectedHash = createHash("sha256").update(original).digest("hex"),
-    commit = vi.fn(() => writeFileSync(path, replacement));
+  const expectedHash = createHash("sha256").update(original).digest("hex");
+  const commit = vi.fn(() => writeFileSync(path, replacement));
 
   expect(() =>
     commitFileIfHashMatches(

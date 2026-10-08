@@ -1,5 +1,6 @@
 import { NodeRequestSchema, type NodeControlMessage } from "@mate/protocol";
 import type { AgentProcessOperations } from "../processes/operation-ledger.js";
+
 /** Complete process execution and durable receipt replies for one initiating connection. */
 export class NodeProcessRequests {
   constructor(
@@ -7,6 +8,7 @@ export class NodeProcessRequests {
     private readonly canSend: () => boolean,
     private readonly send: (request: unknown) => void,
   ) {}
+
   operation(message: Extract<NodeControlMessage, { type: "control.process.operation" }>): void {
     const { requestId, operationId, agentId, operation } = message;
     // Execution outlives the socket; durable receipts serve later reconnection.
@@ -35,8 +37,8 @@ export class NodeProcessRequests {
           receipt: { reason: "node_operation_result_unavailable" },
         });
       });
-    return;
   }
+
   reconcile(message: Extract<NodeControlMessage, { type: "control.process.reconcile" }>): void {
     this.send({
       type: "node.process.reconcile.result",
@@ -64,6 +66,5 @@ export class NodeProcessRequests {
         }
       }),
     });
-    return;
   }
 }

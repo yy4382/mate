@@ -51,9 +51,9 @@ it("refuses to report a node account when the node runs as root", async () => {
 });
 
 it("creates an Agent workspace under the running account without touching Linux accounts", async () => {
-  const workspaceRoot = temporaryRoot(),
-    agentId = randomUUID(),
-    identity = await prepareAgentWorkspace({ agentId, workspaceRoot });
+  const workspaceRoot = temporaryRoot();
+  const agentId = randomUUID();
+  const identity = await prepareAgentWorkspace({ agentId, workspaceRoot });
 
   expect(identity.workspace).toBe(join(resolve(workspaceRoot), agentId));
   expect(statSync(identity.workspace).isDirectory()).toBe(true);
@@ -69,11 +69,11 @@ it("creates an Agent workspace under the running account without touching Linux 
 });
 
 it("provides a memory entry point that is readable and writable by the Agent", async () => {
-  const workspaceRoot = temporaryRoot(),
-    agentId = randomUUID(),
-    identity = await prepareAgentWorkspace({ agentId, workspaceRoot }),
-    memoryPath = join(identity.workspace, "MEMORY.md"),
-    memory = statSync(memoryPath);
+  const workspaceRoot = temporaryRoot();
+  const agentId = randomUUID();
+  const identity = await prepareAgentWorkspace({ agentId, workspaceRoot });
+  const memoryPath = join(identity.workspace, "MEMORY.md");
+  const memory = statSync(memoryPath);
 
   expect(memory.isFile()).toBe(true);
   expect(memory.isSymbolicLink()).toBe(false);
@@ -83,9 +83,9 @@ it("provides a memory entry point that is readable and writable by the Agent", a
 });
 
 it("reuses the same workspace and marker when the same creation request is retried", async () => {
-  const workspaceRoot = temporaryRoot(),
-    agentId = randomUUID(),
-    first = await prepareAgentWorkspace({ agentId, workspaceRoot });
+  const workspaceRoot = temporaryRoot();
+  const agentId = randomUUID();
+  const first = await prepareAgentWorkspace({ agentId, workspaceRoot });
   writeFileSync(join(first.workspace, "notes.md"), "Agent-authored notes\n");
 
   const retried = await prepareAgentWorkspace({ agentId, workspaceRoot });
@@ -96,13 +96,13 @@ it("reuses the same workspace and marker when the same creation request is retri
 });
 
 it("gives two Agents different workspaces under the same single account", async () => {
-  const workspaceRoot = temporaryRoot(),
-    firstAgent = randomUUID(),
-    secondAgent = randomUUID(),
-    [first, second] = await Promise.all([
-      prepareAgentWorkspace({ agentId: firstAgent, workspaceRoot }),
-      prepareAgentWorkspace({ agentId: secondAgent, workspaceRoot }),
-    ]);
+  const workspaceRoot = temporaryRoot();
+  const firstAgent = randomUUID();
+  const secondAgent = randomUUID();
+  const [first, second] = await Promise.all([
+    prepareAgentWorkspace({ agentId: firstAgent, workspaceRoot }),
+    prepareAgentWorkspace({ agentId: secondAgent, workspaceRoot }),
+  ]);
 
   expect(first.workspace).not.toBe(second.workspace);
   expect(first.workspaceMarker).not.toBe(second.workspaceMarker);
@@ -116,8 +116,8 @@ it("gives two Agents different workspaces under the same single account", async 
 });
 
 it("finishes a creation that crashed after staging the workspace marker", async () => {
-  const workspaceRoot = temporaryRoot(),
-    agentId = randomUUID();
+  const workspaceRoot = temporaryRoot();
+  const agentId = randomUUID();
   // The exact state an interrupted create leaves: the workspace directory with one staged marker
   // file that was never published under its final name. Retrying must finish, not refuse.
   const workspace = agentWorkspacePath(workspaceRoot, agentId);
@@ -139,9 +139,9 @@ it("finishes a creation that crashed after staging the workspace marker", async 
 });
 
 it("finishes a creation that crashed between creating the staging file and writing it", async () => {
-  const workspaceRoot = temporaryRoot(),
-    agentId = randomUUID(),
-    workspace = agentWorkspacePath(workspaceRoot, agentId);
+  const workspaceRoot = temporaryRoot();
+  const agentId = randomUUID();
+  const workspace = agentWorkspacePath(workspaceRoot, agentId);
   mkdirSync(workspace, { mode: 0o700 });
   writeFileSync(join(workspace, `.mate-workspace-id.tmp-${"d".repeat(32)}`), "", { mode: 0o600 });
 
@@ -152,10 +152,10 @@ it("finishes a creation that crashed between creating the staging file and writi
 });
 
 it("reports, and never deletes, staging-named content that is not Mate's own staging file", async () => {
-  const workspaceRoot = temporaryRoot(),
-    agentId = randomUUID(),
-    workspace = agentWorkspacePath(workspaceRoot, agentId),
-    impostor = join(workspace, `.mate-workspace-id.tmp-${"e".repeat(32)}`);
+  const workspaceRoot = temporaryRoot();
+  const agentId = randomUUID();
+  const workspace = agentWorkspacePath(workspaceRoot, agentId);
+  const impostor = join(workspace, `.mate-workspace-id.tmp-${"e".repeat(32)}`);
   mkdirSync(workspace, { mode: 0o700 });
   // A name Mate recognises is not a licence to remove whatever now sits under it.
   writeFileSync(impostor, "somebody else's notes\n", { mode: 0o600 });
@@ -167,11 +167,11 @@ it("reports, and never deletes, staging-named content that is not Mate's own sta
 });
 
 it("finishes a creation that crashed between publishing the marker and removing its staging name", async () => {
-  const workspaceRoot = temporaryRoot(),
-    agentId = randomUUID(),
-    first = await prepareAgentWorkspace({ agentId, workspaceRoot }),
-    markerPath = join(first.workspace, ".mate-workspace-id"),
-    stagingPath = join(first.workspace, `.mate-workspace-id.tmp-${"c".repeat(32)}`);
+  const workspaceRoot = temporaryRoot();
+  const agentId = randomUUID();
+  const first = await prepareAgentWorkspace({ agentId, workspaceRoot });
+  const markerPath = join(first.workspace, ".mate-workspace-id");
+  const stagingPath = join(first.workspace, `.mate-workspace-id.tmp-${"c".repeat(32)}`);
   // Re-create the published marker's second link, as a crash before `unlink` would leave it.
   const { linkSync } = await import("node:fs");
   linkSync(markerPath, stagingPath);
@@ -183,8 +183,8 @@ it("finishes a creation that crashed between publishing the marker and removing 
 });
 
 it("refuses to adopt an existing directory that Mate did not create for this Agent", async () => {
-  const workspaceRoot = temporaryRoot(),
-    agentId = randomUUID();
+  const workspaceRoot = temporaryRoot();
+  const agentId = randomUUID();
   mkdirSync(agentWorkspacePath(workspaceRoot, agentId), { mode: 0o700 });
   writeFileSync(join(agentWorkspacePath(workspaceRoot, agentId), "foreign.txt"), "not ours\n");
 
@@ -197,8 +197,8 @@ it("refuses to adopt an existing directory that Mate did not create for this Age
 
 it("reports a diagnosable failure when it cannot write the workspace root", async () => {
   if (typeof process.getuid === "function" && process.getuid() === 0) return;
-  const parent = temporaryRoot(),
-    workspaceRoot = join(parent, "locked");
+  const parent = temporaryRoot();
+  const workspaceRoot = join(parent, "locked");
   mkdirSync(workspaceRoot, { mode: 0o500 });
   chmodSync(workspaceRoot, 0o500);
 
@@ -212,9 +212,9 @@ it("rejects a workspace root that is not an absolute real directory", async () =
     prepareAgentWorkspace({ agentId: randomUUID(), workspaceRoot: "relative/agents" }),
   ).rejects.toBeInstanceOf(AgentProvisioningError);
 
-  const parent = temporaryRoot(),
-    real = join(parent, "real"),
-    link = join(parent, "link");
+  const parent = temporaryRoot();
+  const real = join(parent, "real");
+  const link = join(parent, "link");
   mkdirSync(real, { mode: 0o700 });
   try {
     const { symlinkSync } = await import("node:fs");
@@ -228,16 +228,16 @@ it("rejects a workspace root that is not an absolute real directory", async () =
 });
 
 it("handles only the constrained provision request and returns verified workspace facts", async () => {
-  const agentId = "ed1e60c8-bdda-4f46-a857-bbd542f82640",
-    command = NodeControlMessageSchema.parse({
-      type: "control.agent.provision",
-      requestId: "3c7f7fc3-b613-4d26-9696-4aecac8565b8",
-      agentId,
-    }) as Extract<
-      ReturnType<typeof NodeControlMessageSchema.parse>,
-      { type: "control.agent.provision" }
-    >,
-    sent: NodeRequest[] = [];
+  const agentId = "ed1e60c8-bdda-4f46-a857-bbd542f82640";
+  const command = NodeControlMessageSchema.parse({
+    type: "control.agent.provision",
+    requestId: "3c7f7fc3-b613-4d26-9696-4aecac8565b8",
+    agentId,
+  }) as Extract<
+    ReturnType<typeof NodeControlMessageSchema.parse>,
+    { type: "control.agent.provision" }
+  >;
+  const sent: NodeRequest[] = [];
   const accepted = await handleProvision(command, sent, async (requestedAgent, progress) => {
     expect(requestedAgent).toBe(agentId);
     progress("checking_account");
@@ -282,16 +282,16 @@ it("handles only the constrained provision request and returns verified workspac
 });
 
 it("reports a bounded, diagnosable failure without exposing arbitrary host error text", async () => {
-  const agentId = "ed1e60c8-bdda-4f46-a857-bbd542f82640",
-    command = NodeControlMessageSchema.parse({
-      type: "control.agent.provision",
-      requestId: "5b782025-b80f-4cb5-b855-aad347c0d8db",
-      agentId,
-    }) as Extract<
-      ReturnType<typeof NodeControlMessageSchema.parse>,
-      { type: "control.agent.provision" }
-    >,
-    sent: NodeRequest[] = [];
+  const agentId = "ed1e60c8-bdda-4f46-a857-bbd542f82640";
+  const command = NodeControlMessageSchema.parse({
+    type: "control.agent.provision",
+    requestId: "5b782025-b80f-4cb5-b855-aad347c0d8db",
+    agentId,
+  }) as Extract<
+    ReturnType<typeof NodeControlMessageSchema.parse>,
+    { type: "control.agent.provision" }
+  >;
+  const sent: NodeRequest[] = [];
   const accepted = await handleProvision(command, sent, async () => {
     throw new AgentProvisioningError("permission_denied", "节点无法创建 Agent 工作区根路径。");
   });

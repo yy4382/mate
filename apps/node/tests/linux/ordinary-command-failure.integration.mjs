@@ -27,22 +27,22 @@ if (launchingUid === 0)
 if (launchingUid === undefined)
   throw new Error("This check needs an account-aware host (Linux or macOS).");
 
-const root = mkdtempSync(join(tmpdir(), "mate-command-failure-")),
-  dataDirectory = join(root, "node-data"),
-  databasePath = join(dataDirectory, "agent-process-operations.sqlite"),
-  workspaceRoot = join(root, "agents"),
-  evidence = {
-    check: "ordinary-command-failure-recovery",
-    kernel: process.platform,
-    linuxKernel: process.platform === "linux",
-    containerized: existsSync("/.dockerenv"),
-    launchingUid,
-    launchingAccount: userInfo().username,
-    ranAsRoot: false,
-    timeout: {},
-    disconnect: {},
-    restart: {},
-  };
+const root = mkdtempSync(join(tmpdir(), "mate-command-failure-"));
+const dataDirectory = join(root, "node-data");
+const databasePath = join(dataDirectory, "agent-process-operations.sqlite");
+const workspaceRoot = join(root, "agents");
+const evidence = {
+  check: "ordinary-command-failure-recovery",
+  kernel: process.platform,
+  linuxKernel: process.platform === "linux",
+  containerized: existsSync("/.dockerenv"),
+  launchingUid,
+  launchingAccount: userInfo().username,
+  ranAsRoot: false,
+  timeout: {},
+  disconnect: {},
+  restart: {},
+};
 
 mkdirSync(dataDirectory, { recursive: true, mode: 0o700 });
 
@@ -52,9 +52,9 @@ function delay(ms) {
 
 /** The node's own process plumbing over the real receipt database, counting real command runs. */
 function openNode(commandTimeoutMs) {
-  const database = openNodeProcessDatabase(databasePath),
-    host = createLinuxAgentProcessExecutor(workspaceRoot, { commandTimeoutMs }),
-    counts = new Map();
+  const database = openNodeProcessDatabase(databasePath);
+  const host = createLinuxAgentProcessExecutor(workspaceRoot, { commandTimeoutMs });
+  const counts = new Map();
   return {
     operations: new AgentProcessOperations(database, (request) => {
       counts.set(request.operationId, (counts.get(request.operationId) ?? 0) + 1);
@@ -67,10 +67,10 @@ function openNode(commandTimeoutMs) {
 
 /** Start a real node process that runs one command and hard-exits before its result settles. */
 function startCrashingNode(agentId, operationId, command, commandTimeoutMs, ledger) {
-  const storageEntry = import.meta.resolve("@mate/node/database"),
-    executorEntry = import.meta.resolve("@mate/node/linux-process-executor"),
-    operationsEntry = import.meta.resolve("@mate/node/process-operations"),
-    script = `
+  const storageEntry = import.meta.resolve("@mate/node/database");
+  const executorEntry = import.meta.resolve("@mate/node/linux-process-executor");
+  const operationsEntry = import.meta.resolve("@mate/node/process-operations");
+  const script = `
       const { openNodeProcessDatabase } = await import(${JSON.stringify(storageEntry)});
       const { createLinuxAgentProcessExecutor } = await import(${JSON.stringify(executorEntry)});
       const { AgentProcessOperations } = await import(${JSON.stringify(operationsEntry)});
@@ -97,22 +97,22 @@ function startCrashingNode(agentId, operationId, command, commandTimeoutMs, ledg
       process.stdout.write("NODE_SAW_COMMAND");
       // No close, no receipt, no cleanup: only what already reached the durable database survives.
       process.exit(0);
-    `,
-    child = spawn(process.execPath, ["--input-type=module", "--eval", script], {
-      cwd: process.cwd(),
-      env: {
-        PATH: process.env.PATH ?? "/usr/bin:/bin",
-        LANG: "C.UTF-8",
-        MATE_FAILURE_DATABASE: databasePath,
-        MATE_FAILURE_WORKSPACE_ROOT: workspaceRoot,
-        MATE_FAILURE_COMMAND_TIMEOUT_MS: String(commandTimeoutMs),
-        MATE_FAILURE_AGENT: agentId,
-        MATE_FAILURE_OPERATION: operationId,
-        MATE_FAILURE_COMMAND: command,
-        MATE_FAILURE_LEDGER: ledger,
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    `;
+  const child = spawn(process.execPath, ["--input-type=module", "--eval", script], {
+    cwd: process.cwd(),
+    env: {
+      PATH: process.env.PATH ?? "/usr/bin:/bin",
+      LANG: "C.UTF-8",
+      MATE_FAILURE_DATABASE: databasePath,
+      MATE_FAILURE_WORKSPACE_ROOT: workspaceRoot,
+      MATE_FAILURE_COMMAND_TIMEOUT_MS: String(commandTimeoutMs),
+      MATE_FAILURE_AGENT: agentId,
+      MATE_FAILURE_OPERATION: operationId,
+      MATE_FAILURE_COMMAND: command,
+      MATE_FAILURE_LEDGER: ledger,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   let text = "";
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
@@ -137,18 +137,18 @@ function storedRow(operationId) {
 
 try {
   // ---------------------------------------------------------------------- timeout
-  const timeoutAgent = randomUUID(),
-    timeoutWorkspace = await prepareAgentWorkspace({ agentId: timeoutAgent, workspaceRoot }),
-    marker = join(timeoutWorkspace.workspace, "marker.txt");
+  const timeoutAgent = randomUUID();
+  const timeoutWorkspace = await prepareAgentWorkspace({ agentId: timeoutAgent, workspaceRoot });
+  const marker = join(timeoutWorkspace.workspace, "marker.txt");
   {
     const node = openNode(600);
     try {
-      const operationId = randomUUID(),
-        receipt = await node.operations.execute(timeoutAgent, operationId, {
-          kind: "exec",
-          command: `printf started >> ${JSON.stringify(marker)}; sleep 30`,
-          cwd: ".",
-        });
+      const operationId = randomUUID();
+      const receipt = await node.operations.execute(timeoutAgent, operationId, {
+        kind: "exec",
+        command: `printf started >> ${JSON.stringify(marker)}; sleep 30`,
+        cwd: ".",
+      });
       assert.equal(receipt.state, "failed", "A command killed at its time bound is not a success");
       assert.equal(receipt.receipt.timedOut, true, "The receipt must name the timeout");
       assert.equal(
@@ -176,24 +176,24 @@ try {
   // ------------------------------------------------------------------- disconnect
   // A real node process dies mid-command. What the next node process finds is its durable start
   // record, never a claimed result.
-  const interruptedAgent = randomUUID(),
-    interruptedWorkspace = await prepareAgentWorkspace({
-      agentId: interruptedAgent,
-      workspaceRoot,
-    }),
-    ledger = join(interruptedWorkspace.workspace, "ledger.txt"),
-    interruptedOperationId = randomUUID(),
-    // The tail is short on purpose: the process group this crash leaves behind is out of Mate's
-    // reach, so the check lets it finish by itself instead of orphaning a long-lived process.
-    interruptedCommand = `printf 'executed\\n' >> ${JSON.stringify(ledger)}; sleep 5`,
-    crashing = startCrashingNode(
-      interruptedAgent,
-      interruptedOperationId,
-      interruptedCommand,
-      30_000,
-      ledger,
-    ),
-    deadline = Date.now() + 10_000;
+  const interruptedAgent = randomUUID();
+  const interruptedWorkspace = await prepareAgentWorkspace({
+    agentId: interruptedAgent,
+    workspaceRoot,
+  });
+  const ledger = join(interruptedWorkspace.workspace, "ledger.txt");
+  const interruptedOperationId = randomUUID();
+  // The tail is short on purpose: the process group this crash leaves behind is out of Mate's
+  // reach, so the check lets it finish by itself instead of orphaning a long-lived process.
+  const interruptedCommand = `printf 'executed\\n' >> ${JSON.stringify(ledger)}; sleep 5`;
+  const crashing = startCrashingNode(
+    interruptedAgent,
+    interruptedOperationId,
+    interruptedCommand,
+    30_000,
+    ledger,
+  );
+  const deadline = Date.now() + 10_000;
   while (Date.now() < deadline && !existsSync(ledger)) await delay(20);
   assert.equal(readFileSync(ledger, "utf8"), "executed\n", "The command really ran");
   const crashed = await crashing.exited;
@@ -231,13 +231,13 @@ try {
     );
     assert.equal(readFileSync(ledger, "utf8"), "executed\n", "The side effect happened once");
     // A fresh durable action still runs: deduplication is per operation ID, not a stalled node.
-    const freshMarker = join(interruptedWorkspace.workspace, "fresh.txt"),
-      freshOperationId = randomUUID(),
-      fresh = await node.operations.execute(interruptedAgent, freshOperationId, {
-        kind: "exec",
-        command: `printf fresh > ${JSON.stringify(freshMarker)}`,
-        cwd: ".",
-      });
+    const freshMarker = join(interruptedWorkspace.workspace, "fresh.txt");
+    const freshOperationId = randomUUID();
+    const fresh = await node.operations.execute(interruptedAgent, freshOperationId, {
+      kind: "exec",
+      command: `printf fresh > ${JSON.stringify(freshMarker)}`,
+      cwd: ".",
+    });
     assert.equal(fresh.state, "succeeded", "A new command after the restart still runs");
     assert.equal(readFileSync(freshMarker, "utf8"), "fresh");
     evidence.disconnect = {

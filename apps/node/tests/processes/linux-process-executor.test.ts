@@ -18,16 +18,16 @@ import { AgentProcessOperations } from "../../src/processes/operation-ledger.js"
 const accountUid = typeof process.getuid === "function" ? process.getuid() : 0;
 
 async function setup(options: { commandTimeoutMs?: number; runner?: AgentCommandRunner } = {}) {
-  const root = mkdtempSync(join(tmpdir(), "mate-agent-command-")),
-    workspaceRoot = join(root, "agents"),
-    agentId = randomUUID(),
-    identity = await prepareAgentWorkspace({ agentId, workspaceRoot }),
-    runner = options.runner ?? new OrdinaryCommandRunner(),
-    database = new Database(join(root, "operations.sqlite")),
-    operations = new AgentProcessOperations(
-      database,
-      createLinuxAgentProcessExecutor(workspaceRoot, { ...options, runner }),
-    );
+  const root = mkdtempSync(join(tmpdir(), "mate-agent-command-"));
+  const workspaceRoot = join(root, "agents");
+  const agentId = randomUUID();
+  const identity = await prepareAgentWorkspace({ agentId, workspaceRoot });
+  const runner = options.runner ?? new OrdinaryCommandRunner();
+  const database = new Database(join(root, "operations.sqlite"));
+  const operations = new AgentProcessOperations(
+    database,
+    createLinuxAgentProcessExecutor(workspaceRoot, { ...options, runner }),
+  );
   return {
     root,
     agentId,
@@ -136,12 +136,12 @@ it("reports truncated output instead of passing it off as the whole result", asy
 it("reports a timed-out command as failed and stops the work that had not run yet", async () => {
   const fixture = await setup({ commandTimeoutMs: 300 });
   try {
-    const marker = join(fixture.identity.workspace, "late.txt"),
-      receipt = await fixture.operations.execute(fixture.agentId, randomUUID(), {
-        kind: "exec",
-        command: `sleep 5; : > ${marker}`,
-        cwd: ".",
-      });
+    const marker = join(fixture.identity.workspace, "late.txt");
+    const receipt = await fixture.operations.execute(fixture.agentId, randomUUID(), {
+      kind: "exec",
+      command: `sleep 5; : > ${marker}`,
+      cwd: ".",
+    });
     expect(receipt.state).toBe("failed");
     expect(receipt.receipt).toMatchObject({
       code: null,
@@ -159,11 +159,15 @@ it("reports a timed-out command as failed and stops the work that had not run ye
 it("replays one operation ID from its durable receipt without running the command twice", async () => {
   const fixture = await setup();
   try {
-    const operationId = randomUUID(),
-      operation = { kind: "exec" as const, command: "printf 'once\\n' >> ledger.txt", cwd: "." },
-      ledger = join(fixture.identity.workspace, "ledger.txt"),
-      first = await fixture.operations.execute(fixture.agentId, operationId, operation),
-      second = await fixture.operations.execute(fixture.agentId, operationId, operation);
+    const operationId = randomUUID();
+    const operation = {
+      kind: "exec" as const,
+      command: "printf 'once\\n' >> ledger.txt",
+      cwd: ".",
+    };
+    const ledger = join(fixture.identity.workspace, "ledger.txt");
+    const first = await fixture.operations.execute(fixture.agentId, operationId, operation);
+    const second = await fixture.operations.execute(fixture.agentId, operationId, operation);
     expect(first.state).toBe("succeeded");
     expect(second).toEqual(first);
     expect(readFileSync(ledger, "utf8")).toBe("once\n");
@@ -175,8 +179,8 @@ it("replays one operation ID from its durable receipt without running the comman
 it("refuses to reuse an operation ID for other input without running the second command", async () => {
   const fixture = await setup();
   try {
-    const operationId = randomUUID(),
-      ledger = join(fixture.identity.workspace, "ledger.txt");
+    const operationId = randomUUID();
+    const ledger = join(fixture.identity.workspace, "ledger.txt");
     await fixture.operations.execute(fixture.agentId, operationId, {
       kind: "exec",
       command: "printf 'once\\n' >> ledger.txt",
@@ -198,8 +202,8 @@ it("refuses to reuse an operation ID for other input without running the second 
 it("passes the Agent's own sudo through to the host without wrapping or approving it", async () => {
   const fixture = await setup();
   try {
-    const shim = join(fixture.identity.workspace, "bin"),
-      recorded = join(fixture.identity.workspace, "sudo-argv");
+    const shim = join(fixture.identity.workspace, "bin");
+    const recorded = join(fixture.identity.workspace, "sudo-argv");
     mkdirSync(shim);
     writeFileSync(
       join(shim, "sudo"),
@@ -222,8 +226,8 @@ it("passes the Agent's own sudo through to the host without wrapping or approvin
 it("reports an explicit sudo the host allowed as that command's own success", async () => {
   const fixture = await setup();
   try {
-    const shim = join(fixture.identity.workspace, "bin"),
-      recorded = join(fixture.identity.workspace, "sudo-argv");
+    const shim = join(fixture.identity.workspace, "bin");
+    const recorded = join(fixture.identity.workspace, "sudo-argv");
     mkdirSync(shim);
     writeFileSync(
       join(shim, "sudo"),
@@ -253,8 +257,8 @@ it("reports an explicit sudo the host allowed as that command's own success", as
 it("never inserts sudo the Agent did not write", async () => {
   const fixture = await setup();
   try {
-    const shim = join(fixture.identity.workspace, "bin"),
-      recorded = join(fixture.identity.workspace, "sudo-was-called");
+    const shim = join(fixture.identity.workspace, "bin");
+    const recorded = join(fixture.identity.workspace, "sudo-was-called");
     mkdirSync(shim);
     writeFileSync(join(shim, "sudo"), `#!/bin/sh\n: > ${recorded}\nexit 0\n`);
     chmodSync(join(shim, "sudo"), 0o700);

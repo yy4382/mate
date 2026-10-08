@@ -114,12 +114,12 @@ export class LinuxWorkspaceExecutor {
 
   execute(request: WorkspaceExecutionRequest, signal?: AbortSignal): Promise<ExecutionResult> {
     validateRequest(request);
-    const requestHash = workspaceReceiptRequestHash(request.agentId, request.operation),
-      // The mode decides which workspace a read runs in, so the same operation ID under another
-      // mode is another request and may not share this in-flight result. Durable receipts identify
-      // filesystem mutations by Agent and operation; read modes do not produce receipts.
-      key = `${request.mode}\0${request.operationId}`,
-      existingCall = this.active.get(key);
+    const requestHash = workspaceReceiptRequestHash(request.agentId, request.operation);
+    // The mode decides which workspace a read runs in, so the same operation ID under another
+    // mode is another request and may not share this in-flight result. Durable receipts identify
+    // filesystem mutations by Agent and operation; read modes do not produce receipts.
+    const key = `${request.mode}\0${request.operationId}`;
+    const existingCall = this.active.get(key);
     if (existingCall)
       return existingCall.requestHash === requestHash
         ? existingCall.promise
@@ -166,8 +166,8 @@ export class LinuxWorkspaceExecutor {
     requestHash: string,
     signal?: AbortSignal,
   ): Promise<ExecutionResult> {
-    const records = mutatingKinds.has(request.operation.kind),
-      existing = records ? this.readReceipt(request.operationId) : undefined;
+    const records = mutatingKinds.has(request.operation.kind);
+    const existing = records ? this.readReceipt(request.operationId) : undefined;
     if (existing) {
       if (existing.agentId !== request.agentId || existing.requestHash !== requestHash)
         return failed(
@@ -218,12 +218,12 @@ export class LinuxWorkspaceExecutor {
 
     let result: ExecutionResult;
     try {
-      const sharedRead = agentReadRoot(
-        request.mode,
-        request.operation,
-        identity.workspace,
-        resolve(this.homeRoot),
-      );
+      const sharedRead = selectAgentReadWorkspace({
+        mode: request.mode,
+        operation: request.operation,
+        workspace: identity.workspace,
+        workspaceRoot: resolve(this.homeRoot),
+      });
       result = await this.createBackend({
         username: identity.username,
         uid: identity.uid,
@@ -262,8 +262,7 @@ export class LinuxWorkspaceExecutor {
         operationId: request.operationId,
         agentId: request.agentId,
         requestHash,
-        state:
-          result.code === 0 ? "succeeded" : workspaceResultIsUnknown(result) ? "unknown" : "failed",
+        state: receiptState(result),
         result,
         revision: 2,
         updatedAt: this.now(),
@@ -281,8 +280,8 @@ export class LinuxWorkspaceExecutor {
   }
 
   private writeReceipt(receipt: StoredReceipt): void {
-    const path = this.receiptPath(receipt.operationId),
-      temp = `${path}.${process.pid}.${this.now()}.tmp`;
+    const path = this.receiptPath(receipt.operationId);
+    const temp = `${path}.${process.pid}.${this.now()}.tmp`;
     writeFileSync(temp, `${JSON.stringify(receipt)}\n`, { flag: "wx", mode: 0o600 });
     const fd = openSync(temp, "r");
     try {
@@ -322,22 +321,25 @@ export class LinuxWorkspaceExecutor {
  * inside the workspace whose operation receipt records it. Mate's confinement stays the file
  * helper's job; this only chooses which workspace a permitted read runs in.
  */
-function agentReadRoot(
-  mode: WorkspaceMode,
-  operation: Operation,
-  workspace: string,
-  workspaceRoot: string,
-): { root: string; operation: Operation } | undefined {
+function selectAgentReadWorkspace({
+  mode,
+  operation,
+  workspace,
+  workspaceRoot,
+}: Pick<WorkspaceExecutionRequest, "mode" | "operation"> & {
+  workspace: string;
+  workspaceRoot: string;
+}): { root: string; operation: Operation } | undefined {
   if (mode !== "agent_read" || !agentReadKinds.has(operation.kind)) return undefined;
-  const target = resolve(workspace, operation.path),
-    own = within(workspace, target);
+  const target = resolve(workspace, operation.path);
+  const own = within(workspace, target);
   if (own) {
     const ownPath = relative(workspace, target);
     return { root: workspace, operation: { ...operation, path: ownPath === "" ? "." : ownPath } };
   }
   if (!within(workspaceRoot, target)) return undefined;
-  const peerPath = relative(workspaceRoot, target),
-    peerName = peerPath.split(sep)[0] ?? "";
+  const peerPath = relative(workspaceRoot, target);
+  const peerName = peerPath.split(sep)[0] ?? "";
   if (!agentDirectoryName.test(peerName) || !isWorkspaceDirectory(join(workspaceRoot, peerName)))
     return undefined;
   return { root: workspaceRoot, operation: { ...operation, path: peerPath } };
@@ -374,6 +376,11 @@ function validateRequest(request: WorkspaceExecutionRequest): void {
     !readKinds.has(request.operation.kind)
   )
     throw new Error("Owner browsing and file publishing allow read operations only");
+}
+
+function receiptState(result: ExecutionResult) {
+  if (result.code === 0) return "succeeded";
+  return workspaceResultIsUnknown(result) ? "unknown" : "failed";
 }
 
 function failed(errorCode: WorkspaceFailureCode, stderr: string): ExecutionResult {

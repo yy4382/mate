@@ -10,21 +10,21 @@ import {
 
 import { sendWorkspaceOperationResult } from "../../src/files/workspace-result.js";
 
-const requestId = "2ee1d608-4dc4-458a-b143-3c6a7919e84a",
-  agentId = "7cd3ed23-c885-4f27-8278-a5467a69fb96";
+const requestId = "2ee1d608-4dc4-458a-b143-3c6a7919e84a";
+const agentId = "7cd3ed23-c885-4f27-8278-a5467a69fb96";
 
 it("keeps the largest documented binary workspace write inside the complete WebSocket frame", () => {
-  const bytes = Buffer.alloc(WORKSPACE_WRITE_MAX_BYTES, 0x61),
-    base64 = bytes.toString("base64"),
-    path = "🧪".repeat(1365),
-    workspaceRequest = {
-      type: "control.workspace.operation",
-      requestId,
-      operationId: "5fe049b7-0cd2-4f37-aea1-4636e151f3bf",
-      agentId,
-      mode: "agent_action",
-      operation: { kind: "write_bytes", path, base64 },
-    };
+  const bytes = Buffer.alloc(WORKSPACE_WRITE_MAX_BYTES, 0x61);
+  const base64 = bytes.toString("base64");
+  const path = "🧪".repeat(1365);
+  const workspaceRequest = {
+    type: "control.workspace.operation",
+    requestId,
+    operationId: "5fe049b7-0cd2-4f37-aea1-4636e151f3bf",
+    agentId,
+    mode: "agent_action",
+    operation: { kind: "write_bytes", path, base64 },
+  };
 
   expect(base64).toHaveLength(WORKSPACE_WRITE_BYTES_BASE64_MAX_CHARS);
   expect(operationSchema.parse(workspaceRequest.operation)).toEqual(workspaceRequest.operation);
@@ -33,15 +33,15 @@ it("keeps the largest documented binary workspace write inside the complete WebS
 });
 
 it("rejects text whose UTF-8 size fits but JSON escaping would exceed a node frame", () => {
-  const content = "\u0001".repeat(Math.floor(WORKSPACE_WRITE_MAX_BYTES / 2)),
-    workspaceRequest = {
-      type: "control.workspace.operation",
-      requestId,
-      operationId: "5fe049b7-0cd2-4f37-aea1-4636e151f3bf",
-      agentId,
-      mode: "agent_action",
-      operation: { kind: "write", path: "notes.txt", content },
-    };
+  const content = "\u0001".repeat(Math.floor(WORKSPACE_WRITE_MAX_BYTES / 2));
+  const workspaceRequest = {
+    type: "control.workspace.operation",
+    requestId,
+    operationId: "5fe049b7-0cd2-4f37-aea1-4636e151f3bf",
+    agentId,
+    mode: "agent_action",
+    operation: { kind: "write", path: "notes.txt", content },
+  };
   expect(Buffer.byteLength(content)).toBeLessThan(WORKSPACE_WRITE_MAX_BYTES);
   expect(Buffer.byteLength(JSON.stringify(workspaceRequest))).toBeGreaterThan(
     MAX_NODE_MESSAGE_BYTES,

@@ -24,8 +24,8 @@ function invoke(root: string, operation: Record<string, unknown>) {
 }
 
 it("lists the private home without following symbolic links and reads a file in bounded chunks", () => {
-  const root = temp(),
-    outside = temp();
+  const root = temp();
+  const outside = temp();
   writeFileSync(join(root, "notes.txt"), "first page\nsecond page\n");
   writeFileSync(join(outside, "secret.txt"), "outside");
   symlinkSync(outside, join(root, "outside-link"));
@@ -57,8 +57,8 @@ it("lists the private home without following symbolic links and reads a file in 
 });
 
 it("rejects traversal and symbolic-link reads outside the selected home", () => {
-  const root = temp(),
-    outside = temp();
+  const root = temp();
+  const outside = temp();
   writeFileSync(join(outside, "secret.txt"), "secret");
   symlinkSync(join(outside, "secret.txt"), join(root, "secret-link"));
 
@@ -72,8 +72,8 @@ it("rejects traversal and symbolic-link reads outside the selected home", () => 
 });
 
 it("refuses to continue a streamed read after the file changes", () => {
-  const root = temp(),
-    path = join(root, "changing.txt");
+  const root = temp();
+  const path = join(root, "changing.txt");
   writeFileSync(path, "before");
   const stat = invoke(root, { kind: "workspace_stat", path: "changing.txt" });
   expect(stat.code).toBe(0);

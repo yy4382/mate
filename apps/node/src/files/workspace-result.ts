@@ -14,12 +14,12 @@ export function sendWorkspaceOperationResult(
   metadata: Pick<WorkspaceOperationSuccess, "requestId" | "operationId" | "agentId" | "revision">,
   result: WorkspaceOperationSuccess["result"],
 ): void {
-  const stdout = result.stdout.slice(0, RESULT_TEXT_LIMIT),
-    stderr = result.stderr.slice(0, RESULT_TEXT_LIMIT),
-    truncated =
-      result.truncated ||
-      stdout.length !== result.stdout.length ||
-      stderr.length !== result.stderr.length;
+  const stdout = result.stdout.slice(0, RESULT_TEXT_LIMIT);
+  const stderr = result.stderr.slice(0, RESULT_TEXT_LIMIT);
+  const truncated =
+    result.truncated ||
+    stdout.length !== result.stdout.length ||
+    stderr.length !== result.stderr.length;
   const errorCode = workspaceFailureCodeSchema.safeParse(result.errorCode);
   try {
     send(
