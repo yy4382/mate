@@ -29,7 +29,7 @@ it("executes file and process tools with defaults, receipts and domain-specific 
       "tools.call",
       { name, input },
     );
-  // Removing both memberships is fixture createAgentToolFixture, not a new leave-channel product feature.
+  // Remove both memberships to prepare the tool-call scenario.
   db.prepare("UPDATE owner_channel_memberships SET active=0 WHERE channel_id=?").run(source.id);
   expect(
     await call(30, "messages.send", { conversationId: direct.id, text: "Working in B" }),
