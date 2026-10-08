@@ -77,7 +77,7 @@ export function createControlPlane(
       : {}),
   };
   const nodes = new NodeDirectory(ownerAuth.db, nodeOptions);
-  const agents = new AgentDirectory(ownerAuth.db, options.now ?? Date.now, nodes);
+  const agents = new AgentDirectory(ownerAuth.db, options.now ?? Date.now, nodes.identity);
   const modelCredentials = new ModelCredentialDirectory(ownerAuth.db, options.now);
   const ownerChat = new OwnerChat(ownerAuth.db, options.now);
   const push = new OwnerPush(ownerAuth.db);

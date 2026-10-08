@@ -4,7 +4,7 @@ import type Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { MessageWriter } from "../../conversations/messages/writer.js";
-import type { NodeDirectory } from "../../nodes/directory.js";
+import type { NodeOperations } from "../../nodes/operations.js";
 import { AgentSession } from "../../runtime/session/service.js";
 import { defineAgentTool, type AgentToolContext } from "../../runtime/tools/entry.js";
 import type { WorkspaceAccess } from "../access/service.js";
@@ -26,14 +26,14 @@ export class WorkspaceActions {
   private readonly actions: WorkspaceActionLedger;
   constructor(
     private readonly db: Database.Database,
-    private readonly nodes: NodeDirectory,
+    private readonly nodeOperations: Pick<NodeOperations, "setWorkspaceOperationResultHandler">,
     private readonly access: WorkspaceAccess,
     notify: MessageWriter["notifyAgentReceiptCorrection"],
   ) {
     this.actions = new WorkspaceActionLedger(db, notify);
   }
   registerResultHandler(): void {
-    this.nodes.operations.setWorkspaceOperationResultHandler((nodeId, result) =>
+    this.nodeOperations.setWorkspaceOperationResultHandler((nodeId, result) =>
       this.actions.receive(nodeId, result),
     );
   }

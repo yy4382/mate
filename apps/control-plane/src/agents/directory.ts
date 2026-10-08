@@ -5,8 +5,12 @@ import { createHash, randomUUID } from "node:crypto";
 import { basename, resolve } from "node:path";
 import { type AgentWorkspaceIdentity, type AgentProvisionStage } from "@mate/protocol";
 
-import { nodeAccountOf, NodeAccountConflict, type NodeAccount } from "../nodes/identity.js";
-import type { NodeDirectory } from "../nodes/directory.js";
+import {
+  nodeAccountOf,
+  NodeAccountConflict,
+  type NodeAccount,
+  type NodeIdentity,
+} from "../nodes/identity.js";
 import { providerCredentialExistsSql } from "../providers/credentials.js";
 import type { OwnerChat } from "../conversations/service.js";
 import type {
@@ -92,7 +96,7 @@ export class AgentDirectory {
     private readonly db: Database.Database,
     private readonly now: () => number,
     /** Records and verifies the one ordinary account the Agent's node runs under. */
-    private readonly nodes: NodeDirectory,
+    private readonly nodeIdentity: Pick<NodeIdentity, "recordAccount">,
   ) {}
 
   list(): AgentSummary[] {
@@ -289,7 +293,7 @@ export class AgentDirectory {
         if (finished.changes !== 1)
           throw new AgentRequestConflict("Agent 的准备状态已变化，未完成的工作区不会被记录。");
         try {
-          this.nodes.identity.recordAccount(current.node_id, account);
+          this.nodeIdentity.recordAccount(current.node_id, account);
         } catch (error) {
           // A node whose account moved is the owner's provisioning conflict, the same kind of
           // refusal as any other request this Agent cannot satisfy.

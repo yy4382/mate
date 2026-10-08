@@ -18,8 +18,12 @@ export class WorkspaceService {
   ) {
     const access = new WorkspaceAccess(db, nodes);
     this.reads = new WorkspaceReads(access);
-    this.actions = new WorkspaceActions(db, nodes, access, (agentId, operationId, state) =>
-      messages.notifyAgentReceiptCorrection(agentId, operationId, state),
+    this.actions = new WorkspaceActions(
+      db,
+      nodes.operations,
+      access,
+      (agentId, operationId, state) =>
+        messages.notifyAgentReceiptCorrection(agentId, operationId, state),
     );
     this.downloads = new WorkspaceDownloads(db, this.reads, access);
     this.actions.registerResultHandler();
