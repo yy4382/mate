@@ -5,7 +5,49 @@ import { FILE_CHUNK_MAX_BYTES, workspaceVersionSchema } from "./workspace.js";
 export const WORKSPACE_WRITE_MAX_BYTES = 700 * 1024;
 export const WORKSPACE_WRITE_BYTES_BASE64_MAX_CHARS = Math.ceil(WORKSPACE_WRITE_MAX_BYTES / 3) * 4;
 
-export const operationSchema = z.discriminatedUnion("kind", [
+const workspaceReadChunkOperationSchema = z
+  .object({
+    kind: z.literal("workspace_read_chunk"),
+    path: z.string().max(4096),
+    offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+    length: z.number().int().min(1).max(FILE_CHUNK_MAX_BYTES),
+    version: workspaceVersionSchema.optional(),
+  })
+  .strict();
+
+const workspaceWriteBytesOperationSchema = z
+  .object({
+    kind: z.literal("write_bytes"),
+    path: z.string().max(4096),
+    base64: z
+      .string()
+      .max(WORKSPACE_WRITE_BYTES_BASE64_MAX_CHARS)
+      .refine(
+        (value) => Buffer.from(value, "base64").toString("base64") === value,
+        "Canonical base64 required",
+      )
+      .refine(
+        (value) => Buffer.from(value, "base64").byteLength <= WORKSPACE_WRITE_MAX_BYTES,
+        "Decoded binary file exceeds the 700 KiB workspace write limit",
+      ),
+  })
+  .strict();
+
+const workspaceWriteTextOperationSchema = z
+  .object({
+    kind: z.literal("write"),
+    path: z.string().max(4096),
+    content: z
+      .string()
+      .max(WORKSPACE_WRITE_MAX_BYTES)
+      .refine(
+        (value) => Buffer.byteLength(value, "utf8") <= WORKSPACE_WRITE_MAX_BYTES,
+        "UTF-8 file exceeds the 700 KiB workspace write limit",
+      ),
+  })
+  .strict();
+
+export const workspaceOperationSchema = z.discriminatedUnion("kind", [
   z
     .object({
       kind: z.literal("read_bytes"),
@@ -23,46 +65,10 @@ export const operationSchema = z.discriminatedUnion("kind", [
     })
     .strict(),
   z.object({ kind: z.literal("workspace_stat"), path: z.string().max(4096) }).strict(),
-  z
-    .object({
-      kind: z.literal("workspace_read_chunk"),
-      path: z.string().max(4096),
-      offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
-      length: z.number().int().min(1).max(FILE_CHUNK_MAX_BYTES),
-      version: workspaceVersionSchema.optional(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("write_bytes"),
-      path: z.string().max(4096),
-      base64: z
-        .string()
-        .max(WORKSPACE_WRITE_BYTES_BASE64_MAX_CHARS)
-        .refine(
-          (value) => Buffer.from(value, "base64").toString("base64") === value,
-          "Canonical base64 required",
-        )
-        .refine(
-          (value) => Buffer.from(value, "base64").byteLength <= WORKSPACE_WRITE_MAX_BYTES,
-          "Decoded binary file exceeds the 700 KiB workspace write limit",
-        ),
-    })
-    .strict(),
+  workspaceReadChunkOperationSchema,
+  workspaceWriteBytesOperationSchema,
   z.object({ kind: z.literal("read"), path: z.string().max(4096) }).strict(),
-  z
-    .object({
-      kind: z.literal("write"),
-      path: z.string().max(4096),
-      content: z
-        .string()
-        .max(WORKSPACE_WRITE_MAX_BYTES)
-        .refine(
-          (value) => Buffer.byteLength(value, "utf8") <= WORKSPACE_WRITE_MAX_BYTES,
-          "UTF-8 file exceeds the 700 KiB workspace write limit",
-        ),
-    })
-    .strict(),
+  workspaceWriteTextOperationSchema,
   z.object({ kind: z.literal("list"), path: z.string().max(4096) }).strict(),
   z.object({ kind: z.literal("stat"), path: z.string().max(4096) }).strict(),
   z
@@ -100,4 +106,4 @@ export const operationSchema = z.discriminatedUnion("kind", [
     })
     .strict(),
 ]);
-export type Operation = z.infer<typeof operationSchema>;
+export type WorkspaceOperation = z.infer<typeof workspaceOperationSchema>;

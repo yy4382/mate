@@ -3,7 +3,7 @@ import { existsSync, statSync, realpathSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { operationSchema } from "@mate/protocol";
+import { workspaceOperationSchema } from "@mate/protocol";
 import {
   type ExecutionBackend,
   type ExecutionRequest,
@@ -38,7 +38,7 @@ export class SameAccountFileBackend implements ExecutionBackend {
         : resolve(dirname(adjacent), "../../dist/files/file-operation.mjs"));
   }
   async execute(request: ExecutionRequest, signal?: AbortSignal): Promise<ExecutionResult> {
-    const op = operationSchema.parse(request.operation);
+    const op = workspaceOperationSchema.parse(request.operation);
     z.number().int().min(1).max(300000).parse(request.timeoutMs);
     const account = this.account;
     if (signal?.aborted) throw new Error("Execution aborted");

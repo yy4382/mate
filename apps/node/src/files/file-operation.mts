@@ -2,7 +2,7 @@ import { systemErrorCode } from "../system-error.js";
 import { FileOperationError, fileFailure } from "./file-failures.js";
 import { FixedWorkspacePaths } from "./fixed-workspace-paths.js";
 // Fixed file helper launched under Mate's existing account. Requests use stdin.
-import { operationSchema } from "@mate/protocol";
+import { workspaceOperationSchema } from "@mate/protocol";
 import type { WorkspaceVersion } from "@mate/protocol/workspace";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -39,7 +39,7 @@ if (!lstatSync(root).isDirectory()) throw new Error("Workspace root must be a di
 const privateMode = process.argv[3] !== "022";
 process.umask(privateMode ? 0o077 : 0o022);
 const paths = new FixedWorkspacePaths(root, privateMode);
-const operation = operationSchema.parse(JSON.parse(readFileSync(0, "utf8")));
+const operation = workspaceOperationSchema.parse(JSON.parse(readFileSync(0, "utf8")));
 paths.lockMutation(operation.kind);
 
 const maxTextFileBytes = 1_000_000;

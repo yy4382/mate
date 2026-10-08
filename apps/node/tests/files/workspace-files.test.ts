@@ -4,7 +4,7 @@ import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import { operationSchema } from "@mate/protocol";
+import { workspaceOperationSchema } from "@mate/protocol";
 
 const roots: string[] = [];
 const temp = () => {
@@ -92,14 +92,14 @@ it("refuses to continue a streamed read after the file changes", () => {
 });
 
 it("validates bounded workspace requests before they reach a node", () => {
-  expect(operationSchema.parse({ kind: "workspace_list", path: "notes" })).toEqual({
+  expect(workspaceOperationSchema.parse({ kind: "workspace_list", path: "notes" })).toEqual({
     kind: "workspace_list",
     path: "notes",
     offset: 0,
     limit: 32,
   });
   expect(() =>
-    operationSchema.parse({
+    workspaceOperationSchema.parse({
       kind: "workspace_read_chunk",
       path: "notes/file.txt",
       offset: 0,

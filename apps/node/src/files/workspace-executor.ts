@@ -13,7 +13,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   workspaceResultIsUnknown,
   type WorkspaceFailureCode,
-  type Operation,
+  type WorkspaceOperation,
   type AgentWorkspaceIdentity,
   type ControlWorkspaceOperation,
 } from "@mate/protocol";
@@ -61,7 +61,7 @@ const storedReceiptSchema = z.looseObject({
 });
 type StoredReceipt = z.infer<typeof storedReceiptSchema>;
 
-const mutatingKinds = new Set<Operation["kind"]>([
+const mutatingKinds = new Set<WorkspaceOperation["kind"]>([
   "write_bytes",
   "write",
   "edit",
@@ -69,12 +69,12 @@ const mutatingKinds = new Set<Operation["kind"]>([
   "move",
   "remove",
 ]);
-const readKinds = new Set<Operation["kind"]>([
+const readKinds = new Set<WorkspaceOperation["kind"]>([
   "workspace_list",
   "workspace_stat",
   "workspace_read_chunk",
 ]);
-const agentReadKinds = new Set<Operation["kind"]>([...readKinds, "read"]);
+const agentReadKinds = new Set<WorkspaceOperation["kind"]>([...readKinds, "read"]);
 
 /** Executes file requests as the node account after verifying the Agent workspace identity. */
 export class LinuxWorkspaceExecutor {
@@ -329,7 +329,7 @@ function selectAgentReadWorkspace({
 }: Pick<WorkspaceExecutionRequest, "mode" | "operation"> & {
   workspace: string;
   workspaceRoot: string;
-}): { root: string; operation: Operation } | undefined {
+}): { root: string; operation: WorkspaceOperation } | undefined {
   if (mode !== "agent_read" || !agentReadKinds.has(operation.kind)) return undefined;
   const target = resolve(workspace, operation.path);
   const own = within(workspace, target);

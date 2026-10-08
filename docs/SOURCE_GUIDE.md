@@ -94,6 +94,17 @@ Zod schema 是需要运行时校验的领域数据的类型来源。`z.infer` �
 
 浏览器使用 `@mate/protocol/owner` 和 `@mate/protocol/workspace`，避免依赖含 Node 专用校验的根导出或供应商 SDK。网页只需要静态形状时使用 `import type`；HTTP 和事件流响应需要实际校验时，使用这些浏览器安全的 Zod 契约及保留额外字段的显示投影。运行时校验会引入 Zod，但不应引入 Node 专用工具或模型 SDK。
 
+从调用方的 import 选择契约入口：
+
+| 公开入口 | 定义与阅读路线 |
+| --- | --- |
+| `@mate/protocol` | `packages/protocol/src/index.ts` 明确列出控制面与节点共用的消息、操作和错误。`messages.ts` 先定义工作区身份、结果、收据和操作模式，再组成 `NodeRequestSchema` 与 `NodeControlMessageSchema`。 |
+| `@mate/protocol/owner` | `owner.ts` 定义所有者 HTTP 与事件流的完整资料，如 `ownerMessageSchema` / `OwnerMessage`、`agentSummarySchema` / `AgentSummary`。网页各功能的 `*-responses.ts` 从这里推导屏幕需要的投影。 |
+| `@mate/protocol/workspace` | `workspace.ts` 定义文件版本、目录页、文件块和下载状态；控制面、节点和网页共用这些形状。 |
+| `@mate/protocol/node` | `node.ts` 计算工作区与进程操作请求摘要，使用 Node 的加密库。 |
+
+工作区操作使用 `workspaceOperationSchema` / `WorkspaceOperation`，进程操作使用 `agentProcessOperationSchema` / `AgentProcessOperation`；两者分别定义于 `workspace-operations.ts` 和 `process-operations.ts`。需要工作区操作的未解析输入时，使用 `z.input<typeof workspaceOperationSchema>`，解析后的 `WorkspaceOperation` 已含分页默认值。控制面节点账号类型直接从 `AgentWorkspaceIdentity` 选取账号字段，无需再从 schema 重复推导同一资料。
+
 数据库查询的参数和行类型写在查询边界；对不可信持久数据或外部结果使用已有 Zod 契约或明确的类型收窄。不要靠 `as` 跳过检查，也不要为了消除一个断言而发明通用框架。
 
 Pi 会话保留供应商扩展字段。会话边界的窄适配不能改成会删掉未知字段的重新构造；变更 Zod schema 时也必须保留原本的严格或宽松行为、默认值、错误映射和恢复含义。

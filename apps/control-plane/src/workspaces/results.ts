@@ -1,4 +1,4 @@
-import type { Operation, WorkspaceFailureCode } from "@mate/protocol";
+import type { WorkspaceOperation, WorkspaceFailureCode } from "@mate/protocol";
 import type { WorkspaceVersion } from "@mate/protocol/workspace";
 import { createHash } from "node:crypto";
 import { posix as posixPath } from "node:path";
@@ -103,9 +103,9 @@ export function confirmedFileFailure(
 }
 
 export function isMutatingOperation(
-  operation: Operation,
+  operation: WorkspaceOperation,
 ): operation is Extract<
-  Operation,
+  WorkspaceOperation,
   { kind: "write_bytes" | "write" | "edit" | "mkdir" | "move" | "remove" }
 > {
   return ["write_bytes", "write", "edit", "mkdir", "move", "remove"].includes(operation.kind);
@@ -177,7 +177,7 @@ export function safeError(error: unknown): string {
   );
 }
 
-export function operationPaths(operation: Operation): string[] {
+export function operationPaths(operation: WorkspaceOperation): string[] {
   return operation.kind === "move" ? [operation.path, operation.destination] : [operation.path];
 }
 

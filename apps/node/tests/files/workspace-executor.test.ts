@@ -14,7 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { Operation } from "@mate/protocol";
+import type { WorkspaceOperation } from "@mate/protocol";
 import { workspaceReceiptRequestHash } from "@mate/protocol/node";
 import type { ExecutionBackend, ExecutionResult } from "../../src/files/file-execution.js";
 import { prepareAgentWorkspace } from "../../src/provisioning/agent-workspace.js";
@@ -35,13 +35,13 @@ afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true
 const agentId = "6a69f5cb-d52c-44d2-97e9-65cecc461f13";
 const operationId = "f045a330-2902-4a92-b9bd-115ee60ec91c";
 
-function setup(run: (operation: Operation) => Promise<ExecutionResult> | ExecutionResult) {
+function setup(run: (operation: WorkspaceOperation) => Promise<ExecutionResult> | ExecutionResult) {
   const root = temp();
   const homeRoot = join(root, "agents");
   const home = join(homeRoot, agentId);
   mkdirSync(home, { recursive: true, mode: 0o700 });
   chmodSync(home, 0o700);
-  const calls: Operation[] = [];
+  const calls: WorkspaceOperation[] = [];
   const backend: ExecutionBackend = {
     execute: async (request) => {
       calls.push(request.operation);
@@ -183,7 +183,7 @@ async function twoRealAgents() {
   const reader = await prepareAgentWorkspace({ agentId: readerId, workspaceRoot: homeRoot });
   const peer = await prepareAgentWorkspace({ agentId: peerId, workspaceRoot: homeRoot });
   const executor = new LinuxWorkspaceExecutor(homeRoot, dataDirectory);
-  const run = (mode: WorkspaceMode, operation: Operation) =>
+  const run = (mode: WorkspaceMode, operation: WorkspaceOperation) =>
     executor.execute({ operationId: randomUUID(), agentId: readerId, mode, operation });
   writeFileSync(join(peer.workspace, "peer-notes.md"), "peer notes\n", { mode: 0o600 });
   // A link inside the reader's own workspace, pointing at the peer's file, is the cheapest way to
@@ -295,7 +295,7 @@ it("keeps owner workspace preview inside the selected Agent workspace for paths 
     "..",
     "peer-link",
   ]) {
-    const attempts: Array<Operation> = [
+    const attempts: Array<WorkspaceOperation> = [
       { kind: "workspace_list", path, offset: 0, limit: 32 },
       { kind: "workspace_stat", path },
       { kind: "workspace_read_chunk", path, offset: 0, length: 8192 },

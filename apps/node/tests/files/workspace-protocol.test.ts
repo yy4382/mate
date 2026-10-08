@@ -2,7 +2,7 @@ import { expect, it } from "vitest";
 import {
   WORKSPACE_WRITE_BYTES_BASE64_MAX_CHARS,
   WORKSPACE_WRITE_MAX_BYTES,
-  operationSchema,
+  workspaceOperationSchema,
   MAX_NODE_MESSAGE_BYTES,
   NodeControlMessageSchema,
   NodeRequestSchema,
@@ -27,7 +27,9 @@ it("keeps the largest documented binary workspace write inside the complete WebS
   };
 
   expect(base64).toHaveLength(WORKSPACE_WRITE_BYTES_BASE64_MAX_CHARS);
-  expect(operationSchema.parse(workspaceRequest.operation)).toEqual(workspaceRequest.operation);
+  expect(workspaceOperationSchema.parse(workspaceRequest.operation)).toEqual(
+    workspaceRequest.operation,
+  );
   expect(NodeControlMessageSchema.parse(workspaceRequest)).toEqual(workspaceRequest);
   expect(Buffer.byteLength(JSON.stringify(workspaceRequest))).toBeLessThan(MAX_NODE_MESSAGE_BYTES);
 });
@@ -52,7 +54,7 @@ it("rejects text whose UTF-8 size fits but JSON escaping would exceed a node fra
 it("rejects a decoded binary write one byte above the advertised limit", () => {
   const overLimit = Buffer.alloc(WORKSPACE_WRITE_MAX_BYTES + 1).toString("base64");
   expect(() =>
-    operationSchema.parse({ kind: "write_bytes", path: "file.bin", base64: overLimit }),
+    workspaceOperationSchema.parse({ kind: "write_bytes", path: "file.bin", base64: overLimit }),
   ).toThrow();
 });
 

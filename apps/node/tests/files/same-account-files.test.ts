@@ -12,7 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
-import type { Operation, WorkspaceFailureCode } from "@mate/protocol";
+import type { WorkspaceOperation, WorkspaceFailureCode } from "@mate/protocol";
 import { SameAccountFileBackend } from "../../src/files/same-account-files.js";
 
 const roots: string[] = [];
@@ -139,7 +139,7 @@ it("carries real helper path, version, missing-file and permission failures by c
   writeFileSync(join(root, "protected.txt"), "private", { mode: 0o000 });
   symlinkSync("file.txt", join(root, "link.txt"));
   const backend = new SameAccountFileBackend({ ...identity, home: root });
-  const cases: Array<{ operation: Operation; errorCode: WorkspaceFailureCode }> = [
+  const cases: Array<{ operation: WorkspaceOperation; errorCode: WorkspaceFailureCode }> = [
     { operation: { kind: "read", path: "missing.txt" }, errorCode: "not_found" },
     { operation: { kind: "read", path: "link.txt" }, errorCode: "unsafe_path" },
     {
