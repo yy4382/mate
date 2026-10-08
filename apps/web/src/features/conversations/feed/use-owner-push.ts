@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { jsonRequest } from "../../../http-json.js";
 import { pushPublicKeySchema, pushSubscriptionSchema } from "../conversation-responses.js";
 import { ownerJSON } from "../owner-request.js";
 
@@ -18,11 +19,11 @@ export function useOwnerPush(authenticated: boolean) {
         userVisibleOnly: true,
         applicationServerKey: pushReady.key,
       });
-      await ownerJSON("/api/owner/push/subscriptions", pushSubscriptionSchema, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(subscription),
-      });
+      await ownerJSON(
+        "/api/owner/push/subscriptions",
+        pushSubscriptionSchema,
+        jsonRequest("POST", subscription),
+      );
       setPushState("已开启通知");
     } catch (cause) {
       setPushState(cause instanceof Error ? cause.message : "无法开启通知");

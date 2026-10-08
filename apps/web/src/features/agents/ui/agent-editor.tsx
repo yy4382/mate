@@ -3,8 +3,8 @@ import type {
   ModelProviderSummary as ModelProvider,
 } from "@mate/protocol/owner";
 import { useLayoutEffect, useState } from "react";
+import { jsonRequest, readResponseJSON, responseErrorMessage } from "../../../http-json.js";
 import { redirectToLogin } from "../../../navigation.js";
-import { errorMessage } from "../agent-requests.js";
 import type { AgentSummary } from "../agent-responses.js";
 
 export function AgentEditor({
@@ -37,17 +37,16 @@ export function AgentEditor({
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch(`/api/owner/agents/${encodeURIComponent(agent.id)}/${path}`, {
-        method,
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify(body),
-      });
+      const response = await fetch(
+        `/api/owner/agents/${encodeURIComponent(agent.id)}/${path}`,
+        jsonRequest(method, body),
+      );
       if (response.status === 401) {
         redirectToLogin();
         return;
       }
-      const result: unknown = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(errorMessage(result, "无法保存 Agent 设置。"));
+      const result = await readResponseJSON(response);
+      if (!response.ok) throw new Error(responseErrorMessage(result, "无法保存 Agent 设置。"));
       await refresh();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "无法保存 Agent 设置。");

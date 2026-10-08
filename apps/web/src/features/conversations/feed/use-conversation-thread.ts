@@ -49,7 +49,7 @@ export function useConversationThread({
     close();
     setThreadReplies([]);
   }, [close]);
-  const install = useCallback((thread: z.infer<typeof threadSchema>) => {
+  const installThread = useCallback((thread: z.infer<typeof threadSchema>) => {
     threadRootIdRef.current = thread.root.id;
     setThreadRoot(thread.root);
     setThreadReplies(thread.replies);
@@ -69,7 +69,7 @@ export function useConversationThread({
     open,
     close,
     reset,
-    install,
+    installThread,
     receiveStreamReply,
     appendSubmittedReply,
   };

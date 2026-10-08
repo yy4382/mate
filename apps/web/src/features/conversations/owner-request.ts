@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import { readResponseJSON, responseErrorMessage } from "../../http-json.js";
 import { redirectToLogin } from "../../navigation.js";
 
 /** A received HTTP error, distinguishable from a lost or unreadable response. */
@@ -24,13 +25,11 @@ export async function ownerJSON<Schema extends z.ZodType>(
     redirectToLogin();
     throw new OwnerRequestError(401, "登录状态已失效");
   }
-  const result: unknown = await response.json().catch(() => null);
+  const result = await readResponseJSON(response);
   if (!response.ok) {
     throw new OwnerRequestError(
       response.status,
-      typeof result === "object" && result !== null && "error" in result
-        ? String(result.error)
-        : "请求失败，请重试。",
+      responseErrorMessage(result, "请求失败，请重试。"),
     );
   }
   const parsed = schema.safeParse(result);

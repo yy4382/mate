@@ -31,7 +31,8 @@ export function useConversationFeed({
   onSessionExpired,
   onMobileView,
   onError,
-  thread,
+  receiveStreamReply,
+  installThread,
 }: {
   authenticated: boolean;
   selectedId: string | null;
@@ -40,9 +41,9 @@ export function useConversationFeed({
   onSessionExpired: () => void;
   onMobileView: (view: "chat" | "thread") => void;
   onError: (message: string | null) => void;
-  thread: Pick<ReturnType<typeof useConversationThread>, "receiveStreamReply" | "install">;
+  receiveStreamReply: ReturnType<typeof useConversationThread>["receiveStreamReply"];
+  installThread: ReturnType<typeof useConversationThread>["installThread"];
 }) {
-  const { receiveStreamReply, install } = thread;
   const [channels, setChannels] = useState<Channel[]>([]);
   const [messageWindows, setMessageWindows] = useState<Record<string, MessageWindow>>({});
   const [historyRefresh, setHistoryRefresh] = useState(0);
@@ -218,7 +219,7 @@ export function useConversationFeed({
       .then((context) => {
         if (!active || selectedIdRef.current !== channelId) return;
         if (context.kind === "thread") {
-          install(context.thread);
+          installThread(context.thread);
           onMobileView("thread");
           void ownerJSON(
             `/api/owner/channels/${encodeURIComponent(channelId)}/messages`,
@@ -247,7 +248,7 @@ export function useConversationFeed({
     return () => {
       active = false;
     };
-  }, [authenticated, selectedId, onMobileView, onError, install]);
+  }, [authenticated, selectedId, onMobileView, onError, installThread]);
   async function loadOlder() {
     if (!selectedId || !currentWindow.nextBefore) return;
     const channelId = selectedId,

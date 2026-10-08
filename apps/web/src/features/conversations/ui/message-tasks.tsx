@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { jsonRequest } from "../../../http-json.js";
 import { taskSchema, tasksResponseSchema, type Task } from "../../tasks/task-responses.js";
 import type { Message } from "../conversation-responses.js";
 import { ownerJSON, OwnerRequestError } from "../owner-request.js";
@@ -49,11 +50,11 @@ export function useMessageTasks(authenticated: boolean) {
         message={message}
         onCancel={() => setTaskCreation(null)}
         onCreate={async (title) => {
-          const task = await ownerJSON("/api/owner/tasks", taskSchema, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ messageId: message.id, title }),
-          }).catch((cause: unknown) => {
+          const task = await ownerJSON(
+            "/api/owner/tasks",
+            taskSchema,
+            jsonRequest("POST", { messageId: message.id, title }),
+          ).catch((cause: unknown) => {
             // A gateway/server failure can occur after the control plane committed.
             if (cause instanceof OwnerRequestError && cause.status < 500) throw cause;
             throw new Error(
