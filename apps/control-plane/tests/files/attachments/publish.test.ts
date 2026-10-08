@@ -61,26 +61,26 @@ it("publishes Agent workspace files to a joined conversation in bounded chunks a
     version = { device: "1", inode: "2", size: 5, modifiedNs: "3", changedNs: "4" };
   socket.onWorkspaceOperation = async (message) => {
     requests.push(message);
-    const operation = message.operation as { kind: string; offset?: number },
-      result =
-        operation.kind === "workspace_stat"
-          ? {
-              code: 0,
-              stdout: JSON.stringify({ type: "file", size: 5, version }),
-              stderr: "",
-              truncated: false,
-            }
-          : {
-              code: 0,
-              stdout: JSON.stringify({
-                offset: operation.offset,
-                totalBytes: 5,
-                base64: "aGVsbG8=",
-                version,
-              }),
-              stderr: "",
-              truncated: false,
-            };
+    const operation = message.operation as { kind: string; offset?: number };
+    const result =
+      operation.kind === "workspace_stat"
+        ? {
+            code: 0,
+            stdout: JSON.stringify({ type: "file", size: 5, version }),
+            stderr: "",
+            truncated: false,
+          }
+        : {
+            code: 0,
+            stdout: JSON.stringify({
+              offset: operation.offset,
+              totalBytes: 5,
+              base64: "aGVsbG8=",
+              version,
+            }),
+            stderr: "",
+            truncated: false,
+          };
     await toolTestInput(
       app,
       socket,
@@ -101,23 +101,23 @@ it("publishes Agent workspace files to a joined conversation in bounded chunks a
     visibility: "public",
   });
   const input = {
-      name: "attachments.publish",
-      input: { conversationId: destination.id, path: "notes.txt", filename: "共享笔记.txt" },
-    },
-    actionId = stableToolActionId(run.actionScopeId, input),
-    deniedInput = {
-      name: "attachments.publish",
-      input: { conversationId: unjoined.id, path: "notes.txt", filename: "不应发布.txt" },
-    },
-    deniedActionId = stableToolActionId(run.actionScopeId, deniedInput),
-    denied = await callAgentTool(app, socket, run, deniedActionId, "tools.call", deniedInput);
+    name: "attachments.publish",
+    input: { conversationId: destination.id, path: "notes.txt", filename: "共享笔记.txt" },
+  };
+  const actionId = stableToolActionId(run.actionScopeId, input);
+  const deniedInput = {
+    name: "attachments.publish",
+    input: { conversationId: unjoined.id, path: "notes.txt", filename: "不应发布.txt" },
+  };
+  const deniedActionId = stableToolActionId(run.actionScopeId, deniedInput);
+  const denied = await callAgentTool(app, socket, run, deniedActionId, "tools.call", deniedInput);
   expect(denied.ok).toBe(false);
   expect(requests).toHaveLength(0);
   const attempts = await Promise.all([
-      callAgentTool(app, socket, run, actionId, "tools.call", input),
-      callAgentTool(app, socket, run, actionId, "tools.call", input),
-    ]),
-    published = attempts.find((attempt) => attempt.ok)!;
+    callAgentTool(app, socket, run, actionId, "tools.call", input),
+    callAgentTool(app, socket, run, actionId, "tools.call", input),
+  ]);
+  const published = attempts.find((attempt) => attempt.ok)!;
   expect(attempts.filter((attempt) => attempt.ok)).toHaveLength(1);
   db.prepare(
     `UPDATE owner_channel_memberships SET active=1

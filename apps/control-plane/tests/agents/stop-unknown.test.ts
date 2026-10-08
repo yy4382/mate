@@ -41,11 +41,11 @@ it("reports an earlier command whose termination the node cannot confirm as unkn
   );
   // A command really started, and the node then restarted: the node's own restart mute says its
   // shutdown left the command's fate unproven. Only the node's durable receipt can say that.
-  const directory = fixtures.at(-1)!.directory,
-    db = new Database(join(directory, "control-plane", "control-plane.sqlite")),
-    earlierOperationId = randomUUID(),
-    runId = randomUUID(),
-    at = Date.now();
+  const directory = fixtures.at(-1)!.directory;
+  const db = new Database(join(directory, "control-plane", "control-plane.sqlite"));
+  const earlierOperationId = randomUUID();
+  const runId = randomUUID();
+  const at = Date.now();
   try {
     const channel = app.chat.conversations.getOrCreateAgentDirectChannel(id)!;
     app.chat.messages.createMessage({ channelId: channel.id, text: "先跑一条普通命令。" });
@@ -151,11 +151,11 @@ it("counts every command whose termination nothing proved, however the node answ
   // Four durable records: a command the node itself could not end, one Mate had to end that still
   // left a descendant alive, one that exited zero but left a background descendant in its group, and
   // one that provably never launched a shell.
-  const survivedStop = randomUUID(),
-    survivorsLeft = randomUUID(),
-    descendantLeft = randomUUID(),
-    neverStarted = randomUUID(),
-    rejectedByNode = randomUUID();
+  const survivedStop = randomUUID();
+  const survivorsLeft = randomUUID();
+  const descendantLeft = randomUUID();
+  const neverStarted = randomUUID();
+  const rejectedByNode = randomUUID();
   try {
     const channel = app.chat.conversations.getOrCreateAgentDirectChannel(id)!;
     app.chat.messages.createMessage({ channelId: channel.id, text: "先跑几条普通命令。" });

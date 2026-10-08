@@ -48,16 +48,16 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
     text: "Use workspace files and publish the result.",
   });
   const run = await waitForRun(socket, runStart);
-  const requests: Array<Record<string, unknown>> = [],
-    nodeReceipts = new Map<
-      string,
-      { code: number; stdout: string; stderr: string; truncated: boolean }
-    >();
-  let heldRequest: Record<string, unknown> | undefined,
-    holdNextResponse = false,
-    failNextResponse = false,
-    expectedActionId: string | undefined,
-    executingEnvelope: unknown;
+  const requests: Array<Record<string, unknown>> = [];
+  const nodeReceipts = new Map<
+    string,
+    { code: number; stdout: string; stderr: string; truncated: boolean }
+  >();
+  let heldRequest: Record<string, unknown> | undefined;
+  let holdNextResponse = false;
+  let failNextResponse = false;
+  let expectedActionId: string | undefined;
+  let executingEnvelope: unknown;
   socket.onWorkspaceOperation = async (message) => {
     requests.push(message);
     const operationId = String(message.operationId),
@@ -367,10 +367,10 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
   expect(requests).toHaveLength(beforeFailedReplay);
 
   const immediateFailureInput = {
-      name: "workspace.write",
-      input: { path: "protected.txt", content: "no" },
-    },
-    immediateFailureId = stableToolActionId(correctedRun.actionScopeId, immediateFailureInput);
+    name: "workspace.write",
+    input: { path: "protected.txt", content: "no" },
+  };
+  const immediateFailureId = stableToolActionId(correctedRun.actionScopeId, immediateFailureInput);
   expectedActionId = immediateFailureId;
   failNextResponse = true;
   const originalFailure = await callAgentTool(

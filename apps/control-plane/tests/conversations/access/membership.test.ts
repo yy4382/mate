@@ -36,17 +36,17 @@ it("limits read and send to joined conversations while exposing only public meta
     },
     app.chat,
   );
-  const ownDirect = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!,
-    publicRoom = app.chat.channels.createChannel({
-      name: "Visible name",
-      description: "Visible description only.",
-      visibility: "public",
-    }),
-    privateRoom = app.chat.channels.createChannel({
-      name: "Secret project",
-      description: "Only members can know this exists.",
-      visibility: "private",
-    });
+  const ownDirect = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
+  const publicRoom = app.chat.channels.createChannel({
+    name: "Visible name",
+    description: "Visible description only.",
+    visibility: "public",
+  });
+  const privateRoom = app.chat.channels.createChannel({
+    name: "Secret project",
+    description: "Only members can know this exists.",
+    visibility: "private",
+  });
   app.chat.messages.createMessage({ channelId: publicRoom.id, text: "Public message body." });
   app.chat.messages.createMessage({ channelId: privateRoom.id, text: "Private message body." });
   await app.http.request("/api/owner/model-credentials/openai", {
@@ -141,21 +141,21 @@ it("limits read and send to joined conversations while exposing only public meta
     input: { conversationId: ownDirect.id, text: "One explicit private reply." },
   };
   const firstSend = await callAgentTool(
-      app,
-      socket,
-      run,
-      "same-send-action-id",
-      "tools.call",
-      sendInput,
-    ),
-    retrySend = await callAgentTool(
-      app,
-      socket,
-      run,
-      "same-send-action-id",
-      "tools.call",
-      sendInput,
-    );
+    app,
+    socket,
+    run,
+    "same-send-action-id",
+    "tools.call",
+    sendInput,
+  );
+  const retrySend = await callAgentTool(
+    app,
+    socket,
+    run,
+    "same-send-action-id",
+    "tools.call",
+    sendInput,
+  );
   expect(firstSend).toMatchObject({ ok: true });
   expect(retrySend.result).toEqual(firstSend.result);
   const directMessages = app.chat.timeline.listMessages(ownDirect.id, undefined, 100)!.messages;
@@ -167,16 +167,16 @@ it("limits read and send to joined conversations while exposing only public meta
 it("lets a non-member Agent read a public channel's timeline and thread but not speak", async () => {
   const { app, cookie, nodeId, socket } = await setup();
   const agentId = await prepareVerifiedAgent(app, nodeId, "Curious colleague");
-  const ownDirect = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!,
-    publicRoom = app.chat.channels.createChannel({
-      name: "Open research",
-      description: "Anyone configured may read this.",
-      visibility: "public",
-    }),
-    root = app.chat.messages.createMessage({
-      channelId: publicRoom.id,
-      text: "Public planning message.",
-    })!;
+  const ownDirect = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
+  const publicRoom = app.chat.channels.createChannel({
+    name: "Open research",
+    description: "Anyone configured may read this.",
+    visibility: "public",
+  });
+  const root = app.chat.messages.createMessage({
+    channelId: publicRoom.id,
+    text: "Public planning message.",
+  })!;
   app.chat.messages.createMessage({
     channelId: publicRoom.id,
     text: "First public reply.",
@@ -234,16 +234,16 @@ it("lets a non-member Agent read a public channel's timeline and thread but not 
 it("keeps a non-member Agent out of a private channel that holds a task", async () => {
   const { app, cookie, nodeId, socket } = await setup();
   const agentId = await prepareVerifiedAgent(app, nodeId, "Private outsider");
-  const ownDirect = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!,
-    privateRoom = app.chat.channels.createChannel({
-      name: "Secret project",
-      description: "Only members may read this.",
-      visibility: "private",
-    }),
-    secret = app.chat.messages.createMessage({
-      channelId: privateRoom.id,
-      text: "Private planning message.",
-    })!;
+  const ownDirect = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
+  const privateRoom = app.chat.channels.createChannel({
+    name: "Secret project",
+    description: "Only members may read this.",
+    visibility: "private",
+  });
+  const secret = app.chat.messages.createMessage({
+    channelId: privateRoom.id,
+    text: "Private planning message.",
+  })!;
   app.chat.tasks.createTaskForMessage({
     messageId: secret.id,
     actorKind: "human",
@@ -296,12 +296,12 @@ it("keeps a non-member Agent out of a private channel that holds a task", async 
 it("lets a non-member Agent join a public channel, then speak and receive later activity", async () => {
   const { app, cookie, nodeId, socket } = await setup();
   const agentId = await prepareVerifiedAgent(app, nodeId, "Joining colleague");
-  const ownDirect = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!,
-    publicRoom = app.chat.channels.createChannel({
-      name: "Open standup",
-      description: "Agents may join on their own.",
-      visibility: "public",
-    });
+  const ownDirect = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
+  const publicRoom = app.chat.channels.createChannel({
+    name: "Open standup",
+    description: "Agents may join on their own.",
+    visibility: "public",
+  });
   app.chat.messages.createMessage({ channelId: publicRoom.id, text: "Old standup note." });
   await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
@@ -377,22 +377,22 @@ it("does not let an outsider read or join a peer direct message through the publ
   const run = await waitForRun(socket, runStart);
 
   const peerDm = app.chat.channels.createChannel({
-      name: "Peer DM",
-      description: "A private exchange between two colleagues.",
-      visibility: "private",
-    }),
-    ordered = [firstAgentId, secondAgentId].sort(),
-    seed = db.transaction(() => {
-      db.prepare(
-        "INSERT INTO owner_agent_peer_direct_channels(channel_id,first_agent_id,second_agent_id,created_at) VALUES(?,?,?,?)",
-      ).run(peerDm.id, ordered[0], ordered[1], Date.now());
-      db.prepare(
-        "INSERT INTO owner_channel_memberships(channel_id,principal_kind,principal_id,active,joined_at) VALUES(?,?,?,1,?)",
-      ).run(peerDm.id, "agent", firstAgentId, Date.now());
-      db.prepare(
-        "INSERT INTO owner_channel_memberships(channel_id,principal_kind,principal_id,active,joined_at) VALUES(?,?,?,1,?)",
-      ).run(peerDm.id, "agent", secondAgentId, Date.now());
-    });
+    name: "Peer DM",
+    description: "A private exchange between two colleagues.",
+    visibility: "private",
+  });
+  const ordered = [firstAgentId, secondAgentId].sort();
+  const seed = db.transaction(() => {
+    db.prepare(
+      "INSERT INTO owner_agent_peer_direct_channels(channel_id,first_agent_id,second_agent_id,created_at) VALUES(?,?,?,?)",
+    ).run(peerDm.id, ordered[0], ordered[1], Date.now());
+    db.prepare(
+      "INSERT INTO owner_channel_memberships(channel_id,principal_kind,principal_id,active,joined_at) VALUES(?,?,?,1,?)",
+    ).run(peerDm.id, "agent", firstAgentId, Date.now());
+    db.prepare(
+      "INSERT INTO owner_channel_memberships(channel_id,principal_kind,principal_id,active,joined_at) VALUES(?,?,?,1,?)",
+    ).run(peerDm.id, "agent", secondAgentId, Date.now());
+  });
   seed.immediate();
   const secret = app.chat.messages.createMessage({
     channelId: peerDm.id,

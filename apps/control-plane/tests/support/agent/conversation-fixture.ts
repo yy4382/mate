@@ -109,12 +109,12 @@ export async function pairAnotherNode(
   const pairingToken = ((await token.json()) as { pairingToken: string }).pairingToken,
     socket = new FakeNodeSocket();
   app.nodes.open(socket);
-  const challenge = JSON.parse(socket.sent[0]!) as { nonce: string },
-    keyPair = generateKeyPairSync("ed25519", {
-      privateKeyEncoding: { type: "pkcs8", format: "pem" },
-      publicKeyEncoding: { type: "spki", format: "pem" },
-    }),
-    nodeId = randomUUID();
+  const challenge = JSON.parse(socket.sent[0]!) as { nonce: string };
+  const keyPair = generateKeyPairSync("ed25519", {
+    privateKeyEncoding: { type: "pkcs8", format: "pem" },
+    publicKeyEncoding: { type: "spki", format: "pem" },
+  });
+  const nodeId = randomUUID();
   bindToolSocket(app, nodeId, socket);
   await toolTestInput(
     app,

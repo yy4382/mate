@@ -12,17 +12,17 @@ afterEach(cleanupFixture);
 it("lets a non-member Agent read a public channel's attachments but keeps publish member-only", async () => {
   const { app, cookie, nodeId, socket } = await setup();
   const agentId = await prepareVerifiedAgent(app, nodeId, "Attachment reader");
-  const ownDirect = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!,
-    publicRoom = app.chat.channels.createChannel({
-      name: "Open files",
-      description: "Public attachments are readable.",
-      visibility: "public",
-    }),
-    privateRoom = app.chat.channels.createChannel({
-      name: "Closed files",
-      description: "Private attachments stay closed.",
-      visibility: "private",
-    });
+  const ownDirect = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
+  const publicRoom = app.chat.channels.createChannel({
+    name: "Open files",
+    description: "Public attachments are readable.",
+    visibility: "public",
+  });
+  const privateRoom = app.chat.channels.createChannel({
+    name: "Closed files",
+    description: "Private attachments stay closed.",
+    visibility: "private",
+  });
   const upload = async (channelId: string, filename: string, body: string) =>
     app.http.request(`/api/owner/channels/${channelId}/attachments`, {
       method: "POST",

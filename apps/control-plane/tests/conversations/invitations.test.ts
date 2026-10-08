@@ -66,21 +66,21 @@ it("commits an eligible peer invitation once and rejects invalid invitation targ
     input: { conversationId: room.id, agentId: inviteeId },
   };
   const invite = await callAgentTool(
-      app,
-      socket,
-      run,
-      "same-invite-action-id",
-      "tools.call",
-      inviteInput,
-    ),
-    replay = await callAgentTool(
-      app,
-      socket,
-      run,
-      "same-invite-action-id",
-      "tools.call",
-      inviteInput,
-    );
+    app,
+    socket,
+    run,
+    "same-invite-action-id",
+    "tools.call",
+    inviteInput,
+  );
+  const replay = await callAgentTool(
+    app,
+    socket,
+    run,
+    "same-invite-action-id",
+    "tools.call",
+    inviteInput,
+  );
   expect(invite).toMatchObject({ ok: true });
   expect(replay.result).toEqual(invite.result);
   expect(
@@ -153,12 +153,12 @@ it("lets the owner invite an existing Agent to a channel through the authenticat
     channelId: channel.id,
     text: "邀请之前的历史也应对新成员可读。",
   });
-  const route = `/api/owner/channels/${channel.id}/invitations`,
-    ownerDm = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!,
-    invitableChannels = await app.http.request("/api/owner/invitable-channels", {
-      headers: { cookie },
-    }),
-    invitableBody = (await invitableChannels.json()) as { channels: Array<{ id: string }> };
+  const route = `/api/owner/channels/${channel.id}/invitations`;
+  const ownerDm = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
+  const invitableChannels = await app.http.request("/api/owner/invitable-channels", {
+    headers: { cookie },
+  });
+  const invitableBody = (await invitableChannels.json()) as { channels: Array<{ id: string }> };
   expect(invitableChannels.status).toBe(200);
   expect(invitableBody.channels.map((item) => item.id)).toContain(channel.id);
   expect(invitableBody.channels.map((item) => item.id)).not.toContain(ownerDm.id);
@@ -219,11 +219,11 @@ it("lets the owner invite an existing Agent to a channel through the authenticat
     channelId: channel.id,
     text: "邀请提交后，新成员立即获得读取权限。",
   });
-  const run = await waitForRun(socket, runStart),
-    read = await callAgentTool(app, socket, run, "owner-invite-read", "tools.call", {
-      name: "conversations.read",
-      input: { conversationId: channel.id },
-    });
+  const run = await waitForRun(socket, runStart);
+  const read = await callAgentTool(app, socket, run, "owner-invite-read", "tools.call", {
+    name: "conversations.read",
+    input: { conversationId: channel.id },
+  });
   expect(read).toMatchObject({ ok: true });
   expect(
     (read.result as { messages: Array<{ text: string }> }).messages.map((message) => message.text),

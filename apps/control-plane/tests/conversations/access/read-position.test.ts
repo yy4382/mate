@@ -14,16 +14,16 @@ afterEach(cleanupFixture);
 it("does not backfill a just-joined channel as unread nor forget what was already read", async () => {
   const { app, cookie, db, nodeId, socket } = await setup();
   const agentId = await prepareVerifiedAgent(app, nodeId, "Late joiner");
-  const ownDirect = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!,
-    publicRoom = app.chat.channels.createChannel({
-      name: "Open history",
-      description: "History stays quiet when an Agent joins.",
-      visibility: "public",
-    }),
-    oldRoot = app.chat.messages.createMessage({
-      channelId: publicRoom.id,
-      text: "History before joining.",
-    })!;
+  const ownDirect = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
+  const publicRoom = app.chat.channels.createChannel({
+    name: "Open history",
+    description: "History stays quiet when an Agent joins.",
+    visibility: "public",
+  });
+  const oldRoot = app.chat.messages.createMessage({
+    channelId: publicRoom.id,
+    text: "History before joining.",
+  })!;
   app.chat.messages.createMessage({
     channelId: publicRoom.id,
     text: "Another old note.",

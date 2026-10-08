@@ -7,15 +7,15 @@ import { cleanupAgentToolFixture, addAgent, setup } from "../support/agent/agent
 import { eventually } from "../support/environment/run-services.js";
 
 async function recordedOperations() {
-  const context = await setup(),
-    agentId = addAgent(context.app, context.nodeId, "收据同事"),
-    agent = context.app.agents.get(agentId)!,
-    channel = context.app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!,
-    sessionId = agent.sessionId,
-    runId = randomUUID(),
-    operation = { kind: "write", path: "history.txt", content: "synthetic\n" } as const,
-    nodeRequestHash = workspaceReceiptRequestHash(agentId, operation),
-    insert = context.db.prepare(`INSERT INTO owner_agent_tool_actions
+  const context = await setup();
+  const agentId = addAgent(context.app, context.nodeId, "收据同事");
+  const agent = context.app.agents.get(agentId)!;
+  const channel = context.app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
+  const sessionId = agent.sessionId;
+  const runId = randomUUID();
+  const operation = { kind: "write", path: "history.txt", content: "synthetic\n" } as const;
+  const nodeRequestHash = workspaceReceiptRequestHash(agentId, operation);
+  const insert = context.db.prepare(`INSERT INTO owner_agent_tool_actions
       (session_id,action_id,agent_id,operation,request_hash,result_json,created_at)
       VALUES(?,?,?,'workspace.write',?,?,?)`);
   return {
@@ -66,26 +66,26 @@ async function recordedOperations() {
 }
 
 it("continues past a whole page of in-flight writes and reconciles every historical operation across later pages and heartbeats", async () => {
-  const context = await recordedOperations(),
-    waiting = Array.from(
-      { length: 100 },
-      (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
-    ),
-    history = Array.from(
-      { length: 101 },
-      (_, index) => `ffffffff-ffff-4fff-8fff-${String(index).padStart(12, "0")}`,
-    ),
-    pending = waiting.map((operationId) => {
-      context.record(operationId, "executing");
-      return context.app.nodes.workspaceOperation(context.nodeId, {
-        type: "control.workspace.operation",
-        requestId: randomUUID(),
-        operationId,
-        agentId: context.agentId,
-        mode: "agent_action",
-        operation: context.operation,
-      });
+  const context = await recordedOperations();
+  const waiting = Array.from(
+    { length: 100 },
+    (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+  );
+  const history = Array.from(
+    { length: 101 },
+    (_, index) => `ffffffff-ffff-4fff-8fff-${String(index).padStart(12, "0")}`,
+  );
+  const pending = waiting.map((operationId) => {
+    context.record(operationId, "executing");
+    return context.app.nodes.workspaceOperation(context.nodeId, {
+      type: "control.workspace.operation",
+      requestId: randomUUID(),
+      operationId,
+      agentId: context.agentId,
+      mode: "agent_action",
+      operation: context.operation,
     });
+  });
   const settled = Promise.allSettled(pending);
   for (const operationId of history) context.record(operationId, "unknown");
   const queried: string[] = [],

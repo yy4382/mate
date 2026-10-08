@@ -43,12 +43,12 @@ it("replays a committed tool action after its reply is lost and the delivery ret
   });
   const runStart = socket.sent.length;
   app.chat.messages.createMessage({ channelId: direct.id, text: "Start retryable tool action." });
-  const firstRun = await waitForRun(socket, runStart),
-    actionId = "retry-after-lost-tool-result",
-    input = {
-      name: "messages.send",
-      input: { conversationId: direct.id, text: "提交一次，即使回执丢失也不重复。" },
-    };
+  const firstRun = await waitForRun(socket, runStart);
+  const actionId = "retry-after-lost-tool-result";
+  const input = {
+    name: "messages.send",
+    input: { conversationId: direct.id, text: "提交一次，即使回执丢失也不重复。" },
+  };
   socket.dropToolCallId = actionId;
   const sentBeforeToolCall = socket.sent.length;
   await toolTestInput(
@@ -162,11 +162,18 @@ it("keeps a running Agent's tool catalogue and refuses stale or forged tool runs
     ),
   ).toBe(true);
 
-  const otherNode = await pairAnotherNode(app, cookie),
-    forgedNode = await callAgentTool(app, otherNode.socket, run, "forged-node-call", "tools.call", {
+  const otherNode = await pairAnotherNode(app, cookie);
+  const forgedNode = await callAgentTool(
+    app,
+    otherNode.socket,
+    run,
+    "forged-node-call",
+    "tools.call",
+    {
       name: "messages.send",
       input: { conversationId: direct.id, text: "Forged node must not send." },
-    });
+    },
+  );
   expect(forgedNode).toMatchObject({ type: "tools.result", ok: false });
   const forgedAgent = await callAgentTool(
     app,

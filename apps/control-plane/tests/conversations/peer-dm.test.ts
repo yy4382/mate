@@ -94,24 +94,24 @@ it("lets one Agent discover and open an explicit peer DM that both Agents and th
   });
   expect(failedDm).toMatchObject({ ok: false, error: "Direct-message target is not available" });
 
-  const openInput = { name: "conversations.open_dm", input: { targetAgentId: secondAgentId } },
-    secondRunStart = socket.sent.length,
-    opened = await callAgentTool(
-      app,
-      socket,
-      firstRun,
-      "same-open-dm-action",
-      "tools.call",
-      openInput,
-    ),
-    openedAgain = await callAgentTool(
-      app,
-      socket,
-      firstRun,
-      "same-open-dm-action",
-      "tools.call",
-      openInput,
-    );
+  const openInput = { name: "conversations.open_dm", input: { targetAgentId: secondAgentId } };
+  const secondRunStart = socket.sent.length;
+  const opened = await callAgentTool(
+    app,
+    socket,
+    firstRun,
+    "same-open-dm-action",
+    "tools.call",
+    openInput,
+  );
+  const openedAgain = await callAgentTool(
+    app,
+    socket,
+    firstRun,
+    "same-open-dm-action",
+    "tools.call",
+    openInput,
+  );
   expect(opened).toMatchObject({ ok: true });
   expect(openedAgain.result).toEqual(opened.result);
   const peerDm = opened.result as {

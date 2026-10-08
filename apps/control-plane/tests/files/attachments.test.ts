@@ -28,16 +28,16 @@ async function setup() {
   const app = createControlPlane({ dataDir: join(directory, "control-plane"), passwordFile });
   fixtures.push({ app, directory, passwordFile });
   const login = await app.http.request("/api/auth/login", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ password }),
-    }),
-    cookie = login.headers.get("set-cookie")!.split(";", 1)[0]!,
-    channel = app.chat.channels.createChannel({
-      name: "附件测试",
-      description: "",
-      visibility: "private",
-    });
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ password }),
+  });
+  const cookie = login.headers.get("set-cookie")!.split(";", 1)[0]!;
+  const channel = app.chat.channels.createChannel({
+    name: "附件测试",
+    description: "",
+    visibility: "private",
+  });
   return { app, cookie, directory, passwordFile, channel };
 }
 
@@ -53,18 +53,18 @@ function chunkedBody(chunks: string[]): ReadableStream<Uint8Array> {
 }
 
 it("streams a Unicode owner upload into a channel and streams it back only through its channel", async () => {
-  const { app, cookie, channel } = await setup(),
-    filename = "共享资料.txt",
-    upload = await app.http.request(`/api/owner/channels/${channel.id}/attachments`, {
-      method: "POST",
-      headers: {
-        cookie,
-        "content-type": "text/plain; charset=utf-8",
-        "x-mate-filename": encodeURIComponent(filename),
-      },
-      body: chunkedBody(["第一", "段\n第二", "段"]),
-      duplex: "half",
-    } as RequestInit & { duplex: "half" });
+  const { app, cookie, channel } = await setup();
+  const filename = "共享资料.txt";
+  const upload = await app.http.request(`/api/owner/channels/${channel.id}/attachments`, {
+    method: "POST",
+    headers: {
+      cookie,
+      "content-type": "text/plain; charset=utf-8",
+      "x-mate-filename": encodeURIComponent(filename),
+    },
+    body: chunkedBody(["第一", "段\n第二", "段"]),
+    duplex: "half",
+  } as RequestInit & { duplex: "half" });
   expect(upload.status).toBe(201);
   const created = (await upload.json()) as {
     attachment: { id: string; filename: string; size: number };
@@ -112,27 +112,27 @@ it("removes an interrupted upload and does not expose partial attachment metadat
   let controller: ReadableStreamDefaultController<Uint8Array> | undefined,
     pulls = 0,
     signalFirstChunk!: () => void;
-  const firstChunk = new Promise<void>((resolve) => (signalFirstChunk = resolve)),
-    body = new ReadableStream<Uint8Array>({
-      start(streamController) {
-        controller = streamController;
-      },
-      pull(streamController) {
-        pulls++;
-        if (pulls === 1) {
-          streamController.enqueue(new Uint8Array(64 * 1024));
-          signalFirstChunk();
-          return;
-        }
-        return new Promise<void>(() => {});
-      },
-    }),
-    pendingResponse = app.http.request(`/api/owner/channels/${channel.id}/attachments`, {
-      method: "POST",
-      headers: { cookie, "x-mate-filename": "interrupted.txt" },
-      body,
-      duplex: "half",
-    } as RequestInit & { duplex: "half" });
+  const firstChunk = new Promise<void>((resolve) => (signalFirstChunk = resolve));
+  const body = new ReadableStream<Uint8Array>({
+    start(streamController) {
+      controller = streamController;
+    },
+    pull(streamController) {
+      pulls++;
+      if (pulls === 1) {
+        streamController.enqueue(new Uint8Array(64 * 1024));
+        signalFirstChunk();
+        return;
+      }
+      return new Promise<void>(() => {});
+    },
+  });
+  const pendingResponse = app.http.request(`/api/owner/channels/${channel.id}/attachments`, {
+    method: "POST",
+    headers: { cookie, "x-mate-filename": "interrupted.txt" },
+    body,
+    duplex: "half",
+  } as RequestInit & { duplex: "half" });
   await firstChunk;
   controller!.error(new Error("network interrupted"));
   const response = await pendingResponse;
@@ -162,11 +162,11 @@ it("removes an interrupted upload and does not expose partial attachment metadat
 });
 
 it("cleans uploading rows and files left by a control-plane restart", async () => {
-  const { app, directory, passwordFile, channel } = await setup(),
-    dataDirectory = join(directory, "control-plane"),
-    storageKey = randomUUID(),
-    attachmentId = randomUUID(),
-    database = new Database(join(dataDirectory, "control-plane.sqlite"));
+  const { app, directory, passwordFile, channel } = await setup();
+  const dataDirectory = join(directory, "control-plane");
+  const storageKey = randomUUID();
+  const attachmentId = randomUUID();
+  const database = new Database(join(dataDirectory, "control-plane.sqlite"));
   database
     .prepare(
       `INSERT INTO owner_conversation_attachments(
@@ -195,14 +195,14 @@ it("cleans uploading rows and files left by a control-plane restart", async () =
   const restarted = createControlPlane({ dataDir: dataDirectory, passwordFile });
   fixtures.push({ app: restarted, directory, passwordFile });
   const login = await restarted.http.request("/api/auth/login", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ password }),
-    }),
-    cookie = login.headers.get("set-cookie")!.split(";", 1)[0]!,
-    listing = await restarted.http.request(`/api/owner/channels/${channel.id}/attachments`, {
-      headers: { cookie },
-    });
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ password }),
+  });
+  const cookie = login.headers.get("set-cookie")!.split(";", 1)[0]!;
+  const listing = await restarted.http.request(`/api/owner/channels/${channel.id}/attachments`, {
+    headers: { cookie },
+  });
   expect(listing.status).toBe(200);
   expect(await listing.json()).toEqual({ attachments: [] });
   expect(existsSync(join(dataDirectory, "attachments", `${storageKey}.uploading`))).toBe(false);
