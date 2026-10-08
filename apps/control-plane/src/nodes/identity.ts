@@ -1,12 +1,9 @@
-import type { NodeRequest, provisionIdentitySchema } from "@mate/protocol";
+import type { AgentWorkspaceIdentity, NodeRequest } from "@mate/protocol";
 import type Database from "better-sqlite3";
 import { createHash, createPublicKey, randomBytes, verify } from "node:crypto";
 import { z } from "zod";
 /** The one ordinary Linux account a paired node runs every one of its Agents under. */
-export type NodeAccount = Pick<
-  z.output<typeof provisionIdentitySchema>,
-  "username" | "uid" | "gid"
->;
+export type NodeAccount = Pick<AgentWorkspaceIdentity, "username" | "uid" | "gid">;
 
 /** A node reported an account that is not the one its Agents already run under. */
 export class NodeAccountConflict extends Error {

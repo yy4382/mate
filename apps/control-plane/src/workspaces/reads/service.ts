@@ -1,4 +1,4 @@
-import type { Operation } from "@mate/protocol";
+import type { WorkspaceOperation } from "@mate/protocol";
 import type { WorkspaceVersion } from "@mate/protocol/workspace";
 import { FILE_CHUNK_MAX_BYTES, workspaceVersionSchema } from "@mate/protocol/workspace";
 import { randomUUID } from "node:crypto";
@@ -169,7 +169,7 @@ export class WorkspaceReads {
 
   async readForAgentPublish(
     identity: AgentToolContext,
-    operation: Extract<Operation, { kind: "workspace_stat" | "workspace_read_chunk" }>,
+    operation: Extract<WorkspaceOperation, { kind: "workspace_stat" | "workspace_read_chunk" }>,
   ): Promise<Record<string, unknown>> {
     const { runId, agentId } = identity;
     return this.access.withAccessAudit(
@@ -187,7 +187,7 @@ export class WorkspaceReads {
 
   private async readForAgentPublishUnchecked(
     identity: AgentToolContext,
-    operation: Extract<Operation, { kind: "workspace_stat" | "workspace_read_chunk" }>,
+    operation: Extract<WorkspaceOperation, { kind: "workspace_stat" | "workspace_read_chunk" }>,
   ): Promise<Record<string, unknown>> {
     const { agentId } = identity;
     await identity.committed;
@@ -214,7 +214,7 @@ export class WorkspaceReads {
   async readForAgent(
     identity: AgentToolContext,
     operation: Extract<
-      Operation,
+      WorkspaceOperation,
       { kind: "read" | "workspace_list" | "workspace_stat" | "workspace_read_chunk" }
     >,
   ): Promise<unknown> {
@@ -235,7 +235,7 @@ export class WorkspaceReads {
   private async readForAgentUnchecked(
     identity: AgentToolContext,
     operation: Extract<
-      Operation,
+      WorkspaceOperation,
       { kind: "read" | "workspace_list" | "workspace_stat" | "workspace_read_chunk" }
     >,
   ): Promise<unknown> {
@@ -317,7 +317,7 @@ export class WorkspaceReads {
   private async agentReadOperation(
     identity: AgentToolContext,
     operation: Extract<
-      Operation,
+      WorkspaceOperation,
       { kind: "workspace_list" | "workspace_stat" | "workspace_read_chunk" }
     >,
   ) {
@@ -383,7 +383,7 @@ export class WorkspaceReads {
   private async readOperation(
     agentId: string,
     operation: Extract<
-      Operation,
+      WorkspaceOperation,
       { kind: "workspace_list" | "workspace_stat" | "workspace_read_chunk" }
     >,
   ): Promise<Record<string, unknown>> {

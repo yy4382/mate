@@ -1,4 +1,4 @@
-import type { Operation } from "@mate/protocol";
+import type { WorkspaceOperation } from "@mate/protocol";
 import { workspaceReceiptRequestHash } from "@mate/protocol/node";
 import type Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
@@ -128,7 +128,7 @@ export class WorkspaceActions {
       actionId: string;
       operationName: string;
       toolInput: Record<string, unknown>;
-      operation: Operation;
+      operation: WorkspaceOperation;
     },
   ): Promise<unknown> {
     return this.access.withAccessAudit(

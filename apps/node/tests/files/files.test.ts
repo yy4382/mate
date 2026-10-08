@@ -12,7 +12,7 @@ import {
 import { tmpdir, homedir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
-import type { Operation } from "@mate/protocol";
+import type { WorkspaceOperation } from "@mate/protocol";
 const roots: string[] = [];
 const temp = () => {
   const root = realpathSync(mkdtempSync(`${tmpdir()}/mate-files-`));
@@ -20,7 +20,7 @@ const temp = () => {
   return root;
 };
 afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })));
-function invoke(root: string, op: Operation) {
+function invoke(root: string, op: WorkspaceOperation) {
   const result = spawnSync(
     process.execPath,
     [fileURLToPath(new URL("../../dist/files/file-operation.mjs", import.meta.url)), root],
@@ -132,9 +132,9 @@ it("backend decodes split Unicode output as a stream", async () => {
 });
 it("binary operations accept a maximum-size canonical payload and bounded chunks without text loss", async () => {
   const root = temp();
-  const { operationSchema, WORKSPACE_WRITE_MAX_BYTES } = await import("@mate/protocol");
+  const { workspaceOperationSchema, WORKSPACE_WRITE_MAX_BYTES } = await import("@mate/protocol");
   const data = Buffer.alloc(WORKSPACE_WRITE_MAX_BYTES, 255);
-  const op = operationSchema.parse({
+  const op = workspaceOperationSchema.parse({
     kind: "write_bytes",
     path: "binary",
     base64: data.toString("base64"),
@@ -146,5 +146,5 @@ it("binary operations accept a maximum-size canonical payload and bounded chunks
   );
   expect(result.totalBytes).toBe(WORKSPACE_WRITE_MAX_BYTES);
   expect(Buffer.from(result.base64, "base64")).toEqual(data.subarray(offset));
-  expect(() => operationSchema.parse({ ...op, base64: "!!!" })).toThrow();
+  expect(() => workspaceOperationSchema.parse({ ...op, base64: "!!!" })).toThrow();
 });

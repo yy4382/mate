@@ -1,5 +1,5 @@
 import type { z } from "zod";
-import type { operationSchema, Operation } from "@mate/protocol";
+import type { workspaceOperationSchema, WorkspaceOperation } from "@mate/protocol";
 import type { OwnerMessage, ModelCredentialSummary } from "@mate/protocol/owner";
 import type { WorkspaceDirectoryPage, WorkspaceVersion } from "@mate/protocol/workspace";
 
@@ -13,10 +13,10 @@ const nestedReply: OwnerMessage = reply.recentReplies[0]!;
 // @ts-expect-error Message text remains a string at every reply depth.
 const wrongReplyText: number = nestedReply.text;
 
-const listInput: z.input<typeof operationSchema> = { kind: "workspace_list", path: "" };
+const listInput: z.input<typeof workspaceOperationSchema> = { kind: "workspace_list", path: "" };
 // @ts-expect-error Parsed operations include the existing pagination defaults.
-const missingListDefaults: Operation = { kind: "workspace_list", path: "" };
-const listOutput: Operation = { ...listInput, offset: 0, limit: 32 };
+const missingListDefaults: WorkspaceOperation = { kind: "workspace_list", path: "" };
+const listOutput: WorkspaceOperation = { ...listInput, offset: 0, limit: 32 };
 
 declare const directory: WorkspaceDirectoryPage;
 const nextOffset: number | null = directory.nextOffset;

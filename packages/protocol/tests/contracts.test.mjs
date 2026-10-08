@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { operationSchema, WORKSPACE_WRITE_MAX_BYTES } from "@mate/protocol";
+import { workspaceOperationSchema, WORKSPACE_WRITE_MAX_BYTES } from "@mate/protocol";
 import {
   agentSummarySchema,
   ownerChatEventSchema,
@@ -37,7 +37,7 @@ test("workspace versions retain the shared strict decimal and safe-integer contr
   ]) {
     assert.equal(workspaceVersionSchema.safeParse(invalid).success, false);
     assert.equal(
-      operationSchema.safeParse({
+      workspaceOperationSchema.safeParse({
         kind: "workspace_read_chunk",
         path: "file.txt",
         offset: 0,
@@ -54,32 +54,34 @@ test("workspace versions retain the shared strict decimal and safe-integer contr
     length: 8192,
     version,
   };
-  assert.deepEqual(operationSchema.parse(request), request);
+  assert.deepEqual(workspaceOperationSchema.parse(request), request);
   const { version: omitted, ...withoutVersion } = request;
-  assert.deepEqual(operationSchema.parse(withoutVersion), withoutVersion);
+  assert.deepEqual(workspaceOperationSchema.parse(withoutVersion), withoutVersion);
 });
 
 test("workspace operation defaults, unknown fields, and byte refinements stay unchanged", () => {
-  assert.deepEqual(operationSchema.parse({ kind: "workspace_list", path: "" }), {
+  assert.deepEqual(workspaceOperationSchema.parse({ kind: "workspace_list", path: "" }), {
     kind: "workspace_list",
     path: "",
     offset: 0,
     limit: 32,
   });
   assert.equal(
-    operationSchema.safeParse({ kind: "workspace_list", path: "", extra: true }).success,
+    workspaceOperationSchema.safeParse({ kind: "workspace_list", path: "", extra: true }).success,
     false,
   );
   assert.equal(
-    operationSchema.safeParse({ kind: "write_bytes", path: "file.txt", base64: "aA==" }).success,
+    workspaceOperationSchema.safeParse({ kind: "write_bytes", path: "file.txt", base64: "aA==" })
+      .success,
     true,
   );
   assert.equal(
-    operationSchema.safeParse({ kind: "write_bytes", path: "file.txt", base64: "aA" }).success,
+    workspaceOperationSchema.safeParse({ kind: "write_bytes", path: "file.txt", base64: "aA" })
+      .success,
     false,
   );
   assert.equal(
-    operationSchema.safeParse({
+    workspaceOperationSchema.safeParse({
       kind: "write",
       path: "file.txt",
       content: "a".repeat(WORKSPACE_WRITE_MAX_BYTES),
@@ -87,7 +89,7 @@ test("workspace operation defaults, unknown fields, and byte refinements stay un
     true,
   );
   assert.equal(
-    operationSchema.safeParse({
+    workspaceOperationSchema.safeParse({
       kind: "write",
       path: "file.txt",
       content: "中".repeat(Math.floor(WORKSPACE_WRITE_MAX_BYTES / 3) + 1),

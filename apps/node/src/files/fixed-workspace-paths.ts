@@ -1,4 +1,4 @@
-import { type Operation } from "@mate/protocol";
+import { type WorkspaceOperation } from "@mate/protocol";
 import {
   closeSync,
   constants,
@@ -20,7 +20,7 @@ const flockSync: FlockSync | undefined =
   process.platform === "linux"
     ? (createRequire(import.meta.url)("fs-ext").flockSync as FlockSync)
     : undefined;
-const mutatingKinds = new Set<Operation["kind"]>([
+const mutatingKinds = new Set<WorkspaceOperation["kind"]>([
   "write_bytes",
   "write",
   "edit",
@@ -51,7 +51,7 @@ export class FixedWorkspacePaths {
         );
     }
   }
-  lockMutation(kind: Operation["kind"]): void {
+  lockMutation(kind: WorkspaceOperation["kind"]): void {
     // This lock serializes short Mate workspace mutations only; ordinary Agent shell commands do not
     // acquire it, so a long-lived command or background process cannot hold up this operation.
     if (
