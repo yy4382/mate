@@ -3,11 +3,15 @@ import { afterEach, expect, it } from "vitest";
 import { z } from "zod";
 import { NodeControlMessageSchema } from "@mate/protocol";
 import { workspaceReceiptRequestHash } from "@mate/protocol/node";
-import { cleanupAgentToolFixture, addAgent, setup } from "../support/agent/agent-tool-fixture.js";
+import {
+  cleanupAgentToolFixture,
+  addAgent,
+  createAgentToolFixture,
+} from "../support/agent/agent-tool-fixture.js";
 import { eventually } from "../support/environment/run-services.js";
 
 async function recordedOperations() {
-  const context = await setup();
+  const context = await createAgentToolFixture();
   const agentId = addAgent(context.app, context.nodeId, "收据同事");
   const agent = context.app.agents.get(agentId)!;
   const channel = context.app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;

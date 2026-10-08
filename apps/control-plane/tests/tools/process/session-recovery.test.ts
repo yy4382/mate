@@ -12,7 +12,7 @@ import {
   fixtures,
   cleanupFixture,
   FakeNodeSocket,
-  setup,
+  createProcessToolFixture,
   waitForRun,
 } from "../../support/agent/process-tool-fixture.js";
 afterEach(cleanupFixture);
@@ -20,7 +20,7 @@ afterEach(cleanupFixture);
 it.each(["restart", "reconnect", "conflicting receipt", "malformed workspace"])(
   "continues the same session without new input after %s and presents uncertainty first",
   async (mode) => {
-    const { app, cookie, db, nodeId, socket, keyPair } = await setup();
+    const { app, cookie, db, nodeId, socket, keyPair } = await createProcessToolFixture();
     const agentId = randomUUID();
     app.agents.prepare({
       id: agentId,

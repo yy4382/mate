@@ -10,14 +10,14 @@ import {
   password,
   fixtures,
   cleanupFixture,
-  setup,
+  createConversationFixture,
   waitForRun,
   callAgentTool,
 } from "../support/agent/conversation-fixture.js";
 afterEach(cleanupFixture);
 
 it("persists separate attention and draft choices while gating stale sends", async () => {
-  const { app, cookie, nodeId, socket, db, directory } = await setup();
+  const { app, cookie, nodeId, socket, db, directory } = await createConversationFixture();
   const agentId = randomUUID();
   app.agents.prepare({
     id: agentId,
@@ -189,7 +189,7 @@ it("persists separate attention and draft choices while gating stale sends", asy
 });
 
 it("does not let a saved draft or a later paginated read hide unseen conversation changes", async () => {
-  const { app, cookie, nodeId, socket } = await setup();
+  const { app, cookie, nodeId, socket } = await createConversationFixture();
   const agentId = randomUUID();
   app.agents.prepare({
     id: agentId,

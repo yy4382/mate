@@ -10,7 +10,7 @@ import {
   fixtures,
   cleanupFixture,
   FakeNodeSocket,
-  setup,
+  createConversationFixture,
   waitForRun,
   callAgentTool,
   stableToolActionId,
@@ -20,7 +20,7 @@ afterEach(cleanupFixture);
 it.each(["legacy", "structured"])(
   "replays a confirmed failed file action as the same error after control-plane restart (%s)",
   async (mode) => {
-    const { app, cookie, db, nodeId, socket, keyPair } = await setup();
+    const { app, cookie, db, nodeId, socket, keyPair } = await createConversationFixture();
     const agentId = randomUUID();
     app.agents.prepare({
       id: agentId,

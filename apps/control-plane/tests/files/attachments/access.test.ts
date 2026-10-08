@@ -2,7 +2,7 @@ import { afterEach, expect, it } from "vitest";
 
 import {
   cleanupFixture,
-  setup,
+  createConversationFixture,
   prepareVerifiedAgent,
   waitForRun,
   callAgentTool,
@@ -10,7 +10,7 @@ import {
 afterEach(cleanupFixture);
 
 it("lets a non-member Agent read a public channel's attachments but keeps publish member-only", async () => {
-  const { app, cookie, nodeId, socket } = await setup();
+  const { app, cookie, nodeId, socket } = await createConversationFixture();
   const agentId = await prepareVerifiedAgent(app, nodeId, "Attachment reader");
   const ownDirect = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
   const publicRoom = app.chat.channels.createChannel({

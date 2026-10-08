@@ -4,14 +4,14 @@ import { afterEach, expect, it } from "vitest";
 
 import {
   cleanupFixture,
-  setup,
+  createConversationFixture,
   waitForRun,
   callAgentTool,
 } from "../support/agent/conversation-fixture.js";
 afterEach(cleanupFixture);
 
 it("lets one Agent discover and open an explicit peer DM that both Agents and the owner can read", async () => {
-  const { app, cookie, db, nodeId, socket } = await setup();
+  const { app, cookie, db, nodeId, socket } = await createConversationFixture();
   const firstAgentId = randomUUID(),
     secondAgentId = randomUUID(),
     unverifiedId = randomUUID(),

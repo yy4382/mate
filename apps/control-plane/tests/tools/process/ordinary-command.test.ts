@@ -7,14 +7,14 @@ import { afterEach, expect, it } from "vitest";
 import {
   password,
   cleanupFixture,
-  setup,
+  createProcessToolFixture,
   waitForRun,
   sendTool,
 } from "../../support/agent/process-tool-fixture.js";
 afterEach(cleanupFixture);
 
 it("dispatches ordinary commands from a durable intent without privileged approval", async () => {
-  const { app, cookie, db, nodeId, socket } = await setup();
+  const { app, cookie, db, nodeId, socket } = await createProcessToolFixture();
   const agentId = randomUUID();
   app.agents.prepare({
     id: agentId,
@@ -140,7 +140,7 @@ it("dispatches ordinary commands from a durable intent without privileged approv
 });
 
 it("offers no privileged request or approval-status tool and no owner approval route", async () => {
-  const { app, cookie, db, nodeId, socket } = await setup();
+  const { app, cookie, db, nodeId, socket } = await createProcessToolFixture();
   const agentId = randomUUID();
   app.agents.prepare({
     id: agentId,
@@ -213,7 +213,7 @@ it("offers no privileged request or approval-status tool and no owner approval r
 });
 
 it("runs an explicit sudo the Agent wrote as one ordinary command with its own result", async () => {
-  const { app, cookie, db, nodeId, socket } = await setup();
+  const { app, cookie, db, nodeId, socket } = await createProcessToolFixture();
   const agentId = randomUUID();
   app.agents.prepare({
     id: agentId,

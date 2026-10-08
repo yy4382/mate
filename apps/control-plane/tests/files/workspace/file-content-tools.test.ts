@@ -1,14 +1,14 @@
 import { afterEach, expect, it } from "vitest";
 import {
   cleanupAgentToolFixture,
-  setup,
+  createAgentToolFixture,
   authorizeModel,
   addAgent,
   waitForRuns,
 } from "../../support/agent/agent-tool-fixture.js";
 
 async function fileTools(bytes: Buffer, fault?: "short" | "changed" | "revoked") {
-  const fixture = await setup();
+  const fixture = await createAgentToolFixture();
   const { app, cookie, nodeId, socket } = fixture;
   const agentId = addAgent(app, nodeId, "File reader");
   const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;

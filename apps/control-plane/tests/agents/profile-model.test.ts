@@ -2,11 +2,16 @@ import { randomUUID } from "node:crypto";
 
 import { afterEach, expect, it } from "vitest";
 
-import { cleanupFixture, setup, login, pairNode } from "../support/agent/creation-fixture.js";
+import {
+  cleanupFixture,
+  createAgentCreationFixture,
+  login,
+  pairNode,
+} from "../support/agent/creation-fixture.js";
 afterEach(cleanupFixture);
 
 it("edits each profile field without changing an Agent's identity or session", async () => {
-  const app = setup();
+  const app = createAgentCreationFixture();
   const cookie = await login(app);
   const { id: nodeId } = await pairNode(app, cookie);
   const id = randomUUID();
@@ -55,7 +60,7 @@ it("edits each profile field without changing an Agent's identity or session", a
 });
 
 it("requires an existing provider key before changing the model and preserves the Agent session", async () => {
-  const app = setup();
+  const app = createAgentCreationFixture();
   const cookie = await login(app);
   const { id: nodeId } = await pairNode(app, cookie);
   const id = randomUUID();

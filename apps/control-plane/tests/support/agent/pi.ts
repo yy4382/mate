@@ -49,9 +49,6 @@ export function scripted(messages: AssistantMessage[]): StreamFn {
   };
 }
 export function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((r) => {
-    resolve = r;
-  });
+  const { promise, resolve } = Promise.withResolvers<void>();
   return { promise, resolve };
 }

@@ -3,7 +3,7 @@ import { afterEach, expect, it } from "vitest";
 
 import {
   cleanupFixture,
-  setup,
+  createConversationFixture,
   prepareVerifiedAgent,
   finishRun,
   waitForRun,
@@ -12,7 +12,7 @@ import {
 afterEach(cleanupFixture);
 
 it("does not backfill a just-joined channel as unread nor forget what was already read", async () => {
-  const { app, cookie, db, nodeId, socket } = await setup();
+  const { app, cookie, db, nodeId, socket } = await createConversationFixture();
   const agentId = await prepareVerifiedAgent(app, nodeId, "Late joiner");
   const ownDirect = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
   const publicRoom = app.chat.channels.createChannel({

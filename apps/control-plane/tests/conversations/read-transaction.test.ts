@@ -4,14 +4,14 @@ import { afterEach, expect, it } from "vitest";
 
 import {
   cleanupAgentToolFixture,
-  setup,
+  createAgentToolFixture,
   authorizeModel,
   addAgent,
   waitForRuns,
 } from "../support/agent/agent-tool-fixture.js";
 
 it("rolls back all body-presentation changes when a synchronous read fails, and refuses reads after the run ends", async () => {
-  const { app, cookie, db, nodeId, socket } = await setup();
+  const { app, cookie, db, nodeId, socket } = await createAgentToolFixture();
   const agentId = addAgent(app, nodeId, "Atomic reader");
   const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
   await authorizeModel(app, cookie);

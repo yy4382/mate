@@ -7,7 +7,7 @@ import { afterEach, expect, it, vi } from "vitest";
 
 import {
   cleanupFixture,
-  setup,
+  createConversationFixture,
   waitForRun,
   callAgentTool,
   stableToolActionId,
@@ -15,7 +15,9 @@ import {
 afterEach(cleanupFixture);
 
 it("authorizes workspace writes, reuses one action receipt, and reconciles a late node receipt", async () => {
-  const { app, cookie, db, nodeId, socket } = await setup({ nodeOperationTimeoutMs: 40 });
+  const { app, cookie, db, nodeId, socket } = await createConversationFixture({
+    nodeOperationTimeoutMs: 40,
+  });
   const agentId = randomUUID();
   app.agents.prepare({
     id: agentId,

@@ -8,7 +8,7 @@ import { AgentRequestConflict } from "../../src/agents/directory.js";
 
 import {
   cleanupFixture,
-  setup,
+  createAgentCreationFixture,
   databaseFor,
   login,
   pairNode,
@@ -16,7 +16,7 @@ import {
 afterEach(cleanupFixture);
 
 it("persists a stable Agent session, verifies provisioning, then queues its initial-channel messages", async () => {
-  const app = setup();
+  const app = createAgentCreationFixture();
   const cookie = await login(app);
   const { id: nodeId, socket } = await pairNode(app, cookie);
   const channelResponse = await app.http.request("/api/owner/channels", {
@@ -126,7 +126,7 @@ it("persists a stable Agent session, verifies provisioning, then queues its init
 });
 
 it("retains one failed request and retries it with the same Agent and provisioning IDs", async () => {
-  const app = setup();
+  const app = createAgentCreationFixture();
   const cookie = await login(app);
   const { id: nodeId, socket } = await pairNode(app, cookie);
   const input = {
@@ -218,7 +218,7 @@ it("retains one failed request and retries it with the same Agent and provisioni
 });
 
 it("refuses an Agent whose node reports a different account than the one it already runs", async () => {
-  const app = setup();
+  const app = createAgentCreationFixture();
   const cookie = await login(app);
   const { id: nodeId } = await pairNode(app, cookie);
   const request = (id: string, name: string) => ({
@@ -297,7 +297,7 @@ it("refuses an Agent whose node reports a different account than the one it alre
 });
 
 it("refuses to complete an Agent whose node reports it is running as root", async () => {
-  const app = setup();
+  const app = createAgentCreationFixture();
   const cookie = await login(app);
   const { id: nodeId } = await pairNode(app, cookie);
   const identity = (agentId: string, account: { uid: number; gid: number }) => ({

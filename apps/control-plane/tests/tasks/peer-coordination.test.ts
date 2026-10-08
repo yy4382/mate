@@ -7,7 +7,7 @@ import { afterEach, expect, it } from "vitest";
 
 import {
   cleanupFixture,
-  setup,
+  createConversationFixture,
   prepareVerifiedAgent,
   waitForRun,
   callAgentTool,
@@ -15,7 +15,7 @@ import {
 afterEach(cleanupFixture);
 
 it("does not let a member transfer a task to a public-channel non-member", async () => {
-  const { app, cookie, nodeId, socket } = await setup();
+  const { app, cookie, nodeId, socket } = await createConversationFixture();
   const memberId = await prepareVerifiedAgent(app, nodeId, "Task owner"),
     outsiderId = await prepareVerifiedAgent(app, nodeId, "Interested onlooker");
   const room = app.chat.channels.createChannel({
@@ -93,7 +93,7 @@ it("does not let a member transfer a task to a public-channel non-member", async
 });
 
 it("lets peers coordinate on one task without a tree and preserves a newer claim when the former owner yields", async () => {
-  const { app, cookie, nodeId, socket } = await setup();
+  const { app, cookie, nodeId, socket } = await createConversationFixture();
   const firstId = randomUUID(),
     secondId = randomUUID();
   // Both peers run under the node's single ordinary account; only their workspaces differ.

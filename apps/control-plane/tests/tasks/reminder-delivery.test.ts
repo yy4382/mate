@@ -10,7 +10,7 @@ import {
   password,
   fixtures,
   cleanupFixture,
-  setup,
+  createConversationFixture,
   reconnectNode,
   waitForRun,
   callAgentTool,
@@ -19,7 +19,7 @@ import {
 afterEach(cleanupFixture);
 
 it("holds Agent task changes for fresh discussion and queues an offline reminder without marking it handled", async () => {
-  const { app, cookie, nodeId, socket, db } = await setup();
+  const { app, cookie, nodeId, socket, db } = await createConversationFixture();
   const agentId = randomUUID();
   app.agents.prepare({
     id: agentId,
@@ -268,7 +268,7 @@ it("holds Agent task changes for fresh discussion and queues an offline reminder
 });
 
 it("marks a reminder handled when a preceding DM delivery starts the completed batch", async () => {
-  const fixture = await setup();
+  const fixture = await createConversationFixture();
   const { app, nodeId, socket, nodePrivateKey, db } = fixture;
   const { agentId, dm, reminderId } = await startReminderFixture(fixture);
   app.nodes.close(socket);

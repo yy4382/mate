@@ -5,11 +5,15 @@ import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { afterEach, expect, it } from "vitest";
 
-import { password, cleanupFixture, setup } from "../../support/agent/conversation-fixture.js";
+import {
+  password,
+  cleanupFixture,
+  createConversationFixture,
+} from "../../support/agent/conversation-fixture.js";
 afterEach(cleanupFixture);
 
 it("streams the owner workspace download one bounded node chunk at a time and stops on cancellation", async () => {
-  const { app, cookie, db, nodeId, socket } = await setup(),
+  const { app, cookie, db, nodeId, socket } = await createConversationFixture(),
     agentId = randomUUID(),
     data = Buffer.from("agent workspace content ".repeat(1200)),
     version = {

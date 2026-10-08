@@ -6,14 +6,14 @@ import { afterEach, expect, it } from "vitest";
 
 import {
   cleanupFixture,
-  setup,
+  createConversationFixture,
   waitForRun,
   callAgentTool,
 } from "../../support/agent/conversation-fixture.js";
 afterEach(cleanupFixture);
 
 it("sends an Agent's own workspace read of a peer workspace to the node as an agent read", async () => {
-  const { app, cookie, db, nodeId, socket } = await setup(),
+  const { app, cookie, db, nodeId, socket } = await createConversationFixture(),
     agentId = randomUUID(),
     peerAgentId = randomUUID();
   app.agents.prepare({

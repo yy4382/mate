@@ -33,7 +33,7 @@ export class FakeNodeSocket implements NodeSocket {
   close() {}
   terminate() {}
 }
-export async function setup() {
+export async function createProcessToolFixture() {
   const directory = mkdtempSync(join(tmpdir(), "mate-agent-process-tool-"));
   chmodSync(directory, 0o700);
   const passwordFile = join(directory, "owner-password");

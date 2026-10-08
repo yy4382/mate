@@ -6,11 +6,14 @@ import { afterEach, expect, it } from "vitest";
 
 import { WorkspaceService } from "../../../src/workspaces/service.js";
 
-import { cleanupFixture, setup } from "../../support/agent/conversation-fixture.js";
+import {
+  cleanupFixture,
+  createConversationFixture,
+} from "../../support/agent/conversation-fixture.js";
 afterEach(cleanupFixture);
 
 it("records owner workspace reads and safe failure codes without file contents", async () => {
-  const { app, cookie, db, nodeId, socket } = await setup(),
+  const { app, cookie, db, nodeId, socket } = await createConversationFixture(),
     agentId = randomUUID(),
     version = { device: "1", inode: "2", size: 4, modifiedNs: "3", changedNs: "4" };
   app.agents.prepare({
@@ -243,7 +246,7 @@ it("records owner workspace reads and safe failure codes without file contents",
 });
 
 it("marks an unfinished workspace download as interrupted after control-plane restart", async () => {
-  const { app, db } = await setup(),
+  const { app, db } = await createConversationFixture(),
     agentId = randomUUID(),
     downloadId = randomUUID();
   db.prepare(
@@ -268,7 +271,7 @@ it("marks an unfinished workspace download as interrupted after control-plane re
 });
 
 it("expires abandoned download status with a terminal audit result and clears its session binding", async () => {
-  const { app, db } = await setup(),
+  const { app, db } = await createConversationFixture(),
     agentId = randomUUID(),
     downloadId = randomUUID();
   db.prepare(

@@ -8,14 +8,14 @@ import { AgentSession } from "../../src/runtime/session/service.js";
 import type { SessionCommit } from "../../src/runtime/session/record.js";
 import {
   cleanupAgentToolFixture,
-  setup,
+  createAgentToolFixture,
   authorizeModel,
   addAgent,
   waitForRuns,
 } from "../support/agent/agent-tool-fixture.js";
 
 async function historyFixture() {
-  const fixture = await setup();
+  const fixture = await createAgentToolFixture();
   const { app, cookie, nodeId, socket, db } = fixture;
   const agentId = addAgent(app, nodeId, "History reader");
   const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;

@@ -9,14 +9,14 @@ import { afterEach, expect, it } from "vitest";
 import {
   cleanupFixture,
   FakeNodeSocket,
-  setup,
+  createProcessToolFixture,
   waitForRun,
   sendTool,
 } from "../../support/agent/process-tool-fixture.js";
 afterEach(cleanupFixture);
 
 it("reconciles a durable node receipt before resuming a disconnected Agent", async () => {
-  const { app, cookie, db, nodeId, socket, keyPair } = await setup();
+  const { app, cookie, db, nodeId, socket, keyPair } = await createProcessToolFixture();
   const agentId = randomUUID();
   app.agents.prepare({
     id: agentId,

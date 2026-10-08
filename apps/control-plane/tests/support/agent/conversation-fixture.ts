@@ -41,7 +41,7 @@ export class FakeNodeSocket implements NodeSocket {
   close() {}
   terminate() {}
 }
-export async function setup(options: { nodeOperationTimeoutMs?: number } = {}) {
+export async function createConversationFixture(options: { nodeOperationTimeoutMs?: number } = {}) {
   const directory = mkdtempSync(join(tmpdir(), "mate-agent-direct-message-"));
   chmodSync(directory, 0o700);
   const passwordFile = join(directory, "owner-password");
@@ -106,8 +106,8 @@ export async function pairAnotherNode(
     method: "POST",
     headers: { cookie },
   });
-  const pairingToken = ((await token.json()) as { pairingToken: string }).pairingToken,
-    socket = new FakeNodeSocket();
+  const pairingToken = ((await token.json()) as { pairingToken: string }).pairingToken;
+  const socket = new FakeNodeSocket();
   app.nodes.open(socket);
   const challenge = JSON.parse(socket.sent[0]!) as { nonce: string };
   const keyPair = generateKeyPairSync("ed25519", {
@@ -222,8 +222,8 @@ export async function callAgentTool(
   input: Record<string, unknown>,
   identity: { agentId?: string } = {},
 ) {
-  const fromIndex = socket.sent.length,
-    requestId = randomUUID();
+  const fromIndex = socket.sent.length;
+  const requestId = randomUUID();
   await toolTestInput(
     app,
     socket,
@@ -284,7 +284,9 @@ export function stableToolActionId(
     .digest("hex");
   return `mate:${actionScopeId}:${signature}:${occurrence}`;
 }
-export async function startReminderFixture(fixture: Awaited<ReturnType<typeof setup>>) {
+export async function startReminderFixture(
+  fixture: Awaited<ReturnType<typeof createConversationFixture>>,
+) {
   const { app, cookie, nodeId, socket } = fixture;
   const agentId = randomUUID();
   app.agents.prepare({

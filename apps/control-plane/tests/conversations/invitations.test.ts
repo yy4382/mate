@@ -4,14 +4,14 @@ import { afterEach, expect, it } from "vitest";
 
 import {
   cleanupFixture,
-  setup,
+  createConversationFixture,
   waitForRun,
   callAgentTool,
 } from "../support/agent/conversation-fixture.js";
 afterEach(cleanupFixture);
 
 it("commits an eligible peer invitation once and rejects invalid invitation targets", async () => {
-  const { app, cookie, db, nodeId, socket } = await setup();
+  const { app, cookie, db, nodeId, socket } = await createConversationFixture();
   const inviterId = randomUUID(),
     inviteeId = randomUUID(),
     unverifiedId = randomUUID();
@@ -114,7 +114,7 @@ it("commits an eligible peer invitation once and rejects invalid invitation targ
 });
 
 it("lets the owner invite an existing Agent to a channel through the authenticated web API", async () => {
-  const { app, cookie, db, nodeId, socket } = await setup();
+  const { app, cookie, db, nodeId, socket } = await createConversationFixture();
   const agentId = randomUUID();
   app.agents.prepare({
     id: agentId,

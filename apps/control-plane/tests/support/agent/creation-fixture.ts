@@ -17,7 +17,7 @@ export function cleanupFixture() {
     rmSync(directory, { recursive: true, force: true });
   }
 }
-export function setup() {
+export function createAgentCreationFixture() {
   const directory = mkdtempSync(join(tmpdir(), "mate-agent-creation-"));
   chmodSync(directory, 0o700);
   const passwordFile = join(directory, "owner-password");

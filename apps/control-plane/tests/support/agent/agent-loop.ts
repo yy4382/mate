@@ -85,8 +85,8 @@ export async function loopFixture(
   const directory = mkdtempSync(join(tmpdir(), "mate-control-loop-"));
   chmodSync(directory, 0o700);
   writeFileSync(join(directory, "owner-password"), `${ownerPassword}\n`, { mode: 0o600 });
-  const requests: ProviderRequest[] = [],
-    pending = new Set<ServerResponse>();
+  const requests: ProviderRequest[] = [];
+  const pending = new Set<ServerResponse>();
   const provider = createServer(async (request, response) => {
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(Buffer.from(chunk));
@@ -98,10 +98,11 @@ export async function loopFixture(
   });
   await new Promise<void>((done) => provider.listen(0, "127.0.0.1", done));
   const providerPort = (provider.address() as { port: number }).port;
-  let control: ProcessOutput | undefined, node: ProcessOutput | undefined;
-  let origin = "",
-    cookie = "",
-    nodeId = "";
+  let control: ProcessOutput | undefined;
+  let node: ProcessOutput | undefined;
+  let origin = "";
+  let cookie = "";
+  let nodeId = "";
   const additionalNodes: ProcessOutput[] = [];
   const modelForRun = `model => ({ ...model, baseUrl: "http://127.0.0.1:${providerPort}/v1"${contextWindow ? `, contextWindow: ${contextWindow}, maxTokens: 1000` : ""} })`;
   function startControl(port = 0, injectFault = true) {
@@ -124,8 +125,8 @@ export async function loopFixture(
     return control;
   }
   function launchNode(dataName: string, workspaceName: string, pairingToken?: string) {
-    const data = join(directory, dataName),
-      workspace = join(directory, workspaceName);
+    const data = join(directory, dataName);
+    const workspace = join(directory, workspaceName);
     const runner = `const { runLinuxNodeWithTestDependencies } = await import(${JSON.stringify(import.meta.resolve("@mate/node"))}); const { LinuxWorkspaceExecutor } = await import(${JSON.stringify(import.meta.resolve("@mate/node/workspace-execution"))}); const controller = new AbortController(); process.on("SIGTERM", () => controller.abort()); await runLinuxNodeWithTestDependencies({ controlPlaneUrl: ${JSON.stringify(origin)}, dataDirectory: ${JSON.stringify(data)}, agentWorkspaceRoot: ${JSON.stringify(workspace)}, pairingToken: ${JSON.stringify(pairingToken)}, heartbeatIntervalMs: 100, heartbeatTimeoutMs: 2000 }, controller.signal, { workspaceExecutor: new LinuxWorkspaceExecutor(${JSON.stringify(workspace)}, ${JSON.stringify(data)}) });`;
     return new ProcessOutput(
       spawn(process.execPath, ["--input-type=module", "--eval", runner], {

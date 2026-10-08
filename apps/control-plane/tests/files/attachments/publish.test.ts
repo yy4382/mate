@@ -6,7 +6,7 @@ import { afterEach, expect, it } from "vitest";
 
 import {
   cleanupFixture,
-  setup,
+  createConversationFixture,
   waitForRun,
   callAgentTool,
   stableToolActionId,
@@ -14,7 +14,7 @@ import {
 afterEach(cleanupFixture);
 
 it("publishes Agent workspace files to a joined conversation in bounded chunks and rechecks ACL before replay", async () => {
-  const { app, cookie, db, nodeId, socket } = await setup();
+  const { app, cookie, db, nodeId, socket } = await createConversationFixture();
   const agentId = randomUUID();
   app.agents.prepare({
     id: agentId,

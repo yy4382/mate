@@ -4,7 +4,7 @@ import { afterEach, expect, it } from "vitest";
 
 import {
   cleanupAgentToolFixture,
-  setup,
+  createAgentToolFixture,
   authorizeModel,
   addAgent,
   waitForRuns,
@@ -13,7 +13,7 @@ import {
 it.each(["process.exec", "workspace.write", "attachments.publish"])(
   "%s commits its intent before network waiting, preserves dispatched effects, and refuses old-run continuation",
   async (name) => {
-    const { app, cookie, db, nodeId, socket } = await setup();
+    const { app, cookie, db, nodeId, socket } = await createAgentToolFixture();
     const agentId = addAgent(app, nodeId, "Late receipt");
     const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
     await authorizeModel(app, cookie);
@@ -158,7 +158,7 @@ it.each(["process.exec", "workspace.write", "attachments.publish"])(
 it.each(["process.exec", "workspace.write", "attachments.publish"])(
   "%s never dispatches an intent whose final database commit fails",
   async (name) => {
-    const { app, cookie, db, nodeId, socket } = await setup();
+    const { app, cookie, db, nodeId, socket } = await createAgentToolFixture();
     const agentId = addAgent(app, nodeId, "Commit failure");
     const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
     await authorizeModel(app, cookie);
@@ -200,7 +200,7 @@ it.each(["process.exec", "workspace.write", "attachments.publish"])(
 it.each(["process.exec", "workspace.write", "attachments.publish"])(
   "%s rolls back its entire preparation if persistence fails after inserting the intent",
   async (name) => {
-    const { app, cookie, db, nodeId, socket } = await setup();
+    const { app, cookie, db, nodeId, socket } = await createAgentToolFixture();
     const agentId = addAgent(app, nodeId, "Preparation failure");
     const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
     await authorizeModel(app, cookie);
