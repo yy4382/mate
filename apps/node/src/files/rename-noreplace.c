@@ -14,14 +14,20 @@
 #endif
 
 /* POSIX errno names are stable across hosts; numeric errno values are not. */
-static const char *errno_code(int error_number) {
+static const char *errno_name(int error_number) {
   switch (error_number) {
-    case EACCES: return "EACCES";
-    case EPERM: return "EPERM";
-    case ENOENT: return "ENOENT";
-    case EISDIR: return "EISDIR";
-    case ELOOP: return "ELOOP";
-    default: return "";
+    case EACCES:
+      return "EACCES";
+    case EPERM:
+      return "EPERM";
+    case ENOENT:
+      return "ENOENT";
+    case EISDIR:
+      return "EISDIR";
+    case ELOOP:
+      return "ELOOP";
+    default:
+      return "";
   }
 }
 
@@ -31,11 +37,18 @@ int main(int argc, char **argv) {
     return 64;
   }
 
+  /* The parent passes open source and destination directories as descriptors 3 and 4. */
+  const int source_directory_fd = 3;
+  const int destination_directory_fd = 4;
+  const char *source_name = argv[1];
+  const char *destination_name = argv[2];
   int result;
 #ifdef __APPLE__
-  result = renameatx_np(3, argv[1], 4, argv[2], RENAME_EXCL);
+  result = renameatx_np(source_directory_fd, source_name,
+                       destination_directory_fd, destination_name, RENAME_EXCL);
 #elif defined(__linux__)
-  result = renameat2(3, argv[1], 4, argv[2], RENAME_NOREPLACE);
+  result = renameat2(source_directory_fd, source_name,
+                     destination_directory_fd, destination_name, RENAME_NOREPLACE);
 #else
   fprintf(stderr, "Atomic no-replace rename is unavailable on this platform\n");
   return 78;
@@ -51,7 +64,7 @@ int main(int argc, char **argv) {
     fprintf(stderr, "atomic_move_unavailable: The filesystem lacks atomic no-replace rename\n");
     return 78;
   }
-  fprintf(stdout, "%s", errno_code(error_number));
+  fprintf(stdout, "%s", errno_name(error_number));
   fprintf(stderr, "atomic_move_failed: %s\n", strerror(error_number));
   return 1;
 }

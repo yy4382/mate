@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, expect, test } from "vitest";
 import { uninstallNode } from "../../src/management/uninstall.js";
 import { nodePaths } from "../../src/management/paths.js";
-import { renderNodeUnit } from "../../src/management/service/commands.js";
+import { renderNodeUnit } from "../../src/management/service/unit.js";
 import type { UserServiceManager } from "../../src/management/service/systemd.js";
 
 const homes: string[] = [];
@@ -27,8 +27,8 @@ afterEach(() => {
 function fixture() {
   const home = mkdtempSync(join(tmpdir(), "mate-uninstall-"));
   homes.push(home);
-  const paths = nodePaths(home),
-    bundle = join(paths.versionsDirectory, "0.1.0");
+  const paths = nodePaths(home);
+  const bundle = join(paths.versionsDirectory, "0.1.0");
   const inventory = [
     "bin/mate",
     "node/bin/node",
@@ -84,10 +84,10 @@ function fixture() {
     join(paths.dataDirectory, "agents/MEMORY.md"),
   ];
   for (const file of retained.slice(1)) writeFileSync(file, "synthetic-retained-data");
-  let loaded = true,
-    active = "active",
-    enabled = "enabled",
-    fail = "";
+  let loaded = true;
+  let active = "active";
+  let enabled = "enabled";
+  let fail = "";
   const manager: UserServiceManager = {
     assertAvailable() {},
     inspect() {
@@ -141,8 +141,8 @@ function fixture() {
 }
 
 test("uninstall removes only its service and program while preserving data, and a local CLI can repeat", async () => {
-  const f = fixture(),
-    before = f.retained.map((file) => readFileSync(file, "utf8"));
+  const f = fixture();
+  const before = f.retained.map((file) => readFileSync(file, "utf8"));
   const output = await uninstallNode(f.paths, f.recovery, f.manager);
   expect(f.manager.inspect()).toMatchObject({
     active: "inactive",
@@ -171,8 +171,8 @@ test("failed reload reports completed removal and a local bundle resumes without
 });
 
 test("non-Mate program additions are preserved and reported, then partial inventory resumes after entry loss", async () => {
-  const f = fixture(),
-    foreign = join(f.bundle, "foreign.txt");
+  const f = fixture();
+  const foreign = join(f.bundle, "foreign.txt");
   writeFileSync(foreign, "foreign");
   await expect(uninstallNode(f.paths, f.recovery, f.manager)).rejects.toThrow("foreign.txt");
   expect(readFileSync(foreign, "utf8")).toBe("foreign");
@@ -213,15 +213,15 @@ test("configured data inside removable programs blocks program deletion even aft
 });
 
 test("interrupted entry and unit removal files resume without a public management entry", async () => {
-  const f = fixture(),
-    unitStage = join(
-      dirname(f.paths.unit),
-      ".mate-removing-unit-12345678-1234-1234-1234-123456789abc",
-    ),
-    entryStage = join(
-      dirname(f.paths.entry),
-      ".mate-removing-12345678-1234-1234-1234-123456789abc",
-    );
+  const f = fixture();
+  const unitStage = join(
+    dirname(f.paths.unit),
+    ".mate-removing-unit-12345678-1234-1234-1234-123456789abc",
+  );
+  const entryStage = join(
+    dirname(f.paths.entry),
+    ".mate-removing-12345678-1234-1234-1234-123456789abc",
+  );
   f.manager.run("stop");
   f.manager.run("disable");
   writeFileSync(unitStage, readFileSync(f.paths.unit));
@@ -234,9 +234,9 @@ test("interrupted entry and unit removal files resume without a public managemen
 });
 
 test("early manager failure reports configured retained locations without modifying service or data", async () => {
-  const f = fixture(),
-    data = join(f.paths.home, "custom-data"),
-    workspace = join(f.paths.home, "custom-workspaces");
+  const f = fixture();
+  const data = join(f.paths.home, "custom-data");
+  const workspace = join(f.paths.home, "custom-workspaces");
   writeFileSync(
     f.paths.configuration,
     JSON.stringify({
@@ -257,12 +257,12 @@ test("early manager failure reports configured retained locations without modify
 });
 
 test("uninstall resumes an update's moved owned unit and incomplete installation without starting", async () => {
-  const f = fixture(),
-    backup = join(
-      dirname(f.paths.unit),
-      ".mate-node-previous-unit-12345678-1234-1234-1234-123456789abc",
-    ),
-    stage = join(f.paths.versionsDirectory, ".install-12345678-1234-1234-1234-123456789abc");
+  const f = fixture();
+  const backup = join(
+    dirname(f.paths.unit),
+    ".mate-node-previous-unit-12345678-1234-1234-1234-123456789abc",
+  );
+  const stage = join(f.paths.versionsDirectory, ".install-12345678-1234-1234-1234-123456789abc");
   writeFileSync(backup, readFileSync(f.paths.unit));
   rmSync(f.paths.unit);
   mkdirSync(stage);
@@ -287,8 +287,8 @@ test("uninstall resumes an update's moved owned unit and incomplete installation
 });
 
 test("a valid installation marker never authorizes deleting an extra unknown file", async () => {
-  const f = fixture(),
-    stage = join(f.paths.versionsDirectory, ".install-12345678-1234-1234-1234-123456789abc");
+  const f = fixture();
+  const stage = join(f.paths.versionsDirectory, ".install-12345678-1234-1234-1234-123456789abc");
   mkdirSync(stage);
   writeFileSync(join(stage, ".mate-install-stage"), "Mate node bootstrap staging\n", {
     mode: 0o600,
@@ -303,9 +303,9 @@ test("a valid installation marker never authorizes deleting an extra unknown fil
 test.each(["directory", "link", "contents"])(
   "uninstall preserves an installation marker conflict (%s) and reports it",
   async (kind) => {
-    const f = fixture(),
-      stage = join(f.paths.versionsDirectory, ".install-12345678-1234-1234-1234-123456789abc"),
-      marker = join(stage, ".mate-install-stage");
+    const f = fixture();
+    const stage = join(f.paths.versionsDirectory, ".install-12345678-1234-1234-1234-123456789abc");
+    const marker = join(stage, ".mate-install-stage");
     cpSync(f.bundle, stage, { recursive: true });
     if (kind === "directory") mkdirSync(marker);
     else if (kind === "link") symlinkSync(f.paths.configuration, marker);
@@ -322,8 +322,8 @@ test.each(["directory", "link", "contents"])(
 );
 
 test("uninstall cleans a damaged repair backup only with the verified package inventory and preserves unknown repair files", async () => {
-  const f = fixture(),
-    backup = join(f.paths.versionsDirectory, ".repair-12345678-1234-1234-1234-123456789abc");
+  const f = fixture();
+  const backup = join(f.paths.versionsDirectory, ".repair-12345678-1234-1234-1234-123456789abc");
   cpSync(f.bundle, backup, { recursive: true });
   writeFileSync(join(backup, "app/apps/node/dist/main.js"), "damaged known program");
   writeFileSync(join(backup, "unknown.txt"), "non-Mate");

@@ -44,8 +44,8 @@ function inspect() {
       const versions = dirname(dirname(dirname(target)));
       const backups = readdirSync(versions).filter((name) => name.startsWith(".repair-"));
       for (const name of backups) {
-        const backup = join(versions, name),
-          manifest = join(backup, "bundle.json");
+        const backup = join(versions, name);
+        const manifest = join(backup, "bundle.json");
         if (!existsSync(manifest)) continue;
         const metadata = JSON.parse(readFileSync(manifest, "utf8"));
         const first = metadata.files[0]?.path;

@@ -3,7 +3,7 @@ import {
   readExecStartProperty,
   readPrivateProperty,
 } from "../../src/management/service/systemd-property.js";
-import { serviceReferencesBundle } from "../../src/management/service/commands.js";
+import { serviceReferencesBundle } from "../../src/management/service/unit.js";
 import { nodePaths } from "../../src/management/paths.js";
 import dbus, { Variant } from "dbus-native";
 import { createServer } from "node:net";
@@ -62,8 +62,8 @@ test("incorrect signatures, truncated structs and unknown decoded types fail clo
 });
 
 test("the peer adapter reads binary properties with no bus daemon or Hello and preserves multiline argv", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "mate-private-property-")),
-    socket = join(directory, "peer");
+  const directory = mkdtempSync(join(tmpdir(), "mate-private-property-"));
+  const socket = join(directory, "peer");
   const argv = [runtime, 'node"\n string "--config-file"\n string "config'];
   const calls: string[] = [];
   const server = createServer((stream) => {
@@ -106,9 +106,9 @@ test("the peer adapter reads binary properties with no bus daemon or Hello and p
 test.each(["request-rejected", "unrecognized-reply", "transport", "timeout"])(
   "the standalone property reader reports %s without reply or credential data",
   async (category) => {
-    const directory = mkdtempSync(join(tmpdir(), "mate-private-failure-")),
-      socket = join(directory, "systemd/private"),
-      secret = "synthetic-private-reply-and-download-secret";
+    const directory = mkdtempSync(join(tmpdir(), "mate-private-failure-"));
+    const socket = join(directory, "systemd/private");
+    const secret = "synthetic-private-reply-and-download-secret";
     mkdirSync(join(directory, "systemd"));
     const server = createServer((stream) => {
       const connection = dbus.createConnection({ stream, server: true, authMethods: ["EXTERNAL"] });
@@ -150,8 +150,8 @@ test.each(["request-rejected", "unrecognized-reply", "transport", "timeout"])(
         ],
         { env: { ...process.env, XDG_RUNTIME_DIR: directory, GH_TOKEN: secret }, timeout: 10000 },
       );
-      let stdout = "",
-        stderr = "";
+      let stdout = "";
+      let stderr = "";
       child.stdout.on("data", (data) => {
         stdout += data.toString();
       });

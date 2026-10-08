@@ -11,13 +11,13 @@ import {
 } from "./install-entry.js";
 import {
   readManagedUnit,
+  serviceReferencesBundle,
   recoverUnitStaging,
   interruptedUnitFiles,
   publishNodeUnit,
-  serviceReferencesBundle,
-} from "./service/commands.js";
+} from "./service/unit.js";
 import { systemdUserManager, type ServiceFacts } from "./service/systemd.js";
-import { bundleRequest, withReleaseBundle } from "./acquire-bundle.js";
+import { bundleRequestSchema, withReleaseBundle } from "./acquire-bundle.js";
 import { z } from "zod";
 import { probeBundle, verifyBundle } from "./bundle.js";
 import { dirname } from "node:path";
@@ -35,19 +35,19 @@ function assertStopped(facts: ServiceFacts) {
     );
 }
 
-/** Whole-bundle update command; manager replacements cover only early error branches. */
+/** Acquire and publish a complete bundle while the service is stopped and management is locked. */
 export async function updateNode(
-  request: z.input<typeof bundleRequest>,
+  request: z.input<typeof bundleRequestSchema>,
   paths = nodePaths(),
   manager = systemdUserManager,
 ) {
   requireOrdinaryAccount();
-  bundleRequest.parse(request);
+  bundleRequestSchema.parse(request);
   manager.assertAvailable({ effectiveCommand: false });
   return withManagementLock(paths, async () => {
-    const unitVersion = readManagedUnit(paths),
-      previousUnits = interruptedUnitFiles(paths),
-      selected = installedEntryVersion(paths);
+    const unitVersion = readManagedUnit(paths);
+    const previousUnits = interruptedUnitFiles(paths);
+    const selected = installedEntryVersion(paths);
     if (!unitVersion && !previousUnits.length)
       throw new Error("Mate user service is not installed; install it before updating");
     const inspectStopped = () => {
@@ -81,7 +81,12 @@ export async function updateNode(
         inspectStopped();
         if (readManagedUnit(paths) !== unitVersion)
           throw new Error("User unit changed concurrently; resolve the conflict before retrying");
-        publishNodeUnit(paths, metadata.version, unitVersion, directory);
+        publishNodeUnit({
+          paths,
+          version: metadata.version,
+          previousVersion: unitVersion,
+          bundleDirectory: directory,
+        });
         manager.run("daemon-reload");
         const facts = manager.inspect();
         assertStopped(facts);
@@ -99,7 +104,13 @@ export async function updateNode(
             "Service enabled/disabled state changed during update; inspect the actual user manager state",
           );
         finishSameVersionRepair(repaired, metadata);
-        return `Mate complete bundle updated to ${metadata.version}\nEntry: ${paths.entry}\nUnit: ${paths.unit}\nActive: ${facts.active} (${facts.sub}); PID: ${facts.pid}; pending job: ${facts.job}\nEnabled: ${facts.enabled}\nConfiguration and node identity/data/workspaces were preserved. The executing CLI's old complete bundle was retained. Start the same-version control plane, then run mate node start explicitly.\n`;
+        return `Mate complete bundle updated to ${metadata.version}
+Entry: ${paths.entry}
+Unit: ${paths.unit}
+Active: ${facts.active} (${facts.sub}); PID: ${facts.pid}; pending job: ${facts.job}
+Enabled: ${facts.enabled}
+Configuration and node identity/data/workspaces were preserved. The executing CLI's old complete bundle was retained. Start the same-version control plane, then run mate node start explicitly.
+`;
       } catch (error) {
         throw new Error(
           `${error instanceof Error ? error.message : "Update failed"}\nUpdate references may be incomplete. Keep node stopped; inspect mate node status/logs and retry the same mate node update command from this CLI or a verified local complete bundle. No rollback or automatic start was performed.`,

@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, expect, test } from "vitest";
-import { readBundle, releaseVersion } from "../../src/management/bundle.js";
+import { readBundle, releaseVersionSchema } from "../../src/management/bundle.js";
 
 const directories: string[] = [];
 afterEach(() => {
@@ -38,7 +38,7 @@ test("release metadata exposes the whole bundle's runtime and actual ELF library
 
 test("release selection rejects latest and paths instead of silently selecting another version", () => {
   for (const version of ["latest", "v0.1.0", "../0.1.0", "0.1", "0.1.0/../../escape"])
-    expect(() => releaseVersion.parse(version)).toThrow();
+    expect(() => releaseVersionSchema.parse(version)).toThrow();
 });
 
 test("metadata cannot authenticate a file outside its complete bundle", () => {

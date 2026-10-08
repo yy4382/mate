@@ -27,8 +27,14 @@ cleanup_cut() {
   if [ -f "$work/cut.json" ]; then
     "$runtime" --input-type=module -e '
       import { readFileSync } from "node:fs";
-      const cut=JSON.parse(readFileSync(process.argv[1],"utf8"));
-      for (const pid of [...cut.children,cut.pid]) { try { process.kill(pid,"SIGKILL"); } catch(e) { if(e.code!=="ESRCH") throw e; } }
+      const cut = JSON.parse(readFileSync(process.argv[1], "utf8"));
+      for (const pid of [...cut.children, cut.pid]) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch (e) {
+          if (e.code !== "ESRCH") throw e;
+        }
+      }
     ' "$work/cut.json"
     rm "$work/cut.json"
   fi
@@ -82,8 +88,10 @@ prepare_package() {
   tar -xzf "$archive" -C "$work/package" --no-same-owner --no-same-permissions
   "$runtime" --input-type=module -e '
     import { readFileSync, writeFileSync } from "node:fs";
-    const file=process.argv[1], metadata=JSON.parse(readFileSync(file,"utf8"));
-    metadata.version=process.argv[2]; writeFileSync(file,JSON.stringify(metadata,null,2)+"\n");
+    const file = process.argv[1],
+      metadata = JSON.parse(readFileSync(file, "utf8"));
+    metadata.version = process.argv[2];
+    writeFileSync(file, JSON.stringify(metadata, null, 2) + "\n");
   ' "$work/package/mate-node/bundle.json" "$selected"
   tar -czf "$work/new.tar.gz" -C "$work/package" mate-node
   new_checksum=$(sha256sum "$work/new.tar.gz" | cut -d' ' -f1)
@@ -99,11 +107,14 @@ good_checksum=$new_checksum
 "$runtime" --input-type=module -e '
   import { readFileSync, writeFileSync } from "node:fs";
   import { createHash } from "node:crypto";
-  const dir=process.argv[1], file="app/apps/node/dist/management/cli.js";
-  writeFileSync(`${dir}/${file}`,"throw new Error(\"synthetic new CLI preflight failure\");\n");
-  const metadata=JSON.parse(readFileSync(`${dir}/bundle.json`,"utf8"));
-  metadata.files.find(entry=>entry.path===file).sha256=createHash("sha256").update(readFileSync(`${dir}/${file}`)).digest("hex");
-  writeFileSync(`${dir}/bundle.json`,JSON.stringify(metadata,null,2)+"\n");
+  const dir = process.argv[1],
+    file = "app/apps/node/dist/management/cli.js";
+  writeFileSync(`${dir}/${file}`, "throw new Error(\"synthetic new CLI preflight failure\");\n");
+  const metadata = JSON.parse(readFileSync(`${dir}/bundle.json`, "utf8"));
+  metadata.files.find((entry) => entry.path === file).sha256 = createHash("sha256")
+    .update(readFileSync(`${dir}/${file}`))
+    .digest("hex");
+  writeFileSync(`${dir}/bundle.json`, JSON.stringify(metadata, null, 2) + "\n");
 ' "$work/package/mate-node"
 tar -czf "$work/new.tar.gz" -C "$work/package" mate-node
 new_checksum=$(sha256sum "$work/new.tar.gz" | cut -d' ' -f1)
@@ -240,16 +251,25 @@ begin_cut repair-cleanup "$cut_version" "$external/bin/mate"
 "$runtime" --input-type=module -e '
   import { readFileSync, existsSync } from "node:fs";
   import { join } from "node:path";
-  const cut=JSON.parse(readFileSync(process.argv[1],"utf8"));
-  if(!/^State:\s+T\b/m.test(readFileSync(`/proc/${cut.pid}/status`,"utf8"))) throw new Error("Actual update CLI is not stopped");
-  const evidence=cut.repairEvidence;
-  if(!evidence) throw new Error("No repair cleanup candidate was captured");
-  const manifest=join(evidence.backup,"bundle.json");
-  if(!existsSync(manifest)||existsSync(join(evidence.backup,evidence.missingPayload))) throw new Error("Actual repair cleanup interruption was not captured");
-  const metadata=JSON.parse(readFileSync(manifest,"utf8"));
-  const remaining=metadata.files.filter(file=>existsSync(join(evidence.backup,file.path))).length;
-  if(remaining===0) throw new Error("No payload remains in the stopped cleanup; partial cleanup seam is unverified");
-  process.stdout.write(`MATE_REPAIR_CLEANUP_CUT_ASSERTED pid=${cut.pid} remaining=${remaining} manifest=present first-payload=missing\n`);
+  const cut = JSON.parse(readFileSync(process.argv[1], "utf8"));
+  if (!/^State:\s+T\b/m.test(readFileSync(`/proc/${cut.pid}/status`, "utf8")))
+    throw new Error("Actual update CLI is not stopped");
+  const evidence = cut.repairEvidence;
+  if (!evidence) throw new Error("No repair cleanup candidate was captured");
+  const manifest = join(evidence.backup, "bundle.json");
+  if (!existsSync(manifest) || existsSync(join(evidence.backup, evidence.missingPayload)))
+    throw new Error("Actual repair cleanup interruption was not captured");
+  const metadata = JSON.parse(readFileSync(manifest, "utf8"));
+  const remaining = metadata.files.filter((file) =>
+    existsSync(join(evidence.backup, file.path)),
+  ).length;
+  if (remaining === 0)
+    throw new Error(
+      "No payload remains in the stopped cleanup; partial cleanup seam is unverified",
+    );
+  process.stdout.write(
+    `MATE_REPAIR_CLEANUP_CUT_ASSERTED pid=${cut.pid} remaining=${remaining} manifest=present first-payload=missing\n`,
+  );
 ' "$work/cut.json"
 cleanup_cut
 phase=same-version-damaged-program-recovery

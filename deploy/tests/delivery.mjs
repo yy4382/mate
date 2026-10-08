@@ -20,8 +20,8 @@ const [image, bundle, directory, version, archive, sourceRoot, daemonRecovery] =
 assert.ok(image && bundle && directory && version && archive && sourceRoot);
 assert.equal(process.platform, "linux");
 assert.equal(resolve(process.execPath), join(bundle, "node/bin/node"));
-const uid = process.getuid(),
-  gid = process.getgid();
+const uid = process.getuid();
+const gid = process.getgid();
 assert.ok(uid > 0 && gid > 0);
 // This option is reserved for the disposable, already configured hosted runner.
 // It must never be used against a developer's current Docker daemon.
@@ -41,8 +41,8 @@ if (daemonRecovery) {
   );
 }
 const project = `mate-delivery-${randomUUID().slice(0, 8)}`;
-const data = join(directory, "control-plane"),
-  nodeData = join(directory, "node");
+const data = join(directory, "control-plane");
+const nodeData = join(directory, "node");
 const passwordFile = join(directory, "owner-password");
 mkdirSync(data, { mode: 0o700 });
 const password = "synthetic-delivery-acceptance-password";
@@ -59,17 +59,17 @@ const env = {
   MATE_CONTROL_PLANE_DATA_DIR: data,
   MATE_OWNER_PASSWORD_FILE: passwordFile,
 };
-let initialize = true,
-  fixture = false,
-  node,
-  nodeOutput = "",
-  cookie = "",
-  channelId;
-const requests = [],
-  observed = new Map();
-let phase = "work",
-  providerError,
-  nextCall = 0;
+let initialize = true;
+let fixture = false;
+let node;
+let nodeOutput = "";
+let cookie = "";
+let channelId;
+const requests = [];
+const observed = new Map();
+let phase = "work";
+let providerError;
+let nextCall = 0;
 const delay = (ms) => new Promise((done) => setTimeout(done, ms));
 function docker(args) {
   const result = spawnSync("docker", args, { env, encoding: "utf8", timeout: 120_000 });
@@ -597,7 +597,7 @@ try {
     image,
     "--input-type=module",
     "-e",
-    "import Database from 'better-sqlite3'; const db = new Database('/fixture/control-plane.sqlite'); db.exec('CREATE TABLE synthetic_sentinel(value TEXT)'); db.prepare('INSERT INTO synthetic_sentinel VALUES(?)').run('preserve'); db.pragma('application_id = 1296257100'); db.pragma('user_version = 999'); db.close();",
+    readFileSync(new URL("./foreign-database-fixture.mjs", import.meta.url), "utf8"),
   ]);
   const foreignDatabase = join(foreignData, "control-plane.sqlite");
   const beforeFormat = createHash("sha256").update(readFileSync(foreignDatabase)).digest("hex");

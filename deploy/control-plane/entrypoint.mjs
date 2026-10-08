@@ -2,8 +2,8 @@ import { accessSync, constants, lstatSync } from "node:fs";
 import { isAbsolute } from "node:path";
 
 try {
-  const uid = process.getuid(),
-    gid = process.getgid();
+  const uid = process.getuid();
+  const gid = process.getgid();
   if (uid === 0 || gid === 0) throw new Error("Mate requires a nonzero owner UID and GID");
   const dataPath = process.env.MATE_CONTROL_PLANE_DATA_DIR;
   if (!dataPath || !isAbsolute(dataPath))

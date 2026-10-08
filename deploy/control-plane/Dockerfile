@@ -4,6 +4,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 make g+
 RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
 WORKDIR /build
 COPY . .
+# Build the three delivered packages and assemble their production dependencies.
 RUN pnpm install --frozen-lockfile \
     && pnpm build:protocol && pnpm build:web \
     && pnpm --filter @mate/control-plane run build \

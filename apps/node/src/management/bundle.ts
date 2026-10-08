@@ -16,10 +16,10 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 
-export const releaseVersion = z
+export const releaseVersionSchema = z
   .string()
   .regex(/^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/, "Use an explicit Mate release version");
-const filePath = z
+const bundleFilePathSchema = z
   .string()
   .refine(
     (value) =>
@@ -28,10 +28,10 @@ const filePath = z
       value.split("/").every((part) => part !== "" && part !== "." && part !== ".."),
     "Invalid bundle file path",
   );
-export const bundleMetadata = z
+export const bundleMetadataSchema = z
   .object({
     format: z.literal(1),
-    version: releaseVersion,
+    version: releaseVersionSchema,
     nodeVersion: z.string().regex(/^v24\.\d+\.\d+$/),
     platform: z.literal("linux"),
     architecture: z.enum(["x64", "arm64"]),
@@ -44,7 +44,7 @@ export const bundleMetadata = z
       .array(
         z
           .object({
-            path: filePath,
+            path: bundleFilePathSchema,
             sha256: z.string().regex(/^[a-f0-9]{64}$/),
             executable: z.boolean(),
           })
@@ -53,7 +53,7 @@ export const bundleMetadata = z
       .min(1),
   })
   .strict();
-export type BundleMetadata = z.infer<typeof bundleMetadata>;
+export type BundleMetadata = z.infer<typeof bundleMetadataSchema>;
 
 export function runningBundleDirectory() {
   return resolve(dirname(fileURLToPath(import.meta.url)), "../../../../..");
@@ -68,7 +68,7 @@ export function bundleEntrypoints(directory: string) {
 }
 
 export function readBundle(directory: string) {
-  const metadata = bundleMetadata.parse(
+  const metadata = bundleMetadataSchema.parse(
     JSON.parse(readFileSync(join(directory, "bundle.json"), "utf8")),
   );
   if (new Set(metadata.files.map((file) => file.path)).size !== metadata.files.length)
@@ -79,7 +79,10 @@ export function readBundle(directory: string) {
 /** Verify every regular file; archives and installed bundles must contain no links. */
 export function verifyBundle(directory: string, expectedVersion?: string) {
   const metadata = readBundle(directory);
-  if (expectedVersion !== undefined && metadata.version !== releaseVersion.parse(expectedVersion))
+  if (
+    expectedVersion !== undefined &&
+    metadata.version !== releaseVersionSchema.parse(expectedVersion)
+  )
     throw new Error(
       `Bundle version ${metadata.version} does not match requested ${expectedVersion}`,
     );

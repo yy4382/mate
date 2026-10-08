@@ -6,8 +6,8 @@ import { createHash } from "node:crypto";
 
 const [archiveArgument, outputArgument] = process.argv.slice(2);
 if (!archiveArgument || !outputArgument) throw new Error("ARCHIVE and fixture OUTPUT are required");
-const archive = resolve(archiveArgument),
-  output = resolve(outputArgument);
+const archive = resolve(archiveArgument);
+const output = resolve(outputArgument);
 mkdirSync(output, { recursive: true });
 function tar(args) {
   const result = spawnSync("tar", args, { encoding: "utf8" });
@@ -43,6 +43,13 @@ variant("unsafe-link", (bundle) => {
 // This is a download-tool substitute only; the actual bundled Node and CLI still execute.
 writeFileSync(
   join(output, "gh"),
-  `#!/bin/sh\nset -eu\n[ "$1" = release ] && [ "$2" = download ] || exit 1\n[ -n "$GH_TOKEN" ] || exit 1\nwhile [ "$#" -gt 0 ]; do if [ "$1" = --dir ]; then destination=$2; break; fi; shift; done\ncp "$MATE_TEST_ASSET" "$destination/$(basename "$archive")"\ncp "$MATE_TEST_CHECKSUMS" "$destination/SHA256SUMS"\n`,
+  `#!/bin/sh
+set -eu
+[ "$1" = release ] && [ "$2" = download ] || exit 1
+[ -n "$GH_TOKEN" ] || exit 1
+while [ "$#" -gt 0 ]; do if [ "$1" = --dir ]; then destination=$2; break; fi; shift; done
+cp "$MATE_TEST_ASSET" "$destination/$(basename "$archive")"
+cp "$MATE_TEST_CHECKSUMS" "$destination/SHA256SUMS"
+`,
   { mode: 0o755 },
 );
