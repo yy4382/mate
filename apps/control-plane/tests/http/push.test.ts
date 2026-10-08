@@ -44,8 +44,16 @@ it("retries a temporary Push failure after durable backoff without duplicating t
       keys: { p256dh: "key", auth: "auth" },
     });
     db.transaction(() => {
-      push.queue("message:message-1", "Agent 发来消息", "/app?channel=room-1&message=message-1");
-      push.queue("message:message-1", "Agent 发来消息", "/app?channel=room-1&message=message-1");
+      push.queue({
+        eventKey: "message:message-1",
+        title: "Agent 发来消息",
+        url: "/app?channel=room-1&message=message-1",
+      });
+      push.queue({
+        eventKey: "message:message-1",
+        title: "Agent 发来消息",
+        url: "/app?channel=room-1&message=message-1",
+      });
     })();
     await push.deliver();
     await push.deliver();
@@ -88,7 +96,9 @@ it("drops a permanently gone Push endpoint without retrying it", async () => {
       endpoint: "https://push.example.test/gone",
       keys: { p256dh: "key", auth: "auth" },
     });
-    db.transaction(() => push.queue("message:1", "消息", "/app?channel=room-1&message=1"))();
+    db.transaction(() =>
+      push.queue({ eventKey: "message:1", title: "消息", url: "/app?channel=room-1&message=1" }),
+    )();
     await push.deliver();
     now += 100_000;
     await push.deliver();

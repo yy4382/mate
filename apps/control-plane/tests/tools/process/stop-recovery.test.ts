@@ -222,11 +222,14 @@ it("rechecks stopped scopes after a restarted node confirms an ordinary operatio
   const session = new AgentSession(db);
   for (const entry of session.pendingCorrections(agentId, resumed.runId))
     expect(
-      session.append(resumed.runId, nodeId, agentId, {
-        kind: "message",
-        id: entry.id,
-        message: entry.message,
-      }),
+      session.append(
+        { runId: resumed.runId, nodeId, agentId },
+        {
+          kind: "message",
+          id: entry.id,
+          message: entry.message,
+        },
+      ),
     ).toBe(true);
   const lateStop = {
     type: "node.process.operation.result",
@@ -257,11 +260,14 @@ it("rechecks stopped scopes after a restarted node confirms an ordinary operatio
   expect(JSON.stringify(additions)).toContain("succeeded");
   expect(JSON.stringify(corrected.messages)).toContain(JSON.stringify(additions[0]!.message));
   expect(
-    session.append(resumed.runId, nodeId, agentId, {
-      kind: "message",
-      id: additions[0]!.id,
-      message: additions[0]!.message,
-    }),
+    session.append(
+      { runId: resumed.runId, nodeId, agentId },
+      {
+        kind: "message",
+        id: additions[0]!.id,
+        message: additions[0]!.message,
+      },
+    ),
   ).toBe(true);
   await toolTestInput(app, reconnect, JSON.stringify(lateStop));
   expect(session.pendingCorrections(agentId, resumed.runId)).toEqual([]);

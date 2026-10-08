@@ -84,9 +84,12 @@ export class RunControl {
       )
       .get(agentId);
     if (!row) return { state: "unknown", receipt: { reason: "stop_not_confirmed" } };
-    const receipt = parseReceipt(row.receipt_json) ?? { reason: "stop_receipt_unreadable" },
-      scope = receiptScope(receipt),
-      unconfirmedOperationIds = unconfirmedCommandIds(receipt, this.unconfirmedCommands(agentId));
+    const receipt = parseReceipt(row.receipt_json) ?? { reason: "stop_receipt_unreadable" };
+    const scope = receiptScope(receipt);
+    const unconfirmedOperationIds = unconfirmedCommandIds(
+      receipt,
+      this.unconfirmedCommands(agentId),
+    );
     return {
       state: row.state,
       receipt,
@@ -194,7 +197,7 @@ export class RunControl {
             "INSERT INTO owner_agent_stop_intents(operation_id,agent_id,node_id,state,created_at,updated_at) VALUES(?,?,?,'executing',?,?)",
           )
           .run(nextId, row.agent_id, row.node_id, this.now(), this.now());
-        void this.dispatchStop(nextId, row.agent_id, row.node_id);
+        void this.dispatchStop({ operationId: nextId, agentId: row.agent_id, nodeId: row.node_id });
       } else if (mode === "node_ready" && row.state === "unknown") {
         // A node may have durably returned unknown for the old ID. A fresh idempotent stop
         // request rechecks all scopes after the node has finished receipt reconciliation.
@@ -204,13 +207,25 @@ export class RunControl {
             "INSERT INTO owner_agent_stop_intents(operation_id,agent_id,node_id,state,created_at,updated_at) VALUES(?,?,?,'executing',?,?)",
           )
           .run(nextId, row.agent_id, row.node_id, this.now(), this.now());
-        void this.dispatchStop(nextId, row.agent_id, row.node_id);
+        void this.dispatchStop({ operationId: nextId, agentId: row.agent_id, nodeId: row.node_id });
       } else if (mode === "node_ready")
-        void this.dispatchStop(row.operation_id, row.agent_id, row.node_id);
+        void this.dispatchStop({
+          operationId: row.operation_id,
+          agentId: row.agent_id,
+          nodeId: row.node_id,
+        });
     }
   }
 
-  async dispatchStop(operationId: string, agentId: string, nodeId: string): Promise<void> {
+  async dispatchStop({
+    operationId,
+    agentId,
+    nodeId,
+  }: {
+    operationId: string;
+    agentId: string;
+    nodeId: string;
+  }): Promise<void> {
     if (this.activeStops.has(operationId)) return;
     this.activeStops.add(operationId);
     try {

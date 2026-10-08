@@ -104,11 +104,11 @@ export function createControlPlane(
   );
   ownerChat.events.setPushHandler((message, directToOwner) => {
     if (!directToOwner && !mentionsOwner(message.text)) return;
-    push.queue(
-      `message:${message.id}`,
-      "Agent 发来消息",
-      `/app?channel=${encodeURIComponent(message.channelId)}&message=${encodeURIComponent(message.id)}`,
-    );
+    push.queue({
+      eventKey: `message:${message.id}`,
+      title: "Agent 发来消息",
+      url: `/app?channel=${encodeURIComponent(message.channelId)}&message=${encodeURIComponent(message.id)}`,
+    });
   });
   runs.start();
   const http = new Hono()

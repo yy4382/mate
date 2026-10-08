@@ -41,17 +41,12 @@ export class AgentTools {
     );
     this.meta = new Map(
       Object.entries({
-        "tools.list": defineAgentTool(
-          { description: "", schema: z.object({}).strict() },
-          (identity) => {
-            return {
-              tools: [...this.operations].map(([name, entry]) => ({
-                name,
-                description: entry.description,
-              })),
-            };
-          },
-        ),
+        "tools.list": defineAgentTool({ description: "", schema: z.object({}).strict() }, () => ({
+          tools: [...this.operations].map(([name, entry]) => ({
+            name,
+            description: entry.description,
+          })),
+        })),
         "tools.describe": defineAgentTool(
           { description: "", schema: z.object({ name: z.string().min(1).max(128) }).strict() },
           (identity, input) => {
@@ -70,9 +65,7 @@ export class AgentTools {
               .object({ name: z.string().min(1).max(128), input: z.record(z.string(), z.json()) })
               .strict(),
           },
-          (identity, input) => {
-            return this.operation(input.name).invoke(identity, input.input);
-          },
+          (identity, input) => this.operation(input.name).invoke(identity, input.input),
         ),
       }),
     );

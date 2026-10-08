@@ -70,8 +70,6 @@ export function listAgentActivity(
     referenceId: row.reference_id,
     summary: row.summary,
     at: row.created_at,
-    ...(expanded && row.detail_json !== null
-      ? { detail: JSON.parse(row.detail_json) as unknown }
-      : {}),
+    ...(expanded && row.detail_json !== null ? { detail: JSON.parse(row.detail_json) } : {}),
   }));
 }

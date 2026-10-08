@@ -25,7 +25,7 @@ async function historyFixture() {
   const identity = { runId: run.runId, nodeId, agentId, toolCallId: "history-observation" };
   const session = new AgentSession(db);
   const append = (entry: SessionCommit) => {
-    expect(session.append(run.runId, nodeId, agentId, entry)).toBe(true);
+    expect(session.append({ runId: run.runId, nodeId, agentId }, entry)).toBe(true);
     return entry.id;
   };
   const message = (content: string) =>
@@ -338,11 +338,14 @@ it("rejects malformed pagination, query changes, foreign cursors and records wit
   const otherRun = (await waitForRuns(socket, 0, [otherId])).get(otherId)!;
   const foreignId = randomUUID();
   expect(
-    session.append(otherRun.runId, nodeId, otherId, {
-      kind: "message",
-      id: foreignId,
-      message: { role: "user", content: "foreign secret", timestamp: 1 },
-    }),
+    session.append(
+      { runId: otherRun.runId, nodeId, agentId: otherId },
+      {
+        kind: "message",
+        id: foreignId,
+        message: { role: "user", content: "foreign secret", timestamp: 1 },
+      },
+    ),
   ).toBe(true);
   const missing = await call("history.read", { id: randomUUID() });
   expect(missing).toEqual({ ok: false, error: "History record not found" });

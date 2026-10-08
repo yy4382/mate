@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
-import { Agent } from "@earendil-works/pi-agent-core";
+import { Agent, type StreamFn } from "@earendil-works/pi-agent-core";
 import { Type, type Api, type Model } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { isSupportedModel } from "./catalog.js";
@@ -115,13 +115,54 @@ export async function checkProviderProtocol(
   }
   const model = test?.modelForCheck(selected) ?? selected;
   const marker = `mate-probe-${randomUUID()}`;
-  let callId = "",
-    announcedCallId = "",
-    callCount = 0,
-    executionCount = 0,
-    continuationCalls = false,
-    timedOut = false;
+  let callId = "";
+  let announcedCallId = "";
+  let callCount = 0;
+  let executionCount = 0;
+  let continuationCalls = false;
+  let timedOut = false;
   let completeResponse = Promise.resolve(false);
+  const streamCheckResponse: StreamFn = (model, context, options) => {
+    completeResponse = Promise.resolve(false);
+    if (report.stage === "continuation") {
+      report.observed.toolCallAssociated = context.messages.some(
+        (message) =>
+          message.role === "toolResult" &&
+          callId.length > 0 &&
+          callId === announcedCallId &&
+          message.toolCallId === callId &&
+          message.toolName === "mate_protocol_probe" &&
+          !message.isError &&
+          message.content.some((content) => content.type === "text" && content.text === marker),
+      );
+    }
+    return registry.streamSimple(model, context, {
+      ...options,
+      apiKey,
+      env: {},
+      transport: "sse",
+      maxRetries: 0,
+      timeoutMs: selection.timeoutMs,
+      onResponse: (response) => {
+        report.httpStatus = response.status;
+      },
+      ...(model.api === "google-generative-ai" || model.api === "google-vertex"
+        ? {}
+        : {
+            fetch: async (request: RequestInfo | URL, init?: RequestInit) => {
+              const response = await fetch(request, init);
+              report.httpStatus = response.status;
+              // Inspect terminal evidence transiently; no body is retained in the report or on disk.
+              completeResponse = response
+                .clone()
+                .text()
+                .then((body) => normalDeclineTermination(body, model.api))
+                .catch(() => false);
+              return response;
+            },
+          }),
+    });
+  };
   const agent = new Agent({
     initialState: {
       model,
@@ -130,49 +171,9 @@ export async function checkProviderProtocol(
     },
     // Each probe phase is one explicit Pi turn, with one result continuation requested below.
     finishTurn: () => ({ action: "end" }),
-    streamFn: (model, context, options) => {
-      completeResponse = Promise.resolve(false);
-      if (report.stage === "continuation") {
-        report.observed.toolCallAssociated = context.messages.some(
-          (message) =>
-            message.role === "toolResult" &&
-            callId.length > 0 &&
-            callId === announcedCallId &&
-            message.toolCallId === callId &&
-            message.toolName === "mate_protocol_probe" &&
-            !message.isError &&
-            message.content.some((content) => content.type === "text" && content.text === marker),
-        );
-      }
-      return registry.streamSimple(model, context, {
-        ...options,
-        apiKey,
-        env: {},
-        transport: "sse",
-        maxRetries: 0,
-        timeoutMs: selection.timeoutMs,
-        onResponse: (response) => {
-          report.httpStatus = response.status;
-        },
-        ...(model.api === "google-generative-ai" || model.api === "google-vertex"
-          ? {}
-          : {
-              fetch: async (request: RequestInfo | URL, init?: RequestInit) => {
-                const response = await fetch(request, init);
-                report.httpStatus = response.status;
-                // Inspect terminal evidence transiently; no body is retained in the report or on disk.
-                completeResponse = response
-                  .clone()
-                  .text()
-                  .then((body) => normalDeclineTermination(body, model.api))
-                  .catch(() => false);
-                return response;
-              },
-            }),
-      });
-    },
+    streamFn: streamCheckResponse,
   });
-  const unsubscribe = agent.subscribe(async (event) => {
+  const observeCheckEvent: Parameters<Agent["subscribe"]>[0] = async (event) => {
     if (
       event.type === "message_update" &&
       report.stage === "text" &&
@@ -225,7 +226,8 @@ export async function checkProviderProtocol(
         (content) => content.type === "text" && content.text.includes(marker),
       );
     }
-  });
+  };
+  const unsubscribe = agent.subscribe(observeCheckEvent);
   const cancel = () => agent.abort();
   const timer = setTimeout(() => {
     timedOut = true;

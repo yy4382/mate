@@ -4,12 +4,22 @@ import { type ModelContextMessage, type SessionCheckpoint, type SessionCommit } 
 import { durableToolIdentity } from "../tools/identity.js";
 import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
+import type { AgentToolIdentity } from "../tools/entry.js";
+
+interface SessionMessageRow {
+  id: string;
+  payload_json: string;
+  action_scope_id: string;
+}
 
 /** SQLite owns the immutable model history; deliveries and operation receipts keep their own facts. */
 export class AgentSession {
   constructor(private readonly db: Database.Database) {}
 
-  append(runId: string, nodeId: string, agentId: string, entry: SessionCommit): boolean {
+  append(
+    { runId, nodeId, agentId }: Pick<AgentToolIdentity, "runId" | "nodeId" | "agentId">,
+    entry: SessionCommit,
+  ): boolean {
     return this.db
       .transaction(() => {
         const run = this.db
@@ -132,17 +142,13 @@ export class AgentSession {
       );
     if (!match || match[0] !== identity) return undefined;
     const rows = this.db
-      .prepare(
+      .prepare<unknown[], SessionMessageRow>(
         `SELECT id,payload_json,action_scope_id FROM owner_agent_session_records
          WHERE agent_id=? AND action_scope_id=? AND kind='message' ORDER BY seq`,
       )
-      .iterate(agentId, match[1]) as Iterable<{
-      id: string;
-      payload_json: string;
-      action_scope_id: string;
-    }>;
+      .iterate(agentId, match[1]);
     for (const row of rows) {
-      const entry = JSON.parse(row.payload_json) as Extract<SessionCommit, { kind: "message" }>;
+      const entry: Extract<SessionCommit, { kind: "message" }> = JSON.parse(row.payload_json);
       if (entry.message.role !== "assistant") continue;
       for (const call of entry.message.content) {
         if (
@@ -158,17 +164,12 @@ export class AgentSession {
   read(agentId: string): ModelContextMessage[] {
     const checkpoint = this.latestCheckpoint(agentId);
     const rows = this.db
-      .prepare<unknown[], { id: string; payload_json: string; action_scope_id: string }>(
+      .prepare<unknown[], SessionMessageRow>(
         `SELECT id,payload_json,action_scope_id FROM owner_agent_session_records
       WHERE agent_id=? AND kind='message' ORDER BY seq`,
       )
       .all(agentId);
-    return rows.map((row) => ({
-      id: row.id,
-      message: JSON.parse(row.payload_json).message,
-      actionScopeId: row.action_scope_id,
-      ...(row.id === checkpoint?.firstKeptEntryId ? { checkpoint } : {}),
-    }));
+    return rows.map((row) => projectContextMessage(row, checkpoint));
   }
 
   /** Read only the retained projection; original transcript remains immutable and available. */
@@ -176,24 +177,12 @@ export class AgentSession {
     const checkpoint = this.latestCheckpoint(agentId);
     if (!checkpoint) return this.read(agentId);
     const rows = this.db
-      .prepare<
-        unknown[],
-        {
-          id: string;
-          payload_json: string;
-          action_scope_id: string;
-        }
-      >(
+      .prepare<unknown[], SessionMessageRow>(
         `SELECT id,payload_json,action_scope_id FROM owner_agent_session_records
       WHERE agent_id=? AND kind='message' AND seq >= (SELECT seq FROM owner_agent_session_records WHERE id=?) ORDER BY seq`,
       )
       .all(agentId, checkpoint.firstKeptEntryId);
-    return rows.map((row) => ({
-      id: row.id,
-      message: JSON.parse(row.payload_json).message,
-      actionScopeId: row.action_scope_id,
-      ...(row.id === checkpoint.firstKeptEntryId ? { checkpoint } : {}),
-    }));
+    return rows.map((row) => projectContextMessage(row, checkpoint));
   }
 
   private latestCheckpoint(agentId: string): SessionCheckpoint | undefined {
@@ -204,4 +193,14 @@ export class AgentSession {
       .get(agentId);
     return row ? sessionCheckpointSchema.parse(JSON.parse(row.payload_json)) : undefined;
   }
+}
+
+function projectContextMessage(row: SessionMessageRow, checkpoint: SessionCheckpoint | undefined) {
+  const entry: Extract<SessionCommit, { kind: "message" }> = JSON.parse(row.payload_json);
+  return {
+    id: row.id,
+    message: entry.message,
+    actionScopeId: row.action_scope_id,
+    ...(row.id === checkpoint?.firstKeptEntryId ? { checkpoint } : {}),
+  };
 }

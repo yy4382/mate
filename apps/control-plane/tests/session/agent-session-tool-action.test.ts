@@ -22,8 +22,8 @@ function fixture() {
   const nodeId = randomUUID();
   let session = new AgentSession(db);
   function run(agentId = randomUUID()) {
-    const runId = randomUUID(),
-      actionScopeId = randomUUID();
+    const runId = randomUUID();
+    const actionScopeId = randomUUID();
     db.prepare("INSERT OR IGNORE INTO owner_agents VALUES(?)").run(agentId);
     db.prepare("INSERT INTO owner_agent_runs VALUES(?,?,?,?,'running')").run(
       runId,
@@ -38,15 +38,18 @@ function fixture() {
     // Providers can repeat their own IDs, even in the same delivery scope.
     const toolCallId = "provider-repeated-id";
     expect(
-      session.append(current.runId, nodeId, current.agentId, {
-        kind: "message",
-        id,
-        message: {
-          ...assistantMessage("原始 assistant 文本"),
-          stopReason: "toolUse",
-          content: [{ type: "toolCall", id: toolCallId, name, arguments: input }],
+      session.append(
+        { runId: current.runId, nodeId, agentId: current.agentId },
+        {
+          kind: "message",
+          id,
+          message: {
+            ...assistantMessage("原始 assistant 文本"),
+            stopReason: "toolUse",
+            content: [{ type: "toolCall", id: toolCallId, name, arguments: input }],
+          },
         },
-      }),
+      ),
     ).toBe(true);
     return { id, identity: durableToolIdentity(current.actionScopeId, id, toolCallId) };
   }
@@ -73,17 +76,20 @@ function fixture() {
 it("finds early and late committed calls without confusing repeated provider IDs, Agents or scopes", () => {
   const f = fixture();
   try {
-    const first = f.run(),
-      other = f.run(),
-      next = f.run(first.agentId);
+    const first = f.run();
+    const other = f.run();
+    const next = f.run(first.agentId);
     const early = f.call(first, "process.exec", { command: "printf first", cwd: "." });
     for (let i = 0; i < 120; i++) {
       expect(
-        f.session.append(first.runId, f.nodeId, first.agentId, {
-          kind: "message",
-          id: randomUUID(),
-          message: { role: "user", content: `合成观察 ${i}`, timestamp: i },
-        }),
+        f.session.append(
+          { runId: first.runId, nodeId: f.nodeId, agentId: first.agentId },
+          {
+            kind: "message",
+            id: randomUUID(),
+            message: { role: "user", content: `合成观察 ${i}`, timestamp: i },
+          },
+        ),
       ).toBe(true);
     }
     const sameScope = f.call(first, "tools.call", {
@@ -156,29 +162,35 @@ it("recovers original names and arguments before compaction after reopening the 
     const kept = f.call(originalRun, "process.exec", { command: "printf retained", cwd: "." });
     const through = randomUUID();
     expect(
-      f.session.append(originalRun.runId, f.nodeId, originalRun.agentId, {
-        kind: "message",
-        id: through,
-        message: {
-          role: "toolResult",
-          toolCallId: "provider-repeated-id",
-          toolName: "process.exec",
-          isError: false,
-          content: [{ type: "text", text: "retained" }],
-          timestamp: 2,
+      f.session.append(
+        { runId: originalRun.runId, nodeId: f.nodeId, agentId: originalRun.agentId },
+        {
+          kind: "message",
+          id: through,
+          message: {
+            role: "toolResult",
+            toolCallId: "provider-repeated-id",
+            toolName: "process.exec",
+            isError: false,
+            content: [{ type: "text", text: "retained" }],
+            timestamp: 2,
+          },
         },
-      }),
+      ),
     ).toBe(true);
     expect(
-      f.session.append(originalRun.runId, f.nodeId, originalRun.agentId, {
-        kind: "compaction",
-        id: randomUUID(),
-        firstKeptEntryId: kept.id,
-        throughEntryId: through,
-        summary: "摘要没有保留旧工具参数",
-        tokensBefore: 100,
-        summaryRequestIds: [randomUUID()],
-      }),
+      f.session.append(
+        { runId: originalRun.runId, nodeId: f.nodeId, agentId: originalRun.agentId },
+        {
+          kind: "compaction",
+          id: randomUUID(),
+          firstKeptEntryId: kept.id,
+          throughEntryId: through,
+          summary: "摘要没有保留旧工具参数",
+          tokensBefore: 100,
+          summaryRequestIds: [randomUUID()],
+        },
+      ),
     ).toBe(true);
     expect(f.session.context(originalRun.agentId).map((entry) => entry.id)).toEqual([
       kept.id,
