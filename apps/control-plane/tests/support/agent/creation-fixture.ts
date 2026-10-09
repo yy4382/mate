@@ -5,11 +5,11 @@ import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect } from "vitest";
-import { createControlPlaneApp } from "../../../src/http.js";
+import { createControlPlane } from "../../../src/application.js";
 
-import type { NodeSocket } from "../../../src/nodes/directory.js";
+import type { NodeSocket } from "../../../src/nodes/transport.js";
 export const ownerPassword = "agent-creation-owner-password";
-export const fixtures: Array<{ app: ReturnType<typeof createControlPlaneApp>; directory: string }> =
+export const fixtures: Array<{ app: ReturnType<typeof createControlPlane>; directory: string }> =
   [];
 export function cleanupFixture() {
   for (const { app, directory } of fixtures.splice(0)) {
@@ -17,7 +17,7 @@ export function cleanupFixture() {
     rmSync(directory, { recursive: true, force: true });
   }
 }
-export function setup() {
+export function createAgentCreationFixture() {
   const directory = mkdtempSync(join(tmpdir(), "mate-agent-creation-"));
   chmodSync(directory, 0o700);
   const passwordFile = join(directory, "owner-password");
@@ -30,13 +30,13 @@ export function setup() {
   return app;
 }
 /** A second connection to the fixture's own database, for asserting stored rows directly. */
-export function databaseFor(app: ReturnType<typeof createControlPlaneApp>): Database.Database {
+export function databaseFor(app: ReturnType<typeof createControlPlane>): Database.Database {
   const fixture = fixtures.find((entry) => entry.app === app);
   if (!fixture) throw new Error("The fixture was already cleaned up");
   return new Database(join(fixture.directory, "control-plane", "control-plane.sqlite"));
 }
-export async function login(app: ReturnType<typeof createControlPlaneApp>): Promise<string> {
-  const response = await app.request("/api/auth/login", {
+export async function login(app: ReturnType<typeof createControlPlane>): Promise<string> {
+  const response = await app.http.request("/api/auth/login", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ password: ownerPassword }),
@@ -61,10 +61,10 @@ export class FakeNodeSocket implements NodeSocket {
   }
 }
 export async function pairNode(
-  app: ReturnType<typeof createControlPlaneApp>,
+  app: ReturnType<typeof createControlPlane>,
   cookie: string,
 ): Promise<{ id: string; socket: FakeNodeSocket }> {
-  const tokenResponse = await app.request("/api/owner/nodes/pairing-tokens", {
+  const tokenResponse = await app.http.request("/api/owner/nodes/pairing-tokens", {
     method: "POST",
     headers: { cookie },
   });

@@ -8,7 +8,7 @@ import { AgentRequestConflict } from "../../src/agents/directory.js";
 
 import {
   cleanupFixture,
-  setup,
+  createAgentCreationFixture,
   databaseFor,
   login,
   pairNode,
@@ -16,10 +16,10 @@ import {
 afterEach(cleanupFixture);
 
 it("persists a stable Agent session, verifies provisioning, then queues its initial-channel messages", async () => {
-  const app = setup();
+  const app = createAgentCreationFixture();
   const cookie = await login(app);
   const { id: nodeId, socket } = await pairNode(app, cookie);
-  const channelResponse = await app.request("/api/owner/channels", {
+  const channelResponse = await app.http.request("/api/owner/channels", {
     method: "POST",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ name: "Research", description: "Research work", visibility: "private" }),
@@ -36,7 +36,7 @@ it("persists a stable Agent session, verifies provisioning, then queues its init
     initialChannelId: channelId,
   };
 
-  const creation = app.request("/api/owner/agents", {
+  const creation = app.http.request("/api/owner/agents", {
     method: "POST",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify(input),
@@ -52,7 +52,7 @@ it("persists a stable Agent session, verifies provisioning, then queues its init
     requestId: expect.any(String),
     agentId: input.id,
   });
-  expect(app.chat.inviteAgentToChannel(channelId, input.id)).toBe(false);
+  expect(app.chat.channels.inviteAgentToChannel(channelId, input.id)).toBe(false);
   await toolTestInput(
     app,
     socket,
@@ -63,7 +63,7 @@ it("persists a stable Agent session, verifies provisioning, then queues its init
       stage: "preparing_workspace",
     }),
   );
-  const progressResponse = await app.request("/api/owner/agents", { headers: { cookie } });
+  const progressResponse = await app.http.request("/api/owner/agents", { headers: { cookie } });
   const progress = (await progressResponse.json()) as { agents: Array<{ stage: string }> };
   expect(progress.agents[0]?.stage).toBe("preparing_workspace");
   await toolTestInput(
@@ -108,9 +108,9 @@ it("persists a stable Agent session, verifies provisioning, then queues its init
       workspace: `/var/lib/mate/agents/${input.id}`,
     },
   });
-  expect(app.chat.inviteAgentToChannel(channelId, input.id)).toBe(true);
+  expect(app.chat.channels.inviteAgentToChannel(channelId, input.id)).toBe(true);
   const sentCount = socket.sent.length;
-  const repeat = await app.request("/api/owner/agents", {
+  const repeat = await app.http.request("/api/owner/agents", {
     method: "POST",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify(input),
@@ -121,12 +121,12 @@ it("persists a stable Agent session, verifies provisioning, then queues its init
   );
   expect(socket.sent).toHaveLength(sentCount);
 
-  app.chat.createMessage(channelId, "A queued first message");
-  expect(app.chat.listPendingDeliveries("agent", input.id).deliveries).toHaveLength(1);
+  app.chat.messages.createMessage({ channelId: channelId, text: "A queued first message" });
+  expect(app.chat.deliveries.listPendingDeliveries("agent", input.id).deliveries).toHaveLength(1);
 });
 
 it("retains one failed request and retries it with the same Agent and provisioning IDs", async () => {
-  const app = setup();
+  const app = createAgentCreationFixture();
   const cookie = await login(app);
   const { id: nodeId, socket } = await pairNode(app, cookie);
   const input = {
@@ -137,14 +137,14 @@ it("retains one failed request and retries it with the same Agent and provisioni
     nodeId,
     model: { provider: "openai", id: "gpt-4.1" },
   };
-  const failedCreation = app.request("/api/owner/agents", {
+  const failedCreation = app.http.request("/api/owner/agents", {
     method: "POST",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify(input),
   });
   await new Promise((resolve) => setTimeout(resolve, 0));
   const firstCommand = JSON.parse(socket.sent.at(-1)!) as { requestId: string };
-  const concurrentDuplicate = app.request("/api/owner/agents", {
+  const concurrentDuplicate = app.http.request("/api/owner/agents", {
     method: "POST",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify(input),
@@ -172,7 +172,7 @@ it("retains one failed request and retries it with the same Agent and provisioni
   expect(failedAgent.agent.status).toBe("failed");
   expect(concurrentFailedAgent.agent).toEqual(failedAgent.agent);
 
-  const retry = app.request("/api/owner/agents", {
+  const retry = app.http.request("/api/owner/agents", {
     method: "POST",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify(input),
@@ -218,7 +218,7 @@ it("retains one failed request and retries it with the same Agent and provisioni
 });
 
 it("refuses an Agent whose node reports a different account than the one it already runs", async () => {
-  const app = setup();
+  const app = createAgentCreationFixture();
   const cookie = await login(app);
   const { id: nodeId } = await pairNode(app, cookie);
   const request = (id: string, name: string) => ({
@@ -297,7 +297,7 @@ it("refuses an Agent whose node reports a different account than the one it alre
 });
 
 it("refuses to complete an Agent whose node reports it is running as root", async () => {
-  const app = setup();
+  const app = createAgentCreationFixture();
   const cookie = await login(app);
   const { id: nodeId } = await pairNode(app, cookie);
   const identity = (agentId: string, account: { uid: number; gid: number }) => ({

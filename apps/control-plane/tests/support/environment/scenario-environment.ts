@@ -11,6 +11,14 @@ import type { ProviderRequest } from "../agent/agent-loop.js";
 import { ProcessOutput, login, ownerPassword, stopProcess } from "./run-services.js";
 import { createScenarioNodeLink } from "./scenario-network.js";
 import { createScenarioContainer } from "./scenario-container.js";
+import {
+  agentConfigurationSchema,
+  configurationSchema,
+  providerRequestSchema,
+  type ScenarioConfiguration,
+  type PreparedScenarioAgent,
+} from "./scenario-configuration.js";
+import { ScenarioResources, type CleanupAction, type CleanupReport } from "./scenario-resources.js";
 
 /** Startup keeps the original cause separate from best-effort cleanup results. */
 export class ScenarioStartupError extends Error {
@@ -508,12 +516,3 @@ export async function createScenarioEnvironment(options: ScenarioConfiguration) 
     );
   }
 }
-
-import {
-  agentConfigurationSchema,
-  configurationSchema,
-  providerRequestSchema,
-  type ScenarioConfiguration,
-  type PreparedScenarioAgent,
-} from "./scenario-configuration.js";
-import { ScenarioResources, type CleanupAction, type CleanupReport } from "./scenario-resources.js";

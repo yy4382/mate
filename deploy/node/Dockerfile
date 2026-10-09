@@ -5,6 +5,8 @@ RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
 COPY . .
 ENV npm_config_build_from_source=true
 RUN pnpm install --frozen-lockfile && pnpm build:node
+
+# Assemble production packages with the native addons built above.
 RUN mkdir -p /production/apps/node /production/packages/protocol && \
     cp package.json pnpm-lock.yaml pnpm-workspace.yaml /production/ && \
     cp apps/node/package.json /production/apps/node/ && \
@@ -15,6 +17,8 @@ RUN mkdir -p /production/apps/node /production/packages/protocol && \
     rm -f /production/node_modules/.pnpm/node_modules/@mate/node && \
     cp -r /source/apps/node/node_modules/better-sqlite3/build /production/apps/node/node_modules/better-sqlite3/ && \
     cp -r /source/apps/node/node_modules/fs-ext/build /production/apps/node/node_modules/fs-ext/
+
+# Include the dedicated runtime, then describe and archive the complete bundle.
 ARG MATE_VERSION
 RUN mkdir -p /artifact/mate-node/app /artifact/mate-node/node/bin /artifact/mate-node/bin /out && \
     tar --hard-dereference -chf /production.tar -C /production . && \

@@ -31,18 +31,18 @@ export class ConversationToolActions {
     const validId = z.string().min(1).max(500).safeParse(toolCallId);
     if (!validId.success) throw new AgentToolRefusal("Invalid action ID");
     const requestHash = createHash("sha256")
-        .update(JSON.stringify({ operation, input }))
-        .digest("hex"),
-      existing = z
-        .looseObject({ request_hash: z.string(), result_json: z.string() })
-        .optional()
-        .parse(
-          this.db
-            .prepare(
-              "SELECT request_hash,result_json FROM owner_agent_tool_actions WHERE session_id=? AND action_id=?",
-            )
-            .get(run.session_id, toolCallId),
-        );
+      .update(JSON.stringify({ operation, input }))
+      .digest("hex");
+    const existing = z
+      .looseObject({ request_hash: z.string(), result_json: z.string() })
+      .optional()
+      .parse(
+        this.db
+          .prepare(
+            "SELECT request_hash,result_json FROM owner_agent_tool_actions WHERE session_id=? AND action_id=?",
+          )
+          .get(run.session_id, toolCallId),
+      );
     if (existing) {
       if (existing.request_hash !== requestHash)
         throw new AgentToolRefusal("Action ID was already used for a different request");

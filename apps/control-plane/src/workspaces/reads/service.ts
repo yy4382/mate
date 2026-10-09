@@ -1,4 +1,4 @@
-import type { Operation } from "@mate/protocol";
+import type { WorkspaceOperation } from "@mate/protocol";
 import type { WorkspaceVersion } from "@mate/protocol/workspace";
 import { FILE_CHUNK_MAX_BYTES, workspaceVersionSchema } from "@mate/protocol/workspace";
 import { randomUUID } from "node:crypto";
@@ -24,90 +24,92 @@ const agentImageReadMaxBytes = 5 * 1024 * 1024;
 const utf8BoundaryLookaroundBytes = 3;
 const agentTextReadMaxBytes = 8 * 1024;
 
-/** Bounded owner and Agent reads, with each entry retaining its original run checks. */
+/** Bounded owner, Agent and attachment-publication reads. */
 export class WorkspaceReads {
   constructor(private readonly access: WorkspaceAccess) {}
   agentTools() {
     return {
       "workspace.list": defineAgentTool(
         workspaceToolDefinitions["workspace.list"],
-        (identity, input) => {
-          return this.readForAgent(identity, {
+        (identity, input) =>
+          this.readForAgent(identity, {
             kind: "workspace_list",
             ...input,
-          });
-        },
+          }),
         "Agent 文件请求被拒绝。",
       ),
       "workspace.stat": defineAgentTool(
         workspaceToolDefinitions["workspace.stat"],
-        (identity, input) => {
-          return this.readForAgent(identity, {
+        (identity, input) =>
+          this.readForAgent(identity, {
             kind: "workspace_stat",
             ...input,
-          });
-        },
+          }),
         "Agent 文件请求被拒绝。",
       ),
       "workspace.read": defineAgentTool(
         workspaceToolDefinitions["workspace.read"],
-        (identity, input) => {
-          return this.readForAgent(identity, { kind: "read", ...input });
-        },
+        (identity, input) => this.readForAgent(identity, { kind: "read", ...input }),
         "Agent 文件请求被拒绝。",
       ),
       "workspace.read_chunk": defineAgentTool(
         workspaceToolDefinitions["workspace.read_chunk"],
-        (identity, input) => {
-          return this.readForAgent(identity, {
+        (identity, input) =>
+          this.readForAgent(identity, {
             kind: "workspace_read_chunk",
             ...input,
-          });
-        },
+          }),
         "Agent 文件请求被拒绝。",
       ),
     };
   }
-  async list(agentId: string, path: string, offset = 0, limit = 32) {
+  async list({
+    agentId,
+    path,
+    offset = 0,
+    limit = 32,
+  }: {
+    agentId: string;
+    path: string;
+    offset?: number;
+    limit?: number;
+  }) {
     return this.access.withAccessAudit(
       { principalKind: "owner", principalId: "owner", agentId, operation: "list", paths: [path] },
-      () => this.listUnchecked(agentId, path, offset, limit),
+      async () => {
+        const result = await this.readOperation(agentId, {
+          kind: "workspace_list",
+          path,
+          offset,
+          limit,
+        });
+        const parsed = workspaceDirectoryResultSchema.safeParse(result);
+        if (!parsed.success) throw invalidNodeResponse();
+        return parsed.data;
+      },
     );
   }
 
-  private async listUnchecked(agentId: string, path: string, offset: number, limit: number) {
-    const result = await this.readOperation(agentId, {
-      kind: "workspace_list",
-      path,
-      offset,
-      limit,
-    });
-    const parsed = workspaceDirectoryResultSchema.safeParse(result);
-    if (!parsed.success) throw invalidNodeResponse();
-    return parsed.data;
-  }
-
-  async stat(agentId: string, path: string) {
+  async stat({ agentId, path }: { agentId: string; path: string }) {
     return this.access.withAccessAudit(
       { principalKind: "owner", principalId: "owner", agentId, operation: "stat", paths: [path] },
-      () => this.statUnchecked(agentId, path),
+      async () => {
+        const result = await this.readOperation(agentId, { kind: "workspace_stat", path });
+        const parsed = workspaceStatResultSchema.safeParse(result);
+        if (!parsed.success) throw invalidNodeResponse();
+        return parsed.data;
+      },
     );
   }
 
-  private async statUnchecked(agentId: string, path: string) {
-    const result = await this.readOperation(agentId, { kind: "workspace_stat", path });
-    const parsed = workspaceStatResultSchema.safeParse(result);
-    if (!parsed.success) throw invalidNodeResponse();
-    return parsed.data;
-  }
-
-  async readChunk(
-    agentId: string,
-    path: string,
-    offset: number,
-    version?: WorkspaceVersion,
-    length = FILE_CHUNK_MAX_BYTES,
-  ): Promise<WorkspaceChunk> {
+  async readChunk(input: {
+    agentId: string;
+    path: string;
+    offset: number;
+    version?: WorkspaceVersion | undefined;
+    length?: number;
+  }): Promise<WorkspaceChunk> {
+    const { agentId, path } = input;
     return this.access.withAccessAudit(
       {
         principalKind: "owner",
@@ -116,17 +118,17 @@ export class WorkspaceReads {
         operation: "read_chunk",
         paths: [path],
       },
-      () => this.readChunkUnchecked(agentId, path, offset, version, length),
+      () => this.readChunkUnchecked(input),
     );
   }
 
-  private async readChunkUnchecked(
-    agentId: string,
-    path: string,
-    offset: number,
-    version: WorkspaceVersion | undefined,
-    length: number,
-  ): Promise<WorkspaceChunk> {
+  private async readChunkUnchecked({
+    agentId,
+    path,
+    offset,
+    version,
+    length = FILE_CHUNK_MAX_BYTES,
+  }: Parameters<WorkspaceReads["readChunk"]>[0]): Promise<WorkspaceChunk> {
     const result = await this.readOperation(agentId, {
       kind: "workspace_read_chunk",
       path,
@@ -162,7 +164,7 @@ export class WorkspaceReads {
 
   async readForAgentPublish(
     identity: AgentToolContext,
-    operation: Extract<Operation, { kind: "workspace_stat" | "workspace_read_chunk" }>,
+    operation: Extract<WorkspaceOperation, { kind: "workspace_stat" | "workspace_read_chunk" }>,
   ): Promise<Record<string, unknown>> {
     const { runId, agentId } = identity;
     return this.access.withAccessAudit(
@@ -180,7 +182,7 @@ export class WorkspaceReads {
 
   private async readForAgentPublishUnchecked(
     identity: AgentToolContext,
-    operation: Extract<Operation, { kind: "workspace_stat" | "workspace_read_chunk" }>,
+    operation: Extract<WorkspaceOperation, { kind: "workspace_stat" | "workspace_read_chunk" }>,
   ): Promise<Record<string, unknown>> {
     const { agentId } = identity;
     await identity.committed;
@@ -207,7 +209,7 @@ export class WorkspaceReads {
   async readForAgent(
     identity: AgentToolContext,
     operation: Extract<
-      Operation,
+      WorkspaceOperation,
       { kind: "read" | "workspace_list" | "workspace_stat" | "workspace_read_chunk" }
     >,
   ): Promise<unknown> {
@@ -228,7 +230,7 @@ export class WorkspaceReads {
   private async readForAgentUnchecked(
     identity: AgentToolContext,
     operation: Extract<
-      Operation,
+      WorkspaceOperation,
       { kind: "read" | "workspace_list" | "workspace_stat" | "workspace_read_chunk" }
     >,
   ): Promise<unknown> {
@@ -236,13 +238,12 @@ export class WorkspaceReads {
     identity.requireCurrentRun();
     if (operation.kind === "read" || operation.kind === "workspace_read_chunk") {
       const version = operation.kind === "workspace_read_chunk" ? operation.version : undefined;
-      const prefix = await this.agentChunk(
-        identity,
-        operation.path,
-        0,
-        FILE_CHUNK_MAX_BYTES,
+      const prefix = await this.agentChunk(identity, {
+        path: operation.path,
+        offset: 0,
+        length: FILE_CHUNK_MAX_BYTES,
         version,
-      );
+      });
       const type = fileType(prefix.bytes, prefix.totalBytes > prefix.bytes.length);
       if (type !== "text/plain") {
         if (operation.kind === "workspace_read_chunk")
@@ -256,13 +257,12 @@ export class WorkspaceReads {
           return unreadable(type, "图片超过 5 MiB 完整读取上限。");
         const chunks = [prefix.bytes];
         for (let offset = prefix.bytes.length; offset < prefix.totalBytes;) {
-          const chunk = await this.agentChunk(
-            identity,
-            operation.path,
+          const chunk = await this.agentChunk(identity, {
+            path: operation.path,
             offset,
-            FILE_CHUNK_MAX_BYTES,
-            prefix.version,
-          );
+            length: FILE_CHUNK_MAX_BYTES,
+            version: prefix.version,
+          });
           chunks.push(chunk.bytes);
           offset += chunk.bytes.length;
         }
@@ -286,24 +286,22 @@ export class WorkspaceReads {
       );
       const parts: Buffer[] = [];
       for (let offset = start; offset < end;) {
-        const chunk = await this.agentChunk(
-          identity,
-          operation.path,
+        const chunk = await this.agentChunk(identity, {
+          path: operation.path,
           offset,
-          Math.min(FILE_CHUNK_MAX_BYTES, end - offset),
-          prefix.version,
-        );
+          length: Math.min(FILE_CHUNK_MAX_BYTES, end - offset),
+          version: prefix.version,
+        });
         parts.push(chunk.bytes);
         offset += chunk.bytes.length;
       }
       return {
-        ...textRange(
-          Buffer.concat(parts),
-          start,
-          operation.offset,
-          operation.length,
-          prefix.totalBytes,
-        ),
+        ...textRange(Buffer.concat(parts), {
+          readOffset: start,
+          offset: operation.offset,
+          length: operation.length,
+          totalBytes: prefix.totalBytes,
+        }),
         version: prefix.version,
       };
     }
@@ -314,7 +312,7 @@ export class WorkspaceReads {
   private async agentReadOperation(
     identity: AgentToolContext,
     operation: Extract<
-      Operation,
+      WorkspaceOperation,
       { kind: "workspace_list" | "workspace_stat" | "workspace_read_chunk" }
     >,
   ) {
@@ -336,10 +334,17 @@ export class WorkspaceReads {
 
   private async agentChunk(
     identity: AgentToolContext,
-    path: string,
-    offset: number,
-    length: number,
-    version?: WorkspaceVersion,
+    {
+      path,
+      offset,
+      length,
+      version,
+    }: {
+      path: string;
+      offset: number;
+      length: number;
+      version?: WorkspaceVersion | undefined;
+    },
   ) {
     const result = await this.agentReadOperation(identity, {
       kind: "workspace_read_chunk",
@@ -373,7 +378,7 @@ export class WorkspaceReads {
   private async readOperation(
     agentId: string,
     operation: Extract<
-      Operation,
+      WorkspaceOperation,
       { kind: "workspace_list" | "workspace_stat" | "workspace_read_chunk" }
     >,
   ): Promise<Record<string, unknown>> {

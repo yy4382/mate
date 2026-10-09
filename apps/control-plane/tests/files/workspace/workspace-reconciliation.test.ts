@@ -18,10 +18,7 @@ afterEach(async () => {
 });
 
 function event() {
-  let resolve = () => {};
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
+  const { promise, resolve } = Promise.withResolvers<void>();
   return { promise, resolve };
 }
 
@@ -47,8 +44,8 @@ async function fixture(options: { nodeOperationTimeoutMs?: number } = {}) {
   const directory = mkdtempSync(join(tmpdir(), "mate-workspace-reconciliation-"));
   resourceReleases.push(() => rmSync(directory, { recursive: true, force: true }));
   chmodSync(directory, 0o700);
-  const passwordFile = join(directory, "owner-password"),
-    password = "synthetic-reconciliation-password";
+  const passwordFile = join(directory, "owner-password");
+  const password = "synthetic-reconciliation-password";
   writeFileSync(passwordFile, password, { mode: 0o600 });
   const app = toolTestApp({ dataDir: join(directory, "control"), passwordFile, ...options });
   resourceReleases.push(() => app.close());
@@ -56,24 +53,24 @@ async function fixture(options: { nodeOperationTimeoutMs?: number } = {}) {
   resourceReleases.push(() => {
     db.close();
   });
-  const login = await app.request("/api/auth/login", {
+  const login = await app.http.request("/api/auth/login", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ password }),
   });
   expect(login.status, await login.clone().text()).toBe(204);
-  const cookie = login.headers.get("set-cookie")!.split(";", 1)[0]!,
-    api = async (path: string, body?: unknown) => {
-      const response = await app.request(path, {
-        method: body === undefined ? "GET" : "POST",
-        headers: { cookie, "content-type": "application/json" },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      });
-      expect(response.ok, await response.clone().text()).toBe(true);
-      return response.json();
-    },
-    pairing = await api("/api/owner/nodes/pairing-tokens", {}),
-    server = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+  const cookie = login.headers.get("set-cookie")!.split(";", 1)[0]!;
+  const api = async (path: string, body?: unknown) => {
+    const response = await app.http.request(path, {
+      method: body === undefined ? "GET" : "POST",
+      headers: { cookie, "content-type": "application/json" },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    expect(response.ok, await response.clone().text()).toBe(true);
+    return response.json();
+  };
+  const pairing = await api("/api/owner/nodes/pairing-tokens", {});
+  const server = new WebSocketServer({ port: 0, host: "127.0.0.1" });
   resourceReleases.push(async () => {
     for (const socket of server.clients) socket.terminate();
     if (!server.address()) return;
@@ -81,11 +78,11 @@ async function fixture(options: { nodeOperationTimeoutMs?: number } = {}) {
       server.close((error) => (error ? reject(error) : done())),
     );
   });
-  const sent: string[] = [],
-    received: NodeRequest[] = [],
-    heartbeats: Array<Extract<NodeRequest, { type: "node.ping" }>> = [],
-    errors: unknown[] = [],
-    sockets: Array<Parameters<typeof app.nodes.open>[0] & { sent: string[] }> = [];
+  const sent: string[] = [];
+  const received: NodeRequest[] = [];
+  const heartbeats: Array<Extract<NodeRequest, { type: "node.ping" }>> = [];
+  const errors: unknown[] = [];
+  const sockets: Array<Parameters<typeof app.nodes.open>[0] & { sent: string[] }> = [];
   let holdHeartbeats = false;
   server.on("connection", (network) => {
     const socket = {
@@ -123,30 +120,30 @@ async function fixture(options: { nodeOperationTimeoutMs?: number } = {}) {
   });
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Missing WebSocket port");
-  const controller = new AbortController(),
-    workspaceRoot = join(directory, "workspaces"),
-    nodeData = join(directory, "node"),
-    beforeReceipt = event(),
-    releaseReceipt = event(),
-    node = runLinuxNodeWithTestDependencies(
-      {
-        controlPlaneUrl: `http://127.0.0.1:${address.port}`,
-        dataDirectory: nodeData,
-        agentWorkspaceRoot: workspaceRoot,
-        pairingToken: pairing.pairingToken,
-        heartbeatIntervalMs: 100,
-        heartbeatTimeoutMs: 2000,
-      },
-      controller.signal,
-      {
-        workspaceExecutor: new LinuxWorkspaceExecutor(workspaceRoot, nodeData, {
-          beforeReceipt: async () => {
-            beforeReceipt.resolve();
-            await releaseReceipt.promise;
-          },
-        }),
-      },
-    );
+  const controller = new AbortController();
+  const workspaceRoot = join(directory, "workspaces");
+  const nodeData = join(directory, "node");
+  const beforeReceipt = event();
+  const releaseReceipt = event();
+  const node = runLinuxNodeWithTestDependencies(
+    {
+      controlPlaneUrl: `http://127.0.0.1:${address.port}`,
+      dataDirectory: nodeData,
+      agentWorkspaceRoot: workspaceRoot,
+      pairingToken: pairing.pairingToken,
+      heartbeatIntervalMs: 100,
+      heartbeatTimeoutMs: 2000,
+    },
+    controller.signal,
+    {
+      workspaceExecutor: new LinuxWorkspaceExecutor(workspaceRoot, nodeData, {
+        beforeReceipt: async () => {
+          beforeReceipt.resolve();
+          await releaseReceipt.promise;
+        },
+      }),
+    },
+  );
   // Observe a fatal node error immediately; cleanup still awaits and reports the rejection.
   void node.catch((error: unknown) => errors.push(error));
   resourceReleases.push(async () => {
@@ -159,23 +156,26 @@ async function fixture(options: { nodeOperationTimeoutMs?: number } = {}) {
     "real node pairing",
   );
   if (paired.type !== "node.pair") throw new Error("Expected node pairing");
-  const nodeId = paired.nodeId,
-    created = await api("/api/owner/agents", {
-      id: randomUUID(),
-      nodeId,
-      name: "文件同事",
-      role: "写入合成文件",
-      description: "Synthetic receipt interleaving",
-      model: { provider: "openai", id: "gpt-4.1" },
-    }),
-    agentId = z.object({ agent: z.object({ id: z.string() }) }).parse(created).agent.id,
-    direct = await api(`/api/owner/agents/${agentId}/direct-channel`, {});
-  await app.request("/api/owner/model-credentials/openai", {
+  const nodeId = paired.nodeId;
+  const created = await api("/api/owner/agents", {
+    id: randomUUID(),
+    nodeId,
+    name: "文件同事",
+    role: "写入合成文件",
+    description: "Synthetic receipt interleaving",
+    model: { provider: "openai", id: "gpt-4.1" },
+  });
+  const agentId = z.object({ agent: z.object({ id: z.string() }) }).parse(created).agent.id;
+  const direct = await api(`/api/owner/agents/${agentId}/direct-channel`, {});
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-no-provider-request" }),
   });
-  app.chat.createMessage(direct.channel.id, "写一份合成文件后保持静默。");
+  app.chat.messages.createMessage({
+    channelId: direct.channel.id,
+    text: "写一份合成文件后保持静默。",
+  });
   const run = await eventually(() => {
     for (const text of sent) {
       const parsed = z

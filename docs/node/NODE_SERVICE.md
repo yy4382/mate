@@ -48,15 +48,3 @@ CLI 使用完整包内的 D-Bus 库短暂连接 systemd 已有的私有 socket�
 异常退出采用 systemd 的 `Restart=on-failure` 和 5 秒重试；显式 stop 保持停止。正常停止先让 node 按既有收据逻辑结束命令；超过 45 秒的停止由 systemd 清理此服务剩余进程。管理变更使用本机短暂文件锁，冲突命令明确失败，锁随进程退出释放；不持久化安装意图或另建维护数据库。
 
 enable 只把单元挂到该账号 user manager 的启动目标。它不启动开机时的 user manager，也不承诺注销后仍运行；这些由用户自行决定和配置 linger。Mate 只读取 `loginctl` 的当前事实，不调用 enable-linger 或 sudo。缺可用 user manager 时 `mate node install` 明确失败；不退回裸后台进程或系统服务，薄 bootstrap 和版本命令仍可用。原始 `systemctl --user`/`journalctl --user` 可用于宿主诊断，例如检查人为 disabled 的选择，但日常管理使用上述 CLI。
-
-## 独立真实服务验收
-
-在明确授权的可丢弃 Linux 宿主或 VM、现有普通账号、实际 user manager 中运行；账号不能已有 Mate 程序、单元、配置或数据，PATH 中不能有系统 Node。测试不会配置账号、linger、权限提升或系统软件。
-
-```sh
-sh deploy/node/tests/user-service-smoke.sh \
-  /path/mate-node-0.1.0-linux-arm64.tar.gz /path/bootstrap.sh \
-  '<SHA-256>' 0.1.0 /path/user-service-peer.mjs
-```
-
-此脚本执行实际 bootstrap、包内 CLI、用户服务和 journal；外部 WebSocket 测试服务明确是合成协议接缝，验证拒绝令牌后保留身份换令牌、身份优先、服务重复安装/停止/禁用/重启/异常恢复、日志、缺 manager、配置与单元冲突。它不证明真实控制面、真实 provider 或四平台矩阵；这些分别记录正式验收证据。用户自行配置 linger 的运行边界见上文。容器或 macOS 的边界测试也不能替代此脚本的真实用户服务证据。脚本保留配置和数据，并在结束时停止服务；测试环境由操作者关闭。

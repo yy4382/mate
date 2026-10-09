@@ -19,14 +19,14 @@ const launchingUid = typeof process.getuid === "function" ? process.getuid() : u
 if (launchingUid === 0)
   throw new Error("Run this check as the ordinary launching account, not as root.");
 
-const root = mkdtempSync(join(tmpdir(), "mate-agent-workspace-")),
-  agentAId = randomUUID(),
-  agentBId = randomUUID();
+const root = mkdtempSync(join(tmpdir(), "mate-agent-workspace-"));
+const agentAId = randomUUID();
+const agentBId = randomUUID();
 const mode = (path) => statSync(path).mode & 0o777;
 
 try {
-  const agentA = await prepareAgentWorkspace({ agentId: agentAId, workspaceRoot: root }),
-    agentB = await prepareAgentWorkspace({ agentId: agentBId, workspaceRoot: root });
+  const agentA = await prepareAgentWorkspace({ agentId: agentAId, workspaceRoot: root });
+  const agentB = await prepareAgentWorkspace({ agentId: agentBId, workspaceRoot: root });
 
   assert.equal(agentA.username, userInfo().username);
   assert.equal(agentA.uid, launchingUid);
@@ -58,8 +58,8 @@ try {
 
   // A workspace that no longer carries Mate's marker and holds other content is reported, never
   // adopted or erased, so a failure stays diagnosable instead of silently merging two Agents' data.
-  const foreignId = randomUUID(),
-    foreign = await prepareAgentWorkspace({ agentId: foreignId, workspaceRoot: root });
+  const foreignId = randomUUID();
+  const foreign = await prepareAgentWorkspace({ agentId: foreignId, workspaceRoot: root });
   rmSync(join(foreign.workspace, ".mate-workspace-id"));
   writeFileSync(join(foreign.workspace, "foreign.txt"), "not ours\n", { mode: 0o600 });
   await assert.rejects(

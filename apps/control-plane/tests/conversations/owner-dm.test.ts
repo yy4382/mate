@@ -4,11 +4,15 @@ import { randomUUID } from "node:crypto";
 
 import { afterEach, expect, it } from "vitest";
 
-import { cleanupFixture, setup, waitForRun } from "../support/agent/conversation-fixture.js";
+import {
+  cleanupFixture,
+  createConversationFixture,
+  waitForRun,
+} from "../support/agent/conversation-fixture.js";
 afterEach(cleanupFixture);
 
 it("creates one private owner DM and keeps its input queued while the Agent awaits credentials", async () => {
-  const { app, cookie, nodeId } = await setup();
+  const { app, cookie, nodeId } = await createConversationFixture();
   const agentId = randomUUID();
   const prepared = app.agents.prepare({
     id: agentId,
@@ -31,30 +35,30 @@ it("creates one private owner DM and keeps its input queued while the Agent awai
   );
   expect(prepared.agent.sessionId).toBe(app.agents.get(agentId)?.sessionId);
 
-  const direct = await app.request(`/api/owner/agents/${agentId}/direct-channel`, {
+  const direct = await app.http.request(`/api/owner/agents/${agentId}/direct-channel`, {
     method: "POST",
     headers: { cookie },
   });
   expect(direct.status).toBe(200);
   const { channel } = (await direct.json()) as { channel: { id: string; visibility: string } };
   expect(channel.visibility).toBe("private");
-  const repeated = await app.request(`/api/owner/agents/${agentId}/direct-channel`, {
+  const repeated = await app.http.request(`/api/owner/agents/${agentId}/direct-channel`, {
     method: "POST",
     headers: { cookie },
   });
   expect(((await repeated.json()) as { channel: { id: string } }).channel.id).toBe(channel.id);
 
-  const post = await app.request(`/api/owner/channels/${channel.id}/messages`, {
+  const post = await app.http.request(`/api/owner/channels/${channel.id}/messages`, {
     method: "POST",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ text: "请给我一个简短研究计划。" }),
   });
   expect(post.status).toBe(201);
-  expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toHaveLength(1);
+  expect(app.chat.deliveries.listPendingDeliveries("agent", agentId).deliveries).toHaveLength(1);
 });
 
 it("routes Agent conversation discovery through its current control-plane run", async () => {
-  const { app, cookie, nodeId, socket } = await setup();
+  const { app, cookie, nodeId, socket } = await createConversationFixture();
   const agentId = randomUUID();
   app.agents.prepare({
     id: agentId,
@@ -75,20 +79,20 @@ it("routes Agent conversation discovery through its current control-plane run", 
     },
     app.chat,
   );
-  const ownChannel = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  const publicRoom = app.chat.createChannel({
+  const ownChannel = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
+  const publicRoom = app.chat.channels.createChannel({
     name: "Discoverable room",
     description: "Public metadata is visible to every Agent.",
     visibility: "public",
   });
-  const otherPrivateRoom = app.chat.createChannel({
+  const otherPrivateRoom = app.chat.channels.createChannel({
     name: "Hidden room",
     description: "Private metadata is member-only.",
     visibility: "private",
   });
-  app.chat.createMessage(ownChannel.id, "列出可见对话。");
+  app.chat.messages.createMessage({ channelId: ownChannel.id, text: "列出可见对话。" });
   const runStart = socket.sent.length;
-  const credential = await app.request("/api/owner/model-credentials/openai", {
+  const credential = await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-tools-key" }),

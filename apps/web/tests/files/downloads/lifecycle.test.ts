@@ -1,5 +1,4 @@
 // @vitest-environment jsdom
-// @vitest-environment jsdom
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createElement } from "react";
@@ -70,24 +69,24 @@ it("streams a download through a standard browser fallback and reports its termi
 
 it("backs off download status polling until a terminal result arrives", async () => {
   let now = 0;
-  const delays: number[] = [],
-    fetchStatus = vi
-      .fn()
-      .mockResolvedValueOnce(json(200, { state: "started", errorCode: null, expiresInMs: 800 }))
-      .mockResolvedValueOnce(json(200, { state: "started", errorCode: null, expiresInMs: 800 }))
-      .mockResolvedValueOnce(
-        json(200, { state: "failed", errorCode: "file_changed", expiresInMs: 800 }),
-      ),
-    status = await waitForDownloadStatus("agent-1", "download-1", {
-      now: () => now,
-      fetchStatus: fetchStatus as unknown as typeof fetch,
-      delay: async (milliseconds) => {
-        delays.push(milliseconds);
-        now += milliseconds;
-      },
-      statusTtlMs: 400,
-      registrationGraceMs: 100,
-    });
+  const delays: number[] = [];
+  const fetchStatus = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(json(200, { state: "started", errorCode: null, expiresInMs: 800 }))
+    .mockResolvedValueOnce(json(200, { state: "started", errorCode: null, expiresInMs: 800 }))
+    .mockResolvedValueOnce(
+      json(200, { state: "failed", errorCode: "file_changed", expiresInMs: 800 }),
+    );
+  const status = await waitForDownloadStatus("agent-1", "download-1", {
+    now: () => now,
+    fetchStatus,
+    delay: async (milliseconds) => {
+      delays.push(milliseconds);
+      now += milliseconds;
+    },
+    statusTtlMs: 400,
+    registrationGraceMs: 100,
+  });
 
   expect(status).toMatchObject({ state: "failed", errorCode: "file_changed" });
   expect(delays).toEqual([250, 500]);
@@ -96,18 +95,20 @@ it("backs off download status polling until a terminal result arrives", async ()
 
 it("stops polling at the download status TTL and reports that the result cannot be confirmed", async () => {
   let now = 0;
-  const delays: number[] = [],
-    fetchStatus = vi.fn(async () => json(200, { state: "started", errorCode: null })),
-    pending = waitForDownloadStatus("agent-1", "download-1", {
-      now: () => now,
-      fetchStatus: fetchStatus as unknown as typeof fetch,
-      delay: async (milliseconds) => {
-        delays.push(milliseconds);
-        now += milliseconds;
-      },
-      statusTtlMs: 800,
-      registrationGraceMs: 100,
-    });
+  const delays: number[] = [];
+  const fetchStatus = vi.fn<typeof fetch>(async () =>
+    json(200, { state: "started", errorCode: null }),
+  );
+  const pending = waitForDownloadStatus("agent-1", "download-1", {
+    now: () => now,
+    fetchStatus,
+    delay: async (milliseconds) => {
+      delays.push(milliseconds);
+      now += milliseconds;
+    },
+    statusTtlMs: 800,
+    registrationGraceMs: 100,
+  });
 
   await expect(pending).rejects.toThrow("下载状态已过期，无法再确认");
   expect(delays).toEqual([250, 500, 50]);
@@ -159,10 +160,10 @@ it("stops status polling when the owner leaves the workspace page", async () => 
   const statusCall = fixture.fetchMock.mock.calls.find(([input]) =>
     String(input).includes("/workspace/downloads/"),
   );
-  const signal = (statusCall?.[1] as RequestInit).signal as AbortSignal;
+  const signal = statusCall?.[1]?.signal;
 
   view.unmount();
-  expect(signal.aborted).toBe(true);
+  expect(signal).toHaveProperty("aborted", true);
   await new Promise((resolve) => setTimeout(resolve, 300));
   expect(countStatusRequests()).toBe(1);
 });

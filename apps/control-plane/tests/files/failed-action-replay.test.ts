@@ -6,11 +6,10 @@ import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 
 import {
-  password,
   fixtures,
   cleanupFixture,
   FakeNodeSocket,
-  setup,
+  createConversationFixture,
   waitForRun,
   callAgentTool,
   stableToolActionId,
@@ -20,7 +19,7 @@ afterEach(cleanupFixture);
 it.each(["legacy", "structured"])(
   "replays a confirmed failed file action as the same error after control-plane restart (%s)",
   async (mode) => {
-    const { app, cookie, db, nodeId, socket, keyPair } = await setup();
+    const { app, cookie, db, nodeId, socket, keyPair } = await createConversationFixture();
     const agentId = randomUUID();
     app.agents.prepare({
       id: agentId,
@@ -41,17 +40,17 @@ it.each(["legacy", "structured"])(
       },
       app.chat,
     );
-    const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-    await app.request("/api/owner/model-credentials/openai", {
+    const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
+    await app.http.request("/api/owner/model-credentials/openai", {
       method: "PUT",
       headers: { cookie, "content-type": "application/json" },
       body: JSON.stringify({ apiKey: "synthetic-key" }),
     });
     const start = socket.sent.length;
-    app.chat.createMessage(direct.id, "Attempt one file action.");
+    app.chat.messages.createMessage({ channelId: direct.id, text: "Attempt one file action." });
     const firstRun = await waitForRun(socket, start);
-    const input = { name: "workspace.write", input: { path: "protected.txt", content: "no" } },
-      actionId = stableToolActionId(firstRun.actionScopeId, input);
+    const input = { name: "workspace.write", input: { path: "protected.txt", content: "no" } };
+    const actionId = stableToolActionId(firstRun.actionScopeId, input);
     let executions = 0;
     let failureReceipt: unknown;
     socket.onWorkspaceOperation = async (request) => {

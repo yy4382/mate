@@ -7,8 +7,8 @@ export function openNodeProcessDatabase(path: string): Database.Database {
   try {
     db = new Database(path);
   } catch (cause) {
-    const code = systemErrorCode(cause) ?? "",
-      detail = cause instanceof Error ? cause.message : String(cause);
+    const code = systemErrorCode(cause) ?? "";
+    const detail = cause instanceof Error ? cause.message : String(cause);
     throw new Error(
       `Cannot open Mate database at ${path} (${code || "unknown error"}: ${detail}). Check that the directory exists and that the Mate user can read and write it, then start Mate again.`,
     );

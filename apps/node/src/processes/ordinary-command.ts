@@ -1,7 +1,7 @@
 import { systemErrorCode } from "../system-error.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
-import { killProcessGroup } from "./linux-processes.js";
+import { killProcessGroup, processStartToken } from "./linux-processes.js";
 
 /** Captured bytes per stream for one ordinary command; anything beyond it is reported as cut. */
 export const ordinaryCommandOutputLimitBytes = 65_536;
@@ -82,14 +82,8 @@ export class OrdinaryCommandNotStartedError extends Error {
 }
 
 /**
- * Runs one Agent command as an ordinary child process of the account Mate already runs as: same
- * account, same host environment, the Agent's own working directory and `$HOME`, and a shell that
- * receives the command text verbatim. Mate adds no privileges, no approval and no wrapper.
- *
- * The runner also remembers the commands it started while their process group still exists. That
- * memory is what `process.list`, `process.inspect`, `process.stop` and the Agent-stop path report
- * on: Mate can only ever speak for process groups it started and can still signal, and it forgets
- * them when the node process restarts.
+ * Runs the command verbatim through a shell under the existing account (ADR-0004). Tracks the
+ * process groups it starts for process tools and Agent stop; that memory ends with this node run.
  */
 export class OrdinaryCommandRunner {
   private readonly tracked = new Map<string, TrackedProcess>();
@@ -120,11 +114,11 @@ export class OrdinaryCommandRunner {
   }
 
   async run(request: OrdinaryCommandRequest): Promise<OrdinaryCommandReceipt> {
-    const startedAt = this.now(),
-      key = trackedKey(request.agentId, request.operationId);
-    let process_: ChildProcess;
+    const startedAt = this.now();
+    const key = trackedKey(request.agentId, request.operationId);
+    let shell: ChildProcess;
     try {
-      process_ = spawn("/bin/sh", ["-c", request.command], {
+      shell = spawn("/bin/sh", ["-c", request.command], {
         cwd: request.cwd,
         env: commandEnvironment(request, this.environment),
         // Its own session and process group, so Mate can end the command and its descendants
@@ -135,24 +129,24 @@ export class OrdinaryCommandRunner {
     } catch (error) {
       throw new OrdinaryCommandNotStartedError(error);
     }
-    const pid = process_.pid;
-    let timedOut = false,
-      exited = false,
-      opened = false,
-      hardStop: ReturnType<typeof setTimeout> | undefined,
-      releaseHardStop: (() => void) | undefined;
+    const pid = shell.pid;
+    let timedOut = false;
+    let exited = false;
+    let spawned = false;
+    let hardStop: ReturnType<typeof setTimeout> | undefined;
+    let releaseHardStop: (() => void) | undefined;
     // The listeners exist before any await, so a failed start is always this call's definite
     // result instead of an unhandled child-process error.
     const outcome = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
       (resolveOutcome) => {
         // A shell that cannot start emits only 'error'; that is a definite not-started result.
-        process_.once("error", () => resolveOutcome({ code: null, signal: null }));
-        process_.once("exit", (code, signal) => {
+        shell.once("error", () => resolveOutcome({ code: null, signal: null }));
+        shell.once("exit", (code, signal) => {
           exited = true;
           resolveOutcome({ code, signal });
         });
-        process_.once("spawn", () => {
-          opened = true;
+        shell.once("spawn", () => {
+          spawned = true;
         });
       },
     );
@@ -176,10 +170,10 @@ export class OrdinaryCommandRunner {
     // this brand-new command by mistake.
     for (const [otherKey, other] of this.tracked)
       if (other.pid === pid && otherKey !== key) this.tracked.delete(otherKey);
-    const stdout = new BoundedOutput(this.outputLimitBytes),
-      stderr = new BoundedOutput(this.outputLimitBytes);
-    process_.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
-    process_.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
+    const stdout = new BoundedOutput(this.outputLimitBytes);
+    const stderr = new BoundedOutput(this.outputLimitBytes);
+    shell.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
+    shell.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
 
     const timer = setTimeout(() => {
       // A command that already exited ended on its own; the deadline is then just a late timer,
@@ -199,7 +193,7 @@ export class OrdinaryCommandRunner {
     ]);
     clearTimeout(timer);
     if (hardStop) clearTimeout(hardStop);
-    if (!opened) {
+    if (!spawned) {
       this.tracked.delete(key);
       throw new OrdinaryCommandNotStartedError(
         new Error(`the shell process could not start in ${request.cwd}`),
@@ -208,10 +202,10 @@ export class OrdinaryCommandRunner {
     // Give output a command already wrote a moment to arrive, then stop waiting for pipes a
     // background descendant may hold open: the command's own shell has exited.
     await new Promise((resolveGrace) => setTimeout(resolveGrace, outputGraceMs));
-    const pipesOpen = !process_.stdout?.readableEnded || !process_.stderr?.readableEnded;
+    const pipesOpen = !shell.stdout?.readableEnded || !shell.stderr?.readableEnded;
     if (pipesOpen) {
-      process_.stdout?.destroy();
-      process_.stderr?.destroy();
+      shell.stdout?.destroy();
+      shell.stderr?.destroy();
     }
     tracked.exited = true;
     const processGroupRunning = this.processGroupAlive(pid);
@@ -257,8 +251,8 @@ export class OrdinaryCommandRunner {
   }
 
   async stopAll(agentId: string): Promise<{ stopped: string[]; unconfirmed: string[] }> {
-    const stopped: string[] = [],
-      unconfirmed: string[] = [];
+    const stopped: string[] = [];
+    const unconfirmed: string[] = [];
     for (const entry of this.list(agentId)) {
       const result = await this.stop(agentId, entry.operationId);
       if (result.state === "stopped") stopped.push(entry.operationId);
@@ -295,25 +289,6 @@ export class OrdinaryCommandRunner {
     }
     return true;
   }
-}
-
-/**
- * One process incarnation, as Linux reports it: field 22 of `/proc/<pid>/stat` is the start time in
- * clock ticks, so a recycled process ID can never look like the process it replaced. Hosts without
- * `/proc` return nothing and fall back to the process group check alone.
- */
-function processStartToken(pid: number): string | undefined {
-  let stat: string;
-  try {
-    stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-  } catch {
-    return undefined;
-  }
-  // `/proc/<pid>/stat` is `pid (comm) state ppid pgrp session ... itrealvalue starttime ...`; the
-  // command name is parenthesised and may contain spaces, so fields are counted from its close.
-  const closing = stat.lastIndexOf(")"),
-    token = closing < 0 ? undefined : stat.slice(closing + 2).split(" ")[19];
-  return token !== undefined && /^\d+$/.test(token) ? token : undefined;
 }
 
 /**
@@ -360,8 +335,8 @@ function procGroupMember(pid: number): { group: number; state: string } | undefi
   }
   const closing = stat.lastIndexOf(")");
   if (closing < 0) return undefined;
-  const fields = stat.slice(closing + 2).split(" "),
-    group = Number(fields[2]);
+  const fields = stat.slice(closing + 2).split(" ");
+  const group = Number(fields[2]);
   return fields[0] && Number.isSafeInteger(group) ? { group, state: fields[0] } : undefined;
 }
 
@@ -370,12 +345,8 @@ function trackedKey(agentId: string, operationId: string): string {
 }
 
 /**
- * The command's environment is the node's own, because it is the very same account's environment:
- * the spec asks the command to use the host's existing programs and environment. That deliberately
- * includes Mate's own MATE_* service variables — the same account can already read the node's
- * environment and its data directories, so Mate claims no confidentiality boundary here (ADR-0004)
- * and hides nothing behind an allow-list that would only look like one. HOME, USER, LOGNAME and PWD
- * do point at the Agent's own workspace instead of the node service's directories.
+ * Inherit the existing account's environment, including MATE_* variables (ADR-0004), and point
+ * HOME, USER, LOGNAME and PWD at the Agent's workspace and account identity.
  */
 function commandEnvironment(
   request: OrdinaryCommandRequest,

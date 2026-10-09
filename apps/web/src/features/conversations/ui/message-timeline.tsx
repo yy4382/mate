@@ -1,11 +1,37 @@
 import type { Channel, Message } from "../conversation-responses.js";
 import type { MessageWindow } from "../feed/message-window.js";
-import type { TaskCreationPosition, useMessageTasks } from "./message-tasks.js";
-import { MessageTasks } from "./message-tasks.js";
+import { MessageTasks, TaskCreationForm, type MessageTaskControls } from "./message-tasks.js";
 
-function timeLabel(value: number): string {
+function messageTimeLabel(value: number) {
   return new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(value);
 }
+
+function timelineAuthorName(author: Message["author"]) {
+  if (author.id === "mate-system") return "Mate";
+  return author.kind === "agent" ? "Agent" : "你";
+}
+
+function timelineAuthorInitial(author: Message["author"]) {
+  if (author.id === "mate-system") return "M";
+  return author.kind === "agent" ? "A" : "你";
+}
+
+type MessageTimelineProps = {
+  selected: Channel;
+  currentWindow: MessageWindow;
+  loadingLatest: boolean;
+  loadingOlder: boolean;
+  loadingMessages: boolean;
+  deepLinkError: string | null;
+  returnToLatest: () => Promise<void>;
+  loadOlder: () => Promise<void>;
+  openMenuId: string | null;
+  onToggleMenu: (id: string) => void;
+  onQuote: (message: Message) => void;
+  onReply: (message: Message) => void;
+  openThread: (message: Message) => Promise<void>;
+} & MessageTaskControls;
+
 export function MessageTimeline({
   selected,
   currentWindow,
@@ -16,31 +42,16 @@ export function MessageTimeline({
   returnToLatest,
   loadOlder,
   tasks,
-  taskForm,
+  taskCreation,
+  createTask,
+  cancelTaskCreation,
   openMenuId,
   onToggleMenu,
   onQuote,
   onReply,
   openThread,
   openTaskCreation,
-}: {
-  selected: Channel;
-  currentWindow: MessageWindow;
-  loadingLatest: boolean;
-  loadingOlder: boolean;
-  loadingMessages: boolean;
-  deepLinkError: string | null;
-  returnToLatest: () => Promise<void>;
-  loadOlder: () => Promise<void>;
-  tasks: ReturnType<typeof useMessageTasks>["tasks"];
-  taskForm: ReturnType<typeof useMessageTasks>["taskForm"];
-  openMenuId: string | null;
-  onToggleMenu: (id: string) => void;
-  onQuote: (message: Message) => void;
-  onReply: (message: Message) => void;
-  openThread: (message: Message) => Promise<void>;
-  openTaskCreation: (message: Message, position: TaskCreationPosition) => void;
-}) {
+}: MessageTimelineProps) {
   const currentMessages = currentWindow.messages;
   return (
     <div className="message-list" aria-live="polite" aria-label="消息历史">
@@ -88,23 +99,13 @@ export function MessageTimeline({
             tabIndex={0}
           >
             <div className="message-avatar" aria-hidden="true">
-              {message.author.id === "mate-system"
-                ? "M"
-                : message.author.kind === "agent"
-                  ? "A"
-                  : "你"}
+              {timelineAuthorInitial(message.author)}
             </div>
             <div className="message-content">
               <div className="message-meta">
-                <strong>
-                  {message.author.id === "mate-system"
-                    ? "Mate"
-                    : message.author.kind === "agent"
-                      ? "Agent"
-                      : "你"}
-                </strong>
+                <strong>{timelineAuthorName(message.author)}</strong>
                 <time dateTime={new Date(message.createdAt).toISOString()}>
-                  {timeLabel(message.createdAt)}
+                  {messageTimeLabel(message.createdAt)}
                 </time>
               </div>
               {message.quoteId && (
@@ -116,7 +117,14 @@ export function MessageTimeline({
               )}
               <p>{message.text}</p>
               <MessageTasks tasks={tasks} messageId={message.id} />
-              {taskForm(message, "timeline")}
+              {taskCreation?.message.id === message.id && taskCreation.position === "timeline" && (
+                <TaskCreationForm
+                  key={`${message.id}:timeline`}
+                  message={message}
+                  onCancel={cancelTaskCreation}
+                  onCreate={(title) => createTask({ message, position: "timeline", title })}
+                />
+              )}
               {!!message.replyCount && (
                 <button
                   type="button"
@@ -140,20 +148,10 @@ export function MessageTimeline({
               </button>
               {openMenuId === message.id && (
                 <div className="message-menu" role="group" aria-label="消息操作">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onQuote(message);
-                    }}
-                  >
+                  <button type="button" onClick={() => onQuote(message)}>
                     普通回复（引用）
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onReply(message);
-                    }}
-                  >
+                  <button type="button" onClick={() => onReply(message)}>
                     讨论串回复
                   </button>
                   <button type="button" onClick={() => void openThread(message)}>

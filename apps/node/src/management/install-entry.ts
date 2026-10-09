@@ -19,12 +19,12 @@ import {
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import locks from "fs-ext";
-import { nodePaths } from "./paths.js";
+import { lstatIfPresent, nodePaths } from "./paths.js";
 import {
   bundleEntrypoints,
   probeBundle,
   readBundle,
-  releaseVersion,
+  releaseVersionSchema,
   runningBundleDirectory,
   type BundleMetadata,
   verifyBundle,
@@ -85,29 +85,20 @@ export function installedEntryVersion(paths: ReturnType<typeof nodePaths>) {
   if (!target.startsWith(prefix) || !target.endsWith("/bin/mate"))
     throw new Error(`Non-Mate link conflicts with management entry: ${paths.entry}`);
   const version = target.slice(prefix.length, -"/bin/mate".length);
-  if (!releaseVersion.safeParse(version).success)
+  if (!releaseVersionSchema.safeParse(version).success)
     throw new Error("Invalid installed Mate entry target");
   return version;
-}
-
-export function lstatIfPresent(path: string) {
-  try {
-    return lstatSync(path);
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
-    throw error;
-  }
 }
 
 const installationStageMarker = "Mate node bootstrap staging\n";
 const temporaryId = "[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}";
 
 function assertPartialInstallation(stage: string, verifiedDirectory: string) {
-  const metadata = readBundle(verifiedDirectory),
-    files = new Set(["bundle.json", ...metadata.files.map((file) => file.path)]),
-    directories = new Set<string>();
-  const left = Buffer.allocUnsafe(64 * 1024),
-    right = Buffer.allocUnsafe(64 * 1024);
+  const metadata = readBundle(verifiedDirectory);
+  const files = new Set(["bundle.json", ...metadata.files.map((file) => file.path)]);
+  const directories = new Set<string>();
+  const left = Buffer.allocUnsafe(64 * 1024);
+  const right = Buffer.allocUnsafe(64 * 1024);
   for (const file of files) {
     let parent = dirname(file);
     while (parent !== ".") {
@@ -118,9 +109,9 @@ function assertPartialInstallation(stage: string, verifiedDirectory: string) {
   const visit = (part: string) => {
     checkManagedDirectory(join(stage, part));
     for (const name of readdirSync(join(stage, part))) {
-      const path = part ? `${part}/${name}` : name,
-        absolute = join(stage, path),
-        info = lstatSync(absolute);
+      const path = part ? `${part}/${name}` : name;
+      const absolute = join(stage, path);
+      const info = lstatSync(absolute);
       if (path === ".mate-install-stage") {
         if (
           !info.isFile() ||
@@ -143,8 +134,8 @@ function assertPartialInstallation(stage: string, verifiedDirectory: string) {
           constants.O_RDONLY | constants.O_NOFOLLOW,
         );
         try {
-          const copied = fstatSync(staged),
-            source = fstatSync(original);
+          const copied = fstatSync(staged);
+          const source = fstatSync(original);
           if (
             !copied.isFile() ||
             copied.uid !== process.getuid?.() ||

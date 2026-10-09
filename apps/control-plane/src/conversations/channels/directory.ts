@@ -9,11 +9,9 @@ import {
   type ConversationRow,
 } from "../rows.js";
 import { conversationToolDefinitions } from "../tools/contracts.js";
-
 import type Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-
 import type { ConversationEvents } from "../events.js";
 import { defineConversationTool, type ConversationToolActions } from "../tools/actions.js";
 
@@ -49,17 +47,17 @@ export class ConversationDirectory {
         );
         if (existing) return toChannel(existing);
 
-        const id = randomUUID(),
-          at = this.now(),
-          channel: OwnerChannel = {
-            id,
-            name: `${agent.name} 私信`,
-            description: `与 ${agent.name} 的所有者私信。`,
-            visibility: "private",
-            archived: false,
-            createdAt: at,
-            updatedAt: at,
-          };
+        const id = randomUUID();
+        const at = this.now();
+        const channel: OwnerChannel = {
+          id,
+          name: `${agent.name} 私信`,
+          description: `与 ${agent.name} 的所有者私信。`,
+          visibility: "private",
+          archived: false,
+          createdAt: at,
+          updatedAt: at,
+        };
         this.db
           .prepare(
             "INSERT INTO owner_channels(id,name,description,visibility,created_at,updated_at) VALUES(?,?,?,'private',?,?)",
@@ -186,9 +184,9 @@ export class ConversationDirectory {
     firstAgentId: string,
     secondAgentId: string,
   ): OwnerChannel {
-    const ordered = [firstAgentId, secondAgentId].sort(),
-      first = ordered[0],
-      second = ordered[1];
+    const ordered = [firstAgentId, secondAgentId].sort();
+    const first = ordered[0];
+    const second = ordered[1];
     if (first === undefined || second === undefined)
       throw new AgentToolRefusal("Direct-message target is not available");
     const existing = z
@@ -217,11 +215,11 @@ export class ConversationDirectory {
       );
     if (participants.length !== 2)
       throw new AgentToolRefusal("Direct-message target is not available");
-    const id = randomUUID(),
-      at = this.now(),
-      names = new Map<string, string>(participants.map((agent) => [agent.id, agent.name])),
-      firstName = names.get(first),
-      secondName = names.get(second);
+    const id = randomUUID();
+    const at = this.now();
+    const names = new Map(participants.map((agent) => [agent.id, agent.name]));
+    const firstName = names.get(first);
+    const secondName = names.get(second);
     if (firstName === undefined || secondName === undefined)
       throw new AgentToolRefusal("Direct-message target is not available");
     this.db
@@ -254,10 +252,7 @@ export class ConversationDirectory {
     return channel;
   }
 
-  /**
-   * The one conversation-metadata SELECT. Membership is always probed, so a reader can get
-   * the active-member flag without a second round trip.
-   */
+  /** Read conversation metadata and this Agent's membership together. */
   private readConversationRow(agentId: string, conversationId: string) {
     return conversationRowSchema.optional().parse(
       this.db
@@ -277,7 +272,7 @@ export class ConversationDirectory {
     );
   }
 
-  private toConversationFacts(row: ConversationRow): AgentConversationFacts {
+  private toConversationFacts(row: ConversationRow) {
     return {
       id: row.id,
       name: row.name,
@@ -291,10 +286,7 @@ export class ConversationDirectory {
    * Conversation metadata for a read. A public channel stays readable without membership;
    * a private conversation, or any direct message, is readable only to an active member.
    */
-  private readAgentConversation(
-    agentId: string,
-    conversationId: string,
-  ): AgentConversationFacts | undefined {
+  private readAgentConversation(agentId: string, conversationId: string) {
     const row = this.readConversationRow(agentId, conversationId);
     if (!row) return undefined;
     const readable =
@@ -320,7 +312,7 @@ export class ConversationDirectory {
     return this.toConversationFacts(row);
   }
 
-  isInviteableAgent(agentId: string): boolean {
+  isInvitableAgent(agentId: string): boolean {
     const row = this.db
       .prepare(
         `SELECT 1 FROM owner_agents a JOIN nodes n ON n.id=a.node_id
@@ -331,20 +323,16 @@ export class ConversationDirectory {
       .get(agentId);
     return !!row;
   }
+
   agentTools() {
     return {
-      "agents.list": defineConversationTool(
-        conversationToolDefinitions["agents.list"],
-        (run, toolCallId, args) => {
-          return { agents: this.listContactableAgents(run.agent_id) };
-        },
-      ),
+      "agents.list": defineConversationTool(conversationToolDefinitions["agents.list"], (run) => ({
+        agents: this.listContactableAgents(run.agent_id),
+      })),
 
       "conversations.list": defineConversationTool(
         conversationToolDefinitions["conversations.list"],
-        (run, toolCallId, args) => {
-          return { conversations: this.listAgentConversations(run.agent_id) };
-        },
+        (run) => ({ conversations: this.listAgentConversations(run.agent_id) }),
       ),
 
       "conversations.open_dm": defineConversationTool(
@@ -352,7 +340,7 @@ export class ConversationDirectory {
         (run, toolCallId, args) => {
           if (args.targetAgentId === run.agent_id)
             throw new AgentToolRefusal("An Agent cannot open a direct message with itself");
-          if (!this.isInviteableAgent(args.targetAgentId))
+          if (!this.isInvitableAgent(args.targetAgentId))
             throw new AgentToolRefusal("Direct-message target is not available");
           return this.toolActions.record(run, toolCallId, "conversations.open_dm", args, () =>
             this.getOrCreateAgentPeerDirectChannel(run.agent_id, args.targetAgentId),

@@ -3,18 +3,18 @@ import { afterEach, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import {
   cleanupAgentToolFixture,
-  setup,
+  createAgentToolFixture,
   authorizeModel,
   addAgent,
   waitForRuns,
 } from "../support/agent/agent-tool-fixture.js";
 
 it("discovers and invokes conversation tools through the shared Agent tools interface", async () => {
-  const { app, cookie, nodeId, socket } = await setup();
+  const { app, cookie, nodeId, socket } = await createAgentToolFixture();
   const agentId = addAgent(app, nodeId, "Tool caller");
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
   await authorizeModel(app, cookie);
-  app.chat.createMessage(direct.id, "Discover the available tools.");
+  app.chat.messages.createMessage({ channelId: direct.id, text: "Discover the available tools." });
   const run = (await waitForRuns(socket, 0, [agentId])).get(agentId)!;
   const identity = { runId: run.runId, nodeId, agentId, toolCallId: "shared-interface" };
   const listed = await app.tools.execute(identity, "tools.list", {});
@@ -55,11 +55,11 @@ it("discovers and invokes conversation tools through the shared Agent tools inte
 });
 
 it("preserves the complete model-visible catalog and rejects invalid input before any effect", async () => {
-  const { app, cookie, nodeId, socket } = await setup();
+  const { app, cookie, nodeId, socket } = await createAgentToolFixture();
   const agentId = addAgent(app, nodeId, "Catalog reader");
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
   await authorizeModel(app, cookie);
-  app.chat.createMessage(direct.id, "Inspect tools.");
+  app.chat.messages.createMessage({ channelId: direct.id, text: "Inspect tools." });
   const run = (await waitForRuns(socket, 0, [agentId])).get(agentId)!;
   const identity = { runId: run.runId, nodeId, agentId, toolCallId: "catalog" };
   const surface = JSON.parse(
@@ -69,7 +69,7 @@ it("preserves the complete model-visible catalog and rejects invalid input befor
     ok: true,
     result: { tools: surface.map(({ name, description }) => ({ name, description })) },
   });
-  const messagesBefore = app.chat.listMessages(direct.id, undefined, 50);
+  const messagesBefore = app.chat.timeline.listMessages(direct.id, undefined, 50);
   const sentBefore = socket.sent.length;
   for (const operation of surface) {
     expect(await app.tools.execute(identity, "tools.describe", { name: operation.name })).toEqual({
@@ -104,7 +104,7 @@ it("preserves the complete model-visible catalog and rejects invalid input befor
     await app.tools.execute(identity, "tools.call", { name: "agents.list", input: null }),
   ).toEqual({ ok: false, error: "Invalid tool input" });
   expect(socket.sent).toHaveLength(sentBefore);
-  expect(app.chat.listMessages(direct.id, undefined, 50)).toEqual(messagesBefore);
+  expect(app.chat.timeline.listMessages(direct.id, undefined, 50)).toEqual(messagesBefore);
 });
 
 afterEach(cleanupAgentToolFixture);

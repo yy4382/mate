@@ -59,10 +59,10 @@ export class WorkspaceAccess {
     },
   ): void {
     const identity = z
-        .looseObject({ home: z.string().nullable() })
-        .optional()
-        .parse(this.db.prepare("SELECT home FROM owner_agents WHERE id=?").get(access.agentId)),
-      paths = access.paths.map((path) => safeAuditPath(path, identity?.home ?? undefined));
+      .looseObject({ home: z.string().nullable() })
+      .optional()
+      .parse(this.db.prepare("SELECT home FROM owner_agents WHERE id=?").get(access.agentId));
+    const paths = access.paths.map((path) => safeAuditPath(path, identity?.home ?? undefined));
     this.db
       .prepare(
         `INSERT INTO owner_workspace_access_audit(
@@ -89,7 +89,7 @@ export class WorkspaceAccess {
 
   async runNodeOperation(request: ControlWorkspaceOperation, nodeId: string) {
     try {
-      const response = await this.nodes.workspaceOperation(nodeId, request);
+      const response = await this.nodes.operations.workspaceOperation(nodeId, request);
       if (!response.ok) throw mapNodeError(response.error);
       if (response.result.code !== 0) {
         throw confirmedFileFailure(
@@ -112,12 +112,14 @@ export class WorkspaceAccess {
       if (error instanceof NodeRequestError && error.code === "timeout")
         throw new WorkspaceError("operation_unknown", "文件操作结果尚未确认，不会自动重试。", 409);
       if (error instanceof NodeRequestError && error.code === "offline") {
-        const agentId = request.agentId,
-          agent = z
-            .looseObject({ node_id: z.string() })
-            .optional()
-            .parse(this.db.prepare("SELECT node_id FROM owner_agents WHERE id=?").get(agentId)),
-          node = agent ? this.nodes.list().find((item) => item.id === agent.node_id) : undefined;
+        const agentId = request.agentId;
+        const agent = z
+          .looseObject({ node_id: z.string() })
+          .optional()
+          .parse(this.db.prepare("SELECT node_id FROM owner_agents WHERE id=?").get(agentId));
+        const node = agent
+          ? this.nodes.list().find((item) => item.id === agent.node_id)
+          : undefined;
         throw new WorkspaceError(
           "node_offline",
           "节点当前离线，工作区暂不可用。",

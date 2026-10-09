@@ -1,5 +1,4 @@
 // @vitest-environment jsdom
-// @vitest-environment jsdom
 import { act, screen, waitFor } from "@testing-library/react";
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -77,9 +76,8 @@ it("does not count an already loaded thread reply again when its event is replay
 it("ignores a delayed thread response after switching channels", async () => {
   const root = message(publicChannel.id, "slow-root", "慢讨论根消息", "1");
   fixture.history.set(publicChannel.id, [root]);
-  let signalStarted!: () => void, release!: (value: Response) => void;
-  const started = new Promise<void>((resolve) => (signalStarted = resolve));
-  const response = new Promise<Response>((resolve) => (release = resolve));
+  const { promise: started, resolve: signalStarted } = Promise.withResolvers<void>();
+  const { promise: response, resolve: release } = Promise.withResolvers<Response>();
   fixture.nextThreadGate = { rootId: root.id, started, signalStarted, response };
   const user = await openChat();
   await user.click(await screen.findByRole("button", { name: "消息 慢讨论根消息 的操作" }));
@@ -96,9 +94,8 @@ it("keeps the newer thread when an earlier thread request completes last", async
   const first = message(publicChannel.id, "first-root", "第一条根消息", "1");
   const second = message(publicChannel.id, "second-root", "第二条根消息", "2");
   fixture.history.set(publicChannel.id, [first, second]);
-  let signalStarted!: () => void, release!: (value: Response) => void;
-  const started = new Promise<void>((resolve) => (signalStarted = resolve));
-  const response = new Promise<Response>((resolve) => (release = resolve));
+  const { promise: started, resolve: signalStarted } = Promise.withResolvers<void>();
+  const { promise: response, resolve: release } = Promise.withResolvers<Response>();
   fixture.nextThreadGate = { rootId: first.id, started, signalStarted, response };
   const user = await openChat();
   await user.click(await screen.findByRole("button", { name: "消息 第一条根消息 的操作" }));

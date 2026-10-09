@@ -13,7 +13,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   workspaceResultIsUnknown,
   type WorkspaceFailureCode,
-  type Operation,
+  type WorkspaceOperation,
   type AgentWorkspaceIdentity,
   type ControlWorkspaceOperation,
 } from "@mate/protocol";
@@ -61,7 +61,7 @@ const storedReceiptSchema = z.looseObject({
 });
 type StoredReceipt = z.infer<typeof storedReceiptSchema>;
 
-const mutatingKinds = new Set<Operation["kind"]>([
+const mutatingKinds = new Set<WorkspaceOperation["kind"]>([
   "write_bytes",
   "write",
   "edit",
@@ -69,12 +69,12 @@ const mutatingKinds = new Set<Operation["kind"]>([
   "move",
   "remove",
 ]);
-const readKinds = new Set<Operation["kind"]>([
+const readKinds = new Set<WorkspaceOperation["kind"]>([
   "workspace_list",
   "workspace_stat",
   "workspace_read_chunk",
 ]);
-const agentReadKinds = new Set<Operation["kind"]>([...readKinds, "read"]);
+const agentReadKinds = new Set<WorkspaceOperation["kind"]>([...readKinds, "read"]);
 
 /** Executes file requests as the node account after verifying the Agent workspace identity. */
 export class LinuxWorkspaceExecutor {
@@ -114,12 +114,12 @@ export class LinuxWorkspaceExecutor {
 
   execute(request: WorkspaceExecutionRequest, signal?: AbortSignal): Promise<ExecutionResult> {
     validateRequest(request);
-    const requestHash = workspaceReceiptRequestHash(request.agentId, request.operation),
-      // The mode decides which workspace a read runs in, so the same operation ID under another
-      // mode is another request and may not share this in-flight result. Durable receipts identify
-      // filesystem mutations by Agent and operation; read modes do not produce receipts.
-      key = `${request.mode}\0${request.operationId}`,
-      existingCall = this.active.get(key);
+    const requestHash = workspaceReceiptRequestHash(request.agentId, request.operation);
+    // The mode decides which workspace a read runs in, so the same operation ID under another
+    // mode is another request and may not share this in-flight result. Durable receipts identify
+    // filesystem mutations by Agent and operation; read modes do not produce receipts.
+    const key = `${request.mode}\0${request.operationId}`;
+    const existingCall = this.active.get(key);
     if (existingCall)
       return existingCall.requestHash === requestHash
         ? existingCall.promise
@@ -166,8 +166,8 @@ export class LinuxWorkspaceExecutor {
     requestHash: string,
     signal?: AbortSignal,
   ): Promise<ExecutionResult> {
-    const records = mutatingKinds.has(request.operation.kind),
-      existing = records ? this.readReceipt(request.operationId) : undefined;
+    const recordsReceipt = mutatingKinds.has(request.operation.kind);
+    const existing = recordsReceipt ? this.readReceipt(request.operationId) : undefined;
     if (existing) {
       if (existing.agentId !== request.agentId || existing.requestHash !== requestHash)
         return failed(
@@ -206,7 +206,7 @@ export class LinuxWorkspaceExecutor {
         "workspace_unavailable",
         "identity_mismatch: Agent workspace does not match its stable ID",
       );
-    if (records)
+    if (recordsReceipt)
       this.writeReceipt({
         operationId: request.operationId,
         agentId: request.agentId,
@@ -218,12 +218,12 @@ export class LinuxWorkspaceExecutor {
 
     let result: ExecutionResult;
     try {
-      const sharedRead = agentReadRoot(
-        request.mode,
-        request.operation,
-        identity.workspace,
-        resolve(this.homeRoot),
-      );
+      const readWorkspace = selectAgentReadWorkspace({
+        mode: request.mode,
+        operation: request.operation,
+        workspace: identity.workspace,
+        workspaceRoot: resolve(this.homeRoot),
+      });
       result = await this.createBackend({
         username: identity.username,
         uid: identity.uid,
@@ -231,8 +231,8 @@ export class LinuxWorkspaceExecutor {
         home: identity.workspace,
       }).execute(
         {
-          root: sharedRead?.root ?? identity.workspace,
-          operation: sharedRead?.operation ?? request.operation,
+          root: readWorkspace?.root ?? identity.workspace,
+          operation: readWorkspace?.operation ?? request.operation,
           timeoutMs: 60_000,
           agentId: request.agentId,
         },
@@ -243,7 +243,7 @@ export class LinuxWorkspaceExecutor {
         "operation_unknown",
         "operation_unknown: The node could not confirm the file operation result",
       );
-      if (records)
+      if (recordsReceipt)
         this.writeReceipt({
           operationId: request.operationId,
           agentId: request.agentId,
@@ -256,14 +256,13 @@ export class LinuxWorkspaceExecutor {
       return result;
     }
 
-    if (records && this.beforeReceipt) await this.beforeReceipt();
-    if (records)
+    if (recordsReceipt && this.beforeReceipt) await this.beforeReceipt();
+    if (recordsReceipt)
       this.writeReceipt({
         operationId: request.operationId,
         agentId: request.agentId,
         requestHash,
-        state:
-          result.code === 0 ? "succeeded" : workspaceResultIsUnknown(result) ? "unknown" : "failed",
+        state: receiptState(result),
         result,
         revision: 2,
         updatedAt: this.now(),
@@ -281,8 +280,8 @@ export class LinuxWorkspaceExecutor {
   }
 
   private writeReceipt(receipt: StoredReceipt): void {
-    const path = this.receiptPath(receipt.operationId),
-      temp = `${path}.${process.pid}.${this.now()}.tmp`;
+    const path = this.receiptPath(receipt.operationId);
+    const temp = `${path}.${process.pid}.${this.now()}.tmp`;
     writeFileSync(temp, `${JSON.stringify(receipt)}\n`, { flag: "wx", mode: 0o600 });
     const fd = openSync(temp, "r");
     try {
@@ -305,39 +304,33 @@ export class LinuxWorkspaceExecutor {
 }
 
 /**
- * Where one Agent read operation really runs, and the path it runs with. An Agent's file tools are
- * not confined to its own directory: Mate asks the Agent in its prompt not to browse a peer's
- * workspace casually, and then leaves that judgement to it, so a read of another Agent's workspace
- * runs with the shared workspace root instead of being refused.
+ * Select the root and relative path for an Agent read. Peer reads use the shared workspace root
+ * under ADR-0004; only provisioned Agent directories named by `agentWorkspacePath` are selected,
+ * never the root itself or unrelated entries. A path resolving inside the Agent's own workspace
+ * keeps that root regardless of its original spelling.
  *
- * Reachable directories are exactly the ones the node provisions under that root: the Agent's own
- * workspace, and a peer workspace named by its stable Agent ID (`agentWorkspacePath`). The root
- * itself and anything else under it are not a workspace, so they stay refused even if an operator
- * points the root at a directory that also holds the node's own files. Paths are handed on relative
- * to the root they run under, so a path that resolves inside the Agent's own workspace is not
- * refused for the spelling it arrived in.
- *
- * Only reads move. Writing, publishing and the owner's preview keep their own root: the owner's
- * preview of a selected Agent must not leave that Agent's directory, and a file change must stay
- * inside the workspace whose operation receipt records it. Mate's confinement stays the file
- * helper's job; this only chooses which workspace a permitted read runs in.
+ * Writing, publishing and owner preview retain the selected Agent's root. This function selects
+ * the read workspace; the file helper checks the paths within it.
  */
-function agentReadRoot(
-  mode: WorkspaceMode,
-  operation: Operation,
-  workspace: string,
-  workspaceRoot: string,
-): { root: string; operation: Operation } | undefined {
+function selectAgentReadWorkspace({
+  mode,
+  operation,
+  workspace,
+  workspaceRoot,
+}: Pick<WorkspaceExecutionRequest, "mode" | "operation"> & {
+  workspace: string;
+  workspaceRoot: string;
+}): { root: string; operation: WorkspaceOperation } | undefined {
   if (mode !== "agent_read" || !agentReadKinds.has(operation.kind)) return undefined;
-  const target = resolve(workspace, operation.path),
-    own = within(workspace, target);
+  const target = resolve(workspace, operation.path);
+  const own = within(workspace, target);
   if (own) {
     const ownPath = relative(workspace, target);
     return { root: workspace, operation: { ...operation, path: ownPath === "" ? "." : ownPath } };
   }
   if (!within(workspaceRoot, target)) return undefined;
-  const peerPath = relative(workspaceRoot, target),
-    peerName = peerPath.split(sep)[0] ?? "";
+  const peerPath = relative(workspaceRoot, target);
+  const peerName = peerPath.split(sep)[0] ?? "";
   if (!agentDirectoryName.test(peerName) || !isWorkspaceDirectory(join(workspaceRoot, peerName)))
     return undefined;
   return { root: workspaceRoot, operation: { ...operation, path: peerPath } };
@@ -374,6 +367,11 @@ function validateRequest(request: WorkspaceExecutionRequest): void {
     !readKinds.has(request.operation.kind)
   )
     throw new Error("Owner browsing and file publishing allow read operations only");
+}
+
+function receiptState(result: ExecutionResult) {
+  if (result.code === 0) return "succeeded";
+  return workspaceResultIsUnknown(result) ? "unknown" : "failed";
 }
 
 function failed(errorCode: WorkspaceFailureCode, stderr: string): ExecutionResult {

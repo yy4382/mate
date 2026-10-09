@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import Database from "better-sqlite3";
 import { expect, it } from "vitest";
 import {
@@ -86,13 +86,17 @@ it("reports weighted Agent usage through owner HTTP across model and service res
       `data: ${JSON.stringify({ type: "response.output_item.done", output_index: 0, item: output[0] })}\n\n`,
     );
     response.end(
-      `data: ${JSON.stringify({ type: "response.completed", response: { id: `response-${requests}`, status: "completed", output, usage } })}\n\n`,
+      `data: ${JSON.stringify({
+        type: "response.completed",
+        response: { id: `response-${requests}`, status: "completed", output, usage },
+      })}\n\n`,
     );
   });
   await new Promise<void>((done) => provider.listen(0, "127.0.0.1", done));
   const address = provider.address();
   if (!address || typeof address === "string") throw new Error("No provider port");
-  let control: ProcessOutput | undefined, node: ProcessOutput | undefined;
+  let control: ProcessOutput | undefined;
+  let node: ProcessOutput | undefined;
   let db: Database.Database | undefined;
   try {
     control = startControlPlane(directory);
@@ -153,10 +157,10 @@ it("reports weighted Agent usage through owner HTTP across model and service res
     const completed = async (count: number) =>
       eventually(() => {
         const row = db!
-          .prepare(
+          .prepare<[string], { n: number }>(
             "SELECT COUNT(*) AS n FROM owner_agent_runs WHERE agent_id=? AND state='completed'",
           )
-          .get(agentId) as { n: number };
+          .get(agentId)!;
         return row.n === count ? true : undefined;
       }, `completed run ${count}`);
     await api(`/api/owner/channels/${dm}/messages`, { text: "first" });
@@ -224,10 +228,10 @@ it("reports weighted Agent usage through owner HTTP across model and service res
     });
     await eventually(() => {
       const row = db!
-        .prepare(
+        .prepare<[string], { n: number }>(
           "SELECT COUNT(*) AS n FROM owner_agent_session_records WHERE agent_id=? AND payload_json LIKE '%\"modelRequest\":true%'",
         )
-        .get(agentId) as { n: number };
+        .get(agentId)!;
       return row.n >= 6 ? true : undefined;
     }, "failed response usage commit");
     const failed = await api(usagePath, undefined, "GET");
@@ -238,10 +242,10 @@ it("reports weighted Agent usage through owner HTTP across model and service res
     await api(`/api/owner/channels/${dm}/messages`, { text: "complete failure without usage" });
     await eventually(() => {
       const row = db!
-        .prepare(
+        .prepare<[string], { n: number }>(
           "SELECT COUNT(*) AS n FROM owner_agent_session_records WHERE agent_id=? AND usage_json IS NOT NULL AND kind='message'",
         )
-        .get(agentId) as { n: number };
+        .get(agentId)!;
       return row.n >= 7 ? true : undefined;
     }, "complete failure without usage commit");
     const noUsage = await api(usagePath, undefined, "GET");
@@ -251,8 +255,10 @@ it("reports weighted Agent usage through owner HTTP across model and service res
     await api(`/api/owner/channels/${dm}/messages`, { text: "network failure before a response" });
     await eventually(() => {
       const row = db!
-        .prepare("SELECT COUNT(*) AS n FROM owner_agent_runs WHERE agent_id=? AND state='failed'")
-        .get(agentId) as { n: number };
+        .prepare<[string], { n: number }>(
+          "SELECT COUNT(*) AS n FROM owner_agent_runs WHERE agent_id=? AND state='failed'",
+        )
+        .get(agentId)!;
       return requests >= 8 && row.n >= 3 ? true : undefined;
     }, "unconfirmed transport failure");
     const unconfirmed = await api(usagePath, undefined, "GET");

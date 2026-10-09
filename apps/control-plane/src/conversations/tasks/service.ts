@@ -4,26 +4,26 @@ import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import type { CurrentAgentToolRun } from "../../runtime/tools/entry.js";
+import type { AgentConversationPosition } from "../contracts.js";
 import { AgentToolRefusal } from "../errors.js";
 import { taskDraftRowSchema, taskRowSchema, toTask, type TaskDraftRow } from "../rows.js";
 import { defineConversationTool, type ConversationToolActions } from "../tools/actions.js";
-import { conversationToolDefinitions, type TaskToolRequest } from "../tools/contracts.js";
+import {
+  conversationToolDefinitions,
+  draftStateAfterReview,
+  type TaskToolRequest,
+} from "../tools/contracts.js";
 
-/** Conversation facts needed by task/reminder rules; all callbacks are synchronous. */
+/** Conversation facts needed by task rules; all callbacks are synchronous. */
 export interface TaskConversationAccess {
   requireMembership(agentId: string, channelId: string): void;
   isMember(agentId: string, channelId: string): boolean;
-  inspectPositionChanges(
-    agentId: string,
-    inputEndSequence: number,
-    channelId: string,
-    rootId?: string,
-  ): { changes: OwnerMessage[] };
+  inspectPositionChanges(position: AgentConversationPosition): { changes: OwnerMessage[] };
   recordTaskEvent(kind: string, channelId: string, task: OwnerTask): void;
 }
 
 /** Every task projection derives its channel from its anchor message. */
-const taskSelection = `SELECT t.*,a.name AS owner_agent_name,m.channel_id
+const taskProjectionSql = `SELECT t.*,a.name AS owner_agent_name,m.channel_id
          FROM owner_tasks t
          JOIN owner_messages m ON m.id=t.message_id
          LEFT JOIN owner_agents a ON a.id=t.owner_agent_id`;
@@ -37,12 +37,17 @@ export class TaskService {
     private readonly toolActions: ConversationToolActions,
   ) {}
 
-  createTaskForMessage(
-    messageId: string,
-    actorKind: OwnerPrincipalKind,
-    actorId: string,
-    title: string,
-  ): OwnerTask {
+  createTaskForMessage({
+    messageId,
+    actorKind,
+    actorId,
+    title,
+  }: {
+    messageId: string;
+    actorKind: OwnerPrincipalKind;
+    actorId: string;
+    title: string;
+  }): OwnerTask {
     return this.db
       .transaction(() => {
         const message = z
@@ -59,7 +64,7 @@ export class TaskService {
         if (actorKind === "agent")
           this.conversations.requireMembership(actorId, message.channel_id);
         const id = this.insertTask(message.id, title, this.now());
-        this.taskEvent(id, actorKind, actorId, "created", "");
+        this.recordTaskActivity({ taskId: id, actorKind, actorId, kind: "created", note: "" });
         const task = this.readTask(id)!;
         this.conversations.recordTaskEvent("task.created", message.channel_id, task);
         return task;
@@ -68,7 +73,7 @@ export class TaskService {
   }
 
   /** Insert one independent, unclaimed task; callers commit its activity with the task. */
-  private insertTask(messageId: string, title: string, at: number): string {
+  private insertTask(messageId: string, title: string, at: number) {
     const id = randomUUID();
     this.db
       .prepare(
@@ -81,19 +86,21 @@ export class TaskService {
   readTask(id: string): OwnerTask | undefined {
     const row = taskRowSchema
       .optional()
-      .parse(this.db.prepare(`${taskSelection} WHERE t.id=?`).get(id));
+      .parse(this.db.prepare(`${taskProjectionSql} WHERE t.id=?`).get(id));
     return row && toTask(row);
   }
 
   tasksForMessage(messageId: string): OwnerTask[] {
     return taskRowSchema
       .array()
-      .parse(this.db.prepare(`${taskSelection} WHERE t.message_id=? ORDER BY t.id`).all(messageId))
+      .parse(
+        this.db.prepare(`${taskProjectionSql} WHERE t.message_id=? ORDER BY t.id`).all(messageId),
+      )
       .map(toTask);
   }
 
   /** Only additions to the ID set invalidate a create decision; task edits do not. */
-  private taskSnapshot(tasks: OwnerTask[]): string {
+  private taskSnapshot(tasks: OwnerTask[]) {
     return createHash("sha256")
       .update(JSON.stringify(tasks.map((task) => task.id)))
       .digest("hex");
@@ -102,7 +109,7 @@ export class TaskService {
   listTasks(): OwnerTask[] {
     return taskRowSchema
       .array()
-      .parse(this.db.prepare(`${taskSelection} ORDER BY t.updated_at DESC,t.id DESC`).all())
+      .parse(this.db.prepare(`${taskProjectionSql} ORDER BY t.updated_at DESC,t.id DESC`).all())
       .map(toTask);
   }
 
@@ -114,10 +121,7 @@ export class TaskService {
       .all(taskId);
   }
 
-  private taskDraftPosition(draft: TaskDraftRow): {
-    channelId: string;
-    rootId: string | undefined;
-  } {
+  private taskDraftPosition(draft: TaskDraftRow) {
     const input = z
       .looseObject({ messageId: z.string().optional() })
       .parse(JSON.parse(draft.input_json));
@@ -133,15 +137,15 @@ export class TaskService {
     return { channelId: message.channel_id, rootId: message.root_id ?? undefined };
   }
 
-  private unreviewedTaskChanges(draft: TaskDraftRow): OwnerMessage[] {
+  private unreviewedTaskChanges(draft: TaskDraftRow) {
     const position = this.taskDraftPosition(draft);
     return this.conversations
-      .inspectPositionChanges(
-        draft.agent_id,
-        draft.input_end_seq,
-        position.channelId,
-        position.rootId,
-      )
+      .inspectPositionChanges({
+        agentId: draft.agent_id,
+        inputEndSequence: draft.input_end_seq,
+        channelId: position.channelId,
+        rootId: position.rootId,
+      })
       .changes.filter(
         (message) =>
           !this.db
@@ -171,7 +175,7 @@ export class TaskService {
     }
   }
 
-  private mutateTask(agentId: string, task: OwnerTask, request: TaskToolRequest): OwnerTask {
+  private mutateTask(agentId: string, task: OwnerTask, request: TaskToolRequest) {
     const { name: action, input } = request;
     const current = this.readTask(task.id);
     if (
@@ -181,9 +185,9 @@ export class TaskService {
     )
       throw new AgentToolRefusal("Task version changed; read the task again");
     this.conversations.requireMembership(agentId, current.channelId);
-    let owner = current.ownerAgentId,
-      status = current.status,
-      title = current.title;
+    let owner = current.ownerAgentId;
+    let status = current.status;
+    let title = current.title;
     if (action === "tasks.claim") {
       if (owner && owner !== agentId) throw new AgentToolRefusal("Task is already claimed");
       owner = agentId;
@@ -213,19 +217,31 @@ export class TaskService {
         "UPDATE owner_tasks SET title=?,status=?,owner_agent_id=?,version=version+1,updated_at=? WHERE id=?",
       )
       .run(title, status, owner, this.now(), task.id);
-    this.taskEvent(task.id, "agent", agentId, action.slice(6), "note" in input ? input.note : "");
+    this.recordTaskActivity({
+      taskId: task.id,
+      actorKind: "agent",
+      actorId: agentId,
+      kind: action.slice(6),
+      note: "note" in input ? input.note : "",
+    });
     const updated = this.readTask(task.id)!;
     this.conversations.recordTaskEvent("task.updated", task.channelId, updated);
     return updated;
   }
 
-  private taskEvent(
-    taskId: string,
-    actorKind: OwnerPrincipalKind,
-    actorId: string,
-    kind: string,
-    note: string,
-  ): void {
+  private recordTaskActivity({
+    taskId,
+    actorKind,
+    actorId,
+    kind,
+    note,
+  }: {
+    taskId: string;
+    actorKind: OwnerPrincipalKind;
+    actorId: string;
+    kind: string;
+    note: string;
+  }) {
     this.db
       .prepare(
         "INSERT INTO owner_task_events(task_id,actor_kind,actor_id,kind,note,created_at) VALUES(?,?,?,?,?,?)",
@@ -269,12 +285,12 @@ export class TaskService {
         );
       const rootId = anchor?.root_id ?? undefined;
       if (!args.draftId) {
-        const { changes } = this.conversations.inspectPositionChanges(
-          run.agent_id,
-          run.input_end_seq,
+        const { changes } = this.conversations.inspectPositionChanges({
+          agentId: run.agent_id,
+          inputEndSequence: run.input_end_seq,
           channelId,
           rootId,
-        );
+        });
         if (changes.length) {
           const draftId = randomUUID();
           this.db
@@ -333,12 +349,12 @@ export class TaskService {
             : request.input.taskSnapshot !== taskSnapshot
         )
           return { status: "tasks_changed", ...taskFacts };
-        const created = this.createTaskForMessage(
-          messageId!,
-          "agent",
-          run.agent_id,
-          request.input.title,
-        );
+        const created = this.createTaskForMessage({
+          messageId: messageId!,
+          actorKind: "agent",
+          actorId: run.agent_id,
+          title: request.input.title,
+        });
         result = {
           status: "created",
           task: created,
@@ -359,33 +375,28 @@ export class TaskService {
     return {
       "tasks.create": defineConversationTool(
         conversationToolDefinitions["tasks.create"],
-        (run, toolCallId, args) => {
-          return this.executeTaskChange(run, toolCallId, { name: "tasks.create", input: args });
-        },
+        (run, toolCallId, args) =>
+          this.executeTaskChange(run, toolCallId, { name: "tasks.create", input: args }),
       ),
       "tasks.claim": defineConversationTool(
         conversationToolDefinitions["tasks.claim"],
-        (run, toolCallId, args) => {
-          return this.executeTaskChange(run, toolCallId, { name: "tasks.claim", input: args });
-        },
+        (run, toolCallId, args) =>
+          this.executeTaskChange(run, toolCallId, { name: "tasks.claim", input: args }),
       ),
       "tasks.yield": defineConversationTool(
         conversationToolDefinitions["tasks.yield"],
-        (run, toolCallId, args) => {
-          return this.executeTaskChange(run, toolCallId, { name: "tasks.yield", input: args });
-        },
+        (run, toolCallId, args) =>
+          this.executeTaskChange(run, toolCallId, { name: "tasks.yield", input: args }),
       ),
       "tasks.transfer": defineConversationTool(
         conversationToolDefinitions["tasks.transfer"],
-        (run, toolCallId, args) => {
-          return this.executeTaskChange(run, toolCallId, { name: "tasks.transfer", input: args });
-        },
+        (run, toolCallId, args) =>
+          this.executeTaskChange(run, toolCallId, { name: "tasks.transfer", input: args }),
       ),
       "tasks.update": defineConversationTool(
         conversationToolDefinitions["tasks.update"],
-        (run, toolCallId, args) => {
-          return this.executeTaskChange(run, toolCallId, { name: "tasks.update", input: args });
-        },
+        (run, toolCallId, args) =>
+          this.executeTaskChange(run, toolCallId, { name: "tasks.update", input: args }),
       ),
       "tasks.review": defineConversationTool(
         conversationToolDefinitions["tasks.review"],
@@ -420,16 +431,7 @@ export class TaskService {
               );
             if (args.choice === "revise" && !args.revisedInput)
               throw new AgentToolRefusal("Revised task input is required");
-            const state =
-              args.choice === "revise"
-                ? "editing"
-                : args.choice === "keep"
-                  ? "kept"
-                  : args.choice === "abandon"
-                    ? "abandoned"
-                    : args.choice === "defer"
-                      ? "deferred"
-                      : "ready";
+            const state = draftStateAfterReview(args.choice);
             this.recordTaskDraftReviews(draft.id, changes);
             this.db
               .prepare(

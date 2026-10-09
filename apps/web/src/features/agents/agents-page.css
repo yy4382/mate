@@ -1,3 +1,4 @@
+/* Page shell and shared headings */
 .agents-page-shell {
   align-items: start;
   padding-block: 32px;
@@ -33,6 +34,7 @@
   line-height: 1.6;
 }
 
+/* Agent creation and model credential forms */
 .agent-form-section {
   margin-top: 30px;
   padding-top: 22px;
@@ -122,6 +124,7 @@
   margin-top: 2px;
 }
 
+/* Agent list, status and invitations */
 .agent-list-heading {
   margin-top: 32px;
   padding-bottom: 12px;
@@ -249,6 +252,7 @@
   background: #f7f8f3;
 }
 
+/* Runtime identity and Agent actions */
 .agent-linux-identity {
   display: grid;
   gap: 9px;
@@ -289,6 +293,7 @@
   margin-top: 16px;
 }
 
+/* Activity timeline */
 .agent-activity {
   margin-top: 14px;
 }
@@ -324,6 +329,7 @@
   white-space: pre-wrap;
 }
 
+/* Mobile layout */
 @media (max-width: 580px) {
   .agents-card {
     padding: 28px 22px;

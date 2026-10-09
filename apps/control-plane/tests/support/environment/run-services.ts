@@ -159,9 +159,9 @@ export function startNode(options: {
   /** The node's ordinary-command time bound; tests that need a command to outlive the node raise it. */
   commandTimeoutMs?: number;
 }): ProcessOutput {
-  const clientModule = import.meta.resolve("@mate/node"),
-    runtimeModule = import.meta.resolve("@mate/node/process-operation-runtime"),
-    runner = `
+  const clientModule = import.meta.resolve("@mate/node");
+  const runtimeModule = import.meta.resolve("@mate/node/process-operation-runtime");
+  const runner = `
       const { runLinuxNodeWithTestDependencies } = await import(${JSON.stringify(clientModule)});
       const { openNodeProcessOperations } = await import(${JSON.stringify(runtimeModule)});
       const { LinuxWorkspaceExecutor } = await import(${JSON.stringify(import.meta.resolve("@mate/node/workspace-execution"))});
@@ -178,8 +178,7 @@ export function startNode(options: {
           dataDirectory: process.env.MATE_NODE_DATA_DIR,
           agentWorkspaceRoot: process.env.MATE_NODE_AGENT_WORKSPACE_ROOT,
           pairingToken: process.env.MATE_NODE_PAIRING_TOKEN,
-          // A slow heartbeat keeps this test about command execution: the control plane's periodic
-          // mid-flight reconciliation belongs to the recovery ticket, not here.
+          // A slow heartbeat keeps this fixture focused on command execution.
           heartbeatIntervalMs: 30_000,
           heartbeatTimeoutMs: 60_000,
         }, controller.signal, {

@@ -3,15 +3,11 @@ import { expect, it } from "vitest";
 import type { AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
 import { AgentLoop } from "../../src/runtime/loop.js";
 import { SessionCompaction } from "../../src/runtime/session/compaction.js";
-import type {
-  ModelContextMessage,
-  SessionCommit,
-  SessionCheckpoint,
-} from "../../src/runtime/session/record.js";
+import type { ModelContextMessage, SessionCommit } from "../../src/runtime/session/record.js";
 import { answer, model, scripted } from "../support/agent/pi.js";
 import { respond } from "../support/agent/agent-loop.js";
 
-// Frozen from b0dfb0dc before extracting prompts. Synthetic content only; omit clock/UUID fields.
+// Request snapshots contain synthetic content and omit clock/UUID fields.
 it.each([false, true])(
   "preserves the full normal request and configuration (recovery=%s)",
   async (recovery) => {
@@ -51,12 +47,14 @@ it.each([false, true])(
             modelId: "gpt-4o-mini",
             apiKey: "synthetic-key",
           },
-          () => true,
-          (entry) => {
-            commits.push(entry);
-            return true;
+          {
+            isCurrent: () => true,
+            appendSessionEntry: (entry) => {
+              commits.push(entry);
+              return true;
+            },
+            executeTool: async () => ({ ok: true, result: {} }),
           },
-          async () => ({ ok: true, result: {} }),
           {
             modelForRun: (selected) => ({
               ...selected,
@@ -86,12 +84,16 @@ it.each([false, true])(
 it.each(["initial", "update", "prefix"] as const)(
   "preserves %s summary requests and restored context",
   async (mode) => {
-    const user = (content: string): AgentMessage => ({ role: "user", content, timestamp: 3 });
+    const user = (content: string): ModelContextMessage["message"] => ({
+      role: "user",
+      content,
+      timestamp: 3,
+    });
     const retained =
       mode === "prefix"
         ? answer([{ type: "text", text: "r".repeat(17000) }])
         : user("r".repeat(17000));
-    const messages = [
+    const messages: ModelContextMessage["message"][] = [
       user("synthetic work"),
       answer(
         [
@@ -113,15 +115,15 @@ it.each(["initial", "update", "prefix"] as const)(
         content: [{ type: "text", text: "x".repeat(2020) }],
         isError: false,
         timestamp: 4,
-      } as AgentMessage,
+      },
       ...(mode === "prefix" ? [user("current turn")] : []),
       retained,
     ];
-    const entries = messages.map((message, i) => ({
+    const entries: ModelContextMessage[] = messages.map((message, i) => ({
       id: `entry-${i}`,
       actionScopeId: "scope",
       message,
-    })) as ModelContextMessage[];
+    }));
     if (mode === "update")
       entries[0]!.checkpoint = {
         kind: "compaction",
@@ -170,7 +172,7 @@ it.each(["initial", "update", "prefix"] as const)(
         ),
     ).toMatchSnapshot();
     expect(transformed.slice(2)).toEqual([retained]);
-    const checkpoint = commits.find((entry) => entry.kind === "compaction") as SessionCheckpoint;
+    const checkpoint = commits.find((entry) => entry.kind === "compaction")!;
     expect(checkpoint.firstKeptEntryId).toBe(entries.at(-1)!.id);
     expect(checkpoint.throughEntryId).toBe(entries.at(-1)!.id);
     const restored = new SessionCompaction(

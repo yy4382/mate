@@ -5,13 +5,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 import { expect } from "vitest";
-import { createControlPlaneApp } from "../../../src/http.js";
-import type { NodeSocket } from "../../../src/nodes/directory.js";
+import { createControlPlane } from "../../../src/application.js";
+import type { NodeSocket } from "../../../src/nodes/transport.js";
 import type { NodeControlMessage } from "@mate/protocol";
 
 const password = "agent-tool-fixture-owner-password";
 const fixtures: Array<{
-  app: ReturnType<typeof createControlPlaneApp>;
+  app: ReturnType<typeof createControlPlane>;
   directory: string;
   db: InstanceType<typeof Database>;
 }> = [];
@@ -35,7 +35,7 @@ export class FakeNodeSocket implements NodeSocket {
   terminate() {}
 }
 
-export async function setup() {
+export async function createAgentToolFixture() {
   const directory = mkdtempSync(join(tmpdir(), "mate-agent-tool-fixture-"));
   chmodSync(directory, 0o700);
   const passwordFile = join(directory, "owner-password");
@@ -43,13 +43,13 @@ export async function setup() {
   const app = toolTestApp({ dataDir: join(directory, "control-plane"), passwordFile });
   const db = new Database(join(directory, "control-plane", "control-plane.sqlite"));
   fixtures.push({ app, directory, db });
-  const login = await app.request("/api/auth/login", {
+  const login = await app.http.request("/api/auth/login", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ password }),
   });
   const cookie = login.headers.get("set-cookie")!.split(";", 1)[0]!;
-  const token = await app.request("/api/owner/nodes/pairing-tokens", {
+  const token = await app.http.request("/api/owner/nodes/pairing-tokens", {
     method: "POST",
     headers: { cookie },
   });
@@ -79,10 +79,10 @@ export async function setup() {
 }
 
 export async function authorizeModel(
-  app: ReturnType<typeof createControlPlaneApp>,
+  app: ReturnType<typeof createControlPlane>,
   cookie: string,
 ): Promise<void> {
-  const response = await app.request("/api/owner/model-credentials/openai", {
+  const response = await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-direct-claim-key" }),
@@ -92,7 +92,7 @@ export async function authorizeModel(
 
 /** Every Agent on one node runs under that node's single ordinary account. */
 export function addAgent(
-  app: ReturnType<typeof createControlPlaneApp>,
+  app: ReturnType<typeof createControlPlane>,
   nodeId: string,
   name: string,
 ): string {

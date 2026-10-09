@@ -1,19 +1,13 @@
-import { agentDraftRowSchema, type AgentDraftRow } from "../rows.js";
-
 import type { OwnerMessage } from "@mate/protocol/owner";
+import type { AgentConversationPosition } from "../contracts.js";
 import { AgentToolRefusal } from "../errors.js";
-import { messageRowSchema, toMessage } from "../rows.js";
-
-import { conversationToolDefinitions } from "../tools/contracts.js";
-
+import { agentDraftRowSchema, messageRowSchema, toMessage, type AgentDraftRow } from "../rows.js";
+import { conversationToolDefinitions, draftStateAfterReview } from "../tools/contracts.js";
 import type Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-
 import { defineConversationTool, type ConversationToolActions } from "../tools/actions.js";
-
 import type { ConversationDirectory } from "../channels/directory.js";
-
 import type { MessageWriter } from "./writer.js";
 
 export class ConversationAttention {
@@ -38,14 +32,16 @@ export class ConversationAttention {
       .parse(
         this.db
           .prepare(
-            `SELECT a.message_id AS messageId,a.unread,a.seen,a.deferred,a.muted,a.presented FROM owner_agent_message_attention a JOIN owner_messages m ON m.id=a.message_id WHERE a.agent_id=? AND m.channel_id=? ORDER BY m.order_seq`,
+            `SELECT a.message_id AS messageId,a.unread,a.seen,a.deferred,a.muted,a.presented
+             FROM owner_agent_message_attention a JOIN owner_messages m ON m.id=a.message_id
+             WHERE a.agent_id=? AND m.channel_id=? ORDER BY m.order_seq`,
           )
           .all(agentId, channelId),
       );
   }
 
   readPersistedAgentDraft(agentId: string, id: string) {
-    const row = z
+    return z
       .looseObject({ state: z.string(), text: z.string(), channelId: z.string() })
       .optional()
       .parse(
@@ -55,7 +51,6 @@ export class ConversationAttention {
           )
           .get(id, agentId),
       );
-    return row;
   }
 
   private validateMessagePosition(channelId: string, rootId?: string, quoteId?: string): void {
@@ -71,12 +66,12 @@ export class ConversationAttention {
   }
 
   /** Shared per-message freshness check for an authorized Agent send or task change. */
-  inspectAgentPositionChanges(
-    agentId: string,
-    inputEndSequence: number,
-    channelId: string,
-    rootId?: string,
-  ): { changes: OwnerMessage[] } {
+  inspectAgentPositionChanges({
+    agentId,
+    inputEndSequence,
+    channelId,
+    rootId,
+  }: AgentConversationPosition): { changes: OwnerMessage[] } {
     return {
       changes: this.unpresentedPositionMessages(agentId, inputEndSequence, channelId, rootId),
     };
@@ -175,6 +170,7 @@ export class ConversationAttention {
     if (!row) throw new AgentToolRefusal("Draft is not available");
     return row;
   }
+
   agentTools(messages: MessageWriter) {
     return {
       "attention.list": defineConversationTool(
@@ -184,7 +180,10 @@ export class ConversationAttention {
           return {
             items: this.db
               .prepare(
-                `SELECT a.message_id AS messageId,a.unread,a.seen,a.deferred,a.muted,a.presented,m.order_seq AS messageOrder,m.root_id AS rootId FROM owner_agent_message_attention a JOIN owner_messages m ON m.id=a.message_id WHERE a.agent_id=? AND m.channel_id=? ORDER BY m.order_seq`,
+                `SELECT a.message_id AS messageId,a.unread,a.seen,a.deferred,a.muted,a.presented,
+                        m.order_seq AS messageOrder,m.root_id AS rootId
+                 FROM owner_agent_message_attention a JOIN owner_messages m ON m.id=a.message_id
+                 WHERE a.agent_id=? AND m.channel_id=? ORDER BY m.order_seq`,
               )
               .all(run.agent_id, args.conversationId),
           };
@@ -223,14 +222,14 @@ export class ConversationAttention {
           this.directory.requireAgentConversation(run.agent_id, args.conversationId);
           this.validateMessagePosition(args.conversationId, args.rootId, args.quoteId);
           return this.toolActions.record(run, toolCallId, "drafts.save", args, () => {
-            const id = randomUUID(),
-              at = this.now(),
-              freshness = this.inspectAgentPositionChanges(
-                run.agent_id,
-                run.input_end_seq,
-                args.conversationId,
-                args.rootId,
-              );
+            const id = randomUUID();
+            const at = this.now();
+            const freshness = this.inspectAgentPositionChanges({
+              agentId: run.agent_id,
+              inputEndSequence: run.input_end_seq,
+              channelId: args.conversationId,
+              rootId: args.rootId,
+            });
             this.db
               .prepare(
                 "INSERT INTO owner_agent_drafts(id,agent_id,channel_id,root_id,quote_id,text,input_end_seq,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'editing',?,?)",
@@ -279,16 +278,7 @@ export class ConversationAttention {
               );
             if (draft.state === "sent" || draft.state === "abandoned")
               throw new AgentToolRefusal("Draft is closed");
-            const state =
-              args.choice === "revise"
-                ? "editing"
-                : args.choice === "keep"
-                  ? "kept"
-                  : args.choice === "defer"
-                    ? "deferred"
-                    : args.choice === "abandon"
-                      ? "abandoned"
-                      : "ready";
+            const state = draftStateAfterReview(args.choice);
             if (args.choice === "revise" && !args.text)
               throw new AgentToolRefusal("Revised text is required");
             this.recordDraftReviews(draft.id, changes);
@@ -309,15 +299,15 @@ export class ConversationAttention {
           this.validateMessagePosition(args.conversationId, args.rootId, args.quoteId);
           return this.toolActions.record(run, toolCallId, "messages.send", args, () => {
             if (!args.draftId) {
-              const { changes } = this.inspectAgentPositionChanges(
-                run.agent_id,
-                run.input_end_seq,
-                args.conversationId,
-                args.rootId,
-              );
+              const { changes } = this.inspectAgentPositionChanges({
+                agentId: run.agent_id,
+                inputEndSequence: run.input_end_seq,
+                channelId: args.conversationId,
+                rootId: args.rootId,
+              });
               if (changes.length) {
-                const id = randomUUID(),
-                  at = this.now();
+                const id = randomUUID();
+                const at = this.now();
                 this.db
                   .prepare(
                     "INSERT INTO owner_agent_drafts(id,agent_id,channel_id,root_id,quote_id,text,input_end_seq,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'editing',?,?)",
@@ -358,15 +348,13 @@ export class ConversationAttention {
                 .prepare("UPDATE owner_agent_drafts SET state='sent',updated_at=? WHERE id=?")
                 .run(this.now(), draft.id);
             }
-            return messages.createAgentToolMessage(
-              run,
-              toolCallId,
-              args.conversationId,
-              args.text,
-              args.rootId,
-              args.quoteId,
-              args.asTask,
-            );
+            return messages.createAgentToolMessage(run, {
+              channelId: args.conversationId,
+              text: args.text,
+              rootId: args.rootId,
+              quoteId: args.quoteId,
+              asTask: args.asTask,
+            });
           });
         },
       ),

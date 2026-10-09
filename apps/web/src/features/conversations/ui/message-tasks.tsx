@@ -1,75 +1,17 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { taskSchema, tasksResponseSchema, type Task } from "../../tasks/task-responses.js";
+import type { Task } from "../../tasks/task-responses.js";
 import type { Message } from "../conversation-responses.js";
-import { ownerJSON, OwnerRequestError } from "../owner-request.js";
+import type { useMessageTasks } from "../feed/use-message-tasks.js";
 
-export type TaskCreationPosition = "timeline" | "thread-root" | "thread-reply";
+export type MessageTaskControls = Pick<
+  ReturnType<typeof useMessageTasks>,
+  "tasks" | "taskCreation" | "openTaskCreation" | "cancelTaskCreation" | "createTask"
+>;
 
-/** Tasks stay attached to their exact message, independently of the open timeline or thread. */
-export function useMessageTasks(authenticated: boolean) {
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [taskCreation, setTaskCreation] = useState<{
-    message: Message;
-    position: TaskCreationPosition;
-  } | null>(null);
-
-  useEffect(() => {
-    if (!authenticated) return;
-    let live = true;
-    async function refreshTasks() {
-      try {
-        const result = await ownerJSON("/api/owner/tasks", tasksResponseSchema);
-        if (live) setTasks(result.tasks);
-      } catch {
-        /* Conversation remains usable while the task board reloads. */
-      }
-    }
-    void refreshTasks();
-    const timer = window.setInterval(() => void refreshTasks(), 3000);
-    return () => {
-      live = false;
-      window.clearInterval(timer);
-    };
-  }, [authenticated]);
-
-  async function refreshTasks() {
-    const result = await ownerJSON("/api/owner/tasks", tasksResponseSchema);
-    setTasks(result.tasks);
-  }
-
-  function openTaskCreation(message: Message, position: TaskCreationPosition) {
-    setTaskCreation({ message, position });
-  }
-
-  function taskForm(message: Message, position: TaskCreationPosition) {
-    if (taskCreation?.message.id !== message.id || taskCreation.position !== position) return null;
-    return (
-      <TaskCreationForm
-        key={`${message.id}:${position}`}
-        message={message}
-        onCancel={() => setTaskCreation(null)}
-        onCreate={async (title) => {
-          const task = await ownerJSON("/api/owner/tasks", taskSchema, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ messageId: message.id, title }),
-          }).catch((cause: unknown) => {
-            // A gateway/server failure can occur after the control plane committed.
-            if (cause instanceof OwnerRequestError && cause.status < 500) throw cause;
-            throw new Error(
-              "创建提交结果未确认，可能已创建。请刷新查看任务列表，再决定是否创建另一项。",
-            );
-          });
-          setTasks((current) => [...current.filter((existing) => existing.id !== task.id), task]);
-          setTaskCreation((current) =>
-            current?.message.id === message.id && current.position === position ? null : current,
-          );
-        }}
-      />
-    );
-  }
-
-  return { tasks, refreshTasks, openTaskCreation, taskForm };
+function taskStatusLabel(status: Task["status"]) {
+  if (status === "done") return "已完成";
+  if (status === "in_progress") return "进行中";
+  return "待认领";
 }
 
 export function MessageTasks({ tasks, messageId }: { tasks: Task[]; messageId: string }) {
@@ -79,20 +21,15 @@ export function MessageTasks({ tasks, messageId }: { tasks: Task[]; messageId: s
         .filter((task) => task.messageId === messageId)
         .map((task) => (
           <a key={task.id} className="message-task-card" href="/app/tasks">
-            任务 ·{" "}
-            {task.status === "done"
-              ? "已完成"
-              : task.status === "in_progress"
-                ? "进行中"
-                : "待认领"}{" "}
-            · {task.title} · 负责人：{task.ownerAgentName ?? task.ownerAgentId ?? "无"}
+            任务 · {taskStatusLabel(task.status)} · {task.title} · 负责人：
+            {task.ownerAgentName ?? task.ownerAgentId ?? "无"}
           </a>
         ))}
     </div>
   );
 }
 
-function TaskCreationForm({
+export function TaskCreationForm({
   message,
   onCreate,
   onCancel,

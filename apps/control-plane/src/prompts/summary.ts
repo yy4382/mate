@@ -97,7 +97,11 @@ export function buildSummaryRequest(
   prefix: boolean,
 ) {
   const conversation = serialize(messages);
-  const prompt = `<conversation>\n${conversation}\n</conversation>\n\n${previous ? `<previous-summary>\n${previous}\n</previous-summary>\n\n` : ""}${prefix ? PREFIX_PROMPT : previous ? UPDATE_PROMPT : INITIAL_PROMPT}`;
+  const previousSection = previous
+    ? `<previous-summary>\n${previous}\n</previous-summary>\n\n`
+    : "";
+  const instruction = prefix ? PREFIX_PROMPT : previous ? UPDATE_PROMPT : INITIAL_PROMPT;
+  const prompt = `<conversation>\n${conversation}\n</conversation>\n\n${previousSection}${instruction}`;
   return {
     systemPrompt: SYSTEM_PROMPT,
     prompt,

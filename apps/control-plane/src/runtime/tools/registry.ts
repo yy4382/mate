@@ -2,7 +2,7 @@ import { AgentHistory } from "../../agent-history.js";
 import { currentAgentToolRunSchema } from "./entry.js";
 import type Database from "better-sqlite3";
 import { z } from "zod";
-import { OwnerChat } from "../../conversations/service.js";
+import type { OwnerChat } from "../../conversations/service.js";
 import { AgentToolRefusal } from "../../conversations/errors.js";
 import { WorkspaceService } from "../../workspaces/service.js";
 import { WorkspaceError } from "../../workspaces/errors.js";
@@ -41,17 +41,12 @@ export class AgentTools {
     );
     this.meta = new Map(
       Object.entries({
-        "tools.list": defineAgentTool(
-          { description: "", schema: z.object({}).strict() },
-          (identity) => {
-            return {
-              tools: [...this.operations].map(([name, entry]) => ({
-                name,
-                description: entry.description,
-              })),
-            };
-          },
-        ),
+        "tools.list": defineAgentTool({ description: "", schema: z.object({}).strict() }, () => ({
+          tools: [...this.operations].map(([name, entry]) => ({
+            name,
+            description: entry.description,
+          })),
+        })),
         "tools.describe": defineAgentTool(
           { description: "", schema: z.object({ name: z.string().min(1).max(128) }).strict() },
           (identity, input) => {
@@ -70,9 +65,7 @@ export class AgentTools {
               .object({ name: z.string().min(1).max(128), input: z.record(z.string(), z.json()) })
               .strict(),
           },
-          (identity, input) => {
-            return this.operation(input.name).invoke(identity, input.input);
-          },
+          (identity, input) => this.operation(input.name).invoke(identity, input.input),
         ),
       }),
     );
@@ -83,12 +76,7 @@ export class AgentTools {
     operation: string,
     input: unknown,
   ): Promise<AgentToolCallResult> {
-    let accept!: () => void;
-    let refuse!: (error: unknown) => void;
-    const committed = new Promise<void>((resolve, reject) => {
-      accept = resolve;
-      refuse = reject;
-    });
+    const { promise: committed, resolve: accept, reject: refuse } = Promise.withResolvers<void>();
     // A synchronous refusal may have no node continuation waiting on this promise.
     void committed.catch(() => {});
     let execution: unknown;

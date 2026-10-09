@@ -16,7 +16,7 @@ it("settles pending responses through the environment's registered cleanup", asy
   try {
     const agent = environment.agents[0];
     if (!agent) throw new Error("Expected prepared Agent");
-    provider.forAgent(agent, [function pendingForCleanup(_request: ScriptedRequest) {}]);
+    provider.forAgent(agent, [function pendingForCleanup(_request) {}]);
     await environment.request(`/api/owner/channels/${agent.channelId}/messages`, {
       method: "POST",
       body: { text: "等待环境关闭。" },
@@ -39,18 +39,15 @@ it("waits for async steps that arrive while completion is already waiting on a r
     provider: provider.handle,
   });
   environment.registerCleanup("scripted provider", () => provider.close());
-  let releaseSecond!: () => void;
-  const secondGate = new Promise<void>((resolve) => {
-    releaseSecond = resolve;
-  });
+  const { promise: secondGate, resolve: releaseSecond } = Promise.withResolvers<void>();
   try {
     const agent = environment.agents[0];
     if (!agent) throw new Error("Expected prepared Agent");
     provider.forAgent(agent, [
-      async function firstStep(request: ScriptedRequest) {
+      async function firstStep(request) {
         await provider.waitFor(request.agentId, "secondStep");
       },
-      async function secondStep(request: ScriptedRequest) {
+      async function secondStep(request) {
         request.text("工具后回复。");
         await secondGate;
         throw new Error("新增步骤不能遗漏");
@@ -98,16 +95,13 @@ it("records closing a replied but unfinished step and preserves its later non-ca
     provider: provider.handle,
   });
   environment.registerCleanup("scripted provider", () => provider.close());
-  let releaseStep!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    releaseStep = resolve;
-  });
+  const { promise: gate, resolve: releaseStep } = Promise.withResolvers<void>();
   const original = new Error("关闭后实际断言失败");
   try {
     const agent = environment.agents[0];
     if (!agent) throw new Error("Expected prepared Agent");
     provider.forAgent(agent, [
-      async function replyThenFail(request: ScriptedRequest) {
+      async function replyThenFail(request) {
         request.text("先回复。");
         await gate;
         throw original;

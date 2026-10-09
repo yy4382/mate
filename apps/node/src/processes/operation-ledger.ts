@@ -57,7 +57,7 @@ interface OperationRow {
   revision: number;
 }
 
-const schema = `
+const processOperationsDDL = `
 CREATE TABLE IF NOT EXISTS agent_process_operations (
   operation_id TEXT PRIMARY KEY,
   agent_id TEXT NOT NULL,
@@ -91,7 +91,7 @@ export class AgentProcessOperations {
     private readonly now: () => number = Date.now,
   ) {
     database.pragma("synchronous = FULL");
-    database.exec(schema);
+    database.exec(processOperationsDDL);
     if (
       !database
         .prepare<[], { name: string }>("PRAGMA table_info(agent_process_operations)")
@@ -176,8 +176,8 @@ export class AgentProcessOperations {
       const row = this.findOperation.get(operationId);
       if (row?.agent_id) agents.add(row.agent_id);
     }
-    const stopped: string[] = [],
-      unconfirmed: string[] = [];
+    const stopped: string[] = [];
+    const unconfirmed: string[] = [];
     for (const agentId of agents) {
       try {
         const receipt = await this.execute(agentId, randomUUID(), { kind: "process.stop_all" });
@@ -209,9 +209,9 @@ export class AgentProcessOperations {
   ): Promise<AgentProcessOperationReceipt> {
     agentIdSchema.parse(agentId);
     operationIdSchema.parse(operationId);
-    const operation = agentProcessOperationSchema.parse(operationInput),
-      request = JSON.stringify({ agentId, operation }),
-      requestHash = processOperationRequestHash(agentId, operation);
+    const operation = agentProcessOperationSchema.parse(operationInput);
+    const request = JSON.stringify({ agentId, operation });
+    const requestHash = processOperationRequestHash(agentId, operation);
     const row = this.database
       .transaction(() => {
         const old = this.findOperation.get(operationId);

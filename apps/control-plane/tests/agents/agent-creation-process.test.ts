@@ -45,24 +45,25 @@ function createAgent(
 
 it("shows a diagnosable failure on the web when the node cannot prepare the workspace", async () => {
   if (typeof process.getuid === "function" && process.getuid() === 0) return;
-  const directory = mkdtempSync(join(tmpdir(), "mate-agent-creation-failure-")),
-    nodeData = join(directory, "node-data"),
-    readonlyRoot = join(directory, "read-only-workspaces");
+  const directory = mkdtempSync(join(tmpdir(), "mate-agent-creation-failure-"));
+  const nodeData = join(directory, "node-data");
+  const readonlyRoot = join(directory, "read-only-workspaces");
   chmodSync(directory, 0o700);
   mkdirSync(readonlyRoot, { mode: 0o500 });
   chmodSync(readonlyRoot, 0o500);
   writeFileSync(join(directory, "owner-password"), `${ownerPassword}\n`, { mode: 0o600 });
 
-  let control: ProcessOutput | undefined, node: ProcessOutput | undefined;
+  let control: ProcessOutput | undefined;
+  let node: ProcessOutput | undefined;
   try {
     control = startControlPlane(directory);
-    const origin = `http://127.0.0.1:${(await control.waitFor(/MATE_CONTROL_PLANE_LISTENING (\d+)/))[1]}`,
-      cookie = await login(origin),
-      pairing = await fetch(new URL("/api/owner/nodes/pairing-tokens", origin), {
-        method: "POST",
-        headers: { cookie },
-      }),
-      { pairingToken } = (await pairing.json()) as { pairingToken: string };
+    const origin = `http://127.0.0.1:${(await control.waitFor(/MATE_CONTROL_PLANE_LISTENING (\d+)/))[1]}`;
+    const cookie = await login(origin);
+    const pairing = await fetch(new URL("/api/owner/nodes/pairing-tokens", origin), {
+      method: "POST",
+      headers: { cookie },
+    });
+    const { pairingToken } = (await pairing.json()) as { pairingToken: string };
 
     node = startNode({
       origin,
@@ -72,8 +73,8 @@ it("shows a diagnosable failure on the web when the node cannot prepare the work
     });
     const paired = await node.waitFor(/MATE_NODE_PAIRED ([0-9a-f-]+)/i);
 
-    const payload = agentPayload(),
-      response = await createAgent(origin, cookie, paired[1]!, payload);
+    const payload = agentPayload();
+    const response = await createAgent(origin, cookie, paired[1]!, payload);
     expect(response.status).toBe(502);
     const failed = (await response.json()) as {
       error: string;

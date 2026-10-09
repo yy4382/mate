@@ -2,7 +2,7 @@ import { afterEach, expect, it } from "vitest";
 
 import {
   cleanupFixture,
-  setup,
+  createConversationFixture,
   prepareVerifiedAgent,
   waitForRun,
   callAgentTool,
@@ -10,21 +10,21 @@ import {
 afterEach(cleanupFixture);
 
 it("lets a non-member Agent read a public channel's attachments but keeps publish member-only", async () => {
-  const { app, cookie, nodeId, socket } = await setup();
+  const { app, cookie, nodeId, socket } = await createConversationFixture();
   const agentId = await prepareVerifiedAgent(app, nodeId, "Attachment reader");
-  const ownDirect = app.chat.getOrCreateAgentDirectChannel(agentId)!,
-    publicRoom = app.chat.createChannel({
-      name: "Open files",
-      description: "Public attachments are readable.",
-      visibility: "public",
-    }),
-    privateRoom = app.chat.createChannel({
-      name: "Closed files",
-      description: "Private attachments stay closed.",
-      visibility: "private",
-    });
+  const ownDirect = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
+  const publicRoom = app.chat.channels.createChannel({
+    name: "Open files",
+    description: "Public attachments are readable.",
+    visibility: "public",
+  });
+  const privateRoom = app.chat.channels.createChannel({
+    name: "Closed files",
+    description: "Private attachments stay closed.",
+    visibility: "private",
+  });
   const upload = async (channelId: string, filename: string, body: string) =>
-    app.request(`/api/owner/channels/${channelId}/attachments`, {
+    app.http.request(`/api/owner/channels/${channelId}/attachments`, {
       method: "POST",
       headers: {
         cookie,
@@ -37,13 +37,16 @@ it("lets a non-member Agent read a public channel's attachments but keeps publis
   expect(publicUpload.status).toBe(201);
   const publicAttachment = (await publicUpload.json()) as { attachment: { id: string } };
   expect((await upload(privateRoom.id, "机密.txt", "private attachment body")).status).toBe(201);
-  await app.request("/api/owner/model-credentials/openai", {
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
   });
   const runStart = socket.sent.length;
-  app.chat.createMessage(ownDirect.id, "Start a conversation tool run.");
+  app.chat.messages.createMessage({
+    channelId: ownDirect.id,
+    text: "Start a conversation tool run.",
+  });
   const run = await waitForRun(socket, runStart);
 
   const publicList = await callAgentTool(app, socket, run, "list-public-files", "tools.call", {

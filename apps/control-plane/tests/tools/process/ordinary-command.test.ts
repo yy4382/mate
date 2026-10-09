@@ -5,16 +5,15 @@ import { randomUUID } from "node:crypto";
 import { afterEach, expect, it } from "vitest";
 
 import {
-  password,
   cleanupFixture,
-  setup,
+  createProcessToolFixture,
   waitForRun,
   sendTool,
 } from "../../support/agent/process-tool-fixture.js";
 afterEach(cleanupFixture);
 
 it("dispatches ordinary commands from a durable intent without privileged approval", async () => {
-  const { app, cookie, db, nodeId, socket } = await setup();
+  const { app, cookie, db, nodeId, socket } = await createProcessToolFixture();
   const agentId = randomUUID();
   app.agents.prepare({
     id: agentId,
@@ -35,14 +34,17 @@ it("dispatches ordinary commands from a durable intent without privileged approv
     },
     app.chat,
   );
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  await app.request("/api/owner/model-credentials/openai", {
+  const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-process-tool-key" }),
   });
   const startAt = socket.sent.length;
-  app.chat.createMessage(direct.id, "Use the ordinary process tools.");
+  app.chat.messages.createMessage({
+    channelId: direct.id,
+    text: "Use the ordinary process tools.",
+  });
   const run = await waitForRun(socket, startAt);
 
   await sendTool(app, socket, run, "list-process-tools", "tools.list", {});
@@ -63,8 +65,8 @@ it("dispatches ordinary commands from a durable intent without privileged approv
     },
   });
 
-  const scope = run.actionScopeId,
-    toolCallId = `mate:${scope}:${"a".repeat(64)}:1`;
+  const scope = run.actionScopeId;
+  const toolCallId = `mate:${scope}:${"a".repeat(64)}:1`;
   let intentWasCommittedBeforeDispatch = false;
   socket.onSend = (message) => {
     if (message.type !== "control.process.operation") return;
@@ -137,7 +139,7 @@ it("dispatches ordinary commands from a durable intent without privileged approv
 });
 
 it("offers no privileged request or approval-status tool and no owner approval route", async () => {
-  const { app, cookie, db, nodeId, socket } = await setup();
+  const { app, cookie, db, nodeId, socket } = await createProcessToolFixture();
   const agentId = randomUUID();
   app.agents.prepare({
     id: agentId,
@@ -158,14 +160,14 @@ it("offers no privileged request or approval-status tool and no owner approval r
     },
     app.chat,
   );
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  await app.request("/api/owner/model-credentials/openai", {
+  const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-tool-surface-key" }),
   });
   const startAt = socket.sent.length;
-  app.chat.createMessage(direct.id, "What can you run?");
+  app.chat.messages.createMessage({ channelId: direct.id, text: "What can you run?" });
   const run = await waitForRun(socket, startAt);
 
   await sendTool(app, socket, run, "list-all-tools", "tools.list", {});
@@ -189,15 +191,15 @@ it("offers no privileged request or approval-status tool and no owner approval r
 
   const requestId = randomUUID();
   expect(
-    (await app.request(`/api/owner/channels/${direct.id}/approvals`, { headers: { cookie } }))
+    (await app.http.request(`/api/owner/channels/${direct.id}/approvals`, { headers: { cookie } }))
       .status,
   ).toBe(404);
   expect(
-    (await app.request(`/api/owner/approvals/${requestId}`, { headers: { cookie } })).status,
+    (await app.http.request(`/api/owner/approvals/${requestId}`, { headers: { cookie } })).status,
   ).toBe(404);
   expect(
     (
-      await app.request(`/api/owner/approvals/${requestId}/decision`, {
+      await app.http.request(`/api/owner/approvals/${requestId}/decision`, {
         method: "POST",
         headers: { cookie, "content-type": "application/json", origin: "http://localhost" },
         body: JSON.stringify({ decision: "approve" }),
@@ -210,7 +212,7 @@ it("offers no privileged request or approval-status tool and no owner approval r
 });
 
 it("runs an explicit sudo the Agent wrote as one ordinary command with its own result", async () => {
-  const { app, cookie, db, nodeId, socket } = await setup();
+  const { app, cookie, db, nodeId, socket } = await createProcessToolFixture();
   const agentId = randomUUID();
   app.agents.prepare({
     id: agentId,
@@ -231,14 +233,17 @@ it("runs an explicit sudo the Agent wrote as one ordinary command with its own r
     },
     app.chat,
   );
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  await app.request("/api/owner/model-credentials/openai", {
+  const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-sudo-key" }),
   });
   const startAt = socket.sent.length;
-  app.chat.createMessage(direct.id, "Run a command that asks for root.");
+  app.chat.messages.createMessage({
+    channelId: direct.id,
+    text: "Run a command that asks for root.",
+  });
   const run = await waitForRun(socket, startAt);
 
   const command = "sudo -n systemctl restart nginx";

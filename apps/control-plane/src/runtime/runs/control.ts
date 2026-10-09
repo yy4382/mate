@@ -35,12 +35,7 @@ export class RunControl {
             receiptFields(lastStop.receipt)?.reason !== "pending_process_receipts") ||
           lastStop.state === "failed"
         ) {
-          stopId = randomUUID();
-          this.db
-            .prepare(
-              "INSERT INTO owner_agent_stop_intents(operation_id,agent_id,node_id,state,created_at,updated_at) VALUES(?,?,?,'executing',?,?)",
-            )
-            .run(stopId, agentId, agent.node_id, this.now(), this.now());
+          stopId = this.createStopIntent(agentId, agent.node_id);
         }
         this.db
           .prepare(
@@ -70,6 +65,16 @@ export class RunControl {
     return { runId: pending?.id, stopId, nodeId: agent.node_id };
   }
 
+  private createStopIntent(agentId: string, nodeId: string) {
+    const operationId = randomUUID();
+    this.db
+      .prepare(
+        "INSERT INTO owner_agent_stop_intents(operation_id,agent_id,node_id,state,created_at,updated_at) VALUES(?,?,?,'executing',?,?)",
+      )
+      .run(operationId, agentId, nodeId, this.now(), this.now());
+    return operationId;
+  }
+
   stopStatus(agentId: string): {
     state: string;
     receipt: unknown | null;
@@ -84,9 +89,12 @@ export class RunControl {
       )
       .get(agentId);
     if (!row) return { state: "unknown", receipt: { reason: "stop_not_confirmed" } };
-    const receipt = parseReceipt(row.receipt_json) ?? { reason: "stop_receipt_unreadable" },
-      scope = receiptScope(receipt),
-      unconfirmedOperationIds = unconfirmedCommandIds(receipt, this.unconfirmedCommands(agentId));
+    const receipt = parseReceipt(row.receipt_json) ?? { reason: "stop_receipt_unreadable" };
+    const scope = receiptScope(receipt);
+    const unconfirmedOperationIds = unconfirmedCommandIds(
+      receipt,
+      this.unconfirmedCommands(agentId),
+    );
     return {
       state: row.state,
       receipt,
@@ -188,33 +196,35 @@ export class RunControl {
       const reason = receiptFields(parseReceipt(row.receipt_json))?.reason;
       if (reason === "pending_process_receipts") {
         if (this.unsettledProcessReceipt(row.agent_id)) continue;
-        const nextId = randomUUID();
-        this.db
-          .prepare(
-            "INSERT INTO owner_agent_stop_intents(operation_id,agent_id,node_id,state,created_at,updated_at) VALUES(?,?,?,'executing',?,?)",
-          )
-          .run(nextId, row.agent_id, row.node_id, this.now(), this.now());
-        void this.dispatchStop(nextId, row.agent_id, row.node_id);
+        const nextId = this.createStopIntent(row.agent_id, row.node_id);
+        void this.dispatchStop({ operationId: nextId, agentId: row.agent_id, nodeId: row.node_id });
       } else if (mode === "node_ready" && row.state === "unknown") {
         // A node may have durably returned unknown for the old ID. A fresh idempotent stop
         // request rechecks all scopes after the node has finished receipt reconciliation.
-        const nextId = randomUUID();
-        this.db
-          .prepare(
-            "INSERT INTO owner_agent_stop_intents(operation_id,agent_id,node_id,state,created_at,updated_at) VALUES(?,?,?,'executing',?,?)",
-          )
-          .run(nextId, row.agent_id, row.node_id, this.now(), this.now());
-        void this.dispatchStop(nextId, row.agent_id, row.node_id);
+        const nextId = this.createStopIntent(row.agent_id, row.node_id);
+        void this.dispatchStop({ operationId: nextId, agentId: row.agent_id, nodeId: row.node_id });
       } else if (mode === "node_ready")
-        void this.dispatchStop(row.operation_id, row.agent_id, row.node_id);
+        void this.dispatchStop({
+          operationId: row.operation_id,
+          agentId: row.agent_id,
+          nodeId: row.node_id,
+        });
     }
   }
 
-  async dispatchStop(operationId: string, agentId: string, nodeId: string): Promise<void> {
+  async dispatchStop({
+    operationId,
+    agentId,
+    nodeId,
+  }: {
+    operationId: string;
+    agentId: string;
+    nodeId: string;
+  }): Promise<void> {
     if (this.activeStops.has(operationId)) return;
     this.activeStops.add(operationId);
     try {
-      const result = await this.nodes.executeAgentProcessOperation(nodeId, {
+      const result = await this.nodes.operations.executeAgentProcessOperation(nodeId, {
         operationId,
         agentId,
         operation: { kind: "process.stop_all" },
@@ -368,18 +378,18 @@ export class RunControl {
   ): Promise<{ ok: boolean; error?: string }> {
     let verified;
     try {
-      verified = await this.nodes.provisionAgent(
-        row.node_id,
-        randomUUID(),
+      verified = await this.nodes.operations.provisionAgent({
+        nodeId: row.node_id,
+        requestId: randomUUID(),
         agentId,
-        () => {},
-        true,
-      );
+        onProgress: () => {},
+        verifyOnly: true,
+      });
     } catch {
       return { ok: false, error: "原节点未能核验运行账号与 Agent 工作区，请恢复原节点后重试。" };
     }
     // Re-verify against the node's recorded account plus this Agent's own workspace and marker.
-    const nodeAccount = this.nodes.account(row.node_id);
+    const nodeAccount = this.nodes.identity.account(row.node_id);
     if (
       !verified.ok ||
       !row.home_marker ||

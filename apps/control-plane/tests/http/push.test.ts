@@ -1,7 +1,8 @@
 import Database from "better-sqlite3";
 import { expect, it } from "vitest";
 import { OwnerPush } from "../../src/notifications/push.js";
-import { createControlPlaneApp, mentionsOwner } from "../../src/http.js";
+import { createControlPlane } from "../../src/application.js";
+import { mentionsOwner } from "../../src/notifications/mentions-owner.js";
 import { controlPlaneSchema } from "../../src/storage/schema.js";
 import { openControlPlaneDatabase } from "../../src/storage/initialize.js";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -43,8 +44,16 @@ it("retries a temporary Push failure after durable backoff without duplicating t
       keys: { p256dh: "key", auth: "auth" },
     });
     db.transaction(() => {
-      push.queue("message:message-1", "Agent 发来消息", "/app?channel=room-1&message=message-1");
-      push.queue("message:message-1", "Agent 发来消息", "/app?channel=room-1&message=message-1");
+      push.queue({
+        eventKey: "message:message-1",
+        title: "Agent 发来消息",
+        url: "/app?channel=room-1&message=message-1",
+      });
+      push.queue({
+        eventKey: "message:message-1",
+        title: "Agent 发来消息",
+        url: "/app?channel=room-1&message=message-1",
+      });
     })();
     await push.deliver();
     await push.deliver();
@@ -87,7 +96,9 @@ it("drops a permanently gone Push endpoint without retrying it", async () => {
       endpoint: "https://push.example.test/gone",
       keys: { p256dh: "key", auth: "auth" },
     });
-    db.transaction(() => push.queue("message:1", "消息", "/app?channel=room-1&message=1"))();
+    db.transaction(() =>
+      push.queue({ eventKey: "message:1", title: "消息", url: "/app?channel=room-1&message=1" }),
+    )();
     await push.deliver();
     now += 100_000;
     await push.deliver();
@@ -138,11 +149,12 @@ it("refuses a database the unified schema did not initialize", () => {
 
 it("requires owner login for subscription and exposes a usable Push public key", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mate-push-api-"));
-  const app = createControlPlaneApp({ dataDir });
+  const app = createControlPlane({ dataDir });
   try {
-    expect((await app.request("/api/owner/push/public-key")).status).toBe(401);
+    expect((await app.http.request("/api/owner/push/public-key")).status).toBe(401);
     expect(
-      (await app.request("/api/owner/push/subscriptions", { method: "POST", body: "{}" })).status,
+      (await app.http.request("/api/owner/push/subscriptions", { method: "POST", body: "{}" }))
+        .status,
     ).toBe(401);
     expect(app.push.publicKey).toMatch(/^[\w-]+$/);
   } finally {

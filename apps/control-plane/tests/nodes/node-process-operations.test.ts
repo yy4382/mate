@@ -2,7 +2,8 @@ import Database from "better-sqlite3";
 import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { expect, it } from "vitest";
 import { NodeRequestError } from "../../src/nodes/pending-requests.js";
-import { NodeDirectory, type NodeSocket } from "../../src/nodes/directory.js";
+import { NodeDirectory } from "../../src/nodes/directory.js";
+import type { NodeSocket } from "../../src/nodes/transport.js";
 
 class TestNodeSocket implements NodeSocket {
   readonly messages: Record<string, unknown>[] = [];
@@ -22,13 +23,13 @@ async function authenticatedNode() {
     CREATE TABLE owner_agent_stop_intents(operation_id TEXT PRIMARY KEY,agent_id TEXT,node_id TEXT,state TEXT);
     CREATE TABLE owner_agent_activity(seq INTEGER PRIMARY KEY,agent_id TEXT,node_id TEXT,kind TEXT,reference_id TEXT,summary TEXT,detail_json TEXT,created_at INTEGER);
   `);
-  const nodeId = randomUUID(),
-    { publicKey, privateKey } = generateKeyPairSync("ed25519", {
-      privateKeyEncoding: { type: "pkcs8", format: "pem" },
-      publicKeyEncoding: { type: "spki", format: "pem" },
-    }),
-    socket = new TestNodeSocket(),
-    directory = new NodeDirectory(database, { processOperationTimeoutMs: 100 });
+  const nodeId = randomUUID();
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519", {
+    privateKeyEncoding: { type: "pkcs8", format: "pem" },
+    publicKeyEncoding: { type: "spki", format: "pem" },
+  });
+  const socket = new TestNodeSocket();
+  const directory = new NodeDirectory(database, { processOperationTimeoutMs: 100 });
   database.prepare("INSERT INTO nodes VALUES(?,?,?,?)").run(nodeId, publicKey, Date.now(), null);
   directory.open(socket);
   const challenge = socket.messages[0];
@@ -47,11 +48,11 @@ async function authenticatedNode() {
 }
 
 it("routes a node receipt back to the matching ordinary operation request", async () => {
-  const context = await authenticatedNode(),
-    operationId = randomUUID(),
-    agentId = randomUUID();
+  const context = await authenticatedNode();
+  const operationId = randomUUID();
+  const agentId = randomUUID();
   try {
-    const pending = context.directory.executeAgentProcessOperation(context.nodeId, {
+    const pending = context.directory.operations.executeAgentProcessOperation(context.nodeId, {
       operationId,
       agentId,
       operation: { kind: "exec", command: "printf hello", cwd: "." },
@@ -86,7 +87,7 @@ it("routes a node receipt back to the matching ordinary operation request", asyn
 it("does not claim an operation completed when its node disconnects", async () => {
   const context = await authenticatedNode();
   try {
-    const pending = context.directory.executeAgentProcessOperation(context.nodeId, {
+    const pending = context.directory.operations.executeAgentProcessOperation(context.nodeId, {
       operationId: randomUUID(),
       agentId: randomUUID(),
       operation: { kind: "process.list" },
@@ -100,11 +101,11 @@ it("does not claim an operation completed when its node disconnects", async () =
 });
 
 it("periodic receipt recovery skips a current command wait and still queries other missing receipts", async () => {
-  const context = await authenticatedNode(),
-    operationId = randomUUID(),
-    recoveryId = randomUUID(),
-    agentId = randomUUID(),
-    receipts: unknown[] = [];
+  const context = await authenticatedNode();
+  const operationId = randomUUID();
+  const recoveryId = randomUUID();
+  const agentId = randomUUID();
+  const receipts: unknown[] = [];
   try {
     context.directory.setProcessReceiptHandler(
       (_nodeId, receipt) => receipts.push(receipt),
@@ -120,7 +121,7 @@ it("periodic receipt recovery skips a current command wait and still queries oth
         context.nodeId,
         JSON.stringify({ operation: { kind: "process.list" } }),
       );
-    const pending = context.directory.executeAgentProcessOperation(context.nodeId, {
+    const pending = context.directory.operations.executeAgentProcessOperation(context.nodeId, {
       operationId,
       agentId,
       operation: { kind: "process.list" },

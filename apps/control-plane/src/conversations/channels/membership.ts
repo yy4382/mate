@@ -3,13 +3,10 @@ import type { NewOwnerChannel, OwnerChannelUpdate } from "../contracts.js";
 import { AgentToolRefusal } from "../errors.js";
 import { channelRowSchema, toChannel } from "../rows.js";
 import { conversationToolDefinitions } from "../tools/contracts.js";
-
 import type Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-
-import { nodeAccountOf } from "../../nodes/directory.js";
-
+import { nodeAccountOf } from "../../nodes/identity.js";
 import type { ConversationEvents } from "../events.js";
 import { type ConversationToolActions, defineConversationTool } from "../tools/actions.js";
 import type { ConversationDirectory } from "./directory.js";
@@ -24,8 +21,8 @@ export class ChannelMembership {
   ) {}
 
   createChannel(input: NewOwnerChannel): OwnerChannel {
-    const id = randomUUID(),
-      at = this.now();
+    const id = randomUUID();
+    const at = this.now();
     return this.db
       .transaction(() => {
         this.db
@@ -188,6 +185,7 @@ export class ChannelMembership {
       })
       .immediate();
   }
+
   agentTools() {
     return {
       "conversations.join": defineConversationTool(
@@ -254,7 +252,7 @@ export class ChannelMembership {
                 .get(args.conversationId, args.agentId),
             );
           // A valid Agent invitation is effective at this same control-plane commit.
-          if (!this.directory.isInviteableAgent(args.agentId))
+          if (!this.directory.isInvitableAgent(args.agentId))
             throw new AgentToolRefusal("Invitation target is not available");
           return this.toolActions.record(run, toolCallId, "conversations.invite", args, () => {
             if (!this.inviteAgentToChannel(args.conversationId, args.agentId))

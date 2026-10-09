@@ -1,4 +1,4 @@
-import { operationSchema } from "@mate/protocol";
+import { workspaceOperationSchema } from "@mate/protocol";
 import { workspaceVersionSchema } from "@mate/protocol/workspace";
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -11,7 +11,7 @@ export const fileBoundarySchema = z.object({
   operationId: z.string().uuid(),
   agentId: z.string().uuid(),
   mode: z.literal("agent_action"),
-  operation: operationSchema,
+  operation: workspaceOperationSchema,
   requestHash: z.string(),
 });
 export function readFileBoundary(directory: string) {

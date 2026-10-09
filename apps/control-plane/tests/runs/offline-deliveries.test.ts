@@ -2,14 +2,19 @@ import { randomUUID } from "node:crypto";
 
 import { afterEach, expect, it } from "vitest";
 
-import { cleanupFixture, setup, login, pairNode } from "../support/agent/creation-fixture.js";
+import {
+  cleanupFixture,
+  createAgentCreationFixture,
+  login,
+  pairNode,
+} from "../support/agent/creation-fixture.js";
 afterEach(cleanupFixture);
 
 it("finds an online Agent beyond more than one page of offline deliveries", async () => {
-  const app = setup();
+  const app = createAgentCreationFixture();
   const cookie = await login(app);
-  const offlineNode = await pairNode(app, cookie),
-    onlineNode = await pairNode(app, cookie);
+  const offlineNode = await pairNode(app, cookie);
+  const onlineNode = await pairNode(app, cookie);
   app.nodes.close(offlineNode.socket);
 
   for (let index = 0; index < 105; index++) {
@@ -34,8 +39,11 @@ it("finds an online Agent beyond more than one page of offline deliveries", asyn
       },
       app.chat,
     );
-    const direct = app.chat.getOrCreateAgentDirectChannel(id)!;
-    app.chat.createMessage(direct.id, `离线 Agent ${index} 的排队输入。`);
+    const direct = app.chat.conversations.getOrCreateAgentDirectChannel(id)!;
+    app.chat.messages.createMessage({
+      channelId: direct.id,
+      text: `离线 Agent ${index} 的排队输入。`,
+    });
   }
 
   const onlineAgentId = randomUUID();
@@ -58,10 +66,10 @@ it("finds an online Agent beyond more than one page of offline deliveries", asyn
     },
     app.chat,
   );
-  const onlineDirect = app.chat.getOrCreateAgentDirectChannel(onlineAgentId)!;
-  app.chat.createMessage(onlineDirect.id, "在线 Agent 的排队输入。");
+  const onlineDirect = app.chat.conversations.getOrCreateAgentDirectChannel(onlineAgentId)!;
+  app.chat.messages.createMessage({ channelId: onlineDirect.id, text: "在线 Agent 的排队输入。" });
 
-  const credential = await app.request("/api/owner/model-credentials/openai", {
+  const credential = await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-scheduler-key" }),
@@ -80,5 +88,7 @@ it("finds an online Agent beyond more than one page of offline deliveries", asyn
     agentId: onlineAgentId,
     channelId: onlineDirect.id,
   });
-  expect(app.chat.listPendingDeliveries("agent", onlineAgentId).deliveries).toHaveLength(1);
+  expect(app.chat.deliveries.listPendingDeliveries("agent", onlineAgentId).deliveries).toHaveLength(
+    1,
+  );
 });

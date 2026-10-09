@@ -3,7 +3,7 @@ import { NodeRequestError } from "../../../src/nodes/pending-requests.js";
 import {
   cleanupAgentToolFixture,
   addAgent,
-  setup,
+  createAgentToolFixture,
 } from "../../support/agent/agent-tool-fixture.js";
 
 it.each([
@@ -15,15 +15,15 @@ it.each([
 ] as const)(
   "maps the %s transport code independently of diagnostic wording",
   async (reason, code, status) => {
-    const context = await setup();
+    const context = await createAgentToolFixture();
     const agentId = addAgent(context.app, context.nodeId, "文件同事");
     // Deliberately misleading words would send a text-based classifier down the wrong path.
     const diagnostic = "offline timeout disconnected diagnostic changed";
     const transport = vi
-      .spyOn(context.app.nodes, "workspaceOperation")
+      .spyOn(context.app.nodes.operations, "workspaceOperation")
       .mockRejectedValueOnce(new NodeRequestError(reason, diagnostic));
     try {
-      const response = await context.app.request(
+      const response = await context.app.http.request(
         `/api/owner/agents/${agentId}/workspace/stat?path=report.txt`,
         { headers: { cookie: context.cookie } },
       );

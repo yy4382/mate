@@ -1,9 +1,8 @@
-import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 
 import {
   cleanupFixture,
-  setup,
+  createConversationFixture,
   prepareVerifiedAgent,
   finishRun,
   waitForRun,
@@ -12,23 +11,33 @@ import {
 afterEach(cleanupFixture);
 
 it("does not backfill a just-joined channel as unread nor forget what was already read", async () => {
-  const { app, cookie, db, nodeId, socket } = await setup();
+  const { app, cookie, db, nodeId, socket } = await createConversationFixture();
   const agentId = await prepareVerifiedAgent(app, nodeId, "Late joiner");
-  const ownDirect = app.chat.getOrCreateAgentDirectChannel(agentId)!,
-    publicRoom = app.chat.createChannel({
-      name: "Open history",
-      description: "History stays quiet when an Agent joins.",
-      visibility: "public",
-    }),
-    oldRoot = app.chat.createMessage(publicRoom.id, "History before joining.")!;
-  app.chat.createMessage(publicRoom.id, "Another old note.", { rootId: oldRoot.id });
-  await app.request("/api/owner/model-credentials/openai", {
+  const ownDirect = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
+  const publicRoom = app.chat.channels.createChannel({
+    name: "Open history",
+    description: "History stays quiet when an Agent joins.",
+    visibility: "public",
+  });
+  const oldRoot = app.chat.messages.createMessage({
+    channelId: publicRoom.id,
+    text: "History before joining.",
+  })!;
+  app.chat.messages.createMessage({
+    channelId: publicRoom.id,
+    text: "Another old note.",
+    rootId: oldRoot.id,
+  });
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
   });
   const runStart = socket.sent.length;
-  app.chat.createMessage(ownDirect.id, "Start a conversation tool run.");
+  app.chat.messages.createMessage({
+    channelId: ownDirect.id,
+    text: "Start a conversation tool run.",
+  });
   const run = await waitForRun(socket, runStart);
 
   // Reading the public history before joining creates nothing to be unread later.
@@ -65,18 +74,19 @@ it("does not backfill a just-joined channel as unread nor forget what was alread
       )
       .get(publicRoom.id, agentId),
   ).toMatchObject({ joinedAt: expect.any(Number) });
-  const joinedAtBefore = (
-    db
-      .prepare(
-        "SELECT joined_at AS joinedAt FROM owner_channel_memberships WHERE channel_id=? AND principal_kind='agent' AND principal_id=?",
-      )
-      .get(publicRoom.id, agentId) as { joinedAt: number }
-  ).joinedAt;
+  const joinedAtBefore = db
+    .prepare<[string, string], { joinedAt: number }>(
+      "SELECT joined_at AS joinedAt FROM owner_channel_memberships WHERE channel_id=? AND principal_kind='agent' AND principal_id=?",
+    )
+    .get(publicRoom.id, agentId)!.joinedAt;
 
   // A later delivery becomes unread, is read, and stays read across a second join.
   await finishRun(app, socket, run);
   const beforeFresh = socket.sent.length;
-  const fresh = app.chat.createMessage(publicRoom.id, "Fresh activity after joining.")!;
+  const fresh = app.chat.messages.createMessage({
+    channelId: publicRoom.id,
+    text: "Fresh activity after joining.",
+  })!;
   const freshRun = await waitForRun(socket, beforeFresh);
   const freshRead = await callAgentTool(app, socket, freshRun, "read-fresh", "tools.call", {
     name: "conversations.read",

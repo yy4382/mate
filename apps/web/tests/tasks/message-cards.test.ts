@@ -1,5 +1,4 @@
 // @vitest-environment jsdom
-// @vitest-environment jsdom
 import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -55,7 +54,7 @@ it("creates titled tasks repeatedly on the root and reply and shows every title,
   await user.click(screen.getByRole("button", { name: `消息 ${root.text} 的操作` }));
   await user.click(screen.getByRole("button", { name: "从消息建任务" }));
   const title = screen.getByRole("textbox", { name: "任务标题" });
-  expect((title as HTMLInputElement).value).toBe(root.text);
+  expect(title).toHaveProperty("value", root.text);
   await user.clear(title);
   await user.type(title, "  新的根任务  ");
   await user.click(screen.getByRole("button", { name: "创建任务", exact: true }));
@@ -109,12 +108,10 @@ it("keeps a newer task form open when an earlier message's create finishes", asy
   const second = message(publicChannel.id, "second-task-source", "第二项工作的消息", "2");
   fixture.history.set(publicChannel.id, [first, second]);
   const handleFetch = fixture.fetchMock.getMockImplementation()!;
-  let signalStarted!: () => void, release!: () => void;
-  let signalSecondStarted!: () => void, releaseSecond!: () => void;
-  const started = new Promise<void>((resolve) => (signalStarted = resolve));
-  const waiting = new Promise<void>((resolve) => (release = resolve));
-  const secondStarted = new Promise<void>((resolve) => (signalSecondStarted = resolve));
-  const secondWaiting = new Promise<void>((resolve) => (releaseSecond = resolve));
+  const { promise: started, resolve: signalStarted } = Promise.withResolvers<void>();
+  const { promise: waiting, resolve: release } = Promise.withResolvers<void>();
+  const { promise: secondStarted, resolve: signalSecondStarted } = Promise.withResolvers<void>();
+  const { promise: secondWaiting, resolve: releaseSecond } = Promise.withResolvers<void>();
   fixture.fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
     const response = await handleFetch(input, init);
     if (String(input) === "/api/owner/tasks" && init?.method === "POST") {
@@ -143,15 +140,17 @@ it("keeps a newer task form open when an earlier message's create finishes", asy
   await secondStarted;
   await act(async () => release());
 
-  expect((screen.getByRole("textbox", { name: "任务标题" }) as HTMLInputElement).value).toBe(
+  expect(screen.getByRole("textbox", { name: "任务标题" })).toHaveProperty(
+    "value",
     "继续编辑第二项任务",
   );
   expect(document.getElementById(`message-${first.id}`)?.textContent).toContain(
     `任务 · 待认领 · ${first.text}`,
   );
-  expect(
-    (screen.getByRole("button", { name: "创建任务", exact: true }) as HTMLButtonElement).disabled,
-  ).toBe(true);
+  expect(screen.getByRole("button", { name: "创建任务", exact: true })).toHaveProperty(
+    "disabled",
+    true,
+  );
   await act(async () => releaseSecond());
   await waitFor(() => expect(screen.queryByRole("form", { name: "创建任务" })).toBeNull());
   expect(fixture.taskPosts).toEqual([

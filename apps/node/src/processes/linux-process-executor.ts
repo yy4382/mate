@@ -18,10 +18,8 @@ export interface LinuxAgentProcessExecutorOptions {
 }
 
 /**
- * Execute the Agent's ordinary operations on the host. A command is a shell child process of the
- * account the node already runs as, in the Agent's own default workspace: Mate adds no privilege,
- * no wrapper and no approval, and a `sudo` the Agent wrote reaches the host unchanged. Only what
- * this node started and can still signal is ever reported as a running process.
+ * Dispatch ordinary operations through the existing account's command runner (ADR-0004).
+ * Process tools report only commands tracked by this node run.
  */
 export function createLinuxAgentProcessExecutor(
   agentHomeRoot: string,
@@ -30,7 +28,7 @@ export function createLinuxAgentProcessExecutor(
   const commandTimeoutMs = options.commandTimeoutMs ?? defaultCommandTimeoutMs;
   if (!Number.isSafeInteger(commandTimeoutMs) || commandTimeoutMs < 1 || commandTimeoutMs > 300_000)
     throw new Error("Agent command timeout must be between 1 and 300000 milliseconds");
-  const runner: AgentCommandRunner = options.runner ?? new OrdinaryCommandRunner();
+  const runner = options.runner ?? new OrdinaryCommandRunner();
   return async ({ agentId, operationId, operation }) => {
     switch (operation.kind) {
       case "exec": {
@@ -40,9 +38,8 @@ export function createLinuxAgentProcessExecutor(
         } catch {
           return { state: "failed", receipt: { reason: "agent_workspace_unavailable" } };
         }
-        // `cwd` defaults to the Agent's own workspace. It is deliberately not confined to it:
-        // ADR-0004 makes a workspace an organisational location, not a Unix boundary, and the same
-        // account's commands are not gated on which directory they name.
+        // Resolve cwd from the Agent's default workspace; it may name another host directory
+        // under the same-account command model (ADR-0004).
         const cwd = resolve(identity.workspace, operation.cwd);
         if (!isDirectory(cwd))
           return { state: "failed", receipt: { reason: "command_cwd_unavailable" } };
@@ -111,10 +108,8 @@ export function createLinuxAgentProcessExecutor(
             };
       }
       case "process.stop_all": {
-        // The tracker only knows commands this node process started, so the receipt says exactly
-        // that: "everything I was tracking is stopped" is not "nothing from an earlier node run
-        // can still be running". The control plane reads the same scope and tells the owner which
-        // of its durable command records the node could not confirm.
+        // The scope names this node run's tracked commands. Earlier runs' commands remain
+        // unconfirmed in the control plane's durable records.
         const { stopped, unconfirmed } = await runner.stopAll(agentId);
         return unconfirmed.length === 0
           ? {

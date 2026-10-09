@@ -1,7 +1,7 @@
 import { lstatSync, readdirSync, realpathSync, rmSync, rmdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
-import { nodePaths } from "./paths.js";
+import { lstatIfPresent, nodePaths } from "./paths.js";
 import {
   readBundle,
   verifyBundle,
@@ -9,7 +9,7 @@ import {
   runningBundleDirectory,
   type BundleMetadata,
 } from "./bundle.js";
-import { checkManagedDirectory, lstatIfPresent } from "./install-entry.js";
+import { checkManagedDirectory } from "./install-entry.js";
 import { createAtomicNoReplaceRename } from "../files/mutations/atomic-rename.js";
 
 /** A trusted unchanged inventory identifies damaged owned program files, never arbitrary extra files. */
@@ -35,8 +35,8 @@ function assertRepairOwnership(directory: string, metadata: BundleMetadata) {
   }
   const visit = (relative: string) => {
     for (const name of readdirSync(join(directory, relative))) {
-      const path = relative ? `${relative}/${name}` : name,
-        info = lstatSync(join(directory, path));
+      const path = relative ? `${relative}/${name}` : name;
+      const info = lstatSync(join(directory, path));
       if (
         info.uid !== process.getuid?.() ||
         (!info.isDirectory() && !info.isFile()) ||

@@ -3,14 +3,14 @@ import { join } from "node:path";
 import { queueUncertainOperationFacts } from "../../../src/runtime/recovery/context.js";
 import { AgentSession } from "../../../src/runtime/session/service.js";
 import {
-  createControlPlaneApp,
-  type ControlPlaneAppOptions,
-  type ControlPlaneApp,
-} from "../../../src/http.js";
-import type { NodeSocket } from "../../../src/nodes/directory.js";
+  createControlPlane,
+  type ControlPlaneOptions,
+  type ControlPlane,
+} from "../../../src/application.js";
+import type { NodeSocket } from "../../../src/nodes/transport.js";
 
-/** Existing authorization tests pause the real scheduler before the external provider boundary.
- * Their calls now enter the public tool/session services directly, without a model transport. */
+/** Tool/session tests pause the real scheduler before the external provider boundary.
+ * Calls enter the public tool/session services directly, without a model transport. */
 export interface TestRun {
   type: "test.run.started";
   requestId: string;
@@ -24,15 +24,15 @@ export interface TestRun {
   modelId: string;
 }
 const fixtures = new WeakMap<
-  ControlPlaneApp,
+  ControlPlane,
   { path: string; sockets: Map<string, { sent: string[] }>; gates: Map<string, () => void> }
 >();
 const socketNodes = new WeakMap<object, string>();
-export function toolTestApp(options: ControlPlaneAppOptions): ControlPlaneApp {
-  const path = join(options.dataDir!, "control-plane.sqlite"),
-    sockets = new Map<string, { sent: string[] }>(),
-    gates = new Map<string, () => void>();
-  const app = createControlPlaneApp(options, {
+export function toolTestApp(options: ControlPlaneOptions): ControlPlane {
+  const path = join(options.dataDir!, "control-plane.sqlite");
+  const sockets = new Map<string, { sent: string[] }>();
+  const gates = new Map<string, () => void>();
+  const app = createControlPlane(options, {
     beforeRunStart: async (runId) => {
       const db = new Database(path);
       try {
@@ -65,7 +65,7 @@ export function toolTestApp(options: ControlPlaneAppOptions): ControlPlaneApp {
   return app;
 }
 export function bindToolSocket(
-  app: ControlPlaneApp,
+  app: ControlPlane,
   nodeId: string,
   socket: { sent: string[] },
 ): void {
@@ -73,22 +73,22 @@ export function bindToolSocket(
   socketNodes.set(socket, nodeId);
 }
 export async function toolTestInput(
-  app: ControlPlaneApp,
+  app: ControlPlane,
   socket: NodeSocket & { sent: string[] },
   raw: string,
 ): Promise<void> {
-  const input = JSON.parse(raw),
-    fixture = fixtures.get(app)!;
+  const input = JSON.parse(raw);
+  const fixture = fixtures.get(app)!;
   if (input.type === "node.pair" || input.type === "node.authenticate")
     bindToolSocket(app, input.nodeId, socket);
   if (input.type === "session.read") {
     const db = new Database(fixture.path);
     try {
       queueUncertainOperationFacts(db, input.agentId, Date.now());
-      const session = new AgentSession(db),
-        run = db
-          .prepare("SELECT delivery_id FROM owner_agent_runs WHERE id=?")
-          .get(input.runId) as { delivery_id: string };
+      const session = new AgentSession(db);
+      const run = db
+        .prepare("SELECT delivery_id FROM owner_agent_runs WHERE id=?")
+        .get(input.runId) as { delivery_id: string };
       socket.sent.push(
         JSON.stringify({
           messages: [
@@ -124,9 +124,7 @@ export async function toolTestInput(
     const db = new Database(fixture.path);
     try {
       const accepted = new AgentSession(db).append(
-        input.runId,
-        socketNodes.get(socket)!,
-        input.agentId,
+        { runId: input.runId, nodeId: socketNodes.get(socket)!, agentId: input.agentId },
         input.entry,
       );
       socket.sent.push(JSON.stringify({ type: "session.commit", accepted }));
@@ -134,7 +132,7 @@ export async function toolTestInput(
       db.close();
     }
   } else if (input.type === "run.complete") {
-    if (input.ok) app.chat.completeAgentRun(input.runId, input.agentId);
+    if (input.ok) app.chat.deliveries.completeAgentRun(input.runId, input.agentId);
     else {
       const db = new Database(fixture.path);
       try {

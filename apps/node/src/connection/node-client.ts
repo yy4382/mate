@@ -127,10 +127,8 @@ async function runLinuxNodeInternal(
       retryMs = Math.min(retryMs * 2, MAX_RETRY_MS);
     }
   } finally {
-    // A node that is going away must not leave work behind that nothing tracks any more: each
-    // ordinary command is its own process group, so it survives the node that started it. The stop
-    // is best effort and its report is written to the node's own output, because shutdown still has
-    // to finish; the durable operation records keep the result reviewable afterwards.
+    // Commands have their own process groups (ADR-0004), so shutdown attempts to stop them.
+    // Log the best-effort report while durable operation records retain the results.
     try {
       const { stopped, unconfirmed } = await processOperations.stopAllAgents();
       if (stopped.length > 0 || unconfirmed.length > 0)
@@ -207,25 +205,25 @@ function connectOnce(
   const socket = new WebSocket(url, { perMessageDeflate: false });
 
   return new Promise<boolean>((resolveConnection, rejectConnection) => {
-    let settled = false,
-      authenticated = false,
-      challenge: string | undefined,
-      authenticateRequestId: string | undefined,
-      pairRequestId: string | undefined,
-      heartbeat: ReturnType<typeof setInterval> | undefined,
-      pingTimeout: ReturnType<typeof setTimeout> | undefined,
-      forceTerminateTimeout: ReturnType<typeof setTimeout> | undefined,
-      pendingPing: string | undefined,
-      timeout: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
+    let authenticated = false;
+    let challenge: string | undefined;
+    let authenticateRequestId: string | undefined;
+    let pairRequestId: string | undefined;
+    let heartbeatInterval: ReturnType<typeof setInterval> | undefined;
+    let pingTimeout: ReturnType<typeof setTimeout> | undefined;
+    let forceTerminateTimeout: ReturnType<typeof setTimeout> | undefined;
+    let pendingPing: string | undefined;
+    let handshakeTimeout: ReturnType<typeof setTimeout> | undefined;
     const canSend = () => socket.readyState === WebSocket.OPEN && authenticated;
     const send = (request: unknown) => sendRequest(socket, request);
     const processRequests = new NodeProcessRequests(processOperations, canSend, send);
     const workspaceRequests = new NodeWorkspaceRequests(workspaceExecutor, canSend, send);
     const cleanup = () => {
-      if (heartbeat) clearInterval(heartbeat);
+      if (heartbeatInterval) clearInterval(heartbeatInterval);
       if (pingTimeout) clearTimeout(pingTimeout);
       if (forceTerminateTimeout) clearTimeout(forceTerminateTimeout);
-      if (timeout) clearTimeout(timeout);
+      if (handshakeTimeout) clearTimeout(handshakeTimeout);
       signal.removeEventListener("abort", onAbort);
       socket.removeEventListener("message", onMessage);
       socket.removeEventListener("close", onClose);
@@ -346,24 +344,24 @@ function connectOnce(
       if (message.type === "control.paired") {
         if (message.requestId !== pairRequestId || message.nodeId !== identity.id)
           throw new NodeAuthenticationError("控制面返回了不匹配的节点配对确认。");
-        if (timeout) clearTimeout(timeout);
-        timeout = undefined;
+        if (handshakeTimeout) clearTimeout(handshakeTimeout);
+        handshakeTimeout = undefined;
         clearPairingToken();
         authenticated = true;
         process.stdout.write(`MATE_NODE_PAIRED ${identity.id}\n`);
         sendPing();
-        heartbeat = setInterval(sendPing, heartbeatIntervalMs);
+        heartbeatInterval = setInterval(sendPing, heartbeatIntervalMs);
         return;
       }
       if (message.type === "control.authenticated") {
         if (message.requestId !== authenticateRequestId || message.nodeId !== identity.id)
           throw new NodeAuthenticationError("控制面返回了不匹配的节点身份确认。");
-        if (timeout) clearTimeout(timeout);
-        timeout = undefined;
+        if (handshakeTimeout) clearTimeout(handshakeTimeout);
+        handshakeTimeout = undefined;
         authenticated = true;
         process.stdout.write(`MATE_NODE_CONNECTED ${identity.id}\n`);
         sendPing();
-        heartbeat = setInterval(sendPing, heartbeatIntervalMs);
+        heartbeatInterval = setInterval(sendPing, heartbeatIntervalMs);
         return;
       }
       if (message.type === "control.pong" && pendingPing === message.requestId) {
@@ -405,23 +403,25 @@ function connectOnce(
       if (message.type === "control.agent.provision") {
         if (!authenticated)
           throw new NodeAuthenticationError("控制面在节点身份验证前请求创建 Agent。");
+        const prepareWorkspace: AgentWorkspaceRunner = (agentId, onProgress) => {
+          if (message.verifyOnly)
+            return Promise.resolve(
+              readAgentWorkspaceIdentity(agentId, resolvePath(agentWorkspaceRoot)),
+            );
+          if (testDependencies.prepareAgentWorkspace)
+            return testDependencies.prepareAgentWorkspace(agentId, onProgress);
+          return prepareAgentWorkspace({
+            agentId,
+            workspaceRoot: resolvePath(agentWorkspaceRoot),
+            onProgress,
+          });
+        };
         void handleAgentProvisionRequest(
           message,
           (request) => {
             if (socket.readyState === WebSocket.OPEN) sendRequest(socket, request);
           },
-          (agentId, onProgress) =>
-            message.verifyOnly
-              ? Promise.resolve(
-                  readAgentWorkspaceIdentity(agentId, resolvePath(agentWorkspaceRoot)),
-                )
-              : testDependencies.prepareAgentWorkspace
-                ? testDependencies.prepareAgentWorkspace(agentId, onProgress)
-                : prepareAgentWorkspace({
-                    agentId,
-                    workspaceRoot: resolvePath(agentWorkspaceRoot),
-                    onProgress,
-                  }),
+          prepareWorkspace,
         ).catch(() => {
           // Provisioning failures are returned as bounded protocol results by its handler.
         });
@@ -432,7 +432,7 @@ function connectOnce(
     socket.addEventListener("message", onMessage);
     socket.addEventListener("close", onClose, { once: true });
     socket.addEventListener("error", onError);
-    timeout = setTimeout(
+    handshakeTimeout = setTimeout(
       () => reject(new Error("Node WebSocket handshake timed out")),
       HANDSHAKE_TIMEOUT_MS,
     );

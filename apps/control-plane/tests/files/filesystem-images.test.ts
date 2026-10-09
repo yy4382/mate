@@ -71,12 +71,9 @@ it.each([false, true])(
             { name: "tools.call", input: { name: "workspace.read", input: { path: "image" } } },
           ]);
         } else {
-          respond(
-            response,
-            compact && turn === 2 ? "x".repeat(28000) : "done",
-            undefined,
-            compact && turn === 2 ? 15000 : 50,
-          );
+          respond(response, compact && turn === 2 ? "x".repeat(28000) : "done", {
+            inputTokens: compact && turn === 2 ? 15000 : 50,
+          });
         }
       },
       "",
@@ -129,14 +126,31 @@ it.each([false, true])(
 
 it("resumes a committed multi-chunk image after a crash without rereading the removed source", async () => {
   let turn = 0;
-  const fixture = await loopFixture((_request, response) => {
-    respond(
-      response,
-      turn++ === 0
-        ? [{ name: "tools.call", input: { name: "workspace.read", input: { path: "large.png" } } }]
-        : "done",
-    );
-  }, ', afterSessionCommit: async entry => { if (entry.kind === "message" && entry.message.role === "toolResult" && entry.message.content.some(block => block.type === "image")) { console.log("MATE_IMAGE_COMMITTED"); await new Promise(() => {}); } }');
+  const fixture = await loopFixture(
+    (_request, response) => {
+      respond(
+        response,
+        turn++ === 0
+          ? [
+              {
+                name: "tools.call",
+                input: { name: "workspace.read", input: { path: "large.png" } },
+              },
+            ]
+          : "done",
+      );
+    },
+    `, afterSessionCommit: async entry => {
+      if (
+        entry.kind === "message" &&
+        entry.message.role === "toolResult" &&
+        entry.message.content.some(block => block.type === "image")
+      ) {
+        console.log("MATE_IMAGE_COMMITTED");
+        await new Promise(() => {});
+      }
+    }`,
+  );
   try {
     const agent = await fixture.agent();
     const bytes = Buffer.alloc(5 * 1024 * 1024);
@@ -224,9 +238,9 @@ it.each(["gpt-4", "gpt-4o-mini"])(
 );
 
 it("keeps an uploaded image out of a vision request even when the uploader claims text", async () => {
-  let attachmentId = "",
-    conversationId = "",
-    turn = 0;
+  let attachmentId = "";
+  let conversationId = "";
+  let turn = 0;
   const fixture = await loopFixture((_request, response) => {
     respond(
       response,

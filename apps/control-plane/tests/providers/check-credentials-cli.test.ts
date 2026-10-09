@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 import { resolve } from "node:path";
 
 import { checkProviderProtocol } from "../../src/providers/active-check.js";
-import { withProvider, text } from "../support/provider/protocol-fixture.js";
+import { withProvider } from "../support/provider/protocol-fixture.js";
 
 it("an owner check without an explicitly supplied credential remains unverified", async () => {
   const result = await checkProviderProtocol({ provider: "openai", modelId: "gpt-4o-mini" });

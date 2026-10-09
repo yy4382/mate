@@ -9,7 +9,7 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
 });
-const json = (body: unknown) => ({ status: 200, ok: true, json: async () => body }) as Response;
+const json = (body: unknown) => Response.json(body);
 
 it("shows each paired node's live connection state from the control plane", async () => {
   vi.stubGlobal(

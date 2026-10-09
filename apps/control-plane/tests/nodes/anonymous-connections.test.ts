@@ -3,8 +3,7 @@ import { spawn } from "node:child_process";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 
 import { tmpdir } from "node:os";
-import { resolve } from "node:path";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { expect, it } from "vitest";
@@ -26,7 +25,15 @@ it("bounds node WebSocket connections and rejects malformed or oversized anonymo
   const passwordFile = join(directory, "owner-password");
   writeFileSync(passwordFile, `${ownerPassword}\n`, { mode: 0o600 });
   const moduleUrl = pathToFileURL(resolve("dist/main.js")).href;
-  const runner = `const { startControlPlane } = await import(${JSON.stringify(moduleUrl)}); startControlPlane(0, undefined, { dataDir: process.env.MATE_CONTROL_PLANE_DATA_DIR, passwordFile: process.env.MATE_OWNER_PASSWORD_FILE, maxNodeConnections: 3, maxUnauthenticatedNodeConnections: 1, nodeHandshakeTimeoutMs: 1000 });`;
+  const runner = `
+    const { startControlPlane } = await import(${JSON.stringify(moduleUrl)});
+    startControlPlane(0, undefined, {
+      dataDir: process.env.MATE_CONTROL_PLANE_DATA_DIR,
+      passwordFile: process.env.MATE_OWNER_PASSWORD_FILE,
+      maxNodeConnections: 3,
+      maxUnauthenticatedNodeConnections: 1,
+      nodeHandshakeTimeoutMs: 1000
+    });`;
   const serverChild = spawn(process.execPath, ["--input-type=module", "--eval", runner], {
     cwd: process.cwd(),
     env: {

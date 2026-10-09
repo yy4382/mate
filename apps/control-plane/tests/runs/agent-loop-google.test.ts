@@ -7,7 +7,21 @@ it("the real Google SDK adapter uses the local endpoint and preserves unknown ca
   const fixture = await loopFixture((_request, response) => {
     response.writeHead(200, { "content-type": "text/event-stream" });
     response.end(
-      `data: ${JSON.stringify({ responseId: `google-synthetic-response-${turn}`, candidates: [{ content: { role: "model", parts: [{ text: "Google正文仅保留在会话。" }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 10, totalTokenCount: 110, ...(turn++ ? { cachedContentTokenCount: 30 } : {}) } })}\n\n`,
+      `data: ${JSON.stringify({
+        responseId: `google-synthetic-response-${turn}`,
+        candidates: [
+          {
+            content: { role: "model", parts: [{ text: "Google正文仅保留在会话。" }] },
+            finishReason: "STOP",
+          },
+        ],
+        usageMetadata: {
+          promptTokenCount: 100,
+          candidatesTokenCount: 10,
+          totalTokenCount: 110,
+          ...(turn++ ? { cachedContentTokenCount: 30 } : {}),
+        },
+      })}\n\n`,
     );
   });
   try {
@@ -29,13 +43,12 @@ it("the real Google SDK adapter uses the local endpoint and preserves unknown ca
     await fixture.send(agent.channelId, "Google已报告的缓存值");
     await eventually(
       () =>
-        fixture.db(
-          (db) =>
-            db
-              .prepare(
-                "SELECT COUNT(*) AS n FROM owner_agent_runs WHERE agent_id=? AND state='completed'",
-              )
-              .get(agent.id) as any,
+        fixture.db((db) =>
+          db
+            .prepare<[string], { n: number }>(
+              "SELECT COUNT(*) AS n FROM owner_agent_runs WHERE agent_id=? AND state='completed'",
+            )
+            .get(agent.id),
         )?.n === 2
           ? true
           : undefined,
@@ -71,11 +84,12 @@ it("the real Google SDK credential rejection pauses without treating its normali
     await fixture.send(agent.channelId, "保持未处理。");
     await eventually(
       () =>
-        fixture.db(
-          (db) =>
-            db
-              .prepare("SELECT paused_reason FROM owner_agent_run_control WHERE agent_id=?")
-              .get(agent.id) as any,
+        fixture.db((db) =>
+          db
+            .prepare<[string], { paused_reason: string | null }>(
+              "SELECT paused_reason FROM owner_agent_run_control WHERE agent_id=?",
+            )
+            .get(agent.id),
         )?.paused_reason === "credentials"
           ? true
           : undefined,

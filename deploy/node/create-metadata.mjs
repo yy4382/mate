@@ -2,11 +2,14 @@ import { createHash } from "node:crypto";
 import { chmodSync, lstatSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { bundleMetadata, releaseVersion } from "../../apps/node/dist/management/bundle.js";
+import {
+  bundleMetadataSchema,
+  releaseVersionSchema,
+} from "../../apps/node/dist/management/bundle.js";
 
 const [directory, requestedVersion] = process.argv.slice(2);
 if (!directory) throw new Error("Bundle directory is required");
-const version = releaseVersion.parse(requestedVersion);
+const version = releaseVersionSchema.parse(requestedVersion);
 const files = [];
 const symbols = [];
 function visit(relative) {
@@ -33,20 +36,20 @@ function visit(relative) {
   }
 }
 visit("");
-function highest(prefix) {
+function highestLibraryVersion(prefix) {
   const values = symbols.filter((symbol) => symbol[1] === prefix).map((symbol) => symbol[2]);
-  values.sort((a, b) => {
-    const aa = a.split(".").map(Number),
-      bb = b.split(".").map(Number);
-    for (let i = 0; i < Math.max(aa.length, bb.length); i++) {
-      const difference = (aa[i] ?? 0) - (bb[i] ?? 0);
+  values.sort((left, right) => {
+    const leftParts = left.split(".").map(Number);
+    const rightParts = right.split(".").map(Number);
+    for (let i = 0; i < Math.max(leftParts.length, rightParts.length); i++) {
+      const difference = (leftParts[i] ?? 0) - (rightParts[i] ?? 0);
       if (difference) return difference;
     }
     return 0;
   });
   return values.at(-1) ?? "none";
 }
-const metadata = bundleMetadata.parse({
+const metadata = bundleMetadataSchema.parse({
   format: 1,
   version,
   nodeVersion: process.version,
@@ -54,9 +57,9 @@ const metadata = bundleMetadata.parse({
   architecture: process.arch,
   buildSystem: { id: "debian", version: "12" },
   systemLibraries: {
-    glibc: highest("GLIBC"),
-    glibcxx: highest("GLIBCXX"),
-    cxxabi: highest("CXXABI"),
+    glibc: highestLibraryVersion("GLIBC"),
+    glibcxx: highestLibraryVersion("GLIBCXX"),
+    cxxabi: highestLibraryVersion("CXXABI"),
   },
   targetSystems: ["ubuntu:24.04", "debian:13"],
   files,

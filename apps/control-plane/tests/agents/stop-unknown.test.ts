@@ -9,14 +9,14 @@ import { afterEach, expect, it } from "vitest";
 import {
   fixtures,
   cleanupFixture,
-  setup,
+  createAgentCreationFixture,
   login,
   pairNode,
 } from "../support/agent/creation-fixture.js";
 afterEach(cleanupFixture);
 
 it("reports an earlier command whose termination the node cannot confirm as unknown, not stopped", async () => {
-  const app = setup();
+  const app = createAgentCreationFixture();
   const cookie = await login(app);
   const { id: nodeId, socket } = await pairNode(app, cookie);
   const id = randomUUID();
@@ -41,20 +41,20 @@ it("reports an earlier command whose termination the node cannot confirm as unkn
   );
   // A command really started, and the node then restarted: the node's own restart mute says its
   // shutdown left the command's fate unproven. Only the node's durable receipt can say that.
-  const directory = fixtures.at(-1)!.directory,
-    db = new Database(join(directory, "control-plane", "control-plane.sqlite")),
-    earlierOperationId = randomUUID(),
-    runId = randomUUID(),
-    at = Date.now();
+  const directory = fixtures.at(-1)!.directory;
+  const db = new Database(join(directory, "control-plane", "control-plane.sqlite"));
+  const earlierOperationId = randomUUID();
+  const runId = randomUUID();
+  const at = Date.now();
   try {
-    const channel = app.chat.getOrCreateAgentDirectChannel(id)!;
-    app.chat.createMessage(channel.id, "先跑一条普通命令。");
+    const channel = app.chat.conversations.getOrCreateAgentDirectChannel(id)!;
+    app.chat.messages.createMessage({ channelId: channel.id, text: "先跑一条普通命令。" });
     const delivery = db
-      .prepare(
+      .prepare<[string], { id: string }>(
         `SELECT id FROM owner_message_deliveries
          WHERE recipient_kind='agent' AND recipient_id=? ORDER BY seq DESC LIMIT 1`,
       )
-      .get(id) as { id: string };
+      .get(id)!;
     db.prepare(
       `INSERT INTO owner_agent_runs(
          id,agent_id,node_id,delivery_id,state,started_at,input_end_seq,context_history_end_seq
@@ -83,8 +83,12 @@ it("reports an earlier command whose termination the node cannot confirm as unkn
       at,
     );
     expect(
-      (await app.request(`/api/owner/agents/${id}/pause`, { method: "POST", headers: { cookie } }))
-        .status,
+      (
+        await app.http.request(`/api/owner/agents/${id}/pause`, {
+          method: "POST",
+          headers: { cookie },
+        })
+      ).status,
     ).toBe(200);
     const stopRequest = socket.sent
       .map((text) => JSON.parse(text) as Record<string, unknown>)
@@ -118,7 +122,7 @@ it("reports an earlier command whose termination the node cannot confirm as unkn
 });
 
 it("counts every command whose termination nothing proved, however the node answered", async () => {
-  const app = setup();
+  const app = createAgentCreationFixture();
   const cookie = await login(app);
   const { id: nodeId, socket } = await pairNode(app, cookie);
   const id = randomUUID();
@@ -141,26 +145,26 @@ it("counts every command whose termination nothing proved, however the node answ
     },
     app.chat,
   );
-  const directory = fixtures.at(-1)!.directory,
-    db = new Database(join(directory, "control-plane", "control-plane.sqlite")),
-    at = Date.now();
+  const directory = fixtures.at(-1)!.directory;
+  const db = new Database(join(directory, "control-plane", "control-plane.sqlite"));
+  const at = Date.now();
   // Four durable records: a command the node itself could not end, one Mate had to end that still
   // left a descendant alive, one that exited zero but left a background descendant in its group, and
   // one that provably never launched a shell.
-  const survivedStop = randomUUID(),
-    survivorsLeft = randomUUID(),
-    descendantLeft = randomUUID(),
-    neverStarted = randomUUID(),
-    rejectedByNode = randomUUID();
+  const survivedStop = randomUUID();
+  const survivorsLeft = randomUUID();
+  const descendantLeft = randomUUID();
+  const neverStarted = randomUUID();
+  const rejectedByNode = randomUUID();
   try {
-    const channel = app.chat.getOrCreateAgentDirectChannel(id)!;
-    app.chat.createMessage(channel.id, "先跑几条普通命令。");
+    const channel = app.chat.conversations.getOrCreateAgentDirectChannel(id)!;
+    app.chat.messages.createMessage({ channelId: channel.id, text: "先跑几条普通命令。" });
     const delivery = db
-      .prepare(
+      .prepare<[string], { id: string }>(
         `SELECT id FROM owner_message_deliveries
          WHERE recipient_kind='agent' AND recipient_id=? ORDER BY seq DESC LIMIT 1`,
       )
-      .get(id) as { id: string };
+      .get(id)!;
     const runId = randomUUID();
     db.prepare(
       `INSERT INTO owner_agent_runs(
@@ -209,7 +213,10 @@ it("counts every command whose termination nothing proved, however the node answ
       timedOut: false,
       processGroupRunning: true,
     });
-    await app.request(`/api/owner/agents/${id}/pause`, { method: "POST", headers: { cookie } });
+    await app.http.request(`/api/owner/agents/${id}/pause`, {
+      method: "POST",
+      headers: { cookie },
+    });
     const stopRequest = socket.sent
       .map((text) => JSON.parse(text) as Record<string, unknown>)
       .find(
@@ -247,7 +254,7 @@ it("counts every command whose termination nothing proved, however the node answ
     expect(stop.unconfirmedOperationIds).not.toContain(neverStarted);
     expect(stop.unconfirmedOperationIds).not.toContain(rejectedByNode);
     const activity = (await (
-      await app.request(`/api/owner/agents/${id}/activity?detail=1`, { headers: { cookie } })
+      await app.http.request(`/api/owner/agents/${id}/activity?detail=1`, { headers: { cookie } })
     ).json()) as {
       events: Array<{ kind: string; summary: string; referenceId: string | null }>;
     };
@@ -262,7 +269,7 @@ it("counts every command whose termination nothing proved, however the node answ
 });
 
 it("uses a fresh stop operation ID after an unknown node receipt", async () => {
-  const app = setup();
+  const app = createAgentCreationFixture();
   const cookie = await login(app);
   const { id: nodeId, socket } = await pairNode(app, cookie);
   const id = randomUUID();
@@ -286,7 +293,7 @@ it("uses a fresh stop operation ID after an unknown node receipt", async () => {
     app.chat,
   );
   const pause = () =>
-    app.request(`/api/owner/agents/${id}/pause`, { method: "POST", headers: { cookie } });
+    app.http.request(`/api/owner/agents/${id}/pause`, { method: "POST", headers: { cookie } });
   expect((await pause()).status).toBe(200);
   const stopRequests = () =>
     socket.sent

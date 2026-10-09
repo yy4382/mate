@@ -1,24 +1,23 @@
 import { createHash, randomUUID } from "node:crypto";
-import { readFileSync, readdirSync, readlinkSync, realpathSync, rmdirSync, rmSync } from "node:fs";
+import { readFileSync, readdirSync, readlinkSync, rmdirSync, rmSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { readBundle, releaseVersion } from "./bundle.js";
+import { readBundle, releaseVersionSchema } from "./bundle.js";
 import { readNodeConfiguration } from "./configuration.js";
 import {
   checkManagedDirectory,
   installedEntryVersion,
-  lstatIfPresent,
   requireOrdinaryAccount,
   recoverInstallationStaging,
   withManagementLock,
 } from "./install-entry.js";
-import { nodePaths } from "./paths.js";
+import { canonicalManagedPath, lstatIfPresent, nodePaths } from "./paths.js";
 import {
   readManagedUnit,
-  renderNodeUnit,
   serviceReferencesBundle,
+  renderNodeUnit,
   interruptedUnitFiles,
   recoverUnitStaging,
-} from "./service/commands.js";
+} from "./service/unit.js";
 import { systemdUserManager } from "./service/systemd.js";
 import { finishSameVersionRepair } from "./repair-bundle.js";
 import { createAtomicNoReplaceRename } from "../files/mutations/atomic-rename.js";
@@ -42,27 +41,27 @@ function inspectRemovalStaging(paths: ReturnType<typeof nodePaths>) {
     checkManagedDirectory(directory);
     for (const name of readdirSync(directory)) {
       if (!pattern.test(name)) continue;
-      const file = join(directory, name),
-        info = lstatIfPresent(file);
+      const file = join(directory, name);
+      const info = lstatIfPresent(file);
       if (!info || info.uid !== process.getuid?.())
         throw new Error(`Unknown interrupted removal file preserved: ${file}`);
       if (unit) {
-        const text = info.isFile() ? readFileSync(file, "utf8") : "",
-          version = text.match(/^# Mate bundle version: (.+)$/m)?.[1];
+        const text = info.isFile() ? readFileSync(file, "utf8") : "";
+        const version = text.match(/^# Mate bundle version: (.+)$/m)?.[1];
         if (
           !version ||
-          !releaseVersion.safeParse(version).success ||
+          !releaseVersionSchema.safeParse(version).success ||
           text !== renderNodeUnit(paths, version)
         )
           throw new Error(`Unknown interrupted removal unit preserved: ${file}`);
       } else {
-        const target = info.isSymbolicLink() ? readlinkSync(file) : "",
-          prefix = `${paths.versionsDirectory}/`;
+        const target = info.isSymbolicLink() ? readlinkSync(file) : "";
+        const prefix = `${paths.versionsDirectory}/`;
         const version =
           target.startsWith(prefix) && target.endsWith("/bin/mate")
             ? target.slice(prefix.length, -"/bin/mate".length)
             : "";
-        if (!releaseVersion.safeParse(version).success)
+        if (!releaseVersionSchema.safeParse(version).success)
           throw new Error(`Unknown interrupted removal entry preserved: ${file}`);
       }
       files.push(file);
@@ -87,20 +86,17 @@ function retainedLocations(paths: ReturnType<typeof nodePaths>, ensureSeparate =
   const config = lstatIfPresent(paths.configuration)
     ? readNodeConfiguration(paths.configuration, paths)
     : undefined;
-  const data = config?.dataDirectory ?? paths.dataDirectory,
-    workspace = config?.agentWorkspaceRoot ?? join(data, "agents");
-  const canonical = (path: string) => {
-    const missing = [];
-    let ancestor = resolve(path);
-    while (!lstatIfPresent(ancestor)) {
-      missing.unshift(basename(ancestor));
-      ancestor = dirname(ancestor);
-    }
-    return join(realpathSync(ancestor), ...missing);
-  };
+  const data = config?.dataDirectory ?? paths.dataDirectory;
+  const workspace = config?.agentWorkspaceRoot ?? join(data, "agents");
   for (const retained of ensureSeparate ? [paths.configDirectory, data, workspace] : []) {
-    const part = relative(canonical(paths.programDirectory), canonical(retained));
-    const reverse = relative(canonical(retained), canonical(paths.programDirectory));
+    const part = relative(
+      canonicalManagedPath(paths.programDirectory),
+      canonicalManagedPath(retained),
+    );
+    const reverse = relative(
+      canonicalManagedPath(retained),
+      canonicalManagedPath(paths.programDirectory),
+    );
     const nested = (value: string) =>
       value === "" || (value !== ".." && !value.startsWith(`..${sep}`) && !isAbsolute(value));
     if (nested(part) || nested(reverse))
@@ -108,7 +104,12 @@ function retainedLocations(paths: ReturnType<typeof nodePaths>, ensureSeparate =
         "Retained data/configuration/workspaces overlap removable programs; resolve configuration before uninstall",
       );
   }
-  return `Preserved configuration: ${paths.configDirectory}\nPreserved node identity: ${join(data, "node-identity.json")}\nPreserved operation receipts: ${data}\nPreserved Agent workspaces: ${workspace}\nPreserved control-plane database/model credentials/attachments: the MATE_CONTROL_PLANE_DATA_DIR bind directory from your Compose .env (not managed or discovered by the node CLI)\n`;
+  return `Preserved configuration: ${paths.configDirectory}
+Preserved node identity: ${join(data, "node-identity.json")}
+Preserved operation receipts: ${data}
+Preserved Agent workspaces: ${workspace}
+Preserved control-plane database/model credentials/attachments: the MATE_CONTROL_PLANE_DATA_DIR bind directory from your Compose .env (not managed or discovered by the node CLI)
+`;
 }
 
 /** Remaining files must match the original inventory, so interrupted deletion can resume. */
@@ -137,14 +138,14 @@ function remainingProgramFiles(directory: string, version: string) {
       parent = dirname(parent);
     }
   }
-  const files: string[] = [],
-    folders: string[] = [];
+  const files: string[] = [];
+  const folders: string[] = [];
   const visit = (part: string) => {
     checkManagedDirectory(join(directory, part));
     for (const name of readdirSync(join(directory, part))) {
-      const path = part ? `${part}/${name}` : name,
-        absolute = join(directory, path),
-        info = lstatIfPresent(absolute);
+      const path = part ? `${part}/${name}` : name;
+      const absolute = join(directory, path);
+      const info = lstatIfPresent(absolute);
       if (path === "bundle.json" && info?.isFile() && info.uid === process.getuid?.()) continue;
       if (info?.isDirectory() && directories.has(path)) {
         visit(path);
@@ -184,7 +185,13 @@ export async function uninstallNode(
 ) {
   requireOrdinaryAccount();
   const completed: string[] = [];
-  let preserved = `Preserved configuration: ${paths.configDirectory}\nPreserved default node identity: ${join(paths.dataDirectory, "node-identity.json")}\nPreserved default operation receipts: ${paths.dataDirectory}\nPreserved default Agent workspaces: ${join(paths.dataDirectory, "agents")}\nCustom locations could not be read from ${paths.configuration}; no data was removed.\nPreserved control-plane database/model credentials/attachments: the MATE_CONTROL_PLANE_DATA_DIR bind directory from your Compose .env\n`;
+  let preserved = `Preserved configuration: ${paths.configDirectory}
+Preserved default node identity: ${join(paths.dataDirectory, "node-identity.json")}
+Preserved default operation receipts: ${paths.dataDirectory}
+Preserved default Agent workspaces: ${join(paths.dataDirectory, "agents")}
+Custom locations could not be read from ${paths.configuration}; no data was removed.
+Preserved control-plane database/model credentials/attachments: the MATE_CONTROL_PLANE_DATA_DIR bind directory from your Compose .env
+`;
   try {
     try {
       preserved = retainedLocations(paths, false);
@@ -206,20 +213,20 @@ export async function uninstallNode(
           "Moved owned unit restored only to stop/disable it; no service installed or started",
         );
       }
-      const selected = installedEntryVersion(paths),
-        unitVersion = readManagedUnit(paths),
-        facts = manager.inspect({ effectiveCommand: false });
+      const selected = installedEntryVersion(paths);
+      const unitVersion = readManagedUnit(paths);
+      const facts = manager.inspect({ effectiveCommand: false });
       if (facts.load !== "not-found" && facts.fragment !== paths.unit)
         throw new Error(`Non-Mate manager unit conflict: ${facts.fragment}`);
       if (!unitVersion && facts.load !== "not-found") {
-        const effective = manager.inspect(),
-          candidate = effective.execStart[0]?.path;
+        const effective = manager.inspect();
+        const candidate = effective.execStart[0]?.path;
         const version = candidate?.startsWith(`${paths.versionsDirectory}/`)
           ? candidate.slice(paths.versionsDirectory.length + 1).split("/")[0]
           : undefined;
         if (
           !version ||
-          !releaseVersion.safeParse(version).success ||
+          !releaseVersionSchema.safeParse(version).success ||
           !serviceReferencesBundle(effective, paths, version)
         )
           throw new Error(
@@ -249,10 +256,10 @@ export async function uninstallNode(
         if (unitVersion) {
           if (readManagedUnit(paths) !== unitVersion)
             throw new Error("User unit changed during uninstall; preserved");
-          const temporary = join(dirname(paths.unit), `.mate-removing-unit-${randomUUID()}`),
-            move = createAtomicNoReplaceRename(
-              join(runningDirectory, "app/apps/node/dist/files/rename-noreplace"),
-            );
+          const temporary = join(dirname(paths.unit), `.mate-removing-unit-${randomUUID()}`);
+          const move = createAtomicNoReplaceRename(
+            join(runningDirectory, "app/apps/node/dist/files/rename-noreplace"),
+          );
           move(paths.unit, temporary);
           try {
             const info = lstatIfPresent(temporary);
@@ -339,7 +346,7 @@ export async function uninstallNode(
       if (lstatIfPresent(paths.versionsDirectory)) {
         checkManagedDirectory(paths.versionsDirectory);
         for (const version of readdirSync(paths.versionsDirectory)) {
-          if (!releaseVersion.safeParse(version).success)
+          if (!releaseVersionSchema.safeParse(version).success)
             throw new Error(
               `Unrecognized program directory preserved: ${join(paths.versionsDirectory, version)}`,
             );
@@ -359,9 +366,9 @@ export async function uninstallNode(
       const removeBundle = (bundle: ReturnType<typeof remainingProgramFiles>) => {
         for (const file of bundle.files) {
           checkExistingAncestors(paths, dirname(file));
-          const info = lstatIfPresent(file),
-            previous = bundle.identities.get(file),
-            record = bundle.records.get(relative(bundle.directory, file).split(sep).join("/"));
+          const info = lstatIfPresent(file);
+          const previous = bundle.identities.get(file);
+          const record = bundle.records.get(relative(bundle.directory, file).split(sep).join("/"));
           if (
             !info?.isFile() ||
             info.uid !== process.getuid?.() ||
@@ -376,8 +383,8 @@ export async function uninstallNode(
         }
         for (const folder of bundle.folders) {
           checkExistingAncestors(paths, folder);
-          const info = lstatIfPresent(folder),
-            previous = bundle.identities.get(folder);
+          const info = lstatIfPresent(folder);
+          const previous = bundle.identities.get(folder);
           if (info?.dev !== previous?.dev || info?.ino !== previous?.ino)
             throw new Error(`Program directory changed before removal; preserved: ${folder}`);
           rmdirSync(folder);
@@ -408,10 +415,10 @@ export async function uninstallNode(
         if (installedEntryVersion(paths) !== selected)
           throw new Error("Management entry changed; preserved");
         // Rename first, then inspect the object actually moved; never unlink a replaced foreign entry.
-        const temporary = join(dirname(paths.entry), `.mate-removing-${randomUUID()}`),
-          move = createAtomicNoReplaceRename(
-            join(runningDirectory, "app/apps/node/dist/files/rename-noreplace"),
-          );
+        const temporary = join(dirname(paths.entry), `.mate-removing-${randomUUID()}`);
+        const move = createAtomicNoReplaceRename(
+          join(runningDirectory, "app/apps/node/dist/files/rename-noreplace"),
+        );
         move(paths.entry, temporary);
         try {
           const info = lstatIfPresent(temporary);
@@ -440,11 +447,17 @@ export async function uninstallNode(
           resolve(bundle.directory) === resolve(runningDirectory),
       ))
         removeBundle(bundle);
-      return `${completed.join("\n")}\n${preserved}The reusable management.lock file is retained to keep concurrent commands on one lock inode.\nControl-plane containers are removed separately with Compose down; their bind data remains.\n`;
+      return `${completed.join("\n")}
+${preserved}The reusable management.lock file is retained to keep concurrent commands on one lock inode.
+Control-plane containers are removed separately with Compose down; their bind data remains.
+`;
     });
   } catch (error) {
     throw new Error(
-      `Uninstall incomplete: ${error instanceof Error ? error.message : "cleanup failed"}\nCompleted: ${completed.join("; ") || "none"}\nRemaining cleanup: inspect ${paths.unit}, ${paths.entry} and ${paths.versionsDirectory}; retry the same uninstall using a verified local complete bundle.\n${preserved}`,
+      `Uninstall incomplete: ${error instanceof Error ? error.message : "cleanup failed"}
+Completed: ${completed.join("; ") || "none"}
+Remaining cleanup: inspect ${paths.unit}, ${paths.entry} and ${paths.versionsDirectory}; retry the same uninstall using a verified local complete bundle.
+${preserved}`,
     );
   }
 }

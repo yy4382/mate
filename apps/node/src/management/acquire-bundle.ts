@@ -5,11 +5,11 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { z } from "zod";
-import { releaseVersion, withoutDownloadCredentials } from "./bundle.js";
+import { releaseVersionSchema, withoutDownloadCredentials } from "./bundle.js";
 
-export const bundleRequest = z
+export const bundleRequestSchema = z
   .object({
-    version: releaseVersion,
+    version: releaseVersionSchema,
     package: z.string().min(1).optional(),
     sha256: z
       .string()
@@ -35,10 +35,10 @@ function tar(args: string[]) {
 
 /** Acquires into a temporary directory only; the caller owns all installed changes. */
 export async function withReleaseBundle<T>(
-  request: z.input<typeof bundleRequest>,
+  request: z.input<typeof bundleRequestSchema>,
   action: (directory: string) => T,
 ) {
-  const selected = bundleRequest.parse(request);
+  const selected = bundleRequestSchema.parse(request);
   if (!["x64", "arm64"].includes(process.arch))
     throw new Error("Only Linux x64 and arm64 bundles are supported");
   const asset = `mate-node-${selected.version}-linux-${process.arch}.tar.gz`;

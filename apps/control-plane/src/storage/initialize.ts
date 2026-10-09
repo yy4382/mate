@@ -23,8 +23,8 @@ export class UnsupportedDatabaseError extends Error {
 
 /** Open the private control-plane database through the same writable SQLite boundary. */
 export function openControlPlaneDatabase(path: string, schema: string): Database.Database {
-  const empty = !existsSync(path) || statSync(path).size === 0,
-    db = openWritable(path);
+  const empty = !existsSync(path) || statSync(path).size === 0;
+  const db = openWritable(path);
   try {
     if (empty) createControlPlaneFormat(db, path, schema);
     else acceptControlPlaneFormat(db, path, schema);
@@ -92,9 +92,9 @@ function controlPlaneVerdict(db: Database.Database, schema: string): Verdict {
     template.exec(schema);
     const expected = databaseObjects(template);
     if (!expected.size) throw new Error("Control-plane schema declares no structures");
-    const applicationId = Number(db.pragma("application_id", { simple: true })),
-      revision = Number(db.pragma("user_version", { simple: true })),
-      objects = databaseObjects(db);
+    const applicationId = Number(db.pragma("application_id", { simple: true }));
+    const revision = Number(db.pragma("user_version", { simple: true }));
+    const objects = databaseObjects(db);
     if (applicationId !== CONTROL_PLANE_APPLICATION_ID)
       return { kind: "foreign", applicationId, revision };
     if (revision !== CONTROL_PLANE_FORMAT_REVISION) return { kind: "revision", revision };

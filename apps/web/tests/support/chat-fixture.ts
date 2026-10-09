@@ -6,74 +6,76 @@ import { expect, vi } from "vitest";
 import { ChatPage } from "../../src/features/conversations/chat-page.js";
 
 import { redirectToLogin } from "../../src/navigation.js";
-class FixtureState {
-  channels!: FixtureChannel[];
-  history!: Map<string, FixtureMessage[]>;
-  sessionStatus!: number;
-  fetchMock!: ReturnType<typeof vi.fn>;
-  posts!: Array<{ channelId: string; text: string }>;
-  taskPosts!: Array<{ messageId?: string; title?: string; asTask?: boolean }>;
-  tasks!: Array<{
-    id: string;
-    messageId: string;
-    channelId: string;
-    title: string;
-    status: "open" | "in_progress" | "done";
-    ownerAgentId: string | null;
-    ownerAgentName?: string | null;
-  }>;
-  positionPosts!: Array<{ rootId?: string; quoteId?: string }>;
-  nextPostGate!: {
+import type { AttachmentSummary, OwnerChannel, OwnerTask } from "@mate/protocol/owner";
+import type { Message } from "../../src/features/conversations/conversation-responses.js";
+
+export type FixtureMessage = Pick<
+  Message,
+  "id" | "channelId" | "rootId" | "quoteId" | "author" | "text" | "order" | "createdAt"
+>;
+
+type FixtureTask = Pick<
+  OwnerTask,
+  "id" | "messageId" | "channelId" | "title" | "status" | "ownerAgentId"
+> &
+  Partial<Pick<OwnerTask, "ownerAgentName">>;
+
+type FixtureState = {
+  channels: OwnerChannel[];
+  history: Map<string, FixtureMessage[]>;
+  sessionStatus: number;
+  fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
+  posts: Array<{ channelId: string; text: string }>;
+  taskPosts: Array<{ messageId?: string; title?: string; asTask?: boolean }>;
+  tasks: FixtureTask[];
+  positionPosts: Array<{ rootId?: string; quoteId?: string }>;
+  nextPostGate: {
     started: Promise<void>;
     signalStarted: () => void;
     waiting: Promise<void>;
     release: () => void;
   } | null;
-  nextThreadGate!: {
+  nextThreadGate: {
     rootId: string;
     started: Promise<void>;
     signalStarted: () => void;
     response: Promise<Response>;
   } | null;
-  nextHistoryGate!: {
+  nextHistoryGate: {
     channelId: string;
     started: Promise<void>;
     signalStarted: () => void;
     response: Promise<Response>;
   } | null;
-  attachments!: Array<{
-    id: string;
-    channelId: string;
-    filename: string;
-    contentType: string;
-    size: number;
-    sha256: string;
-    uploader: { kind: "human"; id: "owner" } | { kind: "agent"; id: string };
-    createdAt: number;
-  }>;
-  attachmentUploads!: Array<{ channelId: string; body: BodyInit | null; headers: Headers }>;
-  failNextAttachmentUpload!: boolean;
-  loseNextTaskResponse!: "network" | "invalid" | "malformed" | "unreadable" | "gateway" | null;
+  attachments: AttachmentSummary[];
+  attachmentUploads: Array<{ channelId: string; body: BodyInit | null; headers: Headers }>;
+  failNextAttachmentUpload: boolean;
+  loseNextTaskResponse: "network" | "invalid" | "malformed" | "unreadable" | "gateway" | null;
+};
+
+function createChatFixture(): FixtureState {
+  return {
+    channels: [publicChannel, privateChannel],
+    history: new Map([
+      [publicChannel.id, []],
+      [privateChannel.id, []],
+    ]),
+    sessionStatus: 200,
+    fetchMock: vi.fn<typeof fetch>(),
+    posts: [],
+    taskPosts: [],
+    tasks: [],
+    positionPosts: [],
+    nextPostGate: null,
+    nextThreadGate: null,
+    nextHistoryGate: null,
+    attachments: [],
+    attachmentUploads: [],
+    failNextAttachmentUpload: false,
+    loseNextTaskResponse: null,
+  };
 }
-export const fixture = new FixtureState();
-export interface FixtureChannel {
-  id: string;
-  name: string;
-  description: string;
-  visibility: "public" | "private";
-  archived: boolean;
-  createdAt: number;
-  updatedAt: number;
-}
-export interface FixtureMessage {
-  id: string;
-  channelId: string;
-  rootId: null;
-  author: { kind: "human"; id: "owner" } | { kind: "agent"; id: string };
-  text: string;
-  order: string;
-  createdAt: number;
-}
+
 export class TestEventSource {
   static instances: TestEventSource[] = [];
   static messageOnConnect: { channelId: string; payload: FixtureMessage; seq: number } | undefined;
@@ -118,7 +120,7 @@ export class TestEventSource {
     this.onerror?.(new Event("error"));
   }
 }
-export const publicChannel: FixtureChannel = {
+export const publicChannel: OwnerChannel = {
   id: "channel-public",
   name: "公开频道",
   description: "公开讨论",
@@ -127,7 +129,7 @@ export const publicChannel: FixtureChannel = {
   createdAt: 1,
   updatedAt: 1,
 };
-export const privateChannel: FixtureChannel = {
+export const privateChannel: OwnerChannel = {
   id: "channel-private",
   name: "私有频道",
   description: "私人记录",
@@ -136,10 +138,11 @@ export const privateChannel: FixtureChannel = {
   createdAt: 2,
   updatedAt: 2,
 };
+export const fixture = createChatFixture();
+
 export function delayNextPost(): { started: Promise<void>; release: () => void } {
-  let signalStarted!: () => void, release!: () => void;
-  const started = new Promise<void>((resolve) => (signalStarted = resolve));
-  const waiting = new Promise<void>((resolve) => (release = resolve));
+  const { promise: started, resolve: signalStarted } = Promise.withResolvers<void>();
+  const { promise: waiting, resolve: release } = Promise.withResolvers<void>();
   fixture.nextPostGate = { started, signalStarted, waiting, release };
   return { started, release };
 }
@@ -147,13 +150,12 @@ export function failNextLatestHistoryRequest(channelId: string): {
   started: Promise<void>;
   fail: () => void;
 } {
-  let signalStarted!: () => void, rejectResponse!: (response: Response) => void;
-  const started = new Promise<void>((resolve) => (signalStarted = resolve));
-  const response = new Promise<Response>((resolve) => (rejectResponse = resolve));
+  const { promise: started, resolve: signalStarted } = Promise.withResolvers<void>();
+  const { promise: response, resolve: resolveResponse } = Promise.withResolvers<Response>();
   fixture.nextHistoryGate = { channelId, started, signalStarted, response };
   return {
     started,
-    fail: () => rejectResponse(json(503, { error: "读取频道 A 的最新消息失败" })),
+    fail: () => resolveResponse(json(503, { error: "读取频道 A 的最新消息失败" })),
   };
 }
 export function message(
@@ -173,11 +175,7 @@ export function message(
   };
 }
 export function json(status: number, body: unknown): Response {
-  return {
-    status,
-    ok: status >= 200 && status < 300,
-    json: async () => body,
-  } as Response;
+  return Response.json(body, { status });
 }
 export function installFetch(): void {
   fixture.fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -204,14 +202,14 @@ export function installFetch(): void {
         const upload = fixture.attachmentUploads.at(-1)!;
         const filename = decodeURIComponent(upload.headers.get("x-mate-filename") ?? "");
         const body = upload.body as File;
-        const attachment = {
+        const attachment: AttachmentSummary = {
           id: `attachment-${fixture.attachmentUploads.length}`,
           channelId,
           filename,
           contentType: upload.headers.get("content-type") ?? "application/octet-stream",
           size: body.size,
           sha256: "sha256",
-          uploader: { kind: "human" as const, id: "owner" as const },
+          uploader: { kind: "human", id: "owner" },
           createdAt: Date.now(),
         };
         fixture.attachments.push(attachment);
@@ -270,7 +268,12 @@ export function installFetch(): void {
     if (match) {
       const channelId = decodeURIComponent(match[1]!);
       if (init?.method === "POST") {
-        const body = JSON.parse(String(init.body)) as { text: string };
+        const body = JSON.parse(String(init.body)) as {
+          text: string;
+          asTask?: boolean;
+          rootId?: string;
+          quoteId?: string;
+        };
         const current = fixture.history.get(channelId) ?? [];
         const lastOrder = current.at(-1)?.order ?? "0";
         const created = message(
@@ -280,8 +283,8 @@ export function installFetch(): void {
           String(BigInt(lastOrder) + 1n),
         );
         fixture.posts.push({ channelId, text: body.text });
-        fixture.taskPosts.push({ asTask: (body as { asTask?: boolean }).asTask });
-        if ((body as { asTask?: boolean }).asTask)
+        fixture.taskPosts.push({ asTask: body.asTask });
+        if (body.asTask)
           fixture.tasks.push({
             id: `task-${fixture.tasks.length + 1}`,
             messageId: created.id,
@@ -291,18 +294,11 @@ export function installFetch(): void {
             ownerAgentId: null,
           });
         fixture.positionPosts.push({
-          ...(typeof (body as { rootId?: string }).rootId === "string"
-            ? { rootId: (body as { rootId: string }).rootId }
-            : {}),
-          ...(typeof (body as { quoteId?: string }).quoteId === "string"
-            ? { quoteId: (body as { quoteId: string }).quoteId }
-            : {}),
+          ...(typeof body.rootId === "string" ? { rootId: body.rootId } : {}),
+          ...(typeof body.quoteId === "string" ? { quoteId: body.quoteId } : {}),
         });
-        (created as FixtureMessage & { quoteId?: string }).rootId =
-          (body as { rootId?: string }).rootId ?? null;
-        (created as FixtureMessage & { quoteId?: string }).quoteId = (
-          body as { quoteId?: string }
-        ).quoteId;
+        created.rootId = body.rootId ?? null;
+        created.quoteId = body.quoteId;
         fixture.history.set(channelId, [...current, created]);
         const gate = fixture.nextPostGate;
         if (gate) {
@@ -312,9 +308,9 @@ export function installFetch(): void {
         }
         return json(201, created);
       }
-      const messages = (fixture.history.get(channelId) ?? []).filter((entry) => !entry.rootId),
-        urlValue = new URL(url, "http://mate.test"),
-        before = urlValue.searchParams.get("before");
+      const messages = (fixture.history.get(channelId) ?? []).filter((entry) => !entry.rootId);
+      const urlValue = new URL(url, "http://mate.test");
+      const before = urlValue.searchParams.get("before");
       const gate = fixture.nextHistoryGate;
       if (before === null && gate?.channelId === channelId) {
         fixture.nextHistoryGate = null;
@@ -322,12 +318,12 @@ export function installFetch(): void {
         gate.signalStarted();
         return gate.response;
       }
-      const limit = Number(urlValue.searchParams.get("limit") ?? 50),
-        eligible =
-          before === null
-            ? messages
-            : messages.filter((entry) => BigInt(entry.order) < BigInt(before)),
-        page = eligible.slice(-limit);
+      const limit = Number(urlValue.searchParams.get("limit") ?? 50);
+      const eligible =
+        before === null
+          ? messages
+          : messages.filter((entry) => BigInt(entry.order) < BigInt(before));
+      const page = eligible.slice(-limit);
       return json(200, {
         messages: page,
         nextBefore: eligible.length > page.length ? (page[0]?.order ?? null) : null,
@@ -346,24 +342,8 @@ export async function openChat(): Promise<ReturnType<typeof userEvent.setup>> {
   return user;
 }
 export function resetFixture() {
-  fixture.loseNextTaskResponse = null;
   window.history.replaceState({}, "", "/");
-  fixture.channels = [publicChannel, privateChannel];
-  fixture.history = new Map([
-    [publicChannel.id, []],
-    [privateChannel.id, []],
-  ]);
-  fixture.sessionStatus = 200;
-  fixture.posts = [];
-  fixture.attachments = [];
-  fixture.attachmentUploads = [];
-  fixture.failNextAttachmentUpload = false;
-  fixture.taskPosts = [];
-  fixture.tasks = [];
-  fixture.positionPosts = [];
-  fixture.nextPostGate = null;
-  fixture.nextHistoryGate = null;
-  fixture.nextThreadGate = null;
+  Object.assign(fixture, createChatFixture());
   TestEventSource.instances = [];
   TestEventSource.messageOnConnect = undefined;
   installFetch();

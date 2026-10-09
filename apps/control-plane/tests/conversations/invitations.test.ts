@@ -4,17 +4,17 @@ import { afterEach, expect, it } from "vitest";
 
 import {
   cleanupFixture,
-  setup,
+  createConversationFixture,
   waitForRun,
   callAgentTool,
 } from "../support/agent/conversation-fixture.js";
 afterEach(cleanupFixture);
 
 it("commits an eligible peer invitation once and rejects invalid invitation targets", async () => {
-  const { app, cookie, db, nodeId, socket } = await setup();
-  const inviterId = randomUUID(),
-    inviteeId = randomUUID(),
-    unverifiedId = randomUUID();
+  const { app, cookie, db, nodeId, socket } = await createConversationFixture();
+  const inviterId = randomUUID();
+  const inviteeId = randomUUID();
+  const unverifiedId = randomUUID();
   for (const [agentId, name] of [
     [inviterId, "Inviter"],
     [inviteeId, "Invitee"],
@@ -47,40 +47,40 @@ it("commits an eligible peer invitation once and rejects invalid invitation targ
     description: "Must not be invited.",
     model: { provider: "openai", id: "gpt-4.1" },
   });
-  const room = app.chat.createChannel({
+  const room = app.chat.channels.createChannel({
     name: "Team room",
     description: "A shared room.",
     visibility: "private",
   });
-  expect(app.chat.inviteAgentToChannel(room.id, inviterId)).toBe(true);
-  await app.request("/api/owner/model-credentials/openai", {
+  expect(app.chat.channels.inviteAgentToChannel(room.id, inviterId)).toBe(true);
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
   });
   const runStart = socket.sent.length;
-  app.chat.createMessage(room.id, "Start invitation run.");
+  app.chat.messages.createMessage({ channelId: room.id, text: "Start invitation run." });
   const run = await waitForRun(socket, runStart);
   const inviteInput = {
     name: "conversations.invite",
     input: { conversationId: room.id, agentId: inviteeId },
   };
   const invite = await callAgentTool(
-      app,
-      socket,
-      run,
-      "same-invite-action-id",
-      "tools.call",
-      inviteInput,
-    ),
-    replay = await callAgentTool(
-      app,
-      socket,
-      run,
-      "same-invite-action-id",
-      "tools.call",
-      inviteInput,
-    );
+    app,
+    socket,
+    run,
+    "same-invite-action-id",
+    "tools.call",
+    inviteInput,
+  );
+  const replay = await callAgentTool(
+    app,
+    socket,
+    run,
+    "same-invite-action-id",
+    "tools.call",
+    inviteInput,
+  );
   expect(invite).toMatchObject({ ok: true });
   expect(replay.result).toEqual(invite.result);
   expect(
@@ -99,7 +99,11 @@ it("commits an eligible peer invitation once and rejects invalid invitation targ
   for (const [actionId, targetId, conversationId] of [
     ["invite-self", inviterId, room.id],
     ["invite-unverified", unverifiedId, room.id],
-    ["invite-to-dm", inviteeId, app.chat.getOrCreateAgentDirectChannel(inviterId)!.id],
+    [
+      "invite-to-dm",
+      inviteeId,
+      app.chat.conversations.getOrCreateAgentDirectChannel(inviterId)!.id,
+    ],
   ]) {
     const denied = await callAgentTool(app, socket, run, actionId!, "tools.call", {
       name: "conversations.invite",
@@ -110,7 +114,7 @@ it("commits an eligible peer invitation once and rejects invalid invitation targ
 });
 
 it("lets the owner invite an existing Agent to a channel through the authenticated web API", async () => {
-  const { app, cookie, db, nodeId, socket } = await setup();
+  const { app, cookie, db, nodeId, socket } = await createConversationFixture();
   const agentId = randomUUID();
   app.agents.prepare({
     id: agentId,
@@ -140,21 +144,26 @@ it("lets the owner invite an existing Agent to a channel through the authenticat
     description: "Must not be admitted by the owner route.",
     model: { provider: "openai", id: "gpt-4.1" },
   });
-  const channel = app.chat.createChannel({
+  const channel = app.chat.channels.createChannel({
     name: "Owner-managed channel",
     description: "Existing Agents can be invited by the owner.",
     visibility: "private",
   });
-  app.chat.createMessage(channel.id, "邀请之前的历史也应对新成员可读。");
-  const route = `/api/owner/channels/${channel.id}/invitations`,
-    ownerDm = app.chat.getOrCreateAgentDirectChannel(agentId)!,
-    invitableChannels = await app.request("/api/owner/invitable-channels", { headers: { cookie } }),
-    invitableBody = (await invitableChannels.json()) as { channels: Array<{ id: string }> };
+  app.chat.messages.createMessage({
+    channelId: channel.id,
+    text: "邀请之前的历史也应对新成员可读。",
+  });
+  const route = `/api/owner/channels/${channel.id}/invitations`;
+  const ownerDm = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
+  const invitableChannels = await app.http.request("/api/owner/invitable-channels", {
+    headers: { cookie },
+  });
+  const invitableBody = (await invitableChannels.json()) as { channels: Array<{ id: string }> };
   expect(invitableChannels.status).toBe(200);
   expect(invitableBody.channels.map((item) => item.id)).toContain(channel.id);
   expect(invitableBody.channels.map((item) => item.id)).not.toContain(ownerDm.id);
 
-  const unverifiedInvite = await app.request(route, {
+  const unverifiedInvite = await app.http.request(route, {
     method: "POST",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ agentId: unverifiedAgentId }),
@@ -167,14 +176,14 @@ it("lets the owner invite an existing Agent to a channel through the authenticat
       )
       .get(channel.id, unverifiedAgentId),
   ).toBeUndefined();
-  const unauthenticated = await app.request(route, {
+  const unauthenticated = await app.http.request(route, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ agentId }),
   });
   expect(unauthenticated.status).toBe(401);
 
-  const invite = await app.request(route, {
+  const invite = await app.http.request(route, {
     method: "POST",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ agentId }),
@@ -192,26 +201,29 @@ it("lets the owner invite an existing Agent to a channel through the authenticat
       )
       .get(channel.id, agentId),
   ).toEqual({ active: 1 });
-  expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toHaveLength(0);
-  const privateDmInvite = await app.request(`/api/owner/channels/${ownerDm.id}/invitations`, {
+  expect(app.chat.deliveries.listPendingDeliveries("agent", agentId).deliveries).toHaveLength(0);
+  const privateDmInvite = await app.http.request(`/api/owner/channels/${ownerDm.id}/invitations`, {
     method: "POST",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ agentId }),
   });
   expect(privateDmInvite.status).toBe(409);
 
-  await app.request("/api/owner/model-credentials/openai", {
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-tools-key" }),
   });
   const runStart = socket.sent.length;
-  app.chat.createMessage(channel.id, "邀请提交后，新成员立即获得读取权限。");
-  const run = await waitForRun(socket, runStart),
-    read = await callAgentTool(app, socket, run, "owner-invite-read", "tools.call", {
-      name: "conversations.read",
-      input: { conversationId: channel.id },
-    });
+  app.chat.messages.createMessage({
+    channelId: channel.id,
+    text: "邀请提交后，新成员立即获得读取权限。",
+  });
+  const run = await waitForRun(socket, runStart);
+  const read = await callAgentTool(app, socket, run, "owner-invite-read", "tools.call", {
+    name: "conversations.read",
+    input: { conversationId: channel.id },
+  });
   expect(read).toMatchObject({ ok: true });
   expect(
     (read.result as { messages: Array<{ text: string }> }).messages.map((message) => message.text),

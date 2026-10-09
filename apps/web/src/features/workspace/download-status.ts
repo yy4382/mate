@@ -73,16 +73,16 @@ export async function waitForDownloadStatus(
     registrationGraceMs?: number;
   } = {},
 ): Promise<DownloadStatus> {
-  const url = `/api/owner/agents/${encodeURIComponent(agentId)}/workspace/downloads/${encodeURIComponent(downloadId)}`,
-    now = options.now ?? Date.now,
-    fetchStatus = options.fetchStatus ?? fetch,
-    delay = options.delay ?? abortableDelay,
-    startedAt = now(),
-    registrationDeadline =
-      startedAt + (options.registrationGraceMs ?? DOWNLOAD_STATUS_REGISTRATION_GRACE_MS);
-  let expiresAt = startedAt + (options.statusTtlMs ?? DOWNLOAD_STATUS_TTL_MS),
-    pollDelayMs = 250,
-    sawStatus = false;
+  const url = `/api/owner/agents/${encodeURIComponent(agentId)}/workspace/downloads/${encodeURIComponent(downloadId)}`;
+  const now = options.now ?? Date.now;
+  const fetchStatus = options.fetchStatus ?? fetch;
+  const delay = options.delay ?? abortableDelay;
+  const startedAt = now();
+  const registrationDeadline =
+    startedAt + (options.registrationGraceMs ?? DOWNLOAD_STATUS_REGISTRATION_GRACE_MS);
+  let expiresAt = startedAt + (options.statusTtlMs ?? DOWNLOAD_STATUS_TTL_MS);
+  let pollDelayMs = 250;
+  let sawStatus = false;
   for (;;) {
     if (options.signal?.aborted) throw abortError();
     if (now() >= expiresAt)

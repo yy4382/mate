@@ -2,6 +2,23 @@ import type { FormEvent, RefObject } from "react";
 import type { Channel, Message } from "../conversation-responses.js";
 
 export type ReplyTarget = { kind: "quote" | "thread"; message: Message };
+type ConversationComposerProps = {
+  selected: Channel;
+  replyTarget: ReplyTarget | null;
+  draft: string;
+  asTask: boolean;
+  busy: boolean;
+  attachmentBusy: boolean;
+  selectedFile: File | null;
+  attachmentInputRef: RefObject<HTMLInputElement | null>;
+  sendMessage: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+  onCancelReply: () => void;
+  onDraftChange: (value: string) => void;
+  onAsTaskChange: (value: boolean) => void;
+  onFileChange: (file: File | null) => void;
+  onUpload: () => Promise<void>;
+};
+
 export function ConversationComposer({
   selected,
   replyTarget,
@@ -17,22 +34,7 @@ export function ConversationComposer({
   onAsTaskChange,
   onFileChange,
   onUpload,
-}: {
-  selected: Channel;
-  replyTarget: ReplyTarget | null;
-  draft: string;
-  asTask: boolean;
-  busy: boolean;
-  attachmentBusy: boolean;
-  selectedFile: File | null;
-  attachmentInputRef: RefObject<HTMLInputElement | null>;
-  sendMessage: (event: FormEvent<HTMLFormElement>) => Promise<void>;
-  onCancelReply: () => void;
-  onDraftChange: (value: string) => void;
-  onAsTaskChange: (value: boolean) => void;
-  onFileChange: (file: File | null) => void;
-  onUpload: () => Promise<void>;
-}) {
+}: ConversationComposerProps) {
   return (
     <form className="message-composer" onSubmit={sendMessage}>
       {replyTarget && (

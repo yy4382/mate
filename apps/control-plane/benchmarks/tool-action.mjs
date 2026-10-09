@@ -26,6 +26,29 @@ const usage = {
   totalTokens: 0,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
+function syntheticMessage(index, toolCall) {
+  if (index % 4 === 0) return { role: "user", content: text, timestamp: index };
+  if (index % 4 === 2)
+    return {
+      role: "toolResult",
+      toolCallId: "reused-provider-call-id",
+      toolName: "process.exec",
+      content: [{ type: "text", text }],
+      isError: false,
+      timestamp: index,
+    };
+  return {
+    role: "assistant",
+    content: [{ type: "text", text }, ...(index % 4 === 1 ? [toolCall] : [])],
+    timestamp: index,
+    api: "openai-completions",
+    provider: "openai",
+    model: "synthetic",
+    usage,
+    stopReason: index % 4 === 1 ? "toolUse" : "stop",
+  };
+}
+
 const results = [];
 let sqliteVersion;
 const directory = mkdtempSync(join(tmpdir(), "mate-tool-action-benchmark-"));
@@ -63,46 +86,29 @@ try {
                 scopeAt(i),
               );
             }
-            let message;
-            if (i % 4 === 0) message = { role: "user", content: text, timestamp: i };
-            else if (i % 4 === 2)
-              message = {
-                role: "toolResult",
-                toolCallId: "reused-provider-call-id",
-                toolName: "process.exec",
-                content: [{ type: "text", text }],
-                isError: false,
-                timestamp: i,
-              };
-            else
-              message = {
-                role: "assistant",
-                content: [{ type: "text", text }, ...(i % 4 === 1 ? [callAt(i)] : [])],
-                timestamp: i,
-                api: "openai-completions",
-                provider: "openai",
-                model: "synthetic",
-                usage,
-                stopReason: i % 4 === 1 ? "toolUse" : "stop",
-              };
+            const message = syntheticMessage(i, callAt(i));
             assert.equal(
-              session.append(runAt(i), nodeId, agentId, {
-                kind: "message",
-                id: entryAt(i),
-                message,
-              }),
+              session.append(
+                { runId: runAt(i), nodeId, agentId },
+                {
+                  kind: "message",
+                  id: entryAt(i),
+                  message,
+                },
+              ),
               true,
             );
           }
         })();
+        function actionIdentity(position, target) {
+          if (position === "missing") return `mate:${scopeAt(target)}:${"0".repeat(64)}:1`;
+          if (position === "missing-scope") return `mate:${uuid(999999)}:${"0".repeat(64)}:1`;
+          return durableToolIdentity(scopeAt(target), entryAt(target), callAt(target).id);
+        }
+
         for (const position of ["early", "late", "missing", "missing-scope"]) {
           const target = position === "early" ? 1 : count - 3;
-          const identity =
-            position === "missing"
-              ? `mate:${scopeAt(target)}:${"0".repeat(64)}:1`
-              : position === "missing-scope"
-                ? `mate:${uuid(999999)}:${"0".repeat(64)}:1`
-                : durableToolIdentity(scopeAt(target), entryAt(target), callAt(target).id);
+          const identity = actionIdentity(position, target);
           const expected = position.startsWith("missing")
             ? undefined
             : {
@@ -120,8 +126,8 @@ try {
             assert.deepEqual(result, expected);
           }
           // A separate untimed pass counts JSON.parse inputs without distorting latency.
-          let parsedRecords = 0,
-            parsedBytes = 0;
+          let parsedRecords = 0;
+          let parsedBytes = 0;
           const parse = JSON.parse;
           try {
             JSON.parse = (value, ...args) => {

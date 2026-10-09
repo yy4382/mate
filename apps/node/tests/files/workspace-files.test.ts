@@ -2,9 +2,9 @@ import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { operationSchema } from "@mate/protocol";
+import { workspaceOperationSchema } from "@mate/protocol";
 
 const roots: string[] = [];
 const temp = () => {
@@ -24,8 +24,8 @@ function invoke(root: string, operation: Record<string, unknown>) {
 }
 
 it("lists the private home without following symbolic links and reads a file in bounded chunks", () => {
-  const root = temp(),
-    outside = temp();
+  const root = temp();
+  const outside = temp();
   writeFileSync(join(root, "notes.txt"), "first page\nsecond page\n");
   writeFileSync(join(outside, "secret.txt"), "outside");
   symlinkSync(outside, join(root, "outside-link"));
@@ -57,8 +57,8 @@ it("lists the private home without following symbolic links and reads a file in 
 });
 
 it("rejects traversal and symbolic-link reads outside the selected home", () => {
-  const root = temp(),
-    outside = temp();
+  const root = temp();
+  const outside = temp();
   writeFileSync(join(outside, "secret.txt"), "secret");
   symlinkSync(join(outside, "secret.txt"), join(root, "secret-link"));
 
@@ -72,8 +72,8 @@ it("rejects traversal and symbolic-link reads outside the selected home", () => 
 });
 
 it("refuses to continue a streamed read after the file changes", () => {
-  const root = temp(),
-    path = join(root, "changing.txt");
+  const root = temp();
+  const path = join(root, "changing.txt");
   writeFileSync(path, "before");
   const stat = invoke(root, { kind: "workspace_stat", path: "changing.txt" });
   expect(stat.code).toBe(0);
@@ -92,14 +92,14 @@ it("refuses to continue a streamed read after the file changes", () => {
 });
 
 it("validates bounded workspace requests before they reach a node", () => {
-  expect(operationSchema.parse({ kind: "workspace_list", path: "notes" })).toEqual({
+  expect(workspaceOperationSchema.parse({ kind: "workspace_list", path: "notes" })).toEqual({
     kind: "workspace_list",
     path: "notes",
     offset: 0,
     limit: 32,
   });
   expect(() =>
-    operationSchema.parse({
+    workspaceOperationSchema.parse({
       kind: "workspace_read_chunk",
       path: "notes/file.txt",
       offset: 0,

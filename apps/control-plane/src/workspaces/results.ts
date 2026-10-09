@@ -1,12 +1,12 @@
-import type { Operation, WorkspaceFailureCode } from "@mate/protocol";
+import type { WorkspaceOperation, WorkspaceFailureCode } from "@mate/protocol";
 import type { WorkspaceVersion } from "@mate/protocol/workspace";
 import { createHash } from "node:crypto";
 import { posix as posixPath } from "node:path";
 import { z } from "zod";
 import { WorkspaceError } from "./errors.js";
 
-// Node responses historically allow extension fields and non-decimal version strings.
-// Keep that read boundary separate from the strict version schema accepted in tool requests.
+// Node response versions allow extension fields and non-decimal strings; tool request
+// versions use the stricter schema from protocol.
 export const workspaceVersionResultSchema = z.looseObject({
   device: z.string(),
   inode: z.string(),
@@ -19,7 +19,7 @@ const workspaceEntryResultSchema = z.looseObject({
   type: z.enum(["file", "directory", "symlink", "other"]),
   size: z.number().refine(Number.isSafeInteger).nonnegative(),
 });
-// The legacy list guard checked entries and pagination, but did not validate path.
+// Directory responses validate entries and pagination while retaining node metadata.
 export const workspaceDirectoryResultSchema = z.looseObject({
   entries: workspaceEntryResultSchema.array(),
   nextOffset: z.number().refine(Number.isSafeInteger).nullable(),
@@ -103,9 +103,9 @@ export function confirmedFileFailure(
 }
 
 export function isMutatingOperation(
-  operation: Operation,
+  operation: WorkspaceOperation,
 ): operation is Extract<
-  Operation,
+  WorkspaceOperation,
   { kind: "write_bytes" | "write" | "edit" | "mkdir" | "move" | "remove" }
 > {
   return ["write_bytes", "write", "edit", "mkdir", "move", "remove"].includes(operation.kind);
@@ -115,18 +115,9 @@ export function hashToolRequest(operation: string, input: unknown): string {
   return createHash("sha256").update(JSON.stringify({ operation, input })).digest("hex");
 }
 
-export function deterministicOperationId(actionId: string): string {
-  const bytes = createHash("sha256").update(actionId).digest().subarray(0, 16);
-  bytes[6] = (bytes[6]! & 0x0f) | 0x50;
-  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
-  const hex = bytes.toString("hex");
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
-
 export function parseOperationReceipt(value: string): unknown {
   try {
-    const receipt: unknown = JSON.parse(value);
-    return receipt;
+    return JSON.parse(value);
   } catch {
     throw new WorkspaceError("invalid_response", "节点操作收据无法读取。", 502);
   }
@@ -177,7 +168,7 @@ export function safeError(error: unknown): string {
   );
 }
 
-export function operationPaths(operation: Operation): string[] {
+export function operationPaths(operation: WorkspaceOperation): string[] {
   return operation.kind === "move" ? [operation.path, operation.destination] : [operation.path];
 }
 
@@ -186,8 +177,8 @@ export function safeAuditPath(path: string, home?: string): string {
   if (path.includes("\0") || segments.includes("..")) return "[invalid path]";
   if (path.startsWith("/")) {
     if (!home?.startsWith("/")) return "[absolute path request]";
-    const normalizedHome = posixPath.normalize(home),
-      normalizedPath = posixPath.normalize(path);
+    const normalizedHome = posixPath.normalize(home);
+    const normalizedPath = posixPath.normalize(path);
     if (normalizedPath !== normalizedHome && !normalizedPath.startsWith(`${normalizedHome}/`))
       return "[absolute path request]";
     const relative = posixPath.relative(normalizedHome, normalizedPath);

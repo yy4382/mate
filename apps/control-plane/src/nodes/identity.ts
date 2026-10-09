@@ -1,12 +1,9 @@
-import type { NodeRequest, provisionIdentitySchema } from "@mate/protocol";
+import type { AgentWorkspaceIdentity, NodeRequest } from "@mate/protocol";
 import type Database from "better-sqlite3";
 import { createHash, createPublicKey, randomBytes, verify } from "node:crypto";
 import { z } from "zod";
 /** The one ordinary Linux account a paired node runs every one of its Agents under. */
-export type NodeAccount = Pick<
-  z.output<typeof provisionIdentitySchema>,
-  "username" | "uid" | "gid"
->;
+export type NodeAccount = Pick<AgentWorkspaceIdentity, "username" | "uid" | "gid">;
 
 /** A node reported an account that is not the one its Agents already run under. */
 export class NodeAccountConflict extends Error {
@@ -45,6 +42,7 @@ export class NodeIdentity {
       .run(hashToken(pairingToken), createdAt, expiresAt);
     return { pairingToken, expiresAt: new Date(expiresAt).toISOString() };
   }
+  /** The node account is absent until its first successful workspace preparation. */
   account(nodeId: string): NodeAccount | undefined {
     const row = z
       .looseObject({ linux_username: z.string(), uid: z.number(), gid: z.number() })
@@ -58,6 +56,7 @@ export class NodeIdentity {
       );
     return row ? { username: row.linux_username, uid: row.uid, gid: row.gid } : undefined;
   }
+  /** Record or match the node account inside the caller's workspace-preparation transaction. */
   recordAccount(nodeId: string, account: NodeAccount): void {
     const recorded = this.database
       .prepare(
@@ -89,9 +88,8 @@ export class NodeIdentity {
   }
   pair(request: Extract<NodeRequest, { type: "node.pair" }>): boolean {
     const now = this.now();
-    let paired: boolean;
     try {
-      paired = this.database
+      return this.database
         .transaction(() => {
           const result = this.database
             .prepare(
@@ -108,7 +106,6 @@ export class NodeIdentity {
     } catch {
       return false;
     }
-    return paired;
   }
 }
 function hashToken(token: string): string {

@@ -11,8 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { resolve } from "node:path";
-import type { Operation } from "@mate/protocol";
+import type { WorkspaceOperation } from "@mate/protocol";
 const roots: string[] = [];
 const temp = () => {
   const root = realpathSync(mkdtempSync(`${tmpdir()}/mate-files-`));
@@ -20,7 +19,7 @@ const temp = () => {
   return root;
 };
 afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })));
-function invoke(root: string, op: Operation) {
+function invoke(root: string, op: WorkspaceOperation) {
   const result = spawnSync(
     process.execPath,
     [fileURLToPath(new URL("../../dist/files/file-operation.mjs", import.meta.url)), root],
@@ -68,8 +67,8 @@ it("organizes files with hash-checked edits, non-overwriting moves and guarded r
   expect(invoke(root, { kind: "remove", path: "." }).code).not.toBe(0);
 });
 it("rejects paths and symbolic links that escape the Agent workspace", () => {
-  const root = temp(),
-    outside = temp();
+  const root = temp();
+  const outside = temp();
   writeFileSync(`${outside}/secret`, "outside");
   symlinkSync(outside, `${root}/link`);
   expect(invoke(root, { kind: "read", path: "link/secret" }).code).not.toBe(0);
@@ -83,15 +82,15 @@ it("rejects paths and symbolic links that escape the Agent workspace", () => {
   expect(result.truncated).toBe(true);
 });
 it("stdin accepts large Unicode/control-character writes without argv expansion", () => {
-  const root = temp(),
-    value = "你好\n\t".repeat(25000);
+  const root = temp();
+  const value = "你好\n\t".repeat(25000);
   expect(invoke(root, { kind: "write", path: "large", content: value }).code).toBe(0);
   expect(readFileSync(`${root}/large`, "utf8")).toBe(value);
   expect(invoke(root, { kind: "read", path: "large" }).code).not.toBe(0);
 });
 it("keeps direct Agent reads within the node receipt limit and directs larger reads to chunks", () => {
-  const root = temp(),
-    content = "x".repeat(10_000);
+  const root = temp();
+  const content = "x".repeat(10_000);
   expect(invoke(root, { kind: "write", path: "large.txt", content }).code).toBe(0);
   const fullRead = invoke(root, { kind: "read", path: "large.txt" });
   expect(fullRead.code).not.toBe(0);
@@ -104,11 +103,13 @@ it("keeps direct Agent reads within the node receipt limit and directs larger re
   expect(Buffer.from(chunk.base64, "base64")).toEqual(Buffer.from(content.slice(0, 8192)));
 });
 it("backend decodes split Unicode output as a stream", async () => {
-  const root = temp(),
-    helper = `${root}/synthetic.cjs`;
+  const root = temp();
+  const helper = `${root}/synthetic.cjs`;
   writeFileSync(
     helper,
-    "process.stdout.write(Buffer.from([0xe4]));setTimeout(()=>process.stdout.end(Buffer.from([0xbd,0xa0])),100);",
+    `process.stdout.write(Buffer.from([0xe4]));
+setTimeout(() => process.stdout.end(Buffer.from([0xbd, 0xa0])), 100);
+`,
   );
   const { SameAccountFileBackend } = await import("../../src/files/same-account-files.js");
   const backend = new SameAccountFileBackend(
@@ -132,19 +133,19 @@ it("backend decodes split Unicode output as a stream", async () => {
 });
 it("binary operations accept a maximum-size canonical payload and bounded chunks without text loss", async () => {
   const root = temp();
-  const { operationSchema, WORKSPACE_WRITE_MAX_BYTES } = await import("@mate/protocol"),
-    data = Buffer.alloc(WORKSPACE_WRITE_MAX_BYTES, 255);
-  const op = operationSchema.parse({
+  const { workspaceOperationSchema, WORKSPACE_WRITE_MAX_BYTES } = await import("@mate/protocol");
+  const data = Buffer.alloc(WORKSPACE_WRITE_MAX_BYTES, 255);
+  const op = workspaceOperationSchema.parse({
     kind: "write_bytes",
     path: "binary",
     base64: data.toString("base64"),
   });
   expect(invoke(root, op).code).toBe(0);
-  const offset = data.byteLength - 1024,
-    result = JSON.parse(
-      invoke(root, { kind: "read_bytes", path: "binary", offset, length: 32768 }).stdout,
-    );
+  const offset = data.byteLength - 1024;
+  const result = JSON.parse(
+    invoke(root, { kind: "read_bytes", path: "binary", offset, length: 32768 }).stdout,
+  );
   expect(result.totalBytes).toBe(WORKSPACE_WRITE_MAX_BYTES);
   expect(Buffer.from(result.base64, "base64")).toEqual(data.subarray(offset));
-  expect(() => operationSchema.parse({ ...op, base64: "!!!" })).toThrow();
+  expect(() => workspaceOperationSchema.parse({ ...op, base64: "!!!" })).toThrow();
 });

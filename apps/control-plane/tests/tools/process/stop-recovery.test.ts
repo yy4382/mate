@@ -8,14 +8,14 @@ import { afterEach, expect, it } from "vitest";
 import {
   cleanupFixture,
   FakeNodeSocket,
-  setup,
+  createProcessToolFixture,
   waitForRun,
   waitFor,
 } from "../../support/agent/process-tool-fixture.js";
 afterEach(cleanupFixture);
 
 it("rechecks stopped scopes after a restarted node confirms an ordinary operation remains unknown", async () => {
-  const { app, cookie, db, nodeId, socket, keyPair } = await setup();
+  const { app, cookie, db, nodeId, socket, keyPair } = await createProcessToolFixture();
   const agentId = randomUUID();
   app.agents.prepare({
     id: agentId,
@@ -33,17 +33,17 @@ it("rechecks stopped scopes after a restarted node confirms an ordinary operatio
     workspaceMarker: "a".repeat(64),
   };
   app.agents.complete(agentId, identity, app.chat);
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  await app.request("/api/owner/model-credentials/openai", {
+  const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-key" }),
   });
   const start = socket.sent.length;
-  app.chat.createMessage(direct.id, "Start a command.");
+  app.chat.messages.createMessage({ channelId: direct.id, text: "Start a command." });
   const run = await waitForRun(socket, start);
-  const operationId = randomUUID(),
-    stableActionId = `mate:${run.actionScopeId}:${"c".repeat(64)}:1`;
+  const operationId = randomUUID();
+  const stableActionId = `mate:${run.actionScopeId}:${"c".repeat(64)}:1`;
   db.prepare(
     `INSERT INTO owner_agent_process_operations(
       operation_id,run_id,agent_id,node_id,
@@ -222,11 +222,14 @@ it("rechecks stopped scopes after a restarted node confirms an ordinary operatio
   const session = new AgentSession(db);
   for (const entry of session.pendingCorrections(agentId, resumed.runId))
     expect(
-      session.append(resumed.runId, nodeId, agentId, {
-        kind: "message",
-        id: entry.id,
-        message: entry.message,
-      }),
+      session.append(
+        { runId: resumed.runId, nodeId, agentId },
+        {
+          kind: "message",
+          id: entry.id,
+          message: entry.message,
+        },
+      ),
     ).toBe(true);
   const lateStop = {
     type: "node.process.operation.result",
@@ -257,11 +260,14 @@ it("rechecks stopped scopes after a restarted node confirms an ordinary operatio
   expect(JSON.stringify(additions)).toContain("succeeded");
   expect(JSON.stringify(corrected.messages)).toContain(JSON.stringify(additions[0]!.message));
   expect(
-    session.append(resumed.runId, nodeId, agentId, {
-      kind: "message",
-      id: additions[0]!.id,
-      message: additions[0]!.message,
-    }),
+    session.append(
+      { runId: resumed.runId, nodeId, agentId },
+      {
+        kind: "message",
+        id: additions[0]!.id,
+        message: additions[0]!.message,
+      },
+    ),
   ).toBe(true);
   await toolTestInput(app, reconnect, JSON.stringify(lateStop));
   expect(session.pendingCorrections(agentId, resumed.runId)).toEqual([]);

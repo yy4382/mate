@@ -4,21 +4,27 @@ import { afterEach, expect, it } from "vitest";
 
 import {
   cleanupAgentToolFixture,
-  setup,
+  createAgentToolFixture,
   authorizeModel,
   addAgent,
   waitForRuns,
 } from "../support/agent/agent-tool-fixture.js";
 
 it("rolls back all body-presentation changes when a synchronous read fails, and refuses reads after the run ends", async () => {
-  const { app, cookie, db, nodeId, socket } = await setup();
+  const { app, cookie, db, nodeId, socket } = await createAgentToolFixture();
   const agentId = addAgent(app, nodeId, "Atomic reader");
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
   await authorizeModel(app, cookie);
-  app.chat.createMessage(direct.id, "Start reading.");
+  app.chat.messages.createMessage({ channelId: direct.id, text: "Start reading." });
   const run = (await waitForRuns(socket, 0, [agentId])).get(agentId)!;
-  const first = app.chat.createMessage(direct.id, "First unread body")!;
-  const second = app.chat.createMessage(direct.id, "Second unread body")!;
+  const first = app.chat.messages.createMessage({
+    channelId: direct.id,
+    text: "First unread body",
+  })!;
+  const second = app.chat.messages.createMessage({
+    channelId: direct.id,
+    text: "Second unread body",
+  })!;
   const identity = { runId: run.runId, nodeId, agentId, toolCallId: "atomic-read" };
   const attention = () =>
     app.tools.execute(identity, "tools.call", {

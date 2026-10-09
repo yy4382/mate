@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { afterEach, expect, test } from "vitest";
 import { updateNode } from "../../src/management/update.js";
 import { nodePaths } from "../../src/management/paths.js";
-import { renderNodeUnit } from "../../src/management/service/commands.js";
+import { renderNodeUnit } from "../../src/management/service/unit.js";
 import { type UserServiceManager } from "../../src/management/service/systemd.js";
 import { withManagementLock } from "../../src/management/install-entry.js";
 
@@ -20,7 +20,7 @@ const homes: string[] = [];
 afterEach(() => {
   for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
 });
-function fixture(active = "active", sub = "running", pid = 42, job = 0) {
+function installedNodeFixture({ active = "active", sub = "running", pid = 42, job = 0 } = {}) {
   const home = mkdtempSync(join(tmpdir(), "mate-update-command-"));
   homes.push(home);
   const paths = nodePaths(home);
@@ -58,13 +58,13 @@ function fixture(active = "active", sub = "running", pid = 42, job = 0) {
 }
 
 test("update refuses a running or restarting service before acquiring a package or changing references", async () => {
-  for (const [active, sub, pid, job] of [
-    ["active", "running", 42, 0],
-    ["activating", "auto-restart", 0, 0],
-    ["inactive", "dead", 0, 7],
-    ["deactivating", "stop-sigterm", 42, 0],
-  ] satisfies Array<[string, string, number, number]>) {
-    const { paths, manager } = fixture(active, sub, pid, job);
+  for (const serviceState of [
+    { active: "active", sub: "running", pid: 42, job: 0 },
+    { active: "activating", sub: "auto-restart", pid: 0, job: 0 },
+    { active: "inactive", sub: "dead", pid: 0, job: 7 },
+    { active: "deactivating", sub: "stop-sigterm", pid: 42, job: 0 },
+  ]) {
+    const { paths, manager } = installedNodeFixture(serviceState);
     const before = readFileSync(paths.unit, "utf8");
     await expect(
       updateNode({ version: "0.2.0", package: "/missing", sha256: "a".repeat(64) }, paths, manager),
@@ -74,7 +74,7 @@ test("update refuses a running or restarting service before acquiring a package 
 });
 
 test("a local package checksum failure keeps the stopped entry, unit and saved data", async () => {
-  const { paths, manager } = fixture("inactive", "dead", 0);
+  const { paths, manager } = installedNodeFixture({ active: "inactive", sub: "dead", pid: 0 });
   const archive = join(paths.home, "not-a-package.tar.gz");
   writeFileSync(archive, "untrusted bytes");
   mkdirSync(paths.dataDirectory, { recursive: true });
@@ -91,7 +91,7 @@ test("a local package checksum failure keeps the stopped entry, unit and saved d
 });
 
 test("another management operation holds the lock before update can acquire or alter references", async () => {
-  const { paths, manager } = fixture("inactive", "dead", 0);
+  const { paths, manager } = installedNodeFixture({ active: "inactive", sub: "dead", pid: 0 });
   await withManagementLock(paths, async () => {
     await expect(
       updateNode({ version: "0.2.0", package: "/missing", sha256: "a".repeat(64) }, paths, manager),
@@ -101,7 +101,7 @@ test("another management operation holds the lock before update can acquire or a
 });
 
 test("foreign units and entry files remain conflicts even when the old public CLI is broken", async () => {
-  const { paths, manager } = fixture("inactive", "dead", 0);
+  const { paths, manager } = installedNodeFixture({ active: "inactive", sub: "dead", pid: 0 });
   writeFileSync(paths.unit, "[Service]\nExecStart=/foreign\n");
   await expect(
     updateNode({ version: "0.2.0", package: "/missing", sha256: "a".repeat(64) }, paths, manager),

@@ -35,14 +35,14 @@ if (launchingUid === 0)
 if (launchingUid === undefined)
   throw new Error("This check needs an account-aware host (Linux or macOS).");
 
-const ownerPassword = "synthetic-owner-password-used-only-by-this-check",
-  root = mkdtempSync(join(tmpdir(), "mate-single-account-")),
-  controlData = join(root, "control-plane-data"),
-  nodeData = join(root, "node-data"),
-  agentWorkspaceRoot = join(root, "agents"),
-  passwordFile = join(root, "owner-password"),
-  notifySocketPath = join(root, "notify.sock"),
-  processes = [];
+const ownerPassword = "synthetic-owner-password-used-only-by-this-check";
+const root = mkdtempSync(join(tmpdir(), "mate-single-account-"));
+const controlData = join(root, "control-plane-data");
+const nodeData = join(root, "node-data");
+const agentWorkspaceRoot = join(root, "agents");
+const passwordFile = join(root, "owner-password");
+const notifySocketPath = join(root, "notify.sock");
+const processes = [];
 
 chmodSync(root, 0o700);
 writeFileSync(passwordFile, `${ownerPassword}\n`, { mode: 0o600 });
@@ -52,12 +52,12 @@ chmodSync(passwordFile, 0o600);
 const notifierAvailable = existsSync("/usr/bin/systemd-notify");
 
 /** A container pass is evidence about Linux userspace, not about the target host; record which one ran. */
-const containerMarkers = ["/.dockerenv", "/run/.containerenv", "/run/systemd/container"],
-  hostEnvironmentMarker = containerMarkers.find((marker) => existsSync(marker)),
-  hostEnvironment =
-    hostEnvironmentMarker !== undefined || typeof process.env.container === "string"
-      ? "container"
-      : "host";
+const containerMarkers = ["/.dockerenv", "/run/.containerenv", "/run/systemd/container"];
+const hostEnvironmentMarker = containerMarkers.find((marker) => existsSync(marker));
+const hostEnvironment =
+  hostEnvironmentMarker !== undefined || typeof process.env.container === "string"
+    ? "container"
+    : "host";
 
 function delay(ms) {
   return new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
@@ -111,8 +111,8 @@ function startControlPlane(label, port) {
 /** Probe-then-bind can lose the port to another process; retry instead of flaking. */
 async function startControlPlaneOnFreePort(label) {
   for (let attempt = 0; attempt < 5; attempt++) {
-    const port = await freePort(),
-      candidate = startControlPlane(label, port);
+    const port = await freePort();
+    const candidate = startControlPlane(label, port);
     try {
       const listening = await waitFor(candidate, /MATE_CONTROL_PLANE_LISTENING (\d+)/, 5000);
       assert.equal(Number(listening[1]), port);
@@ -292,8 +292,8 @@ async function checkControlPlaneLoop(origin, cookie, agent) {
       .prepare("SELECT state,receipt_json FROM owner_agent_process_operations WHERE agent_id=?")
       .get(agent.id);
     assert.equal(operation.state, "succeeded");
-    const receipt = JSON.parse(operation.receipt_json),
-      [uid, gid, cwd] = receipt.stdout.trim().split("\n");
+    const receipt = JSON.parse(operation.receipt_json);
+    const [uid, gid, cwd] = receipt.stdout.trim().split("\n");
     assert.equal(Number(uid), launchingUid);
     assert.equal(Number(gid), process.getgid());
     assert.equal(cwd, agent.linuxIdentity.workspace);
@@ -305,11 +305,12 @@ async function checkControlPlaneLoop(origin, cookie, agent) {
   }
 }
 
-let control, node;
+let control;
+let node;
 try {
-  const started = await startControlPlaneOnFreePort("control plane"),
-    controlPlanePort = started.port,
-    origin = `http://127.0.0.1:${controlPlanePort}`;
+  const started = await startControlPlaneOnFreePort("control plane");
+  const controlPlanePort = started.port;
+  const origin = `http://127.0.0.1:${controlPlanePort}`;
   control = started.control;
   assert.equal((await fetch(new URL("/api/status", origin))).status, 200);
   let cookie = await login(origin);
@@ -410,29 +411,29 @@ try {
   );
 
   // Create two Agents from the owner web API on the ordinary account this check already runs as.
-  const firstAgent = await createAgent(origin, cookie, paired[1], "第一名同事"),
-    secondAgent = await createAgent(origin, cookie, paired[1], "第二名同事"),
-    agentEvidence = [firstAgent, secondAgent].map((agent) => {
-      assert.ok(
-        agent.linuxIdentity && ["waiting_credentials", "ready"].includes(agent.status),
-        `Agent ${agent.id} did not reach a runnable state: ${JSON.stringify(agent)}`,
-      );
-      const workspace = agent.linuxIdentity.workspace,
-        memory = join(workspace, "MEMORY.md");
-      assert.equal(lstatSync(workspace).isDirectory(), true, "Agent workspace is not a directory");
-      assert.equal(lstatSync(memory).isFile(), true, "Agent memory entry point is missing");
-      assert.match(readFileSync(memory, "utf8"), /memory/, "The memory entry point is empty");
-      return {
-        agentId: agent.id,
-        status: agent.status,
-        accountUsername: agent.linuxIdentity.username,
-        accountUid: agent.linuxIdentity.uid,
-        accountGid: agent.linuxIdentity.gid,
-        workspace,
-        memoryEntryAvailable: true,
-        sessionId: agent.sessionId,
-      };
-    });
+  const firstAgent = await createAgent(origin, cookie, paired[1], "第一名同事");
+  const secondAgent = await createAgent(origin, cookie, paired[1], "第二名同事");
+  const agentEvidence = [firstAgent, secondAgent].map((agent) => {
+    assert.ok(
+      agent.linuxIdentity && ["waiting_credentials", "ready"].includes(agent.status),
+      `Agent ${agent.id} did not reach a runnable state: ${JSON.stringify(agent)}`,
+    );
+    const workspace = agent.linuxIdentity.workspace;
+    const memory = join(workspace, "MEMORY.md");
+    assert.equal(lstatSync(workspace).isDirectory(), true, "Agent workspace is not a directory");
+    assert.equal(lstatSync(memory).isFile(), true, "Agent memory entry point is missing");
+    assert.match(readFileSync(memory, "utf8"), /memory/, "The memory entry point is empty");
+    return {
+      agentId: agent.id,
+      status: agent.status,
+      accountUsername: agent.linuxIdentity.username,
+      accountUid: agent.linuxIdentity.uid,
+      accountGid: agent.linuxIdentity.gid,
+      workspace,
+      memoryEntryAvailable: true,
+      sessionId: agent.sessionId,
+    };
+  });
   assert.notEqual(agentEvidence[0].workspace, agentEvidence[1].workspace);
   assert.notEqual(agentEvidence[0].sessionId, agentEvidence[1].sessionId);
   assert.equal(agentEvidence[0].accountUid, launchingUid);

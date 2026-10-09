@@ -5,14 +5,18 @@ import { assistantEntry } from "../support/agent/session.js";
 import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 
-import { cleanupFixture, setup, waitForRun } from "../support/agent/conversation-fixture.js";
+import {
+  cleanupFixture,
+  createConversationFixture,
+  waitForRun,
+} from "../support/agent/conversation-fixture.js";
 afterEach(cleanupFixture);
 
 it("keeps an archived run input pending and retries it after the owner unarchives the channel", async () => {
-  const { app, cookie, directory, nodeId, socket } = await setup();
+  const { app, cookie, directory, nodeId, socket } = await createConversationFixture();
   const agentId = randomUUID();
   app.agents.prepare({
     id: agentId,
@@ -33,10 +37,10 @@ it("keeps an archived run input pending and retries it after the owner unarchive
     },
     app.chat,
   );
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  app.chat.createMessage(direct.id, "归档期间不可写入回复的私信。");
+  const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
+  app.chat.messages.createMessage({ channelId: direct.id, text: "归档期间不可写入回复的私信。" });
   const runStart = socket.sent.length;
-  const credential = await app.request("/api/owner/model-credentials/openai", {
+  const credential = await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-archive-race-key" }),
@@ -44,7 +48,7 @@ it("keeps an archived run input pending and retries it after the owner unarchive
   expect(credential.status).toBe(204);
   const run = await waitForRun(socket, runStart);
 
-  const archive = await app.request(`/api/owner/channels/${direct.id}`, {
+  const archive = await app.http.request(`/api/owner/channels/${direct.id}`, {
     method: "PATCH",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ archived: true }),
@@ -66,7 +70,7 @@ it("keeps an archived run input pending and retries it after the owner unarchive
     type: "session.commit",
     accepted: true,
   });
-  expect(app.chat.listMessages(direct.id, undefined, 20)?.messages).toMatchObject([
+  expect(app.chat.timeline.listMessages(direct.id, undefined, 20)?.messages).toMatchObject([
     { author: { kind: "human" }, text: "归档期间不可写入回复的私信。" },
   ]);
 
@@ -94,7 +98,7 @@ it("keeps an archived run input pending and retries it after the owner unarchive
   } finally {
     db.close();
   }
-  expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toMatchObject([
+  expect(app.chat.deliveries.listPendingDeliveries("agent", agentId).deliveries).toMatchObject([
     { message: { text: "归档期间不可写入回复的私信。" } },
   ]);
 
@@ -107,7 +111,7 @@ it("keeps an archived run input pending and retries it after the owner unarchive
   );
 
   const retryStart = socket.sent.length;
-  const unarchive = await app.request(`/api/owner/channels/${direct.id}`, {
+  const unarchive = await app.http.request(`/api/owner/channels/${direct.id}`, {
     method: "PATCH",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ archived: false }),
@@ -130,7 +134,7 @@ it("keeps an archived run input pending and retries it after the owner unarchive
     type: "session.commit",
     accepted: true,
   });
-  expect(app.chat.listMessages(direct.id, undefined, 20)?.messages).toMatchObject([
+  expect(app.chat.timeline.listMessages(direct.id, undefined, 20)?.messages).toMatchObject([
     { author: { kind: "human" }, text: "归档期间不可写入回复的私信。" },
   ]);
   await toolTestInput(
@@ -144,5 +148,5 @@ it("keeps an archived run input pending and retries it after the owner unarchive
       ok: true,
     }),
   );
-  expect(app.chat.listPendingDeliveries("agent", agentId).deliveries).toHaveLength(0);
+  expect(app.chat.deliveries.listPendingDeliveries("agent", agentId).deliveries).toHaveLength(0);
 });

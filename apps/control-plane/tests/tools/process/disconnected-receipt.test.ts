@@ -9,14 +9,14 @@ import { afterEach, expect, it } from "vitest";
 import {
   cleanupFixture,
   FakeNodeSocket,
-  setup,
+  createProcessToolFixture,
   waitForRun,
   sendTool,
 } from "../../support/agent/process-tool-fixture.js";
 afterEach(cleanupFixture);
 
 it("reconciles a durable node receipt before resuming a disconnected Agent", async () => {
-  const { app, cookie, db, nodeId, socket, keyPair } = await setup();
+  const { app, cookie, db, nodeId, socket, keyPair } = await createProcessToolFixture();
   const agentId = randomUUID();
   app.agents.prepare({
     id: agentId,
@@ -37,14 +37,14 @@ it("reconciles a durable node receipt before resuming a disconnected Agent", asy
     },
     app.chat,
   );
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  await app.request("/api/owner/model-credentials/openai", {
+  const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-recovery-key" }),
   });
   const start = socket.sent.length;
-  app.chat.createMessage(direct.id, "Run one command.");
+  app.chat.messages.createMessage({ channelId: direct.id, text: "Run one command." });
   const oldRun = await waitForRun(socket, start);
   const toolCallId = `mate:${oldRun.actionScopeId}:${"b".repeat(64)}:1`;
   const pendingTool = sendTool(app, socket, oldRun, toolCallId, "tools.call", {
@@ -162,7 +162,7 @@ it("reconciles a durable node receipt before resuming a disconnected Agent", asy
     type: "tools.result",
     ok: false,
   });
-  const safeResponse = await app.request(`/api/owner/agents/${agentId}/activity`, {
+  const safeResponse = await app.http.request(`/api/owner/agents/${agentId}/activity`, {
     headers: { cookie },
   });
   expect(safeResponse.status).toBe(200);
@@ -172,18 +172,21 @@ it("reconciles a durable node receipt before resuming a disconnected Agent", asy
   expect(safe.events.some((event) => event.kind === "receipt.corrected")).toBe(true);
   expect(safe.events.every((event) => event.detail === undefined)).toBe(true);
   expect(JSON.stringify(safe)).not.toContain("printf once");
-  const expandedResponse = await app.request(`/api/owner/agents/${agentId}/activity?detail=1`, {
-    headers: { cookie },
-  });
+  const expandedResponse = await app.http.request(
+    `/api/owner/agents/${agentId}/activity?detail=1`,
+    {
+      headers: { cookie },
+    },
+  );
   const expanded = (await expandedResponse.json()) as { events: Array<{ detail?: unknown }> };
   expect(JSON.stringify(expanded)).toContain("printf once");
   const notification = db
-    .prepare(
+    .prepare<[string], { text: string; author_id: string; state: string }>(
       `SELECT m.text,m.author_id,d.state FROM owner_messages m
      JOIN owner_message_deliveries d ON d.message_id=m.id AND d.recipient_id=?
      WHERE m.author_id='mate-system' ORDER BY m.created_at DESC LIMIT 1`,
     )
-    .get(agentId) as { text: string; author_id: string; state: string };
+    .get(agentId)!;
   expect(notification).toMatchObject({ author_id: "mate-system", state: "pending" });
   expect(notification.text).toContain(String(operation!.operationId));
 
@@ -289,11 +292,14 @@ it("reconciles a durable node receipt before resuming a disconnected Agent", asy
   });
 
   const stored = db
-    .prepare(`SELECT run_id,request_json FROM owner_agent_process_operations WHERE operation_id=?`)
-    .get(secondOperation!.operationId) as {
-    run_id: string;
-    request_json: string;
-  };
+    .prepare<
+      [unknown],
+      {
+        run_id: string;
+        request_json: string;
+      }
+    >(`SELECT run_id,request_json FROM owner_agent_process_operations WHERE operation_id=?`)
+    .get(secondOperation!.operationId)!;
   // The committed request is the only record of the operation's identity; a replay reads it there.
   const originalRequest = JSON.parse(stored.request_json) as {
     actionScopeId: string;

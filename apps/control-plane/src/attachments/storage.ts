@@ -10,15 +10,16 @@ export async function streamUpload(
   maximumBytes: number,
 ): Promise<{ size: number; sha256: string }> {
   let size = 0;
-  const digest = createHash("sha256"),
-    limiter = new Transform({
-      transform(chunk: Buffer, _encoding, callback) {
-        size += chunk.byteLength;
-        if (size > maximumBytes) return callback(new Error("Attachment too large"));
-        digest.update(chunk);
-        callback(null, chunk);
-      },
-    });
+  const digest = createHash("sha256");
+  const limiter = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      size += chunk.byteLength;
+      if (size > maximumBytes) return callback(new Error("Attachment too large"));
+      digest.update(chunk);
+      callback(null, chunk);
+    },
+  });
+  // Hono supplies Uint8Array chunks from the raw request body; only the DOM/Node stream types differ.
   await pipeline(
     Readable.fromWeb(body as import("node:stream/web").ReadableStream<Uint8Array>),
     limiter,
@@ -47,7 +48,7 @@ export function normalizeContentType(value: string): string {
     : "application/octet-stream";
 }
 
-export function syncFile(path: string): void {
+function syncPath(path: string): void {
   const descriptor = openSync(path, "r");
   try {
     fsyncSync(descriptor);
@@ -56,14 +57,7 @@ export function syncFile(path: string): void {
   }
 }
 
-export function syncDirectory(path: string): void {
-  const descriptor = openSync(path, "r");
-  try {
-    fsyncSync(descriptor);
-  } finally {
-    closeSync(descriptor);
-  }
-}
+export { syncPath as syncFile, syncPath as syncDirectory };
 
 export function removeIfPresent(path: string): void {
   try {

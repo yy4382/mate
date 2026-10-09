@@ -346,28 +346,31 @@ export async function runReportWorkflow(
     driver.sendOwnerMessage(author, ownerRequest),
   );
   const held = await provider.waitFor(peer.summary.id, "waitForAuthorR1");
-  const r1 = await step("author R1 completes with its task still in progress", async () => {
-    assert.equal(held.state, "pending");
-    const run = await driver.waitForRun(work, "completed", waits);
-    const last = await provider.waitFor(author.summary.id, "finishDraftRun");
-    await driver.waitForTask({ ...claimedTask(last), status: "in_progress" }, waits);
-    const invitation = last.result("messages.send", ownerMessageSchema);
-    const tasks = await driver.tasks(signal);
-    assert.equal(tasks.length, 2);
-    const reviewTask = tasks.find((task) => task.messageId === invitation.id);
-    assert.ok(reviewTask);
-    assert.equal(reviewTask.channelId, peerConversationId);
-    assert.equal(reviewTask.status, "open");
-    assert.equal(reviewTask.ownerAgentId, null);
-    assert.notEqual(reviewTask.id, claimedTask(last).id);
-    assert.equal(claimedTask(last).messageId, work.message.id);
-    assert.deepEqual(
-      (await driver.messages(author.channelId, signal)).map((message) => message.text),
-      [ownerRequest],
-    );
-    assert.deepEqual(await driver.messages(peerConversationId, signal), [invitation]);
-    return run;
-  });
+  const authorDraftRun = await step(
+    "author R1 completes with its task still in progress",
+    async () => {
+      assert.equal(held.state, "pending");
+      const run = await driver.waitForRun(work, "completed", waits);
+      const last = await provider.waitFor(author.summary.id, "finishDraftRun");
+      await driver.waitForTask({ ...claimedTask(last), status: "in_progress" }, waits);
+      const invitation = last.result("messages.send", ownerMessageSchema);
+      const tasks = await driver.tasks(signal);
+      assert.equal(tasks.length, 2);
+      const reviewTask = tasks.find((task) => task.messageId === invitation.id);
+      assert.ok(reviewTask);
+      assert.equal(reviewTask.channelId, peerConversationId);
+      assert.equal(reviewTask.status, "open");
+      assert.equal(reviewTask.ownerAgentId, null);
+      assert.notEqual(reviewTask.id, claimedTask(last).id);
+      assert.equal(claimedTask(last).messageId, work.message.id);
+      assert.deepEqual(
+        (await driver.messages(author.channelId, signal)).map((message) => message.text),
+        [ownerRequest],
+      );
+      assert.deepEqual(await driver.messages(peerConversationId, signal), [invitation]);
+      return run;
+    },
+  );
   const draft = await step("published draft equals the author's actual file", async () => {
     const request = await provider.waitFor(author.summary.id, "finishDraftRun");
     return driver.assertAttachment({
@@ -385,14 +388,14 @@ export async function runReportWorkflow(
       held.call("conversations.read", { conversationId: peerConversationId }),
       "responded",
     );
-    return { authorRunId: r1.id, peerSessionId: held.sessionId };
+    return { authorRunId: authorDraftRun.id, peerSessionId: held.sessionId };
   });
   const review = await provider.waitFor(peer.summary.id, "finishReviewRun");
   const reply = review.result("messages.send", ownerMessageSchema);
   const peerRun = await step("peer finishes its independent review run", () =>
     driver.waitForRun({ ...peerObservation, message: reviewMessage(review) }, "completed", waits),
   );
-  const r2 = await step(
+  const authorDeliveryRun = await step(
     "actual feedback triggers author's R2 in the original session",
     async () => {
       const run = await driver.waitForRun(
@@ -400,8 +403,8 @@ export async function runReportWorkflow(
         "completed",
         waits,
       );
-      assert.notEqual(run.id, r1.id);
-      assert.equal(run.sessionId, r1.sessionId);
+      assert.notEqual(run.id, authorDraftRun.id);
+      assert.equal(run.sessionId, authorDraftRun.sessionId);
       assert.notEqual(peerRun.sessionId, run.sessionId);
       return run;
     },
@@ -485,13 +488,16 @@ export async function runReportWorkflow(
         }
       }
       assert.equal(current.size, 0);
-      assert.deepEqual(started, agent === author ? [r1.id, r2.id] : [peerRun.id]);
+      assert.deepEqual(
+        started,
+        agent === author ? [authorDraftRun.id, authorDeliveryRun.id] : [peerRun.id],
+      );
     }
     await provider.assertComplete();
-    return { sessions, authorRuns: [r1.id, r2.id], peerRun: peerRun.id };
+    return { sessions, authorRuns: [authorDraftRun.id, authorDeliveryRun.id], peerRun: peerRun.id };
   });
   return {
-    authorRuns: [r1, r2],
+    authorRuns: [authorDraftRun, authorDeliveryRun],
     peerRun,
     tasks,
     attachments: [draft.attachment, final.attachment],

@@ -7,6 +7,7 @@ import { TasksPage } from "./features/tasks/tasks-page.js";
 import { RemindersPage } from "./features/reminders/reminders-page.js";
 import { watchServiceStatus, type ServiceState } from "./status-monitor.js";
 import { appReturnPath } from "./navigation.js";
+import { jsonRequest, responseErrorMessage } from "./http-json.js";
 import "./style.css";
 
 function StatusPage() {
@@ -50,21 +51,16 @@ function LoginPage() {
     setError(null);
     const form = new FormData(event.currentTarget);
     try {
-      const response = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { Accept: "application/json", "Content-Type": "application/json" },
-        body: JSON.stringify({ password: form.get("password") }),
-      });
+      const response = await fetch(
+        "/api/auth/login",
+        jsonRequest("POST", { password: form.get("password") }),
+      );
       if (response.ok) {
         window.location.assign(appReturnPath(window.location.search));
         return;
       }
       const result: unknown = await response.json();
-      setError(
-        typeof result === "object" && result !== null && "error" in result
-          ? String(result.error)
-          : "登录失败，请重试。",
-      );
+      setError(responseErrorMessage(result, "登录失败，请重试。"));
     } catch {
       setError("暂时无法连接控制面，请稍后重试。");
     } finally {
@@ -104,20 +100,16 @@ function LoginPage() {
   );
 }
 
-const path = window.location.pathname;
-const Page =
-  path === "/login" || path.startsWith("/login/")
-    ? LoginPage
-    : path.startsWith("/app/agents/") && path.endsWith("/reminders")
-      ? RemindersPage
-      : path === "/app/tasks" || path.startsWith("/app/tasks/")
-        ? TasksPage
-        : path === "/app/agents" || path.startsWith("/app/agents/")
-          ? AgentsPage
-          : path === "/app/nodes" || path.startsWith("/app/nodes/")
-            ? NodesPage
-            : path === "/app" || path.startsWith("/app/")
-              ? ChatPage
-              : StatusPage;
+function pageForPath(path: string) {
+  if (path === "/login" || path.startsWith("/login/")) return LoginPage;
+  if (path.startsWith("/app/agents/") && path.endsWith("/reminders")) return RemindersPage;
+  if (path === "/app/tasks" || path.startsWith("/app/tasks/")) return TasksPage;
+  if (path === "/app/agents" || path.startsWith("/app/agents/")) return AgentsPage;
+  if (path === "/app/nodes" || path.startsWith("/app/nodes/")) return NodesPage;
+  if (path === "/app" || path.startsWith("/app/")) return ChatPage;
+  return StatusPage;
+}
+
+const Page = pageForPath(window.location.pathname);
 
 createRoot(document.getElementById("root")!).render(<Page />);

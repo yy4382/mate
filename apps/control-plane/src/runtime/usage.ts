@@ -2,7 +2,6 @@ import { z } from "zod";
 import { reportedUsageSchema, type ReportedUsage } from "./session/record.js";
 import type Database from "better-sqlite3";
 
-type Metric = { value: number | null; knownRequests: number; missingRequests: number };
 const tokenNameSchema = z.enum([
   "uncachedInput",
   "cacheRead",
@@ -123,7 +122,7 @@ class UsageAccumulator {
         value: this.hitKnown ? this.hitRead / this.hitInput : null,
         knownRequests: this.hitKnown,
         missingRequests: this.requestCount - this.hitKnown,
-      } satisfies Metric,
+      },
     };
   }
 }

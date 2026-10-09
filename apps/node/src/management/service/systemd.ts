@@ -2,9 +2,9 @@ import { spawnSync } from "node:child_process";
 import { z } from "zod";
 import { fileURLToPath } from "node:url";
 import { withoutDownloadCredentials } from "../bundle.js";
-import { privatePropertyFailure } from "./systemd-property.js";
+import { privatePropertyFailureSchema } from "./systemd-property.js";
 
-export const serviceFacts = z.object({
+export const serviceFactsSchema = z.object({
   load: z.string().min(1),
   active: z.string().min(1),
   sub: z.string().min(1),
@@ -18,7 +18,7 @@ export const serviceFacts = z.object({
   ),
   type: z.string(),
 });
-export type ServiceFacts = z.infer<typeof serviceFacts>;
+export type ServiceFacts = z.infer<typeof serviceFactsSchema>;
 export type ServiceAction = "daemon-reload" | "enable" | "disable" | "start" | "stop" | "restart";
 export type InspectionOptions = { effectiveCommand?: boolean };
 export interface UserServiceManager {
@@ -51,17 +51,28 @@ function privateProperty(property: "Version" | "ExecStartEx") {
 function propertyFailureDetails(result: ReturnType<typeof privateProperty>) {
   const readFailure = () => {
     try {
-      const parsed = privatePropertyFailure.safeParse(JSON.parse(result.stderr));
+      const parsed = privatePropertyFailureSchema.safeParse(JSON.parse(result.stderr));
       return parsed.success ? parsed.data : undefined;
     } catch {
       return undefined;
     }
   };
-  const failure = readFailure(),
-    code = privatePropertyFailure.shape.code.safeParse(
-      result.error && "code" in result.error ? result.error.code : undefined,
-    );
-  return `category=${failure?.category ?? (result.error ? "process-failure" : "child-failure")}; exit=${result.status ?? "none"}; signal=${result.signal ?? "none"}; code=${failure?.code ?? (code.success ? code.data : undefined) ?? "unknown"}; elapsed=${result.elapsedMs}ms`;
+  const failure = readFailure();
+  const code = privatePropertyFailureSchema.shape.code.safeParse(
+    result.error && "code" in result.error ? result.error.code : undefined,
+  );
+  return [
+    `category=${failure?.category ?? (result.error ? "process-failure" : "child-failure")}`,
+    `exit=${result.status ?? "none"}`,
+    `signal=${result.signal ?? "none"}`,
+    `code=${failure?.code ?? (code.success ? code.data : undefined) ?? "unknown"}`,
+    `elapsed=${result.elapsedMs}ms`,
+  ].join("; ");
+}
+
+function readJobId(value: string | undefined) {
+  if (value === "") return 0;
+  return /^\d+$/.test(value ?? "") ? Number(value) : undefined;
 }
 
 function effectiveExecStart() {
@@ -71,7 +82,7 @@ function effectiveExecStart() {
       `Could not inspect the effective user service command; its references are unknown (${propertyFailureDetails(result)})`,
     );
   try {
-    return serviceFacts.shape.execStart.parse(JSON.parse(result.stdout));
+    return serviceFactsSchema.shape.execStart.parse(JSON.parse(result.stdout));
   } catch {
     throw new Error("User manager returned unrecognized effective command facts");
   }
@@ -86,10 +97,10 @@ export const systemdUserManager: UserServiceManager = {
         "User manager unavailable: systemctl --user cannot connect. Use the existing account's login session; Mate does not configure linger or fall back to a background/system service.",
       );
     if (options?.effectiveCommand === false) return;
-    const bus = privateProperty("Version");
-    if (bus.status !== 0)
+    const managerVersionResult = privateProperty("Version");
+    if (managerVersionResult.status !== 0)
       throw new Error(
-        `Effective user manager inspection unavailable: the complete bundle must connect to systemd's existing private socket; Mate does not install software or a session bus (${propertyFailureDetails(bus)})`,
+        `Effective user manager inspection unavailable: the complete bundle must connect to systemd's existing private socket; Mate does not install software or a session bus (${propertyFailureDetails(managerVersionResult)})`,
       );
   },
   inspect(options) {
@@ -110,13 +121,13 @@ export const systemdUserManager: UserServiceManager = {
     );
     if (result.status !== 0 && !(result.status === 4 && values.LoadState === "not-found"))
       throw new Error("Could not inspect the user service; its actual state is unknown");
-    const parsed = serviceFacts.safeParse({
+    const parsed = serviceFactsSchema.safeParse({
       load: values.LoadState,
       active: values.ActiveState,
       sub: values.SubState,
       enabled: values.UnitFileState ?? "",
       pid: Number(values.MainPID),
-      job: values.Job === "" ? 0 : /^\d+$/.test(values.Job ?? "") ? Number(values.Job) : undefined,
+      job: readJobId(values.Job),
       fragment: values.FragmentPath ?? "",
       needsReload: values.NeedDaemonReload === "yes",
       execStart:

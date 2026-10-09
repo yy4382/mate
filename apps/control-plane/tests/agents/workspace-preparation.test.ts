@@ -5,12 +5,15 @@ import { randomUUID } from "node:crypto";
 import { afterEach, expect, it } from "vitest";
 
 import { AgentProvisionStageSchema } from "@mate/protocol";
-import { cleanupFixture, setup } from "../support/agent/conversation-fixture.js";
+import {
+  cleanupFixture,
+  createConversationFixture,
+} from "../support/agent/conversation-fixture.js";
 afterEach(cleanupFixture);
 
 it("refuses the owner's workspace preview until preparation finished, then serves it", async () => {
-  const { app, cookie, db, nodeId, socket } = await setup(),
-    agentId = randomUUID();
+  const { app, cookie, db, nodeId, socket } = await createConversationFixture();
+  const agentId = randomUUID();
   app.agents.prepare({
     id: agentId,
     nodeId,
@@ -44,7 +47,7 @@ it("refuses the owner's workspace preview until preparation finished, then serve
     );
   };
   const preview = () =>
-    app.request(`/api/owner/agents/${agentId}/workspace`, { headers: { cookie } });
+    app.http.request(`/api/owner/agents/${agentId}/workspace`, { headers: { cookie } });
 
   const refused = await preview();
   expect(refused.status).toBe(404);
@@ -66,8 +69,8 @@ it("refuses the owner's workspace preview until preparation finished, then serve
 });
 
 it("lets no progress or failure report move an Agent whose preparation already finished", async () => {
-  const { app, nodeId } = await setup(),
-    agentId = randomUUID();
+  const { app, nodeId } = await createConversationFixture();
+  const agentId = randomUUID();
   app.agents.prepare({
     id: agentId,
     nodeId,

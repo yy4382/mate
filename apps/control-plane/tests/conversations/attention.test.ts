@@ -7,17 +7,16 @@ import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 
 import {
-  password,
   fixtures,
   cleanupFixture,
-  setup,
+  createConversationFixture,
   waitForRun,
   callAgentTool,
 } from "../support/agent/conversation-fixture.js";
 afterEach(cleanupFixture);
 
 it("persists separate attention and draft choices while gating stale sends", async () => {
-  const { app, cookie, nodeId, socket, db, directory } = await setup();
+  const { app, cookie, nodeId, socket, db, directory } = await createConversationFixture();
   const agentId = randomUUID();
   app.agents.prepare({
     id: agentId,
@@ -38,14 +37,14 @@ it("persists separate attention and draft choices while gating stale sends", asy
     },
     app.chat,
   );
-  const dm = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  await app.request("/api/owner/model-credentials/openai", {
+  const dm = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-attention-key" }),
   });
   const from = socket.sent.length;
-  const first = app.chat.createMessage(dm.id, "Initial context")!;
+  const first = app.chat.messages.createMessage({ channelId: dm.id, text: "Initial context" })!;
   const run = await waitForRun(socket, from);
   async function tool(id: string, name: string, input: Record<string, unknown>) {
     const result = await callAgentTool(app, socket, run, id, "tools.call", { name, input });
@@ -79,7 +78,7 @@ it("persists separate attention and draft choices while gating stale sends", asy
   expect(presented.items).toEqual([
     expect.objectContaining({ messageId: first.id, unread: 1, presented: 1 }),
   ]);
-  app.chat.createMessage(dm.id, "Before unprepared send");
+  app.chat.messages.createMessage({ channelId: dm.id, text: "Before unprepared send" });
   const unprepared = await tool("unprepared-send", "messages.send", {
     conversationId: dm.id,
     text: "Must review first",
@@ -95,7 +94,7 @@ it("persists separate attention and draft choices while gating stale sends", asy
     text: "First attempt",
   });
   const draftId = saved.id as string;
-  app.chat.createMessage(dm.id, "Concurrent change");
+  app.chat.messages.createMessage({ channelId: dm.id, text: "Concurrent change" });
   const changes = await tool("draft-inspect", "drafts.review", { draftId, choice: "inspect" });
   expect(changes.changes).toEqual([expect.objectContaining({ text: "Concurrent change" })]);
   await tool("draft-keep", "drafts.review", { draftId, choice: "keep" });
@@ -105,7 +104,7 @@ it("persists separate attention and draft choices while gating stale sends", asy
   });
   expect(refused).toMatchObject({ ok: false, error: "Draft is not ready for this message" });
   await tool("draft-continue", "drafts.review", { draftId, choice: "continue" });
-  app.chat.createMessage(dm.id, "Another concurrent change");
+  app.chat.messages.createMessage({ channelId: dm.id, text: "Another concurrent change" });
   const stale = await callAgentTool(app, socket, run, "draft-stale-send", "tools.call", {
     name: "messages.send",
     input: { conversationId: dm.id, text: "First attempt", draftId },
@@ -131,9 +130,13 @@ it("persists separate attention and draft choices while gating stale sends", asy
     draftId,
   });
   expect(sent.text).toBe("First attempt");
-  const threadReply = app.chat.createMessage(dm.id, "Full thread reply", { rootId: first.id })!;
+  const threadReply = app.chat.messages.createMessage({
+    channelId: dm.id,
+    text: "Full thread reply",
+    rootId: first.id,
+  })!;
   expect(
-    app.chat
+    app.chat.deliveries
       .listPendingDeliveries("agent", agentId)
       .deliveries.find((delivery) => delivery.messageId === threadReply.id)?.message.rootId,
   ).toBe(first.id);
@@ -163,7 +166,7 @@ it("persists separate attention and draft choices while gating stale sends", asy
     directory,
     db: new Database(join(directory, "control-plane", "control-plane.sqlite")),
   });
-  expect(restarted.chat.listAgentAttention(agentId, dm.id)).toEqual(
+  expect(restarted.chat.attention.listAgentAttention(agentId, dm.id)).toEqual(
     expect.arrayContaining([
       expect.objectContaining({
         messageId: first.id,
@@ -175,7 +178,9 @@ it("persists separate attention and draft choices while gating stale sends", asy
       }),
     ]),
   );
-  expect(restarted.chat.readPersistedAgentDraft(agentId, second.id as string)).toMatchObject({
+  expect(
+    restarted.chat.attention.readPersistedAgentDraft(agentId, second.id as string),
+  ).toMatchObject({
     state: "abandoned",
     text: "Abandon this",
     channelId: dm.id,
@@ -183,7 +188,7 @@ it("persists separate attention and draft choices while gating stale sends", asy
 });
 
 it("does not let a saved draft or a later paginated read hide unseen conversation changes", async () => {
-  const { app, cookie, nodeId, socket } = await setup();
+  const { app, cookie, nodeId, socket } = await createConversationFixture();
   const agentId = randomUUID();
   app.agents.prepare({
     id: agentId,
@@ -204,20 +209,26 @@ it("does not let a saved draft or a later paginated read hide unseen conversatio
     },
     app.chat,
   );
-  const dm = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  await app.request("/api/owner/model-credentials/openai", {
+  const dm = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-freshness-key" }),
   });
   const from = socket.sent.length;
-  app.chat.createMessage(dm.id, "Run input");
+  app.chat.messages.createMessage({ channelId: dm.id, text: "Run input" });
   const run = await waitForRun(socket, from);
   async function tool(id: string, name: string, input: Record<string, unknown>) {
     return callAgentTool(app, socket, run, id, "tools.call", { name, input });
   }
-  const firstChange = app.chat.createMessage(dm.id, "Earlier unseen change")!;
-  const secondChange = app.chat.createMessage(dm.id, "Later visible change")!;
+  const firstChange = app.chat.messages.createMessage({
+    channelId: dm.id,
+    text: "Earlier unseen change",
+  })!;
+  const secondChange = app.chat.messages.createMessage({
+    channelId: dm.id,
+    text: "Later visible change",
+  })!;
   const read = await tool("read-latest-only", "conversations.read", {
     conversationId: dm.id,
     limit: 1,

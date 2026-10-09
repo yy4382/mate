@@ -5,8 +5,7 @@ import Database from "better-sqlite3";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 
 import { tmpdir } from "node:os";
-import { resolve } from "node:path";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { expect, it } from "vitest";
 import { ownerAuthSchema } from "../../src/auth/schema.js";

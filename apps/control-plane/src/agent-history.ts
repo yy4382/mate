@@ -15,7 +15,6 @@ const cursorSchema = z
   .refine((cursor) => cursor.after <= cursor.through);
 type SearchCursor = z.infer<typeof cursorSchema>;
 
-type Message = Extract<SessionCommit, { kind: "message" }>["message"];
 interface HistoryRow {
   id: string;
   agent_id: string;
@@ -60,28 +59,27 @@ export class AgentHistory {
   private search(agentId: string, query: string, cursor?: SearchCursor) {
     // A query containing half a Unicode character cannot define a pair-safe match range.
     if (/[\uD800-\uDFFF]/u.test(query)) throw new AgentToolRefusal("Invalid history query");
-    const latest = (
-      this.db
-        .prepare(
-          `SELECT COALESCE(MAX(seq),0) AS seq FROM owner_agent_session_records
+    // The aggregate returns one row even when this Agent has no history.
+    const latest = this.db
+      .prepare<unknown[], { seq: number }>(
+        `SELECT COALESCE(MAX(seq),0) AS seq FROM owner_agent_session_records
       WHERE agent_id=? AND kind='message'`,
-        )
-        .get(agentId) as { seq: number }
-    ).seq;
+      )
+      .get(agentId)!.seq;
     if (cursor && (cursor.agentId !== agentId || cursor.query !== query || cursor.through > latest))
       throw new AgentToolRefusal("Invalid history cursor");
     const through = cursor?.through ?? latest;
     let after = cursor?.after ?? 0;
     const rows = this.db
-      .prepare(
+      .prepare<unknown[], HistoryRow>(
         `SELECT id,agent_id,seq,run_id,action_scope_id,payload_json,created_at FROM owner_agent_session_records
       WHERE agent_id=? AND kind='message' AND seq>? AND seq<=? ORDER BY seq LIMIT 100`,
       )
-      .all(agentId, after, through) as HistoryRow[];
+      .all(agentId, after, through);
     const hits = [];
     let scanned = 0;
     for (const row of rows) {
-      const { text, ...metadata } = project(row);
+      const { text, ...metadata } = projectHistoryMessage(row);
       after = row.seq;
       scanned++;
       const start = text.indexOf(query);
@@ -89,7 +87,7 @@ export class AgentHistory {
         hits.push({
           ...metadata,
           match: { start, end: start + query.length },
-          excerpt: excerpt(text, start),
+          excerpt: historyMatchExcerpt(text, start),
         });
       if (hits.length === 20) break;
     }
@@ -104,29 +102,29 @@ export class AgentHistory {
 
   private read(agentId: string, id: string, offset: number, maxChars: number) {
     const row = this.db
-      .prepare(
+      .prepare<unknown[], HistoryRow>(
         `SELECT id,agent_id,seq,run_id,action_scope_id,payload_json,created_at FROM owner_agent_session_records
       WHERE agent_id=? AND id=? AND kind='message'`,
       )
-      .get(agentId, id) as HistoryRow | undefined;
+      .get(agentId, id);
     if (!row) throw new AgentToolRefusal("History record not found");
-    const { text, ...metadata } = project(row);
+    const { text, ...metadata } = projectHistoryMessage(row);
     if (offset > text.length || splitsPair(text, offset))
       throw new AgentToolRefusal("Invalid history offset");
     let end = Math.min(text.length, offset + maxChars);
     if (splitsPair(text, end)) end--;
     const previous = this.db
-      .prepare(
+      .prepare<unknown[], { id: string }>(
         `SELECT id FROM owner_agent_session_records
       WHERE agent_id=? AND kind='message' AND seq<? ORDER BY seq DESC LIMIT 1`,
       )
-      .get(agentId, row.seq) as { id: string } | undefined;
+      .get(agentId, row.seq);
     const next = this.db
-      .prepare(
+      .prepare<unknown[], { id: string }>(
         `SELECT id FROM owner_agent_session_records
       WHERE agent_id=? AND kind='message' AND seq>? ORDER BY seq LIMIT 1`,
       )
-      .get(agentId, row.seq) as { id: string } | undefined;
+      .get(agentId, row.seq);
     return {
       ...metadata,
       text: text.slice(offset, end),
@@ -139,8 +137,9 @@ export class AgentHistory {
   }
 }
 
-function project(row: HistoryRow) {
-  const { message } = JSON.parse(row.payload_json) as { message: Message };
+function projectHistoryMessage(row: HistoryRow) {
+  const entry: Extract<SessionCommit, { kind: "message" }> = JSON.parse(row.payload_json);
+  const { message } = entry;
   const body =
     typeof message.content === "string"
       ? message.content
@@ -180,12 +179,12 @@ function project(row: HistoryRow) {
 }
 
 function splitsPair(text: string, offset: number): boolean {
-  const before = text.charCodeAt(offset - 1),
-    after = text.charCodeAt(offset);
+  const before = text.charCodeAt(offset - 1);
+  const after = text.charCodeAt(offset);
   return before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff;
 }
 
-function excerpt(text: string, matchStart: number) {
+function historyMatchExcerpt(text: string, matchStart: number) {
   let start = Math.max(0, matchStart - 100);
   if (splitsPair(text, start)) start--;
   let end = Math.min(text.length, start + 400);

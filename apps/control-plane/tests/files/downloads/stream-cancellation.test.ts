@@ -2,24 +2,27 @@ import { toolTestInput } from "../../support/agent/tool-run.js";
 
 import { randomUUID } from "node:crypto";
 
-import { resolve } from "node:path";
 import { afterEach, expect, it } from "vitest";
 
-import { password, cleanupFixture, setup } from "../../support/agent/conversation-fixture.js";
+import {
+  password,
+  cleanupFixture,
+  createConversationFixture,
+} from "../../support/agent/conversation-fixture.js";
 afterEach(cleanupFixture);
 
 it("streams the owner workspace download one bounded node chunk at a time and stops on cancellation", async () => {
-  const { app, cookie, db, nodeId, socket } = await setup(),
-    agentId = randomUUID(),
-    data = Buffer.from("agent workspace content ".repeat(1200)),
-    version = {
-      device: "1",
-      inode: "2",
-      size: data.byteLength,
-      modifiedNs: "3",
-      changedNs: "4",
-    },
-    requests: Array<{ kind: string; offset?: number; length?: number }> = [];
+  const { app, cookie, db, nodeId, socket } = await createConversationFixture();
+  const agentId = randomUUID();
+  const data = Buffer.from("agent workspace content ".repeat(1200));
+  const version = {
+    device: "1",
+    inode: "2",
+    size: data.byteLength,
+    modifiedNs: "3",
+    changedNs: "4",
+  };
+  const requests: Array<{ kind: string; offset?: number; length?: number }> = [];
   app.agents.prepare({
     id: agentId,
     nodeId,
@@ -78,7 +81,7 @@ it("streams the owner workspace download one bounded node chunk at a time and st
     );
   };
 
-  const listing = await app.request(
+  const listing = await app.http.request(
     `/api/owner/agents/${agentId}/workspace?path=&offset=0&limit=32`,
     {
       headers: { cookie },
@@ -89,11 +92,11 @@ it("streams the owner workspace download one bounded node chunk at a time and st
     entries: [{ name: "large.bin", size: data.byteLength }],
   });
 
-  const completedDownloadId = randomUUID(),
-    download = await app.request(
-      `/api/owner/agents/${agentId}/workspace/download?path=large.bin&downloadId=${completedDownloadId}`,
-      { headers: { cookie } },
-    );
+  const completedDownloadId = randomUUID();
+  const download = await app.http.request(
+    `/api/owner/agents/${agentId}/workspace/download?path=large.bin&downloadId=${completedDownloadId}`,
+    { headers: { cookie } },
+  );
   expect(download.status).toBe(200);
   expect(download.headers.get("content-length")).toBe(String(data.byteLength));
   expect(download.headers.get("x-mate-download-id")).toBe(completedDownloadId);
@@ -102,8 +105,8 @@ it("streams the owner workspace download one bounded node chunk at a time and st
       .prepare("SELECT result,completed_at FROM owner_workspace_access_audit WHERE download_id=?")
       .get(completedDownloadId),
   ).toEqual({ result: "started", completed_at: null });
-  const reader = download.body!.getReader(),
-    chunks: Uint8Array[] = [];
+  const reader = download.body!.getReader();
+  const chunks: Uint8Array[] = [];
   for (;;) {
     const item = await reader.read();
     if (item.done) break;
@@ -118,26 +121,29 @@ it("streams the owner workspace download one bounded node chunk at a time and st
   ).toEqual({ result: "succeeded", completed_at: expect.any(Number) });
   expect(
     await (
-      await app.request(`/api/owner/agents/${agentId}/workspace/downloads/${completedDownloadId}`, {
-        headers: { cookie },
-      })
+      await app.http.request(
+        `/api/owner/agents/${agentId}/workspace/downloads/${completedDownloadId}`,
+        {
+          headers: { cookie },
+        },
+      )
     ).json(),
   ).toMatchObject({ state: "succeeded", errorCode: null });
-  const secondLogin = await app.request("/api/auth/login", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ password }),
-    }),
-    secondCookie = secondLogin.headers.get("set-cookie")!.split(";", 1)[0]!,
-    otherSessionStatus = await app.request(
-      `/api/owner/agents/${agentId}/workspace/downloads/${completedDownloadId}`,
-      { headers: { cookie: secondCookie } },
-    );
+  const secondLogin = await app.http.request("/api/auth/login", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ password }),
+  });
+  const secondCookie = secondLogin.headers.get("set-cookie")!.split(";", 1)[0]!;
+  const otherSessionStatus = await app.http.request(
+    `/api/owner/agents/${agentId}/workspace/downloads/${completedDownloadId}`,
+    { headers: { cookie: secondCookie } },
+  );
   expect(otherSessionStatus.status).toBe(404);
   db.prepare(
     "UPDATE owner_workspace_access_audit SET download_expires_at=? WHERE download_id=?",
   ).run(Date.now() - 1, completedDownloadId);
-  const expiredStatus = await app.request(
+  const expiredStatus = await app.http.request(
     `/api/owner/agents/${agentId}/workspace/downloads/${completedDownloadId}`,
     { headers: { cookie } },
   );
@@ -154,14 +160,14 @@ it("streams the owner workspace download one bounded node chunk at a time and st
   expect(downloadChunks.every((request) => request.length === 8192)).toBe(true);
 
   const previousChunks = requests.filter(
-      (request) => request.kind === "workspace_read_chunk",
-    ).length,
-    interruptedDownloadId = randomUUID(),
-    interrupted = await app.request(
-      `/api/owner/agents/${agentId}/workspace/download?path=large.bin&downloadId=${interruptedDownloadId}`,
-      { headers: { cookie } },
-    ),
-    interruptReader = interrupted.body!.getReader();
+    (request) => request.kind === "workspace_read_chunk",
+  ).length;
+  const interruptedDownloadId = randomUUID();
+  const interrupted = await app.http.request(
+    `/api/owner/agents/${agentId}/workspace/download?path=large.bin&downloadId=${interruptedDownloadId}`,
+    { headers: { cookie } },
+  );
+  const interruptReader = interrupted.body!.getReader();
   const first = await interruptReader.read();
   expect(first.done).toBe(false);
   expect(first.value!.byteLength).toBeLessThanOrEqual(8192);
@@ -172,7 +178,7 @@ it("streams the owner workspace download one bounded node chunk at a time and st
   expect(interruptedChunks).toBeLessThanOrEqual(2);
   expect(
     await (
-      await app.request(
+      await app.http.request(
         `/api/owner/agents/${agentId}/workspace/downloads/${interruptedDownloadId}`,
         { headers: { cookie } },
       )

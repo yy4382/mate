@@ -29,16 +29,15 @@ it("refuses an Agent command timeout outside its supported range", () => {
 });
 
 it("stops every Agent's running commands when the node is shutting down", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "mate-process-operations-")),
-    database = new Database(join(directory, "operations.sqlite")),
-    firstAgent = randomUUID(),
-    secondAgent = randomUUID(),
-    first = deferred<{ state: "succeeded"; receipt: unknown }>(),
-    second = deferred<{ state: "succeeded"; receipt: unknown }>(),
-    stoppedFor: string[] = [];
-  const execute = vi.fn(async ({ agentId, operation }: { agentId: string; operation: unknown }) => {
-    const kind = (operation as { kind: string }).kind;
-    if (kind === "process.stop_all") {
+  const directory = mkdtempSync(join(tmpdir(), "mate-process-operations-"));
+  const database = new Database(join(directory, "operations.sqlite"));
+  const firstAgent = randomUUID();
+  const secondAgent = randomUUID();
+  const first = deferred<{ state: "succeeded"; receipt: unknown }>();
+  const second = deferred<{ state: "succeeded"; receipt: unknown }>();
+  const stoppedFor: string[] = [];
+  const execute = vi.fn(async ({ agentId, operation }: AgentProcessExecutionRequest) => {
+    if (operation.kind === "process.stop_all") {
       stoppedFor.push(agentId);
       return {
         state: "succeeded" as const,
@@ -76,13 +75,13 @@ it("stops every Agent's running commands when the node is shutting down", async 
 });
 
 it("records start before host work and replays a durable terminal receipt without rerunning", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "mate-process-operations-")),
-    path = join(directory, "operations.sqlite"),
-    agentId = randomUUID(),
-    operationId = randomUUID(),
-    started = deferred<void>(),
-    finish = deferred<{ state: "succeeded"; receipt: unknown }>(),
-    database = new Database(path);
+  const directory = mkdtempSync(join(tmpdir(), "mate-process-operations-"));
+  const path = join(directory, "operations.sqlite");
+  const agentId = randomUUID();
+  const operationId = randomUUID();
+  const started = deferred<void>();
+  const finish = deferred<{ state: "succeeded"; receipt: unknown }>();
+  const database = new Database(path);
   let operations!: AgentProcessOperations;
   const execute = vi.fn(async () => {
     expect(operations.status(agentId, operationId)).toMatchObject({ state: "started" });
@@ -93,11 +92,11 @@ it("records start before host work and replays a durable terminal receipt withou
 
   try {
     const request = {
-        kind: "exec" as const,
-        cwd: ".",
-        command: "printf durable",
-      },
-      first = operations.execute(agentId, operationId, request);
+      kind: "exec" as const,
+      cwd: ".",
+      command: "printf durable",
+    };
+    const first = operations.execute(agentId, operationId, request);
     await started.promise;
     const duplicate = operations.execute(agentId, operationId, request);
     expect(execute).toHaveBeenCalledOnce();
@@ -114,9 +113,9 @@ it("records start before host work and replays a durable terminal receipt withou
     expect(duplicateReceipt).toEqual(firstReceipt);
 
     database.close();
-    const recoveredDatabase = new Database(path),
-      recoveryExecutor = vi.fn(async () => ({ state: "failed" as const, receipt: null })),
-      recovered = new AgentProcessOperations(recoveredDatabase, recoveryExecutor);
+    const recoveredDatabase = new Database(path);
+    const recoveryExecutor = vi.fn(async () => ({ state: "failed" as const, receipt: null }));
+    const recovered = new AgentProcessOperations(recoveredDatabase, recoveryExecutor);
     try {
       expect(await recovered.execute(agentId, operationId, request)).toEqual(firstReceipt);
       expect(recoveryExecutor).not.toHaveBeenCalled();
@@ -130,11 +129,11 @@ it("records start before host work and replays a durable terminal receipt withou
 });
 
 it("rejects reuse of one operation ID for a different Agent request", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "mate-process-operations-")),
-    database = new Database(join(directory, "operations.sqlite")),
-    execute = vi.fn(async () => ({ state: "succeeded" as const, receipt: { code: 0 } })),
-    operations = new AgentProcessOperations(database, execute),
-    operationId = randomUUID();
+  const directory = mkdtempSync(join(tmpdir(), "mate-process-operations-"));
+  const database = new Database(join(directory, "operations.sqlite"));
+  const execute = vi.fn(async () => ({ state: "succeeded" as const, receipt: { code: 0 } }));
+  const operations = new AgentProcessOperations(database, execute);
+  const operationId = randomUUID();
   try {
     await operations.execute(randomUUID(), operationId, {
       kind: "exec",
@@ -156,18 +155,18 @@ it("rejects reuse of one operation ID for a different Agent request", async () =
 });
 
 it("marks an interrupted node operation unknown and never replays it after restart", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "mate-process-operations-")),
-    path = join(directory, "operations.sqlite"),
-    agentId = randomUUID(),
-    operationId = randomUUID(),
-    request = { kind: "exec" as const, cwd: ".", command: "touch once" },
-    canonical = JSON.stringify({
-      agentId,
-      operation: { kind: "exec", command: "touch once", cwd: "." },
-    }),
-    database = new Database(path),
-    noWork = vi.fn(async () => ({ state: "succeeded" as const, receipt: { code: 0 } })),
-    original = new AgentProcessOperations(database, noWork);
+  const directory = mkdtempSync(join(tmpdir(), "mate-process-operations-"));
+  const path = join(directory, "operations.sqlite");
+  const agentId = randomUUID();
+  const operationId = randomUUID();
+  const request = { kind: "exec" as const, cwd: ".", command: "touch once" };
+  const canonical = JSON.stringify({
+    agentId,
+    operation: { kind: "exec", command: "touch once", cwd: "." },
+  });
+  const database = new Database(path);
+  const noWork = vi.fn(async () => ({ state: "succeeded" as const, receipt: { code: 0 } }));
+  const original = new AgentProcessOperations(database, noWork);
   try {
     database
       .prepare(
@@ -179,9 +178,9 @@ it("marks an interrupted node operation unknown and never replays it after resta
     expect(original.status(agentId, operationId)?.state).toBe("started");
     database.close();
 
-    const recoveredDatabase = new Database(path),
-      recoveryExecutor = vi.fn(async () => ({ state: "succeeded" as const, receipt: null })),
-      recovered = new AgentProcessOperations(recoveredDatabase, recoveryExecutor);
+    const recoveredDatabase = new Database(path);
+    const recoveryExecutor = vi.fn(async () => ({ state: "succeeded" as const, receipt: null }));
+    const recovered = new AgentProcessOperations(recoveredDatabase, recoveryExecutor);
     try {
       expect(recovered.status(agentId, operationId)).toMatchObject({
         state: "unknown",
@@ -202,12 +201,12 @@ it("marks an interrupted node operation unknown and never replays it after resta
 
 it("fences new commands and repeats Agent stopping after an admitted command settles", async () => {
   const database = new Database(":memory:");
-  const agentId = randomUUID(),
-    otherAgent = randomUUID();
+  const agentId = randomUUID();
+  const otherAgent = randomUUID();
   const commandStarted = deferred<void>();
   const finishCommand = deferred<{ state: "succeeded"; receipt: unknown }>();
   let stops = 0;
-  const host = vi.fn(async ({ operation }: { operation: { kind: string } }) => {
+  const host = vi.fn(async ({ operation }: AgentProcessExecutionRequest) => {
     if (operation.kind === "exec") {
       commandStarted.resolve();
       return finishCommand.promise;
@@ -254,9 +253,9 @@ it("fences new commands and repeats Agent stopping after an admitted command set
 });
 
 it("reports malformed or mismatched stored request evidence as unknown without executing again", async () => {
-  const database = new Database(":memory:"),
-    agentId = randomUUID(),
-    operationId = randomUUID();
+  const database = new Database(":memory:");
+  const agentId = randomUUID();
+  const operationId = randomUUID();
   const execute = vi.fn(async () => ({ state: "succeeded" as const, receipt: { stdout: "once" } }));
   const operations = new AgentProcessOperations(database, execute);
   try {
@@ -321,9 +320,9 @@ it("interprets only the relevant shutdown receipt IDs and reports malformed IDs 
     },
   ];
   for (const sample of cases) {
-    const database = new Database(":memory:"),
-      agentId = randomUUID(),
-      finish = deferred<AgentProcessExecution>();
+    const database = new Database(":memory:");
+    const agentId = randomUUID();
+    const finish = deferred<AgentProcessExecution>();
     const execute = vi.fn(
       async ({ operation }: AgentProcessExecutionRequest): Promise<AgentProcessExecution> => {
         if (operation.kind === "exec") return finish.promise;

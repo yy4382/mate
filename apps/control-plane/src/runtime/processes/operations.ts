@@ -156,15 +156,21 @@ export class AgentProcessOperationBroker {
     committed: Promise<void> = Promise.resolve(),
     requireCurrentRun: () => void = () => {},
   ): Promise<AgentProcessOperationResult> {
-    const runId = uuidSchema.parse(request.runId),
-      nodeId = uuidSchema.parse(request.nodeId),
-      agentId = uuidSchema.parse(request.agentId),
-      actionScopeId = uuidSchema.parse(request.actionScopeId),
-      stableActionId = stableActionIdSchema.parse(request.stableActionId),
-      operationId = uuidSchema.parse(request.operationId),
-      operation = agentProcessOperationSchema.parse(request.operation),
-      requestJson = JSON.stringify({ actionScopeId, stableActionId, nodeId, agentId, operation }),
-      requestHash = createHash("sha256").update(requestJson).digest("hex");
+    const runId = uuidSchema.parse(request.runId);
+    const nodeId = uuidSchema.parse(request.nodeId);
+    const agentId = uuidSchema.parse(request.agentId);
+    const actionScopeId = uuidSchema.parse(request.actionScopeId);
+    const stableActionId = stableActionIdSchema.parse(request.stableActionId);
+    const operationId = uuidSchema.parse(request.operationId);
+    const operation = agentProcessOperationSchema.parse(request.operation);
+    const requestJson = JSON.stringify({
+      actionScopeId,
+      stableActionId,
+      nodeId,
+      agentId,
+      operation,
+    });
+    const requestHash = createHash("sha256").update(requestJson).digest("hex");
     if (stableActionScopeId(stableActionId) !== actionScopeId)
       throw new Error("Agent process action scope does not match the active delivery");
     if (operationId !== deriveAgentProcessOperationId(agentId, stableActionId))
@@ -234,9 +240,9 @@ export class AgentProcessOperationBroker {
 
   /** Read the durable CP receipt as a seam for late-result reconciliation. */
   status(agentId: string, operationId: string): AgentProcessOperationResult | undefined {
-    const parsedAgentId = uuidSchema.parse(agentId),
-      parsedOperationId = uuidSchema.parse(operationId),
-      row = this.read(parsedOperationId);
+    const parsedAgentId = uuidSchema.parse(agentId);
+    const parsedOperationId = uuidSchema.parse(operationId);
+    const row = this.read(parsedOperationId);
     if (!row || row.agent_id !== parsedAgentId) return undefined;
     return toResult(row);
   }
@@ -407,8 +413,8 @@ export class AgentProcessOperationBroker {
 }
 
 function toResult(row: OperationRow): AgentProcessOperationResult {
-  const receipt = parseHistory(row.receipt_json),
-    request = parseHistory(row.request_json);
+  const receipt = parseHistory(row.receipt_json);
+  const request = parseHistory(row.request_json);
   const operation =
     request.value && typeof request.value === "object" && "operation" in request.value
       ? request.value.operation
@@ -434,14 +440,14 @@ function stableActionScopeId(stableActionId: string): string {
 
 /** Derive an operation UUID from the session's committed assistant/tool-call action identity. */
 export function deriveAgentProcessOperationId(agentId: string, stableActionId: string): string {
-  const parsedAgentId = uuidSchema.parse(agentId),
-    parsedStableActionId = stableActionIdSchema.parse(stableActionId),
-    hash = createHash("sha256")
-      .update("mate-process-operation-v1\0")
-      .update(parsedAgentId)
-      .update("\0")
-      .update(parsedStableActionId)
-      .digest();
+  const parsedAgentId = uuidSchema.parse(agentId);
+  const parsedStableActionId = stableActionIdSchema.parse(stableActionId);
+  const hash = createHash("sha256")
+    .update("mate-process-operation-v1\0")
+    .update(parsedAgentId)
+    .update("\0")
+    .update(parsedStableActionId)
+    .digest();
   hash[6] = (hash[6]! & 0x0f) | 0x50;
   hash[8] = (hash[8]! & 0x3f) | 0x80;
   const hex = hash.subarray(0, 16).toString("hex");

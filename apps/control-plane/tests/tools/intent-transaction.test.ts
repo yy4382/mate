@@ -4,7 +4,7 @@ import { afterEach, expect, it } from "vitest";
 
 import {
   cleanupAgentToolFixture,
-  setup,
+  createAgentToolFixture,
   authorizeModel,
   addAgent,
   waitForRuns,
@@ -13,11 +13,11 @@ import {
 it.each(["process.exec", "workspace.write", "attachments.publish"])(
   "%s commits its intent before network waiting, preserves dispatched effects, and refuses old-run continuation",
   async (name) => {
-    const { app, cookie, db, nodeId, socket } = await setup();
+    const { app, cookie, db, nodeId, socket } = await createAgentToolFixture();
     const agentId = addAgent(app, nodeId, "Late receipt");
-    const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+    const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
     await authorizeModel(app, cookie);
-    app.chat.createMessage(direct.id, "Accept one operation.");
+    app.chat.messages.createMessage({ channelId: direct.id, text: "Accept one operation." });
     const run = (await waitForRuns(socket, 0, [agentId])).get(agentId)!;
     const identity = {
       runId: run.runId,
@@ -32,10 +32,7 @@ it.each(["process.exec", "workspace.write", "attachments.publish"])(
           ? { path: "empty.txt", content: "" }
           : { conversationId: direct.id, path: "empty.txt" };
     let release!: () => Promise<void>;
-    let dispatched!: () => void;
-    const sent = new Promise<void>((resolve) => {
-      dispatched = resolve;
-    });
+    const { promise: sent, resolve: dispatched } = Promise.withResolvers<void>();
     const version = { device: "1", inode: "2", size: 0, modifiedNs: "3", changedNs: "4" };
     let first = true;
     socket.onSend = (message) => {
@@ -138,7 +135,10 @@ it.each(["process.exec", "workspace.write", "attachments.publish"])(
     });
     expect(socket.sent).toHaveLength(sentAfterReceipt);
     const beforeNext = socket.sent.length;
-    app.chat.createMessage(direct.id, "Continue in the same session.");
+    app.chat.messages.createMessage({
+      channelId: direct.id,
+      text: "Continue in the same session.",
+    });
     const next = (await waitForRuns(socket, beforeNext, [agentId])).get(agentId)!;
     expect(next.runId).not.toBe(run.runId);
     expect(next.sessionId).toBe(run.sessionId);
@@ -155,11 +155,14 @@ it.each(["process.exec", "workspace.write", "attachments.publish"])(
 it.each(["process.exec", "workspace.write", "attachments.publish"])(
   "%s never dispatches an intent whose final database commit fails",
   async (name) => {
-    const { app, cookie, db, nodeId, socket } = await setup();
+    const { app, cookie, db, nodeId, socket } = await createAgentToolFixture();
     const agentId = addAgent(app, nodeId, "Commit failure");
-    const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+    const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
     await authorizeModel(app, cookie);
-    app.chat.createMessage(direct.id, "Commit must precede dispatch.");
+    app.chat.messages.createMessage({
+      channelId: direct.id,
+      text: "Commit must precede dispatch.",
+    });
     const run = (await waitForRuns(socket, 0, [agentId])).get(agentId)!;
     const identity = {
       runId: run.runId,
@@ -194,11 +197,11 @@ it.each(["process.exec", "workspace.write", "attachments.publish"])(
 it.each(["process.exec", "workspace.write", "attachments.publish"])(
   "%s rolls back its entire preparation if persistence fails after inserting the intent",
   async (name) => {
-    const { app, cookie, db, nodeId, socket } = await setup();
+    const { app, cookie, db, nodeId, socket } = await createAgentToolFixture();
     const agentId = addAgent(app, nodeId, "Preparation failure");
-    const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+    const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
     await authorizeModel(app, cookie);
-    app.chat.createMessage(direct.id, "Preparation must be atomic.");
+    app.chat.messages.createMessage({ channelId: direct.id, text: "Preparation must be atomic." });
     const run = (await waitForRuns(socket, 0, [agentId])).get(agentId)!;
     const identity = {
       runId: run.runId,

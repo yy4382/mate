@@ -37,12 +37,17 @@ export class WorkspaceDownloads {
     clearInterval(this.downloadPruneTimer);
   }
   /** The body pulls only one bounded node chunk after the previous chunk is consumed. */
-  async download(
-    agentId: string,
-    path: string,
-    downloadId: string,
-    ownerSessionToken: string,
-  ): Promise<{ size: number; stream: ReadableStream<Uint8Array>; downloadId: string }> {
+  async download({
+    agentId,
+    path,
+    downloadId,
+    ownerSessionToken,
+  }: {
+    agentId: string;
+    path: string;
+    downloadId: string;
+    ownerSessionToken: string;
+  }) {
     this.pruneExpiredDownloadBindings(Date.now());
     const access = {
       principalKind: "owner" as const,
@@ -59,18 +64,22 @@ export class WorkspaceDownloads {
       completedAt: null,
     });
     try {
-      return await this.downloadUnchecked(agentId, path, downloadId);
+      return await this.downloadUnchecked({ agentId, path, downloadId });
     } catch (error) {
       this.completeDownloadAudit(downloadId, "failed", workspaceAccessErrorCode(error));
       throw error;
     }
   }
 
-  downloadStatus(
-    agentId: string,
-    downloadId: string,
-    ownerSessionToken: string,
-  ): WorkspaceDownloadStatus {
+  status({
+    agentId,
+    downloadId,
+    ownerSessionToken,
+  }: {
+    agentId: string;
+    downloadId: string;
+    ownerSessionToken: string;
+  }): WorkspaceDownloadStatus {
     this.pruneExpiredDownloadBindings(Date.now());
     const ownerSessionHash = createHash("sha256").update(ownerSessionToken).digest("hex");
     const row = z
@@ -97,23 +106,26 @@ export class WorkspaceDownloads {
     };
   }
 
-  private async downloadUnchecked(
-    agentId: string,
-    path: string,
-    downloadId: string,
-  ): Promise<{ size: number; stream: ReadableStream<Uint8Array>; downloadId: string }> {
-    const metadata = await this.reads.stat(agentId, path);
+  private async downloadUnchecked({
+    agentId,
+    path,
+    downloadId,
+  }: {
+    agentId: string;
+    path: string;
+    downloadId: string;
+  }) {
+    const metadata = await this.reads.stat({ agentId, path });
     if (metadata.type !== "file") throw new WorkspaceError("not_file", "只能下载普通文件。", 400);
-    let offset = 0,
-      finished = false;
-    const thisService = this,
-      finish = (result: "succeeded" | "failed" | "cancelled", errorCode?: string) => {
-        if (finished) return;
-        finished = true;
-        thisService.completeDownloadAudit(downloadId, result, errorCode);
-      };
+    let offset = 0;
+    let finished = false;
+    const finish = (result: "succeeded" | "failed" | "cancelled", errorCode?: string) => {
+      if (finished) return;
+      finished = true;
+      this.completeDownloadAudit(downloadId, result, errorCode);
+    };
     const stream = new ReadableStream<Uint8Array>({
-      async pull(controller) {
+      pull: async (controller) => {
         if (finished) return;
         if (offset >= metadata.size) {
           finish("succeeded");
@@ -121,17 +133,17 @@ export class WorkspaceDownloads {
           return;
         }
         try {
-          const chunk = await thisService.reads.readChunk(
+          const chunk = await this.reads.readChunk({
             agentId,
             path,
             offset,
-            metadata.version,
-            FILE_CHUNK_MAX_BYTES,
-          );
+            version: metadata.version,
+            length: FILE_CHUNK_MAX_BYTES,
+          });
           if (!chunk.bytes.byteLength || chunk.bytes.byteLength > metadata.size - offset)
             throw new WorkspaceError("file_changed", "文件在下载期间发生变化。", 409);
           offset += chunk.bytes.byteLength;
-          thisService.renewDownloadBinding(downloadId);
+          this.renewDownloadBinding(downloadId);
           controller.enqueue(chunk.bytes);
           if (offset === metadata.size) {
             finish("succeeded");

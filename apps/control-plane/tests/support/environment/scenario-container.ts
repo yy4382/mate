@@ -34,7 +34,7 @@ const containerSchema = z.object({
   }),
 });
 
-/** Test-only lifecycle around B's unchanged image and production Compose. */
+/** Test lifecycle around the production image and Compose. */
 export function createScenarioContainer(options: {
   image: string;
   directory: string;
@@ -42,8 +42,8 @@ export function createScenarioContainer(options: {
   save: (resource: { id: string; project: string; ownership: string; networks: string[] }) => void;
 }) {
   const root = fileURLToPath(new URL("../../../../..", import.meta.url));
-  const uid = process.getuid?.(),
-    gid = process.getgid?.();
+  const uid = process.getuid?.();
+  const gid = process.getgid?.();
   assert.ok(
     uid && gid,
     "Container scenarios require an existing nonroot account with nonzero UID/GID",

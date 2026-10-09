@@ -4,16 +4,16 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import Database from "better-sqlite3";
 import { createHash, generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { expect } from "vitest";
-import { createControlPlaneApp } from "../../../src/http.js";
+import { createControlPlane } from "../../../src/application.js";
 
-import type { NodeSocket } from "../../../src/nodes/directory.js";
+import type { NodeSocket } from "../../../src/nodes/transport.js";
 
 export const password = "agent-direct-message-owner-password";
 export type OwnerMessageLike = { id: string; text: string };
 export const fixtures: Array<{
-  app: ReturnType<typeof createControlPlaneApp>;
+  app: ReturnType<typeof createControlPlane>;
   directory: string;
   db: InstanceType<typeof Database>;
 }> = [];
@@ -41,7 +41,7 @@ export class FakeNodeSocket implements NodeSocket {
   close() {}
   terminate() {}
 }
-export async function setup(options: { nodeOperationTimeoutMs?: number } = {}) {
+export async function createConversationFixture(options: { nodeOperationTimeoutMs?: number } = {}) {
   const directory = mkdtempSync(join(tmpdir(), "mate-agent-direct-message-"));
   chmodSync(directory, 0o700);
   const passwordFile = join(directory, "owner-password");
@@ -55,13 +55,13 @@ export async function setup(options: { nodeOperationTimeoutMs?: number } = {}) {
   });
   const db = new Database(join(directory, "control-plane", "control-plane.sqlite"));
   fixtures.push({ app, directory, db });
-  const login = await app.request("/api/auth/login", {
+  const login = await app.http.request("/api/auth/login", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ password }),
   });
   const cookie = login.headers.get("set-cookie")!.split(";", 1)[0]!;
-  const token = await app.request("/api/owner/nodes/pairing-tokens", {
+  const token = await app.http.request("/api/owner/nodes/pairing-tokens", {
     method: "POST",
     headers: { cookie },
   });
@@ -99,22 +99,22 @@ export async function setup(options: { nodeOperationTimeoutMs?: number } = {}) {
   };
 }
 export async function pairAnotherNode(
-  app: ReturnType<typeof createControlPlaneApp>,
+  app: ReturnType<typeof createControlPlane>,
   cookie: string,
 ): Promise<{ nodeId: string; socket: FakeNodeSocket }> {
-  const token = await app.request("/api/owner/nodes/pairing-tokens", {
+  const token = await app.http.request("/api/owner/nodes/pairing-tokens", {
     method: "POST",
     headers: { cookie },
   });
-  const pairingToken = ((await token.json()) as { pairingToken: string }).pairingToken,
-    socket = new FakeNodeSocket();
+  const pairingToken = ((await token.json()) as { pairingToken: string }).pairingToken;
+  const socket = new FakeNodeSocket();
   app.nodes.open(socket);
-  const challenge = JSON.parse(socket.sent[0]!) as { nonce: string },
-    keyPair = generateKeyPairSync("ed25519", {
-      privateKeyEncoding: { type: "pkcs8", format: "pem" },
-      publicKeyEncoding: { type: "spki", format: "pem" },
-    }),
-    nodeId = randomUUID();
+  const challenge = JSON.parse(socket.sent[0]!) as { nonce: string };
+  const keyPair = generateKeyPairSync("ed25519", {
+    privateKeyEncoding: { type: "pkcs8", format: "pem" },
+    publicKeyEncoding: { type: "spki", format: "pem" },
+  });
+  const nodeId = randomUUID();
   bindToolSocket(app, nodeId, socket);
   await toolTestInput(
     app,
@@ -131,7 +131,7 @@ export async function pairAnotherNode(
   return { nodeId, socket };
 }
 export async function reconnectNode(
-  app: ReturnType<typeof createControlPlaneApp>,
+  app: ReturnType<typeof createControlPlane>,
   nodeId: string,
   privateKey: string,
 ): Promise<FakeNodeSocket> {
@@ -159,7 +159,7 @@ export async function reconnectNode(
  * username, UID and GID and differ only in Agent ID, workspace and session.
  */
 export async function prepareVerifiedAgent(
-  app: ReturnType<typeof createControlPlaneApp>,
+  app: ReturnType<typeof createControlPlane>,
   nodeId: string,
   name: string,
 ) {
@@ -186,7 +186,7 @@ export async function prepareVerifiedAgent(
   return agentId;
 }
 export async function finishRun(
-  app: ReturnType<typeof createControlPlaneApp>,
+  app: ReturnType<typeof createControlPlane>,
   socket: FakeNodeSocket,
   run: { runId: string; agentId: string },
 ) {
@@ -214,7 +214,7 @@ export async function waitForRun(socket: FakeNodeSocket, fromIndex: number): Pro
   throw new Error("The queued Agent input did not start a run");
 }
 export async function callAgentTool(
-  app: ReturnType<typeof createControlPlaneApp>,
+  app: ReturnType<typeof createControlPlane>,
   socket: FakeNodeSocket,
   run: { runId: string; agentId: string },
   toolCallId: string,
@@ -222,8 +222,8 @@ export async function callAgentTool(
   input: Record<string, unknown>,
   identity: { agentId?: string } = {},
 ) {
-  const fromIndex = socket.sent.length,
-    requestId = randomUUID();
+  const fromIndex = socket.sent.length;
+  const requestId = randomUUID();
   await toolTestInput(
     app,
     socket,
@@ -284,7 +284,9 @@ export function stableToolActionId(
     .digest("hex");
   return `mate:${actionScopeId}:${signature}:${occurrence}`;
 }
-export async function startReminderFixture(fixture: Awaited<ReturnType<typeof setup>>) {
+export async function startReminderFixture(
+  fixture: Awaited<ReturnType<typeof createConversationFixture>>,
+) {
   const { app, cookie, nodeId, socket } = fixture;
   const agentId = randomUUID();
   app.agents.prepare({
@@ -306,14 +308,14 @@ export async function startReminderFixture(fixture: Awaited<ReturnType<typeof se
     },
     app.chat,
   );
-  const dm = app.chat.getOrCreateAgentDirectChannel(agentId)!;
-  await app.request("/api/owner/model-credentials/openai", {
+  const dm = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
+  await app.http.request("/api/owner/model-credentials/openai", {
     method: "PUT",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({ apiKey: "synthetic-reminder-key" }),
   });
   const from = socket.sent.length;
-  app.chat.createMessage(dm.id, "Set a follow-up reminder");
+  app.chat.messages.createMessage({ channelId: dm.id, text: "Set a follow-up reminder" });
   const initialRun = await waitForRun(socket, from);
   const create = await callAgentTool(app, socket, initialRun, "create-followup", "tools.call", {
     name: "reminders.create",

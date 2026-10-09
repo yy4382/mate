@@ -1,6 +1,6 @@
 # 本地开发与验证
 
-生产只有控制面镜像/Compose 与 node 完整包、薄 bootstrap、统一 `mate node` CLI 和 systemd 用户服务路径，见[运维说明](OPERATIONS.md)。下文源码入口用于开发和测试，不是 VPS 的安装方式。真实产物及 Ubuntu 24.04/Debian 13 x86_64/arm64 用户服务证据单独记录在[部署验收](DEPLOYMENT_ACCEPTANCE.md)；容器和替身不能替代真实 user manager。
+生产只有控制面镜像/Compose 与 node 完整包、薄 bootstrap、统一 `mate node` CLI 和 systemd 用户服务路径，见[运维说明](OPERATIONS.md)。下文源码入口用于开发和测试，不是 VPS 的安装方式。
 
 使用 Node 24 和 pnpm 10.33.0。运行 `pnpm install --frozen-lockfile`、`pnpm check`、`pnpm typecheck`。`pnpm build` 将控制面编译到 `apps/control-plane/dist`、节点编译到 `apps/node/dist`，将网页写入 `apps/web/dist`。节点可单独用 `pnpm build:node` 构建，并通过 `pnpm --filter @mate/node test` 运行本地行为测试。运行环境变量见[配置说明](CONFIGURATION.md)，生产部署与诊断见[运维说明](OPERATIONS.md)。
 
@@ -32,7 +32,7 @@ pnpm dev:web
 
 浏览器打开 `http://127.0.0.1:5173`，Vite 将 `/api` 转给本机控制面。PWA 注册和授权入口可在安全的 localhost 上检查；真实公网 Push 送达、域名证书和 Caddy WSS 须在 HTTPS 部署上验证。Web Push 的仓库测试只注入本地伪发送器，验证通知选择、去重、失败不回滚和落点；它不向第三方服务发送通知。
 
-节点启动与配对已按新目标运行：`pnpm start:control-plane` 与 `pnpm start:node` 可在普通账号下直接启动，不需要 root、用户创建或 service manager。节点需要 `MATE_CONTROL_PLANE_URL`；`MATE_NODE_DATA_DIR` 默认为当前目录下的 `data/node`，Agent 工作区根目录默认为节点数据目录下的 `agents`，可用 `MATE_NODE_AGENT_WORKSPACE_ROOT` 覆盖。创建 Agent 也走同一条普通账号路径：节点在运行账号可写的工作区根目录下建立该 Agent 的目录、记忆入口 `MEMORY.md` 和原身份标记，不创建 Linux 账号、不切换 UID/GID。工作区根路径不可写或目标目录已被其他内容占用时，网页按同一请求显示可诊断的失败原因。
+源码开发可用 `pnpm start:control-plane` 与 `pnpm start:node` 在普通账号下直接启动，不需要 root、用户创建或 service manager。节点需要 `MATE_CONTROL_PLANE_URL`；`MATE_NODE_DATA_DIR` 默认为当前目录下的 `data/node`，Agent 工作区根目录默认为节点数据目录下的 `agents`，可用 `MATE_NODE_AGENT_WORKSPACE_ROOT` 覆盖。创建 Agent 也走同一条普通账号路径：节点在运行账号可写的工作区根目录下建立该 Agent 的目录、记忆入口 `MEMORY.md` 和原身份标记，不创建 Linux 账号、不切换 UID/GID。工作区根路径不可写或目标目录已被其他内容占用时，网页按同一请求显示可诊断的失败原因。
 
 ```sh
 export MATE_CONTROL_PLANE_URL=http://127.0.0.1:8787
@@ -41,6 +41,7 @@ pnpm start:node
 ```
 
 单账号启动检查以现有普通账号启动控制面与节点，通过真实 WebSocket 配对、创建两名 Agent，分别重启节点和控制面并核对重新认证、在线状态与错误身份拒绝。控制面真实 Pi 循环请求本地脚本化 HTTP/SSE 模型服务，调用节点普通命令并持久保存 transcript；命令实测 UID/GID 和工作目录。脚本核对两名 Agent 独立工作区与 session、`MEMORY.md`、目录权限 `700`，以及没有按 Agent 创建账号。macOS 与 Linux 均可运行，并记录 `kernel`、`hostEnvironment` 与 `linuxKernel`；macOS 结果仅是跨平台证据。工作区不可写的网页失败由 `agent-creation-process.test.ts` 单独覆盖：
+
 ```sh
 pnpm build
 pnpm test:linux-single-account-node
@@ -80,7 +81,9 @@ try {
   if (!agent) throw new Error("Expected prepared Agent");
   provider.forAgent(agent, [
     function executeCommand(request: ScriptedRequest) {
-      request.call("process.exec", { command: "printf 'command-ran' > result.txt; cat result.txt" });
+      request.call("process.exec", {
+        command: "printf 'command-ran' > result.txt; cat result.txt",
+      });
     },
     function inspectRealResult(request: ScriptedRequest) {
       const result = request.result("process.exec", scriptedToolResultSchemas["process.exec"]);
@@ -89,7 +92,8 @@ try {
     },
   ]);
   await environment.request(`/api/owner/channels/${agent.channelId}/messages`, {
-    method: "POST", body: { text: "执行普通命令。" },
+    method: "POST",
+    body: { text: "执行普通命令。" },
   });
   const result = await provider.waitFor(agent.summary.id, "inspectRealResult");
   expect(await result.outcome).toEqual({ kind: "responded" });
@@ -322,17 +326,17 @@ pnpm --filter @mate/control-plane exec vitest run tests/nodes/node-network.test.
 
 ## 控制面提交与重启恢复场景
 
-`tests/scenarios/recovery/` 把既有 CP 提交、压缩、任务结果、部分 SSE 和正常关停用例迁移到同一个 `runScenario`。每条场景使用下面的 ID；失败证据、模型步骤、真实平台/SHA、进程输出与退出、原消息/run/session/operation、API 与效果文件沿既有证据机制保存。迁移后原 `agent-loop-recovery.test.ts` 只保留工作区身份与拒绝提交测试；`message-tasks.test.ts` 保留其它任务行为，避免重复运行同一恢复矩阵。
+`tests/scenarios/recovery/` 使用 `runScenario` 组织 CP 提交、压缩、任务结果、部分 SSE 和正常关停用例。每条场景使用下面的 ID；证据目录保存模型步骤、实际平台/SHA、进程输出与退出、原消息/run/session/operation、API 与效果文件。`tests/runs/agent-loop-recovery.test.ts` 覆盖工作区身份与拒绝提交，`tests/tasks/message-tasks.test.ts` 覆盖其它任务行为。
 
-| 场景 ID | 确定的事件和主要证据 | 覆盖来源 |
-| --- | --- | --- |
-| `cp-assistant-before` / `cp-assistant-after` | 完整 assistant 提交前/后暂停，SIGKILL 的真实退出，恢复请求的已确认有序前缀与一次命令效果 | 迁移既有提交钩子用例，增加原消息/run 关联 |
-| `cp-result-before` / `cp-result-after` | 命令效果及收据已有、toolResult 未提交/已提交；恢复仅复用原 operation，旧 run 中断 | 迁移既有结果边界，并明确结果已提交但 run 未完成 |
-| `cp-task-result-before` | 创建任务的事务已提交、toolResult 未确认；实际模型收到原收据，ID/锚点/创建活动保留，显式认领及随后新建任务仍可用 | 迁移既有消息任务恢复用例 |
-| `cp-compacted-pending-tool` / `cp-compacted-finish` | 已确认摘要和保留历史存在，待工具调用/完整结束之后 SIGKILL；恢复及后续实际请求保留同一摘要与保留前缀，不重附被摘要覆盖的 seed | 迁移既有两条压缩恢复用例，并补恢复请求证明 |
-| `cp-partial-sse` | Pi 实际收到工具参数 delta 后 SIGKILL；取消及恢复完成后，半条消息没有入库/进入上下文，没有派发工具 | 迁移既有部分 SSE 用例，补 Pi 收到片段的事件 |
-| `cp-sigterm-command` | 文件证明真实命令已经产生效果；CP 收到 SIGTERM 并正常退出、node 与命令 PID 仍存活，测试明确放行命令后晚到收据按原 operation 对账；真实对话工具读取更正消息，后续 run 按该消息关联等待 | 迁移既有正常关停用例，以条件门替代固定 sleep |
-| `cp-manual-pause` | Owner API 暂停实际待响应模型；重启和重新认证后 pausedReason 仍为 manual 且无 current run，显式恢复后沿原 session 完成 | 新增 CP 重启的暂停组合 |
+| 场景 ID                                             | 确定的事件和主要证据                                                                                                                                                                 | `tests/scenarios/` 下的实现                                |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- |
+| `cp-assistant-before` / `cp-assistant-after`        | 完整 assistant 提交前/后暂停，SIGKILL 的真实退出，恢复请求的已确认有序前缀与一次命令效果                                                                                             | `recovery/committed-history.test.ts`，复用 `cp-restart.ts` |
+| `cp-result-before` / `cp-result-after`              | 命令效果及收据已有、toolResult 未提交/已提交；恢复仅复用原 operation，旧 run 中断                                                                                                    | `recovery/committed-history.test.ts`，复用 `cp-restart.ts` |
+| `cp-task-result-before`                             | 创建任务的事务已提交、toolResult 未确认；实际模型收到原收据，ID/锚点/创建活动保留，显式认领及随后新建任务仍可用                                                                      | `recovery/committed-history.test.ts`                       |
+| `cp-compacted-pending-tool` / `cp-compacted-finish` | 已确认摘要和保留历史存在，待工具调用/完整结束之后 SIGKILL；恢复及后续实际请求保留同一摘要与保留前缀，不重附被摘要覆盖的 seed                                                         | `recovery/compacted-context.test.ts`                       |
+| `cp-partial-sse`                                    | Pi 实际收到工具参数 delta 后 SIGKILL；取消及恢复完成后，半条消息没有入库/进入上下文，没有派发工具                                                                                    | `recovery/committed-history.test.ts`                       |
+| `cp-sigterm-command`                                | 文件证明真实命令已经产生效果；CP 收到 SIGTERM 并正常退出、node 与命令 PID 仍存活，测试明确放行命令后晚到收据按原 operation 对账；真实对话工具读取更正消息，后续 run 按该消息关联等待 | `recovery/command-pause.test.ts`                           |
+| `cp-manual-pause`                                   | Owner API 暂停实际待响应模型；重启和重新认证后 pausedReason 仍为 manual 且无 current run，显式恢复后沿原 session 完成                                                                | `recovery/command-pause.test.ts`                           |
 
 ```sh
 pnpm build

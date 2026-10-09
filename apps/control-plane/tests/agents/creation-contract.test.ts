@@ -2,16 +2,20 @@ import { toolTestInput } from "../support/agent/tool-run.js";
 
 import { randomUUID } from "node:crypto";
 
-import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 
 import { newAgentRequestSchema } from "../../src/agents/contracts.js";
 
-import { cleanupFixture, setup, login, pairNode } from "../support/agent/creation-fixture.js";
+import {
+  cleanupFixture,
+  createAgentCreationFixture,
+  login,
+  pairNode,
+} from "../support/agent/creation-fixture.js";
 afterEach(cleanupFixture);
 
 it("keeps an offline-node Agent form unsubmitted", async () => {
-  const app = setup();
+  const app = createAgentCreationFixture();
   const cookie = await login(app);
   const input = {
     id: "ed1e60c8-bdda-4f46-a857-bbd542f82640",
@@ -22,7 +26,7 @@ it("keeps an offline-node Agent form unsubmitted", async () => {
     model: { provider: "openai", id: "gpt-4.1" },
   };
 
-  const response = await app.request("/api/owner/agents", {
+  const response = await app.http.request("/api/owner/agents", {
     method: "POST",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify(input),
@@ -30,13 +34,13 @@ it("keeps an offline-node Agent form unsubmitted", async () => {
 
   expect(response.status).toBe(409);
   expect(await response.json()).toEqual({ error: "所选节点当前离线，Agent 资料尚未提交。" });
-  const list = await app.request("/api/owner/agents", { headers: { cookie } });
+  const list = await app.http.request("/api/owner/agents", { headers: { cookie } });
   expect(list.status).toBe(200);
   expect(await list.json()).toEqual({ agents: [] });
 });
 
 it("rejects a model outside the provider registry before persisting an Agent", async () => {
-  const app = setup();
+  const app = createAgentCreationFixture();
   const cookie = await login(app);
   const { id: nodeId, socket } = await pairNode(app, cookie);
   const input = {
@@ -47,7 +51,7 @@ it("rejects a model outside the provider registry before persisting an Agent", a
     nodeId,
     model: { provider: "openai", id: "gpt-4.1-typo" },
   };
-  const creation = app.request("/api/owner/agents", {
+  const creation = app.http.request("/api/owner/agents", {
     method: "POST",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify(input),
@@ -90,15 +94,18 @@ it("rejects credential fields outside the Agent creation contract", () => {
 });
 
 it("sends only the bounded Agent provisioning operation to the selected online node", async () => {
-  const app = setup();
+  const app = createAgentCreationFixture();
   const cookie = await login(app);
   const { id: nodeId, socket } = await pairNode(app, cookie);
   const agentId = "ed1e60c8-bdda-4f46-a857-bbd542f82640";
   const requestId = randomUUID();
   const stages: string[] = [];
-  const completed = app.nodes.provisionAgent(nodeId, requestId, agentId, (stage) =>
-    stages.push(stage),
-  );
+  const completed = app.nodes.operations.provisionAgent({
+    nodeId,
+    requestId,
+    agentId,
+    onProgress: (stage) => stages.push(stage),
+  });
   const command = JSON.parse(socket.sent.at(-1)!) as Record<string, unknown>;
 
   expect(command).toEqual({

@@ -354,24 +354,24 @@ export class WorkspaceActionLedger {
       };
     }
     if (identity.nodeId !== nodeId || identity.agentId !== result.agentId) return;
+    const receiptIdentity = {
+      operationId: result.operationId,
+      runId: identity.runId,
+      channelId: identity.channelId,
+      operation: identity.operation,
+    };
     let envelope: Parameters<WorkspaceActionLedger["complete"]>[1];
     const revision = result.ok ? (result.revision ?? result.result.revision) : undefined;
     if (!result.ok) {
       envelope = {
         state: "unknown",
-        operationId: result.operationId,
-        runId: identity.runId,
-        channelId: identity.channelId,
-        operation: identity.operation,
+        ...receiptIdentity,
         error: result.error,
       };
     } else if (result.result.code !== 0) {
       envelope = {
         state: workspaceResultIsUnknown(result.result) ? "unknown" : "failed",
-        operationId: result.operationId,
-        runId: identity.runId,
-        channelId: identity.channelId,
-        operation: identity.operation,
+        ...receiptIdentity,
         ...(revision !== undefined ? { revision } : {}),
         result: {
           code: result.result.code,
@@ -384,20 +384,14 @@ export class WorkspaceActionLedger {
       try {
         envelope = {
           state: "succeeded",
-          operationId: result.operationId,
-          runId: identity.runId,
-          channelId: identity.channelId,
-          operation: identity.operation,
+          ...receiptIdentity,
           ...(revision !== undefined ? { revision } : {}),
           result: JSON.parse(result.result.stdout) as unknown,
         };
       } catch {
         envelope = {
           state: "unknown",
-          operationId: result.operationId,
-          runId: identity.runId,
-          channelId: identity.channelId,
-          operation: identity.operation,
+          ...receiptIdentity,
           ...(revision !== undefined ? { revision } : {}),
           error: "Invalid node receipt",
         };

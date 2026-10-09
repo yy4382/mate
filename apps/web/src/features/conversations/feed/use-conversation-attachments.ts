@@ -10,7 +10,13 @@ import { ownerJSON } from "../owner-request.js";
 /** Refresh the selected channel's attachment list every five seconds. */
 const attachmentPollIntervalMs = 5_000;
 
-export function useConversationAttachments(authenticated: boolean, selectedId: string | null) {
+export function useConversationAttachments({
+  authenticated,
+  selectedId,
+}: {
+  authenticated: boolean;
+  selectedId: string | null;
+}) {
   const [attachmentsByChannel, setAttachmentsByChannel] = useState<Record<string, Attachment[]>>(
     {},
   );
@@ -48,8 +54,8 @@ export function useConversationAttachments(authenticated: boolean, selectedId: s
 
   async function uploadAttachment(selected: Channel | null) {
     if (!selected || selected.archived || !selectedFile || attachmentBusy) return;
-    const channelId = selected.id,
-      file = selectedFile;
+    const channelId = selected.id;
+    const file = selectedFile;
     setAttachmentBusy(true);
     setAttachmentError(null);
     try {

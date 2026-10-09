@@ -8,24 +8,24 @@ import { AgentSession } from "../../src/runtime/session/service.js";
 import type { SessionCommit } from "../../src/runtime/session/record.js";
 import {
   cleanupAgentToolFixture,
-  setup,
+  createAgentToolFixture,
   authorizeModel,
   addAgent,
   waitForRuns,
 } from "../support/agent/agent-tool-fixture.js";
 
 async function historyFixture() {
-  const fixture = await setup();
+  const fixture = await createAgentToolFixture();
   const { app, cookie, nodeId, socket, db } = fixture;
   const agentId = addAgent(app, nodeId, "History reader");
-  const direct = app.chat.getOrCreateAgentDirectChannel(agentId)!;
+  const direct = app.chat.conversations.getOrCreateAgentDirectChannel(agentId)!;
   await authorizeModel(app, cookie);
-  app.chat.createMessage(direct.id, "Read confirmed history.");
+  app.chat.messages.createMessage({ channelId: direct.id, text: "Read confirmed history." });
   const run = (await waitForRuns(socket, 0, [agentId])).get(agentId)!;
   const identity = { runId: run.runId, nodeId, agentId, toolCallId: "history-observation" };
   const session = new AgentSession(db);
   const append = (entry: SessionCommit) => {
-    expect(session.append(run.runId, nodeId, agentId, entry)).toBe(true);
+    expect(session.append({ runId: run.runId, nodeId, agentId }, entry)).toBe(true);
     return entry.id;
   };
   const message = (content: string) =>
@@ -330,16 +330,22 @@ it("rejects malformed pagination, query changes, foreign cursors and records wit
   expect(await call("history.search", { query: "" })).toMatchObject({ ok: false });
   expect(await call("history.search", { query: "\ud83d" })).toMatchObject({ ok: false });
   const otherId = addAgent(app, nodeId, "Other history");
-  const direct = app.chat.getOrCreateAgentDirectChannel(otherId)!;
-  app.chat.createMessage(direct.id, "Start another independent history.");
+  const direct = app.chat.conversations.getOrCreateAgentDirectChannel(otherId)!;
+  app.chat.messages.createMessage({
+    channelId: direct.id,
+    text: "Start another independent history.",
+  });
   const otherRun = (await waitForRuns(socket, 0, [otherId])).get(otherId)!;
   const foreignId = randomUUID();
   expect(
-    session.append(otherRun.runId, nodeId, otherId, {
-      kind: "message",
-      id: foreignId,
-      message: { role: "user", content: "foreign secret", timestamp: 1 },
-    }),
+    session.append(
+      { runId: otherRun.runId, nodeId, agentId: otherId },
+      {
+        kind: "message",
+        id: foreignId,
+        message: { role: "user", content: "foreign secret", timestamp: 1 },
+      },
+    ),
   ).toBe(true);
   const missing = await call("history.read", { id: randomUUID() });
   expect(missing).toEqual({ ok: false, error: "History record not found" });
@@ -361,7 +367,7 @@ it("rejects malformed pagination, query changes, foreign cursors and records wit
     result: { previousId: null, nextId: expect.any(String) },
   });
   app.runs?.close();
-  app.chat.completeAgentRun(run.runId, agentId);
+  app.chat.deliveries.completeAgentRun(run.runId, agentId);
   expect(await call("history.read", { id: firstId })).toEqual({
     ok: false,
     error: "Agent run is no longer active",
@@ -417,7 +423,7 @@ it("preserves confirmed records across compaction and database reopening without
       app.chat,
       app.workspace,
       app.attachments,
-      new AgentProcessOperationBroker(reopened, app.nodes),
+      new AgentProcessOperationBroker(reopened, app.nodes.operations),
     );
     const read = (name: string, input: unknown) =>
       tools.execute(identity, "tools.call", { name, input });
