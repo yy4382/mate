@@ -1,10 +1,7 @@
 import { expect, it } from "vitest";
 import { createScenarioEnvironment } from "../../support/environment/scenario-environment.js";
 import { createScenarioDriver, ScenarioWaitError } from "../../support/scenario/scenario-driver.js";
-import {
-  createScriptedProvider,
-  type ScriptedRequest,
-} from "../../support/agent/scripted-provider.js";
+import { createScriptedProvider } from "../../support/agent/scripted-provider.js";
 import { attachmentSummarySchema, ownerMessageSchema, ownerTaskSchema } from "@mate/protocol/owner";
 import { scriptedToolResultSchemas } from "../../support/agent/scripted-tool-results.js";
 
@@ -21,19 +18,19 @@ it("delivers a short single-Agent report through a new Owner message, claimed ta
     const agent = environment.agents[0];
     if (!agent) throw new Error("Expected prepared Agent");
     const driver = createScenarioDriver(environment);
-    let messageId = "",
-      taskId = "",
-      attachmentId = "",
-      replyId = "";
+    let messageId = "";
+    let taskId = "";
+    let attachmentId = "";
+    let replyId = "";
     provider.forAgent(agent, [
-      function finishOldRun(request: ScriptedRequest) {
+      function finishOldRun(request) {
         request.text("旧轮只是内部正文。");
       },
-      function readWork(request: ScriptedRequest) {
+      function readWork(request) {
         expect(JSON.stringify(request.payload.input)).toContain("先完成旧轮。");
         request.call("conversations.read", { conversationId: agent.channelId });
       },
-      function createTask(request: ScriptedRequest) {
+      function createTask(request) {
         const message = request
           .result("conversations.read", scriptedToolResultSchemas["conversations.read"])
           .messages.find((candidate) => candidate.text === "请生成 2、4、6 的报告。");
@@ -42,20 +39,20 @@ it("delivers a short single-Agent report through a new Owner message, claimed ta
         expect(message.author).toEqual({ kind: "human", id: "owner" });
         request.call("tasks.create", { messageId, title: "三条合成数值报告" });
       },
-      function claimTask(request: ScriptedRequest) {
+      function claimTask(request) {
         const task = request.result("tasks.create", scriptedToolResultSchemas["tasks.create"]).task;
         taskId = task.id;
         expect(task.messageId).toBe(messageId);
         request.call("tasks.claim", { taskId, expectedVersion: task.version });
       },
-      function generateReport(request: ScriptedRequest) {
+      function generateReport(request) {
         const task = request.result("tasks.claim", scriptedToolResultSchemas["tasks.claim"]);
         expect(task).toMatchObject({ ownerAgentId: agent.summary.id, status: "in_progress" });
         request.call("process.exec", {
           command: `printf '2\\n4\\n6\\n' > values.txt; awk '{sum += $1} END {printf "输入：2,4,6\\n总计：%d\\n", sum}' values.txt > report.txt; cat report.txt`,
         });
       },
-      function publishReport(request: ScriptedRequest) {
+      function publishReport(request) {
         const result = request.result("process.exec", scriptedToolResultSchemas["process.exec"]);
         expect(result).toMatchObject({
           state: "succeeded",
@@ -66,7 +63,7 @@ it("delivers a short single-Agent report through a new Owner message, claimed ta
           path: "report.txt",
         });
       },
-      function replyToOwner(request: ScriptedRequest) {
+      function replyToOwner(request) {
         const attachment = request.result("attachments.publish", attachmentSummarySchema);
         attachmentId = attachment.id;
         expect(attachment.channelId).toBe(agent.channelId);
@@ -76,7 +73,7 @@ it("delivers a short single-Agent report through a new Owner message, claimed ta
           text: `报告已交付：${attachmentId}`,
         });
       },
-      function completeTask(request: ScriptedRequest) {
+      function completeTask(request) {
         const reply = request.result("messages.send", ownerMessageSchema);
         replyId = reply.id;
         expect(reply).toMatchObject({
@@ -87,7 +84,7 @@ it("delivers a short single-Agent report through a new Owner message, claimed ta
         const task = request.result("tasks.claim", scriptedToolResultSchemas["tasks.claim"]);
         request.call("tasks.update", { taskId, expectedVersion: task.version, status: "done" });
       },
-      function finishNewRun(request: ScriptedRequest) {
+      function finishNewRun(request) {
         expect(request.result("tasks.update", ownerTaskSchema)).toMatchObject({
           id: taskId,
           status: "done",
@@ -159,10 +156,10 @@ it("observes run completion while its explicitly claimed task remains in progres
     const driver = createScenarioDriver(environment);
     let taskId = "";
     provider.forAgent(agent, [
-      function readOwner(request: ScriptedRequest) {
+      function readOwner(request) {
         request.call("conversations.read", { conversationId: agent.channelId });
       },
-      function createWork(request: ScriptedRequest) {
+      function createWork(request) {
         const message = request.result(
           "conversations.read",
           scriptedToolResultSchemas["conversations.read"],
@@ -170,12 +167,12 @@ it("observes run completion while its explicitly claimed task remains in progres
         if (!message) throw new Error("Expected real Owner input");
         request.call("tasks.create", { messageId: message.id, title: "稍后继续的工作" });
       },
-      function claimWork(request: ScriptedRequest) {
+      function claimWork(request) {
         const task = request.result("tasks.create", scriptedToolResultSchemas["tasks.create"]).task;
         taskId = task.id;
         request.call("tasks.claim", { taskId, expectedVersion: task.version });
       },
-      function endRun(request: ScriptedRequest) {
+      function endRun(request) {
         expect(request.result("tasks.claim", scriptedToolResultSchemas["tasks.claim"]).status).toBe(
           "in_progress",
         );

@@ -5,10 +5,7 @@ import {
   ScenarioWaitError,
   waitForScenario,
 } from "../../support/scenario/scenario-driver.js";
-import {
-  createScriptedProvider,
-  type ScriptedRequest,
-} from "../../support/agent/scripted-provider.js";
+import { createScriptedProvider } from "../../support/agent/scripted-provider.js";
 import { ownerChatSnapshotSchema } from "@mate/protocol/owner";
 
 it("waits for this message's new run after its activity cursor instead of an old completed run", async () => {
@@ -23,10 +20,10 @@ it("waits for this message's new run after its activity cursor instead of an old
     if (!agent) throw new Error("Expected prepared Agent");
     const driver = createScenarioDriver(environment);
     provider.forAgent(agent, [
-      function oldRun(request: ScriptedRequest) {
+      function oldRun(request) {
         request.text("旧轮结束。");
       },
-      function newRun(_request: ScriptedRequest) {},
+      function newRun(_request) {},
     ]);
     const firstMessage = await driver.sendOwnerMessage(agent, "先完成旧轮。");
     const first = await driver.waitForRun(firstMessage, "completed");

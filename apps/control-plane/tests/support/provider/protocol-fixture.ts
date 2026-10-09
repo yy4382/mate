@@ -2,8 +2,6 @@ import { expect } from "vitest";
 import { createServer, type ServerResponse } from "node:http";
 import { z } from "zod";
 
-import { resolve } from "node:path";
-
 export const requestSchema = z.looseObject({
   input: z
     .array(

@@ -4,7 +4,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import Database from "better-sqlite3";
 import { createHash, generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { expect } from "vitest";
 import { createControlPlane } from "../../../src/application.js";
 

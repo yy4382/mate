@@ -71,12 +71,9 @@ it.each([false, true])(
             { name: "tools.call", input: { name: "workspace.read", input: { path: "image" } } },
           ]);
         } else {
-          respond(
-            response,
-            compact && turn === 2 ? "x".repeat(28000) : "done",
-            undefined,
-            compact && turn === 2 ? 15000 : 50,
-          );
+          respond(response, compact && turn === 2 ? "x".repeat(28000) : "done", {
+            inputTokens: compact && turn === 2 ? 15000 : 50,
+          });
         }
       },
       "",

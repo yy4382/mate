@@ -5,10 +5,7 @@ import {
   ScenarioWaitError,
   waitForScenario,
 } from "../../support/scenario/scenario-driver.js";
-import {
-  createScriptedProvider,
-  type ScriptedRequest,
-} from "../../support/agent/scripted-provider.js";
+import { createScriptedProvider } from "../../support/agent/scripted-provider.js";
 import { ownerMessageSchema, ownerReminderSchema } from "@mate/protocol/owner";
 
 import { z } from "zod";
@@ -71,10 +68,10 @@ it("does not backfill a later retry's new message into the original failed run",
     if (!agent) throw new Error("Expected prepared Agent");
     const driver = createScenarioDriver(environment);
     provider.forAgent(agent, [
-      function originalSeed(request: ScriptedRequest) {
+      function originalSeed(request) {
         request.expectCancellation("Owner pause before the later input");
       },
-      function expandedRetry(_request: ScriptedRequest) {},
+      function expandedRetry(_request) {},
     ]);
     const observation = await driver.observe(agent);
     const seed = await driver.sendOwnerMessage(agent, "先处理种子 A。");
@@ -176,19 +173,19 @@ it("does not assign a queued ordinary Owner message to a reminder-only run with 
     if (!agent) throw new Error("Expected prepared Agent");
     const driver = createScenarioDriver(environment);
     provider.forAgent(agent, [
-      function scheduleReminder(request: ScriptedRequest) {
+      function scheduleReminder(request) {
         request.call("reminders.create", {
           conversationId: agent.channelId,
           text: "只处理到期提醒",
           dueAt: Date.now() + 1500,
         });
       },
-      function finishPreparation(request: ScriptedRequest) {
+      function finishPreparation(request) {
         expect(request.result("reminders.create", ownerReminderSchema).state).toBe("active");
         request.text("已设置合成提醒。");
       },
-      function reminderOnly(_request: ScriptedRequest) {},
-      function ordinaryWork(_request: ScriptedRequest) {},
+      function reminderOnly(_request) {},
+      function ordinaryWork(_request) {},
     ]);
     const setup = await driver.sendOwnerMessage(agent, "请设置合成提醒。");
     await driver.waitForRun(setup, "completed");

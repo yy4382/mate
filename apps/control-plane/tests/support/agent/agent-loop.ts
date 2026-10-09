@@ -26,10 +26,17 @@ export interface ProviderRequest {
 export function respond(
   response: ServerResponse,
   content: string | Array<{ name: string; input: unknown }>,
-  prefix?: string,
-  inputTokens = 50,
-  identity?: string,
-  observeWrite?: (accepted: boolean, output: readonly unknown[]) => void,
+  {
+    prefix,
+    inputTokens = 50,
+    identity,
+    observeWrite,
+  }: {
+    prefix?: string | undefined;
+    inputTokens?: number | undefined;
+    identity?: string | undefined;
+    observeWrite?: ((accepted: boolean, output: readonly unknown[]) => void) | undefined;
+  } = {},
 ): void {
   response.writeHead(200, { "content-type": "text/event-stream" });
   const output =
@@ -70,9 +77,22 @@ export function respond(
     );
     observeWrite?.(accepted, output);
   });
-  response.end(
-    `data: ${JSON.stringify({ type: "response.completed", response: { id: `resp_${identity ?? "synthetic"}`, status: "completed", output, usage: { input_tokens: inputTokens, output_tokens: 10, total_tokens: inputTokens + 10, input_tokens_details: { cached_tokens: 5 }, output_tokens_details: { reasoning_tokens: 0 } } } })}\n\n`,
-  );
+  const completedEvent = {
+    type: "response.completed",
+    response: {
+      id: `resp_${identity ?? "synthetic"}`,
+      status: "completed",
+      output,
+      usage: {
+        input_tokens: inputTokens,
+        output_tokens: 10,
+        total_tokens: inputTokens + 10,
+        input_tokens_details: { cached_tokens: 5 },
+        output_tokens_details: { reasoning_tokens: 0 },
+      },
+    },
+  };
+  response.end(`data: ${JSON.stringify(completedEvent)}\n\n`);
 }
 
 /** Real services and local provider HTTP/SSE; the only scripted boundary is model output. */
