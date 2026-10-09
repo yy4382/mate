@@ -166,8 +166,8 @@ export class LinuxWorkspaceExecutor {
     requestHash: string,
     signal?: AbortSignal,
   ): Promise<ExecutionResult> {
-    const records = mutatingKinds.has(request.operation.kind);
-    const existing = records ? this.readReceipt(request.operationId) : undefined;
+    const recordsReceipt = mutatingKinds.has(request.operation.kind);
+    const existing = recordsReceipt ? this.readReceipt(request.operationId) : undefined;
     if (existing) {
       if (existing.agentId !== request.agentId || existing.requestHash !== requestHash)
         return failed(
@@ -206,7 +206,7 @@ export class LinuxWorkspaceExecutor {
         "workspace_unavailable",
         "identity_mismatch: Agent workspace does not match its stable ID",
       );
-    if (records)
+    if (recordsReceipt)
       this.writeReceipt({
         operationId: request.operationId,
         agentId: request.agentId,
@@ -218,7 +218,7 @@ export class LinuxWorkspaceExecutor {
 
     let result: ExecutionResult;
     try {
-      const sharedRead = selectAgentReadWorkspace({
+      const readWorkspace = selectAgentReadWorkspace({
         mode: request.mode,
         operation: request.operation,
         workspace: identity.workspace,
@@ -231,8 +231,8 @@ export class LinuxWorkspaceExecutor {
         home: identity.workspace,
       }).execute(
         {
-          root: sharedRead?.root ?? identity.workspace,
-          operation: sharedRead?.operation ?? request.operation,
+          root: readWorkspace?.root ?? identity.workspace,
+          operation: readWorkspace?.operation ?? request.operation,
           timeoutMs: 60_000,
           agentId: request.agentId,
         },
@@ -243,7 +243,7 @@ export class LinuxWorkspaceExecutor {
         "operation_unknown",
         "operation_unknown: The node could not confirm the file operation result",
       );
-      if (records)
+      if (recordsReceipt)
         this.writeReceipt({
           operationId: request.operationId,
           agentId: request.agentId,
@@ -256,8 +256,8 @@ export class LinuxWorkspaceExecutor {
       return result;
     }
 
-    if (records && this.beforeReceipt) await this.beforeReceipt();
-    if (records)
+    if (recordsReceipt && this.beforeReceipt) await this.beforeReceipt();
+    if (recordsReceipt)
       this.writeReceipt({
         operationId: request.operationId,
         agentId: request.agentId,
@@ -304,22 +304,13 @@ export class LinuxWorkspaceExecutor {
 }
 
 /**
- * Where one Agent read operation really runs, and the path it runs with. An Agent's file tools are
- * not confined to its own directory: Mate asks the Agent in its prompt not to browse a peer's
- * workspace casually, and then leaves that judgement to it, so a read of another Agent's workspace
- * runs with the shared workspace root instead of being refused.
+ * Select the root and relative path for an Agent read. Peer reads use the shared workspace root
+ * under ADR-0004; only provisioned Agent directories named by `agentWorkspacePath` are selected,
+ * never the root itself or unrelated entries. A path resolving inside the Agent's own workspace
+ * keeps that root regardless of its original spelling.
  *
- * Reachable directories are exactly the ones the node provisions under that root: the Agent's own
- * workspace, and a peer workspace named by its stable Agent ID (`agentWorkspacePath`). The root
- * itself and anything else under it are not a workspace, so they stay refused even if an operator
- * points the root at a directory that also holds the node's own files. Paths are handed on relative
- * to the root they run under, so a path that resolves inside the Agent's own workspace is not
- * refused for the spelling it arrived in.
- *
- * Only reads move. Writing, publishing and the owner's preview keep their own root: the owner's
- * preview of a selected Agent must not leave that Agent's directory, and a file change must stay
- * inside the workspace whose operation receipt records it. Mate's confinement stays the file
- * helper's job; this only chooses which workspace a permitted read runs in.
+ * Writing, publishing and owner preview retain the selected Agent's root. This function selects
+ * the read workspace; the file helper checks the paths within it.
  */
 function selectAgentReadWorkspace({
   mode,

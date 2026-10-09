@@ -2,8 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { bundleEntrypoints, releaseVersionSchema } from "../bundle.js";
-import { lstatIfPresent } from "../install-entry.js";
-import { nodePaths } from "../paths.js";
+import { lstatIfPresent, nodePaths } from "../paths.js";
 import type { ServiceFacts } from "./systemd.js";
 import { createAtomicNoReplaceRename } from "../../files/mutations/atomic-rename.js";
 

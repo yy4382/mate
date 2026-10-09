@@ -70,18 +70,18 @@ export async function readPrivateProperty(
   // Transport failures also reject pending calls. Handle the event without exposing reply data.
   bus.connection.on("error", () => {});
   try {
-    const manager = property === "Version";
+    const isManagerProperty = property === "Version";
     const reply = await bus.invoke<unknown>({
       destination: "org.freedesktop.systemd1",
-      path: manager
+      path: isManagerProperty
         ? "/org/freedesktop/systemd1"
         : "/org/freedesktop/systemd1/unit/mate_2dnode_2eservice",
       interface: "org.freedesktop.DBus.Properties",
       member: "Get",
       signature: "ss",
-      body: [`org.freedesktop.systemd1.${manager ? "Manager" : "Service"}`, property],
+      body: [`org.freedesktop.systemd1.${isManagerProperty ? "Manager" : "Service"}`, property],
     });
-    return manager
+    return isManagerProperty
       ? z.object({ signature: z.literal("s"), value: z.string().min(1) }).parse(reply).value
       : readExecStartProperty(reply);
   } finally {

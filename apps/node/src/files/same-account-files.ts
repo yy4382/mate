@@ -38,13 +38,13 @@ export class SameAccountFileBackend implements ExecutionBackend {
         : resolve(dirname(adjacent), "../../dist/files/file-operation.mjs"));
   }
   async execute(request: ExecutionRequest, signal?: AbortSignal): Promise<ExecutionResult> {
-    const op = workspaceOperationSchema.parse(request.operation);
+    const operation = workspaceOperationSchema.parse(request.operation);
     z.number().int().min(1).max(300000).parse(request.timeoutMs);
     const account = this.account;
     if (signal?.aborted) throw new Error("Execution aborted");
     const root = realpathSync(request.root);
     if (!statSync(root).isDirectory()) throw new Error("Workspace root is not a directory");
-    const path = resolve(root, op.path);
+    const path = resolve(root, operation.path);
     const privateHome = within(realpathSync(account.home), path);
     const umask = privateHome ? "077" : "022";
     if (process.getuid?.() !== account.uid || process.getgid?.() !== account.gid)
@@ -65,8 +65,8 @@ export class SameAccountFileBackend implements ExecutionBackend {
       });
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];
-      let outBytes = 0;
-      let errBytes = 0;
+      let stdoutBytes = 0;
+      let stderrBytes = 0;
       let truncated = false;
       let interrupted = false;
       let settled = false;
@@ -82,10 +82,10 @@ export class SameAccountFileBackend implements ExecutionBackend {
         return size + part.length;
       };
       child.stdout!.on("data", (chunk: Buffer) => {
-        outBytes = collect(stdout, outBytes, chunk);
+        stdoutBytes = collect(stdout, stdoutBytes, chunk);
       });
       child.stderr!.on("data", (chunk: Buffer) => {
-        errBytes = collect(stderr, errBytes, chunk);
+        stderrBytes = collect(stderr, stderrBytes, chunk);
       });
       // The process group is the only handle Mate has: a descendant that leaves it, or that this
       // account may not signal, is outside everything the result below describes.
@@ -137,7 +137,7 @@ export class SameAccountFileBackend implements ExecutionBackend {
       });
       child.once("close", (code) => complete(code, false));
       child.stdin!.on("error", () => {});
-      child.stdin!.end(JSON.stringify(op));
+      child.stdin!.end(JSON.stringify(operation));
     });
   }
 }

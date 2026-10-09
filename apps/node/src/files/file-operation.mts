@@ -200,15 +200,14 @@ switch (operation.kind) {
   case "workspace_list": {
     const names = paths.directoryNames(path).sort();
     const page = names.slice(operation.offset, operation.offset + operation.limit);
-    const entries: Array<{ name: string; type: string; size: number }> = [];
-    for (const name of page) {
+    const entries = page.map((name) => {
       const stat = lstatSync(resolve(path, name));
-      entries.push({
+      return {
         name,
         type: listedFileType(stat),
         size: stat.size,
-      });
-    }
+      };
+    });
     writeJsonResult({
       path: operation.path,
       entries,
@@ -312,6 +311,7 @@ switch (operation.kind) {
     break;
   }
   case "search": {
+    const query = operation.query;
     const matches: unknown[] = [];
     let visited = 0;
     let bytes = 0;
@@ -362,7 +362,7 @@ switch (operation.kind) {
       }
       if (data.includes(0)) return;
       for (const [index, line] of data.toString("utf8").split("\n").entries())
-        if (line.includes(operation.kind === "search" ? operation.query : "")) {
+        if (line.includes(query)) {
           const item = {
             path: resolve(root, relativePath || "."),
             line: index + 1,

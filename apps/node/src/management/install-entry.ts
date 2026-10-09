@@ -19,7 +19,7 @@ import {
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import locks from "fs-ext";
-import { nodePaths } from "./paths.js";
+import { lstatIfPresent, nodePaths } from "./paths.js";
 import {
   bundleEntrypoints,
   probeBundle,
@@ -88,15 +88,6 @@ export function installedEntryVersion(paths: ReturnType<typeof nodePaths>) {
   if (!releaseVersionSchema.safeParse(version).success)
     throw new Error("Invalid installed Mate entry target");
   return version;
-}
-
-export function lstatIfPresent(path: string) {
-  try {
-    return lstatSync(path);
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
-    throw error;
-  }
 }
 
 const installationStageMarker = "Mate node bootstrap staging\n";

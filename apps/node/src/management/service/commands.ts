@@ -1,16 +1,15 @@
 import { accessSync, constants, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { basename, dirname, join, resolve, relative, isAbsolute, sep } from "node:path";
+import { dirname, join, relative, isAbsolute, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import { readNodeConfiguration } from "../configuration.js";
 import {
   checkManagedDirectory,
   installedEntryVersion,
-  lstatIfPresent,
   prepareManagedDirectory,
   requireOrdinaryAccount,
   withManagementLock,
 } from "../install-entry.js";
-import { nodePaths } from "../paths.js";
+import { canonicalManagedPath, lstatIfPresent, nodePaths } from "../paths.js";
 import {
   nodeUnitName,
   systemdUserManager,
@@ -30,17 +29,8 @@ function prepareNodeDirectories(
   paths: ReturnType<typeof nodePaths>,
   config: ReturnType<typeof readNodeConfiguration>,
 ) {
-  const canonicalPath = (path: string) => {
-    let ancestor = resolve(path);
-    const missing = [];
-    while (!lstatIfPresent(ancestor)) {
-      missing.unshift(basename(ancestor));
-      ancestor = dirname(ancestor);
-    }
-    return join(realpathSync(ancestor), ...missing);
-  };
   const nested = (parent: string, path: string) => {
-    const part = relative(canonicalPath(parent), canonicalPath(path));
+    const part = relative(canonicalManagedPath(parent), canonicalManagedPath(path));
     return part === "" || (part !== ".." && !part.startsWith(`..${sep}`) && !isAbsolute(part));
   };
   for (const path of [config.dataDirectory, config.agentWorkspaceRoot]) {
@@ -147,11 +137,15 @@ export async function manageNode(
         throw new Error("Existing service uses another version; use mate node update");
       if (!lstatIfPresent(paths.configuration)) {
         prepareManagedDirectory(paths.configDirectory);
-        writeFileSync(
-          paths.configuration,
-          `${JSON.stringify({ MATE_CONTROL_PLANE_URL: "http://127.0.0.1:8787", MATE_NODE_DATA_DIR: paths.dataDirectory, MATE_NODE_AGENT_WORKSPACE_ROOT: join(paths.dataDirectory, "agents") }, null, 2)}\n`,
-          { mode: 0o600, flag: "wx" },
-        );
+        const initialConfiguration = {
+          MATE_CONTROL_PLANE_URL: "http://127.0.0.1:8787",
+          MATE_NODE_DATA_DIR: paths.dataDirectory,
+          MATE_NODE_AGENT_WORKSPACE_ROOT: join(paths.dataDirectory, "agents"),
+        };
+        writeFileSync(paths.configuration, `${JSON.stringify(initialConfiguration, null, 2)}\n`, {
+          mode: 0o600,
+          flag: "wx",
+        });
       }
       const config = readNodeConfiguration(paths.configuration, paths);
       if (!lstatIfPresent(join(config.dataDirectory, "node-identity.json")) && !config.pairingToken)
