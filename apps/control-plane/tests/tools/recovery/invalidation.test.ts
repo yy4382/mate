@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import Database from "better-sqlite3";
 import { WebSocket, WebSocketServer } from "ws";
 import { expect, it } from "vitest";
@@ -77,13 +77,16 @@ function pausedCommitControlPlane(directory: string): ProcessOutput {
     startControlPlane(0, undefined, {
       dataDir: ${JSON.stringify(join(directory, "control-plane-data"))},
       passwordFile: ${JSON.stringify(join(directory, "owner-password"))},
-    }, { modelForRun: (model, apiKey) => ({ ...model, baseUrl: apiKey }), beforeAgentAttachmentCommit: async () => {
-      if (paused) return;
-      paused = true;
-      console.log('MATE_ATTACHMENT_BEFORE_COMMIT');
-      while (!existsSync(${JSON.stringify(join(directory, "release-commit"))}))
-        await new Promise(done => setTimeout(done, 10));
-    } });`;
+    }, {
+      modelForRun: (model, apiKey) => ({ ...model, baseUrl: apiKey }),
+      beforeAgentAttachmentCommit: async () => {
+        if (paused) return;
+        paused = true;
+        console.log('MATE_ATTACHMENT_BEFORE_COMMIT');
+        while (!existsSync(${JSON.stringify(join(directory, "release-commit"))}))
+          await new Promise(done => setTimeout(done, 10));
+      }
+    });`;
   return new ProcessOutput(
     spawn(process.execPath, ["--input-type=module", "--eval", runner], {
       env: { PATH: process.env.PATH, LANG: "C.UTF-8" },
@@ -106,18 +109,26 @@ function pausedReceiptNode(directory: string, origin: string, pairingToken: stri
     const db = openNodeProcessDatabase(data + '/agent-process-operations.sqlite');
     chmodSync(data + '/agent-process-operations.sqlite', 0o600);
     const execute = createLinuxAgentProcessExecutor(root, { commandTimeoutMs: 700 });
-    const pause = async () => { console.log('MATE_OPERATION_BEFORE_RECEIPT'); await new Promise(() => {}); };
+    const pause = async () => {
+      console.log('MATE_OPERATION_BEFORE_RECEIPT');
+      await new Promise(() => {});
+    };
     const operations = new AgentProcessOperations(db, async request => {
       const result = await execute(request);
-      if (request.operation.kind === 'exec' && request.operation.command.includes('effect-count.txt')) await pause();
+      if (request.operation.kind === 'exec' && request.operation.command.includes('effect-count.txt'))
+        await pause();
       return result;
     });
     const controller = new AbortController();
     process.on('SIGTERM', () => controller.abort());
-    await runLinuxNodeWithTestDependencies({ controlPlaneUrl: ${JSON.stringify(origin)},
-      dataDirectory: data, agentWorkspaceRoot: root, pairingToken: ${JSON.stringify(pairingToken)},
-      heartbeatIntervalMs: 30000, heartbeatTimeoutMs: 60000 }, controller.signal, {
-
+    await runLinuxNodeWithTestDependencies({
+      controlPlaneUrl: ${JSON.stringify(origin)},
+      dataDirectory: data,
+      agentWorkspaceRoot: root,
+      pairingToken: ${JSON.stringify(pairingToken)},
+      heartbeatIntervalMs: 30000,
+      heartbeatTimeoutMs: 60000
+    }, controller.signal, {
       processOperations: operations,
       workspaceExecutor: new LinuxWorkspaceExecutor(root, data, { beforeReceipt: pause }),
     });`;
@@ -152,20 +163,17 @@ it.each([
     const directory = mkdtempSync(join(tmpdir(), "mate-tool-invalidation-"));
     chmodSync(directory, 0o700);
     writeFileSync(join(directory, "owner-password"), ownerPassword, { mode: 0o600 });
-    let control: ProcessOutput | undefined,
-      node: ProcessOutput | undefined,
-      db: Database.Database | undefined;
-    let origin = "",
-      dm = "",
-      held: { socket: WebSocket; data: Buffer; binary: boolean } | undefined;
+    let control: ProcessOutput | undefined;
+    let node: ProcessOutput | undefined;
+    let db: Database.Database | undefined;
+    let origin = "";
+    let dm = "";
+    let held: { socket: WebSocket; data: Buffer; binary: boolean } | undefined;
     let currentUpstream: WebSocket | undefined;
-    const wire: any[] = [],
-      requests: any[] = [],
-      sockets = new Set<WebSocket>();
-    let releaseRecovery!: () => void;
-    const recovery = new Promise<void>((done) => {
-      releaseRecovery = done;
-    });
+    const wire: any[] = [];
+    const requests: any[] = [];
+    const sockets = new Set<WebSocket>();
+    const { promise: recovery, resolve: releaseRecovery } = Promise.withResolvers<void>();
     const provider = createServer(async (request, response) => {
       const chunks: Buffer[] = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
@@ -205,8 +213,8 @@ it.each([
             : [],
       );
     });
-    const proxyHttp = createServer(),
-      proxyWs = new WebSocketServer({ noServer: true });
+    const proxyHttp = createServer();
+    const proxyWs = new WebSocketServer({ noServer: true });
     let holdRead = boundary === "chunk";
     let holdReceipt = boundary === "receipt";
     const operations = new Map<string, any>();
@@ -259,8 +267,8 @@ it.each([
       new Promise<void>((done) => provider.listen(0, "127.0.0.1", done)),
       new Promise<void>((done) => proxyHttp.listen(0, "127.0.0.1", done)),
     ]);
-    const providerAddress = provider.address(),
-      proxyAddress = proxyHttp.address();
+    const providerAddress = provider.address();
+    const proxyAddress = proxyHttp.address();
     if (
       !providerAddress ||
       typeof providerAddress === "string" ||
@@ -324,10 +332,10 @@ it.each([
         );
       else await control.waitFor(/MATE_ATTACHMENT_BEFORE_COMMIT/);
       const oldRun = db
-        .prepare(
+        .prepare<[string], { runId: string; sessionId: string }>(
           "SELECT r.id AS runId,r.delivery_id AS actionScopeId,s.id AS sessionId FROM owner_agent_runs r JOIN owner_agent_sessions s ON s.agent_id=r.agent_id WHERE r.agent_id=? ORDER BY r.rowid LIMIT 1",
         )
-        .get(agentId) as any;
+        .get(agentId)!;
       const oldReceipt =
         boundary === "receipt"
           ? JSON.parse(held!.data.toString())
@@ -394,10 +402,10 @@ it.each([
             readFileSync(join(created.agent.linuxIdentity.workspace, "normal.txt"), "utf8"),
           ).toBe("normal contents\nonce");
           const row = db
-            .prepare(
+            .prepare<[], { result_json: string }>(
               "SELECT result_json FROM owner_agent_tool_actions WHERE operation='workspace.edit'",
             )
-            .get() as { result_json: string };
+            .get()!;
           expect(JSON.parse(row.result_json).state).toBe("executing");
         }
       }
@@ -416,8 +424,8 @@ it.each([
         } else currentUpstream!.terminate();
         await eventually(() => {
           const row = db!
-            .prepare("SELECT state FROM owner_agent_runs WHERE id=?")
-            .get(oldRun.runId) as { state: string };
+            .prepare<[string], { state: string }>("SELECT state FROM owner_agent_runs WHERE id=?")
+            .get(oldRun.runId)!;
           return row.state === "failed" ? true : undefined;
         }, "node disconnect to invalidate its old run");
         if (boundary === "unconfirmed" || cause === "restart") node = startNode(nodeOptions);
@@ -433,10 +441,10 @@ it.each([
       if (firstTool === "attachment") {
         await eventually(() => {
           const row = db!
-            .prepare(
+            .prepare<[], { result_json: string }>(
               "SELECT result_json FROM owner_agent_tool_actions WHERE operation='attachments.publish'",
             )
-            .get() as { result_json: string };
+            .get()!;
           return ["failed", "succeeded"].includes(JSON.parse(row.result_json).state)
             ? true
             : undefined;
@@ -463,8 +471,16 @@ it.each([
         await eventually(() => {
           if (firstTool === "command") {
             const row = db!
-              .prepare("SELECT * FROM owner_agent_process_operations WHERE operation_id=?")
-              .get(oldReceipt.operationId) as any;
+              .prepare<
+                [string],
+                {
+                  state: string;
+                  node_receipt_confirmed: number;
+                  receipt_json: string;
+                  request_json: string;
+                }
+              >("SELECT * FROM owner_agent_process_operations WHERE operation_id=?")
+              .get(oldReceipt.operationId);
             // Disconnect first records a local unknown; reconciliation confirms the node receipt later.
             if (
               row?.state !== (boundary === "unconfirmed" ? "unknown" : "succeeded") ||
@@ -489,10 +505,10 @@ it.each([
             });
           } else {
             const row = db!
-              .prepare(
+              .prepare<[], { result_json: string }>(
                 "SELECT result_json FROM owner_agent_tool_actions WHERE operation='workspace.edit'",
               )
-              .get() as { result_json: string };
+              .get()!;
             const receipt = JSON.parse(row.result_json);
             if (receipt.state !== (boundary === "unconfirmed" ? "unknown" : "succeeded"))
               return undefined;
@@ -555,10 +571,10 @@ it.each([
       if (cause === "pause") await api(`/api/owner/agents/${agentId}/resume`);
       await eventually(() => {
         const row = db!
-          .prepare(
+          .prepare<[string], { n: number }>(
             "SELECT COUNT(*) AS n FROM owner_agent_runs WHERE agent_id=? AND state='completed'",
           )
-          .get(agentId) as { n: number };
+          .get(agentId)!;
         // A late receipt can independently queue a correction delivery after recovery admission.
         // Its subsequent run is valid; the recovered work must complete rather than total exactly one.
         return row.n >= 1 ? true : undefined;

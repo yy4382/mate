@@ -1,10 +1,7 @@
 import { expect, it } from "vitest";
 import { eventually } from "../support/environment/run-services.js";
 import { createScenarioEnvironment } from "../support/environment/scenario-environment.js";
-import {
-  createScriptedProvider,
-  type ScriptedRequest,
-} from "../support/agent/scripted-provider.js";
+import { createScriptedProvider } from "../support/agent/scripted-provider.js";
 
 it("records expected client cancellation, refuses late output, and leaves the real Owner timeline unchanged", async () => {
   const provider = createScriptedProvider();
@@ -17,7 +14,7 @@ it("records expected client cancellation, refuses late output, and leaves the re
     const agent = environment.agents[0];
     if (!agent) throw new Error("Expected prepared Agent");
     provider.forAgent(agent, [
-      async function pendingCancellation(request: ScriptedRequest) {
+      async function pendingCancellation(request) {
         request.expectCancellation("owner pause");
         await new Promise<void>((_resolve, reject) => {
           request.signal.addEventListener("abort", () => reject(request.signal.reason), {
@@ -60,7 +57,7 @@ it.each(["timeout", "closed"])(
       const agent = environment.agents[0];
       if (!agent) throw new Error("Expected prepared Agent");
       provider.forAgent(agent, [
-        async function pendingStep(request: ScriptedRequest) {
+        async function pendingStep(request) {
           await new Promise<void>((resolve) =>
             request.signal.addEventListener("abort", () => resolve(), { once: true }),
           );
@@ -104,7 +101,7 @@ it.each(["unexpected_request", "script_exhausted", "late_request"])(
       if (!agent) throw new Error("Expected prepared Agent");
       if (code === "script_exhausted")
         provider.forAgent(agent, [
-          function onlyStep(request: ScriptedRequest) {
+          function onlyStep(request) {
             request.tools([{ name: "tools.list", input: {} }]);
           },
         ]);
@@ -146,7 +143,7 @@ it("bounds a named-step observation, reports the last request, and wakes observa
   try {
     const agent = environment.agents[0];
     if (!agent) throw new Error("Expected prepared Agent");
-    provider.forAgent(agent, [function actualStep(_request: ScriptedRequest) {}]);
+    provider.forAgent(agent, [function actualStep(_request) {}]);
     await environment.request(`/api/owner/channels/${agent.channelId}/messages`, {
       method: "POST",
       body: { text: "最后实际请求" },
@@ -178,7 +175,7 @@ it("treats an unannounced real client cancellation as a failure", async () => {
   try {
     const agent = environment.agents[0];
     if (!agent) throw new Error("Expected prepared Agent");
-    provider.forAgent(agent, [function stalled(_request: ScriptedRequest) {}]);
+    provider.forAgent(agent, [function stalled(_request) {}]);
     await environment.request(`/api/owner/channels/${agent.channelId}/messages`, {
       method: "POST",
       body: { text: "没有声明取消。" },
@@ -207,7 +204,7 @@ it.each(["step_failed", "step_timeout"])(
       const agent = environment.agents[0];
       if (!agent) throw new Error("Expected prepared Agent");
       provider.forAgent(agent, [
-        async function replyThenWait(request: ScriptedRequest) {
+        async function replyThenWait(request) {
           request.text("回复已经释放。");
           if (code === "step_timeout") await new Promise(() => {});
           else {

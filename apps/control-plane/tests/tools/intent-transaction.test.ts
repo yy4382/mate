@@ -32,10 +32,7 @@ it.each(["process.exec", "workspace.write", "attachments.publish"])(
           ? { path: "empty.txt", content: "" }
           : { conversationId: direct.id, path: "empty.txt" };
     let release!: () => Promise<void>;
-    let dispatched!: () => void;
-    const sent = new Promise<void>((resolve) => {
-      dispatched = resolve;
-    });
+    const { promise: sent, resolve: dispatched } = Promise.withResolvers<void>();
     const version = { device: "1", inode: "2", size: 0, modifiedNs: "3", changedNs: "4" };
     let first = true;
     socket.onSend = (message) => {

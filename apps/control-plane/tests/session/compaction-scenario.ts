@@ -147,15 +147,41 @@ export async function exerciseCompaction(
       ),
     );
     response.end(
-      `data: ${JSON.stringify({ type: "response.completed", response: { id: `response-${requests.length}`, status: isSummary && summaryMode === "length" ? "incomplete" : "completed", ...(isSummary && summaryMode === "length" ? { incomplete_details: { reason: "max_output_tokens" } } : {}), output, usage: { input_tokens: (turn === 0 && summaryMode !== "overflow" && summaryMode !== "recoveryOrder") || (summaryMode === "repeat" && turn === 1) ? 115_000 : 100, output_tokens: 10, total_tokens: (turn === 0 && summaryMode !== "overflow" && summaryMode !== "recoveryOrder") || (summaryMode === "repeat" && turn === 1) ? 115_010 : 110, ...(isSummary && summaryMode === "length" ? {} : { input_tokens_details: { cached_tokens: 0 } }) } } })}\n\n`,
+      `data: ${JSON.stringify({
+        type: "response.completed",
+        response: {
+          id: `response-${requests.length}`,
+          status: isSummary && summaryMode === "length" ? "incomplete" : "completed",
+          ...(isSummary && summaryMode === "length"
+            ? { incomplete_details: { reason: "max_output_tokens" } }
+            : {}),
+          output,
+          usage: {
+            input_tokens:
+              (turn === 0 && summaryMode !== "overflow" && summaryMode !== "recoveryOrder") ||
+              (summaryMode === "repeat" && turn === 1)
+                ? 115_000
+                : 100,
+            output_tokens: 10,
+            total_tokens:
+              (turn === 0 && summaryMode !== "overflow" && summaryMode !== "recoveryOrder") ||
+              (summaryMode === "repeat" && turn === 1)
+                ? 115_010
+                : 110,
+            ...(isSummary && summaryMode === "length"
+              ? {}
+              : { input_tokens_details: { cached_tokens: 0 } }),
+          },
+        },
+      })}\n\n`,
     );
   });
   await new Promise<void>((done) => provider.listen(0, "127.0.0.1", done));
   const address = provider.address();
   if (!address || typeof address === "string") throw new Error("No provider port");
-  let control: ProcessOutput | undefined,
-    node: ProcessOutput | undefined,
-    db: Database.Database | undefined;
+  let control: ProcessOutput | undefined;
+  let node: ProcessOutput | undefined;
+  let db: Database.Database | undefined;
   try {
     control =
       summaryMode === "interrupt" || summaryMode === "recoveryOrder"
@@ -165,7 +191,24 @@ export async function exerciseCompaction(
               [
                 "--input-type=module",
                 "--eval",
-                `const { startControlPlane } = await import(${JSON.stringify(new URL("../../dist/main.js", import.meta.url).href)}); startControlPlane(0, undefined, { dataDir: ${JSON.stringify(join(directory, "control-plane-data"))}, passwordFile: ${JSON.stringify(join(directory, "owner-password"))} }, { modelForRun: (model, apiKey) => ({ ...model, baseUrl: apiKey }), beforeSessionCommit: async entry => { if (${JSON.stringify(summaryMode)} === "interrupt" ? entry.kind === "compaction" : entry.kind === "message" && entry.message.role === "toolResult") { console.log("MATE_TEST_COMMIT_INTERRUPTED"); process.exit(92); } } });`,
+                `
+                  const { startControlPlane } = await import(${JSON.stringify(new URL("../../dist/main.js", import.meta.url).href)});
+                  startControlPlane(0, undefined, {
+                    dataDir: ${JSON.stringify(join(directory, "control-plane-data"))},
+                    passwordFile: ${JSON.stringify(join(directory, "owner-password"))}
+                  }, {
+                    modelForRun: (model, apiKey) => ({ ...model, baseUrl: apiKey }),
+                    beforeSessionCommit: async entry => {
+                      if (
+                        ${JSON.stringify(summaryMode)} === "interrupt"
+                          ? entry.kind === "compaction"
+                          : entry.kind === "message" && entry.message.role === "toolResult"
+                      ) {
+                        console.log("MATE_TEST_COMMIT_INTERRUPTED");
+                        process.exit(92);
+                      }
+                    }
+                  });`,
               ],
               { env: { PATH: process.env.PATH }, stdio: ["ignore", "pipe", "pipe"] },
             ),
@@ -210,10 +253,10 @@ export async function exerciseCompaction(
     const completed = async (count: number) =>
       eventually(() => {
         const row = db!
-          .prepare(
+          .prepare<[string], { n: number }>(
             "SELECT COUNT(*) AS n FROM owner_agent_runs WHERE agent_id=? AND state='completed'",
           )
-          .get(agentId) as { n: number };
+          .get(agentId)!;
         return row.n === count ? true : undefined;
       }, `completed run ${count}`);
     await api(`/api/owner/channels/${dm}/messages`, {
@@ -315,17 +358,19 @@ export async function exerciseCompaction(
     ) {
       await eventually(() => {
         const control = db!
-          .prepare(
+          .prepare<[string], { paused_reason: string | null }>(
             "SELECT paused_reason,temporary_failures FROM owner_agent_run_control WHERE agent_id=?",
           )
-          .get(agentId) as { paused_reason: string | null; temporary_failures: number };
+          .get(agentId)!;
         return control?.paused_reason === "context" ? control : undefined;
       }, "bounded compaction failure");
       expect(requests).toHaveLength(summaryMode === "uncuttable" ? 1 : 3);
       expect(requests.slice(1).every((request) => request.tools === undefined)).toBe(true);
       const rows = db
-        .prepare("SELECT kind,payload_json FROM owner_agent_session_records WHERE agent_id=?")
-        .all(agentId) as Array<{ kind: string; payload_json: string }>;
+        .prepare<[string], { kind: string; payload_json: string }>(
+          "SELECT kind,payload_json FROM owner_agent_session_records WHERE agent_id=?",
+        )
+        .all(agentId);
       expect(rows.filter((row) => row.kind === "compaction")).toHaveLength(0);
       expect(rows.filter((row) => row.kind === "summary_usage")).toHaveLength(
         summaryMode === "uncuttable" || summaryMode === "network" ? 0 : 2,
@@ -357,10 +402,10 @@ export async function exerciseCompaction(
         ),
       ).toBe(true);
       const activity = db
-        .prepare(
+        .prepare<[string], { detail_json: string }>(
           "SELECT detail_json FROM owner_agent_activity WHERE agent_id=? AND kind='run.failed' ORDER BY seq DESC LIMIT 1",
         )
-        .get(agentId) as { detail_json: string };
+        .get(agentId)!;
       const detail = JSON.parse(activity.detail_json);
       expect(detail.code).toBe("context_failed");
       expect(detail.reason).toMatch(
@@ -387,10 +432,10 @@ export async function exerciseCompaction(
       expect(JSON.stringify(requests[4].input)).toContain("[会话压缩摘要]");
     }
     const rows = db
-      .prepare(
+      .prepare<[string], { kind: string; payload_json: string }>(
         "SELECT kind,payload_json FROM owner_agent_session_records WHERE agent_id=? ORDER BY seq",
       )
-      .all(agentId) as Array<{ kind: string; payload_json: string }>;
+      .all(agentId);
     expect(rows.filter((row) => row.kind === "compaction")).toHaveLength(
       summaryMode === "repeat" ? 2 : 1,
     );

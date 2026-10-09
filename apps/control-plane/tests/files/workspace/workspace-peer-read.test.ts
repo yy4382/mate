@@ -13,9 +13,9 @@ import {
 afterEach(cleanupFixture);
 
 it("sends an Agent's own workspace read of a peer workspace to the node as an agent read", async () => {
-  const { app, cookie, db, nodeId, socket } = await createConversationFixture(),
-    agentId = randomUUID(),
-    peerAgentId = randomUUID();
+  const { app, cookie, db, nodeId, socket } = await createConversationFixture();
+  const agentId = randomUUID();
+  const peerAgentId = randomUUID();
   app.agents.prepare({
     id: agentId,
     nodeId,

@@ -1,16 +1,16 @@
 import { spawn, type SpawnOptions } from "node:child_process";
 import { chmodSync, chownSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { resolve } from "node:path";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { expect, it } from "vitest";
 
 it("serves the status page and protects owner routes in an unprivileged process", async () => {
   const fixtureDir = mkdtempSync(join(tmpdir(), "mate-control-plane-process-"));
   chmodSync(fixtureDir, 0o700);
-  const dataDir = join(fixtureDir, "data"),
-    passwordFile = join(fixtureDir, "owner-password"),
-    fixtureOwner = process.platform === "linux" && process.geteuid?.() === 0 ? 65534 : undefined;
+  const dataDir = join(fixtureDir, "data");
+  const passwordFile = join(fixtureDir, "owner-password");
+  const fixtureOwner =
+    process.platform === "linux" && process.geteuid?.() === 0 ? 65534 : undefined;
   writeFileSync(passwordFile, "integration-owner-password-with-12-plus-characters\n", {
     mode: 0o600,
   });
@@ -33,8 +33,8 @@ it("serves the status page and protects owner routes in an unprivileged process"
     Object.assign(options, { uid: 65534, gid: 65534 });
 
   const server = spawn(process.execPath, [resolve("dist/main.js")], options);
-  const stdout = server.stdout,
-    stderr = server.stderr;
+  const stdout = server.stdout;
+  const stderr = server.stderr;
   if (!stdout || !stderr) throw new Error("Control-plane process pipes were not created");
   let diagnostics = "";
   stderr.setEncoding("utf8");
@@ -72,10 +72,10 @@ it("serves the status page and protects owner routes in an unprivileged process"
       });
     });
 
-    const origin = `http://127.0.0.1:${port}`,
-      page = await fetch(origin),
-      html = await page.text(),
-      scriptPath = html.match(/<script[^>]+src="([^"]+)"/i)?.[1];
+    const origin = `http://127.0.0.1:${port}`;
+    const page = await fetch(origin);
+    const html = await page.text();
+    const scriptPath = html.match(/<script[^>]+src="([^"]+)"/i)?.[1];
 
     expect(page.status).toBe(200);
     expect(html).toContain('<html lang="zh-CN">');

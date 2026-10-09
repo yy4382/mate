@@ -7,7 +7,13 @@ import { eventually, stopProcess } from "../support/environment/run-services.js"
 it("heartbeat expiry at completion ends the durable run before releasing its slot and automatically recovers", async () => {
   const fixture = await loopFixture(
     (_request, response) => respond(response, "完整结束。"),
-    ', beforeRunFinish: async () => { if (!globalThis.crossedHeartbeat) { globalThis.crossedHeartbeat = true; console.log("MATE_HEARTBEAT_BOUNDARY"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 750); } }',
+    `, beforeRunFinish: async () => {
+      if (!globalThis.crossedHeartbeat) {
+        globalThis.crossedHeartbeat = true;
+        console.log("MATE_HEARTBEAT_BOUNDARY");
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 750);
+      }
+    }`,
     undefined,
     ", nodeHeartbeatTimeoutMs: 500",
   );
@@ -59,8 +65,10 @@ it.each(["openai", "anthropic"] as const)(
       await fixture.send(agent.channelId, "保留当前配置直到下一轮");
       await eventually(() => responses[0], "old-provider SSE request");
       const run = fixture.db((db) =>
-        db.prepare("SELECT id FROM owner_agent_runs WHERE agent_id=?").get(agent.id),
-      ) as { id: string };
+        db
+          .prepare<[string], { id: string }>("SELECT id FROM owner_agent_runs WHERE agent_id=?")
+          .get(agent.id)!,
+      );
       await fixture.api(`/api/owner/agents/${agent.id}/model`, "PUT", {
         provider: "anthropic",
         id: "claude-sonnet-4-5",
@@ -111,7 +119,13 @@ it.each(
         if (recovering) answer(request, response);
       },
       phase === "starting"
-        ? `, beforeRunStart: async () => { if (!globalThis.pausedStart) { globalThis.pausedStart = true; console.log('MATE_START_STALLED'); await new Promise(() => {}); } }`
+        ? `, beforeRunStart: async () => {
+          if (!globalThis.pausedStart) {
+            globalThis.pausedStart = true;
+            console.log('MATE_START_STALLED');
+            await new Promise(() => {});
+          }
+        }`
         : "",
       phase === "summary" ? 16000 : undefined,
     );
@@ -134,7 +148,12 @@ it.each(
             await eventually(() => responses[1], "pending summary request", 2500);
           } catch (error) {
             throw new Error(
-              `${String(error)}; facts=${JSON.stringify(fixture.db((db) => ({ runs: db.prepare("SELECT * FROM owner_agent_runs").all(), activity: db.prepare("SELECT * FROM owner_agent_activity").all() })))}`,
+              `${String(error)}; facts=${JSON.stringify(
+                fixture.db((db) => ({
+                  runs: db.prepare("SELECT * FROM owner_agent_runs").all(),
+                  activity: db.prepare("SELECT * FROM owner_agent_activity").all(),
+                })),
+              )}`,
             );
           }
           expect(JSON.stringify(fixture.requests[1]!.input[0])).toContain(
@@ -146,8 +165,8 @@ it.each(
       const original = fixture.db((db) =>
         db.prepare("SELECT id FROM owner_agent_sessions WHERE agent_id=?").get(agent.id),
       );
-      const next = responses.length,
-        oldResponse = responses.at(-1);
+      const next = responses.length;
+      const oldResponse = responses.at(-1);
       if (cause === "pause") {
         await fixture.api(`/api/owner/agents/${agent.id}/pause`, "POST");
         expect((await fixture.api(`/api/owner/agents/${agent.id}/activity`)).pausedReason).toBe(
@@ -315,11 +334,12 @@ it("an authentication rejection pauses with a credential reason until corrected"
     await fixture.send(agent.channelId, "仍待处理");
     await eventually(
       () =>
-        fixture.db(
-          (db) =>
-            db
-              .prepare("SELECT paused_reason FROM owner_agent_run_control WHERE agent_id=?")
-              .get(agent.id) as any,
+        fixture.db((db) =>
+          db
+            .prepare<[string], { paused_reason: string | null }>(
+              "SELECT paused_reason FROM owner_agent_run_control WHERE agent_id=?",
+            )
+            .get(agent.id),
         )?.paused_reason === "credentials"
           ? true
           : undefined,
@@ -369,9 +389,12 @@ it("offline messages and due reminders queue while another online node's Agent k
     await fixture.send(first.channelId, "离线新输入");
     await eventually(
       () =>
-        fixture.db(
-          (db) =>
-            db.prepare("SELECT state FROM owner_reminders WHERE agent_id=?").get(first.id) as any,
+        fixture.db((db) =>
+          db
+            .prepare<[string], { state: string }>(
+              "SELECT state FROM owner_reminders WHERE agent_id=?",
+            )
+            .get(first.id),
         )?.state === "fired"
           ? true
           : undefined,
@@ -431,18 +454,28 @@ it("retries shutdown after a durable run update fails and cancels both active pr
           return prepare.call(this, sql, ...args);
         };
         try {
-          try { close.call(this); }
-          catch (error) {
+          try {
+            close.call(this);
+          } catch (error) {
             if (error.message !== 'synthetic shutdown storage failure') throw error;
             console.log('MATE_SHUTDOWN_STORAGE_FAILED');
             close.call(this);
-            const facts = new Database(${JSON.stringify(join(directory, "control-plane-data", "control-plane.sqlite"))}, { readonly: true });
+            const facts = new Database(
+              ${JSON.stringify(join(directory, "control-plane-data", "control-plane.sqlite"))},
+              { readonly: true }
+            );
             try {
-              const stopped = facts.prepare("SELECT count(*) AS count FROM owner_agent_runs WHERE state='failed'").get().count;
+              const stopped = facts
+                .prepare("SELECT count(*) AS count FROM owner_agent_runs WHERE state='failed'")
+                .get().count;
               console.log('MATE_RETRIED_SHUTDOWN_STOPPED ' + stopped);
-            } finally { facts.close(); }
+            } finally {
+              facts.close();
+            }
           }
-        } finally { Database.prototype.prepare = prepare; }
+        } finally {
+          Database.prototype.prepare = prepare;
+        }
       };
     }`,
   );

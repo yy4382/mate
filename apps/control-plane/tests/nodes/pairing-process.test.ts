@@ -4,8 +4,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 
 import { tmpdir } from "node:os";
-import { resolve } from "node:path";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { expect, it } from "vitest";
@@ -207,7 +206,13 @@ it("rejects an expired pairing token in a control-plane process with a short ass
   const passwordFile = join(directory, "owner-password");
   writeFileSync(passwordFile, `${ownerPassword}\n`, { mode: 0o600 });
   const moduleUrl = pathToFileURL(resolve("dist/main.js")).href;
-  const runner = `const { startControlPlane } = await import(${JSON.stringify(moduleUrl)}); startControlPlane(0, undefined, { dataDir: process.env.MATE_CONTROL_PLANE_DATA_DIR, passwordFile: process.env.MATE_OWNER_PASSWORD_FILE, pairingTokenTtlMs: 250 });`;
+  const runner = `
+    const { startControlPlane } = await import(${JSON.stringify(moduleUrl)});
+    startControlPlane(0, undefined, {
+      dataDir: process.env.MATE_CONTROL_PLANE_DATA_DIR,
+      passwordFile: process.env.MATE_OWNER_PASSWORD_FILE,
+      pairingTokenTtlMs: 250
+    });`;
   const serverChild = spawn(process.execPath, ["--input-type=module", "--eval", runner], {
     cwd: process.cwd(),
     env: {

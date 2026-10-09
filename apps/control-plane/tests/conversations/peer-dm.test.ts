@@ -12,10 +12,10 @@ afterEach(cleanupFixture);
 
 it("lets one Agent discover and open an explicit peer DM that both Agents and the owner can read", async () => {
   const { app, cookie, db, nodeId, socket } = await createConversationFixture();
-  const firstAgentId = randomUUID(),
-    secondAgentId = randomUUID(),
-    unverifiedId = randomUUID(),
-    failedAgentId = randomUUID();
+  const firstAgentId = randomUUID();
+  const secondAgentId = randomUUID();
+  const unverifiedId = randomUUID();
+  const failedAgentId = randomUUID();
   for (const [agentId, name] of [
     [firstAgentId, "First colleague"],
     [secondAgentId, "Second colleague"],

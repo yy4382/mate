@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 
-import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 
 import {
@@ -359,9 +358,9 @@ it("lets a non-member Agent join a public channel, then speak and receive later 
 
 it("does not let an outsider read or join a peer direct message through the public read path", async () => {
   const { app, cookie, db, nodeId, socket } = await createConversationFixture();
-  const firstAgentId = await prepareVerifiedAgent(app, nodeId, "Chatty colleague"),
-    secondAgentId = await prepareVerifiedAgent(app, nodeId, "Quiet colleague"),
-    outsiderId = await prepareVerifiedAgent(app, nodeId, "Outsider colleague");
+  const firstAgentId = await prepareVerifiedAgent(app, nodeId, "Chatty colleague");
+  const secondAgentId = await prepareVerifiedAgent(app, nodeId, "Quiet colleague");
+  const outsiderId = await prepareVerifiedAgent(app, nodeId, "Outsider colleague");
   // Seed the peer DM through its own tables: the factory path requires the tool transaction.
   const outsiderDirect = app.chat.conversations.getOrCreateAgentDirectChannel(outsiderId)!;
   await app.http.request("/api/owner/model-credentials/openai", {

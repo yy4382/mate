@@ -13,9 +13,9 @@ import {
 afterEach(cleanupFixture);
 
 it("records owner workspace reads and safe failure codes without file contents", async () => {
-  const { app, cookie, db, nodeId, socket } = await createConversationFixture(),
-    agentId = randomUUID(),
-    version = { device: "1", inode: "2", size: 4, modifiedNs: "3", changedNs: "4" };
+  const { app, cookie, db, nodeId, socket } = await createConversationFixture();
+  const agentId = randomUUID();
+  const version = { device: "1", inode: "2", size: 4, modifiedNs: "3", changedNs: "4" };
   app.agents.prepare({
     id: agentId,
     nodeId,
@@ -37,9 +37,9 @@ it("records owner workspace reads and safe failure codes without file contents",
   );
   socket.onWorkspaceOperation = async (message) => {
     const operation = message.operation as { kind: string; path: string; offset?: number };
-    let code = 0,
-      stdout = "{}",
-      stderr = "";
+    let code = 0;
+    let stdout = "{}";
+    let stderr = "";
     if (operation.path.includes("..") || operation.path.includes("\0")) {
       code = 1;
       stderr = "unsafe_path: Path escapes the workspace";
@@ -182,11 +182,11 @@ it("records owner workspace reads and safe failure codes without file contents",
   expect(await browserError.text()).toContain("文件或目录不存在");
 
   const audit = db
-    .prepare(
+    .prepare<[string], { operation: string; result: string; relative_paths: string }>(
       `SELECT actor_kind,actor_id,agent_id,operation,relative_paths,result,error_code,download_id
        FROM owner_workspace_access_audit WHERE agent_id=? ORDER BY id`,
     )
-    .all(agentId) as Array<Record<string, unknown>>;
+    .all(agentId);
   expect(audit).toEqual(
     expect.arrayContaining([
       expect.objectContaining({
@@ -246,9 +246,9 @@ it("records owner workspace reads and safe failure codes without file contents",
 });
 
 it("marks an unfinished workspace download as interrupted after control-plane restart", async () => {
-  const { app, db } = await createConversationFixture(),
-    agentId = randomUUID(),
-    downloadId = randomUUID();
+  const { app, db } = await createConversationFixture();
+  const agentId = randomUUID();
+  const downloadId = randomUUID();
   db.prepare(
     `INSERT INTO owner_workspace_access_audit(
        at,actor_kind,actor_id,agent_id,operation,relative_paths,result,download_id
@@ -271,9 +271,9 @@ it("marks an unfinished workspace download as interrupted after control-plane re
 });
 
 it("expires abandoned download status with a terminal audit result and clears its session binding", async () => {
-  const { app, db } = await createConversationFixture(),
-    agentId = randomUUID(),
-    downloadId = randomUUID();
+  const { app, db } = await createConversationFixture();
+  const agentId = randomUUID();
+  const downloadId = randomUUID();
   db.prepare(
     `INSERT INTO owner_workspace_access_audit(
        at,actor_kind,actor_id,agent_id,operation,relative_paths,result,

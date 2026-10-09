@@ -5,7 +5,6 @@ import { z } from "zod";
 import { checkProviderProtocol } from "../../src/providers/active-check.js";
 import {
   withProvider,
-  text,
   anthropicReply,
   completionsReply,
 } from "../support/provider/protocol-fixture.js";

@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 
 import { checkProviderProtocol } from "../../src/providers/active-check.js";
-import { withProvider, text, completionsReply } from "../support/provider/protocol-fixture.js";
+import { withProvider, completionsReply } from "../support/provider/protocol-fixture.js";
 
 it.each(["SAFETY", "BLOCKLIST"])(
   "a complete Google %s model decline remains unverified",
@@ -43,7 +43,14 @@ it("a Google decline followed by malformed SSE remains a protocol failure", asyn
     (_request, response, index) => {
       response.writeHead(200, { "content-type": "text/event-stream" });
       response.write(
-        `data: ${JSON.stringify({ candidates: [{ content: { role: "model", parts: [{ text: "短文本" }] }, finishReason: index === 0 ? "STOP" : "SAFETY" }] })}\n\n`,
+        `data: ${JSON.stringify({
+          candidates: [
+            {
+              content: { role: "model", parts: [{ text: "短文本" }] },
+              finishReason: index === 0 ? "STOP" : "SAFETY",
+            },
+          ],
+        })}\n\n`,
       );
       response.end(index === 0 ? "" : "data: {invalid-json}\n\n");
     },

@@ -67,33 +67,47 @@ it.each(["missing", "replaced"] as const)(
 
 it("a rejected assistant commit keeps the service responsive and prevents its tool from executing", async () => {
   let requests = 0;
-  const fixture = await loopFixture((_request, response) => {
-    respond(
-      response,
-      requests++ < 2
-        ? [
-            {
-              name: "tools.call",
-              input: {
-                name: "process.exec",
-                input: { command: "printf 'once\\n' >> rejected-commit.txt" },
+  const fixture = await loopFixture(
+    (_request, response) => {
+      respond(
+        response,
+        requests++ < 2
+          ? [
+              {
+                name: "tools.call",
+                input: {
+                  name: "process.exec",
+                  input: { command: "printf 'once\\n' >> rejected-commit.txt" },
+                },
               },
-            },
-          ]
-        : "完成。",
-    );
-  }, ', beforeSessionCommit: async entry => { if (entry.kind === "message" && entry.message.role === "assistant" && !globalThis.rejectedCommit) { globalThis.rejectedCommit = true; console.log("MATE_COMMIT_REJECTED"); throw new Error("Synthetic persistence failure"); } }');
+            ]
+          : "完成。",
+      );
+    },
+    `, beforeSessionCommit: async entry => {
+      if (
+        entry.kind === "message" &&
+        entry.message.role === "assistant" &&
+        !globalThis.rejectedCommit
+      ) {
+        globalThis.rejectedCommit = true;
+        console.log("MATE_COMMIT_REJECTED");
+        throw new Error("Synthetic persistence failure");
+      }
+    }`,
+  );
   try {
     const agent = await fixture.agent();
     await fixture.send(agent.channelId, "持久提交必须先于命令");
     await fixture.control.waitFor(/MATE_COMMIT_REJECTED/);
     await eventually(
       () =>
-        fixture.db(
-          (db) =>
-            db
-              .prepare("SELECT state FROM owner_agent_runs WHERE agent_id=? ORDER BY rowid LIMIT 1")
-              .get(agent.id) as any,
+        fixture.db((db) =>
+          db
+            .prepare<[string], { state: string }>(
+              "SELECT state FROM owner_agent_runs WHERE agent_id=? ORDER BY rowid LIMIT 1",
+            )
+            .get(agent.id),
         )?.state === "failed"
           ? true
           : undefined,

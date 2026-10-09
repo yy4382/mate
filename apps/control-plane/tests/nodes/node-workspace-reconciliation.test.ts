@@ -92,8 +92,8 @@ it("continues past a whole page of in-flight writes and reconciles every histori
   });
   const settled = Promise.allSettled(pending);
   for (const operationId of history) context.record(operationId, "unknown");
-  const queried: string[] = [],
-    errors: unknown[] = [];
+  const queried: string[] = [];
+  const errors: unknown[] = [];
   context.socket.onSend = (message) => {
     if (message.type !== "control.workspace.reconcile") return;
     queried.push(...message.operations.map(({ operationId }) => operationId));
@@ -153,10 +153,10 @@ it("continues past a whole page of in-flight writes and reconciles every histori
 });
 
 it("keeps missing and conflicting historical receipts unknown and accepts a valid late receipt without replay", async () => {
-  const context = await recordedOperations(),
-    operationId = randomUUID(),
-    result = { code: 0, stdout: '{"written":true}', stderr: "", truncated: false, revision: 2 },
-    valid = { operationId, agentId: context.agentId, result };
+  const context = await recordedOperations();
+  const operationId = randomUUID();
+  const result = { code: 0, stdout: '{"written":true}', stderr: "", truncated: false, revision: 2 };
+  const valid = { operationId, agentId: context.agentId, result };
   context.record(operationId, "unknown");
   for (const { receipts, state } of [
     { receipts: [], state: "unknown" },

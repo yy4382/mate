@@ -50,11 +50,11 @@ it("reports an earlier command whose termination the node cannot confirm as unkn
     const channel = app.chat.conversations.getOrCreateAgentDirectChannel(id)!;
     app.chat.messages.createMessage({ channelId: channel.id, text: "先跑一条普通命令。" });
     const delivery = db
-      .prepare(
+      .prepare<[string], { id: string }>(
         `SELECT id FROM owner_message_deliveries
          WHERE recipient_kind='agent' AND recipient_id=? ORDER BY seq DESC LIMIT 1`,
       )
-      .get(id) as { id: string };
+      .get(id)!;
     db.prepare(
       `INSERT INTO owner_agent_runs(
          id,agent_id,node_id,delivery_id,state,started_at,input_end_seq,context_history_end_seq
@@ -145,9 +145,9 @@ it("counts every command whose termination nothing proved, however the node answ
     },
     app.chat,
   );
-  const directory = fixtures.at(-1)!.directory,
-    db = new Database(join(directory, "control-plane", "control-plane.sqlite")),
-    at = Date.now();
+  const directory = fixtures.at(-1)!.directory;
+  const db = new Database(join(directory, "control-plane", "control-plane.sqlite"));
+  const at = Date.now();
   // Four durable records: a command the node itself could not end, one Mate had to end that still
   // left a descendant alive, one that exited zero but left a background descendant in its group, and
   // one that provably never launched a shell.
@@ -160,11 +160,11 @@ it("counts every command whose termination nothing proved, however the node answ
     const channel = app.chat.conversations.getOrCreateAgentDirectChannel(id)!;
     app.chat.messages.createMessage({ channelId: channel.id, text: "先跑几条普通命令。" });
     const delivery = db
-      .prepare(
+      .prepare<[string], { id: string }>(
         `SELECT id FROM owner_message_deliveries
          WHERE recipient_kind='agent' AND recipient_id=? ORDER BY seq DESC LIMIT 1`,
       )
-      .get(id) as { id: string };
+      .get(id)!;
     const runId = randomUUID();
     db.prepare(
       `INSERT INTO owner_agent_runs(

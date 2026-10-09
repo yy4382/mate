@@ -56,8 +56,8 @@ it("persists top-level messages with Mate identity and channel order", async () 
     return response.json();
   }
 
-  const first = await send("先确认安排"),
-    second = await send("下午三点再同步");
+  const first = await send("先确认安排");
+  const second = await send("下午三点再同步");
 
   expect(first).toMatchObject({
     channelId: channel.id,

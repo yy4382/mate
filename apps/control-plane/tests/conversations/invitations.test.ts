@@ -12,9 +12,9 @@ afterEach(cleanupFixture);
 
 it("commits an eligible peer invitation once and rejects invalid invitation targets", async () => {
   const { app, cookie, db, nodeId, socket } = await createConversationFixture();
-  const inviterId = randomUUID(),
-    inviteeId = randomUUID(),
-    unverifiedId = randomUUID();
+  const inviterId = randomUUID();
+  const inviteeId = randomUUID();
+  const unverifiedId = randomUUID();
   for (const [agentId, name] of [
     [inviterId, "Inviter"],
     [inviteeId, "Invitee"],

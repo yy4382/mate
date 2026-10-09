@@ -2,7 +2,6 @@ import { toolTestInput } from "../support/agent/tool-run.js";
 
 import { randomUUID } from "node:crypto";
 
-import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 
 import { newAgentRequestSchema } from "../../src/agents/contracts.js";

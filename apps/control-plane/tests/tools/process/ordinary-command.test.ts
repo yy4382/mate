@@ -5,7 +5,6 @@ import { randomUUID } from "node:crypto";
 import { afterEach, expect, it } from "vitest";
 
 import {
-  password,
   cleanupFixture,
   createProcessToolFixture,
   waitForRun,
@@ -66,8 +65,8 @@ it("dispatches ordinary commands from a durable intent without privileged approv
     },
   });
 
-  const scope = run.actionScopeId,
-    toolCallId = `mate:${scope}:${"a".repeat(64)}:1`;
+  const scope = run.actionScopeId;
+  const toolCallId = `mate:${scope}:${"a".repeat(64)}:1`;
   let intentWasCommittedBeforeDispatch = false;
   socket.onSend = (message) => {
     if (message.type !== "control.process.operation") return;

@@ -42,8 +42,8 @@ it("rechecks stopped scopes after a restarted node confirms an ordinary operatio
   const start = socket.sent.length;
   app.chat.messages.createMessage({ channelId: direct.id, text: "Start a command." });
   const run = await waitForRun(socket, start);
-  const operationId = randomUUID(),
-    stableActionId = `mate:${run.actionScopeId}:${"c".repeat(64)}:1`;
+  const operationId = randomUUID();
+  const stableActionId = `mate:${run.actionScopeId}:${"c".repeat(64)}:1`;
   db.prepare(
     `INSERT INTO owner_agent_process_operations(
       operation_id,run_id,agent_id,node_id,

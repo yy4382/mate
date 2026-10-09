@@ -1,4 +1,3 @@
-import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 
 import {
@@ -75,13 +74,11 @@ it("does not backfill a just-joined channel as unread nor forget what was alread
       )
       .get(publicRoom.id, agentId),
   ).toMatchObject({ joinedAt: expect.any(Number) });
-  const joinedAtBefore = (
-    db
-      .prepare(
-        "SELECT joined_at AS joinedAt FROM owner_channel_memberships WHERE channel_id=? AND principal_kind='agent' AND principal_id=?",
-      )
-      .get(publicRoom.id, agentId) as { joinedAt: number }
-  ).joinedAt;
+  const joinedAtBefore = db
+    .prepare<[string, string], { joinedAt: number }>(
+      "SELECT joined_at AS joinedAt FROM owner_channel_memberships WHERE channel_id=? AND principal_kind='agent' AND principal_id=?",
+    )
+    .get(publicRoom.id, agentId)!.joinedAt;
 
   // A later delivery becomes unread, is read, and stays read across a second join.
   await finishRun(app, socket, run);

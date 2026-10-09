@@ -122,8 +122,8 @@ it("lets the owner update and archive a private channel through the control-plan
 it("refuses to publish a direct message as a public channel", async () => {
   const app = setup();
   const cookie = await ownerCookie(app);
-  const agentId = randomUUID(),
-    db = databaseFor(app);
+  const agentId = randomUUID();
+  const db = databaseFor(app);
   try {
     const nodeId = randomUUID();
     db.prepare("INSERT INTO nodes(id,public_key,paired_at) VALUES(?,?,?)").run(
