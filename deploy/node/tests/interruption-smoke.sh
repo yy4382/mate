@@ -25,10 +25,18 @@ while kill -0 "$pid" 2>/dev/null; do
   done
   [ "$killed" = no ] || break
 done
-[ "$killed" = yes ] || { cat "$stage/interrupted.log" >&2; echo 'Did not reach a live copy interruption point' >&2; exit 1; }
-if wait "$pid"; then exit 1; fi
+[ "$killed" = yes ] || {
+  cat "$stage/interrupted.log" >&2
+  echo 'Did not reach a live copy interruption point' >&2
+  exit 1
+}
+if wait "$pid"; then
+  exit 1
+fi
 "$runtime" "$cli" --bootstrap-install "$bundle" "$version"
-for directory in "$HOME"/.local/lib/mate-node/versions/.install-*; do test ! -e "$directory"; done
+for directory in "$HOME"/.local/lib/mate-node/versions/.install-*; do
+  test ! -e "$directory"
+done
 test "$("$HOME/.local/bin/mate" --version)" = "$version"
 echo 'PASS actual CLI SIGKILL during staging; retry removed the interrupted stage and installed a complete bundle.'
 
@@ -51,8 +59,15 @@ while kill -0 "$pid" 2>/dev/null; do
   done
   [ "$created" = no ] || break
 done
-[ "$created" = yes ] || { cat "$stage/race.log" >&2; echo 'Concurrent-file copy point was not exercised' >&2; exit 1; }
-if wait "$pid"; then cat "$stage/race.log" >&2; exit 1; fi
+[ "$created" = yes ] || {
+  cat "$stage/race.log" >&2
+  echo 'Concurrent-file copy point was not exercised' >&2
+  exit 1
+}
+if wait "$pid"; then
+  cat "$stage/race.log" >&2
+  exit 1
+fi
 test ! -L "$HOME/.local/bin/mate"
 test "$(cat "$HOME/.local/bin/mate")" = 'concurrent unrelated entry'
 echo 'PASS actual CLI concurrent initial-entry conflict; the non-Mate file was preserved.'

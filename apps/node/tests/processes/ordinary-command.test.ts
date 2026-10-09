@@ -16,7 +16,7 @@ const account = {
   gid: typeof process.getgid === "function" ? process.getgid() : 0,
 };
 
-function fixture() {
+function commandFixture() {
   const root = mkdtempSync(join(tmpdir(), "mate-ordinary-command-"));
   return {
     root,
@@ -40,7 +40,7 @@ function fixture() {
 }
 
 it("runs the command text verbatim as the launching account in the requested directory", async () => {
-  const files = fixture();
+  const files = commandFixture();
   const runner = new OrdinaryCommandRunner();
   try {
     const receipt = await runner.run(
@@ -68,7 +68,7 @@ it("runs the command text verbatim as the launching account in the requested dir
 });
 
 it("bounds captured output and reports the cut instead of hiding it", async () => {
-  const files = fixture();
+  const files = commandFixture();
   const runner = new OrdinaryCommandRunner();
   try {
     const receipt = await runner.run(
@@ -83,7 +83,7 @@ it("bounds captured output and reports the cut instead of hiding it", async () =
 });
 
 it("kills a command that exceeds its time bound and reports the timeout truthfully", async () => {
-  const files = fixture();
+  const files = commandFixture();
   const marker = join(files.root, "late");
   const runner = new OrdinaryCommandRunner();
   try {
@@ -102,7 +102,7 @@ it("kills a command that exceeds its time bound and reports the timeout truthful
 });
 
 it("reports a command that never started as a definite failure with no side effect", async () => {
-  const files = fixture();
+  const files = commandFixture();
   const runner = new OrdinaryCommandRunner();
   try {
     await expect(
@@ -120,7 +120,7 @@ it("reports a command that never started as a definite failure with no side effe
 });
 
 it("keeps tracking a command whose process group outlives its shell and stops it on request", async () => {
-  const files = fixture();
+  const files = commandFixture();
   const runner = new OrdinaryCommandRunner();
   const agentId = randomUUID();
   const operationId = randomUUID();
@@ -148,7 +148,7 @@ it("keeps tracking a command whose process group outlives its shell and stops it
 });
 
 it("does not report a process group as stopped while it still cannot confirm that", async () => {
-  const files = fixture();
+  const files = commandFixture();
   const agentId = randomUUID();
   const operationId = randomUUID();
   let groupAlive = true;
@@ -177,7 +177,7 @@ it("does not report a process group as stopped while it still cannot confirm tha
 });
 
 it("reports a stop of a command it never started as not running", async () => {
-  const files = fixture();
+  const files = commandFixture();
   const runner = new OrdinaryCommandRunner();
   try {
     await expect(runner.stop(randomUUID(), randomUUID())).resolves.toEqual({
@@ -191,7 +191,7 @@ it("reports a stop of a command it never started as not running", async () => {
 });
 
 it("keeps two Agents' tracked commands apart and stops only the requested Agent's", async () => {
-  const files = fixture();
+  const files = commandFixture();
   const runner = new OrdinaryCommandRunner();
   const alice = randomUUID();
   const bob = randomUUID();
@@ -221,7 +221,7 @@ it("keeps two Agents' tracked commands apart and stops only the requested Agent'
 });
 
 it("passes a command's own sudo to the host without adding anything around it", async () => {
-  const files = fixture();
+  const files = commandFixture();
   const shim = join(files.root, "bin");
   const runner = new OrdinaryCommandRunner();
   try {
@@ -230,7 +230,11 @@ it("passes a command's own sudo to the host without adding anything around it", 
     const recorded = join(files.root, "sudo-argv");
     writeFileSync(
       join(shim, "sudo"),
-      `#!/bin/sh\nprintf '%s\\n' "$@" > ${recorded}\nprintf 'sudo refused\\n' >&2\nexit 7\n`,
+      `#!/bin/sh
+printf '%s\\n' "$@" > ${recorded}
+printf 'sudo refused\\n' >&2
+exit 7
+`,
       { mode: 0o700 },
     );
     chmodSync(join(shim, "sudo"), 0o700);
@@ -247,12 +251,16 @@ it("reports nothing about a descendant that left the process group", async () =>
   // A command can start something in its own new session, which is how a sudo child with a pty can
   // look. That descendant is outside the only thing Mate can observe, so Mate must report nothing
   // about it — neither that it is running nor that it was stopped.
-  const files = fixture();
+  const files = commandFixture();
   const runner = new OrdinaryCommandRunner();
   const agentId = randomUUID();
   const operationId = randomUUID();
   try {
-    const escaped = `${JSON.stringify(process.execPath)} -e "require('node:child_process').spawn('sleep',['1'],{detached:true,stdio:'ignore'}).unref()"`;
+    const escaped = `${JSON.stringify(process.execPath)} -e "
+require('node:child_process')
+  .spawn('sleep', ['1'], { detached: true, stdio: 'ignore' })
+  .unref()
+"`;
     const receipt = await runner.run(files.request({ agentId, operationId, command: escaped }));
     expect(receipt.code).toBe(0);
     expect(receipt.processGroupRunning).toBe(false);
@@ -266,7 +274,7 @@ it("reports nothing about a descendant that left the process group", async () =>
 it("forgets a tracked process group whose ID now belongs to another process", async () => {
   // A group ID can only be reused once its group has ended. If the host says this ID is now a
   // different process incarnation, the entry is stale and must never be signalled.
-  const files = fixture();
+  const files = commandFixture();
   const agentId = randomUUID();
   const operationId = randomUUID();
   let token = "the-command-mate-started";
@@ -290,7 +298,7 @@ it("forgets a tracked process group whose ID now belongs to another process", as
 });
 
 it("accepts parent and symlink working directories and preserves complete foreground output", async () => {
-  const files = fixture();
+  const files = commandFixture();
   const runner = new OrdinaryCommandRunner();
   try {
     const { symlinkSync, realpathSync } = await import("node:fs");
@@ -313,15 +321,16 @@ it("accepts parent and symlink working directories and preserves complete foregr
 });
 
 it("uses an installed CLI on a subsequent call through the existing host PATH", async () => {
-  const files = fixture();
+  const files = commandFixture();
   const runner = new OrdinaryCommandRunner({
     environment: { ...process.env, PATH: `${files.root}/.local/bin:${process.env.PATH}` },
   });
   try {
     const install = await runner.run(
       files.request({
-        command:
-          'mkdir -p "$HOME/.local/bin"; printf "#!/bin/sh\\nprintf cli-ready\\n" > "$HOME/.local/bin/mate-test-cli"; chmod 700 "$HOME/.local/bin/mate-test-cli"',
+        command: `mkdir -p "$HOME/.local/bin"
+printf "#!/bin/sh\\nprintf cli-ready\\n" > "$HOME/.local/bin/mate-test-cli"
+chmod 700 "$HOME/.local/bin/mate-test-cli"`,
       }),
     );
     expect(install.code).toBe(0);

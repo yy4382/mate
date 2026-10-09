@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { createAtomicNoReplaceRename } from "../../src/files/mutations/atomic-rename.js";
 import { commitFileIfHashMatches, moveFileNoReplace } from "../../src/files/mutations/workspace.js";

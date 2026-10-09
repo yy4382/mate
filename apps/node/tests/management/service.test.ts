@@ -22,7 +22,7 @@ afterEach(() => {
   for (const directory of directories.splice(0))
     rmSync(directory, { recursive: true, force: true });
 });
-function fixture() {
+function installedNodeFixture() {
   const home = mkdtempSync(join(tmpdir(), "mate-service-command-"));
   directories.push(home);
   const paths = nodePaths(home);
@@ -112,7 +112,7 @@ function fixture() {
 }
 
 test("first install starts a single service, while repeating preserves stopped and disabled facts", async () => {
-  const { paths, bundle, installation, manager } = fixture();
+  const { paths, bundle, installation, manager } = installedNodeFixture();
   const before = readFileSync(paths.configuration, "utf8");
   await manageNode("install", installation, manager);
   expect(manager.inspect()).toMatchObject({ active: "active", enabled: "enabled", pid: 1 });
@@ -131,7 +131,7 @@ test("first install starts a single service, while repeating preserves stopped a
 });
 
 test("data remains separate even when its directory name starts with two dots", async () => {
-  const { paths, installation, manager } = fixture();
+  const { paths, installation, manager } = installedNodeFixture();
   writeFileSync(
     paths.configuration,
     JSON.stringify({
@@ -144,7 +144,7 @@ test("data remains separate even when its directory name starts with two dots", 
 });
 
 test("an ancestor symlink cannot place retained node data inside the removable program tree", async () => {
-  const { paths, installation, manager } = fixture();
+  const { paths, installation, manager } = installedNodeFixture();
   symlinkSync(paths.programDirectory, join(paths.home, "alias"), "dir");
   mkdirSync(join(paths.programDirectory, "data"), { mode: 0o700 });
   writeFileSync(
@@ -159,7 +159,7 @@ test("an ancestor symlink cannot place retained node data inside the removable p
 });
 
 test("a manager drop-in cannot silently replace the effective node command or configuration", async () => {
-  const { installation, manager } = fixture();
+  const { installation, manager } = installedNodeFixture();
   await manageNode("install", installation, manager);
   const inspect = manager.inspect;
   manager.inspect = () => ({
@@ -172,7 +172,7 @@ test("a manager drop-in cannot silently replace the effective node command or co
 });
 
 test("stopping remains possible with damaged configuration and reports that the stop completed", async () => {
-  const { paths, installation, manager } = fixture();
+  const { paths, installation, manager } = installedNodeFixture();
   await manageNode("install", installation, manager);
   chmodSync(paths.configuration, 0o644);
   await expect(manageNode("stop", installation, manager)).rejects.toThrow("stop completed");
@@ -180,7 +180,7 @@ test("stopping remains possible with damaged configuration and reports that the 
 });
 
 test("stop and logs remain available when effective command inspection fails", async () => {
-  const { installation, manager } = fixture();
+  const { installation, manager } = installedNodeFixture();
   await manageNode("install", installation, manager);
   const inspect = manager.inspect;
   // A malformed foreign command or unavailable typed transport must not block recovery.
@@ -195,7 +195,7 @@ test("stop and logs remain available when effective command inspection fails", a
 });
 
 test("a drop-in with the same argv cannot restore environment substitution or change execution acknowledgement", async () => {
-  const { installation, manager } = fixture();
+  const { installation, manager } = installedNodeFixture();
   await manageNode("install", installation, manager);
   const inspect = manager.inspect;
   manager.inspect = () => ({
@@ -208,7 +208,7 @@ test("a drop-in with the same argv cannot restore environment substitution or ch
 });
 
 test("interrupted installation with an existing stopped unit only reloads and reports explicit start", async () => {
-  const { paths, installation, manager } = fixture();
+  const { paths, installation, manager } = installedNodeFixture();
   mkdirSync(join(paths.home, ".config/systemd/user"), { recursive: true });
   writeFileSync(paths.unit, renderNodeUnit(paths, "0.1.0"));
   const report = await manageNode("install", installation, manager);
@@ -217,7 +217,7 @@ test("interrupted installation with an existing stopped unit only reloads and re
 });
 
 test("missing manager and foreign unit fail before replacing files or reporting stopped", async () => {
-  const { paths, installation, manager, unavailable } = fixture();
+  const { paths, installation, manager, unavailable } = installedNodeFixture();
   mkdirSync(join(paths.home, ".config/systemd/user"), { recursive: true });
   writeFileSync(paths.unit, "[Service]\nExecStart=/foreign\n");
   await expect(manageNode("install", installation, manager)).rejects.toThrow("Non-Mate");
@@ -227,7 +227,7 @@ test("missing manager and foreign unit fail before replacing files or reporting 
 });
 
 test("status reports actual facts without a pairing token, and refuses mismatched installed references", async () => {
-  const { paths, installation, manager } = fixture();
+  const { paths, installation, manager } = installedNodeFixture();
   await manageNode("install", installation, manager);
   const output = await manageNode("status", installation, manager);
   expect(output).toContain("Active: active");
@@ -239,7 +239,7 @@ test("status reports actual facts without a pairing token, and refuses mismatche
 });
 
 test("interrupted private unit staging is retried but unknown files are preserved", async () => {
-  const { paths, installation, manager } = fixture();
+  const { paths, installation, manager } = installedNodeFixture();
   mkdirSync(join(paths.home, ".config/systemd/user"), { recursive: true });
   const interrupted = join(
     join(paths.home, ".config/systemd/user"),

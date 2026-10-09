@@ -47,7 +47,13 @@ writeFileSync(
 set -eu
 [ "$1" = release ] && [ "$2" = download ] || exit 1
 [ -n "$GH_TOKEN" ] || exit 1
-while [ "$#" -gt 0 ]; do if [ "$1" = --dir ]; then destination=$2; break; fi; shift; done
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = --dir ]; then
+    destination=$2
+    break
+  fi
+  shift
+done
 cp "$MATE_TEST_ASSET" "$destination/$(basename "$archive")"
 cp "$MATE_TEST_CHECKSUMS" "$destination/SHA256SUMS"
 `,

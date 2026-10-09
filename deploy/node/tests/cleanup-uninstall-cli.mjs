@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
-const pid = Number(process.argv[2]),
-  parent = Number(process.argv[3]);
+const pid = Number(process.argv[2]);
+const parent = Number(process.argv[3]);
 if (!Number.isSafeInteger(pid) || pid <= 1) throw new Error("Refusing unsafe cleanup PID");
 try {
   const own = readFileSync(`/proc/${pid}/status`, "utf8");

@@ -91,7 +91,12 @@ it("refuses a different execution account at call time", async () => {
 it("keeps the file helper environment private and supplies the workspace home and CLI path", async () => {
   const root = workspace();
   const helper = join(root, "environment.cjs");
-  writeFileSync(helper, "process.stdin.resume();process.stdout.write(JSON.stringify(process.env))");
+  writeFileSync(
+    helper,
+    `process.stdin.resume();
+process.stdout.write(JSON.stringify(process.env))
+`,
+  );
   process.env.MATE_FILE_ENV_TEST = "not-for-helper";
   try {
     const backend = new SameAccountFileBackend(
@@ -120,7 +125,12 @@ it("keeps the file helper environment private and supplies the workspace home an
 it("cancels and times out a file helper without blocking other work", async () => {
   const root = workspace();
   const helper = join(root, "waiting.cjs");
-  writeFileSync(helper, "process.stdin.resume();setInterval(()=>{},1000)");
+  writeFileSync(
+    helper,
+    `process.stdin.resume();
+setInterval(() => {}, 1000)
+`,
+  );
   const backend = new SameAccountFileBackend(identity, helper);
   const controller = new AbortController();
   const request = { root, timeoutMs: 5000, operation: { kind: "read" as const, path: "." } };

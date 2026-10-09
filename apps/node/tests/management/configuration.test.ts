@@ -10,7 +10,7 @@ afterEach(() => {
     rmSync(directory, { recursive: true, force: true });
 });
 
-function config() {
+function configurationFixture() {
   const home = mkdtempSync(join(tmpdir(), "mate-node-config-"));
   directories.push(home);
   const directory = join(home, ".config/mate");
@@ -30,7 +30,7 @@ function config() {
 }
 
 test("the direct node entry reads the private service configuration without shell environment or cwd", () => {
-  const { file, home } = config();
+  const { file, home } = configurationFixture();
   expect(nodeOptionsFromEnvironment({ MATE_NODE_CONFIG_FILE: file })).toMatchObject({
     controlPlaneUrl: "http://127.0.0.1:8787",
     pairingToken: "synthetic-token".repeat(3),
@@ -40,7 +40,7 @@ test("the direct node entry reads the private service configuration without shel
 });
 
 test("unsafe or damaged configuration fails without printing its contents", () => {
-  const { file, directory } = config();
+  const { file, directory } = configurationFixture();
   chmodSync(file, 0o644);
   expect(() => nodeOptionsFromEnvironment({ MATE_NODE_CONFIG_FILE: file })).toThrow("private");
   chmodSync(file, 0o600);

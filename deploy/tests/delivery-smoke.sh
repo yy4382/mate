@@ -7,9 +7,22 @@ bootstrap=$(realpath "${3:?}")
 digest=${4:?}
 version=${5:?}
 daemon_recovery=${6:-}
-case "$daemon_recovery" in ''|--docker-daemon-recovery) ;; *) echo 'Unknown delivery option' >&2; exit 1 ;; esac
-[ "$(uname -s)" = Linux ] || { echo 'Delivery acceptance requires a Linux host' >&2; exit 1; }
-[ "$(id -u)" -gt 0 ] && [ "$(id -g)" -gt 0 ] || { echo 'Use an existing ordinary account' >&2; exit 1; }
+case "$daemon_recovery" in
+  ''|--docker-daemon-recovery)
+    ;;
+  *)
+    echo 'Unknown delivery option' >&2
+    exit 1
+    ;;
+esac
+[ "$(uname -s)" = Linux ] || {
+  echo 'Delivery acceptance requires a Linux host' >&2
+  exit 1
+}
+[ "$(id -u)" -gt 0 ] && [ "$(id -g)" -gt 0 ] || {
+  echo 'Use an existing ordinary account' >&2
+  exit 1
+}
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 directory=$(mktemp -d "${TMPDIR:-/tmp}/mate-delivery-XXXXXX")
 chmod 700 "$directory"

@@ -2,7 +2,10 @@
 # Actual bundle CLI and user manager; synthetic external WebSocket peer only.
 # Run in an explicitly authorized disposable Linux host/VM ordinary account.
 set -eu
-[ "$#" -eq 6 ] || { echo 'Usage: uninstall-smoke.sh ARCHIVE BOOTSTRAP SHA VERSION PEER_SCRIPT CUT_SCRIPT' >&2; exit 2; }
+[ "$#" -eq 6 ] || {
+  echo 'Usage: uninstall-smoke.sh ARCHIVE BOOTSTRAP SHA VERSION PEER_SCRIPT CUT_SCRIPT' >&2
+  exit 2
+}
 archive=$1
 bootstrap=$2
 checksum=$3
@@ -10,15 +13,27 @@ version=$4
 peer_script=$5
 cut_script=$6
 test_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-[ "$(id -u)" != 0 ] || { echo 'Use the existing ordinary test account' >&2; exit 1; }
-[ "$(systemd-detect-virt --container 2>/dev/null || true)" = none ] || { echo 'Containers do not establish service acceptance' >&2; exit 1; }
-command -v node >/dev/null 2>&1 && { echo 'Host Node must not supplement the package' >&2; exit 1; }
+[ "$(id -u)" != 0 ] || {
+  echo 'Use the existing ordinary test account' >&2
+  exit 1
+}
+[ "$(systemd-detect-virt --container 2>/dev/null || true)" = none ] || {
+  echo 'Containers do not establish service acceptance' >&2
+  exit 1
+}
+command -v node >/dev/null 2>&1 && {
+  echo 'Host Node must not supplement the package' >&2
+  exit 1
+}
 entry="$HOME/.local/bin/mate"
 unit="$HOME/.config/systemd/user/mate-node.service"
 config="$HOME/.config/mate/node.json"
 data="$HOME/.local/share/mate/node"
 for path in "$entry" "$unit" "$config" "$data" "$HOME/.local/lib/mate-node"; do
-  [ ! -e "$path" ] && [ ! -L "$path" ] || { echo "Refusing existing Mate files: $path" >&2; exit 1; }
+  [ ! -e "$path" ] && [ ! -L "$path" ] || {
+    echo "Refusing existing Mate files: $path" >&2
+    exit 1
+  }
 done
 work=$(mktemp -d)
 phase=bootstrap
@@ -29,14 +44,29 @@ cleanup() {
   result=$?
   if [ "$result" != 0 ]; then
     printf 'MATE_UNINSTALL_SMOKE_FAIL phase=%s exit=%s evidence=%s\n' "$phase" "$result" "$work" >&2
-    for file in "$work"/*.log; do [ ! -f "$file" ] || { printf 'Evidence: %s\n' "$file" >&2; cat "$file" >&2; }; done
+    for file in "$work"/*.log; do
+      [ ! -f "$file" ] || {
+        printf 'Evidence: %s\n' "$file" >&2
+        cat "$file" >&2
+      }
+    done
   fi
-  if [ -n "$observer_pid" ]; then kill "$observer_pid" 2>/dev/null || true; wait "$observer_pid" 2>/dev/null || true; fi
+  if [ -n "$observer_pid" ]; then
+    kill "$observer_pid" 2>/dev/null || true
+    wait "$observer_pid" 2>/dev/null || true
+  fi
   if [ -n "$cli_pid" ] && [ -n "${recovery_runtime:-}" ]; then
-    "$recovery_runtime" "$test_directory/cleanup-uninstall-cli.mjs" "$cli_pid" "$$" || { echo 'Owned CLI child cleanup failed; evidence retained' >&2; }
+    "$recovery_runtime" "$test_directory/cleanup-uninstall-cli.mjs" "$cli_pid" "$$" || {
+      echo 'Owned CLI child cleanup failed; evidence retained' >&2
+    }
   fi
-  if [ -n "$cli_pid" ]; then wait "$cli_pid" 2>/dev/null || true; fi
-  if [ -n "$peer_pid" ]; then kill "$peer_pid" 2>/dev/null || true; wait "$peer_pid" 2>/dev/null || true; fi
+  if [ -n "$cli_pid" ]; then
+    wait "$cli_pid" 2>/dev/null || true
+  fi
+  if [ -n "$peer_pid" ]; then
+    kill "$peer_pid" 2>/dev/null || true
+    wait "$peer_pid" 2>/dev/null || true
+  fi
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
@@ -49,15 +79,26 @@ printf 'Protocol peer is synthetic; this is not control-plane/provider integrati
 sh "$bootstrap" --version "$version" --package "$archive" --sha256 "$checksum"
 bundle="$HOME/.local/lib/mate-node/versions/$version"
 runtime="$bundle/node/bin/node"
-"$runtime" "$peer_script" "$bundle" "$work" >"$work/peer.log" 2>&1 & peer_pid=$!
+"$runtime" "$peer_script" "$bundle" "$work" >"$work/peer.log" 2>&1 &
+peer_pid=$!
 i=0
-until grep -q MATE_TEST_PEER_READY "$work/peer.log"; do i=$((i+1)); [ "$i" -lt 100 ] || exit 1; sleep .1; done
-mkdir -p "$HOME/.config/mate"; chmod 700 "$HOME/.config/mate"
-printf '{"MATE_CONTROL_PLANE_URL":"http://127.0.0.1:18789","MATE_NODE_PAIRING_TOKEN":"mate-service-synthetic-valid-token-0000000000"}\n' >"$config"; chmod 600 "$config"
+until grep -q MATE_TEST_PEER_READY "$work/peer.log"; do
+  i=$((i+1))
+  [ "$i" -lt 100 ] || exit 1
+  sleep .1
+done
+mkdir -p "$HOME/.config/mate"
+chmod 700 "$HOME/.config/mate"
+printf '{"MATE_CONTROL_PLANE_URL":"http://127.0.0.1:18789","MATE_NODE_PAIRING_TOKEN":"mate-service-synthetic-valid-token-0000000000"}\n' >"$config"
+chmod 600 "$config"
 phase=pair-and-retain
 "$entry" node install >"$work/install.log" 2>&1
 i=0
-until journalctl --user --unit mate-node.service --no-pager | grep -q MATE_NODE_PAIRED; do i=$((i+1)); [ "$i" -lt 60 ] || exit 1; sleep 1; done
+until journalctl --user --unit mate-node.service --no-pager | grep -q MATE_NODE_PAIRED; do
+  i=$((i+1))
+  [ "$i" -lt 60 ] || exit 1
+  sleep 1
+done
 mkdir -p "$data/agents" "$data/workspace-receipts"
 printf 'synthetic retained memory\n' >"$data/agents/MEMORY.md"
 printf 'synthetic retained receipt\n' >"$data/workspace-receipts/uninstall-fixture.json"
@@ -66,34 +107,59 @@ config_sha=$(sha256sum "$config" | cut -d' ' -f1)
 memory_sha=$(sha256sum "$data/agents/MEMORY.md" | cut -d' ' -f1)
 receipt_sha=$(sha256sum "$data/workspace-receipts/uninstall-fixture.json" | cut -d' ' -f1)
 printf '%s  %s\n' "$checksum" "$archive" | sha256sum -c -
-mkdir "$work/recovery"; tar -xzf "$archive" -C "$work/recovery"
+mkdir "$work/recovery"
+tar -xzf "$archive" -C "$work/recovery"
 recovery="$work/recovery/mate-node"
-recovery_runtime="$recovery/node/bin/node" recovery_cli="$recovery/app/apps/node/dist/management/cli.js"
+recovery_runtime="$recovery/node/bin/node"
+recovery_cli="$recovery/app/apps/node/dist/management/cli.js"
 [ "$("$recovery_runtime" "$recovery_cli" --version)" = "$version" ]
 phase=foreign-unit
 cp "$unit" "$work/unit.saved"
 printf '[Service]\nExecStart=/non-mate-test-fixture\n' >"$unit"
-if "$entry" node uninstall >"$work/foreign-unit.log" 2>&1; then exit 1; fi
-grep -q Non-Mate "$work/foreign-unit.log"; grep -q /non-mate-test-fixture "$unit"
+if "$entry" node uninstall >"$work/foreign-unit.log" 2>&1; then
+  exit 1
+fi
+grep -q Non-Mate "$work/foreign-unit.log"
+grep -q /non-mate-test-fixture "$unit"
 mv "$work/unit.saved" "$unit"
 phase=foreign-entry
-mv "$entry" "$work/entry.saved"; printf 'non-Mate command\n' >"$entry"
-if "$recovery_runtime" "$recovery_cli" node uninstall >"$work/foreign-entry.log" 2>&1; then exit 1; fi
-grep -q Non-Mate "$work/foreign-entry.log"; grep -q 'non-Mate command' "$entry"
-rm "$entry"; mv "$work/entry.saved" "$entry"
+mv "$entry" "$work/entry.saved"
+printf 'non-Mate command\n' >"$entry"
+if "$recovery_runtime" "$recovery_cli" node uninstall >"$work/foreign-entry.log" 2>&1; then
+  exit 1
+fi
+grep -q Non-Mate "$work/foreign-entry.log"
+grep -q 'non-Mate command' "$entry"
+rm "$entry"
+mv "$work/entry.saved" "$entry"
 phase=actual-sigkill
-"$entry" node uninstall >"$work/interrupted.log" 2>&1 & cli_pid=$!
+"$entry" node uninstall >"$work/interrupted.log" 2>&1 &
+cli_pid=$!
 killed=no
 while kill -0 "$cli_pid" 2>/dev/null; do
-  if [ ! -e "$unit" ]; then kill -KILL "$cli_pid"; killed=yes; break; fi
+  if [ ! -e "$unit" ]; then
+    kill -KILL "$cli_pid"
+    killed=yes
+    break
+  fi
 done
-[ "$killed" = yes ] || { echo 'No live uninstall interruption point observed' >&2; exit 1; }
-if wait "$cli_pid"; then exit 1; fi
+[ "$killed" = yes ] || {
+  echo 'No live uninstall interruption point observed' >&2
+  exit 1
+}
+if wait "$cli_pid"; then
+  exit 1
+fi
 cli_pid=
-[ -f "$bundle/bundle.json" ] || { echo 'Uninstall already completed before SIGKILL; no recovery evidence established' >&2; exit 1; }
+[ -f "$bundle/bundle.json" ] || {
+  echo 'Uninstall already completed before SIGKILL; no recovery evidence established' >&2
+  exit 1
+}
 printf 'Observed live uninstall SIGKILL with remaining owned bundle inventory: %s\n' "$bundle/bundle.json"
 # Prepare the explicitly requested unavailable-public-entry recovery case; never reinstall/start.
-if [ -L "$entry" ]; then rm "$entry"; fi
+if [ -L "$entry" ]; then
+  rm "$entry"
+fi
 phase=local-bundle-recovery
 "$recovery_runtime" "$recovery_cli" node uninstall >"$work/recovery.log" 2>&1
 "$recovery_runtime" "$recovery_cli" node uninstall >"$work/repeat.log" 2>&1
@@ -117,26 +183,48 @@ phase=normal-self-uninstall
 [ ! -e "$entry" ] && [ ! -L "$entry" ] && [ ! -e "$unit" ] && [ ! -d "$bundle" ]
 check_retained
 cut_timeout=${MATE_TEST_CUT_TIMEOUT_SECONDS:-180}
-case "$cut_timeout" in ''|*[!0-9]*) echo 'Invalid cut timeout' >&2; exit 1;; esac
+case "$cut_timeout" in
+  ''|*[!0-9]*)
+    echo 'Invalid cut timeout' >&2
+    exit 1
+    ;;
+esac
 [ "$cut_timeout" -ge 1 ] && [ "$cut_timeout" -le 1800 ] || exit 1
 cut_update_and_uninstall() {
-  cut_phase=$1 update_version=$2 update_archive=$3 update_sha=$4
+  cut_phase=$1
+  update_version=$2
+  update_archive=$3
+  update_sha=$4
   rm -f "$work/cut.json" "$work/cut.ready" "$work/cut.pid"
-  MATE_TEST_CUT_TIMEOUT_SECONDS="$cut_timeout" "$recovery_runtime" "$cut_script" "$entry" "$unit" "$update_version" "$work/cut.pid" "$work/cut.ready" "$work/cut.json" "$cut_phase" >"$work/cut-$cut_phase.log" 2>&1 & observer_pid=$!
+  MATE_TEST_CUT_TIMEOUT_SECONDS="$cut_timeout" "$recovery_runtime" "$cut_script" "$entry" "$unit" "$update_version" "$work/cut.pid" "$work/cut.ready" "$work/cut.json" "$cut_phase" >"$work/cut-$cut_phase.log" 2>&1 &
+  observer_pid=$!
   i=0
-  until [ -f "$work/cut.ready" ]; do i=$((i+1)); [ "$i" -lt 100 ] || exit 1; sleep .1; done
-  "$recovery_runtime" "$recovery_cli" node update --version "$update_version" --package "$update_archive" --sha256 "$update_sha" >"$work/update-$cut_phase.log" 2>&1 & cli_pid=$!
+  until [ -f "$work/cut.ready" ]; do
+    i=$((i+1))
+    [ "$i" -lt 100 ] || exit 1
+    sleep .1
+  done
+  "$recovery_runtime" "$recovery_cli" node update --version "$update_version" --package "$update_archive" --sha256 "$update_sha" >"$work/update-$cut_phase.log" 2>&1 &
+  cli_pid=$!
   printf '%s\n' "$cli_pid" >"$work/cut.pid"
   i=0
   until [ -f "$work/cut.json" ]; do
-    kill -0 "$observer_pid" 2>/dev/null || { wait "$observer_pid"; exit 1; }
-    i=$((i+1)); [ "$i" -lt "$((cut_timeout*10+100))" ] || exit 1; sleep .1
+    kill -0 "$observer_pid" 2>/dev/null || {
+      wait "$observer_pid"
+      exit 1
+    }
+    i=$((i+1))
+    [ "$i" -lt "$((cut_timeout*10+100))" ] || exit 1
+    sleep .1
   done
-  wait "$observer_pid"; observer_pid=
+  wait "$observer_pid"
+  observer_pid=
   # Confirm the observed owned residual still exists after SIGSTOP; do not count a past cut.
   "$recovery_runtime" "$test_directory/stop-update-cut-for-uninstall.mjs" "$work/cut.json" "$cli_pid" "$unit" "$work/stage-path"
   mv "$work/cut.json" "$work/cut-$cut_phase.json"
-  if wait "$cli_pid"; then exit 1; fi
+  if wait "$cli_pid"; then
+    exit 1
+  fi
   cli_pid=
   uninstall_runtime=$recovery_runtime
   uninstall_cli=$recovery_cli
@@ -148,7 +236,9 @@ cut_update_and_uninstall() {
   if [ "$cut_phase" = repair-cleanup ] || [ "$cut_phase" = install ]; then
     staged=$(cat "$work/stage-path")
     printf 'unknown test file\n' >"$staged/non-mate-fixture"
-    if "$uninstall_runtime" "$uninstall_cli" node uninstall >"$work/$cut_phase-foreign.log" 2>&1; then exit 1; fi
+    if "$uninstall_runtime" "$uninstall_cli" node uninstall >"$work/$cut_phase-foreign.log" 2>&1; then
+      exit 1
+    fi
     grep -q 'Unknown' "$work/$cut_phase-foreign.log"
     grep -q 'unknown test file' "$staged/non-mate-fixture"
     rm "$staged/non-mate-fixture"
@@ -157,8 +247,11 @@ cut_update_and_uninstall() {
     # Synthetic marker conflict on a complete actual bundle after the observed copy cut.
     # A complete inventory must not authorize removing this same-name empty directory.
     cp -R "$work/new-package/mate-node/." "$staged/"
-    rm "$staged/.mate-install-stage"; mkdir "$staged/.mate-install-stage"
-    if "$uninstall_runtime" "$uninstall_cli" node uninstall >"$work/install-marker-conflict.log" 2>&1; then exit 1; fi
+    rm "$staged/.mate-install-stage"
+    mkdir "$staged/.mate-install-stage"
+    if "$uninstall_runtime" "$uninstall_cli" node uninstall >"$work/install-marker-conflict.log" 2>&1; then
+      exit 1
+    fi
     grep -q 'Unknown interrupted installation marker preserved' "$work/install-marker-conflict.log"
     [ -d "$staged/.mate-install-stage" ] && [ -f "$staged/bundle.json" ]
     check_retained
@@ -167,7 +260,9 @@ cut_update_and_uninstall() {
   fi
   "$uninstall_runtime" "$uninstall_cli" node uninstall >"$work/uninstall-$cut_phase.log" 2>&1
   [ ! -e "$unit" ] && [ ! -e "$bundle" ] && [ ! -L "$entry" ]
-  for path in "$HOME/.local/lib/mate-node/versions"/.install-* "$HOME/.local/lib/mate-node/versions"/.repair-* "$HOME/.config/systemd/user"/.mate-node-previous-unit-* "$HOME/.config/systemd/user"/.mate-node-unit-*; do [ ! -e "$path" ]; done
+  for path in "$HOME/.local/lib/mate-node/versions"/.install-* "$HOME/.local/lib/mate-node/versions"/.repair-* "$HOME/.config/systemd/user"/.mate-node-previous-unit-* "$HOME/.config/systemd/user"/.mate-node-unit-*; do
+    [ ! -e "$path" ]
+  done
   check_retained
 }
 phase=uninstall-from-update-unit-cut
@@ -179,12 +274,13 @@ phase=uninstall-from-update-install-cut
 sh "$bootstrap" --version "$version" --package "$archive" --sha256 "$checksum"
 "$entry" node install >"$work/copy-cut-install.log" 2>&1
 "$entry" node stop >"$work/copy-cut-stop.log" 2>&1
-mkdir "$work/new-package"; tar -xzf "$archive" -C "$work/new-package"
+mkdir "$work/new-package"
+tar -xzf "$archive" -C "$work/new-package"
 next_version="$version-uninstall-cut"
 "$recovery_runtime" --input-type=module -e '
   import { readFileSync, writeFileSync } from "node:fs";
-  const file = process.argv[1],
-    metadata = JSON.parse(readFileSync(file, "utf8"));
+  const file = process.argv[1];
+  const metadata = JSON.parse(readFileSync(file, "utf8"));
   metadata.version = process.argv[2];
   writeFileSync(file, JSON.stringify(metadata) + "\n");
 ' "$work/new-package/mate-node/bundle.json" "$next_version"

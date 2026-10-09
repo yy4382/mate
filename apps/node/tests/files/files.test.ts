@@ -11,7 +11,6 @@ import {
 } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { resolve } from "node:path";
 import type { WorkspaceOperation } from "@mate/protocol";
 const roots: string[] = [];
 const temp = () => {
@@ -108,7 +107,9 @@ it("backend decodes split Unicode output as a stream", async () => {
   const helper = `${root}/synthetic.cjs`;
   writeFileSync(
     helper,
-    "process.stdout.write(Buffer.from([0xe4]));setTimeout(()=>process.stdout.end(Buffer.from([0xbd,0xa0])),100);",
+    `process.stdout.write(Buffer.from([0xe4]));
+setTimeout(() => process.stdout.end(Buffer.from([0xbd, 0xa0])), 100);
+`,
   );
   const { SameAccountFileBackend } = await import("../../src/files/same-account-files.js");
   const backend = new SameAccountFileBackend(
