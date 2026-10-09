@@ -2,7 +2,7 @@
 
 2026-10-02。本文定义首个可用版本的目标行为；当前代码是否已实现，以源码、测试和配置为准。[网页控制面与 Linux 节点 spec #70](https://github.com/yy4382/mate/issues/70)需按本次已确认的单账号与交互决定修订。设计决策见 [ADR-0002](adr/0002-first-release-compatibility-reset.md)、[ADR-0003](adr/0003-web-control-plane-and-linux-nodes.md)、[ADR-0004](adr/0004-single-account-command-execution.md)、[ADR-0007](adr/0007-continue-with-uncertain-operation-results.md) 和 [ADR-0009](adr/0009-lightweight-linux-packaging.md)。开发流程与停止条件见 [AGENTS.md](../AGENTS.md)。
 
-首版必须能部署在低资源 Linux VPS，以 Mate 自己的中文网页操作。控制面镜像/Compose 与宿主 node 用户服务保留各自职责，在同机使用一个现有普通 Linux 账号的 UID/GID；node 发布包内带同版本管理 CLI、专用 Node、程序和依赖，VPS 不现场编译。薄 shell bootstrap 只获取并安装 CLI 入口，统一 `mate node` CLI 管理用户服务及手动整包更新；停机后更新，完成后保持停止。Mate 不创建用户、不切换身份、不为 Agent 命令建 systemd 单元，bootstrap 与 CLI 不修改系统软件、sudo/Docker 权限或 linger。验收 Ubuntu 24.04 与 Debian 13 的 x86_64/arm64。远程 Linux 节点应能手动配对使用，但跨机部署不作为首版验收范围。
+首版必须能部署在低资源 Linux VPS，以 Mate 自己的中文网页操作。控制面镜像/Compose 与宿主 node 用户服务保留各自职责，在同机使用一个现有普通 Linux 账号的 UID/GID；node 发布包内带同版本管理 CLI、专用 Node、程序和依赖，VPS 不现场编译。薄 shell bootstrap 只获取并安装 CLI 入口，统一 `mate node` CLI 管理用户服务及手动整包更新；停机后更新，完成后保持停止。Mate 不创建用户、不切换身份、不为 Agent 命令建 systemd 单元，bootstrap 与 CLI 不修改系统软件、sudo/Docker 权限或 linger。目标系统为 Ubuntu 24.04 与 Debian 13 的 x86_64/arm64。远程 Linux 节点应能手动配对使用，但跨机部署不作为首版验收范围。
 
 Agent 模型调用与循环由控制面在进程内异步推进，节点只承担工作区和本机执行；[经独立设计审查的规格 #125](https://github.com/yy4382/mate/issues/125)取代 #70 中模型循环所在侧的决定。
 
