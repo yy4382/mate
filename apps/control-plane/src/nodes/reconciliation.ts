@@ -107,16 +107,7 @@ export class NodeReconciliation {
       pending.requestId !== request.requestId
     )
       return reject(socket, request.requestId, "invalid_identity", "节点操作对账请求不匹配。");
-    const conflicts = new Set<string>();
-    const seen = new Set<string>();
-    for (const receipt of request.receipts) {
-      if (
-        pending.operations.get(receipt.operationId) !== receipt.agentId ||
-        seen.has(receipt.operationId)
-      )
-        conflicts.add(receipt.operationId);
-      seen.add(receipt.operationId);
-    }
+    const { seen, conflicts } = collectReceiptIdentities(request.receipts, pending.operations);
     for (const receipt of request.receipts) {
       if (conflicts.has(receipt.operationId)) continue;
       const { revision, ...value } = receipt;
@@ -237,16 +228,7 @@ export class NodeReconciliation {
       pending.requestId !== request.requestId
     )
       return reject(socket, request.requestId, "invalid_identity", "节点文件对账请求不匹配。");
-    const conflicts = new Set<string>();
-    const seen = new Set<string>();
-    for (const receipt of request.receipts) {
-      if (
-        pending.operations.get(receipt.operationId) !== receipt.agentId ||
-        seen.has(receipt.operationId)
-      )
-        conflicts.add(receipt.operationId);
-      seen.add(receipt.operationId);
-    }
+    const { seen, conflicts } = collectReceiptIdentities(request.receipts, pending.operations);
     for (const receipt of request.receipts) {
       if (conflicts.has(receipt.operationId)) continue;
       this.operations.deliverWorkspaceOperationResult(session.nodeId, {
@@ -274,4 +256,18 @@ export class NodeReconciliation {
     delete session.workspaceReconcile;
     this.startWorkspaceReconciliation(socket, session, pending.cursor, pending.blocking);
   }
+}
+
+function collectReceiptIdentities(
+  receipts: { operationId: string; agentId: string }[],
+  operations: Map<string, string>,
+) {
+  const conflicts = new Set<string>();
+  const seen = new Set<string>();
+  for (const receipt of receipts) {
+    if (operations.get(receipt.operationId) !== receipt.agentId || seen.has(receipt.operationId))
+      conflicts.add(receipt.operationId);
+    seen.add(receipt.operationId);
+  }
+  return { seen, conflicts };
 }

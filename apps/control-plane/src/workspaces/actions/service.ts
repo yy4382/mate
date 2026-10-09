@@ -7,11 +7,11 @@ import type { MessageWriter } from "../../conversations/messages/writer.js";
 import type { NodeOperations } from "../../nodes/operations.js";
 import { AgentSession } from "../../runtime/session/service.js";
 import { defineAgentTool, type AgentToolContext } from "../../runtime/tools/entry.js";
+import { operationIdForAction } from "../../runtime/tools/identity.js";
 import type { WorkspaceAccess } from "../access/service.js";
 import { WorkspaceError } from "../errors.js";
 import {
   confirmedFileFailure,
-  deterministicOperationId,
   hashToolRequest,
   isMutatingOperation,
   operationPaths,
@@ -151,7 +151,7 @@ export class WorkspaceActions {
       )
         throw new WorkspaceError("operation_conflict", "文件操作 ID 与已保存调用不匹配。", 403);
     }
-    const operationId = deterministicOperationId(input.actionId);
+    const operationId = operationIdForAction(input.actionId);
     const requestHash = hashToolRequest(input.operationName, input.toolInput);
     const nodeRequestHash = workspaceReceiptRequestHash(input.agentId, input.operation);
     const intent = {

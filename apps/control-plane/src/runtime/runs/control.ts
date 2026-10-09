@@ -35,12 +35,7 @@ export class RunControl {
             receiptFields(lastStop.receipt)?.reason !== "pending_process_receipts") ||
           lastStop.state === "failed"
         ) {
-          stopId = randomUUID();
-          this.db
-            .prepare(
-              "INSERT INTO owner_agent_stop_intents(operation_id,agent_id,node_id,state,created_at,updated_at) VALUES(?,?,?,'executing',?,?)",
-            )
-            .run(stopId, agentId, agent.node_id, this.now(), this.now());
+          stopId = this.createStopIntent(agentId, agent.node_id);
         }
         this.db
           .prepare(
@@ -68,6 +63,16 @@ export class RunControl {
       )
       .get(agentId);
     return { runId: pending?.id, stopId, nodeId: agent.node_id };
+  }
+
+  private createStopIntent(agentId: string, nodeId: string) {
+    const operationId = randomUUID();
+    this.db
+      .prepare(
+        "INSERT INTO owner_agent_stop_intents(operation_id,agent_id,node_id,state,created_at,updated_at) VALUES(?,?,?,'executing',?,?)",
+      )
+      .run(operationId, agentId, nodeId, this.now(), this.now());
+    return operationId;
   }
 
   stopStatus(agentId: string): {
@@ -191,22 +196,12 @@ export class RunControl {
       const reason = receiptFields(parseReceipt(row.receipt_json))?.reason;
       if (reason === "pending_process_receipts") {
         if (this.unsettledProcessReceipt(row.agent_id)) continue;
-        const nextId = randomUUID();
-        this.db
-          .prepare(
-            "INSERT INTO owner_agent_stop_intents(operation_id,agent_id,node_id,state,created_at,updated_at) VALUES(?,?,?,'executing',?,?)",
-          )
-          .run(nextId, row.agent_id, row.node_id, this.now(), this.now());
+        const nextId = this.createStopIntent(row.agent_id, row.node_id);
         void this.dispatchStop({ operationId: nextId, agentId: row.agent_id, nodeId: row.node_id });
       } else if (mode === "node_ready" && row.state === "unknown") {
         // A node may have durably returned unknown for the old ID. A fresh idempotent stop
         // request rechecks all scopes after the node has finished receipt reconciliation.
-        const nextId = randomUUID();
-        this.db
-          .prepare(
-            "INSERT INTO owner_agent_stop_intents(operation_id,agent_id,node_id,state,created_at,updated_at) VALUES(?,?,?,'executing',?,?)",
-          )
-          .run(nextId, row.agent_id, row.node_id, this.now(), this.now());
+        const nextId = this.createStopIntent(row.agent_id, row.node_id);
         void this.dispatchStop({ operationId: nextId, agentId: row.agent_id, nodeId: row.node_id });
       } else if (mode === "node_ready")
         void this.dispatchStop({

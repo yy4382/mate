@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { closeSync, fsyncSync, openSync, renameSync } from "node:fs";
 import { z } from "zod";
 import type { AgentToolContext } from "../runtime/tools/entry.js";
+import { operationIdForAction } from "../runtime/tools/identity.js";
 import { WorkspaceError } from "../workspaces/errors.js";
 import { isWorkspaceVersion, sameVersion } from "../workspaces/results.js";
 import type { WorkspaceReads } from "../workspaces/reads/service.js";
@@ -12,7 +13,6 @@ import { AttachmentError } from "./errors.js";
 import {
   canonicalJson,
   decodeChunk,
-  operationIdForAction,
   parseActionResult,
   parsePublishedAttachment,
 } from "./results.js";
