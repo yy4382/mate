@@ -78,15 +78,9 @@ function createRequest(
   const lateReleases: z.output<typeof lateReleaseSchema>[] = [];
   let stepFinished = false;
   let responseOutput: readonly unknown[] | undefined;
-  let resolveFinished!: () => void;
-  const finished = new Promise<void>((resolve) => {
-    resolveFinished = resolve;
-  });
+  const { promise: finished, resolve: resolveFinished } = Promise.withResolvers<void>();
   const controller = new AbortController();
-  let resolveOutcome!: (result: ScriptedOutcome) => void;
-  const outcome = new Promise<ScriptedOutcome>((resolve) => {
-    resolveOutcome = resolve;
-  });
+  const { promise: outcome, resolve: resolveOutcome } = Promise.withResolvers<ScriptedOutcome>();
   const timer = setTimeout(() => {
     fail(
       new ScriptedProviderError(
@@ -108,8 +102,13 @@ function createRequest(
   }
   function send(content: string | ScriptedToolCall[], prefix?: string, inputTokens?: number) {
     if (state !== "pending") return "late";
-    respond(response, content, prefix, inputTokens, randomUUID(), (_accepted, output) => {
-      responseOutput = output;
+    respond(response, content, {
+      prefix,
+      inputTokens,
+      identity: randomUUID(),
+      observeWrite: (_accepted, output) => {
+        responseOutput = output;
+      },
     });
     finish({ kind: "responded" });
     return "responded";
@@ -180,9 +179,10 @@ function createRequest(
       };
       response.on("error", recordError);
       try {
-        respond(response, content, undefined, undefined, responseId, (accepted) =>
-          writesAccepted.push(accepted),
-        );
+        respond(response, content, {
+          identity: responseId,
+          observeWrite: (accepted) => writesAccepted.push(accepted),
+        });
         // Observe deferred stream errors without leaving an unbounded response/drain wait.
         await nextTurn(undefined, { signal: AbortSignal.timeout(timeoutMs) });
       } catch (error) {

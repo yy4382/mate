@@ -95,7 +95,7 @@ it("cp-task-result-before: restores the committed task result and allows an expl
     async run({ environment, driver, signal, step }) {
       const agent = environment.agents[0];
       if (!agent) throw new Error("Expected prepared Agent");
-      const createResult = z.looseObject({
+      const createTaskResultSchema = z.looseObject({
         task: ownerTaskSchema,
         taskSnapshot: taskToolSchemas["tasks.create"].shape.taskSnapshot.unwrap(),
       });
@@ -112,7 +112,7 @@ it("cp-task-result-before: restores the committed task result and allows an expl
           request.call("tasks.create", { messageId: message.id, title: "相同标题" });
         },
         function recoverOriginalResult(request) {
-          const recovered = request.result("tasks.create", createResult);
+          const recovered = request.result("tasks.create", createTaskResultSchema);
           const receipt = readRecoveryFacts(environment.directory, agent.summary.id)
             .taskReceipts[0];
           expect(recovered).toEqual(receipt?.result);
@@ -125,7 +125,7 @@ it("cp-task-result-before: restores the committed task result and allows an expl
           expect(
             request.result("tasks.claim", scriptedToolResultSchemas["tasks.claim"]).status,
           ).toBe("in_progress");
-          const recovered = request.result("tasks.create", createResult);
+          const recovered = request.result("tasks.create", createTaskResultSchema);
           request.call("tasks.create", {
             messageId: recovered.task.messageId,
             title: "明确的新事项",
@@ -133,7 +133,9 @@ it("cp-task-result-before: restores the committed task result and allows an expl
           });
         },
         function finish(request) {
-          expect(request.result("tasks.create", createResult).task.title).toBe("明确的新事项");
+          expect(request.result("tasks.create", createTaskResultSchema).task.title).toBe(
+            "明确的新事项",
+          );
           request.text("本轮结束，任务尚未完成。");
         },
       ]);

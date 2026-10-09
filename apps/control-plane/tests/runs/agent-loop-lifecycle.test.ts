@@ -126,7 +126,10 @@ it.each(
           responses[0]!.write('data: {"type":"response.created","response":{"id":"partial"}}\n\n');
         }
         if (phase === "summary") {
-          respond(responses[0]!, [{ name: "tools.list", input: {} }], "x".repeat(28000), 15000);
+          respond(responses[0]!, [{ name: "tools.list", input: {} }], {
+            prefix: "x".repeat(28000),
+            inputTokens: 15000,
+          });
           try {
             await eventually(() => responses[1], "pending summary request", 2500);
           } catch (error) {

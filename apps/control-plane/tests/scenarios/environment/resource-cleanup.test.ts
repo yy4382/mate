@@ -5,21 +5,14 @@ import { expect, it } from "vitest";
 import { eventually } from "../../support/environment/run-services.js";
 import { createServer } from "node:http";
 import { createScenarioEnvironment } from "../../support/environment/scenario-environment.js";
-import { release } from "node:os";
 
 it("waits for a timed-out release still finishing cancellation instead of invoking it concurrently", async () => {
   const environment = await createScenarioEnvironment({
     provider: () => {},
     cleanupTimeoutMs: 1000,
   });
-  let finishRelease = () => {};
-  const releaseFinishing = new Promise<void>((resolve) => {
-    finishRelease = resolve;
-  });
-  let finishObserved = () => {};
-  const releaseFinished = new Promise<void>((resolve) => {
-    finishObserved = resolve;
-  });
+  const { promise: releaseFinishing, resolve: finishRelease } = Promise.withResolvers<void>();
+  const { promise: releaseFinished, resolve: finishObserved } = Promise.withResolvers<void>();
   let attempts = 0;
   let active = 0;
   let abortObserved = false;

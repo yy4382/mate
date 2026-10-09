@@ -3,10 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { runScenario, ScenarioFailure } from "../../support/scenario/scenario-evidence.js";
-import {
-  createScriptedProvider,
-  type ScriptedRequest,
-} from "../../support/agent/scripted-provider.js";
+import { createScriptedProvider } from "../../support/agent/scripted-provider.js";
 
 import { ownerPassword } from "../../support/environment/run-services.js";
 import { scriptedToolResultSchemas } from "../../support/agent/scripted-tool-results.js";
@@ -39,10 +36,10 @@ it("redacts credentials in synthetic effects and projections and refuses files o
             "-----BEGIN PRIVATE KEY-----\nsynthetic-private-secret\n-----END PRIVATE KEY-----",
         });
         provider.forAgent(agent, [
-          function writeSyntheticFixture(request: ScriptedRequest) {
+          function writeSyntheticFixture(request) {
             request.call("process.exec", { command: `printf '%s' '${synthetic}' > effect.json` });
           },
-          function finishFixture(request: ScriptedRequest) {
+          function finishFixture(request) {
             request.text("合成数据已写入。");
           },
         ]);
@@ -153,13 +150,13 @@ it("exports node-local command and file receipts from real tool execution withou
         if (!agent) throw new Error("Expected prepared Agent");
         agentId = agent.summary.id;
         provider.forAgent(agent, [
-          function writeInput(request: ScriptedRequest) {
+          function writeInput(request) {
             request.call("workspace.write", { path: "input.txt", content: "2\n4\n6\n" });
           },
-          function consumeRealInput(request: ScriptedRequest) {
+          function consumeRealInput(request) {
             request.call("process.exec", { command: "cat input.txt" });
           },
-          function acknowledgeRealOutput(request: ScriptedRequest) {
+          function acknowledgeRealOutput(request) {
             expect(
               request.result("process.exec", scriptedToolResultSchemas["process.exec"]).receipt
                 ?.stdout,

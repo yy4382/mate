@@ -1,7 +1,5 @@
 import { type ChildProcess } from "node:child_process";
 
-import { resolve } from "node:path";
-
 export class ProcessOutput {
   text = "";
   exitStatus: { code: number | null; signal: NodeJS.Signals | null } | undefined;

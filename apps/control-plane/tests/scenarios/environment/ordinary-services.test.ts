@@ -1,4 +1,16 @@
 import { release } from "node:os";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { join } from "node:path";
+import { scriptedToolResultSchemas } from "../../support/agent/scripted-tool-results.js";
+import { expect, it } from "vitest";
+import { z } from "zod";
+import { agentSummarySchema, nodeSummarySchema } from "@mate/protocol/owner";
+import { respond } from "../../support/agent/agent-loop.js";
+import { createScriptedProvider } from "../../support/agent/scripted-provider.js";
+import { eventually } from "../../support/environment/run-services.js";
+
+import { createScenarioEnvironment } from "../../support/environment/scenario-environment.js";
+
 console.info(
   "SCENARIO_ENVIRONMENT_PLATFORM",
   JSON.stringify({
@@ -11,21 +23,6 @@ console.info(
   }),
 );
 
-import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { join } from "node:path";
-import { scriptedToolResultSchemas } from "../../support/agent/scripted-tool-results.js";
-import { expect, it } from "vitest";
-import { z } from "zod";
-import { agentSummarySchema, nodeSummarySchema } from "@mate/protocol/owner";
-import { respond } from "../../support/agent/agent-loop.js";
-import {
-  createScriptedProvider,
-  type ScriptedRequest,
-} from "../../support/agent/scripted-provider.js";
-import { eventually } from "../../support/environment/run-services.js";
-
-import { createScenarioEnvironment } from "../../support/environment/scenario-environment.js";
-
 it("prepares a real logged-in paired Agent whose Pi run can execute an ordinary node command", async () => {
   const provider = createScriptedProvider();
   const environment = await createScenarioEnvironment({
@@ -37,12 +34,12 @@ it("prepares a real logged-in paired Agent whose Pi run can execute an ordinary 
     const agent = environment.agents[0];
     if (!agent) throw new Error("Expected prepared Agent");
     provider.forAgent(agent, [
-      function executeCommand(request: ScriptedRequest) {
+      function executeCommand(request) {
         request.call("process.exec", {
           command: "printf 'command-ran' > result.txt; cat result.txt",
         });
       },
-      function inspectRealResult(request: ScriptedRequest) {
+      function inspectRealResult(request) {
         expect(
           request.result("process.exec", scriptedToolResultSchemas["process.exec"]).receipt?.stdout,
         ).toBe("command-ran");

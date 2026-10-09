@@ -7,9 +7,8 @@ import {
   type Socket as TcpSocket,
 } from "node:net";
 
-import { resolve } from "node:path";
-
 import { type RawData } from "ws";
+import { delay } from "./process-output.js";
 
 export const ownerPassword = "node-process-owner-password-used-only-by-this-test";
 export const observedCloses = new WeakMap<WebSocket, CloseEvent>();
@@ -389,7 +388,7 @@ export function countClientFrames(
   while (state.data.length >= 2) {
     const first = state.data[0]!;
     const second = state.data[1]!;
-    let payloadLength = second! & 0x7f;
+    let payloadLength = second & 0x7f;
     let headerLength = 2;
     if (payloadLength === 126) {
       if (state.data.length < 4) return;
@@ -402,10 +401,10 @@ export function countClientFrames(
       payloadLength = Number(length);
       headerLength = 10;
     }
-    const masked = (second! & 0x80) !== 0;
+    const masked = (second & 0x80) !== 0;
     const frameLength = headerLength + (masked ? 4 : 0) + payloadLength;
     if (state.data.length < frameLength) return;
-    onOpcode(first! & 0x0f);
+    onOpcode(first & 0x0f);
     state.data = state.data.subarray(frameLength);
   }
 }
@@ -414,5 +413,3 @@ export interface NodeView {
   online: boolean;
   lastConnectedAt: string | null;
 }
-
-import { delay } from "./process-output.js";
