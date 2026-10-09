@@ -19,14 +19,9 @@ export const newChannelSchema = z
     visibility: z.enum(["public", "private"]),
   })
   .strict();
-export const updateChannelSchema = z
-  .object({
-    name: z.string().trim().min(1).max(80).optional(),
-    description: z.string().trim().max(500).optional(),
-    visibility: z.enum(["public", "private"]).optional(),
-    archived: z.boolean().optional(),
-  })
-  .strict()
+export const updateChannelSchema = newChannelSchema
+  .partial()
+  .extend({ archived: z.boolean().optional() })
   .refine((value) => Object.keys(value).length > 0);
 export const newMessageSchema = z
   .object({

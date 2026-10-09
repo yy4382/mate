@@ -8,6 +8,14 @@ const messageOrderCursorSchema = z
   .max(16)
   .optional();
 
+const taskVersionInputSchema = z
+  .object({
+    taskId: z.string().uuid(),
+    expectedVersion: z.number().int().positive(),
+    draftId: z.string().uuid().optional(),
+  })
+  .strict();
+
 export const taskToolSchemas = {
   "tasks.create": z
     .object({
@@ -20,20 +28,8 @@ export const taskToolSchemas = {
       draftId: z.string().uuid().optional(),
     })
     .strict(),
-  "tasks.claim": z
-    .object({
-      taskId: z.string().uuid(),
-      expectedVersion: z.number().int().positive(),
-      draftId: z.string().uuid().optional(),
-    })
-    .strict(),
-  "tasks.yield": z
-    .object({
-      taskId: z.string().uuid(),
-      expectedVersion: z.number().int().positive(),
-      draftId: z.string().uuid().optional(),
-    })
-    .strict(),
+  "tasks.claim": taskVersionInputSchema,
+  "tasks.yield": taskVersionInputSchema,
   "tasks.transfer": z
     .object({
       taskId: z.string().uuid(),
@@ -56,6 +52,23 @@ export const taskToolSchemas = {
 export type TaskToolRequest = {
   [N in keyof typeof taskToolSchemas]: { name: N; input: z.output<(typeof taskToolSchemas)[N]> };
 }[keyof typeof taskToolSchemas];
+
+const messageDraftInputSchema = z
+  .object({
+    conversationId: conversationIdSchema,
+    text: z.string().min(1).max(20_000),
+    rootId: z.string().uuid().optional(),
+    quoteId: z.string().uuid().optional(),
+  })
+  .strict();
+const draftReviewChoiceSchema = z.enum([
+  "inspect",
+  "revise",
+  "keep",
+  "abandon",
+  "defer",
+  "continue",
+]);
 
 export const conversationToolDefinitions = {
   "agents.list": {
@@ -108,21 +121,14 @@ export const conversationToolDefinitions = {
   },
   "drafts.save": {
     description: "持久保存发送草稿和当前讨论位置。保存后可查看并发变化。",
-    schema: z
-      .object({
-        conversationId: conversationIdSchema,
-        text: z.string().min(1).max(20_000),
-        rootId: z.string().uuid().optional(),
-        quoteId: z.string().uuid().optional(),
-      })
-      .strict(),
+    schema: messageDraftInputSchema,
   },
   "drafts.review": {
     description: "查看草稿后的讨论变化，并选择修改、保留、放弃、暂缓或知情继续。",
     schema: z
       .object({
         draftId: z.string().uuid(),
-        choice: z.enum(["inspect", "revise", "keep", "abandon", "defer", "continue"]),
+        choice: draftReviewChoiceSchema,
         text: z.string().min(1).max(20_000).optional(),
       })
       .strict(),
@@ -130,16 +136,10 @@ export const conversationToolDefinitions = {
   "messages.send": {
     description:
       "向一个明确指定且当前已加入的频道或私信发送普通消息。发送目标必须提供 conversationId。",
-    schema: z
-      .object({
-        conversationId: conversationIdSchema,
-        text: z.string().min(1).max(20_000),
-        rootId: z.string().uuid().optional(),
-        quoteId: z.string().uuid().optional(),
-        draftId: z.string().uuid().optional(),
-        asTask: z.boolean().optional(),
-      })
-      .strict(),
+    schema: messageDraftInputSchema.extend({
+      draftId: z.string().uuid().optional(),
+      asTask: z.boolean().optional(),
+    }),
   },
   "tasks.create": {
     description:
@@ -168,7 +168,7 @@ export const conversationToolDefinitions = {
     schema: z
       .object({
         draftId: z.string().uuid(),
-        choice: z.enum(["inspect", "revise", "keep", "abandon", "defer", "continue"]),
+        choice: draftReviewChoiceSchema,
         revisedInput: z.record(z.string(), z.json()).optional(),
       })
       .strict(),

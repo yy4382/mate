@@ -149,11 +149,7 @@ const NodeRequestShapeSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("node.process.operation.result"),
       requestId: NodeRequestIdSchema,
-      operationId: NodeRequestIdSchema,
-      agentId: agentIdSchema,
-      state: z.enum(["succeeded", "failed", "unknown"]),
-      receipt: z.json().nullable(),
-      revision: z.number().int().positive().optional(),
+      ...nodeProcessReceiptSchema.shape,
     })
     .strict(),
   z
