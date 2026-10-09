@@ -97,10 +97,10 @@ export const systemdUserManager: UserServiceManager = {
         "User manager unavailable: systemctl --user cannot connect. Use the existing account's login session; Mate does not configure linger or fall back to a background/system service.",
       );
     if (options?.effectiveCommand === false) return;
-    const bus = privateProperty("Version");
-    if (bus.status !== 0)
+    const managerVersionResult = privateProperty("Version");
+    if (managerVersionResult.status !== 0)
       throw new Error(
-        `Effective user manager inspection unavailable: the complete bundle must connect to systemd's existing private socket; Mate does not install software or a session bus (${propertyFailureDetails(bus)})`,
+        `Effective user manager inspection unavailable: the complete bundle must connect to systemd's existing private socket; Mate does not install software or a session bus (${propertyFailureDetails(managerVersionResult)})`,
       );
   },
   inspect(options) {
