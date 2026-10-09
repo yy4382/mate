@@ -116,17 +116,7 @@ export class AttachmentService {
 
   listForOwner(channelId: string): AttachmentSummary[] {
     requireOwnerMembership(this.db, channelId, false);
-    const rows = attachmentRowSchema.array().parse(
-      this.db
-        .prepare(
-          `SELECT id,channel_id,storage_key,filename,content_type,size,sha256,
-                uploader_kind,uploader_id,created_at
-         FROM owner_conversation_attachments
-         WHERE channel_id=? AND state='ready' ORDER BY created_at,id`,
-        )
-        .all(channelId),
-    );
-    return rows.map(toAttachmentSummary);
+    return this.listReadyAttachments(channelId);
   }
 
   listForAgent({
@@ -137,6 +127,10 @@ export class AttachmentService {
     channelId: string;
   }): AttachmentSummary[] {
     authorizeAgentConversationRead(this.db, agentId, channelId);
+    return this.listReadyAttachments(channelId);
+  }
+
+  private listReadyAttachments(channelId: string) {
     const rows = attachmentRowSchema.array().parse(
       this.db
         .prepare(
@@ -167,17 +161,7 @@ export class AttachmentService {
       input.length > FILE_CHUNK_MAX_BYTES
     )
       throw new AttachmentError("attachment_not_found", "附件分块参数无效。", 400);
-    const row = attachmentRowSchema.optional().parse(
-      this.db
-        .prepare(
-          `SELECT id,channel_id,storage_key,filename,content_type,size,sha256,
-                uploader_kind,uploader_id,created_at
-         FROM owner_conversation_attachments
-         WHERE id=? AND channel_id=? AND state='ready'`,
-        )
-        .get(input.attachmentId, input.channelId),
-    );
-    if (!row) throw new AttachmentError("attachment_not_found", "附件不存在。", 404);
+    const row = this.requireReadyAttachment(input);
     if (input.offset > row.size)
       throw new AttachmentError("attachment_not_found", "附件分块位置超出文件大小。", 416);
     const path = storagePath(this.directory, `${row.storage_key}.blob`);
@@ -292,17 +276,7 @@ export class AttachmentService {
 
   downloadForOwner({ channelId, attachmentId }: { channelId: string; attachmentId: string }) {
     requireOwnerMembership(this.db, channelId, false);
-    const row = attachmentRowSchema.optional().parse(
-      this.db
-        .prepare(
-          `SELECT id,channel_id,storage_key,filename,content_type,size,sha256,
-                uploader_kind,uploader_id,created_at
-         FROM owner_conversation_attachments
-         WHERE id=? AND channel_id=? AND state='ready'`,
-        )
-        .get(attachmentId, channelId),
-    );
-    if (!row) throw new AttachmentError("attachment_not_found", "附件不存在。", 404);
+    const row = this.requireReadyAttachment({ channelId, attachmentId });
     const path = storagePath(this.directory, `${row.storage_key}.blob`);
     const stat = lstatSync(path);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== row.size)
@@ -315,6 +289,28 @@ export class AttachmentService {
       ) as ReadableStream<Uint8Array>,
     };
   }
+
+  private requireReadyAttachment({
+    channelId,
+    attachmentId,
+  }: {
+    channelId: string;
+    attachmentId: string;
+  }) {
+    const row = attachmentRowSchema.optional().parse(
+      this.db
+        .prepare(
+          `SELECT id,channel_id,storage_key,filename,content_type,size,sha256,
+                uploader_kind,uploader_id,created_at
+         FROM owner_conversation_attachments
+         WHERE id=? AND channel_id=? AND state='ready'`,
+        )
+        .get(attachmentId, channelId),
+    );
+    if (!row) throw new AttachmentError("attachment_not_found", "附件不存在。", 404);
+    return row;
+  }
+
   private recoverInterruptedUploads(): void {
     const interrupted = z
       .looseObject({ id: z.string(), storage_key: z.string() })

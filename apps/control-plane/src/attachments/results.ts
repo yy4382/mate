@@ -1,6 +1,5 @@
 import type { WorkspaceVersion } from "@mate/protocol/workspace";
 import { FILE_CHUNK_MAX_BYTES } from "@mate/protocol/workspace";
-import { createHash } from "node:crypto";
 import { z } from "zod";
 import { WorkspaceError } from "../workspaces/errors.js";
 import { isWorkspaceVersion, sameVersion } from "../workspaces/results.js";
@@ -23,14 +22,6 @@ export function decodeChunk(
   if (!bytes.length || bytes.length > FILE_CHUNK_MAX_BYTES || bytes.length > size - offset)
     throw new WorkspaceError("file_changed", "Invalid or incomplete node chunk", 409);
   return bytes;
-}
-
-export function operationIdForAction(actionId: string): string {
-  const bytes = createHash("sha256").update(actionId).digest().subarray(0, 16);
-  bytes[6] = (bytes[6]! & 0x0f) | 0x50;
-  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
-  const hex = bytes.toString("hex");
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 const actionResultSchema = z.looseObject({

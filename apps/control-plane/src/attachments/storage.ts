@@ -48,7 +48,7 @@ export function normalizeContentType(value: string): string {
     : "application/octet-stream";
 }
 
-export function syncFile(path: string): void {
+function syncPath(path: string): void {
   const descriptor = openSync(path, "r");
   try {
     fsyncSync(descriptor);
@@ -57,14 +57,7 @@ export function syncFile(path: string): void {
   }
 }
 
-export function syncDirectory(path: string): void {
-  const descriptor = openSync(path, "r");
-  try {
-    fsyncSync(descriptor);
-  } finally {
-    closeSync(descriptor);
-  }
-}
+export { syncPath as syncFile, syncPath as syncDirectory };
 
 export function removeIfPresent(path: string): void {
   try {
