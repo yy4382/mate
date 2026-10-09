@@ -36,13 +36,13 @@ function visit(relative) {
   }
 }
 visit("");
-function highest(prefix) {
+function highestLibraryVersion(prefix) {
   const values = symbols.filter((symbol) => symbol[1] === prefix).map((symbol) => symbol[2]);
-  values.sort((a, b) => {
-    const aa = a.split(".").map(Number);
-    const bb = b.split(".").map(Number);
-    for (let i = 0; i < Math.max(aa.length, bb.length); i++) {
-      const difference = (aa[i] ?? 0) - (bb[i] ?? 0);
+  values.sort((left, right) => {
+    const leftParts = left.split(".").map(Number);
+    const rightParts = right.split(".").map(Number);
+    for (let i = 0; i < Math.max(leftParts.length, rightParts.length); i++) {
+      const difference = (leftParts[i] ?? 0) - (rightParts[i] ?? 0);
       if (difference) return difference;
     }
     return 0;
@@ -57,9 +57,9 @@ const metadata = bundleMetadataSchema.parse({
   architecture: process.arch,
   buildSystem: { id: "debian", version: "12" },
   systemLibraries: {
-    glibc: highest("GLIBC"),
-    glibcxx: highest("GLIBCXX"),
-    cxxabi: highest("CXXABI"),
+    glibc: highestLibraryVersion("GLIBC"),
+    glibcxx: highestLibraryVersion("GLIBCXX"),
+    cxxabi: highestLibraryVersion("CXXABI"),
   },
   targetSystems: ["ubuntu:24.04", "debian:13"],
   files,

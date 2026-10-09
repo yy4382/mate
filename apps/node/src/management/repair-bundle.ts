@@ -1,7 +1,7 @@
 import { lstatSync, readdirSync, realpathSync, rmSync, rmdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
-import { nodePaths } from "./paths.js";
+import { lstatIfPresent, nodePaths } from "./paths.js";
 import {
   readBundle,
   verifyBundle,
@@ -9,7 +9,7 @@ import {
   runningBundleDirectory,
   type BundleMetadata,
 } from "./bundle.js";
-import { checkManagedDirectory, lstatIfPresent } from "./install-entry.js";
+import { checkManagedDirectory } from "./install-entry.js";
 import { createAtomicNoReplaceRename } from "../files/mutations/atomic-rename.js";
 
 /** A trusted unchanged inventory identifies damaged owned program files, never arbitrary extra files. */

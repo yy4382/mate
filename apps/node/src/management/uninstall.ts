@@ -1,17 +1,16 @@
 import { createHash, randomUUID } from "node:crypto";
-import { readFileSync, readdirSync, readlinkSync, realpathSync, rmdirSync, rmSync } from "node:fs";
+import { readFileSync, readdirSync, readlinkSync, rmdirSync, rmSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { readBundle, releaseVersionSchema } from "./bundle.js";
 import { readNodeConfiguration } from "./configuration.js";
 import {
   checkManagedDirectory,
   installedEntryVersion,
-  lstatIfPresent,
   requireOrdinaryAccount,
   recoverInstallationStaging,
   withManagementLock,
 } from "./install-entry.js";
-import { nodePaths } from "./paths.js";
+import { canonicalManagedPath, lstatIfPresent, nodePaths } from "./paths.js";
 import {
   readManagedUnit,
   serviceReferencesBundle,
@@ -89,18 +88,15 @@ function retainedLocations(paths: ReturnType<typeof nodePaths>, ensureSeparate =
     : undefined;
   const data = config?.dataDirectory ?? paths.dataDirectory;
   const workspace = config?.agentWorkspaceRoot ?? join(data, "agents");
-  const canonical = (path: string) => {
-    const missing = [];
-    let ancestor = resolve(path);
-    while (!lstatIfPresent(ancestor)) {
-      missing.unshift(basename(ancestor));
-      ancestor = dirname(ancestor);
-    }
-    return join(realpathSync(ancestor), ...missing);
-  };
   for (const retained of ensureSeparate ? [paths.configDirectory, data, workspace] : []) {
-    const part = relative(canonical(paths.programDirectory), canonical(retained));
-    const reverse = relative(canonical(retained), canonical(paths.programDirectory));
+    const part = relative(
+      canonicalManagedPath(paths.programDirectory),
+      canonicalManagedPath(retained),
+    );
+    const reverse = relative(
+      canonicalManagedPath(retained),
+      canonicalManagedPath(paths.programDirectory),
+    );
     const nested = (value: string) =>
       value === "" || (value !== ".." && !value.startsWith(`..${sep}`) && !isAbsolute(value));
     if (nested(part) || nested(reverse))
