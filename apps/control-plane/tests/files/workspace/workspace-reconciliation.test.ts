@@ -18,10 +18,7 @@ afterEach(async () => {
 });
 
 function event() {
-  let resolve = () => {};
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
+  const { promise, resolve } = Promise.withResolvers<void>();
   return { promise, resolve };
 }
 
@@ -47,8 +44,8 @@ async function fixture(options: { nodeOperationTimeoutMs?: number } = {}) {
   const directory = mkdtempSync(join(tmpdir(), "mate-workspace-reconciliation-"));
   resourceReleases.push(() => rmSync(directory, { recursive: true, force: true }));
   chmodSync(directory, 0o700);
-  const passwordFile = join(directory, "owner-password"),
-    password = "synthetic-reconciliation-password";
+  const passwordFile = join(directory, "owner-password");
+  const password = "synthetic-reconciliation-password";
   writeFileSync(passwordFile, password, { mode: 0o600 });
   const app = toolTestApp({ dataDir: join(directory, "control"), passwordFile, ...options });
   resourceReleases.push(() => app.close());

@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 
 import {
-  password,
   fixtures,
   cleanupFixture,
   FakeNodeSocket,
@@ -50,8 +49,8 @@ it.each(["legacy", "structured"])(
     const start = socket.sent.length;
     app.chat.messages.createMessage({ channelId: direct.id, text: "Attempt one file action." });
     const firstRun = await waitForRun(socket, start);
-    const input = { name: "workspace.write", input: { path: "protected.txt", content: "no" } },
-      actionId = stableToolActionId(firstRun.actionScopeId, input);
+    const input = { name: "workspace.write", input: { path: "protected.txt", content: "no" } };
+    const actionId = stableToolActionId(firstRun.actionScopeId, input);
     let executions = 0;
     let failureReceipt: unknown;
     socket.onWorkspaceOperation = async (request) => {

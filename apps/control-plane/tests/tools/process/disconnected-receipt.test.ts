@@ -181,12 +181,12 @@ it("reconciles a durable node receipt before resuming a disconnected Agent", asy
   const expanded = (await expandedResponse.json()) as { events: Array<{ detail?: unknown }> };
   expect(JSON.stringify(expanded)).toContain("printf once");
   const notification = db
-    .prepare(
+    .prepare<[string], { text: string; author_id: string; state: string }>(
       `SELECT m.text,m.author_id,d.state FROM owner_messages m
      JOIN owner_message_deliveries d ON d.message_id=m.id AND d.recipient_id=?
      WHERE m.author_id='mate-system' ORDER BY m.created_at DESC LIMIT 1`,
     )
-    .get(agentId) as { text: string; author_id: string; state: string };
+    .get(agentId)!;
   expect(notification).toMatchObject({ author_id: "mate-system", state: "pending" });
   expect(notification.text).toContain(String(operation!.operationId));
 
@@ -292,11 +292,14 @@ it("reconciles a durable node receipt before resuming a disconnected Agent", asy
   });
 
   const stored = db
-    .prepare(`SELECT run_id,request_json FROM owner_agent_process_operations WHERE operation_id=?`)
-    .get(secondOperation!.operationId) as {
-    run_id: string;
-    request_json: string;
-  };
+    .prepare<
+      [unknown],
+      {
+        run_id: string;
+        request_json: string;
+      }
+    >(`SELECT run_id,request_json FROM owner_agent_process_operations WHERE operation_id=?`)
+    .get(secondOperation!.operationId)!;
   // The committed request is the only record of the operation's identity; a replay reads it there.
   const originalRequest = JSON.parse(stored.request_json) as {
     actionScopeId: string;

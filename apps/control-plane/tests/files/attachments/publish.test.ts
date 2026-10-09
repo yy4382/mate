@@ -56,9 +56,9 @@ it("publishes Agent workspace files to a joined conversation in bounded chunks a
     channelId: channel.id,
     text: "Publish a note from the workspace.",
   });
-  const run = await waitForRun(socket, runStart),
-    requests: Array<Record<string, unknown>> = [],
-    version = { device: "1", inode: "2", size: 5, modifiedNs: "3", changedNs: "4" };
+  const run = await waitForRun(socket, runStart);
+  const requests: Array<Record<string, unknown>> = [];
+  const version = { device: "1", inode: "2", size: 5, modifiedNs: "3", changedNs: "4" };
   socket.onWorkspaceOperation = async (message) => {
     requests.push(message);
     const operation = message.operation as { kind: string; offset?: number };

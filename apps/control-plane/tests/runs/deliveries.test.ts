@@ -48,7 +48,7 @@ async function createChannel(app: ReturnType<typeof createControlPlane>, cookie:
 }
 
 function addSyntheticMember(dataDir: string, channelId: string): void {
-  // Test fixture only: #73 exposes no Agent membership management HTTP endpoint.
+  // Seed a synthetic Agent membership to isolate message delivery.
   const db = new Database(join(dataDir, "control-plane.sqlite"));
   db.pragma("foreign_keys = ON");
   db.prepare(

@@ -62,8 +62,8 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
   let executingEnvelope: unknown;
   socket.onWorkspaceOperation = async (message) => {
     requests.push(message);
-    const operationId = String(message.operationId),
-      existingReceipt = nodeReceipts.get(operationId);
+    const operationId = String(message.operationId);
+    const existingReceipt = nodeReceipts.get(operationId);
     if (existingReceipt) {
       if (!holdNextResponse)
         await toolTestInput(
@@ -81,9 +81,11 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
       return;
     }
     const action = expectedActionId
-      ? (db
-          .prepare("SELECT result_json FROM owner_agent_tool_actions WHERE action_id=?")
-          .get(expectedActionId) as { result_json: string } | undefined)
+      ? db
+          .prepare<[string], { result_json: string }>(
+            "SELECT result_json FROM owner_agent_tool_actions WHERE action_id=?",
+          )
+          .get(expectedActionId)
       : undefined;
     if (action) executingEnvelope = JSON.parse(action.result_json);
     const receipt = failNextResponse
@@ -123,8 +125,8 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
     },
   });
 
-  const firstInput = { name: "workspace.write", input: { path: "notes.txt", content: "hello" } },
-    firstActionId = stableToolActionId(run.actionScopeId, firstInput);
+  const firstInput = { name: "workspace.write", input: { path: "notes.txt", content: "hello" } };
+  const firstActionId = stableToolActionId(run.actionScopeId, firstInput);
   expectedActionId = firstActionId;
   const first = await callAgentTool(app, socket, run, firstActionId, "tools.call", firstInput);
   expect(first).toMatchObject({ ok: true, result: { sha256: "receipt-1" } });
@@ -137,8 +139,10 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
     operation: { kind: "write", path: "notes.txt", content: "hello" },
   });
   const firstAction = db
-    .prepare("SELECT result_json FROM owner_agent_tool_actions WHERE session_id=? AND action_id=?")
-    .get(run.sessionId, firstActionId) as { result_json: string };
+    .prepare<[string, string], { result_json: string }>(
+      "SELECT result_json FROM owner_agent_tool_actions WHERE session_id=? AND action_id=?",
+    )
+    .get(run.sessionId, firstActionId)!;
   expect(JSON.parse(firstAction.result_json)).toMatchObject({
     state: "succeeded",
     operationId: requests[0]!.operationId,
@@ -149,7 +153,7 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
       `SELECT actor_kind,actor_id,agent_id,run_id,operation,relative_paths,result,error_code
        FROM owner_workspace_access_audit WHERE agent_id=? AND operation='workspace.write'`,
     )
-    .get(agentId) as Record<string, unknown>;
+    .get(agentId);
   expect(writeAudit).toMatchObject({
     actor_kind: "agent",
     actor_id: agentId,
@@ -178,8 +182,8 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
   ).toMatchObject({ ok: true, result: first.result });
   expect(requests).toHaveLength(1);
 
-  const delayedInput = { name: "workspace.write", input: { path: "late.txt", content: "saved" } },
-    delayedActionId = stableToolActionId(run.actionScopeId, delayedInput);
+  const delayedInput = { name: "workspace.write", input: { path: "late.txt", content: "saved" } };
+  const delayedActionId = stableToolActionId(run.actionScopeId, delayedInput);
   expectedActionId = delayedActionId;
   holdNextResponse = true;
   const unknown = await callAgentTool(
@@ -193,8 +197,10 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
   expect(unknown).toMatchObject({ ok: false, error: expect.stringContaining("尚未确认") });
   expect(heldRequest).toBeDefined();
   const unknownAction = db
-    .prepare("SELECT result_json FROM owner_agent_tool_actions WHERE session_id=? AND action_id=?")
-    .get(run.sessionId, delayedActionId) as { result_json: string };
+    .prepare<[string, string], { result_json: string }>(
+      "SELECT result_json FROM owner_agent_tool_actions WHERE session_id=? AND action_id=?",
+    )
+    .get(run.sessionId, delayedActionId)!;
   expect(JSON.parse(unknownAction.result_json)).toMatchObject({
     state: "unknown",
     operationId: heldRequest!.operationId,
@@ -232,13 +238,11 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
   );
   expect(
     JSON.parse(
-      (
-        db
-          .prepare(
-            "SELECT result_json FROM owner_agent_tool_actions WHERE session_id=? AND action_id=?",
-          )
-          .get(run.sessionId, delayedActionId) as { result_json: string }
-      ).result_json,
+      db
+        .prepare<[string, string], { result_json: string }>(
+          "SELECT result_json FROM owner_agent_tool_actions WHERE session_id=? AND action_id=?",
+        )
+        .get(run.sessionId, delayedActionId)!.result_json,
     ).state,
   ).toBe("unknown");
   expect(
@@ -262,8 +266,10 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
     }),
   );
   const reconciled = db
-    .prepare("SELECT result_json FROM owner_agent_tool_actions WHERE session_id=? AND action_id=?")
-    .get(run.sessionId, delayedActionId) as { result_json: string };
+    .prepare<[string, string], { result_json: string }>(
+      "SELECT result_json FROM owner_agent_tool_actions WHERE session_id=? AND action_id=?",
+    )
+    .get(run.sessionId, delayedActionId)!;
   expect(JSON.parse(reconciled.result_json)).toMatchObject({
     state: "succeeded",
     operationId: heldRequest!.operationId,
@@ -291,10 +297,10 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
     ),
   ).toBe(true);
   const correctedActivity = db
-    .prepare(
+    .prepare<[unknown], { count: number }>(
       "SELECT COUNT(*) AS count FROM owner_agent_activity WHERE reference_id=? AND kind='receipt.corrected'",
     )
-    .get(heldRequest!.operationId) as { count: number };
+    .get(heldRequest!.operationId)!;
   expect(correctedActivity.count).toBe(1);
   await toolTestInput(
     app,
@@ -317,8 +323,8 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
   ).toEqual({ count: 1 });
   expect(requests).toHaveLength(2);
 
-  const failedInput = { name: "workspace.write", input: { path: "denied.txt", content: "try" } },
-    failedActionId = stableToolActionId(correctedRun.actionScopeId, failedInput);
+  const failedInput = { name: "workspace.write", input: { path: "denied.txt", content: "try" } };
+  const failedActionId = stableToolActionId(correctedRun.actionScopeId, failedInput);
   expectedActionId = failedActionId;
   holdNextResponse = true;
   expect(
@@ -343,8 +349,10 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
     }),
   );
   const failedAction = db
-    .prepare("SELECT result_json FROM owner_agent_tool_actions WHERE session_id=? AND action_id=?")
-    .get(run.sessionId, failedActionId) as { result_json: string };
+    .prepare<[string, string], { result_json: string }>(
+      "SELECT result_json FROM owner_agent_tool_actions WHERE session_id=? AND action_id=?",
+    )
+    .get(run.sessionId, failedActionId)!;
   expect(JSON.parse(failedAction.result_json)).toMatchObject({
     state: "failed",
     result: { code: 7 },

@@ -4,8 +4,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 
 import { tmpdir } from "node:os";
-import { resolve } from "node:path";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { WebSocket as UpstreamWebSocket, WebSocketServer } from "ws";
 import { expect, it } from "vitest";
@@ -25,7 +24,13 @@ it("expires a blackholed node from owner status and reconnects after its pong de
   const passwordFile = join(directory, "owner-password");
   writeFileSync(passwordFile, `${ownerPassword}\n`, { mode: 0o600 });
   const moduleUrl = pathToFileURL(resolve("dist/main.js")).href;
-  const runner = `const { startControlPlane } = await import(${JSON.stringify(moduleUrl)}); startControlPlane(0, undefined, { dataDir: process.env.MATE_CONTROL_PLANE_DATA_DIR, passwordFile: process.env.MATE_OWNER_PASSWORD_FILE, nodeHeartbeatTimeoutMs: 200 });`;
+  const runner = `
+    const { startControlPlane } = await import(${JSON.stringify(moduleUrl)});
+    startControlPlane(0, undefined, {
+      dataDir: process.env.MATE_CONTROL_PLANE_DATA_DIR,
+      passwordFile: process.env.MATE_OWNER_PASSWORD_FILE,
+      nodeHeartbeatTimeoutMs: 200
+    });`;
   const serverChild = spawn(process.execPath, ["--input-type=module", "--eval", runner], {
     cwd: process.cwd(),
     env: {
@@ -40,11 +45,11 @@ it("expires a blackholed node from owner status and reconnects after its pong de
   const proxyWebSockets = new WebSocketServer({ noServer: true });
   let proxyConnections = 0;
   let serverPort = "";
-  let blackholedSocket: WebSocket | undefined;
+  let blackholedSocket: UpstreamWebSocket | undefined;
   proxyHttp.on("upgrade", (request, networkSocket, head) => {
     proxyWebSockets.handleUpgrade(request, networkSocket, head, (nodeSocket) => {
       proxyConnections++;
-      blackholedSocket = nodeSocket as unknown as WebSocket;
+      blackholedSocket = nodeSocket;
       const upstreamUrl = `ws://127.0.0.1:${serverPort}/api/nodes/connect`;
       const controlSocket = new UpstreamWebSocket(upstreamUrl);
       let blackhole = false;
@@ -107,7 +112,15 @@ it("expires a blackholed node from owner status and reconnects after its pong de
     expect(tokenResponse.status).toBe(201);
     const { pairingToken } = (await tokenResponse.json()) as { pairingToken: string };
     const nodeModuleUrl = import.meta.resolve("@mate/node");
-    const nodeRunner = `const { runLinuxNode } = await import(${JSON.stringify(nodeModuleUrl)}); await runLinuxNode({ controlPlaneUrl: process.env.MATE_CONTROL_PLANE_URL, dataDirectory: process.env.MATE_NODE_DATA_DIR, pairingToken: process.env.MATE_NODE_PAIRING_TOKEN, heartbeatIntervalMs: 50, heartbeatTimeoutMs: 1200 }, new AbortController().signal);`;
+    const nodeRunner = `
+      const { runLinuxNode } = await import(${JSON.stringify(nodeModuleUrl)});
+      await runLinuxNode({
+        controlPlaneUrl: process.env.MATE_CONTROL_PLANE_URL,
+        dataDirectory: process.env.MATE_NODE_DATA_DIR,
+        pairingToken: process.env.MATE_NODE_PAIRING_TOKEN,
+        heartbeatIntervalMs: 50,
+        heartbeatTimeoutMs: 1200
+      }, new AbortController().signal);`;
     node = new ProcessOutput(
       spawn(process.execPath, ["--input-type=module", "--eval", nodeRunner], {
         cwd: process.cwd(),
@@ -152,7 +165,15 @@ it("reclaims a blackholed WebSocket slot and reconnects the same node identity",
   const passwordFile = join(directory, "owner-password");
   writeFileSync(passwordFile, `${ownerPassword}\n`, { mode: 0o600 });
   const moduleUrl = pathToFileURL(resolve("dist/main.js")).href;
-  const runner = `const { startControlPlane } = await import(${JSON.stringify(moduleUrl)}); startControlPlane(0, undefined, { dataDir: process.env.MATE_CONTROL_PLANE_DATA_DIR, passwordFile: process.env.MATE_OWNER_PASSWORD_FILE, maxNodeConnections: 1, maxUnauthenticatedNodeConnections: 1, nodeHeartbeatTimeoutMs: 200 });`;
+  const runner = `
+    const { startControlPlane } = await import(${JSON.stringify(moduleUrl)});
+    startControlPlane(0, undefined, {
+      dataDir: process.env.MATE_CONTROL_PLANE_DATA_DIR,
+      passwordFile: process.env.MATE_OWNER_PASSWORD_FILE,
+      maxNodeConnections: 1,
+      maxUnauthenticatedNodeConnections: 1,
+      nodeHeartbeatTimeoutMs: 200
+    });`;
   const serverChild = spawn(process.execPath, ["--input-type=module", "--eval", runner], {
     cwd: process.cwd(),
     env: {
@@ -186,7 +207,15 @@ it("reclaims a blackholed WebSocket slot and reconnects the same node identity",
     const { pairingToken } = (await tokenResponse.json()) as { pairingToken: string };
     proxy = await startTcpBlackholeProxy(controlPort);
     const nodeModuleUrl = import.meta.resolve("@mate/node");
-    const nodeRunner = `const { runLinuxNode } = await import(${JSON.stringify(nodeModuleUrl)}); await runLinuxNode({ controlPlaneUrl: process.env.MATE_CONTROL_PLANE_URL, dataDirectory: process.env.MATE_NODE_DATA_DIR, pairingToken: process.env.MATE_NODE_PAIRING_TOKEN, heartbeatIntervalMs: 40, heartbeatTimeoutMs: 600 }, new AbortController().signal);`;
+    const nodeRunner = `
+      const { runLinuxNode } = await import(${JSON.stringify(nodeModuleUrl)});
+      await runLinuxNode({
+        controlPlaneUrl: process.env.MATE_CONTROL_PLANE_URL,
+        dataDirectory: process.env.MATE_NODE_DATA_DIR,
+        pairingToken: process.env.MATE_NODE_PAIRING_TOKEN,
+        heartbeatIntervalMs: 40,
+        heartbeatTimeoutMs: 600
+      }, new AbortController().signal);`;
     node = new ProcessOutput(
       spawn(process.execPath, ["--input-type=module", "--eval", nodeRunner], {
         cwd: process.cwd(),

@@ -22,7 +22,7 @@ it.each(["read", "defer", "continue", "next-run"] as const)(
                 "SELECT COUNT(*) AS n FROM owner_message_deliveries WHERE recipient_id=? AND state='pending'",
               )
               .get(agent.id),
-          ) as any,
+          ),
         "queued delivery",
       );
       await new Promise((done) => setTimeout(done, 350));
@@ -84,15 +84,15 @@ it.each(["read", "defer", "continue", "next-run"] as const)(
         }
         return fixture.db((db) => {
           const pending = db
-            .prepare(
+            .prepare<[string], { n: number }>(
               "SELECT COUNT(*) AS n FROM owner_message_deliveries WHERE recipient_id=? AND state='pending'",
             )
-            .get(agent.id) as { n: number };
+            .get(agent.id)!;
           const latest = db
-            .prepare(
+            .prepare<[string], { state: string }>(
               "SELECT state FROM owner_agent_runs WHERE agent_id=? ORDER BY rowid DESC LIMIT 1",
             )
-            .get(agent.id) as { state: string };
+            .get(agent.id)!;
           return pending.n === 0 && latest.state === "completed" ? true : undefined;
         });
       }, "all pending inputs and provider requests completed");
@@ -197,13 +197,12 @@ it.each(["revise", "abandon", "defer", "continue"] as const)(
       respond(responses[index]!, "结束。");
       await eventually(
         () =>
-          fixture.db(
-            (db) =>
-              db
-                .prepare(
-                  "SELECT COUNT(*) AS n FROM owner_agent_runs WHERE agent_id=? AND state='completed'",
-                )
-                .get(agent.id) as any,
+          fixture.db((db) =>
+            db
+              .prepare<[string], { n: number }>(
+                "SELECT COUNT(*) AS n FROM owner_agent_runs WHERE agent_id=? AND state='completed'",
+              )
+              .get(agent.id),
           )?.n,
         "first completed run",
       );

@@ -86,8 +86,8 @@ it("streams a Unicode owner upload into a channel and streams it back only throu
   expect(response.status).toBe(200);
   expect(response.headers.get("content-length")).toBe(String(created.attachment.size));
   expect(response.headers.get("x-accel-buffering")).toBe("no");
-  const reader = response.body!.getReader(),
-    parts: Uint8Array[] = [];
+  const reader = response.body!.getReader();
+  const parts: Uint8Array[] = [];
   for (;;) {
     const item = await reader.read();
     if (item.done) break;
@@ -109,10 +109,9 @@ it("streams a Unicode owner upload into a channel and streams it back only throu
 
 it("removes an interrupted upload and does not expose partial attachment metadata", async () => {
   const { app, cookie, channel, directory } = await setup();
-  let controller: ReadableStreamDefaultController<Uint8Array> | undefined,
-    pulls = 0,
-    signalFirstChunk!: () => void;
-  const firstChunk = new Promise<void>((resolve) => (signalFirstChunk = resolve));
+  let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+  let pulls = 0;
+  const { promise: firstChunk, resolve: signalFirstChunk } = Promise.withResolvers<void>();
   const body = new ReadableStream<Uint8Array>({
     start(streamController) {
       controller = streamController;

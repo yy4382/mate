@@ -41,28 +41,28 @@ function setup() {
 }
 
 it("commits the control-plane intent before dispatch and reuses its terminal receipt", async () => {
-  const context = setup(),
-    operation = { kind: "exec" as const, command: "printf cp", cwd: "." },
-    dispatch = vi.fn(async (_nodeId: string, request: { operationId: string }) => {
-      expect(
-        context.database
-          .prepare("SELECT state FROM owner_agent_process_operations WHERE operation_id=?")
-          .get(request.operationId),
-      ).toEqual({ state: "executing" });
-      return {
-        operationId: request.operationId,
-        agentId: context.agentId,
-        state: "succeeded" as const,
-        receipt: { code: 0, stdout: "cp" },
-      };
-    }),
-    broker = new AgentProcessOperationBroker(context.database, {
-      executeAgentProcessOperation: dispatch,
-    });
+  const context = setup();
+  const operation = { kind: "exec" as const, command: "printf cp", cwd: "." };
+  const dispatch = vi.fn(async (_nodeId: string, request: { operationId: string }) => {
+    expect(
+      context.database
+        .prepare("SELECT state FROM owner_agent_process_operations WHERE operation_id=?")
+        .get(request.operationId),
+    ).toEqual({ state: "executing" });
+    return {
+      operationId: request.operationId,
+      agentId: context.agentId,
+      state: "succeeded" as const,
+      receipt: { code: 0, stdout: "cp" },
+    };
+  });
+  const broker = new AgentProcessOperationBroker(context.database, {
+    executeAgentProcessOperation: dispatch,
+  });
   try {
-    const request = { ...context, operation },
-      result = await broker.execute(request),
-      replay = await broker.execute(request);
+    const request = { ...context, operation };
+    const result = await broker.execute(request);
+    const replay = await broker.execute(request);
     expect(result).toMatchObject({ state: "succeeded", receipt: { stdout: "cp" } });
     expect(replay).toEqual(result);
     expect(broker.status(context.agentId, context.operationId)).toEqual(result);
@@ -97,20 +97,20 @@ it("commits the control-plane intent before dispatch and reuses its terminal rec
 });
 
 it("keeps an unknown intent without dispatching it again and accepts a late receipt", async () => {
-  const context = setup(),
-    operation = { kind: "exec" as const, command: "touch once", cwd: "." },
-    dispatch = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("node disconnected"))
-      .mockResolvedValueOnce({
-        operationId: context.operationId,
-        agentId: context.agentId,
-        state: "succeeded" as const,
-        receipt: { code: 0, stdout: "" },
-      }),
-    broker = new AgentProcessOperationBroker(context.database, {
-      executeAgentProcessOperation: dispatch,
+  const context = setup();
+  const operation = { kind: "exec" as const, command: "touch once", cwd: "." };
+  const dispatch = vi
+    .fn()
+    .mockRejectedValueOnce(new Error("node disconnected"))
+    .mockResolvedValueOnce({
+      operationId: context.operationId,
+      agentId: context.agentId,
+      state: "succeeded" as const,
+      receipt: { code: 0, stdout: "" },
     });
+  const broker = new AgentProcessOperationBroker(context.database, {
+    executeAgentProcessOperation: dispatch,
+  });
   try {
     expect(await broker.execute({ ...context, operation })).toMatchObject({ state: "unknown" });
     expect(await broker.execute({ ...context, operation })).toMatchObject({ state: "unknown" });
@@ -176,16 +176,16 @@ it("commits a corrected process receipt and Agent notification in one transactio
 });
 
 it("rejects operation IDs reused for changed requests and mismatched action scopes", async () => {
-  const context = setup(),
-    dispatch = vi.fn(async () => ({
-      operationId: context.operationId,
-      agentId: context.agentId,
-      state: "succeeded" as const,
-      receipt: null,
-    })),
-    broker = new AgentProcessOperationBroker(context.database, {
-      executeAgentProcessOperation: dispatch,
-    });
+  const context = setup();
+  const dispatch = vi.fn(async () => ({
+    operationId: context.operationId,
+    agentId: context.agentId,
+    state: "succeeded" as const,
+    receipt: null,
+  }));
+  const broker = new AgentProcessOperationBroker(context.database, {
+    executeAgentProcessOperation: dispatch,
+  });
   try {
     await expect(
       broker.execute({
@@ -213,8 +213,8 @@ it("rejects operation IDs reused for changed requests and mismatched action scop
 });
 
 it("derives safe scope IDs only from delivery-scoped normalized tool identities", () => {
-  const agentId = randomUUID(),
-    stableActionId = `mate:${randomUUID()}:${"b".repeat(64)}:2`;
+  const agentId = randomUUID();
+  const stableActionId = `mate:${randomUUID()}:${"b".repeat(64)}:2`;
   expect(deriveAgentProcessOperationId(agentId, stableActionId)).toBe(
     deriveAgentProcessOperationId(agentId, stableActionId),
   );

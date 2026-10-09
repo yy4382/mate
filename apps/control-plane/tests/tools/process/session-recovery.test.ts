@@ -8,7 +8,6 @@ import { afterEach, expect, it } from "vitest";
 import { deriveAgentProcessOperationId } from "../../../src/runtime/processes/operations.js";
 
 import {
-  password,
   fixtures,
   cleanupFixture,
   FakeNodeSocket,
@@ -50,9 +49,9 @@ it.each(["restart", "reconnect", "conflicting receipt", "malformed workspace"])(
     const start = socket.sent.length;
     app.chat.messages.createMessage({ channelId: direct.id, text: "Run a command once." });
     const run = await waitForRun(socket, start);
-    const actionId = `mate:${run.actionScopeId}:${"f".repeat(64)}:1`,
-      operationId = deriveAgentProcessOperationId(agentId, actionId),
-      at = Date.now();
+    const actionId = `mate:${run.actionScopeId}:${"f".repeat(64)}:1`;
+    const operationId = deriveAgentProcessOperationId(agentId, actionId);
+    const at = Date.now();
     db.prepare(
       `INSERT INTO owner_agent_process_operations(
     operation_id,run_id,agent_id,node_id,

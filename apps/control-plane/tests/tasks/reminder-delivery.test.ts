@@ -3,11 +3,10 @@ import { toolTestApp, toolTestInput } from "../support/agent/tool-run.js";
 import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 
 import {
-  password,
   fixtures,
   cleanupFixture,
   createConversationFixture,
@@ -239,10 +238,10 @@ it("holds Agent task changes for fresh discussion and queues an offline reminder
     ]),
   );
   const delivery = db
-    .prepare(
+    .prepare<[string], { id: string; state: string }>(
       "SELECT id,state FROM owner_message_deliveries WHERE id=(SELECT delivery_id FROM owner_reminder_firings WHERE reminder_id=?)",
     )
-    .get(reminderId) as { id: string; state: string };
+    .get(reminderId)!;
   expect(app.chat.deliveries.acknowledgeDelivery(delivery.id, "agent", agentId)).toBe(false);
   expect(delivery.state).toBe("pending");
   expect(app.chat.timeline.listMessages(dm.id, undefined, 100)?.messages).toHaveLength(4);
@@ -283,9 +282,14 @@ it("marks a reminder handled when a preceding DM delivery starts the completed b
   expect(pending[0]?.messageId).toBe(ordinary.id);
   const reconnected = await reconnectNode(app, nodeId, nodePrivateKey);
   const run = await waitForRun(reconnected, 0);
-  const seed = db.prepare("SELECT delivery_id FROM owner_agent_runs WHERE id=?").get(run.runId) as {
-    delivery_id: string;
-  };
+  const seed = db
+    .prepare<
+      [string],
+      {
+        delivery_id: string;
+      }
+    >("SELECT delivery_id FROM owner_agent_runs WHERE id=?")
+    .get(run.runId)!;
   expect(seed.delivery_id).toBe(pending[0]?.id);
   await toolTestInput(
     app,

@@ -17,9 +17,9 @@ it("routes interleaved real requests from two Agents using the same model and th
   try {
     const [first, second] = environment.agents;
     if (!first || !second) throw new Error("Expected two prepared Agents");
-    provider.forAgent(first, [function firstPending(_request: ScriptedRequest) {}]);
+    provider.forAgent(first, [function firstPending(_request) {}]);
     provider.forAgent(second, [
-      function secondFinishes(request: ScriptedRequest) {
+      function secondFinishes(request) {
         request.text("乙的独立正文。");
       },
     ]);
@@ -139,22 +139,22 @@ it("associates a real compaction summary with the original Agent while its peer 
     const [first, second] = environment.agents;
     if (!first || !second) throw new Error("Expected two prepared Agents");
     provider.forAgent(first, [
-      function fillContext(request: ScriptedRequest) {
+      function fillContext(request) {
         expect(request.kind).toBe("normal");
         request.tools([{ name: "tools.list", input: {} }], {
           prefix: "x".repeat(28000),
           inputTokens: 15000,
         });
       },
-      function summarize(_request: ScriptedRequest) {},
-      function continueAfterSummary(request: ScriptedRequest) {
+      function summarize(_request) {},
+      function continueAfterSummary(request) {
         expect(request.kind).toBe("normal");
         expect(JSON.stringify(request.payload.input)).toContain("同一甲 session 的工具历史");
         request.text("甲压缩后结束。");
       },
     ]);
     provider.forAgent(second, [
-      function peerNormal(request: ScriptedRequest) {
+      function peerNormal(request) {
         expect(request.kind).toBe("normal");
         request.text("乙结束。");
       },

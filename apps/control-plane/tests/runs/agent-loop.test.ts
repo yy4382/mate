@@ -17,18 +17,24 @@ it("control plane requests the provider while its web API responds and a silent 
       await fixture.completed(agent.id);
     } catch (error) {
       throw new Error(
-        `${String(error)}; runs=${JSON.stringify(fixture.db((db) => db.prepare("SELECT * FROM owner_agent_runs").all()))}; transcript=${JSON.stringify(fixture.db((db) => db.prepare("SELECT payload_json FROM owner_agent_session_records").all()))}; control=${fixture.control.text}`,
+        `${String(error)}; runs=${JSON.stringify(
+          fixture.db((db) => db.prepare("SELECT * FROM owner_agent_runs").all()),
+        )}; transcript=${JSON.stringify(
+          fixture.db((db) =>
+            db.prepare("SELECT payload_json FROM owner_agent_session_records").all(),
+          ),
+        )}; control=${fixture.control.text}`,
       );
     }
     const messages = await fixture.api(`/api/owner/channels/${agent.channelId}/messages`);
     expect(messages.messages).toHaveLength(1);
     const facts = fixture.db((db) =>
       db
-        .prepare(
+        .prepare<[string], { payload_json: string }>(
           "SELECT payload_json FROM owner_agent_session_records WHERE agent_id=? ORDER BY seq",
         )
         .all(agent.id),
-    ) as Array<{ payload_json: string }>;
+    );
     expect(facts.map((row) => JSON.parse(row.payload_json))).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ kind: "configuration" }),
@@ -47,9 +53,9 @@ it("control plane requests the provider while its web API responds and a silent 
 }, 30000);
 
 it("one real Pi run uses authorized conversation, task, file and command tools and continues from durable results", async () => {
-  let channelId = "",
-    messageId = "",
-    turn = 0;
+  let channelId = "";
+  let messageId = "";
+  let turn = 0;
   const fixture = await loopFixture((request, response) => {
     let previous: any;
     try {
@@ -147,11 +153,11 @@ it("one real Pi run uses authorized conversation, task, file and command tools a
     expect(last).toContain("missing.tool");
     const records = fixture.db((db) =>
       db
-        .prepare(
+        .prepare<[string], { payload_json: string }>(
           "SELECT payload_json FROM owner_agent_session_records WHERE agent_id=? ORDER BY seq",
         )
         .all(agent.id),
-    ) as Array<{ payload_json: string }>;
+    );
     expect(
       records.filter((row) => JSON.parse(row.payload_json).message?.role === "toolResult"),
     ).toHaveLength(11);

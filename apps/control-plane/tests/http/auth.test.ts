@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
-  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -93,10 +92,14 @@ it("validates the configured password and stores only password and session hashe
   const cookie = cookiePair(accepted);
   const rawToken = cookie.slice(cookie.indexOf("=") + 1);
   const db = new Database(join(dataDir, "control-plane.sqlite"));
-  const credential = db.prepare("SELECT password_hash FROM owner_credentials WHERE id=1").get() as
-    { password_hash: string } | undefined;
-  const session = db.prepare("SELECT token_hash FROM owner_sessions").get() as
-    { token_hash: string } | undefined;
+  const credential = db
+    .prepare<[], { password_hash: string }>(
+      "SELECT password_hash FROM owner_credentials WHERE id=1",
+    )
+    .get();
+  const session = db
+    .prepare<[], { token_hash: string }>("SELECT token_hash FROM owner_sessions")
+    .get();
   db.close();
 
   expect(wrongPassword.status).toBe(401);
@@ -221,13 +224,13 @@ it("deletes logged-out sessions and cleans expired rows in batches of at most 10
     insertExpired.run(tokenHash, now - 10_000, now - 1);
   }
   const cleanupPlan = db
-    .prepare(
+    .prepare<[number], { detail: string }>(
       "EXPLAIN QUERY PLAN SELECT token_hash FROM owner_sessions WHERE expires_at <= ? ORDER BY expires_at LIMIT 100",
     )
-    .all(now) as { detail: string }[];
-  const beforeLogin = (
-    db.prepare("SELECT count(*) AS count FROM owner_sessions").get() as { count: number }
-  ).count;
+    .all(now);
+  const beforeLogin = db
+    .prepare<[], { count: number }>("SELECT count(*) AS count FROM owner_sessions")
+    .get()!.count;
   db.close();
 
   expect(loggedOutRow).toBeUndefined();
@@ -240,9 +243,9 @@ it("deletes logged-out sessions and cleans expired rows in batches of at most 10
   expect((await login(app)).status).toBe(204);
 
   const afterDb = new Database(join(dataDir, "control-plane.sqlite"));
-  const afterLogin = (
-    afterDb.prepare("SELECT count(*) AS count FROM owner_sessions").get() as { count: number }
-  ).count;
+  const afterLogin = afterDb
+    .prepare<[], { count: number }>("SELECT count(*) AS count FROM owner_sessions")
+    .get()!.count;
   afterDb.close();
   expect(beforeLogin + 1 - afterLogin).toBe(100);
 });

@@ -13,8 +13,8 @@ afterEach(cleanupFixture);
 it("finds an online Agent beyond more than one page of offline deliveries", async () => {
   const app = createAgentCreationFixture();
   const cookie = await login(app);
-  const offlineNode = await pairNode(app, cookie),
-    onlineNode = await pairNode(app, cookie);
+  const offlineNode = await pairNode(app, cookie);
+  const onlineNode = await pairNode(app, cookie);
   app.nodes.close(offlineNode.socket);
 
   for (let index = 0; index < 105; index++) {

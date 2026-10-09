@@ -3,7 +3,6 @@ import { spawn } from "node:child_process";
 import { chmodSync, mkdtempSync, rmSync } from "node:fs";
 
 import { tmpdir } from "node:os";
-import { resolve } from "node:path";
 import { join } from "node:path";
 
 import { expect, it } from "vitest";
@@ -16,7 +15,13 @@ it("keeps retrying when the WebSocket handshake never completes", async () => {
   chmodSync(directory, 0o700);
   const endpoint = await startUnresponsiveWebSocketEndpoint();
   const moduleUrl = import.meta.resolve("@mate/node");
-  const runner = `const { runLinuxNode } = await import(${JSON.stringify(moduleUrl)}); await runLinuxNode({ controlPlaneUrl: process.env.MATE_CONTROL_PLANE_URL, dataDirectory: process.env.MATE_NODE_DATA_DIR, pairingToken: process.env.MATE_NODE_PAIRING_TOKEN }, new AbortController().signal);`;
+  const runner = `
+    const { runLinuxNode } = await import(${JSON.stringify(moduleUrl)});
+    await runLinuxNode({
+      controlPlaneUrl: process.env.MATE_CONTROL_PLANE_URL,
+      dataDirectory: process.env.MATE_NODE_DATA_DIR,
+      pairingToken: process.env.MATE_NODE_PAIRING_TOKEN
+    }, new AbortController().signal);`;
   const node = new ProcessOutput(
     spawn(process.execPath, ["--input-type=module", "--eval", runner], {
       cwd: process.cwd(),
@@ -48,7 +53,20 @@ it("aborts a connecting WebSocket without an unhandled error", async () => {
   chmodSync(directory, 0o700);
   const endpoint = await startUnresponsiveWebSocketEndpoint();
   const moduleUrl = import.meta.resolve("@mate/node");
-  const runner = `const { runLinuxNode } = await import(${JSON.stringify(moduleUrl)}); const controller = new AbortController(); process.on("message", (message) => { if (message === "abort") { controller.abort(); process.disconnect(); } }); await runLinuxNode({ controlPlaneUrl: process.env.MATE_CONTROL_PLANE_URL, dataDirectory: process.env.MATE_NODE_DATA_DIR, pairingToken: process.env.MATE_NODE_PAIRING_TOKEN }, controller.signal);`;
+  const runner = `
+    const { runLinuxNode } = await import(${JSON.stringify(moduleUrl)});
+    const controller = new AbortController();
+    process.on("message", (message) => {
+      if (message === "abort") {
+        controller.abort();
+        process.disconnect();
+      }
+    });
+    await runLinuxNode({
+      controlPlaneUrl: process.env.MATE_CONTROL_PLANE_URL,
+      dataDirectory: process.env.MATE_NODE_DATA_DIR,
+      pairingToken: process.env.MATE_NODE_PAIRING_TOKEN
+    }, controller.signal);`;
   const node = new ProcessOutput(
     spawn(process.execPath, ["--input-type=module", "--eval", runner], {
       cwd: process.cwd(),

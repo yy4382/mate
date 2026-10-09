@@ -2,7 +2,6 @@ import { type TestRun } from "../support/agent/tool-run.js";
 
 import { randomUUID } from "node:crypto";
 
-import { resolve } from "node:path";
 import { afterEach, expect, it } from "vitest";
 
 import {
@@ -16,8 +15,8 @@ afterEach(cleanupFixture);
 
 it("does not let a member transfer a task to a public-channel non-member", async () => {
   const { app, cookie, nodeId, socket } = await createConversationFixture();
-  const memberId = await prepareVerifiedAgent(app, nodeId, "Task owner"),
-    outsiderId = await prepareVerifiedAgent(app, nodeId, "Interested onlooker");
+  const memberId = await prepareVerifiedAgent(app, nodeId, "Task owner");
+  const outsiderId = await prepareVerifiedAgent(app, nodeId, "Interested onlooker");
   const room = app.chat.channels.createChannel({
     name: "Shared work",
     description: "A public room with a task.",
@@ -30,8 +29,8 @@ it("does not let a member transfer a task to a public-channel non-member", async
     body: JSON.stringify({ apiKey: "synthetic-transfer-key" }),
   });
   // Start the non-member's own run first, from its private DM.
-  const outsiderDirect = app.chat.conversations.getOrCreateAgentDirectChannel(outsiderId)!,
-    outsiderStart = socket.sent.length;
+  const outsiderDirect = app.chat.conversations.getOrCreateAgentDirectChannel(outsiderId)!;
+  const outsiderStart = socket.sent.length;
   app.chat.messages.createMessage({ channelId: outsiderDirect.id, text: "Start an onlooker run." });
   const outsiderRun = await waitForRun(socket, outsiderStart);
 
@@ -152,8 +151,8 @@ it("lets peers coordinate on one task without a tree and preserves a newer claim
       break;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  const first = runs.find((run) => run.agentId === firstId)!,
-    second = runs.find((run) => run.agentId === secondId)!;
+  const first = runs.find((run) => run.agentId === firstId)!;
+  const second = runs.find((run) => run.agentId === secondId)!;
   expect(first).toBeDefined();
   expect(second).toBeDefined();
   async function action(

@@ -7,7 +7,6 @@ import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 
 import {
-  password,
   fixtures,
   cleanupFixture,
   createConversationFixture,

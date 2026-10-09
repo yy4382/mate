@@ -100,9 +100,9 @@ it("stores one API key per supported provider without returning it and keeps onl
 
 it("answers Agent readiness from the credential row instead of writing Agent state", async () => {
   const fixture = setup();
-  const nodeId = randomUUID(),
-    agentId = randomUUID(),
-    databasePath = join(fixture.dataDir, "control-plane.sqlite");
+  const nodeId = randomUUID();
+  const agentId = randomUUID();
+  const databasePath = join(fixture.dataDir, "control-plane.sqlite");
   const db = new Database(databasePath);
   db.prepare("INSERT INTO nodes(id,public_key,paired_at) VALUES(?,?,?)").run(
     nodeId,

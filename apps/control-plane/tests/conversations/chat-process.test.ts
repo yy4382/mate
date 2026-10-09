@@ -7,8 +7,8 @@ import { expect, it } from "vitest";
 const password = "integration-owner-password-with-12-plus-characters";
 
 async function startControlPlane(fixtureDir: string) {
-  const dataDir = join(fixtureDir, "data"),
-    passwordFile = join(fixtureDir, "owner-password");
+  const dataDir = join(fixtureDir, "data");
+  const passwordFile = join(fixtureDir, "owner-password");
   writeFileSync(passwordFile, `${password}\n`, { mode: 0o600 });
   chmodSync(passwordFile, 0o600);
   const server = spawn(process.execPath, [resolve("dist/main.js")], {
@@ -21,8 +21,8 @@ async function startControlPlane(fixtureDir: string) {
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
-  const stdout = server.stdout,
-    stderr = server.stderr;
+  const stdout = server.stdout;
+  const stderr = server.stderr;
   if (!stdout || !stderr) throw new Error("Control-plane process pipes were not created");
   let diagnostics = "";
   stderr.setEncoding("utf8");
@@ -68,30 +68,22 @@ async function stopControlPlane(server: ChildProcess) {
 }
 
 async function readEvent(response: Response): Promise<{ id: number; body: string }> {
-  const reader = response.body!.getReader();
-  let timeout: ReturnType<typeof setTimeout>;
-  const chunk = await Promise.race([
-    reader.read(),
-    new Promise<never>((_, reject) => {
-      timeout = setTimeout(() => reject(new Error("SSE event timed out")), 3000);
-    }),
-  ]);
-  clearTimeout(timeout!);
-  expect(chunk.done).toBe(false);
-  const body = new TextDecoder().decode(chunk.value);
-  await reader.cancel();
+  const body = await readFrame(response, "SSE event timed out");
   const id = Number(body.match(/^id: (\d+)$/m)?.[1]);
   expect(Number.isSafeInteger(id)).toBe(true);
   return { id, body };
 }
 
-async function readFrame(response: Response): Promise<string> {
+async function readFrame(
+  response: Response,
+  timeoutMessage = "SSE frame timed out",
+): Promise<string> {
   const reader = response.body!.getReader();
   let timeout: ReturnType<typeof setTimeout>;
   const chunk = await Promise.race([
     reader.read(),
     new Promise<never>((_, reject) => {
-      timeout = setTimeout(() => reject(new Error("SSE frame timed out")), 3000);
+      timeout = setTimeout(() => reject(new Error(timeoutMessage)), 3000);
     }),
   ]);
   clearTimeout(timeout!);

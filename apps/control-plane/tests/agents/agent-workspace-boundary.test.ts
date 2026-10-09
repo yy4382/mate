@@ -13,7 +13,6 @@ import {
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
 
 // One owner, one ordinary account, two Agents created from the web, and the owner's read-only
@@ -130,9 +129,9 @@ function startNode(options: {
   workspaceRoot: string;
   pairingToken?: string;
 }): ProcessOutput {
-  const clientModule = import.meta.resolve("@mate/node"),
-    executorModule = import.meta.resolve("@mate/node/workspace-execution"),
-    runner = `
+  const clientModule = import.meta.resolve("@mate/node");
+  const executorModule = import.meta.resolve("@mate/node/workspace-execution");
+  const runner = `
       const { runLinuxNodeWithTestDependencies } = await import(${JSON.stringify(clientModule)});
       const { LinuxWorkspaceExecutor } = await import(${JSON.stringify(executorModule)});
       const controller = new AbortController();
@@ -230,34 +229,35 @@ async function createAgent(
 
 it("keeps the owner workspace preview inside the selected Agent through restarts", async () => {
   if (typeof process.getuid === "function" && process.getuid() === 0) return;
-  const directory = mkdtempSync(join(tmpdir(), "mate-agent-workspace-boundary-")),
-    nodeData = join(directory, "node-data"),
-    workspaceRoot = join(directory, "agent-workspaces"),
-    port = await freePort(),
-    origin = `http://127.0.0.1:${port}`;
+  const directory = mkdtempSync(join(tmpdir(), "mate-agent-workspace-boundary-"));
+  const nodeData = join(directory, "node-data");
+  const workspaceRoot = join(directory, "agent-workspaces");
+  const port = await freePort();
+  const origin = `http://127.0.0.1:${port}`;
   chmodSync(directory, 0o700);
   mkdirSync(workspaceRoot, { mode: 0o700 });
   mkdirSync(nodeData, { mode: 0o700 });
   writeFileSync(join(directory, "owner-password"), `${ownerPassword}\n`, { mode: 0o600 });
 
-  let control: ProcessOutput | undefined, node: ProcessOutput | undefined;
+  let control: ProcessOutput | undefined;
+  let node: ProcessOutput | undefined;
   try {
     control = startControlPlane(directory, port);
     await control.waitFor(/MATE_CONTROL_PLANE_LISTENING (\d+)/);
-    const cookie = await login(origin),
-      pairing = await fetch(new URL("/api/owner/nodes/pairing-tokens", origin), {
-        method: "POST",
-        headers: { cookie },
-      }),
-      { pairingToken } = (await pairing.json()) as { pairingToken: string };
+    const cookie = await login(origin);
+    const pairing = await fetch(new URL("/api/owner/nodes/pairing-tokens", origin), {
+      method: "POST",
+      headers: { cookie },
+    });
+    const { pairingToken } = (await pairing.json()) as { pairingToken: string };
     node = startNode({ origin, nodeData, workspaceRoot, pairingToken });
-    const paired = await node.waitFor(/MATE_NODE_PAIRED ([0-9a-f-]+)/i),
-      nodeId = paired[1]!;
+    const paired = await node.waitFor(/MATE_NODE_PAIRED ([0-9a-f-]+)/i);
+    const nodeId = paired[1]!;
 
-    const first = await createAgent(origin, cookie, nodeId, "第一名同事"),
-      second = await createAgent(origin, cookie, nodeId, "第二名同事"),
-      firstWorkspace = first.linuxIdentity!.workspace,
-      secondWorkspace = second.linuxIdentity!.workspace;
+    const first = await createAgent(origin, cookie, nodeId, "第一名同事");
+    const second = await createAgent(origin, cookie, nodeId, "第二名同事");
+    const firstWorkspace = first.linuxIdentity!.workspace;
+    const secondWorkspace = second.linuxIdentity!.workspace;
     expect(firstWorkspace).toBe(join(workspaceRoot, first.id));
     expect(secondWorkspace).toBe(join(workspaceRoot, second.id));
     expect(firstWorkspace).not.toBe(secondWorkspace);
@@ -305,14 +305,14 @@ it("keeps the owner workspace preview inside the selected Agent through restarts
     }
 
     // A download is a stream of the same file, so it obeys the same boundary and records failure.
-    const downloadId = randomUUID(),
-      download = await fetch(
-        new URL(
-          `/api/owner/agents/${first.id}/workspace/download?path=${encodeURIComponent(`../${second.id}/peer-notes.md`)}&downloadId=${downloadId}`,
-          origin,
-        ),
-        { headers: { cookie } },
-      );
+    const downloadId = randomUUID();
+    const download = await fetch(
+      new URL(
+        `/api/owner/agents/${first.id}/workspace/download?path=${encodeURIComponent(`../${second.id}/peer-notes.md`)}&downloadId=${downloadId}`,
+        origin,
+      ),
+      { headers: { cookie } },
+    );
     expect(download.status).toBe(403);
     const status = await fetch(
       new URL(`/api/owner/agents/${first.id}/workspace/downloads/${downloadId}`, origin),

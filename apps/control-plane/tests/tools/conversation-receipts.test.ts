@@ -66,8 +66,10 @@ it("replays a committed tool action after its reply is lost and the delivery ret
   );
   expect(socket.sent).toHaveLength(sentBeforeToolCall);
   const original = db
-    .prepare("SELECT result_json FROM owner_agent_tool_actions WHERE session_id=? AND action_id=?")
-    .get(firstRun.sessionId, actionId) as { result_json: string } | undefined;
+    .prepare<[string, string], { result_json: string }>(
+      "SELECT result_json FROM owner_agent_tool_actions WHERE session_id=? AND action_id=?",
+    )
+    .get(firstRun.sessionId, actionId);
   expect(original).toBeDefined();
   const originalResult = JSON.parse(original!.result_json) as unknown;
   expect(

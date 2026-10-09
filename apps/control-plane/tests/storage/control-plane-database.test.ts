@@ -29,13 +29,12 @@ function makeDatabase(path: string, id: number, revision: number): Database.Data
 }
 
 function tableNames(database: Database.Database): string[] {
-  return (
-    database
-      .prepare(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
-      )
-      .all() as Array<{ name: string }>
-  ).map((row) => row.name);
+  return database
+    .prepare<[], { name: string }>(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+    )
+    .all()
+    .map((row) => row.name);
 }
 
 function columnNames(database: Database.Database, table: string): string[] {
@@ -52,13 +51,12 @@ function columnCount(database: Database.Database): number {
 }
 
 function indexNames(database: Database.Database): string[] {
-  return (
-    database
-      .prepare(
-        "SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%' ORDER BY name",
-      )
-      .all() as Array<{ name: string }>
-  ).map((row) => row.name);
+  return database
+    .prepare<[], { name: string }>(
+      "SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+    )
+    .all()
+    .map((row) => row.name);
 }
 
 function columnNamesForIndex(database: Database.Database, index: string): string[] {
@@ -68,13 +66,11 @@ function columnNamesForIndex(database: Database.Database, index: string): string
 }
 
 function indexCount(database: Database.Database): number {
-  return (
-    database
-      .prepare(
-        "SELECT COUNT(*) AS count FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'",
-      )
-      .get() as { count: number }
-  ).count;
+  return database
+    .prepare<[], { count: number }>(
+      "SELECT COUNT(*) AS count FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'",
+    )
+    .get()!.count;
 }
 
 it("a new data directory gets the complete format without the Push service", () => {
@@ -204,11 +200,11 @@ it("declares a preparation stage the owner_agents CHECK constraint and the guard
   const database = new Database(":memory:");
   database.exec(controlPlaneSchema);
   try {
-    const declaration = (
-      database
-        .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='owner_agents'")
-        .get() as { sql: string }
-    ).sql;
+    const declaration = database
+      .prepare<[], { sql: string }>(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='owner_agents'",
+      )
+      .get()!.sql;
     const declared = declaration
       .match(/stage TEXT NOT NULL CHECK\(stage IN \(([^)]*)\)\)/)![1]!
       .split(",")
@@ -408,8 +404,8 @@ it("a new control-plane database carries no privileged approval state", () => {
 });
 
 it("the owner-auth service entry rejects a foreign application id without modifying its database", () => {
-  const f = fixture(),
-    database = makeDatabase(f.path, 1, 22);
+  const f = fixture();
+  const database = makeDatabase(f.path, 1, 22);
   database.exec("CREATE TABLE unrelated(value TEXT); INSERT INTO unrelated VALUES('keep me')");
   database.close();
 
@@ -421,8 +417,8 @@ it("the owner-auth service entry rejects a foreign application id without modify
 });
 
 it("rejects a corrupt database without replacing or deleting its bytes", () => {
-  const f = fixture(),
-    corrupt = Buffer.from("not a SQLite database\0mate");
+  const f = fixture();
+  const corrupt = Buffer.from("not a SQLite database\0mate");
   writeFileSync(f.path, corrupt, { mode: 0o600 });
 
   expect(() => new OwnerAuth({ dataDir: f.dataDir })).toThrow(
@@ -432,8 +428,8 @@ it("rejects a corrupt database without replacing or deleting its bytes", () => {
 });
 
 it("rejects an unknown control-plane revision instead of opening it as current", () => {
-  const f = fixture(),
-    database = makeDatabase(f.path, applicationId, 999);
+  const f = fixture();
+  const database = makeDatabase(f.path, applicationId, 999);
   database.exec("CREATE TABLE unrelated(value TEXT)");
   database.close();
 
@@ -441,8 +437,8 @@ it("rejects an unknown control-plane revision instead of opening it as current",
 });
 
 it.each([27, 28, 29, 30, 31])("rejects the superseded control-plane revision %i", (revision) => {
-  const f = fixture(),
-    database = makeDatabase(f.path, applicationId, revision);
+  const f = fixture();
+  const database = makeDatabase(f.path, applicationId, revision);
   database.exec("CREATE TABLE unrelated(value TEXT)");
   database.close();
 
@@ -452,8 +448,8 @@ it.each([27, 28, 29, 30, 31])("rejects the superseded control-plane revision %i"
 });
 
 it("rejects a current revision that is missing declared schema structures", () => {
-  const f = fixture(),
-    database = makeDatabase(f.path, applicationId, 32);
+  const f = fixture();
+  const database = makeDatabase(f.path, applicationId, 32);
   database.exec("CREATE TABLE unrelated(value TEXT)");
   database.close();
 

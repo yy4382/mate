@@ -5,7 +5,7 @@ import { assistantEntry } from "../support/agent/session.js";
 import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 
 import {

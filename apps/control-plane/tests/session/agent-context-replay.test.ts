@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import Database from "better-sqlite3";
 import { expect, it } from "vitest";
 import {
@@ -20,7 +20,8 @@ it("keeps the actual OpenAI request prefix across tools, DM, public/private chan
   chmodSync(directory, 0o700);
   writeFileSync(join(directory, "owner-password"), ownerPassword, { mode: 0o600 });
   const requests: any[] = [];
-  let control: ProcessOutput | undefined, node: ProcessOutput | undefined;
+  let control: ProcessOutput | undefined;
+  let node: ProcessOutput | undefined;
   let turn = 0;
   let updateConfiguration: (() => Promise<void>) | undefined;
   let configurationTurn = -1;
@@ -51,44 +52,63 @@ it("keeps the actual OpenAI request prefix across tools, DM, public/private chan
             ? [{ id: "invalid", name: "tools.describe", arguments: {} }]
             : [];
     response.writeHead(200, { "content-type": "text/event-stream" });
-    const output = calls.length
-      ? calls.map((call) => ({
-          type: "function_call",
-          id: `fc_${call.id}`,
-          call_id: call.id,
-          name: call.name,
-          arguments: JSON.stringify(call.arguments),
-          status: "completed",
-        }))
-      : [
-          {
-            type: "message",
-            id: `msg_${step}`,
-            role: "assistant",
+    const output = [
+      ...(step === 0
+        ? [
+            {
+              type: "reasoning",
+              id: "rs_signed",
+              summary: [{ type: "summary_text", text: "Synthetic reasoning" }],
+              encrypted_content: "synthetic-replay-signature",
+            },
+          ]
+        : []),
+      ...(calls.length
+        ? calls.map((call) => ({
+            type: "function_call",
+            id: `fc_${call.id}`,
+            call_id: call.id,
+            name: call.name,
+            arguments: JSON.stringify(call.arguments),
             status: "completed",
-            content: [
-              {
-                type: "output_text",
-                text: step === 3 ? "x".repeat(1_100_000) : `  final ${step}\n`,
-                annotations: [],
-              },
-            ],
-          },
-        ];
-    if (step === 0)
-      output.unshift({
-        type: "reasoning",
-        id: "rs_signed",
-        summary: [{ type: "summary_text", text: "Synthetic reasoning" }],
-        encrypted_content: "synthetic-replay-signature",
-      } as any);
+          }))
+        : [
+            {
+              type: "message",
+              id: `msg_${step}`,
+              role: "assistant",
+              status: "completed",
+              content: [
+                {
+                  type: "output_text",
+                  text: step === 3 ? "x".repeat(1_100_000) : `  final ${step}\n`,
+                  annotations: [],
+                },
+              ],
+            },
+          ]),
+    ];
     output.forEach((item, index) =>
       response.write(
         `data: ${JSON.stringify({ type: "response.output_item.done", output_index: index, item })}\n\n`,
       ),
     );
     response.end(
-      `data: ${JSON.stringify({ type: "response.completed", response: { id: `response-${step}`, status: "completed", output, usage: { input_tokens: 100, output_tokens: 10, total_tokens: 110, input_tokens_details: { cached_tokens: 60 }, output_tokens_details: { reasoning_tokens: 0 } } } })}\n\n`,
+      `data: ${JSON.stringify({
+        type: "response.completed",
+        response: {
+          id: `response-${step}`,
+          status: "completed",
+          output,
+          usage: {
+            input_tokens: 100,
+            output_tokens: 10,
+            total_tokens: 110,
+            input_tokens_details: { cached_tokens: 60 },
+            output_tokens_details: { reasoning_tokens: 0 },
+          },
+        },
+      })}\n\n`,
     );
   });
   await new Promise<void>((done) => provider.listen(0, "127.0.0.1", done));
@@ -136,10 +156,10 @@ it("keeps the actual OpenAI request prefix across tools, DM, public/private chan
     const complete = async (count: number) =>
       eventually(() => {
         const row = db!
-          .prepare(
+          .prepare<[string], { n: number }>(
             "SELECT COUNT(*) AS n FROM owner_agent_runs WHERE agent_id=? AND state='completed'",
           )
-          .get(agentId) as { n: number };
+          .get(agentId)!;
         return row.n === count ? true : undefined;
       }, `completed run ${count}`);
     await api(`/api/owner/channels/${dm}/messages`, { text: "私信工作" });
@@ -234,10 +254,10 @@ it("keeps the actual OpenAI request prefix across tools, DM, public/private chan
         .all(agentId, savedHistory.length),
     ).toEqual(savedHistory);
     const configurations = db
-      .prepare(
+      .prepare<[string], { payload_json: string }>(
         "SELECT payload_json FROM owner_agent_session_records WHERE agent_id=? AND kind='configuration' ORDER BY seq",
       )
-      .all(agentId) as Array<{ payload_json: string }>;
+      .all(agentId);
     expect(JSON.parse(configurations.at(-1)!.payload_json).configuration).toMatchObject({
       modelId: "gpt-4.1-mini",
       piAgentVersion: "1.0.0",

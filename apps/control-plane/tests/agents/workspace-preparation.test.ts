@@ -12,8 +12,8 @@ import {
 afterEach(cleanupFixture);
 
 it("refuses the owner's workspace preview until preparation finished, then serves it", async () => {
-  const { app, cookie, db, nodeId, socket } = await createConversationFixture(),
-    agentId = randomUUID();
+  const { app, cookie, db, nodeId, socket } = await createConversationFixture();
+  const agentId = randomUUID();
   app.agents.prepare({
     id: agentId,
     nodeId,
@@ -69,8 +69,8 @@ it("refuses the owner's workspace preview until preparation finished, then serve
 });
 
 it("lets no progress or failure report move an Agent whose preparation already finished", async () => {
-  const { app, nodeId } = await createConversationFixture(),
-    agentId = randomUUID();
+  const { app, nodeId } = await createConversationFixture();
+  const agentId = randomUUID();
   app.agents.prepare({
     id: agentId,
     nodeId,
