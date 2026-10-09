@@ -50,27 +50,24 @@ export class AttachmentService {
     return {
       "attachments.list": defineAgentTool(
         attachmentToolDefinitions["attachments.list"],
-        (identity, input) => {
-          return {
-            attachments: this.listForAgent({
-              agentId: identity.agentId,
-              channelId: input.conversationId,
-            }),
-          };
-        },
+        (identity, input) => ({
+          attachments: this.listForAgent({
+            agentId: identity.agentId,
+            channelId: input.conversationId,
+          }),
+        }),
         "Agent 文件请求被拒绝。",
       ),
       "attachments.read_chunk": defineAgentTool(
         attachmentToolDefinitions["attachments.read_chunk"],
-        (identity, input) => {
-          return this.readChunkForAgent({ ...identity, ...input, channelId: input.conversationId });
-        },
+        (identity, input) =>
+          this.readChunkForAgent({ ...identity, ...input, channelId: input.conversationId }),
         "Agent 文件请求被拒绝。",
       ),
       "attachments.publish": defineAgentTool(
         attachmentToolDefinitions["attachments.publish"],
-        (identity, input) => {
-          return this.publication.publishNodeFile({
+        (identity, input) =>
+          this.publication.publishNodeFile({
             ...identity,
             path: input.path,
             ...(input.filename === undefined ? {} : { filename: input.filename }),
@@ -78,8 +75,7 @@ export class AttachmentService {
             operationName: "attachments.publish",
             toolInput: input,
             channelId: input.conversationId,
-          });
-        },
+          }),
         "Agent 文件请求被拒绝。",
       ),
     };
@@ -313,6 +309,7 @@ export class AttachmentService {
       throw new AttachmentError("attachment_not_found", "附件内容暂不可用。", 404);
     return {
       attachment: toAttachmentSummary(row),
+      // The file ReadStream has no encoding, so its chunks are Buffer/Uint8Array bytes.
       stream: Readable.toWeb(
         createReadStream(path, { highWaterMark: 64 * 1024 }),
       ) as ReadableStream<Uint8Array>,

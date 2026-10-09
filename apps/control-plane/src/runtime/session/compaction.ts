@@ -110,8 +110,9 @@ export class SessionCompaction {
 
   async transform(messages: AgentMessage[], signal?: AbortSignal): Promise<AgentMessage[]> {
     const system = messages.filter((message) => message.role === "system");
-    const activeStart = this.checkpoint
-      ? this.entries.findIndex((entry) => entry.id === this.checkpoint!.firstKeptEntryId)
+    const currentCheckpoint = this.checkpoint;
+    const activeStart = currentCheckpoint
+      ? this.entries.findIndex((entry) => entry.id === currentCheckpoint.firstKeptEntryId)
       : 0;
     if (activeStart < 0) throw new Error("Compaction checkpoint lost its retained entry");
     const active = this.entries.slice(activeStart);
@@ -247,25 +248,24 @@ export class SessionCompaction {
       throw new Error("Summary request has no legal input and output capacity");
     const requestId = randomUUID();
     let inspectedUsage: ReturnType<typeof inspectProviderResponse> | undefined;
-    const response = await (
-      await this.stream(this.model, context, {
-        apiKey: this.apiKey,
-        env: {},
-        ...(signal ? { signal } : {}),
-        maxTokens,
-        cacheRetention: "none",
-        sessionId: requestId,
-        ...(this.model.api === "google-generative-ai" || this.model.api === "google-vertex"
-          ? {}
-          : {
-              fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
-                const response = await fetch(input, init);
-                inspectedUsage = inspectProviderResponse(response, this.model.api);
-                return response;
-              },
-            }),
-      })
-    ).result();
+    const responseStream = await this.stream(this.model, context, {
+      apiKey: this.apiKey,
+      env: {},
+      ...(signal ? { signal } : {}),
+      maxTokens,
+      cacheRetention: "none",
+      sessionId: requestId,
+      ...(this.model.api === "google-generative-ai" || this.model.api === "google-vertex"
+        ? {}
+        : {
+            fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+              const response = await fetch(input, init);
+              inspectedUsage = inspectProviderResponse(response, this.model.api);
+              return response;
+            },
+          }),
+    });
+    const response = await responseStream.result();
     const rawUsage = await inspectedUsage;
     if (confirmedModelResponse(response, rawUsage?.usage ?? null, rawUsage?.complete ?? false))
       await this.commit({

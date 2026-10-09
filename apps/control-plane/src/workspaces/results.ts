@@ -125,8 +125,7 @@ export function deterministicOperationId(actionId: string): string {
 
 export function parseOperationReceipt(value: string): unknown {
   try {
-    const receipt: unknown = JSON.parse(value);
-    return receipt;
+    return JSON.parse(value);
   } catch {
     throw new WorkspaceError("invalid_response", "节点操作收据无法读取。", 502);
   }

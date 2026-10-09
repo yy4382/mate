@@ -375,33 +375,28 @@ export class TaskService {
     return {
       "tasks.create": defineConversationTool(
         conversationToolDefinitions["tasks.create"],
-        (run, toolCallId, args) => {
-          return this.executeTaskChange(run, toolCallId, { name: "tasks.create", input: args });
-        },
+        (run, toolCallId, args) =>
+          this.executeTaskChange(run, toolCallId, { name: "tasks.create", input: args }),
       ),
       "tasks.claim": defineConversationTool(
         conversationToolDefinitions["tasks.claim"],
-        (run, toolCallId, args) => {
-          return this.executeTaskChange(run, toolCallId, { name: "tasks.claim", input: args });
-        },
+        (run, toolCallId, args) =>
+          this.executeTaskChange(run, toolCallId, { name: "tasks.claim", input: args }),
       ),
       "tasks.yield": defineConversationTool(
         conversationToolDefinitions["tasks.yield"],
-        (run, toolCallId, args) => {
-          return this.executeTaskChange(run, toolCallId, { name: "tasks.yield", input: args });
-        },
+        (run, toolCallId, args) =>
+          this.executeTaskChange(run, toolCallId, { name: "tasks.yield", input: args }),
       ),
       "tasks.transfer": defineConversationTool(
         conversationToolDefinitions["tasks.transfer"],
-        (run, toolCallId, args) => {
-          return this.executeTaskChange(run, toolCallId, { name: "tasks.transfer", input: args });
-        },
+        (run, toolCallId, args) =>
+          this.executeTaskChange(run, toolCallId, { name: "tasks.transfer", input: args }),
       ),
       "tasks.update": defineConversationTool(
         conversationToolDefinitions["tasks.update"],
-        (run, toolCallId, args) => {
-          return this.executeTaskChange(run, toolCallId, { name: "tasks.update", input: args });
-        },
+        (run, toolCallId, args) =>
+          this.executeTaskChange(run, toolCallId, { name: "tasks.update", input: args }),
       ),
       "tasks.review": defineConversationTool(
         conversationToolDefinitions["tasks.review"],

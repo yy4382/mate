@@ -31,39 +31,34 @@ export class WorkspaceReads {
     return {
       "workspace.list": defineAgentTool(
         workspaceToolDefinitions["workspace.list"],
-        (identity, input) => {
-          return this.readForAgent(identity, {
+        (identity, input) =>
+          this.readForAgent(identity, {
             kind: "workspace_list",
             ...input,
-          });
-        },
+          }),
         "Agent 文件请求被拒绝。",
       ),
       "workspace.stat": defineAgentTool(
         workspaceToolDefinitions["workspace.stat"],
-        (identity, input) => {
-          return this.readForAgent(identity, {
+        (identity, input) =>
+          this.readForAgent(identity, {
             kind: "workspace_stat",
             ...input,
-          });
-        },
+          }),
         "Agent 文件请求被拒绝。",
       ),
       "workspace.read": defineAgentTool(
         workspaceToolDefinitions["workspace.read"],
-        (identity, input) => {
-          return this.readForAgent(identity, { kind: "read", ...input });
-        },
+        (identity, input) => this.readForAgent(identity, { kind: "read", ...input }),
         "Agent 文件请求被拒绝。",
       ),
       "workspace.read_chunk": defineAgentTool(
         workspaceToolDefinitions["workspace.read_chunk"],
-        (identity, input) => {
-          return this.readForAgent(identity, {
+        (identity, input) =>
+          this.readForAgent(identity, {
             kind: "workspace_read_chunk",
             ...input,
-          });
-        },
+          }),
         "Agent 文件请求被拒绝。",
       ),
     };

@@ -326,18 +326,13 @@ export class ConversationDirectory {
 
   agentTools() {
     return {
-      "agents.list": defineConversationTool(
-        conversationToolDefinitions["agents.list"],
-        (run, toolCallId, args) => {
-          return { agents: this.listContactableAgents(run.agent_id) };
-        },
-      ),
+      "agents.list": defineConversationTool(conversationToolDefinitions["agents.list"], (run) => ({
+        agents: this.listContactableAgents(run.agent_id),
+      })),
 
       "conversations.list": defineConversationTool(
         conversationToolDefinitions["conversations.list"],
-        (run, toolCallId, args) => {
-          return { conversations: this.listAgentConversations(run.agent_id) };
-        },
+        (run) => ({ conversations: this.listAgentConversations(run.agent_id) }),
       ),
 
       "conversations.open_dm": defineConversationTool(

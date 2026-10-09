@@ -88,9 +88,8 @@ export class NodeIdentity {
   }
   pair(request: Extract<NodeRequest, { type: "node.pair" }>): boolean {
     const now = this.now();
-    let paired: boolean;
     try {
-      paired = this.database
+      return this.database
         .transaction(() => {
           const result = this.database
             .prepare(
@@ -107,7 +106,6 @@ export class NodeIdentity {
     } catch {
       return false;
     }
-    return paired;
   }
 }
 function hashToken(token: string): string {

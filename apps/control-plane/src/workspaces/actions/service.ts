@@ -44,80 +44,74 @@ export class WorkspaceActions {
     return {
       "workspace.write": defineAgentTool(
         workspaceToolDefinitions["workspace.write"],
-        (identity, input) => {
-          return this.agentAction({
+        (identity, input) =>
+          this.agentAction({
             ...identity,
             actionId: identity.toolCallId,
             operationName: "workspace.write",
             toolInput: input,
             operation: { kind: "write", ...input },
-          });
-        },
+          }),
         "Agent 文件请求被拒绝。",
       ),
       "workspace.write_bytes": defineAgentTool(
         workspaceToolDefinitions["workspace.write_bytes"],
-        (identity, input) => {
-          return this.agentAction({
+        (identity, input) =>
+          this.agentAction({
             ...identity,
             actionId: identity.toolCallId,
             operationName: "workspace.write_bytes",
             toolInput: input,
             operation: { kind: "write_bytes", ...input },
-          });
-        },
+          }),
         "Agent 文件请求被拒绝。",
       ),
       "workspace.edit": defineAgentTool(
         workspaceToolDefinitions["workspace.edit"],
-        (identity, input) => {
-          return this.agentAction({
+        (identity, input) =>
+          this.agentAction({
             ...identity,
             actionId: identity.toolCallId,
             operationName: "workspace.edit",
             toolInput: input,
             operation: { kind: "edit", ...input },
-          });
-        },
+          }),
         "Agent 文件请求被拒绝。",
       ),
       "workspace.mkdir": defineAgentTool(
         workspaceToolDefinitions["workspace.mkdir"],
-        (identity, input) => {
-          return this.agentAction({
+        (identity, input) =>
+          this.agentAction({
             ...identity,
             actionId: identity.toolCallId,
             operationName: "workspace.mkdir",
             toolInput: input,
             operation: { kind: "mkdir", ...input },
-          });
-        },
+          }),
         "Agent 文件请求被拒绝。",
       ),
       "workspace.move": defineAgentTool(
         workspaceToolDefinitions["workspace.move"],
-        (identity, input) => {
-          return this.agentAction({
+        (identity, input) =>
+          this.agentAction({
             ...identity,
             actionId: identity.toolCallId,
             operationName: "workspace.move",
             toolInput: input,
             operation: { kind: "move", ...input },
-          });
-        },
+          }),
         "Agent 文件请求被拒绝。",
       ),
       "workspace.remove": defineAgentTool(
         workspaceToolDefinitions["workspace.remove"],
-        (identity, input) => {
-          return this.agentAction({
+        (identity, input) =>
+          this.agentAction({
             ...identity,
             actionId: identity.toolCallId,
             operationName: "workspace.remove",
             toolInput: input,
             operation: { kind: "remove", ...input },
-          });
-        },
+          }),
         "Agent 文件请求被拒绝。",
       ),
     };

@@ -28,13 +28,9 @@ export function inspectConfigurationSnapshot(
   input: unknown,
   options: { showContent?: boolean } = {},
 ) {
-  const record =
-    typeof input === "object" && input !== null ? (input as Record<string, unknown>) : {};
+  const record = isObjectValue(input) ? input : {};
   const candidate = record.kind === "configuration" ? record.configuration : record;
-  const raw =
-    typeof candidate === "object" && candidate !== null
-      ? (candidate as Record<string, unknown>)
-      : {};
+  const raw = isObjectValue(candidate) ? candidate : {};
   const parsed = sessionConfigurationSchema.safeParse(
     Object.fromEntries(Object.keys(sessionConfigurationSchema.shape).map((key) => [key, raw[key]])),
   );
@@ -50,4 +46,8 @@ export function inspectConfigurationSnapshot(
       ? { systemPrompt: parsed.data.systemPrompt, tools: parsed.data.tools }
       : {}),
   };
+}
+
+function isObjectValue(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

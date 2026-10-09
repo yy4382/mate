@@ -94,8 +94,8 @@ export function createAgentRoutes({
       return context.json({ agent });
     })
     .get("/api/owner/agents/:agentId/activity", (context) => {
-      const beforeText = context.req.query("before"),
-        limitText = context.req.query("limit");
+      const beforeText = context.req.query("before");
+      const limitText = context.req.query("limit");
       const before = beforeText === undefined ? null : Number(beforeText);
       const limit = limitText === undefined ? 50 : Number(limitText);
       if (
@@ -193,9 +193,9 @@ export function createAgentRoutes({
       } catch {
         return context.json({ error: "Agent 资料格式无效" }, 400);
       }
-      if (!newAgentRequestSchema.safeParse(body).success)
-        return context.json({ error: "Agent 资料格式无效" }, 400);
-      const input = newAgentRequestSchema.parse(body);
+      const parsed = newAgentRequestSchema.safeParse(body);
+      if (!parsed.success) return context.json({ error: "Agent 资料格式无效" }, 400);
+      const input = parsed.data;
       try {
         agents.assertSameRequest(input);
       } catch (error) {

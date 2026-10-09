@@ -76,12 +76,7 @@ export class AgentTools {
     operation: string,
     input: unknown,
   ): Promise<AgentToolCallResult> {
-    let accept!: () => void;
-    let refuse!: (error: unknown) => void;
-    const committed = new Promise<void>((resolve, reject) => {
-      accept = resolve;
-      refuse = reject;
-    });
+    const { promise: committed, resolve: accept, reject: refuse } = Promise.withResolvers<void>();
     // A synchronous refusal may have no node continuation waiting on this promise.
     void committed.catch(() => {});
     let execution: unknown;

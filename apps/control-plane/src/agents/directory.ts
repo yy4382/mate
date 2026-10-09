@@ -5,12 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { basename, resolve } from "node:path";
 import { type AgentWorkspaceIdentity, type AgentProvisionStage } from "@mate/protocol";
 
-import {
-  nodeAccountOf,
-  NodeAccountConflict,
-  type NodeAccount,
-  type NodeIdentity,
-} from "../nodes/identity.js";
+import { nodeAccountOf, NodeAccountConflict, type NodeIdentity } from "../nodes/identity.js";
 import { providerCredentialExistsSql } from "../providers/credentials.js";
 import type { OwnerChat } from "../conversations/service.js";
 import type {
@@ -145,8 +140,8 @@ export class AgentDirectory {
 
   /** Persist the stable Agent and logical session before any node operation starts. */
   prepare(input: NewAgentRequest): PreparedAgentProvision {
-    const requestHash = hashRequest(input),
-      at = this.now();
+    const requestHash = hashRequest(input);
+    const at = this.now();
     return this.db
       .transaction(() => {
         const existing = this.read(input.id);
@@ -190,8 +185,8 @@ export class AgentDirectory {
             throw new AgentRequestConflict("所选初始频道不存在或已归档，请更新表单后重试。");
         }
 
-        const requestId = randomUUID(),
-          sessionId = randomUUID();
+        const requestId = randomUUID();
+        const sessionId = randomUUID();
         this.db
           .prepare(
             `INSERT INTO owner_agents(
@@ -272,15 +267,15 @@ export class AgentDirectory {
         if (!/^[0-9a-f]{64}$/.test(identity.workspaceMarker))
           throw new AgentRequestConflict("节点未返回有效的 Agent 工作区原身份标记。");
 
-        const at = this.now(),
-          // Every Agent on one node runs under that node's single ordinary account. This
-          // transaction records it on the node the first time and requires every later Agent on
-          // that node to report the same one; a mismatch throws before anything is written.
-          account: NodeAccount = {
-            username: identity.username,
-            uid: identity.uid,
-            gid: identity.gid,
-          };
+        const at = this.now();
+        // Every Agent on one node runs under that node's single ordinary account. This
+        // transaction records it on the node the first time and requires every later Agent on
+        // that node to report the same one; a mismatch throws before anything is written.
+        const account = {
+          username: identity.username,
+          uid: identity.uid,
+          gid: identity.gid,
+        };
         // The Agent must still be preparing. A concurrent failure or an already finished Agent
         // must not have its stage overwritten, and the node account must not be recorded for a
         // workspace that was never accepted.
@@ -322,10 +317,10 @@ export class AgentDirectory {
 }
 
 function toAgent(row: AgentRow): AgentSummary {
-  const account = nodeAccountOf(row),
-    // Without an accepted workspace of its own an Agent has no run identity, even on a node whose
-    // shared account is already recorded for the Agents that did finish.
-    identity = account && row.home !== null ? { ...account, workspace: row.home } : null;
+  const account = nodeAccountOf(row);
+  // Without an accepted workspace of its own an Agent has no run identity, even on a node whose
+  // shared account is already recorded for the Agents that did finish.
+  const identity = account && row.home !== null ? { ...account, workspace: row.home } : null;
   return {
     id: row.id,
     nodeId: row.node_id,
