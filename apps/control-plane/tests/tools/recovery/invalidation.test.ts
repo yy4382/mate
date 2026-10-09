@@ -332,7 +332,7 @@ it.each([
         );
       else await control.waitFor(/MATE_ATTACHMENT_BEFORE_COMMIT/);
       const oldRun = db
-        .prepare<[string], { runId: string; actionScopeId: string; sessionId: string }>(
+        .prepare<[string], { runId: string; sessionId: string }>(
           "SELECT r.id AS runId,r.delivery_id AS actionScopeId,s.id AS sessionId FROM owner_agent_runs r JOIN owner_agent_sessions s ON s.agent_id=r.agent_id WHERE r.agent_id=? ORDER BY r.rowid LIMIT 1",
         )
         .get(agentId)!;

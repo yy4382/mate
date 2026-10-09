@@ -358,7 +358,7 @@ export async function exerciseCompaction(
     ) {
       await eventually(() => {
         const control = db!
-          .prepare<[string], { paused_reason: string | null; temporary_failures: number }>(
+          .prepare<[string], { paused_reason: string | null }>(
             "SELECT paused_reason,temporary_failures FROM owner_agent_run_control WHERE agent_id=?",
           )
           .get(agentId)!;
