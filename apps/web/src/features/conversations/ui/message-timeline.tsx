@@ -148,20 +148,10 @@ export function MessageTimeline({
               </button>
               {openMenuId === message.id && (
                 <div className="message-menu" role="group" aria-label="消息操作">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onQuote(message);
-                    }}
-                  >
+                  <button type="button" onClick={() => onQuote(message)}>
                     普通回复（引用）
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onReply(message);
-                    }}
-                  >
+                  <button type="button" onClick={() => onReply(message)}>
                     讨论串回复
                   </button>
                   <button type="button" onClick={() => void openThread(message)}>

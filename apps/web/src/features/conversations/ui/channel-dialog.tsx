@@ -32,9 +32,8 @@ export function ChannelDialog({
   useEffect(() => {
     const previouslyFocused =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    const modal = dialog;
+    const modal = dialogRef.current;
+    if (!modal) return;
     const focusable = () =>
       Array.from(
         modal.querySelectorAll<HTMLElement>(
@@ -48,7 +47,7 @@ export function ChannelDialog({
       modal
     ).focus();
 
-    function trapFocus(event: KeyboardEvent) {
+    const trapFocus = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
         onClose();
@@ -71,7 +70,7 @@ export function ChannelDialog({
         event.preventDefault();
         first.focus();
       }
-    }
+    };
 
     document.addEventListener("keydown", trapFocus);
     return () => {

@@ -10,7 +10,7 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
 });
-const json = (body: unknown) => ({ status: 200, ok: true, json: async () => body }) as Response;
+const json = (body: unknown) => Response.json(body);
 
 it("shows the canonical task card and its activity without adding chat text", async () => {
   vi.stubGlobal(

@@ -7,6 +7,8 @@ import { directoryPageSchema, statSchema, chunkSchema } from "./workspace-respon
 import { useWorkspaceDownload } from "./use-workspace-download.js";
 import "./workspace-browser.css";
 
+const previewChunkBytes = 8 * 1024;
+
 function decodeBase64(value: string) {
   const binary = atob(value);
   const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
@@ -370,22 +372,23 @@ export function WorkspaceBrowser({
               <div className="workspace-preview-heading">
                 <strong>{preview.path}</strong>
                 <span>
-                  {formatBytes(preview.size)} · 第 {Math.floor(preview.offset / 8192) + 1} 段
+                  {formatBytes(preview.size)} · 第{" "}
+                  {Math.floor(preview.offset / previewChunkBytes) + 1} 段
                 </span>
               </div>
               <pre>{preview.text || "（空文件或此段没有文本内容）"}</pre>
               <div className="workspace-preview-actions">
                 <button
                   type="button"
-                  onClick={() => void previewChunk(Math.max(0, preview.offset - 8192))}
+                  onClick={() => void previewChunk(Math.max(0, preview.offset - previewChunkBytes))}
                   disabled={previewBusy || preview.offset === 0}
                 >
                   上一段
                 </button>
                 <button
                   type="button"
-                  onClick={() => void previewChunk(preview.offset + 8192)}
-                  disabled={previewBusy || preview.offset + 8192 >= preview.size}
+                  onClick={() => void previewChunk(preview.offset + previewChunkBytes)}
+                  disabled={previewBusy || preview.offset + previewChunkBytes >= preview.size}
                 >
                   {previewBusy ? "读取中…" : "下一段"}
                 </button>

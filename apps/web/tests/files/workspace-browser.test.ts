@@ -41,8 +41,7 @@ afterEach(() => {
 it.each(["directory", "Agent", "offline", "reconnection"])(
   "ignores a late directory page after switching %s",
   async (change) => {
-    let finish!: (response: Response) => void;
-    const pending = new Promise<Response>((resolve) => (finish = resolve));
+    const { promise: pending, resolve: finish } = Promise.withResolvers<Response>();
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
@@ -91,8 +90,7 @@ it.each(["directory", "Agent", "offline", "reconnection"])(
 );
 
 it("keeps the most recently selected file when an earlier preview arrives late", async () => {
-  let finish!: (response: Response) => void;
-  const pending = new Promise<Response>((resolve) => (finish = resolve));
+  const { promise: pending, resolve: finish } = Promise.withResolvers<Response>();
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
@@ -124,8 +122,7 @@ it("keeps the most recently selected file when an earlier preview arrives late",
 it.each(["directory", "Agent", "offline", "reconnection"])(
   "ignores a late file preview after switching %s",
   async (change) => {
-    let finish!: (response: Response) => void;
-    const pending = new Promise<Response>((resolve) => (finish = resolve));
+    const { promise: pending, resolve: finish } = Promise.withResolvers<Response>();
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input), "http://mate.test");
       if (url.pathname.endsWith("/stat"))

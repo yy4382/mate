@@ -1,5 +1,4 @@
 // @vitest-environment jsdom
-// @vitest-environment jsdom
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createElement } from "react";
@@ -23,7 +22,7 @@ it("lets the owner save one provider key without displaying it again", async () 
     expect(fixture.credentialWrites).toEqual([{ provider: "anthropic", apiKey: syntheticKey }]),
   );
   await screen.findByText("已配置");
-  expect((screen.getByLabelText("API key") as HTMLInputElement).value).toBe("");
+  expect(screen.getByLabelText("API key")).toHaveProperty("value", "");
   expect(document.body.textContent?.includes(syntheticKey)).toBe(false);
   expect(screen.getByText("凭据已保存；服务列表不会显示 key。")).toBeTruthy();
 });

@@ -100,20 +100,16 @@ function LoginPage() {
   );
 }
 
-const path = window.location.pathname;
-const Page =
-  path === "/login" || path.startsWith("/login/")
-    ? LoginPage
-    : path.startsWith("/app/agents/") && path.endsWith("/reminders")
-      ? RemindersPage
-      : path === "/app/tasks" || path.startsWith("/app/tasks/")
-        ? TasksPage
-        : path === "/app/agents" || path.startsWith("/app/agents/")
-          ? AgentsPage
-          : path === "/app/nodes" || path.startsWith("/app/nodes/")
-            ? NodesPage
-            : path === "/app" || path.startsWith("/app/")
-              ? ChatPage
-              : StatusPage;
+function pageForPath(path: string) {
+  if (path === "/login" || path.startsWith("/login/")) return LoginPage;
+  if (path.startsWith("/app/agents/") && path.endsWith("/reminders")) return RemindersPage;
+  if (path === "/app/tasks" || path.startsWith("/app/tasks/")) return TasksPage;
+  if (path === "/app/agents" || path.startsWith("/app/agents/")) return AgentsPage;
+  if (path === "/app/nodes" || path.startsWith("/app/nodes/")) return NodesPage;
+  if (path === "/app" || path.startsWith("/app/")) return ChatPage;
+  return StatusPage;
+}
+
+const Page = pageForPath(window.location.pathname);
 
 createRoot(document.getElementById("root")!).render(<Page />);

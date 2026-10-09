@@ -24,8 +24,8 @@ body {
   padding: 24px;
 }
 
-.status-card {
-  width: min(100%, 480px);
+.status-card,
+.auth-card {
   padding: 40px;
   border: 1px solid #e3e0d8;
   border-radius: 16px;
@@ -33,13 +33,12 @@ body {
   box-shadow: 0 12px 40px rgb(47 49 39 / 7%);
 }
 
+.status-card {
+  width: min(100%, 480px);
+}
+
 .auth-card {
   width: min(100%, 440px);
-  padding: 40px;
-  border: 1px solid #e3e0d8;
-  border-radius: 16px;
-  background: #fffefa;
-  box-shadow: 0 12px 40px rgb(47 49 39 / 7%);
 }
 
 .eyebrow {

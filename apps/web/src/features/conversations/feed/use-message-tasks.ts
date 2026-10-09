@@ -15,7 +15,7 @@ export function useMessageTasks(authenticated: boolean) {
   useEffect(() => {
     if (!authenticated) return;
     let live = true;
-    async function refreshTasks() {
+    async function pollTasks() {
       try {
         const result = await ownerJSON("/api/owner/tasks", tasksResponseSchema);
         if (live) setTasks(result.tasks);
@@ -23,8 +23,8 @@ export function useMessageTasks(authenticated: boolean) {
         /* Conversation remains usable while the task board reloads. */
       }
     }
-    void refreshTasks();
-    const timer = window.setInterval(() => void refreshTasks(), 3000);
+    void pollTasks();
+    const timer = window.setInterval(() => void pollTasks(), 3000);
     return () => {
       live = false;
       window.clearInterval(timer);

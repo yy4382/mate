@@ -1,5 +1,4 @@
 // @vitest-environment jsdom
-// @vitest-environment jsdom
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createElement } from "react";
@@ -28,9 +27,7 @@ it("creates a stable request and retries the same workspace request without putt
   render(createElement(AgentsPage));
   await screen.findByText(/在线节点会在运行账号下创建它的默认工作区和记忆入口/);
   await waitFor(() =>
-    expect((screen.getByRole("combobox", { name: "Linux 节点" }) as HTMLSelectElement).value).toBe(
-      nodeId,
-    ),
+    expect(screen.getByRole("combobox", { name: "Linux 节点" })).toHaveProperty("value", nodeId),
   );
 
   const providerSelect = screen.getByRole("combobox", { name: "模型提供方" });
@@ -133,9 +130,7 @@ it("keeps a no-record node conflict visible through refreshes until the owner st
   render(createElement(AgentsPage));
   await screen.findByText(/在线节点会在运行账号下创建它的默认工作区和记忆入口/);
   await waitFor(() =>
-    expect((screen.getByRole("combobox", { name: "Linux 节点" }) as HTMLSelectElement).value).toBe(
-      nodeId,
-    ),
+    expect(screen.getByRole("combobox", { name: "Linux 节点" })).toHaveProperty("value", nodeId),
   );
 
   await user.type(screen.getByRole("textbox", { name: "名称" }), "Offline colleague");
@@ -153,9 +148,7 @@ it("keeps a no-record node conflict visible through refreshes until the owner st
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
   expect(screen.getByRole("alert").textContent).toBe("节点已离线，Agent 资料尚未提交。");
-  expect((screen.getByRole("button", { name: "创建 Agent" }) as HTMLButtonElement).disabled).toBe(
-    true,
-  );
+  expect(screen.getByRole("button", { name: "创建 Agent" })).toHaveProperty("disabled", true);
 
   await user.click(screen.getByRole("button", { name: "新建资料" }));
   expect(screen.queryByRole("alert")).toBeNull();

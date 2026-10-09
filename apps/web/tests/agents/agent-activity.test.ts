@@ -17,24 +17,21 @@ it("shows offline confirmed facts safely until the owner expands operation detai
     vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       requests.push(url);
-      return {
-        ok: true,
-        json: async () => ({
-          nodeOnline: false,
-          pausedReason: null,
-          nextBefore: null,
-          events: [
-            {
-              sequence: 1,
-              kind: "operation.finished",
-              referenceId: "op-1",
-              summary: "操作完成",
-              ...(url.includes("detail=1") ? { detail: { command: "PRIVATE_ARGUMENT" } } : {}),
-              at: 1,
-            },
-          ],
-        }),
-      } as Response;
+      return Response.json({
+        nodeOnline: false,
+        pausedReason: null,
+        nextBefore: null,
+        events: [
+          {
+            sequence: 1,
+            kind: "operation.finished",
+            referenceId: "op-1",
+            summary: "操作完成",
+            ...(url.includes("detail=1") ? { detail: { command: "PRIVATE_ARGUMENT" } } : {}),
+            at: 1,
+          },
+        ],
+      });
     }),
   );
   const user = userEvent.setup();
@@ -52,16 +49,15 @@ it("shows offline confirmed facts safely until the owner expands operation detai
 it("labels a confirmed stop failure separately from an unknown result", async () => {
   vi.stubGlobal(
     "fetch",
-    vi.fn(async () => ({
-      ok: true,
-      json: async () => ({
+    vi.fn(async () =>
+      Response.json({
         nodeOnline: true,
         pausedReason: "manual",
         stop: { state: "failed", receipt: { reason: "process_stop_unconfirmed" } },
         nextBefore: null,
         events: [],
       }),
-    })),
+    ),
   );
   const user = userEvent.setup();
   render(createElement(AgentActivity, { agentId: "agent-1" }));
@@ -70,17 +66,17 @@ it("labels a confirmed stop failure separately from an unknown result", async ()
   // A failed stop with nothing else unproven must not invent an unproven-command count.
   expect(screen.queryByText(/条命令的终止无法确认；/)).toBeNull();
   expect(screen.queryByText(/停止结果未知/)).toBeNull();
-  expect(
-    (screen.getByRole("button", { name: "重新请求停止普通命令" }) as HTMLButtonElement).disabled,
-  ).toBe(false);
+  expect(screen.getByRole("button", { name: "重新请求停止普通命令" })).toHaveProperty(
+    "disabled",
+    false,
+  );
 });
 
 it("names the node's own unsignalled process groups as well as the unproven earlier commands", async () => {
   vi.stubGlobal(
     "fetch",
-    vi.fn(async () => ({
-      ok: true,
-      json: async () => ({
+    vi.fn(async () =>
+      Response.json({
         nodeOnline: true,
         pausedReason: "manual",
         stop: {
@@ -100,7 +96,7 @@ it("names the node's own unsignalled process groups as well as the unproven earl
         nextBefore: null,
         events: [],
       }),
-    })),
+    ),
   );
   const user = userEvent.setup();
   render(createElement(AgentActivity, { agentId: "agent-1" }));
@@ -115,9 +111,8 @@ it("names the node's own unsignalled process groups as well as the unproven earl
 it("says a confirmed one-node-run stop while an earlier command stays unknown", async () => {
   vi.stubGlobal(
     "fetch",
-    vi.fn(async () => ({
-      ok: true,
-      json: async () => ({
+    vi.fn(async () =>
+      Response.json({
         nodeOnline: true,
         pausedReason: "manual",
         stop: {
@@ -129,7 +124,7 @@ it("says a confirmed one-node-run stop while an earlier command stays unknown", 
         nextBefore: null,
         events: [],
       }),
-    })),
+    ),
   );
   const user = userEvent.setup();
   render(createElement(AgentActivity, { agentId: "agent-1" }));
@@ -143,9 +138,8 @@ it("says a confirmed one-node-run stop while an earlier command stays unknown", 
 it("claims only this node run when the stop's scope is narrower than the Agent", async () => {
   vi.stubGlobal(
     "fetch",
-    vi.fn(async () => ({
-      ok: true,
-      json: async () => ({
+    vi.fn(async () =>
+      Response.json({
         nodeOnline: true,
         pausedReason: "manual",
         stop: {
@@ -157,7 +151,7 @@ it("claims only this node run when the stop's scope is narrower than the Agent",
         nextBefore: null,
         events: [],
       }),
-    })),
+    ),
   );
   const user = userEvent.setup();
   render(createElement(AgentActivity, { agentId: "agent-1" }));

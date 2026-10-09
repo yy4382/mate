@@ -4,6 +4,21 @@ import type { NodeSummary } from "../../nodes/node-responses.js";
 import type { Draft } from "../agent-draft.js";
 import type { AgentSummary, ChannelSummary } from "../agent-responses.js";
 
+type AgentCreationFormProps = {
+  draft: Draft;
+  savedDraft: AgentSummary | undefined;
+  nodes: NodeSummary[];
+  channels: ChannelSummary[];
+  providers: ModelProviderSummary[];
+  loading: boolean;
+  submitting: boolean;
+  refreshError: string | null;
+  creationError: string | null;
+  onDraftChange: (draft: Draft) => void;
+  onNewDraft: () => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+};
+
 export function AgentCreationForm({
   draft,
   savedDraft,
@@ -17,20 +32,7 @@ export function AgentCreationForm({
   onDraftChange,
   onNewDraft,
   onSubmit,
-}: {
-  draft: Draft;
-  savedDraft: AgentSummary | undefined;
-  nodes: NodeSummary[];
-  channels: ChannelSummary[];
-  providers: ModelProviderSummary[];
-  loading: boolean;
-  submitting: boolean;
-  refreshError: string | null;
-  creationError: string | null;
-  onDraftChange: (draft: Draft) => void;
-  onNewDraft: () => void;
-  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
-}) {
+}: AgentCreationFormProps) {
   const selectedNode = nodes.find((node) => node.id === draft.nodeId);
   const selectedProvider = providers.find((provider) => provider.id === draft.provider);
   const onlineNodes = nodes.filter((node) => node.online);

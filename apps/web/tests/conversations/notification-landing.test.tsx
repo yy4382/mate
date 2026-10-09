@@ -40,6 +40,40 @@ async function land(
   Element.prototype.scrollIntoView = function () {
     scrolled.push(this.id);
   };
+  function responseBody(path: string) {
+    if (path === "/api/owner/session") return { authenticated: true };
+    if (path === "/api/owner/snapshot")
+      return {
+        channels: [
+          {
+            id: "room",
+            name: "频道",
+            description: "",
+            visibility: "public",
+            archived: false,
+            createdAt: 1,
+            updatedAt: 1,
+          },
+          {
+            id: "other",
+            name: "别处",
+            description: "",
+            visibility: "public",
+            archived: false,
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        ],
+        cursor: 0,
+      };
+    if (path.endsWith(`/messages/${target.messageId}/context`))
+      return context === null ? { error: "消息不存在" } : context;
+    if (path === "/api/owner/tasks") return { tasks: [] };
+    if (path === "/api/owner/agents") return { agents: [] };
+    if (path.endsWith("/attachments")) return { attachments: [] };
+    return { messages: [root], nextBefore: null };
+  }
+
   vi.stubGlobal("EventSource", QuietEventSource);
   vi.stubGlobal(
     "fetch",
@@ -48,44 +82,7 @@ async function land(
       requested.push(path);
       if (path.endsWith(`/messages/${target.messageId}/context`) && context instanceof Error)
         throw context;
-      const body =
-        path === "/api/owner/session"
-          ? { authenticated: true }
-          : path === "/api/owner/snapshot"
-            ? {
-                channels: [
-                  {
-                    id: "room",
-                    name: "频道",
-                    description: "",
-                    visibility: "public",
-                    archived: false,
-                    createdAt: 1,
-                    updatedAt: 1,
-                  },
-                  {
-                    id: "other",
-                    name: "别处",
-                    description: "",
-                    visibility: "public",
-                    archived: false,
-                    createdAt: 1,
-                    updatedAt: 1,
-                  },
-                ],
-                cursor: 0,
-              }
-            : path.endsWith(`/messages/${target.messageId}/context`)
-              ? context === null
-                ? { error: "消息不存在" }
-                : context
-              : path === "/api/owner/tasks"
-                ? { tasks: [] }
-                : path === "/api/owner/agents"
-                  ? { agents: [] }
-                  : path.endsWith("/attachments")
-                    ? { attachments: [] }
-                    : { messages: [root], nextBefore: null };
+      const body = responseBody(path);
       return Response.json(body, {
         status:
           path.endsWith(`/messages/${target.messageId}/context`) && context === null ? 404 : 200,

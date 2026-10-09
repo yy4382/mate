@@ -262,97 +262,93 @@ export function AgentsPage() {
                       <a href={`/app/agents/${encodeURIComponent(agent.id)}/reminders`}>查看提醒</a>
                     </p>
                     {agent.linuxIdentity && (
-                      <AgentEditor
-                        agent={agent}
-                        providers={providers}
-                        credentials={credentials}
-                        refresh={refresh}
-                      />
-                    )}
-                    {agent.linuxIdentity && (
-                      <div className="agent-direct-message">
-                        {directChannelId ? (
-                          <a href={`/app?channel=${encodeURIComponent(directChannelId)}`}>
-                            打开私信
-                          </a>
-                        ) : (
+                      <>
+                        <AgentEditor
+                          agent={agent}
+                          providers={providers}
+                          credentials={credentials}
+                          refresh={refresh}
+                        />
+                        <div className="agent-direct-message">
+                          {directChannelId ? (
+                            <a href={`/app?channel=${encodeURIComponent(directChannelId)}`}>
+                              打开私信
+                            </a>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={openingDirectMessage !== null}
+                              onClick={() => void openDirectMessage(agent.id)}
+                            >
+                              {openingDirectMessage === agent.id ? "正在打开…" : "私信"}
+                            </button>
+                          )}
+                        </div>
+                        <div className="agent-direct-message">
+                          <label>
+                            邀请加入频道
+                            <select
+                              aria-label={`${agent.name} 邀请频道`}
+                              value={inviteChannels[agent.id] ?? ""}
+                              disabled={invitingAgent !== null || invitableChannels.length === 0}
+                              onChange={(event) =>
+                                setInviteChannels((current) => ({
+                                  ...current,
+                                  [agent.id]: event.target.value,
+                                }))
+                              }
+                            >
+                              <option value="">选择频道</option>
+                              {invitableChannels.map((channel) => (
+                                <option key={channel.id} value={channel.id}>
+                                  {channel.name}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
                           <button
                             type="button"
-                            disabled={openingDirectMessage !== null}
-                            onClick={() => void openDirectMessage(agent.id)}
+                            disabled={invitingAgent !== null || !inviteChannels[agent.id]}
+                            onClick={() => void inviteAgent(agent.id)}
                           >
-                            {openingDirectMessage === agent.id ? "正在打开…" : "私信"}
+                            {invitingAgent === agent.id ? "正在邀请…" : "邀请加入"}
                           </button>
-                        )}
-                      </div>
-                    )}
-                    {agent.linuxIdentity && (
-                      <div className="agent-direct-message">
-                        <label>
-                          邀请加入频道
-                          <select
-                            aria-label={`${agent.name} 邀请频道`}
-                            value={inviteChannels[agent.id] ?? ""}
-                            disabled={invitingAgent !== null || invitableChannels.length === 0}
-                            onChange={(event) =>
-                              setInviteChannels((current) => ({
-                                ...current,
-                                [agent.id]: event.target.value,
-                              }))
-                            }
-                          >
-                            <option value="">选择频道</option>
-                            {invitableChannels.map((channel) => (
-                              <option key={channel.id} value={channel.id}>
-                                {channel.name}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <button
-                          type="button"
-                          disabled={invitingAgent !== null || !inviteChannels[agent.id]}
-                          onClick={() => void inviteAgent(agent.id)}
-                        >
-                          {invitingAgent === agent.id ? "正在邀请…" : "邀请加入"}
-                        </button>
-                        {invitationError && (
-                          <p className="form-error" role="alert">
-                            {invitationError}
-                          </p>
-                        )}
-                        {invitationNotice && (
-                          <p className="agent-field-hint" role="status">
-                            {invitationNotice}
-                          </p>
-                        )}
-                      </div>
-                    )}
-                    {agent.linuxIdentity && (
-                      <dl className="agent-linux-identity">
-                        <div>
-                          <dt>运行账号</dt>
-                          <dd>
-                            <code>{agent.linuxIdentity.username}</code>
-                          </dd>
+                          {invitationError && (
+                            <p className="form-error" role="alert">
+                              {invitationError}
+                            </p>
+                          )}
+                          {invitationNotice && (
+                            <p className="agent-field-hint" role="status">
+                              {invitationNotice}
+                            </p>
+                          )}
                         </div>
-                        <div>
-                          <dt>账号 UID / GID</dt>
-                          <dd>
-                            <code>
-                              {agent.linuxIdentity.uid} / {agent.linuxIdentity.gid}
-                            </code>
-                          </dd>
-                        </div>
-                        <div>
-                          <dt>默认工作区</dt>
-                          <dd>
-                            <code>{agent.linuxIdentity.workspace}</code>
-                          </dd>
-                        </div>
-                      </dl>
+                        <dl className="agent-linux-identity">
+                          <div>
+                            <dt>运行账号</dt>
+                            <dd>
+                              <code>{agent.linuxIdentity.username}</code>
+                            </dd>
+                          </div>
+                          <div>
+                            <dt>账号 UID / GID</dt>
+                            <dd>
+                              <code>
+                                {agent.linuxIdentity.uid} / {agent.linuxIdentity.gid}
+                              </code>
+                            </dd>
+                          </div>
+                          <div>
+                            <dt>默认工作区</dt>
+                            <dd>
+                              <code>{agent.linuxIdentity.workspace}</code>
+                            </dd>
+                          </div>
+                        </dl>
+                        <AgentActivity agentId={agent.id} />
+                      </>
                     )}
-                    {agent.linuxIdentity && <AgentActivity agentId={agent.id} />}
                     {(agent.status === "failed" || agent.status === "provisioning") && (
                       <button
                         className="agent-retry-button"
@@ -362,8 +358,9 @@ export function AgentsPage() {
                           !nodes.some((node) => node.id === agent.nodeId && node.online)
                         }
                         onClick={() => {
-                          setDraft(draftFromAgent(agent));
-                          void submitAgentRequest(requestFromDraft(draftFromAgent(agent)));
+                          const retryDraft = draftFromAgent(agent);
+                          setDraft(retryDraft);
+                          void submitAgentRequest(requestFromDraft(retryDraft));
                         }}
                       >
                         {agent.status === "failed" ? "按同一请求重试" : "继续此请求"}

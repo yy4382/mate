@@ -87,20 +87,10 @@ export function ConversationThread({
               </button>
               {openMenuId === reply.id && (
                 <div className="message-menu" role="group" aria-label="消息操作">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onQuote(reply);
-                    }}
-                  >
+                  <button type="button" onClick={() => onQuote(reply)}>
                     普通回复（引用）
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onReply(threadRoot);
-                    }}
-                  >
+                  <button type="button" onClick={() => onReply(threadRoot)}>
                     讨论串回复
                   </button>
                   <button type="button" onClick={() => openTaskCreation(reply, "thread-reply")}>
@@ -115,9 +105,7 @@ export function ConversationThread({
       <button
         type="button"
         className="thread-reply-button"
-        onClick={() => {
-          onComposeReply(threadRoot);
-        }}
+        onClick={() => onComposeReply(threadRoot)}
       >
         回复讨论串
       </button>
