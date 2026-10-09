@@ -69,9 +69,7 @@ export function ConversationSidebar({
               <button
                 className={`channel-row${selectedId === channel.id ? " is-selected" : ""}${channel.archived ? " is-archived" : ""}`}
                 type="button"
-                onClick={() => {
-                  onSelectChannel(channel.id);
-                }}
+                onClick={() => onSelectChannel(channel.id)}
               >
                 <span className="channel-symbol" aria-hidden="true">
                   {channel.visibility === "private" ? "◈" : "#"}

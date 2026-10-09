@@ -1,5 +1,4 @@
 // @vitest-environment jsdom
-// @vitest-environment jsdom
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createElement } from "react";
@@ -56,9 +55,7 @@ it("saves profile fields separately and only offers configured model services", 
     screen.getByRole("combobox", { name: "Colleague 模型服务" }),
     "anthropic",
   );
-  expect((screen.getByRole("button", { name: "切换模型" }) as HTMLButtonElement).disabled).toBe(
-    true,
-  );
+  expect(screen.getByRole("button", { name: "切换模型" })).toHaveProperty("disabled", true);
 });
 
 it("shows a confirmed Agent stop failure with its diagnostic action", async () => {

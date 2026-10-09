@@ -1,5 +1,4 @@
 // @vitest-environment jsdom
-// @vitest-environment jsdom
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createElement } from "react";
@@ -184,17 +183,14 @@ it("shows a Chinese error when a workspace download stream fails after it starts
       nextOffset: null,
     },
   ];
-  fixture.workspaceDownloadResponse = {
-    status: 200,
-    ok: true,
-    body: new ReadableStream<Uint8Array>({
+  fixture.workspaceDownloadResponse = new Response(
+    new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new TextEncoder().encode("hel"));
         controller.error(new Error("file_changed during stream"));
       },
     }),
-    json: async () => ({}),
-  } as Response;
+  );
   fixture.workspaceDownloadStatus = { state: "failed", errorCode: "file_changed" };
   Object.defineProperty(window, "showSaveFilePicker", {
     configurable: true,

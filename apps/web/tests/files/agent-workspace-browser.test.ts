@@ -1,5 +1,4 @@
 // @vitest-environment jsdom
-// @vitest-environment jsdom
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createElement } from "react";
@@ -108,8 +107,8 @@ it("browses an Agent default workspace read-only, previews and streams downloads
 });
 
 it("shows the last connection time when a workspace request discovers that the node went offline", async () => {
-  const agentId = "8bfb67a1-66ed-4d56-9052-4cc7a41c60b9",
-    lastConnectedAt = "2026-09-26T03:04:05.000Z";
+  const agentId = "8bfb67a1-66ed-4d56-9052-4cc7a41c60b9";
+  const lastConnectedAt = "2026-09-26T03:04:05.000Z";
   fixture.agents = [
     {
       id: agentId,

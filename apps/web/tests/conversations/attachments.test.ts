@@ -1,5 +1,4 @@
 // @vitest-environment jsdom
-// @vitest-environment jsdom
 import { screen } from "@testing-library/react";
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -29,8 +28,8 @@ it("uploads attachments as the original File stream and lists owner and Agent fi
   ];
   const user = await openChat();
   await screen.findByText("agent-report.txt");
-  const input = screen.getByLabelText("添加附件") as HTMLInputElement,
-    file = new File(["hello"], "研究笔记.txt", { type: "text/plain" });
+  const input = screen.getByLabelText("添加附件") as HTMLInputElement;
+  const file = new File(["hello"], "研究笔记.txt", { type: "text/plain" });
   await user.upload(input, file);
   await user.click(screen.getByRole("button", { name: "上传附件" }));
 
