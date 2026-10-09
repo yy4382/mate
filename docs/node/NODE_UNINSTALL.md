@@ -47,15 +47,3 @@ docker compose --env-file .env -f compose.yaml down
 ```
 
 这会移除 Compose 容器和网络，bind 数据仍在原宿主目录；不用数据删除开关。节点 CLI 不代替操作者执行 Docker 操作。
-
-## 可重跑的真实服务验收入口
-
-以下脚本只用于已授权、可丢弃的 Linux 宿主/VM 普通测试账号，拒绝已有 Mate 程序或数据和系统 Node。它不创建账号、修改 linger、安装软件或使用提权：
-
-```sh
-sh deploy/node/tests/uninstall-smoke.sh \
-  /path/mate-node-0.1.0-linux-arm64.tar.gz /path/bootstrap.sh \
-  '<SHA-256>' 0.1.0 /path/user-service-peer.mjs /path/update-cut.mjs
-```
-
-脚本使用真实 bootstrap、完整包 CLI 和 systemd 用户管理器，验证外来单元/入口保留、实际 SIGKILL 后公共入口丢失时从本地完整包恢复、重复清理、重新安装原身份和正常自卸载；还从外部暂停实际更新进程，确认已发生的单元移动、程序复制或修复清理残留后杀死进程，再执行同一卸载。修复备份中的额外测试文件必须保留，移除该测试冲突后才重试。WebSocket 外部协议服务是合成替身，不是实际控制面/provider。临时目录与用户管理器替身的单元测试另外记录，不能替代上述真实服务证据；四平台矩阵的运行结果由交付验收单独记录。

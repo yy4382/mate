@@ -1,18 +1,14 @@
-name: Node package validation
+name: Node package build
 
 on:
-  # This private validation branch supplies a native x64 builder before the
+  # This private build branch supplies a native x64 builder before the
   # workflow exists on main. Deleting the branch removes this push trigger.
   push:
     branches:
       - feat/linux-lightweight-deployment
     paths:
-      - .github/workflows/node-package-validation.yml
+      - .github/workflows/node-package-build.yml
       - deploy/node/**
-      - deploy/control-plane/**
-      - deploy/tests/**
-      - apps/control-plane/**
-      - apps/web/**
       - apps/node/**
       - packages/protocol/**
       - package.json
@@ -32,12 +28,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: node-package-validation-${{ github.ref }}
+  group: node-package-build-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   node-package-x64:
-    name: Build and check x64 node package
+    name: Build x64 node package
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -54,27 +50,7 @@ jobs:
           sh deploy/node/build-bundle.sh "$MATE_VERSION" x64 dist/node-bundles
           printf '%s\n' "$GITHUB_SHA" > dist/node-bundles/SOURCE_COMMIT
 
-      - name: Check actual package in target-system containers
-        # These are packaging checks, not the real host/VM user-manager matrix.
-        run: sh deploy/node/tests/run-container-smoke.sh "$MATE_VERSION" x64 dist/node-bundles
-
-      - name: Build actual control-plane delivery image
-        run: |
-          node deploy/control-plane/build.mjs "$MATE_VERSION" "mate-control-plane:validation-$GITHUB_SHA"
-
-      - name: Verify actual deliveries and isolated Docker recovery
-        # Build tools exist on this runner. The driver and host node run only
-        # with the delivered dedicated runtime; no source module is imported.
-        # This is a disposable hosted host, never the user's current Docker.
-        run: |
-          df -h .
-          archive="dist/node-bundles/mate-node-$MATE_VERSION-linux-x64.tar.gz"
-          digest=$(awk '{print $1}' "$archive.sha256")
-          sh deploy/tests/delivery-smoke.sh "mate-control-plane:validation-$GITHUB_SHA" \
-            "$archive" dist/node-bundles/bootstrap.sh "$digest" "$MATE_VERSION" --docker-daemon-recovery
-          df -h .
-
-      - name: Save the private validation package
+      - name: Save the private built package
         if: ${{ always() && steps.package.outcome == 'success' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

@@ -1,12 +1,12 @@
 # Linux 运行与运维（普通账号）
 
-生产运行只使用控制面 Docker 镜像/Compose 与现有普通账号目录中的 node 完整包。薄 bootstrap 获取并安装管理 CLI，随后用 `mate node` 管理用户服务；源码构建和直接进程入口仅用于[本地开发](DEVELOPMENT.md)。两个组件选择同一明确发布版本。首次发布与 VPS 部署仍需单独执行，验证完成不代表产物已经发布。
+生产运行只使用控制面 Docker 镜像/Compose 与现有普通账号目录中的 node 完整包。薄 bootstrap 获取并安装管理 CLI，随后用 `mate node` 管理用户服务；源码构建和直接进程入口仅用于[本地开发](DEVELOPMENT.md)。两个组件选择同一明确发布版本。首次发布与 VPS 部署仍需单独执行，本地构建不会发布产物。
 
 控制面拥有模型凭据、Pi 循环和唯一 Agent session；node 拥有宿主工作区、普通命令及收据。两者使用同一现有非零 UID/GID。Mate 不创建账号、安装系统软件、切换 Unix 身份或修改 sudo、Docker 权限、linger。Agent 的命令是该账号的普通 shell 子进程，命令中显式 `sudo` 的结果由宿主已有策略决定。
 
 ## 安装与配对顺序
 
-1. 准备 Ubuntu 24.04 或 Debian 13 的 x86_64/arm64 普通账号，现有 Docker Engine/Compose 和可用的 systemd user manager。完整包包含专用 Node 和原生依赖，运行宿主不需要 Node、pnpm 或编译器。完整包扫描得到的系统库底线与平台证据见[完整包说明](node/NODE_BUNDLE.md)和[验收说明](DEPLOYMENT_ACCEPTANCE.md)。
+1. 准备 Ubuntu 24.04 或 Debian 13 的 x86_64/arm64 普通账号，现有 Docker Engine/Compose 和可用的 systemd user manager。完整包包含专用 Node 和原生依赖，运行宿主不需要 Node、pnpm 或编译器。完整包扫描得到的系统库底线见[完整包说明](node/NODE_BUNDLE.md)。
 2. 按[控制面部署](CONTROL_PLANE_DEPLOYMENT.md)取得明确版本镜像，准备当前账号持有的私有 bind 目录和首次密码文件，用初始化 Compose 启动并成功登录。成功登录后去掉初始化 override、密码挂载和环境配置；后续重建读取已有密码哈希。
 3. 按[完整包说明](node/NODE_BUNDLE.md)用本地包与可信 SHA-256，或现有 `gh` 的临时私有 Release 鉴权，运行薄 bootstrap。下载凭据只用于本次获取，不进入 node 配置、用户服务或 Agent 环境。私有镜像登录由用户预先完成。
 4. 网页“节点管理”生成一次性配对令牌，按[用户服务说明](node/NODE_SERVICE.md)写入 `~/.config/mate/node.json`，再执行 `~/.local/bin/mate node install`。同机 URL 是 `http://127.0.0.1:8787`，不能使用容器服务名。网页确认原节点在线后移除配置中的令牌。
@@ -54,8 +54,6 @@ node 异常退出由用户服务重启；显式 stop 保持停止。重复 insta
 
 [node 卸载](node/NODE_UNINSTALL.md)先停止/禁用并移除 Mate 用户单元，再只删除能由实际库存确认的程序与唯一入口。配置、身份、收据、Agent 工作区以及控制面 bind 数据全部保留。中断后可从保留的本地完整包继续同一 CLI 卸载，重新安装沿用原身份。控制面由所有者 `docker compose -f compose.yaml down` 清理容器和项目网络，bind 数据保留；CLI 不操作 Docker、镜像缓存或宿主软件。
 
-独立实际产物与四平台用户服务验证命令、环境记录以及尚未验收的真实集成项见[部署验收](DEPLOYMENT_ACCEPTANCE.md)。资源数字来自指定演练的过程采样，不是未经测量的最低 VPS 配置。
-
 ## 记录与查看任务
 
 在时间线消息的操作菜单、讨论串根消息或回复的操作菜单选择“从消息建任务”，编辑预填的标题后点击“创建任务”即可提交。标题去掉两端空白后须为 1 至 200 字符；同一消息可以继续添加其它任务，回复任务始终挂在所选回复上。消息旁显示全部任务的标题、负责人和状态，“任务看板”保留每项任务及原消息链接。发送时勾选“作为任务发送”只附带一个以消息正文为默认标题的任务。
@@ -70,4 +68,4 @@ Agent 用 `tasks.create` 指定原消息与标题建立待认领任务，再用 
 
 模型上下文接近容量时，运行进程请求摘要，控制面确认摘要与保留起点后才采用压缩上下文；原始完整历史仍保留。摘要连续失败或无法合法切分时，网页动态提供具体失败原因，所有者修复后重试。累计 token 或费用不触发停工。
 
-完整包的实际手动更新入口见 [node 停机更新与恢复](node/NODE_UPDATE.md)：先 `mate node stop`，再停止控制面，更换两侧同版产物，启动控制面后才显式 `mate node start`。CLI 一起更换管理程序、专用 Node 与 node，更新后保持停止并保留数据；损坏入口可从校验后的本地包执行同一 CLI 恢复。真实平台验收另记，不恢复部署登记、协调备份、整套数据复制恢复、维护对账或人工释放入口。日常持久化与故障接续继续由运行时负责。数据库格式不匹配或结构缺失时，启动拒绝修改并报告文件与原因；首版不迁移旧实验格式。保留原文件进行排查，或将 `MATE_CONTROL_PLANE_DATA_DIR` 指向新的空目录。
+完整包的实际手动更新入口见 [node 停机更新与恢复](node/NODE_UPDATE.md)：先 `mate node stop`，再停止控制面，更换两侧同版产物，启动控制面后才显式 `mate node start`。CLI 一起更换管理程序、专用 Node 与 node，更新后保持停止并保留数据；损坏入口可从校验后的本地包执行同一 CLI 恢复。不恢复部署登记、协调备份、整套数据复制恢复、维护对账或人工释放入口。日常持久化与故障接续继续由运行时负责。数据库格式不匹配或结构缺失时，启动拒绝修改并报告文件与原因；首版不迁移旧实验格式。保留原文件进行排查，或将 `MATE_CONTROL_PLANE_DATA_DIR` 指向新的空目录。
