@@ -13,11 +13,11 @@ pnpm build:bundle:node 0.1.0 arm64 dist/node-bundles
 
 输出包括 `mate-node-0.1.0-linux-x64.tar.gz`、`mate-node-0.1.0-linux-arm64.tar.gz`、`SHA256SUMS` 和 `bootstrap.sh`。构建不会发布 GitHub Release、上传镜像或启动服务。原锁文件与原相对 workspace 布局用于离线冻结生产安装；最终包中没有源码 checkout 链接、开发依赖、系统软件安装步骤或 pnpm。
 
-仓库另有独立 `Node package validation` workflow，使用预配的 Ubuntu 24.04 原生 x86_64 hosted runner 构建相同产物，并运行下文的容器包检查。它只有仓库内容读取权限，不发布 Release 或镜像；成功产物作为私有 Actions artifact 保留 3 天，包含 `SOURCE_COMMIT` 供下载者核对被测提交。首轮通过 `feat/linux-lightweight-deployment` 分支的包装相关 push 触发；合并到默认分支后也可明确版本手动运行。该检查不增加每次 PR/main 的故障恢复或用户服务矩阵，真实宿主/VM 验收继续单独采证。
+仓库另有独立 `Node package build` workflow（`.github/workflows/node-package-build.yml`），使用预配的 Ubuntu 24.04 原生 x86_64 hosted runner 构建 node 完整包。它只有仓库内容读取权限，不发布 Release 或镜像；成功产物作为私有 Actions artifact 保留 3 天，包含 `SOURCE_COMMIT` 供下载者核对构建提交。通过 `feat/linux-lightweight-deployment` 分支的包装相关 push 或指定明确版本的手动操作触发。
 
 `bundle.json` 记录完整包版本、专用 Node 版本、架构、构建系统以及扫描全部 ELF 文件得出的最高 GLIBC、GLIBCXX 和 CXXABI 符号要求。它不是只看 Node 官方二进制得到的估计。构建还用包内 Node 实际加载 SQLite、加解文件锁并执行重命名；安装时重复完整文件校验和原生预检。
 
-目标系统仅为 Ubuntu 24.04、Debian 13 的 x86_64/arm64。元数据的 `targetSystems` 表示目标范围；实际运行证据必须另附环境、架构和结果。构建成功或容器成功不能表示真实宿主/VM 的用户服务矩阵已通过。
+目标系统仅为 Ubuntu 24.04、Debian 13 的 x86_64/arm64，元数据的 `targetSystems` 记录目标系统。
 
 ## 仅安装管理 CLI
 
@@ -44,24 +44,3 @@ unset GH_TOKEN GITHUB_TOKEN
 用户自行把 `~/.local/bin` 加入 PATH；bootstrap 不修改 shell profile。绝对入口始终可用。管理 CLI 安装不要求 user manager，也不创建 node 配置、数据、用户单元或后台进程。node 服务命令由 `mate node install/start/stop/restart/status/logs` 管理，首次私有配置与用户服务步骤见 [用户服务说明](NODE_SERVICE.md)；bootstrap 不调用 systemctl/journalctl、不启停服务。
 
 已有 node 用户单元时，同版 bootstrap 只校验完整包并修复管理入口，不修改单元和配置。单元必须明确引用同版包内 Node 与 node 入口；不同版本请求拒绝并提示 `mate node update`。公共入口或程序损坏时，需要使用已校验的本地包内同一 CLI 执行恢复命令；不能引入第二套 shell 更新逻辑。包内 CLI 位于 `mate-node/app/apps/node/dist/management/cli.js`，运行时位于 `mate-node/node/bin/node`，后续管理命令使用这两个绝对路径。
-
-## 包验收与证据边界
-
-在构建机器运行补充容器检查：
-
-```sh
-pnpm test:bundle:node 0.1.0 x64 dist/node-bundles
-pnpm test:bundle:node 0.1.0 arm64 dist/node-bundles
-```
-
-它在无系统 Node、无网络、只读根目录的 Ubuntu 24.04/Debian 13 容器中，以当前非零 UID/GID 执行实际 bootstrap 和实际包内 CLI。验证初装、重复执行、同版入口修复、版本/架构/运行时/文件损坏、SHA-256、归属冲突、不可写目录和凭据不持久化；另在 Ubuntu 中实际 SIGKILL 中断复制后重试，及安装期间原子创建非 Mate 入口验证无覆盖，最后以隔离容器 root 验证 CLI/bootstrap 拒绝 root。下载工具替身只验证获取分支，不能当成真实私有 Release 的网络兼容验收；实际外部发布不在本地检查中执行。
-
-真实 Linux 环境可以直接运行同一外部脚本；它只使用该普通测试账号下的临时 HOME，不改变账号、权限、linger 或宿主配置：
-
-```sh
-sh deploy/node/tests/bundle-smoke.sh \
-  /path/mate-node-0.1.0-linux-arm64.tar.gz \
-  /path/bootstrap.sh '<SHA-256>' 0.1.0
-```
-
-脚本要求 PATH 中没有系统 Node。这里的包检查不操作真实用户服务；systemd 用户服务、真实宿主/VM 四组合矩阵、provider、公开 HTTPS/Web Push 和实际 VPS 部署分别记录，不将临时目录、Docker 或 OrbStack LXC 结果冒充这些证据。
