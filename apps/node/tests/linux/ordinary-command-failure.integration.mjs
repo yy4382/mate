@@ -13,8 +13,7 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
-import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { join } from "node:path";
 import Database from "better-sqlite3";
 import { prepareAgentWorkspace } from "@mate/node/agent-provisioner";
 import { createLinuxAgentProcessExecutor } from "@mate/node/linux-process-executor";
@@ -66,7 +65,7 @@ function openNode(commandTimeoutMs) {
 }
 
 /** Start a real node process that runs one command and hard-exits before its result settles. */
-function startCrashingNode(agentId, operationId, command, commandTimeoutMs, ledger) {
+function startCrashingNode({ agentId, operationId, command, commandTimeoutMs, ledger }) {
   const storageEntry = import.meta.resolve("@mate/node/database");
   const executorEntry = import.meta.resolve("@mate/node/linux-process-executor");
   const operationsEntry = import.meta.resolve("@mate/node/process-operations");
@@ -186,13 +185,13 @@ try {
   // The tail is short on purpose: the process group this crash leaves behind is out of Mate's
   // reach, so the check lets it finish by itself instead of orphaning a long-lived process.
   const interruptedCommand = `printf 'executed\\n' >> ${JSON.stringify(ledger)}; sleep 5`;
-  const crashing = startCrashingNode(
-    interruptedAgent,
-    interruptedOperationId,
-    interruptedCommand,
-    30_000,
+  const crashing = startCrashingNode({
+    agentId: interruptedAgent,
+    operationId: interruptedOperationId,
+    command: interruptedCommand,
+    commandTimeoutMs: 30_000,
     ledger,
-  );
+  });
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline && !existsSync(ledger)) await delay(20);
   assert.equal(readFileSync(ledger, "utf8"), "executed\n", "The command really ran");

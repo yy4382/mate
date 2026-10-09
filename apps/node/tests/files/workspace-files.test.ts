@@ -2,7 +2,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { workspaceOperationSchema } from "@mate/protocol";
 

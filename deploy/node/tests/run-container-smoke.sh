@@ -4,7 +4,17 @@ set -eu
 version=$1
 architecture=$2
 output=${3:-dist/node-bundles}
-case "$architecture" in x64) platform=linux/amd64 ;; arm64) platform=linux/arm64 ;; *) exit 1 ;; esac
+case "$architecture" in
+  x64)
+    platform=linux/amd64
+    ;;
+  arm64)
+    platform=linux/arm64
+    ;;
+  *)
+    exit 1
+    ;;
+esac
 asset="mate-node-$version-linux-$architecture.tar.gz"
 checksum=$(awk -v file="$asset" '$2 == file {print $1}' "$output/SHA256SUMS")
 fixtures="/tmp/mate-b-134-fixtures-$architecture-$$"
@@ -28,8 +38,12 @@ docker run --rm --name "mate-b-134-root-$architecture" --platform "$platform" \
   --mount "type=bind,src=$(cd "$output" && pwd),dst=/assets,readonly" \
   ubuntu:24.04 sh -eu -c '
     tar -xzf "$1" -C /tmp
-    if /tmp/mate-node/bin/mate --version >/tmp/cli-result 2>&1; then exit 1; fi
+    if /tmp/mate-node/bin/mate --version >/tmp/cli-result 2>&1; then
+      exit 1
+    fi
     grep "never root" /tmp/cli-result
-    if sh /assets/bootstrap.sh --version "$2" --package "$1" --sha256 "$3" >/tmp/bootstrap-result 2>&1; then exit 1; fi
+    if sh /assets/bootstrap.sh --version "$2" --package "$1" --sha256 "$3" >/tmp/bootstrap-result 2>&1; then
+      exit 1
+    fi
     grep "never root" /tmp/bootstrap-result
   ' sh "/assets/$asset" "$version" "$checksum"

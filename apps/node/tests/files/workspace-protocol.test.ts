@@ -93,7 +93,7 @@ it("bounds oversized helper output but preserves structured error text", () => {
     ok: true,
     result: { stderr: expect.stringMatching(/^workspace_stat: ENOENT/), truncated: true },
   });
-  expect((sent as { result: { stderr: string } }).result.stderr).toHaveLength(12_000);
+  expect(sent).toHaveProperty("result.stderr.length", 12_000);
 });
 
 it("swallows both primary and fallback send failures without an unhandled rejection", () => {

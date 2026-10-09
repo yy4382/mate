@@ -1,8 +1,8 @@
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-const cut = JSON.parse(readFileSync(process.argv[2], "utf8")),
-  pid = Number(process.argv[3]),
-  unit = process.argv[4];
+const cut = JSON.parse(readFileSync(process.argv[2], "utf8"));
+const pid = Number(process.argv[3]);
+const unit = process.argv[4];
 if (
   cut.pid !== pid ||
   !Number.isSafeInteger(pid) ||

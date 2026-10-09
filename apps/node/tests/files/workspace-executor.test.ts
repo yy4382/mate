@@ -35,7 +35,9 @@ afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true
 const agentId = "6a69f5cb-d52c-44d2-97e9-65cecc461f13";
 const operationId = "f045a330-2902-4a92-b9bd-115ee60ec91c";
 
-function setup(run: (operation: WorkspaceOperation) => Promise<ExecutionResult> | ExecutionResult) {
+function workspaceExecutionFixture(
+  run: (operation: WorkspaceOperation) => Promise<ExecutionResult> | ExecutionResult,
+) {
   const root = temp();
   const homeRoot = join(root, "agents");
   const home = join(homeRoot, agentId);
@@ -79,7 +81,7 @@ const success: ExecutionResult = {
 };
 
 it("runs a state-changing operation once and returns its durable receipt after a node restart", async () => {
-  const fixture = setup(() => success);
+  const fixture = workspaceExecutionFixture(() => success);
   const firstNode = new LinuxWorkspaceExecutor(
     fixture.homeRoot,
     fixture.root,
@@ -103,7 +105,7 @@ it("runs a state-changing operation once and returns its durable receipt after a
 });
 
 it("passes the verified provisioned identity to workspace execution without marker metadata", async () => {
-  const fixture = setup(() => success);
+  const fixture = workspaceExecutionFixture(() => success);
   const backendIdentities: unknown[] = [];
   const executor = new LinuxWorkspaceExecutor(fixture.homeRoot, fixture.root, {
     ...fixture.dependencies,
@@ -125,7 +127,7 @@ it("passes the verified provisioned identity to workspace execution without mark
 });
 
 it("rejects reusing an operation ID with different input", async () => {
-  const fixture = setup(() => success);
+  const fixture = workspaceExecutionFixture(() => success);
   const executor = new LinuxWorkspaceExecutor(fixture.homeRoot, fixture.root, fixture.dependencies);
   await executor.execute(action());
   const conflict = await executor.execute(action("changed input"));
@@ -135,7 +137,7 @@ it("rejects reusing an operation ID with different input", async () => {
 });
 
 it("keeps an interrupted state-changing operation unknown instead of replaying it", async () => {
-  const fixture = setup(() => Promise.reject(new Error("connection lost")));
+  const fixture = workspaceExecutionFixture(() => Promise.reject(new Error("connection lost")));
   const executor = new LinuxWorkspaceExecutor(fixture.homeRoot, fixture.root, fixture.dependencies);
   const first = await executor.execute(action());
   const replay = await executor.execute(action());
@@ -147,7 +149,7 @@ it("keeps an interrupted state-changing operation unknown instead of replaying i
 
 it("retains a confirmed failed file receipt across node restart without execution replay", async () => {
   const denied = { code: 7, stdout: "", stderr: "permission_denied: protected", truncated: false };
-  const fixture = setup(() => denied);
+  const fixture = workspaceExecutionFixture(() => denied);
   const executor = new LinuxWorkspaceExecutor(fixture.homeRoot, fixture.root, fixture.dependencies);
   expect(await executor.execute(action())).toEqual(denied);
   const restarted = new LinuxWorkspaceExecutor(
@@ -161,7 +163,7 @@ it("retains a confirmed failed file receipt across node restart without executio
 });
 
 it("does not wait for a running file operation when reading persisted status", async () => {
-  const fixture = setup(() => new Promise<ExecutionResult>(() => {}));
+  const fixture = workspaceExecutionFixture(() => new Promise<ExecutionResult>(() => {}));
   const executor = new LinuxWorkspaceExecutor(fixture.homeRoot, fixture.root, fixture.dependencies);
   const running = executor.execute(action());
   expect(executor.status(agentId, operationId)).toBeUndefined();
@@ -342,7 +344,7 @@ it("keeps owner workspace preview inside the selected Agent workspace for paths 
 });
 
 it("does not receipt read-only owner browsing and refuses owner write operations", async () => {
-  const fixture = setup(() => success);
+  const fixture = workspaceExecutionFixture(() => success);
   const executor = new LinuxWorkspaceExecutor(fixture.homeRoot, fixture.root, fixture.dependencies);
   const read: WorkspaceExecutionRequest = {
     operationId,
@@ -362,7 +364,7 @@ it("does not receipt read-only owner browsing and refuses owner write operations
 });
 
 it("keeps a receipt for a different historical file request unproven during reconciliation", async () => {
-  const fixture = setup(() => success);
+  const fixture = workspaceExecutionFixture(() => success);
   const executor = new LinuxWorkspaceExecutor(fixture.homeRoot, fixture.root, fixture.dependencies);
   await executor.execute(action());
   expect(executor.status(agentId, operationId, "different request")?.stderr).toContain(
@@ -372,7 +374,7 @@ it("keeps a receipt for a different historical file request unproven during reco
 });
 
 it("reads legacy file receipts with extension fields and full captured output without replay", async () => {
-  const fixture = setup(() => success);
+  const fixture = workspaceExecutionFixture(() => success);
   const executor = new LinuxWorkspaceExecutor(fixture.homeRoot, fixture.root, fixture.dependencies);
   const result = {
     ...success,
@@ -400,7 +402,7 @@ it("reads legacy file receipts with extension fields and full captured output wi
 });
 
 it("keeps unfamiliar historical file states unknown and retains their receipt extensions", async () => {
-  const fixture = setup(() => success);
+  const fixture = workspaceExecutionFixture(() => success);
   const executor = new LinuxWorkspaceExecutor(fixture.homeRoot, fixture.root, fixture.dependencies);
   const receiptPath = join(fixture.root, "workspace-receipts", `${operationId}.json`);
   writeFileSync(
@@ -426,7 +428,7 @@ it("keeps unfamiliar historical file states unknown and retains their receipt ex
 });
 
 it("refuses a malformed persisted file result without replaying its side effect", async () => {
-  const fixture = setup(() => success);
+  const fixture = workspaceExecutionFixture(() => success);
   const executor = new LinuxWorkspaceExecutor(fixture.homeRoot, fixture.root, fixture.dependencies);
   const receiptPath = join(fixture.root, "workspace-receipts", `${operationId}.json`);
   const malformed = JSON.stringify({
@@ -448,7 +450,7 @@ it("refuses a malformed persisted file result without replaying its side effect"
 it.each(["file_changed", "operation_unknown"] as const)(
   "records and reuses %s by code rather than misleading diagnostics",
   async (errorCode) => {
-    const fixture = setup(() => ({
+    const fixture = workspaceExecutionFixture(() => ({
       code: 1,
       stdout: "",
       truncated: false,

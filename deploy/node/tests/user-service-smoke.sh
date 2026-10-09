@@ -7,14 +7,26 @@ bootstrap=$2
 checksum=$3
 version=$4
 peer_script=$5
-[ "$(id -u)" != 0 ] || { echo 'Run as the existing ordinary test account' >&2; exit 1; }
-[ "$(systemd-detect-virt --container 2>/dev/null || true)" = none ] || { echo 'Containers are not service acceptance' >&2; exit 1; }
-command -v node >/dev/null 2>&1 && { echo 'Host Node must not supplement the bundle' >&2; exit 1; }
+[ "$(id -u)" != 0 ] || {
+  echo 'Run as the existing ordinary test account' >&2
+  exit 1
+}
+[ "$(systemd-detect-virt --container 2>/dev/null || true)" = none ] || {
+  echo 'Containers are not service acceptance' >&2
+  exit 1
+}
+command -v node >/dev/null 2>&1 && {
+  echo 'Host Node must not supplement the bundle' >&2
+  exit 1
+}
 entry="$HOME/.local/bin/mate"
 unit="$HOME/.config/systemd/user/mate-node.service"
 config="$HOME/.config/mate/node.json"
 data="$HOME/.local/share/mate/node"
-[ ! -e "$entry" ] && [ ! -L "$entry" ] && [ ! -e "$unit" ] && [ ! -e "$config" ] && [ ! -e "$data" ] || { echo 'Refusing an account with existing Mate files' >&2; exit 1; }
+[ ! -e "$entry" ] && [ ! -L "$entry" ] && [ ! -e "$unit" ] && [ ! -e "$config" ] && [ ! -e "$data" ] || {
+  echo 'Refusing an account with existing Mate files' >&2
+  exit 1
+}
 work=$(mktemp -d)
 peer_pid=
 phase=bootstrap
@@ -29,9 +41,17 @@ cleanup() {
       fi
     done
   fi
-  if [ -f "$work/unit.saved" ]; then mv "$work/unit.saved" "$unit"; fi
-  if [ -f "$unit.d/00-mate-test.conf" ]; then rm "$unit.d/00-mate-test.conf"; systemctl --user daemon-reload || true; fi
-  if [ -n "$peer_pid" ]; then kill "$peer_pid" 2>/dev/null || true; wait "$peer_pid" 2>/dev/null || true; fi
+  if [ -f "$work/unit.saved" ]; then
+    mv "$work/unit.saved" "$unit"
+  fi
+  if [ -f "$unit.d/00-mate-test.conf" ]; then
+    rm "$unit.d/00-mate-test.conf"
+    systemctl --user daemon-reload || true
+  fi
+  if [ -n "$peer_pid" ]; then
+    kill "$peer_pid" 2>/dev/null || true
+    wait "$peer_pid" 2>/dev/null || true
+  fi
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
@@ -50,7 +70,11 @@ phase=protocol-peer
 peer_pid=$!
 i=0
 until grep -q MATE_TEST_PEER_READY "$work/peer.log"; do
-  i=$((i + 1)); [ "$i" -lt 100 ] || { cat "$work/peer.log"; exit 1; }
+  i=$((i + 1))
+  [ "$i" -lt 100 ] || {
+    cat "$work/peer.log"
+    exit 1
+  }
   sleep 0.1
 done
 mkdir -p "$HOME/.config/mate"
@@ -74,7 +98,11 @@ wait_log() {
     else
       grep -q "$wanted" "$work/journal.log" && break
     fi
-    i=$((i + 1)); [ "$i" -lt 60 ] || { cat "$work/journal.log"; exit 1; }
+    i=$((i + 1))
+    [ "$i" -lt 60 ] || {
+      cat "$work/journal.log"
+      exit 1
+    }
     sleep 1
   done
 }
@@ -109,7 +137,10 @@ printf '[Service]\nEnvironmentFile=%s\n' "$work/service-environment" >"$unit.d/0
 "$entry" node install
 phase=identity-first
 journal_cursor=$(journalctl --user --unit mate-node.service --lines 1 --show-cursor --no-pager | sed -n 's/^-- cursor: //p')
-[ -n "$journal_cursor" ] || { echo 'Journal cursor unavailable' >&2; exit 1; }
+[ -n "$journal_cursor" ] || {
+  echo 'Journal cursor unavailable' >&2
+  exit 1
+}
 # A paired identity authenticates first even with a stale/rejected token still in the file.
 write_config mate-service-synthetic-rejected-token-0000000
 "$entry" node start
@@ -117,13 +148,17 @@ wait_log MATE_NODE_CONNECTED
 [ "$(sha256sum "$data/node-identity.json" | cut -d' ' -f1)" = "$identity_before" ]
 pid_before=$(systemctl --user show mate-node.service --property=MainPID --value)
 phase=crash-recovery
-[ "$pid_before" -gt 0 ] || { echo 'No running node PID to crash' >&2; exit 1; }
+[ "$pid_before" -gt 0 ] || {
+  echo 'No running node PID to crash' >&2
+  exit 1
+}
 kill -KILL "$pid_before"
 i=0
 while :; do
   pid_after=$(systemctl --user show mate-node.service --property=MainPID --value)
   [ "$pid_after" != 0 ] && [ "$pid_after" != "$pid_before" ] && break
-  i=$((i + 1)); [ "$i" -lt 60 ] || exit 1
+  i=$((i + 1))
+  [ "$i" -lt 60 ] || exit 1
   sleep 1
 done
 "$entry" node stop
@@ -132,15 +167,21 @@ sleep 6
 phase=effective-command-conflict
 printf '[Service]\nExecStart=\nExecStart=/usr/bin/false\n' >"$unit.d/00-mate-test.conf"
 systemctl --user daemon-reload
-if "$entry" node start >"$work/command-conflict.log" 2>&1; then exit 1; fi
+if "$entry" node start >"$work/command-conflict.log" 2>&1; then
+  exit 1
+fi
 grep -q references "$work/command-conflict.log"
-if "$entry" node status >"$work/command-status.log" 2>&1; then exit 1; fi
+if "$entry" node status >"$work/command-status.log" 2>&1; then
+  exit 1
+fi
 grep -q 'references differ' "$work/command-status.log"
 "$entry" node stop
 phase=multiline-command-conflict
 printf '%s\n' '[Service]' 'ExecStart=' 'ExecStart=/usr/bin/false "node\"\n string \"--config-file\"\n string \"config"' >"$unit.d/00-mate-test.conf"
 systemctl --user daemon-reload
-if "$entry" node start >"$work/multiline-command.log" 2>&1; then exit 1; fi
+if "$entry" node start >"$work/multiline-command.log" 2>&1; then
+  exit 1
+fi
 grep -q references "$work/multiline-command.log"
 "$entry" node stop
 "$entry" node logs --lines 10 >"$work/multiline-journal.log" 2>&1
@@ -149,12 +190,16 @@ rmdir "$unit.d"
 "$entry" node install
 phase=missing-user-manager
 mkdir -p "$work/no-manager"
-if XDG_RUNTIME_DIR="$work/no-manager" DBUS_SESSION_BUS_ADDRESS="unix:path=$work/no-manager/no-bus" "$entry" node install >"$work/no-manager.log" 2>&1; then exit 1; fi
+if XDG_RUNTIME_DIR="$work/no-manager" DBUS_SESSION_BUS_ADDRESS="unix:path=$work/no-manager/no-bus" "$entry" node install >"$work/no-manager.log" 2>&1; then
+  exit 1
+fi
 grep -q 'User manager unavailable' "$work/no-manager.log"
 phase=foreign-unit-conflict
 cp "$unit" "$work/unit.saved"
 printf '[Service]\nExecStart=/non-mate-fixture\n' >"$unit"
-if "$entry" node install >"$work/conflict.log" 2>&1; then exit 1; fi
+if "$entry" node install >"$work/conflict.log" 2>&1; then
+  exit 1
+fi
 grep -q 'Non-Mate' "$work/conflict.log"
 grep -q /non-mate-fixture "$unit"
 mv "$work/unit.saved" "$unit"
@@ -162,7 +207,9 @@ mv "$work/unit.saved" "$unit"
 [ "$(systemctl --user show mate-node.service --property=ActiveState --value)" = inactive ]
 phase=private-configuration
 chmod 644 "$config"
-if "$entry" node status >"$work/config-error.log" 2>&1; then exit 1; fi
+if "$entry" node status >"$work/config-error.log" 2>&1; then
+  exit 1
+fi
 grep -q private "$work/config-error.log"
 chmod 600 "$config"
 [ "$(sha256sum "$data/node-identity.json" | cut -d' ' -f1)" = "$identity_before" ]
