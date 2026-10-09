@@ -19,6 +19,7 @@ export async function streamUpload(
       callback(null, chunk);
     },
   });
+  // Hono supplies Uint8Array chunks from the raw request body; only the DOM/Node stream types differ.
   await pipeline(
     Readable.fromWeb(body as import("node:stream/web").ReadableStream<Uint8Array>),
     limiter,

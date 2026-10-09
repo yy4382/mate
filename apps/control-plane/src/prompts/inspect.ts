@@ -8,15 +8,12 @@ try {
   const args = process.argv.slice(2);
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
+    const next = args[i + 1];
     if (arg === "--show-content" && !showContent) showContent = true;
-    else if (
-      arg === "--snapshot" &&
-      snapshot === undefined &&
-      args[i + 1] &&
-      !args[i + 1]!.startsWith("--")
-    )
-      snapshot = args[++i];
-    else throw new Error(usage);
+    else if (arg === "--snapshot" && snapshot === undefined && next && !next.startsWith("--")) {
+      i++;
+      snapshot = next;
+    } else throw new Error(usage);
   }
   const result =
     snapshot === undefined

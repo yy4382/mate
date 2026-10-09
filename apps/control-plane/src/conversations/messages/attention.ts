@@ -41,7 +41,7 @@ export class ConversationAttention {
   }
 
   readPersistedAgentDraft(agentId: string, id: string) {
-    const row = z
+    return z
       .looseObject({ state: z.string(), text: z.string(), channelId: z.string() })
       .optional()
       .parse(
@@ -51,7 +51,6 @@ export class ConversationAttention {
           )
           .get(id, agentId),
       );
-    return row;
   }
 
   private validateMessagePosition(channelId: string, rootId?: string, quoteId?: string): void {

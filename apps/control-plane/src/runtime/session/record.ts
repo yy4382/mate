@@ -42,6 +42,7 @@ export const piMessageSchema = z
       isError: z.boolean(),
     }),
   ])
+  // Mate checks the envelope; Pi supplies the content/provider fields preserved by these loose objects.
   .transform((message) => message as unknown as Exclude<Message, { role: "system" }>);
 export const sessionConfigurationSchema = z
   .object({
