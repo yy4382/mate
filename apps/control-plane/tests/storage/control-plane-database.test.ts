@@ -77,8 +77,8 @@ it("a new data directory gets the complete format without the Push service", () 
   const f = fixture();
   const auth = new OwnerAuth({ dataDir: f.dataDir });
   try {
-    expect(tableNames(auth.db)).toHaveLength(38);
-    expect(columnCount(auth.db)).toBe(253);
+    expect(tableNames(auth.db)).toHaveLength(39);
+    expect(columnCount(auth.db)).toBe(254);
     expect(indexCount(auth.db)).toBe(26);
     expect(columnNames(auth.db, "owner_push_deliveries")).toEqual([
       "event_key",

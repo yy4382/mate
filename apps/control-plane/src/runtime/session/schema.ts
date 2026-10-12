@@ -1,4 +1,8 @@
 export const agentSessionSchema = `
+CREATE TABLE owner_durable_session_bindings (
+  agent_id TEXT PRIMARY KEY REFERENCES owner_agents(id)
+);
+
 CREATE TABLE owner_durable_tool_calls (
   agent_id TEXT NOT NULL REFERENCES owner_agents(id),
   task_id TEXT NOT NULL,

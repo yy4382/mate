@@ -128,6 +128,11 @@ export class AgentRunCoordinator {
 
   modelChanged(agentId: string): void {
     this.records.modelChanged(agentId);
+    const active = this.activeAgents.get(agentId);
+    if (active) {
+      this.records.invalidateRun(active.runId, agentId);
+      this.cancelRun(active.runId, agentId);
+    }
     this.wake();
   }
 
@@ -277,11 +282,12 @@ export class AgentRunCoordinator {
     apiKey: string,
   ): Promise<void> {
     try {
-      await this.testDependencies.beforeRunStart?.(active.runId);
+      await active.loop.whileCurrent(
+        Promise.resolve(this.testDependencies.beforeRunStart?.(active.runId)),
+      );
       if (!this.current(active.runId, candidate)) return;
-      const verification = await this.control.verifyExecutionEnvironment(
-        candidate.agent_id,
-        candidate,
+      const verification = await active.loop.whileCurrent(
+        this.control.verifyExecutionEnvironment(candidate.agent_id, candidate),
       );
       if (!this.current(active.runId, candidate)) return;
       if (!verification.ok) {
@@ -318,6 +324,16 @@ export class AgentRunCoordinator {
         );
       const result = await active.loop.run(
         {
+          initialized: Boolean(
+            this.db
+              .prepare("SELECT 1 FROM owner_durable_session_bindings WHERE agent_id=?")
+              .get(candidate.agent_id),
+          ),
+          initializedNow: () => {
+            this.db
+              .prepare("INSERT OR IGNORE INTO owner_durable_session_bindings(agent_id) VALUES(?)")
+              .run(candidate.agent_id);
+          },
           sessionId: candidate.session_id,
           storagePath: join(dirname(this.db.name), "durable", `${candidate.agent_id}.sqlite`),
           actionScopeId: candidate.delivery_id,

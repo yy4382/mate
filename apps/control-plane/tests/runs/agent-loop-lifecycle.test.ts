@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import type { ServerResponse } from "node:http";
 import { join } from "node:path";
+
 import { loopFixture, respond } from "../support/agent/agent-loop.js";
 import { eventually, stopProcess } from "../support/environment/run-services.js";
 
@@ -48,55 +49,6 @@ it("heartbeat expiry at completion ends the durable run before releasing its slo
   }
 }, 30000);
 
-it.each(["openai", "anthropic"] as const)(
-  "after a next-run provider edit, changing %s credentials invalidates only a run admitted with that provider",
-  async (changedProvider) => {
-    const responses: ServerResponse[] = [];
-    const fixture = await loopFixture((_request, response) => {
-      responses.push(response);
-      response.writeHead(200, { "content-type": "text/event-stream" });
-      response.write('data: {"type":"response.created","response":{"id":"stalled"}}\n\n');
-    });
-    try {
-      await fixture.api("/api/owner/model-credentials/anthropic", "PUT", {
-        apiKey: "synthetic-anthropic-key",
-      });
-      const agent = await fixture.agent();
-      await fixture.send(agent.channelId, "保留当前配置直到下一轮");
-      await eventually(() => responses[0], "old-provider SSE request");
-      const run = fixture.db((db) =>
-        db
-          .prepare<[string], { id: string }>("SELECT id FROM owner_agent_runs WHERE agent_id=?")
-          .get(agent.id)!,
-      );
-      await fixture.api(`/api/owner/agents/${agent.id}/model`, "PUT", {
-        provider: "anthropic",
-        id: "claude-sonnet-4-5",
-      });
-      await fixture.api(`/api/owner/model-credentials/${changedProvider}`, "PUT", {
-        apiKey: "synthetic-updated-key",
-      });
-      await new Promise((done) => setTimeout(done, 350));
-      expect(
-        fixture.db((db) => db.prepare("SELECT state FROM owner_agent_runs WHERE id=?").get(run.id)),
-      ).toEqual({ state: changedProvider === "openai" ? "failed" : "running" });
-      expect(responses[0]!.destroyed).toBe(changedProvider === "openai");
-      if (changedProvider === "anthropic") {
-        // Revoking the originally admitted provider must still cancel this unchanged loop.
-        await fixture.api("/api/owner/model-credentials/openai", "DELETE");
-        await eventually(
-          () => (responses[0]!.destroyed ? true : undefined),
-          "admitted key revoked",
-        );
-      }
-      await fixture.api(`/api/owner/agents/${agent.id}/pause`, "POST");
-    } finally {
-      await fixture.close();
-    }
-  },
-  30000,
-);
-
 it.each(
   (["pause", "credentials", "offline", "shutdown"] as const).flatMap((cause) =>
     (["starting", "http", "sse", "summary"] as const).map((phase) => [cause, phase] as const),
@@ -127,7 +79,7 @@ it.each(
           }
         }`
         : "",
-      phase === "summary" ? 16000 : undefined,
+      phase === "summary" ? 64000 : undefined,
     );
     try {
       const agent = await fixture.agent();
@@ -141,8 +93,8 @@ it.each(
         }
         if (phase === "summary") {
           respond(responses[0]!, [{ name: "tools.list", input: {} }], {
-            prefix: "x".repeat(28000),
-            inputTokens: 15000,
+            prefix: "x".repeat(240000),
+            inputTokens: 63000,
           });
           try {
             await eventually(() => responses[1], "pending summary request", 2500);
@@ -193,14 +145,10 @@ it.each(
         )
         .toEqual({ state: "failed" });
       expect(
-        fixture.db((db) =>
-          db
-            .prepare(
-              "SELECT COUNT(*) AS n FROM owner_agent_session_records WHERE kind='compaction'",
-            )
-            .get(),
+        fixture.requests.some((request) =>
+          JSON.stringify(request.input).includes("## Goal\\n保留原始工作与工具结果。"),
         ),
-      ).toEqual({ n: 0 });
+      ).toBe(false);
       recovering = true;
       for (let index = next; index < responses.length; index++)
         answer(fixture.requests[index], responses[index]!);
@@ -215,14 +163,10 @@ it.each(
         ),
       ).toEqual(original);
       expect(
-        fixture.db((db) =>
-          db
-            .prepare(
-              "SELECT COUNT(*) AS n FROM owner_agent_session_records WHERE kind='compaction'",
-            )
-            .get(),
+        fixture.requests.some((request) =>
+          JSON.stringify(request.input).includes("## Goal\\n保留原始工作与工具结果。"),
         ),
-      ).toEqual({ n: phase === "summary" ? 1 : 0 });
+      ).toBe(phase === "summary");
     } finally {
       await fixture.close();
     }
@@ -266,9 +210,21 @@ it.each(["credentials", "offline", "shutdown"] as const)(
       );
       await eventually(() => responses[1], "recovered request");
       expect(JSON.stringify(fixture.requests[1]!.input)).toContain("不能失去的输入");
-      if (cause === "offline")
-        expect(JSON.stringify(fixture.requests[1]!.input)).toContain("离线期间排队的输入");
-      respond(responses[1]!, "已恢复。");
+      respond(responses[1]!, "已恢复原工作。");
+      if (cause === "offline") {
+        let next = 2;
+        const queued = await eventually(() => {
+          while (next < responses.length) {
+            const index = next++;
+            if (JSON.stringify(fixture.requests[index]!.input).includes("离线期间排队的输入"))
+              return responses[index];
+            expect(JSON.stringify(fixture.requests[index]!.input)).toContain("[运行提示]");
+            respond(responses[index]!, "原工作保持静默，下一轮处理新输入。");
+          }
+          return undefined;
+        }, "queued offline input after original work and its notices");
+        respond(queued, "已处理离线输入。");
+      }
       await fixture.completed(agent.id);
       expect(
         fixture.db((db) =>
@@ -418,9 +374,33 @@ it("offline messages and due reminders queue while another online node's Agent k
     await fixture.completed(second.id);
     await fixture.reconnectNode();
     await eventually(() => responses[3], "original node resumed");
-    expect(JSON.stringify(fixture.requests[3]!.input)).toContain("离线新输入");
-    expect(JSON.stringify(fixture.requests[3]!.input)).toContain("离线到期提醒");
-    respond(responses[3]!, "原工作和离线消息处理完毕。");
+    respond(responses[3]!, "原工作处理完毕。");
+    let next = 4;
+    let sawOfflineInput = false;
+    let sawReminder = false;
+    await eventually(() => {
+      while (next < responses.length) {
+        const index = next++;
+        const input = JSON.stringify(fixture.requests[index]!.input);
+        sawOfflineInput ||= input.includes("离线新输入");
+        sawReminder ||= fixture.requests[index]!.input.some(
+          (message) =>
+            message.role === "user" && JSON.stringify(message.content).includes("离线到期提醒"),
+        );
+        respond(responses[index]!, "继续处理排队消息和提醒");
+      }
+      return fixture.db((db) =>
+        db
+          .prepare(
+            "SELECT 1 FROM owner_message_deliveries WHERE recipient_id=? AND state='pending'",
+          )
+          .get(first.id),
+      )
+        ? undefined
+        : true;
+    }, "offline queue drained");
+    expect(sawOfflineInput).toBe(true);
+    expect(sawReminder).toBe(true);
     await fixture.completed(first.id);
     expect(
       fixture.db((db) =>

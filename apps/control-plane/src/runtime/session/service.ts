@@ -153,6 +153,7 @@ export class AgentSession {
       message: JSON.parse(row.message_json),
       actionScopeId,
       pending: true,
+      recoveryFact: true,
     }));
   }
 

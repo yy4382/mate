@@ -128,6 +128,13 @@ export class RunRecords {
             )
             .get(candidate.agent_id);
           if (!maxSequence) throw new Error("Message delivery aggregate did not return a row");
+          // A recovered run owns its original admitted batch. Busy arrivals remain
+          // content-free notices until the Agent reads them or a later run admits them.
+          const previous = this.db
+            .prepare<unknown[], { input_end_seq: number; context_history_end_seq: number }>(
+              "SELECT input_end_seq,context_history_end_seq FROM owner_agent_runs WHERE agent_id=? AND delivery_id=? ORDER BY rowid DESC LIMIT 1",
+            )
+            .get(candidate.agent_id, candidate.delivery_id);
           const inputEndSequence =
             firstDifferentSource?.seq === null || firstDifferentSource === undefined
               ? maxSequence.seq
@@ -145,8 +152,8 @@ export class RunRecords {
               candidate.node_id,
               candidate.delivery_id,
               this.now(),
-              Math.max(inputStart.seq, inputEndSequence),
-              maxSequence.seq,
+              previous?.input_end_seq ?? Math.max(inputStart.seq, inputEndSequence),
+              previous?.context_history_end_seq ?? maxSequence.seq,
             );
           recordAgentActivity(this.db, {
             agentId: candidate.agent_id,

@@ -105,6 +105,7 @@ export const contextMessageSchema = z
     message: piMessageSchema,
     actionScopeId: z.string(),
     pending: z.boolean().optional(),
+    recoveryFact: z.boolean().optional(),
     checkpoint: sessionCheckpointSchema.optional(),
   })
   .strict();

@@ -1,7 +1,8 @@
-import { chmodSync, mkdirSync } from "node:fs";
+import { chmodSync, mkdirSync, existsSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname } from "node:path";
 import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
-import { Harness, createRegistry, defineTool, type Conversation } from "@earendil-works/pi-durable";
+import { Harness, createRegistry, defineTool, defineDoc } from "@earendil-works/pi-durable";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { openNodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { Type, type Model, type Api, type Models } from "@earendil-works/pi-ai";
@@ -12,7 +13,16 @@ import { buildAgentSystemPrompt, runNoticeMessage, type AgentProfile } from "../
 import { type SessionCommit, type ModelContextMessage } from "./session/record.js";
 import type { AgentToolCallResult } from "./tools/registry.js";
 
+const admissionDoc = defineDoc({
+  kind: "mate.admission",
+  version: 1,
+  scope: "session",
+  initial: () => ({ sessionId: "", configuration: "" }),
+});
+
 export interface AgentLoopSpec {
+  initialized: boolean;
+  initializedNow(): void;
   sessionId: string;
   storagePath: string;
   actionScopeId: string;
@@ -50,9 +60,25 @@ export interface AgentLoopActions {
 /** One owned Harness advances the Agent's original SQLite conversation, then closes before admission is released. */
 export class AgentLoop {
   private harness: Harness | undefined;
-  private conversation: Conversation | undefined;
+  private sendNotice: ((conversationId: string, deliveryId: string) => Promise<void>) | undefined;
   private readonly controller = new AbortController();
   private readonly notices: { conversationId: string; deliveryId: string }[] = [];
+  async whileCurrent<T>(work: Promise<T>): Promise<T> {
+    const signal = this.controller.signal;
+    signal.throwIfAborted();
+    let listener = () => {};
+    try {
+      return await Promise.race([
+        work,
+        new Promise<never>((_resolve, reject) => {
+          listener = () => reject(signal.reason);
+          signal.addEventListener("abort", listener, { once: true });
+        }),
+      ]);
+    } finally {
+      signal.removeEventListener("abort", listener);
+    }
+  }
   cancel(): void {
     this.controller.abort();
     // Close cancels invocations without withdrawing the durable inbox.
@@ -60,20 +86,10 @@ export class AgentLoop {
   }
   notice(conversationId: string, deliveryId = conversationId): void {
     if (this.controller.signal.aborted) return;
-    if (this.conversation) {
-      void this.conversation
-        .submit(
-          {
-            type: "input",
-            content: runNoticeMessage(conversationId).content,
-            requestId: `notice:${deliveryId}`,
-            whenBusy: "steer",
-          },
-          BACKGROUND_CONTEXT,
-        )
-        .catch(() => {});
-    } else this.notices.push({ conversationId, deliveryId });
+    if (this.sendNotice) void this.sendNotice(conversationId, deliveryId).catch(() => {});
+    else this.notices.push({ conversationId, deliveryId });
   }
+
   async run(
     spec: AgentLoopSpec,
     actions: AgentLoopActions,
@@ -89,13 +105,18 @@ export class AgentLoop {
     const model =
       test.modelForRun?.(selected, spec.apiKey, { sessionId: spec.sessionId }) ?? selected;
     let credentialResponse = false;
+    let canAdvance = false;
+    const assertAdvancing = () => {
+      assertCurrent();
+      if (!canAdvance) throw new Error("Agent admission is reconciling");
+    };
     const models: Models = {
       ...catalog,
       getModel: (provider, id) =>
         provider === model.provider && id === model.id ? model : catalog.getModel(provider, id),
       streamSimple: (requested, context, options) => {
-        assertCurrent();
-        return catalog.streamSimple(requested, context, {
+        assertAdvancing();
+        const stream = catalog.streamSimple(requested, context, {
           ...options,
           apiKey: spec.apiKey,
           env: {},
@@ -103,18 +124,39 @@ export class AgentLoop {
             if (response.status === 401 || response.status === 403) credentialResponse = true;
             await options?.onResponse?.(response, currentModel);
           },
-          fetch: async (input, init) => {
-            assertCurrent();
-            const response = await fetch(input, init);
-            if (response.status === 401 || response.status === 403) credentialResponse = true;
-            return response;
-          },
+          ...(requested.api === "google-generative-ai" || requested.api === "google-vertex"
+            ? {}
+            : {
+                fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+                  assertAdvancing();
+                  const response = await fetch(input, init);
+                  if (response.status === 401 || response.status === 403) credentialResponse = true;
+                  return response;
+                },
+              }),
         });
+        // Google uses its SDK transport rather than the custom fetch/onResponse seam.
+        // Classify only explicit authentication evidence, never generic network errors.
+        void stream
+          .result()
+          .then((message) => {
+            if (
+              (requested.api === "google-generative-ai" || requested.api === "google-vertex") &&
+              /(?:"code"\s*:\s*(?:401|403)|PERMISSION_DENIED|UNAUTHENTICATED|API_KEY_INVALID)/.test(
+                message.errorMessage ?? "",
+              )
+            )
+              credentialResponse = true;
+          })
+          .catch(() => {});
+        return stream;
       },
     };
+    models.completeSimple = (requested, context, options) =>
+      models.streamSimple(requested, context, options).result();
     const inputSchema = z.record(z.string(), z.unknown());
     const forward = async (taskId: number, operation: string, input: Record<string, unknown>) => {
-      assertCurrent();
+      assertAdvancing();
       const toolCallId = actions.bindTool(String(taskId), operation, input);
       const result = await actions.executeTool({ toolCallId, operation, input });
       assertCurrent();
@@ -162,12 +204,19 @@ export class AgentLoop {
     const context = withAbortSignal(this.controller.signal, BACKGROUND_CONTEXT);
     try {
       assertCurrent();
+      if (spec.initialized && !existsSync(spec.storagePath))
+        return {
+          ok: false,
+          code: "execution_environment",
+          reason: "原 Agent 会话文件缺失；请恢复原数据。",
+        };
       mkdirSync(dirname(spec.storagePath), { recursive: true, mode: 0o700 });
       const database = await openNodeSqliteDatabase(spec.storagePath);
+      let storage: SqliteStorage;
       try {
         chmodSync(spec.storagePath, 0o600);
         await database.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;");
-        const storage = await SqliteStorage.open(database);
+        storage = await SqliteStorage.open(database);
         this.harness = await Harness.open(
           storage,
           {
@@ -183,7 +232,43 @@ export class AgentLoop {
       }
       const harness = this.harness;
       assertCurrent();
+      const binding = await harness.snapshot(admissionDoc, context);
+      if ((spec.initialized && !binding) || (binding && binding.sessionId !== spec.sessionId))
+        return {
+          ok: false,
+          code: "execution_environment",
+          reason: "原 Agent 会话身份不匹配；请恢复原数据。",
+        };
       const conversation = await harness.root(BACKGROUND_CONTEXT);
+      const configuration = createHash("sha256")
+        .update(
+          JSON.stringify({
+            provider: spec.provider,
+            modelId: spec.modelId,
+            apiKey: spec.apiKey,
+            prompt: spec.prompt,
+          }),
+        )
+        .digest("hex");
+      const newFacts = [];
+      for (const entry of spec.messages) {
+        if (
+          entry.recoveryFact === true &&
+          !(await storage.submissionByRequest(conversation.id, `delivery:${entry.id}`, context))
+        )
+          newFacts.push(entry);
+      }
+      // abort() enables scheduling: provider and tool entry points remain closed until
+      // the native termination and admission facts have both committed.
+      if ((binding && binding.configuration !== configuration) || newFacts.length > 0)
+        await conversation.abort(context);
+      assertCurrent();
+      await conversation.commit(async (tx) => {
+        const binding = await tx.doc(admissionDoc);
+        binding.sessionId = spec.sessionId;
+        binding.configuration = configuration;
+      }, context);
+      spec.initializedNow();
       await conversation.configure(
         {
           model: { provider: spec.provider, modelId: spec.modelId },
@@ -191,19 +276,61 @@ export class AgentLoop {
         },
         BACKGROUND_CONTEXT,
       );
-      this.conversation = conversation;
       assertCurrent();
       const submissions = [];
-      for (const entry of spec.messages) {
-        if (entry.message.role !== "user") throw new Error("Durable input must be a user message");
+      // Recovery facts are passive native writes while the conversation is idle. Every
+      // fact is committed before any input may start the next provider request.
+      for (const entry of newFacts) {
         assertCurrent();
-        const submission = await conversation.submit(
+        await conversation.submit(
+          {
+            type: "write",
+            requestId: `delivery:${entry.id}`,
+            entry: { kind: "mate.recovery", model: [entry.message] },
+          },
+          context,
+        );
+      }
+      assertCurrent();
+      canAdvance = true;
+      this.sendNotice = async (conversationId, deliveryId) => {
+        let requestId = `notice:${deliveryId}`;
+        let existing = await storage.submissionByRequest(conversation.id, requestId, context);
+        while (existing?.status === "unanswered") {
+          // A placed notice remains in the context; an aborted queued notice must be
+          // admitted again, independently of the still-unread message body.
+          if (existing.entry !== undefined) return;
+          requestId = `notice:${deliveryId}:after:${existing.id}`;
+          existing = await storage.submissionByRequest(conversation.id, requestId, context);
+        }
+        assertCurrent();
+        await conversation.submit(
           {
             type: "input",
-            requestId: `delivery:${entry.id}`,
-            content: entry.message.content,
+            requestId,
+            content: runNoticeMessage(conversationId).content,
             whenBusy: "steer",
           },
+          context,
+        );
+      };
+      for (const entry of spec.messages.filter((entry) => !entry.recoveryFact)) {
+        if (entry.message.role !== "user") throw new Error("Durable input must be a user message");
+        assertCurrent();
+        let requestId = `delivery:${entry.id}`;
+        let content = entry.message.content;
+        let existing = await storage.submissionByRequest(conversation.id, requestId, context);
+        // Terminal attempts never restart. A deterministic successor also survives a lost
+        // Mate acknowledgment; the original text is repeated only if it was never placed.
+        while (existing?.status === "unanswered") {
+          if (existing.entry !== undefined)
+            content = "[恢复提示] 上次工作已终止但输入仍待处理。请继续同一会话中尚未完成的工作。";
+          requestId = `delivery:${entry.id}:after:${existing.id}`;
+          existing = await storage.submissionByRequest(conversation.id, requestId, context);
+        }
+        assertCurrent();
+        const submission = await conversation.submit(
+          { type: "input", requestId, content, whenBusy: "steer" },
           context,
         );
         await test.afterInputAccepted?.(entry.id);
@@ -228,7 +355,7 @@ export class AgentLoop {
             : "model_failed",
       };
     } finally {
-      this.conversation = undefined;
+      this.sendNotice = undefined;
       await this.harness?.close(BACKGROUND_CONTEXT);
       this.harness = undefined;
     }

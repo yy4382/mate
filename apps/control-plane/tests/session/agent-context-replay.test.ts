@@ -243,8 +243,8 @@ it("keeps the actual OpenAI request prefix across tools, DM, public/private chan
     await complete(6);
     expect(requests).toHaveLength(10);
     expect(requests[8].model).toBe("gpt-4o-mini");
-    expect(requests[9].model).toBe("gpt-4o-mini");
-    expect(requests[9].input[0]).toEqual(requests[0].input[0]);
+    expect(requests[9].model).toBe("gpt-4.1-mini");
+    expect(JSON.stringify(requests[9].input[0])).toContain("Changed next run");
     await api(`/api/owner/channels/${dm}/messages`, { text: "采用新配置" });
     await complete(7);
     expect(requests[10].model).toBe("gpt-4.1-mini");
