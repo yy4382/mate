@@ -151,8 +151,10 @@ it("inspects the adopted native model, prompt, tools and versions against real p
     expect(safe).not.toHaveProperty("tools");
     const expanded = inspect(true);
     expect(fixture.requests[0]!.input[0].content).toBe(expanded.systemPrompt);
+    const requestedTools = fixture.requests[0]!.tools;
+    if (!requestedTools) throw new Error("Actual provider request omitted tool definitions");
     expect(
-      fixture.requests[0]!.tools.map((tool) => ({
+      requestedTools.map((tool) => ({
         name: tool.name,
         description: tool.description,
         parameters: tool.parameters,
