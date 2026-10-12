@@ -2,7 +2,7 @@
 
 生产运行只使用控制面 Docker 镜像/Compose 与现有普通账号目录中的 node 完整包。薄 bootstrap 获取并安装管理 CLI，随后用 `mate node` 管理用户服务；源码构建和直接进程入口仅用于[本地开发](DEVELOPMENT.md)。两个组件选择同一明确发布版本。首次发布与 VPS 部署仍需单独执行，本地构建不会发布产物。
 
-控制面拥有模型凭据、Pi 循环和唯一 Agent session；node 拥有宿主工作区、普通命令及收据。两者使用同一现有非零 UID/GID。Mate 不创建账号、安装系统软件、切换 Unix 身份或修改 sudo、Docker 权限、linger。Agent 的命令是该账号的普通 shell 子进程，命令中显式 `sudo` 的结果由宿主已有策略决定。
+控制面拥有模型凭据、Durable 循环和唯一 Agent session；node 拥有宿主工作区、普通命令及收据。两者使用同一现有非零 UID/GID。Mate 不创建账号、安装系统软件、切换 Unix 身份或修改 sudo、Docker 权限、linger。Agent 的命令是该账号的普通 shell 子进程，命令中显式 `sudo` 的结果由宿主已有策略决定。
 
 ## 安装与配对顺序
 

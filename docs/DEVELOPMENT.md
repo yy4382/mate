@@ -40,7 +40,7 @@ export MATE_NODE_DATA_DIR=/ABSOLUTE/private/node
 pnpm start:node
 ```
 
-单账号启动检查以现有普通账号启动控制面与节点，通过真实 WebSocket 配对、创建两名 Agent，分别重启节点和控制面并核对重新认证、在线状态与错误身份拒绝。控制面真实 Durable/Pi 循环请求本地脚本化 HTTP/SSE 模型服务，调用节点普通命令并在每 Agent 原生 SQLite 持久保存 transcript；命令实测 UID/GID 和工作目录。脚本核对两名 Agent 独立工作区与 session、`MEMORY.md`、目录权限 `700`，以及没有按 Agent 创建账号。macOS 与 Linux 均可运行，并记录 `kernel`、`hostEnvironment` 与 `linuxKernel`；macOS 结果仅是跨平台证据。工作区不可写的网页失败由 `agent-creation-process.test.ts` 单独覆盖：
+单账号启动检查以现有普通账号启动控制面与节点，通过真实 WebSocket 配对、创建两名 Agent，分别重启节点和控制面并核对重新认证、在线状态与错误身份拒绝。控制面真实 Durable 循环请求本地脚本化 HTTP/SSE 模型服务，调用节点普通命令并在每 Agent 原生 SQLite 持久保存 transcript；命令实测 UID/GID 和工作目录。脚本核对两名 Agent 独立工作区与 session、`MEMORY.md`、目录权限 `700`，以及没有按 Agent 创建账号。macOS 与 Linux 均可运行，并记录 `kernel`、`hostEnvironment` 与 `linuxKernel`；macOS 结果仅是跨平台证据。工作区不可写的网页失败由 `agent-creation-process.test.ts` 单独覆盖：
 
 ```sh
 pnpm build
@@ -54,7 +54,7 @@ pnpm build
 pnpm test:single-account-agent-workspace
 ```
 
-从网页创建 Agent 到首次私信产生模型运行并写入该 Agent 自己的会话记录，由 `apps/control-plane/tests/runs/agent-loop.test.ts` 用真实控制面内 Pi 循环、本地 HTTP/SSE provider、WebSocket、节点与持久库覆盖；它在 macOS 与 Linux 上都会运行。数据目录的格式拒绝与日常接续见[运行手册](OPERATIONS.md#数据与日常接续)。
+从网页创建 Agent 到首次私信产生模型运行并写入该 Agent 自己的会话记录，由 `apps/control-plane/tests/runs/agent-loop.test.ts` 用真实控制面内 Durable 循环、本地 HTTP/SSE provider、WebSocket、节点与持久库覆盖；它在 macOS 与 Linux 上都会运行。数据目录的格式拒绝与日常接续见[运行手册](OPERATIONS.md#数据与日常接续)。
 
 新增真实进程场景可使用 `apps/control-plane/tests/support/environment/scenario-environment.ts` 的 `createScenarioEnvironment({ agents, provider, controlPlane, node })`。`agents` 声明合成 Agent 资料；`provider` 沿用现有 `agent-loop.ts` 的 HTTP/SSE handler 与 `respond`；可选的 `controlPlane` 和 `node` 配置指定操作、命令与心跳时限。环境返回前已完成 Owner 登录、真实节点配对、合成模型凭据和 Agent 工作区准备；`agents` 返回实际资料（含 session ID）、Owner 私信频道与工作区。用 `request(path, { method, body })` 驱动真实 Owner API，场景不需要拼启动源码。启动文件 `scenario-services.mjs` 使用本次构建的控制面和节点；子进程以现有账号运行，只有必要变量、合成 HOME/临时目录及程序搜索路径。
 
@@ -133,7 +133,7 @@ pnpm --filter @mate/control-plane exec vitest run tests/tasks/message-tasks.test
 pnpm --filter @mate/web exec vitest run tests/conversations tests/tasks/message-cards.test.ts tests/contracts/conversation-responses.test.ts
 ```
 
-普通命令执行在同一个现有普通账号下运行：Agent 的命令进入当前账号的 shell 子进程，默认使用该 Agent 的工作区，返回有界输出、退出码、截断与超时标记，命令里的 `sudo` 原样交给宿主。`agent-loop.test.ts`、`agent-loop-recovery.test.ts` 和 `tests/tools/recovery/invalidation.test.ts` 在真实控制面内 Pi 循环、WebSocket 和节点中核对命令/文件工具、控制面提交边界、节点重启收据复用与未知结果。`agent-loop-lifecycle.test.ts` 核对模型/摘要停滞时取消、凭据暂停、离线和同节点多 Agent 并发；`agent-loop-attention.test.ts` 核对忙时主动读取、暂缓、继续、下一轮同 session 与发言新鲜度选择：
+普通命令执行在同一个现有普通账号下运行：Agent 的命令进入当前账号的 shell 子进程，默认使用该 Agent 的工作区，返回有界输出、退出码、截断与超时标记，命令里的 `sudo` 原样交给宿主。`agent-loop.test.ts`、`agent-loop-recovery.test.ts` 和 `tests/tools/recovery/invalidation.test.ts` 在真实控制面内 Durable 循环、WebSocket 和节点中核对命令/文件工具、控制面提交边界、节点重启收据复用与未知结果。`agent-loop-lifecycle.test.ts` 核对模型/摘要停滞时取消、凭据暂停、离线和同节点多 Agent 并发；`agent-loop-attention.test.ts` 核对忙时主动读取、暂缓、继续、下一轮同 session 与发言新鲜度选择：
 
 ```sh
 pnpm build
