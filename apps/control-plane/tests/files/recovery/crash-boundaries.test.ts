@@ -56,7 +56,7 @@ it.each(
               newText: "edited",
             });
           },
-          function inspectUnknown(request) {
+          async function inspectUnknown(request) {
             const boundary = readFileBoundary(environment.directory);
             const correction = fileModelCorrections(request.payload.input).find(
               (fact) => fact.operationId === boundary.operationId,
@@ -88,11 +88,7 @@ it.each(
             );
             const [action] = readFileActions(environment.directory);
             assert.ok(action);
-            const calls = readCommittedFileCalls(
-              environment.directory,
-              agent.summary.id,
-              action.receipt.runId,
-            );
+            const calls = await readCommittedFileCalls(environment.directory, agent.summary.id);
             assert.equal(calls.length, 1);
             const [committed] = calls;
             assert.ok(committed);

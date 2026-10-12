@@ -3,12 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
-import type { ToolCall } from "@earendil-works/pi-ai";
 import { expect, it } from "vitest";
 import { AgentSession } from "../../src/runtime/session/service.js";
 import { agentSessionSchema } from "../../src/runtime/session/schema.js";
-import { durableToolIdentity } from "../../src/runtime/tools/identity.js";
-import { assistantMessage } from "../support/agent/session.js";
 
 function fixture() {
   const directory = mkdtempSync(join(tmpdir(), "mate-tool-action-"));
@@ -33,26 +30,25 @@ function fixture() {
     );
     return { runId, agentId, actionScopeId };
   }
-  function call(current: ReturnType<typeof run>, name: string, input: ToolCall["arguments"]) {
-    const id = randomUUID();
-    // Providers can repeat their own IDs, even in the same delivery scope.
-    const toolCallId = "provider-repeated-id";
-    expect(
-      session.append(
-        { runId: current.runId, nodeId, agentId: current.agentId },
-        {
-          kind: "message",
-          id,
-          message: {
-            ...assistantMessage("原始 assistant 文本"),
-            stopReason: "toolUse",
-            content: [{ type: "toolCall", id: toolCallId, name, arguments: input }],
-          },
-        },
+  function call(
+    current: ReturnType<typeof run>,
+    name: string,
+    input: Record<string, unknown>,
+    taskId: string = randomUUID(),
+  ) {
+    return {
+      taskId,
+      identity: session.bindTool(
+        current.agentId,
+        current.agentId,
+        current.actionScopeId,
+        taskId,
+        name,
+        input,
       ),
-    ).toBe(true);
-    return { id, identity: durableToolIdentity(current.actionScopeId, id, toolCallId) };
+    };
   }
+
   return {
     nodeId,
     run,
@@ -73,25 +69,13 @@ function fixture() {
   };
 }
 
-it("finds early and late committed calls without confusing repeated provider IDs, Agents or scopes", () => {
+it("binds independent native tool tasks to their Agent and original scope without provider IDs", () => {
   const f = fixture();
   try {
     const first = f.run();
     const other = f.run();
     const next = f.run(first.agentId);
     const early = f.call(first, "process.exec", { command: "printf first", cwd: "." });
-    for (let i = 0; i < 120; i++) {
-      expect(
-        f.session.append(
-          { runId: first.runId, nodeId: f.nodeId, agentId: first.agentId },
-          {
-            kind: "message",
-            id: randomUUID(),
-            message: { role: "user", content: `合成观察 ${i}`, timestamp: i },
-          },
-        ),
-      ).toBe(true);
-    }
     const sameScope = f.call(first, "tools.call", {
       name: "workspace.write",
       input: { path: "note.txt", content: "第二次" },
@@ -151,71 +135,27 @@ it("finds early and late committed calls without confusing repeated provider IDs
   }
 });
 
-it("recovers original names and arguments before compaction after reopening the database", () => {
+it("reopening reuses the same native task effect identity and rejects changed tool or arguments", () => {
   const f = fixture();
   try {
-    const originalRun = f.run();
-    const old = f.call(originalRun, "tools.call", {
-      name: "workspace.write",
-      input: { path: "原始.txt", content: "only once", append: false },
-    });
-    const kept = f.call(originalRun, "process.exec", { command: "printf retained", cwd: "." });
-    const through = randomUUID();
-    expect(
-      f.session.append(
-        { runId: originalRun.runId, nodeId: f.nodeId, agentId: originalRun.agentId },
-        {
-          kind: "message",
-          id: through,
-          message: {
-            role: "toolResult",
-            toolCallId: "provider-repeated-id",
-            toolName: "process.exec",
-            isError: false,
-            content: [{ type: "text", text: "retained" }],
-            timestamp: 2,
-          },
-        },
-      ),
-    ).toBe(true);
-    expect(
-      f.session.append(
-        { runId: originalRun.runId, nodeId: f.nodeId, agentId: originalRun.agentId },
-        {
-          kind: "compaction",
-          id: randomUUID(),
-          firstKeptEntryId: kept.id,
-          throughEntryId: through,
-          summary: "摘要没有保留旧工具参数",
-          tokensBefore: 100,
-          summaryRequestIds: [randomUUID()],
-        },
-      ),
-    ).toBe(true);
-    expect(f.session.context(originalRun.agentId).map((entry) => entry.id)).toEqual([
-      kept.id,
-      through,
-    ]);
+    const original = f.run();
+    const input = { name: "workspace.write", input: { path: "原始.txt", content: "once" } };
+    const call = f.call(original, "tools.call", input, "42");
     f.reopen();
-    const resumed = f.run(originalRun.agentId);
-    f.call(resumed, "tools.call", {
-      name: "workspace.write",
-      input: { path: "different.txt", content: "changed" },
-    });
-    expect(f.session.toolAction(resumed.agentId, old.identity)).toEqual({
-      actionScopeId: originalRun.actionScopeId,
+    const resumed = f.run(original.agentId);
+    expect(f.call(resumed, "tools.call", input, "42").identity).toBe(call.identity);
+    expect(f.session.toolAction(resumed.agentId, call.identity)).toEqual({
+      actionScopeId: original.actionScopeId,
       name: "tools.call",
-      input: {
-        name: "workspace.write",
-        input: { path: "原始.txt", content: "only once", append: false },
-      },
+      input,
     });
-    expect(f.session.toolAction(resumed.agentId, kept.identity)).toEqual({
-      actionScopeId: originalRun.actionScopeId,
-      name: "process.exec",
-      input: { command: "printf retained", cwd: "." },
-    });
-    expect(f.session.context(resumed.agentId)).toHaveLength(3);
+    expect(() => f.call(resumed, "tools.describe", input, "42")).toThrow("binding differs");
+    expect(() =>
+      f.call(resumed, "tools.call", { ...input, input: { path: "different" } }, "42"),
+    ).toThrow("binding differs");
+    const peer = f.run();
+    expect(f.call(peer, "tools.call", input, "42").identity).not.toBe(call.identity);
+    expect(f.session.toolAction(peer.agentId, call.identity)).toBeUndefined();
   } finally {
     f.close();
   }

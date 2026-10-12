@@ -21,6 +21,7 @@ if (process.argv[2] === "control-plane") {
   }
   async function atCommit(phase, entry) {
     if (!boundary || existsSync(reached) || entry.kind !== "message") return;
+    if (entry.message.role === "toolResult" && entry.message.isError) return;
     const currentCalls = [];
     if (entry.message.role === "assistant")
       for (const part of entry.message.content)
@@ -39,7 +40,7 @@ if (process.argv[2] === "control-plane") {
       (boundary.toolName && toolName !== boundary.toolName)
     )
       return;
-    await pause({ phase, entryId: entry.id, role: entry.message.role, toolName });
+    await pause({ phase, entryId: String(entry.id), role: entry.message.role, toolName });
   }
   startControlPlane(
     Number(process.env.MATE_CONTROL_PLANE_PORT),
@@ -58,8 +59,18 @@ if (process.argv[2] === "control-plane") {
       ...(process.env.MATE_SCENARIO_OBSERVE_PARTIAL_TOOL === "true"
         ? { afterToolCallDelta: (delta) => console.log(`MATE_CP_PARTIAL ${JSON.stringify(delta)}`) }
         : {}),
-      beforeSessionCommit: (entry) => atCommit("before", entry),
-      afterSessionCommit: (entry) => atCommit("after", entry),
+      beforeDurableCommit: async (writes) => {
+        for (const write of writes)
+          if (write.type === "entry")
+            for (const message of write.value.model ?? [])
+              await atCommit("before", { id: write.value.id, kind: "message", message });
+      },
+      afterDurableCommit: async (writes) => {
+        for (const write of writes)
+          if (write.type === "entry")
+            for (const message of write.value.model ?? [])
+              await atCommit("after", { id: write.value.id, kind: "message", message });
+      },
       beforeRunFinish: async () => {
         if (boundary?.phase === "finish" && !existsSync(reached)) await pause({ phase: "finish" });
       },

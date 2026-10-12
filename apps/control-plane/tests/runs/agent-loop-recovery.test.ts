@@ -1,3 +1,4 @@
+import { readDurableEntries } from "../support/facts/durable-session-facts.js";
 import { readFileSync, existsSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
@@ -84,10 +85,9 @@ it("a rejected assistant commit keeps the service responsive and prevents its to
           : "完成。",
       );
     },
-    `, beforeSessionCommit: async entry => {
+    `, beforeDurableCommit: async writes => {
       if (
-        entry.kind === "message" &&
-        entry.message.role === "assistant" &&
+        writes.some(write => write.type === "entry" && write.value.model?.some(message => message.role === "assistant")) &&
         !globalThis.rejectedCommit
       ) {
         globalThis.rejectedCommit = true;
@@ -115,14 +115,10 @@ it("a rejected assistant commit keeps the service responsive and prevents its to
     );
     expect(existsSync(join(agent.workspace, "rejected-commit.txt"))).toBe(false);
     expect(
-      fixture.db((db) =>
-        db
-          .prepare(
-            "SELECT COUNT(*) AS n FROM owner_agent_session_records WHERE json_extract(payload_json,'$.message.role')='assistant'",
-          )
-          .get(),
-      ),
-    ).toEqual({ n: 0 });
+      (await readDurableEntries(fixture.directory, agent.id))
+        .flatMap((entry) => entry.model ?? [])
+        .filter((message) => message.role === "assistant"),
+    ).toHaveLength(0);
     expect((await fetch(new URL("/api/status", fixture.origin))).ok).toBe(true);
     await fixture.completed(agent.id);
     expect(readFileSync(join(agent.workspace, "rejected-commit.txt"), "utf8")).toBe("once\n");

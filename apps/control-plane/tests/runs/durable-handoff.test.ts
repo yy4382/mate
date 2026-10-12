@@ -1,3 +1,4 @@
+import { readFileVersion } from "../support/facts/scenario-file-facts.js";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
@@ -93,3 +94,88 @@ it("never executes incomplete streamed arguments before a whole tool call is com
     await fixture.close();
   }
 }, 30000);
+
+it("reenters a committed command after losing its Durable result without executing the shell twice", async () => {
+  let turn = 0;
+  const fixture = await loopFixture((_request, response) => {
+    if (turn++ === 0)
+      respond(response, [
+        {
+          name: "tools.call",
+          input: {
+            name: "process.exec",
+            input: { command: "printf 'once\\n' >> durable-result-gap.txt" },
+          },
+        },
+      ]);
+    else respond(response, "已读取原操作的收据");
+  }, `, beforeDurableCommit: async writes => { if (writes.some(write => write.type === "entry" && write.value.model?.some(message => message.role === "toolResult"))) { console.log("MATE_TOOL_RESULT_GAP"); await new Promise(() => {}); } }`);
+  try {
+    const agent = await fixture.agent();
+    await fixture.send(agent.channelId, "执行一次并保存结果");
+    await fixture.control.waitFor(/MATE_TOOL_RESULT_GAP/);
+    expect(readFileSync(join(agent.workspace, "durable-result-gap.txt"), "utf8")).toBe("once\n");
+    await fixture.restartControl();
+    await fixture.completed(agent.id);
+    expect(readFileSync(join(agent.workspace, "durable-result-gap.txt"), "utf8")).toBe("once\n");
+    expect(fixture.requests).toHaveLength(2);
+    expect(JSON.stringify(fixture.requests[1]!.input)).toContain("succeeded");
+    expect(JSON.stringify(fixture.requests[1]!.input)).not.toContain("interrupted");
+  } finally {
+    await fixture.close();
+  }
+}, 30000);
+
+it.each(["messages.send", "workspace.write"])(
+  "reenters %s after effect commit without publishing or replacing twice",
+  async (name) => {
+    let conversationId = "";
+    let turn = 0;
+    const fixture = await loopFixture((_request, response) => {
+      if (turn++ === 0)
+        respond(response, [
+          {
+            name: "tools.call",
+            input: {
+              name,
+              input:
+                name === "messages.send"
+                  ? { conversationId, text: "一次公开发言" }
+                  : { path: "once.txt", content: "一次文件效果" },
+            },
+          },
+        ]);
+      else respond(response, "已取得原结果");
+    }, `, beforeDurableCommit: async writes => { if (writes.some(write => write.type === "entry" && write.value.model?.some(message => message.role === "toolResult"))) { console.log("MATE_TOOL_RESULT_GAP"); await new Promise(() => {}); } }`);
+    try {
+      const agent = await fixture.agent();
+      conversationId = agent.channelId;
+      await fixture.send(conversationId, "完成一次业务效果");
+      await fixture.control.waitFor(/MATE_TOOL_RESULT_GAP/);
+      const beforeMessages = (await fixture.api(`/api/owner/channels/${conversationId}/messages`))
+        .messages;
+      const beforeFile =
+        name === "workspace.write" ? readFileVersion(join(agent.workspace, "once.txt")) : undefined;
+      await fixture.restartControl();
+      await fixture.completed(agent.id);
+      expect(fixture.requests).toHaveLength(2);
+      expect(JSON.stringify(fixture.requests[1]!.input)).not.toContain("interrupted");
+      expect(
+        (await fixture.api(`/api/owner/channels/${conversationId}/messages`)).messages,
+      ).toEqual(beforeMessages);
+      if (name === "messages.send") {
+        expect(
+          beforeMessages.filter((message: { text: string }) => message.text === "一次公开发言"),
+        ).toHaveLength(1);
+        expect(JSON.stringify(fixture.requests[1]!.input)).toContain("一次公开发言");
+      } else {
+        expect(readFileSync(join(agent.workspace, "once.txt"), "utf8")).toBe("一次文件效果");
+        expect(readFileVersion(join(agent.workspace, "once.txt"))).toEqual(beforeFile);
+        expect(JSON.stringify(fixture.requests[1]!.input)).toContain("sha256");
+      }
+    } finally {
+      await fixture.close();
+    }
+  },
+  30000,
+);

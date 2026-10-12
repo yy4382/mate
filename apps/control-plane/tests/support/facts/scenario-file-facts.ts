@@ -1,3 +1,4 @@
+import { readDurableEntries } from "./durable-session-facts.js";
 import { workspaceOperationSchema } from "@mate/protocol";
 import { workspaceVersionSchema } from "@mate/protocol/workspace";
 import { readFileSync, statSync } from "node:fs";
@@ -126,29 +127,12 @@ export function readFileSessionFacts(directory: string, agentId: string) {
   };
 }
 
-export function readCommittedFileCalls(directory: string, agentId: string, runId: string) {
-  return readScenarioFacts(directory).transcript.flatMap((row) => {
-    const record = z
-      .object({ agentId: z.string(), runId: z.string(), payload: z.string() })
-      .parse(row);
-    if (record.agentId !== agentId || record.runId !== runId) return [];
-    const entry = z
-      .object({
-        message: z.object({ role: z.literal("assistant"), content: z.array(z.unknown()) }),
-      })
-      .safeParse(JSON.parse(record.payload));
-    return entry.success
-      ? entry.data.message.content.flatMap((part) => {
-          const call = z
-            .object({
-              type: z.literal("toolCall"),
-              id: z.string(),
-              name: z.string(),
-              arguments: z.unknown(),
-            })
-            .safeParse(part);
-          return call.success ? [call.data] : [];
-        })
-      : [];
-  });
+export async function readCommittedFileCalls(directory: string, agentId: string) {
+  return (await readDurableEntries(directory, agentId)).flatMap((entry) =>
+    (entry.model ?? []).flatMap((message) =>
+      message.role === "assistant"
+        ? message.content.filter((part) => part.type === "toolCall")
+        : [],
+    ),
+  );
 }

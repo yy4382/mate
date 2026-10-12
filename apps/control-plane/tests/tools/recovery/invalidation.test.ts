@@ -9,7 +9,6 @@ import { WebSocket, WebSocketServer } from "ws";
 import { expect, it } from "vitest";
 import { z } from "zod";
 import { processOperationRequestHash, workspaceReceiptRequestHash } from "@mate/protocol/node";
-import { readScriptedToolResult } from "../../support/agent/scripted-tool-results.js";
 import { fileModelCorrections } from "../../support/facts/scenario-file-facts.js";
 import {
   eventually,
@@ -686,20 +685,14 @@ it.each([
           // Recovery consumes the confirmed original command result before making its new tool
           // decision. A matching SQLite row alone would not prove the model received this fact.
           expect(
-            readScriptedToolResult(
-              z.array(z.unknown()).parse(requests[1].input),
-              "process.exec",
-              z.looseObject({
-                operationId: z.string().uuid(),
-                state: z.string(),
-                receipt: z.unknown(),
-              }),
-            ),
-          ).toMatchObject({
-            operationId: oldReceipt.operationId,
-            state: "succeeded",
-            receipt: oldReceipt.receipt,
-          });
+            fileModelCorrections(z.array(z.unknown()).parse(requests[1].input)),
+          ).toContainEqual(
+            expect.objectContaining({
+              operationId: oldReceipt.operationId,
+              state: "succeeded",
+              receipt: oldReceipt.receipt,
+            }),
+          );
           const originalRequest = wire.find(
             (message) =>
               message.type === "control.process.operation" &&

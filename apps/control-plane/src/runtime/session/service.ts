@@ -157,7 +157,7 @@ export class AgentSession {
     }));
   }
 
-  /** Prove a resumed call's identity from the immutable assistant observation, independently of the new run's delivery. */
+  /** Read the committed Durable tool task binding independently of the new run's delivery. */
   toolAction(
     agentId: string,
     identity: string,
@@ -173,29 +173,6 @@ export class AgentSession {
         name: durable.operation,
         input: JSON.parse(durable.input_json),
       };
-    // The scope narrows candidates only; the original assistant entry still proves the full ID.
-    const match =
-      /^mate:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):[0-9a-f]{64}:1$/.exec(
-        identity,
-      );
-    if (!match || match[0] !== identity) return undefined;
-    const rows = this.db
-      .prepare<unknown[], SessionMessageRow>(
-        `SELECT id,payload_json,action_scope_id FROM owner_agent_session_records
-         WHERE agent_id=? AND action_scope_id=? AND kind='message' ORDER BY seq`,
-      )
-      .iterate(agentId, match[1]);
-    for (const row of rows) {
-      const entry: Extract<SessionCommit, { kind: "message" }> = JSON.parse(row.payload_json);
-      if (entry.message.role !== "assistant") continue;
-      for (const call of entry.message.content) {
-        if (
-          call.type === "toolCall" &&
-          durableToolIdentity(row.action_scope_id, row.id, call.id) === identity
-        )
-          return { actionScopeId: row.action_scope_id, name: call.name, input: call.arguments };
-      }
-    }
     return undefined;
   }
 

@@ -122,6 +122,19 @@ it("a durable file receipt withheld from the control plane corrects the informed
         function finish(request) {
           request.text("原文件收据已更正，同一工作正常继续。");
         },
+        function acknowledgeReceiptNotification(request) {
+          const corrections = fileModelCorrections(request.payload.input).filter(
+            (fact) =>
+              fact.operationId === readFileBoundary(environment.directory).operationId &&
+              fact.state === "succeeded",
+          );
+          assert.equal(
+            corrections.length,
+            1,
+            "The appended receipt fact is not repeated by its notification",
+          );
+          request.text("更正通知已处理。");
+        },
       ]);
       const work = await driver.sendOwnerMessage(
         agent,

@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import type { ScenarioContext } from "../support/scenario/scenario-evidence.js";
+import { readDurableEntries } from "../support/facts/durable-session-facts.js";
 import { readRecoveryFacts } from "../support/facts/scenario-recovery-facts.js";
 import type {
   createScriptedProvider,
@@ -68,15 +69,16 @@ export async function runCpRestart(
     return boundaryEventSchema.parse(JSON.parse(z.string().parse(match[1])));
   });
   const oldRun = await driver.waitForRun(work, "running", { signal });
-  const beforeFault = await step("confirmed history at fault", () => {
+  const beforeFault = await step("confirmed history at fault", async () => {
     const facts = readRecoveryFacts(environment.directory, agent.summary.id);
     assert.equal(facts.runs.filter((run) => run.state === "running").length, 1);
+    const entries = await readDurableEntries(environment.directory, agent.summary.id);
     assert.equal(
-      facts.entries.some(({ entry }) => entry.id === event.entryId),
+      entries.some((entry) => String(entry.id) === event.entryId),
       boundary.phase === "after",
     );
     assert.equal(existsSync(join(agent.workspace, "effect.txt")), boundary.role === "toolResult");
-    return { event, oldRun, facts };
+    return { event, oldRun, facts, entries };
   });
   const oldControl = environment.control;
   await step("SIGKILL exit and same-data restart", async () => {
@@ -102,9 +104,7 @@ export async function runCpRestart(
     // The call is observed from the actual SSE encoder, not reconstructed from runtime code.
     // Read-only records determine which complete messages were confirmed before the fault.
     const call = responseCallSchema.parse(provider.requests[0]?.responseOutput?.[0]);
-    const committed = beforeFault.facts.entries.flatMap(({ entry }) =>
-      entry.kind === "message" ? [entry.message] : [],
-    );
+    const committed = beforeFault.entries.flatMap((entry) => entry.model ?? []);
     const assistant = committed.find((message) => message.role === "assistant");
     const result = committed.find((message) => message.role === "toolResult");
     if (assistant?.role === "assistant") {

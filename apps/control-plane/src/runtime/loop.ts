@@ -2,7 +2,13 @@ import { chmodSync, mkdirSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname } from "node:path";
 import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
-import { Harness, createRegistry, defineTool, defineDoc } from "@earendil-works/pi-durable";
+import {
+  Harness,
+  createRegistry,
+  defineTool,
+  defineDoc,
+  type StorageWrite,
+} from "@earendil-works/pi-durable";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { openNodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { Type, type Model, type Api, type Models } from "@earendil-works/pi-ai";
@@ -39,6 +45,8 @@ export interface AgentLoopTestDependencies {
     apiKey: string,
     session: { readonly sessionId: string },
   ) => Model<Api>;
+  beforeDurableCommit?: (writes: readonly StorageWrite[]) => Promise<void>;
+  afterDurableCommit?: (writes: readonly StorageWrite[]) => Promise<void>;
   beforeSessionCommit?: (entry: SessionCommit) => Promise<void>;
   afterSessionCommit?: (entry: SessionCommit) => Promise<void>;
   afterInputAccepted?: (requestId: string) => Promise<void>;
@@ -105,6 +113,7 @@ export class AgentLoop {
     const model =
       test.modelForRun?.(selected, spec.apiKey, { sessionId: spec.sessionId }) ?? selected;
     let credentialResponse = false;
+    let storageFailed = false;
     let canAdvance = false;
     const assertAdvancing = () => {
       assertCurrent();
@@ -135,6 +144,21 @@ export class AgentLoop {
                 },
               }),
         });
+        if (test.afterToolCallDelta) {
+          const push = stream.push.bind(stream);
+          stream.push = (event) => {
+            push(event);
+            if (event.type === "toolcall_delta") {
+              const call = event.partial.content[event.contentIndex];
+              if (call?.type === "toolCall")
+                test.afterToolCallDelta?.({
+                  sessionId: spec.sessionId,
+                  toolCallId: call.id,
+                  delta: event.delta,
+                });
+            }
+          };
+        }
         // Google uses its SDK transport rather than the custom fetch/onResponse seam.
         // Classify only explicit authentication evidence, never generic network errors.
         void stream
@@ -158,7 +182,9 @@ export class AgentLoop {
     const forward = async (taskId: number, operation: string, input: Record<string, unknown>) => {
       assertAdvancing();
       const toolCallId = actions.bindTool(String(taskId), operation, input);
-      const result = await actions.executeTool({ toolCallId, operation, input });
+      // Revoke the model invocation promptly; the dispatched domain operation keeps
+      // recording its eventual receipt independently of this run's lifetime.
+      const result = await this.whileCurrent(actions.executeTool({ toolCallId, operation, input }));
       assertCurrent();
       if (!result.ok)
         return { isError: true, content: [{ type: "text" as const, text: result.error }] };
@@ -177,6 +203,7 @@ export class AgentLoop {
           name: "tools.list",
           description: "Discover conversation tools available to this Agent run.",
           parameters: Type.Object({}),
+          replay: "safe",
           executionMode: "sequential",
           execute: async (_input, api) => forward(api.taskId, "tools.list", {}),
         }),
@@ -184,6 +211,7 @@ export class AgentLoop {
           name: "tools.describe",
           description: "Get the exact input schema and permissions for one Mate tool.",
           parameters: Type.Object({ name: Type.String({ minLength: 1, maxLength: 128 }) }),
+          replay: "safe",
           executionMode: "sequential",
           execute: async (input, api) =>
             forward(api.taskId, "tools.describe", inputSchema.parse(input)),
@@ -195,6 +223,8 @@ export class AgentLoop {
             name: Type.String({ minLength: 1, maxLength: 128 }),
             input: Type.Record(Type.String(), Type.Any()),
           }),
+          // Domain transactions and node intents deduplicate this persistent task identity.
+          replay: "safe",
           executionMode: "sequential",
           execute: async (input, api) =>
             forward(api.taskId, "tools.call", inputSchema.parse(input)),
@@ -217,6 +247,23 @@ export class AgentLoop {
         chmodSync(spec.storagePath, 0o600);
         await database.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;");
         storage = await SqliteStorage.open(database);
+        const commit = storage.commit.bind(storage);
+        storage.commit = async (writes, context) => {
+          try {
+            await test.beforeDurableCommit?.(writes);
+            const sequence = await commit(writes, context);
+            await test.afterDurableCommit?.(writes);
+            return sequence;
+          } catch (error) {
+            // A failed checkpoint must stop this invocation even when the upstream
+            // scheduler reports the write failure without settling its submission.
+            if (!this.controller.signal.aborted) {
+              storageFailed = true;
+              this.cancel();
+            }
+            throw error;
+          }
+        };
         this.harness = await Harness.open(
           storage,
           {
@@ -348,11 +395,13 @@ export class AgentLoop {
     } catch {
       return {
         ok: false,
-        code: this.controller.signal.aborted
-          ? "aborted"
-          : credentialResponse
-            ? "credentials_invalid"
-            : "model_failed",
+        code: storageFailed
+          ? "session_commit_failed"
+          : this.controller.signal.aborted
+            ? "aborted"
+            : credentialResponse
+              ? "credentials_invalid"
+              : "model_failed",
       };
     } finally {
       this.sendNotice = undefined;

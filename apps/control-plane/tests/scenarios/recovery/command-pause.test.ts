@@ -1,3 +1,4 @@
+import { fileModelCorrections } from "../../support/facts/scenario-file-facts.js";
 import { expect, it } from "vitest";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -33,12 +34,16 @@ it("cp-sigterm-command: a live node command continues after CP exit and its late
           });
         },
         function finishAfterRecovery(request) {
-          request.result(
-            "process.exec",
-            z.object({
-              operationId: z.string(),
-              state: z.enum(["executing", "succeeded", "failed", "unknown"]),
-              receipt: z.unknown(),
+          const facts = fileModelCorrections(request.payload.input);
+          expect(facts).toContainEqual(
+            expect.objectContaining({
+              operationId: readRecoveryFacts(environment.directory, agent.summary.id).operations[0]
+                ?.operationId,
+              state: "unknown",
+              request: expect.objectContaining({
+                operation: expect.objectContaining({ kind: "exec" }),
+              }),
+              note: expect.stringContaining("仍可能运行"),
             }),
           );
           // The driver holds this real request until the original command's late receipt arrives.
@@ -60,13 +65,11 @@ it("cp-sigterm-command: a live node command continues after CP exit and its late
           request.text("已读取晚到收据，继续原会话。");
         },
         function completeReceiptMessageRun(request) {
-          const correction = z
-            .object({
-              role: z.literal("user"),
-              content: z.array(z.object({ type: z.literal("input_text"), text: z.string() })),
-            })
-            .parse(request.payload.input.at(-1));
-          expect(correction.content[0]?.text).toContain('"state":"succeeded"');
+          const facts = fileModelCorrections(request.payload.input);
+          const original = readRecoveryFacts(environment.directory, agent.summary.id).operations[0];
+          const operationFacts = facts.filter((fact) => fact.operationId === original?.operationId);
+          expect(operationFacts.map((fact) => fact.state)).toEqual(["unknown", "succeeded"]);
+          expect(operationFacts[1]).toMatchObject({ receipt: JSON.parse(original!.receipt!) });
           request.text("这条收据消息已处理。");
         },
       ]);

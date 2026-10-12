@@ -1,3 +1,4 @@
+import { readDurableEntries } from "../../support/facts/durable-session-facts.js";
 import { expect, it } from "vitest";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -59,7 +60,7 @@ it("cp-partial-sse: kills after Pi receives partial tool arguments and recovers 
       await environment.restartControl("SIGKILL");
       expect(oldControl.exitStatus?.signal).toBe("SIGKILL");
       const recovered = await driver.waitForRun(work, "completed", { signal });
-      await step("half message absent after confirmed recovery", () => {
+      await step("half message absent after confirmed recovery", async () => {
         const facts = readRecoveryFacts(environment.directory, agent.summary.id);
         expect(facts.operations).toEqual([]);
         expect(facts.sessions).toEqual([{ id: work.sessionId }]);
@@ -67,7 +68,13 @@ it("cp-partial-sse: kills after Pi receives partial tool arguments and recovers 
           state: "failed",
           errorCode: "interrupted",
         });
-        expect(JSON.stringify(facts.entries)).not.toContain("unfinished");
+        const entries = await readDurableEntries(environment.directory, agent.summary.id);
+        expect(JSON.stringify(entries)).not.toContain("unfinished");
+        expect(
+          entries
+            .flatMap((entry) => entry.model ?? [])
+            .some((message) => message.role === "assistant"),
+        ).toBe(true);
         expect(recovered.sessionId).toBe(work.sessionId);
         expect(provider.requests[0]?.call("process.exec", { command: "touch forbidden" })).toBe(
           "late",

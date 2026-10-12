@@ -1,3 +1,4 @@
+import { readDurableEntries } from "../support/facts/durable-session-facts.js";
 import { writeFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
@@ -140,12 +141,9 @@ it("resumes a committed multi-chunk image after a crash without rereading the re
           : "done",
       );
     },
-    `, afterSessionCommit: async entry => {
-      if (
-        entry.kind === "message" &&
-        entry.message.role === "toolResult" &&
-        entry.message.content.some(block => block.type === "image")
-      ) {
+    `, afterDurableCommit: async writes => {
+      if (writes.some(write => write.type === "entry" && write.value.model?.some(message =>
+        message.role === "toolResult" && message.content.some(block => block.type === "image")))) {
         console.log("MATE_IMAGE_COMMITTED");
         await new Promise(() => {});
       }
@@ -158,20 +156,16 @@ it("resumes a committed multi-chunk image after a crash without rereading the re
     writeFileSync(join(agent.workspace, "large.png"), bytes);
     await fixture.send(agent.channelId, "Read the complete image.");
     await fixture.control.waitFor(/MATE_IMAGE_COMMITTED/, 90000);
-    const records = () =>
-      fixture.db((db) =>
-        db
-          .prepare(
-            "SELECT payload_json FROM owner_agent_session_records WHERE agent_id=? AND json_extract(payload_json, '$.message.role')='toolResult'",
-          )
-          .all(agent.id),
+    const records = async () =>
+      (await readDurableEntries(fixture.directory, agent.id)).filter((entry) =>
+        entry.model?.some((message) => message.role === "toolResult"),
       );
-    const persisted = records();
+    const persisted = await records();
     expect(persisted).toHaveLength(1);
     unlinkSync(join(agent.workspace, "large.png"));
     await fixture.restartControl();
     await fixture.completed(agent.id);
-    expect(records()).toEqual(persisted);
+    expect(await records()).toEqual(persisted);
     const output = fixture.requests
       .at(-1)!
       .input.find((item) => item.type === "function_call_output");
