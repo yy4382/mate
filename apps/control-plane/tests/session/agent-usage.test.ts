@@ -321,3 +321,151 @@ it.each(["before", "after"] as const)(
   },
   30000,
 );
+
+it("counts a persisted nonzero streaming attempt as an unknown ordinary response after restart", async () => {
+  const { loopFixture } = await import("../support/agent/agent-loop.js");
+  const { anthropicReply } = await import("../support/provider/protocol-fixture.js");
+  let requests = 0;
+  let resumed: import("node:http").ServerResponse | undefined;
+  const fixture = await loopFixture(
+    (_request, response) => {
+      if (++requests > 1) {
+        resumed = response;
+        return;
+      }
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      const events = [
+        {
+          type: "message_start",
+          message: {
+            id: "partial-usage",
+            type: "message",
+            role: "assistant",
+            model: "claude-sonnet-4-5",
+            content: [],
+            stop_reason: null,
+            stop_sequence: null,
+            usage: { input_tokens: 100, output_tokens: 0, cache_read_input_tokens: 25 },
+          },
+        },
+        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "PRIVATE_NATIVE_PARTIAL_USAGE" },
+        },
+      ];
+      for (const event of events)
+        response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+    },
+    `, afterDurableCommit: async writes => {
+      if (JSON.stringify(writes).includes("PRIVATE_NATIVE_PARTIAL_USAGE")) console.log("MATE_PARTIAL_USAGE_SAVED");
+    }`,
+  );
+  try {
+    await fixture.api("/api/owner/model-credentials/anthropic", "PUT", {
+      apiKey: "synthetic-anthropic-key",
+    });
+    const agent = await fixture.agent("partial usage", {
+      provider: "anthropic",
+      id: "claude-sonnet-4-5",
+    });
+    await fixture.send(agent.channelId, "Preserve native partial spend across restart");
+    await fixture.control.waitFor(/MATE_PARTIAL_USAGE_SAVED/);
+    await fixture.api(`/api/owner/agents/${agent.id}/pause`, "POST");
+    await expect
+      .poll(async () => (await fixture.api(`/api/owner/agents/${agent.id}/activity`)).stop.state)
+      .toBe("succeeded");
+    await fixture.restartControl();
+    await expect
+      .poll(
+        async () =>
+          (await fixture.api("/api/owner/nodes")).nodes.find(
+            (node: { id: string; online: boolean }) => node.id === fixture.nodeId,
+          )?.online,
+      )
+      .toBe(true);
+    await fixture.api(`/api/owner/agents/${agent.id}/resume`, "POST");
+    await expect.poll(() => resumed).toBeDefined();
+    const partial = await fixture.api(`/api/owner/agents/${agent.id}/usage`);
+    expect(partial.normal.requestCount).toBe(1);
+    expect(partial.latestNormal.tokens.uncachedInput).toEqual({
+      value: null,
+      knownRequests: 0,
+      missingRequests: 1,
+    });
+    expect(partial.total.tokens.allInput.value).toBeNull();
+    expect(partial.normal.cacheHitRate.value).toBeNull();
+    if (!resumed) throw new Error("Missing resumed provider request");
+    anthropicReply(resumed, { text: "resumed privately" });
+    await fixture.completed(agent.id);
+    const usage = await fixture.api(`/api/owner/agents/${agent.id}/usage`);
+    expect(requests).toBe(2);
+    expect(usage.normal.requestCount).toBe(2);
+    expect(usage.normal.tokens.uncachedInput).toEqual({
+      value: 20,
+      knownRequests: 1,
+      missingRequests: 1,
+    });
+    expect(usage.total.tokens.uncachedInput).toEqual(usage.normal.tokens.uncachedInput);
+    expect(usage.summary.requestCount).toBe(0);
+    expect(usage.latestNormal.tokens.uncachedInput.value).toBe(20);
+    expect(usage.normal.cacheHitRate.value).toBeNull();
+    expect(
+      JSON.stringify(await fixture.api(`/api/owner/agents/${agent.id}/activity?detail=1`)),
+    ).not.toContain("PRIVATE_NATIVE_PARTIAL_USAGE");
+    await fixture.restartControl();
+    expect(await fixture.api(`/api/owner/agents/${agent.id}/usage`)).toEqual(usage);
+  } finally {
+    await fixture.close();
+  }
+}, 30000);
+
+it("commits a terminal SSE response without waiting for the provider HTTP body to end", async () => {
+  const { loopFixture } = await import("../support/agent/agent-loop.js");
+  let providerResponse: import("node:http").ServerResponse | undefined;
+  const fixture = await loopFixture((_request, response) => {
+    providerResponse = response;
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    for (const [delta, finishReason] of [
+      [{ role: "assistant", content: "private completed response" }, null],
+      [{}, "stop"],
+    ]) {
+      response.write(
+        `data: ${JSON.stringify({ id: "terminal-open-body", object: "chat.completion.chunk", created: 1, model: "deepseek-flash", choices: [{ index: 0, delta, finish_reason: finishReason }] })}\n\n`,
+      );
+    }
+    response.write(
+      `data: ${JSON.stringify({ id: "terminal-open-body", object: "chat.completion.chunk", created: 1, model: "deepseek-flash", choices: [], usage: { prompt_tokens: 100, completion_tokens: 10, prompt_tokens_details: { cached_tokens: 20 } } })}\n\n`,
+    );
+    response.write("data: [DONE]\n\n");
+    // A protocol-complete response is usable even while its HTTP body remains open.
+  });
+  try {
+    await fixture.api("/api/owner/model-credentials/deepseek", "PUT", {
+      apiKey: "synthetic-deepseek-key",
+    });
+    const agent = await fixture.agent("terminal stream", {
+      provider: "deepseek",
+      id: "deepseek-flash",
+    });
+    await fixture.send(agent.channelId, "Complete at the terminal SSE frame");
+    await expect
+      .poll(
+        async () => (await fixture.api(`/api/owner/agents/${agent.id}/usage`)).normal.requestCount,
+        { timeout: 3000 },
+      )
+      .toBe(1);
+    const usage = await fixture.api(`/api/owner/agents/${agent.id}/usage`);
+    expect(usage.latestNormal.tokens.allInput.value).toBe(100);
+    expect(usage.latestNormal.tokens.output.value).toBe(10);
+    expect(usage.latestNormal.cacheHitRate.value).toBe(0.2);
+    expect(providerResponse?.writableEnded).toBe(false);
+    expect(fixture.requests).toHaveLength(1);
+    expect(
+      (await fixture.api(`/api/owner/channels/${agent.channelId}/messages`)).messages,
+    ).toHaveLength(1);
+  } finally {
+    await fixture.close();
+  }
+}, 30000);

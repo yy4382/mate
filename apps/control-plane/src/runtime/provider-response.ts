@@ -115,6 +115,15 @@ export async function inspectProviderResponse(response: Response, api: string) {
         const chunk = await reader.read();
         if (chunk.done) break;
         body += decoder.decode(chunk.value, { stream: true });
+        const frames = body.replace(/\r\n?/g, "\n").split("\n\n").slice(0, -1);
+        const terminal = frames.findIndex((frame) => providerResponseComplete(frame, 200));
+        if (terminal >= 0) {
+          body = frames.slice(0, terminal + 1).join("\n\n");
+          // Cancelling one tee branch can wait for the SDK branch. Start cancellation
+          // without awaiting it, so the SDK can finish at its own terminal event.
+          void reader.cancel().catch(() => {});
+          break;
+        }
       }
       body += decoder.decode();
     }

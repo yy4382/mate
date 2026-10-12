@@ -162,8 +162,12 @@ async function projectUsage(storage: Storage, agentId: string) {
           const normalized = nativeTokens(message.usage);
           for (const name of tokenNames) grouped[name] += normalized[name];
           const parsed = usageProjectionSchema.safeParse(entry.data);
-          if (!parsed.success || !parsed.data.mateUsage.confirmed) continue;
-          const reported = parsed.data.mateUsage.reported;
+          const observed = parsed.success && parsed.data.mateUsage.confirmed;
+          // Durable converts saved progress into an aborted ordinary response and
+          // records its normalized spend. A crash lost the provider availability,
+          // so count this committed attempt while keeping every field unknown.
+          if (!observed && message.stopReason !== "aborted") continue;
+          const reported = observed ? parsed.data.mateUsage.reported : null;
           total.add(reported);
           normal.add(reported);
           latestNormal = { id: `${agentId}:${entry.id}`, recordedAt: message.timestamp, reported };
