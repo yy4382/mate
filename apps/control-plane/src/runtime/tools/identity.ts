@@ -1,13 +1,13 @@
 import { createHash } from "node:crypto";
 
-/** A committed assistant entry and Pi tool call name the same action across run recovery. */
+/** The original Agent session and Durable tool task name one action across run recovery. */
 export function durableToolIdentity(
   actionScopeId: string,
-  assistantId: string,
-  toolCallId: string,
+  sessionId: string,
+  taskId: string,
 ): string {
   return `mate:${actionScopeId}:${createHash("sha256")
-    .update(JSON.stringify([assistantId, toolCallId]))
+    .update(JSON.stringify([sessionId, taskId]))
     .digest("hex")}:1`;
 }
 

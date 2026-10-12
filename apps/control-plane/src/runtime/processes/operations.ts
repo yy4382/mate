@@ -438,7 +438,7 @@ function stableActionScopeId(stableActionId: string): string {
   return stableActionIdSchema.parse(stableActionId).split(":")[1]!;
 }
 
-/** Derive an operation UUID from the session's committed assistant/tool-call action identity. */
+/** Derive an operation UUID from the Agent's bound Durable tool task identity. */
 export function deriveAgentProcessOperationId(agentId: string, stableActionId: string): string {
   const parsedAgentId = uuidSchema.parse(agentId);
   const parsedStableActionId = stableActionIdSchema.parse(stableActionId);
