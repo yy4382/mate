@@ -1,76 +1,26 @@
 import { z } from "zod";
-import { reportedUsageSchema, type ReportedUsage } from "./session/record.js";
+import { type ReportedUsage } from "./provider-response.js";
+import { usageObservationSchema } from "./usage-observation.js";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
+import { openNodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
+import type { Storage, ConversationId } from "@earendil-works/pi-durable";
 import type Database from "better-sqlite3";
 
-const tokenNameSchema = z.enum([
-  "uncachedInput",
-  "cacheRead",
-  "cacheWrite",
-  "allInput",
-  "output",
-  "total",
-  "reasoningOutput",
-]);
-type TokenName = z.infer<typeof tokenNameSchema>;
-const tokenNames = tokenNameSchema.options;
-const usageProjectionSchema = z.object({ reportedUsage: reportedUsageSchema.nullable() });
-
-function zeroTokenCounts() {
-  return {
-    uncachedInput: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    allInput: 0,
-    output: 0,
-    total: 0,
-    reasoningOutput: 0,
-  };
-}
-
-function tokensOf(reported: ReportedUsage | null): Record<TokenName, number | null> {
-  const absent = {
-    uncachedInput: null,
-    cacheRead: null,
-    cacheWrite: null,
-    allInput: null,
-    output: null,
-    total: null,
-    reasoningOutput: null,
-  };
-  if (!reported) return absent;
-  const cacheRead = reported.cacheRead ?? null;
-  const cacheWrite = reported.cacheWrite ?? null;
-  const output = reported.output ?? null;
-  let uncachedInput: number | null = null;
-  let allInput: number | null = null;
-  if (reported.input !== undefined) {
-    if (reported.inputBasis === "excludes_cache") {
-      uncachedInput = reported.input;
-      if (cacheRead !== null && cacheWrite !== null)
-        allInput = reported.input + cacheRead + cacheWrite;
-    } else if (reported.inputBasis === "includes_cache") {
-      // A contradictory provider breakdown is not a valid source for derived totals or rates.
-      if (
-        (cacheRead === null || cacheRead <= reported.input) &&
-        (cacheWrite === null || cacheWrite <= reported.input) &&
-        (cacheRead === null || cacheWrite === null || cacheRead + cacheWrite <= reported.input)
-      )
-        allInput = reported.input;
-      if (allInput !== null && cacheRead !== null && cacheWrite !== null)
-        uncachedInput = reported.input - cacheRead - cacheWrite;
-    }
-  }
-  return {
-    uncachedInput,
-    cacheRead,
-    cacheWrite,
-    allInput,
-    output,
-    total: allInput !== null && output !== null ? allInput + output : null,
-    reasoningOutput: reported.reasoning ?? null,
-  };
-}
-
+import {
+  tokenNames,
+  zeroTokenCounts,
+  tokensOf,
+  nativeTokens,
+  summaryAvailabilitySchema,
+  summaryAvailabilityKind,
+  nativeUsageSchema,
+  type SummaryCoverage,
+} from "./usage-observation.js";
+const usageProjectionSchema = z.object({ mateUsage: usageObservationSchema });
+const nativeModelUsageSchema = z.object({ models: z.record(z.string(), nativeUsageSchema) });
 class UsageAccumulator {
   private requestCount = 0;
   private readonly totals = zeroTokenCounts();
@@ -100,8 +50,25 @@ class UsageAccumulator {
     }
   }
 
+  addSummary(
+    coverage: SummaryCoverage,
+    remainder: ReturnType<typeof nativeTokens> | undefined,
+  ): void {
+    this.requestCount += coverage.requestCount;
+    for (const name of tokenNames) {
+      const value = remainder?.[name];
+      if (coverage.unsafe[name] || value === undefined || value < 0 || !coverage.known[name])
+        continue;
+      this.totals[name] += value;
+      this.known[name] += coverage.known[name];
+    }
+    this.hitKnown += coverage.hitKnown;
+    this.hitInput += coverage.hitInput;
+    this.hitRead += coverage.hitRead;
+  }
+
   snapshot() {
-    const metric = (name: TokenName) => ({
+    const metric = (name: keyof ReturnType<typeof zeroTokenCounts>) => ({
       value: this.known[name] ? this.totals[name] : null,
       knownRequests: this.known[name],
       missingRequests: this.requestCount - this.known[name],
@@ -127,36 +94,13 @@ class UsageAccumulator {
   }
 }
 
-/** Each confirmed request appears once in the immutable per-Agent session log. */
-export function agentUsage(db: Database.Database, agentId: string) {
-  const total = new UsageAccumulator();
-  const normal = new UsageAccumulator();
-  const summary = new UsageAccumulator();
-  let latestNormal: { id: string; recordedAt: number; reported: ReportedUsage | null } | null =
-    null;
-  const rows = db
-    .prepare<
-      unknown[],
-      {
-        id: string;
-        kind: string;
-        usage_json: string;
-        created_at: number;
-      }
-    >(
-      `SELECT id,kind,usage_json,created_at FROM owner_agent_session_records
-     WHERE agent_id=? AND usage_json IS NOT NULL ORDER BY seq`,
-    )
-    .iterate(agentId);
-  for (const row of rows) {
-    const reported = usageProjectionSchema.parse(JSON.parse(row.usage_json)).reportedUsage;
-    total.add(reported);
-    if (row.kind === "summary_usage") summary.add(reported);
-    else {
-      normal.add(reported);
-      latestNormal = { id: row.id, recordedAt: row.created_at, reported };
-    }
-  }
+function responseFor(
+  agentId: string,
+  total: UsageAccumulator,
+  normal: UsageAccumulator,
+  summary: UsageAccumulator,
+  latestNormal: { id: string; recordedAt: number; reported: ReportedUsage | null } | null,
+) {
   const latest = new UsageAccumulator();
   if (latestNormal) latest.add(latestNormal.reported);
   return {
@@ -168,4 +112,100 @@ export function agentUsage(db: Database.Database, agentId: string) {
       ? { id: latestNormal.id, recordedAt: latestNormal.recordedAt, ...latest.snapshot() }
       : null,
   };
+}
+
+async function usageState(storage: Storage, conversationId: ConversationId) {
+  const scope = { kind: "conversation" as const, conversationId };
+  const read = async (kind: string) => {
+    const record = await storage.findDocument({ kind, scope }, "current", BACKGROUND_CONTEXT);
+    return record && (await storage.document(record.id, "current", BACKGROUND_CONTEXT));
+  };
+  const native = await read("pi.usage");
+  const availability = await read(summaryAvailabilityKind);
+  return {
+    models: native ? nativeModelUsageSchema.parse(native.value).models : {},
+    groups: availability ? summaryAvailabilitySchema.parse(availability.value).groups : {},
+  };
+}
+
+async function projectUsage(storage: Storage, agentId: string) {
+  const conversations = await storage.scanConversations({}, 2, undefined, BACKGROUND_CONTEXT);
+  if (conversations.items.length !== 1) throw new Error("Agent usage unavailable");
+  const conversationId = conversations.items[0]!.id;
+  for (;;) {
+    const state = await usageState(storage, conversationId);
+    const through = (
+      await storage.scanEntries({ conversationId }, 1, undefined, BACKGROUND_CONTEXT)
+    ).items[0]?.id;
+    const total = new UsageAccumulator();
+    const normal = new UsageAccumulator();
+    const summary = new UsageAccumulator();
+    let latestNormal: { id: string; recordedAt: number; reported: ReportedUsage | null } | null =
+      null;
+    const ordinary: Record<string, ReturnType<typeof nativeTokens>> = {};
+    if (through !== undefined) {
+      let cursor;
+      do {
+        const page = await storage.scanEntries(
+          { conversationId, order: "ascending", maxEntryId: through },
+          100,
+          cursor,
+          BACKGROUND_CONTEXT,
+        );
+        for (const entry of page.items) {
+          if (entry.kind !== "pi.assistant") continue;
+          const message = entry.model?.[0];
+          if (message?.role !== "assistant") continue;
+          const key = `${message.provider}/${message.model}`;
+          const grouped = ordinary[key] ?? zeroTokenCounts();
+          ordinary[key] = grouped;
+          const normalized = nativeTokens(message.usage);
+          for (const name of tokenNames) grouped[name] += normalized[name];
+          const parsed = usageProjectionSchema.safeParse(entry.data);
+          if (!parsed.success || !parsed.data.mateUsage.confirmed) continue;
+          const reported = parsed.data.mateUsage.reported;
+          total.add(reported);
+          normal.add(reported);
+          latestNormal = { id: `${agentId}:${entry.id}`, recordedAt: message.timestamp, reported };
+        }
+        cursor = page.next;
+      } while (cursor);
+    }
+    // The public adapter materializes each document atomically, rather than nesting a
+    // second SQL transaction. Retry a concurrent model commit so subtraction and
+    // coverage refer to one committed range. The fixed entry tail never grows mid-scan.
+    if (JSON.stringify(state) !== JSON.stringify(await usageState(storage, conversationId)))
+      continue;
+    for (const [key, coverage] of Object.entries(state.groups)) {
+      const native = state.models[key];
+      const remainder = native && nativeTokens(native);
+      if (remainder) for (const name of tokenNames) remainder[name] -= ordinary[key]?.[name] ?? 0;
+      summary.addSummary(coverage, remainder);
+      total.addSummary(coverage, remainder);
+    }
+    return responseFor(agentId, total, normal, summary, latestNormal);
+  }
+}
+
+/** Native model totals and all ordinary responses share a stable committed scope; tool spend is separate. */
+export async function agentUsage(db: Database.Database, agentId: string) {
+  const path = join(dirname(db.name), "durable", `${agentId}.sqlite`);
+  if (!existsSync(path))
+    return responseFor(
+      agentId,
+      new UsageAccumulator(),
+      new UsageAccumulator(),
+      new UsageAccumulator(),
+      null,
+    );
+  const database = await openNodeSqliteDatabase(path);
+  let storage;
+  try {
+    await database.exec("PRAGMA synchronous=FULL;");
+    storage = await SqliteStorage.open(database);
+    return await projectUsage(storage, agentId);
+  } finally {
+    if (storage) await storage.close(BACKGROUND_CONTEXT);
+    else await database.close();
+  }
 }

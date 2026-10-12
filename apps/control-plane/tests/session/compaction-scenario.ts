@@ -1,4 +1,6 @@
 import { expect } from "vitest";
+import { inspectSession } from "../../src/prompts/inspection.js";
+import { join } from "node:path";
 import { loopFixture, respond } from "../support/agent/agent-loop.js";
 import { readDurableEntries } from "../support/facts/durable-session-facts.js";
 import { eventually } from "../support/environment/run-services.js";
@@ -13,6 +15,7 @@ export async function exerciseCompaction(
     | "length"
     | "network"
     | "failureWithoutUsage"
+    | "failureWithUsage"
     | "uncuttable"
     | "overflow"
     | "interrupt"
@@ -32,10 +35,10 @@ export async function exerciseCompaction(
             `data: ${JSON.stringify({ type: "response.created", response: { id: "partial-summary" } })}\n\n`,
           );
           setTimeout(() => response.destroy(), 10);
-        } else if (mode === "failureWithoutUsage") {
+        } else if (mode === "failureWithoutUsage" || mode === "failureWithUsage") {
           response.writeHead(200, { "content-type": "text/event-stream" });
           response.end(
-            `data: ${JSON.stringify({ type: "response.failed", response: { id: "failed", status: "failed", error: { code: "invalid_request_error", message: "summary failed" }, output: [] } })}\n\n`,
+            `data: ${JSON.stringify({ type: "response.failed", response: { id: "failed", status: "failed", error: { code: "invalid_request_error", message: "summary failed" }, output: [], ...(mode === "failureWithUsage" ? { usage: { input_tokens: 70, output_tokens: 3, input_tokens_details: { cached_tokens: 7 } } } : {}) } })}\n\n`,
           );
         } else if (mode === "toolCall") respond(response, [{ name: "tools.list", input: {} }]);
         else if (["length", "overflowFailure", "overflowFailureRestart"].includes(mode)) {
@@ -169,9 +172,63 @@ export async function exerciseCompaction(
       await eventually(() => (normal >= 3 ? true : undefined), "native overflow retry");
       await fixture.completed(agent.id);
     }
+    const usage = await fixture.api(`/api/owner/agents/${agent.id}/usage`);
+    expect(usage.normal.requestCount).toBe(normal);
+    const committedSummaries = mode === "network" ? 0 : mode === "interrupt" ? 1 : summaries;
+    expect(usage.summary.requestCount).toBe(committedSummaries);
+    expect(usage.total.requestCount).toBe(normal + committedSummaries);
+    expect(usage.normal.tokens.allInput.value).toBe(
+      mode === "overflow"
+        ? 100
+        : mode === "repeat"
+          ? 230050
+          : mode === "recoveryOrder"
+            ? 100 + 50 * (normal - 1)
+            : 115000 + 50 * (normal - 1),
+    );
+    if (mode === "failureWithoutUsage" || committedSummaries === 0) {
+      expect(usage.summary.tokens.allInput.value).toBeNull();
+      expect(usage.summary.tokens.output.value).toBeNull();
+      expect(usage.summary.cacheHitRate.value).toBeNull();
+    } else {
+      expect(usage.summary.tokens.allInput.value).toBe(
+        mode === "toolCall" ? 50 : mode === "failureWithUsage" ? 70 : 100 * committedSummaries,
+      );
+      expect(usage.summary.tokens.output.value).toBe(
+        mode === "failureWithUsage" ? 3 : 10 * committedSummaries,
+      );
+      expect(usage.summary.tokens.cacheRead.value).toBe(
+        mode === "length" ? null : mode === "failureWithUsage" ? 7 : 5 * committedSummaries,
+      );
+      expect(usage.summary.cacheHitRate.value).toBe(
+        mode === "length" ? null : ["toolCall", "failureWithUsage"].includes(mode) ? 0.1 : 0.05,
+      );
+    }
+    if (mode === "success") {
+      const inspected = await inspectSession(
+        join(fixture.directory, "control-plane-data", "durable", `${agent.id}.sqlite`),
+        { showContent: true },
+      );
+      expect(inspected.toolCount).toBe(3);
+      expect(fixture.requests.at(-1)!.input[0].content).toBe(inspected.systemPrompt);
+      expect(
+        fixture.requests.at(-1)!.tools!.map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.parameters,
+        })),
+      ).toEqual(inspected.tools);
+    }
     const records = await entries();
+
     const checkpoints = records.filter((entry) => entry.kind === "pi.compaction");
-    const failed = ["toolCall", "length", "network", "failureWithoutUsage"].includes(mode);
+    const failed = [
+      "toolCall",
+      "length",
+      "network",
+      "failureWithoutUsage",
+      "failureWithUsage",
+    ].includes(mode);
     if (failed) {
       expect(summaries).toBeGreaterThan(0);
       expect(checkpoints).toHaveLength(0);
@@ -208,11 +265,32 @@ export async function exerciseCompaction(
         ),
       ).toContain("Preserve the prior request");
     await fixture.restartControl();
+    expect(await fixture.api(`/api/owner/agents/${agent.id}/usage`)).toEqual(usage);
+    if (mode === "success")
+      await fixture.api(`/api/owner/agents/${agent.id}/model`, "PUT", {
+        provider: "openai",
+        id: "gpt-4o",
+      });
     const before = normal;
     await fixture.send(agent.channelId, "Follow-up after restart");
     await eventually(() => (normal > before ? true : undefined), "restarted context request");
     await fixture.completed(agent.id);
     expect(JSON.stringify(fixture.requests.at(-1)!.input)).toContain("Preserve the prior request");
+    if (mode === "success") {
+      await expect
+        .poll(
+          async () =>
+            (await fixture.api(`/api/owner/agents/${agent.id}/usage`)).normal.requestCount,
+          { timeout: 15000 },
+        )
+        .toBe(5);
+      const after = await fixture.api(`/api/owner/agents/${agent.id}/usage`);
+      expect(after.summary).toEqual(usage.summary);
+      expect(after.normal.tokens.allInput.value).toBe(115200);
+      expect(after.total.tokens.allInput.value).toBe(115300);
+      expect(after.latestNormal.tokens.allInput.value).toBe(50);
+      expect(after.total.cacheHitRate.value).toBe(30 / 115300);
+    }
     expect(
       JSON.stringify(
         fixture.requests.find((request) =>

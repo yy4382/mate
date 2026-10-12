@@ -66,11 +66,11 @@ export function createAgentRoutes({
         })),
       });
     })
-    .get("/api/owner/agents/:agentId/usage", (context) => {
+    .get("/api/owner/agents/:agentId/usage", async (context) => {
       const agentId = context.req.param("agentId");
       if (!agents.get(agentId)) return context.json({ error: "Agent 不存在。" }, 404);
       context.header("Cache-Control", "no-store");
-      return context.json(agentUsage(db, agentId));
+      return context.json(await agentUsage(db, agentId));
     })
     .patch("/api/owner/agents/:agentId/profile", async (context) => {
       const input = agentProfilePatchSchema.safeParse(await context.req.json().catch(() => null));

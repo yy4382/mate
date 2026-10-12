@@ -67,3 +67,9 @@ it.each(["overflowFailure", "overflowFailureRestart"] as const)(
   (mode) => exerciseCompaction(mode),
   30000,
 );
+
+it(
+  "retains complete failed summary spend without installing its failed output",
+  () => exerciseCompaction("failureWithUsage"),
+  30000,
+);

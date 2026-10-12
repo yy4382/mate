@@ -1,6 +1,17 @@
 import { z } from "zod";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { ReportedUsage } from "./session/record.js";
+import { calculateCost, type AssistantMessage, type Api, type Model } from "@earendil-works/pi-ai";
+export const reportedUsageSchema = z
+  .object({
+    sourceApi: z.string(),
+    inputBasis: z.enum(["includes_cache", "excludes_cache", "unknown"]),
+    input: z.number().nonnegative().optional(),
+    output: z.number().nonnegative().optional(),
+    cacheRead: z.number().nonnegative().optional(),
+    cacheWrite: z.number().nonnegative().optional(),
+    reasoning: z.number().nonnegative().optional(),
+  })
+  .strict();
+export type ReportedUsage = z.infer<typeof reportedUsageSchema>;
 
 // Provider envelopes are intentionally open: inspect known fields without dropping extensions.
 const providerObjectSchema = z.record(z.string(), z.unknown());
@@ -159,4 +170,29 @@ export function confirmedModelResponse(
     ((message.api === "google-generative-ai" || message.api === "google-vertex") &&
       (message.responseId !== undefined || message.usage.totalTokens > 0))
   );
+}
+
+/** Pi 1.1's Responses adapter throws on response.failed before normalizing its usage.
+ * Retain those explicitly reported counters in the returned native response, so Durable
+ * commits failed spend in its own model totals. Availability remains separate from zeros. */
+export function restoreFailedUsage(
+  message: AssistantMessage,
+  reported: ReportedUsage | null,
+  complete: boolean,
+  model: Model<Api>,
+): void {
+  if (message.stopReason !== "error" || !complete || !reported) return;
+  const usage = message.usage;
+  if (reported.cacheRead !== undefined) usage.cacheRead = reported.cacheRead;
+  if (reported.cacheWrite !== undefined) usage.cacheWrite = reported.cacheWrite;
+  if (reported.input !== undefined) {
+    if (reported.inputBasis === "includes_cache")
+      usage.input = Math.max(0, reported.input - usage.cacheRead - usage.cacheWrite);
+    if (reported.inputBasis === "excludes_cache") usage.input = reported.input;
+  }
+  if (reported.output !== undefined) usage.output = reported.output;
+  if (reported.reasoning !== undefined) usage.reasoning = reported.reasoning;
+  if (reported.input !== undefined && reported.output !== undefined)
+    usage.totalTokens = usage.input + usage.cacheRead + usage.cacheWrite + usage.output;
+  calculateCost(model, usage);
 }

@@ -1,19 +1,7 @@
 import type { Message } from "@earendil-works/pi-ai";
 import { z } from "zod";
 
-export const reportedUsageSchema = z
-  .object({
-    sourceApi: z.string(),
-    inputBasis: z.enum(["includes_cache", "excludes_cache", "unknown"]),
-    input: z.number().nonnegative().optional(),
-    output: z.number().nonnegative().optional(),
-    cacheRead: z.number().nonnegative().optional(),
-    cacheWrite: z.number().nonnegative().optional(),
-    reasoning: z.number().nonnegative().optional(),
-  })
-  .strict();
-export type ReportedUsage = z.infer<typeof reportedUsageSchema>;
-
+import { reportedUsageSchema } from "../provider-response.js";
 // Preserve Pi/provider extension fields (signatures, replay data and usage) verbatim.
 const contentBlock = z.looseObject({ type: z.string() });
 export const piMessageSchema = z

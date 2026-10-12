@@ -1,5 +1,11 @@
 import { z } from "zod";
 import { buildAgentSystemPrompt } from "./system.js";
+import { runtimeVersions } from "../runtime/build-identity.js";
+import { existsSync } from "node:fs";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
+import { openNodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
 import { runtimeSources } from "./runtime.js";
 
 /** Only explicit content mode renders the synthetic example. Never reads runtime state. */
@@ -11,6 +17,7 @@ export function inspectPrompts(options: { showContent?: boolean } = {}) {
   });
   return {
     kind: "current-build",
+    runtimeVersions,
     systemSections: built.sections.map(({ text: _text, ...source }, order) => ({
       ...source,
       order,
@@ -30,8 +37,16 @@ const systemEntrySchema = z.object({
         role: z.literal("system"),
         content: z.string(),
         sections: z.record(z.string(), z.string().nullable()).optional(),
-        toolsAdded: z.array(z.json()).optional(),
-        toolsRemoved: z.array(z.string()).optional(),
+        toolsAdded: z
+          .array(
+            z.object({
+              name: z.string(),
+              description: z.string().optional(),
+              parameters: z.json().optional(),
+            }),
+          )
+          .optional(),
+        toolsRemoved: z.array(z.object({ name: z.string() })).optional(),
       }),
     )
     .length(1),
@@ -50,4 +65,107 @@ export function inspectSystemEntry(input: unknown, options: { showContent?: bool
     toolsRemovedCount: message.toolsRemoved?.length ?? 0,
     ...(options.showContent ? { message } : {}),
   };
+}
+
+const configurationSchema = z.object({
+  model: z.object({ provider: z.string(), modelId: z.string() }).optional(),
+});
+const versionsSchema = z.object({
+  runtimeVersions: z.object({
+    controlPlane: z.string(),
+    piDurable: z.string(),
+    piAi: z.string(),
+    chord: z.string(),
+  }),
+});
+
+/** Observe adopted native facts without opening a Harness or emitting conversation content. */
+export async function inspectSession(path: string, options: { showContent?: boolean } = {}) {
+  if (!existsSync(path)) throw new Error("Session unavailable");
+  const database = await openNodeSqliteDatabase(path);
+  let storage;
+  try {
+    await database.exec("PRAGMA synchronous=FULL;");
+    storage = await SqliteStorage.open(database);
+    const conversations = await storage.scanConversations({}, 2, undefined, BACKGROUND_CONTEXT);
+    if (conversations.items.length !== 1) throw new Error("Session unavailable");
+    const conversationId = conversations.items[0]!.id;
+    for (;;) {
+      const scope = { kind: "conversation" as const, conversationId };
+      const agent = await storage.findDocument(
+        { kind: "pi.agent", scope },
+        "current",
+        BACKGROUND_CONTEXT,
+      );
+      const configured = agent && (await storage.document(agent.id, "current", BACKGROUND_CONTEXT));
+      const admission = await storage.findDocument(
+        { kind: "mate.admission", scope: { kind: "session" } },
+        "current",
+        BACKGROUND_CONTEXT,
+      );
+      const adopted =
+        admission && (await storage.document(admission.id, "current", BACKGROUND_CONTEXT));
+      const tail = (await storage.scanEntries({ conversationId }, 1, undefined, BACKGROUND_CONTEXT))
+        .items[0]?.id;
+      // A newly committed summary need not have a new system baseline yet. Inspect the
+      // last committed system change against its own head, rather than discard the
+      // configuration that the provider actually received before that summary.
+      const entries = [];
+      let entryCursor;
+      if (tail !== undefined)
+        do {
+          const page = await storage.scanEntries(
+            { conversationId, order: "ascending", maxEntryId: tail },
+            100,
+            entryCursor,
+            BACKGROUND_CONTEXT,
+          );
+          entries.push(...page.items);
+          entryCursor = page.next;
+        } while (entryCursor);
+      const lastSystem = entries.findLast((entry) => entry.kind === "pi.system");
+      const head =
+        lastSystem &&
+        (await storage.findLatestHeadMarker(conversationId, lastSystem.id, BACKGROUND_CONTEXT));
+      const messages = [];
+      let lastModel;
+      for (const entry of entries) {
+        const message = entry.model?.[0];
+        if (entry.kind === "pi.assistant" && message?.role === "assistant")
+          lastModel = { provider: message.provider, modelId: message.model };
+        if (entry.kind === "pi.system" && (!head || entry.id > head.id)) {
+          const parsed = systemEntrySchema.parse(entry);
+          messages.push(parsed.model[0]!);
+        }
+      }
+      const currentConfigured =
+        agent && (await storage.document(agent.id, "current", BACKGROUND_CONTEXT));
+      const currentAdopted =
+        admission && (await storage.document(admission.id, "current", BACKGROUND_CONTEXT));
+      if (
+        JSON.stringify(configured?.value) !== JSON.stringify(currentConfigured?.value) ||
+        JSON.stringify(adopted?.value) !== JSON.stringify(currentAdopted?.value)
+      )
+        continue;
+      const tools = getCurrentTools(messages);
+      const systemPrompt = getCurrentSystemPrompt(messages);
+      return {
+        kind: "saved-session-configuration",
+        provenance: "committed-system-changes",
+        runtimeVersions: adopted ? versionsSchema.parse(adopted.value).runtimeVersions : null,
+        inspectorVersions: runtimeVersions,
+        model: lastModel ?? null,
+        configuredModel: configured
+          ? (configurationSchema.parse(configured.value).model ?? null)
+          : null,
+        systemEntryCount: messages.length,
+        systemPromptChars: systemPrompt.length,
+        toolCount: tools.length,
+        ...(options.showContent ? { systemPrompt, tools } : {}),
+      };
+    }
+  } finally {
+    if (storage) await storage.close(BACKGROUND_CONTEXT);
+    else await database.close();
+  }
 }

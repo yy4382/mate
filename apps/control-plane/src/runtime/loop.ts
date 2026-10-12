@@ -13,13 +13,27 @@ import {
 } from "@earendil-works/pi-durable";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { openNodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { Type, type Model, type Api, type Models } from "@earendil-works/pi-ai";
+import {
+  Type,
+  type Model,
+  type Api,
+  type Models,
+  type SimpleStreamOptions,
+} from "@earendil-works/pi-ai";
 import { isContextOverflow } from "@earendil-works/pi-ai/utils/overflow";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { z } from "zod";
 import { WorkspaceImage } from "../workspaces/reads/image-result.js";
 import { buildAgentSystemPrompt, runNoticeMessage, type AgentProfile } from "../prompts/index.js";
 import { type SessionCommit, type ModelContextMessage } from "./session/record.js";
+import { runtimeVersions } from "./build-identity.js";
+import { UsageObservations } from "./usage-observation.js";
+import {
+  inspectProviderResponse,
+  reportedGoogleUsage,
+  confirmedModelResponse,
+  restoreFailedUsage,
+} from "./provider-response.js";
 import { projectImages } from "./session/image-context.js";
 import type { AgentToolCallResult } from "./tools/registry.js";
 
@@ -27,7 +41,7 @@ const admissionDoc = defineDoc({
   kind: "mate.admission",
   version: 1,
   scope: "session",
-  initial: () => ({ sessionId: "", configuration: "" }),
+  initial: () => ({ sessionId: "", configuration: "", runtimeVersions }),
 });
 
 export interface AgentLoopSpec {
@@ -123,73 +137,98 @@ export class AgentLoop {
       assertCurrent();
       if (!canAdvance) throw new Error("Agent admission is reconciling");
     };
+    const observations = new UsageObservations();
+    const streamModel = (
+      requested: Model<Api>,
+      context: Parameters<Models["streamSimple"]>[1],
+      options: SimpleStreamOptions | undefined,
+      summary = false,
+    ) => {
+      assertAdvancing();
+      let inspection: ReturnType<typeof inspectProviderResponse> = Promise.resolve(null);
+      const stream = catalog.streamSimple(
+        requested,
+        {
+          ...context,
+          messages: projectImages(context.messages, requested.input.includes("image")),
+        },
+        {
+          ...options,
+          apiKey: spec.apiKey,
+          env: {},
+          onResponse: async (response, currentModel) => {
+            if (response.status === 401 || response.status === 403) credentialResponse = true;
+            await options?.onResponse?.(response, currentModel);
+          },
+          ...(requested.api === "google-generative-ai" || requested.api === "google-vertex"
+            ? {}
+            : {
+                fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+                  assertAdvancing();
+                  const response = await fetch(input, init);
+                  if (response.status === 401 || response.status === 403) credentialResponse = true;
+                  inspection = inspectProviderResponse(response, requested.api);
+                  return response;
+                },
+              }),
+        },
+      );
+      const result = stream.result.bind(stream);
+      const observed = result().then(async (message) => {
+        const inspected = await inspection;
+        const reported =
+          requested.api === "google-generative-ai" || requested.api === "google-vertex"
+            ? reportedGoogleUsage(message)
+            : (inspected?.usage ?? null);
+        restoreFailedUsage(message, reported, inspected?.complete ?? false, requested);
+        observations.capture(
+          message,
+          reported,
+          confirmedModelResponse(message, reported, inspected?.complete),
+          summary,
+        );
+        return message;
+      });
+      stream.result = () => observed;
+      if (test.afterToolCallDelta) {
+        const push = stream.push.bind(stream);
+        stream.push = (event) => {
+          push(event);
+          if (event.type === "toolcall_delta") {
+            const call = event.partial.content[event.contentIndex];
+            if (call?.type === "toolCall")
+              test.afterToolCallDelta?.({
+                sessionId: spec.sessionId,
+                toolCallId: call.id,
+                delta: event.delta,
+              });
+          }
+        };
+      }
+      // Google uses its SDK transport rather than the custom fetch/onResponse seam.
+      // Classify only explicit authentication evidence, never generic network errors.
+      void stream
+        .result()
+        .then((message) => {
+          if (
+            (requested.api === "google-generative-ai" || requested.api === "google-vertex") &&
+            /(?:"code"\s*:\s*(?:401|403)|PERMISSION_DENIED|UNAUTHENTICATED|API_KEY_INVALID)/.test(
+              message.errorMessage ?? "",
+            )
+          )
+            credentialResponse = true;
+        })
+        .catch(() => {});
+      return stream;
+    };
     const models: Models = {
       ...catalog,
       getModel: (provider, id) =>
         provider === model.provider && id === model.id ? model : catalog.getModel(provider, id),
-      streamSimple: (requested, context, options) => {
-        assertAdvancing();
-        const stream = catalog.streamSimple(
-          requested,
-          {
-            ...context,
-            messages: projectImages(context.messages, requested.input.includes("image")),
-          },
-          {
-            ...options,
-            apiKey: spec.apiKey,
-            env: {},
-            onResponse: async (response, currentModel) => {
-              if (response.status === 401 || response.status === 403) credentialResponse = true;
-              await options?.onResponse?.(response, currentModel);
-            },
-            ...(requested.api === "google-generative-ai" || requested.api === "google-vertex"
-              ? {}
-              : {
-                  fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
-                    assertAdvancing();
-                    const response = await fetch(input, init);
-                    if (response.status === 401 || response.status === 403)
-                      credentialResponse = true;
-                    return response;
-                  },
-                }),
-          },
-        );
-        if (test.afterToolCallDelta) {
-          const push = stream.push.bind(stream);
-          stream.push = (event) => {
-            push(event);
-            if (event.type === "toolcall_delta") {
-              const call = event.partial.content[event.contentIndex];
-              if (call?.type === "toolCall")
-                test.afterToolCallDelta?.({
-                  sessionId: spec.sessionId,
-                  toolCallId: call.id,
-                  delta: event.delta,
-                });
-            }
-          };
-        }
-        // Google uses its SDK transport rather than the custom fetch/onResponse seam.
-        // Classify only explicit authentication evidence, never generic network errors.
-        void stream
-          .result()
-          .then((message) => {
-            if (
-              (requested.api === "google-generative-ai" || requested.api === "google-vertex") &&
-              /(?:"code"\s*:\s*(?:401|403)|PERMISSION_DENIED|UNAUTHENTICATED|API_KEY_INVALID)/.test(
-                message.errorMessage ?? "",
-              )
-            )
-              credentialResponse = true;
-          })
-          .catch(() => {});
-        return stream;
-      },
+      streamSimple: streamModel,
+      completeSimple: (requested, context, options) =>
+        streamModel(requested, context, options, true).result(),
     };
-    models.completeSimple = (requested, context, options) =>
-      models.streamSimple(requested, context, options).result();
     const inputSchema = z.record(z.string(), z.unknown());
     const forward = async (taskId: number, operation: string, input: Record<string, unknown>) => {
       assertAdvancing();
@@ -263,7 +302,9 @@ export class AgentLoop {
         storage.commit = async (writes, context) => {
           try {
             await test.beforeDurableCommit?.(writes);
-            const sequence = await commit(writes, context);
+            const observed = await observations.writes(storage, writes, context);
+            const sequence = await commit(observed.writes, context);
+            observed.committed();
             await test.afterDurableCommit?.(writes);
             return sequence;
           } catch (error) {
@@ -306,6 +347,7 @@ export class AgentLoop {
             modelId: spec.modelId,
             apiKey: spec.apiKey,
             prompt: spec.prompt,
+            runtimeVersions,
           }),
         )
         .digest("hex");
@@ -326,6 +368,7 @@ export class AgentLoop {
         const binding = await tx.doc(admissionDoc);
         binding.sessionId = spec.sessionId;
         binding.configuration = configuration;
+        binding.runtimeVersions = runtimeVersions;
       }, context);
       spec.initializedNow();
       await conversation.configure(

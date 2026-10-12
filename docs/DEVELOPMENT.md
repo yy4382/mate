@@ -153,9 +153,11 @@ pnpm test:linux-ordinary-command-failure
 
 # Agent token 与缓存统计
 
-所有者登录后，可携带登录 Cookie 请求 `GET /api/owner/agents/{agentId}/usage`。接口只读取指定 Agent 已由控制面确认的模型响应；Agent 不存在返回 404，未登录返回 401。响应设置 `Cache-Control: no-store`，不提供网页面板。
+所有者登录后，可携带登录 Cookie 请求 `GET /api/owner/agents/{agentId}/usage`。接口只读取指定 Agent 的 Durable 原生模型累计、已提交普通响应及 provider 可用性元数据；Agent 不存在返回 404，未登录返回 401。响应设置 `Cache-Control: no-store`，不提供网页面板。
 
-响应中的 `total`、`normal`、`summary` 分别是全部请求、普通请求和会话压缩摘要请求的累计；`latestNormal` 是最后一次普通请求的记录 ID、控制面确认时间 `recordedAt`（Unix 毫秒）和该次统计。没有普通请求时 `latestNormal` 为 `null`。失败响应只要返回并被确认，其实际报告的用量也计入；失败摘要不因此成为有效压缩。
+普通响应及摘要的观察元数据与原生统计在同一提交内保存。摘要仅保留字段可用性、请求计数和加权缓存分母的聚合；其数值从原生 `pi.usage.models` 按 provider/model 扣除同一稳定提交范围内的全部普通响应，不使用历史工具过滤后的成功集合，也不包含 `pi.usage.tools`。不保留第二份请求或 transcript 账本。
+
+响应中的 `total`、`normal`、`summary` 分别是全部请求、普通请求和会话压缩摘要请求的累计；`latestNormal` 是最后一次普通请求的记录 ID、原生响应时间 `recordedAt`（Unix 毫秒）和该次统计。没有普通请求时 `latestNormal` 为 `null`。失败响应只要返回并被确认，其实际报告的用量也计入；失败摘要不因此成为有效压缩。
 
 每组的 `requestCount` 是已确认的模型响应数。`tokens` 分别列出 `uncachedInput`（未缓存输入）、`cacheRead`（缓存读取）、`cacheWrite`（缓存写入）、`allInput`（前三者之和）、`output`、`total`（全部输入加输出）和 `reasoningOutput`（若报告，是输出的子集，不再加到总数）。每个指标包含 `value`、`knownRequests` 和 `missingRequests`：只汇总供应商字段足以确定的请求；没有可确定的值时 `value` 为 `null`，真实零则为 `0`。供应商只报告包含缓存的输入时，不再次把缓存读取量加上去。
 
@@ -167,7 +169,7 @@ Pi 当前的 Google SDK 适配器不开放响应体截取，并把未报告的�
 
 提示词统一入口为 `apps/control-plane/src/prompts/index.ts`。`system.ts` 构建 Mate 的中文 Agent 指引，`runtime.ts` 构建输入来源、忙时通知和收据更正；Durable 原生负责系统提示的顺序变化、容量判断、摘要请求、压缩提交与重启接续。摘要不启用后台预压缩。
 
-先构建，再查看当前指引的来源、顺序和启用条件。默认不输出正文，不读运行目录、数据库或环境凭据：
+先构建，再查看实际安装的控制面、Durable、Pi AI、Chord 版本及当前指引的来源、顺序和启用条件。默认不输出正文，不读运行目录、数据库或环境凭据：
 
 ```sh
 pnpm build:control-plane
@@ -182,7 +184,16 @@ pnpm prompt:inspect --entry /ABSOLUTE/private/system-entry.json
 pnpm prompt:inspect --entry /ABSOLUTE/private/system-entry.json --show-content
 ```
 
-该记录是系统片段和工具定义的顺序增量，不是完整配置快照；默认只报告数量，显式显示内容时才输出片段与工具变化。诊断不输出无关字段，失败不回显文件名或输入内容。原文可能包含私密 profile，文件和输出都不应提交到 Git。旧 configuration 快照读取与旧摘要字节快照已删除；前缀、压缩和恢复行为由真实本地模型请求场景验证。
+要核对某个 Agent 实际采用的原生模型、系统提示和工具定义，可明确指定其会话文件；读取不会打开 Harness 或推进工作：
+
+```sh
+pnpm prompt:inspect --session /ABSOLUTE/data/control-plane/durable/AGENT_ID.sqlite
+pnpm prompt:inspect --session /ABSOLUTE/data/control-plane/durable/AGENT_ID.sqlite --show-content
+```
+
+会话诊断区分最近普通响应的 `model` 和当前存储的 `configuredModel`；`runtimeVersions` 是最近准入保存的版本，`inspectorVersions` 是当前诊断命令的版本。系统提示和工具由已提交的原生系统变化重放，压缩前后均使用固定记录范围；默认只显示长度和数量，展开才输出原文与定义。
+
+单条 `pi.system` 记录是系统片段和工具定义的顺序增量，不是完整配置快照；默认只报告数量，显式显示内容时才输出片段与工具变化。诊断不输出无关字段，失败不回显文件名或输入内容。原文可能包含私密 profile，文件和输出都不应提交到 Git。旧 configuration 快照读取与旧摘要字节快照已删除；前缀、压缩和恢复行为由真实本地模型请求场景验证。
 
 ## 所有者主动检查真实模型供应商
 

@@ -28,6 +28,7 @@ it("reports weighted Agent usage through owner HTTP across model and service res
     { input_tokens: 70, output_tokens: 3, input_tokens_details: { cached_tokens: 7 } },
   ];
   let requests = 0;
+  let networkEnded = false;
   const provider = createServer(async (request, response) => {
     for await (const _chunk of request) {
       /* drain request */
@@ -38,7 +39,10 @@ it("reports weighted Agent usage through owner HTTP across model and service res
       response.write(
         `data: ${JSON.stringify({ type: "response.created", response: { id: "partial" } })}\n\n`,
       );
-      setTimeout(() => response.destroy(), 10);
+      setTimeout(() => {
+        response.destroy();
+        networkEnded = true;
+      }, 10);
       return;
     }
     if (requests === 7) {
@@ -49,7 +53,7 @@ it("reports weighted Agent usage through owner HTTP across model and service res
           response: {
             id: "failed-without-usage",
             status: "failed",
-            error: { code: "server_error", message: "no usage supplied" },
+            error: { code: "invalid_request_error", message: "no usage supplied" },
             output: [],
           },
         })}\n\n`,
@@ -64,7 +68,7 @@ it("reports weighted Agent usage through owner HTTP across model and service res
           response: {
             id: "failed-response",
             status: "failed",
-            error: { code: "server_error", message: "synthetic failure" },
+            error: { code: "invalid_request_error", message: "synthetic failure" },
             output: [],
             usage,
           },
@@ -187,6 +191,7 @@ it("reports weighted Agent usage through owner HTTP across model and service res
     node = startNode({ ...nodeOptions, origin });
     await node.waitFor(/MATE_NODE_CONNECTED/);
     expect((await api(usagePath, undefined, "GET")).normal.tokens.allInput.value).toBe(1000);
+    await api(`/api/owner/agents/${agentId}/model`, { provider: "openai", id: "gpt-4o" }, "PUT");
     await api(`/api/owner/channels/${dm}/messages`, { text: "third" });
     await completed(3);
     const three = await api(usagePath, undefined, "GET");
@@ -226,41 +231,38 @@ it("reports weighted Agent usage through owner HTTP across model and service res
     await api(`/api/owner/channels/${dm}/messages`, {
       text: "failed provider response with reported usage",
     });
-    await eventually(() => {
-      const row = db!
-        .prepare<[string], { n: number }>(
-          "SELECT COUNT(*) AS n FROM owner_agent_session_records WHERE agent_id=? AND payload_json LIKE '%\"modelRequest\":true%'",
-        )
-        .get(agentId)!;
-      return row.n >= 6 ? true : undefined;
-    }, "failed response usage commit");
+    await expect
+      .poll(async () => (await api(usagePath, undefined, "GET")).normal.requestCount, {
+        timeout: 15000,
+        interval: 25,
+      })
+      .toBe(6);
     const failed = await api(usagePath, undefined, "GET");
     expect(failed.normal.requestCount).toBe(6);
     expect(failed.latestNormal.tokens.allInput.value).toBe(70);
     expect(failed.latestNormal.tokens.cacheRead.value).toBe(7);
     expect(failed.latestNormal.tokens.output.value).toBe(3);
     await api(`/api/owner/channels/${dm}/messages`, { text: "complete failure without usage" });
-    await eventually(() => {
-      const row = db!
-        .prepare<[string], { n: number }>(
-          "SELECT COUNT(*) AS n FROM owner_agent_session_records WHERE agent_id=? AND usage_json IS NOT NULL AND kind='message'",
-        )
-        .get(agentId)!;
-      return row.n >= 7 ? true : undefined;
-    }, "complete failure without usage commit");
+    await expect
+      .poll(async () => (await api(usagePath, undefined, "GET")).normal.requestCount, {
+        timeout: 15000,
+        interval: 25,
+      })
+      .toBe(7);
     const noUsage = await api(usagePath, undefined, "GET");
     expect(noUsage.normal.requestCount).toBe(7);
     expect(noUsage.latestNormal.tokens.allInput.value).toBeNull();
     expect(noUsage.latestNormal.tokens.output.value).toBeNull();
     await api(`/api/owner/channels/${dm}/messages`, { text: "network failure before a response" });
-    await eventually(() => {
-      const row = db!
-        .prepare<[string], { n: number }>(
-          "SELECT COUNT(*) AS n FROM owner_agent_runs WHERE agent_id=? AND state='failed'",
-        )
-        .get(agentId)!;
-      return requests >= 8 && row.n >= 3 ? true : undefined;
-    }, "unconfirmed transport failure");
+    await expect.poll(() => networkEnded, { timeout: 15000 }).toBe(true);
+    await api(`/api/owner/agents/${agentId}/pause`);
+    await expect
+      .poll(
+        async () =>
+          (await api(`/api/owner/agents/${agentId}/activity`, undefined, "GET")).stop.state,
+        { timeout: 15000 },
+      )
+      .toBe("succeeded");
     const unconfirmed = await api(usagePath, undefined, "GET");
     expect(unconfirmed.normal.requestCount).toBe(7);
     expect(unconfirmed.latestNormal.id).toBe(noUsage.latestNormal.id);
@@ -272,3 +274,50 @@ it("reports weighted Agent usage through owner HTTP across model and service res
     rmSync(directory, { recursive: true, force: true });
   }
 }, 30_000);
+
+it.each(["before", "after"] as const)(
+  "keeps usage atomic across a %s native response commit failure and restart",
+  async (boundary) => {
+    const { loopFixture, respond } = await import("../support/agent/agent-loop.js");
+    let requests = 0;
+    const fixture = await loopFixture(
+      (_request, response) => {
+        respond(response, "private response", { inputTokens: ++requests === 1 ? 100 : 200 });
+      },
+      `, ${boundary}DurableCommit: async writes => {
+    if (writes.some(write => write.type === "entry" && write.value.kind === "pi.assistant")) {
+      console.log("MATE_USAGE_COMMIT_FAILURE"); throw new Error("synthetic usage commit failure");
+    }
+  }`,
+    );
+    try {
+      const agent = await fixture.agent();
+      await fixture.send(agent.channelId, "Preserve atomic response observation");
+      await fixture.control.waitFor(/MATE_USAGE_COMMIT_FAILURE/);
+      await fixture.api(`/api/owner/agents/${agent.id}/pause`, "POST");
+      const failed = await fixture.api(`/api/owner/agents/${agent.id}/usage`);
+      expect(failed.normal.requestCount).toBe(boundary === "before" ? 0 : 1);
+      expect(failed.normal.tokens.allInput.value).toBe(boundary === "before" ? null : 100);
+      await fixture.restartControl();
+      expect(await fixture.api(`/api/owner/agents/${agent.id}/usage`)).toEqual(failed);
+      await expect
+        .poll(
+          async () =>
+            (await fixture.api("/api/owner/nodes")).nodes.find(
+              (node: { id: string; online: boolean }) => node.id === fixture.nodeId,
+            )?.online,
+          { timeout: 15000 },
+        )
+        .toBe(true);
+      await fixture.api(`/api/owner/agents/${agent.id}/resume`, "POST");
+      await fixture.completed(agent.id);
+      const recovered = await fixture.api(`/api/owner/agents/${agent.id}/usage`);
+      expect(recovered.normal.requestCount).toBe(1);
+      expect(recovered.normal.tokens.allInput.value).toBe(boundary === "before" ? 200 : 100);
+      expect(requests).toBe(boundary === "before" ? 2 : 1);
+    } finally {
+      await fixture.close();
+    }
+  },
+  30000,
+);
