@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { join } from "node:path";
 import { queueUncertainOperationFacts } from "../../../src/runtime/recovery/context.js";
-import { AgentSession } from "../../../src/runtime/session/service.js";
+import { FixtureSession as AgentSession } from "./fixture-session.js";
 import {
   createControlPlane,
   type ControlPlaneOptions,

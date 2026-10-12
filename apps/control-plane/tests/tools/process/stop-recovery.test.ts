@@ -1,5 +1,5 @@
 import { toolTestInput } from "../../support/agent/tool-run.js";
-import { AgentSession } from "../../../src/runtime/session/service.js";
+import { FixtureSession as AgentSession } from "../../support/agent/fixture-session.js";
 
 import { randomUUID, sign } from "node:crypto";
 

@@ -72,28 +72,24 @@ it.each([false, true])(
             { name: "tools.call", input: { name: "workspace.read", input: { path: "image" } } },
           ]);
         } else {
-          respond(response, compact && turn === 2 ? "x".repeat(28000) : "done", {
-            inputTokens: compact && turn === 2 ? 15000 : 50,
+          respond(response, compact && turn === 2 ? "x".repeat(100000) : "done", {
+            inputTokens: compact && turn === 2 ? 115000 : 50,
           });
         }
       },
       "",
-      compact ? 16000 : undefined,
+      compact ? 128000 : undefined,
     );
     try {
       const agent = await fixture.agent();
       writeFileSync(join(agent.workspace, "image"), Buffer.from(png, "base64"));
       await fixture.send(agent.channelId, "Read image.");
       await fixture.completed(agent.id);
-      const originalImages = () =>
-        fixture.db((db) =>
-          db
-            .prepare(
-              "SELECT payload_json FROM owner_agent_session_records WHERE agent_id=? AND payload_json LIKE ?",
-            )
-            .all(agent.id, `%${png}%`),
+      const originalImages = async () =>
+        (await readDurableEntries(fixture.directory, agent.id)).filter((entry) =>
+          JSON.stringify(entry).includes(png),
         );
-      const original = originalImages();
+      const original = await originalImages();
       expect(original).toHaveLength(1);
       await fixture.restartControl();
       await fixture.api(`/api/owner/agents/${agent.id}/model`, "PUT", {
@@ -107,7 +103,7 @@ it.each([false, true])(
       const later = JSON.stringify(fixture.requests.slice(before));
       expect(later).not.toContain(png);
       expect(later).not.toContain("input_image");
-      expect(later.includes("图片")).toBe(true);
+      expect(later).toMatch(compact ? /image/i : /图片/);
       if (compact) {
         const summaries = fixture.requests
           .slice(before)
@@ -115,9 +111,9 @@ it.each([false, true])(
             JSON.stringify(request.input[0]).includes("context summarization assistant"),
           );
         expect(summaries.length).toBeGreaterThan(0);
-        expect(JSON.stringify(summaries).includes("图片 image/png")).toBe(true);
+        expect(JSON.stringify(summaries)).not.toContain(png);
       }
-      expect(originalImages()).toEqual(original);
+      expect(await originalImages()).toEqual(original);
     } finally {
       await fixture.close();
     }

@@ -1,3 +1,4 @@
+import { readDurableEntries } from "../../support/facts/durable-session-facts.js";
 import { expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -18,7 +19,7 @@ it.each([false, true])(
       environment: {
         agents: [{ name: "压缩恢复同事" }],
         controlPlane: {
-          modelContextWindow: 16000,
+          modelContextWindow: 128000,
           commitBoundary: completeAnswer
             ? { phase: "finish" }
             : { phase: "after", role: "assistant", toolName: "process.exec" },
@@ -32,8 +33,8 @@ it.each([false, true])(
         provider.forAgent(agent, [
           function exceedContext(request) {
             request.tools([{ name: "tools.list", input: {} }], {
-              prefix: "x".repeat(28000),
-              inputTokens: 15000,
+              prefix: "x".repeat(100000),
+              inputTokens: 115000,
             });
           },
           function confirmedSummary(request) {
@@ -68,11 +69,14 @@ it.each([false, true])(
         await step("confirmed compaction fault point", async () => {
           await environment.control.waitFor(/MATE_CP_BOUNDARY (.+)/, 5000, { signal });
           const facts = readRecoveryFacts(environment.directory, agent.summary.id);
-          const checkpoints = facts.entries.filter(({ entry }) => entry.kind === "compaction");
+          const checkpoints = (
+            await readDurableEntries(environment.directory, agent.summary.id)
+          ).filter((entry) => entry.kind === "pi.compaction");
           expect(checkpoints).toHaveLength(1);
-          const checkpoint = checkpoints[0]?.entry;
-          if (checkpoint?.kind !== "compaction") throw new Error("Expected confirmed compaction");
-          expect(checkpoint.summary).toContain(summary);
+          const checkpoint = checkpoints[0];
+          if (checkpoint?.kind !== "pi.compaction")
+            throw new Error("Expected confirmed compaction");
+          expect(JSON.stringify(checkpoint.model)).toContain(summary.replaceAll("\n", "\\n"));
           return { oldRun, facts };
         });
         await environment.restartControl("SIGKILL");
@@ -82,10 +86,14 @@ it.each([false, true])(
           const continuation = await driver.sendOwnerMessage(agent, "下一项工作。");
           await driver.waitForRun(continuation, "completed", { signal });
         }
-        await step("same checkpoint, interrupted run and confirmed input identity", () => {
+        await step("same checkpoint, interrupted run and confirmed input identity", async () => {
           const facts = readRecoveryFacts(environment.directory, agent.summary.id);
           expect(facts.sessions).toEqual([{ id: work.sessionId }]);
-          expect(facts.entries.filter(({ entry }) => entry.kind === "compaction")).toHaveLength(1);
+          expect(
+            (await readDurableEntries(environment.directory, agent.summary.id)).filter(
+              (entry) => entry.kind === "pi.compaction",
+            ),
+          ).toHaveLength(1);
           expect(facts.runs.find((run) => run.id === oldRun.id)).toMatchObject({
             state: "failed",
             errorCode: "interrupted",

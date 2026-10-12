@@ -8,15 +8,19 @@ import {
   defineTool,
   defineDoc,
   type StorageWrite,
+  type Storage,
+  type ConversationId,
 } from "@earendil-works/pi-durable";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { openNodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { Type, type Model, type Api, type Models } from "@earendil-works/pi-ai";
+import { isContextOverflow } from "@earendil-works/pi-ai/utils/overflow";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { z } from "zod";
 import { WorkspaceImage } from "../workspaces/reads/image-result.js";
 import { buildAgentSystemPrompt, runNoticeMessage, type AgentProfile } from "../prompts/index.js";
 import { type SessionCommit, type ModelContextMessage } from "./session/record.js";
+import { projectImages } from "./session/image-context.js";
 import type { AgentToolCallResult } from "./tools/registry.js";
 
 const admissionDoc = defineDoc({
@@ -125,25 +129,33 @@ export class AgentLoop {
         provider === model.provider && id === model.id ? model : catalog.getModel(provider, id),
       streamSimple: (requested, context, options) => {
         assertAdvancing();
-        const stream = catalog.streamSimple(requested, context, {
-          ...options,
-          apiKey: spec.apiKey,
-          env: {},
-          onResponse: async (response, currentModel) => {
-            if (response.status === 401 || response.status === 403) credentialResponse = true;
-            await options?.onResponse?.(response, currentModel);
+        const stream = catalog.streamSimple(
+          requested,
+          {
+            ...context,
+            messages: projectImages(context.messages, requested.input.includes("image")),
           },
-          ...(requested.api === "google-generative-ai" || requested.api === "google-vertex"
-            ? {}
-            : {
-                fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
-                  assertAdvancing();
-                  const response = await fetch(input, init);
-                  if (response.status === 401 || response.status === 403) credentialResponse = true;
-                  return response;
-                },
-              }),
-        });
+          {
+            ...options,
+            apiKey: spec.apiKey,
+            env: {},
+            onResponse: async (response, currentModel) => {
+              if (response.status === 401 || response.status === 403) credentialResponse = true;
+              await options?.onResponse?.(response, currentModel);
+            },
+            ...(requested.api === "google-generative-ai" || requested.api === "google-vertex"
+              ? {}
+              : {
+                  fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+                    assertAdvancing();
+                    const response = await fetch(input, init);
+                    if (response.status === 401 || response.status === 403)
+                      credentialResponse = true;
+                    return response;
+                  },
+                }),
+          },
+        );
         if (test.afterToolCallDelta) {
           const push = stream.push.bind(stream);
           stream.push = (event) => {
@@ -387,8 +399,18 @@ export class AgentLoop {
         this.notice(notice.conversationId, notice.deliveryId);
       for (const submission of submissions) {
         const settled = await submission.wait(context);
-        if (settled.status !== "done")
-          return { ok: false, code: credentialResponse ? "credentials_invalid" : "model_failed" };
+        if (settled.status !== "done") {
+          const contextOverflow = await endedWithOverflow(storage, conversation.id, settled.detail);
+          return {
+            ok: false,
+            code: credentialResponse
+              ? "credentials_invalid"
+              : contextOverflow
+                ? "context_failed"
+                : "model_failed",
+            ...(typeof settled.detail === "string" ? { reason: settled.detail } : {}),
+          };
+        }
       }
       await conversation.waitForIdle(context);
       return { ok: true };
@@ -409,4 +431,27 @@ export class AgentLoop {
       this.harness = undefined;
     }
   }
+}
+
+/** The terminal submission and its last assistant response survive summary failures and process restarts. */
+async function endedWithOverflow(
+  storage: Storage,
+  conversationId: ConversationId,
+  detail: unknown,
+) {
+  let cursor;
+  do {
+    const page = await storage.scanEntries({ conversationId }, 100, cursor, BACKGROUND_CONTEXT);
+    for (const entry of page.items) {
+      const message = entry.model?.find((message) => message.role === "assistant");
+      if (message)
+        return (
+          message.stopReason === "error" &&
+          message.errorMessage === detail &&
+          isContextOverflow(message)
+        );
+    }
+    cursor = page.next;
+  } while (cursor);
+  return false;
 }

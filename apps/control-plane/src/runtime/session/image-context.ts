@@ -1,7 +1,7 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { Message } from "@earendil-works/pi-ai";
 
 /** Request-time projection only: the durable transcript and its tool-call identities are untouched. */
-export function projectImages(messages: AgentMessage[], vision: boolean): AgentMessage[] {
+export function projectImages(messages: Message[], vision: boolean): Message[] {
   if (vision) return messages;
   return messages.map((message) => {
     if (message.role !== "user" && message.role !== "toolResult" && message.role !== "system")

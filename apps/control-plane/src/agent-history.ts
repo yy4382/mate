@@ -2,7 +2,17 @@ import type Database from "better-sqlite3";
 import { z } from "zod";
 import { defineAgentTool } from "./runtime/tools/entry.js";
 import { AgentToolRefusal } from "./conversations/errors.js";
-import type { SessionCommit } from "./runtime/session/record.js";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import {
+  type EntryRecord,
+  type Storage,
+  type ConversationId,
+  type EntryId,
+} from "@earendil-works/pi-durable";
+import { openNodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 const cursorSchema = z
   .object({
@@ -14,16 +24,6 @@ const cursorSchema = z
   .strict()
   .refine((cursor) => cursor.after <= cursor.through);
 type SearchCursor = z.infer<typeof cursorSchema>;
-
-interface HistoryRow {
-  id: string;
-  agent_id: string;
-  seq: number;
-  run_id: string;
-  action_scope_id: string;
-  payload_json: string;
-  created_at: number;
-}
 
 /** An observation of immutable messages, never a model-context or tool-execution input. */
 export class AgentHistory {
@@ -56,90 +56,147 @@ export class AgentHistory {
     };
   }
 
-  private search(agentId: string, query: string, cursor?: SearchCursor) {
-    // A query containing half a Unicode character cannot define a pair-safe match range.
-    if (/[\uD800-\uDFFF]/u.test(query)) throw new AgentToolRefusal("Invalid history query");
-    // The aggregate returns one row even when this Agent has no history.
-    const latest = this.db
-      .prepare<unknown[], { seq: number }>(
-        `SELECT COALESCE(MAX(seq),0) AS seq FROM owner_agent_session_records
-      WHERE agent_id=? AND kind='message'`,
-      )
-      .get(agentId)!.seq;
-    if (cursor && (cursor.agentId !== agentId || cursor.query !== query || cursor.through > latest))
-      throw new AgentToolRefusal("Invalid history cursor");
-    const through = cursor?.through ?? latest;
-    let after = cursor?.after ?? 0;
-    const rows = this.db
-      .prepare<unknown[], HistoryRow>(
-        `SELECT id,agent_id,seq,run_id,action_scope_id,payload_json,created_at FROM owner_agent_session_records
-      WHERE agent_id=? AND kind='message' AND seq>? AND seq<=? ORDER BY seq LIMIT 100`,
-      )
-      .all(agentId, after, through);
-    const hits = [];
-    let scanned = 0;
-    for (const row of rows) {
-      const { text, ...metadata } = projectHistoryMessage(row);
-      after = row.seq;
-      scanned++;
-      const start = text.indexOf(query);
-      if (start >= 0)
-        hits.push({
-          ...metadata,
-          match: { start, end: start + query.length },
-          excerpt: historyMatchExcerpt(text, start),
-        });
-      if (hits.length === 20) break;
+  private async source<T>(
+    agentId: string,
+    read: (storage: Storage, conversation: ConversationId) => Promise<T>,
+  ) {
+    const path = join(dirname(this.db.name), "durable", `${agentId}.sqlite`);
+    if (!existsSync(path)) throw new AgentToolRefusal("History record not found");
+    // A second public storage handle only observes facts; it never opens a Harness or schedules work.
+    const database = await openNodeSqliteDatabase(path);
+    let storage;
+    try {
+      await database.exec("PRAGMA synchronous=FULL;");
+      storage = await SqliteStorage.open(database);
+      const conversations = await storage.scanConversations({}, 2, undefined, BACKGROUND_CONTEXT);
+      const conversation = conversations.items[0];
+      if (!conversation || conversations.items.length !== 1)
+        throw new AgentToolRefusal("History unavailable");
+      return await read(storage, conversation.id);
+    } finally {
+      if (storage) await storage.close(BACKGROUND_CONTEXT);
+      else await database.close();
     }
-    const more = this.db
-      .prepare(
-        `SELECT 1 FROM owner_agent_session_records
-      WHERE agent_id=? AND kind='message' AND seq>? AND seq<=? LIMIT 1`,
-      )
-      .get(agentId, after, through);
-    return { hits, scanned, nextCursor: more ? { agentId, query, through, after } : null };
   }
 
-  private read(agentId: string, id: string, offset: number, maxChars: number) {
-    const row = this.db
-      .prepare<unknown[], HistoryRow>(
-        `SELECT id,agent_id,seq,run_id,action_scope_id,payload_json,created_at FROM owner_agent_session_records
-      WHERE agent_id=? AND id=? AND kind='message'`,
+  private async search(agentId: string, query: string, cursor?: SearchCursor) {
+    if (/[\uD800-\uDFFF]/u.test(query)) throw new AgentToolRefusal("Invalid history query");
+    return this.source(agentId, async (storage, conversationId) => {
+      const latest =
+        (await storage.scanEntries({ conversationId }, 1, undefined, BACKGROUND_CONTEXT)).items[0]
+          ?.id ?? 0;
+      if (
+        cursor &&
+        (cursor.agentId !== agentId || cursor.query !== query || cursor.through > latest)
       )
-      .get(agentId, id);
-    if (!row) throw new AgentToolRefusal("History record not found");
-    const { text, ...metadata } = projectHistoryMessage(row);
-    if (offset > text.length || splitsPair(text, offset))
-      throw new AgentToolRefusal("Invalid history offset");
-    let end = Math.min(text.length, offset + maxChars);
-    if (splitsPair(text, end)) end--;
-    const previous = this.db
-      .prepare<unknown[], { id: string }>(
-        `SELECT id FROM owner_agent_session_records
-      WHERE agent_id=? AND kind='message' AND seq<? ORDER BY seq DESC LIMIT 1`,
-      )
-      .get(agentId, row.seq);
-    const next = this.db
-      .prepare<unknown[], { id: string }>(
-        `SELECT id FROM owner_agent_session_records
-      WHERE agent_id=? AND kind='message' AND seq>? ORDER BY seq LIMIT 1`,
-      )
-      .get(agentId, row.seq);
-    return {
-      ...metadata,
-      text: text.slice(offset, end),
-      offset,
-      totalLength: text.length,
-      nextOffset: end < text.length ? end : null,
-      previousId: previous?.id ?? null,
-      nextId: next?.id ?? null,
-    };
+        throw new AgentToolRefusal("Invalid history cursor");
+      const through = cursor?.through ?? latest;
+      let after = cursor?.after ?? 0;
+      const page = await storage.scanEntries(
+        {
+          conversationId,
+          order: "ascending",
+          minEntryId: idFromNumber(after + 1),
+          maxEntryId: idFromNumber(through),
+        },
+        100,
+        undefined,
+        BACKGROUND_CONTEXT,
+      );
+      const hits = [];
+      let scanned = 0;
+      for (const entry of page.items) {
+        after = entry.id;
+        scanned++;
+        const row = projectHistoryMessage(agentId, entry);
+        if (!row) continue;
+        const { text, ...metadata } = row;
+        const start = text.indexOf(query);
+        if (start >= 0)
+          hits.push({
+            ...metadata,
+            match: { start, end: start + query.length },
+            excerpt: historyMatchExcerpt(text, start),
+          });
+        if (hits.length === 20) break;
+      }
+      const more =
+        (
+          await storage.scanEntries(
+            {
+              conversationId,
+              minEntryId: idFromNumber(after + 1),
+              maxEntryId: idFromNumber(through),
+            },
+            1,
+            undefined,
+            BACKGROUND_CONTEXT,
+          )
+        ).items.length > 0;
+      return { hits, scanned, nextCursor: more ? { agentId, query, through, after } : null };
+    });
+  }
+
+  private async read(agentId: string, id: string, offset: number, maxChars: number) {
+    const prefix = `${agentId}:`;
+    const seq = Number(id.slice(prefix.length));
+    if (!id.startsWith(prefix) || !Number.isSafeInteger(seq) || seq < 1 || `${prefix}${seq}` !== id)
+      throw new AgentToolRefusal("History record not found");
+    return this.source(agentId, async (storage, conversationId) => {
+      const record = await storage.entry(conversationId, idFromNumber(seq), BACKGROUND_CONTEXT);
+      const row = record && projectHistoryMessage(agentId, record.entry);
+      if (!row) throw new AgentToolRefusal("History record not found");
+      const { text, ...metadata } = row;
+      if (offset > text.length || splitsPair(text, offset))
+        throw new AgentToolRefusal("Invalid history offset");
+      let end = Math.min(text.length, offset + maxChars);
+      if (splitsPair(text, end)) end--;
+      const neighbor = async (order: "ascending" | "descending") => {
+        let cursor;
+        do {
+          const page = await storage.scanEntries(
+            {
+              conversationId,
+              order,
+              ...(order === "ascending"
+                ? { minEntryId: idFromNumber(seq + 1) }
+                : { maxEntryId: idFromNumber(seq - 1) }),
+            },
+            100,
+            cursor,
+            BACKGROUND_CONTEXT,
+          );
+          for (const entry of page.items) {
+            const next = projectHistoryMessage(agentId, entry);
+            if (next) return next.id;
+          }
+          cursor = page.next;
+        } while (cursor);
+        return null;
+      };
+      return {
+        ...metadata,
+        text: text.slice(offset, end),
+        offset,
+        totalLength: text.length,
+        nextOffset: end < text.length ? end : null,
+        previousId: await neighbor("descending"),
+        nextId: await neighbor("ascending"),
+      };
+    });
   }
 }
 
-function projectHistoryMessage(row: HistoryRow) {
-  const entry: Extract<SessionCommit, { kind: "message" }> = JSON.parse(row.payload_json);
-  const { message } = entry;
+function projectHistoryMessage(agentId: string, entry: EntryRecord) {
+  // Mate writes one message per entry. Native progress is task state, never an entry;
+  // error/aborted/deferred assistant entries are diagnostics excluded by Durable context.
+  const message = entry.model?.[0];
+  if (
+    !message ||
+    message.role === "system" ||
+    (message.role === "assistant" && ["error", "aborted", "deferred"].includes(message.stopReason))
+  )
+    return undefined;
   const body =
     typeof message.content === "string"
       ? message.content
@@ -151,20 +208,16 @@ function projectHistoryMessage(row: HistoryRow) {
             return "[非文字内容已省略]";
           })
           .join("\n");
-  const text =
-    message.role === "toolResult"
-      ? `工具结果 ${message.toolName} (${message.toolCallId})\n${body}`
-      : body;
   return {
-    id: row.id,
-    agentId: row.agent_id,
-    seq: row.seq,
-    runId: row.run_id,
-    actionScopeId: row.action_scope_id,
+    id: `${agentId}:${entry.id}`,
+    agentId,
+    seq: entry.id,
     role: message.role,
     timestamp: message.timestamp,
-    confirmedAt: row.created_at,
-    text,
+    text:
+      message.role === "toolResult"
+        ? `工具结果 ${message.toolName} (${message.toolCallId})\n${body}`
+        : body,
     ...(message.role === "assistant"
       ? {
           toolCalls: message.content.flatMap((block) =>
@@ -190,4 +243,9 @@ function historyMatchExcerpt(text: string, matchStart: number) {
   let end = Math.min(text.length, start + 400);
   if (splitsPair(text, end)) end--;
   return { start, end, text: text.slice(start, end) };
+}
+
+// Durable exposes branded numeric IDs without a public decoder; inputs are validated safe integers above.
+function idFromNumber(value: number) {
+  return value as EntryId;
 }

@@ -44,28 +44,6 @@ export const piMessageSchema = z
   ])
   // Mate checks the envelope; Pi supplies the content/provider fields preserved by these loose objects.
   .transform((message) => message as unknown as Exclude<Message, { role: "system" }>);
-export const sessionConfigurationSchema = z
-  .object({
-    provider: z.string(),
-    modelId: z.string(),
-    systemPrompt: z.string(),
-    tools: z.array(z.json()),
-    piAgentVersion: z.string(),
-    piAiVersion: z.string(),
-    formatVersion: z.literal(1),
-  })
-  .strict();
-export const sessionCheckpointSchema = z
-  .object({
-    kind: z.literal("compaction"),
-    id: z.string().uuid(),
-    firstKeptEntryId: z.string().uuid(),
-    throughEntryId: z.string().uuid(),
-    summary: z.string().min(1),
-    tokensBefore: z.number().int().nonnegative(),
-    summaryRequestIds: z.array(z.string().uuid()).min(1),
-  })
-  .strict();
 export const sessionCommitSchema = z.discriminatedUnion("kind", [
   z
     .object({
@@ -79,14 +57,6 @@ export const sessionCommitSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      kind: z.literal("configuration"),
-      id: z.string().uuid(),
-      configuration: sessionConfigurationSchema,
-    })
-    .strict(),
-  sessionCheckpointSchema,
-  z
-    .object({
       kind: z.literal("summary_usage"),
       id: z.string().uuid(),
       stopReason: z.enum(["stop", "length", "toolUse", "error", "aborted", "deferred", "pending"]),
@@ -98,7 +68,6 @@ export const sessionCommitSchema = z.discriminatedUnion("kind", [
     .strict(),
 ]);
 export type SessionCommit = z.infer<typeof sessionCommitSchema>;
-export type SessionCheckpoint = Extract<SessionCommit, { kind: "compaction" }>;
 export const contextMessageSchema = z
   .object({
     id: z.string(),
@@ -106,7 +75,6 @@ export const contextMessageSchema = z
     actionScopeId: z.string(),
     pending: z.boolean().optional(),
     recoveryFact: z.boolean().optional(),
-    checkpoint: sessionCheckpointSchema.optional(),
   })
   .strict();
 export type ModelContextMessage = z.infer<typeof contextMessageSchema>;

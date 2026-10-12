@@ -1,3 +1,4 @@
+import { readDurableEntries } from "../support/facts/durable-session-facts.js";
 import assert from "node:assert/strict";
 import { it } from "vitest";
 import { runScenario } from "../support/scenario/scenario-evidence.js";
@@ -219,7 +220,7 @@ it("cancels an actual pending summary, retains the acknowledged checkpoint and r
     provider,
     environment: {
       agents: [{ name: "摘要接续" }],
-      controlPlane: { modelContextWindow: 16000, nodeHeartbeatTimeoutMs: 1500 },
+      controlPlane: { modelContextWindow: 128000, nodeHeartbeatTimeoutMs: 1500 },
       node: { networkProxy: true, heartbeatTimeoutMs: 1000 },
     },
     async run({ environment, driver, signal, step }) {
@@ -228,8 +229,8 @@ it("cancels an actual pending summary, retains the acknowledged checkpoint and r
       provider.forAgent(agent, [
         function firstLargeResponse(request) {
           request.tools([{ name: "tools.list", input: {} }], {
-            prefix: "x".repeat(28000),
-            inputTokens: 15000,
+            prefix: "x".repeat(100000),
+            inputTokens: 115000,
           });
         },
         function confirmedSummary(request) {
@@ -240,8 +241,8 @@ it("cancels an actual pending summary, retains the acknowledged checkpoint and r
           assert.equal(request.kind, "normal");
           assert.match(JSON.stringify(request.payload.input), /已确认摘要 KEEP-1/);
           request.tools([{ name: "tools.list", input: {} }], {
-            prefix: "y".repeat(28000),
-            inputTokens: 15000,
+            prefix: "y".repeat(100000),
+            inputTokens: 115000,
           });
         },
         function pendingSummary(request) {
@@ -265,13 +266,11 @@ it("cancels an actual pending summary, retains the acknowledged checkpoint and r
       const work = await driver.sendOwnerMessage(agent, "确认摘要之后再次压缩并接续。");
       const pending = await provider.waitFor(agent.summary.id, "pendingSummary");
       const oldRun = await driver.waitForRun(work, "running", { signal });
-      const checkpoints = () =>
-        z
-          .object({ agentId: z.string(), kind: z.string(), payload: z.string() })
-          .array()
-          .parse(readScenarioFacts(environment.directory).transcript)
-          .filter((record) => record.agentId === agent.summary.id && record.kind === "compaction");
-      const confirmed = checkpoints();
+      const checkpoints = async () =>
+        (await readDurableEntries(environment.directory, agent.summary.id)).filter(
+          (entry) => entry.kind === "pi.compaction",
+        );
+      const confirmed = await checkpoints();
       assert.equal(confirmed.length, 1);
       assert.match(JSON.stringify(confirmed), /KEEP-1/);
       const after = environment.nodeLink.observe();
@@ -308,7 +307,7 @@ it("cancels an actual pending summary, retains the acknowledged checkpoint and r
           kind: "cancelled",
           reason: "summary node offline",
         });
-        assert.deepEqual(checkpoints(), confirmed);
+        assert.deepEqual(await checkpoints(), confirmed);
         assert.equal(environment.control.exitStatus, undefined);
         assert.equal(environment.node.exitStatus, undefined);
         assert.match(await preview, /node_offline|workspace_unavailable|节点/);
@@ -332,9 +331,9 @@ it("cancels an actual pending summary, retains the acknowledged checkpoint and r
           .find((run) => run.id === oldRun.id)?.state,
         "failed",
       );
-      assert.equal(checkpoints().length, 2);
-      assert.deepEqual(checkpoints()[0], confirmed[0]);
-      assert.doesNotMatch(JSON.stringify(checkpoints()), /FORBIDDEN/);
+      assert.equal((await checkpoints()).length, 2);
+      assert.deepEqual((await checkpoints())[0], confirmed[0]);
+      assert.doesNotMatch(JSON.stringify(await checkpoints()), /FORBIDDEN/);
       assert.deepEqual(await driver.tasks(), []);
       assert.deepEqual(await driver.attachments(agent.channelId), []);
       assert.deepEqual(readScenarioFacts(environment.directory).operations, []);

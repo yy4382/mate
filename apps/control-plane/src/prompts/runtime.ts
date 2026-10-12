@@ -14,28 +14,11 @@ export const runtimeSources: PromptSource[] = [
     condition: "运行中收到新消息提示；不带正文、不标已读",
     role: "user",
   },
-  {
-    id: "run-recovery",
-    source: "apps/control-plane/src/prompts/runtime.ts#runRecoveryMessage",
-    condition: "恢复时末条记录为 error 或 aborted 的 assistant 响应",
-    role: "user",
-  },
-  {
-    id: "context-recovery",
-    source: "apps/control-plane/src/prompts/runtime.ts#contextRecoveryMessage",
-    condition: "普通请求上下文溢出后，强制压缩重试前",
-    role: "user",
-  },
+
   {
     id: "receipt-correction",
     source: "apps/control-plane/src/prompts/runtime.ts#receiptCorrectionMessage",
     condition: "恢复操作收据的新事实；canonical JSON 与去重由调用方负责",
-    role: "user",
-  },
-  {
-    id: "summary-replay",
-    source: "apps/control-plane/src/prompts/runtime.ts#summaryMessage",
-    condition: "已有控制面确认的压缩摘要，放在保留消息之前；时间戳为 0",
     role: "user",
   },
 ];
@@ -65,31 +48,6 @@ export function runNoticeMessage(conversationId: string): UserMessage {
   return {
     role: "user",
     content: `[运行提示] 对话 ${conversationId} 有新消息到达。这条提示只说明有新消息，不含正文，也没有把任何消息标为已读；你可以用 conversations.read 或 attention.list 现在查看，也可以继续手上的工作，把它留给下一轮同一会话。`,
-    timestamp: Date.now(),
-  };
-}
-
-export function summaryMessage(summary: string): UserMessage {
-  return {
-    role: "user",
-    content: [{ type: "text", text: `[会话压缩摘要]\n${summary}` }],
-    timestamp: 0,
-  };
-}
-
-export function runRecoveryMessage(): UserMessage {
-  return {
-    role: "user" as const,
-    content:
-      "[运行恢复] 上次模型响应未成功完成。请从已保存的工具结果和操作事实继续，不要重做结果未知的副作用。",
-    timestamp: Date.now(),
-  };
-}
-export function contextRecoveryMessage(): UserMessage {
-  return {
-    role: "user" as const,
-    content:
-      "[上下文恢复] 上次普通模型请求超出上下文容量。已保存的工具结果和操作事实仍有效；从压缩后的同一会话继续，不要重做结果未知的副作用。",
     timestamp: Date.now(),
   };
 }

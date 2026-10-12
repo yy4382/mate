@@ -1,7 +1,6 @@
-import { sessionConfigurationSchema } from "../runtime/session/record.js";
+import { z } from "zod";
 import { buildAgentSystemPrompt } from "./system.js";
 import { runtimeSources } from "./runtime.js";
-import { summarySources } from "./summary.js";
 
 /** Only explicit content mode renders the synthetic example. Never reads runtime state. */
 export function inspectPrompts(options: { showContent?: boolean } = {}) {
@@ -18,36 +17,37 @@ export function inspectPrompts(options: { showContent?: boolean } = {}) {
       ...(options.showContent ? { text: _text } : {}),
     })),
     runtimeMessages: runtimeSources,
-    summaryRequest: summarySources,
+    summaryRequest: { owner: "@earendil-works/pi-durable", mode: "blocking", backgroundTokens: 0 },
     ...(options.showContent ? { systemPrompt: built.systemPrompt } : {}),
   };
 }
 
-/** Read only the established configuration shape; never serialize arbitrary input fields. */
-export function inspectConfigurationSnapshot(
-  input: unknown,
-  options: { showContent?: boolean } = {},
-) {
-  const record = isObjectValue(input) ? input : {};
-  const candidate = record.kind === "configuration" ? record.configuration : record;
-  const raw = isObjectValue(candidate) ? candidate : {};
-  const parsed = sessionConfigurationSchema.safeParse(
-    Object.fromEntries(Object.keys(sessionConfigurationSchema.shape).map((key) => [key, raw[key]])),
-  );
-  if (!parsed.success) throw new Error("Invalid configuration snapshot");
-  return {
-    kind: "saved-configuration",
-    // formatVersion 1 stores final text and schemas, not section provenance. Do not infer it
-    // from today's templates or split profile fields on newlines.
-    provenance: "unavailable-in-snapshot",
-    source: "apps/control-plane/src/runtime/session/record.ts#sessionConfigurationSchema",
-    toolCount: parsed.data.tools.length,
-    ...(options.showContent
-      ? { systemPrompt: parsed.data.systemPrompt, tools: parsed.data.tools }
-      : {}),
-  };
-}
+const systemEntrySchema = z.object({
+  kind: z.literal("pi.system"),
+  model: z
+    .array(
+      z.object({
+        role: z.literal("system"),
+        content: z.string(),
+        sections: z.record(z.string(), z.string().nullable()).optional(),
+        toolsAdded: z.array(z.json()).optional(),
+        toolsRemoved: z.array(z.string()).optional(),
+      }),
+    )
+    .length(1),
+});
 
-function isObjectValue(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+/** Native positional system changes are deltas, not a snapshot of the current full prompt. */
+export function inspectSystemEntry(input: unknown, options: { showContent?: boolean } = {}) {
+  const parsed = systemEntrySchema.safeParse(input);
+  if (!parsed.success) throw new Error("Invalid Durable system entry");
+  const message = parsed.data.model[0]!;
+  return {
+    kind: "saved-system-entry",
+    provenance: "native-positional-change",
+    sectionCount: Object.keys(message.sections ?? {}).length,
+    toolsAddedCount: message.toolsAdded?.length ?? 0,
+    toolsRemovedCount: message.toolsRemoved?.length ?? 0,
+    ...(options.showContent ? { message } : {}),
+  };
 }

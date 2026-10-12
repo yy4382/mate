@@ -165,9 +165,9 @@ Pi 当前的 Google SDK 适配器不开放响应体截取，并把未报告的�
 
 ## 提示词构建与本地诊断
 
-提示词统一入口为 `apps/control-plane/src/prompts/index.ts`。`system.ts` 按固定顺序构建普通 Agent 系统提示：前三段来自本次 run 的 profile（name、role、description），其余段为固定约定；每段与原文一起声明源码位置和启用条件。`runtime.ts` 单独构建输入来源、忙时通知、运行/上下文恢复、收据更正和摘要回填的用户消息。`summary.ts` 只构建一次性摘要请求（初始、更新、长轮次前缀），将历史转为临时文本，不提供工作工具。调用方仍负责调度、容量判断、持久提交和恢复。
+提示词统一入口为 `apps/control-plane/src/prompts/index.ts`。`system.ts` 构建 Mate 的中文 Agent 指引，`runtime.ts` 构建输入来源、忙时通知和收据更正；Durable 原生负责系统提示的顺序变化、容量判断、摘要请求、压缩提交与重启接续。摘要不启用后台预压缩。
 
-先构建，然后查看来源、顺序、角色及启用条件；默认不输出正文，不读运行目录、数据库或环境凭据：
+先构建，再查看当前指引的来源、顺序和启用条件。默认不输出正文，不读运行目录、数据库或环境凭据：
 
 ```sh
 pnpm build:control-plane
@@ -175,16 +175,14 @@ pnpm prompt:inspect
 pnpm prompt:inspect --show-content
 ```
 
-`--show-content` 在没有快照参数时仅显示合成 profile 的最终 system prompt 和逐段文本，与 AgentLoop 使用同一构建函数。真实运行的完整 system prompt 和工具 schema 仍由现有 configuration 会话记录保存，不另建配置或复制 schema。需要核对某次运行时，将那一条记录的 `payload_json`（或其中的 `configuration` 对象）保存到自己控制的私密 JSON 文件，再显式指定：
+`--show-content` 显示合成 profile 的系统提示。需要核对历史系统变化时，把 Durable 公共存储接口读取的一条 `pi.system` entry 保存在自己控制的私密 JSON 文件，再显式指定：
 
 ```sh
-pnpm prompt:inspect --snapshot /ABSOLUTE/private/configuration.json
-pnpm prompt:inspect --snapshot /ABSOLUTE/private/configuration.json --show-content
+pnpm prompt:inspect --entry /ABSOLUTE/private/system-entry.json
+pnpm prompt:inspect --entry /ABSOLUTE/private/system-entry.json --show-content
 ```
 
-快照默认仅报告类型、工具数量及来源可用性；加 `--show-content` 才显示该快照原有的最终 system prompt 和工具 schema。它们可能包含私密 profile 或描述，输出和快照都不应提交到 Git。诊断不输出快照中无关字段或凭据字段，失败也不回显文件名或输入内容。现有快照没有分段来源，诊断会标记 `unavailable-in-snapshot`，不会用今天的模板冒充历史来源；当前源码的来源清单用不带 `--snapshot` 的命令查看。
-
-`prompt-characterization.test.ts` 的快照冻结于重构前实现 `b0dfb0dc`，使用合成数据核对普通请求/配置、恢复通知、三类摘要请求及恢复后上下文顺序。它是保持旧输出的回归基线；重构时不要用更新快照来消除差异。注意力选择、压缩失败/中断和持久恢复仍由现有集成测试覆盖。
+该记录是系统片段和工具定义的顺序增量，不是完整配置快照；默认只报告数量，显式显示内容时才输出片段与工具变化。诊断不输出无关字段，失败不回显文件名或输入内容。原文可能包含私密 profile，文件和输出都不应提交到 Git。旧 configuration 快照读取与旧摘要字节快照已删除；前缀、压缩和恢复行为由真实本地模型请求场景验证。
 
 ## 所有者主动检查真实模型供应商
 

@@ -27,13 +27,13 @@ it(
 );
 
 it(
-  "does not count an incomplete summary stream after HTTP headers",
+  "does not install an incomplete summary stream after HTTP headers",
   () => exerciseCompaction("network"),
   30_000,
 );
 
 it(
-  "counts complete failed summaries without usage as missing data",
+  "retains original context after a failed summary that reports no usage",
   () => exerciseCompaction("failureWithoutUsage"),
   30_000,
 );
@@ -60,4 +60,10 @@ it(
   "replays a missing tool result before pending new input after a control-plane restart",
   () => exerciseCompaction("recoveryOrder"),
   30_000,
+);
+
+it.each(["overflowFailure", "overflowFailureRestart"] as const)(
+  "keeps persistent context failure classification after a failed overflow summary: %s",
+  (mode) => exerciseCompaction(mode),
+  30000,
 );

@@ -35,38 +35,35 @@ it("inspects ordered system sections while withholding all content by default", 
   );
 });
 
-it("reuses configuration snapshots without leaking fields or inventing historical provenance", async () => {
-  const { inspectConfigurationSnapshot } = await import("../../src/prompts/inspection.js");
-  const snapshot = {
-    kind: "configuration",
-    id: "ignored",
+it("inspects native system changes without leaking fields or pretending they are complete prompts", async () => {
+  const { inspectSystemEntry } = await import("../../src/prompts/inspection.js");
+  const entry = {
+    kind: "pi.system",
+    model: [
+      {
+        role: "system",
+        content: "",
+        sections: { instructions: "private prompt" },
+        toolsAdded: [{ name: "private-tool" }],
+        apiKey: "secret",
+      },
+    ],
     apiKey: "outer secret",
-    configuration: {
-      provider: "private provider",
-      modelId: "private model",
-      systemPrompt: "private saved prompt\noriginal order",
-      tools: [{ name: "private tool", parameters: { const: "private parameter" } }],
-      piAgentVersion: "0.86.0",
-      piAiVersion: "0.86.0",
-      formatVersion: 1,
-      apiKey: "nested secret",
-    },
-    transcript: "private transcript",
   };
-  const hidden = inspectConfigurationSnapshot(snapshot);
-  expect(JSON.stringify(hidden)).not.toMatch(/private|secret/);
-  expect(hidden).toMatchObject({
-    kind: "saved-configuration",
-    provenance: "unavailable-in-snapshot",
-    toolCount: 1,
+  expect(inspectSystemEntry(entry)).toEqual({
+    kind: "saved-system-entry",
+    provenance: "native-positional-change",
+    sectionCount: 1,
+    toolsAddedCount: 1,
+    toolsRemovedCount: 0,
   });
-  const visible = inspectConfigurationSnapshot(snapshot, { showContent: true });
-  expect(visible.systemPrompt).toBe(snapshot.configuration.systemPrompt);
-  expect(visible.tools).toEqual(snapshot.configuration.tools);
-  expect(JSON.stringify(visible)).not.toMatch(/secret|transcript|private provider|private model/);
-  expect(() => inspectConfigurationSnapshot({ apiKey: "error secret", systemPrompt: 7 })).toThrow(
-    "Invalid configuration snapshot",
+  expect(JSON.stringify(inspectSystemEntry(entry, { showContent: true }))).toContain(
+    "private prompt",
   );
+  expect(JSON.stringify(inspectSystemEntry(entry, { showContent: true }))).not.toContain("secret");
+  expect(() =>
+    inspectSystemEntry({ kind: "configuration", configuration: { systemPrompt: "old" } }),
+  ).toThrow("Invalid Durable system entry");
 });
 
 it("keeps the command's normal output and failures free of private input", async () => {
@@ -79,33 +76,35 @@ it("keeps the command's normal output and failures free of private input", async
   const run = (...args: string[]) =>
     spawnSync(process.execPath, ["dist/prompts/inspect.js", ...args], { encoding: "utf8" });
   try {
-    const snapshot = {
-      provider: "synthetic",
-      modelId: "synthetic",
-      systemPrompt: "private prompt",
-      tools: [{ secret: "private schema" }],
-      piAgentVersion: "0.86.0",
-      piAiVersion: "0.86.0",
-      formatVersion: 1,
+    const entry = {
+      kind: "pi.system",
+      model: [
+        {
+          role: "system",
+          content: "",
+          sections: { instructions: "private prompt" },
+          toolsAdded: [],
+        },
+      ],
       apiKey: "secret key",
     };
-    writeFileSync(file, JSON.stringify(snapshot));
+    writeFileSync(file, JSON.stringify(entry));
     const normal = run();
     expect(normal.status).toBe(0);
     expect(JSON.parse(normal.stdout)).not.toHaveProperty("systemPrompt");
-    const hidden = run("--snapshot", file);
+    const hidden = run("--entry", file);
     expect(hidden.status).toBe(0);
     expect(hidden.stdout + hidden.stderr).not.toMatch(/private|secret/);
-    const visible = run("--snapshot", file, "--show-content");
+    const visible = run("--entry", file, "--show-content");
     expect(visible.status).toBe(0);
-    expect(JSON.parse(visible.stdout).systemPrompt).toBe(snapshot.systemPrompt);
+    expect(JSON.parse(visible.stdout).message.sections.instructions).toBe("private prompt");
     expect(visible.stdout).not.toContain("secret key");
     writeFileSync(file, '{"private invalid JSON secret');
     for (const args of [
-      ["--snapshot", file],
-      ["--snapshot", file + "missing"],
+      ["--entry", file],
+      ["--entry", file + "missing"],
       ["--unknown-private-secret"],
-      ["--snapshot"],
+      ["--entry"],
     ]) {
       const result = run(...args);
       expect(result.status).toBe(1);

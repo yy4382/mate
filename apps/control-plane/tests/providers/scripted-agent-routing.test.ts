@@ -131,7 +131,7 @@ it("associates a real compaction summary with the original Agent while its peer 
   const provider = createScriptedProvider();
   const environment = await createScenarioEnvironment({
     agents: [{ name: "甲摘要" }, { name: "乙普通" }],
-    controlPlane: { modelContextWindow: 16000 },
+    controlPlane: { modelContextWindow: 128000 },
     provider: provider.handle,
   });
   environment.registerCleanup("scripted provider", () => provider.close());
@@ -142,8 +142,8 @@ it("associates a real compaction summary with the original Agent while its peer 
       function fillContext(request) {
         expect(request.kind).toBe("normal");
         request.tools([{ name: "tools.list", input: {} }], {
-          prefix: "x".repeat(28000),
-          inputTokens: 15000,
+          prefix: "x".repeat(100000),
+          inputTokens: 115000,
         });
       },
       function summarize(_request) {},
