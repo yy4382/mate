@@ -190,7 +190,6 @@ export class RunRecords {
       .get(run.delivery_id);
     if (!inputStart) return undefined;
     queueUncertainOperationFacts(this.db, agentId, this.now());
-    const history = new AgentSession(this.db).context(agentId);
     const input = this.db
       .prepare<
         unknown[],
@@ -208,14 +207,11 @@ export class RunRecords {
       JOIN owner_channels c ON c.id=d.channel_id
       WHERE d.recipient_kind='agent' AND d.recipient_id=? AND d.channel_id=? AND d.state='pending'
         AND d.seq>=? AND d.seq<=?
-        AND NOT EXISTS (SELECT 1 FROM owner_agent_session_records experienced
-          WHERE experienced.agent_id=d.recipient_id AND experienced.id=d.id)
         AND (NOT EXISTS (SELECT 1 FROM owner_message_deliveries seed JOIN owner_messages sm ON sm.id=seed.message_id WHERE seed.id=? AND sm.internal_kind='reminder') OR m.internal_kind='reminder')
       ORDER BY d.seq`,
       )
       .all(agentId, run.channel_id, inputStart.seq, run.input_end_seq, run.delivery_id);
     const messages = [
-      ...history,
       ...input.map((row) => ({
         id: row.id,
         actionScopeId: run.delivery_id,

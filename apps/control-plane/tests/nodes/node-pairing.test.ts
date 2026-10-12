@@ -7,9 +7,9 @@ import { createControlPlane } from "../../src/application.js";
 const ownerPassword = "owner-password-used-only-by-this-test";
 const fixtures: Array<{ app: ReturnType<typeof createControlPlane>; directory: string }> = [];
 
-afterEach(() => {
+afterEach(async () => {
   for (const { app, directory } of fixtures.splice(0)) {
-    app.close();
+    await app.close();
     rmSync(directory, { recursive: true, force: true });
   }
 });

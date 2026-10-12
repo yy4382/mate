@@ -158,7 +158,7 @@ it("requires owner login for subscription and exposes a usable Push public key",
     ).toBe(401);
     expect(app.push.publicKey).toMatch(/^[\w-]+$/);
   } finally {
-    app.close();
+    await app.close();
     rmSync(dataDir, { recursive: true, force: true });
   }
 });

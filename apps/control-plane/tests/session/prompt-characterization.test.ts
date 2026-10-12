@@ -1,85 +1,8 @@
-import { createServer } from "node:http";
 import { expect, it } from "vitest";
 import type { AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
-import { AgentLoop } from "../../src/runtime/loop.js";
 import { SessionCompaction } from "../../src/runtime/session/compaction.js";
 import type { ModelContextMessage, SessionCommit } from "../../src/runtime/session/record.js";
 import { answer, model, scripted } from "../support/agent/pi.js";
-import { respond } from "../support/agent/agent-loop.js";
-
-// Request snapshots contain synthetic content and omit clock/UUID fields.
-it.each([false, true])(
-  "preserves the full normal request and configuration (recovery=%s)",
-  async (recovery) => {
-    const requests: any[] = [];
-    const server = createServer(async (request, response) => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) chunks.push(Buffer.from(chunk));
-      requests.push(JSON.parse(Buffer.concat(chunks).toString()));
-      respond(response, "silent completion");
-    });
-    await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
-    try {
-      const commits: SessionCommit[] = [];
-      const loop = new AgentLoop();
-      loop.notice("synthetic-conversation");
-      const initial: ModelContextMessage[] = [
-        {
-          id: "input",
-          actionScopeId: "scope",
-          message: { role: "user", content: "synthetic input", timestamp: 7 },
-        },
-      ];
-      if (recovery)
-        initial.push({
-          id: "failed",
-          actionScopeId: "scope",
-          message: { ...answer([]), stopReason: "error", errorMessage: "synthetic failure" },
-        });
-      expect(
-        await loop.run(
-          {
-            sessionId: "synthetic-session",
-            actionScopeId: "scope",
-            messages: initial,
-            prompt: { name: "同事", role: "持续工作", description: "Synthetic fixture" },
-            provider: "openai",
-            modelId: "gpt-4o-mini",
-            apiKey: "synthetic-key",
-          },
-          {
-            isCurrent: () => true,
-            appendSessionEntry: (entry) => {
-              commits.push(entry);
-              return true;
-            },
-            executeTool: async () => ({ ok: true, result: {} }),
-          },
-          {
-            modelForRun: (selected) => ({
-              ...selected,
-              baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`,
-            }),
-          },
-        ),
-      ).toEqual({ ok: true });
-      expect(
-        commits.find((entry) => entry.kind === "configuration")?.configuration,
-      ).toMatchSnapshot();
-      expect(
-        requests.map(({ input, tools, instructions }) => ({ input, tools, instructions })),
-      ).toMatchSnapshot();
-      expect(
-        commits
-          .filter((entry) => entry.kind === "message" && entry.message.role === "user")
-          .map((entry) => (entry.kind === "message" ? { ...entry.message, timestamp: 0 } : entry)),
-      ).toMatchSnapshot();
-    } finally {
-      server.closeAllConnections();
-      await new Promise<void>((done) => server.close(() => done()));
-    }
-  },
-);
 
 it.each(["initial", "update", "prefix"] as const)(
   "preserves %s summary requests and restored context",

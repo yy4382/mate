@@ -9,9 +9,9 @@ import { createControlPlane } from "../../src/application.js";
 const password = "owner-password-used-only-by-this-test";
 const fixtures: Array<{ app: ReturnType<typeof createControlPlane>; directory: string }> = [];
 
-afterEach(() => {
+afterEach(async () => {
   for (const { app, directory } of fixtures.splice(0)) {
-    app.close();
+    await app.close();
     rmSync(directory, { recursive: true, force: true });
   }
 });
@@ -81,7 +81,7 @@ it("stores one API key per supported provider without returning it and keeps onl
   expect(unsupportedProvider.status).toBe(400);
   expect((await unsupportedProvider.text()).includes(syntheticKey)).toBe(false);
 
-  fixture.app.close();
+  await fixture.app.close();
   const restarted = createControlPlane({
     dataDir: fixture.dataDir,
     passwordFile: fixture.passwordFile,
@@ -162,7 +162,7 @@ it("answers Agent readiness from the credential row instead of writing Agent sta
   expect(fixture.app.agents.get(agentId)?.status).toBe("waiting_credentials");
 
   // The list endpoint answers from the same rule after a restart, with no readiness row to read.
-  fixture.app.close();
+  await fixture.app.close();
   const repairDb = new Database(databasePath);
   repairDb.exec("DROP TRIGGER reject_agent_update");
   repairDb.close();

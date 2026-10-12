@@ -245,7 +245,7 @@ it("holds Agent task changes for fresh discussion and queues an offline reminder
   expect(app.chat.deliveries.acknowledgeDelivery(delivery.id, "agent", agentId)).toBe(false);
   expect(delivery.state).toBe("pending");
   expect(app.chat.timeline.listMessages(dm.id, undefined, 100)?.messages).toHaveLength(4);
-  app.close();
+  await app.close();
   const restarted = toolTestApp({
     dataDir: join(fixtures.at(-1)!.directory, "control-plane"),
     passwordFile: join(fixtures.at(-1)!.directory, "owner-password"),

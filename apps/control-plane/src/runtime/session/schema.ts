@@ -1,4 +1,14 @@
 export const agentSessionSchema = `
+CREATE TABLE owner_durable_tool_calls (
+  agent_id TEXT NOT NULL REFERENCES owner_agents(id),
+  task_id TEXT NOT NULL,
+  identity TEXT NOT NULL UNIQUE,
+  action_scope_id TEXT NOT NULL,
+  operation TEXT NOT NULL,
+  input_json TEXT NOT NULL,
+  PRIMARY KEY(agent_id,task_id)
+);
+
 CREATE TABLE owner_agent_session_records (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
   id TEXT NOT NULL UNIQUE,

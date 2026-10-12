@@ -218,7 +218,7 @@ it.each(["legacy", "structured"])(
       ).toBe(true);
       expect(executions).toBe(1);
     } finally {
-      restarted.close();
+      await restarted.close();
     }
   },
 );

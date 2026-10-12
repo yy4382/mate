@@ -28,25 +28,13 @@ it("control plane requests the provider while its web API responds and a silent 
     }
     const messages = await fixture.api(`/api/owner/channels/${agent.channelId}/messages`);
     expect(messages.messages).toHaveLength(1);
-    const facts = fixture.db((db) =>
-      db
-        .prepare<[string], { payload_json: string }>(
-          "SELECT payload_json FROM owner_agent_session_records WHERE agent_id=? ORDER BY seq",
-        )
-        .all(agent.id),
-    );
-    expect(facts.map((row) => JSON.parse(row.payload_json))).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ kind: "configuration" }),
-        expect.objectContaining({
-          kind: "message",
-          message: expect.objectContaining({
-            role: "assistant",
-            content: [expect.objectContaining({ type: "text", text: "我选择保持静默。" })],
-          }),
-        }),
-      ]),
-    );
+    expect(
+      fixture.db((db) =>
+        db
+          .prepare("SELECT COUNT(*) AS n FROM owner_agent_session_records WHERE agent_id=?")
+          .get(agent.id),
+      ),
+    ).toEqual({ n: 0 });
   } finally {
     await fixture.close();
   }
@@ -151,15 +139,8 @@ it("one real Pi run uses authorized conversation, task, file and command tools a
     const last = JSON.stringify(fixture.requests.at(-1)?.input);
     expect(last).toContain("local file");
     expect(last).toContain("missing.tool");
-    const records = fixture.db((db) =>
-      db
-        .prepare<[string], { payload_json: string }>(
-          "SELECT payload_json FROM owner_agent_session_records WHERE agent_id=? ORDER BY seq",
-        )
-        .all(agent.id),
-    );
     expect(
-      records.filter((row) => JSON.parse(row.payload_json).message?.role === "toolResult"),
+      fixture.requests.at(-1)?.input.filter((item) => item.type === "function_call_output"),
     ).toHaveLength(11);
     // Model credentials never enter either node operation ledger or its identity file.
     for (const name of readdirSync(join(fixture.directory, "node-data"))) {

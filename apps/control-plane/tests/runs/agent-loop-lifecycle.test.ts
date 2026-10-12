@@ -443,7 +443,7 @@ it("retries shutdown after a durable run update fails and cancels both active pr
       const { AgentRunCoordinator } = await import(${JSON.stringify(coordinatorUrl)});
       const { default: Database } = await import('better-sqlite3');
       const close = AgentRunCoordinator.prototype.close;
-      AgentRunCoordinator.prototype.close = function() {
+      AgentRunCoordinator.prototype.close = async function() {
         const prepare = Database.prototype.prepare;
         let failOnce = true;
         Database.prototype.prepare = function(sql, ...args) {
@@ -455,11 +455,11 @@ it("retries shutdown after a durable run update fails and cancels both active pr
         };
         try {
           try {
-            close.call(this);
+            await close.call(this);
           } catch (error) {
             if (error.message !== 'synthetic shutdown storage failure') throw error;
             console.log('MATE_SHUTDOWN_STORAGE_FAILED');
-            close.call(this);
+            await close.call(this);
             const facts = new Database(
               ${JSON.stringify(join(directory, "control-plane-data", "control-plane.sqlite"))},
               { readonly: true }

@@ -7,9 +7,9 @@ import { createControlPlane } from "../../src/application.js";
 const password = "owner-password-used-only-by-this-test";
 const cases: Array<{ app: ReturnType<typeof createControlPlane>; dataDir: string }> = [];
 
-afterEach(() => {
+afterEach(async () => {
   for (const { app, dataDir } of cases.splice(0)) {
-    app.close();
+    await app.close();
     rmSync(dataDir, { recursive: true, force: true });
   }
 });
@@ -72,7 +72,7 @@ it("replays committed events after a restart and fills a disconnect gap by event
     body: JSON.stringify({ text: "控制面已提交" }),
   });
   const firstMessage = await firstResponse.json();
-  app.close();
+  await app.close();
   app = createControlPlane({ dataDir: fixture.dataDir, passwordFile: fixture.passwordFile });
   cases.push({ app, dataDir: fixture.dataDir });
 

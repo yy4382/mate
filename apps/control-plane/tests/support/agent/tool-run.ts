@@ -56,10 +56,11 @@ export function toolTestApp(options: ControlPlaneOptions): ControlPlane {
     },
   });
   const close = app.close.bind(app);
-  app.close = () => {
-    close();
+  app.close = async () => {
+    const closed = close();
     for (const resolve of gates.values()) resolve();
     gates.clear();
+    await closed;
   };
   fixtures.set(app, { path, sockets, gates });
   return app;

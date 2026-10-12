@@ -135,8 +135,8 @@ export function createControlPlane(
     tools,
     push,
     runs,
-    close() {
-      runs.close();
+    async close() {
+      await runs.close();
       workspace.close();
       nodes.closeAll();
       push.close();

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -165,6 +165,9 @@ it("keeps the actual OpenAI request prefix across tools, DM, public/private chan
     await api(`/api/owner/channels/${dm}/messages`, { text: "私信工作" });
     await complete(1);
     expect(requests).toHaveLength(4);
+    expect(existsSync(join(directory, "control-plane-data", "durable", `${agentId}.sqlite`))).toBe(
+      true,
+    );
     expect(requests[3].input.at(-1)).toMatchObject({
       type: "function_call_output",
       call_id: "invalid",
@@ -253,16 +256,8 @@ it("keeps the actual OpenAI request prefix across tools, DM, public/private chan
         )
         .all(agentId, savedHistory.length),
     ).toEqual(savedHistory);
-    const configurations = db
-      .prepare<[string], { payload_json: string }>(
-        "SELECT payload_json FROM owner_agent_session_records WHERE agent_id=? AND kind='configuration' ORDER BY seq",
-      )
-      .all(agentId);
-    expect(JSON.parse(configurations.at(-1)!.payload_json).configuration).toMatchObject({
-      modelId: "gpt-4.1-mini",
-      piAgentVersion: "1.0.0",
-      piAiVersion: "1.0.0",
-    });
+    // Durable owns the transcript; business storage must not shadow it.
+    expect(savedHistory).toEqual([]);
   } finally {
     db?.close();
     await stopProcess(node);

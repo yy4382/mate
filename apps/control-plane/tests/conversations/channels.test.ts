@@ -9,9 +9,9 @@ import { createControlPlane } from "../../src/application.js";
 const password = "owner-password-used-only-by-this-test";
 const cases: Array<{ app: ReturnType<typeof createControlPlane>; dataDir: string }> = [];
 
-afterEach(() => {
+afterEach(async () => {
   for (const { app, dataDir } of cases.splice(0)) {
-    app.close();
+    await app.close();
     rmSync(dataDir, { recursive: true, force: true });
   }
 });

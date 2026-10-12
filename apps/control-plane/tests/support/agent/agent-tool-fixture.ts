@@ -16,10 +16,10 @@ const fixtures: Array<{
   db: InstanceType<typeof Database>;
 }> = [];
 
-export function cleanupAgentToolFixture() {
+export async function cleanupAgentToolFixture() {
   for (const { app, directory, db } of fixtures.splice(0)) {
     db.close();
-    app.close();
+    await app.close();
     rmSync(directory, { recursive: true, force: true });
   }
 }

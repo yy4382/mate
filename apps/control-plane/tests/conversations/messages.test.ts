@@ -7,9 +7,9 @@ import { createControlPlane } from "../../src/application.js";
 const password = "owner-password-used-only-by-this-test";
 const cases: Array<{ app: ReturnType<typeof createControlPlane>; dataDir: string }> = [];
 
-afterEach(() => {
+afterEach(async () => {
   for (const { app, dataDir } of cases.splice(0)) {
-    app.close();
+    await app.close();
     rmSync(dataDir, { recursive: true, force: true });
   }
 });
@@ -72,7 +72,7 @@ it("persists top-level messages with Mate identity and channel order", async () 
   expect(second).not.toHaveProperty("revision");
   expect(second.id).not.toBe(first.id);
 
-  fixture.app.close();
+  await fixture.app.close();
   const restarted = createControlPlane({
     dataDir: fixture.dataDir,
     passwordFile: fixture.passwordFile,
@@ -201,7 +201,7 @@ it("keeps quote replies on the timeline and thread replies under the root after 
   const quote = await send("引用答复", { quoteId: root.id });
   for (let n = 1; n <= 4; n++) await send(`讨论 ${n}`, { rootId: root.id });
   expect(quote).toMatchObject({ rootId: null, quoteId: root.id });
-  fixture.app.close();
+  await fixture.app.close();
   const restarted = createControlPlane({
     dataDir: fixture.dataDir,
     passwordFile: fixture.passwordFile,

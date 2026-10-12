@@ -17,11 +17,11 @@ import { createControlPlane } from "../../src/application.js";
 const password = "owner-password-used-only-by-this-test";
 const cases: Array<{ app: ReturnType<typeof createControlPlane>; dataDir: string }> = [];
 
-afterEach(() => {
+afterEach(async () => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
   for (const { app, dataDir } of cases.splice(0)) {
-    app.close();
+    await app.close();
     const credentialDirectory = join(dataDir, "mate-control-plane.service");
     if (existsSync(credentialDirectory)) chmodSync(credentialDirectory, 0o700);
     rmSync(dataDir, { recursive: true, force: true });
@@ -256,7 +256,7 @@ it("does not use a password file again after first-time setup", async () => {
   const accepted = await login(app);
   const cookie = cookiePair(accepted);
   expect(accepted.status).toBe(204);
-  app.close();
+  await app.close();
   rmSync(passwordFile);
 
   const restarted = createControlPlane({ dataDir, passwordFile, webRoot: dataDir });

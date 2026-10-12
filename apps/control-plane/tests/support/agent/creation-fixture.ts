@@ -11,9 +11,9 @@ import type { NodeSocket } from "../../../src/nodes/transport.js";
 export const ownerPassword = "agent-creation-owner-password";
 export const fixtures: Array<{ app: ReturnType<typeof createControlPlane>; directory: string }> =
   [];
-export function cleanupFixture() {
+export async function cleanupFixture() {
   for (const { app, directory } of fixtures.splice(0)) {
-    app.close();
+    await app.close();
     rmSync(directory, { recursive: true, force: true });
   }
 }

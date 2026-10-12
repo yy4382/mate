@@ -16,6 +16,32 @@ interface SessionMessageRow {
 export class AgentSession {
   constructor(private readonly db: Database.Database) {}
 
+  /** Binds the upstream committed tool task to the existing business effect identity. */
+  bindTool(
+    agentId: string,
+    sessionId: string,
+    actionScopeId: string,
+    taskId: string,
+    operation: string,
+    input: Record<string, unknown>,
+  ): string {
+    const identity = durableToolIdentity(actionScopeId, sessionId, taskId);
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO owner_durable_tool_calls
+      (agent_id,task_id,identity,action_scope_id,operation,input_json) VALUES(?,?,?,?,?,?)`,
+      )
+      .run(agentId, taskId, identity, actionScopeId, operation, JSON.stringify(input));
+    const row = this.db
+      .prepare<unknown[], { identity: string; operation: string; input_json: string }>(
+        "SELECT identity,operation,input_json FROM owner_durable_tool_calls WHERE agent_id=? AND task_id=?",
+      )
+      .get(agentId, taskId);
+    if (!row || row.operation !== operation || row.input_json !== JSON.stringify(input))
+      throw new Error("Durable tool task binding differs");
+    return row.identity;
+  }
+
   append(
     { runId, nodeId, agentId }: Pick<AgentToolIdentity, "runId" | "nodeId" | "agentId">,
     entry: SessionCommit,
@@ -135,6 +161,17 @@ export class AgentSession {
     agentId: string,
     identity: string,
   ): { actionScopeId: string; name: string; input: unknown } | undefined {
+    const durable = this.db
+      .prepare<unknown[], { action_scope_id: string; operation: string; input_json: string }>(
+        "SELECT action_scope_id,operation,input_json FROM owner_durable_tool_calls WHERE agent_id=? AND identity=?",
+      )
+      .get(agentId, identity);
+    if (durable)
+      return {
+        actionScopeId: durable.action_scope_id,
+        name: durable.operation,
+        input: JSON.parse(durable.input_json),
+      };
     // The scope narrows candidates only; the original assistant entry still proves the full ID.
     const match =
       /^mate:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):[0-9a-f]{64}:1$/.exec(

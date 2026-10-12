@@ -10,9 +10,9 @@ const password = "owner-password-used-only-by-this-test";
 const cases: Array<{ app: ReturnType<typeof createControlPlane>; dataDir: string }> = [];
 const syntheticAgent = "fixture-agent-with-channel-membership";
 
-afterEach(() => {
+afterEach(async () => {
   for (const { app, dataDir } of cases.splice(0)) {
-    app.close();
+    await app.close();
     rmSync(dataDir, { recursive: true, force: true });
   }
 });
@@ -90,7 +90,7 @@ it("persists one delivery per member in the message transaction and resumes the 
   expect(response.status).toBe(201);
   expect(message.author).toEqual({ kind: "human", id: "owner" });
 
-  fixture.app.close();
+  await fixture.app.close();
   const restarted = createControlPlane({
     dataDir: fixture.dataDir,
     passwordFile: join(fixture.dataDir, "owner-password"),

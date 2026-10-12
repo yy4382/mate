@@ -6,9 +6,9 @@ import Database from "better-sqlite3";
 import { afterEach, expect, it } from "vitest";
 import { createControlPlane } from "../../src/application.js";
 const fixtures: Array<{ app: ReturnType<typeof createControlPlane>; dir: string }> = [];
-afterEach(() => {
+afterEach(async () => {
   for (const { app, dir } of fixtures.splice(0)) {
-    app.close();
+    await app.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -60,7 +60,7 @@ it("commits a task with its new message and keeps the message as its unique anch
       }),
     ],
   });
-  fixture.app.close();
+  await fixture.app.close();
   const restarted = createControlPlane({
     dataDir: fixture.dir,
     passwordFile: fixture.passwordFile,

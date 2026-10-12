@@ -219,7 +219,7 @@ it.each(["restart", "reconnect", "conflicting receipt", "malformed workspace"])(
         ),
       ).toHaveLength(0);
     } finally {
-      restarted.close();
+      await restarted.close();
     }
   },
 );

@@ -14,7 +14,7 @@ it("reports only the running status through the control-plane HTTP API", async (
     expect(response.headers.get("content-type")).toContain("application/json");
     expect(await response.json()).toEqual({ status: "running" });
   } finally {
-    app.close();
+    await app.close();
     rmSync(dataDir, { recursive: true, force: true });
   }
 });

@@ -13,9 +13,9 @@ const fixtures: Array<{
   passwordFile: string;
 }> = [];
 
-afterEach(() => {
+afterEach(async () => {
   for (const { app, directory } of fixtures.splice(0)) {
-    app.close();
+    await app.close();
     rmSync(directory, { recursive: true, force: true });
   }
 });
@@ -187,7 +187,7 @@ it("cleans uploading rows and files left by a control-plane restart", async () =
     "renamed but uncommitted",
   );
   database.close();
-  app.close();
+  await app.close();
   const previousFixture = fixtures.findIndex((fixture) => fixture.app === app);
   if (previousFixture >= 0) fixtures.splice(previousFixture, 1);
 

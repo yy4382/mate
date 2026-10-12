@@ -33,12 +33,12 @@ export function startControlPlane(
     websocket: { server: websocketServerAdapter },
   });
 
-  server.once("listening", () => {
+  server.once("listening", async () => {
     const address = server.address();
     if (!address || typeof address === "string") {
       process.stderr.write("Control-plane HTTP server did not report a network address\n");
       process.exitCode = 1;
-      controlPlane.close();
+      await controlPlane.close();
       websocketServer.close();
       server.close();
       return;
@@ -46,8 +46,8 @@ export function startControlPlane(
     process.stdout.write(`MATE_CONTROL_PLANE_LISTENING ${address.port}\n`);
   });
 
-  const shutdown = () => {
-    controlPlane.close();
+  const shutdown = async () => {
+    await controlPlane.close();
     websocketServer.close();
     server.close((error) => {
       if (error) {

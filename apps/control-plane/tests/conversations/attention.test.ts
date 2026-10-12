@@ -156,7 +156,7 @@ it("persists separate attention and draft choices while gating stale sends", asy
   expect(db.prepare("SELECT state FROM owner_agent_drafts WHERE id=?").get(second.id)).toEqual({
     state: "abandoned",
   });
-  app.close();
+  await app.close();
   const restarted = toolTestApp({
     dataDir: join(directory, "control-plane"),
     passwordFile: join(directory, "owner-password"),
