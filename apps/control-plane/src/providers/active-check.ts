@@ -275,7 +275,7 @@ export async function checkProviderProtocol(
       callCount === 1 &&
       call?.type === "toolCall" &&
       call.name === "mate_protocol_probe" &&
-      Object.keys(call.arguments).length === 0
+      z.strictObject({}).safeParse(call.arguments).success
     ) {
       callId = call.id;
       executionCount = 1;

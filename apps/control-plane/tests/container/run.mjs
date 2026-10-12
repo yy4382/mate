@@ -1,10 +1,17 @@
 // Build this checkout’s delivery image, then run the synthetic scenario functions.
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { mkdirSync, mkdtempSync, rmdirSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 const root = fileURLToPath(new URL("../../../..", import.meta.url));
 const sha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
 const image = `mate-a-scenarios:${sha.slice(0, 12)}-${randomUUID()}`;
+const evidenceBase = join(root, "artifacts", "scenarios");
+mkdirSync(evidenceBase, { recursive: true, mode: 0o700 });
+// Each invocation owns only its evidence subtree. Historical manifests can refer to
+// unrelated reused PIDs and must retain the cleanup tool's identity-mismatch refusal.
+const evidenceRoot = mkdtempSync(join(evidenceBase, "scenario-container-run-"));
 let current;
 let cancelled;
 function interrupt(signal) {
@@ -58,7 +65,11 @@ try {
       "--config",
       "vitest.container.config.ts",
     ],
-    { ...process.env, MATE_SCENARIO_IMAGE: image },
+    {
+      ...process.env,
+      MATE_SCENARIO_IMAGE: image,
+      MATE_CONTAINER_SCENARIO_EVIDENCE_ROOT: evidenceRoot,
+    },
   );
   if (tests.code !== 0) throw new Error(`Container scenarios failed: ${JSON.stringify(tests)}`);
 } catch (error) {
@@ -69,11 +80,7 @@ try {
   try {
     execFileSync(
       process.execPath,
-      [
-        "apps/control-plane/tests/support/environment/scenario-cleanup.mjs",
-        "--root",
-        "artifacts/scenarios",
-      ],
+      ["apps/control-plane/tests/support/environment/scenario-cleanup.mjs", "--root", evidenceRoot],
       { cwd: root, stdio: "inherit", timeout: 90_000 },
     );
   } catch (error) {
@@ -92,6 +99,7 @@ try {
   }
 }
 if (firstFailure) {
+  console.error(`Container scenario evidence: ${evidenceRoot}`);
   console.error(firstFailure);
   process.exitCode = 1;
-}
+} else rmdirSync(evidenceRoot);

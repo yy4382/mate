@@ -24,6 +24,8 @@ import {
 import { cpCommitCases, runCpRestart } from "../scenarios/cp-restart.js";
 
 const image = process.env.MATE_SCENARIO_IMAGE;
+const evidenceRoot =
+  process.env.MATE_CONTAINER_SCENARIO_EVIDENCE_ROOT ?? resolve("../../artifacts/scenarios");
 assert.ok(
   image,
   "Build the current checkout image and set MATE_SCENARIO_IMAGE; this suite never skips",
@@ -31,6 +33,7 @@ assert.ok(
 it("runs the same report workflow after production image web, login and node pairing", async () => {
   const provider = createScriptedProvider({ timeoutMs: 15_000 });
   await runScenario({
+    evidenceRoot,
     name: "container-report-workflow",
     provider,
     environment: { agents: reportWorkflowAgents, container: { image } },
@@ -58,7 +61,6 @@ it("runs the same report workflow after production image web, login and node pai
   });
 });
 it("independently reclaims only manifest-owned containers, network and node after driver SIGKILL", async () => {
-  const evidenceRoot = resolve("../../artifacts/scenarios");
   mkdirSync(evidenceRoot, { recursive: true, mode: 0o700 });
   const root = mkdtempSync(join(evidenceRoot, "scenario-container-probe-"));
   const probe = new ProcessOutput(
@@ -180,6 +182,7 @@ it("independently reclaims only manifest-owned containers, network and node afte
 it("recovers the same session after bidirectional silent node link loss in the image topology", async () => {
   const provider = createScriptedProvider({ timeoutMs: 15_000 });
   await runScenario({
+    evidenceRoot,
     name: "container-node-blackhole",
     provider,
     environment: { ...nodeNetworkConfiguration, container: { image } },
@@ -191,6 +194,7 @@ it("recovers the committed assistant and runs its command once after container S
   const boundary = cpCommitCases[1];
   assert.ok(boundary);
   await runScenario({
+    evidenceRoot,
     name: "container-cp-assistant-after",
     provider,
     environment: {

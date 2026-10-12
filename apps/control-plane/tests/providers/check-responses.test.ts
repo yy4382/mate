@@ -132,3 +132,47 @@ it.each(["owner", "timeout"])(
     );
   },
 );
+
+it.each(["[]", '\"\"', "0", '{"unexpected":true}'])(
+  "rejects malformed protocol probe arguments %s before producing a tool result",
+  async (argumentsJson) => {
+    await withProvider(
+      (request, response, index) => {
+        if (index === 0) text(response, "短文本");
+        else if (index === 1) {
+          const item = {
+            type: "function_call",
+            id: "invalid-probe",
+            call_id: "invalid-probe",
+            name: "mate_protocol_probe",
+            arguments: argumentsJson,
+            status: "completed",
+          };
+          response.writeHead(200, { "content-type": "text/event-stream" });
+          response.end(
+            `data: ${JSON.stringify({ type: "response.output_item.done", output_index: 0, item })}\n\n` +
+              `data: ${JSON.stringify({ type: "response.completed", response: { id: "invalid-probe-response", status: "completed", output: [item], usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 } } })}\n\n`,
+          );
+        } else
+          text(
+            response,
+            request.input.find((item) => item.type === "function_call_output")?.output ?? "missing",
+          );
+      },
+      async (baseUrl, requests) => {
+        const result = await checkProviderProtocol(
+          { provider: "openai", modelId: "gpt-4o-mini", apiKey: "synthetic-key" },
+          { modelForCheck: (model) => ({ ...model, baseUrl }) },
+        );
+        expect(result).toMatchObject({
+          status: "unverified",
+          reason: "tool_not_observed",
+          stage: "tool",
+        });
+        expect(result.observed.toolExecuted).toBe(false);
+        expect(result.observed.toolCallAssociated).toBe(false);
+        expect(requests).toHaveLength(2);
+      },
+    );
+  },
+);
