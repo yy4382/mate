@@ -1,7 +1,12 @@
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
-import { Agent, type StreamFn } from "@earendil-works/pi-agent-core";
-import { Type, type Api, type Model } from "@earendil-works/pi-ai";
+import {
+  Type,
+  type Api,
+  type Model,
+  type Context,
+  type AssistantMessage,
+} from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { isSupportedModel } from "./catalog.js";
 
@@ -122,7 +127,13 @@ export async function checkProviderProtocol(
   let continuationCalls = false;
   let timedOut = false;
   let completeResponse = Promise.resolve(false);
-  const streamCheckResponse: StreamFn = (model, context, options) => {
+  const controller = new AbortController();
+  const context: Context = {
+    systemPrompt:
+      "You are checking provider transport and tool protocol. Follow only the short check instructions.",
+    messages: [],
+  };
+  const streamCheckResponse = () => {
     completeResponse = Promise.resolve(false);
     if (report.stage === "continuation") {
       report.observed.toolCallAssociated = context.messages.some(
@@ -137,7 +148,7 @@ export async function checkProviderProtocol(
       );
     }
     return registry.streamSimple(model, context, {
-      ...options,
+      signal: controller.signal,
       apiKey,
       env: {},
       transport: "sse",
@@ -163,40 +174,22 @@ export async function checkProviderProtocol(
           }),
     });
   };
-  const agent = new Agent({
-    initialState: {
-      model,
-      systemPrompt:
-        "You are checking provider transport and tool protocol. Follow only the short check instructions.",
-    },
-    // Each probe phase is one explicit Pi turn, with one result continuation requested below.
-    finishTurn: () => ({ action: "end" }),
-    streamFn: streamCheckResponse,
-  });
-  const observeCheckEvent: Parameters<Agent["subscribe"]>[0] = async (event) => {
-    if (
-      event.type === "message_update" &&
-      report.stage === "text" &&
-      event.assistantMessageEvent.type === "text_delta" &&
-      event.assistantMessageEvent.delta.length > 0
-    )
-      report.observed.textStream = true;
-    if (event.type !== "message_end" || event.message.role !== "assistant") return;
-    if (event.message.stopReason === "error" || event.message.stopReason === "aborted") {
+  const observeCheckResponse = async (message: AssistantMessage) => {
+    if (message.stopReason === "error" || message.stopReason === "aborted") {
       // Pi normalizes these completed model-decline outcomes to error. They do not prove
       // broken transport; classify only the structured terminal reason, never error prose.
-      const nativeReason = event.message.rawStopReason ?? "";
+      const nativeReason = message.rawStopReason ?? "";
       const httpDeclined =
         ["refusal", "sensitive", "content_filter"].includes(nativeReason) &&
         report.httpStatus !== null &&
         report.httpStatus >= 200 &&
         report.httpStatus < 300 &&
         (await completeResponse);
-      // Pi's Google adapter does not expose fetch. In pinned Pi 1.0.0 this exact adapter-generated
+      // Pi's Google adapter does not expose fetch. In pinned Pi 1.1.0 this exact adapter-generated
       // diagnostic is emitted only after SDK stream iteration finishes, distinct from SDK/parse errors.
       // Require both the structured content-decline reason and that completion diagnostic.
       const googleDeclined =
-        (event.message.api === "google-generative-ai" || event.message.api === "google-vertex") &&
+        (message.api === "google-generative-ai" || message.api === "google-vertex") &&
         [
           "SAFETY",
           "BLOCKLIST",
@@ -207,31 +200,42 @@ export async function checkProviderProtocol(
           "IMAGE_PROHIBITED_CONTENT",
           "IMAGE_RECITATION",
         ].includes(nativeReason) &&
-        event.message.errorMessage === `Provider stopped with: ${nativeReason}`;
+        message.errorMessage === `Provider stopped with: ${nativeReason}`;
       const declined = httpDeclined || googleDeclined;
       report.status = declined ? "unverified" : "failed";
       report.reason = declined ? "model_declined" : "provider_error";
     }
-    if (report.stage === "text")
-      report.observed.textCompleted = event.message.stopReason === "stop";
+    if (report.stage === "text") report.observed.textCompleted = message.stopReason === "stop";
     if (report.stage === "tool") {
-      const calls = event.message.content.filter((content) => content.type === "toolCall");
+      const calls = message.content.filter((content) => content.type === "toolCall");
       callCount = calls.length;
       announcedCallId = calls[0]?.id ?? "";
     }
     if (report.stage === "continuation") {
-      continuationCalls = event.message.content.some((content) => content.type === "toolCall");
-      report.observed.continuationCompleted = event.message.stopReason === "stop";
-      report.observed.toolResultAcknowledged = event.message.content.some(
+      continuationCalls = message.content.some((content) => content.type === "toolCall");
+      report.observed.continuationCompleted = message.stopReason === "stop";
+      report.observed.toolResultAcknowledged = message.content.some(
         (content) => content.type === "text" && content.text.includes(marker),
       );
     }
   };
-  const unsubscribe = agent.subscribe(observeCheckEvent);
-  const cancel = () => agent.abort();
+  const turn = async (prompt?: string) => {
+    if (prompt !== undefined)
+      context.messages.push({ role: "user", content: prompt, timestamp: Date.now() });
+    const stream = streamCheckResponse();
+    for await (const event of stream) {
+      if (report.stage === "text" && event.type === "text_delta" && event.delta.length > 0)
+        report.observed.textStream = true;
+    }
+    const message = await stream.result();
+    await observeCheckResponse(message);
+    context.messages.push(message);
+    return message;
+  };
+  const cancel = () => controller.abort();
   const timer = setTimeout(() => {
     timedOut = true;
-    agent.abort();
+    controller.abort();
   }, selection.timeoutMs);
   input.signal?.addEventListener("abort", cancel, { once: true });
   const failedOrCancelled = () => {
@@ -245,7 +249,7 @@ export async function checkProviderProtocol(
   try {
     if (failedOrCancelled()) return report;
     report.stage = "text";
-    await agent.prompt("Reply with a brief greeting, using a short text response.");
+    await turn("Reply with a brief greeting, using a short text response.");
     if (failedOrCancelled()) return report;
     if (!report.observed.textStream || !report.observed.textCompleted) {
       report.reason = "text_not_observed";
@@ -253,26 +257,38 @@ export async function checkProviderProtocol(
     }
     report.stage = "tool";
     report.httpStatus = null;
-    agent.state.tools = [
+    context.tools = [
       {
         name: "mate_protocol_probe",
-        label: "Harmless protocol check",
         description:
           "Return a temporary marker. No files, commands, network or external side effects.",
         parameters: Type.Object({}),
-        execute: async (id) => {
-          executionCount++;
-          if (executionCount !== 1) throw new Error("The probe requires one tool call");
-          callId = id;
-          report.observed.toolExecuted = true;
-          return { content: [{ type: "text", text: marker }], details: null };
-        },
       },
     ];
-    await agent.prompt(
+    const toolResponse = await turn(
       "Call mate_protocol_probe exactly once with no arguments. After receiving its result, reply briefly with that exact marker.",
     );
     if (failedOrCancelled()) return report;
+    const call = toolResponse.content.find((content) => content.type === "toolCall");
+    if (
+      toolResponse.stopReason === "toolUse" &&
+      callCount === 1 &&
+      call?.type === "toolCall" &&
+      call.name === "mate_protocol_probe" &&
+      Object.keys(call.arguments).length === 0
+    ) {
+      callId = call.id;
+      executionCount = 1;
+      report.observed.toolExecuted = true;
+      context.messages.push({
+        role: "toolResult",
+        toolCallId: callId,
+        toolName: "mate_protocol_probe",
+        content: [{ type: "text", text: marker }],
+        isError: false,
+        timestamp: Date.now(),
+      });
+    }
     if (executionCount !== 1 || callCount !== 1) {
       report.reason = "tool_not_observed";
       return report;
@@ -283,10 +299,10 @@ export async function checkProviderProtocol(
       return report;
     }
     // Some adapters require the matching tool declaration with tool-use/result history.
-    // Keep it declared; the one-turn stop and execute guard still prevent another probe effect.
+    // Keep it declared to test association; this final request never executes another probe call.
     report.stage = "continuation";
     report.httpStatus = null;
-    await agent.continue();
+    await turn();
     if (failedOrCancelled()) return report;
     if (!report.observed.toolCallAssociated) {
       report.status = "failed";
@@ -308,7 +324,5 @@ export async function checkProviderProtocol(
   } finally {
     clearTimeout(timer);
     input.signal?.removeEventListener("abort", cancel);
-    unsubscribe();
-    agent.reset();
   }
 }

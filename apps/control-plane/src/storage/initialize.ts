@@ -2,8 +2,8 @@ import Database from "better-sqlite3";
 import { existsSync, statSync } from "node:fs";
 
 const CONTROL_PLANE_APPLICATION_ID = 0x4d43504c;
-// Revision 33 switches new Agent sessions to Pi Durable storage.
-const CONTROL_PLANE_FORMAT_REVISION = 33;
+// Revision 34 removes the superseded transcript and keeps only Durable handoff identities.
+const CONTROL_PLANE_FORMAT_REVISION = 34;
 
 const moveAside =
   "Mate does not migrate or erase a database it does not recognise: if this file was not created by this release, move it aside and point MATE_CONTROL_PLANE_DATA_DIR at a new, empty directory.";
@@ -101,14 +101,6 @@ function controlPlaneVerdict(db: Database.Database, schema: string): Verdict {
     const missing = [...expected]
       .filter((object) => !objects.has(object))
       .map((object) => object.replace(":", " "));
-    const usageColumn = db
-      .prepare<[], { hidden: number }>(
-        "SELECT hidden FROM pragma_table_xinfo('owner_agent_session_records') WHERE name='usage_json'",
-      )
-      .get();
-    // SQLite table_xinfo marks a STORED generated column with hidden=3.
-    if (usageColumn?.hidden !== 3)
-      missing.push("generated column owner_agent_session_records.usage_json");
     return missing.length ? { kind: "incomplete", missing } : { kind: "current" };
   } finally {
     template.close();

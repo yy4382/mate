@@ -1,9 +1,4 @@
-import {
-  createAssistantMessageEventStream,
-  type AssistantMessage,
-  type Model,
-} from "@earendil-works/pi-ai";
-import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { type AssistantMessage, type Model } from "@earendil-works/pi-ai";
 export const model: Model<"openai-completions"> = {
   id: "synthetic",
   name: "synthetic",
@@ -36,16 +31,6 @@ export function answer(
       totalTokens: 12,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
-  };
-}
-export function scripted(messages: AssistantMessage[]): StreamFn {
-  let index = 0;
-  return () => {
-    const stream = createAssistantMessageEventStream();
-    const message = messages[index++];
-    if (!message) throw new Error("Synthetic script exhausted");
-    stream.push({ type: "done", reason: message.stopReason as "stop" | "toolUse", message });
-    return stream;
   };
 }
 export function deferred() {

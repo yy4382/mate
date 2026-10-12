@@ -7,14 +7,14 @@ import { join } from "node:path";
 
 /** Snapshot the WAL read-only, then inspect public native storage without starting a Harness. */
 export async function readDurableEntries(directory: string, agentId: string) {
+  return readDurableSessionEntries(join(directory, "control-plane-data"), agentId);
+}
+export async function readDurableSessionEntries(dataDir: string, agentId: string) {
   const snapshot = mkdtempSync(join(tmpdir(), "mate-durable-facts-"));
-  const database = new Database(
-    join(directory, "control-plane-data", "durable", `${agentId}.sqlite`),
-    {
-      readonly: true,
-      fileMustExist: true,
-    },
-  );
+  const database = new Database(join(dataDir, "durable", `${agentId}.sqlite`), {
+    readonly: true,
+    fileMustExist: true,
+  });
   try {
     const path = join(snapshot, "session.sqlite");
     await database.backup(path);

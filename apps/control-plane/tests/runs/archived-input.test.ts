@@ -58,7 +58,7 @@ it("keeps an archived run input pending and retries it after the owner unarchive
     app,
     socket,
     JSON.stringify({
-      type: "session.append",
+      type: "test.commit",
       requestId: randomUUID(),
       runId: run.runId,
       agentId,
@@ -67,7 +67,7 @@ it("keeps an archived run input pending and retries it after the owner unarchive
   );
   // The private record is accepted, but it still publishes nothing.
   expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
-    type: "session.commit",
+    type: "test.committed",
     accepted: true,
   });
   expect(app.chat.timeline.listMessages(direct.id, undefined, 20)?.messages).toMatchObject([
@@ -123,7 +123,7 @@ it("keeps an archived run input pending and retries it after the owner unarchive
     app,
     socket,
     JSON.stringify({
-      type: "session.append",
+      type: "test.commit",
       requestId: randomUUID(),
       runId: retry.runId,
       agentId,
@@ -131,7 +131,7 @@ it("keeps an archived run input pending and retries it after the owner unarchive
     }),
   );
   expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
-    type: "session.commit",
+    type: "test.committed",
     accepted: true,
   });
   expect(app.chat.timeline.listMessages(direct.id, undefined, 20)?.messages).toMatchObject([

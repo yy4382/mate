@@ -40,7 +40,7 @@ export MATE_NODE_DATA_DIR=/ABSOLUTE/private/node
 pnpm start:node
 ```
 
-单账号启动检查以现有普通账号启动控制面与节点，通过真实 WebSocket 配对、创建两名 Agent，分别重启节点和控制面并核对重新认证、在线状态与错误身份拒绝。控制面真实 Pi 循环请求本地脚本化 HTTP/SSE 模型服务，调用节点普通命令并持久保存 transcript；命令实测 UID/GID 和工作目录。脚本核对两名 Agent 独立工作区与 session、`MEMORY.md`、目录权限 `700`，以及没有按 Agent 创建账号。macOS 与 Linux 均可运行，并记录 `kernel`、`hostEnvironment` 与 `linuxKernel`；macOS 结果仅是跨平台证据。工作区不可写的网页失败由 `agent-creation-process.test.ts` 单独覆盖：
+单账号启动检查以现有普通账号启动控制面与节点，通过真实 WebSocket 配对、创建两名 Agent，分别重启节点和控制面并核对重新认证、在线状态与错误身份拒绝。控制面真实 Durable/Pi 循环请求本地脚本化 HTTP/SSE 模型服务，调用节点普通命令并在每 Agent 原生 SQLite 持久保存 transcript；命令实测 UID/GID 和工作目录。脚本核对两名 Agent 独立工作区与 session、`MEMORY.md`、目录权限 `700`，以及没有按 Agent 创建账号。macOS 与 Linux 均可运行，并记录 `kernel`、`hostEnvironment` 与 `linuxKernel`；macOS 结果仅是跨平台证据。工作区不可写的网页失败由 `agent-creation-process.test.ts` 单独覆盖：
 
 ```sh
 pnpm build
@@ -354,7 +354,7 @@ pnpm --filter @mate/control-plane exec vitest run tests/scenarios/recovery/commi
 
 新增 CP 场景仍声明普通结构化配置。`controlPlane.commitBoundary` 使用 `{ phase: "before" | "after", role: "assistant" | "toolResult", toolName? }` 或 `{ phase: "finish" }`；固定测试启动器通过现有提交依赖暂停一次，15 秒未打断则失败。一次性标记位于本场景临时目录，重启不再次暂停，重启启动器不重新注入提交故障。`restartControl("SIGKILL")` 明确崩溃；默认 `restartControl("SIGTERM")` 走正常关停，两者记录实际退出状态。`controlPlane.observePartialTool` 仅通过已有测试依赖容器中的观测回调报告真实 Pi 工具参数 delta，不新增生产配置或故障 API。脚本的 `partialTool(argumentsPrefix)` 发送未完成 SSE 并保持待响应，需先声明预期取消。
 
-`tests/scenarios/cp-restart.ts` 导出选定的 `runCpRestart(context, provider)`，默认复用 assistant 已提交但尚未派发命令的边界，供容器拓扑沿用同一模型脚本、成果与原身份断言。`scenario-recovery-facts.ts` 集中只读查询 Owner API 没有暴露的 transcript、原 run、操作与工具收据；任务、活动、模型请求和文件仍为主要成果证据。这些场景加入 `pnpm check`；本地 macOS 结果不能代替实际 Linux CI、镜像、真实 provider 或 VPS 验证。
+`tests/scenarios/cp-restart.ts` 导出选定的 `runCpRestart(context, provider)`，默认复用 assistant 已提交但尚未派发命令的边界，供容器拓扑沿用同一模型脚本、成果与原身份断言。`scenario-recovery-facts.ts` 集中只读查询 Owner API 没有暴露的原 run、操作与工具收据；`durable-session-facts.ts` 通过只读 WAL 快照和公共 storage API 读取原生 entry，不启动 Harness。任务、活动、模型请求和文件仍为主要成果证据。这些场景加入 `pnpm check`；本地 macOS 结果不能代替实际 Linux CI、镜像、真实 provider 或 VPS 验证。
 
 ## 真实文件崩溃与收据边界
 
@@ -400,3 +400,5 @@ Agent 通过 `tools.list` / `tools.describe` 发现 `history.search` 与 `histor
 `history.read({id, offset?, maxChars?})` 默认从 0 返回最多 8,000 个 UTF-16 代码单元，`maxChars` 为 2 至 16,000。返回 `text`、`offset`、`nextOffset`、`totalLength` 和同 Agent 的 `previousId` / `nextId`；按 `nextOffset` 续读不会静默丢失尾部。offset 等于总长度时返回空片段和 `nextOffset=null`，超界或位于代理对中间则拒绝。未知记录 ID 和他人记录 ID 使用同一拒绝。
 
 这些限制是观察分页约束，不是 Agent 运行或用量额度。100 条记录的上限不保证固定 CPU、内存或读取字节成本：巨型原消息仍需读取、解析并构造整个文字投影，分段阅读也有这一成本；首版不引入全文索引或改写原始历史。
+
+当前运行职责见 [ADR-0010](adr/0010-durable-agent-runtime.md)。业务库格式 revision 34 拒绝旧开发数据：停止服务，保留并移开旧数据目录，再使用账号拥有的新空目录重新初始化（步骤见 [运维说明](OPERATIONS.md)）。不得删除原文件、恢复旧表读取器或把新库覆盖到旧目录。

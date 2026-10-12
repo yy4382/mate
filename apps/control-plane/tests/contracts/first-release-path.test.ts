@@ -47,7 +47,8 @@ it("owns the Pi loop in the control plane and ships no node model runtime or pro
     expect(packageManifest.dependencies).not.toHaveProperty("@earendil-works/pi-ai");
   }
   const control = JSON.parse(readFileSync(resolve("package.json"), "utf8"));
-  expect(control.dependencies).toHaveProperty("@earendil-works/pi-agent-core");
+  expect(control.dependencies).not.toHaveProperty("@earendil-works/pi-agent-core");
+  expect(control.dependencies).toHaveProperty("@earendil-works/pi-durable");
   expect(control.dependencies).toHaveProperty("@earendil-works/pi-ai");
   expect(readFileSync(resolve("../../packages/protocol/src/messages.ts"), "utf8")).not.toContain(
     "agent.run",

@@ -114,7 +114,7 @@ it("reconciles a durable node receipt before resuming a disconnected Agent", asy
     app,
     reconnect,
     JSON.stringify({
-      type: "session.read",
+      type: "test.context",
       requestId: randomUUID(),
       runId: next.runId,
       agentId,
@@ -134,7 +134,7 @@ it("reconciles a durable node receipt before resuming a disconnected Agent", asy
     app,
     reconnect,
     JSON.stringify({
-      type: "session.append",
+      type: "test.commit",
       requestId: randomUUID(),
       runId: oldRun.runId,
       agentId,
@@ -142,7 +142,7 @@ it("reconciles a durable node receipt before resuming a disconnected Agent", asy
     }),
   );
   expect(JSON.parse(reconnect.sent.at(-1)!)).toMatchObject({
-    type: "session.commit",
+    type: "test.committed",
     accepted: false,
   });
   await toolTestInput(

@@ -153,7 +153,7 @@ it.each(["restart", "reconnect", "conflicting receipt", "malformed workspace"])(
         restarted,
         recovered,
         JSON.stringify({
-          type: "session.read",
+          type: "test.context",
           requestId: randomUUID(),
           runId: next.runId,
           agentId,
@@ -187,7 +187,7 @@ it.each(["restart", "reconnect", "conflicting receipt", "malformed workspace"])(
           restarted,
           recovered,
           JSON.stringify({
-            type: "session.append",
+            type: "test.commit",
             requestId: entry.id,
             runId: next.runId,
             agentId,
@@ -198,7 +198,7 @@ it.each(["restart", "reconnect", "conflicting receipt", "malformed workspace"])(
         restarted,
         recovered,
         JSON.stringify({
-          type: "session.read",
+          type: "test.context",
           requestId: randomUUID(),
           runId: next.runId,
           agentId,

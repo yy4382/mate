@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 import { expect, it } from "vitest";
+import { readDurableEntries } from "../support/facts/durable-session-facts.js";
 import {
   eventually,
   login,
@@ -227,9 +228,13 @@ it("keeps the actual OpenAI request prefix across tools, DM, public/private chan
       summary: [{ type: "summary_text", text: "Synthetic reasoning" }],
       encrypted_content: "synthetic-replay-signature",
     });
-    const savedHistory = db
-      .prepare("SELECT payload_json FROM owner_agent_session_records WHERE agent_id=? ORDER BY seq")
-      .all(agentId);
+    const savedHistory = await readDurableEntries(directory, agentId);
+    expect(savedHistory.flatMap((entry) => entry.model ?? [])).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ role: "assistant" }),
+        expect.objectContaining({ role: "toolResult" }),
+      ]),
+    );
     configurationTurn = requests.length;
     updateConfiguration = async () => {
       await api(`/api/owner/agents/${agentId}/profile`, { role: "Changed next run" }, "PATCH");
@@ -249,15 +254,14 @@ it("keeps the actual OpenAI request prefix across tools, DM, public/private chan
     await complete(7);
     expect(requests[10].model).toBe("gpt-4.1-mini");
     expect(JSON.stringify(requests[10].input[0])).toContain("Changed next run");
+    const continuedHistory = await readDurableEntries(directory, agentId);
+    expect(continuedHistory.slice(0, savedHistory.length)).toEqual(savedHistory);
+    // There is one transcript authority, and it retained the pre-edit history verbatim.
     expect(
       db
-        .prepare(
-          "SELECT payload_json FROM owner_agent_session_records WHERE agent_id=? ORDER BY seq LIMIT ?",
-        )
-        .all(agentId, savedHistory.length),
-    ).toEqual(savedHistory);
-    // Durable owns the transcript; business storage must not shadow it.
-    expect(savedHistory).toEqual([]);
+        .prepare("SELECT name FROM sqlite_master WHERE name LIKE 'owner_agent_session_records%'")
+        .all(),
+    ).toEqual([]);
   } finally {
     db?.close();
     await stopProcess(node);

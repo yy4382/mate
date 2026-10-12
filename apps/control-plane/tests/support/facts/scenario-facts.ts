@@ -13,14 +13,9 @@ const runSchema = z.object({
   messageIds: z.array(ownerMessageSchema.shape.id),
 });
 
-/**
- * A run belongs to its admitted seed even before an input commit. Additional messages belong only
- * when their real delivery IDs were committed under that seed's action scope by this or an earlier
- * run, within this run's admitted input bounds. The existing run ledger's insertion order prevents
- * later recovery commits from being attributed to an old run. Recovery retains the original scope;
- * a sequence range alone would wrongly include ordinary messages in reminder runs.
- * These are read-only correlation facts, never scenario business writes or an action boundary.
- */
+/** A seed is admitted before its input commit. Additional inputs require a confirmed
+ * Durable submission acknowledgment from this seed, never a future recovery run or
+ * a reminder's overlapping sequence range. This is diagnostic correlation only. */
 export function readMessageRuns(directory: string, agentId: string, messageId: string) {
   const db = new Database(join(directory, "control-plane-data", "control-plane.sqlite"), {
     readonly: true,
@@ -35,10 +30,10 @@ export function readMessageRuns(directory: string, agentId: string, messageId: s
              FROM owner_agent_runs r
              JOIN owner_message_deliveries d ON d.recipient_kind='agent' AND d.recipient_id=r.agent_id
              WHERE r.agent_id=? AND (d.id=r.delivery_id OR (d.seq<=r.input_end_seq AND EXISTS (
-               SELECT 1 FROM owner_agent_session_records input
+               SELECT 1 FROM owner_durable_input_bindings input
                JOIN owner_agent_runs committedRun ON committedRun.id=input.run_id
-               WHERE input.agent_id=r.agent_id AND input.kind='message'
-                 AND input.id=d.id AND input.action_scope_id=r.delivery_id
+               WHERE input.delivery_id=d.id AND committedRun.agent_id=r.agent_id
+                 AND committedRun.delivery_id=r.delivery_id
                  AND committedRun.rowid<=r.rowid
              )))
            )
@@ -80,11 +75,6 @@ export function readScenarioFacts(directory: string) {
       runs: db
         .prepare(
           "SELECT id,agent_id AS agentId,node_id AS nodeId,delivery_id AS deliveryId,state,error_code AS errorCode,started_at AS startedAt,completed_at AS completedAt FROM owner_agent_runs ORDER BY rowid",
-        )
-        .all(),
-      transcript: db
-        .prepare(
-          "SELECT seq,id,agent_id AS agentId,run_id AS runId,action_scope_id AS actionScopeId,kind,payload_json AS payload FROM owner_agent_session_records ORDER BY seq",
         )
         .all(),
       operations: db

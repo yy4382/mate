@@ -1,3 +1,4 @@
+import { readDurableEntries } from "../support/facts/durable-session-facts.js";
 import { expect, it } from "vitest";
 import type { ServerResponse } from "node:http";
 import { join } from "node:path";
@@ -357,15 +358,15 @@ it("offline messages and due reminders queue while another online node's Agent k
       "offline reminder queued",
     );
     expect(fixture.requests).toHaveLength(2);
+    const offlineContext = await readDurableEntries(fixture.directory, first.id);
+    expect(JSON.stringify(offlineContext)).not.toContain("离线新输入");
     expect(
-      fixture.db((db) =>
-        db
-          .prepare(
-            "SELECT COUNT(*) AS n FROM owner_agent_session_records WHERE payload_json LIKE '%离线新输入%' OR payload_json LIKE '%离线到期提醒%' AND json_extract(payload_json,'$.message.role')='user'",
-          )
-          .get(),
+      JSON.stringify(
+        offlineContext
+          .flatMap((entry) => entry.model ?? [])
+          .filter((message) => message.role === "user"),
       ),
-    ).toEqual({ n: 0 });
+    ).not.toContain("离线到期提醒");
     await fixture.send(second.channelId, "其他在线节点继续");
     await eventually(() => responses[2], "other node's provider request");
     expect(JSON.stringify(fixture.requests[2]!.input)).toContain("其他在线节点继续");

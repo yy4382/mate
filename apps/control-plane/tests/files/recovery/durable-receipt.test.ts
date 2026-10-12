@@ -187,6 +187,19 @@ it("a durable file receipt withheld from the control plane corrects the informed
       });
       await environment.restartNode();
       await driver.waitForRun(work, "completed", { signal });
+      // The receipt notification is a separate delivery; completing the recovered work
+      // does not imply that its later notification has reached the model yet.
+      const notification = await provider.waitFor(
+        agent.summary.id,
+        "acknowledgeReceiptNotification",
+      );
+      await notification.finished;
+      assert.deepEqual(await notification.outcome, { kind: "responded" });
+      const receiptMessage = (await driver.messages(agent.channelId, signal)).find((message) =>
+        message.text.startsWith(`Mate 已核对操作 ${started.receipt.operationId}`),
+      );
+      assert.ok(receiptMessage);
+      await driver.waitForRun({ ...work, message: receiptMessage }, "completed", { signal });
       await provider.assertComplete();
       assert.equal(readFileSync(path, "utf8"), edited);
       assert.deepEqual(readFileVersion(path), boundaryVersion);

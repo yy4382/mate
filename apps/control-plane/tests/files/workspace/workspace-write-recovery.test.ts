@@ -1,5 +1,5 @@
 import { toolTestInput } from "../../support/agent/tool-run.js";
-import { type ModelContextMessage } from "../../../src/runtime/session/record.js";
+import { type ModelContextMessage } from "../../../src/runtime/session/input.js";
 
 import { randomUUID } from "node:crypto";
 
@@ -280,7 +280,7 @@ it("authorizes workspace writes, reuses one action receipt, and reconciles a lat
     app,
     socket,
     JSON.stringify({
-      type: "session.read",
+      type: "test.context",
       requestId: randomUUID(),
       runId: correctedRun.runId,
       agentId,

@@ -192,7 +192,7 @@ it.each(["legacy", "structured"])(
         restarted,
         recovered,
         JSON.stringify({
-          type: "session.read",
+          type: "test.context",
           requestId: randomUUID(),
           runId: retryRun.runId,
           agentId,

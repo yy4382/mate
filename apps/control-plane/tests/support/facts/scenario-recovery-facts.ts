@@ -1,7 +1,6 @@
 import Database from "better-sqlite3";
 import { join } from "node:path";
 import { z } from "zod";
-import { sessionCommitSchema } from "../../../src/runtime/session/record.js";
 
 /** Only facts unavailable from Owner API; never writes scenario business state. */
 export function readRecoveryFacts(directory: string, agentId: string) {
@@ -25,21 +24,6 @@ export function readRecoveryFacts(directory: string, agentId: string) {
             )
             .all(agentId),
         ),
-      entries: db
-        .prepare(
-          "SELECT seq,run_id AS runId,payload_json AS payload FROM owner_agent_session_records WHERE agent_id=? ORDER BY seq",
-        )
-        .all(agentId)
-        .map((row) => {
-          const parsed = z
-            .object({ seq: z.number(), runId: z.string(), payload: z.string() })
-            .parse(row);
-          return {
-            seq: parsed.seq,
-            runId: parsed.runId,
-            entry: sessionCommitSchema.parse(JSON.parse(parsed.payload)),
-          };
-        }),
       operations: z
         .object({
           operationId: z.string(),

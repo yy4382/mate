@@ -175,7 +175,7 @@ export class RunRecords {
   readRunContext(
     runId: string,
     agentId: string,
-  ): import("../session/record.js").ModelContextMessage[] | undefined {
+  ): import("../session/input.js").ModelContextMessage[] | undefined {
     const run = this.db
       .prepare<
         unknown[],

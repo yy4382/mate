@@ -12,49 +12,55 @@ import { z } from "zod";
 import { loopFixture, respond } from "../../support/agent/agent-loop.js";
 import { readMessageRuns } from "../../support/facts/scenario-facts.js";
 
-it("does not backfill an original batch's uncommitted message from a future recovery run", async () => {
-  const fixture = await loopFixture(
-    (_request, response) => respond(response, "恢复同批消息后结束。"),
-    ", beforeSessionCommit: async entry => { if (entry.kind === 'message' && entry.message.role === 'user' && typeof entry.message.content === 'string' && entry.message.content.includes('B 在提交前中断')) { console.log('MATE_SCENARIO_SECOND_INPUT_PENDING'); await new Promise(() => {}); } }",
-  );
-  try {
-    const agent = await fixture.agent("同批未提交");
-    await fixture.stopNode();
-    const first = ownerMessageSchema.parse(
-      await fixture.send(agent.channelId, "A 已确认的原始输入。"),
+it.each(["beforeDurableCommit", "afterDurableCommit"])(
+  "does not backfill an original batch's input from a future recovery run at %s",
+  async (boundary) => {
+    const fixture = await loopFixture(
+      (_request, response) => respond(response, "恢复同批消息后结束。"),
+      `, ${boundary}: async writes => { if (JSON.stringify(writes).includes('B 在提交前中断')) { console.log('MATE_SCENARIO_SECOND_INPUT_PENDING'); await new Promise(() => {}); } }`,
     );
-    const second = ownerMessageSchema.parse(
-      await fixture.send(agent.channelId, "B 在提交前中断。"),
-    );
-    await fixture.reconnectNode();
-    await fixture.control.waitFor(/MATE_SCENARIO_SECOND_INPUT_PENDING/);
-    expect(fixture.requests).toEqual([]);
-    const original = readMessageRuns(fixture.directory, agent.id, first.id)[0];
-    if (!original) throw new Error("Expected original seed run");
-    expect(readMessageRuns(fixture.directory, agent.id, second.id)).toEqual([]);
-    const oldControl = fixture.control;
-    await fixture.restartControl();
-    expect(oldControl.exitStatus?.signal).toBe("SIGKILL");
-    const runs = await waitForScenario(
-      "confirmed second input in recovery run",
-      () => readMessageRuns(fixture.directory, agent.id, second.id),
-      (facts) => facts.some((run) => run.state === "completed"),
-    );
-    expect(runs.map((run) => run.id)).not.toContain(original.id);
-    expect(runs).toEqual([
-      expect.objectContaining({
-        state: "completed",
-        sessionId: original.sessionId,
-        messageIds: [first.id, second.id],
-      }),
-    ]);
-    expect(fixture.requests).toHaveLength(1);
-    expect(JSON.stringify(fixture.requests[0])).toContain("A 已确认的原始输入。");
-    expect(JSON.stringify(fixture.requests[0])).toContain("B 在提交前中断。");
-  } finally {
-    await fixture.close();
-  }
-}, 30_000);
+    try {
+      const agent = await fixture.agent("同批未提交");
+      await fixture.stopNode();
+      const first = ownerMessageSchema.parse(
+        await fixture.send(agent.channelId, "A 已确认的原始输入。"),
+      );
+      const second = ownerMessageSchema.parse(
+        await fixture.send(agent.channelId, "B 在提交前中断。"),
+      );
+      await fixture.reconnectNode();
+      await fixture.control.waitFor(/MATE_SCENARIO_SECOND_INPUT_PENDING/);
+      expect(fixture.requests).toEqual([]);
+      const original = readMessageRuns(fixture.directory, agent.id, first.id)[0];
+      if (!original) throw new Error("Expected original seed run");
+      expect(readMessageRuns(fixture.directory, agent.id, second.id)).toEqual([]);
+      const oldControl = fixture.control;
+      await fixture.restartControl();
+      expect(oldControl.exitStatus?.signal).toBe("SIGKILL");
+      const runs = await waitForScenario(
+        "confirmed second input in recovery run",
+        () => readMessageRuns(fixture.directory, agent.id, second.id),
+        (facts) => facts.some((run) => run.state === "completed"),
+      );
+      expect(runs.map((run) => run.id)).not.toContain(original.id);
+      expect(runs).toEqual([
+        expect.objectContaining({
+          state: "completed",
+          sessionId: original.sessionId,
+          messageIds: [first.id, second.id],
+        }),
+      ]);
+      expect(fixture.requests).toHaveLength(2);
+      expect(JSON.stringify(fixture.requests[0]).split("A 已确认的原始输入。")).toHaveLength(2);
+      expect(JSON.stringify(fixture.requests[0])).not.toContain("B 在提交前中断。");
+      expect(JSON.stringify(fixture.requests[1]).split("A 已确认的原始输入。")).toHaveLength(2);
+      expect(JSON.stringify(fixture.requests[1]).split("B 在提交前中断。")).toHaveLength(2);
+    } finally {
+      await fixture.close();
+    }
+  },
+  30_000,
+);
 
 it("does not backfill a later retry's new message into the original failed run", async () => {
   const provider = createScriptedProvider();
@@ -71,7 +77,12 @@ it("does not backfill a later retry's new message into the original failed run",
       function originalSeed(request) {
         request.expectCancellation("Owner pause before the later input");
       },
-      function expandedRetry(_request) {},
+      function resumedOriginal(_request) {},
+      function finishArrivalNotice(request) {
+        expect(JSON.stringify(request.payload.input)).not.toContain("后来才加入的 B。");
+        request.text("只结束到达提示，正文继续排队。");
+      },
+      function laterInput(_request) {},
     ]);
     const observation = await driver.observe(agent);
     const seed = await driver.sendOwnerMessage(agent, "先处理种子 A。");
@@ -96,8 +107,12 @@ it("does not backfill a later retry's new message into the original failed run",
       original.id,
     );
     await environment.request(`/api/owner/agents/${agent.summary.id}/resume`, { method: "POST" });
-    const retry = await provider.waitFor(agent.summary.id, "expandedRetry");
-    expect(JSON.stringify(retry.payload.input)).toContain("后来才加入的 B。");
+    const retry = await provider.waitFor(agent.summary.id, "resumedOriginal");
+    expect(JSON.stringify(retry.payload.input)).not.toContain("后来才加入的 B。");
+    expect(JSON.stringify(retry.payload.input).split("先处理种子 A。")).toHaveLength(2);
+    retry.tools([{ name: "tools.list", input: {} }]);
+    const later = await provider.waitFor(agent.summary.id, "laterInput");
+    expect(JSON.stringify(later.payload.input).split("后来才加入的 B。")).toHaveLength(2);
     expect(retry.sessionId).toBe(pending.sessionId);
     await expect(driver.waitForRun(target, "failed", { timeoutMs: 100 })).rejects.toBeInstanceOf(
       ScenarioWaitError,
@@ -107,7 +122,7 @@ it("does not backfill a later retry's new message into the original failed run",
     ).not.toContain(original.id);
     const current = await driver.waitForRun(target, "running");
     expect(current.id).not.toBe(original.id);
-    retry.text("重试处理 A 和 B 后结束。");
+    later.text("在后续轮处理 B 后结束。");
     expect((await driver.waitForRun(target, "completed")).id).toBe(current.id);
     await provider.assertComplete();
   } finally {
@@ -118,7 +133,7 @@ it("does not backfill a later retry's new message into the original failed run",
 it("retains the actual seed association before input commit and across control-plane recovery", async () => {
   const fixture = await loopFixture(
     (_request, response) => respond(response, "恢复轮结束。"),
-    ", beforeSessionCommit: async entry => { if (entry.kind === 'message' && entry.message.role === 'user') { console.log('MATE_SCENARIO_INPUT_PENDING'); await new Promise(() => {}); } }",
+    ", beforeDurableCommit: async writes => { if (writes.some(write => write.type === 'submission' && write.value.type === 'input')) { console.log('MATE_SCENARIO_INPUT_PENDING'); await new Promise(() => {}); } }",
   );
   try {
     const agent = await fixture.agent("未提交输入");

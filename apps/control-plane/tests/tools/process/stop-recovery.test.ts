@@ -1,5 +1,5 @@
 import { toolTestInput } from "../../support/agent/tool-run.js";
-import { FixtureSession as AgentSession } from "../../support/agent/fixture-session.js";
+import { NativeToolSession } from "../../support/agent/native-tool-session.js";
 
 import { randomUUID, sign } from "node:crypto";
 
@@ -208,7 +208,7 @@ it("rechecks stopped scopes after a restarted node confirms an ordinary operatio
     app,
     reconnect,
     JSON.stringify({
-      type: "session.read",
+      type: "test.context",
       requestId: randomUUID(),
       runId: resumed.runId,
       agentId,
@@ -219,13 +219,12 @@ it("rechecks stopped scopes after a restarted node confirms an ordinary operatio
   const context = JSON.parse(reconnect.sent.at(-1)!);
   expect(JSON.stringify(context.messages)).toContain(secondStop.operationId);
   expect(JSON.stringify(context.messages)).toContain("old_command_may_still_run");
-  const session = new AgentSession(db);
-  for (const entry of session.pendingCorrections(agentId, resumed.runId))
+  const session = new NativeToolSession(db);
+  for (const entry of await session.pendingCorrections(agentId, resumed.runId))
     expect(
-      session.append(
+      await session.commit(
         { runId: resumed.runId, nodeId, agentId },
         {
-          kind: "message",
           id: entry.id,
           message: entry.message,
         },
@@ -245,7 +244,7 @@ it("rechecks stopped scopes after a restarted node confirms an ordinary operatio
     app,
     reconnect,
     JSON.stringify({
-      type: "session.read",
+      type: "test.context",
       requestId: randomUUID(),
       runId: resumed.runId,
       agentId,
@@ -254,22 +253,21 @@ it("rechecks stopped scopes after a restarted node confirms an ordinary operatio
     }),
   );
   const corrected = JSON.parse(reconnect.sent.at(-1)!);
-  const additions = session.pendingCorrections(agentId, resumed.runId);
+  const additions = await session.pendingCorrections(agentId, resumed.runId);
   expect(additions).toHaveLength(1);
   expect(JSON.stringify(additions)).toContain(secondStop.operationId);
   expect(JSON.stringify(additions)).toContain("succeeded");
   expect(JSON.stringify(corrected.messages)).toContain(JSON.stringify(additions[0]!.message));
   expect(
-    session.append(
+    await session.commit(
       { runId: resumed.runId, nodeId, agentId },
       {
-        kind: "message",
         id: additions[0]!.id,
         message: additions[0]!.message,
       },
     ),
   ).toBe(true);
   await toolTestInput(app, reconnect, JSON.stringify(lateStop));
-  expect(session.pendingCorrections(agentId, resumed.runId)).toEqual([]);
-  expect(JSON.stringify(session.read(agentId))).toContain("old_command_may_still_run");
+  expect(await session.pendingCorrections(agentId, resumed.runId)).toEqual([]);
+  expect(JSON.stringify(await session.context(agentId))).toContain("old_command_may_still_run");
 });

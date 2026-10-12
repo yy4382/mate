@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { join } from "node:path";
 import { queueUncertainOperationFacts } from "../../../src/runtime/recovery/context.js";
-import { FixtureSession as AgentSession } from "./fixture-session.js";
+import { NativeToolSession } from "./native-tool-session.js";
 import {
   createControlPlane,
   type ControlPlaneOptions,
@@ -82,19 +82,19 @@ export async function toolTestInput(
   const fixture = fixtures.get(app)!;
   if (input.type === "node.pair" || input.type === "node.authenticate")
     bindToolSocket(app, input.nodeId, socket);
-  if (input.type === "session.read") {
+  if (input.type === "test.context") {
     const db = new Database(fixture.path);
     try {
       queueUncertainOperationFacts(db, input.agentId, Date.now());
-      const session = new AgentSession(db);
+      const session = new NativeToolSession(db);
       const run = db
         .prepare("SELECT delivery_id FROM owner_agent_runs WHERE id=?")
         .get(input.runId) as { delivery_id: string };
       socket.sent.push(
         JSON.stringify({
           messages: [
-            ...session.context(input.agentId),
-            ...session.pendingCorrections(input.agentId, run.delivery_id),
+            ...(await session.context(input.agentId)),
+            ...(await session.pendingCorrections(input.agentId, run.delivery_id)),
           ],
         }),
       );
@@ -121,14 +121,14 @@ export async function toolTestInput(
         ...result,
       }),
     );
-  } else if (input.type === "session.append") {
+  } else if (input.type === "test.commit") {
     const db = new Database(fixture.path);
     try {
-      const accepted = new AgentSession(db).append(
+      const accepted = await new NativeToolSession(db).commit(
         { runId: input.runId, nodeId: socketNodes.get(socket)!, agentId: input.agentId },
         input.entry,
       );
-      socket.sent.push(JSON.stringify({ type: "session.commit", accepted }));
+      socket.sent.push(JSON.stringify({ type: "test.committed", accepted }));
     } finally {
       db.close();
     }

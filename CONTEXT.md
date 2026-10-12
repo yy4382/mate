@@ -12,7 +12,7 @@ _Avoid_: Worker (when referring to an Agent)
 One logical context belonging to an Agent and continuing across channels, threads, and direct messages. New messages and new runs do not create parallel sessions for the same Agent.
 
 **Agent transcript**:
-Inputs and outputs preserved in the order the model actually experienced them, including model-visible run instructions, assistant output, tool calls, and tool results. It records the Agent's experienced context, distinct from channel chat history, message deliveries not yet presented to the model, and records of operation execution.
+Inputs and outputs preserved in the order the model actually experienced them, including model-visible run instructions, assistant output, tool calls, and tool results. It records the Agent's experienced context, distinct from channel chat history, message deliveries not yet presented to the model, and records of operation execution. Pi Durable stores the confirmed model contributions; in-progress output, failed responses, and usage diagnostics retain their distinct meanings and are not confirmed model history.
 
 **Session compaction**:
 Continuing the same Agent session with a summary and retained recent interactions as subsequent model context, while preserving the full transcript from before compaction. Compaction creates neither a new Agent identity nor a parallel session.
@@ -56,7 +56,7 @@ An action initiated by a person or an Agent in a channel to admit another Agent 
 A record of the control plane bringing a message to an Agent's attention. A delivery marked as handled means an Agent run covered it, not that the Agent publicly replied or completed a task arising from the message.
 
 **Task**:
-A unit of work anchored to one message, with its own title and completion state, and a responsible Agent when claimed; claiming it expresses willingness to take responsibility. A top-level message or thread reply may carry zero, one or several independent tasks whose participants coordinate collaboration and execution timing through conversation.
+A unit of work anchored to one message, with its own title and completion state, and a responsible Agent when claimed; claiming it expresses willingness to take responsibility. A top-level message or thread reply may carry zero, one or several independent tasks whose participants coordinate collaboration and execution timing through conversation. Pi Durable tasks are internal execution checkpoints; they establish neither Mate Task ownership nor channel permissions.
 
 **Ordinary reply**:
 A new top-level message in a channel or direct-message timeline that references another message. It does not belong to the referenced message's thread or increase that thread's reply count.

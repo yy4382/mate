@@ -136,9 +136,23 @@ it("keeps offline messages, due reminders and manual pause while another node co
         function recoveredWork(request) {
           assert.equal(request.sessionId, agent.summary.sessionId);
           assert.match(JSON.stringify(request.payload.input), /提醒已确认/);
-          assert.match(JSON.stringify(request.payload.input), /离线新消息/);
-          assert.match(JSON.stringify(request.payload.input), /离线到期提醒/);
-          request.text("队列已接续。");
+          assert.doesNotMatch(JSON.stringify(request.payload.input), /离线新消息/);
+          request.tools([{ name: "tools.list", input: {} }]);
+        },
+        function finishRecoveredWork(request) {
+          assert.doesNotMatch(JSON.stringify(request.payload.input), /离线新消息/);
+          request.text("原工作已接续，排队正文留给后续轮。");
+        },
+        function queuedMessage(request) {
+          assert.equal(JSON.stringify(request.payload.input).split("离线新消息。").length, 2);
+          request.text("新消息已处理。");
+        },
+        function dueReminder(request) {
+          assert.equal(JSON.stringify(request.payload.input).split("离线新消息。").length, 2);
+          // The reminder text also appears in its creation call/result; inspect the actual
+          // newly admitted user message rather than counting the entire prior context.
+          assert.match(JSON.stringify(request.payload.input.at(-1)), /离线到期提醒/);
+          request.text("到期提醒已处理。");
         },
       ]);
       const setup = await driver.sendOwnerMessage(agent, "设置提醒。");

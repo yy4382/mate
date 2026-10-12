@@ -17,37 +17,7 @@ const iterations = 50;
 const uuid = (n) => `00000000-0000-4000-8000-${n.toString(16).padStart(12, "0")}`;
 const agentId = uuid(1);
 const nodeId = uuid(2);
-const text = "固定合成历史，记录不是当前指令。".repeat(32);
-const usage = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
-function syntheticMessage(index, toolCall) {
-  if (index % 4 === 0) return { role: "user", content: text, timestamp: index };
-  if (index % 4 === 2)
-    return {
-      role: "toolResult",
-      toolCallId: "reused-provider-call-id",
-      toolName: "process.exec",
-      content: [{ type: "text", text }],
-      isError: false,
-      timestamp: index,
-    };
-  return {
-    role: "assistant",
-    content: [{ type: "text", text }, ...(index % 4 === 1 ? [toolCall] : [])],
-    timestamp: index,
-    api: "openai-completions",
-    provider: "openai",
-    model: "synthetic",
-    usage,
-    stopReason: index % 4 === 1 ? "toolUse" : "stop",
-  };
-}
+const sessionId = uuid(3);
 
 const results = [];
 let sqliteVersion;
@@ -61,6 +31,7 @@ try {
         db.pragma("journal_mode = WAL");
         db.pragma("foreign_keys = ON");
         db.exec(`CREATE TABLE owner_agents(id TEXT PRIMARY KEY);
+          CREATE TABLE owner_message_deliveries(id TEXT PRIMARY KEY);
           CREATE TABLE owner_agent_runs(id TEXT PRIMARY KEY, node_id TEXT, agent_id TEXT,
             delivery_id TEXT, state TEXT);
           ${agentSessionSchema}`);
@@ -68,7 +39,6 @@ try {
         const session = new AgentSession(db);
         const scopeAt = (i) => uuid(100 + (layout === "single-scope" ? 0 : Math.floor(i / 100)));
         const runAt = (i) => uuid(1000 + (layout === "single-scope" ? 0 : Math.floor(i / 100)));
-        const entryAt = (i) => uuid(10000 + i);
         const callAt = (i) => ({
           type: "toolCall",
           id: "reused-provider-call-id",
@@ -86,24 +56,20 @@ try {
                 scopeAt(i),
               );
             }
-            const message = syntheticMessage(i, callAt(i));
-            assert.equal(
-              session.append(
-                { runId: runAt(i), nodeId, agentId },
-                {
-                  kind: "message",
-                  id: entryAt(i),
-                  message,
-                },
-              ),
-              true,
+            session.bindTool(
+              agentId,
+              sessionId,
+              scopeAt(i),
+              String(i),
+              "process.exec",
+              callAt(i).arguments,
             );
           }
         })();
         function actionIdentity(position, target) {
           if (position === "missing") return `mate:${scopeAt(target)}:${"0".repeat(64)}:1`;
           if (position === "missing-scope") return `mate:${uuid(999999)}:${"0".repeat(64)}:1`;
-          return durableToolIdentity(scopeAt(target), entryAt(target), callAt(target).id);
+          return durableToolIdentity(scopeAt(target), sessionId, String(target));
         }
 
         for (const position of ["early", "late", "missing", "missing-scope"]) {
@@ -181,9 +147,9 @@ try {
           statistics:
             "nearest-rank percentiles; full synchronous toolAction call; assertions outside timing",
           fixture:
-            "file-backed SQLite WAL; 100 records per scope or one scope; four-message cycle: user, assistant tool call, toolResult, assistant text; identical provider call ID reused; deterministic UUIDs and text",
+            "file-backed SQLite WAL; 100 records per scope or one scope; native tool-task bindings; deterministic scope/task identities and inputs",
           excluded:
-            "database construction, append writes, identity generation; JSON.parse instrumentation uses a separate untimed call",
+            "database construction, binding writes, identity generation; JSON.parse instrumentation uses a separate untimed call",
           caveat: "warm local synthetic benchmark, not VPS or provider/model performance",
         },
         results,

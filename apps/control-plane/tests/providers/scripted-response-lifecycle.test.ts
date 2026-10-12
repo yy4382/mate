@@ -67,7 +67,8 @@ it.each(["timeout", "closed"])(
         method: "POST",
         body: { text: "等待结果。" },
       });
-      const pending = await provider.waitFor(agent.summary.id, "pendingStep");
+      // The 300ms bound measures an admitted HTTP response, not Durable startup.
+      const pending = await provider.waitFor(agent.summary.id, "pendingStep", 5000);
       if (kind === "closed") await provider.close();
       expect(await pending.outcome).toEqual({ kind });
       expect(pending.signal.aborted).toBe(true);

@@ -1,5 +1,5 @@
 // Start both services as one ordinary account, pair over the real WebSocket, create Agents from the
-// owner web API, restart each service, and run the real control-plane Pi loop through a local
+// owner web API, restart each service, and run the real control-plane Durable loop through a local
 // scripted provider and an ordinary node command. No root or identity switch is involved.
 //
 // This check needs no root, no container and no service manager: run it as the ordinary account

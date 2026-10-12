@@ -25,7 +25,7 @@ import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { z } from "zod";
 import { WorkspaceImage } from "../workspaces/reads/image-result.js";
 import { buildAgentSystemPrompt, runNoticeMessage, type AgentProfile } from "../prompts/index.js";
-import { type SessionCommit, type ModelContextMessage } from "./session/record.js";
+import { type ModelContextMessage } from "./session/input.js";
 import { runtimeVersions } from "./build-identity.js";
 import { UsageObservations } from "./usage-observation.js";
 import {
@@ -47,6 +47,7 @@ const admissionDoc = defineDoc({
 export interface AgentLoopSpec {
   initialized: boolean;
   initializedNow(): void;
+  inputAccepted(deliveryId: string, submissionId: number): void;
   sessionId: string;
   storagePath: string;
   actionScopeId: string;
@@ -65,8 +66,6 @@ export interface AgentLoopTestDependencies {
   ) => Model<Api>;
   beforeDurableCommit?: (writes: readonly StorageWrite[]) => Promise<void>;
   afterDurableCommit?: (writes: readonly StorageWrite[]) => Promise<void>;
-  beforeSessionCommit?: (entry: SessionCommit) => Promise<void>;
-  afterSessionCommit?: (entry: SessionCommit) => Promise<void>;
   afterInputAccepted?: (requestId: string) => Promise<void>;
   beforeRunFinish?: () => Promise<void>;
   beforeRunStart?: (runId: string) => Promise<void>;
@@ -435,6 +434,7 @@ export class AgentLoop {
           { type: "input", requestId, content, whenBusy: "steer" },
           context,
         );
+        spec.inputAccepted(entry.id, submission.id);
         await test.afterInputAccepted?.(entry.id);
         submissions.push(submission);
       }

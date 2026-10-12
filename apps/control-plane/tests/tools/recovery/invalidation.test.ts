@@ -1,3 +1,4 @@
+import { readDurableEntries } from "../../support/facts/durable-session-facts.js";
 import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -547,13 +548,15 @@ it.each([
       expect(
         db.prepare("SELECT state,error_code FROM owner_agent_runs WHERE id=?").get(oldRun.runId),
       ).toEqual(interrupted);
-      expect(
-        db
-          .prepare(
-            "SELECT COUNT(*) AS n FROM owner_agent_session_records WHERE run_id=? AND json_extract(payload_json,'$.message.role')='toolResult'",
-          )
-          .get(oldRun.runId),
-      ).toEqual({ n: 0 });
+      const stoppedEntries = await readDurableEntries(directory, agentId);
+      // Durable may confirm cancellation/error diagnostics; a late operation receipt
+      // must never be presented as the stopped invocation's successful tool result.
+      for (const result of stoppedEntries
+        .flatMap((entry) => entry.model ?? [])
+        .filter((message) => message.role === "toolResult")) {
+        expect(result.isError).toBe(true);
+        expect(JSON.stringify(result.content)).not.toContain('"state":"succeeded"');
+      }
       if (cause === "pause") {
         const reconnectStart = wire.length;
         currentUpstream!.terminate();

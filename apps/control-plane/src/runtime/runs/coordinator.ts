@@ -334,6 +334,16 @@ export class AgentRunCoordinator {
               .prepare("INSERT OR IGNORE INTO owner_durable_session_bindings(agent_id) VALUES(?)")
               .run(candidate.agent_id);
           },
+          inputAccepted: (deliveryId, submissionId) => {
+            // Native submission is authoritative. Remember only which admitted run first
+            // acknowledged it; a lost acknowledgment is reconciled by requestId on recovery.
+            this.db
+              .prepare(
+                `INSERT OR IGNORE INTO owner_durable_input_bindings
+              (delivery_id,run_id,submission_id) VALUES(?,?,?)`,
+              )
+              .run(deliveryId, active.runId, submissionId);
+          },
           sessionId: candidate.session_id,
           storagePath: join(dirname(this.db.name), "durable", `${candidate.agent_id}.sqlite`),
           actionScopeId: candidate.delivery_id,

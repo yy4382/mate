@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import { loopFixture, respond } from "../support/agent/agent-loop.js";
 import { eventually } from "../support/environment/run-services.js";
 import { readFileSync, readdirSync } from "node:fs";
+import { readDurableEntries } from "../support/facts/durable-session-facts.js";
 import { join } from "node:path";
 
 it("control plane requests the provider while its web API responds and a silent Pi turn completes", async () => {
@@ -20,21 +21,21 @@ it("control plane requests the provider while its web API responds and a silent 
         `${String(error)}; runs=${JSON.stringify(
           fixture.db((db) => db.prepare("SELECT * FROM owner_agent_runs").all()),
         )}; transcript=${JSON.stringify(
-          fixture.db((db) =>
-            db.prepare("SELECT payload_json FROM owner_agent_session_records").all(),
-          ),
+          await readDurableEntries(fixture.directory, agent.id),
         )}; control=${fixture.control.text}`,
       );
     }
     const messages = await fixture.api(`/api/owner/channels/${agent.channelId}/messages`);
     expect(messages.messages).toHaveLength(1);
-    expect(
-      fixture.db((db) =>
-        db
-          .prepare("SELECT COUNT(*) AS n FROM owner_agent_session_records WHERE agent_id=?")
-          .get(agent.id),
-      ),
-    ).toEqual({ n: 0 });
+    const entries = await readDurableEntries(fixture.directory, agent.id);
+    expect(entries.flatMap((entry) => entry.model ?? [])).toContainEqual(
+      expect.objectContaining({
+        role: "assistant",
+        content: expect.arrayContaining([
+          expect.objectContaining({ type: "text", text: "我选择保持静默。" }),
+        ]),
+      }),
+    );
   } finally {
     await fixture.close();
   }

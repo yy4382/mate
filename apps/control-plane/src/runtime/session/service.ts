@@ -1,5 +1,5 @@
 import { receiptCorrectionMessage } from "../../prompts/index.js";
-import { type ModelContextMessage } from "./record.js";
+import { type ModelContextMessage } from "./input.js";
 import { durableToolIdentity } from "../tools/identity.js";
 import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
