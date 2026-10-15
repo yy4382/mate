@@ -144,7 +144,11 @@ export async function inspectSession(
       let requestThinkingLevel: string | null = null;
       for (const entry of entries) {
         const message = entry.model?.[0];
-        if (entry.kind === "pi.assistant" && message?.role === "assistant") {
+        if (
+          entry.conversationId === conversationId &&
+          entry.kind === "pi.assistant" &&
+          message?.role === "assistant"
+        ) {
           lastModel = { provider: message.provider, modelId: message.model };
           const request = z
             .object({ mateRequest: z.object({ thinkingLevel: z.string() }).nullable() })

@@ -392,7 +392,7 @@ pnpm --filter @mate/control-plane exec vitest run tests/files/recovery tests/too
 
 ## 工作助手与设置验证
 
-`tests/runs/working-subagents.test.ts`、`assistant-communication.test.ts` 和 `assistant-failure.test.ts` 通过 Owner API、真实 Durable、本地 HTTP/SSE 与真实 node 验证并行/递归工作、父空闲、通信、暂停、断连、重启和收据更正。`assistant-observation.test.ts` 核对全会话用量、并发摘要中断、历史与动态来源；`assistant-settings.test.ts` 用实际请求核对低/高/默认、模型/凭据更新、原输入与 provider session 保留，以及旧 prepared 请求在配置更新后崩溃恢复。网页 `tests/agents/agent-editor.test.ts` 验证能力选项、保存/刷新和不兼容模型切换。交付容器场景另验证工作助手留在原控制面挂载目录、SIGKILL 后原上下文与单次节点效果恢复。所有模型响应仍为合成脚本，不代表真实 provider 或 VPS。
+`tests/runs/working-subagents.test.ts` 和 `assistant-communication.test.ts` 通过 Owner API、真实 Durable、本地 HTTP/SSE 与真实 node 验证并行/递归工作、父空闲、通信、暂停、断连、重启和收据更正。`assistant-failure.test.ts` 另以原生 MemoryStorage 与模型流 stub 检查无正文 fault 等必要的适配契约，不是 HTTP/node 集成证据。`assistant-observation.test.ts` 核对全会话用量、并发摘要中断、历史与动态来源；`assistant-settings.test.ts` 用实际请求核对低/高/默认、模型/凭据更新、原输入与 provider session 保留，以及旧 prepared 请求在配置更新后崩溃恢复。网页 `tests/agents/agent-editor.test.ts` 验证能力选项、保存/刷新和不兼容模型切换。交付容器场景另验证工作助手留在原控制面挂载目录、SIGKILL 后原上下文与单次节点效果恢复。所有模型响应仍为合成脚本，不代表真实 provider 或 VPS。
 
 ## Agent 已确认历史检索
 

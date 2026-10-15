@@ -429,82 +429,91 @@ it("an assistant's shared seen flag cannot clear the parent's freshness check", 
   }
 }, 30000);
 
-it("unknown command facts return to the assistant that issued the effect before its next decision", async () => {
-  let release = "";
-  const children: string[] = [];
-  const roots: string[] = [];
-  const fixture = await loopFixture((request, response) => {
-    const input = JSON.stringify(request.input.filter((item) => item.role !== "system"));
-    if (
-      JSON.stringify(request.input.filter((item) => item.role === "user")[0]).includes(
-        "uncertain-child",
-      )
-    ) {
-      children.push(input);
-      if (input.includes("Mate 收据更正")) respond(response, "子已看到未知效果，不重复命令");
-      else if (!input.includes("function_call_output"))
-        respond(response, [
-          {
-            name: "tools.call",
-            input: {
-              name: "process.exec",
+it.each(["control-plane", "node"])(
+  "unknown command facts return to their original assistant after %s SIGKILL before its next decision",
+  async (crashed) => {
+    let release = "";
+    const children: string[] = [];
+    const roots: string[] = [];
+    const keys: unknown[] = [];
+    const fixture = await loopFixture((request, response) => {
+      const input = JSON.stringify(request.input.filter((item) => item.role !== "system"));
+      if (
+        JSON.stringify(request.input.filter((item) => item.role === "user")[0]).includes(
+          "uncertain-child",
+        )
+      ) {
+        children.push(input);
+        keys.push(request.prompt_cache_key);
+        if (input.includes("Mate 收据更正")) respond(response, "子已看到未知效果，不重复命令");
+        else if (!input.includes("function_call_output"))
+          respond(response, [
+            {
+              name: "tools.call",
               input: {
-                command:
-                  "printf 'once\\n' >> uncertain-child.txt; while [ ! -f release-uncertain ]; do sleep 0.025; done",
+                name: "process.exec",
+                input: {
+                  command:
+                    "printf 'once\\n' >> uncertain-child.txt; while [ ! -f release-uncertain ]; do sleep 0.025; done",
+                },
               },
             },
-          },
-        ]);
-      else respond(response, "子工具结束");
-    } else {
-      roots.push(input);
-      if (input.includes("function_call_output") || input.includes("[助手完成回报]"))
-        respond(response, "父保持空闲");
-      else
-        respond(response, [
-          {
-            name: "tools.call",
-            input: {
-              name: "spawn_agent",
-              input: { task_name: "uncertain", message: "uncertain-child", fork_turns: "none" },
+          ]);
+        else respond(response, "子工具结束");
+      } else {
+        roots.push(input);
+        if (input.includes("function_call_output") || input.includes("[助手完成回报]"))
+          respond(response, "父保持空闲");
+        else
+          respond(response, [
+            {
+              name: "tools.call",
+              input: {
+                name: "spawn_agent",
+                input: { task_name: "uncertain", message: "uncertain-child", fork_turns: "none" },
+              },
             },
-          },
-        ]);
-    }
-  });
-  try {
-    const agent = await fixture.agent();
-    release = join(agent.workspace, "release-uncertain");
-    await fixture.send(agent.channelId, "恢复原操作");
-    const { eventually } = await import("../support/environment/run-services.js");
-    await eventually(() => {
-      try {
-        return readFileSync(join(agent.workspace, "uncertain-child.txt"), "utf8") === "once\n"
-          ? true
-          : undefined;
-      } catch {
-        return undefined;
+          ]);
       }
-    }, "command effect before its receipt");
-    await fixture.restartControl();
-    await fixture.completed(agent.id);
-    expect(readFileSync(join(agent.workspace, "uncertain-child.txt"), "utf8")).toBe("once\n");
-    expect(children.at(-1)).toContain("operation_result_unproven");
-    expect(children.at(-1)).toContain("Mate 收据更正");
-    expect(roots.every((input) => !input.includes("operation_result_unproven"))).toBe(true);
-    writeFileSync(release, "release");
-    await eventually(
-      () =>
-        children.find((input) => input.includes('\\"state\\":\\"succeeded\\"')) ??
-        children.find((input) => input.includes('"state":"succeeded"')),
-      "late corrected receipt delivered to idle child",
-    );
-    expect(readFileSync(join(agent.workspace, "uncertain-child.txt"), "utf8")).toBe("once\n");
-  } finally {
-    if (release) writeFileSync(release, "release");
-    await fixture.close();
-  }
-}, 30000);
+    });
+    try {
+      const agent = await fixture.agent();
+      release = join(agent.workspace, "release-uncertain");
+      await fixture.send(agent.channelId, "恢复原操作");
+      const { eventually } = await import("../support/environment/run-services.js");
+      await eventually(() => {
+        try {
+          return readFileSync(join(agent.workspace, "uncertain-child.txt"), "utf8") === "once\n"
+            ? true
+            : undefined;
+        } catch {
+          return undefined;
+        }
+      }, "command effect before its receipt");
+      if (crashed === "node") await fixture.restartNode();
+      else await fixture.restartControl();
+      await fixture.completed(agent.id);
+      expect(readFileSync(join(agent.workspace, "uncertain-child.txt"), "utf8")).toBe("once\n");
+      expect(children.at(-1)).toContain("operation_result_unproven");
+      expect(children.at(-1)).toContain("Mate 收据更正");
+      expect(roots.every((input) => !input.includes("operation_result_unproven"))).toBe(true);
+      expect(new Set(keys).size).toBe(1);
+      writeFileSync(release, "release");
+      if (crashed === "control-plane")
+        await eventually(
+          () =>
+            children.find((input) => input.includes('\\"state\\":\\"succeeded\\"')) ??
+            children.find((input) => input.includes('"state":"succeeded"')),
+          "late corrected receipt delivered to idle child",
+        );
+      expect(readFileSync(join(agent.workspace, "uncertain-child.txt"), "utf8")).toBe("once\n");
+    } finally {
+      if (release) writeFileSync(release, "release");
+      await fixture.close();
+    }
+  },
+  30000,
+);
 
 it("name conflicts fail explicitly and a failed assistant is listed and reported once", async () => {
   let childRequests = 0;

@@ -130,6 +130,14 @@ function emptyCoverage(): SummaryCoverage {
   };
 }
 
+/** Request details remain ephemeral until their native response commits. */
+interface ModelRequestObservation {
+  summary: boolean;
+  providerSessionId: string | undefined;
+  thinkingLevel: ModelThinkingLevel;
+  signal: AbortSignal | undefined;
+}
+
 /** Availability belongs to the native response commit, never an independent request ledger. */
 export class UsageObservations {
   private readonly pending: {
@@ -137,26 +145,27 @@ export class UsageObservations {
     message: AssistantMessage;
     confirmed: boolean;
     reported: ReportedUsage | null;
-    request: {
-      summary: boolean;
-      providerSessionId: string | undefined;
-      thinkingLevel: ModelThinkingLevel;
-    };
+    request: ModelRequestObservation;
   }[] = [];
+
+  private forgetCancelledSummaries() {
+    for (let index = this.pending.length - 1; index >= 0; index--) {
+      const observation = this.pending[index]!;
+      if (observation.request.summary && observation.request.signal?.aborted)
+        this.pending.splice(index, 1);
+    }
+  }
 
   capture(
     message: AssistantMessage,
     reported: ReportedUsage | null,
     confirmed: boolean,
-    request: {
-      summary: boolean;
-      providerSessionId: string | undefined;
-      thinkingLevel: ModelThinkingLevel;
-    },
+    request: ModelRequestObservation,
   ) {
-    // Native compaction never records an aborted response. Keeping it pending could
+    this.forgetCancelledSummaries();
+    // Native compaction never records a revoked response. Keeping it pending could
     // associate the next completed summary with this interrupted request instead.
-    if (request.summary && message.stopReason === "aborted") return;
+    if (request.summary && (message.stopReason === "aborted" || request.signal?.aborted)) return;
     const id = randomUUID();
     Object.assign(message, { mateObservationId: id });
     this.pending.push({ id, message, reported, confirmed, request });
@@ -167,6 +176,7 @@ export class UsageObservations {
     writes: readonly StorageWrite[],
     context: Parameters<Storage["commit"]>[1],
   ) {
+    this.forgetCancelledSummaries();
     const committedIds: string[] = [];
     const prepared = (enriched: readonly StorageWrite[]) => ({
       writes: enriched,

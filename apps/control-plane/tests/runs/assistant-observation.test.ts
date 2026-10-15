@@ -1,6 +1,6 @@
 import type { ServerResponse } from "node:http";
 import { join } from "node:path";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import { loopFixture, respond } from "../support/agent/agent-loop.js";
 import { eventually } from "../support/environment/run-services.js";
@@ -71,6 +71,85 @@ it("keeps an interrupted assistant summary separate from a concurrent successful
     expect(usage.normal.tokens.allInput.value).toBe(230000 + (normal - 2) * 50);
     expect(usage.total.tokens.allInput.value).toBe(230200 + (normal - 2) * 50);
   } finally {
+    await fixture.close();
+  }
+}, 30000);
+
+it("does not attribute a completed but cancelled summary response to the same assistant's next summary", async () => {
+  const roots: ServerResponse[] = [];
+  let summaries = 0;
+  let firstSummary: ServerResponse | undefined;
+  const fixture = await loopFixture(
+    (request, response) => {
+      const input = JSON.stringify(request.input.filter((item) => item.role !== "system"));
+      if (JSON.stringify(request.input).includes("context summarization assistant")) {
+        if (++summaries === 1) firstSummary = response;
+        else respond(response, "ACCEPTED_SUMMARY", { inputTokens: 200 });
+      } else {
+        const first = JSON.stringify(request.input.filter((item) => item.role === "user")[0]);
+        if (first.includes("cancelled-summary-child") || first.includes("ACCEPTED_SUMMARY")) {
+          if (input.includes("ACCEPTED_SUMMARY")) respond(response, "子摘要后完成");
+          else
+            respond(response, [{ name: "tools.list", input: {} }], {
+              prefix: "x".repeat(100000),
+              inputTokens: 115000,
+            });
+        } else roots.push(response);
+      }
+    },
+    (directory) => `, afterModelResponse: async summary => {
+    if (!summary) return;
+    const { existsSync, writeFileSync } = await import("node:fs");
+    if (existsSync(${JSON.stringify(join(directory, "summary-observed"))})) return;
+    writeFileSync(${JSON.stringify(join(directory, "summary-observed"))}, "observed");
+    console.log("SUMMARY_RESPONSE_OBSERVED");
+    while (!existsSync(${JSON.stringify(join(directory, "release-summary"))})) await new Promise(resolve => setTimeout(resolve, 10));
+  }`,
+  );
+  const call = (response: ServerResponse, name: string, input: unknown) =>
+    respond(response, [{ name: "tools.call", input: { name, input } }]);
+  try {
+    const agent = await fixture.agent();
+    await fixture.send(agent.channelId, "同一助手取消摘要后继续");
+    call(await eventually(() => roots[0], "parent"), "spawn_agent", {
+      task_name: "summary",
+      message: "cancelled-summary-child",
+      fork_turns: "none",
+    });
+    respond(await eventually(() => firstSummary, "first summary"), "ABANDONED_SUMMARY", {
+      inputTokens: 100,
+    });
+    await fixture.control.waitFor(/SUMMARY_RESPONSE_OBSERVED/);
+    call(await eventually(() => roots[1], "parent after spawn"), "interrupt_agent", {
+      target: "summary",
+    });
+    const interrupted = await eventually(() => roots[2], "interrupt result");
+    writeFileSync(join(fixture.directory, "release-summary"), "release");
+    call(interrupted, "followup_task", { target: "summary", message: "重新继续同一上下文" });
+    let cursor = 3;
+    while (summaries < 2 || roots.length > cursor) {
+      const root = await eventually(() => roots[cursor], "parent followup/report");
+      cursor++;
+      respond(root, "主完成");
+      if (summaries >= 2) break;
+    }
+    await eventually(() => (summaries === 2 ? true : undefined), "second summary request");
+    // A result may wake the primary once more after its followup result.
+    for (let i = cursor; i < roots.length; i++) respond(roots[i]!, "主完成");
+    await expect
+      .poll(
+        async () => (await fixture.api(`/api/owner/agents/${agent.id}/usage`)).summary.requestCount,
+      )
+      .toBe(1);
+    const usage = await fixture.api(`/api/owner/agents/${agent.id}/usage`);
+    expect(usage.summary.tokens.allInput).toEqual({
+      value: 200,
+      knownRequests: 1,
+      missingRequests: 0,
+    });
+    expect(usage.summary.cacheHitRate.value).toBe(5 / 200);
+  } finally {
+    writeFileSync(join(fixture.directory, "release-summary"), "release");
     await fixture.close();
   }
 }, 30000);

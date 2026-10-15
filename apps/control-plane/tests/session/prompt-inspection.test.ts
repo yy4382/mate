@@ -180,3 +180,57 @@ it("inspects the adopted native model, prompt, tools and versions against real p
     await fixture.close();
   }
 }, 30000);
+
+it("does not report fork-inherited responses as the new assistant's own request configuration", async () => {
+  const { loopFixture, respond } = await import("../support/agent/agent-loop.js");
+  const { inspectSession } = await import("../../src/prompts/inspection.js");
+  const { openNodeSqliteDatabase } = await import("@earendil-works/pi-durable/storage/sqlite/node");
+  const { SqliteStorage } = await import("@earendil-works/pi-durable/storage/sqlite");
+  const { BACKGROUND_CONTEXT } = await import("@earendil-works/chord/context");
+  const { eventually } = await import("../support/environment/run-services.js");
+  const { join } = await import("node:path");
+  let fork = false;
+  let child: import("../support/agent/agent-loop.js").ProviderRequest | undefined;
+  const fixture = await loopFixture((request, response) => {
+    const users = JSON.stringify(request.input.filter((item) => item.role === "user"));
+    const input = JSON.stringify(request.input.filter((item) => item.role !== "system"));
+    if (users.includes("DIAGNOSTIC_FORK_CHILD")) child = request;
+    else if (!fork || input.includes("function_call_output")) respond(response, "父已确认响应");
+    else
+      respond(response, [
+        {
+          name: "tools.call",
+          input: {
+            name: "spawn_agent",
+            input: { task_name: "diagnostic", message: "DIAGNOSTIC_FORK_CHILD", fork_turns: "all" },
+          },
+        },
+      ]);
+  });
+  try {
+    const agent = await fixture.agent();
+    await fixture.send(agent.channelId, "确认父历史");
+    await fixture.completed(agent.id);
+    fork = true;
+    await fixture.send(agent.channelId, "创建继承助手");
+    await eventually(() => child, "assistant request held without a saved response");
+    const file = join(fixture.directory, "control-plane-data", "durable", `${agent.id}.sqlite`);
+    const storage = await SqliteStorage.open(await openNodeSqliteDatabase(file));
+    let id;
+    try {
+      id = (await storage.scanConversations({}, 10, undefined, BACKGROUND_CONTEXT)).items.find(
+        (item) => item.id !== 1,
+      )?.id;
+    } finally {
+      await storage.close(BACKGROUND_CONTEXT);
+    }
+    if (id === undefined) throw new Error("Missing native assistant identity");
+    const observed = await inspectSession(file, { conversationId: id, showContent: true });
+    expect(observed.model).toBeNull();
+    expect(observed.requestThinkingLevel).toBeNull();
+    expect(observed.configuredModel).toEqual({ provider: "openai", modelId: "gpt-4o-mini" });
+    expect(observed.systemPrompt).toBe(child!.input[0].content);
+  } finally {
+    await fixture.close();
+  }
+}, 30000);

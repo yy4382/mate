@@ -81,6 +81,7 @@ export interface AgentLoopTestDependencies {
   afterInputAccepted?: (requestId: string) => Promise<void>;
   beforeRunFinish?: () => Promise<void>;
   beforeAssistantInterrupt?: () => Promise<void>;
+  afterModelResponse?: (summary: boolean) => Promise<void>;
   beforeRunStart?: (runId: string) => Promise<void>;
   afterToolCallDelta?: (delta: { sessionId: string; toolCallId: string; delta: string }) => void;
 }
@@ -207,8 +208,11 @@ export class AgentLoop {
             summary,
             providerSessionId: options?.sessionId,
             thinkingLevel: options?.reasoning ?? "off",
+            signal: options?.signal,
           },
         );
+        if (test.afterModelResponse)
+          await this.whileCurrent(test.afterModelResponse(summary), options?.signal);
         return message;
       });
       stream.result = () => observed;
