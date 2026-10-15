@@ -390,6 +390,10 @@ pnpm --filter @mate/control-plane exec vitest run tests/files/recovery tests/too
 
 本地 macOS + Linux arm64 Docker 的通过只证明该混合拓扑；真正 Linux host 的证据须来自新提交的实际 CI。容器通过不代表 systemd 用户服务、linger、bootstrap／CLI 安装／整包更新／卸载、Ubuntu／Debian × x86_64／arm64 宿主矩阵、真实 provider、公开 HTTPS/Web Push 或 VPS 部署。
 
+## 工作助手与设置验证
+
+`tests/runs/working-subagents.test.ts`、`assistant-communication.test.ts` 和 `assistant-failure.test.ts` 通过 Owner API、真实 Durable、本地 HTTP/SSE 与真实 node 验证并行/递归工作、父空闲、通信、暂停、断连、重启和收据更正。`assistant-observation.test.ts` 核对全会话用量、并发摘要中断、历史与动态来源；`assistant-settings.test.ts` 用实际请求核对低/高/默认、模型/凭据更新、原输入与 provider session 保留，以及旧 prepared 请求在配置更新后崩溃恢复。网页 `tests/agents/agent-editor.test.ts` 验证能力选项、保存/刷新和不兼容模型切换。交付容器场景另验证工作助手留在原控制面挂载目录、SIGKILL 后原上下文与单次节点效果恢复。所有模型响应仍为合成脚本，不代表真实 provider 或 VPS。
+
 ## Agent 已确认历史检索
 
 Agent 通过 `tools.list` / `tools.describe` 发现 `history.search` 与 `history.read`，再由 `tools.call` 调用。两个工具沿用当前 run、node、Agent 核验，不接受目标 Agent 或目标原生 conversation；只观察调用者当前 conversation 的已确认原生历史（包括 fork 继承的已确认记录），助手不会查到未继承的主会话或同级助手历史。不改变注意力、任务、权限、压缩点或操作收据。配置、用量、失败响应、流式未确认片段和未消费的 pending correction 不在结果中。压缩只改变后续上下文，原记录 ID、时间和正文继续可读；旧历史不是当前指令或重新执行工具的授权。
