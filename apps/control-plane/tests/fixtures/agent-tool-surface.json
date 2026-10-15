@@ -26,6 +26,80 @@
     }
   },
   {
+    "name": "send_message",
+    "description": "向同属Agent的根或助手持久递送普通消息；忙中在安全点呈现，空闲只排队。target可为稳定身份、相对路径或/root绝对路径。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["target", "message"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "followup_task",
+    "description": "向助手追加工作；空闲时唤醒，忙中追加输入；不能指定/root。结果仍回报最初委派者。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["target", "message"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "interrupt_agent",
+    "description": "停止助手当前工作，保留身份和上下文，后代继续独立工作；不能指定/root。已执行节点效果不会撤销。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["target"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "wait_agent",
+    "description": "等待同属Agent的输入或完成变化；已有未呈现通知立即返回，旧已呈现结果不会重复唤醒。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "timeout_ms": {
+          "default": 30000,
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600000
+        }
+      },
+      "required": ["timeout_ms"],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "list_agents",
     "description": "列出同属一个Mate Agent的工作助手身份、任务路径及原生工作状态。",
     "inputSchema": {

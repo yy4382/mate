@@ -106,7 +106,7 @@ export class MessageWriter {
     agentId: string,
     operationId: string,
     state: "succeeded" | "failed",
-  ): void {
+  ) {
     const channel = this.directory.getOrCreateAgentDirectChannel(agentId);
     const at = this.now();
     const id = randomUUID();
@@ -143,7 +143,7 @@ export class MessageWriter {
       },
       at,
     );
-    if (!queued || !channel || channel.archived) return;
+    if (!queued.created || !channel || channel.archived) return queued.id;
     const text = `Mate 已核对操作 ${operationId} 的收据：${state === "succeeded" ? "成功" : "失败"}。完整更正将在后续模型上下文中呈现。`;
     this.db
       .transaction(() => {
@@ -175,6 +175,7 @@ export class MessageWriter {
         this.events.record("message.created", channel.id, message);
       })
       .immediate();
+    return queued.id;
   }
 
   createAgentToolMessage(

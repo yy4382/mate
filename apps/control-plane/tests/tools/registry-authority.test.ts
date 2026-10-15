@@ -72,6 +72,10 @@ it("refuses every registered operation and meta tool for ended, absent and anoth
   const inputs: Record<string, Record<string, unknown>> = {
     spawn_agent: { task_name: "refused", message: "Must not start" },
     list_agents: {},
+    send_message: { target: "helper", message: "Must not send" },
+    followup_task: { target: "helper", message: "Must not start" },
+    interrupt_agent: { target: "helper" },
+    wait_agent: { timeout_ms: 1 },
     "agents.list": {},
     "conversations.list": {},
     "conversations.read": { conversationId },

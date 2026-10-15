@@ -1,3 +1,4 @@
+import type { Context } from "@earendil-works/chord";
 import {
   assistantsDoc,
   createAssistantWork,
@@ -5,6 +6,7 @@ import {
   subagentTools,
   callAssistantTool,
   waitForAssistants,
+  wakeAssistantForRecovery,
 } from "./subagents.js";
 import { chmodSync, mkdirSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -76,12 +78,14 @@ export interface AgentLoopTestDependencies {
   afterDurableCommit?: (writes: readonly StorageWrite[]) => Promise<void>;
   afterInputAccepted?: (requestId: string) => Promise<void>;
   beforeRunFinish?: () => Promise<void>;
+  beforeAssistantInterrupt?: () => Promise<void>;
   beforeRunStart?: (runId: string) => Promise<void>;
   afterToolCallDelta?: (delta: { sessionId: string; toolCallId: string; delta: string }) => void;
 }
 export type AgentLoopResult = { ok: true } | { ok: false; code: string; reason?: string };
 export interface AgentLoopActions {
   isCurrent(): boolean;
+  recoverTools(taskIds: string[]): ModelContextMessage[];
   bindTool(
     taskId: string,
     operation: string,
@@ -102,8 +106,7 @@ export class AgentLoop {
   private sendNotice: ((conversationId: string, deliveryId: string) => Promise<void>) | undefined;
   private readonly controller = new AbortController();
   private readonly notices: { conversationId: string; deliveryId: string }[] = [];
-  async whileCurrent<T>(work: Promise<T>): Promise<T> {
-    const signal = this.controller.signal;
+  async whileCurrent<T>(work: Promise<T>, signal = this.controller.signal): Promise<T> {
     signal.throwIfAborted();
     let listener = () => {};
     try {
@@ -244,20 +247,73 @@ export class AgentLoop {
     };
     const ready = Promise.withResolvers<{ storage: Storage; harness: Harness }>();
     const assistantWork = createAssistantWork(() => this.whileCurrent(ready.promise));
-    const assistantInterrupt = createAssistantInterrupt(() => this.whileCurrent(ready.promise));
+    const publishToolRecovery = async (taskIds: string[], wake: boolean) => {
+      const facts = actions.recoverTools(taskIds);
+      if (this.controller.signal.aborted || !this.harness) return;
+      const { storage, harness } = await ready.promise;
+      const context = withAbortSignal(this.controller.signal, BACKGROUND_CONTEXT);
+      const root = await harness.root(context);
+      const identities = (await harness.snapshot(assistantsDoc, context))?.assistants ?? [];
+      for (const entry of facts) {
+        const id =
+          entry.conversationId === undefined || entry.conversationId === root.id
+            ? root.id
+            : identities.find((item) => item.id === entry.conversationId)?.id;
+        if (id === undefined) throw new Error("Recovery conversation missing");
+        const source = await harness.conversation(id, context);
+        if (!source) throw new Error("Recovery conversation missing");
+        const requestId = `delivery:${entry.id}`;
+        if (!(await storage.submissionByRequest(source.id, requestId, context)))
+          await source.submit(
+            { type: "write", requestId, entry: { kind: "mate.recovery", model: [entry.message] } },
+            context,
+          );
+        if (wake)
+          await wakeAssistantForRecovery(harness, assistantWork, source.id, entry.id, context);
+      }
+    };
+    const assistantInterrupt = createAssistantInterrupt(
+      async () => {
+        await test.beforeAssistantInterrupt?.();
+        return this.whileCurrent(ready.promise);
+      },
+      (taskIds) => publishToolRecovery(taskIds, false),
+    );
     const inputSchema = z.record(z.string(), z.unknown());
     const forward = async (
       api: import("@earendil-works/pi-durable").ToolExecutionApi,
       operation: string,
       input: Record<string, unknown>,
+      context: Context,
     ) => {
       assertAdvancing();
       const toolCallId = actions.bindTool(String(api.taskId), operation, input, api.conversationId);
       // Revoke the model invocation promptly; the dispatched domain operation keeps
       // recording its eventual receipt independently of this run's lifetime.
-      const result = await this.whileCurrent(
-        actions.executeTool({ toolCallId, conversationId: api.conversationId, operation, input }),
-      );
+      let cancelled = false;
+      const work = actions.executeTool({
+        toolCallId,
+        conversationId: api.conversationId,
+        operation,
+        input,
+      });
+      void work
+        .finally(async () => {
+          if (cancelled) await publishToolRecovery([String(api.taskId)], true);
+        })
+        .catch(() => {});
+      const signal = context.abortSignal
+        ? AbortSignal.any([context.abortSignal, this.controller.signal])
+        : this.controller.signal;
+      const result = await this.whileCurrent(work, signal).catch(async (error) => {
+        // Whole-Agent cancellation is reconciled by the existing admission path.
+        // Only an assistant-local interruption needs facts in this still-open Harness.
+        if (context.abortSignal?.aborted && !this.controller.signal.aborted) {
+          cancelled = true;
+          await publishToolRecovery([String(api.taskId)], false);
+        }
+        throw error;
+      });
       assertCurrent();
       if (!result.ok)
         return { isError: true, content: [{ type: "text" as const, text: result.error }] };
@@ -279,7 +335,7 @@ export class AgentLoop {
           parameters: Type.Object({}),
           replay: "safe",
           executionMode: "sequential",
-          execute: async (_input, api) => forward(api, "tools.list", {}),
+          execute: async (_input, api, context) => forward(api, "tools.list", {}, context),
         }),
         defineTool({
           name: "tools.describe",
@@ -287,7 +343,8 @@ export class AgentLoop {
           parameters: Type.Object({ name: Type.String({ minLength: 1, maxLength: 128 }) }),
           replay: "safe",
           executionMode: "sequential",
-          execute: async (input, api) => forward(api, "tools.describe", inputSchema.parse(input)),
+          execute: async (input, api, context) =>
+            forward(api, "tools.describe", inputSchema.parse(input), context),
         }),
         defineTool({
           name: "tools.call",
@@ -334,7 +391,7 @@ export class AgentLoop {
                 };
               }
             }
-            return forward(api, "tools.call", inputSchema.parse(input));
+            return forward(api, "tools.call", inputSchema.parse(input), context);
           },
         }),
       ],
@@ -472,45 +529,13 @@ export class AgentLoop {
       for (const entry of spec.messages.filter(
         (entry) => entry.recoveryFact && sourceFor(entry).id !== conversation.id,
       )) {
-        await conversation.commit(async (tx) => {
-          const identity = (await tx.doc(assistantsDoc)).assistants.find(
-            (item) => item.id === sourceFor(entry).id,
-          );
-          if (!identity) throw new Error("Recovery assistant missing");
-          const requestId = `recovery-wake:${entry.id}`;
-          let cursor;
-          do {
-            const page = await tx.scanTasks(
-              { kind: assistantWork.definition.name, conversationId: identity.parent },
-              100,
-              cursor,
-            );
-            if (
-              page.items.some(
-                (task) =>
-                  task.input &&
-                  typeof task.input === "object" &&
-                  !Array.isArray(task.input) &&
-                  task.input.requestId === requestId,
-              )
-            )
-              return;
-            cursor = page.next;
-          } while (cursor);
-          await tx.createTask(
-            assistantWork,
-            {
-              spawnTask: identity.spawnTask,
-              requestId,
-              message: "[恢复提示] 新的操作收据事实已写入本会话，请据此决定检查、补救或继续。",
-            },
-            {
-              ownership: { kind: "conversation" },
-              conversationId: identity.parent,
-              background: true,
-            },
-          );
-        }, context);
+        await wakeAssistantForRecovery(
+          harness,
+          assistantWork,
+          sourceFor(entry).id,
+          entry.id,
+          context,
+        );
       }
       canAdvance = true;
       ready.resolve({ storage, harness });

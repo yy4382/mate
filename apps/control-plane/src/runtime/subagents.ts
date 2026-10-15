@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { posix } from "node:path";
 import {
   GenerationTask,
+  AgentDoc,
+  ToolTask,
   LiveDoc,
   InboxDoc,
   UserEntry,
@@ -14,8 +16,9 @@ import {
   type Harness,
   type Storage,
   type SubmissionRecord,
+  type SubmissionId,
 } from "@earendil-works/pi-durable";
-import type { Context } from "@earendil-works/chord";
+import { copyJson, type Context } from "@earendil-works/chord";
 import { z } from "zod";
 
 export const subagentTools = {
@@ -150,47 +153,49 @@ export function createAssistantWork(ready: () => Promise<{ storage: Storage }>) 
           submissions.push(...page.items);
           cursor = page.next;
         } while (cursor);
-        // A failed provider response has no submission.answer, but its confirmed
-        // assistant entry carries the native generation task that settled the group.
-        const failure = await (async () => {
-          if (settled.status !== "done" && settled.entry !== undefined) {
-            for (const entry of history.entries) {
-              if (entry.id < settled.entry || !entry.byTaskId) continue;
-              const task = await storage.task(entry.byTaskId, context);
+        // Admission and post-tools handover place inputs before minting the next
+        // generation. Its ordered native ID therefore also binds failures without
+        // an assistant entry (including faulted/orphaned outcomes) to their inputs.
+        const failures: TaskId[] = [];
+        if (settled.status !== "done") {
+          let cursor;
+          do {
+            const page = await storage.scanTasks(
+              {
+                conversationId: identity.id,
+                kind: GenerationTask.definition.name,
+                status: "terminal",
+              },
+              100,
+              cursor,
+              context,
+            );
+            for (const task of page.items) {
               if (
-                task?.kind === GenerationTask.definition.name &&
                 task.state.status === "terminal" &&
-                task.state.outcome.status === "failed"
-              ) {
-                return entry;
-              }
+                task.state.outcome.status !== "completed" &&
+                task.state.outcome.status !== "aborted"
+              )
+                failures.push(task.id);
             }
-          }
-          return undefined;
-        })();
-        const previousFinal =
-          failure &&
-          history.entries
-            .filter(
-              (entry) =>
-                entry.id < failure.id &&
-                entry.byTaskId !== failure.byTaskId &&
-                entry.model?.some(
-                  (message) => message.role === "assistant" && message.stopReason !== "toolUse",
-                ),
-            )
-            .at(-1);
+            cursor = page.next;
+          } while (cursor);
+        }
+        const failureFor = (item: SubmissionRecord) => {
+          const entry = item.entry;
+          return entry === undefined ? undefined : failures.find((id) => id > entry);
+        };
+        const failure = failureFor(settled);
         const related = submissions.filter((item) =>
           settled.answer !== undefined
             ? item.answer === settled.answer
-            : failure && item.entry !== undefined
+            : failure !== undefined
               ? item.status === "unanswered" &&
                 item.reason === settled.reason &&
-                item.entry < failure.id &&
-                (!previousFinal || item.entry > previousFinal.id)
+                failureFor(item) === failure
               : item.id === settled.id,
         );
-        const completion = settled.answer ?? failure?.byTaskId ?? submission.id;
+        const completion = settled.answer ?? failure ?? submission.id;
         const reportText = `[助手完成回报] ${JSON.stringify({ id: identity.handle, path: identity.path, submissionIds: related.map((item) => item.id), status: settled.status === "done" ? "completed" : "failed", output: output ?? settled.detail ?? settled.reason ?? "" })}`;
         let report = await parent.submit(
           {
@@ -230,16 +235,72 @@ export function createAssistantWork(ready: () => Promise<{ storage: Storage }>) 
   });
 }
 
-export function createAssistantInterrupt(ready: () => Promise<{ harness: Harness }>) {
-  return defineTask<{ requestId: string; targets: TaskId[] }, { phase: "stop" }, null>({
+type InterruptedWork = {
+  conversationId: ConversationId;
+  owners: { taskId: TaskId; requestId: string }[];
+  inputs: SubmissionId[];
+};
+
+export function createAssistantInterrupt(
+  ready: () => Promise<{ harness: Harness; storage: Storage }>,
+  recoverTools: (taskIds: string[]) => Promise<void>,
+) {
+  return defineTask<{ requestId: string; work: InterruptedWork }, { phase: "stop" }, null>({
     name: "mate.assistant-interrupt",
     version: 1,
     initial: () => ({ phase: "stop" }),
     phases: {
       stop: async (task, runtime, context) => {
-        const { harness } = await ready();
-        for (const target of task.input.targets) await harness.abortTask(target, context);
-        for (const target of task.input.targets) await runtime.waitForTask(target, context);
+        const { harness, storage } = await ready();
+        const { work } = task.input;
+        // Stop input owners first so an intentional abort cannot create recovery input.
+        for (const owner of work.owners) await harness.abortTask(owner.taskId, context);
+        for (const owner of work.owners) await runtime.waitForTask(owner.taskId, context);
+        const inputs = new Set(work.inputs);
+        for (const owner of work.owners) {
+          let requestId = owner.requestId;
+          for (;;) {
+            const submission = await storage.submissionByRequest(
+              work.conversationId,
+              requestId,
+              context,
+            );
+            if (!submission) break;
+            inputs.add(submission.id);
+            if (submission.status !== "unanswered" || submission.reason !== "aborted") break;
+            requestId = `resume:${submission.id}`;
+          }
+        }
+        for (const id of inputs) await harness.abortSubmission(id, context, work.conversationId);
+        // Native generation IDs change after a tool round; the run's input identities do not.
+        // Retry the native abort when handover won the race, without touching later independent work.
+        for (;;) {
+          const live = await runtime.snapshot(LiveDoc, work.conversationId, context);
+          if (!live?.run?.inputs.some((id) => inputs.has(id))) break;
+          await harness.abortTask(live.run.taskId, context);
+          await runtime.waitForTask(live.run.taskId, context);
+        }
+        // A tool can finish its domain operation just as native cancellation wins its
+        // result commit. Recover from the operation ledger after native termination too.
+        const tools: string[] = [];
+        let cursor;
+        do {
+          const page = await storage.scanTasks(
+            {
+              conversationId: work.conversationId,
+              kind: ToolTask.definition.name,
+              status: "terminal",
+            },
+            100,
+            cursor,
+            context,
+          );
+          for (const tool of page.items)
+            if (tool.state.status === "terminal" && tool.state.outcome.status === "aborted")
+              tools.push(String(tool.id));
+          cursor = page.next;
+        } while (cursor);
+        await recoverTools(tools);
         await runtime.commit(
           () => ({ status: "terminal", outcome: { status: "completed", result: null } }),
           context,
@@ -301,11 +362,18 @@ export async function callAssistantTool(
         { spawnTask: api.taskId, message: args.message },
         { ownership: { kind: "conversation" }, background: true },
       );
-      const ownership = { kind: "task" as const, taskId: workTask };
+      // The persistent work task owns input/recovery/reporting, not the reusable
+      // conversation lifetime: aborting an old owner must not cascade into later work.
+      const ownership = { kind: "ownerless" as const };
       const child =
         args.fork_turns === "all" && cutoff !== undefined
           ? await tx.forkConversation(api.conversationId, cutoff, { ownership })
           : await tx.createConversation({ ownership });
+      if (args.fork_turns !== "all" || cutoff === undefined)
+        Object.assign(
+          await tx.doc(AgentDoc, child.id),
+          copyJson(await tx.doc(AgentDoc, api.conversationId)),
+        );
       const handle = randomUUID();
       identities.assistants.push({
         handle,
@@ -446,9 +514,9 @@ export async function callAssistantTool(
     }
     // Capture once before effects: replay cannot interrupt a later followup run.
     const captured =
-      (await api.memo<TaskId[]>("interrupt-targets", context)) ??
+      (await api.memo<InterruptedWork>("interrupt-targets", context)) ??
       (await api.commit(async (tx) => {
-        const found: TaskId[] = [];
+        const owners: InterruptedWork["owners"] = [];
         const live = await tx.doc(LiveDoc, target.id);
         let cursor;
         do {
@@ -478,12 +546,14 @@ export async function callAssistantTool(
               submission.status === "placed" ||
               submission.reason === "aborted"
             )
-              found.push(task.id);
+              owners.push({
+                taskId: task.id,
+                requestId: owner.data.requestId ?? `spawn:${target.spawnTask}`,
+              });
           }
           cursor = page.next;
         } while (cursor);
-        if (live.run) found.push(live.run.taskId);
-        return found;
+        return { conversationId: target.id, owners, inputs: [...(live.run?.inputs ?? [])] };
       }, context));
     const targets = await api.memo("interrupt-targets", captured, context);
     const interrupt = await api.commit(async (tx) => {
@@ -503,7 +573,7 @@ export async function callAssistantTool(
       } while (cursor);
       return tx.createTask(
         assistantInterrupt,
-        { requestId, targets },
+        { requestId, work: targets },
         { ownership: { kind: "conversation" }, background: true },
       );
     }, context);
@@ -549,8 +619,55 @@ export async function callAssistantTool(
 export async function waitForAssistants(harness: Harness, context: Context) {
   for (;;) {
     const graph = await harness.inspect(context);
-    const work = graph.tasks.filter((task) => task.record.kind === "mate.assistant-work");
+    const work = graph.tasks.filter(
+      (task) =>
+        task.record.kind === "mate.assistant-work" ||
+        task.record.kind === "mate.assistant-interrupt",
+    );
     if (!work.length) return;
     await Promise.all(work.map((task) => harness.waitForTask(task.record.id, context)));
   }
+}
+
+/** A receipt wakes its original assistant, keeping the original spawn parent as reporter. */
+export async function wakeAssistantForRecovery(
+  harness: Harness,
+  assistantWork: ReturnType<typeof createAssistantWork>,
+  conversationId: ConversationId,
+  factId: string,
+  context: Context,
+) {
+  const root = await harness.root(context);
+  if (conversationId === root.id) return;
+  await root.commit(async (tx) => {
+    const identity = (await tx.doc(assistantsDoc)).assistants.find(
+      (item) => item.id === conversationId,
+    );
+    if (!identity) throw new Error("Recovery assistant missing");
+    const requestId = `recovery-wake:${factId}`;
+    let cursor;
+    do {
+      const page = await tx.scanTasks(
+        { kind: assistantWork.definition.name, conversationId: identity.parent },
+        100,
+        cursor,
+      );
+      if (
+        page.items.some(
+          (task) => z.object({ requestId: z.literal(requestId) }).safeParse(task.input).success,
+        )
+      )
+        return;
+      cursor = page.next;
+    } while (cursor);
+    await tx.createTask(
+      assistantWork,
+      {
+        spawnTask: identity.spawnTask,
+        requestId,
+        message: "[恢复提示] 新的操作收据事实已写入本会话，请据此决定检查、补救或继续。",
+      },
+      { ownership: { kind: "conversation" }, conversationId: identity.parent, background: true },
+    );
+  }, context);
 }

@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { loopFixture, respond } from "../support/agent/agent-loop.js";
@@ -424,6 +424,7 @@ it("an assistant's shared seen flag cannot clear the parent's freshness check", 
 }, 30000);
 
 it("unknown command facts return to the assistant that issued the effect before its next decision", async () => {
+  let release = "";
   const children: string[] = [];
   const roots: string[] = [];
   const fixture = await loopFixture((request, response) => {
@@ -441,7 +442,10 @@ it("unknown command facts return to the assistant that issued the effect before 
             name: "tools.call",
             input: {
               name: "process.exec",
-              input: { command: "printf 'once\\n' >> uncertain-child.txt; sleep 1" },
+              input: {
+                command:
+                  "printf 'once\\n' >> uncertain-child.txt; while [ ! -f release-uncertain ]; do sleep 0.025; done",
+              },
             },
           },
         ]);
@@ -464,6 +468,7 @@ it("unknown command facts return to the assistant that issued the effect before 
   });
   try {
     const agent = await fixture.agent();
+    release = join(agent.workspace, "release-uncertain");
     await fixture.send(agent.channelId, "恢复原操作");
     const { eventually } = await import("../support/environment/run-services.js");
     await eventually(() => {
@@ -481,6 +486,7 @@ it("unknown command facts return to the assistant that issued the effect before 
     expect(children.at(-1)).toContain("operation_result_unproven");
     expect(children.at(-1)).toContain("Mate 收据更正");
     expect(roots.every((input) => !input.includes("operation_result_unproven"))).toBe(true);
+    writeFileSync(release, "release");
     await eventually(
       () =>
         children.find((input) => input.includes('\\"state\\":\\"succeeded\\"')) ??
@@ -489,6 +495,7 @@ it("unknown command facts return to the assistant that issued the effect before 
     );
     expect(readFileSync(join(agent.workspace, "uncertain-child.txt"), "utf8")).toBe("once\n");
   } finally {
+    if (release) writeFileSync(release, "release");
     await fixture.close();
   }
 }, 30000);

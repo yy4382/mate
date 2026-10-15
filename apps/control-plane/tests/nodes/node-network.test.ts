@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 import { it } from "vitest";
 import { runScenario } from "../support/scenario/scenario-evidence.js";
 import { waitForScenario, ScenarioWaitError } from "../support/scenario/scenario-driver.js";
-import { createScriptedProvider } from "../support/agent/scripted-provider.js";
+import {
+  createScriptedProvider,
+  type ScriptedRequest,
+} from "../support/agent/scripted-provider.js";
 import { readScenarioFacts } from "../support/facts/scenario-facts.js";
 import { readNetworkQueueFacts } from "../support/facts/scenario-network-facts.js";
 import { scriptedToolResultSchemas } from "../support/agent/scripted-tool-results.js";
@@ -118,6 +121,24 @@ it("keeps offline messages, due reminders and manual pause while another node co
         },
       ]);
       let reminderId = "";
+      const deferNotice = (request: ScriptedRequest) => {
+        const last = request.payload.input.at(-1);
+        if (!JSON.stringify(last).includes("[运行提示]")) return false;
+        const notice = z
+          .object({
+            role: z.literal("user"),
+            content: z
+              .array(z.object({ type: z.literal("input_text"), text: z.string() }))
+              .length(1),
+          })
+          .parse(last).content[0]!.text;
+        assert.ok(notice.startsWith(`[运行提示] 对话 ${agent.channelId} 有新消息到达。`));
+        assert.match(notice, /不含正文/);
+        assert.doesNotMatch(notice, /离线新消息|离线到期提醒/);
+        request.repeatStep();
+        request.text("保留新消息提示，排队正文仍留给后续轮。");
+        return true;
+      };
       provider.forAgent(agent, [
         function scheduleReminder(request) {
           request.call("reminders.create", {
@@ -144,10 +165,12 @@ it("keeps offline messages, due reminders and manual pause while another node co
           request.text("原工作已接续，排队正文留给后续轮。");
         },
         function queuedMessage(request) {
+          if (deferNotice(request)) return;
           assert.equal(JSON.stringify(request.payload.input).split("离线新消息。").length, 2);
           request.text("新消息已处理。");
         },
         function dueReminder(request) {
+          if (deferNotice(request)) return;
           assert.equal(JSON.stringify(request.payload.input).split("离线新消息。").length, 2);
           // The reminder text also appears in its creation call/result; inspect the actual
           // newly admitted user message rather than counting the entire prior context.

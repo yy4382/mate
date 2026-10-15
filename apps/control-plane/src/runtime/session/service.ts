@@ -45,7 +45,7 @@ export class AgentSession {
   }
 
   /** A restored receipt is pending information until a model actually consumes it. */
-  queueCorrection(agentId: string, result: unknown, timestamp: number): boolean {
+  queueCorrection(agentId: string, result: unknown, timestamp: number) {
     // The immutable transcript retains this identity even after the pending update is consumed
     // or compacted. Time is presentation metadata, never part of a recovery fact's identity.
     const canonical = (value: unknown): unknown => {
@@ -74,7 +74,7 @@ export class AgentSession {
       .update(agentId + "\0" + fact)
       .digest("hex");
     const id = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
-    return (
+    const created =
       this.db
         .prepare(
           `INSERT OR IGNORE INTO owner_agent_session_updates(id,agent_id,message_json,conversation_id)
@@ -85,8 +85,8 @@ export class AgentSession {
           agentId,
           JSON.stringify(receiptCorrectionMessage(fact, timestamp)),
           source?.conversation_id ?? 1,
-        ).changes > 0
-    );
+        ).changes > 0;
+    return { id, created };
   }
 
   pendingCorrections(agentId: string, actionScopeId: string): ModelContextMessage[] {

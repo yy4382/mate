@@ -220,14 +220,37 @@ it("recursive assistants communicate by path, keep descendants through interrupt
 
 it("root control and foreign targets fail explicitly while ordinary root messages remain possible", async () => {
   const roots: { request: ProviderRequest; response: ServerResponse }[] = [];
+  const foreignRequests: typeof roots = [];
+  let foreignFinished = false;
   let finish = false;
   const fixture = await loopFixture((request, response) => {
-    if (finish) respond(response, "完成");
-    else roots.push({ request, response });
+    const foreign = JSON.stringify(
+      request.input.filter((item) => item.role === "user")[0],
+    ).includes("FOREIGN_TEAM");
+    if (finish || (foreign && foreignFinished)) respond(response, "完成");
+    else (foreign ? foreignRequests : roots).push({ request, response });
   });
   try {
     const agent = await fixture.agent();
     const foreign = await fixture.agent();
+    await fixture.send(foreign.channelId, "FOREIGN_TEAM_ROOT");
+    call((await eventually(() => foreignRequests[0], "foreign root")).response, "spawn_agent", {
+      task_name: "foreign",
+      message: "FOREIGN_TEAM_CHILD",
+      fork_turns: "none",
+    });
+    await eventually(
+      () => (foreignRequests.length === 3 ? true : undefined),
+      "foreign assistant running",
+    );
+    const foreignResult = foreignRequests.find((item) =>
+      item.request.input.some((entry) => entry.type === "function_call_output"),
+    );
+    if (!foreignResult) throw new Error("Foreign assistant identity missing");
+    const foreignId = output(foreignResult.request).id;
+    foreignFinished = true;
+    for (const item of foreignRequests.slice(1)) respond(item.response, "foreign complete");
+    await fixture.completed(foreign.id);
     await fixture.send(agent.channelId, "无效目标");
     const requests = [
       {
@@ -238,7 +261,7 @@ it("root control and foreign targets fail explicitly while ordinary root message
       { name: "interrupt_agent", input: { target: "root" }, error: "cannot target root" },
       {
         name: "send_message",
-        input: { target: foreign.id, message: "跨Agent消息" },
+        input: { target: foreignId, message: "跨Agent消息" },
         error: "Unknown assistant target",
       },
       {
@@ -398,9 +421,12 @@ it("an assistant can interrupt its own work and a followup resumes it without re
     });
     const root = await eventually(() => roots[1], "root spawn result");
     const child = await eventually(() => children[0], "child");
+    respond(root.response, "父已空闲");
     call(child.response, "interrupt_agent", { target: "." });
     await fixture.control.waitFor(/SELF_INTERRUPTED/);
-    call(root.response, "followup_task", {
+    await fixture.completed(agent.id);
+    await fixture.send(agent.channelId, "继续自中断助手");
+    call((await eventually(() => roots[2], "new owner input")).response, "followup_task", {
       target: "self",
       message: "CONTINUE_AFTER_SELF_INTERRUPT",
     });
@@ -409,9 +435,246 @@ it("an assistant can interrupt its own work and a followup resumes it without re
     expect(JSON.stringify(continued.request.input)).toContain("CONTINUE_AFTER_SELF_INTERRUPT");
     finish = true;
     respond(continued.response, "子完成");
-    respond((await eventually(() => roots[2], "followup result")).response, "父完成");
+    respond((await eventually(() => roots[3], "followup result")).response, "父完成");
     await fixture.completed(agent.id);
   } finally {
+    await fixture.close();
+  }
+}, 30000);
+
+it("interrupt promptly preserves an in-flight node effect and delivers its late receipt to the issuing assistant", async () => {
+  const { existsSync, readFileSync, writeFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const roots: { request: ProviderRequest; response: ServerResponse }[] = [];
+  const children: typeof roots = [];
+  let finish = false;
+  let release = "";
+  const fixture = await loopFixture((request, response) => {
+    if (finish) return respond(response, "完成");
+    (JSON.stringify(request.input.filter((item) => item.role === "user")[0]).includes(
+      "pending-effect-child",
+    )
+      ? children
+      : roots
+    ).push({ request, response });
+  });
+  try {
+    const agent = await fixture.agent();
+    release = join(agent.workspace, "release-effect");
+    await fixture.send(agent.channelId, "中断节点工作");
+    call((await eventually(() => roots[0], "root")).response, "spawn_agent", {
+      task_name: "effect",
+      message: "pending-effect-child",
+      fork_turns: "none",
+    });
+    const root = await eventually(() => roots[1], "spawned");
+    call((await eventually(() => children[0], "child")).response, "process.exec", {
+      command:
+        "printf 'once\\n' >> pending-effect.txt; while [ ! -e release-effect ]; do sleep 0.05; done; printf 'LATE_RECEIPT\\n'",
+    });
+    await eventually(
+      () => (existsSync(join(agent.workspace, "pending-effect.txt")) ? true : undefined),
+      "effect before receipt",
+    );
+    call(root.response, "interrupt_agent", { target: "effect" });
+    const interrupted = await eventually(() => roots[2], "prompt interruption before receipt");
+    expect(output(interrupted.request)).toMatchObject({ status: "interrupted" });
+    expect(existsSync(release)).toBe(false);
+    call(interrupted.response, "followup_task", {
+      target: "effect",
+      message: "CONTINUE_AFTER_UNKNOWN",
+    });
+    const continued = await eventually(() => children[1], "assistant sees unknown effect");
+    expect(JSON.stringify(continued.request.input)).toContain("operation_result_unproven");
+    expect(JSON.stringify(continued.request.input)).toContain("pending-effect.txt");
+    respond(continued.response, "已看到未知效果");
+    const rootFollowup = await eventually(() => roots[3], "followup admitted");
+    writeFileSync(release, "release");
+    const corrected = await eventually(() => children[2], "late receipt wakes issuer");
+    expect(JSON.stringify(corrected.request.input)).toContain("LATE_RECEIPT");
+    expect(JSON.stringify(corrected.request.input)).toContain("succeeded");
+    expect(
+      roots.every((item) => !JSON.stringify(item.request.input).includes("LATE_RECEIPT")),
+    ).toBe(true);
+    expect(readFileSync(join(agent.workspace, "pending-effect.txt"), "utf8")).toBe("once\n");
+    finish = true;
+    respond(corrected.response, "收据已确认");
+    respond(rootFollowup.response, "根完成");
+    await fixture.completed(agent.id);
+  } finally {
+    if (release) writeFileSync(release, "release");
+    await fixture.close();
+  }
+}, 30000);
+
+it.each(["handover", "queued"])(
+  "interruption follows captured work through %s and leaves later work and passive messages intact",
+  async (mode) => {
+    const { existsSync, writeFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const roots: { request: ProviderRequest; response: ServerResponse }[] = [];
+    const children: typeof roots = [];
+    let finish = false;
+    let release = "";
+    const fixture = await loopFixture(
+      (request, response) => {
+        if (finish) return respond(response, "完成");
+        (JSON.stringify(request.input.filter((item) => item.role === "user")[0]).includes(
+          "race-child",
+        )
+          ? children
+          : roots
+        ).push({ request, response });
+      },
+      (directory) => {
+        release = join(directory, "interrupt-release");
+        return `, beforeAssistantInterrupt: async () => { console.log("INTERRUPT_CAPTURED"); const {existsSync} = await import("node:fs"); while (!existsSync(${JSON.stringify(release)})) await new Promise(resolve=>setTimeout(resolve,10)); }`;
+      },
+    );
+    try {
+      const agent = await fixture.agent();
+      await fixture.send(agent.channelId, "竞态工作");
+      call((await eventually(() => roots[0], "root")).response, "spawn_agent", {
+        task_name: "race",
+        message: "race-child",
+        fork_turns: "none",
+      });
+      const spawned = await eventually(() => roots[1], "spawned");
+      respond((await eventually(() => children[0], "child")).response, "INITIAL_DONE");
+      call(spawned.response, "wait_agent", { timeout_ms: 1000 });
+      let parent = await eventually(() => roots[2], "initial report");
+      if (!JSON.stringify(parent.request.input).includes("INITIAL_DONE")) {
+        call(parent.response, "wait_agent", { timeout_ms: 1000 });
+        parent = await eventually(() => roots[3], "initial report presented");
+      }
+      const rootStart = roots.length;
+      respond(parent.response, "初始工作完成");
+      await fixture.completed(agent.id);
+      await fixture.send(agent.channelId, "开始新工作");
+      call((await eventually(() => roots[rootStart], "new root")).response, "followup_task", {
+        target: "race",
+        message: "ACTIVE_WORK",
+      });
+      const active = await eventually(() => children[1], "active followup");
+      call(
+        (await eventually(() => roots[rootStart + 1], "active admitted")).response,
+        "followup_task",
+        { target: "race", message: "CANCEL_QUEUED_WORK" },
+      );
+      call(
+        (await eventually(() => roots[rootStart + 2], "queued admitted")).response,
+        "send_message",
+        { target: "race", message: "KEEP_PASSIVE_MESSAGE" },
+      );
+      call(
+        (await eventually(() => roots[rootStart + 3], "passive queued")).response,
+        "interrupt_agent",
+        { target: "race" },
+      );
+      await fixture.control.waitFor(/INTERRUPT_CAPTURED/);
+      let stale = active;
+      if (mode === "handover") {
+        call(active.response, "list_agents", {});
+        stale = await eventually(() => children[2], "successor generation after capture");
+        expect(JSON.stringify(stale.request.input)).toContain("CANCEL_QUEUED_WORK");
+      }
+      writeFileSync(release, "release");
+      const stopped = await eventually(() => roots[rootStart + 4], "interrupted");
+      expect(output(stopped.request)).toMatchObject({ status: "interrupted" });
+      call(stale.response, "process.exec", {
+        command: "printf forbidden > handover-forbidden.txt",
+      });
+      call(stopped.response, "followup_task", { target: "race", message: "INDEPENDENT_WORK" });
+      const continued = await eventually(
+        () => children[mode === "handover" ? 3 : 2],
+        "later independent work",
+      );
+      const input = JSON.stringify(continued.request.input);
+      expect(input).toContain("INDEPENDENT_WORK");
+      expect(input.split("KEEP_PASSIVE_MESSAGE")).toHaveLength(2);
+      if (mode === "queued") expect(input).not.toContain("CANCEL_QUEUED_WORK");
+      expect(existsSync(join(agent.workspace, "handover-forbidden.txt"))).toBe(false);
+      finish = true;
+      respond(continued.response, "新工作完成");
+      respond(
+        (await eventually(() => roots[rootStart + 5], "independent admitted")).response,
+        "根完成",
+      );
+      await fixture.completed(agent.id);
+    } finally {
+      if (release) writeFileSync(release, "release");
+      await fixture.close();
+    }
+  },
+  30000,
+);
+
+it("interrupting captured spawn work does not cancel independent work begun after its completion", async () => {
+  const { writeFileSync, readFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const roots: { request: ProviderRequest; response: ServerResponse }[] = [];
+  const workers: typeof roots = [];
+  const senders: typeof roots = [];
+  let finish = false;
+  let release = "";
+  const fixture = await loopFixture(
+    (request, response) => {
+      if (finish) return respond(response, "完成");
+      const first = JSON.stringify(request.input.filter((item) => item.role === "user")[0]);
+      (first.includes("original-worker")
+        ? workers
+        : first.includes("independent-sender")
+          ? senders
+          : roots
+      ).push({ request, response });
+    },
+    (directory) => {
+      release = join(directory, "interrupt-release");
+      return `, beforeAssistantInterrupt: async () => { console.log("SPAWN_CAPTURED"); const {existsSync} = await import("node:fs"); while(!existsSync(${JSON.stringify(release)})) await new Promise(resolve=>setTimeout(resolve,10)); }, afterDurableCommit: async writes => { if(writes.some(write=>write.type==="submission" && write.value.requestId?.startsWith("assistant-report:") && write.value.status==="queued")) console.log("ORIGINAL_REPORTED"); }`;
+    },
+  );
+  try {
+    const agent = await fixture.agent();
+    await fixture.send(agent.channelId, "旧工作捕获");
+    call((await eventually(() => roots[0], "root")).response, "spawn_agent", {
+      task_name: "worker",
+      message: "original-worker",
+      fork_turns: "none",
+    });
+    call((await eventually(() => roots[1], "worker spawned")).response, "spawn_agent", {
+      task_name: "sender",
+      message: "independent-sender",
+      fork_turns: "none",
+    });
+    const worker = await eventually(() => workers[0], "worker");
+    const sender = await eventually(() => senders[0], "sender");
+    call((await eventually(() => roots[2], "sender spawned")).response, "interrupt_agent", {
+      target: "worker",
+    });
+    await fixture.control.waitFor(/SPAWN_CAPTURED/);
+    respond(worker.response, "ORIGINAL_FINISHED");
+    await fixture.control.waitFor(/ORIGINAL_REPORTED/);
+    call(sender.response, "followup_task", {
+      target: "../worker",
+      message: "INDEPENDENT_AFTER_CAPTURE",
+    });
+    const independent = await eventually(() => workers[1], "independent worker started");
+    writeFileSync(release, "release");
+    const stopped = await eventually(() => roots[3], "old work interrupt completes");
+    expect(output(stopped.request)).toMatchObject({ status: "interrupted" });
+    call(independent.response, "process.exec", {
+      command: "printf 'new-work\\n' > independent-work.txt",
+    });
+    const afterEffect = await eventually(() => workers[2], "independent work remains authorized");
+    expect(readFileSync(join(agent.workspace, "independent-work.txt"), "utf8")).toBe("new-work\n");
+    expect(workers).toHaveLength(3);
+    finish = true;
+    respond(afterEffect.response, "独立工作完成");
+    respond(stopped.response, "根完成");
+    respond((await eventually(() => senders[1], "sender followup admitted")).response, "发送完成");
+    await fixture.completed(agent.id);
+  } finally {
+    if (release) writeFileSync(release, "release");
     await fixture.close();
   }
 }, 30000);

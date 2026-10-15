@@ -69,6 +69,7 @@ function createRequest(
   step: string,
   timeoutMs: number,
   fail: (error: ScriptedProviderError) => void,
+  repeat: () => void,
 ) {
   let state = z
     .enum(["pending", "responded", "cancelled", "closed", "timeout", "failed"])
@@ -77,6 +78,7 @@ function createRequest(
   let clientClosed = false;
   const lateReleases: z.output<typeof lateReleaseSchema>[] = [];
   let stepFinished = false;
+  let repeated = false;
   let responseOutput: readonly unknown[] | undefined;
   const { promise: finished, resolve: resolveFinished } = Promise.withResolvers<void>();
   const controller = new AbortController();
@@ -160,6 +162,13 @@ function createRequest(
     },
     result<S extends z.core.$ZodType>(name: string, schema: S) {
       return readScriptedToolResult(payload.input, name, schema);
+    },
+    /** Explicitly respond to a concurrent notice, then keep this expectation for the next request. */
+    repeatStep() {
+      if (state !== "pending" || repeated)
+        throw new Error("Repeat requires a fresh pending request");
+      repeated = true;
+      repeat();
     },
     text(text: string, options: { inputTokens?: number } = {}) {
       return send(text, undefined, options.inputTokens);
@@ -311,6 +320,7 @@ export function createScriptedProvider(options: { timeoutMs?: number } = {}) {
         step.name,
         timeoutMs,
         fail,
+        () => script.steps.unshift(step),
       );
       requests.push(request);
       for (const change of [...changes]) change();

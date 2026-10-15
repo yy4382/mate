@@ -1,3 +1,4 @@
+import { queueUncertainOperationFacts } from "../recovery/context.js";
 import type Database from "better-sqlite3";
 import type { OwnerChat } from "../../conversations/service.js";
 import { NodeDirectory } from "../../nodes/directory.js";
@@ -364,7 +365,27 @@ export class AgentRunCoordinator {
           modelId: candidate.model_id,
           apiKey,
         },
-        { isCurrent, bindTool, executeTool },
+        {
+          isCurrent,
+          bindTool,
+          executeTool,
+          recoverTools: (taskIds) => {
+            const facts = new Set(
+              queueUncertainOperationFacts(this.db, candidate.agent_id, Date.now(), {
+                taskIds,
+                confirmed: (operationId, state) =>
+                  this.chat.messages.notifyAgentReceiptCorrection(
+                    candidate.agent_id,
+                    operationId,
+                    state,
+                  ),
+              }),
+            );
+            return new AgentSession(this.db)
+              .pendingCorrections(candidate.agent_id, candidate.delivery_id)
+              .filter((entry) => facts.has(entry.id));
+          },
+        },
         this.testDependencies,
       );
       await this.testDependencies.beforeRunFinish?.();

@@ -8,8 +8,27 @@ export function queueUncertainOperationFacts(
   db: Database.Database,
   agentId: string,
   now: number,
-): void {
+  interrupted?: {
+    taskIds: readonly string[];
+    confirmed(operationId: string, state: "succeeded" | "failed"): string;
+  },
+) {
   const session = new AgentSession(db);
+  const facts: string[] = [];
+  const queue = (agentId: string, value: unknown, now: number) =>
+    facts.push(session.queueCorrection(agentId, value, now).id);
+  const operations =
+    interrupted &&
+    new Set(
+      interrupted.taskIds.flatMap((taskId) => {
+        const row = db
+          .prepare<unknown[], { operation_id: string }>(
+            "SELECT operation_id FROM owner_durable_tool_calls WHERE agent_id=? AND task_id=?",
+          )
+          .get(agentId, taskId);
+        return row ? [row.operation_id] : [];
+      }),
+    );
   const processes = db
     .prepare<
       unknown[],
@@ -25,10 +44,14 @@ export function queueUncertainOperationFacts(
     )
     .all(agentId);
   for (const row of processes) {
+    if (operations && !operations.has(row.operation_id)) continue;
     const request = parseHistory(row.request_json);
     const receipt = parseHistory(row.receipt_json);
-    if (["succeeded", "failed"].includes(row.state) && request.ok && receipt.ok) continue;
-    session.queueCorrection(
+    if ((row.state === "succeeded" || row.state === "failed") && request.ok && receipt.ok) {
+      if (interrupted) facts.push(interrupted.confirmed(row.operation_id, row.state));
+      continue;
+    }
+    queue(
       agentId,
       {
         operationId: row.operation_id,
@@ -51,9 +74,18 @@ export function queueUncertainOperationFacts(
     )
     .all(agentId);
   for (const row of stops) {
+    if (operations && !operations.has(row.operation_id)) continue;
     const receipt = parseHistory(row.receipt_json);
-    if (row.state === "succeeded" && receipt.ok) continue;
-    session.queueCorrection(
+    if (row.state === "succeeded" && receipt.ok) {
+      if (interrupted)
+        queue(
+          agentId,
+          { operationId: row.operation_id, state: row.state, receipt: receipt.value },
+          now,
+        );
+      continue;
+    }
+    queue(
       agentId,
       {
         operationId: row.operation_id,
@@ -82,10 +114,14 @@ export function queueUncertainOperationFacts(
   for (const row of files) {
     const parsed = parseHistory(row.result_json);
     const envelope = (parsed.ok && receiptEnvelopeSchema.safeParse(parsed.value).data) || {};
-    if (["succeeded", "failed"].includes(String(envelope.state))) continue;
     const operationId =
       typeof envelope.operationId === "string" ? envelope.operationId : row.action_id;
-    session.queueCorrection(
+    if (operations && !operations.has(operationId)) continue;
+    if (envelope.state === "succeeded" || envelope.state === "failed") {
+      if (interrupted) facts.push(interrupted.confirmed(operationId, envelope.state));
+      continue;
+    }
+    queue(
       agentId,
       {
         operationId,
@@ -103,6 +139,7 @@ export function queueUncertainOperationFacts(
       now,
     );
   }
+  return facts;
 }
 
 export function parseHistory(value: string | null): { ok: boolean; value: unknown } {
