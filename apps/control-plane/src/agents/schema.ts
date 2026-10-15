@@ -16,6 +16,7 @@ CREATE TABLE owner_agents (
   description TEXT NOT NULL,
   provider TEXT NOT NULL,
   model_id TEXT NOT NULL,
+  thinking_level TEXT NOT NULL DEFAULT 'default' CHECK(thinking_level IN ('default','low','medium','high')),
   initial_channel_id TEXT REFERENCES owner_channels(id),
   request_hash TEXT NOT NULL CHECK(length(request_hash) = 64),
   provision_request_id TEXT NOT NULL UNIQUE,

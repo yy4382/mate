@@ -153,7 +153,7 @@ pnpm test:linux-ordinary-command-failure
 
 # Agent token 与缓存统计
 
-所有者登录后，可携带登录 Cookie 请求 `GET /api/owner/agents/{agentId}/usage`。接口只读取指定 Agent 的 Durable 原生模型累计、已提交普通响应及 provider 可用性元数据；Agent 不存在返回 404，未登录返回 401。响应设置 `Cache-Control: no-store`，不提供网页面板。
+所有者登录后，可携带登录 Cookie 请求 `GET /api/owner/agents/{agentId}/usage`。接口汇总指定 Agent 的主会话与全部助手的 Durable 原生模型累计、已提交普通响应及 provider 可用性元数据。fork 继承的历史只计原 conversation 自己提交的响应一次；原生摘要可用性按 provider session 关联。Agent 不存在返回 404，未登录返回 401。响应设置 `Cache-Control: no-store`，不提供网页面板。
 
 普通响应及摘要的观察元数据与原生统计在同一提交内保存。摘要仅保留字段可用性、请求计数和加权缓存分母的聚合；其数值从原生 `pi.usage.models` 按 provider/model 扣除同一稳定提交范围内的全部普通响应，不使用历史工具过滤后的成功集合，也不包含 `pi.usage.tools`。不保留第二份请求或 transcript 账本。
 
@@ -189,9 +189,12 @@ pnpm prompt:inspect --entry /ABSOLUTE/private/system-entry.json --show-content
 ```sh
 pnpm prompt:inspect --session /ABSOLUTE/data/control-plane/durable/AGENT_ID.sqlite
 pnpm prompt:inspect --session /ABSOLUTE/data/control-plane/durable/AGENT_ID.sqlite --show-content
+pnpm prompt:inspect --session /ABSOLUTE/data/control-plane/durable/AGENT_ID.sqlite --conversation 2
 ```
 
-会话诊断区分最近普通响应的 `model` 和当前存储的 `configuredModel`；`runtimeVersions` 是最近准入保存的版本，`inspectorVersions` 是当前诊断命令的版本。系统提示和工具由已提交的原生系统变化重放，压缩前后均使用固定记录范围；默认只显示长度和数量，展开才输出原文与定义。
+会话诊断默认读取唯一主会话（ID 1），`--conversation ID` 明确选择同一库中的助手会话；输出 `conversationId`，未知 ID 拒绝。现有 Agent 动态的节点操作给出 `sourceConversationId`，网页同时标记主会话或工作助手。诊断区分该会话最近普通响应的 `model` 和当前存储的 `configuredModel`；`runtimeVersions` 是最近整组准入保存的版本，`inspectorVersions` 是当前诊断命令的版本。系统提示和工具由已提交的原生系统变化重放，压缩前后均使用固定记录范围；默认只显示长度和数量，展开才输出原文与定义。
+
+`configuredThinkingLevel` 显示该会话已采用的选择（默认或低/中/高），`requestThinkingLevel` 是最近保存普通响应对应请求的原生级别；默认对应 off，无可观察响应时为 `null`。它表示发送给 Pi 适配器的请求配置，不推断 provider 实际思考投入或跨模型等效力度。摘要继续使用 Durable 的原生策略，不另设摘要强度。
 
 单条 `pi.system` 记录是系统片段和工具定义的顺序增量，不是完整配置快照；默认只报告数量，显式显示内容时才输出片段与工具变化。诊断不输出无关字段，失败不回显文件名或输入内容。原文可能包含私密 profile，文件和输出都不应提交到 Git。旧 configuration 快照读取与旧摘要字节快照已删除；前缀、压缩和恢复行为由真实本地模型请求场景验证。
 
@@ -389,16 +392,16 @@ pnpm --filter @mate/control-plane exec vitest run tests/files/recovery tests/too
 
 ## Agent 已确认历史检索
 
-Agent 通过 `tools.list` / `tools.describe` 发现 `history.search` 与 `history.read`，再由 `tools.call` 调用。两个工具沿用当前 run、node、Agent 核验，不接受目标 Agent；只观察调用者自己的已确认 `kind=message` 原记录，不改变注意力、任务、权限、压缩点或操作收据。配置、用量、流式未确认片段和未消费的 pending correction 不在结果中。压缩只改变后续上下文，原记录 ID、来源、时间和正文继续可读；旧历史不是当前指令或重新执行工具的授权。
+Agent 通过 `tools.list` / `tools.describe` 发现 `history.search` 与 `history.read`，再由 `tools.call` 调用。两个工具沿用当前 run、node、Agent 核验，不接受目标 Agent 或目标原生 conversation；只观察调用者当前 conversation 的已确认原生历史（包括 fork 继承的已确认记录），助手不会查到未继承的主会话或同级助手历史。不改变注意力、任务、权限、压缩点或操作收据。配置、用量、失败响应、流式未确认片段和未消费的 pending correction 不在结果中。压缩只改变后续上下文，原记录 ID、时间和正文继续可读；旧历史不是当前指令或重新执行工具的授权。
 
-搜索和读取共用确定性文字投影：字符串正文保持原样；内容块按原顺序以换行分隔，`text` 只取文字，`toolCall` 写为 `工具调用 名称 (ID)` 加换行和 JSON 参数，其他块写为 `[非文字内容已省略]`。`toolResult` 在正文前写入 `工具结果 名称 (ID)`。图片、隐藏思维、协议签名及其他扩展字段不输出。原正文中的频道及可见范围标记不从当前对话状态重建。结果同时给出记录 `id`、`agentId`、`seq`、`runId`、`actionScopeId`、`role`、原消息 `timestamp`、持久确认 `confirmedAt`（均为 Unix 毫秒时间）及 assistant 的 `toolCalls` 或结果的 `toolCallId` / `toolName` / `isError`。
+搜索和读取共用确定性文字投影：字符串正文保持原样；内容块按原顺序以换行分隔，`text` 只取文字，`toolCall` 写为 `工具调用 名称 (ID)` 加换行和 JSON 参数，其他块写为 `[非文字内容已省略]`。`toolResult` 在正文前写入 `工具结果 名称 (ID)`。图片、隐藏思维、协议签名及其他扩展字段不输出。原正文中的频道及可见范围标记不从当前对话状态重建。结果给出记录 `id`、`agentId`、原生记录号 `seq`、`role`、原消息 `timestamp`（Unix 毫秒）及 assistant 的 `toolCalls` 或结果的 `toolCallId` / `toolName` / `isError`。
 
 `history.search({query, cursor?})` 使用大小写敏感的字面子串，不解释正则。空字符串及包含未配对代理字符的查询拒绝。每次按 `seq` 升序扫描最多 100 条，返回最多 20 条，每条只报首个命中。`match` 为完整命中的 `[start,end)`；`excerpt` 带文字和自己的 `[start,end)`，最多 400 个 UTF-16 代码单元，命中前保留最多约 100 单元，边界不切代理对。长查询的命中可超过摘录，应按 ID 续读。所有范围均从投影文字的 0 开始。
 
-首请求固定调用者当时最高消息 `seq`；原样携返回的 `nextCursor` 和同一查询继续，直到 `nextCursor=null`。游标包含 Agent、原查询、固定上界 `through` 和已扫描位置 `after`，不是权限凭证；服务端校验字段类型、非负安全整数、`after<=through`、上界未超出自己的已确认记录，以及 Agent/查询匹配。空命中但游标非空时仍可继续；命中满 20 条只推进到最后处理的记录，新追加消息需新搜索。
+首请求固定调用者当时最高消息 `seq`；原样携返回的 `nextCursor` 和同一查询继续，直到 `nextCursor=null`。游标包含 Agent、当前原生 conversation、原查询、固定上界 `through` 和已扫描位置 `after`，不是权限凭证；服务端校验字段类型、非负安全整数、`after<=through`、上界未超出自己的已确认记录，以及 Agent/conversation/查询匹配。空命中但游标非空时仍可继续；命中满 20 条只推进到最后处理的记录，新追加消息需新搜索。
 
-`history.read({id, offset?, maxChars?})` 默认从 0 返回最多 8,000 个 UTF-16 代码单元，`maxChars` 为 2 至 16,000。返回 `text`、`offset`、`nextOffset`、`totalLength` 和同 Agent 的 `previousId` / `nextId`；按 `nextOffset` 续读不会静默丢失尾部。offset 等于总长度时返回空片段和 `nextOffset=null`，超界或位于代理对中间则拒绝。未知记录 ID 和他人记录 ID 使用同一拒绝。
+`history.read({id, offset?, maxChars?})` 默认从 0 返回最多 8,000 个 UTF-16 代码单元，`maxChars` 为 2 至 16,000。返回 `text`、`offset`、`nextOffset`、`totalLength` 和当前 conversation 的 `previousId` / `nextId`；按 `nextOffset` 续读不会静默丢失尾部。offset 等于总长度时返回空片段和 `nextOffset=null`，超界或位于代理对中间则拒绝。未知记录 ID 和他人记录 ID 使用同一拒绝。
 
 这些限制是观察分页约束，不是 Agent 运行或用量额度。100 条记录的上限不保证固定 CPU、内存或读取字节成本：巨型原消息仍需读取、解析并构造整个文字投影，分段阅读也有这一成本；首版不引入全文索引或改写原始历史。
 
-当前运行职责见 [ADR-0010](adr/0010-durable-agent-runtime.md)。业务库格式 revision 34 拒绝旧开发数据：停止服务，保留并移开旧数据目录，再使用账号拥有的新空目录重新初始化（步骤见 [运维说明](OPERATIONS.md)）。不得删除原文件、恢复旧表读取器或把新库覆盖到旧目录。
+当前运行职责见 [ADR-0010](adr/0010-durable-agent-runtime.md)。业务库拒绝旧开发格式：停止服务，保留并移开旧数据目录，再使用账号拥有的新空目录重新初始化（步骤见 [运维说明](OPERATIONS.md)）。不得删除原文件、恢复旧表读取器或把新库覆盖到旧目录。

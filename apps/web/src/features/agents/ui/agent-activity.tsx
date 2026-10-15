@@ -110,6 +110,13 @@ export function AgentActivity({ agentId }: { agentId: string }) {
                 <time dateTime={new Date(event.at).toISOString()}>
                   {new Date(event.at).toLocaleString("zh-CN")}
                 </time>
+                {event.sourceConversationId !== undefined && (
+                  <span>
+                    {event.sourceConversationId === 1
+                      ? "主会话"
+                      : `工作助手 · 会话 ${event.sourceConversationId}`}
+                  </span>
+                )}
                 <span>{event.summary}</span>
                 {expanded && event.detail !== undefined && (
                   <pre>{JSON.stringify(event.detail, null, 2)}</pre>

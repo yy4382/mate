@@ -1,4 +1,4 @@
-import { agentProvisioningStageSchema } from "@mate/protocol/owner";
+import { agentProvisioningStageSchema, agentThinkingLevelSchema } from "@mate/protocol/owner";
 import { z } from "zod";
 import type Database from "better-sqlite3";
 import { createHash, randomUUID } from "node:crypto";
@@ -24,6 +24,7 @@ const agentRowSchema = z.looseObject({
   description: z.string(),
   provider: z.string(),
   model_id: z.string(),
+  thinking_level: agentThinkingLevelSchema,
   initial_channel_id: z.string().nullable(),
   session_id: z.string(),
   provision_request_id: z.string(),
@@ -76,7 +77,7 @@ export interface PreparedAgentProvision {
  * a credential the owner adds or removes is visible on the very next read.
  */
 const agentRowQuery = `
-  SELECT a.id,a.node_id,a.name,a.role,a.description,a.provider,a.model_id,
+  SELECT a.id,a.node_id,a.name,a.role,a.description,a.provider,a.model_id,a.thinking_level,
          a.initial_channel_id,s.id AS session_id,a.provision_request_id,a.request_hash,
          a.stage,a.error,n.linux_username,n.uid,n.gid,a.home,a.home_marker,
          a.created_at,a.updated_at,
@@ -127,8 +128,10 @@ export class AgentDirectory {
   updateModel(id: string, model: NewAgentRequest["model"]): AgentSummary | undefined {
     if (!this.read(id)) return undefined;
     this.db
-      .prepare("UPDATE owner_agents SET provider=?,model_id=?,updated_at=? WHERE id=?")
-      .run(model.provider, model.id, this.now(), id);
+      .prepare(
+        "UPDATE owner_agents SET provider=?,model_id=?,thinking_level=?,updated_at=? WHERE id=?",
+      )
+      .run(model.provider, model.id, model.thinkingLevel ?? "default", this.now(), id);
     return this.get(id);
   }
 
@@ -190,9 +193,9 @@ export class AgentDirectory {
         this.db
           .prepare(
             `INSERT INTO owner_agents(
-              id,node_id,name,role,description,provider,model_id,initial_channel_id,
+              id,node_id,name,role,description,provider,model_id,thinking_level,initial_channel_id,
               request_hash,provision_request_id,stage,created_at,updated_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,'queued',?,?)`,
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,'queued',?,?)`,
           )
           .run(
             input.id,
@@ -202,6 +205,7 @@ export class AgentDirectory {
             input.description,
             input.model.provider,
             input.model.id,
+            input.model.thinkingLevel ?? "default",
             input.initialChannelId ?? null,
             requestHash,
             requestId,
@@ -327,7 +331,11 @@ function toAgent(row: AgentRow): AgentSummary {
     name: row.name,
     role: row.role,
     description: row.description,
-    model: { provider: row.provider, id: row.model_id },
+    model: {
+      provider: row.provider,
+      id: row.model_id,
+      ...(row.thinking_level === "default" ? {} : { thinkingLevel: row.thinking_level }),
+    },
     initialChannelId: row.initial_channel_id,
     sessionId: row.session_id,
     status: deriveStatus(row.stage, row.provider_credential === 1),
@@ -360,7 +368,11 @@ function hashRequest(input: NewAgentRequest): string {
     name: input.name,
     role: input.role,
     description: input.description,
-    model: { provider: input.model.provider, id: input.model.id },
+    model: {
+      provider: input.model.provider,
+      id: input.model.id,
+      thinkingLevel: input.model.thinkingLevel ?? "default",
+    },
     initialChannelId: input.initialChannelId ?? null,
   });
   return createHash("sha256").update(canonical).digest("hex");

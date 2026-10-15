@@ -34,6 +34,7 @@ export const activityPageSchema = z.looseObject({
       sequence: z.number(),
       summary: z.string(),
       at: z.number(),
+      sourceConversationId: z.number().int().positive().optional(),
       detail: z.unknown().optional(),
     }),
   ),

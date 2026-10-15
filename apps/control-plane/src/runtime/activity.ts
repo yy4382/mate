@@ -7,6 +7,7 @@ export interface AgentActivityEvent {
   summary: string;
   detail?: unknown;
   at: number;
+  sourceConversationId?: number;
 }
 
 /** The safe summary is stored separately from owner-only operation detail. */
@@ -57,11 +58,16 @@ export function listAgentActivity(
         summary: string;
         detail_json: string | null;
         created_at: number;
+        conversation_id: number | null;
       }
     >(
-      `SELECT seq,kind,reference_id,summary,detail_json,created_at FROM owner_agent_activity
-     WHERE (agent_id=? OR (agent_id IS NULL AND node_id=?)) AND seq<?
-     ORDER BY seq DESC LIMIT ?`,
+      `SELECT activity.seq,activity.kind,activity.reference_id,activity.summary,
+              activity.detail_json,activity.created_at,tool.conversation_id
+       FROM owner_agent_activity activity
+       LEFT JOIN owner_durable_tool_calls tool
+         ON tool.agent_id=activity.agent_id AND tool.operation_id=activity.reference_id
+       WHERE (activity.agent_id=? OR (activity.agent_id IS NULL AND activity.node_id=?)) AND activity.seq<?
+       ORDER BY activity.seq DESC LIMIT ?`,
     )
     .all(agentId, agent.node_id, before ?? Number.MAX_SAFE_INTEGER, limit);
   return rows.map((row) => ({
@@ -70,6 +76,7 @@ export function listAgentActivity(
     referenceId: row.reference_id,
     summary: row.summary,
     at: row.created_at,
+    ...(row.conversation_id === null ? {} : { sourceConversationId: row.conversation_id }),
     ...(expanded && row.detail_json !== null ? { detail: JSON.parse(row.detail_json) } : {}),
   }));
 }

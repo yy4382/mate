@@ -5,7 +5,7 @@ import { createElement, useEffect, useState } from "react";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { AgentEditor } from "../../src/features/agents/ui/agent-editor.js";
 import { agentSchema } from "../../src/features/agents/agent-responses.js";
-import { modelCredentialSummarySchema } from "@mate/protocol/owner";
+import { modelCredentialSummarySchema, modelProviderSummarySchema } from "@mate/protocol/owner";
 
 const scheduler = vi.hoisted(() => {
   const immediate = globalThis.setImmediate;
@@ -228,4 +228,64 @@ it("saves profile fields and configured models separately and synchronizes later
   for (const name of ["保存名称", "保存角色", "保存描述", "切换模型"]) {
     expect(screen.getByRole("button", { name })).toHaveProperty("disabled", true);
   }
+});
+
+it("saves supported thinking levels and requires an explicit compatible selection when switching models", async () => {
+  const writes: unknown[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      writes.push(JSON.parse(String(init?.body)));
+      return Response.json({});
+    }),
+  );
+  const providers = [
+    {
+      id: "openai",
+      name: "OpenAI",
+      models: [
+        { id: "gpt-5-mini", name: "GPT-5 mini", thinkingLevels: ["low", "medium", "high"] },
+        { id: "gpt-4o-mini", name: "GPT-4o mini", thinkingLevels: [] },
+      ],
+    },
+  ];
+  const props = {
+    agent: agentSchema.parse({
+      ...agent,
+      model: { provider: "openai", id: "gpt-5-mini", thinkingLevel: "low" },
+    }),
+    providers: modelProviderSummarySchema.array().parse(providers),
+    credentials: modelCredentialSummarySchema
+      .array()
+      .parse([{ provider: "openai", configured: true, updatedAt: 1 }]),
+    refresh: async () => {},
+  };
+  const view = render(createElement(AgentEditor, props));
+  const user = userEvent.setup();
+  expect(screen.getByRole("combobox", { name: "Partner 思考强度" })).toHaveProperty("value", "low");
+  await user.selectOptions(screen.getByRole("combobox", { name: "Partner 思考强度" }), "high");
+  await user.click(screen.getByRole("button", { name: "切换模型" }));
+  await waitFor(() =>
+    expect(writes.at(-1)).toEqual({ provider: "openai", id: "gpt-5-mini", thinkingLevel: "high" }),
+  );
+  view.rerender(
+    createElement(AgentEditor, {
+      ...props,
+      agent: agentSchema.parse({
+        ...props.agent,
+        model: { ...props.agent.model, thinkingLevel: "high" },
+      }),
+    }),
+  );
+  expect(screen.getByRole("combobox", { name: "Partner 思考强度" })).toHaveProperty(
+    "value",
+    "high",
+  );
+  await user.selectOptions(screen.getByRole("combobox", { name: "Partner 模型" }), "gpt-4o-mini");
+  expect(screen.getByRole("button", { name: "切换模型" })).toHaveProperty("disabled", true);
+  expect(screen.getByText(/当前模型不支持已选思考强度/)).toBeTruthy();
+  await user.selectOptions(screen.getByRole("combobox", { name: "Partner 思考强度" }), "default");
+  expect(screen.queryByRole("option", { name: "低" })).toBeNull();
+  await user.click(screen.getByRole("button", { name: "切换模型" }));
+  await waitFor(() => expect(writes.at(-1)).toEqual({ provider: "openai", id: "gpt-4o-mini" }));
 });

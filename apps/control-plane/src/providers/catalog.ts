@@ -1,4 +1,6 @@
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import { agentThinkingEffortSchema } from "@mate/protocol/owner";
 
 const modelRegistry = builtinModels();
 
@@ -9,9 +11,13 @@ export const supportedModelProviders = modelRegistry
   .map((provider) => ({
     id: provider.id,
     name: provider.name,
-    models: modelRegistry
-      .getModels(provider.id)
-      .map((model) => ({ id: model.id, name: model.name })),
+    models: modelRegistry.getModels(provider.id).map((model) => ({
+      id: model.id,
+      name: model.name,
+      thinkingLevels: agentThinkingEffortSchema.options.filter((level) =>
+        getSupportedThinkingLevels(model).includes(level),
+      ),
+    })),
   }))
   .filter((provider) => provider.models.length > 0)
   .sort((left, right) => left.id.localeCompare(right.id));
@@ -29,4 +35,14 @@ export function isSupportedModelProvider(provider: string): boolean {
 
 export function isSupportedModel(provider: string, modelId: string): boolean {
   return supportedModels.has(`${provider}:${modelId}`);
+}
+
+export function isSupportedThinkingLevel(provider: string, modelId: string, level: string) {
+  const model = supportedModelProviders
+    .find((item) => item.id === provider)
+    ?.models.find((item) => item.id === modelId);
+  return (
+    model !== undefined &&
+    (level === "default" || model.thinkingLevels.some((item) => item === level))
+  );
 }

@@ -22,6 +22,9 @@ import {
   runNodeNetworkRecovery,
 } from "../scenarios/node-network-recovery.js";
 import { cpCommitCases, runCpRestart } from "../scenarios/cp-restart.js";
+import { createScenarioEnvironment } from "../support/environment/scenario-environment.js";
+import { respond, type ProviderRequest } from "../support/agent/agent-loop.js";
+import { eventually } from "../support/environment/run-services.js";
 
 const image = process.env.MATE_SCENARIO_IMAGE;
 const evidenceRoot =
@@ -204,4 +207,118 @@ it("recovers the committed assistant and runs its command once after container S
     },
     run: (context) => runCpRestart(context, provider),
   });
+});
+
+it("keeps a working assistant in the delivered control-plane mount and recovers its original node effect", async () => {
+  const manifestDirectory = mkdtempSync(join(evidenceRoot, "scenario-working-assistant-"));
+  const children: ProviderRequest[] = [];
+  let resumed = false;
+  let passed = false;
+  const environment = await createScenarioEnvironment({
+    container: { image },
+    agents: [{ name: "容器助手同事" }],
+    resourceManifestPath: join(manifestDirectory, "resources.json"),
+    provider(request, response) {
+      const first = JSON.stringify(request.input.filter((item) => item.role === "user")[0]);
+      const input = JSON.stringify(request.input.filter((item) => item.role !== "system"));
+      if (first.includes("DELIVERED_WORK_ASSISTANT")) {
+        children.push(request);
+        if (input.includes("function_call_output")) {
+          if (resumed) respond(response, "DELIVERED_ASSISTANT_FINAL");
+        } else
+          respond(response, [
+            {
+              name: "tools.call",
+              input: {
+                name: "process.exec",
+                input: { command: "printf 'once\\n' >> delivered-assistant.txt" },
+              },
+            },
+          ]);
+      } else if (input.includes("function_call_output") || input.includes("[助手完成回报]"))
+        respond(response, "父完成");
+      else
+        respond(response, [
+          {
+            name: "tools.call",
+            input: {
+              name: "spawn_agent",
+              input: {
+                task_name: "delivered",
+                message: "DELIVERED_WORK_ASSISTANT",
+                fork_turns: "none",
+              },
+            },
+          },
+        ]);
+    },
+  });
+  try {
+    const agent = environment.agents[0];
+    assert.ok(agent);
+    const api = async (path: string, method = "GET", body?: unknown) => {
+      const response = await environment.request(path, {
+        method,
+        ...(body === undefined ? {} : { body }),
+      });
+      assert.equal(response.ok, true, await response.clone().text());
+      return response.json();
+    };
+    await api(`/api/owner/channels/${agent.channelId}/messages`, "POST", {
+      text: "委派容器发布包中的工作助手",
+    });
+    await eventually(() => children[1], "assistant's committed node result before container crash");
+    assert.equal(readFileSync(join(agent.workspace, "delivered-assistant.txt"), "utf8"), "once\n");
+    resumed = true;
+    await environment.restartControl("SIGKILL");
+    const recovered = await eventually(
+      () => children[2],
+      "same assistant context after container crash",
+    );
+    assert.equal(recovered.prompt_cache_key, children[0]?.prompt_cache_key);
+    assert.match(JSON.stringify(recovered.input), /delivered-assistant.txt/);
+    assert.equal(JSON.stringify(recovered.input).split("DELIVERED_WORK_ASSISTANT").length, 2);
+    await eventually(
+      () =>
+        environment.requests.find((request) =>
+          JSON.stringify(request.input).includes("DELIVERED_ASSISTANT_FINAL"),
+        ),
+      "original parent receives assistant result",
+    );
+    assert.equal(readFileSync(join(agent.workspace, "delivered-assistant.txt"), "utf8"), "once\n");
+    assert.equal((await api("/api/owner/agents")).agents.length, 1);
+    assert.equal((await api(`/api/owner/channels/${agent.channelId}/messages`)).messages.length, 1);
+    const activity = await api(`/api/owner/agents/${agent.summary.id}/activity`);
+    assert.ok(
+      activity.events.some(
+        (event: { sourceConversationId?: number }) => (event.sourceConversationId ?? 0) > 1,
+      ),
+    );
+    const usage = await api(`/api/owner/agents/${agent.summary.id}/usage`);
+    assert.ok(usage.normal.requestCount >= 5);
+    assert.ok(
+      existsSync(
+        join(environment.directory, "control-plane-data", "durable", `${agent.summary.id}.sqlite`),
+      ),
+    );
+    console.log(
+      "MATE_CONTAINER_WORK_ASSISTANT",
+      JSON.stringify({
+        sourceSha: environment.topology?.sourceSha,
+        agentId: agent.summary.id,
+        providerSession: recovered.prompt_cache_key,
+        effect: "once",
+        nativeDatabaseInOriginalMount: true,
+        members: 1,
+        assistantOperationSource: activity.events.find(
+          (event: { sourceConversationId?: number }) => (event.sourceConversationId ?? 0) > 1,
+        )?.sourceConversationId,
+      }),
+    );
+    passed = true;
+  } finally {
+    const cleanup = await environment.close();
+    assert.equal(cleanup.failures.length, 0);
+    if (passed) rmSync(manifestDirectory, { recursive: true, force: true });
+  }
 });

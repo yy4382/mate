@@ -1,11 +1,13 @@
 import { readFileSync } from "node:fs";
 import { inspectSystemEntry, inspectPrompts, inspectSession } from "./inspection.js";
 
-const usage = "Usage: prompt:inspect [--show-content] [--entry FILE | --session SQLITE]";
+const usage =
+  "Usage: prompt:inspect [--show-content] [--entry FILE | --session SQLITE [--conversation ID]]";
 try {
   let showContent = false;
   let entry: string | undefined;
   let session: string | undefined;
+  let conversationId: number | undefined;
   const args = process.argv.slice(2);
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -17,12 +19,25 @@ try {
     } else if (arg === "--session" && session === undefined && next && !next.startsWith("--")) {
       i++;
       session = next;
+    } else if (
+      arg === "--conversation" &&
+      conversationId === undefined &&
+      next &&
+      /^[1-9]\d*$/.test(next) &&
+      Number.isSafeInteger(Number(next))
+    ) {
+      i++;
+      conversationId = Number(next);
     } else throw new Error(usage);
   }
   if (entry !== undefined && session !== undefined) throw new Error(usage);
+  if (conversationId !== undefined && session === undefined) throw new Error(usage);
   const result =
     session !== undefined
-      ? await inspectSession(session, { showContent })
+      ? await inspectSession(session, {
+          showContent,
+          ...(conversationId === undefined ? {} : { conversationId }),
+        })
       : entry === undefined
         ? inspectPrompts({ showContent })
         : inspectSystemEntry(JSON.parse(readFileSync(entry, "utf8")), { showContent });

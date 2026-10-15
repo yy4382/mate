@@ -1,4 +1,8 @@
-import type { ModelCredentialSummary, ModelProviderSummary } from "@mate/protocol/owner";
+import {
+  agentThinkingLevelSchema,
+  type ModelCredentialSummary,
+  type ModelProviderSummary,
+} from "@mate/protocol/owner";
 import { useLayoutEffect, useState } from "react";
 import { jsonRequest, readResponseJSON, responseErrorMessage } from "../../../http-json.js";
 import { redirectToLogin } from "../../../navigation.js";
@@ -20,6 +24,7 @@ export function AgentEditor({
   const [description, setDescription] = useState(agent.description);
   const [provider, setProvider] = useState(agent.model.provider);
   const [modelId, setModelId] = useState(agent.model.id);
+  const [thinkingLevel, setThinkingLevel] = useState(agent.model.thinkingLevel ?? "default");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Synchronize refreshed settings before the form can receive owner input.
@@ -29,7 +34,15 @@ export function AgentEditor({
     setDescription(agent.description);
     setProvider(agent.model.provider);
     setModelId(agent.model.id);
-  }, [agent.name, agent.role, agent.description, agent.model.provider, agent.model.id]);
+    setThinkingLevel(agent.model.thinkingLevel ?? "default");
+  }, [
+    agent.name,
+    agent.role,
+    agent.description,
+    agent.model.provider,
+    agent.model.id,
+    agent.model.thinkingLevel,
+  ]);
   async function saveSettings({
     path,
     method,
@@ -61,7 +74,14 @@ export function AgentEditor({
   }
   const selectedProvider = providers.find((item) => item.id === provider);
   const hasModelCredential = credentials.some((item) => item.provider === provider);
-  const isCurrentModel = provider === agent.model.provider && modelId === agent.model.id;
+  const thinkingLevels =
+    selectedProvider?.models.find((item) => item.id === modelId)?.thinkingLevels ?? [];
+  const supportedThinking =
+    thinkingLevel === "default" || thinkingLevels.some((level) => level === thinkingLevel);
+  const isCurrentModel =
+    provider === agent.model.provider &&
+    modelId === agent.model.id &&
+    thinkingLevel === (agent.model.thinkingLevel ?? "default");
 
   return (
     <div className="agent-editor">
@@ -155,12 +175,46 @@ export function AgentEditor({
           ))}
         </select>
       </label>
+      <label>
+        思考强度
+        <select
+          aria-label={`${agent.name} 思考强度`}
+          value={thinkingLevel}
+          onChange={(event) => setThinkingLevel(agentThinkingLevelSchema.parse(event.target.value))}
+        >
+          <option value="default">默认</option>
+          {!supportedThinking && (
+            <option value={thinkingLevel} disabled>
+              {thinkingLabel(thinkingLevel)}（当前模型不支持）
+            </option>
+          )}
+          {thinkingLevels.map((level) => (
+            <option key={level} value={level}>
+              {thinkingLabel(level)}
+            </option>
+          ))}
+        </select>
+      </label>
+      {!supportedThinking && (
+        <p className="agent-field-hint">当前模型不支持已选思考强度，请选择默认或支持的级别。</p>
+      )}
+      <p className="agent-field-hint">
+        主会话和工作助手共用此选择。默认沿用系统行为；不同模型的强度不等效。
+      </p>
       {!hasModelCredential && <p className="agent-field-hint">请先配置目标模型服务的 API key。</p>}
       <button
         type="button"
-        disabled={busy || !modelId || !hasModelCredential || isCurrentModel}
+        disabled={busy || !modelId || !hasModelCredential || !supportedThinking || isCurrentModel}
         onClick={() =>
-          void saveSettings({ path: "model", method: "PUT", body: { provider, id: modelId } })
+          void saveSettings({
+            path: "model",
+            method: "PUT",
+            body: {
+              provider,
+              id: modelId,
+              ...(thinkingLevel === "default" ? {} : { thinkingLevel }),
+            },
+          })
         }
       >
         切换模型
@@ -172,4 +226,8 @@ export function AgentEditor({
       )}
     </div>
   );
+}
+
+function thinkingLabel(level: "default" | "low" | "medium" | "high") {
+  return { default: "默认", low: "低", medium: "中", high: "高" }[level];
 }

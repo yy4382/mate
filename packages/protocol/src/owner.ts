@@ -111,10 +111,20 @@ export const nodeSummarySchema = z.object({
   lastConnectedAt: z.string().nullable(),
 });
 
+export const agentThinkingLevelSchema = z.enum(["default", "low", "medium", "high"]);
+export type AgentThinkingLevel = z.infer<typeof agentThinkingLevelSchema>;
+export const agentThinkingEffortSchema = agentThinkingLevelSchema.exclude(["default"]);
+
 export const modelProviderSummarySchema = z.object({
   id: z.string(),
   name: z.string(),
-  models: z.array(z.object({ id: z.string(), name: z.string() })),
+  models: z.array(
+    z.object({
+      id: z.string(),
+      name: z.string(),
+      thinkingLevels: z.array(agentThinkingEffortSchema).optional(),
+    }),
+  ),
 });
 
 export const modelCredentialSummarySchema = z.object({
@@ -152,7 +162,11 @@ export const agentSummarySchema = z.object({
   name: z.string(),
   role: z.string(),
   description: z.string(),
-  model: z.object({ provider: z.string(), id: z.string() }),
+  model: z.object({
+    provider: z.string(),
+    id: z.string(),
+    thinkingLevel: agentThinkingLevelSchema.optional(),
+  }),
   initialChannelId: z.string().nullable(),
   sessionId: z.string(),
   status: agentProvisioningStatusSchema,

@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { createServer, type ServerResponse } from "node:http";
+import { createServer, type ServerResponse, type IncomingMessage } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -97,7 +97,7 @@ export function respond(
 
 /** Real services and local provider HTTP/SSE; the only scripted boundary is model output. */
 export async function loopFixture(
-  handler: (request: ProviderRequest, response: ServerResponse) => void,
+  handler: (request: ProviderRequest, response: ServerResponse, http: IncomingMessage) => void,
   extraControl: string | ((directory: string) => string) = "",
   contextWindow?: number,
   controlOptions = "",
@@ -114,7 +114,7 @@ export async function loopFixture(
     requests.push(payload);
     pending.add(response);
     response.once("close", () => pending.delete(response));
-    handler(payload, response);
+    handler(payload, response, request);
   });
   await new Promise<void>((done) => provider.listen(0, "127.0.0.1", done));
   const providerPort = (provider.address() as { port: number }).port;

@@ -57,7 +57,7 @@ docker compose -f compose.yaml up -d --force-recreate
 rm "$HOME/.config/mate/owner-password"
 ```
 
-以后只使用 `compose.yaml`；它没有密码挂载或密码环境变量。重新登录使用原密码，容器替换和同版本镜像更新读取同一 bind 目录内的 `control-plane.sqlite`、`durable/<Agent ID>.sqlite` 与 `attachments`。原生会话及其 WAL/SHM 已包含在现有挂载中，无需新 volume 或服务；node 的工作区和凭据边界不变。不能仅凭 `/api/status` 可达就删除首次密码：必须先成功登录完成哈希保存。
+以后只使用 `compose.yaml`；它没有密码挂载或密码环境变量。重新登录使用原密码，容器替换和同版本镜像更新读取同一 bind 目录内的 `control-plane.sqlite`、`durable/<Agent ID>.sqlite` 与 `attachments`。每个 Agent 的主会话和全部工作助手及其 WAL/SHM 已包含在现有挂载中，无需新 volume 或服务；node 的工作区和凭据边界不变。不能仅凭 `/api/status` 可达就删除首次密码：必须先成功登录完成哈希保存。
 
 ## 启停、更新、日志与卸载
 

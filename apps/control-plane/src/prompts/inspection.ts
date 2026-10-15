@@ -7,6 +7,7 @@ import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { openNodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
 import { runtimeSources } from "./runtime.js";
+import { ROOT_CONVERSATION_ID } from "@earendil-works/pi-durable";
 
 /** Only explicit content mode renders the synthetic example. Never reads runtime state. */
 export function inspectPrompts(options: { showContent?: boolean } = {}) {
@@ -69,6 +70,7 @@ export function inspectSystemEntry(input: unknown, options: { showContent?: bool
 
 const configurationSchema = z.object({
   model: z.object({ provider: z.string(), modelId: z.string() }).optional(),
+  thinkingLevel: z.string().optional(),
 });
 const versionsSchema = z.object({
   runtimeVersions: z.object({
@@ -80,16 +82,26 @@ const versionsSchema = z.object({
 });
 
 /** Observe adopted native facts without opening a Harness or emitting conversation content. */
-export async function inspectSession(path: string, options: { showContent?: boolean } = {}) {
+export async function inspectSession(
+  path: string,
+  options: { showContent?: boolean; conversationId?: number } = {},
+) {
   if (!existsSync(path)) throw new Error("Session unavailable");
   const database = await openNodeSqliteDatabase(path);
   let storage;
   try {
     await database.exec("PRAGMA synchronous=FULL;");
     storage = await SqliteStorage.open(database);
-    const conversations = await storage.scanConversations({}, 2, undefined, BACKGROUND_CONTEXT);
-    if (conversations.items.length !== 1) throw new Error("Session unavailable");
-    const conversationId = conversations.items[0]!.id;
+    const selected = options.conversationId ?? ROOT_CONVERSATION_ID;
+    let conversation;
+    let cursor;
+    do {
+      const page = await storage.scanConversations({}, 100, cursor, BACKGROUND_CONTEXT);
+      conversation = page.items.find((item) => item.id === selected);
+      cursor = page.next;
+    } while (!conversation && cursor);
+    if (!conversation) throw new Error("Session unavailable");
+    const conversationId = conversation.id;
     for (;;) {
       const scope = { kind: "conversation" as const, conversationId };
       const agent = await storage.findDocument(
@@ -129,10 +141,18 @@ export async function inspectSession(path: string, options: { showContent?: bool
         (await storage.findLatestHeadMarker(conversationId, lastSystem.id, BACKGROUND_CONTEXT));
       const messages = [];
       let lastModel;
+      let requestThinkingLevel: string | null = null;
       for (const entry of entries) {
         const message = entry.model?.[0];
-        if (entry.kind === "pi.assistant" && message?.role === "assistant")
+        if (entry.kind === "pi.assistant" && message?.role === "assistant") {
           lastModel = { provider: message.provider, modelId: message.model };
+          const request = z
+            .object({ mateRequest: z.object({ thinkingLevel: z.string() }).nullable() })
+            .safeParse(entry.data);
+          requestThinkingLevel = request.success
+            ? (request.data.mateRequest?.thinkingLevel ?? null)
+            : null;
+        }
         if (entry.kind === "pi.system" && (!head || entry.id > head.id)) {
           const parsed = systemEntrySchema.parse(entry);
           messages.push(parsed.model[0]!);
@@ -151,6 +171,7 @@ export async function inspectSession(path: string, options: { showContent?: bool
       const systemPrompt = getCurrentSystemPrompt(messages);
       return {
         kind: "saved-session-configuration",
+        conversationId,
         provenance: "committed-system-changes",
         runtimeVersions: adopted ? versionsSchema.parse(adopted.value).runtimeVersions : null,
         inspectorVersions: runtimeVersions,
@@ -158,6 +179,10 @@ export async function inspectSession(path: string, options: { showContent?: bool
         configuredModel: configured
           ? (configurationSchema.parse(configured.value).model ?? null)
           : null,
+        configuredThinkingLevel: configured
+          ? (configurationSchema.parse(configured.value).thinkingLevel ?? "default")
+          : null,
+        requestThinkingLevel,
         systemEntryCount: messages.length,
         systemPromptChars: systemPrompt.length,
         toolCount: tools.length,

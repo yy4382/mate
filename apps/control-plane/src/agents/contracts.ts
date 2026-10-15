@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { isSupportedModel, isSupportedModelProvider } from "../providers/catalog.js";
+import { agentThinkingLevelSchema } from "@mate/protocol/owner";
+import {
+  isSupportedModel,
+  isSupportedModelProvider,
+  isSupportedThinkingLevel,
+} from "../providers/catalog.js";
 
 export const newAgentRequestSchema = z
   .object({
@@ -19,9 +24,13 @@ export const newAgentRequestSchema = z
           .regex(/^[a-z][a-z0-9._-]{0,63}$/)
           .refine(isSupportedModelProvider),
         id: z.string().trim().min(1).max(200),
+        thinkingLevel: agentThinkingLevelSchema.optional(),
       })
       .strict()
-      .refine((model) => isSupportedModel(model.provider, model.id)),
+      .refine((model) => isSupportedModel(model.provider, model.id))
+      .refine((model) =>
+        isSupportedThinkingLevel(model.provider, model.id, model.thinkingLevel ?? "default"),
+      ),
     initialChannelId: z.string().uuid().optional(),
   })
   .strict();

@@ -27,6 +27,7 @@ it("shows offline confirmed facts safely until the owner expands operation detai
             kind: "operation.finished",
             referenceId: "op-1",
             summary: "操作完成",
+            sourceConversationId: 2,
             ...(url.includes("detail=1") ? { detail: { command: "PRIVATE_ARGUMENT" } } : {}),
             at: 1,
           },
@@ -38,6 +39,7 @@ it("shows offline confirmed facts safely until the owner expands operation detai
   render(createElement(AgentActivity, { agentId: "agent-1" }));
   await user.click(screen.getByRole("button", { name: "查看动态" }));
   await waitFor(() => expect(screen.getByText("操作完成")).toBeTruthy());
+  expect(screen.getByText("工作助手 · 会话 2")).toBeTruthy();
   expect(screen.getByText("节点离线 · 以下为最后已确认事实")).toBeTruthy();
   expect(screen.queryByText(/PRIVATE_ARGUMENT/)).toBeNull();
   expect(requests).toEqual(["/api/owner/agents/agent-1/activity"]);

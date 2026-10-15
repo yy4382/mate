@@ -12,17 +12,17 @@ _Avoid_: Worker (when referring to an Agent)
 The primary logical context belonging to an Agent and continuing across channels, threads, and direct messages. New messages and new runs continue that primary context. Work assistants have separate contexts while retaining the same owning Agent.
 
 **Work assistant**:
-A named helper delegated work by an Agent or another helper. It has its own context and reports to its original delegator, while sharing the owning Agent’s workspace, tools and business identity. It is not a new member, a task owner, or a separate privilege boundary. Pausing the owning Agent pauses all its helpers.
+A named helper delegated work by an Agent or another helper. It has its own context and reports to its original delegator, while sharing the owning Agent’s workspace, tools, model settings and business identity. It is not a new member, a task owner, or a separate privilege boundary. Pausing the owning Agent pauses all its helpers.
 _Avoid_: Mate Agent (when referring to a temporary helper)
 
 **Agent transcript**:
-Inputs and outputs preserved in the order the model actually experienced them, including model-visible run instructions, assistant output, tool calls, and tool results. It records the Agent's experienced context, distinct from channel chat history, message deliveries not yet presented to the model, and records of operation execution. Pi Durable stores the confirmed model contributions; in-progress output, failed responses, and usage diagnostics retain their distinct meanings and are not confirmed model history.
+The ordered history experienced by one primary or work-assistant context, including model-visible instructions, output, tool calls and results. Confirmed history is distinct from channel messages not yet presented, operation receipts, in-progress output, failed responses and usage diagnostics.
 
 **Session compaction**:
 Continuing the same Agent session with a summary and retained recent interactions as subsequent model context, while preserving the full transcript from before compaction. Compaction creates neither a new Agent identity nor a parallel session.
 
 **Agent run**:
-One working turn of an Agent's model over its single Agent session. Starting a new run, even in a fresh model process, continues the same session rather than creating a new context.
+One admitted working period of an Agent, including work assistants that continue after its primary work becomes idle. Starting a new run continues the original primary and assistant contexts.
 _Avoid_: authorised run, primary run, worker
 
 **Current run**:

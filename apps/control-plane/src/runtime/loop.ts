@@ -38,6 +38,7 @@ import { buildAgentSystemPrompt, runNoticeMessage, type AgentProfile } from "../
 import { type ModelContextMessage } from "./session/input.js";
 import { runtimeVersions } from "./build-identity.js";
 import { UsageObservations } from "./usage-observation.js";
+import type { AgentThinkingLevel } from "@mate/protocol/owner";
 import {
   inspectProviderResponse,
   reportedGoogleUsage,
@@ -65,6 +66,7 @@ export interface AgentLoopSpec {
   prompt: AgentProfile;
   provider: string;
   modelId: string;
+  thinkingLevel?: AgentThinkingLevel;
   apiKey: string;
 }
 /** Fault injection at persistence boundaries, and a local HTTP provider in integration tests. */
@@ -201,7 +203,11 @@ export class AgentLoop {
           message,
           reported,
           confirmedModelResponse(message, reported, inspected?.complete),
-          summary,
+          {
+            summary,
+            providerSessionId: options?.sessionId,
+            thinkingLevel: options?.reasoning ?? "off",
+          },
         );
         return message;
       });
@@ -459,6 +465,7 @@ export class AgentLoop {
           JSON.stringify({
             provider: spec.provider,
             modelId: spec.modelId,
+            thinkingLevel: spec.thinkingLevel ?? "default",
             apiKey: spec.apiKey,
             prompt: spec.prompt,
             runtimeVersions,
@@ -504,6 +511,10 @@ export class AgentLoop {
         await source.configure(
           {
             model: { provider: spec.provider, modelId: spec.modelId },
+            thinkingLevel:
+              spec.thinkingLevel === undefined || spec.thinkingLevel === "default"
+                ? null
+                : spec.thinkingLevel,
             instructions: buildAgentSystemPrompt(spec.prompt).systemPrompt,
           },
           BACKGROUND_CONTEXT,

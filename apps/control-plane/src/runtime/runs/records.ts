@@ -6,6 +6,7 @@ import { providerCredentialExistsSql } from "../../providers/credentials.js";
 import { recordAgentActivity } from "../activity.js";
 import { queueUncertainOperationFacts } from "../recovery/context.js";
 import { AgentSession } from "../session/service.js";
+import type { AgentThinkingLevel } from "@mate/protocol/owner";
 
 // Admission scans continue on later passes; this does not cap an Agent's work.
 const maxCandidatesPerPass = 100;
@@ -41,6 +42,7 @@ export interface RunCandidate {
   description: string;
   provider: string;
   model_id: string;
+  thinking_level: AgentThinkingLevel;
   channel_id: string;
   channel_visibility: "public" | "private";
   delivery_id: string;
@@ -58,7 +60,7 @@ export class RunRecords {
     return this.db
       .prepare<unknown[], RunCandidate>(
         `SELECT a.id AS agent_id,a.node_id,a.home,a.home_marker,s.id AS session_id,a.name,a.role,a.description,
-                a.provider,a.model_id,d.channel_id,c.visibility AS channel_visibility,
+                a.provider,a.model_id,a.thinking_level,d.channel_id,c.visibility AS channel_visibility,
                 d.id AS delivery_id
          FROM owner_message_deliveries d
          JOIN owner_messages m ON m.id=d.message_id

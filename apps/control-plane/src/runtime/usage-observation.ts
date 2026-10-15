@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { StorageWrite, Storage, DocumentId } from "@earendil-works/pi-durable";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
@@ -137,18 +137,29 @@ export class UsageObservations {
     message: AssistantMessage;
     confirmed: boolean;
     reported: ReportedUsage | null;
-    summary: boolean;
+    request: {
+      summary: boolean;
+      providerSessionId: string | undefined;
+      thinkingLevel: ModelThinkingLevel;
+    };
   }[] = [];
 
   capture(
     message: AssistantMessage,
     reported: ReportedUsage | null,
     confirmed: boolean,
-    summary: boolean,
+    request: {
+      summary: boolean;
+      providerSessionId: string | undefined;
+      thinkingLevel: ModelThinkingLevel;
+    },
   ) {
+    // Native compaction never records an aborted response. Keeping it pending could
+    // associate the next completed summary with this interrupted request instead.
+    if (request.summary && message.stopReason === "aborted") return;
     const id = randomUUID();
     Object.assign(message, { mateObservationId: id });
-    this.pending.push({ id, message, reported, confirmed, summary });
+    this.pending.push({ id, message, reported, confirmed, request });
   }
 
   async writes(
@@ -172,7 +183,9 @@ export class UsageObservations {
       if (message?.role !== "assistant") return write;
       const marker = z.object({ mateObservationId: z.string() }).safeParse(message);
       const observation = marker.success
-        ? this.pending.find((item) => !item.summary && item.id === marker.data.mateObservationId)
+        ? this.pending.find(
+            (item) => !item.request.summary && item.id === marker.data.mateObservationId,
+          )
         : undefined;
       if (observation) committedIds.push(observation.id);
       const cleaned = { ...message };
@@ -187,6 +200,9 @@ export class UsageObservations {
               mateUsage: observation
                 ? { confirmed: observation.confirmed, reported: observation.reported }
                 : { confirmed: false, reported: null },
+              mateRequest: observation
+                ? { thinkingLevel: observation.request.thinkingLevel }
+                : null,
             },
             { omitUndefinedProperties: true },
           ),
@@ -210,7 +226,13 @@ export class UsageObservations {
         : !z.object({ phase: z.literal("retry") }).safeParse(state.checkpoint).success
     )
       return prepared(enriched);
-    const index = this.pending.findIndex((item) => item.summary);
+    const provider = await storage.findDocument({ kind: "pi.provider", scope }, "current", context);
+    const identity = provider && (await storage.document(provider.id, "current", context));
+    const sessionId =
+      identity && z.object({ sessionId: z.string() }).parse(identity.value).sessionId;
+    const index = this.pending.findIndex(
+      (item) => item.request.summary && item.request.providerSessionId === sessionId,
+    );
     if (index < 0) return prepared(enriched);
     const observation = this.pending[index]!;
     committedIds.push(observation.id);

@@ -129,67 +129,85 @@ async function usageState(storage: Storage, conversationId: ConversationId) {
 }
 
 async function projectUsage(storage: Storage, agentId: string) {
-  const conversations = await storage.scanConversations({}, 2, undefined, BACKGROUND_CONTEXT);
-  if (conversations.items.length !== 1) throw new Error("Agent usage unavailable");
-  const conversationId = conversations.items[0]!.id;
+  const scopes = async () => {
+    const conversations = [];
+    let cursor;
+    do {
+      const page = await storage.scanConversations({}, 100, cursor, BACKGROUND_CONTEXT);
+      for (const conversation of page.items)
+        conversations.push({
+          id: conversation.id,
+          state: await usageState(storage, conversation.id),
+        });
+      cursor = page.next;
+    } while (cursor);
+    return conversations;
+  };
   for (;;) {
-    const state = await usageState(storage, conversationId);
-    const through = (
-      await storage.scanEntries({ conversationId }, 1, undefined, BACKGROUND_CONTEXT)
-    ).items[0]?.id;
+    const conversations = await scopes();
     const total = new UsageAccumulator();
     const normal = new UsageAccumulator();
     const summary = new UsageAccumulator();
     let latestNormal: { id: string; recordedAt: number; reported: ReportedUsage | null } | null =
       null;
-    const ordinary: Record<string, ReturnType<typeof nativeTokens>> = {};
-    if (through !== undefined) {
-      let cursor;
-      do {
-        const page = await storage.scanEntries(
-          { conversationId, order: "ascending", maxEntryId: through },
-          100,
-          cursor,
-          BACKGROUND_CONTEXT,
-        );
-        for (const entry of page.items) {
-          if (entry.kind !== "pi.assistant") continue;
-          const message = entry.model?.[0];
-          if (message?.role !== "assistant") continue;
-          const key = `${message.provider}/${message.model}`;
-          const grouped = ordinary[key] ?? zeroTokenCounts();
-          ordinary[key] = grouped;
-          const normalized = nativeTokens(message.usage);
-          for (const name of tokenNames) grouped[name] += normalized[name];
-          const parsed = usageProjectionSchema.safeParse(entry.data);
-          const observed = parsed.success && parsed.data.mateUsage.confirmed;
-          // Durable converts saved progress to aborted responses, and a truncated
-          // provider response may already carry nonzero native spend. Include these
-          // committed attempts even when provider availability was lost; header-only
-          // failures with all-zero fallback counters provide no such evidence.
-          const nativeAttempt =
-            message.stopReason === "aborted" || tokenNames.some((name) => normalized[name] > 0);
-          if (!observed && !nativeAttempt) continue;
-          const reported = observed ? parsed.data.mateUsage.reported : null;
-          total.add(reported);
-          normal.add(reported);
-          latestNormal = { id: `${agentId}:${entry.id}`, recordedAt: message.timestamp, reported };
-        }
-        cursor = page.next;
-      } while (cursor);
+    for (const { id: conversationId, state } of conversations) {
+      const ordinary: Record<string, ReturnType<typeof nativeTokens>> = {};
+      const through = (
+        await storage.scanEntries({ conversationId }, 1, undefined, BACKGROUND_CONTEXT)
+      ).items[0]?.id;
+      if (through !== undefined) {
+        let cursor;
+        do {
+          const page = await storage.scanEntries(
+            { conversationId, order: "ascending", maxEntryId: through },
+            100,
+            cursor,
+            BACKGROUND_CONTEXT,
+          );
+          for (const entry of page.items) {
+            // A fork can see its ancestors' entries, but their spend belongs only to
+            // the conversation that committed them. Native usage documents start empty.
+            if (entry.conversationId !== conversationId || entry.kind !== "pi.assistant") continue;
+            const message = entry.model?.[0];
+            if (message?.role !== "assistant") continue;
+            const key = `${message.provider}/${message.model}`;
+            const grouped = ordinary[key] ?? zeroTokenCounts();
+            ordinary[key] = grouped;
+            const normalized = nativeTokens(message.usage);
+            for (const name of tokenNames) grouped[name] += normalized[name];
+            const parsed = usageProjectionSchema.safeParse(entry.data);
+            const observed = parsed.success && parsed.data.mateUsage.confirmed;
+            // Durable converts saved progress to aborted responses, and a truncated
+            // provider response may already carry nonzero native spend. Include these
+            // committed attempts even when provider availability was lost; header-only
+            // failures with all-zero fallback counters provide no such evidence.
+            const nativeAttempt =
+              message.stopReason === "aborted" || tokenNames.some((name) => normalized[name] > 0);
+            if (!observed && !nativeAttempt) continue;
+            const reported = observed ? parsed.data.mateUsage.reported : null;
+            total.add(reported);
+            normal.add(reported);
+            if (!latestNormal || message.timestamp >= latestNormal.recordedAt)
+              latestNormal = {
+                id: `${agentId}:${entry.id}`,
+                recordedAt: message.timestamp,
+                reported,
+              };
+          }
+          cursor = page.next;
+        } while (cursor);
+      }
+      for (const [key, coverage] of Object.entries(state.groups)) {
+        const native = state.models[key];
+        const remainder = native && nativeTokens(native);
+        if (remainder) for (const name of tokenNames) remainder[name] -= ordinary[key]?.[name] ?? 0;
+        summary.addSummary(coverage, remainder);
+        total.addSummary(coverage, remainder);
+      }
     }
-    // The public adapter materializes each document atomically, rather than nesting a
-    // second SQL transaction. Retry a concurrent model commit so subtraction and
-    // coverage refer to one committed range. The fixed entry tail never grows mid-scan.
-    if (JSON.stringify(state) !== JSON.stringify(await usageState(storage, conversationId)))
-      continue;
-    for (const [key, coverage] of Object.entries(state.groups)) {
-      const native = state.models[key];
-      const remainder = native && nativeTokens(native);
-      if (remainder) for (const name of tokenNames) remainder[name] -= ordinary[key]?.[name] ?? 0;
-      summary.addSummary(coverage, remainder);
-      total.addSummary(coverage, remainder);
-    }
+    // Public document reads are individually atomic. Retry if any conversation
+    // appeared or committed spend during the scan, including an all-zero summary.
+    if (JSON.stringify(conversations) !== JSON.stringify(await scopes())) continue;
     return responseFor(agentId, total, normal, summary, latestNormal);
   }
 }

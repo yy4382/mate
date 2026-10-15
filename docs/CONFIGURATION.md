@@ -18,4 +18,6 @@
 
 模型 API key 由控制面保存并直接用于模型请求，不进入节点配置或通信。测试通过控制面专用的依赖注入指定本地 HTTP/SSE provider 和持久提交故障点；这些接缝不作为环境变量或发布配置暴露。
 
-控制面主模型循环固定使用 `@earendil-works/pi-durable@1.1.0`、`@earendil-works/pi-ai@1.1.0` 与 `@earendil-works/chord@1.1.0`。每个 Agent 的原生会话库位于数据目录的 `durable/<Agent ID>.sqlite`，采用 WAL 与 `synchronous=FULL`；模型上下文、输入提交和工具检查点由 Durable 持久保存，Mate 业务库只保留业务事实与关联。两个位置必须一起保留。旧开发格式不迁移，启动遇到格式拒绝时改用新空数据目录，不能覆盖原目录。
+控制面模型循环固定使用 `@earendil-works/pi-durable@1.1.0`、`@earendil-works/pi-ai@1.1.0` 与 `@earendil-works/chord@1.1.0`。每个 Agent 的主会话与全部工作助手位于同一 `durable/<Agent ID>.sqlite`，采用 WAL 与 `synchronous=FULL`；模型上下文、输入提交和工具检查点由 Durable 持久保存，Mate 业务库只保留业务事实与关联。两个位置必须一起保留。旧开发格式不迁移，启动遇到格式拒绝时改用新空数据目录，不能覆盖原目录。
+
+在 Agent 现有模型设置选择“思考强度”：默认，或所选模型支持的低、中、高。所有助手共用所属 Agent 的选择，保存后后续有效请求采用新模型、强度与凭据；刷新和重启保留选择。默认不指定显式级别，沿用当前 Durable 的 off 行为；它不是模型自动选择最佳强度。选项通过 Pi 公开模型能力取得，不同模型的级别不承诺等效。不支持的非默认值由 API 拒绝；切换模型后须在同一表单明确选择兼容级别或默认，不会静默降级。创建 Agent 时不指定强度即为默认。

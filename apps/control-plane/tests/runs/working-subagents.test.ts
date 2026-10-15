@@ -184,6 +184,12 @@ it("fork all inherits confirmed context while none starts clean", async () => {
     expect(childContexts.get("all")).toContain("confirmed prior answer");
     expect(childContexts.get("all")).not.toContain("spawn_agent");
     expect(childContexts.get("none")).not.toContain("confirmed prior");
+    const usage = await fixture.api(`/api/owner/agents/${agent.id}/usage`);
+    expect(usage.normal.requestCount).toBe(fixture.requests.length);
+    expect(usage.normal.tokens.allInput.value).toBe(fixture.requests.length * 50);
+    expect(usage.summary.requestCount).toBe(0);
+    await fixture.restartControl();
+    expect(await fixture.api(`/api/owner/agents/${agent.id}/usage`)).toEqual(usage);
   } finally {
     await fixture.close();
   }

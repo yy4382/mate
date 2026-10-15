@@ -363,6 +363,7 @@ export class AgentRunCoordinator {
           },
           provider: candidate.provider,
           modelId: candidate.model_id,
+          thinkingLevel: candidate.thinking_level,
           apiKey,
         },
         {
