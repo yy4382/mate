@@ -1,3 +1,4 @@
+import { subagentTools } from "../subagents.js";
 import { AgentHistory } from "../../agent-history.js";
 import { currentAgentToolRunSchema } from "./entry.js";
 import type Database from "better-sqlite3";
@@ -32,6 +33,14 @@ export class AgentTools {
   ) {
     this.operations = new Map(
       Object.entries({
+        ...Object.fromEntries(
+          Object.entries(subagentTools).map(([name, definition]) => [
+            name,
+            defineAgentTool(definition, () => {
+              throw new AgentToolRefusal("Assistant tool requires a Durable invocation");
+            }),
+          ]),
+        ),
         ...chat.agentTools(),
         ...workspace.agentTools(),
         ...attachments.agentTools(),
@@ -150,6 +159,10 @@ export class AgentTools {
       )
       .get(identity.runId, identity.agentId, identity.nodeId);
     if (!run) throw new AgentToolRefusal("Agent run is no longer active");
-    return currentAgentToolRunSchema.parse(run);
+    return currentAgentToolRunSchema.parse({
+      ...currentAgentToolRunSchema.parse(run),
+      conversation_id: identity.conversationId ?? 1,
+      ...(identity.conversationId && identity.conversationId !== 1 ? { input_end_seq: 0 } : {}),
+    });
   }
 }

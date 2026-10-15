@@ -1,6 +1,6 @@
 import { receiptCorrectionMessage } from "../../prompts/index.js";
 import { type ModelContextMessage } from "./input.js";
-import { durableToolIdentity } from "../tools/identity.js";
+import { durableToolIdentity, operationIdForAction } from "../tools/identity.js";
 import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
 
@@ -16,14 +16,24 @@ export class AgentSession {
     taskId: string,
     operation: string,
     input: Record<string, unknown>,
+    conversationId = 1,
   ): string {
     const identity = durableToolIdentity(actionScopeId, sessionId, taskId);
     this.db
       .prepare(
         `INSERT OR IGNORE INTO owner_durable_tool_calls
-      (agent_id,task_id,identity,action_scope_id,operation,input_json) VALUES(?,?,?,?,?,?)`,
+      (agent_id,task_id,identity,action_scope_id,operation,input_json,conversation_id,operation_id) VALUES(?,?,?,?,?,?,?,?)`,
       )
-      .run(agentId, taskId, identity, actionScopeId, operation, JSON.stringify(input));
+      .run(
+        agentId,
+        taskId,
+        identity,
+        actionScopeId,
+        operation,
+        JSON.stringify(input),
+        conversationId,
+        operationIdForAction(identity),
+      );
     const row = this.db
       .prepare<unknown[], { identity: string; operation: string; input_json: string }>(
         "SELECT identity,operation,input_json FROM owner_durable_tool_calls WHERE agent_id=? AND task_id=?",
@@ -47,6 +57,18 @@ export class AgentSession {
           .map(([key, child]) => [key, canonical(child)]),
       );
     };
+    const operationId =
+      result && typeof result === "object" && "operationId" in result
+        ? result.operationId
+        : undefined;
+    const source =
+      typeof operationId === "string"
+        ? this.db
+            .prepare<unknown[], { conversation_id: number }>(
+              "SELECT conversation_id FROM owner_durable_tool_calls WHERE agent_id=? AND operation_id=?",
+            )
+            .get(agentId, operationId)
+        : undefined;
     const fact = JSON.stringify(canonical(result));
     const hex = createHash("sha256")
       .update(agentId + "\0" + fact)
@@ -55,17 +77,22 @@ export class AgentSession {
     return (
       this.db
         .prepare(
-          `INSERT OR IGNORE INTO owner_agent_session_updates(id,agent_id,message_json)
-      VALUES(?,?,?)`,
+          `INSERT OR IGNORE INTO owner_agent_session_updates(id,agent_id,message_json,conversation_id)
+      VALUES(?,?,?,?)`,
         )
-        .run(id, agentId, JSON.stringify(receiptCorrectionMessage(fact, timestamp))).changes > 0
+        .run(
+          id,
+          agentId,
+          JSON.stringify(receiptCorrectionMessage(fact, timestamp)),
+          source?.conversation_id ?? 1,
+        ).changes > 0
     );
   }
 
   pendingCorrections(agentId: string, actionScopeId: string): ModelContextMessage[] {
     const rows = this.db
-      .prepare<unknown[], { id: string; message_json: string }>(
-        "SELECT id,message_json FROM owner_agent_session_updates WHERE agent_id=? ORDER BY rowid",
+      .prepare<unknown[], { id: string; message_json: string; conversation_id: number }>(
+        "SELECT id,message_json,conversation_id FROM owner_agent_session_updates WHERE agent_id=? ORDER BY rowid",
       )
       .all(agentId);
     return rows.map((row) => ({
@@ -74,6 +101,7 @@ export class AgentSession {
       actionScopeId,
       pending: true,
       recoveryFact: true,
+      conversationId: row.conversation_id,
     }));
   }
 

@@ -1,3 +1,9 @@
+import {
+  assistantsDoc,
+  createAssistantWork,
+  callAssistantTool,
+  waitForAssistants,
+} from "./subagents.js";
 import { chmodSync, mkdirSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname } from "node:path";
@@ -74,9 +80,15 @@ export interface AgentLoopTestDependencies {
 export type AgentLoopResult = { ok: true } | { ok: false; code: string; reason?: string };
 export interface AgentLoopActions {
   isCurrent(): boolean;
-  bindTool(taskId: string, operation: string, input: Record<string, unknown>): string;
+  bindTool(
+    taskId: string,
+    operation: string,
+    input: Record<string, unknown>,
+    conversationId: ConversationId,
+  ): string;
   executeTool(request: {
     toolCallId: string;
+    conversationId: ConversationId;
     operation: string;
     input: Record<string, unknown>;
   }): Promise<AgentToolCallResult>;
@@ -228,13 +240,21 @@ export class AgentLoop {
       completeSimple: (requested, context, options) =>
         streamModel(requested, context, options, true).result(),
     };
+    const ready = Promise.withResolvers<void>();
+    const assistantWork = createAssistantWork(() => this.whileCurrent(ready.promise));
     const inputSchema = z.record(z.string(), z.unknown());
-    const forward = async (taskId: number, operation: string, input: Record<string, unknown>) => {
+    const forward = async (
+      api: import("@earendil-works/pi-durable").ToolExecutionApi,
+      operation: string,
+      input: Record<string, unknown>,
+    ) => {
       assertAdvancing();
-      const toolCallId = actions.bindTool(String(taskId), operation, input);
+      const toolCallId = actions.bindTool(String(api.taskId), operation, input, api.conversationId);
       // Revoke the model invocation promptly; the dispatched domain operation keeps
       // recording its eventual receipt independently of this run's lifetime.
-      const result = await this.whileCurrent(actions.executeTool({ toolCallId, operation, input }));
+      const result = await this.whileCurrent(
+        actions.executeTool({ toolCallId, conversationId: api.conversationId, operation, input }),
+      );
       assertCurrent();
       if (!result.ok)
         return { isError: true, content: [{ type: "text" as const, text: result.error }] };
@@ -248,6 +268,7 @@ export class AgentLoop {
     const registry = createRegistry();
     registry.install({
       name: "mate",
+      tasks: [assistantWork],
       tools: [
         defineTool({
           name: "tools.list",
@@ -255,7 +276,7 @@ export class AgentLoop {
           parameters: Type.Object({}),
           replay: "safe",
           executionMode: "sequential",
-          execute: async (_input, api) => forward(api.taskId, "tools.list", {}),
+          execute: async (_input, api) => forward(api, "tools.list", {}),
         }),
         defineTool({
           name: "tools.describe",
@@ -263,8 +284,7 @@ export class AgentLoop {
           parameters: Type.Object({ name: Type.String({ minLength: 1, maxLength: 128 }) }),
           replay: "safe",
           executionMode: "sequential",
-          execute: async (input, api) =>
-            forward(api.taskId, "tools.describe", inputSchema.parse(input)),
+          execute: async (input, api) => forward(api, "tools.describe", inputSchema.parse(input)),
         }),
         defineTool({
           name: "tools.call",
@@ -276,8 +296,40 @@ export class AgentLoop {
           // Domain transactions and node intents deduplicate this persistent task identity.
           replay: "safe",
           executionMode: "sequential",
-          execute: async (input, api) =>
-            forward(api.taskId, "tools.call", inputSchema.parse(input)),
+          execute: async (input, api, context) => {
+            if (input.name === "spawn_agent" || input.name === "list_agents") {
+              assertAdvancing();
+              try {
+                return {
+                  content: [
+                    {
+                      type: "text",
+                      text: JSON.stringify(
+                        await callAssistantTool(
+                          input.name,
+                          input.input,
+                          api,
+                          context,
+                          assistantWork,
+                        ),
+                      ),
+                    },
+                  ],
+                };
+              } catch (error) {
+                return {
+                  isError: true,
+                  content: [
+                    {
+                      type: "text",
+                      text: error instanceof Error ? error.message : "Assistant request failed",
+                    },
+                  ],
+                };
+              }
+            }
+            return forward(api, "tools.call", inputSchema.parse(input));
+          },
         }),
       ],
     });
@@ -350,18 +402,33 @@ export class AgentLoop {
           }),
         )
         .digest("hex");
+      const conversations = new Map([[conversation.id, conversation]]);
+      for (const identity of (await harness.snapshot(assistantsDoc, context))?.assistants ?? []) {
+        const child = await harness.conversation(identity.id, context);
+        if (!child) throw new Error("Assistant conversation missing");
+        conversations.set(child.id, child);
+      }
+      const sourceFor = (entry: ModelContextMessage) => {
+        const source = [...conversations.values()].find(
+          (item) => item.id === (entry.conversationId ?? conversation.id),
+        );
+        if (!source) throw new Error("Recovery conversation missing");
+        return source;
+      };
       const newFacts = [];
       for (const entry of spec.messages) {
         if (
           entry.recoveryFact === true &&
-          !(await storage.submissionByRequest(conversation.id, `delivery:${entry.id}`, context))
+          !(await storage.submissionByRequest(sourceFor(entry).id, `delivery:${entry.id}`, context))
         )
           newFacts.push(entry);
       }
       // abort() enables scheduling: provider and tool entry points remain closed until
       // the native termination and admission facts have both committed.
-      if ((binding && binding.configuration !== configuration) || newFacts.length > 0)
-        await conversation.abort(context);
+      const reconcile = new Set(newFacts.map((entry) => sourceFor(entry)));
+      if (binding && binding.configuration !== configuration)
+        for (const source of conversations.values()) reconcile.add(source);
+      for (const source of reconcile) await source.abort(context);
       assertCurrent();
       await conversation.commit(async (tx) => {
         const binding = await tx.doc(admissionDoc);
@@ -370,20 +437,21 @@ export class AgentLoop {
         binding.runtimeVersions = runtimeVersions;
       }, context);
       spec.initializedNow();
-      await conversation.configure(
-        {
-          model: { provider: spec.provider, modelId: spec.modelId },
-          instructions: buildAgentSystemPrompt(spec.prompt).systemPrompt,
-        },
-        BACKGROUND_CONTEXT,
-      );
+      for (const source of conversations.values())
+        await source.configure(
+          {
+            model: { provider: spec.provider, modelId: spec.modelId },
+            instructions: buildAgentSystemPrompt(spec.prompt).systemPrompt,
+          },
+          BACKGROUND_CONTEXT,
+        );
       assertCurrent();
       const submissions = [];
       // Recovery facts are passive native writes while the conversation is idle. Every
       // fact is committed before any input may start the next provider request.
       for (const entry of newFacts) {
         assertCurrent();
-        await conversation.submit(
+        await sourceFor(entry).submit(
           {
             type: "write",
             requestId: `delivery:${entry.id}`,
@@ -393,7 +461,53 @@ export class AgentLoop {
         );
       }
       assertCurrent();
+      // A correction is an input to its actual issuer, even when that assistant was idle.
+      // The reporter task itself is the durable deduplication record, not a notification flag.
+      for (const entry of spec.messages.filter(
+        (entry) => entry.recoveryFact && sourceFor(entry).id !== conversation.id,
+      )) {
+        await conversation.commit(async (tx) => {
+          const identity = (await tx.doc(assistantsDoc)).assistants.find(
+            (item) => item.id === sourceFor(entry).id,
+          );
+          if (!identity) throw new Error("Recovery assistant missing");
+          const requestId = `recovery-wake:${entry.id}`;
+          let cursor;
+          do {
+            const page = await tx.scanTasks(
+              { kind: assistantWork.definition.name, conversationId: identity.parent },
+              100,
+              cursor,
+            );
+            if (
+              page.items.some(
+                (task) =>
+                  task.input &&
+                  typeof task.input === "object" &&
+                  !Array.isArray(task.input) &&
+                  task.input.requestId === requestId,
+              )
+            )
+              return;
+            cursor = page.next;
+          } while (cursor);
+          await tx.createTask(
+            assistantWork,
+            {
+              spawnTask: identity.spawnTask,
+              requestId,
+              message: "[恢复提示] 新的操作收据事实已写入本会话，请据此决定检查、补救或继续。",
+            },
+            {
+              ownership: { kind: "conversation" },
+              conversationId: identity.parent,
+              background: true,
+            },
+          );
+        }, context);
+      }
       canAdvance = true;
+      ready.resolve();
       this.sendNotice = async (conversationId, deliveryId) => {
         let requestId = `notice:${deliveryId}`;
         let existing = await storage.submissionByRequest(conversation.id, requestId, context);
@@ -455,7 +569,12 @@ export class AgentLoop {
           };
         }
       }
-      await conversation.waitForIdle(context);
+      for (;;) {
+        await conversation.waitForIdle(context);
+        await waitForAssistants(harness, context);
+        await conversation.waitForIdle(context);
+        if (!(await harness.inspect(context)).tasks.length) break;
+      }
       return { ok: true };
     } catch {
       return {

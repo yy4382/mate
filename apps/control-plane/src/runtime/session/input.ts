@@ -7,4 +7,5 @@ export interface ModelContextMessage {
   actionScopeId: string;
   pending?: boolean;
   recoveryFact?: boolean;
+  conversationId?: number;
 }

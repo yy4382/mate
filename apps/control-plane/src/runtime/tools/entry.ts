@@ -5,6 +5,7 @@ export const agentToolIdentitySchema = z.object({
   nodeId: z.string(),
   agentId: z.string(),
   toolCallId: z.string(),
+  conversationId: z.number().int().positive().optional(),
 });
 export type AgentToolIdentity = z.infer<typeof agentToolIdentitySchema>;
 
@@ -16,6 +17,7 @@ export const currentAgentToolRunSchema = z.object({
   channel_id: z.string(),
   session_id: z.string(),
   input_end_seq: z.number(),
+  conversation_id: z.number().int().positive().default(1),
 });
 export type CurrentAgentToolRun = z.infer<typeof currentAgentToolRunSchema>;
 

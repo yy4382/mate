@@ -32,6 +32,7 @@ CREATE TABLE owner_task_drafts (
   action TEXT NOT NULL,
   input_json TEXT NOT NULL,
   input_end_seq INTEGER NOT NULL,
+  conversation_id INTEGER NOT NULL DEFAULT 1,
   state TEXT NOT NULL CHECK(state IN ('editing','kept','deferred','abandoned','ready','applied')),
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL

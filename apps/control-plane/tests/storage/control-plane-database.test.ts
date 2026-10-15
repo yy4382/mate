@@ -77,8 +77,8 @@ it("a new data directory gets the complete format without the Push service", () 
   const f = fixture();
   const auth = new OwnerAuth({ dataDir: f.dataDir });
   try {
-    expect(tableNames(auth.db)).toHaveLength(39);
-    expect(columnCount(auth.db)).toBe(248);
+    expect(tableNames(auth.db)).toHaveLength(40);
+    expect(columnCount(auth.db)).toBe(257);
     expect(indexCount(auth.db)).toBe(24);
     expect(columnNames(auth.db, "owner_push_deliveries")).toEqual([
       "event_key",
@@ -101,6 +101,7 @@ it("a new data directory gets the complete format without the Push service", () 
       "created_at",
       "author_kind",
       "author_id",
+      "source_conversation_id",
       "root_id",
       "quote_id",
       "internal_kind",
@@ -228,7 +229,7 @@ it("reopens the format it just created with the same tables and revision", () =>
   const reopened = new OwnerAuth({ dataDir: f.dataDir });
   try {
     expect(tableNames(reopened.db)).toEqual(before);
-    expect(reopened.db.pragma("user_version", { simple: true })).toBe(34);
+    expect(reopened.db.pragma("user_version", { simple: true })).toBe(35);
   } finally {
     reopened.close();
   }
@@ -397,7 +398,7 @@ it("a new control-plane database carries no privileged approval state", () => {
         )
         .all(),
     ).toEqual([]);
-    expect(auth.db.pragma("user_version", { simple: true })).toBe(34);
+    expect(auth.db.pragma("user_version", { simple: true })).toBe(35);
   } finally {
     auth.close();
   }
@@ -436,7 +437,7 @@ it("rejects an unknown control-plane revision instead of opening it as current",
   expect(() => new OwnerAuth({ dataDir: f.dataDir })).toThrow(/control-plane schema revision 999/);
 });
 
-it.each([27, 28, 29, 30, 31, 32, 33])(
+it.each([27, 28, 29, 30, 31, 32, 33, 34])(
   "rejects the superseded control-plane revision %i",
   (revision) => {
     const f = fixture();
@@ -445,19 +446,19 @@ it.each([27, 28, 29, 30, 31, 32, 33])(
     database.close();
 
     expect(() => new OwnerAuth({ dataDir: f.dataDir })).toThrow(
-      new RegExp(`uses control-plane schema revision ${revision}; this release uses revision 34`),
+      new RegExp(`uses control-plane schema revision ${revision}; this release uses revision 35`),
     );
   },
 );
 
 it("rejects a current revision that is missing declared schema structures", () => {
   const f = fixture();
-  const database = makeDatabase(f.path, applicationId, 34);
+  const database = makeDatabase(f.path, applicationId, 35);
   database.exec("CREATE TABLE unrelated(value TEXT)");
   database.close();
 
   expect(() => new OwnerAuth({ dataDir: f.dataDir })).toThrow(
-    /claims control-plane schema revision 34 but is missing/,
+    /claims control-plane schema revision 35 but is missing/,
   );
 });
 
@@ -469,6 +470,6 @@ it("rejects the current revision when a declared Durable handoff structure is mi
   database.exec("DROP TABLE owner_durable_input_bindings");
   database.close();
   expect(() => new OwnerAuth({ dataDir: f.dataDir })).toThrow(
-    /claims control-plane schema revision 34 but is missing .*owner_durable_input_bindings/,
+    /claims control-plane schema revision 35 but is missing .*owner_durable_input_bindings/,
   );
 });

@@ -1,3 +1,4 @@
+import { recordPresentation } from "../messages/presentation.js";
 import type { OwnerMessage, OwnerPrincipalKind, OwnerTask } from "@mate/protocol/owner";
 import type Database from "better-sqlite3";
 import { createHash, randomUUID } from "node:crypto";
@@ -143,6 +144,7 @@ export class TaskService {
       .inspectPositionChanges({
         agentId: draft.agent_id,
         inputEndSequence: draft.input_end_seq,
+        conversationId: draft.conversation_id,
         channelId: position.channelId,
         rootId: position.rootId,
       })
@@ -160,18 +162,18 @@ export class TaskService {
         .prepare("INSERT OR IGNORE INTO owner_task_draft_reviews(draft_id,message_id) VALUES(?,?)")
         .run(draftId, message.id);
       const draft = z
-        .looseObject({ agent_id: z.string() })
-        .parse(this.db.prepare("SELECT agent_id FROM owner_task_drafts WHERE id=?").get(draftId));
+        .looseObject({ agent_id: z.string(), conversation_id: z.number() })
+        .parse(
+          this.db
+            .prepare("SELECT agent_id,conversation_id FROM owner_task_drafts WHERE id=?")
+            .get(draftId),
+        );
       this.db
         .prepare(
           "INSERT OR IGNORE INTO owner_agent_message_attention(agent_id,message_id,updated_at) VALUES(?,?,?)",
         )
         .run(draft.agent_id, message.id, this.now());
-      this.db
-        .prepare(
-          "UPDATE owner_agent_message_attention SET presented=1,updated_at=? WHERE agent_id=? AND message_id=?",
-        )
-        .run(this.now(), draft.agent_id, message.id);
+      recordPresentation(this.db, draft.agent_id, draft.conversation_id, message.id, this.now());
     }
   }
 
@@ -288,6 +290,7 @@ export class TaskService {
         const { changes } = this.conversations.inspectPositionChanges({
           agentId: run.agent_id,
           inputEndSequence: run.input_end_seq,
+          conversationId: run.conversation_id,
           channelId,
           rootId,
         });
@@ -295,7 +298,7 @@ export class TaskService {
           const draftId = randomUUID();
           this.db
             .prepare(
-              "INSERT INTO owner_task_drafts(id,agent_id,task_id,action,input_json,input_end_seq,state,created_at,updated_at) VALUES(?,?,?,?,?,?,'editing',?,?)",
+              "INSERT INTO owner_task_drafts(id,agent_id,task_id,action,input_json,input_end_seq,conversation_id,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'editing',?,?)",
             )
             .run(
               draftId,
@@ -304,6 +307,7 @@ export class TaskService {
               taskOperation,
               JSON.stringify(args),
               run.input_end_seq,
+              run.conversation_id,
               this.now(),
               this.now(),
             );
@@ -320,6 +324,7 @@ export class TaskService {
           );
         if (
           !draft ||
+          draft.conversation_id !== run.conversation_id ||
           draft.action !== taskOperation ||
           draft.state !== "ready" ||
           draft.task_id !== (task?.id ?? null)
@@ -409,7 +414,8 @@ export class TaskService {
                   .prepare("SELECT * FROM owner_task_drafts WHERE id=? AND agent_id=?")
                   .get(args.draftId, run.agent_id),
               );
-            if (!draft) throw new AgentToolRefusal("Task draft is not available");
+            if (!draft || draft.conversation_id !== run.conversation_id)
+              throw new AgentToolRefusal("Task draft is not available");
             const position = this.taskDraftPosition(draft);
             this.conversations.requireMembership(run.agent_id, position.channelId);
             const changes = this.unreviewedTaskChanges(draft);

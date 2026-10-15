@@ -300,7 +300,7 @@ export class AgentRunCoordinator {
       const messages = this.records.readRunContext(active.runId, candidate.agent_id);
       if (!messages) throw new Error("Run context is unavailable");
       const isCurrent = () => this.current(active.runId, candidate);
-      const bindTool: AgentLoopActions["bindTool"] = (taskId, operation, input) =>
+      const bindTool: AgentLoopActions["bindTool"] = (taskId, operation, input, conversationId) =>
         new AgentSession(this.db).bindTool(
           candidate.agent_id,
           candidate.session_id,
@@ -308,8 +308,14 @@ export class AgentRunCoordinator {
           taskId,
           operation,
           input,
+          conversationId,
         );
-      const executeTool: AgentLoopActions["executeTool"] = ({ toolCallId, operation, input }) =>
+      const executeTool: AgentLoopActions["executeTool"] = ({
+        toolCallId,
+        conversationId,
+        operation,
+        input,
+      }) =>
         Promise.resolve(
           this.tools.execute(
             {
@@ -317,6 +323,7 @@ export class AgentRunCoordinator {
               nodeId: candidate.node_id,
               agentId: candidate.agent_id,
               toolCallId,
+              conversationId,
             },
             operation,
             input,

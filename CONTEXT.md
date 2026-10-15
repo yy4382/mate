@@ -9,7 +9,11 @@ An autonomous colleague with a persistent identity, its own context, and a defau
 _Avoid_: Worker (when referring to an Agent)
 
 **Agent session**:
-One logical context belonging to an Agent and continuing across channels, threads, and direct messages. New messages and new runs do not create parallel sessions for the same Agent.
+The primary logical context belonging to an Agent and continuing across channels, threads, and direct messages. New messages and new runs continue that primary context. Work assistants have separate contexts while retaining the same owning Agent.
+
+**Work assistant**:
+A named helper delegated work by an Agent or another helper. It has its own context and reports to its original delegator, while sharing the owning Agent’s workspace, tools and business identity. It is not a new member, a task owner, or a separate privilege boundary. Pausing the owning Agent pauses all its helpers.
+_Avoid_: Mate Agent (when referring to a temporary helper)
 
 **Agent transcript**:
 Inputs and outputs preserved in the order the model actually experienced them, including model-visible run instructions, assistant output, tool calls, and tool results. It records the Agent's experienced context, distinct from channel chat history, message deliveries not yet presented to the model, and records of operation execution. Pi Durable stores the confirmed model contributions; in-progress output, failed responses, and usage diagnostics retain their distinct meanings and are not confirmed model history.

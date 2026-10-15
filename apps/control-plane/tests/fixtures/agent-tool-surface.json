@@ -1,5 +1,41 @@
 [
   {
+    "name": "spawn_agent",
+    "description": "启动命名工作助手并立即返回。助手共享你的节点、工作区和业务身份，普通正文仅回报直接委派者。默认继承已确认上下文；none仅传新任务。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "task_name": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fork_turns": {
+          "default": "all",
+          "type": "string",
+          "enum": ["all", "none"]
+        }
+      },
+      "required": ["task_name", "message", "fork_turns"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_agents",
+    "description": "列出同属一个Mate Agent的工作助手身份、任务路径及原生工作状态。",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "agents.list",
     "description": "发现当前已配置、可通过 Mate 联系的其他 Agent 身份。",
     "inputSchema": {
@@ -999,6 +1035,12 @@
               "type": "string",
               "minLength": 1
             },
+            "conversationId": {
+              "default": 1,
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
             "query": {
               "type": "string",
               "minLength": 1
@@ -1014,7 +1056,7 @@
               "maximum": 9007199254740991
             }
           },
-          "required": ["agentId", "query", "through", "after"],
+          "required": ["agentId", "conversationId", "query", "through", "after"],
           "additionalProperties": false
         }
       },

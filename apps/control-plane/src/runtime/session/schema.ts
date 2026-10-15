@@ -6,6 +6,8 @@ CREATE TABLE owner_durable_session_bindings (
 CREATE TABLE owner_durable_tool_calls (
   agent_id TEXT NOT NULL REFERENCES owner_agents(id),
   task_id TEXT NOT NULL,
+  conversation_id INTEGER NOT NULL DEFAULT 1,
+  operation_id TEXT,
   identity TEXT NOT NULL UNIQUE,
   action_scope_id TEXT NOT NULL,
   operation TEXT NOT NULL,
@@ -22,6 +24,7 @@ CREATE TABLE owner_durable_input_bindings (
 CREATE TABLE owner_agent_session_updates (
   id TEXT PRIMARY KEY,
   agent_id TEXT NOT NULL REFERENCES owner_agents(id),
+  conversation_id INTEGER NOT NULL DEFAULT 1,
   message_json TEXT NOT NULL
 );
 `;

@@ -1,3 +1,4 @@
+import { recordPresentation } from "./presentation.js";
 import type { OwnerMessage, OwnerMessagePage } from "@mate/protocol/owner";
 import { AgentToolRefusal } from "../errors.js";
 import { messageRowSchema, toMessage } from "../rows.js";
@@ -119,11 +120,7 @@ export class MessageTimeline {
           const page = this.listMessages(args.conversationId, before, args.limit);
           if (!page) throw new AgentToolRefusal("Conversation is not available");
           for (const message of page.messages)
-            this.db
-              .prepare(
-                "UPDATE owner_agent_message_attention SET presented=1,updated_at=? WHERE agent_id=? AND message_id=?",
-              )
-              .run(this.now(), run.agent_id, message.id);
+            recordPresentation(this.db, run.agent_id, run.conversation_id, message.id, this.now());
           return { conversation, ...page };
         },
       ),
@@ -135,11 +132,7 @@ export class MessageTimeline {
           const thread = this.listThread(args.conversationId, args.rootId);
           if (!thread) throw new AgentToolRefusal("Thread is not available");
           for (const message of [thread.root, ...thread.replies])
-            this.db
-              .prepare(
-                "UPDATE owner_agent_message_attention SET presented=1,updated_at=? WHERE agent_id=? AND message_id=?",
-              )
-              .run(this.now(), run.agent_id, message.id);
+            recordPresentation(this.db, run.agent_id, run.conversation_id, message.id, this.now());
           return thread;
         },
       ),

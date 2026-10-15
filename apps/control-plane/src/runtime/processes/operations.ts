@@ -125,6 +125,9 @@ export class AgentProcessOperationBroker {
         !isDeepStrictEqual(original.input, identity.request.input))
     )
       throw new Error("Recovered tool arguments differ from the committed call");
+    this.database
+      .prepare("UPDATE owner_durable_tool_calls SET operation_id=? WHERE agent_id=? AND identity=?")
+      .run(deriveAgentProcessOperationId(agentId, toolCallId), agentId, toolCallId);
     const result = await this.execute(
       {
         runId,

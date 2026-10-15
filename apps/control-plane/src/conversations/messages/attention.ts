@@ -1,3 +1,4 @@
+import { recordPresentation, presentationExistsSql } from "./presentation.js";
 import type { OwnerMessage } from "@mate/protocol/owner";
 import type { AgentConversationPosition } from "../contracts.js";
 import { AgentToolRefusal } from "../errors.js";
@@ -69,11 +70,18 @@ export class ConversationAttention {
   inspectAgentPositionChanges({
     agentId,
     inputEndSequence,
+    conversationId = 1,
     channelId,
     rootId,
   }: AgentConversationPosition): { changes: OwnerMessage[] } {
     return {
-      changes: this.unpresentedPositionMessages(agentId, inputEndSequence, channelId, rootId),
+      changes: this.unpresentedPositionMessages(
+        agentId,
+        inputEndSequence,
+        channelId,
+        rootId,
+        conversationId,
+      ),
     };
   }
 
@@ -82,25 +90,30 @@ export class ConversationAttention {
     inputEndSequence: number,
     channelId: string,
     rootId?: string,
+    conversationId = 1,
   ): OwnerMessage[] {
     const rows = messageRowSchema.array().parse(
       this.db
         .prepare(
           `SELECT m.id,m.channel_id,m.order_seq,m.text,m.root_id,m.quote_id,m.author_kind,m.author_id,m.created_at
       FROM owner_messages m WHERE m.channel_id=?
-      AND NOT (m.author_kind='agent' AND m.author_id=?)
+      AND NOT (m.author_kind='agent' AND m.author_id=? AND m.source_conversation_id=?)
       AND (? IS NULL OR m.id=? OR m.root_id=?)
-      AND NOT EXISTS (SELECT 1 FROM owner_agent_message_attention a WHERE a.agent_id=? AND a.message_id=m.id AND a.presented=1)
+      AND NOT EXISTS ${presentationExistsSql}
       AND NOT EXISTS (SELECT 1 FROM owner_message_deliveries d WHERE d.recipient_id=? AND d.recipient_kind='agent' AND d.message_id=m.id AND d.seq<=?)
       ORDER BY m.order_seq`,
         )
         .all(
           channelId,
           agentId,
+          conversationId,
           rootId ?? null,
           rootId ?? null,
           rootId ?? null,
           agentId,
+          conversationId,
+          agentId,
+          conversationId,
           agentId,
           inputEndSequence,
         ),
@@ -114,21 +127,25 @@ export class ConversationAttention {
         .prepare(
           `SELECT m.id,m.channel_id,m.order_seq,m.text,m.root_id,m.quote_id,m.author_kind,m.author_id,m.created_at
       FROM owner_messages m WHERE m.channel_id=?
-      AND NOT (m.author_kind='agent' AND m.author_id=?)
+      AND NOT (m.author_kind='agent' AND m.author_id=? AND m.source_conversation_id=?)
       AND (? IS NULL OR m.id=? OR m.root_id=?)
       AND NOT EXISTS (SELECT 1 FROM owner_agent_draft_reviews r WHERE r.draft_id=? AND r.message_id=m.id)
-      AND NOT EXISTS (SELECT 1 FROM owner_agent_message_attention a WHERE a.agent_id=? AND a.message_id=m.id AND a.presented=1)
+      AND NOT EXISTS ${presentationExistsSql}
       AND NOT EXISTS (SELECT 1 FROM owner_message_deliveries d WHERE d.recipient_id=? AND d.recipient_kind='agent' AND d.message_id=m.id AND d.seq<=?)
       ORDER BY m.order_seq`,
         )
         .all(
           draft.channel_id,
           draft.agent_id,
+          draft.conversation_id,
           draft.root_id,
           draft.root_id,
           draft.root_id,
           draft.id,
           draft.agent_id,
+          draft.conversation_id,
+          draft.agent_id,
+          draft.conversation_id,
           draft.agent_id,
           draft.input_end_seq,
         ),
@@ -142,32 +159,33 @@ export class ConversationAttention {
         .prepare("INSERT OR IGNORE INTO owner_agent_draft_reviews(draft_id,message_id) VALUES(?,?)")
         .run(draftId, message.id);
       const draft = z
-        .looseObject({ agent_id: z.string() })
-        .parse(this.db.prepare("SELECT agent_id FROM owner_agent_drafts WHERE id=?").get(draftId));
+        .looseObject({ agent_id: z.string(), conversation_id: z.number() })
+        .parse(
+          this.db
+            .prepare("SELECT agent_id,conversation_id FROM owner_agent_drafts WHERE id=?")
+            .get(draftId),
+        );
       this.db
         .prepare(
           "INSERT OR IGNORE INTO owner_agent_message_attention(agent_id,message_id,updated_at) VALUES(?,?,?)",
         )
         .run(draft.agent_id, message.id, this.now());
-      this.db
-        .prepare(
-          "UPDATE owner_agent_message_attention SET presented=1,updated_at=? WHERE agent_id=? AND message_id=?",
-        )
-        .run(this.now(), draft.agent_id, message.id);
+      recordPresentation(this.db, draft.agent_id, draft.conversation_id, message.id, this.now());
     }
   }
 
-  private readAgentDraft(agentId: string, id: string) {
+  private readAgentDraft(agentId: string, id: string, conversationId: number) {
     const row = agentDraftRowSchema
       .optional()
       .parse(
         this.db
           .prepare(
-            "SELECT id,agent_id,channel_id,root_id,quote_id,text,input_end_seq,state FROM owner_agent_drafts WHERE id=? AND agent_id=?",
+            "SELECT id,agent_id,channel_id,root_id,quote_id,text,input_end_seq,conversation_id,state FROM owner_agent_drafts WHERE id=? AND agent_id=?",
           )
           .get(id, agentId),
       );
-    if (!row) throw new AgentToolRefusal("Draft is not available");
+    if (!row || row.conversation_id !== conversationId)
+      throw new AgentToolRefusal("Draft is not available");
     return row;
   }
 
@@ -227,12 +245,13 @@ export class ConversationAttention {
             const freshness = this.inspectAgentPositionChanges({
               agentId: run.agent_id,
               inputEndSequence: run.input_end_seq,
+              conversationId: run.conversation_id,
               channelId: args.conversationId,
               rootId: args.rootId,
             });
             this.db
               .prepare(
-                "INSERT INTO owner_agent_drafts(id,agent_id,channel_id,root_id,quote_id,text,input_end_seq,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'editing',?,?)",
+                "INSERT INTO owner_agent_drafts(id,agent_id,channel_id,root_id,quote_id,text,input_end_seq,conversation_id,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,'editing',?,?)",
               )
               .run(
                 id,
@@ -242,6 +261,7 @@ export class ConversationAttention {
                 args.quoteId ?? null,
                 args.text,
                 run.input_end_seq,
+                run.conversation_id,
                 at,
                 at,
               );
@@ -259,7 +279,7 @@ export class ConversationAttention {
       "drafts.review": defineConversationTool(
         conversationToolDefinitions["drafts.review"],
         (run, toolCallId, args) => {
-          const draft = this.readAgentDraft(run.agent_id, args.draftId);
+          const draft = this.readAgentDraft(run.agent_id, args.draftId, run.conversation_id);
           this.directory.requireAgentConversation(run.agent_id, draft.channel_id);
           return this.toolActions.record(run, toolCallId, "drafts.review", args, () => {
             const changes = this.unreviewedDraftChanges(draft);
@@ -302,6 +322,7 @@ export class ConversationAttention {
               const { changes } = this.inspectAgentPositionChanges({
                 agentId: run.agent_id,
                 inputEndSequence: run.input_end_seq,
+                conversationId: run.conversation_id,
                 channelId: args.conversationId,
                 rootId: args.rootId,
               });
@@ -310,7 +331,7 @@ export class ConversationAttention {
                 const at = this.now();
                 this.db
                   .prepare(
-                    "INSERT INTO owner_agent_drafts(id,agent_id,channel_id,root_id,quote_id,text,input_end_seq,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'editing',?,?)",
+                    "INSERT INTO owner_agent_drafts(id,agent_id,channel_id,root_id,quote_id,text,input_end_seq,conversation_id,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,'editing',?,?)",
                   )
                   .run(
                     id,
@@ -320,6 +341,7 @@ export class ConversationAttention {
                     args.quoteId ?? null,
                     args.text,
                     run.input_end_seq,
+                    run.conversation_id,
                     at,
                     at,
                   );
@@ -333,7 +355,7 @@ export class ConversationAttention {
               }
             }
             if (args.draftId) {
-              const draft = this.readAgentDraft(run.agent_id, args.draftId);
+              const draft = this.readAgentDraft(run.agent_id, args.draftId, run.conversation_id);
               if (
                 draft.channel_id !== args.conversationId ||
                 draft.root_id !== (args.rootId ?? null) ||

@@ -17,6 +17,7 @@ import { dirname, join } from "node:path";
 const cursorSchema = z
   .object({
     agentId: z.string().min(1),
+    conversationId: z.number().int().positive().default(1),
     query: z.string().min(1),
     through: z.number().int().nonnegative(),
     after: z.number().int().nonnegative(),
@@ -37,7 +38,8 @@ export class AgentHistory {
             "只读搜索自己的已确认会话历史（含压缩前消息）：user/assistant/toolResult正文及工具名称、ID、JSON参数；非文字块省略，不含隐藏思维、签名或二进制。query为非空且代理对完整的大小写敏感字面子串。按seq升序，每条取首个命中，每次最多扫描100条、返回20条、摘录400个UTF-16代码单元；巨型记录仍需完整解析。match和excerpt范围均为文字投影中从0开始的[start,end)。原样携nextCursor和同一query续查，空命中也可能有下一页；追加记录需新搜索。旧历史不授权重新执行。",
           schema: z.object({ query: z.string().min(1), cursor: cursorSchema.optional() }).strict(),
         },
-        (identity, input) => this.search(identity.agentId, input.query, input.cursor),
+        (identity, input) =>
+          this.search(identity.agentId, input.query, input.cursor, identity.conversationId),
       ),
       "history.read": defineAgentTool(
         {
@@ -51,7 +53,14 @@ export class AgentHistory {
             })
             .strict(),
         },
-        (identity, input) => this.read(identity.agentId, input.id, input.offset, input.maxChars),
+        (identity, input) =>
+          this.read(
+            identity.agentId,
+            input.id,
+            input.offset,
+            input.maxChars,
+            identity.conversationId,
+          ),
       ),
     };
   }
@@ -59,6 +68,7 @@ export class AgentHistory {
   private async source<T>(
     agentId: string,
     read: (storage: Storage, conversation: ConversationId) => Promise<T>,
+    conversationId = 1,
   ) {
     const path = join(dirname(this.db.name), "durable", `${agentId}.sqlite`);
     if (!existsSync(path)) throw new AgentToolRefusal("History record not found");
@@ -68,122 +78,151 @@ export class AgentHistory {
     try {
       await database.exec("PRAGMA synchronous=FULL;");
       storage = await SqliteStorage.open(database);
-      const conversations = await storage.scanConversations({}, 2, undefined, BACKGROUND_CONTEXT);
-      const conversation = conversations.items[0];
-      if (!conversation || conversations.items.length !== 1)
-        throw new AgentToolRefusal("History unavailable");
-      return await read(storage, conversation.id);
+      let cursor;
+      do {
+        const page = await storage.scanConversations({}, 100, cursor, BACKGROUND_CONTEXT);
+        const conversation = page.items.find((item) => item.id === conversationId);
+        if (conversation) return await read(storage, conversation.id);
+        cursor = page.next;
+      } while (cursor);
+      throw new AgentToolRefusal("History unavailable");
     } finally {
       if (storage) await storage.close(BACKGROUND_CONTEXT);
       else await database.close();
     }
   }
 
-  private async search(agentId: string, query: string, cursor?: SearchCursor) {
+  private async search(
+    agentId: string,
+    query: string,
+    cursor?: SearchCursor,
+    sourceConversation = 1,
+  ) {
     if (/[\uD800-\uDFFF]/u.test(query)) throw new AgentToolRefusal("Invalid history query");
-    return this.source(agentId, async (storage, conversationId) => {
-      const latest =
-        (await storage.scanEntries({ conversationId }, 1, undefined, BACKGROUND_CONTEXT)).items[0]
-          ?.id ?? 0;
-      if (
-        cursor &&
-        (cursor.agentId !== agentId || cursor.query !== query || cursor.through > latest)
-      )
-        throw new AgentToolRefusal("Invalid history cursor");
-      const through = cursor?.through ?? latest;
-      let after = cursor?.after ?? 0;
-      const page = await storage.scanEntries(
-        {
-          conversationId,
-          order: "ascending",
-          minEntryId: idFromNumber(after + 1),
-          maxEntryId: idFromNumber(through),
-        },
-        100,
-        undefined,
-        BACKGROUND_CONTEXT,
-      );
-      const hits = [];
-      let scanned = 0;
-      for (const entry of page.items) {
-        after = entry.id;
-        scanned++;
-        const row = projectHistoryMessage(agentId, entry);
-        if (!row) continue;
-        const { text, ...metadata } = row;
-        const start = text.indexOf(query);
-        if (start >= 0)
-          hits.push({
-            ...metadata,
-            match: { start, end: start + query.length },
-            excerpt: historyMatchExcerpt(text, start),
-          });
-        if (hits.length === 20) break;
-      }
-      const more =
-        (
-          await storage.scanEntries(
-            {
-              conversationId,
-              minEntryId: idFromNumber(after + 1),
-              maxEntryId: idFromNumber(through),
-            },
-            1,
-            undefined,
-            BACKGROUND_CONTEXT,
-          )
-        ).items.length > 0;
-      return { hits, scanned, nextCursor: more ? { agentId, query, through, after } : null };
-    });
+    return this.source(
+      agentId,
+      async (storage, conversationId) => {
+        const latest =
+          (await storage.scanEntries({ conversationId }, 1, undefined, BACKGROUND_CONTEXT)).items[0]
+            ?.id ?? 0;
+        if (
+          cursor &&
+          (cursor.agentId !== agentId ||
+            cursor.conversationId !== sourceConversation ||
+            cursor.query !== query ||
+            cursor.through > latest)
+        )
+          throw new AgentToolRefusal("Invalid history cursor");
+        const through = cursor?.through ?? latest;
+        let after = cursor?.after ?? 0;
+        const page = await storage.scanEntries(
+          {
+            conversationId,
+            order: "ascending",
+            minEntryId: idFromNumber(after + 1),
+            maxEntryId: idFromNumber(through),
+          },
+          100,
+          undefined,
+          BACKGROUND_CONTEXT,
+        );
+        const hits = [];
+        let scanned = 0;
+        for (const entry of page.items) {
+          after = entry.id;
+          scanned++;
+          const row = projectHistoryMessage(agentId, entry);
+          if (!row) continue;
+          const { text, ...metadata } = row;
+          const start = text.indexOf(query);
+          if (start >= 0)
+            hits.push({
+              ...metadata,
+              match: { start, end: start + query.length },
+              excerpt: historyMatchExcerpt(text, start),
+            });
+          if (hits.length === 20) break;
+        }
+        const more =
+          (
+            await storage.scanEntries(
+              {
+                conversationId,
+                minEntryId: idFromNumber(after + 1),
+                maxEntryId: idFromNumber(through),
+              },
+              1,
+              undefined,
+              BACKGROUND_CONTEXT,
+            )
+          ).items.length > 0;
+        return {
+          hits,
+          scanned,
+          nextCursor: more ? { agentId, conversationId, query, through, after } : null,
+        };
+      },
+      sourceConversation,
+    );
   }
 
-  private async read(agentId: string, id: string, offset: number, maxChars: number) {
+  private async read(
+    agentId: string,
+    id: string,
+    offset: number,
+    maxChars: number,
+    sourceConversation = 1,
+  ) {
     const prefix = `${agentId}:`;
     const seq = Number(id.slice(prefix.length));
     if (!id.startsWith(prefix) || !Number.isSafeInteger(seq) || seq < 1 || `${prefix}${seq}` !== id)
       throw new AgentToolRefusal("History record not found");
-    return this.source(agentId, async (storage, conversationId) => {
-      const record = await storage.entry(conversationId, idFromNumber(seq), BACKGROUND_CONTEXT);
-      const row = record && projectHistoryMessage(agentId, record.entry);
-      if (!row) throw new AgentToolRefusal("History record not found");
-      const { text, ...metadata } = row;
-      if (offset > text.length || splitsPair(text, offset))
-        throw new AgentToolRefusal("Invalid history offset");
-      let end = Math.min(text.length, offset + maxChars);
-      if (splitsPair(text, end)) end--;
-      const neighbor = async (order: "ascending" | "descending") => {
-        let cursor;
-        do {
-          const page = await storage.scanEntries(
-            {
-              conversationId,
-              order,
-              ...(order === "ascending"
-                ? { minEntryId: idFromNumber(seq + 1) }
-                : { maxEntryId: idFromNumber(seq - 1) }),
-            },
-            100,
-            cursor,
-            BACKGROUND_CONTEXT,
-          );
-          for (const entry of page.items) {
-            const next = projectHistoryMessage(agentId, entry);
-            if (next) return next.id;
-          }
-          cursor = page.next;
-        } while (cursor);
-        return null;
-      };
-      return {
-        ...metadata,
-        text: text.slice(offset, end),
-        offset,
-        totalLength: text.length,
-        nextOffset: end < text.length ? end : null,
-        previousId: await neighbor("descending"),
-        nextId: await neighbor("ascending"),
-      };
-    });
+    return this.source(
+      agentId,
+      async (storage, conversationId) => {
+        const record = await storage.entry(conversationId, idFromNumber(seq), BACKGROUND_CONTEXT);
+        const row = record && projectHistoryMessage(agentId, record.entry);
+        if (!row) throw new AgentToolRefusal("History record not found");
+        const { text, ...metadata } = row;
+        if (offset > text.length || splitsPair(text, offset))
+          throw new AgentToolRefusal("Invalid history offset");
+        let end = Math.min(text.length, offset + maxChars);
+        if (splitsPair(text, end)) end--;
+        const neighbor = async (order: "ascending" | "descending") => {
+          let cursor;
+          do {
+            const page = await storage.scanEntries(
+              {
+                conversationId,
+                order,
+                ...(order === "ascending"
+                  ? { minEntryId: idFromNumber(seq + 1) }
+                  : { maxEntryId: idFromNumber(seq - 1) }),
+              },
+              100,
+              cursor,
+              BACKGROUND_CONTEXT,
+            );
+            for (const entry of page.items) {
+              const next = projectHistoryMessage(agentId, entry);
+              if (next) return next.id;
+            }
+            cursor = page.next;
+          } while (cursor);
+          return null;
+        };
+        return {
+          ...metadata,
+          text: text.slice(offset, end),
+          offset,
+          totalLength: text.length,
+          nextOffset: end < text.length ? end : null,
+          previousId: await neighbor("descending"),
+          nextId: await neighbor("ascending"),
+        };
+      },
+      sourceConversation,
+    );
   }
 }
 

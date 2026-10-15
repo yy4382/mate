@@ -27,6 +27,7 @@ CREATE TABLE owner_messages (
   created_at INTEGER NOT NULL,
   author_kind TEXT NOT NULL DEFAULT 'human' CHECK(author_kind IN ('human','agent')),
   author_id TEXT NOT NULL DEFAULT 'owner',
+  source_conversation_id INTEGER NOT NULL DEFAULT 1,
   root_id TEXT REFERENCES owner_messages(id),
   quote_id TEXT REFERENCES owner_messages(id),
   internal_kind TEXT,

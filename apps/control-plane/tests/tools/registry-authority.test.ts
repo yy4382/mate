@@ -70,6 +70,8 @@ it("refuses every registered operation and meta tool for ended, absent and anoth
   const task = { taskId: id, expectedVersion: 1 };
   const reminder = { reminderId: id, expectedVersion: 1 };
   const inputs: Record<string, Record<string, unknown>> = {
+    spawn_agent: { task_name: "refused", message: "Must not start" },
+    list_agents: {},
     "agents.list": {},
     "conversations.list": {},
     "conversations.read": { conversationId },

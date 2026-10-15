@@ -196,9 +196,19 @@ export class MessageWriter {
       );
     this.db
       .prepare(
-        "INSERT INTO owner_messages(id,channel_id,order_seq,text,root_id,quote_id,author_kind,author_id,created_at) VALUES(?,?,?,?,?,?, 'agent', ?,?)",
+        "INSERT INTO owner_messages(id,channel_id,order_seq,text,root_id,quote_id,author_kind,author_id,created_at,source_conversation_id) VALUES(?,?,?,?,?,?, 'agent', ?,?,?)",
       )
-      .run(id, channelId, sequence.next, text, rootId ?? null, quoteId ?? null, run.agent_id, at);
+      .run(
+        id,
+        channelId,
+        sequence.next,
+        text,
+        rootId ?? null,
+        quoteId ?? null,
+        run.agent_id,
+        at,
+        run.conversation_id,
+      );
     const message = toMessage({
       id,
       channel_id: channelId,

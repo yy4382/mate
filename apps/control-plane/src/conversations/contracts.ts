@@ -45,6 +45,7 @@ export type NewOwnerMessage = z.output<typeof newMessageSchema>;
 export interface AgentConversationPosition {
   agentId: string;
   inputEndSequence: number;
+  conversationId?: number | undefined;
   channelId: string;
   rootId?: string | undefined;
 }

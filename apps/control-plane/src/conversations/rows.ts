@@ -65,6 +65,7 @@ export const taskDraftRowSchema = z.looseObject({
   action: z.string(),
   input_json: z.string(),
   input_end_seq: z.number(),
+  conversation_id: z.number().default(1),
   state: z.string(),
 });
 export type TaskDraftRow = z.infer<typeof taskDraftRowSchema>;
@@ -165,6 +166,7 @@ export const agentDraftRowSchema = z.looseObject({
   quote_id: z.string().nullable(),
   text: z.string(),
   input_end_seq: z.number(),
+  conversation_id: z.number().default(1),
   state: z.string(),
 });
 export type AgentDraftRow = z.infer<typeof agentDraftRowSchema>;
