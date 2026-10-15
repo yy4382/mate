@@ -1,6 +1,8 @@
 import {
   assistantsDoc,
   createAssistantWork,
+  createAssistantInterrupt,
+  subagentTools,
   callAssistantTool,
   waitForAssistants,
 } from "./subagents.js";
@@ -240,8 +242,9 @@ export class AgentLoop {
       completeSimple: (requested, context, options) =>
         streamModel(requested, context, options, true).result(),
     };
-    const ready = Promise.withResolvers<void>();
+    const ready = Promise.withResolvers<{ storage: Storage; harness: Harness }>();
     const assistantWork = createAssistantWork(() => this.whileCurrent(ready.promise));
+    const assistantInterrupt = createAssistantInterrupt(() => this.whileCurrent(ready.promise));
     const inputSchema = z.record(z.string(), z.unknown());
     const forward = async (
       api: import("@earendil-works/pi-durable").ToolExecutionApi,
@@ -268,7 +271,7 @@ export class AgentLoop {
     const registry = createRegistry();
     registry.install({
       name: "mate",
-      tasks: [assistantWork],
+      tasks: [assistantWork, assistantInterrupt],
       tools: [
         defineTool({
           name: "tools.list",
@@ -297,7 +300,8 @@ export class AgentLoop {
           replay: "safe",
           executionMode: "sequential",
           execute: async (input, api, context) => {
-            if (input.name === "spawn_agent" || input.name === "list_agents") {
+            if (Object.hasOwn(subagentTools, input.name)) {
+              if (!this.harness) throw new Error("Harness unavailable");
               assertAdvancing();
               try {
                 return {
@@ -311,6 +315,8 @@ export class AgentLoop {
                           api,
                           context,
                           assistantWork,
+                          this.harness,
+                          assistantInterrupt,
                         ),
                       ),
                     },
@@ -507,7 +513,7 @@ export class AgentLoop {
         }, context);
       }
       canAdvance = true;
-      ready.resolve();
+      ready.resolve({ storage, harness });
       this.sendNotice = async (conversationId, deliveryId) => {
         let requestId = `notice:${deliveryId}`;
         let existing = await storage.submissionByRequest(conversation.id, requestId, context);
