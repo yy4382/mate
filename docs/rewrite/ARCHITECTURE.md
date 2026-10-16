@@ -175,18 +175,25 @@ interface ChatApp {
 
 所有工具都直接暴露给模型，不经过"先列出工具、再调用"的元工具。
 
+**聊天端口：** runtime 不依赖聊天 app 的代码。它自己定义 `ChatPort`：绑定到一个账号的聊天操作（读未读、回看、搜索、发送、加入、离开、打开私信、列会话、建任务、改任务），参数就是模型给的参数加上 `requestId = tool:<Durable 工具任务 ID>`，结果原样转成 JSON 交给模型。Agent Manager 把 `ChatApp` 绑定到 Agent 的账号就得到它，每个方法只是补上账号参数。发送和任务操作总是带 `freshness: true`，模型的参数里没有这一项。聊天 app 的拒绝（带 `reason` 的错误）作为错误结果交给模型，不算工具失败。
+
 **对外接口（给 Agent Manager 和连接器用）：**
 
 ```ts
 interface AgentRuntime {
   static open(file, config, env): AgentRuntime // 打开 Harness 并调用 resume()
-  submit(input, { requestId, whenBusy }): Submission // 透传给主对话
-  withdraw(submissionId) // 撤回尚未交给模型的提交
+  // 透传给主对话。带 replaces 时，先撤回收件箱里 requestId 以它开头、且不是这次 requestId 的未交付输入
+  submit(input, { requestId, whenBusy, replaces? }): Submission
+  withdraw(requestId) // 撤回尚未交给模型的提交
+  cursor(name) / advanceCursor(name, value) // 环境在某个来源里的位置，只进不退；连接器用 "chat-inbox"
   configure(change) // 模型、thinking 级别、说明文字；从下一次请求起生效
   view() / watchEvents() // 给管理界面观察
   usage()
   close() // 中止所有进行中的工作，然后关闭 Harness
 }
+// 在没有打开 runtime 的 Agent 文件上读写"已暂停"，给 Agent Manager 用
+readAgentState(file): { paused }
+setAgentPaused(file, paused)
 ```
 
 **关键规则：**
@@ -213,11 +220,10 @@ interface AgentRuntime {
    私信 @所有者     至少 1 条
    通知只是提示，可能已过时；需要时用读取工具查看。什么时候读由你决定。
    ```
-3. 如果收件箱里已经有一条还没交给模型的通知，先撤回它，再提交这条新的。撤回时如果那条恰好已经交给了模型，就照常提交新的。
-4. 提交时 `requestId = notice:<最新事件 ID>`，`whenBusy = "steer"`：Agent 正在运行时，通知插在当前这轮工具调用之后。
-5. 把事件位置推进到最新事件 ID。
+3. 提交时 `requestId = notice:<最新事件 ID>`，`whenBusy = "steer"`，`replaces = "notice:"`：Agent 正在运行时，通知插在当前这轮工具调用之后；收件箱里还没交给模型的旧通知先被撤回。哪些通知还没交付由 Durable 的提交记录决定，连接器不另记，所以崩溃后重来也最多只有一条未交付的通知。撤回时如果那条恰好已经交给了模型，就照常提交新的。
+4. 把事件位置推进到最新事件 ID（`advanceCursor("chat-inbox", …)`）。
 
-**为什么不会丢、不会重复：** 第 4 步和第 5 步之间崩溃的话，重启后会重新处理同一批事件，生成同一个 `requestId`，Durable 会去重。整个流程里没有跨库事务，也不需要。
+**为什么不会丢、不会重复：** 第 3 步和第 4 步之间崩溃的话，重启后会重新处理同一批事件，生成同一个 `requestId`；`replaces` 不撤回与这次 `requestId` 相同的那条，Durable 去重。整个流程里没有跨库事务，也不需要。
 
 **同样的模式也用于提醒**（见 4.2 的提醒扩展）：提醒到期时提交 `requestId = reminder:<id>` 的输入，由 Durable 去重。不需要轮询循环，也不需要另一条唤醒路径。
 

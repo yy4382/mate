@@ -21,6 +21,7 @@
     "zod": "4.6.5"
   },
   "devDependencies": {
+    "@mate/chat": "workspace:*",
     "@mate/testkit": "workspace:*"
   }
 }

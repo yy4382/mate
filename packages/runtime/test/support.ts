@@ -7,6 +7,7 @@ import {
   openAgentRuntime,
   type AgentRuntime,
   type AgentSettings,
+  type ChatPort,
   type Clock,
   type WorkspacePort,
   type WorkspaceToolRequest,
@@ -67,6 +68,7 @@ export type TestAgent = {
   readonly workspace: FakeWorkspace;
   open(options?: {
     onFatal?: (error: unknown) => void;
+    chat?: ChatPort;
   }): Promise<{ runtime: AgentRuntime; database: () => FaultyDatabase }>;
 };
 
@@ -98,6 +100,7 @@ export async function testAgent(
         wrapDatabase: (inner) => (database = new FaultyDatabase(inner)),
         ...(clock === undefined ? {} : { clock }),
         ...(options.onFatal === undefined ? {} : { onFatal: options.onFatal }),
+        ...(options.chat === undefined ? {} : { chat: options.chat }),
       });
       // A frozen store stands for a dead process: there is nothing left to close, and closing would wait forever.
       onTestFinished(() => (database?.frozen ? undefined : runtime.close()));

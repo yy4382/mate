@@ -1,5 +1,6 @@
 import type { ScriptedRequest } from "@mate/testkit";
 import { describe, expect, it } from "vitest";
+import { testChat } from "./chat-port.ts";
 import { testAgent } from "./support.ts";
 
 const spawn = (name: string, message: string) => ({
@@ -57,8 +58,9 @@ describe("work assistants", () => {
     agent.provider.assertComplete();
   });
 
-  it("gives an assistant the workspace tools but not the assistant or reminder tools", async () => {
+  it("gives an assistant the workspace tools but not the assistant, reminder, or chat tools", async () => {
     const agent = await testAgent();
+    const { port } = testChat();
     const finished = Promise.withResolvers<void>();
     let primaryTools: string[] = [];
     let assistantTools: string[] = [];
@@ -76,7 +78,7 @@ describe("work assistants", () => {
       assistantTools = request.toolNames();
       request.text("done");
     });
-    const { runtime } = await agent.open();
+    const { runtime } = await agent.open({ chat: port });
 
     await runtime.submit("delegate it", { requestId: "m1" });
     await finished.promise;
@@ -90,6 +92,11 @@ describe("work assistants", () => {
     );
     expect(assistantTools, "the assistant cannot delegate").not.toContain("assistant");
     expect(assistantTools, "the assistant cannot set reminders").not.toContain("reminder");
+    expect(primaryTools, "the primary conversation can chat").toContain("chat_send");
+    expect(
+      assistantTools.filter((name) => name.startsWith("chat_")),
+      "the assistant has no chat tools",
+    ).toEqual([]);
     agent.provider.assertComplete();
   });
 

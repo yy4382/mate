@@ -105,6 +105,12 @@ Durable 为每个对话维护的输入队列。外界给 runtime 的所有输入
 **结果未知**（unknown result）
 node 工具调用进行中连接断开时，返回给模型的结果：命令可能执行了，也可能没有，不会重试。
 
+**聊天端口**（ChatPort）
+runtime 自己定义的、绑定到 Agent 账号的聊天操作接口，聊天工具只通过它调用聊天 app。Agent Manager 把 `ChatApp` 绑定到账号来实现它。runtime 不 import 聊天 app。
+
+**游标**（cursor）
+runtime 存在自己 Durable 存储里的一个命名位置，只进不退，比如连接器在收件事件里处理到的事件 ID（`chat-inbox`）。
+
 **提醒**（reminder）
 Agent 给自己设定的定时输入，保存在它自己的存储文件里，到时间后提交到主对话的收件箱。
 

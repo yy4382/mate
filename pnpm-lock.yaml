@@ -104,6 +104,9 @@ importers:
         specifier: 4.6.5
         version: 4.6.5
     devDependencies:
+      '@mate/chat':
+        specifier: workspace:*
+        version: link:../chat
       '@mate/testkit':
         specifier: workspace:*
         version: link:../testkit

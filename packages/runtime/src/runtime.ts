@@ -5,11 +5,13 @@ import {
   configure,
   createRegistry,
   type Conversation,
+  type Cursor,
+  defineDoc,
   type Extension,
-  type HarnessOptions,
 } from "@earendil-works/pi-durable";
 import type { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { assistants } from "./assistants.ts";
+import { chatExtension, type ChatPort } from "./chat-tools.ts";
 import { systemClock, type Clock } from "@mate/clock";
 import { Lifetime, guardDatabase } from "./lifetime.ts";
 import { agentModels, type ModelRef, type ModelResolver } from "./models.ts";
@@ -29,6 +31,8 @@ export type AgentRuntimeOptions = {
   /** Read at every model request, so a key change applies from the next request. */
   readonly apiKey: () => string;
   readonly workspace: WorkspacePort;
+  /** The chat app bound to this Agent's account. Without it the Agent has no chat tools. */
+  readonly chat?: ChatPort;
   readonly resolveModel?: ModelResolver;
   readonly wrapDatabase?: DatabaseWrapper;
   /** Called once if the runtime's storage fails. The runtime is then dead and the Agent should be reopened. */
@@ -87,13 +91,16 @@ export async function openAgentRuntime(options: AgentRuntimeOptions): Promise<Ag
   );
   const { extension: remindersExtension, run: runReminders } = reminders(clock, lifetime.signal);
   // Extensions available in the primary conversation only; assistants must not have them.
-  const primaryOnlyExtensions: readonly Extension[] = [assistantsPrimary, remindersExtension];
+  const primaryOnlyExtensions: readonly Extension[] = [
+    assistantsPrimary,
+    remindersExtension,
+    ...(options.chat === undefined ? [] : [chatExtension(options.chat)]),
+  ];
   if (options.workspace !== undefined) {
     registry.install(workspaceExtension(options.workspace, lifetime.signal));
   }
-  registry.install(assistantsPrimary);
+  for (const extension of primaryOnlyExtensions) registry.install(extension);
   registry.install(assistantsIdentity);
-  registry.install(remindersExtension);
   const harness = await Harness.open(
     storage,
     {
@@ -125,11 +132,17 @@ export class AgentRuntime {
     this.#lifetime = lifetime;
   }
 
-  /** Admit an input to the primary conversation. The same `requestId` is admitted once, however often it is sent. */
+  /**
+   * Admit an input to the primary conversation. The same `requestId` is admitted once, however often it is sent.
+   * With `replaces`, every input still queued whose requestId starts with it, other than `requestId` itself, is
+   * withdrawn first; one the model was handed meanwhile stays, so the model then sees both.
+   */
   async submit(
     content: string,
-    options: { requestId: string; whenBusy?: WhenBusy },
+    options: { requestId: string; whenBusy?: WhenBusy; replaces?: string },
   ): Promise<SubmittedInput> {
+    if (options.replaces !== undefined)
+      await this.#withdrawQueued(options.replaces, options.requestId);
     const submission = await this.#root.submit(
       {
         type: "input",
@@ -156,6 +169,39 @@ export class AgentRuntime {
       this.#root.id,
     );
     return result === "aborted" ? "withdrawn" : result;
+  }
+
+  /** Withdraw the queued inputs whose requestId starts with `prefix`, except `keep`. Queued is what Durable stores. */
+  async #withdrawQueued(prefix: string, keep: string): Promise<void> {
+    let cursor: Cursor | undefined;
+    do {
+      const page = await this.#storage.scanSubmissions(
+        { conversationId: this.#root.id, status: "queued" },
+        100,
+        cursor,
+        BACKGROUND_CONTEXT,
+      );
+      for (const record of page.items) {
+        if (record.requestId === undefined || record.requestId === keep) continue;
+        if (!record.requestId.startsWith(prefix)) continue;
+        // A boundary may place it in the meantime; Durable then reports it placed and leaves it to the model.
+        await this.#harness.abortSubmission(record.id, BACKGROUND_CONTEXT, this.#root.id);
+      }
+      cursor = page.next;
+    } while (cursor !== undefined);
+  }
+
+  /** The position stored under `name`, 0 until first advanced. */
+  async cursor(name: string): Promise<number> {
+    return (await this.#harness.snapshot(CursorsDoc, BACKGROUND_CONTEXT))?.positions[name] ?? 0;
+  }
+
+  /** Move the position stored under `name` forward to `value`. A position never moves back. */
+  async advanceCursor(name: string, value: number): Promise<void> {
+    await this.#harness.commit(async (tx) => {
+      const state = await tx.doc(CursorsDoc);
+      if ((state.positions[name] ?? 0) < value) state.positions[name] = value;
+    }, BACKGROUND_CONTEXT);
   }
 
   /** Change the model settings of every conversation of this Agent, effective from each one's next request. */
@@ -189,6 +235,14 @@ export class AgentRuntime {
     return this.#closed;
   }
 }
+
+/** Positions of the Agent's environment in its sources, such as the connector's in the chat inbox, by name. */
+const CursorsDoc = defineDoc<{ positions: Record<string, number> }>({
+  kind: "mate.cursors",
+  version: 1,
+  scope: "session",
+  initial: () => ({ positions: {} }),
+});
 
 function agentChange(settings: AgentSettings) {
   return {
