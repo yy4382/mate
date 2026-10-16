@@ -1,0 +1,135 @@
+import { z } from "zod";
+import type { Actor } from "./accounts.ts";
+import { ChatError } from "./chat-error.ts";
+import { SqlBoolean, idList, type ChatDatabase } from "./database.ts";
+import { Id } from "./identifiers.ts";
+
+export const ConversationKind = z.enum(["public", "private", "dm"]);
+
+const ConversationRow = z.object({
+  id: Id,
+  kind: ConversationKind,
+  name: z.string().nullable(),
+  archived: SqlBoolean,
+});
+export type Conversation = z.output<typeof ConversationRow>;
+
+/** A conversation as its reader sees it. `name` is null for a DM. */
+export const ConversationView = z.object({
+  conversationId: Id,
+  kind: ConversationKind,
+  name: z.string().nullable(),
+  archived: z.boolean(),
+  member: z.boolean(),
+  members: z.array(Id),
+});
+export type ConversationView = z.output<typeof ConversationView>;
+
+const SELECT_CONVERSATION = "SELECT id, kind, name, archived FROM conversations";
+
+const Exists = z.object({ found: SqlBoolean });
+
+export function isMember(db: ChatDatabase, account: number, conversationId: number): boolean {
+  return (
+    db.get(
+      Exists,
+      "SELECT EXISTS (SELECT 1 FROM memberships WHERE conversation_id = ? AND account_id = ?) AS found",
+      conversationId,
+      account,
+    )?.found ?? false
+  );
+}
+
+/** Public channels are readable without joining; private channels and DMs only by members. The owner reads all. */
+export function canRead(db: ChatDatabase, actor: Actor, conversation: Conversation): boolean {
+  return actor.owner || conversation.kind === "public" || isMember(db, actor.id, conversation.id);
+}
+
+/**
+ * The conversation, if `actor` may read it. A conversation the actor may not read is reported exactly like one that
+ * does not exist.
+ */
+export function readableConversation(
+  db: ChatDatabase,
+  actor: Actor,
+  conversationId: number,
+): Conversation {
+  const conversation = db.get(
+    ConversationRow,
+    `${SELECT_CONVERSATION} WHERE id = ?`,
+    conversationId,
+  );
+  if (conversation === undefined || !canRead(db, actor, conversation))
+    throw new ChatError("not-found", `conversation ${conversationId} not found`);
+  return conversation;
+}
+
+/** Posting, task actions and attachments need membership in a conversation that is not archived. */
+export function requireWritable(db: ChatDatabase, actor: Actor, conversation: Conversation): void {
+  if (!isMember(db, actor.id, conversation.id))
+    throw new ChatError(
+      "not-member",
+      `account ${actor.id} is not a member of conversation ${conversation.id}`,
+    );
+  if (conversation.archived)
+    throw new ChatError("archived", `conversation ${conversation.id} is archived`);
+}
+
+/** Every conversation `actor` may read, in creation order. */
+export function listConversations(db: ChatDatabase, actor: Actor): ConversationView[] {
+  const readable = db.all(
+    ConversationRow,
+    `${SELECT_CONVERSATION} c WHERE ? OR c.kind = 'public'
+       OR EXISTS (SELECT 1 FROM memberships m WHERE m.conversation_id = c.id AND m.account_id = ?)
+     ORDER BY c.id`,
+    actor.owner ? 1 : 0,
+    actor.id,
+  );
+  return views(db, actor, readable);
+}
+
+export function conversationView(
+  db: ChatDatabase,
+  actor: Actor,
+  conversation: Conversation,
+): ConversationView {
+  const [view] = views(db, actor, [conversation]);
+  if (view === undefined) throw new Error(`no view for conversation ${conversation.id}`);
+  return view;
+}
+
+const MemberRow = z.object({ conversation_id: Id, account_id: Id });
+
+function views(db: ChatDatabase, actor: Actor, conversations: Conversation[]): ConversationView[] {
+  const members = Map.groupBy(
+    db.all(
+      MemberRow,
+      `SELECT conversation_id, account_id FROM memberships
+       WHERE conversation_id IN (SELECT value FROM json_each(?)) ORDER BY account_id`,
+      idList(conversations.map((conversation) => conversation.id)),
+    ),
+    (row) => row.conversation_id,
+  );
+  return conversations.map((conversation) => {
+    const accountIds = (members.get(conversation.id) ?? []).map((row) => row.account_id);
+    return {
+      conversationId: conversation.id,
+      kind: conversation.kind,
+      name: conversation.name,
+      archived: conversation.archived,
+      member: accountIds.includes(actor.id),
+      members: accountIds,
+    };
+  });
+}
+
+/** Load a conversation by ID without a visibility check, for code that has already established access. */
+export function conversationById(db: ChatDatabase, conversationId: number): Conversation {
+  const conversation = db.get(
+    ConversationRow,
+    `${SELECT_CONVERSATION} WHERE id = ?`,
+    conversationId,
+  );
+  if (conversation === undefined) throw new Error(`conversation ${conversationId} vanished`);
+  return conversation;
+}

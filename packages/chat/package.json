@@ -1,0 +1,22 @@
+{
+  "name": "@mate/chat",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "mate-source": "./src/index.ts",
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@mate/testkit": "workspace:*"
+  }
+}
