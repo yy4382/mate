@@ -1,5 +1,5 @@
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import { FaultyDatabase, ScriptedProvider, temporaryDirectory } from "@mate/testkit";
+import { FakeClock, FaultyDatabase, ScriptedProvider, temporaryDirectory } from "@mate/testkit";
 import { join } from "node:path";
 import { onTestFinished } from "vitest";
 import {
@@ -7,10 +7,13 @@ import {
   openAgentRuntime,
   type AgentRuntime,
   type AgentSettings,
+  type Clock,
   type WorkspacePort,
   type WorkspaceToolRequest,
   type WorkspaceToolResult,
 } from "../src/index.ts";
+
+export { FakeClock } from "@mate/testkit";
 
 export const defaultSettings: AgentSettings = { model: { provider: "openai", modelId: "gpt-4.1" } };
 
@@ -68,7 +71,10 @@ export type TestAgent = {
 };
 
 /** A created Agent store, a scripted provider, and a fake workspace, all cleaned up after the test. */
-export async function testAgent(settings: AgentSettings = defaultSettings): Promise<TestAgent> {
+export async function testAgent(
+  settings: AgentSettings = defaultSettings,
+  clock?: Clock,
+): Promise<TestAgent> {
   const file = join(temporaryDirectory(), "agents", "agent-1.sqlite");
   const provider = await ScriptedProvider.start();
   onTestFinished(() => provider.close());
@@ -90,6 +96,7 @@ export async function testAgent(settings: AgentSettings = defaultSettings): Prom
           return model === undefined ? undefined : { ...model, baseUrl: provider.baseUrl };
         },
         wrapDatabase: (inner) => (database = new FaultyDatabase(inner)),
+        ...(clock === undefined ? {} : { clock }),
         ...(options.onFatal === undefined ? {} : { onFatal: options.onFatal }),
       });
       // A frozen store stands for a dead process: there is nothing left to close, and closing would wait forever.

@@ -5,11 +5,15 @@ import {
   configure,
   createRegistry,
   type Conversation,
+  type Extension,
   type HarnessOptions,
 } from "@earendil-works/pi-durable";
 import type { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
+import { assistants } from "./assistants.ts";
+import { systemClock, type Clock } from "@mate/clock";
 import { Lifetime, guardDatabase } from "./lifetime.ts";
 import { agentModels, type ModelRef, type ModelResolver } from "./models.ts";
+import { reminders } from "./reminders.ts";
 import { createAgentStorage, openAgentStorage, type DatabaseWrapper } from "./storage.ts";
 import { workspaceExtension, type WorkspacePort } from "./workspace-tools.ts";
 
@@ -29,6 +33,8 @@ export type AgentRuntimeOptions = {
   readonly wrapDatabase?: DatabaseWrapper;
   /** Called once if the runtime's storage fails. The runtime is then dead and the Agent should be reopened. */
   readonly onFatal?: (error: unknown) => void;
+  /** Defaults to the system clock. Override in tests. */
+  readonly clock?: Clock;
 };
 
 /** When an input arrives while the Agent is working: join the current work after this tool round, or wait for it. */
@@ -44,9 +50,14 @@ export type WithdrawResult = "withdrawn" | "already_placed" | "settled" | "not_f
 /** Create a new Agent store. The Agent exists once this resolves. */
 export async function createAgentStore(file: string, settings: AgentSettings): Promise<void> {
   await createAgentStorage(file, async (storage) => {
+    const lifetime = new Lifetime();
     const harness = await Harness.open(
       storage,
-      harnessOptions(() => "", undefined, new Lifetime(), undefined),
+      {
+        models: agentModels(() => "", undefined, lifetime.signal),
+        registry: createRegistry(),
+        settings: { toolExecution: "sequential" },
+      },
       BACKGROUND_CONTEXT,
     );
     try {
@@ -69,14 +80,34 @@ export async function openAgentRuntime(options: AgentRuntimeOptions): Promise<Ag
         options.onFatal?.(error);
       }),
   );
+  const clock = options.clock ?? systemClock;
+  const registry = createRegistry();
+  const { primary: assistantsPrimary, identity: assistantsIdentity } = assistants(
+    () => primaryOnlyExtensions,
+  );
+  const { extension: remindersExtension, run: runReminders } = reminders(clock, lifetime.signal);
+  // Extensions available in the primary conversation only; assistants must not have them.
+  const primaryOnlyExtensions: readonly Extension[] = [assistantsPrimary, remindersExtension];
+  if (options.workspace !== undefined) {
+    registry.install(workspaceExtension(options.workspace, lifetime.signal));
+  }
+  registry.install(assistantsPrimary);
+  registry.install(assistantsIdentity);
+  registry.install(remindersExtension);
   const harness = await Harness.open(
     storage,
-    harnessOptions(options.apiKey, options.resolveModel, lifetime, options.workspace),
+    {
+      models: agentModels(options.apiKey, options.resolveModel, lifetime.signal),
+      registry,
+      settings: { toolExecution: "sequential" },
+    },
     BACKGROUND_CONTEXT,
   );
   const root = await harness.root(BACKGROUND_CONTEXT);
   const runtime = new AgentRuntime(harness, storage, root, lifetime);
   harness.resume();
+  // Run the reminder loop in the background; it exits when the lifetime ends.
+  void runReminders(harness, root);
   return runtime;
 }
 
@@ -157,21 +188,6 @@ export class AgentRuntime {
     })();
     return this.#closed;
   }
-}
-
-function harnessOptions(
-  apiKey: () => string,
-  resolveModel: ModelResolver | undefined,
-  lifetime: Lifetime,
-  workspace: WorkspacePort | undefined,
-): HarnessOptions {
-  const registry = createRegistry();
-  if (workspace !== undefined) registry.install(workspaceExtension(workspace, lifetime.signal));
-  return {
-    models: agentModels(apiKey, resolveModel, lifetime.signal),
-    registry,
-    settings: { toolExecution: "sequential" },
-  };
 }
 
 function agentChange(settings: AgentSettings) {
