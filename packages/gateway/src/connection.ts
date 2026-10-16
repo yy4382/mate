@@ -8,7 +8,7 @@ import {
 } from "@mate/node-protocol";
 import { randomBytes } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import type { WebSocket } from "ws";
+import type { RawData, WebSocket } from "ws";
 import { z } from "zod";
 import { unknownResult, type PendingCalls } from "./pending-calls.js";
 import {
@@ -21,7 +21,11 @@ import {
 } from "./storage.js";
 
 const HANDSHAKE_TIMEOUT_MS = 10_000;
-const MAX_MESSAGE_BYTES = 1_048_576;
+/**
+ * The largest message the gateway reads, measured on the serialized frame as it arrives. The WebSocket server enforces
+ * it before buffering the rest, and closes the connection with 1009.
+ */
+export const MAX_MESSAGE_BYTES = 1024 * 1024;
 
 /** Everything the gateway's connection handling shares. One per gateway. */
 export interface GatewayContext {
@@ -54,15 +58,20 @@ export function sendGateway(ws: WebSocket, msg: GatewayMessage): boolean {
   return true;
 }
 
-/** Reject a socket with a gateway.error and close it. */
+/**
+ * Reject a socket with a gateway.error and close it. The connection ends here, not when the close handshake finishes,
+ * so nothing it sends afterwards is read and its node is offline at once.
+ */
 function rejectSocket(
   ws: WebSocket,
+  ctx: GatewayContext,
   requestId: string | undefined,
   code: GatewayError["code"],
   message: string,
 ): void {
   sendGateway(ws, { type: "gateway.error", requestId, code, message });
   ws.close(1008, message);
+  closeNodeSocket(ws, ctx);
 }
 
 /** Take a new connection from a node: send the challenge and start the handshake timeout. */
@@ -85,15 +94,17 @@ export function acceptNodeSocket(ws: WebSocket, ctx: GatewayContext): void {
   const handshakeOver = AbortSignal.any([session.handshake.signal, session.ended.signal]);
   void ctx.clock.sleep(HANDSHAKE_TIMEOUT_MS, handshakeOver).then(() => {
     if (!handshakeOver.aborted)
-      rejectSocket(ws, undefined, "malformed_request", "handshake timeout");
+      rejectSocket(ws, ctx, undefined, "malformed_request", "handshake timeout");
   });
 
   sendGateway(ws, { type: "gateway.challenge", nonce: session.nonce });
 
   ws.on("message", (data) => {
-    void handleMessage(ws, data, ctx).catch(() => {
-      rejectSocket(ws, undefined, "malformed_request", "message handling error");
-    });
+    try {
+      handleMessage(ws, data, ctx);
+    } catch {
+      rejectSocket(ws, ctx, undefined, "malformed_request", "message handling error");
+    }
   });
   ws.on("close", () => closeNodeSocket(ws, ctx));
   ws.on("error", () => {
@@ -103,20 +114,16 @@ export function acceptNodeSocket(ws: WebSocket, ctx: GatewayContext): void {
 
 const requestIdOf = z.object({ requestId: z.string() });
 
-async function handleMessage(ws: WebSocket, data: unknown, ctx: GatewayContext): Promise<void> {
+/** Read one message synchronously, so a connection that has ended (no session) never has a message read. */
+function handleMessage(ws: WebSocket, data: RawData, ctx: GatewayContext): void {
   const session = ctx.sessions.get(ws);
   if (!session) return;
 
   let raw: unknown;
   try {
-    raw = JSON.parse(await messageText(data));
+    raw = JSON.parse(messageText(data));
   } catch {
-    rejectSocket(ws, undefined, "malformed_request", "invalid JSON");
-    return;
-  }
-
-  if (JSON.stringify(raw).length > MAX_MESSAGE_BYTES) {
-    rejectSocket(ws, undefined, "malformed_request", "message too large");
+    rejectSocket(ws, ctx, undefined, "malformed_request", "invalid JSON");
     return;
   }
 
@@ -125,6 +132,7 @@ async function handleMessage(ws: WebSocket, data: unknown, ctx: GatewayContext):
     const rid = requestIdOf.safeParse(raw);
     rejectSocket(
       ws,
+      ctx,
       rid.success ? rid.data.requestId : undefined,
       "malformed_request",
       "invalid message",
@@ -148,7 +156,7 @@ function dispatch(
       return handlePair(ws, msg, session, ctx);
   }
   if (session.nodeId === undefined) {
-    rejectSocket(ws, msg.requestId, "not_authenticated", "not authenticated");
+    rejectSocket(ws, ctx, msg.requestId, "not_authenticated", "not authenticated");
     return;
   }
   switch (msg.type) {
@@ -172,7 +180,7 @@ function handleAuthenticate(
   ctx: GatewayContext,
 ): void {
   if (session.nodeId !== undefined) {
-    rejectSocket(ws, msg.requestId, "invalid_identity", "already authenticated");
+    rejectSocket(ws, ctx, msg.requestId, "invalid_identity", "already authenticated");
     return;
   }
   const pubKey = nodePublicKey(ctx.db, msg.nodeId);
@@ -186,7 +194,7 @@ function handleAuthenticate(
     return;
   }
   if (!verifyEd25519(pubKey, session.nonce, msg.signature)) {
-    rejectSocket(ws, msg.requestId, "invalid_identity", "signature verification failed");
+    rejectSocket(ws, ctx, msg.requestId, "invalid_identity", "signature verification failed");
     return;
   }
   markConnected(ws, msg.nodeId, session, ctx);
@@ -200,25 +208,25 @@ function handlePair(
   ctx: GatewayContext,
 ): void {
   if (session.nodeId !== undefined) {
-    rejectSocket(ws, msg.requestId, "pairing_rejected", "already authenticated");
+    rejectSocket(ws, ctx, msg.requestId, "pairing_rejected", "already authenticated");
     return;
   }
   if (!isEd25519PublicKey(msg.publicKey)) {
-    rejectSocket(ws, msg.requestId, "invalid_identity", "invalid public key");
+    rejectSocket(ws, ctx, msg.requestId, "invalid_identity", "invalid public key");
     return;
   }
   if (!verifyEd25519(msg.publicKey, session.nonce, msg.signature)) {
-    rejectSocket(ws, msg.requestId, "invalid_identity", "signature verification failed");
+    rejectSocket(ws, ctx, msg.requestId, "invalid_identity", "signature verification failed");
     return;
   }
   const now = () => ctx.clock.now();
   const consumed = consumePairingToken(ctx.db, msg.pairingToken, now);
   if (!consumed.ok) {
-    rejectSocket(ws, msg.requestId, "pairing_rejected", "pairing token invalid or expired");
+    rejectSocket(ws, ctx, msg.requestId, "pairing_rejected", "pairing token invalid or expired");
     return;
   }
   if (consumed.nodeId !== null && consumed.nodeId !== msg.nodeId) {
-    rejectSocket(ws, msg.requestId, "pairing_rejected", "pairing token not for this node");
+    rejectSocket(ws, ctx, msg.requestId, "pairing_rejected", "pairing token not for this node");
     return;
   }
   pairNode(ctx.db, msg.nodeId, msg.publicKey, now);
@@ -283,11 +291,8 @@ export function closeNodeSocket(ws: WebSocket, ctx: GatewayContext): void {
   ctx.pending.settleForSocket(ws, unknownResult);
 }
 
-async function messageText(data: unknown): Promise<string> {
-  if (typeof data === "string") return data;
-  if (data instanceof ArrayBuffer) return Buffer.from(data).toString("utf8");
-  if (ArrayBuffer.isView(data))
-    return Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString("utf8");
-  if (typeof Blob !== "undefined" && data instanceof Blob) return data.text();
-  throw new Error("unsupported WebSocket message type");
+function messageText(data: RawData): string {
+  if (Array.isArray(data)) return Buffer.concat(data).toString("utf8");
+  if (Buffer.isBuffer(data)) return data.toString("utf8");
+  return Buffer.from(data).toString("utf8");
 }

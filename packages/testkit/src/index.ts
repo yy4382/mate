@@ -13,3 +13,4 @@ export { temporaryDirectory } from "./temporary-directory.ts";
 export { FakeNode, type FakeNodeOptions } from "./fake-node.ts";
 export { FakeGateway, type FakeGatewayOptions } from "./fake-gateway.ts";
 export { FakeWorkspace, toolText, type PendingWorkspaceCall } from "./fake-workspace.ts";
+export { NetworkProxy, type NetworkMode } from "./network-proxy.ts";

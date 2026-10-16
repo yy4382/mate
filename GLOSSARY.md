@@ -184,3 +184,6 @@ node 上限定在一个工作区里的 Durable `NodeExecutionEnv`：Durable 的 
 **lane**（ScriptedLane）
 脚本化提供商里一个会话自己的步骤队列。请求按 `prompt_cache_key` 归到 lane：会话的第一个请求由声明了认领条件的 lane 认领，没人认领时归默认 lane。这样主对话和工作助手并发请求时，谁先到不影响脚本。
 避免：用全局步骤顺序区分会话。
+
+**网络代理**（NetworkProxy）
+`@mate/testkit` 里夹在 node 和网关之间的本地 TCP 代理，由测试切换三种模式：转发（`forward`）、黑洞（`blackhole`，连接不断但两个方向的数据都被吞掉）、断开（`disconnect`，断掉现有连接，新连接一到就断）。

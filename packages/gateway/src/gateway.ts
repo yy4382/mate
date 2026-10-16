@@ -7,6 +7,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import {
   acceptNodeSocket,
   closeNodeSocket,
+  MAX_MESSAGE_BYTES,
   sendGateway,
   type GatewayContext,
   type NodeSession,
@@ -95,7 +96,7 @@ export function createNodeGateway(options: NodeGatewayOptions): NodeGateway {
     heartbeatTimeoutMs: options.heartbeatTimeoutMs ?? DEFAULT_HEARTBEAT_TIMEOUT_MS,
   };
 
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES });
   wss.on("connection", (ws: WebSocket) => acceptNodeSocket(ws, ctx));
 
   function statusOf(nodeId: string, lastConnectedAt: string | null): NodeStatusResult {

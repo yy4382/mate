@@ -35,6 +35,8 @@ export class FakeNode {
   #ws: WebSocket | undefined;
   #challenge: string | undefined;
   #authenticated = false;
+  #pongs = 0;
+  #closed: Promise<void> = Promise.resolve();
   #onAuthenticated?: () => void;
   #onAuthError?: (err: Error) => void;
 
@@ -42,11 +44,16 @@ export class FakeNode {
     this.#options = options;
   }
 
-  /** Connect and complete the challenge/authenticate handshake. Resolves when authenticated. */
+  /**
+   * Open a new connection and complete the challenge/authenticate handshake. Resolves when authenticated. Calling it
+   * again opens a fresh connection, as a reconnecting node would.
+   */
   connect(): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       const ws = new WebSocket(this.#options.gatewayUrl);
       this.#ws = ws;
+      this.#authenticated = false;
+      this.#closed = new Promise((closed) => ws.once("close", () => closed()));
       this.#onAuthenticated = resolve;
       this.#onAuthError = reject;
 
@@ -82,7 +89,7 @@ export class FakeNode {
     if (msg.type === "gateway.challenge") {
       this.#challenge = msg.nonce;
       const sig = this.#options.sign(msg.nonce);
-      this.#send({
+      this.send({
         type: "node.authenticate",
         requestId: randomUUID(),
         nodeId: this.#options.nodeId,
@@ -98,7 +105,7 @@ export class FakeNode {
         this.#options.publicKey
       ) {
         const sig = this.#options.sign(this.#challenge!);
-        this.#send({
+        this.send({
           type: "node.pair",
           requestId: randomUUID(),
           nodeId: this.#options.nodeId,
@@ -118,7 +125,10 @@ export class FakeNode {
       return;
     }
 
-    if (msg.type === "gateway.pong") return;
+    if (msg.type === "gateway.pong") {
+      this.#pongs++;
+      return;
+    }
 
     if (msg.type === "gateway.run.tool") {
       void this.#handleRunTool(msg);
@@ -139,7 +149,7 @@ export class FakeNode {
   async #handleRunTool(msg: GatewayRunTool): Promise<void> {
     const handler = this.#options.onRunTool;
     if (!handler) {
-      this.#send({
+      this.send({
         type: "node.tool.result",
         requestId: msg.requestId,
         content: [{ type: "text", text: "(no handler)" }],
@@ -149,9 +159,9 @@ export class FakeNode {
     }
     const { outputs, result } = await handler(msg);
     for (const chunk of outputs) {
-      this.#send({ type: "node.tool.output", requestId: msg.requestId, chunk });
+      this.send({ type: "node.tool.output", requestId: msg.requestId, chunk });
     }
-    this.#send({
+    this.send({
       type: "node.tool.result",
       requestId: msg.requestId,
       content: result.content,
@@ -162,14 +172,14 @@ export class FakeNode {
   async #handlePrepareWorkspace(requestId: string, agentId: string): Promise<void> {
     try {
       await this.#options.onPrepareWorkspace?.(agentId);
-      this.#send({
+      this.send({
         type: "node.tool.result",
         requestId,
         content: [{ type: "text", text: "Workspace prepared." }],
         isError: false,
       });
     } catch (error) {
-      this.#send({
+      this.send({
         type: "node.tool.result",
         requestId,
         content: [
@@ -183,14 +193,23 @@ export class FakeNode {
     }
   }
 
-  #send(msg: NodeRequest): void {
-    if (this.#ws?.readyState === WebSocket.OPEN) {
-      this.#ws.send(JSON.stringify(NodeRequestSchema.parse(msg)));
-    }
+  /**
+   * Send any node message on the current connection, such as a result for a call this connection never received.
+   * Returns false when the connection is not open, so nothing was sent.
+   */
+  send(msg: NodeRequest): boolean {
+    if (this.#ws?.readyState !== WebSocket.OPEN) return false;
+    this.#ws.send(JSON.stringify(NodeRequestSchema.parse(msg)));
+    return true;
+  }
+
+  /** Resolves once the current connection has closed, whichever side closed it. */
+  closed(): Promise<void> {
+    return this.#closed;
   }
 
   ping(): void {
-    this.#send({ type: "node.ping", requestId: randomUUID() });
+    this.send({ type: "node.ping", requestId: randomUUID() });
   }
 
   terminate(): void {
@@ -199,6 +218,11 @@ export class FakeNode {
 
   close(): void {
     this.#ws?.close(1000, "test done");
+  }
+
+  /** How many pongs have arrived. The gateway reads a connection in order, so a pong means it read what came before. */
+  get pongs(): number {
+    return this.#pongs;
   }
 
   get isAuthenticated(): boolean {
