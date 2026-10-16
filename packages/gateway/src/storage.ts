@@ -17,7 +17,6 @@ CREATE TABLE IF NOT EXISTS nodes (
 );
 CREATE TABLE IF NOT EXISTS pairing_tokens (
   token_hash TEXT PRIMARY KEY,
-  node_id TEXT,
   created_at INTEGER NOT NULL,
   expires_at INTEGER NOT NULL,
   used INTEGER NOT NULL DEFAULT 0
@@ -29,8 +28,10 @@ export function openGatewayDatabase(dataDirectory: string): DatabaseSync {
   const db = new DatabaseSync(path);
   db.exec(SCHEMA_SQL);
 
-  const row = db.prepare("SELECT value FROM meta WHERE key='user_version'").get() as
-    { value: string } | undefined;
+  const row = z
+    .object({ value: z.string() })
+    .optional()
+    .parse(db.prepare("SELECT value FROM meta WHERE key='user_version'").get());
 
   if (row === undefined) {
     db.prepare("INSERT INTO meta(key,value) VALUES('user_version',?)").run(String(SCHEMA_VERSION));
@@ -47,48 +48,55 @@ export function createPairingToken(
   db: DatabaseSync,
   now: () => number,
   ttlMs: number,
-  nodeId?: string,
 ): { pairingToken: string; expiresAt: string } {
   const createdAt = now();
   const expiresAt = createdAt + ttlMs;
   const token = randomBytes(32).toString("base64url");
-  const hash = hashToken(token);
-  db.prepare(
-    "INSERT INTO pairing_tokens(token_hash,node_id,created_at,expires_at) VALUES(?,?,?,?)",
-  ).run(hash, nodeId ?? null, createdAt, expiresAt);
+  db.prepare("INSERT INTO pairing_tokens(token_hash,created_at,expires_at) VALUES(?,?,?)").run(
+    hashToken(token),
+    createdAt,
+    expiresAt,
+  );
   return { pairingToken: token, expiresAt: new Date(expiresAt).toISOString() };
 }
 
-export function consumePairingToken(
-  db: DatabaseSync,
-  token: string,
-  now: () => number,
-): { ok: true; nodeId: string | null } | { ok: false } {
-  const hash = hashToken(token);
-  const row = db
-    .prepare("SELECT node_id, expires_at, used FROM pairing_tokens WHERE token_hash=?")
-    .get(hash) as { node_id: string | null; expires_at: number; used: number } | undefined;
-  if (!row || row.used !== 0 || row.expires_at < now()) return { ok: false };
-  db.prepare("UPDATE pairing_tokens SET used=1 WHERE token_hash=?").run(hash);
-  return { ok: true, nodeId: row.node_id };
-}
-
+/**
+ * Pair a new node with a pairing token, using the token up. Pairing only ever adds a node: a node ID that is already
+ * paired keeps its key, and the token stays unused. Returns false, changing nothing, when the token is unknown, used,
+ * or expired, or the node is already paired.
+ */
 export function pairNode(
   db: DatabaseSync,
+  token: string,
   nodeId: string,
   publicKey: string,
   now: () => number,
-): void {
-  db.prepare(
-    `INSERT INTO nodes(id,public_key,paired_at) VALUES(?,?,?)
-     ON CONFLICT(id) DO UPDATE SET public_key=excluded.public_key`,
-  ).run(nodeId, publicKey, now());
+): boolean {
+  const at = now();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const used = db
+      .prepare("UPDATE pairing_tokens SET used=1 WHERE token_hash=? AND used=0 AND expires_at>=?")
+      .run(hashToken(token), at);
+    const added = db
+      .prepare(
+        "INSERT INTO nodes(id,public_key,paired_at) VALUES(?,?,?) ON CONFLICT(id) DO NOTHING",
+      )
+      .run(nodeId, publicKey, at);
+    const paired = used.changes === 1 && added.changes === 1;
+    db.exec(paired ? "COMMIT" : "ROLLBACK");
+    return paired;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 export function nodePublicKey(db: DatabaseSync, nodeId: string): string | undefined {
-  const row = db.prepare("SELECT public_key FROM nodes WHERE id=?").get(nodeId) as
-    { public_key: string } | undefined;
-  return row?.public_key;
+  return z
+    .object({ public_key: z.string() })
+    .optional()
+    .parse(db.prepare("SELECT public_key FROM nodes WHERE id=?").get(nodeId))?.public_key;
 }
 
 export function touchNodeConnection(db: DatabaseSync, nodeId: string, now: () => number): void {

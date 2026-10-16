@@ -98,6 +98,18 @@ describe("node file tools (MODULE_TESTS 8.2)", () => {
     expect(readFileSync(join(workspace, "inside", "ok.txt"), "utf8")).toBe("fine");
   });
 
+  it("treats names that only begin with two dots as ordinary names inside the workspace", async () => {
+    const node = await connectedNode();
+    const { agentId, workspace } = await node.agent();
+    for (const path of ["..notes.md", "...", "..cache/x.txt"]) {
+      const written = await node.run(agentId, "write", { path, content: path });
+      expect(written.isError, `write ${path}: ${textOf(written)}`).toBe(false);
+      expect(readFileSync(join(workspace, path), "utf8")).toBe(path);
+      const read = await node.run(agentId, "read", { path });
+      expect(textOf(read), `read ${path}`).toBe(path);
+    }
+  });
+
   it("reports a file that keeps changing while it is read instead of mixing old and new content", async () => {
     const node = await connectedNode();
     const { agentId, workspace } = await node.agent();

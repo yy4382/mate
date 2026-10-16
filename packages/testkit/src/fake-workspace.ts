@@ -6,7 +6,6 @@ import type { ToolName, ToolResult } from "@mate/node-protocol";
  * type-check as the runtime's `WorkspacePort` wherever a test passes one in.
  */
 export type WorkspaceToolRequest = {
-  readonly requestId: string;
   readonly tool: ToolName;
   readonly arguments: Readonly<Record<string, unknown>>;
 };

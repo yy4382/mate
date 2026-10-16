@@ -1,7 +1,7 @@
 import { chmodSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 import { FakeGateway } from "@mate/testkit";
 import {
   connectedNode,
@@ -35,34 +35,52 @@ describe("node connection and stopping (MODULE_TESTS 8.3)", () => {
     for (const pid of pids) await eventually(() => !running(pid), `process ${pid} is stopped`);
   });
 
-  it("stopAgent stops every running call of that Agent and no other Agent's", async () => {
+  it("a stop ends that one call's process group and leaves every other call running, of the same Agent or another", async () => {
     const node = await connectedNode();
     const first = await node.agent();
     const second = await node.agent();
-    const firstCalls = [
-      node.run(first.agentId, "bash", { command: longCommand("a") }),
-      node.run(first.agentId, "bash", { command: longCommand("b") }),
-    ];
-    const otherCall = node.run(second.agentId, "bash", { command: longCommand("c") });
-    const firstPids = [
-      ...(await pidsOf(first.workspace, "a")),
+    const stopped = node.gateway.runTool("call-a", first.agentId, "bash", {
+      command: longCommand("a"),
+    });
+    const sameAgent = node.run(first.agentId, "bash", { command: longCommand("b") });
+    const otherAgent = node.run(second.agentId, "bash", { command: longCommand("c") });
+    const stoppedPids = await pidsOf(first.workspace, "a");
+    const otherPids = [
       ...(await pidsOf(first.workspace, "b")),
+      ...(await pidsOf(second.workspace, "c")),
     ];
-    const otherPids = await pidsOf(second.workspace, "c");
 
-    node.gateway.stopAgent(first.agentId);
-    for (const result of await Promise.all(firstCalls)) {
-      expect(result.isError).toBe(true);
-      expect(textOf(result)).toContain("Command was stopped");
+    node.gateway.stopTool("call-a");
+    const result = await stopped;
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("Command was stopped");
+    for (const pid of stoppedPids) {
+      await eventually(() => !running(pid), `process ${pid} is stopped`);
     }
-    for (const pid of firstPids) await eventually(() => !running(pid), `process ${pid} is stopped`);
-    expect(otherPids.every(running), "the other Agent's command still runs").toBe(true);
+    expect(otherPids.every(running), "the other calls' commands still run").toBe(true);
 
     const next = await node.run(first.agentId, "bash", { command: "echo again" });
-    expect(textOf(next), "the stopped Agent's next call runs normally").toBe("again\n");
+    expect(textOf(next), "the Agent's next call runs normally").toBe("again\n");
+    node.gateway.disconnect();
+    await Promise.allSettled([sameAgent, otherAgent]);
+  });
 
-    node.gateway.stopAgent(second.agentId);
-    expect(textOf(await otherCall)).toContain("Command was stopped");
+  it("a stop that arrives after the command returned, while its background still holds the output, kills the background", async () => {
+    const node = await connectedNode();
+    const { agentId, workspace } = await node.agent();
+    const call = node.gateway.runTool("call-bg", agentId, "bash", {
+      command: "sleep 30 & echo $! > background.pid; echo started; touch returned",
+    });
+    await eventually(() => existsSync(join(workspace, "returned")), "the command returned");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const background = readPid(join(workspace, "background.pid"));
+    expect(running(background), "the background still runs").toBe(true);
+
+    node.gateway.stopTool("call-bg");
+    const result = await call;
+    expect(textOf(result), "the command itself had finished").toContain("started");
+    expect(textOf(result)).not.toContain("Command was stopped");
+    await eventually(() => !running(background), "the background is killed", 2_000);
   });
 
   it("on shutdown stops every group it started, including the background of commands that already returned", async () => {
@@ -115,6 +133,24 @@ describe("node connection and stopping (MODULE_TESTS 8.3)", () => {
     await gateway.close();
     expect(ended, node.stderr()).toEqual({ code: 1, signal: null });
     expect(node.stderr()).toContain("pairing_rejected");
+  });
+
+  it("reconnects instead of exiting when the gateway ends the connection over a protocol error such as a handshake timeout", async () => {
+    let attempts = 0;
+    const gateway = new FakeGateway({
+      onConnect: () => (++attempts === 1 ? "handshake_timeout" : true),
+    });
+    await gateway.start();
+    onTestFinished(() => gateway.close());
+    const node = await startNodeProcess({ gateway });
+    await Promise.race([
+      gateway.waitForNode(),
+      node.exited.then(({ code }) => {
+        throw new Error(`node exited (${code}): ${node.stderr()}`);
+      }),
+    ]);
+    expect(attempts, "the second attempt got in").toBe(2);
+    expect(node.child.exitCode, "the node is still running").toBeNull();
   });
 
   it("keeps reconnecting with backoff while the gateway is unreachable, then connects again", async () => {

@@ -2,7 +2,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { FakeNode } from "@mate/testkit";
-import { newIdentity, startGateway } from "./support.ts";
+import { WebSocket } from "ws";
+import { newIdentity, startGateway, within } from "./support.ts";
 
 describe("node gateway pairing (MODULE_TESTS 7)", () => {
   it("accepts a pairing token once and refuses it the second time", async () => {
@@ -45,5 +46,45 @@ describe("node gateway pairing (MODULE_TESTS 7)", () => {
     await node.connect();
     expect(node.isAuthenticated, "what is stored is enough to check the token").toBe(true);
     node.close();
+  });
+
+  it("never pairs a node ID that is already paired: the node keeps its key and the token stays unused", async () => {
+    const under = await startGateway();
+    const paired = await under.pairedNode();
+    paired.close();
+    await paired.closed();
+
+    // Someone else claims the paired node's ID with their own key and a valid token.
+    const { pairingToken } = under.gateway.createPairingToken();
+    const impostor = newIdentity();
+    const socket = new WebSocket(under.url);
+    const answers: Array<{ type: string; code?: string; nonce?: string }> = [];
+    const closed = new Promise<void>((resolve) => socket.once("close", () => resolve()));
+    socket.on("message", (data) => {
+      const message = JSON.parse(String(data));
+      answers.push(message);
+      if (message.type !== "gateway.challenge") return;
+      socket.send(
+        JSON.stringify({
+          type: "node.pair",
+          requestId: "pair-1",
+          nodeId: paired.nodeId,
+          publicKey: impostor.publicKey,
+          signature: impostor.sign(message.nonce),
+          pairingToken,
+        }),
+      );
+    });
+    await within(closed);
+    expect(answers.map((m) => m.code ?? m.type)).toEqual(["gateway.challenge", "pairing_rejected"]);
+
+    const again = new FakeNode({ gatewayUrl: under.url, nodeId: paired.nodeId, sign: paired.sign });
+    await again.connect();
+    expect(again.isAuthenticated, "the paired node's own key still works").toBe(true);
+    again.close();
+    const fresh = new FakeNode({ gatewayUrl: under.url, ...newIdentity(), pairingToken });
+    await fresh.connect();
+    expect(fresh.isAuthenticated, "the refused attempt did not use the token up").toBe(true);
+    fresh.close();
   });
 });

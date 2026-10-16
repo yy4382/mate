@@ -1,3 +1,4 @@
+import { BASH_MAX_TIMEOUT_SECONDS } from "@mate/node-protocol";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -83,6 +84,18 @@ describe("node commands (MODULE_TESTS 8.1)", () => {
       const pid = readPid(join(workspace, name));
       await eventually(() => !running(pid), `${name} (${pid}) is killed`);
     }
+  });
+
+  it("refuses, without running it, a command whose timeout is past the protocol's maximum", async () => {
+    const node = await connectedNode();
+    const { agentId, workspace } = await node.agent();
+    const result = await node.run(agentId, "bash", {
+      command: "touch ran",
+      timeout: BASH_MAX_TIMEOUT_SECONDS + 1,
+    });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toMatch(/Invalid bash arguments/);
+    expect(existsSync(join(workspace, "ran")), "nothing ran").toBe(false);
   });
 
   it("reports a command the system cannot start as not started", async () => {

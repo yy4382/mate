@@ -111,6 +111,18 @@ describe("node gateway limits (MODULE_TESTS 7)", () => {
     expect(await within(connection.closed)).toBe(1008);
   });
 
+  it("ends a connection that does not authenticate in time with a protocol error, not a refusal of its identity", async () => {
+    const under = await startGateway();
+    const connection = await rawConnection(under.url);
+    await eventually(() => connection.received.length === 1, "challenged");
+    under.clock.advance(10_000);
+    expect(await within(connection.closed)).toBe(1008);
+    expect(connection.received.map((m) => `${m.type} ${m.code ?? ""}`.trim())).toEqual([
+      "gateway.challenge",
+      "gateway.error handshake_timeout",
+    ]);
+  });
+
   it("closes an authenticated connection that tries to authenticate again, and reads nothing it sends after that", async () => {
     const under = await startGateway();
     const paired = await under.pairedNode();
@@ -130,7 +142,7 @@ describe("node gateway limits (MODULE_TESTS 7)", () => {
     const call = under.gateway.runTool(
       paired.nodeId,
       "agent-1",
-      { requestId: randomUUID(), tool: "bash", arguments: { command: "sleep 60" } },
+      { tool: "bash", arguments: { command: "sleep 60" } },
       () => {},
       never,
     );

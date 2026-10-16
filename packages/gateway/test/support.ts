@@ -39,7 +39,6 @@ export async function startGateway(
       dataDirectory,
       clock,
       heartbeatTimeoutMs: 5_000,
-      toolTimeoutMs: 10_000,
       pairingTokenTtlMs: 60_000,
       ...options,
     });

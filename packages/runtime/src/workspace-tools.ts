@@ -1,23 +1,18 @@
 import type { JsonValue } from "@earendil-works/chord";
+import { Type } from "@earendil-works/pi-ai";
 import {
   defineExtension,
   type JsonObject,
   type ToolExecutionResult,
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
-import {
-  createBashTool,
-  createEditTool,
-  createReadTool,
-  createWriteTool,
-} from "@earendil-works/pi-durable/tools";
+import { createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-durable/tools";
+import { bashTool, type BashArguments, type ToolName } from "@mate/node-protocol";
 import { z } from "zod";
 
-export type WorkspaceToolName = "bash" | "read" | "write" | "edit";
+export type WorkspaceToolName = ToolName;
 
 export type WorkspaceToolRequest = {
-  /** Stable across a crash and its recovery: the Durable tool task ID. */
-  readonly requestId: string;
   readonly tool: WorkspaceToolName;
   readonly arguments: JsonObject;
 };
@@ -29,8 +24,9 @@ export type WorkspaceToolResult = {
 };
 
 /**
- * Where workspace tools execute. The runtime forwards each whole call; the node runs it with Durable's own tool on its
- * local filesystem. An offline node or a lost connection comes back as an error result whose text says so.
+ * Where workspace tools execute. The runtime forwards each whole call; the node runs `bash` itself and the file tools
+ * with Durable's own tools on its local filesystem. An offline node or a lost connection comes back as an error result
+ * whose text says so. Aborting `signal` stops the call where it runs.
  */
 export interface WorkspacePort {
   run(
@@ -40,12 +36,25 @@ export interface WorkspacePort {
   ): Promise<WorkspaceToolResult>;
 }
 
+/**
+ * What the model is told about each tool. The file tools run as Durable's own on the node, so their definitions are
+ * Durable's; `bash` is the node's own, defined once in the node protocol.
+ */
 const definitions = [
-  { name: "bash", tool: createBashTool() },
+  {
+    name: "bash",
+    tool: {
+      ...bashTool,
+      parameters: Type.Unsafe<BashArguments>(bashTool.parameters),
+    },
+  },
   { name: "read", tool: createReadTool() },
   { name: "write", tool: createWriteTool() },
   { name: "edit", tool: createEditTool() },
-] as const satisfies readonly { name: WorkspaceToolName; tool: ToolRegistration }[];
+] as const satisfies readonly {
+  name: WorkspaceToolName;
+  tool: Pick<ToolRegistration, "name" | "description" | "parameters">;
+}[];
 
 const toolArguments = z.record(z.string(), z.json());
 
@@ -71,7 +80,7 @@ export function workspaceExtension(port: WorkspacePort, closing: AbortSignal) {
         ]);
         const result = await untilAborted(
           port.run(
-            { requestId: `tool:${api.taskId}`, tool: name, arguments: toolArguments.parse(args) },
+            { tool: name, arguments: toolArguments.parse(args) },
             (chunk) => api.output(chunk),
             signal,
           ),

@@ -15,9 +15,50 @@ export type JsonValue = z.infer<ReturnType<typeof z.json>>;
 
 // ── Tool calls ───────────────────────────────────────────────────────────────
 
-/** The workspace tools a node runs. Each is Durable's own tool of that name, executed on the node's filesystem. */
+/**
+ * The workspace tools a node runs. `read`, `write` and `edit` are Durable's own tools of those names, executed on the
+ * node's filesystem; `bash` is the node's own, defined below.
+ */
 export const ToolNameSchema = z.enum(["bash", "read", "write", "edit"]);
 export type ToolName = z.infer<typeof ToolNameSchema>;
+
+// ── The bash tool ────────────────────────────────────────────────────────────
+
+/** Bytes of a command's combined output its result keeps: the tail. Earlier output is dropped and the result says so. */
+export const BASH_KEPT_OUTPUT_BYTES = 50 * 1024;
+/** The longest timeout a command may ask for: one day. */
+export const BASH_MAX_TIMEOUT_SECONDS = 24 * 60 * 60;
+
+/**
+ * The arguments of the node's `bash` tool. The runtime shows the model this schema and the node validates calls with
+ * it, so what the model is promised and what the node does come from one place.
+ */
+export const BashArgumentsSchema = z.object({
+  command: z.string().describe("The command, run verbatim by /bin/sh -c"),
+  timeout: z
+    .number()
+    .positive()
+    .max(BASH_MAX_TIMEOUT_SECONDS)
+    .optional()
+    .describe(
+      `Timeout in seconds, at most ${BASH_MAX_TIMEOUT_SECONDS}; no timeout when omitted. On timeout every process the command started is killed`,
+    ),
+});
+export type BashArguments = z.infer<typeof BashArgumentsSchema>;
+
+const { $schema: _, ...bashParameters } = z.toJSONSchema(BashArgumentsSchema, { io: "input" });
+
+/** The `bash` tool as the model sees it: its name, what it does, and its parameters as JSON Schema. */
+export const bashTool = {
+  name: "bash",
+  description:
+    "Run a shell command with /bin/sh -c in your workspace, which is both the working directory and HOME. Returns " +
+    `the combined stdout and stderr; only the last ${BASH_KEPT_OUTPUT_BYTES / 1024}KB are kept, and the result says ` +
+    "how much was dropped before them. A nonzero exit, a kill by signal, and a timeout are errors. When the command " +
+    "returns while processes it started in the background still run, the result says so; if they still hold the " +
+    "output, it returns about a second after the command and says the output may be incomplete.",
+  parameters: bashParameters,
+} as const;
 
 /** What a tool call ends in, as the gateway hands it to its caller. */
 export const ToolResultSchema = z.object({
@@ -99,15 +140,29 @@ export const GatewayPairedSchema = z.object({
   nodeId,
 });
 
+/**
+ * The gateway refused who the node says it is. `unknown_identity` is the one refusal a node with a pairing token
+ * answers by pairing; every other refusal, and `unknown_identity` without a token, is final: retrying cannot help.
+ */
+export const GatewayRefusedSchema = z.object({
+  type: z.literal("gateway.refused"),
+  requestId,
+  code: z.enum(["unknown_identity", "invalid_identity", "pairing_rejected"]),
+  message: z.string(),
+});
+
+/**
+ * The gateway ended the connection for how it was used, not for who the node is: a node that sees this reconnects.
+ */
 export const GatewayErrorSchema = z.object({
   type: z.literal("gateway.error"),
   requestId: requestId.optional(),
   code: z.enum([
-    "unknown_identity",
-    "pairing_rejected",
-    "invalid_identity",
     "malformed_request",
     "not_authenticated",
+    "already_authenticated",
+    "handshake_timeout",
+    "internal_error",
   ]),
   message: z.string(),
 });
@@ -119,17 +174,18 @@ export const GatewayPongSchema = z.object({
 
 export const GatewayRunToolSchema = z.object({
   type: z.literal("gateway.run.tool"),
-  /** Correlation ID for tool output and result frames. */
+  /** Chosen by the gateway, unique per call; the call's output, result, and stop all carry it. */
   requestId,
   agentId,
   tool: ToolNameSchema,
   arguments: z.record(z.string(), z.json()),
 });
 
-export const GatewayStopAgentSchema = z.object({
-  type: z.literal("gateway.stop.agent"),
+/** Stop one call: nobody waits for its result any more. */
+export const GatewayStopToolSchema = z.object({
+  type: z.literal("gateway.stop.tool"),
+  /** The `requestId` of the `gateway.run.tool` to stop. */
   requestId,
-  agentId,
 });
 
 export const GatewayPrepareWorkspaceSchema = z.object({
@@ -142,10 +198,11 @@ export const GatewayMessageSchema = z.discriminatedUnion("type", [
   GatewayChallengeSchema,
   GatewayAuthenticatedSchema,
   GatewayPairedSchema,
+  GatewayRefusedSchema,
   GatewayErrorSchema,
   GatewayPongSchema,
   GatewayRunToolSchema,
-  GatewayStopAgentSchema,
+  GatewayStopToolSchema,
   GatewayPrepareWorkspaceSchema,
 ]);
 
@@ -153,8 +210,9 @@ export type GatewayMessage = z.infer<typeof GatewayMessageSchema>;
 export type GatewayChallenge = z.infer<typeof GatewayChallengeSchema>;
 export type GatewayAuthenticated = z.infer<typeof GatewayAuthenticatedSchema>;
 export type GatewayPaired = z.infer<typeof GatewayPairedSchema>;
+export type GatewayRefused = z.infer<typeof GatewayRefusedSchema>;
 export type GatewayError = z.infer<typeof GatewayErrorSchema>;
 export type GatewayPong = z.infer<typeof GatewayPongSchema>;
 export type GatewayRunTool = z.infer<typeof GatewayRunToolSchema>;
-export type GatewayStopAgent = z.infer<typeof GatewayStopAgentSchema>;
+export type GatewayStopTool = z.infer<typeof GatewayStopToolSchema>;
 export type GatewayPrepareWorkspace = z.infer<typeof GatewayPrepareWorkspaceSchema>;

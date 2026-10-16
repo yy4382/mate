@@ -1,6 +1,7 @@
 import {
   GatewayMessageSchema,
   NodeRequestSchema,
+  type GatewayError,
   type GatewayMessage,
   type JsonValue,
   type ToolName,
@@ -13,10 +14,14 @@ import { WebSocket, WebSocketServer } from "ws";
 export interface FakeGatewayOptions {
   port?: number;
   /**
-   * Called each time a node authenticates or pairs.
-   * Return false to reject with pairing_rejected.
+   * Called each time a node authenticates or pairs. Return true to accept it; false to refuse its identity
+   * (`unknown_identity` to an authentication, `pairing_rejected` to a pairing); or a protocol error code to end the
+   * connection with that `gateway.error`, as the real gateway does for a handshake timeout.
    */
-  onConnect?: (nodeId: string, publicKey: string) => boolean | Promise<boolean>;
+  onConnect?: (
+    nodeId: string,
+    publicKey: string,
+  ) => boolean | GatewayError["code"] | Promise<boolean | GatewayError["code"]>;
 }
 
 interface PendingToolCall {
@@ -163,8 +168,9 @@ export class FakeGateway {
     this.#nodeId = undefined;
   }
 
-  stopAgent(agentId: string): void {
-    this.#send({ type: "gateway.stop.agent", requestId: randomBytes(8).toString("hex"), agentId });
+  /** Stop one call this gateway sent, as the real gateway does when its caller aborts. */
+  stopTool(requestId: string): void {
+    this.#send({ type: "gateway.stop.tool", requestId });
   }
 
   async #handleMessage(text: string): Promise<void> {
@@ -182,9 +188,10 @@ export class FakeGateway {
       // The fake gateway keeps no node registry: it trusts the signature iff the test's
       // onConnect callback says so, or when no callback was given.
       const ok = this.#options.onConnect ? await this.#options.onConnect(msg.nodeId, "") : true;
+      if (typeof ok === "string") return this.#endWith(ok);
       if (!ok) {
         this.#send({
-          type: "gateway.error",
+          type: "gateway.refused",
           requestId: msg.requestId,
           code: "unknown_identity",
           message: "rejected",
@@ -202,9 +209,10 @@ export class FakeGateway {
       const ok = this.#options.onConnect
         ? await this.#options.onConnect(msg.nodeId, msg.publicKey)
         : true;
+      if (typeof ok === "string") return this.#endWith(ok);
       if (!ok) {
         this.#send({
-          type: "gateway.error",
+          type: "gateway.refused",
           requestId: msg.requestId,
           code: "pairing_rejected",
           message: "rejected",
@@ -235,6 +243,11 @@ export class FakeGateway {
     if (msg.type === "node.tool.output") {
       this.#pendingToolCalls.get(msg.requestId)?.onOutput(msg.chunk);
     }
+  }
+
+  #endWith(code: GatewayError["code"]): void {
+    this.#send({ type: "gateway.error", code, message: code });
+    this.#socket?.close(1008, code);
   }
 
   #send(msg: GatewayMessage): void {

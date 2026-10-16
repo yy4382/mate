@@ -21,7 +21,10 @@ export type ConnectionOptions = {
   handshakeTimeoutMs: number;
 };
 
-/** How one connection ended: the gateway refused who we are, or the link went away and is worth retrying. */
+/**
+ * How one connection ended: the gateway refused who we are (`gateway.refused`), or the link went away or the gateway
+ * ended it over a protocol error (`gateway.error`), both worth retrying.
+ */
 export type ConnectionEnd =
   { kind: "rejected"; reason: string } | { kind: "lost"; paired: boolean };
 
@@ -39,7 +42,8 @@ export function connect(
     const socket = new WebSocket(options.url);
     // Ends with the connection: stops its timers and every tool call it started.
     const lifetime = new AbortController();
-    const calls = new Map<string, { agentId: string; stop: AbortController }>();
+    // Running calls by the request ID the gateway gave each; aborting one stops it.
+    const calls = new Map<string, AbortController>();
     let authRequestId: string | undefined;
     let nonce = "";
     let authenticated = false;
@@ -60,7 +64,7 @@ export function connect(
     const onShutdown = () => finish({ kind: "lost", paired });
     shutdown.addEventListener("abort", onShutdown, { once: true });
     lifetime.signal.addEventListener("abort", () => {
-      for (const call of calls.values()) call.stop.abort();
+      for (const stop of calls.values()) stop.abort();
       calls.clear();
     });
 
@@ -87,7 +91,7 @@ export function connect(
 
     const runTool = async (message: GatewayRunTool) => {
       const stop = new AbortController();
-      calls.set(message.requestId, { agentId: message.agentId, stop });
+      calls.set(message.requestId, stop);
       const result = await executor.run(
         message,
         (chunk) => send({ type: "node.tool.output", requestId: message.requestId, chunk }),
@@ -109,7 +113,7 @@ export function connect(
             signature: signChallenge(options.identity, nonce),
           });
           return;
-        case "gateway.error":
+        case "gateway.refused":
           if (message.code === "unknown_identity" && message.requestId === authRequestId) {
             if (options.pairingToken === undefined) {
               finish({ kind: "rejected", reason: "the gateway does not know this node" });
@@ -127,6 +131,9 @@ export function connect(
           }
           finish({ kind: "rejected", reason: `${message.code}: ${message.message}` });
           return;
+        case "gateway.error":
+          finish({ kind: "lost", paired });
+          return;
         case "gateway.paired":
         case "gateway.authenticated":
           paired = true;
@@ -140,36 +147,17 @@ export function connect(
         case "gateway.run.tool":
           void runTool(message);
           return;
-        case "gateway.stop.agent":
-          for (const [requestId, call] of calls) {
-            if (call.agentId !== message.agentId) continue;
-            call.stop.abort();
-            calls.delete(requestId);
-          }
+        case "gateway.stop.tool":
+          calls.get(message.requestId)?.abort();
+          calls.delete(message.requestId);
           return;
         case "gateway.prepare.workspace":
           send({
             type: "node.tool.result",
             requestId: message.requestId,
-            ...prepare(message.agentId),
+            ...executor.prepareWorkspace(message.agentId),
           });
           return;
-      }
-    };
-
-    const prepare = (agentId: string) => {
-      try {
-        executor.prepareWorkspace(agentId);
-        return {
-          content: [{ type: "text" as const, text: "Workspace prepared." }],
-          isError: false,
-        };
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        return {
-          content: [{ type: "text" as const, text: `Failed to prepare workspace: ${reason}` }],
-          isError: true,
-        };
       }
     };
 

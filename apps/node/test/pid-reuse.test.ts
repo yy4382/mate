@@ -18,10 +18,14 @@ const canChoosePids =
     "echo 99 > /proc/sys/kernel/ns_last_pid",
   ]).status === 0;
 
+/** Set by `pnpm test:linux`, whose container is meant to allow it: there a missing capability fails, not skips. */
+const required = process.env["MATE_REQUIRE_PID_NAMESPACE"] === "1";
+
 describe("node process groups and PID reuse (MODULE_TESTS 8.1)", () => {
-  it.runIf(canChoosePids)(
+  it.runIf(canChoosePids || required)(
     "never kills an unrelated process that was given the ID of a group the node recorded",
     async () => {
+      expect(canChoosePids, "this run must be able to choose PIDs in a PID namespace").toBe(true);
       // The node runs as the second process of its own PID namespace; the shell that is its init reaps orphans and
       // keeps the namespace, and so the unrelated process, alive for a while after the node exits.
       const node = await connectedNode({

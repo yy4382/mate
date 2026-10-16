@@ -23,7 +23,8 @@ export interface FakeNodeOptions {
     result: ToolResult;
   }>;
   onPrepareWorkspace?: (agentId: string) => Promise<void>;
-  onStopAgent?: (agentId: string) => void;
+  /** Called with the request ID of a call the gateway stopped. */
+  onStopTool?: (requestId: string) => void;
 }
 
 /**
@@ -98,23 +99,30 @@ export class FakeNode {
       return;
     }
 
-    if (msg.type === "gateway.error") {
+    if (msg.type === "gateway.refused") {
+      const challenge = this.#challenge;
+      const { pairingToken, publicKey } = this.#options;
       if (
         msg.code === "unknown_identity" &&
-        this.#options.pairingToken &&
-        this.#options.publicKey
+        challenge !== undefined &&
+        pairingToken !== undefined &&
+        publicKey !== undefined
       ) {
-        const sig = this.#options.sign(this.#challenge!);
         this.send({
           type: "node.pair",
           requestId: randomUUID(),
           nodeId: this.#options.nodeId,
-          publicKey: this.#options.publicKey,
-          signature: sig,
-          pairingToken: this.#options.pairingToken,
+          publicKey,
+          signature: this.#options.sign(challenge),
+          pairingToken,
         });
         return;
       }
+      this.#onAuthError?.(new Error(`Gateway refused: ${msg.code} — ${msg.message}`));
+      return;
+    }
+
+    if (msg.type === "gateway.error") {
       this.#onAuthError?.(new Error(`Gateway error: ${msg.code} — ${msg.message}`));
       return;
     }
@@ -135,8 +143,8 @@ export class FakeNode {
       return;
     }
 
-    if (msg.type === "gateway.stop.agent") {
-      this.#options.onStopAgent?.(msg.agentId);
+    if (msg.type === "gateway.stop.tool") {
+      this.#options.onStopTool?.(msg.requestId);
       return;
     }
 

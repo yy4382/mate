@@ -79,7 +79,7 @@ VPS（Ubuntu 24.04 / Debian 13，x86_64 或 arm64）
 | 看 node 状态、日志 | `mate node status`、`mate node logs` |
 | 启停 node | `mate node stop`、`mate node start`。显式 stop 之后保持停止 |
 | 看控制面日志、启停 | 在放 `compose.yaml` 的目录里 `docker compose logs -f`、`docker compose stop`、`docker compose start` |
-| 暂停或恢复某个 Agent | 网页"管理"。暂停 = 立刻关闭它的 runtime，进行中的模型请求和 node 上的命令都被停掉；恢复后从停下的地方接着跑 |
+| 暂停或恢复某个 Agent | 网页"管理"。暂停 = 立刻关闭它的 runtime，进行中的模型请求和 node 上的命令都被停掉（网关逐个通知 node 杀掉这些命令的进程组；用 `setsid` 之类脱离进程组的后台进程不受影响）；恢复后从停下的地方接着跑 |
 | 看 Agent 在想什么、做了什么 | 网页"管理"里的实时对话记录 |
 | 看用量 | 网页"管理"。只用于观察，没有任何配额 |
 

@@ -4,6 +4,7 @@ import {
   NodeRequestSchema,
   type GatewayError,
   type GatewayMessage,
+  type GatewayRefused,
   type NodeRequest,
 } from "@mate/node-protocol";
 import { randomBytes } from "node:crypto";
@@ -12,7 +13,6 @@ import type { RawData, WebSocket } from "ws";
 import { z } from "zod";
 import { unknownResult, type PendingCalls } from "./pending-calls.js";
 import {
-  consumePairingToken,
   isEd25519PublicKey,
   nodePublicKey,
   pairNode,
@@ -59,19 +59,35 @@ export function sendGateway(ws: WebSocket, msg: GatewayMessage): boolean {
 }
 
 /**
- * Reject a socket with a gateway.error and close it. The connection ends here, not when the close handshake finishes,
- * so nothing it sends afterwards is read and its node is offline at once.
+ * Tell the node why and close its connection: a refusal of who it is, or an error in how it used the connection. The
+ * connection ends here, not when the close handshake finishes, so nothing it sends afterwards is read and its node is
+ * offline at once.
  */
 function rejectSocket(
   ws: WebSocket,
   ctx: GatewayContext,
-  requestId: string | undefined,
+  reason: GatewayRefused | GatewayError,
+): void {
+  sendGateway(ws, reason);
+  ws.close(1008, reason.message);
+  closeNodeSocket(ws, ctx);
+}
+
+function protocolError(
   code: GatewayError["code"],
   message: string,
-): void {
-  sendGateway(ws, { type: "gateway.error", requestId, code, message });
-  ws.close(1008, message);
-  closeNodeSocket(ws, ctx);
+  requestId?: string,
+): GatewayError {
+  return {
+    type: "gateway.error",
+    code,
+    message,
+    ...(requestId === undefined ? {} : { requestId }),
+  };
+}
+
+function refusal(code: GatewayRefused["code"], message: string, requestId: string): GatewayRefused {
+  return { type: "gateway.refused", requestId, code, message };
 }
 
 /** Take a new connection from a node: send the challenge and start the handshake timeout. */
@@ -94,7 +110,7 @@ export function acceptNodeSocket(ws: WebSocket, ctx: GatewayContext): void {
   const handshakeOver = AbortSignal.any([session.handshake.signal, session.ended.signal]);
   void ctx.clock.sleep(HANDSHAKE_TIMEOUT_MS, handshakeOver).then(() => {
     if (!handshakeOver.aborted)
-      rejectSocket(ws, ctx, undefined, "malformed_request", "handshake timeout");
+      rejectSocket(ws, ctx, protocolError("handshake_timeout", "handshake timeout"));
   });
 
   sendGateway(ws, { type: "gateway.challenge", nonce: session.nonce });
@@ -103,7 +119,7 @@ export function acceptNodeSocket(ws: WebSocket, ctx: GatewayContext): void {
     try {
       handleMessage(ws, data, ctx);
     } catch {
-      rejectSocket(ws, ctx, undefined, "malformed_request", "message handling error");
+      rejectSocket(ws, ctx, protocolError("internal_error", "message handling error"));
     }
   });
   ws.on("close", () => closeNodeSocket(ws, ctx));
@@ -123,7 +139,7 @@ function handleMessage(ws: WebSocket, data: RawData, ctx: GatewayContext): void 
   try {
     raw = JSON.parse(messageText(data));
   } catch {
-    rejectSocket(ws, ctx, undefined, "malformed_request", "invalid JSON");
+    rejectSocket(ws, ctx, protocolError("malformed_request", "invalid JSON"));
     return;
   }
 
@@ -133,9 +149,11 @@ function handleMessage(ws: WebSocket, data: RawData, ctx: GatewayContext): void 
     rejectSocket(
       ws,
       ctx,
-      rid.success ? rid.data.requestId : undefined,
-      "malformed_request",
-      "invalid message",
+      protocolError(
+        "malformed_request",
+        "invalid message",
+        rid.success ? rid.data.requestId : undefined,
+      ),
     );
     return;
   }
@@ -156,7 +174,7 @@ function dispatch(
       return handlePair(ws, msg, session, ctx);
   }
   if (session.nodeId === undefined) {
-    rejectSocket(ws, ctx, msg.requestId, "not_authenticated", "not authenticated");
+    rejectSocket(ws, ctx, protocolError("not_authenticated", "not authenticated", msg.requestId));
     return;
   }
   switch (msg.type) {
@@ -180,21 +198,24 @@ function handleAuthenticate(
   ctx: GatewayContext,
 ): void {
   if (session.nodeId !== undefined) {
-    rejectSocket(ws, ctx, msg.requestId, "invalid_identity", "already authenticated");
+    rejectSocket(
+      ws,
+      ctx,
+      protocolError("already_authenticated", "already authenticated", msg.requestId),
+    );
     return;
   }
   const pubKey = nodePublicKey(ctx.db, msg.nodeId);
   if (pubKey === undefined) {
-    sendGateway(ws, {
-      type: "gateway.error",
-      requestId: msg.requestId,
-      code: "unknown_identity",
-      message: "node identity not paired",
-    });
+    sendGateway(ws, refusal("unknown_identity", "node identity not paired", msg.requestId));
     return;
   }
   if (!verifyEd25519(pubKey, session.nonce, msg.signature)) {
-    rejectSocket(ws, ctx, msg.requestId, "invalid_identity", "signature verification failed");
+    rejectSocket(
+      ws,
+      ctx,
+      refusal("invalid_identity", "signature verification failed", msg.requestId),
+    );
     return;
   }
   markConnected(ws, msg.nodeId, session, ctx);
@@ -208,28 +229,37 @@ function handlePair(
   ctx: GatewayContext,
 ): void {
   if (session.nodeId !== undefined) {
-    rejectSocket(ws, ctx, msg.requestId, "pairing_rejected", "already authenticated");
+    rejectSocket(
+      ws,
+      ctx,
+      protocolError("already_authenticated", "already authenticated", msg.requestId),
+    );
     return;
   }
   if (!isEd25519PublicKey(msg.publicKey)) {
-    rejectSocket(ws, ctx, msg.requestId, "invalid_identity", "invalid public key");
+    rejectSocket(ws, ctx, refusal("invalid_identity", "invalid public key", msg.requestId));
     return;
   }
   if (!verifyEd25519(msg.publicKey, session.nonce, msg.signature)) {
-    rejectSocket(ws, ctx, msg.requestId, "invalid_identity", "signature verification failed");
+    rejectSocket(
+      ws,
+      ctx,
+      refusal("invalid_identity", "signature verification failed", msg.requestId),
+    );
     return;
   }
-  const now = () => ctx.clock.now();
-  const consumed = consumePairingToken(ctx.db, msg.pairingToken, now);
-  if (!consumed.ok) {
-    rejectSocket(ws, ctx, msg.requestId, "pairing_rejected", "pairing token invalid or expired");
+  if (!pairNode(ctx.db, msg.pairingToken, msg.nodeId, msg.publicKey, () => ctx.clock.now())) {
+    rejectSocket(
+      ws,
+      ctx,
+      refusal(
+        "pairing_rejected",
+        "pairing token invalid or expired, or the node is already paired",
+        msg.requestId,
+      ),
+    );
     return;
   }
-  if (consumed.nodeId !== null && consumed.nodeId !== msg.nodeId) {
-    rejectSocket(ws, ctx, msg.requestId, "pairing_rejected", "pairing token not for this node");
-    return;
-  }
-  pairNode(ctx.db, msg.nodeId, msg.publicKey, now);
   markConnected(ws, msg.nodeId, session, ctx);
   sendGateway(ws, { type: "gateway.paired", requestId: msg.requestId, nodeId: msg.nodeId });
 }

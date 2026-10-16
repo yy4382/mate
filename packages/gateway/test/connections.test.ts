@@ -29,7 +29,7 @@ describe("node gateway connections (MODULE_TESTS 7)", () => {
     const callOnOld = under.gateway.runTool(
       old.nodeId,
       "agent-1",
-      { requestId: randomUUID(), tool: "bash", arguments: { command: "sleep 60" } },
+      { tool: "bash", arguments: { command: "sleep 60" } },
       (chunk) => onOld.push(chunk),
       never,
     );
@@ -57,7 +57,7 @@ describe("node gateway connections (MODULE_TESTS 7)", () => {
     const callOnNew = under.gateway.runTool(
       old.nodeId,
       "agent-1",
-      { requestId: randomUUID(), tool: "bash", arguments: { command: "echo new" } },
+      { tool: "bash", arguments: { command: "echo new" } },
       (chunk) => onNew.push(chunk),
       never,
     );
@@ -88,7 +88,7 @@ describe("node gateway connections (MODULE_TESTS 7)", () => {
     const call = under.gateway.runTool(
       node.nodeId,
       "agent-1",
-      { requestId: randomUUID(), tool: "bash", arguments: { command: "sleep 60" } },
+      { tool: "bash", arguments: { command: "sleep 60" } },
       () => {},
       never,
     );
@@ -116,7 +116,7 @@ describe("node gateway connections (MODULE_TESTS 7)", () => {
     const after = await under.gateway.runTool(
       node.nodeId,
       "agent-1",
-      { requestId: randomUUID(), tool: "bash", arguments: { command: "echo hi" } },
+      { tool: "bash", arguments: { command: "echo hi" } },
       () => {},
       never,
     );

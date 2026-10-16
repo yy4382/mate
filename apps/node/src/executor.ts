@@ -2,11 +2,9 @@ import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import type { Clock } from "@mate/clock";
-import type { GatewayRunTool, ToolResult } from "@mate/node-protocol";
+import { BashArgumentsSchema, type GatewayRunTool, type ToolResult } from "@mate/node-protocol";
 import { Commands } from "./commands.ts";
 import { runFileTool } from "./files.ts";
-
-const bashArguments = z.object({ command: z.string(), timeout: z.number().positive().optional() });
 
 /**
  * Everything the node executes, in the Agents' workspaces under one root. A command runs in a process group the
@@ -37,7 +35,7 @@ export class Executor {
       );
     }
     if (call.tool !== "bash") return runFileTool(call.tool, call.arguments, workspace, signal);
-    const args = bashArguments.safeParse(call.arguments);
+    const args = BashArgumentsSchema.safeParse(call.arguments);
     if (!args.success) return failure(`Invalid bash arguments: ${z.prettifyError(args.error)}`);
     return this.#commands.run(
       {
@@ -52,11 +50,17 @@ export class Executor {
   }
 
   /** Create the Agent's workspace with an empty MEMORY.md; repeating it changes nothing. */
-  prepareWorkspace(agentId: string): void {
+  prepareWorkspace(agentId: string): ToolResult {
     const workspace = join(this.#root, agentId);
-    mkdirSync(workspace, { recursive: true });
-    const memory = join(workspace, "MEMORY.md");
-    if (!existsSync(memory)) writeFileSync(memory, "", { flag: "wx" });
+    try {
+      mkdirSync(workspace, { recursive: true });
+      const memory = join(workspace, "MEMORY.md");
+      if (!existsSync(memory)) writeFileSync(memory, "", { flag: "wx" });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      return failure(`Failed to prepare workspace: ${reason}`);
+    }
+    return { content: [{ type: "text", text: "Workspace prepared." }], isError: false };
   }
 
   /** Kill every process group the node started. */

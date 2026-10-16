@@ -1,3 +1,4 @@
+import { bashTool } from "@mate/node-protocol";
 import { ScriptedProvider } from "@mate/testkit";
 import { describe, expect, it, onTestFinished } from "vitest";
 import { testChat } from "./test-chat.ts";
@@ -39,7 +40,7 @@ describe("agent loop", () => {
     agent.provider.assertComplete();
   });
 
-  it("forwards a tool call to the workspace with a stable requestId and returns its result to the model", async () => {
+  it("forwards a tool call to the workspace and returns its result to the model", async () => {
     const agent = await testAgent();
     agent.workspace.answerAll(() => text("a.txt\nb.txt"));
     let callIds: string[] = [];
@@ -55,13 +56,26 @@ describe("agent loop", () => {
 
     await (await runtime.submit("what is here?", { requestId: "m1" })).settled();
 
-    expect(agent.workspace.calls).toEqual([
-      {
-        requestId: expect.stringMatching(/^tool:\d+$/),
-        tool: "bash",
-        arguments: { command: "ls" },
-      },
-    ]);
+    expect(agent.workspace.calls).toEqual([{ tool: "bash", arguments: { command: "ls" } }]);
+    agent.provider.assertComplete();
+  });
+
+  it("offers the model the node's own bash tool, as the node protocol defines it", async () => {
+    const agent = await testAgent();
+    let offered: Record<string, unknown> | undefined;
+    agent.provider.step("look", (request) => {
+      offered = request.body.tools?.find((tool) => tool.name === "bash");
+      request.text("ok");
+    });
+    const { runtime } = await agent.open();
+    await (await runtime.submit("hi", { requestId: "m1" })).settled();
+
+    expect(offered?.["description"], "what bash promises is what the node does").toBe(
+      bashTool.description,
+    );
+    expect(offered?.["parameters"], "the node validates calls with the same schema").toEqual(
+      bashTool.parameters,
+    );
     agent.provider.assertComplete();
   });
 

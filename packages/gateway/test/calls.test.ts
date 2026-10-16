@@ -1,4 +1,5 @@
-import { randomUUID } from "node:crypto";
+import { getEventListeners } from "node:events";
+import type { GatewayRunTool, ToolResult } from "@mate/node-protocol";
 import { describe, expect, it } from "vitest";
 import { deferred, eventually, never, startGateway, text, toolResult, within } from "./support.ts";
 
@@ -12,7 +13,7 @@ describe("node gateway tool calls (MODULE_TESTS 7)", () => {
     const result = await under.gateway.runTool(
       node.nodeId,
       "agent-1",
-      { requestId: randomUUID(), tool: "bash", arguments: { command: "echo hello world" } },
+      { tool: "bash", arguments: { command: "echo hello world" } },
       (chunk) => chunks.push(chunk),
       never,
     );
@@ -30,7 +31,7 @@ describe("node gateway tool calls (MODULE_TESTS 7)", () => {
       under.gateway.runTool(
         node.nodeId,
         "agent-1",
-        { requestId: randomUUID(), tool: "bash", arguments: { command: "echo hi" } },
+        { tool: "bash", arguments: { command: "echo hi" } },
         () => {},
         never,
       ),
@@ -53,7 +54,7 @@ describe("node gateway tool calls (MODULE_TESTS 7)", () => {
     const call = under.gateway.runTool(
       node.nodeId,
       "agent-1",
-      { requestId: randomUUID(), tool: "bash", arguments: { command: "sleep 60" } },
+      { tool: "bash", arguments: { command: "sleep 60" } },
       (chunk) => chunks.push(chunk),
       never,
     );
@@ -75,7 +76,7 @@ describe("node gateway tool calls (MODULE_TESTS 7)", () => {
     const next = under.gateway.runTool(
       node.nodeId,
       "agent-1",
-      { requestId: randomUUID(), tool: "bash", arguments: { command: "echo next" } },
+      { tool: "bash", arguments: { command: "echo next" } },
       () => {},
       never,
     );
@@ -86,33 +87,121 @@ describe("node gateway tool calls (MODULE_TESTS 7)", () => {
     expect(await call, "the caller's answer stays unknown").toEqual(result);
   });
 
-  it("ends a call as unknown when its caller aborts it, and drops what the node sends for it afterwards", async () => {
+  it("stops a call on its node when its caller aborts, ends it at once as stopped, and drops what the node sends for it afterwards", async () => {
     const under = await startGateway();
     const callArrived = deferred<string>();
+    const stopArrived = deferred<string>();
     const node = await under.pairedNode({
       onRunTool: (message) => {
         callArrived.resolve(message.requestId);
         return new Promise(() => {});
       },
+      onStopTool: (requestId) => stopArrived.resolve(requestId),
     });
     const abort = new AbortController();
     const chunks: string[] = [];
     const call = under.gateway.runTool(
       node.nodeId,
       "agent-1",
-      { requestId: randomUUID(), tool: "bash", arguments: { command: "sleep 60" } },
+      { tool: "bash", arguments: { command: "sleep 60" } },
       (chunk) => chunks.push(chunk),
       abort.signal,
     );
     const requestId = await callArrived.promise;
     abort.abort();
-    expect(text(await within(call))).toMatch(/unknown/i);
+    const result = await within(call);
+    expect(text(result)).toMatch(/stopped/i);
+    expect(text(result), "the connection is fine; the caller is not told otherwise").not.toMatch(
+      /connection/i,
+    );
+    expect(await within(stopArrived.promise), "the node is told to stop that call").toBe(requestId);
 
     node.send({ type: "node.tool.output", requestId, chunk: "late output" });
     node.send({ type: "node.tool.result", requestId, ...toolResult("late result") });
     node.ping();
     await eventually(() => node.pongs > 0, "the node's later messages were read");
     expect(chunks, "output after the call ended is dropped").toEqual([]);
+    expect(under.gateway.status(node.nodeId).online, "the node stays online").toBe(true);
+  });
+
+  it("gives each call its own request ID, so concurrent calls of two Agents each get their own output and result", async () => {
+    const under = await startGateway();
+    const arrived: GatewayRunTool[] = [];
+    const node = await under.pairedNode({
+      onRunTool: async (message) => {
+        arrived.push(message);
+        // Answer only once both calls are on the node, so each answer races the other.
+        await eventually(() => arrived.length === 2, "both calls reached the node");
+        return {
+          outputs: [`out ${message.agentId}`],
+          result: toolResult(`result ${message.agentId}`),
+        };
+      },
+    });
+    const run = (agentId: string, chunks: string[]) =>
+      under.gateway.runTool(
+        node.nodeId,
+        agentId,
+        { tool: "bash", arguments: { command: "echo" } },
+        (chunk) => chunks.push(chunk),
+        never,
+      );
+    const aChunks: string[] = [];
+    const bChunks: string[] = [];
+    const [a, b] = await Promise.all([
+      within(run("agent-a", aChunks)),
+      within(run("agent-b", bChunks)),
+    ]);
+    expect(text(a)).toBe("result agent-a");
+    expect(text(b)).toBe("result agent-b");
+    expect(aChunks).toEqual(["out agent-a"]);
+    expect(bChunks).toEqual(["out agent-b"]);
+    expect(new Set(arrived.map((m) => m.requestId)).size, "two different request IDs").toBe(2);
+  });
+
+  it("returns the node's result however long a call runs: a call has no deadline of its own", async () => {
+    const day = 24 * 60 * 60_000;
+    const under = await startGateway({ heartbeatTimeoutMs: 30 * day });
+    const answer = deferred<{ outputs: string[]; result: ToolResult }>();
+    const node = await under.pairedNode({ onRunTool: () => answer.promise });
+    const call = under.gateway.runTool(
+      node.nodeId,
+      "agent-1",
+      { tool: "bash", arguments: { command: "make world" } },
+      () => {},
+      never,
+    );
+    under.clock.advance(day);
+    expect(await within(call, 100), "a day later the call still waits for the node").toBe(
+      "pending",
+    );
+    answer.resolve({ outputs: [], result: toolResult("built") });
+    expect(await within(call)).toEqual(toolResult("built"));
+  });
+
+  it("refuses a call with an invalid Agent ID before sending it or listening on its signal", async () => {
+    const under = await startGateway();
+    const arrived: string[] = [];
+    const node = await under.pairedNode({
+      onRunTool: async (message) => {
+        arrived.push(message.agentId);
+        return { outputs: [], result: toolResult("ran") };
+      },
+    });
+    const signal = new AbortController().signal;
+    await expect(
+      under.gateway.runTool(
+        node.nodeId,
+        "../escape",
+        { tool: "bash", arguments: { command: "echo" } },
+        () => {},
+        signal,
+      ),
+    ).rejects.toThrow();
+    expect(getEventListeners(signal, "abort"), "nothing is left listening").toEqual([]);
+    node.ping();
+    await eventually(() => node.pongs > 0, "the gateway has sent everything it would");
+    expect(arrived, "nothing reached the node").toEqual([]);
   });
 
   it("takes a call's output and result only from the node that carries it, and keeps it running when another node disconnects", async () => {
@@ -129,7 +218,7 @@ describe("node gateway tool calls (MODULE_TESTS 7)", () => {
     const call = under.gateway.runTool(
       staying.nodeId,
       "agent-1",
-      { requestId: randomUUID(), tool: "bash", arguments: { command: "echo hi" } },
+      { tool: "bash", arguments: { command: "echo hi" } },
       (chunk) => chunks.push(chunk),
       never,
     );

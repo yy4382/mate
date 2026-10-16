@@ -74,7 +74,7 @@ Mate 内置的类 Slack 聊天系统。它不知道 runtime 和模型的存在�
 聊天 app 在一次写操作提交、并且这次写追加了收件事件之后发出的提醒，只带收到事件的账号，不带事件本身。它只是"该去读收件事件了"的提示，连接器仍然从自己的事件位置往后读，所以错过一次信号不会丢事件。
 
 **requestId**
-调用方为一次操作生成的稳定 ID。接收方按它去重：同一个 ID 只生效一次，重复调用返回第一次的结果。Agent 的工具调用用 Durable 的工具调用 ID 作为 requestId；所有者的网页请求由浏览器生成。
+调用方为一次操作生成的稳定 ID。接收方按它去重：同一个 ID 只生效一次，重复调用返回第一次的结果。Agent 的聊天工具调用用 Durable 的工具调用 ID 作为 requestId；所有者的网页请求由浏览器生成。node 工具调用没有调用方的 requestId：网关为每次调用生成自己的请求 ID，只用来对应输出、结果和停止。
 
 ## Agent runtime
 
@@ -149,7 +149,7 @@ Agent 给自己设定的定时输入，保存在它自己的存储文件里，�
 以宿主机现有账号运行的执行进程，由 `mate node` CLI 管理成 systemd 用户服务。它在 Agent 的工作区里执行命令、读写文件，不接触模型凭据和对话记录。
 
 **工作区宿主**（WorkspaceHost）
-Agent Manager 看到的"工作区在哪里"：为一个 Agent 准备工作区（可以重复调用），以及给出这个 Agent 的工作区端口（`WorkspacePort`）。由 node 网关实现；测试里用假的。
+Agent Manager 看到的"工作区在哪里"：为一个 Agent 准备工作区（可以重复调用），以及给出这个 Agent 的工作区端口（`WorkspacePort`）。node 网关本身不实现它（`NodeGateway` 没有 `port()`），由控制面把网关适配成它：准备工作区调 `prepareWorkspace`，端口的每次调用转给 `runTool` 并带上调用的 signal。这层适配在 M6 接线；测试里用假的。
 
 **node 网关**（node gateway）
 控制面里负责 node 配对、认证、心跳，并把工具调用整个转发给 node 的模块。
@@ -158,8 +158,16 @@ Agent Manager 看到的"工作区在哪里"：为一个 Agent 准备工作区（
 Agent 在 node 上的工作目录。Agent 在里面自由组织记忆、文件和脚本。
 
 **命令进程组**（command process group）
-node 为每条 `bash` 命令开的会话和进程组（`/bin/sh -c` 以 `detached` 启动，组 ID 就是 shell 的 PID）。它是 node 对一条命令所启动的一切的唯一把手：超时、`stopAgent`、断线时杀掉进行中命令的组，node 关闭时杀掉所有还有活进程的组，包括命令已返回、只剩后台进程的组。只剩僵尸进程的组算已结束；组 ID 被系统复用给别的进程后（启动时间不同），node 不再碰它。用 `setsid` 等方式离开进程组的进程归 Agent 自己负责。
+node 为每条 `bash` 命令开的会话和进程组（`/bin/sh -c` 以 `detached` 启动，组 ID 就是 shell 的 PID）。它是 node 对一条命令所启动的一切的唯一把手：超时、调用方停止这次调用、断线时杀掉进行中命令的组，node 关闭时杀掉所有还有活进程的组，包括命令已返回、只剩后台进程的组。只剩僵尸进程的组算已结束；组 ID 被系统复用给别的进程后（启动时间不同），node 不再碰它。用 `setsid` 等方式离开进程组的进程归 Agent 自己负责。
 避免：按单个 PID 跟踪命令、用 `kill -0` 判断组是否还在跑。
+
+**身份拒绝**（gateway.refused）
+网关对 node 说"你是谁"不被接受：身份不认识（`unknown_identity`）、签名或公钥无效、配对令牌被拒。除了"不认识"而 node 手里有配对令牌的情况，node 收到后退出，不重试。
+避免：把它和**协议错误**（`gateway.error`：格式错误、顺序错误、握手超时、内部错误）混为一谈；协议错误只结束这条连接，node 退避重连。
+
+**已停止**（stopped）
+调用方中止一次 node 工具调用后得到的结果：网关已让 node 杀掉这次调用的命令进程组，已经做了的不会撤回，也不会重做。
+避免：结果未知（那是连接断开时的结果）。
 
 **工作区环境**（WorkspaceEnv）
 node 上限定在一个工作区里的 Durable `NodeExecutionEnv`：Durable 的 `read`、`write`、`edit` 在它上面执行，每个路径先经过它解析，`..`、指向外部的绝对路径和符号链接都在这里被拒绝。

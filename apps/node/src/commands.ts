@@ -1,10 +1,8 @@
 import { spawn } from "node:child_process";
 import type { Clock } from "@mate/clock";
-import type { ToolResult } from "@mate/node-protocol";
+import { BASH_KEPT_OUTPUT_BYTES, type ToolResult } from "@mate/node-protocol";
 import { ProcessGroup } from "./process-group.ts";
 
-/** Bytes of output a result keeps: the tail, as Durable's own `bash` tool keeps it. */
-const KEPT_OUTPUT_BYTES = 50 * 1024;
 /** Bytes streamed to the gateway per call; past this only the result's tail is sent, so `yes` cannot flood the link. */
 const STREAMED_OUTPUT_BYTES = 1024 * 1024;
 /** How long a command whose shell exited may keep the output open or its group running before the node returns. */
@@ -174,7 +172,7 @@ class Output {
       this.#onOutput(chunk);
     }
     this.#text += chunk;
-    const excess = Buffer.byteLength(this.#text) - KEPT_OUTPUT_BYTES;
+    const excess = Buffer.byteLength(this.#text) - BASH_KEPT_OUTPUT_BYTES;
     if (excess > 0) {
       const kept = Buffer.from(this.#text).subarray(excess).toString("utf8");
       this.#dropped += excess;
@@ -201,7 +199,7 @@ function render(
   const remarks: string[] = [];
   if (output.droppedBytes > 0) {
     remarks.push(
-      `[Output truncated: the first ${output.droppedBytes} bytes were dropped; the last ${KEPT_OUTPUT_BYTES} bytes are kept]`,
+      `[Output truncated: the first ${output.droppedBytes} bytes were dropped; the last ${BASH_KEPT_OUTPUT_BYTES} bytes are kept]`,
     );
   }
   if (pipesHeld) {
@@ -230,7 +228,7 @@ function describe(ending: Ending, timeoutSeconds: number | undefined): string | 
     case "timed-out":
       return `Command timed out after ${timeoutSeconds} seconds and was killed`;
     case "stopped":
-      return "Command was stopped: the Agent was stopped or the connection to the node dropped";
+      return "Command was stopped: its caller stopped it or the connection to the node dropped";
     case "not-started":
       return `Command could not start: ${ending.reason}`;
   }

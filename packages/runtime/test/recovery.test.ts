@@ -28,7 +28,7 @@ describe("crash and reopen", () => {
     agent.provider.assertComplete();
   });
 
-  it("reruns an interrupted read after a crash with the same requestId", async () => {
+  it("reruns an interrupted read after a crash", async () => {
     const agent = await testAgent();
     agent.provider.step(
       "start",
@@ -47,9 +47,9 @@ describe("crash and reopen", () => {
     const second = await agent.open();
     await second.runtime.idle();
 
-    expect(agent.workspace.calls.map((request) => request.requestId)).toEqual([
-      call.request.requestId,
-      call.request.requestId,
+    expect(agent.workspace.calls, "the same read, sent again").toEqual([
+      call.request,
+      call.request,
     ]);
     agent.provider.assertComplete();
   });

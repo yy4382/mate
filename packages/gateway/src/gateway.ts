@@ -1,5 +1,13 @@
 import { systemClock, type Clock } from "@mate/clock";
-import type { JsonValue, ToolName, ToolResult } from "@mate/node-protocol";
+import {
+  GatewayPrepareWorkspaceSchema,
+  GatewayRunToolSchema,
+  type GatewayPrepareWorkspace,
+  type GatewayRunTool,
+  type JsonValue,
+  type ToolName,
+  type ToolResult,
+} from "@mate/node-protocol";
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
@@ -12,19 +20,12 @@ import {
   type GatewayContext,
   type NodeSession,
 } from "./connection.js";
-import {
-  offlineResult,
-  PendingCalls,
-  prepareWorkspaceOfflineResult,
-  stoppedResult,
-  unknownResult,
-} from "./pending-calls.js";
+import { offlineResult, PendingCalls, stoppedResult } from "./pending-calls.js";
 import { createPairingToken, listNodes, openGatewayDatabase } from "./storage.js";
 
 const DEFAULT_PAIRING_TOKEN_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_MAX_UNAUTHENTICATED = 32;
 const DEFAULT_HEARTBEAT_TIMEOUT_MS = 35_000;
-const DEFAULT_TOOL_TIMEOUT_MS = 90_000;
 
 export interface NodeGatewayOptions {
   dataDirectory: string;
@@ -32,29 +33,28 @@ export interface NodeGatewayOptions {
   pairingTokenTtlMs?: number;
   maxUnauthenticated?: number | undefined;
   heartbeatTimeoutMs?: number;
-  toolTimeoutMs?: number;
 }
 
 export interface RunToolRequest {
-  requestId: string;
   tool: ToolName;
   arguments: Record<string, JsonValue>;
 }
 
 export interface NodeGateway {
-  /** Run a workspace tool on the given node for the given agent. Never retries. */
+  /**
+   * Run a workspace tool on the given node for the given agent, streaming its output. Never retries. Aborting `signal`
+   * stops the call on the node and ends it at once with a stopped result. A call has no deadline: it ends when the
+   * node answers, its connection is lost, or `signal` aborts.
+   */
   runTool(
     nodeId: string,
     agentId: string,
-    req: RunToolRequest,
+    request: RunToolRequest,
     onOutput: (chunk: string) => void,
     signal: AbortSignal,
   ): Promise<ToolResult>;
 
-  /** Stop all in-flight tool calls for an agent on a node. */
-  stopAgent(nodeId: string, agentId: string): void;
-
-  /** Prepare a workspace on the node (create dir + MEMORY.md). */
+  /** Create the Agent's workspace on the node with an empty MEMORY.md; repeating it changes nothing. */
   prepareWorkspace(nodeId: string, agentId: string): Promise<ToolResult>;
 
   /** Whether one node is online. */
@@ -63,8 +63,8 @@ export interface NodeGateway {
   /** Every paired node and whether it is online. */
   nodes(): NodeStatusResult[];
 
-  /** Create a pairing token, optionally scoped to a nodeId. */
-  createPairingToken(nodeId?: string): { pairingToken: string; expiresAt: string };
+  /** Create a single-use pairing token for a new node. */
+  createPairingToken(): { pairingToken: string; expiresAt: string };
 
   /** Mount onto an HTTP server's upgrade event. */
   handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void;
@@ -83,12 +83,11 @@ export function createNodeGateway(options: NodeGatewayOptions): NodeGateway {
   const clock = options.clock ?? systemClock;
   const now = () => clock.now();
   const pairingTokenTtlMs = options.pairingTokenTtlMs ?? DEFAULT_PAIRING_TOKEN_TTL_MS;
-  const toolTimeoutMs = options.toolTimeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS;
 
   const ctx: GatewayContext = {
     db: openGatewayDatabase(options.dataDirectory),
     clock,
-    pending: new PendingCalls(clock),
+    pending: new PendingCalls(),
     sessions: new WeakMap<WebSocket, NodeSession>(),
     connected: new Map<string, WebSocket>(),
     unauthenticated: new Set<WebSocket>(),
@@ -103,62 +102,57 @@ export function createNodeGateway(options: NodeGatewayOptions): NodeGateway {
     return { nodeId, online: ctx.connected.has(nodeId), lastConnectedAt };
   }
 
+  /**
+   * Send one request to a node and wait for its answer. The gateway picks the request ID, so calls from different
+   * callers can never share one.
+   */
+  function request(
+    ws: WebSocket,
+    message: GatewayRunTool | GatewayPrepareWorkspace,
+    onOutput: (chunk: string) => void,
+  ): Promise<ToolResult> {
+    const result = ctx.pending.add(message.requestId, ws, onOutput);
+    if (!sendGateway(ws, message)) ctx.pending.settle(message.requestId, offlineResult());
+    return result;
+  }
+
   return {
-    async runTool(nodeId, agentId, req, onOutput, signal) {
+    async runTool(nodeId, agentId, { tool, arguments: args }, onOutput, signal) {
+      // Checked before anything is registered, so a call that cannot be sent leaves nothing behind.
+      const message = GatewayRunToolSchema.parse({
+        type: "gateway.run.tool",
+        requestId: randomUUID(),
+        agentId,
+        tool,
+        arguments: args,
+      });
       const ws = ctx.connected.get(nodeId);
       if (ws === undefined) return offlineResult();
-      if (signal.aborted) return unknownResult();
+      if (signal.aborted) return stoppedResult();
 
-      const result = ctx.pending.add(
-        req.requestId,
-        ws,
-        agentId,
-        onOutput,
-        toolTimeoutMs,
-        unknownResult,
-      );
-      const abort = () => ctx.pending.settle(req.requestId, unknownResult());
-      signal.addEventListener("abort", abort, { once: true });
-      const sent = sendGateway(ws, {
-        type: "gateway.run.tool",
-        requestId: req.requestId,
-        agentId,
-        tool: req.tool,
-        arguments: req.arguments,
-      });
-      if (!sent) ctx.pending.settle(req.requestId, unknownResult());
-
+      const { requestId } = message;
+      const stop = () => {
+        if (ctx.pending.settle(requestId, stoppedResult())) {
+          sendGateway(ws, { type: "gateway.stop.tool", requestId });
+        }
+      };
+      signal.addEventListener("abort", stop, { once: true });
       try {
-        return await result;
+        return await request(ws, message, onOutput);
       } finally {
-        signal.removeEventListener("abort", abort);
+        signal.removeEventListener("abort", stop);
       }
-    },
-
-    stopAgent(nodeId, agentId) {
-      const ws = ctx.connected.get(nodeId);
-      if (ws === undefined) return;
-      ctx.pending.settleForAgent(ws, agentId, stoppedResult);
-      sendGateway(ws, { type: "gateway.stop.agent", requestId: randomUUID(), agentId });
     },
 
     async prepareWorkspace(nodeId, agentId) {
-      const ws = ctx.connected.get(nodeId);
-      if (ws === undefined) return prepareWorkspaceOfflineResult();
-
-      const requestId = randomUUID();
-      const result = ctx.pending.add(
-        requestId,
-        ws,
+      const message = GatewayPrepareWorkspaceSchema.parse({
+        type: "gateway.prepare.workspace",
+        requestId: randomUUID(),
         agentId,
-        () => {},
-        toolTimeoutMs,
-        prepareWorkspaceOfflineResult,
-      );
-      if (!sendGateway(ws, { type: "gateway.prepare.workspace", requestId, agentId })) {
-        ctx.pending.settle(requestId, prepareWorkspaceOfflineResult());
-      }
-      return result;
+      });
+      const ws = ctx.connected.get(nodeId);
+      if (ws === undefined) return offlineResult();
+      return request(ws, message, () => {});
     },
 
     status(nodeId) {
@@ -170,8 +164,8 @@ export function createNodeGateway(options: NodeGatewayOptions): NodeGateway {
       return listNodes(ctx.db).map((n) => statusOf(n.nodeId, n.lastConnectedAt));
     },
 
-    createPairingToken(nodeId) {
-      return createPairingToken(ctx.db, now, pairingTokenTtlMs, nodeId);
+    createPairingToken() {
+      return createPairingToken(ctx.db, now, pairingTokenTtlMs);
     },
 
     handleUpgrade(req, socket, head) {

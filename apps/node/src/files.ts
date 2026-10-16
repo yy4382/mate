@@ -1,5 +1,5 @@
 import { lstat, realpath } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { Context, JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
 import type {
@@ -157,7 +157,8 @@ class WorkspaceEnv extends NodeExecutionEnv {
 
 function inside(root: string, path: string): boolean {
   const rest = relative(root, path);
-  return rest === "" || (!rest.startsWith("..") && !isAbsolute(rest));
+  // Only a first segment of exactly `..` leaves the root; `..notes.md` or `...` is an ordinary name inside it.
+  return rest !== ".." && !rest.startsWith(`..${sep}`) && !isAbsolute(rest);
 }
 
 /**

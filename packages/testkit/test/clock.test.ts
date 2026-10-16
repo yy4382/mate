@@ -34,6 +34,18 @@ describe.each(clocks)("%s", (_name, make) => {
     expect(await settledSoon(sleeping), "woken by the abort").toBe(true);
   });
 
+  it("sleeps past the platform timer's limit of 2^31-1 ms instead of waking at once, and still wakes on abort", async () => {
+    const clock = make();
+    const controller = new AbortController();
+    const sleeping = clock.sleep(2 ** 31 + 1_000, controller.signal);
+    expect(await settledSoon(sleeping), "still asleep").toBe(false);
+    controller.abort();
+    expect(await settledSoon(sleeping), "woken by the abort").toBe(true);
+    expect(getEventListeners(controller.signal, "abort"), "the abort listener is removed").toEqual(
+      [],
+    );
+  });
+
   it("leaves no listener on the signal once a sleep has ended by its deadline", async () => {
     const clock = make();
     const signal = new AbortController().signal;

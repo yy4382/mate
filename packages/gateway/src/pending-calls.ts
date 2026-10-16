@@ -1,44 +1,30 @@
-import type { Clock } from "@mate/clock";
 import type { ToolResult } from "@mate/node-protocol";
 import type { WebSocket } from "ws";
 
 interface Pending {
   /** The connection the call was sent on. Only that connection may answer it. */
   socket: WebSocket;
-  agentId: string;
   onOutput: (chunk: string) => void;
   resolve: (result: ToolResult) => void;
-  /** Aborted once the call settles, which cancels its timeout. */
-  settled: AbortController;
 }
 
 /**
- * In-flight requests from the gateway to its nodes, keyed by request ID and bound to the connection that carried them.
- * Binding to the connection rather than the node means a call ends when its connection ends, and an answer arriving on
- * any other connection (a reconnect, a displaced connection) is dropped without a separate check.
+ * In-flight requests from the gateway to its nodes, keyed by the request ID the gateway chose for each and bound to the
+ * connection that carried it. Binding to the connection rather than the node means a call ends when its connection
+ * ends, and an answer arriving on any other connection (a reconnect, a displaced connection) is dropped without a
+ * separate check. A call has no deadline of its own: a dead link is found by the heartbeat, and a command's duration is
+ * its own `timeout`.
  */
 export class PendingCalls {
   readonly #calls = new Map<string, Pending>();
-  readonly #clock: Clock;
-
-  constructor(clock: Clock) {
-    this.#clock = clock;
-  }
 
   add(
     requestId: string,
     socket: WebSocket,
-    agentId: string,
     onOutput: (chunk: string) => void,
-    timeoutMs: number,
-    onTimeout: () => ToolResult,
   ): Promise<ToolResult> {
     return new Promise<ToolResult>((resolve) => {
-      const settled = new AbortController();
-      this.#calls.set(requestId, { socket, agentId, onOutput, resolve, settled });
-      void this.#clock.sleep(timeoutMs, settled.signal).then(() => {
-        if (!settled.signal.aborted) this.settle(requestId, onTimeout());
-      });
+      this.#calls.set(requestId, { socket, onOutput, resolve });
     });
   }
 
@@ -58,20 +44,13 @@ export class PendingCalls {
     }
   }
 
-  /** End every call of one agent carried by a connection. */
-  settleForAgent(socket: WebSocket, agentId: string, result: () => ToolResult): void {
-    for (const [requestId, call] of this.#calls) {
-      if (call.socket === socket && call.agentId === agentId) this.settle(requestId, result());
-    }
-  }
-
-  /** Resolve one call; a call that has already settled is left alone. */
-  settle(requestId: string, result: ToolResult): void {
+  /** Resolve one call. Returns false, and changes nothing, when it has already settled. */
+  settle(requestId: string, result: ToolResult): boolean {
     const call = this.#calls.get(requestId);
-    if (!call) return;
+    if (!call) return false;
     this.#calls.delete(requestId);
-    call.settled.abort();
     call.resolve(result);
+    return true;
   }
 }
 
@@ -96,15 +75,11 @@ export function offlineResult(): ToolResult {
 
 export function stoppedResult(): ToolResult {
   return {
-    content: [{ type: "text", text: "Tool call stopped by stopAgent." }],
-    isError: true,
-  };
-}
-
-export function prepareWorkspaceOfflineResult(): ToolResult {
-  return {
     content: [
-      { type: "text", text: "Node offline: cannot prepare workspace while node is disconnected." },
+      {
+        type: "text",
+        text: "The tool call was stopped before it finished; whatever it already did stays done. It was not retried.",
+      },
     ],
     isError: true,
   };
