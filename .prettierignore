@@ -1,0 +1,7 @@
+*.md
+dist/
+coverage/
+pnpm-lock.yaml
+.pnpm-store/
+.worktrees/
+data/
