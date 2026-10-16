@@ -4,7 +4,14 @@ import { z } from "zod";
 
 const requestId = z.string().min(1).max(128);
 const nodeId = z.string().uuid();
-const agentId = z.string().min(1).max(128);
+/** Also the name of the Agent's workspace directory on the node, so it can never be `..` or contain a separator. */
+const agentId = z
+  .string()
+  .max(128)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/);
+
+/** A JSON value, as tool arguments carry them. */
+export type JsonValue = z.infer<ReturnType<typeof z.json>>;
 
 // ── Tool calls ───────────────────────────────────────────────────────────────
 
@@ -116,7 +123,7 @@ export const GatewayRunToolSchema = z.object({
   requestId,
   agentId,
   tool: ToolNameSchema,
-  arguments: z.record(z.string(), z.unknown()),
+  arguments: z.record(z.string(), z.json()),
 });
 
 export const GatewayStopAgentSchema = z.object({

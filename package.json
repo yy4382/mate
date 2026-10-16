@@ -12,6 +12,7 @@
     "format:check": "prettier --check .",
     "typecheck": "pnpm -r run typecheck",
     "test": "vitest run",
+    "test:linux": "sh scripts/test-linux.sh",
     "build": "pnpm -r run build"
   },
   "devDependencies": {

@@ -1,5 +1,5 @@
 import { systemClock, type Clock } from "@mate/clock";
-import type { ToolName, ToolResult } from "@mate/node-protocol";
+import type { JsonValue, ToolName, ToolResult } from "@mate/node-protocol";
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
@@ -37,7 +37,7 @@ export interface NodeGatewayOptions {
 export interface RunToolRequest {
   requestId: string;
   tool: ToolName;
-  arguments: Record<string, unknown>;
+  arguments: Record<string, JsonValue>;
 }
 
 export interface NodeGateway {

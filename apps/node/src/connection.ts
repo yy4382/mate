@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto";
+import { WebSocket } from "ws";
+import type { Clock } from "@mate/clock";
 import {
   GatewayMessageSchema,
   NodeRequestSchema,
@@ -5,379 +8,183 @@ import {
   type GatewayRunTool,
   type NodeRequest,
 } from "@mate/node-protocol";
-import { randomUUID } from "node:crypto";
-import { WebSocket } from "ws";
-import { signChallenge, type NodeIdentity } from "./identity.js";
-import { executeToolCall, prepareWorkspaceDir, ProcessGroupTracker } from "./executor.js";
+import type { Executor } from "./executor.ts";
+import { signChallenge, type NodeIdentity } from "./identity.ts";
 
-const INITIAL_RETRY_MS = 250;
-const MAX_RETRY_MS = 10_000;
-const HANDSHAKE_TIMEOUT_MS = 10_000;
-const HEARTBEAT_INTERVAL_MS = 10_000;
-const HEARTBEAT_TIMEOUT_MS = 30_000;
-
-class NodeAuthenticationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "NodeAuthenticationError";
-  }
-}
-
-export interface NodeOptions {
-  controlPlaneUrl: string;
-  dataDirectory: string;
-  workspacesRoot: string;
-  pairingToken?: string | undefined;
-  heartbeatIntervalMs?: number;
-  heartbeatTimeoutMs?: number;
-}
-
-export async function startNode(options: NodeOptions, signal: AbortSignal): Promise<void> {
-  const wsUrl = toWebSocketUrl(options.controlPlaneUrl);
-  const { identity, created } = await import("./identity.js").then((m) =>
-    m.loadOrCreateNodeIdentity(options.dataDirectory),
-  );
-
-  let pairingToken = options.pairingToken;
-  if (created && !pairingToken) {
-    throw new Error("A new node requires a pairing token");
-  }
-
-  const heartbeatIntervalMs = options.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS;
-  const heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? HEARTBEAT_TIMEOUT_MS;
-
-  if (heartbeatTimeoutMs <= heartbeatIntervalMs) {
-    throw new Error("heartbeatTimeoutMs must be greater than heartbeatIntervalMs");
-  }
-
-  const tracker = new ProcessGroupTracker();
-
-  try {
-    let retryMs = INITIAL_RETRY_MS;
-    while (!signal.aborted) {
-      try {
-        await connectOnce(
-          {
-            url: wsUrl,
-            identity,
-            getPairingToken: () => pairingToken,
-            clearPairingToken: () => {
-              pairingToken = undefined;
-            },
-            heartbeatIntervalMs,
-            heartbeatTimeoutMs,
-            workspacesRoot: options.workspacesRoot,
-            tracker,
-          },
-          signal,
-        );
-        retryMs = INITIAL_RETRY_MS;
-      } catch (error) {
-        if (error instanceof NodeAuthenticationError) throw error;
-        if (signal.aborted) break;
-      }
-      if (!signal.aborted) await sleep(retryMs, signal);
-      retryMs = Math.min(retryMs * 2, MAX_RETRY_MS);
-    }
-  } finally {
-    tracker.killAll();
-  }
-}
-
-interface ConnectionOptions {
+export type ConnectionOptions = {
   url: string;
   identity: NodeIdentity;
-  getPairingToken: () => string | undefined;
-  clearPairingToken: () => void;
+  /** The pairing token while the node has not paired yet; used only after the gateway says it does not know us. */
+  pairingToken: string | undefined;
   heartbeatIntervalMs: number;
   heartbeatTimeoutMs: number;
-  workspacesRoot: string;
-  tracker: ProcessGroupTracker;
-}
+  handshakeTimeoutMs: number;
+};
 
-function connectOnce(opts: ConnectionOptions, signal: AbortSignal): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    const socket = new WebSocket(opts.url);
+/** How one connection ended: the gateway refused who we are, or the link went away and is worth retrying. */
+export type ConnectionEnd =
+  { kind: "rejected"; reason: string } | { kind: "lost"; paired: boolean };
 
-    let authenticated = false;
-    let pendingPing: string | undefined;
-    let heartbeatInterval: ReturnType<typeof setInterval> | undefined;
-    let pingTimeout: ReturnType<typeof setTimeout> | undefined;
-    let handshakeTimeout: ReturnType<typeof setTimeout> | undefined;
+/**
+ * One WebSocket connection to the gateway, from handshake to close. Tool calls it receives run on the executor; when
+ * the connection ends, every call still running on it is stopped, because nobody waits for its result any more.
+ */
+export function connect(
+  options: ConnectionOptions,
+  executor: Executor,
+  clock: Clock,
+  shutdown: AbortSignal,
+): Promise<ConnectionEnd> {
+  return new Promise((resolve) => {
+    const socket = new WebSocket(options.url);
+    // Ends with the connection: stops its timers and every tool call it started.
+    const lifetime = new AbortController();
+    const calls = new Map<string, { agentId: string; stop: AbortController }>();
     let authRequestId: string | undefined;
-    let pairRequestId: string | undefined;
-    let challenge: string | undefined;
+    let nonce = "";
+    let authenticated = false;
+    let paired = false;
+    let lastPong = clock.now();
+    let end: ConnectionEnd | undefined;
 
-    // Per-agent abort controllers for in-flight tool calls
-    const agentControllers = new Map<string, AbortController>();
-
-    const cleanup = () => {
-      if (heartbeatInterval) clearInterval(heartbeatInterval);
-      if (pingTimeout) clearTimeout(pingTimeout);
-      if (handshakeTimeout) clearTimeout(handshakeTimeout);
-      // Abort all running tool calls on disconnect
-      for (const controller of agentControllers.values()) {
-        controller.abort();
-      }
-      agentControllers.clear();
-      socket.removeEventListener("error", onError);
-    };
-
-    const sendToGateway = (msg: NodeRequest) => {
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify(NodeRequestSchema.parse(msg)));
-      }
-    };
-
-    const sendPing = () => {
-      const requestId = randomUUID();
-      pendingPing = requestId;
-      sendToGateway({ type: "node.ping", requestId });
-      pingTimeout = setTimeout(() => {
-        if (pendingPing === requestId) {
-          socket.terminate();
-          cleanup();
-          resolve();
-        }
-      }, opts.heartbeatTimeoutMs);
-    };
-
-    const authenticate = (nonce: string) => {
-      authRequestId = randomUUID();
-      sendToGateway({
-        type: "node.authenticate",
-        requestId: authRequestId,
-        nodeId: opts.identity.id,
-        signature: signChallenge(opts.identity, nonce),
-      });
-    };
-
-    const pair = (nonce: string) => {
-      const token = opts.getPairingToken();
-      if (!token) {
-        reject(new NodeAuthenticationError("Node not paired and no pairing token provided"));
-        socket.close(1000, "no pairing token");
-        return;
-      }
-      pairRequestId = randomUUID();
-      sendToGateway({
-        type: "node.pair",
-        requestId: pairRequestId,
-        nodeId: opts.identity.id,
-        publicKey: opts.identity.publicKey,
-        signature: signChallenge(opts.identity, nonce),
-        pairingToken: token,
-      });
-    };
-
-    const onAbort = () => {
-      cleanup();
+    const finish = (ending: ConnectionEnd) => {
+      end ??= ending;
+      if (lifetime.signal.aborted) return;
+      lifetime.abort();
+      shutdown.removeEventListener("abort", onShutdown);
       if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
-        socket.close(1000, "node shutting down");
+        socket.terminate();
       }
-      resolve();
+      resolve(end);
+    };
+    const onShutdown = () => finish({ kind: "lost", paired });
+    shutdown.addEventListener("abort", onShutdown, { once: true });
+    lifetime.signal.addEventListener("abort", () => {
+      for (const call of calls.values()) call.stop.abort();
+      calls.clear();
+    });
+
+    const send = (message: NodeRequest) => {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify(NodeRequestSchema.parse(message)));
+      }
     };
 
-    const onError = () => {
-      // WebSocket errors always precede close; close handler drives retry
-    };
+    void clock.sleep(options.handshakeTimeoutMs, lifetime.signal).then(() => {
+      if (!authenticated) finish({ kind: "lost", paired });
+    });
 
-    const onClose = () => {
-      cleanup();
-      if (!authenticated) {
-        reject(new Error("WebSocket closed before authentication"));
-      } else {
-        resolve();
-      }
-    };
-
-    const onMessage = (event: WebSocket.MessageEvent) => {
-      void handleMessage(String(event.data)).catch((err: unknown) => {
-        cleanup();
-        reject(err instanceof Error ? err : new Error("message handling error"));
-      });
-    };
-
-    const handleMessage = async (text: string): Promise<void> => {
-      let raw: unknown;
-      try {
-        raw = JSON.parse(text);
-      } catch {
-        throw new NodeAuthenticationError("invalid JSON from gateway");
-      }
-      const parsed = GatewayMessageSchema.safeParse(raw);
-      if (!parsed.success) {
-        throw new NodeAuthenticationError("invalid gateway message");
-      }
-      const msg = parsed.data;
-      await dispatch(msg);
-    };
-
-    const dispatch = async (msg: GatewayMessage): Promise<void> => {
-      if (msg.type === "gateway.challenge") {
-        challenge = msg.nonce;
-        authenticate(msg.nonce);
-        handshakeTimeout = setTimeout(() => {
-          reject(new Error("handshake timeout"));
-          socket.close(1001, "handshake timeout");
-        }, HANDSHAKE_TIMEOUT_MS);
-        return;
-      }
-
-      if (msg.type === "gateway.error") {
-        if (msg.code === "unknown_identity" && msg.requestId === authRequestId) {
-          pair(challenge!);
+    const heartbeat = async () => {
+      while (!lifetime.signal.aborted) {
+        if (clock.now() - lastPong > options.heartbeatTimeoutMs) {
+          finish({ kind: "lost", paired });
           return;
         }
-        throw new NodeAuthenticationError(
-          `Gateway rejected authentication: ${msg.code} — ${msg.message}`,
-        );
-      }
-
-      if (msg.type === "gateway.authenticated") {
-        if (handshakeTimeout) {
-          clearTimeout(handshakeTimeout);
-          handshakeTimeout = undefined;
-        }
-        authenticated = true;
-        sendPing();
-        heartbeatInterval = setInterval(sendPing, opts.heartbeatIntervalMs);
-        return;
-      }
-
-      if (msg.type === "gateway.paired") {
-        if (handshakeTimeout) {
-          clearTimeout(handshakeTimeout);
-          handshakeTimeout = undefined;
-        }
-        opts.clearPairingToken();
-        authenticated = true;
-        sendPing();
-        heartbeatInterval = setInterval(sendPing, opts.heartbeatIntervalMs);
-        return;
-      }
-
-      if (msg.type === "gateway.pong") {
-        if (pendingPing === msg.requestId) {
-          pendingPing = undefined;
-          if (pingTimeout) {
-            clearTimeout(pingTimeout);
-            pingTimeout = undefined;
-          }
-        }
-        return;
-      }
-
-      if (msg.type === "gateway.run.tool") {
-        void handleRunTool(msg);
-        return;
-      }
-
-      if (msg.type === "gateway.stop.agent") {
-        const ctrl = agentControllers.get(msg.agentId);
-        if (ctrl) ctrl.abort();
-        return;
-      }
-
-      if (msg.type === "gateway.prepare.workspace") {
-        handlePrepareWorkspace(msg);
-        return;
+        send({ type: "node.ping", requestId: randomUUID() });
+        await clock.sleep(options.heartbeatIntervalMs, lifetime.signal);
       }
     };
 
-    const handleRunTool = async (msg: GatewayRunTool): Promise<void> => {
-      let ctrl = agentControllers.get(msg.agentId);
-      if (!ctrl) {
-        ctrl = new AbortController();
-        agentControllers.set(msg.agentId, ctrl);
-      }
-
-      // Also abort on top-level signal
-      const combinedSignal = AbortSignal.any([signal, ctrl.signal]);
-
-      const result = await executeToolCall(
-        msg,
-        opts.workspacesRoot,
-        (chunk) => {
-          sendToGateway({
-            type: "node.tool.output",
-            requestId: msg.requestId,
-            chunk,
-          });
-        },
-        combinedSignal,
-        opts.tracker,
+    const runTool = async (message: GatewayRunTool) => {
+      const stop = new AbortController();
+      calls.set(message.requestId, { agentId: message.agentId, stop });
+      const result = await executor.run(
+        message,
+        (chunk) => send({ type: "node.tool.output", requestId: message.requestId, chunk }),
+        stop.signal,
       );
-
-      sendToGateway({
-        type: "node.tool.result",
-        requestId: msg.requestId,
-        content: result.content,
-        isError: result.isError,
-      });
+      calls.delete(message.requestId);
+      send({ type: "node.tool.result", requestId: message.requestId, ...result });
     };
 
-    const handlePrepareWorkspace = (
-      msg: Extract<GatewayMessage, { type: "gateway.prepare.workspace" }>,
-    ): void => {
-      try {
-        prepareWorkspaceDir(opts.workspacesRoot, msg.agentId);
-        sendToGateway({
-          type: "node.tool.result",
-          requestId: msg.requestId,
-          content: [{ type: "text", text: "Workspace prepared." }],
-          isError: false,
-        });
-      } catch (error) {
-        sendToGateway({
-          type: "node.tool.result",
-          requestId: msg.requestId,
-          content: [
-            {
-              type: "text",
-              text: `Failed to prepare workspace: ${error instanceof Error ? error.message : String(error)}`,
-            },
-          ],
-          isError: true,
-        });
+    const dispatch = (message: GatewayMessage) => {
+      switch (message.type) {
+        case "gateway.challenge":
+          nonce = message.nonce;
+          authRequestId = randomUUID();
+          send({
+            type: "node.authenticate",
+            requestId: authRequestId,
+            nodeId: options.identity.id,
+            signature: signChallenge(options.identity, nonce),
+          });
+          return;
+        case "gateway.error":
+          if (message.code === "unknown_identity" && message.requestId === authRequestId) {
+            if (options.pairingToken === undefined) {
+              finish({ kind: "rejected", reason: "the gateway does not know this node" });
+              return;
+            }
+            send({
+              type: "node.pair",
+              requestId: randomUUID(),
+              nodeId: options.identity.id,
+              publicKey: options.identity.publicKey,
+              signature: signChallenge(options.identity, nonce),
+              pairingToken: options.pairingToken,
+            });
+            return;
+          }
+          finish({ kind: "rejected", reason: `${message.code}: ${message.message}` });
+          return;
+        case "gateway.paired":
+        case "gateway.authenticated":
+          paired = true;
+          authenticated = true;
+          lastPong = clock.now();
+          void heartbeat();
+          return;
+        case "gateway.pong":
+          lastPong = clock.now();
+          return;
+        case "gateway.run.tool":
+          void runTool(message);
+          return;
+        case "gateway.stop.agent":
+          for (const [requestId, call] of calls) {
+            if (call.agentId !== message.agentId) continue;
+            call.stop.abort();
+            calls.delete(requestId);
+          }
+          return;
+        case "gateway.prepare.workspace":
+          send({
+            type: "node.tool.result",
+            requestId: message.requestId,
+            ...prepare(message.agentId),
+          });
+          return;
       }
     };
 
-    signal.addEventListener("abort", onAbort, { once: true });
-    socket.addEventListener("message", onMessage);
-    socket.addEventListener("close", onClose, { once: true });
-    socket.addEventListener("error", onError);
-  });
-}
-
-function toWebSocketUrl(controlPlaneUrl: string): string {
-  let url: URL;
-  try {
-    url = new URL(controlPlaneUrl);
-  } catch {
-    throw new Error("controlPlaneUrl must be a valid absolute URL");
-  }
-  if (url.protocol === "http:") url.protocol = "ws:";
-  else if (url.protocol === "https:") url.protocol = "wss:";
-  else if (url.protocol !== "ws:" && url.protocol !== "wss:") {
-    throw new Error("controlPlaneUrl must use http, https, ws, or wss");
-  }
-  url.pathname = "/api/nodes/connect";
-  return url.toString();
-}
-
-function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  if (signal.aborted) return Promise.resolve();
-  return new Promise((res) => {
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", abort);
-      res();
-    }, ms);
-    const abort = () => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", abort);
-      res();
+    const prepare = (agentId: string) => {
+      try {
+        executor.prepareWorkspace(agentId);
+        return {
+          content: [{ type: "text" as const, text: "Workspace prepared." }],
+          isError: false,
+        };
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        return {
+          content: [{ type: "text" as const, text: `Failed to prepare workspace: ${reason}` }],
+          isError: true,
+        };
+      }
     };
-    signal.addEventListener("abort", abort, { once: true });
+
+    socket.on("message", (data) => {
+      let parsed: ReturnType<typeof GatewayMessageSchema.safeParse>;
+      try {
+        parsed = GatewayMessageSchema.safeParse(JSON.parse(String(data)));
+      } catch {
+        parsed = GatewayMessageSchema.safeParse(undefined);
+      }
+      if (parsed.success) dispatch(parsed.data);
+      else finish({ kind: "lost", paired });
+    });
+    socket.on("close", () => finish({ kind: "lost", paired }));
+    // An error is always followed by close, which decides what happens next.
+    socket.on("error", () => {});
   });
 }

@@ -157,6 +157,13 @@ Agent Manager 看到的"工作区在哪里"：为一个 Agent 准备工作区（
 **工作区**（workspace）
 Agent 在 node 上的工作目录。Agent 在里面自由组织记忆、文件和脚本。
 
+**命令进程组**（command process group）
+node 为每条 `bash` 命令开的会话和进程组（`/bin/sh -c` 以 `detached` 启动，组 ID 就是 shell 的 PID）。它是 node 对一条命令所启动的一切的唯一把手：超时、`stopAgent`、断线时杀掉进行中命令的组，node 关闭时杀掉所有还有活进程的组，包括命令已返回、只剩后台进程的组。只剩僵尸进程的组算已结束；组 ID 被系统复用给别的进程后（启动时间不同），node 不再碰它。用 `setsid` 等方式离开进程组的进程归 Agent 自己负责。
+避免：按单个 PID 跟踪命令、用 `kill -0` 判断组是否还在跑。
+
+**工作区环境**（WorkspaceEnv）
+node 上限定在一个工作区里的 Durable `NodeExecutionEnv`：Durable 的 `read`、`write`、`edit` 在它上面执行，每个路径先经过它解析，`..`、指向外部的绝对路径和符号链接都在这里被拒绝。
+
 **MEMORY.md**
 工作区里的一个文件，是 Agent 恢复时读的第一个入口。它只是一个约定，Mate 从不检查它。
 

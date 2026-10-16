@@ -2,6 +2,7 @@ import {
   GatewayMessageSchema,
   NodeRequestSchema,
   type GatewayMessage,
+  type JsonValue,
   type ToolName,
   type ToolResult,
 } from "@mate/node-protocol";
@@ -21,6 +22,7 @@ export interface FakeGatewayOptions {
 interface PendingToolCall {
   resolve: (result: ToolResult) => void;
   reject: (err: Error) => void;
+  onOutput: (chunk: string) => void;
 }
 
 /**
@@ -34,6 +36,7 @@ export class FakeGateway {
   #nonce: string | undefined;
   #nodeId: string | undefined;
   #authenticated = false;
+  #authentications = 0;
   readonly #pendingToolCalls = new Map<string, PendingToolCall>();
   readonly #options: FakeGatewayOptions;
 
@@ -107,15 +110,33 @@ export class FakeGateway {
     return this.#nodeId;
   }
 
-  /** Run a tool on the connected node; resolves with the result. */
+  /** How many times a node has authenticated or paired, across connections. */
+  get authentications(): number {
+    return this.#authentications;
+  }
+
+  /** Resolve once a node is authenticated on the current connection. */
+  async waitForNode(timeoutMs = 10_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (!this.#authenticated) {
+      if (Date.now() > deadline) throw new Error("no node authenticated in time");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+
+  /**
+   * Run a tool on the connected node; resolves with the result, and rejects if the connection closes first.
+   * `onOutput` receives each streamed chunk.
+   */
   runTool(
     requestId: string,
     agentId: string,
     tool: ToolName,
-    args: Record<string, unknown>,
+    args: Record<string, JsonValue>,
+    onOutput: (chunk: string) => void = () => {},
   ): Promise<ToolResult> {
     return new Promise((resolve, reject) => {
-      this.#pendingToolCalls.set(requestId, { resolve, reject });
+      this.#pendingToolCalls.set(requestId, { resolve, reject, onOutput });
       this.#send({
         type: "gateway.run.tool",
         requestId,
@@ -129,7 +150,7 @@ export class FakeGateway {
   /** Send a prepare-workspace message. */
   prepareWorkspace(requestId: string, agentId: string): Promise<ToolResult> {
     return new Promise((resolve, reject) => {
-      this.#pendingToolCalls.set(requestId, { resolve, reject });
+      this.#pendingToolCalls.set(requestId, { resolve, reject, onOutput: () => {} });
       this.#send({ type: "gateway.prepare.workspace", requestId, agentId });
     });
   }
@@ -172,6 +193,7 @@ export class FakeGateway {
       }
       this.#nodeId = msg.nodeId;
       this.#authenticated = true;
+      this.#authentications++;
       this.#send({ type: "gateway.authenticated", requestId: msg.requestId, nodeId: msg.nodeId });
       return;
     }
@@ -191,6 +213,7 @@ export class FakeGateway {
       }
       this.#nodeId = msg.nodeId;
       this.#authenticated = true;
+      this.#authentications++;
       this.#send({ type: "gateway.paired", requestId: msg.requestId, nodeId: msg.nodeId });
       return;
     }
@@ -209,7 +232,9 @@ export class FakeGateway {
       return;
     }
 
-    // node.tool.output: streaming chunks — ignored in fake (just wait for result)
+    if (msg.type === "node.tool.output") {
+      this.#pendingToolCalls.get(msg.requestId)?.onOutput(msg.chunk);
+    }
   }
 
   #send(msg: GatewayMessage): void {
