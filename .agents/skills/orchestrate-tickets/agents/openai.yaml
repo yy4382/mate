@@ -1,5 +1,0 @@
-interface:
-  display_name: "Orchestrate Tickets"
-  short_description: "Run a spec's tickets as one sub-agent per ticket"
-policy:
-  allow_implicit_invocation: false
